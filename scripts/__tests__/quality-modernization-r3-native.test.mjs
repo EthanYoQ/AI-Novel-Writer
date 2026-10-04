@@ -5,12 +5,214 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows, createOperationDispatchGate,
   assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS,
-  SAVED_NATIVE_REVIEW_DIAGNOSTIC as savedPolicy, savedNativeOperations, reviewLengthRecoveryFor } from '../quality-modernization-driver.mjs'
+  SAVED_NATIVE_REVIEW_DIAGNOSTIC as savedPolicy, savedNativeOperations, reviewLengthRecoveryFor,
+  PLANNING_NATIVE_DIAGNOSTIC as planningPolicy, planningNativeOperations, planningOutlineState, structuredRecoveryState, validatePairedReceipt } from '../quality-modernization-driver.mjs'
 import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasoningFor,
   forwardQualificationWindowFor, hash, updateLedger } from '../quality-modernization-run.mjs'
 
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+
+test('planning diagnostic uses its six-chapter scope and native 64K profile without changing formal32K', () => {
+  const phase = 'planning-native-diagnostic'
+  assert.deepEqual(selectPhase(protocol, phase, 'diagnostic'), { ...planningPolicy, phase })
+  assert.equal(planningPolicy.formalDenominatorContribution, 0)
+  assert.deepEqual(planningNativeOperations(planningPolicy.caseId, 'review').map(item => item.kind), ['outline', 'outline', 'directory', 'directory', 'draft', 'review'])
+  assert.deepEqual(planningPolicy.operations.slice(0, 4).map(item => [item.range, item.targetUnits]),
+    [[[1, 5], 600], [[6, 6], 600], [[1, 5], 600], [[6, 6], 600]])
+  assert.ok(Object.values(planningPolicy.planningRootBudgets).every(budget => budget.maxPhysicalRequests === 32))
+  assert.equal(planningPolicy.maxPhysicalRequests, Object.values(planningPolicy.physicalRequestBounds).reduce((sum, count) => sum + count, 0))
+  assert.deepEqual(planningNativeOperations(planningPolicy.caseId, 'complete').map(item => item.kind), ['refine', 'final-review'])
+  assert.throws(() => planningNativeOperations('R3', 'review'), /SCOPE/)
+  assert.equal(forwardQualificationWindowFor(protocol, phase, 'diagnostic'), null)
+  assert.equal(QUALIFICATION_STAGE_MODELS.profiles.flash.model.maxTokens, 32768)
+  const model = planningPolicy.modelProfile.model
+  const registration = forwardReasoningFor(protocol, phase, 'diagnostic')
+  const input = { arm: 'candidate', phase, milestone: 'diagnostic', caseId: planningPolicy.caseId,
+    operationId: 'planning-outline-1-5', creativeStrategy: 'auto', model,
+    resolution: { requested: 'high', effective: 'high', status: 'mapped', source: 'model-override' } }
+  for (const max_tokens of [1, 32768, 65536]) assert.doesNotThrow(() => assertForwardReasoning(registration, { ...input,
+    body: { model: model.modelName, temperature: 0, max_tokens, thinking: { type: 'enabled' }, reasoning_effort: 'high' } }))
+  assert.throws(() => assertForwardReasoning(registration, { ...input, model: { ...model, maxTokens: 32768 } }), /MODEL_MISMATCH/)
+  assert.throws(() => assertForwardReasoning(registration, { ...input,
+    body: { model: model.modelName, temperature: 0, max_tokens: 65537, thinking: { type: 'enabled' }, reasoning_effort: 'high' } }), /WIRE_MISMATCH/)
+})
+
+test('planning directory starts with the production 5+1 batches and rejects a six-item request', () => {
+  const options = { chapterNumbers: [1, 2, 3, 4, 5, 6], decode: () => {} }
+  const read = () => ({ output: '[]', finishReason: 'stop' })
+  const first = { purpose: 'chapter-blueprint-directory', structuredRange: [1, 2, 3, 4, 5] }
+  assert.deepEqual(structuredRecoveryState([], options, read).next, { purpose: first.purpose, range: first.structuredRange })
+  assert.deepEqual(structuredRecoveryState([first], options, read).next, { purpose: first.purpose, range: [6] })
+  assert.equal(structuredRecoveryState([first, { ...first, structuredRange: [6] }], options, read).complete, true)
+  assert.throws(() => structuredRecoveryState([{ ...first, structuredRange: [1, 2, 3, 4, 5, 6] }], options, read), /SEQUENCE_INVALID/)
+})
+
+test('planning outline replay preserves long STOP and only retries a settled failed chapter', () => {
+  const first = { attemptId: 'normal', purpose: 'plot-outline:chapter:6:normal' }
+  const compact = { attemptId: 'compact', purpose: 'plot-outline:chapter:6:compact' }
+  const output = `## 第6章：接续\n${'完整内容'.repeat(300)}`
+  assert.equal(planningOutlineState([first], [6, 6], () => ({ output, finishReason: 'stop' })).text, output)
+  assert.throws(() => planningOutlineState([first, compact], [6, 6], () => ({ output, finishReason: 'stop' })), /SEQUENCE/)
+  assert.throws(() => planningOutlineState([compact], [6, 6], () => ({ output, finishReason: 'stop' })), /SEQUENCE/)
+  const completed = planningOutlineState([first, compact], [6, 6], owner => ({ output,
+    finishReason: owner === first ? 'length' : 'stop' }))
+  assert.equal(completed.complete, true)
+  assert.deepEqual(completed.artifactIds, ['compact'])
+  assert.equal(planningOutlineState([first], [6, 6], () => ({ output, finishReason: 'unknown' })).cursor.reason, 'unknown-completion')
+})
+
+test('planning receipt validates two outline roots, preserved prefix and full chapter artifacts', () => {
+  const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `planning-outline-receipt-${randomUUID()}`)
+  fs.mkdirSync(directory, { recursive: true })
+  try {
+    const binding = planningBinding(), operations = planningPolicy.operations.filter(item => item.kind === 'outline')
+    const result = { ...binding, physicalProject: { projectId: binding.actual.projectId, parityHash: binding.parityId },
+      projectEpoch: binding.actual.epoch, attempts: [], operations: [], ownerTerminal: [], physicalModelRequests: 0, syntheticDispatches: 6 }
+    let prefix = '', previousSynopsis = ''
+    for (const operation of operations) {
+      const artifactIds = [], entries = []
+      for (let chapter = operation.range[0]; chapter <= operation.range[1]; chapter++) {
+        const attemptId = `chapter-${chapter}`, artifactId = `artifact-${chapter}`, output = `## 第${chapter}章：维修\n${'事实'.repeat(600)}`
+        const outputPath = path.join(directory, `${attemptId}.md`)
+        fs.writeFileSync(outputPath, output)
+        const actual = { ...binding.actual, attemptId, runId: operation.id, rootActionId: operation.id, purpose: `plot-outline:chapter:${chapter}:normal` }
+        result.attempts.push({ attemptId: `candidate:${attemptId}`, binding: { ...binding, operation: operation.id, actual },
+          outputPath, visibleTextHash: hash(output), finishReason: 'stop' })
+        result.ownerTerminal.push({ ...actual, artifactId, status: 'settled', finishReason: 'stop', textHash: hash(output), hasFormalEffect: false })
+        artifactIds.push(artifactId); entries.push(output)
+      }
+      const body = [prefix, entries.join('\n\n')].filter(Boolean).join('\n\n')
+      const synopsis = `# 情节大纲\n\n${body}${operation.range[1] < 6 ? '\n\n> 本大纲已覆盖至第 5 章（全书 6 章），其余章节将在后续批次继续生成。' : ''}`
+      const outputPath = path.join(directory, `${operation.id}.md`)
+      fs.writeFileSync(outputPath, synopsis)
+      result.operations.push({ operation: operation.id, kind: operation.kind, handle: { runId: operation.id, rootActionId: operation.id }, planningOutline: {
+        progress: { protocol: 'chapter-outline-v3', range: { from: operation.range[0], to: operation.range[1] }, targetUnits: 600,
+          cursor: { kind: 'complete' }, confirmedPrefix: prefix, sourceExpected: { totalChapters: 6, writingLanguage: 'zh-CN', synopsis: previousSynopsis }, composition: { artifactIds } },
+        savedSynopsis: { outputPath, contentHash: hash(synopsis) } } })
+      prefix = body; previousSynopsis = synopsis
+    }
+    const options = { mode: 'synthetic', arm: 'candidate', phase: 'planning-native-diagnostic',
+      scenario: { ...planningPolicy, operations, evaluationPolicy: null }, ...currentProtocolBinding() }
+    assert.equal(validatePairedReceipt(result, options), null)
+    for (const mutate of [value => { value.operations[1].handle.rootActionId = value.operations[0].handle.rootActionId },
+      value => { value.operations[1].planningOutline.progress.confirmedPrefix = 'changed' },
+      value => { value.ownerTerminal[0].hasFormalEffect = true },
+      value => { value.operations[0].planningOutline.progress.composition.artifactIds.pop() },
+      value => { value.attempts[0].finishReason = 'length' }]) {
+      const invalid = structuredClone(result); mutate(invalid)
+      assert.match(validatePairedReceipt(invalid, options), /PLANNING_/)
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('planning fixture keeps ordinary review and accepts an empty primary only through the accepted compact artifact', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+  const focusStart = fixture.indexOf('reviewFocus: savedRun || planningRun ?')
+  const focusEnd = fixture.indexOf('\n          })', focusStart)
+  assert.ok(focusStart >= 0 && focusEnd > focusStart)
+  assert.equal(new Function(`const planningRun = true, savedRun = false; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)(), '')
+  const start = fixture.indexOf('      for (const attempt of receipt.attempts)', fixture.indexOf('      assert.equal(receipt.ownerTerminal.length'))
+  const end = fixture.indexOf('\n    }\n    if (restorationKind)', start)
+  assert.ok(start >= 0 && end > start)
+  const ledgerStart = fixture.indexOf('    const ledgerEvents =', end)
+  const ledgerEnd = fixture.indexOf('    assertNoOutboundPreflightFailures', ledgerStart)
+  const check = new Function('receipt', 'assert', 'sha', 'PLANNING_NATIVE_DIAGNOSTIC', 'reviewLengthRecoveryFor', `
+    const planningRun = true, structuredRecovery = null, draftRecovery = null, aiReviewRun = true,
+      copiedRun = false, continuityRun = false, repairPolicy = null, condensePolicy = null,
+      candidate = true, request = { mode: 'synthetic', ledgerPath: 'ledger' },
+      verifiedEmptyDraftAttempts = new Set(), verifiedReplacedOutlineAttempts = new Set();
+    const fs = { readFileSync: name => name === 'ledger' ? receipt.attempts.flatMap(attempt =>
+      ['reserve', 'dispatch', 'settle'].map(type => JSON.stringify({ type, attemptId: attempt.attemptId, binding: attempt.binding }))).join('\\n')
+      : name === 'normal' ? '' : 'accepted chapter' };
+    ${fixture.slice(start, end)}
+    ${fixture.slice(ledgerStart, ledgerEnd)}`)
+  for (const finishReason of ['stop', 'length']) {
+    const attempts = ['normal', 'compact'].map((kind, index) => ({ attemptId: kind, outputPath: kind,
+      binding: { operation: 'planning-outline-1-5', actual: { attemptId: kind, runId: 'run', rootActionId: 'root', purpose: `plot-outline:chapter:1:${kind}` } },
+      finishReason: index ? 'stop' : finishReason, visibleTextHash: hash(index ? 'accepted chapter' : '') }))
+    const receipt = { attempts, operations: [{ operation: 'planning-outline-1-5',
+      planningOutline: { progress: { composition: { artifactIds: ['artifact-compact'] } } } }],
+      ownerTerminal: attempts.map(attempt => ({ attemptId: attempt.attemptId, purpose: attempt.binding.actual.purpose,
+        status: 'settled', finishReason: attempt.finishReason, artifactId: `artifact-${attempt.attemptId}`,
+        textHash: attempt.visibleTextHash, hasFormalEffect: false, trustedUsage: true })) }
+    const verify = value => check(value, assert, hash, planningPolicy, () => null)
+    assert.doesNotThrow(() => verify(receipt))
+    for (const mutate of [value => { value.operations[0].planningOutline.progress.composition.artifactIds = ['foreign-artifact'] },
+      value => { value.ownerTerminal[1].purpose = 'plot-outline:chapter:2:compact' },
+      value => { value.attempts[1].binding.operation = 'planning-outline-6' },
+      value => { value.attempts[1].binding.actual.runId = 'foreign' },
+      value => { value.attempts[1].binding.actual.purpose = 'plot-outline:chapter:2:compact' },
+      value => { value.attempts[0].finishReason = value.ownerTerminal[0].finishReason = 'unknown' },
+      value => { value.attempts.pop(); value.ownerTerminal.pop() }]) {
+      const invalid = structuredClone(receipt); mutate(invalid)
+      assert.throws(() => verify(invalid))
+    }
+  }
+})
+
+const planningBinding = () => ({ campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
+  codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+  phase: 'planning-native-diagnostic', milestone: 'diagnostic', caseId: planningPolicy.caseId, operation: 'planning-outline-1-5',
+  invocationId: planningPolicy.invocationId, planningRange: [1, 5],
+  stageModel: { profileId: planningPolicy.modelProfile.profileId, configurationHash: planningPolicy.modelProfile.configurationHash },
+  diagnosticInputHash: planningPolicy.diagnosticInputHash, diagnosticSourceHash: hash(planningPolicy.sources),
+  evaluationPolicyHash: hash(planningPolicy.evaluationPolicy), actual: { attemptId: 'first', runId: 'outline', rootActionId: 'outline',
+    projectId: 'new-project', epoch: 'new-epoch', purpose: 'plot-outline:chapter:1:normal' } })
+
+test('planning rejects wrong source, range, 32K binding and UNKNOWN restart before another reserve', () => {
+  const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `planning-scope-${randomUUID()}`)
+  fs.mkdirSync(directory, { recursive: true })
+  try {
+    const ledger = path.join(directory, 'ledger.jsonl'), binding = planningBinding(), options = { campaignMode: 'synthetic' }
+    const reserve = (id, extra = {}) => updateLedger(ledger, { type: 'reserve', attemptId: id, binding: { ...binding, ...extra } }, options)
+    for (const extra of [{ planningRange: [1, 10] }, { diagnosticInputHash: '0'.repeat(64) }, { diagnosticSourceHash: '0'.repeat(64) },
+      { stageModel: { profileId: binding.stageModel.profileId, configurationHash: QUALIFICATION_STAGE_MODELS.profiles.flash.configurationHash } },
+      { actual: { ...binding.actual, purpose: 'plot-outline' } }]) assert.throws(() => reserve('bad', extra), /PLANNING_NATIVE/)
+    reserve('first')
+    updateLedger(ledger, { type: 'dispatch', attemptId: 'first' }, options)
+    updateLedger(ledger, { type: 'unknown', attemptId: 'first' }, options)
+    for (const extra of [{ codeSha: 'e'.repeat(40) }, { invocationId: randomUUID() },
+      { actual: { ...binding.actual, attemptId: 'retry', rootActionId: 'new-root', purpose: 'plot-outline:chapter:1:compact' } }])
+      assert.throws(() => reserve('retry', extra), /PLANNING_NATIVE/)
+    assert.equal(fs.readFileSync(ledger, 'utf8').trim().split('\n').length, 3)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('planning ledger derives the action envelope and rejects spent or shared roots', () => {
+  const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `planning-bounds-${randomUUID()}`)
+  fs.mkdirSync(directory, { recursive: true })
+  try {
+    const ledger = path.join(directory, 'ledger.jsonl'), base = planningBinding(), options = { campaignMode: 'synthetic' }
+    let ordinal = 0
+    for (const operation of planningPolicy.operations) {
+      const count = planningPolicy.physicalRequestBounds[operation.id]
+      const purposes = operation.kind === 'outline' ? Array.from({ length: operation.range[1] - operation.range[0] + 1 }, (_, index) =>
+        [`plot-outline:chapter:${operation.range[0] + index}:normal`, `plot-outline:chapter:${operation.range[0] + index}:compact`]).flat()
+        : operation.kind === 'directory' ? Array(count).fill('chapter-blueprint-directory')
+          : operation.kind === 'draft' ? ['chapter-draft-short-outline', 'chapter-draft', ...Array(count - 2).fill('chapter-draft-continuation')]
+            : operation.kind === 'refine' ? Array(count).fill('refine-from-review')
+              : ['review-chapter', 'review-chapter', 'review-chapter-rebuild', 'review-chapter-rebuild']
+      for (const [index, purpose] of purposes.entries()) {
+        const attemptId = String(++ordinal), binding = { ...base, operation: operation.id, planningRange: operation.range ?? planningPolicy.range,
+          actual: { ...base.actual, attemptId, purpose, runId: operation.id,
+            rootActionId: ['review', 'refine', 'final-review'].includes(operation.kind) ? 'planning-review' : operation.id,
+            ...(operation.kind === 'directory' ? { structuredRange: [operation.range[0]] } : {}) } }
+        const finishReason = index === count - 1 || operation.kind === 'outline' && index % 2 === 1
+          || ['review', 'final-review'].includes(operation.kind) && index === 1 ? 'stop' : 'length'
+        updateLedger(ledger, { type: 'reserve', attemptId, binding }, options)
+        updateLedger(ledger, { type: 'dispatch', attemptId }, options)
+        updateLedger(ledger, { type: 'settle', attemptId, finishReason }, options)
+      }
+      assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'extra', binding: { ...base, operation: operation.id,
+        actual: { ...base.actual, purpose: purposes.at(-1), runId: 'new-root', rootActionId: 'new-root' } } }, options), /PLANNING_NATIVE/)
+    }
+    assert.equal(ordinal, planningPolicy.maxPhysicalRequests)
+    const events = fs.readFileSync(ledger, 'utf8').trim().split('\n').map(JSON.parse)
+    assert.equal(events.filter(row => row.type === 'reserve').length, planningPolicy.maxPhysicalRequests)
+    assert.ok(events.filter(row => row.type === 'reserve').every(row => row.allocation === 'nonQualificationDiagnostic'))
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+}, 30000)
 
 test('saved native mapping permits its real bounded recovery sequences and rejects a fifth request per operation', () => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `saved-recovery-${randomUUID()}`)

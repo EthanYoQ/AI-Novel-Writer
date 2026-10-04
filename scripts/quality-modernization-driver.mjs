@@ -33,7 +33,11 @@ const { preservesStructuredJsonEvidence } = await import(`data:text/javascript;b
 const { planBlueprintGenerationCost } = await import(`data:text/javascript;base64,${Buffer.from(costBundle).toString('base64')}`)
 const policyBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'electron/services/main-generation-plan.ts')],
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
-const { MAIN_GENERATION_POLICY } = await import(`data:text/javascript;base64,${Buffer.from(policyBundle).toString('base64')}`)
+const { MAIN_GENERATION_POLICY, newMainGenerationPolicy } = await import(`data:text/javascript;base64,${Buffer.from(policyBundle).toString('base64')}`)
+const outlineBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/plot-outline-contract.ts')],
+  bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
+const { PLOT_OUTLINE_PROTOCOL, PLOT_OUTLINE_CONTENT, DEFAULT_PLANNING_ACTION_CHAPTERS, DEFAULT_PLANNING_TARGET_UNITS,
+  derivePlotOutlineCursor, joinPlotOutlineEntries, renderPlotOutlineSynopsis } = await import(`data:text/javascript;base64,${Buffer.from(outlineBundle).toString('base64')}`)
 export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-production.fixture.mjs'
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
@@ -150,6 +154,31 @@ export function savedNativeOperations(caseId, action) {
     || action === 'complete' && caseId !== policy.caseIds[0]) throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
   return policy.operations.filter(item => item.caseIds.includes(caseId)
     && (action === 'complete' ? item.kind !== 'review' : item.kind === 'review'))
+}
+
+export function planningNativeOperations(caseId, action) {
+  const policy = PLANNING_NATIVE_DIAGNOSTIC
+  if (caseId !== policy.caseId || !['prepare', 'review', 'complete'].includes(action)) throw new Error('PLANNING_NATIVE_SCOPE_MISMATCH')
+  return policy.operations.filter(item => action === 'complete' ? ['refine', 'final-review'].includes(item.kind)
+    : !['refine', 'final-review'].includes(item.kind))
+}
+
+export function readPlanningNativeSource(inputPath) {
+  const bytes = fs.readFileSync(inputPath), policy = PLANNING_NATIVE_DIAGNOSTIC
+  if (digest(bytes) !== policy.diagnosticInputHash) throw new Error('PLANNING_NATIVE_INPUT_DRIFT')
+  const input = JSON.parse(bytes), values = {}
+  for (const [key, entry] of Object.entries(policy.sources)) {
+    const content = fs.readFileSync(path.join(path.dirname(inputPath), entry.name))
+    if (digest(content) !== entry.sha256) throw new Error('PLANNING_NATIVE_SOURCE_DRIFT')
+    values[key] = key === 'rows' ? JSON.parse(content) : content.toString('utf8')
+  }
+  if (input.totalChapters !== policy.totalChapters || input.wordsPerChapter !== policy.wordsPerChapter
+    || stableEvidence(input.sources) !== stableEvidence(policy.sources)) throw new Error('PLANNING_NATIVE_SOURCE_MISMATCH')
+  if (!Array.isArray(values.rows.core) || values.rows.core.length !== 1) throw new Error('PLANNING_NATIVE_SOURCE_CORE_MISMATCH')
+  const core = values.rows.core[0]
+  for (const [key, field] of [['premise', 'premise'], ['characters', 'characters_arch'], ['worldbuilding', 'worldbuilding']])
+    if (values[key] !== core[field]) throw new Error('PLANNING_NATIVE_TEXT_SOURCE_MISMATCH')
+  return { ...values, rows: { ...values.rows, core }, inputHash: digest(bytes), sourceHash: digest(policy.sources) }
 }
 
 export function readSavedNativeSource(inputPath, caseId) {
@@ -362,13 +391,92 @@ const structuredRecoveryPolicy = operationId => Object.freeze({ operationId, arm
   budget: 'planBlueprintGenerationCost', maxSyntaxRepairs: 1, maxCompactFallbacksPerChapter: 1,
   trigger: 'settled-length-or-production-blueprint-decode-failure', order: 'depth-first-half-split',
   armAsymmetry: 'Both arms use their existing structured executor; candidate now rebuilds value_too_long without mechanical truncation. No baseline product code is changed.' })
-export const structuredRecoveryFor = (policy, arm) => policy?.structuredRecovery?.arms.includes(arm) ? policy.structuredRecovery : null
+export const structuredRecoveryFor = (policy, arm, operationId) => {
+  const value = Array.isArray(policy?.structuredRecovery)
+    ? policy.structuredRecovery.find(item => item.operationId === operationId) : policy?.structuredRecovery
+  return value?.arms.includes(arm) ? value : null
+}
 const draftRecoveryPolicy = operationIds => Object.freeze({ operationIds: Object.freeze(operationIds),
   arms: Object.freeze(['baseline', 'candidate']), maxAttempts: 8, maxContinuationRounds: 7, maxNoProgressRecoveries: 1,
   baselineMinimumRatio: 0.8, candidateMinimumRatio: 0.7, minimumProgressUnits: 300,
   trigger: 'settled-hash-verified-short-stop-or-length', formalEffect: 'last-attempt-only',
   armAsymmetry: 'baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget.' })
 export const draftRecoveryFor = (policy, arm) => policy?.draftRecovery?.arms.includes(arm) ? policy.draftRecovery : null
+const planningChapters = 6
+const planningActions = ['outline', 'directory'].flatMap(kind => Array.from({ length: Math.ceil(planningChapters / DEFAULT_PLANNING_ACTION_CHAPTERS) }, (_, index) => {
+  const from = index * DEFAULT_PLANNING_ACTION_CHAPTERS + 1, to = Math.min(planningChapters, from + DEFAULT_PLANNING_ACTION_CHAPTERS - 1)
+  return { id: `planning-${kind}-${from === to ? from : `${from}-${to}`}`, kind, range: [from, to], targetUnits: DEFAULT_PLANNING_TARGET_UNITS }
+}))
+const planningRequestBounds = Object.freeze({ ...Object.fromEntries(planningActions.map(action => [action.id,
+  action.kind === 'outline' ? (action.range[1] - action.range[0] + 1) * PLOT_OUTLINE_CONTENT.maxAttemptsPerChapter
+    : planBlueprintGenerationCost(action.range[1] - action.range[0] + 1).recoveryCallBound])),
+  'planning-draft': draftRecoveryPolicy([]).maxAttempts + 1,
+  'planning-review': (SAVED_NATIVE_REVIEW_DIAGNOSTIC.attemptPolicy.reviewRebuild.maxRepairAttempts + 1)
+    * (SAVED_NATIVE_REVIEW_DIAGNOSTIC.attemptPolicy.reviewRebuild.maxLengthReplacements + 1),
+  'planning-refine': SAVED_NATIVE_REVIEW_DIAGNOSTIC.attemptPolicy.refinementRecovery.maxAttempts,
+  'planning-final-review': (SAVED_NATIVE_REVIEW_DIAGNOSTIC.attemptPolicy.finalReviewRebuild.maxRepairAttempts + 1)
+    * (SAVED_NATIVE_REVIEW_DIAGNOSTIC.attemptPolicy.finalReviewRebuild.maxLengthReplacements + 1) })
+const planningMaximumRequests = Object.values(planningRequestBounds).reduce((sum, count) => sum + count, 0)
+const planningModel = { ...QUALIFICATION_STAGE_MODELS.profiles.flash.model, maxTokens: 65536 }
+const planningRootBudgets = Object.fromEntries(planningActions.map(action => {
+  const [from, to] = action.range
+  const selection = { operation: action.kind === 'outline' ? 'generate-plot-outline' : 'chapter-blueprint-directory', authorInputs: [
+    { id: 'planning:target-units', text: String(action.targetUnits) },
+    ...(action.kind === 'outline' ? [
+      { id: 'architecture:author-config', text: JSON.stringify({ totalChapters: planningChapters }) },
+      { id: 'architecture:planning-intent', text: JSON.stringify({ version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from, to } }) },
+    ] : [
+      { id: 'directory:author-config', text: JSON.stringify({ totalChapters: planningChapters }) },
+      { id: 'directory:requested-range', text: JSON.stringify({ mode: 'append', startChapter: from, endChapter: to }) },
+    ]),
+  ] }
+  return [action.id, newMainGenerationPolicy(selection, planningModel).budget]
+}))
+export const PLANNING_NATIVE_DIAGNOSTIC = Object.freeze({
+  sceneId: '场景1', caseId: 'planning-six-chapters', caseIds: ['planning-six-chapters'], chapterNumber: 1,
+  milestone: 'diagnostic', arms: ['candidate'], nonQualification: true, allocation: 'nonQualificationDiagnostic',
+  scenarioRevision: 'planning-six-chapters-native-cap64-v2', formalDenominatorContribution: 0,
+  invocationId: '68fe991e-9b6b-4ba5-9734-2623477af7c1', totalChapters: planningChapters, wordsPerChapter: 1000,
+  range: [1, planningChapters], expectedPhysicalRequests: planningActions.reduce((sum, action) => sum + (action.kind === 'outline'
+    ? action.range[1] - action.range[0] + 1 : planBlueprintGenerationCost(action.range[1] - action.range[0] + 1).expectedCalls), 3),
+  maxPhysicalRequests: planningMaximumRequests, physicalRequestBounds: planningRequestBounds, planningRootBudgets,
+  identityPolicy: 'new-project-native-generated-ids-explicit-source-target-bijection-stable-through-journey',
+  diagnosticInputHash: '713e14b031d3e373ed603f09b9c36a4ac32415bf3217ddae6961e6c71cb82ada',
+  sources: {
+    premise: { name: 'thread11-w4-premise-saved.md', sha256: '5682e67d6a450405b7ee695e5263da163a37c9bc501ec2e853c51cee4845820a' },
+    characters: { name: 'thread11-w4-characters-saved.md', sha256: 'b025461e58fb7726e7c6bf445f4112bdcdca726fc6a2264544e0e565be238053' },
+    worldbuilding: { name: 'thread11-w4-worldbuilding-saved.md', sha256: '5b082ea3b1447bd09e465a9bc7e43c05e057200513691b71b05959060d5e4549' },
+    rows: { name: 'thread11-w4-blueprint-1791057053875-ce289708-saved-rows.json', sha256: '5d6e65d5e2566e765a0b317f86e43c63310eed1fc2c48e4192d802045d81ff11' },
+  },
+  operations: [...planningActions,
+    { id: 'planning-draft', kind: 'draft' }, { id: 'planning-review', kind: 'review' },
+    { id: 'planning-refine', kind: 'refine' }, { id: 'planning-final-review', kind: 'final-review' }],
+  attemptPolicy: { milestone: 'diagnostic', arms: ['candidate'],
+    outline: planningActions.filter(action => action.kind === 'outline').map(action => ({ operationId: action.id,
+      range: action.range, protocol: PLOT_OUTLINE_PROTOCOL, ...PLOT_OUTLINE_CONTENT })),
+    structuredRecovery: planningActions.filter(action => action.kind === 'directory').map(action => ({ ...structuredRecoveryPolicy(action.id),
+      chapterNumbers: Array.from({ length: action.range[1] - action.range[0] + 1 }, (_, index) => action.range[0] + index), arms: ['candidate'],
+      armAsymmetry: 'Candidate-only diagnostic. Complete long content is accepted; truncation or structural failure may trigger bounded recovery.' })),
+    draftRecovery: { ...draftRecoveryPolicy(['planning-draft']), arms: ['candidate'] },
+    draftCondense: { operationIds: ['planning-draft'], arms: ['candidate'], primaryPurpose: 'chapter-draft',
+      condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
+      trigger: 'settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum', formalEffect: 'last-attempt-only' },
+    shortOutline: { purpose: 'chapter-draft-short-outline', operationIds: ['planning-draft'], maxAttempts: 1,
+      trigger: 'new-draft-before-prose-same-root-native-artifact' },
+    reviewRebuild: { operationId: 'planning-review', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1, maxLengthReplacements: 1 },
+    finalReviewRebuild: { operationId: 'planning-final-review', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1, maxLengthReplacements: 1 },
+    refinementRecovery: { operationId: 'planning-refine', purpose: 'refine-from-review', maxAttempts: 4,
+      trigger: 'settled-length-same-confirmation-visible-append-with-progress' } },
+  evaluationPolicy: { ...AI_REVIEW_FINAL_MANUSCRIPT_POLICY, caseIds: ['planning-six-chapters'],
+    confirmation: 'agent-semantic-approval-references-original-report-and-native-findings',
+    physicalRequests: { minimum: 11, maximum: planningMaximumRequests, manuscriptMinimum: 1, manuscriptMaximum: 12 },
+    qualityDecision: 'diagnostic-only-no-new-literary-pass-gate' },
+  modelProfile: { ...QUALIFICATION_STAGE_MODELS.profiles.flash,
+    configurationHash: 'a1a2da6a780d8f54967bbaa20150235357684dd245f22f95e0fee772a25a1676',
+    model: planningModel },
+})
+export const PLANNING_STAGE_MODELS = Object.freeze({ revision: 'planning-native-official-flash-cap64-v1',
+  profiles: { flash: PLANNING_NATIVE_DIAGNOSTIC.modelProfile } })
 const EARLY_BUDGET_ATTEMPT_POLICY = Object.freeze({ milestone: 'post-ui', arms: Object.freeze(['baseline', 'candidate']),
   operationId: '指定范围生成', primaryPurpose: 'chapter-blueprint-directory',
   repairPurpose: 'chapter-blueprint-directory:structured-syntax-repair', maxRepairAttempts: 1,
@@ -718,17 +826,19 @@ const QUALIFICATION_WINDOW_HASH = '64d634a4fa20fbafbbe3103c43e4a2c9959e3a6be64aa
 
 /** Resolve only the registered bridge fallback; native owner budgets and dispatch gates remain authoritative. */
 export function qualificationBridgeWindows(request) {
-  if (request.phase === 'saved-native-review-diagnostic') {
-    const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC
+  if (['saved-native-review-diagnostic', 'planning-native-diagnostic'].includes(request.phase)) {
+    const planning = request.phase === 'planning-native-diagnostic'
+    const policy = planning ? PLANNING_NATIVE_DIAGNOSTIC : SAVED_NATIVE_REVIEW_DIAGNOSTIC
     if (request.milestone !== 'diagnostic' || (request.arm ?? request.target?.arm) !== 'candidate'
       || request.scenarioRevision !== policy.scenarioRevision
-      || stableEvidence(request.operations) !== stableEvidence(savedNativeOperations(request.caseId, request.nativeAction))
+      || stableEvidence(request.operations) !== stableEvidence((planning ? planningNativeOperations : savedNativeOperations)(request.caseId, request.nativeAction))
       || stableEvidence(request.attemptPolicy) !== stableEvidence(policy.attemptPolicy)
       || stableEvidence(request.evaluationPolicy) !== stableEvidence(policy.evaluationPolicy)
       || request.forwardQualificationWindow != null || Object.keys(request).some(key => /timeout|deadline/iu.test(key)))
       throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
     const attemptMs = MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs + 60_000
-    const maxCalls = request.action === 'prepare' ? 0 : request.operations.length * 4
+    const maxCalls = request.action === 'prepare' ? 0 : planning
+      ? request.operations.reduce((sum, item) => sum + policy.physicalRequestBounds[item.id], 0) : request.operations.length * 4
     return { attemptMs, spawnMs: Math.max(1, maxCalls) * attemptMs + 60_000,
       testMs: Math.max(1, maxCalls) * attemptMs + 120_000, maxCalls, revision: policy.scenarioRevision }
   }
@@ -844,6 +954,11 @@ export function createOutboundPreflightAssert(failures) {
 
 /** Forward-only experiment: verify the saved preference separately from each arm's natural wire. */
 export function assertForwardReasoning(registration, { arm, phase, milestone, caseId, model, creativeStrategy, resolution, body, operationId }) {
+  const planning = phase === 'planning-native-diagnostic'
+  if (planning && (registration?.revision !== PLANNING_NATIVE_DIAGNOSTIC.scenarioRevision
+    || milestone !== 'diagnostic' || caseId !== PLANNING_NATIVE_DIAGNOSTIC.caseId
+    || operationId && !PLANNING_NATIVE_DIAGNOSTIC.operations.some(item => item.id === operationId)))
+    throw new Error('PLANNING_NATIVE_MODEL_SCOPE_MISMATCH')
   const saved = phase === 'saved-native-review-diagnostic'
   if (saved && (registration?.revision !== SAVED_NATIVE_REVIEW_DIAGNOSTIC.scenarioRevision
     || milestone !== 'diagnostic' || !SAVED_NATIVE_REVIEW_DIAGNOSTIC.caseIds.includes(caseId)
@@ -855,16 +970,16 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
       && (!caseId || scope.caseIds.includes(caseId))))) throw new Error('QUALIFICATION_MODEL_SCOPE_MISMATCH')
   const stageProfile = staged ? qualificationModelForOperation(phase, milestone, operationId) : null
   if (stageProfile && modelConfigurationHash(model) !== stageProfile.configurationHash) throw new Error('QUALIFICATION_MODEL_CONFIGURATION_DRIFT')
-  if (saved || phase === 'r3-native-revision-diagnostic' || stageProfile) {
-    const profile = saved ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : stageProfile ?? r3ModelForOperation(operationId ?? R3_NATIVE_REVISION_DIAGNOSTIC.operations[0].id)
+  if (planning || saved || phase === 'r3-native-revision-diagnostic' || stageProfile) {
+    const profile = planning ? PLANNING_NATIVE_DIAGNOSTIC.modelProfile : saved ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : stageProfile ?? r3ModelForOperation(operationId ?? R3_NATIVE_REVISION_DIAGNOSTIC.operations[0].id)
     const expected = profile.model
-    if (arm !== 'candidate' || !saved && !staged && (milestone !== 'diagnostic' || caseId !== 'R3'
+    if (arm !== 'candidate' || !planning && !saved && !staged && (milestone !== 'diagnostic' || caseId !== 'R3'
       || registration?.revision !== R3_NATIVE_REVISION_DIAGNOSTIC.scenarioRevision) || creativeStrategy !== 'auto'
       || modelConfigurationHash(model) !== profile.configurationHash) throw new Error('R3_NATIVE_MODEL_MISMATCH')
     if (body === undefined) return null
     const outputTokens = body.max_tokens ?? body.max_completion_tokens
     if (body.model !== expected.modelName || body.temperature !== expected.temperature
-      || (stageProfile || saved ? !Number.isSafeInteger(outputTokens) || outputTokens <= 0 || outputTokens > expected.maxTokens
+      || (stageProfile || saved || planning ? !Number.isSafeInteger(outputTokens) || outputTokens <= 0 || outputTokens > expected.maxTokens
         : outputTokens !== expected.maxTokens)
       || body.thinking?.type !== 'enabled' || body.reasoning_effort !== expected.reasoningOverride
       || Object.hasOwn(body, 'enable_thinking') || Object.hasOwn(body, 'thinking_budget')
@@ -1082,6 +1197,20 @@ export function runProductionBridge(request) {
   fs.writeFileSync(path.join(evidenceRoot, `${request.action}-stderr.log`), redact(result.stderr))
   for (const file of [report, request.receiptPath]) if (secrets.length && fs.existsSync(file)) fs.writeFileSync(file, redact(fs.readFileSync(file, 'utf8')))
   const receipt = fs.existsSync(request.receiptPath) ? JSON.parse(fs.readFileSync(request.receiptPath, 'utf8')) : null
+  if (receipt?.runtimePaths && request.phase === 'planning-native-diagnostic') {
+    receipt.sourcePids = [...new Set([...receipt.sourcePids, result.pid])]
+    const processes = receipt.sourcePids.map(pid => {
+      try { process.kill(pid, 0); return { pid, exited: false } }
+      catch (error) { return { pid, exited: error.code === 'ESRCH' } }
+    })
+    const wal = `${receipt.runtimePaths.databasePath}-wal`
+    receipt.sourceClosure = { ...receipt.sourceClosure, processes, exitCode: result.status, signal: result.signal,
+      parentObservedWalBytes: fs.existsSync(wal) ? fs.statSync(wal).size : 0 }
+    receipt.sourceClosed = receipt.sourceClosure.databaseClosed === true && receipt.sourceClosure.walBytes === 0
+      && receipt.sourceClosure.parentObservedWalBytes === 0 && processes.every(item => item.exited)
+      && result.status !== null && result.signal === null
+    fs.writeFileSync(request.receiptPath, JSON.stringify(receipt, null, 2) + '\n')
+  }
   if (result.status !== 0 || !receipt || !['prepared', 'passed'].includes(receipt.status)) {
     throw Object.assign(new Error('PRODUCTION_BRIDGE_FAILED'), { detail: receipt?.error, receiptPath: request.receiptPath,
       exitCode: result.status, stderrPath: path.join(evidenceRoot, `${request.action}-stderr.log`) })
@@ -1223,6 +1352,7 @@ export function continuityCaseOperations(caseId) {
 export const FINALIZED_CHARACTER_OPERATION_IDS = Object.freeze(PHASE_SCENARIOS['c16-c18'].operations
   .filter(operation => operation.kind === 'character_cards').map(operation => operation.id))
 export function productionScenario(phase, milestone, protocolRevision) {
+  if (phase === 'planning-native-diagnostic') return PLANNING_NATIVE_DIAGNOSTIC
   if (phase === 'saved-native-review-diagnostic') return SAVED_NATIVE_REVIEW_DIAGNOSTIC
   if (phase === 'r3-native-revision-diagnostic') return R3_NATIVE_REVISION_DIAGNOSTIC
   const scenario = PHASE_SCENARIOS[phase]
@@ -1352,7 +1482,8 @@ export function blueprintRecoveryDecoder(repositoryRoot, arm) {
   return baselineDecoders.get(key)
 }
 export function structuredRecoveryState(attempts, { chapterNumbers, decode = blueprintRecoveryDecoder(null, 'candidate') }, readOutput) {
-  const pending = [{ range: chapterNumbers, purpose: 'chapter-blueprint-directory' }]
+  const pending = Array.from({ length: Math.ceil(chapterNumbers.length / 5) }, (_, index) =>
+    ({ range: chapterNumbers.slice(index * 5, index * 5 + 5), purpose: 'chapter-blueprint-directory' }))
   const compact = new Set()
   let syntaxUsed = false, lastSyntaxSource = null
   const maxCalls = planBlueprintGenerationCost(chapterNumbers.length).maxCalls
@@ -1460,7 +1591,8 @@ export function reviewRecoveryAllowed(history, purpose, policy) {
 export function reviewLengthRecoveryFor(result, operationId) {
   if (result.arm === 'baseline') return null
   let policy
-  if (result.phase === 'saved-native-review-diagnostic') policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC.attemptPolicy
+  if (result.phase === 'planning-native-diagnostic') policy = PLANNING_NATIVE_DIAGNOSTIC.attemptPolicy
+  else if (result.phase === 'saved-native-review-diagnostic') policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC.attemptPolicy
   else if (result.phase === 'r3-native-revision-diagnostic') policy = R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy
   else if (result.arm === 'candidate' && result.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION
     && ['final', 'post-ui'].includes(result.milestone)) {
@@ -1470,13 +1602,34 @@ export function reviewLengthRecoveryFor(result, operationId) {
   return [policy, policy?.reviewRebuild, policy?.finalReviewRebuild, policy?.controlReviewRebuild]
     .find(item => item?.operationId === operationId && item.maxLengthReplacements === 1) ?? null
 }
+export function planningOutlineState(attempts, range, read) {
+  const replay = [], accepted = []
+  let text = ''
+  let cursor = derivePlotOutlineCursor({ from: range[0], to: range[1] }, 0, replay)
+  for (const owner of attempts) {
+    if (cursor.kind !== 'request' || owner.purpose !== `plot-outline:chapter:${cursor.chapterNumber}:${cursor.attempt}`)
+      throw new Error('PLANNING_OUTLINE_SEQUENCE_INVALID')
+    const evidence = read(owner)
+    const artifactId = evidence.artifactId ?? owner.attemptId
+    replay.push({ purpose: owner.purpose, status: 'settled', finishReason: evidence.finishReason,
+      artifact: { artifactId, text: evidence.output, textHash: digest(evidence.output), revision: 1 } })
+    cursor = derivePlotOutlineCursor({ from: range[0], to: range[1] }, accepted.length, replay)
+    if (cursor.kind === 'accept') {
+      accepted.push(...cursor.artifactIds)
+      text = joinPlotOutlineEntries(text, cursor.text)
+      cursor = derivePlotOutlineCursor({ from: range[0], to: range[1] }, accepted.length, replay)
+    }
+  }
+  return { complete: cursor.kind === 'complete', cursor, artifactIds: accepted, text }
+}
+
 /**
  * Only a settled, hash-verified parse failure — or, for a registered draft operation, a settled
  * over-length primary draft — may add one physical request. `draftCondense.measureUnits` and
  * `draftCondense.maximum` come from the production counter and draftTargetUnitRange.
  */
 export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false, draftCondense = null,
-  draftRecovery = null, structuredRecovery = null, refinementRecovery = null, shortOutline = null } = {}) {
+  draftRecovery = null, structuredRecovery = null, refinementRecovery = null, shortOutline = null, planningOutline = null } = {}) {
   const dispatched = new Map()
   const outlines = new Map()
   const draftAttempts = new Map()
@@ -1493,6 +1646,20 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
     && left.projectId === right.projectId && left.epoch === right.epoch && left.attemptId !== right.attemptId
   return (operationId, owner, reviewSource) => {
     const first = dispatched.get(operationId)
+    const outlinePolicy = Array.isArray(planningOutline) ? planningOutline.find(item => item.operationId === operationId) : planningOutline
+    if (outlinePolicy?.operationId === operationId) {
+      const history = outlines.get(operationId) ?? []
+      try {
+        if (!owner || !['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch'].every(key => typeof owner[key] === 'string' && owner[key])
+          || history.some(prior => !sameRun(prior, owner))) throw new Error('PLANNING_OUTLINE_OWNER_MISMATCH')
+        const state = planningOutlineState(history, outlinePolicy.range,
+          prior => verifiedRecoveryOutput(prior, readPrimaryEvidence?.(prior), operationId))
+        if (state.cursor.kind !== 'request' || owner.purpose !== `plot-outline:chapter:${state.cursor.chapterNumber}:${state.cursor.attempt}`)
+          throw new Error('PLANNING_OUTLINE_SEQUENCE_INVALID')
+        outlines.set(operationId, [...history, { ...owner }])
+        return
+      } catch { reject(operationId, 'planning-outline-scope') }
+    }
     if (shortOutline?.operationIds.includes(operationId)) {
       const outline = outlines.get(operationId)
       if (owner?.purpose === shortOutline.purpose) {
@@ -1540,12 +1707,13 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
         return
       } catch { reject(operationId, 'refinement-recovery-not-authorized') }
     }
-    if (structuredRecovery?.policy.operationId === operationId) {
+    const structured = Array.isArray(structuredRecovery) ? structuredRecovery.find(item => item.policy.operationId === operationId) : structuredRecovery
+    if (structured?.policy.operationId === operationId) {
       const history = structuredAttempts.get(operationId) ?? []
       try {
         if (!owner || !['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch'].every(key => typeof owner[key] === 'string' && owner[key])
           || history.some(prior => !sameRun(prior, owner))) throw new Error('STRUCTURED_RECOVERY_OWNER_MISMATCH')
-        const state = structuredRecoveryState(history, structuredRecovery,
+        const state = structuredRecoveryState(history, structured,
           prior => verifiedRecoveryOutput(prior, readPrimaryEvidence?.(prior), operationId))
         if (!state.next || owner.purpose !== state.next.purpose
           || JSON.stringify(owner.structuredRange) !== JSON.stringify(state.next.range)) throw new Error('STRUCTURED_RECOVERY_NOT_TRIGGERED')
@@ -1694,7 +1862,7 @@ function draftRecoveryReceiptFailure(result, operationId, policy, arm, reviewed 
   } catch { return 'DRAFT_RECOVERY_EVIDENCE_INVALID' }
 }
 export function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRevision, protocolHash }) {
-  const owned = ['early-review', 'full'].includes(phase) || Boolean(scenario.evaluationPolicy)
+  const owned = ['early-review', 'full', 'planning-native-diagnostic'].includes(phase) || Boolean(scenario.evaluationPolicy)
   const invocationId = result?.invocationId
   if (typeof protocolRevision !== 'string' || !protocolRevision || !CONTENT_HASH.test(protocolHash ?? '')
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(invocationId ?? '')
@@ -1703,6 +1871,55 @@ export function validatePairedReceipt(result, { mode, arm, phase, scenario, prot
     return 'PAIR_BINDING_MISMATCH'
   if (!Array.isArray(result.attempts))
     return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
+  if (phase === 'planning-native-diagnostic' && !scenario.evaluationPolicy
+    && (scenario.operations.length > 1 || scenario.operations[0]?.kind === 'outline')) {
+    if (result.attempts.some(attempt => !scenario.operations.some(operation => operation.id === attempt.binding?.operation))
+      || new Set(result.attempts.map(attempt => attempt.attemptId)).size !== result.attempts.length
+      || result.physicalModelRequests !== (mode === 'real' ? result.attempts.length : 0)
+      || result.syntheticDispatches !== (mode === 'synthetic' ? result.attempts.length : 0)) return 'PLANNING_OPERATION_COVERAGE_MISMATCH'
+    const roots = new Set()
+    for (const operation of scenario.operations) {
+      const attempts = result.attempts.filter(attempt => attempt.binding?.operation === operation.id)
+      const persisted = result.operations?.find(item => item.operation === operation.id)
+      const terminal = result.ownerTerminal?.filter(item => attempts.some(attempt => attempt.binding.actual?.attemptId === item.attemptId))
+      if (!persisted?.handle || roots.has(persisted.handle.rootActionId)) return 'PLANNING_ACTION_ROOT_MISMATCH'
+      roots.add(persisted.handle.rootActionId)
+      if (operation.kind !== 'outline') {
+        const failure = validatePairedReceipt({ ...result, attempts, operations: [persisted], ownerTerminal: terminal,
+          physicalModelRequests: mode === 'real' ? attempts.length : 0, syntheticDispatches: mode === 'synthetic' ? attempts.length : 0 },
+        { mode, arm, phase, protocolRevision, protocolHash, scenario: { ...scenario, operations: [operation],
+          attemptPolicy: { ...scenario.attemptPolicy, structuredRecovery: structuredRecoveryFor(scenario.attemptPolicy, arm, operation.id) } } })
+        if (failure) return failure
+        continue
+      }
+      try {
+        if (arm !== 'candidate' || !attempts.length || terminal?.length !== attempts.length) throw new Error('owner')
+        const state = planningOutlineState(attempts.map(attempt => attempt.binding.actual), operation.range, owner => {
+          const attempt = attempts.find(item => item.binding.actual.attemptId === owner.attemptId), binding = attempt.binding
+          const saved = terminal.find(item => item.attemptId === owner.attemptId)
+          if (attempt.attemptId !== `${arm}:${owner.attemptId}` || owner.runId !== persisted.handle.runId
+            || owner.rootActionId !== persisted.handle.rootActionId || owner.projectId !== result.physicalProject?.projectId || owner.epoch !== result.projectEpoch
+            || binding.mode !== mode || binding.arm !== arm || binding.phase !== phase || binding.caseId !== scenario.caseId
+            || binding.invocationId !== invocationId || binding.protocolRevision !== protocolRevision || binding.protocolHash !== protocolHash
+            || binding.codeSha !== result.codeSha || binding.sourceHash !== result.sourceHash || binding.driverHash !== result.driverHash
+            || binding.parityId !== result.physicalProject?.parityHash || !saved?.artifactId || saved.hasFormalEffect
+            || !['settled', 'unknown'].includes(saved.status) || saved.purpose !== owner.purpose
+            || saved.finishReason !== attempt.finishReason || saved.textHash !== attempt.visibleTextHash) throw new Error('owner')
+          const output = fs.readFileSync(attempt.outputPath, 'utf8')
+          if (digest(output) !== attempt.visibleTextHash) throw new Error('hash')
+          return { output, finishReason: attempt.finishReason, artifactId: saved.artifactId }
+        })
+        const proof = persisted.planningOutline, progress = proof?.progress
+        if (!state.complete || progress?.protocol !== PLOT_OUTLINE_PROTOCOL || progress.cursor.kind !== 'complete'
+          || stableEvidence(progress.range) !== stableEvidence({ from: operation.range[0], to: operation.range[1] })
+          || progress.targetUnits !== operation.targetUnits || stableEvidence(progress.composition?.artifactIds) !== stableEvidence(state.artifactIds)) throw new Error('composition')
+        const expected = renderPlotOutlineSynopsis(joinPlotOutlineEntries(progress.confirmedPrefix, state.text), operation.range[1], progress.sourceExpected)
+        const saved = fs.readFileSync(proof.savedSynopsis.outputPath, 'utf8')
+        if (saved !== expected || digest(saved) !== proof.savedSynopsis.contentHash) throw new Error('saved')
+      } catch { return 'PLANNING_OUTLINE_EVIDENCE_INVALID' }
+    }
+    return null
+  }
   if (scenario.attemptPolicy?.shortOutline && !scenario.evaluationPolicy) {
     const policy = scenario.attemptPolicy.shortOutline
     const outlines = result.attempts.filter(attempt => attempt.binding.actual?.purpose === policy.purpose)
@@ -1787,7 +2004,8 @@ export function validatePairedReceipt(result, { mode, arm, phase, scenario, prot
   for (const operation of scenario.operations) {
     const matches = result.attempts.filter(attempt => attempt?.binding?.operation === operation.id)
     if (structuredUsed && structuredPolicy.operationId === operation.id) {
-      const failure = structuredRecoveryReceiptFailure(result, operation.id, phase === 'full' ? [1, 2, 3] : [scenario.chapterNumber], arm)
+      const failure = structuredRecoveryReceiptFailure(result, operation.id, phase === 'planning-native-diagnostic'
+        ? structuredPolicy.chapterNumbers : phase === 'full' ? [1, 2, 3] : [scenario.chapterNumber], arm)
       if (failure) return failure
     } else if (recoveryOperations.some(item => item.id === operation.id)) {
       const failure = draftRecoveryReceiptFailure(result, operation.id, recoveryPolicy, arm, Boolean(scenario.evaluationPolicy))
@@ -2291,10 +2509,11 @@ export const modelConfigurationHash = model => digest(Object.fromEntries(Object.
 export function copyIsolatedRealModelConfig(original, roots, expectedHash) {
   // Copy only the approved generation profile; a default model would also start an unregistered embedding request.
   const models = JSON.parse(fs.readFileSync(path.join(original.roots.config, 'models.json'), 'utf8'))
-  const profiles = original.stageModels ? Object.values(QUALIFICATION_STAGE_MODELS.profiles) : original.r3StageProfiles
+  const registeredStages = original.stageModels?.revision === PLANNING_STAGE_MODELS.revision ? PLANNING_STAGE_MODELS : QUALIFICATION_STAGE_MODELS
+  const profiles = original.stageModels ? Object.values(registeredStages.profiles) : original.r3StageProfiles
     ? Object.values(R3_NATIVE_REVISION_DIAGNOSTIC.profiles) : [{ profileId: original.modelId, configurationHash: expectedHash }]
-  if (original.stageModels && (stableEvidence(original.stageModels) !== stableEvidence(QUALIFICATION_STAGE_MODELS)
-    || expectedHash && expectedHash !== digest(QUALIFICATION_STAGE_MODELS.profiles))) throw new Error('QUALIFICATION_MODEL_CONFIGURATION_DRIFT')
+  if (original.stageModels && (stableEvidence(original.stageModels) !== stableEvidence(registeredStages)
+    || expectedHash && expectedHash !== digest(registeredStages.profiles))) throw new Error('QUALIFICATION_MODEL_CONFIGURATION_DRIFT')
   if (original.r3StageProfiles && stableEvidence(original.r3StageProfiles) !== stableEvidence(R3_NATIVE_REVISION_DIAGNOSTIC.profiles))
     throw new Error('R3_NATIVE_MODEL_MISMATCH')
   const selected = profiles.map(profile => {
@@ -2554,11 +2773,16 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
 }
 
 export function runProductionPhasePair(targets, options, bridge = runProductionBridge) {
-  if (options.phase === 'saved-native-review-diagnostic') {
-    const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC, caseId = options.caseId, nativeAction = options.nativeAction
-    const operations = savedNativeOperations(caseId, nativeAction)
-    const source = readSavedNativeSource(options.diagnosticInputPath, caseId)
-    const original = targets.candidate, invocationId = source.source.invocationId
+  if (['saved-native-review-diagnostic', 'planning-native-diagnostic'].includes(options.phase)) {
+    const planning = options.phase === 'planning-native-diagnostic'
+    const policy = planning ? PLANNING_NATIVE_DIAGNOSTIC : SAVED_NATIVE_REVIEW_DIAGNOSTIC, caseId = options.caseId, nativeAction = options.nativeAction
+    if (options.syntheticPlanning !== undefined && (!planning || options.development !== true || options.mode !== 'synthetic'
+      || !['empty-stop', 'empty-length', 'outline-recovery', 'blueprint-recovery'].includes(options.syntheticPlanning)))
+      throw new Error('PLANNING_SYNTHETIC_SCOPE_MISMATCH')
+    const operationsFor = planning ? planningNativeOperations : savedNativeOperations
+    const operations = operationsFor(caseId, nativeAction)
+    const source = planning ? readPlanningNativeSource(options.diagnosticInputPath) : readSavedNativeSource(options.diagnosticInputPath, caseId)
+    const original = targets.candidate, invocationId = planning ? policy.invocationId : source.source.invocationId
     if (!original || targets.baseline || original.protocolHash !== options.protocolHash
       || original.protocolRevision !== options.protocolRevision || options.mode === 'real' && original.developmentOnly)
       throw new Error('SAVED_NATIVE_TARGET_MISMATCH')
@@ -2568,7 +2792,7 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     if (record.targetHash && record.targetHash !== digest(original)) throw new Error('SAVED_NATIVE_TARGET_DRIFT')
     if (nativeAction === 'complete' && !record.results.review) throw new Error('SAVED_NATIVE_FIRST_REVIEW_REQUIRED')
     let approval, firstReview
-    if (nativeAction === 'complete' || nativeAction === 'review' && caseId === policy.caseIds[1]) {
+    if (nativeAction === 'complete' || !planning && nativeAction === 'review' && caseId === policy.caseIds[1]) {
       approval = JSON.parse(fs.readFileSync(options.approvalPath))
       const negativeRecord = caseId === policy.caseIds[0] ? record : JSON.parse(fs.readFileSync(recordPath(policy.caseIds[0])))
       const prior = negativeRecord.results[nativeAction === 'complete' ? 'review' : 'complete']
@@ -2580,8 +2804,8 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
         || receipt.sourceHash !== original.sourceHash || receipt.driverHash !== productionBridgeHash()
         || review.reviewId !== approval.reviewId || review.contentHash !== approval.reportHash
         || digest(fs.readFileSync(review.outputPath)) !== approval.reportHash
-        || approval.kind !== (nativeAction === 'complete' ? 'negative-detection' : 'negative-closure')
-        || nativeAction === 'complete' && (!Array.isArray(approval.findingIds) || approval.findingIds.length === 0
+        || approval.kind !== (planning ? 'planning-refinement' : nativeAction === 'complete' ? 'negative-detection' : 'negative-closure')
+        || nativeAction === 'complete' && (!Array.isArray(approval.findingIds) || !planning && approval.findingIds.length === 0
           || new Set(approval.findingIds).size !== approval.findingIds.length)) throw new Error('SAVED_NATIVE_APPROVAL_MISMATCH')
       firstReview = nativeAction === 'complete' ? receipt : undefined
     } else if (options.approvalPath) throw new Error('SAVED_NATIVE_APPROVAL_SCOPE_MISMATCH')
@@ -2598,9 +2822,9 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
       record.target = target; record.targetHash = digest(original)
       saveExecutionRecord(bound, record)
     }
-    const templatesPath = path.join(target.isolationRoot, 'saved-native-templates.json')
+    const templatesPath = path.join(target.isolationRoot, planning ? 'planning-native-templates.json' : 'saved-native-templates.json')
     const common = { ...options, ...bound, target, invocationId, nativeAction, caseId, operations, templatesPath,
-      sceneId: policy.sceneId, chapterNumber: 2, scenarioRevision: policy.scenarioRevision,
+      sceneId: policy.sceneId, chapterNumber: policy.chapterNumber, scenarioRevision: policy.scenarioRevision,
       attemptPolicy: policy.attemptPolicy, evaluationPolicy: policy.evaluationPolicy, driverHash: productionBridgeHash(),
       approval, firstReview, ledgerPath: record.ledgerPath ?? options.ledgerPath }
     if (record.ledgerPath && path.resolve(record.ledgerPath) !== path.resolve(options.ledgerPath)) throw new Error('SAVED_NATIVE_LEDGER_DRIFT')
@@ -2608,7 +2832,7 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     if (!record.prepared) {
       if (nativeAction === 'complete') throw new Error('SAVED_NATIVE_PREPARATION_REQUIRED')
       record.prepared = bridge({ ...common, mode: 'synthetic', nativeAction: 'prepare', action: 'prepare',
-        operations: savedNativeOperations(caseId, 'prepare') })
+        operations: operationsFor(caseId, 'prepare') })
       saveExecutionRecord(bound, record)
     }
     if (nativeAction === 'prepare') return { status: 'prepared', physicalModelRequests: 0, prepared: record.prepared,
@@ -2619,7 +2843,7 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     return { status: result.status === 'passed' ? 'pending-independent-oracle-review' : 'failed',
       qualification: 'non-qualification-diagnostic', formalDenominatorContribution: 0, results: [result],
       executionRecordPath: bound.executionRecordPath, physicalModelRequests: result.physicalModelRequests ?? 0,
-      notRun: result.status === 'passed' ? [] : ['control-review'] }
+      notRun: result.status === 'passed' ? [] : planning ? operations.filter(item => !result.operations?.some(done => done.operation === item.id)).map(item => item.id) : ['control-review'] }
   }
   if (options.phase === 'full') return runProductionFull(targets, options, bridge)
   const scenario = productionScenario(options.phase, options.milestone, options.protocolRevision)
@@ -2928,7 +3152,7 @@ export function validateAiReviewedManuscript(result) {
         throw new Error('AI_REVIEW_REBUILD_NOT_REGISTERED')
       return { ...aiReviewFinalManuscriptSelection({ rawContent: artifact.text, savedContent: reportBody, context }), context, report: JSON.parse(reportBody) }
     }
-    const savedNative = result.phase === 'saved-native-review-diagnostic'
+    const savedNative = ['saved-native-review-diagnostic', 'planning-native-diagnostic'].includes(result.phase)
     let firstEvidence = result
     if (savedNative && result.nativeApproval) {
       const bytes = fs.readFileSync(result.nativeApproval.receiptPath)

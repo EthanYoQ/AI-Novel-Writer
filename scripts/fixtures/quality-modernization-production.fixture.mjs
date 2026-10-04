@@ -13,6 +13,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, r3ModelForOperation, modelConfigurationHash, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation,
   SAVED_NATIVE_REVIEW_DIAGNOSTIC, readSavedNativeSource,
+  PLANNING_NATIVE_DIAGNOSTIC, PLANNING_STAGE_MODELS, readPlanningNativeSource,
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
@@ -38,6 +39,7 @@ const templateKeysForPhase = phase => phase === 'c16-c18'
   ? ['generate_chapter_notes', 'update_character_cards', 'first_chapter_draft', 'next_chapter_draft']
   : ['early-review', 'bounded-revision-diagnostic', 'r3-native-revision-diagnostic'].includes(phase)
   ? ['consistency_check', 'refine_from_review']
+  : phase === 'planning-native-diagnostic' ? ['synopsis', 'chapter_blueprint_chunk', 'first_chapter_draft', 'next_chapter_draft']
   : ['chapter_blueprint_chunk', 'first_chapter_draft', 'next_chapter_draft']
 /** 合成正文按目标单位数配长：既不低于 70% 下限，也不触发自动续写。 */
 const syntheticDraftText = (countUnits, targetUnits, chapterNumber = 1, offset = 0) => {
@@ -214,6 +216,8 @@ test('isolated production commands persist the selected phase operations', async
   const boundedRun = request.phase === 'bounded-revision-diagnostic'
   const r3Run = request.phase === 'r3-native-revision-diagnostic'
   const savedRun = request.phase === 'saved-native-review-diagnostic'
+  const planningRun = request.phase === 'planning-native-diagnostic'
+  const planningSource = planningRun ? readPlanningNativeSource(request.diagnosticInputPath) : null
   const copiedRun = boundedRun || r3Run || savedRun
   const boundedSource = savedRun ? readSavedNativeSource(request.diagnosticInputPath, request.caseId)
     : r3Run ? readR3NativeSource(request.diagnosticInputPath) : boundedRun ? readBoundedRevisionSource(request.diagnosticInputPath) : null
@@ -227,7 +231,7 @@ test('isolated production commands persist the selected phase operations', async
   }
   if (diagnosticRun) assert.equal(target.arm, 'candidate', 'SHARED_INPUT_DIAGNOSTIC_CANDIDATE_REQUIRED')
   const aiReviewRun = request.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision
-    && (savedRun || r3Run || fullRun || request.phase === 'c16-c18' || request.milestone === 'post-ui' && ['early-budget', 'early-context', 'early-review'].includes(request.phase))
+    && (planningRun || savedRun || r3Run || fullRun || request.phase === 'c16-c18' || request.milestone === 'post-ui' && ['early-budget', 'early-context', 'early-review'].includes(request.phase))
   if (aiReviewRun) assert.deepEqual(request.evaluationPolicy, productionScenario(request.phase, request.milestone, request.protocolRevision).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
   if (request.phase === 'c16-c18') assert.deepEqual(request.evaluationPolicy,
     productionScenario(request.phase, request.milestone, request.protocolRevision).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
@@ -243,8 +247,8 @@ test('isolated production commands persist the selected phase operations', async
   const registeredForward = forwardReasoningFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
     request.phase, request.milestone)
   assert.deepEqual(request.forwardReasoning ?? null, registeredForward, 'FORWARD_REGISTRATION_MISMATCH')
-  const stageProfiles = savedRun ? QUALIFICATION_STAGE_MODELS.profiles : registeredForward?.stageModels?.profiles
-  const modelForOperation = operationId => savedRun ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : r3Run ? r3ModelForOperation(operationId)
+  const stageProfiles = planningRun ? PLANNING_STAGE_MODELS.profiles : savedRun ? QUALIFICATION_STAGE_MODELS.profiles : registeredForward?.stageModels?.profiles
+  const modelForOperation = operationId => planningRun ? PLANNING_NATIVE_DIAGNOSTIC.modelProfile : savedRun ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : r3Run ? r3ModelForOperation(operationId)
     : qualificationModelForOperation(request.phase, request.milestone, operationId)
   const registeredWindow = forwardQualificationWindowFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
     request.phase, request.milestone)
@@ -262,12 +266,17 @@ test('isolated production commands persist the selected phase operations', async
     assert.equal(request.scenarioRevision, productionScenario('c16-c18', 'final', request.protocolRevision).scenarioRevision, 'CONTINUITY_EXECUTION_REVISION_MISMATCH')
     assert.ok(typeof continuitySource?.content === 'string' && continuitySource.content.trim(), 'CONTINUITY_SOURCE_MISSING')
   }
-  const scene = source.scenes.find(value => value.id === request.sceneId)
+  const scene = planningRun ? { id: request.sceneId, title: '规划六章', targetUnits: 1000,
+    material: planningSource.rows.core.core_outline, characters: planningSource.rows.characters.map(item => item.name),
+    chapters: Array.from({ length: 6 }, (_, index) => ({ number: index + 1, targetUnits: 1000,
+      brief: `林砚核对第${index + 1}份维修记录并保留交付证据`, requiredEvents: [`林砚核对第${index + 1}份维修记录`, '林砚保留交付证据'],
+      oracle: { time: '七日交付期限内', knowledge: '后续调查尚未发生' } })) }
+    : source.scenes.find(value => value.id === request.sceneId)
   assert.ok(scene, 'SCENE_NOT_REGISTERED')
   const chapter = scene.chapters[request.chapterNumber - 1]
   assert.ok(chapter, 'CHAPTER_NOT_REGISTERED')
-  const authorityFacts = Object.values(chapter.oracle ?? {}).flatMap(value => Array.isArray(value) ? value : [value])
-  const chapterGuidance = `${source.template}\n本章时点：${chapter.oracle.time}`
+  const authorityFacts = planningRun ? [] : Object.values(chapter.oracle ?? {}).flatMap(value => Array.isArray(value) ? value : [value])
+  const chapterGuidance = planningRun ? '' : `${source.template}\n本章时点：${chapter.oracle.time}`
   const authorityText = [scene.material, scene.longSetting,
     ...(fullRun ? scene.chapters.map(entry => `${entry.brief}\n${entry.requiredEvents.join('；')}\n本章时点：${entry.oracle.time}`) : [chapter.brief, chapter.requiredEvents]),
     scene.characters, chapterGuidance].flat().filter(Boolean).join('\n')
@@ -286,14 +295,14 @@ test('isolated production commands persist the selected phase operations', async
   }
   // 长设定只在预注册语义源里存在的场景携带；它作为作者资料进入受预算的必需材料。
   // 场景 revision 登记的附加行（如 post-UI 的【第1章必现】）只追加到作者世界设定，其余 revision 字节不变。
-  const authorSetting = scenarioAuthorSetting(scene, request.scenarioRevision)
+  const authorSetting = planningRun ? planningSource.rows.core.world_setting : scenarioAuthorSetting(scene, request.scenarioRevision)
   if (reviewedRun) assert.ok(scenarioAuthorSettingLines(scene, request.scenarioRevision).length, 'REVIEWED_SCENARIO_AUTHOR_LINE_MISSING')
   const load = relative => import(/* @vite-ignore */ pathToFileURL(path.join(target.repositoryRoot, relative)).href)
   const receipt = { schemaVersion: 1, invocationId: request.invocationId, arm: target.arm, mode: request.mode, action: request.action,
     ...(request.sampling ? { sampling: { ...request.sampling, slot: `${request.phase}:${request.caseId}` } } : {}),
     protocolRevision: request.protocolRevision, protocolHash: request.protocolHash, scenarioRevision: request.scenarioRevision,
     phase: request.phase, milestone: request.milestone, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
-    operations: [], qualification: diagnosticRun || copiedRun ? 'non-qualification-diagnostic' : request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
+    operations: [], qualification: planningRun || diagnosticRun || copiedRun ? 'non-qualification-diagnostic' : request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
     sourceHash: target.sourceHash, driverHash: request.driverHash,
     modelParameters: { source: source.modelParameters, effective: effectiveModelParameters,
       registrationRevision: registeredForward?.revision ?? null },
@@ -312,7 +321,7 @@ test('isolated production commands persist the selected phase operations', async
   const originalFetch = globalThis.fetch
   let davFetch = null
   globalThis.fetch = async (...args) => davFetch ? davFetch(...args) : rejectOutsidePhysicalBoundary(receipt)
-  let database, projectAccess, currentContext, sourceParity, countUnits, recoveryRows, localDispatchGateRejection
+  let database, projectAccess, currentContext, sourceParity, countUnits, recoveryRows, localDispatchGateRejection, capturePlanningEvidence, planningDb
   let secrets = []
   const safeDiagnostic = value => safeReceiptDiagnostic(value, request.mode)
   const streamSettlements = []
@@ -352,6 +361,12 @@ test('isolated production commands persist the selected phase operations', async
       assert.deepEqual(projectAccess.probeExistingProject(project.rootPath), project)
     }
     let db = database.getProjectDb()
+    if (planningRun) {
+      planningDb = db
+      receipt.runtimePaths = { projectRoot: project.rootPath, databasePath: path.join(project.rootPath, '.ai-novel', 'project.db'),
+        manifestPath: path.join(project.rootPath, '.ai-novel', 'project.json'), globalAssetRoot: target.roots.config }
+      receipt.sourcePids = [process.pid]
+    }
     assert.equal(db.prepare('SELECT 1').pluck().get(), 1)
     let lease = projectAccess.beginSession(project)
     let session = { projectId: project.projectId, projectPath: project.rootPath, leaseId: lease.leaseId }
@@ -428,7 +443,7 @@ test('isolated production commands persist the selected phase operations', async
     if (r3Run || stageProfiles) {
       const profiles = stageProfiles ?? copiedPolicy.profiles
       assert.deepEqual(stageProfiles ? target.stageModels : target.r3StageProfiles,
-        stageProfiles ? QUALIFICATION_STAGE_MODELS : copiedPolicy.profiles, 'REGISTERED_STAGE_MODEL_MISMATCH')
+        stageProfiles ? planningRun ? PLANNING_STAGE_MODELS : QUALIFICATION_STAGE_MODELS : copiedPolicy.profiles, 'REGISTERED_STAGE_MODEL_MISMATCH')
       const configured = request.mode === 'real' ? json(path.join(target.roots.config, 'models.json'))
         : Object.values(profiles).map(profile => ({ ...profile.model, apiKey: 'synthetic-quality-never-network' }))
       stageModels = Object.fromEntries(Object.values(profiles).map(profile => {
@@ -457,6 +472,39 @@ test('isolated production commands persist the selected phase operations', async
     ;(await load('electron/controllers/fs-controller.ts')).registerFSController()
     ;(await load('electron/controllers/app-data-controller.ts')).registerAppDataController()
     ;(await load('electron/controllers/kb-controller.ts')).registerKBController()
+    if (planningRun) {
+      receipt.publicModel = Object.fromEntries(Object.entries(model).filter(([key]) => key !== 'apiKey'))
+      capturePlanningEvidence = async () => {
+        const latest = db.prepare('SELECT id FROM drafts WHERE chapter_number=1 ORDER BY version DESC LIMIT 1').get()
+        receipt.savedEvidence = {
+          core: await invoke('db:project-core-get', project.rootPath, session),
+          blueprints: await invoke('db:blueprint-get-all', project.rootPath, session),
+          draft: latest ? await invoke('db:draft-get-full', latest.id, project.rootPath, session) : null,
+          reviews: await Promise.all(db.prepare('SELECT id FROM reviews ORDER BY id').all()
+            .map(row => invoke('db:review-get-full', row.id, project.rootPath, session))),
+          revisions: await Promise.all(db.prepare('SELECT id FROM revisions ORDER BY id').all()
+            .map(row => invoke('db:revision-get-full', row.id, project.rootPath, session))),
+        }
+        receipt.savedEvidenceHash = sha(JSON.stringify(receipt.savedEvidence, (_, value) => value && !Array.isArray(value) && typeof value === 'object'
+          ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value))
+        const promptRoot = path.join(target.roots.config, 'prompts')
+        receipt.sourceAssets = { userSkills: [], globalPrompts: fs.readdirSync(promptRoot).sort().map(name => {
+          const file = path.join(promptRoot, name), bytes = fs.readFileSync(file)
+          return { scope: 'global', relativePath: `prompts/${name}`, sourcePath: file,
+            sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length }
+        }) }
+        if (currentContext?.mainGenerationRunHandle) {
+          const handle = currentContext.mainGenerationRunHandle
+          receipt.recovery = { sourceHandle: handle, context: await invoke('generation:read-context', { handle }, session),
+            state: await invoke('generation:read', handle, session),
+            binding: JSON.parse(db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(handle.runId)),
+            artifacts: db.prepare('SELECT artifact_json FROM generation_artifacts WHERE run_id=? ORDER BY rowid').all(handle.runId)
+              .map(row => JSON.parse(row.artifact_json)),
+            attempts: db.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(handle.runId)
+              .map(row => ({ attempt: JSON.parse(row.attempt_json), usage: JSON.parse(row.usage_receipt_json) })) }
+        }
+      }
+    }
     if (continuityRun || copiedRun) {
       assert.equal(candidate, true, 'CANDIDATE_REQUIRED')
       ;(await load('electron/controllers/project-archive-controller.ts')).registerProjectArchiveController()
@@ -467,7 +515,13 @@ test('isolated production commands persist the selected phase operations', async
       assert.equal(embedding, null, 'UNREGISTERED_EMBEDDING_CONFIGURATION')
     }
 
-    const config = r3Run || savedRun ? boundedSource.context.config : { genre: '悬疑', targetAudience: '通用', totalChapters: scene.chapters.length, wordsPerChapter: scene.targetUnits,
+    const config = planningRun ? { ...Object.fromEntries(['genre', 'sub_genre', 'target_audience', 'writing_language', 'creative_strategy',
+      'narrative_thread_dormant_threshold', 'plot_structure', 'narrative_pov', 'writing_style', 'reference_works', 'global_guidance',
+      'golden_finger', 'core_outline', 'world_setting', 'protagonist_profile'].map(key => [key.replace(/_([a-z])/gu, (_, letter) => letter.toUpperCase()), planningSource.rows.core[key]])),
+      narrativePOV: planningSource.rows.core.narrative_pov,
+      narrativeThreadDormantChapterThreshold: planningSource.rows.core.narrative_thread_dormant_threshold,
+      totalChapters: 6, wordsPerChapter: 1000 }
+      : r3Run || savedRun ? boundedSource.context.config : { genre: '悬疑', targetAudience: '通用', totalChapters: scene.chapters.length, wordsPerChapter: scene.targetUnits,
       writingLanguage: 'zh-CN', creativeStrategy: 'auto', globalGuidance: source.template,
       coreOutline: scene.material, worldSetting: authorSetting, protagonistProfile: scene.characters.join('\n'),
       plotStructure: 'three_act', narrativePov: 'third_limited', writingStyle: '' }
@@ -557,6 +611,84 @@ test('isolated production commands persist the selected phase operations', async
       } else templates = json(request.templatesPath).templates
       fs.mkdirSync(path.join(target.roots.config, 'prompts'), { recursive: true })
       for (const template of templates) save(path.join(target.roots.config, 'prompts', `${template.key}.json`), template)
+      if (planningRun) {
+        ;(await load('electron/repositories/project-core-repository.ts')).ProjectCoreRepository.init(scene.title, config.writingLanguage)
+        const saved = await invoke('db:project-core-update', { ...config, projectName: scene.title,
+          premise: planningSource.premise, worldbuilding: planningSource.worldbuilding }, project.rootPath, session)
+        assert.ok(saved?.success, 'PLANNING_SOURCE_CORE_NOT_SAVED')
+        const fields = ['name', 'role', 'gender', 'age', 'appearance', 'personality', 'background', 'abilities', 'motivation', 'arc', 'notes']
+        let roster = await invoke('db:character-roster-read', project.rootPath, session)
+        assert.equal(roster.entries.length, 0, 'PLANNING_SOURCE_ROSTER_NOT_EMPTY')
+        const characterMap = []
+        for (const sourceCharacter of planningSource.rows.characters) {
+          const selectionKey = `draft:${sourceCharacter.character_id}`
+          const result = await invoke('db:character-roster-commit', { operationId: `${request.invocationId}:${sourceCharacter.character_id}`,
+            intent: 'manual_edit', schemaVersion: 1, expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision,
+            entries: [...roster.entries, { ...Object.fromEntries(fields.map(key => [key, sourceCharacter[key]])),
+              characterId: selectionKey, legacyRelationshipNotes: sourceCharacter.relationships, relationships: [],
+              ...(sourceCharacter.cs_updated_at_chapter === null ? {} : { currentState: { location: sourceCharacter.cs_location, powerLevel: sourceCharacter.cs_power_level,
+                physicalState: sourceCharacter.cs_physical_state, mentalState: sourceCharacter.cs_mental_state,
+                keyItems: sourceCharacter.cs_key_items, recentEvents: sourceCharacter.cs_recent_events,
+                updatedAtChapter: sourceCharacter.cs_updated_at_chapter, provenance: JSON.parse(sourceCharacter.cs_provenance) } }) }] }, project.rootPath, session)
+          assert.ok(result?.success, `PLANNING_SOURCE_CHARACTER_NOT_SAVED:${result?.error}`)
+          const receipt = result.receipt ?? result
+          const created = receipt.created.filter(item => item.selectionKey === selectionKey)
+          assert.equal(created.length, 1, 'PLANNING_SOURCE_ID_MAPPING_MISSING')
+          characterMap.push({ sourceId: sourceCharacter.character_id, targetId: created[0].characterId })
+          roster = receipt.snapshot
+        }
+        assert.equal(new Set(characterMap.map(item => item.targetId)).size, characterMap.length, 'PLANNING_SOURCE_ID_NOT_BIJECTIVE')
+        const targetId = id => {
+          const target = characterMap.find(item => item.sourceId === id)?.targetId
+          assert.ok(target, 'PLANNING_SOURCE_RELATIONSHIP_ENDPOINT_MISSING')
+          return target
+        }
+        const relations = planningSource.rows.relationships
+        const linked = await invoke('db:character-roster-commit', { operationId: `${request.invocationId}:relationships`,
+          intent: 'manual_edit', schemaVersion: 1, expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision,
+          entries: roster.entries.map(entry => ({ ...entry, relationships: relations.filter(item => targetId(item.source_character_id) === entry.characterId)
+            .map(item => ({ targetCharacterId: targetId(item.target_character_id), relation: item.relation })) })) }, project.rootPath, session)
+        assert.ok(linked?.success, `PLANNING_SOURCE_RELATIONSHIPS_NOT_SAVED:${linked?.error}`)
+        roster = await invoke('db:character-roster-read', project.rootPath, session)
+        for (const sourceCharacter of planningSource.rows.characters) {
+          const actual = roster.entries.find(item => item.characterId === targetId(sourceCharacter.character_id))
+          assert.deepEqual(Object.fromEntries(fields.map(key => [key, actual[key]])), Object.fromEntries(fields.map(key => [key, sourceCharacter[key]])), 'PLANNING_SOURCE_CHARACTER_FACT_DRIFT')
+        }
+        const persistedCharacters = db.prepare('SELECT * FROM characters').all()
+        const characterMetadata = ['character_id', 'static_provenance', 'identity_revision', 'created_at', 'updated_at']
+        for (const sourceCharacter of planningSource.rows.characters) {
+          const actual = persistedCharacters.find(item => item.character_id === targetId(sourceCharacter.character_id))
+          const facts = row => Object.fromEntries(Object.entries(row).filter(([key]) => !characterMetadata.includes(key)))
+          assert.deepEqual(facts(actual), facts(sourceCharacter), 'PLANNING_SOURCE_CHARACTER_STATE_DRIFT')
+        }
+        const persistedRelations = db.prepare('SELECT * FROM character_relationships').all()
+        assert.equal(persistedRelations.length, relations.length, 'PLANNING_SOURCE_RELATIONSHIP_COUNT_DRIFT')
+        const relationshipMap = relations.map(item => {
+          const matches = persistedRelations.filter(row => row.source_character_id === targetId(item.source_character_id)
+            && row.target_character_id === targetId(item.target_character_id) && row.relation === item.relation)
+          assert.equal(matches.length, 1, 'PLANNING_SOURCE_RELATIONSHIP_FACT_DRIFT')
+          return { sourceId: item.relationship_id, targetId: matches[0].relationship_id,
+            sourceCharacterId: targetId(item.source_character_id), targetCharacterId: targetId(item.target_character_id) }
+        })
+        const readback = await invoke('db:project-core-get', project.rootPath, session)
+        assert.equal(readback.premise, planningSource.premise, 'PLANNING_SOURCE_PREMISE_DRIFT')
+        assert.equal(readback.worldbuilding, planningSource.worldbuilding, 'PLANNING_SOURCE_WORLDBUILDING_DRIFT')
+        const relationOrderIndependentText = text => text.split(/(?=^## )/mu).map(section => {
+          const lines = section.split('\n')
+          return [lines.filter(line => !line.startsWith('- 关系：')).join('\n').trimEnd(),
+            lines.filter(line => line.startsWith('- 关系：')).sort()]
+        })
+        assert.deepEqual(relationOrderIndependentText(readback.charactersArch), relationOrderIndependentText(planningSource.characters), 'PLANNING_SOURCE_CHARACTERS_TEXT_DRIFT')
+        assert.equal(readback.synopsis, '', 'PLANNING_SOURCE_SYNOPSIS_NOT_EMPTY')
+        assert.equal(db.prepare('SELECT COUNT(*) FROM drafts').pluck().get(), 0, 'PLANNING_SOURCE_DRAFT_NOT_EMPTY')
+        assert.equal(db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get(), 0, 'PLANNING_SOURCE_BLUEPRINT_NOT_EMPTY')
+        save(path.join(target.isolationRoot, 'planning-source.json'), { inputHash: planningSource.inputHash,
+          sourceHash: planningSource.sourceHash, characterMap, relationshipMap, core: readback, roster: roster.entries,
+          nativeMetadataFields: characterMetadata, characterRows: persistedCharacters, relationshipRows: persistedRelations,
+          projectionDifference: 'only-relationship-line-order-from-new-native-relationship-ids',
+          contentHashes: { premise: sha(readback.premise), sourceCharacters: sha(planningSource.characters),
+            savedCharactersArch: sha(readback.charactersArch), worldbuilding: sha(readback.worldbuilding) } })
+      } else {
       const columns = { id: 'main', project_name: scene.title, genre: config.genre, target_audience: config.targetAudience,
         total_chapters: scene.chapters.length, words_per_chapter: scene.targetUnits, writing_language: 'zh-CN', global_guidance: source.template,
         core_outline: scene.material, world_setting: authorSetting, protagonist_profile: config.protagonistProfile,
@@ -639,6 +771,7 @@ test('isolated production commands persist the selected phase operations', async
             materialContentHash: sha(`【未定稿候选 · 第${item.chapterNumber}章 · draft ${draftId} · v${full.version}】\n${materialBody}`) })
         }
         save(path.join(target.isolationRoot, 'predecessor.json'), { candidates: records })
+      }
       }
     }
     if (continuityRun && request.action === 'execute' && continuityCase.kind === 'extraction' && continuityCase.sourceSuffix) {
@@ -741,9 +874,15 @@ test('isolated production commands persist the selected phase operations', async
     sourceParity = { core, authorBlueprints, model: safeModel, ...(r3Run || stageProfiles ? { stageProfiles: stageProfiles ?? copiedPolicy.profiles } : {}), templates: physicalTemplates, skills: skillBindings.bindings,
       predecessors: parityPredecessors(predecessorReadbacks),
       semanticHash: sha(source), guidanceHash: sha(source.template) }
-    if (fullRun) {
+    if (fullRun || planningRun) {
       // Generated blueprints and prose diverge by arm; only original author inputs define initial parity.
-      sourceParity = { ...sourceParity, authorBlueprints: [], predecessors: [] }
+      sourceParity = { ...sourceParity, ...(planningRun ? { core: { ...core, synopsis: '' } } : {}), authorBlueprints: [], predecessors: [] }
+    }
+    if (planningRun) {
+      const prepared = json(path.join(target.isolationRoot, 'planning-source.json'))
+      assert.equal(prepared.inputHash, planningSource.inputHash, 'PLANNING_SOURCE_INPUT_DRIFT')
+      assert.deepEqual(JSON.parse(JSON.stringify((await invoke('db:character-roster-read', project.rootPath, session)).entries)), prepared.roster, 'PLANNING_SOURCE_ROSTER_DRIFT')
+      receipt.planningSource = { ...prepared, path: path.join(target.isolationRoot, 'planning-source.json') }
     }
     receipt.physicalProject = { path: project.rootPath, dbPath: db.name, projectId: project.projectId,
       format: candidate ? 'canonical' : 'legacy', parityHash: sha(sourceParity), readback: sourceParity }
@@ -894,8 +1033,10 @@ test('isolated production commands persist the selected phase operations', async
         measureUnits: text => countUnits(visible.sanitizeDraftText(redactVisibleCompletionText(text))) }
     }
     const structuredPolicy = policyEligible ? structuredRecoveryFor(request.attemptPolicy, target.arm) : null
-    const structuredRecovery = structuredPolicy ? { policy: structuredPolicy, decode: blueprintRecoveryDecoder(target.repositoryRoot, target.arm),
-      chapterNumbers: fullRun ? scene.chapters.map(entry => entry.number) : [chapter.number] } : null
+    const structuredRecovery = planningRun ? request.attemptPolicy.structuredRecovery.map(policy => ({ policy,
+      decode: blueprintRecoveryDecoder(target.repositoryRoot, target.arm), chapterNumbers: policy.chapterNumbers }))
+      : structuredPolicy ? { policy: structuredPolicy, decode: blueprintRecoveryDecoder(target.repositoryRoot, target.arm),
+        chapterNumbers: fullRun ? scene.chapters.map(entry => entry.number) : [chapter.number] } : null
     const recoveryPolicy = policyEligible ? draftRecoveryFor(request.attemptPolicy, target.arm) : null
     const draftRecovery = recoveryPolicy ? { policy: recoveryPolicy, arm: target.arm, targetUnits: chapter.targetUnits } : null
     if (recoveryPolicy) {
@@ -904,6 +1045,7 @@ test('isolated production commands persist the selected phase operations', async
     }
     const { parseFinalizedCharacterStateResponse } = continuityRun ? await load('src/shared/finalized-continuity.ts') : {}
     const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, draftCondense, draftRecovery, structuredRecovery,
+      planningOutline: planningRun ? request.attemptPolicy.outline : null,
       shortOutline: request.attemptPolicy?.shortOutline,
       refinementRecovery: aiReviewRun ? request.attemptPolicy.refinementRecovery : null,
       finalizationRepair: continuityRun, readPrimaryEvidence: first => {
@@ -920,12 +1062,12 @@ test('isolated production commands persist the selected phase operations', async
         ...(operationKind === 'refine' ? { composition: refinementComposition,
           composeVisibleText: baselineContract.appendVisibleTextContinuation, redactVisibleText: baselineContract.redactVisibleCompletionText } : {}) }
       // 原生恢复只读该 attempt 的原始 artifact 与正式效果；同一草稿的旧审稿不代替本次 owner 证据。
-      if (target.arm === 'candidate' && (request.phase === 'saved-native-review-diagnostic' || r3Run || continuityRun || request.attemptPolicy?.structuredRecovery && operationKind === 'directory'
+      if (target.arm === 'candidate' && (planningRun && operationKind === 'outline' || request.phase === 'saved-native-review-diagnostic' || r3Run || continuityRun || request.attemptPolicy?.structuredRecovery && operationKind === 'directory'
         || (request.attemptPolicy?.draftRecovery || request.attemptPolicy?.draftCondense) && operationKind === 'draft'
         || ['review', 'final-review'].includes(operationKind) && reviewLengthRecoveryFor(receipt, operationId))) {
         const artifact = db.prepare('SELECT artifact_json FROM generation_artifacts WHERE attempt_id=?').pluck().get(first.attemptId)
         if (!artifact) return null
-        if (['draft', 'directory'].includes(operationKind)) return { attempt: matches[0], events,
+        if (['draft', 'directory', 'outline'].includes(operationKind)) return { attempt: matches[0], events,
           ownerArtifactHash: sha(JSON.parse(artifact).text), ownerArtifactId: JSON.parse(artifact).artifactId }
         if (aiReviewRun && ['review', 'final-review', 'refine'].includes(operationKind)) {
           const usage = JSON.parse(db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(first.attemptId))
@@ -951,6 +1093,10 @@ test('isolated production commands persist the selected phase operations', async
     } })
     const physicalFetch = async (url, options) => {
       const preflight = createOutboundPreflightAssert(receipt.preflightFailures ??= [])
+      if (planningRun) {
+        readPlanningNativeSource(request.diagnosticInputPath)
+        await Promise.all(streamSettlements)
+      }
       preflight(new URL(String(url)).host === effectiveModelParameters.endpointHost, 'UNREGISTERED_PROVIDER_HOST')
       preflight(new URL(String(url)).pathname === '/v1/chat/completions', 'UNREGISTERED_PROVIDER_PATH')
       const body = JSON.parse(options.body)
@@ -987,7 +1133,7 @@ test('isolated production commands persist the selected phase operations', async
           for (const key of ['modelId', 'modelName', 'modelRevision', 'provider', 'protocol', 'endpointFingerprint'])
             preflight(manifest.modelReceipt?.[key] === expected[key], 'R3_NATIVE_OWNER_MODEL_MISMATCH')
         }
-        if (!['directory', 'chapter_notes', 'character_cards', 'diagnostic'].includes(operationKind)) preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
+        if (!['outline', 'directory', 'chapter_notes', 'character_cards', 'diagnostic'].includes(operationKind)) preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
       }
       const observedIpc = candidate ? null : pendingBaselineIpc
       pendingBaselineIpc = null
@@ -1163,6 +1309,22 @@ test('isolated production commands persist the selected phase operations', async
           ...(candidate && operationKind === 'draft' ? { materialSource: materialDecision.included.find(item => item.sourceId === `candidate:${previous.id}`) } : {}) }
       }
       // phase / caseId / operation 全部来自本次选定的协议阶段，账本按协议逐字校验。
+      let planningConsumption
+      if (planningRun && ['outline', 'directory'].includes(operationKind)) {
+        const operation = PLANNING_NATIVE_DIAGNOSTIC.operations.find(item => item.id === operationId)
+        const manifest = JSON.parse(db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(actual.runId)).sourceManifest
+        preflight(JSON.stringify(manifest.policy.budget) === JSON.stringify(PLANNING_NATIVE_DIAGNOSTIC.planningRootBudgets[operationId]), 'PLANNING_ROOT_BUDGET_DRIFT')
+        const { planningTargetInstruction } = await load('src/shared/plot-outline-contract.ts')
+        const instruction = planningTargetInstruction(operationKind === 'outline' ? 'outline' : 'blueprint', operation.targetUnits, 'zh-CN')
+        preflight(body.messages.some(message => message.role === 'system' && message.content.includes(instruction)), 'PLANNING_SYSTEM_TARGET_MISSING')
+        const core = await invoke('db:project-core-get', project.rootPath, session)
+        const fields = operationKind === 'outline' ? ['premise', 'charactersArch', 'worldbuilding'] : ['premise', 'charactersArch', 'worldbuilding', 'synopsis']
+        const compactBlueprint = actual.purpose.startsWith('chapter-blueprint-directory:compact-single:')
+        planningConsumption = fields.map(field => ({ field, contentHash: sha(core[field]), bytes: Buffer.byteLength(core[field]),
+          completeTextSent: promptText.includes(core[field]) || compactBlueprint && promptText.includes(JSON.stringify(core[field]).slice(1, -1)),
+          encoding: compactBlueprint ? 'json-string' : 'text' }))
+        if (!structuredSyntaxRepair) preflight(planningConsumption.every(item => item.completeTextSent), 'PLANNING_SAVED_ARCHITECTURE_NOT_SENT')
+      }
       const binding = { campaignId: CAMPAIGN_ID, invocationId: request.invocationId, mode: request.mode, arm: target.arm,
         ...(request.sampling ? { sampling: { ...request.sampling, slot: `${request.phase}:${request.caseId}` } } : {}),
         protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
@@ -1175,6 +1337,8 @@ test('isolated production commands persist the selected phase operations', async
             .map(key => [key, diagnosticSlot[key]])) } : {}),
         ...(r3Run || stageProfiles ? { stageModel: { profileId: modelForOperation(operationId).profileId, configurationHash: modelForOperation(operationId).configurationHash } } : {}),
         ...(copiedRun ? { diagnosticSourceHash: sha(copiedPolicy.source), diagnosticInputHash: boundedSource.inputHash } : {}),
+        ...(planningRun ? { diagnosticSourceHash: planningSource.sourceHash, diagnosticInputHash: planningSource.inputHash,
+          planningRange: PLANNING_NATIVE_DIAGNOSTIC.operations.find(item => item.id === operationId)?.range ?? PLANNING_NATIVE_DIAGNOSTIC.range } : {}),
         ...(aiReviewRun ? { evaluationPolicyHash: sha(request.evaluationPolicy) } : {}),
         ...(actual ? { actual } : { baselineIpc: observedIpc }) }
       record({ type: 'reserve', attemptId, binding })
@@ -1189,6 +1353,7 @@ test('isolated production commands persist the selected phase operations', async
         .map(record => ({ sourceId: `candidate:${record.draftId}`, revision: record.version, contentHash: record.materialContentHash,
           persistedContentHash: sha(record.content), persistedBytes: Buffer.byteLength(record.content, 'utf8'), markerHash: sha(record.marker) }))
       const requestReceipt = { attemptId, binding, requestedOutputTokens: body.max_tokens ?? body.max_completion_tokens,
+        ...(planningConsumption ? { planningConsumption } : {}),
         ...(boundedRun || separatedRun ? { nativePlannedAttempt: JSON.parse(db.prepare('SELECT attempt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(actual.attemptId)) } : {}),
         ...(forwardReasoningEvidence ? { reasoning: forwardReasoningEvidence } : {}),
         compiledPromptHash: sha(body.messages), systemPromptHash: sha(body.messages.filter(message => message.role === 'system')),
@@ -1211,8 +1376,8 @@ test('isolated production commands persist the selected phase operations', async
         userPromptHash, optionalMaterialEvidence: { registered: registeredOptional, sent: sentOptional,
           sentSourceIds: sentOptional.map(record => record.sourceId),
           ...(candidate ? { materialDecision } : {}) } }
-      if (r3Run || savedRun) {
-        const messagesPath = path.join(evidenceRoot, `r3-request-messages-${receipt.attempts.length + 1}.json`)
+      if (r3Run || savedRun || planningRun) {
+        const messagesPath = path.join(evidenceRoot, `${planningRun ? 'planning' : 'r3'}-request-messages-${receipt.attempts.length + 1}.json`)
         const messages = JSON.stringify(body.messages)
         fs.writeFileSync(messagesPath, messages, { flag: 'wx' })
         requestReceipt.requestMessages = { path: messagesPath, sha256: sha(messages), bytes: Buffer.byteLength(messages) }
@@ -1246,7 +1411,12 @@ test('isolated production commands persist the selected phase operations', async
           ...(diagnosticSlot.role === 'goal' ? { goalReviews: diagnosticInput.sources.find(item => item.id === diagnosticSlot.sourceId)
             .materials.context.frozenGoals.items.map(goal => ({ id: goal.id, status: 'unknown', description: '零模型接线不判断目标。', evidence: [] })) } : {}) })
         else if (diagnosticRun) text = '| 事实原文引文 | 时间单位 | 属于前章或本章 | 已经发生或尚未发生 | 本章要求新增的事件 |\n| --- | --- | --- | --- | --- |\n| 未明示 | 未明示 | 未明示 | 未明示 | 未明示 |'
-        else if (operationKind === 'directory') text =JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).filter(entry => !(actual ?? observedIpc).structuredRange || (actual ?? observedIpc).structuredRange.includes(entry.number)).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
+        else if (planningRun && operationKind === 'outline') {
+          const match = /^plot-outline:chapter:(\d+):(normal|compact)$/u.exec(actual.purpose)
+          assert.ok(match, 'PLANNING_NATIVE_OUTLINE_PROTOCOL_REQUIRED')
+          text = `## 第${match[1]}章：维修记录${match[1]}\n\n林砚在七日交付期限内核对第${match[1]}份维修记录。她只依据手写维修簿与机器零件留下的痕迹调查，不使用超自然能力。她保留这份记录的原件，先记下缺页和涂改的具体位置，不提前断言委托人的去向。当前章结束时，下一份记录仍需核实。`
+        }
+        else if (operationKind === 'directory') text =JSON.stringify({ blueprints: (fullRun || planningRun ? scene.chapters : [chapter]).filter(entry => !(actual ?? observedIpc).structuredRange || (actual ?? observedIpc).structuredRange.includes(entry.number)).map(entry => ({ chapterNumber: entry.number, title: planningRun ? `维修记录${entry.number}` : scene.title, role: '开篇',
           purpose: entry.brief, keyEvents: entry.requiredEvents.join('；'), characters: scene.characters,
           relationships: [], suspenseHook: entry.oracle?.knowledge ?? '', userGuidance: fullRun ? `${source.template}\n本章时点：${entry.oracle.time}` : source.template })) })
         else if (operationKind === 'chapter_notes') text = finalizedContext.identity.content
@@ -1328,6 +1498,17 @@ test('isolated production commands persist the selected phase operations', async
         // Development transport exercises the existing product recovery branches; real/frozen requests never enter here.
         if (request.development && request.mode === 'synthetic') {
           const purpose = (actual ?? observedIpc).purpose
+          if (planningRun && request.syntheticPlanning) {
+            if (['empty-stop', 'empty-length'].includes(request.syntheticPlanning) && purpose === 'plot-outline:chapter:1:normal') {
+              text = ''; syntheticFinish = request.syntheticPlanning === 'empty-stop' ? 'stop' : 'length'
+            }
+            if (request.syntheticPlanning === 'outline-recovery' && /^plot-outline:chapter:2:(normal|compact)$/.test(purpose)) {
+              text = '## 第2章：未完成候选\n原文在这里截断'; syntheticFinish = 'length'
+            }
+            if (request.syntheticPlanning === 'blueprint-recovery' && operationKind === 'directory') {
+              text = '{"blueprints":[{"chapterNumber":1,"title":"未完成候选'; syntheticFinish = 'length'
+            }
+          }
           if (savedRun) {
             const ordinal = receipt.attempts.filter(item => item.binding.operation === operationId).length
             if (['review', 'final-review'].includes(operationKind) && ordinal < 4) {
@@ -1356,7 +1537,7 @@ test('isolated production commands persist the selected phase operations', async
               issues.forEach((item, index) => { text = text.replace(`清晨，林澄核对第${index + 1}行登记，发现日期异常。`, item.quote) })
             }
           }
-          if (structuredRecovery && operationKind === 'directory' && candidate && !purpose.includes(':compact-single:')) {
+          if (structuredRecovery && operationKind === 'directory' && candidate && !planningRun && !purpose.includes(':compact-single:')) {
             const invalid = JSON.parse(text)
             invalid.blueprints[0].keyEvents = '超'.repeat(4001)
             text = JSON.stringify(invalid)
@@ -1485,10 +1666,10 @@ test('isolated production commands persist the selected phase operations', async
       FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1`).get(chapter.number)
     const reviewState = {}
     const reviewedDraft = reviewedRun ? {} : null
-    const aiReviewedDraft = aiReviewRun && (savedRun || request.operations.some(item => ['draft', 'review'].includes(item.kind))) ? {} : null
+    const aiReviewedDraft = aiReviewRun && (savedRun || planningRun || request.operations.some(item => ['draft', 'review'].includes(item.kind))) ? {} : null
     let reviewedMustShowTexts = []
     const artifact = (outputPath, content, extra = {}) => ({ ...extra, outputPath, contentHash: sha(content) })
-    if (savedRun && request.nativeAction === 'complete') {
+    if ((savedRun || planningRun) && request.nativeAction === 'complete') {
       const first = request.firstReview, approval = request.approval, sourceDraft = latestDraft()
       assert.equal(first?.physicalProject?.projectId, project.projectId, 'SAVED_NATIVE_APPROVAL_PROJECT_MISMATCH')
       assert.equal(path.resolve(first.physicalProject.dbPath), path.resolve(db.name), 'SAVED_NATIVE_APPROVAL_DATABASE_MISMATCH')
@@ -1497,7 +1678,7 @@ test('isolated production commands persist the selected phase operations', async
       assert.deepEqual(stored.sourceDraft, { id: sourceDraft.id, chapterNumber: sourceDraft.chapterNumber,
         version: sourceDraft.version, status: sourceDraft.status, content: sourceDraft.content }, 'SAVED_NATIVE_APPROVAL_SOURCE_MISMATCH')
       const cycle = await invoke('db:review-cycle-get', approval.reviewId, project.rootPath, session)
-      const provenance = first.operations.find(item => item.operation === 'negative-review')?.reviewProvenance
+      const provenance = first.operations.find(item => item.operation === (planningRun ? 'planning-review' : 'negative-review'))?.reviewProvenance
       assert.ok(provenance?.attemptId, 'SAVED_NATIVE_APPROVAL_PROVENANCE_MISSING')
       const row = db.prepare(`SELECT a.usage_receipt_json,g.artifact_json,r.binding_json FROM generation_attempts a
         JOIN generation_artifacts g ON g.attempt_id=a.attempt_id JOIN generation_runs r ON r.run_id=a.run_id WHERE a.attempt_id=?`).get(provenance.attemptId)
@@ -1510,7 +1691,7 @@ test('isolated production commands persist the selected phase operations', async
       const indexes = approval.findingIds.map(id => {
         const finding = cycle.findings.find(item => item.findingId === id)
         const item = report.items[finding?.reviewItemIndex]
-        assert.ok(item && item.severity === 'unknown' && item.goalId === 'ch2:keyEvents:2'
+        assert.ok(item && (planningRun || item.severity === 'unknown' && item.goalId === 'ch2:keyEvents:2')
           && selection.selected.some(selected => sha(selected) === sha(item)), 'SAVED_NATIVE_APPROVAL_FINDING_MISMATCH')
         return finding.reviewItemIndex
       })
@@ -1538,6 +1719,16 @@ test('isolated production commands persist the selected phase operations', async
       const acceptedPrevious = ['draft', 'review', 'final-review'].includes(operationKind) ? await readAcceptedPredecessor() : null
       currentContext = { runId: randomUUID(), projectPath: project.rootPath, projectSession: session, writingLanguage: 'zh-CN',
         uiLocale: 'zh-CN', generationModelId: model.id, data: { architecture: authorityText, existingBlueprints: [] }, cancelled: false }
+      const planningBefore = planningRun ? { core: await invoke('db:project-core-get', project.rootPath, session),
+        blueprints: db.prepare('SELECT * FROM blueprints ORDER BY chapter_number').all() } : null
+      if (planningRun) {
+        const savedCore = await invoke('db:project-core-get', project.rootPath, session)
+        currentContext.data.architecture = [savedCore.premise, savedCore.charactersArch, savedCore.worldbuilding, savedCore.synopsis].filter(Boolean).join('\n\n')
+        if (operationKind !== 'outline') {
+          const headings = [...savedCore.synopsis.matchAll(/^#{0,6}\s*第(\d+)章[^\n]*$/gmu)].map(item => Number(item[1]))
+          assert.deepEqual(headings, [1, 2, 3, 4, 5, 6], 'PLANNING_NATIVE_SAVED_OUTLINE_INCOMPLETE')
+        }
+      }
       const params = { context: currentContext, callbacks, step: { id: operationId, title: operationId } }
       const sourceDraft = latestDraft()
       let command
@@ -1553,8 +1744,13 @@ test('isolated production commands persist the selected phase operations', async
           sourceLabel: receipt.restoration?.sourceReplacement ? 'quality-c17b-refinalize' : 'quality-c16-existing',
           finalizedSource: readback.snapshot.source, stopOnFailure: true, stepKey: operationKind })
       }
+      else if (operationKind === 'outline') command = new (await load('src/services/workflows/commands/architecture.command.ts')).GeneratePlotArchitectureCommand(
+          ['synopsis'], { expectedProjectPath: project.rootPath, novelConfig: config, targetUnits: operation.targetUnits }, undefined,
+          { synopsisRange: { from: operation.range[0], to: operation.range[1] } })
       else if (operationKind === 'directory') command = new (await load('src/services/workflows/commands/directory.command.ts')).GenerateDirectoryCommand(
-          { mode: 'append', startChapter: chapter.number, count: fullRun ? scene.chapters.length : 1 }, { expectedProjectPath: project.rootPath, novelConfig: config })
+          { mode: 'append', startChapter: planningRun ? operation.range[0] : chapter.number,
+            count: planningRun ? operation.range[1] - operation.range[0] + 1 : fullRun ? scene.chapters.length : 1,
+            ...(planningRun ? { targetUnits: operation.targetUnits } : {}) }, { expectedProjectPath: project.rootPath, novelConfig: config })
       else if (operationKind === 'draft') command = new (await load('src/services/workflows/commands/generate-draft.command.ts')).GenerateDraftCommand(
           readCommittedDraftChapterInfo(db, chapter, project.rootPath, chapterGuidance),
           // 第二章必须由本臂自己的库提供前驱候选（作者前情），不能借另一臂的输出。
@@ -1587,7 +1783,7 @@ test('isolated production commands persist the selected phase operations', async
           }
           command = new (await load('src/services/workflows/commands/review-chapter.command.ts')).ReviewChapterCommand({
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
-            reviewFocus: savedRun ? '' : aiReviewRun ? [
+            reviewFocus: savedRun || planningRun ? '' : aiReviewRun ? [
               fullRun || request.phase === 'early-budget' && request.milestone === 'post-ui' ? chapterGuidance : '',
               acceptedPrevious && !request.attemptPolicy?.shortOutline ? `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(request.predecessor)}\n${acceptedPrevious.content}` : '',
               !request.attemptPolicy?.shortOutline && request.phase === 'early-context' && request.milestone === 'post-ui'
@@ -1645,7 +1841,7 @@ test('isolated production commands persist the selected phase operations', async
           const human = await load('src/shared/human-confirmed-review.ts')
           const snapshot = human.createHumanConfirmedReviewSnapshot({ sourceReviewId: sourceReview.id,
             sourceDraft: sourceReview.sourceDraft, ...(cycleId ? { cycleId } : {}), summary: report.summary,
-            authorGuidance: r3Run || savedRun ? '' : reviewedRun || boundedRun || aiReviewRun ? `只修复本次全部已选问题，保留全部作者事实与必需事件，不新增物品史、人物身份或知情事实；其余内容保持不变。\n作者事实：\n${authorityFacts.join('\n')}\n本章必需事件：\n${chapter.requiredEvents.join('\n')}` : '只修复已选问题，其余正文保持不变。若问题要求人物在当章承担代价，必须同时满足三项：人物已经执行选择，具体损失或牺牲已经发生，后文不保留相反状态。签字认责、保证负责、简单否定翻转或承诺以后付出都不算代价。', items: selectedItems ?? [selected],
+            authorGuidance: r3Run || savedRun || planningRun ? '' : reviewedRun || boundedRun || aiReviewRun ? `只修复本次全部已选问题，保留全部作者事实与必需事件，不新增物品史、人物身份或知情事实；其余内容保持不变。\n作者事实：\n${authorityFacts.join('\n')}\n本章必需事件：\n${chapter.requiredEvents.join('\n')}` : '只修复已选问题，其余正文保持不变。若问题要求人物在当章承担代价，必须同时满足三项：人物已经执行选择，具体损失或牺牲已经发生，后文不保留相反状态。签字认责、保证负责、简单否定翻转或承诺以后付出都不算代价。', items: selectedItems ?? [selected],
             ...(report.goalReview ? { goalReview: report.goalReview } : {}) })
           assert.ok(snapshot, 'CONFIRMATION_SNAPSHOT_INVALID')
           const confirmationContent = human.serializeHumanConfirmedReviewSnapshot(snapshot)
@@ -1691,12 +1887,37 @@ test('isolated production commands persist the selected phase operations', async
       }
       const result = await command.execute(params)
       await Promise.all(streamSettlements)
-      if (!fullRun || operationKind !== 'directory') assert.deepEqual(db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all(), authorBlueprints, 'OUTSIDE_RANGE_REWRITTEN')
+      if (!planningRun && (!fullRun || operationKind !== 'directory')) assert.deepEqual(db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all(), authorBlueprints, 'OUTSIDE_RANGE_REWRITTEN')
       const outputPath = path.join(evidenceRoot, `${receipt.operations.length + 1}-${operationKind}.${['directory', 'review', 'recheck', 'final-review'].includes(operationKind) ? 'json' : 'txt'}`)
       fs.writeFileSync(outputPath, typeof result === 'string' ? result : JSON.stringify(result, null, 2))
       const operationReceipt = { operation: operationId, kind: operationKind, returnedHash: sha(result),
         outputHash: sha(result), outputPath, handle: currentContext.mainGenerationRunHandle ?? null }
       receipt.operations.push(operationReceipt)
+      if (planningRun && operationKind === 'outline') {
+        const progress = (await invoke('generation:read', currentContext.mainGenerationRunHandle, session)).plotOutline
+        assert.equal(progress?.protocol, PLANNING_NATIVE_DIAGNOSTIC.attemptPolicy.outline.find(item => item.operationId === operationId).protocol, 'PLANNING_NATIVE_PROTOCOL_NOT_USED')
+        assert.equal(progress.cursor.kind, 'complete', 'PLANNING_NATIVE_PREFIX_NOT_COMPLETE')
+        assert.deepEqual(progress.range, { from: operation.range[0], to: operation.range[1] }, 'PLANNING_NATIVE_RANGE_MISMATCH')
+        assert.equal(progress.targetUnits, operation.targetUnits, 'PLANNING_NATIVE_TARGET_MISMATCH')
+        assert.equal(progress.composition.artifactIds.length, operation.range[1] - operation.range[0] + 1, 'PLANNING_NATIVE_PREFIX_COVERAGE_MISMATCH')
+        const core = await invoke('db:project-core-get', project.rootPath, session)
+        assert.equal(progress.sourceExpected.synopsis, planningBefore.core.synopsis, 'PLANNING_OUTLINE_SOURCE_DRIFT')
+        const { plotOutlineConfirmedPrefix } = await load('src/shared/plot-outline-contract.ts')
+        assert.equal(progress.confirmedPrefix, plotOutlineConfirmedPrefix(progress.sourceExpected, progress.range), 'PLANNING_OUTLINE_PREFIX_DRIFT')
+        if (progress.confirmedPrefix) assert.ok(core.synopsis.startsWith(`# 情节大纲\n\n${progress.confirmedPrefix}\n\n`), 'PLANNING_OUTLINE_SAVED_PREFIX_CHANGED')
+        const synopsisPath = path.join(evidenceRoot, `${operationId}-saved-synopsis.md`)
+        fs.writeFileSync(synopsisPath, core.synopsis)
+        operationReceipt.planningOutline = { progress, savedSynopsis: artifact(synopsisPath, core.synopsis) }
+      }
+      if (planningRun && operationKind === 'directory') {
+        const rows = db.prepare('SELECT * FROM blueprints ORDER BY chapter_number').all()
+        assert.deepEqual(rows.map(row => row.chapter_number), Array.from({ length: operation.range[1] }, (_, index) => index + 1), 'PLANNING_BLUEPRINT_RANGE_MISMATCH')
+        assert.deepEqual(rows.filter(row => row.chapter_number < operation.range[0]), planningBefore.blueprints, 'PLANNING_BLUEPRINT_PREFIX_CHANGED')
+        const blueprintsPath = path.join(evidenceRoot, `${operationId}-saved-blueprints.json`)
+        const bytes = JSON.stringify(rows, null, 2)
+        fs.writeFileSync(blueprintsPath, bytes)
+        operationReceipt.savedBlueprints = artifact(blueprintsPath, bytes)
+      }
       if (continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)) {
         const slot = finalizedContext.slot
         const persisted = await invoke('finalization-generation:read', { slot }, session)
@@ -1819,7 +2040,7 @@ test('isolated production commands persist the selected phase operations', async
                 selection.selected.some(selected => sha(selected) === sha(item)) ? [index] : [])
               aiReviewedDraft.softwareItems = selection.softwareItems
               aiReviewedDraft.disposition = selection.disposition
-              if (savedRun) aiReviewedDraft.findings = (await invoke('db:review-cycle-get', stored.id, project.rootPath, session)).findings
+              if (savedRun || planningRun) aiReviewedDraft.findings = (await invoke('db:review-cycle-get', stored.id, project.rootPath, session)).findings
             }
           } else if (aiReviewRun) {
             const native = reviewState.baselineCreate
@@ -1936,7 +2157,7 @@ test('isolated production commands persist the selected phase operations', async
             .all(cycle.cycleId) }
       }
     }
-    const verifiedEmptyDraftAttempts = new Set()
+    const verifiedEmptyDraftAttempts = new Set(), verifiedReplacedOutlineAttempts = new Set()
     if (candidate) {
       receipt.ownerTerminal = db.prepare('SELECT a.attempt_id,a.attempt_json,a.usage_receipt_json,g.artifact_json FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id ORDER BY a.rowid').all()
         .filter(row => receipt.attempts.some(attempt => attempt.binding.actual.attemptId === row.attempt_id))
@@ -1977,15 +2198,27 @@ test('isolated production commands persist the selected phase operations', async
         assert.equal(validateAiReviewedManuscript(receipt), null, 'REVIEW_RECOVERY_PROVENANCE_MISMATCH')
       for (const attempt of receipt.attempts) {
         const terminal = receipt.ownerTerminal.find(row => row.attemptId === attempt.binding.actual.attemptId)
+        const planningOutline = planningRun && PLANNING_NATIVE_DIAGNOSTIC.attemptPolicy.outline.some(item => item.operationId === attempt.binding.operation)
+        const outlineComposition = planningOutline && receipt.operations.find(item => item.operation === attempt.binding.operation)?.planningOutline?.progress.composition
+        const replacedOutline = planningOutline && ['stop', 'length'].includes(attempt.finishReason)
+          && attempt.binding.actual.purpose.endsWith(':normal') && receipt.attempts.some(other => {
+            const accepted = receipt.ownerTerminal.find(row => row.attemptId === other.binding.actual.attemptId)
+            return other.binding.operation === attempt.binding.operation
+              && other.binding.actual.runId === attempt.binding.actual.runId
+              && other.binding.actual.rootActionId === attempt.binding.actual.rootActionId
+              && other.binding.actual.purpose === attempt.binding.actual.purpose.replace(/:normal$/, ':compact')
+              && accepted?.status === 'settled' && accepted.finishReason === 'stop'
+              && accepted.textHash !== sha('') && outlineComposition?.artifactIds.includes(accepted.artifactId)
+          })
         const replacedReviewLength = Boolean(reviewLengthRecoveryFor(receipt, attempt.binding.operation)) && attempt.finishReason === 'length'
           && ['review-chapter', 'review-chapter-rebuild'].includes(attempt.binding.actual.purpose)
           && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
         assert.ok(terminal && ['settled', 'unknown'].includes(terminal.status))
         if (structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft')
-          || aiReviewRun && attempt.binding.actual.purpose === 'refine-from-review' || replacedReviewLength) assert.ok(['stop', 'length'].includes(terminal.finishReason))
+          || aiReviewRun && attempt.binding.actual.purpose === 'refine-from-review' || replacedReviewLength || replacedOutline) assert.ok(['stop', 'length'].includes(terminal.finishReason))
         else assert.equal(terminal.finishReason, 'stop')
         assert.equal(terminal.purpose, attempt.binding.actual.purpose)
-        assert.ok(terminal.artifactId && (terminal.textHash !== sha('') || replacedReviewLength || verifiedEmptyDraftAttempts.has(attempt.attemptId)), 'OWNER_ARTIFACT_MISSING')
+        assert.ok(terminal.artifactId && (terminal.textHash !== sha('') || replacedReviewLength || replacedOutline || verifiedEmptyDraftAttempts.has(attempt.attemptId)), 'OWNER_ARTIFACT_MISSING')
         const repairedDirectory = repairPolicy && attempt.binding.operation === repairPolicy.operationId
           && attempt.binding.actual.purpose === repairPolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
@@ -1997,9 +2230,10 @@ test('isolated production commands persist the selected phase operations', async
         const condensedPrimary = condensePolicy && attempt.binding.actual.purpose === condensePolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === attempt.binding.operation
             && other.binding.actual?.purpose === condensePolicy.condensePurpose)
-        assert.equal(terminal.hasFormalEffect, !repairedDirectory && !supersededAttempt && !condensedPrimary)
+        assert.equal(terminal.hasFormalEffect, !planningOutline && !repairedDirectory && !supersededAttempt && !condensedPrimary)
         if (request.mode === 'synthetic') assert.equal(terminal.trustedUsage, true)
         assert.equal(terminal.textHash, attempt.visibleTextHash, 'OWNER_ARTIFACT_OUTPUT_MISMATCH')
+        if (replacedOutline) verifiedReplacedOutlineAttempts.add(attempt.attemptId)
       }
     }
     if (restorationKind) {
@@ -2019,7 +2253,8 @@ test('isolated production commands persist the selected phase operations', async
       const replacedReviewLength = candidate && Boolean(reviewLengthRecoveryFor(receipt, attempt.binding.operation)) && attempt.finishReason === 'length'
         && ['review-chapter', 'review-chapter-rebuild'].includes(attempt.binding.actual.purpose)
         && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
-      assert.ok(attempt.outputPath && (attempt.visibleTextHash !== sha('') || replacedReviewLength || verifiedEmptyDraftAttempts.has(attempt.attemptId)), 'PHYSICAL_OUTPUT_MISSING')
+      assert.ok(attempt.outputPath && (attempt.visibleTextHash !== sha('') || replacedReviewLength
+        || verifiedEmptyDraftAttempts.has(attempt.attemptId) || verifiedReplacedOutlineAttempts.has(attempt.attemptId)), 'PHYSICAL_OUTPUT_MISSING')
       assert.equal(sha(fs.readFileSync(attempt.outputPath, 'utf8')), attempt.visibleTextHash, 'PHYSICAL_OUTPUT_HASH_MISMATCH')
     }
     assertNoOutboundPreflightFailures(receipt)
@@ -2056,7 +2291,17 @@ test('isolated production commands persist the selected phase operations', async
         if (diagnostics) attempt.transportDiagnostics = diagnostics
       }
     } catch { receipt.transportDiagnosticsUnavailable = true }
+    try { await capturePlanningEvidence?.() }
+    catch (error) { receipt.savedEvidenceError = safeDiagnostic(error); receipt.status = 'failed' }
     database?.closeProjectDatabase(); projectAccess?.invalidateCurrentSession()
+    if (planningRun && receipt.runtimePaths) {
+      const wal = `${receipt.runtimePaths.databasePath}-wal`
+      receipt.sourceClosure = { databaseClosed: planningDb?.open === false,
+        walPath: wal, walBytes: fs.existsSync(wal) ? fs.statSync(wal).size : 0, walExists: fs.existsSync(wal) }
+      receipt.sourceManifest = json(receipt.runtimePaths.manifestPath)
+      receipt.sourceFileHashes = Object.fromEntries(['databasePath', 'manifestPath'].map(key => [key,
+        createHash('sha256').update(fs.readFileSync(receipt.runtimePaths[key])).digest('hex')]))
+    }
     vi.unstubAllGlobals()
     // 每臂的请求规模证据（纯数字，不含提示词原文与凭据），两臂因此可在不花真实调用时比较。
     receipt.bridgeSettlementDeadlineMs = windows.attemptMs

@@ -102,14 +102,31 @@ const structured = (range, values, purpose = 'chapter-blueprint-directory', fini
   purpose, output: JSON.stringify({ blueprints: values }), finishReason })
 const replayStructure = (attempts, range = [1]) => structuredRecoveryState(attempts, { chapterNumbers: range }, value => value)
 
-test('overlong blueprint uses whole compact replacement and retains original failed bytes', () => {
+test('existing one-to-five chapter directories preserve the request range, raw bytes and order', () => {
+  for (let count = 1; count <= 5; count++) {
+    const range = Array.from({ length: count }, (_, index) => index + 3)
+    const attempt = structured(range, range.map(blueprint)), before = JSON.stringify(attempt)
+    const requested = []
+    const options = { chapterNumbers: range, decode: (output, scope) => {
+      requested.push({ output, scope: [...scope] })
+    } }
+    assert.deepEqual(structuredRecoveryState([], options, value => value).next,
+      { range, purpose: 'chapter-blueprint-directory' })
+    assert.equal(structuredRecoveryState([attempt], options, value => value).complete, true)
+    assert.deepEqual(requested, [{ output: attempt.output, scope: range }])
+    assert.equal(JSON.stringify(attempt), before)
+  }
+})
+
+test('complete long blueprint is accepted and truncated blueprint retains its original bytes during compact recovery', () => {
   const over = { ...blueprint(1), keyEvents: '超'.repeat(1201) }
-  const failed = structured([1], [over]), original = failed.output
+  assert.equal(replayStructure([structured([1], [over])]).complete, true)
+  const failed = structured([1], [over], 'chapter-blueprint-directory', 'length'), original = failed.output
   assert.deepEqual(replayStructure([failed]).next, { range: [1], purpose: 'chapter-blueprint-directory:compact-single:chapter-1' })
   const replacement = structured([1], [blueprint(1)], 'chapter-blueprint-directory:compact-single:chapter-1')
   assert.equal(replayStructure([failed, replacement]).complete, true)
   assert.equal(failed.output, original)
-  assert.throws(() => replayStructure([failed, { ...replacement, output: failed.output }]), /EXHAUSTED/)
+  assert.throws(() => replayStructure([failed, { ...replacement, output: failed.output, finishReason: 'length' }]), /EXHAUSTED/)
   assert.throws(() => replayStructure([structured([1], [blueprint(1)]), replacement]), /SEQUENCE_INVALID/)
 })
 

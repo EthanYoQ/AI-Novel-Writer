@@ -3026,6 +3026,332 @@
     "limits": "Closed historical no-action review; no refund, replay or reinterpretation."
   },
   "phases": {
+    "planning-native-diagnostic": {
+      "sceneId": "场景1",
+      "caseId": "planning-six-chapters",
+      "caseIds": [
+        "planning-six-chapters"
+      ],
+      "chapterNumber": 1,
+      "milestone": "diagnostic",
+      "arms": [
+        "candidate"
+      ],
+      "nonQualification": true,
+      "allocation": "nonQualificationDiagnostic",
+      "scenarioRevision": "planning-six-chapters-native-cap64-v2",
+      "formalDenominatorContribution": 0,
+      "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+      "totalChapters": 6,
+      "wordsPerChapter": 1000,
+      "range": [
+        1,
+        6
+      ],
+      "expectedPhysicalRequests": 11,
+      "maxPhysicalRequests": 51,
+      "physicalRequestBounds": {
+        "planning-outline-1-5": 10,
+        "planning-outline-6": 2,
+        "planning-directory-1-5": 15,
+        "planning-directory-6": 3,
+        "planning-draft": 9,
+        "planning-review": 4,
+        "planning-refine": 4,
+        "planning-final-review": 4
+      },
+      "planningRootBudgets": {
+        "planning-outline-1-5": {
+          "maxPhysicalRequests": 32,
+          "maxTokenLiability": 33554432,
+          "maxOutputPerRequest": 65536,
+          "maxActiveElapsedMs": 3600000
+        },
+        "planning-outline-6": {
+          "maxPhysicalRequests": 32,
+          "maxTokenLiability": 33554432,
+          "maxOutputPerRequest": 65536,
+          "maxActiveElapsedMs": 3600000
+        },
+        "planning-directory-1-5": {
+          "maxPhysicalRequests": 32,
+          "maxTokenLiability": 33554432,
+          "maxOutputPerRequest": 65536,
+          "maxActiveElapsedMs": 3600000
+        },
+        "planning-directory-6": {
+          "maxPhysicalRequests": 32,
+          "maxTokenLiability": 33554432,
+          "maxOutputPerRequest": 65536,
+          "maxActiveElapsedMs": 3600000
+        }
+      },
+      "identityPolicy": "new-project-native-generated-ids-explicit-source-target-bijection-stable-through-journey",
+      "diagnosticInputHash": "713e14b031d3e373ed603f09b9c36a4ac32415bf3217ddae6961e6c71cb82ada",
+      "sources": {
+        "premise": {
+          "name": "thread11-w4-premise-saved.md",
+          "sha256": "5682e67d6a450405b7ee695e5263da163a37c9bc501ec2e853c51cee4845820a"
+        },
+        "characters": {
+          "name": "thread11-w4-characters-saved.md",
+          "sha256": "b025461e58fb7726e7c6bf445f4112bdcdca726fc6a2264544e0e565be238053"
+        },
+        "worldbuilding": {
+          "name": "thread11-w4-worldbuilding-saved.md",
+          "sha256": "5b082ea3b1447bd09e465a9bc7e43c05e057200513691b71b05959060d5e4549"
+        },
+        "rows": {
+          "name": "thread11-w4-blueprint-1791057053875-ce289708-saved-rows.json",
+          "sha256": "5d6e65d5e2566e765a0b317f86e43c63310eed1fc2c48e4192d802045d81ff11"
+        }
+      },
+      "operations": [
+        {
+          "id": "planning-outline-1-5",
+          "kind": "outline",
+          "range": [
+            1,
+            5
+          ],
+          "targetUnits": 600
+        },
+        {
+          "id": "planning-outline-6",
+          "kind": "outline",
+          "range": [
+            6,
+            6
+          ],
+          "targetUnits": 600
+        },
+        {
+          "id": "planning-directory-1-5",
+          "kind": "directory",
+          "range": [
+            1,
+            5
+          ],
+          "targetUnits": 600
+        },
+        {
+          "id": "planning-directory-6",
+          "kind": "directory",
+          "range": [
+            6,
+            6
+          ],
+          "targetUnits": 600
+        },
+        {
+          "id": "planning-draft",
+          "kind": "draft"
+        },
+        {
+          "id": "planning-review",
+          "kind": "review"
+        },
+        {
+          "id": "planning-refine",
+          "kind": "refine"
+        },
+        {
+          "id": "planning-final-review",
+          "kind": "final-review"
+        }
+      ],
+      "attemptPolicy": {
+        "milestone": "diagnostic",
+        "arms": [
+          "candidate"
+        ],
+        "outline": [
+          {
+            "operationId": "planning-outline-1-5",
+            "range": [
+              1,
+              5
+            ],
+            "protocol": "chapter-outline-v3",
+            "maxAttemptsPerChapter": 2
+          },
+          {
+            "operationId": "planning-outline-6",
+            "range": [
+              6,
+              6
+            ],
+            "protocol": "chapter-outline-v3",
+            "maxAttemptsPerChapter": 2
+          }
+        ],
+        "structuredRecovery": [
+          {
+            "operationId": "planning-directory-1-5",
+            "arms": [
+              "candidate"
+            ],
+            "budget": "planBlueprintGenerationCost",
+            "maxSyntaxRepairs": 1,
+            "maxCompactFallbacksPerChapter": 1,
+            "trigger": "settled-length-or-production-blueprint-decode-failure",
+            "order": "depth-first-half-split",
+            "armAsymmetry": "Candidate-only diagnostic. Complete long content is accepted; truncation or structural failure may trigger bounded recovery.",
+            "chapterNumbers": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ]
+          },
+          {
+            "operationId": "planning-directory-6",
+            "arms": [
+              "candidate"
+            ],
+            "budget": "planBlueprintGenerationCost",
+            "maxSyntaxRepairs": 1,
+            "maxCompactFallbacksPerChapter": 1,
+            "trigger": "settled-length-or-production-blueprint-decode-failure",
+            "order": "depth-first-half-split",
+            "armAsymmetry": "Candidate-only diagnostic. Complete long content is accepted; truncation or structural failure may trigger bounded recovery.",
+            "chapterNumbers": [
+              6
+            ]
+          }
+        ],
+        "draftRecovery": {
+          "operationIds": [
+            "planning-draft"
+          ],
+          "arms": [
+            "candidate"
+          ],
+          "maxAttempts": 8,
+          "maxContinuationRounds": 7,
+          "maxNoProgressRecoveries": 1,
+          "baselineMinimumRatio": 0.8,
+          "candidateMinimumRatio": 0.7,
+          "minimumProgressUnits": 300,
+          "trigger": "settled-hash-verified-short-stop-or-length",
+          "formalEffect": "last-attempt-only",
+          "armAsymmetry": "baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget."
+        },
+        "draftCondense": {
+          "operationIds": [
+            "planning-draft"
+          ],
+          "arms": [
+            "candidate"
+          ],
+          "primaryPurpose": "chapter-draft",
+          "condensePurpose": "chapter-draft-condense",
+          "maxCondenseAttempts": 1,
+          "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
+          "formalEffect": "last-attempt-only"
+        },
+        "shortOutline": {
+          "purpose": "chapter-draft-short-outline",
+          "operationIds": [
+            "planning-draft"
+          ],
+          "maxAttempts": 1,
+          "trigger": "new-draft-before-prose-same-root-native-artifact"
+        },
+        "reviewRebuild": {
+          "operationId": "planning-review",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "maxLengthReplacements": 1
+        },
+        "finalReviewRebuild": {
+          "operationId": "planning-final-review",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "maxLengthReplacements": 1
+        },
+        "refinementRecovery": {
+          "operationId": "planning-refine",
+          "purpose": "refine-from-review",
+          "maxAttempts": 4,
+          "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+        }
+      },
+      "evaluationPolicy": {
+        "revision": "ai-review-final-manuscript-v1",
+        "caseIds": [
+          "planning-six-chapters"
+        ],
+        "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+        "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+        "confirmation": "agent-semantic-approval-references-original-report-and-native-findings",
+        "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+        "endpoint": "native-merge-then-ordinary-full-review",
+        "automaticCeiling": "pending-independent-oracle-review",
+        "physicalRequests": {
+          "minimum": 11,
+          "maximum": 51,
+          "manuscriptMinimum": 1,
+          "manuscriptMaximum": 12
+        },
+        "qualityDecision": "diagnostic-only-no-new-literary-pass-gate"
+      },
+      "modelProfile": {
+        "profileId": "7935a372-b853-4408-9374-9fdb272a78f9",
+        "configurationHash": "a1a2da6a780d8f54967bbaa20150235357684dd245f22f95e0fee772a25a1676",
+        "model": {
+          "id": "7935a372-b853-4408-9374-9fdb272a78f9",
+          "name": "R3 official DeepSeek Flash native diagnostic",
+          "provider": "deepseek",
+          "protocol": "openai",
+          "modelName": "deepseek-flash",
+          "baseUrl": "https://api.deepseek.com",
+          "temperature": 0,
+          "maxTokens": 65536,
+          "purposes": [
+            "generation",
+            "refinement",
+            "summary"
+          ],
+          "reasoningOverride": "high",
+          "capabilities": {
+            "contextWindowTokens": 1048576,
+            "maxOutputTokens": 393216,
+            "reasoning": true,
+            "structuredOutput": true,
+            "usage": true
+          },
+          "capabilitySources": {
+            "contextWindowTokens": "endpoint",
+            "maxOutputTokens": "endpoint",
+            "reasoning": "manual",
+            "structuredOutput": "manual",
+            "usage": "manual"
+          },
+          "reasoningMapping": {
+            "adapter": "deepseek-v4-thinking",
+            "supportedEfforts": [
+              "off",
+              "low",
+              "high",
+              "max"
+            ],
+            "providerValues": {
+              "off": "disabled",
+              "low": "low",
+              "high": "high",
+              "max": "max"
+            },
+            "requestAliases": {
+              "medium": "high"
+            }
+          }
+        }
+      }
+    },
     "saved-native-review-diagnostic": {
       "sceneId": "场景1",
       "chapterNumber": 2,

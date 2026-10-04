@@ -189,7 +189,7 @@ test.each([
       && physicalStart > terminalEnd && physicalEnd > physicalStart)
     const body = check === 'physical output' ? fixture.slice(terminalStart, terminalLoop) + fixture.slice(physicalStart, physicalEnd)
       : fixture.slice(terminalStart, terminalEnd) + fixture.slice(physicalStart, physicalEnd)
-    const context = { receipt, request, fs, assert, sha: hash, candidate: true, continuityRun: true, copiedRun: false,
+    const context = { receipt, request, fs, assert, sha: hash, candidate: true, continuityRun: true, copiedRun: false, planningRun: false,
       aiReviewRun: true, structuredRecovery: null, target: request.target, chapter: { targetUnits: 900 }, draftRecoveryFor,
       repairPolicy: request.attemptPolicy, condensePolicy: request.attemptPolicy.draftCondense,
       validatePairedReceipt, validateAiReviewedManuscript, reviewLengthRecoveryFor }
@@ -429,9 +429,9 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
     noAction.aiReviewedDraft.composition = result.aiReviewedDraft.composition
     assert.equal(validateAiReviewedManuscript(noAction), 'AI_REVIEW_NO_ACTION_MISMATCH')
     // The full adapter passes the accepted complete predecessor through the frozen command's existing reviewFocus.
-    const fixture = fixtureSource(), focusStart = fixture.indexOf('reviewFocus: savedRun ?')
+    const fixture = fixtureSource(), focusStart = fixture.indexOf('reviewFocus: savedRun || planningRun ?')
     const focusEnd = fixture.indexOf('\n          })', focusStart)
-    const focus = new Function('acceptedPrevious', 'request', `const savedRun = false, aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)
+    const focus = new Function('acceptedPrevious', 'request', `const savedRun = false, planningRun = false, aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)
     const previous = { ...currentDraft }, expected = { projectId: session.projectId, arm: 'baseline', chapterNumber: 1,
       draftId: 1, version: 1, status: 'revised', contentHash: hash(previous.content), persistedBytes: Buffer.byteLength(previous.content) }
     currentDraft = { id: 2, chapterNumber: 2, version: 1, status: 'draft', content: '次日上午，林岚回到柜台。'.repeat(70) }
@@ -451,7 +451,7 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
   const formal = lengthRecovery === 'formal'
   const scenario = formal ? productionScenario('full', 'final', CANDIDATE_ONLY_PROTOCOL_REVISION) : null
   const [{ initializeLegacyBaselineSchema }, { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION }, { SqliteSchemaAdapter },
-    { migrateSchema }, { createMainGenerationOwner }, { ModelExecutionLeaseRegistry }, { MAIN_GENERATION_POLICY: policy },
+    { migrateSchema }, { createMainGenerationOwner }, { ModelExecutionLeaseRegistry }, { newMainGenerationPolicy },
     { buildGenerationSourceBinding, rebuildGenerationSourceBinding }, { generationOutputContract }, { ReviewRepository },
     { ReviewCycleRepository }, { RevisionRepository }, { serializeHumanConfirmedReviewSnapshot }] = await Promise.all([
       import('../../electron/migrations/baseline-schema'), import('../../electron/migrations/desktop-registry'),
@@ -482,8 +482,8 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
         usage: { promptTokens: 100, completionTokens: 60, reasoningTokens: 0, totalTokens: 160,
           accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } } },
       buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch: 'epoch',
-        modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
-      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, 'epoch', modelReceipt, policy).binding })
+        modelReceipt, policy: newMainGenerationPolicy(selection, model), outputContract: generationOutputContract(selection) }).binding,
+      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, 'epoch', modelReceipt, previous.sourceManifest.policy).binding })
     const prepared = owner.prepareReviewRevision({ operation: 'review-chapter', draftId: 1,
       expectedDraft: { chapterNumber: 1, version: 1, status: 'draft', contentHash: hash(prose) }, authorInputs: [], uiLocale: 'zh-CN' })
     assert.deepEqual(prepared.context.frozenGoals.items.map(item => item.id), ['ch1:keyEvents:1', 'ch1:mustShow:1'])
@@ -630,7 +630,7 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
       const terminalStart = fixture.indexOf('      assert.equal(receipt.ownerTerminal.length'),
         terminalEnd = fixture.indexOf('\n    }\n    if (restorationKind)', terminalStart)
       new Function('receipt', 'validateAiReviewedManuscript', 'reviewLengthRecoveryFor', 'assert', 'sha', `
-        const aiReviewRun = true, copiedRun = ${!formal}, structuredRecovery = null, draftRecovery = null,
+        const planningRun = false, aiReviewRun = true, copiedRun = ${!formal}, structuredRecovery = null, draftRecovery = null,
           repairPolicy = null, continuityRun = false, condensePolicy = null, request = { mode: 'synthetic', operations: [] };
         ${fixture.slice(qualificationStart, qualificationEnd)}
         ${fixture.slice(terminalStart, terminalEnd)}`)(result, validateAiReviewedManuscript, reviewLengthRecoveryFor, assert, hash)
@@ -649,7 +649,7 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
         const proofStart = fixture.indexOf('readPrimaryEvidence: first => {') + 'readPrimaryEvidence: first => {'.length
         const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
         const readEvidence = new Function('first', 'receipt', 'request', 'db', 'fs', 'sha', 'reviewLengthRecoveryFor', 'operationId', 'operationKind', `
-          const r3Run = false, continuityRun = false, baselineContract = null, aiReviewRun = true,
+          const r3Run = false, planningRun = false, continuityRun = false, baselineContract = null, aiReviewRun = true,
             target = { arm: 'candidate' }, authorityFacts = [];
           ${fixture.slice(proofStart, proofEnd)}`)
         const request = { attemptPolicy: scenario.attemptPolicy, ledgerPath }
@@ -717,8 +717,8 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
     db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,2,1,'draft',20,?)").run(countDraftUnits(nextContent))
     const expected = { arm: 'candidate', projectId: 'project', chapterNumber: 1, draftId: 1, version: 1,
       status: 'revised', contentHash: hash(revisedProse), persistedBytes: Buffer.byteLength(revisedProse) }
-    const focusStart = fixture.indexOf('reviewFocus: savedRun ?'), focusEnd = fixture.indexOf('\n          })', focusStart)
-    const focus = new Function('acceptedPrevious', 'request', `const savedRun = false, aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)(
+    const focusStart = fixture.indexOf('reviewFocus: savedRun || planningRun ?'), focusEnd = fixture.indexOf('\n          })', focusStart)
+    const focus = new Function('acceptedPrevious', 'request', `const savedRun = false, planningRun = false, aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)(
       { content: revisedProse }, { predecessor: expected })
     const preparedNext = owner.prepareReviewRevision({ operation: 'review-chapter', draftId: 2,
       expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: hash(nextContent) },
@@ -4211,7 +4211,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       && repairEnd > repairStart && checkStart > repairEnd && checkEnd > checkStart && reserve > checkEnd
       && evidenceStart > 0 && evidenceEnd > evidenceStart)
     const readPrimaryEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target',
-      `const r3Run = false, continuityRun = false, baselineContract = null, operationKind = 'directory';\n${fixture.slice(proofStart, proofEnd)}`)
+      `const r3Run = false, planningRun = false, continuityRun = false, baselineContract = null, operationKind = 'directory';\n${fixture.slice(proofStart, proofEnd)}`)
     const isStructuredSyntaxRepair = new Function('repairPolicy', 'operationId', 'actual', 'observedIpc',
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
@@ -4858,10 +4858,10 @@ test('旧 reviewed-draft 段认证两次 invocation 和末项 unknown', () => {
 })
 
 test('AI 首审只为 full 和 post-UI budget 补作者指导，原前驱与其他 selector 字节不变', () => {
-  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: savedRun ?')
+  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: savedRun || planningRun ?')
   const end = fixture.indexOf('\n          })', start)
   const focus = new Function('request', 'acceptedPrevious', 'chapterGuidance',
-    `const savedRun = false, aiReviewRun = true, fullRun = request.phase === 'full', predecessorReadbacks = []; return ({ ${fixture.slice(start, end)} }).reviewFocus`)
+    `const savedRun = false, planningRun = false, aiReviewRun = true, fullRun = request.phase === 'full', predecessorReadbacks = []; return ({ ${fixture.slice(start, end)} }).reviewFocus`)
   const guidance = '只依据作者素材。\n本章时点：当天清晨'
   const previous = { content: '前章已接受正文。' }, predecessor = { draftId: 7, version: 3, contentHash: hash(previous.content) }
   const old = `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(predecessor)}\n${previous.content}`
@@ -4892,9 +4892,9 @@ test('post-UI context 执行 revision 关联原语义 selector，漂移与错误
 })
 
 test('context 审稿传选定候选原文，身份漂移与写稿材料错配仍拒绝', async () => {
-  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: savedRun ?')
+  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: savedRun || planningRun ?')
   const focus = new Function('predecessorReadbacks', 'sha',
-    `const savedRun = false, aiReviewRun = true, fullRun = false, acceptedPrevious = null, request = {phase:'early-context',milestone:'post-ui'};
+    `const savedRun = false, planningRun = false, aiReviewRun = true, fullRun = false, acceptedPrevious = null, request = {phase:'early-context',milestone:'post-ui'};
     return ({ ${fixture.slice(start, fixture.indexOf('\n          })', start))} }).reviewFocus`)
   const required = { draftId: 9, chapterNumber: 2, version: 4, content: '已选前章的真实正文。', required: true }
   const actual = focus([required, { ...required, draftId: 10, content: '未选候选秘密。', required: false }], hash)
@@ -5610,7 +5610,7 @@ test('bounded-revision synthetic response switch covers refine and both ordinary
   const end = fixture.indexOf('        // Development transport', start)
   assert.ok(start >= 0 && end > start)
   const generate = new Function('request', 'operationKind', 'current', 'assert', 'BOUNDED_REVISION_DIAGNOSTIC',
-    `${constants}\nconst separatedRun = false, diagnosticRun = false, reviewedRun = false, boundedRun = true, aiReviewRun = false, savedRun = false;
+    `${constants}\nconst separatedRun = false, diagnosticRun = false, reviewedRun = false, boundedRun = true, aiReviewRun = false, savedRun = false, planningRun = false;
      const chapter = { number: 2, requiredEvents: ['核查遇阻', '承担代价'] };
      const promptText = '', reviewedSyntheticIssues = [], reviewedMustShowTexts = [];
      const db = { prepare: () => ({ pluck: () => ({ get: () => current }) }) }, latestDraft = () => ({ content: current });
@@ -6312,7 +6312,7 @@ test('S14B post-UI 压缩的 fixture 接线：登记只对候选臂取到，首�
     const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
     assert.ok(proofStart > 0 && proofEnd > proofStart)
     const readEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target', 'operationKind', 'db', 'continuityRun', 'reviewLengthRecoveryFor', 'operationId',
-      `const r3Run = false, baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
+      `const r3Run = false, planningRun = false, baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
     const { syntheticDraftText } = syntheticLengthHelpers()
     const overText = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 90)
     const first = { attemptId: 'primary', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }
@@ -6379,7 +6379,7 @@ test('合成 transport 可复现 S14B post-UI 候选：超长首稿→唯一压�
   assert.match(fixture, /const repairPolicy = policyEligible && \(!continuityRun \|\| aiReviewRun\) \? request\.attemptPolicy : null/)
   assert.match(fixture, /request\.attemptPolicy\?\.draftRecovery \|\| request\.attemptPolicy\?\.draftCondense/)
   assert.match(fixture, /const condensedPrimary = condensePolicy && attempt\.binding\.actual\.purpose === condensePolicy\.primaryPurpose/)
-  assert.match(fixture, /assert\.equal\(terminal\.hasFormalEffect, !repairedDirectory && !supersededAttempt && !condensedPrimary\)/)
+  assert.match(fixture, /assert\.equal\(terminal\.hasFormalEffect, !planningOutline && !repairedDirectory && !supersededAttempt && !condensedPrimary\)/)
   assert.match(fixture, /if \(reviewedRun\) assert\.ok\(scenarioAuthorSettingLines\(scene, request\.scenarioRevision\)\.length, 'REVIEWED_SCENARIO_AUTHOR_LINE_MISSING'\)/)
   // 开发合成默认让 post-UI 候选走「超长→唯一压缩→在范围」；C16–C18 的默认接线原样保留（行为见 syntheticDraftCondensePlan 的独立测试）。
   const plan = syntheticDraftCondensePlan({ mode: 'synthetic', development: true, phase: 'early-budget', milestone: 'post-ui' })
@@ -7079,7 +7079,7 @@ test('full 压缩的 fixture 接线（行为）：登记只对候选臂取到，
     const proofStart = fixture.indexOf('readPrimaryEvidence: first => {') + 'readPrimaryEvidence: first => {'.length
     const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
     const readEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target', 'operationKind', 'db', 'continuityRun',
-      `const r3Run = false, baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
+      `const r3Run = false, planningRun = false, baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
     const { syntheticDraftText } = syntheticLengthHelpers()
     const overText = syntheticDraftText(countDraftUnits, FULL_RANGE.maximum + 90), inRange = syntheticDraftText(countDraftUnits, FULL_TARGET)
     const first = { attemptId: 'primary', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }
