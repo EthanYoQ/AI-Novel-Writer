@@ -3384,7 +3384,7 @@ export function validateAiReviewedManuscript(result) {
     }
     const selectedIndexes = first.report.items.flatMap((item, index) => first.selected.some(selected => stableEvidence(selected) === stableEvidence(item)) ? [index] : [])
     if (first.selected.length !== chain.selectedCount || digest(first.selected) !== chain.selectedItemsHash
-      || stableEvidence(selectedIndexes) !== stableEvidence(chain.selectedIndexes)
+      || stableEvidence(selectedIndexes) !== stableEvidence(savedNative ? [...chain.selectedIndexes].sort((a, b) => a - b) : chain.selectedIndexes)
       || stableEvidence(first.softwareItems) !== stableEvidence(chain.softwareItems) || first.disposition !== chain.disposition)
       throw new Error('AI_REVIEW_SELECTION_MISMATCH')
     if (first.selected.length === 0) {
