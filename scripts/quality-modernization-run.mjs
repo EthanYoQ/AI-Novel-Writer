@@ -310,7 +310,8 @@ export function validatePhysicalLedger(file) {
   const planning = validateHistoricalSupersessionBoundary(raw, saved, protocol.historicalPlanningSavedOutlineBoundary)
   const planning91 = validateHistoricalSupersessionBoundary(raw, planning, protocol.historicalPlanning91f59903Boundary)
   const savedPostUi = validateHistoricalSupersessionBoundary(raw, planning91, protocol.historicalSavedPostUi94e9b048Boundary)
-  validateHistoricalSupersessionBoundary(raw, savedPostUi, protocol.historicalSavedProFirstReviewBoundary)
+  const savedPro = validateHistoricalSupersessionBoundary(raw, savedPostUi, protocol.historicalSavedProFirstReviewBoundary)
+  validateHistoricalSupersessionBoundary(raw, savedPro, protocol.historicalSavedProClosureBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -1005,6 +1006,9 @@ export function updateLedger(file, event, options = {}) {
       const savedProBoundary = options.campaignMode === 'real' ? protocol.historicalSavedProFirstReviewBoundary : options.historicalSavedProFirstReviewBoundary
       const trustedSavedProEvents = savedProBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedSavedPostUiEvents, savedProBoundary) : trustedSavedPostUiEvents
+      const savedProClosureBoundary = options.campaignMode === 'real' ? protocol.historicalSavedProClosureBoundary : options.historicalSavedProClosureBoundary
+      const trustedSavedProClosureEvents = savedProClosureBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedSavedProEvents, savedProClosureBoundary) : trustedSavedProEvents
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -1048,7 +1052,7 @@ export function updateLedger(file, event, options = {}) {
           const lastOutcome = row => events.find(event => event.attemptId === row.attemptId && event.type === 'settle')?.finishReason
           const repair = [policy.attemptPolicy.reviewRebuild, policy.attemptPolicy.finalReviewRebuild,
             policy.attemptPolicy.controlReviewRebuild].find(item => item.operationId === binding.operation)
-          if (prior.length >= policy.maxPhysicalRequests || matches.length >= 4
+          if (prior.length >= (historical.size === 3 ? historical.size + 4 : policy.maxPhysicalRequests) || matches.length >= 4
             || prior.some(row => !historical.has(row.attemptId) && (statuses.get(row.attemptId) !== 'settle'
               || ['codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash'].some(key => row.binding[key] !== binding[key])
               || !isDeepStrictEqual(row.binding.savedReviewContinuation, binding.savedReviewContinuation)))
@@ -1145,7 +1149,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedSavedProEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedSavedProClosureEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

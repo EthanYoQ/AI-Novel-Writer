@@ -3400,6 +3400,31 @@
           "bindingHash": "e124403aadd7d2022c2be47e59c8c60239316d674b66bff99d8dd70ec98354e5",
           "terminal": "settle",
           "finishReason": "stop"
+        },
+        "controlResume": {
+          "continuationId": "f9989f42-e557-4078-80d8-c3f18cd3af6e",
+          "manifestHash": "a08bfa58e92642da574d5fcc2c33a4b79dee1aaf20e9c8762163e0ca09c8a46c",
+          "manifestPath": ".runtime/.cache/v3-resume-20260930/thread12-pro-control-continuation.manifest.json",
+          "historicalAttempts": [
+            {
+              "attemptId": "candidate:30738047-b5ed-48dc-a427-9105d9786507",
+              "bindingHash": "e124403aadd7d2022c2be47e59c8c60239316d674b66bff99d8dd70ec98354e5",
+              "terminal": "settle",
+              "finishReason": "stop"
+            },
+            {
+              "attemptId": "candidate:961e3963-8da7-4e65-8917-5b9e173134ba",
+              "bindingHash": "dd3a908cf7317cbf410c716d189da81d44a7494a8f171d63bfc4d86eeb96be54",
+              "terminal": "settle",
+              "finishReason": "stop"
+            },
+            {
+              "attemptId": "candidate:d637f5c8-e656-4492-9aad-025f15e7dfad",
+              "bindingHash": "2cbf7f63bab7cdf83564fecf54b43e5a99c233b0a9c56c34be08b3058af5150a",
+              "terminal": "settle",
+              "finishReason": "stop"
+            }
+          ]
         }
       },
       "sceneId": "场景1",
@@ -7489,5 +7514,34 @@
       }
     ],
     "limits": "Historical settled first review only. Preserve the original failed complete and count the first review in the registered continuation."
+  },
+  "historicalSavedProClosureBoundary": {
+    "fromEventCount": 1884,
+    "eventCount": 1890,
+    "rawBytesSha256": "5422e87253a4c5f89c677e9f5a5cae938981cdc6de078f45ddcce13afd927cff",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "8150fd88682357e07a94a53ac847c7698ca35e93f8593843c87201086edecb0b",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "68f8917650f3b6cba5d8f9f7432322dc538c8d46",
+        "sourceHash": "5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75",
+        "driverHash": "24fe8437c913ef0fe488de761b879224963f927e82cc3033e435a9003ecccf00"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:961e3963-8da7-4e65-8917-5b9e173134ba",
+        "invocationId": "3c521df7-f5be-4033-8c11-e7417b3daf13",
+        "terminal": "settle",
+        "parityId": "57fd4fa6846e89274a14366f0bc07970e8f07678d9beecce57b17c08e5c6b292"
+      },
+      {
+        "attemptId": "candidate:d637f5c8-e656-4492-9aad-025f15e7dfad",
+        "invocationId": "3c521df7-f5be-4033-8c11-e7417b3daf13",
+        "terminal": "settle",
+        "parityId": "57fd4fa6846e89274a14366f0bc07970e8f07678d9beecce57b17c08e5c6b292"
+      }
+    ],
+    "limits": "Historical settled negative closure only. Keep all three requests counted while continuing the original control with at most four requests."
   }
 }

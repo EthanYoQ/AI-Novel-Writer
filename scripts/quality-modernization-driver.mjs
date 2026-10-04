@@ -124,6 +124,19 @@ export const SAVED_NATIVE_REVIEW_DIAGNOSTIC = Object.freeze({
     sourceHash: '5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75',
     firstReviewAttempt: { attemptId: 'candidate:30738047-b5ed-48dc-a427-9105d9786507',
       bindingHash: 'e124403aadd7d2022c2be47e59c8c60239316d674b66bff99d8dd70ec98354e5', terminal: 'settle', finishReason: 'stop' },
+    controlResume: {
+      continuationId: 'f9989f42-e557-4078-80d8-c3f18cd3af6e',
+      manifestHash: 'a08bfa58e92642da574d5fcc2c33a4b79dee1aaf20e9c8762163e0ca09c8a46c',
+      manifestPath: '.runtime/.cache/v3-resume-20260930/thread12-pro-control-continuation.manifest.json',
+      historicalAttempts: [
+        { attemptId: 'candidate:30738047-b5ed-48dc-a427-9105d9786507',
+          bindingHash: 'e124403aadd7d2022c2be47e59c8c60239316d674b66bff99d8dd70ec98354e5', terminal: 'settle', finishReason: 'stop' },
+        { attemptId: 'candidate:961e3963-8da7-4e65-8917-5b9e173134ba',
+          bindingHash: 'dd3a908cf7317cbf410c716d189da81d44a7494a8f171d63bfc4d86eeb96be54', terminal: 'settle', finishReason: 'stop' },
+        { attemptId: 'candidate:d637f5c8-e656-4492-9aad-025f15e7dfad',
+          bindingHash: '2cbf7f63bab7cdf83564fecf54b43e5a99c233b0a9c56c34be08b3058af5150a', terminal: 'settle', finishReason: 'stop' },
+      ],
+    },
   },
   sceneId: '场景1', chapterNumber: 2, milestone: 'diagnostic', arms: ['candidate'], nonQualification: true,
   scenarioRevision: 'saved-native-review-pro-two-cases-v2', formalDenominatorContribution: 0,
@@ -237,7 +250,12 @@ export function planningSavedOutlineAttempts(binding, prior, statuses) {
 
 export function readSavedReviewContinuation(file) {
   const bytes = fs.readFileSync(file), policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC, registration = policy.savedReviewContinuation
-  if (digest(bytes) !== registration.manifestHash) throw new Error('SAVED_REVIEW_CONTINUATION_MANIFEST_DRIFT')
+  const controlResume = digest(bytes) === registration.controlResume?.manifestHash ? registration.controlResume : null
+  const selected = controlResume ?? registration
+  if (digest(bytes) !== selected.manifestHash) throw new Error('SAVED_REVIEW_CONTINUATION_MANIFEST_DRIFT')
+  if (controlResume && (path.resolve(file) !== path.resolve(ADAPTER_ROOT, controlResume.manifestPath)
+    || fs.realpathSync(file) !== fs.realpathSync(path.resolve(ADAPTER_ROOT, controlResume.manifestPath))))
+    throw new Error('SAVED_REVIEW_CONTINUATION_MANIFEST_PATH_MISMATCH')
   const manifest = JSON.parse(bytes)
   const evidence = Object.fromEntries(Object.entries(manifest.references).map(([key, reference]) => {
     const content = fs.readFileSync(reference.path)
@@ -247,11 +265,15 @@ export function readSavedReviewContinuation(file) {
   const { baseTargets, execution, preparation, firstReview, failedComplete, approval, templates, protocol } = evidence
   const base = baseTargets.candidate, runtime = execution.target, first = firstReview.attempts[0]
   const currentProtocol = JSON.parse(fs.readFileSync(path.join(ADAPTER_ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+  delete currentProtocol.phases[manifest.phase].savedReviewContinuation.controlResume
+  delete currentProtocol.historicalSavedProClosureBoundary
+  if (controlResume && stableEvidence(currentProtocol) !== stableEvidence(evidence.continuationProtocol))
+    throw new Error('SAVED_REVIEW_CONTINUATION_PROTOCOL_DRIFT')
   delete currentProtocol.phases[manifest.phase].savedReviewContinuation
   delete currentProtocol.historicalSavedProFirstReviewBoundary
   if (stableEvidence(currentProtocol) !== stableEvidence(protocol)) throw new Error('SAVED_REVIEW_CONTINUATION_PROTOCOL_DRIFT')
   if (manifest.schemaVersion !== 1 || manifest.kind !== 'saved-native-pro-first-review-continuation'
-    || manifest.continuationId !== registration.continuationId || manifest.phase !== 'saved-native-review-diagnostic'
+    || manifest.continuationId !== selected.continuationId || manifest.phase !== 'saved-native-review-diagnostic'
     || manifest.caseId !== policy.caseIds[0] || manifest.invocationId !== policy.sources[0].invocationId
     || manifest.sourceHash !== registration.sourceHash || manifest.diagnosticInputHash !== policy.diagnosticInputHash
     || digest(manifest.firstReviewAttempt) !== digest(registration.firstReviewAttempt)
@@ -292,20 +314,83 @@ export function readSavedReviewContinuation(file) {
   if (rows.length !== 3 || rows.map(row => row.type).join() !== 'reserve,dispatch,settle'
     || digest(rows[0].binding) !== manifest.firstReviewAttempt.bindingHash || rows[2].finishReason !== 'stop')
     throw new Error('SAVED_REVIEW_CONTINUATION_LEDGER_DRIFT')
-  return { manifest, ...evidence, manifestHash: registration.manifestHash }
+  if (controlResume) {
+    const { continuationTargets, closedNegativeExecution, closedNegativeComplete: closed, closureApproval,
+      failedControlExecution: failed, failedControlPrepare: failure } = evidence
+    const previous = continuationTargets.candidate, control = manifest.controlResume
+    const oldContinuation = { continuationId: registration.continuationId, manifestHash: registration.manifestHash }
+    const finalReview = closed.aiReviewedDraft?.finalReview
+    if (control?.caseId !== policy.caseIds[1] || control.invocationId !== policy.sources[1].invocationId
+      || stableEvidence(control.historicalAttempts) !== stableEvidence(controlResume.historicalAttempts)
+      || continuationTargets.baseline || previous.sourceHash !== manifest.sourceHash
+      || manifest.references.continuationProtocol.sha256 !== previous.protocolHash
+      || ['roots', 'isolationRoot', 'fixture', 'modelId', 'modelSources'].some(key => stableEvidence(previous[key]) !== stableEvidence(base[key]))
+      || [closedNegativeExecution, failed].some(record => record.targetHash !== digest(previous)
+        || stableEvidence(record.savedReviewContinuation) !== stableEvidence(oldContinuation))
+      || path.resolve(closedNegativeExecution.ledgerPath) !== path.resolve(manifest.ledger.path)
+      || path.resolve(closedNegativeExecution.results.complete.receiptPath) !== path.resolve(manifest.references.closedNegativeComplete.path)
+      || failed.prepared !== undefined || Object.keys(failed.results).length !== 0
+      || closed.status !== 'passed' || closed.caseId !== manifest.caseId || closed.invocationId !== manifest.invocationId
+      || ['codeSha', 'sourceHash', 'protocolHash'].some(key => closed[key] !== previous[key] || failure[key] !== previous[key])
+      || [closed, failure].some(receipt => receipt.phase !== manifest.phase || receipt.driverHash !== previous.driver.sha256
+        || stableEvidence(receipt.savedReviewContinuation) !== stableEvidence(oldContinuation))
+      || closed.physicalProject.projectId !== manifest.project.projectId
+      || stableEvidence(closed.aiReviewedDraft.initial) !== stableEvidence(manifest.sourceDraft)
+      || stableEvidence(closed.aiReviewedDraft.review) !== stableEvidence(firstReview.aiReviewedDraft.review)
+      || closed.attempts.length !== 2 || closed.syntheticDispatches !== 0 || closed.physicalModelRequests !== 2
+      || closed.operations.map(item => item.operation).join() !== 'negative-refine,negative-final-review'
+      || closed.attempts.some((attempt, index) => attempt.attemptId !== control.historicalAttempts[index + 1].attemptId
+        || digest(attempt.binding) !== control.historicalAttempts[index + 1].bindingHash || attempt.finishReason !== 'stop')
+      || !finalReview || closureApproval.kind !== 'negative-closure' || closureApproval.reviewId !== finalReview.reviewId
+      || closureApproval.reportHash !== finalReview.contentHash || closureApproval.receiptHash !== manifest.references.closedNegativeComplete.sha256
+      || path.resolve(closureApproval.receiptPath) !== path.resolve(manifest.references.closedNegativeComplete.path)
+      || digest(fs.readFileSync(finalReview.outputPath)) !== closureApproval.reportHash
+      || failure.status !== 'failed' || failure.caseId !== control.caseId || failure.invocationId !== control.invocationId
+      || failure.physicalModelRequests !== 0 || failure.syntheticDispatches !== 0 || failure.attempts.length !== 0
+      || failure.operations.length !== 0 || failure.invocations.join() !== 'project:archive-export' || failure.restoration !== undefined
+      || !failure.error.startsWith('BOUNDED_REVISION_EXPORT_FAILED:ENAMETOOLONG'))
+      throw new Error('SAVED_REVIEW_CONTINUATION_CONTROL_SOURCE_MISMATCH')
+    for (const [record, invocationId] of [[closedNegativeExecution, manifest.invocationId], [failed, control.invocationId]]) {
+      const expected = { ...previous, roots: Object.fromEntries(Object.entries(previous.roots)
+        .map(([key, directory]) => [key, path.join(directory, invocationId.slice(0, 8))])),
+        isolationRoot: path.join(previous.isolationRoot, 'invocations', invocationId), declaredRoots: previous.roots, declaredIsolationRoot: previous.isolationRoot }
+      if (stableEvidence(record.target) !== stableEvidence(expected)) throw new Error('SAVED_REVIEW_CONTINUATION_ROOTS_MISMATCH')
+    }
+    for (const attempt of control.historicalAttempts) {
+      const events = lines.slice(0, manifest.ledger.eventCount).map(line => JSON.parse(line)).filter(row => row.attemptId === attempt.attemptId)
+      if (events.length !== 3 || events.map(row => row.type).join() !== 'reserve,dispatch,settle'
+        || digest(events[0].binding) !== attempt.bindingHash || events[2].finishReason !== 'stop')
+        throw new Error('SAVED_REVIEW_CONTINUATION_LEDGER_DRIFT')
+    }
+  }
+  return { manifest, ...evidence, manifestHash: selected.manifestHash }
 }
 
 export function savedReviewContinuationTarget(base, source) {
   if (base.sourceHash !== source.manifest.sourceHash
     || ['roots', 'isolationRoot', 'fixture', 'modelId', 'modelSources'].some(key => stableEvidence(base[key]) !== stableEvidence(source.baseTargets.candidate[key])))
     throw new Error('SAVED_REVIEW_CONTINUATION_TARGET_DRIFT')
-  return { ...base, roots: source.execution.target.roots, isolationRoot: source.execution.target.isolationRoot,
+  const runtime = (source.manifest.controlResume ? source.failedControlExecution : source.execution).target
+  return { ...base, roots: runtime.roots, isolationRoot: runtime.isolationRoot,
     declaredIsolationRoot: base.isolationRoot, declaredRoots: base.roots }
 }
 
 export function savedReviewHistoricalAttempts(binding, prior, statuses, events) {
   if (!binding.savedReviewContinuation) return new Set()
   const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC, registration = policy.savedReviewContinuation, attempt = registration.firstReviewAttempt
+  const control = registration.controlResume
+  if (control && binding.savedReviewContinuation.continuationId === control.continuationId) {
+    if (binding.savedReviewContinuation.manifestHash !== control.manifestHash || binding.sourceHash !== registration.sourceHash
+      || binding.operation !== 'control-review' || binding.caseId !== policy.caseIds[1] || binding.invocationId !== policy.sources[1].invocationId
+      || binding.stageModel?.profileId !== policy.modelProfile.profileId || binding.stageModel?.configurationHash !== policy.modelProfile.configurationHash
+      || control.historicalAttempts.some(item => {
+        const row = prior.find(value => value.attemptId === item.attemptId)
+        const chain = events.filter(event => event.attemptId === item.attemptId)
+        return !row || digest(row.binding) !== item.bindingHash || statuses.get(item.attemptId) !== item.terminal
+          || chain.map(event => event.type).join() !== 'reserve,dispatch,settle' || chain[2].finishReason !== item.finishReason
+      })) throw new Error('SAVED_REVIEW_CONTINUATION_PREFIX_MISMATCH')
+    return new Set(control.historicalAttempts.map(item => item.attemptId))
+  }
   const row = prior.find(value => value.attemptId === attempt.attemptId)
   if (stableEvidence(binding.savedReviewContinuation) !== stableEvidence({ continuationId: registration.continuationId, manifestHash: registration.manifestHash })
     || binding.sourceHash !== registration.sourceHash || binding.operation === 'negative-review'
@@ -3049,7 +3134,10 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     const source = planning ? readPlanningNativeSource(options.diagnosticInputPath) : readSavedNativeSource(options.diagnosticInputPath, caseId)
     const resume = options.resumeSourcePath ? readPlanningResumeSource(options.resumeSourcePath) : null
     const savedReview = options.savedReviewContinuationPath ? readSavedReviewContinuation(options.savedReviewContinuationPath) : null
-    if (savedReview && (planning || resume || caseId === policy.caseIds[0] && nativeAction !== 'complete'
+    const controlResume = savedReview?.manifest.controlResume
+    if (savedReview && (planning || resume || (controlResume
+      ? caseId !== controlResume.caseId || !['prepare', 'review'].includes(nativeAction)
+      : caseId === policy.caseIds[0] && nativeAction !== 'complete')
       || path.resolve(options.diagnosticInputPath) !== path.resolve(savedReview.manifest.references.diagnosticInput.path)))
       throw new Error('SAVED_REVIEW_CONTINUATION_SCOPE_MISMATCH')
     if (resume && (!planning || !['resume-from-saved-outline', 'complete'].includes(nativeAction))
@@ -3058,7 +3146,8 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     if (!original || targets.baseline || original.protocolHash !== options.protocolHash
       || original.protocolRevision !== options.protocolRevision || options.mode === 'real' && original.developmentOnly)
       throw new Error('SAVED_NATIVE_TARGET_MISMATCH')
-    const recordPath = id => savedReview ? `${savedReview.manifest.references.execution.path}.${savedReview.manifest.continuationId}.${id}.execution.json`
+    const recordPath = id => controlResume ? path.join(path.dirname(options.savedReviewContinuationPath), `${controlResume.caseId}.${savedReview.manifest.continuationId}.execution.json`)
+      : savedReview ? `${savedReview.manifest.references.execution.path}.${savedReview.manifest.continuationId}.${id}.execution.json`
       : resume ? `${resume.manifest.references.execution.path}.${resume.manifest.continuationId}.execution.json`
       : `${options.diagnosticInputPath}.${options.mode}.${id}.execution.json`
     if ((resume || savedReview) && options.executionRecordPath && path.resolve(options.executionRecordPath) !== path.resolve(recordPath(caseId)))
@@ -3074,20 +3163,24 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     let approval, firstReview
     if (nativeAction === 'complete' || !planning && nativeAction === 'review' && caseId === policy.caseIds[1]) {
       approval = JSON.parse(fs.readFileSync(options.approvalPath))
-      const negativeRecord = caseId === policy.caseIds[0] ? record : JSON.parse(fs.readFileSync(recordPath(policy.caseIds[0])))
+      const negativeRecord = controlResume ? savedReview.closedNegativeExecution
+        : caseId === policy.caseIds[0] ? record : JSON.parse(fs.readFileSync(recordPath(policy.caseIds[0])))
       const historical = savedReview && nativeAction === 'complete'
       const prior = historical ? { receiptPath: savedReview.manifest.references.firstReview.path }
         : negativeRecord.results[nativeAction === 'complete' ? firstReviewKey : 'complete']
       if (historical && digest(fs.readFileSync(options.approvalPath)) !== savedReview.manifest.references.approval.sha256)
+        throw new Error('SAVED_NATIVE_APPROVAL_MISMATCH')
+      if (controlResume && digest(fs.readFileSync(options.approvalPath)) !== savedReview.manifest.references.closureApproval.sha256)
         throw new Error('SAVED_NATIVE_APPROVAL_MISMATCH')
       if (!prior?.receiptPath || path.resolve(approval.receiptPath) !== path.resolve(prior.receiptPath)) throw new Error('SAVED_NATIVE_APPROVAL_RECEIPT_MISMATCH')
       const bytes = fs.readFileSync(prior.receiptPath), receipt = JSON.parse(bytes)
       const review = nativeAction === 'complete' ? receipt.aiReviewedDraft?.review : receipt.aiReviewedDraft?.finalReview
       if (digest(bytes) !== approval.receiptHash || receipt.status !== 'passed' || !review
         || receipt.caseId !== policy.caseIds[0] || receipt.phase !== options.phase
-        || receipt.protocolHash !== (historical ? savedReview.manifest.protocolHash : options.protocolHash)
-        || receipt.sourceHash !== original.sourceHash || receipt.driverHash !== (historical ? savedReview.manifest.historicalTools.driverHash : productionBridgeHash())
-        || savedReview && !historical && stableEvidence(receipt.savedReviewContinuation) !== stableEvidence(continuation)
+        || receipt.protocolHash !== (historical ? savedReview.manifest.protocolHash : controlResume ? savedReview.continuationTargets.candidate.protocolHash : options.protocolHash)
+        || receipt.sourceHash !== original.sourceHash || receipt.driverHash !== (historical ? savedReview.manifest.historicalTools.driverHash
+          : controlResume ? savedReview.continuationTargets.candidate.driver.sha256 : productionBridgeHash())
+        || savedReview && !historical && stableEvidence(receipt.savedReviewContinuation) !== stableEvidence(controlResume ? negativeRecord.savedReviewContinuation : continuation)
         || review.reviewId !== approval.reviewId || review.contentHash !== approval.reportHash
         || digest(fs.readFileSync(review.outputPath)) !== approval.reportHash
         || approval.kind !== (planning ? 'planning-refinement' : nativeAction === 'complete' ? 'negative-detection' : 'negative-closure')
@@ -3099,15 +3192,20 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     const savedNegative = savedReview && caseId === policy.caseIds[0]
     if (savedReview) {
       const expected = savedReviewContinuationTarget(original, savedReview)
-      if (savedNegative && target && digest(target) !== digest(expected)
+      if ((savedNegative || controlResume) && target && digest(target) !== digest(expected)
         || record.savedReviewContinuation && stableEvidence(record.savedReviewContinuation) !== stableEvidence(continuation)
         || path.resolve(options.ledgerPath) !== path.resolve(savedReview.manifest.ledger.path))
         throw new Error('SAVED_REVIEW_CONTINUATION_TARGET_DRIFT')
-      if (savedNegative) target = expected
+      if (savedNegative || controlResume) target = expected
       record.savedReviewContinuation = continuation
       record.historicalFirstReview = savedReview.manifest.references.firstReview
       record.historicalFailedComplete = savedReview.manifest.references.failedComplete
-      record.toolTransition = { from: savedReview.manifest.historicalTools, to: { codeSha: original.codeSha,
+      const previous = controlResume ? savedReview.continuationTargets.candidate : null
+      if (controlResume) record.controlResumeSource = { manifest: { path: options.savedReviewContinuationPath, sha256: savedReview.manifestHash },
+        ...Object.fromEntries(['continuationTargets', 'closedNegativeExecution', 'closedNegativeComplete', 'closureApproval',
+          'failedControlExecution', 'failedControlPrepare'].map(key => [key, savedReview.manifest.references[key]])) }
+      record.toolTransition = { from: previous ? { codeSha: previous.codeSha, driverHash: previous.driver.sha256,
+        executionToolsHash: previous.executionToolsHash, runnerAdapterHash: previous.runnerAdapterHash } : savedReview.manifest.historicalTools, to: { codeSha: original.codeSha,
         driverHash: productionBridgeHash(), executionToolsHash: original.executionToolsHash, runnerAdapterHash: original.runnerAdapterHash } }
       record.target = target; record.targetHash = digest(original)
       saveExecutionRecord(bound, record)

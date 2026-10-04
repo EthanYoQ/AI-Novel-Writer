@@ -567,7 +567,7 @@ test('isolated production commands persist the selected phase operations', async
       if (boundedRun) assertBoundedRevisionSource(await invoke('db:draft-get-full', 4, project.rootPath, session))
       const { externalFileGrants } = await load('electron/services/external-file-grant-service.ts')
       const grantFor = restoreGrantIssuer(externalFileGrants, sender.id)
-      const archivePath = path.join(evidenceRoot, 'fixed-source.ainovel')
+      const archivePath = path.join(target.isolationRoot, 'fixed-source.ainovel')
       const targetProjectRoot = path.join(target.roots.project, savedRun ? request.caseId : r3Run ? 'r3-native-diagnostic' : 'c17-a-diagnostic')
       const exported = await invoke('project:archive-export', { projectSession: session, targetArchiveGrantId: grantFor('create', archivePath) })
       assert.ok(exported?.success, `BOUNDED_REVISION_EXPORT_FAILED:${exported?.error}`)
