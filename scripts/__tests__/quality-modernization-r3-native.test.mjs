@@ -250,6 +250,32 @@ test('saved Pro registration preserves the source cases and verifies the complet
   assert.throws(() => choose(target, [{ ...configured[0], name: 'changed' }], savedPolicy, assert, modelConfigurationHash), /R3_NATIVE_MODEL_MISMATCH/)
 })
 
+test('saved native approval accepts the selected findings as a set containing the required negative target', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+  const start = fixture.indexOf('      const indexes = approval.findingIds.map(')
+  const end = fixture.indexOf('      Object.assign(aiReviewedDraft,', start)
+  assert.ok(start >= 0 && end > start)
+  const check = new Function('approval', 'cycle', 'report', 'selection', 'planningRun', 'assert', 'sha', `
+    ${fixture.slice(start, end)}
+    return indexes
+  `)
+  const report = { items: [
+    { severity: 'error', goalId: null, description: '前情复述过多' },
+    { severity: 'unknown', goalId: 'ch2:keyEvents:1', description: '第一事件证据不足' },
+    { severity: 'unknown', goalId: 'ch2:keyEvents:2', description: '第二事件证据不足' },
+    { severity: 'warning', goalId: null, description: '未选择的建议' },
+  ] }
+  const cycle = { findings: report.items.map((_, reviewItemIndex) => ({ findingId: `finding-${reviewItemIndex}`, reviewItemIndex })) }
+  const selection = { selected: structuredClone(report.items.slice(0, 3)) }
+  const verify = (findingIds, planningRun = false) => check({ findingIds }, cycle, report, selection, planningRun, assert, hash)
+  assert.deepEqual(verify(['finding-0', 'finding-1', 'finding-2']), [0, 1, 2])
+  assert.deepEqual(verify(['finding-2']), [2])
+  assert.throws(() => verify(['finding-0', 'finding-1']), /SAVED_NATIVE_APPROVAL_FINDING_MISMATCH/)
+  assert.throws(() => verify(['finding-2', 'fabricated']), /SAVED_NATIVE_APPROVAL_FINDING_MISMATCH/)
+  assert.throws(() => verify(['finding-2', 'finding-3']), /SAVED_NATIVE_APPROVAL_FINDING_MISMATCH/)
+  assert.deepEqual(verify(['finding-0', 'finding-1'], true), [0, 1])
+})
+
 test('saved Pro budget excludes closed Flash identities but preserves same-group history and global replay checks', () => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `saved-forward-${randomUUID()}`)
   fs.mkdirSync(directory, { recursive: true })
