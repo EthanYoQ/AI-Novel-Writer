@@ -1,6 +1,6 @@
 # Program v3 全部 34 个 Spec 的现行审查入口
 
-整理日期：2026-09-26；2026-10-02 纳入[线程 10 交付计划](thread10-delivery-plan.md)，并保留 2026-09-30 材料澄清与 2026-10-01 自主审稿中未被取代的要求。范围为本轮重构的 24 个核心 Spec 和 10 个整合 Spec，不包含独立 DSH 插件或其他路线图。本索引整理已接受的要求，不证明实现、验收或发布完成。
+整理日期：2026-09-26；2026-10-04 合并规划现行规则，2026-10-02 纳入[线程 10 交付计划](thread10-delivery-plan.md)，并保留 2026-09-30 材料澄清与 2026-10-01 自主审稿中未被取代的要求。范围为本轮重构的 24 个核心 Spec 和 10 个整合 Spec，不包含独立 DSH 插件或其他路线图。本索引整理已接受的要求，不证明实现、验收或发布完成。
 
 ## 使用方法与权威顺序
 
@@ -14,7 +14,11 @@
 
 ## 所有审查共同适用的修订
 
-2026-10-04 规划增量按 [S07.M03 有限输出与冻结范围](../../plans/novel-quality-modernization/specs/S07.md#planning-budget-range)、[S06A 逐章大纲与恢复](../../plans/novel-quality-modernization/specs/S06A.md#chapter-planning-recovery)、[S10A 单章选择](../../plans/novel-quality-modernization/specs/S10A.md#planning-chapter-selection)和 [S10B 材料消费](../../plans/novel-quality-modernization/specs/S10B.md#planning-context-consumption)审查。[线程 10 规划工作包](thread10-delivery-plan.md#planning-completion-work-package)拥有实施及验证顺序。该增量不证明已实现，不改变正式文学与平台交付义务。
+2026-10-04 规划规则统一按以下 owner 审查。[S02](../../plans/novel-quality-modernization/specs/S02.md#planning-controls)拥有范围、目标偏好和作者恢复界面；[S06A](../../plans/novel-quality-modernization/specs/S06A.md#chapter-planning-recovery)拥有整章采用、软目标和保存恢复；[S06D](../../plans/novel-quality-modernization/specs/S06D.md#agent-planning-scope)拥有 Agent 内容 scope 与父预算分离。[S07](../../plans/novel-quality-modernization/specs/S07.md#planning-budget-range)拥有所有新 root 的共同容量及 `L=R×B` 责任计算。[S10A](../../plans/novel-quality-modernization/specs/S10A.md#planning-required-material-capacity)和 [S10B](../../plans/novel-quality-modernization/specs/S10B.md#planning-required-material-consumption)保留必需原文、可选预算与实际消费要求。[规划工作包](thread10-delivery-plan.md#planning-completion-work-package)拥有实施与验证顺序。
+
+默认每次 5 章、每章目标 600，可选最多 10 章、目标 1–1000。1000 是设置上限，完整输出超目标仍接受。新建/重置模型输出默认 65536，已有作者显式配置保留。未知 context 仍用原单请求兼容准入范围，不虚称可证明供应商费用上界。详细边界只读上述 Specs。
+
+这些规则取代旧增量及交付 delta 中冲突的规划 1200 字拒收、固定三／五 parts、规划专用容量、compact 32 KiB 拒绝和新动作全书范围。历史根、旧失败和正式文学阈值不改；正文 ±30% 继续适用，规划软目标不套此门。本次不新增 Spec，不证明实现、真实模型验证或 V3 交付完成。
 
 C01/S07、F05/U03 及全部生成消费者应用 [S07.M01–M04](../../plans/novel-quality-modernization/specs/S07.md#generic-model-compatibility)。高级设置的通用 OpenAI 入口须支持未登记的兼容型号。选模后的容量和思考映射须进入实际请求。未知容量、运行估算和已验证硬上限分别记录；根预算、未知结果及保存保护保留。验收引用 S07.A01–A07，历史冻结仍按原合同解释。
 
@@ -27,7 +31,7 @@ S06A、S09B、S10A/B 及 S14A/B 继续应用[2026-09-30 材料澄清](delivery-c
 | 主题 | 现行解释与精确来源 |
 | --- | --- |
 | 产品前端 | 唯一逻辑产品壳为 `writer`，呈现为 PR #262 固定 donor 的 V3 时尚杂志；Classic 只承担历史 baseline/旧偏好兼容，不再要求长期回切或双壳完整资格。现行 F04/F05 取代 C10/C11/C14 及 F01/F02/F04/F05、S14C/D、R01 中冲突的呈现要求。保留全部 153 个 action 的能力与作者外观偏好。 |
-| 字数与模型实验 | candidate 逐条采用 ±30% 和 draft-units v3；历史 baseline 的 ±20% 与全部回执不改。80 是计划额，产品预算保护不撤。线程 10 允许有界 API 筛选，独立开发日志不写正式物理账本；正式资格走原生入口和唯一账本，不要求旧参考臂。 |
+| 字数与模型实验 | candidate 正文逐条采用 ±30% 和 draft-units v3；大纲与蓝图使用 S06A 的软目标，不增加 ±30% 拒收。历史 baseline 的 ±20% 与全部回执不改。80 是计划额，产品预算保护不撤。线程 10 允许有界 API 筛选，独立开发日志不写正式物理账本；正式资格走原生入口和唯一账本，不要求旧参考臂。 |
 | 事实与文学质量 | 线程 10 的七案三轮与连续九章按固定批次裁决，C16 另算；每条保留原成文标准与实际 FAIL/INCONCLUSIVE，批次容错、零容忍项及停止规则只读 owner。带问题的保存稿可按预登记继续，不伪定稿。两名独立评审各按案一次读完整闭环，只仲裁分歧；post-UI 保留独有断言，不另叠文学全绿门。另有改善声明才另行比较。 |
 | 旧项目兼容 | ADR 0020 的普通离线**完整项目副本导入**取代 C08/project-storage、S04、F03 旧项目头像迁移、S14C、F05 U10.A11 中原地迁移/源侧 journal/旧根封锁要求。保留源小说及大纲、蓝图、世界观、人物、原文与资产；不经 AI 重建。检测源变化并验证目标，不承诺并发外部写入下原子快照。S03 全局配置迁移与 B01 当前项目归档合同不因本例外被削弱。 |
 | 原文查看与编辑 | F05 U15.A02 查看完整原文，仅编辑项目副本，外部原件不变；只存检索片段时明确缺原文，不拼接伪造。编辑后旧索引不参与新检索，按现行 F05 恢复索引，不自动付费重建。 |
@@ -41,21 +45,21 @@ S06A、S09B、S10A/B 及 S14A/B 继续应用[2026-09-30 材料澄清](delivery-c
 | --- | --- |
 | [S00 基线、台账与质量协议](../../plans/novel-quality-modernization/specs/S00.md) | C06/C09、v3 覆盖表、线程 10 第 4 节及质量协议。candidate-only 冻结须绑定候选自有模板、round/slot、真实生产 driver 与唯一账本；旧双目标只解释旧 revision。实际接线与验收状态读唯一私有当前检查点及其证据。完整阶段仍是必交项，历史局部 PASS 不证明新阶段就绪。 |
 | [S01 共享契约与 schema lane](../../plans/novel-quality-modernization/specs/S01.md) | C01–C09、C10/C13/C16/C17、[ADR 0018](../../adr/0018-program-v3-domain-contracts.md)。单一 migration registry、共享 owner、类型到生产消费者的接线；纯契约检查不等于落盘保证。project-storage 按 ADR 0020 解释。 |
-| [S02 规范 API 与 URI](../../plans/novel-quality-modernization/specs/S02.md) | C07/C09 及 v3 覆盖表。实际生产消费者走 canonical facade/资源 URI；V3 donor 不带回旧 API，合法 legacy importer 仍可保留旧格式读取。 |
+| [S02 规范 API 与 URI](../../plans/novel-quality-modernization/specs/S02.md) | C07/C09 及 v3 覆盖表。实际生产消费者走 canonical facade/资源 URI；V3 donor 不带回旧 API，合法 legacy importer 仍可保留旧格式读取。 现行规划控件覆盖两个架构入口、目录及实际编辑保存继续，详见本 Spec 的现行增量。 |
 | [S03 全局配置与启动](../../plans/novel-quality-modernization/specs/S03.md) | C08 的全局部分、C10/C11、F01。main 全局迁移/skin/mainReady 与 renderer appearance hydration 各有唯一 writer；旧偏好和作者配置保全。ADR 0020 不取消全局启动保护。 |
 | [S04 项目迁移与知识保全](../../plans/novel-quality-modernization/specs/S04.md) | C07–C09、C13/C17，项目迁移路径由 ADR 0020 和现行 F05 A11 替代。完整副本、新身份及内部引用、源变化检测、目标完整性、知识/原文/资产保全；不再要求旧根永久拒写。 |
 | [S05 持久生成 owner 与 CAS](../../plans/novel-quality-modernization/specs/S05.md) | C01–C03。根动作/物理 attempt/预算持久化、unknown 不盲重发、候选与 epoch/revision CAS；供唯一 V3 壳读取状态，不增第二 run owner。80 硬帽撤销不撤销产品预算。 |
-| [S06A 结构化规划恢复](../../plans/novel-quality-modernization/specs/S06A.md) | C01–C03。架构/角色/蓝图等实际入口接同一 run 与恢复；结构化修复归原根预算，正式提交有持久证据。 |
+| [S06A 结构化规划恢复](../../plans/novel-quality-modernization/specs/S06A.md) | C01–C03。架构/角色/蓝图等实际入口接同一 run 与恢复；结构化修复归原根预算，正式提交有持久证据。 现行整章合同取消内容长度及固定 parts 门，保留有限重建、完整保存、零前缀继续和旧运行保护。 |
 | [S06B 正文与批量恢复](../../plans/novel-quality-modernization/specs/S06B.md) | C01–C03、线程 10 切片 B。单章/批量共同路径自动短细纲后写正文，实际产物、来源和调用归原根预算；正文开始后恢复保持原细纲与组合提示身份。流式前缀、保存、取消及直接前驱保护保留，UI 终态不领先持久化。 |
 | [S06C 审稿修稿 run 归一](../../plans/novel-quality-modernization/specs/S06C.md) | C01–C03/C05、线程 10 切片 A。审修及复核消费已捕获的前驱、作者事实与目标；作者选择 AI 意见不把建议变成作者事实。普通审稿应用[完整报告提取与错误归因](../../plans/novel-quality-modernization/specs/S06C.md#review-output-reception)，不降低字段或事实要求，也不改历史评分。归原动作和预算，保持 finding、合并、恢复与全章末审边界。 |
-| [S06D Agent 与工具子任务](../../plans/novel-quality-modernization/specs/S06D.md) | C01–C03。Agent/工具生成不旁路父动作、来源准入、预算和用户可见恢复；不借此扩展 DSH 插件范围。 |
-| [S07 任务预算、范围与诊断](../../plans/novel-quality-modernization/specs/S07.md) | C01/C06、S07.M01–M04、质量协议及 ADR 0019。现行增量拥有移除型号白名单、通用选模、容量资料及思考映射；验收见 S07.A01–A07。短细纲归原根预算；运行估算不冒充硬上限。candidate 字数 ±30%，原生请求逐次结算，API 开发日志单列。 |
+| [S06D Agent 与工具子任务](../../plans/novel-quality-modernization/specs/S06D.md) | C01–C03。Agent/工具生成不旁路父动作、来源准入、预算和用户可见恢复；不借此扩展 DSH 插件范围。 新 child 冻结规划范围与 system 目标，旧父根预算保持；实际 owner/SQLite 须证明同根与普通入口一致。 |
+| [S07 任务预算、范围与诊断](../../plans/novel-quality-modernization/specs/S07.md) | C01/C06、S07.M01–M04、质量协议及 ADR 0019。现行增量拥有移除型号白名单、通用选模、容量资料及思考映射；验收见 S07.A01–A07。短细纲归原根预算；运行估算不冒充硬上限。candidate 正文字数 ±30%，原生请求逐次结算，API 开发日志单列。 新根共同输出容量、同源 B 与 L=R×B、旧根保护按现行 M03；不得把软目标当物理门。 |
 | [S08 稳定角色 ID](../../plans/novel-quality-modernization/specs/S08.md) | C04/C08/C13/C16。有来源的身份迁移、歧义拒绝、历史引用、头像到稳定 ID 映射；不按名字相似度猜合并。 |
 | [S09A 角色/蓝图 proposal](../../plans/novel-quality-modernization/specs/S09A.md) | C04/C16。身份与关系提议、作者批准及正式提交边界；区别 S09B 已获授权的非冲突 derived 自动更新，不能笼统要求所有字段都手动批准。 |
 | [S09B 连续性、定稿与导入身份](../../plans/novel-quality-modernization/specs/S09B.md) | C04/C16。当前权威定稿、来源顺序、字段 CAS；非冲突 derived 自动演进，作者值/非空 legacy 值保全，冲突或身份歧义才提议。线程 10 的细纲不是定稿或可信派生来源；计划不能冒充已发生事实，不增加独立提取调用。 |
 | [S09C UI/Agent 稳定引用](../../plans/novel-quality-modernization/specs/S09C.md) | C04/C13/C16。V3 角色、图谱、头像和 Agent 全入口使用稳定 ID；历史边保留与当前活跃投影分开，退役身份不复活。 |
-| [S10A 有来源上下文选择](../../plans/novel-quality-modernization/specs/S10A.md) | C02/C03、线程 10 切片 A/B。复用已捕获来源、容量裁决和当前候选准入，补齐审修依据，不在发送时另读未绑定材料。细纲可供正文消费，不是审稿事实证据；首页/图谱/头像信息不得自动塞入 prompt。 |
-| [S10B 章节共享证据](../../plans/novel-quality-modernization/specs/S10B.md) | C03/C06、线程 10。写稿/审修共享可复算身份和事实优先级，细纲与实际正文提示绑定；保存前驱可带问题但不得伪定稿。±30% 保留，旧参考臂只解释历史；截断与复述分别验。 |
+| [S10A 有来源上下文选择](../../plans/novel-quality-modernization/specs/S10A.md) | C02/C03、线程 10 切片 A/B。复用已捕获来源、容量裁决和当前候选准入，补齐审修依据，不在发送时另读未绑定材料。细纲可供正文消费，不是审稿事实证据；首页/图谱/头像信息不得自动塞入 prompt。 明确单章投影与旧歧义回退并存；必要原文按 receipt 和最终模型容量准入，可选材料仍受原预算。 |
+| [S10B 章节共享证据](../../plans/novel-quality-modernization/specs/S10B.md) | C03/C06、线程 10。写稿/审修共享可复算身份和事实优先级，细纲与实际正文提示绑定；保存前驱可带问题但不得伪定稿。正文 ±30% 保留，旧参考臂只解释历史；截断与复述分别验。 已保存规划按真实来源进入写审修，完整超目标结果不在下游拒收；真实 6+6+1 内容保持。 |
 | [S11 审稿至复核闭环](../../plans/novel-quality-modernization/specs/S11.md) | C05、[现行 S14B](frontend-transition-specs.md#s14b--写作质量与-post-ui)及线程 10 切片 A。finding 绑定原文或明确目标，区分已发生、回顾、计划和本章目标；选择 AI 意见不提升其事实权威。定向复核不替代全章末审；首审发现、误报、修稿及最终质量分列，未解决状态按当前保存稿 hash 对应终局报告判断，不扫描旧 cycle 代判。 |
 | [S12 导入 effect ledger](../../plans/novel-quality-modernization/specs/S12.md) | C01/C03/C08/C09。取消/重启/重试、输入来源、单完成账本和真实进度；V3 UI 接原 owner，不引入第二导入状态机。与 A11 旧项目副本导入区别核验，不能互相替代。 |
 | [S13 legacy 退场](../../plans/novel-quality-modernization/specs/S13.md) | C09 及现行 S13。独立核心清理先做，UI 清理等 F04/F05 确定性 Final；保留有消费者的 importer/shared/baseline/许可。完整出口不等 post-UI，不以词法零命中为唯一标准。 |
