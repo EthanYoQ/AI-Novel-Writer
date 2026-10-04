@@ -3391,6 +3391,17 @@
       }
     },
     "saved-native-review-diagnostic": {
+      "savedReviewContinuation": {
+        "continuationId": "8f9a9a0e-8a3f-4972-a3e3-97f5a4fc9e97",
+        "manifestHash": "722493acab402efd6159adebfe059fa544660430dd250bee112c997fd0d4dd1b",
+        "sourceHash": "5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75",
+        "firstReviewAttempt": {
+          "attemptId": "candidate:30738047-b5ed-48dc-a427-9105d9786507",
+          "bindingHash": "e124403aadd7d2022c2be47e59c8c60239316d674b66bff99d8dd70ec98354e5",
+          "terminal": "settle",
+          "finishReason": "stop"
+        }
+      },
       "sceneId": "场景1",
       "chapterNumber": 2,
       "milestone": "diagnostic",
@@ -7455,5 +7466,28 @@
       }
     ],
     "limits": "Historical settled requests only. Preserve original results; no refund, replay, qualification or reclassification."
+  },
+  "historicalSavedProFirstReviewBoundary": {
+    "fromEventCount": 1881,
+    "eventCount": 1884,
+    "rawBytesSha256": "c0bdc388c2e1bbf0dad2e8c51d9993d2d706ed5c69f6e05b1598a4a95b12d3ca",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "e765c06731340acb25eb4946c3cfdba59c9a1504f729c656433411ba5aa7673e",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "b0dff128afbb595d41dc6742518774e61a394798",
+        "sourceHash": "5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75",
+        "driverHash": "79d19faee3041025fbb5dac8aa2c86ba6d1bebf9863c53bc7bf6c534d8e03306"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:30738047-b5ed-48dc-a427-9105d9786507",
+        "invocationId": "3c521df7-f5be-4033-8c11-e7417b3daf13",
+        "terminal": "settle",
+        "parityId": "57fd4fa6846e89274a14366f0bc07970e8f07678d9beecce57b17c08e5c6b292"
+      }
+    ],
+    "limits": "Historical settled first review only. Preserve the original failed complete and count the first review in the registered continuation."
   }
 }

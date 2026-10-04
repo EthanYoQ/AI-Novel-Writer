@@ -12,7 +12,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows, streamEventStructure,
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, r3ModelForOperation, modelConfigurationHash, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation,
-  SAVED_NATIVE_REVIEW_DIAGNOSTIC, readSavedNativeSource,
+  SAVED_NATIVE_REVIEW_DIAGNOSTIC, readSavedNativeSource, readSavedReviewContinuation,
   PLANNING_NATIVE_DIAGNOSTIC, PLANNING_STAGE_MODELS, readPlanningNativeSource, readPlanningResumeSource,
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
@@ -219,6 +219,12 @@ test('isolated production commands persist the selected phase operations', async
   const planningRun = request.phase === 'planning-native-diagnostic'
   const planningSource = planningRun ? readPlanningNativeSource(request.diagnosticInputPath) : null
   const planningResume = request.resumeSourcePath ? readPlanningResumeSource(request.resumeSourcePath) : null
+  const savedReview = request.savedReviewContinuationPath ? readSavedReviewContinuation(request.savedReviewContinuationPath) : null
+  if (savedReview) {
+    assert.ok(savedRun && (request.caseId !== savedReview.manifest.caseId || request.nativeAction === 'complete'), 'SAVED_REVIEW_CONTINUATION_SCOPE_MISMATCH')
+    assert.deepEqual(request.savedReviewContinuation, { continuationId: savedReview.manifest.continuationId,
+      manifestHash: savedReview.manifestHash }, 'SAVED_REVIEW_CONTINUATION_MANIFEST_DRIFT')
+  }
   if (planningResume) {
     assert.ok(planningRun && ['resume-from-saved-outline', 'complete'].includes(request.nativeAction), 'PLANNING_RESUME_SCOPE_MISMATCH')
     assert.deepEqual(request.savedOutlineContinuation, { continuationId: planningResume.manifest.continuationId,
@@ -310,6 +316,7 @@ test('isolated production commands persist the selected phase operations', async
     phase: request.phase, milestone: request.milestone, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
     operations: [], qualification: planningRun || diagnosticRun || copiedRun ? 'non-qualification-diagnostic' : request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
     sourceHash: target.sourceHash, driverHash: request.driverHash,
+    ...(savedReview ? { savedReviewContinuation: request.savedReviewContinuation } : {}),
     modelParameters: { source: source.modelParameters, effective: effectiveModelParameters,
       registrationRevision: registeredForward?.revision ?? null },
     ...(reviewedRun || aiReviewRun ? { evaluationPolicy: request.evaluationPolicy } : {}),
@@ -849,6 +856,30 @@ test('isolated production commands persist the selected phase operations', async
     const core = db.prepare('SELECT project_name,genre,target_audience,total_chapters,words_per_chapter,writing_language,global_guidance,core_outline,world_setting,protagonist_profile,premise,worldbuilding,characters_arch,synopsis FROM project_core WHERE id=?').get('main')
     const physicalTemplates = []
     for (const key of templateKeys) physicalTemplates.push(await prompts.resolvePromptTemplate(key, session, 'zh-CN'))
+    if (savedReview && request.caseId === savedReview.manifest.caseId) {
+      const manifest = savedReview.manifest, expected = manifest.sourceDraft
+      assert.equal(project.projectId, manifest.project.projectId, 'SAVED_REVIEW_CONTINUATION_PROJECT_DRIFT')
+      assert.equal(path.resolve(project.rootPath), path.resolve(manifest.project.path), 'SAVED_REVIEW_CONTINUATION_PROJECT_DRIFT')
+      assert.equal(path.resolve(db.name), path.resolve(manifest.project.dbPath), 'SAVED_REVIEW_CONTINUATION_PROJECT_DRIFT')
+      const draft = await invoke('db:draft-get-full', expected.draftId, project.rootPath, session)
+      assert.deepEqual({ draftId: draft.id, chapterNumber: draft.chapterNumber, version: draft.version,
+        status: draft.status, contentHash: sha(draft.content) }, { draftId: expected.draftId, chapterNumber: expected.chapterNumber,
+        version: expected.version, status: expected.status, contentHash: expected.contentHash }, 'SAVED_REVIEW_CONTINUATION_DRAFT_DRIFT')
+      assert.equal(sha(parityPredecessors(predecessorReadbacks)), manifest.predecessorHash, 'SAVED_REVIEW_CONTINUATION_PREDECESSOR_DRIFT')
+      const report = await invoke('db:review-get-full', savedReview.approval.reviewId, project.rootPath, session)
+      assert.equal(sha(report.content), savedReview.approval.reportHash, 'SAVED_REVIEW_CONTINUATION_REPORT_DRIFT')
+      const cycle = db.prepare('SELECT revision_status,recheck_count,revision_id,confirmation_review_id FROM review_cycles WHERE review_id=?').get(savedReview.approval.reviewId)
+      assert.deepEqual(cycle, { revision_status: 'not-generated', recheck_count: 0, revision_id: null, confirmation_review_id: null }, 'SAVED_REVIEW_CONTINUATION_CYCLE_DRIFT')
+      const configured = json(path.join(target.roots.config, 'models.json')).find(value => value.id === manifest.model.profileId)
+      assert.equal(modelConfigurationHash(configured), manifest.model.configurationHash, 'SAVED_REVIEW_CONTINUATION_MODEL_DRIFT')
+      assert.deepEqual(physicalTemplates, savedReview.templates.templates, 'SAVED_REVIEW_CONTINUATION_TEMPLATE_DRIFT')
+      if (request.action === 'saved-review-preflight') {
+        const snapshot = { sourceArm: target.arm, sourceSha: target.codeSha, templates: physicalTemplates,
+          predecessor: { ...manifest.references.templates, sourceSha: savedReview.templates.sourceSha } }
+        if (fs.existsSync(request.templatesPath)) assert.deepEqual(json(request.templatesPath), snapshot, 'SAVED_REVIEW_CONTINUATION_TEMPLATE_DRIFT')
+        else fs.writeFileSync(request.templatesPath, JSON.stringify(snapshot, null, 2) + '\n', { flag: 'wx' })
+      }
+    }
     if (planningResume) {
       const manifest = planningResume.manifest
       assert.equal(project.projectId, manifest.project.projectId, 'PLANNING_RESUME_PROJECT_DRIFT')
@@ -915,8 +946,8 @@ test('isolated production commands persist the selected phase operations', async
     if (request.action === 'prepare') { assertNoOutboundPreflightFailures(receipt); receipt.status = 'prepared'; return }
     if (continuityRun) request.parityHash = sha(sourceParity)
     else assert.equal(sha(sourceParity), request.parityHash, 'PHYSICAL_PROJECT_PARITY_CHANGED')
-    if (request.action === 'resume-preflight') {
-      assert.ok(planningResume && request.operations.length === 0, 'PLANNING_RESUME_PREFLIGHT_SCOPE_MISMATCH')
+    if (['resume-preflight', 'saved-review-preflight'].includes(request.action)) {
+      assert.ok((request.action === 'resume-preflight' ? planningResume : savedReview) && request.operations.length === 0, 'SAVED_NATIVE_PREFLIGHT_SCOPE_MISMATCH')
       assertNoOutboundPreflightFailures(receipt)
       receipt.status = 'prepared'
       return
@@ -1374,6 +1405,7 @@ test('isolated production commands persist the selected phase operations', async
             .map(key => [key, diagnosticSlot[key]])) } : {}),
         ...(r3Run || stageProfiles ? { stageModel: { profileId: modelForOperation(operationId).profileId, configurationHash: modelForOperation(operationId).configurationHash } } : {}),
         ...(copiedRun ? { diagnosticSourceHash: sha(copiedPolicy.source), diagnosticInputHash: boundedSource.inputHash } : {}),
+        ...(savedReview ? { savedReviewContinuation: request.savedReviewContinuation } : {}),
         ...(planningRun ? { diagnosticSourceHash: planningSource.sourceHash, diagnosticInputHash: planningSource.inputHash,
           planningRange: PLANNING_NATIVE_DIAGNOSTIC.operations.find(item => item.id === operationId)?.range ?? PLANNING_NATIVE_DIAGNOSTIC.range,
           ...(planningResume ? { savedOutlineContinuation: request.savedOutlineContinuation } : {}) } : {}),

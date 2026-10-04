@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { Buffer } from 'node:buffer'
+import { pathToFileURL } from 'node:url'
 import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows, createOperationDispatchGate,
   assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS, modelConfigurationHash,
   SAVED_NATIVE_REVIEW_DIAGNOSTIC as savedPolicy, savedNativeOperations, reviewLengthRecoveryFor,
@@ -395,6 +397,139 @@ test('saved native checks reject cross-case operations and spent or unknown requ
     updateLedger(ledger, { type: 'unknown', attemptId: 'first' }, { campaignMode: 'synthetic' })
     assert.throws(() => reserve('retry', { actual: { ...binding.actual, attemptId: 'retry', rootActionId: 'new-root' } }), /SAVED_NATIVE/)
     assert.equal(fs.readFileSync(ledger, 'utf8').trim().split('\n').length, 3)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('saved first-review continuation preserves old files, counts the exact historical request and uses the new closure', async () => {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/saved-continuation-'))
+  const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n'); return file }
+  const ref = file => ({ path: file, sha256: hash(fs.readFileSync(file)) })
+  try {
+    const adapter = path.join(directory, 'adapter'), scripts = path.join(adapter, 'scripts')
+    fs.mkdirSync(adapter)
+    for (const name of ['src', 'electron', 'node_modules']) fs.symlinkSync(path.join(ROOT, name), path.join(adapter, name), 'junction')
+    fs.mkdirSync(path.join(scripts, 'fixtures'), { recursive: true })
+    for (const name of ['quality-modernization-driver.mjs', 'quality-modernization-run.mjs', 'quality-modernization-receipt.mjs', 'fixtures/quality-modernization-production.fixture.mjs'])
+      fs.copyFileSync(path.join(ROOT, 'scripts', name), path.join(scripts, name))
+    const phase = 'saved-native-review-diagnostic', policy = structuredClone(savedPolicy), slot = policy.sources[0]
+    const projectRoot = path.join(directory, 'assets'); fs.mkdirSync(projectRoot)
+    const content = '原稿不重抽', draftPath = path.join(directory, 'draft.txt'); fs.writeFileSync(draftPath, content)
+    slot.contentSha256 = hash(content)
+    const sourceReceipt = write(path.join(directory, 'source.json'), {})
+    const inputPath = write(path.join(directory, 'input.json'), { cases: policy.sources.map(item => ({ caseId: item.caseId,
+      projectRoot, files: [], draftPath, draftHash: hash(content), context: { source: { content } },
+      originalReceipt: sourceReceipt, originalReceiptHash: ref(sourceReceipt).sha256 })) })
+    policy.sources[1].contentSha256 = hash(content); policy.diagnosticInputHash = ref(inputPath).sha256
+    const isolationRoot = path.join(directory, 'base'), roots = Object.fromEntries(['project', 'config', 'userData', 'legacySource'].map(key => [key, path.join(isolationRoot, key)]))
+    const oldTools = { codeSha: 'a'.repeat(40), driverHash: 'b'.repeat(64), executionToolsHash: 'c'.repeat(64), runnerAdapterHash: 'd'.repeat(64) }
+    const oldProtocol = structuredClone(protocol); oldProtocol.phases[phase] = structuredClone(policy)
+    delete oldProtocol.phases[phase].savedReviewContinuation; delete oldProtocol.historicalSavedProFirstReviewBoundary
+    const sourceProtocolPath = write(path.join(directory, 'old-protocol.json'), oldProtocol), protocolHash = ref(sourceProtocolPath).sha256
+    const base = { arm: 'candidate', roots, isolationRoot, ...oldTools, sourceHash: policy.savedReviewContinuation.sourceHash,
+      driver: { sha256: oldTools.driverHash }, protocolHash, protocolRevision: protocol.decisionRevision, fixture: {}, modelId: policy.modelProfile.profileId, modelSources: {} }
+    const runtime = { ...base, roots: Object.fromEntries(Object.entries(roots).map(([key, dir]) => [key, path.join(dir, slot.invocationId.slice(0, 8))])),
+      isolationRoot: path.join(isolationRoot, 'invocations', slot.invocationId), declaredRoots: roots, declaredIsolationRoot: isolationRoot }
+    const physical = { projectId: 'continued-project', path: runtime.roots.project, dbPath: path.join(runtime.roots.project, 'project.db'),
+      parityHash: 'e'.repeat(64), readback: { predecessors: [] } }
+    const reportPath = write(path.join(directory, 'report.json'), { items: [] })
+    const initial = { draftId: 4, chapterNumber: 2, version: 1, status: 'draft', contentHash: hash(content), outputPath: draftPath }
+    const binding = { campaignId: CAMPAIGN_ID, invocationId: slot.invocationId, mode: 'synthetic', arm: 'candidate',
+      protocolRevision: base.protocolRevision, protocolHash, codeSha: base.codeSha, sourceHash: base.sourceHash, driverHash: base.driver.sha256,
+      parityId: physical.parityHash, phase, milestone: 'diagnostic', caseId: slot.caseId, operation: 'negative-review',
+      diagnosticInputHash: policy.diagnosticInputHash, diagnosticSourceHash: hash(slot), evaluationPolicyHash: hash(policy.evaluationPolicy),
+      stageModel: { profileId: policy.modelProfile.profileId, configurationHash: policy.modelProfile.configurationHash },
+      actual: { attemptId: 'old', projectId: physical.projectId, epoch: 'old-epoch', runId: 'review-run', rootActionId: 'review-root', purpose: 'review-chapter' } }
+    const attemptId = 'candidate:old', oldRows = [{ type: 'reserve', attemptId, binding, allocation: 'nonQualificationDiagnostic' },
+      { type: 'dispatch', attemptId }, { type: 'settle', attemptId, finishReason: 'stop' }]
+    const ledgerPath = path.join(adapter, '.runtime/.cache/novel-quality-modernization/ledger.jsonl'), oldRaw = oldRows.map(row => JSON.stringify(row) + '\n').join('')
+    fs.mkdirSync(path.dirname(ledgerPath), { recursive: true }); fs.writeFileSync(ledgerPath, oldRaw)
+    const first = { ...binding, status: 'passed', projectEpoch: 'old-epoch', physicalProject: physical,
+      attempts: [{ attemptId, binding, finishReason: 'stop' }], aiReviewedDraft: { initial,
+        review: { reviewId: 2, contentHash: ref(reportPath).sha256, outputPath: reportPath } } }
+    const firstPath = write(path.join(directory, 'first.json'), first), failedPath = write(path.join(directory, 'failed.json'),
+      { status: 'failed', physicalProject: physical, operations: [], attempts: [], physicalModelRequests: 0, syntheticDispatches: 0 })
+    const prepared = { status: 'prepared', physicalProject: physical }, prepPath = write(path.join(directory, 'prepare.json'), prepared)
+    const approvalPath = write(path.join(directory, 'approval.json'), { kind: 'negative-detection', receiptPath: firstPath,
+      receiptHash: ref(firstPath).sha256, reviewId: 2, reportHash: ref(reportPath).sha256, findingIds: ['retained-finding'] })
+    const executionPath = write(path.join(directory, 'old-execution.json'), { target: runtime, targetHash: hash(base), ledgerPath,
+      prepared: { ...prepared, receiptPath: prepPath }, results: { review: { ...first, receiptPath: firstPath }, complete: { status: 'failed', receiptPath: failedPath } } })
+    const manifest = { schemaVersion: 1, kind: 'saved-native-pro-first-review-continuation', phase, caseId: slot.caseId,
+      continuationId: policy.savedReviewContinuation.continuationId, invocationId: slot.invocationId, historicalTools: oldTools,
+      sourceHash: base.sourceHash, protocolHash, diagnosticInputHash: policy.diagnosticInputHash, model: binding.stageModel,
+      references: { baseTargets: ref(write(path.join(directory, 'old-targets.json'), { candidate: base })), execution: ref(executionPath),
+        preparation: ref(prepPath), firstReview: ref(firstPath), failedComplete: ref(failedPath), approval: ref(approvalPath),
+        templates: ref(write(path.join(directory, 'templates.json'), { sourceArm: 'candidate', sourceSha: base.codeSha, templates: [] })),
+        diagnosticInput: ref(inputPath), protocol: ref(sourceProtocolPath), report: ref(reportPath) },
+      project: { projectId: physical.projectId, path: physical.path, dbPath: physical.dbPath, sourceEpoch: 'old-epoch' }, sourceDraft: initial,
+      predecessorHash: hash([]), ledger: { path: ledgerPath, eventCount: 3, rawBytesSha256: hash(oldRaw) },
+      firstReviewAttempt: { attemptId, bindingHash: hash(binding), terminal: 'settle', finishReason: 'stop' } }
+    const manifestPath = write(path.join(directory, 'manifest.json'), manifest)
+    Object.assign(policy.savedReviewContinuation, { manifestHash: ref(manifestPath).sha256, firstReviewAttempt: manifest.firstReviewAttempt })
+    const current = structuredClone(oldProtocol); current.phases[phase] = policy
+    const protocolPath = write(path.join(adapter, 'docs/research/novel-quality-modernization/protocol.json'), current)
+    const driverPath = path.join(scripts, 'quality-modernization-driver.mjs'), driverSource = fs.readFileSync(driverPath, 'utf8')
+    const start = driverSource.indexOf('export const SAVED_NATIVE_REVIEW_DIAGNOSTIC ='), end = driverSource.indexOf('\n})', start) + 3
+    fs.writeFileSync(driverPath, driverSource.slice(0, start) + `export const SAVED_NATIVE_REVIEW_DIAGNOSTIC = Object.freeze(${JSON.stringify(policy)})` + driverSource.slice(end))
+    const driver = await import(pathToFileURL(driverPath).href), runner = await import(pathToFileURL(path.join(scripts, 'quality-modernization-run.mjs')).href)
+    const target = { ...base, codeSha: 'f'.repeat(40), protocolHash: ref(protocolPath).sha256 }, calls = []
+    const options = { phase, mode: 'synthetic', protocolRevision: base.protocolRevision, protocolHash: target.protocolHash, ledgerPath,
+      diagnosticInputPath: inputPath, savedReviewContinuationPath: manifestPath, caseId: slot.caseId, nativeAction: 'complete', approvalPath }
+    const bridge = request => {
+      calls.push([request.caseId, request.action]); assert.ok(!request.operations.some(item => item.id === 'negative-review'))
+      if (request.action === 'saved-review-preflight') {
+        assert.deepEqual(request.firstReview, first); assert.equal(request.target.roots.project, runtime.roots.project)
+        write(request.templatesPath, { sourceArm: 'candidate', sourceSha: target.codeSha, templates: [], predecessor: manifest.references.templates })
+        return prepared
+      }
+      if (request.action === 'prepare') { write(request.templatesPath, { templates: [] }); return prepared }
+      const receiptPath = path.join(request.evidenceRoot, 'execute-receipt.json')
+      const result = { ...request, status: 'passed', codeSha: target.codeSha, sourceHash: target.sourceHash,
+        aiReviewedDraft: { finalReview: { reviewId: 3, contentHash: ref(reportPath).sha256, outputPath: reportPath } }, receiptPath }
+      write(receiptPath, result); return result
+    }
+    const run = extra => driver.runProductionPhasePair({ candidate: target }, { ...options, ...extra }, bridge)
+    for (const nativeAction of ['prepare', 'review']) assert.throws(() => run({ nativeAction }), /CONTINUATION_SCOPE/)
+    const result = run(), record = JSON.parse(fs.readFileSync(result.executionRecordPath))
+    assert.deepEqual(calls, [[slot.caseId, 'saved-review-preflight'], [slot.caseId, 'execute']])
+    assert.equal(record.results.review, undefined); assert.deepEqual(record.historicalFirstReview, manifest.references.firstReview)
+    assert.deepEqual(record.toolTransition.from, oldTools); assert.equal(record.toolTransition.to.codeSha, target.codeSha)
+    assert.equal(run().results[0].receiptPath, result.results[0].receiptPath); assert.equal(calls.length, 2)
+    assert.throws(() => run({ caseId: policy.caseIds[1], nativeAction: 'review' }), /APPROVAL_RECEIPT_MISMATCH/)
+    const closurePath = write(path.join(directory, 'closure.json'), { kind: 'negative-closure', receiptPath: result.results[0].receiptPath,
+      receiptHash: ref(result.results[0].receiptPath).sha256, reviewId: 3, reportHash: ref(reportPath).sha256 })
+    run({ caseId: policy.caseIds[1], nativeAction: 'review', approvalPath: closurePath })
+    assert.deepEqual(calls.slice(2), [[policy.caseIds[1], 'prepare'], [policy.caseIds[1], 'execute']])
+    for (const reference of Object.values(manifest.references)) assert.equal(ref(reference.path).sha256, reference.sha256)
+    const boundary = { fromEventCount: 0, eventCount: 3, rawBytesSha256: hash(oldRaw), protocolRevision: base.protocolRevision,
+      protocolHash, reserveAttempts: [{ attemptId, invocationId: slot.invocationId, terminal: 'settle' }] }
+    const next = { ...binding, codeSha: target.codeSha, protocolHash: target.protocolHash, driverHash: driver.productionBridgeHash(),
+      operation: 'negative-refine', savedReviewContinuation: record.savedReviewContinuation,
+      actual: { ...binding.actual, attemptId: 'new', runId: 'refine-run', rootActionId: 'refine-root', epoch: 'fresh-epoch', purpose: 'refine-from-review' } }
+    const ledgerOptions = { campaignMode: 'synthetic', historicalSavedProFirstReviewBoundary: boundary }
+    const reserve = value => runner.updateLedger(ledgerPath, { type: 'reserve', attemptId: 'candidate:new', binding: value }, ledgerOptions)
+    const settled = new Map([[attemptId, 'settle']])
+    assert.throws(() => driver.savedReviewHistoricalAttempts(next, [{ ...oldRows[0], binding: { ...binding, codeSha: target.codeSha } }], settled, oldRows), /CONTINUATION_PREFIX/)
+    assert.throws(() => driver.savedReviewHistoricalAttempts(next, [oldRows[0]], new Map([[attemptId, 'unknown']]), oldRows), /CONTINUATION_PREFIX/)
+    assert.throws(() => driver.savedReviewHistoricalAttempts(next, [oldRows[0]], settled, oldRows.map(row => row.type === 'settle' ? { ...row, finishReason: 'length' } : row)), /CONTINUATION_PREFIX/)
+    assert.throws(() => reserve({ ...next, savedReviewContinuation: undefined }), /SAVED_NATIVE_ATTEMPT_UNAVAILABLE/)
+    assert.throws(() => reserve({ ...next, operation: 'negative-review', actual: { ...next.actual, purpose: 'review-chapter' } }), /CONTINUATION_PREFIX/)
+    assert.throws(() => reserve({ ...next, savedReviewContinuation: { ...record.savedReviewContinuation, manifestHash: '0'.repeat(64) } }), /CONTINUATION_PREFIX/)
+    assert.equal(reserve(next).occupied, 2, 'the old first review remains in cumulative consumption')
+    assert.equal(fs.readFileSync(ledgerPath, 'utf8').slice(0, oldRaw.length), oldRaw)
+    runner.updateLedger(ledgerPath, { type: 'dispatch', attemptId: 'candidate:new' }, ledgerOptions)
+    runner.updateLedger(ledgerPath, { type: 'unknown', attemptId: 'candidate:new' }, ledgerOptions)
+    assert.throws(() => reserve({ ...next, actual: { ...next.actual, attemptId: 'replay' } }), /SAVED_NATIVE_ATTEMPT_UNAVAILABLE/)
+    for (const file of [manifestPath, reportPath, approvalPath, manifest.references.templates.path, protocolPath, ledgerPath]) {
+      const bytes = fs.readFileSync(file)
+      try {
+        if (file === protocolPath) { const changed = JSON.parse(bytes); changed.phases[phase].maxPhysicalRequests++; write(file, changed) }
+        else if (file === ledgerPath) fs.writeFileSync(file, bytes.toString().replace('review-run', 'other-run'))
+        else fs.writeFileSync(file, Buffer.concat([bytes, Buffer.from(' ')]))
+        assert.throws(() => run(), /CONTINUATION_.*DRIFT/)
+      } finally { fs.writeFileSync(file, bytes) }
+    }
+    fs.writeFileSync(firstPath, fs.readFileSync(firstPath, 'utf8') + ' ')
+    assert.throws(() => run(), /CONTINUATION_SOURCE_DRIFT/); assert.equal(calls.length, 4)
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 

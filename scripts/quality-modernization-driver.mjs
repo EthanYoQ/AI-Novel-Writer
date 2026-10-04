@@ -118,6 +118,13 @@ export function qualificationModelForOperation(phase, milestone, operationId) {
 }
 
 export const SAVED_NATIVE_REVIEW_DIAGNOSTIC = Object.freeze({
+  savedReviewContinuation: {
+    continuationId: '8f9a9a0e-8a3f-4972-a3e3-97f5a4fc9e97',
+    manifestHash: '722493acab402efd6159adebfe059fa544660430dd250bee112c997fd0d4dd1b',
+    sourceHash: '5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75',
+    firstReviewAttempt: { attemptId: 'candidate:30738047-b5ed-48dc-a427-9105d9786507',
+      bindingHash: 'e124403aadd7d2022c2be47e59c8c60239316d674b66bff99d8dd70ec98354e5', terminal: 'settle', finishReason: 'stop' },
+  },
   sceneId: '场景1', chapterNumber: 2, milestone: 'diagnostic', arms: ['candidate'], nonQualification: true,
   scenarioRevision: 'saved-native-review-pro-two-cases-v2', formalDenominatorContribution: 0,
   expectedPhysicalRequests: 4, maxPhysicalRequests: 16,
@@ -149,10 +156,14 @@ export const SAVED_NATIVE_REVIEW_DIAGNOSTIC = Object.freeze({
   stop: 'negative-detection-or-closure-or-technical-failure-ends-check-control-NOT_RUN',
 })
 
-export function savedNativeOperations(caseId, action) {
+export function savedNativeOperations(caseId, action, bridgeAction) {
   const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC
   if (!policy.caseIds.includes(caseId) || !['prepare', 'review', 'complete'].includes(action)
     || action === 'complete' && caseId !== policy.caseIds[0]) throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
+  if (bridgeAction === 'saved-review-preflight') {
+    if (action !== 'complete') throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
+    return []
+  }
   return policy.operations.filter(item => item.caseIds.includes(caseId)
     && (action === 'complete' ? item.kind !== 'review' : item.kind === 'review'))
 }
@@ -222,6 +233,87 @@ export function planningSavedOutlineAttempts(binding, prior, statuses) {
       return !row || digest(row.binding) !== item.bindingHash || statuses.get(item.attemptId) !== item.terminal
     })) throw new Error('PLANNING_RESUME_PREFIX_MISMATCH')
   return new Set(registration.attempts.map(item => item.attemptId))
+}
+
+export function readSavedReviewContinuation(file) {
+  const bytes = fs.readFileSync(file), policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC, registration = policy.savedReviewContinuation
+  if (digest(bytes) !== registration.manifestHash) throw new Error('SAVED_REVIEW_CONTINUATION_MANIFEST_DRIFT')
+  const manifest = JSON.parse(bytes)
+  const evidence = Object.fromEntries(Object.entries(manifest.references).map(([key, reference]) => {
+    const content = fs.readFileSync(reference.path)
+    if (digest(content) !== reference.sha256) throw new Error('SAVED_REVIEW_CONTINUATION_SOURCE_DRIFT')
+    return [key, JSON.parse(content)]
+  }))
+  const { baseTargets, execution, preparation, firstReview, failedComplete, approval, templates, protocol } = evidence
+  const base = baseTargets.candidate, runtime = execution.target, first = firstReview.attempts[0]
+  const currentProtocol = JSON.parse(fs.readFileSync(path.join(ADAPTER_ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+  delete currentProtocol.phases[manifest.phase].savedReviewContinuation
+  delete currentProtocol.historicalSavedProFirstReviewBoundary
+  if (stableEvidence(currentProtocol) !== stableEvidence(protocol)) throw new Error('SAVED_REVIEW_CONTINUATION_PROTOCOL_DRIFT')
+  if (manifest.schemaVersion !== 1 || manifest.kind !== 'saved-native-pro-first-review-continuation'
+    || manifest.continuationId !== registration.continuationId || manifest.phase !== 'saved-native-review-diagnostic'
+    || manifest.caseId !== policy.caseIds[0] || manifest.invocationId !== policy.sources[0].invocationId
+    || manifest.sourceHash !== registration.sourceHash || manifest.diagnosticInputHash !== policy.diagnosticInputHash
+    || digest(manifest.firstReviewAttempt) !== digest(registration.firstReviewAttempt)
+    || manifest.model.profileId !== policy.modelProfile.profileId || manifest.model.configurationHash !== policy.modelProfile.configurationHash
+    || baseTargets.baseline || digest(base) !== execution.targetHash || base.sourceHash !== manifest.sourceHash
+    || ['codeSha', 'executionToolsHash', 'runnerAdapterHash'].some(key => base[key] !== manifest.historicalTools[key])
+    || base.driver.sha256 !== manifest.historicalTools.driverHash || base.protocolHash !== manifest.protocolHash
+    || manifest.references.protocol.sha256 !== manifest.protocolHash || manifest.references.diagnosticInput.sha256 !== manifest.diagnosticInputHash
+    || templates.sourceSha !== base.codeSha || templates.sourceArm !== 'candidate'
+    || preparation.status !== 'prepared' || firstReview.status !== 'passed' || failedComplete.status !== 'failed'
+    || failedComplete.physicalModelRequests !== 0 || failedComplete.syntheticDispatches !== 0
+    || failedComplete.operations.length !== 0 || failedComplete.attempts.length !== 0
+    || firstReview.attempts.length !== 1 || first.attemptId !== manifest.firstReviewAttempt.attemptId
+    || digest(first.binding) !== manifest.firstReviewAttempt.bindingHash || first.finishReason !== 'stop'
+    || ['codeSha', 'driverHash'].some(key => firstReview[key] !== manifest.historicalTools[key])
+    || ['sourceHash', 'protocolHash', 'invocationId', 'phase', 'caseId'].some(key => firstReview[key] !== manifest[key])
+    || firstReview.projectEpoch !== manifest.project.sourceEpoch || digest(firstReview.aiReviewedDraft.initial) !== digest(manifest.sourceDraft)
+    || digest(fs.readFileSync(manifest.sourceDraft.outputPath)) !== manifest.sourceDraft.contentHash
+    || digest(firstReview.physicalProject.readback.predecessors) !== manifest.predecessorHash
+    || [preparation, firstReview, failedComplete].some(receipt => receipt.physicalProject.projectId !== manifest.project.projectId
+      || path.resolve(receipt.physicalProject.dbPath) !== path.resolve(manifest.project.dbPath)
+      || path.resolve(receipt.physicalProject.path) !== path.resolve(manifest.project.path))
+    || execution.ledgerPath !== manifest.ledger.path
+    || [['prepared', 'preparation'], ['review', 'firstReview'], ['complete', 'failedComplete']].some(([key, ref]) =>
+      path.resolve((key === 'prepared' ? execution.prepared : execution.results[key]).receiptPath) !== path.resolve(manifest.references[ref].path))
+    || approval.receiptHash !== manifest.references.firstReview.sha256 || approval.reportHash !== manifest.references.report.sha256
+    || path.resolve(approval.receiptPath) !== path.resolve(manifest.references.firstReview.path)
+    || approval.reviewId !== firstReview.aiReviewedDraft.review.reviewId || approval.kind !== 'negative-detection')
+    throw new Error('SAVED_REVIEW_CONTINUATION_SOURCE_MISMATCH')
+  const roots = Object.fromEntries(Object.entries(base.roots).map(([key, directory]) => [key, path.join(directory, manifest.invocationId.slice(0, 8))]))
+  if (digest(runtime.roots) !== digest(roots) || runtime.isolationRoot !== path.join(base.isolationRoot, 'invocations', manifest.invocationId)
+    || digest(runtime.declaredRoots) !== digest(base.roots) || runtime.declaredIsolationRoot !== base.isolationRoot)
+    throw new Error('SAVED_REVIEW_CONTINUATION_ROOTS_MISMATCH')
+  const lines = fs.readFileSync(manifest.ledger.path, 'utf8').split('\n')
+  if (lines.length <= manifest.ledger.eventCount || digest(lines.slice(0, manifest.ledger.eventCount).join('\n') + '\n') !== manifest.ledger.rawBytesSha256)
+    throw new Error('SAVED_REVIEW_CONTINUATION_LEDGER_DRIFT')
+  const rows = lines.slice(0, manifest.ledger.eventCount).map(line => JSON.parse(line)).filter(row => row.attemptId === first.attemptId)
+  if (rows.length !== 3 || rows.map(row => row.type).join() !== 'reserve,dispatch,settle'
+    || digest(rows[0].binding) !== manifest.firstReviewAttempt.bindingHash || rows[2].finishReason !== 'stop')
+    throw new Error('SAVED_REVIEW_CONTINUATION_LEDGER_DRIFT')
+  return { manifest, ...evidence, manifestHash: registration.manifestHash }
+}
+
+export function savedReviewContinuationTarget(base, source) {
+  if (base.sourceHash !== source.manifest.sourceHash
+    || ['roots', 'isolationRoot', 'fixture', 'modelId', 'modelSources'].some(key => stableEvidence(base[key]) !== stableEvidence(source.baseTargets.candidate[key])))
+    throw new Error('SAVED_REVIEW_CONTINUATION_TARGET_DRIFT')
+  return { ...base, roots: source.execution.target.roots, isolationRoot: source.execution.target.isolationRoot,
+    declaredIsolationRoot: base.isolationRoot, declaredRoots: base.roots }
+}
+
+export function savedReviewHistoricalAttempts(binding, prior, statuses, events) {
+  if (!binding.savedReviewContinuation) return new Set()
+  const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC, registration = policy.savedReviewContinuation, attempt = registration.firstReviewAttempt
+  const row = prior.find(value => value.attemptId === attempt.attemptId)
+  if (stableEvidence(binding.savedReviewContinuation) !== stableEvidence({ continuationId: registration.continuationId, manifestHash: registration.manifestHash })
+    || binding.sourceHash !== registration.sourceHash || binding.operation === 'negative-review'
+    || binding.stageModel?.profileId !== policy.modelProfile.profileId || binding.stageModel?.configurationHash !== policy.modelProfile.configurationHash
+    || !row || digest(row.binding) !== attempt.bindingHash || statuses.get(attempt.attemptId) !== attempt.terminal
+    || events.find(event => event.attemptId === attempt.attemptId && event.type === 'settle')?.finishReason !== attempt.finishReason)
+    throw new Error('SAVED_REVIEW_CONTINUATION_PREFIX_MISMATCH')
+  return new Set([attempt.attemptId])
 }
 
 export function readPlanningNativeSource(inputPath) {
@@ -936,7 +1028,7 @@ export function qualificationBridgeWindows(request) {
       || request.forwardQualificationWindow != null || Object.keys(request).some(key => /timeout|deadline/iu.test(key)))
       throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
     const attemptMs = MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs + 60_000
-    const maxCalls = ['prepare', 'resume-preflight'].includes(request.action) ? 0 : planning
+    const maxCalls = ['prepare', 'resume-preflight', 'saved-review-preflight'].includes(request.action) ? 0 : planning
       ? request.operations.reduce((sum, item) => sum + policy.physicalRequestBounds[item.id], 0) : request.operations.length * 4
     return { attemptMs, spawnMs: Math.max(1, maxCalls) * attemptMs + 60_000,
       testMs: Math.max(1, maxCalls) * attemptMs + 120_000, maxCalls, revision: policy.scenarioRevision }
@@ -2807,7 +2899,8 @@ export function classifyFullProduction(results, { mode, order }) {
 export function executionRecordIdentity(options) {
   return digest(JSON.stringify({ invocationId: options.invocationId, protocolHash: options.protocolHash,
     sampling: options.sampling, phase: options.phase, mode: options.mode,
-    ...(options.savedOutlineContinuation ? { savedOutlineContinuation: options.savedOutlineContinuation } : {}) }))
+    ...(options.savedOutlineContinuation ? { savedOutlineContinuation: options.savedOutlineContinuation } : {}),
+    ...(options.savedReviewContinuation ? { savedReviewContinuation: options.savedReviewContinuation } : {}) }))
 }
 function executionRecord(options) {
   if (!options.executionRecordPath) return { results: {} }
@@ -2955,33 +3048,46 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     const operations = operationsFor(caseId, nativeAction)
     const source = planning ? readPlanningNativeSource(options.diagnosticInputPath) : readSavedNativeSource(options.diagnosticInputPath, caseId)
     const resume = options.resumeSourcePath ? readPlanningResumeSource(options.resumeSourcePath) : null
+    const savedReview = options.savedReviewContinuationPath ? readSavedReviewContinuation(options.savedReviewContinuationPath) : null
+    if (savedReview && (planning || resume || caseId === policy.caseIds[0] && nativeAction !== 'complete'
+      || path.resolve(options.diagnosticInputPath) !== path.resolve(savedReview.manifest.references.diagnosticInput.path)))
+      throw new Error('SAVED_REVIEW_CONTINUATION_SCOPE_MISMATCH')
     if (resume && (!planning || !['resume-from-saved-outline', 'complete'].includes(nativeAction))
       || nativeAction === 'resume-from-saved-outline' && !resume) throw new Error('PLANNING_RESUME_SOURCE_REQUIRED')
     const original = targets.candidate, invocationId = planning ? policy.invocationId : source.source.invocationId
     if (!original || targets.baseline || original.protocolHash !== options.protocolHash
       || original.protocolRevision !== options.protocolRevision || options.mode === 'real' && original.developmentOnly)
       throw new Error('SAVED_NATIVE_TARGET_MISMATCH')
-    const recordPath = id => resume ? `${resume.manifest.references.execution.path}.${resume.manifest.continuationId}.execution.json`
+    const recordPath = id => savedReview ? `${savedReview.manifest.references.execution.path}.${savedReview.manifest.continuationId}.${id}.execution.json`
+      : resume ? `${resume.manifest.references.execution.path}.${resume.manifest.continuationId}.execution.json`
       : `${options.diagnosticInputPath}.${options.mode}.${id}.execution.json`
-    if (resume && options.executionRecordPath && path.resolve(options.executionRecordPath) !== path.resolve(recordPath(caseId)))
+    if ((resume || savedReview) && options.executionRecordPath && path.resolve(options.executionRecordPath) !== path.resolve(recordPath(caseId)))
       throw new Error('PLANNING_RESUME_RECORD_PATH_MISMATCH')
-    const continuation = resume ? { continuationId: resume.manifest.continuationId, manifestHash: resume.manifestHash } : null
-    const bound = { ...options, invocationId, executionRecordPath: recordPath(caseId), ...(resume ? { savedOutlineContinuation: continuation } : {}) }
+    const continuationSource = savedReview ?? resume
+    const continuation = continuationSource ? { continuationId: continuationSource.manifest.continuationId, manifestHash: continuationSource.manifestHash } : null
+    const bound = { ...options, invocationId, executionRecordPath: recordPath(caseId), ...(resume ? { savedOutlineContinuation: continuation } : {}),
+      ...(savedReview ? { savedReviewContinuation: continuation } : {}) }
     const record = executionRecord(bound)
     if (record.targetHash && record.targetHash !== digest(original)) throw new Error('SAVED_NATIVE_TARGET_DRIFT')
     const firstReviewKey = resume ? 'resume-from-saved-outline' : 'review'
-    if (nativeAction === 'complete' && !record.results[firstReviewKey]) throw new Error('SAVED_NATIVE_FIRST_REVIEW_REQUIRED')
+    if (nativeAction === 'complete' && !savedReview && !record.results[firstReviewKey]) throw new Error('SAVED_NATIVE_FIRST_REVIEW_REQUIRED')
     let approval, firstReview
     if (nativeAction === 'complete' || !planning && nativeAction === 'review' && caseId === policy.caseIds[1]) {
       approval = JSON.parse(fs.readFileSync(options.approvalPath))
       const negativeRecord = caseId === policy.caseIds[0] ? record : JSON.parse(fs.readFileSync(recordPath(policy.caseIds[0])))
-      const prior = negativeRecord.results[nativeAction === 'complete' ? firstReviewKey : 'complete']
+      const historical = savedReview && nativeAction === 'complete'
+      const prior = historical ? { receiptPath: savedReview.manifest.references.firstReview.path }
+        : negativeRecord.results[nativeAction === 'complete' ? firstReviewKey : 'complete']
+      if (historical && digest(fs.readFileSync(options.approvalPath)) !== savedReview.manifest.references.approval.sha256)
+        throw new Error('SAVED_NATIVE_APPROVAL_MISMATCH')
       if (!prior?.receiptPath || path.resolve(approval.receiptPath) !== path.resolve(prior.receiptPath)) throw new Error('SAVED_NATIVE_APPROVAL_RECEIPT_MISMATCH')
       const bytes = fs.readFileSync(prior.receiptPath), receipt = JSON.parse(bytes)
       const review = nativeAction === 'complete' ? receipt.aiReviewedDraft?.review : receipt.aiReviewedDraft?.finalReview
       if (digest(bytes) !== approval.receiptHash || receipt.status !== 'passed' || !review
-        || receipt.caseId !== policy.caseIds[0] || receipt.phase !== options.phase || receipt.protocolHash !== options.protocolHash
-        || receipt.sourceHash !== original.sourceHash || receipt.driverHash !== productionBridgeHash()
+        || receipt.caseId !== policy.caseIds[0] || receipt.phase !== options.phase
+        || receipt.protocolHash !== (historical ? savedReview.manifest.protocolHash : options.protocolHash)
+        || receipt.sourceHash !== original.sourceHash || receipt.driverHash !== (historical ? savedReview.manifest.historicalTools.driverHash : productionBridgeHash())
+        || savedReview && !historical && stableEvidence(receipt.savedReviewContinuation) !== stableEvidence(continuation)
         || review.reviewId !== approval.reviewId || review.contentHash !== approval.reportHash
         || digest(fs.readFileSync(review.outputPath)) !== approval.reportHash
         || approval.kind !== (planning ? 'planning-refinement' : nativeAction === 'complete' ? 'negative-detection' : 'negative-closure')
@@ -2990,6 +3096,22 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
       firstReview = nativeAction === 'complete' ? receipt : undefined
     } else if (options.approvalPath) throw new Error('SAVED_NATIVE_APPROVAL_SCOPE_MISMATCH')
     let target = record.target
+    const savedNegative = savedReview && caseId === policy.caseIds[0]
+    if (savedReview) {
+      const expected = savedReviewContinuationTarget(original, savedReview)
+      if (savedNegative && target && digest(target) !== digest(expected)
+        || record.savedReviewContinuation && stableEvidence(record.savedReviewContinuation) !== stableEvidence(continuation)
+        || path.resolve(options.ledgerPath) !== path.resolve(savedReview.manifest.ledger.path))
+        throw new Error('SAVED_REVIEW_CONTINUATION_TARGET_DRIFT')
+      if (savedNegative) target = expected
+      record.savedReviewContinuation = continuation
+      record.historicalFirstReview = savedReview.manifest.references.firstReview
+      record.historicalFailedComplete = savedReview.manifest.references.failedComplete
+      record.toolTransition = { from: savedReview.manifest.historicalTools, to: { codeSha: original.codeSha,
+        driverHash: productionBridgeHash(), executionToolsHash: original.executionToolsHash, runnerAdapterHash: original.runnerAdapterHash } }
+      record.target = target; record.targetHash = digest(original)
+      saveExecutionRecord(bound, record)
+    }
     if (resume) {
       const expected = planningResumeTarget(original, resume)
       if (target && digest(target) !== digest(expected) || record.savedOutlineContinuation && stableEvidence(record.savedOutlineContinuation) !== stableEvidence(continuation)
@@ -3011,8 +3133,8 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
       record.target = target; record.targetHash = digest(original)
       saveExecutionRecord(bound, record)
     }
-    const resumeEvidence = resume ? `${bound.executionRecordPath}.evidence` : null
-    if (resume) fs.mkdirSync(resumeEvidence, { recursive: true })
+    const resumeEvidence = continuationSource ? `${bound.executionRecordPath}.evidence` : null
+    if (resumeEvidence) fs.mkdirSync(resumeEvidence, { recursive: true })
     const templatesPath = path.join(resumeEvidence ?? target.isolationRoot, planning ? 'planning-native-templates.json' : 'saved-native-templates.json')
     const common = { ...options, ...bound, target, invocationId, nativeAction, caseId, operations, templatesPath,
       sceneId: policy.sceneId, chapterNumber: policy.chapterNumber, scenarioRevision: policy.scenarioRevision,
@@ -3020,6 +3142,17 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
       approval, firstReview, ledgerPath: record.ledgerPath ?? options.ledgerPath }
     if (record.ledgerPath && path.resolve(record.ledgerPath) !== path.resolve(options.ledgerPath)) throw new Error('SAVED_NATIVE_LEDGER_DRIFT')
     record.ledgerPath = options.ledgerPath
+    if (savedNegative && !record.preflight) {
+      const ledger = fs.readFileSync(options.ledgerPath, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+      const sent = ledger.some(row => row.type === 'reserve' && row.binding.invocationId === invocationId
+        && row.binding.caseId === caseId && operations.some(item => item.id === row.binding.operation))
+      if (!record.results.complete && !sent) {
+        record.preflight = bridge({ ...common, action: 'saved-review-preflight', mode: 'synthetic', operations: [],
+          parityHash: savedReview.preparation.physicalProject.parityHash, evidenceRoot: path.join(resumeEvidence, 'preflight') })
+        record.templatesHash = digest(fs.readFileSync(templatesPath))
+        saveExecutionRecord(bound, record)
+      }
+    }
     if (resume && !record.preflight) {
       if (nativeAction === 'complete') throw new Error('SAVED_NATIVE_PREPARATION_REQUIRED')
       record.preflight = bridge({ ...common, parityHash: resume.preparation.physicalProject.parityHash,
@@ -3028,23 +3161,26 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
       record.templatesHash = digest(fs.readFileSync(templatesPath))
       saveExecutionRecord(bound, record)
     }
-    if (!resume && !record.prepared) {
+    if (!resume && !savedNegative && !record.prepared) {
       if (nativeAction === 'complete') throw new Error('SAVED_NATIVE_PREPARATION_REQUIRED')
       record.prepared = bridge({ ...common, mode: 'synthetic', nativeAction: 'prepare', action: 'prepare',
-        operations: operationsFor(caseId, 'prepare') })
+        operations: operationsFor(caseId, 'prepare'), ...(savedReview ? { evidenceRoot: path.join(resumeEvidence, 'prepare') } : {}) })
       saveExecutionRecord(bound, record)
     }
     if (nativeAction === 'prepare') return { status: 'prepared', physicalModelRequests: 0, prepared: record.prepared,
       executionRecordPath: bound.executionRecordPath, qualification: 'non-qualification-diagnostic' }
     if (resume && digest(fs.readFileSync(templatesPath)) !== record.templatesHash) throw new Error('PLANNING_RESUME_TEMPLATE_DRIFT')
-    if (!resume && options.mode === 'real' && !record.results[nativeAction]) copyIsolatedRealModelConfig(original, target.roots,
+    if (savedNegative && record.templatesHash && digest(fs.readFileSync(templatesPath)) !== record.templatesHash)
+      throw new Error('SAVED_REVIEW_CONTINUATION_TEMPLATE_DRIFT')
+    if (!resume && !savedNegative && options.mode === 'real' && !record.results[nativeAction]) copyIsolatedRealModelConfig(original, target.roots,
       planning ? undefined : policy.modelProfile.configurationHash)
-    const result = executeRecordedStep({ ...common, parityHash: (resume ? record.preflight : record.prepared).physicalProject.parityHash,
+    const result = executeRecordedStep({ ...common, parityHash: (savedNegative ? savedReview.preparation : resume ? record.preflight : record.prepared).physicalProject.parityHash,
       evidenceRoot: path.join(resumeEvidence ?? target.isolationRoot, nativeAction) }, bound, record, nativeAction, bridge)
     const journey = resume ? fs.readFileSync(options.ledgerPath, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
       .filter(row => row.type === 'reserve' && row.binding.invocationId === invocationId && row.binding.caseId === caseId) : []
     return { status: result.status === 'passed' ? 'pending-independent-oracle-review' : 'failed',
       qualification: 'non-qualification-diagnostic', formalDenominatorContribution: 0, results: [result],
+      ...(savedReview ? { savedReviewContinuation: continuation } : {}),
       ...(resume ? { savedOutlineContinuation: continuation, journeyRequests: { historical: resume.manifest.attempts.length,
         continuation: new Set(journey.map(row => row.attemptId).filter(id => !resume.manifest.attempts.some(item => item.attemptId === id))).size,
         total: new Set(journey.map(row => row.attemptId)).size,
