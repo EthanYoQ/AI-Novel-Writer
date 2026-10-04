@@ -140,7 +140,7 @@ beforeEach(async () => {
     if (channel === 'db:draft-list') return []
     return { success: true }
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn(),
@@ -174,7 +174,7 @@ afterEach(async () => {
   useEditorStore.getState().clearTabs()
   useProjectStore.setState({ currentProject: null })
   useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [] })
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
 describe('current-project reference import', () => {

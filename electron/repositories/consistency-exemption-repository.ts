@@ -8,8 +8,7 @@ function requireText(value: string, label: string): string {
 }
 
 export class ConsistencyExemptionRepository {
-  static list(): ConsistencyExemption[] {
-    const db = getProjectDb()
+  static list(db = getProjectDb()): ConsistencyExemption[] {
     if (!db) return []
     const rows = db.prepare(`
       SELECT stable_fact_key AS stableFactKey, reason, revoked

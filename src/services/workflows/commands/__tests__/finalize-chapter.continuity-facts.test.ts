@@ -5,6 +5,14 @@ import { BUILTIN_PROMPTS } from '../../../prompt-templates'
 import { buildFinalizedContinuityFacts } from '../finalize-chapter.command'
 
 describe('buildFinalizedContinuityFacts', () => {
+  it('preserves a long statement and its complete evidence including a final correction', () => {
+    const statement = '阿青听说宝剑已经售出，' + '这个尚未证实的消息在客栈内被反复转述，'.repeat(20) + '但消息并不属实，宝剑仍在木箱里。'
+
+    expect(buildFinalizedContinuityFacts(1, statement, statement, ['阿青'])).toEqual([{
+      category: 'plot', entities: ['阿青'], statement, sourceChapter: 1, evidence: statement,
+    }])
+  })
+
   it('classifies an explicit character death as character state', () => {
     const finalizedContent = '韩峥被洪水卷入排水井，当场死亡。'
 
@@ -103,5 +111,9 @@ describe('buildFinalizedContinuityFacts', () => {
     expect(zh?.content).not.toContain('每项不超过 30 字')
     expect(en.content).toContain('an explicitly stated cause, location, witness, or source of knowledge')
     expect(en.content).toContain('Do not infer missing details or require every note to contain all of these elements')
+    expect(zh?.content).toContain('在角色动态或伏笔与钩子中保留相关角色的最后更正及当前条件')
+    expect(zh?.content).toContain('不得用更显著的旧事件替代当前安排，也不得把计划写成已执行')
+    expect(en.content).toContain('preserve the affected character\'s last correction and current conditions in Character Dynamics or Foreshadowing and Hooks')
+    expect(en.content).toContain('Do not substitute a more prominent earlier event for the current plan or describe a plan as executed')
   })
 })

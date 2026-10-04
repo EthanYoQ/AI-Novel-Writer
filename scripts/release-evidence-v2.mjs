@@ -633,6 +633,96 @@ function validateWindowsReceipt(receipt, name, bundleRoot, version) {
     assert(direct.installedExecutableExists === false && ['absent', 'empty', 'system-residue-only'].includes(direct.installDirectoryState) && Array.isArray(direct.allowedSystemResiduals), 'Windows uninstall receipt facts are invalid')
   } else if (name === 'upgrade-data') {
     assert(direct.previousVersion === '0.2.5' && direct.legacyTableCount === 11 && positiveInteger(direct.preservedAssetCount) && positiveInteger(direct.vectorDimension) && positiveInteger(direct.queryResultCount), 'Windows upgrade-data receipt facts are invalid')
+    // Receipts without a policy revision retain their historical in-place meaning.
+    if (direct.upgradePolicyRevision !== undefined) {
+      const copy = direct.copyImport
+      const saved = direct.oldSaveProof?.draft
+      assert(['v025-offline-copy-v1', 'v025-roster-refusal-v2'].includes(direct.upgradePolicyRevision)
+        && copy?.revision === direct.upgradePolicyRevision,
+        'Windows v0.2.5 copy policy revision is invalid')
+      assert(direct.oldAppSaved === true && direct.legacyRecentPreserved === true
+        && direct.sourceUnchangedSinceOldSave === true && direct.legacyGlobalBytesPreservedSinceOldSave === true
+        && direct.oldSaveProof?.verifiedBy === 'legacy-renderer-cdp-v025-save'
+        && saved?.before?.id === 71 && saved.after?.id === 71 && nonEmptyString(saved.before.content)
+        && saved.after.content === saved.before.content && nonEmptyString(saved.before.updatedAt)
+        && nonEmptyString(saved.after.updatedAt) && saved.after.updatedAt !== saved.before.updatedAt,
+      'Windows v0.2.5 copy old save evidence is invalid')
+      if (direct.upgradePolicyRevision === 'v025-roster-refusal-v2') {
+        assert(copy.expectedCode === 'LEGACY_IMPORT_ROSTER_UNAVAILABLE'
+          && nonEmptyString(copy.source) && nonEmptyString(copy.importSource) && nonEmptyString(copy.target)
+          && copy.source !== copy.target && positiveInteger(copy.sourceFileCount)
+          && validSha256(copy.sourceInventorySha256) && copy.sourceAfterSha256 === copy.sourceInventorySha256
+          && validSha256(copy.legacyGlobalsBeforeSha256)
+          && copy.legacyGlobalsAfterSha256 === copy.legacyGlobalsBeforeSha256
+          && copy.sourceUnchanged === true && copy.legacyGlobalsUnchanged === true
+          && copy.targetPublished === false && copy.targetRecentRegistered === false
+          && copy.stagingRetained === true && copy.modelRequests?.mainFetchCalls === 0
+          && copy.modelRequests?.rendererRequests === 0
+          && validSha256(direct.copyDriverSha256) && validSha256(direct.copyPackageHashes?.exe)
+          && validSha256(direct.copyPackageHashes?.asar)
+          && /^[a-f0-9]{40}$/.test(direct.copyTestedSha ?? ''), 'Windows v0.2.5 copy refusal facts are invalid')
+        const rejected = direct.copySteps?.filter(step => step.stepId === 'v0.2.5-roster-rejected')
+        assert(direct.copySteps?.length === 1 && rejected?.length === 1 && rejected[0].outcome === 'PASS'
+          && rejected[0].expectedCode === copy.expectedCode
+          && rejected[0].requests?.mainFetchCalls === 0 && rejected[0].requests?.rendererRequests === 0,
+        'Windows v0.2.5 copy refusal step is invalid')
+        const official = direct.installedV110
+        assert(official?.previousVersion === '1.1.0' && official.previousSource === 'official-installed-setup'
+          && validSha256(official.previousInstallerSha256) && official.oldAppOpenedProject === true
+          && official.currentAppLaunched === true && official.sourceUnchanged === true
+          && official.globalConfigUnchanged === true && official.recentProjectsUnchanged === true,
+        'Windows official v1.1 installed upgrade facts are invalid')
+        assert(Array.isArray(official.officialSources) && official.officialSources.length === 2
+          && official.officialSources.map(source => source.sourceVersion).join(',') === 'v1.0.0,v1.1.0',
+        'Windows official positive source set is invalid')
+        for (const source of official.officialSources) {
+          assert(validSha256(source.officialProofSha256) && validSha256(source.sourceManifestSha256)
+            && validSha256(source.driverSha256) && validSha256(source.receiptSha256)
+            && /^[a-f0-9]{40}$/.test(source.testedSha ?? '')
+            && source.testedSha === direct.copyTestedSha
+            && source.driverSha256 === direct.copyDriverSha256
+            && source.executableSha256 === direct.copyPackageHashes.exe
+            && source.asarSha256 === direct.copyPackageHashes.asar
+            && source.sourceManifestSha256 === official.officialSources[0].sourceManifestSha256
+            && validSha256(source.sourceInventorySha256) && validSha256(source.targetInventorySha256)
+            && nonEmptyString(source.sourceProjectId) && nonEmptyString(source.targetProjectId)
+            && source.sourceProjectId !== source.targetProjectId
+            && validSha256(source.sourceBodySha256) && validSha256(source.savedBodySha256)
+            && source.savedBodySha256 !== source.sourceBodySha256
+            && source.reopenedBodySha256 === source.savedBodySha256
+            && source.modelCallRows === 0
+            && source.importAndSaveRequests?.mainFetchCalls === 0
+            && source.importAndSaveRequests?.rendererRequests === 0
+            && source.reopenRequests?.mainFetchCalls === 0
+            && source.reopenRequests?.rendererRequests === 0,
+          `Windows official ${source.sourceVersion} source binding is invalid`)
+          for (const stepId of ['import-open', 'target-edit-save', 'target-edit-reopen']) {
+            const matches = source.steps?.filter(step => step.stepId === `${source.sourceVersion}-${stepId}`)
+            assert(matches?.length === 1 && matches[0].outcome === 'PASS',
+              `Windows official ${source.sourceVersion} ${stepId} is invalid`)
+          }
+        }
+      } else {
+      assert(nonEmptyString(copy.sourceProjectId) && nonEmptyString(copy.targetProjectId)
+        && copy.sourceProjectId !== copy.targetProjectId && nonEmptyString(copy.source) && nonEmptyString(copy.target)
+        && copy.source !== copy.target && positiveInteger(copy.sourceFileCount)
+        && validSha256(copy.sourceInventorySha256) && copy.sourceAfterSha256 === copy.sourceInventorySha256
+        && validSha256(copy.targetInventorySha256) && validSha256(copy.savedBodySha256)
+        && copy.reopenedBodySha256 === copy.savedBodySha256 && copy.sourceUnchanged === true
+        && copy.legacyGlobalsUnchanged === true && copy.settingsPreserved === true && copy.targetRecentRegistered === true
+        && copy.preservedTableCount >= 11 && positiveInteger(copy.preservedAssetCount)
+        && positiveInteger(copy.knowledgeDocuments) && positiveInteger(copy.knowledgeChunks)
+        && validSha256(direct.copyDriverSha256) && validSha256(direct.copyPackageHashes?.exe)
+        && validSha256(direct.copyPackageHashes?.asar), 'Windows v0.2.5 copy preservation facts are invalid')
+      for (const step of ['import-open', 'target-edit-save', 'import-zero-network', 'knowledge-index',
+        'target-edit-reopen', 'reopen-zero-network', 'reopen-unchanged']) {
+        const matches = direct.copySteps?.filter(item => item.stepId === `v0.2.5-${step}`)
+        assert(matches?.length === 1 && matches[0].outcome === 'PASS'
+          && (!step.endsWith('zero-network') || (matches[0].requests?.mainFetchCalls === 0
+            && matches[0].requests?.rendererRequests === 0)), 'Windows v0.2.5 copy UI steps are invalid')
+      }
+      }
+    }
   } else if (name === 'native-abi') {
     assert(direct.restoreMode === 'monitored' && /^\d+$/.test(direct.nodeModuleAbi ?? '') && direct.verificationTest === 'electron/repositories/__tests__/character-repository.test.ts', 'Windows native-ABI receipt facts are invalid')
   } else if (name === 'packaged-smoke') {
@@ -760,7 +850,12 @@ function validateExactTemporaryReceipts(evidenceRoot, contract, releaseRoot) {
   const actual = listRegularRelativeFiles(evidenceRoot, 'acceptance')
   assert(JSON.stringify(actual) === JSON.stringify(expected), `Acceptance evidence file set is not exact; got ${actual.join(', ')}`)
   for (const relativePath of actual) {
-    validateAcceptanceReceipt(fileWithin(evidenceRoot, relativePath, 'Acceptance receipt'), `qualification/${relativePath}`, contract.frozen.platform, releaseRoot, contract.frozen.version)
+    const receipt = validateAcceptanceReceipt(fileWithin(evidenceRoot, relativePath, 'Acceptance receipt'), `qualification/${relativePath}`, contract.frozen.platform, releaseRoot, contract.frozen.version)
+    if (contract.frozen.platform === 'windows' && relativePath === 'acceptance/upgrade-data.json') {
+      assert(receipt.direct.upgradePolicyRevision === 'v025-roster-refusal-v2', 'Windows v0.2.5 refusal and official positive sources are required for current qualification')
+      assert(receipt.direct.copyTestedSha === contract.frozen.commit,
+        'Windows old-source journeys must match the frozen candidate commit')
+    }
   }
   return expected
 }
@@ -1046,7 +1141,12 @@ export function verifyQualificationBundle({
   exactFileSet(actualFiles, expectedFiles, 'Qualification bundle')
 
   for (const acceptanceFile of acceptanceFiles) {
-    validateAcceptanceReceipt(fileWithin(resolvedBundleRoot, acceptanceFile, 'Acceptance receipt'), acceptanceFile, selectedPlatform, resolvedBundleRoot, version)
+    const receipt = validateAcceptanceReceipt(fileWithin(resolvedBundleRoot, acceptanceFile, 'Acceptance receipt'), acceptanceFile, selectedPlatform, resolvedBundleRoot, version)
+    if (selectedPlatform === 'windows' && acceptanceFile === 'qualification/acceptance/upgrade-data.json'
+      && receipt.direct.upgradePolicyRevision === 'v025-roster-refusal-v2') {
+      assert(receipt.direct.copyTestedSha === contract.frozen.commit,
+        'Windows old-source journeys must match the frozen candidate commit')
+    }
   }
   for (const { file, kind } of PACKAGED_SMOKE_EVIDENCE[selectedPlatform]) {
     const evidence = jsonEvidenceFile(fileWithin(resolvedBundleRoot, file, 'Packaged smoke evidence'), 'Packaged smoke evidence')

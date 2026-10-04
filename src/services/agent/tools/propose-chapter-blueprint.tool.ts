@@ -101,6 +101,11 @@ export const proposeChapterBlueprintTool = buildAgentTool({
     if (!proposal.valid) return { success: false, content: '', error: proposal.error }
     assertAgentToolActive(context)
     context?.markSideEffectStarted?.()
+    if (context?.agentToolAction) {
+      const receipt = await ipc.invokeWithProjectSession(projectSession, 'agent-generation:commit-domain-tool', { ref: context.agentToolAction })
+      if (receipt.kind !== 'blueprint' || receipt.chapterNumber !== chapterNumber) throw new Error('GENERATION_AGENT_DOMAIN_RECEIPT_MISMATCH')
+      return { success: true, content: text(`第 ${chapterNumber} 章蓝图已更新（${Object.keys(receipt.changes).length} 个字段）`, `Chapter ${chapterNumber} blueprint updated (${Object.keys(receipt.changes).length} fields)`) }
+    }
     const result = await ipc.invokeWithProjectSession(
       projectSession, 'db:blueprint-upsert', { ...current, ...proposal.changes }, project.path,
     )

@@ -117,7 +117,7 @@ describe('RevisionRepository.replacePending', () => {
       },
     })
 
-    expect(replacement).toEqual({ id: 1, revisionIndex: 1 })
+    expect(replacement).toEqual({ id: 1, revisionIndex: 1, discardedRevisionIds: [] })
     expect(RevisionRepository.getFull(replacement.id)).toMatchObject({
       content: '合法新修订',
       sourceDraft: {
@@ -223,6 +223,8 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       status: 'revised',
       wordCount: 10,
       idempotent: false,
+      chapterNumber: 1,
+      version: 1,
     })
     expect(db.prepare(`
       SELECT drafts.status, drafts.word_count, contents.body
@@ -286,6 +288,8 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       status: 'revised',
       wordCount: 10,
       idempotent: true,
+      chapterNumber: 1,
+      version: 1,
     })
 
     db.prepare('UPDATE contents SET body = ? WHERE id = 1').run('合并成功后的用户新编辑')
@@ -345,3 +349,23 @@ describe('RevisionRepository.mergeIntoDraft', () => {
     expect(RevisionRepository.getFull(revision.id)?.status).toBe('pending')
   })
 })
+
+ it('显式连接的内容读写不落入另一全局 SQLite 库', () => {
+    const wrong = new Database(db.serialize())
+    try {
+      wrong.prepare('INSERT INTO contents(body) VALUES (?)').run('错误全局库同 ID 正文')
+      const before = wrong.serialize()
+      vi.mocked(getProjectDb).mockReturnValue(wrong)
+      const first = RevisionRepository.replacePending({ baseDraftId: 1, revisionType: 'refine',
+        content: '指定库旧修稿', wordCount: 6, expectedSource }, db)
+      const result = RevisionRepository.replacePending({ baseDraftId: 1, revisionType: 'refine',
+        content: '指定库新修稿', wordCount: 6, expectedSource }, db)
+      expect(RevisionRepository.getFull(first.id, db)?.status).toBe('discarded')
+      expect(RevisionRepository.getFull(result.id, db)?.content).toBe('指定库新修稿')
+      expect(wrong.prepare('SELECT COUNT(*) AS count FROM revisions').get()).toEqual({ count: 0 })
+      expect(wrong.serialize()).toEqual(before)
+    } finally {
+      vi.mocked(getProjectDb).mockReturnValue(db)
+      wrong.close()
+    }
+  })

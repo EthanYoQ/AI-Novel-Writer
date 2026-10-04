@@ -85,7 +85,7 @@ beforeEach(() => {
     if (channel === 'chapter:list-incomplete-deletions') return { success: true, operations: [] }
     throw new Error(`Unexpected IPC channel in ProjectTree refresh test: ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -103,7 +103,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useDraftStore.setState(originalDraftState)
   useLocaleStore.setState(originalLocaleState)

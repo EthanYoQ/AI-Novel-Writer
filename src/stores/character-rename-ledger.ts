@@ -51,54 +51,32 @@ export function updateCharacterRename(
   return [...renames, { originalName: currentName, newName }]
 }
 
-function mapPersistedCharacterName<T extends { name: string }>(
-  character: T,
-  renames: readonly CharacterRenameData[],
-): T {
-  const rename = renames.find(candidate => candidate.originalName === character.name)
-  return rename ? { ...character, name: rename.newName } : character
-}
-
 /**
  * 角色改名尚未落盘时，base/remote 仍使用旧主键，draft 已使用新主键。
  * 先按改名账本统一身份，再对同一角色执行字段级三方合并。
  */
-export function mergeCharacterDraftWithRemote<T extends { name: string }>(
-  baseCharacters: readonly T[],
-  draftCharacters: readonly T[],
-  remoteCharacters: readonly T[],
-  renames: readonly CharacterRenameData[],
+export function mergeCharacterDraftWithRemote<T extends { name: string; characterId?: string }>(
+  baseCharacters: readonly T[], draftCharacters: readonly T[], remoteCharacters: readonly T[],
+  _renames: readonly CharacterRenameData[],
 ): T[] {
-  const alignedBase = baseCharacters.map(character => mapPersistedCharacterName(character, renames))
-  const alignedRemote = remoteCharacters.map(character => mapPersistedCharacterName(character, renames))
-  const baseByName = new Map(alignedBase.map(character => [character.name, character]))
-  const draftByName = new Map(draftCharacters.map(character => [character.name, character]))
-  const locallyDeleted = new Set(
-    alignedBase
-      .filter(character => !draftByName.has(character.name))
-      .map(character => character.name),
-  )
-
-  const merged: T[] = []
+  void _renames
+  for (const cards of [baseCharacters, draftCharacters, remoteCharacters]) {
+    const ids = cards.flatMap(c => c.characterId ? [c.characterId] : [])
+    if (new Set(ids).size !== ids.length) throw new Error('CHARACTER_DRAFT_IDENTITY_AMBIGUOUS')
+  }
+  // Names and legacy rename metadata never establish identity. Unbound drafts
+  // are retained separately and cannot be saved by the stable-ID writer.
+  const baseById = new Map(baseCharacters.filter(c => c.characterId).map(c => [c.characterId!, c]))
+  const draftById = new Map(draftCharacters.filter(c => c.characterId).map(c => [c.characterId!, c]))
+  const deleted = new Set([...baseById.keys()].filter(id => !draftById.has(id)))
   const included = new Set<string>()
-  for (const remoteCharacter of alignedRemote) {
-    if (locallyDeleted.has(remoteCharacter.name)) continue
-    const draftCharacter = draftByName.get(remoteCharacter.name)
-    const baseCharacter = baseByName.get(remoteCharacter.name)
-    const character = draftCharacter
-      ? (baseCharacter
-          ? mergeObjectDraftWithRemote(baseCharacter, draftCharacter, remoteCharacter)
-          : draftCharacter)
-      : remoteCharacter
-    merged.push(character)
-    included.add(character.name)
-  }
-  for (const draftCharacter of draftCharacters) {
-    if (!included.has(draftCharacter.name)) {
-      merged.push(draftCharacter)
-    }
-  }
-  return merged
+  const merged = remoteCharacters.filter(c => !c.characterId || !deleted.has(c.characterId)).map(remote => {
+    if (!remote.characterId) return remote
+    included.add(remote.characterId)
+    const draft = draftById.get(remote.characterId), base = baseById.get(remote.characterId)
+    return draft ? base ? mergeObjectDraftWithRemote(base, draft, remote) : draft : remote
+  })
+  return [...merged, ...draftCharacters.filter(c => !c.characterId || !included.has(c.characterId))]
 }
 
 export function rebaseCharacterRenamesAfterSave(

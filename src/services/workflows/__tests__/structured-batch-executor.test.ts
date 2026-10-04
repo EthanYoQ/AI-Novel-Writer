@@ -55,6 +55,28 @@ const blueprintContract: StructuredBatchContract<number, Blueprint> = {
   validateItem: blueprint => blueprint.title.trim() ? undefined : '标题不能为空',
 }
 
+it('rebuilds capacity splits before physical calls and preserves the validated prefix for 200 items', async () => {
+  const physical: number[][] = [], prefixes: number[][] = []
+  let preflights = 0
+  const session: Pick<GenerationSession, 'complete'> = { async complete(task) {
+    const input = taskPayload(task)
+    expect(task.budgetDemand).toEqual({ kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: input.items.length })
+    if (input.items.length > 7) { preflights++; throw new Error('Error invoking remote method: TASK_BUDGET_SCOPE_SPLIT_REQUIRED:7') }
+    physical.push([...input.items]); prefixes.push(input.validatedPrefix.map(item => item.chapterNumber))
+    return { status: 'completed', finishReason: 'stop', content: JSON.stringify({ blueprints: input.items.map(chapterNumber => ({ chapterNumber, title: '完整章节' })) }),
+      receipt: attemptReceipt(physical.length, 7000, physical.length * 7000, 'stop') }
+  } }
+  const result = await createStructuredBatchExecutor({ contract: blueprintContract, session }).execute({
+    items: Array.from({ length: 200 }, (_, index) => index + 1), limits: { maxBatchItems: 200 },
+  })
+  expect(result.ok).toBe(true)
+  expect(physical.flat()).toEqual(Array.from({ length: 200 }, (_, index) => index + 1))
+  expect(new Set(physical.flat()).size).toBe(200)
+  expect(result.receipt.calls).toBe(29)
+  expect(result.receipt.splitCount).toBe(preflights)
+  expect(prefixes.at(-1)).toEqual(Array.from({ length: 196 }, (_, index) => index + 1))
+})
+
 type AttemptRequest = {
   items: readonly number[]
   validatedPrefix: readonly Blueprint[]
@@ -1699,5 +1721,50 @@ describe('StructuredBatchExecutor seam', () => {
       items: [{ chapterNumber: 1 }, { chapterNumber: 2 }, { chapterNumber: 3 }],
       receipt: { calls: 6, splitCount: 2, requestedTokens: 600 },
     })
+  })
+})
+it('failure exposes only fully validated items, never the later JSON fragment', async () => {
+  const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: createSession(async request => request.items[0] === 1
+    ? { status: 'completed', content: blueprintJson([1]), requestedTokens: 100 }
+    : { status: 'incomplete', reason: 'unknown', content: '{"blueprints":[{"chapterNumber":2', requestedTokens: 100 }) })
+  const result = await executor.execute({ items: [1, 2], limits: { maxBatchItems: 1 } })
+  expect(result.ok).toBe(false)
+  if (result.ok) throw new Error('Expected failed second batch')
+  expect(result.validatedItems).toEqual([{ chapterNumber: 1, title: '第1章' }])
+  expect(result.receipt.calls).toBe(2)
+})
+
+describe('accepted artifact provenance', () => {
+  it('excludes a truncated parent and records only the successful split responses with exact keys', async () => {
+    let attempt = 0
+    const base = createSession(async ({ items }) => items.length > 1
+      ? { status: 'incomplete', reason: 'output_limit', content: '{"blueprints":[', requestedTokens: 200 }
+      : { status: 'completed', content: JSON.stringify({ blueprints: items.map(chapterNumber => ({ chapterNumber, title: '完整标题' })) }), requestedTokens: 200 })
+    const result = await createStructuredBatchExecutor({ contract: blueprintContract, session: { async complete(...args) {
+      const outcome = await base.complete(...args)
+      const artifactId = `artifact-${++attempt}`
+      outcome.receipt.visibleArtifact = { artifactId, attemptId: artifactId, revision: 1, textHash: 'a'.repeat(64) }
+      return outcome
+    } } }).execute({ items: [1, 2], limits: { maxBatchItems: 2 } })
+    expect(result.ok).toBe(true)
+    expect(result.receipt.calls).toBe(3)
+    expect(result.receipt.attempts).toHaveLength(3)
+    expect(result.receipt.acceptedArtifacts?.map(item => [item.artifact.artifactId, item.itemKeys])).toEqual([
+      ['artifact-2', [1]], ['artifact-3', [2]],
+    ])
+  })
+  it('records the syntax-repaired receipt rather than its invalid predecessor', async () => {
+    let attempt = 0
+    const receipt = (artifactId: string) => ({ ...attemptReceipt(++attempt, 200, attempt * 200, 'stop'),
+      visibleArtifact: { artifactId, attemptId: artifactId, revision: 1, textHash: 'a'.repeat(64) } })
+    const complete = vi.fn(async () => ({ status: 'completed', finishReason: 'stop',
+      content: attempt === 0 ? '{"blueprints":[{"chapterNumber":1,"title":"完整标题",}]}' : '{"blueprints":[{"chapterNumber":1,"title":"完整标题"}]}',
+      receipt: receipt(attempt === 0 ? 'invalid' : 'repaired'),
+    } as GenerationOutcome))
+    const result = await createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+      .execute({ items: [1], limits: { maxBatchItems: 1 } })
+    expect(result.ok).toBe(true)
+    expect(result.receipt.calls).toBe(2)
+    expect(result.receipt.acceptedArtifacts?.map(item => item.artifact.artifactId)).toEqual(['repaired'])
   })
 })

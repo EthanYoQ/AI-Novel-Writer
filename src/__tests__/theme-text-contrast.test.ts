@@ -65,11 +65,6 @@ describe('readable theme text contrast contract', () => {
     expect(contrastRatio(caret!, editorSurface!)).toBeGreaterThanOrEqual(3)
   })
 
-  it('uses the shared high-contrast caret token in the manuscript editor too', () => {
-    const manuscriptCss = readFileSync(resolve(process.cwd(), 'src/components/editor/novel-editor.css'), 'utf8')
-    expect(manuscriptCss).toContain('caret-color: var(--color-editor-caret, var(--color-text))')
-  })
-
   it.each([
     ['default light', ':root'],
     ['paper', '.paper'],

@@ -371,7 +371,7 @@ describe('Agent write_file commit result integration', () => {
       } as never,
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke: (channel: string, ...args: unknown[]) => rawHandler(channel)({}, ...args),
         on: vi.fn(),
         once: vi.fn(),
@@ -431,4 +431,27 @@ describe('Agent write_file commit result integration', () => {
       expect.anything(),
     )
   })
+})
+
+
+// Main error localization reads admitted global data even for rejected project IO.
+const globalEnvironmentKeys = ['AI_NOVEL_APP_DATA_HOME', 'AI_NOVEL_LEGACY_SOURCE_HOME', 'AI_NOVEL_VELA_HOME'] as const
+let globalFixtureRoot = ''
+const previousGlobalEnvironment = new Map<string, string | undefined>()
+beforeAll(async () => {
+  for (const key of globalEnvironmentKeys) previousGlobalEnvironment.set(key, process.env[key])
+  const cache = path.resolve('.runtime/.cache')
+  fs.mkdirSync(cache, { recursive: true })
+  globalFixtureRoot = fs.mkdtempSync(path.join(cache, 'controller-global-fs-controller-project-boundary-'))
+  process.env.AI_NOVEL_LEGACY_SOURCE_HOME = path.join(globalFixtureRoot, 'legacy')
+  await (await import('../../services/__tests__/global-data-fixture')).prepareGlobalDataFixture(globalFixtureRoot)
+})
+afterAll(() => {
+  for (const key of globalEnvironmentKeys) {
+    const previous = previousGlobalEnvironment.get(key)
+    if (previous === undefined) delete process.env[key]
+    else process.env[key] = previous
+  }
+  vi.resetModules()
+  if (globalFixtureRoot) fs.rmSync(globalFixtureRoot, { recursive: true, force: true })
 })

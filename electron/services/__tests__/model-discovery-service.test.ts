@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import { ModelDiscoveryService } from '../model-discovery-service'
+import { applyModelProfileSelection } from '../../../src/shared/model-profile-draft'
+import { resolveGenerationParameters } from '../../llm/generation-parameter-policy'
+import { OpenAIProvider } from '../../llm/openai-provider'
 
 const servers: Server[] = []
 
@@ -35,6 +38,7 @@ async function listen(server: Server): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve())
   })))
@@ -42,6 +46,28 @@ afterEach(async () => {
 })
 
 describe('ModelDiscoveryService', () => {
+  it('keeps explicit capacity fields but does not infer context from max_tokens', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [
+      { id: 'new-model', context_length: 64000, max_output_tokens: 12000, capabilities: { reasoning: true } },
+      { id: 'ambiguous-model', max_tokens: 999999 },
+    ] }) })
+    const result = await new ModelDiscoveryService({ fetchImpl }).discoverModels(profile({ baseUrl: 'https://example.test/v1' }))
+    expect(result).toMatchObject({ success: true, models: [
+      { value: 'new-model', capabilities: { contextWindowTokens: 64000, maxOutputTokens: 12000, reasoning: true } },
+      { value: 'ambiguous-model' },
+    ] })
+    if (!result.success) throw new Error('Expected discovered models')
+    expect(result.models[1]).not.toHaveProperty('capabilities')
+    const selected = applyModelProfileSelection(profile({ baseUrl: 'https://example.test/v1', maxTokens: 16000 }),
+      { modelName: result.models[0].value }, result.models[0].capabilities)
+    const post = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+    vi.stubGlobal('fetch', post)
+    await new OpenAIProvider().generate(selected, [], resolveGenerationParameters(selected, {}))
+    const body = JSON.parse(post.mock.calls[0][1].body)
+    expect(body.max_tokens).toBe(12000)
+    expect(body).not.toHaveProperty('reasoning_effort')
+    expect(body).not.toHaveProperty('enable_thinking')
+  })
   it('discovers OpenAI-compatible models from the current form without leaking its credential', async () => {
     const credential = crypto.randomUUID()
     let requestUrl = ''

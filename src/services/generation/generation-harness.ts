@@ -16,6 +16,8 @@ export interface GenerationMessage {
 /** A semantic generation contract. Physical provider parameters are deliberately absent. */
 export interface GenerationTask {
   purpose: string
+  /** Semantic extent only; main owns capability checks and physical reservation. */
+  budgetDemand?: import('./task-budget-planner').TaskBudgetDemand
   /** Explicit product semantics; omitted stages derive only from output shape. */
   reasoningStage?: GenerationReasoningStage
   output: GenerationOutput
@@ -163,6 +165,9 @@ export interface CompletionPort {
 }
 
 export interface GenerationAttemptReceipt {
+  diagnostics?: import('../../shared/generation-contract').GenerationTransportDiagnostics
+  /** Main's immutable durable candidate identity; absent on unmigrated legacy execution. */
+  visibleArtifact?: { artifactId: string; attemptId: string; revision: number; textHash: string }
   /** Safe semantic task label; never contains prompt, output, endpoint, or credentials. */
   purpose?: string
   model: FrozenGenerationModelIdentity
@@ -177,6 +182,8 @@ export interface GenerationAttemptReceipt {
     deadlineAt: number
   }
   finishReason: LLMFinishReason
+  /** Main-normalized failure category; never provider response text. */
+  failureCode?: 'GENERATION_PROVIDER_FAILED' | 'NETWORK_ERROR'
   usage?: TokenUsage
   promptBudget?: PromptBudgetReport
 }
@@ -196,6 +203,8 @@ export type GenerationOutcome =
     }
 
 export interface GenerationExecutionOptions {
+  /** Required by the S05 main-owner facade; repeated values read the same durable attempt. */
+  invocationNonce?: string
   signal?: AbortSignal
   /** Provisional provider text. It is never terminal or persistence evidence. */
   onChunk?: (chunk: string) => void
@@ -280,11 +289,11 @@ function safeDiagnosticDisplayName(value: string | undefined): string | undefine
   return normalized ? normalized.slice(0, 128) : undefined
 }
 
-function createPromptBudgetReport(input: {
+export function createPromptBudgetReport(input: {
   messages: readonly GenerationMessage[]
   policy: PromptBudgetPolicy
   contextWindowTokens: number | null
-  estimatedInputTokens: number
+  estimatedInputTokens?: number
   reservedOutputTokens: number
   modelId: string
 }): PromptBudgetReport {
@@ -362,7 +371,7 @@ function createPromptBudgetReport(input: {
     totalUtf8Bytes,
     limitUtf8Bytes: effectiveLimitUtf8Bytes,
     contextWindowTokens: input.contextWindowTokens,
-    estimatedInputTokens: input.estimatedInputTokens,
+    ...(input.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: input.estimatedInputTokens }),
     reservedOutputTokens: input.reservedOutputTokens,
     sections: Object.freeze(sections),
     modelId: input.modelId,

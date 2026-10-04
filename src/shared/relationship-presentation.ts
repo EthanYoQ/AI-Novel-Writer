@@ -1,17 +1,21 @@
 import type { Locale } from '../i18n/types'
 
 export interface RelationshipEdge {
+  targetCharacterId?: string
   target: string
   relation: string
 }
 
 export interface RelationshipTextOptions {
+  identities?: readonly { characterId?: string; name: string }[]
+  selfCharacterId?: string
   knownNames?: readonly string[]
   selfName?: string
   previousStorage?: string
 }
 
 export interface RelationshipEditorPresentationOptions {
+  identities?: readonly { characterId?: string; name: string }[]
   locale?: Locale
 }
 
@@ -33,7 +37,7 @@ function textValue(value: unknown): string | null {
 function relationshipEdgeFromRecord(value: UnknownRecord): RelationshipEdge | null {
   const target = textValue(value.target) ?? textValue(value.name)
   const relation = textValue(value.relation) ?? textValue(value.label)
-  return target && relation ? { target, relation } : null
+  return target && relation ? { target, relation, ...(typeof value.targetCharacterId === 'string' ? { targetCharacterId: value.targetCharacterId } : {}) } : null
 }
 
 /**
@@ -129,7 +133,7 @@ function isAllowedEdge(edge: RelationshipEdge, options: RelationshipTextOptions)
 function deduplicateEdges(edges: readonly RelationshipEdge[]): RelationshipEdge[] {
   const seen = new Set<string>()
   return edges.filter((edge) => {
-    const key = `${edge.target}\u0000${edge.relation}`
+    const key = `${edge.targetCharacterId ?? edge.target}\u0000${edge.relation}`
     if (seen.has(key)) return false
     seen.add(key)
     return true
@@ -204,7 +208,11 @@ export function formatRelationshipsForEditor(
       ? UNKNOWN_JSON_RELATIONSHIP_GUIDANCE[options.locale ?? 'zh-CN']
       : value
   }
-  return relationships.map(formatRelationshipEdgeForEditor).join('\n')
+  return relationships.map(edge => {
+    const identity = options.identities?.find(c => c.characterId === edge.targetCharacterId)
+    const target = identity ? (options.identities!.filter(c => c.name === identity.name).length > 1 ? `${identity.name}〔${identity.characterId}〕` : identity.name) : edge.target
+    return formatRelationshipEdgeForEditor({ ...edge, target })
+  }).join('\n')
 }
 
 /**
@@ -217,6 +225,26 @@ export function relationshipStorageFromEditor(
   options: RelationshipTextOptions,
 ): string {
   if (!value.trim()) return ''
+  if (options.identities) {
+    const parsed = parseStructuredRelationships(value)
+    const previous = parseStructuredRelationships(options.previousStorage ?? '') ?? []
+    const lines = parsed ?? value.split(/\r?\n/).filter(line => line.trim()).map(line => {
+      const match = line.match(/^(.+?)：\s*(.+)$/) ?? line.match(/^(.+?):\s*(.+)$/)
+      return match ? { target: match[1].trim(), relation: match[2].trim() } : null
+    })
+    const bound = lines.map(edge => {
+      if (!edge) return null
+      const previousMatch = previous.filter(old => old.target === edge.target && formatRelationForEditor(old.relation) === edge.relation)
+      const preserved = previousMatch.length === 1 ? previousMatch[0].targetCharacterId : undefined
+      const tag = edge.target.match(/〔([^〕]+)〕$/)?.[1]
+      const id = 'targetCharacterId' in edge ? edge.targetCharacterId : undefined
+      const matches = options.identities!.filter(c => id || tag || preserved ? c.characterId === (id || tag || preserved) : c.name === edge.target)
+      const target = matches.length === 1 ? matches[0] : undefined
+      if (!target?.characterId || target.characterId === options.selfCharacterId) return null
+      return { target: target.name, targetCharacterId: target.characterId, relation: edge.relation }
+    })
+    return bound.every(edge => edge !== null) ? JSON.stringify(bound) : value
+  }
   if (parseStructuredRelationships(value) !== null) return value
 
   const edges = parseEditorLines(value, options)
@@ -234,5 +262,10 @@ export function parseRelationshipEdges(
 ): RelationshipEdge[] {
   const structured = parseStructuredRelationships(value)
   const edges = structured ?? (isJsonValue(value) ? [] : parseTextRelationships(value))
+  if (options.identities) return deduplicateEdges(edges.flatMap(edge => {
+    const matches = options.identities!.filter(c => edge.targetCharacterId ? c.characterId === edge.targetCharacterId : c.name === edge.target)
+    const target = matches.length === 1 ? matches[0] : undefined
+    return target?.characterId && target.characterId !== options.selfCharacterId ? [{ ...edge, target: target.name, targetCharacterId: target.characterId }] : []
+  }))
   return deduplicateEdges(edges.filter((edge) => isAllowedEdge(edge, options)))
 }

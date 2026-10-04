@@ -128,7 +128,7 @@ describe('createRepairFinalizeWorkflow', () => {
           throw new Error(`unexpected IPC: ${channel}`)
       }
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
 
     const workflow = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION, stepKey)
     const step = workflow.steps[0]!
@@ -172,7 +172,7 @@ describe('createRepairFinalizeWorkflow', () => {
           throw new Error(`unexpected IPC: ${channel}`)
       }
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
 
     const workflow = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION)
     expect(() => createRepairFinalizeWorkflow(3, PROJECT_PATH, {
@@ -225,7 +225,7 @@ describe('createRepairFinalizeWorkflow', () => {
       if (channel === 'db:draft-get-full') return null
       throw new Error(`unexpected IPC: ${channel}`)
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
     const workflow = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION)
     useLocaleStore.setState({ locale: 'zh-CN' })
     const step = workflow.steps[0]!

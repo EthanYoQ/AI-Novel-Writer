@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as avatarImage from '../avatar-image'
 
 import {
   parseReleaseVectorSmokeInvocation,
@@ -24,6 +25,7 @@ afterEach(() => {
   else process.env.AI_NOVEL_RELEASE_SMOKE_TOKEN = previousReleaseSmokeToken
   process.argv.splice(0, process.argv.length, ...previousArgv)
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('packaged release vector smoke', () => {
@@ -43,13 +45,14 @@ describe('packaged release vector smoke', () => {
     }))).toEqual({ token })
   })
 
-  it('uses deterministic local mock embeddings only under the dual gate and proves a same-fingerprint 768 to 1536 rebuild', async () => {
+  it('uses deterministic local mock embeddings only under the dual gate and proves a same-fingerprint 768 to 1536 rebuild', { timeout: 20_000 }, async () => {
     const token = 'a'.repeat(32)
     process.env.AI_NOVEL_RELEASE_SMOKE = '1'
     process.env.AI_NOVEL_RELEASE_SMOKE_TOKEN = token
     process.argv.push(`--ai-novel-release-smoke=${token}`)
     const fetchMock = vi.fn(() => { throw new Error('release smoke must not use the network') })
     vi.stubGlobal('fetch', fetchMock)
+    const compressAvatar = vi.spyOn(avatarImage, 'compressAvatarImage')
 
     await expect(runReleaseVectorSmoke(token)).resolves.toMatchObject({
       schemaVersion: 1,
@@ -71,5 +74,6 @@ describe('packaged release vector smoke', () => {
       },
     })
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(compressAvatar).not.toHaveBeenCalled()
   })
 })

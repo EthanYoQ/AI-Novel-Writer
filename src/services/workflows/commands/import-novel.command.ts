@@ -1,3 +1,7 @@
+import type { NovelConfig } from '../../../shared/ipc-channels'
+import type { ImportGenerationContext, ImportGenerationSlot } from '../../../shared/import-generation'
+import type { BeginGenerationRequest } from '../../../shared/generation-owner-contract'
+import type { WorkflowContext } from '../../../stores/workflow-store'
 /**
  * 导入小说 — Command 集合
  *
@@ -59,6 +63,22 @@ export interface ImportedChapter {
   title: string
   content: string
   wordCount: number
+}
+
+/** Import identity comes from the durable orchestrator, never the UI workflow ID. */
+export function importGenerationSelection(context: WorkflowContext, stage: ImportGenerationSlot['stage']) {
+  const slot = context.data.importGenerationSlot as ImportGenerationSlot | undefined
+  if (!slot) return undefined
+  if (slot.stage !== stage || !context.data.importRunExecution) throw new Error('IMPORT_GENERATION_EXECUTION_REQUIRED')
+  return { importSlot: slot, importExecution: context.data.importRunExecution as NonNullable<BeginGenerationRequest['importExecution']> }
+}
+
+export function frozenImportContext(context: WorkflowContext): ImportGenerationContext | undefined {
+  if (!context.data.importGenerationSlot) return undefined
+  const frozen = context.data.importGenerationContext as ImportGenerationContext | undefined
+  const slot = context.data.importGenerationSlot as ImportGenerationSlot
+  if (!frozen || frozen.slot.runId !== slot.runId || frozen.slot.stage !== slot.stage || frozen.slot.batchId !== slot.batchId) throw new Error('IMPORT_GENERATION_CONTEXT_REQUIRED')
+  return frozen
 }
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u
@@ -223,8 +243,7 @@ function parseImportEndpointCorrectionDelta(
 
 function requireImportGlobalFactsReceipt(
   candidate: ImportGlobalFactsReceipt | undefined,
-  operationId: string,
-  expectedCharacterNames: readonly string[],
+  expected: ImportGlobalFactsRequest,
   text: UiText,
 ): ImportGlobalFactsReceipt {
   const committedNames = new Set(candidate?.roster?.snapshot?.entries
@@ -232,13 +251,23 @@ function requireImportGlobalFactsReceipt(
     .filter(Boolean))
   if (
     !candidate
-    || candidate.operationId !== operationId
+    || candidate.operationId !== expected.operationId
     || !SHA256_HEX.test(candidate.payloadHash)
     || typeof candidate.idempotent !== 'boolean'
     || !candidate.core
-    || !candidate.roster?.snapshot
-    || candidate.roster.snapshot.status !== 'ready'
-    || expectedCharacterNames.some(name => !committedNames.has(name.trim()))
+    || (candidate.characterProposal !== undefined
+      ? candidate.roster !== undefined
+        || !isRecord(candidate.characterProposal)
+        || typeof candidate.characterProposal.proposalBatchId !== 'string'
+        || !candidate.characterProposal.proposalBatchId.trim()
+        || typeof candidate.characterProposal.sourceHash !== 'string'
+        || !SHA256_HEX.test(candidate.characterProposal.sourceHash)
+        || !deepJsonEqual(candidate.proposalSource, expected)
+        || !deepJsonEqual(candidate.core, expected.core)
+      : candidate.proposalSource !== undefined
+        || !candidate.roster?.snapshot
+        || candidate.roster.snapshot.status !== 'ready'
+        || expected.characterEntries.some(entry => !committedNames.has(entry.name.trim())))
   ) throw new Error(text(
     '导入全局事实提交收据无效或覆盖不完整',
     'The imported global-facts commit receipt is invalid or incomplete.',
@@ -276,7 +305,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
   }
 
   async execute(params: CommandExecuteParams): Promise<void> {
-    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params), { operation: 'import-global-facts', promptKeys: ['infer_novel_config_with_vectors', 'infer_novel_config'], skillStages: ['planning'], output: 'structured-data', ...importGenerationSelection(params.context, 'global') })
   }
 
   private async decodeImportInferenceWithEndpointRecovery(
@@ -284,7 +313,8 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     callbacks: CommandExecuteParams['callbacks'],
     context: CommandExecuteParams['context'],
   ): Promise<ImportInferenceResult> {
-    const writingLanguage = workflowWritingLanguage(context)
+    const frozen = frozenImportContext(context)
+    const writingLanguage = frozen?.core.writingLanguage ?? workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     try {
       return decodeImportInferenceJson(rawResult)
@@ -366,7 +396,8 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {
     const projectSession = requireWorkflowProjectSession(context)
-    const writingLanguage = workflowWritingLanguage(context)
+    const frozen = frozenImportContext(context)
+    const writingLanguage = frozen?.core.writingLanguage ?? workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
@@ -375,9 +406,22 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     )) throw new Error(text('当前项目已切换，导入推演已停止', 'The project changed, so import inference stopped.'))
     const projectSnapshot = Object.freeze({ ...project, novelConfig: Object.freeze({ ...project.novelConfig }) })
 
-    const chapters = context.data.chapters as ImportedChapter[]
+    const baseConfig: NovelConfig = frozen ? {
+      writingLanguage: frozen.core.writingLanguage,
+      creativeStrategy: frozen.core.creativeStrategy,
+      narrativeThreadDormantChapterThreshold: frozen.core.narrativeThreadDormantChapterThreshold,
+      genre: frozen.core.genre, subGenre: frozen.core.subGenre, targetAudience: frozen.core.targetAudience,
+      totalChapters: frozen.core.totalChapters, wordsPerChapter: frozen.core.wordsPerChapter,
+      plotStructure: frozen.core.plotStructure as NovelConfig['plotStructure'],
+      narrativePOV: frozen.core.narrativePov as NovelConfig['narrativePOV'],
+      coreOutline: frozen.core.coreOutline, worldSetting: frozen.core.worldSetting,
+      goldenFinger: frozen.core.goldenFinger, protagonistProfile: frozen.core.protagonistProfile,
+      globalGuidance: frozen.core.globalGuidance, writingStyle: frozen.core.writingStyle,
+      referenceWorks: frozen.core.referenceWorks,
+    } : projectSnapshot.novelConfig
+    const chapters = frozen?.chapters ?? context.data.chapters as ImportedChapter[]
     if (!chapters || chapters.length === 0) throw new Error(text('无章节数据', 'No chapter data is available.'))
-    const importRunTotalChapters = context.data.importRunTotalChapters
+    const importRunTotalChapters = frozen?.totalChapters ?? context.data.importRunTotalChapters
     const totalChapters = typeof importRunTotalChapters === 'number'
       && Number.isSafeInteger(importRunTotalChapters)
       && importRunTotalChapters > 0
@@ -438,8 +482,9 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
 
     // ===== 构建 Prompt =====
     // 优先使用向量增强版 Prompt
-    const template = await resolvePromptTemplate('infer_novel_config_with_vectors', projectSession, writingLanguage)
-      || await resolvePromptTemplate('infer_novel_config', projectSession, writingLanguage)
+    const template = frozen ? (frozen.prompts.infer_novel_config_with_vectors || frozen.prompts.infer_novel_config)
+      : await resolvePromptTemplate('infer_novel_config_with_vectors', projectSession, writingLanguage)
+        || await resolvePromptTemplate('infer_novel_config', projectSession, writingLanguage)
     if (!template) throw new Error(text('未找到推演 Prompt 模板', 'The import-inference prompt template was not found.'))
 
     const firstChapter = chapters[0]?.content?.slice(0, 3000)
@@ -528,6 +573,9 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     ))
 
     // ===== 解析 JSON 结果 =====
+    // Keep the exact visible candidate even when the legacy name-based contract
+    // rejects ambiguity. This is not a formal fact or an adoption authorization.
+    context.data.importGlobalInferenceCandidate = rawResult
     const inferResult = await this.decodeImportInferenceWithEndpointRecovery(rawResult, callbacks, context)
 
     const roster = await ipc.invokeWithProjectSession(
@@ -543,13 +591,13 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     }
 
     const novelConfig = {
-      ...projectSnapshot.novelConfig,
+      ...baseConfig,
       ...inferResult.novelConfig,
       totalChapters,
       wordsPerChapter: Math.max(1, Math.round(
-        (typeof context.data.importRunTotalWords === 'number'
+        (frozen?.totalWords ?? (typeof context.data.importRunTotalWords === 'number'
           ? context.data.importRunTotalWords
-          : chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0))
+          : chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0)))
         / totalChapters,
       )),
     }
@@ -562,9 +610,10 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     ))
     this.assertNotCancelled(context)
 
-    const operationId = `novel-import-global-${context.runId}`
+    const operationId = `novel-import-global-${frozen?.slot.runId ?? context.runId}`
     const commitRequest: ImportGlobalFactsRequest = {
         operationId,
+        ...(context.mainGenerationRunHandle ? { generationRunHandle: context.mainGenerationRunHandle } : {}),
         expectedRosterRevision: roster.revision,
         core: {
           genre: novelConfig.genre,
@@ -603,8 +652,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     }
     const commitReceipt = requireImportGlobalFactsReceipt(
       rawCommitReceipt,
-      operationId,
-      inferResult.characterCards.map(card => card.name),
+      commitRequest,
       text,
     )
     context.data.importGlobalFactsReceipt = commitReceipt
@@ -618,7 +666,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       'The project changed, so the imported configuration was not applied.',
     ))
     const authoritativeNovelConfig = {
-      ...projectSnapshot.novelConfig,
+      ...baseConfig,
       genre: commitReceipt.core.genre,
       subGenre: commitReceipt.core.subGenre,
       targetAudience: commitReceipt.core.targetAudience,
@@ -648,11 +696,19 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         + `Central advantage: ${authoritativeNovelConfig.goldenFinger || none}\n`
         + `Protagonist: ${authoritativeNovelConfig.protagonistProfile || none}`,
     )
-    const committedCharacterCount = commitReceipt.roster.snapshot.entries.length
-    callbacks.log(text(
-      `小说配置、非角色架构与 ${committedCharacterCount} 张角色卡已原子提交`,
-      `The novel configuration, non-character architecture, and ${committedCharacterCount} character ${committedCharacterCount === 1 ? 'card was' : 'cards were'} committed atomically`,
-    ))
+    if (commitReceipt.characterProposal) {
+      const proposalCount = commitReceipt.proposalSource.characterEntries.length
+      callbacks.log(text(
+        `小说配置、非角色架构与 ${proposalCount} 条角色提议已原子保存；提议保留待采用，尚未创建角色。`,
+        `The novel configuration, non-character architecture, and ${proposalCount} character proposals were saved atomically. Proposals remain pending adoption; no characters were created.`,
+      ))
+    } else {
+      const committedCharacterCount = commitReceipt.roster.snapshot.entries.length
+      callbacks.log(text(
+        `小说配置、非角色架构与 ${committedCharacterCount} 张角色卡已原子提交`,
+        `The novel configuration, non-character architecture, and ${committedCharacterCount} character ${committedCharacterCount === 1 ? 'card was' : 'cards were'} committed atomically`,
+      ))
+    }
 
     callbacks.setProgress(90)
     this.notifyRefresh(['fileTree', 'characterCards'], context.projectPath, requireWorkflowProjectSession(context))
@@ -678,12 +734,13 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
   }
 
   async execute(params: CommandExecuteParams): Promise<void> {
-    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params), { operation: 'import-blueprints', promptKeys: ['infer_single_chapter_blueprint'], skillStages: ['planning'], output: 'structured-data', ...importGenerationSelection(params.context, 'blueprints') })
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {
     const projectSession = requireWorkflowProjectSession(context)
-    const writingLanguage = workflowWritingLanguage(context)
+    const frozen = frozenImportContext(context)
+    const writingLanguage = frozen?.core.writingLanguage ?? workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
@@ -691,12 +748,13 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       projectSessionContextFromProject(project),
     )) throw new Error(text('当前项目已切换，蓝图推演已停止', 'The project changed, so blueprint inference stopped.'))
 
-    const chapters = context.data.chapters as ImportedChapter[]
-    const configSummary = (context.data.novelConfigSummary as string)
+    const chapters = frozen?.chapters ?? context.data.chapters as ImportedChapter[]
+    const configSummary = (frozen ? JSON.stringify(frozen.core) : context.data.novelConfigSummary as string)
       || promptLanguageText(writingLanguage, '（配置概要不可用）', '(configuration summary unavailable)')
     if (!chapters || chapters.length === 0) throw new Error(text('无章节数据', 'No chapter data is available.'))
 
-    const template = await resolvePromptTemplate('infer_single_chapter_blueprint', projectSession, writingLanguage)
+    const template = frozen ? frozen.prompts.infer_single_chapter_blueprint
+      : await resolvePromptTemplate('infer_single_chapter_blueprint', projectSession, writingLanguage)
     if (!template) throw new Error(text(
       '未找到单章蓝图推演 Prompt 模板',
       'The single-chapter blueprint inference prompt template was not found.',
@@ -819,7 +877,8 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     this.assertNotCancelled(context)
     const commitRequest: BlueprintRangeCommitRequest = {
         mode: 'replace-range',
-        operationId: `import-blueprints-${context.runId}-${startChapter}-${endChapter}`,
+        operationId: `import-blueprints-${frozen?.slot.runId ?? context.runId}-${startChapter}-${endChapter}`,
+        ...(context.mainGenerationRunHandle ? { generationRunHandle: context.mainGenerationRunHandle } : {}),
         startChapter,
         endChapter,
         blueprints: [...batch.items],

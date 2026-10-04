@@ -121,6 +121,24 @@ describe('BlueprintRepository without an opened project DB', () => {
 })
 
 describe('BlueprintRepository range commit', () => {
+  it('guards a new formal effect inside its transaction and keeps acknowledged replay read-only', () => {
+    const db = createBlueprintDb()
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    const request = { mode: 'replace-range' as const, operationId: 'main-guarded', startChapter: 1, endChapter: 1, blueprints: [blueprintFor(1)] }
+    try {
+      const refuse = () => { expect(db.inTransaction).toBe(true); throw new Error('GENERATION_SOURCE_CHANGED') }
+      expect(() => BlueprintRepository.commitRange(request, refuse)).toThrow('GENERATION_SOURCE_CHANGED')
+      expect(BlueprintRepository.count()).toBe(0)
+      expect(db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
+      const allow = vi.fn(() => expect(db.inTransaction).toBe(true))
+      expect(BlueprintRepository.commitRange(request, allow).idempotent).toBe(false)
+      db.prepare("UPDATE blueprints SET title='作者后来编辑的标题' WHERE chapter_number=1").run()
+      const replay = BlueprintRepository.commitRange(request, refuse)
+      expect(replay.idempotent).toBe(true)
+      expect(replay.snapshot[0].title).toBe('作者后来编辑的标题')
+      expect(allow).toHaveBeenCalledTimes(1)
+    } finally { db.close() }
+  })
   it('commits one exact logical range and returns its transaction readback receipt', () => {
     const db = createBlueprintDb()
     vi.mocked(getProjectDb).mockReturnValue(db)

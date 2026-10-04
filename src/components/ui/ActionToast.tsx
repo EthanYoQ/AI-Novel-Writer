@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 /**
- * Vela ActionToast — 带操作按钮的增强通知
+ * ActionToast — 带操作按钮的增强通知
  *
  * 用于 AI 工作流完成后弹出带操作按钮的通知（如「打开查看」「忽略」）。
  * 基于独立的 React Portal 渲染，不依赖 Toast.tsx 的容器。
@@ -67,9 +67,9 @@ function dismissItem(id: number) {
 
 /** 挂载 ActionToast 容器到 DOM */
 function ensureContainer() {
-  if (document.getElementById('vela-action-toast-root')) return
+  if (document.getElementById('ai-novel-action-toast-root')) return
   const container = document.createElement('div')
-  container.id = 'vela-action-toast-root'
+  container.id = 'ai-novel-action-toast-root'
   document.body.appendChild(container)
   createRoot(container).render(<ActionToastContainer />)
 }

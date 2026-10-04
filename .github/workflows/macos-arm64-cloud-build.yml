@@ -86,6 +86,10 @@ jobs:
         run: |
           node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step build-native-secure-helper -- bash -lc 'clang -fobjc-arc -framework Foundation electron/security/darwin-safe-file-system.m -o electron/security/darwin-safe-file-system && chmod +x electron/security/darwin-safe-file-system'
 
+      - name: Resolve macOS test temp directory
+        run: |
+          node -e "const fs = require('node:fs'); const os = require('node:os'); const original = os.tmpdir(); const physical = fs.realpathSync.native(original); fs.appendFileSync(process.env.GITHUB_ENV, 'TMPDIR=' + physical + '\n'); console.log('tempAlias=' + (physical !== original))"
+
       - name: Run test suite
         run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step test-suite -- pnpm test
 
@@ -125,3 +129,12 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           path: ${{ runner.temp }}/macos-arm64-qualified
+
+      - name: Upload redacted A11 exit diagnostic
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-arm64-a11-exit-diagnostic
+          retention-days: 14
+          if-no-files-found: ignore
+          path: ${{ env.AI_NOVEL_RELEASE_EVIDENCE_ROOT }}/diagnostics/macos-a11-exit.json

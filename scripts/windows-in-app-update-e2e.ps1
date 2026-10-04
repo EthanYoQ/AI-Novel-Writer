@@ -15,12 +15,35 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $resolvedPlanPath = (Resolve-Path -LiteralPath $PlanPath).Path
 $resolvedEvidenceRoot = [System.IO.Path]::GetFullPath($EvidenceRoot)
 New-Item -ItemType Directory -Path $resolvedEvidenceRoot -Force | Out-Null
-$runtimeRoot = Join-Path $resolvedEvidenceRoot 'runtime'
+$runtimeRoot = Join-Path (Join-Path $repositoryRoot '.runtime\.cache') ('update-e2e-' + [guid]::NewGuid().ToString('N'))
 $transcriptPath = Join-Path $resolvedEvidenceRoot 'runner-transcript.log'
 $evidencePath = Join-Path $resolvedEvidenceRoot 'in-app-update-e2e.json'
 $failureWindowsPath = Join-Path $resolvedEvidenceRoot 'failure-windows.json'
 $appExecutableName = "AI$([char]0x5C0F)$([char]0x8BF4)$([char]0x4F5C)$([char]0x5BB6).exe"
 $appDisplayName = [System.IO.Path]::GetFileNameWithoutExtension($appExecutableName)
+
+function Get-E2eCanonicalGeneration {
+  param([Parameter(Mandatory = $true)][string]$CanonicalHome)
+  $receiptPath = Join-Path $CanonicalHome '.migration\receipt.json'
+  $receipt = Read-E2eRequiredJsonFile -Path $receiptPath -Label 'Canonical migration completion receipt'
+  if ($receipt.version -isnot [long] -and $receipt.version -isnot [int]) { throw 'Invalid canonical receipt version type.' }
+  if ($receipt.preservedUnknownCount -isnot [long] -and $receipt.preservedUnknownCount -isnot [int]) { throw 'Invalid canonical preserved count type.' }
+  if ($receipt.version -ne 1 -or $receipt.completed -isnot [bool] -or $receipt.completed -ne $true -or $receipt.generation -isnot [string] -or
+      [string]$receipt.generation -notmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$' -or
+      $null -eq $receipt.preservedUnknownCount -or $receipt.preservedUnknownCount -lt 0 -or
+      $receipt.preservedUnknownCount -ne [Math]::Floor($receipt.preservedUnknownCount) -or
+      $receipt.requiredObjects -isnot [array]) { throw 'Invalid canonical migration completion receipt.' }
+  $generationRoot = Join-Path (Join-Path $CanonicalHome 'generations') $receipt.generation
+  foreach ($candidate in @($CanonicalHome, (Join-Path $CanonicalHome '.migration'), $receiptPath, (Join-Path $CanonicalHome 'generations'), $generationRoot)) {
+    $item = Get-Item -LiteralPath $candidate -Force -ErrorAction Stop
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Canonical generation must not use reparse points.' }
+  }
+  foreach ($name in $receipt.requiredObjects) {
+    if ($name -isnot [string] -or $name -cnotin @('config.json', 'recent-projects.json', 'prompts', 'skills', 'skins', 'models.json', 'mcp_config.json')) { throw 'Unknown canonical required object.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $generationRoot $name))) { throw 'Canonical required object is missing.' }
+  }
+  return $generationRoot
+}
 
 function Assert-E2eCondition {
   param(
@@ -930,6 +953,8 @@ $evidence = [ordered]@{
 }
 $oldUserProfile = $env:USERPROFILE
 $oldHome = $env:HOME
+$oldCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
+$oldLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
 $oldVelaHome = $env:AI_NOVEL_VELA_HOME
 $oldElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
 $oldAppProcess = $null
@@ -981,6 +1006,7 @@ try {
   New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
   $e2eInstallRoot = Join-Path $runtimeRoot 'installed-app'
   $chromiumUserDataDir = Join-Path $runtimeRoot 'chromium-profile'
+  $canonicalHome = Join-Path $runtimeRoot 'canonical'
   New-Item -ItemType Directory -Path $chromiumUserDataDir -Force | Out-Null
   $userDataFixture = New-E2eUserDataFixture -RuntimeRoot $runtimeRoot
   $e2eIsolatedHome = [string]$userDataFixture.isolatedHome
@@ -1046,6 +1072,8 @@ try {
 
   $env:USERPROFILE = $e2eIsolatedHome
   $env:HOME = $e2eIsolatedHome
+  $env:AI_NOVEL_APP_DATA_HOME = $canonicalHome
+  $env:AI_NOVEL_LEGACY_SOURCE_HOME = $e2eVelaHome
   $env:AI_NOVEL_VELA_HOME = $e2eVelaHome
   $oldDebugPort = Get-E2eFreeTcpPort
   $oldAppStdout = Join-Path $resolvedEvidenceRoot 'old-app.stdout.log'
@@ -1054,10 +1082,10 @@ try {
   $oldAppProcess = Start-Process -FilePath $oldExe -ArgumentList @(
     "--remote-debugging-port=$oldDebugPort",
     '--disable-gpu',
-    "--user-data-dir=$chromiumUserDataDir",
+    "--user-data-dir=`"$chromiumUserDataDir`"",
     '--enable-logging',
     '--v=1',
-    "--log-file=$oldElectronLog"
+    "--log-file=`"$oldElectronLog`""
   ) -PassThru -RedirectStandardOutput $oldAppStdout -RedirectStandardError $oldAppStderr
   [void]$oldAppProcess.Handle
   Add-AiNovelTrackedProcess -ProcessIds $oldAppIds -StartTimeTicks $oldAppStartTimes -ProcessId $oldAppProcess.Id | Out-Null
@@ -1130,6 +1158,7 @@ try {
     -ElectronRunner $electronRunner `
     -ExpectedVersion ([string]$plan.expected.version) `
     -TimeoutSeconds $ApplicationTimeoutSeconds
+  $legacyBeforeExplicitRestart = Get-E2eSha256Manifest -Root $e2eVelaHome
   $newDebugPort = Get-E2eFreeTcpPort
   $newAppStdout = Join-Path $resolvedEvidenceRoot 'updated-app.stdout.log'
   $newAppStderr = Join-Path $resolvedEvidenceRoot 'updated-app.stderr.log'
@@ -1137,10 +1166,10 @@ try {
   $newAppProcess = Start-Process -FilePath $updatedExe -ArgumentList @(
     "--remote-debugging-port=$newDebugPort",
     '--disable-gpu',
-    "--user-data-dir=$chromiumUserDataDir",
+    "--user-data-dir=`"$chromiumUserDataDir`"",
     '--enable-logging',
     '--v=1',
-    "--log-file=$updatedElectronLog"
+    "--log-file=`"$updatedElectronLog`""
   ) -PassThru -RedirectStandardOutput $newAppStdout -RedirectStandardError $newAppStderr
   [void]$newAppProcess.Handle
   Add-AiNovelTrackedProcess -ProcessIds $newAppIds -StartTimeTicks $newAppStartTimes -ProcessId $newAppProcess.Id | Out-Null
@@ -1169,6 +1198,15 @@ try {
   $afterRecentProject = Get-E2eFrozenFileManifest -Root $e2eRecentProjectRoot -RelativePaths $e2eRecentProjectFrozenPaths
   $afterPreservation = Get-E2eSha256Manifest -Root $e2ePreservationRoot
   $afterVelaHome = Get-E2eSha256Manifest -Root $e2eVelaHome
+  $canonicalDataRoot = Get-E2eCanonicalGeneration -CanonicalHome $canonicalHome
+  $canonicalConfig = Read-E2eRequiredJsonFile -Path (Join-Path $canonicalDataRoot 'config.json') -Label 'Canonical managed config'
+  $canonicalRecentProjects = @(Read-E2eRequiredJsonFile -Path (Join-Path $canonicalDataRoot 'recent-projects.json') -Label 'Canonical recent projects')
+  Assert-E2eManagedConfigPreserved -Before $beforeManagedConfig -After $canonicalConfig
+  Assert-E2eRecentProjectPreserved -RecentProjects $canonicalRecentProjects -ExpectedProjectRoot $e2eRecentProjectRoot
+  Assert-E2eCondition -Condition ($legacyBeforeExplicitRestart.sha256 -eq $afterVelaHome.sha256) -Message 'Legacy source bytes changed during the updated application restart.'
+  $evidence.userData.canonicalGenerationVerified = $true
+  $evidence.userData.canonicalDataRoot = $canonicalDataRoot
+  $evidence.userData.legacySourceUnchangedOnRestart = $true
   $afterManagedConfig = Read-E2eRequiredJsonFile -Path $e2eConfigPath -Label 'Updated managed config'
   $afterRecentProjects = @(Read-E2eRequiredJsonFile -Path $e2eRecentProjectsPath -Label 'Updated recent projects')
   Assert-E2eManagedConfigPreserved -Before $beforeManagedConfig -After $afterManagedConfig
@@ -1206,6 +1244,8 @@ finally {
   if ($null -ne $oldAppProcess) { $oldAppProcess.Dispose() }
   $env:USERPROFILE = $oldUserProfile
   $env:HOME = $oldHome
+  $env:AI_NOVEL_APP_DATA_HOME = $oldCanonicalHome
+  $env:AI_NOVEL_LEGACY_SOURCE_HOME = $oldLegacySourceHome
   $env:AI_NOVEL_VELA_HOME = $oldVelaHome
   $env:ELECTRON_RUN_AS_NODE = $oldElectronRunAsNode
   if ($transcriptStarted) { Stop-Transcript | Out-Null }

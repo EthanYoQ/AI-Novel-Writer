@@ -6,6 +6,7 @@ import {
   ListTree,
   Globe2,
   GitBranch,
+  History,
   ListChecks,
   Settings,
   ScrollText,
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useLayoutStore, type SidebarView, type BottomTab } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
+import { useProjectStore } from '../../stores/project-store'
 import { openBuiltinEditor } from '../panels/sidebar/sidebar-file-openers'
 import { useLocaleStore } from '../../stores/locale-store'
 
@@ -71,6 +73,8 @@ function LeftNavButton({
  */
 export default function LeftToolWindowBar() {
   const activeRailItem = useLayoutStore(s => s.activeRailItem)
+  const sidebarView = useLayoutStore(s => s.sidebarView)
+  const currentProject = useProjectStore(s => s.currentProject)
   const setSidebarView = useLayoutStore(s => s.setSidebarView)
   const setBottomTab = useLayoutStore(s => s.setBottomTab)
   const openSettings = useLayoutStore(s => s.openSettings)
@@ -78,7 +82,7 @@ export default function LeftToolWindowBar() {
   const text = useLocaleStore(s => s.text)
 
   /** Home 按钮是否激活 */
-  const homeActive = activeRailItem === 'home'
+  const homeActive = activeRailItem === 'home' || (!currentProject && sidebarView === 'project')
   const plotTreeActive = activeRailItem === 'plot-tree'
 
   return (
@@ -107,7 +111,7 @@ export default function LeftToolWindowBar() {
         {/* 侧边栏视图按钮 */}
         {sidebarActivities.map(({ id, icon: Icon, zh, en }) => {
           const label = text(zh, en)
-          const isActive = activeRailItem === id
+          const isActive = activeRailItem === id && !(id === 'project' && homeActive)
           return (
             <LeftNavButton
               key={id}
@@ -137,7 +141,10 @@ export default function LeftToolWindowBar() {
           label={text('世界', 'World')}
           active={activeRailItem === 'world'}
           title={text('世界观', 'World building')}
-          onClick={() => setSidebarView('knowledge', 'world')}
+          onClick={() => {
+            setSidebarView('project', 'world')
+            openBuiltinEditor('world-building-editor', text('故事架构', 'Story architecture'), 'world-building')
+          }}
         />
         <LeftNavButton
           icon={GitBranch}
@@ -152,6 +159,16 @@ export default function LeftToolWindowBar() {
               'narrative-thread',
               'plot-tree',
             )
+          }}
+        />
+        <LeftNavButton
+          icon={History}
+          label={text('历史', 'History')}
+          title={text('版本历史', 'Version history')}
+          onClick={() => {
+            if (!currentProject) return
+            setSidebarView('project')
+            openBuiltinEditor('version-history', text('版本历史', 'Version history'), 'version-history')
           }}
         />
       </div>
@@ -188,7 +205,7 @@ export default function LeftToolWindowBar() {
           icon={Settings}
           label={text('设置', 'Settings')}
           active={activeRailItem === 'settings'}
-          onClick={openSettings}
+          onClick={() => openSettings()}
         />
       </div>
     </div>

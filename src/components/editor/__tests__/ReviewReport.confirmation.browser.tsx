@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import type { ModelProfile, ProjectData } from '../../../shared/ipc-channels'
 import { parseHumanConfirmedReviewSnapshot } from '../../../shared/human-confirmed-review'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
+import type { ReviewCycleProjection } from '../../../shared/review-cycle'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
@@ -107,6 +108,8 @@ function model(overrides: Partial<ModelProfile>): ModelProfile {
 
 function installIpc(confirmationId: number, currentDraftContent: string = REVIEW_SOURCE_DRAFT.content) {
   let draftContent = currentDraftContent
+  let draftStatus: 'draft' | 'revised' = 'draft'
+  let reviewCycle: ReviewCycleProjection | null = null
   let latestReview: {
     id: number
     baseDraftId: number
@@ -122,7 +125,7 @@ function installIpc(confirmationId: number, currentDraftContent: string = REVIEW
         chapterNumber: 1,
         chapterTitle: '雨夜启程',
         version: 1,
-        status: 'draft',
+        status: draftStatus,
         source: 'write',
       }
     }
@@ -141,9 +144,10 @@ function installIpc(confirmationId: number, currentDraftContent: string = REVIEW
       }
     }
     if (channel === 'db:review-get-latest') return latestReview
+    if (channel === 'db:review-cycle-get') return reviewCycle
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -158,6 +162,12 @@ function installIpc(confirmationId: number, currentDraftContent: string = REVIEW
   return {
     setDraftContent(content: string) {
       draftContent = content
+    },
+    setDraftStatus(status: 'draft' | 'revised') {
+      draftStatus = status
+    },
+    setReviewCycle(cycle: ReviewCycleProjection | null) {
+      reviewCycle = cycle
     },
     setLatestReview(content: string) {
       latestReview = {
@@ -180,6 +190,7 @@ function confirmationCreateParams() {
     reviewIndex: number
     content: string
     expectedSource: typeof REVIEW_SOURCE_DRAFT
+    reviewCycleId?: string
   }
 }
 
@@ -189,16 +200,17 @@ function selectedModel(): HTMLSelectElement {
   return select
 }
 
-async function renderReport(reportText = RAW_AI_REPORT) {
+async function renderReport(reportText = RAW_AI_REPORT, cycle?: ReviewCycleProjection | null) {
   await act(async () => {
     root?.render(
       <ReviewReport
         projectKey={PROJECT_PATH}
         reportText={reportText}
-        draftPath="vela://draft/1"
+        draftPath="ai-novel://draft/1"
         chapterNumber={1}
-        chapterDir="vela://draft/ch1"
+        chapterDir="ai-novel://draft/ch1"
         reviewId={41}
+        cycle={cycle}
       />,
     )
   })
@@ -264,7 +276,7 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useLLMStore.setState(originalLLMState)
   useLocaleStore.setState(originalLocaleState)
@@ -273,6 +285,76 @@ afterEach(async () => {
 })
 
 describe('ReviewReport human-confirmed revision flow', () => {
+  it('recovers a persisted required recheck after reopen and reports an async failed workflow before retrying', async () => {
+    const ipcState = installIpc(97, '合并后的正文。')
+    ipcState.setDraftStatus('revised')
+    const required: ReviewCycleProjection = { cycleId: 'cycle-recover', reviewId: 41,
+      revisionStatus: 'merge-committed', mergedHash: 'a'.repeat(64), recheckCount: 0,
+      recheckDisposition: 'required', findings: [] }
+    ipcState.setReviewCycle(required)
+    await renderReport(RAW_AI_REPORT)
+    await vi.waitFor(() => expect(page.getByRole('button', { name: '重试合并后复验' }).query()).not.toBeNull())
+
+    startWorkflow.mockImplementationOnce(async () => {
+      useWorkflowStore.setState({ history: [{ id: 'failed-recheck', status: 'failed', error: 'synthetic model failure' }] as never })
+      return 'failed-recheck'
+    })
+    await act(async () => page.getByRole('button', { name: '重试合并后复验' }).click())
+    await expect.element(page.getByRole('alert')).toHaveTextContent('synthetic model failure')
+    expect(container?.textContent).toContain('关闭或重开后仍可从这里继续')
+
+    ipcState.setReviewCycle({ ...required, recheckCount: 1, recheckDisposition: 'completed' })
+    startWorkflow.mockImplementationOnce(async () => {
+      useWorkflowStore.setState({ history: [{ id: 'completed-recheck', status: 'completed' }] as never })
+      return 'completed-recheck'
+    })
+    await act(async () => page.getByRole('button', { name: '重试合并后复验' }).click())
+    await expect.element(page.getByRole('status')).toHaveTextContent('合并后复验已完成')
+    expect(page.getByRole('button', { name: '重试合并后复验' }).query()).toBeNull()
+    expect(startWorkflow).toHaveBeenCalledTimes(2)
+    expect(startWorkflow.mock.calls[0]?.[0]).toMatchObject({ projectPath: PROJECT_PATH,
+      steps: [{ name: expect.any(String) }] })
+  })
+
+  it('shows cycle and finding states separately and persists only an explicit author waiver as v2', async () => {
+    installIpc(96)
+    const findings: ReviewCycleProjection['findings'] = [
+      { findingId: 'finding-1', reviewItemIndex: 0, category: '连续性', kind: 'objective', status: 'unresolved', targetId: 'draft:1' },
+      { findingId: 'finding-2', reviewItemIndex: 1, category: '节奏', kind: 'literary', status: 'unknown', targetId: 'draft:1' },
+      { findingId: 'finding-3', reviewItemIndex: 2, category: '措辞', kind: 'literary', status: 'resolved', targetId: 'draft:1' },
+    ]
+    const generated: ReviewCycleProjection = {
+      cycleId: 'cycle-1',
+      reviewId: 41,
+      revisionStatus: 'generated',
+      recheckCount: 0,
+      findings,
+    }
+
+    await renderReport(RAW_AI_REPORT, generated)
+    expect(container?.textContent).toContain('修稿已生成')
+    expect(container?.textContent).toContain('未解决')
+    expect(container?.textContent).toContain('待核实')
+    expect(container?.textContent).toContain('已解决')
+    expect(container?.textContent).not.toContain('合并已提交')
+
+    await renderReport(RAW_AI_REPORT, { ...generated, revisionStatus: 'merge-committed', mergedHash: 'a'.repeat(64) })
+    expect(container?.textContent).toContain('合并已提交')
+    expect(container?.querySelector('[data-review-finding-status="unresolved"]')).not.toBeNull()
+    expect(container?.querySelector('[data-review-finding-status="resolved"]')).not.toBeNull()
+
+    await act(async () => page.getByRole('button', { name: '带建议完成' }).first().click())
+    expect(container?.textContent).toContain('作者带建议完成')
+    await act(async () => page.getByRole('button', { name: '确认审稿清单' }).click())
+    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+
+    const snapshot = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)
+    expect(snapshot).toMatchObject({ schemaVersion: 2, cycleId: 'cycle-1' })
+    expect(snapshot?.items[0]).toMatchObject({ findingId: 'finding-1', decision: 'waive' })
+    expect(snapshot?.items[1]).toMatchObject({ findingId: 'finding-2', decision: 'apply' })
+    expect(confirmationCreateParams().reviewCycleId).toBe('cycle-1')
+  })
+
   it('错误降级为待核实时先忽略，确认后只有主动再次纳入才进入修稿', async () => {
     installIpc(42)
     await renderReport(JSON.stringify({ summary: '', items: [

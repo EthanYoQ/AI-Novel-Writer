@@ -37,6 +37,7 @@
 > - **Layered chapter materials** — The current task, future plans, finalized history, and candidate drafts are shown separately, with adjacent source paragraphs retained when they carry causality, negation, or item transfers across sentences.
 > - **Reliable candidate context** — Review-draft batches continue from the exact saved draft versions and prose in the current run and label them as unfinalized.
 > - **Goal-by-goal review** — Each chapter event shows whether it is completed, unmet, or needs verification, alongside source excerpts, so preparation or a promise is not automatically treated as completion.
+> - **Mark a required appearance** — Add a separate line such as `【第3章必现】Describe the required scene` to character notes or the project's world setting to require visible evidence in Chapter 3. Unmarked background details are checked for contradictions, not required to appear.
 > - **Author-controlled goal revision** — Unverified items are not passed checks, and unmet or unverified chapter goals enter revision only when the author explicitly includes them, reducing rework caused by model misjudgments.
 > - **Update, export, and notification fixes** — Update checks no longer repeat during a download, split Markdown exports use independent directories, and workflow-completion notifications keep the full title.
 >

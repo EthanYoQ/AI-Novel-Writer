@@ -23,7 +23,8 @@ const EFFORT_RANK: Readonly<Record<ReasoningEffort, number>> = {
   low: 1,
   medium: 2,
   high: 3,
-  max: 4,
+  xhigh: 4,
+  max: 5,
 }
 
 function providerDirective(
@@ -31,8 +32,13 @@ function providerDirective(
   effective: EffectiveReasoningEffort,
 ): ProviderReasoningDirective | undefined {
   const value = mapping.providerValues[effective]
+  if (mapping.adapter === 'siliconflow-v4-thinking') {
+    return (effective === 'high' || effective === 'max') && value === effective
+      ? { adapter: mapping.adapter, reasoningEffort: effective }
+      : undefined
+  }
   if (mapping.adapter === 'openai-reasoning-effort') {
-    return value === 'low' || value === 'medium' || value === 'high'
+    return typeof value === 'string' && value.trim().length > 0
       ? { adapter: mapping.adapter, reasoningEffort: value }
       : undefined
   }
@@ -40,11 +46,12 @@ function providerDirective(
     if (effective === 'off' && value === 'disabled') {
       return { adapter: mapping.adapter, thinking: 'disabled' }
     }
-    return (effective === 'low' || effective === 'high' || effective === 'max') && value === effective
+    if (effective !== 'off' && value === 'enabled') return { adapter: mapping.adapter, thinking: 'enabled' }
+    return effective !== 'off' && (value === 'low' || value === 'high' || value === 'max')
       ? {
           adapter: mapping.adapter,
           thinking: 'enabled',
-          reasoningEffort: effective,
+          reasoningEffort: value,
         }
       : undefined
   }
@@ -67,7 +74,7 @@ function closestEffectiveEffort(
   const supported = [...mapping.supportedEfforts]
     .sort((left, right) => EFFORT_RANK[left] - EFFORT_RANK[right])
   if (supported.length === 0) return null
-  if (requested === 'off') return { effective: supported[0], status: 'forced' }
+  if (requested === 'off') return null
 
   const lowerOrEqual = supported.filter(effort => EFFORT_RANK[effort] <= EFFORT_RANK[requested])
   return {
@@ -100,6 +107,17 @@ export function resolveReasoningPolicy(input: {
     : override
   const mapping = resolveModelProfileReasoningMapping(input.model)
   if (!mapping) return { requested, effective: null, status: 'unsupported', source }
+  // Only explicitly selected application budgets are defined for this Qwen integration.
+  if (!input.model.reasoningMapping && input.model.modelName === 'Qwen/Qwen3.8-27B'
+    && (source !== 'model-override' || requested !== 'medium' && requested !== 'off')) {
+    return { requested, effective: null, status: 'unsupported', source }
+  }
+  // Only explicit, documented SiliconFlow choices are supported. Preserve
+  // automatic requests and never force off/low/medium up to high.
+  if (!input.model.reasoningMapping && mapping.adapter === 'siliconflow-v4-thinking'
+    && (source !== 'model-override' || requested !== 'high' && requested !== 'max')) {
+    return { requested, effective: null, status: 'unsupported', source }
+  }
 
   const resolved = closestEffectiveEffort(requested, mapping)
   if (!resolved) return { requested, effective: null, status: 'unsupported', source }

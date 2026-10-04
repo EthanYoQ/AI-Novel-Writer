@@ -1,0 +1,12 @@
+{
+  "key": "assistant_writing_identity",
+  "writingLanguage": "zh-CN",
+  "name": "作者项目写作身份",
+  "description": "此项目的作者写作身份",
+  "systemRole": "你是此项目的写作助手_963f7544-00e1-4d4c-9b8e-9b758415dbc5。",
+  "taskGuidance": "遵守作者已确认的旧港档案设定。",
+  "content": "{{mode_instruction}}",
+  "variables": {
+    "mode_instruction": "当前助手工作模式说明"
+  }
+}

@@ -1,12 +1,12 @@
+import { openCanonicalProjectFixture } from '../../test/helpers/canonical-project-fixture'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, initProjectDatabase } from '../database'
+import { closeProjectDatabase } from '../database'
 import { chunkText } from '../embedding'
-import { importReferenceText } from '../knowledge-base'
+import { importReferenceText, importText, searchKnowledgeFTS } from '../knowledge-base'
 import { ImportRunRepository } from '../repositories/import-run-repository'
 import {
   addChunks,
@@ -68,8 +68,8 @@ function authorizedReference(content: string, sourceIdentity: string) {
 
 beforeEach(() => {
   authorizedRunIndex = 0
-  projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-reference-receipt-'))
-  initProjectDatabase(projectPath)
+  projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-reference-receipt-'))
+  openCanonicalProjectFixture(projectPath)
 })
 
 afterEach(() => {
@@ -298,6 +298,30 @@ describe('stable reference knowledge receipt', () => {
       expect.objectContaining({ id: first.docId, corpusKind: 'reference' }),
       expect.objectContaining({ id: second.docId, corpusKind: 'reference' }),
     ]))
+  })
+
+  it('keeps a same-name reference when finalized text is imported and reimported', async () => {
+    const fileName = 'Chapter 1.txt'
+    const reference = await authorizedReference('独立参照红帆', 'reference-red-sail').import(fileName)
+    expect(reference).toMatchObject({ success: true })
+
+    const first = await importText('定稿旧灯塔', fileName, projectPath, 'openai', model)
+    expect(first).toMatchObject({ success: true })
+    expect(await getDocumentIntegrity(projectPath, reference.docId!)).toMatchObject({ complete: true, corpusKind: 'reference' })
+    expect(await searchKnowledgeFTS('独立参照红帆', projectPath)).not.toEqual([])
+
+    const second = await importText('定稿新灯塔', fileName, projectPath, 'openai', model)
+    expect(second).toMatchObject({ success: true })
+    const documents = await listDocuments(projectPath)
+    expect(documents).toHaveLength(2)
+    expect(documents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: reference.docId, corpusKind: 'reference' }),
+      expect.objectContaining({ id: second.docId, corpusKind: 'project-knowledge' }),
+    ]))
+    expect(await getDocumentIntegrity(projectPath, first.docId!)).toBeNull()
+    expect(await searchKnowledgeFTS('独立参照红帆', projectPath)).not.toEqual([])
+    expect(await searchKnowledgeFTS('定稿旧灯塔', projectPath)).toEqual([])
+    expect(await searchKnowledgeFTS('定稿新灯塔', projectPath)).not.toEqual([])
   })
 
   it('does not trust a commit marker when the vector document is half-written', async () => {

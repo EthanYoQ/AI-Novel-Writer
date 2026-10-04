@@ -21,6 +21,7 @@ import { createChapterWorkflow } from './chapter-workflow'
 import { createDirectoryWorkflow, type DirectoryWorkflowParams } from './directory-workflow'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 import type { Locale } from '../../i18n/types'
+import type { AgentToolActionRef } from '../../shared/agent-generation'
 
 export type CreativeWorkflowName =
   | 'generate_draft'
@@ -42,6 +43,7 @@ export type CreativeIntent =
       resumeSynopsis?: ArchitectureWorkflowParams['resumeSynopsis']
       /** 从输出长度中断的候选续写世界观。 */
       resumeWorldBuilding?: ArchitectureWorkflowParams['resumeWorldBuilding']
+      expectedRecoveryHandle?: ArchitectureWorkflowParams['expectedRecoveryHandle']
     }
   | { workflow: 'generate_blueprint'; params?: DirectoryWorkflowParams }
   | { workflow: 'review' | 'refine' | 'finalize'; chapterNumber: number }
@@ -61,6 +63,7 @@ export interface CreativeWorkflowLaunchReceipt {
  * tool arguments.
  */
 export interface CreativeWorkflowLaunchOptions {
+  readonly agentToolAction?: AgentToolActionRef
   readonly generationModelId?: string
   /** Last caller-owned cancellation gate before authoritative registration. */
   readonly assertActive?: () => void
@@ -128,6 +131,7 @@ async function definitionFor(
       synopsisRange: intent.synopsisRange ?? null,
       resumeSynopsis: intent.resumeSynopsis,
       resumeWorldBuilding: intent.resumeWorldBuilding,
+      expectedRecoveryHandle: intent.expectedRecoveryHandle,
     }, uiLocale)
   }
   if (intent.workflow === 'generate_blueprint') {
@@ -170,9 +174,22 @@ export async function launchCreativeWorkflow(
   projectSession: ProjectSessionContext,
   options: CreativeWorkflowLaunchOptions = {},
 ): Promise<CreativeWorkflowLaunchReceipt> {
-  const generationModelId = options.generationModelId?.trim() || undefined
+  let generationModelId = options.generationModelId?.trim() || undefined
   const uiLocale = useLocaleStore.getState().locale
   currentProjectFor(projectSession)
+  const registration = options.agentToolAction ? await ipc.invokeWithProjectSession(projectSession, 'agent-generation:register-workflow', { ref: options.agentToolAction }) : undefined
+  if (registration) {
+    if (intent.workflow !== registration.workflow || intent.workflow === 'generate_draft' && intent.chapterNumber !== registration.chapterNumber
+      || generationModelId && generationModelId !== registration.modelId) throw new Error('GENERATION_AGENT_WORKFLOW_INTENT_CHANGED')
+    generationModelId = registration.modelId
+    const state = useWorkflowStore.getState()
+    const existing = state.activeRuns.find(run => run.id === registration.registrationId) ?? state.history.find(run => run.id === registration.registrationId)
+    if (existing || registration.childHandles.length) {
+      if (existing && !sameProjectSessionContext(existing.projectSession, projectSession)) throw new Error('GENERATION_AGENT_WORKFLOW_RECOVERY_REQUIRED')
+      return Object.freeze({ accepted: true, workflow: registration.workflow, projectPath: projectSession.projectPath,
+        projectSession: Object.freeze({ ...projectSession }), runId: registration.registrationId, status: existing?.status ?? 'waiting' })
+    }
+  }
   await guardIntent(intent, projectSession, uiLocale)
   currentProjectFor(projectSession)
   const definition = await definitionFor(
@@ -183,14 +200,26 @@ export async function launchCreativeWorkflow(
   )
   currentProjectFor(projectSession)
 
+  // Definition loading can yield. A concurrent replay may have registered the
+  // same main-issued workflow while this caller was awaiting its definition.
+  if (registration) {
+    const state = useWorkflowStore.getState()
+    const existing = state.activeRuns.find(run => run.id === registration.registrationId) ?? state.history.find(run => run.id === registration.registrationId)
+    if (existing) {
+      if (!sameProjectSessionContext(existing.projectSession, projectSession)) throw new Error('GENERATION_AGENT_WORKFLOW_RECOVERY_REQUIRED')
+      return Object.freeze({ accepted: true, workflow: registration.workflow, projectPath: projectSession.projectPath,
+        projectSession: Object.freeze({ ...projectSession }), runId: registration.registrationId, status: existing.status })
+    }
+  }
   const conflict = useWorkflowStore.getState().getResourceConflict(definition)
   if (conflict) {
     throw new Error(workflowResourceConflictMessage(uiLocale, conflict.title))
   }
 
-  const runId = randomUUID()
+  const runId = registration?.registrationId ?? randomUUID()
   options.assertActive?.()
-  const completion = useWorkflowStore.getState().startWorkflow({ ...definition, runId, uiLocale })
+  const completion = useWorkflowStore.getState().startWorkflow({ ...definition, runId, uiLocale,
+    ...(generationModelId ? { generationModelId } : {}), ...(registration ? { agentWorkflowRegistration: registration } : {}) })
   void completion.catch((error) => {
     useWorkflowStore.getState().addLog(
       'error',

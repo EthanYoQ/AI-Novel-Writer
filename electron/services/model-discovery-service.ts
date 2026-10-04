@@ -107,7 +107,18 @@ function parseOpenAIModels(payload: unknown, credential: string): DiscoveredMode
     if (!name) return null
     if (seenValues.has(id)) continue
     seenValues.add(id)
-    models.push({ id, name, value: id })
+    const raw = item as Record<string, unknown>
+    const flags = raw.capabilities && typeof raw.capabilities === 'object'
+      ? raw.capabilities as Record<string, unknown> : {}
+    const capabilities: NonNullable<DiscoveredModel['capabilities']> = {}
+    const context = raw.context_window ?? raw.context_length
+    if (typeof context === 'number' && Number.isSafeInteger(context) && context > 0) capabilities.contextWindowTokens = context
+    const output = raw.max_output_tokens
+    if (typeof output === 'number' && Number.isSafeInteger(output) && output > 0) capabilities.maxOutputTokens = output
+    for (const key of ['reasoning', 'structuredOutput', 'usage'] as const) {
+      if (typeof flags[key] === 'boolean') capabilities[key] = flags[key]
+    }
+    models.push({ id, name, value: id, ...(Object.keys(capabilities).length ? { capabilities } : {}) })
   }
   return models
 }

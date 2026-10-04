@@ -1,9 +1,11 @@
+import { prepareCanonicalStorageFixture } from '../../../test/helpers/canonical-project-fixture'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type BetterSqlite3 from 'better-sqlite3'
+import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY } from '../../../src/shared/project-format'
 
 import { getCurrentProjectPath, getProjectDb } from '../../database'
 import { BlueprintRepository } from '../blueprint-repository'
@@ -13,7 +15,8 @@ import { ProjectClearRepository } from '../project-clear-repository'
 import { ProjectCoreRepository } from '../project-core-repository'
 import type { CharacterRosterCommitRequest } from '../../../src/shared/character-roster'
 
-vi.mock('../../database', () => ({
+vi.mock('../../database', async importOriginal => ({
+  ...await importOriginal<typeof import('../../database')>(),
   getCurrentProjectPath: vi.fn(),
   getProjectDb: vi.fn(),
 }))
@@ -224,7 +227,7 @@ describe('project clear repositories', () => {
   it('removes generated root chapter txt files when generated text is cleared', () => {
     const db = createMockDb()
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-clear-'))
-    fs.mkdirSync(path.join(projectPath, '.vela'), { recursive: true })
+    prepareCanonicalStorageFixture(projectPath)
     const generatedFile = path.join(projectPath, '第1章 夜航.txt')
     const generatedFileWithoutTitle = path.join(projectPath, '第2章.txt')
     const userFile = path.join(projectPath, '参考小说.txt')
@@ -240,7 +243,7 @@ describe('project clear repositories', () => {
       expect(fs.existsSync(generatedFile)).toBe(false)
       expect(fs.existsSync(generatedFileWithoutTitle)).toBe(false)
       expect(fs.existsSync(userFile)).toBe(true)
-      expect(fs.existsSync(path.join(projectPath, '.vela', 'trash'))).toBe(true)
+      expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'trash'))).toBe(true)
       expect(result.physicalFilesDeleted).toBe(2)
     } finally {
       fs.rmSync(projectPath, { recursive: true, force: true })
@@ -254,7 +257,7 @@ describe('project clear repositories', () => {
       transaction: vi.fn(() => () => { throw new Error('db failed') }),
     }
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-clear-rollback-'))
-    fs.mkdirSync(path.join(projectPath, '.vela'), { recursive: true })
+    prepareCanonicalStorageFixture(projectPath)
     const generatedFile = path.join(projectPath, '第3章 回滚.txt')
     fs.writeFileSync(generatedFile, 'chapter three')
     vi.mocked(getProjectDb).mockReturnValue(db as never)
@@ -264,6 +267,43 @@ describe('project clear repositories', () => {
       expect(() => ProjectClearRepository.clearGeneratedData({ generatedText: true })).toThrow('db failed')
       expect(fs.existsSync(generatedFile)).toBe(true)
     } finally {
+      fs.rmSync(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('does not restore chapter files after a committed clear when trash cleanup fails', () => {
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-clear-committed-'))
+    prepareCanonicalStorageFixture(projectPath)
+    const db = new Database(path.join(projectPath, CANONICAL_PROJECT_DIRECTORY, CANONICAL_PROJECT_DATABASE))
+    const generatedFile = path.join(projectPath, '第1章 夜航.txt')
+    fs.writeFileSync(generatedFile, 'chapter one')
+    DraftRepository.create({ chapterNumber: 1, source: 'write', content: 'chapter one', wordCount: 11 }, db)
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    vi.mocked(getCurrentProjectPath).mockReturnValue(projectPath)
+    const remove = fs.rmSync.bind(fs)
+    let cleanupAttempted = false
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const removeSpy = vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      if (String(target).startsWith(path.join(projectPath, '.ai-novel', 'trash'))) {
+        cleanupAttempted = true
+        throw new Error('trash cleanup denied')
+      }
+      return remove(target, options)
+    })
+
+    try {
+      let failure: unknown
+      let result: ReturnType<typeof ProjectClearRepository.clearGeneratedData> | undefined
+      try { result = ProjectClearRepository.clearGeneratedData({ generatedText: true }) } catch (error) { failure = error }
+      expect(cleanupAttempted).toBe(true)
+      expect(db.prepare('SELECT COUNT(*) AS count FROM drafts').get()).toEqual({ count: 0 })
+      expect(fs.existsSync(generatedFile)).toBe(false)
+      expect(failure).toBeUndefined()
+      expect(result?.physicalFilesDeleted).toBe(0)
+    } finally {
+      removeSpy.mockRestore()
+      warnSpy.mockRestore()
+      db.close()
       fs.rmSync(projectPath, { recursive: true, force: true })
     }
   })

@@ -32,6 +32,7 @@ import { requireIpcSuccess } from '../../services/ipc-result'
 import type { ExpectedDraftSource, ModelProfile } from '../../shared/ipc-channels'
 import { resolveWritingLanguage, type WritingLanguage } from '../../shared/writing-language'
 import { parseChapterGoalReview, type ChapterGoalReview } from '../../shared/chapter-goal-review'
+import type { ReviewCycleProjection, ReviewFindingStatus } from '../../shared/review-cycle'
 import {
   createHumanConfirmedReviewSnapshot,
   hasIncludedReviewItems,
@@ -52,6 +53,7 @@ interface ReviewIssue {
   quote?: string
   stableFactKey?: string
   sourceChapter?: number
+  findingId?: string
 }
 
 /** AI 返回的 JSON 审稿结构 */
@@ -65,6 +67,7 @@ interface ReviewJSON {
     quote?: string
     stableFactKey?: string
     sourceChapter?: number
+    findingId?: string
   }>
   summary: string
 }
@@ -82,11 +85,15 @@ interface ReviewReportProps {
   reviewId?: number
   /** 审稿与草稿所属项目。 */
   projectKey: string
+  /** Optional persisted cycle state; merge committed is deliberately not a resolved finding. */
+  cycle?: ReviewCycleProjection | null
 }
 
 interface EditableReviewItem extends HumanConfirmedReviewItem {
   id: string
+  reviewItemIndex: number
   severity: ReviewIssue['severity']
+  findingStatus?: ReviewFindingStatus
 }
 
 interface ConfirmedChecklist {
@@ -144,6 +151,7 @@ function parseReport(text: string, fallbackCategory: string): { issues: ReviewIs
           sourceChapter: Number.isSafeInteger(item.sourceChapter) && Number(item.sourceChapter) > 0
             ? item.sourceChapter
             : undefined,
+          findingId: typeof item.findingId === 'string' ? item.findingId : undefined,
         }))
         return { issues, summary: data.summary || '', goalReview: parseChapterGoalReview(data.goalReview) ?? undefined }
       }
@@ -301,27 +309,42 @@ function isReviewId(value: number | undefined): value is number {
 function editableItemsFromReview(
   issues: ReviewIssue[],
   snapshot: HumanConfirmedReviewSnapshot | null,
+  cycle?: ReviewCycleProjection | null,
 ): EditableReviewItem[] {
   if (snapshot) {
-    return snapshot.items.map((item, index) => ({
-      ...item,
-      id: item.origin + '-' + (index + 1),
-      severity: normalizeSeverity(item.severity),
-    }))
+    return snapshot.items.map((item, index) => {
+      const finding = cycle?.findings.find(candidate => candidate.findingId === item.findingId)
+      return {
+        ...item,
+        id: item.origin + '-' + (index + 1),
+        reviewItemIndex: index,
+        severity: normalizeSeverity(item.severity),
+        decision: finding?.status === 'author-waived' ? 'waive' : item.decision,
+        findingStatus: item.decision === 'waive' ? 'author-waived' : finding?.status,
+      }
+    })
   }
 
-  return issues.map((issue, index) => ({
-    id: 'ai-' + (index + 1),
-    category: issue.category,
-    severity: issue.severity,
-    description: issue.description,
-    ...(issue.quote ? { quote: issue.quote } : {}),
-    ...(issue.stableFactKey ? { stableFactKey: issue.stableFactKey } : {}),
-    ...(issue.sourceChapter ? { sourceChapter: issue.sourceChapter } : {}),
-    ...(issue.goalId ? { goalId: issue.goalId } : {}),
-    decision: !issue.goalId && (issue.severity === 'error' || issue.severity === 'warning') ? 'apply' : 'ignore',
-    origin: 'ai',
-  }))
+  return issues.map((issue, index) => {
+    const finding = cycle?.findings.find(candidate => candidate.reviewItemIndex === index)
+    return {
+      id: 'ai-' + (index + 1),
+      reviewItemIndex: index,
+      category: issue.category,
+      severity: issue.severity,
+      description: issue.description,
+      ...(issue.quote ? { quote: issue.quote } : {}),
+      ...(issue.stableFactKey ? { stableFactKey: issue.stableFactKey } : {}),
+      ...(issue.sourceChapter ? { sourceChapter: issue.sourceChapter } : {}),
+      ...(issue.goalId ? { goalId: issue.goalId } : {}),
+      ...(issue.findingId || finding?.findingId ? { findingId: issue.findingId ?? finding?.findingId } : {}),
+      findingStatus: finding?.status,
+      decision: finding?.status === 'author-waived'
+        ? 'waive'
+        : !issue.goalId && (issue.severity === 'error' || issue.severity === 'warning') ? 'apply' : 'ignore',
+      origin: 'ai' as const,
+    }
+  })
 }
 
 function confirmationSourceReviewId(
@@ -346,17 +369,51 @@ function matchesReviewSource(
 /** 审稿报告查看器 */
 export default function ReviewReport(props: ReviewReportProps) {
   const snapshot = parseHumanConfirmedReviewSnapshot(props.reportText)
+  const cycleReviewId = confirmationSourceReviewId(snapshot, props.reviewId)
+  const [loadedCycle, setLoadedCycle] = useState<ReviewCycleProjection | null>(props.cycle ?? null)
+
+  const reloadCycle = async (): Promise<ReviewCycleProjection | null> => {
+    if (!isReviewId(cycleReviewId)) return null
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, props.projectKey)) return null
+    const cycle = await ipc.invokeWithProjectSession(projectSession, 'db:review-cycle-get', cycleReviewId,
+      projectSession.projectPath)
+    if (isProjectSessionCurrent(projectSession)) setLoadedCycle(cycle)
+    return cycle
+  }
+
+  useEffect(() => {
+    if (props.cycle !== undefined || !isReviewId(cycleReviewId)) return
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, props.projectKey)) return
+    let cancelled = false
+    void (async () => {
+      const cycle = await ipc.invokeWithProjectSession(projectSession, 'db:review-cycle-get', cycleReviewId,
+        projectSession.projectPath)
+      if (!cancelled && isProjectSessionCurrent(projectSession)) setLoadedCycle(cycle)
+    })()
+    return () => { cancelled = true }
+  }, [cycleReviewId, props.cycle, props.projectKey])
+
+  const resolvedCycle = props.cycle !== undefined ? props.cycle : loadedCycle
+  const cycleKey = resolvedCycle
+    ? resolvedCycle.cycleId + ':' + resolvedCycle.revisionStatus + ':'
+      + resolvedCycle.findings.map(finding => finding.findingId + ':' + finding.status).join(',')
+    : 'no-cycle'
   const reportKey = String(props.reviewId ?? 'untracked')
     + ':' + String(snapshot?.sourceReviewId ?? 'raw')
+    + ':' + cycleKey
     + ':' + props.reportText
 
   // A report tab can update in place. A keyed session resets its editable
   // checklist only when the underlying immutable report changes.
-  return <ReviewReportSession key={reportKey} {...props} initialSnapshot={snapshot} />
+  return <ReviewReportSession key={reportKey} {...props} cycle={resolvedCycle}
+    initialSnapshot={snapshot} reloadCycle={reloadCycle} />
 }
 
 interface ReviewReportSessionProps extends ReviewReportProps {
   initialSnapshot: HumanConfirmedReviewSnapshot | null
+  reloadCycle: () => Promise<ReviewCycleProjection | null>
 }
 
 function ReviewReportSession({
@@ -367,6 +424,8 @@ function ReviewReportSession({
   projectKey,
   reviewId,
   initialSnapshot,
+  cycle,
+  reloadCycle,
 }: ReviewReportSessionProps) {
   const text = useLocaleStore(s => s.text)
   const writingLanguage = useProjectStore(s => resolveWritingLanguage(
@@ -376,7 +435,7 @@ function ReviewReportSession({
   ))
   const parsedReport = parseReport(reportText, text('综合检查', 'General review'))
   const [items, setItems] = useState<EditableReviewItem[]>(() => (
-    editableItemsFromReview(parsedReport.issues, initialSnapshot)
+    editableItemsFromReview(parsedReport.issues, initialSnapshot, cycle)
   ))
   const [authorGuidance, setAuthorGuidance] = useState(() => initialSnapshot?.authorGuidance ?? '')
   const [confirmed, setConfirmed] = useState<ConfirmedChecklist | null>(() => (
@@ -393,6 +452,8 @@ function ReviewReportSession({
   const [confirming, setConfirming] = useState(false)
   const [showRevisionDialog, setShowRevisionDialog] = useState(false)
   const [processing, setProcessing] = useState(false)
+  const [rechecking, setRechecking] = useState(false)
+  const [recheckMessage, setRecheckMessage] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [showLegend, setShowLegend] = useState(false)
   const sourceReviewId = confirmationSourceReviewId(initialSnapshot, reviewId)
   const summary = initialSnapshot?.summary ?? parsedReport.summary
@@ -427,7 +488,7 @@ function ReviewReportSession({
       const restoredSnapshot = parseHumanConfirmedReviewSnapshot(latestReview.content)
       if (!restoredSnapshot || restoredSnapshot.sourceReviewId !== reviewId) return
 
-      setItems(editableItemsFromReview([], restoredSnapshot))
+      setItems(editableItemsFromReview([], restoredSnapshot, cycle))
       setAuthorGuidance(restoredSnapshot.authorGuidance)
       setConfirmed({
         reviewSourceId: latestReview.id,
@@ -440,7 +501,7 @@ function ReviewReportSession({
     return () => {
       cancelled = true
     }
-  }, [chapterDir, draftPath, initialSnapshot, projectKey, reviewId])
+  }, [chapterDir, cycle, draftPath, initialSnapshot, projectKey, reviewId])
 
   // 按分类分组
   const categories = new Map<string, EditableReviewItem[]>()
@@ -471,6 +532,7 @@ function ReviewReportSession({
         ...current,
         {
           id: 'author-' + Date.now() + '-' + (authorItemCount + 1),
+          reviewItemIndex: current.length,
           category: text('作者补充', 'Author note'),
           severity: 'warning',
           description: '',
@@ -563,22 +625,29 @@ function ReviewReportSession({
       const snapshot = createHumanConfirmedReviewSnapshot({
         sourceReviewId,
         sourceDraft: sourceReview.sourceDraft,
+        ...(cycle?.cycleId || initialSnapshot?.cycleId
+          ? { cycleId: cycle?.cycleId ?? initialSnapshot?.cycleId }
+          : {}),
         summary,
         authorGuidance,
         ...(goalReview ? { goalReview } : {}),
-        items: items.map(({
-          category, severity, description, quote, stableFactKey, sourceChapter, goalId, decision, origin,
-        }) => ({
-          category,
-          severity,
-          description,
-          ...(quote?.trim() ? { quote: quote.trim() } : {}),
-          ...(stableFactKey ? { stableFactKey } : {}),
-          ...(sourceChapter ? { sourceChapter } : {}),
-          ...(goalId ? { goalId } : {}),
-          decision,
-          origin,
-        })),
+        items: items.map((item) => {
+          const findingId = item.findingId ?? (item.origin === 'ai'
+            ? cycle?.findings.find(finding => finding.reviewItemIndex === item.reviewItemIndex)?.findingId
+            : undefined)
+          return {
+            category: item.category,
+            severity: item.severity,
+            description: item.description,
+            ...(item.quote?.trim() ? { quote: item.quote.trim() } : {}),
+            ...(item.stableFactKey ? { stableFactKey: item.stableFactKey } : {}),
+            ...(item.sourceChapter ? { sourceChapter: item.sourceChapter } : {}),
+            ...(item.goalId ? { goalId: item.goalId } : {}),
+            ...(findingId ? { findingId } : {}),
+            decision: item.decision,
+            origin: item.origin,
+          }
+        }),
       })
       if (!snapshot) {
         setChecklistError(text(
@@ -596,11 +665,12 @@ function ReviewReportSession({
       )
       if (!isProjectSessionCurrent(projectSession)) return
       const content = serializeHumanConfirmedReviewSnapshot(snapshot)
-      const createResponse = await ipc.invokeWithProjectSession(projectSession, 'db:review-create', {
+        const createResponse = await ipc.invokeWithProjectSession(projectSession, 'db:review-create', {
           baseDraftId: draftMeta.id,
           reviewIndex,
           content,
           expectedSource: sourceReview.sourceDraft,
+          ...(cycle?.cycleId ? { reviewCycleId: cycle.cycleId } : {}),
         }, projectSession.projectPath)
       if (createResponse.errorCode === 'SOURCE_DRAFT_CHANGED') {
         throw new Error(text(
@@ -759,12 +829,96 @@ function ReviewReportSession({
     }
   }
 
+  const retryRequiredRecheck = async () => {
+    if (!cycle || cycle.revisionStatus !== 'merge-committed' || cycle.recheckDisposition !== 'required'
+      || !cycle.mergedHash || !draftPath) return
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+      setRecheckMessage({ kind: 'error', text: text(
+        '当前项目会话已失效，请重新打开项目后重试复验。',
+        'The project session is no longer active. Reopen the project and retry the recheck.',
+      ) })
+      return
+    }
+    setRechecking(true)
+    setRecheckMessage(null)
+    try {
+      const [{ createReviewOnlyWorkflow, parseDraftMeta }, { readDraftBody }, { useWorkflowStore }, { useEditorStore }] = await Promise.all([
+        import('../../services/workflows/chapter-workflow'),
+        import('../../stores/draft-store'),
+        import('../../stores/workflow-store'),
+        import('../../stores/editor-store'),
+      ])
+      if (!isProjectSessionCurrent(projectSession)) return
+      const [draftMeta, draftContent] = await Promise.all([
+        parseDraftMeta(draftPath, projectSession.projectPath, projectSession),
+        readDraftBody(draftPath, projectSession.projectPath, projectSession),
+      ])
+      if (!isProjectSessionCurrent(projectSession)) return
+      if (!draftMeta || !draftContent) throw new Error(text(
+        '关联的合并稿不可读，无法启动复验。',
+        'The merged draft cannot be read, so the recheck was not started.',
+      ))
+      const draftTab = useEditorStore.getState().tabs.find(tab => (
+        tab.projectKey === projectSession.projectPath && tab.filePath === draftPath
+      ))
+      const workflow = createReviewOnlyWorkflow({
+        projectPath: projectSession.projectPath,
+        chapterNumber: draftMeta.chapterNumber,
+        chapterTitle: draftMeta.chapterTitle || text(`第${draftMeta.chapterNumber}章`, `Chapter ${draftMeta.chapterNumber}`),
+        draftPath,
+        draftContent,
+        sourceDraft: { id: draftMeta.id, chapterNumber: draftMeta.chapterNumber, version: draftMeta.version,
+          status: draftMeta.status, contentRevision: draftTab?.contentRevision ?? 0 },
+        reviewCycleId: cycle.cycleId,
+        expectedMergedHash: cycle.mergedHash,
+      }, projectSession)
+      const workflowStore = useWorkflowStore.getState()
+      const conflict = workflowStore.getResourceConflict(workflow)
+      if (conflict) throw new Error(text(
+        `复验暂未启动：任务“${conflict.title}”正在占用本章。`,
+        `The recheck was not started because “${conflict.title}” is using this chapter.`,
+      ))
+      const runId = await workflowStore.startWorkflow(workflow, false)
+      if (!isProjectSessionCurrent(projectSession)) return
+      const run = useWorkflowStore.getState().history.find(candidate => candidate.id === runId)
+      if (!run || run.status !== 'completed') throw new Error(run?.error || text(
+        '复验任务未完成；可在修复模型或资源问题后再次重试。',
+        'The recheck did not complete. Fix the model or resource issue and retry.',
+      ))
+      const refreshed = await reloadCycle()
+      if (!isProjectSessionCurrent(projectSession)) return
+      if (refreshed?.recheckDisposition !== 'completed') throw new Error(text(
+        '复验已运行，但持久化状态仍未完成，请重试。',
+        'The recheck ran, but its persisted state is still incomplete. Retry it.',
+      ))
+      setRecheckMessage({ kind: 'success', text: text('合并后复验已完成。', 'The post-merge recheck is complete.') })
+    } catch (error) {
+      if (isProjectSessionCurrent(projectSession)) setRecheckMessage({ kind: 'error', text: error instanceof Error
+        ? error.message : text('启动合并后复验时发生错误。', 'An error occurred while starting the post-merge recheck.') })
+    } finally {
+      if (isProjectSessionCurrent(projectSession)) setRechecking(false)
+    }
+  }
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-4">
         {/* 统计栏 */}
         <div className="flex items-center gap-4 mb-4 pb-3 border-b border-[var(--color-border)]">
           <h3 className="text-base font-bold text-[var(--color-text)]">{text('审稿报告', 'Review report')}</h3>
+          {cycle && (
+            <span
+              data-review-cycle-status={cycle.revisionStatus}
+              className="rounded border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]"
+            >
+              {cycle.revisionStatus === 'generated'
+                ? text('修稿已生成', 'Revision generated')
+                : cycle.revisionStatus === 'merge-committed'
+                  ? text('合并已提交', 'Merge committed')
+                  : text('尚未生成修稿', 'Revision not generated')}
+            </span>
+          )}
           <div className="flex items-center gap-3 text-xs ml-auto">
             {errorCount > 0 && (
               <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/20 text-[var(--color-error-text)]">
@@ -850,6 +1004,27 @@ function ReviewReportSession({
                 : text('本章目标检查不完整，尚有待核实项。', 'Chapter goal review is incomplete and needs verification.')}
           </p>
         )}
+        {cycle?.revisionStatus === 'merge-committed' && cycle.recheckDisposition === 'required' && (
+          <section className="mb-4 rounded-lg border border-[var(--color-warning-border)] p-3 text-xs">
+            <p className="text-[var(--color-warning-text)]">
+              {text(
+                '合并已持久化，但定向复验尚未完成。关闭或重开后仍可从这里继续。',
+                'The merge is durable, but the targeted recheck is incomplete. You can resume it here after reopening.',
+              )}
+            </p>
+            <Button className="mt-2" variant="outline" size="sm" onClick={retryRequiredRecheck} disabled={rechecking}>
+              <RotateCcw size={12} />
+              {rechecking ? text('正在复验…', 'Rechecking…') : text('重试合并后复验', 'Retry post-merge recheck')}
+            </Button>
+          </section>
+        )}
+        {recheckMessage && (
+          <p role={recheckMessage.kind === 'error' ? 'alert' : 'status'}
+            className={cn('mb-4 text-xs', recheckMessage.kind === 'error'
+              ? 'text-[var(--color-error-text)]' : 'text-[var(--color-success-text)]')}>
+            {recheckMessage.text}
+          </p>
+        )}
         {/* 分类展示 */}
         {items.length === 0 ? (
           <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
@@ -873,6 +1048,26 @@ function ReviewReportSession({
                     const isPass = item.severity === 'pass'
                     const goal = goalReview?.items.find(goal => goal.id === item.goalId)
                     const isEmptyAuthorIssue = item.origin === 'author' && !item.description.trim()
+                    const projectedFinding = cycle?.findings.find(finding => (
+                      item.findingId
+                        ? finding.findingId === item.findingId
+                        : finding.reviewItemIndex === item.reviewItemIndex
+                    ))
+                    const findingId = item.findingId ?? projectedFinding?.findingId
+                    const findingStatus = item.decision === 'waive'
+                      ? 'author-waived'
+                      : projectedFinding?.status ?? item.findingStatus
+                    const findingStatusLabel = findingStatus === 'resolved'
+                      ? text('已解决', 'Resolved')
+                      : findingStatus === 'unresolved'
+                        ? text('未解决', 'Unresolved')
+                        : findingStatus === 'unknown'
+                          ? text('待核实', 'Unknown')
+                          : findingStatus === 'author-waived'
+                            ? text('作者带建议完成', 'Author waived')
+                            : findingStatus === 'unverified'
+                              ? text('未验证', 'Unverified')
+                              : null
                     return (
                       <div
                         key={item.id}
@@ -884,6 +1079,14 @@ function ReviewReportSession({
                         <div className="flex items-start gap-2">
                           <SeverityIcon severity={item.severity} />
                           <div className="flex-1 min-w-0 space-y-2">
+                            {findingStatusLabel && (
+                              <span
+                                data-review-finding-status={findingStatus}
+                                className="inline-flex rounded border border-[var(--color-border)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-secondary)]"
+                              >
+                                {findingStatusLabel}
+                              </span>
+                            )}
                             {goal && (
                               <div className="space-y-1" aria-label={text('本章目标与证据', 'Chapter goal and evidence')}>
                                 <p className="font-medium">
@@ -972,7 +1175,9 @@ function ReviewReportSession({
                                 <span className={cn('text-[0.7rem]', meta.colorClass)}>
                                   {item.decision === 'apply'
                                     ? text('已纳入本次修稿', 'Included in this revision')
-                                    : text('已忽略，不会传给模型', 'Ignored; not sent to the model')}
+                                    : item.decision === 'waive'
+                                      ? text('作者已带建议完成，不会传给模型', 'Author waived; not sent to the model')
+                                      : text('已忽略，不会传给模型', 'Ignored; not sent to the model')}
                                 </span>
                                 <div className="flex items-center gap-1">
                                   <Button
@@ -989,6 +1194,21 @@ function ReviewReportSession({
                                       ? text('忽略', 'Ignore')
                                       : item.goalId || item.severity === 'unknown' ? text('明确纳入修稿', 'Explicitly include in revision') : text('恢复', 'Restore')}
                                   </Button>
+                                  {item.origin === 'ai' && findingId && findingStatus !== 'resolved' && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      title={text('作者显式豁免（waive）', 'Explicit author waiver')}
+                                      onClick={() => updateItem(item.id, {
+                                        decision: item.decision === 'waive' ? 'ignore' : 'waive',
+                                      })}
+                                    >
+                                      <FileCheck2 size={12} />
+                                      {item.decision === 'waive'
+                                        ? text('取消带建议完成', 'Cancel waiver')
+                                        : text('带建议完成', 'Complete with advisory note')}
+                                    </Button>
+                                  )}
                                   {item.origin === 'author' && (
                                     <Button
                                       variant="ghost"

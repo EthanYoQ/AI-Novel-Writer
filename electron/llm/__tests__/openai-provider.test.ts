@@ -4,6 +4,8 @@ import { OpenAIProvider } from '../openai-provider'
 import { resolveOpenAIChatCompletionsUrl } from '../openai-compatible-endpoint'
 import { resolveGenerationParameters } from '../generation-parameter-policy'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
+import { BUILTIN_PRESETS } from '../../../src/shared/provider-presets'
+import type { GenerationTransportDiagnostics } from '../../../src/shared/generation-contract'
 
 const novelAIModel: ModelProfile = {
   id: 'novelai-test',
@@ -61,6 +63,189 @@ function sseReader(...messages: Array<string | Uint8Array>) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+it.each(['UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'private-provider-secret'])('keeps safe read-stream cause %s and distinguishes heartbeat from output', async causeCode => {
+  let clock = 0
+  vi.spyOn(performance, 'now').mockImplementation(() => clock)
+  const snapshots: GenerationTransportDiagnostics[] = [], onError = vi.fn(), onDone = vi.fn()
+  const chunks = [': heartbeat\n\n', 'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"正文"}}]}\n\n']
+  const reader = { read: vi.fn(async () => {
+    clock += 1000
+    const chunk = chunks.shift()
+    if (chunk) return { done: false, value: new TextEncoder().encode(chunk) }
+    throw new TypeError('private URL and credentials', { cause: Object.assign(new Error('private raw cause'), { code: causeCode }) })
+  }), cancel: vi.fn(async () => {}), releaseLock: vi.fn() }
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: () => reader } }))
+  await new OpenAIProvider().generateStream(novelAIModel, [], { temperature: 0, maxTokens: 512,
+    signal: new AbortController().signal, visibleOnly: true, onChunk: vi.fn(), onDone, onError,
+    onDiagnostics: value => snapshots.push(value) })
+  expect(snapshots.find(value => value.lastResponseMs === 1000)).toMatchObject({ lastOutputMs: null, visibleEvents: 0, reasoningEvents: 0 })
+  expect(snapshots.at(-1)).toMatchObject({ elapsedMs: 4000, firstResponseMs: 1000, lastResponseMs: 3000,
+    lastOutputMs: 3000, httpStatus: 200, phase: 'stream', endReason: 'failed', errorName: 'TypeError', visibleEvents: 1, reasoningEvents: 1 })
+  expect(snapshots.at(-1)?.causeCode).toBe(causeCode.startsWith('UND_ERR_') ? causeCode : undefined)
+  expect(JSON.stringify(snapshots)).not.toContain('private')
+  expect(onError).toHaveBeenCalledExactlyOnceWith('响应流未正常完成', '正文', undefined)
+  expect(onDone).not.toHaveBeenCalled()
+  expect(reader.cancel).toHaveBeenCalledOnce()
+  expect(reader.releaseLock).toHaveBeenCalledOnce()
+})
+
+it.each([false, true])('classifies AbortError from the actual caller signal (aborted=%s)', async aborted => {
+  const controller = new AbortController(), snapshots: GenerationTransportDiagnostics[] = []
+  const onError = vi.fn(), onDone = vi.fn()
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: () => ({
+    read: async () => {
+      if (aborted) controller.abort()
+      throw new DOMException('private abort origin', 'AbortError')
+    },
+  }) } }))
+  await new OpenAIProvider().generateStream(novelAIModel, [], { temperature: 0, maxTokens: 512,
+    signal: controller.signal, visibleOnly: true, onChunk: vi.fn(), onDone, onError,
+    onDiagnostics: value => snapshots.push(value) })
+  expect(snapshots.at(-1)).toMatchObject({ phase: 'stream', errorName: 'AbortError', endReason: aborted ? 'cancelled' : 'failed' })
+  expect(onError).toHaveBeenCalledExactlyOnceWith(aborted ? '已取消生成' : '响应流未正常完成', undefined, undefined)
+  expect(onDone).not.toHaveBeenCalled()
+  expect(JSON.stringify(snapshots)).not.toContain('private abort origin')
+})
+
+describe('SiliconFlow explicit reasoning requests', () => {
+  it('uses a persisted explicit mapping and keeps switch-only requests free of effort fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const model: ModelProfile = { ...novelAIModel, provider: 'custom', baseUrl: 'https://unlisted.test/v1', modelName: 'unlisted',
+      reasoningOverride: 'xhigh', reasoningMapping: { adapter: 'openai-reasoning-effort',
+        supportedEfforts: ['xhigh'], providerValues: { xhigh: 'Extra' } } }
+    await new OpenAIProvider().generate(model, [], resolveGenerationParameters(model, {}))
+    expect(requestBody(fetchMock).reasoning_effort).toBe('Extra')
+    fetchMock.mockClear()
+    const remapped: ModelProfile = { ...model, reasoningMapping: {
+      adapter: 'deepseek-v4-thinking', supportedEfforts: ['xhigh'], providerValues: { xhigh: 'max' },
+    } }
+    await new OpenAIProvider().generate(remapped, [], resolveGenerationParameters(remapped, {}))
+    expect(requestBody(fetchMock)).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'max' })
+    for (const reasoningOverride of ['high', 'off'] as const) {
+      fetchMock.mockClear()
+      const toggle: ModelProfile = { ...model, reasoningOverride, reasoningMapping: {
+        adapter: 'deepseek-v4-thinking', supportedEfforts: ['off', 'high'], providerValues: { off: 'disabled', high: 'enabled' },
+      } }
+      await new OpenAIProvider().generate(toggle, [], resolveGenerationParameters(toggle, {}))
+      expect(requestBody(fetchMock).thinking).toEqual({ type: reasoningOverride === 'off' ? 'disabled' : 'enabled' })
+      expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
+    }
+  })
+  it('serializes the registered xhigh string and omits an unsupported off request', async () => {
+    BUILTIN_PRESETS.push({ provider: 'synthetic-effort', baseUrl: 'https://effort.test/v1', protocol: 'openai', embeddingModels: [],
+      models: [{ name: 'synthetic', maxTokens: 2048, reasoningMapping: { adapter: 'openai-reasoning-effort',
+        supportedEfforts: ['xhigh'], providerValues: { xhigh: 'Extra' } } }] })
+    try {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+      vi.stubGlobal('fetch', fetchMock)
+      const model: ModelProfile = { ...novelAIModel, provider: 'custom', baseUrl: 'https://effort.test/v1', modelName: 'synthetic', reasoningOverride: 'xhigh' }
+      await new OpenAIProvider().generate(model, [], resolveGenerationParameters(model, {}))
+      expect(requestBody(fetchMock).reasoning_effort).toBe('Extra')
+      fetchMock.mockClear()
+      const off = { ...model, reasoningOverride: 'off' as const }
+      await new OpenAIProvider().generate(off, [], resolveGenerationParameters(off, {}))
+      expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
+    } finally { BUILTIN_PRESETS.pop() }
+  })
+  it('sends independent Qwen thinking and answer budgets through both native transports', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }) })
+      .mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader('data: [DONE]\n\n') } })
+    vi.stubGlobal('fetch', fetchMock)
+    const model: ModelProfile = { ...novelAIModel, provider: 'siliconflow',
+      baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B', reasoningOverride: 'medium', maxTokens: 16384 }
+    const options = resolveGenerationParameters(model, { reasoningStage: 'review' })
+    const provider = new OpenAIProvider()
+    await provider.generate(model, [], options)
+    await provider.generateStream(model, [], { ...options, signal: new AbortController().signal,
+      onChunk: vi.fn(), onDone: vi.fn(), onError: vi.fn() })
+    for (const [url, request] of fetchMock.mock.calls) {
+      expect(url).toBe('https://api.siliconflow.cn/v1/chat/completions')
+      const body = JSON.parse(String((request as RequestInit).body))
+      expect(body).toMatchObject({ model: 'Qwen/Qwen3.8-27B', enable_thinking: true, thinking_budget: 16384, max_tokens: 16384 })
+      expect(body).not.toHaveProperty('reasoning_effort')
+    }
+  })
+
+  const silicon: ModelProfile = { ...novelAIModel, provider: 'openai',
+    baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash' }
+
+  it('honors manual numeric budgets, omits the budget when off, and keeps unknown services standard', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const profile: ModelProfile = { ...novelAIModel, provider: 'custom', baseUrl: 'https://api.siliconflow.cn/v1',
+      modelName: 'Qwen/Qwen3.8-27B', maxTokens: 1024, reasoningOverride: 'medium', reasoningMapping: {
+        adapter: 'openai-thinking-budget', supportedEfforts: ['off', 'medium'], providerValues: { off: 0, medium: 4096 },
+      } }
+    for (const reasoningOverride of ['medium', 'off'] as const) {
+      fetchMock.mockClear()
+      const selected = { ...profile, reasoningOverride }
+      await new OpenAIProvider().generate(selected, [], resolveGenerationParameters(selected, {}))
+      expect(requestBody(fetchMock)).toMatchObject({ max_tokens: 1024, enable_thinking: reasoningOverride !== 'off' })
+      expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
+      if (reasoningOverride === 'off') expect(requestBody(fetchMock)).not.toHaveProperty('thinking_budget')
+      else expect(requestBody(fetchMock).thinking_budget).toBe(4096)
+    }
+    fetchMock.mockClear()
+    const unknown = { ...profile, baseUrl: 'https://unknown.test/v1', reasoningMapping: undefined }
+    await new OpenAIProvider().generate(unknown, [], resolveGenerationParameters(unknown, {}))
+    expect(requestBody(fetchMock)).toMatchObject({ max_tokens: 1024 })
+    expect(requestBody(fetchMock)).not.toHaveProperty('enable_thinking')
+    expect(requestBody(fetchMock)).not.toHaveProperty('thinking_budget')
+  })
+
+  it.each([
+    { baseUrl: 'https://api.siliconflow.com/v1' },
+    { modelName: 'deepseek-ai/DeepSeek-V4-Pro-2026' },
+    { protocol: 'gemini' as const },
+  ])('does not serialize a SiliconFlow directive for an unmatched profile: %j', async overrides => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const model = { ...silicon, ...overrides, reasoningOverride: 'high' as const }
+    expect(resolveGenerationParameters(model, {}).reasoning).toBeUndefined()
+    await new OpenAIProvider().generate(model, [], {
+      ...resolveGenerationParameters(model, {}),
+      reasoning: { adapter: 'siliconflow-v4-thinking', reasoningEffort: 'high' },
+    })
+    expect(requestBody(fetchMock)).not.toHaveProperty('enable_thinking')
+    expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
+  })
+
+  it.each(['high', 'max'] as const)('sends explicit %s through production parameters for both transports', async reasoningOverride => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }) })
+      .mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader('data: [DONE]\n\n') } })
+    vi.stubGlobal('fetch', fetchMock)
+    const model = { ...silicon, provider: 'custom' as const, reasoningOverride }
+    const options = resolveGenerationParameters(model, { reasoningStage: 'drafting', maxTokens: 2672 })
+    const provider = new OpenAIProvider()
+    await provider.generate(model, [{ role: 'user', content: '写正文' }], options)
+    await provider.generateStream(model, [{ role: 'user', content: '写正文' }], {
+      ...options, signal: new AbortController().signal, onChunk: vi.fn(), onDone: vi.fn(), onError: vi.fn(),
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [url, request] of fetchMock.mock.calls) {
+      expect(url).toBe('https://api.siliconflow.cn/v1/chat/completions')
+      const body = JSON.parse(String((request as RequestInit).body))
+      expect(body).toMatchObject({ enable_thinking: true, reasoning_effort: reasoningOverride, temperature: 0.7, max_tokens: 2672 })
+      expect(body).not.toHaveProperty('thinking')
+      expect(body).not.toHaveProperty('thinking_budget')
+    }
+  })
+
+  it.each(['auto', 'off', 'low', 'medium'] as const)('omits unverified %s controls even when the project requests max', async reasoningOverride => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const model = { ...silicon, provider: 'custom' as const, reasoningOverride }
+    await new OpenAIProvider().generate(model, [], resolveGenerationParameters(model, { creativeStrategy: 'deep-planning', reasoningStage: 'planning' }))
+    expect(requestBody(fetchMock)).not.toHaveProperty('enable_thinking')
+    expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
+  })
 })
 
 describe('resolveOpenAIChatCompletionsUrl', () => {
@@ -694,7 +879,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onDone).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('CONTROLLED_PROVIDER_ERROR'), 'HEAD', undefined)
+    expect(onError).toHaveBeenCalledWith('供应商返回流式错误', 'HEAD', undefined)
   })
 
   it('does not swallow an onChunk consumer exception as malformed provider data', async () => {
@@ -722,7 +907,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onDone).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('CONTROLLED_CONSUMER_REJECTION'), 'HEADMIDDLE', undefined)
+    expect(onError).toHaveBeenCalledWith('响应流未正常完成', 'HEADMIDDLE', undefined)
   })
 
   it('accepts comments, usage-only events, and empty deltas as legal control traffic', async () => {

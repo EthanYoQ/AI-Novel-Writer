@@ -34,10 +34,13 @@ if [[ ! -f "$dmg" ]]; then
   exit 1
 fi
 
-smoke_root="$(mktemp -d "${TMPDIR:-/tmp}/ai-novel-macos-dmg-smoke.XXXXXX")"
+mkdir -p "$repository_root/.runtime/.cache"
+smoke_root="$(mktemp -d "$repository_root/.runtime/.cache/ai-novel-macos-dmg-smoke.XXXXXX")"
 mount_point="$smoke_root/mount"
 smoke_home="$smoke_root/home"
-skin_home="$smoke_root/vela-skin-home"
+skin_home="$smoke_root/legacy-source"
+canonical_home="$smoke_root/canonical"
+chromium_profile="$smoke_root/chromium-profile"
 mounted=0
 unmount_attempted=0
 unmount_succeeded=0
@@ -46,6 +49,8 @@ app=''
 executable=''
 secure_helper=''
 dmg_sha256=''
+a11_started=0
+a11_current_version=''
 dmg_mount_receipt="$acceptance_directory/dmg-mount.json"
 packaged_smoke_receipt="$acceptance_directory/packaged-smoke.json"
 signing_receipt="$acceptance_directory/signing.json"
@@ -99,6 +104,42 @@ NODE
 
 cleanup() {
   local exit_status=$?
+  if [[ "$exit_status" != "0" && "$a11_started" == "1" ]]; then
+    node - "$evidence_root/diagnostics/macos-a11-exit.json" "$a11_current_version" "$smoke_root/a11-v1.0.0/receipt.json" "$smoke_root/a11-v1.1.0/receipt.json" <<'NODE' || true
+const fs = require('node:fs')
+const path = require('node:path')
+const [output, attemptedVersion, ...receipts] = process.argv.slice(2)
+const cases = []
+for (const file of receipts) {
+  if (!fs.existsSync(file)) continue
+  const version = path.basename(path.dirname(file)) === 'a11-v1.0.0' ? 'v1.0.0' : 'v1.1.0'
+  let receipt
+  try { receipt = JSON.parse(fs.readFileSync(file, 'utf8')) }
+  catch { cases.push({ version, stage: 'receipt-unreadable' }); continue }
+  const exit = receipt.exitDiagnostics?.at(-1)
+  cases.push({
+    version,
+    stage: typeof receipt.lastStage === 'string' && /^[a-z][a-z0-9-]{0,80}$/.test(receipt.lastStage) ? receipt.lastStage : 'unknown',
+    closeRequestCount: Number.isInteger(exit?.renderer?.closeRequestCount) ? exit.renderer.closeRequestCount : null,
+    approvalOrCancel: exit?.renderer?.approvalOrCancel === 'not-observed' ? 'not-observed' : 'unknown',
+    window: exit?.window && typeof exit.window.count === 'number' ? {
+      count: exit.window.count,
+      mainAlive: exit.window.mainAlive === true,
+      mainVisible: exit.window.mainVisible === true,
+      webContentsAlive: exit.window.webContentsAlive === true,
+      closeEvents: Array.isArray(exit.window.events) ? exit.window.events.map(event => ({
+        event: ['window-close', 'window-closed'].includes(event.event) ? event.event : 'unknown',
+        defaultPrevented: event.defaultPrevented === true,
+      })) : [],
+    } : null,
+    processExitObserved: Array.isArray(exit?.events) && exit.events.some(event => event.event === 'process-exit'),
+  })
+}
+if (!cases.some(entry => entry.version === attemptedVersion)) cases.push({ version: attemptedVersion, stage: 'receipt-missing' })
+fs.mkdirSync(path.dirname(output), { recursive: true })
+fs.writeFileSync(output, `${JSON.stringify({ schemaVersion: 1, kind: 'macos-a11-exit-diagnostic', cases }, null, 2)}\n`)
+NODE
+  fi
   if [[ "$mounted" == "1" ]]; then
     unmount_attempted=1
     if hdiutil detach "$mount_point" -force -quiet; then
@@ -116,7 +157,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$mount_point" "$smoke_home" "$skin_home" "$qualification_directory" "$acceptance_directory"
+mkdir -p "$mount_point" "$smoke_home" "$skin_home" "$chromium_profile" "$qualification_directory" "$acceptance_directory"
 dmg_sha256="$(shasum -a 256 "$dmg" | awk '{print $1}')"
 if [[ ! "$dmg_sha256" =~ ^[a-fA-F0-9]{64}$ ]]; then
   echo "Could not calculate SHA-256 for macOS DMG: $dmg" >&2
@@ -314,14 +355,14 @@ homepage_evidence="$qualification_directory/packaged-official-homepage-smoke.jso
 skin_evidence="$qualification_directory/packaged-skin-smoke.json"
 
 run_with_timeout 'packaged vector smoke' 120 env \
-  ELECTRON_RUN_AS_NODE=1 HOME="$smoke_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
+  ELECTRON_RUN_AS_NODE=1 HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
   "$executable" "$vector_runner" "--ai-novel-release-smoke=$token" > "$vector_evidence"
 run_with_timeout 'packaged official homepage smoke' 300 env \
-  HOME="$smoke_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
-  "$executable" "--ai-novel-release-homepage-smoke=$token" > "$homepage_evidence"
+  HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
+  "$executable" "--user-data-dir=$chromium_profile" "--ai-novel-release-homepage-smoke=$token" > "$homepage_evidence"
 run_with_timeout 'packaged skin smoke' 120 env \
-  HOME="$smoke_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_SKIN_SMOKE=1 AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN="$skin_token" \
-  "$executable" "--ai-novel-release-skin-smoke=$skin_token" > "$skin_evidence"
+  HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_SKIN_SMOKE=1 AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN="$skin_token" \
+  "$executable" "--user-data-dir=$chromium_profile" "--ai-novel-release-skin-smoke=$skin_token" > "$skin_evidence"
 
 node - "$vector_evidence" "$homepage_evidence" "$skin_evidence" <<'NODE'
 const fs = require('node:fs')
@@ -339,6 +380,17 @@ if (skin?.customSkin?.importSucceeded !== true || skin?.customSkin?.readSucceede
   throw new Error('Packaged custom skin persistence evidence is incomplete')
 }
 NODE
+
+tested_sha="$(git rev-parse HEAD)"
+for old_version in v1.0.0 v1.1.0; do
+  a11_started=1
+  a11_current_version="$old_version"
+  run_with_timeout "mounted app A11 $old_version offline import" 600 node "$repository_root/scripts/f05-a11-offline-import-journey.mjs" \
+    "--mac-mounted-app=$app" "--mount-point=$mount_point" "--dmg=$dmg" \
+    "--scratch-root=$smoke_root/a11-$old_version" "--tested-sha=$tested_sha" "--arch=$target_arch" \
+    "--mac-version=$old_version"
+done
+a11_started=0
 
 node - "$qualification_directory/macos-dmg-smoke.json" "$dmg" "$app" "$target_arch" "$runner_machine_arch" <<'NODE'
 const fs = require('node:fs')
@@ -361,11 +413,12 @@ fs.writeFileSync(output, `${JSON.stringify({
 }, null, 2)}\n`)
 NODE
 
-node - "$packaged_smoke_receipt" "$release_directory" "$vector_evidence" "$homepage_evidence" "$skin_evidence" "$qualification_directory/macos-dmg-smoke.json" "$target_arch" "$runner_machine_arch" <<'NODE'
+node - "$packaged_smoke_receipt" "$release_directory" "$vector_evidence" "$homepage_evidence" "$skin_evidence" "$qualification_directory/macos-dmg-smoke.json" "$target_arch" "$runner_machine_arch" "$smoke_root/a11-v1.0.0/receipt.json" "$smoke_root/a11-v1.1.0/receipt.json" "$app" "$mount_point" "$dmg" "$tested_sha" "$repository_root/scripts/f05-a11-offline-import-journey.mjs" "$repository_root/scripts/fixtures/s14c-official-old-sources/manifest.json" <<'NODE'
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
-const [output, releaseDirectory, vectorFile, homepageFile, skinFile, macosDmgSmokeFile, targetArch, runnerMachine] = process.argv.slice(2)
+const [output, releaseDirectory, vectorFile, homepageFile, skinFile, macosDmgSmokeFile, targetArch, runnerMachine,
+  a11V100File, a11V110File, app, mountPoint, dmg, testedSha, driver, sourceManifest] = process.argv.slice(2)
 
 function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -393,6 +446,44 @@ const macosDmgSmokeReference = {
   kind: macosDmgSmoke.kind,
   sha256: sha256(macosDmgSmokeFile),
 }
+const hashText = value => crypto.createHash('sha256').update(value).digest('hex')
+const manifest = JSON.parse(fs.readFileSync(sourceManifest, 'utf8'))
+const a11OfflineImport = Object.fromEntries([['v1.0.0', a11V100File], ['v1.1.0', a11V110File]].map(([version, file]) => {
+  const a11 = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const provenance = a11.provenance
+  const journey = a11.mac
+  const source = manifest.cases.find(item => `v${item.version}` === version)
+  if (a11.qualification !== 'A11_OFFLINE_LEGACY_COPY_MAC_V3' || a11.mode !== 'official-old-app-mounted-app'
+    || a11.outcome !== 'PARTIAL' || a11.sliceOutcome !== 'PASS' || a11.testedSha !== testedSha || a11.arch !== targetArch
+    || journey?.sourceVersion !== version || journey.officialProofSha256 !== source?.proofSha256) {
+    throw new Error(`Mounted app A11 ${version} qualification or official source binding is incomplete`)
+  }
+  if (provenance?.dmgSha256 !== sha256(dmg)
+    || provenance.executableSha256 !== sha256(path.join(app, 'Contents', 'MacOS', 'AI小说作家'))
+    || provenance.asarSha256 !== sha256(path.join(app, 'Contents', 'Resources', 'app.asar'))
+    || provenance.driverSha256 !== sha256(driver) || provenance.sourceManifestSha256 !== sha256(sourceManifest)
+    || provenance.appPathSha256 !== hashText(fs.realpathSync(app))
+    || provenance.mountPointSha256 !== hashText(fs.realpathSync(mountPoint))) {
+    throw new Error(`Mounted app A11 ${version} package, path, driver or source manifest changed`)
+  }
+  if (JSON.stringify(a11.steps?.map(step => [step.stepId, step.outcome])) !== JSON.stringify([
+    [`${version}-import-open`, 'PASS'], [`${version}-target-edit-save`, 'PASS'], [`${version}-target-edit-reopen`, 'PASS'],
+  ]) || !/^[a-f0-9]{64}$/.test(journey.sourceInventorySha256 ?? '')
+    || !/^[a-f0-9]{64}$/.test(journey.targetInventorySha256 ?? '')
+    || journey.sourceProjectId === journey.targetProjectId
+    || journey.database?.rows?.project_core !== 1 || journey.database?.rows?.contents !== 4
+    || journey.database?.rows?.drafts !== 2 || journey.database?.rows?.characters !== 2
+    || journey.database?.rows?.blueprints !== 1 || journey.database?.llmCalls !== 0
+    || journey.knowledgeDocuments !== 1 || journey.knowledgeChunks !== 1
+    || journey.savedBodySha256 !== journey.reopenedBodySha256
+    || !/^[a-f0-9]{64}$/.test(journey.sourceBodySha256 ?? '')
+    || journey.importAndSaveRequests?.mainFetchCalls !== 0 || journey.importAndSaveRequests?.rendererRequests !== 0
+    || journey.reopenRequests?.mainFetchCalls !== 0 || journey.reopenRequests?.rendererRequests !== 0) {
+    throw new Error(`Mounted app A11 ${version} import, persistence or zero-request evidence is incomplete`)
+  }
+  return [version, { ...journey, testedSha, architecture: targetArch,
+    packageHashes: provenance, receiptSha256: sha256(file), actions: a11.steps.map(step => step.stepId) }]
+}))
 const direct = {
   mountedApplication: macosDmgSmoke.mountedApplication,
   secureFileSystemHelper: macosDmgSmoke.secureFileSystemHelper,
@@ -401,6 +492,7 @@ const direct = {
   vectorSmoke: macosDmgSmoke.vectorSmoke,
   officialHomepageSmoke: macosDmgSmoke.officialHomepageSmoke,
   skinSmoke: macosDmgSmoke.skinSmoke,
+  a11OfflineImport,
   architecture: { target: targetArch, runnerMachine },
 }
 
@@ -421,6 +513,7 @@ fs.writeFileSync(output, `${JSON.stringify({
     'Validated the packaged official-homepage smoke fact.',
     'Validated the packaged skin smoke fact.',
     'Validated the direct macOS DMG smoke fact.',
+    'Validated official v1.0.0 and v1.1.0 old-app sources, offline imports, target saves, and new-process reopens in the mounted application.',
   ],
   direct,
   directFacts: direct,

@@ -10,6 +10,7 @@ import {
   type GenerationTask,
 } from '../generation/generation-harness'
 import {
+  derivePlotTreeSnapshot,
   generatePlotTree,
   parsePlotTreeSnapshot,
   PLOT_TREE_GENERATION_BUDGET,
@@ -23,6 +24,45 @@ const PROJECT_SESSION = Object.freeze({
   leaseId: 'plot-lease',
   projectPath: 'C:/novels/plot-project',
 }) satisfies ProjectSessionContext
+
+it('default facade sends only the main selector and confirms its artifact instead of saving renderer sources', async () => {
+  const handle = { projectId: PROJECT_SESSION.projectId, epoch: PROJECT_SESSION.leaseId, rootActionId: 'root', runId: 'run' }
+  const snapshot = parsePlotTreeSnapshot(JSON.stringify(modelResponse), sources())
+  const artifact = { artifactId: 'artifact', revision: 1, textHash: 'a'.repeat(64) }
+  const view = { handle, status: 'completed', artifacts: [] }
+  const context = { projectId: PROJECT_SESSION.projectId, kind: 'plot', input: { kind: 'plot' } }
+  const recovery = { context, view, artifact, modelId: 'main-model', attemptCount: 1, sourceStatus: 'current', result: { kind: 'plot', snapshot, derivation: 'model' }, effects: [] }
+  const invoke = vi.fn(async (channel: string, request: unknown) => {
+    if (channel === 'graph-generation:begin') {
+      expect(request).toEqual({ input: { kind: 'plot' }, modelId: 'main-model', uiActionNonce: expect.any(String) })
+      return { ...recovery, attemptCount: 0, result: undefined, artifact: undefined }
+    }
+    if (channel === 'graph-generation:execute') return { run: view, outcome: { status: 'completed', finishReason: 'stop' } }
+    if (channel === 'graph-generation:read') return recovery
+    expect(channel).toBe('graph-generation:confirm')
+    expect(request).toEqual({ handle, artifact, index: 0 })
+    return { success: true, index: 0, kind: 'plot', snapshot, derivation: 'model' }
+  })
+  vi.stubGlobal('window', { aiNovelAPI: { invoke, on: () => () => {} } })
+  try {
+    await expect(generatePlotTree({ modelId: 'main-model', projectSession: PROJECT_SESSION, sources: sources(), signal: new AbortController().signal })).resolves.toEqual(snapshot)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:plot-tree-save')).toBe(false)
+  } finally { vi.unstubAllGlobals() }
+})
+
+it('records model, normalized, and deterministic derivation without losing source revision', () => {
+  const input = sources()
+  const now = '2026-09-13T00:00:00.000Z'
+  const strict = derivePlotTreeSnapshot(JSON.stringify(modelResponse), input, now)
+  expect(strict.kind).toBe('model')
+  const repairable = structuredClone(modelResponse)
+  repairable.tracks[0]!.startChapter = 999
+  expect(derivePlotTreeSnapshot(JSON.stringify(repairable), input, now).kind).toBe('normalized')
+  const fallback = derivePlotTreeSnapshot('not JSON', input, now)
+  expect(fallback.kind).toBe('deterministic')
+  expect(fallback.snapshot).toMatchObject({ generatedAt: now, sourceRevision: input.sourceRevision })
+  expect(fallback).toEqual(derivePlotTreeSnapshot('not JSON', input, now))
+})
 
 function sources(): PlotTreeSourceBundle {
   const narrativeThread = {

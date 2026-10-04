@@ -50,6 +50,7 @@ function project(path: string): ProjectData {
 
 function character(name: string, notes = ''): CharacterCard {
   return {
+    characterId: `id:${name}`,
     name,
     role: 'protagonist',
     gender: '',
@@ -67,7 +68,7 @@ function character(name: string, notes = ''): CharacterCard {
 
 function rosterReadFromCards(cards: CharacterCard[]) {
   return {
-    revision: 1,
+    revision: 1, identityRevision: 1,
     status: cards.length > 0 ? 'ready' : 'empty',
     entries: cards.map(card => ({
       ...card,
@@ -140,9 +141,7 @@ describe('character store project context', () => {
     await useCharacterStore.getState().load(PROJECT_A)
 
     expect(useCharacterStore.getState().characters).toEqual([persistedCharacter])
-    expect(getProjectEditorDraft(currentLedger(), PROJECT_A)?.draftValue).toEqual([
-      persistedCharacter,
-    ])
+    expect(getProjectEditorDraft(currentLedger(), PROJECT_A)).toBeUndefined() // Same ID and normalized bytes equal the persisted card; no dirty draft remains.
   })
 
   it('normalizes only the opened project draft and preserves another project opaque payload', async () => {
@@ -172,8 +171,11 @@ describe('character store project context', () => {
     await useCharacterStore.getState().load(PROJECT_A)
 
     expect(useCharacterStore.getState().characters).toEqual([
+      character('A 草稿'),
       { ...EMPTY_CARD, name: 'A 草稿', notes: '本地修改' },
     ])
+    await expect(useCharacterStore.getState().saveAll(PROJECT_A)).rejects.toThrow('角色身份尚未确认')
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:character-roster-commit')).toBe(false)
     const persistedLedger = JSON.parse(
       useEditorStore.getState().draftLedgers[CHARACTER_DRAFT_TAB.id],
     ) as { projects: unknown[] }
@@ -193,7 +195,7 @@ describe('character store project context', () => {
       lastError: null,
     })
 
-    useCharacterStore.getState().updateField('A 角色', 'notes', 'A 本地修改')
+    useCharacterStore.getState().updateField('id:A 角色', 'notes', 'A 本地修改')
     await expect(useCharacterStore.getState().saveAll(PROJECT_A)).resolves.toBeUndefined()
     expect(invoke).toHaveBeenNthCalledWith(
       2,
@@ -243,7 +245,7 @@ describe('character store project context', () => {
       .mockResolvedValueOnce([character('B 角色')])
 
     await useCharacterStore.getState().load(PROJECT_A)
-    useCharacterStore.getState().updateField('A 角色', 'notes', 'A 未保存')
+    useCharacterStore.getState().updateField('id:A 角色', 'notes', 'A 未保存')
 
     useCharacterStore.getState().beginProjectLoad(PROJECT_B)
     useProjectStore.setState({ currentProject: project(PROJECT_B) })
@@ -253,15 +255,15 @@ describe('character store project context', () => {
       dataProjectKey: null,
       loadingProjectKey: PROJECT_B,
     })
-    expect(useCharacterStore.getState().renameCharacter('A 角色', '错误改名')).toBe(false)
-    await expect(useCharacterStore.getState().deleteCharacter('A 角色', PROJECT_B))
+    expect(useCharacterStore.getState().renameCharacter('id:A 角色', '错误改名')).toBe(false)
+    await expect(useCharacterStore.getState().deleteCharacter('id:A 角色', PROJECT_B))
       .resolves.toBe(false)
     await expect(useCharacterStore.getState().saveAll(PROJECT_B))
       .rejects.toThrow(/切换项目/)
     expect(invoke).toHaveBeenCalledTimes(1)
 
     await useCharacterStore.getState().load(PROJECT_B)
-    useCharacterStore.getState().updateField('B 角色', 'notes', 'B 未保存')
+    useCharacterStore.getState().updateField('id:B 角色', 'notes', 'B 未保存')
 
     const ledger = currentLedger()
     expect(getProjectEditorDraft(ledger, PROJECT_A)?.draftValue).toEqual([
@@ -280,7 +282,8 @@ describe('character store project context', () => {
       .mockResolvedValueOnce([character('B 角色')])
 
     await useCharacterStore.getState().load(PROJECT_A)
-    const deletion = useCharacterStore.getState().deleteCharacter('A 待删除', PROJECT_A)
+    const deletion = useCharacterStore.getState().deleteCharacter('id:A 待删除', PROJECT_A)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2))
     useCharacterStore.getState().beginProjectLoad(PROJECT_B)
     useProjectStore.setState({ currentProject: project(PROJECT_B) })
     const loadB = useCharacterStore.getState().load(PROJECT_B)
@@ -323,16 +326,16 @@ describe('character store project context', () => {
   it('preserves an existing character draft ledger and blocks every write after reload fails', async () => {
     invoke.mockResolvedValueOnce([character('A 角色')])
     await useCharacterStore.getState().load(PROJECT_A)
-    useCharacterStore.getState().updateField('A 角色', 'notes', '未保存草稿')
+    useCharacterStore.getState().updateField('id:A 角色', 'notes', '未保存草稿')
     const ledgerBeforeFailure = useEditorStore.getState().draftLedgers[CHARACTER_DRAFT_TAB.id]
 
     invoke.mockRejectedValueOnce(new Error('database busy'))
     await useCharacterStore.getState().load(PROJECT_A)
 
     useCharacterStore.getState().addCharacter()
-    useCharacterStore.getState().updateField('A 角色', 'notes', '不应覆盖')
-    expect(useCharacterStore.getState().renameCharacter('A 角色', '不应改名')).toBe(false)
-    await expect(useCharacterStore.getState().deleteCharacter('A 角色', PROJECT_A))
+    useCharacterStore.getState().updateField('id:A 角色', 'notes', '不应覆盖')
+    expect(useCharacterStore.getState().renameCharacter('id:A 角色', '不应改名')).toBe(false)
+    await expect(useCharacterStore.getState().deleteCharacter('id:A 角色', PROJECT_A))
       .resolves.toBe(false)
     await expect(useCharacterStore.getState().saveAll(PROJECT_A))
       .rejects.toThrow(/切换项目/)

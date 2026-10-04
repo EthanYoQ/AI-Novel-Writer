@@ -29,6 +29,7 @@ const pendingSnapshot: CharacterRosterSnapshot = {
   renderedMarkdown: '',
   projectionHash: 'pending',
   factHash: 'pending-fact',
+  nameOnlyFactHash: 'pending-fact',
   legacyMarkdown: '旧角色图谱原文',
 }
 
@@ -41,6 +42,7 @@ const readySnapshot: CharacterRosterSnapshot = {
   renderedMarkdown: '',
   projectionHash: 'ready',
   factHash: 'ready-fact',
+  nameOnlyFactHash: 'ready-fact',
 }
 
 function deferred<T>() {

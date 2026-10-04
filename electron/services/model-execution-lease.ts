@@ -4,7 +4,7 @@ import type {
   ModelExecutionLeaseReceipt,
   ModelProfile,
 } from '../../src/shared/ipc-channels'
-import { resolveModelProfileCapabilities } from '../../src/shared/provider-presets'
+import { resolveModelProfileCapabilities, resolveModelProfileStructuredOutput } from '../../src/shared/provider-presets'
 
 const DEFAULT_MODEL_EXECUTION_LEASE_TTL_MS = 4 * 60 * 60 * 1_000
 
@@ -44,10 +44,12 @@ function normalizeEndpoint(baseUrl: string): string {
     const endpoint = new URL(trimmed)
     endpoint.hash = ''
     endpoint.search = ''
+    endpoint.username = ''
+    endpoint.password = ''
     endpoint.pathname = endpoint.pathname.replace(/\/+$/u, '') || '/'
     return endpoint.toString().replace(/\/$/u, '')
   } catch {
-    return trimmed.replace(/\/+$/u, '')
+    throw new Error('模型端点地址无效')
   }
 }
 
@@ -76,7 +78,8 @@ export function resolveModelExecutionCapabilityEvidence(
   const explicitContextWindow = positiveInteger(model.capabilities?.contextWindowTokens)
   const explicitOutputCap = positiveInteger(model.capabilities?.maxOutputTokens)
   const legacyOutputCap = positiveInteger(model.maxTokens)
-  const operationalOutputCap = explicitOutputCap ?? legacyOutputCap
+  const operationalOutputCap = explicitOutputCap && legacyOutputCap
+    ? Math.min(explicitOutputCap, legacyOutputCap) : explicitOutputCap ?? legacyOutputCap
   const verifiedOutputLimit = positiveInteger(verified?.maxOutputTokens)
   const unconstrainedOutputTokens = verifiedOutputLimit && operationalOutputCap
     ? Math.min(verifiedOutputLimit, operationalOutputCap)
@@ -102,13 +105,14 @@ export function resolveModelExecutionCapabilityEvidence(
           ? 'user-operational-cap'
           : 'unknown',
       maxOutputTokens: maxOutputSource,
+      // A separately declared JSON feature does not verify the whole feature group.
       featureFlags: verified ? 'verified-provider-preset' : 'unknown',
     },
     subjectFingerprint,
     contextWindowTokens: contextWindowTokens ?? null,
     maxOutputTokens,
     reasoning: verified?.reasoning ?? null,
-    structuredOutput: verified?.structuredOutput ?? null,
+    structuredOutput: verified?.structuredOutput ?? resolveModelProfileStructuredOutput(model) ?? null,
     usage: verified?.usage ?? null,
   }
 }
@@ -121,6 +125,8 @@ function modelRevision(model: ModelProfile): string {
     temperature: model.temperature,
     maxTokens: model.maxTokens,
     capabilities: model.capabilities ?? null,
+    reasoningOverride: model.reasoningOverride ?? 'auto',
+    ...(model.reasoningMapping ? { reasoningMapping: model.reasoningMapping } : {}),
     purposes: model.purposes,
     embeddingOptions: model.embeddingOptions ?? null,
   })

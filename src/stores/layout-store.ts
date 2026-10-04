@@ -13,7 +13,7 @@ export type RightView = 'agent' | 'ai-output'
 export type LeftRailItem = SidebarView | 'blueprint' | 'world' | 'plot-tree' | BottomTab
 
 /** 设置弹窗分类 */
-export type SettingsSection = 'llm' | 'embedding' | 'proxy' | 'editor' | 'prompts' | 'skills' | 'about'
+export type SettingsSection = 'llm' | 'embedding' | 'proxy' | 'editor' | 'prompts' | 'skills' | 'backup' | 'about'
 
 /** 章节创建对话框的预填参数 */
 export type ChapterCreationPrefill = Record<string, unknown> | null
@@ -35,6 +35,10 @@ interface LayoutState {
   bottomPanelOpen: boolean
   bottomTab: BottomTab
   bottomPanelHeight: number
+
+  /** 沉浸前面板状态只在当前窗口保留。 */
+  immersive: boolean
+  preImmersivePanels: { sidebarOpen: boolean; aiPanelOpen: boolean; bottomPanelOpen: boolean } | null
 
   // ===== 全局弹窗状态（替代 window.dispatchEvent 事件总线）=====
   /** 设置弹窗是否打开 */
@@ -66,6 +70,7 @@ interface LayoutState {
   setBottomTab: (tab: BottomTab) => void
   setBottomPanelHeight: (height: number) => void
   openBottomTab: (tab: BottomTab) => void
+  toggleImmersion: () => void
 
   // ===== 全局弹窗 Actions =====
   openSettings: (section?: SettingsSection, activeRailItem?: LeftRailItem) => void
@@ -94,6 +99,8 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
   bottomPanelOpen: true,
   bottomTab: 'tasks',
   bottomPanelHeight: 200,
+  immersive: false,
+  preImmersivePanels: null,
 
   // 全局弹窗默认关闭
   settingsOpen: false,
@@ -105,7 +112,7 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
   chapterCreationPrefill: null,
 
   // Actions
-  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen, immersive: false, preImmersivePanels: null })),
   setSidebarView: (view, activeRailItem) =>
     set((s) => {
       const nextRailItem = activeRailItem ?? view
@@ -114,17 +121,19 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
         sidebarView: view,
         activeRailItem: nextRailItem,
         sidebarOpen: sameButton ? !s.sidebarOpen : true,
+        immersive: false,
+        preImmersivePanels: null,
       }
     }),
   setSidebarWidth: (width) => set({ sidebarWidth: Math.max(200, Math.min(500, width)) }),
 
-  toggleAIPanel: () => set((s) => ({ aiPanelOpen: !s.aiPanelOpen })),
-  setAIPanelOpen: (open) => set({ aiPanelOpen: open }),
+  toggleAIPanel: () => set((s) => ({ aiPanelOpen: !s.aiPanelOpen, immersive: false, preImmersivePanels: null })),
+  setAIPanelOpen: (open) => set({ aiPanelOpen: open, ...(open ? { immersive: false, preImmersivePanels: null } : {}) }),
   setAIPanelWidth: (width) => set({ aiPanelWidth: Math.max(260, Math.min(600, width)) }),
   setRightView: (view) => set({ rightView: view }),
-  openRightPanel: (view) => set({ aiPanelOpen: true, rightView: view }),
+  openRightPanel: (view) => set({ aiPanelOpen: true, rightView: view, immersive: false, preImmersivePanels: null }),
 
-  toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
+  toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen, immersive: false, preImmersivePanels: null })),
   setBottomTab: (tab) =>
     set((s) => {
       const sameButton = s.bottomTab === tab && s.activeRailItem === tab
@@ -132,10 +141,25 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
         bottomTab: tab,
         activeRailItem: tab,
         bottomPanelOpen: sameButton ? !s.bottomPanelOpen : true,
+        immersive: false,
+        preImmersivePanels: null,
       }
     }),
   setBottomPanelHeight: (height) => set({ bottomPanelHeight: Math.max(100, Math.min(500, height)) }),
-  openBottomTab: (tab) => set({ bottomPanelOpen: true, bottomTab: tab, activeRailItem: tab }),
+  openBottomTab: (tab) => set({ bottomPanelOpen: true, bottomTab: tab, activeRailItem: tab, immersive: false, preImmersivePanels: null }),
+  toggleImmersion: () => set((s) => s.immersive
+    ? { ...s.preImmersivePanels, immersive: false, preImmersivePanels: null }
+    : {
+      immersive: true,
+      preImmersivePanels: {
+        sidebarOpen: s.sidebarOpen,
+        aiPanelOpen: s.aiPanelOpen,
+        bottomPanelOpen: s.bottomPanelOpen,
+      },
+      sidebarOpen: false,
+      aiPanelOpen: false,
+      bottomPanelOpen: false,
+    }),
 
   // 全局弹窗 Actions
   openSettings: (section = 'llm', activeRailItem = 'settings') =>

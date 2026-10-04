@@ -1,3 +1,5 @@
+import { LegacyRosterRecoveryPanel } from './LegacyRosterRecoveryPanel'
+import { resourceWriteAllowed } from '../../shared/project-paths'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Save, RefreshCw, Sparkles, Loader2, AlertTriangle, FileText } from 'lucide-react'
 import { renderIcon } from '../panels/sidebar/sidebar-icons'
@@ -7,11 +9,12 @@ import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
-import { CORE_FIELD_MAP, parseCoreField } from '../../services/vela-protocol'
+import { CORE_FIELD_MAP, parseCoreField } from '../../services/resource-protocol'
 import { appErrorMessage } from '../../i18n/app-errors'
 import { toast } from '../ui/Toast'
 import { CharacterCardImportButton } from '../characters/CharacterCardImportButton'
 import CodeMirrorEditor from './CodeMirrorEditor'
+import { SaveFeedback, type SaveOutcome } from './save-feedback'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
@@ -110,6 +113,7 @@ function ArchFileViewerSession({
   const [editorContent, setEditorContent] = useState(initialContent)
 
   const [saving, setSaving] = useState(false)
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const [loading, setLoading] = useState(false)
   const [showDialog, setShowDialog] = useState(false)
   const [checkingArch, setCheckingArch] = useState(false)
@@ -169,6 +173,7 @@ function ArchFileViewerSession({
     if (isCharacterProjection) return
     reloadGateRef.current.recordContentChange()
     setLoading(false)
+    setSaveOutcome('idle')
     currentContentRef.current = md
     const storeAction = archEditStoreAction({
       savedContent: savedContentRef.current,
@@ -180,7 +185,7 @@ function ArchFileViewerSession({
     writeArchEditState(useEditorStore.getState(), tabId, md, storeAction)
   }, [isCharacterProjection, tabId])
 
-  /** 保存（统一走 vela://core/ DB 路径） */
+  /** 保存（统一走 ai-novel://core/ DB 路径） */
   const handleSave = useCallback(async (md: string, propagateFailure = false) => {
     if (isCharacterProjection) return
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
@@ -190,8 +195,10 @@ function ArchFileViewerSession({
     reloadGateRef.current.invalidate()
     setLoading(false)
     setSaving(true)
+    setSaveOutcome('idle')
     try {
-      if (filePath.startsWith('vela://core/')) {
+      if (!resourceWriteAllowed(filePath)) throw new Error('资源只读或无效')
+      if (filePath.startsWith('ai-novel://core/')) {
         const dbField = parseCoreField(filePath)
         if (!dbField) return
         requireIpcSuccess(await ipc.invokeWithProjectSession(
@@ -222,13 +229,16 @@ function ArchFileViewerSession({
           setIsDirty(false)
           setRefreshBlockedMessage(null)
           useEditorStore.getState().markTabSaved(tabId, md)
+          setSaveOutcome('saved')
         } else {
           setIsDirty(true)
           useEditorStore.getState().updateTabContent(tabId, currentContentRef.current)
+          setSaveOutcome('idle')
         }
       }
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
+        setSaveOutcome('failed')
         toast.error(appErrorMessage(useLocaleStore.getState().locale, error))
       }
       // Exit-save must reject so the caller cannot close an unsaved document.
@@ -274,7 +284,7 @@ function ArchFileViewerSession({
     setLoading(true)
     try {
       let newContent = ''
-      if (filePath.startsWith('vela://core/')) {
+      if (filePath.startsWith('ai-novel://core/')) {
         const core = await ipc.invokeWithProjectSession(
           projectSession,
           'db:project-core-get',
@@ -477,6 +487,7 @@ function ArchFileViewerSession({
           {isDirty && !saving && (
             <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: 'var(--color-warning)' }} title={text('有未保存的修改', 'Unsaved changes')} />
           )}
+          <SaveFeedback dirty={isDirty} saving={saving} outcome={saveOutcome} />
 
           {/* 刷新按钮 */}
           <Button
@@ -494,7 +505,7 @@ function ArchFileViewerSession({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleSave(currentContentRef.current)}
+              onClick={() => { void handleSave(currentContentRef.current) }}
               disabled={saving || !projectMatches}
               title={text('保存（Cmd+S）', 'Save (Cmd+S)')}
             >
@@ -538,6 +549,7 @@ function ArchFileViewerSession({
         </div>
       </div>
 
+      {projectMatches && stepKey === 'characters' && <LegacyRosterRecoveryPanel onRecover={handleRepairCharacterRoster} busy={extracting} />}
       {stepKey === 'characters' && rosterPresentation && (
         <div
           role="status"

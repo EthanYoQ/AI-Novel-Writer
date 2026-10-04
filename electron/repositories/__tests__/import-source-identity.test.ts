@@ -5,7 +5,9 @@ import { createHash, createHmac } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
+import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { ImportSourceIdentityRepository } from '../import-source-identity-repository'
 import { ImportRunRepository } from '../import-run-repository'
 
@@ -134,15 +136,17 @@ describe('project-scoped opaque import source identity', () => {
       WHERE id = 'old-completed-run'
     `).run()
     closeProjectDatabase()
-    const offline = new Database(path.join(root, '.vela', 'vela.db'))
+    const offline = new Database(path.join(root, '.ai-novel', 'project.db'))
     offline.exec(`CREATE TABLE import_source_identity (
       id TEXT PRIMARY KEY, salt_hex TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`)
     offline.prepare('INSERT INTO import_source_identity (id, salt_hex) VALUES (?, ?)')
       .run('main', oldSalt.toString('hex'))
+    // Explicit legacy normalization regression; ordinary reopen never runs it.
+    initializeLegacyBaselineSchema(offline, applicationSecret)
     offline.close()
 
-    initProjectDatabase(root, applicationSecret)
+    initProjectDatabase(root)
     const serialized = JSON.stringify(getProjectDb()!.prepare('SELECT * FROM import_legacy_identity_bridge').all())
     expect(serialized).not.toContain(oldSalt.toString('hex'))
     expect(getProjectDb()!.prepare(`SELECT COUNT(*) AS count FROM sqlite_master

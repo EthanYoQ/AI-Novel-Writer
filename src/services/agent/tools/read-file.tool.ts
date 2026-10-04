@@ -1,3 +1,4 @@
+import { CANONICAL_PROJECT_DIRECTORY } from '../../../shared/project-format'
 /**
  * read_file — 读取项目内的文件内容
  */
@@ -16,8 +17,8 @@ export const readFileTool = buildAgentTool({
     properties: {
       file_path: {
         type: 'string',
-        description: '相对于项目根目录且已存在的文件路径，例如 ".vela/project.json" 或用户已创建的文本文件。故事架构请使用 read_architecture。',
-        descriptionEn: 'Path to an existing file relative to the project root, such as ".vela/project.json" or a user-created text file. Use read_architecture for story architecture.',
+        description: `相对于项目根目录且已存在的文件路径，例如 "${CANONICAL_PROJECT_DIRECTORY}/project.json" 或用户已创建的文本文件。故事架构请使用 read_architecture。`,
+        descriptionEn: `Path to an existing file relative to the project root, such as "${CANONICAL_PROJECT_DIRECTORY}/project.json" or a user-created text file. Use read_architecture for story architecture.`,
       },
     },
     required: ['file_path'],

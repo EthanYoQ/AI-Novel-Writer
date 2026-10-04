@@ -1,9 +1,13 @@
+import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import vm from 'node:vm'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createStore } from 'zustand/vanilla'
+import { createLocaleState } from '../../src/stores/locale-store'
 import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
 import {
   classifyMacosCodeSigning,
@@ -38,6 +42,247 @@ afterEach(() => {
 })
 
 describe('macOS DMG acceptance receipt contract', () => {
+  it('keeps only structured A11 exit facts when a failed smoke cleans its scratch', () => {
+    const script = readRequired(smokeScriptPath)
+    const projection = script.match(/node - "\$evidence_root\/diagnostics\/macos-a11-exit\.json"[^\n]*<<'NODE' \|\| true\r?\n([\s\S]*?)\r?\nNODE/)?.[1]
+    expect(projection).toBeDefined()
+    const root = fixture()
+    const receiptFile = path.join(root, 'a11-v1.1.0', 'receipt.json')
+    const diagnosticFile = path.join(root, 'evidence', 'diagnostics', 'macos-a11-exit.json')
+    mkdirSync(path.dirname(receiptFile), { recursive: true })
+    writeFileSync(receiptFile, JSON.stringify({ lastStage: 'quit-requested',
+      failure: { message: 'PRIVATE_NOVEL_TEXT' },
+      exitDiagnostics: [{ renderer: { closeRequestCount: 1, approvalOrCancel: 'not-observed',
+        dialogs: ['PRIVATE_NOVEL_TEXT'] }, window: { count: 1, mainAlive: true,
+        mainVisible: true, webContentsAlive: true, events: [{ event: 'window-close', defaultPrevented: true }] },
+      events: [{ event: 'app-close' }] }],
+    }))
+    const run = spawnSync(process.execPath, ['-', diagnosticFile, 'v1.1.0',
+      path.join(root, 'a11-v1.0.0', 'receipt.json'), receiptFile], { input: projection, encoding: 'utf8' })
+    expect(run.status, run.stderr).toBe(0)
+    const diagnostic = readFileSync(diagnosticFile, 'utf8')
+    expect(diagnostic).not.toContain('PRIVATE_NOVEL_TEXT')
+    expect(JSON.parse(diagnostic)).toMatchObject({ kind: 'macos-a11-exit-diagnostic', cases: [{
+      version: 'v1.1.0', stage: 'quit-requested', closeRequestCount: 1,
+      approvalOrCancel: 'not-observed', window: { count: 1, mainAlive: true,
+        closeEvents: [{ event: 'window-close', defaultPrevented: true }] },
+      processExitObserved: false,
+    }] })
+  })
+  it.each([
+    { macMode: true, writeSucceeds: true },
+    { macMode: true, writeSucceeds: false },
+    { macMode: false, writeSucceeds: true },
+  ])('prepares the isolated locale with macMode=$macMode writeSucceeds=$writeSucceeds', async ({ macMode, writeSucceeds }) => {
+    const source = readRequired(path.join(repositoryRoot, 'scripts/f05-a11-offline-import-journey.mjs'))
+    const launch = source.slice(source.indexOf('async function launch(roots) {'), source.indexOf('\nasync function home('))
+    let config: { theme: string; locale?: 'zh-CN' | 'en-US' } = { theme: 'light' }
+    const calls: string[] = []
+    const store = createStore(createLocaleState({
+      loadConfig: async () => config,
+      saveLocale: async () => ({ success: true }),
+      systemLocale: () => 'en-US',
+      setDocumentLanguage() {},
+    }))
+    expect(store.getState().text('导入旧项目副本', 'Import legacy project copy')).toBe('Import legacy project copy')
+    const page = {
+      locator: (selector: string) => ({ waitFor: async () => {
+        calls.push(selector)
+        if (selector === 'html[lang="zh-CN"]') expect(store.getState().locale).toBe('zh-CN')
+      } }),
+      evaluate: (callback: () => unknown) => vm.runInNewContext(`(${callback})()`, {
+        window: { aiNovelAPI: { invoke: async (channel: string, value: { locale: 'zh-CN' }) => {
+          calls.push(channel)
+          if (channel === 'config:get') return config
+          expect(channel).toBe('config:set')
+          if (!writeSucceeds) return { success: false, error: 'CONFIG_WRITE_DENIED' }
+          config = { ...config, ...value }
+          return { success: true }
+        } } },
+        localStorage: { getItem: () => null, setItem() {} },
+      }),
+      reload: async () => { calls.push('reload'); await store.getState().init() },
+    }
+    const run = vm.runInNewContext(`(${launch})`, {
+      path, macMode, process: { env: {} }, exe: '/in-memory/app', packageDir: '/in-memory',
+      electron: { launch: async () => ({ firstWindow: async () => page }) },
+      macStage() {}, receipt: {}, console: { error() {} },
+      closeMacApplication: async () => { calls.push('cleanup') },
+    })
+    if (macMode && !writeSucceeds) {
+      await expect(run({})).rejects.toThrow('CONFIG_WRITE_DENIED')
+      expect(calls).not.toContain('reload')
+      expect(calls).toContain('cleanup')
+      expect(config).toEqual({ theme: 'light' })
+    } else {
+      await run({})
+      expect(calls.filter(call => call.startsWith('config:'))).toEqual(macMode ? ['config:set', 'config:get'] : [])
+      expect(store.getState().text('导入旧项目副本', 'Import legacy project copy'))
+        .toBe(macMode ? '导入旧项目副本' : 'Import legacy project copy')
+      expect(config.theme).toBe('light')
+      if (macMode) {
+        expect(calls.indexOf('config:get')).toBeLessThan(calls.indexOf('reload'))
+        expect(calls.indexOf('html[lang="zh-CN"]')).toBeGreaterThan(calls.indexOf('reload'))
+      }
+    }
+  })
+
+  it.each(['home', 'first-window'])('preserves the original Mac %s failure across bounded cleanup', async (failureAt) => {
+    const source = readRequired(path.join(repositoryRoot, 'scripts/f05-a11-offline-import-journey.mjs'))
+    const stages = source.match(/function macStage\(stage\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+    const cleanup = source.match(/async function closeMacApplication\(app\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+    const verify = source.slice(source.indexOf('async function verifyMac() {'), source.indexOf('\nif (macFixtureOnly) {'))
+    const launch = failureAt === 'first-window'
+      ? source.slice(source.indexOf('async function launch(roots) {'), source.indexOf('\nasync function home(')) : ''
+    const stderr: unknown[][] = []
+    const receipt: { lastStage?: string; failure?: { message: string }; cleanupFailure?: { message: string } } = {}
+    const original = new Error('INJECTED_UI_TIMEOUT')
+    let releaseClose!: () => void
+    let closeEntered = false
+    let settled = false
+    let expire: (() => void) | undefined
+    const killed: string[] = []
+    const cleared: number[] = []
+    const close = new Promise<void>(resolve => { releaseClose = resolve })
+    const ownedApp = {
+      close: () => { closeEntered = true; return close },
+      firstWindow: async () => { throw original },
+      process: () => ({ exitCode: null, signalCode: null, kill: (signal: string) => { killed.push(signal); return true } }),
+    }
+    const run = vm.runInNewContext(`${stages}\n${cleanup}\n${launch}\n(${verify})`, {
+      path, macMode: true, winMode: false, nativePicker: false, receipt, scratch: 'in-memory-fixture', fs: { mkdirSync() {} },
+      console: { error: (...args: unknown[]) => stderr.push(args) },
+      seedMac: () => ({ source: 'in-memory-source' }),
+      launch: async () => ({ page: {}, app: ownedApp }),
+      electron: { launch: async () => ownedApp }, process: { env: {} }, exe: '/in-memory/app',
+      home: async () => { throw original },
+      setTimeout: (callback: () => void, timeout: number) => { expect(timeout).toBe(10_000); expire = callback; return 1 },
+      clearTimeout: (timer: number) => cleared.push(timer),
+    })
+    const completion = run().then(() => { settled = true }, (error: Error) => { settled = true; return error })
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(closeEntered).toBe(true)
+      expect(settled).toBe(false)
+      expect(stderr.some(args => args.includes(original))).toBe(true)
+      expect(receipt.failure?.message).toContain('INJECTED_UI_TIMEOUT')
+      expect(receipt.lastStage).toBe('cleanup-start')
+      expect(stderr.findIndex(args => args.includes(original))).toBeLessThan(
+        stderr.findIndex(args => args[0] === '[AI Novel A11] stage=cleanup-start'),
+      )
+      expect(expire).toBeTypeOf('function')
+      expire!()
+      expect(await completion).toBe(original)
+      expect(receipt.failure?.message).toContain('INJECTED_UI_TIMEOUT')
+      expect(receipt.cleanupFailure?.message).toContain('cleanup timed out')
+      expect(killed).toEqual(['SIGKILL'])
+      expect(cleared).toEqual([1])
+    } finally { releaseClose() }
+    expect(await completion).toBe(original)
+
+    const windowsReceipt = {}
+    const windowsStderr: unknown[] = []
+    vm.runInNewContext(`${stages}\nmacStage('launch-start')`, {
+      macMode: false, winMode: false, receipt: windowsReceipt, console: { error: (value: unknown) => windowsStderr.push(value) },
+    })
+    expect(windowsReceipt).toEqual({})
+    expect(windowsStderr).toEqual([])
+    if (failureAt === 'first-window') {
+      const windowsHelpers = source.slice(source.indexOf('async function closeWindowsApplication(app) {'),
+        source.indexOf('\nasync function launch(roots) {'))
+      const taskkills: string[][] = []
+      const windowsLaunch = vm.runInNewContext(`${stages}\n${windowsHelpers}\n(${launch})`, {
+        assert, setTimeout, clearTimeout,
+        path, macMode: false, winMode: false, receipt: windowsReceipt, exe: '/in-memory/app', packageDir: '/in-memory',
+        fs: { existsSync: () => false },
+        execFileSync: (command: string, args: string[]) => { taskkills.push([command, ...args]); return '' },
+        process: { env: {} }, console: { error: (value: unknown) => windowsStderr.push(value) },
+        electron: { launch: async () => ({ firstWindow: async () => { throw original },
+          process: () => ({ pid: 424242 }), close: async () => {} }) },
+      })
+      await expect(windowsLaunch({ canonical: '/canonical', legacy: '/legacy' })).rejects.toBe(original)
+      expect(taskkills).toEqual([['taskkill', '/PID', '424242', '/T', '/F']])
+      expect(windowsReceipt).toMatchObject({ startupDiagnostic: { stage: 'electron-created',
+        startupState: null, visibleAlert: null, legacyConfigHasBom: null, canonicalConfigHasBom: null } })
+      expect(windowsStderr).toEqual([])
+    }
+  })
+
+  it.each([true, false])('keeps successful Mac work failed when cleanup hangs=%s', async (hangs) => {
+    const source = readRequired(path.join(repositoryRoot, 'scripts/f05-a11-offline-import-journey.mjs'))
+    const stages = source.match(/function macStage\(stage\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+    const cleanup = source.match(/async function closeMacApplication\(app\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+    const verify = source.slice(source.indexOf('async function verifyMac() {'), source.indexOf('\nif (macFixtureOnly) {'))
+    // Run the real catch/finally boundary after a successful main body, without fabricating UI success.
+    const boundary = verify.indexOf('\n  } catch (error) {')
+    expect(boundary).toBeGreaterThan(-1)
+    const completionBoundary = verify.slice(boundary)
+    const receipt: { lastStage?: string; cleanupFailure?: { message: string } } = {}
+    const killed: string[] = []
+    let expire: (() => void) | undefined
+    let releaseClose!: () => void
+    const pendingClose = new Promise<void>(resolve => { releaseClose = resolve })
+    const run = vm.runInNewContext(`${stages}\n${cleanup}\n(async () => { const session = ownedSession; try {\n${completionBoundary})`, {
+      macMode: true, winMode: false, nativePicker: false, receipt, console: { error() {} },
+      ownedSession: { app: { close: () => hangs ? pendingClose : Promise.resolve(),
+        process: () => ({ exitCode: null, signalCode: null, kill: (signal: string) => { killed.push(signal); return true } }),
+      } },
+      setTimeout: (callback: () => void, timeout: number) => { expect(timeout).toBe(10_000); expire = callback; return 1 },
+      clearTimeout() {},
+    })
+    const completion = run().then(() => 'PASS', (error: Error) => error.message)
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      if (hangs) {
+        expect(expire).toBeTypeOf('function')
+        expire!()
+        expect(await completion).toContain('cleanup timed out')
+        expect(receipt.cleanupFailure?.message).toContain('cleanup timed out')
+        expect(killed).toEqual(['SIGKILL'])
+      } else {
+        expect(await completion).toBe('PASS')
+        expect(receipt.lastStage).toBe('cleanup-complete')
+        expect(killed).toEqual([])
+      }
+    } finally { releaseClose() }
+  })
+
+  it.each(['v1.0.0', 'v1.1.0'])('copies official %s old-app author source for Mac import', version => {
+    const scratchParent = path.join(repositoryRoot, '.runtime', '.cache')
+    mkdirSync(scratchParent, { recursive: true })
+    const scratch = mkdtempSync(path.join(scratchParent, 's14c-fixture-'))
+    fixtures.push(scratch)
+    const result = spawnSync(process.execPath, [
+      path.join(repositoryRoot, 'scripts', 'f05-a11-offline-import-journey.mjs'),
+      '--mac-fixture-only=1', `--mac-version=${version}`, `--scratch-root=${scratch}`,
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(0)
+    const fact = JSON.parse(result.stdout.trim())
+    expect(fact).toMatchObject({ kind: 'official-old-app-mac-fixture', sourceVersion: version, llmCalls: 0,
+      rows: { project_core: 1, contents: 4, drafts: 2, characters: 2, blueprints: 1 } })
+    for (const file of ['.vela/vela.db', '.vela/project.json',
+      '.vela/prompts/assistant_writing_identity.zh-CN.json', '.vela/writing-skills.json',
+      '.vela/lancedb/documents.lance/_versions/2.manifest', '.vela/lancedb/chunks.lance/_versions/2.manifest']) {
+      expect(existsSync(path.join(scratch, 'source', file)), file).toBe(true)
+    }
+    const source = path.join(scratch, 'source')
+    const files: Record<string, string> = {}
+    const visit = (directory: string) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name)
+        if (entry.isDirectory()) visit(file)
+        else {
+          expect(entry.isFile(), file).toBe(true)
+          files[path.relative(source, file).replaceAll('\\', '/')] = createHash('sha256').update(readFileSync(file)).digest('hex')
+        }
+      }
+    }
+    visit(source)
+    const manifest = JSON.parse(readFileSync(path.join(repositoryRoot, 'scripts/fixtures/s14c-official-old-sources/manifest.json'), 'utf8'))
+    expect(files).toEqual(manifest.cases.find((entry: { version: string }) => `v${entry.version}` === version).files)
+    expect(fact.sourceInventorySha256).toBe(createHash('sha256').update(JSON.stringify(files)).digest('hex'))
+  })
+
   it('classifies an exit-zero ad-hoc signature as lacking a Developer ID distribution identity', () => {
     const observation = classifyMacosCodeSigning({
       detailsExitCode: 0,
@@ -135,6 +380,12 @@ describe('macOS DMG acceptance receipt contract', () => {
     expect(script).not.toContain('unexpected-signed')
     expect(script).toContain('observations: [')
     expect(script).toContain('const direct = {')
+    expect(script).toContain('a11OfflineImport,')
+    expect(script).toContain('for old_version in v1.0.0 v1.1.0')
+    expect(script).toContain('"--mac-version=$old_version"')
+    expect(script).toContain('journey.database?.rows?.characters !== 2')
+    expect(script).toContain('journey.knowledgeChunks !== 1')
+    expect(script).not.toContain('synthetic-v110-mounted-app')
     expect(script).toContain('direct,')
 
     for (const directFact of ['dmg:', 'app:', 'executable:', 'helper:', 'hash:', 'mount:', 'unmount:']) {
@@ -149,7 +400,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       expect(script).toContain(priorFact)
     }
 
-    expect(script).not.toMatch(/(?:\.exe|latest\.yml|win-unpacked|NSIS|Start-Process)/i)
+    expect(script).not.toMatch(/(?:\.exe\b|latest\.yml|win-unpacked|NSIS|Start-Process)/i)
   })
 
   it('accepts the fixed Intel LanceDB binding step and rejects an unknown Intel macOS command step', () => {

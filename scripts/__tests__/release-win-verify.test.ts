@@ -1437,6 +1437,13 @@ internal static class ExactNsisProbeParent {
       await waitForGateStatus(statusPath, 'step-completed', 30_000)
       const rawEvidence = readFileSync(join(evidencePath, 'process-events.jsonl'), 'utf8')
       const events = rawEvidence.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
+      for (const event of events.filter(event => event.kind === 'process-start')) {
+        expect(event).toMatchObject({
+          captureAttemptedAt: expect.any(String),
+          captureFailureStage: '',
+          captureWin32Error: null,
+        })
+      }
       const powerShellExits = events.filter(event => {
         const identity = event.processIdentity as Record<string, unknown> | undefined
         return event.kind === 'process-exit' && identity?.processName === 'powershell'
@@ -1491,7 +1498,7 @@ internal static class ExactNsisProbeParent {
     }
   }, 60_000)
 
-  windowsIt('accepts the real 8.3-path NSIS uninstaller helper process-check chain only after its identity-bound TEMP host is observed', async (context) => {
+  windowsIt('observes the complete real 8.3-path NSIS helper chain or strictly rejects an unobservable short-lived member', async (context) => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-nsis-uninstaller-'))
     const controlPath = join(root, 'control.jsonl')
     const statusPath = join(root, 'status.json')
@@ -1693,8 +1700,132 @@ internal static class ExactNsisUninstallerHelper {
     )
     let gate: Awaited<ReturnType<typeof startArmedExecutable>> | undefined
 
+    function assertSafeNativeObservation(
+      status: Record<string, unknown>,
+      events: Record<string, unknown>[],
+      proof: {
+        rootProcessId: number
+        rootProcessStartTimeTicks: string
+        nodeExecutable: string
+        systemCmd: string
+        systemPowerShell: string
+        uninstallerPath: string
+        helperPaths: string[]
+        monitorStartedAt: unknown
+        rootResult: { code: number | null, signal: NodeJS.Signals | null }
+        launchResult: Record<string, unknown> | undefined
+        probeResults: number[]
+        observedStates: unknown[]
+        windowEvidence: Record<string, unknown>[]
+      },
+    ): 'captured' | 'rejected-unobservable' {
+      expect(proof.rootResult).toEqual({ code: 0, signal: null })
+      expect(proof.launchResult).toMatchObject({ state: 'completed', processId: proof.rootProcessId, targetExitCode: 0, targetSignal: null, error: null })
+      expect(proof.probeResults).toEqual([1, 1])
+      expect(status.step).toBe('smoke:win-installer')
+      expect(status.monitorStartedAt).toBe(proof.monitorStartedAt)
+      const starts = events.filter(event => event.kind === 'process-start')
+      const identity = (event: Record<string, unknown> | undefined) => event?.processIdentity as Record<string, unknown>
+      const rootStart = starts.find(event => event.processId === proof.rootProcessId)
+      expect(rootStart).toBeDefined()
+      const rootIdentity = identity(rootStart)
+      expect(rootIdentity.startTimeTicks).toBe(proof.rootProcessStartTimeTicks)
+      expect(sameWindowsPath(rootIdentity.executablePath, proof.nodeExecutable)).toBe(true)
+      const childStart = (paths: string[], parent: Record<string, unknown>) => starts.find(event => {
+        const child = identity(event)
+        return child?.parentProcessId === parent.processId && paths.some(path => sameWindowsPath(child.executablePath, path))
+      })
+      const wrapperCmdStart = childStart([proof.systemCmd], rootIdentity)
+      const wrapperPowerShellStart = childStart([proof.systemPowerShell], identity(wrapperCmdStart))
+      const uninstallerStart = childStart([proof.uninstallerPath], identity(wrapperPowerShellStart))
+      const helperStart = childStart(proof.helperPaths, identity(uninstallerStart))
+      const chain = [rootStart, wrapperCmdStart, wrapperPowerShellStart, uninstallerStart, helperStart]
+      const names = ['node', 'cmd', 'powershell', 'Uninstall AI小说作家', 'Un_A9']
+      for (const [index, event] of chain.entries()) {
+        expect(event).toMatchObject({ captureEstablished: true, captureFailureStage: '', captureWin32Error: null, jobMessage: 6 })
+        const child = identity(event)
+        expect(child).toMatchObject({ identityCaptured: true, processId: event?.processId, processName: names[index] })
+        expect(child.startTimeTicks).toMatch(/^\d+$/)
+        if (index > 0) {
+          const parent = identity(chain[index - 1])
+          expect(child).toMatchObject({ parentProcessId: parent.processId, parentProcessStartTimeTicks: parent.startTimeTicks })
+          expect(sameWindowsPath(child.parentExecutablePath, parent.executablePath as string)).toBe(true)
+        }
+      }
+      const expectedPowerShell = events.find(event => event.kind === 'process-exit' && event.exitClassification === 'expected-nsis-powershell-probe')
+      const expectedCmd = events.find(event => event.kind === 'process-exit' && event.exitClassification === 'expected-nsis-cmd-process-check')
+      const expectedFind = events.find(event => event.kind === 'process-exit' && event.exitClassification === 'expected-nsis-find-no-match')
+      expect(expectedPowerShell).toMatchObject({ exitCode: 1, exitCodeCaptured: true, captureEstablished: true, jobMessage: 7 })
+      const probeStart = starts.find(event => event.processId === expectedPowerShell?.processId)
+      expect(probeStart).toMatchObject({ captureEstablished: true, captureFailureStage: '', captureWin32Error: null, jobMessage: 6 })
+      expect(identity(probeStart)).toEqual(identity(expectedPowerShell))
+      const helperIdentity = identity(helperStart)
+      expect(identity(expectedPowerShell)).toMatchObject({ identityCaptured: true, commandLineCaptured: true, commandLineRedacted: true, parentProcessId: helperIdentity.processId, parentProcessStartTimeTicks: helperIdentity.startTimeTicks })
+      expect(sameWindowsPath(identity(expectedPowerShell).executablePath, proof.systemPowerShell)).toBe(true)
+      expect(sameWindowsPath(identity(expectedPowerShell).parentExecutablePath, helperIdentity.executablePath as string)).toBe(true)
+      for (const event of events) {
+        expect(['process-start', 'process-exit', 'process-tree', 'job-empty']).toContain(event.kind)
+        expect(event.step).toBe('smoke:win-installer')
+        expect(event.monitorStartedAt).toBe(proof.monitorStartedAt)
+        if (event.processIdentity) expect(identity(event)).not.toHaveProperty('commandLine')
+      }
+      expect(JSON.stringify(events)).not.toContain('tasklist /FI')
+      expect(JSON.stringify(events)).not.toContain('Get-CimInstance')
+      const failedStarts = starts.filter(event => event.captureEstablished === false || event.exitClassification === 'capture-failure')
+      const unknownIds = new Set(failedStarts.map(event => event.processId))
+      if (status.state === 'step-completed') {
+        expect(failedStarts).toEqual([])
+        expect(expectedCmd).toMatchObject({ exitCode: 1, exitCodeCaptured: true, jobMessage: 7 })
+        expect(expectedFind).toMatchObject({ exitCode: 1, exitCodeCaptured: true, jobMessage: 7 })
+        expect(events.some(event => event.kind === 'process-exit' && event.exitClassification === 'failure')).toBe(false)
+      } else {
+        expect(status.state).toBe('failed')
+        expect(proof.observedStates).not.toContain('step-completed')
+        expect(events.some(event => event.kind === 'process-tree' && String(event.reason).includes('completed'))).toBe(false)
+        const failure = /^Release gate monitor failed during 'smoke:win-installer': Release gate could not retain a process handle for job-contained PID ([1-9]\d*); its eventual exit code would be unobservable\.$/.exec(String(status.failure))
+        expect(failure).not.toBeNull()
+        expect(unknownIds.has(Number(failure?.[1]))).toBe(true)
+        expect(failedStarts.length).toBeGreaterThan(0)
+        const stoppedAt = Date.parse(String(status.monitorStoppedAt))
+        expect(Number.isFinite(stoppedAt)).toBe(true)
+        for (const event of failedStarts) {
+          expect(Number.isInteger(event.processId)).toBe(true)
+          expect(Number(event.processId)).toBeGreaterThan(0)
+          expect(chain.some(member => member?.processId === event.processId)).toBe(false)
+          expect(event).toMatchObject({ captureEstablished: false, exitCode: null, exitCodeCaptured: false, captureFailureStage: 'OpenProcess', captureWin32Error: 87, jobMessage: 6, exitClassification: 'capture-failure' })
+          expect(identity(event)).toMatchObject({ processId: event.processId, startTimeTicks: null, processName: null, executablePath: null, parentProcessId: null, parentProcessStartTimeTicks: null, parentExecutablePath: null, identityCaptured: false, commandLineCaptured: false, commandLineRedacted: false, identityCaptureError: null })
+          expect(events.indexOf(expectedPowerShell!)).toBeLessThan(events.indexOf(event))
+          const attemptedAt = Date.parse(String(event.captureAttemptedAt))
+          expect(attemptedAt).toBeGreaterThanOrEqual(Date.parse(String(proof.monitorStartedAt)))
+          expect(attemptedAt).toBeLessThanOrEqual(stoppedAt)
+        }
+        const memberIds = new Set(events.map(event => event.processId))
+        expect(proof.windowEvidence.some(window => (window.visible === true || window.Visible === true) && memberIds.has(window.processId ?? window.ProcessId))).toBe(false)
+      }
+      for (const event of events.filter(event => event.kind === 'process-exit')) {
+        expect(event.jobMessage).toBe(7)
+        if (unknownIds.has(event.processId)) {
+          // The consumer can stop before writing EXIT. An absent EXIT remains
+          // unobservable; any available EXIT must not invent a captured result.
+          expect(event).toMatchObject({ captureEstablished: false, exitCodeCaptured: false, exitCode: null, captureFailureStage: '', captureWin32Error: null })
+          if (event.processIdentity !== null) {
+            expect(identity(event)).toEqual(identity(failedStarts.find(start => start.processId === event.processId)))
+          }
+          expect(event.exitClassification).not.toMatch(/succeeded|expected/)
+        } else {
+          expect(event).toMatchObject({ captureEstablished: true, exitCodeCaptured: true })
+          if (event.exitCode === 0) expect(event.exitClassification).toBe('succeeded')
+          else {
+            expect(event.exitCode).toBe(1)
+            expect([expectedPowerShell, expectedCmd, expectedFind]).toContain(event)
+          }
+        }
+      }
+      return status.state === 'step-completed' ? 'captured' : 'rejected-unobservable'
+    }
+
     try {
-      await waitForGateStatus(statusPath, 'ready')
+      const ready = await waitForGateStatus(statusPath, 'ready')
       gate = await startArmedExecutable(
         root,
         systemCmd,
@@ -1705,6 +1836,7 @@ internal static class ExactNsisUninstallerHelper {
         ],
       )
       if (gate.child.pid == null) throw new Error('The armed uninstaller gate did not expose a PID')
+      const rootProcessStartTimeTicks = windowsProcessStartTimeTicks(gate.child.pid)
       appendFileSync(
         controlPath,
         `${JSON.stringify({
@@ -1712,63 +1844,49 @@ internal static class ExactNsisUninstallerHelper {
           state: 'running',
           step: 'smoke:win-installer',
           rootProcessId: gate.child.pid,
-          rootProcessStartTimeTicks: windowsProcessStartTimeTicks(gate.child.pid),
+          rootProcessStartTimeTicks,
           relatedTargetNames: ['Uninstall AI小说作家', 'Un_A9', 'powershell'],
         })}\n`,
         'utf8',
       )
       await waitForGateStatus(statusPath, 'monitoring')
       writeFileSync(gate.releasePath, 'release', 'utf8')
-      expect(await settleWithin(gate.child, 30_000)).toEqual({ code: 0, signal: null })
-      expect(readFileSync(probeResultPath, 'utf8').split(',').map(Number)).toEqual([1, 1])
+      const rootResult = await settleWithin(gate.child, 30_000)
+      expect(rootResult).toEqual({ code: 0, signal: null })
+      const probeResults = readFileSync(probeResultPath, 'utf8').split(',').map(Number)
+      expect(probeResults).toEqual([1, 1])
 
       appendFileSync(
         controlPath,
         `${JSON.stringify({ sequence: 2, state: 'step-complete', step: 'smoke:win-installer' })}\n`,
         'utf8',
       )
-      await waitForGateStatus(statusPath, 'step-completed', 30_000)
+      const terminalDeadline = Date.now() + 30_000
+      const observedStates: unknown[] = []
+      let terminalStatus: Record<string, unknown> | undefined
+      while (Date.now() < terminalDeadline) {
+        const status = readJsonWhenAvailable(statusPath)
+        observedStates.push(status?.state)
+        if (status?.state === 'step-completed' || status?.state === 'failed') {
+          terminalStatus = status
+          break
+        }
+        await new Promise(resolvePromise => setTimeout(resolvePromise, 20))
+      }
+      if (!terminalStatus) throw new Error('Timed out waiting for the native NSIS observer terminal')
       const rawEvidence = readFileSync(join(evidencePath, 'process-events.jsonl'), 'utf8')
       const events = rawEvidence.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
-      const expectedPowerShell = events.find(event => event.kind === 'process-exit'
-        && event.exitClassification === 'expected-nsis-powershell-probe')
-      const expectedCmd = events.find(event => event.kind === 'process-exit'
-        && event.exitClassification === 'expected-nsis-cmd-process-check')
-      const expectedFind = events.find(event => event.kind === 'process-exit'
-        && event.exitClassification === 'expected-nsis-find-no-match')
-      const helperStart = events.find(event => {
-        const identity = event.processIdentity as Record<string, unknown> | undefined
-        return event.kind === 'process-start' && identity?.processName === 'Un_A9'
+      const windowEventsPath = join(evidencePath, 'window-events.jsonl')
+      const windowEvidence = existsSync(windowEventsPath)
+        ? readFileSync(windowEventsPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
+        : []
+      const observation = assertSafeNativeObservation(terminalStatus, events, {
+        rootProcessId: gate.child.pid, rootProcessStartTimeTicks, nodeExecutable: process.execPath,
+        systemCmd, systemPowerShell, uninstallerPath, helperPaths: [helperPath, helperLaunchPath],
+        monitorStartedAt: ready.monitorStartedAt, rootResult, launchResult: readJsonWhenAvailable(gate.resultPath),
+        probeResults, observedStates, windowEvidence,
       })
-      const uninstallerStart = events.find(event => {
-        const identity = event.processIdentity as Record<string, unknown> | undefined
-        return event.kind === 'process-start' && identity?.processName === 'Uninstall AI小说作家'
-      })
-      const wrapperCmdStart = events.find(event => {
-        const identity = event.processIdentity as Record<string, unknown> | undefined
-        return event.kind === 'process-start'
-          && sameWindowsPath(identity?.executablePath, systemCmd)
-          && identity?.parentProcessId === gate?.child.pid
-      })
-      const wrapperCmdIdentity = wrapperCmdStart?.processIdentity as Record<string, unknown> | undefined
-      const wrapperPowerShellStart = events.find(event => {
-        const identity = event.processIdentity as Record<string, unknown> | undefined
-        return event.kind === 'process-start'
-          && sameWindowsPath(identity?.executablePath, systemPowerShell)
-          && identity?.parentProcessId === wrapperCmdIdentity?.processId
-      })
-      const wrapperPowerShellIdentity = wrapperPowerShellStart?.processIdentity as Record<string, unknown> | undefined
-      const uninstallerIdentity = uninstallerStart?.processIdentity as Record<string, unknown> | undefined
-
-      expect(expectedPowerShell).toMatchObject({ exitCode: 1 })
-      expect(expectedCmd).toMatchObject({ exitCode: 1 })
-      expect(expectedFind).toMatchObject({ exitCode: 1 })
-      expect(wrapperCmdStart).toBeDefined()
-      expect(wrapperPowerShellStart).toBeDefined()
-      expect(helperStart).toBeDefined()
-      expect(uninstallerStart).toBeDefined()
-      expect(uninstallerIdentity?.parentProcessId).toBe(wrapperPowerShellIdentity?.processId)
-      expect(events.some(event => event.kind === 'process-exit' && event.exitClassification === 'failure')).toBe(false)
+      console.info('NSIS native observer terminal:', observation)
       expect(rawEvidence).not.toContain('tasklist /FI')
       expect(rawEvidence).not.toContain('Get-CimInstance')
     } catch (error) {

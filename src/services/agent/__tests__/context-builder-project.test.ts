@@ -171,7 +171,7 @@ describe('agent context project isolation', () => {
       } as never,
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke: vi.fn(async (channel: string) => {
           if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
           if (channel === 'fs:check-exists') return true
@@ -223,7 +223,7 @@ describe('agent context project isolation', () => {
       } as never,
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke: vi.fn(async (channel: string) => {
           if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
           if (channel === 'fs:check-exists') return false

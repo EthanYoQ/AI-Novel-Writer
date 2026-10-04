@@ -4,9 +4,14 @@ import {
   isProjectStoragePreflightError,
   projectStoragePreflightFailure,
   ProjectStoragePreflightError,
+  assertProjectMigrationPathsSupported,
 } from '../project-storage-preflight'
 
 describe('project storage preflight failure seam', () => {
+  it('includes the longer vector staging path before any project migration write', () => {
+    expect(() => assertProjectMigrationPathsSupported('C:\\short', { platform: 'win32' })).not.toThrow()
+    expect(() => assertProjectMigrationPathsSupported(`C:\\${'a'.repeat(140)}`, { platform: 'win32' })).toThrow(ProjectStoragePreflightError)
+  })
   it('maps the typed preflight error to one sanitized AppFailure contract', () => {
     const error = new ProjectStoragePreflightError(250, 120, 'knowledge-base')
 

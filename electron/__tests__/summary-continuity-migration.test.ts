@@ -2,9 +2,17 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../database'
+import { closeLegacyNormalizationFixture as closeProjectDatabase, getLegacyNormalizationFixtureDb as getProjectDb, openLegacyNormalizationFixture } from '../../test/helpers/legacy-baseline-fixture'
+
+// Historical normalization regressions use an explicit fixture handle. Production
+// rejects these unqualified old roots; canonical activation is tested separately.
+vi.mock('../database', async () => {
+  const actual = await vi.importActual<typeof import('../database')>('../database')
+  const fixture = await import('../../test/helpers/legacy-baseline-fixture')
+  return { ...actual, getProjectDb: fixture.getLegacyNormalizationFixtureDb, getCurrentProjectPath: fixture.getLegacyNormalizationFixturePath }
+})
 import { countDraftUnits } from '../../src/shared/draft-units'
 import { FinalizedDraftImportRepository } from '../repositories/finalized-draft-import-repository'
 import { SummaryRepository } from '../repositories/summary-repository'
@@ -37,7 +45,7 @@ describe('summary continuity migration', () => {
     `)
     legacyDb.close()
 
-    expect(() => initProjectDatabase(projectRoot)).not.toThrow()
+    expect(() => openLegacyNormalizationFixture(projectRoot)).not.toThrow()
     expect(getProjectDb()!.prepare('PRAGMA table_info(summary_snapshots)').all())
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'draft_id' }),
@@ -73,7 +81,7 @@ describe('summary continuity migration', () => {
     `)
     legacyDb.close()
 
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     const finalizedContent = 'A finalized author chapter.'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'migration-cascade-finalized',

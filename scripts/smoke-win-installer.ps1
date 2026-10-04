@@ -6,6 +6,8 @@
   [int]$InstallerTimeoutSeconds = 300,
   [int]$PostExitQuietSeconds = 5,
   [switch]$RequireCompleteV025Fixture,
+  [switch]$V110InstalledUpgrade,
+  [string]$IsolatedAcceptanceDirectory,
   [switch]$LoadInstallerLibrary
 )
 
@@ -34,12 +36,23 @@ $script:aiNovelAcceptanceDirectory = if (-not [string]::IsNullOrWhiteSpace($env:
 } else {
   Join-Path $root ("release\{0}\qualification\acceptance" -f [string]$packageJson.version)
 }
-$smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-installer-smoke-' + [guid]::NewGuid().ToString('N'))
+if ($V110InstalledUpgrade) {
+  if ($RequireCompleteV025Fixture -or -not [string]::IsNullOrWhiteSpace($PreviousPortableZipPath) -or
+      [string]::IsNullOrWhiteSpace($PreviousInstallerPath) -or
+      [string]::IsNullOrWhiteSpace($IsolatedAcceptanceDirectory) -or
+      [string]::IsNullOrWhiteSpace($env:AI_NOVEL_RELEASE_EVIDENCE_ROOT)) {
+    throw 'v1.1 installed upgrade requires one previous installer, isolated acceptance output, and the existing release evidence root.'
+  }
+  $script:aiNovelAcceptanceDirectory = [System.IO.Path]::GetFullPath($IsolatedAcceptanceDirectory)
+}
+$smokeRoot = Join-Path (Join-Path $root '.runtime\.cache') ('ai-novel-installer-smoke-' + [guid]::NewGuid().ToString('N'))
 $installRoot = Join-Path $smokeRoot 'installed-app'
+$sharedUserData = Join-Path $smokeRoot 'chromium-profile'
 $velaHome = Join-Path $smokeRoot 'vela-home'
 $globalConfig = Join-Path $velaHome 'config.json'
 $recentProjects = Join-Path $velaHome 'recent-projects.json'
 $upgradeFixtureRoot = Join-Path $smokeRoot 'user-projects\upgrade-preservation-fixture'
+$v025SaveProofPath = Join-Path $smokeRoot 'v025-save-proof.json'
 $uninstaller = Join-Path $installRoot 'Uninstall AI小说作家.exe'
 $lastWindowSnapshot = @()
 $observedProcessIds = [System.Collections.Generic.HashSet[int]]::new()
@@ -83,6 +96,246 @@ function Get-AiNovelFileSha256 {
   }
 }
 
+function Invoke-AiNovelV025CopyImport {
+  $head = (& git -C $root rev-parse HEAD).Trim()
+  if ($LASTEXITCODE -ne 0) { throw 'Cannot bind v0.2.5 copy journey to build HEAD.' }
+  $arguments = @(
+    (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs'),
+    "--package-dir=$installRoot", "--build-tree=$root", "--tested-sha=$head",
+    "--exe-sha256=$((Get-AiNovelFileSha256 -Path $exePath).ToLowerInvariant())",
+    "--asar-sha256=$((Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'resources\app.asar')).ToLowerInvariant())",
+    "--legacy-v025=$upgradeFixtureRoot", "--legacy-home=$velaHome", "--installer-smoke-root=$smokeRoot"
+  )
+  $output = @(& node @arguments)
+  if ($LASTEXITCODE -ne 0) { throw 'Installed v0.2.5 roster refusal journey failed.' }
+  $summary = $output[-1] | ConvertFrom-Json
+  $proof = Get-Content -LiteralPath $summary.receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($proof.sliceOutcome -ne 'PASS' -or $summary.receiptSha256 -ne (Get-AiNovelFileSha256 -Path $summary.receiptPath).ToLowerInvariant() -or
+      $proof.mode -ne 'v025-roster-refusal-v2' -or
+      $proof.packageMode -ne 'installed' -or $proof.testedSha -ne $head -or
+      $proof.driverSha256 -ne (Get-AiNovelFileSha256 -Path (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs')).ToLowerInvariant() -or
+      $proof.packageHashes.exe -ne (Get-AiNovelFileSha256 -Path $exePath).ToLowerInvariant() -or
+      $proof.packageHashes.asar -ne (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'resources\app.asar')).ToLowerInvariant() -or
+      $proof.copyImport.revision -ne 'v025-roster-refusal-v2' -or
+      $proof.copyImport.expectedCode -ne 'LEGACY_IMPORT_ROSTER_UNAVAILABLE' -or
+      $proof.copyImport.sourceUnchanged -ne $true -or $proof.copyImport.legacyGlobalsUnchanged -ne $true -or
+      $proof.copyImport.sourceAfterSha256 -ne $proof.copyImport.sourceInventorySha256 -or
+      $proof.copyImport.legacyGlobalsAfterSha256 -ne $proof.copyImport.legacyGlobalsBeforeSha256 -or
+      $proof.copyImport.targetPublished -ne $false -or $proof.copyImport.targetRecentRegistered -ne $false -or
+      $proof.copyImport.stagingRetained -ne $true -or $proof.copyImport.modelRequests.mainFetchCalls -ne 0 -or
+      $proof.copyImport.modelRequests.rendererRequests -ne 0 -or
+      @($proof.steps | Where-Object { $_.stepId -eq 'v0.2.5-roster-rejected' -and $_.outcome -eq 'PASS' }).Count -ne 1) {
+    throw 'Installed v0.2.5 roster refusal evidence is incomplete.'
+  }
+  return $proof
+}
+
+function New-AiNovelOfficialJourneyScratch {
+  param([ValidatePattern('^[a-f0-9]{8}$')][string]$TaskId = ([guid]::NewGuid().ToString('N').Substring(0, 8)))
+
+  if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA) -or -not [System.IO.Path]::IsPathRooted($env:LOCALAPPDATA)) {
+    throw 'Official A11 scratch requires an absolute LOCALAPPDATA path.'
+  }
+  $parent = Join-Path ([System.IO.Path]::GetFullPath($env:LOCALAPPDATA)) 'VibeCodingScratch\an'
+  $scratch = Join-Path $parent $TaskId
+  $target = Join-Path $scratch 'target\source-新版副本'
+  # Keep this final-target limit aligned with project-storage-preflight.ts (covered by the contract test).
+  if ($target.Length -gt 85) {
+    throw "PROJECT_STORAGE_PATH_UNSUPPORTED: official A11 target has $($target.Length) characters; maximum is 85: $target"
+  }
+  $owner = [ordered]@{
+    owner = 'codex/s14c-windows-official'
+    sourceProject = $root
+    createdAt = [DateTime]::UtcNow.ToString('o')
+    ttlHours = 72
+    cleanupCommand = "Remove-Item -LiteralPath '$($scratch.Replace("'", "''"))' -Recurse -Force"
+    retainReason = 'Official A11 synthetic import evidence, including early launch failures'
+  }
+  $ownerBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($owner | ConvertTo-Json -Compress)))
+  New-Item -ItemType Directory -Path $parent -Force | Out-Null
+  $node = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+  # Non-recursive mkdir is exclusive: an existing task directory is never reused or overwritten.
+  & $node -e "const fs = require('node:fs'); fs.mkdirSync(process.argv[1]); fs.writeFileSync(require('node:path').join(process.argv[1], '.vibe-owner.json'), Buffer.from(process.argv[2], 'base64'), { flag: 'wx' });" $scratch $ownerBase64
+  if ($LASTEXITCODE -ne 0) { throw "Cannot exclusively create owned official A11 scratch: $scratch" }
+  return $scratch
+}
+
+function Invoke-AiNovelOfficialOldSourceJourney {
+  param([Parameter(Mandatory = $true)][ValidateSet('v1.0.0', 'v1.1.0')][string]$Version)
+
+  $head = (& git -C $root rev-parse HEAD).Trim().ToLowerInvariant()
+  if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[a-f0-9]{40}$') { throw 'Cannot bind official old-source journey to build HEAD.' }
+  $manifestPath = Join-Path $PSScriptRoot 'fixtures\s14c-official-old-sources\manifest.json'
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $entry = @($manifest.cases | Where-Object { "v$($_.version)" -eq $Version })
+  if ($manifest.kind -ne 's14c-official-old-app-synthetic-source' -or $entry.Count -ne 1) {
+    throw "Official old-source manifest has no unique $Version case."
+  }
+  $scratch = New-AiNovelOfficialJourneyScratch
+  $exeSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'AI小说作家.exe')).ToLowerInvariant()
+  $asarSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'resources\app.asar')).ToLowerInvariant()
+  $arguments = @(
+    (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs'),
+    "--win-installed-app=$installRoot", "--win-version=$Version", "--scratch-root=$scratch",
+    "--tested-sha=$head", "--exe-sha256=$exeSha256", "--asar-sha256=$asarSha256"
+  )
+  $output = @(& node @arguments)
+  if ($LASTEXITCODE -ne 0) {
+    $failedReceipt = Join-Path $scratch 'receipt.json'
+    if (Test-Path -LiteralPath $failedReceipt -PathType Leaf) {
+      $diagnosticsAcceptance = Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance'
+      New-Item -ItemType Directory -Path $diagnosticsAcceptance -Force | Out-Null
+      Copy-Item -LiteralPath $failedReceipt -Destination (Join-Path $diagnosticsAcceptance 'a11-failure.json')
+    }
+    throw "Installed official $Version A11 Writer journey failed. Scratch: $scratch; receipt: $failedReceipt"
+  }
+  $summary = $output[-1] | ConvertFrom-Json
+  $receiptPath = Join-Path $scratch 'receipt.json'
+  if ([System.IO.Path]::GetFullPath([string]$summary.receiptPath) -ne [System.IO.Path]::GetFullPath($receiptPath)) {
+    throw "Installed official $Version A11 receipt path differs from its isolated scratch root."
+  }
+  $proof = Get-Content -LiteralPath $receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $receiptSha256 = (Get-AiNovelFileSha256 -Path $receiptPath).ToLowerInvariant()
+  $manifestSha256 = (Get-AiNovelFileSha256 -Path $manifestPath).ToLowerInvariant()
+  $driverSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs')).ToLowerInvariant()
+  if ($summary.sliceOutcome -ne 'PASS' -or $proof.sliceOutcome -ne 'PASS' -or
+      $summary.receiptSha256 -ne $receiptSha256 -or $proof.mode -ne 'official-old-app-installed-app' -or
+      $proof.qualification -ne 'A11_OFFLINE_LEGACY_COPY_WIN_V3' -or $proof.testedSha -ne $head -or
+      $proof.win.sourceVersion -ne $Version -or $proof.win.officialProofSha256 -ne $entry[0].proofSha256 -or
+      $proof.provenance.sourceManifestSha256 -ne $manifestSha256 -or
+      $proof.provenance.driverSha256 -ne $driverSha256 -or
+      $proof.provenance.executableSha256 -ne $exeSha256 -or $proof.provenance.asarSha256 -ne $asarSha256) {
+    throw "Installed official $Version A11 Writer evidence is incomplete or unbound."
+  }
+  if ($proof.win.sourceInventorySha256 -notmatch '^[a-f0-9]{64}$' -or
+      $proof.win.targetInventorySha256 -notmatch '^[a-f0-9]{64}$' -or
+      $proof.win.sourceBodySha256 -notmatch '^[a-f0-9]{64}$' -or
+      $proof.win.savedBodySha256 -notmatch '^[a-f0-9]{64}$' -or
+      $proof.win.savedBodySha256 -ne $proof.win.reopenedBodySha256 -or
+      $proof.win.savedBodySha256 -eq $proof.win.sourceBodySha256 -or
+      $proof.win.modelCallRows -ne 0 -or
+      $proof.win.sourceProjectId -eq $proof.win.targetProjectId -or
+      $proof.win.importAndSaveRequests.mainFetchCalls -ne 0 -or
+      $proof.win.importAndSaveRequests.rendererRequests -ne 0 -or
+      $proof.win.reopenRequests.mainFetchCalls -ne 0 -or
+      $proof.win.reopenRequests.rendererRequests -ne 0 -or
+      @($proof.steps | Where-Object { $_.outcome -eq 'PASS' -and $_.stepId -eq "$Version-import-open" }).Count -ne 1 -or
+      @($proof.steps | Where-Object { $_.outcome -eq 'PASS' -and $_.stepId -eq "$Version-target-edit-save" }).Count -ne 1 -or
+      @($proof.steps | Where-Object { $_.outcome -eq 'PASS' -and $_.stepId -eq "$Version-target-edit-reopen" }).Count -ne 1) {
+    throw "Installed official $Version A11 Writer import, save or reopen evidence is incomplete."
+  }
+  return [ordered]@{
+    sourceVersion = $Version
+    testedSha = $head
+    officialProofSha256 = $proof.win.officialProofSha256
+    sourceManifestSha256 = $manifestSha256
+    driverSha256 = $driverSha256
+    executableSha256 = $exeSha256
+    asarSha256 = $asarSha256
+    receiptSha256 = $receiptSha256
+    sourceInventorySha256 = $proof.win.sourceInventorySha256
+    targetInventorySha256 = $proof.win.targetInventorySha256
+    sourceBodySha256 = $proof.win.sourceBodySha256
+    savedBodySha256 = $proof.win.savedBodySha256
+    reopenedBodySha256 = $proof.win.reopenedBodySha256
+    modelCallRows = $proof.win.modelCallRows
+    sourceProjectId = $proof.win.sourceProjectId
+    targetProjectId = $proof.win.targetProjectId
+    importAndSaveRequests = $proof.win.importAndSaveRequests
+    reopenRequests = $proof.win.reopenRequests
+    steps = $proof.steps
+  }
+}
+
+function Get-AiNovelUpgradeSourceInventory {
+  $files = @(Get-ChildItem -LiteralPath $upgradeFixtureRoot -Recurse -File -Force | Sort-Object FullName)
+  if ($files.Count -lt 5) { throw 'Upgrade project source inventory is incomplete.' }
+  return @($files | ForEach-Object {
+    $relative = $_.FullName.Substring($upgradeFixtureRoot.Length).TrimStart('\', '/')
+    "$relative=$((Get-AiNovelFileSha256 -Path $_.FullName).ToLowerInvariant())"
+  })
+}
+
+function Write-AiNovelV110GlobalSeed {
+  param(
+    [Parameter(Mandatory = $true)][string]$ConfigPath,
+    [Parameter(Mandatory = $true)][string]$RecentPath,
+    [Parameter(Mandatory = $true)][string]$ProjectPath
+  )
+
+  $utf8 = [System.Text.UTF8Encoding]::new($false)
+  $configJson = ConvertTo-Json -InputObject @{
+    theme = 'light'; locale = 'zh-CN'; proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 }
+  } -Depth 4
+  $recentJson = ConvertTo-Json -InputObject @(@{
+    name = '升级保留验证小说'; path = $ProjectPath; updatedAt = '2026-01-02T03:04:05.000Z'
+  }) -Depth 4
+  [System.IO.File]::WriteAllText($ConfigPath, $configJson, $utf8)
+  [System.IO.File]::WriteAllText($RecentPath, $recentJson, $utf8)
+}
+
+function Invoke-AiNovelV110Fixture {
+  param([Parameter(Mandatory = $true)][ValidateSet('seed', 'inspect')][string]$Mode)
+
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'Node 22 is required for the v1.1 SQLite fixture.' }
+  $fixtureScript = Join-Path $smokeRoot 'v110-fixture.cjs'
+  if (-not (Test-Path -LiteralPath $fixtureScript -PathType Leaf)) {
+    New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
+    @'
+const fs = require('node:fs')
+const path = require('node:path')
+const Database = require(process.env.AI_NOVEL_V110_NATIVE)
+const root = process.env.AI_NOVEL_V110_PROJECT
+const storage = path.join(root, '.vela')
+const databasePath = path.join(storage, 'vela.db')
+if (process.argv[2] === 'seed') {
+  fs.mkdirSync(storage, { recursive: true })
+  const db = new Database(databasePath)
+  try {
+    db.pragma('journal_mode = WAL')
+    db.exec(fs.readFileSync(process.env.AI_NOVEL_V110_SCHEMA, 'utf8'))
+    db.prepare('INSERT INTO project_core(id,project_name,genre) VALUES (?,?,?)').run('main', '合成安装升级项目', '合成测试')
+    db.prepare('INSERT INTO contents(body) VALUES (?)').run('合成 v1.1 章节正文')
+    db.prepare('INSERT INTO drafts(chapter_number,version,content_id,word_count) VALUES (1,1,1,?)').run(12)
+  } finally { db.close() }
+  fs.writeFileSync(path.join(storage, 'project.json'), JSON.stringify({ schemaVersion: 1, kind: 'ai-novel-project', projectId: '4e25b0b0-86df-46f4-aabb-211000000001', createdAt: '2026-09-01T00:00:00.000Z' }))
+  fs.mkdirSync(path.join(storage, 'prompts'))
+  fs.mkdirSync(path.join(storage, 'skills'))
+  fs.writeFileSync(path.join(storage, 'prompts', 'author.txt'), '合成项目提示词')
+  fs.writeFileSync(path.join(storage, 'skills', 'author.md'), '合成项目 Skill')
+  fs.writeFileSync(path.join(root, 'outline.md'), '合成项目大纲')
+}
+const db = new Database(databasePath, { readonly: true })
+try {
+  const name = db.prepare("SELECT project_name FROM project_core WHERE id='main'").pluck().get()
+  const body = db.prepare('SELECT body FROM contents WHERE id=1').pluck().get()
+  const drafts = db.prepare('SELECT COUNT(*) FROM drafts WHERE content_id=1').pluck().get()
+  if (name !== '合成安装升级项目' || body !== '合成 v1.1 章节正文' || drafts !== 1) throw Error('v1.1 project rows changed')
+  if (fs.readFileSync(path.join(storage, 'prompts', 'author.txt'), 'utf8') !== '合成项目提示词'
+      || fs.readFileSync(path.join(storage, 'skills', 'author.md'), 'utf8') !== '合成项目 Skill'
+      || fs.readFileSync(path.join(root, 'outline.md'), 'utf8') !== '合成项目大纲') throw Error('v1.1 project files changed')
+  process.stdout.write(JSON.stringify({ projectCoreRows: 1, contentRows: 1, draftRows: drafts, authorFiles: 3 }) + '\n')
+} finally { db.close() }
+'@ | Set-Content -LiteralPath $fixtureScript -Encoding utf8
+  }
+  $previousNative = $env:AI_NOVEL_V110_NATIVE
+  $previousProject = $env:AI_NOVEL_V110_PROJECT
+  $previousSchema = $env:AI_NOVEL_V110_SCHEMA
+  try {
+    $env:AI_NOVEL_V110_NATIVE = Join-Path $root 'node_modules\better-sqlite3'
+    $env:AI_NOVEL_V110_PROJECT = $upgradeFixtureRoot
+    $env:AI_NOVEL_V110_SCHEMA = Join-Path $root 'electron\services\__tests__\legacy-v110-schema.sql'
+    $output = & node $fixtureScript $Mode 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "v1.1 fixture $Mode failed: $($output -join ' ')" }
+    return ($output | Select-Object -Last 1 | ConvertFrom-Json)
+  }
+  finally {
+    $env:AI_NOVEL_V110_NATIVE = $previousNative
+    $env:AI_NOVEL_V110_PROJECT = $previousProject
+    $env:AI_NOVEL_V110_SCHEMA = $previousSchema
+  }
+}
+
 function Get-AiNovelUtf8NonEmptyLines {
   param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -116,7 +369,8 @@ function Invoke-AiNovelUpgradeDataFixture {
   param(
     [Parameter(Mandatory = $true)][ValidateSet('seed', 'validate-legacy', 'validate')][string]$Mode,
     [Parameter(Mandatory = $true)][string]$ProjectRoot,
-    [string]$SettingsPath
+    [string]$SettingsPath,
+    [string]$SaveProofPath
   )
 
   if (-not (Test-Path -LiteralPath $script:aiNovelElectronNodeRunner -PathType Leaf)) {
@@ -138,6 +392,10 @@ function Invoke-AiNovelUpgradeDataFixture {
     $fixtureArguments = @($quotedFixtureScript, $Mode, $quotedProjectRoot)
     if (-not [string]::IsNullOrWhiteSpace($SettingsPath)) {
       $fixtureArguments += '"' + $SettingsPath.Replace('"', '\"') + '"'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SaveProofPath)) {
+      if ([string]::IsNullOrWhiteSpace($SettingsPath)) { throw 'Save proof validation requires the isolated settings path.' }
+      $fixtureArguments += '"' + $SaveProofPath.Replace('"', '\"') + '"'
     }
     $process = Start-Process `
       -FilePath $script:aiNovelElectronNodeRunner `
@@ -354,14 +612,22 @@ function Invoke-AiNovelPackagedVectorSmoke {
   $stderrPath = Join-Path $smokeRoot 'packaged-vector-smoke.stderr'
   $previousReleaseSmoke = $env:AI_NOVEL_RELEASE_SMOKE
   $previousReleaseSmokeToken = $env:AI_NOVEL_RELEASE_SMOKE_TOKEN
+  $profile = New-AiNovelQualificationProfile -Root (Join-Path $smokeRoot 'qualification-vector')
+  $previousCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
+  $previousLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
+  $previousProfileAlias = $env:AI_NOVEL_VELA_HOME
   $evidenceSucceeded = $false
 
   try {
+    New-Item -ItemType Directory -Path $profile.userData -Force | Out-Null
+    $env:AI_NOVEL_APP_DATA_HOME = $profile.canonical
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $profile.legacy
+    $env:AI_NOVEL_VELA_HOME = $profile.legacy
     $env:AI_NOVEL_RELEASE_SMOKE = '1'
     $env:AI_NOVEL_RELEASE_SMOKE_TOKEN = $token
     Invoke-AiNovelMonitoredExecutable `
       -Path $Path `
-      -Arguments @("--ai-novel-release-smoke=$token") `
+      -Arguments @("--user-data-dir=`"$($profile.userData)`"", "--ai-novel-release-smoke=$token") `
       -Operation 'Packaged vector qualification' `
       -StandardOutputPath $stdoutPath `
       -StandardErrorPath $stderrPath `
@@ -417,6 +683,9 @@ function Invoke-AiNovelPackagedVectorSmoke {
     throw "Packaged vector qualification failed: $($_.Exception.Message)$([Environment]::NewLine)$stderr"
   }
   finally {
+    $env:AI_NOVEL_APP_DATA_HOME = $previousCanonicalHome
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $previousLegacySourceHome
+    $env:AI_NOVEL_VELA_HOME = $previousProfileAlias
     $env:AI_NOVEL_RELEASE_SMOKE = $previousReleaseSmoke
     $env:AI_NOVEL_RELEASE_SMOKE_TOKEN = $previousReleaseSmokeToken
     if ($evidenceSucceeded) {
@@ -437,14 +706,22 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
   $stderrPath = Join-Path $smokeRoot 'packaged-official-homepage-smoke.stderr'
   $previousReleaseHomepageSmoke = $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE
   $previousReleaseHomepageSmokeToken = $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN
+  $profile = New-AiNovelQualificationProfile -Root (Join-Path $smokeRoot 'qualification-officialhomepage')
+  $previousCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
+  $previousLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
+  $previousProfileAlias = $env:AI_NOVEL_VELA_HOME
   $evidenceSucceeded = $false
 
   try {
+    New-Item -ItemType Directory -Path $profile.userData -Force | Out-Null
+    $env:AI_NOVEL_APP_DATA_HOME = $profile.canonical
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $profile.legacy
+    $env:AI_NOVEL_VELA_HOME = $profile.legacy
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE = '1'
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN = $token
     Invoke-AiNovelMonitoredExecutable `
       -Path $Path `
-      -Arguments @("--ai-novel-release-homepage-smoke=$token") `
+      -Arguments @("--user-data-dir=`"$($profile.userData)`"", "--ai-novel-release-homepage-smoke=$token") `
       -Operation 'Packaged official homepage qualification' `
       -StandardOutputPath $stdoutPath `
       -StandardErrorPath $stderrPath `
@@ -499,6 +776,9 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
     throw "Packaged official homepage qualification failed: $($_.Exception.Message)$([Environment]::NewLine)$stderr"
   }
   finally {
+    $env:AI_NOVEL_APP_DATA_HOME = $previousCanonicalHome
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $previousLegacySourceHome
+    $env:AI_NOVEL_VELA_HOME = $previousProfileAlias
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE = $previousReleaseHomepageSmoke
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN = $previousReleaseHomepageSmokeToken
     if ($evidenceSucceeded) {
@@ -519,15 +799,22 @@ function Invoke-AiNovelPackagedSkinSmoke {
   $previousReleaseSkinSmoke = $env:AI_NOVEL_RELEASE_SKIN_SMOKE
   $previousReleaseSkinSmokeToken = $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN
   $previousVelaHome = $env:AI_NOVEL_VELA_HOME
+  $profile = New-AiNovelQualificationProfile -Root (Join-Path $smokeRoot 'qualification-skin')
+  $previousCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
+  $previousLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
+  $previousProfileAlias = $env:AI_NOVEL_VELA_HOME
   $evidenceSucceeded = $false
 
   try {
+    New-Item -ItemType Directory -Path $profile.userData -Force | Out-Null
+    $env:AI_NOVEL_APP_DATA_HOME = $profile.canonical
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $profile.legacy
+    $env:AI_NOVEL_VELA_HOME = $profile.legacy
     $env:AI_NOVEL_RELEASE_SKIN_SMOKE = '1'
     $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN = $token
-    $env:AI_NOVEL_VELA_HOME = $velaHome
     Invoke-AiNovelMonitoredExecutable `
       -Path $Path `
-      -Arguments @("--ai-novel-release-skin-smoke=$token") `
+      -Arguments @("--user-data-dir=`"$($profile.userData)`"", "--ai-novel-release-skin-smoke=$token") `
       -Operation 'Packaged skin qualification' `
       -StandardOutputPath $stdoutPath `
       -StandardErrorPath $stderrPath `
@@ -582,6 +869,9 @@ function Invoke-AiNovelPackagedSkinSmoke {
     throw "Packaged skin qualification failed: $($_.Exception.Message)$([Environment]::NewLine)$stderr"
   }
   finally {
+    $env:AI_NOVEL_APP_DATA_HOME = $previousCanonicalHome
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $previousLegacySourceHome
+    $env:AI_NOVEL_VELA_HOME = $previousProfileAlias
     $env:AI_NOVEL_RELEASE_SKIN_SMOKE = $previousReleaseSkinSmoke
     $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN = $previousReleaseSkinSmokeToken
     $env:AI_NOVEL_VELA_HOME = $previousVelaHome
@@ -744,6 +1034,8 @@ $smokeSucceeded = $false
 $failureRecord = $null
 $upgradeFixtureSeeded = $false
 $upgradeValidationEvidence = $null
+$v110Before = $null
+$v110Validation = $null
 $currentInstallCompleted = $false
 
 try {
@@ -764,8 +1056,12 @@ try {
   }
 
   New-Item -ItemType Directory -Path $velaHome -Force | Out-Null
-  @{ theme = 'light'; locale = 'zh-CN'; proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 } } |
-    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $globalConfig -Encoding utf8
+  if (-not $V110InstalledUpgrade) {
+    $configJson = ConvertTo-Json -InputObject @{
+      theme = 'light'; locale = 'zh-CN'; proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 }
+    } -Depth 4
+    [System.IO.File]::WriteAllText($globalConfig, $configJson, [System.Text.UTF8Encoding]::new($false))
+  }
 
   $hasPreviousVersion = (
     (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) -or
@@ -784,36 +1080,78 @@ try {
       Copy-Item -Path (Join-Path $portableExecutable.Directory.FullName '*') -Destination $installRoot -Recurse -Force
     }
     else {
+      if ($V110InstalledUpgrade -and
+          (Get-AiNovelFileSha256 -Path (Resolve-Path -LiteralPath $PreviousInstallerPath).Path) -ne
+          '54B436AEAB43A8B00AFFB768E1DB083F3E6B90EF25EBF1CD2DD6779A500C7F88') {
+        throw 'Previous installer is not the verified official v1.1.0 setup.'
+      }
       Install-Silently (Resolve-Path -LiteralPath $PreviousInstallerPath).Path
     }
-    # Seed the real v0.2.5 project format only after the old installer is present:
-    # {project}\.vela\vela.db with all 11 v0.2.5 tables and representative
-    # core, draft, revision, review, post-process, LLM, and summary records.
-    Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
-    Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
-    $upgradeFixtureSeeded = $true
-    @(
-      @{
-        name = '升级保留验证小说'
-        path = $upgradeFixtureRoot
-        updatedAt = '2026-01-02T03:04:05.000Z'
-      }
-    ) | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $recentProjects -Encoding utf8
+    if ($V110InstalledUpgrade) {
+      Invoke-AiNovelV110Fixture -Mode seed | Out-Null
+    }
+    else {
+      # Keep the v0.2.5 fixture and its receipt meaning unchanged:
+      # {project}\.vela\vela.db with all 11 v0.2.5 tables and representative records.
+      Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
+      Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
+      $upgradeFixtureSeeded = $true
+    }
+    if ($V110InstalledUpgrade) {
+      Write-AiNovelV110GlobalSeed -ConfigPath $globalConfig -RecentPath $recentProjects -ProjectPath $upgradeFixtureRoot
+    }
+    else {
+      $recentJson = ConvertTo-Json -InputObject @(
+        @{
+          name = '升级保留验证小说'
+          path = $upgradeFixtureRoot
+          updatedAt = '2026-01-02T03:04:05.000Z'
+        }
+      ) -Depth 4
+      [System.IO.File]::WriteAllText($recentProjects, $recentJson, [System.Text.UTF8Encoding]::new($false))
+    }
 
     $legacyExePath = Join-Path $installRoot 'AI小说作家.exe'
     if (-not (Test-Path -LiteralPath $legacyExePath -PathType Leaf)) {
       throw "Previous-version application is missing after installation: $legacyExePath"
     }
-    & (Join-Path $PSScriptRoot 'smoke-win-app.ps1') `
-      -ExePath $legacyExePath `
-      -ObservationSeconds $ObservationSeconds `
-      -PostExitQuietSeconds $PostExitQuietSeconds `
-      -VelaHome $velaHome `
-      -WindowBaselineIdentities $roundBaselineIdentities `
-      -RelatedProcessIds $observedProcessIds `
-      -RelatedProcessStartTimeTicks $observedProcessStartTimeTicks `
-      -RelatedTargetNames @($roundTargetNames) `
-      -LegacyProjectPathToOpen $upgradeFixtureRoot
+    $oldAppSmokeParameters = @{
+      ExePath = $legacyExePath
+      ObservationSeconds = $ObservationSeconds
+      PostExitQuietSeconds = $PostExitQuietSeconds
+      VelaHome = $velaHome
+      WindowBaselineIdentities = $roundBaselineIdentities
+      RelatedProcessIds = $observedProcessIds
+      RelatedProcessStartTimeTicks = $observedProcessStartTimeTicks
+      RelatedTargetNames = @($roundTargetNames)
+      LegacyProjectPathToOpen = $upgradeFixtureRoot
+    }
+    if ($upgradeFixtureSeeded) { $oldAppSmokeParameters.LegacyV025SaveProofPath = $v025SaveProofPath }
+    if ($V110InstalledUpgrade) { $oldAppSmokeParameters.UserDataPath = $sharedUserData }
+    $previousGlobalProof = $env:AI_NOVEL_V110_GLOBAL_PROOF
+    try {
+      $env:AI_NOVEL_V110_GLOBAL_PROOF = if ($V110InstalledUpgrade) { '1' } else { $null }
+      & (Join-Path $PSScriptRoot 'smoke-win-app.ps1') @oldAppSmokeParameters
+    }
+    finally {
+      $env:AI_NOVEL_V110_GLOBAL_PROOF = $previousGlobalProof
+    }
+    if ($upgradeFixtureSeeded) {
+      Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig -SaveProofPath $v025SaveProofPath | Out-Null
+      $v025SourceBefore = @(Get-AiNovelUpgradeSourceInventory)
+      $v025GlobalBefore = @{
+        config = (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant()
+        recent = (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant()
+      }
+    }
+    if ($V110InstalledUpgrade) {
+      $v110Validation = Invoke-AiNovelV110Fixture -Mode inspect
+      $v110Before = @(Get-AiNovelUpgradeSourceInventory)
+      $v110GlobalBefore = @{
+        config = (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant()
+        recent = (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant()
+      }
+    }
   }
   Install-Silently $resolvedInstaller
 $currentInstallCompleted = $true
@@ -866,9 +1204,8 @@ $currentInstallCompleted = $true
     AcceptanceDirectory = $script:aiNovelAcceptanceDirectory
     ExpectedVersion = [string]$packageJson.version
   }
-  if ($upgradeFixtureSeeded) {
-    $appSmokeParameters.ProjectPathToOpen = $upgradeFixtureRoot
-  }
+  # ADR 0020 requires a new imported copy; project:open must still reject the old root.
+  if ($V110InstalledUpgrade) { $appSmokeParameters.UserDataPath = $sharedUserData }
   & (Join-Path $PSScriptRoot 'smoke-win-app.ps1') @appSmokeParameters
 
   $config = Get-Content -LiteralPath $globalConfig -Raw | ConvertFrom-Json
@@ -876,7 +1213,13 @@ $currentInstallCompleted = $true
     throw 'Installer smoke changed existing global configuration instead of preserving it.'
   }
   if ($upgradeFixtureSeeded) {
-    $upgradeValidationEvidence = Invoke-AiNovelUpgradeDataFixture -Mode validate -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig
+    $upgradeValidationEvidence = Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig -SaveProofPath $v025SaveProofPath
+    $copyJourney = Invoke-AiNovelV025CopyImport
+    if ((Compare-Object -ReferenceObject $v025SourceBefore -DifferenceObject @(Get-AiNovelUpgradeSourceInventory)) -or
+        (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant() -ne $v025GlobalBefore.config -or
+        (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant() -ne $v025GlobalBefore.recent) {
+      throw 'v0.2.5 setup or copy journey changed old source files or global bytes.'
+    }
     if ($RequireCompleteV025Fixture -and $upgradeValidationEvidence.legacyTableCount -ne 11) {
       throw 'The required complete v0.2.5 upgrade fixture was not validated.'
     }
@@ -898,11 +1241,23 @@ $currentInstallCompleted = $true
         kind = 'windows-upgrade-data'
         accepted = $true
         observations = @(
-          'The verified v0.2.5 fixture was opened before upgrade and reopened by the current installed application.'
-          'Project database records, physical assets, embedding search, global settings, and recent-project state were validated after upgrade.'
+          'The verified v0.2.5 application opened, saved and read back its fixture before setup upgrade.'
+          'The installed application rejected the v0.2.5 roster with the expected code, retained unpublished staging and left source and globals unchanged.'
+          'Old source bytes, settings and recent entry remained unchanged; retained vector search was checked on the old source.'
         )
         direct = [ordered]@{
           previousVersion = '0.2.5'
+          upgradePolicyRevision = 'v025-roster-refusal-v2'
+          oldAppSaved = $true
+          oldSaveProof = (Get-Content -LiteralPath $v025SaveProofPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+          legacyRecentPreserved = $true
+          sourceUnchangedSinceOldSave = $true
+          legacyGlobalBytesPreservedSinceOldSave = $true
+          copyImport = $copyJourney.copyImport
+          copySteps = $copyJourney.steps
+          copyDriverSha256 = $copyJourney.driverSha256
+          copyTestedSha = $copyJourney.testedSha
+          copyPackageHashes = $copyJourney.packageHashes
           legacyTableCount = [int]$upgradeValidationEvidence.legacyTableCount
           preservedAssetCount = [int]$upgradeValidationEvidence.preservedAssetCount
           vectorDimension = [int]$upgradeValidationEvidence.embeddingSpace.vectorDimension
@@ -918,6 +1273,49 @@ $currentInstallCompleted = $true
         settingsPreserved = $true
         recentProjectPreserved = $true
       })
+  }
+  if ($V110InstalledUpgrade) {
+    $v110After = Invoke-AiNovelV110Fixture -Mode inspect
+    if ($v110After.projectCoreRows -ne 1 -or $v110After.contentRows -ne 1 -or
+        $v110After.draftRows -ne 1 -or $v110After.authorFiles -ne 3 -or
+        (Compare-Object -ReferenceObject $v110Before -DifferenceObject @(Get-AiNovelUpgradeSourceInventory)) -or
+        (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant() -ne $v110GlobalBefore.config -or
+        (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant() -ne $v110GlobalBefore.recent) {
+      throw 'v1.1 installed upgrade changed the legacy project or global data source.'
+    }
+    $recentProjectEntries = @(Get-Content -LiteralPath $recentProjects -Raw | ConvertFrom-Json)
+    if (@($recentProjectEntries | Where-Object { [string]$_.path -eq $upgradeFixtureRoot }).Count -ne 1) {
+      throw 'v1.1 recent-project entry was not preserved.'
+    }
+    $summary = [ordered]@{
+      previousVersion = '1.1.0'
+      previousSource = 'official-installed-setup'
+      previousInstallerSha256 = (Get-AiNovelFileSha256 -Path $PreviousInstallerPath).ToLowerInvariant()
+      oldAppOpenedProject = $true
+      currentAppLaunched = $true
+      projectCoreRows = [int]$v110Validation.projectCoreRows
+      contentRows = [int]$v110Validation.contentRows
+      draftRows = [int]$v110Validation.draftRows
+      authorFiles = [int]$v110Validation.authorFiles
+      sourceFileCount = @($v110Before).Count
+      sourceUnchanged = $true
+      globalConfigUnchanged = $true
+      recentProjectsUnchanged = $true
+    }
+    $summary.officialSources = @(
+      (Invoke-AiNovelOfficialOldSourceJourney -Version 'v1.0.0')
+      (Invoke-AiNovelOfficialOldSourceJourney -Version 'v1.1.0')
+    )
+    $previousReceiptPath = Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance\upgrade-data.json'
+    $previousReceipt = Get-Content -LiteralPath $previousReceiptPath -Raw | ConvertFrom-Json
+    if ($previousReceipt.accepted -ne $true -or $previousReceipt.kind -ne 'windows-upgrade-data' -or
+        $previousReceipt.direct.previousVersion -ne '0.2.5' -or $previousReceipt.direct.legacyTableCount -ne 11) {
+      throw 'The required v0.2.5 upgrade receipt is missing or changed.'
+    }
+    $previousReceipt.direct | Add-Member -NotePropertyName installedV110 -NotePropertyValue $summary -Force
+    $previousReceipt.observations += 'The official v1.1.0 setup installed and opened a synthetic v1.1 project before the candidate setup replaced it; source data survived unchanged.'
+    $previousReceipt.observations += 'The installed candidate imported official v1.0.0 and v1.1.0 old-app sources through V3 Writer, saved and reopened each independent copy.'
+    Write-AiNovelAcceptanceReceipt -Directory (Split-Path -Parent $previousReceiptPath) -FileName 'upgrade-data.json' -Receipt $previousReceipt
   }
   $smokeSucceeded = $true
 }

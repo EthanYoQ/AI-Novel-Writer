@@ -4,6 +4,7 @@ import path from 'node:path'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { ensureCharacterRosterSchema } from './character-roster-schema'
 import { clearBlueprintFactsWithinTransaction } from './blueprint-repository'
+import { getProjectDataRoot } from '../services/project-data-locator'
 
 export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText'
 
@@ -37,8 +38,7 @@ function moveGeneratedFilesToTrash(projectPath: string): MovedFile[] {
     if (files.length === 0) return []
 
     const trashDir = path.join(
-        projectPath,
-        '.vela',
+        getProjectDataRoot(projectPath),
         'trash',
         `clear-${new Date().toISOString().replace(/[:.]/g, '-')}`,
     )
@@ -137,11 +137,18 @@ export class ProjectClearRepository {
             })
 
             tx()
-            removeMovedFiles(movedFiles)
-            return { cleared, physicalFilesDeleted: movedFiles.length }
         } catch (error) {
             restoreMovedFiles(movedFiles)
             throw error
         }
+        let physicalFilesDeleted = 0
+        try {
+            removeMovedFiles(movedFiles)
+            physicalFilesDeleted = movedFiles.length
+        } catch (error) {
+            // The database is committed; restoring files or reporting failure would misstate the project state.
+            console.warn('[ProjectClear] 已清除项目数据，但废纸篓文件未能完全删除:', error)
+        }
+        return { cleared, physicalFilesDeleted }
     }
 }

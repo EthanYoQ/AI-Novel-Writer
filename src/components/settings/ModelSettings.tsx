@@ -2,8 +2,11 @@ import { useState, useEffect } from 'react'
 import { Plus, Trash2, Check, Zap, Save, Globe, CheckCircle2, XCircle } from 'lucide-react'
 import { useLLMStore } from '../../stores/llm-store'
 import type { ModelProfile } from '../../shared/ipc-channels'
-import type { ModelCapabilities } from '../../shared/provider-presets'
-import { createModelProfileDraft } from '../../shared/model-profile-draft'
+import {
+  resolveModelProfileBudgetCapabilities,
+  type ModelCapabilities,
+} from '../../shared/provider-presets'
+import { applyModelProfileSelection, createModelProfileDraft, modelCapabilitySource } from '../../shared/model-profile-draft'
 import { randomUUID } from '../../utils/id'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -11,7 +14,7 @@ import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 import { cn } from '../../lib/utils'
 import { useLocaleStore } from '../../stores/locale-store'
-import ReasoningPolicySettings from './ReasoningPolicySettings'
+import ReasoningPolicySettings, { ModelCapabilitySources } from './ReasoningPolicySettings'
 
 /** 模型设置面板 — 在侧边栏 settings 视图中展示 */
 export default function ModelSettings() {
@@ -144,12 +147,14 @@ function ModelForm({
   saving: boolean
 }) {
   const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
   const testConnection = useLLMStore(s => s.testConnection)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean, error?: string } | null>(null)
 
   const update = <K extends keyof ModelProfile>(key: K, value: ModelProfile[K]) => {
-    onChange({ ...model, [key]: value })
+    onChange(!model.purposes.includes('embedding') && ['modelName', 'baseUrl', 'protocol', 'provider'].includes(key)
+      ? applyModelProfileSelection(model, { [key]: value }) : { ...model, [key]: value })
   }
 
   const currentCapabilities: ModelCapabilities = {
@@ -159,10 +164,16 @@ function ModelForm({
     structuredOutput: model.capabilities?.structuredOutput ?? false,
     usage: model.capabilities?.usage ?? false,
   }
+  const verifiedCapabilities = resolveModelProfileBudgetCapabilities(model)
+  const formatTokens = (value: number) => new Intl.NumberFormat(locale).format(value)
 
   const updateCapabilities = (next: Partial<ModelCapabilities>) => {
     const capabilities = { ...currentCapabilities, ...next }
-    onChange({ ...model, capabilities, maxTokens: capabilities.maxOutputTokens })
+    const capabilitySources: NonNullable<ModelProfile['capabilitySources']> = {}
+    for (const key of Object.keys(currentCapabilities) as Array<keyof ModelCapabilities>) {
+      capabilitySources[key] = key in next ? 'manual' : modelCapabilitySource(model, key)
+    }
+    onChange({ ...model, capabilities, capabilitySources })
   }
 
   const handleTest = async () => {
@@ -203,9 +214,53 @@ function ModelForm({
         </div>
       </div>
 
+      <div
+        className="rounded border border-[var(--color-border)] bg-[var(--color-hover)] p-2 text-[0.7rem] leading-relaxed text-[var(--color-text-muted)]"
+        aria-label={text('模型能力证据', 'Model capability evidence')}
+        data-capability-evidence={verifiedCapabilities ? 'verified-provider-preset' : 'unknown'}
+      >
+        {verifiedCapabilities ? (
+          <>
+            <div className="font-medium text-[var(--color-text)]">
+              {text('已验证服务商能力', 'Verified provider capability')}
+            </div>
+            <div>
+              {text(
+                '上下文 {context} tokens；最大输出 {output} tokens。',
+                'Context {context} tokens; max output {output} tokens.',
+                {
+                  context: verifiedCapabilities.contextWindowTokens === null
+                    ? text('未知', 'unknown')
+                    : formatTokens(verifiedCapabilities.contextWindowTokens),
+                  output: formatTokens(verifiedCapabilities.maxOutputTokens),
+                },
+              )}
+            </div>
+            <div>
+              {text(
+                '实际请求采用已验证能力、用户设置和父任务剩余额度中的较小值。',
+                'Requests use the smallest of verified capability, user settings, and the parent task remainder.',
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="font-medium text-[var(--color-warning-text)]">
+              {text('模型能力尚未验证', 'Model capability is unverified')}
+            </div>
+            <div>
+              {text(
+                '这里填写的数值只是用户运行上限，不能证明服务商支持该容量。容量未知时按用户设置与任务额度估算，不保证供应商容量或费用上限。',
+                'Values entered here are operational limits, not proof of provider capacity. Unknown capacity uses estimates from your settings and task budget, without guaranteeing provider capacity or cost limits.',
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
       <div>
         <Label>{text('model（模型名称）', 'model')}</Label>
-        <Input value={model.modelName} onChange={(e) => update('modelName', e.target.value)} placeholder="gpt-4o / deepseek-chat" />
+        <Input value={model.modelName} onChange={(e) => update('modelName', e.target.value)} placeholder="gpt-4o / deepseek-v4-flash" />
       </div>
       <div>
         <Label>{text('base_url', 'base_url')}</Label>
@@ -232,14 +287,15 @@ function ModelForm({
           <Input
             type="number"
             min={0}
-            value={currentCapabilities.maxOutputTokens}
-            onChange={(e) => updateCapabilities({ maxOutputTokens: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+            value={model.maxTokens}
+            onChange={(e) => update('maxTokens', e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
           />
         </div>
       </div>
 
       <div>
         <div>
+          <ModelCapabilitySources model={model} />
           <Label>{text('温度', 'Temperature')}</Label>
           <Input 
             value={String(model.temperature)} 

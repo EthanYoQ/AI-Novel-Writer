@@ -21,7 +21,7 @@ const PROJECT_SESSION = Object.freeze({
   projectPath: PROJECT_PATH,
 })
 const TAB_ID = 'draft-ai-snapshot-tab'
-const FILE_PATH = 'vela://draft/7'
+const FILE_PATH = 'ai-novel://draft/7'
 const SAVED_BODY = '数据库中的旧稿正文'
 const SCREEN_BODY = '屏幕上的未保存正文'
 
@@ -56,13 +56,13 @@ beforeEach(async () => {
         updatedAt: '2026-09-06T00:00:00.000Z',
       }
     }
-    if (channel === 'db:blueprint-get-all') return []
+    if (channel === 'db:blueprint-get-all') return [{ chapterNumber: 1, title: '雨夜启程' }]
     if (channel === 'db:draft-list') return [{ id: 7, version: 1 }]
     if (channel === 'db:revision-get-pending' || channel === 'db:review-list') return []
     if (channel === 'db:draft-update-content') return { success: true }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -155,7 +155,7 @@ afterEach(async () => {
   refineExecute.mockRestore()
   reviewExecute.mockRestore()
   setActiveProjectSessionContext(null)
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
 describe('DraftEditor AI source snapshot', () => {
@@ -169,14 +169,14 @@ describe('DraftEditor AI source snapshot', () => {
     await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalled())
     const definition = startWorkflow.mock.calls[0]?.[0] as WorkflowDefinition
     await definition.steps[0].executor({} as never, {} as never, {} as never)
-    const instance = (command === 'refine' ? refineExecute : reviewExecute).mock.instances[0] as unknown as {
-      params: {
+    const instance = (command === 'refine' ? refineExecute : reviewExecute).mock.instances.at(-1) as unknown as {
+      sourceParams: {
         draftContent: string
         sourceDraft: { id: number; chapterNumber: number; version: number; status: string; contentRevision: number }
       }
     }
-    expect(instance.params.draftContent).toBe(SCREEN_BODY)
-    expect(instance.params.sourceDraft).toEqual({
+    expect(instance.sourceParams.draftContent).toBe(SCREEN_BODY)
+    expect(instance.sourceParams.sourceDraft).toEqual({
       id: 7,
       chapterNumber: 1,
       version: 1,
@@ -236,4 +236,55 @@ describe('DraftEditor AI source snapshot', () => {
       expect(startWorkflow).not.toHaveBeenCalled()
     },
   )
+
+  it('reports shortcut failure, retries, and keeps concurrent input dirty', async () => {
+    const originalInvoke = invoke.getMockImplementation() as
+      | ((channel: string, ...args: unknown[]) => unknown)
+      | undefined
+    if (!originalInvoke) throw new Error('missing IPC fixture')
+
+    let saveAttempt = 0
+    let releaseSecondSave!: () => void
+    const secondSaveGate = new Promise<void>(resolve => { releaseSecondSave = resolve })
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:draft-update-content') {
+        saveAttempt += 1
+        if (saveAttempt === 1) return { success: false, error: '磁盘已满' }
+        if (saveAttempt === 2) await secondSaveGate
+      }
+      return originalInvoke(channel, ...args)
+    })
+
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+    await act(async () => view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 's', ctrlKey: true, bubbles: true, cancelable: true,
+    })))
+    await vi.waitFor(() => expect(container.textContent).toContain('保存失败'))
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({ dirty: true })
+
+    await act(async () => page.getByRole('button', { name: '保存', exact: true }).click())
+    await vi.waitFor(() => expect(container.textContent).toContain('保存中'))
+    await act(async () => view.dispatch({
+      changes: { from: view.state.doc.length, insert: '继续输入' },
+    }))
+    releaseSecondSave()
+    await act(async () => secondSaveGate)
+    await vi.waitFor(() => expect(container.textContent).toContain('未保存'))
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({ dirty: true })
+
+    await act(async () => page.getByRole('button', { name: '保存', exact: true }).click())
+    await vi.waitFor(() => expect(container.textContent).toContain('已保存'))
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({ dirty: false })
+
+    await act(async () => view.dispatch({
+      changes: { from: view.state.doc.length, insert: '保存后再改' },
+    }))
+    expect(container.textContent).toContain('未保存')
+    expect(container.textContent).not.toContain('已保存')
+  })
+
+  it('passes the real chapter title and number to the prose paper head', async () => {
+    expect(container.querySelector('.cm-lp-paperhead')?.textContent).toContain('雨夜启程')
+    expect(container.querySelector('.cm-lp-paperhead')?.textContent).toContain('第 1 章')
+  })
 })

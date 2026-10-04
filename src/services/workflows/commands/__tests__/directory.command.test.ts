@@ -1,3 +1,4 @@
+import { WORKFLOW_GENERATION_BUDGETS } from '../base-command'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
@@ -12,7 +13,6 @@ import type { GenerationRuntime } from '../../../generation/generation-runtime'
 import {
   DirectoryPostCommitCancellationError,
   DirectoryPostCommitSyncError,
-  DirectoryCostLimitError,
   GenerateDirectoryCommand,
   retryDirectoryCharacterSync,
 } from '../directory.command'
@@ -180,12 +180,12 @@ function taskRange(task: GenerationTask): [number, number] {
 function stubIpcInvoke(handler: (channel: string, ...args: unknown[]) => unknown) {
   const invoke = vi.fn((channel: string, ...args: unknown[]) => Promise.resolve(
     channel === 'prompt:load-global' ? { templates: [], diagnostics: [] }
-      : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts') ? false
+      : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts') ? false
         : channel === 'db:draft-authority-sequence' ? authoritySequenceResult
         : handler(channel, ...args),
   ))
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),
@@ -633,14 +633,9 @@ describe('GenerateDirectoryCommand', () => {
     }
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)
-    expect(createRuntime).toHaveBeenCalledWith({
-      budget: {
-        maxAttempts: 20,
-        maxRequestedOutputTokens: 81_920,
-        maxRequestedOutputTokensPerAttempt: 4_096,
-        deadlineMs: 1_800_000,
-      },
-    })
+    expect(createRuntime).toHaveBeenCalledWith({ budget: WORKFLOW_GENERATION_BUDGETS.structured }, expect.objectContaining({
+      selection: expect.objectContaining({ operation: 'chapter-blueprint-directory', promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data' }),
+    }))
   })
 
   it('opens one runtime for an eleven-chapter append with the authoritative bounded cost plan', async () => {
@@ -676,14 +671,9 @@ describe('GenerateDirectoryCommand', () => {
     expect(result.map(item => item.chapterNumber))
       .toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
     expect(observedRanges).toEqual([[10, 14], [15, 19], [20, 20]])
-    expect(createRuntime).toHaveBeenCalledWith({
-      budget: {
-        maxAttempts: 31,
-        maxRequestedOutputTokens: 126_976,
-        maxRequestedOutputTokensPerAttempt: 4_096,
-        deadlineMs: 1_800_000,
-      },
-    })
+    expect(createRuntime).toHaveBeenCalledWith({ budget: WORKFLOW_GENERATION_BUDGETS.structured }, expect.objectContaining({
+      selection: expect.objectContaining({ operation: 'chapter-blueprint-directory', promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data' }),
+    }))
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)
   })
@@ -720,7 +710,7 @@ describe('GenerateDirectoryCommand', () => {
       })
   })
 
-  it('writes nothing when a later five-item semantic batch fails', async () => {
+  it('commits only the validated prefix when a later five-item semantic batch fails', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     let attempt = 0
     const session = generationSession(async () => {
@@ -749,34 +739,39 @@ describe('GenerateDirectoryCommand', () => {
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })).rejects.toThrow(/模型请求失败/u)
+    })).rejects.toThrow(/已保存第 1–5 章完整蓝图/u)
 
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range')).toHaveLength(1)
+    expect(invoke.mock.calls.find(([channel]) => channel === 'db:blueprint-commit-range')?.[1]).toMatchObject({ mode: 'replace-range', startChapter: 1, endChapter: 5 })
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert-many')
   })
 
-  it('rejects a scope beyond the absolute task-cost cap before opening a runtime', async () => {
+  it.each([10, 50, 200])('keeps %s chapters on one selected root boundary without a private 50-chapter gate', async count => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
-    const createRuntime = vi.fn(async () => testRuntime(generationSession(async () => {
-      throw new Error('must not generate')
-    })))
-    const command = new GenerateDirectoryCommand(
-      { mode: 'full', count: 51 },
-      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 51 } },
-      { createRuntime },
-    )
-
-    const failure = await command.execute({
-      step: {},
-      context: workflowContext(),
-      callbacks: stepCallbacks(),
-    }).then(() => null, error => error as unknown)
-
-    expect(failure).toBeInstanceOf(DirectoryCostLimitError)
-    expect(failure).toMatchObject({ code: 'DIRECTORY_TASK_COST_LIMIT', chapterCount: 51 })
-    expect((failure as Error).message).toMatch(/每段不超过 50 章/u)
-    expect(createRuntime).not.toHaveBeenCalled()
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
+    const ranges: Array<[number, number]> = []
+    const session = generationSession(async task => {
+      const range = taskRange(task)
+      ranges.push(range)
+      if (ranges.length > 32) throw new Error('ROOT_BUDGET_EXHAUSTED')
+      return { status: 'completed', content: blueprintJson(Array.from({ length: range[1] - range[0] + 1 }, (_, i) => range[0] + i)), finishReason: 'stop', receipt: generationReceipt(ranges.length, 'stop') }
+    })
+    const createRuntime = vi.fn(async () => testRuntime(session))
+    const command = new GenerateDirectoryCommand({ mode: 'full', count }, { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: count } }, { createRuntime })
+    const execution = command.execute({ step: {}, context: workflowContext(), callbacks: stepCallbacks() })
+    if (count === 200) {
+      await expect(execution).rejects.toThrow()
+      expect(ranges).toHaveLength(33)
+      const commits = invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range')
+      expect(commits).toHaveLength(1)
+      expect(commits[0][1]).toMatchObject({ mode: 'replace-range', startChapter: 1, endChapter: 160 })
+    } else {
+      expect((await execution).map(item => item.chapterNumber)).toEqual(Array.from({ length: count }, (_, i) => i + 1))
+      expect(ranges).toHaveLength(count / 5)
+      expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range')).toHaveLength(1)
+    }
+    expect(createRuntime).toHaveBeenCalledOnce()
+    const covered = ranges.flatMap(([from, to]) => Array.from({ length: to - from + 1 }, (_, i) => from + i))
+    expect(new Set(covered).size).toBe(covered.length)
   })
 
   it('rejects an append range beyond the project boundary instead of reporting an empty success', async () => {
@@ -850,20 +845,16 @@ describe('GenerateDirectoryCommand', () => {
     ))).toBe(true)
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)
-    expect(createRuntime).toHaveBeenCalledWith({
-      budget: {
-        maxAttempts: 15,
-        maxRequestedOutputTokens: 61_440,
-        maxRequestedOutputTokensPerAttempt: 4_096,
-        deadlineMs: 1_800_000,
-      },
-    })
+    expect(createRuntime).toHaveBeenCalledWith({ budget: WORKFLOW_GENERATION_BUDGETS.structured }, expect.objectContaining({
+      selection: expect.objectContaining({ operation: 'chapter-blueprint-directory', promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data' }),
+    }))
   })
 
   it('replaces one length-truncated single blueprint in full on the same runtime and commits once', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const observed: Array<{ range: [number, number]; purpose: string }> = []
     const authorGuidance = `KEEP-FULL-${'g'.repeat(1_300)}-END`
+    const architecture = `${'作者设定：药柜仅作背景。\n'.repeat(450)}药师陆青必须在场；但前述取药计划已撤销。`
     let attempt = 0
     const session = generationSession(async (task) => {
       attempt += 1
@@ -872,8 +863,9 @@ describe('GenerateDirectoryCommand', () => {
       if (task.purpose.includes(':compact-single:')) {
         const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
         expect(prompt).toContain(authorGuidance)
+        expect(prompt).toContain('药师陆青必须在场；但前述取药计划已撤销。')
         expect(task.promptBudget).toMatchObject({
-          limitUtf8Bytes: 16_384,
+          limitUtf8Bytes: 32_768,
           sections: expect.arrayContaining([
             expect.objectContaining({ sectionName: 'global-guidance', messageIndex: 1 }),
           ]),
@@ -910,7 +902,7 @@ describe('GenerateDirectoryCommand', () => {
 
     const result = await command.execute({
       step: {},
-      context: workflowContext(),
+      context: { ...workflowContext(), data: { architecture } },
       callbacks: stepCallbacks(),
     })
 
@@ -924,6 +916,48 @@ describe('GenerateDirectoryCommand', () => {
     expect(createRuntime).toHaveBeenCalledOnce()
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)
+  })
+
+  it('rejects a compact request enlarged by a writing Skill before main dispatch and preserves source', async () => {
+    const invoke = stubIpcInvoke(successfulCommitHandler())
+    const physicalDispatch = vi.fn()
+    const tail = '药师陆青必须在场；但取药计划已撤销。'
+    const architecture = `${'药柜只是背景设定。\n'.repeat(450)}${tail}`
+    const skillContent = '创作技巧不能改写作者事实。'.repeat(900)
+    const context: WorkflowContext = {
+      ...workflowContext(), data: { architecture },
+      writingSkills: Object.freeze({ planning: Object.freeze({
+        skillId: 'user:planning-skill', name: 'Planning craft', stage: 'planning' as const,
+        source: 'user' as const, writingLanguage: 'zh-CN' as const,
+        content: skillContent, utf8Bytes: new TextEncoder().encode(skillContent).byteLength,
+      }) }),
+    }
+    const session = generationSession(async task => {
+      physicalDispatch(task.purpose)
+      return {
+        status: 'incomplete', content: '{"blueprints":[', finishReason: 'length',
+        receipt: generationReceipt(1, 'length', task.purpose),
+      }
+    })
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 1 } },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+
+    await expect(command.execute({ step: {}, context, callbacks: stepCallbacks() }))
+      .rejects.toMatchObject({
+        code: 'PROMPT_BUDGET_EXHAUSTED',
+        report: {
+          limitUtf8Bytes: 32_768,
+          sections: expect.arrayContaining([
+            expect.objectContaining({ sectionName: 'architecture', utf8Bytes: new TextEncoder().encode(JSON.stringify({ architecture }).slice(1, -1)).byteLength }),
+            expect.objectContaining({ sectionName: 'writing-skill', utf8Bytes: expect.any(Number) }),
+          ]),
+        },
+      })
+    expect(physicalDispatch).toHaveBeenCalledTimes(1)
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
 
   it('commits no directory facts when the single-item replacement is also length-truncated', async () => {
@@ -986,7 +1020,7 @@ describe('GenerateDirectoryCommand', () => {
           (total, message) => total + new TextEncoder().encode(message.content).byteLength,
           0,
         )
-        expect(taskBytes).toBeLessThanOrEqual(16_384)
+        expect(taskBytes).toBeLessThanOrEqual(32_768)
         expect(prompt).not.toContain('不可信截断片段')
       }
       const chapters = Array.from(
@@ -1006,7 +1040,7 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
     const context = workflowContext()
-    context.data.architecture = '极长架构事实。'.repeat(20_000)
+    context.data.architecture = '极长架构事实。'.repeat(20)
 
     const result = await command.execute({ step: {}, context, callbacks: stepCallbacks() })
 
@@ -1031,7 +1065,7 @@ describe('GenerateDirectoryCommand', () => {
       .toHaveLength(1)
   })
 
-  it('writes nothing when the later split fails after the earlier split validated', async () => {
+  it('commits only the validated prefix when the later split fails after the earlier split validated', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     let attempt = 0
     const session = generationSession(async () => {
@@ -1068,9 +1102,10 @@ describe('GenerateDirectoryCommand', () => {
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })).rejects.toThrow(/模型请求失败/u)
+    })).rejects.toThrow(/已保存第 1–2 章完整蓝图/u)
 
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range')).toHaveLength(1)
+    expect(invoke.mock.calls.find(([channel]) => channel === 'db:blueprint-commit-range')?.[1]).toMatchObject({ mode: 'replace-range', startChapter: 1, endChapter: 2 })
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert-many')
   })
 
@@ -1097,14 +1132,16 @@ describe('GenerateDirectoryCommand', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
 
-  it('bounds an overlong generated suspense hook and commits without another model call', async () => {
+  it('rebuilds an overlong hook without silently deleting its final cancellation', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
-    const overlongHook = 'h'.repeat(180)
-    const complete = vi.fn(async () => ({
+    const overlongHook = `${'h'.repeat(160)}但上述计划已撤销`
+    const complete = vi.fn(async (task: GenerationTask) => ({
       status: 'completed',
-      content: JSON.stringify({ blueprints: [modelBlueprint(1, { suspenseHook: overlongHook })] }),
+      content: JSON.stringify({ blueprints: [modelBlueprint(1, {
+        suspenseHook: task.purpose.includes(':compact-single:') ? '上述计划已撤销' : overlongHook,
+      })] }),
       finishReason: 'stop',
-      receipt: generationReceipt(1, 'stop'),
+      receipt: generationReceipt(complete.mock.calls.length, 'stop', task.purpose),
     } as const))
     const session = generationSession(complete)
     const command = new GenerateDirectoryCommand(
@@ -1119,20 +1156,48 @@ describe('GenerateDirectoryCommand', () => {
       callbacks: stepCallbacks(),
     })
 
-    expect(complete).toHaveBeenCalledOnce()
-    expect(result[0]?.suspenseHook).toBe('h'.repeat(160))
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(complete.mock.calls[1]?.[0].purpose).toBe('chapter-blueprint-directory:compact-single:chapter-1')
+    expect(result[0]?.suspenseHook).toBe('上述计划已撤销')
     expect(invoke.mock.calls.find(([channel]) => channel === 'db:blueprint-commit-range')?.[1])
-      .toMatchObject({ blueprints: [expect.objectContaining({ suspenseHook: 'h'.repeat(160) })] })
+      .toMatchObject({ blueprints: [expect.objectContaining({ suspenseHook: '上述计划已撤销' })] })
   })
 
-  it('bounds an overlong generated relationship description and commits without another model call', async () => {
+  it('keeps an overlong key event uncommitted when the original root has no rebuild budget', async () => {
+    const invoke = stubIpcInvoke(successfulCommitHandler())
+    const complete = vi.fn(async (task: GenerationTask) => {
+      if (task.purpose.includes(':compact-single:')) throw new Error('ROOT_BUDGET_EXHAUSTED')
+      return {
+        status: 'completed',
+        content: JSON.stringify({ blueprints: [modelBlueprint(1, {
+          keyEvents: `${'事'.repeat(1_200)}但主角已撤销该行动`,
+        })] }),
+        finishReason: 'stop',
+        receipt: generationReceipt(1, 'stop', task.purpose),
+      } as const
+    })
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 1 } },
+      { createRuntime: vi.fn(async () => testRuntime(generationSession(complete))) },
+    )
+
+    await expect(command.execute({
+      step: {}, context: workflowContext(), callbacks: stepCallbacks(),
+    })).rejects.toThrow(/ROOT_BUDGET_EXHAUSTED/u)
+
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
+  })
+
+  it('keeps an overlong relationship candidate uncommitted when complete rebuilding fails', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler({
       other: channel => channel === 'db:character-roster-read'
         ? { status: 'empty', revision: 0, entries: [] }
         : { success: true },
     }))
-    const overlongRelation = 'r'.repeat(105)
-    const complete = vi.fn(async () => ({
+    const overlongRelation = `${'r'.repeat(80)}但盟约已解除`
+    const complete = vi.fn(async (task: GenerationTask) => ({
       status: 'completed',
       content: JSON.stringify({
         blueprints: [modelBlueprint(1, {
@@ -1141,7 +1206,7 @@ describe('GenerateDirectoryCommand', () => {
         })],
       }),
       finishReason: 'stop',
-      receipt: generationReceipt(1, 'stop'),
+      receipt: generationReceipt(complete.mock.calls.length, 'stop', task.purpose),
     } as const))
     const session = generationSession(complete)
     const command = new GenerateDirectoryCommand(
@@ -1150,26 +1215,18 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
 
-    const result = await command.execute({
+    await expect(command.execute({
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })
+    })).rejects.toThrow(/code=value_too_long/u)
 
-    const boundedRelation = 'r'.repeat(80)
-    expect(complete).toHaveBeenCalledOnce()
-    expect(result[0]?.relationshipHints).toEqual([
-      { from: '主角', to: '盟友', relation: boundedRelation },
-    ])
-    expect(invoke.mock.calls.find(([channel]) => channel === 'db:blueprint-commit-range')?.[1])
-      .toMatchObject({
-        blueprints: [expect.objectContaining({
-          relationshipHints: [{ from: '主角', to: '盟友', relation: boundedRelation }],
-        })],
-      })
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(complete.mock.calls[1]?.[0].purpose).toBe('chapter-blueprint-directory:compact-single:chapter-1')
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
 
-  it('normalizes all safe overlong text when a supported relationship alias triggers recovery', async () => {
+  it('rebuilds all overlong fields rather than truncating a supported relationship alias', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler({
       other: channel => channel === 'db:character-roster-read'
         ? { status: 'empty', revision: 0, entries: [] }
@@ -1183,11 +1240,15 @@ describe('GenerateDirectoryCommand', () => {
     candidate.relationshipHints = [
       { from: '主角', to: '盟友', relation: 'r'.repeat(105) },
     ]
-    const complete = vi.fn(async () => ({
+    const complete = vi.fn(async (task: GenerationTask) => ({
       status: 'completed',
-      content: JSON.stringify({ blueprints: [candidate] }),
+      content: JSON.stringify({ blueprints: [
+        task.purpose.includes(':compact-single:')
+          ? modelBlueprint(1, { characters: ['主角', '盟友'], purpose: '完整重建', relationshipHints: [{ from: '主角', to: '盟友', relation: '盟约已解除' }] })
+          : candidate,
+      ] }),
       finishReason: 'stop',
-      receipt: generationReceipt(1, 'stop'),
+      receipt: generationReceipt(complete.mock.calls.length, 'stop', task.purpose),
     } as const))
     const command = new GenerateDirectoryCommand(
       { mode: 'full', count: 1 },
@@ -1201,10 +1262,10 @@ describe('GenerateDirectoryCommand', () => {
       callbacks: stepCallbacks(),
     })
 
-    expect(complete).toHaveBeenCalledOnce()
+    expect(complete).toHaveBeenCalledTimes(2)
     expect(result[0]).toMatchObject({
-      purpose: 'p'.repeat(240),
-      relationshipHints: [{ from: '主角', to: '盟友', relation: 'r'.repeat(80) }],
+      purpose: '完整重建',
+      relationshipHints: [{ from: '主角', to: '盟友', relation: '盟约已解除' }],
     })
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)
@@ -1327,7 +1388,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
 
-  it('synchronizes character candidates only after the committed blueprint receipt exists', async () => {
+  it('stages character proposals only after the committed blueprint receipt exists', async () => {
     const committed = blueprint(1, {
       characters: ['林岚', '周砚'],
       newCharacterCandidates: [{ name: '周砚', role: 'supporting' }],
@@ -1336,7 +1397,7 @@ describe('GenerateDirectoryCommand', () => {
     const invoke = stubIpcInvoke(successfulCommitHandler({
       snapshot: [committed],
       other: (channel, ...args) => {
-        if (channel === 'db:character-roster-read') {
+        if (channel === 'character-proposal:stage') {
           return { status: 'empty', revision: 0, entries: [] }
         }
         if (channel === 'db:character-roster-commit') {
@@ -1368,20 +1429,14 @@ describe('GenerateDirectoryCommand', () => {
     await command.execute({ step: {}, context, callbacks: stepCallbacks() })
 
     const committedAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:blueprint-commit-range')
-    const syncAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:character-roster-read')
+    const syncAt = invoke.mock.calls.findIndex(([channel]) => channel === 'character-proposal:stage')
     expect(committedAt).toBeGreaterThanOrEqual(0)
     expect(syncAt).toBeGreaterThan(committedAt)
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({
-        intent: 'blueprint_sync',
-        entries: [expect.objectContaining({
-          name: '周砚',
-        })],
-      }),
-      projectSnapshot.expectedProjectPath,
-      context.projectSession,
-    )
+    expect(invoke).toHaveBeenCalledWith('character-proposal:stage', {
+      source: { kind: 'directory', operationId: 'blueprint-sync-directory-test-run-1-1' },
+    }, context.projectSession)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:character-roster-commit')).toBe(false)
+
     expect(context.data.blueprintCommitReceipt).toMatchObject({ chapterNumbers: [1] })
     expect(context.data.blueprintCharacterSyncReceipt).toMatchObject({
       blueprintCommitOperationId: 'directory-test-run-1-1',
@@ -1390,7 +1445,7 @@ describe('GenerateDirectoryCommand', () => {
     })
   })
 
-  it('reports an explicit committed receipt when post-commit character synchronization fails', async () => {
+  it('reports an explicit committed receipt when post-commit proposal staging fails', async () => {
     const committed = blueprint(1, {
       characters: ['林岚', '周砚'],
       relationshipHints: [{ from: '林岚', to: '周砚', relation: '追查' }],
@@ -1398,7 +1453,7 @@ describe('GenerateDirectoryCommand', () => {
     stubIpcInvoke(successfulCommitHandler({
       snapshot: [committed],
       other: channel => {
-        if (channel === 'db:character-roster-read') throw new Error('同步故障')
+        if (channel === 'character-proposal:stage') throw new Error('同步故障')
         return { success: true }
       },
     }))
@@ -1431,7 +1486,7 @@ describe('GenerateDirectoryCommand', () => {
     expect((failure as Error).message).toContain('蓝图已提交')
   })
 
-  it('retries character synchronization from the committed receipt without regenerating blueprints', async () => {
+  it('retries proposal staging from the committed receipt without regenerating blueprints', async () => {
     const committed = blueprint(1, {
       characters: ['林岚', '周砚'],
       relationshipHints: [{ from: '林岚', to: '周砚', relation: '追查' }],
@@ -1440,7 +1495,7 @@ describe('GenerateDirectoryCommand', () => {
     stubIpcInvoke(successfulCommitHandler({
       snapshot: [committed],
       other: (channel, ...args) => {
-        if (channel === 'db:character-roster-read') {
+        if (channel === 'character-proposal:stage') {
           rosterReads += 1
           if (rosterReads === 1) throw new Error('首次同步故障')
           return { status: 'empty', revision: 0, entries: [] }

@@ -545,7 +545,7 @@ async function waitForFinalQuietPeriod() {
 
 async function runPreMonitorSteps() {
   for (const step of releasePreMonitorSteps) {
-    await runNodeProcess([pnpmCli, 'run', step])
+    await runNodeProcess([pnpmCli, 'run', step, ...(step === 'test' ? ['--fileParallelism=false'] : [])])
   }
 }
 

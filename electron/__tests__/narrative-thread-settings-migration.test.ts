@@ -2,13 +2,21 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   DEFAULT_NARRATIVE_THREAD_DORMANT_THRESHOLD,
   resolveNarrativeThreadDormantThreshold,
 } from '../../src/shared/narrative-thread'
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../database'
+import { closeLegacyNormalizationFixture as closeProjectDatabase, getLegacyNormalizationFixtureDb as getProjectDb, openLegacyNormalizationFixture } from '../../test/helpers/legacy-baseline-fixture'
+
+// Historical normalization regressions use an explicit fixture handle. Production
+// rejects these unqualified old roots; canonical activation is tested separately.
+vi.mock('../database', async () => {
+  const actual = await vi.importActual<typeof import('../database')>('../database')
+  const fixture = await import('../../test/helpers/legacy-baseline-fixture')
+  return { ...actual, getProjectDb: fixture.getLegacyNormalizationFixtureDb, getCurrentProjectPath: fixture.getLegacyNormalizationFixturePath }
+})
 import { ProjectCoreRepository } from '../repositories/project-core-repository'
 
 const require = createRequire(import.meta.url)
@@ -42,12 +50,12 @@ describe('project narrative thread reminder setting', () => {
     `)
     legacyDb.close()
 
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     expect(ProjectCoreRepository.get()?.narrativeThreadDormantChapterThreshold)
       .toBe(DEFAULT_NARRATIVE_THREAD_DORMANT_THRESHOLD)
     ProjectCoreRepository.update({ narrativeThreadDormantChapterThreshold: 7 })
     closeProjectDatabase()
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
 
     expect(ProjectCoreRepository.get()?.narrativeThreadDormantChapterThreshold).toBe(7)
     expect(getProjectDb()!.prepare(

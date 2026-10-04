@@ -72,7 +72,7 @@ describe('embedding registration entry', () => {
     { name: 'with one configured embedding model', models: [configuredEmbedding] },
   ])('shows the free registration entry $name', async ({ models }) => {
     invoke = vi.fn().mockResolvedValue({ success: true })
-    ;(window as unknown as { velaAPI: TestVelaApi }).velaAPI = {
+    ;(window as unknown as { aiNovelAPI: TestVelaApi }).aiNovelAPI = {
       invoke,
       on: () => () => {},
       once: () => {},
@@ -89,7 +89,7 @@ describe('embedding registration entry', () => {
 
   it('opens the fixed SiliconFlow registration resource through IPC', async () => {
     invoke = vi.fn().mockResolvedValue({ success: true })
-    ;(window as unknown as { velaAPI: TestVelaApi }).velaAPI = {
+    ;(window as unknown as { aiNovelAPI: TestVelaApi }).aiNovelAPI = {
       invoke,
       on: () => () => {},
       once: () => {},
@@ -111,7 +111,7 @@ describe('embedding registration entry', () => {
 
   it('hides the recommendation after the user enters the add-embedding form', async () => {
     invoke = vi.fn().mockResolvedValue({ success: true })
-    ;(window as unknown as { velaAPI: TestVelaApi }).velaAPI = {
+    ;(window as unknown as { aiNovelAPI: TestVelaApi }).aiNovelAPI = {
       invoke,
       on: () => () => {},
       once: () => {},

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { getProjectDb } from '../database'
+import { getCurrentProjectPath, getProjectDb } from '../database'
+import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { countDraftUnits } from '../../src/shared/draft-units'
-import { invalidateContinuityProjectionFrom } from './summary-repository'
+import { freezeFinalizedCharacterSnapshot, invalidateContinuityProjectionFrom } from './summary-repository'
 
 export type PublicationStatus = 'pending' | 'published'
 
@@ -293,6 +294,8 @@ export class FinalizationRepository {
         input.content,
         input.targetFileName,
       )
+      freezeFinalizedCharacterSnapshot(db, { draftId: input.draftId, finalizationId: input.finalizationId,
+        chapterNumber: input.chapterNumber, contentHash: input.contentHash })
 
       return {
         finalizationId: input.finalizationId,
@@ -332,11 +335,16 @@ export class FinalizationRepository {
     const normalizedDocumentId = documentId.trim()
     if (!normalizedDocumentId) throw new Error('知识库文档身份不能为空')
     const db = requireDatabase()
+    const existing = db.prepare(`
+      SELECT finalization_id FROM finalization_outbox WHERE draft_id = ?
+    `).get(draftId) as { finalization_id: string } | undefined
+    if (!existing) throw new Error(`草稿缺少定稿提交：${draftId}`)
+    readPortableRuntimeFreeze(getCurrentProjectPath()).assertMutable('finalization_outbox', existing.finalization_id)
     const result = db.prepare(`
       UPDATE finalization_outbox
       SET knowledge_document_id = ?, updated_at = datetime('now')
-      WHERE draft_id = ?
-    `).run(normalizedDocumentId, draftId)
+      WHERE draft_id = ? AND finalization_id = ?
+    `).run(normalizedDocumentId, draftId, existing.finalization_id)
     if (result.changes !== 1) throw new Error(`草稿缺少定稿提交：${draftId}`)
     const record = FinalizationRepository.getByDraftId(draftId)
     if (!record) throw new Error(`草稿缺少定稿提交：${draftId}`)

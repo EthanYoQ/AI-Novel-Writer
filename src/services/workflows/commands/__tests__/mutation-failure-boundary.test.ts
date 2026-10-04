@@ -17,24 +17,51 @@ import { savePartialData } from '../architecture.command'
 import { runPostProcessPipeline } from '../../workflow-utils'
 import { createBoundedCompletionError } from '../../bounded-completion'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
-import type { CharacterRosterEntry } from '../../../../shared/character-roster'
-import type { FinalizedSourceIdentity } from '../../../../shared/finalized-continuity'
+import type { CommandExecuteParams } from '../base-command'
+import { ReviewRevisionRuntimeFixture } from './review-revision-runtime.fixture'
+
+let mainFixture: ReviewRevisionRuntimeFixture
+import { parseFinalizedCharacterStateResponse, type FinalizedCharacterContext, type FinalizedSourceIdentity } from '../../../../shared/finalized-continuity'
 
 class RefineDraftCommand extends RuntimeRefineDraftCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeRefineDraftCommand>[0]
   constructor(...args: ConstructorParameters<typeof RuntimeRefineDraftCommand>) {
-    super(args[0], workflowRuntimeDependencies)
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(workflowRuntimeDependencies).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.parentModelId = useLLMStore.getState().defaultModelId ?? 'test-model'
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
   }
 }
 
 class RefineFromReviewCommand extends RuntimeRefineFromReviewCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeRefineFromReviewCommand>[0]
   constructor(...args: ConstructorParameters<typeof RuntimeRefineFromReviewCommand>) {
-    super(args[0], workflowRuntimeDependencies)
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(workflowRuntimeDependencies).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.parentModelId = useLLMStore.getState().defaultModelId ?? 'test-model'
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
   }
 }
 
 class ReviewChapterCommand extends RuntimeReviewChapterCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeReviewChapterCommand>[0]
   constructor(...args: ConstructorParameters<typeof RuntimeReviewChapterCommand>) {
-    super(args[0], workflowRuntimeDependencies)
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(workflowRuntimeDependencies).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.parentModelId = useLLMStore.getState().defaultModelId ?? 'test-model'
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
   }
 }
 
@@ -77,6 +104,10 @@ function callbacks(): StepCallbacks {
 
 function testPostProcessGeneration(): FinalizePostProcessGeneration {
   return {
+    async characterStates(builder, stepCallbacks, workflowContext, prepared) {
+      const result = parseFinalizedCharacterStateResponse(await this.complete(builder, stepCallbacks, 'structured-data', workflowContext), prepared.context)
+      return { applied: 0, unchanged: 0, candidates: [], unresolved: result.unresolved }
+    },
     complete(builder, stepCallbacks) {
       const llmStore = useLLMStore.getState()
       return new Promise<string>((resolve, reject) => {
@@ -101,6 +132,17 @@ function testPostProcessGeneration(): FinalizePostProcessGeneration {
       })
     },
   }
+}
+
+const characterContexts = new Map<number, FinalizedCharacterContext>()
+let characterContextOrigin: string | undefined
+function testFrozenCharacterSteps(content: string, generation: FinalizePostProcessGeneration, chapterNumber = 1) {
+  const source = finalizedSource(42, chapterNumber, content)
+  const frozen: FinalizedCharacterContext = { projectId: 'A', epoch: 'epoch-A', source, content, projectionGeneration: 0,
+    identityRevision: 1, identityStatus: 'bound', sourceOrder: { continuityEpoch: 'A:0', chapterNumber, authoritativeFinalizationRevision: 1 },
+    characters: [{ characterId: 'synthetic-lin-lan', displayNameSnapshot: '林岚', aliases: [], fields: [] }] }
+  characterContexts.set(42, frozen)
+  return buildFinalizePostProcessSteps({ path: PROJECT_PATH }, chapterNumber, '第一章', content, generation, 42, [], 'zh-CN', source, 0, frozen)
 }
 
 function context(): WorkflowContext {
@@ -144,28 +186,41 @@ function stubLlm(command: object, response: string): void {
   const target = command as {
     callLLMWithBuilder: () => Promise<string>
     callLLMWithBoundedCompletion?: () => Promise<string>
+    callLLMWithAppendContinuation?: () => Promise<string>
   }
   vi.spyOn(target, 'callLLMWithBuilder').mockResolvedValue(response)
   if (typeof target.callLLMWithBoundedCompletion === 'function') {
-    vi.spyOn(target as Required<typeof target>, 'callLLMWithBoundedCompletion').mockResolvedValue(response)
+    vi.spyOn(target as Required<typeof target>, 'callLLMWithBoundedCompletion').mockImplementation(async () => { mainFixture.record(response); return response })
+  }
+  if (typeof target.callLLMWithAppendContinuation === 'function') {
+    vi.spyOn(target as Required<typeof target>, 'callLLMWithAppendContinuation').mockImplementation(async () => {
+      mainFixture.record(response)
+      await mainFixture.invoke('generation:compose-visible', undefined, [mainFixture.recovery!.latestArtifact!.artifactId], createHash('sha256').update(response).digest('hex'))
+      return response
+    })
   }
 }
 
 function stubVelaIpc(invoke: (channel: string, ...args: unknown[]) => Promise<unknown>): void {
+  mainFixture = new ReviewRevisionRuntimeFixture(invoke)
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: (channel: string, ...args: unknown[]) => (
-        channel === 'prompt:load-global'
+        channel === 'finalized-character:read-context'
+          ? Promise.resolve({ contextId: 'synthetic-context', context: characterContexts.get((args[0] as { draftId: number }).draftId), originProjectId: characterContextOrigin })
+          : channel === 'prompt:load-global'
           ? Promise.resolve({ templates: [], diagnostics: [] })
-          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts')
+          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')
             ? Promise.resolve(false)
-            : invoke(channel, ...args)
+            : mainFixture.selected ? mainFixture.invoke(channel, ...args) : invoke(channel, ...args)
       ),
     },
   })
 }
 
 beforeEach(() => {
+  characterContexts.clear()
+  characterContextOrigin = undefined
   finalizationClient.commitFinalizationSnapshot.mockReset()
   useProjectStore.setState({
     currentProject: {
@@ -190,9 +245,28 @@ afterEach(() => {
 })
 
 describe('workflow mutation failure boundaries', () => {
+  it.each(['zh-CN', 'en-US'] as const)('passes notes source-support instructions and complete prose through the renderer fallback: %s', async writingLanguage => {
+    const content = 'Asha waited outside the hall. The parcel remained in her bag.\n\nThe reason was still unknown.'
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:blueprint-update-notes' || channel === 'db:continuity-save-finalized') return { success: true }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    let prompt = ''
+    const generation = testPostProcessGeneration()
+    generation.complete = vi.fn(async builder => { prompt = builder.build(); return '# Notes' })
+    const steps = testFrozenCharacterSteps(content, generation)
+    await steps.find(step => step.key === 'chapter_notes')!.executor(callbacks(), { ...context(), writingLanguage })
+    expect(prompt).toContain(content)
+    expect(prompt).toContain(writingLanguage === 'en-US' ? 'Leave a section empty or omit it when the manuscript states no corresponding fact' : '栏目没有对应的明示事实时可留空或省略')
+    expect(prompt).toContain(writingLanguage === 'en-US' ? 'Co-occurrence does not establish ownership, causation, responsibility, or narrative purpose' : '共现不构成归属、因果、责任或叙事用途的依据')
+    expect(generation.complete).toHaveBeenCalledTimes(1)
+  })
+
   it('sends both finalization post-process requests in the frozen English writing language', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'db:blueprint-update-notes') return { success: true }
+      if (channel === 'db:continuity-save-finalized') return { success: true }
       if (channel === 'db:character-roster-read') {
         return { status: 'empty', revision: 0, entries: [] }
       }
@@ -214,13 +288,7 @@ describe('workflow mutation failure boundaries', () => {
         return `request-${observedMessages.length}`
       }),
     })
-    const steps = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH },
-      1,
-      'Night Café 夜航',
-      'The sign reads “夜航 Café”.',
-      testPostProcessGeneration(),
-    )
+    const steps = testFrozenCharacterSteps('The sign reads “夜航 Café”.', testPostProcessGeneration())
     const workflowContext = { ...context(), writingLanguage: 'en-US' as const }
 
     await steps.find(step => step.key === 'chapter_notes')!.executor(callbacks(), workflowContext)
@@ -244,7 +312,8 @@ describe('workflow mutation failure boundaries', () => {
       },
     })
     const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'kb:import-text') return { success: true, chunkCount: 1 }
+      if (channel === 'kb:import-text') return { success: true, chunkCount: 1, docId: 'synthetic-doc' }
+      if (channel === 'db:finalization-link-knowledge-document' || channel === 'db:continuity-save-finalized') return { success: true }
       if (channel === 'db:blueprint-update-notes') return { success: true }
       if (channel === 'db:character-roster-read') return { status: 'empty', revision: 0, entries: [] }
       throw new Error(`unexpected IPC: ${channel}`)
@@ -255,13 +324,7 @@ describe('workflow mutation failure boundaries', () => {
       _callbacks: StepCallbacks,
       output: 'visible-text' | 'structured-data',
     ) => output === 'structured-data' ? '{"updates":[]}' : '本章剧情要点')
-    const steps = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH },
-      chapterNumber,
-      `第${chapterNumber}章`,
-      '定稿正文',
-      { complete },
-    )
+    const steps = testFrozenCharacterSteps('定稿正文', { ...testPostProcessGeneration(), complete }, chapterNumber)
 
     for (const step of steps) await step.executor(callbacks(), context())
 
@@ -270,7 +333,7 @@ describe('workflow mutation failure boundaries', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(expect.arrayContaining([
       'kb:import-text',
       'db:blueprint-update-notes',
-      'db:character-roster-read',
+      'db:continuity-save-finalized',
     ]))
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:project-core-update')
     expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('作者手工文风')
@@ -288,7 +351,7 @@ describe('workflow mutation failure boundaries', () => {
       error: '定稿已提交、实体稿待发布：disk unavailable',
     })
     const command = new FinalizeChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '旧参数正文不得被读取',
       chapterNumber: 1,
       chapterInfo: chapterInfo(),
@@ -360,7 +423,7 @@ describe('workflow mutation failure boundaries', () => {
       error: 'atomic finalization rejected',
     })
     const command = new FinalizeChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '旧参数正文不得被读取',
       chapterNumber: 1,
       chapterInfo: chapterInfo(),
@@ -667,384 +730,159 @@ describe('workflow mutation failure boundaries', () => {
     )
   })
 
-  it('does not commit character-state changes when the post-process stream is length-truncated', async () => {
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:character-roster-read') {
-        return {
-          status: 'ready',
-          revision: 4,
-          entries: [{ name: '林岚', role: 'protagonist', currentState: {} }],
-        }
-      }
-      throw new Error(`unexpected IPC: ${channel}`)
-    })
-    stubVelaIpc(invoke)
-    useLLMStore.setState({
-      defaultModelId: 'model',
-      generateStream: vi.fn(async (_messages, streamCallbacks) => {
-        streamCallbacks.onDone?.('{"updates":[', undefined, 'length')
-        return 'request-1'
-      }),
-    })
-    const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH },
-      1,
-      '第一章',
-      '正文',
-      testPostProcessGeneration(),
-    ).find(candidate => candidate.key === 'character_cards')
-    expect(step).toBeDefined()
 
-    await expect(step!.executor(callbacks(), context()))
-      .rejects.toThrow('AI 输出达到本次请求长度限制')
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
+  // Domain field/CAS/identity and same-artifact persistence retry coverage now
+  // runs against actual SQLite in finalized-character-state and consumer suites.
+  it('requires the main character-state seam and refuses the legacy name writer', async () => {
+    const invoke = vi.fn(async () => { throw new Error('unexpected legacy IPC') })
+    stubVelaIpc(invoke)
+    const steps = buildFinalizePostProcessSteps({ path: PROJECT_PATH }, 1, '第一章', '正文', { complete: vi.fn() })
+    await expect(steps.find(step => step.key === 'character_cards')!.executor(callbacks(), context())).rejects.toThrow('FINALIZED_CHARACTER_MAIN_REQUIRED')
+    expect(invoke).not.toHaveBeenCalled()
   })
 
-  it('ignores model-reported new characters during finalization', async () => {
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:character-roster-read') {
-        return {
-          status: 'ready',
-          revision: 4,
-          entries: [{ name: '林岚', role: 'protagonist', currentState: {} }],
-        }
-      }
-      throw new Error(`unexpected IPC: ${channel}`)
-    })
-    stubVelaIpc(invoke)
-    useLLMStore.setState({
-      defaultModelId: 'model',
-      generateStream: vi.fn(async (_messages, streamCallbacks) => {
-        streamCallbacks.onDone?.(JSON.stringify({
-          updates: [],
-          newCharacters: [
-            { name: '快递员', role: 'supporting', currentState: {} },
-            { name: '凭空角色', role: 'antagonist', currentState: {} },
-          ],
-        }), undefined, 'stop')
-        return 'request-1'
-      }),
-    })
-    const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH },
-      1,
-      '第一章',
-      '快递员把信封放在桌上。',
-      testPostProcessGeneration(),
-      undefined,
-      ['林岚', '快递员'],
-    ).find(candidate => candidate.key === 'character_cards')
+  it('does not call extraction after the main frozen source disagrees with the requested prose', async () => {
+    stubVelaIpc(vi.fn())
+    const generation = { complete: vi.fn(), characterStates: vi.fn() }
+    const step = testFrozenCharacterSteps('正文', generation).find(step => step.key === 'character_cards')!
+    characterContexts.get(42)!.content = '改动正文'
+    await expect(step.executor(callbacks(), context())).rejects.toThrow('FINALIZED_CHARACTER_SOURCE_CHANGED')
+    expect(generation.characterStates).not.toHaveBeenCalled()
+  })
 
-    await step!.executor(callbacks(), context())
-
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
+  it('does not accept character extraction when the stream is length-truncated', async () => {
+    stubVelaIpc(vi.fn())
+    useLLMStore.setState({ defaultModelId: 'model', generateStream: vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.('{"updates":[', undefined, 'length'); return 'request-1'
+    }) })
+    const step = testFrozenCharacterSteps('正文', testPostProcessGeneration()).find(step => step.key === 'character_cards')!
+    await expect(step.executor(callbacks(), context())).rejects.toThrow('AI 输出达到本次请求长度限制')
   })
 
   it.each([
-    {
-      label: 'about 2,350 English words',
-      draftContent: Array.from({ length: 2350 }, (_, index) => {
-        if (index === 0) return 'CHAPTER_HEAD_SENTINEL'
-        if (index === 1175) return 'MIDDLE_HANDOFF_SENTINEL'
-        if (index === 2349) return 'CHAPTER_TAIL_SENTINEL'
-        return `word${index}`
-      }).join(' '),
-    },
-    {
-      label: 'a long Chinese chapter',
-      draftContent: [
-        '中文开头事实：林岚仍持有铜钥匙。',
-        '场景继续推进。'.repeat(1200),
-        '中文中段独有事实：林岚把铜钥匙交给周砚。',
-        '追逐仍在继续。'.repeat(1200),
-        '中文结尾事实：周砚带着铜钥匙离开。',
-      ].join('\n'),
-    },
-  ])('sends the complete finalized source for character extraction: $label', async ({ draftContent }) => {
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:character-roster-read') {
-        return { status: 'empty', revision: 0, entries: [] }
+    ['about 2,350 English words', Array.from({ length: 2350 }, (_, index) => index === 1175 ? 'MIDDLE_HANDOFF_SENTINEL' : 'word' + index).join(' ')],
+    ['a long Chinese chapter', '头部事实。' + '场景继续推进。'.repeat(1200) + '中段唯一交接事实。' + '追逐仍在继续。'.repeat(1200) + '尾部事实。'],
+  ])('sends the complete immutable source and supplied stable IDs: %s', async (_label, draftContent) => {
+    stubVelaIpc(vi.fn())
+    const characterStates = vi.fn(async () => ({ applied: 0, unchanged: 0, candidates: [], unresolved: [] }))
+    const step = testFrozenCharacterSteps(draftContent, { complete: vi.fn(), characterStates }).find(step => step.key === 'character_cards')!
+    await step.executor(callbacks(), context())
+    const [builder, , , prepared] = characterStates.mock.calls[0] as unknown as Parameters<NonNullable<FinalizePostProcessGeneration['characterStates']>>
+    expect(builder.build()).toContain(draftContent)
+    expect(builder.build()).toContain('synthetic-lin-lan')
+    expect(prepared.context.content).toBe(draftContent)
+    expect(prepared.contextId).toBe('synthetic-context')
+  })
+
+  it.each(['same-project', 'authorized-origin', 'unknown-origin', 'unknown-order', 'unknown-source', 'unknown-epoch', 'future-epoch', 'future-revision', 'same-source', 'equal-revision', 'other-chapter', 'other-character', 'other-project', 'author', 'legacy'] as const)(
+    'renderer cards投影仅隐藏已被当前定稿替代的事件，保留完整context：%s', async kind => {
+      stubVelaIpc(vi.fn())
+      const characterStates = vi.fn(async () => ({ applied: 0, unchanged: 0, candidates: [], unresolved: [] }))
+      const step = testFrozenCharacterSteps('林岚撤回安排，等待许可。', { complete: vi.fn(), characterStates }, 2).find(step => step.key === 'character_cards')!
+      const frozen = characterContexts.get(42)!
+      frozen.projectionGeneration = 3
+      frozen.sourceOrder = { continuityEpoch: 'A:3', chapterNumber: 2, authoritativeFinalizationRevision: 4 }
+      const priorSource = kind === 'same-source' ? frozen.source : finalizedSource(3, kind === 'other-chapter' ? 1 : 2, '旧正文')
+      if (kind === 'unknown-source') priorSource.contentHash = ''
+      const field: FinalizedCharacterContext['characters'][number]['fields'][number] = {
+        projectId: kind === 'other-project' ? 'other-project' : 'A', epoch: 'epoch-A', characterId: kind === 'other-character' ? 'other-character' : 'synthetic-lin-lan', field: 'recentEvents', revision: 3,
+        value: '旧事件基线标记', valueHash: createHash('sha256').update('旧事件基线标记').digest('hex'),
+        provenance: kind === 'author' ? { kind: 'author', chapterNumber: 1 } : kind === 'legacy' ? { kind: 'legacy' } : { kind: 'derived', source: priorSource },
+        sourceOrder: kind === 'unknown-order' ? undefined : { continuityEpoch: kind.includes('origin') ? 'origin-A:2' : kind === 'unknown-epoch' ? 'unrecognized' : kind === 'future-epoch' ? 'A:4' : 'A:2',
+          chapterNumber: priorSource.chapterNumber, authoritativeFinalizationRevision: kind === 'equal-revision' ? 4 : kind === 'future-revision' ? 5 : 3 },
       }
-      throw new Error(`unexpected IPC: ${channel}`)
+      frozen.characters[0]!.fields = [field, { ...field, field: 'location', value: '保留地点标记' }]
+      if (kind === 'authorized-origin') characterContextOrigin = 'origin-A'
+      const before = structuredClone(frozen)
+      await step.executor(callbacks(), context())
+      const [builder, , , prepared] = characterStates.mock.calls[0] as unknown as Parameters<NonNullable<FinalizePostProcessGeneration['characterStates']>>
+      expect(builder.build().includes('旧事件基线标记')).toBe(!['same-project', 'authorized-origin'].includes(kind))
+      expect(builder.build()).toContain('保留地点标记')
+      expect(builder.build()).toContain(frozen.content)
+      expect(prepared.context).toEqual(before)
+      expect(characterContexts.get(42)).toEqual(before)
     })
-    stubVelaIpc(invoke)
-    let observedPrompt = ''
-    const complete: FinalizePostProcessGeneration['complete'] = vi.fn(async (builder) => {
-      observedPrompt = builder.build()
-      return '{"updates":[],"newCharacters":[]}'
-    })
-    const generation: FinalizePostProcessGeneration = { complete }
-    const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH },
-      1,
-      '第一章',
-      draftContent,
-      generation,
-    ).find(candidate => candidate.key === 'character_cards')
 
-    await expect(step!.executor(callbacks(), context())).resolves.toBeUndefined()
-
-    expect(observedPrompt).toContain(draftContent)
-    expect(complete).toHaveBeenCalledOnce()
+  it.each([
+    ['zh-CN', '【最终输出合同，覆盖上文【输出格式（JSON）】】', '只返回一个 JSON 对象'],
+    ['en-US', '[Final output contract: this overrides the [JSON output contract] above]', 'Return one JSON object'],
+  ] as const)('prefixes the code-owned contract with an explicit template override: %s', async (writingLanguage, override, contract) => {
+    stubVelaIpc(vi.fn())
+    const characterStates = vi.fn(async () => ({ applied: 0, unchanged: 0, candidates: [], unresolved: [] }))
+    const step = testFrozenCharacterSteps('正文', { complete: vi.fn(), characterStates }).find(step => step.key === 'character_cards')!
+    await step.executor(callbacks(), { ...context(), writingLanguage })
+    const [builder] = characterStates.mock.calls[0] as unknown as Parameters<NonNullable<FinalizePostProcessGeneration['characterStates']>>
+    const prompt = builder.build()
+    expect(prompt).toContain(override)
+    expect(prompt.indexOf(override)).toBeLessThan(prompt.indexOf(contract))
   })
 
   it.each([
-    ['missing updates', '{}', '缺少 updates'],
-    ['non-array updates', '{"updates":{}}', 'updates 必须是列表'],
-    ['invalid member', '{"updates":[null]}', 'updates[0] 格式无效'],
-    ['invalid state field type', '{"updates":[{"name":"林岚","currentState":{"location":7}}]}', 'location 必须是文本'],
-    ['unknown character', '{"updates":[{"name":"周砚","currentState":{"location":"车站"}}]}', '未知角色'],
-    ['duplicate character', '{"updates":[{"name":"林岚","currentState":{"location":"车站"}},{"name":" 林岚 ","currentState":{"location":"码头"}}]}', '同名冲突'],
-  ])('rejects malformed character-state output instead of treating it as zero changes: %s', async (_label, response, error) => {
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:character-roster-read') {
-        return { status: 'ready', revision: 4, entries: [{ name: '林岚', role: 'protagonist' }] }
-      }
-      throw new Error(`unexpected IPC: ${channel}`)
-    })
-    stubVelaIpc(invoke)
-    const generation: FinalizePostProcessGeneration = { complete: vi.fn(async () => response) }
-    const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH },
-      1,
-      '第一章',
-      '正文',
-      generation,
-    ).find(candidate => candidate.key === 'character_cards')
-
-    await expect(step!.executor(callbacks(), context())).rejects.toThrow(error)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
+    ['zh-CN', '每个 update 必须填写 recentEvents（本章结束时该角色的最新状态，50字以内）', '只返回一个 JSON 对象：{"updates":[{"characterId":"冻结名单中的精确ID","currentState":{"recentEvents":"本章事件","location":"新地点"},"evidence":{"text":"原文精确引用"}}]}', '只列出实际变化的字段', ['location 只写正文明确写出的人物当前所在地点，不写事件或进度', '正文只写了计划、决定或打算前往某处时，人物仍在原处', '正文没有明确写出地点变化时不要列出 location'], 'location 只写地点，不写事件或进度'],
+    ['en-US', "Every update must include recentEvents (this character's latest state at the end of the chapter, within 50 words)", 'Return one JSON object: {"updates":[{"characterId":"exact ID from the frozen list","currentState":{"recentEvents":"this chapter\'s event","location":"new place"},"evidence":{"text":"exact source quote"}}]}', 'list only the fields that actually changed', ['location is only the place the chapter prose explicitly states the character is currently in, never an event or progress', 'the character is still where they were', 'do not list location'], 'location is a place, never an event or progress'],
+  ] as const)('requires recentEvents on every update and a prose-grounded location in the code-owned contract: %s', async (writingLanguage, requirement, example, retired, locationRules, retiredLocation) => {
+    stubVelaIpc(vi.fn())
+    const characterStates = vi.fn(async () => ({ applied: 0, unchanged: 0, candidates: [], unresolved: [] }))
+    const step = testFrozenCharacterSteps('正文', { complete: vi.fn(), characterStates }).find(step => step.key === 'character_cards')!
+    await step.executor(callbacks(), { ...context(), writingLanguage })
+    const [builder] = characterStates.mock.calls[0] as unknown as Parameters<NonNullable<FinalizePostProcessGeneration['characterStates']>>
+    const prompt = builder.build()
+    expect(prompt).toContain(requirement)
+    expect(prompt).toContain(example)
+    expect(prompt).not.toContain(retired)
+    for (const rule of locationRules) expect(prompt).toContain(rule)
+    expect(prompt).not.toContain(retiredLocation)
   })
 
-  it('allows a legal empty update list without a roster commit', async () => {
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:character-roster-read') {
-        return { status: 'ready', revision: 4, entries: [{ name: '林岚', role: 'protagonist' }] }
-      }
-      throw new Error(`unexpected IPC: ${channel}`)
-    })
-    stubVelaIpc(invoke)
-    const generation: FinalizePostProcessGeneration = {
-      complete: vi.fn(async () => '{"updates":[]}'),
-    }
-    const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 1, '第一章', '正文', generation,
-    ).find(candidate => candidate.key === 'character_cards')
-
-    await expect(step!.executor(callbacks(), context())).resolves.toBeUndefined()
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
+  it.each([
+    ['missing updates', '{}', 'UPDATES_INVALID'],
+    ['non-array updates', '{"updates":{}}', 'UPDATES_INVALID'],
+    ['invalid member', '{"updates":[null]}', 'UPDATE_INVALID'],
+    ['template-shaped member without evidence', '{"updates":[{"name":"林岚","currentState":{"location":"码头","updatedAtChapter":1}}],"newCharacters":[]}', 'EVIDENCE_MISSING'],
+    ['invalid state type', '{"updates":[{"characterId":"synthetic-lin-lan","currentState":{"location":7},"evidence":{"start":0,"end":2,"text":"正文"}}]}', 'FIELD_INVALID'],
+    ['duplicate ID', '{"updates":[{"characterId":"synthetic-lin-lan","currentState":{"location":"码头"},"evidence":{"start":0,"end":2,"text":"正文"}},{"characterId":"synthetic-lin-lan","currentState":{"location":"旧站"},"evidence":{"start":0,"end":2,"text":"正文"}}]}', 'DUPLICATE_ID'],
+  ])('rejects malformed state artifacts without treating them as an empty success: %s', async (_label, response, error) => {
+    stubVelaIpc(vi.fn())
+    const generation = { ...testPostProcessGeneration(), complete: vi.fn(async () => response) }
+    const step = testFrozenCharacterSteps('正文', generation).find(step => step.key === 'character_cards')!
+    await expect(step.executor(callbacks(), context())).rejects.toThrow(error)
   })
 
-  it('preserves missing state fields, clears explicit empty strings, and applies legal changes', async () => {
-    const existing = {
-      name: '林岚',
-      role: 'protagonist',
-      gender: '女',
-      age: '二十岁',
-      appearance: '作者设定外貌',
-      personality: '谨慎',
-      background: '作者设定背景',
-      abilities: '调查',
-      motivation: '追查真相',
-      relationships: [],
-      arc: '学会信任',
-      notes: '作者手工备注',
-      currentState: {
-        location: '旧车站',
-        powerLevel: '普通人',
-        physicalState: '轻伤',
-        mentalState: '警惕',
-        keyItems: '铜钥匙',
-        recentEvents: '发现密信',
-        updatedAtChapter: 1,
-      },
-    }
-    let committedEntries: CharacterRosterEntry[] = []
-    let savedCandidates: unknown[] = []
-    const invoke = vi.fn(async (channel: string, request?: unknown) => {
-      if (channel === 'db:character-roster-read') {
-        return { status: 'ready', revision: 4, entries: [existing] }
-      }
-      if (channel === 'db:character-roster-commit') {
-        committedEntries = (request as { entries: CharacterRosterEntry[] }).entries
-        return { success: true, receipt: { revision: 5 } }
-      }
-      if (channel === 'db:continuity-save-character-state-candidates') {
-        savedCandidates = (request as { candidates: unknown[] }).candidates
-        return { success: true }
-      }
-      throw new Error(`unexpected IPC: ${channel}`)
-    })
+  it('accepts an empty update list and does not promote unrelated model static cards', async () => {
+    const invoke = vi.fn()
     stubVelaIpc(invoke)
-    const generation: FinalizePostProcessGeneration = {
-      complete: vi.fn(async () => JSON.stringify({
-        updates: [{
-          name: '林岚',
-          currentState: {
-            location: '码头',
-            keyItems: '',
-            updatedAtChapter: 2,
-          },
-        }],
-      })),
-    }
-    const workflowContext = { ...context(), runId: 'field-semantics' }
-    const sourceReceipt = finalizedSource(42, 2, '正文')
-    const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 2, '第二章', '正文', generation, 42, [], 'zh-CN',
-      sourceReceipt, 0,
-    ).find(candidate => candidate.key === 'character_cards')
-
-    await expect(step!.executor(callbacks(), workflowContext)).resolves.toBeUndefined()
-    expect(committedEntries).toEqual([expect.objectContaining({
-      name: '林岚',
-      appearance: '作者设定外貌',
-      notes: '作者手工备注',
-      currentState: {
-        location: '码头',
-        powerLevel: '普通人',
-        physicalState: '轻伤',
-        mentalState: '警惕',
-        keyItems: '',
-        recentEvents: '发现密信',
-        updatedAtChapter: 2,
-        provenance: {
-          location: { kind: 'derived', source: sourceReceipt },
-          keyItems: { kind: 'derived', source: sourceReceipt },
-        },
-      },
-    })])
-    expect(savedCandidates).toEqual(expect.arrayContaining([
-      { characterName: '林岚', field: 'location', value: '码头' },
-      { characterName: '林岚', field: 'keyItems', value: '' },
-    ]))
+    const step = testFrozenCharacterSteps('正文', { ...testPostProcessGeneration(),
+      complete: vi.fn(async () => JSON.stringify({ updates: [], newCharacters: [{ name: '虚构新角色', role: 'antagonist' }] })) }).find(step => step.key === 'character_cards')!
+    await expect(step.executor(callbacks(), context())).resolves.toBeUndefined()
+    expect(invoke).not.toHaveBeenCalled()
   })
 
-  it('stops character-card post-processing when its one roster receipt reports failure', async () => {
-    const allCharacters = [{ name: '林岚', role: 'protagonist', currentState: {} }]
-    const llmResponse = JSON.stringify({
-      updates: [{ name: '林岚', currentState: { location: '车站' } }],
-      newCharacters: [],
-    })
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:character-roster-read') {
-        return { status: 'ready', revision: 4, entries: allCharacters }
-      }
-      if (channel === 'db:character-roster-commit') {
-        return { success: false, error: 'roster receipt rejected' }
-      }
-      throw new Error(`unexpected IPC: ${channel}`)
-    })
+  it('preserves the explicit proposal receipt for unknown occurrences without a renderer roster write', async () => {
+    const invoke = vi.fn()
     stubVelaIpc(invoke)
-    useLLMStore.setState({
-      defaultModelId: 'model',
-      generateStream: vi.fn(async (_messages, streamCallbacks) => {
-        streamCallbacks.onDone?.(llmResponse, undefined, 'stop')
-        return 'request-1'
-      }),
-    })
-    const sourceReceipt = finalizedSource(41, 1, '正文')
-    const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH },
-      1,
-      '第一章',
-      '正文',
-      testPostProcessGeneration(),
-      41,
-      [],
-      'zh-CN',
-      sourceReceipt,
-    ).find(candidate => candidate.key === 'character_cards')
-    expect(step).toBeDefined()
+    const receipt = { applied: 0, unchanged: 0, candidates: [], unresolved: [], proposalBatchId: 'pending-main-proposal' }
+    const step = testFrozenCharacterSteps('正文', { complete: vi.fn(), characterStates: vi.fn(async () => receipt) }).find(step => step.key === 'character_cards')!
+    const workflowContext = context()
+    await step.executor(callbacks(), workflowContext)
+    expect(workflowContext.data.characterProposalBatchId).toBe('pending-main-proposal')
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('propagates a main commit failure and never reports a successful state write', async () => {
+    stubVelaIpc(vi.fn())
+    const step = testFrozenCharacterSteps('正文', { complete: vi.fn(), characterStates: vi.fn(async () => { throw new Error('main receipt rejected') }) })
+      .find(step => step.key === 'character_cards')!
     const stepCallbacks = callbacks()
-
-    await expect(step!.executor(stepCallbacks, context()))
-      .rejects.toThrow('roster receipt rejected')
-    expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining('自动提取并登记'))
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
-      'db:character-roster-read',
-      'db:character-roster-commit',
-    ])
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({ source: sourceReceipt }),
-      PROJECT_PATH,
-      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
-    )
+    await expect(step.executor(stepCallbacks, context())).rejects.toThrow('main receipt rejected')
+    expect(stepCallbacks.log).not.toHaveBeenCalled()
   })
 
-  it('reuses generated character state when an executor retry only repairs persistence', async () => {
-    const allCharacters = [{ name: '林岚', role: 'protagonist', relationships: [], currentState: {} }]
-    let persistenceAttempts = 0
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:character-roster-read') {
-        return { status: 'ready', revision: 4, entries: allCharacters }
-      }
-      if (channel === 'db:character-roster-commit') {
-        persistenceAttempts += 1
-        return persistenceAttempts === 1
-          ? { success: false, error: 'transient roster failure' }
-          : { success: true, receipt: { revision: 5 } }
-      }
-      throw new Error(`unexpected IPC: ${channel}`)
-    })
-    stubVelaIpc(invoke)
-    const complete = vi.fn(async () => JSON.stringify({
-      updates: [{ name: '林岚', currentState: { location: '车站' } }],
-    }))
-    const sourceReceipt = finalizedSource(41, 1, '正文')
-    const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete }, 41, [], 'zh-CN',
-      sourceReceipt,
-    ).find(candidate => candidate.key === 'character_cards')!
-
-    await expect(step.executor(callbacks(), context())).rejects.toThrow('transient roster failure')
-    await expect(step.executor(callbacks(), context())).resolves.toBeUndefined()
-
-    expect(complete).toHaveBeenCalledOnce()
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(2)
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({ source: sourceReceipt }),
-      PROJECT_PATH,
-      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
-    )
-  })
-
-  it('regenerates character state after malformed model output fails parsing', async () => {
-    const allCharacters = [{ name: '林岚', role: 'protagonist', relationships: [], currentState: {} }]
-    const invoke = vi.fn(async (channel: string) => {
-      if (channel === 'db:character-roster-read') {
-        return { status: 'ready', revision: 4, entries: allCharacters }
-      }
-      if (channel === 'db:character-roster-commit') {
-        return { success: true, receipt: { revision: 5 } }
-      }
-      throw new Error(`unexpected IPC: ${channel}`)
-    })
-    stubVelaIpc(invoke)
-    const complete = vi.fn()
-      .mockResolvedValueOnce('{"updates":{}}')
-      .mockResolvedValueOnce(JSON.stringify({
-        updates: [{ name: '林岚', currentState: { location: '车站' } }],
-      }))
-    const sourceReceipt = finalizedSource(41, 1, '正文')
-    const step = buildFinalizePostProcessSteps(
-      { path: PROJECT_PATH }, 1, '第一章', '正文', { complete }, 41, [], 'zh-CN',
-      sourceReceipt,
-    ).find(candidate => candidate.key === 'character_cards')!
-
-    await expect(step.executor(callbacks(), context())).rejects.toThrow('updates 必须是列表')
-    await expect(step.executor(callbacks(), context())).resolves.toBeUndefined()
-
-    expect(complete).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({ source: sourceReceipt }),
-      PROJECT_PATH,
-      expect.objectContaining({ projectId: 'A', leaseId: 'lease-A' }),
-    )
+  it('stops a cancelled character-state step before reading or generating', async () => {
+    stubVelaIpc(vi.fn())
+    const characterStates = vi.fn()
+    const step = testFrozenCharacterSteps('正文', { complete: vi.fn(), characterStates }).find(step => step.key === 'character_cards')!
+    await expect(step.executor(callbacks(), { ...context(), cancelled: true })).rejects.toThrow('GENERATION_WORKFLOW_CANCELLED')
+    expect(characterStates).not.toHaveBeenCalled()
   })
 
   it('does not persist post-process output when the stream omits terminal evidence', async () => {
@@ -1076,13 +914,13 @@ describe('workflow mutation failure boundaries', () => {
 
   it.each([
     ['ordinary refinement', () => new RefineDraftCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '原稿',
       chapterNumber: 1,
       chapterInfo: chapterInfo(),
     })],
     ['review refinement', () => new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '原稿',
       confirmedReviewContent: CONFIRMED_REVIEW_CONTENT,
       reviewSourceId: 7,
@@ -1164,7 +1002,7 @@ describe('workflow mutation failure boundaries', () => {
       return 'single-review-request'
     })
     useLLMStore.setState({ defaultModelId: 'model', generateStream })
-    await new ReviewChapterCommand({ draftPath: 'vela://draft/1', draftContent: draft, chapterNumber: 1 })
+    await new ReviewChapterCommand({ draftPath: 'ai-novel://draft/1', draftContent: draft, chapterNumber: 1 })
       .execute({ step: {}, context: context(), callbacks: callbacks() })
     expect(generateStream).toHaveBeenCalledTimes(1)
     expect(prompt).toContain('ch1:keyEvents:1')
@@ -1194,7 +1032,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     stubVelaIpc(invoke)
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })
@@ -1211,7 +1049,7 @@ describe('workflow mutation failure boundaries', () => {
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
-  it('bounds free text and saves a structurally valid five-item review', async () => {
+  it('preserves complete item text and saves a structurally valid five-item review', async () => {
     const review = {
       summary: '总'.repeat(121),
       items: [
@@ -1265,7 +1103,7 @@ describe('workflow mutation failure boundaries', () => {
       }),
     })
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })
@@ -1274,15 +1112,14 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: context(),
       callbacks: callbacks(),
-    })).resolves.toBe(JSON.stringify(review))
+    })).resolves.toSatisfy((result: string) => result === mainFixture.recovery?.saved?.content)
 
     const persisted = JSON.parse(persistedContent) as {
       summary: string
       items: Array<{ description: string; quote?: string }>
     }
     expect(persisted.summary).toContain('待核实')
-    expect(persisted.items.slice(0, 5).map(item => Array.from(item.description).length)).toEqual([200, 200, 157, 200, 200])
-    expect(persisted.items.slice(0, 5).map(item => item.quote === undefined ? 0 : Array.from(item.quote).length)).toEqual([154, 147, 0, 0, 69])
+    expect(persisted.items.slice(0, review.items.length)).toEqual(review.items)
     expect(persisted.items[5]).toMatchObject({ severity: 'unknown' })
     expect(useEditorStore.getState().tabs).toHaveLength(1)
     expect(observedReviewPrompt).toContain('全部 items 必须为 1–10 条')
@@ -1291,7 +1128,7 @@ describe('workflow mutation failure boundaries', () => {
     expect(observedReviewPrompt).not.toContain('每个 category 至少输出一条记录')
   })
 
-  it('accepts the packaged DeepSeek review envelope and bounds its quoted evidence', async () => {
+  it.each(['fenced', 'prose-wrapped'])('accepts a %s review envelope and preserves its complete item text and quoted evidence', async (envelope) => {
     const review = {
       items: [
         { category: '剧情连贯性', severity: 'pass', description: '本章为故事开端，情节内部逻辑自洽。' },
@@ -1301,7 +1138,9 @@ describe('workflow mutation failure boundaries', () => {
       ],
       summary: '章节结构扎实，但存在两处轻微不一致。',
     }
-    const response = `\`\`\`json\n${JSON.stringify(review, null, 2)}\n\`\`\``
+    const response = envelope === 'fenced'
+      ? `\`\`\`json\n${JSON.stringify(review, null, 2)}\n\`\`\``
+      : `PRIVATE_PREFIX ${JSON.stringify(review)} PRIVATE_SUFFIX`
     let persistedContent = ''
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'kb:search') return []
@@ -1320,7 +1159,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     stubVelaIpc(invoke)
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })
@@ -1330,22 +1169,20 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: context(),
       callbacks: callbacks(),
-    })).resolves.toBe(response)
+    })).resolves.toSatisfy((result: string) => result === mainFixture.recovery?.saved?.content)
 
     const persisted = JSON.parse(persistedContent) as typeof review
     expect(persisted.items).toHaveLength(5)
     expect(persisted.items[4]).toMatchObject({ severity: 'unknown' })
-    expect(Array.from(persisted.items[1]!.quote!)).toHaveLength(160)
-    expect(persisted.items[1]!.quote).toBe('潮'.repeat(160))
+    expect(persisted.items.slice(0, review.items.length)).toEqual(review.items)
+    expect(persistedContent).not.toContain('PRIVATE_PREFIX')
+    expect(persistedContent).not.toContain('PRIVATE_SUFFIX')
   })
 
   it.each([
     ['invalid JSON', 'not-json PRIVATE_REVIEW_SENTINEL'],
     ['incomplete JSON', '{"summary":"ok","items":['],
-    ['prose around valid JSON', `PRIVATE_PREFIX ${JSON.stringify({
-      summary: 'ok',
-      items: [{ category: 'continuity', severity: 'pass', description: 'No conflict found.' }],
-    })} PRIVATE_SUFFIX`],
+    ['prose around an invalid contract', 'PRIVATE_PREFIX {} PRIVATE_SUFFIX'],
     ['invalid contract', '{}'],
     ['empty items', JSON.stringify({ summary: 'ok', items: [] })],
     ['more than ten items', JSON.stringify({
@@ -1423,7 +1260,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     stubVelaIpc(invoke)
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: 'Draft awaiting review.',
       chapterNumber: 1,
     })
@@ -1445,8 +1282,8 @@ describe('workflow mutation failure boundaries', () => {
       uiLocale: 'en-US' as const,
       writingLanguage: 'zh-CN' as const,
       response: 'not-json',
-      expectedLog: 'The review result failed validation (the output is not complete JSON (it may be truncated by the model output limit)); requesting one complete replacement...',
-      expectedError: 'The AI review response was invalid twice (the replacement output is still not complete JSON)',
+      expectedLog: 'The review result failed validation (the output does not match the review-report contract (missing, oversized, or extra fields)); requesting one complete replacement...',
+      expectedError: 'The AI review response was invalid twice (the replacement output still does not match the review-report contract)',
       expectedPrompt: '上一轮审稿输出未通过合同校验',
     },
     {
@@ -1474,7 +1311,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     stubVelaIpc(invoke)
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: writingLanguage === 'en-US' ? 'Draft awaiting review.' : '待审正文',
       chapterNumber: 1,
     })
@@ -1526,7 +1363,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     useLLMStore.setState({ defaultModelId: 'model', generateStream })
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })
@@ -1535,7 +1372,7 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: context(),
       callbacks: callbacks(),
-    })).resolves.toBe(completeReview)
+    })).resolves.toSatisfy((result: string) => result === mainFixture.recovery?.saved?.content)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(generateStream.mock.calls[1]?.[0][1]?.content).toContain('上一轮结构化输出因长度限制而中断')
@@ -1589,7 +1426,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     useLLMStore.setState({ defaultModelId: 'model', generateStream })
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: originalDraft,
       chapterNumber: 1,
     })
@@ -1598,7 +1435,7 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: context(),
       callbacks: callbacks(),
-    })).resolves.toBe(completeReview)
+    })).resolves.toSatisfy((result: string) => result === mainFixture.recovery?.saved?.content)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(rebuildPrompts[0]).toContain('上一轮审稿输出未通过合同校验')
@@ -1630,7 +1467,7 @@ describe('workflow mutation failure boundaries', () => {
     })
     useLLMStore.setState({ defaultModelId: 'model', generateStream })
     const command = new ReviewChapterCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '待审正文',
       chapterNumber: 1,
     })

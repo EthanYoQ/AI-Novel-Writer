@@ -497,10 +497,10 @@ describe('ImportRunOrchestrator', () => {
 
   it('finishes the current bounded batch before applying cancellation at its safe boundary', async () => {
     const { deps, calls, limits, getRun } = harness(5_000)
-    const context = { cancelled: false }
+    const context = { cancelled: false, cancelRequested: false, cancellationRequest: Promise.resolve() }
     deps.importReference = vi.fn(async item => {
       calls.push(item.number)
-      if (item.number === 1) context.cancelled = true
+      if (item.number === 1) context.cancelRequested = true
     })
 
     await expect(new ImportRunOrchestrator(deps).executeStage('run-1', 'knowledge', 'test-runner', context, callbacks))
@@ -509,8 +509,77 @@ describe('ImportRunOrchestrator', () => {
     expect(calls).toHaveLength(IMPORT_KNOWLEDGE_BATCH_SIZE)
     expect(limits).toEqual([IMPORT_CHAPTER_PAGE_SIZE])
     expect(getRun()).toMatchObject({ status: 'cancelled', stage: 'knowledge', resumable: true })
+    expect(deps.cancelAtBoundary).toHaveBeenCalledOnce()
+    expect(deps.advanceStage).not.toHaveBeenCalled()
     expect(deps.inferGlobal).not.toHaveBeenCalled()
   })
+
+  it('does not write a second cancellation terminal when the batch commit already applied it', async () => {
+    const { deps, calls, getRun } = harness(1)
+    const context = { cancelled: false, cancelRequested: false, cancellationRequest: Promise.resolve() }
+    deps.importReference = vi.fn(async item => {
+      calls.push(item.number)
+      context.cancelRequested = true
+    })
+    deps.completeBatch = vi.fn(async (_runId: string, stage: ImportRunStage, batchId: string) => {
+      const current = await deps.getRun('run-1') as ImportRunSnapshot
+      const completed = current.completedBatches[stage] ?? []
+      const cancelled = runSnapshot({
+        ...current,
+        status: 'cancelled',
+        cancelRequested: true,
+        completedBatches: { ...current.completedBatches, [stage]: [...completed, batchId] },
+      })
+      deps.getRun = vi.fn(async () => cancelled)
+      return { cancelApplied: true, run: cancelled }
+    })
+
+    await expect(new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'knowledge', 'test-runner', context, callbacks,
+    )).rejects.toThrow(/cancel/i)
+
+    expect(calls).toEqual([1])
+    expect(getRun().stage).toBe('knowledge')
+    expect(deps.cancelAtBoundary).not.toHaveBeenCalled()
+    expect(deps.advanceStage).not.toHaveBeenCalled()
+  })
+
+  it.each(['global', 'refresh'] as const)(
+    'applies cancellation requested during the final %s lease renewal before advancing or completing',
+    async (stage) => {
+      const completedBatches = stage === 'global' ? { global: ['done'] } : { refresh: ['done'] }
+      const { deps, getRun } = harness(1, { stage, completedBatches })
+      let releaseRenewal!: () => void
+      const renewalPending = new Promise<void>(resolve => { releaseRenewal = resolve })
+      let markRenewalStarted!: () => void
+      const renewalStarted = new Promise<void>(resolve => { markRenewalStarted = resolve })
+      let persistCancellation!: () => void
+      const cancellationRequest = new Promise<void>(resolve => { persistCancellation = resolve })
+      const execution = { owner: 'test-runner', epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+      deps.renewExecution = vi.fn()
+        .mockImplementationOnce(async () => {
+          markRenewalStarted()
+          await renewalPending
+          return execution
+        })
+        .mockResolvedValue(execution)
+      const context = { cancelled: false, cancelRequested: false, cancellationRequest }
+
+      const running = new ImportRunOrchestrator(deps).executeStage(
+        'run-1', stage, 'test-runner', context, callbacks,
+      )
+      await renewalStarted
+      context.cancelRequested = true
+      persistCancellation()
+      releaseRenewal()
+
+      await expect(running).rejects.toThrow(/cancel/i)
+      expect(deps.complete).not.toHaveBeenCalled()
+      expect(deps.advanceStage).not.toHaveBeenCalled()
+      expect(deps.cancelAtBoundary).toHaveBeenCalledOnce()
+      expect(getRun()).toMatchObject({ stage, status: 'cancelled', cancelRequested: true })
+    },
+  )
 
   it('does not repeat a globally checkpointed model stage after a crash before stage advance', async () => {
     const { deps, getRun } = harness(5, {

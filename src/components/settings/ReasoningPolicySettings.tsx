@@ -3,6 +3,9 @@ import { useState } from 'react'
 import type { ModelProfile } from '../../shared/ipc-channels'
 import { projectSessionContextFromProject } from '../../shared/project-session-context'
 import { resolveReasoningPolicy } from '../../shared/reasoning-policy'
+import { modelCapabilitySource } from '../../shared/model-profile-draft'
+import { resolveModelProfileReasoningMapping } from '../../shared/provider-presets'
+import { isReasoningMapping } from '../../shared/reasoning-types'
 import type {
   CreativeStrategy,
   EffectiveReasoningEffort,
@@ -14,6 +17,21 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
+
+export function ModelCapabilitySources({ model }: { model: ModelProfile }) {
+  const text = useLocaleStore(state => state.text)
+  const labels = {
+    endpoint: text('接口取得', 'Endpoint declaration'), preset: text('资料匹配', 'Catalog match'),
+    manual: text('手动设置', 'Manual setting'), unknown: text('未识别', 'Unknown'),
+  }
+  return <div className="text-xs text-[var(--color-text-muted)]" data-capability-sources>
+    {([
+      ['contextWindowTokens', text('上下文', 'Context')], ['maxOutputTokens', text('模型输出容量', 'Model output capacity')],
+      ['reasoning', text('推理能力', 'Reasoning capability')], ['structuredOutput', text('结构化输出', 'Structured output')],
+      ['usage', text('用量报告', 'Usage reporting')],
+    ] as const).map(([key, label]) => <span className="mr-3" key={key}>{label}：{labels[modelCapabilitySource(model, key)]}</span>)}
+  </div>
+}
 
 export function ProjectCreativeStrategySettings() {
   const text = useLocaleStore(state => state.text)
@@ -67,6 +85,22 @@ export function ModelReasoningOverrideSettings({
 }) {
   const text = useLocaleStore(state => state.text)
   const creativeStrategy = useProjectStore(state => state.currentProject?.novelConfig.creativeStrategy ?? 'auto')
+  const mapping = resolveModelProfileReasoningMapping(model)
+  const switchOnly = mapping?.adapter === 'deepseek-v4-thinking'
+    && Object.values(mapping.providerValues).every(value => value === 'enabled' || value === 'disabled')
+  const [mappingDraft, setMappingDraft] = useState<string | null>(null)
+  const [mappingError, setMappingError] = useState(false)
+  const applyMapping = () => {
+    try {
+      const raw = mappingDraft ?? JSON.stringify(model.reasoningMapping ?? null, null, 2)
+      const value: unknown = raw.trim() ? JSON.parse(raw) : undefined
+      if (value !== undefined && value !== null && (!isReasoningMapping(value)
+        || (model.protocol === 'gemini') !== (value.adapter === 'gemini-thinking-budget'))) throw new Error('mapping')
+      onModelChange({ ...model, reasoningMapping: value == null ? undefined : value as ModelProfile['reasoningMapping'] })
+      setMappingDraft(null)
+      setMappingError(false)
+    } catch { setMappingError(true) }
+  }
   const effortLabel = (value: ReasoningEffort | EffectiveReasoningEffort | null): string => {
     if (value === null) return '—'
     return {
@@ -74,6 +108,7 @@ export function ModelReasoningOverrideSettings({
       low: text('低', 'Low'),
       medium: text('中', 'Medium'),
       high: text('高', 'High'),
+      xhigh: text('极高', 'XHigh'),
       max: text('最高', 'Max'),
     }[value]
   }
@@ -93,7 +128,7 @@ export function ModelReasoningOverrideSettings({
     mapped: text('已映射', 'Mapped'),
     capped: text('已限制', 'Capped'),
     forced: text('模型强制', 'Model-forced'),
-    unsupported: text('不支持 / 不发送参数', 'Unsupported / no parameter sent'),
+    unsupported: text('未发送 / 供应商默认', 'Not sent / provider default'),
   }[status])
 
   const outcome = (
@@ -105,6 +140,15 @@ export function ModelReasoningOverrideSettings({
       <span className="text-right text-[var(--color-text)]">
         {effortLabel(resolution.requested)} → {effortLabel(resolution.effective)}
         <span className="ml-1 text-[var(--color-text-muted)]">({statusLabel(resolution.status)})</span>
+        {resolution.providerDirective && <span className="ml-1" data-reasoning-wire>
+          {resolution.providerDirective.adapter === 'openai-thinking-budget'
+            ? `enable_thinking=${resolution.providerDirective.thinkingBudget > 0}${resolution.providerDirective.thinkingBudget > 0 ? `; thinking_budget=${resolution.providerDirective.thinkingBudget}` : ''}`
+            : resolution.providerDirective.adapter === 'gemini-thinking-budget'
+            ? `thinking_budget=${resolution.providerDirective.thinkingBudget}`
+            : resolution.providerDirective.adapter === 'deepseek-v4-thinking'
+              ? `thinking=${resolution.providerDirective.thinking}${resolution.providerDirective.thinking === 'enabled' && resolution.providerDirective.reasoningEffort ? `; reasoning_effort=${resolution.providerDirective.reasoningEffort}` : ''}`
+              : `${resolution.providerDirective.adapter === 'siliconflow-v4-thinking' ? 'enable_thinking=true; ' : ''}reasoning_effort=${resolution.providerDirective.reasoningEffort}`}
+        </span>}
       </span>
     </div>
   )
@@ -126,6 +170,7 @@ export function ModelReasoningOverrideSettings({
           <option value="low">{text('低', 'Low')}</option>
           <option value="medium">{text('中', 'Medium')}</option>
           <option value="high">{text('高', 'High')}</option>
+          <option value="xhigh">{text('极高', 'XHigh')}</option>
           <option value="max">{text('最高', 'Max')}</option>
         </NativeSelect>
         <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
@@ -135,8 +180,24 @@ export function ModelReasoningOverrideSettings({
           )}
         </p>
       </div>
+      <details>
+        <summary className="text-xs cursor-pointer">{text('高级参数映射', 'Advanced parameter mapping')}</summary>
+        <p className="text-xs">{text('仅按服务文档填写现有适配器映射；应用后再保存配置。清空恢复自动匹配。', 'Use documented adapter mappings. Apply, then save the profile. Clear to restore automatic matching.')}</p>
+        <textarea aria-label={text('推理参数映射 JSON', 'Reasoning mapping JSON')} className="w-full font-mono text-xs" rows={6}
+          value={mappingDraft ?? JSON.stringify(model.reasoningMapping ?? null, null, 2)}
+          onChange={event => { setMappingDraft(event.target.value); setMappingError(false) }} />
+        <button type="button" onClick={applyMapping}>{text('应用映射', 'Apply mapping')}</button>
+        {mappingError && <p role="alert">{text('映射无效，未应用。请检查适配器、档位和值类型。', 'Invalid mapping; not applied. Check adapter, efforts and value types.')}</p>}
+      </details>
 
       <div className="space-y-1.5 rounded-md bg-[var(--color-bg)] p-2" aria-label={text('实际生效推理强度', 'Effective reasoning effort')}>
+        <p className="text-xs">{model.reasoningMapping ? text('手动设置', 'Manual setting')
+          : mapping ? text('资料匹配', 'Catalog match') : text('未识别 / 服务默认', 'Unknown / provider default')}</p>
+        {switchOnly && <p className="text-xs">{text('仅支持思考开关', 'Thinking toggle only')}</p>}
+        {mapping?.adapter === 'openai-thinking-budget' && <p className="text-xs">{text(
+          '数字预算是应用映射，不是服务对同名档位的定义。思考预算与最终回答上限分别发送。',
+          'The numeric budget is an application mapping, not a provider-defined effort. Thinking and final-answer limits are sent separately.',
+        )}</p>}
         {outcome(text('章节起草', 'Chapter drafting'), drafting)}
         {outcome(text('故事规划', 'Story planning'), planning)}
         {outcome(text('审稿与修订', 'Review and revision'), review)}
