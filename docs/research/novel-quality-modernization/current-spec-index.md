@@ -14,6 +14,8 @@
 
 ## 所有审查共同适用的修订
 
+2026-10-04 规划增量按 [S07.M03 有限输出与冻结范围](../../plans/novel-quality-modernization/specs/S07.md#planning-budget-range)、[S06A 逐章大纲与恢复](../../plans/novel-quality-modernization/specs/S06A.md#chapter-planning-recovery)、[S10A 单章选择](../../plans/novel-quality-modernization/specs/S10A.md#planning-chapter-selection)和 [S10B 材料消费](../../plans/novel-quality-modernization/specs/S10B.md#planning-context-consumption)审查。[线程 10 规划工作包](thread10-delivery-plan.md#planning-completion-work-package)拥有实施及验证顺序。该增量不证明已实现，不改变正式文学与平台交付义务。
+
 C01/S07、F05/U03 及全部生成消费者应用 [S07.M01–M04](../../plans/novel-quality-modernization/specs/S07.md#generic-model-compatibility)。高级设置的通用 OpenAI 入口须支持未登记的兼容型号。选模后的容量和思考映射须进入实际请求。未知容量、运行估算和已验证硬上限分别记录；根预算、未知结果及保存保护保留。验收引用 S07.A01–A07，历史冻结仍按原合同解释。
 
 S06B/C、S07、S09B、S10A/B、S11、S00/S14A/B/C 及 F05 的消费者须应用线程 10：补齐审修依据、区分 AI 建议与作者事实，新增自动短细纲及其来源/恢复，接入 candidate-only 多轮资格。保留[AI 自主审稿与作者批准](quality-protocol.md#ai-review-final-manuscript)；人工补题与开发比较不能代替正式闭环，旧诊断成功不填新名额。
