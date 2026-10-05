@@ -8,15 +8,68 @@ import { pathToFileURL } from 'node:url'
 import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows, createOperationDispatchGate,
   assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS, modelConfigurationHash,
   SAVED_NATIVE_REVIEW_DIAGNOSTIC as savedPolicy, GOAL_DELTA_REVIEW_DIAGNOSTIC as goalDeltaPolicy,
+  GLM_GOAL_DELTA_REVIEW_DIAGNOSTIC as glmPolicy,
   savedNativeOperations, readSavedNativeSource, reviewLengthRecoveryFor,
   PLANNING_NATIVE_DIAGNOSTIC as planningPolicy, planningNativeOperations, planningOutlineState, structuredRecoveryState, validatePairedReceipt } from '../quality-modernization-driver.mjs'
 import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasoningFor,
   forwardQualificationWindowFor, hash, updateLedger } from '../quality-modernization-run.mjs'
+import { resolveOpenAIChatCompletionsUrl } from '../../electron/llm/openai-compatible-endpoint.ts'
 
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 
-test('goal delta selects only its frozen input and cannot opt into recovery or legacy cases', () => {
+test('native bridge checks the configured official path for GLM and retains the DeepSeek path', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+  const start = fixture.indexOf("preflight(new URL(String(url)).host ===")
+  const body = fixture.slice(start, fixture.indexOf('const body = JSON.parse(options.body)', start))
+  const check = new Function('url', 'actualModel', 'effectiveModelParameters', 'resolveOpenAIChatCompletionsUrl', 'preflight', body)
+  for (const [model, endpoint] of [[glmPolicy.modelProfile.model, 'https://open.bigmodel.cn/api/paas/v4/chat/completions'],
+    [goalDeltaPolicy.modelProfile.model, 'https://api.deepseek.com/v1/chat/completions']]) {
+    const run = url => check(url, model, { endpointHost: new URL(model.baseUrl).host }, resolveOpenAIChatCompletionsUrl,
+      (condition, code) => assert.ok(condition, code))
+    assert.doesNotThrow(() => run(endpoint))
+    assert.throws(() => run(endpoint.replace('/chat/completions', '/other/chat/completions')), /UNREGISTERED_PROVIDER_PATH/)
+    assert.throws(() => run(endpoint.replace(new URL(endpoint).host, 'proxy.example')), /UNREGISTERED_PROVIDER_HOST/)
+  }
+})
+
+test('GLM condition binds the exact profile and max wire while preserving the failed source condition', () => {
+  const phase = 'saved-native-review-diagnostic'
+  const registration = forwardReasoningFor(protocol, phase, 'diagnostic', glmPolicy.diagnosticInputHash)
+  assert.equal(registration.reasoningOverride, 'max')
+  assert.equal(modelConfigurationHash(glmPolicy.modelProfile.model), glmPolicy.modelProfile.configurationHash)
+  assert.equal(glmPolicy.originalInputHash, goalDeltaPolicy.diagnosticInputHash)
+  assert.equal(glmPolicy.formalDenominatorContribution, 0)
+  assert.equal(glmPolicy.historicalResult, 'FAIL-unchanged')
+  assert.deepEqual(glmPolicy.evaluationPolicy, goalDeltaPolicy.evaluationPolicy)
+  glmPolicy.sources.forEach((source, index) => {
+    const { invocationId, ...identity } = source
+    const { invocationId: oldInvocation, ...oldIdentity } = goalDeltaPolicy.sources[index]
+    assert.notEqual(invocationId, oldInvocation)
+    assert.deepEqual(identity, oldIdentity)
+  })
+  const input = { arm: 'candidate', phase, milestone: 'diagnostic', caseId: glmPolicy.caseIds[0],
+    operationId: glmPolicy.operations[0].id, creativeStrategy: 'auto', model: glmPolicy.modelProfile.model,
+    resolution: { requested: 'max', effective: 'max', status: 'mapped', source: 'model-override' },
+    body: { model: 'glm-5.3', temperature: 1, max_tokens: 65536, reasoning_effort: 'max' } }
+  assert.deepEqual(assertForwardReasoning(registration, input).wire.thinking, { present: false })
+  for (const override of [{ thinking: { type: 'disabled' } }, { thinking: { type: 'enabled' } },
+    { enable_thinking: true }, { thinking_budget: 1 }, { reasoning_effort: 'high' },
+    { model: 'glm-5.3-flash' }, { temperature: 0 }, { max_tokens: 65537 }])
+    assert.throws(() => assertForwardReasoning(registration, { ...input, body: { ...input.body, ...override } }), /WIRE_MISMATCH/)
+  for (const override of [{ baseUrl: 'https://proxy.example/v4' }, { id: 'different-profile' }, { reasoningOverride: 'high' }])
+    assert.throws(() => assertForwardReasoning(registration, { ...input, model: { ...input.model, ...override } }), /MODEL_MISMATCH/)
+  const changed = structuredClone(protocol)
+  changed.glmGoalDeltaReviewDiagnostic.modelProfile.model.temperature = 0
+  assert.throws(() => selectPhase(changed, phase, 'diagnostic', glmPolicy.diagnosticInputHash), /REGISTRATION_MISMATCH/)
+  const old = forwardReasoningFor(protocol, phase, 'diagnostic', goalDeltaPolicy.diagnosticInputHash)
+  assert.equal(old.reasoningOverride, 'high')
+  assert.throws(() => assertForwardReasoning(old, { ...input, model: goalDeltaPolicy.modelProfile.model,
+    body: { model: 'deepseek-v4-pro', temperature: 0, max_tokens: 32768, reasoning_effort: 'high' },
+    resolution: { requested: 'high', effective: 'high', status: 'mapped', source: 'model-override' } }), /WIRE_MISMATCH/)
+})
+
+test.each([goalDeltaPolicy, glmPolicy])('goal delta condition $scenarioRevision selects only its frozen input and cannot opt into recovery or legacy cases', goalDeltaPolicy => {
   const phase = 'saved-native-review-diagnostic', inputHash = goalDeltaPolicy.diagnosticInputHash
   const selected = selectPhase(protocol, phase, 'diagnostic', inputHash)
   assert.deepEqual(selected, { ...goalDeltaPolicy, phase })
@@ -41,9 +94,9 @@ test('goal delta selects only its frozen input and cannot opt into recovery or l
     evaluationPolicy: selected.evaluationPolicy, attemptPolicy: selected.attemptPolicy }).maxCalls, 1)
 })
 
-test('goal delta consumes one reserve per stable case across roots and SHA even after cancellation or unknown', () => {
+test.each([goalDeltaPolicy, glmPolicy])('goal delta condition $scenarioRevision consumes one reserve per stable case across roots and SHA even after cancellation or unknown', policy => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/goal-delta-budget-'))
-  const options = { campaignMode: 'synthetic' }, policy = goalDeltaPolicy
+  const options = { campaignMode: 'synthetic' }
   const binding = index => ({ campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
     codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
     phase: 'saved-native-review-diagnostic', milestone: 'diagnostic', caseId: policy.caseIds[index],
@@ -64,6 +117,18 @@ test('goal delta consumes one reserve per stable case across roots and SHA even 
       updateLedger(file, { type: terminal, attemptId: 'negative', ...(terminal === 'settle' ? { finishReason: 'stop' } : {}) }, options)
       const restart = { ...first, codeSha: 'e'.repeat(40), actual: { ...first.actual, attemptId: 'new', rootActionId: 'new-root', projectId: 'new-project' } }
       assert.throws(() => reserve('restarted-negative', restart), /ATTEMPT_UNAVAILABLE/)
+      if (policy === glmPolicy) {
+        const old = { ...first, invocationId: goalDeltaPolicy.sources[0].invocationId,
+          diagnosticInputHash: goalDeltaPolicy.diagnosticInputHash, diagnosticSourceHash: hash(goalDeltaPolicy.sources[0]),
+          stageModel: { profileId: goalDeltaPolicy.modelProfile.profileId, configurationHash: goalDeltaPolicy.modelProfile.configurationHash },
+          actual: { ...first.actual, attemptId: 'old-attempt', runId: 'old-run', rootActionId: 'old-root', projectId: 'old-project' } }
+        reserve('old-negative', old)
+        updateLedger(file, { type: 'cancel', attemptId: 'old-negative' }, options)
+        assert.throws(() => reserve('old-retry', old), /ATTEMPT_UNAVAILABLE/)
+        assert.throws(() => reserve('old-positive', { ...old, caseId: goalDeltaPolicy.caseIds[1],
+          operation: goalDeltaPolicy.operations[1].id, invocationId: goalDeltaPolicy.sources[1].invocationId,
+          diagnosticSourceHash: hash(goalDeltaPolicy.sources[1]) }), /ATTEMPT_UNAVAILABLE/)
+      }
       if (terminal === 'settle') {
         reserve('positive', second)
         updateLedger(file, { type: 'dispatch', attemptId: 'positive' }, options)

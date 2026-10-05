@@ -8055,5 +8055,107 @@
       }
     ],
     "limits": "Historical formal attempts only. Preserve original FAIL results, ledger bytes and budgets; no refund, replay or reclassification."
+  },
+  "glmGoalDeltaReviewDiagnostic": {
+    "sceneId": "场景1",
+    "chapterNumber": 2,
+    "milestone": "diagnostic",
+    "arms": [
+      "candidate"
+    ],
+    "nonQualification": true,
+    "scenarioRevision": "saved-goal-delta-official-glm-5.3-review-only-v1",
+    "formalDenominatorContribution": 0,
+    "reviewOnly": true,
+    "expectedPhysicalRequests": 2,
+    "maxPhysicalRequests": 2,
+    "diagnosticInputHash": "7372653bf86091cec393515358cd13018142434b657cb2a450f971b619bf25a9",
+    "caseIds": [
+      "goal-delta-negative",
+      "goal-delta-positive"
+    ],
+    "sources": [
+      {
+        "caseId": "goal-delta-negative",
+        "provenance": "formal-99b3-C18-B",
+        "invocationId": "08995837-5d7b-487c-8436-4b16df8605bd",
+        "projectId": "aceadbbf-79ea-4170-bc9a-0ff153e34980",
+        "epoch": "afc0a53a-90e3-42e9-9e39-0154331798c4",
+        "contentSha256": "195f6b366456cd5c48c0997a425d1e5349bfb83f7d6dba0babbc56fb632dc948"
+      },
+      {
+        "caseId": "goal-delta-positive",
+        "provenance": "saved-d6f2",
+        "invocationId": "569d263e-1a75-42b1-a2b6-a1761bf81d66",
+        "projectId": "7dfa542b-41c7-4476-80aa-5e2f1b571331",
+        "epoch": "94506168-ffe0-45be-b1bd-40ce511f5ff2",
+        "contentSha256": "d6f2a9899903e2dab4c2867e9c13c6dde30b189cfbd7a6f6014479895e350c9c"
+      }
+    ],
+    "operations": [
+      {
+        "id": "goal-delta-negative-review",
+        "kind": "review",
+        "caseIds": [
+          "goal-delta-negative"
+        ]
+      },
+      {
+        "id": "goal-delta-positive-review",
+        "kind": "review",
+        "caseIds": [
+          "goal-delta-positive"
+        ]
+      }
+    ],
+    "attemptPolicy": {
+      "milestone": "diagnostic",
+      "arms": [
+        "candidate"
+      ]
+    },
+    "evaluationPolicy": {
+      "revision": "ai-review-final-manuscript-v1",
+      "caseIds": [
+        "goal-delta-negative",
+        "goal-delta-positive"
+      ],
+      "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+      "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+      "confirmation": "root-releases-positive-after-independent-negative-raw-acceptance",
+      "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+      "endpoint": "native-merge-then-ordinary-full-review",
+      "automaticCeiling": "pending-independent-oracle-review",
+      "physicalRequests": {
+        "minimum": 1,
+        "maximum": 1,
+        "manuscriptMinimum": 1,
+        "manuscriptMaximum": 1
+      }
+    },
+    "modelProfile": {
+      "profileId": "0f019b1e-e4d9-4b38-a7b8-5e275b514ef1",
+      "configurationHash": "6f22a714185450d0527d8405072a4d5934c9fbfa9386f6c95c48e6810fbfd935",
+      "model": {
+        "id": "0f019b1e-e4d9-4b38-a7b8-5e275b514ef1",
+        "name": "Thread12 official GLM 5.3 max 65536",
+        "provider": "bigmodel",
+        "protocol": "openai",
+        "modelName": "glm-5.3",
+        "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+        "temperature": 1,
+        "maxTokens": 65536,
+        "purposes": [
+          "generation",
+          "refinement",
+          "summary"
+        ],
+        "reasoningOverride": "max"
+      }
+    },
+    "stop": "one-reserve-per-source-including-failure-no-retry-rebuild-length-refine-complete; negative-semantic-or-technical-failure-stops-positive",
+    "originalInputHash": "95d601c64fa36bab33d91a1739a2176fbdad323cdcdbff64279acba5b524d387",
+    "originalCondition": "saved-goal-delta-review-only-v1",
+    "historicalResult": "FAIL-unchanged"
   }
 }

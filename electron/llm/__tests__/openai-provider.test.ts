@@ -112,6 +112,20 @@ it.each([false, true])('classifies AbortError from the actual caller signal (abo
 })
 
 describe('SiliconFlow explicit reasoning requests', () => {
+  it('emits GLM 5.3 max through the existing OpenAI adapter with default enabled thinking', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const model: ModelProfile = { ...novelAIModel, provider: 'bigmodel',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4', modelName: 'glm-5.3',
+      temperature: 1, maxTokens: 65536, reasoningOverride: 'max' }
+    await new OpenAIProvider().generate(model, [], resolveGenerationParameters(model, { reasoningStage: 'review', responseFormat: { type: 'json_object' } }))
+    expect(fetchMock.mock.calls[0][0]).toBe('https://open.bigmodel.cn/api/paas/v4/chat/completions')
+    const body = requestBody(fetchMock)
+    expect(body).toMatchObject({ model: 'glm-5.3', temperature: 1, max_tokens: 65536,
+      reasoning_effort: 'max', response_format: { type: 'json_object' } })
+    for (const field of ['thinking', 'enable_thinking', 'thinking_budget']) expect(body).not.toHaveProperty(field)
+  })
+
   it('uses a persisted explicit mapping and keeps switch-only requests free of effort fields', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
     vi.stubGlobal('fetch', fetchMock)

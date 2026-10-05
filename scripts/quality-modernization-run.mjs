@@ -9,7 +9,7 @@ import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, reviewRecoveryAllowed,
-  SAVED_NATIVE_REVIEW_DIAGNOSTIC, GOAL_DELTA_REVIEW_DIAGNOSTIC, savedNativePolicy, savedNativeOperations, readSavedNativeSource,
+  SAVED_NATIVE_REVIEW_DIAGNOSTIC, GOAL_DELTA_REVIEW_DIAGNOSTIC, GLM_GOAL_DELTA_REVIEW_DIAGNOSTIC, savedNativePolicy, savedNativeOperations, readSavedNativeSource,
   readSavedReviewContinuation, savedReviewContinuationTarget, savedReviewHistoricalAttempts,
   PLANNING_NATIVE_DIAGNOSTIC, PLANNING_STAGE_MODELS, planningNativeOperations, readPlanningNativeSource,
   readPlanningResumeSource, planningResumeTarget, planningSavedOutlineAttempts,
@@ -436,7 +436,8 @@ export function selectPhase(protocol, phase, milestone = 'early', diagnosticInpu
   if (phase === 'saved-native-review-diagnostic') {
     const selected = savedNativePolicy(diagnosticInputHash)
     if (!isDeepStrictEqual(protocol.phases[phase], SAVED_NATIVE_REVIEW_DIAGNOSTIC)
-      || !isDeepStrictEqual(protocol.goalDeltaReviewDiagnostic, GOAL_DELTA_REVIEW_DIAGNOSTIC)) fail('SAVED_NATIVE_REGISTRATION_MISMATCH')
+      || !isDeepStrictEqual(protocol.goalDeltaReviewDiagnostic, GOAL_DELTA_REVIEW_DIAGNOSTIC)
+      || !isDeepStrictEqual(protocol.glmGoalDeltaReviewDiagnostic, GLM_GOAL_DELTA_REVIEW_DIAGNOSTIC)) fail('SAVED_NATIVE_REGISTRATION_MISMATCH')
     if (milestone !== 'diagnostic') fail('PHASE_MILESTONE_MISMATCH')
     return { ...selected, phase, milestone }
   }
@@ -480,7 +481,7 @@ export function forwardReasoningFor(protocol, phase, milestone, diagnosticInputH
   if (['saved-native-review-diagnostic', 'planning-native-diagnostic'].includes(phase)) {
     const selected = selectPhase(protocol, phase, milestone, diagnosticInputHash)
     return { ...(selected.reviewOnly ? { diagnosticInputHash: selected.diagnosticInputHash } : {}),
-      revision: selected.scenarioRevision, model: selected.modelProfile.model, reasoningOverride: 'high',
+      revision: selected.scenarioRevision, model: selected.modelProfile.model, reasoningOverride: selected.modelProfile.model.reasoningOverride,
       creativeStrategy: 'auto', scopes: [{ phase, milestone, caseIds: selected.caseIds }] }
   }
   if (phase === 'r3-native-revision-diagnostic') {

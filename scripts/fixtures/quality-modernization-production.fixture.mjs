@@ -20,6 +20,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   assertSharedInputDiagnostic, validateAiReviewedManuscript, validatePairedReceipt, reviewLengthRecoveryFor } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 import { safeTransportError } from '../../src/shared/generation-contract'
+import { resolveOpenAIChatCompletionsUrl } from '../../electron/llm/openai-compatible-endpoint'
 
 // This adapter replaces the Electron transport, never a command/runtime/repository.
 // The final provider fetch is the sole synthetic/real response switch.
@@ -1191,7 +1192,8 @@ test('isolated production commands persist the selected phase operations', async
         await Promise.all(streamSettlements)
       }
       preflight(new URL(String(url)).host === effectiveModelParameters.endpointHost, 'UNREGISTERED_PROVIDER_HOST')
-      preflight(new URL(String(url)).pathname === '/v1/chat/completions', 'UNREGISTERED_PROVIDER_PATH')
+      preflight(new URL(String(url)).pathname === new URL(resolveOpenAIChatCompletionsUrl(actualModel.baseUrl, actualModel.provider)).pathname,
+        'UNREGISTERED_PROVIDER_PATH')
       const body = JSON.parse(options.body)
       preflight(body.model === effectiveModelParameters.modelName, 'UNREGISTERED_PROVIDER_MODEL')
       preflight(body.temperature === effectiveModelParameters.temperature, 'UNREGISTERED_PROVIDER_TEMPERATURE')

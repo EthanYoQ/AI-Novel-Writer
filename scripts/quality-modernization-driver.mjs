@@ -199,8 +199,30 @@ export const GOAL_DELTA_REVIEW_DIAGNOSTIC = Object.freeze({
   stop: 'one-reserve-per-source-including-failure-no-retry-rebuild-length-refine-complete; negative-semantic-or-technical-failure-stops-positive',
 })
 
+export const GLM_GOAL_DELTA_REVIEW_DIAGNOSTIC = Object.freeze({
+  ...GOAL_DELTA_REVIEW_DIAGNOSTIC,
+  scenarioRevision: 'saved-goal-delta-official-glm-5.3-review-only-v1',
+  diagnosticInputHash: '7372653bf86091cec393515358cd13018142434b657cb2a450f971b619bf25a9',
+  originalInputHash: GOAL_DELTA_REVIEW_DIAGNOSTIC.diagnosticInputHash,
+  originalCondition: GOAL_DELTA_REVIEW_DIAGNOSTIC.scenarioRevision,
+  historicalResult: 'FAIL-unchanged',
+  sources: GOAL_DELTA_REVIEW_DIAGNOSTIC.sources.map((source, index) => ({ ...source,
+    invocationId: ['08995837-5d7b-487c-8436-4b16df8605bd', '569d263e-1a75-42b1-a2b6-a1761bf81d66'][index] })),
+  modelProfile: {
+    profileId: '0f019b1e-e4d9-4b38-a7b8-5e275b514ef1',
+    configurationHash: '6f22a714185450d0527d8405072a4d5934c9fbfa9386f6c95c48e6810fbfd935',
+    model: {
+      id: '0f019b1e-e4d9-4b38-a7b8-5e275b514ef1', name: 'Thread12 official GLM 5.3 max 65536',
+      provider: 'bigmodel', protocol: 'openai', modelName: 'glm-5.3',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4', temperature: 1, maxTokens: 65536,
+      purposes: ['generation', 'refinement', 'summary'], reasoningOverride: 'max',
+    },
+  },
+})
+
 export function savedNativePolicy(inputHash = SAVED_NATIVE_REVIEW_DIAGNOSTIC.diagnosticInputHash) {
-  const policy = [SAVED_NATIVE_REVIEW_DIAGNOSTIC, GOAL_DELTA_REVIEW_DIAGNOSTIC].find(item => item.diagnosticInputHash === inputHash)
+  const policy = [SAVED_NATIVE_REVIEW_DIAGNOSTIC, GOAL_DELTA_REVIEW_DIAGNOSTIC, GLM_GOAL_DELTA_REVIEW_DIAGNOSTIC]
+    .find(item => item.diagnosticInputHash === inputHash)
   if (!policy) throw new Error('SAVED_NATIVE_INPUT_DRIFT')
   return policy
 }
@@ -1290,16 +1312,18 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
       || registration?.revision !== R3_NATIVE_REVISION_DIAGNOSTIC.scenarioRevision) || creativeStrategy !== 'auto'
       || modelConfigurationHash(model) !== profile.configurationHash) throw new Error('R3_NATIVE_MODEL_MISMATCH')
     if (body === undefined) return null
+    const implicitThinking = savedPolicy === GLM_GOAL_DELTA_REVIEW_DIAGNOSTIC
     const outputTokens = body.max_tokens ?? body.max_completion_tokens
     if (body.model !== expected.modelName || body.temperature !== expected.temperature
       || (stageProfile || saved || planning ? !Number.isSafeInteger(outputTokens) || outputTokens <= 0 || outputTokens > expected.maxTokens
         : outputTokens !== expected.maxTokens)
-      || body.thinking?.type !== 'enabled' || body.reasoning_effort !== expected.reasoningOverride
+      || (implicitThinking ? Object.hasOwn(body, 'thinking') : body.thinking?.type !== 'enabled')
+      || body.reasoning_effort !== expected.reasoningOverride
       || Object.hasOwn(body, 'enable_thinking') || Object.hasOwn(body, 'thinking_budget')
       || resolution?.requested !== expected.reasoningOverride || resolution.effective !== expected.reasoningOverride
       || resolution.status !== 'mapped' || resolution.source !== 'model-override') throw new Error('R3_NATIVE_WIRE_MISMATCH')
     return { requested: expected.reasoningOverride, effective: expected.reasoningOverride, status: resolution.status, source: resolution.source,
-      wire: { thinking: { present: true, value: { type: 'enabled' } }, reasoning_effort: { present: true, value: expected.reasoningOverride },
+      wire: { thinking: implicitThinking ? { present: false } : { present: true, value: { type: 'enabled' } }, reasoning_effort: { present: true, value: expected.reasoningOverride },
         enable_thinking: { present: false }, thinking_budget: { present: false } } }
   }
   const scope = registration?.scopes?.find(item => item.phase === phase && item.milestone === milestone)

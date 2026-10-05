@@ -8,6 +8,24 @@ import {
 } from '../provider-presets'
 
 describe('provider catalog', () => {
+  it('admits only documented GLM 5.3 capacity and reasoning on the official endpoint', () => {
+    const profile = { provider: 'bigmodel', protocol: 'openai',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4', modelName: 'glm-5.3' }
+    expect(resolveModelProfileBudgetCapabilities(profile)).toEqual({ contextWindowTokens: 1_000_000, maxOutputTokens: 131_072,
+      evidence: { sourceUrl: 'https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3', calibration: 'conservative-provider-documentation' } })
+    expect(resolveModelProfileReasoningMapping(profile)).toEqual({ adapter: 'openai-reasoning-effort',
+      supportedEfforts: ['low', 'high', 'max'], providerValues: { low: 'low', high: 'high', max: 'max' } })
+    const preset = createProviderCatalog().find(item => item.provider === 'bigmodel')?.models.find(item => item.name === 'glm-5.3')
+    expect(preset?.structuredOutput).toBe(true)
+    expect(preset?.capabilities).toBeUndefined()
+    for (const overrides of [{ baseUrl: 'https://proxy.example/v4' },
+      { baseUrl: 'https://open.bigmodel.cn/api/paas/v4?proxy=1' }, { modelName: 'glm-5.3-flash' },
+      { modelName: 'glm-5.3-other' }, { protocol: 'gemini' }]) {
+      expect(resolveModelProfileBudgetCapabilities({ ...profile, ...overrides })).toBeUndefined()
+      expect(resolveModelProfileReasoningMapping({ ...profile, ...overrides })).toBeUndefined()
+    }
+  })
+
   it('keeps scoped Qwen capacity on the exact CN endpoint and model', () => {
     const profile = { provider: 'siliconflow', protocol: 'openai',
       baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B' }

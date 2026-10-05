@@ -366,6 +366,21 @@ export function createProviderCatalog(): ProviderPreset[] {
       { name: 'glm-4.7-flashx', maxTokens: 65536 },
       { name: 'glm-5-turbo', maxTokens: 65536 },
       { name: 'glm-5', maxTokens: 65536 },
+      {
+        name: 'glm-5.3', maxTokens: 65_536, structuredOutput: true,
+        budgetCapabilities: {
+          contextWindowTokens: 1_000_000, maxOutputTokens: 131_072,
+          evidence: {
+            sourceUrl: 'https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+        reasoningMapping: {
+          adapter: 'openai-reasoning-effort',
+          supportedEfforts: ['low', 'high', 'max'],
+          providerValues: { low: 'low', high: 'high', max: 'max' },
+        },
+      },
     ],
     embeddingModels: ['embedding-3'],
   },

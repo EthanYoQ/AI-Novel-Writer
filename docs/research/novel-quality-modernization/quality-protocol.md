@@ -569,3 +569,23 @@ prepare 核验后，`--native-action review` 执行该案唯一首审。
 
 `historicalFormalE59501f3Boundary` 保留实际 2037 行历史前缀及原终态。
 其原始字节 SHA256 为 `a77d9e3174b3331c42313a3116a5bc96df561bc1c38ba17b822ecc9d69d6cc98`。
+
+### 官方 GLM 独立模型条件
+
+`glmGoalDeltaReviewDiagnostic` 为同一固定两案登记独立能力条件。
+它使用 `glm-5.3`、官方 BigModel endpoint、temperature 1、maxTokens 65536 和推理覆盖 max。
+输入 envelope 明确记录原条件、原 input hash、模型配置和两个新 invocationId。
+原两案、正文、前驱、作者材料、目标、资产及原 receipt 保持不变。
+原 `99b3` 正式失败和 DeepSeek goal-delta 失败不改判。
+
+该条件仍通过原 `saved-native-review-diagnostic` 入口执行。
+每案最多一个 reserve，合计最多两次，失败不退还机会。
+主 Agent 独立接受负例原 raw 后才释放正例。
+负例语义失败或技术失败即停止，不改用其他 GLM 配置，也不释放旧条件正例。
+不允许重试、格式重建、LENGTH 替代、修稿或 complete，正式分母贡献为 0。
+原生 STOP 只证明技术完成，不证明语义验收通过。
+
+GLM wire 明确发送 `reasoning_effort: max`，省略官方默认 enabled 的 `thinking`。
+只有此 exact 登记允许省略；显式 disabled 和未登记 thinking 字段仍拒绝。
+旧 DeepSeek 请求继续要求 high 与 enabled。
+零网络 prepare 只证明请求组装和被终止的 unknown owner，不证明真实凭据或真实模型运行。
