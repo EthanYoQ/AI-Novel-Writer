@@ -9,25 +9,25 @@ import {
   type ReviewRevisionMaterialAdmission,
 } from '../chapter-materials'
 import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
-import { countDraftUnits } from '../../../shared/draft-units'
+import { countDraftUnits, draftTargetUnitRange } from '../../../shared/draft-units'
 import { selectFrozenReviewRevisionMaterials } from './review-revision-materials'
 import { promptLanguageText } from '../../prompt-language'
 import { reviewTimeContinuity } from '../../../shared/chapter-time-continuity'
 
 function appendCompleteRevisionContract(prompt: string, source: string, writingLanguage: 'zh-CN' | 'en-US'): string {
   const sourceUnits = countDraftUnits(source)
-  const range = { minimum: Math.floor(sourceUnits * 0.8), maximum: Math.ceil(sourceUnits * 1.2) }
+  const range = draftTargetUnitRange(sourceUnits)
   const contract = writingLanguage === 'en-US'
     ? `[Complete revision task contract]
 Confirming an AI finding selects the scope, not its factual claims or proposed replacement. Check each selected issue and proposed factual change against author facts, predecessor prose and the manuscript for the same subject, time and conditions. Resolve the selected issues established by the sources, using the smallest source-supported remedy; do not copy unsupported or conflicting replacements. If the facts remain uncertain, preserve that uncertainty rather than inventing a replacement fact. Explicit author-written requests remain author guidance. Do not polish or rewrite unrelated material; preserve the manuscript's voice and pacing.
 
-The frozen source contains ${sourceUnits} prose units. Output the complete revised chapter, between ${range.minimum} and ${range.maximum} prose units (80%-120% of the source). Preserve every unaffected paragraph or line in full. Do not summarize, excerpt, collapse repeated passages, or use placeholders. If an established issue or explicit author request requires an action or result to occur in this chapter, the added action or result must itself satisfy that requirement's target meaning and must already have happened in the prose. For a cost or loss, show the concrete consequence already lost, spent, or endured; signing, accepting responsibility, or saying that a character will pay later remains a promise and is not the cost itself. Merely reversing a negation, or stating an abstract decision, plan, promise, or commitment, does not count. Reconcile later paragraphs so they do not preserve a state that contradicts the new event.
+The frozen source contains ${sourceUnits} prose units. Output the complete revised chapter, between ${range.minimum} and ${range.maximum} prose units (70%-130% of the source). Preserve every unaffected paragraph or line in full. Do not summarize, excerpt, collapse repeated passages, or use placeholders. If an established issue or explicit author request requires an action or result to occur in this chapter, the added action or result must itself satisfy that requirement's target meaning and must already have happened in the prose. For a cost or loss, show the concrete consequence already lost, spent, or endured; signing, accepting responsibility, or saying that a character will pay later remains a promise and is not the cost itself. Merely reversing a negation, or stating an abstract decision, plan, promise, or commitment, does not count. Reconcile later paragraphs so they do not preserve a state that contradicts the new event.
 
 Output the complete revised chapter as plain prose only, without a preface, explanation, Markdown, analysis, or screenplay formatting. Leave one blank line between paragraphs.`
     : `【完整修稿任务合同】
 确认 AI 意见只确定处理范围，不确认其事实判断或替换方案。先按作者事实、前驱原文和正文的对象、时点及条件核对所选问题及拟修改的事实。解决经来源核实后成立的问题，采用来源支持的最小修法；不得照搬无依据或与来源冲突的替换。仍无法确定时保留不确定性，不编造替换事实。作者亲写的明确要求仍按作者指导执行。不要润色或改写无关内容，保留原文风格和节奏。
 
-冻结源稿共 ${sourceUnits} 个正文单位。必须输出修订后的完整章节，长度须在 ${range.minimum}-${range.maximum} 个正文单位之间（源稿的 80%-120%）。所有未受影响的段落或行必须完整保留；不得摘要、节选、合并重复段落或使用占位符。若成立的问题或作者明确要求当章发生动作或结果，新增动作或结果本身必须满足该要求的目标语义，并且已经在正文中发生。对于代价或损失，必须写出已经失去、消耗或承受的具体后果；签字、认责或声称以后负责仍只是承诺，不是代价本身。简单否定翻转，或抽象的决定、计划、承诺、保证，均不算完成。必须同步修正后文，不得保留与新增事件相反的状态。
+冻结源稿共 ${sourceUnits} 个正文单位。必须输出修订后的完整章节，长度须在 ${range.minimum}-${range.maximum} 个正文单位之间（源稿的 70%-130%）。所有未受影响的段落或行必须完整保留；不得摘要、节选、合并重复段落或使用占位符。若成立的问题或作者明确要求当章发生动作或结果，新增动作或结果本身必须满足该要求的目标语义，并且已经在正文中发生。对于代价或损失，必须写出已经失去、消耗或承受的具体后果；签字、认责或声称以后负责仍只是承诺，不是代价本身。简单否定翻转，或抽象的决定、计划、承诺、保证，均不算完成。必须同步修正后文，不得保留与新增事件相反的状态。
 
 最终只输出修订后完整正文，使用纯文本，不得包含开场白、解释、Markdown、分析或剧本式格式。段落之间保留一个空行。`
   return `${prompt}\n\n${reviewTimeContinuity(writingLanguage)}\n\n${contract}`

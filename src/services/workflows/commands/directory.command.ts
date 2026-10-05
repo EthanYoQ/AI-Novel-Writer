@@ -41,6 +41,7 @@ import {
 import { readAuthoritativeNextChapter } from '../../authoritative-chapter-sequence'
 import { localizeNovelConfigFacts } from '../../../shared/novel-config-localization'
 import { normalizeChapterWordsTarget } from '../chapter-creation-parameters'
+import { draftTargetUnitRange } from '../../../shared/draft-units'
 
 type CreateDirectoryGenerationRuntime = NonNullable<WorkflowGenerationRuntimeDependencies['createRuntime']>
 
@@ -140,8 +141,7 @@ function blueprintCapacityGenerationContract(
   writingLanguage: NonNullable<CommandExecuteParams['context']['writingLanguage']>,
   targetWords: number,
 ): string {
-  const lowerBound = Math.round(targetWords * 0.8)
-  const upperBound = Math.round(targetWords * 1.2)
+  const { minimum: lowerBound, maximum: upperBound } = draftTargetUnitRange(targetWords)
   return promptLanguageText(
     writingLanguage,
     `【章节容量合同】\n每章正文目标约 ${targetWords} 字，可接受范围 ${lowerBound}–${upperBound} 字；据此控制情节点容量。作者指定事件与字数目标均为权威事实，不得删除、改写或擅自调整。合并 role、purpose、keyEvents、架构与前章列表中对同一事件的重复表述，只计一个语义事件；不擅自增加独立事件，也不为凑字数补事件。背景设定只作为约束和参考；除非作者指定事件明确要求，不得把全部背景逐项演成场景。JSON 输出合同不变；容量兼容时，keyEvents 只写能在上述范围内完整演绎的推进与结果。若语义去重后仍不兼容，保留作者指定事件，并在现有 keyEvents 字符串中简短指出“容量冲突：…”供作者调整；不新增字段、不代替作者取舍，也不写章节正文。`,

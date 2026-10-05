@@ -3785,7 +3785,10 @@ export function validateAiReviewedManuscript(result) {
         || finalReview.context.source.id !== first.context.source.id || finalReview.context.source.chapterNumber !== first.context.source.chapterNumber
         || finalReview.context.source.version !== chain.finalDraft.version) throw new Error('AI_FINAL_REVIEW_NOT_ORDINARY')
       const units = countProjectedDraftUnits(final), sourceUnits = countProjectedDraftUnits(initial)
-      if (units < Math.floor(sourceUnits * 0.8) || units > Math.ceil(sourceUnits * 1.2)) throw new Error('AI_REVISION_LENGTH_MISMATCH')
+      const range = targetUnitRange(sourceUnits,
+        result.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION && result.phase !== 'bounded-revision-diagnostic'
+          ? result.protocolRevision : undefined, result.arm)
+      if (units < range.minimum || units > range.maximum) throw new Error('AI_REVISION_LENGTH_MISMATCH')
     }
     }
     const draft = db.prepare(`SELECT d.version,d.chapter_number${result.phase === 'full' ? ',d.status' : ''},c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?`).get(chain.finalDraft.draftId)
