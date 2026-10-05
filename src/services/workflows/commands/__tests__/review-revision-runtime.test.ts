@@ -475,8 +475,8 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(prompt).toContain('需要多处证据时拆成多个 evidence 项')
     expect(prompt).toContain('【作者设定优先】【作者确认项目配置】与【世界观设定】是权威事实；作者角色状态按标注时点理解；历史派生摘要不能覆盖作者事实。')
     expect(prompt).toContain('即使蓝图、章节计划或冻结目标写法相反，也不得因此放过。')
-    expect(prompt).toContain('在 goalReviews.description 中简述目标要求、正文证据及其时态')
-    expect(prompt).toContain('只要求维持状态时，不强造新事件')
+    expect(prompt).toContain('在 description 中逐个简述子动作要求、前章同一事件的终态、本章动作与实际后果')
+    expect(prompt).toContain('明确要求回顾或维持状态时，不另造动作或代价')
   })
 
   it('renders the unique contiguous evidence-anchor constraint for an English ordinary review', async () => {

@@ -7,13 +7,92 @@ import { Buffer } from 'node:buffer'
 import { pathToFileURL } from 'node:url'
 import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows, createOperationDispatchGate,
   assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS, modelConfigurationHash,
-  SAVED_NATIVE_REVIEW_DIAGNOSTIC as savedPolicy, savedNativeOperations, reviewLengthRecoveryFor,
+  SAVED_NATIVE_REVIEW_DIAGNOSTIC as savedPolicy, GOAL_DELTA_REVIEW_DIAGNOSTIC as goalDeltaPolicy,
+  savedNativeOperations, readSavedNativeSource, reviewLengthRecoveryFor,
   PLANNING_NATIVE_DIAGNOSTIC as planningPolicy, planningNativeOperations, planningOutlineState, structuredRecoveryState, validatePairedReceipt } from '../quality-modernization-driver.mjs'
 import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasoningFor,
   forwardQualificationWindowFor, hash, updateLedger } from '../quality-modernization-run.mjs'
 
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+
+test('goal delta selects only its frozen input and cannot opt into recovery or legacy cases', () => {
+  const phase = 'saved-native-review-diagnostic', inputHash = goalDeltaPolicy.diagnosticInputHash
+  const selected = selectPhase(protocol, phase, 'diagnostic', inputHash)
+  assert.deepEqual(selected, { ...goalDeltaPolicy, phase })
+  assert.deepEqual(selectPhase(protocol, phase, 'diagnostic'), { ...savedPolicy, phase })
+  for (const caseId of goalDeltaPolicy.caseIds) {
+    assert.equal(savedNativeOperations(caseId, 'review', undefined, inputHash).length, 1)
+    assert.throws(() => savedNativeOperations(caseId, 'complete', undefined, inputHash), /SCOPE/)
+    assert.throws(() => savedNativeOperations(caseId, 'review'), /SCOPE/)
+  }
+  assert.throws(() => selectPhase(protocol, phase, 'diagnostic', '0'.repeat(64)), /INPUT_DRIFT/)
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/input-rejection-'))
+  try {
+    const input = path.join(dir, 'unknown.json'); fs.writeFileSync(input, '{"cases":[]}')
+    assert.throws(() => readSavedNativeSource(input, goalDeltaPolicy.caseIds[0]), /INPUT_DRIFT/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  const registration = forwardReasoningFor(protocol, phase, 'diagnostic', inputHash)
+  assert.equal(registration.diagnosticInputHash, inputHash)
+  assert.equal(reviewLengthRecoveryFor({ arm: 'candidate', phase, diagnosticInputHash: inputHash }, goalDeltaPolicy.operations[0].id), null)
+  assert.equal(qualificationBridgeWindows({ target: { arm: 'candidate' }, phase, milestone: 'diagnostic',
+    caseId: selected.caseIds[0], nativeAction: 'review', action: 'execute', diagnosticInputHash: inputHash,
+    scenarioRevision: selected.scenarioRevision, operations: [selected.operations[0]],
+    evaluationPolicy: selected.evaluationPolicy, attemptPolicy: selected.attemptPolicy }).maxCalls, 1)
+})
+
+test('goal delta consumes one reserve per stable case across roots and SHA even after cancellation or unknown', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/goal-delta-budget-'))
+  const options = { campaignMode: 'synthetic' }, policy = goalDeltaPolicy
+  const binding = index => ({ campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
+    codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+    phase: 'saved-native-review-diagnostic', milestone: 'diagnostic', caseId: policy.caseIds[index],
+    operation: policy.operations[index].id, invocationId: policy.sources[index].invocationId,
+    diagnosticInputHash: policy.diagnosticInputHash, diagnosticSourceHash: hash(policy.sources[index]),
+    evaluationPolicyHash: hash(policy.evaluationPolicy), stageModel: { profileId: policy.modelProfile.profileId,
+      configurationHash: policy.modelProfile.configurationHash },
+    actual: { attemptId: `attempt-${index}`, runId: `run-${index}`, rootActionId: `root-${index}`,
+      projectId: `restored-${index}`, epoch: `epoch-${index}`, purpose: 'review-chapter' } })
+  try {
+    for (const terminal of ['cancel', 'unknown', 'settle']) {
+      const file = path.join(dir, `${terminal}.jsonl`), first = binding(0), second = binding(1)
+      const reserve = (id, value) => updateLedger(file, { type: 'reserve', attemptId: id, binding: value }, options)
+      assert.throws(() => reserve('positive-first', second), /ATTEMPT_UNAVAILABLE/)
+      assert.throws(() => reserve('rebuild', { ...first, actual: { ...first.actual, purpose: 'review-chapter-rebuild' } }), /BINDING_MISMATCH/)
+      reserve('negative', first)
+      if (terminal !== 'cancel') updateLedger(file, { type: 'dispatch', attemptId: 'negative' }, options)
+      updateLedger(file, { type: terminal, attemptId: 'negative', ...(terminal === 'settle' ? { finishReason: 'stop' } : {}) }, options)
+      const restart = { ...first, codeSha: 'e'.repeat(40), actual: { ...first.actual, attemptId: 'new', rootActionId: 'new-root', projectId: 'new-project' } }
+      assert.throws(() => reserve('restarted-negative', restart), /ATTEMPT_UNAVAILABLE/)
+      if (terminal === 'settle') {
+        reserve('positive', second)
+        updateLedger(file, { type: 'dispatch', attemptId: 'positive' }, options)
+        updateLedger(file, { type: 'settle', attemptId: 'positive', finishReason: 'stop' }, options)
+        assert.throws(() => reserve('third-send', { ...second, codeSha: 'f'.repeat(40) }), /ATTEMPT_UNAVAILABLE/)
+      } else assert.throws(() => reserve('positive-after-failure', second), /ATTEMPT_UNAVAILABLE/)
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('goal delta failure reports only later cases as not run', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8').replaceAll('\r\n', '\n')
+  const start = source.indexOf('export function runProductionPhasePair(')
+  const body = source.slice(start, source.indexOf('\nfunction classifyCandidateProduction(', start)).replace('export function', 'function')
+  const target = { protocolHash: 'a'.repeat(64), protocolRevision: protocol.decisionRevision,
+    diagnosticInputHash: goalDeltaPolicy.diagnosticInputHash, isolationRoot: '/isolated' }
+  const dependencies = { path, savedNativeOperations, digest: hash, productionBridgeHash: () => 'b'.repeat(64),
+    readSavedNativeSource: (_input, caseId) => ({ policy: goalDeltaPolicy, inputHash: target.diagnosticInputHash,
+      source: goalDeltaPolicy.sources.find(item => item.caseId === caseId) }),
+    executionRecord: () => ({ target, prepared: { physicalProject: { parityHash: 'c'.repeat(64) } }, results: {} }),
+    executeRecordedStep: (request, _options, _record, _key, bridge) => bridge(request) }
+  const run = new Function(...Object.keys(dependencies), `${body}\nreturn runProductionPhasePair`)(...Object.values(dependencies))
+  for (const [index, caseId] of goalDeltaPolicy.caseIds.entries()) {
+    const result = run({ candidate: target }, { phase: 'saved-native-review-diagnostic', mode: 'synthetic', caseId,
+      nativeAction: 'review', diagnosticInputPath: '/input.json', ledgerPath: '/ledger.jsonl',
+      protocolHash: target.protocolHash, protocolRevision: target.protocolRevision }, () => ({ status: 'failed' }))
+    assert.deepEqual(result.notRun, index === 0 ? ['goal-delta-positive-review'] : [])
+  }
+})
 
 test('planning diagnostic uses its six-chapter scope and native 64K profile without changing formal32K', () => {
   const phase = 'planning-native-diagnostic'
@@ -239,7 +318,7 @@ test('saved Pro registration preserves the source cases and verifies the complet
   const profileStart = fixture.indexOf('  const stageProfiles ='), profileEnd = fixture.indexOf('  const registeredWindow =', profileStart)
   const choose = new Function('target', 'configured', 'savedPolicy', 'assert', 'modelConfigurationHash', `
     const savedRun = true, planningRun = false, r3Run = false,
-      SAVED_NATIVE_REVIEW_DIAGNOSTIC = savedPolicy, request = { mode: 'real' }, path = { join: () => '' },
+      copiedPolicy = savedPolicy, request = { mode: 'real' }, path = { join: () => '' },
       json = () => configured;
     let model, secrets;
     ${fixture.slice(profileStart, profileEnd)}

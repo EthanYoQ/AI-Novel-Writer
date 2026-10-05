@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { productionScenario, fullExecutionSchedule, runProductionPhasePair, executionRecordIdentity,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, assertForwardReasoning, copyIsolatedRealModelConfig,
   createOperationDispatchGate, reviewLengthRecoveryFor, scenarioAuthorSetting, R3_NATIVE_REVISION_DIAGNOSTIC, modelConfigurationHash,
-  selectOwnerDispatch, SAVED_NATIVE_REVIEW_DIAGNOSTIC, PLANNING_STAGE_MODELS } from '../quality-modernization-driver.mjs'
+  selectOwnerDispatch, SAVED_NATIVE_REVIEW_DIAGNOSTIC, savedNativePolicy, PLANNING_STAGE_MODELS } from '../quality-modernization-driver.mjs'
 import { ROOT, validatePair, candidateBatchSlots, assertCandidateSlotAvailable, aggregateCandidateJudgments, selectPhase, hash, adjudicateCandidateBatch,
   forwardReasoningFor, forwardQualificationWindowFor, buildFixtureExports, currentProtocolBinding } from '../quality-modernization-run.mjs'
 import { targetUnitRange } from '../quality-modernization-receipt.mjs'
@@ -313,7 +313,7 @@ test('freeze consumer selects formal Pro, preserves diagnostic Flash and rejects
   const start = runner.indexOf('export function createProductionTargets(')
   const body = runner.slice(start, runner.indexOf('export function probeTarget(', start)).replace('export function', 'function')
   const inspected = []
-  const dependencies = { fs, path, ROOT, CACHE: directory, QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, PLANNING_STAGE_MODELS, R3_NATIVE_REVISION_DIAGNOSTIC, SAVED_NATIVE_REVIEW_DIAGNOSTIC,
+  const dependencies = { fs, path, ROOT, CACHE: directory, QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, PLANNING_STAGE_MODELS, R3_NATIVE_REVISION_DIAGNOSTIC, SAVED_NATIVE_REVIEW_DIAGNOSTIC, savedNativePolicy,
     CANDIDATE_ONLY_PROTOCOL_REVISION: revision, PRODUCTION_BRIDGE: 'scripts/fixtures/quality-modernization-production.fixture.mjs',
     fail: code => { throw new Error(code) }, git: (_root, args) => args[0] === 'rev-parse' ? 'a'.repeat(40) : '',
     inside: (root, target) => !path.relative(root, target).startsWith('..') && !path.isAbsolute(path.relative(root, target)),

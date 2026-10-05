@@ -86,9 +86,6 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
         '【pass 依据】pass 简述实际核对的对象、来源与对照结果即可，不必逐项展开无问题内容的历史时点；不得照抄格式示例或用无依据套话替代核对。',
         '[Pass evidence] Briefly state the actual subject, source checked and comparison result for a pass; do not expand the historical timing of each problem-free detail. Never copy the format example or substitute unsupported stock conclusions for checking.'),
       buildChapterGoalReviewPrompt(frozen.frozenGoals, language),
-      promptLanguageText(language,
-        '【简短证据核对】在 goalReviews.description 中简述目标要求、正文证据及其时态：本章已发生、旧事回顾或未来计划。要求当章推进时，旧事或计划不算完成；只要求维持状态时，不强造新事件。合理的新动作不必在前文预先出现。不要输出长篇推理。',
-        '[Brief evidence check] In goalReviews.description briefly state the required goal, manuscript evidence and whether it is a current-chapter event, recollection or future plan. Recollection/plans do not satisfy required new progress; state-maintenance goals do not require invented events. Reasonable new actions need not appear in earlier chapters. No lengthy reasoning.'),
     ].join('\n\n')
     const reviewPrompt = frozen.recheck ? [
       promptLanguageText(language,

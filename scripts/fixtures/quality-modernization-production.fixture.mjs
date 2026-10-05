@@ -12,7 +12,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows, streamEventStructure,
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, r3ModelForOperation, modelConfigurationHash, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation,
-  SAVED_NATIVE_REVIEW_DIAGNOSTIC, readSavedNativeSource, readSavedReviewContinuation,
+  readSavedNativeSource, readSavedReviewContinuation,
   PLANNING_NATIVE_DIAGNOSTIC, PLANNING_STAGE_MODELS, readPlanningNativeSource, readPlanningResumeSource,
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
@@ -233,8 +233,11 @@ test('isolated production commands persist the selected phase operations', async
   const copiedRun = boundedRun || r3Run || savedRun
   const boundedSource = savedRun ? readSavedNativeSource(request.diagnosticInputPath, request.caseId)
     : r3Run ? readR3NativeSource(request.diagnosticInputPath) : boundedRun ? readBoundedRevisionSource(request.diagnosticInputPath) : null
-  const copiedPolicy = savedRun ? { ...SAVED_NATIVE_REVIEW_DIAGNOSTIC, source: boundedSource.source }
+  const copiedPolicy = savedRun ? { ...boundedSource.policy, source: boundedSource.source }
     : r3Run ? R3_NATIVE_REVISION_DIAGNOSTIC : BOUNDED_REVISION_DIAGNOSTIC
+  const goalDeltaPreflight = savedRun && copiedPolicy.reviewOnly && request.action === 'prepare'
+  const goalDeltaCaptureStop = new Error('GOAL_DELTA_PREFLIGHT_CAPTURED')
+  if (savedRun && copiedPolicy.reviewOnly) assert.equal(target.diagnosticInputHash, boundedSource.inputHash, 'SAVED_NATIVE_TARGET_MISMATCH')
   if (boundedRun) {
     assert.equal(target.arm, 'candidate', 'BOUNDED_REVISION_CANDIDATE_REQUIRED')
     assert.equal(request.milestone, 'diagnostic', 'BOUNDED_REVISION_SCOPE_INVALID')
@@ -244,7 +247,7 @@ test('isolated production commands persist the selected phase operations', async
   if (diagnosticRun) assert.equal(target.arm, 'candidate', 'SHARED_INPUT_DIAGNOSTIC_CANDIDATE_REQUIRED')
   const aiReviewRun = request.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision
     && (planningRun || savedRun || r3Run || fullRun || request.phase === 'c16-c18' || request.milestone === 'post-ui' && ['early-budget', 'early-context', 'early-review'].includes(request.phase))
-  if (aiReviewRun) assert.deepEqual(request.evaluationPolicy, productionScenario(request.phase, request.milestone, request.protocolRevision).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
+  if (aiReviewRun) assert.deepEqual(request.evaluationPolicy, productionScenario(request.phase, request.milestone, request.protocolRevision, boundedSource?.inputHash).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
   if (request.phase === 'c16-c18') assert.deepEqual(request.evaluationPolicy,
     productionScenario(request.phase, request.milestone, request.protocolRevision).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
   const reviewedRun = Boolean(request.evaluationPolicy) && !aiReviewRun
@@ -257,10 +260,10 @@ test('isolated production commands persist the selected phase operations', async
   const evidenceRoot = request.evidenceRoot ?? target.isolationRoot
   const source = json(request.semanticPath)
   const registeredForward = forwardReasoningFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
-    request.phase, request.milestone)
+    request.phase, request.milestone, boundedSource?.inputHash)
   assert.deepEqual(request.forwardReasoning ?? null, registeredForward, 'FORWARD_REGISTRATION_MISMATCH')
-  const stageProfiles = planningRun ? PLANNING_STAGE_MODELS.profiles : savedRun ? { saved: SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile } : registeredForward?.stageModels?.profiles
-  const modelForOperation = operationId => planningRun ? PLANNING_NATIVE_DIAGNOSTIC.modelProfile : savedRun ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : r3Run ? r3ModelForOperation(operationId)
+  const stageProfiles = planningRun ? PLANNING_STAGE_MODELS.profiles : savedRun ? { saved: copiedPolicy.modelProfile } : registeredForward?.stageModels?.profiles
+  const modelForOperation = operationId => planningRun ? PLANNING_NATIVE_DIAGNOSTIC.modelProfile : savedRun ? copiedPolicy.modelProfile : r3Run ? r3ModelForOperation(operationId)
     : qualificationModelForOperation(request.phase, request.milestone, operationId)
   const registeredWindow = forwardQualificationWindowFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
     request.phase, request.milestone)
@@ -476,7 +479,7 @@ test('isolated production commands persist the selected phase operations', async
     let stageModels = null
     if (r3Run || stageProfiles) {
       const profiles = stageProfiles ?? copiedPolicy.profiles
-      if (savedRun) assert.equal(target.modelId, SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile.profileId, 'REGISTERED_STAGE_MODEL_MISMATCH')
+      if (savedRun) assert.equal(target.modelId, copiedPolicy.modelProfile.profileId, 'REGISTERED_STAGE_MODEL_MISMATCH')
       else assert.deepEqual(stageProfiles ? target.stageModels : target.r3StageProfiles,
         stageProfiles ? planningRun ? PLANNING_STAGE_MODELS : QUALIFICATION_STAGE_MODELS : copiedPolicy.profiles, 'REGISTERED_STAGE_MODEL_MISMATCH')
       const configured = request.mode === 'real' ? json(path.join(target.roots.config, 'models.json'))
@@ -964,7 +967,8 @@ test('isolated production commands persist the selected phase operations', async
     }
     receipt.physicalProject = { path: project.rootPath, dbPath: db.name, projectId: project.projectId,
       format: candidate ? 'canonical' : 'legacy', parityHash: sha(sourceParity), readback: sourceParity }
-    if (request.action === 'prepare') { assertNoOutboundPreflightFailures(receipt); receipt.status = 'prepared'; return }
+    if (request.action === 'prepare' && !goalDeltaPreflight) { assertNoOutboundPreflightFailures(receipt); receipt.status = 'prepared'; return }
+    if (goalDeltaPreflight) request.parityHash = sha(sourceParity)
     if (continuityRun) request.parityHash = sha(sourceParity)
     else assert.equal(sha(sourceParity), request.parityHash, 'PHYSICAL_PROJECT_PARITY_CHANGED')
     if (['resume-preflight', 'saved-review-preflight'].includes(request.action)) {
@@ -1477,6 +1481,11 @@ test('isolated production commands persist the selected phase operations', async
         fs.writeFileSync(outputPath, options.body)
         requestReceipt.diagnosticRequest = { outputPath, sha256: sha(options.body), bytes: Buffer.byteLength(options.body, 'utf8') }
       }
+      if (goalDeltaPreflight) {
+        assert.equal(receipt.preflightRequest, undefined, 'GOAL_DELTA_PREFLIGHT_REPEATED')
+        receipt.preflightRequest = requestReceipt
+        throw goalDeltaCaptureStop
+      }
       receipt.attempts.push(requestReceipt)
       writeProductionReceipt(request.receiptPath, receipt, secrets)
       record({ type: 'reserve', attemptId, binding })
@@ -1978,7 +1987,25 @@ test('isolated production commands persist the selected phase operations', async
         receipt.finalizationEvidence.cardsBeforeReadback = { invocationId: request.invocationId, source,
           revision: roster.revision, identityRevision: roster.identityRevision, rosterHash: sha(beforeText), outputPath: beforePath }
       }
-      const result = await command.execute(params)
+      const result = await command.execute(params).catch(error => {
+        if (!goalDeltaPreflight || !receipt.preflightRequest || error.message !== 'AI 未正常完成生成，结果未被保存。') throw error
+        const actual = receipt.preflightRequest.binding.actual
+        const row = db.prepare('SELECT run_id,attempt_json,usage_receipt_json FROM generation_attempts WHERE attempt_id=?').get(actual.attemptId)
+        assert.equal(row?.run_id, actual.runId, 'GOAL_DELTA_PREFLIGHT_OWNER_MISMATCH')
+        const attempt = JSON.parse(row.attempt_json), usage = JSON.parse(row.usage_receipt_json)
+        assert.equal(attempt.attemptId, actual.attemptId, 'GOAL_DELTA_PREFLIGHT_OWNER_MISMATCH')
+        assert.equal(attempt.rootActionId, actual.rootActionId, 'GOAL_DELTA_PREFLIGHT_OWNER_MISMATCH')
+        assert.equal(attempt.status, 'unknown', 'GOAL_DELTA_PREFLIGHT_OWNER_NOT_STOPPED')
+        assert.equal(usage.result?.failureCode, 'GENERATION_PROVIDER_FAILED', 'GOAL_DELTA_PREFLIGHT_OWNER_NOT_STOPPED')
+        assert.equal(usage.reviewRevisionEffect, undefined, 'GOAL_DELTA_PREFLIGHT_FORMAL_EFFECT')
+        assert.equal(receipt.attempts.length, 0, 'GOAL_DELTA_PREFLIGHT_SENT')
+        assert.equal(receipt.physicalModelRequests + receipt.syntheticDispatches, 0, 'GOAL_DELTA_PREFLIGHT_SENT')
+        const rows = fs.existsSync(request.ledgerPath) ? fs.readFileSync(request.ledgerPath, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : []
+        assert.equal(rows.some(row => row.attemptId === receipt.preflightRequest.attemptId), false, 'GOAL_DELTA_PREFLIGHT_RESERVED')
+        receipt.preflightOwner = { ...actual, status: attempt.status, failureCode: usage.result.failureCode,
+          hasFormalEffect: false, capture: 'stopped-before-campaign-reserve' }
+        throw goalDeltaCaptureStop
+      })
       await Promise.all(streamSettlements)
       if (!planningRun && (!fullRun || operationKind !== 'directory')) assert.deepEqual(db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all(), authorBlueprints, 'OUTSIDE_RANGE_REWRITTEN')
       const outputPath = path.join(evidenceRoot, `${receipt.operations.length + 1}-${operationKind}.${['directory', 'review', 'recheck', 'final-review'].includes(operationKind) ? 'json' : 'txt'}`)
@@ -2353,6 +2380,12 @@ test('isolated production commands persist the selected phase operations', async
     assertNoOutboundPreflightFailures(receipt)
     receipt.status = 'passed'
   } catch (error) {
+    if (goalDeltaPreflight && error === goalDeltaCaptureStop && receipt.preflightOwner && receipt.attempts.length === 0
+      && receipt.physicalModelRequests === 0 && receipt.syntheticDispatches === 0) {
+      assertNoOutboundPreflightFailures(receipt)
+      receipt.status = 'prepared'
+      return
+    }
     if (localDispatchGateRejection) receipt.dispatchGateRejection = localDispatchGateRejection
     const canProjectRecoveryCandidate = request.mode === 'real'
       && !candidate

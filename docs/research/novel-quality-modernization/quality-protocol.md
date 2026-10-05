@@ -523,3 +523,49 @@ sourceRoot 指向原隔离根，其配置位于 c/c。
 node scripts/quality-modernization-run.mjs freeze-targets --phase r3-native-revision-diagnostic --diagnostic-models <private-model-sources.json> --output <new-targets.json>
 node scripts/quality-modernization-run.mjs r3-native-revision-diagnostic --targets <new-targets.json> --milestone diagnostic --diagnostic-input <original-R3.context.json> --mode real --physical-ledger <canonical-ledger.jsonl>
 ```
+
+## 固定稿目标差异诊断
+
+`goalDeltaReviewDiagnostic` 在现有 `saved-native-review-diagnostic` 入口登记两次普通首审。
+`--diagnostic-input` 的文件字节 hash 选择固定 policy。输入不能提供或覆盖 policy。
+新输入 hash 为 `95d601c64fa36bab33d91a1739a2176fbdad323cdcdbff64279acba5b524d387`。
+旧 saved-native 输入与调用规则保持原登记。
+
+`goal-delta-negative` 使用原正式 99b3 / round 1 / C18-B 正文 `195f6b...`。
+`goal-delta-positive` 使用已保存正文 `d6f2a9...`。
+两案使用各自原项目、作者材料、普通审稿 context 与前驱全文的冻结副本。
+原项目只读取文件，不连接原 SQLite 数据库。
+复制后经正常导出、恢复和普通首审保存新报告。
+报告 schema、parser 和历史报告保持原样。
+
+模型固定为官方 DeepSeek V4 Pro，temperature 0、high、maxTokens 32768。
+最多两次实际发送，每案最多一个 reserve。
+失败、取消、UNKNOWN 和更换 root、SHA 或运行目录均不退还机会。
+新 policy 不允许格式重建、LENGTH 替代、修稿或 complete。
+普通产品及旧诊断的恢复能力保持不变。
+
+主 Agent 先执行负例，并独立读取原 raw、保存报告及材料证据。
+只有负例理由正确且没有严重误报时，主 Agent 才释放正例。
+技术中断、终态不明、缺少有效 raw 或负例语义失败时停止，正例保持 NOT_RUN。
+两例成功也只支持候选，不计正式分母，不改判原正式失败。
+
+prepare 沿普通审稿路径组装实际请求，并在 campaign reserve 前捕获完整 messages。
+它不发送请求，不伪造模型响应，不保存报告。
+`preflightOwner` 保留被主动终止的真实 unknown / GENERATION_PROVIDER_FAILED owner。
+`prepared` 只表示隔离项目和请求捕获就绪。
+实际首审使用新 owner，并受同一 canonical ledger 的固定 case 计数限制。
+
+冻结 targets 时传入新输入，以绑定该 policy。
+提交、干净工作树及实际配置检查完成后，主 Agent 使用以下入口。
+
+```text
+node scripts/quality-modernization-run.mjs freeze-targets --phase saved-native-review-diagnostic --diagnostic-input <fixed-input.private.json> --diagnostic-models <private-model-sources.json> --output <new-targets.json>
+node scripts/quality-modernization-run.mjs saved-native-review-diagnostic --targets <new-targets.json> --milestone diagnostic --diagnostic-input <fixed-input.private.json> --native-case goal-delta-negative --native-action prepare --mode real --physical-ledger <canonical-ledger.jsonl>
+```
+
+prepare 核验后，`--native-action review` 执行该案唯一首审。
+负例独立语义验收通过后，才对 `goal-delta-positive` 执行相同步骤。
+不传入旧 continuation 或 approval 文件。
+
+`historicalFormalE59501f3Boundary` 保留实际 2037 行历史前缀及原终态。
+其原始字节 SHA256 为 `a77d9e3174b3331c42313a3116a5bc96df561bc1c38ba17b822ecc9d69d6cc98`。

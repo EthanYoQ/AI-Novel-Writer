@@ -173,9 +173,42 @@ export const SAVED_NATIVE_REVIEW_DIAGNOSTIC = Object.freeze({
   stop: 'negative-detection-or-closure-or-technical-failure-ends-check-control-NOT_RUN',
 })
 
-export function savedNativeOperations(caseId, action, bridgeAction) {
-  const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC
+export const GOAL_DELTA_REVIEW_DIAGNOSTIC = Object.freeze({
+  sceneId: '场景1', chapterNumber: 2, milestone: 'diagnostic', arms: ['candidate'], nonQualification: true,
+  scenarioRevision: 'saved-goal-delta-review-only-v1', formalDenominatorContribution: 0, reviewOnly: true,
+  expectedPhysicalRequests: 2, maxPhysicalRequests: 2,
+  diagnosticInputHash: '95d601c64fa36bab33d91a1739a2176fbdad323cdcdbff64279acba5b524d387',
+  caseIds: ['goal-delta-negative', 'goal-delta-positive'],
+  sources: [
+    { caseId: 'goal-delta-negative', provenance: 'formal-99b3-C18-B', invocationId: '13724639-2137-4920-a68b-9d14a7148a49',
+      projectId: 'aceadbbf-79ea-4170-bc9a-0ff153e34980', epoch: 'afc0a53a-90e3-42e9-9e39-0154331798c4',
+      contentSha256: '195f6b366456cd5c48c0997a425d1e5349bfb83f7d6dba0babbc56fb632dc948' },
+    { caseId: 'goal-delta-positive', provenance: 'saved-d6f2', invocationId: '32b5e502-6a73-4201-b8a9-541f28d25d35',
+      projectId: '7dfa542b-41c7-4476-80aa-5e2f1b571331', epoch: '94506168-ffe0-45be-b1bd-40ce511f5ff2',
+      contentSha256: 'd6f2a9899903e2dab4c2867e9c13c6dde30b189cfbd7a6f6014479895e350c9c' },
+  ],
+  operations: [
+    { id: 'goal-delta-negative-review', kind: 'review', caseIds: ['goal-delta-negative'] },
+    { id: 'goal-delta-positive-review', kind: 'review', caseIds: ['goal-delta-positive'] },
+  ],
+  attemptPolicy: { milestone: 'diagnostic', arms: ['candidate'] },
+  evaluationPolicy: { ...AI_REVIEW_FINAL_MANUSCRIPT_POLICY, caseIds: ['goal-delta-negative', 'goal-delta-positive'],
+    confirmation: 'root-releases-positive-after-independent-negative-raw-acceptance',
+    physicalRequests: { minimum: 1, maximum: 1, manuscriptMinimum: 1, manuscriptMaximum: 1 } },
+  modelProfile: SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile,
+  stop: 'one-reserve-per-source-including-failure-no-retry-rebuild-length-refine-complete; negative-semantic-or-technical-failure-stops-positive',
+})
+
+export function savedNativePolicy(inputHash = SAVED_NATIVE_REVIEW_DIAGNOSTIC.diagnosticInputHash) {
+  const policy = [SAVED_NATIVE_REVIEW_DIAGNOSTIC, GOAL_DELTA_REVIEW_DIAGNOSTIC].find(item => item.diagnosticInputHash === inputHash)
+  if (!policy) throw new Error('SAVED_NATIVE_INPUT_DRIFT')
+  return policy
+}
+
+export function savedNativeOperations(caseId, action, bridgeAction, inputHash) {
+  const policy = savedNativePolicy(inputHash)
   if (!policy.caseIds.includes(caseId) || !['prepare', 'review', 'complete'].includes(action)
+    || policy.reviewOnly && (action === 'complete' || bridgeAction === 'saved-review-preflight')
     || action === 'complete' && caseId !== policy.caseIds[0]) throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
   if (bridgeAction === 'saved-review-preflight') {
     if (action !== 'complete') throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
@@ -424,8 +457,7 @@ export function readPlanningNativeSource(inputPath) {
 }
 
 export function readSavedNativeSource(inputPath, caseId) {
-  const bytes = fs.readFileSync(inputPath), policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC
-  if (digest(bytes) !== policy.diagnosticInputHash) throw new Error('SAVED_NATIVE_INPUT_DRIFT')
+  const bytes = fs.readFileSync(inputPath), policy = savedNativePolicy(digest(bytes))
   const input = JSON.parse(bytes), entry = input.cases.find(item => item.caseId === caseId)
   const source = policy.sources.find(item => item.caseId === caseId)
   if (!entry || !source) throw new Error('SAVED_NATIVE_CASE_MISMATCH')
@@ -440,7 +472,7 @@ export function readSavedNativeSource(inputPath, caseId) {
   const assets = entry.files.map(item => ({ ...item, bytes: read(path.join(entry.projectRoot, item.path), item.sha256) }))
   if (digest(read(entry.draftPath, entry.draftHash)) !== source.contentSha256
     || digest(entry.context.source.content) !== source.contentSha256) throw new Error('SAVED_NATIVE_SOURCE_DRIFT')
-  return { inputHash: digest(bytes), source, context: entry.context, draft: entry.context.source, assets, packetFiles: [],
+  return { policy, inputHash: digest(bytes), source, context: entry.context, draft: entry.context.source, assets, packetFiles: [],
     original: JSON.parse(read(entry.originalReceipt, entry.originalReceiptHash)) }
 }
 
@@ -1108,17 +1140,17 @@ const QUALIFICATION_WINDOW_HASH = '64d634a4fa20fbafbbe3103c43e4a2c9959e3a6be64aa
 export function qualificationBridgeWindows(request) {
   if (['saved-native-review-diagnostic', 'planning-native-diagnostic'].includes(request.phase)) {
     const planning = request.phase === 'planning-native-diagnostic'
-    const policy = planning ? PLANNING_NATIVE_DIAGNOSTIC : SAVED_NATIVE_REVIEW_DIAGNOSTIC
+    const policy = planning ? PLANNING_NATIVE_DIAGNOSTIC : savedNativePolicy(request.diagnosticInputHash)
     if (request.milestone !== 'diagnostic' || (request.arm ?? request.target?.arm) !== 'candidate'
       || request.scenarioRevision !== policy.scenarioRevision
-      || stableEvidence(request.operations) !== stableEvidence((planning ? planningNativeOperations : savedNativeOperations)(request.caseId, request.nativeAction, request.action))
+      || stableEvidence(request.operations) !== stableEvidence((planning ? planningNativeOperations : savedNativeOperations)(request.caseId, request.nativeAction, request.action, request.diagnosticInputHash))
       || stableEvidence(request.attemptPolicy) !== stableEvidence(policy.attemptPolicy)
       || stableEvidence(request.evaluationPolicy) !== stableEvidence(policy.evaluationPolicy)
       || request.forwardQualificationWindow != null || Object.keys(request).some(key => /timeout|deadline/iu.test(key)))
       throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
     const attemptMs = MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs + 60_000
     const maxCalls = ['prepare', 'resume-preflight', 'saved-review-preflight'].includes(request.action) ? 0 : planning
-      ? request.operations.reduce((sum, item) => sum + policy.physicalRequestBounds[item.id], 0) : request.operations.length * 4
+      ? request.operations.reduce((sum, item) => sum + policy.physicalRequestBounds[item.id], 0) : request.operations.length * (policy.reviewOnly ? 1 : 4)
     return { attemptMs, spawnMs: Math.max(1, maxCalls) * attemptMs + 60_000,
       testMs: Math.max(1, maxCalls) * attemptMs + 120_000, maxCalls, revision: policy.scenarioRevision }
   }
@@ -1240,9 +1272,10 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
     || operationId && !PLANNING_NATIVE_DIAGNOSTIC.operations.some(item => item.id === operationId)))
     throw new Error('PLANNING_NATIVE_MODEL_SCOPE_MISMATCH')
   const saved = phase === 'saved-native-review-diagnostic'
-  if (saved && (registration?.revision !== SAVED_NATIVE_REVIEW_DIAGNOSTIC.scenarioRevision
-    || milestone !== 'diagnostic' || !SAVED_NATIVE_REVIEW_DIAGNOSTIC.caseIds.includes(caseId)
-    || operationId && !SAVED_NATIVE_REVIEW_DIAGNOSTIC.operations.some(item => item.id === operationId && item.caseIds.includes(caseId))))
+  const savedPolicy = saved ? savedNativePolicy(registration?.diagnosticInputHash) : null
+  if (saved && (registration?.revision !== savedPolicy.scenarioRevision
+    || milestone !== 'diagnostic' || !savedPolicy.caseIds.includes(caseId)
+    || operationId && !savedPolicy.operations.some(item => item.id === operationId && item.caseIds.includes(caseId))))
     throw new Error('SAVED_NATIVE_MODEL_SCOPE_MISMATCH')
   const staged = registration?.stageModels
   if (staged && (stableEvidence(staged) !== stableEvidence(QUALIFICATION_STAGE_MODELS)
@@ -1251,7 +1284,7 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
   const stageProfile = staged ? qualificationModelForOperation(phase, milestone, operationId) : null
   if (stageProfile && modelConfigurationHash(model) !== stageProfile.configurationHash) throw new Error('QUALIFICATION_MODEL_CONFIGURATION_DRIFT')
   if (planning || saved || phase === 'r3-native-revision-diagnostic' || stageProfile) {
-    const profile = planning ? PLANNING_NATIVE_DIAGNOSTIC.modelProfile : saved ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : stageProfile ?? r3ModelForOperation(operationId ?? R3_NATIVE_REVISION_DIAGNOSTIC.operations[0].id)
+    const profile = planning ? PLANNING_NATIVE_DIAGNOSTIC.modelProfile : saved ? savedPolicy.modelProfile : stageProfile ?? r3ModelForOperation(operationId ?? R3_NATIVE_REVISION_DIAGNOSTIC.operations[0].id)
     const expected = profile.model
     if (arm !== 'candidate' || !planning && !saved && !staged && (milestone !== 'diagnostic' || caseId !== 'R3'
       || registration?.revision !== R3_NATIVE_REVISION_DIAGNOSTIC.scenarioRevision) || creativeStrategy !== 'auto'
@@ -1703,9 +1736,9 @@ export function continuityCaseOperations(caseId) {
 /** 登记为定稿角色状态的 operation（含 C17-B 重新定稿后处理）共用产品原生 repair 的门禁规则。 */
 export const FINALIZED_CHARACTER_OPERATION_IDS = Object.freeze(PHASE_SCENARIOS['c16-c18'].operations
   .filter(operation => operation.kind === 'character_cards').map(operation => operation.id))
-export function productionScenario(phase, milestone, protocolRevision) {
+export function productionScenario(phase, milestone, protocolRevision, diagnosticInputHash) {
   if (phase === 'planning-native-diagnostic') return PLANNING_NATIVE_DIAGNOSTIC
-  if (phase === 'saved-native-review-diagnostic') return SAVED_NATIVE_REVIEW_DIAGNOSTIC
+  if (phase === 'saved-native-review-diagnostic') return savedNativePolicy(diagnosticInputHash)
   if (phase === 'r3-native-revision-diagnostic') return R3_NATIVE_REVISION_DIAGNOSTIC
   const scenario = PHASE_SCENARIOS[phase]
   if (!scenario) throw new Error('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
@@ -1944,7 +1977,7 @@ export function reviewLengthRecoveryFor(result, operationId) {
   if (result.arm === 'baseline') return null
   let policy
   if (result.phase === 'planning-native-diagnostic') policy = PLANNING_NATIVE_DIAGNOSTIC.attemptPolicy
-  else if (result.phase === 'saved-native-review-diagnostic') policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC.attemptPolicy
+  else if (result.phase === 'saved-native-review-diagnostic') policy = savedNativePolicy(result.diagnosticInputHash).attemptPolicy
   else if (result.phase === 'r3-native-revision-diagnostic') policy = R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy
   else if (result.arm === 'candidate' && result.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION
     && ['final', 'post-ui'].includes(result.milestone)) {
@@ -3129,13 +3162,16 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
 export function runProductionPhasePair(targets, options, bridge = runProductionBridge) {
   if (['saved-native-review-diagnostic', 'planning-native-diagnostic'].includes(options.phase)) {
     const planning = options.phase === 'planning-native-diagnostic'
-    const policy = planning ? PLANNING_NATIVE_DIAGNOSTIC : SAVED_NATIVE_REVIEW_DIAGNOSTIC, caseId = options.caseId, nativeAction = options.nativeAction
+    const caseId = options.caseId, nativeAction = options.nativeAction
+    const source = planning ? readPlanningNativeSource(options.diagnosticInputPath) : readSavedNativeSource(options.diagnosticInputPath, caseId)
+    const policy = planning ? PLANNING_NATIVE_DIAGNOSTIC : source.policy
     if (options.syntheticPlanning !== undefined && (!planning || options.development !== true || options.mode !== 'synthetic'
       || !['empty-stop', 'empty-length', 'outline-recovery', 'blueprint-recovery'].includes(options.syntheticPlanning)))
       throw new Error('PLANNING_SYNTHETIC_SCOPE_MISMATCH')
-    const operationsFor = planning ? planningNativeOperations : savedNativeOperations
+    const operationsFor = planning ? planningNativeOperations : (id, action, bridgeAction) => savedNativeOperations(id, action, bridgeAction, source.inputHash)
     const operations = operationsFor(caseId, nativeAction)
-    const source = planning ? readPlanningNativeSource(options.diagnosticInputPath) : readSavedNativeSource(options.diagnosticInputPath, caseId)
+    if (policy.reviewOnly && (options.approvalPath || options.savedReviewContinuationPath || options.resumeSourcePath))
+      throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
     const resume = options.resumeSourcePath ? readPlanningResumeSource(options.resumeSourcePath) : null
     const savedReview = options.savedReviewContinuationPath ? readSavedReviewContinuation(options.savedReviewContinuationPath) : null
     const controlResume = savedReview?.manifest.controlResume
@@ -3147,7 +3183,8 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     if (resume && (!planning || !['resume-from-saved-outline', 'complete'].includes(nativeAction))
       || nativeAction === 'resume-from-saved-outline' && !resume) throw new Error('PLANNING_RESUME_SOURCE_REQUIRED')
     const original = targets.candidate, invocationId = planning ? policy.invocationId : source.source.invocationId
-    if (!original || targets.baseline || original.protocolHash !== options.protocolHash
+    if (!original || policy.reviewOnly && original.diagnosticInputHash !== source.inputHash
+      || targets.baseline || original.protocolHash !== options.protocolHash
       || original.protocolRevision !== options.protocolRevision || options.mode === 'real' && original.developmentOnly)
       throw new Error('SAVED_NATIVE_TARGET_MISMATCH')
     const recordPath = id => controlResume ? path.join(path.dirname(options.savedReviewContinuationPath), `${controlResume.caseId}.${savedReview.manifest.continuationId}.${original.codeSha.slice(0, 8)}.execution.json`)
@@ -3165,7 +3202,7 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     const firstReviewKey = resume ? 'resume-from-saved-outline' : 'review'
     if (nativeAction === 'complete' && !savedReview && !record.results[firstReviewKey]) throw new Error('SAVED_NATIVE_FIRST_REVIEW_REQUIRED')
     let approval, firstReview
-    if (nativeAction === 'complete' || !planning && nativeAction === 'review' && caseId === policy.caseIds[1]) {
+    if (nativeAction === 'complete' || !planning && !policy.reviewOnly && nativeAction === 'review' && caseId === policy.caseIds[1]) {
       approval = JSON.parse(fs.readFileSync(options.approvalPath))
       const negativeRecord = controlResume ? savedReview.closedNegativeExecution
         : caseId === policy.caseIds[0] ? record : JSON.parse(fs.readFileSync(recordPath(policy.caseIds[0])))
@@ -3243,6 +3280,7 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     if (resumeEvidence) fs.mkdirSync(resumeEvidence, { recursive: true })
     const templatesPath = path.join(resumeEvidence ?? target.isolationRoot, planning ? 'planning-native-templates.json' : 'saved-native-templates.json')
     const common = { ...options, ...bound, target, invocationId, nativeAction, caseId, operations, templatesPath,
+      ...(!planning ? { diagnosticInputHash: source.inputHash } : {}),
       sceneId: policy.sceneId, chapterNumber: policy.chapterNumber, scenarioRevision: policy.scenarioRevision,
       attemptPolicy: policy.attemptPolicy, evaluationPolicy: policy.evaluationPolicy, driverHash: productionBridgeHash(),
       approval, firstReview, ledgerPath: record.ledgerPath ?? options.ledgerPath }
@@ -3292,7 +3330,7 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
         total: new Set(journey.map(row => row.attemptId)).size,
         historicalUnknown: resume.manifest.attempts.filter(item => item.terminal === 'unknown').map(item => item.attemptId) } } : {}),
       executionRecordPath: bound.executionRecordPath, physicalModelRequests: result.physicalModelRequests ?? 0,
-      notRun: result.status === 'passed' ? [] : planning ? operations.filter(item => !result.operations?.some(done => done.operation === item.id)).map(item => item.id) : ['control-review'] }
+      notRun: result.status === 'passed' ? [] : policy.reviewOnly ? policy.operations.filter(item => policy.caseIds.indexOf(item.caseIds[0]) > policy.caseIds.indexOf(caseId)).map(item => item.id) : planning ? operations.filter(item => !result.operations?.some(done => done.operation === item.id)).map(item => item.id) : ['control-review'] }
   }
   if (options.phase === 'full') return runProductionFull(targets, options, bridge)
   const scenario = productionScenario(options.phase, options.milestone, options.protocolRevision)

@@ -9,7 +9,7 @@ import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, reviewRecoveryAllowed,
-  SAVED_NATIVE_REVIEW_DIAGNOSTIC, savedNativeOperations, readSavedNativeSource,
+  SAVED_NATIVE_REVIEW_DIAGNOSTIC, GOAL_DELTA_REVIEW_DIAGNOSTIC, savedNativePolicy, savedNativeOperations, readSavedNativeSource,
   readSavedReviewContinuation, savedReviewContinuationTarget, savedReviewHistoricalAttempts,
   PLANNING_NATIVE_DIAGNOSTIC, PLANNING_STAGE_MODELS, planningNativeOperations, readPlanningNativeSource,
   readPlanningResumeSource, planningResumeTarget, planningSavedOutlineAttempts,
@@ -129,7 +129,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   if (historical) return
   assertProtocolBinding(binding)
   validateCandidateSampling(binding, protocol)
-  const phase = protocol.phases[binding.phase] && selectPhase(protocol, binding.phase, binding.milestone)
+  const phase = protocol.phases[binding.phase] && selectPhase(protocol, binding.phase, binding.milestone, binding.diagnosticInputHash)
   if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
@@ -169,7 +169,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
       || binding.diagnosticSourceHash !== hash(source) || binding.actual.projectId === source.projectId
       || binding.actual.epoch === source.epoch || binding.stageModel?.profileId !== profile.profileId
       || binding.stageModel?.configurationHash !== profile.configurationHash
-      || !['review-chapter', 'review-chapter-rebuild', 'refine-from-review'].includes(binding.actual.purpose))
+      || !(phase.reviewOnly ? ['review-chapter'] : ['review-chapter', 'review-chapter-rebuild', 'refine-from-review']).includes(binding.actual.purpose))
       fail('SAVED_NATIVE_BINDING_MISMATCH')
   }
   if (binding.phase === 'planning-native-diagnostic') {
@@ -199,7 +199,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
       || binding.stageModel?.configurationHash !== profile.configurationHash) fail('QUALIFICATION_MODEL_CONFIGURATION_DRIFT')
   }
   if (binding.phase === 'separated-review-diagnostic') {
-    selectPhase(protocol, binding.phase, binding.milestone)
+    selectPhase(protocol, binding.phase, binding.milestone, binding.diagnosticInputHash)
     const slot = phase.operations.find(item => item.id === binding.operation)
     if (phase.diagnosticId !== 'separated-review-diagnostic-3x2-v1' || phase.nonQualification !== true
       || phase.maxPhysicalRequests !== 6 || phase.operations.length !== 6 || binding.arm !== 'candidate'
@@ -312,7 +312,8 @@ export function validatePhysicalLedger(file) {
   const savedPostUi = validateHistoricalSupersessionBoundary(raw, planning91, protocol.historicalSavedPostUi94e9b048Boundary)
   const savedPro = validateHistoricalSupersessionBoundary(raw, savedPostUi, protocol.historicalSavedProFirstReviewBoundary)
   const savedProClosure = validateHistoricalSupersessionBoundary(raw, savedPro, protocol.historicalSavedProClosureBoundary)
-  validateHistoricalSupersessionBoundary(raw, savedProClosure, protocol.historicalSavedProControlBoundary)
+  const savedProControl = validateHistoricalSupersessionBoundary(raw, savedProClosure, protocol.historicalSavedProControlBoundary)
+  validateHistoricalSupersessionBoundary(raw, savedProControl, protocol.historicalFormalE59501f3Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -427,13 +428,18 @@ export function reconcileDispatchedAttempts(file, campaignMode, ownedAttempts) {
   return { reconciled, dangling: dangling.length }
 }
 
-export function selectPhase(protocol, phase, milestone = 'early') {
+export function selectPhase(protocol, phase, milestone = 'early', diagnosticInputHash) {
   if (!['early', 'post-ui', 'final', 'diagnostic'].includes(milestone)) fail('INVALID_MILESTONE')
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
   if (phase === 'planning-native-diagnostic' && !isDeepStrictEqual(protocol.phases[phase], PLANNING_NATIVE_DIAGNOSTIC))
     fail('PLANNING_NATIVE_REGISTRATION_MISMATCH')
-  if (phase === 'saved-native-review-diagnostic' && !isDeepStrictEqual(protocol.phases[phase], SAVED_NATIVE_REVIEW_DIAGNOSTIC))
-    fail('SAVED_NATIVE_REGISTRATION_MISMATCH')
+  if (phase === 'saved-native-review-diagnostic') {
+    const selected = savedNativePolicy(diagnosticInputHash)
+    if (!isDeepStrictEqual(protocol.phases[phase], SAVED_NATIVE_REVIEW_DIAGNOSTIC)
+      || !isDeepStrictEqual(protocol.goalDeltaReviewDiagnostic, GOAL_DELTA_REVIEW_DIAGNOSTIC)) fail('SAVED_NATIVE_REGISTRATION_MISMATCH')
+    if (milestone !== 'diagnostic') fail('PHASE_MILESTONE_MISMATCH')
+    return { ...selected, phase, milestone }
+  }
   if (phase === 'r3-native-revision-diagnostic' && !isDeepStrictEqual(protocol.phases[phase], R3_NATIVE_REVISION_DIAGNOSTIC)) fail('R3_NATIVE_REGISTRATION_MISMATCH')
   if (phase === 'bounded-revision-diagnostic' && !isDeepStrictEqual(protocol.phases[phase], BOUNDED_REVISION_DIAGNOSTIC))
     fail('BOUNDED_REVISION_REGISTRATION_MISMATCH')
@@ -470,10 +476,11 @@ export function selectPhase(protocol, phase, milestone = 'early') {
     fail('CANDIDATE_ONLY_REGISTRATION_MISMATCH')
   return { ...selected, ...current, phase, milestone }
 }
-export function forwardReasoningFor(protocol, phase, milestone) {
+export function forwardReasoningFor(protocol, phase, milestone, diagnosticInputHash) {
   if (['saved-native-review-diagnostic', 'planning-native-diagnostic'].includes(phase)) {
-    const selected = selectPhase(protocol, phase, milestone)
-    return { revision: selected.scenarioRevision, model: selected.modelProfile.model, reasoningOverride: 'high',
+    const selected = selectPhase(protocol, phase, milestone, diagnosticInputHash)
+    return { ...(selected.reviewOnly ? { diagnosticInputHash: selected.diagnosticInputHash } : {}),
+      revision: selected.scenarioRevision, model: selected.modelProfile.model, reasoningOverride: 'high',
       creativeStrategy: 'auto', scopes: [{ phase, milestone, caseIds: selected.caseIds }] }
   }
   if (phase === 'r3-native-revision-diagnostic') {
@@ -621,9 +628,11 @@ export function inspectTarget(target) {
   return { repositoryRoot, sourceHash, roots, driver }
 }
 
-export function createProductionTargets(baselineRoot, output, { development = false, modelId, phase, modelSources, resumeSourcePath, savedReviewContinuationPath } = {}) {
+export function createProductionTargets(baselineRoot, output, { development = false, modelId, phase, modelSources, resumeSourcePath, savedReviewContinuationPath, diagnosticInputPath } = {}) {
   const r3 = phase === 'r3-native-revision-diagnostic'
   const saved = phase === 'saved-native-review-diagnostic'
+  const savedPolicy = saved ? savedNativePolicy(diagnosticInputPath ? hash(fs.readFileSync(diagnosticInputPath)) : undefined) : null
+  if (savedPolicy?.reviewOnly) for (const caseId of savedPolicy.caseIds) readSavedNativeSource(diagnosticInputPath, caseId)
   const planning = phase === 'planning-native-diagnostic'
   const resume = resumeSourcePath ? readPlanningResumeSource(resumeSourcePath) : null
   const savedReview = savedReviewContinuationPath ? readSavedReviewContinuation(savedReviewContinuationPath) : null
@@ -676,13 +685,13 @@ export function createProductionTargets(baselineRoot, output, { development = fa
       isolationRoot, roots, fixture: { path: fixturePath, format: fixture.format, semanticHash: fixture.semanticHash, parametersHash: fixture.parametersHash },
       driver: { kind: 'production-command-physical-project-v2', adapterRoot: ROOT, path: PRODUCTION_BRIDGE, sha256: productionBridgeHash() },
       ...(r3 ? { modelId: R3_NATIVE_REVISION_DIAGNOSTIC.model.id, r3StageProfiles: R3_NATIVE_REVISION_DIAGNOSTIC.profiles }
-        : saved ? { modelId: SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile.profileId }
+        : saved ? { modelId: savedPolicy.modelProfile.profileId, ...(savedPolicy.reviewOnly ? { diagnosticInputHash: savedPolicy.diagnosticInputHash } : {}) }
         : staged ? { modelId: (planning ? stages.profiles.flash
           : qualificationModelForOperation(scope.phase, scope.milestone)).profileId, stageModels: stages }
           : modelId ? { modelId } : {}), ...(development ? { developmentOnly: true } : {}) }
     if ((r3 || saved || staged) && !development) {
       if (modelId && modelId !== target.modelId) fail('R3_NATIVE_MODEL_MISMATCH')
-      const profiles = (saved ? [SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile]
+      const profiles = (saved ? [savedPolicy.modelProfile]
         : Object.values(staged ? stages.profiles : target.r3StageProfiles)).map(profile => {
         const source = modelSources[profile.profileId]
         if (!source || !path.isAbsolute(source.sourceRoot) || source.profileId !== profile.profileId
@@ -1015,6 +1024,9 @@ export function updateLedger(file, event, options = {}) {
       const savedProControlBoundary = options.campaignMode === 'real' ? protocol.historicalSavedProControlBoundary : options.historicalSavedProControlBoundary
       const trustedSavedProControlEvents = savedProControlBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedSavedProClosureEvents, savedProControlBoundary) : trustedSavedProClosureEvents
+      const formalBoundary = options.campaignMode === 'real' ? protocol.historicalFormalE59501f3Boundary : options.historicalFormalE59501f3Boundary
+      const trustedFormalEvents = formalBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedSavedProControlEvents, formalBoundary) : trustedSavedProControlEvents
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -1048,7 +1060,18 @@ export function updateLedger(file, event, options = {}) {
           return 'nonQualificationDiagnostic'
         }
         if (binding.phase === 'saved-native-review-diagnostic') {
-          const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC
+          const policy = savedNativePolicy(binding.diagnosticInputHash)
+          if (policy.reviewOnly) {
+            const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase
+              && row.binding.diagnosticInputHash === policy.diagnosticInputHash)
+            const previous = prior.at(-1)
+            if (prior.length >= policy.maxPhysicalRequests || prior.some(row => row.binding.caseId === binding.caseId)
+              || policy.operations[prior.length]?.id !== binding.operation
+              || previous && (statuses.get(previous.attemptId) !== 'settle'
+                || events.find(event => event.attemptId === previous.attemptId && event.type === 'settle')?.finishReason !== 'stop'))
+              fail('SAVED_NATIVE_ATTEMPT_UNAVAILABLE')
+            return 'nonQualificationDiagnostic'
+          }
           const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase
             && policy.sources.some(source => source.invocationId === row.binding.invocationId))
           const historical = savedReviewHistoricalAttempts(binding, prior, statuses, events)
@@ -1155,7 +1178,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedSavedProControlEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedFormalEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
@@ -1372,7 +1395,8 @@ export function main(argv) {
   const planningNative = command === 'planning-native-diagnostic'
   if (args['--resume-source'] && !planningNative && !(command === 'freeze-targets' && args['--phase'] === 'planning-native-diagnostic')) fail('PLANNING_RESUME_SOURCE_REQUIRED')
   if (args['--saved-review-continuation'] && !savedNative && !(command === 'freeze-targets' && args['--phase'] === 'saved-native-review-diagnostic')) fail('SAVED_REVIEW_CONTINUATION_SCOPE_MISMATCH')
-  if (savedNative) savedNativeOperations(args['--native-case'], args['--native-action'])
+  const savedInputHash = savedNative && args['--diagnostic-input'] ? hash(fs.readFileSync(args['--diagnostic-input'])) : undefined
+  if (savedNative) savedNativeOperations(args['--native-case'], args['--native-action'], undefined, savedInputHash)
   else if (planningNative) planningNativeOperations(args['--native-case'], args['--native-action'])
   else if (args['--native-case'] || args['--native-action'] || args['--approval']) fail('SAVED_NATIVE_SCOPE_MISMATCH')
   const r3Command = command === 'r3-native-revision-diagnostic' || command === 'development-synthetic' && args['--scenario'] === 'r3-native-revision-diagnostic'
@@ -1457,7 +1481,7 @@ export function main(argv) {
     if (command === 'freeze-targets' && args['--scenario']) fail('INVALID_ARGUMENT')
     const prepared = createProductionTargets(args['--baseline-root'], args['--output'], { development: command === 'development-synthetic', modelId: args['--model-id'], phase: args['--phase'] ?? (args['--scenario'] === 'r3-native-revision-diagnostic' ? args['--scenario'] : undefined),
       modelSources: args['--model-sources'] || args['--diagnostic-models'] ? read(real(args['--model-sources'] ?? args['--diagnostic-models'])) : undefined,
-      resumeSourcePath: args['--resume-source'], savedReviewContinuationPath: args['--saved-review-continuation'] })
+      resumeSourcePath: args['--resume-source'], savedReviewContinuationPath: args['--saved-review-continuation'], diagnosticInputPath: args['--diagnostic-input'] })
     if (command === 'freeze-targets') return prepared
     // 零模型开发路径只跑已登记的场景；默认仍是 early-budget，逐字保持原有行为。
     // 它永远只产出 development-only-unfrozen 收据，不构成冻结目标资格。
@@ -1496,8 +1520,8 @@ export function main(argv) {
     const observations = arms.map(arm => inspectTarget(targets[arm]))
     validatePair(targets, observations)
     const phase = command === 'dry-run' ? 'early-budget' : command
-    const selection = selectPhase(protocol, phase, args['--milestone'] || PHASE_SCENARIOS[phase]?.milestone || 'early')
-    const scenario = productionScenario(phase, selection.milestone, protocol.decisionRevision)
+    const selection = selectPhase(protocol, phase, args['--milestone'] || PHASE_SCENARIOS[phase]?.milestone || 'early', savedInputHash)
+    const scenario = productionScenario(phase, selection.milestone, protocol.decisionRevision, savedInputHash)
     if (!scenario) return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
     assertScenarioMatchesProtocol(selection, scenario, path.join(ROOT, protocol.fixturePath))
     let diagnosticInputPath
@@ -1534,7 +1558,7 @@ export function main(argv) {
       : savedNative ? path.join(CACHE, 'saved-native-synthetic-ledger.jsonl') : path.join(evidenceRoot, 'synthetic-ledger.jsonl'))
     const result = runProductionPhasePair(targets, { ...samplingOptions, phase, mode, milestone: selection.milestone,
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.candidateOnlyQualification?.order ?? protocol.order,
-      forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
+      forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone, savedInputHash),
       forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
       diagnosticInputPath, ...(savedNative || planningNative ? { caseId: args['--native-case'], nativeAction: args['--native-action'], approvalPath: args['--approval'], resumeSourcePath: args['--resume-source'], savedReviewContinuationPath: args['--saved-review-continuation'] } : {}),
       ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
