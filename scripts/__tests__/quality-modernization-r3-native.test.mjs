@@ -139,6 +139,63 @@ test.each([goalDeltaPolicy, glmPolicy])('goal delta condition $scenarioRevision 
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('goal delta historical tail permits the first GLM reserve without refunding either condition', () => {
+  const registered = protocol.historicalGoalDeltaFirstReviewBoundary
+  const previous = protocol.historicalFormalE59501f3Boundary, first = previous.reserveAttempts[0]
+  const old = registered.reserveAttempts[0]
+  const bindingFor = policy => ({ campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate',
+    ...registered.armBindings.candidate, ...currentProtocolBinding(),
+    phase: 'saved-native-review-diagnostic', milestone: 'diagnostic', caseId: policy.caseIds[0],
+    operation: policy.operations[0].id, invocationId: policy.sources[0].invocationId,
+    diagnosticInputHash: policy.diagnosticInputHash, diagnosticSourceHash: hash(policy.sources[0]),
+    evaluationPolicyHash: hash(policy.evaluationPolicy), stageModel: { profileId: policy.modelProfile.profileId,
+      configurationHash: policy.modelProfile.configurationHash },
+    actual: { attemptId: 'fresh', runId: 'fresh-run', rootActionId: 'fresh-root',
+      projectId: 'restored-project', epoch: 'restored-epoch', purpose: 'review-chapter' } })
+  const triplet = (item, binding) => [{ type: 'reserve', attemptId: item.attemptId, binding,
+    allocation: 'nonQualificationDiagnostic' }, { type: 'dispatch', attemptId: item.attemptId },
+  { type: item.terminal, attemptId: item.attemptId, finishReason: 'stop' }]
+  const prefix = triplet(first, { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate',
+    ...previous.armBindings.candidate, phase: 'early-budget', milestone: 'early',
+    caseId: '场景1/1', operation: '指定范围生成',
+    parityId: first.parityId, protocolRevision: previous.protocolRevision, protocolHash: previous.protocolHash,
+    invocationId: first.invocationId }).map(JSON.stringify).join('\n') + '\n'
+  const raw = prefix + triplet(old, { ...bindingFor(goalDeltaPolicy),
+    protocolRevision: registered.protocolRevision, protocolHash: registered.protocolHash,
+    invocationId: old.invocationId }).map(JSON.stringify).join('\n') + '\n'
+  const options = { campaignMode: 'synthetic', historicalFormalE59501f3Boundary: { ...previous,
+    fromEventCount: 0, eventCount: 3, rawBytesSha256: hash(prefix), reserveAttempts: [first] },
+  historicalGoalDeltaFirstReviewBoundary: { ...registered, fromEventCount: 3, eventCount: 6, rawBytesSha256: hash(raw) } }
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/goal-delta-history-'))
+  const file = path.join(dir, 'synthetic-ledger.jsonl')
+  const reserve = (id, binding, selected = options) => updateLedger(file, { type: 'reserve', attemptId: id, binding }, selected)
+  try {
+    fs.writeFileSync(file, raw)
+    const current = bindingFor(glmPolicy)
+    assert.throws(() => reserve('without-boundary', current, { campaignMode: 'synthetic',
+      historicalFormalE59501f3Boundary: options.historicalFormalE59501f3Boundary }), /PROTOCOL_DRIFT/)
+    assert.equal(fs.readFileSync(file, 'utf8'), raw)
+    assert.deepEqual(reserve('candidate:glm-first', current), { occupied: 3, cap: null })
+    const appended = fs.readFileSync(file, 'utf8')
+    assert.equal(appended.slice(0, raw.length), raw)
+    assert.equal(appended.trimEnd().split('\n').length, 7)
+    assert.equal(JSON.parse(appended.trimEnd().split('\n').at(-1)).binding.diagnosticInputHash, glmPolicy.diagnosticInputHash)
+    assert.throws(() => reserve('candidate:glm-duplicate', current), /SAVED_NATIVE_ATTEMPT_UNAVAILABLE/)
+    assert.throws(() => reserve('candidate:old-retry', bindingFor(goalDeltaPolicy)), /SAVED_NATIVE_ATTEMPT_UNAVAILABLE/)
+    assert.throws(() => reserve('candidate:stale', { ...current, protocolHash: registered.protocolHash }), /PROTOCOL_DRIFT/)
+    assert.equal(fs.readFileSync(file, 'utf8'), appended)
+    assert.throws(() => reserve('candidate:wrong-identity', current, { ...options,
+      historicalGoalDeltaFirstReviewBoundary: { ...options.historicalGoalDeltaFirstReviewBoundary,
+        reserveAttempts: [{ ...old, invocationId: glmPolicy.sources[0].invocationId }] } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.equal(fs.readFileSync(file, 'utf8'), appended)
+    const tampered = raw.replace(registered.protocolHash, 'f'.repeat(64))
+    fs.writeFileSync(file, tampered)
+    assert.throws(() => reserve('candidate:tampered', current), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    assert.equal(fs.readFileSync(file, 'utf8'), tampered)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('goal delta failure reports only later cases as not run', () => {
   const source = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8').replaceAll('\r\n', '\n')
   const start = source.indexOf('export function runProductionPhasePair(')

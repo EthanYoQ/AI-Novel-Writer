@@ -313,7 +313,8 @@ export function validatePhysicalLedger(file) {
   const savedPro = validateHistoricalSupersessionBoundary(raw, savedPostUi, protocol.historicalSavedProFirstReviewBoundary)
   const savedProClosure = validateHistoricalSupersessionBoundary(raw, savedPro, protocol.historicalSavedProClosureBoundary)
   const savedProControl = validateHistoricalSupersessionBoundary(raw, savedProClosure, protocol.historicalSavedProControlBoundary)
-  validateHistoricalSupersessionBoundary(raw, savedProControl, protocol.historicalFormalE59501f3Boundary)
+  const formal = validateHistoricalSupersessionBoundary(raw, savedProControl, protocol.historicalFormalE59501f3Boundary)
+  validateHistoricalSupersessionBoundary(raw, formal, protocol.historicalGoalDeltaFirstReviewBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -1028,6 +1029,9 @@ export function updateLedger(file, event, options = {}) {
       const formalBoundary = options.campaignMode === 'real' ? protocol.historicalFormalE59501f3Boundary : options.historicalFormalE59501f3Boundary
       const trustedFormalEvents = formalBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedSavedProControlEvents, formalBoundary) : trustedSavedProControlEvents
+      const goalDeltaBoundary = options.campaignMode === 'real' ? protocol.historicalGoalDeltaFirstReviewBoundary : options.historicalGoalDeltaFirstReviewBoundary
+      const trustedGoalDeltaEvents = goalDeltaBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedFormalEvents, goalDeltaBoundary) : trustedFormalEvents
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -1179,7 +1183,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedFormalEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedGoalDeltaEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

@@ -8157,5 +8157,28 @@
     "originalInputHash": "95d601c64fa36bab33d91a1739a2176fbdad323cdcdbff64279acba5b524d387",
     "originalCondition": "saved-goal-delta-review-only-v1",
     "historicalResult": "FAIL-unchanged"
+  },
+  "historicalGoalDeltaFirstReviewBoundary": {
+    "fromEventCount": 2037,
+    "eventCount": 2040,
+    "rawBytesSha256": "726cbfbb3d17f20789881c4a22d632c16d0ee1a033e2f528cab6229bcdaca5af",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "2277488cf8f82f29ffc137ab1f4fcbacadf787b1ebf6a20d68019510e7ddd89a",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "5294d5b8378cf14aadbc2590cd672b232edb0350",
+        "sourceHash": "44d3133455940d28203e94fbe92aabb90e10862616ff5e3077d8dbe1ad4a1322",
+        "driverHash": "4f9aa11b68ed31f7cc92fb3bb28797cd228c1ea7cba5e767ebdb2c3bb90d82a3",
+        "parityId": "57fd4fa6846e89274a14366f0bc07970e8f07678d9beecce57b17c08e5c6b292"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:b3992bee-b333-477f-b96b-bb64fb5cbf77",
+        "invocationId": "13724639-2137-4920-a68b-9d14a7148a49",
+        "terminal": "settle"
+      }
+    ],
+    "limits": "Historical original goal-delta attempt only. Preserve original FAIL, ledger bytes, consumed slot and budgets; no refund, replay or reclassification."
   }
 }
