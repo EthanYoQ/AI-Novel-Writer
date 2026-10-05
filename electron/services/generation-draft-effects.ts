@@ -118,11 +118,12 @@ export class GenerationDraftEffects {
       const composition = this.runs.readVisibleComposition(run.runId)
       if (!composition || !isDraftVisibleTextVersion(composition.algorithm) || composition.textHash !== request.expectedCompositionHash)
         throw new Error('GENERATION_DRAFT_COMPOSITION_REQUIRED')
+      const artifact = this.db.prepare('SELECT attempt_id FROM generation_artifacts WHERE artifact_id=?').pluck().get(composition.artifactIds.at(-1)) as string
+      if (this.runs.receipt(artifact).result?.finishReason !== 'stop') throw new Error('GENERATION_DRAFT_INCOMPLETE')
       const target = Number((run.binding.sourceManifest.authorInputs as { id: string; text: string }[] | undefined)?.find(item => item.id === 'draft:target-units')?.text)
       if (!Number.isSafeInteger(target) || target < 1) throw new Error('GENERATION_DRAFT_INCOMPLETE')
       const units = countDraftUnits(composition.text), range = draftTargetUnitRange(target)
       if (units < range.minimum) throw new Error('GENERATION_DRAFT_INCOMPLETE')
-      if (units > range.maximum) throw new Error('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
       if (request.batchId) {
         const progress = this.readBatch(request.batchId, request.handle.projectId)
         if (progress.rootHandle.rootActionId !== run.rootActionId || progress.nextChapterNumber !== request.chapterNumber
@@ -144,7 +145,6 @@ export class GenerationDraftEffects {
         wordCount: units, sourceDependencies: dependencies }, this.db)
       const version = this.db.prepare('SELECT version FROM drafts WHERE id=?').pluck().get(id) as number
       const receipt: GenerationDraftCommitReceipt = { success: true, id, version, contentHash: composition.textHash, content: composition.text }
-      const artifact = this.db.prepare('SELECT attempt_id FROM generation_artifacts WHERE artifact_id=?').pluck().get(composition.artifactIds.at(-1)) as string
       const row = this.attempts(run.runId).find(item => item.attempt_id === artifact)!
       const usage = JSON.parse(row.usage_receipt_json)
       const stored: StoredDraftCommit = { ...receipt, chapterNumber: request.chapterNumber,

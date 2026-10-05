@@ -361,11 +361,7 @@ function recoveryFailureCode(error: unknown, cancelled: boolean): string {
   return 'GENERATION_FAILED'
 }
 
-function draftLengthOutOfRangeError(): Error & { code: string } {
-  return Object.assign(new Error('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE'), {
-    code: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
-  })
-}
+type DraftCandidate = { text: string; finishReason: 'stop' | 'length' }
 
 function draftTooShortError(
   context: CommandExecuteParams['context'],
@@ -381,17 +377,13 @@ function draftTooShortError(
   ))
 }
 
-/**
- * 本章篇幅合同：门禁仍是 draftTargetUnitRange（±30%）；这里只向模型给出更紧的写作目标，
- * 并明确上限是会被退回的硬上限。初始生成、自动续写与压缩修订共用同一措辞。
- */
 function chapterLengthContractText(writingLanguage: WritingLanguage, targetUnits: number): string {
   const { minimum, maximum } = draftTargetUnitRange(targetUnits)
   const aimLow = Math.round(targetUnits * 0.85)
   return promptLanguageText(
     writingLanguage,
-    `【本章篇幅合同】\n目标 ${targetUnits} 字（按汉字计，不含标点）；请写到约 ${aimLow}–${targetUnits} 字。${maximum} 字是硬上限，超过即被退回；少于 ${minimum} 字同样会被退回。篇幅紧张时，压缩描写与过渡、减少场景数量，而不是删掉必需事件；本章蓝图中的全部作者任务和必需事件都要落实，不得删除、改写或截断，也不要为凑字数增加无关内容。`,
-    `[Chapter length contract]\nTarget: ${targetUnits} words (counted as words, excluding punctuation); aim for about ${aimLow}-${targetUnits} words. ${maximum} words is a hard ceiling: drafts beyond it are rejected, and drafts under ${minimum} words are rejected too. When space is tight, compress description and transitions and use fewer scenes rather than dropping required events; realize every author task and required event in the chapter blueprint without deleting, rewriting, or truncating them, and do not add unrelated content to fill space.`,
+    `【本章篇幅合同】\n目标 ${targetUnits} 字（按汉字计，不含标点）；请写到约 ${aimLow}–${targetUnits} 字。${maximum} 字是参考上限，超出时只提示并保留完整正文；少于 ${minimum} 字会被退回。篇幅紧张时，压缩描写与过渡、减少场景数量，而不是删掉必需事件；本章蓝图中的全部作者任务和必需事件都要落实，不得删除、改写或截断，也不要为凑字数增加无关内容。`,
+    `[Chapter length contract]\nTarget: ${targetUnits} words (counted as words, excluding punctuation); aim for about ${aimLow}-${targetUnits} words. ${maximum} words is a reference maximum; longer complete drafts are kept with a notice. Drafts under ${minimum} words are rejected. When space is tight, compress description and transitions and use fewer scenes rather than dropping required events; realize every author task and required event in the chapter blueprint without deleting, rewriting, or truncating them, and do not add unrelated content to fill space.`,
   )
 }
 
@@ -567,7 +559,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       this.assertNotCancelled(context)
       context.mainGenerationRunHandle = this.resumeHandle
       return this.publishSavedDraft({ context, callbacks, projectSession, expectedProjectPath,
-        cleanDraftText: saved.content, id: saved.id, nextVersion: saved.version, mergedGuidance: '' })
+        cleanDraftText: saved.content, id: saved.id, nextVersion: saved.version, mergedGuidance: '',
+        targetChars: Number(earlyRecovery.authorInputs.find(input => input.id === 'draft:target-units')?.text) })
     }
     if (defaultMain) context.generationModelId = workflowGenerationModelId(context) || useLLMStore.getState().defaultModelId || undefined
     const prepared = defaultMain && !this.resumeHandle
@@ -1099,13 +1092,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             reasoning: initialReasoning,
             onRecoverableCandidate: candidate => { recoverableDraftCandidate = candidate },
           })
-          recoverableDraftCandidate = completedDraft
+          recoverableDraftCandidate = completedDraft.text
           const lengthCheckedDraft = await this.condenseDraftIfNeeded({
             session: draftingSession,
             compositionVersion,
             acknowledge,
             signal: cancellation.signal,
-            draft: completedDraft,
+            candidate: completedDraft,
             alreadyAttempted: recovery?.attemptedPurposes.includes(DRAFT_CONDENSE_PURPOSE) === true,
             targetChars,
             callbacks,
@@ -1137,14 +1130,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         const units = countDraftUnits(cleanDraftText)
         const range = draftTargetUnitRange(targetChars)
         if (units < range.minimum) throw draftTooShortError(context, units, targetChars)
-        if (units > range.maximum) {
-          if (mainOwned) {
-            const handle = context.mainGenerationRunHandle
-            if (!handle) throw new Error('GENERATION_COMPOSITION_HANDLE_REQUIRED')
-            await ipc.invokeWithProjectSession(projectSession, 'generation:pause', handle)
-          }
-          throw draftLengthOutOfRangeError()
-        }
       }
       if (!alreadySaved && hasSubstantialPreviousChapterReuse(previousEnding, cleanDraftText, writingLanguage)) {
         throw new Error(uiText(
@@ -1229,7 +1214,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       this.assertNotCancelled(context)
       draftPersisted = true
       return this.publishSavedDraft({ context, callbacks, projectSession, expectedProjectPath,
-        cleanDraftText, id: createResult.id, nextVersion, mergedGuidance })
+        cleanDraftText, id: createResult.id, nextVersion, mergedGuidance, targetChars })
     } catch (error) {
       if (!mainOwned && !draftPersisted && recoverableDraftCandidate) {
         callbacks.replaceText?.(recoverableDraftCandidate)
@@ -1280,10 +1265,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
   }
 
   private async publishSavedDraft({ context, callbacks, projectSession, expectedProjectPath,
-    cleanDraftText, id, nextVersion, mergedGuidance }: {
+    cleanDraftText, id, nextVersion, mergedGuidance, targetChars }: {
     context: CommandExecuteParams['context']; callbacks: CommandExecuteParams['callbacks']
     projectSession: ProjectSessionContext; expectedProjectPath: string
-    cleanDraftText: string; id: number; nextVersion: number; mergedGuidance: string
+    cleanDraftText: string; id: number; nextVersion: number; mergedGuidance: string; targetChars: number
   }): Promise<string> {
     const uiText = (zh: string, en: string) => workflowUiText(context, zh, en)
     callbacks.replaceText?.(cleanDraftText)
@@ -1333,6 +1318,11 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       `草稿已自动入库保存为版本 v${nextVersion}（${countDraftUnits(cleanDraftText)} 字）`,
       `Draft saved automatically as version v${nextVersion} (${countDraftUnits(cleanDraftText)} units)`,
     ))
+    const units = countDraftUnits(cleanDraftText), { maximum } = draftTargetUnitRange(targetChars)
+    if (units > maximum) callbacks.log(uiText(
+      `第${this.chapterInfo.chapterNumber}章字数超过约定`,
+      `Chapter ${this.chapterInfo.chapterNumber} exceeds the agreed length.`,
+    ))
     return cleanDraftText
   }
 
@@ -1375,7 +1365,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     writingLanguage: WritingLanguage
     reasoning: boolean
     onRecoverableCandidate(candidate: string): void
-  }): Promise<string> {
+  }): Promise<DraftCandidate> {
     const uiText = (zhCNText: string, enUSText: string) => workflowUiText(
       params.context,
       zhCNText,
@@ -1565,7 +1555,7 @@ ${visibleTail}`,
 
     this.assertNotCancelled(params.context)
     if (lastFinishReason === 'length'
-      && countDraftUnits(draft) > draftTargetUnitRange(params.targetChars).maximum) return draft
+      && countDraftUnits(draft) > draftTargetUnitRange(params.targetChars).maximum) return { text: draft, finishReason: lastFinishReason }
     if (lastFinishReason !== 'stop') {
       const error = this.createIncompleteCompletionError(lastFinishReason)
       if (lastFailureCode === 'GENERATION_PROVIDER_FAILED' || lastFailureCode === 'NETWORK_ERROR')
@@ -1589,19 +1579,15 @@ ${visibleTail}`,
     const draftUnits = countDraftUnits(draft)
     if (draftUnits < lowerBound) throw draftTooShortError(params.context, draftUnits, params.targetChars)
 
-    return draft
+    return { text: draft, finishReason: lastFinishReason }
   }
 
-  /**
-   * 超出篇幅上限时，经同一生成会话做唯一一次压缩修订。压缩稿落入可接受范围且完整结束才采用；
-   * 否则（仍越界、未完整结束或请求失败）原样返回原稿，由保存前的篇幅门禁按原语义暂停并报错。
-   */
   private async condenseDraftIfNeeded(params: {
     session: GenerationSession
     compositionVersion: DraftVisibleTextVersion
     acknowledge: (outcome: GenerationOutcome, text: string) => Promise<void>
     signal: AbortSignal
-    draft: string
+    candidate: DraftCandidate
     alreadyAttempted: boolean
     targetChars: number
     callbacks: CommandExecuteParams['callbacks']
@@ -1617,11 +1603,17 @@ ${visibleTail}`,
   }): Promise<string> {
     const uiText = (zhCNText: string, enUSText: string) => workflowUiText(params.context, zhCNText, enUSText)
     const range = draftTargetUnitRange(params.targetChars)
-    const originalUnits = countDraftUnits(params.draft)
-    if (originalUnits <= range.maximum || params.alreadyAttempted || params.context.cancelled) return params.draft
+    const original = () => {
+      this.assertNotCancelled(params.context)
+      if (params.candidate.finishReason !== 'stop') throw this.createIncompleteCompletionError(params.candidate.finishReason)
+      params.callbacks.replaceText?.(params.candidate.text)
+      return params.candidate.text
+    }
+    const originalUnits = countDraftUnits(params.candidate.text)
+    if (originalUnits <= range.maximum || params.alreadyAttempted) return original()
     params.callbacks.log(uiText(
-      `  正文约 ${originalUnits} 字，超出可接受上限 ${range.maximum} 字，执行唯一一次压缩修订`,
-      `  Draft is about ${originalUnits} units, above the acceptable maximum of ${range.maximum}; running the single condense revision`,
+      `  正文约 ${originalUnits} 字，超出参考上限 ${range.maximum} 字，执行唯一一次压缩修订`,
+      `  Draft is about ${originalUnits} units, above the reference maximum of ${range.maximum}; running the single condense revision`,
     ))
     // 顺序：任务与硬性要求 → 作者资料块 → 篇幅合同 → 待压缩正文；固定执行规则在 system。
     const authorMaterial = draftAuthorMaterialBlock(params.writingLanguage, params)
@@ -1636,10 +1628,10 @@ ${visibleTail}`,
       params.writingLanguage,
       `请把下面的本章正文压缩修订到可接受篇幅内，输出修订后的完整正文。
 
-【篇幅现状】待压缩正文当前约 ${originalUnits} 字，超出上限。请压缩到约 ${aimUnits} 字（绝对不得超过 ${ceilUnits} 字），即删去约 ${cutUnits} 字，约占全文 ${cutPercent}%。做法：逐段压缩，每段都删减描写、重复动作和心理，不要只删某一段。
+【篇幅现状】待压缩正文当前约 ${originalUnits} 字，超出上限。请压缩到约 ${aimUnits} 字（参考上限 ${ceilUnits} 字），即删去约 ${cutUnits} 字，约占全文 ${cutPercent}%。做法：逐段压缩，每段都删减描写、重复动作和心理，不要只删某一段。
 
 【硬性要求】
-- 修订后正文须在 ${range.minimum}–${range.maximum} 字之间，按下方篇幅合同写到约 ${Math.round(params.targetChars * 0.85)}–${params.targetChars} 字。
+- 修订后正文建议在 ${range.minimum}–${range.maximum} 字之间；完整事件和作者事实优先，仍超长时保留完整正文。按下方篇幅合同写到约 ${Math.round(params.targetChars * 0.85)}–${params.targetChars} 字。
 - 保留本章蓝图中的全部必需事件、作者任务和情节事实，保留人物身份与关系，保留本章结尾的收束与钩子。
 - 只通过删减冗余描写、重复动作、重复心理和啰嗦对话来缩短；不得新增情节、人物、设定或事实，不得改变事件顺序与因果。
 - 只输出修订后的完整正文；不要输出标题、解释、总结、Markdown、思考过程或“点我继续”。
@@ -1649,13 +1641,13 @@ ${authorMaterial}
 ${lengthContract}
 
 【待压缩正文】
-${params.draft}`,
+${params.candidate.text}`,
       `Condense the chapter manuscript below into the acceptable length and output the complete revised manuscript.
 
-[Current length] The manuscript to condense is about ${originalUnits} words, above the ceiling. Condense it to about ${aimUnits} words (never more than ${ceilUnits} words), which means cutting about ${cutUnits} words, roughly ${cutPercent}% of the text. Method: condense paragraph by paragraph, trimming description, repeated actions, and repeated introspection in every paragraph rather than cutting only one part.
+[Current length] The manuscript to condense is about ${originalUnits} words, above the ceiling. Condense it to about ${aimUnits} words (reference maximum ${ceilUnits} words), which means cutting about ${cutUnits} words, roughly ${cutPercent}% of the text. Method: condense paragraph by paragraph, trimming description, repeated actions, and repeated introspection in every paragraph rather than cutting only one part.
 
 [Requirements]
-- The revised manuscript must be between ${range.minimum} and ${range.maximum} words; following the length contract below, aim for about ${Math.round(params.targetChars * 0.85)}-${params.targetChars} words.
+- Aim for between ${range.minimum} and ${range.maximum} words; complete events and author facts take priority, and a longer complete manuscript is retained. Following the length contract below, aim for about ${Math.round(params.targetChars * 0.85)}-${params.targetChars} words.
 - Keep every required event, author task, and plot fact from the chapter blueprint, keep character identities and relationships, and keep the chapter ending and hook.
 - Shorten only by cutting redundant description, repeated actions, repeated introspection, and wordy dialogue; do not add plot, characters, setting, or facts, and do not change event order or causality.
 - Output only the complete revised manuscript; do not output a title, explanation, summary, Markdown, reasoning, or an interface continuation prompt.
@@ -1665,11 +1657,11 @@ ${authorMaterial}
 ${lengthContract}
 
 [Manuscript to condense]
-${params.draft}`,
+${params.candidate.text}`,
     )
-    let condensed: string
+    let outcome: GenerationOutcome
     try {
-      const outcome = await params.session.complete({
+      outcome = await params.session.complete({
         purpose: DRAFT_CONDENSE_PURPOSE,
         reasoningStage: 'drafting',
         output: 'visible-text',
@@ -1679,29 +1671,28 @@ ${params.draft}`,
           { role: 'user', content: condensePrompt },
         ],
       }, { signal: params.signal })
-      logDraftAttempt(params.callbacks, params.context, { zhCN: '压缩修订', enUS: 'Condense revision' }, outcome.receipt)
-      condensed = sanitizeDraftText(this.stripThinkingTags(outcome.content), params.compositionVersion)
-      const units = countDraftUnits(condensed)
-      const accepted = outcome.finishReason === 'stop' && units >= range.minimum && units <= range.maximum
-      params.callbacks.log(uiText(
-        `  压缩修订响应结束：finishReason=${outcome.finishReason} visibleUnits=${units} accepted=${accepted}`,
-        `  Condense revision response ended: finishReason=${outcome.finishReason} visibleUnits=${units} accepted=${accepted}`,
-      ))
-      if (!accepted) {
-        params.callbacks.replaceText?.(params.draft)
-        return params.draft
-      }
-      this.assertNotCancelled(params.context)
-      await params.acknowledge(outcome, condensed)
     } catch (error) {
       if (params.context.cancelled || params.signal.aborted) throw error
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+      if (code !== 'GENERATION_PROVIDER_FAILED' && code !== 'NETWORK_ERROR') throw error
       params.callbacks.log(uiText(
         `  压缩修订未完成，保留原稿：${error instanceof Error ? error.message : String(error)}`,
         `  Condense revision did not complete; keeping the original draft: ${error instanceof Error ? error.message : String(error)}`,
       ))
-      params.callbacks.replaceText?.(params.draft)
-      return params.draft
+      return original()
     }
+    this.assertNotCancelled(params.context)
+    if (outcome.finishReason === 'cancelled') throw this.createIncompleteCompletionError('cancelled')
+    logDraftAttempt(params.callbacks, params.context, { zhCN: '压缩修订', enUS: 'Condense revision' }, outcome.receipt)
+    const condensed = sanitizeDraftText(this.stripThinkingTags(outcome.content), params.compositionVersion)
+    const units = countDraftUnits(condensed)
+    const accepted = outcome.finishReason === 'stop' && units >= range.minimum && units < originalUnits
+    params.callbacks.log(uiText(
+      `  压缩修订响应结束：finishReason=${outcome.finishReason} visibleUnits=${units} accepted=${accepted}`,
+      `  Condense revision response ended: finishReason=${outcome.finishReason} visibleUnits=${units} accepted=${accepted}`,
+    ))
+    if (!accepted) return original()
+    await params.acknowledge(outcome, condensed)
     params.callbacks.replaceText?.(condensed)
     return condensed
   }

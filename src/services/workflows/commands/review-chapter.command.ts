@@ -87,7 +87,7 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
         '[Pass evidence] Briefly state the actual subject, source checked and comparison result for a pass; do not expand the historical timing of each problem-free detail. Never copy the format example or substitute unsupported stock conclusions for checking.'),
       buildChapterGoalReviewPrompt(frozen.frozenGoals, language),
     ].join('\n\n')
-    const reviewPrompt = frozen.recheck ? [
+    const baseReviewPrompt = frozen.recheck ? [
       promptLanguageText(language,
         '【一次性定向复核】只复核下列 finding，不得新增、删除、合并或改写 findingId/targetId。',
         '[One-time targeted recheck] Recheck only the findings below. Do not add, remove, merge, or rewrite findingId/targetId.'),
@@ -109,6 +109,10 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
         '【硬性 JSON 合同】只输出 {"summary":"...","items":[...]}。items 必须对上述每个 finding 恰好一项，字段仅为 findingId、targetId、resolved、evidenceQuote、reason。evidenceQuote 必须逐字来自合并后正文且只能出现一次；无法确认时仍返回该 finding，并令 resolved=false，说明证据不足。不得输出 Markdown、解释或思考过程。',
         '[Strict JSON contract] Output only {"summary":"...","items":[...]}. Include exactly one item for every finding above, with only findingId, targetId, resolved, evidenceQuote, and reason. evidenceQuote must be verbatim from the merged draft and occur exactly once. If uncertain, still return the finding with resolved=false and explain the lack of evidence. No Markdown, explanation, or reasoning.'),
     ].join('\n\n') : ordinaryReviewPrompt
+    const lengthGuidance = promptLanguageText(language,
+      '【篇幅提示】单纯超出约定字数只作非阻断提示，不属于必须修复的内容缺陷，不得仅因此要求修稿或记为 error/warning。完整性和作者事实优先；真实冗余复述、事实冲突和缺失事件仍须按原规则举证并报告。',
+      '[Length guidance] Exceeding the agreed length alone is a nonblocking notice, not a mandatory content defect. Do not demand revision or mark error/warning solely for length. Completeness and author facts take priority; still provide evidence and report genuine redundancy, factual conflicts and missing events under the existing rules.')
+    const reviewPrompt = `${baseReviewPrompt}\n\n${lengthGuidance}`
     await this.bindMaterialDecision(params, admission.decision, reviewPrompt)
     params.callbacks.log(text('调用 AI 审查员对本章进行多维度扫描...', 'Running the AI continuity review...'))
     const attempts = this.recovery?.attemptedPurposes ?? []

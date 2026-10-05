@@ -2093,18 +2093,26 @@ describe('main draft persistence and batch lineage', () => {
     expect(() => reopened.readVisibleComposition(generated.run.handle)).toThrow('GENERATION_COMPOSITION_INTEGRITY_FAILED')
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
-  it('keeps an oversized composition reviewable without creating a draft', async () => {
+  it('saves a complete oversized composition and replays the same receipt', async () => {
     const f = drafting(draftText.repeat(2)), generated = await generate(f, { ...f.begin, authorInputs })
-    expect(() => f.owner.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
-    expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText.repeat(2))
-    expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
-    expect(f.dispatch).toHaveBeenCalledTimes(1)
-    expect(f.owner.pause(generated.run.handle).status).toBe('paused')
+    const saved = f.owner.commitDraft(generated.request)
+    expect(saved.content).toBe(draftText.repeat(2))
     const reopened = f.reopen()
-    const resumed = await reopened.resume(generated.run.handle)
-    expect(resumed.ledger?.physicalRequests).toBe(1)
-    expect(reopened.readVisibleComposition(resumed.handle)?.text).toBe(draftText.repeat(2))
+    expect(reopened.commitDraft(generated.request)).toEqual(saved)
+    expect(reopened.readContext(generated.run.handle).draftSave).toEqual({ kind: 'current', receipt: saved })
+    expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
     expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a selected LENGTH composition even when its count is in range', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: draftText })
+      return { finishReason: 'length', usage: null }
+    })
+    const f = fixture(dispatch)
+    const generated = await generate({ ...f, fixture: f, dispatch }, { ...f.begin, authorInputs })
+    expect(() => f.owner.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_INCOMPLETE')
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
   })
   it('composes the single condense revision as a replacement of the oversized draft and commits it', async () => {
     const texts = [draftText.repeat(2), draftText]
@@ -2114,7 +2122,6 @@ describe('main draft persistence and batch lineage', () => {
     })
     const f = fixture(dispatch)
     const generated = await generate({ ...f, fixture: f, dispatch }, { ...f.begin, authorInputs })
-    expect(() => f.owner.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
     const condense = await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense',
       task: { ...task, purpose: 'chapter-draft-condense' } })
     const condensedId = condense.run.artifacts.at(-1)!.artifactId
@@ -2161,7 +2168,7 @@ describe('main draft persistence and batch lineage', () => {
     [1399, 'GENERATION_DRAFT_INCOMPLETE'],
     [1400, null],
     [2600, null],
-    [2601, 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE'],
+    [2601, null],
   ] as const)('enforces the exact main-owned 2000-unit boundary at %i', async (units, error) => {
     const text = '正'.repeat(units), f = drafting(text)
     const generated = await generate(f, { ...f.begin, authorInputs: [{ id: 'draft:target-units', text: '2000' }] })
@@ -2228,17 +2235,46 @@ describe('main draft persistence and batch lineage', () => {
     expect(resumed.handle.rootActionId).toBe(batch.rootHandle.rootActionId)
     expect(resumed.ledger?.physicalRequests).toBe(1)
   })
-  it('does not advance a batch after an oversized composition is refused', async () => {
-    const f = drafting(draftText.repeat(2))
+  it('saves all 1350 units and advances the batch after the single condense remains over target', async () => {
+    const initial = `${'长'.repeat(1400)}。`, condensed = `${'缩'.repeat(1350)}。`
+    const texts = [initial, condensed]
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: texts.shift()! })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch), inputs = [{ id: 'draft:target-units', text: '1000' }]
     f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
-    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
-      uiActionNonce: 'oversized-batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
-    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
-    expect(() => f.owner.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
-    expect(f.owner.readBatch(batch.batchId)).toMatchObject({ nextChapterNumber: 1, completedChapters: [] })
-    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
-    expect(f.dispatch).toHaveBeenCalledTimes(1)
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 1000,
+      uiActionNonce: 'oversized-batch', modelId: f.model.id, authorInputs: inputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate({ ...f, fixture: f, dispatch }, { ...f.begin, authorInputs: inputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const condense = await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense', task: { ...task, purpose: 'chapter-draft-condense' } })
+    f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condense.run.artifacts.at(-1)!.artifactId], textHash(condensed), DRAFT_VISIBLE_TEXT_VERSION)
+    const request = { ...generated.request, expectedCompositionHash: textHash(condensed) }
+    const saved = f.owner.commitDraft(request)
+    expect(saved).toMatchObject({ content: condensed, contentHash: textHash(condensed) })
+    expect(f.db.prepare('SELECT c.body,d.word_count FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(saved.id)).toEqual({ body: condensed, word_count: 1350 })
+    const reopened = f.reopen()
+    expect(reopened.commitDraft(request)).toEqual(saved)
+    expect(reopened.readBatch(batch.batchId)).toMatchObject({ nextChapterNumber: 2, completedChapters: [{ draftId: saved.id, contentHash: textHash(condensed) }] })
+    expect(reopened.readContext(generated.run.handle).attemptedPurposes).toEqual(['chapter-draft', 'chapter-draft-condense'])
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(dispatch).toHaveBeenCalledTimes(2)
   })
+  it('uses the selected STOP receipt even when the latest condense attempt fails', async () => {
+    const initial = `${'长'.repeat(1400)}。`
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()
+      .mockImplementationOnce(async (_request, options) => {
+        options.onVisible({ kind: 'delta', text: initial })
+        return { finishReason: 'stop', usage: null }
+      }).mockRejectedValueOnce(new Error('synthetic provider failure'))
+    const f = fixture(dispatch)
+    const generated = await generate({ ...f, fixture: f, dispatch }, { ...f.begin, authorInputs: [{ id: 'draft:target-units', text: '1000' }] })
+    await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense', task: { ...task, purpose: 'chapter-draft-condense' } })
+    expect(f.owner.commitDraft(generated.request).content).toBe(initial)
+    expect(f.owner.readContext(generated.run.handle).attemptedPurposes).toEqual(['chapter-draft', 'chapter-draft-condense'])
+    expect(dispatch).toHaveBeenCalledTimes(2)
+  })
+
   it.each(['auto_finalize', 'draft_review'] as const)('enforces the shared %s batch chapter limit in main before any budget', mode => {
     const f = drafting()
     const intent = (endChapter: number, uiActionNonce: string) => ({ mode, range: { startChapter: 3, endChapter }, targetUnits: 20,

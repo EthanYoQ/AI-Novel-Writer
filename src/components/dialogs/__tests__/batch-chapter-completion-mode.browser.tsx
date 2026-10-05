@@ -226,6 +226,7 @@ function installIpc() {
   const views = new Map<string, MainGenerationRunView>()
   const selections = new Map<string, BeginGenerationRequest>()
   const compositions = new Map<string, VisibleCompositionReceipt>()
+  const purposes = new Map<string, string>()
   const listeners = new Map<string, Set<(data: unknown) => void>>()
   const emit = (channel: string, data: unknown) => {
     for (const listener of listeners.get(channel) ?? []) listener(data)
@@ -279,7 +280,8 @@ function installIpc() {
       const attempt = ++generationAttempt
       const artifact = { ...view.handle, artifactId: `${view.handle.runId}:artifact:${attempt}`, attemptId: `${view.handle.runId}:attempt:${attempt}`,
         revision: 1, durableRevision: 1, text, textHash: await hashAuthorText(text), status: 'completed' as const }
-      view.artifacts = [artifact]
+      view.artifacts = [...view.artifacts, artifact]
+      purposes.set(artifact.artifactId, request.task.purpose)
       emit('generation:snapshot', artifact)
       const outcome: GenerationOutcome = { status: 'completed', content: text, finishReason: 'stop', receipt: {
         model: { id: 'grok-browser', configurationRevision: 'a'.repeat(64), endpointFingerprint: 'b'.repeat(64) },
@@ -297,7 +299,10 @@ function installIpc() {
       const view = views.get(handle.runId)!
       const algorithm = args[3]
       if (!isDraftVisibleTextVersion(algorithm)) throw new Error('GENERATION_COMPOSITION_ALGORITHM_INVALID')
-      const text = ids.reduce((text, id) => composeDraftVisibleContinuation(text, view.artifacts.find(item => item.artifactId === id)!.text, algorithm), '')
+      const text = ids.reduce((text, id) => {
+        const artifact = view.artifacts.find(item => item.artifactId === id)!
+        return purposes.get(id) === 'chapter-draft-condense' ? artifact.text : composeDraftVisibleContinuation(text, artifact.text, algorithm)
+      }, '')
       const receipt: VisibleCompositionReceipt = { algorithm, text, textHash: await hashAuthorText(text),
         artifactIds: ids, sources: view.artifacts.map(item => ({ artifactId: item.artifactId, revision: item.revision, textHash: item.textHash })) }
       expect(receipt.textHash).toBe(args[2]); compositions.set(handle.runId, receipt); return receipt
@@ -757,6 +762,56 @@ describe('batch chapter completion mode browser flow', () => {
       || channel === 'db:character-roster-commit'
       || String(channel).startsWith('db:post-process-')
     ))).toBe(false)
+  })
+
+  it('shows one chapter 5 overlength notice and completes chapters 6 through 10 after saving the full 1350-unit revision', async () => {
+    await page.viewport(1440, 900)
+    const chapterTexts = Array.from({ length: 10 }, (_, index) => `${String.fromCharCode(0x4e00 + index).repeat(1000)}。`)
+    const condensed = `${'缩'.repeat(1350)}。`
+    draftCompletions = [...chapterTexts.slice(0, 4), `${'长'.repeat(1400)}。`, condensed, ...chapterTexts.slice(5)]
+    const current = useProjectStore.getState().currentProject!
+    useProjectStore.setState({ currentProject: { ...current, novelConfig: { ...current.novelConfig, totalChapters: 10, wordsPerChapter: 1000 } } })
+    deferDraftCompletion = true
+    initProjectService()
+    await act(async () => root?.render(<VisibleBatchShell />))
+    await act(async () => page.getByRole('spinbutton', { name: '本次章节数' }).fill('10'))
+    await act(async () => page.getByRole('button', { name: '启动批量创作' }).click())
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await vi.waitFor(() => expect(pendingDraftCompletions).toHaveLength(1))
+      await act(async () => pendingDraftCompletions.shift()?.())
+    }
+    await vi.waitFor(() => expect(pendingDraftCompletions).toHaveLength(1))
+    expect(draftRecord).toMatchObject({ chapterNumber: 5, content: condensed, wordCount: 1350 })
+    await act(async () => useLayoutStore.setState({ bottomTab: 'log' }))
+    await expect.element(page.getByText('第5章字数超过约定', { exact: true })).toBeVisible()
+    await page.screenshot({ path: '../../../../.runtime/.cache/overlength-implementation/chapter5-warning.png' })
+    for (let chapter = 6; chapter <= 10; chapter++) {
+      await vi.waitFor(() => expect(pendingDraftCompletions).toHaveLength(1))
+      await act(async () => pendingDraftCompletions.shift()?.())
+    }
+    await vi.waitFor(() => expect(useWorkflowStore.getState().history[0]?.status).toBe('completed'))
+    const run = useWorkflowStore.getState().history[0]!
+    expect(run.steps).toHaveLength(10)
+    expect(run.steps.every(step => step.status === 'completed')).toBe(true)
+    expect(run.steps.flatMap(step => step.logs).filter(log => log.includes('字数超过约定'))).toEqual([expect.stringContaining('第5章字数超过约定')])
+    const requests = invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')
+      .map(([, request]) => request as { task: { purpose: string; messages: Array<{ content: string }> } })
+    expect(requests.filter(request => request.task.purpose === 'chapter-draft-condense')).toHaveLength(1)
+    const drafts = requests.filter(request => request.task.purpose === 'chapter-draft')
+    expect(drafts).toHaveLength(10)
+    const preparationIndex = invoke.mock.calls.findIndex(([channel, request]) => channel === 'generation:prepare-draft-context'
+      && (request as { chapterNumber: number }).chapterNumber === 6)
+    const preparation = await invoke.mock.results[preparationIndex].value
+    expect(preparation.selectedDrafts).toEqual([expect.objectContaining({ content: condensed, contentHash: await hashAuthorText(condensed) })])
+    expect(drafts[5].task.messages.map(message => message.content).join('\n')).toContain(condensed.slice(-500))
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'generation:commit-draft')).toHaveLength(10)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
+    expect(draftRecord?.chapterNumber).toBe(10)
+    await expect.element(page.getByText('第5章字数超过约定', { exact: true })).toBeVisible()
+    page.getByText('第5章字数超过约定', { exact: true }).element().scrollIntoView({ block: 'center' })
+    await page.screenshot({ path: '../../../../.runtime/.cache/overlength-implementation/ten-chapters-completed-warning.png' })
+    await page.screenshot({ element: page.getByText('第5章字数超过约定', { exact: true }),
+      path: '../../../../.runtime/.cache/overlength-implementation/retained-notice.png' })
   })
 
   it('creates an editable draft in the project tree without finalization side effects', async () => {

@@ -16,6 +16,7 @@ import type { GenerationBatchProgress, BeginGenerationBatchRequest } from '../..
 
 const doubles = vi.hoisted(() => ({
   batch: null as GenerationBatchProgress | null,
+  draftContents: new Map<number, string>(),
   guardChapterWriting: vi.fn(),
   invokeWithProjectSession: vi.fn(),
   generateDraftExecute: vi.fn(),
@@ -44,7 +45,7 @@ vi.mock('../../ipc-client', () => ({
       if (channel === 'generation:read-batch' || channel === 'generation:confirm-batch-finalization') return structuredClone(doubles.batch)
       if (channel === 'db:draft-get-full') {
         const item = doubles.batch?.completedChapters.find(item => item.draftId === args[0])
-        if (item) return { ...item, id: item.draftId, content: 'generated draft' }
+        if (item) return { ...item, id: item.draftId, content: doubles.draftContents.get(item.draftId) ?? 'generated draft' }
       }
       return doubles.invokeWithProjectSession(context, channel, ...args)
     },
@@ -67,6 +68,7 @@ vi.mock('../commands/generate-draft.command', () => ({
     execute = async (params: { context: WorkflowContext }) => {
       const result = await doubles.generateDraftExecute(params)
       const batch = doubles.batch!
+      doubles.draftContents.set(Number(params.context.data.draftId), result)
       batch.completedChapters.push({ chapterNumber: this.chapterNumber, draftId: Number(params.context.data.draftId),
         version: Number(params.context.data.draftVersion), contentHash: createHash('sha256').update(result).digest('hex'), sourceRunHandle: batch.rootHandle })
       if (batch.mode === 'draft_review') batch.nextChapterNumber = this.chapterNumber === batch.range.endChapter ? null : this.chapterNumber + 1
@@ -139,6 +141,7 @@ function resetWorkflowState() {
 
 beforeEach(() => {
   doubles.batch = null
+  doubles.draftContents.clear()
   vi.clearAllMocks()
   doubles.finalizeChapterParams.length = 0
   doubles.generateDraftChapterInfos.length = 0
@@ -382,6 +385,12 @@ describe('batch chapter workflow completion mode', () => {
   })
 
   it('continues later review drafts without treating an earlier batch draft as finalized', async () => {
+    const fullCandidate = `${'稿'.repeat(1350)}。`
+    const generate = doubles.generateDraftExecute.getMockImplementation()!
+    doubles.generateDraftExecute.mockImplementationOnce(async params => {
+      await generate(params)
+      return fullCandidate
+    })
     doubles.guardChapterWriting.mockImplementation(async (chapterNumber?: number) => (
       chapterNumber === 2
         ? { ok: false, message: 'Chapter 1 is not finalized' }
@@ -408,7 +417,7 @@ describe('batch chapter workflow completion mode', () => {
           chapterNumber: 1,
           draftId: 101,
           version: 1,
-          content: 'generated draft',
+          content: fullCandidate,
           required: true,
         }],
       },

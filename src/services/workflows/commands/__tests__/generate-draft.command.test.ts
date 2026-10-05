@@ -670,14 +670,14 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:draft-next-version' || channel === 'db:recovery-candidate-record')).toBe(false)
   })
 
-  it('composes and commits the single in-range condense revision through the main-owned run', async () => {
+  it.each([false, true])('composes the overlength replacement through main and propagates ACK errors: %s', async ackFails => {
     const legacy = fakeOutcomes()
-    const f = setup({ runtime: legacy, wordsTarget: 2000, wordsPerChapter: 2000, mainDefault: true })
+    const f = setup({ runtime: legacy, wordsTarget: 1000, wordsPerChapter: 1000, mainDefault: true })
     f.context.generationModelId = '合成模型'
     const handle: MainGenerationRunHandle = { projectId: f.context.projectSession.projectId,
       epoch: f.context.projectSession.leaseId, rootActionId: '压缩根', runId: '压缩正文' }
-    const draft = `${'长'.repeat(2700)}。`
-    const condensed = `${'缩'.repeat(2000)}。`
+    const draft = `${'长'.repeat(1400)}。`
+    const condensed = `${'缩'.repeat(1350)}。`
     const hash = (value: string) => createHash('sha256').update(value).digest('hex')
     const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
       budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
@@ -695,6 +695,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       }
       if (channel === 'generation:compose-visible') {
         const ids = args[1] as string[]
+        if (ids.length === 2 && ackFails) throw new Error('GENERATION_COMPOSITION_RECEIPT_MISMATCH')
         const text = ids.length === 1 ? draft : condensed
         expect(args[2]).toBe(hash(text))
         return { algorithm: DRAFT_VISIBLE_TEXT_VERSION, artifactIds: ids, text, textHash: hash(text), sources: [] }
@@ -707,7 +708,11 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       return original(channel, ...args)
     })
 
-    await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).resolves.toBe(condensed)
+    const result = f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+    if (ackFails) {
+      await expect(result).rejects.toThrow('GENERATION_COMPOSITION_RECEIPT_MISMATCH')
+      expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
+    } else await expect(result).resolves.toBe(condensed)
 
     expect(legacy.createRuntime).not.toHaveBeenCalled()
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:compose-visible').map(([, , ids]) => ids))
@@ -716,7 +721,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:recovery-candidate-record')).toBe(false)
   })
 
-  it('pauses an over-limit main-owned replay and reports the length code first', async () => {
+  it('still rejects previous-chapter replay in an over-limit main-owned draft', async () => {
     const legacy = fakeOutcomes()
     const replayedEnding = '潮'.repeat(500)
     const f = setup({
@@ -778,7 +783,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     })
 
     await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks }))
-      .rejects.toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
+      .rejects.toThrow('大段重演')
 
     expect(legacy.createRuntime).not.toHaveBeenCalled()
     const executed = f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')
@@ -786,7 +791,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(executed.map(([, request]) => (request as { task: GenerationTask }).task.purpose))
       .toEqual(['chapter-draft-short-outline', 'chapter-draft', 'chapter-draft-condense'])
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:compose-visible')).toHaveLength(1)
-    expect(f.invoke).toHaveBeenCalledWith('generation:pause', handle, f.context.projectSession)
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:recovery-candidate-record')).toBe(false)
     expect(f.callbacks.replaceText).toHaveBeenLastCalledWith(text)
@@ -798,7 +803,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const handle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: state === 'saved-ack-lost' ? '已关闭旧会话' : 'lease-generation-runtime', rootActionId: '原根', runId: '原正文' }
     const f = setup({ runtime: fakeOutcomes(), mainDefault: true, resumeHandle: handle, wordsTarget: 900 })
     f.context.generationModelId = '合成模型'
-    const seed = '潮'.repeat(finishReason === 'stop' ? 900 : 500)
+    const seed = '潮'.repeat(state === 'saved-ack-lost' ? 1350 : finishReason === 'stop' ? 900 : 500)
     const addition = (state === 'legacy-length' ? `二十年后。\n\n${seed}\n\n` : '') + '灯'.repeat(500) + '。'
     const expected = finishReason === 'stop' ? seed : composeDraftVisibleContinuation(seed, addition, algorithm)
     const hash = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -972,16 +977,16 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         expect(args[3]).toBe(algorithm)
         return { algorithm, artifactIds: ['原片', '压缩片'], text: condensed, textHash: hash(condensed), sources: [] }
       }
-      if (channel === 'generation:commit-draft') return { success: true, id: 19, version: 1, content: condensed, contentHash: hash(condensed) }
+      if (channel === 'generation:commit-draft') return { success: true, id: 19, version: 1, content: condenses ? condensed : seed, contentHash: hash(condenses ? condensed : seed) }
       if (channel === 'generation:pause') return { ...view, status: 'paused' }
       return original(channel, ...args)
     })
     const result = f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
     if (condenses) await expect(result).resolves.toBe(condensed)
-    else await expect(result).rejects.toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
+    else await expect(result).resolves.toBe(seed)
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(condenses ? 1 : 0)
-    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(!condenses)
-    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(condenses)
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(true)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:begin' || channel === 'db:draft-create')).toBe(false)
   })
 
@@ -1263,7 +1268,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   it.each([
     { target: 900, aimLow: 765, lowerBound: 630, upperBound: 1170 },
     { target: 1400, aimLow: 1190, lowerBound: 979, upperBound: 1820 },
-  ])('sends the dynamic $target-unit length contract with a tighter aim and a hard ceiling in the final provider request', async ({
+  ])('sends the dynamic $target-unit length contract with a tighter aim and a reference maximum in the final provider request', async ({
     target,
     aimLow,
     lowerBound,
@@ -1286,7 +1291,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(user).toContain('【本章篇幅合同】')
-    expect(user).toContain(`【本章篇幅合同】\n目标 ${target} 字（按汉字计，不含标点）；请写到约 ${aimLow}–${target} 字。${upperBound} 字是硬上限，超过即被退回；少于 ${lowerBound} 字同样会被退回。`)
+    expect(user).toContain(`【本章篇幅合同】\n目标 ${target} 字（按汉字计，不含标点）；请写到约 ${aimLow}–${target} 字。${upperBound} 字是参考上限，超出时只提示并保留完整正文；少于 ${lowerBound} 字会被退回。`)
     expect(user).toContain('篇幅紧张时，压缩描写与过渡、减少场景数量，而不是删掉必需事件')
     expect(user).not.toContain('可接受范围')
     expect(user).toContain(requiredEvent)
@@ -1322,11 +1327,11 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(lengthContractIndex).toBeGreaterThan(authorTaskIndex)
     expect(user).toContain('【后续计划边界（只约束当前章，不是当前章任务）】')
     expect(user).toContain(futurePlan)
-    expect(user).toContain('目标 900 字（按汉字计，不含标点）；请写到约 765–900 字。1170 字是硬上限')
+    expect(user).toContain('目标 900 字（按汉字计，不含标点）；请写到约 765–900 字。1170 字是参考上限')
     expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
-  it('sends the English length contract with word counting, a tighter aim, and a hard ceiling', async () => {
+  it('sends the English length contract with word counting, a tighter aim, and a reference maximum', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
       observedTask = task
@@ -1337,7 +1342,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(user).toContain('[Chapter length contract]\nTarget: 900 words (counted as words, excluding punctuation); aim for about 765-900 words. 1170 words is a hard ceiling: drafts beyond it are rejected, and drafts under 630 words are rejected too.')
+    expect(user).toContain('[Chapter length contract]\nTarget: 900 words (counted as words, excluding punctuation); aim for about 765-900 words. 1170 words is a reference maximum; longer complete drafts are kept with a notice. Drafts under 630 words are rejected.')
     expect(user).toContain('compress description and transitions and use fewer scenes rather than dropping required events')
     expect(user).not.toContain('acceptable range')
   })
@@ -3470,7 +3475,7 @@ ${headingPrefix}第3章：潮门
 
   it('stores a 2601-unit length result as a recovery candidate after one failed condense request', async () => {
     const draft = '正'.repeat(2601)
-    const runtime = fakeOutcomes(outcome(draft, 'length'))
+    const runtime = fakeOutcomes(outcome(draft, 'length'), outcome('', 'unknown', 2))
     const { invoke, context, callbacks, command } = setup({
       runtime,
       wordsPerChapter: 2000,
@@ -3478,20 +3483,57 @@ ${headingPrefix}第3章：潮门
     })
 
     await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
+      .rejects.toThrow('尚未完整生成')
 
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-condense'])
     expect(invoke).toHaveBeenCalledWith(
       'db:recovery-candidate-record',
       expect.objectContaining({
         visibleText: draft,
-        failureCode: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
+        failureCode: 'GENERATION_FAILED',
       }),
       expect.anything(),
       expect.anything(),
     )
     expect(callbacks.replaceText).toHaveBeenLastCalledWith(draft)
     expectNoDraftPersistence(invoke)
+  })
+
+  it('saves all 1350 units after one condense of a complete 1400-unit draft targeting 1000', async () => {
+    const draft = `${'长'.repeat(1400)}。`
+    const condensed = `${'缩'.repeat(1350)}。`
+    const runtime = fakeOutcomes(outcome(draft, 'stop', 1), outcome(condensed, 'stop', 2))
+    const { invoke, context, callbacks, command } = setup({ runtime, wordsPerChapter: 1000, wordsTarget: 1000 })
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(condensed)
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-condense'])
+    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({ content: condensed, wordCount: 1350 }), expect.anything(), expect.anything())
+    expect(callbacks.log).toHaveBeenLastCalledWith(expect.stringContaining('字数超过约定'))
+    expect(callbacks.replaceText).toHaveBeenLastCalledWith(condensed)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
+  })
+
+  it.each(['GENERATION_PROVIDER_FAILED', 'GENERATION_SOURCE_CHANGED', 'CANCELLED'] as const)('handles a thrown %s during the single condense without hiding integrity errors', async code => {
+    const draft = `${'长'.repeat(1400)}。`
+    const runtime = fakeRuntime(attempt => {
+      if (attempt === 1) return outcome(draft, 'stop', 1)
+      throw Object.assign(new Error(code), { code })
+    })
+    const { invoke, context, callbacks, command } = setup({ runtime, wordsPerChapter: 1000, wordsTarget: 1000 })
+    const result = command.execute({ step: {}, context, callbacks })
+    if (code === 'GENERATION_PROVIDER_FAILED') await expect(result).resolves.toBe(draft)
+    else {
+      await expect(result).rejects.toThrow(code)
+      expectNoDraftPersistence(invoke)
+    }
+    expect(runtime.complete).toHaveBeenCalledTimes(2)
+  })
+
+  it('rescues an overlength LENGTH draft only with a complete shorter STOP replacement', async () => {
+    const condensed = `${'缩'.repeat(1350)}。`
+    const runtime = fakeOutcomes(outcome('长'.repeat(1400), 'length', 1), outcome(condensed, 'stop', 2))
+    const { context, callbacks, command } = setup({ runtime, wordsPerChapter: 1000, wordsTarget: 1000 })
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(condensed)
+    expect(runtime.complete).toHaveBeenCalledTimes(2)
   })
 
   it('condenses an over-limit draft once and persists the in-range revision', async () => {
@@ -3509,10 +3551,10 @@ ${headingPrefix}第3章：潮门
       budgetDemand: { kind: 'draft-units', requestedUnits: 2000, segmentable: false } })
     const condensePrompt = condenseTask.messages.at(-1)!.content
     expect(condensePrompt).toContain('1400–2600')
-    expect(condensePrompt).toContain('目标 2000 字（按汉字计，不含标点）；请写到约 1700–2000 字。2600 字是硬上限')
+    expect(condensePrompt).toContain('目标 2000 字（按汉字计，不含标点）；请写到约 1700–2000 字。2600 字是参考上限')
     // 与自动续写相同的作者资料块，随后才是篇幅合同、执行卡与待压缩正文。
     // 篇幅现状块：目标 2000、待压缩 2700 单位 → 约 1780、不超过 2100、删 920（34%）。
-    expect(condensePrompt).toContain('【篇幅现状】待压缩正文当前约 2700 字，超出上限。请压缩到约 1780 字（绝对不得超过 2100 字），即删去约 920 字，约占全文 34%。')
+    expect(condensePrompt).toContain('【篇幅现状】待压缩正文当前约 2700 字，超出上限。请压缩到约 1780 字（参考上限 2100 字），即删去约 920 字，约占全文 34%。')
     const order = ['【篇幅现状】', '【硬性要求】', '【本章蓝图】', '【全局写作要求】\n压缩全局要求哨兵', '【文风要求】\n压缩文风哨兵', '【文风适用边界】',
       '【小说配置事实】', '【作者资料（保留原文', '- 必需事件: 压缩必需事件哨兵', '【本章篇幅合同】', '【待压缩正文】']
       .map(marker => condensePrompt.indexOf(marker))
@@ -3549,7 +3591,7 @@ ${headingPrefix}第3章：潮门
     expect(condensePrompt).toContain('between 630 and 1170 words')
     expect(condensePrompt).toContain('[Chapter length contract]')
     // 篇幅现状块：目标 900、待压缩 1200 词 → 约 801、不超过 945、删 399（33%）。
-    expect(condensePrompt).toContain('[Current length] The manuscript to condense is about 1200 words, above the ceiling. Condense it to about 801 words (never more than 945 words), which means cutting about 399 words, roughly 33% of the text.')
+    expect(condensePrompt).toContain('[Current length] The manuscript to condense is about 1200 words, above the ceiling. Condense it to about 801 words (reference maximum 945 words), which means cutting about 399 words, roughly 33% of the text.')
     const order = ['[Current length]', '[Requirements]', '[Current chapter blueprint]', '[Project-wide writing guidance]', '[Writing style]', '[Novel configuration facts]',
       '[Author material (verbatim', '[Chapter length contract]', '[Manuscript to condense]'].map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
@@ -3578,32 +3620,26 @@ ${headingPrefix}第3章：潮门
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(condensed)
 
     const condensePrompt = runtime.complete.mock.calls[1]![0].messages.at(-1)!.content
-    const block = `【篇幅现状】待压缩正文当前约 ${draftUnits} 字，超出上限。请压缩到约 ${aim} 字（绝对不得超过 ${ceil} 字），即删去约 ${cut} 字，约占全文 ${percent}%。做法：逐段压缩，每段都删减描写、重复动作和心理，不要只删某一段。`
+    const block = `【篇幅现状】待压缩正文当前约 ${draftUnits} 字，超出上限。请压缩到约 ${aim} 字（参考上限 ${ceil} 字），即删去约 ${cut} 字，约占全文 ${percent}%。做法：逐段压缩，每段都删减描写、重复动作和心理，不要只删某一段。`
     expect(condensePrompt).toContain(`${block}\n\n【硬性要求】`)
     expect(condensePrompt.indexOf('【篇幅现状】')).toBeGreaterThan(condensePrompt.indexOf('请把下面的本章正文压缩修订到可接受篇幅内'))
   })
 
   it.each([
-    { label: 'still over the maximum', text: `${'缩'.repeat(2700)}。`, finishReason: 'stop' as const },
-    { label: 'below the minimum', text: `${'缩'.repeat(1300)}。`, finishReason: 'stop' as const },
-    { label: 'truncated by length', text: `${'缩'.repeat(2000)}`, finishReason: 'length' as const },
-  ])('keeps the original length failure when the single condense revision is $label', async ({ text, finishReason }) => {
-    const draft = `${'长'.repeat(2700)}。`
+    { label: 'same length', text: `${'缩'.repeat(1400)}。`, finishReason: 'stop' as const },
+    { label: 'longer', text: `${'缩'.repeat(1450)}。`, finishReason: 'stop' as const },
+    { label: 'below the minimum', text: `${'缩'.repeat(600)}。`, finishReason: 'stop' as const },
+    { label: 'truncated', text: `${'缩'.repeat(1000)}`, finishReason: 'length' as const },
+    { label: 'unknown completion', text: '', finishReason: 'unknown' as const },
+  ])('retains the complete original when the single condense revision is $label', async ({ text, finishReason }) => {
+    const draft = `${'长'.repeat(1400)}。`
     const runtime = fakeOutcomes(outcome(draft, 'stop', 1), outcome(text, finishReason, 2))
-    const { invoke, context, callbacks, command } = setup({ runtime, wordsPerChapter: 2000, wordsTarget: 2000 })
-
-    await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
-
+    const { invoke, context, callbacks, command } = setup({ runtime, wordsPerChapter: 1000, wordsTarget: 1000 })
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(draft)
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-condense'])
-    expect(invoke).toHaveBeenCalledWith(
-      'db:recovery-candidate-record',
-      expect.objectContaining({ visibleText: draft, failureCode: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE' }),
-      expect.anything(),
-      expect.anything(),
-    )
+    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({ content: draft, wordCount: 1400 }), expect.anything(), expect.anything())
     expect(callbacks.replaceText).toHaveBeenLastCalledWith(draft)
-    expectNoDraftPersistence(invoke)
+    expect(callbacks.log).toHaveBeenLastCalledWith('第1章字数超过约定')
   })
 
   it('does not request a condense revision for a short draft that is continued into range', async () => {
@@ -3626,7 +3662,7 @@ ${headingPrefix}第3章：潮门
     expect(runtime.complete).toHaveBeenCalledTimes(2)
   })
 
-  it('asks a below-target continuation for the remaining units under the hard ceiling and repeats the length contract', async () => {
+  it('asks a below-target continuation for the remaining units under the reference maximum and repeats the length contract', async () => {
     const runtime = fakeOutcomes(outcome(`${'初'.repeat(1000)}。`, 'stop', 1), outcome(`${'续'.repeat(900)}。`, 'stop', 2))
     const { context, callbacks, command } = setup({ runtime, wordsPerChapter: 2000, wordsTarget: 2000 })
 
@@ -3636,7 +3672,7 @@ ${headingPrefix}第3章：潮门
     expect(continuation).toMatchObject({ purpose: 'chapter-draft-continuation', budgetDemand: { requestedUnits: 1000 } })
     const prompt = continuation.messages.at(-1)!.content
     expect(prompt).toContain('- 本次续写补足约 1000 字即可，新增部分绝不超过 1600 字；接近时按本章结束状态收束，停在完整句子和自然段落末尾。')
-    expect(prompt).toContain('【本章篇幅合同】\n目标 2000 字（按汉字计，不含标点）；请写到约 1700–2000 字。2600 字是硬上限')
+    expect(prompt).toContain('【本章篇幅合同】\n目标 2000 字（按汉字计，不含标点）；请写到约 1700–2000 字。2600 字是参考上限')
     expect(prompt.indexOf('【本章篇幅合同】')).toBeLessThan(prompt.indexOf('【本章蓝图】'))
     expect(prompt).not.toContain('剩余约')
   })
@@ -3663,12 +3699,13 @@ ${headingPrefix}第3章：潮门
     expect(prompt).not.toMatch(/剩余约 0|approximately 0 words/u)
   })
 
-  it('keeps a completed over-limit continuation as a recovery candidate instead of committing it', async () => {
+  it('saves a complete over-limit continuation after the single condense fails', async () => {
     const initialCandidate = `${'甲'.repeat(3200)}。`
     const continuation = `${'乙'.repeat(701)}。`
     const runtime = fakeOutcomes(
       outcome(initialCandidate, 'length', 1),
       outcome(continuation, 'stop', 2),
+      outcome('', 'unknown', 3),
     )
     const { invoke, context, callbacks, command } = setup({
       runtime,
@@ -3678,23 +3715,14 @@ ${headingPrefix}第3章：潮门
 
     const completedDraft = `${initialCandidate}\n\n${continuation}`
     await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
+      .resolves.toBe(completedDraft)
 
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
       'chapter-draft',
       'chapter-draft-continuation',
       'chapter-draft-condense',
     ])
-    expect(invoke).toHaveBeenCalledWith(
-      'db:recovery-candidate-record',
-      expect.objectContaining({
-        visibleText: completedDraft,
-        failureCode: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
-      }),
-      expect.anything(),
-      expect.anything(),
-    )
-    expectNoDraftPersistence(invoke)
+    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({ content: completedDraft, wordCount: 3901 }), expect.anything(), expect.anything())
   })
 
   it('keeps an over-target length candidate visible when the shared budget cannot continue it', async () => {

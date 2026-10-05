@@ -103,6 +103,26 @@ beforeEach(() => {
 afterEach(() => { clearProjectCustomPrompts(); vi.restoreAllMocks(); vi.unstubAllGlobals(); useProjectStore.setState({ currentProject: null }) })
 
 describe('review/revision consumers using the main contract (synthetic transport)', () => {
+  it.each(['refine-draft', 'refine-from-review'] as const)('saves and reopens complete overlength %s with one notice and no generation on replay', async operation => {
+    for (const [sourceUnits, targetUnits] of [[1000, 2000], [1200, 1000], [1000, 1000]]) {
+      const project = useProjectStore.getState().currentProject!
+      useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, wordsPerChapter: targetUnits } } })
+      const content = `${'修'.repeat(1400)}。`
+      const f = setup([{ content, finishReason: 'stop' }], [], { ...source, content: `${'原'.repeat(sourceUnits)}。` })
+      await expect(f.command(operation).execute(f.args)).resolves.toBe(content)
+      expect(f.writes()).toBe(1)
+      expect(f.fixture.recovery!.saved).toMatchObject({ content, contentHash: hash(content) })
+      expect(f.args.callbacks.log.mock.calls.filter(([text]) => text.includes('字数超过约定'))).toEqual([['第1章字数超过约定']])
+      expect(useEditorStore.getState().tabs.at(-1)).toMatchObject({ type: 'diff', content })
+      f.provider.mockClear()
+      f.args.callbacks.log.mockClear()
+      await expect(f.command(operation, { recoveryHandle: f.fixture.recovery!.handle }).execute(f.args)).resolves.toBe(content)
+      expect(f.provider).not.toHaveBeenCalled()
+      expect(f.writes()).toBe(1)
+      expect(f.args.callbacks.log.mock.calls).toContainEqual(['第1章字数超过约定'])
+    }
+  })
+
   it.each(['zh-CN', 'en-US'] as const)('limits ordinary time judgments to draft precision while preserving conflict checks in %s', async language => {
     const project = useProjectStore.getState().currentProject!
     useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, writingLanguage: language } } })
@@ -228,6 +248,7 @@ describe('review/revision consumers using the main contract (synthetic transport
       }
       if (operation === 'refine-from-review') expect(prompt).toContain(reviewRevisionAiBrief(f.fixture.prepared!.context))
       if (operation === 'recheck') expect(prompt).toContain(language === 'zh-CN' ? '不能判为 resolved' : 'must not be marked resolved')
+      if (operation !== 'refine-from-review') expect(prompt).toContain(language === 'zh-CN' ? '单纯超出约定字数只作非阻断提示' : 'Exceeding the agreed length alone is a nonblocking notice')
       vi.restoreAllMocks()
     }
   })
@@ -535,7 +556,7 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(prompt).not.toContain('已忽略的意见')
     expect(prompt).not.toContain('未确认的临时指导')
     expect(prompt).toContain('冻结源稿共 240 个正文单位')
-    expect(prompt).toContain('168-312 个正文单位之间')
+    expect(prompt).toContain('168-312 个正文单位（源稿的 70%-130%），其中上限仅作指导')
     expect(prompt).toContain('所有未受影响的段落或行必须完整保留')
     expect(prompt).toContain('不得摘要、节选、合并重复段落或使用占位符')
     expect(f.fixture.materialDecisions[0]?.promptHash).toBe(hash(prompt))
@@ -553,7 +574,7 @@ describe('review/revision consumers using the main contract (synthetic transport
     const prompt = english.provider.mock.calls[0]![0].find(message => message.role === 'user')!.content
     expect(prompt).toContain('[Complete revision task contract]')
     expect(prompt).toContain('The frozen source contains 919 prose units')
-    expect(prompt).toContain('between 643 and 1195 prose units (70%-130% of the source)')
+    expect(prompt).toContain('Aim for 643-1195 prose units (70%-130% of the source)')
     expect(prompt).toContain('Preserve every unaffected paragraph or line in full')
     expect(prompt).toContain('Do not summarize, excerpt, collapse repeated passages, or use placeholders')
     expect(english.fixture.materialDecisions[0]?.promptHash).toBe(hash(prompt))
@@ -663,6 +684,7 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(f.fixture.artifacts.get(broken.artifactId)?.text).toBe('{"summary":')
     expect(f.fixture.recovery!.latestArtifact!.artifactId).not.toBe(broken.artifactId)
     expect(f.fixture.recovery!.attemptedPurposes).toEqual(['review-chapter', 'review-chapter-rebuild', 'review-chapter-rebuild'])
+    for (const [messages] of f.provider.mock.calls) expect(messages.find(message => message.role === 'user')!.content).toContain('单纯超出约定字数只作非阻断提示')
     expect(f.fixture.materialDecisions).toHaveLength(2)
     expect(f.fixture.materialDecisions[1]).toEqual(f.fixture.materialDecisions[0])
     expect(f.fixture.calls.some(c => c.channel === 'generation:compose-visible')).toBe(false)

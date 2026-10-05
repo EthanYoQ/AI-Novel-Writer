@@ -12,7 +12,7 @@ import { ipc } from '../../ipc-client'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import { requireWorkflowProjectSession, workflowUiLocale, workflowUiText } from '../workflow-project-session'
 import { assertMateriallyCompleteRevision } from './refinement-completeness'
-import { countDraftUnits } from '../../../shared/draft-units'
+import { countDraftUnits, draftTargetUnitRange } from '../../../shared/draft-units'
 import { throwIfSourceDraftChanged } from '../source-draft-changed'
 
 export interface ReviewRevisionCommandSource {
@@ -216,6 +216,14 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
           `Review-based revision complete (${countDraftUnits(receipt.content)} words); revision r${receipt.index} is ready.`)
         : text(`修稿完成（${countDraftUnits(receipt.content)} 字），修订稿版本 r${receipt.index}`,
           `Revision complete (${countDraftUnits(receipt.content)} words); revision r${receipt.index} is ready.`))
+      const units = countDraftUnits(receipt.content), target = frozen.config.wordsPerChapter
+      const sourceUnits = countDraftUnits(frozen.source.content)
+      const targetMaximum = draftTargetUnitRange(target).maximum
+      const sourceMaximum = draftTargetUnitRange(sourceUnits).maximum
+      if (units > targetMaximum || units > sourceMaximum) callbacks.log(text(
+        `第${chapter}章字数超过约定`,
+        `Chapter ${chapter} exceeds the agreed length.`,
+      ))
     }
     callbacks.replaceText?.(receipt.content)
     return receipt.content
