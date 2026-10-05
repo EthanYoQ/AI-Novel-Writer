@@ -17,7 +17,6 @@ import { createHumanConfirmedReviewSnapshot, serializeHumanConfirmedReviewSnapsh
 import { clearProjectCustomPrompts, getBuiltinPromptTemplate, getPromptSource } from '../../../prompt-templates'
 import { ipcPromptPersistence } from '../../../prompt-catalog'
 import type { FinalizedContinuityProjection } from '../../../../shared/finalized-continuity'
-import { countDraftUnits } from '../../../../shared/draft-units'
 
 const projectPath = 'C:\\synthetic\\review-runtime'
 const session = { projectId: 'review-runtime', projectPath, leaseId: 'review-epoch' }
@@ -385,7 +384,7 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(prompt.split(contractHeading)).toHaveLength(2)
     const contract = prompt.split(contractHeading)[1]!
     expect(contract).toContain(writingLanguage === 'zh-CN' ? '解决经来源核实后成立的问题' : 'Resolve the selected issues established by the sources')
-    expect(contract).toContain('80%-120%')
+    expect(contract).toContain('70%-130%')
     expect(contract).toContain(writingLanguage === 'zh-CN' ? '纯文本' : 'plain prose')
     expect(contract).toContain(writingLanguage === 'zh-CN' ? '段落之间保留一个空行' : 'one blank line between paragraphs')
     expect(prompt).toContain(writingLanguage === 'zh-CN'
@@ -535,10 +534,8 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(prompt).toContain('作者确认的额外指导')
     expect(prompt).not.toContain('已忽略的意见')
     expect(prompt).not.toContain('未确认的临时指导')
-    const sourceUnits = countDraftUnits(source.content)
-    const range = { minimum: Math.floor(sourceUnits * 0.8), maximum: Math.ceil(sourceUnits * 1.2) }
-    expect(prompt).toContain(`冻结源稿共 ${sourceUnits} 个正文单位`)
-    expect(prompt).toContain(`${range.minimum}-${range.maximum} 个正文单位之间`)
+    expect(prompt).toContain('冻结源稿共 240 个正文单位')
+    expect(prompt).toContain('168-312 个正文单位之间')
     expect(prompt).toContain('所有未受影响的段落或行必须完整保留')
     expect(prompt).toContain('不得摘要、节选、合并重复段落或使用占位符')
     expect(f.fixture.materialDecisions[0]?.promptHash).toBe(hash(prompt))
@@ -547,12 +544,16 @@ describe('review/revision consumers using the main contract (synthetic transport
   it('renders the complete-revision contract in English and rejects a zero-unit source before dispatch', async () => {
     useProjectStore.setState({ currentProject: { id: session.projectId, path: projectPath, name: 'Synthetic', sessionLease: session.leaseId,
       novelConfig: { wordsPerChapter: 300, globalGuidance: 'frozen guidance', writingLanguage: 'en-US' } } as never })
-    const english = setup([{ content: revised, finishReason: 'stop' }])
+    const english = setup([{ content: revised, finishReason: 'stop' }], [], {
+      ...source, content: 'The courier crossed the bridge. '.repeat(183) + 'He delivered the parcel.',
+    })
     english.args.context.writingLanguage = 'en-US'
     english.args.context.uiLocale = 'en-US'
     await english.command('refine-from-review').execute(english.args)
     const prompt = english.provider.mock.calls[0]![0].find(message => message.role === 'user')!.content
     expect(prompt).toContain('[Complete revision task contract]')
+    expect(prompt).toContain('The frozen source contains 919 prose units')
+    expect(prompt).toContain('between 643 and 1195 prose units (70%-130% of the source)')
     expect(prompt).toContain('Preserve every unaffected paragraph or line in full')
     expect(prompt).toContain('Do not summarize, excerpt, collapse repeated passages, or use placeholders')
     expect(english.fixture.materialDecisions[0]?.promptHash).toBe(hash(prompt))

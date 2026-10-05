@@ -376,14 +376,16 @@ describe('GenerateDirectoryCommand', () => {
   })
 
   it.each([
-    ['author target', 900, false, 900],
-    ['compact fallback target', 1500, true, 1500],
-    ['existing default', undefined, false, 3000],
+    ['author target', 900, false, 900, '630–1170'],
+    ['compact fallback target', 1500, true, 1500, '1050–1950'],
+    ['rounded author target', 919, false, 919, '643–1195'],
+    ['existing default', undefined, false, 3000, '2100–3900'],
   ] as const)('puts the %s chapter capacity at the end of every production request', async (
     _label,
     wordsPerChapter,
     forceCompact,
     expectedTarget,
+    expectedRange,
   ) => {
     stubIpcInvoke(successfulCommitHandler())
     const observedTasks: GenerationTask[] = []
@@ -419,11 +421,9 @@ describe('GenerateDirectoryCommand', () => {
     await command.execute({ step: {}, context: workflowContext(), callbacks: stepCallbacks() })
 
     expect(observedTasks).toHaveLength(forceCompact ? 2 : 1)
-    const lowerBound = Math.round(expectedTarget * 0.8)
-    const upperBound = Math.round(expectedTarget * 1.2)
     for (const task of observedTasks) {
       const user = task.messages.find(message => message.role === 'user')?.content ?? ''
-      expect(user).toContain(`每章正文目标约 ${expectedTarget} 字，可接受范围 ${lowerBound}–${upperBound} 字`)
+      expect(user).toContain(`每章正文目标约 ${expectedTarget} 字，可接受范围 ${expectedRange} 字`)
       expect(user).toContain('作者指定事件与字数目标均为权威事实，不得删除、改写或擅自调整')
       expect(user).toContain('只计一个语义事件')
       expect(user).toContain('不擅自增加独立事件')
@@ -467,6 +467,7 @@ describe('GenerateDirectoryCommand', () => {
           ...projectSnapshot.novelConfig,
           genre: '科幻',
           totalChapters: 1,
+          wordsPerChapter: 919,
         },
       },
       { createRuntime: vi.fn(async () => testRuntime(session)) },
@@ -483,6 +484,10 @@ describe('GenerateDirectoryCommand', () => {
     const system = observedTask?.messages.find(message => message.role === 'system')?.content ?? ''
     const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(observedTasks).toHaveLength(2)
+    for (const task of observedTasks) {
+      expect(task.messages.find(message => message.role === 'user')?.content)
+        .toContain('Target about 919 words per chapter, with an acceptable range of 643-1195')
+    }
     expect(observedTasks.map(task => task.purpose)).toEqual([
       'chapter-blueprint-directory',
       'chapter-blueprint-directory:compact-single:chapter-1',
@@ -843,7 +848,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(observedRanges).toEqual([[1, 5], [1, 2], [3, 5]])
     expect(observedPrompts).toHaveLength(3)
     expect(observedPrompts.every(prompt => (
-      prompt.includes('每章正文目标约 1200 字，可接受范围 960–1440 字')
+      prompt.includes('每章正文目标约 1200 字，可接受范围 840–1560 字')
     ))).toBe(true)
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)

@@ -447,8 +447,20 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
   } finally { vi.unstubAllGlobals(); nativeDatabase?.closeProjectDatabase(); fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test.each([false, true, 'formal'])('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review (LENGTH replacement=%s)', async (lengthRecovery) => {
+test.each([
+  [false], [true], ['formal'],
+  [false, { units: 689, target: 900, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
+  [false, { units: 1162, target: 900, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
+  [false, { units: 643, target: 900, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
+  [false, { units: 642, target: 900, expected: 'AI_REVISION_LENGTH_MISMATCH', historical: 'AI_REVISION_LENGTH_MISMATCH' }],
+  [false, { units: 1195, target: 1000, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
+  [false, { units: 1196, target: 1000, expected: 'AI_REVISION_LENGTH_MISMATCH', historical: 'AI_REVISION_LENGTH_MISMATCH' }],
+  [false, { units: 1171, target: 900, expected: 'AI_FINAL_DB_MISMATCH', historical: 'AI_REVISION_LENGTH_MISMATCH' }],
+  [false, { units: 735, target: 900, expected: null, historical: null }],
+  [false, { units: 1103, target: 900, expected: null, historical: null }],
+])('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review (LENGTH replacement=%s, revision bounds=%j)', async (lengthRecovery, revisionBounds) => {
   const formal = lengthRecovery === 'formal'
+  const current = formal || Boolean(revisionBounds)
   const scenario = formal ? productionScenario('full', 'final', CANDIDATE_ONLY_PROTOCOL_REVISION) : null
   const [{ initializeLegacyBaselineSchema }, { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION }, { SqliteSchemaAdapter },
     { migrateSchema }, { createMainGenerationOwner }, { ModelExecutionLeaseRegistry }, { newMainGenerationPolicy },
@@ -467,7 +479,7 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
   try {
     db.transaction(() => initializeLegacyBaselineSchema(db))()
     migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-    const prose = '林岚走进北塔，灯火照亮了石阶。'.repeat(70)
+    const prose = revisionBounds ? '林'.repeat(919) : '林岚走进北塔，灯火照亮了石阶。'.repeat(70)
     db.exec("INSERT INTO project_core(id,project_name,words_per_chapter,world_setting) VALUES('main','原生合成',900,'【第1章必现】林岚携带一本账册'); INSERT INTO blueprints(chapter_number,title,key_events) VALUES(1,'北塔','当章归还借书');")
     db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(prose)
     db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,?)").run(countDraftUnits(prose))
@@ -536,6 +548,12 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
     assert.ok(brief.includes('当章归还借书') && brief.includes('林岚携带一本账册'))
     assert.equal(brief.includes('保持原稿'), false, 'ignored AI item does not enter revision brief')
     response = `${prose}\n林岚把借书归还柜台，携带账册离开。`
+    if (revisionBounds) {
+      const action = '林岚把借书归还柜台，携带账册离开。'
+      response = '字'.repeat(revisionBounds.units - countDraftUnits(action)) + action
+      assert.equal(countDraftUnits(prose), 919)
+      assert.equal(countDraftUnits(response), revisionBounds.units)
+    }
     const revisionBegin = owner.begin({ ...begin, operation: 'refine-from-review', uiActionNonce: 'refine', promptKeys: ['refine_from_review'], skillStages: ['refinement'],
       output: 'visible-text', reviewRevisionContextId: refine.contextId, parentRootActionId: refine.parentRootActionId,
       authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(refine.context) }] })
@@ -602,11 +620,11 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
       return { attemptId: row.attempt_id, status: JSON.parse(row.attempt_json).status, artifactId: artifact.artifactId,
         artifactRevision: artifact.revision, textHash: artifact.textHash, reviewRevisionEffect: usage.reviewRevisionEffect,
         finishReason: usage.result.finishReason, purpose: usage.purpose, trustedUsage: true, hasFormalEffect: Boolean(usage.reviewRevisionEffect) } })
-    const result = { ...(lengthRecovery ? { phase: formal ? 'full' : 'r3-native-revision-diagnostic', arm: 'candidate' } : {}),
+    const result = { ...(lengthRecovery || current ? { phase: current ? 'full' : 'r3-native-revision-diagnostic', arm: 'candidate' } : {}),
       ...(formal ? { milestone: 'final', scenarioRevision: scenario.scenarioRevision } : {}), physicalProject: { projectId: 'project', dbPath }, projectEpoch: 'epoch', operations, attempts, ownerTerminal,
-      protocolRevision: formal ? CANDIDATE_ONLY_PROTOCOL_REVISION : protocolBinding.protocolRevision,
+      protocolRevision: current ? CANDIDATE_ONLY_PROTOCOL_REVISION : protocolBinding.protocolRevision,
       saved: { draftId: 1, chapterNumber: 1, version: 1, status: 'revised', contentHash: hash(revisedProse), units: countDraftUnits(revisedProse) },
-      draftObservation: { chapterNumber: 1, targetUnits: 900, units: countDraftUnits(revisedProse), contentHash: hash(revisedProse), persisted: true },
+      draftObservation: { chapterNumber: 1, targetUnits: revisionBounds?.target ?? 900, units: countDraftUnits(revisedProse), contentHash: hash(revisedProse), persisted: true },
       aiReviewedDraft: { initial: save('initial.txt', prose, { draftId: 1, chapterNumber: 1, version: 1, status: 'draft' }),
         review: save('first-review.json', saved.content, { reviewId: saved.id }), selectedCount: selection.selected.length,
         selectedIndexes: report.items.flatMap((item, index) => item.goalId ? [index] : []), selectedItemsHash: hash(selection.selected),
@@ -616,12 +634,19 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
           artifactIds: composition.artifactIds, sources: composition.sources },
         finalReview: save('final-review.json', finalSaved.content, { reviewId: finalSaved.id }),
         finalDraft: save('final.txt', revisedProse, { draftId: 1, version: 1 }) } }
-    if (formal) {
+    if (current) {
       const cycleId = db.prepare('SELECT cycle_id FROM review_cycles WHERE review_id=?').pluck().get(finalSaved.id)
       result.currentReviewState = { contentHash: hash(revisedProse), reviewId: finalSaved.id, reviewContentHash: hash(finalSaved.content), cycleId,
         findings: db.prepare('SELECT finding_id AS findingId,status,target_id AS targetId FROM review_findings WHERE cycle_id=? ORDER BY finding_id').all(cycleId) }
     }
-    assert.equal(validateAiReviewedManuscript(result), null)
+    assert.equal(validateAiReviewedManuscript(result), revisionBounds?.expected ?? null)
+    if (revisionBounds) {
+      assert.equal(validateAiReviewedManuscript({ ...result, phase: 'c16-c18' }), revisionBounds.expected)
+      assert.equal(validateAiReviewedManuscript({ ...result, phase: 'r3-native-revision-diagnostic' }), revisionBounds.expected)
+      assert.equal(validateAiReviewedManuscript({ ...result, protocolRevision: protocolBinding.protocolRevision }), revisionBounds.historical)
+      assert.equal(validateAiReviewedManuscript({ ...result, phase: 'bounded-revision-diagnostic' }), revisionBounds.historical)
+      return
+    }
     if (!lengthRecovery) assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'revised' } }), null)
     if (!lengthRecovery) assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'draft' } }), 'AI_FINAL_DB_MISMATCH')
     const reordered = structuredClone(result)
