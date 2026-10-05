@@ -24,7 +24,7 @@
 - [`0006-unified-cross-platform-github-release.md`](adr/0006-unified-cross-platform-github-release.md) 保存最初的 Windows + macOS ARM64 发布决定，当前三目标发布与平台更新动作由 [`0016-three-target-release-and-platform-update-actions.md`](adr/0016-three-target-release-and-platform-update-actions.md) 取代。
 - [`0019-remove-real-call-hard-cap.md`](adr/0019-remove-real-call-hard-cap.md) 取代冻结实验合同的全局 80 次调用硬帽；80 保留为计划分配额，逐请求记账和产品安全限额继续有效。
 - [`0020-legacy-project-copy-import.md`](adr/0020-legacy-project-copy-import.md) 将旧小说兼容改为保留原件的完整项目导入，禁止 AI 重建或覆盖既有设定；取代旧根退役/永久拒写要求。[现行 F05](research/novel-quality-modernization/frontend-transition-specs.md#f05--最终-v3-功能及桌面体验资格) 同时拥有新版编辑交互验收，旧版性能基线不再阻断新版。
-- [现行字数标准](research/novel-quality-modernization/quality-protocol.md#现行字数标准) 自 2026-09-20 起将冻结规格中的 ±20% 取代为 ±30%；旧规格与实验回执保留原字节和历史结论。
+- [正文篇幅现行要求](plans/novel-quality-modernization/specs/S06B.md#prose-length-overrun)自 2026-10-05 起保留一次既有超长压缩，仍超长则提示并继续；偏短处理不变。[旧 ±20%/±30% 规则与实验记录](research/novel-quality-modernization/quality-protocol.md#现行字数标准)保留原标准和历史结论。
 - [AI 自主审稿与成稿资格](research/novel-quality-modernization/quality-protocol.md#ai-review-final-manuscript) 自 2026-10-01 获用户批准：未来写作资格同时验 AI 自主发现和审修后的最终稿，取代部分首稿直接终点与人工补题路线。机器接线和真实资格另行验证，历史结果不改判。
 - [线程 10 交付计划](research/novel-quality-modernization/thread10-delivery-plan.md) 自 2026-10-02 拥有材料补齐、自动短细纲、有界模型筛选及 candidate-only 多轮资格，取代单轮七案全绿前置、必需双臂和旧 Pro 唯一下一实验。它是生效要求，新增能力与机器协议待实现；冻结旧文与旧协议限制保留为历史和实现差距，不能否决新要求，也不能冒充新资格就绪。
 

@@ -121,7 +121,7 @@ U03 模型设置同时应用 [S07.M01–M04 与 S07.A01–A07](../../plans/novel
 
 post-UI budget/context/review 保留独有材料、触发、作者确认、保存和确定性断言，改用 candidate；同版本、入口、材料、操作及全部断言相符才复用，否则独有旅程执行一次。额外语义结果如实披露，不叠加文学全绿门、不填正式分母；严重作者约束/数据问题及可复现产品缺陷照常处理。自身前置满足后可与正式批次交错，完成才补足 F05。
 
-原生检查与正式资格走生产 command/IPC 和唯一物理账本；有界 API 模型筛选只写独立开发日志。±30%、draft-units v3、事实/事件/复述及可读底线保留，80 仍为计划额。新正式资格不作必需相对比较；另有改善声明时另行取证。达到批准批次出口即结束采样，所有历史 FAIL/INCONCLUSIVE 及旧 baseline 字节保持不变。
+原生检查与正式资格走生产 command/IPC 和唯一物理账本；有界 API 模型筛选只写独立开发日志。正文篇幅按 [S06B](../../plans/novel-quality-modernization/specs/S06B.md#prose-length-overrun)；draft-units v3、事实/事件/复述及可读底线保留，80 仍为计划额。新正式资格不作必需相对比较；另有改善声明时另行取证。达到批准批次出口即结束采样，所有历史 FAIL/INCONCLUSIVE 及旧 baseline 字节保持不变。
 
 ## S14C — 升级与中断恢复
 
