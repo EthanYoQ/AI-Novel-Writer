@@ -6,6 +6,7 @@ import { getProjectDb } from '../../database'
 import { BlueprintRepository, type BlueprintData } from '../blueprint-repository'
 import { CharacterRosterRepository } from '../character-roster-repository'
 import type { CharacterRosterEntry } from '../../../src/shared/character-roster'
+import { parseBlueprintSemanticResponseText } from '../../../src/shared/blueprint-semantic-contract'
 
 vi.mock('../../database', () => ({
   getProjectDb: vi.fn(),
@@ -174,6 +175,43 @@ describe('BlueprintRepository range commit', () => {
       expect(BlueprintRepository.getAll()).toEqual(receipt.snapshot)
     } finally {
       db.close()
+    }
+  })
+
+  it('preserves parsed full names, candidates, and relationship text across SQLite restart', () => {
+    let db = createBlueprintDb()
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    const longName = '亚历山德拉'.repeat(7) + '完整姓名尾部'
+    const longRelation = '双方因旧日的承诺继续合作，但仍在追查失踪的证人。'.repeat(5) + '尾部事实：她已经撤销授权。'
+
+    try {
+      const parsed = parseBlueprintSemanticResponseText(JSON.stringify({ blueprints: [{
+        ...blueprintFor(1),
+        characters: [longName, '周砚'],
+        newCharacterCandidates: [{ name: longName, role: 'supporting' }],
+        relationships: [{ from: longName, to: '周砚', relation: longRelation }],
+      }] }), [1])
+      BlueprintRepository.commitRange({
+        mode: 'replace-range',
+        operationId: 'directory-full-character-facts',
+        startChapter: 1,
+        endChapter: 1,
+        blueprints: parsed.map(item => ({ ...item, userGuidance: '', notes: '', notesUpdatedAt: '' })),
+      })
+      const image = db.serialize()
+      db.close()
+      db = createBlueprintDb(image)
+      vi.mocked(getProjectDb).mockReturnValue(db)
+
+      expect(BlueprintRepository.getCommittedRangeOperation('directory-full-character-facts')).toMatchObject({
+        snapshot: [{
+          characters: [longName, '周砚'],
+          newCharacterCandidates: [{ name: longName, role: 'supporting' }],
+          relationshipHints: [{ from: longName, to: '周砚', relation: longRelation }],
+        }],
+      })
+    } finally {
+      if (db.open) db.close()
     }
   })
 

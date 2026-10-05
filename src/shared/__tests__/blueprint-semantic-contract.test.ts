@@ -100,8 +100,9 @@ describe('blueprint semantic contract', () => {
       .toContain('code=duplicate_item path=blueprint.characters')
   })
 
-  it('accepts long narrative fields, thirteen characters and candidates, and nine distinct relations', () => {
-    const characters = Array.from({ length: 13 }, (_, index) => `角色${index}`)
+  it('accepts long narrative fields and full names, thirteen characters and candidates, and nine distinct relations', () => {
+    const longName = '亚历山德拉'.repeat(7) + '完整姓名尾部'
+    const characters = [longName, ...Array.from({ length: 12 }, (_, index) => `角色${index}`)]
     const candidate = validBlueprint({ title: '题'.repeat(500), role: 'r'.repeat(500), purpose: 'p'.repeat(1000),
       keyEvents: '事'.repeat(2000), suspenseHook: '悬'.repeat(1000), characters,
       newCharacterCandidates: characters.map(name => ({ name, role: 'supporting' })),
@@ -112,8 +113,6 @@ describe('blueprint semantic contract', () => {
       suspenseHook: candidate.suspenseHook, characters, newCharacterCandidates: candidate.newCharacterCandidates,
       relationshipHints: candidate.relationships,
     })
-    expect(validateBlueprintSemanticItem(validBlueprint({ characters: ['名'.repeat(33)], relationships: [] })))
-      .toContain('value_too_long')
     const duplicate = { from: '林岚', to: '周砚', relation: '同行' }
     expect(validateBlueprintSemanticItem(validBlueprint({ relationships: [duplicate, duplicate] }))).toContain('duplicate_item')
   })
@@ -192,7 +191,7 @@ describe('blueprint semantic contract', () => {
 
   it('keeps narrative instructions free of the retired prose and count ceilings', () => {
     for (const language of ['en-US', 'zh-CN'] as const) {
-      expect(blueprintSemanticGenerationContract(language)).not.toMatch(/1,?200|900|100–150|最多 12|at most 12/u)
+      expect(blueprintSemanticGenerationContract(language)).not.toMatch(/1,?200|900|100–150|最多 (?:12|32|80)|at most (?:12|32|80)/u)
     }
   })
 

@@ -1186,7 +1186,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range')).toHaveLength(1)
   })
 
-  it('keeps an overlong relationship candidate uncommitted when complete rebuilding fails', async () => {
+  it('commits a complete relationship beyond the former maximum in one request', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler({
       other: channel => channel === 'db:character-roster-read'
         ? { status: 'empty', revision: 0, entries: [] }
@@ -1211,18 +1211,19 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
 
-    await expect(command.execute({
+    const result = await command.execute({
       step: {},
       context: workflowContext(),
       callbacks: stepCallbacks(),
-    })).rejects.toThrow(/code=value_too_long/u)
+    })
 
-    expect(complete).toHaveBeenCalledTimes(2)
-    expect(complete.mock.calls[1]?.[0].purpose).toBe('chapter-blueprint-directory:compact-single:chapter-1')
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(result[0].relationshipHints).toEqual([{ from: '主角', to: '盟友', relation: overlongRelation }])
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range').map(([, payload]) => payload))
+      .toMatchObject([{ blueprints: [{ relationshipHints: result[0].relationshipHints }] }])
   })
 
-  it('rebuilds all overlong fields rather than truncating a supported relationship alias', async () => {
+  it('preserves full fields through a supported relationship alias in one request', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler({
       other: channel => channel === 'db:character-roster-read'
         ? { status: 'empty', revision: 0, entries: [] }
@@ -1233,16 +1234,11 @@ describe('GenerateDirectoryCommand', () => {
       purpose: 'p'.repeat(260),
     })
     delete candidate.relationships
-    candidate.relationshipHints = [
-      { from: '主角', to: '盟友', relation: 'r'.repeat(105) },
-    ]
+    const longRelation = `${'r'.repeat(105)}但盟约已解除`
+    candidate.relationshipHints = [{ from: '主角', to: '盟友', relation: longRelation }]
     const complete = vi.fn(async (task: GenerationTask) => ({
       status: 'completed',
-      content: JSON.stringify({ blueprints: [
-        task.purpose.includes(':compact-single:')
-          ? modelBlueprint(1, { characters: ['主角', '盟友'], purpose: '完整重建', relationshipHints: [{ from: '主角', to: '盟友', relation: '盟约已解除' }] })
-          : candidate,
-      ] }),
+      content: JSON.stringify({ blueprints: [candidate] }),
       finishReason: 'stop',
       receipt: generationReceipt(complete.mock.calls.length, 'stop', task.purpose),
     } as const))
@@ -1258,10 +1254,10 @@ describe('GenerateDirectoryCommand', () => {
       callbacks: stepCallbacks(),
     })
 
-    expect(complete).toHaveBeenCalledTimes(2)
+    expect(complete).toHaveBeenCalledTimes(1)
     expect(result[0]).toMatchObject({
-      purpose: '完整重建',
-      relationshipHints: [{ from: '主角', to: '盟友', relation: '盟约已解除' }],
+      purpose: 'p'.repeat(260),
+      relationshipHints: [{ from: '主角', to: '盟友', relation: longRelation }],
     })
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)
