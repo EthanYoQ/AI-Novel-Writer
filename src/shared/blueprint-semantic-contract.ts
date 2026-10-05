@@ -34,10 +34,6 @@ export const BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST = Object.freeze({
     requiredFields: Object.freeze(['from', 'to', 'relation'] as const),
     endpointsMustAppearInCharacters: true,
   } as const),
-  outputLimits: Object.freeze({
-    characterNameCharacters: 32,
-    relationshipCharacters: 80,
-  } as const),
   exactChapterCoverage: true,
 } as const)
 
@@ -50,7 +46,7 @@ suspenseHook is always required; even without a mystery, state one concrete unre
 characters must be an array containing at least one unique, non-empty full character name.
 newCharacterCandidates is optional. When present, include only important named characters first introduced by this blueprint and expected to recur. Every item must contain name and role, name must exactly copy one entry from characters, and role must be protagonist, antagonist, supporting, or minor. Omit it or use [] when there are no candidates; never include incidental figures.
 relationships is required and may be []; every item must contain non-empty from, to, and relation fields. from and to must exactly copy full names from the same item's characters array and may not self-reference.
-Character names are at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} characters and relation labels at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} characters. Preserve complete narrative content.
+Preserve complete narrative content.
 Do not omit required fields, combine chapters, rename fields, explain, or output Markdown or code fences.`
   }
   return `【不可变蓝图 JSON 合同】
@@ -61,7 +57,7 @@ characters 必须是至少含一个唯一非空角色名的字符串数组。
 newCharacterCandidates 可选；提供时只声明由本章首次引入且预计后续复用的重要具名角色，每项必须包含 name、role，name 必须逐字复制 characters 中的一个完整姓名，role 只能是 protagonist、antagonist、supporting、minor。无候选时可省略或传 []，一次性路人不得声明为候选。
 relationships 必须是数组，无关系时传 []；每项必须含非空 from、to、relation，from/to 必须精确出现在同项 characters 中且不能自指。
 from/to 必须逐字复制同一项 characters 中的完整字符串；任一端点不在 characters 时，删除该关系或使用 []，不得发明别名、简称或补写角色。
-角色姓名最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} 字符，关系标签最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} 字符。叙述内容须保持完整。
+叙述内容须保持完整。
 不得省略必填字段、合并章节、输出近义字段、解释、Markdown 或代码围栏。`
 }
 
@@ -103,20 +99,11 @@ function fieldValue(
   return undefined
 }
 
-function characterCount(value: string): number {
-  return Array.from(value).length
-}
-
-function requiredText(value: unknown, path: string, maxCharacters?: number): string {
+function requiredText(value: unknown, path: string): string {
   if (value === undefined) throw new StructuredContractDiagnostic('missing_field', path)
   if (typeof value !== 'string') throw new StructuredContractDiagnostic('invalid_type', path)
   if (!value.trim()) throw new StructuredContractDiagnostic('empty_value', path)
-  const normalized = value.trim()
-  const actualCharacters = characterCount(normalized)
-  if (maxCharacters !== undefined && actualCharacters > maxCharacters) {
-    throw new StructuredContractDiagnostic('value_too_long', path, actualCharacters, maxCharacters)
-  }
-  return normalized
+  return value.trim()
 }
 
 function normalizedChapterNumber(value: Record<string, unknown>, path: string): number {
@@ -136,13 +123,7 @@ function normalizedCharacters(value: unknown, path: string): string[] {
   if (value === undefined) throw new StructuredContractDiagnostic('missing_field', path)
   if (!Array.isArray(value)) throw new StructuredContractDiagnostic('invalid_type', path)
   if (value.length === 0) throw new StructuredContractDiagnostic('invalid_value', path)
-  const characters = value.map((candidate, index) => {
-    return requiredText(
-      candidate,
-      `${path}[${index}]`,
-      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters,
-    )
-  })
+  const characters = value.map((candidate, index) => requiredText(candidate, `${path}[${index}]`))
   if (new Set(characters).size !== characters.length) {
     throw new StructuredContractDiagnostic('duplicate_item', path)
   }
@@ -165,11 +146,7 @@ function normalizedRelationships(
     }
     const from = requiredText(fieldValue(candidate, 'from', ['source']), `${relationshipPath}.from`)
     const to = requiredText(fieldValue(candidate, 'to', ['target']), `${relationshipPath}.to`)
-    const relation = requiredText(
-      candidate.relation,
-      `${relationshipPath}.relation`,
-      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters,
-    )
+    const relation = requiredText(candidate.relation, `${relationshipPath}.relation`)
     if (from === to) {
       throw new StructuredContractDiagnostic('relationship_self_reference', relationshipPath)
     }
@@ -195,11 +172,7 @@ function normalizedNewCharacterCandidates(
   return value.map((candidate, index) => {
     const candidatePath = `${path}[${index}]`
     if (!isRecord(candidate)) throw new StructuredContractDiagnostic('invalid_type', candidatePath)
-    const name = requiredText(
-      candidate.name,
-      `${candidatePath}.name`,
-      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters,
-    )
+    const name = requiredText(candidate.name, `${candidatePath}.name`)
     if (!characterSet.has(name)) {
       throw new StructuredContractDiagnostic('invalid_value', `${candidatePath}.name`)
     }
