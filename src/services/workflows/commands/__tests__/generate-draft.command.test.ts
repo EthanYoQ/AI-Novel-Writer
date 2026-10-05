@@ -759,10 +759,11 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       if (channel === 'generation:execute') {
         if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
           return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
+        const condense = (args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-condense'
         const result = outcome(text, 'stop')
         result.receipt.visibleArtifact = {
-          artifactId: '超长正文片',
-          attemptId: '超长物理请求',
+          artifactId: condense ? '压缩正文片' : '超长正文片',
+          attemptId: condense ? '压缩物理请求' : '超长物理请求',
           revision: 1,
           textHash: hash(text),
         }
@@ -771,7 +772,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       if (channel === 'generation:compose-visible') {
         return {
           algorithm: DRAFT_VISIBLE_TEXT_VERSION,
-          artifactIds: ['超长正文片'],
+          artifactIds: args[1],
           text,
           textHash: hash(text),
           sources: [],
@@ -790,7 +791,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     // 新 run 直接生成正文，唯一压缩仍使用同一 run。
     expect(executed.map(([, request]) => (request as { task: GenerationTask }).task.purpose))
       .toEqual(['chapter-draft-short-outline', 'chapter-draft', 'chapter-draft-condense'])
-    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:compose-visible')).toHaveLength(1)
+    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:compose-visible')).toHaveLength(2)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:recovery-candidate-record')).toBe(false)
@@ -3499,14 +3500,14 @@ ${headingPrefix}第3章：潮门
     expectNoDraftPersistence(invoke)
   })
 
-  it('saves all 1350 units after one condense of a complete 1400-unit draft targeting 1000', async () => {
+  it.each([1350, 1400, 1450])('saves all %i units after one condense of a complete 1400-unit draft targeting 1000', async units => {
     const draft = `${'长'.repeat(1400)}。`
-    const condensed = `${'缩'.repeat(1350)}。`
+    const condensed = `${'缩'.repeat(units)}。`
     const runtime = fakeOutcomes(outcome(draft, 'stop', 1), outcome(condensed, 'stop', 2))
     const { invoke, context, callbacks, command } = setup({ runtime, wordsPerChapter: 1000, wordsTarget: 1000 })
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(condensed)
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-condense'])
-    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({ content: condensed, wordCount: 1350 }), expect.anything(), expect.anything())
+    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({ content: condensed, wordCount: units }), expect.anything(), expect.anything())
     expect(callbacks.log).toHaveBeenLastCalledWith(expect.stringContaining('字数超过约定'))
     expect(callbacks.replaceText).toHaveBeenLastCalledWith(condensed)
     expect(invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
@@ -3626,8 +3627,6 @@ ${headingPrefix}第3章：潮门
   })
 
   it.each([
-    { label: 'same length', text: `${'缩'.repeat(1400)}。`, finishReason: 'stop' as const },
-    { label: 'longer', text: `${'缩'.repeat(1450)}。`, finishReason: 'stop' as const },
     { label: 'below the minimum', text: `${'缩'.repeat(600)}。`, finishReason: 'stop' as const },
     { label: 'truncated', text: `${'缩'.repeat(1000)}`, finishReason: 'length' as const },
     { label: 'unknown completion', text: '', finishReason: 'unknown' as const },

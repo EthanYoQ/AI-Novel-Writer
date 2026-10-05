@@ -470,7 +470,7 @@ export class GenerationRunRepository {
                 const target = Number((run.binding.sourceManifest.authorInputs as { id: string; text: string }[] | undefined)
                     ?.find(item => item.id === 'draft:target-units')?.text);
                 if (!Number.isSafeInteger(target) || target < 1) fail('GENERATION_COMPOSITION_SOURCE_INVALID');
-                if (receipt.result?.finishReason !== 'stop' || countDraftUnits(next) >= countDraftUnits(text)
+                if (receipt.result?.finishReason !== 'stop'
                     || countDraftUnits(text) <= draftTargetUnitRange(target).maximum) fail('GENERATION_COMPOSITION_NO_PROGRESS');
             } else {
                 if (draftAlgorithm && sources.length && receipt.result?.finishReason === 'length'

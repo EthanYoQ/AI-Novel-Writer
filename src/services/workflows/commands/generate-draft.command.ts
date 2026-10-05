@@ -1686,7 +1686,7 @@ ${params.candidate.text}`,
     logDraftAttempt(params.callbacks, params.context, { zhCN: '压缩修订', enUS: 'Condense revision' }, outcome.receipt)
     const condensed = sanitizeDraftText(this.stripThinkingTags(outcome.content), params.compositionVersion)
     const units = countDraftUnits(condensed)
-    const accepted = outcome.finishReason === 'stop' && units >= range.minimum && units < originalUnits
+    const accepted = outcome.finishReason === 'stop' && units >= range.minimum
     params.callbacks.log(uiText(
       `  压缩修订响应结束：finishReason=${outcome.finishReason} visibleUnits=${units} accepted=${accepted}`,
       `  Condense revision response ended: finishReason=${outcome.finishReason} visibleUnits=${units} accepted=${accepted}`,

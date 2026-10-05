@@ -2134,21 +2134,28 @@ describe('main draft persistence and batch lineage', () => {
     expect(f.owner.readContext(generated.run.handle).attemptedPurposes).toEqual(['chapter-draft', 'chapter-draft-condense'])
     expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
   })
-  it('refuses a condense revision that does not shorten the composed draft', async () => {
-    const texts = [draftText, `${draftText}城门外的风更紧了。`]
+  it.each([1400, 1450])('saves the complete %i-unit condense revision without requiring a shorter replacement', async units => {
+    const original = `${'原'.repeat(1400)}。`, replacement = `${'修'.repeat(units)}。`
+    const texts = [original, replacement]
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: texts.shift()! })
       return { finishReason: 'stop', usage: null }
     })
     const f = fixture(dispatch)
-    const generated = await generate({ ...f, fixture: f, dispatch }, { ...f.begin, authorInputs })
+    const generated = await generate({ ...f, fixture: f, dispatch }, { ...f.begin, authorInputs: [{ id: 'draft:target-units', text: '1000' }] })
     const condense = await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense',
       task: { ...task, purpose: 'chapter-draft-condense' } })
-    const longer = `${draftText}城门外的风更紧了。`
-    expect(() => f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condense.run.artifacts.at(-1)!.artifactId],
-      textHash(longer), DRAFT_VISIBLE_TEXT_VERSION)).toThrow('GENERATION_COMPOSITION_NO_PROGRESS')
-    expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText)
+    const composed = f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condense.run.artifacts.at(-1)!.artifactId],
+      textHash(replacement), DRAFT_VISIBLE_TEXT_VERSION)
+    expect(composed.text).toBe(replacement)
+    const saved = f.owner.commitDraft({ ...generated.request, expectedCompositionHash: textHash(replacement) })
+    expect(saved).toMatchObject({ content: replacement, contentHash: textHash(replacement) })
+    expect(f.db.prepare('SELECT c.body,d.word_count FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(saved.id))
+      .toEqual({ body: replacement, word_count: units })
+    expect(f.owner.readContext(generated.run.handle).attemptedPurposes).toEqual(['chapter-draft', 'chapter-draft-condense'])
+    expect(dispatch).toHaveBeenCalledTimes(2)
   })
+
   it('refuses a condense revision that replaces a draft already within the frozen target maximum', async () => {
     const shorter = '清晨的街道渐渐苏醒，林岚走向城门。'
     const texts = [draftText, shorter]
