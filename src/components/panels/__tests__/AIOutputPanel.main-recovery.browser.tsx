@@ -6,6 +6,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import type { MainGenerationRunHandle, MainGenerationRunView } from '../../../services/generation/generation-runtime'
+import type { GenerationBatchHistory } from '../../../shared/generation-owner-contract'
 import { createDraftRecoveryWorkflow } from '../../../services/workflows/draft-recovery-workflow'
 import { createReviewRevisionRecoveryWorkflow } from '../../../services/workflows/review-revision-recovery-workflow'
 
@@ -60,6 +61,53 @@ it.each(['zh-CN', 'en-US'] as const)('合法改稿后的生成记录与审稿同
   expect(copy).toHaveBeenCalledWith(content)
   expect(startWorkflow).not.toHaveBeenCalled()
   expect(invoke.mock.calls.some(([channel]) => ['generation:resume', 'generation:execute', 'generation:compose-visible', 'generation:commit-draft'].includes(channel))).toBe(false)
+})
+
+it.each(['zh-CN', 'en-US'] as const)('来源变化的未完成批次不能继续，独立候选仍可查看：%s', async locale => {
+  const session = { projectId: '批次海港', leaseId: '新会话', projectPath: 'C:/合成批次海港' }
+  const handle: MainGenerationRunHandle = { projectId: session.projectId, epoch: '旧会话', rootActionId: '批次预算', runId: '原批次' }
+  const independent = { ...handle, rootActionId: '独立预算', runId: '独立候选' }, content = '独立候选中的海港正文。'
+  const batch: GenerationBatchHistory = { batchId: handle.runId, rootHandle: handle, sourceCurrent: false,
+    mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 900, modelId: '原模型', authorInputs: [],
+    nextChapterNumber: 2, completedChapters: [{ chapterNumber: 1, draftId: 1, version: 1, contentHash: 'a'.repeat(64), sourceRunHandle: handle }] }
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'generation:list') return [{ handle: independent, status: 'failed', artifacts: [{ ...independent,
+      artifactId: '独立片段', attemptId: '独立请求', text: content, textHash: 'b'.repeat(64), revision: 1, durableRevision: 1,
+      status: 'completed', compositionEligible: true }] }]
+    if (channel === 'generation:list-batches') return [batch, { ...batch, batchId: '已完成批次', nextChapterNumber: null }]
+    if (channel === 'db:recovery-candidate-list') return []
+    if (channel === 'generation:read-context') return { handle: independent, operation: 'chapter-draft', chapterNumber: 3,
+      draftSave: { kind: 'absent' }, composition: null, attemptedPurposes: ['chapter-draft'] }
+    throw new Error(`Unexpected action: ${channel}`)
+  })
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
+  const startWorkflow = vi.fn(), copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+  useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, name: '批次海港', sessionLease: session.leaseId, novelConfig: {} } as never })
+  useWorkflowStore.setState({ activeRuns: [], history: [], currentRun: null, startWorkflow })
+  useLocaleStore.setState({ locale })
+  container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
+  await act(async () => root!.render(<AIOutputPanel />))
+  const message = locale === 'zh-CN' ? '批次来源已变化，不能继续此批次。请从当前正文发起新任务。'
+    : 'The batch source changed. This batch cannot continue. Start a new task from the current text.'
+  await vi.waitFor(() => expect(container!.textContent).toContain(message))
+  expect(container.querySelector('[role=alert]')).toBeNull()
+  expect(container.textContent).toContain(locale === 'zh-CN' ? '已保存 1 章，下一章 2' : '1 saved; next chapter 2')
+  expect(container.textContent).toContain(content)
+  expect(container.querySelector<HTMLInputElement>('input[type=checkbox]')?.disabled).toBe(false)
+  const batchButtons = () => [...container!.querySelectorAll('button')].filter(button => button.textContent === (locale === 'zh-CN' ? '继续此批次' : 'Continue this batch'))
+  expect(batchButtons()).toHaveLength(1)
+  expect(batchButtons()[0].disabled).toBe(true)
+  await act(async () => {
+    batchButtons()[0].click()
+    ;[...container!.querySelectorAll('button')].find(button => button.textContent === (locale === 'zh-CN' ? '复制' : 'Copy'))!.click()
+  })
+  expect(copy).toHaveBeenCalledWith(content)
+  expect(startWorkflow).not.toHaveBeenCalled()
+  expect(invoke.mock.calls.some(([channel]) => channel === 'generation:read-batch')).toBe(false)
+  batch.sourceCurrent = true
+  await act(async () => root!.render(<AIOutputPanel key="当前来源" />))
+  await vi.waitFor(() => expect(batchButtons()[0]?.disabled).toBe(false))
+  expect(container.textContent).not.toContain(message)
 })
 
 it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('中文面板沿明确的 %s 原任务恢复，源冲突只可复制，已保存结果可直接打开', async operation => {

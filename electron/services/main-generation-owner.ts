@@ -1276,7 +1276,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         output: 'visible-text', batchIntent: { mode, range, targetUnits } }, true)
       return readBatch(run.handle.runId)
     },
-    listBatches: () => { assertCurrent(); return list().filter(item => repository.get(item.handle.runId).binding.sourceManifest.batchIntent).map(item => readBatch(item.handle.runId)) },
+    listBatches: () => { assertCurrent(); return list().filter(item => repository.get(item.handle.runId).binding.sourceManifest.batchIntent).map(item => draftEffects.readBatchHistory(item.handle.runId, deps.projectId)) },
     confirmBatchFinalization: (request: { batchId: string; chapterNumber: number; finalizationId: string }) => {
       const batch = readBatch(request.batchId)
       if (!batch.completedChapters.some(item => item.chapterNumber === request.chapterNumber && item.finalizationId === request.finalizationId && item.postProcessComplete)) throw new Error('GENERATION_BATCH_FINALIZATION_REQUIRED')

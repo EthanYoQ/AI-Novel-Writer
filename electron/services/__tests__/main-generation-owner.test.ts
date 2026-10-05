@@ -2043,6 +2043,8 @@ describe('main draft persistence and batch lineage', () => {
     DraftRepository.updateContent(saved.id, edited, edited.length)
     const reopened = f.reopen()
     expect(reopened.readContext(generated.run.handle).draftSave).toEqual({ kind: 'changed' })
+    expect(reopened.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false,
+      nextChapterNumber: 2, completedChapters: [expect.objectContaining({ draftId: saved.id, contentHash: saved.contentHash })] })])
     expect(() => reopened.readBatch(batch.batchId)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
     expect(() => reopened.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
     expect(() => reopened.begin({ ...f.begin, chapterNumber: 2, uiActionNonce: 'chapter2', authorInputs,
@@ -2082,7 +2084,88 @@ describe('main draft persistence and batch lineage', () => {
     expect(DraftRepository.getFull(saved.id)?.content).toBe(edited)
     expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
     expect(f.dispatch).toHaveBeenCalledTimes(2)
-    expect(reopened.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, nextChapterNumber: null })])
+    expect(reopened.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false, nextChapterNumber: null })])
+  })
+  it('lists replaced batch drafts by their original receipt but refuses to advance', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    expect(f.owner.listBatches()[0]?.sourceCurrent).toBe(true)
+    const replacement = DraftRepository.create({ chapterNumber: 1, source: 'write', content: '作者创建的新版本。', wordCount: 9 })
+    const reopened = f.reopen()
+    expect(reopened.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false,
+      nextChapterNumber: 2, completedChapters: [expect.objectContaining({ draftId: saved.id, version: saved.version, contentHash: saved.contentHash })] })])
+    expect(() => reopened.readBatch(batch.batchId)).toThrow('GENERATION_BATCH_DRAFT_REPLACED')
+    expect(() => reopened.begin({ ...f.begin, chapterNumber: 2, uiActionNonce: 'chapter2', authorInputs,
+      batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId, selectedDraftIds: [saved.id] }))
+      .toThrow('GENERATION_BATCH_DRAFT_REPLACED')
+    expect(DraftRepository.getFull(saved.id)?.content).toBe(saved.content)
+    expect(DraftRepository.getFull(replacement)?.content).toBe('作者创建的新版本。')
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it.each(['draft_review', 'auto_finalize'] as const)('reads revised finalization without crediting the original %s batch', async mode => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode, range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request), revised = '林岚确认信封中的线索后，走向城门。'
+    FinalizationRepository.commit({ finalizationId: 'revised-finalization', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: revised, contentHash: textHash(revised), contentRevision: 1, targetFileName: '第一章.txt' })
+    FinalizationRepository.markPublished('revised-finalization')
+    const post = PostProcessRepository.createRun({ triggerSourceType: 'chapter_finalize', triggerSourceId: '1', sourceLabel: '第一章',
+      finalizedSource: { finalizationId: 'revised-finalization', draftId: saved.id, chapterNumber: 1, contentHash: textHash(revised) },
+      steps: [{ key: 'kb_import', label: '知识库', critical: true }, { key: 'chapter_notes', label: '章节笔记', critical: true }] })
+    PostProcessRepository.markStepOk(post, 'kb_import')
+    PostProcessRepository.markStepOk(post, 'chapter_notes')
+    const reopened = f.reopen(), history = reopened.listBatches()[0]!
+    expect(history).toMatchObject({ sourceCurrent: false, nextChapterNumber: mode === 'auto_finalize' ? 1 : null,
+      completedChapters: [{ draftId: saved.id, contentHash: saved.contentHash, postProcessComplete: false }] })
+    expect(history.currentChapterRunHandle).toBeUndefined()
+    expect(history.completedChapters[0]?.finalizationId).toBeUndefined()
+    expect(history.completedChapters[0]?.pendingFinalizationId).toBeUndefined()
+    expect(() => reopened.confirmBatchFinalization({ batchId: batch.batchId, chapterNumber: 1, finalizationId: 'revised-finalization' }))
+      .toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(() => reopened.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(DraftRepository.getFull(saved.id)).toMatchObject({ status: 'finalized', content: revised })
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it.each(['hash', 'unrelated snapshot', 'chapter', 'unfinalized draft'])('rejects a corrupt %s outbox despite changed batch prose', async corruption => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request), revised = '修订后的定稿正文。'
+    FinalizationRepository.commit({ finalizationId: 'revised-finalization', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: revised, contentHash: textHash(revised), contentRevision: 1, targetFileName: '第一章.txt' })
+    if (corruption === 'hash') f.db.exec("UPDATE finalization_outbox SET content_hash='invalid'")
+    if (corruption === 'unrelated snapshot') f.db.prepare('UPDATE finalization_outbox SET content_snapshot=?,content_hash=?')
+      .run('无关但哈希自洽的正文。', textHash('无关但哈希自洽的正文。'))
+    if (corruption === 'chapter') f.db.exec('UPDATE finalization_outbox SET chapter_number=2')
+    if (corruption === 'unfinalized draft') f.db.exec("UPDATE drafts SET status='draft'")
+    const reopened = f.reopen()
+    expect(() => reopened.listBatches()).toThrow('GENERATION_BATCH_FINALIZATION_CONFLICT')
+    expect(() => reopened.readBatch(batch.batchId)).toThrow('GENERATION_BATCH_FINALIZATION_CONFLICT')
+  })
+  it.each(['edited', 'replaced'])('keeps validating later receipts after an earlier batch draft is %s', async change => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
+    const first = await generate(f, selection), saved = f.owner.commitDraft(first.request)
+    const second = await generate(f, { ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedDraftIds: [saved.id] })
+    f.owner.commitDraft(second.request)
+    if (change === 'edited') DraftRepository.updateContent(saved.id, '作者修改后的正文。', 9)
+    else DraftRepository.create({ chapterNumber: 1, source: 'write', content: '作者的新版本。', wordCount: 7 })
+    f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.draftCommit.contentHash','invalid') WHERE run_id=?")
+      .run(second.run.handle.runId)
+    const reopened = f.reopen()
+    expect(() => reopened.listBatches()).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(() => reopened.readBatch(batch.batchId)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(f.dispatch).toHaveBeenCalledTimes(2)
   })
   it('rejects corrupted batch receipts when listing history after reopen', async () => {
     const f = drafting()

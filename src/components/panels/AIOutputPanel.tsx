@@ -1,7 +1,7 @@
 import { canCommitRecoveredReview } from '../../services/workflows/commands/review-chapter.command'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import GenerationBudgetDiagnostics from './GenerationBudgetDiagnostics'
-import type { GenerationBatchProgress, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
+import type { GenerationBatchHistory, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import type { ReviewRevisionRecovery } from '../../shared/review-revision-generation'
 import type { EditorInlineRecovery } from '../../shared/editor-inline-generation'
 import { createReviewRevisionRecoveryWorkflow } from '../../services/workflows/review-revision-recovery-workflow'
@@ -275,7 +275,7 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
 }) {
   const [runs, setRuns] = useState<Array<{ view: MainGenerationRunView; recovery: GenerationRecoveryContext }>>([])
   const [planningRuns, setPlanningRuns] = useState<GenerationRecoveryContext[]>([])
-  const [batches, setBatches] = useState<GenerationBatchProgress[]>([])
+  const [batches, setBatches] = useState<GenerationBatchHistory[]>([])
   const [reviewRuns, setReviewRuns] = useState<Array<{ view: MainGenerationRunView; recovery: ReviewRevisionRecovery }>>([])
   const [agentRuns, setAgentRuns] = useState<import('../../shared/agent-generation').AgentGenerationRecovery[]>([])
   const [editorRuns, setEditorRuns] = useState<EditorInlineRecovery[]>([])
@@ -421,7 +421,9 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
     {visibleBatches.map(batch => <article key={batch.batchId} className="mb-3">
       <p>{runText(locale, `批量正文：已保存 ${batch.completedChapters.length} 章，下一章 ${batch.nextChapterNumber}`,
         `Batch drafts: ${batch.completedChapters.length} saved; next chapter ${batch.nextChapterNumber}`)}</p>
-      <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy} onClick={() => { void act(async () => {
+      {!batch.sourceCurrent && <p>{runText(locale, '批次来源已变化，不能继续此批次。请从当前正文发起新任务。',
+        'The batch source changed. This batch cannot continue. Start a new task from the current text.')}</p>}
+      <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy || !batch.sourceCurrent} onClick={() => { void act(async () => {
         const workflow = await createBatchRecoveryWorkflow(session, batch.batchId)
         await useWorkflowStore.getState().startWorkflow(workflow)
       }) }}>{runText(locale, '继续此批次', 'Continue this batch')}</button>

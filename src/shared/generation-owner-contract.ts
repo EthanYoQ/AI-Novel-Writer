@@ -227,6 +227,9 @@ export interface GenerationBatchProgress extends GenerationBatchIntent {
   nextChapterNumber: number | null
   authorInputs: GenerationAuthorInput[]
 }
+export interface GenerationBatchHistory extends GenerationBatchProgress {
+  sourceCurrent: boolean
+}
 
 /** Selection and semantic intent only. Main owns identity, source hashes and budgets. */
 export interface BeginGenerationRequest {
@@ -277,7 +280,7 @@ export interface GenerationOwnerChannels {
   'generation:retry-draft-short-outline': { args: [{ handle: MainGenerationRunHandle; failedAttemptId: string }]; return: MainGenerationExecuteReceipt }
   'generation:begin-batch': { args: [BeginGenerationBatchRequest]; return: GenerationBatchProgress }
   'generation:read-batch': { args: [{ batchId: string }]; return: GenerationBatchProgress }
-  'generation:list-batches': { args: []; return: GenerationBatchProgress[] }
+  'generation:list-batches': { args: []; return: GenerationBatchHistory[] }
   'generation:confirm-batch-finalization': { args: [{ batchId: string; chapterNumber: number; finalizationId: string }]; return: GenerationBatchProgress }
   'generation:list-directory-progress': { args: []; return: DirectoryGenerationProgress[] }
   'generation:compose-visible': { args: [MainGenerationRunHandle, string[], string, VisibleCompositionAlgorithm?]; return: VisibleCompositionReceipt }
