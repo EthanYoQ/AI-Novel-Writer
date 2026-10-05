@@ -2034,7 +2034,8 @@ describe('main draft persistence and batch lineage', () => {
   })
   it('reads author-edited saved history but refuses to advance its batch', async () => {
     const f = drafting()
-    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
       uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
     const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
     const saved = f.owner.commitDraft(generated.request)
@@ -2044,8 +2045,56 @@ describe('main draft persistence and batch lineage', () => {
     expect(reopened.readContext(generated.run.handle).draftSave).toEqual({ kind: 'changed' })
     expect(() => reopened.readBatch(batch.batchId)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
     expect(() => reopened.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(() => reopened.begin({ ...f.begin, chapterNumber: 2, uiActionNonce: 'chapter2', authorInputs,
+      batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId, selectedDraftIds: [saved.id] }))
+      .toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
     expect(DraftRepository.getFull(saved.id)?.content).toBe(edited)
     expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it.each(['revision merge', 'author edit'])('lists completed batch history and an independent candidate after a legitimate %s', async change => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    const receipts = f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE run_id=?').all(generated.run.handle.runId)
+    const edited = '清晨的街道渐渐苏醒，林岚停在城门前，确认昨日的线索仍藏在信封里。'
+    if (change === 'revision merge') {
+      const revision = RevisionRepository.create({ baseDraftId: saved.id, revisionType: 'refine', content: edited,
+        wordCount: edited.length, expectedSource: { id: saved.id, chapterNumber: 1, version: saved.version,
+          status: 'draft', content: saved.content } })
+      RevisionRepository.mergeIntoDraft({ revisionId: revision.id, targetDraftId: saved.id,
+        expectedDraftContent: saved.content, mergedContent: edited, wordCount: edited.length })
+      expect(RevisionRepository.getFull(revision.id)).toMatchObject({ status: 'merged', mergedToDraftId: saved.id })
+    } else {
+      DraftRepository.updateContent(saved.id, edited, edited.length)
+    }
+    const independent = await generate(f, { ...f.begin, authorInputs, uiActionNonce: 'independent' })
+    const reopened = f.reopen()
+    expect(reopened.list().map(run => run.handle.runId)).toEqual(expect.arrayContaining([
+      batch.rootHandle.runId, generated.run.handle.runId, independent.run.handle.runId,
+    ]))
+    expect(reopened.readContext(independent.run.handle).draftSave).toEqual({ kind: 'absent' })
+    expect(reopened.readContext(generated.run.handle).draftSave).toEqual({ kind: 'changed' })
+    expect(() => reopened.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(f.fixture.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE run_id=?').all(generated.run.handle.runId)).toEqual(receipts)
+    expect(DraftRepository.getFull(saved.id)?.content).toBe(edited)
+    expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(f.dispatch).toHaveBeenCalledTimes(2)
+    expect(reopened.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, nextChapterNumber: null })])
+  })
+  it('rejects corrupted batch receipts when listing history after reopen', async () => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    f.db.exec("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.draftCommit.contentHash','invalid') WHERE json_extract(usage_receipt_json,'$.draftCommit') IS NOT NULL")
+    const reopened = f.reopen()
+    expect(() => reopened.listBatches()).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(() => reopened.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(DraftRepository.getFull(saved.id)?.content).toBe(draftText)
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
   it.each([
