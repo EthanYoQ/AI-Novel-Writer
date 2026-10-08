@@ -89,7 +89,7 @@ it('启动后偏好写入失败保留已挂载编辑器及其未保存正文', a
 
 it('已挂载的真实 App 在偏好写入失败后仍呈现 V3', async () => {
   const invoke = vi.fn(async (channel: string) => {
-    if (channel === 'config:get') return {}
+    if (channel === 'config:get') return { locale: 'zh-CN' }
     if (channel === 'project:recent-list') return []
     if (channel === 'llm:list-models') return []
     if (channel === 'update:get-state') return { status: 'disabled', currentVersion: '', isReminderDeferred: false }
