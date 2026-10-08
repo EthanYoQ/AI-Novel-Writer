@@ -175,6 +175,7 @@ describe('real SQLite schema probe and WAL staging backup', () => {
     for (const [table, id] of [['drafts', 19], ['reviews', 21], ['revisions', 23], ['summary_snapshots', 25], ['llm_calls', 27], ['post_process_steps', 29]] as const) {
       expect(target.prepare(`SELECT id FROM ${table}`).pluck().get(), table).toBe(id)
     }
+    expect(target.prepare('SELECT id,generation,stale_from_chapter FROM continuity_projection_meta').all()).toEqual([{ id: 'main', generation: 0, stale_from_chapter: null }])
     expect(target.prepare('SELECT id FROM post_process_runs').pluck().get()).toBe('old-run')
     expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='contents'").pluck().get()).toBe(900)
     expect(bytes(f.root)).toMatchObject(before)
@@ -204,6 +205,7 @@ describe('real SQLite schema probe and WAL staging backup', () => {
     const target = new Database(f.target, { readonly: true, fileMustExist: true }); handles.push(target)
     expect(target.prepare('SELECT rowid FROM project_core WHERE id=?').pluck().get('main')).toBe(7)
     expect(target.prepare('SELECT id,body FROM contents').get()).toEqual({ id: 11, body: 'v1.0 正文\r\n原字节' })
+    expect(target.prepare('SELECT id,generation,stale_from_chapter FROM continuity_projection_meta').all()).toEqual([{ id: 'main', generation: 0, stale_from_chapter: null }])
     expect(target.prepare('SELECT id,content_id,word_count,source_dependencies FROM drafts').get()).toEqual({
       id: 19, content_id: 11, word_count: 876, source_dependencies: '[]',
     })
@@ -240,6 +242,7 @@ describe('real SQLite schema probe and WAL staging backup', () => {
     const target = new Database(f.target, { fileMustExist: true }); handles.push(target)
     expect(target.prepare('SELECT rowid,core_outline,world_setting,protagonist_profile FROM project_core').get())
       .toEqual({ rowid: 7, core_outline: null, world_setting: null, protagonist_profile: null })
+    expect(target.prepare('SELECT id,generation,stale_from_chapter FROM continuity_projection_meta').all()).toEqual([{ id: 'main', generation: 0, stale_from_chapter: null }])
     expect(ProjectCoreRepository.get(target)).toMatchObject({ coreOutline: null, worldSetting: null, protagonistProfile: null })
     ProjectCoreRepository.update({ projectName: '导入后编辑' }, target)
     expect(target.prepare('SELECT project_name,core_outline,world_setting,protagonist_profile FROM project_core').get())
@@ -279,6 +282,7 @@ describe('real SQLite schema probe and WAL staging backup', () => {
     const target = new Database(f.target, { readonly: true, fileMustExist: true }); handles.push(target)
     expect(target.prepare('SELECT rowid FROM project_core WHERE id=?').pluck().get('main')).toBe(7)
     expect(target.prepare('SELECT id,body FROM contents').get()).toEqual({ id: 11, body: '原始正文\r\n字节不变' })
+    expect(target.prepare('SELECT id,generation,stale_from_chapter FROM continuity_projection_meta').all()).toEqual([{ id: 'main', generation: 0, stale_from_chapter: null }])
     expect(target.prepare('SELECT id,content_id,word_count FROM drafts').get()).toEqual({ id: 19, content_id: 11, word_count: 876 })
     expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='contents'").pluck().get()).toBe(900)
     expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='drafts'").pluck().get()).toBe(500)

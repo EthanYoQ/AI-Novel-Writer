@@ -114,7 +114,11 @@ export function commitAuthorCharacterRoster(db: Database.Database, candidate: Ch
     const created = new Map(committed.created.map(item => [item.selectionKey, item.characterId]))
     for (const entry of request.entries) {
       const id = created.get(entry.characterId) ?? entry.characterId, before = original.get(entry.characterId)
-      const legacyNotes = entry.legacyRelationshipNotes ?? ''
+      // 有结构化关系时卡片不显示旧原文；作者没改关系就不能借普通保存清掉这份看不到的原文。
+      const relationKeys = (relations: typeof entry.relationships) => relations.map(relation => JSON.stringify([relation.targetCharacterId, relation.relation])).sort().join('\n')
+      const hiddenNotes = before?.legacyRelationshipNotes && before.relationships.length > 0
+        && relationKeys(before.relationships) === relationKeys(entry.relationships) ? before.legacyRelationshipNotes : ''
+      const legacyNotes = entry.legacyRelationshipNotes ?? hiddenNotes
       if (legacyNotes !== (before?.legacyRelationshipNotes ?? ''))
         db.prepare('UPDATE characters SET relationships=? WHERE character_id=?').run(legacyNotes, id)
       if (entry.currentState) {

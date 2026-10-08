@@ -632,20 +632,30 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   }
 
-  it.each([false, true])('uses the renamed identity from an old blueprint and refuses reused-name ambiguity: %s', async reused => {
+  it.each([
+    ['renamed', [], ['AUTHOR_PROFILE_SENTINEL'], []],
+    ['reused', [{ name: '旧名', characterId: 'stable-b', role: 'supporting', personality: 'WRONG_PROFILE', currentState: {} }], [], ['AUTHOR_PROFILE_SENTINEL', 'WRONG_PROFILE']],
+  ] as const)('maps an old blueprint name through aliases and never injects a reused name: %s', async (_case, extraCards, injected, absent) => {
     const runtime = fakeOutcomes(outcome('本章正文。'.repeat(125), 'stop'))
     const f = setup({ runtime, wordsTarget: 500, characters: ['旧名'],
-      characterCards: [{ name: '新名', characterId: 'stable-a', role: 'protagonist', personality: 'AUTHOR_PROFILE_SENTINEL', currentState: {} },
-        ...(reused ? [{ name: '旧名', characterId: 'stable-b', role: 'supporting', personality: 'WRONG_PROFILE', currentState: {} }] : [])],
+      characterCards: [{ name: '新名', characterId: 'stable-a', role: 'protagonist', personality: 'AUTHOR_PROFILE_SENTINEL', currentState: {} }, ...extraCards],
       characterAliases: [{ name: '旧名', characterId: 'stable-a' }] })
-    const result = f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
-    if (reused) {
-      await expect(result).rejects.toThrow('GENERATION_CHARACTER_REFERENCE_AMBIGUOUS')
-      expect(runtime.complete).not.toHaveBeenCalled()
-    } else {
-      await result
-      expect(runtime.complete.mock.calls[0]![0].messages.map(message => message.content).join('\n')).toContain('AUTHOR_PROFILE_SENTINEL')
-    }
+    await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+    const prompt = runtime.complete.mock.calls[0]![0].messages.map(message => message.content).join('\n')
+    for (const sentinel of injected) expect(prompt).toContain(sentinel)
+    for (const sentinel of absent) expect(prompt).not.toContain(sentinel)
+  })
+
+  it('injects every current character sharing a blueprint name', async () => {
+    const runtime = fakeOutcomes(outcome('本章正文。'.repeat(125), 'stop'))
+    const f = setup({ runtime, wordsTarget: 500, characters: ['沈砺'],
+      characterCards: [{ name: '沈砺', characterId: 'stable-a', role: 'protagonist', personality: 'NORTH_GUARD', currentState: {} },
+        { name: '沈砺', characterId: 'stable-b', role: 'supporting', personality: 'SOUTH_HEALER', currentState: {} }],
+      characterAliases: [{ name: '沈砺', characterId: 'stable-a' }, { name: '沈砺', characterId: 'stable-b' }] })
+    await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+    const prompt = runtime.complete.mock.calls[0]![0].messages.map(message => message.content).join('\n')
+    expect(prompt).toContain('NORTH_GUARD')
+    expect(prompt).toContain('SOUTH_HEALER')
   })
 
   it.each([{ target: 900, edit: false }, { target: 2000, edit: false }, { target: 3000, edit: false }, { target: 900, edit: true }])('真实默认 facade 字数 $target，作者改稿 $edit，仅main组合与原子保存', async ({ target, edit }) => {

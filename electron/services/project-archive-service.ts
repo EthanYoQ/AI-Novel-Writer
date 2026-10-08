@@ -608,7 +608,7 @@ function projectReviewArtifactRef(value: unknown): Record<string, unknown> {
 }
 
 function projectReviewRecheckReceipt(value: unknown): Record<string, unknown> {
-  const receipt = object(value, ['version', 'cycleId', 'comparisonVersion', 'mergedHash', 'findingSetHash', 'findings', 'sourceContent'])
+  const receipt = object(value, ['version', 'cycleId', 'comparisonVersion', 'mergedHash', 'findingSetHash', 'findings'])
   if (Object.keys(receipt).length !== 6 || (receipt.version !== 1 && receipt.version !== 2)) fail('PORTABLE_UNSAFE_PROJECTION')
   return { version: receipt.version, cycleId: safeId(receipt.cycleId),
     comparisonVersion: safeInteger(receipt.comparisonVersion, 1), mergedHash: contentHash(receipt.mergedHash),

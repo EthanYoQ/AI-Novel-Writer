@@ -1773,10 +1773,12 @@ ${params.candidate.text}`,
       const relevantNames = new Set(relevantCharacterNames.map(name => name.trim()).filter(Boolean))
       const selected = new Set<typeof roster.entries[number]>()
       for (const name of relevantNames) {
-        const matches = roster.entries.filter(card => card.name === name || card.characterId
+        const named = roster.entries.filter(card => card.name === name)
+        const renamed = roster.entries.filter(card => card.name !== name && card.characterId
           && roster.aliases?.some(alias => alias.name === name && alias.characterId === card.characterId))
-        if (matches.length > 1) throw new Error(`GENERATION_CHARACTER_REFERENCE_AMBIGUOUS: ${name}`)
-        if (matches[0]) selected.add(matches[0])
+        // 旧名被另一角色复用时无法判断蓝图指谁，宁可不注入也不注入错的档案或中断写稿。
+        if (renamed.length === 0) for (const card of named) selected.add(card)
+        else if (named.length === 0 && renamed.length === 1) selected.add(renamed[0])
       }
       for (const card of selected) {
         const facts = [
@@ -1813,8 +1815,7 @@ ${params.candidate.text}`,
         profiles.push(`${card.name} (${card.role || 'unknown'})${facts.length ? ` | ${facts.join(' | ')}` : ''}`)
       }
       return profiles.length > 0 ? profiles.join('\n') : ''
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith('GENERATION_CHARACTER_REFERENCE_AMBIGUOUS')) throw error
+    } catch {
       return promptLanguageText(
         writingLanguage,
         '（角色资料读取失败；未把旧 currentState 或 characters_arch 当作作者事实）',

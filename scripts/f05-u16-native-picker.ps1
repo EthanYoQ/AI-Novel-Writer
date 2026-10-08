@@ -1,9 +1,10 @@
-param(
+﻿param(
   [Parameter(Mandatory=$true)][string]$Target,
   [Parameter(Mandatory=$true)][string]$ExpectedExe,
   [Parameter(Mandatory=$true)][string]$DialogTitle
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;

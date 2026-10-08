@@ -229,7 +229,10 @@ export async function backupProjectSqlite(options: {
       migrateSchema(new SqliteSchemaAdapter(staging), registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
       if (JSON.stringify(before.domain) !== JSON.stringify(domain(staging, columnsBefore))) throw new Error('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
       // Missing legacy metadata is derived only after every source row was verified.
-      if (legacySchema) initializeCharacterRosterMetadata(staging)
+      if (legacySchema) {
+        initializeCharacterRosterMetadata(staging)
+        staging.exec("INSERT OR IGNORE INTO continuity_projection_meta (id) VALUES ('main')")
+      }
       const after = inspect(staging, registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
       snapshot.unchanged()
       staging.pragma('wal_checkpoint(TRUNCATE)')

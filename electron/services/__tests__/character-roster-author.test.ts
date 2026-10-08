@@ -52,6 +52,19 @@ it('结构化关系替代旧自由文本后再次普通保存不丢失关系', (
   expect(save(f, next).snapshot.entries.find(item => item.characterId === '甲ID')?.relationships).toEqual(entry.relationships)
 })
 
+it('保存其他角色时保留被结构化关系遮住的旧关系原文', () => {
+  const f = fixture()
+  f.db.prepare('INSERT INTO character_identity_approvals VALUES(?,?,?)').run('legacy-binding', 'h', '{}')
+  f.db.prepare('INSERT INTO character_relationships VALUES(?,?,?,?,?,?,?,?)').run('rel-1', '甲ID', '乙ID', '盟友', '沈砺', '沈砺', '{"kind":"legacy"}', 'legacy-binding')
+  f.db.transaction(() => refreshCharacterIdentityProjection(f.db))()
+  const request = f.request('只改乙')
+  request.entries = request.entries.map(characterCardFromRosterEntry).map(characterRosterEntryFromCard)
+  request.entries.find(item => item.characterId === '乙ID')!.background = '南港医者，后来北上'
+  const saved = save(f, request).snapshot.entries.find(item => item.characterId === '甲ID')!
+  expect(saved.legacyRelationshipNotes).toBe('  模糊旧关系原文\r\n')
+  expect(saved.relationships).toEqual([expect.objectContaining({ targetCharacterId: '乙ID', relation: '盟友' })])
+})
+
 it('read补ID及别名不改变原投影hash或写库；同名两人不折叠', () => {
   const f = fixture(), before = facts(f.db), changes = f.db.prepare('SELECT total_changes()').pluck().get()
   const read = CharacterRosterRepository.read(f.db)
