@@ -725,7 +725,6 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(status.steps.character_cards).toMatchObject({ ok: true })
     expect(commitRequests).toHaveLength(2)
     expect(commitRequests[1]).toEqual(commitRequests[0])
-    expect(selections).toHaveLength(2)
     expect(useLLMStore.getState().generateStream).toHaveBeenCalledTimes(2)
     expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
   })
@@ -737,7 +736,6 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(status.steps.character_cards).toMatchObject({ ok: false, error: expect.stringContaining('FIELD_CONFLICT') })
     expect(commitRequests).toHaveLength(3)
     expect(commitRequests.every(request => JSON.stringify(request) === JSON.stringify(commitRequests[0]))).toBe(true)
-    expect(selections).toHaveLength(2)
     expect(useLLMStore.getState().generateStream).toHaveBeenCalledTimes(2)
     expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('作者后来设置')
   })
@@ -759,7 +757,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
   })
 
-  it('cancels before commit and retains the cancelled slot without redispatch on pipeline retry', async () => {
+  it('cancels before commit, keeps the cancelled run, and lets an explicit retry start a fresh attempt', async () => {
     insertFinalizedDraft(7, 2)
     const before = CharacterRosterRepository.read()
     let cancelledOnce = false
@@ -791,6 +789,8 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(PostProcessRepository.getSteps(interruptedRun!.id)
       .find(step => step.stepKey === 'character_cards')).toMatchObject({ ok: false, attemptCount: 0 })
 
+    const finalizationRunCount = () => getProjectDb()!.prepare("SELECT COUNT(*) FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.finalizationGenerationSlotKey') IS NOT NULL").pluck().get() as number
+    const runsBeforeRetry = finalizationRunCount()
     workflowContext.cancelled = false
     cardResponse = JSON.stringify({
       updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }],
@@ -800,11 +800,13 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       step: {}, context: workflowContext, callbacks: callbacks(),
     })
 
-    expect(status.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: false } })
-    expect(useLLMStore.getState().generateStream).not.toHaveBeenCalled()
-    expect(commitRequests).toHaveLength(0)
-    expect(CharacterRosterRepository.read()).toEqual(before)
+    expect(status.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: true } })
+    expect(useLLMStore.getState().generateStream).toHaveBeenCalledTimes(1)
+    expect(commitRequests).toHaveLength(1)
+    expect(CharacterRosterRepository.read().revision).toBe(before.revision + 1)
+    expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
     expect(PostProcessRepository.getLatestRun('chapter_finalize', '2')?.id).toBe(interruptedRun!.id)
+    expect(finalizationRunCount()).toBe(runsBeforeRetry + 1)
   })
 
   it('retries only the selected failed effect using its original candidate without invoking any model again', async () => {

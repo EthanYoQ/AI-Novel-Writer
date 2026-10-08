@@ -783,17 +783,15 @@ it.each(['v100', 'v110'] as const)('%s 无 manifest 的旧历史启用新 lineag
     .toBe(oldCandidateProjectId)
   expect(targetDb.prepare('SELECT status FROM chapter_deletion_operations WHERE operation_id=?').pluck().get('old-deletion'))
     .toBe('pending')
+  const frozenRefusal = { success: false, committed: false, error: expect.stringContaining('仅保留为历史') }
   const calls: string[] = []
   const service = new ChapterDeletionService({ cleaner: {
     async removeManuscript() { calls.push('manuscript') },
     async removeKnowledgeDocument() { calls.push('knowledge') },
   } })
-  expect(await service.retry(f.target, 'old-deletion')).toMatchObject({ success: false, committed: false,
-    operation: { operationId: 'old-deletion' } })
-  expect(await service.confirmLegacyKnowledgeAbsent(f.target, 'old-deletion')).toMatchObject({ success: false, committed: false,
-    operation: { operationId: 'old-deletion' } })
-  expect(await service.delete(f.target, { draftId: 19, chapterNumber: 7 })).toMatchObject({ success: false, committed: false,
-    operation: { operationId: 'old-deletion' } })
+  expect(await service.retry(f.target, 'old-deletion')).toEqual(frozenRefusal)
+  expect(await service.confirmLegacyKnowledgeAbsent(f.target, 'old-deletion')).toEqual(frozenRefusal)
+  expect(await service.delete(f.target, { draftId: 19, chapterNumber: 7 })).toEqual(frozenRefusal)
   expect(calls).toEqual([])
   expect(targetDb.prepare('SELECT status,attempt_count FROM chapter_deletion_operations WHERE operation_id=?')
     .get('old-deletion')).toMatchObject({ status: 'pending', attempt_count: 0 })

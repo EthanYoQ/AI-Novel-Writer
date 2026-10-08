@@ -88,10 +88,9 @@ describe('structured character roster static contract', () => {
     expect(controller).toContain("ipcMain.handle('db:character-roster-commit'")
     expect(projectCore).toContain("Object.hasOwn(data, 'charactersArch')")
     expect(projectCore).not.toContain("charactersArch: 'characters_arch'")
-    expect(projectClear).toContain("characters_arch = ''")
-    expect(projectClear).toContain("DELETE FROM characters")
-    expect(projectClear).toContain("DELETE FROM character_roster_meta")
-    expect(projectClear).toContain("DELETE FROM character_roster_operations")
+    // 清空创作字段保留角色卡；characters_arch 是 roster 投影，随角色卡一起保留。
+    expect(projectClear).not.toContain('characters_arch')
+    expect(projectClear).not.toContain('DELETE FROM character')
     // The ID projection and the guarded pre-M02 writer remain in the same repository.
     expect(roster.match(/SET characters_arch\s*=/g)).toHaveLength(2)
     expect(roster).toContain("if (hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_WRITE_REQUIRED')")

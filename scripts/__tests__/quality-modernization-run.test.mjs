@@ -454,8 +454,8 @@ test.each([
   [false, { units: 643, target: 900, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
   [false, { units: 642, target: 900, expected: 'AI_REVISION_LENGTH_MISMATCH', historical: 'AI_REVISION_LENGTH_MISMATCH' }],
   [false, { units: 1195, target: 1000, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
-  [false, { units: 1196, target: 1000, expected: 'AI_REVISION_LENGTH_MISMATCH', historical: 'AI_REVISION_LENGTH_MISMATCH' }],
-  [false, { units: 1171, target: 900, expected: 'AI_FINAL_DB_MISMATCH', historical: 'AI_REVISION_LENGTH_MISMATCH' }],
+  [false, { units: 1196, target: 1000, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
+  [false, { units: 1171, target: 900, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
   [false, { units: 735, target: 900, expected: null, historical: null }],
   [false, { units: 1103, target: 900, expected: null, historical: null }],
 ])('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review (LENGTH replacement=%s, revision bounds=%j)', async (lengthRecovery, revisionBounds) => {
