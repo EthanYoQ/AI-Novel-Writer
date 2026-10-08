@@ -35,8 +35,7 @@ import { projectPeekService } from '../services/project-peek'
 
 function projectRootSelectionFailure(error: unknown) {
   if (error instanceof Error && ['PROJECT_MIGRATION_NOT_QUALIFIED', 'PROJECT_MIGRATION_DUAL_ROOT', 'PROJECT_MIGRATION_RECOVERY_REQUIRED'].includes(error.message)) {
-    return { errorCode: 'PROJECT_ROOT_REQUIRED' as const,
-      error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请保留当前文件，等待受验证的迁移入口。' }
+    return { error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请通过“导入旧项目”创建完整副本。' }
   }
   if (
     typeof error === 'object'

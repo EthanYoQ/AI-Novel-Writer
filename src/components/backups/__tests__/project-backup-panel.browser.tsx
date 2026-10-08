@@ -91,6 +91,78 @@ afterEach(async () => {
 })
 
 describe('ProjectBackupPanel', () => {
+  it('restores a local archive with no open project', async () => {
+    useProjectStore.setState({ currentProject: null })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'dialog:select-project-archive') return { grantId: 'archive-grant' }
+      if (channel === 'dialog:select-project-restore-target') return { grantId: 'restore-grant' }
+      if (channel === 'project:archive-restore') return { success: true, receipt: { targetProjectId: 'restored-copy', targetProjectRoot: 'C:\\novels\\copy' } }
+      throw new Error(`Unexpected IPC: ${channel}`)
+    })
+    await renderPanel()
+    expect(container.textContent).not.toContain('连接并绑定')
+    expect(container.textContent).not.toContain('导出本地存档')
+    await act(async () => button('从本地存档恢复副本').click())
+    expect(invoke).toHaveBeenCalledWith('dialog:select-project-restore-target', '恢复副本')
+    expect(invoke).toHaveBeenCalledWith('project:archive-restore', { archiveGrantId: 'archive-grant', targetGrantId: 'restore-grant' })
+    expect(container.textContent).toContain('restored-copy')
+    expect(useProjectStore.getState().currentProject).toBeNull()
+  })
+
+  it.each(['same', 'book', 'account'] as const)('keeps parents only for the same cloud target: %s', async change => {
+    const connectedAccount = change === 'account' ? { ...ACCOUNT, accountId: 'account-2' } : ACCOUNT
+    const cloudBookId = change === 'book' ? 'another-book' : BINDING.cloudBookId
+    invoke.mockImplementation(async (channel: string, request?: { cloudBookId?: string; lastSelectedParentGenerationIds: string[] }) => {
+      if (channel === 'cloud-backup:view') return { success: true, binding: { ...BINDING, lastSelectedParentGenerationIds: [GENERATION.generationId] }, account: ACCOUNT }
+      if (channel === 'cloud-backup:list') return { success: true, generations: [{ ...GENERATION, cloudBookId: request?.cloudBookId }] }
+      if (channel === 'cloud-backup:connect') return { success: true, account: connectedAccount }
+      if (channel === 'cloud-backup:confirm-binding') return { success: true, binding: { ...BINDING, cloudBookId, localEndpointAccountId: connectedAccount.accountId, lastSelectedParentGenerationIds: request?.lastSelectedParentGenerationIds, revision: 4 } }
+      throw new Error(`Unexpected IPC: ${channel}`)
+    })
+    await renderPanel()
+    await act(async () => button('刷新云端世代').click())
+    if (change === 'book') await fill('云书标识', cloudBookId)
+    if (change === 'account') {
+      await fill('密码或应用密钥', 'replacement-secret')
+      await act(async () => button('连接并绑定').click())
+    } else {
+      await act(async () => button('确认父世代并重新绑定').click())
+    }
+    expect(invoke).toHaveBeenCalledWith('cloud-backup:confirm-binding', expect.objectContaining({
+      localEndpointAccountId: connectedAccount.accountId, cloudBookId,
+      lastSelectedParentGenerationIds: change === 'same' ? [GENERATION.generationId] : [],
+    }))
+    expect(container.querySelector('input[type="radio"]') !== null).toBe(change === 'same')
+    if (change === 'book') {
+      await act(async () => button('刷新云端世代').click())
+      await act(async () => container.querySelector<HTMLInputElement>('li input[type="checkbox"]')!.click())
+      await act(async () => button('确认父世代并重新绑定').click())
+      expect(invoke).toHaveBeenLastCalledWith('cloud-backup:confirm-binding', expect.objectContaining({
+        cloudBookId, lastSelectedParentGenerationIds: [GENERATION.generationId], expectedRevision: 4,
+      }))
+    }
+  })
+
+  it('uses the returned backup parent and revision when rebinding', async () => {
+    const savedBinding = { ...BINDING, lastSelectedParentGenerationIds: [GENERATION.generationId], revision: 4 }
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'cloud-backup:view') return { success: true, binding: BINDING, account: ACCOUNT }
+      if (channel === 'cloud-backup:backup') return { success: true, generation: GENERATION, binding: savedBinding, bindingSaved: true, backupPoint: 'point-1' }
+      if (channel === 'cloud-backup:list') return { success: true, generations: [GENERATION] }
+      if (channel === 'cloud-backup:confirm-binding') return { success: true, binding: savedBinding }
+      throw new Error(`Unexpected IPC: ${channel}`)
+    })
+    await renderPanel()
+    await act(async () => container.querySelector<HTMLInputElement>('input[name="cloud-disclosure"]')!.click())
+    await act(async () => button('立即云备份').click())
+    await act(async () => button('刷新云端世代').click())
+    expect(container.querySelector<HTMLInputElement>('li input[type="checkbox"]')?.checked).toBe(true)
+    await act(async () => button('确认父世代并重新绑定').click())
+    expect(invoke).toHaveBeenCalledWith('cloud-backup:confirm-binding', expect.objectContaining({
+      lastSelectedParentGenerationIds: [GENERATION.generationId], expectedRevision: 4,
+    }))
+  })
+
   it('guides an unconfigured project and connects before explicit binding', async () => {
     invoke.mockImplementation(async (channel: string, request?: unknown) => {
       if (channel === 'cloud-backup:view') return { success: true, state: 'unconfigured', binding: null, account: null }

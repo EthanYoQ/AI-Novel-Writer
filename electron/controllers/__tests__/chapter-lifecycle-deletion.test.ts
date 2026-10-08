@@ -20,6 +20,8 @@ import { DraftRepository } from '../../repositories/draft-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
 import { projectAccess } from '../../services/project-access'
+import * as portableFreeze from '../../services/portable-runtime-freeze'
+import { ChapterDeletionRepository } from '../../repositories/chapter-deletion-repository'
 import { ChapterDeletionService } from '../../services/chapter-deletion-service'
 import { publishManuscript, removePublishedManuscript } from '../../services/manuscript-publisher'
 import { registerChapterLifecycleController } from '../chapter-lifecycle-controller'
@@ -107,6 +109,11 @@ describe('chapter lifecycle deletion IPC', () => {
   })
 
   it('removes a finalized chapter and only its frozen derived projections', async () => {
+    const finalizationId = getProjectDb()!.prepare('SELECT finalization_id FROM finalization_outbox WHERE draft_id=?').pluck().get(draftId) as string
+    for (const id of [`finalization:${finalizationId}`, 'finalization:unrelated']) {
+      getProjectDb()!.prepare("INSERT INTO post_process_runs(id,trigger_source_type,trigger_source_id) VALUES(?,'chapter_finalize',?)").run(id,id)
+      getProjectDb()!.prepare("INSERT INTO post_process_steps(run_id,step_key,label,critical) VALUES(?,'kb_import','知识',1)").run(id)
+    }
     const rawHandler = handlers.get('chapter:delete-finalized')
     expect(rawHandler).toBeDefined()
 
@@ -130,6 +137,8 @@ describe('chapter lifecycle deletion IPC', () => {
     expect(DraftRepository.getFull(draftId)).toBeNull()
     expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(false)
     expect(PostProcessRepository.getLatestRun('chapter_finalize', '1')).toBeNull()
+    expect(PostProcessRepository.getLatestRun('chapter_finalize', `finalization:${finalizationId}`)).toBeNull()
+    expect(PostProcessRepository.getLatestRun('chapter_finalize', 'finalization:unrelated')).not.toBeNull()
 
     await expect(listDocuments(projectRoot)).resolves.toEqual([
       expect.objectContaining({ id: 'reference-document', fileName: targetFileName }),
@@ -140,6 +149,19 @@ describe('chapter lifecycle deletion IPC', () => {
     ])
   })
 
+  it('hides frozen deletion history and does not offer legacy authorization on a refused retry',async()=>{
+    const operation=ChapterDeletionRepository.begin({operationId:'frozen-operation',draftId,chapterNumber:1})
+    const stored=operation
+    const guard=vi.spyOn(portableFreeze,'readPortableRuntimeFreeze').mockReturnValue({active:true,isFrozen:()=>true,assertMutable:()=>{throw new Error('PORTABLE_RUNTIME_FROZEN')}})
+    try {
+      const service=new ChapterDeletionService()
+      expect(service.listIncomplete(projectRoot)).toEqual([])
+      const result=await service.retry(projectRoot,stored.operationId)
+      expect(result).toMatchObject({success:false,committed:false})
+      expect(result.operation).toBeUndefined()
+      expect(ChapterDeletionRepository.get(stored.operationId)).toEqual(stored)
+    } finally { guard.mockRestore() }
+  })
   it('persists a failed projection cleanup and completes it after restart retry', async () => {
     registerChapterLifecycleController(new ChapterDeletionService({
       createOperationId: () => 'deletion-retry-1',

@@ -2,6 +2,8 @@ import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { beforeEach, afterEach, expect, it, vi } from 'vitest'
 import RendererStartup from '../RendererStartup'
+import { useLocaleStore } from '../../../stores/locale-store'
+const originalLocale = useLocaleStore.getState()
 import { useAppearanceStore, type AppearanceBootstrapDependencies } from '../../../stores/appearance-bootstrap'
 import { APPEARANCE_STORAGE_KEY, LEGACY_THEME_STORAGE_KEY, LEGACY_UI_STORAGE_KEY } from '../../../shared/appearance-profile'
 import { ipc } from '../../../services/ipc-client'
@@ -25,6 +27,7 @@ afterEach(async () => {
   await act(async () => root.unmount()); host.remove()
   keys.forEach(key => localStorage.removeItem(key))
   useAppearanceStore.setState(useAppearanceStore.getInitialState(), true)
+  useLocaleStore.setState(originalLocale)
   vi.restoreAllMocks()
   delete window.aiNovelAPI
 })
@@ -135,4 +138,17 @@ it('外观损坏时响应关闭请求，工作台接管后由业务决定未保�
   invoke.mockClear()
   listeners.forEach(callback => callback({ requestId: 'after-editor' }))
   expect(invoke).toHaveBeenCalledExactlyOnceWith('window:resolve-close', 'after-editor', 'cancel')
+})
+
+it('renders pending and blocked startup messages in English', async () => {
+  useLocaleStore.setState({ locale: 'en-US' })
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const dep = dependencies({ waitForMainReady: async () => { await pending; throw new Error('unavailable') } })
+  await act(async () => root.render(<RendererStartup dependencies={dep} />))
+  expect(host.textContent).toContain('Checking existing settings')
+  await act(async () => { release(); await pending })
+  await vi.waitFor(() => expect(host.textContent).toContain('Appearance preferences could not be loaded safely'))
+  expect(host.textContent).toContain('Check again')
+  expect(host.textContent).not.toContain('启动尚未完成')
 })

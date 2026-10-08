@@ -18,7 +18,6 @@ import {
   loadDirectoryBlueprints,
   saveChapterBlueprint,
   saveAllBlueprints,
-  createDirectoryWorkflow,
   parseTextBlueprintsStrict,
   type ChapterBlueprint,
   type DirectoryWorkflowParams,
@@ -178,10 +177,10 @@ function BlueprintRecoveryEditor({ tab, projectKey }: { tab: EditorTab; projectK
       const fresh = await refresh()
       const continuation = fresh.planningContinuation
       if (!continuation?.remainingRange || !['ready', 'continued'].includes(continuation.state)) throw new Error(text('当前不能继续，请等待生成结束或检查来源变化', 'Wait for generation to finish or check changed sources before continuing.'))
-      await useWorkflowStore.getState().startWorkflow(createDirectoryWorkflow({ mode: 'append',
+      await launchCreativeWorkflow({ workflow: 'generate_blueprint', params: { mode: 'append',
         startChapter: continuation.remainingRange.from, count: continuation.remainingRange.to - continuation.remainingRange.from + 1,
         targetUnits: continuation.targetUnits, restartFrom: continuation.sourceHandle,
-      }, projectKey, session, useLocaleStore.getState().locale))
+      } }, session)
       await refresh()
       setError('')
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }

@@ -75,3 +75,15 @@ describe('project transition unsent agent input', () => {
     expect(container.querySelector('textarea')?.value).toBe('')
   })
 })
+
+it('retains unsaved text and its dirty baseline across a replacement input owner', async () => {
+  await typeInput('换视图仍需确认的输入')
+  await act(async () => root.render(<AgentInputBox key="replacement" />))
+  expect(container.querySelector('textarea')?.value).toBe('换视图仍需确认的输入')
+  expect(hasProjectTransitionDrafts(PROJECT_A)).toBe(true)
+  await act(async () => saveProjectTransitionDrafts(PROJECT_A))
+  expect(hasProjectTransitionDrafts(PROJECT_A)).toBe(false)
+  await typeInput('放弃这个新版本')
+  await act(async () => discardProjectTransitionDrafts(PROJECT_A))
+  expect(container.querySelector('textarea')?.value).toBe('')
+})

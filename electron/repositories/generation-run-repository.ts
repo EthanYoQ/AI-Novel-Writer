@@ -567,7 +567,7 @@ export class GenerationRunRepository {
         }
         return null;
     }
-    composeVisible(runId: string, artifactIds: string[], expectedTextHash: string, algorithm: VisibleCompositionAlgorithm = VISIBLE_CONTINUATION_VERSION): VisibleCompositionReceipt {
+    composeVisible(runId: string, artifactIds: string[], expectedTextHash: string | undefined, algorithm: VisibleCompositionAlgorithm = VISIBLE_CONTINUATION_VERSION): VisibleCompositionReceipt {
         return this.transaction(() => {
             this.assertPlotOutlineWritable(runId);
             const run = this.get(runId);
@@ -575,7 +575,7 @@ export class GenerationRunRepository {
             const read = this.readState(run);
             const next = this.visibleComposition(read, artifactIds, algorithm), previous = this.compositionFrom(read);
             if (previous && previous.algorithm !== algorithm) fail('GENERATION_COMPOSITION_ALGORITHM_CHANGED');
-            if (next.textHash !== expectedTextHash) fail('GENERATION_COMPOSITION_HASH_MISMATCH');
+            if (expectedTextHash !== undefined && next.textHash !== expectedTextHash) fail('GENERATION_COMPOSITION_HASH_MISMATCH');
             if (previous && previous.artifactIds.some((id, index) => next.artifactIds[index] !== id)) fail('GENERATION_COMPOSITION_REGRESSION');
             const outline = this.plotOutlineFrom(read, undefined, previous);
             if (outline && !isDeepStrictEqual(next.artifactIds, previous?.artifactIds)) {

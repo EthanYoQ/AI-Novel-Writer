@@ -348,7 +348,15 @@ function ArchFileViewerSession({
 
   /** 从 DB 重新加载（AI 生成后刷新用） */
   const handleReload = useCallback(async () => {
-    if (recoveryRef.current) { await refreshRecovery(); return }
+    if (recoveryRef.current) {
+      try {
+        await refreshRecovery()
+        setRecoveryError('')
+      } catch (error) {
+        setRecoveryError(appErrorMessage(useLocaleStore.getState().locale, error))
+      }
+      return
+    }
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
       return

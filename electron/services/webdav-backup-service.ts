@@ -70,6 +70,7 @@ export interface WebDavBackupServiceOptions {
   generationIdFactory?: () => string
   now?: () => Date
   timeoutMs?: number
+  transferTimeoutMs?: number
   maxXmlBytes?: number
   maxJsonBytes?: number
   maxArchiveBytes?: number
@@ -102,6 +103,7 @@ interface CompletionDescriptor {
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000
+const DEFAULT_TRANSFER_TIMEOUT_MS = 30 * 60_000
 const DEFAULT_MAX_XML_BYTES = 1024 * 1024
 const DEFAULT_MAX_JSON_BYTES = 1024 * 1024
 const DEFAULT_MAX_ARCHIVE_BYTES = 16 * 1024 ** 3
@@ -277,6 +279,7 @@ export class WebDavBackupService {
   private readonly generationIdFactory: () => string
   private readonly now: () => Date
   private readonly timeoutMs: number
+  private readonly transferTimeoutMs: number
   private readonly maxXmlBytes: number
   private readonly maxJsonBytes: number
   private readonly maxArchiveBytes: number
@@ -286,6 +289,7 @@ export class WebDavBackupService {
     this.generationIdFactory = options.generationIdFactory ?? randomUUID
     this.now = options.now ?? (() => new Date())
     this.timeoutMs = this.positive(options.timeoutMs, DEFAULT_TIMEOUT_MS)
+    this.transferTimeoutMs = this.positive(options.transferTimeoutMs, DEFAULT_TRANSFER_TIMEOUT_MS)
     this.maxXmlBytes = this.positive(options.maxXmlBytes, DEFAULT_MAX_XML_BYTES)
     this.maxJsonBytes = this.positive(options.maxJsonBytes, DEFAULT_MAX_JSON_BYTES)
     this.maxArchiveBytes = this.positive(options.maxArchiveBytes, DEFAULT_MAX_ARCHIVE_BYTES)
@@ -348,6 +352,7 @@ export class WebDavBackupService {
     const response = await this.request(input.account, generationsUrl, {
       method: 'PROPFIND', headers: { Depth: '1', Accept: 'application/xml' },
     }, input.signal)
+    if (response.status === 404) { await response.body?.cancel().catch(() => {}); return [] }
     if (response.status !== 207) responseFailure(response)
     const xmlBytes = await this.readBytes(response, this.maxXmlBytes, input.signal)
     let xmlText: string
@@ -475,11 +480,11 @@ export class WebDavBackupService {
     }
   }
 
-  private async request(account: WebDavAccount, url: URL, init: RequestInit, signal?: AbortSignal): Promise<Response> {
+  private async request(account: WebDavAccount, url: URL, init: RequestInit, signal?: AbortSignal, timeoutMs = this.timeoutMs): Promise<Response> {
     const endpoint = this.account(account)
     if (url.origin !== endpoint.origin || !url.pathname.startsWith(endpoint.pathname)) fail('WEBDAV_INPUT_INVALID')
     if (signal?.aborted) fail('WEBDAV_CANCELLED')
-    const timeoutSignal = AbortSignal.timeout(this.timeoutMs)
+    const timeoutSignal = AbortSignal.timeout(timeoutMs)
     const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
     try {
       return await this.fetchImpl(url, {
@@ -536,7 +541,7 @@ export class WebDavBackupService {
         method: 'PUT', body: body as unknown as BodyInit,
         headers: { 'If-None-Match': '*', 'Content-Length': String(expected.byteSize) },
         duplex: 'half',
-      } as RequestInit & { duplex: 'half' }, signal)
+      } as RequestInit & { duplex: 'half' }, signal, this.transferTimeoutMs)
       if (!response.ok) {
         if (response.status === 409 || response.status === 412 || response.status === 408 || response.status >= 500) uncertain = true
         else responseFailure(response)

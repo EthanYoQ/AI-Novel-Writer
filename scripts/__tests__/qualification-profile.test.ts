@@ -48,7 +48,7 @@ foreach ($bad in @('../escape', '', '12345678-1234-1234-1234-123456789abc/other'
 }
 Write-Output 'PROFILE_CONTRACT_OK'
 `)
-  expect(execFileSync('pwsh', ['-NoProfile', '-File', script], { encoding: 'utf8' })).toContain('PROFILE_CONTRACT_OK')
+  expect(execFileSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { encoding: 'utf8' })).toContain('PROFILE_CONTRACT_OK')
 })
 it('every packaged Electron probe binds explicit profile roots and restores Windows environment', () => {
   const win = readFileSync(resolve('scripts/smoke-win-installer.ps1'), 'utf8')

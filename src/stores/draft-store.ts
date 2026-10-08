@@ -360,7 +360,9 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
           return { success: true, receipt: committedReceipt, postCommitError: staleProjectError().error }
         }
         const mergedTab = useEditorStore.getState().tabs.find(tab => tab.projectKey === expectedProjectPath && tab.filePath === filePath)
-        useWorkflowStore.getState().startWorkflow(createReviewOnlyWorkflow({
+        let started: (() => void) | undefined
+        const admission = new Promise<void>(resolve => { started = resolve })
+        const definition = createReviewOnlyWorkflow({
           projectPath: expectedProjectPath,
           chapterNumber: merged.receipt.chapterNumber,
           chapterTitle: `第${merged.receipt.chapterNumber}章`,
@@ -370,7 +372,12 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
             version: merged.receipt.version, status: 'revised', contentRevision: mergedTab?.contentRevision ?? 0 },
           reviewCycleId: merged.receipt.reviewCycle.cycleId,
           expectedMergedHash: merged.receipt.reviewCycle.mergedHash,
-        }, projectSession), false)
+        }, projectSession)
+        definition.onStarted = started
+        await Promise.race([admission, useWorkflowStore.getState().startWorkflow(definition, false).then(runId => {
+          const run = useWorkflowStore.getState().history.find(item => item.id === runId)
+          if (run?.status === 'failed') throw new Error(run.error)
+        })])
       }
 
       return { success: true, receipt: committedReceipt }

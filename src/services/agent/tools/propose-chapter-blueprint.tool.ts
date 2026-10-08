@@ -26,6 +26,7 @@ function validateBlueprintChanges(args: Record<string, unknown>, context?: Agent
   const changes: Record<string, unknown> = {}
   for (const [field, proposed] of Object.entries(candidate as Record<string, unknown>)) {
     const canonicalField = FIELD_ALIASES[field] ?? field
+    if (Object.hasOwn(changes, canonicalField)) return { valid: false, error: agentToolText(context, `字段 ${canonicalField} 重复`, `Duplicate field: ${canonicalField}`) }
     if (STRING_FIELDS.has(canonicalField as keyof BlueprintData)) {
       if (typeof proposed !== 'string') return { valid: false, error: agentToolText(context, `字段 ${field} 必须是文本`, `Field ${field} must be text`) }
     } else if (canonicalField === 'characters') {
@@ -46,7 +47,7 @@ export function buildChapterBlueprintProposal(
   context?: AgentExecutionContext,
 ): ChapterBlueprintProposal {
   const chapterNumber = args.chapter_number
-  if (!Number.isInteger(chapterNumber) || (chapterNumber as number) <= 0 || chapterNumber !== current.chapterNumber) {
+  if (!Number.isSafeInteger(chapterNumber) || (chapterNumber as number) <= 0 || chapterNumber !== current.chapterNumber) {
     return { valid: false, error: agentToolText(context, '目标章节与当前蓝图不一致', 'The target chapter does not match the current blueprint') }
   }
   const validated = validateBlueprintChanges(args, context)
@@ -86,7 +87,7 @@ export const proposeChapterBlueprintTool = buildAgentTool({
   execute: async (args, context) => {
     const text = (zhCN: string, enUS: string) => agentToolText(context, zhCN, enUS)
     const chapterNumber = args.chapter_number
-    if (!Number.isInteger(chapterNumber) || (chapterNumber as number) <= 0) {
+    if (!Number.isSafeInteger(chapterNumber) || (chapterNumber as number) <= 0) {
       return { success: false, content: '', error: text('章节号无效', 'The chapter number is invalid') }
     }
     const validated = validateBlueprintChanges(args, context)

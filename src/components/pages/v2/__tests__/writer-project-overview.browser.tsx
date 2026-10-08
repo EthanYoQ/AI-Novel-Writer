@@ -112,16 +112,18 @@ it('routes the V3 legacy import through a new copy and opens only the ready targ
 })
 
 it('exposes deletion of only the verified current project on the V3 home shelf', async () => {
+  invoke.mockImplementation(async (channel: string) => channel === 'project:overview-current' || channel === 'project:peek-overview' ? ready('作品') : { success: true })
   const deleteProject = vi.fn(async () => true)
   useProjectStore.setState({
     currentProject: { id: 'current', name: '当前作品', path: 'C:\\novels\\current', sessionLease: 'lease-current', novelConfig: {} } as never,
-    recentProjects: [{ name: '另一本书', path: 'C:\\novels\\other', updatedAt: '' }],
+    recentProjects: [{ name: '另一本书', path: 'C:\\novels\\other', updatedAt: '', previewCapabilityId: 'other-preview' }],
     deleteProject,
   })
   await render(<WriterWelcomePage onNewProject={vi.fn()} />)
 
   const deleteButton = container.querySelector<HTMLButtonElement>('.writer-overview [title="删除项目"]')
   expect(deleteButton).not.toBeNull()
+  expect(container.textContent).toContain('继续写作')
   expect(container.querySelector('.writer-shelf [title="删除项目"]')).toBeNull()
   await act(async () => deleteButton!.click())
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain('当前作品'))
@@ -143,6 +145,7 @@ it('exposes deletion of only the verified current project on the V3 home shelf',
 
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="预览《另一本书》"]')!.click())
   expect(container.querySelector('.writer-overview [title="删除项目"]')).toBeNull()
+  expect(container.textContent).not.toContain('继续写作')
 })
 
 it('previews by capability only, opens on the second cover click, and direct entry uses the store gate', async () => {

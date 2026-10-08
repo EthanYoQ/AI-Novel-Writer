@@ -2,7 +2,7 @@ import { create } from 'zustand'
 
 import type { DraftStatus } from '../shared/draft-status'
 import { sameProjectPathKey } from '../shared/project-session-context'
-import { countUnsavedEditorItems } from './editor-unsaved'
+import { countUnsavedEditorItems, countUnsavedEditorItemsForProject } from './editor-unsaved'
 import { canonicalResourceUri } from '../shared/project-paths'
 import type { GenerationRecoveryContext } from '../shared/generation-owner-contract'
 import type { AllInvokeChannels } from '../shared/ipc-channels'
@@ -493,13 +493,19 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 }))
 
-export async function saveDirtyEditorChangesForExit(currentProjectKey: string | undefined): Promise<void> {
+export async function saveDirtyEditorChangesForExit(
+  currentProjectKey: string | undefined, scope: 'all' | 'project' = 'all',
+): Promise<void> {
+  const countUnsaved = (state: Pick<EditorState, 'tabs' | 'draftLedgers'>) => scope === 'project' && currentProjectKey
+    ? countUnsavedEditorItemsForProject(state.tabs, state.draftLedgers, currentProjectKey)
+    : countUnsavedEditorItems(state.tabs, state.draftLedgers)
   const initial = useEditorStore.getState()
-  if (countUnsavedEditorItems(initial.tabs, initial.draftLedgers) === 0) return
+  if (countUnsaved(initial) === 0) return
 
   const handlers = new Set<EditorExitSaveHandler>()
   for (const tab of initial.tabs) {
     if (!tab.dirty) continue
+    if (scope === 'project' && tab.projectKey !== currentProjectKey) continue
     if (!tab.projectKey || !currentProjectKey || !sameProjectPathKey(tab.projectKey, currentProjectKey)) {
       throw new Error('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出')
     }
@@ -523,6 +529,7 @@ export async function saveDirtyEditorChangesForExit(currentProjectKey: string | 
     }
     for (const project of projects) {
       if (typeof project.projectKey !== 'string') continue
+      if (scope === 'project' && project.projectKey !== currentProjectKey) continue
       if (!currentProjectKey || !sameProjectPathKey(project.projectKey, currentProjectKey)) {
         throw new Error('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出')
       }
@@ -535,7 +542,7 @@ export async function saveDirtyEditorChangesForExit(currentProjectKey: string | 
   for (const handler of handlers) await handler.save()
 
   const settled = useEditorStore.getState()
-  if (countUnsavedEditorItems(settled.tabs, settled.draftLedgers) !== 0) {
+  if (countUnsaved(settled) !== 0) {
     throw new Error('保存期间仍有未保存修改，已取消退出')
   }
 }

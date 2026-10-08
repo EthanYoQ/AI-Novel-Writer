@@ -13,6 +13,8 @@ it.each([false, true])('releases native search tables before the caller can clos
     const connection = await getConnection(root)
     const seed = await connection.createTable('chunks', [{ id: '合成块', docId: '合成文档', fileName: '合成原稿', text: '铜钥匙藏在旧钟后面。' }])
     seed.close()
+    const documents = await connection.createTable('documents', [{ id: '合成文档', fileName: '合成原稿', filePath: '' }])
+    documents.close()
     const originalOpen = connection.openTable.bind(connection)
     const closes: ReturnType<typeof vi.spyOn>[] = []
     vi.spyOn(connection, 'openTable').mockImplementation(async (...args) => {
@@ -23,8 +25,8 @@ it.each([false, true])('releases native search tables before the caller can clos
     })
     const results = await search(root, '铜钥匙')
     expect(results).toHaveLength(failQuery ? 0 : 1)
-    expect(closes).toHaveLength(1)
-    expect(closes[0]).toHaveBeenCalledTimes(1)
+    expect(closes).toHaveLength(failQuery ? 1 : 2)
+    for (const close of closes) expect(close).toHaveBeenCalledTimes(1)
     closeConnection(root)
     fs.renameSync(root, `${root}-closed`)
     fs.rmSync(`${root}-closed`, { recursive: true, force: true })

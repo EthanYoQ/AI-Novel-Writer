@@ -57,6 +57,7 @@ describe('approved ID character writes', () => {
       f.request.creations = []; f.request.relationships = []; f.request.retireIds = [f.rows[0].character_id]
       commitCharacterIdentities(f.db, f.request, () => true)
       expect(CharacterRepository.getById(f.rows[0].character_id)).toBeNull()
+      expect(CharacterRepository.getAll().map(character => character.characterId)).toEqual([f.rows[1].character_id])
       expect(f.db.prepare('SELECT notes FROM characters WHERE character_id=?').pluck().get(f.rows[0].character_id)).toBe('作者笔记')
     } finally { f.db.close() }
   })

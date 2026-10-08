@@ -246,6 +246,20 @@ describe('project archive choosers issue sender-bound grants instead of raw path
     expect(grants.activeCount()).toBe(0)
   })
 
+  it('asks for a different name before granting an existing export target', async () => {
+    const root = tempRoot('b01-controller-existing-')
+    const archive = path.join(root, 'existing.ainovel')
+    fs.writeFileSync(archive, 'previous archive')
+    mocks.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: archive })
+
+    await expect(handler('dialog:select-project-archive-export')(event(), '项目'))
+      .rejects.toThrow('目标文件已存在，请选择其他文件名。项目存档不会覆盖已有文件。')
+
+    expect(grants.activeCount()).toBe(0)
+    expect(mocks.exportPortableProject).not.toHaveBeenCalled()
+    expect(fs.readFileSync(archive, 'utf8')).toBe('previous archive')
+  })
+
   it('revokes every archive grant of a window when that window is destroyed', async () => {
     const root = tempRoot('b01-controller-destroyed-')
     const sender = event()

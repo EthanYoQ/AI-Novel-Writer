@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { buildSync } from 'esbuild'
 import { reconcileDispatchedAttempts } from './quality-modernization-run.mjs'
 import { countProjectedDraftUnits, isExpectedReferenceEvidenceFailure, isVerifiedDirectPersistedDraftEvidence, isVerifiedRecoverySupplementEvidence,
-  readVerifiedDirectPersistedDraftEvidence, readVerifiedRecoveryCandidateSupplement, targetUnitRange } from './quality-modernization-receipt.mjs'
+  readVerifiedDirectPersistedDraftEvidence, readVerifiedRecoveryCandidateSupplement, targetUnitRange, acceptedTargetUnits } from './quality-modernization-receipt.mjs'
 
 const ADAPTER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // The gate and post-run check use the same production parser as ReviewChapterCommand.
@@ -1928,7 +1928,7 @@ export function structuredRecoveryState(attempts, { chapterNumbers, decode = blu
   return { next: attempts.length < maxCalls ? pending[0] ?? null : null, complete: pending.length === 0, maxCalls }
 }
 /** Replay only the product's bounded draft path from immutable raw-visible outputs. */
-export function draftRecoveryState(attempts, { policy, targetUnits, arm, reconcileCount = 0 }, readOutput) {
+export function draftRecoveryState(attempts, { policy, targetUnits, arm, protocolRevision, reconcileCount = 0 }, readOutput) {
   let text = '', lastFinish = null, pendingRecovery = false, recoveryUsed = false, stopped = false, condensed = false
   const minimum = Math.floor(targetUnits * (arm === 'baseline' ? policy.baselineMinimumRatio : policy.candidateMinimumRatio))
   const maximum = arm === 'candidate' ? Math.ceil(targetUnits * 1.3) : Infinity
@@ -1968,7 +1968,8 @@ export function draftRecoveryState(attempts, { policy, targetUnits, arm, reconci
     lastFinish = finishReason
   }
   return { text, next: attempts.length + reconcileCount >= policy.maxAttempts ? [] : allowed(),
-    complete: lastFinish === 'stop' && countProjectedDraftUnits(text) >= minimum && countProjectedDraftUnits(text) <= maximum,
+    complete: lastFinish === 'stop' && countProjectedDraftUnits(text) >= minimum
+      && (countProjectedDraftUnits(text) <= maximum || condensed && arm === 'candidate' && protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION),
     condensed }
 }
 function verifiedRecoveryOutput(owner, evidence, operationId) {
@@ -2203,8 +2204,7 @@ const validDraftObservation = observation => Number.isSafeInteger(observation?.c
   && observation.persisted === true && /^[a-f0-9]{64}$/.test(observation.contentHash ?? '')
 const withinTargetUnits = (observation, protocolRevision, arm) => {
   if (!validDraftObservation(observation)) return false
-  const { minimum, maximum } = targetUnitRange(observation.targetUnits, protocolRevision, arm)
-  return observation.units >= minimum && observation.units <= maximum
+  return acceptedTargetUnits(observation.units, observation.targetUnits, protocolRevision, arm)
 }
 function hasReviewableDraft(result) {
   const observation = result?.draftObservation
@@ -2254,7 +2254,8 @@ function draftRecoveryReceiptFailure(result, operationId, policy, arm, reviewed 
   if (!identities[0] || identities.some(owner => !owner || ['runId', 'rootActionId', 'projectId', 'epoch'].some(key => owner[key] !== identities[0][key]))
     || new Set(identities.map(owner => owner.attemptId)).size !== identities.length) return 'DRAFT_RECOVERY_OWNER_MISMATCH'
   try {
-    const state = draftRecoveryState(identities, { policy, arm, targetUnits: result.draftObservation?.targetUnits, reconcileCount }, owner => {
+    const state = draftRecoveryState(identities, { policy, arm, protocolRevision: result.protocolRevision,
+      targetUnits: result.draftObservation?.targetUnits, reconcileCount }, owner => {
       const attempt = attempts.find(item => (item.binding.actual ?? item.binding.baselineIpc).attemptId === owner.attemptId)
       const output = fs.readFileSync(attempt.outputPath, 'utf8')
       if (digest(output) !== attempt.visibleTextHash) throw new Error('hash')
@@ -3785,10 +3786,9 @@ export function validateAiReviewedManuscript(result) {
         || finalReview.context.source.id !== first.context.source.id || finalReview.context.source.chapterNumber !== first.context.source.chapterNumber
         || finalReview.context.source.version !== chain.finalDraft.version) throw new Error('AI_FINAL_REVIEW_NOT_ORDINARY')
       const units = countProjectedDraftUnits(final), sourceUnits = countProjectedDraftUnits(initial)
-      const range = targetUnitRange(sourceUnits,
+      if (!acceptedTargetUnits(units, sourceUnits,
         result.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION && result.phase !== 'bounded-revision-diagnostic'
-          ? result.protocolRevision : undefined, result.arm)
-      if (units < range.minimum || units > range.maximum) throw new Error('AI_REVISION_LENGTH_MISMATCH')
+          ? result.protocolRevision : undefined, result.arm)) throw new Error('AI_REVISION_LENGTH_MISMATCH')
     }
     }
     const draft = db.prepare(`SELECT d.version,d.chapter_number${result.phase === 'full' ? ',d.status' : ''},c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?`).get(chain.finalDraft.draftId)

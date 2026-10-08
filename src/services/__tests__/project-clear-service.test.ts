@@ -297,3 +297,12 @@ describe('clearProjectData', () => {
     expect(closeTab).not.toHaveBeenCalled()
   })
 })
+
+it('preserves planning recovery tabs when clearing saved blueprints', async () => {
+  vi.mocked(useEditorStore.getState).mockReturnValue({ tabs: [
+    { id: 'recovery', name: 'Recovery', type: 'chapter-card', projectKey: projectPath, dirty: true, planningRecovery: { operation: 'blueprint' } },
+    { id: 'saved', name: 'Saved', type: 'chapter-card', projectKey: projectPath, dirty: false },
+  ], draftLedgers: {}, closeTab } as never)
+  await clearProjectData({ blueprints: true }, projectSession)
+  expect(closeTab).toHaveBeenCalledExactlyOnceWith('saved')
+})

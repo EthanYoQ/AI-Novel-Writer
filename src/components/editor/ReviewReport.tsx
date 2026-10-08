@@ -396,13 +396,9 @@ export default function ReviewReport(props: ReviewReportProps) {
   }, [cycleReviewId, props.cycle, props.projectKey])
 
   const resolvedCycle = props.cycle !== undefined ? props.cycle : loadedCycle
-  const cycleKey = resolvedCycle
-    ? resolvedCycle.cycleId + ':' + resolvedCycle.revisionStatus + ':'
-      + resolvedCycle.findings.map(finding => finding.findingId + ':' + finding.status).join(',')
-    : 'no-cycle'
   const reportKey = String(props.reviewId ?? 'untracked')
     + ':' + String(snapshot?.sourceReviewId ?? 'raw')
-    + ':' + cycleKey
+    + ':' + props.projectKey
     + ':' + props.reportText
 
   // A report tab can update in place. A keyed session resets its editable

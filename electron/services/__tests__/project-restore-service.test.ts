@@ -28,6 +28,9 @@ import { restorePortableProject } from '../project-restore-service'
 import { parsePortableTransferAuthority } from '../portable-transfer-authority'
 import { createPortableProjectAssetProvider } from '../portable-project-assets'
 import { activateCanonicalProjectData, deactivateProjectData } from '../project-data-locator'
+import { importLegacyProjectCopy } from '../legacy-project-copy-import'
+import { ChapterDeletionRepository } from '../../repositories/chapter-deletion-repository'
+import { readPortableCurrentAuthority } from '../portable-current-authority'
 import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture'
 import { readDocumentCopy } from '../../knowledge-base'
@@ -202,12 +205,89 @@ afterEach(() => {
 })
 
 describe('portable project restore service', { timeout: 20_000 }, () => {
+  it('archives a verified legacy copy with readable unreceipted prose while rejecting new unreceipted finalizations', async () => {
+    const f = fixture(), legacyRoot = path.join(f.base, 'legacy'), legacyStorage = path.join(legacyRoot, '.vela')
+    fs.mkdirSync(legacyStorage, { recursive: true })
+    const old = new Database(path.join(legacyStorage, 'vela.db'))
+    old.exec(fs.readFileSync(new URL('./legacy-v110-schema.sql', import.meta.url), 'utf8'))
+    old.prepare("INSERT INTO project_core(id,project_name,characters_arch) VALUES('main','旧小说','')").run()
+    old.prepare("INSERT INTO contents(id,body) VALUES(1,'原始旧定稿')").run()
+    old.prepare("INSERT INTO drafts(id,chapter_number,version,content_id,status) VALUES(1,1,1,1,'finalized')").run()
+    old.close()
+    const copiedRoot = path.join(f.base, 'copied')
+    const imported = await importLegacyProjectCopy({ sourceRoot: legacyRoot, targetRoot: copiedRoot, preflightOptions: { maxNativePathCharacters: 4096 } })
+    expect(imported.state).toBe('ready')
+    if (imported.state !== 'ready') throw new Error(imported.code)
+    const copiedInput = { ...exportInput(f), sourceProjectRoot: copiedRoot,
+      projectSession: { projectId: imported.projectId, projectPath: copiedRoot, leaseId: 'copy' } }
+    await exportPortableProject(copiedInput)
+    await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+    const restored = new Database(path.join(f.targetRoot, '.ai-novel', 'project.db'), { readonly: true })
+    try { expect(restored.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=1').pluck().get()).toBe('原始旧定稿') }
+    finally { restored.close() }
+    const copy = new Database(path.join(copiedRoot, '.ai-novel', 'project.db'))
+    copy.exec("INSERT INTO contents(id,body) VALUES(2,'无凭据新定稿'); INSERT INTO drafts(id,chapter_number,version,content_id,status) VALUES(2,2,1,2,'finalized')")
+    copy.close()
+    await expect(exportPortableProject({ ...copiedInput, targetArchivePath: path.join(f.base, 'invalid.ainovel') }))
+      .rejects.toThrow('PORTABLE_TRANSFER_AUTHORITY_INVALID')
+  })
+
+  it('keeps transferred history valid after a local chapter deletion without accepting missing or frozen proof', async () => {
+    const f = await exportedFixture()
+    const receipt = await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+    initProjectDatabase(f.targetRoot)
+    const db = getProjectDb()!
+    const read = () => readPortableCurrentAuthority({ database: db, projectStorageRoot: path.join(f.targetRoot, '.ai-novel'), projectId: receipt.targetProjectId })
+    expect(read()?.originProjectId).toBe(f.sourceProjectId)
+    const deletion = ChapterDeletionRepository.begin({ operationId: 'delete-restored', draftId: 2, chapterNumber: 1 })
+    expect(deletion.status).toBe('pending')
+    expect(read()?.originProjectId).toBe(f.sourceProjectId)
+    for (const change of [
+      "finalization_id='wrong'",
+      "legacy_knowledge_authorization='required'",
+      "legacy_knowledge_authorization='consumed', legacy_knowledge_authorized_at=''",
+      "status='authorization_required'",
+    ]) {
+      db.exec('SAVEPOINT invalid_deletion')
+      try { db.exec(`UPDATE chapter_deletion_operations SET ${change}`); expect(read).toThrow('PORTABLE_CURRENT_AUTHORITY_INVALID') }
+      finally { db.exec('ROLLBACK TO invalid_deletion'); db.exec('RELEASE invalid_deletion') }
+    }
+    db.exec("UPDATE chapter_deletion_operations SET status='completed'")
+    expect(read()?.originProjectId).toBe(f.sourceProjectId)
+    db.exec('SAVEPOINT missing_deletion')
+    try { db.exec('DELETE FROM chapter_deletion_operations'); expect(read).toThrow('PORTABLE_CURRENT_AUTHORITY_INVALID') }
+    finally { db.exec('ROLLBACK TO missing_deletion'); db.exec('RELEASE missing_deletion') }
+    const freezeFile = path.join(f.targetRoot, '.ai-novel', 'portable-runtime-freeze.json')
+    const freeze = JSON.parse(fs.readFileSync(freezeFile, 'utf8'))
+    freeze.records.push({ projectionId: 'history:chapter_deletion_operations:delete-restored', table: 'chapter_deletion_operations',
+      recordId: 'delete-restored', terminalState: 'completed', projection: {}, projectionHash: sha256('{}'),
+      excludedFields: [], nonReplayable: true, originalReceiptVerified: false })
+    fs.writeFileSync(freezeFile, JSON.stringify(freeze))
+    expect(read).toThrow('PORTABLE_CURRENT_AUTHORITY_INVALID')
+  })
+
+  it('restores and acknowledges a knowledge snapshot above the small metadata limit', async () => {
+    const f = fixture(), text = '知识原文。'.repeat(300_000)
+    expect(Buffer.byteLength(text)).toBeGreaterThan(4 * 1024 * 1024)
+    await restorePortableKnowledgeSnapshot(f.sourceStorage, { version: 1, documents: [{
+      docId: 'large-knowledge', fileName: '资料.txt', corpusKind: 'reference', chunks: [{ chunkIndex: 0, text }],
+    }] })
+    closeConnection(f.sourceStorage)
+    await exportPortableProject({ ...exportInput(f), assets: createPortableProjectAssetProvider() })
+    const receipt = await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+    expect(await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })).toEqual(receipt)
+    const snapshot = parsePortableKnowledgeSnapshot(JSON.parse(fs.readFileSync(path.join(f.targetRoot, '.ai-novel', 'portable-knowledge-source.json'), 'utf8')))
+    expect(snapshot.documents[0]?.chunks[0]?.text).toBe(text)
+  })
+
   it('admits first new generation after restoring frozen artifacts without treating history as current candidates', async () => {
     const f = fixture(), source = new Database(path.join(f.sourceStorage, 'project.db'))
+    const historyText = '历史候选正文。'.repeat(280_000)
+    expect(Buffer.byteLength(historyText)).toBeGreaterThan(4 * 1024 * 1024)
     const h = textHash('source'), fingerprint = { chapterBriefHash: h, authorGuidanceHash: h, dependencyHash: h,
       contextSnapshotHash: h, templateHash: h, skillSnapshotHash: h, modelLeaseRevision: h, policyHash: h, outputContractHash: h }
     const service = createGenerationRunService({ repository: new GenerationRunRepository(() => source), dispatch: async (_request, options) => {
-      options.onVisible({ kind: 'delta', text: '必须保留的历史候选正文。' })
+      options.onVisible({ kind: 'delta', text: historyText })
       return { usage: null, finishReason: 'stop' }
     } })
     const prior = service.open({ projectId: f.sourceProjectId, epoch: 'source-lease', operation: 'write', uiActionNonce: 'source',
@@ -250,9 +330,15 @@ describe('portable project restore service', { timeout: 20_000 }, () => {
     expect(dispatch).toHaveBeenCalledTimes(1)
     expect(result.run.candidates?.map(item => item.text)).toEqual(['恢复后首次新生成。'])
     expect(db.prepare('SELECT * FROM generation_artifacts WHERE attempt_id=?').get(historical.attempt.attemptId)).toEqual(oldRow)
-    expect(JSON.parse((oldRow as { artifact_json: string }).artifact_json).text).toBe('必须保留的历史候选正文。')
+    expect(JSON.parse((oldRow as { artifact_json: string }).artifact_json).text).toBe(historyText)
     db.prepare('UPDATE generation_attempts SET usage_receipt_json=NULL WHERE attempt_id=?').run(result.run.candidates![0].attemptId)
     expect(() => owner.read(next.handle)).toThrow()
+    ChapterDeletionRepository.begin({ operationId: 'delete-current-after-generation', draftId: 2, chapterNumber: 1 })
+    for (const status of ['pending', 'completed']) {
+      db.prepare('UPDATE chapter_deletion_operations SET status=?').run(status)
+      expect(owner.begin({ operation: 'chapter-draft', uiActionNonce: `after-deletion-${status}`, modelId: model.id, chapterNumber: 2,
+        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['next_chapter_draft'], skillStages: [], output: 'visible-text' }).handle.projectId).toBe(projectId)
+    }
     owner.suspendForProjectClose()
   })
   it.each([

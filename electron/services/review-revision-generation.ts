@@ -294,7 +294,7 @@ export class ReviewRevisionGeneration {
     }
     return { handle: handleOf(run), context: structuredClone(context), modelId: (run.binding.sourceManifest.modelReceipt as { modelId: string }).modelId,
       sourceStatus: current ? 'current' : 'conflict', canResume, ...(saved ? { saved } : {}),
-      ...(canResume && !saved ? { contextId: this.remember(context).contextId } : {}), ...(composition ? { composition } : {}),
+      ...(canResume && !saved ? { contextId: this.remember(context, this.parent(context)).contextId } : {}), ...(composition ? { composition } : {}),
       lastCompositionFinishReason, ...(latestArtifact ? { latestArtifact, latestArtifactFinishReason } : {}), attemptedPurposes }
   }
   close(): void { this.contexts.clear() }

@@ -76,7 +76,8 @@ export function commitAuthorCharacterRoster(db: Database.Database, candidate: Ch
         || saved.receiptHash !== hash(JSON.stringify(saved.receipt)) || saved.approvalId !== approvalId
         || saved.receipt.operationId !== request.operationId || saved.receipt.payloadHash !== requestHash
         || !approval || saved.approvalPayloadHash !== approval.payload_hash || saved.approvalReceiptHash !== hash(approval.receipt_json)) throw new Error('CHARACTER_AUTHOR_RECEIPT_INVALID')
-      return { ...saved.receipt, idempotent: true }
+      const snapshot = CharacterRosterRepository.read(db)
+      return { ...saved.receipt, idempotent: true, revision: snapshot.revision, snapshot }
     }
     const current = CharacterRosterRepository.read(db)
     if (current.revision !== request.expectedRevision || current.identityRevision !== request.expectedIdentityRevision) throw new Error('CHARACTER_ID_REVISION_CONFLICT')
@@ -113,8 +114,9 @@ export function commitAuthorCharacterRoster(db: Database.Database, candidate: Ch
     const created = new Map(committed.created.map(item => [item.selectionKey, item.characterId]))
     for (const entry of request.entries) {
       const id = created.get(entry.characterId) ?? entry.characterId, before = original.get(entry.characterId)
-      if (entry.legacyRelationshipNotes !== undefined && entry.legacyRelationshipNotes !== before?.legacyRelationshipNotes)
-        db.prepare('UPDATE characters SET relationships=? WHERE character_id=?').run(entry.legacyRelationshipNotes, id)
+      const legacyNotes = entry.legacyRelationshipNotes ?? ''
+      if (legacyNotes !== (before?.legacyRelationshipNotes ?? ''))
+        db.prepare('UPDATE characters SET relationships=? WHERE character_id=?').run(legacyNotes, id)
       if (entry.currentState) {
         const state = entry.currentState, oldState = before?.currentState
         const changed = CHARACTER_STATE_TEXT_FIELDS.filter(field => !oldState || oldState[field] !== state[field])

@@ -23,12 +23,13 @@ import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
 import { createMainGenerationOwner } from '../services/main-generation-owner'
 import { readMainGenerationPolicy, TaskBudgetPreflightError } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
+import { LegacyVectorMigrationBlockedError } from '../services/knowledge-base-migration-error'
 import { readPortableCurrentAuthority } from '../services/portable-current-authority'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
 import { withKnowledgeSourceGate } from '../services/knowledge-source-gate'
-import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
+import { KnowledgeBaseUnavailableError, knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { getEmbeddingConfig } from './kb-controller'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
@@ -155,7 +156,8 @@ export function registerGenerationController(options: {
         return result
       } catch (error) {
         if (error instanceof TaskBudgetPreflightError) throw new Error(error.message)
-        const code = error instanceof Error && /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER)_[A-Z_]+$/u.test(error.message)
+        if (error instanceof KnowledgeBaseUnavailableError || error instanceof LegacyVectorMigrationBlockedError) throw new Error(error.code)
+        const code = error instanceof Error && (error.message === 'SOURCE_DRAFT_CHANGED' || /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER)_[A-Z_]+$/u.test(error.message))
           ? error.message : 'GENERATION_REQUEST_FAILED'
         throw new Error(code)
       }

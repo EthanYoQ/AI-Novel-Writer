@@ -144,9 +144,12 @@ export function registerProjectArchiveController(
       title: '导出项目存档',
       defaultPath: `${safeSuggestedName(suggestedName, 'project-backup')}.${ARCHIVE_EXTENSION}`,
       filters: [{ name: 'AI Novel Archive', extensions: [ARCHIVE_EXTENSION] }],
-      properties: ['createDirectory', 'showOverwriteConfirmation'],
+      properties: ['createDirectory'],
     })
     if (result.canceled || !result.filePath) return null
+    if (fs.existsSync(result.filePath)) {
+      throw new Error('目标文件已存在，请选择其他文件名。项目存档不会覆盖已有文件。')
+    }
     const issued = grants.issueNewChild({
       webContentsId: event.sender.id,
       filePath: result.filePath,

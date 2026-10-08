@@ -14,6 +14,10 @@ import { DraftRepository } from '../draft-repository'
 import { ProjectClearRepository } from '../project-clear-repository'
 import { ProjectCoreRepository } from '../project-core-repository'
 import type { CharacterRosterCommitRequest } from '../../../src/shared/character-roster'
+import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+import { migrateSchema } from '../../migrations/runner'
+import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
 
 vi.mock('../../database', async importOriginal => ({
   ...await importOriginal<typeof import('../../database')>(),
@@ -107,6 +111,25 @@ beforeEach(() => {
 })
 
 describe('project clear repositories', () => {
+  it.each([false, true])('preserves the current identity schema and readable roster, with legacy cards=%s', populated => {
+    const db = new Database(':memory:')
+    try {
+      initializeLegacyBaselineSchema(db)
+      if (populated) db.exec("INSERT INTO characters(name,notes) VALUES('旧角色','保留原文')")
+      migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+      db.exec("INSERT INTO project_core(id,premise) VALUES('main','清空前提')")
+      db.pragma('foreign_keys=ON')
+      vi.mocked(getProjectDb).mockReturnValue(db)
+      const before = CharacterRosterRepository.read(db)
+      const aliases = db.prepare('SELECT * FROM character_aliases').all()
+      const origins = db.prepare('SELECT * FROM character_identity_origins').all()
+      ProjectClearRepository.clearGeneratedData({ creativeFields: true })
+      expect(CharacterRosterRepository.read(db)).toEqual(before)
+      expect(db.prepare('SELECT * FROM character_aliases').all()).toEqual(aliases)
+      expect(db.prepare('SELECT * FROM character_identity_origins').all()).toEqual(origins)
+      expect(db.pragma('foreign_key_check')).toEqual([])
+    } finally { db.close() }
+  })
   it('clears all blueprints in one call', () => {
     const db = createMockDb()
     vi.mocked(getProjectDb).mockReturnValue(db as never)
@@ -174,16 +197,13 @@ describe('project clear repositories', () => {
       'DELETE FROM blueprint_character_sync_operations',
       'DELETE FROM blueprint_commit_operations',
       'DELETE FROM blueprints',
-      'DELETE FROM character_roster_operations',
-      'DELETE FROM character_roster_meta',
-      'DELETE FROM characters',
       expect.stringContaining('UPDATE project_core') as unknown as string,
     ]))
     expect(statements).not.toContain("UPDATE project_core SET plot_tree_snapshot = '' WHERE id = 'main'")
     expect(result.cleared).toEqual(['blueprints', 'creativeFields'])
   })
 
-  it('clears creative roster facts while preserving the previous plot tree as a stale snapshot', () => {
+  it('preserves character cards and their projection when creative fields are cleared', () => {
     const db = createRealProjectDb()
     vi.mocked(getProjectDb).mockReturnValue(db as never)
     vi.mocked(getCurrentProjectPath).mockReturnValue(null)
@@ -199,26 +219,12 @@ describe('project clear repositories', () => {
         cleared: ['creativeFields'],
       })
 
-      expect(db.prepare('SELECT characters_arch FROM project_core WHERE id = ?').get('main')).toEqual({ characters_arch: '' })
+      expect(db.prepare('SELECT characters_arch FROM project_core WHERE id = ?').get('main'))
+        .toEqual({ characters_arch: beforeClear.snapshot.renderedMarkdown })
       expect(db.prepare('SELECT plot_tree_snapshot FROM project_core WHERE id = ?').get('main'))
         .toEqual({ plot_tree_snapshot: previousPlotTree })
-      expect(db.prepare('SELECT COUNT(*) AS count FROM characters').get()).toEqual({ count: 0 })
-      expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_meta').get()).toEqual({ count: 0 })
-      expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_operations').get()).toEqual({ count: 0 })
-      expect(CharacterRosterRepository.read()).toMatchObject({
-        revision: 0,
-        migrationState: 'empty',
-        status: 'empty',
-        entries: [],
-        renderedMarkdown: '',
-      })
-
-      const regenerated = CharacterRosterRepository.commit(rosterCommitRequest('roster-after-clear', 0))
-      expect(regenerated).toMatchObject({
-        idempotent: false,
-        revision: 1,
-        snapshot: { status: 'ready', entries: [expect.objectContaining({ name: '清除前角色' })] },
-      })
+      expect(CharacterRosterRepository.read()).toEqual(beforeClear.snapshot)
+      expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_operations').get()).toEqual({ count: 1 })
     } finally {
       db.close()
     }

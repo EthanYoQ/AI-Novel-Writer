@@ -25,8 +25,11 @@ import { ModelExecutionLeaseRegistry } from '../../services/model-execution-leas
 import { projectAccess } from '../../services/project-access'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
 import { textHash } from '../../repositories/generation-run-repository'
-import { knowledgeBaseLoader } from '../../services/knowledge-base-loader'
+import { KnowledgeBaseUnavailableError, knowledgeBaseLoader } from '../../services/knowledge-base-loader'
+import { LegacyVectorMigrationBlockedError } from '../../services/knowledge-base-migration-error'
 import { GeneratePlotArchitectureCommand } from '../../../src/services/workflows/commands/architecture.command'
+import { ReviewChapterCommand } from '../../../src/services/workflows/commands/review-chapter.command'
+import { RefineDraftCommand } from '../../../src/services/workflows/commands/refine-draft.command'
 import { useProjectStore } from '../../../src/stores/project-store'
 import type { WorkflowContext, StepCallbacks } from '../../../src/stores/workflow-store'
 import type { MainGenerationRunHandle } from '../../../src/services/generation/generation-runtime'
@@ -55,9 +58,13 @@ beforeAll(() => {
   registerDatabaseController()
 })
 beforeEach(() => {
-  const cache = path.resolve('.runtime/.cache/t12c')
+  const cache = process.platform === 'win32' && process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'ai-novel') : path.resolve('.runtime/.cache/t12c')
   fs.mkdirSync(cache, { recursive: true })
   root = fs.mkdtempSync(path.join(cache, 'ipc-'))
+  fs.writeFileSync(path.join(root, '.vibe-owner.json'), JSON.stringify({ owner: 'generation-controller.test', sourceProject: process.cwd(),
+    createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 86400000).toISOString(),
+    cleanupCommand: `Remove-Item -LiteralPath '${root.replaceAll("'", "''")}' -Recurse -Force` }))
   mocks.globalRoot = path.join(root, 'global'); fs.mkdirSync(mocks.globalRoot)
   const project = projectAccess.createProject(root, '合成小说')
   openedProject = project
@@ -139,6 +146,16 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     const save = () => operation === 'review-chapter'
       ? ipc.invokeWithProjectSession(session, 'review-revision:commit-review', { contextId: prepared.contextId, handle: run.handle, artifact: reference })
       : ipc.invokeWithProjectSession(session, 'review-revision:commit-revision', { contextId: prepared.contextId, handle: run.handle, expectedCompositionHash: artifact.textHash })
+    if (operation === 'review-chapter') {
+      const create = ReviewRepository.create
+      vi.spyOn(ReviewRepository, 'create').mockImplementationOnce((params, db) => {
+        db!.prepare('UPDATE contents SET body=? WHERE id=1').run('保存事务内源稿已变化')
+        return create(params, db)
+      })
+      await expect(save()).rejects.toThrow('SOURCE_DRAFT_CHANGED')
+      expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM reviews').pluck().get()).toBe(0)
+      expect((await invoke('generation:read', run.handle)).candidates).toHaveLength(1)
+    }
     const receipt = await save()
     const table = operation === 'review-chapter' ? 'reviews' : 'revisions'
     expect(receipt).toMatchObject({ success: true, kind: operation === 'review-chapter' ? 'review' : 'revision', source })
@@ -149,6 +166,35 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     const recovered = await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: run.handle })
     expect(recovered).toMatchObject({ sourceStatus: 'conflict', saved: receipt })
     expect((await invoke('generation:read', run.handle)).ledger?.physicalRequests).toBe(originalRoot ? 2 : 1)
+  })
+  it.each(['zh-CN', 'en-US'] as const)('localizes actual prepare source drift for review and refinement in %s', async uiLocale => {
+    getProjectDb()!.exec("INSERT INTO contents(id,body) VALUES(1,'作者已保存的新稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(1,1,1,'draft',1)")
+    useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath,
+      name: '合成小说', sessionLease: session.leaseId, characterStates: '', createdAt: '', updatedAt: '',
+      novelConfig: { genre: '', subGenre: '', targetAudience: '', totalChapters: 1, wordsPerChapter: 2000,
+        plotStructure: 'three_act', narrativePOV: 'third_limited', coreOutline: '', worldSetting: '', goldenFinger: '', protagonistProfile: '', globalGuidance: '' } } })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: (channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args) } })
+    const fetch = stream()
+    const source = { draftPath: 'ai-novel://draft/1', draftContent: '选择时的旧稿', chapterNumber: 1,
+      sourceDraft: { id: 1, chapterNumber: 1, version: 1, status: 'draft' as const, contentRevision: 1 } }
+    await expect(invoke('review-revision:prepare', { operation: 'review-chapter', draftId: 1,
+      expectedDraft: { chapterNumber: 1, version: 1, status: 'draft', contentHash: textHash(source.draftContent) },
+      authorInputs: [], uiLocale })).rejects.toThrow('GENERATION_REVIEW_SOURCE_CHANGED')
+    const context: WorkflowContext = { runId: 'stale-review-source', projectPath: session.projectPath, projectSession: session,
+      writingLanguage: 'zh-CN', uiLocale, cancelled: false, data: {} }
+    const callbacks: StepCallbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
+    const commands = [new ReviewChapterCommand(source), new RefineDraftCommand({ ...source,
+      chapterInfo: { projectPath: session.projectPath, chapterNumber: 1, title: '', role: '', purpose: '', keyEvents: '', characters: [] } })]
+    const messages = uiLocale === 'zh-CN'
+      ? ['源草稿在 AI 审稿期间已变化。审稿报告未保存，请重新打开当前草稿后再次执行 AI 审稿。',
+        '源草稿在 AI 修稿期间已变化。修订未保存，请重新打开当前草稿后再次执行 AI 修稿。']
+      : ['The source draft changed during AI review. The review report was not saved. Reopen the current draft and run AI review again.',
+        'The source draft changed during AI refinement. The revision was not saved. Reopen the current draft and run AI refinement again.']
+    for (const [index, command] of commands.entries()) {
+      await expect(command.execute({ step: {}, context, callbacks })).rejects.toMatchObject({ code: 'SOURCE_DRAFT_CHANGED', message: messages[index] })
+    }
+    expect(fetch).not.toHaveBeenCalled()
+    expect(getProjectDb()!.prepare('SELECT body FROM contents WHERE id=1').pluck().get()).toBe('作者已保存的新稿')
   })
   async function finalizedCharacterFixture() {
     const body = '林岚来到北塔。', characterId = 'character-fixture'
@@ -271,6 +317,12 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     const editSource = () => database.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)').run('作者后来改写的前章', selectedId)
     return { selectedId, prepareRequest, selectionFor, editSource }
   }
+  it.each([new KnowledgeBaseUnavailableError(new Error('native missing')),new LegacyVectorMigrationBlockedError('untrusted details')])('preserves known knowledge failure code before drafting',async error=>{
+    const fixture=await selectedSourceFixture()
+    vi.spyOn(knowledgeBaseLoader,'load').mockRejectedValueOnce(error)
+    await expect(invoke('generation:prepare-draft-context',fixture.prepareRequest)).rejects.toThrow(error.code)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(0)
+  })
   it('requires an issued preparation and rejects source changes before opening a drafting root', async () => {
     const fetch = stream()
     await expect(invoke('generation:begin', { ...request, operation: 'chapter-draft', chapterNumber: 1 })).rejects.toThrow('GENERATION_DRAFT_PREPARATION_REQUIRED')

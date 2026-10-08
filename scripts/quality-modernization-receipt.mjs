@@ -27,6 +27,12 @@ export const targetUnitRange = (targetUnits, protocolRevision, arm) =>
   ? { minimum: Math.floor(targetUnits * 0.7), maximum: Math.ceil(targetUnits * 1.3) }
   : { minimum: Math.floor(targetUnits * 0.8), maximum: Math.ceil(targetUnits * 1.2) }
 
+export function acceptedTargetUnits(units, targetUnits, protocolRevision, arm) {
+  const { minimum, maximum } = targetUnitRange(targetUnits, protocolRevision, arm)
+  return units >= minimum && (units <= maximum
+    || protocolRevision === 's14b-candidate-only-three-rounds-v1' && arm === 'candidate')
+}
+
 export function isExpectedReferenceEvidenceFailure(error) {
   return error instanceof ReferenceEvidenceValidationError && error.message !== 'RECOVERY_DATABASE_READ_FAILED'
 }
@@ -62,8 +68,7 @@ export function recordPersistedDraftObservation(receipt, input) {
   const observation = { chapterNumber: input.chapterNumber, targetUnits: input.targetUnits,
     units: input.units, contentHash: input.contentHash, persisted: true }
   receipt.draftObservation = observation
-  const range = targetUnitRange(input.targetUnits, receipt.protocolRevision, receipt.arm)
-  const withinTargetRange = input.units >= range.minimum && input.units <= range.maximum
+  const withinTargetRange = acceptedTargetUnits(input.units, input.targetUnits, receipt.protocolRevision, receipt.arm)
   if (!withinTargetRange) {
     throw new TargetUnitsGateFailure(input.units, input.targetUnits)
   }

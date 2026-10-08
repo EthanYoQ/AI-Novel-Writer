@@ -76,6 +76,24 @@ afterEach(async () => {
 })
 
 describe('CharactersView finalized proposal recovery', () => {
+  it('shows newly imported proposals after roster refresh and submits their explicit adoption', async () => {
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'character-proposal:list-pending-finalized') return pending
+        ? [{ proposalBatchId: batch.proposalBatchId, revision: batch.revision, importOperationId: 'import-1' }] : []
+      if (channel === 'character-proposal:read-pending-finalized') return { ...batch, source: { kind: 'import', operationId: 'import-1' } }
+      if (channel === 'character-proposal:approve') { pending = false; return { batch: { ...batch, status: 'approved' }, created: [] } }
+      return []
+    })
+    await act(async () => useCharacterStore.setState({ rosterRevision: 1 }))
+    await vi.waitFor(() => expect(container.textContent).toContain('Review imported character decision'))
+    await act(async () => page.getByRole('button', { name: 'Review imported character decision' }).click())
+    await act(async () => page.getByRole('combobox', { name: /Adoption:/ }).selectOptions('create'))
+    await act(async () => page.getByRole('button', { name: 'Accept decisions' }).click())
+    await vi.waitFor(() => expect(container.textContent).not.toContain('Pending character decisions (1)'))
+    expect(invoke).toHaveBeenCalledWith('character-proposal:approve', expect.objectContaining({
+      selections: [{ selectionKey: 'unknown-1', action: 'create' }],
+    }), expect.objectContaining({ leaseId: project.sessionLease }))
+  })
   it('reopens a protected state suggestion and accepts it through the source-bound decision IPC', async () => {
     await vi.waitFor(() => expect(container.textContent).toContain('Pending state suggestions (1)'))
     await act(async () => page.getByRole('button', { name: 'Review finalized state suggestion' }).click())
@@ -93,12 +111,12 @@ describe('CharactersView finalized proposal recovery', () => {
   })
 
   it('lists after reopen, reads by ID, maps by characterId, approves, and refreshes the list through IPC', async () => {
-    await vi.waitFor(() => expect(container.textContent).toContain('Pending finalized character decisions (1)'))
+    await vi.waitFor(() => expect(container.textContent).toContain('Pending character decisions (1)'))
     await act(async () => page.getByRole('button', { name: 'Review finalized character decision' }).click())
     await vi.waitFor(() => expect(container.textContent).toContain('生成候选'))
     await act(async () => page.getByRole('combobox', { name: /Adoption:/ }).selectOptions(`map:${identity.characterId}`))
     await act(async () => page.getByRole('button', { name: 'Accept decisions' }).click())
-    await vi.waitFor(() => expect(container.textContent).not.toContain('Pending finalized character decisions (1)'))
+    await vi.waitFor(() => expect(container.textContent).not.toContain('Pending character decisions (1)'))
     expect(invoke).toHaveBeenCalledWith('character-proposal:read-pending-finalized',
       { proposalBatchId: batch.proposalBatchId }, expect.objectContaining({ leaseId: project.sessionLease }))
     expect(invoke).toHaveBeenCalledWith('character-proposal:approve', expect.objectContaining({
@@ -116,7 +134,7 @@ describe('CharactersView finalized proposal recovery', () => {
       if (channel === 'character-proposal:read-pending-finalized') throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
       return null
     })
-    await vi.waitFor(() => expect(container.textContent).toContain('Pending finalized character decisions (1)'))
+    await vi.waitFor(() => expect(container.textContent).toContain('Pending character decisions (1)'))
     await act(async () => page.getByRole('button', { name: 'Review finalized character decision' }).click())
     await vi.waitFor(() => expect(container.textContent).toContain('CHARACTER_PROPOSAL_SOURCE_CHANGED'))
     expect(container.textContent).not.toContain('生成候选')
@@ -124,11 +142,11 @@ describe('CharactersView finalized proposal recovery', () => {
   })
 
   it('cancels with revision CAS and refreshes the pending list', async () => {
-    await vi.waitFor(() => expect(container.textContent).toContain('Pending finalized character decisions (1)'))
+    await vi.waitFor(() => expect(container.textContent).toContain('Pending character decisions (1)'))
     await act(async () => page.getByRole('button', { name: 'Review finalized character decision' }).click())
     await vi.waitFor(() => expect(container.textContent).toContain('生成候选'))
     await act(async () => page.getByRole('button', { name: 'Reject decisions' }).click())
-    await vi.waitFor(() => expect(container.textContent).not.toContain('Pending finalized character decisions (1)'))
+    await vi.waitFor(() => expect(container.textContent).not.toContain('Pending character decisions (1)'))
     expect(invoke).toHaveBeenCalledWith('character-proposal:cancel', {
       proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision,
     }, expect.objectContaining({ leaseId: project.sessionLease }))

@@ -90,3 +90,19 @@ describe('ModelSettings capability evidence', () => {
     expect(evidence?.textContent).toContain('parent task remainder')
   })
 })
+
+it('shows and edits a lower model capacity independently from the request limit', async () => {
+  const profile = model('https://proxy.example.test/v1')
+  profile.maxTokens = 6000
+  profile.capabilities!.maxOutputTokens = 2000
+  await render(profile, 'en-US')
+  expect(container?.querySelector('[data-effective-output-limit="2000"]')).not.toBeNull()
+  const capacity = container?.querySelector<HTMLInputElement>('[aria-label="Model output capacity tokens"]')
+  expect(capacity).toBeInstanceOf(HTMLInputElement)
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(capacity, '4000')
+    capacity?.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(container?.querySelector('[data-effective-output-limit="4000"]')).not.toBeNull()
+  expect(container?.querySelector<HTMLInputElement>('input[value="6000"]')).not.toBeNull()
+})

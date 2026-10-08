@@ -850,8 +850,10 @@ describe('InferGlobalSettingsCommand', () => {
 
 describe('M02 text-import proposal receipts', () => {
   function proposalReceipt(request: import('../../../../shared/import-global-facts').ImportGlobalFactsRequest) {
+    const domainRequest = { ...request }
+    delete domainRequest.generationRunHandle
     return { operationId: request.operationId, payloadHash: 'f'.repeat(64), idempotent: false, core: structuredClone(request.core),
-      characterProposal: { proposalBatchId: 'import-proposal', sourceHash: 'a'.repeat(64) }, proposalSource: structuredClone(request) }
+      characterProposal: { proposalBatchId: 'import-proposal', sourceHash: 'a'.repeat(64) }, proposalSource: structuredClone(domainRequest) }
   }
   function arrange(mutate?: (receipt: ReturnType<typeof proposalReceipt>) => void) {
     const invoke = stubIpcInvoke((channel, request) => {
@@ -871,6 +873,8 @@ describe('M02 text-import proposal receipts', () => {
   }
   it('records source-exact proposals and does not report candidate count as created characters', async () => {
     const invoke = arrange(), context = createContext()
+    context.mainGenerationRunHandle = { projectId: context.projectSession!.projectId, epoch: context.projectSession!.leaseId,
+      rootActionId: 'import-root', runId: 'import-generation' }
     await new InferGlobalSettingsCommand().execute({ step: {}, context, callbacks })
     expect(context.data.importGlobalFactsReceipt).toMatchObject({ characterProposal: { proposalBatchId: 'import-proposal' } })
     expect(context.data.importGlobalInferenceCandidate).toBe(JSON.stringify(validInference()))

@@ -12,6 +12,10 @@ const ERROR_KEYS = {
 } as const
 
 function readCode(error: unknown): AppErrorCode | undefined {
+  if (error instanceof Error) {
+    const code = /^(?:Error invoking remote method '[^']+': Error: )?(KNOWLEDGE_BASE_NATIVE_UNAVAILABLE|LEGACY_VECTOR_MIGRATION_BLOCKED)$/u.exec(error.message)?.[1]
+    if (code === 'KNOWLEDGE_BASE_NATIVE_UNAVAILABLE' || code === 'LEGACY_VECTOR_MIGRATION_BLOCKED') return code
+  }
   if (typeof error !== 'object' || error === null) return undefined
   const code = 'code' in error
     ? error.code

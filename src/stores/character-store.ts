@@ -19,6 +19,7 @@ import {
 import { randomUUID } from '../utils/id'
 import { useEditorStore } from './editor-store'
 import { useProjectStore } from './project-store'
+import { useLocaleStore } from './locale-store'
 import {
   CHARACTER_DRAFT_TAB,
   discardProjectEditorDraft,
@@ -37,6 +38,13 @@ import {
 
 export type CharacterCurrentState = CharacterStateData
 export type CharacterCard = CharacterData
+export type CharacterAvatarDraft = { kind: 'image'; base64: string; mime: string } | { kind: 'remove' }
+export const characterAvatarChanges = new EventTarget()
+
+/** Unbound draft selection keys are local UI addresses, never persisted character identities. */
+export function characterSelectionKey(card: CharacterCard, index: number): string {
+  return card.characterId ?? `unbound:${index}`
+}
 
 export const EMPTY_CARD: CharacterCard = {
   name: '', role: 'supporting', gender: '', age: '',
@@ -126,6 +134,10 @@ function normalizeCharacterCards(value: unknown): CharacterCard[] {
 }
 
 function persistCharacterDraftLedger(ledger: ReturnType<typeof readCharacterDraftLedger>) {
+  const { dataProjectKey, characters, avatarDrafts } = useCharacterStore.getState()
+  if (dataProjectKey && Object.keys(avatarDrafts).length && !getProjectEditorDraft(ledger, dataProjectKey)) {
+    ledger = { ...ledger, projects: [...ledger.projects, { projectKey: dataProjectKey, baseValue: characters, draftValue: characters }] }
+  }
   persistProjectEditorDraftLedger(useEditorStore.getState(), CHARACTER_DRAFT_TAB, ledger)
 }
 
@@ -159,10 +171,16 @@ function removeCharacterById(
   characters: readonly CharacterCard[],
   name: string,
 ): CharacterCard[] {
-  const targetIndex = characters.findIndex(character => character.characterId === name)
+  const targetIndex = characters.findIndex((character, index) => characterSelectionKey(character, index) === name)
   return targetIndex < 0
     ? [...characters]
-    : characters.filter((_, index) => index !== targetIndex)
+    : characters.filter((_, index) => index !== targetIndex).map(character => {
+        try {
+          const relationships: unknown = JSON.parse(character.relationships)
+          if (Array.isArray(relationships)) return { ...character, relationships: JSON.stringify(relationships.filter(relation => relation?.targetCharacterId !== name)) }
+        } catch { return character }
+        return character
+      })
 }
 
 interface SessionOperation<T> {
@@ -177,6 +195,9 @@ let characterLoadSequence = 0
 
 interface CharacterState {
   characters: CharacterCard[]
+  avatarDrafts: Record<string, CharacterAvatarDraft>
+  stageAvatar: (characterId: string, draft: CharacterAvatarDraft | null, session: ProjectSessionContext) => void
+  commitAvatarDrafts: (session: ProjectSessionContext) => Promise<void>
   /** IPC-verified display grant; raw cards remain the author edit and history source. */
   currentDerivedFields: Record<string, CharacterStateTextField[]>
   selectedId: string | null
@@ -230,6 +251,34 @@ interface CharacterState {
 
 export const useCharacterStore = create<CharacterState>()((set, get) => ({
   characters: [],
+  avatarDrafts: {},
+  stageAvatar: (characterId, draft, session) => {
+    if (!isCharacterProjectSessionCurrent(session) || !sameProjectSessionContext(get().dataProjectSession, session)) return
+    const avatarDrafts = { ...get().avatarDrafts }
+    if (draft) avatarDrafts[characterId] = draft
+    else delete avatarDrafts[characterId]
+    set({ avatarDrafts })
+    const ledger = readCharacterDraftLedger(session.projectPath)
+    const current = getProjectEditorDraft(ledger, session.projectPath)
+    persistCharacterDraftLedger(current ? settleProjectEditorSave(ledger, session.projectPath, current.baseValue, current.draftValue) : ledger)
+  },
+  commitAvatarDrafts: async session => {
+    for (const [characterId, draft] of Object.entries(get().avatarDrafts)) {
+      if (!isCharacterProjectSessionCurrent(session)) return
+      let response
+      try {
+        response = draft.kind === 'image'
+          ? await ipc.invokeWithProjectSession(session, 'character-avatar:commit', characterId, draft.base64)
+          : await ipc.invokeWithProjectSession(session, 'character-avatar:remove', characterId)
+      } catch (error) {
+        const text = useLocaleStore.getState().text
+        throw new Error(text('头像保存失败，档案其它内容已保存。', 'The avatar could not be saved. Other profile changes were saved.'), { cause: error })
+      }
+      if (!response.success) throw new Error(response.error.message)
+      characterAvatarChanges.dispatchEvent(new CustomEvent('changed', { detail: { context: session, characterId } }))
+      if (isCharacterProjectSessionCurrent(session) && get().avatarDrafts[characterId] === draft) get().stageAvatar(characterId, null, session)
+    }
+  },
   currentDerivedFields: {},
   selectedId: null, selectedName: null,
   saving: false,
@@ -249,6 +298,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     const requestSequence = ++characterLoadSequence
     if (!sameProjectSessionContext(get().dataProjectSession, projectSession)) {
       set({
+        avatarDrafts: {},
         characters: [],
         currentDerivedFields: {},
         selectedId: null, selectedName: null,
@@ -318,6 +368,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       const visibleCards = normalizeCharacterCards(restored.value)
 
       const { selectedId } = get()
+      const selected = visibleCards.find((card, index) => characterSelectionKey(card, index) === selectedId) ?? visibleCards[0]
       set({
         characters: visibleCards,
         currentDerivedFields: roster.currentDerivedFields ?? {},
@@ -329,8 +380,8 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
         loadingProjectKey: null,
         loadingProjectSession: null,
         lastError: null,
-        selectedId: visibleCards.find(c => c.characterId === selectedId)?.characterId ?? visibleCards[0]?.characterId ?? null,
-        selectedName: visibleCards.find(c => c.characterId === selectedId)?.name ?? visibleCards[0]?.name ?? null,
+        selectedId: selected ? characterSelectionKey(selected, visibleCards.indexOf(selected)) : null,
+        selectedName: selected?.name ?? null,
       })
     } catch (error) {
       if (
@@ -359,6 +410,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
   beginProjectLoad: (projectPath) => {
     characterLoadSequence += 1
     set({
+      avatarDrafts: {},
       characters: [],
       currentDerivedFields: {},
       selectedId: null, selectedName: null,
@@ -377,6 +429,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
   reset: () => {
     characterLoadSequence += 1
     set({
+      avatarDrafts: {},
       characters: [],
       currentDerivedFields: {},
       selectedId: null, selectedName: null,
@@ -401,8 +454,8 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       || state.loadingProjectSession !== null
       || state.lastError !== null
     ) return
-    const card = state.characters.find(c => c.characterId === id)
-    set({ selectedId: card?.characterId ?? null, selectedName: card?.name ?? null })
+    const card = state.characters.find((c, index) => characterSelectionKey(c, index) === id)
+    set({ selectedId: card ? id : null, selectedName: card?.name ?? null })
   },
 
   setSelectedName: name => {
@@ -457,15 +510,19 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       || get().lastError !== null
     ) return Promise.resolve(false)
     const { characters } = get()
-    if (!characters.some(card => card.characterId === name)) return Promise.resolve(false)
+    if (!characters.some((card, index) => characterSelectionKey(card, index) === name)) return Promise.resolve(false)
     const ledger = readCharacterDraftLedger(projectKey)
     const renames = getCharacterDraftRenames(ledger, projectKey)
     const remaining = removeCharacterById(characters, name)
+    const selectedIndex = characters.findIndex((card, index) => characterSelectionKey(card, index) === get().selectedId)
+    const removedIndex = characters.findIndex((card, index) => characterSelectionKey(card, index) === name)
+    const selected = remaining[selectedIndex === removedIndex ? 0 : selectedIndex - Number(selectedIndex > removedIndex)] ?? remaining[0]
     const nextRenames = renames // Historical metadata is preserved, never used as identity.
     set({
       characters: remaining,
-      selectedId: remaining.find(c => c.characterId === get().selectedId)?.characterId ?? remaining[0]?.characterId ?? null,
-      selectedName: remaining.find(c => c.characterId === get().selectedId)?.name ?? remaining[0]?.name ?? null,
+      avatarDrafts: Object.fromEntries(Object.entries(get().avatarDrafts).filter(([id]) => id !== name)),
+      selectedId: selected ? characterSelectionKey(selected, remaining.indexOf(selected)) : null,
+      selectedName: selected?.name ?? null,
     })
     let nextLedger = recordProjectEditorEdit(ledger, projectKey, characters, remaining)
     nextLedger = setCharacterDraftRenames(nextLedger, projectKey, nextRenames)
@@ -496,7 +553,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     if (characters.length === 0) return Promise.resolve(true)
 
     const ledger = readCharacterDraftLedger(projectKey)
-    set({ characters: [], selectedName: null })
+    set({ characters: [], avatarDrafts: {}, selectedId: null, selectedName: null })
     let nextLedger = recordProjectEditorEdit(ledger, projectKey, characters, [])
     nextLedger = setCharacterDraftRenames(nextLedger, projectKey, [])
     persistCharacterDraftLedger(nextLedger)
@@ -522,7 +579,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       || state.lastError !== null
     ) return false
     const before = get().characters
-    const targetIndex = before.findIndex(character => character.characterId === name)
+    const targetIndex = before.findIndex((character, index) => characterSelectionKey(character, index) === name)
     if (targetIndex < 0) return false
 
     const ledger = readCharacterDraftLedger(projectKey)
@@ -563,8 +620,8 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       && sameProjectSessionContext(get().dataProjectSession, projectSession)
     ) {
       const restored = projectDraft.baseValue
-      const selected = restored.find(c => c.characterId === get().selectedId) ?? restored[0]
-      set({ characters: restored, selectedId: selected?.characterId ?? null, selectedName: selected?.name ?? null })
+      const selected = restored.find((card, index) => characterSelectionKey(card, index) === get().selectedId) ?? restored[0]
+      set({ characters: restored, avatarDrafts: {}, selectedId: selected ? characterSelectionKey(selected, restored.indexOf(selected)) : null, selectedName: selected?.name ?? null })
     }
 
     persistCharacterDraftLedger(discardProjectEditorDraft(ledger, projectPath))
@@ -582,8 +639,8 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     ) return
     const before = get().characters
     set((s) => {
-      const newChars = s.characters.map(c =>
-        c.characterId === name ? { ...c, [key]: value } : c
+      const newChars = s.characters.map((c, index) =>
+        characterSelectionKey(c, index) === name ? { ...c, [key]: value } : c
       )
 
       return { characters: newChars }
@@ -624,7 +681,6 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     ) {
       return Promise.reject(new Error('角色身份操作正在进行，请稍后再保存'))
     }
-    set({ saving: true, identityBusy: true })
     const { characters } = get()
     const expectedRevision = get().rosterRevision
     const expectedIdentityRevision = get().identityRevision
@@ -632,6 +688,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       return Promise.reject(new Error('角色名单尚未完成安全读取，已拒绝保存'))
     }
     if (characters.some(c => !c.characterId) || new Set(characters.map(c => c.characterId)).size !== characters.length) return Promise.reject(new Error('角色身份尚未确认；旧草稿已保留，不按名字自动绑定。'))
+    set({ saving: true, identityBusy: true })
     const saveLedger = readCharacterDraftLedger(projectKey)
     const renames = getCharacterDraftRenames(saveLedger, projectKey)
     const savedCharacters = characters.map(character => ({
@@ -709,6 +766,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       } else if (isCharacterProjectSessionCurrent(projectSession)) {
         set({ characters: currentValue, selectedId: createdIds.get(get().selectedId ?? '') ?? get().selectedId, rosterRevision: result.receipt.revision, identityRevision: result.receipt.snapshot.identityRevision ?? null })
       }
+      await get().commitAvatarDrafts(projectSession)
     }
     const trackedSave = save().finally(() => {
       if (characterSaveInFlight?.promise === trackedSave) {

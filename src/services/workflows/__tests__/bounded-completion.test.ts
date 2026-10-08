@@ -36,6 +36,9 @@ describe('bounded completion', () => {
     'Here is the truth: I never left the island. Everyone who said otherwise was lying.',
     '以下是我从父亲遗物中找到的最后一份内容。它改变了我们所有人的命运。',
     'Below is the valley where my brother disappeared. I had returned to find him.',
+    'I will write to my father before dawn.',
+    'As requested, I left the key beneath the stone.',
+    '根据您的要求，我把信交给了守门人。',
   ])('narrative opening: %s', content => {
     it('passes the shared mechanical integrity gate', () => {
       expect(() => assertMechanicallyCompleteVisibleText(content, 'zh-CN')).not.toThrow()
@@ -49,6 +52,16 @@ describe('bounded completion', () => {
       })).resolves.toBe(content)
       expect(requestContinuation).not.toHaveBeenCalled()
     })
+  })
+
+  it('preserves source refrains but rejects newly duplicated prose in a revision', async () => {
+    const refrain = '旧城的钟声越过河岸，守夜人举起灯火，等待远方的船回来。'.repeat(6)
+    const source = `${refrain}\n\n多年以前。\n\n${refrain}`
+    const request = { initial: { content: source, finishReason: 'stop' as const }, mode: 'append-visible-text' as const,
+      sourceText: source, maxContinuations: 0, originalPrompt: '修订', writingLanguage: 'zh-CN' as const, requestContinuation: vi.fn() }
+    await expect(completeBoundedCompletion(request)).resolves.toBe(source)
+    await expect(completeBoundedCompletion({ ...request, initial: { content: `${source}\n\n${refrain}`, finishReason: 'stop' } }))
+      .rejects.toThrow('明显重复段落')
   })
 
   it.each([
@@ -277,7 +290,7 @@ describe('bounded completion', () => {
     ['a code fence', `\`\`\`markdown\n${'完整正文。'.repeat(40)}\n\`\`\``, '代码围栏'],
     ['opening meta-talk', `以下是根据您的要求修订后的完整章节。\n\n${'完整正文。'.repeat(40)}`, '首段元话术'],
     ['single-line opening meta-talk', `以下是根据您的要求修订后的完整章节。\n${'完整正文。'.repeat(40)}`, '首段元话术'],
-    ...['以下是修订后的完整正文：', '以下是修订后的完整章节正文：', 'Here is the revised chapter:', 'Below is the complete text:']
+    ...['以下是修订后的完整正文：', '以下是修订后的完整章节正文：', 'Here is the revised chapter:', 'Below is the complete text:', 'As requested, here is the revised chapter:']
       .map(opening => ['explicit output introduction', `${opening}\n\n${'完整正文。'.repeat(40)}`, '首段元话术']),
     ['a truncation marker', `${'完整正文。'.repeat(40)}\n\n…[内容已按上下文预算截断]…`, '截断标记'],
     ['an orphan think fragment', `${'完整正文。'.repeat(40)}\n\n</think`, 'think 标签残片'],

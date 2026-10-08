@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 import type Database from 'better-sqlite3'
 
+import type { PortableRuntimeFreezeGuard } from './portable-runtime-freeze'
 import { PORTABLE_SOURCE_SCHEMA_VERSION } from './portable-project-format'
 
 const HASH = /^[a-f0-9]{64}$/u
@@ -150,11 +151,11 @@ function receiptId(input: Pick<PortableTransferAuthority,
     finalizations: input.finalizations, summarySources: input.summarySources })).slice(0, 32)}`
 }
 
-function currentness(database: Database.Database, legacyCopy = false): Pick<PortableTransferAuthority, 'finalizations' | 'summarySources'> {
+function currentness(database: Database.Database, legacyCopy = false, freeze?: PortableRuntimeFreezeGuard): Pick<PortableTransferAuthority, 'finalizations' | 'summarySources'> {
   const core = database.prepare('SELECT id FROM project_core').all() as Array<{ id: string }>
   if (core.length > 1 || core.some(row => row.id !== 'main')) invalid()
   const rows = database.prepare(`
-    SELECT o.finalization_id AS finalizationId, o.draft_id AS draftId,
+    SELECT o.finalization_id AS finalizationId, d.id AS draftId,
       o.chapter_number AS chapterNumber, o.content_hash AS contentHash,
       o.content_snapshot AS contentSnapshot, d.chapter_number AS draftChapterNumber,
       d.status AS draftStatus, c.body AS body
@@ -170,10 +171,11 @@ function currentness(database: Database.Database, legacyCopy = false): Pick<Port
           AND (newer.version > d.version OR (newer.version = d.version AND newer.id > d.id))
       )
     ORDER BY o.finalization_id
-  `).all() as Array<PortableFinalizationAuthority & {
-    contentSnapshot: string; draftChapterNumber: number; draftStatus: string; body: string
+  `).all() as Array<{
+    finalizationId: string | null; draftId: number; chapterNumber: number | null; contentHash: string | null
+    contentSnapshot: string | null; draftChapterNumber: number; draftStatus: string; body: string
   }>
-  const finalizations = rows.map(row => {
+  const finalizations = rows.filter(row => !(row.finalizationId === null && freeze?.isFrozen('drafts', String(row.draftId)))).map(row => {
     const projected = finalization({
       finalizationId: row.finalizationId,
       draftId: row.draftId,
@@ -207,12 +209,13 @@ function currentness(database: Database.Database, legacyCopy = false): Pick<Port
 }
 
 export function createPortableTransferAuthority(input: {
+  freeze?: PortableRuntimeFreezeGuard
   database: Database.Database
   originProjectId: string
   snapshotGeneration: string
   portableDatabaseSha256: string
 }): PortableTransferAuthority {
-  return createAuthority(input, currentness(input.database))
+  return createAuthority(input, currentness(input.database, false, input.freeze))
 }
 
 /** Old finalized prose without an outbox receipt remains readable legacy content;
@@ -255,8 +258,9 @@ export function mapPortableTransferAuthority(
 export function verifyPortableTransferAuthority(
   database: Database.Database,
   authority: PortableTransferAuthority,
+  freeze?: PortableRuntimeFreezeGuard,
 ): void {
-  const facts = currentness(database)
+  const facts = currentness(database, false, freeze)
   if (JSON.stringify(facts.finalizations) !== JSON.stringify(authority.finalizations)
     || JSON.stringify(facts.summarySources) !== JSON.stringify(authority.summarySources)) invalid()
 }
@@ -265,7 +269,9 @@ export function verifyPortableTransferAuthority(
 export function verifyPortableTransferAuthorityHistory(
   database: Database.Database,
   authority: PortableTransferAuthority,
+  freeze?: PortableRuntimeFreezeGuard,
 ): void {
+  const deleted = new Set<number>()
   for (const item of authority.finalizations) {
     const row = database.prepare(`
       SELECT d.status AS status,d.chapter_number AS chapterNumber,c.body AS body,
@@ -273,6 +279,19 @@ export function verifyPortableTransferAuthorityHistory(
       FROM drafts d JOIN contents c ON c.id=d.content_id
       LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.id=?
     `).get(item.draftId) as { status: string; chapterNumber: number; body: string; finalizationId: string | null; contentHash: string | null; contentSnapshot: string | null } | undefined
+    if (!row && freeze?.active && !database.prepare('SELECT 1 FROM drafts WHERE id=?').get(item.draftId)) {
+      const deletion = database.prepare(`
+        SELECT operation_id AS operationId FROM chapter_deletion_operations
+        WHERE draft_id=? AND chapter_number=? AND finalization_id=?
+          AND status IN ('pending','failed','completed')
+          AND (legacy_knowledge_authorization='not_required'
+            OR (legacy_knowledge_authorization='consumed' AND legacy_knowledge_authorized_at <> ''))
+      `).get(item.draftId, item.chapterNumber, item.finalizationId) as { operationId: string } | undefined
+      if (deletion && !freeze.isFrozen('chapter_deletion_operations', deletion.operationId)) {
+        deleted.add(item.draftId)
+        continue
+      }
+    }
     if (!row || row.status !== 'finalized' || row.chapterNumber !== item.chapterNumber
       || row.finalizationId !== item.finalizationId || row.contentHash !== item.contentHash
       || row.contentSnapshot !== row.body || sha256(row.body) !== item.contentHash) invalid()
@@ -284,6 +303,7 @@ export function verifyPortableTransferAuthorityHistory(
         projection_generation AS projectionGeneration
       FROM summary_snapshots WHERE id=?
     `).get(item.summaryId) as PortableSummarySourceAuthority | undefined
+    if (!row && deleted.has(item.draftId)) continue
     if (!row || row.draftId !== item.draftId || row.chapterNumber !== item.chapterNumber
       || row.sourceFinalizationId !== item.sourceFinalizationId || row.sourceContentHash !== item.sourceContentHash
       || row.projectionGeneration !== item.projectionGeneration) invalid()

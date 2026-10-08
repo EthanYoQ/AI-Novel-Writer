@@ -19,8 +19,8 @@ export function importGenerationSlotKey(slot: ImportGenerationSlot): string {
 /** Read immutable import material from the captured database, not renderer samples. */
 export function captureImportGenerationContext(db: Database.Database, slot: ImportGenerationSlot): ImportGenerationContext {
   validateImportGenerationSlot(slot)
-  const run = db.prepare('SELECT purpose,manifest_fingerprint,total_chapters,manifest_word_count FROM import_runs WHERE id=?').get(slot.runId) as {
-    purpose: string; manifest_fingerprint: string; total_chapters: number; manifest_word_count: number
+  const run = db.prepare('SELECT purpose,manifest_fingerprint,manifest_chapter_count,manifest_word_count FROM import_runs WHERE id=?').get(slot.runId) as {
+    purpose: string; manifest_fingerprint: string; manifest_chapter_count: number; manifest_word_count: number
   } | undefined
   if (!run || run.purpose !== 'reference' || !/^[a-f0-9]{64}$/.test(run.manifest_fingerprint)) throw new Error('GENERATION_IMPORT_MANIFEST_REQUIRED')
   const range = slot.stage === 'blueprints' ? parseImportRunChapterBatchCheckpointId(slot.batchId) : null
@@ -36,5 +36,5 @@ export function captureImportGenerationContext(db: Database.Database, slot: Impo
   if (range && createImportRunChapterBatchCheckpointId(chapters) !== slot.batchId) throw new Error('GENERATION_IMPORT_CHECKPOINT_CHANGED')
   const core = ProjectCoreRepository.get(db)
   if (!core || Buffer.byteLength(JSON.stringify(chapters), 'utf8') > 8 * 1024 * 1024) throw new Error('GENERATION_IMPORT_CONTEXT_LIMIT')
-  return { slot: { ...slot }, manifestFingerprint: run.manifest_fingerprint, totalChapters: run.total_chapters, totalWords: run.manifest_word_count, chapters, core, prompts: {} }
+  return { slot: { ...slot }, manifestFingerprint: run.manifest_fingerprint, totalChapters: run.manifest_chapter_count, totalWords: run.manifest_word_count, chapters, core, prompts: {} }
 }

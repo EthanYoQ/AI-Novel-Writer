@@ -22,8 +22,12 @@ export function CharacterProposalSelectionPanel({ batch, identities, choices, on
   const text = useLocaleStore(state => state.text)
   if (choices.proposalBatchId !== batch.proposalBatchId || choices.revision !== batch.revision) return <p role="alert">{text('提议已改变，请重新载入选择。', 'The proposals changed. Reload the choices.')}</p>
   const active = new Set(choices.selections.filter(choice => choice.action !== 'keep-unresolved').map(choice => choice.selectionKey))
-  const relations = batch.items.flatMap(item => item.relationships.flatMap(relation => relation.targetSelectionKey
-    ? [{ sourceSelectionKey: item.selectionKey, targetSelectionKey: relation.targetSelectionKey, relation: relation.relation }] : []))
+  const relations = batch.items.flatMap(item => item.relationships.map(relation => {
+    const matches = batch.items.filter(candidate => candidate.fields.name === relation.targetName)
+    return { sourceSelectionKey: item.selectionKey,
+      targetSelectionKey: relation.targetSelectionKey ?? (matches.length === 1 ? matches[0].selectionKey : undefined),
+      targetName: relation.targetName, relation: relation.relation }
+  }))
   return <section className="space-y-3" aria-label={text('批量选择角色采用方式', 'Choose character adoption in one batch')}>
     <p className="text-xs text-[var(--color-text-secondary)]">{text('同名或共享别名不会自动合并。可选择对应角色、新建或暂不采用；最后一次确认统一保存。', 'Matching names or shared aliases are not merged automatically. Choose a character, create one, or keep unresolved, then confirm the batch once.')}</p>
     {batch.items.map(item => {
@@ -73,7 +77,7 @@ export function CharacterProposalSelectionPanel({ batch, identities, choices, on
               <NativeSelect aria-label={text(`编辑候选角色定位：${item.selectionKey}`, `Edit candidate role: ${item.selectionKey}`)}
                 disabled={disabled || batch.status !== 'pending-approval'} value={edit?.fields.role ?? item.fields.role ?? ''}
                 onChange={event => updateField('role', event.target.value)}>
-                <option value="">{text('未指定', 'Unspecified')}</option>
+                {!item.fields.role && !edit?.fields.role && <option value="" disabled>{text('未指定', 'Unspecified')}</option>}
                 {CHARACTER_ROLES.map(role => { const label = getCharacterRoleLabels(role); return <option key={role} value={role}>{text(label.zhCN, label.enUS)}</option> })}
               </NativeSelect>
             </label>
@@ -82,10 +86,11 @@ export function CharacterProposalSelectionPanel({ batch, identities, choices, on
       </div>
     })}
     {relations.map((relation, index) => <label className="flex gap-2 text-xs" key={`${relation.sourceSelectionKey}:${relation.targetSelectionKey}:${index}`}>
-      <input type="checkbox" disabled={disabled || batch.status !== 'pending-approval' || !active.has(relation.sourceSelectionKey) || !active.has(relation.targetSelectionKey)}
+      <input type="checkbox" disabled={disabled || batch.status !== 'pending-approval' || !active.has(relation.sourceSelectionKey) || !relation.targetSelectionKey || !active.has(relation.targetSelectionKey)}
         checked={choices.relationships.some(value => value.sourceSelectionKey === relation.sourceSelectionKey && value.targetSelectionKey === relation.targetSelectionKey && value.relation === relation.relation)}
-        onChange={event => onChange({ ...choices, relationships: event.target.checked ? [...choices.relationships, relation] : choices.relationships.filter(value => !(value.sourceSelectionKey === relation.sourceSelectionKey && value.targetSelectionKey === relation.targetSelectionKey && value.relation === relation.relation)) })} />
-      {batch.items.find(item => item.selectionKey === relation.sourceSelectionKey)?.fields.name} → {batch.items.find(item => item.selectionKey === relation.targetSelectionKey)?.fields.name}：{relation.relation}
+        onChange={event => onChange({ ...choices, relationships: event.target.checked ? [...choices.relationships, { sourceSelectionKey: relation.sourceSelectionKey, targetSelectionKey: relation.targetSelectionKey, relation: relation.relation }] : choices.relationships.filter(value => !(value.sourceSelectionKey === relation.sourceSelectionKey && value.targetSelectionKey === relation.targetSelectionKey && value.relation === relation.relation)) })} />
+      {batch.items.find(item => item.selectionKey === relation.sourceSelectionKey)?.fields.name} → {batch.items.find(item => item.selectionKey === relation.targetSelectionKey)?.fields.name ?? relation.targetName}：{relation.relation}
+      {!relation.targetSelectionKey && text('（目标身份待确认，暂不采用关系）', ' (Target identity unresolved; relationship not adopted)')}
     </label>)}
   </section>
 }

@@ -33,9 +33,9 @@ function provenance() {
   const resolvedBase = git('rev-parse', '--verify', `${packageBaseSha}^{commit}`)
   const executionHead = git('rev-parse', 'HEAD')
   const changedPaths = git('diff', '--name-only', `${resolvedBase}..${executionHead}`).split('\n').filter(Boolean)
-  const appearanceInputChanges = changedPaths.filter(file =>
-    /^src\/(components\/settings\/AppearanceSettings|stores\/appearance-bootstrap|shared\/(appearance-profile|skin-types)|App)\./i.test(file)
-      || /^electron\/(controllers\/skin-controller|services\/skin-service|main|ipc-handlers)\./i.test(file))
+  const appearanceInputChanges = git('diff', '--name-only', `${resolvedBase}..${executionHead}`, '--',
+    'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts',
+    'tsconfig.json', 'electron-builder.json5').split('\n').filter(Boolean)
   const scopedDirtyPaths = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json',
     'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5').split('\n').filter(Boolean)
   const excludedTestArtifactPaths = scopedDirtyPaths.filter(status => /^src\/.*\/__tests__\/__screenshots__\//.test(status.slice(3)))

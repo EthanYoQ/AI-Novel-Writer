@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useProjectStore } from '../../../../stores/project-store'
 import { createAgentExecutionContext } from '../project-context'
-import { proposeNovelConfigTool } from '../propose-novel-config.tool'
+import { buildNovelConfigProposal, proposeNovelConfigTool } from '../propose-novel-config.tool'
 import {
   buildChapterBlueprintProposal,
   proposeChapterBlueprintTool,
@@ -316,4 +316,13 @@ describe('explicit Agent domain proposals', () => {
     )).rejects.toThrow('项目已切换')
     expect(invoke).toHaveBeenCalledTimes(1)
   })
+})
+
+it.each([{narrativePOV:['first_person']},{totalChapters:2**53},{narrativePOV:'first_person',narrativePov:'third_limited'}])('rejects invalid config changes before approval: %j',changes=>{
+ expect(buildNovelConfigProposal({changes},project.novelConfig as never).valid).toBe(false)
+ expect(buildNovelConfigProposal({changes:{narrativePov:'first_person'}},project.novelConfig as never).valid).toBe(true)
+})
+it('rejects conflicting blueprint aliases before approval',()=>{
+ expect(buildChapterBlueprintProposal({chapter_number:2,changes:{作者微操指导:'一',userGuidance:'二'}},blueprint).valid).toBe(false)
+ expect(buildChapterBlueprintProposal({chapter_number:2,changes:{作者微操指导:'一'}},blueprint).valid).toBe(true)
 })

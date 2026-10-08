@@ -73,8 +73,7 @@ export function characterCardFromRosterEntry(entry: CharacterRosterEntry): Chara
     background: entry.background,
     abilities: entry.abilities,
     motivation: entry.motivation,
-    relationships: entry.legacyRelationshipNotes
-      ?? (entry.relationships.length > 0 ? JSON.stringify(entry.relationships) : ''),
+    relationships: entry.relationships.length > 0 ? JSON.stringify(entry.relationships) : entry.legacyRelationshipNotes ?? '',
     arc: entry.arc,
     notes: entry.notes,
     ...(entry.currentState ? { currentState: entry.currentState } : {}),

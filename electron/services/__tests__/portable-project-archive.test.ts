@@ -132,6 +132,14 @@ afterEach(() => {
 })
 
 describe('portable project archive', () => {
+  it('rejects an oversized manifest before JSON decoding', async () => {
+    const root = temporaryRoot()
+    const oversized = Buffer.alloc(16 * 1024 * 1024 + 1, ' ')
+    const archivePath = writeArchive(root, storedZip([{ name: 'manifest.json', bytes: oversized }]))
+    await expect(extractPortableProjectArchive({ archivePath, stagingParentPath: stagingParent(root) }))
+      .rejects.toThrow('PORTABLE_ARCHIVE_LIMIT_EXCEEDED')
+  })
+
   it('流式写入并解包中文路径，保留大文件字节与hash', async () => {
     const root = temporaryRoot()
     const first = Buffer.from('第一章：雨夜。\nCafé 灯火未熄。', 'utf8')

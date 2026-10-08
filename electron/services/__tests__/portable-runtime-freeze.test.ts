@@ -3,6 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { ProjectAccessService } from '../project-access'
+import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import { PortableRuntimeFreezeError, readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 
 const roots: string[] = []
@@ -25,6 +27,17 @@ function frozen(table: string, recordId: string) {
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
 
 describe('portable runtime freeze sidecar', () => {
+  it('receives the canonical project root after opening an ordinary project through a junction', () => {
+    const root = fixture(), parent = fixture(), link = path.join(parent, 'linked-project')
+    fs.writeFileSync(path.join(root, '.ai-novel', 'project.json'), JSON.stringify(createCanonicalProjectManifest({
+      projectId: '11111111-1111-4111-8111-111111111111', createdAt: '2026-09-20T00:00:00.000Z',
+    })))
+    fs.symlinkSync(root, link, process.platform === 'win32' ? 'junction' : 'dir')
+    const trusted = new ProjectAccessService().probeExistingProject(link)
+    expect(trusted.rootPath).toBe(root)
+    expect(readPortableRuntimeFreeze(trusted.rootPath).active).toBe(false)
+  })
+
   it('leaves ordinary projects and new IDs mutable while freezing only declared history', () => {
     const root = fixture()
     expect(readPortableRuntimeFreeze(root).active).toBe(false)

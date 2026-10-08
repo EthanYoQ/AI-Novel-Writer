@@ -19,6 +19,7 @@ export function FinalizedCharacterProposalPanel() {
 function SessionPanel({ session }: { session: ProjectSessionContext }) {
   const text = useLocaleStore(state => state.text)
   const characters = useCharacterStore(state => state.characters)
+  const rosterRevision = useCharacterStore(state => state.rosterRevision)
   const [summaries, setSummaries] = useState<PendingFinalizedCharacterProposalSummary[]>([])
   const [batch, setBatch] = useState<CharacterProposalBatch | null>(null)
   const [choices, setChoices] = useState<CharacterProposalChoices | null>(null)
@@ -41,7 +42,7 @@ function SessionPanel({ session }: { session: ProjectSessionContext }) {
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadSummaries() }, 0)
     return () => window.clearTimeout(timer)
-  }, [loadSummaries])
+  }, [loadSummaries, rosterRevision])
 
   async function read(summary: PendingFinalizedCharacterProposalSummary) {
     setBusy(true); setError(''); setBatch(null); setChoices(null)
@@ -83,12 +84,12 @@ function SessionPanel({ session }: { session: ProjectSessionContext }) {
   }
 
   if (!summaries.length && !error) return null
-  return <section className="border-b border-[var(--color-border)] p-2 space-y-2" aria-label={text('待处理定稿角色决策', 'Pending finalized character decisions')}>
+  return <section className="border-b border-[var(--color-border)] p-2 space-y-2" aria-label={text('待处理角色决策', 'Pending character decisions')}>
     {summaries.length > 0 && <>
-      <div className="text-xs font-medium">{text(`待处理定稿角色决策（${summaries.length}）`, `Pending finalized character decisions (${summaries.length})`)}</div>
+      <div className="text-xs font-medium">{text(`待处理角色决策（${summaries.length}）`, `Pending character decisions (${summaries.length})`)}</div>
       {!batch && summaries.map(summary => <Button key={summary.proposalBatchId} variant="outline" size="sm" disabled={busy}
-        aria-label={text('检查定稿角色决策', 'Review finalized character decision')} onClick={() => void read(summary)}>
-        {text('检查定稿角色决策', 'Review finalized character decision')} · {summary.finalizationId}
+        aria-label={summary.importOperationId ? text('检查导入角色决策', 'Review imported character decision') : text('检查定稿角色决策', 'Review finalized character decision')} onClick={() => void read(summary)}>
+        {summary.importOperationId ? text('检查导入角色决策', 'Review imported character decision') : text('检查定稿角色决策', 'Review finalized character decision')} · {summary.importOperationId ?? summary.finalizationId}
       </Button>)}
     </>}
     {error && <p role="alert" className="text-xs text-[var(--color-error)] break-all">{error}</p>}

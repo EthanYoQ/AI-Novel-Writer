@@ -14,6 +14,7 @@ import { createAttemptSupervisor, qualificationBridgeWindows, productionScenario
 import { forwardReasoningFor, forwardQualificationWindowFor } from '../quality-modernization-run.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
+fs.mkdirSync(path.join(root, '.runtime/.cache/novel-quality-modernization'), { recursive: true })
 const fixture = fs.readFileSync(path.join(root, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
 const open = '        streamSettlements.push((async () => {'
 const close = '        })())'

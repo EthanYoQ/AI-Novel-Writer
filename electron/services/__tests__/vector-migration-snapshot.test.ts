@@ -223,6 +223,19 @@ it('拒绝损坏registry、快照篡改以及已有目标，原数据不改', na
   const bad = Buffer.from(JSON.stringify(registry)); fs.writeFileSync(path.join(source, 'embedding-spaces.json'), bad); fs.writeFileSync(path.join(copy, 'embedding-spaces.json'), bad)
   await expect(exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).rejects.toThrow('ACTIVE_POINTER_INVALID')
 }))
+it('preserves a building generation while rejecting a building active pointer', nativeCase(async () => {
+  const { source, copy } = await copied()
+  const registryPath = path.join(source, 'embedding-spaces.json')
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'))
+  const building = registry.spaces.find((space: { status: string }) => space.status === 'inactive')
+  building.status = 'building'
+  for (const storage of [source, copy]) fs.writeFileSync(path.join(storage, 'embedding-spaces.json'), JSON.stringify(registry))
+  const snapshot = await exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })
+  expect(JSON.parse(Buffer.from(snapshot.registryBytes!).toString()).spaces).toEqual(registry.spaces)
+  registry.activeGeneration = building.generation
+  for (const storage of [source, copy]) fs.writeFileSync(path.join(storage, 'embedding-spaces.json'), JSON.stringify(registry))
+  await expect(exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).rejects.toThrow('ACTIVE_POINTER_INVALID')
+}))
 it('quiesce对曾暴露的连接拒绝证明，未开户fence阻止新连接', nativeCase(async () => {
   const project = path.join(root, '从未开户'); fs.mkdirSync(project)
   const fence = closeVectorStoreForMigration(project)

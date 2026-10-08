@@ -18,12 +18,23 @@ export class FinalizationGeneration {
     private readonly transferOrigin: () => string | undefined = () => undefined) {}
   find(slot: FinalizationGenerationSlot): DurableGenerationRun | undefined {
     const key = finalizationSlotKey(slot)
-    const rows = this.db.prepare("SELECT run_id FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.finalizationGenerationSlotKey')=?").all(key) as { run_id: string }[]
-    if (rows.length > 1) throw new Error('GENERATION_FINALIZATION_SLOT_CONFLICT')
-    if (!rows[0]) return undefined
-    const run = this.runs.get(rows[0].run_id)
-    if (run.binding.projectId !== this.projectId || !isDeepStrictEqual(readFinalizationGenerationContext(run).slot, slot)) throw new Error('GENERATION_FINALIZATION_SLOT_CONFLICT')
-    return run
+    const rows = this.db.prepare("SELECT run_id,json_extract(json_extract(open_key,'$[0]'),'$[2]') AS ui_action_nonce FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.finalizationGenerationSlotKey')=? ORDER BY rowid").all(key) as { run_id: string; ui_action_nonce: string }[]
+    let previous: DurableGenerationRun | undefined
+    for (const row of rows) {
+      const run = this.runs.get(row.run_id)
+      if (run.binding.projectId !== this.projectId || !isDeepStrictEqual(readFinalizationGenerationContext(run).slot, slot)
+        || previous && (this.readEffect(previous) || row.ui_action_nonce !== `finalization:${key}:retry:${previous.runId}`))
+        throw new Error('GENERATION_FINALIZATION_SLOT_CONFLICT')
+      previous = run
+    }
+    return previous
+  }
+  retryable(run: DurableGenerationRun): boolean {
+    if (this.readEffect(run)) return false
+    const context = readFinalizationGenerationContext(run), budget = this.runs.budget(run.rootActionId)
+    if (budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))) return false
+    return budget.root.status === 'cancelled' || context.slot.stepKey === 'chapter_notes'
+      && !isDeepStrictEqual(finalizationNotesBaseline(this.db, context.slot), context.notesBaseline)
   }
   require(handle: MainGenerationRunHandle): DurableGenerationRun {
     if (!handle || Object.keys(handle).some(key => !['projectId', 'epoch', 'rootActionId', 'runId'].includes(key))) throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
@@ -68,7 +79,9 @@ export class FinalizationGeneration {
     return structuredClone(saved.receipt)
   }
   assertMutable(run: DurableGenerationRun): void {
-    if (run.binding.sourceManifest.finalizationGenerationContext && this.readEffect(run)) throw new Error('GENERATION_FINALIZATION_EFFECT_SEALED')
+    if (!run.binding.sourceManifest.finalizationGenerationContext) return
+    if (this.readEffect(run)) throw new Error('GENERATION_FINALIZATION_EFFECT_SEALED')
+    if (this.find(readFinalizationGenerationContext(run).slot)?.runId !== run.runId) throw new Error('GENERATION_FINALIZATION_SUPERSEDED')
   }
   commit(handle: MainGenerationRunHandle, reference: FinalizedCharacterArtifact, characters: CharacterProposalService, assertSources: (run: DurableGenerationRun) => void): FinalizationGenerationEffect {
     return this.db.transaction(() => {
@@ -79,6 +92,7 @@ export class FinalizationGeneration {
         if (!isDeepStrictEqual((usage.finalizationEffect as SavedEffect | undefined)?.artifact, reference)) throw new Error('GENERATION_FINALIZATION_EFFECT_CONFLICT')
         return saved
       }
+      this.assertMutable(run)
       assertSources(run)
       let receipt: FinalizationGenerationEffect
       if (context.slot.stepKey === 'chapter_notes') {

@@ -192,7 +192,10 @@ describe('planning authorization before confirmation', () => {
  it.each([{chapter_count:11},{target_units:1001},{start_chapter:79,chapter_count:5}])('rejects invalid planning arguments before confirmation and creates no child: %j', async invalid => {
   const f=fixture(planningDispatch({workflow:'generate_blueprint',...invalid}))
   f.db.prepare('UPDATE project_core SET total_chapters=80').run()
-  await expect(f.round()).rejects.toThrow(/GENERATION_PLANNING_(RANGE|TARGET)_INVALID/)
+  const result=await f.round(), action=result.rounds[0]!.actions[0]!
+  expect(action).toMatchObject({status:'failed',observation:expect.stringMatching(/GENERATION_PLANNING_(RANGE|TARGET)_INVALID/)})
+  expect(f.owner.agents.claimTool({ref:action.ref,confirmed:false}).execute).toBe(false)
+  expect(f.reopenStorage().agents.read(result.handle).rounds[0]!.actions[0].status).toBe('failed')
   expect(f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
   expect(f.spy).toHaveBeenCalledTimes(1)
  })
@@ -377,4 +380,33 @@ it('未注册XML工具持久失败观察，重复claim不写，下一轮原root/
  expect(next.run.ledger!.physicalRequests).toBe(2)
  expect(JSON.stringify(f.spy.mock.calls[1]![0])).toContain(claim.action.observation!)
  expect(f.spy).toHaveBeenCalledTimes(2)
+})
+
+it('advances all prior Agent rounds after a confirmed config change before a child writes',async()=>{
+ let index=0
+ const calls=[{name:'read_project_state',arguments:{}},{name:'propose_novel_config',arguments:{changes:{genre:'玄幻'}}},
+   {name:'start_workflow',arguments:{workflow:'generate_blueprint'}}]
+ const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:`<tool_call>${JSON.stringify(calls[index++])}</tool_call>`});return {finishReason:'stop',usage:null}})
+ let recovery=await f.round()
+ const first=recovery.rounds[0]!.actions[0]!
+ f.owner.agents.claimTool({ref:first.ref,confirmed:true})
+ f.owner.agents.finishTool({ref:first.ref,status:'completed',observation:'已读项目'})
+ recovery=await f.owner.agents.executeRound({handle:recovery.handle,index:1})
+ const config=recovery.rounds[1]!.actions[0]!
+ f.owner.agents.claimTool({ref:config.ref,confirmed:true})
+ f.owner.agents.commitDomainTool(config.ref)
+ f.owner.agents.finishTool({ref:config.ref,status:'completed',observation:'已保存配置'})
+ recovery=await f.owner.agents.executeRound({handle:recovery.handle,index:2})
+ const workflow=recovery.rounds[2]!.actions[0]!
+ f.owner.agents.claimTool({ref:workflow.ref,confirmed:true})
+ const registration=f.owner.agents.registerWorkflow(workflow.ref)
+ const child=f.owner.begin({operation:'chapter-blueprint-directory',uiActionNonce:'config-child',modelId:'synthetic',
+   promptKeys:['directory'],skillStages:[],selectedDraftIds:[],selectedFinalizedDraftIds:[],output:'structured-data',
+   parentRootActionId:recovery.handle.rootActionId,agentWorkflowRegistrationId:registration.registrationId,
+   authorInputs:[{id:'directory:author-config',text:'{"totalChapters":80}'},{id:'directory:requested-range',text:'{"mode":"full","startChapter":1,"endChapter":5}'},{id:'planning:target-units',text:'600'}]})
+ f.db.transaction(()=>f.owner.withAgentChildEffect(child.handle,()=>f.db.prepare('UPDATE blueprints SET title=? WHERE chapter_number=1').run('子任务已写入')))()
+ expect(f.db.prepare('SELECT title FROM blueprints WHERE chapter_number=1').pluck().get()).toBe('子任务已写入')
+ expect(f.owner.agents.read(recovery.handle).sourceStatus).toBe('current')
+ f.db.prepare('UPDATE project_core SET genre=?').run('外部修改')
+ expect(()=>f.db.transaction(()=>f.owner.withAgentChildEffect(child.handle,()=>{throw new Error('should not write')}))()).toThrow('GENERATION_AGENT_SOURCE_CHANGED')
 })

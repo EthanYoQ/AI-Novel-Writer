@@ -96,7 +96,7 @@ function useProjectOverview() {
       onPreview: () => preview(project),
       onOpen: () => { void useProjectStore.getState().openProject(project.path) },
     })),
-    hasCurrentProject: currentProject !== null,
+    hasCurrentProject: currentProject !== null && !activeSelection,
     deletableCurrentProject: currentProject && !activeSelection ? { name: currentProject.name, path: currentProject.path } : null,
   }
 }

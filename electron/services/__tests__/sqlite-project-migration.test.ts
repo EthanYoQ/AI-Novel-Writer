@@ -7,7 +7,7 @@ import type BetterSqlite3 from 'better-sqlite3'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { ensureBaselineBlueprintTables } from '../../migrations/baseline-blueprint-schema'
 import { sqliteSchemaFingerprint } from '../../migrations/sqlite-schema-adapter'
-import { backupProjectSqlite, probeProjectSqlite, verifyProjectSqlite } from '../sqlite-project-migration'
+import { backupProjectSqlite, probeProjectSqlite, verifyProjectSqlite, upgradeProjectSqlite } from '../sqlite-project-migration'
 import { CharacterRosterRepository } from '../../repositories/character-roster-repository'
 import { ProjectCoreRepository } from '../../repositories/project-core-repository'
 
@@ -338,4 +338,22 @@ describe('real SQLite schema probe and WAL staging backup', () => {
     await expect(backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target })).rejects.toThrow('PROJECT_MIGRATION_TARGET_EXISTS')
     expect(fs.readFileSync(f.target, 'utf8')).toBe('preserve target')
   })
+})
+
+it('upgrades a qualified schema 6 file to schema 7 without changing author content', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:6})
+ expect(before.schemaVersion).toBe(6)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.schemaVersion).toBe(7)
+ expect(upgraded.domain).toEqual(before.domain)
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
+it('resolves a trusted system scratch junction before validating its private snapshot', () => {
+ const f=fixture(), physical=path.join(f.root,'scratch'), link=path.join(f.root,'scratch-link')
+ fs.mkdirSync(physical);fs.symlinkSync(physical,link,'junction')
+ const previous=process.env.LOCALAPPDATA
+ process.env.LOCALAPPDATA=link
+ try { expect(probeProjectSqlite({databasePath:f.source}).schemaVersion).toBe(0) }
+ finally { if(previous===undefined) delete process.env.LOCALAPPDATA;else process.env.LOCALAPPDATA=previous }
 })

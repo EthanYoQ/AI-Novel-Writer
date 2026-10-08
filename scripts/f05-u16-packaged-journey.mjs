@@ -179,7 +179,7 @@ const archiveManifest = bytes => new Promise((resolve, reject) => yauzl.fromBuff
   })
   zip.readEntry()
 }))
-const visibleGeneration = (panel, generationId) => panel.locator(`input[name="restore-generation"][value="${generationId}"]`).waitFor({ state: 'visible', timeout: 5_000 })
+const visibleGeneration = (panel, generationId) => panel.locator(`input[name="restore-generation"][value="${generationId}"]`).waitFor({ state: process.argv.includes('--probe-hidden-generation') ? 'attached' : 'visible', timeout: 5_000 })
 async function waitNotice(panel, expected, timeout = 30_000) {
   try { await panel.getByRole('status').filter({ hasText: expected }).waitFor({ timeout }) }
   catch (error) {

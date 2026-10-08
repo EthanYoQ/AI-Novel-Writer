@@ -58,47 +58,54 @@ let failNextRequest = false
 let generationFailureEvidence
 let candidateRejectionEvidence
 let eventEvidenceFailure
+let providerFailure
 const provider = createServer(async (request, response) => {
-  const authorized = request.method === 'POST' && request.url === '/v1/chat/completions'
-    && request.headers.authorization === `Bearer ${model.apiKey}`
-  if (!authorized || !sourcePlanId) { response.writeHead(403).end(); return }
-  const chunks = []
-  for await (const chunk of request) chunks.push(chunk)
-  const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-  const facts = JSON.parse(body.messages.at(-1).content)
-  const isPlanCandidate = Boolean(facts.blueprint)
-  const currentPlan = isPlanCandidate ? null : facts.narrativeThreads.find(plan => plan.id === sourcePlanId)
-  if (isPlanCandidate) assert.equal(facts.blueprint.chapterNumber, 1, 'candidate request omitted the synthetic blueprint')
-  else {
-    assert(currentPlan, 'model request omitted the current narrative plan')
-    assert(facts.blueprints.some(blueprint => blueprint.chapterNumber === 1 && blueprint.title === '旧站来信'),
-      'plot request omitted the synthetic blueprint')
-    assert(facts.finalizedChapters.some(chapter => chapter.draftId === sourceDraftId && chapter.chapterNumber === 1),
-      'plot request omitted the synthetic finalized chapter')
+  try {
+    const authorized = request.method === 'POST' && request.url === '/v1/chat/completions'
+      && request.headers.authorization === `Bearer ${model.apiKey}`
+    if (!authorized || !sourcePlanId) { response.writeHead(403).end(); return }
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    const facts = JSON.parse(body.messages.at(-1).content)
+    const isPlanCandidate = Boolean(facts.blueprint)
+    const currentPlan = isPlanCandidate ? null : facts.narrativeThreads.find(plan => plan.id === sourcePlanId)
+    if (isPlanCandidate) assert.equal(facts.blueprint.chapterNumber, 1, 'candidate request omitted the synthetic blueprint')
+    else {
+      assert(currentPlan, 'model request omitted the current narrative plan')
+      assert(facts.blueprints.some(blueprint => blueprint.chapterNumber === 1 && blueprint.title === '旧站来信'),
+        'plot request omitted the synthetic blueprint')
+      assert(facts.finalizedChapters.some(chapter => chapter.draftId === sourceDraftId && chapter.chapterNumber === 1),
+        'plot request omitted the synthetic finalized chapter')
+    }
+    const number = providerRequests.length + 1
+    const responseStatus = failNextRequest ? 503 : 200
+    failNextRequest = false
+    providerRequests.push({ number, kind: isPlanCandidate ? 'plan-candidate' : 'plot', path: request.url, authorized,
+      sourcePlanId, sourceTitle: currentPlan?.title, sourceEvents: currentPlan?.events.length, responseStatus })
+    if (responseStatus === 503) {
+      response.writeHead(503, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: { message: 'U15 controlled provider failure' } }))
+      return
+    }
+    const content = isPlanCandidate
+      ? JSON.stringify({ candidates: [{ title: candidateTitle, type: '伏笔', targetStartChapter: 1,
+        targetEndChapter: 1, authorIntent: '仅供作者审阅，不自动写入。' }] })
+      : JSON.stringify({ tracks: [{ id: 'u15-main', title: `旧站主线-${number}`, role: 'main',
+      startChapter: 1, endChapter: 1, summary: '隔离模型归纳的合成主线', events: [{ status: 'planned', chapterNumber: 1,
+        summary: `旧站线索-${number}`, sources: [{ type: 'narrative-thread', planId: sourcePlanId }] },
+      { status: 'planned', chapterNumber: 1, summary: `蓝图线索-${number}`,
+        sources: [{ type: 'blueprint', chapterNumber: 1 }] },
+      { status: 'occurred', chapterNumber: 1, summary: `定稿线索-${number}`,
+        sources: [{ type: 'finalized-chapter', draftId: sourceDraftId, chapterNumber: 1 }] }] }] })
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\n`)
+    response.end('data: [DONE]\n\n')
+  } catch {
+    providerFailure = new Error('U15_SYNTHETIC_PROVIDER_REQUEST_INVALID')
+    if (!response.headersSent) response.writeHead(500, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: { message: providerFailure.message } }))
   }
-  const number = providerRequests.length + 1
-  const responseStatus = failNextRequest ? 503 : 200
-  failNextRequest = false
-  providerRequests.push({ number, kind: isPlanCandidate ? 'plan-candidate' : 'plot', path: request.url, authorized,
-    sourcePlanId, sourceTitle: currentPlan?.title, sourceEvents: currentPlan?.events.length, responseStatus })
-  if (responseStatus === 503) {
-    response.writeHead(503, { 'content-type': 'application/json' })
-    response.end(JSON.stringify({ error: { message: 'U15 controlled provider failure' } }))
-    return
-  }
-  const content = isPlanCandidate
-    ? JSON.stringify({ candidates: [{ title: candidateTitle, type: '伏笔', targetStartChapter: 1,
-      targetEndChapter: 1, authorIntent: '仅供作者审阅，不自动写入。' }] })
-    : JSON.stringify({ tracks: [{ id: 'u15-main', title: `旧站主线-${number}`, role: 'main',
-    startChapter: 1, endChapter: 1, summary: '隔离模型归纳的合成主线', events: [{ status: 'planned', chapterNumber: 1,
-      summary: `旧站线索-${number}`, sources: [{ type: 'narrative-thread', planId: sourcePlanId }] },
-    { status: 'planned', chapterNumber: 1, summary: `蓝图线索-${number}`,
-      sources: [{ type: 'blueprint', chapterNumber: 1 }] },
-    { status: 'occurred', chapterNumber: 1, summary: `定稿线索-${number}`,
-      sources: [{ type: 'finalized-chapter', draftId: sourceDraftId, chapterNumber: 1 }] }] }] })
-  response.writeHead(200, { 'content-type': 'text/event-stream' })
-  response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\n`)
-  response.end('data: [DONE]\n\n')
 })
 const steps = []
 let phase = 'setup'
@@ -482,6 +489,7 @@ async function main() {
     steps.push({ stepId: 'writer-narrative-plan-restart', relatedActionId: 'U15.A07', coverage: 'persisted-plan-reopen',
       assertion: 'Fresh packaged Electron session reopened the author plan through Writer UI' })
   } catch (error) { failure = error }
+  failure = providerFailure ?? failure
   const cleanupErrors = []
   if (app) try { await quit() } catch (error) { cleanupErrors.push(error) }
   if (provider.listening) try { await new Promise(resolve => provider.close(resolve)) } catch (error) { cleanupErrors.push(error) }

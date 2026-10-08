@@ -495,6 +495,8 @@ describe('review and revision generation through the actual owner and SQLite', (
     expect(() => f.owner.begin({ ...selection, modelId: 'other' })).toThrow()
     const view = f.owner.begin(selection)
     expect(view.handle.rootActionId).toBe(original.handle.rootActionId)
+    const recovered = f.owner.readReviewRevisionRecovery(view.handle)
+    expect(() => f.owner.begin({ ...selection, reviewRevisionContextId: recovered.contextId })).not.toThrow()
     const prompt = '按确认修改'
     const brief = renderHumanConfirmedReviewBrief(prepared.context.confirmation!.snapshot, prepared.context.writingLanguage)
     f.owner.bindMaterialDecision(view.handle, { ...materialDecision(prompt),

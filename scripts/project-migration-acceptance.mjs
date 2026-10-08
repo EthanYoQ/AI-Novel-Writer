@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const cache = path.join(repository, '.runtime', '.cache', 'novel-quality-modernization')
+const fixtureRoot = path.join(cache, 's04-fixtures')
 const suites = [
   'electron/migrations/__tests__/character-assets-migration.test.ts',
   'electron/migrations/__tests__/m05-installed-lane.test.ts',
@@ -18,7 +19,8 @@ function cleanSourceSha() {
   const git = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8', windowsHide: true })
   const sha = git.status === 0 ? git.stdout.trim() : ''
   if (!/^[a-f0-9]{40}$/u.test(sha)) throw new Error('PROJECT_MIGRATION_ACCEPTANCE_SHA_UNAVAILABLE')
-  const status = spawnSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', 'electron', 'src', 'scripts'], {
+  const status = spawnSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', 'electron', 'src', 'scripts',
+    'test', 'vite.config.ts', 'vitest.config.ts', 'tsconfig.json', 'tsconfig.node.json', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'], {
     cwd: repository, encoding: 'utf8', windowsHide: true,
   })
   if (status.status !== 0) throw new Error('PROJECT_MIGRATION_ACCEPTANCE_STATUS_UNAVAILABLE')
@@ -31,12 +33,15 @@ if (args.length === 0 || args.includes('--help')) {
   throw new Error('PROJECT_MIGRATION_ACCEPTANCE_ARGUMENT_INVALID')
 } else {
   // Verify every existing ancestor without following junctions to an external evidence root.
-  for (let cursor = cache; cursor !== path.dirname(cursor); cursor = path.dirname(cursor)) {
+  for (let cursor = fixtureRoot; cursor !== path.dirname(cursor); cursor = path.dirname(cursor)) {
     if (fs.existsSync(cursor) && fs.lstatSync(cursor).isSymbolicLink()) throw new Error('PROJECT_MIGRATION_ACCEPTANCE_UNSAFE_ROOT')
   }
   const subjectSha = cleanSourceSha()
+  const registry = fs.readFileSync(path.join(repository, 'electron/migrations/desktop-registry.ts'), 'utf8')
+  const targetSchemaVersion = Number(registry.match(/^export const CURRENT_DESKTOP_SCHEMA_VERSION = (\d+)$/m)?.[1])
+  if (!Number.isSafeInteger(targetSchemaVersion) || targetSchemaVersion < 1) throw new Error('PROJECT_MIGRATION_ACCEPTANCE_SCHEMA_UNAVAILABLE')
   const plan = { scope: 'synthetic-fixtures-only', fixtureRoot: '.runtime/.cache/novel-quality-modernization/s04-fixtures',
-    gate: 'F03.m05-integrated', subjectSha, targetSchemaVersion: 6, suites,
+    gate: 'F03.m05-integrated', subjectSha, targetSchemaVersion, suites,
     authorProjectsEnabled: false, oldBinaryQualification: 'not-run', powerLossQualification: 'not-run' }
   if (args[0] === '--dry-run') process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`)
   else {

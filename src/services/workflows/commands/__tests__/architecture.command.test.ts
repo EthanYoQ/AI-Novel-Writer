@@ -1119,12 +1119,17 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const stepCallbacks = callbacks
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
-      novelConfig: { genre: '科幻悬疑', totalChapters: 4, wordsPerChapter: 6200 } as never,
+      novelConfig: { genre: '科幻悬疑', totalChapters: 4, wordsPerChapter: 6200,
+        goldenFinger: 'UPDATED_GOLDEN_FACT', worldSetting: 'UPDATED_WORLD_FACT', coreOutline: 'UPDATED_OUTLINE_FACT' } as never,
     })
 
     await expect(command.execute({ step: {}, context: eightContext, callbacks: stepCallbacks })).resolves.toContain('Character proposals')
 
     expect(generateStream).toHaveBeenCalledTimes(4)
+    for (const [messages] of generateStream.mock.calls) {
+      const prompt = messages.map(message => message.content).join('\n')
+      for (const fact of ['UPDATED_GOLDEN_FACT', 'UPDATED_WORLD_FACT', 'UPDATED_OUTLINE_FACT']) expect(prompt).toContain(fact)
+    }
     const manifestPrompt = manifestMessages?.map(message => message.content).join('\n') ?? ''
     expect(manifestPrompt).not.toMatch(/appearance|currentState|"?entries"?/u)
     expect(manifestPrompt).toContain('自定义角色规划定位：重视人物选择与代价。')

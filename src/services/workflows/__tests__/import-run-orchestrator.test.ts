@@ -495,12 +495,16 @@ describe('ImportRunOrchestrator', () => {
     expect(getRun().stage).toBe('global')
   })
 
-  it('finishes the current bounded batch before applying cancellation at its safe boundary', async () => {
+  it.each([false, true])('finishes the batch and cancels even when intent persistence fails: %s', async intentFails => {
     const { deps, calls, limits, getRun } = harness(5_000)
     const context = { cancelled: false, cancelRequested: false, cancellationRequest: Promise.resolve() }
     deps.importReference = vi.fn(async item => {
       calls.push(item.number)
-      if (item.number === 1) context.cancelRequested = true
+      if (item.number === 1) {
+        context.cancelRequested = true
+        if (intentFails) context.cancellationRequest = Promise.reject(new Error('intent write failed'))
+        void context.cancellationRequest.catch(() => undefined)
+      }
     })
 
     await expect(new ImportRunOrchestrator(deps).executeStage('run-1', 'knowledge', 'test-runner', context, callbacks))

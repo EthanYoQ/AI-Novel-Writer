@@ -6,6 +6,7 @@
 )
 
 $ErrorActionPreference = 'Stop'
+$script:AiNovelNativeUpdaterOldApplication = $null
 
 . (Join-Path $PSScriptRoot 'smoke-win-app.ps1') -LoadProbeLibrary
 
@@ -2474,6 +2475,14 @@ function Test-AiNovelGateNativeUpdaterOldApplicationIdentity {
         $oldApplicationName
       )
     )
+    if ($null -ne $script:AiNovelNativeUpdaterOldApplication) {
+      $registered = $script:AiNovelNativeUpdaterOldApplication
+      if (-not (Test-AiNovelGateExactIdentity -Identity $OldApplicationIdentity `
+        -ProcessId $registered.processId -StartTimeTicks $registered.startTimeTicks -ExecutablePath $registered.executablePath)) {
+        return $false
+      }
+      $expectedOldApplicationPath = $registered.executablePath
+    }
     if (-not [string]::Equals(
       [System.IO.Path]::GetFileName([string]$OldApplicationIdentity.executablePath),
       $oldApplicationName,
@@ -3141,6 +3150,7 @@ try {
 
       if ([string]$control.state -eq 'running') {
         $activeStep = [string]$control.step
+        $script:AiNovelNativeUpdaterOldApplication = $null
         $trackedProcessIds.Clear()
         $trackedProcessStartTimeTicks.Clear()
         $trackedProcessIdentities.Clear()
@@ -3189,6 +3199,28 @@ try {
           -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
           -Reason 'root-assigned-before-release'
         Write-AiNovelGateStatus -State 'monitoring' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
+      }
+      elseif ([string]$control.state -eq 'native-updater-old-application') {
+        $installRoot = [string]$control.installRoot
+        $cacheRoot = Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime\.cache'
+        $runtimeRoot = [System.IO.Path]::GetDirectoryName($installRoot)
+        $expectedApplication = Join-Path $installRoot 'AI小说作家.exe'
+        if ($activeStep -ne 'windows-in-app-update-e2e' -or [string]$control.step -ne $activeStep -or
+          $null -ne $legacyBridge -or $null -ne $script:AiNovelNativeUpdaterOldApplication -or
+          $installRoot -notmatch '^[A-Za-z]:\\' -or
+          [System.IO.Path]::GetFileName($installRoot) -ne 'installed-app' -or
+          [System.IO.Path]::GetFileName($runtimeRoot) -notmatch '^update-e2e-[a-f0-9]{32}$' -or
+          -not (Test-AiNovelGateSameAbsolutePath -Left ([System.IO.Path]::GetDirectoryName($runtimeRoot)) -Right $cacheRoot) -or
+          [int]$control.processId -le 0 -or [string]::IsNullOrWhiteSpace([string]$control.processStartTimeTicks) -or
+          -not (Test-AiNovelGateSameAbsolutePath -Left ([string]$control.executablePath) -Right $expectedApplication)) {
+          throw 'Release gate rejected native updater old application registration.'
+        }
+        $script:AiNovelNativeUpdaterOldApplication = [pscustomobject]@{
+          processId = [int]$control.processId
+          startTimeTicks = [string]$control.processStartTimeTicks
+          executablePath = [System.IO.Path]::GetFullPath([string]$control.executablePath)
+        }
+        Write-AiNovelGateStatus -State 'native-updater-registered' -Step $activeStep
       }
       elseif ([string]$control.state -eq 'legacy-bridge-arm') {
         Request-AiNovelGateLegacyBridgeArm -LegacyBridge $legacyBridge -Control $control -ActiveStep $activeStep
@@ -3239,6 +3271,7 @@ try {
       }
       elseif ([string]$control.state -eq 'quiet') {
         $activeStep = [string]$control.step
+        $script:AiNovelNativeUpdaterOldApplication = $null
         $trackedProcessIds.Clear()
         $trackedProcessStartTimeTicks.Clear()
         $trackedProcessIdentities.Clear()

@@ -4,8 +4,7 @@ import type { WorkflowDefinition } from '../../stores/workflow-store'
 import { workflowResourceKey } from '../../stores/workflow-store'
 import { ipc } from '../ipc-client'
 import { createMainGenerationTransport } from '../generation/main-generation-transport'
-import { composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion } from '../../shared/draft-visible-text'
-import { hashAuthorText } from '../../shared/source-ref'
+import { DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion } from '../../shared/draft-visible-text'
 import { GenerateDraftCommand } from './commands/generate-draft.command'
 import type { ChapterInfo } from './chapter-workflow'
 import { createBatchChapterWorkflow } from './batch-chapter-workflow'
@@ -28,16 +27,16 @@ export async function createDraftRecoveryWorkflow(
     const resumed = await transport.resume(session, handle)
     handle = Object.freeze({ ...resumed.handle })
     const candidates = [...resumed.artifacts, ...(resumed.candidates ?? [])]
-    const selected = selectedArtifactIds.map(id => {
+    for (const id of selectedArtifactIds) {
       const candidate = candidates.find(item => item.artifactId === id)
       if (!candidate || candidate.compositionEligible !== true) throw new Error('GENERATION_COMPOSITION_SELECTION_INVALID')
-      return candidate
-    })
+    }
     const algorithm = recovery.composition?.algorithm ?? DRAFT_VISIBLE_TEXT_VERSION
     if (!isDraftVisibleTextVersion(algorithm)) throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
-    const text = selected.reduce((text, candidate) => composeDraftVisibleContinuation(text, candidate.text, algorithm), '')
+    const sameSelection = recovery.composition?.artifactIds.length === selectedArtifactIds.length
+      && recovery.composition.artifactIds.every((id, index) => id === selectedArtifactIds[index])
     await ipc.invokeWithProjectSession(session, 'generation:compose-visible', handle, [...selectedArtifactIds],
-      await hashAuthorText(text), algorithm)
+      sameSelection ? recovery.composition!.textHash : undefined, algorithm)
     recovery = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle })
     if (recovery.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
   }

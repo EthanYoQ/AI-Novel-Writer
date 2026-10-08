@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util'
 import type { ApproveCharacterProposalRequest, CancelCharacterProposalRequest, CharacterIdentitySnapshot, CharacterProposalBatch, CharacterProposalItem, CharacterProposalSource, CharacterStaticFields, PendingFinalizedCharacterProposalSummary } from '../../src/shared/character-proposal'
 import { resolveScopedCharacterIdentity, type CharacterStaticProvenance } from '../../src/shared/character-identity'
 import { CHARACTER_ROLES } from '../../src/shared/character-role'
-import { commitCharacterIdentities, refreshCharacterIdentityProjection, type CharacterIdentityCommitRequest } from '../repositories/character-roster-repository'
+import { CharacterRosterRepository, commitCharacterIdentities, refreshCharacterIdentityProjection, type CharacterIdentityCommitRequest } from '../repositories/character-roster-repository'
 import { GenerationRunRepository, textHash } from '../repositories/generation-run-repository'
 import { SummaryRepository } from '../repositories/summary-repository'
 import { normalizeFinalizedCharacterProposalSource } from './finalized-character-generation-proof'
@@ -71,7 +71,11 @@ export class CharacterProposalService {
         throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
       throw error
     }
-    if (!isDeepStrictEqual(envelope.proof, currentProof)) throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+    if (!isDeepStrictEqual(envelope.proof, currentProof)) {
+      if (envelope.batch.source.kind === 'import' && envelope.batch.status === 'pending-approval' && envelope.proof.provenance === null
+        && currentProof.provenance && isDeepStrictEqual({ ...envelope.proof, provenance: currentProof.provenance }, currentProof)) envelope.proof = currentProof
+      else throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+    }
     this.assertFinalizedSourceCurrent(envelope)
     if (envelope.batch.status === 'approved') {
       const receipt = this.db.prepare('SELECT receipt_json FROM character_identity_approvals WHERE operation_id=?').get(envelope.batch.approvalOperationId) as { receipt_json: string } | undefined
@@ -95,25 +99,47 @@ export class CharacterProposalService {
     }
     return envelope
   }
-  read(proposalBatchId: string): CharacterProposalBatch { return structuredClone(this.readEnvelope(proposalBatchId).batch) }
+  private resolveItems(proof: CharacterProposalProof, source: CharacterProposalSource, snapshot: CharacterIdentitySnapshot): CharacterProposalItem[] {
+    const aliases = snapshot.aliases.filter(alias => snapshot.characters.some(character => character.characterId === alias.characterId && !character.retired))
+      .map(alias => ({ ...alias, projectId: this.projectId }))
+    return proof.items.map(item => {
+      let resolution = resolveScopedCharacterIdentity(aliases,
+        { name: item.fields.name, projectId: this.projectId, sourceKey: item.sourceId, revision: snapshot.revision })
+      if (source.kind !== 'finalized-generation' && resolution.status === 'unresolved') resolution = resolveScopedCharacterIdentity(aliases,
+        { name: item.fields.name, projectId: this.projectId, revision: snapshot.revision })
+      return { ...structuredClone(item), resolution }
+    })
+  }
+  read(proposalBatchId: string): CharacterProposalBatch {
+    return this.db.transaction(() => {
+      const envelope = this.readEnvelope(proposalBatchId)
+      if (envelope.batch.status === 'pending-approval' && envelope.batch.revision !== this.revision()) {
+        const snapshot = this.identitySnapshot()
+        envelope.batch = { ...envelope.batch, revision: snapshot.revision, items: this.resolveItems(envelope.proof, envelope.batch.source, snapshot) }
+        this.write(envelope)
+      }
+      return structuredClone(envelope.batch)
+    }).immediate()
+  }
   listPendingFinalized(): PendingFinalizedCharacterProposalSummary[] {
     const rows = this.db.prepare('SELECT proposal_id FROM character_identity_proposals WHERE source_key=? ORDER BY proposal_id')
       .all(`character-proposal-v1:${this.projectId}`) as { proposal_id: string }[]
-    return rows.flatMap(({ proposal_id }) => {
+    return rows.flatMap(({ proposal_id }): PendingFinalizedCharacterProposalSummary[] => {
       try {
         const envelope = this.readEnvelope(proposal_id), provenance = envelope.proof.provenance
         const source = provenance && 'source' in provenance ? provenance.source : undefined
-        return envelope.batch.status === 'pending-approval' && envelope.batch.source.kind === 'finalized-generation' && source
-          ? [{ proposalBatchId: proposal_id, revision: envelope.batch.revision, finalizationId: source.sourceId }]
-          : []
+        if (envelope.batch.status !== 'pending-approval' || !source) return []
+        if (envelope.batch.source.kind === 'import') return [{ proposalBatchId: proposal_id, revision: envelope.batch.revision, importOperationId: envelope.batch.source.operationId }]
+        return envelope.batch.source.kind === 'finalized-generation'
+          ? [{ proposalBatchId: proposal_id, revision: envelope.batch.revision, finalizationId: source.sourceId }] : []
       } catch { return [] }
     })
   }
   readPendingFinalized(proposalBatchId: string): CharacterProposalBatch {
-    const envelope = this.readEnvelope(proposalBatchId)
-    if (envelope.batch.status !== 'pending-approval' || envelope.batch.source.kind !== 'finalized-generation')
+    const batch = this.read(proposalBatchId)
+    if (batch.status !== 'pending-approval' || !['finalized-generation', 'import'].includes(batch.source.kind))
       throw new Error('CHARACTER_PROPOSAL_NOT_PENDING_FINALIZED')
-    return structuredClone(envelope.batch)
+    return batch
   }
   evidence(proposalBatchId: string) {
     const envelope = this.readEnvelope(proposalBatchId)
@@ -140,20 +166,16 @@ export class CharacterProposalService {
       if (existing) {
         const envelope = this.readEnvelope(proposalBatchId)
         this.sourceProof(source, true, envelope.architectureDerivationVersion ?? 1)
-        return structuredClone(envelope.batch)
+        return this.read(proposalBatchId)
       }
       const architectureDerivationVersion = source?.kind === 'generation' && source.inputKind === 'architecture' ? 2 : undefined
       const proof = this.sourceProof(source, true, architectureDerivationVersion ?? 1)
       const revision = this.revision(), snapshot = this.identitySnapshot()
-      const items = proof.items.map(item => ({ ...structuredClone(item), resolution: resolveScopedCharacterIdentity(
-        snapshot.aliases.map(alias => ({ ...alias, projectId: this.projectId })),
-        { name: item.fields.name, projectId: this.projectId, sourceKey: item.sourceId, revision }) }))
-      // Source-scoped resolution may find no alias; expose exact name candidates for explicit selection only.
-      for (const item of items) if (source.kind !== 'finalized-generation' && item.resolution.status === 'unresolved') item.resolution = resolveScopedCharacterIdentity(
-        snapshot.aliases.map(alias => ({ ...alias, projectId: this.projectId })), { name: item.fields.name, projectId: this.projectId, revision })
+      const items = this.resolveItems(proof, source, snapshot)
       const batch: CharacterProposalBatch = { proposalBatchId, revision, status: 'pending-approval', source: structuredClone(source), items }
       const envelope: Envelope = { version: 1, ...(architectureDerivationVersion ? { architectureDerivationVersion } : {}),
         projectId: this.projectId, proof: structuredClone(proof), batch }
+      this.assertFinalizedSourceCurrent(envelope)
       const encoded = JSON.stringify(envelope)
       this.db.prepare('INSERT INTO character_identity_proposals(proposal_id,owner_character_id,source_key,source_hash,raw_value,candidate_ids_json) VALUES(?,NULL,?,?,?,?)')
         .run(proposalBatchId, `character-proposal-v1:${this.projectId}`, textHash(encoded), encoded, '[]')
@@ -201,6 +223,8 @@ export class CharacterProposalService {
         return { batch: structuredClone(batch), created: structuredClone(envelope.created ?? []) }
       }
       if (batch.status !== 'pending-approval') throw new Error('CHARACTER_PROPOSAL_CANCELLED')
+      if (batch.source.kind !== 'legacy-roster-generation' && !['ready', 'empty'].includes(CharacterRosterRepository.read(this.db).status))
+        throw new Error('CHARACTER_AUTHOR_ROSTER_NOT_READY')
       if (request.expectedRevision !== batch.revision || this.revision() !== batch.revision) throw new Error('CHARACTER_ID_REVISION_CONFLICT')
       const proof = this.sourceProof(batch.source, true, envelope.architectureDerivationVersion ?? 1)
       if (!proof.provenance || !['generated', 'derived'].includes(proof.provenance.kind)) throw new Error('CHARACTER_PROPOSAL_PROVENANCE_REQUIRED')

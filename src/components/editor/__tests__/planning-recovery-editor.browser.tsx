@@ -11,6 +11,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { useLLMStore } from '../../../stores/llm-store'
+import { globalEventBus } from '../../../shared/event-bus'
 import ArchFileViewer from '../ArchFileViewer'
 import ChapterCardEditor from '../ChapterCardEditor'
 import WorldBuildingEditor from '../WorldBuildingEditor'
@@ -79,6 +80,7 @@ beforeEach(() => {
     if (channel === 'fs:read-json') return { success: true, data: showCandidate ? { synopsis_incomplete: true, synopsis_generation_handle: handle } : {} }
     if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
     if (channel === 'db:character-roster-read') return { status: 'ready', renderedMarkdown: '沈砺', entries: [] }
+    if (channel === 'db:character-get-all') return [{ id: 'character-1', name: '沈砺' }]
     if (channel === 'db:draft-authority-sequence') return { status: 'empty', lastChapterNumber: 0, nextChapterNumber: 1, duplicateChapterNumbers: [], authorityFingerprint: 'a'.repeat(64) }
     if (channel === 'generation:restart') throw new Error('RESTART_BOUNDARY_OBSERVED')
     throw new Error(`Unexpected IPC ${channel}`)
@@ -116,6 +118,34 @@ function button(label: string): HTMLButtonElement {
 function noModel() { expect(invoke.mock.calls.some(([channel]) => channel === 'generation:execute' || channel === 'generation:begin' || channel === 'generation:restart')).toBe(false) }
 
 describe('planning recovery editors', () => {
+  it.each(['button', 'workflow'] as const)('reports a rejected recovery refresh from %s', async source => {
+    await render('outline')
+    invoke.mockRejectedValueOnce(new Error('Recovery context reload failed'))
+    await act(async () => {
+      if (source === 'button') {
+        container.querySelector<HTMLButtonElement>('button[title="从磁盘重新加载（AI 生成完成后可点击刷新）"]')!.click()
+      } else {
+        globalEventBus.emit('WORKFLOW_COMPLETE', { type: 'architecture_generation', projectPath: session.projectPath, projectSession: session, runId: 'completed-recovery' })
+      }
+    })
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('Recovery context reload failed'))
+    noModel()
+  })
+
+  it('reports a blueprint resource conflict without adding a failed continuation', async () => {
+    context = fixture('blueprint')
+    await render('blueprint')
+    await act(async () => useWorkflowStore.setState({ activeRuns: [{
+      id: 'running-blueprint', type: 'directory', title: '正在生成蓝图', status: 'running',
+      projectPath: session.projectPath, projectSession: session, resourceKeys: ['blueprints'],
+      writingLanguage: 'zh-CN', uiLocale: 'zh-CN', currentStepIndex: 0, steps: [], createdAt: '',
+    }] }))
+    await act(async () => button('继续生成缺少的章节').click())
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('正在生成蓝图')
+    expect(useWorkflowStore.getState().history).toHaveLength(0)
+    noModel()
+  })
+
   for (const language of ['zh-CN', 'en-US'] as const) {
     for (const keepTail of [true, false]) {
       it(`outline author tail ${language} saves a completed prefix with ${keepTail ? 'old' : 'deleted'} machine progress`, async () => {

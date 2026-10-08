@@ -296,8 +296,8 @@ export class ImportRunOrchestrator {
     } catch (error) {
       if (execution.lost) throw error
       if (cancellationRequested(context)) {
+        await context.cancellationRequest?.catch(() => undefined)
         try {
-          await context.cancellationRequest
           const durableRun = await this.dependencies.getRun(runId)
           if (durableRun?.status !== 'cancelled') {
             execution.current = await this.dependencies.renewExecution(runId, execution.current)

@@ -15,7 +15,7 @@ export interface PortableFieldPolicy {
   disposition: PortableFieldDisposition
   validator: string
   consumer: string
-  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta'
+  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta' | 'registered-donor'
   signedDisposition: string | null
 }
 
@@ -29,6 +29,7 @@ const tables = fieldPolicyDocument.tables as Record<string, Record<string, Polic
 const deltaTables = new Set<string>(fieldPolicyDocument.deltaTables)
 const m06Tables = new Set<string>(fieldPolicyDocument.m06Tables)
 const deltaCharacterFields = new Set<string>(fieldPolicyDocument.deltaCharacterFields)
+const optionalFields = new Set<string>(fieldPolicyDocument.optionalFields)
 const signedOverrides = fieldPolicyDocument.signedOverrides as Record<string, string>
 const signedDefaults: Partial<Record<PolicyCode, string>> = {
   D: 'preserve-domain-value', H: 'historical-read-only-projection', R: 'allowlist-rebuild-or-block',
@@ -45,7 +46,8 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
     for (const [field, code] of Object.entries(fields)) {
       const rule = rules[code]
       const key = `${table}.${field}`
-      const delta = deltaTables.has(table) || m06Tables.has(table) || table === 'characters' && deltaCharacterFields.has(field)
+      const delta = optionalFields.has(key) || deltaTables.has(table) || m06Tables.has(table)
+        || table === 'characters' && deltaCharacterFields.has(field)
       const signedDisposition = delta ? null : signedOverrides[key] ?? signedDefaults[code]
       if (!field || !rule || rule.length !== 3 || !PORTABLE_FIELD_DISPOSITIONS.has(rule[0])
         || typeof rule[1] !== 'string' || !rule[1] || typeof rule[2] !== 'string' || !rule[2]
@@ -53,7 +55,8 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
         formatError('PORTABLE_POLICY_INVALID')
       }
       result.set(key, Object.freeze({ disposition: rule[0], validator: rule[1], consumer: rule[2],
-        origin: m06Tables.has(table) ? 'm06-delta' : delta ? 'm01-m05-delta' : 'signed-s01', signedDisposition }))
+        origin: optionalFields.has(key) ? 'registered-donor'
+          : m06Tables.has(table) ? 'm06-delta' : delta ? 'm01-m05-delta' : 'signed-s01', signedDisposition }))
     }
   }
   if (Object.keys(signedOverrides).some(key => result.get(key)?.origin !== 'signed-s01')) {
@@ -63,7 +66,6 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
 }
 
 const fieldPolicy = loadFieldPolicy()
-export const PORTABLE_FIELD_POLICY_COUNTS = Object.freeze({ tables: Object.keys(tables).length, fields: fieldPolicy.size })
 
 /** Unknown fields fail closed. Callers must obey the returned validator/consumer instead of copying opaque JSON. */
 export function getPortableFieldPolicy(table: string, field: string): PortableFieldPolicy {
@@ -77,7 +79,7 @@ export function listPortableFieldPolicyKeys(): readonly string[] {
 function quoteIdentifier(value: string): string { return `"${value.replaceAll('"', '""')}"` }
 
 /** Read-only bidirectional schema gate. sqlite_* implementation objects are deliberately outside the portable contract. */
-export function assertPortableSourceSchema(database: Database.Database): void {
+export function assertPortableSourceSchema(database: Database.Database): { tables: number; fields: number } {
   try {
     database.pragma('foreign_keys = ON')
     verifySchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
@@ -93,9 +95,10 @@ export function assertPortableSourceSchema(database: Database.Database): void {
       actual.add(key)
     }
   }
-  if (actual.size !== fieldPolicy.size || [...fieldPolicy.keys()].some(key => !actual.has(key))) {
+  if ([...fieldPolicy.keys()].some(key => !actual.has(key) && !optionalFields.has(key))) {
     formatError('PORTABLE_SCHEMA_UNSUPPORTED')
   }
+  return { tables: objects.length, fields: actual.size }
 }
 
 export const PORTABLE_ENTRY_DISPOSITIONS = Object.freeze([

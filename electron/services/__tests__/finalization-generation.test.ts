@@ -548,3 +548,21 @@ it('characters最终合同要求每个update含recentEvents，且与渲染端副
   expect(renderer).toContain(`'${contract.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}'`)
  }
 })
+
+it.each(['cancelled', 'notes-changed'] as const)('starts an explicit fresh finalization attempt after %s, preserving history and sealed replay', async reason => {
+ const f=await generated(), oldHandle=f.recovery.view.handle
+ if(reason==='cancelled') f.owner.cancelFinalizationGeneration({handle:oldHandle})
+ else {
+  f.db.prepare('UPDATE blueprints SET notes=? WHERE chapter_number=1').run('作者新要点')
+  expect(()=>f.owner.commitFinalizationGeneration(f.commitRequest)).toThrow('GENERATION_FINALIZATION_NOTES_CHANGED')
+ }
+ const next=f.owner.beginFinalizationGeneration({slot:f.slot,modelId:'synthetic'})
+ expect(next.view.handle.runId).not.toBe(oldHandle.runId)
+ expect(f.owner.beginFinalizationGeneration({slot:f.slot,modelId:'synthetic'}).view.handle).toEqual(next.view.handle)
+ expect(()=>f.owner.commitFinalizationGeneration(f.commitRequest)).toThrow('GENERATION_FINALIZATION_SUPERSEDED')
+ const receipt=await f.owner.executeFinalizationGeneration({handle:next.view.handle})
+ const committed=f.owner.commitFinalizationGeneration({handle:next.view.handle,artifact:f.artifactOf(receipt)})
+ expect(f.owner.beginFinalizationGeneration({slot:f.slot,modelId:'synthetic'}).effect).toEqual(committed)
+ expect(f.db.prepare("SELECT COUNT(*) FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.finalizationGenerationSlotKey') IS NOT NULL").pluck().get()).toBe(2)
+ expect(f.dispatch).toHaveBeenCalledTimes(2)
+})

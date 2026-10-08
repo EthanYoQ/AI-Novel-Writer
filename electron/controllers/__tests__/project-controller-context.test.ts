@@ -616,10 +616,11 @@ describe('project controller project identity', () => {
     mocks.projectAccess.probeExistingProject.mockImplementationOnce(() => {
       throw new Error('PROJECT_MIGRATION_NOT_QUALIFIED')
     })
-    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(ordinaryDirectory), 'request-unqualified-legacy')).resolves.toMatchObject({
+    const result = await handler('project:open')({ sender: { id: 17 } }, selectedProject(ordinaryDirectory), 'request-unqualified-legacy')
+    expect(result).not.toHaveProperty('errorCode')
+    expect(result).toMatchObject({
       success: false,
-      errorCode: 'PROJECT_ROOT_REQUIRED',
-      error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请保留当前文件，等待受验证的迁移入口。',
+      error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请通过“导入旧项目”创建完整副本。',
       databaseRestored: true,
       dbReady: true,
     })

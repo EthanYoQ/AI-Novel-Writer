@@ -64,7 +64,7 @@ export function createMainGenerationTransport(captureSession = getActiveProjectS
       return () => { if (!closed) { closed = true; unsubscribe() } }
     },
     subscribeReasoning(handle, listener) {
-      const frozen = Object.freeze({ ...handle }); sessionFor(frozen)
+      const frozen = Object.freeze({ ...handle }); sessionFor(frozen, true)
       let closed = false
       const unsubscribe = ipc.on('generation:reasoning', event => {
         if (!closed && handleKey(event) === handleKey(frozen)) listener(event)
@@ -95,7 +95,7 @@ export function createMainGenerationTransport(captureSession = getActiveProjectS
     async restart(sessionInput: ProjectSessionContext, handle: MainGenerationRunHandle, request: BeginGenerationRequest) {
       const session = freezeSession(sessionInput), frozen = { ...handle }, intent = structuredClone(request)
       assertHandle(session, frozen, true)
-      return bindView(await ipc.invokeWithProjectSession(session, 'generation:restart', frozen, intent), session)
+      return bindView(await ipc.invokeWithProjectSession(session, 'generation:restart', frozen, intent), session, true)
     },
     async discard(sessionInput: ProjectSessionContext, handle: MainGenerationRunHandle, artifactId: string) {
       const session = freezeSession(sessionInput), frozen = { ...handle }

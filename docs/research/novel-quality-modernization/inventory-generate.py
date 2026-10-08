@@ -18,8 +18,10 @@ def scope(p):
  parts=p.split('/')
  return not any(x in parts for x in ['.runtime','.cache','node_modules','.git','.codegraph','plugins','.dsh','.worktrees','dist','dist-electron']) and not re.search(r'(^|/)(dsh|deepseek-harness)(/|$)',p,re.I)
 def scan(root):
+ if not root.is_dir(): raise NotADirectoryError(f'Donor root is not a directory: {root}')
  out={}
- for base,dirs,files in os.walk(root,followlinks=False):
+ def unreadable(error): raise error
+ for base,dirs,files in os.walk(root,followlinks=False,onerror=unreadable):
   dirs[:]=[d for d in dirs if scope((pathlib.Path(base)/d).relative_to(root).as_posix()) and not (pathlib.Path(base)/d).is_symlink() and not (pathlib.Path(base)/d).is_junction()]
   for f in files:
    p=pathlib.Path(base)/f; rel=p.relative_to(root).as_posix()
@@ -28,7 +30,7 @@ def scan(root):
 if __name__=='__main__':
  import argparse
  ap=argparse.ArgumentParser(); ap.add_argument('--donor',required=True); args=ap.parse_args()
- current=tree('HEAD'); old=tree('v1.1.0'); donor=scan(pathlib.Path(args.donor))
+ donor=scan(pathlib.Path(args.donor)); current=tree('HEAD'); old=tree('v1.1.0')
  union=json.loads((ROOT/'docs/plans/novel-quality-program-v3-2026-09-13/feature-union.json').read_text(encoding='utf-8'))
  actions={f['id']:[a['actionId'] for a in f['actions']] for f in union['features']}
  def classify(p):
@@ -66,7 +68,7 @@ if __name__=='__main__':
  for p,b in current.items():
   try: lines=b.decode('utf-8').splitlines()
   except UnicodeDecodeError: continue
-  hits=[{'line':i,'tokens':sorted(set(m.group(0) for m in re.finditer(r'vela',line,re.I)))} for i,line in enumerate(lines,1) if re.search('vela',line,re.I)]
+  hits=[{'line':i,'tokens':sorted(set(m.group(0) for m in re.finditer(r'(?<![a-z])vela',line,re.I)))} for i,line in enumerate(lines,1) if re.search(r'(?<![a-z])vela',line,re.I)]
   if hits:
    cat,owner,groups,reason=classify(p)
    production=p.startswith(('src/','electron/')) and not re.search(r'__tests__|\.test\.|\.stories\.',p)

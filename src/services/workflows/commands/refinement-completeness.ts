@@ -31,7 +31,7 @@ export function assertMateriallyCompleteRevision(
   targetUnits: number,
   uiLocale: Locale,
 ): void {
-  assertMechanicallyCompleteVisibleText(revision, uiLocale)
+  assertMechanicallyCompleteVisibleText(revision, uiLocale, source)
   const sourceUnits = countVisibleProseUnits(source)
   const revisionUnits = countVisibleProseUnits(revision)
   const boundedTarget = Number.isSafeInteger(targetUnits) && targetUnits > 0

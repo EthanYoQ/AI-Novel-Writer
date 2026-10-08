@@ -29,6 +29,20 @@ it('同名显示兼容选择拒绝猜首项，name不能作为写目标', async 
  expect(useCharacterStore.getState().characters.every(c => c.notes === '')).toBe(true)
  expect(useCharacterStore.getState().renameCharacter('同名', '错误')).toBe(false)
 })
+it('未绑定旧草稿保存拒绝后仍可重试；删除目标同时清理其入边', async () => {
+ invoke.mockResolvedValue(snapshot([card('甲id', '甲'), card('乙id', '乙')]))
+ await useCharacterStore.getState().load(path)
+ useCharacterStore.setState({ characters: [{ ...EMPTY_CARD, name: '旧草稿' }] })
+ await expect(useCharacterStore.getState().saveAll(path)).rejects.toThrow('角色身份尚未确认')
+ expect(useCharacterStore.getState()).toMatchObject({ saving: false, identityBusy: false })
+ useCharacterStore.setState({ characters: [{ ...card('甲id', '甲'), relationships: JSON.stringify([{ target: '乙', targetCharacterId: '乙id', relation: '盟友' }]) }, card('乙id', '乙')] })
+ invoke.mockImplementationOnce(async (_session, _channel, request) => {
+  expect(request.entries).toHaveLength(1)
+  expect(request.entries[0].relationships).toEqual([])
+  return { success: true, receipt: { revision: 2, snapshot: snapshot([card('甲id', '甲')], 2) } }
+ })
+ expect(await useCharacterStore.getState().deleteCharacter('乙id', path)).toBe(true)
+})
 it('按ID三方合并保留本地改名及远端字段，不按交换后的显示名串人', () => {
  const base = [card('甲', '甲名', '旧甲'), card('乙', '乙名', '旧乙')]
  const draft = [{ ...base[0], name: '乙名' }, { ...base[1], name: '甲名' }]

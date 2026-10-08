@@ -135,10 +135,12 @@ describe('SkinService', () => {
       toJPEG: vi.fn(),
     })
 
-    expect(new SkinService({ rootDirectory }).initialize()).toEqual({
-      activeSkin: 'classic',
-      customSkin: null,
-    })
+    const service = new SkinService({ rootDirectory })
+    expect(service.initialize()).toEqual({ activeSkin: 'classic', customSkin: null })
+    expect(service.getStartupSnapshot('fixture')).toMatchObject({ backgroundSkin: 'classic' })
+    const reopened = new SkinService({ rootDirectory })
+    expect(reopened.initialize()).toEqual({ activeSkin: 'classic', customSkin: null })
+    expect(reopened.getStartupSnapshot('fixture')).toMatchObject({ backgroundSkin: 'classic' })
   })
 
   it('rejects an oversized persisted custom asset before reading bytes or decoding it at startup', () => {

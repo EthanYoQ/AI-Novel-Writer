@@ -17,6 +17,7 @@
     "character_avatar_assets", "character_avatar_unresolved"
   ],
   "m06Tables": ["review_cycle_merges"],
+  "optionalFields": ["characters.avatar"],
   "deltaCharacterFields": ["character_id", "legacy_key", "static_provenance", "identity_revision", "retired"],
   "signedOverrides": {
     "chapter_deletion_operations.knowledge_status": "non-executable-history",
@@ -85,7 +86,7 @@
     "character_relationships": {"relationship_id":"D","source_character_id":"D","target_character_id":"D","relation":"D","source_display_snapshot":"D","target_display_snapshot":"D","provenance_json":"R","approval_id":"D"},
     "character_roster_meta": {"id":"D","schema_version":"D","revision":"D","migration_state":"D","legacy_markdown":"D","projection_hash":"D","fact_hash":"D","updated_at":"D"},
     "character_roster_operations": {"operation_id":"H","payload_hash":"D","committed_revision":"H","projection_hash":"D","created_at":"H"},
-    "characters": {"character_id":"D","legacy_key":"D","static_provenance":"D","identity_revision":"D","retired":"D","name":"D","role":"D","gender":"D","age":"D","appearance":"D","personality":"D","background":"D","abilities":"D","motivation":"D","relationships":"D","arc":"D","notes":"D","cs_location":"D","cs_power_level":"D","cs_physical_state":"D","cs_mental_state":"D","cs_key_items":"D","cs_recent_events":"D","cs_updated_at_chapter":"D","cs_provenance":"D","created_at":"D","updated_at":"D"},
+    "characters": {"character_id":"D","legacy_key":"D","static_provenance":"D","identity_revision":"D","retired":"D","name":"D","role":"D","gender":"D","age":"D","appearance":"D","personality":"D","background":"D","abilities":"D","motivation":"D","relationships":"D","arc":"D","notes":"D","avatar":"X","cs_location":"D","cs_power_level":"D","cs_physical_state":"D","cs_mental_state":"D","cs_key_items":"D","cs_recent_events":"D","cs_updated_at_chapter":"D","cs_provenance":"D","created_at":"D","updated_at":"D"},
     "consistency_exemptions": {"stable_fact_key":"D","reason":"D","revoked":"D"},
     "contents": {"id":"D","body":"D","created_at":"D"},
     "continuity_projection_meta": {"id":"D","generation":"D","stale_from_chapter":"D"},

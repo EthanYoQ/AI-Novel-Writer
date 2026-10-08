@@ -1447,3 +1447,27 @@ describe('project character-state persistence boundary', () => {
     expect(useProjectStore.getState().currentProject?.characterStates).toBe('persisted')
   })
 })
+
+it.each([false, true])('preserves foreign drafts while closing the current project, own dirty=%s', async ownDirty => {
+  const foreign = { id: 'foreign', name: 'B', type: 'outline' as const, projectKey: project('B').path, dirty: true }
+  useEditorStore.setState(state => ({ tabs: [...state.tabs.map(tab => ({ ...tab, dirty: ownDirty })), foreign] }))
+  registerEditorExitSaveHandler({ tabId: 'a-tab', type: 'outline', projectKey: project('A').path,
+    save: async () => useEditorStore.getState().markTabSaved('a-tab') })
+  mocks.invoke.mockResolvedValue({ success: true })
+  await expect(useProjectStore.getState().closeProject()).resolves.toBe(true)
+  expect(useEditorStore.getState().tabs).toEqual([foreign])
+  expect(mocks.confirm).toHaveBeenCalledTimes(ownDirty ? 1 : 0)
+})
+
+it('reopens the saved config after discarding edits to the same project', async () => {
+  useProjectStore.getState().updateNovelConfig({ coreOutline: 'discard this outline' })
+  mocks.confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+  mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'project:open') return { success: true, project: project('A'), requestToken: args[1], activeProjectPath: project('A').path, databaseRestored: true, dbReady: true }
+    if (channel === 'fs:list-dir') return []
+    return { success: true }
+  })
+  await expect(useProjectStore.getState().openProject(project('A').path)).resolves.toBe(true)
+  expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe(project('A').novelConfig.coreOutline)
+  expect(JSON.parse(useEditorStore.getState().draftLedgers.config).projects).toEqual([])
+})

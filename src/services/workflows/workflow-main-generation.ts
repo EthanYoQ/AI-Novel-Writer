@@ -68,6 +68,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
     if (!cancelPromise && view) cancelPromise = transport.cancel(view.handle).catch(error => { cancelFailure = error })
     return cancelPromise
   }
+  const previousCancellation = context.requestMainGenerationCancellation
   context.requestMainGenerationCancellation = async () => { await cancel(); if (cancelFailure) throw cancelFailure }
   const open = async (selection: WorkflowMainGenerationSelection) => {
     if (closed || context.cancelled) throw new Error('GENERATION_WORKFLOW_CANCELLED')
@@ -76,53 +77,70 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
     operation = selection.operation
     importOrdinal = 0
     importStage = !!intent.importSlot
-    const importRecovery = intent.importSlot ? await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot }) : null
-    if (importRecovery) {
-      if (resumeHandle && resumeHandle.runId !== importRecovery.view.handle.runId) throw new Error('GENERATION_IMPORT_SLOT_CHANGED')
-      view = importRecovery.view
-      modelId = importRecovery.modelId
-      context.generationModelId = importRecovery.modelId
-      context.data.importGenerationContext = importRecovery.frozenContext
-    } else if (resumeHandle) {
-      const stored = await transport.read(resumeHandle)
-      if (context.mainGenerationRootHandle && context.mainGenerationRootHandle.rootActionId !== resumeHandle.rootActionId)
-        throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
-      view = stored.nonReplayable && !importStage ? await transport.resume(projectSession, resumeHandle) : stored
-    } else {
-      if (!modelId) throw new Error('GENERATION_MODEL_REQUIRED')
-      const parent = intent.continueDirectoryOperationId || restartHandle ? undefined : context.mainGenerationRootHandle
-      if (intent.parentRootActionId && parent && intent.parentRootActionId !== parent.rootActionId)
-        throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
-      if (parent && (parent.projectId !== projectSession.projectId || !intent.batchId && !intent.importSlot && !context.agentWorkflowRegistrationId && parent.epoch !== projectSession.leaseId))
-        throw new Error('GENERATION_WORKFLOW_RESUME_REQUIRED')
-      const beginRequest = { ...intent, selectedDraftIds: intent.selectedDraftIds ?? [],
-        selectedFinalizedDraftIds: intent.selectedFinalizedDraftIds ?? [], modelId,
-        uiActionNonce: `${context.runId}:${intent.operation}${intent.operation === 'chapter-draft' ? `:${intent.chapterNumber}` : ''}`,
-        ...(context.agentWorkflowRegistrationId ? { agentWorkflowRegistrationId: context.agentWorkflowRegistrationId } : {}),
-        ...(parent ? { parentRootActionId: parent.rootActionId } : {}) }
-      view = restartHandle ? await transport.restart(projectSession, restartHandle, beginRequest) : await transport.begin(projectSession, beginRequest)
-      if (restartHandle && view.nonReplayable) view = await transport.resume(projectSession, view.handle)
+    const previousRoot = context.mainGenerationRootHandle, previousRun = context.mainGenerationRunHandle
+    const previousModelId = context.generationModelId, previousImportContext = context.data.importGenerationContext
+    let openedView: MainGenerationRunView | undefined
+    try {
+      const importRecovery = intent.importSlot ? await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot }) : null
+      if (importRecovery) {
+        if (resumeHandle && resumeHandle.runId !== importRecovery.view.handle.runId) throw new Error('GENERATION_IMPORT_SLOT_CHANGED')
+        view = importRecovery.view
+        modelId = importRecovery.modelId
+        context.generationModelId = importRecovery.modelId
+        context.data.importGenerationContext = importRecovery.frozenContext
+      } else if (resumeHandle) {
+        const stored = await transport.read(resumeHandle)
+        if (context.mainGenerationRootHandle && context.mainGenerationRootHandle.rootActionId !== resumeHandle.rootActionId)
+          throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
+        view = stored.nonReplayable && !importStage ? await transport.resume(projectSession, resumeHandle) : stored
+      } else {
+        if (!modelId) throw new Error('GENERATION_MODEL_REQUIRED')
+        const parent = intent.continueDirectoryOperationId || restartHandle ? undefined : context.mainGenerationRootHandle
+        if (intent.parentRootActionId && parent && intent.parentRootActionId !== parent.rootActionId)
+          throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
+        if (parent && (parent.projectId !== projectSession.projectId || !intent.batchId && !intent.importSlot && !context.agentWorkflowRegistrationId && parent.epoch !== projectSession.leaseId))
+          throw new Error('GENERATION_WORKFLOW_RESUME_REQUIRED')
+        const beginRequest = { ...intent, selectedDraftIds: intent.selectedDraftIds ?? [],
+          selectedFinalizedDraftIds: intent.selectedFinalizedDraftIds ?? [], modelId,
+          uiActionNonce: `${context.runId}:${intent.operation}${intent.operation === 'chapter-draft' ? `:${intent.chapterNumber}` : ''}`,
+          ...(context.agentWorkflowRegistrationId ? { agentWorkflowRegistrationId: context.agentWorkflowRegistrationId } : {}),
+          ...(parent ? { parentRootActionId: parent.rootActionId } : {}) }
+        view = restartHandle ? await transport.restart(projectSession, restartHandle, beginRequest) : await transport.begin(projectSession, beginRequest)
+        openedView = view
+        if (restartHandle && view.nonReplayable) view = await transport.resume(projectSession, view.handle)
+      }
+      openedView = view
+      readOnlyOutline = view.nonReplayable && view.plotOutline?.protocol === PLOT_OUTLINE_PROTOCOL && view.plotOutline.cursor.kind === 'complete'
+      context.mainGenerationRootHandle = Object.freeze({ ...view.handle })
+      context.mainGenerationRunHandle = Object.freeze({ ...view.handle })
+      if (intent.importSlot && !importRecovery) {
+        const stored = await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot })
+        if (!stored || stored.view.handle.runId !== view.handle.runId) throw new Error('GENERATION_IMPORT_CONTEXT_REQUIRED')
+        context.data.importGenerationContext = stored.frozenContext
+        context.generationModelId = stored.modelId
+      }
+      await onRunOpened?.(context.mainGenerationRunHandle)
+      if (context.cancelled) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
+      unsubscribeReasoning = readOnlyOutline ? undefined : transport.subscribeReasoning?.(view.handle, event => {
+        if (closed || context.cancelled || !event.attemptId || !event.text
+          || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+        useWorkflowReasoningStore.getState().append(context.runId, event.attemptId, event.text)
+      })
+      inner = await createMainOwnedGenerationRuntime({ runHandle: view.handle, onSnapshot }, transport)
+    } catch (error) {
+      unsubscribeReasoning?.(); unsubscribeReasoning = undefined; clearReasoning()
+      if (openedView?.handle.epoch === projectSession.leaseId && openedView.status === 'running') {
+        await (context.cancelled ? transport.cancel(openedView.handle) : transport.pause(openedView.handle)).catch(() => undefined)
+      }
+      context.mainGenerationRootHandle = previousRoot
+      context.mainGenerationRunHandle = previousRun
+      context.generationModelId = previousModelId
+      context.data.importGenerationContext = previousImportContext
+      throw error
     }
-    readOnlyOutline = view.nonReplayable && view.plotOutline?.protocol === PLOT_OUTLINE_PROTOCOL && view.plotOutline.cursor.kind === 'complete'
-    context.mainGenerationRootHandle = Object.freeze({ ...view.handle })
-    context.mainGenerationRunHandle = Object.freeze({ ...view.handle })
-    if (intent.importSlot && !importRecovery) {
-      const stored = await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot })
-      if (!stored || stored.view.handle.runId !== view.handle.runId) throw new Error('GENERATION_IMPORT_CONTEXT_REQUIRED')
-      context.data.importGenerationContext = stored.frozenContext
-      context.generationModelId = stored.modelId
-    }
-    await onRunOpened?.(context.mainGenerationRunHandle)
-    if (context.cancelled) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
-    unsubscribeReasoning = readOnlyOutline ? undefined : transport.subscribeReasoning?.(view.handle, event => {
-      if (closed || context.cancelled || !event.attemptId || !event.text
-        || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
-      useWorkflowReasoningStore.getState().append(context.runId, event.attemptId, event.text)
-    })
-    inner = await createMainOwnedGenerationRuntime({ runHandle: view.handle, onSnapshot }, transport)
   }
   try { await open(request.selection) }
-  catch (error) { unsubscribeReasoning?.(); clearReasoning(); throw error }
+  catch (error) { context.requestMainGenerationCancellation = previousCancellation; throw error }
   const unsubscribeProject = useProjectStore.subscribe(state => {
     if (!sameProjectSessionContext(projectSession, projectSessionContextFromProject(state.currentProject))) clearReasoning()
   })
@@ -148,8 +166,9 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
       callbacks.setGenerationActivity?.({ operation })
       try {
         if (importStage) {
-          const receipt = await ipc.invokeWithProjectSession(projectSession, 'import-generation:execute', { handle: view.handle, ordinal: importOrdinal++, task,
+          const receipt = await ipc.invokeWithProjectSession(projectSession, 'import-generation:execute', { handle: view.handle, ordinal: importOrdinal, task,
             execution: context.data.importRunExecution as import('../../shared/import-run').ImportRunExecutionAuthority | undefined })
+          importOrdinal += 1
           view = receipt.run
           context.mainGenerationRunHandle = Object.freeze({ ...view.handle })
           context.mainGenerationRootHandle = Object.freeze({ ...view.handle })

@@ -209,7 +209,7 @@ export function formatRelationshipsForEditor(
       : value
   }
   return relationships.map(edge => {
-    const identity = options.identities?.find(c => c.characterId === edge.targetCharacterId)
+    const identity = edge.targetCharacterId ? options.identities?.find(c => c.characterId === edge.targetCharacterId) : undefined
     const target = identity ? (options.identities!.filter(c => c.name === identity.name).length > 1 ? `${identity.name}〔${identity.characterId}〕` : identity.name) : edge.target
     return formatRelationshipEdgeForEditor({ ...edge, target })
   }).join('\n')
@@ -233,15 +233,15 @@ export function relationshipStorageFromEditor(
       return match ? { target: match[1].trim(), relation: match[2].trim() } : null
     })
     const bound = lines.map(edge => {
-      if (!edge) return null
-      const previousMatch = previous.filter(old => old.target === edge.target && formatRelationForEditor(old.relation) === edge.relation)
+      if (!edge || !edge.target || !edge.relation) return null
+      const previousMatch = previous.filter(old => formatRelationshipsForEditor(JSON.stringify([old]), { identities: options.identities }) === formatRelationshipEdgeForEditor(edge))
       const preserved = previousMatch.length === 1 ? previousMatch[0].targetCharacterId : undefined
       const tag = edge.target.match(/〔([^〕]+)〕$/)?.[1]
       const id = 'targetCharacterId' in edge ? edge.targetCharacterId : undefined
       const matches = options.identities!.filter(c => id || tag || preserved ? c.characterId === (id || tag || preserved) : c.name === edge.target)
       const target = matches.length === 1 ? matches[0] : undefined
       if (!target?.characterId || target.characterId === options.selfCharacterId) return null
-      return { target: target.name, targetCharacterId: target.characterId, relation: edge.relation }
+      return { target: target.name, targetCharacterId: target.characterId, relation: previousMatch.length === 1 ? previousMatch[0].relation : edge.relation }
     })
     return bound.every(edge => edge !== null) ? JSON.stringify(bound) : value
   }

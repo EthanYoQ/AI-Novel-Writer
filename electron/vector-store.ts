@@ -1022,17 +1022,33 @@ async function pruneSupersededDocuments(
   docInfo: DocumentInfo,
 ): Promise<void> {
   const docsTable = await db.openTable(DOCS_TABLE_NAME)
-  const fileName = docInfo.fileName.replace(/'/g, "''")
-  const docId = docInfo.id.replace(/'/g, "''")
-  const corpusKind = docInfo.corpusKind.replace(/'/g, "''")
-  const old = await docsTable.query()
-    .filter(`\`fileName\` = '${fileName}' AND \`corpusKind\` = '${corpusKind}' AND id != '${docId}'`)
-    .select(['id']).toArray()
-  for (const row of old) {
-    if (!await removeDocumentInternal(projectPath, String(row.id))) {
-      throw new Error('SUPERSEDED_KNOWLEDGE_CLEANUP_FAILED')
+  try {
+    const fileName = docInfo.fileName.replace(/'/g, "''")
+    const docId = docInfo.id.replace(/'/g, "''")
+    const corpusKind = docInfo.corpusKind.replace(/'/g, "''")
+    const old = await docsTable.query()
+      .filter(`\`fileName\` = '${fileName}' AND \`corpusKind\` = '${corpusKind}' AND id != '${docId}'`)
+      .select(['id']).toArray()
+    const oldIds = new Set(old.map(row => String(row.id)))
+    const knownIds = new Set((await docsTable.query().select(['id']).toArray()).map(row => String(row.id)))
+    const chunks = await db.openTable(TABLE_NAME)
+    try {
+      const sameSource = await chunks.query()
+        .filter(`\`fileName\` = '${fileName}' AND \`corpusKind\` = '${corpusKind}'`)
+        .select(['docId']).toArray()
+      for (const id of new Set(sameSource.map(row => String(row.docId)))) {
+        if (knownIds.has(id)) continue
+        const rows = await chunks.query().filter(`\`docId\` = '${id.replace(/'/g, "''")}'`).toArray()
+        if (rows.every(row => row.fileName === docInfo.fileName && row.corpusKind === docInfo.corpusKind
+          && typeof row.importedAt === 'string' && row.importedAt <= docInfo.importedAt)) oldIds.add(id)
+      }
+    } finally { chunks.close() }
+    for (const id of oldIds) {
+      if (!await removeDocumentInternal(projectPath, id)) {
+        throw new Error('SUPERSEDED_KNOWLEDGE_CLEANUP_FAILED')
+      }
     }
-  }
+  } finally { docsTable.close() }
 }
 
 async function rollbackCurrentWrite(
@@ -1196,7 +1212,8 @@ async function addChunksInternal(
     rollbackRequired = false
 
     if (metadata?.replacementMode !== 'stable-id') {
-      await pruneSupersededDocuments(db, projectPath, docInfo)
+      try { await pruneSupersededDocuments(db, projectPath, docInfo) }
+      catch (error) { console.warn('[AI Novel VectorStore] 新文档已保存，旧文档清理未完成:', error) }
     }
 
     return { success: true, chunkCount: chunks.length }
@@ -1210,6 +1227,41 @@ async function addChunksInternal(
     console.error('[AI Novel VectorStore] 写入失败:', error)
     return { success: false, chunkCount: 0, error: String(error) }
   }
+}
+
+/** Reindex the existing identity so chapter outbox references remain valid. */
+export async function replaceDocumentChunks(projectPath: string, docId: string, chunks: string[], copy: KnowledgeCopy): Promise<{ success: boolean; chunkCount: number; error?: string }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
+    const opened: Array<{ table: lancedb.Table; version: number }> = []
+    try {
+      const db = await getConnection(projectPath)
+      const names = await db.tableNames()
+      const registry = await loadOrRegisterLegacyRegistry(projectPath, db, names)
+      for (const name of [TABLE_NAME, DOCS_TABLE_NAME, ...names.filter(name => name.startsWith(EMBEDDING_TABLE_PREFIX))]) {
+        const table = await db.openTable(name)
+        opened.push({ table, version: await table.version() })
+      }
+      const [canonical, documents, ...vectors] = opened
+      const filter = `\`docId\` = '${docId.replace(/'/g, "''")}'`
+      const previous = await canonical.table.query().filter(filter).toArray()
+      if (!previous.length || !validateChunks(chunks)) throw new Error('KNOWLEDGE_DOCUMENT_CHUNKS_MISSING')
+      const records = chunks.map((text, chunkIndex) => ({ ...previous[0], id: randomUUID(), text, chunkIndex, totalChunks: chunks.length }))
+      writeRegistry(projectPath, registryWithNoActiveGeneration(registry))
+      for (const { table } of vectors) await table.delete(filter)
+      await canonical.table.mergeInsert('id').whenNotMatchedInsertAll()
+        .whenNotMatchedBySourceDelete({ where: filter })
+        .execute(recordsForSchema(records, await canonical.table.schema()))
+      await documents.table.update({ where: `id = '${docId.replace(/'/g, "''")}'`, values: { chunkCount: chunks.length } })
+      writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, { ...copy, indexedHash: contentHash(copy.content), indexDirty: false })
+      return { success: true, chunkCount: chunks.length }
+    } catch (error) {
+      for (const { table, version } of opened.reverse()) {
+        try { await table.checkout(version); await table.restore() }
+        catch (rollbackError) { console.error('[AI Novel VectorStore] 恢复重建前索引失败:', rollbackError) }
+      }
+      return { success: false, chunkCount: 0, error: error instanceof Error ? error.message : String(error) }
+    } finally { for (const { table } of opened) table.close() }
+  })
 }
 
 /** 删除文档及其在所有嵌入空间中的块，不删除任何表。 */
@@ -1367,12 +1419,14 @@ async function searchWithScopeInternal(
   embeddingSpace?: EmbeddingSpaceIdentity,
   excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<SearchResult[]> {
+  let documentsTable: lancedb.Table | undefined
   try {
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
     if (!tableNames.includes(TABLE_NAME)) return []
-    const staleDocIds = tableNames.includes(DOCS_TABLE_NAME)
-      ? (await (await db.openTable(DOCS_TABLE_NAME)).query().toArray())
+    documentsTable = tableNames.includes(DOCS_TABLE_NAME) ? await db.openTable(DOCS_TABLE_NAME) : undefined
+    const staleDocIds = documentsTable
+      ? (await documentsTable.query().toArray())
           .filter(row => !isDocumentCopyIndexCurrent(getProjectDataRoot(projectPath), String(row.id), row.filePath))
           .map(row => String(row.id))
       : []
@@ -1471,7 +1525,7 @@ async function searchWithScopeInternal(
   } catch (error) {
     console.error('[AI Novel VectorStore] 检索失败:', error)
     return []
-  }
+  } finally { documentsTable?.close() }
 }
 
 export async function listDocuments(projectPath: string): Promise<DocumentInfo[]> {

@@ -42,18 +42,20 @@ async function launch() {
     APPDATA: profile.appData, LOCALAPPDATA: profile.localAppData }
   for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT']) delete env[key]
   const app = await electron.launch({ executablePath, cwd: packageDir, args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
-  const page = await app.firstWindow({ timeout: 30_000 })
-  page.setDefaultTimeout(15_000)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
-  assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer', revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
-  return { app, page }
+  try {
+    const page = await app.firstWindow({ timeout: 30_000 })
+    page.setDefaultTimeout(15_000)
+    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
+    await page.evaluate(() => {
+      const key = 'ai-novel-writer-appearance'
+      const value = JSON.parse(localStorage.getItem(key) ?? '{}')
+      localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer', revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
+    })
+    await page.reload()
+    await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
+    return { app, page }
+  } catch (error) { await app.close().catch(() => {}); throw error }
 }
 
 async function openViaShelf(page) {
@@ -116,6 +118,7 @@ async function main() {
     const savedUiBody = await editorBody(body)
     assert.equal(savedUiBody, fixtureBody + marker, 'UI body changed beyond requested append')
     await editorPage.locator('button[title="保存（⌘S）"]').click()
+    await editorPage.getByRole('status').filter({ hasText: /^已保存$/ }).waitFor({ state: 'visible' })
     const dbPath = path.join(projectPath, '.ai-novel', 'project.db')
     assert.equal(path.relative(scratch, dbPath).startsWith('..'), false)
     const db = new Database(dbPath, { fileMustExist: true, readonly: true })

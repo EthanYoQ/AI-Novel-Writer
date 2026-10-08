@@ -31,7 +31,7 @@ import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import { getProjectDb } from '../../database'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from '../../repositories/blueprint-repository'
-import { commitCharacterIdentities } from '../../repositories/character-roster-repository'
+import { commitCharacterIdentities, refreshCharacterIdentityProjection } from '../../repositories/character-roster-repository'
 import { proveCharacterProposal } from '../generation-character-proposal-proof'
 import { CHARACTER_DETAIL_DESCRIPTION_FIELDS, CHARACTER_STATE_TEXT_FIELDS } from '../../../src/shared/character-proposal-parser'
 import { PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL, joinPlotOutlineEntries, plotOutlinePurpose, plotOutlineRequestContract, planningTargetInstruction, renderPlotOutlineSynopsis, renderPlotOutlineRange, type PlotOutlineProgress } from '../../../src/shared/plot-outline-contract'
@@ -1840,12 +1840,13 @@ describe('durable character proposals from actual generation artifacts', () => {
     expect(() => f.owner.characterProposals.stage(f.source)).toThrow('CHARACTER_PROPOSAL_RECEIPT_INVALID')
     expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
   })
-  async function proposed() {
+  async function proposed(beforeBegin?: (f: ReturnType<typeof fixture>) => void) {
     const output = JSON.stringify({ results: ['1:1', '2:1'].map(sourceId => ({ sourceId, characterCards: [{ name: '林岚', role: 'supporting', background: '模型背景', appearance: '模型外貌', notes: `来源${sourceId}` }] })) })
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: output }); return { finishReason: 'stop', usage: null }
     })
     const f = fixture(dispatch)
+    beforeBegin?.(f)
     const run = f.owner.begin({ ...f.begin, operation: 'planning-material-character-extraction', output: 'structured-data',
       promptKeys: ['planning_material_character_extraction'], authorInputs: [0, 1].map(index => ({ id: `planning-material:${index}`, text: JSON.stringify({ fileName: `资料${index}.txt`, text: '作者资料原文' }) })) })
     const execution = await f.owner.execute({ handle: run.handle, invocationNonce: 'extract', task: { ...task, purpose: 'planning-material-character-extraction', output: 'structured-data' } })
@@ -1893,13 +1894,16 @@ describe('durable character proposals from actual generation artifacts', () => {
     expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(1)
   })
   it('maps a partially edited candidate without overwriting existing author facts', async () => {
-    const f = await proposed()
-    const seeded = commitCharacterIdentities(f.db, { approval: { operationId: 'seed-author', expectedRevision: 0,
-      action: 'author-edit', source: { kind: 'author', source: { projectId: 'project', epoch: 'epoch-1', sourceId: 'author-roster',
-        revision: 0, contentHash: textHash('作者原始角色') } } },
-      changes: [], creations: [{ selectionKey: 'seed', fields: { name: '林岚', role: 'supporting', background: '作者背景', notes: '作者笔记' } }],
-      retireIds: [], relationships: [], resolutions: [] }, () => true)
-    const existingId = seeded.created[0]!.characterId
+    let existingId = ''
+    const f = await proposed(seed => seed.db.transaction(() => {
+      const seeded = commitCharacterIdentities(seed.db, { approval: { operationId: 'seed-author', expectedRevision: 0,
+        action: 'author-edit', source: { kind: 'author', source: { projectId: 'project', epoch: 'epoch-1', sourceId: 'author-roster',
+          revision: 0, contentHash: textHash('作者原始角色') } } },
+        changes: [], creations: [{ selectionKey: 'seed', fields: { name: '林岚', role: 'supporting', background: '作者背景', notes: '作者笔记' } }],
+        retireIds: [], relationships: [], resolutions: [] }, () => true)
+      refreshCharacterIdentityProjection(seed.db)
+      existingId = seeded.created[0]!.characterId
+    }).immediate())
     const batch = f.owner.characterProposals.stage(f.source)
     const request = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'map-edited',
       selections: batch.items.map((item, index) => index === 0
@@ -2054,7 +2058,7 @@ describe('main draft persistence and batch lineage', () => {
     expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
-  it.each(['revision merge', 'author edit'])('lists completed batch history and an independent candidate after a legitimate %s', async change => {
+  it.each(['revision merge', 'author edit', 'deletion'])('lists completed batch history and an independent candidate after a legitimate %s', async change => {
     const f = drafting()
     const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
       uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
@@ -2069,6 +2073,8 @@ describe('main draft persistence and batch lineage', () => {
       RevisionRepository.mergeIntoDraft({ revisionId: revision.id, targetDraftId: saved.id,
         expectedDraftContent: saved.content, mergedContent: edited, wordCount: edited.length })
       expect(RevisionRepository.getFull(revision.id)).toMatchObject({ status: 'merged', mergedToDraftId: saved.id })
+    } else if (change === 'deletion') {
+      DraftRepository.delete(saved.id)
     } else {
       DraftRepository.updateContent(saved.id, edited, edited.length)
     }
@@ -2081,8 +2087,8 @@ describe('main draft persistence and batch lineage', () => {
     expect(reopened.readContext(generated.run.handle).draftSave).toEqual({ kind: 'changed' })
     expect(() => reopened.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
     expect(f.fixture.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE run_id=?').all(generated.run.handle.runId)).toEqual(receipts)
-    expect(DraftRepository.getFull(saved.id)?.content).toBe(edited)
-    expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(DraftRepository.getFull(saved.id)?.content).toBe(change === 'deletion' ? undefined : edited)
+    expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(change === 'deletion' ? 0 : 1)
     expect(f.dispatch).toHaveBeenCalledTimes(2)
     expect(reopened.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false, nextChapterNumber: null })])
   })
@@ -2181,7 +2187,6 @@ describe('main draft persistence and batch lineage', () => {
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
   it.each([
-    'DELETE FROM drafts',
     'UPDATE drafts SET version=version+1',
     "UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.draftCommit.contentHash','invalid')",
   ])('still rejects invalid saved history after reopen: %s', async corruption => {
@@ -2278,7 +2283,7 @@ describe('main draft persistence and batch lineage', () => {
     const condense = await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense',
       task: { ...task, purpose: 'chapter-draft-condense' } })
     const composed = f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condense.run.artifacts.at(-1)!.artifactId],
-      textHash(replacement), DRAFT_VISIBLE_TEXT_VERSION)
+      undefined, DRAFT_VISIBLE_TEXT_VERSION)
     expect(composed.text).toBe(replacement)
     const saved = f.owner.commitDraft({ ...generated.request, expectedCompositionHash: textHash(replacement) })
     expect(saved).toMatchObject({ content: replacement, contentHash: textHash(replacement) })
@@ -2480,4 +2485,25 @@ it('refuses resume after selected template bytes change across a real reopen', a
   await expect(reopened.resume(view.handle)).rejects.toThrow('GENERATION_RECOVERY_UNAUTHORIZED')
   expect(reopened.read(view.handle).handle.epoch).toBe('epoch-1')
   expect(dispatch).not.toHaveBeenCalled()
+})
+
+it('uses one OpenCode conversation header across attempts and changes it for independent roots',async()=>{
+ const f=fixture(), fetch=syntheticStream()
+ f.model.baseUrl='https://opencode.ai/zen/go/v1'
+ const run=f.owner.begin(f.begin)
+ await f.owner.execute({handle:run.handle,invocationNonce:'one',task})
+ await f.owner.execute({handle:run.handle,invocationNonce:'two',task})
+ const other=f.owner.begin({...f.begin,uiActionNonce:'independent-conversation'})
+ await f.owner.execute({handle:other.handle,invocationNonce:'one',task})
+ expect(fetch.mock.calls.map(([,options])=>(options.headers as Record<string,string>)['x-opencode-session']))
+   .toEqual([run.handle.rootActionId,run.handle.rootActionId,other.handle.rootActionId])
+})
+it('keeps the next plot-outline recovery chapter empty instead of duplicating the accepted chapter',async()=>{
+ const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:outlineEntry(1)});return {finishReason:'stop',usage:null}})
+ const run=f.owner.begin(outlineSelection(f,2))
+ await f.owner.execute({handle:run.handle,invocationNonce:'first',task:outlineTask(run.plotOutline!)})
+ acceptOutline(f.owner,run.handle)
+ const recovery=f.owner.readContext(run.handle).plotOutlineRecovery!
+ expect(recovery.draft.split(outlineEntry(1))).toHaveLength(2)
+ expect(recovery.draft).toContain('## 第2章：')
 })

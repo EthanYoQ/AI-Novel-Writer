@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { isDeepStrictEqual } from 'node:util'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import type { CharacterProposalItem, CharacterProposalSource } from '../../src/shared/character-proposal'
 import type { GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
@@ -9,6 +10,35 @@ import type { CharacterProposalProof } from './character-proposal-service'
 import type { ImportGlobalFactsReceipt } from '../../src/shared/import-global-facts'
 import { proveFinalizedCharacterGeneration } from './finalized-character-generation-proof'
 import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
+import { decodeImportInferenceJson, decodeImportInferenceWithEndpointDelta } from '../../src/services/workflows/commands/import-inference-contract'
+import { preservesStructuredJsonEvidence } from '../../src/services/workflows/structured-syntax-repair'
+
+function importCharacterEntriesFromArtifacts(db: Database.Database, runs: GenerationRunRepository, runId: string) {
+  const rows = db.prepare(`SELECT t.attempt_id,json_extract(t.usage_receipt_json,'$.purpose') AS purpose
+    FROM generation_attempts t JOIN generation_artifacts a ON a.attempt_id=t.attempt_id
+    WHERE t.run_id=? AND a.status<>'discarded' ORDER BY t.rowid`).all(runId) as { attempt_id: string; purpose: string }[]
+  const inference = rows.filter(row => row.purpose === 'import-inference')
+  const syntax = rows.filter(row => row.purpose === 'import-inference:structured-syntax-repair')
+  const endpoint = rows.filter(row => row.purpose === 'import-inference:endpoint-card-recovery')
+  if (inference.length !== 1 || syntax.length > 1 || endpoint.length > 1) return null
+  const output = (row: typeof rows[number]) => {
+    const receipt = runs.receipt(row.attempt_id), artifact = receipt.artifact
+    if (!artifact || receipt.failureCode || receipt.result?.finishReason !== 'stop'
+      || !['settled', 'unknown'].includes(receipt.attempt.status) || textHash(artifact.text) !== artifact.textHash)
+      throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
+    return artifact.text
+  }
+  let original = output(inference[0])
+  if (syntax[0]) {
+    const repaired = output(syntax[0])
+    if (!preservesStructuredJsonEvidence(original, repaired)) return null
+    original = repaired
+  }
+  const delta = endpoint[0] ? output(endpoint[0]) : null
+  try {
+    return (delta ? decodeImportInferenceWithEndpointDelta(original, delta, (_zh, en) => en) : decodeImportInferenceJson(original)).characterCards
+  } catch { return null }
+}
 
 export function proveCharacterProposal(db: Database.Database, runs: GenerationRunRepository, projectId: string,
   source: CharacterProposalSource, forWrite: boolean, assertSources: (handle: MainGenerationRunHandle, committedBlueprintChapters?: number[]) => void,
@@ -47,7 +77,29 @@ export function proveCharacterProposal(db: Database.Database, runs: GenerationRu
       return { selectionKey: `import:${index}`, sourceId: `${source.operationId}:${index}`, fields,
         relationships: relationships.map(relation => ({ targetName: relation.target, relation: relation.relation, raw: structuredClone(relation) })), rawValue: structuredClone(entry) }
     })
-    return { items, sourceHash: textHash(JSON.stringify([row.payload_hash, receipt.proposalSource.characterEntries])), provenance: null }
+    const sourceHash = textHash(JSON.stringify([row.payload_hash, receipt.proposalSource.characterEntries]))
+    const effects = db.prepare(`SELECT run_id,batch_id,state,payload_json,payload_hash FROM import_run_receipts
+      WHERE stage='global' AND kind='project-global-facts' AND json_extract(payload_json,'$.operationId')=?`).all(source.operationId) as {
+      run_id: string; batch_id: string; state: string; payload_json: string; payload_hash: string
+    }[]
+    if (effects.length !== 1) return { items, sourceHash, provenance: null }
+    const effect = effects[0], payload = JSON.parse(effect.payload_json) as import('../../src/shared/import-global-facts').ImportGlobalFactsRequest
+    const handle = payload.generationRunHandle
+    if (textHash(effect.payload_json) !== effect.payload_hash || !isDeepStrictEqual(payload.characterEntries, receipt.proposalSource.characterEntries))
+      throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
+    if (!handle) return { items, sourceHash, provenance: null }
+    const run = runs.get(handle.runId)
+    if (handle.projectId !== projectId || run.binding.projectId !== projectId || handle.rootActionId !== run.rootActionId
+      || run.binding.sourceManifest.operation !== 'import-global-facts'
+      || !isDeepStrictEqual(run.binding.sourceManifest.importSlot, { runId: effect.run_id, stage: 'global', batchId: effect.batch_id }))
+      throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
+    if (forWrite && effect.state !== 'committed') throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
+    const generated = importCharacterEntriesFromArtifacts(db, runs, run.runId)
+    if (!generated || !isDeepStrictEqual(generated, receipt.proposalSource.characterEntries)) return { items, sourceHash, provenance: null }
+    const model = run.binding.sourceManifest.modelReceipt as { modelRevision: string }
+    if (!model || !/^[a-f0-9]{64}$/u.test(model.modelRevision)) throw new Error('CHARACTER_PROPOSAL_PROVENANCE_REQUIRED')
+    return { items, sourceHash, provenance: { kind: 'generated', modelRevision: model.modelRevision,
+      source: { projectId, epoch: handle.epoch, sourceId: source.operationId, revision: 0, contentHash: sourceHash } } }
   }
   if (source.kind === 'directory') {
     if (Object.keys(source).some(key => !['kind', 'operationId'].includes(key)) || typeof source.operationId !== 'string') throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')

@@ -279,6 +279,7 @@ function successfulRevisionIpc(options: {
 }
 
 beforeEach(() => {
+  mainFixture = new ReviewRevisionRuntimeFixture(vi.fn())
   useProjectStore.setState({
     currentProject: {
       id: 'refine',

@@ -71,7 +71,7 @@ function physicalSnapshot(source: string) {
   const identity = sourceIdentity(source)
   // Installed apps may have a read-only working directory. Every external
   // snapshot owns its scratch directory and removes it after all handles close.
-  const base = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'VibeCodingScratch', 'ai-novel-writer')
+  const base = path.join(fs.realpathSync(process.env.LOCALAPPDATA || os.tmpdir()), 'VibeCodingScratch', 'ai-novel-writer')
   safeDirectory(base, true)
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'sqlite-read-')), file = path.join(root, 'snapshot.db')
@@ -247,7 +247,7 @@ export function upgradeProjectSqlite(options: { databasePath: string; registry?:
   const registry = options.registry ?? getDesktopMigrationRegistry()
   const before = probeProjectSqlite({ databasePath: options.databasePath, registry })
   if (before.schemaVersion === CURRENT_DESKTOP_SCHEMA_VERSION) return verifyProjectSqlite({ ...options, registry })
-  if (![1, 2, 3, 4, 5].includes(before.schemaVersion)) throw new Error('CANONICAL_SCHEMA_UPGRADE_UNSUPPORTED')
+  if (![1, 2, 3, 4, 5, 6].includes(before.schemaVersion)) throw new Error('CANONICAL_SCHEMA_UPGRADE_UNSUPPORTED')
   sourceFile(options.databasePath)
   const database = new Database(options.databasePath, { fileMustExist: true })
   try {

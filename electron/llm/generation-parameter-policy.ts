@@ -104,7 +104,7 @@ export function resolveGenerationParameters(
 
   return {
     temperature: usesFixedKimiTemperature ? undefined : model.temperature,
-    maxTokens: Math.min(request.maxTokens ?? Infinity, limits.userMaxOutputTokens ?? model.maxTokens,
+    maxTokens: Math.min(request.maxTokens ?? Infinity, limits.userMaxOutputTokens ?? Infinity,
       limits.modelMaxOutputTokens ?? Infinity),
     ...(request.responseFormat ? { responseFormat: request.responseFormat } : {}),
     ...(reasoningResolution.providerDirective

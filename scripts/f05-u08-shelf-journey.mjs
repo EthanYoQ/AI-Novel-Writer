@@ -239,6 +239,7 @@ async function main() {
 
     currentStep = 'U08.A05-unreadable'
     await shelf.getByRole('button', { name: `预览《${names.c}》` }).click()
+    await overview.getByText('暂时无法读取这部作品', { exact: false }).waitFor({ state: 'visible' })
     assert.match(await overview.innerText(), /暂时无法读取这部作品/)
     assert.doesNotMatch(await overview.innerText(), /100%|正文字数\s*0/)
     pass('writer-unreadable-project-unknown', 'U08.A05', 'Unreadable authorized recent project shows unavailable instead of invented zero or completion')

@@ -79,14 +79,14 @@ export interface MainGenerationOwnerDependencies {
   transferOrigin?: () => string | undefined
 }
 
-interface ProviderRequest { model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
+interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
 async function dispatchProvider(value: unknown, options: Parameters<GenerationRunServiceDependencies['dispatch']>[1]) {
-  const { model, task, plan } = value as ProviderRequest
+  const { model, task, plan, conversationId } = value as ProviderRequest
   let evidence: ProviderUsageEvidence | null = null
   let finishReason: LLMFinishReason | null = null
   let failureCode: string | null = null
   await LLMFactory.getProvider(model).generateStream(model, task.messages.map(message => ({ ...message })), {
-    ...plan.options, signal: options.signal, visibleOnly: true,
+    ...plan.options, conversationId, signal: options.signal, visibleOnly: true,
     onChunk: text => options.onVisible({ kind: 'delta', text }),
     onReasoning: options.onReasoning,
     onDiagnostics: options.onDiagnostics,
@@ -445,7 +445,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }
       if (selection.finalizationGenerationSlot) {
         const existing = finalizations.find(selection.finalizationGenerationSlot)
-        if (existing) return existing
+        if (existing && !finalizations.retryable(existing)) return existing
         if (selection.parentRootActionId) repository.activateRootForCommittedStage(selection.parentRootActionId, binding)
       }
       if (batch) repository.activateRootForCommittedStage(batch.rootHandle.rootActionId, binding)
@@ -600,7 +600,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     deps.beforeDispatch?.()
     assertCurrent()
     const receipt = await service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,
-      providerRequest: { model, task, plan } satisfies ProviderRequest, reservedTokens: plan.reservedTokens,
+      providerRequest: { model, task, plan, conversationId: run.rootActionId } satisfies ProviderRequest, reservedTokens: plan.reservedTokens,
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
       reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose,
       ...(plan.budgetDecision ? { budgetDecision: plan.budgetDecision } : {}),
@@ -742,7 +742,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   }
   const plotOutlineRecovery = (run: DurableGenerationRun, outline: PlotOutlineProgress): PlotOutlineRecovery => {
     const saved = repository.readPlotOutlineAuthorEdit(run.runId)
-    const latest = viewOf(run).candidates?.at(-1)
+    const cursor = outline.cursor
+    const currentAttempts = new Set(cursor.kind === 'request' || cursor.kind === 'stopped'
+      ? runAttempts(run.runId).filter(attempt => attempt.purpose?.startsWith(`plot-outline:chapter:${cursor.chapterNumber}:`)).map(attempt => attempt.attemptId) : [])
+    const latest = [...(viewOf(run).candidates ?? [])].reverse().find(candidate => currentAttempts.has(candidate.attemptId))
     let draft = plotOutlineRecoveryDraft(outline, latest?.text)
     let writeState: PlotOutlineRecovery['writeState'] = { kind: 'blocked', reason: 'source-changed' }
     try {
@@ -878,13 +881,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const characters = new CharacterProposalService(deps.database, deps.projectId, (source, forWrite, version) => {
     assertCurrent(); return proveCharacterProposal(deps.database, repository, deps.projectId, source, forWrite, (handle, committedBlueprintChapters) => {
       const run = requireRun(handle)
+      if (repository.budget(run.rootActionId).root.status === 'cancelled') throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+      if (source.kind === 'finalized-generation' && run.binding.sourceManifest.finalizationGenerationContextHash) return
       const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
       const projection = (binding: RunBinding) => ({ sourceManifest: binding.sourceManifest,
         fingerprint: Object.fromEntries(Object.entries(binding.fingerprint).filter(([key]) => !['contextSnapshotHash', 'chapterBriefHash'].includes(key))),
         sources: binding.sourceRefs.filter(ref => !committedBlueprintChapters?.some(chapter => ref.sourceId === `blueprint:${chapter}`))
           .map(({ epoch: _epoch, ...ref }) => { void _epoch; return ref }) })
       const matches = committedBlueprintChapters ? isDeepStrictEqual(projection(run.binding), projection(current)) : compareGenerationSourceBindings(run.binding, current)
-      if (repository.budget(run.rootActionId).root.status === 'cancelled' || !matches) throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+      if (!matches) throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
     }, version)
   })
   const imports = new ImportGeneration(deps.database, repository, deps.projectId)
@@ -1082,9 +1087,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       assertCurrent()
       if (!request || Object.keys(request).some(key => !['slot', 'modelId', 'parentRootActionId'].includes(key))) throw new Error('GENERATION_FINALIZATION_SLOT_INVALID')
       const { slot } = request, prior = finalizations.find(slot)
-      if (prior) return finalizationRecovery(prior)
+      if (prior && !finalizations.retryable(prior)) return finalizationRecovery(prior)
       const sibling = finalizations.find({ source: slot.source, stepKey: slot.stepKey === 'chapter_notes' ? 'character_cards' : 'chapter_notes' })
-      let parentRootActionId = sibling?.rootActionId, selectedModelId = sibling ? modelReceipt(sibling.binding).modelId : request.modelId
+      const predecessor = prior ?? sibling
+      let parentRootActionId = predecessor && repository.budget(predecessor.rootActionId).root.status !== 'cancelled' ? predecessor.rootActionId : undefined
+      let selectedModelId = predecessor ? modelReceipt(predecessor.binding).modelId : request.modelId
       if (request.parentRootActionId !== undefined) {
         const root = repository.budget(request.parentRootActionId).root
         if (root.operation !== 'batch-chapters' || root.projectId !== deps.projectId || parentRootActionId && parentRootActionId !== request.parentRootActionId) throw new Error('GENERATION_FINALIZATION_PARENT_INVALID')
@@ -1098,7 +1105,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const prepared = finalizedCharacters.readContext(slot.source.draftId)
       if (!isDeepStrictEqual(prepared.context.source, slot.source)) throw new Error('GENERATION_FINALIZATION_SOURCE_CHANGED')
       const characterStep = slot.stepKey === 'character_cards'
-      const view = begin({ operation: characterStep ? 'finalized-character-state' : 'finalized-chapter-notes', uiActionNonce: `finalization:${finalizationSlotKey(slot)}`,
+      const view = begin({ operation: characterStep ? 'finalized-character-state' : 'finalized-chapter-notes', uiActionNonce: `finalization:${finalizationSlotKey(slot)}${prior ? `:retry:${prior.runId}` : ''}`,
         modelId: selectedModelId, chapterNumber: slot.source.chapterNumber, selectedDraftIds: [], selectedFinalizedDraftIds: [slot.source.draftId],
         promptKeys: [characterStep ? 'update_character_cards' : 'generate_chapter_notes'], skillStages: ['review'], output: characterStep ? 'structured-data' : 'visible-text',
         authorInputs: [{ id: 'finalized-character-context', text: JSON.stringify(prepared.context) }],
@@ -1310,7 +1317,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       repository.recordDirectoryProgress(progress)
       return progress
     },
-    composeVisible: (handle: MainGenerationRunHandle, artifactIds: string[], expectedTextHash: string, algorithm?: VisibleCompositionAlgorithm) => {
+    composeVisible: (handle: MainGenerationRunHandle, artifactIds: string[], expectedTextHash: string | undefined, algorithm?: VisibleCompositionAlgorithm) => {
       if (requireRun(handle).binding.sourceManifest.operation === 'agent-round') throw new Error('GENERATION_AGENT_CONTROL_IMMUTABLE')
       reviewRevisions.assertMutable(requireRun(handle).runId)
       imports.assertMutable(requireRun(handle))

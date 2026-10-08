@@ -165,6 +165,9 @@ function ModelForm({
     usage: model.capabilities?.usage ?? false,
   }
   const verifiedCapabilities = resolveModelProfileBudgetCapabilities(model)
+  const outputLimits = [model.maxTokens, currentCapabilities.maxOutputTokens, verifiedCapabilities?.maxOutputTokens]
+    .filter((value): value is number => Number.isSafeInteger(value) && Number(value) > 0)
+  const effectiveOutputLimit = outputLimits.length ? Math.min(...outputLimits) : null
   const formatTokens = (value: number) => new Intl.NumberFormat(locale).format(value)
 
   const updateCapabilities = (next: Partial<ModelCapabilities>) => {
@@ -292,6 +295,16 @@ function ModelForm({
           />
         </div>
       </div>
+
+      {!model.purposes.includes('embedding') && <div>
+        <Label>{text('模型输出容量 Tokens', 'Model output capacity tokens')}</Label>
+        <Input type="number" min={0} aria-label={text('模型输出容量 Tokens', 'Model output capacity tokens')}
+          value={model.capabilities?.maxOutputTokens ?? ''}
+          onChange={event => updateCapabilities({ maxOutputTokens: Number(event.target.value) })} />
+        <p className="text-xs text-[var(--color-text-secondary)]" data-effective-output-limit={effectiveOutputLimit}>
+          {text(`当前有效输出额度：${effectiveOutputLimit === null ? '未设置' : formatTokens(effectiveOutputLimit)} Token。采用请求输出、模型容量与已知服务商上限中的较小值。`, `Effective output allowance: ${effectiveOutputLimit === null ? 'not configured' : formatTokens(effectiveOutputLimit)} tokens. Uses the lowest request, model capacity, or verified provider limit.`)}
+        </p>
+      </div>}
 
       <div>
         <div>

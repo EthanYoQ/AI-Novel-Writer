@@ -331,7 +331,7 @@ async function main() {
     await openProject(session.page)
     await session.page.locator('.writer-left-rail button[title="版本历史"]').click()
     await session.page.getByText('章节列表', { exact: true }).waitFor({ state: 'visible' })
-    await session.page.getByTestId('writer-editor').getByText('来源追踪').click()
+    await session.page.locator('main.writer-editor').getByText('来源追踪').click()
     const staleBadge = session.page.getByText('来源已过期', { exact: true })
     await staleBadge.waitFor({ state: 'visible' })
     assert.match(await staleBadge.getAttribute('title'), /草稿会保留.*连续性需要复核/u)
@@ -344,7 +344,7 @@ async function main() {
         screenshot: path.relative(repository, path.join(receiptDir, 'writer-version-history-stale.png')) })
 
     phase = 'writer-history-diff'
-    const historyEditor = session.page.getByTestId('writer-editor')
+    const historyEditor = session.page.locator('main.writer-editor')
     const versionRow = version => historyEditor.getByText(`v${version}`, { exact: true }).locator('..').locator('..')
     await versionRow(1).getByRole('button', { name: '对比', exact: true }).click()
     const diffDialog = session.page.getByRole('dialog', { name: /修稿合并.*v1.*当前/u })

@@ -490,3 +490,35 @@ describe('RelationshipGraph readable theme text', () => {
     ]))
   })
 })
+
+it('refits the selected center after relayout and tracks container resizing', async () => {
+  container.style.cssText = 'width: 900px; height: 500px'
+  container.className = 'relationship-resize-fixture'
+  const style = document.createElement('style')
+  style.textContent = '.relationship-resize-fixture > div { display: flex; height: 500px; } .relationship-resize-fixture > div > div { width: 600px; height: 500px; } .relationship-resize-fixture canvas { display: block; width: 100%; height: 100%; }'
+  document.head.append(style)
+  try {
+  const characters = Array.from({ length: 12 }, (_, index) => ({
+    characterId: `center-${index}`, name: `人物${index}`, role: 'supporting',
+    relationships: index === 0 ? JSON.stringify(Array.from({ length: 11 }, (_, i) => ({ target: `人物${i + 1}`, targetCharacterId: `center-${i + 1}`, relation: '同伴' }))) : '',
+  }))
+  await act(async () => root.render(<RelationshipGraph characters={characters} />))
+  const canvas = container.querySelector('canvas')!
+  const viewport = canvas.parentElement!
+  viewport.style.cssText = 'width: 600px; height: 500px'
+  canvas.style.cssText = 'width: 100%; height: 100%; display: block'
+  await vi.waitFor(() => expect(canvas.width).toBe(canvas.offsetWidth * 2))
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="以人物1为中心"]')!.click())
+  const centeredScale = scaleCalls.mock.calls.at(-1)
+  const centeredOffset = translateCalls.mock.calls.at(-3)
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="适合视图"]')!.click())
+  expect(scaleCalls.mock.calls.at(-1)).toEqual(centeredScale)
+  expect(translateCalls.mock.calls.at(-3)).toEqual(centeredOffset)
+  const oldWidth = canvas.width
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="折叠人物侧栏"]')!.click(); viewport.style.width = '800px' })
+  await vi.waitFor(() => expect(canvas.width).toBeGreaterThan(oldWidth))
+  expect(canvas.width).toBe(canvas.offsetWidth * 2)
+  viewport.style.height = '350px'
+  await vi.waitFor(() => expect(canvas.height).toBe(700))
+  } finally { style.remove() }
+})

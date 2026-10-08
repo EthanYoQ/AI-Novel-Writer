@@ -217,7 +217,7 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
       edit_instruction: '作者对选中文本的处理要求',
       selected_text: '编辑器中选中的正文',
     },
-    requiredContextVariables: ['selected_text'],
+    requiredContextVariables: ['edit_instruction', 'selected_text'],
     content: `【作者要求】
 {{edit_instruction}}
 

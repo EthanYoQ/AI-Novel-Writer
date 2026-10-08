@@ -1,15 +1,17 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import { build } from 'esbuild'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const root = path.join(repository, '.runtime/.cache/s05-electron', randomUUID())
-const roots = Object.fromEntries(['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'projects'].map(name => [name, path.join(root, name)]))
+let root = path.join(repository, '.runtime/.cache/s05-electron', randomUUID())
+let roots
 const syntheticKey = 'synthetic-owner-acceptance-no-network'
 const visibleText = '  合成正文。\n保持原有空白。  '
 const model = { id: 'synthetic-owner', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
@@ -67,6 +69,21 @@ async function captureDispatches(app, expected) {
 if (process.argv.includes('--help')) {
   process.stdout.write('Build first, then use the Electron native profile. Exercises main-owned generation public IPC in isolated roots with intercepted synthetic responses and zero real model calls.\n')
 } else {
+  if (process.platform === 'win32') {
+    assert.ok(process.env.LOCALAPPDATA, 'LOCALAPPDATA is required for short isolated Windows paths')
+    const parent = path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'an')
+    fs.mkdirSync(parent, { recursive: true })
+    root = fs.mkdtempSync(path.join(parent, 'g'))
+    fs.writeFileSync(path.join(root, '.vibe-owner.json'), JSON.stringify({ owner: 'generation-owner-startup-acceptance',
+      sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 72,
+      retainReason: 'Review isolated synthetic generation restart evidence',
+      cleanupCommand: `Remove-Item -LiteralPath '${root.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
+  }
+  roots = Object.fromEntries(['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'projects'].map(name => [name, path.join(root, name)]))
+  const bundled = await build({ entryPoints: [path.join(repository, 'electron/services/project-storage-preflight.ts')],
+    bundle: true, platform: 'node', format: 'esm', write: false })
+  const { assertProjectStoragePathSupported } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`)
+  assertProjectStoragePathSupported(path.join(roots.projects, '合成生成验收'))
   for (const [name, directory] of Object.entries(roots)) if (name !== 'canonical') fs.mkdirSync(directory, { recursive: true })
   try {
     let session = await launch(), projectPath, projectId, oldHandle, firstArtifactId, firstLedger

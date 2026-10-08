@@ -92,6 +92,7 @@ function sameTree(source: string, target: string): void {
 function hasTransferredRuntimeAuthority(databasePath: string): boolean {
   const db = new Database(databasePath, { readonly: true, fileMustExist: true })
   try {
+    if (db.prepare("SELECT 1 FROM drafts WHERE status='finalized' LIMIT 1").get()) return true
     for (const name of RUNTIME_AUTHORITY_TABLES) {
       if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) continue
       if (db.prepare(`SELECT 1 FROM "${name}" LIMIT 1`).get()) return true

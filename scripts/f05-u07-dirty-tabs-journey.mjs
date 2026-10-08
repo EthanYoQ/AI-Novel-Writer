@@ -458,12 +458,12 @@ async function main() {
         await page.locator('.writer-task-table').waitFor({ state: 'visible' })
         await page.locator('.writer-task-table > div:first-child span.font-mono.px-1.rounded').waitFor({ state: 'detached', timeout: 30_000 })
       }
-      await app?.close()
-      appClosed = Boolean(app)
     } catch (error) {
       cleanupError = String(error)
       failure ??= error
     }
+    try { await app?.close(); appClosed = Boolean(app) }
+    catch (error) { cleanupError ??= String(error); failure ??= error }
     if (server.listening) await new Promise(resolve => server.close(resolve))
   }
   const artifactHashes = { executable: fileHash(executablePath), asar: fileHash(asarPath) }

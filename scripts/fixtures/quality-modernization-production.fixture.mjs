@@ -1127,7 +1127,8 @@ test('isolated production commands persist the selected phase operations', async
       : structuredPolicy ? { policy: structuredPolicy, decode: blueprintRecoveryDecoder(target.repositoryRoot, target.arm),
         chapterNumbers: fullRun ? scene.chapters.map(entry => entry.number) : [chapter.number] } : null
     const recoveryPolicy = policyEligible ? draftRecoveryFor(request.attemptPolicy, target.arm) : null
-    const draftRecovery = recoveryPolicy ? { policy: recoveryPolicy, arm: target.arm, targetUnits: chapter.targetUnits } : null
+    const draftRecovery = recoveryPolicy ? { policy: recoveryPolicy, arm: target.arm,
+      protocolRevision: request.protocolRevision, targetUnits: chapter.targetUnits } : null
     if (recoveryPolicy) {
       const { DRAFT_GENERATION_BUDGET } = await load('src/services/workflows/commands/generate-draft.command.ts')
       assert.equal(recoveryPolicy.maxAttempts + Number(Boolean(request.attemptPolicy?.shortOutline)), DRAFT_GENERATION_BUDGET.maxAttempts, 'DRAFT_RECOVERY_BUDGET_MISMATCH')

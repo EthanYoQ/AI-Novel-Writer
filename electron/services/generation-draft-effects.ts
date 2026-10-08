@@ -39,13 +39,13 @@ export class GenerationDraftEffects {
     if (!stored) return null
     const run = this.runs.get(row.run_id), composition = this.runs.readVisibleComposition(run.runId)
     const draft = this.db.prepare('SELECT d.id,d.version,d.chapter_number,d.status,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(stored.id) as { id: number; version: number; chapter_number: number; status: string; body: string } | undefined
-    if (!draft || !composition || !isDraftVisibleTextVersion(composition.algorithm) || stored.success !== true
-      || stored.chapterNumber !== run.binding.sourceManifest.chapterNumber || stored.chapterNumber !== draft.chapter_number
-      || stored.version !== draft.version || stored.contentHash !== textHash(stored.content) || stored.contentHash !== composition.textHash
+    if (!composition || !isDraftVisibleTextVersion(composition.algorithm) || stored.success !== true
+      || stored.chapterNumber !== run.binding.sourceManifest.chapterNumber
+      || draft && (stored.chapterNumber !== draft.chapter_number || stored.version !== draft.version) || stored.contentHash !== textHash(stored.content) || stored.contentHash !== composition.textHash
       || stored.content !== composition.text || stored.batchId !== run.binding.sourceManifest.batchId
       || !isDeepStrictEqual(stored.handle, { ...handleOf(run), epoch: usage.artifactIdentity?.epoch }))
       throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
-    return { receipt: stored, matchesBody: stored.content === draft.body, draft }
+    return { receipt: stored, matchesBody: !!draft && stored.content === draft.body, draft }
   }
   private readSaveState(runId: string) {
     const commits = this.attempts(runId).map(row => this.verifiedCommit(row)).filter(item => item !== null)
@@ -93,7 +93,7 @@ export class GenerationDraftEffects {
       if (outbox && (outbox.content_hash !== textHash(outbox.content_snapshot) || outbox.chapter_number !== committed.chapterNumber))
         throw new Error('GENERATION_BATCH_FINALIZATION_CONFLICT')
       if (outbox && outbox.content_snapshot !== committed.content) {
-        if (saved.draft.status !== 'finalized' || saved.draft.body !== outbox.content_snapshot)
+        if (saved.draft?.status !== 'finalized' || saved.draft.body !== outbox.content_snapshot)
           throw new Error('GENERATION_BATCH_FINALIZATION_CONFLICT')
         sourceConflict ??= 'GENERATION_BATCH_FINALIZATION_CONFLICT'
         outbox = undefined

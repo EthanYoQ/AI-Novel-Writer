@@ -3,7 +3,7 @@ import path from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { prepareCanonicalStorageFixture } from '../../test/helpers/canonical-project-fixture'
 import { getProjectDataRoot } from '../services/project-data-locator'
-import { addChunks, closeConnection, getDocumentIntegrity, listDocuments, readPortableKnowledgeSnapshot, restorePortableKnowledgeSnapshot } from '../vector-store'
+import { addChunks, closeConnection, getConnection, getDocumentIntegrity, listDocuments, readPortableKnowledgeSnapshot, removeDocument, restorePortableKnowledgeSnapshot } from '../vector-store'
 import { clearKnowledgeBase, importDocument, importText, readDocumentCopy, reindexDocumentCopy, saveDocumentCopy, searchKnowledge, searchKnowledgeFTS } from '../knowledge-base'
 import { captureGenerationKnowledge, verifyGenerationKnowledge } from '../services/generation-knowledge-source'
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
@@ -12,11 +12,108 @@ const { generateEmbeddings } = vi.hoisted(() => ({ generateEmbeddings: vi.fn() }
 vi.mock('../embedding', () => ({ chunkText: (text: string) => [text], generateEmbeddings }))
 
 const roots: string[] = []
+function workspace() {
+  fs.mkdirSync(path.resolve('.runtime/.cache'), { recursive: true })
+  const root = fs.mkdtempSync(path.resolve('.runtime/.cache/knowledge-repair-'))
+  roots.push(root)
+  prepareCanonicalStorageFixture(root)
+  return root
+}
 afterEach(async () => {
+  vi.restoreAllMocks()
   for (const root of roots.splice(0)) {
     closeConnection(root)
     await removeDirectoryWithWindowsRetry(root)
   }
+})
+
+it('keeps chapter identity and scoped metadata across reindex and exact deletion, preserving a same-name reference', async () => {
+  const projectPath = workspace()
+  const first = await importText('chapter before', '第1章.txt', projectPath, 'openai', { baseUrl: '', apiKey: '' })
+  await addChunks(projectPath, 'reference', '第1章.txt', ['reference survives'], undefined, undefined, { corpusKind: 'reference' })
+  const before = await readDocumentCopy(first.docId!, projectPath)
+  await saveDocumentCopy(first.docId!, 'chapter after', before.contentHash!, projectPath)
+  const remove = vi.spyOn(fs, 'rmSync').mockImplementation(() => { throw new Error('EBUSY') })
+  expect(await reindexDocumentCopy(first.docId!, projectPath)).toMatchObject({ success: true, docId: first.docId })
+  expect(remove).not.toHaveBeenCalled()
+  remove.mockRestore()
+  expect(await searchKnowledgeFTS('chapter after', projectPath, 5, [1, 1])).toEqual([expect.objectContaining({ text: 'chapter after' })])
+  expect(await removeDocument(projectPath, first.docId!)).toBe(true)
+  expect(await searchKnowledgeFTS('chapter', projectPath)).toEqual([])
+  expect(await listDocuments(projectPath)).toEqual([expect.objectContaining({ id: 'reference' })])
+})
+
+it('restores native tables on reindex failure while a concurrent import waits for the same gate', async () => {
+  const projectPath = workspace()
+  generateEmbeddings.mockResolvedValue([[1, 0]])
+  const first = await importText('chapter before', 'chapter.txt', projectPath, 'openai', { baseUrl: 'fixture', apiKey: 'fixture' })
+  const before = await readDocumentCopy(first.docId!, projectPath)
+  const integrity = await getDocumentIntegrity(projectPath, first.docId!)
+  await saveDocumentCopy(first.docId!, 'chapter after', before.contentHash!, projectPath)
+  const db = await getConnection(projectPath)
+  const open = db.openTable.bind(db)
+  let fail!: () => void
+  let reached!: () => void
+  const paused = new Promise<void>(resolve => { reached = resolve })
+  const failure = new Promise<never>((_, reject) => { fail = () => reject(new Error('CATALOG_WRITE_FAILED')) })
+  vi.spyOn(db, 'openTable').mockImplementation(async (...args) => {
+    const table = await open(...args)
+    if (args[0] === 'documents') vi.spyOn(table, 'update').mockImplementation(() => { reached(); return failure })
+    return table
+  })
+  const rebuild = reindexDocumentCopy(first.docId!, projectPath)
+  await paused
+  let imported = false
+  const concurrent = addChunks(projectPath, 'unrelated', 'other.txt', ['unrelated retained']).then(result => { imported = true; return result })
+  await Promise.resolve()
+  expect(imported).toBe(false)
+  fail()
+  expect(await rebuild).toMatchObject({ success: false, error: 'CATALOG_WRITE_FAILED' })
+  expect(await concurrent).toMatchObject({ success: true })
+  vi.restoreAllMocks()
+  expect(await getDocumentIntegrity(projectPath, first.docId!)).toEqual({ ...integrity,
+    embeddingGenerations: integrity!.embeddingGenerations.map(generation => ({ ...generation, status: 'inactive' })),
+  })
+  expect(await readDocumentCopy(first.docId!, projectPath)).toMatchObject({ content: 'chapter after', indexStatus: 'stale' })
+  expect(await searchKnowledgeFTS('chapter', projectPath)).toEqual([])
+  expect(await searchKnowledgeFTS('unrelated', projectPath)).toHaveLength(1)
+  const vectorTableName = (await db.tableNames()).find(name => name.startsWith('chunks__space_'))!
+  const table = await open(vectorTableName)
+  try { expect((await table.query().toArray()).map(row => row.text)).toEqual(['chapter before']) }
+  finally { table.close() }
+  expect(await reindexDocumentCopy(first.docId!, projectPath)).toMatchObject({ success: true, docId: first.docId })
+  expect((await readPortableKnowledgeSnapshot(getProjectDataRoot(projectPath))).documents).toHaveLength(2)
+})
+
+it('reports the committed import as successful when superseded copy cleanup fails', async () => {
+  const projectPath = workspace()
+  await importText('old text', 'same.txt', projectPath, 'openai', { baseUrl: '', apiKey: '' })
+  const remove = vi.spyOn(fs, 'rmSync').mockImplementation(() => { throw new Error('EBUSY') })
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const current = await importText('new text', 'same.txt', projectPath, 'openai', { baseUrl: '', apiKey: '' })
+  expect(current).toMatchObject({ success: true, chunkCount: 1 })
+  expect(warning).toHaveBeenCalledWith(expect.stringContaining('旧文档清理未完成'), expect.any(Error))
+  remove.mockRestore()
+  expect(await readDocumentCopy(current.docId!, projectPath)).toMatchObject({ available: true, content: 'new text' })
+  expect((await readPortableKnowledgeSnapshot(getProjectDataRoot(projectPath))).documents).toEqual([expect.objectContaining({ docId: current.docId })])
+})
+
+it('recovers only same-source orphan groups during explicit reimport', async () => {
+  const projectPath = workspace()
+  await addChunks(projectPath, 'old', 'same.txt', ['old'], undefined, undefined, { corpusKind: 'reference', replacementMode: 'stable-id' })
+  await addChunks(projectPath, 'current', 'same.txt', ['current'], undefined, undefined, { corpusKind: 'reference', replacementMode: 'stable-id' })
+  await addChunks(projectPath, 'unknown-orphan', 'unrelated.txt', ['unknown data'], undefined, undefined, { corpusKind: 'reference', replacementMode: 'stable-id' })
+  const db = await getConnection(projectPath)
+  const documents = await db.openTable('documents')
+  try { await documents.delete("id = 'old' OR id = 'unknown-orphan'") }
+  finally { documents.close() }
+  await expect(readPortableKnowledgeSnapshot(getProjectDataRoot(projectPath))).rejects.toThrow('PORTABLE_KNOWLEDGE_INVALID')
+  expect(await addChunks(projectPath, 'new', 'same.txt', ['new'], undefined, undefined, { corpusKind: 'reference' })).toMatchObject({ success: true })
+  expect(await searchKnowledgeFTS('old', projectPath)).toEqual([])
+  expect(await searchKnowledgeFTS('unknown data', projectPath)).toHaveLength(1)
+  await expect(readPortableKnowledgeSnapshot(getProjectDataRoot(projectPath))).rejects.toThrow('PORTABLE_KNOWLEDGE_INVALID')
+  await removeDocument(projectPath, 'unknown-orphan')
+  expect((await readPortableKnowledgeSnapshot(getProjectDataRoot(projectPath))).documents).toEqual([expect.objectContaining({ docId: 'new' })])
 })
 
 it('does not reconstruct a full original from legacy retrieval chunks', async () => {
@@ -100,7 +197,7 @@ it('edits only the project copy and excludes stale text from search and generati
 
     const rebuilt = await reindexDocumentCopy(docId, projectPath)
     expect(rebuilt.success).toBe(true)
-    expect(rebuilt.docId).not.toBe(docId)
+    expect(rebuilt.docId).toBe(docId)
     expect(await listDocuments(projectPath)).toEqual([expect.objectContaining({ id: rebuilt.docId })])
     expect(fs.readdirSync(path.join(getProjectDataRoot(projectPath), 'knowledge-copies'))).toHaveLength(1)
     expect(await readDocumentCopy(rebuilt.docId!, projectPath)).toMatchObject({ content: edited, edited: true, indexStatus: 'current' })

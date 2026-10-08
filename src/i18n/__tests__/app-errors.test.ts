@@ -19,3 +19,8 @@ describe('localized application errors', () => {
     expect(appErrorMessage('en-US', new Error('disk full'))).toBe('Something went wrong: disk full')
   })
 })
+
+it.each(['KNOWLEDGE_BASE_NATIVE_UNAVAILABLE','LEGACY_VECTOR_MIGRATION_BLOCKED'])('maps knowledge preparation IPC error %s without exposing internal details', code => {
+ expect(appErrorMessage('en-US',new Error(`Error invoking remote method 'generation:prepare-draft-context': Error: ${code}`)))
+   .toBe(appErrorMessage('en-US',{errorCode:code}))
+})

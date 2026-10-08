@@ -8,7 +8,6 @@ import { closeProjectDatabase, createProjectDatabase, getProjectDb, initProjectD
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import {
   DEFAULT_PORTABLE_ARCHIVE_LIMITS,
-  PORTABLE_FIELD_POLICY_COUNTS,
   assertPortableSourceSchema,
   getPortableFieldPolicy,
   listPortableFieldPolicyKeys,
@@ -76,8 +75,7 @@ describe('portable v7 field policy', () => {
     const fieldCount = tables.reduce((count, table) => count
       + (database.prepare(`PRAGMA table_info("${table.name}")`).all() as unknown[]).length, 0)
     expect({ tables: tables.length, fields: fieldCount }).toEqual({ tables: 51, fields: 481 })
-    expect(PORTABLE_FIELD_POLICY_COUNTS).toEqual({ tables: 51, fields: 481 })
-    expect(() => assertPortableSourceSchema(database)).not.toThrow()
+    expect(assertPortableSourceSchema(database)).toEqual({ tables: 51, fields: 481 })
     expect(getPortableFieldPolicy('review_cycle_merges', 'cycle_id').disposition).toBe('historical-nonreplayable')
     expect(getPortableFieldPolicy('review_cycle_merges', 'body').disposition).toBe('historical-nonreplayable')
     expect(listPortableFieldPolicyKeys()).toContain('blueprint_commit_operations.operation_id')
@@ -106,7 +104,10 @@ describe('portable v7 field policy', () => {
     const baseline = new Set(signed.fieldDispositions.map(field => `${field.table}.${field.field}`))
     const baselineTables = new Set(signed.fieldDispositions.map(field => field.table))
     const added = listPortableFieldPolicyKeys().filter(key => !baseline.has(key))
-    expect(added).toHaveLength(125)
+    expect(added).toHaveLength(126)
+    expect(getPortableFieldPolicy('characters', 'avatar')).toMatchObject({
+      origin: 'registered-donor', disposition: 'exclude-machine-authority', signedDisposition: null,
+    })
     const delta = added.filter(key => getPortableFieldPolicy(...key.split('.') as [string, string]).origin === 'm01-m05-delta')
     expect(delta).toHaveLength(123)
     expect(new Set(delta.map(key => key.split('.')[0]).filter(table => !baselineTables.has(table!))).size).toBe(15)
@@ -135,13 +136,14 @@ describe('portable v7 field policy', () => {
     expect(() => getPortableFieldPolicy('future_table', 'opaque_json')).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
   })
 
-  it.each(['extra-table', 'extra-field', 'higher-version', 'lower-version', 'legacy-v6'] as const)(
+  it.each(['extra-table', 'extra-field', 'unregistered-avatar', 'higher-version', 'lower-version', 'legacy-v6'] as const)(
     '%s在只读门拒绝且不再改源DB', mode => {
       const project = fixture()
       const mutate = new Database(project.databasePath)
       try {
         if (mode === 'extra-table') mutate.exec('CREATE TABLE future_portable_data(id TEXT)')
         if (mode === 'extra-field') mutate.exec('ALTER TABLE contents ADD COLUMN future_payload TEXT')
+        if (mode === 'unregistered-avatar') mutate.exec('ALTER TABLE characters ADD COLUMN avatar TEXT')
         if (mode === 'higher-version') mutate.pragma('user_version = 8')
         if (mode === 'lower-version') mutate.pragma('user_version = 5')
         if (mode === 'legacy-v6') {

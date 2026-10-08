@@ -85,7 +85,7 @@ interface LayoutState {
   closeChapterCreation: () => void
 }
 
-export const useLayoutStore = create<LayoutState>()((set) => ({
+export const useLayoutStore = create<LayoutState>()((set, get) => ({
   // 默认值
   sidebarOpen: true,
   sidebarView: 'project',
@@ -127,14 +127,24 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
     }),
   setSidebarWidth: (width) => set({ sidebarWidth: Math.max(200, Math.min(500, width)) }),
 
-  toggleAIPanel: () => set((s) => ({ aiPanelOpen: !s.aiPanelOpen, immersive: false, preImmersivePanels: null })),
+  toggleAIPanel: () => {
+    if (get().sidebarView === 'home') {
+      get().openRightPanel(get().rightView)
+      return
+    }
+    set((s) => ({ aiPanelOpen: !s.aiPanelOpen, immersive: false, preImmersivePanels: null }))
+  },
   setAIPanelOpen: (open) => set({ aiPanelOpen: open, ...(open ? { immersive: false, preImmersivePanels: null } : {}) }),
   setAIPanelWidth: (width) => set({ aiPanelWidth: Math.max(260, Math.min(600, width)) }),
   setRightView: (view) => set({ rightView: view }),
-  openRightPanel: (view) => set({ aiPanelOpen: true, rightView: view, immersive: false, preImmersivePanels: null }),
+  openRightPanel: (view) => {
+    if (get().sidebarView === 'home') get().setSidebarView('project')
+    set({ aiPanelOpen: true, rightView: view, immersive: false, preImmersivePanels: null })
+  },
 
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen, immersive: false, preImmersivePanels: null })),
-  setBottomTab: (tab) =>
+  setBottomTab: (tab) => {
+    if (get().sidebarView === 'home') get().setSidebarView('project')
     set((s) => {
       const sameButton = s.bottomTab === tab && s.activeRailItem === tab
       return {
@@ -144,9 +154,13 @@ export const useLayoutStore = create<LayoutState>()((set) => ({
         immersive: false,
         preImmersivePanels: null,
       }
-    }),
+    })
+  },
   setBottomPanelHeight: (height) => set({ bottomPanelHeight: Math.max(100, Math.min(500, height)) }),
-  openBottomTab: (tab) => set({ bottomPanelOpen: true, bottomTab: tab, activeRailItem: tab, immersive: false, preImmersivePanels: null }),
+  openBottomTab: (tab) => {
+    if (get().sidebarView === 'home') get().setSidebarView('project')
+    set({ bottomPanelOpen: true, bottomTab: tab, activeRailItem: tab, immersive: false, preImmersivePanels: null })
+  },
   toggleImmersion: () => set((s) => s.immersive
     ? { ...s.preImmersivePanels, immersive: false, preImmersivePanels: null }
     : {

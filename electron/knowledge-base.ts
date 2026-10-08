@@ -21,6 +21,7 @@ import {
 } from './services/knowledge-base-migration-error'
 import {
   addChunks,
+  replaceDocumentChunks,
   removeDocument as removeDocFromStore,
   clearAll as clearKnowledgeStore,
   searchWithScope as storeSearchWithScope,
@@ -276,17 +277,10 @@ export async function reindexDocumentCopy(docId: string, projectPath: string): P
     if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { success: false, error: '完整原文不可用，请重新导入' }
     const copy = readKnowledgeCopy(getProjectDataRoot(projectPath), docId)
     if (!copy?.content.trim()) return { success: false, error: '项目副本为空，无法重建索引' }
-    const newDocId = randomUUID()
     const chunks = chunkText(copy.content, normalizeEmbeddingOptions(undefined).chunkSize, normalizeEmbeddingOptions(undefined).chunkOverlap)
-    writeKnowledgeCopy(getProjectDataRoot(projectPath), newDocId, { ...copy, indexedHash: copyHash(copy.content), indexDirty: false })
-    const result = await addChunks(projectPath, newDocId, doc.fileName, chunks, undefined,
-      `${KNOWLEDGE_COPY_MARKER}${newDocId}`, { corpusKind: doc.corpusKind, replacementMode: 'stable-id' })
+    const result = await replaceDocumentChunks(projectPath, docId, chunks, copy)
     if (!result.success) return { success: false, error: result.error }
-    if (!await removeDocFromStore(projectPath, docId)) {
-      await removeDocFromStore(projectPath, newDocId)
-      return { success: false, error: '旧索引清理失败，重建未完成' }
-    }
-    return { success: true, docId: newDocId, chunkCount: chunks.length }
+    return { success: true, docId, chunkCount: result.chunkCount }
   })
 }
 

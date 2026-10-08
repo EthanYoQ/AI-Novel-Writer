@@ -3,6 +3,10 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 
+import { CHARACTER_STATE_TEXT_FIELDS } from '../../src/shared/character-roster'
+import { readPortableCurrentAuthority } from './portable-current-authority'
+import { parsePortableRuntimeFreeze, readPortableRuntimeFreeze } from './portable-runtime-freeze'
+
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
 import {
   CANONICAL_PROJECT_DATABASE,
@@ -11,12 +15,10 @@ import {
 } from '../../src/shared/project-format'
 import { readPortableCharacterAvatarRows } from '../repositories/character-asset-repository'
 import {
-  PORTABLE_FIELD_POLICY_COUNTS,
   PORTABLE_PROJECT_FORMAT_VERSION,
   PORTABLE_SOURCE_SCHEMA_VERSION,
   assertPortableSourceSchema,
   getPortableFieldPolicy,
-  listPortableFieldPolicyKeys,
   portablePathKey,
   type PortableEntryDisposition,
   type PortableOmissionReason,
@@ -76,7 +78,7 @@ const REVIEW_FINGERPRINT_FIELDS = [
 const REVIEW_CONTEXT_FIELDS = [
   'version', 'operation', 'source', 'sourceHash', 'config', 'writingLanguage', 'uiLocale', 'authorInputs',
   'characterStates', 'worldbuilding', 'history', 'blueprints', 'frozenGoals', 'preflightFindings',
-  'confirmation', 'recheck',
+  'confirmation', 'recheck', 'predecessor',
 ] as const
 const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   blueprint_character_sync_operations: ['operation_id'],
@@ -405,20 +407,98 @@ function reviewSource(value: unknown): Record<string, unknown> {
 }
 
 function reviewRecheck(value: unknown): void {
-  const recheck = object(value, ['version', 'cycleId', 'comparisonVersion', 'mergedHash', 'findingSetHash', 'findings'])
-  if (Object.keys(recheck).length !== 6 || (recheck.version !== 1 && recheck.version !== 2)) fail('PORTABLE_UNSAFE_PROJECTION')
+  const recheck = object(value, ['version', 'cycleId', 'comparisonVersion', 'mergedHash', 'findingSetHash', 'findings', 'sourceContent'])
+  if (recheck.version !== 1 && recheck.version !== 2) fail('PORTABLE_UNSAFE_PROJECTION')
+  reviewTextFields(recheck, ['sourceContent'])
   safeId(recheck.cycleId)
   safeInteger(recheck.comparisonVersion, 1)
   contentHash(recheck.mergedHash)
   contentHash(recheck.findingSetHash)
   for (const value of reviewArray(recheck.findings)) {
     const finding = object(value, ['findingId', 'targetId', 'category', 'kind', 'problem', 'expected',
-      'sourceSpan', 'occurrence', 'sourceExcerpt'])
+      'sourceSpan', 'occurrence', 'sourceExcerpt', 'mustShow'])
     reviewTextFields(finding, ['findingId', 'targetId', 'category', 'kind', 'problem', 'expected', 'sourceExcerpt'])
-    safeInteger(finding.occurrence)
-    const span = object(finding.sourceSpan, ['start', 'end', 'unit'])
-    reviewIntegerFields(span, ['start', 'end'])
-    if (span.unit !== 'utf16-code-unit') fail('PORTABLE_UNSAFE_PROJECTION')
+    if (finding.mustShow !== undefined && finding.mustShow !== true) fail('PORTABLE_UNSAFE_PROJECTION')
+    if (finding.occurrence !== undefined) safeInteger(finding.occurrence)
+    if (finding.sourceSpan !== undefined) {
+      const span = object(finding.sourceSpan, ['start', 'end', 'unit'])
+      const start = safeInteger(span.start), end = safeInteger(span.end)
+      if (end < start || span.unit !== 'utf16-code-unit') fail('PORTABLE_UNSAFE_PROJECTION')
+    }
+  }
+}
+
+function reviewHistoryItem(value: unknown): void {
+  const item = object(value, ['draftId', 'chapterNumber', 'chapterTitle', 'content', 'source', 'projection', 'identity'])
+  reviewIntegerFields(item, ['draftId', 'chapterNumber'])
+  reviewTextFields(item, ['chapterTitle', 'content'])
+  if (item.source !== undefined) {
+    const source = object(item.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash'])
+    reviewIntegerFields(source, ['draftId', 'chapterNumber'])
+    reviewTextFields(source, ['finalizationId'])
+    contentHash(source.contentHash)
+  }
+  if (item.identity !== undefined) {
+    const identity = object(item.identity, ['projectId', 'sourceId', 'revision', 'contentHash', 'provenance'])
+    reviewTextFields(identity, ['projectId', 'sourceId', 'provenance'])
+    reviewIntegerFields(identity, ['revision'])
+    contentHash(identity.contentHash)
+  }
+  if (item.projection !== undefined) {
+    const projection = object(item.projection, ['draftId', 'currentFinalizedDraftId', 'chapterNumber',
+      'chapterTitle', 'chapterNotes', 'facts', 'characterStateCandidates', 'source', 'sourceStatus'])
+    reviewIntegerFields(projection, ['draftId', 'currentFinalizedDraftId', 'chapterNumber'])
+    reviewTextFields(projection, ['chapterTitle', 'chapterNotes', 'sourceStatus'])
+    if (projection.source !== undefined) {
+      const source = object(projection.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash'])
+      reviewIntegerFields(source, ['draftId', 'chapterNumber'])
+      reviewTextFields(source, ['finalizationId'])
+      contentHash(source.contentHash)
+    }
+    if (projection.facts !== undefined) for (const factValue of reviewArray(projection.facts)) {
+      const fact = object(factValue, ['category', 'entities', 'statement', 'sourceChapter', 'evidence', 'characterRefs'])
+      reviewTextFields(fact, ['category', 'statement', 'evidence'])
+      reviewIntegerFields(fact, ['sourceChapter'])
+      reviewArray(fact.entities).forEach(item => safeString(item))
+      if (fact.characterRefs !== undefined) for (const refValue of reviewArray(fact.characterRefs)) {
+        const ref = object(refValue, ['characterId', 'displayNameSnapshot'])
+        reviewTextFields(ref, ['characterId', 'displayNameSnapshot'])
+      }
+    }
+    if (projection.characterStateCandidates !== undefined) {
+      for (const candidateValue of reviewArray(projection.characterStateCandidates)) {
+        const candidate = object(candidateValue, ['characterId', 'characterName', 'field', 'value', 'evidence',
+          'selectionKey', 'displayName', 'rawValue', 'reason', 'candidateKey', 'source',
+          'expectedFieldRevision', 'expectedFieldValueHash'])
+        reviewTextFields(candidate, ['characterId', 'characterName', 'field', 'value', 'selectionKey',
+          'displayName', 'reason', 'candidateKey', 'expectedFieldValueHash'])
+        if (candidate.rawValue !== undefined) {
+          if (typeof candidate.rawValue === 'string') safeString(candidate.rawValue)
+          else {
+            const update = object(candidate.rawValue, ['characterId', 'currentState', 'evidence'])
+            safeId(update.characterId)
+            const state = object(update.currentState, CHARACTER_STATE_TEXT_FIELDS)
+            reviewTextFields(state, CHARACTER_STATE_TEXT_FIELDS)
+            const evidence = object(update.evidence, ['start', 'end', 'text'])
+            const start = safeInteger(evidence.start), end = safeInteger(evidence.end)
+            if (end <= start || Object.keys(state).length === 0) fail('PORTABLE_UNSAFE_PROJECTION')
+            safeString(evidence.text)
+          }
+        }
+        reviewIntegerFields(candidate, ['expectedFieldRevision'])
+        if (candidate.evidence !== undefined) {
+          const evidence = object(candidate.evidence, ['start', 'end', 'text'])
+          reviewIntegerFields(evidence, ['start', 'end'])
+          reviewTextFields(evidence, ['text'])
+        }
+        if (candidate.source !== undefined) {
+          const source = object(candidate.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash'])
+          reviewIntegerFields(source, ['draftId', 'chapterNumber'])
+          reviewTextFields(source, ['finalizationId'])
+          contentHash(source.contentHash)
+        }
+      }
+    }
   }
 }
 
@@ -442,66 +522,8 @@ function assertReviewContext(value: unknown): Record<string, unknown> {
     const input = object(value, ['id', 'text'])
     reviewTextFields(input, ['id', 'text'])
   }
-  for (const value of reviewArray(context.history)) {
-    const item = object(value, ['draftId', 'chapterNumber', 'chapterTitle', 'content', 'source', 'projection', 'identity'])
-    reviewIntegerFields(item, ['draftId', 'chapterNumber'])
-    reviewTextFields(item, ['chapterTitle', 'content'])
-    if (item.source !== undefined) {
-      const source = object(item.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash'])
-      reviewIntegerFields(source, ['draftId', 'chapterNumber'])
-      reviewTextFields(source, ['finalizationId'])
-      contentHash(source.contentHash)
-    }
-    if (item.identity !== undefined) {
-      const identity = object(item.identity, ['projectId', 'sourceId', 'revision', 'contentHash', 'provenance'])
-      reviewTextFields(identity, ['projectId', 'sourceId', 'provenance'])
-      reviewIntegerFields(identity, ['revision'])
-      contentHash(identity.contentHash)
-    }
-    if (item.projection !== undefined) {
-      const projection = object(item.projection, ['draftId', 'currentFinalizedDraftId', 'chapterNumber',
-        'chapterTitle', 'chapterNotes', 'facts', 'characterStateCandidates', 'source', 'sourceStatus'])
-      reviewIntegerFields(projection, ['draftId', 'currentFinalizedDraftId', 'chapterNumber'])
-      reviewTextFields(projection, ['chapterTitle', 'chapterNotes', 'sourceStatus'])
-      if (projection.source !== undefined) {
-        const source = object(projection.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash'])
-        reviewIntegerFields(source, ['draftId', 'chapterNumber'])
-        reviewTextFields(source, ['finalizationId'])
-        contentHash(source.contentHash)
-      }
-      if (projection.facts !== undefined) for (const factValue of reviewArray(projection.facts)) {
-        const fact = object(factValue, ['category', 'entities', 'statement', 'sourceChapter', 'evidence', 'characterRefs'])
-        reviewTextFields(fact, ['category', 'statement', 'evidence'])
-        reviewIntegerFields(fact, ['sourceChapter'])
-        reviewArray(fact.entities).forEach(item => safeString(item))
-        if (fact.characterRefs !== undefined) for (const refValue of reviewArray(fact.characterRefs)) {
-          const ref = object(refValue, ['characterId', 'displayNameSnapshot'])
-          reviewTextFields(ref, ['characterId', 'displayNameSnapshot'])
-        }
-      }
-      if (projection.characterStateCandidates !== undefined) {
-        for (const candidateValue of reviewArray(projection.characterStateCandidates)) {
-          const candidate = object(candidateValue, ['characterId', 'characterName', 'field', 'value', 'evidence',
-            'selectionKey', 'displayName', 'rawValue', 'reason', 'candidateKey', 'source',
-            'expectedFieldRevision', 'expectedFieldValueHash'])
-          reviewTextFields(candidate, ['characterId', 'characterName', 'field', 'value', 'selectionKey',
-            'displayName', 'reason', 'candidateKey', 'expectedFieldValueHash', 'rawValue'])
-          reviewIntegerFields(candidate, ['expectedFieldRevision'])
-          if (candidate.evidence !== undefined) {
-            const evidence = object(candidate.evidence, ['start', 'end', 'text'])
-            reviewIntegerFields(evidence, ['start', 'end'])
-            reviewTextFields(evidence, ['text'])
-          }
-          if (candidate.source !== undefined) {
-            const source = object(candidate.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash'])
-            reviewIntegerFields(source, ['draftId', 'chapterNumber'])
-            reviewTextFields(source, ['finalizationId'])
-            contentHash(source.contentHash)
-          }
-        }
-      }
-    }
-  }
+  reviewArray(context.history).forEach(reviewHistoryItem)
+  if (context.predecessor !== undefined) reviewHistoryItem(context.predecessor)
   for (const value of reviewArray(context.blueprints)) {
     const blueprint = object(value, ['chapterNumber', 'title', 'role', 'purpose', 'keyEvents',
       'characters', 'suspenseHook', 'userGuidance', 'notes'])
@@ -586,7 +608,7 @@ function projectReviewArtifactRef(value: unknown): Record<string, unknown> {
 }
 
 function projectReviewRecheckReceipt(value: unknown): Record<string, unknown> {
-  const receipt = object(value, ['version', 'cycleId', 'comparisonVersion', 'mergedHash', 'findingSetHash', 'findings'])
+  const receipt = object(value, ['version', 'cycleId', 'comparisonVersion', 'mergedHash', 'findingSetHash', 'findings', 'sourceContent'])
   if (Object.keys(receipt).length !== 6 || (receipt.version !== 1 && receipt.version !== 2)) fail('PORTABLE_UNSAFE_PROJECTION')
   return { version: receipt.version, cycleId: safeId(receipt.cycleId),
     comparisonVersion: safeInteger(receipt.comparisonVersion, 1), mergedHash: contentHash(receipt.mergedHash),
@@ -789,7 +811,7 @@ export function sanitizePortableDatabase(databasePath: string): {
   try {
     db.pragma('foreign_keys = ON')
     db.pragma('secure_delete = ON')
-    assertPortableSourceSchema(db)
+    const sourceSchema = assertPortableSourceSchema(db)
     const avatarRows = readPortableCharacterAvatarRows(db)
     const reviewRoots = new Set((db.prepare('SELECT root_action_id FROM review_cycles').all() as Array<{
       root_action_id: string }>).map(row => row.root_action_id))
@@ -799,7 +821,11 @@ export function sanitizePortableDatabase(databasePath: string): {
       if ('recordId' in row) safeId(row.recordId)
       if ('characterId' in row) safeId(row.characterId)
       if ('candidateCharacterIds' in row) row.candidateCharacterIds.forEach(safeId)
-      if ('sourceReference' in row) portablePathKey(row.sourceReference)
+      if ('sourceReference' in row) {
+        const provenance = /^(?:character-delete|runtime-replace|runtime-remove):(.+)$/u.exec(row.sourceReference)
+        if (provenance) safeId(provenance[1])
+        else portablePathKey(row.sourceReference)
+      }
       if ('sourceRelativePath' in row) portablePathKey(row.sourceRelativePath)
       if ('relativePath' in row) portablePathKey(row.relativePath)
     }
@@ -861,9 +887,7 @@ export function sanitizePortableDatabase(databasePath: string): {
           }
         }
       }
-      if (tables.length !== PORTABLE_FIELD_POLICY_COUNTS.tables
-        || accountedFields !== PORTABLE_FIELD_POLICY_COUNTS.fields
-        || listPortableFieldPolicyKeys().length !== accountedFields) fail('PORTABLE_UNSAFE_PROJECTION')
+      if (tables.length !== sourceSchema.tables || accountedFields !== sourceSchema.fields) fail('PORTABLE_UNSAFE_PROJECTION')
     }).immediate()
     db.exec('VACUUM')
     db.pragma('wal_checkpoint(TRUNCATE)')
@@ -992,8 +1016,11 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
     recordOwnedFile(attempt, sourceSnapshotPath)
     const sourceSnapshot = new BetterSqlite(sourceSnapshotPath, { readonly: true, fileMustExist: true })
     let avatarRows: ReturnType<typeof readPortableCharacterAvatarRows>
+    let sourceSchema: ReturnType<typeof assertPortableSourceSchema>
+    const sourceFreeze = readPortableRuntimeFreeze(sourceRoot)
     try {
-      assertPortableSourceSchema(sourceSnapshot)
+      sourceSchema = assertPortableSourceSchema(sourceSnapshot)
+      if (sourceFreeze.active) readPortableCurrentAuthority({ database: sourceSnapshot, projectStorageRoot, projectId: canonicalManifest.projectId })
       avatarRows = readPortableCharacterAvatarRows(sourceSnapshot)
     } finally { sourceSnapshot.close() }
     recordOwnedFileIfPresent(attempt, `${sourceSnapshotPath}-wal`)
@@ -1030,6 +1057,7 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
     try {
       transferAuthority = createPortableTransferAuthority({
         database: portableDatabase,
+        freeze: sourceFreeze,
         originProjectId: canonicalManifest.projectId,
         snapshotGeneration,
         portableDatabaseSha256,
@@ -1082,6 +1110,7 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
       avatarReferenceProjections,
     }
     const historyBytes = Buffer.from(stableJson(historyDocument), 'utf8')
+    parsePortableRuntimeFreeze(historyBytes)
     const historyPath = path.join(attemptRoot, 'portable-runtime-freeze.json')
     writePrivateFile(historyPath, historyBytes)
     recordOwnedFile(attempt, historyPath)
@@ -1175,8 +1204,8 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
       sourceEvidence: {
         schemaVersion: firstEvidence.schemaVersion,
         schemaFingerprint: firstEvidence.fingerprint,
-        tableCount: PORTABLE_FIELD_POLICY_COUNTS.tables,
-        fieldCount: PORTABLE_FIELD_POLICY_COUNTS.fields,
+        tableCount: sourceSchema.tables,
+        fieldCount: sourceSchema.fields,
       },
       entryCount: archiveReceipt.entryCount,
       requiresRuntimeFreezeGuard: true,

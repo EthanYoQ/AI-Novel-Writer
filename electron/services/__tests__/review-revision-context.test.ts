@@ -147,3 +147,15 @@ it('当前投影提供预检事实，失效或 legacy 投影只保留同一原�
   f.db.exec("UPDATE summary_snapshots SET source_finalization_id='',source_content_hash=''")
   expect(f.capture().history[0]!.projection).toBeUndefined()
 })
+
+it('accepts a reviewed current draft and same-hash archived predecessor, but refuses changed history or newer authority', () => {
+ const f=fixture()
+ f.db.exec("UPDATE drafts SET status='reviewed' WHERE id=1; INSERT INTO contents(id,body) VALUES(2,'前驱正文'); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(2,1,1,'archived',2)")
+ f.request.expectedDraft.status='reviewed'
+ f.db.prepare('UPDATE drafts SET source_dependencies=? WHERE id=1').run(JSON.stringify([{kind:'candidate',draftId:2,contentHash:textHash('前驱正文')}]))
+ expect(f.capture().predecessor?.content).toBe('前驱正文')
+ f.db.prepare('UPDATE contents SET body=? WHERE id=2').run('作者修改')
+ expect(f.capture).toThrow('GENERATION_REVIEW_HISTORY_CHANGED')
+ f.db.exec("UPDATE contents SET body='前驱正文' WHERE id=2; INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(2,2,'reviewed',1)")
+ expect(f.capture).toThrow('GENERATION_REVIEW_SOURCE_CHANGED')
+})

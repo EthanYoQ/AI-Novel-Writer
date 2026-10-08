@@ -5,7 +5,7 @@
 import { useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, Users, RefreshCw, Plus, Search } from 'lucide-react'
 import { useProjectStore } from '../../../stores/project-store'
-import { useCharacterStore } from '../../../stores/character-store'
+import { characterSelectionKey, useCharacterStore } from '../../../stores/character-store'
 import { Button } from '../../ui/Button'
 import { Input } from '../../ui/Input'
 import { EmptyState } from '../../ui/EmptyState'
@@ -106,17 +106,17 @@ export default function CharactersView() {
       <div className="flex-1 overflow-y-auto p-1">
         {pageCharacters.map((c) => (
           <div
-            key={c.characterId ?? c.name}
+            key={characterSelectionKey(c, characters.indexOf(c))}
             data-character-id={c.characterId}
-            role="button" tabIndex={0} aria-pressed={selectedId === c.characterId}
-            onKeyDown={event => { if (event.key === 'Enter') setSelectedId(c.characterId ?? null) }}
+            role="button" tabIndex={0} aria-pressed={selectedId === characterSelectionKey(c, characters.indexOf(c))}
+            onKeyDown={event => { if (event.key === 'Enter') setSelectedId(characterSelectionKey(c, characters.indexOf(c))) }}
             className={cn(
               'px-2.5 py-1.5 rounded-md text-xs cursor-pointer mb-0.5',
-              selectedId === c.characterId
+              selectedId === characterSelectionKey(c, characters.indexOf(c))
                 ? 'bg-[var(--color-active)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-hover)]'
             )}
-            onClick={() => setSelectedId(c.characterId ?? null)}
+            onClick={() => setSelectedId(characterSelectionKey(c, characters.indexOf(c)))}
           >
             <div className="flex items-center gap-2">
               {c.characterId && avatarUrls[c.characterId] ? (

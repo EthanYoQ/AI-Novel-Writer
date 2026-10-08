@@ -37,6 +37,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   db.exec("INSERT INTO project_core(id,project_name) VALUES('main','合成定稿'); INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
   FinalizationRepository.commit({ finalizationId: 'finalized-1', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
     content: prose, contentHash: textHash(prose), contentRevision: 1, targetFileName: '第一章.txt' })
+  db.transaction(() => refreshCharacterIdentityProjection(db))()
   const characterId = db.prepare("SELECT character_id FROM characters WHERE name='林岚'").pluck().get() as string
   const model: ModelProfile = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
     apiKey: 'synthetic-fixture-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'],
@@ -82,6 +83,7 @@ import { GenerationRunRepository } from '../../repositories/generation-run-repos
 import { proveFinalizedCharacterGeneration } from '../finalized-character-generation-proof'
 import { proveCharacterProposal } from '../generation-character-proposal-proof'
 import { CharacterProposalService, findCharacterProposalEvidence } from '../character-proposal-service'
+import { commitCharacterIdentities, refreshCharacterIdentityProjection } from '../../repositories/character-roster-repository'
 import type { FinalizationGenerationContext } from '../../../src/shared/finalization-generation'
 import type { CharacterProposalSource } from '../../../src/shared/character-proposal'
 import type { MainGenerationRunHandle } from '../../../src/services/generation/generation-runtime'
@@ -119,6 +121,28 @@ async function occurrence(dedicated = true) {
 }
 
 describe('finalized proposal immutable evidence and live write authority', () => {
+  it('refreshes a pending decision after an author write while rejecting its old selections', async () => {
+    const f = await occurrence(), batch = f.characters.stage(f.source())
+    f.db.transaction(() => {
+      commitCharacterIdentities(f.db, { approval: { operationId: 'later-author', expectedRevision: batch.revision, action: 'author-edit',
+        source: { kind: 'author', source: { projectId: 'project', epoch: 'epoch', sourceId: 'author', revision: 1, contentHash: 'a'.repeat(64) } } },
+        changes: [{ characterId: f.characterId, fields: { name: '作者改名' } }], creations: [], retireIds: [], relationships: [], resolutions: [] }, () => true)
+      refreshCharacterIdentityProjection(f.db)
+    })()
+    const decision = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'review-after-edit',
+      selections: [{ selectionKey: batch.items[0].selectionKey, action: 'map' as const, characterId: f.characterId }] }
+    expect(() => f.characters.approve(decision)).toThrow('CHARACTER_ID_REVISION_CONFLICT')
+    const refreshed = f.characters.readPendingFinalized(batch.proposalBatchId)
+    expect(refreshed.revision).toBe(batch.revision + 1)
+    expect(f.characters.approve({ ...decision, expectedRevision: refreshed.revision }).batch.status).toBe('approved')
+  })
+  it('does not replace an unrepaired legacy roster when another proposal is approved', async () => {
+    const f = await occurrence(), batch = f.characters.stage(f.source())
+    f.db.exec("UPDATE character_roster_meta SET migration_state='legacy_markdown_pending',legacy_markdown='必须保留的旧名单'; UPDATE project_core SET characters_arch='必须保留的旧名单'")
+    expect(() => f.characters.approve({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'unsafe-adoption',
+      selections: [{ selectionKey: batch.items[0].selectionKey, action: 'create' }] })).toThrow('CHARACTER_AUTHOR_ROSTER_NOT_READY')
+    expect(f.db.prepare('SELECT characters_arch FROM project_core').pluck().get()).toBe('必须保留的旧名单')
+  })
   it('rediscovers only pending finalized proposals after the service is reopened', async () => {
     const f = await occurrence(), batch = f.characters.stage(f.source())
     const otherProof = { items: [], sourceHash: textHash('import'), provenance: null }
@@ -278,6 +302,7 @@ describe('finalized proposal immutable evidence and live write authority', () =>
     const f = await occurrence(); f.resume()
     const batch = f.characters.stage(f.source())
     f.db.prepare('UPDATE characters SET name=? WHERE character_id=?').run('作者的新名字', f.characterId)
+    f.db.transaction(() => refreshCharacterIdentityProjection(f.db))()
     const request = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'confirm',
       selections: [{ selectionKey: batch.items[0]!.selectionKey, action: 'map' as const, characterId: f.characterId }] }
     expect(() => f.characters.approve({ ...request, expectedRevision: batch.revision + 1 }))

@@ -4,6 +4,15 @@ R=pathlib.Path.cwd(); O=R/'docs/research/novel-quality-modernization'; P=R/'.run
 def read(p): return json.loads(p.read_text(encoding='utf-8-sig'))
 def save(p,x): p.write_text(json.dumps(x,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
 d=read(O/'donor-delta.json'); inv=read(O/'inventory.json'); union=read(R/'docs/plans/novel-quality-program-v3-2026-09-13/feature-union.json'); acts={f['id']:[a['actionId'] for a in f['actions']] for f in union['features']}
+required_receipts=['codegraph-summaries.json','release-latest-raw.json','pr225-checks-raw.json']
+required_receipts += [f'issues-{n}-raw.json' for n in [187,191,199,205,211,213,219,221,222,224]]
+required_receipts += [f'issue-{n}-comments-raw.json' for n in [187,191,199,205,211,213,219,221,222,224]]
+required_receipts += [f'pulls-{n}-raw.json' for n in [201,208,212,223,225,229]]
+for name in required_receipts: read(P/name)
+src=(R/'electron/database.ts').read_text(encoding='utf-8')
+tables=sorted(set(re.findall(r'CREATE TABLE IF NOT EXISTS\s+(\w+)',src,re.I)))
+if not tables:
+ raise RuntimeError('SCHEMA_SOURCE_UNSUPPORTED: database.ts no longer owns DDL; no ledger was written. Preserve the frozen inventory until current migration schema extraction is supported.')
 for row in d['differences']:
  p=row['path']; s=p.lower()
  if s.startswith(('.release/','.github/','scripts/')): row.update(classification='test-tooling',owner='S01',reason='Keep current release/CI/tool contract; S13/S14A adapt and freeze before qualification. No donor rollback.')
@@ -68,7 +77,6 @@ asset_specs=[
  ('proven-dead-assets','all','source files/assets with verified zero consumer','S13','not applicable','blocked-until-proof','No entries currently certified dead; require import/dynamic/barrel/glob/Storybook/build proof before deletion.')]
 assets=[{'id':i,'scope':scope,'locatorPattern':loc,'assetMigrationOwner':owner,'schemaOwner':'S01','schemaLane':schema,'disposition':disp,'rule':rule,'runtimePresence':'not-scanned-author-data','fixtureAcceptance':'not-run','portableOwner':'B01','gates':['C09','C08','C17']} for i,scope,loc,owner,schema,disp,rule in asset_specs]
 # Explicit source schema names for the single schema owner; no DB contents are read.
-src=(R/'electron/database.ts').read_text(encoding='utf-8'); tables=sorted(set(re.findall(r'CREATE TABLE IF NOT EXISTS\s+(\w+)',src,re.I)))
 save(O/'asset-disposition.json',{'schemaVersion':1,'specId':'S00','baseSha':d['baseSha'],'status':'source-classification-complete-runtime-and-portable-field-approval-pending','assets':assets,'sourceSchemaTables':[{'table':t,'schemaOwner':'S01','upgradeOwner':'S04','portableFieldAllowlistStatus':'pending-S01-signature','unknownColumns':'block portable export; preserve source'} for t in tables],'licenseAssets':d['licenseReview'],'mandatoryBeforeSwitch':['Every actual root occurrence mapped to one asset row; unknown preserved backup-only.','S01 must sign per-field portable allowlist; this table-name list is not authorization to export all columns.','S04 must prove synthetic fixtures for each asset and no real-user directory reads/writes.','F03 M05 avatar fixtures mandatory before final upgrade qualification.'],'rawAuthorDataRead':False,'runtimeMigrationExecuted':False})
 issue_defs={187:('输出长度中断',['审稿约8K输出中断','目录蓝图约4K中断','compact-single约4K中断','最新反馈仍可复现'],'S07',[229]),191:('自动角色卡与随剧情补充',['从文本/大纲自动生成人物卡','卡片可编辑','情节推进自动新增关键信息'],'S09B',[]),199:('大纲范围与截断恢复',['选择本次章节范围','截断保留未完成内容','安全续批且不覆盖后来编辑','坏检查点/源变化/取消/切项目拒写'],'S06A',[201]),205:('连续性v2',['author/derived来源分离','候选/定稿与必需材料','逐目标审稿与unknown','两种批量模式与取消/提交语义'],'S10B',[208]),211:('角色图谱保存和导入',['真实协议图谱只读','保存失败可见且保稿','角色卡粘贴/文件导入确认','无模型/取消/切项目保留正确状态'],'S09C',[212]),213:('手动云存档',['跨设备完整项目归档/恢复新副本','手动WebDAV上传列表下载','保全头像和原稿且不携带权限/秘密'],'B02',[]),219:('生成角色图谱报告缺主角',['生成过程报未生成主角','区分模型遗漏/解析/身份/保存/刷新'],'S06A',[]),221:('多余角色和跨章重复',['蓝图生成后角色库出现未知角色','已有3章时第4章大量复述第3章'],'S10B',[]),222:('ActivityBar残留',['移除真正无消费者组件','清理历史注释'],'S13',[223]),224:('设置弹窗白屏',['工具栏设置入口白屏','状态栏设置入口白屏','有效tab内容与关闭重开状态同步'],'F04',[225])}
 issues=[]; prs=[]

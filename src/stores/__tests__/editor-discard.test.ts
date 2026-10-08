@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import type { ProjectData } from '../../shared/ipc-channels'
 import {
   CHAPTER_CARD_TAB_ID,
@@ -500,4 +501,16 @@ describe('project-scoped unsaved counting', () => {
     expect(countUnsavedEditorItemsForProject(tabs, draftLedgers, projectB)).toBe(1)
     expect(countUnsavedEditorItems(tabs, draftLedgers)).toBe(2)
   })
+})
+
+it('discarding a recovery tab preserves the official blueprint draft and its dirty tab', () => {
+  const ledger = JSON.stringify(updateChapterCardProjectDraft(createEmptyChapterCardDraftLedger(), project('A').path, [chapter(1, '作者未保存蓝图')], new Set([1])))
+  const planningRecovery: GenerationRecoveryContext = { modelId: 'model', handle: { runId: 'recovery', projectId: 'A', epoch: 'epoch', rootActionId: 'root' }, operation: 'blueprint', authorInputs: [], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [], composition: null, lastCompositionFinishReason: null, attemptedPurposes: [], draftSave: { kind: 'absent' } }
+  useEditorStore.setState({ tabs: [
+    { id: 'official', name: '官方蓝图', type: 'chapter-card', projectKey: project('A').path, dirty: true },
+    { id: 'recovery', name: '恢复草稿', type: 'chapter-card', projectKey: project('A').path, dirty: true, planningRecovery },
+  ], draftLedgers: { [CHAPTER_CARD_TAB_ID]: ledger } })
+  discardAndCloseEditorTab('recovery', projectSession('A'))
+  expect(useEditorStore.getState().draftLedgers[CHAPTER_CARD_TAB_ID]).toBe(ledger)
+  expect(useEditorStore.getState().tabs).toEqual([expect.objectContaining({ id: 'official', dirty: true })])
 })

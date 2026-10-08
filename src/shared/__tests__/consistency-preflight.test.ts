@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
 import { findBlueprintContinuityRisks, mergeConsistencyFindingsIntoReview } from '../consistency-preflight'
+import { buildFinalizedContinuityFacts } from '../finalized-continuity-facts'
+
+it('本章候选名单超过八人时仍识别后续事实中的角色', () => {
+  const names = [...Array.from({ length: 8 }, (_, index) => `无关${index}`), '顾舟']
+  const facts = buildFinalizedContinuityFacts(1, '顾舟已经死亡。', '顾舟已经死亡。', names)
+  expect(facts[0]?.entities).toEqual(['顾舟'])
+  expect(findBlueprintContinuityRisks([{ draftId: 1, chapterNumber: 1, chapterTitle: '', chapterNotes: '', sourceStatus: 'current', facts }], {
+    chapterNumber: 2, title: '归来', role: '', purpose: '', keyEvents: '顾舟出现', characters: ['顾舟'], suspenseHook: '', userGuidance: '', notes: '',
+  }, [])).toHaveLength(1)
+})
 
 describe('findBlueprintContinuityRisks', () => {
   const projection = [{

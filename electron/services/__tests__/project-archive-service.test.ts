@@ -7,6 +7,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, createProjectDatabase, initProjectDatabase } from '../../database'
 import { BlueprintRepository } from '../../repositories/blueprint-repository'
+import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+import { getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
+import { migrateSchema } from '../../migrations/runner'
+import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { verifyM03ReviewCycle, canonicalM03FindingSetHash } from '../../migrations/m03-review-cycle'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import { buildReviewGenerationReport } from '../../../src/shared/review-generation-report'
@@ -42,7 +46,7 @@ interface Fixture {
   session: { projectId: string; projectPath: string; leaseId: string }
 }
 
-function fixture(): Fixture {
+function fixture(donor = false): Fixture {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'b01-export-service-'))
   roots.push(base)
   const root = path.join(base, '作者项目')
@@ -57,7 +61,17 @@ function fixture(): Fixture {
     projectId,
     createdAt: '2026-09-20T00:00:00.000Z',
   })))
-  createProjectDatabase(root, Buffer.alloc(32, 7))
+  if (donor) {
+    const db = new Database(path.join(storage, 'project.db'))
+    try {
+      initializeLegacyBaselineSchema(db)
+      const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='characters'").get() as { sql: string }
+      db.exec('ALTER TABLE characters RENAME TO characters_without_avatar')
+      db.exec(row.sql.replace("      cs_location TEXT DEFAULT '',", "      avatar TEXT NOT NULL DEFAULT '',\n      cs_location TEXT DEFAULT '',"))
+      db.exec('DROP TABLE characters_without_avatar')
+      migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 7)
+    } finally { db.close() }
+  } else createProjectDatabase(root, Buffer.alloc(32, 7))
   initProjectDatabase(root)
   BlueprintRepository.listPendingCharacterSyncOperations()
   closeProjectDatabase()
@@ -305,6 +319,86 @@ afterEach(() => {
 })
 
 describe('portable project export service', { timeout: 20_000 }, () => {
+  it('preserves admitted predecessor, recheck goals and state-update raw values without admitting unknown fields', async () => {
+    const material = { draftId: 10, chapterNumber: 1, chapterTitle: '', content: '前驱正文',
+      identity: { projectId: 'project', sourceId: 'candidate:10', revision: 1, contentHash: hash('前驱正文'), provenance: 'generated' } }
+    const update = { characterId: 'character-1', currentState: { location: '城门' }, evidence: { start: 0, end: 2, text: '城门' } }
+    const materials = { predecessor: material,
+      history: [{ ...material, projection: { draftId: 10, currentFinalizedDraftId: 10, chapterNumber: 1,
+        chapterTitle: '', chapterNotes: '', facts: [], characterStateCandidates: [{ characterName: '林澈', field: 'location', value: '城门', rawValue: update }] } }],
+      recheck: { version: 2, cycleId: 'cycle-merge', comparisonVersion: 1, mergedHash: hash('merged'), findingSetHash: hash('findings'),
+        sourceContent: '原文', findings: [{ findingId: 'goal-1', targetId: 'goal-1', category: 'goal', kind: 'objective',
+          problem: '目标尚未呈现', expected: '出现线索', mustShow: true }] } }
+    const seedContext = (f: Fixture, extras: typeof materials) => {
+      seedMergedCycle(f)
+      const db = new Database(f.databasePath)
+      try {
+        const binding = JSON.parse(db.prepare("SELECT binding_json FROM generation_runs WHERE run_id='run-review'").pluck().get() as string)
+        Object.assign(binding.sourceManifest.reviewRevisionContext, extras)
+        binding.sourceManifest.reviewRevisionContextHash = hash(JSON.stringify(binding.sourceManifest.reviewRevisionContext))
+        binding.sourceManifest.authorInputs = [{ id: 'review-revision-context', text: JSON.stringify(binding.sourceManifest.reviewRevisionContext) }]
+        db.prepare('INSERT INTO generation_runs VALUES(?,?,?,?,?,?)').run('run-next-review', 'root-merge', JSON.stringify(binding), 'open', 2, 'open-next-review')
+      } finally { db.close() }
+    }
+    const f = fixture()
+    seedContext(f, materials)
+    await exportPortableProject(input(f))
+    const targetRoot = path.join(f.base, 'restored-context')
+    await restorePortableProject({ archivePath: f.target, targetProjectRoot: targetRoot })
+    const restored = new Database(path.join(targetRoot, '.ai-novel', 'project.db'), { readonly: true })
+    try {
+      const binding = JSON.parse(restored.prepare("SELECT binding_json FROM generation_runs WHERE run_id='run-next-review'").pluck().get() as string)
+      expect(binding.sourceManifest.reviewRevisionContext).toMatchObject(materials)
+      expect(binding.sourceManifest.reviewRevisionContextHash).toBe(hash(JSON.stringify(binding.sourceManifest.reviewRevisionContext)))
+    } finally { restored.close() }
+    for (const mutate of [
+      (value: typeof materials) => { Object.assign(value.predecessor, { secretRef: 'excluded' }) },
+      (value: typeof materials) => { Object.assign(value.recheck.findings[0]!, { mustShow: false }) },
+      (value: typeof materials) => { Object.assign(value.history[0]!.projection.characterStateCandidates[0]!.rawValue, { machinePath: 'C:/secret' }) },
+    ]) {
+      const invalid = fixture(), changed = structuredClone(materials)
+      mutate(changed); seedContext(invalid, changed)
+      await expect(exportPortableProject(input(invalid))).rejects.toThrow('PORTABLE_UNSAFE_PROJECTION')
+    }
+  })
+
+  it('rejects an export whose combined frozen history cannot be read back', async () => {
+    const f = fixture()
+    seedProject(f)
+    const db = new Database(f.databasePath)
+    const artifact = JSON.parse(db.prepare('SELECT artifact_json FROM generation_artifacts').pluck().get() as string)
+    artifact.text = 'a'.repeat(9 * 1024 * 1024); artifact.textHash = hash(artifact.text)
+    db.prepare('UPDATE generation_artifacts SET artifact_json=?').run(JSON.stringify(artifact))
+    const attempt = JSON.parse(db.prepare('SELECT attempt_json FROM generation_attempts').pluck().get() as string)
+    db.prepare('INSERT INTO generation_attempts VALUES(?,?,?,?,?,?,?)').run('attempt-2', 'reservation-2', 'run-1', 'root-1',
+      JSON.stringify({ ...attempt, attemptId: 'attempt-2', reservationId: 'reservation-2' }), null, 'invocation-2')
+    db.prepare('INSERT INTO generation_artifacts VALUES(?,?,?,?,?,?)').run('artifact-2', 'attempt-2', 'run-1',
+      JSON.stringify({ ...artifact, artifactId: 'artifact-2', attemptId: 'attempt-2' }), 2, 'partial')
+    db.close()
+    await expect(exportPortableProject(input(f))).rejects.toThrow('PORTABLE_RUNTIME_FREEZE_INVALID')
+    expect(fs.existsSync(f.target)).toBe(false)
+    const source = new Database(f.databasePath, { readonly: true })
+    try { expect(source.prepare('SELECT COUNT(*) FROM generation_artifacts').pluck().get()).toBe(2) }
+    finally { source.close() }
+  })
+
+  it.each(['character-delete', 'runtime-replace', 'runtime-remove'])('exports %s avatar provenance with its retained asset', async provenance => {
+    const f = fixture()
+    seedProject(f)
+    const db = new Database(f.databasePath)
+    db.exec(`INSERT INTO character_avatar_unresolved(record_id,disposition,source_reference,source_relative_path,
+      preserved_relative_path,content_hash,mime,byte_size,candidate_character_ids_json)
+      SELECT 'orphan-1','orphan','${provenance}:'||character_id,relative_path,relative_path,content_hash,mime,byte_size,'[]'
+      FROM character_avatar_assets`)
+    db.exec('DELETE FROM character_avatar_assets'); db.close()
+    await exportPortableProject(input(f))
+    const restoredRoot = path.join(f.base, 'restored-avatar')
+    await restorePortableProject({ archivePath: f.target, targetProjectRoot: restoredRoot })
+    const restored = new Database(path.join(restoredRoot, '.ai-novel', 'project.db'), { readonly: true })
+    try { expect(restored.prepare('SELECT source_reference FROM character_avatar_unresolved').pluck().get()).toMatch(new RegExp(`^${provenance}:`)) }
+    finally { restored.close() }
+  })
+
   it.each([1, 2] as const)('roundtrips a wrapped recheck with report derivation v%i and unchanged saved ACK', async version => {
     const f = fixture(), seeded = seedMergedCycle(f, {}, undefined, { recheckReportVersion: version })
     await exportPortableProject(input(f))
@@ -556,6 +650,31 @@ describe('portable project export service', { timeout: 20_000 }, () => {
       expect.objectContaining({ table: 'import_runs', terminalState: 'running', nonReplayable: true }),
       expect.objectContaining({ table: 'recovery_candidates', terminalState: 'pending', nonReplayable: true }),
     ]))
+  })
+
+  it('exports and restores registered donor v7 avatars without carrying the legacy avatar reference', async () => {
+    const f = fixture(true)
+    const seeded = seedProject(f)
+    const db = new Database(f.databasePath)
+    try { db.prepare("UPDATE characters SET avatar='C:\\old-machine\\private-avatar.png' WHERE name='林澈'").run() }
+    finally { db.close() }
+    const before = fs.readFileSync(f.databasePath)
+
+    const receipt = await exportPortableProject(input(f))
+    expect(receipt.sourceEvidence).toMatchObject({ schemaVersion: 7, tableCount: 51, fieldCount: 482 })
+    const targetProjectRoot = path.join(f.base, 'restored-donor')
+    await restorePortableProject({ archivePath: f.target, targetProjectRoot })
+
+    const restoredStorage = path.join(targetProjectRoot, '.ai-novel')
+    const restored = new Database(path.join(restoredStorage, 'project.db'), { readonly: true })
+    try {
+      expect(restored.pragma('user_version', { simple: true })).toBe(7)
+      expect(restored.prepare('SELECT avatar FROM characters').pluck().all()).toEqual(['', ''])
+      expect(restored.prepare('SELECT body FROM contents WHERE id=1').pluck().get()).toBe(seeded.body)
+      const avatarPath = restored.prepare('SELECT relative_path FROM character_avatar_assets').pluck().get() as string
+      expect(fs.readFileSync(path.join(restoredStorage, avatarPath))).toEqual(seeded.avatar)
+    } finally { restored.close() }
+    expect(fs.readFileSync(f.databasePath)).toEqual(before)
   })
 
   it('never carries X values, secretRef, raw sensitive receipts or their digests while preserving author path-like text bytes', async () => {

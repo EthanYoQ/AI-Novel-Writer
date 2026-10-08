@@ -21,7 +21,7 @@ import { registerProjectTransitionDraft } from '../../../services/project-transi
 
 /** 输入框最大高度（px），超出后框内滚动 */
 const MAX_HEIGHT = 200
-const projectInputDrafts = new Map<string, string>()
+const projectInputDrafts = new Map<string, { value: string; savedValue: string }>()
 
 /**
  * Agent 输入框组件（参考 agent1.html 第 69-155 行）
@@ -34,7 +34,7 @@ export default function AgentInputBox() {
   const inputValuesRef = useRef(new Map<string, string>())
   const inputVersionsRef = useRef(new Map<string, number>())
   const inputText = projectKey
-    ? (projectInputs.get(projectKey) ?? projectInputDrafts.get(projectKey) ?? '')
+    ? (projectInputs.get(projectKey) ?? projectInputDrafts.get(projectKey)?.value ?? '')
     : ''
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { generating, sendMessage, cancelGeneration, getActiveConversation, setMode, setModelId } = useAgentStore()
@@ -64,6 +64,7 @@ export default function AgentInputBox() {
 
   const replaceInputText = useCallback((value: string) => {
     if (!projectKey) return
+    projectInputDrafts.set(projectKey, { value, savedValue: projectInputDrafts.get(projectKey)?.savedValue ?? '' })
     inputValuesRef.current.set(projectKey, value)
     inputVersionsRef.current.set(
       projectKey,
@@ -76,16 +77,16 @@ export default function AgentInputBox() {
     if (!projectKey) return
     const readInput = () => (
       inputValuesRef.current.get(projectKey)
-      ?? projectInputDrafts.get(projectKey)
+      ?? projectInputDrafts.get(projectKey)?.value
       ?? ''
     )
     const unregister = registerProjectTransitionDraft({
       projectKey,
-      isDirty: () => readInput() !== (projectInputDrafts.get(projectKey) ?? ''),
+      isDirty: () => readInput() !== (projectInputDrafts.get(projectKey)?.savedValue ?? ''),
       version: () => inputVersionsRef.current.get(projectKey) ?? 0,
       save: () => {
         const value = readInput()
-        if (value) projectInputDrafts.set(projectKey, value)
+        if (value) projectInputDrafts.set(projectKey, { value, savedValue: value })
         else projectInputDrafts.delete(projectKey)
       },
       discard: () => {
@@ -93,12 +94,7 @@ export default function AgentInputBox() {
         replaceInputText('')
       },
     })
-    return () => {
-      const value = readInput()
-      if (value) projectInputDrafts.set(projectKey, value)
-      else projectInputDrafts.delete(projectKey)
-      unregister()
-    }
+    return unregister
   }, [projectKey, replaceInputText])
 
   // 检测输入是否触发 / 或 @ 菜单

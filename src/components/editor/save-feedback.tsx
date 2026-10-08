@@ -31,7 +31,7 @@ export function SaveFeedback({
         color: outcome === 'failed'
           ? 'var(--color-error-text)'
           : dirty
-            ? 'var(--color-warning)'
+            ? 'var(--color-warning-text)'
             : 'var(--color-text-muted)',
       }}
     >

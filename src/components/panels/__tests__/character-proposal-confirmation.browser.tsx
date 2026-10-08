@@ -73,6 +73,22 @@ it('actual等待host一次选择同名乙+新建，显式关系经原批准comma
  await pending
  expect(invoke.mock.calls.find(([channel]) => channel === 'character-proposal:approve')?.[1]).toMatchObject({ proposalBatchId: '批次', selections: expect.arrayContaining([{ selectionKey: 'a', action: 'map', characterId: '乙' }, { selectionKey: 'b', action: 'create' }]), relationships: [{ sourceSelectionKey: 'a', targetSelectionKey: 'b', relation: '盟友' }] })
 })
+it('规划资料按唯一候选姓名显示关系，角色定位不提供无法提交的清空选项', async () => {
+ const planning: CharacterProposalBatch = { ...batch, source: { kind: 'generation', inputKind: 'planning-material',
+   handle: { projectId: session.projectId, epoch: session.leaseId, rootActionId: 'root', runId: 'run' }, artifacts: [] },
+   items: batch.items.map((item, index) => ({ ...item, fields: { ...item.fields, name: index ? '乙' : '甲', role: 'supporting' },
+     resolution: { status: 'unresolved', candidateIds: [] }, relationships: index ? [] : [{ targetName: '乙', relation: '同伴' }] })) }
+ const { pending } = await start(planning, true)
+ const relation = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+ expect(relation.disabled).toBe(false)
+ expect(container.querySelector('select[aria-label="编辑候选角色定位：a"] option[value=""]')).toBeNull()
+ await act(async () => relation.click())
+ await act(async () => (container.querySelector('[data-testid="workflow-confirmation-confirm"]') as HTMLButtonElement).click())
+ await pending
+ expect(invoke.mock.calls.find(([channel]) => channel === 'character-proposal:approve')?.[1]).toMatchObject({
+   relationships: [{ sourceSelectionKey: 'a', targetSelectionKey: 'b', relation: '同伴' }],
+ })
+})
 it('换项目与错误批次选择不能写live context；取消无批准', async () => {
  const { pending, runId } = await start(); const choices = useWorkflowStore.getState().activeRuns[0].characterProposalChoices!
  expect(useWorkflowStore.getState().setCharacterProposalChoices(runId, { ...choices, revision: 2 })).toBe(false)

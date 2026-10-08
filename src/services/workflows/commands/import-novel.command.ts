@@ -44,6 +44,9 @@ import {
   importInferenceJsonContract,
   type ImportInferenceResult,
   decodeImportInferenceJson,
+  decodeImportInferenceWithEndpointDelta,
+  importInferenceCards,
+  unresolvedImportRelationshipTargets,
   parseImportInferenceJsonObject,
 } from './import-inference-contract'
 import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
@@ -83,31 +86,6 @@ export function frozenImportContext(context: WorkflowContext): ImportGenerationC
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u
 const MAX_IMPORT_INFERENCE_CHARACTER_CARDS = 8
-const IMPORT_ENDPOINT_DELTA_CARD_KEYS = [
-  'abilities',
-  'age',
-  'appearance',
-  'arc',
-  'background',
-  'currentState',
-  'gender',
-  'motivation',
-  'name',
-  'notes',
-  'personality',
-  'relationships',
-  'role',
-] as const
-const IMPORT_ENDPOINT_DELTA_CURRENT_STATE_KEYS = [
-  'keyItems',
-  'location',
-  'mentalState',
-  'physicalState',
-  'powerLevel',
-  'recentEvents',
-  'updatedAtChapter',
-] as const
-const IMPORT_ENDPOINT_DELTA_RELATIONSHIP_KEYS = ['relation', 'target'] as const
 type UiText = (zhCNText: string, enUSText: string) => string
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -130,122 +108,19 @@ function deepJsonEqual(left: unknown, right: unknown): boolean {
   return false
 }
 
-function importInferenceCards(root: Record<string, unknown>, text: UiText): Array<Record<string, unknown>> {
-  const cards = root.characterCards
-  if (!Array.isArray(cards) || !cards.every(isRecord)) {
-    throw new Error(text(
-      '导入推演受限补卡校正缺少可比较的原始角色卡',
-      'The bounded import correction is missing comparable original character cards.',
-    ))
-  }
-  return cards
-}
-
-function assertExactImportEndpointDeltaKeys(
-  value: Record<string, unknown>,
-  expectedKeys: readonly string[],
-  path: string,
-  text: UiText,
-): void {
-  const actualKeys = Object.keys(value).sort()
-  const sortedExpectedKeys = [...expectedKeys].sort()
-  if (!deepJsonEqual(actualKeys, sortedExpectedKeys)) {
-    throw new Error(text(
-      `导入推演受限补卡校正 delta ${path} 包含缺失或额外字段`,
-      `The bounded import correction delta at ${path} has missing or extra fields.`,
-    ))
-  }
-}
-
-function unresolvedImportRelationshipTargets(root: Record<string, unknown>, text: UiText): string[] {
-  const cards = importInferenceCards(root, text)
-  const names = new Set(cards.map(card => card.name).filter((name): name is string => typeof name === 'string'))
-  const unresolved = new Set<string>()
-  for (const card of cards) {
-    const cardName = typeof card.name === 'string' ? card.name : undefined
-    const relationships = card.relationships
-    if (!Array.isArray(relationships)) continue
-    for (const relationship of relationships) {
-      if (!isRecord(relationship) || typeof relationship.target !== 'string') continue
-      if (relationship.target !== cardName && !names.has(relationship.target)) unresolved.add(relationship.target)
-    }
-  }
-  if (unresolved.size === 0) {
-    throw new Error(text(
-      '导入推演受限补卡校正缺少未闭合的关系端点',
-      'The bounded import correction has no unresolved relationship endpoint.',
-    ))
-  }
-  return [...unresolved]
-}
-
-function parseImportEndpointCorrectionDelta(
-  content: string,
-  unresolvedTargets: readonly string[],
-  text: UiText,
-): Array<Record<string, unknown>> {
-  const deltaRoot = parseImportInferenceJsonObject(content)
-  assertExactImportEndpointDeltaKeys(deltaRoot, ['characterCards'], '$', text)
-  const deltaCards = importInferenceCards(deltaRoot, text)
-  if (deltaCards.length !== unresolvedTargets.length) {
-    throw new Error(text(
-      '导入推演受限补卡校正只能新增缺失关系端点角色',
-      'The bounded import correction may add only characters required by missing relationship endpoints.',
-    ))
-  }
-  for (const [index, deltaCard] of deltaCards.entries()) {
-    const path = `characterCards[${index}]`
-    assertExactImportEndpointDeltaKeys(deltaCard, IMPORT_ENDPOINT_DELTA_CARD_KEYS, path, text)
-    if (isRecord(deltaCard.currentState)) {
-      assertExactImportEndpointDeltaKeys(
-        deltaCard.currentState,
-        IMPORT_ENDPOINT_DELTA_CURRENT_STATE_KEYS,
-        `${path}.currentState`,
-        text,
-      )
-    }
-    const relationships = deltaCard.relationships
-    if (Array.isArray(relationships)) {
-      relationships.forEach((relationship, relationshipIndex) => {
-        if (isRecord(relationship)) {
-          assertExactImportEndpointDeltaKeys(
-            relationship,
-            IMPORT_ENDPOINT_DELTA_RELATIONSHIP_KEYS,
-            `${path}.relationships[${relationshipIndex}]`,
-            text,
-          )
-        }
-      })
-    }
-  }
-  const expectedAddedNames = new Set(unresolvedTargets)
-  const addedNames = deltaCards.map(card => card.name)
-  if (addedNames.some(name => typeof name !== 'string' || !expectedAddedNames.has(name))) {
-    throw new Error(text(
-      '导入推演受限补卡校正新增角色必须精确匹配原始未闭合关系端点',
-      'Characters added by the bounded import correction must exactly match the original unresolved endpoints.',
-    ))
-  }
-  if (new Set(addedNames).size !== addedNames.length) {
-    throw new Error(text(
-      '导入推演受限补卡校正 delta 包含重复缺失关系端点角色',
-      'The bounded import correction delta contains duplicate missing-endpoint characters.',
-    ))
-  }
-  if (addedNames.length !== expectedAddedNames.size) {
-    throw new Error(text(
-      '导入推演受限补卡校正 delta 缺失关系端点角色',
-      'The bounded import correction delta omits a missing-endpoint character.',
-    ))
-  }
-  return deltaCards
-}
-
 function requireImportGlobalFactsReceipt(
   candidate: ImportGlobalFactsReceipt | undefined,
   expected: ImportGlobalFactsRequest,
   text: UiText,
 ): ImportGlobalFactsReceipt {
+  const domainRequest = { ...expected }
+  delete domainRequest.generationRunHandle
+  const normalizedCore = { ...domainRequest.core }
+  for (const field of ['genre', 'subGenre', 'targetAudience', 'goldenFinger', 'globalGuidance', 'coreOutline',
+    'worldSetting', 'protagonistProfile', 'premise', 'worldbuilding', 'synopsis'] as const) {
+    normalizedCore[field] = normalizedCore[field].trim()
+  }
+  expected = { ...domainRequest, operationId: domainRequest.operationId.trim(), core: normalizedCore }
   const committedNames = new Set(candidate?.roster?.snapshot?.entries
     ?.map(entry => typeof entry.name === 'string' ? entry.name.trim() : '')
     .filter(Boolean))
@@ -384,14 +259,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       context,
     )
     if (correction.finishReason !== 'stop') throw this.createIncompleteCompletionError(correction.finishReason)
-    const correctedRoot = {
-      ...originalRoot,
-      characterCards: [
-        ...importInferenceCards(originalRoot, text),
-        ...parseImportEndpointCorrectionDelta(correction.content, unresolvedTargets, text),
-      ],
-    }
-    return decodeImportInferenceJson(JSON.stringify(correctedRoot))
+    return decodeImportInferenceWithEndpointDelta(rawResult, correction.content, text)
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {

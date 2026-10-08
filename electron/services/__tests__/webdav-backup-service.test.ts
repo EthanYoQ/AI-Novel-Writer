@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -53,6 +54,8 @@ class DavFixture {
   redirectSuffix: string | null = null
   redirectLocation = ''
   slowGetSuffix: string | null = null
+  stallUpload = false
+  onUpload?: () => void
   private dropped = false
   private server: Server
   baseUrl = ''
@@ -90,7 +93,12 @@ class DavFixture {
       return
     }
     if (method === 'PUT') {
-      let body = await requestBytes(request)
+      if (url.endsWith('archive.ainovel')) {
+        this.onUpload?.()
+        if (this.stallUpload) { request.resume(); return }
+      }
+      let body: Buffer
+      try { body = await requestBytes(request) } catch { return }
       if (this.dropAfterPutSuffix && url.endsWith(this.dropAfterPutSuffix) && !this.dropped) {
         this.dropped = true
         if (this.corruptDroppedPut && body.length) body = Buffer.concat([body.subarray(0, -1), Buffer.from('!')])
@@ -166,6 +174,52 @@ afterEach(async () => {
 })
 
 describe('WebDavBackupService', () => {
+  it('treats only a missing generation collection as an empty new book', async () => {
+    const credentials = { endpoint: 'https://example.invalid/dav/', username: 'fixture', secret: 'fixture' }
+    const missing = new WebDavBackupService({ fetchImpl: async () => new Response(null, { status: 404 }) })
+    expect(await missing.listGenerations({ account: credentials, cloudBookId: BOOK })).toEqual([])
+    await expect(missing.checkConnection(credentials)).rejects.toThrow('WEBDAV_NOT_FOUND')
+    const unauthorized = new WebDavBackupService({ fetchImpl: async () => new Response(null, { status: 401 }) })
+    await expect(unauthorized.listGenerations({ account: credentials, cloudBookId: BOOK })).rejects.toThrow('WEBDAV_AUTH')
+  })
+
+  it('finishes a continuously read archive upload that exceeds the metadata deadline', async () => {
+    const dav = new DavFixture(); await dav.listen()
+    const source = workspace()
+    fs.writeFileSync(source.archive, Buffer.alloc(4352 * 1024, 7))
+    const service = new WebDavBackupService({ generationIdFactory: () => GEN_A, fetchImpl: async (url, init) => {
+      const body = init?.body
+      if (init?.method !== 'PUT' || !String(url).endsWith('archive.ainovel') || !(body instanceof fs.ReadStream)) return fetch(url, init)
+      const paced = Readable.from((async function* () {
+        for await (const chunk of body) {
+          await new Promise(resolve => setTimeout(resolve, 17_000 * chunk.length / fs.statSync(source.archive).size))
+          yield chunk
+        }
+      })())
+      try { return await fetch(url, { ...init, body: paced as unknown as BodyInit }) }
+      finally { paced.destroy() }
+    } })
+    const start = Date.now()
+    await service.appendGeneration({ account: account(dav), cloudBookId: BOOK, archivePath: source.archive,
+      originProjectId: PROJECT, portableSnapshotGeneration: 'fixture', parentGenerationIds: [] })
+    expect(Date.now() - start).toBeGreaterThan(15_000)
+    expect(sha256(dav.files.get(`/dav/books/${BOOK}/generations/${GEN_A}/archive.ainovel`)!)).toBe(sha256(fs.readFileSync(source.archive)))
+    expect(dav.files.has(`/dav/books/${BOOK}/generations/${GEN_A}/completion.json`)).toBe(true)
+  }, 30_000)
+
+  it.each([false, true])('expires or cancels a stalled archive PUT without publishing completion: cancel=%s', async cancel => {
+    const dav = new DavFixture(); await dav.listen()
+    const source = workspace()
+    dav.stallUpload = true
+    const controller = new AbortController()
+    if (cancel) dav.onUpload = () => controller.abort()
+    const service = new WebDavBackupService({ generationIdFactory: () => GEN_A, transferTimeoutMs: 100 })
+    await expect(service.appendGeneration({ account: account(dav), cloudBookId: BOOK, archivePath: source.archive,
+      originProjectId: PROJECT, portableSnapshotGeneration: 'fixture', parentGenerationIds: [], signal: controller.signal,
+    })).rejects.toThrow(cancel ? 'WEBDAV_CANCELLED' : 'WEBDAV_NOT_FOUND')
+    expect(dav.files.has(`/dav/books/${BOOK}/generations/${GEN_A}/completion.json`)).toBe(false)
+  })
+
   it('checks a loopback WebDAV connection without exposing credentials', async () => {
     const dav = new DavFixture(); await dav.listen()
 

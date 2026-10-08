@@ -218,9 +218,8 @@ export class GeminiProvider implements ILLMProvider {
               inBandReasoning.push(part.text)
             }
           }
-          const content = opts.visibleOnly
-            ? (candidate?.content?.parts ?? []).filter(part => part.thought === undefined || part.thought === false).map(part => typeof part.text === 'string' ? part.text : '').join('')
-            : candidate?.content?.parts?.[0]?.text
+          const content = (candidate?.content?.parts ?? []).filter(part => part.thought !== true)
+            .map(part => typeof part.text === 'string' ? part.text : '').join('')
           const chunk = opts.visibleOnly ? visible.push(content ?? '') : content
           if (chunk) {
             fullText += chunk

@@ -6,6 +6,7 @@ import { prepareCanonicalStorageFixture } from '../../../test/helpers/canonical-
 import { CharacterRosterRepository, refreshCharacterIdentityProjection } from '../../repositories/character-roster-repository'
 import { commitAuthorCharacterRoster } from '../character-roster-author'
 import type { CharacterRosterCommitRequest } from '../../../src/shared/character-roster'
+import { characterCardFromRosterEntry, characterRosterEntryFromCard } from '../../../src/services/character-roster-client'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanup: (() => void)[] = []
@@ -39,6 +40,18 @@ const facts = (db: import('better-sqlite3').Database) => ({ characters: db.prepa
   identity: db.prepare('SELECT * FROM character_identity_meta').all(), roster: db.prepare('SELECT * FROM character_roster_meta').all(), core: db.prepare('SELECT * FROM project_core').all() })
 const save = (f: ReturnType<typeof fixture>, request = f.request()) => commitAuthorCharacterRoster(f.db, request, scope, () => {})
 
+it('结构化关系替代旧自由文本后再次普通保存不丢失关系', () => {
+  const f = fixture(), request = f.request(), entry = request.entries.find(item => item.characterId === '甲ID')!
+  entry.relationships = [{ target: '沈砺', targetCharacterId: '乙ID', relation: '盟友' }]
+  expect(characterRosterEntryFromCard(characterCardFromRosterEntry(entry)).relationships).toEqual(entry.relationships)
+  delete entry.legacyRelationshipNotes
+  const saved = save(f, request)
+  expect(saved.snapshot.entries.find(item => item.characterId === '甲ID')?.legacyRelationshipNotes).toBeUndefined()
+  const next = f.request('普通再保存')
+  next.entries = saved.snapshot.entries.map(characterCardFromRosterEntry).map(characterRosterEntryFromCard)
+  expect(save(f, next).snapshot.entries.find(item => item.characterId === '甲ID')?.relationships).toEqual(entry.relationships)
+})
+
 it('read补ID及别名不改变原投影hash或写库；同名两人不折叠', () => {
   const f = fixture(), before = facts(f.db), changes = f.db.prepare('SELECT total_changes()').pluck().get()
   const read = CharacterRosterRepository.read(f.db)
@@ -71,7 +84,8 @@ it('新draft ID由main生成正式ID且一次批准内重映射关系，重开�
   const later = f.request('后续作者变更'); later.entries.find(entry => entry.characterId === id)!.notes = '后续内容'
   save(f, later); f.reopen()
   const before = facts(f.db), changes = f.db.prepare('SELECT total_changes()').pluck().get()
-  expect(commitAuthorCharacterRoster(f.db, request, { ...scope, epoch: '重开会话' }, () => {})).toEqual({ ...first, idempotent: true })
+  const current = CharacterRosterRepository.read(f.db)
+  expect(commitAuthorCharacterRoster(f.db, request, { ...scope, epoch: '重开会话' }, () => {})).toEqual({ ...first, idempotent: true, revision: current.revision, snapshot: current })
   expect(facts(f.db)).toEqual(before); expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
 })
 it('删除退休ID而不删除原角色/历史边；剩余同名角色不受影响', () => {

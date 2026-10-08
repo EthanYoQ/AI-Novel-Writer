@@ -675,46 +675,33 @@ export async function assembleChapterMaterials(input: {
   }
   const optionalMaterialCeiling = (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * BYTES_PER_BUDGET_CHAR[writingLanguage]
 
-  // ---- 参考材料族的局部子串去重（决定 2C）----
-  // 它是「参考材料」这一族的补充过滤器，**不是**第二套事实来源：它不判定来源是否可用、
-  // 不参与覆盖结算，只是不重复发送已经发过的字节。它需要知道定稿最终纳入了哪些段落，
-  // 而合同只在跑完一次选择之后才结算这一点，所以先用全部候选跑一次探针选择，据此过滤
-  // 参考候选，再用过滤后的候选跑权威选择。
-  //
-  // 探针只可能**多**纳入定稿块（参考候选被删掉只会让出预算，不会夺走预算），所以探针算出的
-  // 「已纳入定稿段落」在权威选择里仍然成立，被删掉的参考不会因此漏网。
-  //
-  // 探针 + 权威选择是一个整体：候选集变化（直接前驱降级，见下）时必须整体重跑。
   const select = () => {
-    const probe = selectChapterSources({
+    const choose = (dropped: Set<MaterialCandidate>) => selectChapterSources({
       current: input.identity,
       capacity,
       optionalMaterialCeiling,
       relevanceTerms: input.relevanceTerms,
-      candidates,
+      candidates: candidates.filter(item => !dropped.has(item)),
     })
-    const includedFinalizedPassages: string[] = []
-    if (probe.decision === 'ready') {
-      for (const material of probe.included) {
+    const covered = (selection: SourceSelection) => {
+      const passages: string[] = []
+      if (selection.decision === 'ready') for (const material of selection.included) {
         const family = familyBySourceId.get(material.ref.sourceId)
-        if (family?.family === 'finalized') includedFinalizedPassages.push(...family.passages)
+        if (family?.family === 'finalized') passages.push(...family.passages)
       }
+      return new Set(referenceCandidates.filter(({ reference }) => reference.deduplicateAgainstFinalized
+        && reference.text.length > 0 && passages.some(passage => passage.includes(reference.text))).map(({ candidate }) => candidate))
     }
-    const droppedReferences = new Set<MaterialCandidate>(referenceCandidates
-      .filter(({ reference }) => reference.deduplicateAgainstFinalized && reference.text.length > 0
-        && includedFinalizedPassages.some(passage => passage.includes(reference.text)))
-      .map(({ candidate }) => candidate))
-    // ---- 权威裁决：这一步的结果就是提示词，别处不再有第二条准入路径 ----
-    return {
-      droppedReferences,
-      selection: selectChapterSources({
-        current: input.identity,
-        capacity,
-        optionalMaterialCeiling,
-        relevanceTerms: input.relevanceTerms,
-        candidates: candidates.filter(item => !droppedReferences.has(item)),
-      }),
+    const droppedReferences = covered(choose(new Set()))
+    let selection = choose(droppedReferences)
+    while (droppedReferences.size > 0) {
+      const stillCovered = covered(selection)
+      const restored = [...droppedReferences].filter(candidate => !stillCovered.has(candidate))
+      if (!restored.length) break
+      for (const candidate of restored) droppedReferences.delete(candidate)
+      selection = choose(droppedReferences)
     }
+    return { droppedReferences, selection }
   }
   let { selection, droppedReferences } = select()
 

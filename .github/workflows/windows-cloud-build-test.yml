@@ -201,6 +201,22 @@ jobs:
               }
             }
           }
+          $v110Acceptance = Join-Path $env:GITHUB_WORKSPACE '.runtime\.cache\s14c-v110-acceptance'
+          foreach ($name in @('install.json', 'launch.json', 'quiet-window.json', 'error-dialogs.json', 'uninstall.json', 'upgrade-data.json', 'a11-failure.json', 'native-abi.json', 'packaged-smoke.json', 'signing.json')) {
+            $source = Join-Path $v110Acceptance $name
+            if (Test-Path -LiteralPath $source -PathType Leaf) {
+              Copy-Item -LiteralPath $source -Destination (Join-Path $diagnosticsRoot "v110-acceptance-$name") -Force
+            }
+          }
+          Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE '.runtime\.cache') -Directory -Filter 'ai-novel-installer-smoke-*' -ErrorAction SilentlyContinue | ForEach-Object {
+            $smokeRoot = $_
+            foreach ($name in @('failure.txt', 'window-snapshot.json', 'observed-process-ids.json')) {
+              $source = Join-Path $smokeRoot.FullName $name
+              if (Test-Path -LiteralPath $source -PathType Leaf) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $diagnosticsRoot "$($smokeRoot.Name)-$name") -Force
+              }
+            }
+          }
           Get-ChildItem -Path ([System.IO.Path]::GetTempPath()) -Directory -Filter 'ai-novel-release-gate-*' -ErrorAction SilentlyContinue | ForEach-Object {
             $gateRoot = $_
             foreach ($name in @('orchestrator-failures.jsonl', 'monitor-status.json', 'process-events.jsonl', 'monitor-control-log.jsonl')) {

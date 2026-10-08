@@ -30,7 +30,13 @@ async function helpers() {
   return productionHelpers
 }
 export function assertShortOutlineRecovery(recovery, expected, proseStarted) {
-  assert.deepEqual(recovery.draftShortOutline, { artifactIds: [expected.artifactId], completedOutput: expected.text,
+  const { retry, ...outline } = recovery.draftShortOutline
+  if (retry?.kind === 'available') {
+    assert.equal(typeof retry.failedAttemptId, 'string')
+    assert.ok(retry.failedAttemptId.trim())
+    assert.deepEqual(retry, { kind: 'available', failedAttemptId: retry.failedAttemptId })
+  } else assert.deepEqual(retry, { kind: 'unavailable' })
+  assert.deepEqual(outline, { artifactIds: [expected.artifactId], completedOutput: expected.text,
     promptHash: expected.promptHash, ...(proseStarted ? { initialDraftTask: expected.initialDraftTask } : {}) })
   assert.deepEqual(recovery.attemptedPurposes, ['chapter-draft-short-outline', ...(proseStarted ? ['chapter-draft'] : [])])
 }

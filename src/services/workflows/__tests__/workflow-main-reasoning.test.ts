@@ -14,8 +14,51 @@ const originalProject = useProjectStore.getState()
 const originalReasoning = useWorkflowReasoningStore.getState()
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   useProjectStore.setState(originalProject, true)
   useWorkflowReasoningStore.setState(originalReasoning, true)
+})
+
+it.each(['navigation', 'snapshot'] as const)('pauses the opened run and restores context after %s setup failure', async failure => {
+  const pause = vi.fn(async () => ({ ...view, status: 'paused' as const }))
+  const transport = { begin: vi.fn(async () => view), pause,
+    read: vi.fn(async () => ({ ...view, handle: { ...handle, runId: 'wrong-run' } })),
+    subscribe: vi.fn(() => () => {}), subscribeReasoning: vi.fn(() => () => {}) } as unknown as ReturnType<typeof createMainGenerationTransport>
+  const previousCancellation = vi.fn()
+  const previousHandle = { ...handle, runId: 'previous-run' }
+  const context: WorkflowContext = { runId: 'workflow', projectPath: session.projectPath, projectSession: session,
+    generationModelId: 'model', writingLanguage: 'zh-CN', uiLocale: 'zh-CN', data: {}, cancelled: false, mainGenerationRunHandle: previousHandle,
+    requestMainGenerationCancellation: previousCancellation }
+  await expect(createWorkflowMainGenerationRuntime({ context,
+    callbacks: { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
+    selection: { operation: 'review-chapter', promptKeys: [], skillStages: [], output: 'visible-text',
+      onRunOpened: async () => { if (failure === 'navigation') throw new Error('navigation failed') } } }, transport)).rejects.toThrow()
+  expect(pause).toHaveBeenCalledExactlyOnceWith(handle)
+  expect(context.mainGenerationRunHandle).toBe(previousHandle)
+  expect(context.mainGenerationRootHandle).toBeUndefined()
+  expect(context.requestMainGenerationCancellation).toBe(previousCancellation)
+})
+
+it('keeps the import ordinal when budget preflight rejects before a physical receipt', async () => {
+  const invoke = vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>(async channel => {
+    if (channel === 'import-generation:read') return { view, modelId: 'model', frozenContext: {} }
+    throw new Error('TASK_BUDGET_SCOPE_SPLIT_REQUIRED:1')
+  })
+  vi.stubGlobal('window', { aiNovelAPI: { invoke } })
+  const transport = { read: vi.fn(async () => view), subscribe: vi.fn(() => () => {}) } as unknown as ReturnType<typeof createMainGenerationTransport>
+  const context: WorkflowContext = { runId: 'workflow', projectPath: session.projectPath, projectSession: session,
+    generationModelId: 'model', writingLanguage: 'zh-CN', uiLocale: 'zh-CN', data: {}, cancelled: false }
+  const runtime = await createWorkflowMainGenerationRuntime({ context,
+    callbacks: { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
+    selection: { operation: 'import-global-facts', promptKeys: [], skillStages: [], output: 'structured-data',
+      importSlot: { runId: 'import-run', stage: 'global', batchId: 'done' } } }, transport)
+  await runtime.execute(async ({ session: generation }) => {
+    const task = { purpose: 'import-global-facts', output: 'structured-data' as const, messages: [] }
+    await expect(generation.complete(task)).rejects.toThrow('TASK_BUDGET_SCOPE_SPLIT_REQUIRED')
+    await expect(generation.complete(task)).rejects.toThrow('TASK_BUDGET_SCOPE_SPLIT_REQUIRED')
+  })
+  expect(invoke.mock.calls.filter(([channel]) => channel === 'import-generation:execute').map(call => call[1]))
+    .toEqual([expect.objectContaining({ ordinal: 0 }), expect.objectContaining({ ordinal: 0 })])
 })
 
 it('shows only current run reasoning in volatile memory and clears it on project switch', async () => {

@@ -82,6 +82,23 @@ type AttemptRequest = {
   validatedPrefix: readonly Blueprint[]
 }
 
+it('splits after syntax-repair preflight refuses capacity without recording a physical repair', async () => {
+  let physical = 0
+  const complete = vi.fn<GenerationSession['complete']>(async task => {
+    if (task.purpose.endsWith(':structured-syntax-repair')) throw new Error('TASK_BUDGET_SCOPE_SPLIT_REQUIRED:1')
+    physical += 1
+    const { items } = taskPayload(task)
+    return { status: 'completed', finishReason: 'stop', content: physical === 1 ? '{"blueprints":['
+      : JSON.stringify({ blueprints: items.map(chapterNumber => ({ chapterNumber, title: '完整章节' })) }),
+      receipt: attemptReceipt(physical, 1000, physical * 1000, 'stop') }
+  })
+  const result = await createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } }).execute({ items: [1, 2], limits: { maxBatchItems: 2 } })
+  expect(result.ok).toBe(true)
+  expect(result.receipt.calls).toBe(3)
+  expect(result.receipt.splitCount).toBe(1)
+  expect(complete).toHaveBeenCalledTimes(4)
+})
+
 type AttemptResult =
   | { status: 'completed'; content: string; requestedTokens: number }
   | {

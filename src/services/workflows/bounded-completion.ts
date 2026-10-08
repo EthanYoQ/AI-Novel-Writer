@@ -52,6 +52,7 @@ export interface BoundedCompletionRequest {
   originalPrompt: string
   writingLanguage: WritingLanguage
   uiLocale?: Locale
+  sourceText?: string
   preserveCompleteStructuredPrompt?: boolean
   requestContinuation: (prompt: string) => Promise<BoundedCompletion>
   isCancelled?: () => boolean
@@ -282,7 +283,7 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
   assertNotCancelled(uiLocale, request.isCancelled)
   if (request.mode === 'append-visible-text') {
     try {
-      assertMechanicallyCompleteVisibleText(content, uiLocale)
+      assertMechanicallyCompleteVisibleText(content, uiLocale, request.sourceText)
     } catch (error) {
       // The merged text may be a usable partial document even when it cannot
       // be mechanically confirmed as complete (e.g. a leftover truncation

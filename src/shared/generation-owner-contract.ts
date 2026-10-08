@@ -283,7 +283,7 @@ export interface GenerationOwnerChannels {
   'generation:list-batches': { args: []; return: GenerationBatchHistory[] }
   'generation:confirm-batch-finalization': { args: [{ batchId: string; chapterNumber: number; finalizationId: string }]; return: GenerationBatchProgress }
   'generation:list-directory-progress': { args: []; return: DirectoryGenerationProgress[] }
-  'generation:compose-visible': { args: [MainGenerationRunHandle, string[], string, VisibleCompositionAlgorithm?]; return: VisibleCompositionReceipt }
+  'generation:compose-visible': { args: [MainGenerationRunHandle, string[], string | undefined, VisibleCompositionAlgorithm?]; return: VisibleCompositionReceipt }
   'generation:read-visible-composition': { args: [MainGenerationRunHandle]; return: VisibleCompositionReceipt | null }
   'generation:begin': { args: [BeginGenerationRequest]; return: MainGenerationRunView }
   'generation:bind-material-decision': { args: [{ handle: MainGenerationRunHandle; materialDecision: MaterialDecisionReceipt }]; return: MainGenerationRunView }

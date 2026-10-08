@@ -4,6 +4,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import ShellV2 from '../ShellV2'
+import { getActiveProjectSessionContext, setActiveProjectSessionContext } from '../../../../shared/project-session-context'
+import NovelConfigEditor from '../../../editor/NovelConfigEditor'
+import { GenerateFieldCommand } from '../../../../services/workflows/commands/generate-field.command'
+import { useLLMStore } from '../../../../stores/llm-store'
 import LeftToolWindowBar from '../../LeftToolWindowBar'
 import StatusBar from '../../StatusBar'
 import EditorArea from '../../../panels/EditorArea'
@@ -167,4 +171,41 @@ it('Writer 草稿标签切换后点击角色栏目不会被旧标签 effect 拉�
   })
   expect(useEditorStore.getState().activeTabId).toBe('f05-draft')
   expect(useLayoutStore.getState()).toMatchObject({ sidebarView: 'characters', activeRailItem: 'characters' })
+})
+
+it('does not create orphan builtin tabs and keeps project navigation open for History', async () => {
+  await render()
+  for (const title of ['世界观', '章节蓝图', '剧情树']) {
+    await click(host.querySelector(`.writer-left-rail button[title="${title}"]`))
+    expect(useEditorStore.getState().tabs).toEqual([])
+  }
+  await act(async () => useProjectStore.setState({ currentProject: project }))
+  await click(host.querySelector('.writer-left-rail button[title="版本历史"]'))
+  expect(useLayoutStore.getState()).toMatchObject({ sidebarOpen: true, activeRailItem: 'project' })
+  await click(host.querySelector('.writer-left-rail button[title="版本历史"]'))
+  expect(useLayoutStore.getState().sidebarOpen).toBe(true)
+  expect(useEditorStore.getState().tabs.at(-1)).toMatchObject({ type: 'version-history', projectKey: project.path })
+})
+
+it('starts separate field generation actions with different run identities', async () => {
+  const oldModelId = useLLMStore.getState().defaultModelId
+  const oldSession = getActiveProjectSessionContext()
+  setActiveProjectSessionContext({ projectId: project.id, leaseId: project.sessionLease!, projectPath: project.path })
+  const execute = vi.spyOn(GenerateFieldCommand.prototype, 'execute').mockResolvedValue('generated')
+  useLLMStore.setState({ defaultModelId: 'fixture-model' })
+  useProjectStore.setState({ currentProject: project })
+  try {
+    await render(<NovelConfigEditor projectKey={project.path} />)
+    const button = host.querySelector<HTMLButtonElement>('[title="AI 生成「核心大纲」"]')!
+    await click(button)
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(button.disabled).toBe(false))
+    await click(button)
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(2))
+    expect(execute.mock.calls[0]![0].context.runId).not.toBe(execute.mock.calls[1]![0].context.runId)
+  } finally {
+    execute.mockRestore()
+    useLLMStore.setState({ defaultModelId: oldModelId })
+    setActiveProjectSessionContext(oldSession)
+  }
 })

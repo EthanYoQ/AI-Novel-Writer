@@ -167,7 +167,9 @@ export default function LeftToolWindowBar() {
           title={text('版本历史', 'Version history')}
           onClick={() => {
             if (!currentProject) return
-            setSidebarView('project')
+            if (sidebarView !== 'project' || activeRailItem !== 'project' || !useLayoutStore.getState().sidebarOpen) {
+              setSidebarView('project')
+            }
             openBuiltinEditor('version-history', text('版本历史', 'Version history'), 'version-history')
           }}
         />

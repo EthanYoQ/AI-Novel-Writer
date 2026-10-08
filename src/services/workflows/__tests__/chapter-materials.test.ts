@@ -19,6 +19,20 @@ const assemble = (input: Omit<Parameters<typeof assembleChapterMaterials>[0], 'i
   assembleChapterMaterials({ identity: { projectId: '项目', epoch: '会话' }, ...input })
 
 describe('chapter materials', () => {
+  it('restores a reference when removing it lets a larger finalized block displace its evidence', async () => {
+    const evidence = 'UNIQUE_SOURCE_EVIDENCE'
+    const low = { chapterNumber: 1, draftId: 11, title: 'Low', content: `${evidence} ${'x'.repeat(1000)}`, evidence: [evidence] }
+    const medium = { chapterNumber: 2, draftId: 12, title: 'Medium', content: `alpha beta ${'y'.repeat(2200)}`, evidence: ['alpha beta'] }
+    const reference = { text: evidence, rendered: `alpha beta gamma ${'z'.repeat(1500)}`, deduplicateAgainstFinalized: true }
+    const input = { writingLanguage: 'en-US' as const, authorProjectFacts: [], characterProfiles: '', futurePlans: '',
+      references: [reference], finalized: [low, medium], candidates: [], relevanceTerms: ['alpha', 'beta', 'gamma'] }
+    const roomy = await assemble({ ...input, budgetChars: 8000 })
+    const required = roomy.decision.included.filter(item => item.required).reduce((sum, item) => sum + item.units, 0)
+    const lowBytes = new TextEncoder().encode(`[Finalized manuscript · Chapter 1 · draft 11]\n${low.content}`).byteLength
+    const bundle = await assemble({ ...input, budgetChars: required + new TextEncoder().encode(reference.rendered).byteLength + lowBytes + 50 })
+    expect(bundle.text).toContain(evidence)
+    expect(bundle.decision.omitted).not.toContainEqual(expect.objectContaining({ sourceId: 'reference:0', reason: 'deduplicated-against-finalized' }))
+  })
   it.each([
     {
       writingLanguage: 'zh-CN' as const,

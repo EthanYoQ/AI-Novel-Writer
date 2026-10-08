@@ -110,6 +110,7 @@ export function openBuiltinEditor(
   chapterNumber?: number,
 ): void {
   const projectKey = useProjectStore.getState().currentProject?.path
+  if (!projectKey) return
   useEditorStore.getState().openFile({
     id,
     name,
@@ -118,7 +119,7 @@ export function openBuiltinEditor(
       ? { narrativeThreadView: narrativeThreadView ?? 'plans' }
       : {}),
     ...(type === 'chapter-card' && chapterNumber !== undefined ? { chapterNumber } : {}),
-    ...(projectKey ? { projectKey } : {}),
+    projectKey,
   })
 }
 

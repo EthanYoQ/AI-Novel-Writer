@@ -20,6 +20,53 @@ afterEach(() => {
   else Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
+it('keeps dirty edits until confirmed discard and invalidates a pending document read after clear', async () => {
+  let cleared = false
+  let finishRead!: () => void
+  const pendingRead = new Promise<unknown>(resolve => { finishRead = () => resolve({ available: true, content: 'Deleted copy', contentHash: 'B', indexStatus: 'current' }) })
+  const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'kb:list-documents') return cleared ? [] : ['a', 'b'].map(id => ({ id, fileName: `${id}.txt`, importedAt: '2026-09-25', chunkCount: 1, filePath: `knowledge-copy:${id}` }))
+    if (channel === 'kb:stats') return { documentCount: cleared ? 0 : 2, totalChunks: cleared ? 0 : 2, vectorDimension: 0 }
+    if (channel === 'kb:get-vector-rebuild-status') return { embeddingConfigured: false, canRebuild: false, totalChunks: 2, vectorlessCount: 2, activeVectorDimension: 0 }
+    if (channel === 'kb:read-document-copy') return args[0] === 'b' ? pendingRead : { available: true, content: 'Saved A', contentHash: 'A', indexStatus: 'current' }
+    if (channel === 'kb:clear-all') { cleared = true; return { success: true } }
+    throw new Error(`Unexpected IPC channel: ${channel}`)
+  })
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {}, once: () => {}, send: () => {} } })
+  useLocaleStore.setState({ locale: 'en-US', initialized: true })
+  useProjectStore.setState({ currentProject: project as never })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => root.render(<KnowledgeOverview />))
+    await vi.waitFor(() => expect(page.getByRole('button', { name: 'a.txt' }).query()).not.toBeNull())
+    await act(async () => page.getByRole('button', { name: 'a.txt' }).click())
+    await vi.waitFor(() => expect(page.getByRole('textbox', { name: 'Project copy content' }).query()).not.toBeNull())
+    await act(async () => page.getByRole('textbox', { name: 'Project copy content' }).fill('Unsaved A'))
+    await act(async () => page.getByRole('button', { name: 'a.txt' }).click())
+    expect((page.getByRole('textbox', { name: 'Project copy content' }).query() as HTMLTextAreaElement).value).toBe('Unsaved A')
+    await act(async () => page.getByRole('button', { name: 'b.txt' }).click())
+    await act(async () => page.getByRole('button', { name: 'Cancel', exact: true }).click())
+    await vi.waitFor(() => expect(page.getByRole('button', { name: 'Discard changes', exact: true }).query()).toBeNull())
+    expect((page.getByRole('textbox', { name: 'Project copy content' }).query() as HTMLTextAreaElement).value).toBe('Unsaved A')
+    expect(invoke.mock.calls.filter(args => args[0] === 'kb:read-document-copy')).toHaveLength(1)
+    await act(async () => page.getByRole('button', { name: 'b.txt' }).click())
+    await act(async () => page.getByRole('button', { name: 'Discard changes', exact: true }).click())
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(args => args[0] === 'kb:read-document-copy')).toHaveLength(2))
+    await act(async () => page.getByRole('button', { name: 'Clear knowledge base', exact: true }).click())
+    await act(async () => page.getByRole('button', { name: 'Clear knowledge base', exact: true }).nth(1).click())
+    await vi.waitFor(() => expect(cleared).toBe(true))
+    await act(async () => finishRead())
+    expect(page.getByRole('textbox', { name: 'Project copy content' }).query()).toBeNull()
+    expect(page.getByRole('button', { name: 'Save project copy', exact: true }).query()).toBeNull()
+  } finally {
+    finishRead()
+    await act(async () => root.unmount())
+    container.remove()
+  }
+})
+
 it('opens a project copy, saves and reopens it, then explicitly updates its local index', async () => {
   let content = 'Full original text'
   let edited = false

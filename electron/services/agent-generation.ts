@@ -98,9 +98,14 @@ export class AgentGeneration {
     const actions = response.toolCalls.map((call, callIndex): AgentToolAction => {
       const toolCallId = this.actionId(row.attempt_id, callIndex)
       let state = usage.agentActions?.[toolCallId]
-      if (call.name === 'start_workflow' && ['generate_architecture', 'generate_blueprint'].includes(String(call.arguments.workflow)) && !state?.planningArguments && !state?.workflow) {
+      if (call.name === 'start_workflow' && ['generate_architecture', 'generate_blueprint'].includes(String(call.arguments.workflow)) && !state?.planningArguments && !state?.workflow && (!state || state.status === 'pending')) {
         const totalChapters = this.db.prepare("SELECT total_chapters FROM project_core WHERE id='main'").pluck().get() as number
-        state = { ...state, status: state?.status ?? 'pending', planningArguments: normalizeAgentPlanningArguments(call.arguments, totalChapters) }
+        try {
+          state = { ...state, status: state?.status ?? 'pending', planningArguments: normalizeAgentPlanningArguments(call.arguments, totalChapters) }
+        } catch (error) {
+          if (!(error instanceof Error) || !['GENERATION_PLANNING_RANGE_INVALID', 'GENERATION_PLANNING_TARGET_INVALID'].includes(error.message)) throw error
+          state = { status: 'failed', observation: error.message }
+        }
         usage.agentActions = { ...usage.agentActions, [toolCallId]: state }
         normalized = true
       }
@@ -380,12 +385,20 @@ export class AgentGeneration {
       if (action.status !== 'running' || root.epoch !== this.scope.epoch || root.status !== 'active' || !this.sourcesCurrent(run)
         || !this.context(run).input.tools.some(tool => tool.name === action.name && tool.source === 'builtin' && tool.requiresConfirmation && !tool.isReadOnly))
         throw new Error('GENERATION_AGENT_DOMAIN_TOOL_NOT_AUTHORIZED')
-      const before = this.host.capture(run)
+      const projections = this.sessionRuns(this.navigation(run).key).map(target => {
+        if (!this.sourcesCurrent(target)) throw new Error('GENERATION_AGENT_SOURCE_CHANGED')
+        const attemptId = this.db.prepare('SELECT attempt_id FROM generation_attempts WHERE run_id=?').pluck().get(target.runId) as string | undefined
+        if (!attemptId) throw new Error('GENERATION_AGENT_CHILD_EFFECT_ROUND_REQUIRED')
+        return { target, attemptId, before: this.host.capture(target) }
+      })
       const effect = commitAgentDomainTool(this.db, ref.toolCallId, action.name, action.arguments)
-      const binding = this.host.capture(run)
-      usage.agentSourceTransition = { actionId: ref.toolCallId, beforeHash: textHash(JSON.stringify(before)), afterHash: textHash(JSON.stringify(binding)), binding }
-      usage.agentActions = { ...usage.agentActions, [ref.toolCallId]: { ...state!, domainEffect: effect } }
-      this.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), ref.attemptId)
+      for (const { target, attemptId, before } of projections) {
+        const binding = this.host.capture(target)
+        const targetUsage = attemptId === ref.attemptId ? usage : JSON.parse(this.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(attemptId) as string) as StoredUsage
+        targetUsage.agentSourceTransition = { actionId: ref.toolCallId, beforeHash: textHash(JSON.stringify(before)), afterHash: textHash(JSON.stringify(binding)), binding }
+        if (attemptId === ref.attemptId) targetUsage.agentActions = { ...targetUsage.agentActions, [ref.toolCallId]: { ...state!, domainEffect: effect } }
+        this.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(targetUsage), attemptId)
+      }
       return { ...effect, current: true }
     }).immediate()
   }

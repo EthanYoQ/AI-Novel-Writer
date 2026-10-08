@@ -515,12 +515,15 @@ function ModelForm({
     structuredOutput: model.capabilities?.structuredOutput ?? false,
     usage: model.capabilities?.usage ?? false,
   }
+  const providerOutputLimit = resolveModelProfileBudgetCapabilities(model)?.maxOutputTokens
+  const outputLimits = [model.maxTokens, currentCapabilities.maxOutputTokens, providerOutputLimit]
+    .filter((value): value is number => Number.isSafeInteger(value) && Number(value) > 0)
+  const effectiveOutputLimit = outputLimits.length ? Math.min(...outputLimits) : null
   const contextOutputConflict = !isEmbedding
     && currentCapabilities.contextWindowTokens !== null
     && currentCapabilities.contextWindowTokens > 0
-    && model.maxTokens >= currentCapabilities.contextWindowTokens
-  const providerOutputLimit = resolveModelProfileBudgetCapabilities(model)?.maxOutputTokens
-  const effectiveOutputLimit = Math.min(model.maxTokens, currentCapabilities.maxOutputTokens, providerOutputLimit ?? Infinity)
+    && effectiveOutputLimit !== null
+    && effectiveOutputLimit >= currentCapabilities.contextWindowTokens
 
   const updateCapabilities = (next: Partial<ModelCapabilities>) => {
     const capabilities = { ...currentCapabilities, ...next }
@@ -533,12 +536,16 @@ function ModelForm({
 
   const resetAdvancedSettings = () => {
     const defaultMaxOutputTokens = Math.min(providerOutputLimit ?? DEFAULT_GENERATION_OUTPUT_TOKENS, DEFAULT_GENERATION_OUTPUT_TOKENS)
+    const capabilitySources: NonNullable<ModelProfile['capabilitySources']> = {}
+    for (const key of Object.keys(currentCapabilities) as Array<keyof ModelCapabilities>) {
+      capabilitySources[key] = modelCapabilitySource(model, key)
+    }
     onChange({
       ...model,
       temperature: 0.7,
       maxTokens: defaultMaxOutputTokens,
       capabilities: { ...currentCapabilities, maxOutputTokens: providerOutputLimit ?? DEFAULT_GENERATION_OUTPUT_TOKENS },
-      capabilitySources: { ...model.capabilitySources, maxOutputTokens: providerOutputLimit === undefined ? 'unknown' : 'preset' },
+      capabilitySources: { ...capabilitySources, maxOutputTokens: providerOutputLimit === undefined ? 'unknown' : 'preset' },
       reasoningOverride: 'auto',
       reasoningMapping: undefined,
     })
@@ -939,7 +946,7 @@ function ModelForm({
                 </div>
               </div>
               <p className="text-xs text-[var(--color-text-secondary)]" data-effective-output-limit={effectiveOutputLimit}>
-                {text(`当前有效输出额度为 ${effectiveOutputLimit.toLocaleString()} Token。取作者设置、模型输出容量与已知服务商上限中的较小值；完整输入和本次剩余额度仍会影响请求。`, `Effective output allowance: ${effectiveOutputLimit.toLocaleString()} tokens. This uses the lowest configured or verified output limit. Prompt size and the remaining action allowance still affect each request.`)}
+                {text(`当前有效输出额度为 ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')} Token。取作者设置、模型输出容量与已知服务商上限中的较小值；完整输入和本次剩余额度仍会影响请求。`, `Effective output allowance: ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')} tokens. This uses the lowest configured or verified output limit. Prompt size and the remaining action allowance still affect each request.`)}
               </p>
               {contextOutputConflict && (
                 <p

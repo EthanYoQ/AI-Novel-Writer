@@ -60,7 +60,7 @@ function legacyKnowledgeAuthorizationRequired(
 
 function frozenLegacyOperation(projectRoot: string, operation: ChapterDeletionOperation): ChapterDeletionResult | null {
   if (!readPortableRuntimeFreeze(projectRoot).isFrozen('chapter_deletion_operations', operation.operationId)) return null
-  return { success: false, committed: false, operation, error: '旧项目章节删除操作仅保留为历史，不能在新项目中重试或继续清理' }
+  return { success: false, committed: false, error: '旧项目章节删除操作仅保留为历史，不能在新项目中重试或继续清理' }
 }
 
 export class ChapterDeletionService {
@@ -136,8 +136,9 @@ export class ChapterDeletionService {
     return this.resume(projectRoot, operationId)
   }
 
-  listIncomplete(): ChapterDeletionOperation[] {
-    return ChapterDeletionRepository.listIncomplete()
+  listIncomplete(projectRoot: string): ChapterDeletionOperation[] {
+    const freeze = readPortableRuntimeFreeze(projectRoot)
+    return ChapterDeletionRepository.listIncomplete().filter(operation => !freeze.isFrozen('chapter_deletion_operations', operation.operationId))
   }
 
   private async resume(projectRoot: string, operationId: string): Promise<ChapterDeletionResult> {

@@ -50,6 +50,7 @@ function ProjectBackupPanelSession({
   const [secret, setSecret] = useState('')
   const [cloudBookId, setCloudBookId] = useState('')
   const [parentIds, setParentIds] = useState<string[]>([])
+  const [generationSource, setGenerationSource] = useState<Pick<CloudBackupBindingView, 'localEndpointAccountId' | 'cloudBookId'> | null>(null)
   const [generations, setGenerations] = useState<CloudBackupGenerationView[]>([])
   const [selectedGenerationId, setSelectedGenerationId] = useState('')
   const [disclosureConfirmed, setDisclosureConfirmed] = useState(false)
@@ -61,6 +62,19 @@ function ProjectBackupPanelSession({
   const [sessionOnlyCredential, setSessionOnlyCredential] = useState(false)
   const [bindingRefreshFailed, setBindingRefreshFailed] = useState(false)
 
+  const matchesGenerationSource = (accountId: string, bookId: string) =>
+    generationSource?.localEndpointAccountId === accountId && generationSource.cloudBookId === bookId
+
+  const updateBinding = (next: CloudBackupBindingView | null) => {
+    if (!next || !matchesGenerationSource(next.localEndpointAccountId, next.cloudBookId)) {
+      setGenerations([])
+      setSelectedGenerationId('')
+    }
+    setBinding(next)
+    setGenerationSource(next)
+    setParentIds(next?.lastSelectedParentGenerationIds ?? [])
+  }
+
   useEffect(() => {
     if (!projectSession) return
     let active = true
@@ -70,7 +84,7 @@ function ProjectBackupPanelSession({
         setNotice({ kind: 'error', text: result.errorCode })
         return
       }
-      setBinding(result.binding)
+      updateBinding(result.binding)
       setAccount(result.account)
       setSessionOnlyCredential(result.account?.persistence === 'session-only')
       if (result.account) {
@@ -79,7 +93,6 @@ function ProjectBackupPanelSession({
       }
       if (result.binding) {
         setCloudBookId(result.binding.cloudBookId)
-        setParentIds(result.binding.lastSelectedParentGenerationIds)
       }
     }).catch(error => {
       if (active) setNotice({ kind: 'error', text: errorText(error) })
@@ -90,17 +103,6 @@ function ProjectBackupPanelSession({
     // sessionKey is the frozen project/session boundary for this request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionKey])
-
-  if (!project) {
-    return <div className="space-y-3" data-testid="project-backup-panel">
-      <p className="text-sm text-[var(--color-text)]">{text('请先打开一个项目，再导出存档或配置云备份。', 'Open a project before exporting an archive or configuring cloud backup.')}</p>
-      <p className="text-xs text-[var(--color-text-muted)]">{text('恢复操作始终创建新副本，不会替换当前项目。', 'Restore always creates a new copy and never replaces the current project.')}</p>
-    </div>
-  }
-
-  if (!projectSession) {
-    return <p className="text-sm text-[var(--color-error-text)]">{text('当前项目缺少有效会话，请重新打开项目后再试。', 'The current project has no valid session. Reopen it and try again.')}</p>
-  }
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true)
@@ -114,22 +116,35 @@ function ProjectBackupPanelSession({
     }
   }
 
+  const restoreLocal = () => run(async () => {
+    const archive = await ipc.invoke('dialog:select-project-archive')
+    if (!archive) return
+    const target = await ipc.invoke('dialog:select-project-restore-target', project ? `${project.name}-恢复副本` : text('恢复副本', 'Restored copy'))
+    if (!target) return
+    const result = await ipc.invoke('project:archive-restore', { archiveGrantId: archive.grantId, targetGrantId: target.grantId })
+    if (!result.success) throw new Error(result.errorCode || result.error)
+    setNotice({ kind: 'success', text: text(`已恢复新副本 ${result.receipt.targetProjectId}：${result.receipt.targetProjectRoot}`, `Restored copy ${result.receipt.targetProjectId}: ${result.receipt.targetProjectRoot}`) })
+  })
+
+  if (!project) {
+    return <div className="space-y-3" data-testid="project-backup-panel">
+      <p className="text-sm text-[var(--color-text)]">{text('请先打开一个项目，再导出存档或配置云备份。', 'Open a project before exporting an archive or configuring cloud backup.')}</p>
+      <p className="text-xs text-[var(--color-text-muted)]">{text('恢复操作始终创建新副本，不会替换当前项目。', 'Restore always creates a new copy and never replaces the current project.')}</p>
+      <Button type="button" variant="outline" onClick={() => void restoreLocal()} disabled={busy}><Download size={14} />{text('从本地存档恢复副本', 'Restore a copy from local archive')}</Button>
+      {notice && <p role={notice.kind === 'error' ? 'alert' : 'status'} className="text-sm">{notice.text}</p>}
+    </div>
+  }
+
+  if (!projectSession) {
+    return <p className="text-sm text-[var(--color-error-text)]">{text('当前项目缺少有效会话，请重新打开项目后再试。', 'The current project has no valid session. Reopen it and try again.')}</p>
+  }
+
   const exportLocal = () => run(async () => {
     const target = await ipc.invoke('dialog:select-project-archive-export', project.name)
     if (!target) return
     const result = await ipc.invoke('project:archive-export', { targetArchiveGrantId: target.grantId, projectSession })
     if (!result.success) throw new Error(result.errorCode || result.error)
     setNotice({ kind: 'success', text: text(`本地存档已导出：${result.receipt.targetSha256}`, `Local archive exported: ${result.receipt.targetSha256}`) })
-  })
-
-  const restoreLocal = () => run(async () => {
-    const archive = await ipc.invoke('dialog:select-project-archive')
-    if (!archive) return
-    const target = await ipc.invoke('dialog:select-project-restore-target', `${project.name}-恢复副本`)
-    if (!target) return
-    const result = await ipc.invoke('project:archive-restore', { archiveGrantId: archive.grantId, targetGrantId: target.grantId })
-    if (!result.success) throw new Error(result.errorCode || result.error)
-    setNotice({ kind: 'success', text: text(`已恢复新副本 ${result.receipt.targetProjectId}：${result.receipt.targetProjectRoot}`, `Restored copy ${result.receipt.targetProjectId}: ${result.receipt.targetProjectRoot}`) })
   })
 
   const connectAndBind = () => run(async () => {
@@ -143,7 +158,7 @@ function ProjectBackupPanelSession({
       projectSession,
       localEndpointAccountId: connected.account.accountId,
       cloudBookId: cloudBookId.trim(),
-      lastSelectedParentGenerationIds: parentIds,
+      lastSelectedParentGenerationIds: matchesGenerationSource(connected.account.accountId, cloudBookId.trim()) ? parentIds : [],
       expectedRevision: binding?.revision ?? null,
     })
     if (!confirmed.success) {
@@ -154,7 +169,7 @@ function ProjectBackupPanelSession({
     const isSessionOnly = connected.warning === 'CLOUD_CREDENTIAL_SESSION_ONLY'
       || connected.account.persistence === 'session-only'
     setAccount(connected.account)
-    setBinding(confirmed.binding)
+    updateBinding(confirmed.binding)
     setSessionOnlyCredential(isSessionOnly)
     setSecret('')
     setNotice({
@@ -173,11 +188,11 @@ function ProjectBackupPanelSession({
       projectSession,
       localEndpointAccountId: account.accountId,
       cloudBookId: cloudBookId.trim(),
-      lastSelectedParentGenerationIds: parentIds,
+      lastSelectedParentGenerationIds: matchesGenerationSource(account.accountId, cloudBookId.trim()) ? parentIds : [],
       expectedRevision: binding?.revision ?? null,
     })
     if (!result.success) throw new Error(result.errorCode)
-    setBinding(result.binding)
+    updateBinding(result.binding)
     setNotice({ kind: 'success', text: text('账号、云书和父世代已重新绑定；尚未上传。', 'Account, cloud book, and parents rebound. Nothing was uploaded.') })
   })
 
@@ -187,6 +202,11 @@ function ProjectBackupPanelSession({
     if (!localEndpointAccountId || !bookId) throw new Error(text('请先连接并绑定云端账号。', 'Connect and bind a cloud account first.'))
     const result = await ipc.invoke('cloud-backup:list', { localEndpointAccountId, cloudBookId: bookId })
     if (!result.success) throw new Error(result.errorCode)
+    if (!matchesGenerationSource(localEndpointAccountId, bookId)) {
+      setParentIds([])
+      setSelectedGenerationId('')
+    }
+    setGenerationSource({ localEndpointAccountId, cloudBookId: bookId })
     setGenerations(result.generations)
     setNotice({ kind: 'success', text: text(`已读取 ${result.generations.length} 个云端世代。`, `Loaded ${result.generations.length} cloud generations.`) })
   })
@@ -199,7 +219,7 @@ function ProjectBackupPanelSession({
     try {
       const result = await ipc.invoke('cloud-backup:backup', { operationId, projectSession, disclosureConfirmed: true })
       if (!result.success) throw new Error(result.errorCode)
-      if (result.binding) setBinding(result.binding)
+      if (result.binding) updateBinding(result.binding)
       setNotice({ kind: 'success', text: text(`云备份完成：${result.generation.generationId}；备份点 ${result.backupPoint}${result.bindingSaved ? '' : '；绑定未保存'}`, `Cloud backup complete: ${result.generation.generationId}; backup point ${result.backupPoint}${result.bindingSaved ? '' : '; binding not saved'}`) })
     } finally {
       setActiveOperationId(current => current === operationId ? null : current)
@@ -245,22 +265,18 @@ function ProjectBackupPanelSession({
     const result = await ipc.invoke('cloud-backup:clear-credential', accountId)
     if (!result.success) throw new Error(result.errorCode)
     setAccount(null)
-    setBinding(null)
+    updateBinding(null)
     setSecret('')
     setCloudBookId('')
     setDisclosureConfirmed(false)
-    setGenerations([])
-    setSelectedGenerationId('')
-    setParentIds([])
     setSessionOnlyCredential(false)
     setConfirmClearCredential(false)
     setBindingRefreshFailed(true)
     const refreshed = await ipc.invoke('cloud-backup:view', projectSession)
     if (!refreshed.success) throw new Error(text(`本机凭据已清除，但绑定状态刷新失败：${refreshed.errorCode}。请关闭并重新打开设置后再连接。`, `The local credential was cleared, but the binding state could not be refreshed: ${refreshed.errorCode}. Close and reopen settings before connecting.`))
-    setBinding(refreshed.binding)
+    updateBinding(refreshed.binding)
     setAccount(refreshed.account)
     setCloudBookId(refreshed.binding?.cloudBookId ?? '')
-    setParentIds(refreshed.binding?.lastSelectedParentGenerationIds ?? [])
     setSessionOnlyCredential(refreshed.account?.persistence === 'session-only')
     setBindingRefreshFailed(false)
     setNotice({ kind: 'success', text: text('本机凭据已清除，绑定现为未配置；历史云世代未删除。', 'The local credential was cleared and the binding is now unconfigured. Existing cloud generations were not deleted.') })
@@ -292,7 +308,15 @@ function ProjectBackupPanelSession({
         <div><Label htmlFor="backup-endpoint">{text('WebDAV 地址', 'WebDAV endpoint')}</Label><Input id="backup-endpoint" value={endpoint} onChange={event => setEndpoint(event.target.value)} /></div>
         <div><Label htmlFor="backup-username">{text('用户名', 'Username')}</Label><Input id="backup-username" value={username} onChange={event => setUsername(event.target.value)} /></div>
         <div><Label htmlFor="backup-secret">{text('密码或应用密钥', 'Password or app secret')}</Label><Input id="backup-secret" type="password" value={secret} onChange={event => setSecret(event.target.value)} /></div>
-        <div><Label htmlFor="backup-cloud-book">{text('云书标识', 'Cloud book ID')}</Label><Input id="backup-cloud-book" value={cloudBookId} onChange={event => setCloudBookId(event.target.value)} /></div>
+        <div><Label htmlFor="backup-cloud-book">{text('云书标识', 'Cloud book ID')}</Label><Input id="backup-cloud-book" value={cloudBookId} onChange={event => {
+          setCloudBookId(event.target.value)
+          if (event.target.value.trim() !== cloudBookId.trim()) {
+            setGenerationSource(null)
+            setParentIds([])
+            setGenerations([])
+            setSelectedGenerationId('')
+          }
+        }} /></div>
       </div>
       <div className="flex flex-wrap gap-2">
         <Button type="button" onClick={() => void connectAndBind()} disabled={busy || bindingRefreshFailed}>{text('连接并绑定', 'Connect and bind')}</Button>

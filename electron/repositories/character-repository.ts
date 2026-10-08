@@ -110,6 +110,7 @@ export class CharacterRepository {
 
         const rows = db.prepare(`
       SELECT * FROM characters
+      ${hasCharacterIdentitySchema(db) ? 'WHERE retired=0' : ''}
       ORDER BY
         CASE role
           WHEN 'protagonist' THEN 0

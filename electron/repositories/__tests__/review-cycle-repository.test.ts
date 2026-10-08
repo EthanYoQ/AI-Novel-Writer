@@ -574,6 +574,16 @@ describe('ReviewCycleRepository generated revision state', () => {
       expect(db.transaction(() => ReviewCycleRepository.commitAuthorConfirmation({
         cycleId: cycle.cycleId, confirmationReviewId: confirmation.id,
       }, db))()).toMatchObject({ waivedFindingCount: 1, idempotent: true })
+      const replacement = seedConfirmation(db, seeded, { ...snapshot,
+        items: snapshot.items.map(item => ({ ...item, decision: item.decision === 'waive' ? 'apply' : 'waive' })) })
+      expect(db.transaction(() => ReviewCycleRepository.commitAuthorConfirmation({ cycleId: cycle.cycleId,
+        confirmationReviewId: replacement.id }, db))()).toMatchObject({ idempotent: false, waivedFindingCount: 1 })
+      expect(db.prepare('SELECT target_id,status,evidence_hash FROM review_findings WHERE cycle_id=? ORDER BY target_id').all(cycle.cycleId)).toEqual([
+        { target_id: 'fact:door', status: 'unresolved', evidence_hash: null },
+        { target_id: 'fact:window', status: 'author-waived', evidence_hash: hash(replacement.body) },
+      ])
+      expect(db.prepare('SELECT c.body FROM reviews r JOIN contents c ON c.id=r.content_id WHERE r.id=?').pluck().get(confirmation.id)).toBe(confirmation.body)
+      expect(verifyM03ReviewCycle(db)).toBe(true)
     } finally { db.close() }
   })
 

@@ -61,13 +61,13 @@ export function buildFinalizedContinuityFacts(
   chapterEntities: readonly string[] = [],
   identityContext?: FinalizedCharacterContext,
 ): FinalizedContinuityFact[] {
-  const entities = [...new Set([...chapterEntities, ...(identityContext?.characters.map(item => item.displayNameSnapshot) ?? [])].map(entity => entity.trim()).filter(Boolean))].slice(0, 8)
+  const entities = [...new Set([...chapterEntities, ...(identityContext?.characters.map(item => item.displayNameSnapshot) ?? [])].map(entity => entity.trim()).filter(Boolean))]
   const statements = chapterNotes
     .split(/\n+|(?<=[。！？.!?])\s*/u)
     .map(statement => statement.replace(/^\s*(?:[-*•]|\d+[.)、])\s*/u, '').trim())
     .filter(Boolean)
   return statements.flatMap(statement => {
-    const factEntities = entities.filter(entity => statement.includes(entity))
+    const factEntities = entities.filter(entity => statement.includes(entity)).slice(0, 8)
     const evidence = evidenceExcerpt(finalizedContent, statement, factEntities)
     const characterRefs = identityContext ? factEntities.flatMap(entity => {
       const candidates = identityContext.characters.filter(item => item.displayNameSnapshot === entity)

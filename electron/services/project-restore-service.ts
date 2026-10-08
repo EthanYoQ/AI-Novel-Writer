@@ -11,7 +11,7 @@ import {
 } from '../../src/shared/project-format'
 import { assertPortableSourceSchema, portablePathKey } from './portable-project-format'
 import { extractPortableProjectArchive } from './portable-project-archive'
-import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
+import { PORTABLE_RUNTIME_HISTORY_MAX_BYTES, parsePortableRuntimeFreeze, readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { verifyProjectSqlite } from './sqlite-project-migration'
 import {
   parsePortableKnowledgeSnapshot,
@@ -516,7 +516,7 @@ function restoreReceipt(
 async function installedReceipt(
   targetRoot: string,
   authority: PortableTransferAuthority,
-  entries: readonly { path: string; sha256: string; disposition: string }[],
+  entries: readonly { path: string; byteSize: number; sha256: string; disposition: string }[],
 ): Promise<RestorePortableProjectReceipt | null> {
   if (!fs.existsSync(targetRoot)) return null
   physicalDirectory(targetRoot)
@@ -547,19 +547,20 @@ async function installedReceipt(
   }
   const databasePath = path.join(storage, CANONICAL_PROJECT_DATABASE)
   try {
-    if (!readPortableRuntimeFreeze(targetRoot).active) return null
+    const freeze = readPortableRuntimeFreeze(targetRoot)
+    if (!freeze.active) return null
     verifyProjectSqlite({ databasePath })
     const database = new BetterSqlite(databasePath, { readonly: true, fileMustExist: true })
     try {
       database.pragma('foreign_keys = ON')
       assertPortableSourceSchema(database)
-      verifyPortableTransferAuthority(database, installedAuthority)
+      verifyPortableTransferAuthority(database, installedAuthority, freeze)
     } finally { database.close() }
     const knowledgeEntry = entries.find(entry => entry.path === PORTABLE_KNOWLEDGE_SOURCE_PATH)
     if (knowledgeEntry) {
       if (knowledgeEntry.disposition !== 'knowledge-source') return null
       const snapshot = parsePortableKnowledgeSnapshot(json(readPhysicalFile(
-        path.join(storage, PORTABLE_KNOWLEDGE_SOURCE_PATH),
+        path.join(storage, PORTABLE_KNOWLEDGE_SOURCE_PATH), knowledgeEntry.byteSize,
       ).bytes))
       if (!await verifyPortableKnowledgeSnapshot(storage, snapshot)) return null
     }
@@ -776,13 +777,15 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
       || authority.portableDatabaseSha256 !== databaseEntry.sha256
       || !extracted.manifest.transferReceiptIds.includes(authority.receiptId)
       || await hashFile(databasePath) !== authority.portableDatabaseSha256) fail('PORTABLE_RESTORE_INVALID')
-    assertFreeze(json(fs.readFileSync(freezePath)), authority.originProjectId, authority.snapshotGeneration)
+    const freezeBytes = readPhysicalFile(freezePath, PORTABLE_RUNTIME_HISTORY_MAX_BYTES).bytes
+    assertFreeze(json(freezeBytes), authority.originProjectId, authority.snapshotGeneration)
+    const freeze = parsePortableRuntimeFreeze(freezeBytes)
     verifyProjectSqlite({ databasePath })
     const database = new BetterSqlite(databasePath, { readonly: true, fileMustExist: true })
     try {
       database.pragma('foreign_keys = ON')
       assertPortableSourceSchema(database)
-      verifyPortableTransferAuthority(database, authority)
+      verifyPortableTransferAuthority(database, authority, freeze)
     } finally {
       database.close()
       for (const suffix of ['-wal', '-shm', '-journal']) captureGeneratedFileIfPresent(attempt, databasePath + suffix)

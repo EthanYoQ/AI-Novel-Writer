@@ -28,6 +28,19 @@ async function snapshot(text = '雨夜', revision = 1, durableRevision = revisio
 }
 
 describe('main owned generation facade', () => {
+  it.each(['failed', 'unknown'] as const)('accepts cancellation of unchanged %s artifacts but rejects changed text', async status => {
+    const f = fixture(), shown = vi.fn()
+    const runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
+    const settled = { ...await snapshot(), status }
+    f.emit(settled)
+    await runtime.read()
+    f.emit({ ...settled, status: 'cancelled' })
+    await runtime.read()
+    expect(shown).toHaveBeenLastCalledWith(expect.objectContaining({ text: settled.text, status: 'cancelled' }))
+    f.emit({ ...await snapshot('雨夜来信', 2), status: 'cancelled' })
+    await expect(runtime.read()).rejects.toThrow('MAIN_SNAPSHOT_REGRESSION')
+    await runtime.close()
+  })
   it('forwards diagnostics with unchanged empty artifacts and ignores stale metadata', async () => {
     const f = fixture(), shown = vi.fn(), runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
     const empty = await snapshot('', 0)

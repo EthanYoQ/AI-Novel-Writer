@@ -13,7 +13,7 @@ import { alertError } from '../components/ui/AlertDialog'
 import { confirm } from '../components/ui/Confirm'
 import { appErrorMessage } from '../i18n/app-errors'
 import { saveDirtyEditorChangesForExit, useEditorStore } from './editor-store'
-import { countUnsavedEditorItems } from './editor-unsaved'
+import { countUnsavedEditorItemsForProject } from './editor-unsaved'
 import { useLocaleStore } from './locale-store'
 import { requireIpcSuccess } from '../services/ipc-result'
 import {
@@ -176,9 +176,16 @@ function isPreparedProjectTransitionCurrent(
 
 async function prepareProjectTransition(project: ProjectData): Promise<PreparedProjectTransition | null> {
   const editor = useEditorStore.getState()
-  const hasEditorDrafts = countUnsavedEditorItems(
+  for (const content of Object.values(editor.draftLedgers)) {
+    if (!content) continue
+    try { JSON.parse(content) } catch {
+      throw new Error(projectText('存在无法识别的未保存编辑内容，请先恢复该编辑器', 'An unsaved editor draft could not be read. Restore that editor before continuing.'))
+    }
+  }
+  const hasEditorDrafts = countUnsavedEditorItemsForProject(
     editor.tabs,
     editor.draftLedgers,
+    project.path,
   ) > 0
   if (!hasEditorDrafts && !hasProjectTransitionDrafts(project.path)) {
     return capturePreparedProjectTransition(project, 'clean')
@@ -196,7 +203,7 @@ async function prepareProjectTransition(project: ProjectData): Promise<PreparedP
     },
   )
   if (save) {
-    await saveDirtyEditorChangesForExit(project.path)
+    await saveDirtyEditorChangesForExit(project.path, 'project')
     await saveProjectTransitionDrafts(project.path)
     return capturePreparedProjectTransition(project, 'saved')
   }
@@ -714,7 +721,9 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           useEditorStore.getState().clearProjectTabs(rendererProjectPath)
         }
         set((state) => ({
-          currentProject: { ...result.project!, novelConfig: restored.value },
+          currentProject: { ...result.project!, novelConfig: preparedTransition?.decision === 'discard'
+            && rendererProjectPath && sameProjectPathKey(rendererProjectPath, result.project!.path)
+            ? result.project!.novelConfig : restored.value },
           projectSessionEpoch: state.projectSessionEpoch + 1,
         }))
         const partialLoadWarnings: string[] = []

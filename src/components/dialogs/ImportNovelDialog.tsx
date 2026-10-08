@@ -49,6 +49,12 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [targetMode, setTargetMode] = useState<'new' | 'current'>('new')
   const [purpose, setPurpose] = useState<ImportPurpose>('reference')
 
+  const [previousOpen, setPreviousOpen] = useState(open)
+  if (previousOpen !== open) {
+    setPreviousOpen(open)
+    if (open) setSavePath(null)
+  }
+
   // 拆章结果
   const [inspection, setInspection] = useState<ImportInspectionSummary | null>(null)
   const [splitting, setSplitting] = useState(false)

@@ -625,3 +625,14 @@ describe('ReviewReport human-confirmed revision flow', () => {
     expect(container?.textContent).toContain(RAW_AI_REPORT)
   })
 })
+
+it('keeps author checklist edits when finding statuses refresh', async () => {
+  installIpc(98)
+  const cycle: ReviewCycleProjection = { cycleId: 'status-refresh', reviewId: 41,
+    revisionStatus: 'not-generated', recheckCount: 0,
+    findings: [{ findingId: 'first', reviewItemIndex: 0, category: '连续性', kind: 'objective', status: 'unresolved', targetId: 'draft:1' }] }
+  await renderReport(RAW_AI_REPORT, cycle)
+  await fillTextarea('textarea[aria-label="审稿问题"]', '作者尚未确认的具体修改')
+  await renderReport(RAW_AI_REPORT, { ...cycle, findings: [{ ...cycle.findings[0]!, status: 'resolved' }] })
+  expect(container?.querySelector<HTMLTextAreaElement>('textarea[aria-label="审稿问题"]')?.value).toBe('作者尚未确认的具体修改')
+})

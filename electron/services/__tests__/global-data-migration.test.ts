@@ -124,6 +124,30 @@ describe('single global generation cutover using synthetic roots only', () => {
     expect(recovered).toMatchObject({ state: 'ready' })
     expect(snapshot(roots.legacySource)).toEqual(before)
   })
+  it.each(['journal.json', 'config.json', 'author.json'])('recovers the durable temporary file left before renaming %s', boundary => {
+    const roots = fixture(); populate(roots.legacySource); const before = snapshot(roots.legacySource)
+    const rename = fs.renameSync
+    let temporary = ''
+    const failure = vi.spyOn(fs, 'renameSync').mockImplementation((source, target) => {
+      if (!temporary && path.basename(String(target)) === boundary) {
+        temporary = String(source)
+        throw Object.assign(new Error('fixture rename failure'), { code: 'EIO' })
+      }
+      rename(source, target)
+    })
+    expect(runGlobalDataMigration(roots)).toEqual({ state: 'blocked', code: 'GLOBAL_MIGRATION_IO_FAILED' })
+    failure.mockRestore()
+    expect(temporary).not.toBe('')
+    expect(fs.existsSync(temporary)).toBe(true)
+    const recovered = runGlobalDataMigration(roots)
+    expect(recovered.state).toBe('ready')
+    if (recovered.state !== 'ready') throw new Error('fixture migration failed')
+    expect(fs.existsSync(temporary)).toBe(false)
+    for (const name of ['config.json', 'prompts/author.json']) {
+      expect(fs.readFileSync(path.join(recovered.dataRoot, name))).toEqual(fs.readFileSync(path.join(roots.legacySource, name)))
+    }
+    expect(snapshot(roots.legacySource)).toEqual(before)
+  })
   it('accepts canonical-only data and empty installations with a receipt, not directory inference', () => {
     for (const mode of ['canonical', 'empty']) {
       const roots = fixture(); if (mode === 'canonical') populate(roots.canonicalTarget)
@@ -193,12 +217,17 @@ describe('single global generation cutover using synthetic roots only', () => {
     expect(runGlobalDataMigration({ ...roots, canonicalTarget: roots.legacySource })).toMatchObject({ code: 'GLOBAL_ROOT_INTERSECTION' })
     expect(runGlobalDataMigration({ ...roots, exclusiveAccess: false })).toMatchObject({ code: 'GLOBAL_EXCLUSIVE_ACCESS_REQUIRED' })
   })
-  it('does not install unknown content planted in a journal-owned staging', () => {
+  it.each([
+    ['unrecognized.txt', 'GLOBAL_STAGING_UNKNOWN_OBJECT'],
+    ['config.json.00000000-0000-4000-8000-000000000000.tmp', 'GLOBAL_STAGING_MISMATCH'],
+  ])('does not install unknown content %s planted in a journal-owned staging', (name, code) => {
     const roots = fixture(); populate(roots.legacySource)
     runGlobalDataMigration({ ...roots, checkpoint: step => { if (step === 'object:config.json') throw new Error('fixture interruption') } })
     const journal = JSON.parse(fs.readFileSync(path.join(roots.canonicalTarget, '.migration/journal.json'), 'utf8'))
-    put(path.join(roots.canonicalTarget, 'generations', `${journal.generation}.staging`), 'unrecognized.txt', 'preserve for adjudication')
-    expect(runGlobalDataMigration(roots)).toMatchObject({ code: 'GLOBAL_STAGING_UNKNOWN_OBJECT' })
+    const staging = path.join(roots.canonicalTarget, 'generations', `${journal.generation}.staging`)
+    put(staging, name, 'preserve for adjudication')
+    expect(runGlobalDataMigration(roots)).toMatchObject({ code })
+    expect(fs.readFileSync(path.join(staging, name), 'utf8')).toBe('preserve for adjudication')
     expect(fs.existsSync(path.join(roots.canonicalTarget, '.migration/receipt.json'))).toBe(false)
   })
   it('rejects a retained staging hardlink without changing source or userData', () => {

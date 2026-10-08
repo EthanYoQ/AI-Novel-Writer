@@ -83,12 +83,13 @@ function requireFinalizedTarget(
 function listPostProcessRunIds(
   db: ReturnType<typeof requireDatabase>,
   chapterNumber: number,
+  finalizationId: string,
 ): string[] {
   const rows = db.prepare(`
     SELECT id FROM post_process_runs
-    WHERE trigger_source_type = 'chapter_finalize' AND trigger_source_id = ?
+    WHERE trigger_source_type = 'chapter_finalize' AND trigger_source_id IN (?, ?)
     ORDER BY id
-  `).all(String(chapterNumber)) as Array<{ id: string }>
+  `).all(String(chapterNumber), `finalization:${finalizationId}`) as Array<{ id: string }>
   return rows.map(row => row.id)
 }
 
@@ -192,7 +193,7 @@ export class ChapterDeletionRepository {
       }
 
       const target = requireFinalizedTarget(db, input.draftId, input.chapterNumber)
-      const postProcessRunIds = listPostProcessRunIds(db, input.chapterNumber)
+      const postProcessRunIds = listPostProcessRunIds(db, input.chapterNumber, target.finalization_id)
 
       db.prepare(`
         INSERT INTO chapter_deletion_operations (
@@ -254,7 +255,7 @@ export class ChapterDeletionRepository {
 
       const frozenRunIds = parsePostProcessRunIds(row.post_process_run_ids)
       if (!frozenRunIds) throw new Error('删除收据中的后处理身份损坏，已拒绝继续删除')
-      const currentRunIds = listPostProcessRunIds(db, row.chapter_number)
+      const currentRunIds = listPostProcessRunIds(db, row.chapter_number, row.finalization_id)
       if (JSON.stringify(currentRunIds) !== JSON.stringify(frozenRunIds)) {
         throw new Error('章节后处理记录在人工确认前已变化，已拒绝继续删除')
       }

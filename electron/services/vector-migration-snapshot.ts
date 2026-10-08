@@ -115,7 +115,7 @@ function validateTables(snapshot: Pick<VectorMigrationSnapshot, 'tables' | 'regi
     for (const space of registry.spaces) {
       if (!Number.isSafeInteger(space.generation) || space.generation < 0 || generations.has(space.generation)
         || typeof space.tableName !== 'string' || registered.has(space.tableName)
-        || !tables.has(space.tableName) || !['active', 'inactive'].includes(space.status)
+        || !tables.has(space.tableName) || !['active', 'inactive', 'building'].includes(space.status)
         || typeof space.modelFingerprint !== 'string' || !space.modelFingerprint || typeof space.createdAt !== 'string'
         || !['l2', 'cosine', 'dot'].includes(space.distanceMetric) || !Number.isSafeInteger(space.vectorDimension) || space.vectorDimension < 1) fail('VECTOR_MIGRATION_SPACE_INVALID')
       generations.add(space.generation); registered.add(space.tableName)

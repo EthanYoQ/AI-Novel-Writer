@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useLocaleStore } from './locale-store'
 import {
   APPEARANCE_STORAGE_KEY, LEGACY_THEME_STORAGE_KEY, LEGACY_UI_STORAGE_KEY, INITIAL_APPEARANCE,
   AppearanceProfileError, migrateLegacyAppearance, parseAppearanceProfile, resolveShell, RELEASE_DEFAULT_SHELL,
@@ -36,8 +37,8 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
     const block = (error: unknown) => {
       set({ phase: 'blocked',
         notice: get().profile
-          ? '外观偏好尚未安全保存，已保留原设置。请重试；当前工作台保持原状。'
-          : '外观偏好尚未安全加载，已保留原设置。请重试；工作台尚未加载。',
+          ? useLocaleStore.getState().text('外观偏好尚未安全保存，已保留原设置。请重试；当前工作台保持原状。', 'Appearance preferences could not be saved safely. Your previous settings and workspace are preserved. Please try again.')
+          : useLocaleStore.getState().text('外观偏好尚未安全加载，已保留原设置。请重试；工作台尚未加载。', 'Appearance preferences could not be loaded safely. Your previous settings are preserved. Please try again before opening the workspace.'),
         failureCode: error instanceof AppearanceProfileError ? error.code : 'APPEARANCE_STORAGE_OR_MAIN_FAILED' })
       return false
     }

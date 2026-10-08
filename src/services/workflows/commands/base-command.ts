@@ -328,6 +328,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       llmOptions?: WorkflowLLMOptions
       /** 已完成可见文本种子；为空时先发起一次全新请求。 */
       seedText?: string
+      sourceText?: string
       /** 自动续写轮数上限（0–7）。 */
       maxContinuations: number
       /** 部分结果回调：在失败抛出前携带当前合并文本。 */
@@ -380,6 +381,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     return completeBoundedCompletion({
       initial,
       mode: 'append-visible-text',
+      sourceText: options.sourceText,
       maxContinuations: options.maxContinuations,
       originalPrompt: options.taskPrompt,
       writingLanguage: workflowWritingLanguage(options.context),

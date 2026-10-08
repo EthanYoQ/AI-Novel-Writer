@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronLeft, ChevronRight, Crosshair, Maximize2, PanelRightClose,
   PanelRightOpen, RotateCcw, Search, ZoomIn, ZoomOut,
@@ -55,6 +55,7 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
   const avatarImagesRef = useRef(new Map<string, HTMLImageElement>())
   const viewRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 })
   const dragRef = useRef<DragState | null>(null)
+  const fitPendingRef = useRef(false)
   const [zoomPercent, setZoomPercent] = useState(100)
   const [centerId, setCenterId] = useState<string | null>(
     selectedCharacterId ?? characters.find(character => character.characterId)?.characterId ?? null,
@@ -93,17 +94,53 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
     drawRef.current?.()
   }, [avatarUrls])
 
+  const fitView = useCallback(() => {
+    const canvas = canvasRef.current
+    const nodes = nodesRef.current
+    if (!canvas || nodes.length === 0) return
+    const padding = 40
+    const bounds = nodes.reduce((result, node) => {
+      const extent = nodeRadius(node) + 8
+      return {
+        minX: Math.min(result.minX, node.x - extent),
+        maxX: Math.max(result.maxX, node.x + extent),
+        minY: Math.min(result.minY, node.y - extent),
+        maxY: Math.max(result.maxY, node.y + extent),
+      }
+    }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity })
+    const scale = Math.min(2, Math.max(0.1, Math.min(
+      (canvas.width - padding * 2) / Math.max(1, bounds.maxX - bounds.minX),
+      (canvas.height - padding * 2) / Math.max(1, bounds.maxY - bounds.minY))))
+    viewRef.current = {
+      scale,
+      offsetX: scale * (canvas.width / 2 - (bounds.minX + bounds.maxX) / 2),
+      offsetY: scale * (canvas.height / 2 - (bounds.minY + bounds.maxY) / 2),
+    }
+    setZoomPercent(Math.round(scale * 100))
+    drawRef.current?.()
+  }, [])
+
+  const hasCharacters = characters.length > 0
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const width = Math.max(canvas.offsetWidth, 400) * 2
-    const height = Math.max(canvas.offsetHeight, 300) * 2
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width
-      canvas.height = height
-      setCanvasSize({ width, height })
-      return
+    const measure = () => {
+      const width = Math.max(canvas.offsetWidth, 1) * 2
+      const height = Math.max(canvas.offsetHeight, 1) * 2
+      setCanvasSize(previous => previous.width === width && previous.height === height
+        ? previous : { width, height })
     }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(canvas.parentElement ?? canvas)
+    return () => observer.disconnect()
+  }, [hasCharacters])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    canvas.width = canvasSize.width
+    canvas.height = canvasSize.height
     nodesRef.current = graph.nodes.map(node => ({ ...node }))
     const drawFrame = () => {
       const context = canvas.getContext('2d')
@@ -185,7 +222,10 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
       context.restore()
     }
     drawRef.current = drawFrame
-    drawFrame()
+    if (fitPendingRef.current) {
+      fitPendingRef.current = false
+      fitView()
+    } else drawFrame()
 
     const themeObserver = new MutationObserver(drawFrame)
     const skinRoot = canvas.closest<HTMLElement>('.app-skin-root')
@@ -196,36 +236,11 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
       })
     }
     return () => { themeObserver.disconnect(); drawRef.current = null }
-  }, [characters, duplicateNames, graph, canvasSize])
+  }, [characters, duplicateNames, graph, canvasSize, fitView])
 
   const updateZoom = (nextScale: number) => {
     const scale = Math.min(2, Math.max(0.5, Math.round(nextScale * 10) / 10))
     viewRef.current.scale = scale
-    setZoomPercent(Math.round(scale * 100))
-    drawRef.current?.()
-  }
-  const fitView = () => {
-    const canvas = canvasRef.current
-    const nodes = nodesRef.current
-    if (!canvas || nodes.length === 0) return
-    const padding = 40
-    const bounds = nodes.reduce((result, node) => {
-      const extent = nodeRadius(node) + 8
-      return {
-        minX: Math.min(result.minX, node.x - extent),
-        maxX: Math.max(result.maxX, node.x + extent),
-        minY: Math.min(result.minY, node.y - extent),
-        maxY: Math.max(result.maxY, node.y + extent),
-      }
-    }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity })
-    const scale = Math.min(2, Math.max(0.1, Math.min(
-      (canvas.width - padding * 2) / Math.max(1, bounds.maxX - bounds.minX),
-      (canvas.height - padding * 2) / Math.max(1, bounds.maxY - bounds.minY))))
-    viewRef.current = {
-      scale,
-      offsetX: scale * (canvas.width / 2 - (bounds.minX + bounds.maxX) / 2),
-      offsetY: scale * (canvas.height / 2 - (bounds.minY + bounds.maxY) / 2),
-    }
     setZoomPercent(Math.round(scale * 100))
     drawRef.current?.()
   }
@@ -330,7 +345,10 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
             {pageCharacters.map(character => (
               <div key={character.characterId} className="mb-0.5 flex items-center gap-1 rounded hover:bg-[var(--color-hover)]">
                 <button type="button" className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs text-[var(--color-text)]" data-graph-character-id={character.characterId} onClick={() => onOpenCharacter?.(character.characterId!)}>{character.name || text('未命名', 'Untitled')}{duplicateNames.has(character.name) ? ` · ${character.characterId?.slice(-8)}` : ''}</button>
-                <button type="button" className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--color-active)]" aria-label={text(`以${character.name}为中心`, `Center graph on ${character.name}`)} onClick={() => { setCenterId(character.characterId!); fitView() }}><Crosshair size={13} /></button>
+                <button type="button" className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--color-active)]" aria-label={text(`以${character.name}为中心`, `Center graph on ${character.name}`)} onClick={() => {
+                  if (character.characterId === actualCenterId) fitView()
+                  else { fitPendingRef.current = true; setCenterId(character.characterId!) }
+                }}><Crosshair size={13} /></button>
               </div>
             ))}
             {pageCharacters.length === 0 && <div className="p-3 text-center text-xs text-[var(--color-text-muted)]">{text('没有匹配的人物', 'No matching characters')}</div>}

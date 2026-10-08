@@ -79,10 +79,10 @@ describe('durable owner visible-only provider boundary', () => {
     expect(options.onError).toHaveBeenCalledWith(expect.any(String), '甲 ', undefined)
     expect(options.onChunk.mock.calls.flat().join('')).toBe('甲 ')
   })
-  it('collects all Gemini visible parts and records thoughts as already included in total', async () => {
+  it.each([false, true])('collects all Gemini visible parts with visibleOnly=%s', async visibleOnly => {
     stream(['data: {"candidates":[{"content":{"parts":[{"text":"hidden","thought":true},{"text":" 甲"},{"functionCall":{"secret":"tool"}},{"text":"乙 ","thought":false}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":20,"thoughtsTokenCount":7,"totalTokenCount":37}}\n'])
     const options = callbacks()
-    await new GeminiProvider().generateStream({ ...model, protocol: 'gemini' }, [], options)
+    await new GeminiProvider().generateStream({ ...model, protocol: 'gemini' }, [], { ...options, visibleOnly })
     expect(options.onError).not.toHaveBeenCalled()
     expect(options.onChunk.mock.calls.flat().join('')).toBe(' 甲乙 ')
     expect(options.onDone).toHaveBeenCalledExactlyOnceWith(' 甲乙 ', { promptTokens: 10, completionTokens: 20, totalTokens: 37 }, 'stop')

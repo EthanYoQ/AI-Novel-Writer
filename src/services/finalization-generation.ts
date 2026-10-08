@@ -31,8 +31,8 @@ export async function runFinalizationGeneration(options: {
     if (recovery) validate(recovery)
     if (recovery?.effect) return recovery.effect
     if (options.cancelled()) throw new Error('GENERATION_WORKFLOW_CANCELLED')
-    if (!recovery) recovery = await ipc.invokeWithProjectSession(session, 'finalization-generation:begin', {
-      slot: options.slot, modelId: options.modelId(), ...(options.parentRootActionId ? { parentRootActionId: options.parentRootActionId } : {}),
+    recovery = await ipc.invokeWithProjectSession(session, 'finalization-generation:begin', {
+      slot: options.slot, modelId: recovery?.modelId ?? options.modelId(), ...(options.parentRootActionId ? { parentRootActionId: options.parentRootActionId } : {}),
     })
     validate(recovery)
     options.onHandle?.(recovery.view.handle)

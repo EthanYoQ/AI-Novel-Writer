@@ -14,7 +14,7 @@
 
 2026-10-02 用户追加的[模型差异与软件交付规则](thread10-delivery-plan.md#2026-10-02-用户追加模型差异与软件交付)优先适用。替代模型须在同案例真实软件流程通过，才能结束该范围的软件修复循环。直连 API 成功仅为开发比较，不能替代原生准入、材料装配、真实请求、保存及读回。机器评分及历史结果不改判，未运行批次不记 PASS。post-UI 原生技术检查继续使用已登记阶段及唯一物理账本。
 
-- `freeze-targets --output <新私有 targets.json> --model-id <已安全配置的 id>` 在新 revision 下只冻结 candidate；不再要求 baseline。配置就绪后用 `register-batch --targets <targets.json> --output <新私有 batch.json>` 预登记代码、协议、模型配置 hash、30 个案例槽位及实际 invocation。
+- `freeze-targets --phase full --model-sources <已登记的私有模型来源.json> --output <新私有 targets.json>` 在新 revision 下只冻结 candidate；不再要求 baseline。模型来源文件仅在本地使用。配置就绪后用 `register-batch --targets <targets.json> --output <新私有 batch.json>` 预登记代码、协议、模型配置 hash、30 个案例槽位及实际 invocation。
 - 正式 `c16-c18 --targets ... --mode real --physical-ledger ... --batch ... --round 1|2|3` 与 `full ... --batch ... --round 1` 消费同一批次。继续执行使用相同 batch/round，读取已有执行记录；已发送且结果不明的位置保留失败并对账，不换 invocation 重抽。后继缺少有效保存稿时保留 NOT_RUN，其他独立链继续。
 - 新正文每条在同一 root 先执行一次 `chapter-draft-short-outline`，其实际产物用于正文组合，但不作为可信派生来源；正文和恢复沿用其原产物与组合提示身份。四条恢复写作的一轮原生请求登记为 20–84；三个持续项目九章为 30–180。三轮加持续写作合计预计 90–432 次请求，具体包含原生格式恢复、续写和压缩的实际分支。80 是历史计划额，不是硬帽；开发筛选和独有 post-UI 请求另记实际数量，不填正式分母。
 - 保存稿的 `currentReviewState` 绑定当前正文 hash 及终局 review/cycle。前章经已有选稿路径继续，不定稿、不 waive；技术结果和独立语义结论分别保留。

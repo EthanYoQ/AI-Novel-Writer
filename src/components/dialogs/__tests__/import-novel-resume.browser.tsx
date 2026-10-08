@@ -178,6 +178,18 @@ afterEach(async () => {
 })
 
 describe('current-project reference import', () => {
+  it('requires a fresh folder grant each time the import dialog opens', async () => {
+    await act(async () => root.render(<ImportNovelDialog open onClose={vi.fn()} />))
+    invoke.mockResolvedValueOnce({ grantId: 'old-folder-grant', displayName: 'Previously selected folder' })
+    await act(async () => document.querySelector<HTMLInputElement>('input[placeholder="选择项目保存目录"]')!.parentElement!.querySelector('button')!.click())
+    const location = page.getByPlaceholder('选择项目保存目录')
+    await expect.element(location).toHaveValue('Previously selected folder')
+    await act(async () => root.render(<ImportNovelDialog open={false} onClose={vi.fn()} />))
+    await act(async () => root.render(<ImportNovelDialog open onClose={vi.fn()} />))
+    await expect.element(location).toHaveValue('')
+    expect(invoke.mock.calls.some(([channel]) => channel === 'project:create')).toBe(false)
+  })
+
   it('updates existing configuration and blueprint tab names to the current interface language', async () => {
     const clickProjectItem = (label: string) => {
       const row = [...container.querySelectorAll<HTMLElement>('.tree-item')]

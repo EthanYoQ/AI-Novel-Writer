@@ -69,7 +69,7 @@ function writeConfig(value: unknown): void {
 beforeEach(async () => {
   vi.resetModules()
   spawnMock.mockReset()
-  velaHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-mcp-'))
+  velaHome = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'ai-novel-mcp-'))
   fixtureRoot = velaHome
     velaHome = await (await import('../../services/__tests__/global-data-fixture')).prepareGlobalDataFixture(fixtureRoot)
   mcpManager = (await import('../mcp-manager')).mcpManager

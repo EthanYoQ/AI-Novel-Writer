@@ -554,3 +554,17 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+.app-skin-root[data-skin-readability='high-contrast'] .v3-magazine-shell {
+  --v3-paper: var(--skin-workspace-page-surface);
+  --v3-paper-deep: var(--skin-main-surface);
+  --v3-panel: var(--skin-panel-surface);
+  --v3-panel-strong: var(--skin-workspace-panel-surface);
+  --v3-ink: var(--skin-text-primary);
+  --v3-muted: var(--skin-text-secondary);
+  --v3-rule: var(--skin-border);
+  --v3-welcome-surface: var(--skin-welcome-surface);
+  --v3-action-surface: var(--skin-control-surface);
+  --v3-rail-surface: var(--skin-panel-surface);
+  background: transparent;
+}

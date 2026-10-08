@@ -340,8 +340,11 @@ function readCurrentCharacterStateCandidateRow(db: BetterSqlite3.Database, draft
     chapterNumber: row.chapterNumber, contentHash: row.contentHash }
   const latest = snapshot && db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1")
     .pluck().get(snapshot.source.chapterNumber) as number | undefined
+  const staleFromChapter = db.prepare("SELECT stale_from_chapter FROM continuity_projection_meta WHERE id='main'").pluck().get() as number | null
   if (!row || !snapshot || !source || !sameSource(source, snapshot.source)
-    || row.projectionGeneration !== snapshot.projectionGeneration || latest !== draftId) {
+    || row.projectionGeneration > snapshot.projectionGeneration
+    || row.projectionGeneration < snapshot.projectionGeneration && staleFromChapter !== null && row.chapterNumber >= staleFromChapter
+    || latest !== draftId) {
     throw new Error('FINALIZED_CHARACTER_STATE_SOURCE_CHANGED')
   }
   return row

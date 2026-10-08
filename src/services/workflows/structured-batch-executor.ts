@@ -312,10 +312,30 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           if (!repairUsed) {
             repairUsed = true
             syntaxRepairApplied = true
-            const repaired = await session.complete(
-              buildStructuredSyntaxRepairTask(task, repairContract, outcome.content, writingLanguage),
-              { signal: input.signal },
-            )
+            let repaired: Awaited<ReturnType<GenerationSession['complete']>>
+            try {
+              repaired = await session.complete(
+                buildStructuredSyntaxRepairTask(task, repairContract, outcome.content, writingLanguage),
+                { signal: input.signal },
+              )
+            } catch (error) {
+              const split = error instanceof Error ? /TASK_BUDGET_SCOPE_SPLIT_REQUIRED:(\d+)(?:\b|$)/u.exec(error.message) : null
+              const capacityConflict = error instanceof Error && error.message.includes('TASK_BUDGET_CAPACITY_CONFLICT')
+              const selected = split ? Number(split[1]) : capacityConflict ? Math.floor(items.length / 2) : 0
+              if (Number.isSafeInteger(selected) && selected > 0 && selected < items.length) {
+                repairUsed = false
+                receipt.splitCount += 1
+                await executeBatch(items.slice(0, selected))
+                await executeBatch(items.slice(selected))
+                return
+              }
+              if (canUseCompactFallback && capacityConflict) {
+                repairUsed = false
+                await runCompactFallback()
+                return
+              }
+              throw error
+            }
             recordAttempt(repaired.receipt)
             if (input.signal?.aborted || repaired.finishReason === 'cancelled') {
               throw new ExecutionFailure({

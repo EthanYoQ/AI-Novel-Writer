@@ -16,6 +16,7 @@ import { resolveReasoningPolicy } from '../../src/shared/reasoning-policy'
 import { OpenAIProvider } from '../../electron/llm/openai-provider'
 
 const revision = 's14b-candidate-only-three-rounds-v1'
+fs.mkdirSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization'), { recursive: true })
 
 test('formal review admits the native same-purpose replacement after settled empty LENGTH', () => {
   const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/formal-review-length-'))

@@ -13,6 +13,8 @@ import {
   type PortableProjectManifestEntry,
 } from './portable-project-format'
 
+const PORTABLE_MANIFEST_MAX_BYTES = 16 * 1024 * 1024
+
 export type PortableProjectArchiveErrorCode =
   | 'PORTABLE_ARCHIVE_INVALID'
   | 'PORTABLE_ARCHIVE_LIMIT_EXCEEDED'
@@ -375,7 +377,7 @@ function openEntry(zip: yauzl.ZipFile, entry: yauzl.Entry): Promise<Readable> {
 }
 
 async function readManifest(zip: yauzl.ZipFile, entry: RawEntry, limits: PortableArchiveLimits): Promise<Buffer> {
-  if (entry.uncompressedSize > limits.maxEntryBytes) fail('PORTABLE_ARCHIVE_LIMIT_EXCEEDED')
+  if (entry.uncompressedSize > Math.min(limits.maxEntryBytes, PORTABLE_MANIFEST_MAX_BYTES)) fail('PORTABLE_ARCHIVE_LIMIT_EXCEEDED')
   const stream = await openEntry(zip, entry)
   const chunks: Buffer[] = []
   let bytesRead = 0
@@ -383,7 +385,7 @@ async function readManifest(zip: yauzl.ZipFile, entry: RawEntry, limits: Portabl
   for await (const value of stream) {
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
     bytesRead += chunk.length
-    if (bytesRead > entry.uncompressedSize || bytesRead > limits.maxEntryBytes) {
+    if (bytesRead > entry.uncompressedSize || bytesRead > Math.min(limits.maxEntryBytes, PORTABLE_MANIFEST_MAX_BYTES)) {
       stream.destroy(); fail('PORTABLE_ARCHIVE_LIMIT_EXCEEDED')
     }
     crc = updateCrc(crc, chunk)
@@ -552,6 +554,7 @@ export async function writePortableProjectArchive(input: WritePortableProjectArc
     let offset = 0
     const central: CentralRecord[] = []
     const manifestBytes = Buffer.from(JSON.stringify(manifest), 'utf8')
+    if (manifestBytes.length > Math.min(limits.maxEntryBytes, PORTABLE_MANIFEST_MAX_BYTES)) fail('PORTABLE_ARCHIVE_LIMIT_EXCEEDED')
     const manifestName = Buffer.from(MANIFEST_PATH)
     const manifestHeader = localHeader(manifestName, manifestBytes.length, crc32(manifestBytes))
     central.push({ name: manifestName, crc32: crc32(manifestBytes), size: manifestBytes.length, offset, dataDescriptor: false })

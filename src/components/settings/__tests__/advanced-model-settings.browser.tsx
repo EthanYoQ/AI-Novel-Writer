@@ -169,6 +169,8 @@ describe('advanced model settings', () => {
       await page.getByLabelText('Context Window').fill('8192')
       await page.getByRole('button', { name: 'Advanced settings', exact: true }).click()
       await page.getByLabelText('Max output tokens').fill('8192')
+      expect(container?.textContent).not.toContain('Max output tokens leave no safe room')
+      await page.getByLabelText('Model output capacity').fill('8192')
     })
 
     await expect.element(page.getByRole('status')).toHaveTextContent(
@@ -178,4 +180,16 @@ describe('advanced model settings', () => {
     await act(async () => page.getByRole('button', { name: 'Save configuration', exact: true }).click())
     await vi.waitFor(() => expect(saveModel).toHaveBeenCalledTimes(1))
   })
+})
+
+it('ignores zero output limits and preserves unknown capability provenance on reset', async () => {
+  const { saveModel } = await renderSettings()
+  await act(async () => useLLMStore.setState({ models: [{ ...model(), provider: 'custom', modelName: 'unlisted', baseUrl: 'https://example.invalid/v1', capabilities: undefined }] }))
+  await clickEdit()
+  await act(async () => page.getByRole('button', { name: '高级设置', exact: true }).click())
+  await act(async () => page.getByLabelText('最大输出 Token').fill('0'))
+  expect(container?.querySelector('[data-effective-output-limit="0"]')).toBeNull()
+  await act(async () => page.getByRole('button', { name: '恢复默认值', exact: true }).click())
+  await act(async () => page.getByRole('button', { name: '保存配置', exact: true }).click())
+  expect(saveModel.mock.calls.at(-1)?.[0].capabilitySources).toMatchObject({ reasoning: 'unknown', structuredOutput: 'unknown', usage: 'unknown' })
 })

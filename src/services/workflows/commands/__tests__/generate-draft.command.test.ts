@@ -396,6 +396,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     uiLocale?: 'zh-CN' | 'en-US'
     chapterNumber?: number
     characters?: string[]
+    characterAliases?: Array<{ name: string; characterId: string }>
     continuity?: Array<{
       draftId: number
       currentFinalizedDraftId?: number
@@ -537,6 +538,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       if (channel === 'db:character-roster-read') return {
         status: 'ready',
         entries: options.characterCards ?? [],
+        aliases: options.characterAliases ?? [],
       }
       if (channel === 'db:draft-get-latest') return options.sourceDraft ?? null
       if (channel === 'fs:list-dir') return []
@@ -630,6 +632,22 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   }
 
+  it.each([false, true])('uses the renamed identity from an old blueprint and refuses reused-name ambiguity: %s', async reused => {
+    const runtime = fakeOutcomes(outcome('本章正文。'.repeat(125), 'stop'))
+    const f = setup({ runtime, wordsTarget: 500, characters: ['旧名'],
+      characterCards: [{ name: '新名', characterId: 'stable-a', role: 'protagonist', personality: 'AUTHOR_PROFILE_SENTINEL', currentState: {} },
+        ...(reused ? [{ name: '旧名', characterId: 'stable-b', role: 'supporting', personality: 'WRONG_PROFILE', currentState: {} }] : [])],
+      characterAliases: [{ name: '旧名', characterId: 'stable-a' }] })
+    const result = f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+    if (reused) {
+      await expect(result).rejects.toThrow('GENERATION_CHARACTER_REFERENCE_AMBIGUOUS')
+      expect(runtime.complete).not.toHaveBeenCalled()
+    } else {
+      await result
+      expect(runtime.complete.mock.calls[0]![0].messages.map(message => message.content).join('\n')).toContain('AUTHOR_PROFILE_SENTINEL')
+    }
+  })
+
   it.each([{ target: 900, edit: false }, { target: 2000, edit: false }, { target: 3000, edit: false }, { target: 900, edit: true }])('真实默认 facade 字数 $target，作者改稿 $edit，仅main组合与原子保存', async ({ target, edit }) => {
     const legacy = fakeOutcomes()
     const f = setup({ runtime: legacy, wordsTarget: target, mainDefault: true })
@@ -691,7 +709,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         const text = condense ? condensed : draft
         const result = outcome(text, 'stop')
         result.receipt.visibleArtifact = { artifactId: condense ? '压缩片' : '原片', attemptId: condense ? '压缩请求' : '原请求', revision: 1, textHash: hash(text) }
-        return { outcome: result, run: view }
+        return { outcome: result, run: { ...view, artifacts: [{ ...handle, ...result.receipt.visibleArtifact,
+          text, durableRevision: 1, status: 'completed' }] } }
       }
       if (channel === 'generation:compose-visible') {
         const ids = args[1] as string[]
@@ -714,6 +733,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
     } else await expect(result).resolves.toBe(condensed)
 
+    expect(f.callbacks.replaceText).toHaveBeenCalledWith(condensed)
+    expect(vi.mocked(f.callbacks.replaceText!).mock.calls.some(([text]) => text.startsWith(draft) && text.includes(condensed))).toBe(false)
     expect(legacy.createRuntime).not.toHaveBeenCalled()
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:compose-visible').map(([, , ids]) => ids))
       .toEqual([['原片'], ['原片', '压缩片']])

@@ -18,6 +18,7 @@ export interface GlobalMigrationOptions extends GlobalDataRoots {
 interface Journal { version: 1; generation: string; phase: 'prepared' | 'verified'; source: 'legacy' | 'canonical' | 'empty' }
 interface Receipt { version: 1; generation: string; completed: true; preservedUnknownCount: number; requiredObjects: string[] }
 const admitted = new WeakMap<object, string>()
+const temporarySuffix = /\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.tmp$/
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 function fail(code: string): never { throw new Error(code) }
 function parse(file: string): unknown { try {
@@ -185,12 +186,21 @@ export function runGlobalDataMigration(options: GlobalMigrationOptions): GlobalM
     validate(legacy); validate(target)
     const legacyFiles = selectedFiles(legacy), targetFiles = selectedFiles(target)
     if (legacyFiles.length && targetFiles.length) fail(conflictCode(legacy, target))
+    let pendingJournal: string | undefined
+    if (!fs.existsSync(journalPath) && fs.existsSync(control)) {
+      const entries = fs.readdirSync(control)
+      if (entries.length === 1 && entries[0]!.replace(temporarySuffix, '') === 'journal.json'
+        && (!fs.existsSync(generations) || fs.readdirSync(generations).length === 0)) {
+        pendingJournal = path.join(control, entries[0]!)
+      }
+    }
     let journal: Journal
-    if (fs.existsSync(journalPath)) {
-      const value = parse(journalPath)
+    if (pendingJournal || fs.existsSync(journalPath)) {
+      const value = parse(pendingJournal ?? journalPath)
       if (!record(value) || value.version !== 1 || typeof value.generation !== 'string' || !/^[a-f0-9-]{36}$/.test(value.generation)
         || !['prepared', 'verified'].includes(value.phase as string) || !['legacy', 'canonical', 'empty'].includes(value.source as string)) fail('GLOBAL_JOURNAL_INVALID')
       journal = value as unknown as Journal
+      if (pendingJournal && journal.phase !== 'prepared') fail('GLOBAL_JOURNAL_INVALID')
     } else {
       // An unknown half-generation is preserved for explicit adjudication.
       if (fs.existsSync(generations) || fs.existsSync(control)) fail('GLOBAL_PARTIAL_TARGET_UNKNOWN')
@@ -202,12 +212,23 @@ export function runGlobalDataMigration(options: GlobalMigrationOptions): GlobalM
     const source = journal.source === 'legacy' ? legacy : target
     if ((journal.source === 'legacy' && targetFiles.length) || (journal.source === 'canonical' && legacyFiles.length)
       || (journal.source === 'empty' && (legacyFiles.length || targetFiles.length))) fail('GLOBAL_SOURCE_CHANGED')
+    if (pendingJournal) {
+      fs.renameSync(pendingJournal, journalPath); syncDirectory(control)
+      fs.mkdirSync(generations, { recursive: true })
+    }
     const staging = path.join(generations, `${journal.generation}.staging`), installed = path.join(generations, journal.generation)
     if (!fs.existsSync(installed)) {
       safeRoot(staging); fs.mkdirSync(staging, { recursive: true })
-      files(staging) // Reject links planted in a retained interrupted staging before opening any file.
-      if (fs.readdirSync(staging).some(name => !GLOBAL_OBJECTS.includes(name as typeof GLOBAL_OBJECTS[number]))) fail('GLOBAL_STAGING_UNKNOWN_OBJECT')
+      const stagedFiles = files(staging) // Reject links planted in a retained interrupted staging before opening any file.
       const names = selectedFiles(source)
+      for (const name of journal.phase === 'prepared' ? stagedFiles : []) {
+        const destination = name.replace(temporarySuffix, '')
+        if (names.includes(name) || !names.includes(destination)) continue
+        const temporary = path.join(staging, name)
+        if (!fs.readFileSync(temporary).equals(fs.readFileSync(path.join(source, destination)))) fail('GLOBAL_STAGING_MISMATCH')
+        fs.renameSync(temporary, path.join(staging, destination)); syncDirectory(path.dirname(temporary))
+      }
+      if (fs.readdirSync(staging).some(name => !GLOBAL_OBJECTS.includes(name as typeof GLOBAL_OBJECTS[number]))) fail('GLOBAL_STAGING_UNKNOWN_OBJECT')
       if (journal.phase === 'verified' && !equalSelected(source, staging)) fail('GLOBAL_VERIFIED_SOURCE_CHANGED')
       // An interrupted write is retried only for this journal-owned staging.
       for (const name of journal.phase === 'prepared' ? names : []) {

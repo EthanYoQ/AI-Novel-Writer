@@ -1091,6 +1091,18 @@ try {
   Add-AiNovelTrackedProcess -ProcessIds $oldAppIds -StartTimeTicks $oldAppStartTimes -ProcessId $oldAppProcess.Id | Out-Null
   Add-AiNovelTrackedProcessTree -RootProcessId $oldAppProcess.Id -ProcessIds $oldAppIds -StartTimeTicks $oldAppStartTimes
   $oldEndpoint = Wait-E2eCdpEndpoint -Port $oldDebugPort -TimeoutSeconds 45
+  if ($null -eq $legacyBridgeContract) {
+    $nativeOldIdentity = Get-E2eLiveProcessIdentity -ProcessId $oldAppProcess.Id -ExpectedImagePath $oldExe
+    Add-E2eMonitorControl -ControlPath $MonitorControlPath -Payload @{
+      state = 'native-updater-old-application'
+      step = 'windows-in-app-update-e2e'
+      processId = $nativeOldIdentity.processId
+      processStartTimeTicks = $nativeOldIdentity.startTimeTicks
+      executablePath = $nativeOldIdentity.executablePath
+      installRoot = $e2eInstallRoot
+    }
+    [void](Wait-E2eMonitorState -StatusPath $MonitorStatusPath -ExpectedState 'native-updater-registered' -TimeoutSeconds 15 -Phase 'native updater identity registration')
+  }
   if ($null -ne $legacyBridgeContract) {
     $oldAppIdentity = Get-E2eLiveProcessIdentity -ProcessId $oldAppProcess.Id -ExpectedImagePath $oldExe
     Add-E2eMonitorControl -ControlPath $MonitorControlPath -Payload @{

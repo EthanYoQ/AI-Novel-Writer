@@ -71,7 +71,7 @@ const report = JSON.stringify({ summary: '三项待作者判断。', items: [
     quote: unverifiedQuote, sourceChapter: 1 },
 ] })
 const steps = []
-const pass = (stepId, assertion, observed, actionId = 'U12.A03') => steps.push({ stepId, actionId, outcome: 'PASS', assertion, observed })
+const pass = (stepId, assertion, observed, actionId = null) => steps.push({ stepId, actionId, outcome: 'PASS', assertion, observed })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 function reviewRows(projectPath) {
   const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
@@ -361,7 +361,7 @@ async function main() {
     assert.equal(rows[1].baseDraftId, draftId)
     assert.equal(rows[1].reviewIndex, rows[0].reviewIndex + 1)
     pass('U12.A03-v3-confirm', 'V3 UI kept one suggestion, rejected another, and appended an exact source-bound snapshot without changing the AI report',
-      { sourceReviewId, confirmationReviewId: rows[1].id, decisions: confirmation.items.map(item => item.decision) })
+      { sourceReviewId, confirmationReviewId: rows[1].id, decisions: confirmation.items.map(item => item.decision) }, 'U12.A03')
     await app.close(); app = null
 
     currentStep = 'U12.A03-process-reopen'
@@ -370,7 +370,7 @@ async function main() {
     await page.getByRole('button', { name: '按确认意见修稿', exact: true }).waitFor({ state: 'visible' })
     assert.deepEqual(reviewRows(projectPath), rows, 'restart changed persisted reviews')
     pass('U12.A03-process-reopen', 'A new Electron process renders the confirmed review and retains both immutable rows',
-      { sourceReviewId, confirmationReviewId: rows[1].id, reviewCount: rows.length })
+      { sourceReviewId, confirmationReviewId: rows[1].id, reviewCount: rows.length }, 'U12.A03')
     await app.close(); app = null
 
     currentStep = 'U12.A01-production-review'

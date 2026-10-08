@@ -58,11 +58,10 @@ export interface CancelCharacterProposalRequest {
   proposalBatchId: string
   expectedRevision: number
 }
-export interface PendingFinalizedCharacterProposalSummary {
+export type PendingFinalizedCharacterProposalSummary = {
   proposalBatchId: string
   revision: number
-  finalizationId: string
-}
+} & ({ finalizationId: string; importOperationId?: never } | { importOperationId: string; finalizationId?: never })
 export interface CharacterIdentitySnapshot {
   revision: number
   characters: { characterId: string; fields: CharacterStaticFields; retired: boolean; revision: number;

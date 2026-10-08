@@ -1,4 +1,4 @@
-import { BaseWorkflowCommand, type CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
+import { BaseWorkflowCommand, injectWritingSkillIntoTask, type CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import type { GenerationAuthorInput, MaterialDecisionDraft } from '../../../shared/generation-owner-contract'
 import type { PreparedReviewRevisionContext, ReviewRevisionContext, ReviewRevisionOperation, ReviewRevisionRecovery, ReviewRevisionCommitReceipt } from '../../../shared/review-revision-generation'
@@ -39,8 +39,8 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
 
   async execute(params: CommandExecuteParams): Promise<string> {
     try { return await this.executePrepared(params) } catch (error) {
-      if (error instanceof Error && (error.message.includes('SOURCE_DRAFT_CHANGED')
-        || 'code' in error && error.code === 'SOURCE_DRAFT_CHANGED')) {
+      if (error instanceof Error && (['SOURCE_DRAFT_CHANGED', 'GENERATION_SOURCE_CHANGED', 'GENERATION_REVIEW_SOURCE_CHANGED'].some(code => error.message.includes(code))
+        || 'code' in error && ['SOURCE_DRAFT_CHANGED', 'GENERATION_SOURCE_CHANGED', 'GENERATION_REVIEW_SOURCE_CHANGED'].includes(String(error.code)))) {
         throwIfSourceDraftChanged({ errorCode: 'SOURCE_DRAFT_CHANGED' }, workflowUiLocale(params.context), this.operation === 'review-chapter' ? 'review' : 'refine')
       }
       throw error
@@ -110,9 +110,11 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
   protected async bindMaterialDecision(params: CommandExecuteParams, decision: MaterialDecisionDraft, prompt: string): Promise<void> {
     const handle = params.context.mainGenerationRunHandle
     if (!handle) throw new Error('GENERATION_REVIEW_REVISION_HANDLE_REQUIRED')
+    const { task } = injectWritingSkillIntoTask({ purpose: this.operation, output: 'visible-text',
+      messages: [{ role: 'user', content: prompt }] }, params.context, this.operation === 'review-chapter' ? 'review' : 'refinement')
     await ipc.invokeWithProjectSession(requireWorkflowProjectSession(params.context), 'generation:bind-material-decision', {
       handle,
-      materialDecision: { ...decision, promptHash: await hashAuthorText(prompt) },
+      materialDecision: { ...decision, promptHash: await hashAuthorText(task.messages[0]!.content) },
     })
   }
 
@@ -152,6 +154,7 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
       if (remainingRequests <= 0) throw this.createIncompleteCompletionError('length')
       await this.callLLMWithAppendContinuation({
         taskPrompt, systemPrompt, callbacks: params.callbacks, context: params.context,
+        sourceText: frozen.source.content,
         llmOptions: { purpose: this.operation, reasoningStage: 'review', writingSkillStage: 'refinement' },
         seedText: composition?.text,
         maxContinuations: composition?.text ? remainingRequests : remainingRequests - 1,

@@ -10,10 +10,20 @@ import { isVerifiedDirectPersistedDraftEvidence, projectRecoveryCandidateSupplem
   recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 
 const sha = value => createHash('sha256').update(value).digest('hex')
+fs.mkdirSync(path.join(process.cwd(), '.runtime/.cache/novel-quality-modernization'), { recursive: true })
 
 test('real receipts preserve stable targeted-review failure codes without exposing free text', () => {
   assert.equal(safeReceiptDiagnostic(new Error('TARGETED_REVIEW_ITEM_MISSING'), 'real'), 'TARGETED_REVIEW_ITEM_MISSING')
   assert.equal(safeReceiptDiagnostic(new Error('provider said secret'), 'real'), 'REAL_PROVIDER_DIAGNOSTIC_REDACTED')
+})
+
+test('current persisted candidate overlength is advisory while short and historical drafts still fail', () => {
+  const input = { chapterNumber: 1, targetUnits: 1000, units: 1350, contentHash: 'a'.repeat(64) }
+  const current = { protocolRevision: 's14b-candidate-only-three-rounds-v1', arm: 'candidate' }
+  assert.equal(recordPersistedDraftObservation(current, input).persisted, true)
+  assert.throws(() => recordPersistedDraftObservation(current, { ...input, units: 699 }), { code: 'TARGET_UNITS_FAILED' })
+  assert.throws(() => recordPersistedDraftObservation({ ...current, arm: 'baseline' }, input), { code: 'TARGET_UNITS_FAILED' })
+  assert.throws(() => recordPersistedDraftObservation({ ...current, protocolRevision: 'pacing-readability-v1' }, input), { code: 'TARGET_UNITS_FAILED' })
 })
 
 test('reviewed-draft revision preserves candidate units without changing historical ranges', () => {

@@ -169,7 +169,8 @@ it('同会话头像保存与移除后，V3 侧栏批量头像立即重读对应�
     if (channel === 'character-avatar:remove') { saved = null; return { success: true } }
     return { success: false }
   })
-  useCharacterStore.setState({ characters: [card(0)], dataProjectKey: path, loadingProjectKey: null, lastError: null })
+  useCharacterStore.setState({ characters: [card(0)], dataProjectKey: path,
+    dataProjectSession: { projectId: project.id, leaseId: project.sessionLease!, projectPath: path }, loadingProjectKey: null, lastError: null })
   await act(async () => root.render(
     <ShellV2 theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
       sidebar={<CharactersView />} editor={<AvatarActionProbe />}

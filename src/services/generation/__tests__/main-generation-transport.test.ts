@@ -40,6 +40,8 @@ it('读取时捕获的session不会被稍后currentproject替换，execute只发
 it('新会话可读旧epoch历史，但不能借read授权执行；resume沿显式当前session重新授权', async () => {
   const f = fixture(); f.activate({ ...session, leaseId: '新会话' })
   await f.transport.read(handle)
+  const stopReasoning = f.transport.subscribeReasoning!(handle, vi.fn())
+  stopReasoning()
   expect(f.invoke).toHaveBeenCalledWith('generation:read', handle, { ...session, leaseId: '新会话' })
   await expect(f.transport.execute({ handle, invocationNonce: '点击', task: { purpose: '正文', output: 'visible-text', messages: [] } })).rejects.toThrow('MISMATCH')
   const current = { ...session, leaseId: '新会话' }
@@ -83,6 +85,7 @@ it('restart及discard沿显式新session，旧候选仍由main重新验证', asy
   f.invoke.mockResolvedValueOnce({ ...view, handle: { ...handle, epoch: '新会话', rootActionId: '新根' } })
   await f.transport.restart(current, handle, intent)
   expect(f.invoke).toHaveBeenLastCalledWith('generation:restart', handle, intent, current)
+  await expect(f.transport.restart(current, handle, intent)).resolves.toMatchObject({ handle })
   await f.transport.discard(current, handle, '候选甲')
   expect(f.invoke).toHaveBeenLastCalledWith('generation:discard-candidate', handle, '候选甲', current)
 })

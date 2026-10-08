@@ -35,5 +35,5 @@ interface ImportGlobalFactsReceiptBase {
 }
 export type ImportGlobalFactsReceipt = ImportGlobalFactsReceiptBase & (
   | { roster: CharacterRosterCommitReceipt; characterProposal?: never; proposalSource?: never }
-  | { roster?: never; characterProposal: import('./character-proposal').CharacterProposalStageEvidence; proposalSource: ImportGlobalFactsRequest }
+  | { roster?: never; characterProposal: import('./character-proposal').CharacterProposalStageEvidence; proposalSource: Omit<ImportGlobalFactsRequest, 'generationRunHandle'> }
 )

@@ -13,12 +13,14 @@ const expected = { artifactId: 'outline-artifact', text: '先走到灯塔，再�
 const recovery = () => ({ attemptedPurposes: ['chapter-draft-short-outline', 'chapter-draft'], draftShortOutline: {
   artifactIds: [expected.artifactId], completedOutput: expected.text, promptHash: expected.promptHash,
   initialDraftTask: structuredClone(expected.initialDraftTask),
+  retry: { kind: 'unavailable' },
 } })
 
 it('reopen evidence rejects missing or changed persisted outline identity', () => {
   assertShortOutlineRecovery(recovery(), expected, true)
   for (const mutate of [
     value => { delete value.draftShortOutline },
+    value => { value.draftShortOutline.retry = { kind: 'available', failedAttemptId: '' } },
     value => { value.draftShortOutline.artifactIds = ['replacement'] },
     value => { value.draftShortOutline.completedOutput += '新增计划' },
     value => { value.draftShortOutline.promptHash = hash('changed-input') },

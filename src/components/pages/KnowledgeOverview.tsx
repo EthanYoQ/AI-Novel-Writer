@@ -152,9 +152,16 @@ export default function KnowledgeOverview() {
   const searchMode = hasVectors ? text('混合检索', 'Hybrid search') : text('BM25 全文检索', 'BM25 full-text search')
   const rebuildPresentation = getVectorRebuildPresentation(vectorRebuildStatus)
 
-  const openDocument = async (docId: string) => {
+  const openDocument = async (docId: string, reload = false) => {
     const session = captureProjectSession(currentProject)
     if (!session) return
+    if (!reload && docId === selectedDocId) return
+    if (!reload && documentCopy?.available && draftContent !== documentCopy.content) {
+      const discard = await confirm(text('当前项目副本有未保存的修改。放弃修改并切换文档？', 'This project copy has unsaved changes. Discard them and switch documents?'), {
+        confirmText: text('放弃修改', 'Discard changes'), danger: true,
+      })
+      if (!discard || !isProjectSessionCurrent(session)) return
+    }
     const request = ++documentRequest.current
     setSelectedDocId(docId)
     setDocumentCopy(null)
@@ -176,7 +183,7 @@ export default function KnowledgeOverview() {
       const result = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(session, 'kb:save-document-copy', selectedDocId, draftContent, documentCopy.contentHash, session.projectPath))
       if (!isProjectSessionCurrent(session)) return
       if (!result.success) { toast.error(result.error || text('保存失败', 'Save failed')); return }
-      await openDocument(selectedDocId)
+      await openDocument(selectedDocId, true)
       setSearchResults([])
       toast.success(text('项目副本已保存，索引待更新', 'Project copy saved; index update needed'))
     } catch (error) {
@@ -194,7 +201,7 @@ export default function KnowledgeOverview() {
       if (!result.success || !result.docId) { toast.error(result.error || text('重建失败', 'Rebuild failed')); return }
       await loadData()
       await loadVectorRebuildStatus()
-      await openDocument(result.docId)
+      await openDocument(result.docId, true)
       setSearchResults([])
       toast.success(text('本地全文索引已更新', 'Local text index updated'))
     } catch (error) {
@@ -314,6 +321,10 @@ export default function KnowledgeOverview() {
       )
       if (!isProjectSessionCurrent(projectSession)) return
       if (result.success) {
+        documentRequest.current++
+        setSelectedDocId(null)
+        setDocumentCopy(null)
+        setDraftContent('')
         setDocuments([])
         setStats({ documentCount: 0, totalChunks: 0, vectorDimension: 0 })
         setSearchResults([])

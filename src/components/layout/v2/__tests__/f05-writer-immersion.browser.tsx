@@ -39,7 +39,7 @@ function WriterFixture() {
     aiPanel={<AIPanel />}
     bottom={<p>任务与日志</p>} statusBar={<p>状态</p>}
     sidebarOpen={layout.sidebarOpen} aiPanelOpen={layout.aiPanelOpen}
-    bottomOpen={layout.bottomPanelOpen} immersive={layout.immersive} />
+    bottomOpen={layout.bottomPanelOpen} immersive={layout.immersive} home={layout.sidebarView === 'home'} />
 }
 
 async function click(selector: string) {
@@ -118,4 +118,26 @@ it('U07.A07/A08 沉浸进入退出，打开助手退出且未发送输入仍在'
   expect(useLayoutStore.getState()).toMatchObject({ immersive: false, aiPanelOpen: true, rightView: 'agent' })
   expect(host.querySelector('textarea[placeholder="输入消息，@ 提及，/ 使用工作流..."]')).toBe(input)
   expect(input.value).toBe('草稿里的未发送提问')
+})
+
+it('reveals explicitly opened panels from the bookshelf', async () => {
+  await act(async () => root.render(<WriterFixture />))
+  for (const tab of ['tasks', 'log', 'models'] as const) {
+    await act(async () => useLayoutStore.getState().setSidebarView('home'))
+    await click(`button[title="${{ tasks: '任务', log: '日志', models: '模型' }[tab]}"]`)
+    expect(host.querySelector('#writer-bottom')?.hasAttribute('hidden')).toBe(false)
+    expect(useLayoutStore.getState()).toMatchObject({ sidebarView: 'project', bottomTab: tab, bottomPanelOpen: true })
+  }
+  await act(async () => useLayoutStore.getState().setSidebarView('home'))
+  await act(async () => useLayoutStore.getState().openBottomTab('tasks'))
+  expect(host.querySelector('#writer-bottom')?.hasAttribute('hidden')).toBe(false)
+  expect(useLayoutStore.getState().sidebarView).toBe('project')
+  await act(async () => useLayoutStore.getState().setSidebarView('home'))
+  await act(async () => useLayoutStore.getState().openRightPanel('ai-output'))
+  expect(host.querySelector('#writer-assistant')?.hasAttribute('hidden')).toBe(false)
+  expect(useLayoutStore.getState()).toMatchObject({ sidebarView: 'project', rightView: 'ai-output', aiPanelOpen: true })
+  await act(async () => useLayoutStore.getState().setSidebarView('home'))
+  await click('button[title="AI 输出"]')
+  expect(host.querySelector('#writer-assistant')?.hasAttribute('hidden')).toBe(false)
+  expect(useLayoutStore.getState().aiPanelOpen).toBe(true)
 })

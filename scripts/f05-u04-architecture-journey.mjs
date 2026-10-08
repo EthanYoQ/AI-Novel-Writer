@@ -53,10 +53,7 @@ const worldText = '潮汐城分为上城与旧港，钟声决定城门开放。�
 const recoveryText = '恢复后追加：林岚查清了旧港的潮汐规则。'.repeat(3)
 const heldText = '候选保留：旧港的钟声记录尚未核对完毕。'.repeat(4)
 const staleText = '旧源候选：新增前提尚未纳入这次生成。'.repeat(4)
-const outline = (from, to) => Array.from({ length: to - from + 1 }, (_, offset) => {
-  const chapter = from + offset
-  return `第${chapter}章：旧港线索${chapter}\n林岚在钟声之后核对地图，找到第${chapter}条线索，并决定下一步调查方向。她请守塔人核对潮位和城门记录，再与记录员比对地图上的旧标记，确认线索的来源与风险。`
-}).join('\n\n') + `\n\n大纲批次进度：已覆盖第${from}–${to}章，全书共100章`
+const outline = chapter => `## 第${chapter}章：旧港线索${chapter}\n林岚在钟声之后核对地图，找到第${chapter}条线索，并决定下一步调查方向。她请守塔人核对潮位和城门记录，再与记录员比对地图上的旧标记，确认线索的来源与风险。`
 const steps = []
 const pass = (stepId, actionId, assertion, observed) => steps.push({ stepId, actionId, outcome: 'PASS', assertion, observed })
 const timeout = 60_000
@@ -244,8 +241,10 @@ async function main() {
     }
     if (fixture.mode === 'world-stop') send(worldText)
     else if (fixture.mode === 'world-resume') send(recoveryText)
-    else if (fixture.mode === 'outline-first') send(outline(1, 2))
-    else if (fixture.mode === 'outline-next') send(outline(3, 4))
+    else if (fixture.mode === 'outline-first' || fixture.mode === 'outline-next') {
+      const ordinal = fixture.requests.filter(row => row.mode === fixture.mode).length
+      send(outline((fixture.mode === 'outline-first' ? 0 : 2) + ordinal))
+    }
     else if (fixture.mode === 'world-length') send(heldText, 'length')
     else if (fixture.mode === 'world-hold' || fixture.mode === 'world-source-change') {
       response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: fixture.mode === 'world-source-change' ? staleText : heldText } }] })}\n\n`)
@@ -349,8 +348,10 @@ async function main() {
     assert.deepEqual(fixture.requests.map(request => [request.mode, request.method, request.path, request.authorized]), [
       ['world-stop', 'POST', '/v1/chat/completions', true],
       ['outline-first', 'POST', '/v1/chat/completions', true],
+      ['outline-first', 'POST', '/v1/chat/completions', true],
       ['outline-next', 'POST', '/v1/chat/completions', true],
-    ], 'V3 UI actions did not reach the three expected loopback generation requests')
+      ['outline-next', 'POST', '/v1/chat/completions', true],
+    ], 'V3 UI actions did not reach the five expected loopback generation requests')
     pass('U04.A04-continue-batch', 'U04.A04', 'Writer continuation started at chapter 3 and preserved chapter 1 while extending through chapter 4', { from: 3, to: 4 })
 
     if (!a01A04Only) {
@@ -479,7 +480,7 @@ async function main() {
     try {
       await page.getByText('正式内容保留 · 有未完成候选', { exact: true }).waitFor({ state: 'visible' })
       await page.getByRole('button', { name: '查看候选' }).click()
-      await page.getByTestId('writer-editor').locator('pre').filter({ hasText: staleText }).waitFor({ state: 'visible' })
+      await page.locator('main.writer-editor').locator('pre').filter({ hasText: staleText }).waitFor({ state: 'visible' })
     } catch (error) {
       const partial = await readPartial(page, context)
       const composition = partial?.world_building_generation_handle

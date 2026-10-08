@@ -11,7 +11,7 @@ import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import { readMainGenerationPolicy } from '../main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
-import { commitCharacterIdentities } from '../../repositories/character-roster-repository'
+import { commitCharacterIdentities, refreshCharacterIdentityProjection } from '../../repositories/character-roster-repository'
 import { getProjectDb } from '../../database'
 import { textHash } from '../../repositories/generation-run-repository'
 import type { GenerationRunRepository } from '../../repositories/generation-run-repository'
@@ -39,6 +39,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   db.exec("INSERT INTO project_core(id,project_name) VALUES('main','合成定稿'); INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
   FinalizationRepository.commit({ finalizationId: 'finalized-1', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
     content: prose, contentHash: textHash(prose), contentRevision: 1, targetFileName: '第一章.txt' })
+  db.transaction(() => refreshCharacterIdentityProjection(db))()
   const characterId = db.prepare("SELECT character_id FROM characters WHERE name='林岚'").pluck().get() as string
   const model: ModelProfile = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
     apiKey: 'synthetic-fixture-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'],
@@ -179,11 +180,22 @@ describe('finalized character extraction through the main owner', () => {
     expect(envelope.proof.provenance.kind).toBe('derived')
     expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('')
     // Explicit identity confirmation must not write the historical label back over a later author rename.
-    f.db.prepare('UPDATE characters SET name=? WHERE character_id=?').run('作者的新名', f.characterId)
-    const approved = f.owner.characterProposals.approve({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision,
-      operationId: 'confirm-occurrence', selections: [{ selectionKey: batch.items[0]!.selectionKey, action: 'map', characterId: f.characterId }] })
+    f.db.transaction(() => {
+      commitCharacterIdentities(f.db, { approval: { operationId: 'rename-after-extraction', expectedRevision: batch.revision, action: 'author-edit',
+        source: { kind: 'author', source: { projectId: 'project', epoch: 'epoch', sourceId: 'author', revision: 1, contentHash: 'a'.repeat(64) } } },
+        changes: [{ characterId: f.characterId, fields: { name: '作者的新名' } }], creations: [], retireIds: [], relationships: [], resolutions: [] }, () => true)
+      refreshCharacterIdentityProjection(f.db)
+    })()
+    const refreshed = f.owner.characterProposals.readPendingFinalized(batch.proposalBatchId)
+    expect(refreshed.revision).toBe(batch.revision + 1)
+    const decision = { proposalBatchId: batch.proposalBatchId, expectedRevision: refreshed.revision,
+      operationId: 'confirm-occurrence', selections: [{ selectionKey: batch.items[0]!.selectionKey, action: 'map' as const, characterId: f.characterId }] }
+    expect(() => f.owner.characterProposals.approve({ ...decision, expectedRevision: batch.revision })).toThrow('CHARACTER_ID_REVISION_CONFLICT')
+    const approved = f.owner.characterProposals.approve(decision)
     expect(approved.batch.status).toBe('approved')
     expect(f.db.prepare('SELECT name FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('作者的新名')
+    f.db.prepare('UPDATE contents SET body=? WHERE id=1').run('作者改过的定稿')
+    expect(() => f.owner.characterProposals.approve(decision)).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
   })
   it.each(['length', 'bad-json'] as const)('does not turn %s output into a state update', async kind => {
     const f = fixture(async (_request, options) => {

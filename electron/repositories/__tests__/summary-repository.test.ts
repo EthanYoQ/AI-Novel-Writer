@@ -205,7 +205,13 @@ describe('finalized continuity projection', () => {
       evidence: { start: 0, end: content.length, text: content },
     }])
 
+    const pending = SummaryRepository.listPendingFinalizedCharacterStateCandidates()
+    expect(pending).toHaveLength(1)
+    invalidateContinuityProjectionFrom(getProjectDb()!, 20)
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates()).toEqual(pending)
+    expect(SummaryRepository.readPendingFinalizedCharacterStateCandidate(draftId, pending[0].candidateKey).value).toBe('铁制罗盘')
     invalidateContinuityProjectionFrom(getProjectDb()!, 1)
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates()).toEqual([])
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
       sourceStatus: 'stale',
       characterStateCandidates: [expect.objectContaining({ characterName: '林岚', field: 'keyItems' })],

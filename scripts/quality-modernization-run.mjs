@@ -1587,5 +1587,5 @@ export const exitCodeForStatus = status => status === 'blocked' ? 2 : status ===
   : ['pending-independent-oracle-review', 'pending-independent-diagnostic-oracle-review'].includes(status) ? 3 : 0
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { const result = main(process.argv.slice(2)); console.log(JSON.stringify(result, null, 2)); process.exitCode = exitCodeForStatus(result.status) }
-  catch (error) { console.error(JSON.stringify({ status: 'blocked', code: /^[A-Z_]+$/.test(error.message) ? error.message : 'INVALID_OR_UNAVAILABLE_INPUT', physicalModelRequests: null, note: 'Inspect the retained campaign/target receipts; no unverified zero-call claim.' })); process.exitCode = 2 }
+  catch (error) { console.error(JSON.stringify({ status: 'blocked', code: /^[A-Z][A-Z0-9_]*$/.test(error.message) ? error.message : 'INVALID_OR_UNAVAILABLE_INPUT', physicalModelRequests: null, note: 'Inspect the retained campaign/target receipts; no unverified zero-call claim.' })); process.exitCode = 2 }
 }

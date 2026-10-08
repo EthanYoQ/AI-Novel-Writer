@@ -669,7 +669,8 @@ async function main() {
     qualificationEligible: !diagnosticOverlay,
     dirtyProductPaths, productOverlayHashes, unverifiedActions,
     firstFailure: primaryError ? { stepId: currentStep,
-      message: String(primaryError instanceof AggregateError ? primaryError.errors[0] : primaryError).slice(0, 1200) } : null, testedSha,
+      message: String(primaryError instanceof AggregateError ? primaryError.errors[0] : primaryError)
+        .replaceAll(model.apiKey, '[REDACTED]').replaceAll(reasoning, '[REDACTED]').slice(0, 1200) } : null, testedSha,
     driverDirty: Boolean(git('status', '--porcelain', '--', relative(repository, driverPath))),
     packageDir, exeSha256: expectedExe.toLowerCase(), asarSha256: expectedAsar.toLowerCase(),
     driverSha256, profileRoot: runRoot, evidenceLevel: 'packaged-electron', shell: 'writer',

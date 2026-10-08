@@ -7,6 +7,7 @@ import { useWorkflowStore } from '../../stores/workflow-store'
 import { confirm } from '../ui/Confirm'
 import {
   useCharacterStore,
+  characterSelectionKey,
   EMPTY_STATE,
   type CharacterCard,
   type CharacterCurrentState,
@@ -52,6 +53,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
     parseProjectEditorDraftLedger(state.draftLedgers[CHARACTER_DRAFT_TAB.id]), projectKey,
   )))
   const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
+  const [saveError, setSaveError] = useState('')
   const identityBusy = useCharacterStore(s => s.identityBusy)
   const renameCharacter = useCharacterStore(s => s.renameCharacter)
   const updateField = useCharacterStore(s => s.updateField)
@@ -76,7 +78,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   // 数据由 ProjectService 统一加载，组件只消费 store 数据
 
   const selectedCard = dataReady
-    ? characters.find((c) => c.characterId === selectedId) || null
+    ? characters.find((c, index) => characterSelectionKey(c, index) === selectedId) || null
     : null
   const avatar = useCharacterAvatar(selectedCard?.characterId ?? null, dataReady && viewMode === 'edit')
   const relationshipEditorText = selectedCard
@@ -91,7 +93,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
       { title: text('删除角色', 'Delete character'), confirmText: text('删除', 'Delete'), danger: true }
     )
     if (!ok || !isProjectSessionCurrent(projectSession)) return
-    const deleted = await deleteCharacter(selectedCard.characterId!, projectKey)
+    const deleted = await deleteCharacter(selectedId!, projectKey)
     if (!isProjectSessionCurrent(projectSession)) return
     if (!deleted) {
       addLog(
@@ -108,21 +110,10 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     setSaveOutcome('idle')
+    setSaveError('')
     try {
       await saveAll(projectKey)
       if (!isProjectSessionCurrent(projectSession)) return
-      const avatarSaved = await avatar.commitStaged()
-      if (!isProjectSessionCurrent(projectSession)) return
-      if (!avatarSaved) {
-        setSaveOutcome('failed')
-        const failure = new Error(text(
-          '头像保存失败；其它档案内容已保存，原头像未变。',
-          'The avatar could not be saved. Other profile changes were saved and the previous avatar is unchanged.',
-        ))
-        addLog('error', failure.message)
-        if (propagateFailure) throw failure
-        return
-      }
       addLog('info', text(`已保存 ${characters.length} 个角色卡`, `Saved ${characters.length} character cards`))
       const stillDirty = useEditorStore.getState().tabs.some(
         tab => tab.type === 'character' && tab.projectKey === projectKey && tab.dirty,
@@ -131,6 +122,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
         setSaveOutcome('failed')
+        setSaveError(error instanceof Error ? error.message : String(error))
         addLog('error', text(`角色卡保存失败：${error}`, 'Could not save character cards.'))
       }
       if (propagateFailure) throw error
@@ -346,7 +338,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                           },
                         },
                       }
-                      updateCurrentField(selectedCard.characterId!, 'currentState', cs)
+                      updateCurrentField(selectedId!, 'currentState', cs)
                     }}
                     rows={2}
                     placeholder={`${label}...`}
@@ -377,40 +369,42 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                 <div className="min-w-0 flex-1">
                   <Label>{text('角色头像', 'Character avatar')}</Label>
                   <div className="mt-1 flex flex-wrap gap-1.5">
-                    <Button variant="outline" size="sm" disabled={avatar.busy} onClick={() => { void avatar.chooseAvatar() }}><Camera size={12} />{avatar.avatarUrl ? text('替换头像', 'Replace avatar') : text('选择头像', 'Choose avatar')}</Button>
+                    <Button variant="outline" size="sm" disabled={avatar.busy || !selectedCard.characterId || selectedCard.characterId.startsWith('draft:')} onClick={() => { void avatar.chooseAvatar() }}><Camera size={12} />{avatar.avatarUrl ? text('替换头像', 'Replace avatar') : text('选择头像', 'Choose avatar')}</Button>
                     {avatar.avatarUrl && <Button variant="outline" size="sm" disabled={avatar.busy} onClick={avatar.stageRemoval}><Trash2 size={12} />{text('移除头像', 'Remove avatar')}</Button>}
                     {avatar.staged && <Button variant="ghost" size="sm" disabled={avatar.busy} onClick={avatar.discardStaged}><X size={12} />{text('取消头像更改', 'Discard avatar change')}</Button>}
                   </div>
+                  {(!selectedCard.characterId || selectedCard.characterId.startsWith('draft:')) && <p className="mt-1 text-[0.7rem] text-[var(--color-text-secondary)]">{text('先保存角色，再选择头像。', 'Save the character before choosing an avatar.')}</p>}
                   {avatar.staged && <p className="mt-1 text-[0.7rem] text-[var(--color-text-secondary)]">{text('头像更改将在保存角色档案时提交。', 'The avatar change is committed when you save the character profile.')}</p>}
                   {avatar.notice && <p role="alert" className="mt-1 text-[0.7rem] text-[var(--color-danger)]">{avatar.notice}</p>}
+                  {saveError && <p role="alert" className="mt-1 text-[0.7rem] text-[var(--color-danger)]">{saveError}</p>}
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3">
-                <div><Label>{text('姓名', 'Name')}</Label><Input value={selectedCard.name} disabled={identityBusy} onChange={(e) => renameCurrentCharacter(selectedCard.characterId!, e.target.value)} /></div>
-                <div><Label>{text('性别', 'Gender')}</Label><Input value={selectedCard.gender} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'gender', e.target.value)} /></div>
-                <div><Label>{text('年龄', 'Age')}</Label><Input value={selectedCard.age} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'age', e.target.value)} /></div>
+                <div><Label>{text('姓名', 'Name')}</Label><Input value={selectedCard.name} disabled={identityBusy} onChange={(e) => renameCurrentCharacter(selectedId!, e.target.value)} /></div>
+                <div><Label>{text('性别', 'Gender')}</Label><Input value={selectedCard.gender} onChange={(e) => updateCurrentField(selectedId!, 'gender', e.target.value)} /></div>
+                <div><Label>{text('年龄', 'Age')}</Label><Input value={selectedCard.age} onChange={(e) => updateCurrentField(selectedId!, 'age', e.target.value)} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>{text('定位', 'Role')}</Label>
-                  <NativeSelect value={selectedCard.role} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'role', e.target.value as typeof selectedCard.role)}>
+                  <NativeSelect value={selectedCard.role} onChange={(e) => updateCurrentField(selectedId!, 'role', e.target.value as typeof selectedCard.role)}>
                     {CHARACTER_ROLES.map(role => (
                       <option key={role} value={role}>{roleLabel(role)}</option>
                     ))}
                   </NativeSelect>
                 </div>
               </div>
-              <div><Label>{text('外貌描写', 'Appearance')}</Label><Textarea value={selectedCard.appearance} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'appearance', e.target.value)} rows={3} placeholder={text('输入外貌描写...', 'Describe appearance...')} /></div>
-              <div><Label>{text('性格特征', 'Personality')}</Label><Textarea value={selectedCard.personality} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'personality', e.target.value)} rows={3} placeholder={text('输入性格特征...', 'Describe personality...')} /></div>
-              <div><Label>{text('背景故事', 'Background')}</Label><Textarea value={selectedCard.background} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'background', e.target.value)} rows={4} placeholder={text('输入背景故事...', 'Describe background...')} /></div>
-              <div><Label>{text('能力/技能', 'Abilities / skills')}</Label><Textarea value={selectedCard.abilities} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'abilities', e.target.value)} rows={3} placeholder={text('输入能力/技能...', 'Describe abilities or skills...')} /></div>
-              <div><Label>{text('核心动机', 'Core motivation')}</Label><Textarea value={selectedCard.motivation} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'motivation', e.target.value)} rows={2} placeholder={text('输入核心动机...', 'Describe core motivation...')} /></div>
+              <div><Label>{text('外貌描写', 'Appearance')}</Label><Textarea value={selectedCard.appearance} onChange={(e) => updateCurrentField(selectedId!, 'appearance', e.target.value)} rows={3} placeholder={text('输入外貌描写...', 'Describe appearance...')} /></div>
+              <div><Label>{text('性格特征', 'Personality')}</Label><Textarea value={selectedCard.personality} onChange={(e) => updateCurrentField(selectedId!, 'personality', e.target.value)} rows={3} placeholder={text('输入性格特征...', 'Describe personality...')} /></div>
+              <div><Label>{text('背景故事', 'Background')}</Label><Textarea value={selectedCard.background} onChange={(e) => updateCurrentField(selectedId!, 'background', e.target.value)} rows={4} placeholder={text('输入背景故事...', 'Describe background...')} /></div>
+              <div><Label>{text('能力/技能', 'Abilities / skills')}</Label><Textarea value={selectedCard.abilities} onChange={(e) => updateCurrentField(selectedId!, 'abilities', e.target.value)} rows={3} placeholder={text('输入能力/技能...', 'Describe abilities or skills...')} /></div>
+              <div><Label>{text('核心动机', 'Core motivation')}</Label><Textarea value={selectedCard.motivation} onChange={(e) => updateCurrentField(selectedId!, 'motivation', e.target.value)} rows={2} placeholder={text('输入核心动机...', 'Describe core motivation...')} /></div>
               <div>
                 <Label>{text('关系网', 'Relationships')}</Label>
                 <Textarea
                   value={relationshipEditorText}
                   onChange={(e) => updateCurrentField(
-                    selectedCard.characterId!,
+                    selectedId!,
                     'relationships',
                     relationshipStorageFromEditor(e.target.value, {
                       identities: characters,
@@ -426,8 +420,8 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                   )}
                 />
               </div>
-              <div><Label>{text('成长轨迹', 'Character arc')}</Label><Textarea value={selectedCard.arc} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'arc', e.target.value)} rows={3} placeholder={text('输入成长轨迹...', 'Describe the character arc...')} /></div>
-              <div><Label>{text('备注', 'Notes')}</Label><Textarea value={selectedCard.notes} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'notes', e.target.value)} rows={2} placeholder={text('输入备注...', 'Enter notes...')} /><p className="text-xs text-muted-foreground">{text('本章须在正文中明示的内容，另起一行写【第N章必现】具体要求', 'For a must-show requirement, use its own line: 【第N章必现】specific requirement')}</p></div>
+              <div><Label>{text('成长轨迹', 'Character arc')}</Label><Textarea value={selectedCard.arc} onChange={(e) => updateCurrentField(selectedId!, 'arc', e.target.value)} rows={3} placeholder={text('输入成长轨迹...', 'Describe the character arc...')} /></div>
+              <div><Label>{text('备注', 'Notes')}</Label><Textarea value={selectedCard.notes} onChange={(e) => updateCurrentField(selectedId!, 'notes', e.target.value)} rows={2} placeholder={text('输入备注...', 'Enter notes...')} /><p className="text-xs text-muted-foreground">{text('本章须在正文中明示的内容，另起一行写【第N章必现】具体要求', 'For a must-show requirement, use its own line: 【第N章必现】specific requirement')}</p></div>
             </div>
           </div>
         )}

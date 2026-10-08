@@ -38,7 +38,6 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '../ui/Dialog'
 import { Button } from '../ui/Button'
-import { alertError } from '../ui/AlertDialog'
 
 const isMac = navigator.userAgent.includes('Mac')
 
@@ -116,17 +115,10 @@ export default function TitleBar() {
     setExitBusy(true)
     setExitError(null)
     try {
-      const result = await ipc.invoke('window:resolve-close', request.requestId, 'cancel')
+      const result = await ipc.invoke('window:resolve-close', request.requestId, 'proceed')
       if (!result.success) throw new Error(text('退出请求已失效，请重试', 'The exit request expired. Try again.'))
       discardAllEditorChanges()
       setExitRequest(null)
-      const closeResult = await ipc.invoke('window:close')
-      if (!closeResult.success) {
-        await alertError(
-          text('未保存修改已放弃，但无法再次发起退出。请手动重试退出。', 'Unsaved changes were discarded, but exit could not be requested again. Try exiting again.'),
-          { title: text('退出失败', 'Could not exit') },
-        )
-      }
     } catch (error) {
       setExitError(error instanceof Error ? error.message : String(error))
     } finally {

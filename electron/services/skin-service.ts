@@ -505,7 +505,12 @@ export class SkinService {
       }
     }
 
-    if (parsed.customSkin && !customSkin) this.startupHealthy = false
+    if (parsed.customSkin && !customSkin) {
+      const recovered: SkinState = { activeSkin: parsed.activeSkin === 'custom' ? 'classic' : parsed.activeSkin, customSkin: null }
+      this.writeManifest(recovered)
+      this.cleanupAsset(assetFileFor(parsed.customSkin))
+      return recovered
+    }
     if (parsed.activeSkin === 'custom' && !customSkin) return CLASSIC_STATE
     return {
       activeSkin: parsed.activeSkin,

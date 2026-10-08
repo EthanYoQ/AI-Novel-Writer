@@ -73,7 +73,7 @@ export function readPortableCurrentAuthority(input: {
   try {
     const authority = parsePortableTransferAuthority(parsed)
     if (authority.targetProjectId !== input.projectId) invalid()
-    verifyPortableTransferAuthorityHistory(input.database, authority)
+    verifyPortableTransferAuthorityHistory(input.database, authority, freeze)
     return Object.freeze({ receiptId: authority.receiptId, originProjectId: authority.originProjectId, snapshotGeneration: authority.snapshotGeneration })
   } catch (error) {
     if (error instanceof PortableCurrentAuthorityError) throw error

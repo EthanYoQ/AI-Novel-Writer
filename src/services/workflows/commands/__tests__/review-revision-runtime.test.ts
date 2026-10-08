@@ -463,11 +463,14 @@ describe('review/revision consumers using the main contract (synthetic transport
     'binds %s admission to the exact initial user message before the first provider request',
     async operation => {
       const f = setup([{ content: operation === 'review-chapter' ? review : revised, finishReason: 'stop' }])
-
+      const stage = operation === 'review-chapter' ? 'review' : 'refinement'
+      f.args.context.writingSkills = { [stage]: { stage, skillId: 'user:causality', source: 'user',
+        name: 'Causality', content: 'FROZEN_SKILL_SENTINEL', writingLanguage: 'zh-CN', utf8Bytes: 21 } }
       await f.command(operation).execute(f.args)
 
       const userPrompt = f.provider.mock.calls[0]?.[0].find(message => message.role === 'user')?.content ?? ''
       expect(userPrompt).not.toBe('')
+      expect(userPrompt.match(/FROZEN_SKILL_SENTINEL/g)).toHaveLength(1)
       expect(f.providerBindCounts[0]).toBe(1)
       expect(f.fixture.materialDecisions).toHaveLength(1)
       expect(f.fixture.materialDecisions[0]?.promptHash).toBe(hash(userPrompt))

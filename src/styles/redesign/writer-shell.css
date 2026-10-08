@@ -7,7 +7,9 @@
 .writer-shell[data-writer-theme="dark"] { --writer-paper: #202124; --writer-panel: #292b30; --writer-ink: #eeece8; --writer-muted: #b5b1aa; --writer-line: #515159; --writer-accent: #e3b786; }
 .writer-shell[data-writer-theme="galaxy"] { --writer-paper: #211d30; --writer-panel: #2d263e; --writer-ink: #f1eafb; --writer-muted: #c2b4d1; --writer-line: #564a6b; --writer-accent: #c7a7ef; }
 .writer-shell { height: 100%; width: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--writer-paper); overflow: hidden; }
-.writer-shell button, .writer-shell summary { font: inherit; color: inherit; cursor: pointer; }
+@layer components {
+  .writer-shell button, .writer-shell summary { font: inherit; color: inherit; cursor: pointer; }
+}
 .writer-shell .writer-tabs-host > button { color: var(--writer-ink); background: var(--writer-panel); border: 1px solid var(--writer-line); border-radius: 4px; padding: 5px 9px; }
 .writer-shell button:disabled { opacity: .65; cursor: not-allowed; }
 .writer-shell button:focus-visible, .writer-shell summary:focus-visible, .writer-shell .writer-grip:focus-visible { outline: 2px solid var(--writer-accent); outline-offset: 2px; }

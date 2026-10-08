@@ -1,3 +1,4 @@
+import '../../../../index.css'
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -83,4 +84,20 @@ it('窄窗口给出可读提示并保留横向工作区', async () => {
   expect(getComputedStyle(host.querySelector('.writer-small-window')!).display).not.toBe('none')
   expect(host.querySelector('.writer-workspace')!.getBoundingClientRect().width).toBeGreaterThanOrEqual(760)
   await page.screenshot({ path: '../../../../../.runtime/.cache/novel-quality-modernization/f02-narrow.png' })
+})
+
+it('keeps button utility colors and exposes image skin through the V3 shell', async () => {
+  const utilities = document.createElement('style')
+  utilities.textContent = '@layer utilities { .text-white { color: rgb(255,255,255); } .text-xs { font-size: 12px; } }'
+  document.head.append(utilities)
+  await act(async () => root.render(<div className="app-skin-root" data-theme="light">
+    {shell('light', <button className="text-white text-xs">Styled action</button>)}
+  </div>))
+  const button = host.querySelector('.writer-editor-content button')!
+  expect(getComputedStyle(button).color).toBe('rgb(255, 255, 255)')
+  expect(getComputedStyle(button).fontSize).toBe('12px')
+  utilities.remove()
+  host.querySelector<HTMLElement>('.app-skin-root')!.dataset.skinReadability = 'high-contrast'
+  expect(getComputedStyle(host.querySelector('.v3-magazine-shell')!).backgroundColor).toBe('rgba(0, 0, 0, 0)')
+  expect(getComputedStyle(host.querySelector('.writer-editor')!).backgroundColor).toMatch(/\/ 0\.6\)|, 0\.6\)/)
 })

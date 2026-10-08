@@ -1,4 +1,5 @@
 import { chapterTimeContinuity } from '../../../shared/chapter-time-continuity'
+import { appErrorMessage } from '../../../i18n/app-errors'
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
@@ -569,6 +570,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         promptKeys: [templateKey], skillStages: ['drafting'], authorInputs, query: searchQuery,
         selectedDraftIds: [...new Set(this.selectedCandidateDrafts.filter(item => item.chapterNumber < this.chapterInfo.chapterNumber).map(item => item.draftId))],
         ...(this.batchId ? { batchId: this.batchId } : {}),
+      }).catch(error => {
+        const code = error instanceof Error ? /(?:^|:\s)(KNOWLEDGE_BASE_NATIVE_UNAVAILABLE|LEGACY_VECTOR_MIGRATION_BLOCKED)$/u.exec(error.message)?.[1] : undefined
+        if (code) throw Object.assign(new Error(appErrorMessage(context.uiLocale ?? 'zh-CN', { code })), { code })
+        throw error
       }) : null
     const knowledgeSnapshot = prepared?.knowledgeSnapshot ?? earlyRecovery?.knowledgeSnapshot
     // Recovery uses the original main snapshot, including retrieval hints outside the writer prompt.
@@ -858,12 +863,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       let runtime: GenerationRuntime | null = null
       let cleanDraftText: string
       let acknowledgedPreview = ''
+      let replacingPreview = false
       let compositionVersion: DraftVisibleTextVersion = DRAFT_VISIBLE_TEXT_VERSION
       // 对账输出不是正文：对账请求进行期间不把它的快照显示到写作面板。
       const mainCallbacks = { ...callbacks,
         appendText: (text: string) => { if (!planning) callbacks.appendText(text) },
         ...(callbacks.replaceText ? { replaceText: (text: string) => {
-          if (!planning) callbacks.replaceText?.(composeDraftVisibleContinuation(acknowledgedPreview, text, compositionVersion))
+          if (!planning) callbacks.replaceText?.(replacingPreview ? text : composeDraftVisibleContinuation(acknowledgedPreview, text, compositionVersion))
         } } : {}),
       }
       try {
@@ -1093,6 +1099,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             onRecoverableCandidate: candidate => { recoverableDraftCandidate = candidate },
           })
           recoverableDraftCandidate = completedDraft.text
+          replacingPreview = true
           const lengthCheckedDraft = await this.condenseDraftIfNeeded({
             session: draftingSession,
             compositionVersion,
@@ -1764,8 +1771,14 @@ ${params.candidate.text}`,
       }
       const profiles: string[] = []
       const relevantNames = new Set(relevantCharacterNames.map(name => name.trim()).filter(Boolean))
-      for (const card of roster.entries) {
-        if (!relevantNames.has(card.name)) continue
+      const selected = new Set<typeof roster.entries[number]>()
+      for (const name of relevantNames) {
+        const matches = roster.entries.filter(card => card.name === name || card.characterId
+          && roster.aliases?.some(alias => alias.name === name && alias.characterId === card.characterId))
+        if (matches.length > 1) throw new Error(`GENERATION_CHARACTER_REFERENCE_AMBIGUOUS: ${name}`)
+        if (matches[0]) selected.add(matches[0])
+      }
+      for (const card of selected) {
         const facts = [
           card.gender && `gender: ${card.gender}`,
           card.age && `age: ${card.age}`,
@@ -1800,7 +1813,8 @@ ${params.candidate.text}`,
         profiles.push(`${card.name} (${card.role || 'unknown'})${facts.length ? ` | ${facts.join(' | ')}` : ''}`)
       }
       return profiles.length > 0 ? profiles.join('\n') : ''
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('GENERATION_CHARACTER_REFERENCE_AMBIGUOUS')) throw error
       return promptLanguageText(
         writingLanguage,
         '（角色资料读取失败；未把旧 currentState 或 characters_arch 当作作者事实）',

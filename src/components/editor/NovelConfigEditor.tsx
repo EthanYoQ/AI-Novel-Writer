@@ -29,6 +29,7 @@ import {
 } from '../project-session-gate'
 import { AUDIENCE_EN, GENRE_EN } from './novel-config-labels'
 import { SaveFeedback, type SaveOutcome } from './save-feedback'
+import { randomUUID } from '../../utils/id'
 
 /** 小说配置编辑器 — Tab 内的可视化配置面板 */
 export default function NovelConfigEditor({ projectKey }: { projectKey: string }) {
@@ -155,7 +156,7 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
       await cmd.execute({
         step: { id: '', commandId: '', name: '', params: {} },
         context: {
-          runId: 'config-field',
+          runId: `config-field:${randomUUID()}`,
           projectPath: projectSession.projectPath,
           projectSession,
           writingLanguage: resolveWritingLanguage(currentProject?.novelConfig.writingLanguage),

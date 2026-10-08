@@ -127,22 +127,10 @@ describe('TitleBar native exit settlement', () => {
         }),
       },
     })
-    let ledgerWasClearedBeforeReclose = false
-    invoke.mockImplementation(async (channel: string) => {
-      if (channel === 'window:close') {
-        ledgerWasClearedBeforeReclose = JSON.parse(
-          useEditorStore.getState().draftLedgers.config,
-        ).projects.length === 0
-        closeRequested?.({ requestId: 'close-after-discard' })
-      }
-      return { success: true }
-    })
-
     await act(async () => page.getByRole('button', { name: '放弃并退出' }).click())
-    expect(invoke).toHaveBeenCalledWith('window:resolve-close', 'close-save-race', 'cancel')
-    expect(invoke).toHaveBeenCalledWith('window:close')
-    expect(invoke).toHaveBeenCalledWith('window:resolve-close', 'close-after-discard', 'proceed')
-    expect(ledgerWasClearedBeforeReclose).toBe(true)
+    expect(invoke).toHaveBeenCalledWith('window:resolve-close', 'close-save-race', 'proceed')
+    expect(invoke).not.toHaveBeenCalledWith('window:resolve-close', 'close-save-race', 'cancel')
+    expect(invoke).not.toHaveBeenCalledWith('window:close')
     expect(useEditorStore.getState().tabs.some(tab => tab.dirty)).toBe(false)
     expect(JSON.parse(useEditorStore.getState().draftLedgers.config).projects).toEqual([])
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument()

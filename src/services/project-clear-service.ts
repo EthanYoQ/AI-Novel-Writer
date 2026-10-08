@@ -67,7 +67,7 @@ function affectedTabs(
   projectKey: string,
 ): EditorTab[] {
   const affectedTypes = new Set(scopes.flatMap(scope => AFFECTED_TAB_TYPES[scope]))
-  return tabs.filter(tab => tab.projectKey === projectKey && affectedTypes.has(tab.type))
+  return tabs.filter(tab => tab.projectKey === projectKey && !tab.planningRecovery && affectedTypes.has(tab.type))
 }
 
 function affectedHiddenDraftLabels(

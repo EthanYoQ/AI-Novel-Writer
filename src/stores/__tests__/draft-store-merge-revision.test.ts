@@ -8,6 +8,7 @@ const {
   settleMergedRevision,
   startWorkflow,
   editorTabs,
+  workflowHistory,
 } = vi.hoisted(() => ({
   invokeWithProjectSession: vi.fn(),
   refreshFileTree: vi.fn(),
@@ -15,6 +16,7 @@ const {
   markTabSaved: vi.fn(),
   settleMergedRevision: vi.fn(),
   startWorkflow: vi.fn(),
+  workflowHistory: [] as Array<{ id: string; status: string; error: string }>,
   editorTabs: [] as Array<{
     id: string
     filePath: string
@@ -55,7 +57,7 @@ vi.mock('../editor-store', () => ({
 }))
 
 vi.mock('../workflow-store', () => ({
-  useWorkflowStore: { getState: () => ({ startWorkflow }) },
+  useWorkflowStore: { getState: () => ({ startWorkflow, history: workflowHistory }) },
   workflowResourceKey: (...parts: unknown[]) => parts.join(':'),
 }))
 
@@ -74,6 +76,7 @@ const projectSession = {
 
 describe('draft-store merged revision persistence', () => {
   beforeEach(() => {
+    workflowHistory.length = 0
     invokeWithProjectSession.mockReset()
     refreshFileTree.mockReset()
     syncTabContent.mockReset()
@@ -82,6 +85,7 @@ describe('draft-store merged revision persistence', () => {
     startWorkflow.mockReset()
     editorTabs.splice(0)
     refreshFileTree.mockResolvedValue(undefined)
+    startWorkflow.mockResolvedValue('recheck')
 
     invokeWithProjectSession.mockImplementation(async (_session: unknown, channel: string) => {
       if (channel === 'db:draft-list') {
@@ -200,6 +204,10 @@ describe('draft-store merged revision persistence', () => {
   })
 
   it('starts exactly one targeted recheck only when the merge receipt requires it', async () => {
+    startWorkflow.mockImplementation(async definition => {
+      definition.onStarted()
+      return new Promise<string>(() => {})
+    })
     editorTabs.push({ id: 'draft-11', filePath: 'ai-novel://draft/11', projectKey: projectPath,
       content: '原稿', contentRevision: 2, dirty: false })
     invokeWithProjectSession.mockImplementation(async (_session: unknown, channel: string) => {
@@ -218,7 +226,7 @@ describe('draft-store merged revision persistence', () => {
     expect(startWorkflow.mock.calls[0]?.[1]).toBe(false)
   })
 
-  it('reports a post-commit recheck launch failure without claiming the durable merge failed', async () => {
+  it.each(['reject', 'failed-history'] as const)('reports a post-commit recheck launch %s without claiming the durable merge failed', async failure => {
     editorTabs.push({ id: 'draft-11', filePath: 'ai-novel://draft/11', projectKey: projectPath,
       content: '原稿', contentRevision: 2, dirty: false })
     invokeWithProjectSession.mockImplementation(async (_session: unknown, channel: string) => {
@@ -228,7 +236,8 @@ describe('draft-store merged revision persistence', () => {
       if (channel === 'db:draft-list') return []
       return { success: true }
     })
-    startWorkflow.mockImplementation(() => { throw new Error('synthetic recheck launch failure') })
+    if (failure === 'reject') startWorkflow.mockRejectedValue(new Error('synthetic recheck launch failure'))
+    else workflowHistory.push({ id: 'recheck', status: 'failed', error: 'synthetic recheck launch failure' })
 
     await expect(useDraftStore.getState().applyMergedRevision('ai-novel://draft/ch1', 1,
       'ai-novel://draft/11', 'ai-novel://revision/1', '合并正文', '原稿', projectPath, projectSession))

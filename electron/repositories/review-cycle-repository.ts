@@ -613,9 +613,8 @@ export class ReviewCycleRepository {
         revision_id,source_hash,revision_status FROM review_cycles WHERE cycle_id=?`).get(input.cycleId) as CycleBindingRow | undefined
       if (!cycle || cycle.revision_status !== 'not-generated' || cycle.revision_id !== null) conflict()
       const confirmation = validateAuthorConfirmation(cycle, input.confirmationReviewId, db)
-      if (cycle.confirmation_review_id !== null) {
-        if (cycle.confirmation_review_id !== input.confirmationReviewId
-          || cycle.confirmation_content_hash !== confirmation.contentHash) conflict()
+      if (cycle.confirmation_review_id === input.confirmationReviewId) {
+        if (cycle.confirmation_content_hash !== confirmation.contentHash) conflict()
         const waivedFindingCount = bindAuthorWaivers({ cycleId: input.cycleId,
           confirmationContentHash: confirmation.contentHash }, confirmation.snapshot, db, false)
         if (!verifyM03ReviewCycle(db)) conflict()
@@ -625,10 +624,11 @@ export class ReviewCycleRepository {
       const confirmationOwner = db.prepare('SELECT cycle_id FROM review_cycles WHERE confirmation_review_id=?')
         .pluck().get(input.confirmationReviewId) as string | undefined
       if (confirmationOwner && confirmationOwner !== input.cycleId) conflict()
+      if (cycle.confirmation_review_id !== null) db.prepare("UPDATE review_findings SET status='unresolved',evidence_hash=NULL,confirmation_item_index=NULL WHERE cycle_id=? AND status='author-waived'").run(input.cycleId)
       const waivedFindingCount = bindAuthorWaivers({ cycleId: input.cycleId,
         confirmationContentHash: confirmation.contentHash }, confirmation.snapshot, db, true)
       const result = db.prepare(`UPDATE review_cycles SET confirmation_review_id=?,confirmation_content_hash=?
-        WHERE cycle_id=? AND revision_status='not-generated' AND confirmation_review_id IS NULL AND revision_id IS NULL`)
+        WHERE cycle_id=? AND revision_status='not-generated' AND revision_id IS NULL`)
         .run(input.confirmationReviewId, confirmation.contentHash, input.cycleId)
       if (result.changes !== 1 || !verifyM03ReviewCycle(db)) conflict()
       return { cycleId: input.cycleId, confirmationReviewId: input.confirmationReviewId,

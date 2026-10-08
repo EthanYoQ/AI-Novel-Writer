@@ -129,6 +129,12 @@ describe('generation parameter policy', () => {
     })
   })
 
+  it('keeps the requested output budget when the model output limit is cleared', () => {
+    expect(resolveGenerationParameters({ ...openAIModel, maxTokens: 0 }, {
+      maxTokens: 1024,
+    }).maxTokens).toBe(1024)
+  })
+
   const officialKimiHosts = [
     'https://api.moonshot.cn/v1',
     'https://api.moonshot.ai/v1',

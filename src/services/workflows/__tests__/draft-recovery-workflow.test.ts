@@ -146,7 +146,7 @@ it.each(['draft-visible-v1', DRAFT_VISIBLE_TEXT_VERSION, null] as const)(
     const raw = `少年时。\n\n${refrain}\n\n二十年后。\n\n${refrain}`
     const algorithm: DraftVisibleTextVersion = storedAlgorithm ?? DRAFT_VISIBLE_TEXT_VERSION
     const expected = composeDraftVisibleContinuation('', raw, algorithm)
-    if (storedAlgorithm) recovery.composition!.algorithm = storedAlgorithm
+    if (storedAlgorithm) recovery.composition = { ...recovery.composition!, algorithm: storedAlgorithm, text: expected, textHash: hash(expected) }
     else recovery.composition = null
     const invoke = bridge(recovery)
     const original = invoke.getMockImplementation()!
@@ -156,7 +156,7 @@ it.each(['draft-visible-v1', DRAFT_VISIBLE_TEXT_VERSION, null] as const)(
         { artifactId: 'original-artifact', text: raw, compositionEligible: true },
       ] }
       if (channel === 'generation:compose-visible') {
-        expect(args.slice(0, 4)).toEqual([resumedHandle, ['original-artifact'], hash(expected), algorithm])
+        expect(args.slice(0, 4)).toEqual([resumedHandle, ['original-artifact'], storedAlgorithm ? hash(expected) : undefined, algorithm])
         recovery.composition = { algorithm, text: expected, textHash: hash(expected), artifactIds: ['original-artifact'], sources: [] }
         return recovery.composition
       }

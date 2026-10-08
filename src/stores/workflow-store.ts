@@ -202,6 +202,7 @@ export interface WorkflowCompleteAction {
 }
 
 export interface WorkflowDefinition {
+  onStarted?: () => void
   /** 可由需要同步订阅事件的调用方预先分配。 */
   runId?: string
   /** Main-validated Agent tool registration, separate from model-editable intent. */
@@ -711,6 +712,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         ), context.uiLocale)
       }
     }
+
+    definition.onStarted?.()
 
     // 逐步执行
     for (let i = 0; i < definition.steps.length; i++) {

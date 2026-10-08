@@ -50,6 +50,12 @@ test('continuation then one compression binds final visible replacement; baselin
   assert.throws(() => replayDraft([...values, condensed], { arm: 'baseline' }), /SEQUENCE_INVALID/)
   assert.deepEqual(replayDraft([reply('chapter-draft', '甲'.repeat(650))], { arm: 'baseline' }).next, ['chapter-draft-continuation'])
   assert.deepEqual(replayDraft([reply('chapter-draft', '甲'.repeat(650))]).next, [])
+  const overlong = [...values, reply('chapter-draft-condense', '丙'.repeat(1300))]
+  const current = { protocolRevision: 's14b-candidate-only-three-rounds-v1' }
+  assert.equal(replayDraft(overlong, current).complete, true)
+  assert.equal(replayDraft(overlong).complete, false)
+  assert.equal(replayDraft(values, current).complete, false)
+  assert.throws(() => replayDraft([...values, reply('chapter-draft-condense', '丙'.repeat(1300), 'length')], current), /CONDENSE_INCOMPLETE/)
 })
 
 test('existing eight-attempt root budget includes reconcile; exhausted output cannot authorize another send', () => {
