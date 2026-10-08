@@ -51,6 +51,11 @@ vi.mock('../../stores/project-store', () => ({
   },
 }))
 
+const characterLoad = vi.fn()
+vi.mock('../../stores/character-store', () => ({
+  useCharacterStore: { getState: vi.fn(() => ({ load: characterLoad })) },
+}))
+
 vi.mock('../../stores/draft-store', () => ({
   useDraftStore: {
     getState: vi.fn(() => ({
@@ -220,23 +225,25 @@ describe('clearProjectData', () => {
     expect(ipc.invokeWithProjectSession).toHaveBeenCalledOnce()
   })
 
-  it('does not block creative-field clearing for character cards that the repository does not delete', async () => {
+  it('blocks creative-field clearing while character cards have unsaved edits, and reloads cards after clearing', async () => {
     vi.mocked(useEditorStore.getState).mockReturnValue({
       tabs: [],
       draftLedgers: {
         'character-editor-drafts': JSON.stringify({
           version: 1,
-          projects: [{ projectKey: projectPath, baseValue: [], draftValue: [{ name: '保留角色' }] }],
+          projects: [{ projectKey: projectPath, baseValue: [], draftValue: [{ name: '未保存角色' }] }],
         }),
       },
       clearTabs,
       closeTab,
     } as never)
 
-    await expect(clearProjectData({ creativeFields: true }, projectSession)).resolves.toEqual({
-      cleared: ['generatedText'],
-    })
-    expect(ipc.invokeWithProjectSession).toHaveBeenCalledOnce()
+    await expect(clearProjectData({ creativeFields: true }, projectSession)).rejects.toThrow('角色卡')
+    expect(ipc.invokeWithProjectSession).not.toHaveBeenCalled()
+
+    vi.mocked(useEditorStore.getState).mockReturnValue({ tabs: [], draftLedgers: {}, clearTabs, closeTab } as never)
+    await clearProjectData({ creativeFields: true }, projectSession)
+    expect(characterLoad).toHaveBeenCalledWith(projectPath, projectSession)
   })
 
   it('closes only affected clean tabs after clear', async () => {
