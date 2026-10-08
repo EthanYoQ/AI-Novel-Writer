@@ -870,6 +870,12 @@ function identityProjectionEntries(db: BetterSqlite3.Database, includeIds = fals
     relationships: relationships.filter(item => item.source_character_id === character.characterId).map(item => ({ target: item.name, relation: item.relation,
       ...(includeIds ? { targetCharacterId: item.target_character_id } : {}) })) })))
 }
+/** 清空故事架构时丢弃升级遗留的角色架构原文，再按当前 ID 事实重建投影。 */
+export function clearLegacyCharacterArchitecture(db: BetterSqlite3.Database): void {
+  if (!db.inTransaction) throw new Error('CHARACTER_ID_TRANSACTION_REQUIRED')
+  db.prepare("UPDATE character_roster_meta SET legacy_markdown='' WHERE id='main'").run()
+  refreshCharacterIdentityProjection(db)
+}
 /** Compatibility prose is derived from ID facts and never acts as an identity write source. */
 export function refreshCharacterIdentityProjection(db: BetterSqlite3.Database): void {
   if (!db.inTransaction || !hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_TRANSACTION_REQUIRED')

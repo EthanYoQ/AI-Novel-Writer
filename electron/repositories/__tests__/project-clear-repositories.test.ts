@@ -42,27 +42,33 @@ beforeEach(() => {
 })
 
 describe('project clear repositories', () => {
-  it.each([false, true])('clears character cards through identity retirement and keeps the roster readable, with legacy cards=%s', populated => {
+  it.each([
+    ['empty', false, '', 'empty'],
+    ['legacy cards', true, '', 'legacy_cards_preserved'],
+    ['legacy cards with old architecture text', true, '# 旧角色图谱', 'legacy_cards_preserved'],
+    ['old architecture text only', false, '# 旧角色图谱', 'legacy_markdown_pending'],
+  ] as const)('clears character cards and architecture through the roster owner: %s', (_case, card, architecture, migrationState) => {
     const db = new Database(':memory:')
     try {
       initializeLegacyBaselineSchema(db)
-      if (populated) {
-        db.exec("INSERT INTO characters(name,notes) VALUES('旧角色','保留原文'); DELETE FROM character_roster_meta")
-        initializeCharacterRosterMetadata(db)
-      }
+      db.prepare("INSERT INTO project_core(id,premise,characters_arch,plot_tree_snapshot) VALUES('main','清空前提',?,'plot-tree-before')").run(architecture)
+      if (card) db.exec("INSERT INTO characters(name,notes) VALUES('旧角色','保留原文')")
+      db.exec('DELETE FROM character_roster_meta')
+      initializeCharacterRosterMetadata(db)
       migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-      db.exec("INSERT INTO project_core(id,premise) VALUES('main','清空前提')")
       db.pragma('foreign_keys=ON')
       vi.mocked(getProjectDb).mockReturnValue(db)
-      expect(CharacterRosterRepository.read(db).entries).toHaveLength(populated ? 1 : 0)
+      expect(CharacterRosterRepository.read(db)).toMatchObject({ migrationState, entries: card ? [expect.anything()] : [] })
       const aliasRows = () => db.prepare('SELECT character_id,name,source_key,valid_from FROM character_aliases').all()
       const aliases = aliasRows()
       const origins = db.prepare('SELECT * FROM character_identity_origins').all()
       ProjectClearRepository.clearGeneratedData({ creativeFields: true }, { projectId: 'project', epoch: 'lease' })
       const after = CharacterRosterRepository.read(db)
-      expect(after.entries).toEqual([])
-      expect(['ready', 'empty']).toContain(after.status)
+      expect(after).toMatchObject({ status: 'empty', entries: [] })
+      expect(after.legacyMarkdown ?? '').toBe('')
       expect(db.prepare('SELECT characters_arch FROM project_core').pluck().get()).toBe(after.renderedMarkdown)
+      expect(after.renderedMarkdown).not.toContain('旧')
+      expect(db.prepare('SELECT plot_tree_snapshot FROM project_core').pluck().get()).toBe('plot-tree-before')
       expect(db.prepare('SELECT COUNT(*) FROM characters WHERE retired=0').pluck().get()).toBe(0)
       expect(aliasRows()).toEqual(aliases)
       expect(db.prepare('SELECT COUNT(*) FROM character_aliases WHERE valid_through IS NULL').pluck().get()).toBe(0)

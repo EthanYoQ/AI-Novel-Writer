@@ -8,7 +8,7 @@ import { getProjectDataRoot } from '../services/project-data-locator'
 import { commitAuthorCharacterRoster } from '../services/character-roster-author'
 import { adoptLegacyCards, readLegacyRosterSource } from '../services/legacy-roster-source'
 import { hasCharacterIdentitySchema } from './character-repository'
-import { CharacterRosterRepository } from './character-roster-repository'
+import { CharacterRosterRepository, clearLegacyCharacterArchitecture } from './character-roster-repository'
 import { CHARACTER_ROSTER_SCHEMA_VERSION } from '../../src/shared/character-roster'
 
 export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText'
@@ -130,6 +130,7 @@ export class ProjectClearRepository {
                             commitAuthorCharacterRoster(db, { operationId, schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION, intent: 'manual_edit',
                                 expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision!, entries: [] }, session, () => {})
                         }
+                        clearLegacyCharacterArchitecture(db)
                     }
                     db.prepare(`
                         UPDATE project_core
