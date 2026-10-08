@@ -58,13 +58,9 @@ beforeAll(() => {
   registerDatabaseController()
 })
 beforeEach(() => {
-  const cache = process.platform === 'win32' && process.env.LOCALAPPDATA
-    ? path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'ai-novel') : path.resolve('.runtime/.cache/t12c')
+  const cache = path.resolve('.runtime/.cache/t12c')
   fs.mkdirSync(cache, { recursive: true })
   root = fs.mkdtempSync(path.join(cache, 'ipc-'))
-  fs.writeFileSync(path.join(root, '.vibe-owner.json'), JSON.stringify({ owner: 'generation-controller.test', sourceProject: process.cwd(),
-    createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 86400000).toISOString(),
-    cleanupCommand: `Remove-Item -LiteralPath '${root.replaceAll("'", "''")}' -Recurse -Force` }))
   mocks.globalRoot = path.join(root, 'global'); fs.mkdirSync(mocks.globalRoot)
   const project = projectAccess.createProject(root, '合成小说')
   openedProject = project
