@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 /**
  * 工作流共享工具函数
  *
@@ -412,7 +413,7 @@ export async function runPostProcessPipeline(
   ))
 
   if (failedSteps.length > 0) {
-    const failedLabels = failedSteps.map(r => r.label).join(uiLocale === 'en-US' ? ', ' : '、')
+    const failedLabels = failedSteps.map(r => r.label).join(localeText(uiLocale, '、', ', '))
     callbacks.log(text(
       `以下后处理步骤失败：${failedLabels}`,
       `The following post-processing steps failed: ${failedLabels}`,

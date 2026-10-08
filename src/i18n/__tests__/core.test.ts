@@ -4,7 +4,9 @@ import { createTranslator, localize, resolveLocale, translate } from '../core'
 describe('i18n core', () => {
   it.each([
     ['zh-CN', 'zh-CN'],
-    ['zh-TW', 'zh-CN'],
+    ['zh-TW', 'zh-TW'],
+    ['zh-HK', 'zh-TW'],
+    ['zh-Hant', 'zh-TW'],
     ['en-US', 'en-US'],
     ['fr-FR', 'en-US'],
     [undefined, 'en-US'],
@@ -21,6 +23,7 @@ describe('i18n core', () => {
     const localTranslate = createTranslator({
       'en-US': { 'common.open': 'Open' },
       'zh-CN': {},
+      'zh-TW': {},
     })
 
     expect(localTranslate('zh-CN', 'common.open')).toBe('Open')
@@ -32,5 +35,12 @@ describe('i18n core', () => {
       .toBe('已关闭 3 个文件')
     expect(localize('en-US', '已关闭 {count} 个文件', 'Closed {count} files', { count: 3 }))
       .toBe('Closed 3 files')
+  })
+
+  it('renders Traditional Chinese UI copy while preserving interpolated user data', () => {
+    expect(translate('zh-TW', 'language.chinese')).toBe('簡體中文')
+    expect(localize('zh-TW', '已关闭 {count} 个文件：{name}', 'Closed {count} files: {name}', {
+      count: 3, name: '简体书名.txt',
+    })).toBe('已關閉 3 個檔案：简体书名.txt')
   })
 })

@@ -888,8 +888,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 </span>
               </div>
               <div className="text-xs space-y-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                {(locale === 'zh-CN'
-                  ? costEstimate.breakdown.split('\n')
+                {(locale !== 'en-US'
+                  ? text(costEstimate.breakdown, '').split('\n')
                   : [
                       `Global analysis: ~15K tokens`,
                       `Chapter blueprints: ~${Math.max(0, costEstimate.estimatedTokens - 15000) / 1000}K tokens`,

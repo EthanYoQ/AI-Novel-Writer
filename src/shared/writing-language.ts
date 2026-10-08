@@ -1,4 +1,6 @@
-export const WRITING_LANGUAGES = ['zh-CN', 'en-US'] as const
+import { toTraditionalChinese } from './traditional-chinese'
+
+export const WRITING_LANGUAGES = ['zh-CN', 'zh-TW', 'en-US'] as const
 
 export type WritingLanguage = typeof WRITING_LANGUAGES[number]
 
@@ -16,5 +18,5 @@ export function writingLanguageText(
   zhCNText: string,
   enUSText: string,
 ): string {
-  return language === 'en-US' ? enUSText : zhCNText
+  return language === 'en-US' ? enUSText : language === 'zh-TW' ? toTraditionalChinese(zhCNText) : zhCNText
 }

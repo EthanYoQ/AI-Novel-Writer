@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
 import { randomUUID } from '../../utils/id'
@@ -70,9 +71,7 @@ export interface CreativeWorkflowLaunchOptions {
 
 function requireGuardAccepted(result: GuardResult, uiLocale: Locale): void {
   if (!result.ok) {
-    throw new Error(result.message ?? (uiLocale === 'en-US'
-      ? 'Creative workflow prerequisites are not satisfied'
-      : '创作工作流前置条件未满足'))
+    throw new Error(result.message ?? (localeText(uiLocale, '创作工作流前置条件未满足', 'Creative workflow prerequisites are not satisfied')))
   }
 }
 
@@ -194,9 +193,7 @@ export async function launchCreativeWorkflow(
   void completion.catch((error) => {
     useWorkflowStore.getState().addLog(
       'error',
-      uiLocale === 'en-US'
-        ? `[Failed] Workflow errored after launch: ${String(error)}`
-        : `[失败] 工作流启动后异常：${String(error)}`,
+      localeText(uiLocale, "[失败] 工作流启动后异常：{value0}", "[Failed] Workflow errored after launch: {value0}", { value0: String(String(error)) }),
       uiLocale,
     )
   })

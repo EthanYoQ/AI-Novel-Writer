@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle, AlertTriangle, SlidersHorizontal, Copy, Pencil, Trash2 } from 'lucide-react'
 import {
@@ -27,7 +28,7 @@ import { PLOT_OUTLINE_RESUME_ERROR_CODE } from '../../services/workflows/command
 import { toast } from '../ui/Toast'
 
 function runText(locale: Locale, zhCNText: string, enUSText: string): string {
-  return locale === 'en-US' ? enUSText : zhCNText
+  return localeText(locale, zhCNText, enUSText)
 }
 
 /**
@@ -663,7 +664,7 @@ function WorkflowFailureNotice({
   projectPath: string
   projectSession: ProjectSessionContext | null
   isUnpersistedChapterDraft: boolean
-  locale: 'zh-CN' | 'en-US'
+  locale: 'zh-CN' | 'zh-TW' | 'en-US'
   /** 情节大纲生成被截断且已完成部分已保存 → 可断点续写。 */
   resumeSynopsisAvailable?: boolean
   resumingSynopsis?: boolean
@@ -690,7 +691,7 @@ function WorkflowFailureNotice({
     ) return
     useEditorStore.getState().openFile({
       id: 'config',
-      name: locale === 'zh-CN' ? '小说配置' : 'Novel configuration',
+      name: localeText(locale, '小说配置', 'Novel configuration'),
       type: 'config',
       projectKey: projectPath,
     })
@@ -734,9 +735,7 @@ function WorkflowFailureNotice({
         )}
         {presentation.action === 'open-novel-config' && !matchesCurrentProject && (
           <p className="m-0 mt-1" style={{ color: 'var(--color-text-muted)' }}>
-            {locale === 'zh-CN'
-              ? '此结果属于另一项目会话。请切回该项目后再打开小说配置。'
-              : 'This result belongs to another project session. Switch back to that project before opening Novel configuration.'}
+            {localeText(locale, '此结果属于另一项目会话。请切回该项目后再打开小说配置。', 'This result belongs to another project session. Switch back to that project before opening Novel configuration.')}
           </p>
         )}
 

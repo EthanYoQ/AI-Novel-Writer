@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import { useEffect, useState, type CSSProperties, type MouseEvent } from 'react'
 import {
   Archive,
@@ -231,9 +232,9 @@ export default function TitleBar() {
         </div>
         <div className="leading-tight min-w-[112px]">
           <div className="text-sm font-semibold brand-gradient">
-            {locale === 'zh-CN' ? APP_BRAND.zhName : APP_BRAND.enName}
+            {localeText(locale, APP_BRAND.zhName, APP_BRAND.enName)}
           </div>
-          {locale === 'zh-CN' && (
+          {locale !== 'en-US' && (
             <div className="text-[0.68rem] opacity-75">{APP_BRAND.enName}</div>
           )}
         </div>
@@ -326,7 +327,7 @@ export default function TitleBar() {
           style={{ minHeight: 24, padding: '0 7px' }}
         >
           <Languages size={13} strokeWidth={1.5} />
-          <span>{locale === 'zh-CN' ? 'EN' : '中文'}</span>
+          <span>{locale === 'zh-CN' ? '繁中' : locale === 'zh-TW' ? 'EN' : '简中'}</span>
         </button>
         <button
           onClick={() => openSettings()}

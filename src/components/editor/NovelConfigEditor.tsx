@@ -203,6 +203,7 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
                   onChange={(e) => update('writingLanguage', e.target.value as WritingLanguage)}
                 >
                   <option value="zh-CN">{text('简体中文', 'Simplified Chinese')}</option>
+                  <option value="zh-TW">{text('繁體中文', 'Traditional Chinese')}</option>
                   <option value="en-US">English</option>
                 </NativeSelect>
               </Field>

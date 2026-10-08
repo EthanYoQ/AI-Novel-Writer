@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import { workflowResourceKey, type WorkflowContext, type WorkflowDefinition, type WorkflowStep, type StepCallbacks } from '../../stores/workflow-store'
 import { ipc } from '../ipc-client'
 import { guardChapterWriting } from '../workflow-guards'
@@ -60,10 +61,6 @@ function normalizeGenerationModelId(value: unknown): string | undefined {
 
 function normalizeCompletionMode(value: unknown): BatchChapterCompletionMode {
   return value === 'auto_finalize' ? 'auto_finalize' : 'draft_review'
-}
-
-function localeText(locale: Locale, zhCNText: string, enUSText: string): string {
-  return locale === 'en-US' ? enUSText : zhCNText
 }
 
 function toChapterInfo(
@@ -169,9 +166,7 @@ async function runOneBatchChapter(
     : chapterNumber
   const guard = await guardChapterWriting(guardedChapterNumber, projectPath, projectSession)
   if (!guard.ok) {
-    throw new Error(uiLocale === 'en-US'
-      ? `Chapter ${chapterNumber} does not meet the writing prerequisites.`
-      : guard.message || `第${chapterNumber}章不满足创作前置条件`)
+    throw new Error(localeText(uiLocale, guard.message || `第${chapterNumber}章不满足创作前置条件`, "Chapter {value0} does not meet the writing prerequisites.", { value0: String(chapterNumber) }))
   }
 
   const [blueprint, existingDraft] = await Promise.all([
@@ -179,32 +174,16 @@ async function runOneBatchChapter(
     ipc.invokeWithProjectSession(projectSession, 'db:draft-get-latest', chapterNumber, projectPath),
   ])
   if (!blueprint) {
-    throw new Error(localeText(
-      uiLocale,
-      `未找到第${chapterNumber}章蓝图，批量创作已停止`,
-      `No blueprint was found for Chapter ${chapterNumber}. Batch writing stopped.`,
-    ))
+    throw new Error(localeText(uiLocale, "未找到第{value0}章蓝图，批量创作已停止", "No blueprint was found for Chapter {value0}. Batch writing stopped.", { value0: String(chapterNumber) }))
   }
   if (existingDraft) {
-    throw new Error(localeText(
-      uiLocale,
-      `第${chapterNumber}章已有草稿，批量创作不会覆盖既有内容`,
-      `Chapter ${chapterNumber} already has a draft. Batch writing will not overwrite it.`,
-    ))
+    throw new Error(localeText(uiLocale, "第{value0}章已有草稿，批量创作不会覆盖既有内容", "Chapter {value0} already has a draft. Batch writing will not overwrite it.", { value0: String(chapterNumber) }))
   }
 
   const chapterInfo = toChapterInfo(blueprint as ChapterBlueprint, projectPath, chapterWordsTarget)
   callbacks.log(completionMode === 'draft_review'
-    ? localeText(
-      uiLocale,
-      `开始第${chapterNumber}章：生成草稿待审。`,
-      `Starting Chapter ${chapterNumber}: generate a review draft.`,
-    )
-    : localeText(
-      uiLocale,
-      `开始第${chapterNumber}章：生成草稿、自动定稿并完成后处理。`,
-      `Starting Chapter ${chapterNumber}: generate, auto-finalize, and post-process.`,
-    ))
+    ? localeText(uiLocale, "开始第{value0}章：生成草稿待审。", "Starting Chapter {value0}: generate a review draft.", { value0: String(chapterNumber) })
+    : localeText(uiLocale, "开始第{value0}章：生成草稿、自动定稿并完成后处理。", "Starting Chapter {value0}: generate, auto-finalize, and post-process.", { value0: String(chapterNumber) }))
   callbacks.setProgress(5)
 
   const draftContent = await new GenerateDraftCommand(chapterInfo, {
@@ -218,11 +197,7 @@ async function runOneBatchChapter(
     const draftId = Number(context.data.draftId)
     const version = Number(context.data.draftVersion)
     if (!Number.isSafeInteger(draftId) || !Number.isSafeInteger(version)) {
-      throw new Error(localeText(
-        uiLocale,
-        `第${chapterNumber}章草稿已保存，但缺少可冻结的草稿身份，批量创作已停止`,
-        `Chapter ${chapterNumber} was saved, but its draft identity could not be frozen. Batch writing stopped.`,
-      ))
+      throw new Error(localeText(uiLocale, "第{value0}章草稿已保存，但缺少可冻结的草稿身份，批量创作已停止", "Chapter {value0} was saved, but its draft identity could not be frozen. Batch writing stopped.", { value0: String(chapterNumber) }))
     }
     draftReviewCandidates.set(chapterNumber, Object.freeze({
       chapterNumber,
@@ -231,22 +206,14 @@ async function runOneBatchChapter(
       content: draftContent,
     }))
     callbacks.setProgress(100)
-    return localeText(
-      uiLocale,
-      `第${chapterNumber}章草稿已生成并保存，等待审稿。`,
-      `Chapter ${chapterNumber} draft was generated and saved for review.`,
-    )
+    return localeText(uiLocale, "第{value0}章草稿已生成并保存，等待审稿。", "Chapter {value0} draft was generated and saved for review.", { value0: String(chapterNumber) })
   }
 
   callbacks.setProgress(55)
 
   const draftPath = String(context.data.draftPath || '')
   if (!draftPath) {
-    throw new Error(localeText(
-      uiLocale,
-      `第${chapterNumber}章草稿已生成，但未取得草稿路径`,
-      `Chapter ${chapterNumber} was generated, but its draft path is unavailable.`,
-    ))
+    throw new Error(localeText(uiLocale, "第{value0}章草稿已生成，但未取得草稿路径", "Chapter {value0} was generated, but its draft path is unavailable.", { value0: String(chapterNumber) }))
   }
 
   const snapshot = await captureBatchFinalizationSnapshot(
@@ -270,11 +237,7 @@ async function runOneBatchChapter(
   }).execute({ step, context, callbacks })
 
   callbacks.setProgress(100)
-  return localeText(
-    uiLocale,
-    `第${chapterNumber}章已定稿，后处理全部通过。`,
-    `Chapter ${chapterNumber} was finalized and all post-processing passed.`,
-  )
+  return localeText(uiLocale, "第{value0}章已定稿，后处理全部通过。", "Chapter {value0} was finalized and all post-processing passed.", { value0: String(chapterNumber) })
 }
 
 /**
@@ -290,7 +253,7 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
   const projectPath = params.projectPath
   const startChapterNumber = Math.max(1, Math.trunc(Number(params.startChapterNumber) || 1))
   const chapterCount = normalizeBatchChapterCount(params.chapterCount)
-  const uiLocale: Locale = params.locale === 'en-US' ? 'en-US' : 'zh-CN'
+  const uiLocale: Locale = params.locale ?? 'zh-CN'
   const generationModelId = normalizeGenerationModelId(params.generationModelId)
   if (!generationModelId) {
     throw new Error(localeText(
@@ -326,30 +289,14 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
     ],
     completionMode,
     title: completionMode === 'draft_review'
-      ? localeText(
-        uiLocale,
-        `批量草稿待审 — 第${startChapterNumber}–${endChapterNumber}章`,
-        `Batch review drafts — Chapters ${startChapterNumber}–${endChapterNumber}`,
-      )
-      : localeText(
-        uiLocale,
-        `批量自动定稿 — 第${startChapterNumber}–${endChapterNumber}章`,
-        `Batch auto-finalize — Chapters ${startChapterNumber}–${endChapterNumber}`,
-      ),
+      ? localeText(uiLocale, "批量草稿待审 — 第{value0}–{value1}章", "Batch review drafts — Chapters {value0}–{value1}", { value0: String(startChapterNumber), value1: String(endChapterNumber) })
+      : localeText(uiLocale, "批量自动定稿 — 第{value0}–{value1}章", "Batch auto-finalize — Chapters {value0}–{value1}", { value0: String(startChapterNumber), value1: String(endChapterNumber) }),
     steps: Array.from({ length: chapterCount }, (_, index) => {
       const chapterNumber = startChapterNumber + index
       return {
         name: completionMode === 'draft_review'
-          ? localeText(
-            uiLocale,
-            `第${chapterNumber}章：生成草稿待审`,
-            `Chapter ${chapterNumber}: generate review draft`,
-          )
-          : localeText(
-            uiLocale,
-            `第${chapterNumber}章：自动定稿与后处理`,
-            `Chapter ${chapterNumber}: auto-finalize and post-process`,
-          ),
+          ? localeText(uiLocale, "第{value0}章：生成草稿待审", "Chapter {value0}: generate review draft", { value0: String(chapterNumber) })
+          : localeText(uiLocale, "第{value0}章：自动定稿与后处理", "Chapter {value0}: auto-finalize and post-process", { value0: String(chapterNumber) }),
         description: completionMode === 'draft_review'
           ? localeText(
             uiLocale,

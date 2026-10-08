@@ -29,8 +29,8 @@ describe('main-process locale selection', () => {
     expect(resolveStoredOrSystemLocale('en-US', 'zh-CN')).toBe('en-US')
   })
 
-  it('maps Chinese system locales to Simplified Chinese', () => {
-    expect(resolveStoredOrSystemLocale(undefined, 'zh-HK')).toBe('zh-CN')
+  it('maps Traditional Chinese system locales to Traditional Chinese', () => {
+    expect(resolveStoredOrSystemLocale(undefined, 'zh-HK')).toBe('zh-TW')
   })
 
   it('defaults other system locales to English', () => {

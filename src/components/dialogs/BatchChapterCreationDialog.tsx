@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import { useEffect, useState } from 'react'
 import { AlertCircle, AlertTriangle, BookOpen, Loader2, Play } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
@@ -225,9 +226,7 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
       const guard = await guardChapterWriting(frozenStart, projectPath, projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
       if (!guard.ok) {
-        setError(frozenLocale === 'en-US'
-          ? 'Writing prerequisites are not met. Complete the project setup and previous finalized chapter before starting.'
-          : guard.message || '前置条件未满足。')
+        setError(localeText(frozenLocale, guard.message || '前置条件未满足。', 'Writing prerequisites are not met. Complete the project setup and previous finalized chapter before starting.'))
         return
       }
 
@@ -260,12 +259,8 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
       void startWorkflow(workflow)
       useLayoutStore.getState().openBottomTab('tasks')
       addLog('info', frozenCompletionMode === 'draft_review'
-        ? (frozenLocale === 'en-US'
-          ? `Batch review drafts started: chapters ${frozenStart}–${frozenEnd} (${frozenChapterCount} total).`
-          : `已启动批量草稿待审：第${frozenStart}–${frozenEnd}章（共${frozenChapterCount}章）`)
-        : (frozenLocale === 'en-US'
-          ? `Batch auto-finalize started: chapters ${frozenStart}–${frozenEnd} (${frozenChapterCount} total).`
-          : `已启动批量自动定稿：第${frozenStart}–${frozenEnd}章（共${frozenChapterCount}章）`))
+        ? (localeText(frozenLocale, "已启动批量草稿待审：第{value0}–{value1}章（共{value2}章）", "Batch review drafts started: chapters {value0}–{value1} ({value2} total).", { value0: String(frozenStart), value1: String(frozenEnd), value2: String(frozenChapterCount) }))
+        : (localeText(frozenLocale, "已启动批量自动定稿：第{value0}–{value1}章（共{value2}章）", "Batch auto-finalize started: chapters {value0}–{value1} ({value2} total).", { value0: String(frozenStart), value1: String(frozenEnd), value2: String(frozenChapterCount) })))
       onClose()
     } catch (cause) {
       if (!isProjectSessionCurrent(projectSession)) return

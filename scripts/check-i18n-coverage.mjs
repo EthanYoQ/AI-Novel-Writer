@@ -98,6 +98,7 @@ const enhancedCoverageFiles = new Set([
 const localizationCallees = new Set([
   'text',
   'localize',
+  'localeText',
   'translate',
   'stepDesc',
   'appErrorMessage',

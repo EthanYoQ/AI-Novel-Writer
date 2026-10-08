@@ -1,3 +1,4 @@
+import { localize as localeText } from '../i18n/core'
 /**
  * 导出服务 — 将小说项目导出为多种格式
  *
@@ -64,9 +65,7 @@ function isMatchingProjectSnapshot(
 function staleExportResult(locale: Locale): { success: false; error: string } {
   return {
     success: false,
-    error: locale === 'en-US'
-      ? 'The project session changed. This export was cancelled.'
-      : '项目会话已变化，本次导出已取消',
+    error: localeText(locale, '项目会话已变化，本次导出已取消', 'The project session changed. This export was cancelled.'),
   }
 }
 
@@ -103,14 +102,10 @@ function splitWriteDetail(
   possiblyWritten: readonly string[],
   definitelyFailed?: string,
 ): string {
-  const none = locale === 'en-US' ? 'none' : '无'
-  const detail = locale === 'en-US'
-    ? `; confirmed written: ${confirmedWritten.join(', ') || none}; possibly written: ${possiblyWritten.join(', ') || none}; definitely failed: ${definitelyFailed || none}`
-    : `；已确认写入: ${confirmedWritten.join(', ') || none}；可能已写入: ${possiblyWritten.join(', ') || none}；确定写入失败: ${definitelyFailed || none}`
+  const none = localeText(locale, '无', 'none')
+  const detail = localeText(locale, "；已确认写入: {value0}；可能已写入: {value1}；确定写入失败: {value2}", "; confirmed written: {value0}; possibly written: {value1}; definitely failed: {value2}", { value0: String(confirmedWritten.join(', ') || none), value1: String(possiblyWritten.join(', ') || none), value2: String(definitelyFailed || none) })
   if (possiblyWritten.length === 0) return detail
-  return `${detail}${locale === 'en-US'
-    ? '; verify possibly written files before retrying; do not retry blindly'
-    : '；请先核对可能已写入的文件，不要盲目重试'}`
+  return `${detail}${localeText(locale, '；请先核对可能已写入的文件，不要盲目重试', '; verify possibly written files before retrying; do not retry blindly')}`
 }
 
 function staleSplitExportResult(
@@ -132,18 +127,14 @@ function staleSplitExportResult(
 }
 
 function unknownSingleWriteDetail(locale: Locale, relativePath: string): string {
-  return locale === 'en-US'
-    ? `; ${relativePath} may have been written; verify it before retrying and do not retry blindly`
-    : `；${relativePath} 可能已写入；请先核对，不要盲目重试`
+  return localeText(locale, "；{value0} 可能已写入；请先核对，不要盲目重试", "; {value0} may have been written; verify it before retrying and do not retry blindly", { value0: String(relativePath) })
 }
 
 function staleCommittedSingleExportResult(locale: Locale, relativePath: string): { success: false; error: string } {
   const stale = staleExportResult(locale)
   return {
     ...stale,
-    error: `${stale.error}${locale === 'en-US'
-      ? `; the exported file was already written: ${relativePath}`
-      : `；导出文件已确认写入: ${relativePath}`}`,
+    error: `${stale.error}${localeText(locale, "；导出文件已确认写入: {value0}", "; the exported file was already written: {value0}", { value0: String(relativePath) })}`,
   }
 }
 
@@ -151,9 +142,7 @@ function changedFinalizationResult(
   locale: Locale,
   confirmedWritten: readonly string[] = [],
 ): { success: false; error: string } {
-  const error = locale === 'en-US'
-    ? 'The finalized chapters changed. Review the latest versions and confirm the export again.'
-    : '定稿章节已变化，请检查最新版本并重新确认导出'
+  const error = localeText(locale, '定稿章节已变化，请检查最新版本并重新确认导出', 'The finalized chapters changed. Review the latest versions and confirm the export again.')
   return {
     success: false,
     error: confirmedWritten.length > 0
@@ -236,7 +225,7 @@ export async function exportNovel(
   projectSession: ProjectSessionContext,
 ): Promise<{ success: boolean; path?: string; error?: string }> {
   const uiLocale = useLocaleStore.getState().locale
-  const text = (zhCNText: string, enUSText: string) => uiLocale === 'en-US' ? enUSText : zhCNText
+  const text = (zhCNText: string, enUSText: string) => localeText(uiLocale, zhCNText, enUSText)
   const writtenSplitFiles: string[] = []
   let activeWritePath: string | undefined
   if (!isMatchingProjectSnapshot(project, projectSession) || !isProjectSessionCurrent(projectSession)) {
@@ -480,5 +469,5 @@ function formatLabel(format: ExportFormat, locale: Locale): string {
     'split-md': ['分章 Markdown', 'Split Markdown'],
     'txt': ['纯文本 TXT', 'Plain text (TXT)'],
   }
-  return labels[format][locale === 'en-US' ? 1 : 0]
+  return localeText(locale, labels[format][0], labels[format][1])
 }

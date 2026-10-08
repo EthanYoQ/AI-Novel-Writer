@@ -56,7 +56,7 @@ export function isCoreLocalizedBuiltinPromptKey(key: string): key is CoreLocaliz
   return CORE_LOCALIZED_BUILTIN_PROMPT_KEY_SET.has(key)
 }
 
-const CHARACTER_ARCHITECTURE_PROMPTS: Readonly<Record<WritingLanguage, CharacterArchitecturePromptSet>> = {
+const CHARACTER_ARCHITECTURE_PROMPTS: Readonly<Record<Exclude<WritingLanguage, 'zh-TW'>, CharacterArchitecturePromptSet>> = {
   'zh-CN': {
     manifestSystem: `你是小说角色身份规划器。只规划角色身份、叙事职责和角色间关系，不生成角色详情。
 故事前提和主角档案中的作者明确设定是权威事实；涉及角色身份、特质、关系或叙事职责的事实必须落实，不得遗漏、弱化、反转或用题材惯例替换。
@@ -130,6 +130,16 @@ Output {"entries":[...]} only. Echo slotId on every entry; name and role must ex
 }
 
 export function characterArchitecturePrompts(language: WritingLanguage): CharacterArchitecturePromptSet {
+  if (language === 'zh-TW') {
+    const base = CHARACTER_ARCHITECTURE_PROMPTS['zh-CN']
+    const contract = '\n所有生成的文字欄位必須使用繁體中文（臺灣用語），保留 JSON 鍵名、識別碼及作者原文引用。'
+    return {
+      ...base,
+      manifestSystem: writingLanguageText(language, base.manifestSystem, '') + contract,
+      detailSystem: writingLanguageText(language, base.detailSystem, '') + contract,
+      detailContract: writingLanguageText(language, base.detailContract, ''),
+    }
+  }
   return CHARACTER_ARCHITECTURE_PROMPTS[language]
 }
 

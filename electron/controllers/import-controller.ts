@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../src/i18n/core'
 import { app, ipcMain, dialog } from 'electron'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -86,7 +87,7 @@ function text(zhCNText: string, enUSText: string): string {
 }
 
 function importText(locale: ImportRunLocale | undefined, zhCNText: string, enUSText: string): string {
-  return locale === 'en-US' ? enUSText : locale === 'zh-CN' ? zhCNText : text(zhCNText, enUSText)
+  return locale ? localeText(locale, zhCNText, enUSText) : text(zhCNText, enUSText)
 }
 
 function importSelectionErrorMessage(
@@ -609,14 +610,10 @@ export function registerImportController(
       }
 
       if (emptySourceFound) {
-        const error = responseLocale === 'en-US'
-          ? 'One or more selected files are empty. Add novel text and choose the unfinished files again.'
-          : responseLocale === 'zh-CN'
-            ? '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。'
-            : text(
-                '一个或多个所选文件为空。请补充小说正文后，重新选择未完成的文件。',
-                'One or more selected files are empty. Add novel text and choose the unfinished files again.',
-              )
+        const error = importText(responseLocale,
+          '\u4e00\u4e2a\u6216\u591a\u4e2a\u6240\u9009\u6587\u4ef6\u4e3a\u7a7a\u3002\u8bf7\u8865\u5145\u5c0f\u8bf4\u6b63\u6587\u540e\uff0c\u91cd\u65b0\u9009\u62e9\u672a\u5b8c\u6210\u7684\u6587\u4ef6\u3002',
+          'One or more selected files are empty. Add novel text and choose the unfinished files again.',
+        )
         return { success: false, error }
       }
 

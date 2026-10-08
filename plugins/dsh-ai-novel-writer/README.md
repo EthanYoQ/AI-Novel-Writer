@@ -126,3 +126,18 @@ This maintainer-only command packs the plugin, installs those bytes into an isol
 The precise runtime gates, evidence order, and failure triage live in [V2 development gates](docs/v2-development-gates.md). Each qualification run writes logs, screenshots, and its machine-readable receipt to a task-owned `.runtime/.cache/` directory with `.vibe-owner.json` ownership and expiry; these files are temporary evidence, not repository documentation. The keyless snapshot does not replace manual qualification with a configured online model.
 
 The package does not modify DeepSeek Harness upstream or its agent loop.
+
+## Dev
+
+在專案根目錄開啟 PowerShell，依序執行：
+
+```cmd
+pnpm install
+pnpm dev
+```
+
+```cmd
+pnpm build:win-dir
+```
+
+It will build an executable file in release\win-unpacked\

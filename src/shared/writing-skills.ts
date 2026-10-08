@@ -80,6 +80,7 @@ function parseFrontmatter(raw: string): { fields: Record<string, string>; conten
 function normalizedLanguage(value: string | undefined): WritingSkillLanguage {
   const normalized = value?.toLowerCase()
   if (normalized === 'en-us' || normalized === 'en' || normalized === 'english') return 'en-US'
+  if (normalized && ['zh-tw', 'zh-hk', 'zh-hant', 'traditional chinese'].includes(normalized)) return 'zh-TW'
   if (normalized === 'zh-cn' || normalized === 'zh' || normalized === 'chinese') return 'zh-CN'
   return 'bilingual'
 }

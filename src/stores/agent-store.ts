@@ -1,3 +1,4 @@
+import { localize as localeText } from '../i18n/core'
 import { create } from 'zustand'
 import { buildAgentSystemPrompt } from '../services/agent/context-builder'
 import {
@@ -132,7 +133,7 @@ const generateTitle = (content: string): string => {
 
 /** 生成 /help 命令的帮助文本 */
 const generateHelpText = (locale: Locale): string => {
-  const text = (zhCN: string, enUS: string) => locale === 'en-US' ? enUS : zhCN
+  const text = (zhCN: string, enUS: string) => localeText(locale, zhCN, enUS)
   const toolCount = toolRegistry.listAll().length
   const skillCount = skillRegistry.listAll().length
   const commands = getAllSlashCommands(locale)
@@ -205,7 +206,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
     const newConv: AgentConversation = {
       id: genId(),
-      title: useLocaleStore.getState().locale === 'en-US' ? 'New conversation' : '新对话',
+      title: localeText(useLocaleStore.getState().locale, '新对话', 'New conversation'),
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -276,7 +277,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
   sendMessage: async (content) => {
     if (!content.trim() || get().generating) return
     const requestLocale = useLocaleStore.getState().locale
-    const text = (zhCNText: string, enUSText: string) => requestLocale === 'en-US' ? enUSText : zhCNText
+    const text = (zhCNText: string, enUSText: string) => localeText(requestLocale, zhCNText, enUSText)
     let skillInvocation: { skill: LoadedSkill; input: string } | null = null
 
     // 确保 Tool 已初始化
@@ -591,9 +592,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   cancelGeneration: async () => {
     const cancelledUiLocale = activeRequestUiLocale ?? useLocaleStore.getState().locale
-    const stoppedText = cancelledUiLocale === 'en-US'
-      ? '\n\n_(Generation stopped)_'
-      : '\n\n_（已停止生成）_'
+    const stoppedText = localeText(cancelledUiLocale, '\n\n_（已停止生成）_', '\n\n_(Generation stopped)_')
     // P1-7: 触发 AbortSignal，使 ReAct 循环真正中止
     if (activeAbortController) {
       activeAbortController.abort()

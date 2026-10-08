@@ -91,4 +91,14 @@ describeWithChrome('locale shell browser regression', () => {
     expect(measurements.titleLines).toBe(1)
     expect(measurements.descriptionLines).toBeLessThanOrEqual(2)
   })
+
+  it('renders mounted input and output surfaces in Traditional Chinese', async () => {
+    await page.getByTestId('switch-to-traditional').click()
+    await expect.poll(() => page.getByText('歡迎使用 AI小說作家').count()).toBe(1)
+    expect(await page.getByText('AI 寫作助手', { exact: true }).count()).toBe(1)
+    expect(await page.getByText('模型呼叫', { exact: true }).count()).toBe(1)
+    expect(await page.locator('html').getAttribute('lang')).toBe('zh-TW')
+    expect(await page.getByText('欢迎使用 AI小说作家').count()).toBe(0)
+    expect(await page.getByText('Welcome to AI Novel Writer').count()).toBe(0)
+  })
 })

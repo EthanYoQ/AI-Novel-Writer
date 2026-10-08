@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import { useState } from 'react'
 import { RotateCcw, ShieldAlert } from 'lucide-react'
 
@@ -35,9 +36,9 @@ export default function ConsistencyPreflightPanel({
       </div>}
       {findings.map(finding => (
         <div key={finding.stableFactKey} className="rounded-md px-2 py-2 text-xs space-y-2" style={{ backgroundColor: 'var(--color-hover)' }}>
-          <p>{locale === 'en-US' ? finding.issue.enUS : finding.issue.zhCN}</p>
+          <p>{localeText(locale, finding.issue.zhCN, finding.issue.enUS)}</p>
           <p style={{ color: 'var(--color-text-muted)' }}>{text(`来源：第${finding.sourceChapter}章 · ${finding.evidence}`, `Source: Chapter ${finding.sourceChapter} · ${finding.evidence}`)}</p>
-          <p>{locale === 'en-US' ? finding.suggestion.enUS : finding.suggestion.zhCN}</p>
+          <p>{localeText(locale, finding.suggestion.zhCN, finding.suggestion.enUS)}</p>
           <div className="flex gap-2">
             <Input
               aria-label={text('豁免原因', 'Exemption reason')}

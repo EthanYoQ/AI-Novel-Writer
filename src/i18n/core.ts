@@ -1,5 +1,7 @@
 import { enUS, type MessageKey } from './messages/en-US'
+import { toTraditionalChinese } from '../shared/traditional-chinese'
 import { zhCN } from './messages/zh-CN'
+import { zhTW } from './messages/zh-TW'
 import type { Locale, MessageParams } from './types'
 
 type Catalog = Record<string, string>
@@ -7,10 +9,13 @@ type Catalog = Record<string, string>
 export const messages: Record<Locale, Catalog> = {
   'en-US': enUS,
   'zh-CN': zhCN,
+  'zh-TW': zhTW,
 }
 
 export function resolveLocale(input?: string | null): Locale {
-  return input?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US'
+  const tag = input?.toLowerCase().replaceAll('_', '-')
+  if (tag?.startsWith('zh') && /(?:^|-)(?:tw|hk|mo|hant)(?:-|$)/u.test(tag)) return 'zh-TW'
+  return tag?.startsWith('zh') ? 'zh-CN' : 'en-US'
 }
 
 export function createTranslator(catalogs: Record<Locale, Catalog>) {
@@ -36,7 +41,8 @@ export function localize(
   enUSText: string,
   params?: MessageParams,
 ): string {
-  return interpolate(locale === 'zh-CN' ? zhCNText : enUSText, params)
+  const template = locale === 'en-US' ? enUSText : locale === 'zh-TW' ? toTraditionalChinese(zhCNText) : zhCNText
+  return interpolate(template, params)
 }
 
 export function translate(locale: Locale, key: MessageKey, params?: MessageParams): string {

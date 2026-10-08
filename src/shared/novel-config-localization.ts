@@ -1,4 +1,4 @@
-import type { WritingLanguage } from './writing-language'
+import { writingLanguageText, type WritingLanguage } from './writing-language'
 
 type LocalizedLabel = Readonly<{ zhCN: string; enUS: string }>
 
@@ -51,7 +51,7 @@ const NARRATIVE_POV_LABELS: Readonly<Record<string, LocalizedLabel>> = {
 function localize(value: string | undefined, labels: Readonly<Record<string, LocalizedLabel>>, language: WritingLanguage): string {
   if (!value) return ''
   const label = labels[value]
-  return label ? (language === 'en-US' ? label.enUS : label.zhCN) : value
+  return label ? writingLanguageText(language, label.zhCN, label.enUS) : value
 }
 
 type ModelFactConfig = Partial<Record<'genre' | 'targetAudience' | 'plotStructure' | 'narrativePOV', string>>

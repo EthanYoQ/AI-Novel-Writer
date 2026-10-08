@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import {
   Trash2, ChevronsDown, Loader2, CheckCircle2, XCircle, Clock,
@@ -231,7 +232,7 @@ function ActiveRunPanel({
   onPause: () => void
   onResume: () => void
 }) {
-  const text = (zhCNText: string, enUSText: string) => run.uiLocale === 'en-US' ? enUSText : zhCNText
+  const text = (zhCNText: string, enUSText: string) => localeText(run.uiLocale, zhCNText, enUSText)
   const [expanded, setExpanded] = useState(true)
 
   // 需要确认时自动展开
@@ -443,7 +444,7 @@ function WorkflowStepItem({
   isLast: boolean
   uiLocale: WorkflowRun['uiLocale']
 }) {
-  const text = (zhCNText: string, enUSText: string) => uiLocale === 'en-US' ? enUSText : zhCNText
+  const text = (zhCNText: string, enUSText: string) => localeText(uiLocale, zhCNText, enUSText)
   const [expanded, setExpanded] = useState(false)
   const hasDetail = !!step.error || step.logs.length > 0
 

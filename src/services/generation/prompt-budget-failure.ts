@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import type { Locale } from '../../i18n/types'
 import {
   PromptBudgetExceededError,
@@ -35,15 +36,13 @@ function sectionLabel(
   locale: Locale,
 ): string {
   if (section.sectionName === 'writing-skill') {
-    const generic = locale === 'zh-CN' ? '写作 Skill' : 'Writing Skill'
+    const generic = localeText(locale, '写作 Skill', 'Writing Skill')
     if (!section.displayName) return generic
-    return locale === 'zh-CN'
-      ? `${generic}：${section.displayName}`
-      : `${generic}: ${section.displayName}`
+    return localeText(locale, "{value0}：{value1}", "{value0}: {value1}", { value0: String(generic), value1: String(section.displayName) })
   }
   const labels = SECTION_LABELS[section.sectionName]
-  if (!labels) return locale === 'zh-CN' ? '其他结构化上下文' : 'Other structured context'
-  return locale === 'zh-CN' ? labels[0] : labels[1]
+  if (!labels) return localeText(locale, '其他结构化上下文', 'Other structured context')
+  return localeText(locale, labels[0], labels[1])
 }
 
 function formatInteger(value: number, locale: Locale): string {
@@ -56,9 +55,9 @@ export function formatPromptBudgetFailure(report: PromptBudgetReport, locale: Lo
     .sort((left, right) => right.utf8Bytes - left.utf8Bytes)
     .slice(0, 3)
     .map(section => `${sectionLabel(section, locale)} ${formatInteger(section.utf8Bytes, locale)}`)
-    .join(locale === 'zh-CN' ? '、' : ', ')
+    .join(localeText(locale, '、', ', '))
 
-  if (locale === 'zh-CN') {
+  if (locale !== 'en-US') {
     const contextWindow = report.contextWindowTokens == null
       ? '未知'
       : `${formatInteger(report.contextWindowTokens, locale)} tokens`
@@ -66,10 +65,12 @@ export function formatPromptBudgetFailure(report: PromptBudgetReport, locale: Lo
       ? '未知'
       : `${formatInteger(report.estimatedInputTokens, locale)} tokens`
     return [
-      `提示词共 ${formatInteger(report.totalUtf8Bytes, locale)} UTF-8 字节，超过上限 ${formatInteger(report.limitUtf8Bytes, locale)} 字节；输出保留空间为 ${formatInteger(report.reservedOutputTokens, locale)} tokens。`,
-      `模型上下文：${contextWindow}；估算输入：${estimatedInput}。`,
-      `主要占用：${contributors}。`,
-      `模型：${report.modelId}；结果码：${report.errorCode}。`,
+      localeText(locale, '提示词共 {total} UTF-8 字节，超过上限 {limit} 字节；输出保留空间为 {reserved} tokens。', '', {
+        total: formatInteger(report.totalUtf8Bytes, locale), limit: formatInteger(report.limitUtf8Bytes, locale), reserved: formatInteger(report.reservedOutputTokens, locale),
+      }),
+      localeText(locale, '模型上下文：{context}；估算输入：{input}。', '', { context: contextWindow, input: estimatedInput }),
+      localeText(locale, '主要占用：{contributors}。', '', { contributors }),
+      localeText(locale, '模型：{model}；结果码：{code}。', '', { model: report.modelId, code: report.errorCode }),
     ].join('')
   }
 

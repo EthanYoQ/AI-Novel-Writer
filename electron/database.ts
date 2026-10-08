@@ -1,3 +1,4 @@
+import { localize as localeText } from '../src/i18n/core'
 /**
  * Vela SQLite 数据库服务 — 主进程使用
  *
@@ -426,7 +427,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       authority_fingerprint TEXT NOT NULL DEFAULT '',
       legacy_source_fingerprint TEXT NOT NULL DEFAULT '',
       source_display_json TEXT NOT NULL DEFAULT '[]',
-      locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
+      locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'zh-TW', 'en-US')),
       stage TEXT NOT NULL DEFAULT 'knowledge'
         CHECK(stage IN (
           'parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints',
@@ -707,7 +708,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   `).get() as { sql: string } | undefined
   if (
     importRunSchema
-    && (!importRunSchema.sql.includes("'parsing'") || !importRunSchema.sql.includes("'author-commit'"))
+    && (!importRunSchema.sql.includes("'parsing'") || !importRunSchema.sql.includes("'author-commit'") || !importRunSchema.sql.includes("'zh-TW'"))
   ) {
     db.pragma('foreign_keys = OFF')
     try {
@@ -723,7 +724,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
             authority_fingerprint TEXT NOT NULL DEFAULT '',
             legacy_source_fingerprint TEXT NOT NULL DEFAULT '',
             source_display_json TEXT NOT NULL DEFAULT '[]',
-            locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'en-US')),
+            locale TEXT NOT NULL CHECK(locale IN ('zh-CN', 'zh-TW', 'en-US')),
             stage TEXT NOT NULL DEFAULT 'knowledge'
               CHECK(stage IN (
                 'parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints',
@@ -859,7 +860,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       AND stage NOT IN ('parsing', 'prepared')
   `).all() as Array<{
     id: string
-    locale: 'zh-CN' | 'en-US'
+    locale: 'zh-CN' | 'zh-TW' | 'en-US'
     manifest_chapter_count: number
   }>
   const readLegacySnapshots = db.prepare(`
@@ -902,9 +903,7 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
         continue
       }
       rejectLegacyResume.run(
-        run.locale === 'en-US'
-          ? 'This legacy import is missing complete frozen chapter snapshots and cannot be resumed. Select the source again to restart.'
-          : '该旧导入缺少完整的冻结章节快照，不可恢复；请重新选择来源后开始。',
+        localeText(run.locale, '该旧导入缺少完整的冻结章节快照，不可恢复；请重新选择来源后开始。', 'This legacy import is missing complete frozen chapter snapshots and cannot be resumed. Select the source again to restart.'),
         run.id,
       )
     }

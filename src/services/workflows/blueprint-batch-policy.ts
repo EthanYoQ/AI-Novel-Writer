@@ -1,3 +1,4 @@
+import { toTraditionalChinese } from '../../shared/traditional-chinese'
 /** Product-level maximum for one semantic blueprint batch. */
 export const MAX_BLUEPRINT_ITEMS_PER_BATCH = 5
 export const DEFAULT_BLUEPRINT_GENERATION_COUNT = MAX_BLUEPRINT_ITEMS_PER_BATCH
@@ -78,7 +79,7 @@ export function planBlueprintGenerationCost(chapterCount: number): BlueprintGene
 }
 
 export function getBlueprintBatchAdvice(
-  locale: 'zh-CN' | 'en-US',
+  locale: 'zh-CN' | 'zh-TW' | 'en-US',
   chapterCount?: number,
 ): string {
   const plan = chapterCount === undefined ? null : planBlueprintGenerationCost(chapterCount)
@@ -91,5 +92,6 @@ export function getBlueprintBatchAdvice(
   const estimate = plan === null
     ? ''
     : `预计至少 ${plan.expectedCalls} 次模型调用，本任务最多允许 ${plan.maxCalls} 次；`
-  return `每个语义批次最多 5 章；${estimate}章节越多耗时和调用次数越多，达到输出限制时会自动继续拆分。`
+  const advice = `每个语义批次最多 5 章；${estimate}章节越多耗时和调用次数越多，达到输出限制时会自动继续拆分。`
+  return locale === 'zh-TW' ? toTraditionalChinese(advice) : advice
 }

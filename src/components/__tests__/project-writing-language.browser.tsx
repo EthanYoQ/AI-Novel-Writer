@@ -35,7 +35,7 @@ afterEach(async () => {
   setActiveProjectSessionContext(null)
 })
 
-function project(id: string, writingLanguage: 'zh-CN' | 'en-US'): ProjectData {
+function project(id: string, writingLanguage: 'zh-CN' | 'zh-TW' | 'en-US'): ProjectData {
   return {
     id,
     name: `Novel ${id}`,
@@ -96,6 +96,8 @@ describe('project writing language', () => {
     { uiLocale: 'zh-CN', writingLanguage: 'en-US', label: '写作语言' },
     { uiLocale: 'en-US', writingLanguage: 'zh-CN', label: 'Writing language' },
     { uiLocale: 'en-US', writingLanguage: 'en-US', label: 'Writing language' },
+    { uiLocale: 'zh-TW', writingLanguage: 'zh-TW', label: '寫作語言' },
+    { uiLocale: 'en-US', writingLanguage: 'zh-TW', label: 'Writing language' },
   ] as const)(
     'renders $writingLanguage writing in a $uiLocale interface',
     async ({ uiLocale, writingLanguage, label }) => {

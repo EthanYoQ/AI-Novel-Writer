@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 /** Persisted, resumable reference-import workflow. */
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import {
@@ -37,7 +38,7 @@ export interface ImportWorkflowParams {
 }
 
 function textForLocale(locale: ImportRunSnapshot['locale'], zhCNText: string, enUSText: string): string {
-  return locale === 'en-US' ? enUSText : zhCNText
+  return localeText(locale, zhCNText, enUSText)
 }
 
 function required<T>(result: { success: boolean; error?: string } & T, fallback: string): T {

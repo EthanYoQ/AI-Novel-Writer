@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -250,7 +251,7 @@ export function createDirectoryWorkflow(
   sourceProjectSession: ProjectSessionContext,
   frozenUiLocale: Locale = useLocaleStore.getState().locale,
 ): WorkflowDefinition {
-  const text = (zhCNText: string, enUSText: string) => frozenUiLocale === 'en-US' ? enUSText : zhCNText
+  const text = (zhCNText: string, enUSText: string) => localeText(frozenUiLocale, zhCNText, enUSText)
   const projectAtStart = useProjectStore.getState().currentProject
   const currentProjectSession = projectSessionContextFromProject(projectAtStart)
   if (

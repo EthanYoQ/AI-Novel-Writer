@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../../i18n/core'
 import type { PlanningMaterial } from '../../knowledge-service'
 import { ipc } from '../../ipc-client'
 import { characterRosterEntriesFromCards } from '../../character-roster-client'
@@ -223,7 +224,7 @@ function formatCandidatePreview(
   const sections = entries.map((entry, index) => {
     const roleLabels = CHARACTER_ROLE_LABELS[entry.role]
     const rows = [
-      `- ${text('角色定位', 'Role')}: ${context.uiLocale === 'en-US' ? roleLabels.enUS : roleLabels.zhCN}`,
+      `- ${text('角色定位', 'Role')}: ${localeText(context.uiLocale, roleLabels.zhCN, roleLabels.enUS)}`,
       ...MATERIAL_CHARACTER_TEXT_FIELDS.flatMap(field => (
         entry[field] ? [`- ${fieldLabels[field]}: ${entry[field]}`] : []
       )),

@@ -1,4 +1,4 @@
-export type ImportRunLocale = 'zh-CN' | 'en-US'
+export type ImportRunLocale = 'zh-CN' | 'zh-TW' | 'en-US'
 export type ImportPurpose = 'reference' | 'author-manuscript'
 export const AUTHOR_IMPORT_PREVIEW_STALE = 'AUTHOR_IMPORT_PREVIEW_STALE' as const
 

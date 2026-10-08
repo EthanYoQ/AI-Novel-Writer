@@ -1,3 +1,4 @@
+import { toTraditionalChinese } from '../shared/traditional-chinese'
 import type { Locale } from '../i18n/types'
 import { safeReceiptPurpose } from './generation/generation-harness'
 import type { LLMCallRecord } from './stats-service'
@@ -82,7 +83,7 @@ function safeStepName(value: unknown): string | undefined {
 }
 
 export function formatSafeCallDiagnostic(input: SafeCallDiagnosticInput): string {
-  const zh = input.locale === 'zh-CN'
+  const zh = input.locale !== 'en-US'
   const unknown = zh ? '未知' : 'unknown'
   const value = (candidate: unknown) => candidate ?? unknown
   const workflow = input.workflow
@@ -95,7 +96,7 @@ export function formatSafeCallDiagnostic(input: SafeCallDiagnosticInput): string
       })
     : []
 
-  const labels = zh ? {
+  const baseLabels = zh ? {
     title: 'AI 小说作家安全诊断', environment: '环境', call: '模型调用', workflow: '工作流', budget: '提示词预算',
     version: '应用版本', platform: '平台', actualModel: '实际模型', model: '模型 ID', purpose: '用途', requested: '请求时间', duration: '耗时（毫秒）',
     prompt: '输入 Tokens', completion: '输出 Tokens', total: '总 Tokens', result: '调用结果', success: '成功', failure: '失败',
@@ -108,6 +109,8 @@ export function formatSafeCallDiagnostic(input: SafeCallDiagnosticInput): string
     status: 'Workflow status', failureCode: 'Workflow failure code', step: 'Step', stepStatus: 'Step status', stepFailure: 'Step failure code', finish: 'Finish reason',
     actual: 'Actual bytes', limit: 'Limit bytes', reserved: 'Reserved output tokens', section: 'Section', bytes: 'Bytes',
   }
+
+  const labels = Object.fromEntries(Object.entries(baseLabels).map(([key, label]) => [key, input.locale === 'zh-TW' ? toTraditionalChinese(label) : label])) as typeof baseLabels
 
   const lines = [
     `# ${labels.title}`,

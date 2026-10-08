@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 /**
  * 意图路由 + / 命令解析
  *
@@ -48,7 +49,7 @@ export interface ParsedMention {
 
 /** 内置 / 命令列表 */
 function builtinCommands(locale: Locale): SlashCommand[] {
-  const text = (zhCN: string, enUS: string) => locale === 'en-US' ? enUS : zhCN
+  const text = (zhCN: string, enUS: string) => localeText(locale, zhCN, enUS)
   return [
     {
       name: 'clear',
@@ -88,12 +89,8 @@ export function getAllSlashCommands(locale: Locale = 'zh-CN'): SlashCommand[] {
     if (skill.metadata.userInvocable !== false) {
       commands.push({
         name: skill.metadata.name,
-        displayName: locale === 'en-US'
-          ? (skill.writingSkill.metadata.displayName ?? skill.metadata.name)
-          : (skill.metadata.displayName ?? skill.metadata.name),
-        description: locale === 'en-US'
-          ? skill.writingSkill.metadata.description
-          : skill.metadata.description,
+        displayName: localeText(locale, (skill.metadata.displayName ?? skill.metadata.name), (skill.writingSkill.metadata.displayName ?? skill.metadata.name)),
+        description: localeText(locale, skill.metadata.description, skill.writingSkill.metadata.description),
         source: 'skill',
         skill,
       })
@@ -150,7 +147,7 @@ export function parseSlashCommand(input: string, locale: Locale = 'zh-CN'): {
  * 获取所有可 @ 提及的目标
  */
 export function getAllMentionTargets(locale: Locale = 'zh-CN'): MentionTarget[] {
-  const text = (zhCN: string, enUS: string) => locale === 'en-US' ? enUS : zhCN
+  const text = (zhCN: string, enUS: string) => localeText(locale, zhCN, enUS)
   return [
     { type: 'architecture', displayName: text('故事架构', 'Story architecture'), value: 'architecture' },
     { type: 'character', displayName: text('角色卡', 'Character cards'), value: 'characters' },

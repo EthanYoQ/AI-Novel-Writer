@@ -22,6 +22,9 @@ importers:
 
   .:
     dependencies:
+      opencc-js:
+        specifier: ^1.4.2
+        version: 1.4.2
       '@codemirror/lang-markdown':
         specifier: ^6.5.0
         version: 6.5.1
@@ -251,6 +254,9 @@ importers:
         version: 0.22.3
 
 packages:
+
+  opencc-js@1.4.2:
+    resolution: {integrity: sha512-EdcspgdROiCCZDM+jZR6Pa670xW+EW2QhctPBQ8gRjg6lrx4IHEl+2s+kt5izk/TkxVRgdWuFgaGkaEdIUfdaw==}
 
   '@adobe/css-tools@4.4.4':
     resolution: {integrity: sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg==}
@@ -4704,6 +4710,8 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  opencc-js@1.4.2: {}
 
   '@adobe/css-tools@4.4.4': {}
 

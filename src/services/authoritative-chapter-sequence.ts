@@ -1,3 +1,4 @@
+import { localize as localeText } from '../i18n/core'
 import type { AuthoritativeChapterSequence } from '../shared/author-manuscript-import'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { WritingLanguage } from '../shared/writing-language'
@@ -12,22 +13,18 @@ export class AuthoritativeChapterSequenceError extends Error {
   ) {
     const gap = sequence.firstGapChapterNumber
     const duplicates = sequence.duplicateChapterNumbers
-    const details = locale === 'en-US'
-      ? [
-          gap === undefined ? '' : `Chapter ${gap} is missing from finalized manuscript authority.`,
-          duplicates.length === 0
-            ? ''
-            : `Finalized authority has duplicate records for Chapters ${duplicates.join(', ')}.`,
-        ].filter(Boolean).join(' ')
-      : [
+    const details = localeText(locale, [
           gap === undefined ? '' : `权威定稿缺少第 ${gap} 章。`,
           duplicates.length === 0
             ? ''
             : `权威定稿的第 ${duplicates.join('、')} 章存在重复记录。`,
-        ].filter(Boolean).join('')
-    super(locale === 'en-US'
-      ? `${details || 'Finalized manuscript authority is inconsistent.'} Repair or remove the conflicting finalized chapters before continuing.`
-      : `${details || '权威定稿状态不一致。'}请先修复或移除冲突定稿，再继续创作。`)
+        ].filter(Boolean).join(''), [
+          gap === undefined ? '' : `Chapter ${gap} is missing from finalized manuscript authority.`,
+          duplicates.length === 0
+            ? ''
+            : `Finalized authority has duplicate records for Chapters ${duplicates.join(', ')}.`,
+        ].filter(Boolean).join(' '))
+    super(localeText(locale, "{value0}请先修复或移除冲突定稿，再继续创作。", "{value1} Repair or remove the conflicting finalized chapters before continuing.", { value0: String(details || '权威定稿状态不一致。'), value1: String(details || 'Finalized manuscript authority is inconsistent.') }))
     this.name = 'AuthoritativeChapterSequenceError'
   }
 }

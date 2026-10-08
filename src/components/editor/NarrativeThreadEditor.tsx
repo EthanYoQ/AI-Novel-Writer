@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Clock3, Loader2, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
 
@@ -340,7 +341,7 @@ export default function NarrativeThreadEditor({
   const refreshPlotTree = async () => {
     const session = captureProjectSession(useProjectStore.getState().currentProject)
     const uiLocale = useLocaleStore.getState().locale
-    const uiText: LocaleText = (zhCNText, enUSText) => uiLocale === 'en-US' ? enUSText : zhCNText
+    const uiText: LocaleText = (zhCNText, enUSText) => localeText(uiLocale, zhCNText, enUSText)
     const frozenModelId = selectedPlotModel?.id
     if (!session || !isProjectSessionPath(session, projectKey) || !plotSources
       || !frozenModelId || plotBusy) return

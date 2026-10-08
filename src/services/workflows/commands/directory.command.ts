@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../../i18n/core'
 import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
@@ -103,11 +104,9 @@ export class DirectoryBlueprintContractError extends Error {
       ? ` actualCharacters=${diagnostic.actualCharacters} maxCharacters=${diagnostic.maxCharacters}`
       : ''
     super(
-      uiLocale === 'en-US'
-        ? `Structured contract diagnostic code=${diagnostic.code} path=${diagnostic.path} field=${diagnostic.field}${characterCounts}`
-          + (generationSummary ? `; ${generationSummary}` : '')
-        : `结构化合同诊断 code=${diagnostic.code} path=${diagnostic.path} field=${diagnostic.field}${characterCounts}`
-          + (generationSummary ? `；${generationSummary}` : ''),
+      localeText(uiLocale, `结构化合同诊断 code=${diagnostic.code} path=${diagnostic.path} field=${diagnostic.field}${characterCounts}`
+          + (generationSummary ? `；${generationSummary}` : ''), `Structured contract diagnostic code=${diagnostic.code} path=${diagnostic.path} field=${diagnostic.field}${characterCounts}`
+          + (generationSummary ? `; ${generationSummary}` : '')),
     )
     this.name = 'DirectoryBlueprintContractError'
   }
@@ -532,9 +531,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
             context.uiLocale,
           )
         }
-        throw new Error(context.uiLocale === 'en-US'
-          ? `Blueprint generation failed: code=${batchResult.failure.code} reason=${batchResult.failure.reason ?? 'unknown'}; ${generationSummary}`
-          : `${batchResult.failure.message}；${generationSummary}`)
+        throw new Error(localeText(context.uiLocale, "{value0}；{value1}", "Blueprint generation failed: code={value2} reason={value3}; {value1}", { value0: String(batchResult.failure.message), value1: String(generationSummary), value2: String(batchResult.failure.code), value3: String(batchResult.failure.reason ?? 'unknown') }))
       }
 
       this.assertNotCancelled(context)

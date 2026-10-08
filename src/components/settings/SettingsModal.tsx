@@ -204,6 +204,23 @@ function LLMSection({
   const setDefaultEmbeddingModel = useLLMStore(s => s.setDefaultEmbeddingModel)
   const [editingModel, setEditingModel] = useState<ModelProfile | null>(null)
   const [saving, setSaving] = useState(false)
+  const [planStatus, setPlanStatus] = useState<{ connected: boolean; email?: string; sharing: boolean }>({ connected: false, sharing: false })
+  const [planModels, setPlanModels] = useState<Array<{ slug: string; name: string }>>([])
+  const [planModel, setPlanModel] = useState('')
+  const [planBusy, setPlanBusy] = useState(false)
+  const [planError, setPlanError] = useState('')
+  const planAvailable = !purposes.includes('embedding')
+  useEffect(() => {
+    if (!planAvailable) return
+    void ipc.invoke('chatgpt-plan:status').then(setPlanStatus).catch(() => {})
+  }, [planAvailable])
+  useEffect(() => {
+    if (!planStatus.sharing) return
+    void ipc.invoke('chatgpt-plan:models').then(found => {
+      setPlanModels(found)
+      setPlanModel(current => current || found[0]?.slug || '')
+    }).catch(() => {})
+  }, [planStatus.sharing])
   useEffect(() => {
     if (!loaded) loadModels()
   }, [loaded, loadModels])
@@ -225,6 +242,27 @@ function LLMSection({
   }
 
   const isEmbeddingSection = purposes.includes('embedding')
+  const connectPlan = async () => {
+    setPlanBusy(true)
+    setPlanError('')
+    try { setPlanStatus(await ipc.invoke('chatgpt-plan:sign-in')) }
+    catch (error) { setPlanError(error instanceof Error ? error.message : String(error)) }
+    finally { setPlanBusy(false) }
+  }
+  const addPlanModel = async () => {
+    if (!planModel) return
+    setPlanBusy(true)
+    const profile: ModelProfile = {
+      id: randomUUID(), name: `ChatGPT · ${planModel}`, provider: 'chatgpt-plan',
+      protocol: 'openai', modelName: planModel, apiKey: '', baseUrl: 'https://api.openai.com/v1',
+      temperature: 0.7, maxTokens: 4096, purposes: [...purposes],
+    }
+    try {
+      if (!await saveModel(profile)) throw new Error('Could not save the model profile')
+      if (filtered.length === 0) await setDefaultModel(profile.id)
+    } catch (error) { setPlanError(error instanceof Error ? error.message : String(error)) }
+    finally { setPlanBusy(false) }
+  }
   const openSiliconFlowInvite = () => void openModelProviderResource('siliconflow-invite', text)
 
   /** 保存模型；若是该分类第一个则自动设为默认 */
@@ -275,6 +313,28 @@ function LLMSection({
       {/* 模型列表 */}
       {!editingModel && (
         <>
+          {!isEmbeddingSection && (
+            <div className="space-y-2 rounded-xl p-4" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-panel)' }}>
+              <p className="text-sm font-semibold">{text('使用 ChatGPT 方案', 'Use your ChatGPT plan')}</p>
+              <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                {text('登入並授權後，可使用符合資格的 ChatGPT Plus 或 Pro 方案額度產生文字。', 'Sign in and authorize eligible ChatGPT Plus or Pro plan usage for text generation.')}
+              </p>
+              {planStatus.connected && <p className="text-xs">{planStatus.email || text('已連接帳號', 'Connected account')}</p>}
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" disabled={planBusy} onClick={() => void connectPlan()}>
+                  {planBusy ? text('處理中…', 'Working…') : text('使用 ChatGPT 登入', 'Continue with ChatGPT')}
+                </Button>
+                {planStatus.connected && <Button size="sm" variant="ghost" onClick={() => void ipc.invoke('chatgpt-plan:disconnect').then(setPlanStatus)}>{text('中斷連接', 'Disconnect')}</Button>}
+              </div>
+              {planStatus.sharing && <div className="flex items-center gap-2">
+                <NativeSelect value={planModel} onChange={event => setPlanModel(event.target.value)}>
+                  {planModels.map(item => <option key={item.slug} value={item.slug}>{item.name}</option>)}
+                </NativeSelect>
+                <Button size="sm" disabled={!planModel || planBusy} onClick={() => void addPlanModel()}>{text('新增模型', 'Add model')}</Button>
+              </div>}
+              {planError && <p role="alert" className="text-xs text-[var(--color-error-text)]">{planError}</p>}
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium" style={{ color: 'var(--color-text-muted)' }}>
               {text(`已配置 ${filtered.length} 个${purposeLabel}`, `${filtered.length} ${purposeLabel} configured`)}
@@ -400,13 +460,13 @@ function ModelCard({
             <Check size={14} />
           </button>
         )}
-        <button
+        {model.provider !== 'chatgpt-plan' && <button
           onClick={onEdit}
           title={text('编辑', 'Edit')}
           className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
         >
           <Settings2 size={14} />
-        </button>
+        </button>}
         <button
           onClick={onDelete}
           title={text('删除', 'Delete')}
@@ -1223,7 +1283,7 @@ function FontSelect({
                   <span className="text-xs font-medium" style={{ color: 'var(--color-text)', fontFamily: opt.family }}>
                     {text(opt.label, opt.labelEn)}
                   </span>
-                  {locale === 'zh-CN' && (
+                  {locale !== 'en-US' && (
                     <span className="text-[0.65rem]" style={{ color: 'var(--color-text-muted)' }}>
                       {opt.labelEn}
                     </span>
@@ -1297,6 +1357,7 @@ function EditorSection() {
           onChange={(event) => void setLocale(event.target.value as Locale)}
         >
           <option value="zh-CN">{text('简体中文', 'Simplified Chinese')}</option>
+          <option value="zh-TW">{text('繁體中文', 'Traditional Chinese')}</option>
           <option value="en-US">English</option>
         </NativeSelect>
       </div>

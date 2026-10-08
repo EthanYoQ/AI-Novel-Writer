@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../src/i18n/core'
 import { createHash } from 'node:crypto'
 import { countDraftUnits } from '../../src/shared/draft-units'
 
@@ -51,7 +52,7 @@ interface ImportRunRow {
   authority_fingerprint: string
   legacy_source_fingerprint: string
   source_display_json: string
-  locale: 'zh-CN' | 'en-US'
+  locale: 'zh-CN' | 'zh-TW' | 'en-US'
   stage: ImportRunStage
   status: ImportRunStatus
   completed_batches_json: string
@@ -1216,13 +1217,9 @@ function hasCommittedAuthorFinalizationReceipt(run: ImportRunRow): boolean {
 
 function fenceUncommittedAuthorRun(run: ImportRunRow, now = Date.now()): void {
   if (run.status === 'running' && run.execution_owner && run.lease_expires_at > now) {
-    throw new Error(run.locale === 'en-US'
-      ? 'The previous author import is still running. Wait for it to stop, then confirm the latest preview again.'
-      : '之前的作者原稿导入仍在运行，请等待其停止后重新确认最新预览')
+    throw new Error(localeText(run.locale, '之前的作者原稿导入仍在运行，请等待其停止后重新确认最新预览', 'The previous author import is still running. Wait for it to stop, then confirm the latest preview again.'))
   }
-  const guidance = run.locale === 'en-US'
-    ? 'Author manuscript authority changed. Confirm the latest preview to create a new import run.'
-    : '作者原稿权威状态已变化，请根据最新预览重新确认导入'
+  const guidance = localeText(run.locale, '作者原稿权威状态已变化，请根据最新预览重新确认导入', 'Author manuscript authority changed. Confirm the latest preview to create a new import run.')
   const fenced = db().prepare(`
     UPDATE import_runs
     SET resumable = 0, cancel_requested = 0, last_error = ?,
@@ -1238,9 +1235,7 @@ function fenceUncommittedAuthorRun(run: ImportRunRow, now = Date.now()): void {
       )
   `).run(guidance, run.id, now)
   if (fenced.changes !== 1) {
-    throw new Error(run.locale === 'en-US'
-      ? 'The author import state changed. Confirm the latest preview again.'
-      : '作者原稿导入状态已变化，请重新确认最新预览')
+    throw new Error(localeText(run.locale, '作者原稿导入状态已变化，请重新确认最新预览', 'The author import state changed. Confirm the latest preview again.'))
   }
 }
 
@@ -1416,7 +1411,7 @@ export class ImportRunRepository {
       throw new Error('导入运行身份无效')
     }
     if (candidate.purpose !== 'reference') throw new Error('当前版本不支持作者手稿导入')
-    if (candidate.locale !== 'zh-CN' && candidate.locale !== 'en-US') throw new Error('导入运行语言无效')
+    if (candidate.locale !== 'zh-CN' && candidate.locale !== 'zh-TW' && candidate.locale !== 'en-US') throw new Error('导入运行语言无效')
     const sourceDisplay = normalizeDisplay(candidate.sourceDisplay)
     const sourceIds = normalizeSourceIds(candidate.sourceIds, sourceDisplay, candidate.sourceFingerprint)
     const sourceFingerprints = normalizeSourceFingerprints(candidate.sourceFingerprints, sourceIds)
@@ -1754,9 +1749,7 @@ export class ImportRunRepository {
         }
       }
       if (overlappingResumableSourceRun(runId, run.purpose)) {
-        throw new Error(run.locale === 'en-US'
-          ? 'Another resumable import already contains the same source. Complete or cancel that import, then try again.'
-          : '另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试')
+        throw new Error(localeText(run.locale, '另一个可恢复导入已包含相同来源，请先完成或取消该导入后重试', 'Another resumable import already contains the same source. Complete or cancel that import, then try again.'))
       }
       const sourceIds = sources.map(source => source.source_id)
       const completed = latestCompletedRun(run.purpose, run.source_fingerprint)
@@ -1853,7 +1846,7 @@ export class ImportRunRepository {
     if (candidate.purpose !== 'reference' && candidate.purpose !== 'author-manuscript') {
       throw new Error('导入用途无效')
     }
-    if (candidate.locale !== 'zh-CN' && candidate.locale !== 'en-US') throw new Error('导入运行语言无效')
+    if (candidate.locale !== 'zh-CN' && candidate.locale !== 'zh-TW' && candidate.locale !== 'en-US') throw new Error('导入运行语言无效')
     const sourceDisplay = normalizeDisplay(candidate.sourceDisplay)
     const sourceIds = normalizeSourceIds(candidate.sourceIds, sourceDisplay, candidate.sourceFingerprint)
     const sourceFingerprints = normalizeSourceFingerprints(candidate.sourceFingerprints, sourceIds)

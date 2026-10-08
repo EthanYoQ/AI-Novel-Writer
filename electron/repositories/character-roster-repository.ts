@@ -24,7 +24,7 @@ import { getProjectDb } from '../database'
 import { CharacterRepository, type CharacterData } from './character-repository'
 import { ensureCharacterRosterSchema } from './character-roster-schema'
 import { CHARACTER_ROLE_LABELS, normalizeCharacterRole } from '../../src/shared/character-role'
-import { DEFAULT_WRITING_LANGUAGE, type WritingLanguage } from '../../src/shared/writing-language'
+import { DEFAULT_WRITING_LANGUAGE, WRITING_LANGUAGES, writingLanguageText, type WritingLanguage } from '../../src/shared/writing-language'
 import { ProjectCoreRepository } from './project-core-repository'
 
 interface CharacterRosterMetaRow {
@@ -729,11 +729,10 @@ export function renderCharacterRosterMarkdown(
   const canonical = sortedEntries(entries)
   if (canonical.length === 0) return ''
   const english = writingLanguage === 'en-US'
+  const text = (zh: string, en: string) => writingLanguageText(writingLanguage, zh, en)
 
   const blocks = canonical.map(entry => {
-    const roleLabel = english
-      ? CHARACTER_ROLE_LABELS[entry.role].enUS
-      : CHARACTER_ROLE_LABELS[entry.role].zhCN
+    const roleLabel = text(CHARACTER_ROLE_LABELS[entry.role].zhCN, CHARACTER_ROLE_LABELS[entry.role].enUS)
     const lines = [`## ${roleLabel}${english ? ': ' : '：'}${entry.name}`]
     const fields: Array<[string, string]> = [
       [english ? 'Gender' : '性别', entry.gender],
@@ -747,21 +746,21 @@ export function renderCharacterRosterMarkdown(
       [english ? 'Notes' : '备注', entry.notes],
     ]
     for (const [label, value] of fields) {
-      if (value) lines.push(`- ${label}${english ? ': ' : '：'}${value}`)
+      if (value) lines.push(`- ${text(label, label)}${english ? ': ' : '：'}${value}`)
     }
     for (const relationship of entry.relationships) {
       lines.push(english
         ? `- Relationship: ${relationship.target} (${relationship.relation})`
-        : `- 关系：${relationship.target}（${relationship.relation}）`)
+        : `- ${text('关系', 'Relationship')}：${relationship.target}（${relationship.relation}）`)
     }
     if (entry.legacyRelationshipNotes) {
       lines.push(english
         ? `- Relationship notes: ${entry.legacyRelationshipNotes}`
-        : `- 关系备注：${entry.legacyRelationshipNotes}`)
+        : `- ${text('关系备注', 'Relationship notes')}：${entry.legacyRelationshipNotes}`)
     }
     return lines.join('\n')
   })
-  return [english ? '# Character graph' : '# 角色图谱', ...blocks].join('\n\n')
+  return [text('# 角色图谱', '# Character graph'), ...blocks].join('\n\n')
 }
 
 function readMeta(db: BetterSqlite3.Database): CharacterRosterMetaRow {
@@ -821,17 +820,16 @@ function readSnapshot(db: BetterSqlite3.Database): CharacterRosterSnapshot {
   const writingLanguage = ProjectCoreRepository.get()?.writingLanguage ?? DEFAULT_WRITING_LANGUAGE
   const currentProjection = readCurrentProjection(db)
   const localizedProjection = renderCharacterRosterMarkdown(entries, writingLanguage)
-  const previousLanguageProjection = renderCharacterRosterMarkdown(
-    entries,
-    writingLanguage === 'en-US' ? 'zh-CN' : 'en-US',
-  )
+  const previousLanguageProjection = WRITING_LANGUAGES
+    .filter(language => language !== writingLanguage)
+    .map(language => renderCharacterRosterMarkdown(entries, language))
+    .find(projection => projection === currentProjection && meta.projection_hash === hashText(projection))
   // A project may change writing language after a ready roster was committed.
   // Keep that exact historical projection readable; the next roster commit
   // rewrites it in the current project language without changing facts.
   const renderedMarkdown = (
     meta.migration_state === 'ready'
-    && currentProjection === previousLanguageProjection
-    && meta.projection_hash === hashText(previousLanguageProjection)
+    && previousLanguageProjection !== undefined
   ) ? previousLanguageProjection : localizedProjection
   const projectionHash = hashText(renderedMarkdown)
   return {

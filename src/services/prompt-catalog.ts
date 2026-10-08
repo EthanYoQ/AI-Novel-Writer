@@ -87,11 +87,11 @@ function setLocalizedTemplate(target: Map<string, PromptTemplate>, template: Pro
 }
 
 function promptKeyFromFilename(filename: string): string {
-  return filename.replace(/\.json$/u, '').replace(/\.(?:zh-CN|en-US)$/u, '')
+  return filename.replace(/\.json$/u, '').replace(/\.(?:zh-CN|zh-TW|en-US)$/u, '')
 }
 
 function promptLanguageFromFilename(filename: string): WritingLanguage | undefined {
-  const match = filename.match(/\.(zh-CN|en-US)\.json$/u)
+  const match = filename.match(/\.(zh-CN|zh-TW|en-US)\.json$/u)
   return match?.[1] as WritingLanguage | undefined
 }
 

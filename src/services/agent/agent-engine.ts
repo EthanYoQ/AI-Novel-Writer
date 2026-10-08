@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 /**
  * Agent 核心引擎 — ReAct（Reasoning + Acting）循环
  *
@@ -133,7 +134,7 @@ export async function runAgentLoop(
     writingLanguageText(executionContext.writingLanguage, zhCN, enUS)
   )
   const uiText = (zhCN: string, enUS: string) => (
-    executionContext.uiLocale === 'en-US' ? enUS : zhCN
+    localeText(executionContext.uiLocale, zhCN, enUS)
   )
 
   // 构建消息列表

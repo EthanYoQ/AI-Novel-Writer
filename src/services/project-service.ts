@@ -1,3 +1,4 @@
+import { localize as localeText } from '../i18n/core'
 /**
  * ProjectService — 项目生命周期与跨 Store 协调的单例调度层
  *
@@ -41,7 +42,7 @@ function runProjectEventTask(label: () => string, task: () => Promise<void>): vo
     console.error(`[ProjectService] ${localizedLabel}:`, error)
     globalEventBus.emit('SYSTEM_NOTICE', {
       level: 'error',
-      message: locale === 'zh-CN' ? `${localizedLabel}：${message}` : localizedLabel,
+      message: localeText(locale, "{value0}：{value1}", localizedLabel, { value0: String(localizedLabel), value1: String(message) }),
     })
   })
 }

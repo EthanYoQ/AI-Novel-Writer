@@ -164,6 +164,39 @@ afterEach(() => {
 })
 
 describe('ImportRunRepository', () => {
+  it('persists Traditional Chinese import language across database reopen', () => {
+    ImportRunRepository.prepare(request([chapter(1)], { locale: 'zh-TW' }))
+    closeProjectDatabase()
+    initProjectDatabase(root)
+    expect(ImportRunRepository.get('import-run-1')).toMatchObject({ locale: 'zh-TW' })
+    expect(getProjectDb()!.pragma('foreign_key_check')).toEqual([])
+  })
+
+  it('upgrades a current two-language schema and preserves frozen import data', () => {
+    ImportRunRepository.prepare(request())
+    closeProjectDatabase()
+    const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+    const schema = legacy.prepare("SELECT sql FROM sqlite_master WHERE name = 'import_runs'").get() as { sql: string }
+    try {
+      legacy.pragma('foreign_keys = OFF')
+      legacy.exec(schema.sql
+        .replace('CREATE TABLE import_runs', 'CREATE TABLE import_runs_two_languages')
+        .replace("'zh-CN', 'zh-TW', 'en-US'", "'zh-CN', 'en-US'"))
+      legacy.exec(`
+        INSERT INTO import_runs_two_languages SELECT * FROM import_runs;
+        DROP TABLE import_runs;
+        ALTER TABLE import_runs_two_languages RENAME TO import_runs;
+      `)
+    } finally {
+      legacy.close()
+    }
+
+    initProjectDatabase(root)
+    expect(ImportRunRepository.get('import-run-1')).toMatchObject({ locale: 'en-US' })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_run_chapters').get()).toEqual({ count: 1 })
+    expect(getProjectDb()!.pragma('foreign_key_check')).toEqual([])
+    expect(() => ImportRunRepository.prepare(request([chapter(2)], { runId: 'traditional-run', locale: 'zh-TW' }))).not.toThrow()
+  })
   it('migrates the pre-purpose import-run schema before creating purpose indexes', () => {
     closeProjectDatabase()
     const legacy = new Database(path.join(root, '.vela', 'vela.db'))

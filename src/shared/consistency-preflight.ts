@@ -1,3 +1,4 @@
+import { localize as localeText } from '../i18n/core'
 import type { FinalizedContinuityProjection } from './finalized-continuity'
 
 export interface ConsistencyExemption {
@@ -121,12 +122,12 @@ export function findBlueprintContinuityRisks(
 export function mergeConsistencyFindingsIntoReview(
   review: ReviewLike,
   findings: readonly ConsistencyFinding[],
-  locale: 'zh-CN' | 'en-US',
+  locale: 'zh-CN' | 'zh-TW' | 'en-US',
 ): ReviewLike & { items: Array<Record<string, unknown>> } {
   const mapped = findings.map(finding => ({
-    category: locale === 'en-US' ? 'Deterministic continuity preflight' : '确定性一致性预检',
+    category: localeText(locale, '确定性一致性预检', 'Deterministic continuity preflight'),
     severity: finding.severity,
-    description: locale === 'en-US' ? finding.issue.enUS : finding.issue.zhCN,
+    description: localeText(locale, finding.issue.zhCN, finding.issue.enUS),
     quote: finding.evidence,
     stableFactKey: finding.stableFactKey,
     sourceChapter: finding.sourceChapter,

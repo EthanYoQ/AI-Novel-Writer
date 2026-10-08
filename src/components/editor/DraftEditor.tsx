@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../i18n/core'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Sparkles, Search, BadgeCheck, Save, FileStack, FileText, Wrench, Check } from 'lucide-react'
 
@@ -454,9 +455,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       const guard = await guardRepairPostProcess(meta.chapterNumber, projectKey, projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
       if (!guard.ok) {
-        toast.error(locale === 'zh-CN'
-          ? (guard.message || text('无法执行修复', 'Could not run the repair.'))
-          : text('无法执行修复', 'Could not run the repair.'))
+        toast.error(localeText(locale, (guard.message || text('无法执行修复', 'Could not run the repair.')), text('无法执行修复', 'Could not run the repair.')))
         return
       }
       const { useWorkflowStore } = await import('../../stores/workflow-store')

@@ -1,3 +1,4 @@
+import { localize } from '../../i18n/core'
 import type { SourceDraftGuardErrorCode } from '../../shared/ipc-channels'
 import type { Locale } from '../../i18n/types'
 
@@ -18,10 +19,10 @@ export function throwIfSourceDraftChanged(
   operation: 'refine' | 'review',
 ): void {
   if (result.errorCode !== SOURCE_DRAFT_CHANGED) return
-  if (uiLocale === 'zh-CN') {
-    throw new SourceDraftChangedError(operation === 'refine'
+  if (uiLocale !== 'en-US') {
+    throw new SourceDraftChangedError(localize(uiLocale, operation === 'refine'
       ? '源草稿在 AI 修稿期间已变化。修订未保存，请重新打开当前草稿后再次执行 AI 修稿。'
-      : '源草稿在 AI 审稿期间已变化。审稿报告未保存，请重新打开当前草稿后再次执行 AI 审稿。')
+      : '源草稿在 AI 审稿期间已变化。审稿报告未保存，请重新打开当前草稿后再次执行 AI 审稿。', ''))
   }
   throw new SourceDraftChangedError(operation === 'refine'
     ? 'The source draft changed during AI refinement. The revision was not saved. Reopen the current draft and run AI refinement again.'

@@ -1,3 +1,4 @@
+import { localize as localeText } from '../i18n/core'
 import { create } from 'zustand'
 import { randomUUID } from '../utils/id'
 import { globalEventBus } from '../shared/event-bus'
@@ -268,7 +269,7 @@ function findResourceConflict(
 }
 
 function uiText(locale: Locale, zhCNText: string, enUSText: string): string {
-  return locale === 'en-US' ? enUSText : zhCNText
+  return localeText(locale, zhCNText, enUSText)
 }
 
 // ===== Store =====

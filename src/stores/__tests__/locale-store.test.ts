@@ -3,6 +3,25 @@ import { describe, expect, it, vi } from 'vitest'
 import { createLocaleState } from '../locale-store'
 
 describe('locale store', () => {
+  it('cycles through all three languages and persists Traditional Chinese', async () => {
+    const saveLocale = vi.fn(async () => ({ success: true }))
+    const state = createStore(createLocaleState({
+      loadConfig: async () => ({ locale: 'zh-TW' }),
+      saveLocale,
+      systemLocale: () => 'zh-CN',
+      setDocumentLanguage: vi.fn(),
+    }))
+    await state.getState().toggleLocale()
+    expect(state.getState().locale).toBe('zh-TW')
+    expect(saveLocale).toHaveBeenLastCalledWith('zh-TW')
+    expect(state.getState().text('输入与输出', 'Input and output')).toBe('輸入與輸出')
+    await state.getState().toggleLocale()
+    expect(state.getState().locale).toBe('en-US')
+    await state.getState().toggleLocale()
+    expect(state.getState().locale).toBe('zh-CN')
+    await state.getState().init()
+    expect(state.getState().locale).toBe('zh-TW')
+  })
   it('prefers a saved locale over the operating-system locale', async () => {
     const state = createStore(createLocaleState({
       loadConfig: async () => ({ locale: 'zh-CN' }),
@@ -27,7 +46,7 @@ describe('locale store', () => {
 
     await state.getState().init()
 
-    expect(state.getState().locale).toBe('zh-CN')
+    expect(state.getState().locale).toBe('zh-TW')
     expect(saveLocale).not.toHaveBeenCalled()
   })
 

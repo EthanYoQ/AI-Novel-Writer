@@ -58,7 +58,7 @@ export type ConfigImpactPreviewState =
     }
 
 function displayValue(value: unknown, locale: string): string {
-  if (Array.isArray(value)) return value.join(locale === 'zh-CN' ? '、' : ', ')
+  if (Array.isArray(value)) return value.join(locale === 'en-US' ? ', ' : '、')
   if (value === undefined || value === null || value === '') return '—'
   return String(value)
 }

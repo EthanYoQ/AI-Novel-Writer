@@ -1,3 +1,4 @@
+import { localize as localeText } from '../../../i18n/core'
 import { Plus, MoreHorizontal, X, Server, Sparkles, ChevronRight, History } from 'lucide-react'
 import { useAgentStore } from '../../../stores/agent-store'
 import { useLayoutStore } from '../../../stores/layout-store'
@@ -324,9 +325,7 @@ function SkillSubView({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="font-medium truncate" style={{ color: 'var(--color-text)' }}>
-                      {locale === 'en-US'
-                        ? (skill.writingSkill.metadata.displayName ?? skill.metadata.name)
-                        : (skill.metadata.displayName ?? skill.metadata.name)}
+                      {localeText(locale, (skill.metadata.displayName ?? skill.metadata.name), (skill.writingSkill.metadata.displayName ?? skill.metadata.name))}
                     </span>
                     <span
                       className="text-[0.6rem] px-1 py-0 rounded flex-shrink-0"
@@ -339,9 +338,7 @@ function SkillSubView({
                     className="text-[0.68rem] truncate mt-0.5"
                     style={{ color: 'var(--color-text-muted)' }}
                   >
-                    {locale === 'en-US'
-                      ? skill.writingSkill.metadata.description
-                      : skill.metadata.description}
+                    {localeText(locale, skill.metadata.description, skill.writingSkill.metadata.description)}
                   </div>
                 </div>
               </div>

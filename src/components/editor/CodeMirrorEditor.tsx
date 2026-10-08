@@ -1,3 +1,4 @@
+import { localize } from '../../i18n/core'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import CodeMirror, { ReactCodeMirrorRef, EditorView, ViewUpdate } from '@uiw/react-codemirror'
 import { keymap } from '@codemirror/view'
@@ -254,7 +255,7 @@ export default function CodeMirrorEditor({
         }
       ]),
       // 汉化 Search / UI 文本（涵盖官方大小写所有变种）
-      EditorState.phrases.of(uiLocale === 'zh-CN' ? {
+      EditorState.phrases.of(uiLocale !== 'en-US' ? Object.fromEntries(Object.entries({
         "Find": "查找",
         "find": "查找",
         "Replace": "替换",
@@ -275,7 +276,7 @@ export default function CodeMirrorEditor({
         "By word": "全词匹配",
         "Close": "关闭",
         "close": "关闭"
-      } : {})
+      }).map(([key, value]) => [key, localize(uiLocale, value, key)])) : {})
     ]
     if (mode === 'document') {
       exts.push(markdown({ base: markdownLanguage, codeLanguages: languages }))

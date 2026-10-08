@@ -59,6 +59,14 @@ function LocaleShellHarness() {
       >
         Switch to English
       </button>
+      <button
+        type="button"
+        data-testid="switch-to-traditional"
+        className="absolute left-40 top-2 z-50"
+        onClick={() => void setLocale('zh-TW')}
+      >
+        Switch to Traditional Chinese
+      </button>
       <TitleBar />
       <div className="grid h-[660px] grid-cols-[1fr_320px] pt-10">
         <WelcomePage onNewProject={() => {}} onOpenProject={() => {}} />

@@ -3,7 +3,7 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
 import type { NovelConfig } from '../../shared/ipc-channels'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
-import type { WritingLanguage } from '../../shared/writing-language'
+import { writingLanguageText, type WritingLanguage } from '../../shared/writing-language'
 import { promptLanguageText } from '../prompt-language'
 import {
   projectSessionContextFromProject,
@@ -285,7 +285,7 @@ Act III — climax and resolution: chapters ${ch75 + 1}–${totalChapters}.`)
 
 export function getNarrativePOVLabel(pov: string, writingLanguage: WritingLanguage): string {
   const language = writingLanguage
-  const labels: Record<WritingLanguage, Record<string, string>> = {
+  const labels: Record<Exclude<WritingLanguage, 'zh-TW'>, Record<string, string>> = {
     'zh-CN': {
     first_person: '第一人称',
     third_limited: '第三人称有限视角',
@@ -299,7 +299,7 @@ export function getNarrativePOVLabel(pov: string, writingLanguage: WritingLangua
       multi_pov: 'rotating multiple viewpoints',
     },
   }
-  return labels[language][pov] || pov
+  return writingLanguageText(language, labels['zh-CN'][pov] || pov, labels['en-US'][pov] || pov)
 }
 
 /**
