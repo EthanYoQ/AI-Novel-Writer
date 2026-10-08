@@ -402,7 +402,7 @@ export class WebDavBackupService {
     let handle: fs.promises.FileHandle | undefined
     try {
       handle = await fs.promises.open(temporary, 'wx', 0o600)
-      const response = await this.request(input.account, location, { method: 'GET' }, input.signal)
+      const response = await this.request(input.account, location, { method: 'GET' }, input.signal, this.transferTimeoutMs)
       if (!response.ok) responseFailure(response)
       const declared = this.contentLength(response)
       if (declared !== null && declared !== manifest.archive.byteSize) fail('WEBDAV_REMOTE_INVALID')
@@ -533,7 +533,7 @@ export class WebDavBackupService {
 
   private async putFile(account: WebDavAccount, url: URL, file: string,
     expected: { sha256: string; byteSize: number }, signal?: AbortSignal): Promise<void> {
-    if (await this.existingMatches(account, url, expected, signal)) return
+    if (await this.existingMatches(account, url, expected, signal, true, this.transferTimeoutMs)) return
     let uncertain = false
     const body = fs.createReadStream(file)
     try {
@@ -551,14 +551,14 @@ export class WebDavBackupService {
       if (error instanceof WebDavBackupError && error.code === 'WEBDAV_NETWORK' && !signal?.aborted) uncertain = true
       else throw error
     } finally { body.destroy() }
-    if (!await this.existingMatches(account, url, expected, signal, false)) {
+    if (!await this.existingMatches(account, url, expected, signal, false, this.transferTimeoutMs)) {
       fail(uncertain ? 'WEBDAV_REMOTE_CONFLICT' : 'WEBDAV_REMOTE_INVALID')
     }
   }
 
   private async existingMatches(account: WebDavAccount, url: URL, expected: { sha256: string; byteSize: number },
-    signal?: AbortSignal, allowMissing = true): Promise<boolean> {
-    const response = await this.request(account, url, { method: 'GET' }, signal)
+    signal?: AbortSignal, allowMissing = true, timeoutMs = this.timeoutMs): Promise<boolean> {
+    const response = await this.request(account, url, { method: 'GET' }, signal, timeoutMs)
     if (response.status === 404 && allowMissing) { await response.body?.cancel().catch(() => {}); return false }
     if (!response.ok) responseFailure(response)
     const actual = await this.hashResponse(response, Math.min(this.maxArchiveBytes, Math.max(expected.byteSize, 1)), signal)
@@ -586,7 +586,7 @@ export class WebDavBackupService {
     if (manifest.cloudBookId !== cloudBookId || manifest.generationId !== generationId
       || JSON.stringify(manifest.archive) !== JSON.stringify(completion.archive)) fail('WEBDAV_REMOTE_INVALID')
     const archiveResponse = await this.request(account, locations.archive,
-      { method: verifyArchiveContent ? 'GET' : 'HEAD' }, signal)
+      { method: verifyArchiveContent ? 'GET' : 'HEAD' }, signal, verifyArchiveContent ? this.transferTimeoutMs : this.timeoutMs)
     if (!archiveResponse.ok) responseFailure(archiveResponse)
     if (verifyArchiveContent) {
       const declared = this.contentLength(archiveResponse)

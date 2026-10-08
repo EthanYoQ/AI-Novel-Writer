@@ -207,6 +207,30 @@ describe('WebDavBackupService', () => {
     expect(dav.files.has(`/dav/books/${BOOK}/generations/${GEN_A}/completion.json`)).toBe(true)
   }, 30_000)
 
+  it('reads back and restores an archive whose GET outlasts the metadata deadline', async () => {
+    const dav = new DavFixture(); await dav.listen()
+    const source = workspace()
+    fs.writeFileSync(source.archive, Buffer.alloc(64 * 1024, 7))
+    const service = new WebDavBackupService({ generationIdFactory: () => GEN_A, timeoutMs: 300, transferTimeoutMs: 60_000,
+      fetchImpl: async (url, init) => {
+        const response = await fetch(url, init)
+        if (init?.method !== 'GET' || !String(url).endsWith('archive.ainovel') || !response.body) return response
+        const reader = response.body.getReader()
+        const slow = new ReadableStream({ async pull(controller) {
+          await new Promise(resolve => setTimeout(resolve, 200))
+          const { done, value } = await reader.read()
+          if (done) controller.close(); else controller.enqueue(value)
+        } })
+        return new Response(slow, { status: response.status, headers: response.headers })
+      } })
+    await service.appendGeneration({ account: account(dav), cloudBookId: BOOK, archivePath: source.archive,
+      originProjectId: PROJECT, portableSnapshotGeneration: 'fixture', parentGenerationIds: [] })
+    expect(dav.files.has(`/dav/books/${BOOK}/generations/${GEN_A}/completion.json`)).toBe(true)
+    const target = path.join(path.dirname(source.archive), 'restored.ainovel')
+    await service.downloadGeneration({ account: account(dav), cloudBookId: BOOK, generationId: GEN_A, targetArchivePath: target })
+    expect(sha256(fs.readFileSync(target))).toBe(sha256(fs.readFileSync(source.archive)))
+  }, 30_000)
+
   it.each([false, true])('expires or cancels a stalled archive PUT without publishing completion: cancel=%s', async cancel => {
     const dav = new DavFixture(); await dav.listen()
     const source = workspace()
