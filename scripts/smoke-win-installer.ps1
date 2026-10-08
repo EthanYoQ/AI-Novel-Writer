@@ -466,7 +466,7 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
       $null -ne $result.trustedIntent -and
       $result.trustedIntent.channel -eq 'official-homepage:open' -and
       $result.trustedIntent.requestArgumentCount -eq 0 -and
-      $result.trustedIntent.url -eq 'https://github.com/EthanYoQ/AI-Novel-Writer' -and
+      $result.trustedIntent.url -eq 'https://github.com/qew4476/AI-Novel-Writer' -and
       $result.trustedIntent.success -eq $true -and
       $result.trustedIntent.shellOpenExternalCalls -eq 1 -and
       $null -ne $result.failedOpenExternal -and

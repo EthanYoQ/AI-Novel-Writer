@@ -2,7 +2,7 @@ import { localize } from '../i18n/core'
 import type { Locale } from '../i18n/types'
 
 /** The only renderer-approved external destination. It is never renderer supplied. */
-export const OFFICIAL_HOMEPAGE_URL = 'https://github.com/EthanYoQ/AI-Novel-Writer'
+export const OFFICIAL_HOMEPAGE_URL = 'https://github.com/qew4476/AI-Novel-Writer'
 
 /**
  * Renderer-facing copy for a failed fixed homepage intent. Keeping this shared

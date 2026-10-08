@@ -44,7 +44,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "EthanYoQ",
+        "owner": "qew4476",
         "repo": "AI-Novel-Writer",
         "channel": "latest",
         "releaseType": "release",

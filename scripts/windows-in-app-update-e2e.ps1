@@ -949,7 +949,7 @@ try {
   $transcriptStarted = $true
   $plan = Get-Content -LiteralPath $resolvedPlanPath -Raw | ConvertFrom-Json
   Assert-E2eCondition -Condition ($plan.schemaVersion -eq 1) -Message 'Release plan schema is unsupported.'
-  Assert-E2eCondition -Condition ($plan.officialRepository.owner -eq 'EthanYoQ' -and $plan.officialRepository.repo -eq 'AI-Novel-Writer') -Message 'Release plan is not pinned to the official repository.'
+  Assert-E2eCondition -Condition ($plan.officialRepository.owner -eq 'qew4476' -and $plan.officialRepository.repo -eq 'AI-Novel-Writer') -Message 'Release plan is not pinned to the official repository.'
   Assert-E2eCondition -Condition ($plan.from.tag -match '^v\d+\.\d+\.\d+$') -Message 'from_tag in release plan is not a final semantic version.'
   Assert-E2eCondition -Condition ($plan.expected.tag -match '^v\d+\.\d+\.\d+$') -Message 'expected_tag in release plan is not a final semantic version.'
   Assert-E2eCondition -Condition ($plan.expected.tag -eq $plan.latest.tag) -Message 'expected_tag is not the current latest formal Release.'

@@ -1,7 +1,7 @@
 import type { UpdateBackend } from './update-service'
 
-export const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/EthanYoQ/AI-Novel-Writer/releases/latest'
-export const GITHUB_LATEST_RELEASE_PAGE = 'https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest'
+export const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/qew4476/AI-Novel-Writer/releases/latest'
+export const GITHUB_LATEST_RELEASE_PAGE = 'https://github.com/qew4476/AI-Novel-Writer/releases/latest'
 
 interface ReleaseResponse {
   ok: boolean

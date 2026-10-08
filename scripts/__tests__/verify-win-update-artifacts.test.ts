@@ -54,7 +54,7 @@ function createFormalWindowsRelease(root: string, options: { sha512?: string; re
     'win-unpacked/resources/app-update.yml',
     [
       'provider: github',
-      'owner: EthanYoQ',
+      'owner: qew4476',
       'repo: AI-Novel-Writer',
       `releaseType: ${options.releaseType ?? 'release'}`,
       'channel: latest',
@@ -82,7 +82,7 @@ describe('Windows update release artifact verification', () => {
       embeddedUpdateConfig: path.join(root, 'win-unpacked/resources/app-update.yml'),
       version: '0.2.6',
       provider: 'github',
-      owner: 'EthanYoQ',
+      owner: 'qew4476',
       repo: 'AI-Novel-Writer',
       releaseType: 'release',
     })
@@ -126,7 +126,7 @@ describe('Windows update release artifact verification', () => {
     expect(config.nsis?.artifactName).toBe('ai-novel-writer-setup-${version}.${ext}')
     expect(windowsPublish).toMatchObject({
       provider: 'github',
-      owner: 'EthanYoQ',
+      owner: 'qew4476',
       repo: 'AI-Novel-Writer',
       releaseType: 'release',
       publishAutoUpdate: true,

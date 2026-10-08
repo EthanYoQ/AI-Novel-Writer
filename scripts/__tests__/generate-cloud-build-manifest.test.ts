@@ -94,7 +94,7 @@ describe('cloud Windows build manifest', () => {
       'init',
       '--platform', 'windows',
       '--evidence-root', evidenceRoot,
-      '--repository', 'EthanYoQ/AI-Novel-Writer',
+      '--repository', 'qew4476/AI-Novel-Writer',
       '--commit', commit,
       '--run-id', '101',
       '--run-attempt', '1',

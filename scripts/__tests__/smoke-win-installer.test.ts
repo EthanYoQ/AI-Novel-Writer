@@ -50,7 +50,7 @@ describe('packaged vector qualification wiring', () => {
     expect(installer).toContain('--ai-novel-release-homepage-smoke=')
     expect(installer).toContain('packaged-official-homepage-smoke.json')
     expect(installer).toContain("$result.kind -eq 'packaged-official-homepage-smoke'")
-    expect(installer).toContain("$result.trustedIntent.url -eq 'https://github.com/EthanYoQ/AI-Novel-Writer'")
+    expect(installer).toContain("$result.trustedIntent.url -eq 'https://github.com/qew4476/AI-Novel-Writer'")
     expect(installer).toContain('$result.trustedIntent.success -eq $true')
     expect(installer).toContain('$result.failedOpenExternal.success -eq $false')
     expect(installer).toContain('$result.failedOpenExternal.rendererError.enUS -eq \'Unable to open the official homepage. Please try again later.\'')

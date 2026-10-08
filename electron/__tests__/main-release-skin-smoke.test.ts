@@ -51,7 +51,7 @@ vi.mock('../i18n', () => ({ mainT: () => 'AI Novel Writer' }))
 vi.mock('../controllers/update-controller', () => ({ registerUpdateController: vi.fn() }))
 vi.mock('../services/electron-updater-adapter', () => ({ createElectronUpdaterBackend: vi.fn() }))
 vi.mock('../services/github-release-update-backend', () => ({
-  GITHUB_LATEST_RELEASE_PAGE: 'https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest',
+  GITHUB_LATEST_RELEASE_PAGE: 'https://github.com/qew4476/AI-Novel-Writer/releases/latest',
   createGitHubReleaseUpdateBackend: vi.fn(),
 }))
 vi.mock('../services/update-preferences-store', () => ({

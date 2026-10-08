@@ -2,10 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   GITHUB_LATEST_RELEASE_API,
+  GITHUB_LATEST_RELEASE_PAGE,
   createGitHubReleaseUpdateBackend,
 } from '../github-release-update-backend'
 
 describe('GitHub latest release update backend', () => {
+  it('pins update checks and downloads to the fork repository', () => {
+    expect(GITHUB_LATEST_RELEASE_API).toBe('https://api.github.com/repos/qew4476/AI-Novel-Writer/releases/latest')
+    expect(GITHUB_LATEST_RELEASE_PAGE).toBe('https://github.com/qew4476/AI-Novel-Writer/releases/latest')
+  })
+
   it('reads only stable release metadata from the fixed repository endpoint', async () => {
     const fetcher = vi.fn(async () => ({
       ok: true,

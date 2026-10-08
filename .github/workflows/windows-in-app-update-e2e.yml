@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   update-through-real-installed-ui:
-    if: ${{ github.repository == 'EthanYoQ/AI-Novel-Writer' }}
+    if: ${{ github.repository == 'qew4476/AI-Novel-Writer' }}
     runs-on: windows-2022
     timeout-minutes: 45
     steps:
