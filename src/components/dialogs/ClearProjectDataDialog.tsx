@@ -32,8 +32,8 @@ const OPTIONS: Array<{
     key: 'creativeFields',
     labelZh: '故事架构与大纲',
     labelEn: 'Story architecture and outline',
-    descZh: '清空前提、世界观、情节大纲、文风分析与全局创作指导；角色卡保留。',
-    descEn: 'Clear premise, world building, plot outline, style analysis, and global guidance. Character cards are kept.',
+    descZh: '清空前提、世界观、角色卡与角色架构、情节大纲、文风分析与全局创作指导。',
+    descEn: 'Clear premise, world building, character cards and architecture, plot outline, style analysis, and global guidance.',
     Icon: FolderTree,
   },
   {
@@ -156,7 +156,7 @@ function ClearProjectDataDialogContents({
               {text('清除项目生成内容', 'Clear generated project data')}
             </div>
             <div className="mt-0.5 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              {text('此操作只清除所选生成数据，不删除项目目录、角色卡或模型配置。', 'Only the selected generated data will be removed. The project folder, character cards, and model settings are preserved.')}
+              {text('此操作只清除所选数据，不删除项目目录或模型配置。', 'Only the selected data will be removed. The project folder and model settings are preserved.')}
             </div>
           </div>
         </div>

@@ -1,9 +1,15 @@
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { clearBlueprintFactsWithinTransaction } from './blueprint-repository'
 import { getProjectDataRoot } from '../services/project-data-locator'
+import { commitAuthorCharacterRoster } from '../services/character-roster-author'
+import { adoptLegacyCards, readLegacyRosterSource } from '../services/legacy-roster-source'
+import { hasCharacterIdentitySchema } from './character-repository'
+import { CharacterRosterRepository } from './character-roster-repository'
+import { CHARACTER_ROSTER_SCHEMA_VERSION } from '../../src/shared/character-roster'
 
 export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText'
 
@@ -77,7 +83,8 @@ function removeMovedFiles(moved: MovedFile[]): void {
 }
 
 export class ProjectClearRepository {
-    static clearGeneratedData(options: ProjectClearOptions): ProjectClearResult {
+    /** session 是清空角色卡所需的作者身份；角色走与作者删除相同的退休路径，历史身份记录保留。 */
+    static clearGeneratedData(options: ProjectClearOptions, session?: { projectId: string; epoch: string }): ProjectClearResult {
         const db = getProjectDb()
         if (!db) throw new Error('项目数据库未打开')
 
@@ -109,6 +116,21 @@ export class ProjectClearRepository {
                 }
 
                 if (options.creativeFields) {
+                    if (hasCharacterIdentitySchema(db)) {
+                        const operationId = `project-clear:${randomUUID()}`
+                        // 升级后尚未修复的旧角色卡先按既有入口采用，才能走作者退休路径。
+                        if (CharacterRosterRepository.read(db).migrationState === 'legacy_cards_preserved') {
+                            const source = readLegacyRosterSource(db)
+                            adoptLegacyCards(db, { operationId, expectedRevision: source.snapshot.revision, expectedLegacyHash: source.legacyHash,
+                                expectedIdentityRevision: source.identityRevision, expectedFactsHash: source.factsHash })
+                        }
+                        const roster = CharacterRosterRepository.read(db)
+                        if (roster.entries.length > 0) {
+                            if (!session) throw new Error('CHARACTER_AUTHOR_SCOPE_REQUIRED')
+                            commitAuthorCharacterRoster(db, { operationId, schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION, intent: 'manual_edit',
+                                expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision!, entries: [] }, session, () => {})
+                        }
+                    }
                     db.prepare(`
                         UPDATE project_core
                         SET writing_style = '',

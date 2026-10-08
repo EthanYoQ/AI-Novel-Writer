@@ -230,7 +230,9 @@ export function registerDatabaseController() {
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      const result = ProjectClearRepository.clearGeneratedData(options)
+      const session = projectAccess.captureCurrentSession()
+      const result = ProjectClearRepository.clearGeneratedData(options,
+        session ? { projectId: session.projectId, epoch: session.leaseId } : undefined)
       return { success: true, ...result }
     } catch (err) {
       console.error('[db:project-clear-generated-data] 失败:', err)

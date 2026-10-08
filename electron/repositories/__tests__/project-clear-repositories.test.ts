@@ -4,7 +4,6 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type BetterSqlite3 from 'better-sqlite3'
 import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY } from '../../../src/shared/project-format'
 
 import { getCurrentProjectPath, getProjectDb } from '../../database'
@@ -13,8 +12,8 @@ import { CharacterRosterRepository } from '../character-roster-repository'
 import { DraftRepository } from '../draft-repository'
 import { ProjectClearRepository } from '../project-clear-repository'
 import { ProjectCoreRepository } from '../project-core-repository'
-import type { CharacterRosterCommitRequest } from '../../../src/shared/character-roster'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+import { initializeCharacterRosterMetadata } from '../character-roster-schema'
 import { migrateSchema } from '../../migrations/runner'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
@@ -32,78 +31,10 @@ function createMockDb() {
   const run = vi.fn()
   const all = vi.fn(() => [{ name: 'fact_hash' }])
   const get = vi.fn(() => ({ present: true }))
-  const prepare = vi.fn((sql: string) => ({ sql, run, all, get }))
+  const prepare = vi.fn((sql: string) => ({ sql, run, all, get: sql.includes('character_identity_meta') ? () => undefined : get }))
   const transaction = vi.fn((fn: () => void) => () => fn())
   const exec = vi.fn()
   return { prepare, transaction, run, exec }
-}
-
-function rosterCommitRequest(operationId: string, expectedRevision: number): CharacterRosterCommitRequest {
-  return {
-    operationId,
-    expectedRevision,
-    schemaVersion: 1,
-    entries: [{
-      name: '清除前角色',
-      role: 'protagonist',
-      gender: '女',
-      age: '二十五岁',
-      appearance: '黑色风衣',
-      personality: '冷静',
-      background: '旧城区调查员',
-      abilities: '线索分析',
-      motivation: '找回失踪同伴',
-      relationships: [],
-      arc: '学会信任同伴',
-      notes: '应随故事架构一起清除',
-    }],
-  }
-}
-
-function createRealProjectDb(): BetterSqlite3.Database {
-  const db = new Database(':memory:')
-  db.exec(`
-    CREATE TABLE project_core (
-      id TEXT PRIMARY KEY,
-      writing_style TEXT DEFAULT '',
-      reference_works TEXT DEFAULT '',
-      global_guidance TEXT DEFAULT '',
-      golden_finger TEXT DEFAULT '',
-      premise TEXT DEFAULT '',
-      worldbuilding TEXT DEFAULT '',
-      characters_arch TEXT DEFAULT '',
-      synopsis TEXT DEFAULT '',
-      character_states TEXT DEFAULT '',
-      plot_tree_snapshot TEXT NOT NULL DEFAULT '',
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
-    INSERT INTO project_core (id, writing_style, premise, characters_arch)
-    VALUES ('main', '旧文风', '旧故事前提', '');
-    CREATE TABLE characters (
-      name TEXT PRIMARY KEY,
-      role TEXT DEFAULT 'supporting',
-      gender TEXT DEFAULT '',
-      age TEXT DEFAULT '',
-      appearance TEXT DEFAULT '',
-      personality TEXT DEFAULT '',
-      background TEXT DEFAULT '',
-      abilities TEXT DEFAULT '',
-      motivation TEXT DEFAULT '',
-      relationships TEXT DEFAULT '',
-      arc TEXT DEFAULT '',
-      notes TEXT DEFAULT '',
-      cs_location TEXT DEFAULT '',
-      cs_power_level TEXT DEFAULT '',
-      cs_physical_state TEXT DEFAULT '',
-      cs_mental_state TEXT DEFAULT '',
-      cs_key_items TEXT DEFAULT '',
-      cs_recent_events TEXT DEFAULT '',
-      cs_updated_at_chapter INTEGER DEFAULT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
-  `)
-  return db
 }
 
 beforeEach(() => {
@@ -111,21 +42,30 @@ beforeEach(() => {
 })
 
 describe('project clear repositories', () => {
-  it.each([false, true])('preserves the current identity schema and readable roster, with legacy cards=%s', populated => {
+  it.each([false, true])('clears character cards through identity retirement and keeps the roster readable, with legacy cards=%s', populated => {
     const db = new Database(':memory:')
     try {
       initializeLegacyBaselineSchema(db)
-      if (populated) db.exec("INSERT INTO characters(name,notes) VALUES('旧角色','保留原文')")
+      if (populated) {
+        db.exec("INSERT INTO characters(name,notes) VALUES('旧角色','保留原文'); DELETE FROM character_roster_meta")
+        initializeCharacterRosterMetadata(db)
+      }
       migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
       db.exec("INSERT INTO project_core(id,premise) VALUES('main','清空前提')")
       db.pragma('foreign_keys=ON')
       vi.mocked(getProjectDb).mockReturnValue(db)
-      const before = CharacterRosterRepository.read(db)
-      const aliases = db.prepare('SELECT * FROM character_aliases').all()
+      expect(CharacterRosterRepository.read(db).entries).toHaveLength(populated ? 1 : 0)
+      const aliasRows = () => db.prepare('SELECT character_id,name,source_key,valid_from FROM character_aliases').all()
+      const aliases = aliasRows()
       const origins = db.prepare('SELECT * FROM character_identity_origins').all()
-      ProjectClearRepository.clearGeneratedData({ creativeFields: true })
-      expect(CharacterRosterRepository.read(db)).toEqual(before)
-      expect(db.prepare('SELECT * FROM character_aliases').all()).toEqual(aliases)
+      ProjectClearRepository.clearGeneratedData({ creativeFields: true }, { projectId: 'project', epoch: 'lease' })
+      const after = CharacterRosterRepository.read(db)
+      expect(after.entries).toEqual([])
+      expect(['ready', 'empty']).toContain(after.status)
+      expect(db.prepare('SELECT characters_arch FROM project_core').pluck().get()).toBe(after.renderedMarkdown)
+      expect(db.prepare('SELECT COUNT(*) FROM characters WHERE retired=0').pluck().get()).toBe(0)
+      expect(aliasRows()).toEqual(aliases)
+      expect(db.prepare('SELECT COUNT(*) FROM character_aliases WHERE valid_through IS NULL').pluck().get()).toBe(0)
       expect(db.prepare('SELECT * FROM character_identity_origins').all()).toEqual(origins)
       expect(db.pragma('foreign_key_check')).toEqual([])
     } finally { db.close() }
@@ -201,33 +141,6 @@ describe('project clear repositories', () => {
     ]))
     expect(statements).not.toContain("UPDATE project_core SET plot_tree_snapshot = '' WHERE id = 'main'")
     expect(result.cleared).toEqual(['blueprints', 'creativeFields'])
-  })
-
-  it('preserves character cards and their projection when creative fields are cleared', () => {
-    const db = createRealProjectDb()
-    vi.mocked(getProjectDb).mockReturnValue(db as never)
-    vi.mocked(getCurrentProjectPath).mockReturnValue(null)
-
-    try {
-      const previousPlotTree = JSON.stringify({ schemaVersion: 1, sourceRevision: 'before-clear' })
-      db.prepare("UPDATE project_core SET plot_tree_snapshot = ? WHERE id = 'main'").run(previousPlotTree)
-      const beforeClear = CharacterRosterRepository.commit(rosterCommitRequest('roster-before-clear', 0))
-      expect(beforeClear.snapshot).toMatchObject({ status: 'ready', entries: [expect.objectContaining({ name: '清除前角色' })] })
-      expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_operations').get()).toEqual({ count: 1 })
-
-      expect(ProjectClearRepository.clearGeneratedData({ creativeFields: true })).toMatchObject({
-        cleared: ['creativeFields'],
-      })
-
-      expect(db.prepare('SELECT characters_arch FROM project_core WHERE id = ?').get('main'))
-        .toEqual({ characters_arch: beforeClear.snapshot.renderedMarkdown })
-      expect(db.prepare('SELECT plot_tree_snapshot FROM project_core WHERE id = ?').get('main'))
-        .toEqual({ plot_tree_snapshot: previousPlotTree })
-      expect(CharacterRosterRepository.read()).toEqual(beforeClear.snapshot)
-      expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_operations').get()).toEqual({ count: 1 })
-    } finally {
-      db.close()
-    }
   })
 
   it('removes generated root chapter txt files when generated text is cleared', () => {
