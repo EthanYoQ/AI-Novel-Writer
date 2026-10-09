@@ -775,7 +775,7 @@ describe('batch chapter completion mode browser flow', () => {
     const nextDraftReady = () => new Promise<void>(resolve => { notifyDraftCompletionReady = resolve })
     let draftReady = nextDraftReady()
     const completeNextDraft = async () => {
-      await draftReady
+      await act(async () => { await draftReady })
       expect(pendingDraftCompletions).toHaveLength(1)
       draftReady = nextDraftReady()
       await act(async () => pendingDraftCompletions.shift()?.())
@@ -794,7 +794,7 @@ describe('batch chapter completion mode browser flow', () => {
     for (let attempt = 0; attempt < 6; attempt++) {
       await completeNextDraft()
     }
-    await draftReady
+    await act(async () => { await draftReady })
     expect(pendingDraftCompletions).toHaveLength(1)
     expect(draftRecord).toMatchObject({ chapterNumber: 5, content: condensed, wordCount: 1350 })
     await act(async () => useLayoutStore.setState({ bottomTab: 'log' }))
@@ -803,7 +803,9 @@ describe('batch chapter completion mode browser flow', () => {
     for (let chapter = 6; chapter <= 10; chapter++) {
       await completeNextDraft()
     }
-    await vi.waitFor(() => expect(useWorkflowStore.getState().history[0]?.status).toBe('completed'))
+    await act(async () => {
+      await vi.waitFor(() => expect(useWorkflowStore.getState().history[0]?.status).toBe('completed'))
+    })
     const run = useWorkflowStore.getState().history[0]!
     expect(run.steps).toHaveLength(10)
     expect(run.steps.every(step => step.status === 'completed')).toBe(true)
