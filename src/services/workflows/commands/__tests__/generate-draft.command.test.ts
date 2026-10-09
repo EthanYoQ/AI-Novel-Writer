@@ -2501,17 +2501,17 @@ ${headingPrefix}第3章：潮门
     {
       writingLanguage: 'zh-CN' as const,
       ...FINALIZED_FACT_PRECEDENCE['zh-CN'],
-      continuationTail: '【已写正文末尾】',
+      continuationContext: '【本章已写正文全文】',
     },
     {
       writingLanguage: 'en-US' as const,
       ...FINALIZED_FACT_PRECEDENCE['en-US'],
-      continuationTail: '[End of existing manuscript]',
+      continuationContext: '[Full existing manuscript for this chapter]',
     },
   ])('puts the $writingLanguage finalized-fact precedence rule in initial and continuation requests', async ({
     writingLanguage, heading, unresolved, verification, planDecision, supportedDecision, authorBoundary, noRetroactiveExecution,
     newAction, actionConsistency,
-    timeRuleStart, timeRuleEnd, lengthContract, continuationTail,
+    timeRuleStart, timeRuleEnd, lengthContract, continuationContext,
   }) => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(100), 'length', 1),
@@ -2550,7 +2550,7 @@ ${headingPrefix}第3章：潮门
       expect(task.messages[0]!.content).not.toContain('核查遇阻；承担代价')
       expect(task.messages[0]!.content).not.toContain('作者更正：林澄撤回先前核查安排。')
     }
-    expect(continuationTask!.messages[1]!.content).toContain(continuationTail)
+    expect(continuationTask!.messages[1]!.content).toContain(continuationContext)
   })
 
   describe('automatic short outline', () => {

@@ -62,7 +62,6 @@ import type { DraftSourceDependency } from '../../../shared/draft-source-depende
 export { countDraftUnits } from '../../../shared/draft-units'
 export { previousChapterEnding } from '../chapter-materials'
 
-const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const NEXT_CHAPTER_HEAD_MAX_CHARS = 1200
 const CROSS_CHAPTER_REUSE_CJK_NGRAM_CHARS = 8
@@ -1414,7 +1413,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const remaining = Math.max(0, params.targetChars - currentChars)
       const ceiling = Math.max(0, range.maximum - currentChars)
       const allowance = remaining > 0 ? Math.min(remaining, ceiling) : Math.min(150, ceiling)
-      const visibleTail = sanitizeDraftText(draft, params.compositionVersion).slice(-CONTINUE_PROMPT_MAX_CHARS)
+      const visibleDraft = sanitizeDraftText(draft, params.compositionVersion)
       const recoveryInstruction = recoveryPending
         ? promptLanguageText(
             params.writingLanguage,
@@ -1443,7 +1442,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
 【硬性要求】
 - 只输出新增正文，不要复述已写内容。
-- 从“已写正文末尾”自然接下去，保持同一场景逻辑或合理转场。
+- 根据下方本章已写正文全文，从末尾自然接下去，保持同一场景逻辑或合理转场。
 ${lengthInstruction}
 - 不要输出标题、解释、总结、Markdown、思考过程或“点我继续”。
 - 避免重复已写正文中的整句、整段、动作链和意象。
@@ -1453,13 +1452,13 @@ ${lengthContract}
 
 ${authorMaterial}
 
-【已写正文末尾】
-${visibleTail}`,
+【本章已写正文全文】
+${visibleDraft}`,
         `${recoveryInstruction}Continue the current chapter seamlessly.
 
 [Requirements]
 - Output only new manuscript prose; do not repeat existing text.
-- Continue naturally from the existing ending, preserving the same scene logic or making a justified transition.
+- Read the full existing manuscript below and continue naturally from its ending, preserving the same scene logic or making a justified transition.
 ${lengthInstruction}
 - Do not output a title, explanation, summary, Markdown, reasoning, or an interface continuation prompt.
 - Avoid repeating complete sentences, paragraphs, action sequences, or imagery from the existing manuscript.
@@ -1469,8 +1468,8 @@ ${lengthContract}
 
 ${authorMaterial}
 
-[End of existing manuscript]
-${visibleTail}`,
+[Full existing manuscript for this chapter]
+${visibleDraft}`,
       )
 
       const preview = createDraftStreamPreview(
