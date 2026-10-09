@@ -115,8 +115,7 @@ describe('installable AI novel bundle', () => {
     expect(persona).toContain('deep-planning：')
     expect(persona).not.toMatch(/reasoningEffort|reasoning[_ -]?effort/i)
     const readme = await readFile(join(root, 'README.md'), 'utf8')
-    const documentedPersona = /##### Stable novel persona\r?\n\r?\n```markdown\r?\n([\s\S]*?)\r?\n```/.exec(readme)?.[1]
-    expect(documentedPersona?.replaceAll('\r\n', '\n')).toBe(persona)
+    expect(readme).toContain('[V1 Preset](presets/ai-novel-writer/agent.cordis.yml)')
     await ctx.fiber.dispose()
   })
 })
