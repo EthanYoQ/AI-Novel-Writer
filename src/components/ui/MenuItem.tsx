@@ -2,7 +2,6 @@ import { useLocaleStore } from '../../stores/locale-store'
 
 /**
  * 通用菜单项按钮
- * 统一替换 AgentHeader.MoreMenuItem
  */
 export interface MenuItemProps {
   label: string

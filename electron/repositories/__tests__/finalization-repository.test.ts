@@ -3,18 +3,23 @@ import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import type BetterSqlite3 from 'better-sqlite3'
 
-import { getProjectDb } from '../../database'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { getCurrentProjectPath, getProjectDb } from '../../database'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import { FinalizationRepository } from '../finalization-repository'
 
 vi.mock('../../database', () => ({
   getProjectDb: vi.fn(),
+  getCurrentProjectPath: vi.fn(() => null),
 }))
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 
 let db: BetterSqlite3.Database
+const roots: string[] = []
 
 function seedDraft(): void {
   db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(11, '数据库中的旧正文')
@@ -28,7 +33,7 @@ function hash(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex')
 }
 
-function commitSnapshot(): ReturnType<typeof FinalizationRepository.commit> {
+function commitSnapshot(contentRevision = 8): ReturnType<typeof FinalizationRepository.commit> {
   return FinalizationRepository.commit({
     finalizationId: 'finalization-1',
     draftId: 17,
@@ -36,7 +41,7 @@ function commitSnapshot(): ReturnType<typeof FinalizationRepository.commit> {
     chapterTitle: '第一章',
     content: 'Finalized snapshot shown to the user',
     contentHash: hash('Finalized snapshot shown to the user'),
-    contentRevision: 8,
+    contentRevision,
     targetFileName: '第1章 第一章.txt',
   })
 }
@@ -65,19 +70,54 @@ beforeEach(() => {
       target_file_name TEXT NOT NULL,
       publication_status TEXT NOT NULL,
       last_error TEXT NOT NULL DEFAULT '',
-      published_at TEXT
+      published_at TEXT,
+      knowledge_document_id TEXT NOT NULL DEFAULT '',
+      updated_at TEXT
     );
   `)
   vi.mocked(getProjectDb).mockReturnValue(db)
+  vi.mocked(getCurrentProjectPath).mockReturnValue(null)
   seedDraft()
 })
 
 afterEach(() => {
   db.close()
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
   vi.clearAllMocks()
 })
 
+function freezeFinalization(id: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-finalization-freeze-'))
+  roots.push(root)
+  const storage = path.join(root, '.ai-novel')
+  fs.mkdirSync(storage)
+  fs.writeFileSync(path.join(storage, 'portable-runtime-freeze.json'), JSON.stringify({
+    version: 1, originProjectId: '11111111-1111-4111-8111-111111111111', snapshotGeneration: 'snapshot-1',
+    nonReplayable: true, requiresRuntimeFreezeGuard: true, avatarReferenceProjections: [], records: [{
+      projectionId: `history:finalization_outbox:${id}`, table: 'finalization_outbox', recordId: id,
+      terminalState: 'pending', projection: {}, projectionHash: 'a'.repeat(64), excludedFields: [],
+      nonReplayable: true, originalReceiptVerified: false,
+    }],
+  }), { mode: 0o600 })
+  return root
+}
+
 describe('FinalizationRepository transaction seam', () => {
+  it('persists the first positive source revision unchanged in the outbox', () => {
+    expect(commitSnapshot(1).contentRevision).toBe(1)
+    expect(db.prepare('SELECT content_revision FROM finalization_outbox WHERE draft_id=17').get())
+      .toEqual({ content_revision: 1 })
+  })
+
+  it('does not link a knowledge document to a frozen imported outbox', () => {
+    commitSnapshot()
+    const root = freezeFinalization('finalization-1')
+    vi.mocked(getCurrentProjectPath).mockReturnValue(root)
+    expect(() => FinalizationRepository.linkKnowledgeDocument(17, 'knowledge-document')).toThrow('PORTABLE_RUNTIME_FROZEN')
+    expect(db.prepare('SELECT knowledge_document_id FROM finalization_outbox WHERE draft_id=17').get())
+      .toEqual({ knowledge_document_id: '' })
+  })
+
   it('commits content, word count, finalized status, and pending publication outbox as one fact', () => {
     const committed = commitSnapshot()
 

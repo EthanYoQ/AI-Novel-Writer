@@ -53,7 +53,7 @@ beforeEach(() => {
   useWorkflowStore.setState({ activeRuns: [], history: [] })
   setActiveProjectSessionContext(projectSession)
 
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke: vi.fn(async (channel: string) => {
@@ -64,6 +64,7 @@ beforeEach(() => {
         if (channel === 'db:character-roster-read') {
           return { status: 'empty', revision: 0, entries: [], renderedMarkdown: '' }
         }
+        if (channel === 'generation:list') return []
         throw new Error(`未预期的 IPC 通道：${channel}`)
       }),
       on: vi.fn(() => () => {}),
@@ -83,7 +84,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
@@ -130,7 +131,8 @@ describe('WorldBuildingEditor 世界观恢复候选', () => {
       .find(button => button.textContent?.includes('查看候选'))
     expect(viewButton).toBeTruthy()
     await act(async () => viewButton?.click())
-    expect(container.textContent).toContain('不会自动写入正式世界观')
+    expect(container.textContent).toContain('不会自动写入正式内容')
+    expect(container.textContent).not.toContain('未预期的 IPC 通道')
     expect(container.textContent).toContain('倒悬古城依靠记忆结晶运转')
   })
 })

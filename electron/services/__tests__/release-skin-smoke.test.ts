@@ -72,10 +72,12 @@ function withSmokeEnvironment<T>(root: string, callback: () => T): T {
     AI_NOVEL_RELEASE_SKIN_SMOKE: process.env.AI_NOVEL_RELEASE_SKIN_SMOKE,
     AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN: process.env.AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN,
     AI_NOVEL_VELA_HOME: process.env.AI_NOVEL_VELA_HOME,
+    AI_NOVEL_APP_DATA_HOME: process.env.AI_NOVEL_APP_DATA_HOME,
   }
   process.env.AI_NOVEL_RELEASE_SKIN_SMOKE = '1'
   process.env.AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN = smokeToken
   process.env.AI_NOVEL_VELA_HOME = path.join(root, 'isolated-vela-home')
+  process.env.AI_NOVEL_APP_DATA_HOME = path.join(root, 'isolated-canonical-home')
   try {
     return callback()
   } finally {

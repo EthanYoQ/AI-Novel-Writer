@@ -2,12 +2,28 @@ import { create } from 'zustand'
 
 import type { DraftStatus } from '../shared/draft-status'
 import { sameProjectPathKey } from '../shared/project-session-context'
-import { countUnsavedEditorItems } from './editor-unsaved'
+import { countUnsavedEditorItems, countUnsavedEditorItemsForProject } from './editor-unsaved'
+import { canonicalResourceUri } from '../shared/project-paths'
+import type { GenerationRecoveryContext } from '../shared/generation-owner-contract'
+import type { AllInvokeChannels } from '../shared/ipc-channels'
 
 export interface EditorTabSaveSnapshot {
   content: string
   contentRevision: number
 }
+
+type PlanningSaveChannel = 'db:project-core-synopsis-commit' | 'db:blueprint-commit-range'
+
+export type PlanningRecoverySaveSnapshot = EditorTabSaveSnapshot & {
+  status: 'pending' | 'saved'
+} & {
+  [Channel in PlanningSaveChannel]: {
+    channel: Channel
+    request: AllInvokeChannels[Channel]['args'][0] & {
+      authorRecovery: NonNullable<AllInvokeChannels[Channel]['args'][0]['authorRecovery']>
+    }
+  }
+}[PlanningSaveChannel]
 
 /** 编辑器 Tab 数据 */
 export interface EditorTab {
@@ -58,6 +74,31 @@ export interface EditorTab {
   narrativeThreadView?: 'plot-tree' | 'plans'
   /** 重复打开同一叙事线 Tab 时递增，确保本次视图请求生效。 */
   narrativeThreadViewRequest?: number
+  planningRecovery?: GenerationRecoveryContext
+  planningSaveOperationId?: string
+  planningSaveEnd?: string
+  planningSaveSnapshot?: PlanningRecoverySaveSnapshot
+}
+
+export function openPlanningRecoveryDraft(context: GenerationRecoveryContext, projectKey: string, name: string): void {
+  const draft = context.plotOutlineRecovery?.draft ?? context.blueprintRecovery?.draft
+  if (draft === undefined) return
+  const outline = Boolean(context.plotOutlineRecovery)
+  useEditorStore.getState().openFile({
+    id: `planning-recovery:${context.handle.runId}`,
+    name,
+    type: outline ? 'arch-file' : 'chapter-card',
+    ...(outline ? { filePath: 'ai-novel://core/synopsis' } : {}),
+    projectKey,
+    content: draft,
+    savedContent: '',
+    originalContent: draft,
+    dirty: draft.length > 0,
+    planningRecovery: context,
+    planningSaveOperationId: crypto.randomUUID(),
+    planningSaveEnd: String(context.plotOutlineRecovery?.completeChapters.at(-1)
+      ?? context.plotOutline?.range.from ?? context.blueprintRecovery?.editRange?.from ?? ''),
+  })
 }
 
 interface EditorState {
@@ -104,6 +145,7 @@ interface EditorState {
   markTabSaved: (tabId: string, savedContent?: string) => void
   /** 按保存开始时的快照结算；期间有新输入时只更新已保存基准。 */
   settleTabSave: (tabId: string, snapshot: EditorTabSaveSnapshot) => void
+  setPlanningSaveSnapshot: (tabId: string, snapshot: PlanningRecoverySaveSnapshot | undefined) => void
   /** 结算修订合并；期间有新输入时保留当前正文与未保存状态。 */
   settleMergedRevision: (
     tabId: string,
@@ -164,7 +206,7 @@ export function registerEditorExitSaveHandler(handler: EditorExitSaveHandler): (
 // These store-owned removal paths are the handler lifetime boundary.
 function removeEditorExitSaveHandlers(tab: EditorTab): void {
   exitSaveHandlers.delete(`tab:${tab.id}`)
-  if (tab.projectKey && BACKGROUND_LEDGER_BY_EDITOR_TYPE[tab.type]) {
+  if (tab.projectKey && !tab.planningRecovery && BACKGROUND_LEDGER_BY_EDITOR_TYPE[tab.type]) {
     exitSaveHandlers.delete(exitSaveTypeKey(tab.type, tab.projectKey))
   }
 }
@@ -201,25 +243,42 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   draftLedgers: {},
 
   openFile: (tab) => {
+    const canonical = (value: string | undefined): string | undefined => {
+      if (value === undefined) return value
+      const resource = canonicalResourceUri(value)
+      if (!resource && value.includes('://')) throw new Error('INVALID_RESOURCE_URI')
+      return resource ?? value
+    }
     const projectScopedTab = {
       ...tab,
+      filePath: canonical(tab.filePath),
+      revisionPath: canonical(tab.revisionPath),
+      chapterDir: canonical(tab.chapterDir),
+      reportPath: canonical(tab.reportPath),
       id: createProjectScopedEditorTabId(tab.id, tab.type, tab.projectKey),
     }
-    const tabWithDraftState = hasBackgroundProjectDraft(get().draftLedgers, projectScopedTab)
+    const tabWithDraftState = !tab.planningRecovery && hasBackgroundProjectDraft(get().draftLedgers, projectScopedTab)
       ? { ...projectScopedTab, dirty: true }
       : projectScopedTab
     // diff 类型每次内容不同，只按 id 精确匹配（不走 filePath 去重）
     // 其他类型（含 review-report）按 filePath + type 去重
-    const idOnly = tab.type === 'diff'
+    const idOnly = tab.type === 'diff' || Boolean(tab.planningRecovery)
     const existing = get().tabs.find((t) =>
       t.id === tabWithDraftState.id ||
       (!idOnly
         && tabWithDraftState.filePath !== undefined
-        && t.filePath === tabWithDraftState.filePath
-        && t.type === tabWithDraftState.type
+        && canonical(t.filePath) === tabWithDraftState.filePath
+        && t.type === tabWithDraftState.type && !t.planningRecovery
         && t.projectKey === tabWithDraftState.projectKey)
     )
     if (existing) {
+      if (existing.dirty && existing.filePath !== canonical(existing.filePath)) {
+        set(s => ({ tabs: s.tabs.map(t => t.id === existing.id ? {
+          ...t, filePath: canonical(t.filePath), revisionPath: canonical(t.revisionPath),
+          chapterDir: canonical(t.chapterDir), reportPath: canonical(t.reportPath),
+        } : t), activeTabId: existing.id }))
+        return
+      }
       // diff / review-report 每次内容不同，强制更新内容后激活
       if (tabWithDraftState.type === 'diff' || tabWithDraftState.type === 'review-report') {
         set((s) => ({
@@ -232,6 +291,10 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
           tabs: s.tabs.map((t) => t.id === existing.id
             ? {
                 ...t,
+                filePath: canonical(t.filePath),
+                revisionPath: canonical(t.revisionPath),
+                chapterDir: canonical(t.chapterDir),
+                reportPath: canonical(t.reportPath),
                 name: tabWithDraftState.name,
                 ...(tabWithDraftState.draftId === undefined
                   ? {}
@@ -280,7 +343,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setProjectEditorDirty: (type, projectKey, dirty) => {
     set((state) => ({
       tabs: state.tabs.map(tab => (
-        tab.type === type && tab.projectKey === projectKey
+        tab.type === type && tab.projectKey === projectKey && !tab.planningRecovery
           ? { ...tab, dirty }
           : tab
       )),
@@ -364,6 +427,10 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     }))
   },
 
+  setPlanningSaveSnapshot: (tabId, snapshot) => {
+    set(state => ({ tabs: state.tabs.map(tab => tab.id === tabId ? { ...tab, planningSaveSnapshot: snapshot } : tab) }))
+  },
+
   settleMergedRevision: (tabId, snapshot, mergedContent) => {
     set((state) => ({
       tabs: state.tabs.map(tab => {
@@ -426,13 +493,19 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 }))
 
-export async function saveDirtyEditorChangesForExit(currentProjectKey: string | undefined): Promise<void> {
+export async function saveDirtyEditorChangesForExit(
+  currentProjectKey: string | undefined, scope: 'all' | 'project' = 'all',
+): Promise<void> {
+  const countUnsaved = (state: Pick<EditorState, 'tabs' | 'draftLedgers'>) => scope === 'project' && currentProjectKey
+    ? countUnsavedEditorItemsForProject(state.tabs, state.draftLedgers, currentProjectKey)
+    : countUnsavedEditorItems(state.tabs, state.draftLedgers)
   const initial = useEditorStore.getState()
-  if (countUnsavedEditorItems(initial.tabs, initial.draftLedgers) === 0) return
+  if (countUnsaved(initial) === 0) return
 
   const handlers = new Set<EditorExitSaveHandler>()
   for (const tab of initial.tabs) {
     if (!tab.dirty) continue
+    if (scope === 'project' && tab.projectKey !== currentProjectKey) continue
     if (!tab.projectKey || !currentProjectKey || !sameProjectPathKey(tab.projectKey, currentProjectKey)) {
       throw new Error('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出')
     }
@@ -456,6 +529,7 @@ export async function saveDirtyEditorChangesForExit(currentProjectKey: string | 
     }
     for (const project of projects) {
       if (typeof project.projectKey !== 'string') continue
+      if (scope === 'project' && project.projectKey !== currentProjectKey) continue
       if (!currentProjectKey || !sameProjectPathKey(project.projectKey, currentProjectKey)) {
         throw new Error('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出')
       }
@@ -468,7 +542,7 @@ export async function saveDirtyEditorChangesForExit(currentProjectKey: string | 
   for (const handler of handlers) await handler.save()
 
   const settled = useEditorStore.getState()
-  if (countUnsavedEditorItems(settled.tabs, settled.draftLedgers) !== 0) {
+  if (countUnsaved(settled) !== 0) {
     throw new Error('保存期间仍有未保存修改，已取消退出')
   }
 }

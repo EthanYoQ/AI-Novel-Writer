@@ -1,4 +1,7 @@
+import { composeVisibleContinuation, CONTINUATION_VISIBLE_TAIL_CHARS, VISIBLE_CONTINUATION_VERSION } from '../../../shared/visible-continuation'
+import { assertMechanicallyCompleteVisibleText } from '../../../shared/visible-text-integrity'
 import { describe, expect, it, vi } from 'vitest'
+import { createGenerationHarness } from '../../generation/generation-harness'
 
 import {
   appendVisibleTextContinuation,
@@ -9,6 +12,58 @@ import {
 } from '../bounded-completion'
 
 describe('bounded completion', () => {
+  it.each(['zh-CN', 'en-US'] as const)('preserves the full original append task and bounds only the visible tail (%s)', async writingLanguage => {
+    const middleRule = 'AUTHOR_MIDDLE_RULE：主角不得使用魔法。'
+    const originalPrompt = `AUTHOR_BEGIN\n${'前置作者材料。'.repeat(1_000)}\n${middleRule}\n${'后置作者材料。'.repeat(1_000)}\nAUTHOR_END`
+    const partial = `EARLY_VISIBLE_TEXT\n${'已有世界观规则。'.repeat(800)}\nLATEST_VISIBLE_TEXT`
+    const requestContinuation = vi.fn().mockResolvedValue({ content: '新的正文完成了世界观规则。', finishReason: 'stop' })
+
+    const result = await completeBoundedCompletion({
+      initial: { content: partial, finishReason: 'length' },
+      mode: 'append-visible-text', maxContinuations: 1, originalPrompt, writingLanguage,
+      requestContinuation,
+    })
+
+    const prompt = requestContinuation.mock.calls[0]?.[0] as string
+    expect(prompt).toContain(middleRule)
+    expect(prompt).toContain(originalPrompt)
+    expect(prompt).toContain(partial.slice(-CONTINUATION_VISIBLE_TAIL_CHARS))
+    expect(prompt).not.toContain('EARLY_VISIBLE_TEXT')
+    expect(result).toContain(partial)
+  })
+
+  describe.each([
+    'Here is the truth: I never left the island. Everyone who said otherwise was lying.',
+    '以下是我从父亲遗物中找到的最后一份内容。它改变了我们所有人的命运。',
+    'Below is the valley where my brother disappeared. I had returned to find him.',
+    'I will write to my father before dawn.',
+    'As requested, I left the key beneath the stone.',
+    '根据您的要求，我把信交给了守门人。',
+  ])('narrative opening: %s', content => {
+    it('passes the shared mechanical integrity gate', () => {
+      expect(() => assertMechanicallyCompleteVisibleText(content, 'zh-CN')).not.toThrow()
+    })
+
+    it('returns the complete prose unchanged without a continuation', async () => {
+      const requestContinuation = vi.fn()
+      await expect(completeBoundedCompletion({
+        initial: { content, finishReason: 'stop' }, mode: 'append-visible-text', maxContinuations: 3,
+        originalPrompt: '输出完整正文', writingLanguage: 'zh-CN', requestContinuation,
+      })).resolves.toBe(content)
+      expect(requestContinuation).not.toHaveBeenCalled()
+    })
+  })
+
+  it('preserves source refrains but rejects newly duplicated prose in a revision', async () => {
+    const refrain = '旧城的钟声越过河岸，守夜人举起灯火，等待远方的船回来。'.repeat(6)
+    const source = `${refrain}\n\n多年以前。\n\n${refrain}`
+    const request = { initial: { content: source, finishReason: 'stop' as const }, mode: 'append-visible-text' as const,
+      sourceText: source, maxContinuations: 0, originalPrompt: '修订', writingLanguage: 'zh-CN' as const, requestContinuation: vi.fn() }
+    await expect(completeBoundedCompletion(request)).resolves.toBe(source)
+    await expect(completeBoundedCompletion({ ...request, initial: { content: `${source}\n\n${refrain}`, finishReason: 'stop' } }))
+      .rejects.toThrow('明显重复段落')
+  })
+
   it.each([
     {
       mode: 'replace-structured-output' as const,
@@ -235,6 +290,8 @@ describe('bounded completion', () => {
     ['a code fence', `\`\`\`markdown\n${'完整正文。'.repeat(40)}\n\`\`\``, '代码围栏'],
     ['opening meta-talk', `以下是根据您的要求修订后的完整章节。\n\n${'完整正文。'.repeat(40)}`, '首段元话术'],
     ['single-line opening meta-talk', `以下是根据您的要求修订后的完整章节。\n${'完整正文。'.repeat(40)}`, '首段元话术'],
+    ...['以下是修订后的完整正文：', '以下是修订后的完整章节正文：', 'Here is the revised chapter:', 'Below is the complete text:', 'As requested, here is the revised chapter:']
+      .map(opening => ['explicit output introduction', `${opening}\n\n${'完整正文。'.repeat(40)}`, '首段元话术']),
     ['a truncation marker', `${'完整正文。'.repeat(40)}\n\n…[内容已按上下文预算截断]…`, '截断标记'],
     ['an orphan think fragment', `${'完整正文。'.repeat(40)}\n\n</think`, 'think 标签残片'],
     ['an obvious repeated paragraph', `${'重复段落内容。'.repeat(20)}\n\n${'重复段落内容。'.repeat(20)}`, '重复段落'],
@@ -301,10 +358,7 @@ describe('bounded completion', () => {
     expect(requestContinuation).not.toHaveBeenCalled()
   })
 
-  it.each([
-    { label: 'declared 8k context', contextWindowTokens: 8_192 },
-    { label: 'unknown context', contextWindowTokens: null },
-  ])('preserves the complete structured task and visible reference for $label', async ({ contextWindowTokens }) => {
+  it('preserves the complete structured task and visible reference', async () => {
     const originalPrompt = `任务合同开头：必须返回完整章节 JSON。\n${'原始任务内容'.repeat(1_500)}\n任务合同结尾：不得只补后缀。`
     const partial = `上一轮输出开头：{"chapters":[\n${'不完整可见 JSON'.repeat(1_500)}\n上一轮输出结尾：{"number":1}`
     const requestContinuation = vi.fn().mockResolvedValue({
@@ -318,11 +372,6 @@ describe('bounded completion', () => {
       maxContinuations: 1,
       originalPrompt,
       writingLanguage: 'zh-CN',
-      promptBudget: {
-        contextWindowTokens,
-        maxOutputTokens: 4_096,
-        systemPromptChars: 0,
-      },
       requestContinuation,
     })).resolves.toBe('{"chapters":[{"number":1}]}')
 
@@ -346,10 +395,6 @@ describe('bounded completion', () => {
       maxContinuations: 1,
       originalPrompt,
       writingLanguage: 'zh-CN',
-      promptBudget: {
-        contextWindowTokens: 4_096,
-        maxOutputTokens: 4_096,
-      },
       requestContinuation,
     })).resolves.toBe('{"complete":true}')
 
@@ -358,25 +403,63 @@ describe('bounded completion', () => {
     expect(continuationPrompt).toContain(partial)
   })
 
-  it('does not fabricate an 8192 context window and pre-reject an unknown model with an 8192 output cap', async () => {
-    const requestContinuation = vi.fn().mockResolvedValue({
-      content: '{"chapters":[]}',
-      finishReason: 'stop',
+  it.each([
+    { code: 'CONTEXT_BUDGET_EXHAUSTED', contextWindowTokens: 2_500, maxAttempts: 8, maxRequestedOutputTokens: 65_536 },
+    { code: 'ATTEMPT_BUDGET_EXHAUSTED', contextWindowTokens: null, maxAttempts: 1, maxRequestedOutputTokens: 65_536 },
+    { code: 'REQUESTED_TOKEN_BUDGET_EXHAUSTED', contextWindowTokens: null, maxAttempts: 8, maxRequestedOutputTokens: 8192 },
+  ])('retains the partial without dispatch when the generation session rejects $code', async ({
+    code, contextWindowTokens, maxAttempts, maxRequestedOutputTokens,
+  }) => {
+    const partial = '先前已经生成的世界观内容。'.repeat(400)
+    const originalPrompt = '完整作者材料。'.repeat(150)
+    const complete = vi.fn().mockResolvedValue({ content: partial, finishReason: 'length' })
+    const session = createGenerationHarness({
+      modelSource: { snapshotDefaultModel: () => ({
+        model: { id: 'bounded-model', provider: 'custom', protocol: 'openai', modelName: 'bounded-model',
+          baseUrl: 'https://provider.example/v1', maxTokens: 8192 },
+        revision: 'bounded-model-revision', modelExecutionLeaseId: 'bounded-model-lease',
+        resolvedCapabilities: { contextWindowTokens, maxOutputTokens: 8192, reasoning: null, structuredOutput: null, usage: null,
+          source: { contextWindowTokens: contextWindowTokens === null ? 'unknown' : 'user-operational-cap',
+            maxOutputTokens: 'user-operational-cap', featureFlags: 'unknown' } },
+      }) },
+      completionPort: { complete },
+      policy: { maxAttempts, maxRequestedOutputTokens, maxRequestedOutputTokensPerAttempt: 8192, deadlineMs: 60_000 },
+    }).openSession()
+    const task = (prompt: string) => ({
+      purpose: 'generate-world-building', output: 'visible-text' as const,
+      messages: [{ role: 'user' as const, content: prompt }],
     })
+    const initial = await session.complete(task(originalPrompt))
+    const onInterrupted = vi.fn()
+    const requestContinuation = vi.fn((prompt: string) => session.complete(task(prompt)))
 
     await expect(completeBoundedCompletion({
-      initial: { content: '{"chapters":[', finishReason: 'length' },
-      mode: 'replace-structured-output',
-      maxContinuations: 1,
-      originalPrompt: '返回完整 JSON',
-      writingLanguage: 'zh-CN',
-      promptBudget: {
-        contextWindowTokens: null,
-        maxOutputTokens: 8192,
-      },
-      requestContinuation,
-    })).resolves.toBe('{"chapters":[]}')
+      initial, mode: 'append-visible-text', maxContinuations: 3, originalPrompt,
+      writingLanguage: 'zh-CN', requestContinuation, onInterrupted,
+    })).rejects.toMatchObject({ code })
 
     expect(requestContinuation).toHaveBeenCalledOnce()
+    expect(requestContinuation.mock.calls[0]?.[0]).toContain(originalPrompt)
+    expect(complete).toHaveBeenCalledOnce()
+    expect(onInterrupted).toHaveBeenCalledExactlyOnceWith(partial)
   })
+})
+
+
+it('pure visible-append-v1 retains original UTF16 overlap and whitespace behavior', () => {
+  expect(VISIBLE_CONTINUATION_VERSION).toBe('visible-append-v1')
+  const cases: Array<[string, string, string]> = [
+    ['甲'.repeat(47), '甲'.repeat(47) + '乙', '甲'.repeat(47) + '\n\n' + '甲'.repeat(47) + '乙'],
+    ['甲'.repeat(48), '甲 '.repeat(48) + '\n  乙', '甲'.repeat(48) + '\n\n乙'],
+    ['开头' + '甲'.repeat(1600), '甲'.repeat(1600) + '尾声', '开头' + '甲'.repeat(1600) + '\n\n尾声'],
+    ['', '  雨夜\r\n', '雨夜'],
+    ['雨夜', '', '雨夜'],
+    ['甲'.repeat(48), '甲'.repeat(48), '甲'.repeat(48)],
+    ['𠮷'.repeat(24), '𠮷'.repeat(24) + '乙', '𠮷'.repeat(24) + '\n\n乙'],
+  ]
+  for (const [existing, addition, expected] of cases) {
+    expect(composeVisibleContinuation(existing, addition)).toBe(expected)
+    expect(appendVisibleTextContinuation(existing, addition)).toBe(expected)
+  }
+  expect(appendVisibleTextContinuation('<think>隐藏</think>雨夜', '<think>隐藏</think>来信')).toBe('雨夜\n\n来信')
 })

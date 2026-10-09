@@ -4,13 +4,17 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import {
   BlueprintRepository,
   type BlueprintData,
   type BlueprintRangeCommitReceipt,
 } from '../blueprint-repository'
-import { CharacterRosterRepository } from '../character-roster-repository'
+import { CharacterProposalService } from '../../services/character-proposal-service'
+import { proveCharacterProposal } from '../../services/generation-character-proposal-proof'
+import { GenerationRunRepository } from '../generation-run-repository'
+import { projectAccess } from '../../services/project-access'
 import { ImportRunRepository } from '../import-run-repository'
 import {
   ImportRunOrchestrator,
@@ -74,6 +78,11 @@ interface RecoveryTrace {
 }
 
 function completeBlueprintCharacterSync(receipt: BlueprintRangeCommitReceipt): void {
+  const db = getProjectDb()!, project = projectAccess.probeExistingProject(root)
+  if (project.kind !== 'manifest') throw new Error('test project identity missing')
+  new CharacterProposalService(db, project.projectId, (source, forWrite) => proveCharacterProposal(db,
+    new GenerationRunRepository(() => db), project.projectId, source, forWrite, () => {}))
+    .stage({ kind: 'directory', operationId: receipt.characterSyncOperation.operationId })
   BlueprintRepository.completeCharacterSyncOperation(
     receipt.characterSyncOperation.operationId,
   )
@@ -501,9 +510,11 @@ describe('ImportRunOrchestrator with the real import repository', () => {
     expect(getProjectDb()!.prepare(
       "SELECT COUNT(*) AS count FROM import_reference_documents WHERE state = 'committed'",
     ).get()).toEqual({ count: 6 })
-    expect(CharacterRosterRepository.read()).toMatchObject({
-      status: 'ready',
-      entries: [expect.objectContaining({ name: 'Mara' })],
-    })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+    const proposals = getProjectDb()!.prepare("SELECT raw_value FROM character_identity_proposals WHERE source_key LIKE 'character-proposal-v1:%'").all() as { raw_value: string }[]
+    expect(proposals.map(row => JSON.parse(row.raw_value).batch)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'pending-approval', source: { kind: 'import', operationId: `novel-import-global-${runId}` },
+        items: [expect.objectContaining({ fields: expect.objectContaining({ name: 'Mara' }) })] }),
+    ]))
   })
 })

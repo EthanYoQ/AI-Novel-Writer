@@ -1,4 +1,6 @@
 import type { LLMRequest, ModelProfile } from '../../src/shared/ipc-channels'
+import type { TaskBudgetCapabilityConstraints } from '../../src/services/generation/task-budget-planner'
+import { resolveModelProfileBudgetCapabilities } from '../../src/shared/provider-presets'
 import { resolveReasoningPolicy } from '../../src/shared/reasoning-policy'
 import type {
   CreativeStrategy,
@@ -47,6 +49,35 @@ function validateKimiTemperature(temperature: number): void {
   throw new Error('Kimi API 的 temperature 必须在 0 到 1 之间。请在模型设置中调整后重试。')
 }
 
+function positiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null
+}
+
+/**
+ * Separates verified provider capability from user operational limits. The S07
+ * planner may narrow a verified limit with the latter, but never treats a large
+ * user-entered number as proof that an endpoint can serve it.
+ */
+export function resolveGenerationCapabilityConstraints(
+  model: ModelProfile,
+): TaskBudgetCapabilityConstraints {
+  const verified = resolveModelProfileBudgetCapabilities(model)
+  const modelContextWindowTokens = positiveInteger(verified?.contextWindowTokens)
+  const modelMaxOutputTokens = positiveInteger(verified?.maxOutputTokens)
+  const userOutputLimits = [positiveInteger(model.capabilities?.maxOutputTokens), positiveInteger(model.maxTokens)]
+    .filter((value): value is number => value !== null)
+  return Object.freeze({
+    modelContextWindowTokens,
+    modelMaxOutputTokens,
+    modelContextSource: modelContextWindowTokens === null ? 'unknown' : 'verified-provider-preset',
+    modelOutputSource: modelMaxOutputTokens === null ? 'unknown' : 'verified-provider-preset',
+    userContextWindowTokens: positiveInteger(model.capabilities?.contextWindowTokens),
+    userMaxOutputTokens: userOutputLimits.length ? Math.min(...userOutputLimits) : null,
+  })
+}
+
 /**
  * Resolves the effective provider request parameters from one model profile.
  * Model-profile temperature is the only user-visible sampling input; callers
@@ -69,10 +100,12 @@ export function resolveGenerationParameters(
     creativeStrategy: request.creativeStrategy,
     stage: request.reasoningStage,
   })
+  const limits = resolveGenerationCapabilityConstraints(model)
 
   return {
     temperature: usesFixedKimiTemperature ? undefined : model.temperature,
-    maxTokens: request.maxTokens ?? model.maxTokens,
+    maxTokens: Math.min(request.maxTokens ?? Infinity, limits.userMaxOutputTokens ?? Infinity,
+      limits.modelMaxOutputTokens ?? Infinity),
     ...(request.responseFormat ? { responseFormat: request.responseFormat } : {}),
     ...(reasoningResolution.providerDirective
       ? { reasoning: reasoningResolution.providerDirective }

@@ -27,7 +27,7 @@ describe('tool artifact project ownership', () => {
   it('freezes the tool-time project identity into every created artifact', async () => {
     const invoke = vi.fn(async () => ({ success: true }))
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -68,7 +68,7 @@ describe('tool artifact project ownership', () => {
   it('refuses an aborted write before invoking the authoritative filesystem boundary', async () => {
     const invoke = vi.fn(async () => ({ success: true }))
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
     const controller = new AbortController()
     controller.abort()
@@ -93,7 +93,7 @@ describe('tool artifact project ownership', () => {
       return { success: true }
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
     const executionContext = createAgentExecutionContext()
     const resultPromise = writeFileTool.execute({
@@ -130,7 +130,7 @@ describe('tool artifact project ownership', () => {
       error: 'write receipt detail',
     }))
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
 
     const result = await writeFileTool.execute({

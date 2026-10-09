@@ -1,4 +1,5 @@
 import { ipc } from './ipc-client'
+import { useCharacterStore } from '../stores/character-store'
 import { useDraftStore } from '../stores/draft-store'
 import { useEditorStore, type EditorTab } from '../stores/editor-store'
 import { useProjectStore } from '../stores/project-store'
@@ -20,7 +21,7 @@ export interface ClearProjectDataResult {
 }
 
 const AFFECTED_TAB_TYPES: Record<ProjectClearScope, EditorTab['type'][]> = {
-  creativeFields: ['config', 'world-building', 'arch-file'],
+  creativeFields: ['config', 'world-building', 'arch-file', 'character'],
   blueprints: ['chapter-card'],
   generatedText: ['chapter', 'diff', 'version-history', 'review-report'],
 }
@@ -30,6 +31,7 @@ const AFFECTED_DRAFT_LEDGERS: Partial<Record<
   { scope: ProjectClearScope; label: string }
 >> = {
   config: { scope: 'creativeFields', label: '小说配置' },
+  'character-editor-drafts': { scope: 'creativeFields', label: '角色卡' },
   'chapter-card-editor': { scope: 'blueprints', label: '章节蓝图' },
 }
 
@@ -67,7 +69,7 @@ function affectedTabs(
   projectKey: string,
 ): EditorTab[] {
   const affectedTypes = new Set(scopes.flatMap(scope => AFFECTED_TAB_TYPES[scope]))
-  return tabs.filter(tab => tab.projectKey === projectKey && affectedTypes.has(tab.type))
+  return tabs.filter(tab => tab.projectKey === projectKey && !tab.planningRecovery && affectedTypes.has(tab.type))
 }
 
 function affectedHiddenDraftLabels(
@@ -155,6 +157,9 @@ export async function clearProjectData(
 
   if (normalized.generatedText) {
     useDraftStore.getState().reset()
+  }
+  if (normalized.creativeFields) {
+    await useCharacterStore.getState().load(projectPath, projectSession)
   }
 
   assertProjectSessionCurrent(projectSession)

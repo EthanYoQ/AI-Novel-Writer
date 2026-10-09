@@ -36,7 +36,7 @@ export const IMPORT_INFERENCE_JSON_CONTRACT = `
     "premise": "非空文本", "worldbuilding": "非空文本", "synopsis": "非空文本"
   },
   "characterCards": [{
-    "name": "唯一非空角色名", "role": "protagonist | antagonist | supporting | minor",
+    "name": "非空角色显示名", "role": "protagonist | antagonist | supporting | minor",
     "gender": "非空文本", "age": "非空文本或有限数字", "appearance": "非空文本",
     "personality": "非空文本", "background": "非空文本", "abilities": "非空文本",
     "motivation": "非空文本", "relationships": [{"target":"同一 characterCards 中另一角色的精确 name","relation":"非空关系文本"}],
@@ -44,7 +44,7 @@ export const IMPORT_INFERENCE_JSON_CONTRACT = `
     "currentState": {"location":"非空文本","powerLevel":"非空文本","physicalState":"非空文本","mentalState":"非空文本","keyItems":"非空文本","recentEvents":"非空文本","updatedAtChapter":0}
   }]
 }
-characterCards 必须有 3–8 项，name 唯一，至少一个 protagonist；关系不得自指，target 必须在本次 name 集合中。不得省略字段、使用中文枚举或以近义字段替代。`
+characterCards 必须有 3–8 项，至少一个 protagonist；不同人物可以同名，不得按名字合并。name 和关系 target 只是待作者确认的原始称呼，不是角色身份；同名关系保留为待确认提议。唯一名称不得自指，target 必须在本次 name 集合中。不得省略字段、使用中文枚举或以近义字段替代。`
 
 const EN_US_IMPORT_INFERENCE_JSON_CONTRACT = `
 [Immutable import-inference JSON contract]
@@ -61,7 +61,7 @@ Output one direct JSON object only, with no Markdown fence or explanation. It mu
     "premise": "non-empty text", "worldbuilding": "non-empty text", "synopsis": "non-empty text"
   },
   "characterCards": [{
-    "name": "unique non-empty character name", "role": "protagonist | antagonist | supporting | minor",
+    "name": "non-empty character display name", "role": "protagonist | antagonist | supporting | minor",
     "gender": "non-empty text", "age": "non-empty text or finite number", "appearance": "non-empty text",
     "personality": "non-empty text", "background": "non-empty text", "abilities": "non-empty text",
     "motivation": "non-empty text", "relationships": [{"target":"exact name of another character in characterCards","relation":"non-empty relationship text"}],
@@ -69,7 +69,7 @@ Output one direct JSON object only, with no Markdown fence or explanation. It mu
     "currentState": {"location":"non-empty text","powerLevel":"non-empty text","physicalState":"non-empty text","mentalState":"non-empty text","keyItems":"non-empty text","recentEvents":"non-empty text","updatedAtChapter":0}
   }]
 }
-characterCards must contain 3–8 unique names and at least one protagonist. Relationships may not self-reference, and every target must occur in the same name set. Do not omit fields, translate enum values, or substitute synonym field names.`
+characterCards must contain 3–8 items and at least one protagonist. Different people may share a name; never merge them by name. Names and relationship targets are original labels awaiting author confirmation, not character identities. Preserve ambiguous same-name relationships as proposals. A unique name may not self-reference, and every target must occur in the same name set. Do not omit fields, translate enum values, or substitute synonym field names.`
 
 export function importInferenceJsonContract(writingLanguage: WritingLanguage): string {
   return promptLanguageText(
@@ -235,14 +235,17 @@ function decodeCards(value: unknown): CharacterRosterEntry[] {
     }
   })
   const names = new Set(cards.map(card => card.name))
-  if (names.size !== cards.length) throw new StructuredContractDiagnostic('duplicate_item', 'characterCards')
   if (!cards.some(card => card.role === 'protagonist')) {
     throw new StructuredContractDiagnostic('missing_item', 'characterCards.protagonist')
   }
   for (const [index, card] of cards.entries()) {
     for (const [relationshipIndex, relationship] of card.relationships.entries()) {
       const path = `characterCards[${index}].relationships[${relationshipIndex}].target`
-      if (relationship.target === card.name) throw new StructuredContractDiagnostic('relationship_self_reference', path)
+      // An occurrence is a candidate, not a name-keyed identity. A shared label
+      // may refer to another occurrence and must reach the approval boundary intact.
+      if (relationship.target === card.name && cards.filter(candidate => candidate.name === card.name).length === 1) {
+        throw new StructuredContractDiagnostic('relationship_self_reference', path)
+      }
       if (!names.has(relationship.target)) {
         throw new StructuredContractDiagnostic('relationship_endpoint_not_in_characters', path)
       }
@@ -283,4 +286,159 @@ export function decodeImportInferenceJson(content: string): ImportInferenceResul
     },
     characterCards: decodeCards(required(root, 'characterCards', '$')),
   }
+}
+
+type UiText = (zhCNText: string, enUSText: string) => string
+
+const IMPORT_ENDPOINT_DELTA_CARD_KEYS = [
+  'abilities',
+  'age',
+  'appearance',
+  'arc',
+  'background',
+  'currentState',
+  'gender',
+  'motivation',
+  'name',
+  'notes',
+  'personality',
+  'relationships',
+  'role',
+] as const
+const IMPORT_ENDPOINT_DELTA_CURRENT_STATE_KEYS = [
+  'keyItems',
+  'location',
+  'mentalState',
+  'physicalState',
+  'powerLevel',
+  'recentEvents',
+  'updatedAtChapter',
+] as const
+const IMPORT_ENDPOINT_DELTA_RELATIONSHIP_KEYS = ['relation', 'target'] as const
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function importInferenceCards(root: Record<string, unknown>, text: UiText): Array<Record<string, unknown>> {
+  const cards = root.characterCards
+  if (!Array.isArray(cards) || !cards.every(isRecord)) {
+    throw new Error(text(
+      '导入推演受限补卡校正缺少可比较的原始角色卡',
+      'The bounded import correction is missing comparable original character cards.',
+    ))
+  }
+  return cards
+}
+
+function assertExactImportEndpointDeltaKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[],
+  path: string,
+  text: UiText,
+): void {
+  const actualKeys = Object.keys(value).sort()
+  const sortedExpectedKeys = [...expectedKeys].sort()
+  if (actualKeys.length !== sortedExpectedKeys.length || actualKeys.some((key, index) => key !== sortedExpectedKeys[index])) {
+    throw new Error(text(
+      `导入推演受限补卡校正 delta ${path} 包含缺失或额外字段`,
+      `The bounded import correction delta at ${path} has missing or extra fields.`,
+    ))
+  }
+}
+
+export function unresolvedImportRelationshipTargets(root: Record<string, unknown>, text: UiText): string[] {
+  const cards = importInferenceCards(root, text)
+  const names = new Set(cards.map(card => card.name).filter((name): name is string => typeof name === 'string'))
+  const unresolved = new Set<string>()
+  for (const card of cards) {
+    const cardName = typeof card.name === 'string' ? card.name : undefined
+    const relationships = card.relationships
+    if (!Array.isArray(relationships)) continue
+    for (const relationship of relationships) {
+      if (!isRecord(relationship) || typeof relationship.target !== 'string') continue
+      if (relationship.target !== cardName && !names.has(relationship.target)) unresolved.add(relationship.target)
+    }
+  }
+  if (unresolved.size === 0) {
+    throw new Error(text(
+      '导入推演受限补卡校正缺少未闭合的关系端点',
+      'The bounded import correction has no unresolved relationship endpoint.',
+    ))
+  }
+  return [...unresolved]
+}
+
+function parseImportEndpointCorrectionDelta(
+  content: string,
+  unresolvedTargets: readonly string[],
+  text: UiText,
+): Array<Record<string, unknown>> {
+  const deltaRoot = parseImportInferenceJsonObject(content)
+  assertExactImportEndpointDeltaKeys(deltaRoot, ['characterCards'], '$', text)
+  const deltaCards = importInferenceCards(deltaRoot, text)
+  if (deltaCards.length !== unresolvedTargets.length) {
+    throw new Error(text(
+      '导入推演受限补卡校正只能新增缺失关系端点角色',
+      'The bounded import correction may add only characters required by missing relationship endpoints.',
+    ))
+  }
+  for (const [index, deltaCard] of deltaCards.entries()) {
+    const path = `characterCards[${index}]`
+    assertExactImportEndpointDeltaKeys(deltaCard, IMPORT_ENDPOINT_DELTA_CARD_KEYS, path, text)
+    if (isRecord(deltaCard.currentState)) {
+      assertExactImportEndpointDeltaKeys(
+        deltaCard.currentState,
+        IMPORT_ENDPOINT_DELTA_CURRENT_STATE_KEYS,
+        `${path}.currentState`,
+        text,
+      )
+    }
+    const relationships = deltaCard.relationships
+    if (Array.isArray(relationships)) {
+      relationships.forEach((relationship, relationshipIndex) => {
+        if (isRecord(relationship)) {
+          assertExactImportEndpointDeltaKeys(
+            relationship,
+            IMPORT_ENDPOINT_DELTA_RELATIONSHIP_KEYS,
+            `${path}.relationships[${relationshipIndex}]`,
+            text,
+          )
+        }
+      })
+    }
+  }
+  const expectedAddedNames = new Set(unresolvedTargets)
+  const addedNames = deltaCards.map(card => card.name)
+  if (addedNames.some(name => typeof name !== 'string' || !expectedAddedNames.has(name))) {
+    throw new Error(text(
+      '导入推演受限补卡校正新增角色必须精确匹配原始未闭合关系端点',
+      'Characters added by the bounded import correction must exactly match the original unresolved endpoints.',
+    ))
+  }
+  if (new Set(addedNames).size !== addedNames.length) {
+    throw new Error(text(
+      '导入推演受限补卡校正 delta 包含重复缺失关系端点角色',
+      'The bounded import correction delta contains duplicate missing-endpoint characters.',
+    ))
+  }
+  if (addedNames.length !== expectedAddedNames.size) {
+    throw new Error(text(
+      '导入推演受限补卡校正 delta 缺失关系端点角色',
+      'The bounded import correction delta omits a missing-endpoint character.',
+    ))
+  }
+  return deltaCards
+}
+
+export function decodeImportInferenceWithEndpointDelta(original: string, delta: string, text: UiText): ImportInferenceResult {
+  const root = parseImportInferenceJsonObject(original)
+  const correctedRoot = {
+    ...root,
+    characterCards: [
+      ...importInferenceCards(root, text),
+      ...parseImportEndpointCorrectionDelta(delta, unresolvedImportRelationshipTargets(root, text), text),
+    ],
+  }
+  return decodeImportInferenceJson(JSON.stringify(correctedRoot))
 }

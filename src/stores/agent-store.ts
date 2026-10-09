@@ -1,7 +1,5 @@
 import { create } from 'zustand'
-import { buildAgentSystemPrompt } from '../services/agent/context-builder'
 import {
-  cleanAgentVisibleText,
   runAgentLoop,
   type ConfigImpactBlueprintProposal,
   type ToolCallInfo,
@@ -19,11 +17,14 @@ import {
 } from '../services/agent/intent-router'
 import { toolRegistry } from '../services/agent/tool-registry'
 import type { ToolArtifact } from '../services/agent/tool-registry'
-import { createAgentExecutionContext } from '../services/agent/tools/project-context'
-import { createGenerationRuntime } from '../services/generation/generation-runtime'
+import { createAgentExecutionContext, assertAgentProjectCurrent } from '../services/agent/tools/project-context'
+import type { MainGenerationRunHandle } from '../services/generation/generation-runtime'
+import { AgentGenerationClient } from '../services/agent/agent-generation-client'
+import type { AgentGenerationRecovery } from '../shared/agent-generation'
 import { writingLanguageText } from '../shared/writing-language'
 import { useLocaleStore } from './locale-store'
-import { useProjectStore } from './project-store'
+import { useLLMStore } from './llm-store'
+import { useEditorStore } from './editor-store'
 import type { Locale } from '../i18n/types'
 
 export const AGENT_GENERATION_BUDGET = Object.freeze({
@@ -40,6 +41,8 @@ export type AgentMode = 'planning' | 'fast'
 
 /** 单条消息 */
 export interface AgentMessage {
+  /** Exact durable Agent navigation; no renderer-owned candidate mirror. */
+  mainGenerationHandle?: MainGenerationRunHandle
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
@@ -108,7 +111,9 @@ interface AgentState {
   /** 设置当前会话使用的模型 */
   setModelId: (modelId: string | null) => void
   /** 发送消息（触发 Agent ReAct 循环） */
-  sendMessage: (content: string) => Promise<void>
+  sendMessage: (content: string, recoveryHandle?: MainGenerationRunHandle) => Promise<void>
+  /** Explicitly recover the original Agent turn, including its durable tool calls. */
+  resumeGeneration: (handle: MainGenerationRunHandle) => Promise<void>
   /** 取消当前生成 */
   cancelGeneration: () => Promise<void>
   /** 响应 Tool 确认（用于 ConfirmCard） */
@@ -173,6 +178,7 @@ const pendingConfirmations = new Map<string, {
 
 /** 当前活跃的 AbortController（用于取消 ReAct 循环） */
 let activeAbortController: AbortController | null = null
+let activeGenerationClient: AgentGenerationClient | null = null
 let activeRequestUiLocale: Locale | null = null
 
 // ===== Zustand Store =====
@@ -273,9 +279,9 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     }))
   },
 
-  sendMessage: async (content) => {
-    if (!content.trim() || get().generating) return
-    const requestLocale = useLocaleStore.getState().locale
+  sendMessage: async (content, recoveryHandle) => {
+    if ((!content.trim() && !recoveryHandle) || get().generating) return
+    let requestLocale = useLocaleStore.getState().locale
     const text = (zhCNText: string, enUSText: string) => requestLocale === 'en-US' ? enUSText : zhCNText
     let skillInvocation: { skill: LoadedSkill; input: string } | null = null
 
@@ -334,19 +340,17 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     }
 
     // 确保有活跃会话（无则创建）
-    let conv = get().getActiveConversation()
+    let conv = recoveryHandle ? get().conversations.find(item => item.messages.some(message =>
+      message.mainGenerationHandle?.rootActionId === recoveryHandle.rootActionId)) : get().getActiveConversation()
     if (!conv) {
       conv = get().createConversation()
     }
     const convId = conv.id
-    const modelId = conv.modelId ?? undefined
+    const modelId = conv.modelId ?? useLLMStore.getState().defaultModelId ?? undefined
     const executionContext = createAgentExecutionContext(modelId, requestLocale)
-    const runtimeProject = executionContext.projectSession
-      ? {
-          projectSession: executionContext.projectSession,
-          creativeStrategy: useProjectStore.getState().currentProject?.novelConfig.creativeStrategy ?? 'auto',
-        }
-      : {}
+    const editor = useEditorStore.getState()
+    const activeTab = editor.tabs.find(tab => tab.id === editor.activeTabId && tab.projectKey === executionContext.projectSession?.projectPath)
+    const editorContext = activeTab ? `${activeTab.name} (${activeTab.type}${activeTab.dirty ? ', unsaved' : ''})\n${(activeTab.content ?? '').slice(0, 500)}` : undefined
     const modelText = (zhCNText: string, enUSText: string) => writingLanguageText(
       executionContext.writingLanguage,
       zhCNText,
@@ -375,14 +379,17 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     }
 
     // 构建占位助手消息（ReAct 循环中实时更新）
+    const existingAssistant = recoveryHandle ? conv.messages.find(message => message.role === 'assistant'
+      && message.mainGenerationHandle?.rootActionId === recoveryHandle.rootActionId) : undefined
     const assistantMsg: AgentMessage = {
-      id: genId(),
+      id: existingAssistant?.id ?? genId(),
       role: 'assistant',
       content: '',
       createdAt: Date.now(),
       streaming: true,
       toolCalls: [],
-      artifacts: [],
+      artifacts: existingAssistant?.artifacts ?? [],
+      ...(recoveryHandle ? { mainGenerationHandle: recoveryHandle } : {}),
     }
 
     // 更新会话标题（取第一条用户消息）
@@ -397,16 +404,20 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
           ? {
               ...c,
               title: newTitle,
-              messages: [...c.messages, userMsg, assistantMsg],
+              messages: existingAssistant ? c.messages.map(message => message.id === assistantMsg.id ? assistantMsg : message) : [...c.messages, userMsg, assistantMsg],
               updatedAt: Date.now(),
             }
           : c
       ),
     }))
     activeRequestUiLocale = requestLocale
+    const abortController = new AbortController()
+    activeAbortController = abortController
+    set({ activeRequestId: assistantMsg.id, activeConversationId: convId })
 
     // 辅助函数：更新助手消息
     const updateAssistantMsg = (updater: (msg: AgentMessage) => AgentMessage) => {
+      if (get().activeRequestId !== assistantMsg.id) return
       set(state => ({
         conversations: state.conversations.map(c =>
           c.id === convId
@@ -421,16 +432,24 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       }))
     }
 
+    const client = executionContext.projectSession ? new AgentGenerationClient(executionContext.projectSession, recovery => {
+      set(state => ({ conversations: state.conversations.map(conversation => conversation.id === convId
+        ? { ...conversation, messages: conversation.messages.map(message => message.id === assistantMsg.id
+          ? { ...message, mainGenerationHandle: recovery.handle } : message) } : conversation) }))
+    }) : null
+    activeGenerationClient = client
+    const frozenTools = toolRegistry.listAll().map(tool => ({ name: tool.name,
+      description: executionContext.writingLanguage === 'en-US' ? tool.descriptionEn ?? tool.description : tool.description,
+      inputSchema: { ...structuredClone(tool.inputSchema) }, requiresConfirmation: tool.requiresConfirmation,
+      isReadOnly: tool.isReadOnly, source: tool.source }))
     try {
+      if (!client) throw new Error('GENERATION_AGENT_PROJECT_REQUIRED')
       const currentConv = get().conversations.find(c => c.id === convId)!
-
-      // 系统提示词、@ 引用预取和随后 ReAct 循环必须共享同一个项目 lease。
-      const systemPrompt = await buildAgentSystemPrompt(currentConv.mode, executionContext)
 
       // ===== P1-5: @ 提及预取 =====
       let enrichedUserMessage = content.trim()
       const mentions = parseMentions(enrichedUserMessage, requestLocale)
-      if (mentions.length > 0) {
+      if (!recoveryHandle && mentions.length > 0) {
         const prefetchCalls = mentionsToToolCalls(mentions)
         const prefetchResults: string[] = []
         for (const call of prefetchCalls) {
@@ -456,64 +475,48 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
       // 构造历史消息（取最近 16 条非流式消息）
       const historyMessages: LLMMessage[] = currentConv.messages
-        .filter(m => !m.streaming && m.role !== 'system')
+        .filter(m => !m.streaming && m.role !== 'system' && m.id !== userMsg.id)
         .slice(-16)
         .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
-      // AbortController 用于取消（P1-7: 提升到模块级变量以便 cancelGeneration 访问）
-      const abortController = new AbortController()
-      activeAbortController = abortController
-      set({ activeRequestId: assistantMsg.id })
-
-      // 整个 ReAct 循环只冻结一个模型租约和一份调用/token/deadline预算。
-      const runtime = await createGenerationRuntime({
-        ...(modelId ? { modelId } : {}),
-        ...runtimeProject,
-        budget: AGENT_GENERATION_BUDGET,
-      })
-      await runtime.execute(async ({ session }) => runAgentLoop(
-        systemPrompt,
-        historyMessages,
-        enrichedUserMessage,
-        modelId,
-        async (messages) => {
-          const outcome = await session.complete({
-            purpose: 'agent',
-            reasoningStage: 'general',
-            output: 'visible-text',
-            messages: messages.map(message => ({
-              role: message.role,
-              content: message.content,
-            })),
-          }, { signal: abortController.signal })
-          if (outcome.status !== 'completed') {
-            switch (outcome.finishReason) {
-              case 'length':
-                throw new Error(text(
-                  'AI 输出达到模型最大长度，未将不完整内容写入对话或执行工具。请提高模型最大输出 Tokens 或缩短任务后重试。',
-                  'The AI response reached the model output limit. Incomplete content was not added to the conversation and no tool was run. Increase the model output-token limit or shorten the task, then try again.',
-                ))
-              case 'content_filter':
-                throw new Error(text(
-                  'AI 输出因内容限制而未完成，未将不完整内容写入对话或执行工具。',
-                  'The AI response was stopped by a content restriction. Incomplete content was not added to the conversation and no tool was run.',
-                ))
-              default:
-                throw new Error(text(
-                  'AI 未正常完成生成，未将不完整内容写入对话或执行工具。',
-                  'The AI did not complete the response normally. Incomplete content was not added to the conversation and no tool was run.',
-                ))
-            }
-          }
-          return outcome.content
-        },
+      assertAgentProjectCurrent(executionContext)
+      if (abortController.signal.aborted) return
+      let recovery: AgentGenerationRecovery
+      if (recoveryHandle) {
+        recovery = await client.read(recoveryHandle)
+        requestLocale = recovery.context.input.uiLocale
+        activeRequestUiLocale = requestLocale
+        set(state => ({ conversations: state.conversations.map(conversation => conversation.id === convId
+          ? { ...conversation, title: isFirstMsg ? generateTitle(recovery.context.input.userMessage) : conversation.title,
+              messages: conversation.messages.map(message => message.id === userMsg.id
+                ? { ...message, content: recovery.context.input.userMessage } : message) } : conversation) }))
+        if (recovery.sourceStatus !== 'current') {
+          updateAssistantMsg(message => ({ ...message, content: recovery.rounds.map(round => round.visibleText).join('') }))
+          throw new Error('GENERATION_SOURCE_CHANGED')
+        }
+        const incomplete = recovery.rounds.some(round => round.status === 'unknown' || round.status === 'incomplete'
+          || round.actions.some(action => action.status === 'unknown' || action.status === 'running'))
+        if (!incomplete && (recovery.nextRound !== null || recovery.rounds.some(round => round.actions.some(action => action.status === 'pending')))) {
+          recovery = await client.resume(recovery.handle)
+        }
+      } else {
+        if (!modelId) throw new Error('GENERATION_AGENT_MODEL_REQUIRED')
+        recovery = await client.begin({ uiActionNonce: assistantMsg.id, modelId, input: {
+          mode: currentConv.mode, uiLocale: requestLocale, historyMessages: historyMessages as Array<{ role: 'user' | 'assistant'; content: string }>,
+          userMessage: enrichedUserMessage, ...(editorContext ? { editorContext } : {}), tools: frozenTools,
+        } })
+      }
+      if (abortController.signal.aborted) { await client.cancel(); return }
+      let roundIndex = 0
+      await runAgentLoop(
+        '', [], recovery.context.input.userMessage, recovery.modelId,
+        async () => client.round(roundIndex++),
         {
           onTextChunk: (chunk) => {
-            const cleaned = cleanAgentVisibleText(chunk)
-            if (!cleaned) return
+            if (!chunk) return
             updateAssistantMsg(m => ({
               ...m,
-              content: m.content + cleaned,
+              content: m.content + chunk,
             }))
           },
           onToolCallStart: (toolCall) => {
@@ -531,6 +534,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             }))
           },
           onToolCallConfirmRequired: (toolCall) => {
+            if (get().activeRequestId !== assistantMsg.id || abortController.signal.aborted) return Promise.resolve(false)
             // 更新 UI 显示确认状态
             updateAssistantMsg(m => ({
               ...m,
@@ -545,15 +549,15 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             })
           },
           onDone: (fullText, toolCalls, artifacts) => {
+            if (get().activeRequestId !== assistantMsg.id) return
             activeAbortController = null
             activeRequestUiLocale = null
-            const cleanedText = cleanAgentVisibleText(fullText)
             updateAssistantMsg(m => ({
               ...m,
-              content: cleanedText,
+              content: fullText,
               streaming: false,
               toolCalls,
-              artifacts: artifacts.length > 0 ? artifacts : undefined,
+              artifacts: [...(existingAssistant?.artifacts ?? []), ...artifacts],
             }))
             set(state => ({
               generating: false,
@@ -564,30 +568,44 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
             }))
           },
           onError: () => {
+            if (get().activeRequestId !== assistantMsg.id) return
             activeAbortController = null
             activeRequestUiLocale = null
             updateAssistantMsg(m => ({
               ...m,
-              content: text('生成失败，请重试。', 'Generation failed. Please try again.'),
+              content: m.content ? m.content + text('\n\n生成未完成，原候选已保留。', '\n\nGeneration did not finish; the original candidate was retained.')
+                : text('生成失败，请重试。', 'Generation failed. Please try again.'),
               streaming: false,
             }))
             set({ generating: false, activeRequestId: null })
           },
         },
         abortController.signal,
-        executionContext,
-      ))
-    } catch {
+        Object.freeze({ ...executionContext, selectedModelId: recovery.modelId, writingLanguage: recovery.context.writingLanguage,
+          uiLocale: recovery.context.input.uiLocale, agentGeneration: client }),
+      )
+    } catch (error) {
+      if (get().activeRequestId !== assistantMsg.id) return
       activeAbortController = null
       activeRequestUiLocale = null
       updateAssistantMsg(m => ({
         ...m,
-        content: text('生成失败，请重试。', 'Generation failed. Please try again.'),
+        content: (m.content ? m.content + '\n\n' : '') + (error instanceof Error && error.message === 'GENERATION_AGENT_PROJECT_REQUIRED'
+          ? text('请先打开项目，再使用 AI 助手。', 'Open a project before using the AI assistant.')
+          : error instanceof Error && error.message.includes('SOURCE_CHANGED')
+            ? text('来源已变化，原候选已保留，未继续生成或写入。', 'The source changed. The original candidate was retained without further generation or writes.')
+            : text('生成失败，请重试。', 'Generation failed. Please try again.')),
         streaming: false,
       }))
       set({ generating: false, activeRequestId: null })
+    } finally {
+      client?.close()
+      if (activeGenerationClient === client) activeGenerationClient = null
+      if (activeAbortController === abortController) activeAbortController = null
     }
   },
+
+  resumeGeneration: async handle => { await get().sendMessage('', handle) },
 
   cancelGeneration: async () => {
     const cancelledUiLocale = activeRequestUiLocale ?? useLocaleStore.getState().locale
@@ -617,6 +635,16 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         ),
       })),
     }))
+    const client = activeGenerationClient
+    if (client) {
+      try { await client.cancel() } catch {
+        set(state => ({ conversations: state.conversations.map(conversation => ({ ...conversation,
+          messages: conversation.messages.map(message => message.mainGenerationHandle?.rootActionId === client.recovery.handle.rootActionId
+            ? { ...message, content: message.content + (cancelledUiLocale === 'en-US'
+              ? '\nThe stop request has not been confirmed.' : '\n停止请求尚未确认。') } : message),
+        })) }))
+      }
+    }
   },
 
   resolveToolConfirmation: (toolCallId, confirmed, options) => {

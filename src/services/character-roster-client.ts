@@ -22,7 +22,7 @@ function parseStructuredRelationships(value: string): CharacterRosterRelationshi
     const relationships: CharacterRosterRelationship[] = []
     for (const raw of parsed) {
       if (!isRecord(raw) || typeof raw.target !== 'string' || typeof raw.relation !== 'string') return null
-      relationships.push({ target: raw.target.trim(), relation: raw.relation.trim() })
+      relationships.push({ target: raw.target.trim(), relation: raw.relation.trim(), ...(typeof raw.targetCharacterId === 'string' ? { targetCharacterId: raw.targetCharacterId } : {}) })
     }
     return relationships
   }
@@ -41,6 +41,7 @@ function parseStructuredRelationships(value: string): CharacterRosterRelationshi
 export function characterRosterEntryFromCard(card: CharacterData): CharacterRosterEntry {
   const relationships = parseStructuredRelationships(card.relationships)
   return {
+    characterId: card.characterId,
     name: card.name.trim(),
     role: card.role,
     gender: card.gender,
@@ -62,6 +63,7 @@ export function characterRosterEntryFromCard(card: CharacterData): CharacterRost
 
 export function characterCardFromRosterEntry(entry: CharacterRosterEntry): CharacterData {
   return {
+    characterId: entry.characterId,
     name: entry.name,
     role: normalizeCharacterRole(entry.role),
     gender: entry.gender,
@@ -71,8 +73,7 @@ export function characterCardFromRosterEntry(entry: CharacterRosterEntry): Chara
     background: entry.background,
     abilities: entry.abilities,
     motivation: entry.motivation,
-    relationships: entry.legacyRelationshipNotes
-      ?? (entry.relationships.length > 0 ? JSON.stringify(entry.relationships) : ''),
+    relationships: entry.relationships.length > 0 ? JSON.stringify(entry.relationships) : entry.legacyRelationshipNotes ?? '',
     arc: entry.arc,
     notes: entry.notes,
     ...(entry.currentState ? { currentState: entry.currentState } : {}),

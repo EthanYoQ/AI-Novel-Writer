@@ -1,3 +1,4 @@
+import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useProjectStore } from '../../stores/project-store'
@@ -76,7 +77,7 @@ export function useCharacterRosterRepair({
       'db:character-roster-read',
       session.projectPath,
     ),
-    migrate: projectPath => migrateLegacyCharacterRoster(projectPath),
+    migrate: (projectPath, options) => migrateLegacyCharacterRoster(projectPath, options),
     setState: setControllerState,
   }), [enabled, projectKey, sessionKey, setControllerState])
 
@@ -85,7 +86,7 @@ export function useCharacterRosterRepair({
     [port],
   )
   const refresh = useCallback(() => controller.load(), [controller])
-  const migrate = useCallback(() => controller.migrate(), [controller])
+  const migrate = useCallback((options?: { recoveryHandle?: MainGenerationRunHandle; restart?: boolean }) => controller.migrate(options), [controller])
 
   useEffect(() => {
     const timer = setTimeout(() => { void controller.load() }, 0)

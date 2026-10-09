@@ -183,7 +183,7 @@ describe('release dependency contract', () => {
     expect(canUseMonitorBody).toContain('monitor.exitCode === null')
     expect(canUseMonitorBody).toContain('monitor.signalCode === null')
     expect(releaseGate.slice(preMonitorLoop, preMonitorInvocation)).toContain(
-      "await runNodeProcess([pnpmCli, 'run', step])",
+      "await runNodeProcess([pnpmCli, 'run', step, ...(step === 'test' ? ['--fileParallelism=false'] : [])])",
     )
     expect(releaseGate).toContain('let releaseFinalizationRequired = false')
     expect(releaseGate).not.toContain('preMonitorSucceeded')
@@ -194,7 +194,7 @@ describe('release dependency contract', () => {
 
     expect(
       createHash('sha256').update(releaseMonitor).digest('hex'),
-    ).toBe('663969e64b6a937e9106a6ea01ff265bed16b6e5ac5fa6973b474c5037050085')
+    ).toBe('033a2de5ffbed113a45b559435b4c8c6243dcd97236fd6d3c58a25038a849573')
   })
 
   it('blocks direct Windows artifact builds outside the release gate', () => {

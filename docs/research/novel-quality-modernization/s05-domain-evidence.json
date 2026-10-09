@@ -1,0 +1,67 @@
+{
+  "dependencySha": "86d4ab043acc111d2614449385e507ff9d6ecb38",
+  "typecheck": "PASS",
+  "scope": "domain-and-source-binding-pending-independent-review",
+  "specId": "S05",
+  "physicalModelCalls": 0,
+  "tests": 63,
+  "files": [
+    {
+      "path": "electron/services/generation-run-service.ts",
+      "sha256": "a10aa47d2c37b121fbac0165cd638c3e981eeffdcc1d3f3a7ce218aba6137180"
+    },
+    {
+      "path": "electron/repositories/generation-run-repository.ts",
+      "sha256": "f3774144abd0e41d0fc7855a4e5843c01035bfafc31682730c38234fa64d71e4"
+    },
+    {
+      "path": "electron/migrations/m01-generation-runs.ts",
+      "sha256": "768c5d51b7a38fd6573ba72c0f0ab114cb8f9d188439f9800eb0b20f8c376feb"
+    },
+    {
+      "path": "electron/services/__tests__/generation-run-service.test.ts",
+      "sha256": "ce00836edeaa9e223ff3601c1d6367df73a6fae5b9f532d6fdb9a1efc4132f7a"
+    },
+    {
+      "path": "electron/services/generation-source-binding.ts",
+      "sha256": "854ca1d1a088b6535ffb32abcfab4daf1cb65dd29b66e5707f366793d791052b"
+    },
+    {
+      "path": "electron/services/__tests__/generation-source-binding.test.ts",
+      "sha256": "5f65b8ebfb6e6d1735c42b278c8ef6c4165964e37fd27e0658b69814b36dfe22"
+    },
+    {
+      "path": "docs/research/novel-quality-modernization/s05-domain-evidence.md",
+      "sha256": "580405a40822f9f5ad69fa113272dc35996a9a22ef766d6acae32e37397cc6ee"
+    }
+  ],
+  "ownedLint": "PASS: generation-run-repository.ts, generation-run-service.ts, generation-source-binding.ts",
+  "promptSelectionGate": {
+    "tests": 30,
+    "suites": 3,
+    "lint": "PASS",
+    "files": [
+      {
+        "path": "electron/services/main-generation-owner.ts",
+        "sha256": "53ba6dc016f91e6f77ab65a1442b16251e6cc1bc938697d39528b01aa8dce7aa"
+      },
+      {
+        "path": "electron/services/generation-source-binding.ts",
+        "sha256": "854ca1d1a088b6535ffb32abcfab4daf1cb65dd29b66e5707f366793d791052b"
+      },
+      {
+        "path": "electron/services/__tests__/main-generation-owner.test.ts",
+        "sha256": "abc1f44f5193eda89e6aeeafadd7b30bb9f27646b29abe8712cdfdc696160b89"
+      },
+      {
+        "path": "electron/services/__tests__/generation-source-binding.test.ts",
+        "sha256": "5f65b8ebfb6e6d1735c42b278c8ef6c4165964e37fd27e0658b69814b36dfe22"
+      }
+    ],
+    "counterexamples": [
+      "empty begin creates no root and dispatches zero requests",
+      "empty source selection reads no prompt assets",
+      "selected template change refuses resume after real database reopen"
+    ]
+  }
+}

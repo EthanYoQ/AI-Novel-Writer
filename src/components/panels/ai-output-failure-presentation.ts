@@ -1,6 +1,6 @@
 import type { Locale } from '../../i18n/types'
 import type { PromptBudgetReport } from '../../services/generation/generation-harness'
-import type { WorkflowFailureCode } from '../../stores/workflow-store'
+import type { WorkflowFailureCode, WorkflowStep } from '../../stores/workflow-store'
 
 export interface WorkflowFailurePresentation {
   heading: string
@@ -107,6 +107,7 @@ export function presentWorkflowFailure(
   locale: Locale,
   isUnpersistedChapterDraft: boolean,
   promptBudgetReport?: PromptBudgetReport,
+  activity?: WorkflowStep['generationActivity'],
 ): WorkflowFailurePresentation {
   if (failureCode === 'prompt_budget_exhausted') {
     const adjustment = promptBudgetAdjustment(promptBudgetReport, locale)
@@ -123,6 +124,36 @@ export function presentWorkflowFailure(
           persistence: 'The request blocked by this budget preflight was not sent and caused no additional model attempt or consumption.',
           ...adjustment,
         }
+  }
+
+  if (activity?.operation === 'review-chapter') {
+    const diagnostic = activity.diagnostics
+    const code = diagnostic?.causeCode ?? diagnostic?.errorCode
+    let reason = error?.trim() || (locale === 'zh-CN' ? '审稿未完成，原因未知。' : 'The review did not finish; the cause is unknown.')
+    if (diagnostic?.endReason === 'failed') {
+      const zh = locale === 'zh-CN'
+      reason = code === 'UND_ERR_BODY_TIMEOUT'
+        ? (zh ? '读取响应流超时。上游为何停止响应尚未确认。' : 'Reading the response stream timed out. Why the upstream stopped responding is not confirmed.')
+        : ['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT', 'ETIMEDOUT'].includes(code ?? '')
+          ? (zh ? '等待服务响应超时。具体原因尚未确认。' : 'Waiting for the service timed out. The underlying cause is not confirmed.')
+        : code === 'STREAM_INCOMPLETE'
+          ? (zh ? '响应流在完整报告返回前结束。具体原因尚未确认。' : 'The response stream ended before a complete report arrived. The underlying cause is not confirmed.')
+        : code === 'STREAM_INVALID' || code === 'RESPONSE_BODY_MISSING'
+          ? (zh ? '服务响应缺少有效的生成数据。' : 'The service response did not contain valid generation data.')
+        : ['UND_ERR_SOCKET', 'ECONNRESET', 'ERR_STREAM_PREMATURE_CLOSE'].includes(code ?? '')
+          ? (zh ? '响应连接中断。具体原因尚未确认。' : 'The response connection was interrupted. The underlying cause is not confirmed.')
+          : diagnostic.httpStatus && diagnostic.httpStatus >= 400
+            ? (zh ? `服务返回 HTTP ${diagnostic.httpStatus}，请求未完成。` : `The service returned HTTP ${diagnostic.httpStatus}; the request did not complete.`)
+            : (zh ? '审稿请求未完成，具体原因未知。' : 'The review request did not complete; the specific cause is unknown.')
+    }
+    return {
+      heading: locale === 'zh-CN' ? '审稿未完成' : 'Review did not finish',
+      reason,
+      persistence: diagnostic?.endReason === 'failed'
+        ? (locale === 'zh-CN' ? '本次未保存完整审稿报告，原稿保留。' : 'No complete review report was saved; the source draft is preserved.')
+        : (locale === 'zh-CN' ? '尚未确认完整审稿报告已保存；原稿保留。' : 'A saved complete review report has not been confirmed; the source draft is preserved.'),
+      guidance: locale === 'zh-CN' ? '请查看恢复入口。已有保存结果可直接打开；重新审稿会重新调用模型。' : 'Check recovery actions. Saved results open directly; reviewing again sends a new model request.',
+    }
   }
 
   if (failureCode === 'content_filter') {

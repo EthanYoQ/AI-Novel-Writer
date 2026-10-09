@@ -28,6 +28,7 @@ describe('blueprint batch policy', () => {
       semanticBatchCount: 1,
       expectedCalls: 1,
       maxCalls: 15,
+      recoveryCallBound: 15,
       maxCompactSingleFallbacks: 5,
       exceedsHardLimit: false,
       runtimeBudget: {
@@ -53,6 +54,7 @@ describe('blueprint batch policy', () => {
       semanticBatchCount: 10,
       expectedCalls: 10,
       maxCalls: 32,
+      recoveryCallBound: 141,
       maxCompactSingleFallbacks: 50,
       exceedsHardLimit: false,
       runtimeBudget: {
@@ -73,10 +75,10 @@ describe('blueprint batch policy', () => {
 
   it('explains batching and throughput tradeoffs in both interface languages', () => {
     expect(getBlueprintBatchAdvice('zh-CN', 7)).toContain('预计至少 2 次模型调用')
-    expect(getBlueprintBatchAdvice('zh-CN', 7)).toContain('最多允许 20 次')
+    expect(getBlueprintBatchAdvice('zh-CN', 7)).toContain('自动分裂和恢复最多调用 20 次')
     expect(getBlueprintBatchAdvice('zh-CN', 7)).toContain('达到输出限制时会自动继续拆分')
     expect(getBlueprintBatchAdvice('en-US')).toContain('at most 5 chapters')
     expect(getBlueprintBatchAdvice('en-US')).toContain('more time and API calls')
-    expect(getBlueprintBatchAdvice('en-US', 7)).toContain('task allowance: up to 20')
+    expect(getBlueprintBatchAdvice('en-US', 200)).toContain('automatic splitting and recovery: up to 561')
   })
 })

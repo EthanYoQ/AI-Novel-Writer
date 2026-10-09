@@ -41,16 +41,17 @@ export function buildNovelConfigProposal(
   const changes: Record<string, unknown> = {}
   for (const [field, proposed] of Object.entries(candidate)) {
     const canonicalField = field === 'narrativePov' ? 'narrativePOV' : field
+    if (Object.hasOwn(changes, canonicalField)) return { valid: false, error: agentToolText(context, `字段 ${canonicalField} 重复`, `Duplicate field: ${canonicalField}`) }
     const normalizedValue = canonicalField === 'writingLanguage'
       ? proposed === '简体中文' ? 'zh-CN' : proposed === 'English' ? 'en-US' : proposed
       : proposed
     if (STRING_FIELDS.has(canonicalField as keyof NovelConfig)) {
       if (typeof normalizedValue !== 'string') return { valid: false, error: agentToolText(context, `字段 ${field} 必须是文本`, `Field ${field} must be text`) }
     } else if (NUMBER_FIELDS.has(canonicalField as keyof NovelConfig)) {
-      if (!Number.isInteger(normalizedValue) || (normalizedValue as number) <= 0) return { valid: false, error: agentToolText(context, `字段 ${field} 必须是正整数`, `Field ${field} must be a positive integer`) }
+      if (!Number.isSafeInteger(normalizedValue) || (normalizedValue as number) <= 0) return { valid: false, error: agentToolText(context, `字段 ${field} 必须是正整数`, `Field ${field} must be a positive integer`) }
     } else if (canonicalField in ENUM_FIELDS) {
       const allowedValues = ENUM_FIELDS[canonicalField as keyof NovelConfig] ?? []
-      if (!allowedValues.includes(String(normalizedValue))) {
+      if (typeof normalizedValue !== 'string' || !allowedValues.includes(normalizedValue)) {
         return { valid: false, error: agentToolText(context, `字段 ${field} 的值 ${JSON.stringify(normalizedValue)} 不受支持；允许值：${allowedValues.join('、')}`, `Field ${field} has unsupported value ${JSON.stringify(normalizedValue)}; allowed values: ${allowedValues.join(', ')}`) }
       }
     } else {
@@ -100,6 +101,12 @@ export const proposeNovelConfigTool = buildAgentTool({
     const nextConfig = { ...project.novelConfig, ...proposal.changes }
     assertAgentToolActive(context)
     context?.markSideEffectStarted?.()
+    if (context?.agentToolAction) {
+      const receipt = await ipc.invokeWithProjectSession(projectSession, 'agent-generation:commit-domain-tool', { ref: context.agentToolAction })
+      if (receipt.kind !== 'config') throw new Error('GENERATION_AGENT_DOMAIN_RECEIPT_MISMATCH')
+      if (receipt.current !== false) useProjectStore.getState().updateNovelConfig(receipt.changes as Partial<NovelConfig>, projectSession)
+      return { success: true, content: text(`小说配置已更新（${Object.keys(receipt.changes).length} 个字段）`, `Novel configuration updated (${Object.keys(receipt.changes).length} fields)`) }
+    }
     const result = await ipc.invokeWithProjectSession(
       projectSession, 'project:update-config', project.id, { novelConfig: nextConfig }, project.path,
     )

@@ -8,6 +8,14 @@ import {
 } from '../prompt-language'
 import { ArchitecturePromptBuilder, DirectoryPromptBuilder } from '../prompts/prompt-builder'
 
+it.each(['zh-CN', 'en-US'] as const)('retains each inline action when its custom %s template omits the instruction', language => {
+  const template = { ...getBuiltinPromptTemplate('edit_selected_text', language)!, content: '{{selected_text}}' }
+  const instructions = ['润色所选正文', '扩写所选正文', '续写所选正文', '改写为对话']
+  const prompts = instructions.map(edit_instruction => renderPrompt(template, { selected_text: '原始正文', edit_instruction }, language))
+  prompts.forEach((prompt, index) => expect(prompt).toContain(instructions[index]))
+  expect(new Set(prompts).size).toBe(4)
+})
+
 const REQUIRED_CORE_KEYS = [
   'generate_novel_config_field',
   'edit_selected_text',

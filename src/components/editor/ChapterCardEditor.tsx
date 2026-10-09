@@ -18,6 +18,7 @@ import {
   loadDirectoryBlueprints,
   saveChapterBlueprint,
   saveAllBlueprints,
+  parseTextBlueprintsStrict,
   type ChapterBlueprint,
   type DirectoryWorkflowParams,
 } from '../../services/workflows/directory-workflow'
@@ -30,13 +31,17 @@ import { Input } from '../ui/Input'
 import { Textarea } from '../ui/Textarea'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
+import { chapterRoleOptions, chapterRoleSelectValue, getChapterRoleLabels } from '../../shared/chapter-role'
 import { cn } from '../../lib/utils'
 import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
 import { globalEventBus } from '../../shared/event-bus'
 import { shouldRefreshBlueprints } from './blueprint-refresh'
 import { useLocaleStore } from '../../stores/locale-store'
-import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
+import { openPlanningRecoveryDraft, registerEditorExitSaveHandler, useEditorStore, type EditorTab, type PlanningRecoverySaveSnapshot } from '../../stores/editor-store'
+import type { GenerationRecoveryContext } from '../../shared/generation-owner-contract'
+import CodeMirrorEditor from './CodeMirrorEditor'
+import { requireIpcSuccess } from '../../services/ipc-result'
 import {
   CHAPTER_CARD_TAB_ID,
   captureBlueprintSnapshots,
@@ -53,12 +58,11 @@ import {
   type EditableChapterBlueprintField,
 } from './chapter-card-draft-ledger'
 import { LatestRequestGate } from './latest-request-gate'
+import { SaveFeedback, type SaveOutcome } from './save-feedback'
 import {
   AuthoritativeChapterSequenceError,
   readAuthoritativeNextChapter,
 } from '../../services/authoritative-chapter-sequence'
-
-const ROLES = ['建置', '铺垫', '发展', '冲突', '高潮', '转折', '收尾']
 
 const ROLE_COLORS: Record<string, string> = {
   高潮: 'bg-red-500/20 text-[var(--color-error-text)]',
@@ -91,7 +95,120 @@ function isCurrentProjectSession(projectSession: ProjectSessionContext): boolean
 }
 
 /** 章节蓝图编辑器 — 读写 directory.json */
-export default function ChapterCardEditor({
+export default function ChapterCardEditor(props: { projectKey: string; initialChapterNumber?: number; tabId?: string }) {
+  const recoveryTab = useEditorStore(state => state.tabs.find(tab => tab.id === props.tabId && tab.planningRecovery))
+  const currentLease = useProjectStore(state => state.currentProject?.sessionLease)
+  return recoveryTab ? <BlueprintRecoveryEditor key={`${recoveryTab.id}:${currentLease}`} tab={recoveryTab} projectKey={props.projectKey} /> : <ChapterCardEditorSession {...props} />
+}
+
+function BlueprintRecoveryEditor({ tab, projectKey }: { tab: EditorTab; projectKey: string }) {
+  const text = useLocaleStore(state => state.text)
+  const [session] = useState(() => currentProjectSessionForPath(projectKey))
+  const currentProject = useProjectStore(state => state.currentProject)
+  const sessionCurrent = sameProjectSessionContext(session, projectSessionContextFromProject(currentProject))
+  const planningTargetUnit = currentProject?.novelConfig.writingLanguage === 'en-US' ? text('词', 'words') : text('字', 'characters')
+  const [context, setContext] = useState(tab.planningRecovery)
+  const [end, setEnd] = useState(String(tab.planningSaveEnd ?? ''))
+  const endRef = useRef(end)
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const [error, setError] = useState('')
+  const currentTab = useEditorStore(state => state.tabs.find(item => item.id === tab.id)) ?? tab
+  const refresh = useCallback(async () => {
+    const expectedSession = session
+    const original = tab.planningRecovery
+    if (!expectedSession || !isCurrentProjectSession(expectedSession) || !original) throw new Error(text('项目会话已切换，请重新打开恢复稿', 'The project session changed. Reopen the recovery draft.'))
+    const next = await ipc.invokeWithProjectSession(expectedSession, 'generation:read-context', { handle: original.handle })
+    if (!isCurrentProjectSession(expectedSession)) throw new Error(text('项目会话已切换', 'The project session changed.'))
+    setContext(next)
+    return next
+  }, [session, tab.planningRecovery, text])
+  useEffect(() => { void Promise.resolve().then(refresh).catch(reason => setError(String(reason))) }, [refresh])
+  const save = useCallback(async (propagate = false) => {
+    if (busyRef.current) { if (propagate) throw new Error(text('保存仍在进行', 'Saving is still in progress.')); return }
+    busyRef.current = true
+    setBusy(true)
+    const snapshot = useEditorStore.getState().tabs.find(item => item.id === tab.id)
+    try {
+      if (!session) throw new Error(text('项目会话已切换', 'The project session changed.'))
+      const fresh = await refresh()
+      const candidate = fresh.blueprintRecovery
+      const originalRange = tab.planningRecovery?.blueprintRecovery?.editRange
+      if (!snapshot || !candidate || candidate.leaseEpoch !== session.leaseId || !originalRange || !snapshot.planningSaveOperationId
+        || candidate.writeState !== 'ready' && !candidate.saved) throw new Error(text('当前无法保存，请等待生成结束或检查来源变化', 'Wait for generation to finish or check changed sources before saving.'))
+      const pending = useEditorStore.getState().tabs.find(item => item.id === tab.id)?.planningSaveSnapshot
+      if (pending?.status === 'saved' || candidate.saved && !pending) throw new Error(text('本次恢复已保存，后续修改仅供复制。', 'This recovery is saved. Further edits can only be copied.'))
+      let submission = pending
+      if (!submission) {
+        const authorEnd = Number(endRef.current)
+        if (!Number.isSafeInteger(authorEnd) || authorEnd < originalRange.from || authorEnd > originalRange.to) throw new Error(text('请选择连续完整章节的终点', 'Choose the last complete consecutive chapter.'))
+        const blueprints = parseTextBlueprintsStrict(snapshot.content ?? '', originalRange.from, authorEnd, 'author')
+        submission = {
+          content: snapshot.content ?? '', contentRevision: snapshot.contentRevision ?? 0,
+          status: 'pending', channel: 'db:blueprint-commit-range',
+          request: { mode: 'replace-range', operationId: snapshot.planningSaveOperationId,
+            startChapter: originalRange.from, endChapter: authorEnd, blueprints,
+            authorRecovery: { sourceHandle: candidate.sourceHandle, leaseEpoch: candidate.leaseEpoch } },
+        } satisfies PlanningRecoverySaveSnapshot
+        useEditorStore.getState().setPlanningSaveSnapshot(tab.id, submission)
+      }
+      if (submission.channel !== 'db:blueprint-commit-range') throw new Error('INVALID_PLANNING_SAVE_CHANNEL')
+      const result = await ipc.invokeWithProjectSession(session, 'db:blueprint-commit-range', {
+        ...submission.request, authorRecovery: { ...submission.request.authorRecovery, leaseEpoch: candidate.leaseEpoch },
+      }, projectKey)
+      if (!result.success && !pending && isCurrentProjectSession(session)) useEditorStore.getState().setPlanningSaveSnapshot(tab.id, undefined)
+      requireIpcSuccess(result, '保存恢复蓝图')
+      if (!isCurrentProjectSession(session)) return
+      useEditorStore.getState().setPlanningSaveSnapshot(tab.id, { ...submission, status: 'saved' })
+      useEditorStore.getState().settleTabSave(tab.id, submission)
+      setError('')
+      await refresh()
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); if (propagate) throw reason }
+    finally { busyRef.current = false; setBusy(false) }
+  }, [projectKey, refresh, session, tab.id, tab.planningRecovery, text])
+  useEffect(() => {
+    registerEditorExitSaveHandler({ tabId: tab.id, type: 'chapter-card', save: () => save(true) })
+  }, [save, tab.id])
+  const continuePlanning = async () => {
+    if (busyRef.current) return
+    busyRef.current = true; setBusy(true)
+    try {
+      if (!session) throw new Error(text('项目会话已切换', 'The project session changed.'))
+      const fresh = await refresh()
+      const continuation = fresh.planningContinuation
+      if (!continuation?.remainingRange || !['ready', 'continued'].includes(continuation.state)) throw new Error(text('当前不能继续，请等待生成结束或检查来源变化', 'Wait for generation to finish or check changed sources before continuing.'))
+      await launchCreativeWorkflow({ workflow: 'generate_blueprint', params: { mode: 'append',
+        startChapter: continuation.remainingRange.from, count: continuation.remainingRange.to - continuation.remainingRange.from + 1,
+        targetUnits: continuation.targetUnits, restartFrom: continuation.sourceHandle,
+      } }, session)
+      await refresh()
+      setError('')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+  const candidate = context?.blueprintRecovery
+  const continuation = context?.planningContinuation
+  return <div className="h-full flex flex-col" aria-label={text('蓝图恢复', 'Blueprint recovery')}>
+    <div className="p-3 text-xs space-y-2">
+      {currentTab.planningSaveSnapshot?.status === 'saved' && <p>{text('本次恢复已保存，后续修改仅供复制。', 'This recovery is saved. Further edits can only be copied.')}</p>}
+      <p>{text('蓝图未完整生成，原文已保留。请补齐 JSON 中的引号、括号和必填内容，只保留要保存的连续完整章节。保存只写入本地，不会调用模型。', 'The incomplete blueprint text is preserved. Complete the JSON quotes, brackets and required fields. Keep only complete consecutive chapters to save. Saving is local and does not call a model.')}</p>
+      <label>{text('保存到第几章', 'Last complete chapter')} <input type="number" min={tab.planningRecovery?.blueprintRecovery?.editRange?.from} max={tab.planningRecovery?.blueprintRecovery?.editRange?.to} value={end} onChange={event => {
+        const value = event.target.value
+        endRef.current = value; setEnd(value)
+        useEditorStore.setState(state => ({ tabs: state.tabs.map(item => item.id === tab.id ? { ...item, planningSaveEnd: value } : item) }))
+      }} /></label>
+      <Button disabled={busy || !sessionCurrent || currentTab.planningSaveSnapshot?.status === 'saved' || candidate?.writeState !== 'ready' && !(candidate?.saved && currentTab.planningSaveSnapshot?.status === 'pending')} onClick={() => { void save() }}>{text('保存恢复蓝图', 'Save recovered blueprints')}</Button>
+      <Button disabled={busy || !sessionCurrent || !continuation?.remainingRange || !['ready', 'continued'].includes(continuation.state)} onClick={() => { void continuePlanning() }}>{text('继续生成缺少的章节', 'Generate remaining chapters')}</Button>
+      {continuation?.remainingRange && <p>{text(`待完成第 ${continuation.remainingRange.from} 至 ${continuation.remainingRange.to} 章，每章目标 ${continuation.targetUnits} ${planningTargetUnit}。`, `Chapters ${continuation.remainingRange.from} to ${continuation.remainingRange.to} remain. Target ${continuation.targetUnits} ${planningTargetUnit} per chapter.`)}</p>}
+      {candidate && ['in-flight', 'source-changed', 'continued'].includes(candidate.writeState) && <p>{text('当前正式内容不能覆盖。可继续编辑或复制恢复稿。', 'Saved content cannot currently be replaced. You can still edit or copy this recovery draft.')}</p>}
+      {error && <p role="alert">{error}</p>}
+      <details><summary>{text('原始候选', 'Original candidate')}</summary><pre className="whitespace-pre-wrap max-h-40 overflow-auto">{tab.originalContent}</pre></details>
+    </div>
+    <div className="flex-1 min-h-0"><CodeMirrorEditor mode="document" content={currentTab.content ?? ''} hideStatusBar onChange={value => useEditorStore.getState().updateTabContent(tab.id, value)} onSave={() => save()} /></div>
+  </div>
+}
+
+function ChapterCardEditorSession({
   projectKey,
   initialChapterNumber,
 }: {
@@ -101,11 +218,29 @@ export default function ChapterCardEditor({
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
+  const [planningRecovery, setPlanningRecovery] = useState<GenerationRecoveryContext | null>(null)
+  const latestDirectoryRun = useWorkflowStore(state => state.history.find(run => run.type === 'directory' && run.projectPath === projectKey)?.id)
+  useEffect(() => {
+    const session = currentProjectSessionForPath(projectKey)
+    if (!session) return
+    let current = true
+    void (async () => {
+      const views = await ipc.invokeWithProjectSession(session, 'generation:list')
+      for (const view of views) {
+        const recovery = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle })
+        if (!current || !isCurrentProjectSession(session)) return
+        if (recovery.blueprintRecovery && recovery.blueprintRecovery.writeState !== 'complete') { setPlanningRecovery(recovery); return }
+      }
+      if (current) setPlanningRecovery(null)
+    })().catch(() => {})
+    return () => { current = false }
+  }, [projectKey, currentProject?.sessionLease, latestDirectoryRun])
   // ✅ action 用 getState() 获取，不订阅 workflow store 高频更新
   const addLog = useWorkflowStore.getState().addLog
   const [blueprints, setBlueprints] = useState<ChapterBlueprint[]>([])
   const [selectedIdx, setSelectedIdx] = useState<number>(0)
   const [saving, setSaving] = useState(false)
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const [loading, setLoading] = useState(true)
   const [dirtyChapterNumbers, setDirtyChapterNumbers] = useState<Set<number>>(() => new Set())
   const blueprintsRef = useRef<ChapterBlueprint[]>([])
@@ -142,15 +277,10 @@ export default function ChapterCardEditor({
     if (targetIndex >= 0) setSelectedIdx(targetIndex)
   }, [initialChapterNumber, loading])
 
-  const roleLabel = (role: string) => text(role, ({
-    建置: 'Setup',
-    铺垫: 'Foreshadowing',
-    发展: 'Development',
-    冲突: 'Conflict',
-    高潮: 'Climax',
-    转折: 'Turning point',
-    收尾: 'Resolution',
-  } as Record<string, string>)[role] ?? role)
+  const roleLabel = (role: string) => {
+    const labels = getChapterRoleLabels(role)
+    return labels ? text(labels.zhCN, labels.enUS) : role
+  }
 
   const applyVisibleDraftState = useCallback((nextBlueprints: ChapterBlueprint[], nextDirty: Set<number>) => {
     blueprintsRef.current = nextBlueprints
@@ -212,6 +342,7 @@ export default function ChapterCardEditor({
     ) return
     const nextDirty = new Set(dirtyChapterNumbersRef.current)
     nextDirty.add(chapterNumber)
+    setSaveOutcome('idle')
     persistProjectDraftState(projectKey, projectSession, nextBlueprints, nextDirty)
   }, [projectKey, projectMatches, persistProjectDraftState])
 
@@ -376,7 +507,7 @@ export default function ChapterCardEditor({
   }
 
   /** 保存当前章节蓝图 */
-  const handleSaveOne = async () => {
+  const handleSaveOne = async (propagateFailure = false) => {
     const projectSession = currentProjectSessionForPath(projectKey)
     if (
       !projectMatches
@@ -386,6 +517,7 @@ export default function ChapterCardEditor({
     ) return
     const savedSnapshots = captureBlueprintSnapshots([selected])
     setSaving(true)
+    setSaveOutcome('idle')
     try {
       await saveChapterBlueprint(selected, projectKey, projectSession)
       if (!isCurrentProjectSession(projectSession)) return
@@ -396,19 +528,22 @@ export default function ChapterCardEditor({
         savedSnapshots,
       )
       persistProjectDraftState(projectKey, projectSession, current.blueprints, nextDirty)
-    addLog('info', text(`第 ${selected.chapterNumber} 章蓝图已保存`, `Saved blueprint for Chapter ${selected.chapterNumber}`))
+      setSaveOutcome(nextDirty.size === 0 ? 'saved' : 'idle')
+      addLog('info', text(`第 ${selected.chapterNumber} 章蓝图已保存`, `Saved blueprint for Chapter ${selected.chapterNumber}`))
     } catch (err) {
       if (!isCurrentProjectSession(projectSession)) return
       const message = err instanceof Error ? err.message : String(err)
       addLog('error', text(`保存第 ${selected.chapterNumber} 章蓝图失败：${message}`, `Could not save the blueprint for Chapter ${selected.chapterNumber}.`))
       toast.error(text(`保存失败\n\n${message}`, 'Could not save the blueprint.'))
+      setSaveOutcome('failed')
+      if (propagateFailure) throw err
     } finally {
       if (isCurrentProjectSession(projectSession)) setSaving(false)
     }
   }
 
   /** 全量保存到 SQLite */
-  const handleSaveAll = async () => {
+  const handleSaveAll = async (propagateFailure = false) => {
     const projectSession = currentProjectSessionForPath(projectKey)
     if (
       !projectMatches
@@ -418,6 +553,7 @@ export default function ChapterCardEditor({
     const saveInput = blueprintsRef.current
     const savedSnapshots = captureBlueprintSnapshots(saveInput)
     setSaving(true)
+    setSaveOutcome('idle')
     try {
       await saveAllBlueprints(saveInput, projectKey, projectSession)
       if (!isCurrentProjectSession(projectSession)) return
@@ -428,12 +564,15 @@ export default function ChapterCardEditor({
         savedSnapshots,
       )
       persistProjectDraftState(projectKey, projectSession, current.blueprints, nextDirty)
+      setSaveOutcome(nextDirty.size === 0 ? 'saved' : 'idle')
       addLog('info', text(`已保存全部 ${saveInput.length} 章蓝图`, `Saved all ${saveInput.length} chapter blueprints`))
     } catch (err) {
       if (!isCurrentProjectSession(projectSession)) return
       const message = err instanceof Error ? err.message : String(err)
       addLog('error', text(`保存全部蓝图失败：${message}`, 'Could not save all chapter blueprints.'))
       toast.error(text(`保存失败\n\n${message}`, 'Could not save the blueprints.'))
+      setSaveOutcome('failed')
+      if (propagateFailure) throw err
     } finally {
       if (isCurrentProjectSession(projectSession)) setSaving(false)
     }
@@ -447,7 +586,7 @@ export default function ChapterCardEditor({
     registerEditorExitSaveHandler({
       type: 'chapter-card',
       projectKey,
-      save: () => exitSaveRef.current(),
+      save: () => exitSaveRef.current(true),
     })
   }, [projectKey])
 
@@ -737,6 +876,11 @@ export default function ChapterCardEditor({
               {text('未保存', 'Unsaved')}
             </span>
           )}
+          <SaveFeedback dirty={visibleDirty} saving={saving} outcome={saveOutcome} />
+          {planningRecovery && <Button size="sm" onClick={() => {
+            const session = currentProjectSessionForPath(projectKey)
+            if (session && isCurrentProjectSession(session)) openPlanningRecoveryDraft(planningRecovery, projectKey, text('蓝图恢复稿', 'Blueprint recovery draft'))
+          }}>{text('编辑恢复稿', 'Edit recovery draft')}</Button>}
         </div>
         <div className="flex items-center gap-1">
           {/* 写作入口 — 仅下一章可写时显示 */}
@@ -789,7 +933,7 @@ export default function ChapterCardEditor({
             {text('清空全部蓝图', 'Clear all blueprints')}
           </Button>
           {visibleDirty && (
-            <Button variant="outline" size="sm" onClick={handleSaveAll} disabled={saving || !projectDataReady}>
+            <Button variant="outline" size="sm" onClick={() => { void handleSaveAll() }} disabled={saving || !projectDataReady}>
             <Save size={12} /> {saving ? text('保存中...', 'Saving...') : text('保存全部', 'Save all')}
             </Button>
           )}
@@ -948,7 +1092,7 @@ export default function ChapterCardEditor({
                     <Trash2 size={12} />
                     {text('删除此章', 'Delete chapter')}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleSaveOne} disabled={saving}>
+                  <Button variant="outline" size="sm" onClick={() => { void handleSaveOne() }} disabled={saving}>
                     <Save size={12} /> {saving ? text('保存中...', 'Saving...') : text('保存', 'Save')}
                   </Button>
                 </div>
@@ -980,8 +1124,10 @@ export default function ChapterCardEditor({
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <Label>{text('章节定位', 'Chapter role')}</Label>
-                    <NativeSelect value={selected.role} onChange={e => updateField('role', e.target.value)}>
-                      {ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
+                    <NativeSelect value={chapterRoleSelectValue(selected.role)} onChange={e => updateField('role', e.target.value)}>
+                      {chapterRoleOptions(selected.role).map(({ value, labels }) => (
+                        <option key={value} value={value}>{labels ? text(labels.zhCN, labels.enUS) : value}</option>
+                      ))}
                     </NativeSelect>
                   </div>
                   <div>

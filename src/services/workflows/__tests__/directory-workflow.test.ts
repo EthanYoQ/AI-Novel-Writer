@@ -1,6 +1,9 @@
+import type { DirectoryGenerationProgress } from '../../../shared/generation-owner-contract'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  resolveDirectoryContinuation,
+  terminalDirectoryProgress,
   assertBlueprintCoverage,
   commitDirectoryBlueprintRange,
   parseTextBlueprints,
@@ -36,7 +39,7 @@ const blueprint: ChapterBlueprint = {
 function stubIpcInvoke(result: unknown) {
   const invoke = vi.fn().mockResolvedValue(result)
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),
@@ -223,6 +226,13 @@ describe('parseTextBlueprints', () => {
 })
 
 describe('parseTextBlueprintsStrict', () => {
+  it('preserves author recovery fields exactly while model parsing retains its existing persistence boundary', () => {
+    const fields = { userGuidance: '  作者指导。\r\n', notes: '<think>作者原文</think>', notesUpdatedAt: '2026-10-04T13:00:00.000Z' }
+    const raw = JSON.stringify([{ ...blueprint, ...fields }])
+    expect(parseTextBlueprintsStrict(raw, 1, 1, 'author')[0]).toMatchObject(fields)
+    expect(parseTextBlueprintsStrict(raw, 1, 1)[0]).toMatchObject({ userGuidance: '', notes: '', notesUpdatedAt: '' })
+    expect(() => parseTextBlueprintsStrict(JSON.stringify([{ ...blueprint, notes: 123 }]), 1, 1, 'author')).toThrow('invalid_type')
+  })
   it('returns parsed blueprints for valid array input', () => {
     const result = parseTextBlueprintsStrict(JSON.stringify([{ ...blueprint, relationships: [] }]), 1, 1)
 
@@ -592,5 +602,42 @@ describe('directory workflow project context', () => {
 
     expect(workflow.steps.map(step => step.name)).toEqual(['读取架构', '生成蓝图'])
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert-many')
+  })
+})
+
+
+describe('durable directory continuation selection', () => {
+  const session = { projectId: '目录合成项目', leaseId: '重新打开会话', projectPath: 'C:/目录合成项目' }
+  const handle = { projectId: session.projectId, epoch: '旧会话', rootActionId: '原预算根', runId: '原运行' }
+  const base: DirectoryGenerationProgress = { authorInputs: [{ id: 'directory:pacing-guidance', text: '  缓慢递进。\r\n' }, { id: 'directory:author-config', text: JSON.stringify({ totalChapters: 200 }) }], operationId: '已保存范围', payloadHash: 'a'.repeat(64), sourceHandle: handle,
+    requestedRange: { startChapter: 1, endChapter: 200 }, committedRange: { startChapter: 1, endChapter: 160 }, remainingRange: { startChapter: 161, endChapter: 200 } }
+  function arrange(all: DirectoryGenerationProgress[]) {
+    useProjectStore.setState({ currentProject: { ...project(session.projectPath), id: session.projectId, sessionLease: session.leaseId } })
+    const invoke = stubIpcInvoke(all)
+    return invoke
+  }
+  it('overrides caller range from the exact committed receipt and retains the operation root', async () => {
+    const invoke = arrange([base])
+    await expect(resolveDirectoryContinuation({ mode: 'full', startChapter: 1, count: 200, continueDirectoryOperationId: base.operationId }, session))
+      .resolves.toMatchObject({ mode: 'append', pacingGuidance: '  缓慢递进。\r\n', startChapter: 161, count: 40, continueDirectoryOperationId: base.operationId })
+    expect(invoke).toHaveBeenCalledWith('generation:list-directory-progress', session)
+  })
+  it('uses an issued exact handle after restart instead of starting the continuation twice', async () => {
+    const continuationHandle = { ...handle, runId: '已有剩余运行' }
+    arrange([{ ...base, continuationHandle }])
+    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: base.operationId }, session))
+      .resolves.toMatchObject({ startChapter: 161, count: 40, resumeHandle: continuationHandle, continueDirectoryOperationId: undefined })
+  })
+  it('follows only the explicit chain and never regenerates the already committed child prefix', async () => {
+    const continuationHandle = { ...handle, runId: '已有剩余运行' }
+    const parent = { ...base, continuationHandle }
+    const child: DirectoryGenerationProgress = { ...base, operationId: '后续已保存', sourceHandle: { ...continuationHandle, epoch: session.leaseId },
+      requestedRange: { startChapter: 161, endChapter: 200 }, committedRange: { startChapter: 161, endChapter: 180 }, remainingRange: { startChapter: 181, endChapter: 200 } }
+    arrange([parent, child])
+    expect(terminalDirectoryProgress(parent, [parent, child])).toEqual(child)
+    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: parent.operationId }, session))
+      .resolves.toMatchObject({ startChapter: 181, count: 20, continueDirectoryOperationId: child.operationId })
+    arrange([parent, { ...child, remainingRange: null }])
+    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: parent.operationId }, session)).rejects.toThrow('DIRECTORY_PROGRESS_COMPLETE')
   })
 })

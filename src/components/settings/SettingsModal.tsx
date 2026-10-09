@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   X, Plus, Trash2, Check, Save, Globe, Cpu, Database,
   Type, Settings2, Zap, Eye, EyeOff, ChevronDown, MessageSquare,
-  Info, Palette, ExternalLink, RefreshCw, RotateCcw, BookOpen,
+  Info, Palette, ExternalLink, RefreshCw, RotateCcw, BookOpen, HardDriveUpload,
 } from 'lucide-react'
 import PromptSettings from './PromptSettings'
 import SkillSettings from './SkillSettings'
@@ -16,8 +16,8 @@ import type {
 } from '../../shared/ipc-channels'
 import { LOW_VRAM_EMBEDDING_OPTIONS, normalizeEmbeddingOptions } from '../../shared/embedding-options'
 import type { ModelCapabilities, ProviderPreset } from '../../shared/provider-presets'
-import { BUILTIN_PRESETS } from '../../shared/provider-presets'
-import { createModelProfileDraft } from '../../shared/model-profile-draft'
+import { BUILTIN_PRESETS, resolveModelProfileBudgetCapabilities } from '../../shared/provider-presets'
+import { applyModelProfileSelection, createModelProfileDraft, DEFAULT_GENERATION_OUTPUT_TOKENS, modelCapabilitySource } from '../../shared/model-profile-draft'
 import type { ModelProviderResourceId } from '../../shared/model-provider-resources'
 import { randomUUID } from '../../utils/id'
 import { Button } from '../ui/Button'
@@ -34,8 +34,10 @@ import type { Locale } from '../../i18n/types'
 import { alertError } from '../ui/AlertDialog'
 import {
   ModelReasoningOverrideSettings,
+  ModelCapabilitySources,
   ProjectCreativeStrategySettings,
 } from './ReasoningPolicySettings'
+import ProjectBackupPanel from '../backups/ProjectBackupPanel'
 
 // ==================== 分类定义 ====================
 
@@ -59,6 +61,7 @@ export const SETTINGS_SECTIONS: SectionItem[] = [
   { id: 'editor', label: '编辑器', labelEn: 'Editor', icon: <Type size={16} />, description: '字体大小、自动保存等编辑器偏好设置', descriptionEn: 'Fonts and other editor preferences' },
   { id: 'prompts', label: '提示词模板', labelEn: 'Prompt templates', icon: <MessageSquare size={16} />, description: '自定义 AI 创作各环节使用的提示词模板', descriptionEn: 'Customize guidance for each AI writing stage' },
   { id: 'skills', label: '写作 Skills', labelEn: 'Writing skills', icon: <BookOpen size={16} />, description: '检查、安装并绑定提示词型写作 Skill', descriptionEn: 'Inspect, install, and bind prompt-only writing skills' },
+  { id: 'backup', label: '项目备份', labelEn: 'Project backup', icon: <HardDriveUpload size={16} />, description: '导出本地存档，或显式绑定 WebDAV 后创建云备份', descriptionEn: 'Export local archives or explicitly bind WebDAV for cloud backups' },
   { id: 'about', label: '关于', labelEn: 'About', icon: <Info size={16} />, description: '版本、定位与本地部署说明', descriptionEn: 'Version, positioning, and local deployment' },
 ]
 
@@ -163,6 +166,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             {section === 'editor' && <EditorSection />}
             {section === 'prompts' && <PromptSettings />}
             {section === 'skills' && <SkillSettings />}
+            {section === 'backup' && <ProjectBackupPanel />}
             {section === 'about' && <AboutSection />}
           </div>
         </main>
@@ -500,7 +504,8 @@ function ModelForm({
     if (key === 'provider' || key === 'protocol' || key === 'baseUrl' || key === 'apiKey') {
       invalidateDiscovery()
     }
-    onChange({ ...model, [key]: val })
+    onChange(!isEmbedding && ['modelName', 'baseUrl', 'protocol', 'provider'].includes(key)
+      ? applyModelProfileSelection(model, { [key]: val }) : { ...model, [key]: val })
   }
 
   const currentCapabilities: ModelCapabilities = {
@@ -510,30 +515,39 @@ function ModelForm({
     structuredOutput: model.capabilities?.structuredOutput ?? false,
     usage: model.capabilities?.usage ?? false,
   }
+  const providerOutputLimit = resolveModelProfileBudgetCapabilities(model)?.maxOutputTokens
+  const outputLimits = [model.maxTokens, currentCapabilities.maxOutputTokens, providerOutputLimit]
+    .filter((value): value is number => Number.isSafeInteger(value) && Number(value) > 0)
+  const effectiveOutputLimit = outputLimits.length ? Math.min(...outputLimits) : null
   const contextOutputConflict = !isEmbedding
     && currentCapabilities.contextWindowTokens !== null
     && currentCapabilities.contextWindowTokens > 0
-    && currentCapabilities.maxOutputTokens >= currentCapabilities.contextWindowTokens
+    && effectiveOutputLimit !== null
+    && effectiveOutputLimit >= currentCapabilities.contextWindowTokens
 
   const updateCapabilities = (next: Partial<ModelCapabilities>) => {
     const capabilities = { ...currentCapabilities, ...next }
-    onChange({ ...model, capabilities, maxTokens: capabilities.maxOutputTokens })
+    const capabilitySources: NonNullable<ModelProfile['capabilitySources']> = {}
+    for (const key of Object.keys(currentCapabilities) as Array<keyof ModelCapabilities>) {
+      capabilitySources[key] = key in next ? 'manual' : modelCapabilitySource(model, key)
+    }
+    onChange({ ...model, capabilities, capabilitySources })
   }
 
   const resetAdvancedSettings = () => {
-    const presetModel = presetModels.find(candidate => candidate.name === model.modelName)
-    const defaultMaxOutputTokens = presetModel?.capabilities?.maxOutputTokens
-      ?? presetModel?.maxTokens
-      ?? 4096
+    const defaultMaxOutputTokens = Math.min(providerOutputLimit ?? DEFAULT_GENERATION_OUTPUT_TOKENS, DEFAULT_GENERATION_OUTPUT_TOKENS)
+    const capabilitySources: NonNullable<ModelProfile['capabilitySources']> = {}
+    for (const key of Object.keys(currentCapabilities) as Array<keyof ModelCapabilities>) {
+      capabilitySources[key] = modelCapabilitySource(model, key)
+    }
     onChange({
       ...model,
       temperature: 0.7,
       maxTokens: defaultMaxOutputTokens,
-      capabilities: {
-        ...currentCapabilities,
-        maxOutputTokens: defaultMaxOutputTokens,
-      },
+      capabilities: { ...currentCapabilities, maxOutputTokens: providerOutputLimit ?? DEFAULT_GENERATION_OUTPUT_TOKENS },
+      capabilitySources: { ...capabilitySources, maxOutputTokens: providerOutputLimit === undefined ? 'unknown' : 'preset' },
       reasoningOverride: 'auto',
+      reasoningMapping: undefined,
     })
   }
 
@@ -552,7 +566,7 @@ function ModelForm({
       : firstModel?.capabilities
     setCustomModelName(false)
     invalidateDiscovery()
-    onChange({
+    const selection = {
       ...model,
       provider,
       protocol: (p?.protocol ?? 'openai') as 'openai' | 'gemini',
@@ -560,7 +574,10 @@ function ModelForm({
       modelName: defaultModelName,
       maxTokens: capabilities?.maxOutputTokens ?? firstModel?.maxTokens ?? 4096,
       capabilities: capabilities ? { ...capabilities } : undefined,
-    })
+    }
+    onChange(isEmbedding ? selection : applyModelProfileSelection(model, {
+      provider, protocol: selection.protocol, baseUrl: selection.baseUrl, modelName: selection.modelName,
+    }))
   }
 
   /** 选择预设模型或切换到自定义输入 */
@@ -570,15 +587,14 @@ function ModelForm({
       up('modelName', '')
     } else {
       setCustomModelName(false)
-      // 找到对应的 ModelPreset，同时更新 modelName 和 maxTokens
       const matched = presetModels.find((m) => m.name === val)
       const capabilities = matched?.capabilities
-      onChange({
+      onChange(isEmbedding ? {
         ...model,
         modelName: val,
         maxTokens: capabilities?.maxOutputTokens ?? matched?.maxTokens ?? model.maxTokens,
         capabilities: capabilities ? { ...capabilities } : undefined,
-      })
+      } : applyModelProfileSelection(model, { modelName: val }))
     }
   }
 
@@ -707,14 +723,7 @@ function ModelForm({
                 if (customModelName) {
                   // 切回预设列表
                   const first = presetModels[0]
-                  const capabilities = first.capabilities
-                  setCustomModelName(false)
-                  onChange({
-                    ...model,
-                    modelName: first.name,
-                    maxTokens: capabilities?.maxOutputTokens ?? first.maxTokens ?? model.maxTokens,
-                    capabilities: capabilities ? { ...capabilities } : undefined,
-                  })
+                  handleModelSelect(first.name)
                 } else {
                   // 切换到自定义输入
                   setCustomModelName(true)
@@ -810,7 +819,9 @@ function ModelForm({
               const value = event.target.value
               if (!value) return
               setCustomModelName(true)
-              onChange({ ...model, modelName: value })
+              if (isEmbedding) up('modelName', value)
+              else onChange(applyModelProfileSelection(model, { modelName: value },
+                discoveredModels.find(candidate => candidate.value === value)?.capabilities))
             }}
           >
             <option value="">{text('选择端点返回的模型', 'Choose a model returned by the endpoint')}</option>
@@ -863,6 +874,7 @@ function ModelForm({
       {!isEmbedding && (
         <ProjectCreativeStrategySettings />
       )}
+      {!isEmbedding && <ModelCapabilitySources model={model} />}
 
       {!isEmbedding && (
         <div className="rounded-lg border border-[var(--color-border)]" data-model-advanced-settings>
@@ -919,14 +931,23 @@ function ModelForm({
                     aria-label={text('最大输出 Token', 'Max output tokens')}
                     type="number"
                     min={0}
-                    value={currentCapabilities.maxOutputTokens}
-                    onChange={(e) => updateCapabilities({ maxOutputTokens: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+                    value={model.maxTokens}
+                    onChange={(e) => up('maxTokens', e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
                   />
                   <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
-                    {text('限制当前模型单次响应；恢复默认会使用内置模型上限。', 'Limits one response from this model. Restore uses the built-in model limit.')}
+                    {text('作者设置的单次输出限制；实际请求仍受模型容量与任务预算约束。', 'Your per-response limit; model capacity and task budgets still apply.')}
                   </p>
                 </div>
+                <div>
+                  <Label>{text('模型输出容量', 'Model output capacity')}</Label>
+                  <Input aria-label={text('模型输出容量', 'Model output capacity')} type="number" min={1}
+                    value={currentCapabilities.maxOutputTokens}
+                    onChange={event => updateCapabilities({ maxOutputTokens: Number(event.target.value) })} />
+                </div>
               </div>
+              <p className="text-xs text-[var(--color-text-secondary)]" data-effective-output-limit={effectiveOutputLimit}>
+                {text(`当前有效输出额度为 ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')} Token。取作者设置、模型输出容量与已知服务商上限中的较小值；完整输入和本次剩余额度仍会影响请求。`, `Effective output allowance: ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')} tokens. This uses the lowest configured or verified output limit. Prompt size and the remaining action allowance still affect each request.`)}
+              </p>
               {contextOutputConflict && (
                 <p
                   role="status"

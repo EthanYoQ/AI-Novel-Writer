@@ -4,15 +4,37 @@
  */
 
 import type { VerifiedReasoningMapping } from './reasoning-types'
+import { isReasoningMapping } from './reasoning-types'
 
 /** 单个模型的预设 — name + 该模型的输出 token 上限 */
 export interface ModelPreset {
   name: string
   /** Model-specific capability metadata. `maxTokens` remains the legacy output limit. */
   capabilities?: ModelCapabilities
+  /** Independently verified JSON-mode support; does not imply other feature or capacity facts. */
+  structuredOutput?: boolean
+  /** Verified capacity facts used only for budget planning, independent of feature flags. */
+  budgetCapabilities?: ModelBudgetCapabilities
   /** Provider request mapping verified against the official model documentation. */
   reasoningMapping?: VerifiedReasoningMapping
   maxTokens: number
+}
+
+/** Provider-documented capacity facts that do not imply request-feature support. */
+export interface ModelBudgetCapabilities {
+  contextWindowTokens: number
+  maxOutputTokens: number
+  evidence: {
+    sourceUrl: string
+    /** The catalog deliberately records a safe value at or below the rounded provider claim. */
+    calibration: 'conservative-provider-documentation'
+  }
+}
+
+export interface ResolvedModelBudgetCapabilities {
+  contextWindowTokens: number
+  maxOutputTokens: number
+  evidence?: ModelBudgetCapabilities['evidence']
 }
 
 /** Optional capabilities supported by a model endpoint. */
@@ -33,6 +55,7 @@ export interface ModelCapabilityProfile {
   modelName?: unknown
   maxTokens?: unknown
   capabilities?: ModelCapabilities | null
+  reasoningMapping?: VerifiedReasoningMapping
 }
 
 /** 单个服务商的预设配置 */
@@ -43,6 +66,10 @@ export interface ProviderPreset {
   displayName?: string
   /** 默认 API 地址 */
   baseUrl: string
+  /** Additional exact official endpoints allowed to supply budget capability evidence. */
+  budgetCapabilityBaseUrls?: string[]
+  /** Persisted provider labels accepted only for this exact budget evidence match. */
+  budgetProviderAliases?: string[]
   /** 默认调用协议：openai 兼容 或 gemini 原生 */
   protocol: string
   /** 支持的生成模型列表（含各自的 maxTokens） */
@@ -64,12 +91,97 @@ export function createProviderCatalog(): ProviderPreset[] {
     provider: 'openai',
     displayName: 'OpenAI',
     baseUrl: 'https://api.openai.com',
+    // Profiles persist the versioned endpoint; both spellings are the same
+    // official host, so only budget evidence may match through it.
+    budgetCapabilityBaseUrls: ['https://api.openai.com/v1'],
     protocol: 'openai',
     models: [
-      { name: 'gpt-4o', maxTokens: 16384 },
-      { name: 'gpt-4o-mini', maxTokens: 16384 },
-      { name: 'gpt-4-turbo', maxTokens: 4096 },
-      { name: 'gpt-3.5-turbo', maxTokens: 4096 }
+      {
+        name: 'gpt-4.1',
+        // Preserve the legacy operational default; budget evidence is separate
+        // and never advertised as request-feature support.
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 1_047_576,
+          maxOutputTokens: 32_768,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4.1',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-4.1-2025-04-14',
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 1_047_576,
+          maxOutputTokens: 32_768,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4.1',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'o3',
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 200_000,
+          maxOutputTokens: 100_000,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/o3',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-4o',
+        maxTokens: 16384,
+        budgetCapabilities: {
+          contextWindowTokens: 128_000,
+          maxOutputTokens: 16_384,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4o',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-4o-mini',
+        maxTokens: 16384,
+        budgetCapabilities: {
+          contextWindowTokens: 128_000,
+          maxOutputTokens: 16_384,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4o-mini',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-4-turbo',
+        maxTokens: 4096,
+        budgetCapabilities: {
+          contextWindowTokens: 128_000,
+          maxOutputTokens: 4_096,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4-turbo',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-3.5-turbo',
+        maxTokens: 4096,
+        budgetCapabilities: {
+          contextWindowTokens: 16_385,
+          maxOutputTokens: 4_096,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-3.5-turbo',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      }
     ],
     embeddingModels: ['text-embedding-3-small', 'text-embedding-3-large', 'text-embedding-ada-002'],
   },
@@ -105,8 +217,77 @@ export function createProviderCatalog(): ProviderPreset[] {
     provider: 'siliconflow',
     displayName: 'SiliconFlow',
     baseUrl: 'https://api.siliconflow.cn/v1',
+    budgetCapabilityBaseUrls: ['https://api.siliconflow.com/v1'],
+    budgetProviderAliases: ['openai'],
     protocol: 'openai',
-    models: [],
+    models: [
+      {
+        name: 'deepseek-ai/DeepSeek-V4-Flash',
+        // JSON mode: https://docs.siliconflow.cn/docs/api/chat-completions-post
+        structuredOutput: true,
+        // https://docs.siliconflow.cn/docs/api/chat-completions-post
+        reasoningMapping: {
+          adapter: 'siliconflow-v4-thinking',
+          supportedEfforts: ['high', 'max'],
+          providerValues: { high: 'high', max: 'max' },
+        },
+        // Preserve the existing operational default. The separately verified
+        // capacity is evidence for planning and does not enlarge user settings.
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          // The provider page publishes rounded 1049K / 393K values. Use
+          // conservative decimal bounds rather than inventing binary limits.
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 393_000,
+          evidence: {
+            sourceUrl: 'https://www.siliconflow.com/models/deepseek-v4-flash',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'deepseek-ai/DeepSeek-V4-Pro',
+        // JSON mode: https://docs.siliconflow.cn/docs/userguide/guides/json-mode
+        structuredOutput: true,
+        // https://docs.siliconflow.cn/docs/api/chat-completions-post
+        reasoningMapping: {
+          adapter: 'siliconflow-v4-thinking',
+          supportedEfforts: ['high', 'max'],
+          providerValues: { high: 'high', max: 'max' },
+        },
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 393_000,
+          evidence: {
+            sourceUrl: 'https://www.siliconflow.com/models/deepseek-v4-pro',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'Qwen/Qwen3.8-27B',
+        // JSON mode: https://docs.siliconflow.cn/docs/userguide/guides/json-mode
+        structuredOutput: true,
+        // Application-selected budget, not a provider-defined medium effort.
+        // https://docs.siliconflow.cn/docs/userguide/capabilities/reasoning
+        reasoningMapping: {
+          adapter: 'openai-thinking-budget',
+          supportedEfforts: ['off', 'medium'],
+          providerValues: { off: 0, medium: 16_384 },
+        },
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 262_144,
+          // Conservative supported output, not a claim of the model's maximum.
+          maxOutputTokens: 16_384,
+          evidence: {
+            sourceUrl: 'https://www.siliconflow.cn/models',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+    ],
     embeddingModels: ['BAAI/bge-m3'],
     embeddingModelCapabilities: {
       'BAAI/bge-m3': {
@@ -185,6 +366,21 @@ export function createProviderCatalog(): ProviderPreset[] {
       { name: 'glm-4.7-flashx', maxTokens: 65536 },
       { name: 'glm-5-turbo', maxTokens: 65536 },
       { name: 'glm-5', maxTokens: 65536 },
+      {
+        name: 'glm-5.3', maxTokens: 65_536, structuredOutput: true,
+        budgetCapabilities: {
+          contextWindowTokens: 1_000_000, maxOutputTokens: 131_072,
+          evidence: {
+            sourceUrl: 'https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+        reasoningMapping: {
+          adapter: 'openai-reasoning-effort',
+          supportedEfforts: ['low', 'high', 'max'],
+          providerValues: { low: 'low', high: 'high', max: 'max' },
+        },
+      },
     ],
     embeddingModels: ['embedding-3'],
   },
@@ -259,6 +455,7 @@ function normalizedOfficialBaseUrl(value: unknown): string | null {
       || endpoint.hash
     ) return null
     endpoint.pathname = endpoint.pathname.replace(/\/+$/u, '') || '/'
+    if (endpoint.origin === 'https://api.deepseek.com' && endpoint.pathname === '/v1') endpoint.pathname = '/'
     return endpoint.toString().replace(/\/$/u, '')
   } catch {
     return null
@@ -287,6 +484,70 @@ function validatedCapabilities(value: unknown): ModelCapabilities | undefined {
   }
 }
 
+function validatedBudgetCapabilities(value: unknown): ModelBudgetCapabilities | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as Partial<ModelBudgetCapabilities>
+  const evidence = candidate.evidence as Partial<ModelBudgetCapabilities['evidence']> | undefined
+  if (
+    !Number.isSafeInteger(candidate.contextWindowTokens)
+    || Number(candidate.contextWindowTokens) <= 0
+    || !Number.isSafeInteger(candidate.maxOutputTokens)
+    || Number(candidate.maxOutputTokens) <= 0
+    || typeof evidence?.sourceUrl !== 'string'
+    || evidence.sourceUrl.length === 0
+    || evidence.calibration !== 'conservative-provider-documentation'
+  ) return undefined
+  return {
+    contextWindowTokens: candidate.contextWindowTokens as number,
+    maxOutputTokens: candidate.maxOutputTokens as number,
+    evidence: {
+      sourceUrl: evidence.sourceUrl,
+      calibration: evidence.calibration,
+    },
+  }
+}
+
+function matchesBudgetCapabilityEndpoint(preset: ProviderPreset, baseUrl: unknown): boolean {
+  const endpoint = normalizedOfficialBaseUrl(baseUrl)
+  if (!endpoint) return false
+  return [preset.baseUrl, ...(preset.budgetCapabilityBaseUrls ?? [])]
+    .some(candidate => endpoint === normalizedOfficialBaseUrl(candidate))
+}
+
+/**
+ * Resolve capacity evidence for budget planning without making claims about
+ * reasoning, structured output, usage reporting, or other request features.
+ */
+export function resolveModelProfileBudgetCapabilities(
+  profile: ModelCapabilityProfile,
+): ResolvedModelBudgetCapabilities | undefined {
+  if (
+    typeof profile.protocol !== 'string'
+    || typeof profile.modelName !== 'string'
+  ) return undefined
+
+  const protocol = profile.protocol
+  const modelName = profile.modelName.trim()
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.protocol === protocol && matchesBudgetCapabilityEndpoint(candidate, profile.baseUrl))
+  if (
+    !preset
+  ) return undefined
+
+  const model = preset.models.find(candidate => candidate.name === modelName)
+  // Qwen evidence is scoped to the published CN endpoint, not the V4 alias.
+  if (modelName === 'Qwen/Qwen3.8-27B'
+    && normalizedOfficialBaseUrl(profile.baseUrl) !== 'https://api.siliconflow.cn/v1') return undefined
+  const dedicated = validatedBudgetCapabilities(model?.budgetCapabilities)
+  if (dedicated) return dedicated
+
+  const capabilities = validatedCapabilities(model?.capabilities)
+  if (!capabilities || capabilities.contextWindowTokens === null) return undefined
+  return {
+    contextWindowTokens: capabilities.contextWindowTokens,
+    maxOutputTokens: capabilities.maxOutputTokens,
+  }
+}
+
 /**
  * Resolve verified built-in provider facts without mutating persisted data.
  * User-stored capabilities and output limits are operational policy, not proof
@@ -296,15 +557,14 @@ export function resolveModelProfileCapabilities(
   profile: ModelCapabilityProfile,
 ): ModelCapabilities | undefined {
   if (
-    typeof profile.provider !== 'string'
-    || typeof profile.protocol !== 'string'
+    typeof profile.protocol !== 'string'
     || typeof profile.modelName !== 'string'
   ) return undefined
 
-  const provider = profile.provider
   const protocol = profile.protocol
   const modelName = profile.modelName.trim()
-  const preset = BUILTIN_PRESETS.find(candidate => candidate.provider === provider)
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.protocol === protocol
+    && normalizedOfficialBaseUrl(profile.baseUrl) === normalizedOfficialBaseUrl(candidate.baseUrl))
   if (
     !preset
     || preset.protocol !== protocol
@@ -317,6 +577,15 @@ export function resolveModelProfileCapabilities(
   return validatedCapabilities(model?.capabilities)
 }
 
+/** Resolve one declared feature on the exact catalog endpoint, protocol and model. */
+export function resolveModelProfileStructuredOutput(profile: ModelCapabilityProfile): boolean | undefined {
+  if (typeof profile.protocol !== 'string' || typeof profile.modelName !== 'string') return undefined
+  const modelName = profile.modelName.trim()
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.protocol === profile.protocol
+    && normalizedOfficialBaseUrl(profile.baseUrl) === normalizedOfficialBaseUrl(candidate.baseUrl))
+  return preset?.models.find(candidate => candidate.name === modelName)?.structuredOutput
+}
+
 /**
  * Resolve only provider request mappings whose endpoint and exact model slug
  * match an app-maintained built-in preset. User-entered capability flags are
@@ -325,21 +594,24 @@ export function resolveModelProfileCapabilities(
 export function resolveModelProfileReasoningMapping(
   profile: ModelCapabilityProfile,
 ): VerifiedReasoningMapping | undefined {
+  if (profile.reasoningMapping !== undefined) {
+    const mapping = profile.reasoningMapping
+    return isReasoningMapping(mapping)
+      && (profile.protocol === 'gemini') === (mapping.adapter === 'gemini-thinking-budget')
+      ? mapping : undefined
+  }
   if (
-    typeof profile.provider !== 'string'
-    || typeof profile.protocol !== 'string'
+    typeof profile.protocol !== 'string'
     || typeof profile.modelName !== 'string'
   ) return undefined
 
-  const provider = profile.provider
   const protocol = profile.protocol
   const modelName = profile.modelName.trim()
-  const preset = BUILTIN_PRESETS.find(candidate => candidate.provider === provider)
-  if (
-    !preset
-    || preset.protocol !== protocol
-    || normalizedOfficialBaseUrl(profile.baseUrl) !== normalizedOfficialBaseUrl(preset.baseUrl)
-  ) return undefined
+  // Display labels do not define endpoint capabilities. Budget aliases still
+  // do not grant request features without an exact endpoint mapping.
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.protocol === protocol
+    && normalizedOfficialBaseUrl(profile.baseUrl) === normalizedOfficialBaseUrl(candidate.baseUrl))
+  if (!preset) return undefined
 
   const mapping = preset.models.find(candidate => candidate.name === modelName)
     ?.reasoningMapping

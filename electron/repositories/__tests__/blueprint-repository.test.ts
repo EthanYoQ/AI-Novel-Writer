@@ -6,6 +6,7 @@ import { getProjectDb } from '../../database'
 import { BlueprintRepository, type BlueprintData } from '../blueprint-repository'
 import { CharacterRosterRepository } from '../character-roster-repository'
 import type { CharacterRosterEntry } from '../../../src/shared/character-roster'
+import { parseBlueprintSemanticResponseText } from '../../../src/shared/blueprint-semantic-contract'
 
 vi.mock('../../database', () => ({
   getProjectDb: vi.fn(),
@@ -121,6 +122,24 @@ describe('BlueprintRepository without an opened project DB', () => {
 })
 
 describe('BlueprintRepository range commit', () => {
+  it('guards a new formal effect inside its transaction and keeps acknowledged replay read-only', () => {
+    const db = createBlueprintDb()
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    const request = { mode: 'replace-range' as const, operationId: 'main-guarded', startChapter: 1, endChapter: 1, blueprints: [blueprintFor(1)] }
+    try {
+      const refuse = () => { expect(db.inTransaction).toBe(true); throw new Error('GENERATION_SOURCE_CHANGED') }
+      expect(() => BlueprintRepository.commitRange(request, refuse)).toThrow('GENERATION_SOURCE_CHANGED')
+      expect(BlueprintRepository.count()).toBe(0)
+      expect(db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
+      const allow = vi.fn(() => expect(db.inTransaction).toBe(true))
+      expect(BlueprintRepository.commitRange(request, allow).idempotent).toBe(false)
+      db.prepare("UPDATE blueprints SET title='作者后来编辑的标题' WHERE chapter_number=1").run()
+      const replay = BlueprintRepository.commitRange(request, refuse)
+      expect(replay.idempotent).toBe(true)
+      expect(replay.snapshot[0].title).toBe('作者后来编辑的标题')
+      expect(allow).toHaveBeenCalledTimes(1)
+    } finally { db.close() }
+  })
   it('commits one exact logical range and returns its transaction readback receipt', () => {
     const db = createBlueprintDb()
     vi.mocked(getProjectDb).mockReturnValue(db)
@@ -156,6 +175,43 @@ describe('BlueprintRepository range commit', () => {
       expect(BlueprintRepository.getAll()).toEqual(receipt.snapshot)
     } finally {
       db.close()
+    }
+  })
+
+  it('preserves parsed full names, candidates, and relationship text across SQLite restart', () => {
+    let db = createBlueprintDb()
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    const longName = '亚历山德拉'.repeat(7) + '完整姓名尾部'
+    const longRelation = '双方因旧日的承诺继续合作，但仍在追查失踪的证人。'.repeat(5) + '尾部事实：她已经撤销授权。'
+
+    try {
+      const parsed = parseBlueprintSemanticResponseText(JSON.stringify({ blueprints: [{
+        ...blueprintFor(1),
+        characters: [longName, '周砚'],
+        newCharacterCandidates: [{ name: longName, role: 'supporting' }],
+        relationships: [{ from: longName, to: '周砚', relation: longRelation }],
+      }] }), [1])
+      BlueprintRepository.commitRange({
+        mode: 'replace-range',
+        operationId: 'directory-full-character-facts',
+        startChapter: 1,
+        endChapter: 1,
+        blueprints: parsed.map(item => ({ ...item, userGuidance: '', notes: '', notesUpdatedAt: '' })),
+      })
+      const image = db.serialize()
+      db.close()
+      db = createBlueprintDb(image)
+      vi.mocked(getProjectDb).mockReturnValue(db)
+
+      expect(BlueprintRepository.getCommittedRangeOperation('directory-full-character-facts')).toMatchObject({
+        snapshot: [{
+          characters: [longName, '周砚'],
+          newCharacterCandidates: [{ name: longName, role: 'supporting' }],
+          relationshipHints: [{ from: longName, to: '周砚', relation: longRelation }],
+        }],
+      })
+    } finally {
+      if (db.open) db.close()
     }
   })
 

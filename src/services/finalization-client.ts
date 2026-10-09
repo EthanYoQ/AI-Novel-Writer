@@ -3,12 +3,12 @@ import { getActiveProjectSessionContext, sameProjectSessionContext } from '../sh
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { FinalizationSnapshot } from './finalization-snapshot'
 
-interface VelaInvokeApi {
+interface AiNovelInvokeApi {
   invoke(channel: string, ...args: unknown[]): Promise<unknown>
 }
 
-function getVelaApi(): VelaInvokeApi {
-  const api = (window as unknown as { velaAPI?: VelaInvokeApi }).velaAPI
+function getAiNovelApi(): AiNovelInvokeApi {
+  const api = (window as unknown as { aiNovelAPI?: AiNovelInvokeApi }).aiNovelAPI
   if (!api) throw new Error('不在 Electron 环境中，无法提交定稿')
   return api
 }
@@ -21,7 +21,7 @@ export async function commitFinalizationSnapshot(
   if (!sameProjectSessionContext(snapshot.projectSession, currentSession)) {
     throw new Error('项目会话已变化，已拒绝提交旧定稿快照')
   }
-  return getVelaApi().invoke(
+  return getAiNovelApi().invoke(
     'finalization:commit',
     snapshot,
     snapshot.projectSession,
@@ -37,7 +37,7 @@ export async function retryFinalizationPublication(
   if (!sameProjectSessionContext(projectSession, currentSession)) {
     throw new Error('项目会话已变化，已拒绝实体稿重试')
   }
-  return getVelaApi().invoke(
+  return getAiNovelApi().invoke(
     'finalization:retry',
     finalizationId,
     projectSession,

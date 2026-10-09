@@ -80,6 +80,32 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
+  it('ignores Han text under renderer __tests__ while checking sibling production files', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-renderer-tests-'))
+    try {
+      writeFixture(root, 'src/components/layout/v2/__tests__/layout.browser.tsx', `
+        export function LayoutFixture() {
+          return <button>测试夹具</button>
+        }
+      `)
+      writeFixture(root, 'src/components/layout/v2/Feature.tsx', `
+        export function Feature() {
+          return <button>生产文案</button>
+        }
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('src/components/layout/v2/Feature.tsx')
+      expect(result.output).toContain('生产文案')
+      expect(result.output).not.toContain('src/components/layout/v2/__tests__/layout.browser.tsx')
+      expect(result.output).not.toContain('测试夹具')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('permits localized boundary copy while ignoring prompts, parsers, and internal logs', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-policy-'))
     try {

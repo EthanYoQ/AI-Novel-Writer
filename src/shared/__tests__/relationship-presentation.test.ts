@@ -7,6 +7,15 @@ import {
 } from '../relationship-presentation'
 
 describe('relationship presentation', () => {
+  it('preserves incomplete input and unchanged identity relations without binding a missing ID to an unrelated draft', () => {
+    const identities = [{ name: '未绑定' }, { name: '陆云飞', characterId: 'lu' }, { name: '苏璃', characterId: 'su' }]
+    const relation = '关系类型：竞争对手；矛盾张力：权力斗争；情感连接：无'
+    expect(formatRelationshipsForEditor(JSON.stringify([{ target: '苏璃', relation: '盟友' }]), { identities })).toBe('苏璃：盟友')
+    expect(relationshipStorageFromEditor('苏璃： ', { identities })).toBe('苏璃： ')
+    const previousStorage = JSON.stringify([{ target: '陆云飞', targetCharacterId: 'lu', relation }])
+    expect(JSON.parse(relationshipStorageFromEditor('陆云飞：竞争对手（权力斗争；情感连接：无）\n苏璃：盟友', { identities, previousStorage })))
+      .toEqual([{ target: '陆云飞', targetCharacterId: 'lu', relation }, { target: '苏璃', targetCharacterId: 'su', relation: '盟友' }])
+  })
   it('renders legacy structured relationships as natural-language editor lines', () => {
     const persisted = JSON.stringify([
       {

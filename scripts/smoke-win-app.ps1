@@ -2,6 +2,7 @@
   [string]$ExePath,
   [int]$ObservationSeconds = 30,
   [string]$VelaHome,
+  [string]$UserDataPath,
   [System.Collections.Generic.HashSet[string]]$WindowBaselineIdentities,
   [System.Collections.Generic.HashSet[int]]$RelatedProcessIds,
   [hashtable]$RelatedProcessStartTimeTicks,
@@ -10,6 +11,8 @@
   [switch]$LoadProbeLibrary,
   [string]$ProjectPathToOpen,
   [string]$LegacyProjectPathToOpen,
+  [switch]$LegacyWriterProof,
+  [string]$LegacyV025SaveProofPath,
   [string]$AcceptanceDirectory,
   [string]$ExpectedVersion
 )
@@ -844,6 +847,30 @@ function Write-AiNovelAcceptanceReceipt {
   Move-Item -LiteralPath $temporary -Destination $destination -Force
 }
 
+function New-AiNovelQualificationProfile {
+  param([Parameter(Mandatory = $true)][string]$Root, [string]$LegacySource)
+  if (-not [System.IO.Path]::IsPathRooted($Root) -or $Root -match '^[A-Za-z]:(?![\\/])') { throw 'Qualification root must be absolute.' }
+  $base = [System.IO.Path]::GetFullPath($Root)
+  if ([string]::IsNullOrWhiteSpace($LegacySource)) { $LegacySource = Join-Path $base 'legacy-source' }
+  if (-not [System.IO.Path]::IsPathRooted($LegacySource) -or $LegacySource -match '^[A-Za-z]:(?![\\/])') { throw 'Legacy source must be absolute.' }
+  $profile = [ordered]@{
+    canonical = Join-Path $base 'canonical'
+    legacy = [System.IO.Path]::GetFullPath($LegacySource)
+    userData = Join-Path $base 'chromium-profile'
+  }
+  $paths = @($profile.Values)
+  for ($left = 0; $left -lt $paths.Count; $left++) {
+    for ($right = $left + 1; $right -lt $paths.Count; $right++) {
+      $a = $paths[$left].TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+      $b = $paths[$right].TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+      if ($a.StartsWith($b, [StringComparison]::OrdinalIgnoreCase) -or $b.StartsWith($a, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Qualification canonical, legacy and userData roots must not intersect.'
+      }
+    }
+  }
+  return [pscustomobject]$profile
+}
+
 if ($LoadProbeLibrary) {
   return
 }
@@ -858,11 +885,84 @@ $resolvedExe = (Resolve-Path -LiteralPath $ExePath).Path
 if ([System.IO.Path]::GetExtension($resolvedExe) -ne '.exe') {
   throw "Smoke target must be an .exe file: $resolvedExe"
 }
+if ($LegacyWriterProof) {
+  if ([string]::IsNullOrWhiteSpace($LegacyProjectPathToOpen) -or
+      [string]::IsNullOrWhiteSpace($VelaHome) -or
+      [string]::IsNullOrWhiteSpace($AcceptanceDirectory)) {
+    throw 'Legacy writer proof requires a project, isolated Vela home and acceptance directory.'
+  }
+  $fixtureRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime\cache\s14c-old-binaries'))
+  $asarPath = Join-Path (Split-Path -Parent $resolvedExe) 'resources\app.asar'
+  foreach ($candidate in @($ExePath, $LegacyProjectPathToOpen, $VelaHome, $AcceptanceDirectory, $asarPath)) {
+    if (-not [System.IO.Path]::IsPathRooted($candidate) -or
+        -not [System.IO.Path]::GetFullPath($candidate).StartsWith($fixtureRoot + [System.IO.Path]::DirectorySeparatorChar,
+          [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw 'Legacy writer proof paths must stay inside the isolated old-binary fixture root.'
+    }
+  }
+  foreach ($candidate in @($fixtureRoot, $ExePath, $LegacyProjectPathToOpen, $VelaHome, $AcceptanceDirectory, $asarPath)) {
+    $ancestor = [System.IO.Path]::GetFullPath($candidate)
+    while ($ancestor) {
+      $item = Get-Item -LiteralPath $ancestor -Force -ErrorAction SilentlyContinue
+      if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        throw "Old writer proof reparse point is not allowed: $ancestor"
+      }
+      $parent = Split-Path -Parent $ancestor
+      if (-not $parent -or $parent -eq $ancestor) { break }
+      $ancestor = $parent
+    }
+  }
+  function Get-OldWriterProofHash([string]$Path) {
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $stream = [System.IO.File]::OpenRead($Path)
+      try { return [System.BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '') }
+      finally { $stream.Dispose() }
+    } finally { $algorithm.Dispose() }
+  }
+  $verifiedBinaries = @{
+    '2b2b93e5b0e06946715b3524e9dbd5277f3a0eb95f4009de6c16dc81609f951b' = @{
+      asar = '746e621074f40ac983e2feb343c82e491da064722145670a2221279387503236'; version = '1.0.0.0'
+    }
+    '6c17e1fcc62d235feb7f5bdba5b0f355b198c5322b2f67d922874857e27f564a' = @{
+      asar = '447bb76357422adc2ca967b667bfe60c3419b1ca7ea22a0d2d08105ed398a679'; version = '1.1.0.0'
+    }
+  }
+  $verifiedBinary = $verifiedBinaries[(Get-OldWriterProofHash $resolvedExe).ToLowerInvariant()]
+  if (-not $verifiedBinary) {
+    throw 'Old writer proof executable SHA256 mismatch.'
+  }
+  if ((Get-OldWriterProofHash $asarPath) -ne $verifiedBinary.asar) {
+    throw 'Old writer proof ASAR SHA256 mismatch.'
+  }
+  if ([string](Get-Item -LiteralPath $resolvedExe).VersionInfo.ProductVersion -ne $verifiedBinary.version) {
+    throw 'Old writer proof product version mismatch.'
+  }
+}
 
-$smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-smoke-' + [guid]::NewGuid().ToString('N'))
+$smokeRoot = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime\.cache') ('ai-novel-smoke-' + [guid]::NewGuid().ToString('N'))
+$qualificationProfile = New-AiNovelQualificationProfile -Root $smokeRoot -LegacySource $VelaHome
+if (-not [string]::IsNullOrWhiteSpace($UserDataPath)) {
+  $cacheRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime\.cache'))
+  $sharedUserData = [System.IO.Path]::GetFullPath($UserDataPath)
+  $legacyRoot = [System.IO.Path]::GetFullPath($VelaHome)
+  $ownSmokeRoot = [System.IO.Path]::GetFullPath($smokeRoot)
+  if (-not [System.IO.Path]::IsPathRooted($UserDataPath) -or
+      -not $sharedUserData.StartsWith($cacheRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+      $sharedUserData.Equals($ownSmokeRoot, [StringComparison]::OrdinalIgnoreCase) -or
+      $sharedUserData.StartsWith($ownSmokeRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+      $sharedUserData.Equals($legacyRoot, [StringComparison]::OrdinalIgnoreCase) -or
+      $sharedUserData.StartsWith($legacyRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+      $legacyRoot.StartsWith($sharedUserData + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Shared userData must be an isolated path under the repository smoke cache.'
+  }
+  $qualificationProfile.userData = $sharedUserData
+}
 $chromiumLog = Join-Path $smokeRoot 'chromium.log'
 New-Item -ItemType Directory -Path $smokeRoot | Out-Null
 $process = $null
+$previousCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
+$previousLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
 $previousVelaHome = $env:AI_NOVEL_VELA_HOME
 $previousSmokeOpenProject = $env:AI_NOVEL_SMOKE_OPEN_PROJECT
 $previousSmokeProjectMarker = $env:AI_NOVEL_SMOKE_PROJECT_MARKER
@@ -870,6 +970,7 @@ $previousUserProfile = $env:USERPROFILE
 $projectOpenMarker = Join-Path $smokeRoot 'project-opened.json'
 $legacyDebuggerPort = $null
 $legacyProofComplete = $false
+$legacyWriterEvidence = $null
 $acceptedMainWindowCount = 0
 $smokeSucceeded = $false
 $lastWindowSnapshot = @()
@@ -915,10 +1016,10 @@ try {
     throw "Application smoke cannot start while an existing product error dialog is open: $(Format-AiNovelWindowEvidence -Windows $startupBlockingWindows)"
   }
 
-  if (-not [string]::IsNullOrWhiteSpace($VelaHome)) {
-    New-Item -ItemType Directory -Path $VelaHome -Force | Out-Null
-    $env:AI_NOVEL_VELA_HOME = $VelaHome
-  }
+  New-Item -ItemType Directory -Path $qualificationProfile.userData -Force | Out-Null
+  $env:AI_NOVEL_APP_DATA_HOME = $qualificationProfile.canonical
+  $env:AI_NOVEL_LEGACY_SOURCE_HOME = $qualificationProfile.legacy
+  $env:AI_NOVEL_VELA_HOME = $qualificationProfile.legacy
   if (-not [string]::IsNullOrWhiteSpace($ProjectPathToOpen)) {
     $env:AI_NOVEL_SMOKE_OPEN_PROJECT = (Resolve-Path -LiteralPath $ProjectPathToOpen).Path
     $env:AI_NOVEL_SMOKE_PROJECT_MARKER = $projectOpenMarker
@@ -935,7 +1036,7 @@ try {
     $listener.Stop()
   }
 
-  $launchArguments = @("--user-data-dir=$smokeRoot", '--enable-logging', '--v=1', "--log-file=$chromiumLog")
+  $launchArguments = @("--user-data-dir=`"$($qualificationProfile.userData)`"", '--enable-logging', '--v=1', "--log-file=`"$chromiumLog`"")
   if ($null -ne $legacyDebuggerPort) {
     $launchArguments += "--remote-debugging-port=$legacyDebuggerPort"
   }
@@ -1016,10 +1117,10 @@ try {
       (-not [string]::IsNullOrWhiteSpace($LegacyProjectPathToOpen))
     )
     if ($shouldProbeLegacyProject) {
-      & node (Join-Path $PSScriptRoot 'probe-legacy-project-open.mjs') `
-        ([string]$legacyDebuggerPort) `
-        (Resolve-Path -LiteralPath $LegacyProjectPathToOpen).Path `
-        $projectOpenMarker
+      $legacyProbeArguments = @([string]$legacyDebuggerPort, (Resolve-Path -LiteralPath $LegacyProjectPathToOpen).Path, $projectOpenMarker)
+      if ($LegacyWriterProof) { $legacyProbeArguments += '--draft-write-proof' }
+      if (-not [string]::IsNullOrWhiteSpace($LegacyV025SaveProofPath)) { $legacyProbeArguments += '--v025-save-proof' }
+      & node (Join-Path $PSScriptRoot 'probe-legacy-project-open.mjs') @legacyProbeArguments
       if ($LASTEXITCODE -ne 0) {
         throw "Legacy renderer project-open probe failed with code $LASTEXITCODE"
       }
@@ -1071,9 +1172,27 @@ try {
       throw 'Application main window opened, but the renderer did not open and confirm the upgrade fixture project.'
     }
     $openedProject = Get-Content -LiteralPath $projectOpenMarker -Raw | ConvertFrom-Json
+    if (-not [string]::IsNullOrWhiteSpace($LegacyV025SaveProofPath)) {
+      if ($LegacyWriterProof -or [string]$openedProject.verifiedBy -ne 'legacy-renderer-cdp-v025-save' -or
+          [int]$openedProject.draft.before.id -ne 71 -or
+          [string]$openedProject.draft.before.content -ne [string]$openedProject.draft.after.content -or
+          [string]$openedProject.draft.before.updatedAt -eq [string]$openedProject.draft.after.updatedAt -or
+          (Get-Item -LiteralPath $resolvedExe).VersionInfo.ProductVersion -notin @('0.2.5', '0.2.5.0')) {
+        throw 'The v0.2.5 application did not return exact save/read-back evidence.'
+      }
+      Copy-Item -LiteralPath $projectOpenMarker -Destination $LegacyV025SaveProofPath
+    }
     if ([System.IO.Path]::GetFullPath([string]$openedProject.projectPath) -ne
         [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $expectedOpenedProjectPath).Path)) {
       throw 'Application confirmed a different project than the requested upgrade fixture.'
+    }
+    if ($LegacyWriterProof) {
+      $legacyWriterEvidence = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($projectOpenMarker)) | ConvertFrom-Json
+      if ([string]$legacyWriterEvidence.verifiedBy -ne 'legacy-renderer-cdp-draft-write' -or
+          [int]$legacyWriterEvidence.draft.id -le 0 -or
+          [string]$legacyWriterEvidence.draft.content -ne [string]$legacyWriterEvidence.draft.readBackContent) {
+        throw 'Legacy renderer did not provide exact draft write/read evidence.'
+      }
     }
   }
 
@@ -1153,6 +1272,28 @@ try {
         postExitQuietSeconds = $PostExitQuietSeconds
         newProductErrorDialogCount = 0
       })
+    if ($LegacyWriterProof) {
+      Write-AiNovelAcceptanceReceipt `
+        -Directory $AcceptanceDirectory `
+        -FileName 'legacy-writer.json' `
+        -Receipt ([ordered]@{
+          schemaVersion = 1
+          kind = 'old-binary-draft-writer'
+          accepted = $true
+          observations = @(
+            'The isolated old product process opened the synthetic legacy project through its renderer preload.'
+            'The same process committed a draft through its production IPC and read back identical content.'
+            'The old process tree exited before this receipt was published.'
+          )
+          direct = [ordered]@{
+            executablePath = $resolvedExe
+            productVersion = $actualVersion
+            processId = [int]$process.Id
+            projectPath = [string]$legacyWriterEvidence.projectPath
+            draft = $legacyWriterEvidence.draft
+          }
+        })
+    }
   }
 
   $smokeSucceeded = $true
@@ -1170,6 +1311,8 @@ finally {
   if ($process) {
     Stop-AiNovelProcessTree -Process $process -ProcessIds $appProcessIds -StartTimeTicks $appProcessStartTimeTicks
   }
+  $env:AI_NOVEL_APP_DATA_HOME = $previousCanonicalHome
+  $env:AI_NOVEL_LEGACY_SOURCE_HOME = $previousLegacySourceHome
   $env:AI_NOVEL_VELA_HOME = $previousVelaHome
   $env:AI_NOVEL_SMOKE_OPEN_PROJECT = $previousSmokeOpenProject
   $env:AI_NOVEL_SMOKE_PROJECT_MARKER = $previousSmokeProjectMarker

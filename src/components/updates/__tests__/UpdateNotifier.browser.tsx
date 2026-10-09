@@ -12,7 +12,7 @@ let root: Root
 beforeEach(() => {
   useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
   Object.assign(window, {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: vi.fn(async (channel: string) => channel === 'update:get-state'
         ? {
             status: 'available',
@@ -38,7 +38,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   vi.restoreAllMocks()
 })
 

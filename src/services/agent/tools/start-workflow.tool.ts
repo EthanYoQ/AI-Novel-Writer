@@ -25,6 +25,9 @@ export const startWorkflowTool = buildAgentTool({
         description: '章节号（写稿/修稿/审稿/定稿必填）',
         descriptionEn: 'Chapter number, required for drafting, review, refinement, and finalization',
       },
+      start_chapter: { type: 'integer', description: '规划起始章号，默认 1', descriptionEn: 'First planning chapter; defaults to 1' },
+      chapter_count: { type: 'integer', description: '本次规划章数，默认 5，最多 10', descriptionEn: 'Planning chapters for this action; defaults to 5, at most 10' },
+      target_units: { type: 'integer', description: '每章规划叙述目标，默认 600 字；实际完整输出可超过目标', descriptionEn: 'Per-chapter planning target; defaults to 600 words. Longer complete output is accepted' },
     },
     required: ['workflow'],
   },
@@ -73,11 +76,13 @@ export const startWorkflowTool = buildAgentTool({
 
     try {
       assertAgentToolActive(context)
+      if (!context?.agentToolAction) throw new Error(text('缺少主进程签发的工具动作，工作流未启动。', 'The main-issued tool action is missing; the workflow was not started.'))
       const receipt = await launchCreativeWorkflow({
         workflow,
         ...(chapterNumber === undefined ? {} : { chapterNumber }),
       } as CreativeIntent, projectSession, {
         generationModelId,
+        ...(context?.agentToolAction ? { agentToolAction: context.agentToolAction } : {}),
         assertActive: () => assertAgentToolActive(context),
         onRegistered: context?.markSideEffectStarted,
       })

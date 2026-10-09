@@ -12,7 +12,7 @@ beforeEach(() => {
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: () => () => {},
         once: () => {},
@@ -36,6 +36,18 @@ afterEach(() => {
 })
 
 describe('project-scoped IPC session transport', () => {
+  it('rejects a missing canonical bridge without invoking the legacy write API', async () => {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { velaAPI: { invoke } },
+    })
+
+    expect(ipc.isElectron).toBe(false)
+    await expect(ipc.invoke('fs:grant-write-file', 'grant-1', '正文.txt', '中文正文')).rejects.toThrow('aiNovelAPI 未就绪')
+    expect(() => ipc.send('window:close')).toThrow('aiNovelAPI 未就绪')
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it('appends the frozen active session to a project database request', async () => {
     invoke.mockResolvedValue([])
 

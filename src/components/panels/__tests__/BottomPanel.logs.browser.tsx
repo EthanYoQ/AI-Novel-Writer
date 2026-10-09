@@ -4,11 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import BottomPanel from '../BottomPanel'
 
 const originalLayoutState = useLayoutStore.getState()
 const originalLocaleState = useLocaleStore.getState()
+const originalProjectState = useProjectStore.getState()
 const originalWorkflowState = useWorkflowStore.getState()
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -19,6 +21,8 @@ let container: HTMLDivElement
 beforeEach(async () => {
   useLayoutStore.setState({ ...originalLayoutState, bottomPanelOpen: true, bottomTab: 'log' })
   useLocaleStore.setState({ ...originalLocaleState, locale: 'en-US', initialized: true })
+  useProjectStore.setState({ currentProject: { id: 'planning', path: 'C:/novels/planning',
+    name: 'Planning', sessionLease: 'planning-session', novelConfig: {} } as never })
   useWorkflowStore.setState({ ...originalWorkflowState, globalLogs: [] })
   container = document.createElement('div')
   document.body.append(container)
@@ -31,6 +35,7 @@ afterEach(async () => {
   container.remove()
   useLayoutStore.setState(originalLayoutState)
   useLocaleStore.setState(originalLocaleState)
+  useProjectStore.setState(originalProjectState)
   useWorkflowStore.setState(originalWorkflowState)
 })
 

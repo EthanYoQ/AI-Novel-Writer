@@ -77,7 +77,7 @@ function installVelaApi(response: ReturnType<typeof rosterRead>) {
     if (channel === 'db:character-roster-read') return response
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  ;(window as unknown as { velaAPI: TestVelaApi }).velaAPI = {
+  ;(window as unknown as { aiNovelAPI: TestVelaApi }).aiNovelAPI = {
     invoke,
     on: () => () => {},
     once: () => {},
@@ -110,7 +110,7 @@ afterEach(async () => {
   useLayoutStore.setState(originalLayoutState)
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
-  delete (window as unknown as { velaAPI?: TestVelaApi }).velaAPI
+  delete (window as unknown as { aiNovelAPI?: TestVelaApi }).aiNovelAPI
 })
 
 describe('Sidebar legacy character rendering', () => {

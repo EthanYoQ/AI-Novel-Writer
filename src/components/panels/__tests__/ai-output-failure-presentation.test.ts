@@ -84,3 +84,18 @@ describe('AI output failure presentation', () => {
     expect(presentation).not.toHaveProperty('action')
   })
 })
+
+
+it.each([
+  ['UND_ERR_BODY_TIMEOUT', '读取响应流超时'],
+  ['UND_ERR_SOCKET', '响应连接中断'],
+  [undefined, '具体原因未知'],
+] as const)('explains safe review transport diagnostics without inferring the upstream cause: %s', (causeCode, reason) => {
+  const presentation = presentWorkflowFailure(undefined, 'generic provider failure', 'zh-CN', false, undefined, {
+    operation: 'review-chapter', diagnostics: { startedAt: 0, elapsedMs: 478000, firstResponseMs: 3000, lastResponseMs: 171000,
+      lastOutputMs: null, phase: 'stream', endReason: 'failed', visibleEvents: 0, reasoningEvents: 0, ...(causeCode ? { causeCode } : {}) },
+  })
+  expect(presentation.reason).toContain(reason)
+  expect(presentation.persistence).toBe('本次未保存完整审稿报告，原稿保留。')
+  expect(presentation.guidance).toContain('重新审稿会重新调用模型')
+})

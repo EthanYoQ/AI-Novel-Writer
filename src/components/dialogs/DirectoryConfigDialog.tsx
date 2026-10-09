@@ -8,14 +8,14 @@ import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
 import { Button } from '../ui/Button'
-import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
 import { Textarea } from '../ui/Textarea'
+import type { DirectoryGenerationProgress } from '../../shared/generation-owner-contract'
+import { terminalDirectoryProgress } from '../../services/workflows/directory-workflow'
 import type { DirectoryWorkflowParams } from '../../services/workflows/directory-workflow'
 import {
   DEFAULT_BLUEPRINT_GENERATION_COUNT,
   getBlueprintBatchAdvice,
-  MAX_BLUEPRINT_CHAPTERS_PER_TASK,
   planBlueprintGenerationCost,
 } from '../../services/workflows/blueprint-batch-policy'
 import {
@@ -28,6 +28,8 @@ import {
 } from '../../services/workflows/directory-character-sync-recovery'
 import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
 import { ipc } from '../../services/ipc-client'
+import { resolveWritingLanguage } from '../../shared/writing-language'
+import { assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS, DEFAULT_PLANNING_TARGET_UNITS, parsePlanningTargetUnits, PLANNING_ACTION_CHAPTER_LIMIT, PLANNING_TARGET_UNITS_LIMIT } from '../../shared/plot-outline-contract'
 
 interface Props {
   isOpen: boolean
@@ -78,9 +80,11 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   // 覆盖/追加模式选择 (仅当 existingCount > 0 时有效)
   const [overwriteMode, setOverwriteMode] = useState<'append' | 'full'>('append')
 
-  const [frontN, setFrontN] = useState<number | ''>(DEFAULT_BLUEPRINT_GENERATION_COUNT)
+  const [frontN, setFrontN] = useState<number | ''>(DEFAULT_PLANNING_ACTION_CHAPTERS)
   const [rangeStart, setRangeStart] = useState<number | ''>(existingCount + 1)
-  const [rangeEnd, setRangeEnd] = useState<number | ''>(existingCount + 50)
+  const [rangeEnd, setRangeEnd] = useState<number | ''>(existingCount + DEFAULT_PLANNING_ACTION_CHAPTERS)
+  const [targetUnits, setTargetUnits] = useState(String(DEFAULT_PLANNING_TARGET_UNITS))
+  const [preferenceLoading, setPreferenceLoading] = useState(true)
   // 节奏指导
   const [pacingGuidance, setPacingGuidance] = useState('')
   const [isConfirming, setIsConfirming] = useState(false)
@@ -93,6 +97,33 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   const [highestBlueprintChapter, setHighestBlueprintChapter] = useState<number | null>(null)
   const [authorityError, setAuthorityError] = useState<string | null>(null)
   const [authorityLoading, setAuthorityLoading] = useState(false)
+  const [directoryProgress, setDirectoryProgress] = useState<DirectoryGenerationProgress[]>([])
+  const [progressError, setProgressError] = useState<string | null>(null)
+  const [progressSessionKey, setProgressSessionKey] = useState('')
+  useEffect(() => {
+    if (!isOpen) return
+    let disposed = false
+    void ipc.invoke('config:get').then(config => {
+      if (!disposed) setTargetUnits(String(parsePlanningTargetUnits(config.blueprintTargetUnits)))
+    }).catch(error => {
+      if (!disposed) setLaunchError(error instanceof Error ? error.message : String(error))
+    }).finally(() => { if (!disposed) setPreferenceLoading(false) })
+    return () => { disposed = true; setPreferenceLoading(true) }
+  }, [isOpen])
+  useEffect(() => {
+    if (!isOpen || !currentProject) return
+    const session = captureProjectSession(currentProject)
+    if (!session) return
+    let disposed = false
+    void ipc.invokeWithProjectSession(session, 'generation:list-directory-progress').then(all => {
+      if (disposed || !isProjectSessionCurrent(session)) return
+      setProgressSessionKey(session.projectId + ':' + session.leaseId); setProgressError(null)
+      const terminals = all.map(item => terminalDirectoryProgress(item, all))
+      setDirectoryProgress([...new Map(terminals.map(item => [item.operationId, item])).values()])
+    }).catch(error => { if (!disposed && isProjectSessionCurrent(session)) { setDirectoryProgress([]); setProgressSessionKey(session.projectId + ':' + session.leaseId); setProgressError(error instanceof Error ? error.message : String(error)) } })
+    return () => { disposed = true }
+  }, [currentProject, isOpen])
+
 
   useEffect(() => {
     if (!isOpen || !currentProject) return
@@ -145,7 +176,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
         setHighestBlueprintChapter(highestBlueprint)
         const appendStart = Math.max(highestBlueprint + 1, nextChapter)
         setRangeStart(appendStart)
-        setRangeEnd(Math.min(currentProject.novelConfig.totalChapters, appendStart + 49))
+        setRangeEnd(Math.min(currentProject.novelConfig.totalChapters, appendStart + DEFAULT_PLANNING_ACTION_CHAPTERS - 1))
         setAuthorityError(null)
       } catch (cause) {
         if (disposed || !isProjectSessionCurrent(projectSession)) return
@@ -242,56 +273,43 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
     const frozenAppendByDefault = overwriteMode === 'append'
       && (existingCount > 0 || frozenAppendStart > 1)
 
-    let params: DirectoryWorkflowParams
-
-    if (rangeMode === 'full') {
-      // 追加全量：若已无剩余章节则拒绝（覆盖模式仍可从第 1 章重生成）
-      if (overwriteMode === 'append' && frozenAppendStart > total) {
-        toast.warning(text('没有可追加生成的章节', 'No chapters remain to generate.'))
-        return
-      }
-      params = overwriteMode === 'full'
-        ? { mode: 'full', count: 0 }
-        : { mode: 'append', startChapter: frozenAppendStart, count: 0 }
-    } else if (rangeMode === 'front') {
-      if (frozenAppendByDefault) {
-        if (frozenAppendStart > total) {
-          toast.warning(text('没有可追加生成的章节', 'No chapters remain to generate.'))
-          return
-        }
-        const remaining = total - frozenAppendStart + 1
-        const count = Math.min(remaining, Math.max(1, Number(frontN) || DEFAULT_BLUEPRINT_GENERATION_COUNT))
-        params = { mode: 'append', startChapter: frozenAppendStart, count }
-      } else {
-        params = {
-          mode: 'full',
-          count: Math.min(total, Math.max(1, Number(frontN) || DEFAULT_BLUEPRINT_GENERATION_COUNT)),
-        }
-      }
-    } else {
-      // 指定范围：提交时归一化，不依赖 blur；全书已有蓝图时拒绝追加
-      if (frozenHighestBlueprint >= total) {
-        toast.warning(text('没有可追加生成的章节', 'No chapters remain to generate.'))
-        return
-      }
-      const start = Math.min(total, Math.max(frozenAppendStart, Number(rangeStart) || frozenAppendStart))
-      const end = Math.min(total, Math.max(start, Number(rangeEnd) || start))
-      params = { mode: 'append', startChapter: start, count: Math.max(1, end - start + 1) }
-    }
-
-    const costPlan = planBlueprintGenerationCost(requestedChapterCount(params, total, frozenAppendStart))
-    if (costPlan.exceedsHardLimit) {
-      toast.warning(text(
-        `当前范围超过单次任务安全成本上限，请拆成每段不超过 ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} 章的范围。`,
-        `This range exceeds the safe cost limit. Split it into ranges of no more than ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} chapters.`,
-      ))
+    const start = rangeMode === 'range' ? Number(rangeStart)
+      : rangeMode === 'full' ? (overwriteMode === 'full' ? 1 : frozenAppendStart)
+        : frozenAppendByDefault ? frozenAppendStart : 1
+    const end = rangeMode === 'range' ? Number(rangeEnd)
+      : rangeMode === 'full' ? total : Math.min(total, start + Number(frontN) - 1)
+    try {
+      if (rangeMode === 'front') assertPlanningActionRange({ from: 1, to: Number(frontN) })
+      assertPlanningActionRange({ from: start, to: end })
+      if (end > total || (rangeMode === 'range' && start < frozenAppendStart)) throw new Error('range')
+    } catch {
+      setLaunchError(text(`请选择有效的连续 1–${PLANNING_ACTION_CHAPTER_LIMIT} 章。全量范围过大时请改选数量或范围。`, `Select 1-${PLANNING_ACTION_CHAPTER_LIMIT} valid consecutive chapters. If the full range is larger, choose a quantity or range.`))
       return
+    }
+    let target: number
+    try { target = parsePlanningTargetUnits(Number(targetUnits)) } catch {
+      setLaunchError(text(`每章蓝图目标须为 1–${PLANNING_TARGET_UNITS_LIMIT} 的整数。`, `The blueprint target must be an integer from 1 to ${PLANNING_TARGET_UNITS_LIMIT}.`))
+      return
+    }
+    const params: DirectoryWorkflowParams = {
+      mode: rangeMode === 'range' || (rangeMode === 'full' ? overwriteMode !== 'full' : frozenAppendByDefault) ? 'append' : 'full',
+      startChapter: start,
+      count: end - start + 1,
+      targetUnits: target,
     }
 
     if (!isProjectSessionCurrent(projectSession)) return
     setIsConfirming(true)
     try {
-      await onConfirm({ ...params, pacingGuidance: pacingGuidance.trim() || undefined })
+      try {
+        const saved = await ipc.invoke('config:set', { blueprintTargetUnits: target })
+        if (!saved.success) throw new Error(saved.error)
+      } catch {
+        setLaunchError(text('目标字数偏好保存失败。请重试，输入已保留。', 'Could not save the target preference. Your input is retained. Please retry.'))
+        return
+      }
+      if (!isProjectSessionCurrent(projectSession)) return
+      await onConfirm({ ...params, pacingGuidance: pacingGuidance || undefined })
       setLaunchError(null)
       onClose()
       toast.info(text('已提交：正在生成章节蓝图...', 'Submitted: generating chapter blueprints...'))
@@ -320,6 +338,30 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
         </DialogHeader>
 
         <div className="px-5 py-4 space-y-4">
+          {progressSessionKey === currentProject.id + ':' + currentProject.sessionLease && progressError && <p role="alert" className="text-xs">{progressError}</p>}
+          {(progressSessionKey === currentProject.id + ':' + currentProject.sessionLease ? directoryProgress : []).map(progress => (
+            <div key={progress.operationId} className="rounded-lg border p-3 text-xs">
+              <p>{text(
+                '已保存第 ' + progress.committedRange.startChapter + '–' + progress.committedRange.endChapter + ' 章蓝图。',
+                'Blueprints for chapters ' + progress.committedRange.startChapter + '–' + progress.committedRange.endChapter + ' are saved.',
+              )}</p>
+              {progress.remainingRange ? (
+                <Button variant="outline" className="mt-2" disabled={isConfirming} onClick={async () => {
+                  const session = captureProjectSession(currentProject)
+                  if (!session || !isProjectSessionCurrent(session)) return
+                  setIsConfirming(true)
+                  try {
+                    await onConfirm({ mode: 'append', continueDirectoryOperationId: progress.operationId })
+                    setLaunchError(null); onClose()
+                  } catch (error) { setLaunchError(error instanceof Error ? error.message : String(error)) }
+                  finally { setIsConfirming(false) }
+                }}>
+                  {text('继续第 ' + progress.remainingRange.startChapter + '–' + progress.remainingRange.endChapter + ' 章（沿用原预算）',
+                    'Continue chapters ' + progress.remainingRange.startChapter + '–' + progress.remainingRange.endChapter + ' (same budget)')}
+                </Button>
+              ) : <p>{text('该范围已完成。', 'This range is complete.')}</p>}
+            </div>
+          ))}
           {(isRecoveryLoading || pendingCharacterSyncs.length > 0 || recoveryError) && (
             <div
               className="rounded-lg border px-3 py-2.5 text-xs"
@@ -365,16 +407,13 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
                 label={
                   <span className="flex items-center gap-2">
                     {text('批量连续生成', 'Generate next')}
-                    <Input
+                    <input
                       type="number"
+                      min={1} max={PLANNING_ACTION_CHAPTER_LIMIT} step={1}
+                      aria-label={text('本次蓝图章数', 'Blueprint chapters in this action')}
                       value={frontN}
-                      onChange={e => setFrontN(e.target.value === '' ? '' : parseInt(e.target.value))}
-                      onBlur={() => {
-                        const v = Number(frontN)
-                        if (!v || v < 1) setFrontN(DEFAULT_BLUEPRINT_GENERATION_COUNT)
-                        else setFrontN(Math.min(total, v))
-                      }}
-                      className="w-16 h-6 text-xs px-2 py-0"
+                      onChange={e => setFrontN(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-16 h-6 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] text-xs px-2 py-0"
                       onClick={e => e.stopPropagation()}
                     />
                     {text('章', 'chapters')}
@@ -387,30 +426,23 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
                 label={
                   <span className="flex items-center gap-2">
                     {text('指定生成：第', 'Generate range:')}
-                    <Input
+                    <input
                       type="number"
+                      min={1} max={total} step={1}
+                      aria-label={text('蓝图起始章', 'First blueprint chapter')}
                       value={rangeStart}
-                      onChange={e => setRangeStart(e.target.value === '' ? '' : parseInt(e.target.value))}
-                      onBlur={() => {
-                        const v = Number(rangeStart)
-                        if (!v || v < 1) setRangeStart(1)
-                        else if (v > total) setRangeStart(total)
-                      }}
-                      className="w-16 h-6 text-xs px-2 py-0"
+                      onChange={e => setRangeStart(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-16 h-6 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] text-xs px-2 py-0"
                       onClick={e => e.stopPropagation()}
                     />
                     {text('到 第', 'to')}
-                    <Input
+                    <input
                       type="number"
+                      min={1} max={total} step={1}
+                      aria-label={text('蓝图结束章', 'Last blueprint chapter')}
                       value={rangeEnd}
-                      onChange={e => setRangeEnd(e.target.value === '' ? '' : parseInt(e.target.value))}
-                      onBlur={() => {
-                        const v = Number(rangeEnd)
-                        const start = Number(rangeStart) || 1
-                        if (!v || v < start) setRangeEnd(start)
-                        else if (v > total) setRangeEnd(total)
-                      }}
-                      className="w-16 h-6 text-xs px-2 py-0"
+                      onChange={e => setRangeEnd(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-16 h-6 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] text-xs px-2 py-0"
                       onClick={e => e.stopPropagation()}
                     />
                     {text('章', 'chapter')}
@@ -436,10 +468,22 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
                 getBlueprintBatchAdvice('en-US', previewCost.chapterCount),
               )}
               {previewCost.exceedsHardLimit && text(
-                ` 当前范围超过单次任务安全成本上限，请拆成每段不超过 ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} 章。`,
-                ` This exceeds the safe per-task cost limit; split it into ranges of no more than ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} chapters.`,
+                ' 大范围可能耗尽本次预算；已验证的连续蓝图会保存，剩余范围保持未完成。',
+                ' Large ranges may exhaust this action’s budget. Validated consecutive blueprints are saved; the rest remain incomplete.',
               )}
             </p>
+          </div>
+
+          <div>
+            <Label htmlFor="blueprint-target-units">
+              {resolveWritingLanguage(currentProject.novelConfig.writingLanguage) === 'zh-CN'
+                ? text('每章蓝图目标字数', 'Blueprint target characters per chapter')
+                : text('每章蓝图目标词数', 'Blueprint target words per chapter')}
+            </Label>
+            <input id="blueprint-target-units" type="number" min={1} max={PLANNING_TARGET_UNITS_LIMIT} step={1}
+              className="mt-1 h-7 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] px-3 text-xs"
+              value={targetUnits} disabled={preferenceLoading} onChange={event => setTargetUnits(event.target.value)} />
+            <p className="mt-1 text-xs text-[var(--color-text-muted)]">{text('仅作生成目标，实际内容可多可少。', 'A generation target. Actual content may be longer or shorter.')}</p>
           </div>
 
           {(existingCount > 0 || hasPriorAuthority) && (
@@ -497,6 +541,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
             onClick={handleConfirm}
             disabled={
               isConfirming
+              || preferenceLoading
               || authorityLoading
               || Boolean(authorityError)
               || isRecovering

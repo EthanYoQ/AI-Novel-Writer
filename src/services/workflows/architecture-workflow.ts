@@ -1,3 +1,8 @@
+import { parsePlanningTargetUnits, assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS } from '../../shared/plot-outline-contract'
+import { globalEventBus } from '../../shared/event-bus'
+import type { WorkflowGenerationRuntimeDependencies } from './commands/base-command'
+import type { MainGenerationRunHandle } from '../generation/generation-runtime'
+import type { ArchitecturePlanningIntent } from '../../shared/generation-owner-contract'
 import { workflowResourceKey, type WorkflowDefinition, type WorkflowContext, type StepCallbacks } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
@@ -15,6 +20,9 @@ import { requireWorkflowProjectSession } from './workflow-project-session'
 import type { ArchitectureProjectSnapshot } from './commands/architecture.command'
 import { localize } from '../../i18n/core'
 import type { Locale } from '../../i18n/types'
+import { ipc } from '../ipc-client'
+import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
+import { architectureRecoveryHandle } from '../../shared/architecture-recovery-navigation'
 
 // ==========================================
 // 1. 类型定义
@@ -27,6 +35,8 @@ export interface PartialArchData {
   world_building_result?: string
   world_building_partial_result?: string
   world_building_incomplete?: boolean
+  world_building_generation_handle?: import('../generation/generation-runtime').MainGenerationRunHandle
+  synopsis_generation_handle?: import('../generation/generation-runtime').MainGenerationRunHandle
   world_building_facts_fingerprint?: string
   world_building_db_hash?: string
   world_building_step_guidance?: string
@@ -36,6 +46,8 @@ export interface PartialArchData {
 }
 
 export interface ArchitectureWorkflowParams {
+  restartFrom?: MainGenerationRunHandle
+  targetUnits?: number
   /** 启动工作流时所属的项目路径；后续所有步骤均绑定此项目 */
   projectPath: string
   /** UI 在异步确认前冻结的完整项目会话。 */
@@ -49,6 +61,8 @@ export interface ArchitectureWorkflowParams {
   resumeSynopsis?: boolean
   /** 从上次输出长度中断的候选续写世界观（工作流只包含 worldbuilding 一步）。 */
   resumeWorldBuilding?: boolean
+  /** The exact run whose confirmed candidate the author selected in the UI. */
+  expectedRecoveryHandle?: MainGenerationRunHandle
 }
 
 export interface ConfigGenerationWorkflowParams {
@@ -72,14 +86,14 @@ export function createArchitectureWorkflow(
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   const resumingSynopsis = params.resumeSynopsis === true
   const resumingWorldBuilding = params.resumeWorldBuilding === true
-  if (resumingSynopsis && resumingWorldBuilding) {
+  if (resumingSynopsis && resumingWorldBuilding || params.restartFrom && (resumingSynopsis || resumingWorldBuilding)) {
     throw new Error(text('一次只能恢复一个故事架构步骤', 'Only one story-architecture step can be resumed at a time.'))
   }
-  const sel = resumingSynopsis
+  const sel = resumingSynopsis || params.restartFrom
     ? ['synopsis' as const]
     : resumingWorldBuilding
       ? ['worldbuilding' as const]
-      : params.selectedSteps ?? ['premise', 'characters', 'worldbuilding', 'synopsis']
+      : [...(params.selectedSteps ?? ['premise', 'characters', 'worldbuilding', 'synopsis'])]
   const expectedProjectPath = params.projectPath
   const project = useProjectStore.getState().currentProject
   const currentProjectSession = projectSessionContextFromProject(project)
@@ -93,15 +107,42 @@ export function createArchitectureWorkflow(
   }
   // 工厂在捕获配置快照的同一时刻绑定 lease，防止同路径重新打开后复用旧快照。
   const projectSession = Object.freeze({ ...params.projectSession })
+  const synopsisRange = sel.includes('synopsis')
+    ? Object.freeze({ ...(params.synopsisRange ?? { from: 1, to: Math.min(project.novelConfig.totalChapters, DEFAULT_PLANNING_ACTION_CHAPTERS) }) }) : null
+  if (synopsisRange && !resumingSynopsis) assertPlanningActionRange(synopsisRange)
+  const targetUnits = parsePlanningTargetUnits(params.targetUnits)
+  const planningIntent: ArchitecturePlanningIntent | undefined = resumingSynopsis || resumingWorldBuilding ? undefined : Object.freeze({
+    version: 'architecture-action-v1',
+    priorSteps: Object.freeze((['premise', 'characters', 'worldbuilding'] as const).filter(step => sel.includes(step))),
+    synopsisRange,
+  })
   const projectSnapshot: ArchitectureProjectSnapshot = Object.freeze({
+    targetUnits,
     expectedProjectPath,
     novelConfig: Object.freeze({ ...project.novelConfig }),
+    ...(planningIntent ? { planningIntent } : {}),
   })
   const stepDesc = (key: string, zhCNDesc: string, enUSDesc: string) => sel.includes(key as never)
     ? text(zhCNDesc, enUSDesc)
     : text('（跳过，保留已有内容）', '(Skipped; existing content is retained)')
   // 闭包捕获逐步指导，executor 中注入到 context.data
   const guidance = params.stepGuidance || {}
+  const expectedRecoveryHandle = params.expectedRecoveryHandle ? Object.freeze({ ...params.expectedRecoveryHandle }) : undefined
+  const recoveryHandle = async (context: WorkflowContext, kind: 'worldbuilding' | 'synopsis') => {
+    const session = requireWorkflowProjectSession(context)
+    const result = await ipc.invokeWithProjectSession(session, 'fs:read-json',
+      `${expectedProjectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`, expectedProjectPath)
+    const partial = result.success ? result.data : undefined
+    const handle = architectureRecoveryHandle(partial, kind, session.projectId)
+    if (!handle) throw new Error(text('此候选缺少可恢复的运行记录，请保留或复制候选后重新生成。', 'This candidate has no recoverable run record. Keep or copy it before generating again.'))
+    if (expectedRecoveryHandle && (['projectId', 'epoch', 'rootActionId', 'runId'] as const)
+      .some(key => handle[key] !== expectedRecoveryHandle[key])) throw new Error(text(
+        '恢复记录已变化，已拒绝改用另一运行；请重新查看候选后再继续。',
+        'The recovery record changed. A different run was not substituted; review the candidate again before continuing.',
+      ))
+    context.data.partial = partial
+    return handle
+  }
 
   const allSteps = [
     {
@@ -135,6 +176,7 @@ export function createArchitectureWorkflow(
         const { GenerateWorldBuildingCommand } = await import('./commands/architecture.command')
         return new GenerateWorldBuildingCommand(projectSnapshot, undefined, {
           resumeWorldBuilding: params.resumeWorldBuilding,
+          ...(resumingWorldBuilding ? { resumeHandle: await recoveryHandle(context, 'worldbuilding') } : {}),
         }).execute({ step, context, callbacks })
       },
     },
@@ -149,13 +191,24 @@ export function createArchitectureWorkflow(
         const { GeneratePlotArchitectureCommand } = await import('./commands/architecture.command')
         return new GeneratePlotArchitectureCommand(sel, projectSnapshot, undefined, {
           resumeSynopsis: params.resumeSynopsis,
-          synopsisRange: params.synopsisRange ?? null,
+          restartHandle: params.restartFrom,
+          ...(resumingSynopsis ? { resumeHandle: await recoveryHandle(context, 'synopsis') } : {}),
+          synopsisRange,
         }).execute({ step, context, callbacks })
       },
     },
   ]
 
-  const finalSteps = allSteps.filter(s => sel.includes(s.key as never))
+  const finalSteps = allSteps.filter(s => sel.includes(s.key as never)).flatMap(step => step.key === 'characters'
+    ? [step, {
+      name: text('确认采用角色提议', 'Confirm character adoption'), key: 'adopt-characters',
+      description: text('按预览采用明确身份，未明确的候选继续保留', 'Adopt clear identities from the preview and keep unresolved candidates'),
+      requiresConfirmation: true,
+      executor: async (step: unknown, context: WorkflowContext, callbacks: StepCallbacks) => {
+        const { AdoptGeneratedCharactersCommand } = await import('./commands/architecture.command')
+        return new AdoptGeneratedCharactersCommand().execute({ step, context, callbacks })
+      },
+    }] : [step])
 
   return {
     type: 'architecture_generation',
@@ -308,7 +361,7 @@ export function getNarrativePOVLabel(pov: string, writingLanguage: WritingLangua
  * 启动 Markdown 提取。唯一写路径是 RepairLegacyCharacterRosterCommand 的
  * 结构化 roster commit。
  */
-export async function migrateLegacyCharacterRoster(projectPath: string): Promise<void> {
+export async function migrateLegacyCharacterRoster(projectPath: string, options: { recoveryHandle?: MainGenerationRunHandle; restart?: boolean; generationDependencies?: WorkflowGenerationRuntimeDependencies } = {}): Promise<void> {
   const text = useLocaleStore.getState().text
   const project = useProjectStore.getState().currentProject
   const projectSession = projectSessionContextFromProject(project)
@@ -320,6 +373,8 @@ export async function migrateLegacyCharacterRoster(projectPath: string): Promise
     projectSessionContextFromProject(useProjectStore.getState().currentProject),
   )) throw new Error(text('当前项目已切换，请在原项目中重试', 'The project changed. Return to the original project and try again.'))
 
+  const source = options.generationDependencies ? undefined : await ipc.invokeWithProjectSession(projectSession, 'legacy-roster:read-source')
+  const requiresAdoption = !options.generationDependencies && (!!options.recoveryHandle || source?.snapshot.migrationState !== 'legacy_cards_preserved')
   const { useWorkflowStore } = await import('../../stores/workflow-store')
   const runId = randomUUID()
   const completedRunId = await useWorkflowStore.getState().startWorkflow({
@@ -344,10 +399,21 @@ export async function migrateLegacyCharacterRoster(projectPath: string): Promise
         ) ? currentProject?.novelConfig.genre ?? '' : ''
         return new RepairLegacyCharacterRosterCommand({
           expectedProjectPath: projectPath,
-          genre,
-        }).execute({ step: _step, context, callbacks })
+          genre, ...options, expectedMode: requiresAdoption ? 'model' : 'existing',
+        }, options.generationDependencies).execute({ step: _step, context, callbacks })
       },
-    }],
+    }, ...(requiresAdoption ? [{
+      name: text('确认采用角色提议', 'Confirm character proposals'),
+      description: text('仅采用静态字段与明确关系；原始当前状态保留为候选。', 'Adopt static fields and clear relationships only; original current state remains a candidate.'),
+      requiresConfirmation: true,
+      executor: async (_step: Parameters<WorkflowDefinition['steps'][number]['executor']>[0], context: WorkflowContext, callbacks: StepCallbacks) => {
+        const { AdoptGeneratedCharactersCommand } = await import('./commands/architecture.command')
+        const result = await new AdoptGeneratedCharactersCommand().execute({ step: _step, context, callbacks })
+        const session = requireWorkflowProjectSession(context)
+        if (sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: 'characters.md', projectPath: session.projectPath, projectSession: session, runId: context.runId })
+        return result
+      },
+    }] : [])],
   })
   const completedRun = useWorkflowStore.getState().history.find(run => run.id === completedRunId)
   if (!completedRun || completedRun.status !== 'completed') {

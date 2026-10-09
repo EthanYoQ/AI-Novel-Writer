@@ -9,6 +9,27 @@ const answer = [
 ]
 
 describe('本章目标审稿合同', () => {
+  it('只把当前章的独立必现行并入原目标，普通背景和其他章不入清单', () => {
+    const frozen = freezeChapterGoals(3, '交还钥匙', [
+      '北塔常年积雪。\n【第3章必现】主角亲眼看见红灯熄灭\n【第4章必现】城门开启',
+      '【第3章必现】她当面承认身份\n普通备注：她害怕黑暗',
+    ])
+    expect(frozen.items).toEqual([
+      { id: 'ch3:keyEvents:1', text: '交还钥匙' },
+      { id: 'ch3:mustShow:1', text: '主角亲眼看见红灯熄灭' },
+      { id: 'ch3:mustShow:2', text: '她当面承认身份' },
+    ])
+  })
+
+  it('必现缺席是 unknown，正文明确出现与明确相反分别接纳定位证据', () => {
+    const frozen = freezeChapterGoals(3, '', ['【第3章必现】主角亲眼看见红灯熄灭'])
+    const goal = frozen.items[0]!
+    const absent = normalizeChapterGoalReview([{ id: goal.id, status: 'unknown', description: '正文没有展示。', evidence: [] }], frozen, '主角走进北塔。', 'zh-CN')
+    expect(absent.items[0]).toMatchObject({ status: 'unknown', evidence: [] })
+    expect(normalizeChapterGoalReview([{ id: goal.id, status: 'completed', description: '红灯熄灭。', evidence: [{ quote: '红灯在他眼前熄灭。' }] }], frozen, '红灯在他眼前熄灭。', 'zh-CN').items[0]?.status).toBe('completed')
+    expect(normalizeChapterGoalReview([{ id: goal.id, status: 'unmet', description: '正文明确相反。', evidence: [{ quote: '红灯始终亮着。' }] }], frozen, '红灯始终亮着。', 'zh-CN').items[0]?.status).toBe('unmet')
+  })
+
   it('软件按原文冻结每个显式条目，不让模型改写目标', () => {
     expect(goals.items.map(item => item.text)).toEqual(['完成相册', '约定周三搬设备'])
     expect(Object.isFrozen(goals.items)).toBe(true)
@@ -71,6 +92,13 @@ describe('本章目标审稿合同', () => {
     expect(prompt).toContain('按 id、evidence、description、status 顺序')
     expect(prompt).toContain('逐个列出目标原文中的每个当章子动作及其判断，再汇总')
     expect(prompt).toContain('任一 unmet → unmet；否则任一 unknown → unknown；仅全部完成 → completed')
+  })
+
+  it('目标与作者设定冲突时一律判 unknown 且不改写目标', () => {
+    const zh = buildChapterGoalReviewPrompt(goals, 'zh-CN')
+    expect(zh).toContain('目标原文与作者确认设定冲突时，无论正文是否写出该冲突内容，都判 unknown（不判 completed 或 unmet），并在 description 说明冲突，仍不得改写目标。')
+    const en = buildChapterGoalReviewPrompt(goals, 'en-US')
+    expect(en).toContain("If a goal's text conflicts with author-confirmed settings, judge it unknown (never completed or unmet) whether or not the draft contains the conflicting content, and explain the conflict in description. Still do not rewrite the goal.")
   })
 
   it.each(['“钟楼已经修好。”', '"钟楼已经修好。"', '“钟楼已经修好。”她说。”'])('只容忍一对外围引号：%s', quote => {

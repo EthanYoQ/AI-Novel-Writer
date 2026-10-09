@@ -138,7 +138,12 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
       const runId = await useWorkflowStore.getState().startWorkflow(workflow, true)
       if (!isProjectSessionCurrent(session)) return
       const run = useWorkflowStore.getState().history.find(candidate => candidate.id === runId)
-      if (run?.status === 'completed') {
+      const rejected = run?.status === 'completed' && run.characterProposalChoices
+        && !run.characterProposalChoices.selections.some(choice => choice.action !== 'keep-unresolved')
+      if (rejected) {
+        setOpen(true)
+        toast.warning(text('未采用任何角色，输入内容已保留。', 'No characters were adopted; your input was kept.'))
+      } else if (run?.status === 'completed') {
         clearImportDraftIfCurrent(sessionKey, submittedDraft)
         toast.success(text('角色卡已导入角色名单', 'Character cards imported into the roster'))
       } else {

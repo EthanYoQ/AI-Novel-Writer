@@ -1,9 +1,15 @@
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
 import { getCurrentProjectPath, getProjectDb } from '../database'
-import { ensureCharacterRosterSchema } from './character-roster-schema'
 import { clearBlueprintFactsWithinTransaction } from './blueprint-repository'
+import { getProjectDataRoot } from '../services/project-data-locator'
+import { commitAuthorCharacterRoster } from '../services/character-roster-author'
+import { adoptLegacyCards, readLegacyRosterSource } from '../services/legacy-roster-source'
+import { hasCharacterIdentitySchema } from './character-repository'
+import { CharacterRosterRepository, clearLegacyCharacterArchitecture } from './character-roster-repository'
+import { CHARACTER_ROSTER_SCHEMA_VERSION } from '../../src/shared/character-roster'
 
 export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText'
 
@@ -37,8 +43,7 @@ function moveGeneratedFilesToTrash(projectPath: string): MovedFile[] {
     if (files.length === 0) return []
 
     const trashDir = path.join(
-        projectPath,
-        '.vela',
+        getProjectDataRoot(projectPath),
         'trash',
         `clear-${new Date().toISOString().replace(/[:.]/g, '-')}`,
     )
@@ -78,7 +83,8 @@ function removeMovedFiles(moved: MovedFile[]): void {
 }
 
 export class ProjectClearRepository {
-    static clearGeneratedData(options: ProjectClearOptions): ProjectClearResult {
+    /** session 是清空角色卡所需的作者身份；角色走与作者删除相同的退休路径，历史身份记录保留。 */
+    static clearGeneratedData(options: ProjectClearOptions, session?: { projectId: string; epoch: string }): ProjectClearResult {
         const db = getProjectDb()
         if (!db) throw new Error('项目数据库未打开')
 
@@ -110,14 +116,22 @@ export class ProjectClearRepository {
                 }
 
                 if (options.creativeFields) {
-                    // 即使项目是在 roster 元数据迁移前创建的，也必须先按唯一
-                    // 迁移规则建立元数据表，再在同一 transaction 内清空角色事实
-                    // 与 receipt。这样下次 read 会重新分类为空项目，而不会遗留
-                    // ready 状态或旧角色参与新的架构生成。
-                    ensureCharacterRosterSchema(db)
-                    db.prepare('DELETE FROM character_roster_operations').run()
-                    db.prepare('DELETE FROM character_roster_meta').run()
-                    db.prepare('DELETE FROM characters').run()
+                    if (hasCharacterIdentitySchema(db)) {
+                        const operationId = `project-clear:${randomUUID()}`
+                        // 升级后尚未修复的旧角色卡先按既有入口采用，才能走作者退休路径。
+                        if (CharacterRosterRepository.read(db).migrationState === 'legacy_cards_preserved') {
+                            const source = readLegacyRosterSource(db)
+                            adoptLegacyCards(db, { operationId, expectedRevision: source.snapshot.revision, expectedLegacyHash: source.legacyHash,
+                                expectedIdentityRevision: source.identityRevision, expectedFactsHash: source.factsHash })
+                        }
+                        const roster = CharacterRosterRepository.read(db)
+                        if (roster.entries.length > 0) {
+                            if (!session) throw new Error('CHARACTER_AUTHOR_SCOPE_REQUIRED')
+                            commitAuthorCharacterRoster(db, { operationId, schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION, intent: 'manual_edit',
+                                expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision!, entries: [] }, session, () => {})
+                        }
+                        clearLegacyCharacterArchitecture(db)
+                    }
                     db.prepare(`
                         UPDATE project_core
                         SET writing_style = '',
@@ -126,7 +140,6 @@ export class ProjectClearRepository {
                             golden_finger = '',
                             premise = '',
                             worldbuilding = '',
-                            characters_arch = '',
                             synopsis = '',
                             character_states = '',
                             updated_at = datetime('now')
@@ -137,11 +150,18 @@ export class ProjectClearRepository {
             })
 
             tx()
-            removeMovedFiles(movedFiles)
-            return { cleared, physicalFilesDeleted: movedFiles.length }
         } catch (error) {
             restoreMovedFiles(movedFiles)
             throw error
         }
+        let physicalFilesDeleted = 0
+        try {
+            removeMovedFiles(movedFiles)
+            physicalFilesDeleted = movedFiles.length
+        } catch (error) {
+            // The database is committed; restoring files or reporting failure would misstate the project state.
+            console.warn('[ProjectClear] 已清除项目数据，但废纸篓文件未能完全删除:', error)
+        }
+        return { cleared, physicalFilesDeleted }
     }
 }

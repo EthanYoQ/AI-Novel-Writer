@@ -1,0 +1,65 @@
+{
+  "kind": "s14c-official-old-app-synthetic-source",
+  "sourceSummarySha256": "4ba4148c14472110b6d0822c9a694adeb1488c107e6c76d85dc9c49d89b3971a",
+  "scope": "Official v1.0.0/v1.1.0 old-app synthetic projects; raw proof.json and machine paths excluded. FTS-only knowledge has no original full text.",
+  "cases": [
+    {
+      "version": "1.0.0",
+      "directory": "v100",
+      "proofSha256": "4d3986bde6657141c84f73620fbc86beac4db91aff58c800e1cafc9e10bab47b",
+      "proofFileSha256": "b6e165a12bc20941fb43e5226cc2b6d0380335b10fe3ff5d0c401bf3e652e61f",
+      "oldExecutableSha256": "2b2b93e5b0e06946715b3524e9dbd5277f3a0eb95f4009de6c16dc81609f951b",
+      "oldAsarSha256": "746e621074f40ac983e2feb343c82e491da064722145670a2221279387503236",
+      "files": {
+        ".vela/lancedb/chunks.lance/_indices/86b1a50a-e807-4cda-a767-48840cb97691/metadata.lance": "ea278c8ebb4f1b0623090acb35254cd4f32d520470022975f1e4478b8e5339b2",
+        ".vela/lancedb/chunks.lance/_indices/86b1a50a-e807-4cda-a767-48840cb97691/part_0_docs.lance": "009f65733a0459070879231d7e01b3624e39cf89d948bdd8dac9eb5e3dc1877e",
+        ".vela/lancedb/chunks.lance/_indices/86b1a50a-e807-4cda-a767-48840cb97691/part_0_invert.lance": "865a68cdcd8e544160d5ce5add190f7e3138b278b4446807fe4b0d4f28fd6e36",
+        ".vela/lancedb/chunks.lance/_indices/86b1a50a-e807-4cda-a767-48840cb97691/part_0_tokens.lance": "364925ad626ba0802c3a22e073e07d6f2a2d0f6769f277f410bd579503643093",
+        ".vela/lancedb/chunks.lance/_transactions/0-6f53ccb8-3fcd-4eca-b77c-ca0ca2882916.txn": "a662dc4b759ef933f57be4f5922ee6ab2f1d8f742652863b37325d2ee1096e96",
+        ".vela/lancedb/chunks.lance/_transactions/1-e760db29-61a5-49bc-a958-5f595b04d651.txn": "0f3fb38192e87b4ec3fcc9dfb3083ae41a767d1721b166fccc2eb1a48e0c98fd",
+        ".vela/lancedb/chunks.lance/_versions/1.manifest": "567220d2e5faaa9aea6a5bf1a773b01ecc55884896e60076714a908e6a273851",
+        ".vela/lancedb/chunks.lance/_versions/2.manifest": "c0882e274853e5e622956e8273fe406d0002e387e8305126eab86e2143fb65b4",
+        ".vela/lancedb/chunks.lance/data/111100000010001011011101299344464fb58b9f7169efb9e2.lance": "c4efb5ac166ecf20cc4bbc2c96dccc7241ec068fb42f06381433cc7cbc3f1ea4",
+        ".vela/lancedb/documents.lance/_transactions/0-903b1194-5382-4ae2-b8a7-6fd79d2bc446.txn": "6b68fa6de4f012eb338292b1289c76e5a8c5db9d5a5703b12c82bc5ad02bceff",
+        ".vela/lancedb/documents.lance/_transactions/1-8f7e3444-aefd-444d-af8c-a126ed5e5479.txn": "7692b6adc47b18d4693e1c9d729ad1266a48da113dd2d20414f4d7437e4cc220",
+        ".vela/lancedb/documents.lance/_versions/1.manifest": "46c393268b82b48ef26c68c2d43993394dda099137da3e836109b1806be5f872",
+        ".vela/lancedb/documents.lance/_versions/2.manifest": "f11d193166711228a9aa780c7e7161d30bdb5bcacd6c67c6cfe241ddc5255cef",
+        ".vela/lancedb/documents.lance/data/001000000011111110011110d75aae40b1882a6f458a82aef2.lance": "446c091320cb62ba48238ce69a387b43012d11bf4a0251aeacbcf7de2bbce7b6",
+        ".vela/project.json": "cee5ce502e77d5a80ea8fdfb15193b5a702a0225e66a5a69db650d81b76b034b",
+        ".vela/prompts/assistant_writing_identity.zh-CN.json": "6ae6663329bef89bb99e112518e7dec28a397bd6ec70cf438ae1dd4b6ee0d67c",
+        ".vela/vela.db": "df4ec3b8c6eeb2ae7e525ba09f71c463b0e9a1fc236a22f54c3269bf9b0ab6a8",
+        ".vela/writing-skills.json": "674badccb9857426dac18e02f873806a45dcf21ca11a069b83e21f75642dfb2a",
+        "第1章 旧港档案_6ec96a9a-688f-48d8-a1b1-9015ae86d5fa.txt": "ebf60c216c619365e8fdd2d8e4112f89d6cb777fb2820b574d74ba78d0952acc"
+      }
+    },
+    {
+      "version": "1.1.0",
+      "directory": "v110",
+      "proofSha256": "e979bd0577ff02c973e2cd14ab27c82dfea0184fc2ca8cec8e713eba5e15420f",
+      "proofFileSha256": "b10d10720008be7766f53de54c980ae2d25427e4da05feeab38d8ee4677f11f7",
+      "oldExecutableSha256": "6c17e1fcc62d235feb7f5bdba5b0f355b198c5322b2f67d922874857e27f564a",
+      "oldAsarSha256": "447bb76357422adc2ca967b667bfe60c3419b1ca7ea22a0d2d08105ed398a679",
+      "files": {
+        ".vela/lancedb/chunks.lance/_indices/5ea2d510-1a67-4a5d-a630-d7cadee1d16e/metadata.lance": "d5d5c21756a4167de800bcbc19f1b079eb1f5d4c5dba8978ea7407d6330558f4",
+        ".vela/lancedb/chunks.lance/_indices/5ea2d510-1a67-4a5d-a630-d7cadee1d16e/part_4_docs.lance": "009f65733a0459070879231d7e01b3624e39cf89d948bdd8dac9eb5e3dc1877e",
+        ".vela/lancedb/chunks.lance/_indices/5ea2d510-1a67-4a5d-a630-d7cadee1d16e/part_4_invert.lance": "865a68cdcd8e544160d5ce5add190f7e3138b278b4446807fe4b0d4f28fd6e36",
+        ".vela/lancedb/chunks.lance/_indices/5ea2d510-1a67-4a5d-a630-d7cadee1d16e/part_4_tokens.lance": "9180657791535354fd5ca54e640c2ea348a599250c1eb46a74c939d943752e71",
+        ".vela/lancedb/chunks.lance/_transactions/0-447436ed-55ce-4db0-9ec9-5b36cdee7729.txn": "367a74bf73058e346c19dd21aac918ba9c00047f42dde83420439d27e106e043",
+        ".vela/lancedb/chunks.lance/_transactions/1-48b31a65-1b81-4649-bbb5-eb8a1198a82e.txn": "93a764a7055895d4a27f56ec39a57cf2ba454c90327dae97658e4f37fdd3ef9d",
+        ".vela/lancedb/chunks.lance/_versions/1.manifest": "aa782c94ad8a9110e5bae4967599192db848e013258250266ee62a9b8cd0c9f7",
+        ".vela/lancedb/chunks.lance/_versions/2.manifest": "d887bb50f8fdf9d9029a1186c9d33c09462cabf5de50b96edf91663bedc27aa2",
+        ".vela/lancedb/chunks.lance/data/01101111010111110001010166e4b049888485bdfce76711cf.lance": "17c42177b6af2b0eb3e1afb48ccda4750bbdfff195cd5949ac56fc6515997127",
+        ".vela/lancedb/documents.lance/_transactions/0-778ce674-ef53-43ab-b4d0-e124a215a4a1.txn": "72a802ff2c7ae9af4cbf7baf3aedacb1385b04b19ed3d7668fbed5a2598d6d75",
+        ".vela/lancedb/documents.lance/_transactions/1-ba19207f-39e6-4a99-b6ff-b5ec0a51d012.txn": "e89bce4ccc3bdf6f8d341e91eb0a9d16ce20754734abf5dfc7f1d98479c5eee4",
+        ".vela/lancedb/documents.lance/_versions/1.manifest": "475c908f7690c6312943da465435d42703af8498078e08b9205f880f4cd7e6f4",
+        ".vela/lancedb/documents.lance/_versions/2.manifest": "c36f69540ace5d3db9c78927cafb33d865fb432be0b23bd14962427c28cf54af",
+        ".vela/lancedb/documents.lance/data/010100100111010101011011f053d74f3dab8bec1fabff67ee.lance": "f89e11d740425c2ac461d32440fe56dd0da1fd7ba6378d8610bc5cca925af7f8",
+        ".vela/project.json": "2bd9e0d1f234e2b60429967aaadfe4d4d51ed569963f52663bd00a5f687263e8",
+        ".vela/prompts/assistant_writing_identity.zh-CN.json": "803fc0b06cd5980255bf8cb96ca17b5a8f3bfde2388c52e5ef87eb962e0d1256",
+        ".vela/vela.db": "a96c9f53ca6840b56cc3634ca3de3ea56caa53c3dbbed2959d4723c286cd452a",
+        ".vela/writing-skills.json": "674badccb9857426dac18e02f873806a45dcf21ca11a069b83e21f75642dfb2a",
+        "第1章 旧港档案_963f7544-00e1-4d4c-9b8e-9b758415dbc5.txt": "5fef44c58117a2462657fe23cabc181dad6209a1f414a0782d2439de5529b790"
+      }
+    }
+  ]
+}

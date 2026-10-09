@@ -4,7 +4,8 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { DraftRepository } from '../draft-repository'
 import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
 import {

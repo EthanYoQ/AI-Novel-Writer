@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { createJSONStorage, persist } from 'zustand/middleware'
+import { useAppearanceStore, type AppearanceStore } from './appearance-bootstrap'
 import { ipc } from '../services/ipc-client'
 
 export type Theme = 'light' | 'galaxy' | 'paper' | 'dark'
@@ -121,115 +121,39 @@ interface ThemeState {
   setUiFont: (font: FontId) => void
 }
 
-type PersistedThemeState = Pick<
-  ThemeState,
-  'theme' | 'zoom' | 'writingFont' | 'uiFont'
->
-
-// ─── Store ───────────────────────────────────────────────────────────────
-
-export const useThemeStore = create<ThemeState>()(
-  persist(
-    (set, get) => ({
-      theme: 'paper',
-      resolvedTheme: 'paper',
-      zoom: 1.0,
-      writingFont: 'lxgw-wenkai',
-      uiFont: 'noto-sans-sc',
-
-      setTheme: (theme: Theme) => {
-        const resolved = resolveTheme(theme)
-        set({ theme, resolvedTheme: resolved })
-        applyTheme(resolved)
-      },
-
-      initTheme: () => {
-        const { zoom, writingFont, uiFont } = get()
-        let { theme } = get()
-
-        // --- 迁移并兼容历史数据版本 ---
-        // 兼容旧版系统设定的 localStorage
-        if ((theme as string) === 'system') {
-          theme = resolveTheme(theme)
-          set({ theme })
-        }
-        // Zustand v5 不会为缺失 version 的历史记录调用 migrate；首次初始化时
-        // 将唯一明确的旧值 night 迁移并按当前持久化版本写回。
-        if ((theme as string) === 'night') {
-          theme = 'dark'
-          set({ theme })
-        }
-        const resolved = resolveTheme(theme)
-        set({ resolvedTheme: resolved })
-        applyTheme(resolved)
-        applyZoom(zoom)
-        applyWritingFont(writingFont)
-        applyUiFont(uiFont)
-      },
-
-      zoomIn: () => {
-        const next = Math.min(ZOOM_MAX, +(get().zoom + ZOOM_STEP).toFixed(2))
-        set({ zoom: next })
-        applyZoom(next)
-      },
-
-      zoomOut: () => {
-        const next = Math.max(ZOOM_MIN, +(get().zoom - ZOOM_STEP).toFixed(2))
-        set({ zoom: next })
-        applyZoom(next)
-      },
-
-      zoomReset: () => {
-        set({ zoom: 1.0 })
-        applyZoom(1.0)
-      },
-
-      setZoom: (zoom: number) => {
-        const clamped = +Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom)).toFixed(2)
-        set({ zoom: clamped })
-        applyZoom(clamped)
-      },
-
-      setWritingFont: (font: FontId) => {
-        set({ writingFont: font })
-        applyWritingFont(font)
-      },
-
-      setUiFont: (font: FontId) => {
-        set({ uiFont: font })
-        applyUiFont(font)
-      },
-    }),
-    {
-      name: 'ai-novel-writer-theme',
-      storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        theme: state.theme,
-        zoom: state.zoom,
-        writingFont: state.writingFont,
-        uiFont: state.uiFont,
-      }),
-      version: 1,
-      migrate: (persistedState, version) => {
-        const state = persistedState as { theme?: string }
-        if (version < 1 && state.theme === 'night') {
-          return { ...state, theme: 'dark' } as PersistedThemeState
-        }
-        return persistedState as PersistedThemeState
-      },
+/** Legacy-facing projection only; appearance-bootstrap owns all persistence. */
+export function createThemeStore(appearance: AppearanceStore = useAppearanceStore) {
+  const store = create<ThemeState>()((set, get) => ({
+    theme: 'paper', resolvedTheme: 'paper', zoom: 1, writingFont: 'lxgw-wenkai', uiFont: 'noto-sans-sc',
+    setTheme: theme => { appearance.getState().update({ colorTheme: theme }) },
+    initTheme: () => {
+      const state = appearance.getState()
+      if (state.phase !== 'migrated' || !state.profile) return
+      const profile = state.profile
+      set({ theme: profile.colorTheme, resolvedTheme: profile.colorTheme, zoom: profile.zoom,
+        writingFont: profile.writingFont, uiFont: profile.uiFont })
+      applyTheme(profile.colorTheme)
+      applyZoom(profile.zoom)
+      applyWritingFont(profile.writingFont)
+      applyUiFont(profile.uiFont)
+    },
+    zoomIn: () => { appearance.getState().update({ zoom: Math.min(ZOOM_MAX, +(get().zoom + ZOOM_STEP).toFixed(2)) }) },
+    zoomOut: () => { appearance.getState().update({ zoom: Math.max(ZOOM_MIN, +(get().zoom - ZOOM_STEP).toFixed(2)) }) },
+    zoomReset: () => { appearance.getState().update({ zoom: 1 }) },
+    setZoom: zoom => { appearance.getState().update({ zoom: +Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom)).toFixed(2) }) },
+    setWritingFont: writingFont => { appearance.getState().update({ writingFont }) },
+    setUiFont: uiFont => { appearance.getState().update({ uiFont }) },
+  }))
+  appearance.subscribe((next, previous) => {
+    if (next.phase === 'migrated' && (next.profile !== previous.profile || previous.phase !== 'migrated')) {
+      store.getState().initTheme()
     }
-  )
-)
-
-// ─── 内部工具函数 ─────────────────────────────────────────────────────────
-
-/** 解析主题：直接返回实际值，保留对 localStorage 旧版 system 设定的向下兼容 */
-function resolveTheme(theme: Theme): 'light' | 'galaxy' | 'paper' | 'dark' {
-  if ((theme as string) === 'system') {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-  }
-  return theme
+  })
+  if (appearance.getState().phase === 'migrated') store.getState().initTheme()
+  return store
 }
+
+export const useThemeStore = createThemeStore()
 
 /** 应用主题到 DOM — 支持互斥的主题 */
 function applyTheme(theme: 'light' | 'galaxy' | 'paper' | 'dark') {

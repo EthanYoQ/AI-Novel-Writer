@@ -1,4 +1,5 @@
 import { act } from 'react'
+import type { ReactNode } from 'react'
 import { EditorView } from '@codemirror/view'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +12,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import AIOutputPanel from '../AIOutputPanel'
 import EditorArea from '../EditorArea'
+import ShellV2 from '../../layout/v2/ShellV2'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -54,6 +56,26 @@ function button(label: string): HTMLButtonElement | undefined {
     .find(item => item.textContent?.includes(label))
 }
 
+async function renderWriter(editor: ReactNode = <p>正文</p>) {
+  await act(async () => {
+    root?.render(
+      <ShellV2
+        theme="paper"
+        titleBar={<span>Recovery project</span>}
+        rail={<span>小说</span>}
+        sidebar={<span>作品资料</span>}
+        editor={editor}
+        aiPanel={<AIOutputPanel />}
+        bottom={<span>任务</span>}
+        statusBar={<span>本地写作</span>}
+      />,
+    )
+    await Promise.resolve()
+  })
+  expect(container?.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
+  expect(container?.querySelector('[data-shell-variant="v3"]')).not.toBeNull()
+}
+
 beforeEach(() => {
   useWorkflowStore.setState({ activeRuns: [], history: [], currentRun: null })
   useProjectStore.setState({
@@ -71,6 +93,7 @@ beforeEach(() => {
   storedCandidate = candidate()
   invoke = vi.fn(async (channel: string, candidateId?: string, visibleText?: string) => {
     if (channel === 'db:recovery-candidate-list') return [storedCandidate]
+    if (channel === 'generation:list' || channel === 'generation:list-batches') return []
     if (channel === 'db:recovery-candidate-update') {
       storedCandidate = candidate({ candidateId, visibleText })
       return { success: true, candidate: storedCandidate }
@@ -80,9 +103,9 @@ beforeEach(() => {
   })
   clipboardWrite = vi.fn().mockResolvedValue(undefined)
   Object.assign(window, {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
-      on: vi.fn(),
+      on: vi.fn(() => () => {}),
       once: vi.fn(),
       send: vi.fn(),
       setZoomLevel: vi.fn(),
@@ -105,15 +128,12 @@ afterEach(async () => {
   root = undefined
   container = undefined
   setActiveProjectSessionContext(null)
-  delete (window as typeof window & { velaAPI?: unknown }).velaAPI
+  delete (window as typeof window & { aiNovelAPI?: unknown }).aiNovelAPI
 })
 
 describe('AI output recovery candidates', () => {
   it('discovers a pending candidate after project reopen and copies or continues it explicitly', async () => {
-    await act(async () => {
-      root?.render(<AIOutputPanel />)
-      await Promise.resolve()
-    })
+    await renderWriter()
 
     expect(container?.textContent).toContain('恢复候选')
     expect(container?.textContent).toContain('原始候选')
@@ -153,15 +173,15 @@ describe('AI output recovery candidates', () => {
     ])
     expect(container?.textContent).not.toContain('林岚推开驾驶室的门。')
 
-    await act(async () => {
-      root?.render(<EditorArea onNewProject={vi.fn()} />)
-      await Promise.resolve()
-    })
+    await renderWriter(<EditorArea onNewProject={vi.fn()} />)
+    expect(container?.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
     const recoveryTab = useEditorStore.getState().tabs.find(tab => (
-      tab.filePath === 'vela://recovery/candidate-1'
+      tab.filePath === 'ai-novel://recovery/candidate-1'
     ))!
+    expect(container?.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
     await act(async () => useEditorStore.getState().setActiveTab(recoveryTab.id))
 
+    expect(container?.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
     expect(container?.textContent).toContain('项目恢复候选')
     expect(container?.textContent).toContain('林岚推开驾驶室的门。')
     await act(async () => {
@@ -171,6 +191,7 @@ describe('AI output recovery candidates', () => {
       })
     })
     expect(container?.querySelector('button[title^="保存"]')).not.toBeNull()
+    expect(container?.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
     await act(async () => saveDirtyEditorChangesForExit(projectPath))
     expect(useEditorStore.getState().tabs.find(tab => tab.id === recoveryTab.id)).toEqual(
       expect.objectContaining({
@@ -194,18 +215,12 @@ describe('AI output recovery candidates', () => {
       || channel.startsWith('kb:')
     ))).toBe(false)
 
-    await act(async () => {
-      root?.render(<AIOutputPanel />)
-      await Promise.resolve()
-    })
+    expect(container?.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
     expect(container?.textContent).toContain('林岚停下列车，保存现场。')
   })
 
   it('discards explicitly without creating an editor tab', async () => {
-    await act(async () => {
-      root?.render(<AIOutputPanel />)
-      await Promise.resolve()
-    })
+    await renderWriter()
     await act(async () => {
       button('放弃')?.click()
       await Promise.resolve()
@@ -227,10 +242,7 @@ describe('AI output recovery candidates', () => {
       if (channel === 'db:recovery-candidate-resolve') return { success: true }
       throw new Error(`unexpected IPC: ${channel}`)
     })
-    await act(async () => {
-      root?.render(<AIOutputPanel />)
-      await Promise.resolve()
-    })
+    await renderWriter()
 
     expect(container?.textContent).toContain('源章节已变化')
     expect(button('继续编辑')).toBeDisabled()

@@ -16,10 +16,13 @@ import {
   type AgentExecutionContext,
   type ToolResult,
   type ToolArtifact,
+  createToolArtifact,
 } from './tool-registry'
 import { createAgentExecutionContext } from './tools/project-context'
 import { writingLanguageText, type WritingLanguage } from '../../shared/writing-language'
 import type { FileWriteCommitState } from '../../shared/ipc-channels'
+import { parseAgentResponseProtocol, cleanAgentProtocolVisibleText } from '../../shared/agent-response-protocol'
+import type { AgentGenerationRound, AgentToolAction } from '../../shared/agent-generation'
 
 // ===== 常量 =====
 
@@ -86,20 +89,11 @@ export interface LLMMessage {
 export type LLMGenerateFn = (
   messages: LLMMessage[],
   modelId: string,
-) => Promise<string>
+) => Promise<string | AgentGenerationRound>
 
-const TOOL_CALL_BLOCK = /<(tool_call|｜DSML｜tool_call)>[\s\S]*?<\/\1>/g
-const TOOL_CALL_TAG = /<\/?(?:tool_call|｜DSML｜tool_call)>/g
-
-/** Remove provider tool-protocol markup before any model text reaches the UI. */
+/** Remove provider control text before any model response reaches the UI. */
 export function cleanAgentVisibleText(text: string): string {
-  return text
-    .replace(TOOL_CALL_BLOCK, '')
-    .replace(/<tool_result[\s\S]*?<\/tool_result>/g, '')
-    .replace(TOOL_CALL_TAG, '')
-    .replace(/<\/?tool_result[^>]*>/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  return cleanAgentProtocolVisibleText(text, toolRegistry.listAll().map(tool => tool.name))
 }
 
 // ===== 核心引擎 =====
@@ -124,6 +118,9 @@ export async function runAgentLoop(
   abortSignal?: AbortSignal,
   providedExecutionContext?: AgentExecutionContext,
 ): Promise<void> {
+  if (providedExecutionContext?.agentGeneration) {
+    return runHostedAgentLoop(generateFn, callbacks, providedExecutionContext, abortSignal)
+  }
   const allToolCalls: ToolCallInfo[] = []
   const allArtifacts: ToolArtifact[] = []
   // One agent run gets one immutable project identity. Tool calls later in the
@@ -158,7 +155,9 @@ export async function runAgentLoop(
     // 调用 LLM
     let llmResponse: string
     try {
-      llmResponse = await generateFn(messages, modelId ?? '')
+      const generated = await generateFn(messages, modelId ?? '')
+      if (typeof generated !== 'string') throw new Error('GENERATION_AGENT_HOST_REQUIRED')
+      llmResponse = generated
     } catch {
       if (abortSignal?.aborted) {
         callbacks.onDone(fullAssistantText + uiText('\n\n_（已停止生成）_', '\n\n_(Generation stopped)_'), allToolCalls, allArtifacts)
@@ -367,173 +366,135 @@ export async function runAgentLoop(
 
 // ===== 工具函数 =====
 
-/** 解析的 Tool 调用 */
-interface ParsedToolCall {
-  name: string
-  arguments: Record<string, unknown>
-}
-
-/**
- * Some providers emit a function-style tool call as two plain-text lines
- * instead of the XML shape requested by the system prompt.  Treat that form
- * as a command only when it consumes the *entire* response and names a tool
- * already registered for this agent run.  This keeps ordinary prose and
- * arbitrary JSON from acquiring side effects.
- */
-function parseRegisteredRawToolCall(text: string): ParsedToolCall | null {
-  const match = /^\s*([A-Za-z][\w.-]*)[ \t]*\r?\n\s*(\{[\s\S]*\})\s*$/.exec(text)
-  if (!match) return null
-
-  const [, name, rawArguments] = match
-  if (!toolRegistry.get(name)) return null
-
+/** Production rounds and action identities come only from main. The legacy
+ * string loop above remains an explicitly injected engine test seam. */
+async function runHostedAgentLoop(generate: LLMGenerateFn, callbacks: AgentEngineCallbacks,
+  context: AgentExecutionContext, signal?: AbortSignal): Promise<void> {
+  const host = context.agentGeneration!
+  const ui = (zh: string, en: string) => context.uiLocale === 'en-US' ? en : zh
+  const model = (zh: string, en: string) => writingLanguageText(context.writingLanguage, zh, en)
+  const calls: ToolCallInfo[] = [], artifacts: ToolArtifact[] = []
+  let visible = ''
+  const done = (unknown = false) => callbacks.onDone(visible + (unknown ? ui(
+    '\n\n_（写入结果待确认；为避免重复写入，本轮已停止。）_',
+    '\n\n_(The write result is unknown. This run stopped to avoid a duplicate write.)_',
+  ) : signal?.aborted ? ui('\n\n_（已停止生成）_', '\n\n_(Generation stopped)_') : ''), calls, artifacts)
+  const restoreWorkflow = (action: AgentToolAction) => {
+    const registration = action.workflow
+    if (!registration || registration.state !== 'started' || !context.projectSession) return
+    if (artifacts.some(artifact => artifact.type === 'workflow_started' && artifact.runId === registration.registrationId)) return
+    artifacts.push(createToolArtifact({ type: 'workflow_started', name: registration.workflow,
+      projectPath: context.projectSession.projectPath, projectSession: context.projectSession,
+      runId: registration.registrationId, status: 'waiting' }))
+  }
   try {
-    const argumentsValue: unknown = JSON.parse(rawArguments)
-    if (
-      typeof argumentsValue !== 'object'
-      || argumentsValue === null
-      || Array.isArray(argumentsValue)
-    ) return null
-    return { name, arguments: argumentsValue as Record<string, unknown> }
-  } catch {
-    return null
-  }
-}
-
-function parseRegisteredJsonEnvelope(text: string): ParsedToolCall | null {
-  const envelope = text.trim()
-  if (!envelope.startsWith('{') || !envelope.endsWith('}')) return null
-
-  try {
-    const value: unknown = JSON.parse(envelope)
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-    const keys = Object.keys(value)
-    if (keys.length !== 2 || !keys.includes('name') || !keys.includes('arguments')) return null
-    const { name, arguments: args } = value as Record<string, unknown>
-    if (
-      typeof name !== 'string'
-      || !toolRegistry.get(name)
-      || !args
-      || typeof args !== 'object'
-      || Array.isArray(args)
-    ) return null
-    return { name, arguments: args as Record<string, unknown> }
-  } catch {
-    return null
-  }
-}
-
-function parseTaggedToolCallContent(text: string): ParsedToolCall | null {
-  const emptyTool = /^<([A-Za-z][\w.-]*)>\s*<\/\1>$/.exec(text)
-  if (emptyTool && toolRegistry.get(emptyTool[1])) {
-    return { name: emptyTool[1], arguments: {} }
-  }
-
-  const match = /^<name>\s*([A-Za-z][\w.-]*)\s*<\/name>\s*<arguments>\s*(\{[\s\S]*\})\s*<\/arguments>$/.exec(text)
-  if (!match) return null
-
-  try {
-    const args: unknown = JSON.parse(match[2])
-    if (!args || typeof args !== 'object' || Array.isArray(args)) return null
-    return { name: match[1], arguments: args as Record<string, unknown> }
-  } catch {
-    return null
-  }
-}
-
-/**
- * 从 LLM 输出中解析 <tool_call>...</tool_call> 标签
- *
- * 返回分离后的文本片段和 tool 调用列表。
- * 增强版：支持 JSON 前后有多余文字的容错解析。
- */
-export function parseToolCalls(text: string): {
-  textParts: string[]
-  toolCalls: ParsedToolCall[]
-} {
-  const rawToolCall = parseRegisteredRawToolCall(text)
-  if (rawToolCall) {
-    return { textParts: [], toolCalls: [rawToolCall] }
-  }
-
-  const jsonEnvelope = parseRegisteredJsonEnvelope(text)
-  if (jsonEnvelope) {
-    return { textParts: [], toolCalls: [jsonEnvelope] }
-  }
-
-  const toolCalls: ParsedToolCall[] = []
-  const textParts: string[] = []
-
-  // 匹配标准 XML 或 SiliconFlow DSML 的 tool_call 包装。
-  const regex = /<(tool_call|｜DSML｜tool_call)>\s*([\s\S]*?)\s*<\/\1>/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null = null
-  let matchedProtocolBlock = false
-
-  while ((match = regex.exec(text)) !== null) {
-    matchedProtocolBlock = true
-    // 收集标签前的文本
-    if (match.index > lastIndex) {
-      const before = text.slice(lastIndex, match.index).trim()
-      if (before) textParts.push(before)
-    }
-    lastIndex = regex.lastIndex
-
-    // 解析 JSON（增强容错）
-    const rawContent = match[2].trim()
-    let parsed = false
-
-    // 策略 1：直接解析整个内容
-    try {
-      const data = JSON.parse(rawContent)
-      if (data.name && typeof data.name === 'string') {
-        toolCalls.push({ name: data.name, arguments: data.arguments ?? {} })
-        parsed = true
+    for (let roundIndex = 0; roundIndex < MAX_TOOL_ROUNDS; roundIndex++) {
+      if (signal?.aborted) { done(); return }
+      const round = await generate([], context.selectedModelId ?? '')
+      if (typeof round === 'string' || round.index !== roundIndex) throw new Error('GENERATION_AGENT_ROUND_MISMATCH')
+      if (signal?.aborted) { done(); return }
+      if (round.visibleText) { visible += round.visibleText; callbacks.onTextChunk(round.visibleText) }
+      if (round.status !== 'completed') throw new Error('GENERATION_AGENT_ROUND_INCOMPLETE')
+      if (!round.actions.length) { done(); return }
+      const queue = [...round.actions]
+      const refreshAuthorActions = async (index: number) => {
+        const refreshed = await host.readRound(round.index)
+        const known = new Set(queue.map(entry => entry.ref.toolCallId))
+        queue.splice(index + 1, 0, ...refreshed.actions.filter(entry => !known.has(entry.ref.toolCallId)))
       }
-    } catch { /* 尝试容错解析 */ }
-
-    // 策略 2：兼容供应商在 tool_call 内输出严格的 name/arguments 子标签。
-    if (!parsed) {
-      const taggedToolCall = parseTaggedToolCallContent(rawContent)
-      if (taggedToolCall) {
-        toolCalls.push(taggedToolCall)
-        parsed = true
-      }
-    }
-
-    // 策略 3：从内容中提取 JSON 对象（LLM 可能在 JSON 前后加了额外文字）
-    if (!parsed) {
-      const jsonMatch = rawContent.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
+      for (let index = 0; index < queue.length; index++) {
+        if (signal?.aborted) { done(); return }
+        let action = queue[index]
+        const tool = toolRegistry.get(action.name)
+        const info: ToolCallInfo = { id: action.ref.toolCallId, toolName: action.name, arguments: action.arguments,
+          status: 'pending', source: tool?.source, projectSession: context.projectSession }
+        calls.push(info)
+        if (['completed', 'failed', 'declined'].includes(action.status)) {
+          info.status = action.status === 'completed' ? 'completed' : 'failed'
+          if (action.status === 'completed') info.result = action.observation
+          else info.error = action.status === 'declined' ? ui('用户拒绝执行', 'The user declined this action') : ui('工具执行失败，请重试。', 'Tool execution failed. Please try again.')
+          callbacks.onToolCallStart(info); callbacks.onToolCallComplete(info); restoreWorkflow(action)
+          continue
+        }
+        if (action.status === 'unknown' || action.status === 'running') {
+          info.status = 'result_unknown'; info.commitState = 'unknown'
+          callbacks.onToolCallStart(info); callbacks.onToolCallComplete(info); done(true); return
+        }
+        if (tool) host.assertTool(tool)
+        let decision: ToolConfirmationDecision = { confirmed: true }
+        info.status = tool?.requiresConfirmation ? 'waiting_confirm' : 'running'
+        callbacks.onToolCallStart(info)
+        if (tool?.requiresConfirmation) {
+          const response = await callbacks.onToolCallConfirmRequired(info)
+          decision = typeof response === 'boolean' ? { confirmed: response } : response
+        }
+        if (signal?.aborted) { done(); return }
+        const claim = await host.claimTool(action.ref, decision.confirmed, decision.blueprintProposals)
+        action = claim.action
+        if (!claim.execute) {
+          info.status = action.status === 'completed' ? 'completed' : ['running', 'unknown'].includes(action.status) ? 'result_unknown' : 'failed'
+          info.result = action.observation
+          if (action.status === 'declined') { info.error = ui('用户拒绝执行', 'The user declined this action'); info.commitState = 'not_committed' }
+          callbacks.onToolCallComplete(info); restoreWorkflow(action)
+          if (info.status === 'result_unknown') { done(true); return }
+          if (action.name === 'propose_novel_config' && info.status === 'completed') await refreshAuthorActions(index)
+          continue
+        }
+        info.status = 'running'
+        let sideEffectStarted = false, finishAttempted = false
         try {
-          const data = JSON.parse(jsonMatch[0])
-          if (data.name && typeof data.name === 'string') {
-            toolCalls.push({ name: data.name, arguments: data.arguments ?? {} })
-            parsed = true
+          if (!tool) {
+            const observation = model(`未知工具：${action.name}`, `Unknown tool: ${action.name}`)
+            finishAttempted = true
+            await host.finishTool({ ref: action.ref, status: 'failed', observation })
+            info.status = 'failed'; info.error = ui(`未知工具：${action.name}`, `Unknown tool: ${action.name}`)
+          } else {
+            const result = await executeToolWithTimeout(tool.execute, action.arguments, Object.freeze({
+              ...context, agentToolAction: action.ref, markSideEffectStarted: () => { sideEffectStarted = true },
+            }), TOOL_TIMEOUT_MS, context.writingLanguage, tool.isReadOnly, () => sideEffectStarted, signal)
+            const unknown = !tool.isReadOnly && result.commitState === 'unknown'
+            const observation = result.success ? truncateResult(result.content, TOOL_RESULT_MAX_CHARS, context.writingLanguage)
+              : model('工具执行失败。', 'Tool execution failed.')
+            finishAttempted = true
+            action = await host.finishTool({ ref: action.ref, status: unknown ? 'unknown' : result.success ? 'completed' : 'failed', observation })
+            info.commitState = result.commitState
+            info.status = unknown ? 'result_unknown' : result.success ? 'completed' : 'failed'
+            if (result.success) info.result = observation
+            else info.error = ui('工具执行失败，请重试。', 'Tool execution failed. Please try again.')
+            if (result.artifacts) artifacts.push(...result.artifacts)
+            restoreWorkflow(action)
           }
-        } catch {
-          console.warn('[AgentEngine] tool_call JSON 容错解析也失败:', rawContent)
+        } catch (error) {
+          const unknown = finishAttempted || !!tool && !tool.isReadOnly && sideEffectStarted
+          info.status = unknown ? 'result_unknown' : 'failed'
+          if (unknown || tool && !tool.isReadOnly) info.commitState = unknown ? 'unknown' : 'not_committed'
+          info.error = unknown ? ui('操作结果待确认，本轮不会自动重试。', 'The result is unknown; this run will not retry automatically.')
+            : error instanceof ToolExecutionTimeoutError ? ui('工具停止等待：执行超时，操作已取消。', 'Tool wait timed out; the operation was cancelled.')
+              : signal?.aborted ? ui('工具已在提交前取消。', 'The tool was cancelled before commit.') : ui('工具执行失败，请重试。', 'Tool execution failed. Please try again.')
+          if (!finishAttempted) {
+            try { await host.finishTool({ ref: action.ref, status: unknown ? 'unknown' : 'failed', observation: model('工具执行失败。', 'Tool execution failed.') }) }
+            catch { info.status = 'result_unknown' }
+          }
+        }
+        callbacks.onToolCallComplete(info)
+        if (info.status === 'result_unknown') { done(true); return }
+        if (action.name === 'propose_novel_config' && info.status === 'completed') {
+          await refreshAuthorActions(index)
         }
       }
     }
-
-    // 完全解析失败，丢弃该标签（不再打回 textParts，避免泄露 XML）
-    if (!parsed) {
-      console.warn('[AgentEngine] tool_call 标签解析失败，已丢弃:', rawContent)
-    }
+    visible += ui('\n\n已达到最大工具调用次数限制，自动停止。', '\n\nThe maximum number of tool calls was reached, so generation stopped.')
+    done()
+  } catch {
+    if (signal?.aborted) done()
+    else if (visible) callbacks.onDone(visible + ui('\n\n生成未完成，原候选已保留。', '\n\nGeneration did not finish; the original candidate was retained.'), calls, artifacts)
+    else callbacks.onError(ui('AI 请求失败，请重试。', 'The AI request failed. Please try again.'))
   }
+}
 
-  // 收集最后一个标签后的文本
-  if (lastIndex < text.length) {
-    const after = text.slice(lastIndex).trim()
-    if (after) textParts.push(after)
-  }
-
-  // 如果没有匹配到任何标签，整个文本都是 textParts
-  if (!matchedProtocolBlock && toolCalls.length === 0 && textParts.length === 0) {
-    textParts.push(text)
-  }
-
+/** Compatibility adapter; main consumers supply their own frozen registry. */
+export function parseToolCalls(text: string) {
+  const { textParts, toolCalls } = parseAgentResponseProtocol(text, toolRegistry.listAll().map(tool => tool.name))
   return { textParts, toolCalls }
 }
 

@@ -10,6 +10,7 @@ import {
   resolveManuscriptTarget,
   type PublishManuscriptInput,
 } from './manuscript-publisher'
+import { PortableRuntimeFreezeError, readPortableRuntimeFreeze } from './portable-runtime-freeze'
 
 export interface FinalizationRequest {
   /** 已由 ProjectAccess 验证并 canonicalize 的项目根目录。 */
@@ -171,6 +172,12 @@ export class FinalizationService {
   }
 
   private async publishCommitted(projectRoot: string, record: FinalizationRecord): Promise<FinalizationResult> {
+    try {
+      readPortableRuntimeFreeze(projectRoot).assertMutable('finalization_outbox', record.finalizationId)
+    } catch (error) {
+      const message = error instanceof PortableRuntimeFreezeError ? error.code : String(error)
+      return toResult(record, false, message)
+    }
     try {
       const integrityError = snapshotIntegrityError(record)
       if (integrityError) throw new Error(integrityError)

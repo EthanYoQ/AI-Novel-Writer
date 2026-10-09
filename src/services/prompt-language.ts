@@ -418,8 +418,8 @@ Return JSON only, with no Markdown, preface, analysis, plan, code fence, or reas
 Output the complete revised manuscript as plain prose only. Do not include Markdown, a preface, an explanation, analysis, or screenplay formatting. Separate every paragraph with one blank line.`,
   },
   consistency_check: {
-    systemRole: 'You are a rigorous fiction continuity editor. Review only objectively verifiable story facts and never grade subjective prose style. Use explicit categories and concrete textual evidence.',
-    content: `Review the chapter for objective continuity and causal problems.
+    systemRole: 'You are a rigorous fiction editor. Review objectively verifiable factual continuity, causality and motivation, explicit required goals for this chapter, and unnecessary complete retellings of prior events. Never grade prose or style preferences.',
+    content: `Review the chapter for objectively verifiable continuity, causality, explicit required goals for this chapter, and unnecessary complete retellings of prior events.
 
 [Chapter under review]
 {{chapter_content}}
@@ -434,58 +434,51 @@ Output the complete revised manuscript as plain prose only. Do not include Markd
 {{world_building}}
 
 [Review principles]
-1. Report only issues supported by a specific quotation from the chapter.
+1. Use items for issues located in the chapter under review. Every error or warning must quote one contiguous, locatable passage from that chapter.
 2. Prefer no issue over an invented issue. A checked dimension with no verified problem may be omitted or represented by one pass item; do not pad the item count.
-3. Do not report style preferences or optional craft suggestions. Report only verifiable contradictions or causal failures.
-4. Every reported issue must be independently checkable by another editor.
+3. Check factual continuity, independently verifiable causality and motivation, explicit required goals for this chapter, and unnecessary complete retellings of prior events. Exclude prose or style preferences and optional creative advice.
+4. Every reported issue must be independently checkable by another editor. Do not require the author to invent costs or plot events beyond what the original goals require.
 
 [Review dimensions]
 1. Plot continuity against prior context.
-2. Causal logic, motivation, and factual plausibility.
+2. Causality and motivation: identify conflicts between established action conditions, causal connections or character motives and this chapter's actions or results, or concrete gaps that prevent an event from making sense. Explain them from the manuscript and original materials, not personal preferences.
 3. Character location, capability, physical state, and emotional state.
-4. Connections between chapters, including hooks and setup.
-5. Existing foreshadowing that should be addressed, and new facts that contradict it.`,
+4. Locate contradictions or causal gaps in this chapter's connections to legitimate prior context, foreshadowing or hooks.
+5. Explicit required goals for this chapter: check the original goals supplied with the request under the existing goalReviews contract. Identify the original goal when it is missing or lacks evidence; do not invent a manuscript quotation or repeat the same goal issue in items.
+6. Prior-event retelling: locate passages that completely retell an event that already happened without providing necessary new information, action or change. Explain which prior event is repeated and why the passage adds no new progression.`,
     systemSuffix: `[Author-requested review focus — prioritize when present]
 {{review_focus}}
 
 [JSON output contract]
 Output exactly one JSON object in this shape:
-{"items":[{"category":"plot continuity","severity":"pass","description":"No contradiction found"},{"category":"causal logic","severity":"error","quote":"exact source sentence","description":"verified problem"}],"summary":"one-sentence overall assessment"}
+{"items":[{"category":"plot continuity","description":"[Actual subject and source checked, and the comparison result; do not copy this placeholder]","severity":"pass"},{"category":"causal logic","quote":"exact source sentence","description":"specific objective defect and why it is a problem","severity":"error"}],"summary":"one-sentence overall assessment"}
 
-severity must be error, warning, or pass. Return 1–10 items total. A review dimension does not need its own item; do not add pass items merely to cover categories, and never repeat the same issue. Keep each quote within 160 characters, each description within 200 characters, and summary within 120 characters. quote may be omitted only for pass items. Do not output Markdown, explanation, or reasoning.`,
+Return item fields in category, quote, description, severity order: first check the draft excerpt against the source materials, explain the judgment in description, then choose severity. Use error/warning only when description identifies a specific objective defect in the current draft and explains why it is a problem. If the conclusion is reasonable, meets requirements, or no issue found, use pass or omit the item. If the whole draft has no specific issue, keep one pass item. Still report genuine objective problems as error/warning according to their severity.
+
+severity must be error (a serious objective problem in the review scope), warning (a smaller or local objective problem), or pass (no specific issue found in that dimension). Return 1–10 items total. A review dimension does not need its own item; do not add pass items merely to cover categories, and never repeat the same issue. Keep each quote within 160 characters, each description within 200 characters, and summary within 120 characters. quote may be omitted only for pass items. Do not output Markdown, explanation, or reasoning.`,
   },
   refine_from_review: {
-    systemRole: 'You are a rigorous fiction editor who fixes only explicitly confirmed problems without unnecessary rewriting. Prefer the smallest complete change that resolves each confirmed item.',
-    content: `Revise the chapter using only the confirmed review checklist.
-
-[Confirmed review checklist]
+    systemRole: 'You are a rigorous fiction editor.',
+    content: `[Confirmed review checklist]
 {{review_report}}
 
 [Source manuscript]
 {{draft_content}}
 
 [Project-wide writing guidance]
-{{global_guidance}}
-
-[Revision principles]
-1. Resolve every confirmed item one by one.
-2. Do not polish or rewrite material that the confirmed checklist does not address.
-3. Preserve the manuscript's voice, pacing, facts, and approximate length.
-4. Make the smallest change that completely resolves each confirmed problem.`,
+{{global_guidance}}`,
     systemSuffix: `[Confirmed author guidance — highest priority when present]
-{{user_refine_prompt}}
-
-Output the complete revised chapter as plain prose only. Do not include a preface, explanation, Markdown, analysis, or screenplay formatting. Separate every paragraph with one blank line.`,
+{{user_refine_prompt}}`,
   },
   generate_chapter_notes: {
-    systemRole: 'You are a professional fiction structure analyst. Use concise phrases, explicit categories, and concrete evidence from the chapter.',
+    systemRole: 'You are a professional fiction structure analyst. Extract only events, state changes, and unresolved questions explicitly supported by the manuscript; do not invent canon or design foreshadowing.',
     content: `Generate precise structured chapter notes for the following manuscript.
 
 [Chapter manuscript]
 Chapter {{chapter_number}}: {{chapter_title}}
 {{chapter_content}}
 
-Return exactly this Markdown structure and no additional explanation:
+Organize explicitly supported manuscript facts under the following Markdown headings, with no additional explanation. Leave a section empty or omit it when the manuscript states no corresponding fact; do not invent content to fill the structure:
 
 # Chapter {{chapter_number}} Notes
 
@@ -501,12 +494,16 @@ List irreversible developments with a type marker.
 | Name | Specific change |
 
 ## New Canon
-List world, power-system, or rule facts first established or confirmed here. Omit this section when empty.
+List only world, power-system, or rule facts explicitly established or confirmed by the manuscript. Omit this section when empty.
 
 ## Foreshadowing and Hooks
-Mark planted clues with [Plant] and the chapter-ending hook with [Hook]. Omit this section when empty.
+Record only clues and unresolved questions explicitly left by the manuscript, using [Plant] or [Hook] where appropriate. Do not infer an object's purpose, symbolism, or future plot. Omit this section when empty.
 
 For an irreversible change relevant to later continuity, preserve an explicitly stated cause, location, witness, or source of knowledge in the same note as the subject and change. Do not infer missing details or require every note to contain all of these elements.
+
+Co-occurrence does not establish ownership, causation, responsibility, or narrative purpose; do not connect people, objects, places, or events merely because they appear together. Preserve the original predicates and modality where possible, distinguishing events from plans, guesses, negations, and unknowns. Do not turn a character's judgment or an unresolved question into a confirmed fact.
+
+When later prose corrects, withdraws, or postpones an earlier plan, preserve the affected character's last correction and current conditions in Character Dynamics or Foreshadowing and Hooks (such as not yet started, or what they are waiting for). Do not substitute a more prominent earlier event for the current plan or describe a plan as executed. Without a correction, retain the current plan stated in the manuscript; do not change another character's plan.
 
 Keep every item concise and grounded in the manuscript.`,
   },
@@ -525,6 +522,8 @@ Keep every item concise and grounded in the manuscript.`,
 2. In newCharacters, include only important newly introduced characters, excluding incidental figures with no continuing effect.
 3. currentState may contain location, powerLevel, physicalState, mentalState, keyItems, recentEvents, and updatedAtChapter. Set updatedAtChapter to {{chapter_number}}.
 4. Preserve every character name exactly as written in the manuscript or existing records.
+
+recentEvents records this character's latest state at the end of the chapter, within 50 words. If a plan is corrected, withdrawn, or postponed, prioritize the last correction and current conditions over a prominent earlier event. Without a correction, retain the relevant event or still-pending plan. Do not describe a plan as executed or change another character's plan.
 
 [JSON output contract]
 Return exactly one JSON object:
@@ -667,8 +666,7 @@ Output JSON only, with no Markdown, explanation, or reasoning.`,
 [Chapter brief]
 {{chapter_info}}
 
-[Upcoming chapter blueprints]
-Use these only to understand later turning points. Do not reveal or advance them in this chapter.
+[Upcoming chapter blueprints — use only to understand later turning points; do not reveal or advance them in this chapter]
 {{future_blueprints}}
 
 [Project-wide writing guidance]
@@ -697,7 +695,7 @@ Use these only to understand later turning points. Do not reveal or advance them
 - Write approximately {{word_number}} words and cover only the chapter brief. End at the state or hook specified there; when none is specified, end naturally without advancing later blueprints or adding filler.
 - Output plain manuscript prose only. Do not use Markdown, headings, analysis, plans, or screenplay formatting.
 - Separate every paragraph with one blank line. Use standard quotation marks consistently for dialogue.
-- If the target length cannot fit in one response, stop at a natural paragraph boundary without asking the user to continue.
+- As you approach the target length, close at the chapter's specified ending state and do not exceed the target; never ask the user to continue.
 - Keep each character's voice distinct. Avoid paragraph-ending summaries, generic destiny metaphors, and unrelated philosophical conclusions.`,
   },
   next_chapter_draft: {
@@ -713,17 +711,16 @@ Use these only to understand later turning points. Do not reveal or advance them
 [Chapter brief]
 {{chapter_info}}
 
-[Upcoming chapter blueprints]
-Use these only to understand later turning points. Do not reveal or advance them in this chapter.
+[Upcoming chapter blueprints — use only to understand later turning points; do not reveal or advance them in this chapter]
 {{future_blueprints}}
 
 [Knowledge-base context]
 {{filtered_context}}
 
 [Serialization requirements]
-1. [Story memory and previous stopping point] records completed history. [Chapter brief], [Upcoming chapter blueprints], and [Knowledge-base context] do not thereby become completed events. Begin after the previous chapter's final state and advance a new event from this chapter brief. Do not quote, summarize, replay, or restage any sentence, action, or image from the previous ending; also avoid teleporting the scene or abruptly changing viewpoint.
+1. The [Finalized manuscript · Chapter N] passages (and any author-selected [Unfinalized candidate · Chapter N] passages) under [Sourced history and candidates] are prose written before this chapter; the end of the latest one is the previous chapter's completed state. [Chapter brief] and [Future-plan boundary] do not thereby become completed events. Begin after the previous chapter's final state and advance a new event from this chapter brief. Do not quote, summarize, replay, or restage any sentence, action, or image from the previous ending; also avoid teleporting the scene or abruptly changing viewpoint.
 2. Drive the scene through action, expression, sensory detail, and dialogue rather than detached summary.
-3. Use approximately {{word_number}} words to complete this chapter's conflict without filler.
+3. Complete this chapter's conflict without filler.
 4. Use only the ending state or hook explicitly required by the chapter brief. When none is specified, end naturally without inventing an escalation, interruption, or later event.
 5. Follow the project-wide guidance: {{global_guidance}}
 
@@ -742,10 +739,10 @@ Use these only to understand later turning points. Do not reveal or advance them
 {{user_guidance}}
 
 [Output contract]
-- Cover only the chapter brief and stop once its conflict is complete. Do not advance later blueprints.
+- Write approximately {{word_number}} words. Cover only the chapter brief and stop once its conflict is complete; do not pad with filler narration or idle dialogue, and do not advance later blueprints.
 - Output plain manuscript prose only, without headings, Markdown, analysis, plans, or screenplay formatting.
 - Separate every paragraph with one blank line and use quotation marks consistently for dialogue.
-- If the target length cannot fit in one response, stop at a natural paragraph boundary without asking the user to continue.
+- As you approach the target length, close at the chapter's specified ending state and do not exceed the target; never ask the user to continue.
 - Keep character voices distinct and avoid generic paragraph summaries, destiny metaphors, or unrelated philosophical conclusions.`,
   },
 } satisfies Record<CoreLocalizedBuiltinPromptKey, PromptLanguageTemplate> & Record<string, PromptLanguageTemplate>)

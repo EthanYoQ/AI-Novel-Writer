@@ -17,6 +17,37 @@ const geminiFlashLite: ModelProfile = {
 }
 
 describe('reasoning policy', () => {
+  it('maps explicit Qwen medium to an application budget and keeps off disabled', () => {
+    const model: ModelProfile = { ...geminiFlashLite, provider: 'siliconflow', protocol: 'openai',
+      baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B' }
+    expect(resolveReasoningPolicy({ model: { ...model, reasoningOverride: 'medium' }, stage: 'review' }))
+      .toEqual({ requested: 'medium', effective: 'medium', status: 'mapped', source: 'model-override',
+        providerDirective: { adapter: 'openai-thinking-budget', thinkingBudget: 16384 } })
+    expect(resolveReasoningPolicy({ model: { ...model, reasoningOverride: 'off' } }).providerDirective)
+      .toEqual({ adapter: 'openai-thinking-budget', thinkingBudget: 0 })
+    for (const reasoningOverride of [undefined, 'auto', 'low', 'high', 'max'] as const) {
+      expect(resolveReasoningPolicy({ model: { ...model, reasoningOverride }, stage: 'planning' }))
+        .toMatchObject({ effective: null, status: 'unsupported' })
+    }
+  })
+
+  const silicon: ModelProfile = { ...geminiFlashLite, provider: 'openai', protocol: 'openai',
+    baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash' }
+
+  it.each(['openai', 'siliconflow'] as const)('maps explicit SiliconFlow choices with the %s label', provider => {
+    for (const reasoningOverride of ['high', 'max'] as const) {
+      expect(resolveReasoningPolicy({ model: { ...silicon, provider, reasoningOverride }, creativeStrategy: 'fluent-drafting' }))
+        .toEqual({ requested: reasoningOverride, effective: reasoningOverride, status: 'mapped', source: 'model-override',
+          providerDirective: { adapter: 'siliconflow-v4-thinking', reasoningEffort: reasoningOverride } })
+    }
+  })
+
+  it.each([undefined, 'auto', 'off', 'low', 'medium'] as const)('does not force SiliconFlow %s into a supported effort', reasoningOverride => {
+    const result = resolveReasoningPolicy({ model: { ...silicon, reasoningOverride }, creativeStrategy: 'deep-planning', stage: 'planning' })
+    expect(result).toEqual({ requested: reasoningOverride && reasoningOverride !== 'auto' ? reasoningOverride : 'max',
+      effective: null, status: 'unsupported', source: !reasoningOverride || reasoningOverride === 'auto' ? 'project-strategy' : 'model-override' })
+  })
+
   it('uses the project strategy and generation purpose to request stage-specific effort', () => {
     expect(resolveReasoningPolicy({
       model: geminiFlashLite,
@@ -101,7 +132,7 @@ describe('reasoning policy', () => {
       model: { ...grok, reasoningOverride: 'off' },
       creativeStrategy: 'fluent-drafting',
       stage: 'drafting',
-    })).toMatchObject({ requested: 'off', effective: 'low', status: 'forced' })
+    })).toMatchObject({ requested: 'off', effective: null, status: 'unsupported' })
   })
 
   it('suppresses reasoning fields for unknown custom endpoints and unverified built-in models', () => {

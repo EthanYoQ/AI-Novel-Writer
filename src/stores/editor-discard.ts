@@ -78,7 +78,7 @@ export function discardAndCloseEditorTab(
       useCharacterStore.getState().discardDraft(projectKey, expectedProjectSession)
     } else if (tab.type === 'config') {
       useProjectStore.getState().discardNovelConfigDraft(projectKey, expectedProjectSession)
-    } else if (tab.type === 'chapter-card') {
+    } else if (tab.type === 'chapter-card' && !tab.planningRecovery) {
       const ledger = parseChapterCardDraftLedger(
         useEditorStore.getState().draftLedgers[CHAPTER_CARD_TAB_ID],
       )

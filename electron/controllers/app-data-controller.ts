@@ -12,6 +12,7 @@ import {
 } from '../../src/shared/writing-skills'
 import { mainText } from '../i18n'
 import { VELA_HOME, writeJsonFile } from '../utils/config-utils'
+import { assertGlobalDataReady } from '../services/app-data-locator'
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
@@ -71,6 +72,7 @@ function writingSkillDirectory(name: string): string {
 }
 
 function ensureOwnedSkillsRoot(): string {
+  assertGlobalDataReady()
   if (fs.existsSync(VELA_HOME)) {
     const homeInfo = fs.lstatSync(VELA_HOME)
     if (homeInfo.isSymbolicLink() || !homeInfo.isDirectory()) {
@@ -200,10 +202,11 @@ function promptLanguageFromFilename(filename: string): WritingLanguage | undefin
 }
 
 /**
- * ~/.vela 的提示词和用户 Skill 只能由此固定根目录控制器访问；渲染层不接收
+ * 已准入全局 generation 的提示词和用户 Skill 只能由此固定根目录控制器访问；渲染层不接收
  * 任意 app-data 路径，也不借用外部文件授权。
  */
 export function registerAppDataController(): void {
+  assertGlobalDataReady()
   const inspectedWritingSkills = new Map<string, Pick<RemoteWritingSkillInspection, 'contentSha256' | 'resolvedUrl'>>()
   ipcMain.handle('prompt:load-global', async (): Promise<AppPromptLoadReceipt> => {
     const promptsDirectory = path.join(VELA_HOME, 'prompts')

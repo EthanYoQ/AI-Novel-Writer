@@ -1,0 +1,4092 @@
+{
+  "schemaVersion": 2,
+  "version": "Program-v3",
+  "status": "planning-NOT-RUN",
+  "sourcePolicy": "current production capabilities UNION actual donor capabilities UNION accepted enhancements; no function deletion as a defect fix",
+  "acceptancePolicy": "requiredInWriter can pass only via Writer own production entry; Classic fallback never substitutes",
+  "inventoryOwner": "S00",
+  "uiWiringOwner": "F04",
+  "qualificationOwner": "F05",
+  "executionRequiredFields": [
+    "surface",
+    "writerEntry",
+    "sharedHandlerOrCommand",
+    "ipcOrMainService",
+    "persistedOutcome",
+    "errorOutcome",
+    "fixture",
+    "testedSha",
+    "evidenceLevels",
+    "receipt",
+    "stepId"
+  ],
+  "features": [
+    {
+      "id": "U01",
+      "name": "项目生命周期",
+      "sourceKind": "current+donor",
+      "requiredInWriter": true,
+      "classicExpectation": "same-business-outcome",
+      "actions": [
+        {
+          "actionId": "U01.A01",
+          "label": "新建项目",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A02",
+          "label": "打开项目",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A03",
+          "label": "最近项目进入",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A04",
+          "label": "书架预览后进入",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A05",
+          "label": "保存后切换",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A06",
+          "label": "放弃后切换",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A07",
+          "label": "取消切换",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A08",
+          "label": "保存失败仍留原项目/dirty/ledger",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A09",
+          "label": "旧异步回包隔离",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A10",
+          "label": "导入项目",
+          "owner": "S12",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A11",
+          "label": "重开项目",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U01.A12",
+          "label": "按既有权限删除项目",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "真实Electron按钮→共享transition/IPC→项目状态；失败/旧回包不串写",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U02",
+      "name": "写手默认与外观",
+      "sourceKind": "current+donor",
+      "requiredInWriter": true,
+      "classicExpectation": "same-preferences-and-data",
+      "actions": [
+        {
+          "actionId": "U02.A01",
+          "label": "新装/unset默认Writer",
+          "owner": "F01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U02.A02",
+          "label": "旧显式Classic/Writer偏好迁移",
+          "owner": "F01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U02.A03",
+          "label": "选择颜色主题",
+          "owner": "F01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U02.A04",
+          "label": "选择/替换背景图片",
+          "owner": "F01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U02.A05",
+          "label": "选择写作/UI字体",
+          "owner": "F01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U02.A06",
+          "label": "缩放界面",
+          "owner": "F01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U02.A07",
+          "label": "Writer回切Classic不丢状态",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U02.A08",
+          "label": "重开保持偏好",
+          "owner": "F01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "实际storage hydration/重开/两壳切换；默认不是作者显式选择",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U03",
+      "name": "配置/模型/Prompt/Skill",
+      "sourceKind": "current+donor",
+      "requiredInWriter": true,
+      "classicExpectation": "same-business-outcome",
+      "actions": [
+        {
+          "actionId": "U03.A01",
+          "label": "从侧栏打开设置",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A02",
+          "label": "从状态栏打开设置",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A03",
+          "label": "默认/deep-link有效tab",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A04",
+          "label": "关闭重开设置并保存状态",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A05",
+          "label": "获取模型列表",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A06",
+          "label": "保存已支持模型参数",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A07",
+          "label": "请求receipt显示实际参数",
+          "owner": "S07",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A08",
+          "label": "编辑保存Prompt",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A09",
+          "label": "检查Skill",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A10",
+          "label": "安装Skill",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A11",
+          "label": "绑定/冻结Skill",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A12",
+          "label": "卸载Skill",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A13",
+          "label": "代理设置与失败反馈",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U03.A14",
+          "label": "复制脱敏诊断",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "Writer实际控件→typed IPC→持久结果；仅获准模型真实请求",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U04",
+      "name": "架构/大纲/恢复",
+      "sourceKind": "current+donor",
+      "requiredInWriter": true,
+      "classicExpectation": "same-business-outcome",
+      "actions": [
+        {
+          "actionId": "U04.A01",
+          "label": "生成世界观",
+          "owner": "S06A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U04.A02",
+          "label": "生成指定from/to大纲",
+          "owner": "S06A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U04.A03",
+          "label": "查看已完成范围",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U04.A04",
+          "label": "续批大纲",
+          "owner": "S06A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U04.A05",
+          "label": "截断保留候选",
+          "owner": "S06A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U04.A06",
+          "label": "取消保留候选",
+          "owner": "S06A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U04.A07",
+          "label": "世界观候选安全恢复",
+          "owner": "S06A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U04.A08",
+          "label": "源变化拒绝正式写/保候选",
+          "owner": "S06A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "Writer按钮到最新shared command；确定性故障+预注册真实模型门",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U05",
+      "name": "蓝图/正文/批量",
+      "sourceKind": "current+donor",
+      "requiredInWriter": true,
+      "classicExpectation": "same-business-outcome",
+      "actions": [
+        {
+          "actionId": "U05.A01",
+          "label": "单章蓝图",
+          "owner": "S06A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U05.A02",
+          "label": "批量蓝图",
+          "owner": "S06A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U05.A03",
+          "label": "生成单章正文",
+          "owner": "S06B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U05.A04",
+          "label": "批量待审模式",
+          "owner": "S06B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U05.A05",
+          "label": "批量自动定稿模式",
+          "owner": "S06B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U05.A06",
+          "label": "停止批量",
+          "owner": "S06B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U05.A07",
+          "label": "失败不越下一章",
+          "owner": "S06B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U05.A08",
+          "label": "当前章synopsis/来源与预算一致",
+          "owner": "S10B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "生产按钮→run→冻结参数→候选/落盘；重复/幽灵角色联合case",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U06",
+      "name": "中文编辑体验",
+      "sourceKind": "donor",
+      "requiredInWriter": true,
+      "classicExpectation": "no-regression-in-classic-editor",
+      "actions": [
+        {
+          "actionId": "U06.A01",
+          "label": "实时Markdown预览",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U06.A02",
+          "label": "纸页页眉/首字下沉",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U06.A03",
+          "label": "中文IME完整输入",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U06.A04",
+          "label": "拖动选择/光标保持",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U06.A05",
+          "label": "撤销/重做",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U06.A06",
+          "label": "缩进与字体",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U06.A07",
+          "label": "字数统计正确",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U06.A08",
+          "label": "短文绝对/相对响应门",
+          "owner": "F05",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U06.A09",
+          "label": "长文绝对/相对响应门",
+          "owner": "F05",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "真实CodeMirror+Windows中文IME；不能关闭预览或回Classic规避",
+      "coordinationOwner": "F04",
+      "protocolRef": "editor-absolute-v1"
+    },
+    {
+      "id": "U07",
+      "name": "标签/栏目/沉浸",
+      "sourceKind": "donor",
+      "requiredInWriter": true,
+      "classicExpectation": "old-pages-and-actions-remain-accessible",
+      "actions": [
+        {
+          "actionId": "U07.A01",
+          "label": "Writer全部业务栏目可达",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U07.A02",
+          "label": "标签dirty提示",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U07.A03",
+          "label": "关闭标签与未保存保护",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U07.A04",
+          "label": "标签前后页",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U07.A05",
+          "label": "打开标签列表",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U07.A06",
+          "label": "栏目与tab高亮同步",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U07.A07",
+          "label": "进入/退出沉浸",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U07.A08",
+          "label": "打开面板退出沉浸且助手输入保留",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "Writer DOM/真实动作；layout不清任务/候选/助手输入",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U08",
+      "name": "书架/真实进度",
+      "sourceKind": "donor",
+      "requiredInWriter": true,
+      "classicExpectation": "no-project-data-mutation",
+      "actions": [
+        {
+          "actionId": "U08.A01",
+          "label": "当前项目真实统计",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U08.A02",
+          "label": "另一授权项目只读速览",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U08.A03",
+          "label": "速览再次进入目标项目",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U08.A04",
+          "label": "六阶段进度显示数量与真实完成",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U08.A05",
+          "label": "未知目标/不可读项目显示未知而非假0/100%",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U08.A06",
+          "label": "切换撤权清内存摘句/无私密持久cache",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U08.A07",
+          "label": "预览零写/零迁移/拒任意path",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "main capability真正只读查询；无可写fallback/旧路径；无正文/路径持久缓存",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U09",
+      "name": "角色导入/演进",
+      "sourceKind": "current+donor+enhancement",
+      "requiredInWriter": true,
+      "classicExpectation": "same-business-outcome",
+      "actions": [
+        {
+          "actionId": "U09.A01",
+          "label": "文本/大纲/世界观提取可编辑人物候选",
+          "owner": "S09A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U09.A02",
+          "label": "编辑导入候选",
+          "owner": "S09C",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U09.A03",
+          "label": "接受导入候选",
+          "owner": "S09A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U09.A04",
+          "label": "拒绝/取消导入保原件",
+          "owner": "S09A",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U09.A05",
+          "label": "定稿非冲突derived自动更新",
+          "owner": "S09B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U09.A06",
+          "label": "作者冲突/身份歧义提议",
+          "owner": "S09B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U09.A07",
+          "label": "拒绝提议后重开不重复",
+          "owner": "S09B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U09.A08",
+          "label": "改名/同名稳定身份与来源展示",
+          "owner": "S09C",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U09.A09",
+          "label": "并发作者编辑/旧源迟到不覆盖不倒退",
+          "owner": "S09B",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "角色UI→S09→持久数据；自动正例+作者冲突反例",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U10",
+      "name": "完整头像",
+      "sourceKind": "donor",
+      "requiredInWriter": true,
+      "classicExpectation": "same-asset-view-edit-ability",
+      "actions": [
+        {
+          "actionId": "U10.A01",
+          "label": "选择头像预览不提交",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A02",
+          "label": "取消头像选择",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A03",
+          "label": "保存头像",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A04",
+          "label": "合法图压缩与失败保原图",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A05",
+          "label": "替换头像",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A06",
+          "label": "移除头像",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A07",
+          "label": "人物卡显示头像",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A08",
+          "label": "图谱有界批量读头像",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A09",
+          "label": "改名/同名后头像仍对人",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A10",
+          "label": "重开头像持久",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A11",
+          "label": "M05升级字节/引用保全",
+          "owner": "F03",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U10.A12",
+          "label": "项目归档恢复头像字节/关联",
+          "owner": "B01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "真实文件grant/IPC+M05 staging故障注入+B01 roundtrip；绝不删除功能",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U11",
+      "name": "关系图",
+      "sourceKind": "current+donor",
+      "requiredInWriter": true,
+      "classicExpectation": "old-relations-graph-actions-remain",
+      "actions": [
+        {
+          "actionId": "U11.A01",
+          "label": "五档/重要度呈现",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A02",
+          "label": "更换中心角色",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A03",
+          "label": "拖动节点",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A04",
+          "label": "空白平移",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A05",
+          "label": "滚轮缩放",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A06",
+          "label": "复位/适应视图",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A07",
+          "label": "折叠人物侧栏",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A08",
+          "label": "打开角色档案",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A09",
+          "label": "原关系编辑",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A10",
+          "label": "AI关系提议/采用",
+          "owner": "S09C",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A11",
+          "label": "重置布局零事实写",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A12",
+          "label": "明确确认删除角色与关系",
+          "owner": "S09C",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U11.A13",
+          "label": "大图搜索/分页仍可达全部角色",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "Writer实际图交互→相同ID事实；布局零写，1000角色有界合成fixture",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U12",
+      "name": "审稿/修稿/定稿",
+      "sourceKind": "current+donor",
+      "requiredInWriter": true,
+      "classicExpectation": "same-business-outcome",
+      "actions": [
+        {
+          "actionId": "U12.A01",
+          "label": "选择维度/逐目标审稿",
+          "owner": "S11",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U12.A02",
+          "label": "查看待核实与来源证据",
+          "owner": "S11",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U12.A03",
+          "label": "人工确认/拒绝意见",
+          "owner": "S11",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U12.A04",
+          "label": "发起修稿",
+          "owner": "S11",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U12.A05",
+          "label": "no-op不假通过",
+          "owner": "S11",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U12.A06",
+          "label": "合并不等于resolved",
+          "owner": "S11",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U12.A07",
+          "label": "定稿与outbox正确状态",
+          "owner": "S11",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U12.A08",
+          "label": "过期/冲突/失败仍保候选",
+          "owner": "S11",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "Writer入口→finding/revision/正式存储；预注册中文真实门",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U13",
+      "name": "工作流反馈/恢复",
+      "sourceKind": "current+donor",
+      "requiredInWriter": true,
+      "classicExpectation": "same-information-and-actions",
+      "actions": [
+        {
+          "actionId": "U13.A01",
+          "label": "流式正文呈现",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U13.A02",
+          "label": "提供商实际提供的推理区呈现",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U13.A03",
+          "label": "失败码/完整标题显示",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U13.A04",
+          "label": "失败重试",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U13.A05",
+          "label": "续批入口",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U13.A06",
+          "label": "候选恢复操作",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U13.A07",
+          "label": "中止操作",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U13.A08",
+          "label": "查看运行历史",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U13.A09",
+          "label": "印章pending/success/failure准确",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "真实状态映射/IPC；不编造模型推理，不假success",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U14",
+      "name": "保存反馈",
+      "sourceKind": "donor+current",
+      "requiredInWriter": true,
+      "classicExpectation": "same-save-owner-and-outcome",
+      "actions": [
+        {
+          "actionId": "U14.A01",
+          "label": "正文保存成功/失败状态",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U14.A02",
+          "label": "架构保存成功/失败状态",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U14.A03",
+          "label": "蓝图保存成功/失败状态",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U14.A04",
+          "label": "配置保存成功/失败状态",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U14.A05",
+          "label": "角色保存成功/失败状态",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U14.A06",
+          "label": "快捷键保存",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U14.A07",
+          "label": "按钮保存",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U14.A08",
+          "label": "退出保存",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U14.A09",
+          "label": "并发修改不误报干净/失败可重试",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "实际组件/IPC失败注入+重开；无未捕获拒绝或假已保存",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U15",
+      "name": "历史/知识/正文导出",
+      "sourceKind": "current+donor",
+      "requiredInWriter": true,
+      "classicExpectation": "same-business-outcome",
+      "actions": [
+        {
+          "actionId": "U15.A01",
+          "label": "版本历史与来源过期提示",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U15.A02",
+          "label": "知识库原文查看/既有编辑导入",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U15.A03",
+          "label": "merged-md正文导出",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U15.A04",
+          "label": "split-md正文导出/目录清理",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U15.A05",
+          "label": "txt正文导出",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U15.A06",
+          "label": "剧情树现有动作",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U15.A07",
+          "label": "伏笔等现有业务页动作",
+          "owner": "F04",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "electron"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "Writer真实入口→最新服务→实际产物；正文不强加头像附件",
+      "coordinationOwner": "F04"
+    },
+    {
+      "id": "U16",
+      "name": "本地/云项目存档",
+      "sourceKind": "enhancement",
+      "requiredInWriter": true,
+      "classicExpectation": "same-service-accessible-from-classic",
+      "actions": [
+        {
+          "actionId": "U16.A01",
+          "label": "创建完整本地项目归档",
+          "owner": "B01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A02",
+          "label": "本地归档恢复新副本",
+          "owner": "B01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A03",
+          "label": "配置/检查WebDAV",
+          "owner": "B02",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged",
+            "controlled-service"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A04",
+          "label": "保存/更新/清除凭据",
+          "owner": "B02",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged",
+            "controlled-service"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A05",
+          "label": "手动上传完整世代",
+          "owner": "B02",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged",
+            "controlled-service"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A06",
+          "label": "列出完整云世代",
+          "owner": "B02",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged",
+            "controlled-service"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A07",
+          "label": "选择云世代下载",
+          "owner": "B02",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged",
+            "controlled-service"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A08",
+          "label": "下载产物恢复新副本",
+          "owner": "B01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A09",
+          "label": "显示并选择分叉/不覆盖",
+          "owner": "B02",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged",
+            "controlled-service"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A10",
+          "label": "重启保持本机绑定与origin-readonly",
+          "owner": "B02",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged",
+            "controlled-service"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A11",
+          "label": "取消/错误恢复不动原稿",
+          "owner": "B01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        },
+        {
+          "actionId": "U16.A12",
+          "label": "恢复当前连续性并继续创作、旧运行冻结",
+          "owner": "B01",
+          "uiOwner": "F04",
+          "qualificationOwner": "F05",
+          "requiredInWriter": true,
+          "requiredEvidenceLevels": [
+            "packaged"
+          ],
+          "status": "not-run",
+          "evidence": {
+            "surface": null,
+            "writerEntry": null,
+            "sharedHandlerOrCommand": null,
+            "ipcOrMainService": null,
+            "persistedOutcome": null,
+            "errorOutcome": null,
+            "fixture": null,
+            "testedSha": null,
+            "evidenceLevels": null,
+            "receipt": null,
+            "stepId": null
+          }
+        }
+      ],
+      "minEvidence": "两个隔离profile打包应用+受控WebDAV；B01数据/来源roundtrip，B02网络与OS秘密验证",
+      "coordinationOwner": "F04"
+    }
+  ],
+  "notActualDonorFeatures": [
+    {
+      "name": "disabled备份占位",
+      "policy": "placeholder itself not a feature; real backup now required by U16, do not remove requirement"
+    },
+    {
+      "name": "卷/冲突0/续写38%硬编码demo",
+      "policy": "replace with actual available data; never present fake completed numbers"
+    },
+    {
+      "name": "世界词条卡与仅审美愿景",
+      "policy": "not automatically required; existing worldbuilding/knowledge capabilities remain mandatory"
+    }
+  ],
+  "featureStatusPolicy": "Derived only from all required action statuses; no independent feature status/evidence allowed",
+  "editorProtocol": {
+    "id": "editor-absolute-v1",
+    "frozenBeforeCandidateResults": true,
+    "units": [
+      3000,
+      200000
+    ],
+    "build": "production real CodeMirror; Writer live preview ON",
+    "device": "S00 fixed test machine/viewport/zoom/fonts, no background load",
+    "samples": "3 warmups + 7 valid samples per shell/action; interleaved",
+    "actions": ["input", "selection"],
+    "warmupCount": 3,
+    "sampleCount": 7,
+    "maxMadToMedian": 0.1,
+    "maxRerunIndex": 1,
+    "receiptShape": "samples[units][shell][action] = { warmupSamplesMs[3], rawSamplesMs[7], longTasksMs[] }; summary statistics are computed, not trusted",
+    "maxMedianInputToPaintMs": 50,
+    "maxWorstValidInputToPaintMs": 100,
+    "maxMainThreadLongTaskMs": 50,
+    "writerRelativeMedianRegressionMaxPercent": 20,
+    "ime": "exact expected document/selection/cursor after composition and undo; zero loss, zero duplicates",
+    "unstable": "MAD/median > 10% permits one identical rerun only; still unstable=inconclusive"
+  },
+  "acceptanceValidatorContract": {
+    "reject": [
+      "missing/duplicate actionId",
+      "unknown or out-of-scope action owner",
+      "feature-level independently written PASS",
+      "required action not pass or evidence empty",
+      "surface other than writer",
+      "missing required evidence levels",
+      "unrelated actions reuse same receipt+stepId",
+      "editor absolute/relative/IME gates fail or Writer live preview disabled"
+    ],
+    "negativeFixtures": [
+      "only one action filled then feature PASS -> reject",
+      "U16 archive owner B02 instead of B01 -> reject",
+      "Classic evidence for Writer action -> reject",
+      "two shells both slow even equal -> reject",
+      "IME loses/repeats text despite fast samples -> reject",
+      "live preview disabled yields fast sample -> reject"
+    ]
+  }
+}

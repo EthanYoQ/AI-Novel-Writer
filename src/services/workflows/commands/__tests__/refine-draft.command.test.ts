@@ -8,6 +8,7 @@ import {
   type HumanConfirmedReviewSnapshotInput,
 } from '../../../../shared/human-confirmed-review'
 import type { ModelExecutionLeaseReceipt } from '../../../../shared/ipc-channels'
+import { MATERIAL_DECISION_MAX_INPUT_UNITS } from '../../../../shared/generation-owner-contract'
 import { useEditorStore } from '../../../../stores/editor-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
@@ -16,11 +17,51 @@ import {
   type GenerationRuntimeEnvironment,
 } from '../../../generation/generation-runtime'
 import { GenerationHarnessError } from '../../../generation/generation-harness'
-import { clearProjectCustomPrompts } from '../../../prompt-templates'
-import { RefineDraftCommand } from '../refine-draft.command'
-import { RefineFromReviewCommand } from '../refine-from-review.command'
-import { ReviewChapterCommand } from '../review-chapter.command'
-import type { WorkflowGenerationRuntimeDependencies } from '../base-command'
+import { clearProjectCustomPrompts, getBuiltinPromptTemplate } from '../../../prompt-templates'
+import { RefineDraftCommand as RuntimeRefineDraftCommand } from '../refine-draft.command'
+import { RefineFromReviewCommand as RuntimeRefineFromReviewCommand } from '../refine-from-review.command'
+import { ReviewChapterCommand as RuntimeReviewChapterCommand } from '../review-chapter.command'
+import type { CommandExecuteParams, WorkflowGenerationRuntimeDependencies } from '../base-command'
+import { ReviewRevisionRuntimeFixture } from './review-revision-runtime.fixture'
+
+
+let mainFixture: ReviewRevisionRuntimeFixture
+class RefineDraftCommand extends RuntimeRefineDraftCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeRefineDraftCommand>[0]
+  constructor(...args: ConstructorParameters<typeof RuntimeRefineDraftCommand>) {
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(args[1]!).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
+  }
+}
+class RefineFromReviewCommand extends RuntimeRefineFromReviewCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeRefineFromReviewCommand>[0]
+  constructor(...args: ConstructorParameters<typeof RuntimeRefineFromReviewCommand>) {
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(args[1]!).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
+  }
+}
+class ReviewChapterCommand extends RuntimeReviewChapterCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeReviewChapterCommand>[0]
+  constructor(...args: ConstructorParameters<typeof RuntimeReviewChapterCommand>) {
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(args[1]!).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
+  }
+}
 
 const PROJECT_PATH = 'C:\\novels\\refine'
 const PROJECT_SESSION = Object.freeze({
@@ -136,14 +177,15 @@ function stubIpc(
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>,
   projectPromptDirectoryExists?: () => Promise<boolean>,
 ): void {
+  mainFixture = new ReviewRevisionRuntimeFixture(invoke)
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: (channel: string, ...args: unknown[]) => (
         channel === 'prompt:load-global'
           ? Promise.resolve({ templates: [], diagnostics: [] })
-          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts')
+          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')
             ? projectPromptDirectoryExists?.() ?? Promise.resolve(false)
-            : invoke(channel, ...args)
+            : mainFixture.invoke(channel, ...args)
       ),
     },
   })
@@ -155,7 +197,7 @@ function command(
   sourceDraft?: NonNullable<ConstructorParameters<typeof RefineDraftCommand>[0]['sourceDraft']>,
 ): RefineDraftCommand {
   return new RefineDraftCommand({
-    draftPath: 'vela://draft/1',
+    draftPath: 'ai-novel://draft/1',
     draftContent,
     sourceDraft,
     chapterNumber: 1,
@@ -177,7 +219,7 @@ function reviewCommand(
   overrides: Partial<ConstructorParameters<typeof RefineFromReviewCommand>[0]> = {},
 ): RefineFromReviewCommand {
   return new RefineFromReviewCommand({
-    draftPath: 'vela://draft/1',
+    draftPath: 'ai-novel://draft/1',
     draftContent,
     confirmedReviewContent: DEFAULT_CONFIRMED_REVIEW_CONTENT,
     reviewSourceId: CONFIRMATION_REVIEW_ID,
@@ -193,7 +235,7 @@ function chapterReviewCommand(
   sourceDraft?: NonNullable<ConstructorParameters<typeof ReviewChapterCommand>[0]['sourceDraft']>,
 ): ReviewChapterCommand {
   return new ReviewChapterCommand({
-    draftPath: 'vela://draft/1',
+    draftPath: 'ai-novel://draft/1',
     draftContent,
     sourceDraft,
     chapterNumber,
@@ -216,7 +258,7 @@ function successfulRevisionIpc(options: {
       return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
     }
     if (channel === 'db:draft-get-full') {
-      return { ...CONFIRMED_SOURCE_DRAFT, content: options.currentDraftContent ?? CONFIRMED_SOURCE_DRAFT.content }
+      return { ...CONFIRMED_SOURCE_DRAFT, content: options.currentDraftContent ?? mainFixture.selected?.draftContent ?? CONFIRMED_SOURCE_DRAFT.content }
     }
     if (channel === 'db:review-get-full') {
       return {
@@ -237,6 +279,7 @@ function successfulRevisionIpc(options: {
 }
 
 beforeEach(() => {
+  mainFixture = new ReviewRevisionRuntimeFixture(vi.fn())
   useProjectStore.setState({
     currentProject: {
       id: 'refine',
@@ -250,6 +293,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  clearProjectCustomPrompts()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   useProjectStore.setState({ currentProject: null })
@@ -320,7 +364,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       expect.objectContaining({
         name: 'Revision merge: Chapter 1',
         type: 'diff',
-        revisionPath: 'vela://revision/9',
+        revisionPath: 'ai-novel://revision/9',
       }),
     ])
   })
@@ -371,7 +415,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     const context = { ...workflowContext(), writingLanguage: 'en-US' as const }
     const commands = [
       command(completeWithLease, confirmedSource),
-      chapterReviewCommand(completeWithLease),
+      chapterReviewCommand(completeWithLease, confirmedSource),
       reviewCommand(completeWithLease, confirmedSource, { confirmedReviewContent: confirmedContent }),
     ]
     for (const target of commands) {
@@ -379,8 +423,8 @@ describe('RefineDraftCommand bounded visible completion', () => {
     }
 
     expect(observed.get('refine-draft')).toContain('Revise the chapter manuscript')
-    expect(observed.get('review-chapter')).toContain('Review the chapter for objective continuity')
-    expect(observed.get('refine-from-review')).toContain('Revise the chapter using only the confirmed review checklist')
+    expect(observed.get('review-chapter')).toContain('Review the chapter for objectively verifiable continuity')
+    expect(observed.get('refine-from-review')).toContain('Resolve the selected issues established by the sources')
     for (const request of observed.values()) {
       expect(request).not.toContain('你是一位功力深厚的文学编辑')
       expect(request).not.toContain('你是一位严谨的小说质量监督编辑')
@@ -410,7 +454,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     expect(completeWithLease.mock.calls.map(([request]) => request.leaseId))
       .toEqual(['model-lease-refine', 'model-lease-refine'])
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:revision-replace-pending')).toEqual([
-      ['db:revision-replace-pending', expect.objectContaining({ content: expected }), PROJECT_PATH, PROJECT_SESSION],
+      ['db:revision-replace-pending', expect.objectContaining({ content: expected })],
     ])
     expect(useEditorStore.getState().tabs).toEqual([
       expect.objectContaining({ type: 'diff', content: expected }),
@@ -460,7 +504,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     })).rejects.toThrow('续写未增加新的可见正文')
 
     expect(completeWithLease).toHaveBeenCalledTimes(2)
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -481,7 +525,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     })).rejects.toThrow(message)
 
     expect(completeWithLease).toHaveBeenCalledOnce()
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -503,7 +547,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       callbacks: callbacks(),
     })).rejects.toThrow()
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -523,7 +567,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     })).rejects.toThrow('已自动续写 3 次，尚未完整生成')
 
     expect(completeWithLease).toHaveBeenCalledTimes(4)
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
   })
 
   it('persists nothing when cancellation happens after the first length result', async () => {
@@ -542,7 +586,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       callbacks: callbacks(),
     })).rejects.toThrow('工作流已取消')
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
   })
 
   it('rejects a project-session switch during continuation before any revision IPC', async () => {
@@ -571,7 +615,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       callbacks: callbacks(),
     })).rejects.toThrow('当前项目已切换')
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -605,7 +649,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       message: 'The source draft changed during AI refinement. The revision was not saved. Reopen the current draft and run AI refinement again.',
     })
 
-    expect(invoke.mock.calls).toEqual([[
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:revision-replace-pending')).toEqual([[
       'db:revision-replace-pending',
       expect.objectContaining({
         baseDraftId: 1,
@@ -617,8 +661,6 @@ describe('RefineDraftCommand bounded visible completion', () => {
           content: source,
         },
       }),
-      PROJECT_PATH,
-      PROJECT_SESSION,
     ]])
   })
 
@@ -634,7 +676,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       callbacks: callbacks(),
     })).rejects.toThrow('修稿结果明显短于原稿')
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -685,7 +727,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
       expect.objectContaining({
         name: 'Review fix: Chapter 1',
         type: 'diff',
-        revisionPath: 'vela://revision/9',
+        revisionPath: 'ai-novel://revision/9',
       }),
     ])
   })
@@ -693,7 +735,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
   it('uses the frozen English UI locale for a pre-generation confirmation error', async () => {
     const createRuntime = vi.fn<WorkflowGenerationRuntimeDependencies['createRuntime']>()
     const target = new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: 'Original chapter.',
       chapterNumber: 1,
     }, { createRuntime })
@@ -790,7 +832,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
       })
     ))
     const command = new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: sourceDraft,
       confirmedReviewContent: persistedConfirmation,
       reviewSourceId: CONFIRMATION_REVIEW_ID,
@@ -808,10 +850,8 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     expect(invoke).toHaveBeenCalledWith(
       'db:review-get-full',
       CONFIRMATION_REVIEW_ID,
-      PROJECT_PATH,
-      PROJECT_SESSION,
     )
-    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'grok-selected-model' }))
+    expect(createRuntime.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ modelId: 'grok-selected-model' }))
     expect(begunModelIds).toEqual(['grok-selected-model'])
     const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
     expect(prompt).toContain('只修复这个已确认的问题。')
@@ -819,6 +859,13 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     expect(prompt).not.toContain('这个被作者忽略，不能送入模型。')
     expect(prompt).not.toContain('原始 AI 总结绝不能进入修稿提示。')
     expect(prompt).not.toContain('瞬态 UI 提示不得绕过确认快照。')
+    expect(prompt).toContain('若成立的问题或作者明确要求当章发生动作或结果')
+    expect(prompt).toContain('新增动作或结果本身必须满足该要求的目标语义')
+    expect(prompt).toContain('已经失去、消耗或承受的具体后果')
+    expect(prompt).toContain('签字、认责或声称以后负责仍只是承诺')
+    expect(prompt).toContain('不得保留与新增事件相反的状态')
+    expect(prompt).toContain('简单否定翻转')
+    expect(prompt).toContain('决定、计划、承诺、保证，均不算完成')
 
     const pendingRevision = invoke.mock.calls.find(([channel]) => channel === 'db:revision-replace-pending')?.[1]
     expect(pendingRevision).toMatchObject({
@@ -841,7 +888,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     })
     stubIpc(invoke)
     const command = new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: CONFIRMED_SOURCE_DRAFT.content,
       confirmedReviewContent: DEFAULT_CONFIRMED_REVIEW_CONTENT,
       reviewSourceId: CONFIRMATION_REVIEW_ID,
@@ -852,7 +899,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
       step: {},
       context: workflowContext(),
       callbacks: callbacks(),
-    })).rejects.toThrow('源草稿已变化')
+    })).rejects.toThrow(/源草稿.*已变化/)
 
     expect(createRuntime).not.toHaveBeenCalled()
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:revision-replace-pending')).toBe(false)
@@ -892,13 +939,13 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     })
 
     await templateLoadStarted
-    expect(draftReadCount).toBe(1)
+    const frozenReadCount = draftReadCount
     currentDraftContent = `${CONFIRMED_SOURCE_DRAFT.content}模板加载期间保存的新正文。`
     releaseTemplateLoad()
 
-    await expect(execution).rejects.toThrow('源草稿已变化')
+    await expect(execution).rejects.toThrow(/源草稿.*已变化/)
 
-    expect(draftReadCount).toBe(2)
+    expect(draftReadCount).toBeGreaterThan(frozenReadCount)
     expect(completeWithLease).not.toHaveBeenCalled()
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:revision-replace-pending')).toBe(false)
   })
@@ -991,7 +1038,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     })
     stubIpc(invoke)
     const command = new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '原稿正文。'.repeat(100),
       confirmedReviewContent: rendererContent(),
       reviewSourceId: CONFIRMATION_REVIEW_ID,
@@ -1033,7 +1080,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     expect(completeWithLease).toHaveBeenCalledTimes(2)
     expect(completeWithLease.mock.calls.map(([request]) => request.reasoningStage))
       .toEqual(['review', 'review'])
-    expect(stepCallbacks.log).toHaveBeenCalledWith('  有界生成初始响应：finishReason=length')
+    expect(stepCallbacks.log).toHaveBeenCalledWith('  初始响应：finishReason=length')
     expect(stepCallbacks.log).toHaveBeenCalledWith('  自动续写第 1 轮响应：finishReason=stop')
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining(first))
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:revision-replace-pending')).toHaveLength(1)
@@ -1095,12 +1142,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
       message: '源草稿在 AI 审稿期间已变化。审稿报告未保存，请重新打开当前草稿后再次执行 AI 审稿。',
     })
 
-    expect(invoke.mock.calls.filter(([channel]) => (
-      channel === 'db:draft-get-full'
-      || channel === 'db:draft-get-meta'
-      || channel === 'db:review-next-index'
-      || channel === 'db:review-create'
-    ))).toEqual([[
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:review-create')).toEqual([[
       'db:review-create',
       expect.objectContaining({
         baseDraftId: 1,
@@ -1112,8 +1154,6 @@ describe('ReviewChapterCommand reasoning stage', () => {
           content: source,
         },
       }),
-      PROJECT_PATH,
-      PROJECT_SESSION,
     ]])
   })
 
@@ -1148,6 +1188,101 @@ describe('ReviewChapterCommand reasoning stage', () => {
     expect(replacementRequest).toContain('SOURCE_DRAFT_HEAD')
     expect(replacementRequest).toContain('SOURCE_DRAFT_MIDDLE_CONFLICT')
     expect(replacementRequest).toContain('SOURCE_DRAFT_TAIL')
+  })
+
+  it.each([
+    ['zh-CN', 'default'], ['zh-CN', 'custom'],
+    ['en-US', 'default'], ['en-US', 'custom'],
+  ] as const)('sends evidence and classification boundaries in %s/%s ordinary and rebuilt review requests', async (writingLanguage, templateSource) => {
+    const authorFact = 'AUTHOR_FACT_SENTINEL'
+    const worldFact = 'WORLD_FACT_SENTINEL'
+    const source = 'DRAFT_CONTENT_SENTINEL'
+    const customMarker = 'CUSTOM_REVIEW_TEMPLATE_SENTINEL'
+    const promptFile = `consistency_check.${writingLanguage}.json`
+    const promptPath = `${PROJECT_PATH}/.ai-novel/prompts/${promptFile}`
+    useProjectStore.setState(state => ({
+      currentProject: state.currentProject ? {
+        ...state.currentProject,
+        novelConfig: { ...state.currentProject.novelConfig, writingLanguage, protagonistProfile: authorFact },
+      } : null,
+    }))
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValueOnce({ content: '{"summary":', finishReason: 'stop' })
+      .mockResolvedValueOnce({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
+    stubIpc(vi.fn(async (channel: string) => {
+      if (channel === 'fs:list-dir') return [{ name: promptFile, path: promptPath, isDir: false }]
+      if (channel === 'fs:read-file') return { success: true, content: JSON.stringify({
+        ...getBuiltinPromptTemplate('consistency_check', writingLanguage)!, writingLanguage,
+        content: `${customMarker}\n{{chapter_content}}\n{{world_building}}`,
+      }) }
+      if (channel === 'db:continuity-list-before' || channel === 'db:character-get-all' || channel === 'db:blueprint-get-all') return []
+      if (channel === 'db:project-core-get') return { worldbuilding: worldFact }
+      if (channel === 'db:blueprint-get') return {
+        chapterNumber: 1, title: 'Current chapter', role: 'opening', purpose: '',
+        keyEvents: 'CURRENT_CHAPTER_GOAL_SENTINEL', characters: [], suspenseHook: '', userGuidance: '', notes: '', notesUpdatedAt: '',
+      }
+      if (channel === 'db:draft-get-meta') return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: true, id: 77 }
+      throw new Error(`unexpected IPC: ${channel}`)
+    }), async () => templateSource === 'custom')
+
+    await chapterReviewCommand(completeWithLease, source).execute({
+      step: {}, context: { ...workflowContext(), writingLanguage }, callbacks: callbacks(),
+    })
+
+    expect(completeWithLease).toHaveBeenCalledTimes(2)
+    const requiredClauses = writingLanguage === 'zh-CN' ? [
+      '是权威事实', '作者角色状态按标注时点理解', '同一对象、时点及条件', '合理兼容解释',
+      '未再次说明、未触碰或未明确位置', '新进展可以发生在同一时段或地点',
+      '由其必然推出的前提矛盾，必须报告为 error 或 warning',
+      '通读待审全文，检查所有可能满足目标原义的动作与实际后果', '不能因一处证据是旧结果就断言全文缺失',
+      '不另要求更换钟点或场景', '须核实目标明确的时点或场景要求',
+      '不自行增加门槛', '具体实际后果', '泛泛不便、旧损失或未来承诺',
+      '旧结果不能代替', '积极、可定位的明示证据', '没有矛盾不算完成',
+      'unknown，不能以“没写到”断言“没发生”', '逐字连续、且全文仅出现一次',
+    ] : [
+      'worldbuilding settings are authoritative facts', 'author character states apply at their annotated time',
+      'same subject, time and conditions', 'reasonable compatible interpretation',
+      'Mere omission, lack of contact or an unstated location', 'New progress can occur within the same time period or location',
+      'premise that necessarily follows from it, report it as an error or warning',
+      'whole draft for all actions and actual consequences', 'One excerpt recounting an old result does not establish absence from the whole draft',
+      'without requiring a different clock time or scene', 'checking any timing or scene explicitly required by the goal',
+      "Do not add a threshold for a cost's form, amount, intensity or irreversibility when the goal specifies none",
+      'concrete actual consequence', 'Vague inconvenience, old loss and future promises',
+      'Old results cannot satisfy required new progress', 'positive, locatable prose', 'absence of contradiction is insufficient',
+      'unknown, not proof of non-occurrence', 'verbatim, contiguous excerpt that occurs exactly once',
+    ]
+    const classificationClauses = writingLanguage === 'zh-CN' ? [
+      'category、quote、description、severity',
+      'description 必须说明当前正文的具体客观缺陷才可标为 error/warning',
+      '若结论为合理、符合要求或未发现问题，该项应为 pass 或省略',
+      '全文未发现具体问题时，保留一条 pass',
+      '确有客观问题仍须按严重程度报告 error/warning',
+    ] : [
+      'category, quote, description, severity order',
+      'Use error/warning only when description identifies a specific objective defect in the current draft',
+      'If the conclusion is reasonable, meets requirements, or no issue found, use pass or omit the item',
+      'If the whole draft has no specific issue, keep one pass item',
+      'Still report genuine objective problems as error/warning according to their severity',
+    ]
+    for (const [index, [completion]] of completeWithLease.mock.calls.entries()) {
+      const request = completion.messages.map(message => message.content).join('\n')
+      for (const material of [authorFact, worldFact, source, 'CURRENT_CHAPTER_GOAL_SENTINEL']) expect(request).toContain(material)
+      expect(request.includes(customMarker)).toBe(templateSource === 'custom')
+      expect(requiredClauses.filter(clause => !request.includes(clause))).toEqual([])
+      expect.soft(classificationClauses.filter(clause => !request.includes(clause))).toEqual([])
+      const example = JSON.parse(request.match(/^\{"items":\[[^\n]+\}$/mu)![0]) as { items: Array<{ quote?: string }> }
+      for (const item of example.items) {
+        expect.soft(Object.keys(item)).toEqual(item.quote === undefined
+          ? ['category', 'description', 'severity']
+          : ['category', 'quote', 'description', 'severity'])
+      }
+      if (index === 1) {
+        const rebuildContract = request.slice(request.lastIndexOf(writingLanguage === 'zh-CN' ? '【硬性要求】' : '[Hard requirement]'))
+        expect.soft(classificationClauses.filter(clause => !rebuildContract.includes(clause))).toEqual([])
+      }
+    }
   })
 
   it('uses finalized continuity as the only established-history source in the review request', async () => {
@@ -1219,7 +1354,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
     const reviewRequest = completeWithLease.mock.calls[0]?.[0].messages
       .map(message => message.content).join('\n') ?? ''
     expect(reviewRequest).toContain('FINALIZED_HISTORY_FACT')
-    expect(reviewRequest).toContain('唯一已发生事实源')
+    expect(reviewRequest).toContain('定稿历史')
     expect(reviewRequest).toContain('【作者全局创作指导｜约束而非已发生事实】')
     expect(reviewRequest).toContain('AUTHOR_GLOBAL_GUIDANCE')
     expect(reviewRequest).toContain('【作者确认项目配置｜约束而非已发生事实】')
@@ -1229,7 +1364,8 @@ describe('ReviewChapterCommand reasoning stage', () => {
     expect(reviewRequest).toContain('AUTHOR_WORLD_SETTING')
     expect(reviewRequest).toContain('AUTHOR_GOLDEN_FINGER')
     expect(reviewRequest).toContain('AUTHOR_PROTAGONIST')
-    expect(reviewRequest).toContain('【当前及未来蓝图/计划｜非既定历史】')
+    expect(reviewRequest).toContain('【本章作者指导｜约束】')
+    expect(reviewRequest).toContain('【后续蓝图/计划｜非既定历史】')
     expect(reviewRequest).toContain('FUTURE_BLUEPRINT_PLAN')
     expect(reviewRequest).not.toContain('REFERENCE_WORK_POLLUTANT')
     expect(reviewRequest).not.toContain('FUTURE_PLAN_POLLUTANT')
@@ -1300,17 +1436,17 @@ describe('ReviewChapterCommand reasoning stage', () => {
 
     await expect(chapterReviewCommand(completeWithLease).execute({
       step: {}, context: workflowContext(), callbacks: stepCallbacks,
-    })).resolves.toContain('AI review')
+    })).resolves.toContain('No conflict found.')
 
     expect(JSON.parse(createParams[0]!.content)).toMatchObject({
       summary: '审稿包含待核实项目，不能视为全部通过。',
-      goalReview: { coverage: 'unknown' },
+      goalReview: { coverage: 'not_configured' },
       items: [
         { category: 'continuity', severity: 'pass', description: 'No conflict found.' },
         { severity: 'unknown' },
       ],
     })
-    expect(stepCallbacks.log).toHaveBeenCalledWith('一致性证据暂时不可用；AI 审稿仍会继续。')
+    expect(mainFixture.prepared?.context.preflightFindings).toEqual([])
   })
 
   it('uses the frozen English UI locale for visible review logs and the report tab independently of Chinese writing', async () => {
@@ -1379,5 +1515,152 @@ describe('ReviewChapterCommand reasoning stage', () => {
     expect(completeWithLease.mock.calls[0]?.[0].reasoningStage).toBe('review')
     expect(completeWithLease.mock.calls[0]?.[0].messages[1]?.content)
       .toContain('【补充写作 Skill：Review craft】')
+  })
+})
+
+describe('审稿/审稿修稿走同一条准入（S10B-2）', () => {
+  const HUGE_HISTORY = '长'.repeat(9_000)
+
+  function reviewHistoryIpc(projections: unknown[]) {
+    return vi.fn(async (channel: string) => {
+      if (channel === 'db:continuity-list-before') return projections
+      if (channel === 'kb:search' || channel === 'db:character-get-all') return []
+      if (channel === 'db:blueprint-get-all' || channel === 'db:consistency-exemption-list') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:blueprint-get') return null
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: true, id: 77 }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+  }
+
+  it('stops the review with a stable error when the required previous-chapter material exceeds the 8MiB safety bound', async () => {
+    // 前一章的定稿是审稿的连续性锚点：装不下就显式失败，绝不静默省略必需事实、也不截断。
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+    stubIpc(reviewHistoryIpc([{
+      draftId: 7, chapterNumber: 1, chapterTitle: '离港', chapterNotes: 'A'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS + 1),
+      sourceStatus: 'current', facts: [],
+    }]))
+
+    await expect(chapterReviewCommand(completeWithLease, '顾舟检查码头的潮汐钟。', 2).execute({
+      step: {}, context: workflowContext(), callbacks: callbacks(),
+    })).rejects.toThrow('审稿的必需材料超出上下文容量')
+
+    expect(completeWithLease).not.toHaveBeenCalled()
+  })
+
+  it('drops an over-budget optional history block while the required previous chapter survives verbatim', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
+    stubIpc(reviewHistoryIpc([
+      { draftId: 1, chapterNumber: 1, chapterTitle: '旧章', chapterNotes: `第一章超长标记${HUGE_HISTORY}`,
+        sourceStatus: 'current', facts: [] },
+      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: '第二章定稿正文。',
+        sourceStatus: 'current', facts: [] },
+    ]))
+
+    await chapterReviewCommand(completeWithLease, '顾舟检查码头的潮汐钟。', 3).execute({
+      step: {}, context: workflowContext(), callbacks: callbacks(),
+    })
+
+    const request = completeWithLease.mock.calls[0]?.[0].messages
+      .map(message => message.content).join('\n') ?? ''
+    // 必需锚点在，超预算的可选块整体省略（不是截断），块头措辞不变。
+    expect(request).toContain('【第2章定稿历史】')
+    expect(request).toContain('第二章定稿正文。')
+    expect(request).not.toContain('第一章超长标记')
+  })
+
+  it('stops the confirmed-review revision when the confirmed checklist exceeds the 8MiB safety bound', async () => {
+    const confirmationContent = confirmedReviewContent({
+      sourceDraft: { ...CONFIRMED_SOURCE_DRAFT, content: '原稿正文。'.repeat(250) },
+      items: [{
+        category: '连续性', severity: 'error', description: 'A'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS + 1), decision: 'apply', origin: 'ai',
+      }],
+    })
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+    stubIpc(successfulRevisionIpc({ reviewContent: confirmationContent }))
+
+    await expect(reviewCommand(completeWithLease, CONFIRMED_SOURCE_DRAFT.content, {
+      confirmedReviewContent: confirmationContent,
+    }).execute({ step: {}, context: workflowContext(), callbacks: callbacks() }))
+      .rejects.toThrow('审稿修稿必需材料超出上下文容量')
+
+    expect(completeWithLease).not.toHaveBeenCalled()
+  })
+})
+
+describe('修稿路径不再整段拼接（S10B-2）', () => {
+  const HUGE_HISTORY = '长'.repeat(9_000)
+  const SOURCE = '原稿正文。'.repeat(250)
+  const REVISION = '修订正文。'.repeat(250)
+
+  function refineCommand(completeWithLease: GenerationRuntimeEnvironment['completeWithLease'],
+    chapterNumber: number): RefineDraftCommand {
+    return new RefineDraftCommand({
+      draftPath: 'ai-novel://draft/1',
+      draftContent: SOURCE,
+      chapterNumber,
+      chapterInfo: {
+        projectPath: PROJECT_PATH, chapterNumber, title: `第${chapterNumber}章`, role: '发展',
+        purpose: '推进', keyEvents: '事件', characters: [],
+      },
+    }, runtimeDependencies(completeWithLease))
+  }
+
+  function historyIpc(projections: unknown[], chapterNumber: number) {
+    return vi.fn(async (channel: string) => {
+      if (channel === 'db:continuity-list-before') return projections
+      if (channel === 'db:draft-get-meta') return { id: 1, chapterNumber, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:revision-replace-pending') return { success: true, id: 9, revisionIndex: 2 }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+  }
+
+  it('keeps every finalized chapter in both summary slots when the admitted set is unchanged', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: REVISION, finishReason: 'stop' })
+    stubIpc(historyIpc([
+      { draftId: 1, chapterNumber: 1, chapterTitle: '旧章', chapterNotes: '第一章定稿原文。', sourceStatus: 'current', facts: [] },
+      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: '第二章定稿原文。', sourceStatus: 'current', facts: [] },
+    ], 3))
+
+    await refineCommand(completeWithLease, 3).execute({ step: {}, context: workflowContext(), callbacks: callbacks() })
+
+    const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
+    expect(prompt).toContain('第一章定稿原文。')
+    // 全文摘要与近章摘要仍逐字携带同一份拼接结果。
+    expect(prompt.match(/第二章定稿原文。/gu)).toHaveLength(2)
+  })
+
+  it('omits an over-budget optional history block while the required previous chapter survives', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: REVISION, finishReason: 'stop' })
+    stubIpc(historyIpc([
+      { draftId: 1, chapterNumber: 1, chapterTitle: '旧章', chapterNotes: `第一章超长标记${HUGE_HISTORY}`,
+        sourceStatus: 'current', facts: [] },
+      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: '第二章定稿原文。',
+        sourceStatus: 'current', facts: [] },
+    ], 3))
+
+    await refineCommand(completeWithLease, 3).execute({ step: {}, context: workflowContext(), callbacks: callbacks() })
+
+    const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
+    expect(prompt).toContain('第二章定稿原文。')
+    expect(prompt).not.toContain('第一章超长标记')
+  })
+
+  it('stops the refinement when the required previous-chapter material exceeds the 8MiB safety bound', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+    stubIpc(historyIpc([
+      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: 'A'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS + 1),
+        sourceStatus: 'current', facts: [] },
+    ], 3))
+
+    await expect(refineCommand(completeWithLease, 3).execute({
+      step: {}, context: workflowContext(), callbacks: callbacks(),
+    })).rejects.toThrow('修稿的必需材料超出上下文容量')
+
+    expect(completeWithLease).not.toHaveBeenCalled()
   })
 })

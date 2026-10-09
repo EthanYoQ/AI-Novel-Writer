@@ -3,9 +3,10 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 import type { ProjectData } from '../../../shared/ipc-channels'
+import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
 import type { AuthoritativeChapterSequence } from '../../../shared/author-manuscript-import'
 import type { ChapterBlueprint } from '../../../services/workflows/directory-workflow'
-import { useEditorStore } from '../../../stores/editor-store'
+import { saveDirtyEditorChangesForExit, useEditorStore } from '../../../stores/editor-store'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { toast } from '../../ui/Toast'
@@ -67,6 +68,7 @@ function installIpc(options: {
   finalizedChapter?: (chapterNumber: number) => unknown
   onClearGeneratedText?: () => void
   authoritySequence?: AuthoritativeChapterSequence | (() => AuthoritativeChapterSequence)
+  saveError?: string
 } = {}) {
   const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'db:blueprint-get-all') return options.blueprints ?? [blueprint(1)]
@@ -87,10 +89,16 @@ function installIpc(options: {
       options.onClearGeneratedText?.()
       return { success: true, cleared: ['generatedText'] }
     }
+    if (channel === 'db:blueprint-upsert-many') {
+      return options.saveError
+        ? { success: false, error: options.saveError }
+        : { success: true }
+    }
+    if (channel === 'db:blueprint-upsert') return { success: true }
     if (channel === 'fs:list-dir') return []
     throw new Error(`unexpected IPC ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -115,6 +123,11 @@ beforeEach(() => {
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
   useLayoutStore.setState({ chapterCreationOpen: false, chapterCreationPrefill: null })
   useProjectStore.setState({ currentProject: project(), fileTree: [], loading: false })
+  setActiveProjectSessionContext({
+    projectId: 'chapter-write-entry',
+    leaseId: 'chapter-write-entry-lease',
+    projectPath: PROJECT_PATH,
+  })
   installIpc()
   container = document.createElement('div')
   document.body.append(container)
@@ -126,13 +139,66 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   useEditorStore.setState(originalEditorState)
   useLayoutStore.setState(originalLayoutState)
   useProjectStore.setState(originalProjectState)
+  setActiveProjectSessionContext(null)
 })
 
 describe('ChapterCardEditor writing entry', () => {
+  it.each(['发展', '开篇', '双线交汇', ' 双线交汇 ', ' 高潮 ', '', '   '])(
+    'preserves role %j through selection, blueprint save and writing prefill', async stored => {
+      const invoke = installIpc({ blueprints: [{ ...blueprint(1), role: stored }] })
+      await renderEditor()
+      await vi.waitFor(() => expect(container?.querySelector('select')?.value).toBe(stored.trim() ? stored : ''))
+      expect(container?.querySelector('select')?.selectedOptions[0]?.textContent).toBe(stored.trim() ? stored : '未设定')
+      const buttons = Array.from(container!.querySelectorAll('button'))
+      await act(async () => buttons.find(button => button.textContent?.trim() === '保存')!.click())
+      await vi.waitFor(() => expect(invoke.mock.calls.find(call => call[0] === 'db:blueprint-upsert')?.[1])
+        .toEqual(expect.objectContaining({ role: stored })))
+      await act(async () => buttons.find(button => button.textContent?.trim() === '写作此章')!.click())
+      expect(useLayoutStore.getState().chapterCreationPrefill?.role).toBe(stored)
+    },
+  )
+
+  it('saves and passes the author-selected replacement role', async () => {
+    const invoke = installIpc({ blueprints: [{ ...blueprint(1), role: ' 双线交汇 ' }] })
+    await renderEditor()
+    await vi.waitFor(() => expect(container?.querySelector('select')?.value).toBe(' 双线交汇 '))
+    await act(async () => {
+      const select = container!.querySelector('select')!
+      select.value = '高潮'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.trim() === '保存')!.click())
+    await vi.waitFor(() => expect(invoke.mock.calls.find(call => call[0] === 'db:blueprint-upsert')?.[1])
+      .toEqual(expect.objectContaining({ role: '高潮' })))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.trim() === '写作此章')!.click())
+    expect(useLayoutStore.getState().chapterCreationPrefill?.role).toBe('高潮')
+  })
+
+  it('propagates blueprint save failure to the exit gate', async () => {
+    installIpc({ saveError: '蓝图写入失败' })
+    useEditorStore.setState({
+      tabs: [{ id: 'blueprint-exit', name: '章节蓝图', type: 'chapter-card', projectKey: PROJECT_PATH, dirty: true }],
+      activeTabId: 'blueprint-exit',
+      draftLedgers: {},
+    })
+    await renderEditor()
+    await vi.waitFor(() => expect(container?.textContent).toContain('雨夜启程'))
+
+    let failure: unknown
+    await act(async () => {
+      try { await saveDirtyEditorChangesForExit(PROJECT_PATH) } catch (error) { failure = error }
+    })
+    expect(failure).toEqual(expect.objectContaining({ message: '蓝图写入失败' }))
+    expect(useEditorStore.getState().tabs[0].dirty).toBe(true)
+    expect(container?.textContent).toContain('保存失败')
+  })
+
   it('uses finalized authority to expose Chapter 10 even when imported Chapters 1 through 9 have no blueprints', async () => {
     installIpc({
       blueprints: [blueprint(10)],

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { useWorkflowReasoningStore } from '../../../stores/workflow-reasoning-store'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -6,6 +7,7 @@ import { useWorkflowStore, type WorkflowRun } from '../../../stores/workflow-sto
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useEditorStore } from '../../../stores/editor-store'
+import { useLayoutStore } from '../../../stores/layout-store'
 import AIOutputPanel from '../AIOutputPanel'
 import type { PromptBudgetReport } from '../../../services/generation/generation-harness'
 
@@ -13,6 +15,8 @@ const originalWorkflowState = useWorkflowStore.getState()
 const originalLocaleState = useLocaleStore.getState()
 const originalProjectState = useProjectStore.getState()
 const originalEditorState = useEditorStore.getState()
+const originalLayoutState = useLayoutStore.getState()
+const originalBridge = Object.getOwnPropertyDescriptor(window, 'aiNovelAPI')
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -132,6 +136,13 @@ function activeEnglishBlueprintRun(): WorkflowRun {
 }
 
 beforeEach(() => {
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: {
+    invoke: async (channel: string) => {
+      if (channel === 'db:recovery-candidate-list' || channel === 'generation:list' || channel === 'generation:list-batches') return []
+      throw new Error(`Unexpected IPC: ${channel}`)
+    },
+    on: () => () => {},
+  } })
   useWorkflowStore.setState({
     activeRuns: [],
     history: [failedChapterDraft()],
@@ -165,6 +176,9 @@ afterEach(async () => {
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
   useEditorStore.setState(originalEditorState)
+  useLayoutStore.setState(originalLayoutState)
+  if (originalBridge) Object.defineProperty(window, 'aiNovelAPI', originalBridge)
+  else Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
 describe('AIOutputPanel failed chapter draft', () => {
@@ -224,6 +238,10 @@ describe('AIOutputPanel failed chapter draft', () => {
   })
 
   it('explains a failed generation and confirms that no draft or manuscript was saved', async () => {
+    useProjectStore.setState({ currentProject: {
+      id: 'failed-chapter-draft', name: 'Failed chapter draft', path: 'C:\\novels\\failed-chapter-draft',
+      sessionLease: 'failed-chapter-draft-lease', novelConfig: {},
+    } as never })
     await act(async () => {
       root?.render(<AIOutputPanel />)
     })
@@ -255,6 +273,10 @@ describe('AIOutputPanel failed chapter draft', () => {
     }]
     useLocaleStore.setState({ locale: 'en-US' })
     useWorkflowStore.setState({ history: [run] })
+    useProjectStore.setState({ currentProject: {
+      id: 'failed-chapter-draft', name: 'Failed chapter draft', path: run.projectPath,
+      sessionLease: 'failed-chapter-draft-lease', novelConfig: {},
+    } as never })
 
     await act(async () => {
       root?.render(<AIOutputPanel />)
@@ -275,6 +297,7 @@ describe('AIOutputPanel prompt budget failure', () => {
   ] as const)('shows a %s actionable adjustment entry', async (locale, heading, actionLabel) => {
     useLocaleStore.setState({ locale })
     useWorkflowStore.setState({ history: [failedPromptBudget(locale)] })
+    useLayoutStore.setState({ sidebarView: 'characters', activeRailItem: 'characters', sidebarOpen: true })
     await act(async () => {
       root?.render(<AIOutputPanel />)
     })
@@ -293,6 +316,7 @@ describe('AIOutputPanel prompt budget failure', () => {
     expect(useEditorStore.getState().tabs).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'config', projectKey: 'C:\\novels\\prompt-budget' }),
     ]))
+    expect(useLayoutStore.getState()).toMatchObject({ sidebarView: 'project', activeRailItem: 'project', sidebarOpen: true })
   })
 
   it.each([
@@ -320,18 +344,9 @@ describe('AIOutputPanel prompt budget failure', () => {
       .some(button => button.textContent?.includes(actionLabel))).toBe(false)
   })
 
-  it('freezes the run locale and disables its project action after the current project session changes', async () => {
+  it('freezes the run locale while current and hides it after the project changes', async () => {
     useLocaleStore.setState({ locale: 'en-US' })
     useWorkflowStore.setState({ history: [failedPromptBudget('zh-CN')] })
-    useProjectStore.setState({
-      currentProject: {
-        id: 'other-project',
-        name: 'Other project',
-        path: 'C:\\novels\\other-project',
-        sessionLease: 'other-project-lease',
-        novelConfig: {},
-      } as never,
-    })
     await act(async () => {
       root?.render(<AIOutputPanel />)
     })
@@ -342,12 +357,49 @@ describe('AIOutputPanel prompt budget failure', () => {
 
     expect(container?.textContent).toContain('提示词预算不足')
     expect(container?.textContent).not.toContain('Prompt budget is insufficient')
-    expect(container?.textContent).toContain('此结果属于另一项目会话。请切回该项目后再打开小说配置。')
     const action = Array.from(container?.querySelectorAll('button') ?? [])
       .find(button => button.textContent?.includes('打开小说配置'))
-    expect(action).toBeDisabled()
+    expect(action).not.toBeDisabled()
 
-    await act(async () => action?.click())
+    await act(async () => useProjectStore.setState({ currentProject: {
+      id: 'other-project', name: 'Other project', path: 'C:\\novels\\other-project',
+      sessionLease: 'other-project-lease', novelConfig: {},
+    } as never }))
+    expect(container?.textContent).not.toContain('提示词预算不足')
+    expect(container?.textContent).not.toContain('角色图谱生成')
+    expect(Array.from(container?.querySelectorAll('button') ?? [])
+      .some(button => button.textContent?.includes('打开小说配置'))).toBe(false)
     expect(useEditorStore.getState().tabs).toEqual([])
   })
+})
+
+
+it('shows review waiting and output age without a percentage and keeps stop immediately reachable', async () => {
+  const run = activeEnglishBlueprintRun()
+  run.uiLocale = 'zh-CN'
+  run.steps[0].progress = 10
+  run.steps[0].generationActivity = { operation: 'review-chapter', diagnostics: {
+    startedAt: Date.now() - 60000, elapsedMs: 60000, firstResponseMs: 3000, lastResponseMs: 10000,
+    lastOutputMs: 5000, phase: 'stream', visibleEvents: 0, reasoningEvents: 10,
+  } }
+  useWorkflowReasoningStore.getState().append(run.id, 'attempt', '持续思考的展示内容')
+  const cancel = vi.fn()
+  useWorkflowStore.setState({ activeRuns: [run], currentRun: run, history: [], cancelWorkflow: cancel })
+  await act(async () => root!.render(<AIOutputPanel />))
+  expect(container!.textContent).toContain('已等待 60秒')
+  expect(container!.textContent).toContain('距最近响应 50秒')
+  expect(container!.textContent).toContain('距最近有效输出 55秒（含思考）')
+  expect(container!.textContent).toContain('尚无完整审稿报告')
+  expect(container!.textContent).not.toContain('10%')
+  expect(container!.textContent).not.toContain('思考中...')
+  expect(cancel).not.toHaveBeenCalled()
+  await act(async () => useWorkflowStore.setState({ activeRuns: [{ ...run, steps: [{ ...run.steps[0],
+    generationActivity: { operation: 'review-chapter', diagnostics: { ...run.steps[0].generationActivity!.diagnostics!,
+      elapsedMs: 70000, lastResponseMs: 70000, lastOutputMs: 70000, reasoningEvents: 20 } },
+  }] }] }))
+  expect(container!.textContent).toContain('距最近有效输出 0秒（含思考）')
+  const stop = [...container!.querySelectorAll('button')].find(button => button.textContent?.includes('中止生成'))!
+  await act(async () => stop.click())
+  expect(cancel).toHaveBeenCalledExactlyOnceWith(run.id)
+  await act(async () => useWorkflowReasoningStore.getState().clear(run.id))
 })

@@ -32,6 +32,29 @@ afterEach(() => {
 })
 
 describe('SkinService', () => {
+  it('does not publish readiness before initialization or after corrupt manifest fallback', () => {
+    const rootDirectory = temporaryRoot()
+    const service = new SkinService({ rootDirectory })
+    expect(() => service.getStartupSnapshot('fixture-generation')).toThrow('GLOBAL_SKIN_NOT_READY')
+    fs.writeFileSync(path.join(rootDirectory, 'manifest.json'), '{corrupt')
+    service.initialize()
+    expect(() => service.getStartupSnapshot('fixture-generation')).toThrow('GLOBAL_SKIN_NOT_READY')
+    expect(fs.readFileSync(path.join(rootDirectory, 'manifest.json'), 'utf8')).toBe('{corrupt')
+  })
+  it('changes the snapshot revision only after successful main skin writes', () => {
+    const rootDirectory = temporaryRoot()
+    const service = new SkinService({ rootDirectory })
+    service.initialize()
+    const first = service.getStartupSnapshot('fixture-generation')
+    expect(first).toMatchObject({ backgroundSkin: 'classic', skinRevision: 0 })
+    expect(service.activate('anime').success).toBe(true)
+    expect(service.getStartupSnapshot('fixture-generation')).toMatchObject({ backgroundSkin: 'anime', skinRevision: 1 })
+    expect(service.activate('custom').success).toBe(false)
+    expect(service.getStartupSnapshot('fixture-generation').skinRevision).toBe(1)
+    const reopened = new SkinService({ rootDirectory })
+    reopened.initialize()
+    expect(reopened.getStartupSnapshot('fixture-generation')).toEqual(service.getStartupSnapshot('fixture-generation'))
+  })
   it('initializes an empty skin store as the safe classic state', () => {
     const rootDirectory = temporaryRoot()
     const service = new SkinService({ rootDirectory })
@@ -112,10 +135,12 @@ describe('SkinService', () => {
       toJPEG: vi.fn(),
     })
 
-    expect(new SkinService({ rootDirectory }).initialize()).toEqual({
-      activeSkin: 'classic',
-      customSkin: null,
-    })
+    const service = new SkinService({ rootDirectory })
+    expect(service.initialize()).toEqual({ activeSkin: 'classic', customSkin: null })
+    expect(service.getStartupSnapshot('fixture')).toMatchObject({ backgroundSkin: 'classic' })
+    const reopened = new SkinService({ rootDirectory })
+    expect(reopened.initialize()).toEqual({ activeSkin: 'classic', customSkin: null })
+    expect(reopened.getStartupSnapshot('fixture')).toMatchObject({ backgroundSkin: 'classic' })
   })
 
   it('rejects an oversized persisted custom asset before reading bytes or decoding it at startup', () => {
@@ -186,6 +211,7 @@ describe('SkinService', () => {
     expect(fs.readFileSync(path.join(rootDirectory, 'assets', `${revision}.png`))).toEqual(normalized)
     expect(JSON.parse(fs.readFileSync(path.join(rootDirectory, 'manifest.json'), 'utf8'))).toEqual({
       version: 1,
+      stateRevision: 1,
       activeSkin: 'custom',
       customSkin: {
         assetFile: `${revision}.png`,
@@ -211,6 +237,7 @@ describe('SkinService', () => {
     })
     expect(JSON.parse(fs.readFileSync(path.join(rootDirectory, 'manifest.json'), 'utf8'))).toEqual({
       version: 1,
+      stateRevision: 1,
       activeSkin: 'anime',
     })
   })
@@ -242,6 +269,7 @@ describe('SkinService', () => {
     expect(fs.existsSync(path.join(rootDirectory, 'assets', `${revision}.png`))).toBe(false)
     expect(JSON.parse(fs.readFileSync(path.join(rootDirectory, 'manifest.json'), 'utf8'))).toEqual({
       version: 1,
+      stateRevision: 2,
       activeSkin: 'classic',
     })
   })
@@ -304,6 +332,7 @@ describe('SkinService', () => {
     })
     expect(JSON.parse(fs.readFileSync(path.join(rootDirectory, 'manifest.json'), 'utf8'))).toEqual({
       version: 1,
+      stateRevision: 2,
       activeSkin: 'classic',
     })
   })

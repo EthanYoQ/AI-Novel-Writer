@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import type { ProjectData } from '../../shared/ipc-channels'
 import {
   CHAPTER_CARD_TAB_ID,
@@ -74,6 +75,7 @@ function projectSession(key: 'A' | 'B') {
 function character(name: string, notes = ''): CharacterCard {
   return {
     name,
+    characterId: `id:${name}`,
     role: 'protagonist',
     gender: '',
     age: '',
@@ -112,7 +114,7 @@ beforeEach(() => {
       const request = args[0] as { entries: unknown[]; expectedRevision: number }
       return {
         ...result,
-        receipt: { revision: request.expectedRevision + 1, snapshot: { entries: request.entries } },
+        receipt: { revision: request.expectedRevision + 1, snapshot: { entries: request.entries, identityRevision: request.expectedRevision + 1 } },
       }
     }
     return result
@@ -122,12 +124,14 @@ beforeEach(() => {
   useCharacterStore.setState({
     characters: [character('旧名')],
     selectedName: '旧名',
+      selectedId: 'id:旧名',
     saving: false,
     identityBusy: false,
     loaded: true,
     dataProjectKey: project('A').path,
     dataProjectSession: projectSession('A'),
     rosterRevision: 1,
+    identityRevision: 1,
     loadingProjectKey: null,
     loadingProjectSession: null,
     lastError: null,
@@ -136,22 +140,24 @@ beforeEach(() => {
 
 describe('editor discard semantics', () => {
   it('discards only project A character rename, preserves project B draft, and reopens without a duplicate rename', async () => {
-    expect(useCharacterStore.getState().renameCharacter('旧名', '新名')).toBe(true)
+    expect(useCharacterStore.getState().renameCharacter('id:旧名', '新名')).toBe(true)
 
     useProjectStore.setState({ currentProject: project('B') })
     useCharacterStore.setState({
       characters: [character('角色 B')],
       selectedName: '角色 B',
+      selectedId: 'id:角色 B',
       dataProjectKey: project('B').path,
       dataProjectSession: projectSession('B'),
       loadingProjectSession: null,
     })
-    useCharacterStore.getState().updateField('角色 B', 'notes', 'B 未保存')
+    useCharacterStore.getState().updateField('id:角色 B', 'notes', 'B 未保存')
 
     useProjectStore.setState({ currentProject: project('A') })
     useCharacterStore.setState({
-      characters: [character('新名')],
+      characters: [{ ...character('新名'), characterId: 'id:旧名' }],
       selectedName: '新名',
+      selectedId: 'id:旧名',
       dataProjectKey: project('A').path,
       dataProjectSession: projectSession('A'),
       loadingProjectSession: null,
@@ -276,7 +282,7 @@ describe('editor discard semantics', () => {
   })
 
   it('does not mutate drafts when the close confirmation is cancelled', () => {
-    useCharacterStore.getState().renameCharacter('旧名', '新名')
+    useCharacterStore.getState().renameCharacter('id:旧名', '新名')
     useEditorStore.setState({
       tabs: [{
         id: 'character-a',
@@ -296,7 +302,7 @@ describe('editor discard semantics', () => {
   })
 
   it('restores the dirty indicator when reopening and keeps hidden drafts in the update gate', () => {
-    useCharacterStore.getState().renameCharacter('旧名', '新名')
+    useCharacterStore.getState().renameCharacter('id:旧名', '新名')
     expect(useEditorStore.getState().tabs).toEqual([])
     expect(countUnsavedEditorItems(
       useEditorStore.getState().tabs,
@@ -317,7 +323,7 @@ describe('editor discard semantics', () => {
   })
 
   it('discards current-project tabs and ledgers before requesting install, and stays discarded on failure', async () => {
-    useCharacterStore.getState().renameCharacter('旧名', '新名')
+    useCharacterStore.getState().renameCharacter('id:旧名', '新名')
     useProjectStore.getState().updateNovelConfig({ coreOutline: 'A 未保存' })
     let chapterLedger = updateChapterCardProjectDraft(
       createEmptyChapterCardDraftLedger(),
@@ -495,4 +501,16 @@ describe('project-scoped unsaved counting', () => {
     expect(countUnsavedEditorItemsForProject(tabs, draftLedgers, projectB)).toBe(1)
     expect(countUnsavedEditorItems(tabs, draftLedgers)).toBe(2)
   })
+})
+
+it('discarding a recovery tab preserves the official blueprint draft and its dirty tab', () => {
+  const ledger = JSON.stringify(updateChapterCardProjectDraft(createEmptyChapterCardDraftLedger(), project('A').path, [chapter(1, '作者未保存蓝图')], new Set([1])))
+  const planningRecovery: GenerationRecoveryContext = { modelId: 'model', handle: { runId: 'recovery', projectId: 'A', epoch: 'epoch', rootActionId: 'root' }, operation: 'blueprint', authorInputs: [], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [], composition: null, lastCompositionFinishReason: null, attemptedPurposes: [], draftSave: { kind: 'absent' } }
+  useEditorStore.setState({ tabs: [
+    { id: 'official', name: '官方蓝图', type: 'chapter-card', projectKey: project('A').path, dirty: true },
+    { id: 'recovery', name: '恢复草稿', type: 'chapter-card', projectKey: project('A').path, dirty: true, planningRecovery },
+  ], draftLedgers: { [CHAPTER_CARD_TAB_ID]: ledger } })
+  discardAndCloseEditorTab('recovery', projectSession('A'))
+  expect(useEditorStore.getState().draftLedgers[CHAPTER_CARD_TAB_ID]).toBe(ledger)
+  expect(useEditorStore.getState().tabs).toEqual([expect.objectContaining({ id: 'official', dirty: true })])
 })

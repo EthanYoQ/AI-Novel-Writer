@@ -119,11 +119,14 @@ describe('advanced model settings', () => {
     await act(async () => page.getByRole('button', { name: '高级设置', exact: true }).click())
     await expect.element(page.getByLabelText('温度')).toHaveValue(0.9)
     await expect.element(page.getByLabelText('最大输出 Token')).toHaveValue(7000)
+    expect(container?.querySelector('[data-effective-output-limit="6000"]')).not.toBeNull()
     await expect.element(page.getByLabelText('模型推理覆盖')).toHaveValue('low')
 
     await act(async () => page.getByRole('button', { name: '恢复默认值', exact: true }).click())
     await expect.element(page.getByLabelText('温度')).toHaveValue(0.7)
     await expect.element(page.getByLabelText('最大输出 Token')).toHaveValue(8192)
+    await expect.element(page.getByLabelText('模型输出容量')).toHaveValue(8192)
+    expect(container?.querySelector('[data-effective-output-limit="8192"]')).not.toBeNull()
     await expect.element(page.getByLabelText('模型推理覆盖')).toHaveValue('auto')
     await act(async () => page.getByRole('button', { name: '保存配置', exact: true }).click())
 
@@ -144,6 +147,19 @@ describe('advanced model settings', () => {
     await expect.element(page.getByLabelText('Max output tokens')).toBeVisible()
     await expect.element(page.getByLabelText('Model reasoning override')).toBeVisible()
     await expect.element(page.getByLabelText('Effective reasoning effort')).toBeVisible()
+    await expect.element(page.getByText(/Effective output allowance: 6,000 tokens/)).toBeVisible()
+  })
+
+  it('resets an unlisted model to the common 65536 allowance without changing it before the explicit reset', async () => {
+    await renderSettings()
+    await act(async () => useLLMStore.setState({ models: [{ ...model(), modelName: 'unlisted-model', provider: 'custom', baseUrl: 'https://example.invalid/v1' }] }))
+    await clickEdit()
+    await act(async () => page.getByRole('button', { name: '高级设置', exact: true }).click())
+    await expect.element(page.getByLabelText('最大输出 Token')).toHaveValue(6000)
+    await act(async () => page.getByRole('button', { name: '恢复默认值', exact: true }).click())
+    await expect.element(page.getByLabelText('最大输出 Token')).toHaveValue(65536)
+    await expect.element(page.getByLabelText('模型输出容量')).toHaveValue(65536)
+    expect(container?.querySelector('[data-effective-output-limit="65536"]')).not.toBeNull()
   })
 
   it('warns when the configured output consumes the context window without blocking save', async () => {
@@ -153,6 +169,8 @@ describe('advanced model settings', () => {
       await page.getByLabelText('Context Window').fill('8192')
       await page.getByRole('button', { name: 'Advanced settings', exact: true }).click()
       await page.getByLabelText('Max output tokens').fill('8192')
+      expect(container?.textContent).not.toContain('Max output tokens leave no safe room')
+      await page.getByLabelText('Model output capacity').fill('8192')
     })
 
     await expect.element(page.getByRole('status')).toHaveTextContent(
@@ -162,4 +180,16 @@ describe('advanced model settings', () => {
     await act(async () => page.getByRole('button', { name: 'Save configuration', exact: true }).click())
     await vi.waitFor(() => expect(saveModel).toHaveBeenCalledTimes(1))
   })
+})
+
+it('ignores zero output limits and preserves unknown capability provenance on reset', async () => {
+  const { saveModel } = await renderSettings()
+  await act(async () => useLLMStore.setState({ models: [{ ...model(), provider: 'custom', modelName: 'unlisted', baseUrl: 'https://example.invalid/v1', capabilities: undefined }] }))
+  await clickEdit()
+  await act(async () => page.getByRole('button', { name: '高级设置', exact: true }).click())
+  await act(async () => page.getByLabelText('最大输出 Token').fill('0'))
+  expect(container?.querySelector('[data-effective-output-limit="0"]')).toBeNull()
+  await act(async () => page.getByRole('button', { name: '恢复默认值', exact: true }).click())
+  await act(async () => page.getByRole('button', { name: '保存配置', exact: true }).click())
+  expect(saveModel.mock.calls.at(-1)?.[0].capabilitySources).toMatchObject({ reasoning: 'unknown', structuredOutput: 'unknown', usage: 'unknown' })
 })

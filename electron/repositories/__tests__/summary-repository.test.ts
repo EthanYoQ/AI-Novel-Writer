@@ -1,11 +1,13 @@
 import fs from 'node:fs'
-import os from 'node:os'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
+import { FinalizationRepository } from '../finalization-repository'
 import { invalidateContinuityProjectionFrom, SummaryRepository } from '../summary-repository'
 
 let projectRoot = ''
@@ -17,7 +19,9 @@ function projectionGeneration(): number {
 }
 
 beforeEach(() => {
-  projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-continuity-'))
+  const cache = path.resolve('.runtime/.cache/novel-quality-modernization/s09b-summary-tests')
+  fs.mkdirSync(cache, { recursive: true })
+  projectRoot = fs.mkdtempSync(path.join(cache, 'case-'))
   initProjectDatabase(projectRoot)
 })
 
@@ -27,6 +31,24 @@ afterEach(() => {
 })
 
 describe('finalized continuity projection', () => {
+  it('persists and reads a complete long fact and evidence without losing its final correction', () => {
+    const content = '阿青听说宝剑已经售出，' + '这个尚未证实的消息在客栈内被反复转述，'.repeat(20) + '但消息并不属实，宝剑仍在木箱里。'
+    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'continuity-long-correction',
+      chapters: [{ chapterNumber: 1, title: '宝剑', content, wordCount: countDraftUnits(content) }],
+    })
+    const draft = receipt.drafts[0]!
+    const facts = [{ category: 'plot' as const, entities: ['阿青'], statement: content, sourceChapter: 1, evidence: content }]
+    SummaryRepository.saveFinalizedContinuity({
+      draftId: draft.draftId, chapterNumber: 1, chapterNotes: content, facts,
+      projectionGeneration: projectionGeneration(),
+      source: { draftId: draft.draftId, finalizationId: draft.finalizationId, chapterNumber: 1, contentHash: draft.contentHash },
+    })
+
+    expect(SummaryRepository.listFinalizedContinuityBefore(2)[0]).toMatchObject({ chapterNotes: content, facts })
+    expect(SummaryRepository.readFinalizedSource(draft.draftId)).toMatchObject({ status: 'valid', snapshot: { content } })
+  })
+
   it('persists chapter facts against a finalized draft even when no blueprint exists', () => {
     const content = '第一章正文尾声：银色怀表在午夜停摆。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
@@ -80,7 +102,7 @@ describe('finalized continuity projection', () => {
         chapterNumber: 1,
         contentHash: draft.contentHash,
       },
-      sourceStatus: 'current',
+      sourceStatus: 'legacy',
     }])
   })
 
@@ -121,14 +143,15 @@ describe('finalized continuity projection', () => {
 
   it('keeps source-bound character locators idempotent through note retries and history invalidation', () => {
     getProjectDb()!.prepare(
-      "INSERT INTO characters (name, role) VALUES ('林岚', 'protagonist')",
+      "INSERT INTO characters (character_id,name,role) VALUES ('synthetic-lin-lan','林岚','protagonist')",
     ).run()
     const content = '第二章定稿：林岚抵达新港，随身带着铁罗盘。'
-    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
-      operationId: 'continuity-character-candidates',
-      chapters: [{ chapterNumber: 2, title: '新港', content, wordCount: countDraftUnits(content) }],
-    })
-    const draft = receipt.drafts[0]!
+    const db = getProjectDb()!
+    const contentId = Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(content).lastInsertRowid)
+    const draftId = Number(db.prepare("INSERT INTO drafts(chapter_number,version,status,content_id,word_count) VALUES(2,1,'draft',?,?)")
+      .run(contentId, countDraftUnits(content)).lastInsertRowid)
+    const draft = { draftId, finalizationId: 'continuity-character-candidates', contentHash: createHash('sha256').update(content).digest('hex') }
+    FinalizationRepository.commit({ ...draft, chapterNumber: 2, chapterTitle: '新港', content, contentRevision: 1, targetFileName: '第二章.txt' })
     const source = {
       draftId: draft.draftId,
       finalizationId: draft.finalizationId,
@@ -146,7 +169,8 @@ describe('finalized continuity projection', () => {
     const candidateRequest = {
       draftId: draft.draftId,
       chapterNumber: 2,
-      candidates: [{ characterName: '林岚', field: 'keyItems' as const, value: '铁罗盘' }],
+      candidates: [{ characterId: 'synthetic-lin-lan', characterName: '林岚', field: 'keyItems' as const, value: '铁罗盘',
+        evidence: { start: 0, end: content.length, text: content } }],
       projectionGeneration: projectionGeneration(),
       source,
     }
@@ -158,7 +182,7 @@ describe('finalized continuity projection', () => {
 
     expect(JSON.parse((getProjectDb()!.prepare(
       'SELECT character_state_candidates AS candidates FROM summary_snapshots WHERE draft_id = ?',
-    ).get(draft.draftId) as { candidates: string }).candidates)).toHaveLength(1)
+    ).get(draft.draftId) as { candidates: string }).candidates).pending).toHaveLength(1)
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
       facts: [],
       characterStateCandidates: [{
@@ -171,15 +195,23 @@ describe('finalized continuity projection', () => {
 
     SummaryRepository.saveFinalizedCharacterStateCandidates({
       ...candidateRequest,
-      candidates: [{ characterName: '林岚', field: 'keyItems', value: '铁制罗盘' }],
+      candidates: [{ ...candidateRequest.candidates[0], value: '铁制罗盘' }],
     })
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]?.characterStateCandidates).toEqual([{
+      characterId: 'synthetic-lin-lan',
       characterName: '林岚',
       field: 'keyItems',
       value: '铁制罗盘',
+      evidence: { start: 0, end: content.length, text: content },
     }])
 
+    const pending = SummaryRepository.listPendingFinalizedCharacterStateCandidates()
+    expect(pending).toHaveLength(1)
+    invalidateContinuityProjectionFrom(getProjectDb()!, 20)
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates()).toEqual(pending)
+    expect(SummaryRepository.readPendingFinalizedCharacterStateCandidate(draftId, pending[0].candidateKey).value).toBe('铁制罗盘')
     invalidateContinuityProjectionFrom(getProjectDb()!, 1)
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates()).toEqual([])
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
       sourceStatus: 'stale',
       characterStateCandidates: [expect.objectContaining({ characterName: '林岚', field: 'keyItems' })],
@@ -188,7 +220,7 @@ describe('finalized continuity projection', () => {
       .toThrow(/失效水位已推进/u)
   })
 
-  it('rejects unbounded or cross-chapter continuity facts', () => {
+  it('rejects cross-chapter continuity facts', () => {
     const content = '定稿正文。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'continuity-invalid-fact',
@@ -210,9 +242,9 @@ describe('finalized continuity projection', () => {
       facts: [{
         category: 'plot',
         entities: [],
-        statement: 'x'.repeat(281),
+        statement: '定稿事实。',
         sourceChapter: 2,
-        evidence: '短证据',
+        evidence: content,
       }],
     })).toThrow('连续性事实参数无效')
   })
@@ -337,7 +369,7 @@ describe('finalized continuity projection', () => {
     })
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
       chapterNotes: '新水位重新提炼：铜钥匙未交出。',
-      sourceStatus: 'current',
+      sourceStatus: 'legacy',
     })
   })
 

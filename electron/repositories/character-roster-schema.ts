@@ -6,6 +6,8 @@ import type { CharacterRosterMigrationState } from '../../src/shared/character-r
  * 角色条目本身始终留在已有的 characters 表中，避免建立并列 JSON 事实源。
  */
 export function ensureCharacterRosterSchema(db: BetterSqlite3.Database): void {
+  // M02 and later are owned by the central lane. Reads must never run legacy DDL.
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='character_identity_meta'").get()) return
   db.exec(`
     CREATE TABLE IF NOT EXISTS character_roster_meta (
       id TEXT PRIMARY KEY CHECK (id = 'main'),
@@ -46,6 +48,11 @@ export function ensureCharacterRosterSchema(db: BetterSqlite3.Database): void {
     db.exec("ALTER TABLE character_roster_meta ADD COLUMN fact_hash TEXT NOT NULL DEFAULT ''")
   }
 
+  initializeCharacterRosterMetadata(db)
+}
+
+/** Classify copied facts without DDL or rewriting an existing roster receipt. */
+export function initializeCharacterRosterMetadata(db: BetterSqlite3.Database): void {
   const hasMeta = db.prepare(
     "SELECT 1 FROM character_roster_meta WHERE id = 'main'",
   ).get()

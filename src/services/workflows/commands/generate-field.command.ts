@@ -54,10 +54,16 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
-    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+    const currentProject = useProjectStore.getState().currentProject
+    if (!currentProject) throw new Error(workflowUiText(params.context, '当前项目已切换，字段生成已停止', 'The current project changed, so field generation stopped.'))
+    const expectedConfig = structuredClone(currentProject.novelConfig)
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params, expectedConfig), {
+      authorInputs: [{ id: 'field:author-config', text: JSON.stringify(expectedConfig) }],
+      operation: `generate-field:${this.fieldKey.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`, promptKeys: ['generate_novel_config_field'], skillStages: ['planning'], output: 'visible-text',
+    })
   }
 
-  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams, expectedConfig: NovelConfig): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (
@@ -74,7 +80,7 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
       ))
     }
 
-    const config = project.novelConfig
+    const config = expectedConfig
     const writingLanguage = workflowWritingLanguage(context)
     const labelPair = FIELD_LABELS[this.fieldKey]
     const label = workflowUiText(context, labelPair[0], labelPair[1])
@@ -127,7 +133,7 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
         throw new Error(safeMessage)
       }
     }
-    let result = await requestFieldCompletion(prompt, `generate-field-${this.fieldKey}`)
+    let result = await requestFieldCompletion(prompt, `generate-field-${this.fieldKey.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`)
     this.assertNotCancelled(context)
     let cleanResult = this.stripThinkingTags(result).trim()
 
@@ -147,7 +153,7 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
           `【纠正规则】上一轮候选无效且已丢弃。只重新生成“全局写作要求”字段：${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} 条，每条独占一行，总计不超过 ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} 字符。只输出规则正文，不要标题、解释、Markdown 或逐章大纲。`,
           `[Correction contract] The previous candidate was invalid and discarded. Regenerate only the Global writing guidance field: ${GENERATED_GLOBAL_GUIDANCE_MIN_RULES}–${GENERATED_GLOBAL_GUIDANCE_MAX_RULES} rules, one rule per line, within ${GENERATED_GLOBAL_GUIDANCE_MAX_CHARS} characters total. Output only the rules, with no title, explanation, Markdown, or chapter-by-chapter outline.`,
         )}`,
-        'generate-field-globalGuidance-replacement',
+        'generate-field-global-guidance-replacement',
       )
       this.assertNotCancelled(context)
       cleanResult = this.stripThinkingTags(result).trim()
@@ -177,7 +183,13 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
     this.assertNotCancelled(context)
     const { updateNovelConfig, saveProject } = projectState
     const expandedResult = preserveAuthorText(config[this.fieldKey], cleanResult)
-    updateNovelConfig({ [this.fieldKey]: expandedResult }, projectSession)
+    const mainOwned = this.requireGenerationExecution().mainOwned
+    let generatedSaved = false
+    if (mainOwned) {
+      const handle = context.mainGenerationRunHandle
+      if (!handle) throw new Error('GENERATION_COMMIT_HANDLE_REQUIRED')
+      generatedSaved = await projectState.commitGeneratedNovelConfig({ [this.fieldKey]: expandedResult }, expectedConfig, projectSession, handle)
+    } else updateNovelConfig({ [this.fieldKey]: expandedResult }, projectSession)
     if (!sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
@@ -189,7 +201,7 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
       ))
     }
     this.assertNotCancelled(context)
-    const saved = await saveProject(projectSession)
+    const saved = mainOwned ? generatedSaved : await saveProject(projectSession)
     this.assertNotCancelled(context)
     projectState = useProjectStore.getState()
     if (!saved) {

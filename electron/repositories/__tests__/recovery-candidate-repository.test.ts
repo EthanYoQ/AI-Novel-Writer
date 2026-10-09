@@ -3,7 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, initProjectDatabase } from '../../database'
+import { closeProjectDatabase } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { searchKnowledge } from '../../knowledge-base'
 import { BlueprintRepository } from '../blueprint-repository'
 import { CharacterRepository } from '../character-repository'
@@ -35,12 +36,36 @@ beforeEach(() => {
   })
 })
 
+function freezeCandidate(candidateId: string): void {
+  fs.writeFileSync(path.join(projectRoot, '.ai-novel', 'portable-runtime-freeze.json'), JSON.stringify({
+    version: 1, originProjectId: '11111111-1111-4111-8111-111111111111', snapshotGeneration: 'snapshot-1',
+    nonReplayable: true, requiresRuntimeFreezeGuard: true, avatarReferenceProjections: [], records: [{
+      projectionId: `history:recovery_candidates:${candidateId}`, table: 'recovery_candidates', recordId: candidateId,
+      terminalState: 'pending', projection: {}, projectionHash: 'a'.repeat(64), excludedFields: [],
+      nonReplayable: true, originalReceiptVerified: false,
+    }],
+  }), { mode: 0o600 })
+}
+
 afterEach(() => {
   closeProjectDatabase()
   fs.rmSync(projectRoot, { recursive: true, force: true })
 })
 
 describe('RecoveryCandidateRepository project-local seam', () => {
+  it('keeps imported pending history visible but refuses every old-state mutation', () => {
+    const old = RecoveryCandidateRepository.record({ runId: 'old-run', stepId: 'generate-draft', projectId: 'project-recovery', chapterNumber: 3,
+      chapterTitle: source.title, source, sourceDraft: null, visibleText: '历史恢复正文', failureCode: 'NETWORK_ERROR', failureReason: 'old' })
+    freezeCandidate(old.candidateId)
+    expect(RecoveryCandidateRepository.listPending()).toEqual([expect.objectContaining({ candidateId: old.candidateId })])
+    expect(() => RecoveryCandidateRepository.updatePending(old.candidateId, '不应写入')).toThrow('PORTABLE_RUNTIME_FROZEN')
+    expect(() => RecoveryCandidateRepository.resolve(old.candidateId, 'discarded')).toThrow('PORTABLE_RUNTIME_FROZEN')
+    const fresh = RecoveryCandidateRepository.record({ runId: 'new-run', stepId: 'generate-draft', projectId: 'project-recovery', chapterNumber: 3,
+      chapterTitle: source.title, source, sourceDraft: null, visibleText: '新恢复正文', failureCode: 'NETWORK_ERROR', failureReason: 'new' })
+    expect(() => RecoveryCandidateRepository.resolve(fresh.candidateId, 'discarded')).not.toThrow()
+    expect(RecoveryCandidateRepository.listPending().map(item => item.candidateId)).toEqual([old.candidateId])
+  })
+
   it('persists only visible prose, survives reopen, and stays outside formal facts and search', async () => {
     const recorded = RecoveryCandidateRepository.record({
       runId: 'run-interrupted',

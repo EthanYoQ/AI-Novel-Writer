@@ -11,6 +11,9 @@ import { Button } from '../ui/Button'
 import { Textarea } from '../ui/Textarea'
 import { useLocaleStore } from '../../stores/locale-store'
 import { AUDIENCE_EN, GENRE_EN } from '../editor/novel-config-labels'
+import { ipc } from '../../services/ipc-client'
+import { resolveWritingLanguage } from '../../shared/writing-language'
+import { assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS, DEFAULT_PLANNING_TARGET_UNITS, parsePlanningTargetUnits, PLANNING_ACTION_CHAPTER_LIMIT, PLANNING_TARGET_UNITS_LIMIT } from '../../shared/plot-outline-contract'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
@@ -42,11 +45,9 @@ interface Props {
     selectedSteps: ArchStepKey[],
     stepGuidance: Record<string, string>,
     synopsisRange?: { from: number; to: number },
+    targetUnits?: number,
   ) => Promise<void>
 }
-
-/** 默认视作「全书一口气生成」的章数阈值，超过时提示分批。 */
-const SCOPE_WARNING_THRESHOLD = 20
 
 /** 生成架构确认弹框（含步骤勾选） */
 export default function ArchitectureConfirmDialog({
@@ -66,9 +67,23 @@ export default function ArchitectureConfirmDialog({
   const [stepGuidance, setStepGuidance] = useState<Record<string, string>>({})
   // 是否展开指导输入区
   const [showGuidance, setShowGuidance] = useState(false)
-  // 情节大纲本次生成范围（起章/止章；空 = 1..total 全书）
   const [synopsisFrom, setSynopsisFrom] = useState('')
   const [synopsisTo, setSynopsisTo] = useState('')
+  const [targetUnits, setTargetUnits] = useState(String(DEFAULT_PLANNING_TARGET_UNITS))
+  const [preferenceLoading, setPreferenceLoading] = useState(true)
+  const [isConfirming, setIsConfirming] = useState(false)
+  const [guardError, setGuardError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!isOpen) return
+    let disposed = false
+    void ipc.invoke('config:get').then(config => {
+      if (!disposed) setTargetUnits(String(parsePlanningTargetUnits(config.outlineTargetUnits)))
+    }).catch(error => {
+      if (!disposed) setGuardError(error instanceof Error ? error.message : String(error))
+    }).finally(() => { if (!disposed) setPreferenceLoading(false) })
+    return () => { disposed = true; setPreferenceLoading(true) }
+  }, [isOpen])
 
   // 每次弹窗打开时重置选中状态；续批入口会预填起止章并勾选情节大纲
   const resetChecked = useCallback(() => {
@@ -76,11 +91,11 @@ export default function ArchitectureConfirmDialog({
     if (initialSynopsisRange) {
       defaults.synopsis = true
       setSynopsisFrom(String(initialSynopsisRange.from))
-      setSynopsisTo(String(initialSynopsisRange.to))
+      setSynopsisTo(String(Math.min(initialSynopsisRange.to, initialSynopsisRange.from + PLANNING_ACTION_CHAPTER_LIMIT - 1)))
     } else {
       const total = Number(currentProject?.novelConfig.totalChapters) || 0
-      setSynopsisFrom(total > SCOPE_WARNING_THRESHOLD ? '1' : '')
-      setSynopsisTo(total > SCOPE_WARNING_THRESHOLD ? String(SCOPE_WARNING_THRESHOLD) : '')
+      setSynopsisFrom('1')
+      setSynopsisTo(String(Math.min(total, DEFAULT_PLANNING_ACTION_CHAPTERS)))
     }
     setChecked(defaults)
   }, [archStatus, currentProject?.novelConfig.totalChapters, initialSelectedSteps, initialSynopsisRange])
@@ -91,9 +106,6 @@ export default function ArchitectureConfirmDialog({
     }
     wasOpen.current = isOpen
   }, [isOpen, resetChecked])
-
-  const [isConfirming, setIsConfirming] = useState(false)
-  const [guardError, setGuardError] = useState<string | null>(null)
 
   if (!currentProject) return null
   const config = currentProject.novelConfig
@@ -108,24 +120,12 @@ export default function ArchitectureConfirmDialog({
   const selectedSteps = (Object.keys(checked) as ArchStepKey[]).filter(k => checked[k])
   const noneSelected = selectedSteps.length === 0
 
-  // 情节大纲本次生成范围：大项目默认 1–20；非空非法值不得回落为全书。
   const totalChapters = Number(config.totalChapters) > 0 ? Number(config.totalChapters) : 0
   const resolveSynopsisRange = (): { ok: true; range?: { from: number; to: number } } | { ok: false } => {
-    if (!checked.synopsis || totalChapters <= 0) return { ok: true }
-    const parseBound = (value: string): { empty: true } | { empty: false; value: number } | null => {
-      if (!value.trim()) return { empty: true }
-      const parsed = Number(value)
-      return Number.isSafeInteger(parsed) && parsed > 0 ? { empty: false, value: parsed } : null
-    }
-    const parsedFrom = parseBound(synopsisFrom)
-    const parsedTo = parseBound(synopsisTo)
-    if (!parsedFrom || !parsedTo) return { ok: false }
-    const from = parsedFrom.empty ? 1 : parsedFrom.value
-    const to = parsedTo.empty ? totalChapters : parsedTo.value
-    if (from > totalChapters || to > totalChapters || from > to) return { ok: false }
-    return from === 1 && to === totalChapters
-      ? { ok: true }
-      : { ok: true, range: { from, to } }
+    if (!checked.synopsis) return { ok: true }
+    const range = { from: Number(synopsisFrom), to: Number(synopsisTo) }
+    try { assertPlanningActionRange(range) } catch { return { ok: false } }
+    return range.to <= totalChapters ? { ok: true, range } : { ok: false }
   }
 
   const handleConfirm = async () => {
@@ -143,8 +143,8 @@ export default function ArchitectureConfirmDialog({
       const resolution = resolveSynopsisRange()
       if (!resolution.ok) {
         setGuardError(text(
-          `情节大纲范围无效：应在第 1–${totalChapters} 章之间且起始章 ≤ 结束章。`,
-          `Invalid plot-outline range: it must stay within chapters 1-${totalChapters} with from ≤ to.`,
+          `情节大纲范围无效。请选择第 1–${totalChapters} 章内连续的 1–${PLANNING_ACTION_CHAPTER_LIMIT} 章。`,
+          `Invalid plot-outline range. Select 1-${PLANNING_ACTION_CHAPTER_LIMIT} consecutive chapters within chapters 1-${totalChapters}.`,
         ))
         return
       }
@@ -159,7 +159,21 @@ export default function ArchitectureConfirmDialog({
       }
 
       setGuardError(null)
-      await onConfirm(selectedSteps, stepGuidance, resolution.range)
+      let target: number | undefined
+      if (checked.synopsis) {
+        try { target = parsePlanningTargetUnits(Number(targetUnits)) } catch {
+          setGuardError(text(`每章大纲目标须为 1–${PLANNING_TARGET_UNITS_LIMIT} 的整数。`, `The outline target must be an integer from 1 to ${PLANNING_TARGET_UNITS_LIMIT}.`))
+          return
+        }
+        try {
+          const saved = await ipc.invoke('config:set', { outlineTargetUnits: target })
+          if (!saved.success) throw new Error(saved.error)
+        } catch {
+          setGuardError(text('目标字数偏好保存失败。请重试，输入已保留。', 'Could not save the target preference. Your input is retained. Please retry.'))
+          return
+        }
+      }
+      await onConfirm(selectedSteps, stepGuidance, resolution.range, target)
       onClose()
       const stepNames = selectedSteps.map(k => {
         const item = ARCH_FILES.find(f => f.key === k)
@@ -284,7 +298,6 @@ export default function ArchitectureConfirmDialog({
             })}
           </div>
 
-          {/* 情节大纲 —— 所有项目都可选范围；大项目默认首批 1–20。 */}
           {checked.synopsis && totalChapters > 0 && (
             <div
               className="rounded-lg p-3 space-y-2"
@@ -299,15 +312,7 @@ export default function ArchitectureConfirmDialog({
                 className="text-xs leading-relaxed m-0"
                 style={{ color: 'var(--color-text-secondary)' }}
               >
-                  {totalChapters > SCOPE_WARNING_THRESHOLD
-                    ? text(
-                        `全书共 ${totalChapters} 章，已默认本次生成第 1–20 章；完成后可从下一章续批，已确认部分不会被覆盖。`,
-                        `The book spans ${totalChapters} chapters, so this batch defaults to chapters 1-20. Continue from the next chapter afterward; confirmed content will not be overwritten.`,
-                      )
-                    : text(
-                        `全书共 ${totalChapters} 章；可按需缩小本次生成范围。`,
-                        `The book spans ${totalChapters} chapters; narrow this batch if needed.`,
-                      )}
+                  {text(`全书共 ${totalChapters} 章，每次最多生成 ${PLANNING_ACTION_CHAPTER_LIMIT} 章。完成后可继续下一批。`, `The book has ${totalChapters} chapters. Generate up to ${PLANNING_ACTION_CHAPTER_LIMIT} chapters per action, then continue with the next batch.`)}
                 </p>
                 <div className="flex items-center gap-1.5 text-xs">
                   <span style={{ color: 'var(--color-text-muted)' }}>{text('第', 'From ch.')}</span>
@@ -343,9 +348,21 @@ export default function ArchitectureConfirmDialog({
                     }}
                   />
                   <span className="text-xs flex-1" style={{ color: 'var(--color-text-muted)' }}>
-                    {text('章（留空起始=1、结束=全书）', 'chapter (leave empty: from 1 / to the whole book)')}
+                    {text('章', 'chapter')}
                   </span>
                 </div>
+                <label className="block text-xs">
+                  {resolveWritingLanguage(config.writingLanguage) === 'zh-CN'
+                    ? text('每章大纲目标字数', 'Outline target characters per chapter')
+                    : text('每章大纲目标词数', 'Outline target words per chapter')}
+                  <input
+                    type="number" min={1} max={PLANNING_TARGET_UNITS_LIMIT} step={1}
+                    value={targetUnits} disabled={preferenceLoading}
+                    onChange={event => setTargetUnits(event.target.value)}
+                    className="ml-2 w-20 rounded-md border px-2 py-1.5 bg-[var(--color-bg)]"
+                  />
+                </label>
+                <p className="text-xs text-[var(--color-text-muted)]">{text('仅作生成目标，实际内容可多可少。', 'A generation target. Actual content may be longer or shorter.')}</p>
             </div>
           )}
 
@@ -401,7 +418,7 @@ export default function ArchitectureConfirmDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={isConfirming}>{text('取消', 'Cancel')}</Button>
-          <Button variant="default" onClick={handleConfirm} disabled={noneSelected || isConfirming}>
+          <Button variant="default" onClick={handleConfirm} disabled={noneSelected || isConfirming || (checked.synopsis && preferenceLoading)}>
             <Wand2 size={13} />
             {isConfirming ? text('校验中...', 'Validating...') : text(`确认生成（${selectedSteps.length}/4）`, `Generate (${selectedSteps.length}/4)`)}
           </Button>

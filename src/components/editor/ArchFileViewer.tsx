@@ -1,20 +1,25 @@
+import { LegacyRosterRecoveryPanel } from './LegacyRosterRecoveryPanel'
+import { resourceWriteAllowed } from '../../shared/project-paths'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Save, RefreshCw, Sparkles, Loader2, AlertTriangle, FileText } from 'lucide-react'
 import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
-import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore, type PlanningRecoverySaveSnapshot } from '../../stores/editor-store'
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
-import { CORE_FIELD_MAP, parseCoreField } from '../../services/vela-protocol'
+import { CORE_FIELD_MAP, parseCoreField } from '../../services/resource-protocol'
 import { appErrorMessage } from '../../i18n/app-errors'
 import { toast } from '../ui/Toast'
 import { CharacterCardImportButton } from '../characters/CharacterCardImportButton'
 import CodeMirrorEditor from './CodeMirrorEditor'
+import { SaveFeedback, type SaveOutcome } from './save-feedback'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
+import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
+import { renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix } from '../../shared/plot-outline-contract'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
 import {
@@ -99,8 +104,31 @@ function ArchFileViewerSession({
   const meta = stepKey ? ARCH_META[stepKey] : null
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
+  const recoveryTab = useEditorStore(s => s.tabs.find(tab => tab.id === tabId && tab.planningRecovery))
+  const [recovery, setRecovery] = useState(recoveryTab?.planningRecovery)
+  const [authorEnd, setAuthorEnd] = useState(String(recoveryTab?.planningSaveEnd ?? ''))
+  const [recoveryError, setRecoveryError] = useState('')
+  const [continuing, setContinuing] = useState(false)
+  const recoverySession = useRef(captureProjectSession(currentProject))
+  const authorEndRef = useRef(authorEnd)
+  const recoveryRef = useRef(recovery)
+  const hasRecovery = Boolean(recoveryTab)
   const currentProjectKey = currentProject?.path
   const projectMatches = isArchProjectCurrent(projectKey, currentProjectKey)
+  const planningTargetUnit = recovery?.plotOutline?.sourceExpected.writingLanguage === 'en-US' ? text('词', 'words') : text('字', 'characters')
+
+  const refreshRecovery = useCallback(async () => {
+    const session = recoverySession.current
+    const original = recoveryTab?.planningRecovery
+    if (!session || !original || !isProjectSessionCurrent(session)) return
+    const next = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: original.handle })
+    if (isProjectSessionCurrent(session)) { recoveryRef.current = next; setRecovery(next) }
+    return next
+  }, [recoveryTab?.planningRecovery])
+  useEffect(() => {
+    if (!hasRecovery) return
+    void refreshRecovery().catch(error => setRecoveryError(appErrorMessage(useLocaleStore.getState().locale, error)))
+  }, [hasRecovery, refreshRecovery])
 
   // 磁盘上的内容（已保存的基准）
   const savedContentRef = useRef(initialSavedContent)
@@ -110,6 +138,7 @@ function ArchFileViewerSession({
   const [editorContent, setEditorContent] = useState(initialContent)
 
   const [saving, setSaving] = useState(false)
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const [loading, setLoading] = useState(false)
   const [showDialog, setShowDialog] = useState(false)
   const [checkingArch, setCheckingArch] = useState(false)
@@ -169,6 +198,7 @@ function ArchFileViewerSession({
     if (isCharacterProjection) return
     reloadGateRef.current.recordContentChange()
     setLoading(false)
+    setSaveOutcome('idle')
     currentContentRef.current = md
     const storeAction = archEditStoreAction({
       savedContent: savedContentRef.current,
@@ -180,7 +210,7 @@ function ArchFileViewerSession({
     writeArchEditState(useEditorStore.getState(), tabId, md, storeAction)
   }, [isCharacterProjection, tabId])
 
-  /** 保存（统一走 vela://core/ DB 路径） */
+  /** 保存（统一走 ai-novel://core/ DB 路径） */
   const handleSave = useCallback(async (md: string, propagateFailure = false) => {
     if (isCharacterProjection) return
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
@@ -190,8 +220,63 @@ function ArchFileViewerSession({
     reloadGateRef.current.invalidate()
     setLoading(false)
     setSaving(true)
+    setSaveOutcome('idle')
+    const savedSnapshot = useEditorStore.getState().tabs.find(tab => tab.id === tabId)
+    let submittedSnapshot = { content: md, contentRevision: savedSnapshot?.contentRevision ?? 0 }
     try {
-      if (filePath.startsWith('vela://core/')) {
+      if (!resourceWriteAllowed(filePath)) throw new Error('资源只读或无效')
+      if (recoveryRef.current) {
+        const original = recoveryRef.current
+        const session = recoverySession.current
+        if (!session || !isProjectSessionCurrent(session)) throw new Error(text('项目会话已切换，请重新打开恢复稿', 'The project session changed. Reopen the recovery draft.'))
+        const fresh = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: original.handle })
+        const progress = original.plotOutline
+        const candidate = fresh.plotOutlineRecovery
+        const tab = useEditorStore.getState().tabs.find(tab => tab.id === tabId)
+        const operationId = tab?.planningSaveOperationId
+        if (!progress || !candidate || !operationId || candidate.leaseEpoch !== session.leaseId) throw new Error(text('恢复内容暂时无法读取，请重新打开恢复稿', 'Recovery content is unavailable. Reopen the recovery draft.'))
+        const pending = tab?.planningSaveSnapshot
+        if (pending?.status === 'saved' || candidate.saved && !pending) throw new Error(text('本次恢复已保存，后续修改仅供复制。', 'This recovery is saved. Further edits can only be copied.'))
+        if (candidate.writeState.kind !== 'ready' && !candidate.saved) throw new Error(text('当前无法保存，请等待生成结束或检查来源变化', 'Wait for generation to finish or check changed sources before saving.'))
+        let submission = pending
+        if (!submission) {
+          const committedRange = { from: progress.range.from, to: Number(authorEndRef.current) }
+          let synopsis = md.trimEnd()
+          if (!validPlotOutlineAuthorPrefix(synopsis, progress, committedRange)) {
+            const expected = progress.sourceExpected
+            const title = renderPlotOutlineSynopsis('', expected.totalChapters, expected)
+            const generatedTo = Math.min(progress.range.from + (progress.composition?.chapters?.length ?? 0), progress.range.to)
+            const oldTail = renderPlotOutlineSynopsis('', generatedTo, expected).slice(title.length)
+            if (oldTail && candidate.draft.endsWith(oldTail) && synopsis.endsWith(oldTail)) synopsis = synopsis.slice(0, -oldTail.length)
+            synopsis = synopsis.trimEnd() + renderPlotOutlineSynopsis('', committedRange.to, expected).slice(title.length)
+          }
+          if (!validPlotOutlineAuthorPrefix(synopsis, progress, committedRange)) throw new Error(text('请保留连续完整章节，并移除所选保存终点之后的未完成内容。原有范围外内容须保持不变。', 'Keep complete consecutive chapters and remove incomplete content after the selected ending chapter. Preserve the original content outside this range.'))
+          submission = {
+            ...submittedSnapshot, status: 'pending', channel: 'db:project-core-synopsis-commit',
+            request: { synopsis, expected: progress.sourceExpected,
+              authorRecovery: { sourceHandle: candidate.sourceHandle, leaseEpoch: candidate.leaseEpoch, operationId, committedRange } },
+          } satisfies PlanningRecoverySaveSnapshot
+          useEditorStore.getState().setPlanningSaveSnapshot(tabId, submission)
+        }
+        if (submission.channel !== 'db:project-core-synopsis-commit') throw new Error('INVALID_PLANNING_SAVE_CHANNEL')
+        const result = await ipc.invokeWithProjectSession(session, 'db:project-core-synopsis-commit', {
+          ...submission.request, authorRecovery: { ...submission.request.authorRecovery, leaseEpoch: candidate.leaseEpoch },
+        }, projectKey)
+        if (!result.success && !pending && isProjectSessionCurrent(session)) useEditorStore.getState().setPlanningSaveSnapshot(tabId, undefined)
+        requireIpcSuccess(result, '保存恢复大纲')
+        if (!isProjectSessionCurrent(session)) return
+        submittedSnapshot = { ...submission, content: submission.request.synopsis }
+        const currentTab = useEditorStore.getState().tabs.find(tab => tab.id === tabId)
+        if (submission.content !== submittedSnapshot.content && currentTab?.content === submission.content
+          && (currentTab.contentRevision ?? 0) === submission.contentRevision && currentContentRef.current === submission.content) {
+          currentContentRef.current = submittedSnapshot.content
+          setEditorContent(submittedSnapshot.content)
+          useEditorStore.getState().syncTabContent(tabId, submittedSnapshot.content)
+          submittedSnapshot.contentRevision = useEditorStore.getState().tabs.find(tab => tab.id === tabId)?.contentRevision ?? 0
+        }
+        useEditorStore.getState().setPlanningSaveSnapshot(tabId, { ...submission, status: 'saved' })
+        setRecoveryError('')
+      } else if (filePath.startsWith('ai-novel://core/')) {
         const dbField = parseCoreField(filePath)
         if (!dbField) return
         requireIpcSuccess(await ipc.invokeWithProjectSession(
@@ -217,18 +302,28 @@ function ArchFileViewerSession({
       if (isProjectSessionCurrent(projectSession)) {
         reloadGateRef.current.invalidate()
         setLoading(false)
-        savedContentRef.current = md
-        if (didArchSaveSettle(md, currentContentRef.current)) {
+        const savedContent = submittedSnapshot.content
+        savedContentRef.current = savedContent
+        if (recoveryRef.current) useEditorStore.getState().settleTabSave(tabId, submittedSnapshot)
+        const settled = recoveryRef.current
+          ? !useEditorStore.getState().tabs.find(tab => tab.id === tabId)?.dirty
+          : didArchSaveSettle(savedContent, currentContentRef.current)
+        if (settled) {
           setIsDirty(false)
           setRefreshBlockedMessage(null)
-          useEditorStore.getState().markTabSaved(tabId, md)
+          if (!recoveryRef.current) useEditorStore.getState().markTabSaved(tabId, savedContent)
+          setSaveOutcome('saved')
         } else {
           setIsDirty(true)
-          useEditorStore.getState().updateTabContent(tabId, currentContentRef.current)
+          if (!recoveryRef.current) useEditorStore.getState().updateTabContent(tabId, currentContentRef.current)
+          setSaveOutcome('idle')
         }
+        if (recoveryRef.current) await refreshRecovery()
       }
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
+        if (recoveryRef.current) setRecoveryError(appErrorMessage(useLocaleStore.getState().locale, error))
+        setSaveOutcome('failed')
         toast.error(appErrorMessage(useLocaleStore.getState().locale, error))
       }
       // Exit-save must reject so the caller cannot close an unsaved document.
@@ -236,7 +331,7 @@ function ArchFileViewerSession({
     } finally {
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
-  }, [filePath, isCharacterProjection, projectKey, tabId])
+  }, [filePath, isCharacterProjection, projectKey, tabId, refreshRecovery, text])
 
   useEffect(() => {
     if (isCharacterProjection) return
@@ -253,6 +348,15 @@ function ArchFileViewerSession({
 
   /** 从 DB 重新加载（AI 生成后刷新用） */
   const handleReload = useCallback(async () => {
+    if (recoveryRef.current) {
+      try {
+        await refreshRecovery()
+        setRecoveryError('')
+      } catch (error) {
+        setRecoveryError(appErrorMessage(useLocaleStore.getState().locale, error))
+      }
+      return
+    }
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
       return
@@ -274,7 +378,7 @@ function ArchFileViewerSession({
     setLoading(true)
     try {
       let newContent = ''
-      if (filePath.startsWith('vela://core/')) {
+      if (filePath.startsWith('ai-novel://core/')) {
         const core = await ipc.invokeWithProjectSession(
           projectSession,
           'db:project-core-get',
@@ -336,7 +440,7 @@ function ArchFileViewerSession({
         setLoading(false)
       }
     }
-  }, [filePath, projectKey, tabId])
+  }, [filePath, projectKey, tabId, refreshRecovery])
 
   useEffect(() => {
     const reloadGate = reloadGateRef.current
@@ -366,6 +470,7 @@ function ArchFileViewerSession({
     selectedSteps: ArchStepKey[],
     stepGuidance: Record<string, string>,
     synopsisRange?: { from: number; to: number },
+    targetUnits?: number,
   ) => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
@@ -377,6 +482,7 @@ function ArchFileViewerSession({
       selectedSteps,
       stepGuidance,
       synopsisRange,
+      targetUnits,
     }, projectSession)
   }
 
@@ -416,6 +522,23 @@ function ArchFileViewerSession({
     }
   }
 
+  const continuePlanning = async () => {
+    if (continuing || saving) return
+    setContinuing(true)
+    try {
+      const next = await refreshRecovery()
+      const continuation = next?.planningContinuation
+      const session = recoverySession.current
+      if (!session || !isProjectSessionCurrent(session) || !continuation?.remainingRange
+        || !['ready', 'continued'].includes(continuation.state)) throw new Error(text('当前不能继续，请先保存完整章节或等待生成结束', 'Save completed chapters or wait for generation to finish before continuing.'))
+      await useWorkflowStore.getState().startWorkflow(createArchitectureWorkflow({
+        projectPath: projectKey, projectSession: session, selectedSteps: ['synopsis'],
+        synopsisRange: continuation.remainingRange, targetUnits: continuation.targetUnits, restartFrom: continuation.sourceHandle,
+      }))
+      await refreshRecovery()
+    } catch (error) { setRecoveryError(appErrorMessage(useLocaleStore.getState().locale, error)) }
+    finally { setContinuing(false) }
+  }
   const generated = initialContent.length > 50 && !initialContent.includes('待生成')
 
   const rosterPresentation = stepKey === 'characters'
@@ -477,6 +600,7 @@ function ArchFileViewerSession({
           {isDirty && !saving && (
             <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: 'var(--color-warning)' }} title={text('有未保存的修改', 'Unsaved changes')} />
           )}
+          <SaveFeedback dirty={isDirty} saving={saving} outcome={saveOutcome} />
 
           {/* 刷新按钮 */}
           <Button
@@ -494,8 +618,8 @@ function ArchFileViewerSession({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleSave(currentContentRef.current)}
-              disabled={saving || !projectMatches}
+              onClick={() => { void handleSave(currentContentRef.current) }}
+              disabled={saving || !projectMatches || recoveryTab?.planningSaveSnapshot?.status === 'saved' || Boolean(recovery && recovery.plotOutlineRecovery?.writeState.kind !== 'ready' && !(recovery.plotOutlineRecovery?.saved && recoveryTab?.planningSaveSnapshot?.status === 'pending'))}
               title={text('保存（Cmd+S）', 'Save (Cmd+S)')}
             >
               <Save size={12} />
@@ -521,7 +645,7 @@ function ArchFileViewerSession({
           )}
 
           {/* AI 生成按钮 */}
-          {stepKey && meta && (
+          {stepKey && meta && !recovery && (
             <Button
               variant="ai"
               size="sm"
@@ -538,6 +662,24 @@ function ArchFileViewerSession({
         </div>
       </div>
 
+      {recovery && <div className="px-3 py-2 text-xs space-y-2" aria-label={text('大纲恢复', 'Outline recovery')}>
+        {recoveryTab?.planningSaveSnapshot?.status === 'saved' && <p>{text('本次恢复已保存，后续修改仅供复制。', 'This recovery is saved. Further edits can only be copied.')}</p>}
+        <p>{text('这是可编辑的恢复稿。保存只写入本地，不会调用模型。请用“## 第1章：标题”这样的章标题，保留连续完整章节。', 'Edit this recovery draft. Saving is local and does not call a model. Keep complete consecutive chapters with headings such as “## Chapter 1: Title”.')}</p>
+        <label>{text('保存到第几章', 'Last complete chapter')} <input type="number" min={recovery.plotOutline?.range.from} max={recovery.plotOutline?.range.to} value={authorEnd} onChange={event => {
+          const value = event.target.value
+          authorEndRef.current = value; setAuthorEnd(value)
+          useEditorStore.setState(state => ({ tabs: state.tabs.map(tab => tab.id === tabId ? { ...tab, planningSaveEnd: value } : tab) }))
+        }} /></label>
+        <p>{recovery.planningContinuation?.remainingRange
+          ? text(`待完成第 ${recovery.planningContinuation.remainingRange.from} 至 ${recovery.planningContinuation.remainingRange.to} 章，每章目标 ${recovery.planningContinuation.targetUnits} ${planningTargetUnit}。`, `Chapters ${recovery.planningContinuation.remainingRange.from} to ${recovery.planningContinuation.remainingRange.to} remain. Target ${recovery.planningContinuation.targetUnits} ${planningTargetUnit} per chapter.`)
+          : text('本次所选章节已保存。', 'The selected chapters are saved.')}</p>
+        {recovery.plotOutlineRecovery?.writeState.kind === 'blocked' && <p>{text('生成尚在进行、来源已变化或本稿已保存时，不能覆盖正式内容。草稿仍可编辑和复制。', 'Active generation, changed sources or an already saved draft prevent replacing saved content. You can still edit and copy this draft.')}</p>}
+        <button type="button" className="btn-secondary" disabled={continuing || saving || !projectMatches || !recovery.planningContinuation?.remainingRange || !['ready', 'continued'].includes(recovery.planningContinuation.state)} onClick={() => { void continuePlanning() }}>{text('继续生成缺少的章节', 'Generate remaining chapters')}</button>
+        <details><summary>{text('原始候选', 'Original candidate')}</summary><pre className="whitespace-pre-wrap max-h-40 overflow-auto">{recoveryTab?.originalContent}</pre></details>
+        {recoveryError && <p role="alert">{recoveryError}</p>}
+      </div>}
+
+      {projectMatches && stepKey === 'characters' && <LegacyRosterRecoveryPanel onRecover={handleRepairCharacterRoster} busy={extracting} />}
       {stepKey === 'characters' && rosterPresentation && (
         <div
           role="status"

@@ -21,11 +21,24 @@ afterEach(() => {
 })
 
 describe('config-utils', () => {
-  it('uses an explicit AI_NOVEL_VELA_HOME only when a controlled environment provides one', async () => {
+  it('imports without creating or reading global configuration and rejects early writes', async () => {
+    const root = createTemporaryDirectory()
+    vi.stubEnv('AI_NOVEL_VELA_HOME', path.join(root, 'legacy'))
+    vi.stubEnv('AI_NOVEL_APP_DATA_HOME', path.join(root, 'canonical'))
+    const mkdir = vi.spyOn(fs, 'mkdirSync')
+    const write = vi.spyOn(fs, 'writeFileSync')
+    const configUtils = await import('../config-utils')
+    expect(() => configUtils.writeJsonFile(configUtils.GLOBAL_CONFIG_PATH, {})).toThrow('GLOBAL_DATA_NOT_READY')
+    expect(mkdir).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+    expect(fs.readdirSync(root)).toEqual([])
+  })
+  it('treats AI_NOVEL_VELA_HOME as legacy source only and blocks pre-coordinator writes', async () => {
     vi.stubEnv('AI_NOVEL_VELA_HOME', 'C:/temp/isolated-vela-home')
     const configUtils = await import('../config-utils')
 
-    expect(configUtils.VELA_HOME).toBe('C:/temp/isolated-vela-home')
+    expect(configUtils.VELA_HOME).not.toBe('C:/temp/isolated-vela-home')
+    expect(() => configUtils.ensureVelaHome()).toThrow('GLOBAL_DATA_NOT_READY')
   })
 
   it('atomically replaces a JSON file with a complete parseable document', async () => {
@@ -108,6 +121,8 @@ describe('config-utils', () => {
   it('preserves the full global config when the update preferences store writes through it', async () => {
     const velaHome = createTemporaryDirectory()
     vi.stubEnv('AI_NOVEL_VELA_HOME', velaHome)
+    const target = createTemporaryDirectory()
+    vi.stubEnv('AI_NOVEL_APP_DATA_HOME', target)
     const configUtils = await import('../config-utils')
     const { GlobalConfigUpdatePreferencesStore } = await import(
       '../../services/update-preferences-store'
@@ -117,7 +132,10 @@ describe('config-utils', () => {
       locale: 'zh-CN' as const,
       customSetting: 'preserve-me',
     }
-    fs.writeFileSync(configUtils.GLOBAL_CONFIG_PATH, JSON.stringify(existingConfig), 'utf-8')
+    fs.writeFileSync(path.join(velaHome, 'config.json'), JSON.stringify(existingConfig), 'utf-8')
+    const migration = await import('../../services/global-data-migration')
+    const result = migration.runGlobalDataMigration({ legacySource: velaHome, canonicalTarget: target, userData: createTemporaryDirectory(), exclusiveAccess: true })
+    migration.activateGlobalData(result)
 
     const store = new GlobalConfigUpdatePreferencesStore()
     const preferences = { lastAutomaticCheckDate: '2026-07-25' }

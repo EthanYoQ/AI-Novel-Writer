@@ -13,10 +13,11 @@ import DirectoryConfigDialog from '../DirectoryConfigDialog'
 
 let root: Root
 let container: HTMLDivElement
-let invoke: ReturnType<typeof vi.fn>
+let invoke: ReturnType<typeof vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>>
 let authoritativeNextChapter: number
 let authorityGap: number | null
 let blueprintChapterNumbers: number[]
+let planningPreferences: { outlineTargetUnits?: number; blueprintTargetUnits?: number }
 
 const project = {
   id: 'dialogs', sessionLease: 'lease-dialogs', name: 'Dialogs', path: 'C:\\novels\\dialogs',
@@ -31,6 +32,7 @@ beforeEach(() => {
   authoritativeNextChapter = 1
   authorityGap = null
   blueprintChapterNumbers = []
+  planningPreferences = {}
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: project as never })
   useWorkflowStore.setState({
@@ -40,7 +42,15 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
-  invoke = vi.fn(async (channel: string) => {
+  invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'config:get') return planningPreferences
+    if (channel === 'config:set') {
+      const patch = args[0]
+      if (typeof patch !== 'object' || patch === null) throw new Error('Invalid preference patch')
+      planningPreferences = { ...planningPreferences, ...patch }
+      return { success: true }
+    }
+    if (channel === 'generation:list-directory-progress') return []
     if (channel === 'db:blueprint-character-sync-list-pending') return []
     if (channel === 'db:blueprint-get-all') {
       return blueprintChapterNumbers.map(chapterNumber => ({ chapterNumber }))
@@ -62,7 +72,7 @@ beforeEach(() => {
         }
     return { success: true }
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -80,7 +90,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   useProjectStore.setState({ currentProject: null })
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
 describe('workflow launch dialogs', () => {
@@ -222,7 +232,7 @@ describe('workflow launch dialogs', () => {
     await expect.element(page.getByRole('dialog')).toBeVisible()
   })
 
-  it('defaults a large-book synopsis batch to chapters 1-20', async () => {
+  it('defaults a large-book synopsis batch to chapters 1-5 and a 600-character target', async () => {
     useProjectStore.setState({
       currentProject: {
         ...project,
@@ -241,17 +251,19 @@ describe('workflow launch dialogs', () => {
     ))
 
     await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的起始章' })).toHaveValue(1)
-    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(20)
+    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(5)
+    await expect.element(page.getByRole('spinbutton', { name: '每章大纲目标字数' })).toHaveValue(600)
     await act(async () => page.getByRole('button', { name: /确认生成/ }).click())
 
     await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledWith(
       ['synopsis'],
       {},
-      { from: 1, to: 20 },
+      { from: 1, to: 5 },
+      600,
     ))
   })
 
-  it('preserves the stored continuation range when reopening the synopsis dialog', async () => {
+  it('keeps the continuation start and caps the prefilled new action at ten chapters', async () => {
     useProjectStore.setState({
       currentProject: {
         ...project,
@@ -271,17 +283,18 @@ describe('workflow launch dialogs', () => {
     ))
 
     await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的起始章' })).toHaveValue(21)
-    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(40)
+    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(30)
     await act(async () => page.getByRole('button', { name: /确认生成/ }).click())
 
     await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledWith(
       ['synopsis'],
       {},
-      { from: 21, to: 40 },
+      { from: 21, to: 30 },
+      600,
     ))
   })
 
-  it.each(['0', '-1', '1.5'])('rejects non-empty invalid synopsis range value %s', async invalidFrom => {
+  it.each(['', '0', '-1', '1.5'])('rejects invalid synopsis range value %s without falling back to the whole book', async invalidFrom => {
     const onConfirm = vi.fn().mockResolvedValue(undefined)
     await act(async () => root.render(
       <ArchitectureConfirmDialog
@@ -361,6 +374,7 @@ describe('workflow launch dialogs', () => {
       updatedAt: '2026-01-01 00:00:00',
     }
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list-directory-progress') return []
       if (channel === 'db:blueprint-get-all') return []
       if (channel === 'db:draft-authority-sequence') return {
         status: 'empty',
@@ -404,4 +418,121 @@ describe('workflow launch dialogs', () => {
     expect(onConfirm).not.toHaveBeenCalled()
     await expect.element(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
   })
+})
+
+
+it('shows the committed directory chain endpoint and resumes only its explicit remaining receipt', async () => {
+  const handle = { projectId: project.id, epoch: '上次会话', rootActionId: '原作者动作', runId: '最初运行' }
+  const nextHandle = { ...handle, runId: '后续运行' }
+  const original = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+  invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'generation:list-directory-progress') return [
+      { operationId: '父提交', payloadHash: 'a'.repeat(64), sourceHandle: handle,
+        requestedRange: { startChapter: 1, endChapter: 200 }, committedRange: { startChapter: 1, endChapter: 160 },
+        remainingRange: { startChapter: 161, endChapter: 200 }, continuationHandle: nextHandle },
+      { operationId: '末端提交', payloadHash: 'b'.repeat(64), sourceHandle: nextHandle,
+        requestedRange: { startChapter: 161, endChapter: 200 }, committedRange: { startChapter: 161, endChapter: 180 },
+        remainingRange: { startChapter: 181, endChapter: 200 } },
+    ]
+    return original(channel, ...args)
+  })
+  const onConfirm = vi.fn(async () => {})
+  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={180} onConfirm={onConfirm} />))
+  await expect.element(page.getByText('已保存第 161–180 章蓝图。')).toBeVisible()
+  await expect.element(page.getByRole('button', { name: '继续第 161–200 章（沿用原预算）' })).not.toBeInTheDocument()
+  await act(async () => page.getByRole('button', { name: '继续第 181–200 章（沿用原预算）' }).click())
+  expect(onConfirm).toHaveBeenCalledWith({ mode: 'append', continueDirectoryOperationId: '末端提交' })
+})
+
+
+it('rejects a new 200-chapter action while retaining the entered value', async () => {
+  useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, totalChapters: 200 } } as never })
+  const onConfirm = vi.fn(async () => {})
+  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+  await act(async () => page.getByRole('spinbutton').nth(0).fill('200'))
+  await expect.element(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
+  await act(async () => page.getByRole('button', { name: '开始生成' }).click())
+  expect(onConfirm).not.toHaveBeenCalled()
+  await expect.element(page.getByText(/请选择有效的连续 1–10 章/)).toBeVisible()
+  await expect.element(page.getByRole('spinbutton', { name: '本次蓝图章数' })).toHaveValue(200)
+})
+
+it.each(['outline', 'blueprint'] as const)('persists the %s target independently and accepts ten chapters with target 1000', async kind => {
+  planningPreferences = { outlineTargetUnits: 700, blueprintTargetUnits: 800 }
+  useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, totalChapters: 20 } } as never })
+  const onConfirm = vi.fn(async () => {})
+  const renderDialog = async (isOpen: boolean) => act(async () => root.render(kind === 'outline'
+    ? <ArchitectureConfirmDialog isOpen={isOpen} onClose={() => {}} archStatus={{ premise: true, characters: true, worldbuilding: true }} initialSelectedSteps={['synopsis']} onConfirm={onConfirm} />
+    : <DirectoryConfigDialog isOpen={isOpen} onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+  await renderDialog(true)
+  const target = page.getByRole('spinbutton', { name: kind === 'outline' ? '每章大纲目标字数' : '每章蓝图目标字数' })
+  await expect.element(target).toHaveValue(kind === 'outline' ? 700 : 800)
+  await act(async () => {
+    await target.fill('1000')
+    await page.getByRole('spinbutton', { name: kind === 'outline' ? '本次生成范围的结束章' : '本次蓝图章数' }).fill('10')
+    await page.getByRole('button', { name: kind === 'outline' ? /确认生成/ : '开始生成' }).click()
+  })
+  await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledOnce())
+  if (kind === 'outline') expect(onConfirm).toHaveBeenCalledWith(['synopsis'], {}, { from: 1, to: 10 }, 1000)
+  else expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ count: 10, targetUnits: 1000 }))
+  expect(planningPreferences).toEqual(kind === 'outline'
+    ? { outlineTargetUnits: 1000, blueprintTargetUnits: 800 }
+    : { outlineTargetUnits: 700, blueprintTargetUnits: 1000 })
+  await renderDialog(false)
+  await renderDialog(true)
+  await expect.element(target).toHaveValue(1000)
+})
+
+it.each(['outline', 'blueprint'] as const)('rejects eleven chapters and target 1001 in the %s dialog', async kind => {
+  useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, totalChapters: 20 } } as never })
+  const onConfirm = vi.fn(async () => {})
+  await act(async () => root.render(kind === 'outline'
+    ? <ArchitectureConfirmDialog isOpen onClose={() => {}} archStatus={{}} initialSelectedSteps={['synopsis']} onConfirm={onConfirm} />
+    : <DirectoryConfigDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+  const count = page.getByRole('spinbutton', { name: kind === 'outline' ? '本次生成范围的结束章' : '本次蓝图章数' })
+  const submit = page.getByRole('button', { name: kind === 'outline' ? /确认生成/ : '开始生成' })
+  await act(async () => { await count.fill('11'); await submit.click() })
+  expect(onConfirm).not.toHaveBeenCalled()
+  await act(async () => {
+    await count.fill('10')
+    await page.getByRole('spinbutton', { name: kind === 'outline' ? '每章大纲目标字数' : '每章蓝图目标字数' }).fill('1001')
+    await submit.click()
+  })
+  await expect.element(page.getByText(/目标须为 1–1000 的整数/)).toBeVisible()
+  expect(onConfirm).not.toHaveBeenCalled()
+  expect(invoke.mock.calls.some(([channel]) => channel === 'config:set')).toBe(false)
+})
+
+it.each(['outline', 'blueprint'] as const)('retains %s input and does not start generation when saving preferences fails', async kind => {
+  const original = invoke.getMockImplementation()!
+  invoke.mockImplementation(async (channel, ...args) => {
+    if (channel === 'config:set') return { success: false, error: 'disk unavailable' }
+    return original(channel, ...args)
+  })
+  const onConfirm = vi.fn(async () => {})
+  const onClose = vi.fn()
+  await act(async () => root.render(kind === 'outline'
+    ? <ArchitectureConfirmDialog isOpen onClose={onClose} archStatus={{}} initialSelectedSteps={['synopsis']} onConfirm={onConfirm} />
+    : <DirectoryConfigDialog isOpen onClose={onClose} existingCount={0} onConfirm={onConfirm} />))
+  const target = page.getByRole('spinbutton', { name: kind === 'outline' ? '每章大纲目标字数' : '每章蓝图目标字数' })
+  await act(async () => { await target.fill('900'); await page.getByRole('button', { name: kind === 'outline' ? /确认生成/ : '开始生成' }).click() })
+  await expect.element(page.getByText('目标字数偏好保存失败。请重试，输入已保留。')).toBeVisible()
+  await expect.element(target).toHaveValue(900)
+  expect(onConfirm).not.toHaveBeenCalled()
+  expect(onClose).not.toHaveBeenCalled()
+})
+
+it('rejects full-book generation above ten chapters and does not normalize an empty quantity', async () => {
+  useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, totalChapters: 20 } } as never })
+  const onConfirm = vi.fn(async () => {})
+  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+  await act(async () => { await page.getByText('全量生成（共 20 章）').click(); await page.getByRole('button', { name: '开始生成' }).click() })
+  expect(onConfirm).not.toHaveBeenCalled()
+  await act(async () => {
+    await page.getByText('批量连续生成').click()
+    await page.getByRole('spinbutton', { name: '本次蓝图章数' }).fill('')
+    await page.getByRole('button', { name: '开始生成' }).click()
+  })
+  expect(onConfirm).not.toHaveBeenCalled()
+  await expect.element(page.getByRole('spinbutton', { name: '本次蓝图章数' })).toHaveValue(null)
 })

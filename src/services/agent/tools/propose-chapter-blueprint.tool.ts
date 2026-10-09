@@ -26,6 +26,7 @@ function validateBlueprintChanges(args: Record<string, unknown>, context?: Agent
   const changes: Record<string, unknown> = {}
   for (const [field, proposed] of Object.entries(candidate as Record<string, unknown>)) {
     const canonicalField = FIELD_ALIASES[field] ?? field
+    if (Object.hasOwn(changes, canonicalField)) return { valid: false, error: agentToolText(context, `字段 ${canonicalField} 重复`, `Duplicate field: ${canonicalField}`) }
     if (STRING_FIELDS.has(canonicalField as keyof BlueprintData)) {
       if (typeof proposed !== 'string') return { valid: false, error: agentToolText(context, `字段 ${field} 必须是文本`, `Field ${field} must be text`) }
     } else if (canonicalField === 'characters') {
@@ -46,7 +47,7 @@ export function buildChapterBlueprintProposal(
   context?: AgentExecutionContext,
 ): ChapterBlueprintProposal {
   const chapterNumber = args.chapter_number
-  if (!Number.isInteger(chapterNumber) || (chapterNumber as number) <= 0 || chapterNumber !== current.chapterNumber) {
+  if (!Number.isSafeInteger(chapterNumber) || (chapterNumber as number) <= 0 || chapterNumber !== current.chapterNumber) {
     return { valid: false, error: agentToolText(context, '目标章节与当前蓝图不一致', 'The target chapter does not match the current blueprint') }
   }
   const validated = validateBlueprintChanges(args, context)
@@ -86,7 +87,7 @@ export const proposeChapterBlueprintTool = buildAgentTool({
   execute: async (args, context) => {
     const text = (zhCN: string, enUS: string) => agentToolText(context, zhCN, enUS)
     const chapterNumber = args.chapter_number
-    if (!Number.isInteger(chapterNumber) || (chapterNumber as number) <= 0) {
+    if (!Number.isSafeInteger(chapterNumber) || (chapterNumber as number) <= 0) {
       return { success: false, content: '', error: text('章节号无效', 'The chapter number is invalid') }
     }
     const validated = validateBlueprintChanges(args, context)
@@ -101,6 +102,11 @@ export const proposeChapterBlueprintTool = buildAgentTool({
     if (!proposal.valid) return { success: false, content: '', error: proposal.error }
     assertAgentToolActive(context)
     context?.markSideEffectStarted?.()
+    if (context?.agentToolAction) {
+      const receipt = await ipc.invokeWithProjectSession(projectSession, 'agent-generation:commit-domain-tool', { ref: context.agentToolAction })
+      if (receipt.kind !== 'blueprint' || receipt.chapterNumber !== chapterNumber) throw new Error('GENERATION_AGENT_DOMAIN_RECEIPT_MISMATCH')
+      return { success: true, content: text(`第 ${chapterNumber} 章蓝图已更新（${Object.keys(receipt.changes).length} 个字段）`, `Chapter ${chapterNumber} blueprint updated (${Object.keys(receipt.changes).length} fields)`) }
+    }
     const result = await ipc.invokeWithProjectSession(
       projectSession, 'db:blueprint-upsert', { ...current, ...proposal.changes }, project.path,
     )

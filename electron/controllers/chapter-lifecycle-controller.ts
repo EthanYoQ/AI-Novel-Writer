@@ -73,6 +73,6 @@ export function registerChapterLifecycleController(
     projectRoot: string,
   ) => {
     assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
-    return { success: true, operations: service.listIncomplete() }
+    return { success: true, operations: service.listIncomplete(projectRoot) }
   })
 }

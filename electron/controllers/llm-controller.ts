@@ -9,6 +9,7 @@ import {
 } from '../utils/config-utils'
 import type { GlobalConfig, LLMFinishReason, LLMRequest, ModelDiscoveryRequest, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
+import { isReasoningMapping } from '../../src/shared/reasoning-types'
 import { LLMFactory } from '../llm/llm-factory'
 import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
 import { getCurrentProjectPath } from '../database'
@@ -278,6 +279,10 @@ export function registerLLMController() {
 
   ipcMain.handle('llm:save-model', async (_event, model: ModelProfile) => {
     try {
+      if (model.reasoningMapping !== undefined && (!isReasoningMapping(model.reasoningMapping)
+        || (model.protocol === 'gemini') !== (model.reasoningMapping.adapter === 'gemini-thinking-budget'))) {
+        throw new Error('INVALID_REASONING_MAPPING')
+      }
       const models = loadModelConfigsForUpdate()
       const idx = models.findIndex((m) => m.id === model.id)
       if (idx >= 0) models[idx] = model
@@ -403,4 +408,6 @@ export function registerLLMController() {
       return { success: false, error: String(error) }
     }
   })
+
+  return { modelExecutionLeases, loadModel: getModelConfig, applyProxyConfig }
 }

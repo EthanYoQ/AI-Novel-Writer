@@ -109,7 +109,8 @@ export function createPlanningMaterialCharacterExtractionWorkflow(
       },
       {
         name: text('确认并导入角色卡', 'Confirm and import character cards'),
-        description: text('把已确认候选原子合并到角色名单，并保留作者手工字段', 'Atomically merge confirmed candidates while preserving author-edited fields'),
+        description: text('确认采用明确候选，身份不明的提议继续保留', 'Confirm clear candidates and keep unresolved proposals'),
+        requiresConfirmation: true,
         executor: async (step, context, callbacks) => {
           const { CommitPlanningMaterialCharactersCommand } = await import('./commands/planning-material.command')
           await new CommitPlanningMaterialCharactersCommand().execute({ step, context, callbacks })

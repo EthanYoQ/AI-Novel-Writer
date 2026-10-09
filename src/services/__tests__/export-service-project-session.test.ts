@@ -226,6 +226,30 @@ describe('exportNovel project session ownership', () => {
     )
   })
 
+  it('keeps one authoritative chapter title in TXT when the finalized prose starts with the matching ATX heading', async () => {
+    vi.mocked(ipc.invokeWithProjectSession).mockResolvedValueOnce([{
+      draftId: 1,
+      chapterNumber: 1,
+      version: 1,
+      title: '夜航',
+      content: '# 第1章 夜航\n\n雾从站台升起',
+      ...authority(1),
+    }] as never)
+
+    await expect(exportNovel(
+      { format: 'txt', grantId: 'export-grant' },
+      projectSnapshot,
+      projectSession,
+    )).resolves.toEqual({ success: true, path: 'Project A.txt' })
+
+    expect(ipc.invoke).toHaveBeenCalledWith(
+      'fs:grant-write-file',
+      'export-grant',
+      'Project A.txt',
+      'Project A\n==================\n\n第1章 夜航\n\n雾从站台升起\n\n',
+    )
+  })
+
   it.each([
     { format: 'merged-md' as const, writingLanguage: 'zh-CN' as const, title: '起航', expectedHeading: '# 第1章 起航' },
     { format: 'split-md' as const, writingLanguage: 'zh-CN' as const, title: '起航', expectedHeading: '# 第1章 起航' },

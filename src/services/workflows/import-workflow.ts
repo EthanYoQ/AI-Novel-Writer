@@ -263,7 +263,8 @@ function productionDependencies(
         `Reference Chapter ${chapter.number} is in the knowledge base${result.idempotent ? ' (already present)' : ''}.`,
       ))
     },
-    inferGlobal: async (chapters, stats, _run, commit) => {
+    inferGlobal: async (chapters, stats, run, commit) => {
+      context.data.importGenerationSlot = { runId: run.id, stage: 'global', batchId: 'done' }
       context.data.chapters = chapters.map(importedChapter)
       context.data.importRunTotalChapters = stats.totalChapters
       context.data.importRunTotalWords = stats.totalWords
@@ -272,12 +273,13 @@ function productionDependencies(
         await commit(request)
       ) as ImportGlobalFactsReceipt).execute({ step: {} as never, context, callbacks })
     },
-    analyzeStyle: async (chapters, _run, commit) => {
+    analyzeStyle: async (chapters, run, commit) => {
+      context.data.importGenerationSlot = { runId: run.id, stage: 'style', batchId: 'done' }
       const { AnalyzeWritingStyleCommand } = await import('./commands/analyze-style.command')
       const style = await new AnalyzeWritingStyleCommand(
         { chapters: chapters.map(importedChapter) },
         undefined,
-        async writingStyle => { await commit({ writingStyle }) },
+        async (writingStyle, generationRunHandle) => { await commit({ writingStyle, ...(generationRunHandle ? { generationRunHandle } : {}) }) },
       )
         .execute({ step: {} as never, context, callbacks })
       if (!style.trim()) throw new Error(textForLocale(
@@ -286,7 +288,8 @@ function productionDependencies(
         'No usable writing style was extracted, so imitation guidance cannot be created.',
       ))
     },
-    inferBlueprints: async (chapters, _checkpoint, _run, commit) => {
+    inferBlueprints: async (chapters, checkpoint, run, commit) => {
+      context.data.importGenerationSlot = { runId: run.id, stage: 'blueprints', batchId: checkpoint }
       context.data.chapters = chapters.map(importedChapter)
       context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
       const { InferBlueprintsPerChapterCommand } = await import('./commands/import-novel.command')
@@ -460,10 +463,7 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
     workflowResourceKey('architecture'),
     workflowResourceKey('blueprints'),
   ]
-  const durableCancelHooks: Pick<
-    WorkflowDefinition,
-    'onCancelRequested' | 'onCancelledAtBoundary'
-  > = {
+  const durableCancelHooks: Pick<WorkflowDefinition, 'onCancelRequested'> = {
     onCancelRequested: async context => {
       const execution = context.data.importRunExecution as ImportRunExecutionLease | undefined
       if (!execution) return
@@ -478,37 +478,6 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
         params.run.locale,
         '无法保存导入取消请求',
         'Could not persist the import cancellation request.',
-      ))
-    },
-    onCancelledAtBoundary: async context => {
-      const durableRun = await ipc.invokeWithProjectSession(
-        session, 'db:import-run-get', params.run.id, params.projectPath,
-      )
-      if (!durableRun || durableRun.status === 'cancelled') return
-      const execution = context.data.importRunExecution as ImportRunExecutionLease | undefined
-      if (!execution) return
-      const renewed = required(
-        await ipc.invokeWithProjectSession(
-          session,
-          'db:import-run-renew-execution',
-          params.run.id,
-          execution,
-          params.projectPath,
-        ),
-        textForLocale(params.run.locale, '无法续租导入取消边界', 'Could not renew the import cancellation boundary.'),
-      ).execution!
-      context.data.importRunExecution = renewed
-      const result = await ipc.invokeWithProjectSession(
-        session,
-        'db:import-run-cancel-at-boundary',
-        params.run.id,
-        renewed,
-        params.projectPath,
-      )
-      if (!result.success) throw new Error(result.error || textForLocale(
-        params.run.locale,
-        '无法完成导入取消',
-        'Could not finalize import cancellation.',
       ))
     },
   }
