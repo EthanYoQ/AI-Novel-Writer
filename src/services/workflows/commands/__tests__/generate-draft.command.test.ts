@@ -1698,7 +1698,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
-    expect(decision).toMatchObject({ version: 1, verdict: 'admitted', coverage: { required: 1, included: 1, complete: true } })
+    expect(decision).toMatchObject({ version: 1, verdict: 'admitted', coverage: { required: 2, included: 2, complete: true } })
     // 收据记的来源就是提示词里真正出现的那几份材料。
     expect(decision?.included.map(item => item.sourceId)).toContain('author:required')
     expect(decision?.included.map(item => item.sourceId)).toContain('finalized:41')
@@ -2175,7 +2175,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     })
 
     await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('必需材料（作者资料、角色档案、后续计划）超出上下文容量')
+      .rejects.toThrow('必需材料（作者资料、角色档案、后续计划、上一章正文）超出上下文容量')
     expect(runtime.complete).not.toHaveBeenCalled()
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining(
       '必需材料超出上下文容量（capacity-conflict）：author:required:budget',
@@ -2211,8 +2211,6 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   })
 
   describe('直接前驱的定稿块是必需连续性材料', () => {
-    // 无未定稿候选前驱、知识库没有相关原文时，上一章结尾只经定稿块进入提示词；
-    // 作者资料几乎占满材料预算时，整块（证据窗口 + 结尾）装不下，也不能静默丢掉前驱后仍生成续章。
     const endingSentinel = '上一章定稿结尾哨兵。'
     const evidenceLine = '林岚把红色钥匙收进口袋。'
     const previousFinalizedContent = [
@@ -2239,7 +2237,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       previousFinalizedContent,
     })
 
-    it('keeps the previous ending in the prompt when only the ending fits beside long author facts', async () => {
+    it('keeps the complete predecessor beside author facts beyond the optional material target', async () => {
       let observedTask: GenerationTask | undefined
       const runtime = fakeRuntime((_attempt, task) => {
         observedTask = task
@@ -2251,16 +2249,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
       const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
       expect(runtime.complete).toHaveBeenCalled()
-      // 模型必须收到上一章原文（至少结尾）；淘汰的只是证据窗口。
-      expect(prompt).toContain(endingSentinel)
-      expect(prompt).not.toContain(evidenceLine)
+      expect(prompt).toContain(previousFinalizedContent)
       const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
       const finalizedItem = decision?.included.find(item => item.sourceId === 'finalized:41')
       expect(finalizedItem).toMatchObject({ required: true })
-      expect(finalizedItem?.units).toBeLessThan(3_500)
+      expect(finalizedItem?.units).toBeGreaterThan(3_500)
       expect(decision?.coverage).toEqual({ required: 2, included: 2, complete: true })
-      expect(decision?.omitted).toContainEqual(expect.objectContaining({ sourceId: 'finalized:41', reason: 'budget' }))
-      expect(prompt).toContain('finalized#1:budget')
+      expect(decision?.omitted).not.toContainEqual(expect.objectContaining({ sourceId: 'finalized:41', reason: 'budget' }))
     })
 
     it('dispatches the required ending when author material leaves too little optional room', async () => {

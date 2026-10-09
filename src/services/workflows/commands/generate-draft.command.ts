@@ -793,7 +793,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         ],
       })
     } catch (error) {
-      // 必需材料（作者资料/角色档案/后续计划）超出容量：显式失败，绝不静默裁掉。
       if (!(error instanceof ChapterMaterialCapacityError)) throw error
       const blocked = error.decision.decision === 'capacity-conflict'
         ? `${error.decision.blockingSourceId}:${error.decision.blockingReason}`
@@ -803,8 +802,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `  Required material exceeds the context capacity (${error.decision.decision}): ${blocked}`,
       ))
       throw new Error(uiText(
-        '本章必需材料（作者资料、角色档案、后续计划）超出上下文容量，已停止生成。请精简这些内容后重试。',
-        'The required material for this chapter (author facts, character profiles, future plans) exceeds the context capacity, so generation stopped. Trim it and try again.',
+        '本章必需材料（作者资料、角色档案、后续计划、上一章正文）超出上下文容量，已停止生成。请精简这些内容后重试。',
+        'The required material for this chapter (author facts, character profiles, future plans, previous chapter prose) exceeds the context capacity, so generation stopped. Trim it and try again.',
       ))
     }
     const admittedCandidateSourceIds = new Set(chapterMaterials.selection.included
@@ -813,8 +812,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     if (selectedCandidateDrafts.length > 0 && admittedCandidateSourceIds.size === 0) {
       throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
     }
-    // 无未定稿候选时上一章原文只经直接前驱的定稿块（整块或降级后的结尾）到达模型：
-    // 来源存在不等于模型收到了它，未被选入提示词就不得开始生成。
     if (selectedCandidateDrafts.length === 0 && requiredFinalizedSource
       && !chapterMaterials.selection.included.some(material => material.ref.sourceId === `finalized:${requiredFinalizedSource.draftId}`)) {
       throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
