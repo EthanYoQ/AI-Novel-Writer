@@ -118,7 +118,10 @@ export function validateHistoricalSupersessionBoundary(raw, fromEventCount, boun
   }
   return boundary.eventCount
 }
-export function validateCampaignBinding(binding, { campaignMode, protocol, historical = false }) {
+export function validateCampaignBinding(binding, options) {
+  return validateCampaignBindingSnapshot(binding, options)
+}
+function validateCampaignBindingSnapshot(binding, { campaignMode, protocol, historical = false }, protocolBinding) {
   if (!binding || binding.campaignId !== CAMPAIGN_ID || binding.mode !== campaignMode
     || !['baseline', 'candidate'].includes(binding.arm) || !/^[a-f0-9]{40}$/.test(binding.codeSha)
     || ['sourceHash', 'driverHash', 'parityId'].some(key => !/^[a-f0-9]{64}$/.test(binding[key]))
@@ -127,7 +130,9 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   // protocol selection and allocation are historical evidence, not input to the
   // current revision, so only the stable envelope is rechecked here.
   if (historical) return
-  assertProtocolBinding(binding)
+  const current = protocolBinding ?? currentProtocolBinding()
+  if (typeof current.protocolRevision !== 'string' || !current.protocolRevision) fail('INVALID_PROTOCOL_REVISION')
+  if (binding.protocolRevision !== current.protocolRevision || binding.protocolHash !== current.protocolHash) fail('PROTOCOL_DRIFT')
   validateCandidateSampling(binding, protocol)
   const phase = protocol.phases[binding.phase] && selectPhase(protocol, binding.phase, binding.milestone, binding.diagnosticInputHash)
   if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
@@ -747,7 +752,9 @@ export function updateLedger(file, event, options = {}) {
     const events = rawLedger.split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line))
     if (options.campaignMode) {
       if (!['real', 'synthetic'].includes(options.campaignMode)) fail('INVALID_CAMPAIGN_MODE')
-      const protocol = read(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
+      const protocolBytes = fs.readFileSync(PROTOCOL_PATH)
+      const protocol = JSON.parse(protocolBytes)
+      const protocolBinding = { protocolRevision: protocol.decisionRevision, protocolHash: hash(protocolBytes) }
       const reserved = new Map(), statuses = new Map()
       const historicalBoundary = options.campaignMode === 'real'
         ? protocol.historicalLedgerBoundary : options.historicalLedgerBoundary
@@ -1184,14 +1191,14 @@ export function updateLedger(file, event, options = {}) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
           const superseded = index >= trustedHistoricalEvents && index < trustedGoalDeltaEvents
-          validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
+          validateCampaignBindingSnapshot(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded }, protocolBinding)
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
         }
         statuses.set(row.attemptId, row.type)
       }
       if (event.type === 'reserve') {
-        validateCampaignBinding(event.binding, { campaignMode: options.campaignMode, protocol })
+        validateCampaignBindingSnapshot(event.binding, { campaignMode: options.campaignMode, protocol }, protocolBinding)
         event = { ...event, allocation: allocationFor(event.binding) }
       }
     }
