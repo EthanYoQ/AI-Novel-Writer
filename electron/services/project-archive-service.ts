@@ -1014,10 +1014,10 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
     try { firstEvidence = await backupProjectSqlite({ sourceDatabasePath, targetDatabasePath: sourceSnapshotPath }) }
     catch (error) { return mapSourceChange(error) }
     recordOwnedFile(attempt, sourceSnapshotPath)
+    const sourceFreeze = readPortableRuntimeFreeze(sourceRoot)
     const sourceSnapshot = new BetterSqlite(sourceSnapshotPath, { readonly: true, fileMustExist: true })
     let avatarRows: ReturnType<typeof readPortableCharacterAvatarRows>
     let sourceSchema: ReturnType<typeof assertPortableSourceSchema>
-    const sourceFreeze = readPortableRuntimeFreeze(sourceRoot)
     try {
       sourceSchema = assertPortableSourceSchema(sourceSnapshot)
       if (sourceFreeze.active) readPortableCurrentAuthority({ database: sourceSnapshot, projectStorageRoot, projectId: canonicalManifest.projectId })
