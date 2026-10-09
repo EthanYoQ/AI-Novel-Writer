@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve, win32 } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -312,6 +313,67 @@ function parseLastJsonLine(output: string): Record<string, unknown> {
   if (!line) throw new Error('PowerShell probe did not return JSON')
   return JSON.parse(line) as Record<string, unknown>
 }
+
+windowsPowerShellIt('reads the installed asar version and rejects a different package with the same product version', async () => {
+  const cacheRoot = resolve('.runtime/.cache')
+  mkdirSync(cacheRoot, { recursive: true })
+  const fixtureRoot = mkdtempSync(join(cacheRoot, 'installed-version-'))
+  const installed = join(fixtureRoot, 'installed')
+  const source = join(fixtureRoot, 'package')
+  const archive = join(installed, 'resources', 'app.asar')
+  const builderRequire = createRequire(realpathSync(resolve('node_modules/electron-builder/package.json')))
+  const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib/package.json'))
+  const { createPackage } = appBuilderRequire('@electron/asar')
+  const electronVersion = JSON.parse(readFileSync(resolve('node_modules/electron/package.json'), 'utf8')).version
+  const previewVersion = `${electronVersion}-Preview`
+  const executable = join(installed, 'electron.exe')
+  try {
+    mkdirSync(join(installed, 'resources'), { recursive: true })
+    mkdirSync(source)
+    for (const entry of readdirSync(resolve('node_modules/electron/dist'), { withFileTypes: true })) {
+      if (entry.isFile()) linkSync(resolve('node_modules/electron/dist', entry.name), join(installed, entry.name))
+    }
+    const writePackage = async (version: string) => {
+      writeFileSync(join(source, 'package.json'), JSON.stringify({ version }))
+      await createPackage(source, archive)
+    }
+    await writePackage(previewVersion)
+    const accepted = parseLastJsonLine(runProbeLibrary(`
+$env:ELECTRON_RUN_AS_NODE = 'before-probe'
+$version = Get-AiNovelInstalledVersion -ExePath ${quotePowerShell(executable)} -ExpectedVersion ${quotePowerShell(previewVersion)}
+[pscustomobject]@{ packageVersion = $version.packageVersion; productVersion = $version.productVersion; environmentRestored = $env:ELECTRON_RUN_AS_NODE -eq 'before-probe' } | ConvertTo-Json -Compress
+`))
+    expect(accepted).toMatchObject({ packageVersion: previewVersion, environmentRestored: true })
+    expect([electronVersion, `${electronVersion}.0`]).toContain(accepted.productVersion)
+
+    for (const [version, expectedError] of [
+      [electronVersion, 'Installed package version mismatch'],
+      [`${electronVersion}-preview`, 'Installed package version mismatch'],
+      [`${electronVersion}-01`, 'valid semantic version'],
+      ['0.0.1-Preview', 'Installed product version mismatch'],
+    ]) {
+      await writePackage(version)
+      const expected = version === '0.0.1-Preview' ? version : previewVersion
+      const rejected = parseLastJsonLine(runProbeLibrary(`
+$env:ELECTRON_RUN_AS_NODE = 'before-probe'
+try { Get-AiNovelInstalledVersion -ExePath ${quotePowerShell(executable)} -ExpectedVersion ${quotePowerShell(expected)}; throw 'unexpected success' }
+catch { [pscustomobject]@{ error = $_.Exception.Message; environmentRestored = $env:ELECTRON_RUN_AS_NODE -eq 'before-probe' } | ConvertTo-Json -Compress }
+`))
+      expect(rejected.error).toContain(expectedError)
+      expect(rejected.environmentRestored).toBe(true)
+    }
+    rmSync(archive)
+    const failedRead = parseLastJsonLine(runProbeLibrary(`
+$env:ELECTRON_RUN_AS_NODE = 'before-probe'
+try { Get-AiNovelInstalledVersion -ExePath ${quotePowerShell(executable)} -ExpectedVersion ${quotePowerShell(previewVersion)}; throw 'unexpected success' }
+catch { [pscustomobject]@{ error = $_.Exception.Message; environmentRestored = $env:ELECTRON_RUN_AS_NODE -eq 'before-probe' } | ConvertTo-Json -Compress }
+`))
+    expect(failedRead.error).toContain('Installed package version reader failed')
+    expect(failedRead.environmentRestored).toBe(true)
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true })
+  }
+})
 
 function runWinFormsGracefulCloseProbe(rejectClose: boolean, timeoutSeconds: number): Record<string, unknown> {
   const rejectCloseHandler = rejectClose

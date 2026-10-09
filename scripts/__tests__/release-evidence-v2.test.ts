@@ -12,6 +12,7 @@ const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = path.resolve(testDirectory, '..', '..')
 const evidenceScript = path.join(repositoryRoot, 'scripts', 'release-evidence-v2.mjs')
 const releaseVersion = (JSON.parse(readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')) as { version: string }).version
+const productVersion = releaseVersion.split(/[+-]/)[0]
 const fixtures: string[] = []
 const WINDOWS_COMMAND_STEPS = [
   'install-locked-dependencies',
@@ -44,7 +45,7 @@ function validWindowsReceipt(name: string, releaseRoot: string) {
   })
   const receipts: Record<string, unknown> = {
     install: { ...base, kind: 'windows-install', direct: { installerExitCode: 0, installedExecutable: 'C:/AI/AI小说作家.exe', installedExecutableExists: true } },
-    launch: { ...base, kind: 'windows-launch', expectedVersion: releaseVersion, direct: { executablePath: 'C:/AI/AI小说作家.exe', productVersion: `${releaseVersion}.0`, processId: 101, processStartTimeTicks: '12345', visibleMainWindowCount: 1 } },
+    launch: { ...base, kind: 'windows-launch', expectedVersion: releaseVersion, direct: { executablePath: 'C:/AI/AI小说作家.exe', productVersion: `${productVersion}.0`, packageVersion: releaseVersion, processId: 101, processStartTimeTicks: '12345', visibleMainWindowCount: 1 } },
     'quiet-window': { ...base, kind: 'windows-final-quiet-window', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', quietWindowSeconds: 5, completedAt: '2026-08-10T14:57:30.3051843Z' } },
     'error-dialogs': { ...base, kind: 'windows-error-dialogs', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', newProductErrorDialogCount: 0, observedThrough: '2026-08-10T14:57:30.3051843Z' } },
     uninstall: { ...base, kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
@@ -416,10 +417,14 @@ describe('release evidence v2 CLI', () => {
       expect(invalidTimestampResult.stderr).toContain('Windows error-dialog receipt facts are invalid')
     }
     for (const mutateLaunch of [
-      (receipt: LaunchReceipt) => { receipt.direct.productVersion = `${releaseVersion}.1` },
+      (receipt: LaunchReceipt) => { receipt.direct.productVersion = `${productVersion}.1` },
       (receipt: LaunchReceipt) => { receipt.direct.productVersion = `${releaseVersion}-beta.1` },
       (receipt: LaunchReceipt) => { receipt.direct.productVersion = 'garbage' },
       (receipt: LaunchReceipt) => { delete receipt.direct.productVersion },
+      (receipt: LaunchReceipt) => { receipt.direct.packageVersion = productVersion },
+      (receipt: LaunchReceipt) => { receipt.direct.packageVersion = '1.2.0-preview' },
+      (receipt: LaunchReceipt) => { receipt.direct.packageVersion = null },
+      (receipt: LaunchReceipt) => { delete receipt.direct.packageVersion },
       (receipt: LaunchReceipt) => { receipt.expectedVersion = '0.8.0' },
       (receipt: LaunchReceipt) => { delete receipt.expectedVersion },
     ]) {

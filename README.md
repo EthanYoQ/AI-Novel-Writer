@@ -1,208 +1,247 @@
-<div align="center">
+<p align="center">
+  <img src="docs/assets/readme/ai-novel-writer-logo-transparent.png" width="104" height="104" alt="AI 小说作家标志" />
+</p>
+
+# AI 小说作家
 
 [English](README_en.md) | **中文**
 
-</div>
+AI 小说作家是 Windows 和 macOS 上的小说写作软件。你可以整理设定、规划章节、生成草稿，再审稿和修稿。作品保存在本机，AI 模型由你配置。
 
-<p align="center">
-  <img src="docs/assets/readme/ai-novel-writer-logo-transparent.png" width="104" height="104" alt="AI 小说作家 Logo" />
-</p>
+## 试用 1.2.0-Preview
 
-<h1 align="center">AI 小说作家 / AI Novel Writer</h1>
+本次是公开测试版，更新了写作界面、项目存储和生成恢复。维护者计划先修复测试反馈，再准备稳定版。稳定版暂无固定发布日期。
 
-<div align="center">
+[下载 Preview 或稳定版](https://github.com/EthanYoQ/AI-Novel-Writer/releases) · [查看本次改动](.release/notes/v1.2.0-Preview.md) · [报告问题](https://github.com/EthanYoQ/AI-Novel-Writer/issues)
 
-[English](README_en.md) | **中文**
+在 Releases 页面选择标有 `1.2.0-Preview` 的版本。`Pre-release` 表示测试版。只想使用稳定版时，选择没有该标记的版本。
 
-</div>
+测试前备份重要作品。AI 可能遗漏情节、误判审稿问题或写出不合适的内容。生成完成不等于作品合格，定稿前仍需作者检查。
 
-<p align="center">
-  面向AI长篇小说创作的桌面工作台。它把“前提 → 角色 → 世界观 → 章节蓝图 → 草稿 → 审稿 → 修稿 → 定稿”组织为一条可追溯的创作流程；模型由你自行配置，项目资料留在你的电脑上。
-</p>
+## 用它完成哪些工作
 
-<p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer"><img src="https://badgen.net/badge/DSH%20plugin/0.1.0%20preview/blue" alt="DeepSeek Harness plugin 0.1.0 preview" /></a>
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/LICENSE"><img src="https://badgen.net/badge/license/GPL-3.0/blue" alt="GPL-3.0 License" /></a>
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/stargazers"><img src="https://badgen.net/github/stars/EthanYoQ/AI-Novel-Writer" alt="GitHub stars" /></a>
-</p>
+- 有故事想法时，先写故事前提，再整理人物和世界设定。
 
-<p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载桌面版（Windows / macOS）</a> · <a href="https://www.npmjs.com/package/@ethanyoq/dsh-ai-novel-writer">安装 DeepSeek Harness Web 插件</a>
-</p>
+- 有全书大纲时，按章节生成蓝图。蓝图记录本章目标、冲突和事件。
 
-> **DeepSeek Harness 插件提示：** `0.1.0` 预览版目前冻结维护，短期不扩展功能；它的能力不足桌面软件版的 10%，不能替代桌面版。需要完整项目树、批量工作流、成熟编辑器或自动审校时，请使用上方的桌面版。
+- 有章节蓝图时，生成草稿。查看审稿报告，选择要处理的问题，再修稿和定稿。
 
-<p align="center">
-  <img src="docs/assets/readme/ui-zh-v085-project-config.png" alt="AI 小说作家 v0.8.5：在本地桌面工作台中配置长篇小说的故事前提、世界观、角色、蓝图与章节" width="100%" />
-</p>
+- 要连续写作时，启动批量任务。你可以保留待审草稿，也可以选择自动定稿模式。
 
-> ## v1.1.0
->
-> - **来源明确的连续性材料**：作者填写的角色资料、模型提炼的动态状态与旧项目未知来源信息不再混作同一种事实；后续写作优先使用带来源的定稿原文。
-> - **分层的章节材料**：本章任务、尚未发生的计划、定稿历史和候选稿会分别呈现；相关原文保留相邻段落，帮助承接伤因、否定和物品转交等跨句信息。
-> - **可靠的候选稿上下文**：连续草稿沿用本批次实际保存的草稿版本和正文，并明确标注尚未定稿。
-> - **逐项目标审稿**：本章关键事件会逐项显示“已完成、未完成、待核实”和对应正文证据，避免把准备或承诺直接当作完成。
-> - **指定本章必现**：在角色备注或项目世界设定中单独写一行 `【第3章必现】正文要求`，即可要求第 3 章正文明确呈现；审稿需要可定位的正文证据。未标记的背景设定仍只检查矛盾。
-> - **由作者决定目标修稿**：待核实不算检查通过，目标类未完成或待核实均须作者明确选择后才交给修稿流程，减少模型误判带来的返工。
-> - **更新、导出与通知修复**：避免下载期间的重复更新检查，拆分 Markdown 导出使用独立目录，工作流完成通知保留完整标题。
->
-> 这些改进减少错误摘要或过期状态影响后续章节的风险，但不能替代作者审阅，也不保证模型输出完全没有漂移或每章字数都达到目标。
+- 要保存或转移作品时，导出完整项目归档。要交付正文时，导出 Markdown 或 TXT。
 
-### 保留的 1.0.0 功能
+软件不附送模型账号或额度，也不提供在线发表和阅读社区。使用云端模型需要自己的账号和凭据。模型服务商可能按请求收费。
 
-- 写作 Skill 可独立安装，并按规划、正文、审稿或润色阶段分别使用。
-- 故事线视图展示主线和支线进度，并可跳到对应章节依据。
-- 规划资料可导入项目，让蓝图和后续写作使用同一套设定。
-- 角色表接收蓝图中明确确认的新角色，并持续记录角色状态。
-- 中文长篇工作流串联蓝图、草稿、审稿、修订和定稿。
-- Windows 和 macOS 均可查看并启动适合本机的更新。
+## 安装桌面版
 
-1.0.0 的多草稿保存、旧请求覆盖、来源恢复、导出与安装检查修复继续保留；逐项说明见 [1.1.0 双语更新内容](.release/notes/v1.1.0.md)。正式安装包以 [GitHub Release](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 为准。
+从[官方 Releases 页面](https://github.com/EthanYoQ/AI-Novel-Writer/releases)下载与你的系统对应的文件。文件名中的版本号应与所选 Release 一致。
 
+### Windows x64
 
+1. 下载 `ai-novel-writer-setup-<版本号>.exe`。
 
-## DeepSeek Harness 插件（早期 MVP）
+2. 运行安装程序。
 
-除了 Windows 与 macOS 桌面版，本仓库还保留 `@ethanyoq/dsh-ai-novel-writer` `0.1.0` 开发预览。该插件目前冻结维护，短期不扩展功能。DeepSeek Harness 的 V2 工作台是刻意收敛的早期 MVP，当前能力不足桌面软件版的 10%；它不读取桌面版 `.vela` 项目，也不能替代桌面版的项目树、批量工作流、成熟编辑器或自动审校。
+3. 启动 AI 小说作家。
 
-V2 只提供人工审核的最小创作链：项目设置 → 故事架构 → 人物设定 → 全书纲要 → 逐章蓝图 → 逐章正文。模型生成的待审核建议到达 Proposal 收件箱后，会先填入右侧工作台的本地编辑表单，供人工查看和修改；只有用户明确审核并应用 Proposal，权威项目状态才会改变。
+Windows 安装包未进行代码签名。SmartScreen 可能显示未知发布者提示，系统策略也可能阻止运行。遇到提示时，先核对下载来源和 Release 说明。
 
-该插件不属于桌面版正式 Release，但已发布为独立 npm 包，拥有独立锁文件、CI 和 MIT 许可；仓库根目录仍为 GPL-3.0 桌面应用。将它安装到 DeepSeek Harness 的 `web` profile：
+### macOS
+
+1. Apple Silicon Mac 下载 `ai-novel-writer-mac-arm64-<版本号>-installer.dmg`。
+
+2. Intel Mac 下载 `ai-novel-writer-mac-x64-<版本号>-installer.dmg`。
+
+3. 打开对应 DMG，将应用拖入“应用程序”文件夹。
+
+4. 启动 AI 小说作家。
+
+macOS 安装包使用 ad-hoc 签名，没有 Developer ID 签名，也未通过 Apple 公证。Gatekeeper 可能提示或阻止打开。
+
+确认来源后，按系统提示在“系统设置”的“隐私与安全性”中允许打开。安装与安全提示的具体情况以对应 Release 说明为准。
+
+### 以后怎样更新
+
+稳定版更新检查不接收 Preview。试用 Preview 时，从 Releases 页面手动下载并安装。
+
+Windows 发现稳定版更新后先提醒。你选择下载后，软件才开始下载。下载完成后，你再决定何时重启安装。
+
+macOS 更新提醒会打开官方 Release 页面。你需要手动下载对应架构的 DMG，软件不会在应用内替换 macOS 程序。
+
+## 从第一章开始
+
+先准备一个可用的生成模型。界面语言与作品的写作语言可以分别设置。
+
+1. 打开“设置”，进入“AI 生成模型”。
+
+2. 添加模型，填写服务商地址、模型名和所需凭据。
+
+3. 保存模型配置，并设为默认生成模型。
+
+4. 回到首页，选择“新建作品”。
+
+5. 填写故事想法、写作语言和章节目标。
+
+6. 完善故事前提、人物、世界设定和情节大纲。
+
+7. 打开“章节蓝图”，为第 1 章创建蓝图。
+
+8. 在蓝图中选择写作操作，生成第 1 章草稿。
+
+9. 打开草稿，运行 AI 审稿。
+
+10. 核对报告，选择要修正的问题，再运行修稿。
+
+11. 检查修订内容，确认后定稿。
+
+定稿表示保存作品内的正式章节，不会向网站发表。若要交付正文，使用“导出”，选择合并 Markdown、分章 Markdown 或纯文本 TXT。
+
+## 配置自己的模型
+
+软件支持 OpenAI-compatible 协议和 Gemini 原生协议。OpenAI-compatible 指兼容 Chat Completions 的接口。自定义地址仍须符合所选协议。
+
+OpenAI、DeepSeek、Ollama 和 NovelAI 等服务有对应预设。选择预设后，核对地址、模型名和账号权限。替换 URL 和 Key 不保证任意服务都兼容。
+
+如果模型列表可用，可以在设置中获取列表。模型支持的容量和参数并不相同。输出上限只是请求设置，不保证模型生成同样数量的内容。
+
+输入材料超过模型可用容量时，软件会明确拒绝请求。更换模型或减少本次材料后再试，不要把高输出设置当作容量证明。
+
+### 使用本机 Ollama
+
+先在 Ollama 中准备模型，再使用以下配置。模型名填写你本机已有的名称。
+
+```text
+Provider: Ollama
+Protocol: OpenAI-compatible
+Base URL: http://127.0.0.1:11434/v1
+API Key: 可留空
+Model: 你的本机模型名
+```
+
+向量模型也使用 `/v1` 地址。`/api` 是 Ollama 原生接口路径，不适用于本应用的 OpenAI-compatible 请求。
+
+### 使用 NovelAI
+
+NovelAI 预设使用 `https://text.novelai.net/oa`。填写自己的 Persistent API Token 和账号可用的模型名。
+
+该预设只有最小兼容支持。维护者尚未验证真实 NovelAI 账号的完整写作流程。账号权限和接口差异以服务商资料及实际响应为准。
+
+## 写长篇时怎样继续
+
+大纲和蓝图默认每次规划 5 章，可选 1–10 章。这是单次操作范围，不是整部作品的章数上限。完成后，从下一段章节继续。
+
+规划字数是软目标。完整内容超过目标仍会保留。正文仍超出目标时，软件会提示作者，不会仅因超长丢弃完整内容。
+
+生成下一章时，软件带入直接上一章的完整正文。更早章节按相关内容选择。实际请求仍受模型容量限制，不能保证所有材料都能发送。
+
+批量写作一次可选 1–10 章，支持暂停和取消。需要逐章检查时，选择“生成草稿待审”。自动定稿模式仍不保证模型内容正确。
+
+如果某个细节必须在本章出现，可以在角色备注或世界设定中单独写一行：
+
+```text
+【第3章必现】正文明确写出主角把钥匙交给同伴。
+```
+
+审稿会按本章要求寻找正文证据。待核实不是检查通过。你需要核对原文，并决定是否将意见交给修稿。
+
+蓝图提出新人物时，你可以创建人物、关联已有身份，或保留未解决。改名或同名不代表同一个人物，先核对再确认。
+
+## 失败后怎样处理
+
+生成、审稿或修稿失败时，先查看任务中保留的候选内容。按界面提供的操作恢复或保存。候选不等于已保存的草稿或定稿。
+
+如果源蓝图或源稿已经变化，旧候选可能不能继续。查看当前版本和候选来源后再操作。恢复功能不能代替独立备份。
+
+## 保留旧作品和备份
+
+### 导入 v1.0.0 或 v1.1.0 项目
+
+旧项目需要通过完整副本导入新版。导入不会调用 AI 重建作品设定，也不会在旧项目目录内转换。
+
+1. 在旧版中保存作品。
+
+2. 关闭旧版，以及会修改该目录的编辑或同步程序。
+
+3. 在新版首页选择“导入旧项目副本”。
+
+4. 选择旧项目目录和独立的新目录。
+
+5. 导入期间保持旧目录不变。
+
+6. 导入完成后，核对正文和创作资料。
+
+旧目录会保留。导入后的两份作品独立保存，之后的修改不会自动同步。若导入报告资料缺失或损坏，先处理缺口，不要当作导入成功。
+
+### 保存完整项目归档
+
+1. 打开作品。
+
+2. 打开“设置”中的“项目备份”。
+
+3. 选择“导出本地存档”。
+
+4. 将归档保存到独立的备份位置。
+
+完整归档保留正文、历史和创作资料，并校验文件与清单。恢复会创建独立的新副本。正文导出只用于阅读或交付，不能替代完整项目归档。
+
+### 使用 WebDAV 备份
+
+如果你有 WebDAV 服务，可以在“项目备份”中配置账号并绑定当前作品。然后手动上传项目归档，或下载已有备份并恢复为新副本。
+
+WebDAV 不是实时协同编辑或自动双向同步。上传会把完整项目归档发送到你配置的服务器。服务账号、存储空间和访问权限由你管理。
+
+## 资料保存在哪里
+
+小说正文、人物、蓝图和创作记录保存在本机项目目录。导入的参考资料也留在本机。生成请求选中的资料会随提示词发送给你配置的模型服务。
+
+使用本机模型时，请求发送到你配置的本机或局域网服务。使用云端模型时，提示词和相关正文会发送给对应服务商。
+
+模型凭据与应用偏好保存在系统的应用数据目录中。新版默认根目录如下，实际配置位于其中当前使用的数据子目录。
+
+- Windows：`%APPDATA%\ai-novel-writer`。
+
+- macOS：`~/Library/Application Support/ai-novel-writer`。
+
+旧版 `~/.vela` 资料在升级读取后保留。不要分享含 API Key 的 `models.json`，也不要将凭据或完整私人作品附到公开问题报告中。
+
+参考资料可以使用全文检索。若要按含义查找资料，需另配向量模型。写作 Skill 是各阶段的补充指导，可以配合提示词模板使用，但不能保证输出质量。
+
+## 获取帮助和反馈
+
+使用问题发到 [Discussions](https://github.com/EthanYoQ/AI-Novel-Writer/discussions)。错误和功能建议发到 [Issues](https://github.com/EthanYoQ/AI-Novel-Writer/issues)。提交前先搜索已有记录。
+
+报告 Preview 问题时，写明版本、系统、模型服务和复现步骤。说明你期望的结果和实际结果。截图先遮住凭据及私人作品内容。
+
+参与开发前阅读[贡献指南](CONTRIBUTING.md)。开发、领域规则和架构文档从[文档目录](docs/README.md)进入。
+
+## DeepSeek Harness 插件
+
+仓库另有独立的 `@ethanyoq/dsh-ai-novel-writer` 插件。`0.1.0` 预览目前冻结维护。插件不读取桌面项目，也不能替代桌面版。
+
+如果你使用 DeepSeek Harness Web，可以安装该插件：
 
 ```sh
 dsh plugin --profile web add @ethanyoq/dsh-ai-novel-writer
 dsh --profile web
 ```
 
-源码开发、固定 tarball 安装和 Windows 含空格路径限制由[插件安装指南](plugins/dsh-ai-novel-writer/docs/official-dsh-plugin-installation.md)单独维护，根 README 不复制这些易变化的维护者步骤。
+打开“小说工作台”，安装“AI 小说作家 V2” Preset。新建会话时选择该 Preset。AI 提议先进入本地表单，只有人工审核并应用 Proposal 后才写入项目。
 
-启动 Web 后，打开“小说工作台”，安装 **“AI 小说作家 V2”** Preset；随后新建会话并选择该 Preset。V2 的 AI 起草结果会先回填到右侧工作台的本地编辑表单，供人工修改和审核；点击应用 Proposal 才会写入项目。完整功能、项目格式、验证范围和卸载方式见[插件说明](plugins/dsh-ai-novel-writer/README.md)。不要使用 `dsh plugin add github:EthanYoQ/AI-Novel-Writer`：仓库根包是桌面应用，不是可激活的 DSH bundle。
+[插件说明](plugins/dsh-ai-novel-writer/README.md) · [安装指南](plugins/dsh-ai-novel-writer/docs/official-dsh-plugin-installation.md) · [npm 包](https://www.npmjs.com/package/@ethanyoq/dsh-ai-novel-writer)
 
+不要安装仓库根包作为 DSH 插件。桌面应用与插件分别发布，使用不同项目格式。
 
+## 历史界面图片
 
-## 产品定位
+以下是 v0.8.5 的旧界面截图，用于保留项目历史。1.2.0-Preview 使用 V3 界面，布局和按钮可能不同。不要按旧截图定位当前操作。
 
-AI 小说作家不是内置模型服务，也不是在线小说平台。它提供的是创作编排层：保存项目状态、组织提示词与上下文、管理章节蓝图和草稿版本，并把生成、审稿和修稿串起来。
+<details>
+<summary>查看 v0.8.5 中文截图</summary>
 
-你可以接入本地或云端模型；软件不会替你提供或托管模型额度。长篇创作时，系统会围绕当前章节蓝图、相关角色资料、世界观、历史摘要和可选参考文风组织上下文，而不是把整本小说塞进一次聊天记录。
+![v0.8.5 历史截图，不代表 1.2.0-Preview 界面](docs/assets/readme/ui-zh-v085-project-config.png)
 
-```mermaid
-flowchart LR
-  A[创作前提] --> B[角色与世界观]
-  B --> C[情节大纲与章节蓝图]
-  C --> D[章节草稿]
-  D --> E[审稿报告]
-  E --> F[修稿与定稿]
-  F --> G[下一章的项目上下文]
-```
-
-## 界面预览
-
-![AI 小说作家 v0.8.5 主界面，展示虚构项目、小说配置、项目结构、AI 写作助手和任务面板](docs/assets/readme/ui-zh-v085-project-config.png)
-
-## 核心能力
-
-| 能力 | 说明 |
-| --- | --- |
-| 结构化创作流程 | 从前提、角色、世界观到章节蓝图、草稿、审稿、修稿和定稿，按阶段组织创作资产。 |
-| 章节级生成 | 生成时围绕当前章节的蓝图和相关资料组织上下文，减少跨章跑题。 |
-| 生成失败恢复 | 章节生成失败但已有可见正文时，会把正文保存在当前项目的恢复候选中；候选不是正式草稿，源蓝图或草稿变化后不可继续，但可丢弃。 |
-| 审稿与修稿 | 为草稿生成结构化审稿信息，并以报告作为修稿输入。 |
-| 角色卡与项目资料 | 在项目内维护角色、世界观、蓝图、草稿和定稿；项目会话机制避免旧窗口向重新打开的项目写入数据。 |
-| 剧情树与叙事线索 | 以章节轨道展示主线、支线和来源进度；剧情树是可重建的只读快照，不会取代作者事实。 |
-| 写作 Skills 与提示词模板 | 可按创作阶段绑定补充写作方法并定制中英文创作指导；语言、输出结构和工具协议仍由隐藏合同保护。 |
-| 文风控制 | 章节定稿不会自动改写小说配置中的文风；你仍可手动编辑，或主动运行文风分析、导入小说建立仿写指南。 |
-| 参考文本与知识库 | 可导入常见文本格式作为参考资料；未配置 embedding 时仍可使用 SQLite FTS 全文检索。 |
-| 批量创作任务 | 单独的批量章节创作任务可设为 1–10 章，支持暂停、取消；后处理失败会停止后续章节。 |
-| 中英文界面 | 首次启动可跟随系统语言，手动选择会持久保存。 |
-
-生成情节大纲时，可在「AI 生成架构」中明确填写本次章节范围；超过 20 章的项目默认从第 1–20 章开始。完成一批后可从下一章继续；若生成中断且保留了有效断点，可从原断点恢复。如果已修改原大纲或参与生成的源设定与指导，旧断点不会直接接到新内容上，需要重新生成相应范围。
-
-## 模型配置
-
-目前支持两类调用协议：
-
-- **OpenAI-compatible**：适用于 OpenAI、DeepSeek、Ollama、NovelAI 预设及其他兼容 Chat Completions 的服务。
-- **Gemini 原生协议**：适用于 Google Gemini 兼容端点。
-
-“自定义 API”指的是在上述协议范围内自定义地址、模型标识和凭据；它不是任意 HTTP 协议或可执行脚本编辑器。Anthropic、Azure、KoboldAI 原生协议等不同接口需要单独的适配器，不能仅靠替换 URL 保证兼容。
-
-### Ollama
-
-推荐通过 Ollama 的 OpenAI-compatible 服务接入：
-
-```text
-Provider:  Ollama（本地）或自定义
-Protocol:  OpenAI-compatible
-Base URL:  http://127.0.0.1:11434/v1
-API Key:   可留空；若界面要求，可填任意本地占位值
-Model:     你的 Ollama 模型名，例如 qwen3:14b
-```
-
-向量模型也应使用 `/v1`。不要把 Base URL 写成 `http://127.0.0.1:11434/api`：`/api` 是 Ollama 的原生接口路径，不是本应用当前使用的 OpenAI-compatible embedding 路径。
-
-### NovelAI（最小兼容支持）
-
-设置中可选择 **NovelAI** 预设，默认地址为 `https://text.novelai.net/oa`，协议为 OpenAI-compatible。请使用自己的 Persistent API Token，并按账户实际可用模型填写模型标识。
-
-本项目对该预设做了最小参数兼容：不向其发送标准 `response_format`，思考参数采用其兼容分支。由于维护者没有用户的 NovelAI Token，尚未进行真实账户的完整创作流程验证；遇到账号权限、模型名或接口差异时，请以 NovelAI 的账户和官方资料为准。
-
-## 数据、隐私与边界
-
-| 数据或行为 | 默认位置 / 去向 |
-| --- | --- |
-| 小说项目、角色、蓝图、草稿和定稿 | 你的项目目录与本地 SQLite 数据库。 |
-| 生成失败的恢复候选 | 只保存在当前项目的本地 SQLite 数据库；不会自动成为草稿、定稿或连续性事实。 |
-| 导入的参考资料 | 保留在本地项目范围内，除非你自行把内容发送给云端模型。 |
-| 本地模型请求 | 发送给你配置的本机或局域网推理服务。 |
-| 云端模型请求 | 当你选择 OpenAI、DeepSeek、Gemini 或其他云端端点时，提示词和上下文会发送给该服务商。 |
-| 模型配置与 API Key | 当前保存在本机用户目录 `~/.vela/models.json`；请保护操作系统账户，不要分享该文件。 |
-| 应用偏好与更新延后设置 | 保存在 `~/.vela/config.json`。 |
-
-软件本身不提供模型账号、云端生成服务或运营消息推送。联网更新检查只读取公开 GitHub Release；用户可手动检查，也可在发现更新后暂缓提醒。
-
-## 安装与更新
-
-### Windows x64
-
-正式版使用 Windows NSIS 安装程序：
-
-```text
-ai-novel-writer-setup-<版本号>.exe
-```
-
-1. 只从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载正式安装包。
-2. 安装程序更新应用本身，不应删除小说项目、角色卡或已有设置；仍建议在升级前自行备份重要作品。
-3. 安装后可在欢迎页使用“检查更新”；应用启动后也会按每日一次的成功检查频率静默检查。发现正式更新时先提示，只有用户点击“下载更新”后才开始下载；下载完成后再提供“立即重启更新 / 稍后”的选择。
-4. 旧版便携 ZIP 不能自行获得首个更新器版本，需要手动安装一次正式安装包；后续不再维护新的便携 ZIP。
-
-当前安装程序尚未进行代码签名。Windows 可能显示发布者或信誉提示；请确认下载页面属于本项目的官方 GitHub Release 后再继续。
-
-### macOS（Apple Silicon 与 Intel）
-
-从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载与你的 Mac 架构对应的安装包：
-
-```text
-ai-novel-writer-mac-arm64-<版本号>-installer.dmg
-ai-novel-writer-mac-x64-<版本号>-installer.dmg
-```
-
-1. `arm64` 适用于 Apple Silicon Mac（M1、M2、M3、M4 等）；`x64` 适用于 Intel Mac。
-2. 将 DMG 中的应用拖入“应用程序”文件夹后启动。应用可以检查 GitHub 最新正式版并显示提醒，但不会在 macOS 内下载或替换程序；更新操作只打开官方 Release 页面，由用户手动下载对应架构的后续版本。
-3. 两个安装包均为 ad-hoc 签名，且均未使用 Developer ID 签名或公证。若 Gatekeeper 阻止打开，请确认来源是本项目的官方 GitHub Release，然后在 Finder 中按住 Control 点击应用并选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。
-
-## 当前限制
-
-- 不承诺任意第三方 API 都能仅靠 URL 和 Key 接入；只保证已实现协议与预设范围内的行为。
-- 不替代作者的创意、事实核查或版权判断；AI 输出需要作者审阅。
-- 不提供在线发布、阅读社区或云端模型账号。
-- 正式安装包由 GitHub Actions 云端构建；Windows、macOS ARM64 与 macOS x64 会各自通过资格检查后，才会进入同一个 GitHub Release。
-
-## 开发与架构文档
-
-文档权威层级、ADR、调研、Agent 规则和任务交接入口见 [`docs/README.md`](docs/README.md)。DeepSeek Harness 插件拥有独立的[插件说明](plugins/dsh-ai-novel-writer/README.md)，不作为桌面版行为的来源。
+</details>
 
 ## 许可证
 
-[GPL-3.0](LICENSE)
+桌面应用使用 [GPL-3.0](LICENSE)。DeepSeek Harness 插件按其独立的 [MIT 许可证](plugins/dsh-ai-novel-writer/LICENSE)发布。
