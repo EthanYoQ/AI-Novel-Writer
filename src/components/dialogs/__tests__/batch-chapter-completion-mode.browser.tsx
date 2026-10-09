@@ -804,7 +804,7 @@ describe('batch chapter completion mode browser flow', () => {
     expect(draftRecord).toMatchObject({ chapterNumber: 5, content: condensed, wordCount: 1350 })
     mark('log-tab-start'); await act(async () => useLayoutStore.setState({ bottomTab: 'log' })); mark('log-tab-drained')
     mark('notice-wait-start'); await expect.element(page.getByText('第5章字数超过约定', { exact: true })).toBeVisible(); mark('notice-visible')
-    mark('screenshot-start'); await page.screenshot({ path: '../../../../.runtime/.cache/overlength-implementation/chapter5-warning.png' }); mark('screenshot-end')
+    mark('screenshots-removed')
     for (let chapter = 6; chapter <= 10; chapter++) {
       await completeNextDraft()
     }
@@ -829,10 +829,6 @@ describe('batch chapter completion mode browser flow', () => {
     expect(invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
     expect(draftRecord?.chapterNumber).toBe(10)
     await expect.element(page.getByText('第5章字数超过约定', { exact: true })).toBeVisible()
-    page.getByText('第5章字数超过约定', { exact: true }).element().scrollIntoView({ block: 'center' })
-    await page.screenshot({ path: '../../../../.runtime/.cache/overlength-implementation/ten-chapters-completed-warning.png' })
-    await page.screenshot({ element: page.getByText('第5章字数超过约定', { exact: true }),
-      path: '../../../../.runtime/.cache/overlength-implementation/retained-notice.png' })
   })
 
   it('creates an editable draft in the project tree without finalization side effects', async () => {

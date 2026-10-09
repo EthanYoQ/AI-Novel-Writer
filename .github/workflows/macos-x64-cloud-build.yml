@@ -21,6 +21,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ inputs.expected_sha }}
+          fetch-depth: 2
           persist-credentials: false
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
@@ -44,12 +45,32 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
-      - name: Diagnose original nine-case browser file
+      - name: Candidate without three unconsumed captures
+        id: candidate
+        continue-on-error: true
         env:
           DEBUG: pw:api
         run: |
           set -o pipefail
-          pnpm run test:browser src/components/dialogs/__tests__/batch-chapter-completion-mode.browser.tsx 2>&1 | tee .runtime/.cache/batch-cloud-diagnostic/browser.log
+          pnpm run test:browser src/components/dialogs/__tests__/batch-chapter-completion-mode.browser.tsx 2>&1 | tee .runtime/.cache/batch-cloud-diagnostic/candidate.log
+      - name: Original screenshot control on same runner
+        id: control
+        continue-on-error: true
+        env:
+          DEBUG: pw:api
+        run: |
+          set -euo pipefail
+          test_file=src/components/dialogs/__tests__/batch-chapter-completion-mode.browser.tsx
+          git show a1390730ad2023c61f0823376dfb05bf3916379b:"$test_file" > "$test_file"
+          pnpm run test:browser "$test_file" 2>&1 | tee .runtime/.cache/batch-cloud-diagnostic/control.log
+      - name: Record both outcomes without promotion
+        if: ${{ always() }}
+        env:
+          CANDIDATE_OUTCOME: ${{ steps.candidate.outcome }}
+          CONTROL_OUTCOME: ${{ steps.control.outcome }}
+        run: |
+          node --input-type=module -e 'import fs from "node:fs";fs.writeFileSync(".runtime/.cache/batch-cloud-diagnostic/outcomes.json",JSON.stringify({candidate:process.env.CANDIDATE_OUTCOME,control:process.env.CONTROL_OUTCOME,order:["candidate","control"],diagnosticOnly:true},null,2))'
+          test "$CANDIDATE_OUTCOME" = success
       - name: Upload diagnostic-only evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
