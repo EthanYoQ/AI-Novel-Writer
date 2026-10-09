@@ -27,7 +27,7 @@ function sha512(content: string | Buffer) {
   return createHash('sha512').update(content).digest('base64')
 }
 
-function createFormalWindowsRelease(root: string, options: { sha512?: string; releaseType?: string } = {}) {
+function createFormalWindowsRelease(root: string, options: { sha512?: string; releaseType?: string; version?: string; size?: number } = {}) {
   const installerName = 'AI小说作家-0.2.6-setup.exe'
   const installer = Buffer.from('known-good-nsis-installer')
   const installerSha512 = options.sha512 ?? sha512(installer)
@@ -38,11 +38,11 @@ function createFormalWindowsRelease(root: string, options: { sha512?: string; re
     root,
     'latest.yml',
     [
-      'version: 0.2.6',
+      `version: ${options.version ?? '0.2.6'}`,
       'files:',
       `  - url: ${installerName}`,
       `    sha512: ${installerSha512}`,
-      `    size: ${installer.length}`,
+      `    size: ${options.size ?? installer.length}`,
       `path: ${installerName}`,
       `sha512: ${installerSha512}`,
       'releaseDate: 2026-07-25T00:00:00.000Z',
@@ -71,6 +71,30 @@ afterEach(() => {
 })
 
 describe('Windows update release artifact verification', () => {
+  it('accepts the exact Preview package version with the stable update source', () => {
+    const root = fixture()
+    createFormalWindowsRelease(root, { version: '1.2.0-Preview' })
+
+    expect(verifyWindowsUpdateArtifacts(root, undefined, '1.2.0-Preview')).toMatchObject({
+      version: '1.2.0-Preview', releaseType: 'release',
+    })
+    expect(() => verifyWindowsUpdateArtifacts(root, undefined, '1.2.0')).toThrow('does not match expected release version')
+  })
+
+  it.each(['1.2.0-', '1.2.0-01', '1.2.0-Preview..1', '01.2.0', '1.2.0+build..1'])('rejects malformed version %s', (version) => {
+    const root = fixture()
+    createFormalWindowsRelease(root, { version })
+    expect(() => verifyWindowsUpdateArtifacts(root)).toThrow('semantic version')
+    createFormalWindowsRelease(root)
+    expect(() => verifyWindowsUpdateArtifacts(root, undefined, version)).toThrow('semantic version')
+  })
+
+  it('rejects Preview metadata whose installer size is wrong', () => {
+    const root = fixture()
+    createFormalWindowsRelease(root, { version: '1.2.0-Preview', size: 1 })
+    expect(() => verifyWindowsUpdateArtifacts(root)).toThrow('size does not match')
+  })
+
   it('accepts a formal GitHub NSIS update package whose metadata resolves to the installer', () => {
     const root = fixture()
     const { installerName } = createFormalWindowsRelease(root)

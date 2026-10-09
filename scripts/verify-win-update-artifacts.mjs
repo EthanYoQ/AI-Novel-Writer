@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '..')
+const semanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 const expectedGithubSource = Object.freeze({
   provider: 'github',
   owner: 'EthanYoQ',
@@ -93,13 +94,13 @@ export function verifyWindowsUpdateArtifacts(releaseDir, projectRoot = repositor
   const metadata = loadYaml(projectRoot, readFileSync(latestMetadata, 'utf8'), 'latest.yml')
   const version = metadata.version
   assert(
-    typeof version === 'string' && /^\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?$/.test(version),
-    'latest.yml must declare a final semantic version',
+    typeof version === 'string' && semanticVersionPattern.exec(version)?.[0] === version,
+    'latest.yml must declare a semantic version',
   )
   if (expectedVersion != null) {
     assert(
-      typeof expectedVersion === 'string' && /^\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?$/.test(expectedVersion),
-      'Expected release version must be a final semantic version',
+      typeof expectedVersion === 'string' && semanticVersionPattern.exec(expectedVersion)?.[0] === expectedVersion,
+      'Expected release version must be a semantic version',
     )
     assert(version === expectedVersion, `latest.yml version ${version} does not match expected release version ${expectedVersion}`)
   }

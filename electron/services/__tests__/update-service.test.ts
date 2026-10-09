@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  isHigherStableVersion,
   UpdateService,
   type UpdateBackend,
   type UpdateCheckResult,
@@ -83,6 +84,58 @@ function createNonPersistingPreferencesStore(): UpdatePreferencesStore {
 }
 
 describe('UpdateService', () => {
+  it('offers the stable release to a Preview installation and downloads only on request', async () => {
+    const updater = new FakeUpdater({ updateInfo: { version: '1.2.0' } })
+    const service = new UpdateService({
+      updater,
+      currentVersion: '1.2.0-Preview',
+      isPackaged: true,
+      preferences: createPreferencesStore(),
+    })
+
+    await service.checkManually()
+    expect(service.getState()).toMatchObject({ status: 'available', availableVersion: '1.2.0' })
+    expect(updater.downloadCalls).toBe(0)
+    await service.downloadUpdate()
+    expect(updater.downloadCalls).toBe(1)
+  })
+
+  it('restores a stable update for Preview and rechecks it before download', async () => {
+    const updater = new FakeUpdater({ updateInfo: { version: '1.2.0' } })
+    const service = new UpdateService({
+      updater,
+      currentVersion: '1.2.0-Preview',
+      isPackaged: true,
+      preferences: createPreferencesStore({ availableUpdate: { version: '1.2.0' } }),
+    })
+
+    expect(service.getState()).toMatchObject({ status: 'available', availableVersion: '1.2.0' })
+    await expect(service.downloadUpdate()).resolves.toMatchObject({ success: true })
+    expect(updater.checkCalls).toBe(1)
+    expect(updater.downloadCalls).toBe(1)
+  })
+
+  it.each([
+    ['1.2.0', '1.2.0-Preview', true],
+    ['v1.2.0+build.2', 'v1.2.0-Preview+build.1', true],
+    ['1.3.0', '1.2.0-Preview', true],
+    ['1.1.9', '1.2.0-Preview', false],
+    ['1.2.0', '1.2.0', false],
+    ['1.2.0+build.2', '1.2.0+build.1', false],
+    ['1.3.0-Preview', '1.2.0-Preview', false],
+    ['1.3.0', '1.2.0-', false],
+    ['1.3.0', '1.2.0-01', false],
+    ['1.3.0', '1.2.0-Preview..1', false],
+    ['1.3.0', '01.2.0-Preview', false],
+    ['1.3.0', '1.2.0+build..1', false],
+    ['1.3.0', 'unknown', false],
+    ['1.3.0', '1.2.0\n', false],
+    ['01.3.0', '1.2.0-Preview', false],
+    ['9007199254740992.0.0', '1.2.0-Preview', false],
+  ])('compares stable candidate %s with current %s as %s', (candidate, current, expected) => {
+    expect(isHigherStableVersion(candidate, current)).toBe(expected)
+  })
+
   it('does not contact the update backend from an unpackaged development runtime', async () => {
     const updater = new FakeUpdater({ updateInfo: { version: '0.2.6' } })
     const service = new UpdateService({

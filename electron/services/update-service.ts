@@ -75,10 +75,13 @@ function localCalendarDate(now: Date): string {
   return `${year}-${month}-${day}`
 }
 
-function stableVersionParts(version: string): number[] | null {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version)
-  if (!match) return null
-  return [Number(match[1]), Number(match[2]), Number(match[3])]
+function versionParts(version: string): { core: number[]; prerelease: boolean } | null {
+  const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version)
+  if (!match || match[0] !== version) return null
+  if (match[4]?.split('.').some(identifier => /^0\d+$/.test(identifier))) return null
+  const core = [Number(match[1]), Number(match[2]), Number(match[3])]
+  if (!core.every(Number.isSafeInteger)) return null
+  return { core, prerelease: match[4] !== undefined }
 }
 
 function normalizeProgress(value: unknown): UpdateDownloadProgress | undefined {
@@ -171,18 +174,18 @@ function classifyUpdateFailure(phase: Extract<UpdateErrorPhase, 'check' | 'downl
   return makeUpdateError(code, phase, 'unknown', true, 'UPDATE_OPERATION_FAILED')
 }
 
-/** 预发布版本和非 SemVer 版本不属于可用更新。 */
+/** 候选必须是正式版；当前预发布版可以升级到同核心版本的正式版。 */
 export function isHigherStableVersion(candidate: string, current: string): boolean {
-  const candidateParts = stableVersionParts(candidate)
-  const currentParts = stableVersionParts(current)
-  if (!candidateParts || !currentParts) return false
+  const candidateParts = versionParts(candidate)
+  const currentParts = versionParts(current)
+  if (!candidateParts || candidateParts.prerelease || !currentParts) return false
 
-  for (let index = 0; index < candidateParts.length; index += 1) {
-    if (candidateParts[index] !== currentParts[index]) {
-      return candidateParts[index] > currentParts[index]
+  for (let index = 0; index < candidateParts.core.length; index += 1) {
+    if (candidateParts.core[index] !== currentParts.core[index]) {
+      return candidateParts.core[index] > currentParts.core[index]
     }
   }
-  return false
+  return currentParts.prerelease
 }
 
 /**

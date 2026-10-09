@@ -871,6 +871,56 @@ function New-AiNovelQualificationProfile {
   return [pscustomobject]$profile
 }
 
+function Get-AiNovelInstalledVersion {
+  param(
+    [Parameter(Mandatory = $true)][string]$ExePath,
+    [string]$ExpectedVersion
+  )
+
+  $productVersion = [string](Get-Item -LiteralPath $ExePath).VersionInfo.ProductVersion
+  $numericVersion = $null
+  if (-not [version]::TryParse($productVersion, [ref]$numericVersion)) {
+    throw "Installed application exposed an invalid product version: $productVersion"
+  }
+  $previousElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
+  $reader = $null
+  try {
+    $env:ELECTRON_RUN_AS_NODE = '1'
+    $readPackageVersion = "console.log(JSON.stringify(JSON.parse(require('node:fs').readFileSync(require('node:path').join(require('node:path').dirname(process.execPath), 'resources', 'app.asar', 'package.json'), 'utf8')).version))"
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $ExePath
+    $startInfo.Arguments = '-e "' + $readPackageVersion + '"'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $reader = [System.Diagnostics.Process]::Start($startInfo)
+    $stdout = $reader.StandardOutput.ReadToEndAsync()
+    $stderr = $reader.StandardError.ReadToEndAsync()
+    $reader.WaitForExit()
+    $output = $stdout.GetAwaiter().GetResult()
+    $errorOutput = $stderr.GetAwaiter().GetResult()
+    if ($reader.ExitCode -ne 0) { throw "Installed package version reader failed with exit code $($reader.ExitCode): $errorOutput" }
+    $packageVersion = $output | ConvertFrom-Json
+  }
+  finally {
+    if ($null -ne $reader) { $reader.Dispose() }
+    $env:ELECTRON_RUN_AS_NODE = $previousElectronRunAsNode
+  }
+  $semanticVersionPattern = '^(?<core>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z'
+  if ($packageVersion -isnot [string] -or $packageVersion -notmatch $semanticVersionPattern) {
+    throw 'Installed package did not expose a valid semantic version.'
+  }
+  $coreVersion = $Matches.core
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and $packageVersion -cne $ExpectedVersion) {
+    throw "Installed package version mismatch: expected $ExpectedVersion, got $packageVersion"
+  }
+  if ($productVersion -cne $coreVersion -and $productVersion -cne "$coreVersion.0") {
+    throw "Installed product version mismatch: expected $coreVersion or $coreVersion.0, got $productVersion"
+  }
+  return [pscustomobject]@{ productVersion = $productVersion; packageVersion = $packageVersion }
+}
+
 if ($LoadProbeLibrary) {
   return
 }
@@ -1214,33 +1264,8 @@ try {
     -LastWindowSnapshot ([ref]$lastWindowSnapshot)
 
   if (-not [string]::IsNullOrWhiteSpace($AcceptanceDirectory)) {
-    $versionInfo = (Get-Item -LiteralPath $resolvedExe).VersionInfo
-    $actualVersion = [string]$versionInfo.ProductVersion
-    if ([string]::IsNullOrWhiteSpace($actualVersion)) {
-      throw 'Installed application did not expose a product version.'
-    }
-    if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion)) {
-      $actualSemanticVersion = $null
-      $expectedSemanticVersion = $null
-      if (-not [version]::TryParse($actualVersion, [ref]$actualSemanticVersion)) {
-        throw "Installed application exposed an invalid product version: $actualVersion"
-      }
-      if (-not [version]::TryParse($ExpectedVersion, [ref]$expectedSemanticVersion)) {
-        throw "Expected application version is invalid: $ExpectedVersion"
-      }
-      $versionMatches = (
-        $actualSemanticVersion.Major -eq $expectedSemanticVersion.Major -and
-        $actualSemanticVersion.Minor -eq $expectedSemanticVersion.Minor -and
-        $actualSemanticVersion.Build -eq $expectedSemanticVersion.Build -and
-        (
-          $actualSemanticVersion.Revision -eq $expectedSemanticVersion.Revision -or
-          ($expectedSemanticVersion.Revision -eq -1 -and $actualSemanticVersion.Revision -eq 0)
-        )
-      )
-      if (-not $versionMatches) {
-        throw "Installed application version mismatch: expected $ExpectedVersion, got $actualVersion"
-      }
-    }
+    $installedVersion = Get-AiNovelInstalledVersion -ExePath $resolvedExe -ExpectedVersion $ExpectedVersion
+    $actualVersion = $installedVersion.productVersion
     $rootProcessStartTimeTicks = [long]$appProcessStartTimeTicks[[string]$process.Id]
     Write-AiNovelAcceptanceReceipt `
       -Directory $AcceptanceDirectory `
@@ -1257,6 +1282,7 @@ try {
         direct = [ordered]@{
           executablePath = $resolvedExe
           productVersion = $actualVersion
+          packageVersion = $installedVersion.packageVersion
           processId = [int]$process.Id
           processStartTimeTicks = [string]$rootProcessStartTimeTicks
           visibleMainWindowCount = $acceptedMainWindowCount
