@@ -74,6 +74,7 @@ let draftCompletionIndex: number
 let draftCompletions: string[]
 let deferDraftCompletion: boolean
 let pendingDraftCompletions: Array<() => void>
+let notifyDraftCompletionReady: (() => void) | undefined
 let changeDefaultAfterFirstDraft: boolean
 let postProcessSteps: Array<{
   stepKey: string
@@ -276,7 +277,12 @@ function installIpc() {
       const text = isOutline ? '目标：收到匿名信；行动：沈砺拆信检查署名；结果：开始调查。'
         : draftCompletions[draftCompletionIndex++] ?? DRAFT_TEXT
       if (!isOutline && changeDefaultAfterFirstDraft && draftCompletionIndex === 1) useLLMStore.setState({ defaultModelId: 'changed-default-model' })
-      if (!isOutline && deferDraftCompletion) await new Promise<void>(resolve => pendingDraftCompletions.push(resolve))
+      if (!isOutline && deferDraftCompletion) {
+        await new Promise<void>(resolve => {
+          pendingDraftCompletions.push(resolve)
+          notifyDraftCompletionReady?.()
+        })
+      }
       const attempt = ++generationAttempt
       const artifact = { ...view.handle, artifactId: `${view.handle.runId}:artifact:${attempt}`, attemptId: `${view.handle.runId}:attempt:${attempt}`,
         revision: 1, durableRevision: 1, text, textHash: await hashAuthorText(text), status: 'completed' as const }
@@ -539,6 +545,7 @@ beforeEach(() => {
   draftCompletions = [DRAFT_TEXT]
   deferDraftCompletion = false
   pendingDraftCompletions = []
+  notifyDraftCompletionReady = undefined
   changeDefaultAfterFirstDraft = false
   postProcessRunCreated = false
   postProcessSteps = []
@@ -765,6 +772,14 @@ describe('batch chapter completion mode browser flow', () => {
   })
 
   it('shows one chapter 5 overlength notice and completes chapters 6 through 10 after saving the full 1350-unit revision', async () => {
+    const nextDraftReady = () => new Promise<void>(resolve => { notifyDraftCompletionReady = resolve })
+    let draftReady = nextDraftReady()
+    const completeNextDraft = async () => {
+      await draftReady
+      expect(pendingDraftCompletions).toHaveLength(1)
+      draftReady = nextDraftReady()
+      await act(async () => pendingDraftCompletions.shift()?.())
+    }
     await page.viewport(1440, 900)
     const chapterTexts = Array.from({ length: 10 }, (_, index) => `${String.fromCharCode(0x4e00 + index).repeat(1000)}。`)
     const condensed = `${'缩'.repeat(1350)}。`
@@ -777,17 +792,16 @@ describe('batch chapter completion mode browser flow', () => {
     await act(async () => page.getByRole('spinbutton', { name: '本次章节数' }).fill('10'))
     await act(async () => page.getByRole('button', { name: '启动批量创作' }).click())
     for (let attempt = 0; attempt < 6; attempt++) {
-      await vi.waitFor(() => expect(pendingDraftCompletions).toHaveLength(1))
-      await act(async () => pendingDraftCompletions.shift()?.())
+      await completeNextDraft()
     }
-    await vi.waitFor(() => expect(pendingDraftCompletions).toHaveLength(1))
+    await draftReady
+    expect(pendingDraftCompletions).toHaveLength(1)
     expect(draftRecord).toMatchObject({ chapterNumber: 5, content: condensed, wordCount: 1350 })
     await act(async () => useLayoutStore.setState({ bottomTab: 'log' }))
     await expect.element(page.getByText('第5章字数超过约定', { exact: true })).toBeVisible()
     await page.screenshot({ path: '../../../../.runtime/.cache/overlength-implementation/chapter5-warning.png' })
     for (let chapter = 6; chapter <= 10; chapter++) {
-      await vi.waitFor(() => expect(pendingDraftCompletions).toHaveLength(1))
-      await act(async () => pendingDraftCompletions.shift()?.())
+      await completeNextDraft()
     }
     await vi.waitFor(() => expect(useWorkflowStore.getState().history[0]?.status).toBe('completed'))
     const run = useWorkflowStore.getState().history[0]!
