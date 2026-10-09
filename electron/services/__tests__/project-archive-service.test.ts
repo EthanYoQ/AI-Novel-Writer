@@ -362,6 +362,15 @@ describe('portable project export service', { timeout: 20_000 }, () => {
     }
   })
 
+  it('cleans staging when a runtime freeze sidecar is invalid', async () => {
+    const f = fixture()
+    fs.writeFileSync(path.join(f.storage, 'portable-runtime-freeze.json'), '{}')
+
+    await expect(exportPortableProject(input(f))).rejects.toThrow('PORTABLE_RUNTIME_FREEZE_INVALID')
+    expect(fs.existsSync(f.target)).toBe(false)
+    expect(fs.readdirSync(f.attemptParent)).toEqual([])
+  })
+
   it('rejects an export whose combined frozen history cannot be read back', async () => {
     const f = fixture()
     seedProject(f)
