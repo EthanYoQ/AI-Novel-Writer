@@ -103,8 +103,13 @@ beforeEach(() => {
     },
   })
   container = document.createElement('div')
+  container.className = 'relationship-editor-fixture'
+  const style = document.createElement('style')
+  style.textContent = '.relationship-editor-fixture canvas { width: 600px; height: 400px; }'
+  const mount = document.createElement('div')
+  container.append(style, mount)
   document.body.append(container)
-  root = createRoot(container)
+  root = createRoot(mount)
 })
 
 afterEach(async () => {
@@ -303,12 +308,16 @@ describe('CharacterEditor relationship field', () => {
 
     await act(async () => page.getByRole('button', { name: '关系图谱' }).click())
     await expect.element(page.getByText('100%')).toBeVisible()
+    const canvas = container!.querySelector('canvas')!
+    expect(canvas).toBeTruthy()
+    for (let frame = 0; frame < 3; frame++) {
+      await act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+      expect([canvas.width, canvas.height]).toEqual([canvas.offsetWidth * 2, canvas.offsetHeight * 2])
+    }
 
     await act(async () => page.getByRole('button', { name: '放大关系图谱' }).click())
     await expect.element(page.getByText('110%')).toBeVisible()
 
-    const canvas = container?.querySelector('canvas')
-    expect(canvas).toBeTruthy()
     await act(async () => {
       canvas?.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }))
     })
