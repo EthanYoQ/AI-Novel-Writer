@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, onTestFinished } from 'vitest'
 import { page } from 'vitest/browser'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -772,13 +772,18 @@ describe('batch chapter completion mode browser flow', () => {
   })
 
   it('shows one chapter 5 overlength notice and completes chapters 6 through 10 after saving the full 1350-unit revision', async () => {
+    const started = performance.now()
+    const phases: unknown[] = []
+    const mark = (event: string) => phases.push({ event, ms: Math.round(performance.now() - started), pending: pendingDraftCompletions.length, completionIndex: draftCompletionIndex, draftChapter: draftRecord?.chapterNumber, fonts: document.fonts.status, height: document.body.scrollHeight, width: document.body.scrollWidth, animationCount: document.getAnimations().length })
+    onTestFinished(() => console.error('[batch-phase-evidence]', JSON.stringify(phases)))
+    mark('start')
     const nextDraftReady = () => new Promise<void>(resolve => { notifyDraftCompletionReady = resolve })
     let draftReady = nextDraftReady()
     const completeNextDraft = async () => {
-      await act(async () => { await draftReady })
+      mark('draft-wait-start'); await act(async () => { await draftReady; mark('draft-ready') }); mark('draft-act-drained')
       expect(pendingDraftCompletions).toHaveLength(1)
       draftReady = nextDraftReady()
-      await act(async () => pendingDraftCompletions.shift()?.())
+      await act(async () => pendingDraftCompletions.shift()?.()); mark('draft-released')
     }
     await page.viewport(1440, 900)
     const chapterTexts = Array.from({ length: 10 }, (_, index) => `${String.fromCharCode(0x4e00 + index).repeat(1000)}。`)
@@ -794,19 +799,19 @@ describe('batch chapter completion mode browser flow', () => {
     for (let attempt = 0; attempt < 6; attempt++) {
       await completeNextDraft()
     }
-    await act(async () => { await draftReady })
+    mark('chapter6-ready-start'); await act(async () => { await draftReady; mark('chapter6-ready') }); mark('chapter6-act-drained')
     expect(pendingDraftCompletions).toHaveLength(1)
     expect(draftRecord).toMatchObject({ chapterNumber: 5, content: condensed, wordCount: 1350 })
-    await act(async () => useLayoutStore.setState({ bottomTab: 'log' }))
-    await expect.element(page.getByText('第5章字数超过约定', { exact: true })).toBeVisible()
-    await page.screenshot({ path: '../../../../.runtime/.cache/overlength-implementation/chapter5-warning.png' })
+    mark('log-tab-start'); await act(async () => useLayoutStore.setState({ bottomTab: 'log' })); mark('log-tab-drained')
+    mark('notice-wait-start'); await expect.element(page.getByText('第5章字数超过约定', { exact: true })).toBeVisible(); mark('notice-visible')
+    mark('screenshot-start'); await page.screenshot({ path: '../../../../.runtime/.cache/overlength-implementation/chapter5-warning.png' }); mark('screenshot-end')
     for (let chapter = 6; chapter <= 10; chapter++) {
       await completeNextDraft()
     }
     await act(async () => {
       await vi.waitFor(() => expect(useWorkflowStore.getState().history[0]?.status).toBe('completed'))
     })
-    const run = useWorkflowStore.getState().history[0]!
+    mark('workflow-completed'); const run = useWorkflowStore.getState().history[0]!
     expect(run.steps).toHaveLength(10)
     expect(run.steps.every(step => step.status === 'completed')).toBe(true)
     expect(run.steps.flatMap(step => step.logs).filter(log => log.includes('字数超过约定'))).toEqual([expect.stringContaining('第5章字数超过约定')])
