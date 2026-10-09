@@ -27,7 +27,7 @@ describe('v1.2.0-Preview candidate metadata', () => {
     ])
   })
 
-  it('documents the bilingual 1.1.0 scope, retained features, and signing disclosure', () => {
+  it('documents the bilingual 1.1.0 notes, current README version, retained features, and signing disclosure', () => {
     const notes = readFileSync('.release/notes/v1.1.0.md', 'utf8')
     const previousNotes = readFileSync('.release/notes/v1.0.0.md', 'utf8')
     const chineseReadme = readFileSync('README.md', 'utf8')
@@ -62,8 +62,8 @@ describe('v1.2.0-Preview candidate metadata', () => {
       'not notarized',
     ]) expect(notes).toContain(expected)
 
-    expect(chineseReadme).toContain('v1.1.0')
-    expect(englishReadme).toContain('v1.1.0')
+    expect(chineseReadme).toContain('> ## 1.2.0-Preview')
+    expect(englishReadme).toContain('> ## 1.2.0-Preview')
 
     const zhRetained = previousNotes
       .slice(0, previousNotes.indexOf('## 安装提示'))
@@ -89,7 +89,7 @@ describe('v1.2.0-Preview candidate metadata', () => {
         'Apple Silicon',
         'Intel',
         '1.2.0-Preview',
-        'https://github.com/EthanYoQ/AI-Novel-Writer/releases)',
+        'https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest)',
       ]) expect(readme).toContain(expected)
 
       for (const installer of [
@@ -102,13 +102,13 @@ describe('v1.2.0-Preview candidate metadata', () => {
     for (const expected of [
       '未进行代码签名',
       'ad-hoc 签名',
-      '没有 Developer ID 签名',
-      '未通过 Apple 公证',
+      '未使用 Developer ID 签名',
+      '未使用 Developer ID 签名或公证',
     ]) expect(chineseReadme).toContain(expected)
 
     for (const expected of [
       'not code-signed',
-      'ad-hoc signatures',
+      'ad-hoc signed',
       'no Developer ID signature',
       'not notarized',
     ]) expect(englishReadme).toContain(expected)
