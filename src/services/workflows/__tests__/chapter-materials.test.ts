@@ -19,6 +19,23 @@ const assemble = (input: Omit<Parameters<typeof assembleChapterMaterials>[0], 'i
   assembleChapterMaterials({ identity: { projectId: '项目', epoch: '会话' }, ...input })
 
 describe('chapter materials', () => {
+  it.each(['finalized', 'candidate'] as const)('admits the full %s predecessor at the receipt limit and refuses one byte more', async source => {
+    const run = (content: string) => assemble({
+      writingLanguage: 'en-US', authorProjectFacts: [], characterProfiles: '', futurePlans: '',
+      references: [], relevanceTerms: [], budgetChars: 400,
+      finalized: source === 'finalized' ? [{ chapterNumber: 1, draftId: 11, title: '', content, evidence: [], includeEnding: true }] : [],
+      candidates: source === 'candidate' ? [{ chapterNumber: 1, draftId: 11, version: 1, content, required: true }] : [],
+    })
+    const base = await run('a')
+    const content = 'a'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS - base.decision.capacity.admittedUnits + 1)
+
+    const fitting = await run(content)
+
+    expect(fitting.decision.capacity.admittedUnits).toBe(MATERIAL_DECISION_MAX_INPUT_UNITS)
+    const error = await run(`${content}a`).then(() => null, reason => reason)
+    expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
+  })
+
   it('restores a reference when removing it lets a larger finalized block displace its evidence', async () => {
     const evidence = 'UNIQUE_SOURCE_EVIDENCE'
     const low = { chapterNumber: 1, draftId: 11, title: 'Low', content: `${evidence} ${'x'.repeat(1000)}`, evidence: [evidence] }

@@ -2029,6 +2029,42 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  it.each([
+    { writingLanguage: 'zh-CN', source: 'finalized' },
+    { writingLanguage: 'en-US', source: 'finalized' },
+    { writingLanguage: 'zh-CN', source: 'candidate' },
+    { writingLanguage: 'en-US', source: 'candidate' },
+  ] as const)('sends the full $writingLanguage $source predecessor in drafting and continuation', async ({ writingLanguage, source }) => {
+    const previous = [
+      'The wooden door opens only from inside. 木门只能从里面打开。',
+      'Earlier prose. 先前正文。'.repeat(200),
+      'Lin still holds the brass key. 铜钥匙仍由林岚保管。',
+      'Later prose. 后续正文。'.repeat(200),
+      'She stops at the end of the corridor. 她停在走廊尽头。',
+    ].join('\n\n')
+    const runtime = fakeOutcomes(outcome('初'.repeat(2000), 'stop', 1), outcome(`${'续'.repeat(1700)}。`, 'stop', 2))
+    const { invoke, context, callbacks, command } = setup({
+      runtime, writingLanguage, chapterNumber: 2,
+      ...(source === 'finalized'
+        ? { previousFinalizedContent: previous, continuitySourceContents: { 77: previous } }
+        : { selectedCandidateDrafts: [{ chapterNumber: 1, draftId: 31, version: 3, content: previous, required: true }] }),
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
+    for (const [task] of runtime.complete.mock.calls) expect(task.messages[1]!.content).toContain(previous)
+    expect(runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision?.included).toContainEqual(
+      expect.objectContaining({ sourceId: source === 'finalized' ? 'finalized:77' : 'candidate:31', required: true }),
+    )
+    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({
+      sourceDependencies: expect.arrayContaining([expect.objectContaining({
+        draftId: source === 'finalized' ? 77 : 31,
+        contentHash: createHash('sha256').update(previous, 'utf8').digest('hex'),
+      })]),
+    }), projectPath, expect.anything())
+  })
+
   it('binds the final provider request to only the finalized prose that reached that request', async () => {
     const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'))
     const overBudget = `林岚把钥匙藏进钟楼。${'过长段落'.repeat(2_000)}`
