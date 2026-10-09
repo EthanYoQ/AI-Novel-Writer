@@ -467,6 +467,7 @@ describe('planning recovery editors', () => {
       await act(async () => button('继续生成缺少的章节').click())
       await vi.waitFor(() => expect(invoke.mock.calls.filter(([name]) => name === 'generation:restart')).toHaveLength(1))
       await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns).toHaveLength(0))
+      await expect.element(button('继续生成缺少的章节')).toBeEnabled()
       await act(async () => button('继续生成缺少的章节').click())
       await vi.waitFor(() => expect(invoke.mock.calls.filter(([name]) => name === 'generation:restart')).toHaveLength(2))
       const calls = invoke.mock.calls.filter(([name]) => name === 'generation:restart')
