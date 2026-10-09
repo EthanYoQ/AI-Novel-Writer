@@ -83,13 +83,13 @@ describe('v1.2.0-Preview candidate metadata', () => {
     const chineseReadme = readFileSync('README.md', 'utf8')
     const englishReadme = readFileSync('README_en.md', 'utf8')
 
-    // Current release metadata is checked above; README wording can evolve.
     for (const readme of [chineseReadme, englishReadme]) {
       for (const expected of [
         'Windows x64',
         'Apple Silicon',
         'Intel',
-        'https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest',
+        '1.2.0-Preview',
+        'https://github.com/EthanYoQ/AI-Novel-Writer/releases)',
       ]) expect(readme).toContain(expected)
 
       for (const installer of [
@@ -100,14 +100,15 @@ describe('v1.2.0-Preview candidate metadata', () => {
     }
 
     for (const expected of [
-      '尚未进行代码签名',
+      '未进行代码签名',
       'ad-hoc 签名',
-      '未使用 Developer ID 签名或公证',
+      '没有 Developer ID 签名',
+      '未通过 Apple 公证',
     ]) expect(chineseReadme).toContain(expected)
 
     for (const expected of [
       'not code-signed',
-      'ad-hoc signed',
+      'ad-hoc signatures',
       'no Developer ID signature',
       'not notarized',
     ]) expect(englishReadme).toContain(expected)
