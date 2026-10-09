@@ -3885,6 +3885,45 @@ ${headingPrefix}第3章：潮门
     }
   })
 
+  it.each([
+    { writingLanguage: 'zh-CN' as const, opening: '木门只能从里面打开。', middle: '铜钥匙仍由林岚保管。', ending: '她停在走廊尽头。', filler: '初', advance: '续', closing: '终' },
+    { writingLanguage: 'en-US' as const, opening: 'The wooden door opens only from inside.', middle: 'Lin still holds the brass key.', ending: 'She stops at the end of the corridor.', filler: 'opening ', advance: 'advance ', closing: 'closing ' },
+  ])('sends the full accumulated $writingLanguage manuscript through continuation and no-progress recovery', async ({
+    writingLanguage, opening, middle, ending, filler, advance, closing,
+  }) => {
+    const initial = [opening, filler.repeat(1000).trim(), middle, filler.repeat(1000).trim(), ending].join('\n\n')
+    const accepted = `${advance.repeat(500).trim()}。`
+    const recovered = `${closing.repeat(1600).trim()}。`
+    const discarded = 'DISCARDED_LOW_PROGRESS'
+    const runtime = fakeOutcomes(
+      outcome(`<think>HIDDEN_REASONING</think>\n${initial}\n\n未完待续`, 'stop', 1),
+      outcome(accepted, 'length', 2),
+      outcome(discarded, 'length', 3),
+      outcome(recovered, 'stop', 4),
+    )
+    const { invoke, context, callbacks, command } = setup({ runtime, writingLanguage })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
+      'chapter-draft',
+      'chapter-draft-continuation',
+      'chapter-draft-continuation',
+      'chapter-draft-no-progress-recovery',
+    ])
+    const prompts = runtime.complete.mock.calls.slice(1).map(([task]) => task.messages[1]!.content)
+    const accumulated = `${initial}\n\n${accepted}`
+    for (const [index, prompt] of prompts.entries()) {
+      expect(prompt).toContain(index === 0 ? initial : accumulated)
+      expect(prompt).not.toContain('HIDDEN_REASONING')
+      expect(prompt).not.toContain('未完待续')
+      expect(prompt).not.toContain(discarded)
+    }
+    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({
+      content: `${accumulated}\n\n${recovered}`,
+    }), projectPath, expect.anything())
+  })
+
   it('recovers once from an output-limited continuation with no visible progress and commits only the recovered draft', async () => {
     const initial = '初'.repeat(4000)
     const discarded = '初'.repeat(200)
