@@ -95,6 +95,8 @@ jobs:
           node -e "const fs = require('node:fs'); const os = require('node:os'); const original = os.tmpdir(); const physical = fs.realpathSync.native(original); fs.appendFileSync(process.env.GITHUB_ENV, 'TMPDIR=' + physical + '\n'); console.log('tempAlias=' + (physical !== original))"
 
       - name: Run test suite
+        env:
+          AI_NOVEL_RELEASE_EVIDENCE_COMMAND_TIMEOUT_MS: '1800000'
         run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step test-suite -- pnpm test --maxWorkers=1
 
       - name: Build unsigned macOS Intel x64 package
