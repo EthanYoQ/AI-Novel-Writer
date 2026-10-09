@@ -62,7 +62,6 @@ import type { DraftSourceDependency } from '../../../shared/draft-source-depende
 export { countDraftUnits } from '../../../shared/draft-units'
 export { previousChapterEnding } from '../chapter-materials'
 
-const CONTINUE_PROMPT_MAX_CHARS = 1600
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const NEXT_CHAPTER_HEAD_MAX_CHARS = 1200
 const CROSS_CHAPTER_REUSE_CJK_NGRAM_CHARS = 8
@@ -794,7 +793,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         ],
       })
     } catch (error) {
-      // 必需材料（作者资料/角色档案/后续计划）超出容量：显式失败，绝不静默裁掉。
       if (!(error instanceof ChapterMaterialCapacityError)) throw error
       const blocked = error.decision.decision === 'capacity-conflict'
         ? `${error.decision.blockingSourceId}:${error.decision.blockingReason}`
@@ -804,8 +802,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `  Required material exceeds the context capacity (${error.decision.decision}): ${blocked}`,
       ))
       throw new Error(uiText(
-        '本章必需材料（作者资料、角色档案、后续计划）超出上下文容量，已停止生成。请精简这些内容后重试。',
-        'The required material for this chapter (author facts, character profiles, future plans) exceeds the context capacity, so generation stopped. Trim it and try again.',
+        '本章必需材料（作者资料、角色档案、后续计划、上一章正文）超出上下文容量，已停止生成。请精简这些内容后重试。',
+        'The required material for this chapter (author facts, character profiles, future plans, previous chapter prose) exceeds the context capacity, so generation stopped. Trim it and try again.',
       ))
     }
     const admittedCandidateSourceIds = new Set(chapterMaterials.selection.included
@@ -814,8 +812,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     if (selectedCandidateDrafts.length > 0 && admittedCandidateSourceIds.size === 0) {
       throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
     }
-    // 无未定稿候选时上一章原文只经直接前驱的定稿块（整块或降级后的结尾）到达模型：
-    // 来源存在不等于模型收到了它，未被选入提示词就不得开始生成。
     if (selectedCandidateDrafts.length === 0 && requiredFinalizedSource
       && !chapterMaterials.selection.included.some(material => material.ref.sourceId === `finalized:${requiredFinalizedSource.draftId}`)) {
       throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
@@ -1414,7 +1410,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const remaining = Math.max(0, params.targetChars - currentChars)
       const ceiling = Math.max(0, range.maximum - currentChars)
       const allowance = remaining > 0 ? Math.min(remaining, ceiling) : Math.min(150, ceiling)
-      const visibleTail = sanitizeDraftText(draft, params.compositionVersion).slice(-CONTINUE_PROMPT_MAX_CHARS)
+      const visibleDraft = sanitizeDraftText(draft, params.compositionVersion)
       const recoveryInstruction = recoveryPending
         ? promptLanguageText(
             params.writingLanguage,
@@ -1443,7 +1439,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
 【硬性要求】
 - 只输出新增正文，不要复述已写内容。
-- 从“已写正文末尾”自然接下去，保持同一场景逻辑或合理转场。
+- 根据下方本章已写正文全文，从末尾自然接下去，保持同一场景逻辑或合理转场。
 ${lengthInstruction}
 - 不要输出标题、解释、总结、Markdown、思考过程或“点我继续”。
 - 避免重复已写正文中的整句、整段、动作链和意象。
@@ -1453,13 +1449,13 @@ ${lengthContract}
 
 ${authorMaterial}
 
-【已写正文末尾】
-${visibleTail}`,
+【本章已写正文全文】
+${visibleDraft}`,
         `${recoveryInstruction}Continue the current chapter seamlessly.
 
 [Requirements]
 - Output only new manuscript prose; do not repeat existing text.
-- Continue naturally from the existing ending, preserving the same scene logic or making a justified transition.
+- Read the full existing manuscript below and continue naturally from its ending, preserving the same scene logic or making a justified transition.
 ${lengthInstruction}
 - Do not output a title, explanation, summary, Markdown, reasoning, or an interface continuation prompt.
 - Avoid repeating complete sentences, paragraphs, action sequences, or imagery from the existing manuscript.
@@ -1469,8 +1465,8 @@ ${lengthContract}
 
 ${authorMaterial}
 
-[End of existing manuscript]
-${visibleTail}`,
+[Full existing manuscript for this chapter]
+${visibleDraft}`,
       )
 
       const preview = createDraftStreamPreview(

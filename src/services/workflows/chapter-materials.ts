@@ -377,7 +377,7 @@ export function previousChapterEnding(content: string): string {
     : tail.trim()
 }
 
-function relevantPassages(content: string, terms: readonly string[], retainAll = false): string[] {
+function relevantPassages(content: string, terms: readonly string[]): string[] {
   const sourceParagraphs = paragraphs(content)
   const normalizedTerms = terms.map(term => term.trim().toLocaleLowerCase()).filter(term => term.length >= 2)
   const windows: Array<[number, number]> = []
@@ -388,7 +388,7 @@ function relevantPassages(content: string, terms: readonly string[], retainAll =
     }
   }
   const merged = mergeWindows(windows)
-  return (retainAll ? merged : merged.slice(-2))
+  return merged.slice(-2)
     .map(([start, end]) => sourceParagraphs.slice(start, end + 1).join('\n\n'))
 }
 
@@ -426,10 +426,8 @@ function finalizedPassages(source: FinalizedMaterialSource, relevanceTerms: read
 /** 未定稿候选在本章的材料文本；同上，只有一处计算。 */
 function candidatePassages(candidate: SelectedCandidateDraft, isRequired: boolean,
   relevanceTerms: readonly string[]): string[] {
-  const relevant = relevantPassages(candidate.content, relevanceTerms, isRequired)
-  return isRequired
-    ? removeContainedPassages([...relevant, previousChapterEnding(candidate.content)])
-    : relevant
+  if (isRequired) return candidate.content.trim() ? [candidate.content] : []
+  return relevantPassages(candidate.content, relevanceTerms)
 }
 
 /** 每条候选在渲染与账目上额外需要的信息，只能由本函数的构造过程给出。 */
@@ -459,6 +457,17 @@ export async function assembleChapterMaterials(input: {
   const candidates: MaterialCandidate[] = []
   const familyBySourceId = new Map<string, MaterialFamily>()
   const referenceCandidates: Array<{ candidate: MaterialCandidate; reference: ChapterMaterialReference }> = []
+  const orderedCandidates = [...input.candidates].sort((left, right) => left.chapterNumber - right.chapterNumber)
+  const explicitRequiredCandidates = orderedCandidates.filter(candidate => candidate.required === true)
+  if (orderedCandidates.length > 1 && explicitRequiredCandidates.length !== 1) {
+    throw new Error('CHAPTER_MATERIAL_REQUIRED_PREDECESSOR_AMBIGUOUS')
+  }
+  const requiredPredecessor = orderedCandidates.length === 1
+    ? orderedCandidates[0]
+    : explicitRequiredCandidates[0]
+  const predecessorSource = requiredPredecessor
+    ? undefined
+    : input.finalized.find(source => source.includeEnding && source.sourceStatus !== 'invalid' && source.content.trim())
 
   const push = async (family: MaterialFamily, material: {
     sourceId: string
@@ -523,7 +532,6 @@ export async function assembleChapterMaterials(input: {
     category: 'author', provenance: 'author', required: true,
   })
 
-  // 定稿块的候选材料：整块与「只保留结尾」的降级块共用同一份块头与身份规则，只有段落和必需性不同。
   const finalizedMaterial = (source: FinalizedMaterialSource, passages: readonly string[], isRequired: boolean) => ({
     sourceId: `finalized:${source.draftId}`,
     revision: source.draftId,
@@ -559,6 +567,8 @@ export async function assembleChapterMaterials(input: {
       continue
     }
     const extracted = finalizedPassages(source, input.relevanceTerms)
+    const isRequired = source === predecessorSource
+    const passages = isRequired ? [source.content] : extracted.passages
     const expectedEvidence = source.evidence.filter(value => value.trim()).length
     const hasUnlocatedEvidence = extracted.locatedEvidence < expectedEvidence
     if (hasUnlocatedEvidence) {
@@ -568,7 +578,7 @@ export async function assembleChapterMaterials(input: {
         reason: 'evidence-not-locatable',
       })
     }
-    if (extracted.passages.length === 0) {
+    if (passages.length === 0) {
       await recordDecisionOmission({
         sourceId: `finalized:${source.draftId}`,
         revision: source.draftId,
@@ -582,9 +592,9 @@ export async function assembleChapterMaterials(input: {
       family: 'finalized',
       chapterNumber: source.chapterNumber,
       locatedEvidence: extracted.locatedEvidence,
-      passages: extracted.passages,
+      passages,
       source,
-    }, finalizedMaterial(source, extracted.passages, false))
+    }, finalizedMaterial(source, passages, isRequired))
     if (hasUnlocatedEvidence && selected) {
       await recordDecisionOmission({
         sourceId: selected.ref.sourceId,
@@ -597,16 +607,6 @@ export async function assembleChapterMaterials(input: {
   }
 
   // ---- 未定稿候选 ----
-  const orderedCandidates = [...input.candidates].sort((left, right) => left.chapterNumber - right.chapterNumber)
-  const explicitRequiredCandidates = orderedCandidates.filter(candidate => candidate.required === true)
-  if (orderedCandidates.length > 1 && explicitRequiredCandidates.length !== 1) {
-    throw new Error('CHAPTER_MATERIAL_REQUIRED_PREDECESSOR_AMBIGUOUS')
-  }
-  // Legacy callers supplied only the direct predecessor and had no marker. Keep
-  // that case required; larger sets must identify the one authoritative predecessor.
-  const requiredPredecessor = orderedCandidates.length === 1
-    ? orderedCandidates[0]
-    : explicitRequiredCandidates[0]
   let requiredPredecessorMaterial: MaterialCandidate | undefined
   for (const candidate of orderedCandidates) {
     const isRequired = candidate === requiredPredecessor
@@ -703,45 +703,7 @@ export async function assembleChapterMaterials(input: {
     }
     return { droppedReferences, selection }
   }
-  let { selection, droppedReferences } = select()
-
-  // ---- 直接前驱的定稿块是必需连续性材料 ----
-  // 没有未定稿候选前驱时，上一章的结尾只经这个定稿块进入提示词（旧的 previousEnding 提示槽已清空），
-  // 材料预算不得把它静默淘汰：整块（证据窗口 + 结尾）装不下时降级为只保留结尾——它有上界
-  // （`PREVIOUS_ENDING_MAX_CHARS`）——并作为必需材料；连结尾都装不下就和别的必需材料一样显式失败。
-  // 整块装得下时仍按原有的相关度竞争入选，提示词与降级机制引入前逐字节相同。
-  const predecessorSource = requiredPredecessor
-    ? undefined
-    : input.finalized.find(source => source.includeEnding && source.sourceStatus !== 'invalid' && source.content.trim())
-  const predecessorBlock = predecessorSource
-    ? candidates.find(item => item.ref.sourceId === `finalized:${predecessorSource.draftId}`)
-    : undefined
-  let predecessorEnding: MaterialCandidate | undefined
-  if (predecessorSource && predecessorBlock && selection.decision === 'ready'
-    && !selection.included.some(item => item.ref.contentHash === predecessorBlock.ref.contentHash)) {
-    candidates.splice(candidates.indexOf(predecessorBlock), 1)
-    const ending = previousChapterEnding(predecessorSource.content)
-    predecessorEnding = await push({
-      family: 'finalized', chapterNumber: predecessorSource.chapterNumber, locatedEvidence: 0,
-      passages: [ending], source: predecessorSource,
-    }, finalizedMaterial(predecessorSource, [ending], true))
-    // 被淘汰的只是证据窗口：照常作为可选材料的覆盖缺口报告（提示词与收据里都有据可查）。
-    // 整块没有结尾之外的窗口（无证据回退，或证据落在结尾内）时整块就是结尾块，身份全同：
-    // 没有任何窗口被淘汰，不能再为同一身份记省略（它同时入选，收据会自相矛盾）。
-    if (predecessorEnding?.ref.contentHash !== predecessorBlock.ref.contentHash) {
-      omissions.push({ source: 'finalized', chapterNumber: predecessorSource.chapterNumber, reason: 'budget' })
-      await recordDecisionOmission({
-        sourceId: predecessorBlock.ref.sourceId,
-        revision: predecessorBlock.ref.revision,
-        contentHash: predecessorBlock.ref.contentHash,
-        reason: 'budget',
-        category: predecessorBlock.category,
-      })
-    }
-    const reselected = select()
-    selection = reselected.selection
-    droppedReferences = reselected.droppedReferences
-  }
+  const { selection, droppedReferences } = select()
   for (const candidate of droppedReferences) {
     await recordDecisionOmission({
       sourceId: candidate.ref.sourceId,
@@ -753,7 +715,7 @@ export async function assembleChapterMaterials(input: {
   }
   if (selection.decision !== 'ready') {
     const omission = selection.omissions.find(item => (
-      [requiredCandidate, requiredPredecessorMaterial, predecessorEnding].some(material => material
+      [requiredCandidate, requiredPredecessorMaterial].some(material => material
         && item.sourceId === material.ref.sourceId
         && item.revision === material.ref.revision
         && item.contentHash === material.ref.contentHash)

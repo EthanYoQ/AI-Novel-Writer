@@ -1698,7 +1698,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
-    expect(decision).toMatchObject({ version: 1, verdict: 'admitted', coverage: { required: 1, included: 1, complete: true } })
+    expect(decision).toMatchObject({ version: 1, verdict: 'admitted', coverage: { required: 2, included: 2, complete: true } })
     // 收据记的来源就是提示词里真正出现的那几份材料。
     expect(decision?.included.map(item => item.sourceId)).toContain('author:required')
     expect(decision?.included.map(item => item.sourceId)).toContain('finalized:41')
@@ -2029,6 +2029,42 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  it.each([
+    { writingLanguage: 'zh-CN', source: 'finalized' },
+    { writingLanguage: 'en-US', source: 'finalized' },
+    { writingLanguage: 'zh-CN', source: 'candidate' },
+    { writingLanguage: 'en-US', source: 'candidate' },
+  ] as const)('sends the full $writingLanguage $source predecessor in drafting and continuation', async ({ writingLanguage, source }) => {
+    const previous = [
+      'The wooden door opens only from inside. 木门只能从里面打开。',
+      'Earlier prose. 先前正文。'.repeat(200),
+      'Lin still holds the brass key. 铜钥匙仍由林岚保管。',
+      'Later prose. 后续正文。'.repeat(200),
+      'She stops at the end of the corridor. 她停在走廊尽头。',
+    ].join('\n\n')
+    const runtime = fakeOutcomes(outcome('初'.repeat(2000), 'stop', 1), outcome(`${'续'.repeat(1700)}。`, 'stop', 2))
+    const { invoke, context, callbacks, command } = setup({
+      runtime, writingLanguage, chapterNumber: 2,
+      ...(source === 'finalized'
+        ? { previousFinalizedContent: previous, continuitySourceContents: { 77: previous } }
+        : { selectedCandidateDrafts: [{ chapterNumber: 1, draftId: 31, version: 3, content: previous, required: true }] }),
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
+    for (const [task] of runtime.complete.mock.calls) expect(task.messages[1]!.content).toContain(previous)
+    expect(runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision?.included).toContainEqual(
+      expect.objectContaining({ sourceId: source === 'finalized' ? 'finalized:77' : 'candidate:31', required: true }),
+    )
+    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({
+      sourceDependencies: expect.arrayContaining([expect.objectContaining({
+        draftId: source === 'finalized' ? 77 : 31,
+        contentHash: createHash('sha256').update(previous, 'utf8').digest('hex'),
+      })]),
+    }), projectPath, expect.anything())
+  })
+
   it('binds the final provider request to only the finalized prose that reached that request', async () => {
     const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'))
     const overBudget = `林岚把钥匙藏进钟楼。${'过长段落'.repeat(2_000)}`
@@ -2139,7 +2175,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     })
 
     await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('必需材料（作者资料、角色档案、后续计划）超出上下文容量')
+      .rejects.toThrow('必需材料（作者资料、角色档案、后续计划、上一章正文）超出上下文容量')
     expect(runtime.complete).not.toHaveBeenCalled()
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining(
       '必需材料超出上下文容量（capacity-conflict）：author:required:budget',
@@ -2175,8 +2211,6 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   })
 
   describe('直接前驱的定稿块是必需连续性材料', () => {
-    // 无未定稿候选前驱、知识库没有相关原文时，上一章结尾只经定稿块进入提示词；
-    // 作者资料几乎占满材料预算时，整块（证据窗口 + 结尾）装不下，也不能静默丢掉前驱后仍生成续章。
     const endingSentinel = '上一章定稿结尾哨兵。'
     const evidenceLine = '林岚把红色钥匙收进口袋。'
     const previousFinalizedContent = [
@@ -2203,7 +2237,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       previousFinalizedContent,
     })
 
-    it('keeps the previous ending in the prompt when only the ending fits beside long author facts', async () => {
+    it('keeps the complete predecessor beside author facts beyond the optional material target', async () => {
       let observedTask: GenerationTask | undefined
       const runtime = fakeRuntime((_attempt, task) => {
         observedTask = task
@@ -2215,16 +2249,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
       const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
       expect(runtime.complete).toHaveBeenCalled()
-      // 模型必须收到上一章原文（至少结尾）；淘汰的只是证据窗口。
-      expect(prompt).toContain(endingSentinel)
-      expect(prompt).not.toContain(evidenceLine)
+      expect(prompt).toContain(previousFinalizedContent)
       const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
       const finalizedItem = decision?.included.find(item => item.sourceId === 'finalized:41')
       expect(finalizedItem).toMatchObject({ required: true })
-      expect(finalizedItem?.units).toBeLessThan(3_500)
+      expect(finalizedItem?.units).toBeGreaterThan(3_500)
       expect(decision?.coverage).toEqual({ required: 2, included: 2, complete: true })
-      expect(decision?.omitted).toContainEqual(expect.objectContaining({ sourceId: 'finalized:41', reason: 'budget' }))
-      expect(prompt).toContain('finalized#1:budget')
+      expect(decision?.omitted).not.toContainEqual(expect.objectContaining({ sourceId: 'finalized:41', reason: 'budget' }))
     })
 
     it('dispatches the required ending when author material leaves too little optional room', async () => {
@@ -2501,17 +2532,17 @@ ${headingPrefix}第3章：潮门
     {
       writingLanguage: 'zh-CN' as const,
       ...FINALIZED_FACT_PRECEDENCE['zh-CN'],
-      continuationTail: '【已写正文末尾】',
+      continuationContext: '【本章已写正文全文】',
     },
     {
       writingLanguage: 'en-US' as const,
       ...FINALIZED_FACT_PRECEDENCE['en-US'],
-      continuationTail: '[End of existing manuscript]',
+      continuationContext: '[Full existing manuscript for this chapter]',
     },
   ])('puts the $writingLanguage finalized-fact precedence rule in initial and continuation requests', async ({
     writingLanguage, heading, unresolved, verification, planDecision, supportedDecision, authorBoundary, noRetroactiveExecution,
     newAction, actionConsistency,
-    timeRuleStart, timeRuleEnd, lengthContract, continuationTail,
+    timeRuleStart, timeRuleEnd, lengthContract, continuationContext,
   }) => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(100), 'length', 1),
@@ -2550,7 +2581,7 @@ ${headingPrefix}第3章：潮门
       expect(task.messages[0]!.content).not.toContain('核查遇阻；承担代价')
       expect(task.messages[0]!.content).not.toContain('作者更正：林澄撤回先前核查安排。')
     }
-    expect(continuationTask!.messages[1]!.content).toContain(continuationTail)
+    expect(continuationTask!.messages[1]!.content).toContain(continuationContext)
   })
 
   describe('automatic short outline', () => {
@@ -3883,6 +3914,45 @@ ${headingPrefix}第3章：潮门
         for (const text of [characterProfileSentinel, finalizedEvidenceSentinel, referenceSentinel]) expect(task.messages[0]!.content).not.toContain(text)
       }
     }
+  })
+
+  it.each([
+    { writingLanguage: 'zh-CN' as const, opening: '木门只能从里面打开。', middle: '铜钥匙仍由林岚保管。', ending: '她停在走廊尽头。', filler: '初', advance: '续', closing: '终' },
+    { writingLanguage: 'en-US' as const, opening: 'The wooden door opens only from inside.', middle: 'Lin still holds the brass key.', ending: 'She stops at the end of the corridor.', filler: 'opening ', advance: 'advance ', closing: 'closing ' },
+  ])('sends the full accumulated $writingLanguage manuscript through continuation and no-progress recovery', async ({
+    writingLanguage, opening, middle, ending, filler, advance, closing,
+  }) => {
+    const initial = [opening, filler.repeat(1000).trim(), middle, filler.repeat(1000).trim(), ending].join('\n\n')
+    const accepted = `${advance.repeat(500).trim()}。`
+    const recovered = `${closing.repeat(1600).trim()}。`
+    const discarded = 'DISCARDED_LOW_PROGRESS'
+    const runtime = fakeOutcomes(
+      outcome(`<think>HIDDEN_REASONING</think>\n${initial}\n\n未完待续`, 'stop', 1),
+      outcome(accepted, 'length', 2),
+      outcome(discarded, 'length', 3),
+      outcome(recovered, 'stop', 4),
+    )
+    const { invoke, context, callbacks, command } = setup({ runtime, writingLanguage })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
+      'chapter-draft',
+      'chapter-draft-continuation',
+      'chapter-draft-continuation',
+      'chapter-draft-no-progress-recovery',
+    ])
+    const prompts = runtime.complete.mock.calls.slice(1).map(([task]) => task.messages[1]!.content)
+    const accumulated = `${initial}\n\n${accepted}`
+    for (const [index, prompt] of prompts.entries()) {
+      expect(prompt).toContain(index === 0 ? initial : accumulated)
+      expect(prompt).not.toContain('HIDDEN_REASONING')
+      expect(prompt).not.toContain('未完待续')
+      expect(prompt).not.toContain(discarded)
+    }
+    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({
+      content: `${accumulated}\n\n${recovered}`,
+    }), projectPath, expect.anything())
   })
 
   it('recovers once from an output-limited continuation with no visible progress and commits only the recovered draft', async () => {
