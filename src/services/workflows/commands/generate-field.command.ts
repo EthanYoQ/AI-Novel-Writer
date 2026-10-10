@@ -1,6 +1,6 @@
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import type { NovelConfig } from '../../../shared/ipc-channels'
+import type { NovelConfig, ProjectData } from '../../../shared/ipc-channels'
 import {
   projectSessionContextFromProject,
   sameProjectSessionContext,
@@ -32,6 +32,8 @@ export type GeneratableField =
   | 'globalGuidance'
   | 'writingStyle'
 
+type FieldGenerationInput = Pick<ProjectData, 'name' | 'novelConfig'>
+
 const FIELD_LABELS: Record<GeneratableField, readonly [string, string]> = {
   coreOutline: ['核心大纲', 'Core outline'],
   worldSetting: ['世界观设定', 'World setting'],
@@ -56,14 +58,17 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
   async execute(params: CommandExecuteParams): Promise<string> {
     const currentProject = useProjectStore.getState().currentProject
     if (!currentProject) throw new Error(workflowUiText(params.context, '当前项目已切换，字段生成已停止', 'The current project changed, so field generation stopped.'))
-    const expectedConfig = structuredClone(currentProject.novelConfig)
-    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params, expectedConfig), {
-      authorInputs: [{ id: 'field:author-config', text: JSON.stringify(expectedConfig) }],
+    const expectedInput: FieldGenerationInput = structuredClone({
+      name: currentProject.name,
+      novelConfig: currentProject.novelConfig,
+    })
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params, expectedInput), {
+      authorInputs: [{ id: 'field:author-config', text: JSON.stringify(expectedInput.novelConfig) }],
       operation: `generate-field:${this.fieldKey.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`, promptKeys: ['generate_novel_config_field'], skillStages: ['planning'], output: 'visible-text',
     })
   }
 
-  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams, expectedConfig: NovelConfig): Promise<string> {
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams, expectedInput: FieldGenerationInput): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     const project = useProjectStore.getState().currentProject
     if (
@@ -80,6 +85,7 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
       ))
     }
 
+    const expectedConfig = expectedInput.novelConfig
     const config = expectedConfig
     const writingLanguage = workflowWritingLanguage(context)
     const labelPair = FIELD_LABELS[this.fieldKey]
@@ -88,7 +94,7 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
     callbacks.log(workflowUiText(context, `正在为「${label}」生成内容...`, `Generating “${label}”...`))
 
     // 构建上下文摘要（已填写的字段作为参考）
-    const contextSummary = this.buildContext(config, writingLanguage)
+    const contextSummary = this.buildContext(expectedInput, writingLanguage)
     // 构建针对性 prompt
     const template = await resolvePromptTemplate(
       'generate_novel_config_field',
@@ -227,11 +233,16 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
   }
 
   /** 构建已有配置的上下文摘要 */
-  private buildContext(config: NovelConfig, writingLanguage: WritingLanguage): string {
+  private buildContext({ name, novelConfig: config }: FieldGenerationInput, writingLanguage: WritingLanguage): string {
     const parts: string[] = []
     const line = (zhLabel: string, enLabel: string, value: string | number) => (
       `- ${promptLanguageText(writingLanguage, zhLabel, enLabel)}: ${value}`
     )
+    if (name.trim()) parts.push(line(
+      '作者指定书名（沿用，不另拟书名）',
+      'Author-provided title (keep this title; do not invent another)',
+      name,
+    ))
     if (config.genre) parts.push(line('类型', 'Genre', config.genre))
     if (config.subGenre) parts.push(line('细分类型', 'Subgenre', config.subGenre))
     if (config.targetAudience) parts.push(line('目标受众', 'Target audience', config.targetAudience))

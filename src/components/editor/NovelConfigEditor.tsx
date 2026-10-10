@@ -172,7 +172,12 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
       })
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
-      addLog('error', text(`生成失败：${e}`, `Generation failed: ${e}`))
+      addLog('error', e instanceof Error && e.message === 'GENERATION_AUTHOR_DRAFT_CHANGED'
+        ? text(
+          '生成期间小说配置已修改。已保留你的修改，请按当前配置重新生成。',
+          'The novel configuration changed during generation. Your edits have been preserved. Generate again using the current configuration.',
+        )
+        : text(`生成失败：${e}`, `Generation failed: ${e}`))
     } finally {
       if (isProjectSessionCurrent(projectSession)) setGeneratingField(null)
     }

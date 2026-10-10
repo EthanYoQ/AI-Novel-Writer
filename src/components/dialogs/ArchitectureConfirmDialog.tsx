@@ -197,7 +197,7 @@ export default function ArchitectureConfirmDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-[460px]">
+      <DialogContent className="max-h-[90vh] max-w-[460px] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Wand2 size={16} className="text-[var(--color-accent)]" />
