@@ -139,7 +139,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     assertCurrent()
     const run = repository.get(handle.runId)
     if (run.binding.projectId !== deps.projectId || !isDeepStrictEqual(handleOf(run), handle)) throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
-    if (execution) repository.assertPlotOutlineWritable(run.runId)
+    if (execution) {
+      repository.assertBlueprintRecoveryWritable(run.runId)
+      repository.assertPlotOutlineWritable(run.runId)
+    }
     if (execution && run.binding.epoch !== deps.epoch) throw new Error('GENERATION_EPOCH_STALE')
     if (repository.isPrivatePlanningHistory(run.runId)) return run
     const policy = readMainGenerationPolicy(run.binding.sourceManifest.policy)
@@ -387,7 +390,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }
     }
     const continuation = selection.continueDirectoryOperationId === undefined ? undefined
-      : repository.listDirectoryProgress().find(item => item.operationId === selection.continueDirectoryOperationId)
+      : repository.readDirectoryProgress(selection.continueDirectoryOperationId)
     if (selection.continueDirectoryOperationId !== undefined && (!continuation?.remainingRange || selection.parentRootActionId
       || selection.output !== 'structured-data'
       // Selected rows also include preceding chapters consumed as source dependencies.
@@ -624,6 +627,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   }
   const resume = async (handle: MainGenerationRunHandle) => {
     const run = requireRun(handle)
+    repository.assertBlueprintRecoveryWritable(run.runId)
     repository.assertPlotOutlineWritable(run.runId)
     if (plotOutlineAlreadyCurrent(run)) return viewOf(run)
     imports.assertMutable(run)
@@ -663,7 +667,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const run = requireRun(handle, true)
       if (repository.budget(run.rootActionId).root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
       if (blueprintRange) {
-        const continued = repository.listDirectoryProgress().find(item => item.continuationHandle?.runId === run.runId)
+        const continued = repository.assertBlueprintRecoveryWritable(run.runId).predecessor
         if (continued && !isDeepStrictEqual(continued.remainingRange, blueprintRange)) throw new Error('GENERATION_DIRECTORY_CONTINUATION_RANGE_CHANGED')
         const selected = run.binding.sourceManifest.selectedBlueprintChapterNumbers as number[] | undefined
         if (!selected || !Number.isSafeInteger(blueprintRange.startChapter) || !Number.isSafeInteger(blueprintRange.endChapter)
@@ -706,8 +710,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (!outline && !directoryRange) return undefined
     const scope = directoryRange ? JSON.parse(directoryRange.text) as { startChapter: number; endChapter: number } : undefined
     const saved = outline ? repository.readPlotOutlineAuthorEdit(run.runId) : null
-    const blueprintSaved = scope ? repository.readBlueprintAuthorEdit(run.runId) : null
-    const progress = scope ? repository.listDirectoryProgress().find(item => item.sourceHandle.runId === run.runId) : undefined
+    const recovery = scope ? repository.readBlueprintRecovery(run.runId) : null
+    if (recovery && recovery.kind !== 'available') return undefined
+    if (recovery && recovery.progress.length > 1) throw new Error('GENERATION_DIRECTORY_PROGRESS_INVALID')
+    const blueprintSaved = recovery?.authorEdit
+    const progress = recovery?.progress[0]
     const remainingRange = outline ? saved ? saved.remainingRange : outline.range
       : blueprintSaved ? blueprintSaved.remainingRange : progress ? progress.remainingRange ? { from: progress.remainingRange.startChapter, to: progress.remainingRange.endChapter } : null
         : { from: scope!.startChapter, to: scope!.endChapter }
@@ -791,7 +798,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const author = request.authorRecovery
     if (!author || request.generationRunHandle || request.mode !== 'replace-range' || author.leaseEpoch !== deps.epoch)
       throw new Error('GENERATION_BLUEPRINT_AUTHOR_EDIT_INVALID')
-    const run = requireRun(author.sourceHandle), recovery = planningContinuation(run)
+    const run = requireRun(author.sourceHandle)
+    repository.assertBlueprintRecoveryWritable(run.runId)
+    const recovery = planningContinuation(run)
     if (run.binding.sourceManifest.operation !== 'chapter-blueprint-directory' || !recovery
       || !Number.isSafeInteger(request.startChapter) || !Number.isSafeInteger(request.endChapter) || request.startChapter < 1 || request.endChapter < request.startChapter
       || request.endChapter - request.startChapter >= 10000
@@ -835,7 +844,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const run = requireRun(handle), manifest = run.binding.sourceManifest, composition = repository.isPrivatePlanningHistory(run.runId) ? null : repository.readVisibleComposition(run.runId)
     const plotOutline = repository.readPlotOutline(run.runId)
     const continuation = planningContinuation(run)
-    const blueprintSaved = manifest.operation === 'chapter-blueprint-directory' ? repository.readBlueprintAuthorEdit(run.runId) : null
+    const blueprint = manifest.operation === 'chapter-blueprint-directory' ? repository.readBlueprintRecovery(run.runId) : null
+    const blueprintSaved = blueprint?.kind === 'available' ? blueprint.authorEdit : null
     const draftSave = draftEffects.readRecovery(run.runId)
     const materialDecision = manifest.materialDecision as MaterialDecisionReceipt | undefined
     const requiredCandidateDraftIds = new Set((materialDecision?.included ?? [])
@@ -853,7 +863,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { modelId: modelReceipt(run.binding).modelId, handle: handleOf(run), operation: manifest.operation as string, chapterNumber: manifest.chapterNumber as number | undefined,
       ...(plotOutline ? { plotOutline, plotOutlineRecovery: plotOutlineRecovery(run, plotOutline) } : {}),
       ...(continuation ? { planningContinuation: continuation } : {}),
-      ...(manifest.operation === 'chapter-blueprint-directory' && continuation ? { blueprintRecovery: {
+      ...(blueprint && blueprint.kind !== 'available' ? { blueprintRecovery: {
+        sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft: viewOf(run).candidates?.at(-1)?.text ?? '',
+        editRange: null, saved: null, writeState: 'unavailable' as const, diagnostic: blueprint.diagnostic,
+      } } : manifest.operation === 'chapter-blueprint-directory' && continuation ? { blueprintRecovery: {
         sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft: viewOf(run).candidates?.at(-1)?.text ?? '',
         editRange: continuation.remainingRange, saved: blueprintSaved,
         writeState: blueprintSaved ? 'author-saved' as const : continuation.state === 'save-prefix' ? 'ready' as const : continuation.state,
@@ -1308,9 +1321,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         const batch = characters.read(request.proposalBatchId)
         if (batch.status === 'approved') return characters.approve(request)
         const source = batch.source
+        const directoryOperation = source.kind === 'directory' ? deps.database.prepare(
+          'SELECT blueprint_commit_operation_id FROM blueprint_character_sync_operations WHERE operation_id=?').pluck().get(source.operationId) : undefined
+        if (source.kind === 'directory' && typeof directoryOperation !== 'string') throw new Error('CHARACTER_PROPOSAL_SOURCE_MISSING')
         const handle = source.kind === 'finalized-generation' ? proveFinalizedCharacterGeneration(deps.database, repository, deps.projectId, source.handle, source.artifact).currentHandle
           : source.kind === 'legacy-roster-generation' ? readLegacyRosterGenerationProof(deps.database, repository, deps.projectId, source).currentHandle : source.kind === 'generation' ? source.handle
-          : source.kind === 'directory' ? repository.listDirectoryProgress().find(item => item.operationId === source.operationId)?.sourceHandle : undefined
+          : typeof directoryOperation === 'string' ? repository.readDirectoryProgress(directoryOperation)?.sourceHandle : undefined
         return handle ? agents.withChildEffect(handle, () => characters.approve(request)) : characters.approve(request)
       }).immediate()
     },
@@ -1350,13 +1366,17 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     assertSynopsisCommit, commitPlotOutlineAuthorEdit, commitBlueprintAuthorEdit,
     withAgentChildEffect: <T>(handle: MainGenerationRunHandle, effect: () => T): T => { requireRun(handle); return agents.withChildEffect(handle, effect) },
     read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)),
-    listDirectoryProgress: () => { assertCurrent(); return repository.listDirectoryProgress().map(progress => ({ ...progress,
-      authorInputs: structuredClone(repository.get(progress.sourceHandle.runId).binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined) })) },
+    listDirectoryProgress: () => {
+      assertCurrent()
+      const catalog = repository.listDirectoryProgress()
+      return { ...catalog, progress: catalog.progress.map(progress => ({ ...progress,
+        authorInputs: structuredClone(repository.get(progress.sourceHandle.runId).binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined) })) }
+    },
     recordDirectoryCommit: (handle: MainGenerationRunHandle, requestedRange: { startChapter: number; endChapter: number }, receipt: BlueprintRangeCommitReceipt) => {
       const run = requireRun(handle, true)
       if (readMainGenerationPolicy(run.binding.sourceManifest.policy).version === 's07-capacity-v2' && receipt.mode !== 'replace-range')
         throw new Error('GENERATION_DIRECTORY_RANGE_REPLACE_REQUIRED')
-      const existing = repository.listDirectoryProgress().find(item => item.operationId === receipt.operationId)
+      const existing = repository.readDirectoryProgress(receipt.operationId)
       if (existing) {
         if (existing.payloadHash !== receipt.payloadHash || existing.sourceHandle.runId !== handle.runId || !isDeepStrictEqual(existing.requestedRange, requestedRange)) throw new Error('GENERATION_DIRECTORY_PROGRESS_CONFLICT')
         return existing
@@ -1387,6 +1407,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     cancel: (handle: MainGenerationRunHandle) => { const run = requireRun(handle); service.cancel(run.rootActionId); return viewOf(repository.get(run.runId)) },
     restart: (handle: MainGenerationRunHandle, selection: BeginGenerationRequest) => {
       const old = requireRun(handle)
+      repository.assertBlueprintRecoveryWritable(old.runId)
       imports.assertMutable(old)
       finalizations.assertMutable(old)
       graphs.assertMutable(old)

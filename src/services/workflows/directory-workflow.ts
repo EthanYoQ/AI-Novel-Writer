@@ -66,7 +66,7 @@ export function terminalDirectoryProgress(progress: DirectoryGenerationProgress,
 
 export async function resolveDirectoryContinuation(params: DirectoryWorkflowParams, session: ProjectSessionContext): Promise<DirectoryWorkflowParams & { resumeHandle?: MainGenerationRunHandle; authorConfig?: DirectoryWorkflowProjectSnapshot['novelConfig'] }> {
   if (!params.continueDirectoryOperationId) return params
-  const all = await ipc.invokeWithProjectSession(session, 'generation:list-directory-progress')
+  const { progress: all } = await ipc.invokeWithProjectSession(session, 'generation:list-directory-progress')
   const selected = all.find(item => item.operationId === params.continueDirectoryOperationId)
   if (!selected || selected.sourceHandle.projectId !== session.projectId) throw new Error('DIRECTORY_PROGRESS_NOT_FOUND')
   const terminal = terminalDirectoryProgress(selected, all)
