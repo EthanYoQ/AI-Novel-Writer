@@ -68,6 +68,68 @@ afterEach(() => {
 })
 
 describe('GenerateFieldCommand project identity', () => {
+  describe.each([
+    { writingLanguage: 'zh-CN', title: '星港归途', label: '作者指定书名（沿用，不另拟书名）' },
+    { writingLanguage: 'en-US', title: 'Harbor of Stars', label: 'Author-provided title (keep this title; do not invent another)' },
+  ] as const)('author title in $writingLanguage', ({ writingLanguage, title, label }) => {
+    it.each(['coreOutline', 'worldSetting', 'globalGuidance'] as const)(
+      'includes the captured title in %s provider messages after asynchronous admission',
+      async fieldKey => {
+        const initialProject = useProjectStore.getState().currentProject!
+        const novelConfig = {
+          ...initialProject.novelConfig,
+          writingLanguage,
+          coreOutline: '',
+          worldSetting: '',
+          goldenFinger: '',
+          protagonistProfile: '',
+          globalGuidance: '',
+          writingStyle: '',
+        }
+        useProjectStore.setState({
+          currentProject: { ...initialProject, name: title, novelConfig },
+          saveProject: vi.fn(async () => true),
+        })
+        const observedPrompts: string[] = []
+        useLLMStore.setState({
+          defaultModelId: 'model-1',
+          generateStream: vi.fn<typeof originalGenerateStream>(async (messages, streamCallbacks) => {
+            observedPrompts.push(messages.map(message => message.content).join('\n'))
+            streamCallbacks.onDone?.([
+              'Keep character motives consistent.',
+              'Advance conflict through action.',
+              'Preserve established facts.',
+              'End scenes with a meaningful change.',
+            ].join('\n'), undefined, 'stop')
+            return 'field-request'
+          }),
+        })
+        const command = new RuntimeGenerateFieldCommand(fieldKey, {
+          createRuntime: async (options, main) => {
+            expect(main?.selection.authorInputs).toEqual([
+              { id: 'field:author-config', text: JSON.stringify(novelConfig) },
+            ])
+            await Promise.resolve()
+            useProjectStore.setState({
+              currentProject: { ...initialProject, name: 'Later synthetic title', novelConfig },
+            })
+            return workflowRuntimeDependencies.createRuntime(options, main)
+          },
+        })
+
+        await command.execute({
+          step: {},
+          context: { ...context, writingLanguage, uiLocale: writingLanguage },
+          callbacks,
+        })
+
+        expect(observedPrompts).toHaveLength(1)
+        expect(observedPrompts[0]).toContain(`${label}: ${title}`)
+        expect(observedPrompts[0]).not.toContain('Later synthetic title')
+      },
+    )
+  })
+
   it('expands a populated field without deleting the author text', async () => {
     const authorText = 'The academy bell rings only when a student disappears.'
     const addition = 'Its mechanism is tied to the sealed observatory beneath the library.'

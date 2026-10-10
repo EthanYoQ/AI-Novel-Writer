@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { playwright } from '@vitest/browser-playwright'
 import { readFileSync } from 'node:fs'
 import { createServer, type AddressInfo } from 'node:net'
@@ -18,7 +19,7 @@ const browserApiPort = Number(process.env.AI_NOVEL_VITEST_BROWSER_API_PORT || 0)
 const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tailwindcss(), react()],
   optimizeDeps: {
     include: ['zustand/middleware'],
   },

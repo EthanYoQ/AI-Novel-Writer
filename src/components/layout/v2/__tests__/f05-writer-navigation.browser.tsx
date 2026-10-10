@@ -17,6 +17,7 @@ import { useEditorStore } from '../../../../stores/editor-store'
 import { useLayoutStore } from '../../../../stores/layout-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
+import { useWorkflowStore } from '../../../../stores/workflow-store'
 import type { ProjectData } from '../../../../shared/ipc-channels'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -207,5 +208,50 @@ it('starts separate field generation actions with different run identities', asy
     execute.mockRestore()
     useLLMStore.setState({ defaultModelId: oldModelId })
     setActiveProjectSessionContext(oldSession)
+  }
+})
+
+it.each(['zh-CN', 'en-US'] as const)('explains field generation conflicts and restores generation controls in %s', async (locale) => {
+  const oldModelId = useLLMStore.getState().defaultModelId
+  const oldSession = getActiveProjectSessionContext()
+  const oldLogs = useWorkflowStore.getState().globalLogs
+  setActiveProjectSessionContext({ projectId: project.id, leaseId: project.sessionLease!, projectPath: project.path })
+  const execute = vi.spyOn(GenerateFieldCommand.prototype, 'execute')
+    .mockRejectedValueOnce(new Error('GENERATION_AUTHOR_DRAFT_CHANGED'))
+    .mockRejectedValueOnce(new Error('Provider unavailable'))
+  useLLMStore.setState({ defaultModelId: 'fixture-model' })
+  useLocaleStore.setState({ locale })
+  useProjectStore.setState({ currentProject: project })
+  useWorkflowStore.setState({ globalLogs: [] })
+  try {
+    await render(<NovelConfigEditor projectKey={project.path} />)
+    const title = locale === 'zh-CN' ? 'AI 生成「主角人设」' : 'Generate “Protagonist profile” with AI'
+    const button = host.querySelector<HTMLButtonElement>(`[title="${title}"]`)!
+    await act(async () => {
+      button.click()
+      await vi.waitFor(() => expect(useWorkflowStore.getState().globalLogs.at(-1)).toMatchObject({
+        level: 'error',
+        message: locale === 'zh-CN'
+          ? '生成期间小说配置已修改。已保留你的修改，请按当前配置重新生成。'
+          : 'The novel configuration changed during generation. Your edits have been preserved. Generate again using the current configuration.',
+      }))
+    })
+    await vi.waitFor(() => expect(button.disabled).toBe(false))
+    await act(async () => {
+      button.click()
+      await vi.waitFor(() => expect(useWorkflowStore.getState().globalLogs.at(-1)).toMatchObject({
+        level: 'error',
+        message: locale === 'zh-CN' ? '生成失败：Error: Provider unavailable' : 'Generation failed: Error: Provider unavailable',
+      }))
+    })
+    expect(execute).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(button.disabled).toBe(false))
+  } finally {
+    execute.mockRestore()
+    await act(async () => {
+      useLLMStore.setState({ defaultModelId: oldModelId })
+      useWorkflowStore.setState({ globalLogs: oldLogs })
+      setActiveProjectSessionContext(oldSession)
+    })
   }
 })
