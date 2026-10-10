@@ -162,6 +162,22 @@ describe('interactive Electron startup', () => {
     expect(fs.readFileSync(path.join(mocks.userData, 'retained.json'), 'utf8')).toBe('original Chromium profile')
   })
 
+  it('starts with the default Chromium profile without changing its existing data', async () => {
+    vi.stubEnv('AI_NOVEL_APP_DATA_HOME', '')
+    mocks.userData = path.join(mocks.appData, 'ai-novel-writer')
+    fs.mkdirSync(mocks.userData, { recursive: true })
+    fs.writeFileSync(path.join(mocks.userData, 'retained.json'), 'original Chromium profile')
+
+    await import('../main')
+    await vi.waitFor(() => expect(mocks.BrowserWindow).toHaveBeenCalledOnce())
+
+    expect(mocks.registerIPCHandlers).toHaveBeenCalledOnce()
+    expect(mocks.startUpdateRuntime).toHaveBeenCalledOnce()
+    expect(fs.readdirSync(mocks.userData)).toEqual(['retained.json'])
+    expect(fs.readFileSync(path.join(mocks.userData, 'retained.json'), 'utf8')).toBe('original Chromium profile')
+    expect(fs.readFileSync(path.join(legacy, 'config.json'), 'utf8')).toBe('{}')
+  })
+
   it('shows only a diagnostic window when source JSON is corrupt', async () => {
     fs.writeFileSync(path.join(legacy, 'config.json'), '{corrupt')
     await import('../main')
