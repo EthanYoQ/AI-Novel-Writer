@@ -1,3 +1,5 @@
+import '../../../index.css'
+import { page } from 'vitest/browser'
 import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { beforeEach, afterEach, expect, it, vi } from 'vitest'
@@ -151,4 +153,23 @@ it('renders pending and blocked startup messages in English', async () => {
   await vi.waitFor(() => expect(host.textContent).toContain('Appearance preferences could not be loaded safely'))
   expect(host.textContent).toContain('Check again')
   expect(host.textContent).not.toContain('启动尚未完成')
+})
+
+it('migration notice excludes its titlebar overlap from native dragging and dismisses without remounting the workspace', async () => {
+  const load = vi.fn(async () => ({ default: () => <textarea aria-label="迁移后未保存正文" defaultValue="保留作者正文" /> }))
+  const dep = dependencies({ waitForMainReady: async () => ({
+    state: 'ready', globalGeneration: '启动世代', skinRevision: 0,
+    migrationNotice: { legacySourceIgnored: true, preservedUnknownCount: 1 },
+  }) })
+  await act(async () => root.render(<RendererStartup dependencies={dep} loadWorkspace={load} />))
+  await vi.waitFor(() => expect(host.querySelector('textarea')).not.toBeNull())
+  const editor = host.querySelector('textarea')!
+  const notice = host.querySelector<HTMLElement>('[role="status"]')!
+  expect(getComputedStyle(notice).getPropertyValue('-webkit-app-region')).toBe('no-drag')
+  expect(editor.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+  await act(async () => page.getByRole('button', { name: '知道了', exact: true }).click())
+  expect(host.querySelector('[role="status"]')).toBeNull()
+  expect(host.querySelector('textarea')).toBe(editor)
+  expect(editor.value).toBe('保留作者正文')
+  expect(load).toHaveBeenCalledOnce()
 })

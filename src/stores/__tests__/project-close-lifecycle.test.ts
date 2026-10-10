@@ -127,6 +127,72 @@ beforeEach(() => {
 })
 
 describe('project close lifecycle', () => {
+  it('imports a recognized shelf project through its source grant and opens only the new copy', async () => {
+    mocks.confirm.mockResolvedValueOnce(true)
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'project:open' && args[0] === project('B').path) return {
+        success: false, project: null, requestToken: args[1], activeProjectPath: project('A').path,
+        databaseRestored: true, dbReady: true, errorCode: 'PROJECT_LEGACY_IMPORT_REQUIRED',
+        legacyImportSource: { grantId: 'old-B-grant', displayName: 'B' },
+      }
+      if (channel === 'dialog:select-project-restore-target') return { grantId: 'new-copy-target' }
+      if (channel === 'project:import-legacy-copy') return { state: 'ready', projectId: 'C', targetRoot: project('C').path }
+      if (channel === 'project:open' && args[0] === project('C').path) return {
+        success: true, project: project('C'), requestToken: args[1], activeProjectPath: project('C').path,
+        databaseRestored: true, dbReady: true,
+      }
+      if (channel === 'project:recent-list' || channel === 'fs:list-dir') return []
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    await expect(useProjectStore.getState().openProject(project('B').path)).resolves.toBe(true)
+    expect(mocks.invoke).toHaveBeenCalledWith('project:import-legacy-copy', 'old-B-grant', 'new-copy-target')
+    expect(mocks.invoke).not.toHaveBeenCalledWith('dialog:select-legacy-project')
+    expect(useProjectStore.getState().currentProject).toEqual(project('C'))
+    expect(mocks.alertError).not.toHaveBeenCalled()
+  })
+
+  it.each(['confirmation', 'target'])('keeps the active project when legacy import is cancelled at %s', async cancelAt => {
+    mocks.confirm.mockResolvedValueOnce(cancelAt !== 'confirmation')
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'project:open') return {
+        success: false, project: null, requestToken: args[1], activeProjectPath: project('A').path,
+        databaseRestored: true, dbReady: true, errorCode: 'PROJECT_LEGACY_IMPORT_REQUIRED',
+        legacyImportSource: { grantId: 'old-B-grant', displayName: 'B' },
+      }
+      if (channel === 'dialog:select-project-restore-target') return null
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    await expect(useProjectStore.getState().openProject(project('B').path)).resolves.toBe(false)
+    expect(useProjectStore.getState().currentProject).toEqual(project('A'))
+    expect(useEditorStore.getState().tabs[0].id).toBe('a-tab')
+    expect(mocks.invoke.mock.calls.some(([channel]) => channel === 'project:import-legacy-copy')).toBe(false)
+    expect(mocks.alertError).not.toHaveBeenCalled()
+  })
+
+  it('does not start an old import after another project opens while its confirmation is pending', async () => {
+    const choice = deferred<boolean>()
+    mocks.confirm.mockReturnValueOnce(choice.promise)
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'project:open' && args[0] === project('B').path) return {
+        success: false, project: null, requestToken: args[1], activeProjectPath: project('A').path,
+        databaseRestored: true, dbReady: true, errorCode: 'PROJECT_LEGACY_IMPORT_REQUIRED',
+        legacyImportSource: { grantId: 'old-B-grant', displayName: 'B' },
+      }
+      if (channel === 'project:open') return {
+        success: true, project: project('C'), requestToken: args[1], activeProjectPath: project('C').path,
+        databaseRestored: true, dbReady: true,
+      }
+      if (channel === 'project:recent-list' || channel === 'fs:list-dir') return []
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const opening = useProjectStore.getState().openProject(project('B').path)
+    await vi.waitFor(() => expect(mocks.confirm).toHaveBeenCalled())
+    await expect(useProjectStore.getState().openProject(project('C').path)).resolves.toBe(true)
+    choice.resolve(true)
+    await expect(opening).resolves.toBe(false)
+    expect(mocks.invoke.mock.calls.some(([channel]) => channel === 'project:import-legacy-copy')).toBe(false)
+    expect(useProjectStore.getState().currentProject).toEqual(project('C'))
+  })
   it('keeps the current project and tabs when a dirty editor has no safe save handler', async () => {
     useEditorStore.setState((state) => ({
       tabs: state.tabs.map(tab => ({ ...tab, dirty: true, content: '未保存正文' })),

@@ -77,6 +77,14 @@ it('隐藏面板不卸载共享业务节点', async () => {
   expect(host.querySelector('[aria-label="作品资料输入"]')).toBe(sidebar); expect(sidebar.value).toBe('作者资料草稿')
   expect(host.querySelector('[aria-label="助手输入"]')).toBe(assistant); expect(assistant.selectionStart).toBe(2)
   expect(host.querySelector('[aria-label="任务输入"]')).toBe(bottom); expect(bottom.value).toBe('正在运行的任务')
+  await act(async () => root.render(shell('paper', <textarea aria-label={'作者正文'} defaultValue={'尚未保存的原稿'} />, action, true, slots)))
+  const referencePanel = host.querySelector<HTMLElement>('#writer-sidebar')!
+  const widthBeforeResize = referencePanel.getBoundingClientRect().width
+  host.querySelector<HTMLElement>('[role="separator"][aria-label="调整资料栏宽度"]')!.focus()
+  await act(async () => userEvent.keyboard('{ArrowRight}'))
+  expect(referencePanel.getBoundingClientRect().width).toBeGreaterThan(widthBeforeResize)
+  expect(host.querySelector('[aria-label="作品资料输入"]')).toBe(sidebar)
+  expect(sidebar.value).toBe('作者资料草稿')
 })
 it('窄窗口给出可读提示并保留横向工作区', async () => {
   await page.viewport(640, 800)
@@ -100,4 +108,24 @@ it('keeps button utility colors and exposes image skin through the V3 shell', as
   host.querySelector<HTMLElement>('.app-skin-root')!.dataset.skinReadability = 'high-contrast'
   expect(getComputedStyle(host.querySelector('.v3-magazine-shell')!).backgroundColor).toBe('rgba(0, 0, 0, 0)')
   expect(getComputedStyle(host.querySelector('.writer-editor')!).backgroundColor).toMatch(/\/ 0\.6\)|, 0\.6\)/)
+})
+
+it('home and closed panels leave the left navigation outside resize targets', async () => {
+  const action = vi.fn()
+  const pointerDown = vi.fn()
+  for (const home of [true, false]) {
+    await act(async () => root.render(<ShellV2 theme="paper" home={home}
+      sidebarOpen={home} aiPanelOpen={home} bottomOpen={home}
+      titleBar={<span>刊头</span>}
+      rail={<button style={{ width: 94, height: 60 }} onPointerDown={event => pointerDown(event.defaultPrevented)} onClick={action}>导航入口</button>}
+      sidebar={<input aria-label="隐藏资料草稿" defaultValue="保留资料" />}
+      editor={<textarea aria-label="正文草稿" defaultValue="保留正文" />}
+      aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>状态</span>} />))
+    const button = host.querySelector<HTMLButtonElement>('.writer-rail-host button')!
+    await page.getByRole('button', { name: '导航入口' }).hover()
+    expect(getComputedStyle(button).cursor).toBe('pointer')
+    await act(async () => page.getByRole('button', { name: '导航入口' }).click())
+  }
+  expect(action).toHaveBeenCalledTimes(2)
+  expect(pointerDown.mock.calls).toEqual([[false], [false]])
 })
