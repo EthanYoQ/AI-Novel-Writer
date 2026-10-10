@@ -623,13 +623,20 @@ async function main() {
         `【大纲】${importNames[0]}负责调查失踪案。`,
         `【世界观】旧港有严格的夜航禁令。`,
       ].join('\n')
+      const panel = rolePage.locator('.writer-ai-panel').getByTestId('workflow-confirmation-panel')
       const openImport = async text => {
         const source = rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' })
         if (!await source.isVisible()) await rolePage.getByTitle('粘贴 / 导入角色卡').click()
         await source.fill(text)
         await rolePage.getByRole('dialog').getByRole('button', { name: 'AI 提取并预览' }).click()
         await rolePage.getByRole('dialog').getByRole('button', { name: '发送并提取' }).click()
-        await rolePage.locator('[data-testid="workflow-confirmation-panel"]').waitFor({ state: 'visible', timeout: 30_000 })
+        const taskPanel = rolePage.locator('.writer-task-table')
+        if (!(await taskPanel.isVisible())) await rolePage.locator('.bottom-tool-btn[title="任务"]').click()
+        const openConfirmation = taskPanel.getByTestId('workflow-confirmation-open')
+        await openConfirmation.waitFor({ state: 'visible', timeout: 30_000 })
+        await openConfirmation.click()
+        await panel.waitFor({ state: 'visible', timeout: 30_000 })
+        await panel.locator(':scope > details > summary').click()
         assert.equal(await rolePage.locator('[data-shell-variant="v3"]').count(), 1)
       }
       currentStep = 'u09-a01-extract'
@@ -637,7 +644,6 @@ async function main() {
       assert.equal(modelRequests.length, 1)
       const sent = JSON.stringify(modelRequests[0].messages)
       for (const text of ['【原文】', '【大纲】', '【世界观】', importNames[0]]) assert(sent.includes(text), `fixture did not receive ${text}`)
-      const panel = rolePage.locator('[data-testid="workflow-confirmation-panel"]')
       await panel.getByText(importNames[0], { exact: false }).first().waitFor({ state: 'visible' })
       assert.deepEqual(roster(), original, 'extraction changed canonical characters before approval')
       steps.push({ stepId: currentStep, actionId: 'U09.A01', outcome: 'PASS',
@@ -690,7 +696,7 @@ async function main() {
         'rejecting every candidate discarded the original pasted text')
       const cancelledSource = `${importNames[2]}来自作者未采用的世界观草稿。`
       await openImport(cancelledSource)
-      await panel.locator('[data-testid="workflow-confirmation-cancel"]').click()
+      await panel.locator('..').getByRole('button', { name: '中止生成', exact: true }).click()
       await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).waitFor({ state: 'visible', timeout: 30_000 })
       assert.equal(await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).inputValue(), cancelledSource)
       assert.deepEqual(roster(), accepted, 'cancelled candidate changed original roster')

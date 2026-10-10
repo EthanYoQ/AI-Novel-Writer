@@ -44,7 +44,7 @@ describe('workflow logs', () => {
     expect(container.textContent).toContain(`AI Novel Writer v${__APP_VERSION__}`)
   })
 
-  it('shows a readable candidate preview and explicit confirmation actions', async () => {
+  it('opens the selected waiting task in AI output without a second confirmation owner', async () => {
     const confirmContinue = vi.fn()
     const cancelWorkflow = vi.fn()
     await act(async () => {
@@ -89,20 +89,13 @@ describe('workflow logs', () => {
       })
     })
 
-    const preview = container.querySelector('[data-testid="workflow-confirmation-preview"]')
-    expect(preview?.textContent).toContain('Zhou Lan')
-    expect(preview?.textContent).toContain('Guarded the archive for 20 years')
-
-    const cancel = container.querySelector<HTMLButtonElement>('[data-testid="workflow-confirmation-cancel"]')
-    const confirm = container.querySelector<HTMLButtonElement>('[data-testid="workflow-confirmation-confirm"]')
-    expect(cancel?.textContent).toContain('Cancel workflow')
-    expect(confirm?.textContent).toContain('Confirm and import')
-
-    await act(async () => confirm?.click())
-    expect(confirmContinue).toHaveBeenCalledWith('planning-candidates')
+    expect(container.querySelector('[data-testid="workflow-confirmation-panel"]')).toBeNull()
+    expect(container.querySelector('[data-testid="workflow-confirmation-confirm"]')).toBeNull()
+    const open = container.querySelector<HTMLButtonElement>('[data-testid="workflow-confirmation-open"]')
+    expect(open?.textContent).toContain('Confirm in AI output')
+    await act(async () => open?.click())
+    expect(useLayoutStore.getState()).toMatchObject({ aiPanelOpen: true, rightView: 'ai-output', rightPanelRunId: 'planning-candidates' })
+    expect(confirmContinue).not.toHaveBeenCalled()
     expect(cancelWorkflow).not.toHaveBeenCalled()
-
-    await act(async () => cancel?.click())
-    expect(cancelWorkflow).toHaveBeenCalledWith('planning-candidates')
   })
 })
