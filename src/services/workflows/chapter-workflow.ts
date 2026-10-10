@@ -557,7 +557,7 @@ export function createRepairFinalizeWorkflow(
 
           // 修复运行也冻结一次模型租约，全部 LLM 后处理共享一个预算。
           const { RunFinalizePostProcessCommand } = await import('./commands/finalize-chapter.command')
-          await new RunFinalizePostProcessCommand({
+          const status = await new RunFinalizePostProcessCommand({
             project,
             chapterNumber,
             chapterTitle,
@@ -569,6 +569,7 @@ export function createRepairFinalizeWorkflow(
               `Chapter ${chapterNumber} finalized manuscript`,
             ),
             onlyFailed: true,
+            retryInvalidResult: true,
             stepKey,
             chapterEntities,
           }).execute({ step: {}, context, callbacks })
@@ -580,6 +581,15 @@ export function createRepairFinalizeWorkflow(
             projectPath,
             projectSession,
           })
+          const failedSteps = Object.entries(status.steps)
+            .filter(([key, result]) => (!stepKey || key === stepKey) && !result.ok)
+            .map(([, result]) => result.label)
+          if (failedSteps.length > 0) {
+            throw new Error(text(
+              `后处理修复失败：${failedSteps.join('、')}。已定稿正文和已成功步骤已保留。`,
+              `Post-processing repair failed: ${failedSteps.join(', ')}. The finalized manuscript and successful steps were preserved.`,
+            ))
+          }
         },
       },
     ],

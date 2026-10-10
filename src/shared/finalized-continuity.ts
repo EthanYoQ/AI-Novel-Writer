@@ -166,6 +166,12 @@ export interface FinalizedCharacterStateCommitReceipt {
   candidates: FinalizedCharacterStateCandidate[]
 }
 
+export class FinalizedCharacterEvidenceError extends Error {
+  constructor(code: 'FINALIZED_CHARACTER_EVIDENCE_MISSING' | 'FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE' | 'FINALIZED_CHARACTER_EVIDENCE_INVALID',
+    readonly updateIndex: number,
+    readonly reason: 'missing' | 'no-exact-match' | 'multiple-exact-matches' | 'offset-mismatch') { super(code) }
+}
+
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 /** Main re-parses the settled artifact with its own frozen context before domain commit. */
 export function parseFinalizedCharacterStateResponse(content: string, context: FinalizedCharacterContext): FinalizedCharacterStateResponse {
@@ -177,18 +183,19 @@ export function parseFinalizedCharacterStateResponse(content: string, context: F
   for (const [index, input] of parsed.updates.entries()) {
     if (!record(input) || !record(input.currentState)) throw new Error('FINALIZED_CHARACTER_UPDATE_INVALID')
     // A distinct code lets the repair turn name the missing field instead of offering only the empty exit.
-    if (!record(input.evidence)) throw new Error('FINALIZED_CHARACTER_EVIDENCE_MISSING')
+    if (!record(input.evidence)) throw new FinalizedCharacterEvidenceError('FINALIZED_CHARACTER_EVIDENCE_MISSING', index, 'missing')
     const evidence = input.evidence
     let start = evidence.start, end = evidence.end
     if (!Object.hasOwn(evidence, 'start') && !Object.hasOwn(evidence, 'end') && typeof evidence.text === 'string' && evidence.text.length > 0) {
       const located = context.content.indexOf(evidence.text)
-      if (located < 0 || context.content.indexOf(evidence.text, located + 1) !== -1) throw new Error('FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE')
+      if (located < 0) throw new FinalizedCharacterEvidenceError('FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE', index, 'no-exact-match')
+      if (context.content.indexOf(evidence.text, located + 1) !== -1) throw new FinalizedCharacterEvidenceError('FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE', index, 'multiple-exact-matches')
       start = located; end = located + evidence.text.length
     }
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || (start as number) < 0
       || (end as number) <= (start as number) || (end as number) > context.content.length
       || typeof evidence.text !== 'string' || context.content.slice(start as number, end as number) !== evidence.text) {
-      throw new Error('FINALIZED_CHARACTER_EVIDENCE_INVALID')
+      throw new FinalizedCharacterEvidenceError('FINALIZED_CHARACTER_EVIDENCE_INVALID', index, 'offset-mismatch')
     }
     const currentState: FinalizedCharacterStateValues = {}
     for (const field of CHARACTER_STATE_TEXT_FIELDS) {

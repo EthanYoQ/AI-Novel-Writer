@@ -49,14 +49,14 @@ export class FinalizationGeneration {
     if (!task || textHash(JSON.stringify(task)) !== run.binding.sourceManifest.finalizationGenerationTaskHash) throw new Error('GENERATION_FINALIZATION_TASK_INVALID')
     return structuredClone(task)
   }
-  private artifact(run: DurableGenerationRun, ref: FinalizedCharacterArtifact) {
+  artifact(run: DurableGenerationRun, ref: FinalizedCharacterArtifact) {
     if (!ref || Object.keys(ref).some(key => !['artifactId', 'revision', 'textHash'].includes(key))) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
     const row = this.db.prepare('SELECT run_id,attempt_id,status FROM generation_artifacts WHERE artifact_id=?').get(ref.artifactId) as { run_id: string; attempt_id: string; status: string } | undefined
     if (!row || row.run_id !== run.runId || row.status === 'discarded') throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
     const receipt = this.runs.receipt(row.attempt_id), artifact = receipt.artifact
     if (!artifact || artifact.revision !== ref.revision || artifact.textHash !== ref.textHash || textHash(artifact.text) !== ref.textHash || !artifact.text.trim()
       || receipt.failureCode || !['settled', 'unknown'].includes(receipt.attempt.status) || receipt.result?.finishReason !== 'stop') throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
-    return { artifact, attemptId: row.attempt_id }
+    return { artifact, attemptId: row.attempt_id, receipt }
   }
   readEffect(run: DurableGenerationRun): FinalizationGenerationEffect | undefined {
     const context = readFinalizationGenerationContext(run)

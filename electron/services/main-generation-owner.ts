@@ -42,7 +42,7 @@ import type { FinalizationGenerationChannels, FinalizationGenerationSlot, Finali
 import { FinalizationGeneration } from './finalization-generation'
 import { finalizationSlotKey, readFinalizationGenerationContext } from './finalization-generation-source'
 import { proveFinalizedCharacterGeneration } from './finalized-character-generation-proof'
-import { parseFinalizedCharacterStateResponse } from '../../src/shared/finalized-continuity'
+import { FinalizedCharacterEvidenceError, parseFinalizedCharacterStateResponse } from '../../src/shared/finalized-continuity'
 import type { GraphGenerationChannels, GraphGenerationInput, GraphGenerationRecovery } from '../../src/shared/graph-generation'
 import { GraphGeneration } from './graph-generation'
 import type { LegacyRosterGenerationChannels, LegacyRosterGenerationRecovery } from '../../src/shared/legacy-roster-generation'
@@ -473,7 +473,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return viewOf(run)
     } catch (error) { deps.leases.close(lease.leaseId); throw error }
   }
-  const outcomeOf = (receipt: GenerationExecutionReceipt, task: GenerationTask): MainGenerationExecuteReceipt => {
+  const outcomeOf = (receipt: GenerationExecutionReceipt, task: Pick<GenerationTask, 'purpose'>): MainGenerationExecuteReceipt => {
     const frozenModel = modelReceipt(receipt.run.binding), budget = receipt.budget
     const stored = receipt.result?.finishReason
     const finishReason: LLMFinishReason = receipt.failureCode ? 'error'
@@ -1114,11 +1114,23 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     executeFinalizationGeneration: async (request: FinalizationGenerationChannels['finalization-generation:execute']['args'][0]) => {
       assertCurrent()
-      if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
+      if (!request || Object.keys(request).some(key => !['handle', 'retryOf'].includes(key))) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
       let run = finalizations.require(request.handle)
       const initialTask = finalizations.task(run), context = readFinalizationGenerationContext(run)
-      let invalidText: string | undefined, repairKind: 'generic' | 'evidence-missing' | 'evidence-span' = 'generic'
-      for (let ordinal = 0; ordinal < 3; ordinal++) {
+      const replay = (attempt: ReturnType<typeof runAttempts>[number]) => pending.get(JSON.stringify([run.runId, attempt.invocationNonce]))?.promise
+        ?? outcomeOf(volatileReceipts.get(attempt.attemptId) ?? repository.receipt(attempt.attemptId), { purpose: attempt.purpose })
+      const failureOf = (text: string): Error | undefined => {
+        try { parseFinalizedCharacterStateResponse(text, context.identity); return undefined } catch (error) {
+          if (error instanceof SyntaxError || error instanceof Error && /^FINALIZED_CHARACTER_(UPDATES_INVALID|UPDATE_INVALID|EVIDENCE_MISSING|EVIDENCE_NOT_UNIQUE|EVIDENCE_INVALID|FIELD_INVALID|IDENTITY_REQUIRED|DUPLICATE_ID)$/.test(error.message)) return error
+          throw error
+        }
+      }
+      const repairTask = (invalidText: string | undefined, ordinal: number | string, error?: Error): GenerationTask => {
+        const code = error?.message ?? ''
+        const repairKind = code === 'FINALIZED_CHARACTER_EVIDENCE_MISSING' ? 'evidence-missing' : code.startsWith('FINALIZED_CHARACTER_EVIDENCE_') ? 'evidence-span' : 'generic'
+        const detail = error instanceof FinalizedCharacterEvidenceError ? context.writingLanguage === 'en-US'
+          ? ` updates[${error.updateIndex}].evidence.text: ${error.reason === 'no-exact-match' ? '0 exact matches' : error.reason === 'multiple-exact-matches' ? 'at least 2 exact matches' : error.reason === 'missing' ? 'evidence is missing' : 'start/end do not match the exact source span'}.`
+          : `updates[${error.updateIndex}].evidence.text：${error.reason === 'no-exact-match' ? '精确匹配 0 次' : error.reason === 'multiple-exact-matches' ? '精确匹配至少 2 次' : error.reason === 'missing' ? '缺少 evidence' : 'start/end 与精确原文片段不符'}。` : ''
         const english = context.writingLanguage === 'en-US'
         // Only our own error codes select fixed guidance; model text and error details never enter the message.
         const guidance = repairKind === 'generic' ? '' : repairKind === 'evidence-missing' ? english
@@ -1127,32 +1139,70 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
           : english
             ? ' The evidence.text was not one contiguous, verbatim span of the frozen chapter that occurs exactly once, or its start/end did not match. Copy a single contiguous span verbatim; never join sentences across paragraphs or blank lines, and do not alter punctuation or whitespace. Quote only one sentence; do not rewrite recentEvents to fit a quote: it must still state the latest state of this character at the end of the chapter (when later prose corrects, withdraws, or postpones an earlier plan, follow the last correction), and the evidence must be the one sentence that directly supports that latest state; if that sentence appears more than once, extend it with adjacent text into a longer contiguous span that is unique, and omit start/end so the program calculates them.'
             : '上一份回答的 evidence.text 不是冻结正文中单一连续、只出现一次的逐字片段，或 start/end 与正文不符。只能逐字复制一段连续原文；不得跨段落或空行拼接多句，不得删改标点或空白。请只引用一句；不要为了迁就引用而改写 recentEvents：它仍须写本章结束时该角色的最新状态（正文后文更正、撤回或推迟前文安排时，以最后的更正为准），evidence 选直接支持这一最新状态的那一句；若该句在正文中不唯一，扩展为包含相邻文字的更长连续片段。省略 start/end，由程序计算。'
-        const task: GenerationTask = invalidText === undefined ? initialTask : { ...initialTask, purpose: `${initialTask.purpose}:repair:${ordinal}`,
+        return invalidText === undefined ? initialTask : { ...initialTask, purpose: `${initialTask.purpose}:repair:${ordinal}`,
           messages: [...initialTask.messages, { role: 'assistant', content: invalidText }, { role: 'user', content: english
-            ? `The preceding response does not satisfy the required ${repairKind === 'generic' ? 'JSON structure or exact source evidence' : 'exact source evidence'}.${guidance} Return a corrected JSON object using only the original frozen source and character IDs. Do not change or invent evidence. Return {"updates":[]} when there is no supported update.`
-            : `${repairKind === 'generic' ? '上一份回答未满足要求的 JSON 结构或原文证据校验。' : guidance}请仅依据原始冻结正文和角色 ID 返回修正后的 JSON 对象，不得改写或虚构证据。没有可靠更新时返回 {"updates":[]}。` }] }
+            ? `The preceding response does not satisfy the required ${repairKind === 'generic' ? 'JSON structure or exact source evidence' : 'exact source evidence'}.${guidance}${detail} Return a corrected JSON object using only the original frozen source and character IDs. Do not change or invent evidence. Return {"updates":[]} when there is no supported update.`
+            : `${repairKind === 'generic' ? '上一份回答未满足要求的 JSON 结构或原文证据校验。' : guidance}${detail}请仅依据原始冻结正文和角色 ID 返回修正后的 JSON 对象，不得改写或虚构证据。没有可靠更新时返回 {"updates":[]}。` }] }
+      }
+      if (request.retryOf !== undefined) {
+        if (context.slot.stepKey !== 'character_cards') throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
+        const retryOf = structuredClone(request.retryOf)
+        const proof = finalizations.artifact(run, retryOf)
+        const invocationNonce = `finalization:retry:${proof.attemptId}`
+        const prior = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
+        if (prior) return replay(prior)
+        const assertAvailable = () => {
+          finalizations.assertMutable(run)
+          assertFinalizationSources(run)
+          if (runAttempts(run.runId).at(-1)?.attemptId !== proof.attemptId) throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
+          const currentProof = finalizations.artifact(run, retryOf)
+          const receipt = volatileReceipts.get(proof.attemptId) ?? currentProof.receipt
+          if (receipt.failureCode || receipt.unsavedTail || service.readUnsavedTails().some(tail => repository.receipt(tail.attemptId).run.rootActionId === run.rootActionId)) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
+          const budget = repository.budget(run.rootActionId)
+          if (budget.blockedCode || !['active', 'paused'].includes(budget.root.status)
+            || budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))
+            || [...pending.keys()].some(key => repository.get(JSON.parse(key)[0]).rootActionId === run.rootActionId)) throw new Error('GENERATION_DISPATCH_BLOCKED')
+        }
+        assertAvailable()
+        const failure = failureOf(proof.artifact.text)
+        if (!failure) return outcomeOf(proof.receipt, { purpose: attemptPurpose(proof.attemptId) })
+        if (viewOf(run).nonReplayable) {
+          try { await resume(handleOf(run)) } catch (error) {
+            const existing = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
+            if (existing) return replay(existing)
+            if (!(error instanceof Error) || error.message !== 'GENERATION_RESUME_REFUSED' || viewOf(repository.get(run.runId)).nonReplayable) throw error
+          }
+        }
+        run = repository.get(run.runId)
+        const existing = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
+        if (existing) return replay(existing)
+        assertAvailable()
+        return execute({ handle: handleOf(run), invocationNonce, task: repairTask(proof.artifact.text, proof.attemptId, failure) }, false, false, false, true)
+      }
+      // Dedicated requests own these nonces; old prompts need only their saved purpose and receipt for replay.
+      const latestRetry = runAttempts(run.runId).reverse().find(attempt => attempt.invocationNonce.startsWith('finalization:retry:'))
+      if (latestRetry) return replay(latestRetry)
+      let invalidText: string | undefined, failure: Error | undefined
+      for (let ordinal = 0; ordinal < 3; ordinal++) {
         const invocationNonce = `finalization:${ordinal}`
-        const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
-        const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
+        const prior = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
         let result: MainGenerationExecuteReceipt
-        if (prior) result = await (pending.get(JSON.stringify([run.runId, invocationNonce]))?.promise ?? outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior, task))
+        if (prior) result = await replay(prior)
         else {
-          if (deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) !== ordinal) throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
+          if (runAttempts(run.runId).length !== ordinal) throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
           const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
-          result = await execute({ handle: current.handle, invocationNonce, task }, false, false, false, true)
+          result = await execute({ handle: current.handle, invocationNonce, task: repairTask(invalidText, ordinal, failure) }, false, false, false, true)
         }
         run = repository.get(run.runId)
         if (context.slot.stepKey !== 'character_cards' || result.outcome.status !== 'completed' || ordinal === 2
           || repository.budget(run.rootActionId).root.status === 'cancelled') return result
-        const reference = result.outcome.receipt?.visibleArtifact
+        const reference = result.outcome.receipt.visibleArtifact
         const candidate = (result.run.candidates ?? result.run.artifacts).find(item => item.artifactId === reference?.artifactId)
         if (!candidate?.compositionEligible) return result
         if (textHash(candidate.text) !== candidate.textHash) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
-        try { parseFinalizedCharacterStateResponse(result.outcome.content, context.identity); return result } catch (error) {
-          invalidText = result.outcome.content
-          const code = error instanceof Error ? error.message : ''
-          repairKind = code === 'FINALIZED_CHARACTER_EVIDENCE_MISSING' ? 'evidence-missing' : code.startsWith('FINALIZED_CHARACTER_EVIDENCE_') ? 'evidence-span' : 'generic'
-        }
+        failure = failureOf(result.outcome.content)
+        if (!failure) return result
+        invalidText = result.outcome.content
       }
       throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
     },
