@@ -70,8 +70,8 @@
   "artifactSelection": "workflow-run-attempt-artifact-id",
   "releaseChannel": {
     "draft": false,
-    "prerelease": true,
-    "expectedLatest": false
+    "prerelease": false,
+    "expectedLatest": true
   },
   "retryPolicy": {
     "maxConsecutiveFailuresPerStage": 2

@@ -78,10 +78,26 @@ describe('single global generation cutover using synthetic roots only', () => {
     expect(() => resolveGlobalDataRoots(roots.userData, () => 'relative', {})).toThrow('GLOBAL_APP_DATA_PATH_REQUIRED')
     expect(fs.existsSync(appData)).toBe(false)
   })
-  it('refuses a default canonical root that overlaps Electron userData before creating files', () => {
+  it.each(['empty', 'legacy'])('separates the default canonical root from Electron userData for %s installs', source => {
     const roots = fixture(), appData = path.dirname(roots.userData)
     const userData = path.join(appData, 'ai-novel-writer')
-    expect(runGlobalDataMigration({ ...resolveGlobalDataRoots(userData, appData, {}, path.join(appData, 'home')), exclusiveAccess: true })).toMatchObject({ state: 'blocked', code: 'GLOBAL_ROOT_INTERSECTION' })
+    const resolved = resolveGlobalDataRoots(userData, appData, {}, path.join(appData, 'home'))
+    expect(resolved.canonicalTarget).toBe(path.join(appData, 'ai-novel-writer-data'))
+    if (source === 'legacy') populate(resolved.legacySource)
+    put(userData, 'Local Storage/retained', 'original Chromium preferences')
+    const before = snapshot(userData), legacyBefore = snapshot(resolved.legacySource)
+
+    const result = runGlobalDataMigration({ ...resolved, exclusiveAccess: true })
+    expect(result.state).toBe('ready')
+    expect(snapshot(userData)).toEqual(before)
+    expect(snapshot(resolved.legacySource)).toEqual(legacyBefore)
+    expect(runGlobalDataMigration({ ...resolved, exclusiveAccess: true })).toEqual(result)
+  })
+  it('still refuses an explicit canonical root that overlaps Electron userData before creating files', () => {
+    const roots = fixture(), appData = path.dirname(roots.userData)
+    const userData = path.join(appData, 'ai-novel-writer')
+    const resolved = resolveGlobalDataRoots(userData, appData, { AI_NOVEL_APP_DATA_HOME: userData }, path.join(appData, 'home'))
+    expect(runGlobalDataMigration({ ...resolved, exclusiveAccess: true })).toMatchObject({ state: 'blocked', code: 'GLOBAL_ROOT_INTERSECTION' })
     expect(fs.existsSync(userData)).toBe(false)
   })
   it('copies every global object byte-for-byte, retains unknown shared data and never touches userData', () => {

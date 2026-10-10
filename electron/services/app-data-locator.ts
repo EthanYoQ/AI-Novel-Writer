@@ -10,6 +10,7 @@ export function resolveGlobalDataRoots(userData: string, appData: string | (() =
     const resolvedAppData = typeof appData === 'function' ? appData() : appData
     if (!path.isAbsolute(resolvedAppData)) throw new Error('GLOBAL_APP_DATA_PATH_REQUIRED')
     canonicalTarget = path.join(resolvedAppData, 'ai-novel-writer')
+    if (path.relative(userData, canonicalTarget) === '') canonicalTarget = path.join(resolvedAppData, 'ai-novel-writer-data')
   }
   return {
     legacySource: path.resolve(env[STORAGE_ENVIRONMENT.legacySource]?.trim() || env[STORAGE_ENVIRONMENT.legacySourceCompatibility]?.trim() || path.join(home, '.vela')),
