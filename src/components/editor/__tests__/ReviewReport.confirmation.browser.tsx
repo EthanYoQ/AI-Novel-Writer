@@ -343,8 +343,8 @@ describe('ReviewReport human-confirmed revision flow', () => {
     expect(container?.querySelector('[data-review-finding-status="unresolved"]')).not.toBeNull()
     expect(container?.querySelector('[data-review-finding-status="resolved"]')).not.toBeNull()
 
-    await act(async () => page.getByRole('button', { name: '带建议完成' }).first().click())
-    expect(container?.textContent).toContain('作者带建议完成')
+    await act(async () => page.getByRole('button', { name: '不修改此项' }).first().click())
+    expect(container?.textContent).toContain('作者选择不修改')
     await act(async () => page.getByRole('button', { name: '确认审稿清单' }).click())
     await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
 
@@ -353,6 +353,40 @@ describe('ReviewReport human-confirmed revision flow', () => {
     expect(snapshot?.items[0]).toMatchObject({ findingId: 'finding-1', decision: 'waive' })
     expect(snapshot?.items[1]).toMatchObject({ findingId: 'finding-2', decision: 'apply' })
     expect(confirmationCreateParams().reviewCycleId).toBe('cycle-1')
+  })
+
+  it.each([
+    { severity: 'warning', restore: '恢复' },
+    { severity: 'unknown', restore: '明确纳入修稿' },
+  ])('excludes an author waiver from revision until a $severity item is explicitly restored', async ({ severity, restore }) => {
+    installIpc(99)
+    await renderReport(JSON.stringify({ summary: '', items: [
+      { category: '连续性', severity, description: '需要作者决定是否修改的审稿项' },
+    ] }), { cycleId: 'cycle-restore', reviewId: 41, revisionStatus: 'not-generated', recheckCount: 0,
+      findings: [{ findingId: 'finding-restore', reviewItemIndex: 0, category: '连续性', kind: 'objective',
+        status: severity === 'unknown' ? 'unverified' : 'unresolved', targetId: severity === 'unknown' ? undefined : 'draft:1' }] })
+    const skip = page.getByRole('button', { name: '不修改此项', exact: true })
+    await expect.element(skip).toHaveAttribute('title', '本项不纳入修稿，可在编辑清单时重新纳入。')
+    await act(async () => skip.click())
+    expect(container?.textContent).toContain('本项不纳入修稿，可在编辑清单时重新纳入。')
+    await act(async () => page.getByRole('button', { name: '确认审稿清单', exact: true }).click())
+    const waived = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)
+    expect(waived?.items[0]).toMatchObject({ findingId: 'finding-restore', decision: 'waive' })
+    await act(async () => page.getByRole('button', { name: '按确认意见修稿', exact: true }).click())
+    await expect.element(page.getByRole('alert')).toHaveTextContent('未纳入任何审稿项')
+    expect(document.getElementById('review-revision-model')).toBeNull()
+    expect(startWorkflow).not.toHaveBeenCalled()
+
+    await act(async () => page.getByRole('button', { name: '编辑清单', exact: true }).click())
+    await act(async () => page.getByRole('button', { name: restore, exact: true }).click())
+    invoke.mockClear()
+    await act(async () => page.getByRole('button', { name: '重新确认审稿清单', exact: true }).click())
+    const applied = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)
+    expect(applied?.items[0]).toMatchObject({ findingId: 'finding-restore', decision: 'apply' })
+    expect(waived?.items[0].decision).toBe('waive')
+    await act(async () => page.getByRole('button', { name: '按确认意见修稿', exact: true }).click())
+    await act(async () => page.getByRole('button', { name: '开始修稿', exact: true }).click())
+    expect(startWorkflow).toHaveBeenCalledOnce()
   })
 
   it('错误降级为待核实时先忽略，确认后只有主动再次纳入才进入修稿', async () => {
