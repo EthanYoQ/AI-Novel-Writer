@@ -856,9 +856,9 @@ export default function NarrativeThreadEditor({
           {graphError && <p role="alert">{graphError}</p>}
           {graphRecovery && <div className="space-y-2">
             {(plotBusy || aiBusy) && <p role="status">{text('正在生成，请等待本次结果', 'Generation is in progress. Please wait for the result.')}</p>}
-            {!plotBusy && !aiBusy && graphRecovery.result?.kind === 'plot' && graphRecovery.sourceStatus === 'current' && graphRecovery.view.status !== 'cancelled' && <p role="status">{graphRecovery.effects.length > 0
-              ? text('生成结果已保存', 'The generated result has been saved.')
-              : text('生成已完成，结果尚未保存。请确认后保存', 'Generation is complete. Confirm and save the result.')}</p>}
+            {!plotBusy && !aiBusy && graphRecovery.result?.kind === 'plot' && (graphRecovery.effects.length > 0
+              ? <p role="status">{text('生成结果已保存', 'The generated result has been saved.')}</p>
+              : graphRecovery.sourceStatus === 'current' && graphRecovery.view.status !== 'cancelled' && <p role="status">{text('生成已完成，结果尚未保存。请确认后保存', 'Generation is complete. Confirm and save the result.')}</p>)}
             <p>{text('原模型', 'Original model')}: {graphRecovery.modelId} · {text('已确认', 'Confirmed')}: {graphRecovery.effects.length}</p>
             {graphRecovery.sourceStatus === 'conflict' && <p role="status">{text('来源已变化，仅可查看和复制。', 'Sources changed. Viewing and copying remain available.')}</p>}
             <Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(graphRecovery.result ? JSON.stringify(graphRecovery.result, null, 2) : (graphRecovery.view.candidates ?? graphRecovery.view.artifacts).map(item => item.text).join('\n'))}>{text('复制原结果', 'Copy original result')}</Button>
