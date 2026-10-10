@@ -1160,6 +1160,19 @@ $currentInstallCompleted = $true
   if (-not (Test-Path -LiteralPath $exePath)) {
     throw "Installed application is missing: $exePath"
   }
+  $normalStartupPath = Join-Path $smokeRoot 'normal-startup.json'
+  $normalStartupArguments = @(
+    (Join-Path $PSScriptRoot 'installed-startup-acceptance.mjs'), '--executable', $exePath,
+    '--evidence', $normalStartupPath, '--expected-version', [string]$packageJson.version
+  )
+  if ($env:GITHUB_ACTIONS -eq 'true' -and -not $hasPreviousVersion) { $normalStartupArguments += '--default-profile' }
+  & node @normalStartupArguments
+  if ($LASTEXITCODE -ne 0) { throw "Installed normal startup acceptance failed with code $LASTEXITCODE" }
+  $normalStartup = Get-Content -LiteralPath $normalStartupPath -Raw | ConvertFrom-Json
+  if ($normalStartup.accepted -ne $true -or $normalStartup.startupState -ne 'ready' -or
+      $normalStartup.workbenchVisible -ne $true -or $normalStartup.settingsOpenedAndClosed -ne $true) {
+    throw 'Installed normal startup acceptance did not prove a usable workbench.'
+  }
   $signingReceipt = Get-AiNovelSigningAcceptanceReceipt -Path $resolvedInstaller
   Write-AiNovelAcceptanceReceipt `
     -Directory $script:aiNovelAcceptanceDirectory `
@@ -1175,11 +1188,13 @@ $currentInstallCompleted = $true
       observations = @(
         'The real NSIS installer and its complete observed process tree exited with code zero.'
         'The installed product executable exists at the requested isolated install location.'
+        'The first normal candidate launch reached ready, displayed the workbench, and opened and closed settings.'
       )
       direct = [ordered]@{
         installerExitCode = 0
         installedExecutable = $exePath
         installedExecutableExists = $true
+        normalStartup = $normalStartup
       }
       installerPath = $resolvedInstaller
       installerSha256 = (Get-AiNovelFileSha256 -Path $resolvedInstaller).ToLowerInvariant()
