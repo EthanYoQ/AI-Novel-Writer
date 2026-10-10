@@ -659,6 +659,10 @@
     box-shadow: var(--writer-topbar-shadow);
   }
 
+  .startup-migration-notice {
+    -webkit-app-region: no-drag;
+  }
+
   .writer-command-button {
     -webkit-app-region: no-drag;
     display: inline-flex;

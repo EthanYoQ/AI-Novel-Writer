@@ -2,7 +2,7 @@ import { parsePlanningTargetUnits, DEFAULT_PLANNING_TARGET_UNITS } from '../../s
 import { isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { VisibleCompositionReceipt, VisibleCompositionAlgorithm, DirectoryGenerationProgress, PlanningContinuationReceipt, BlueprintAuthorEditReceipt, GenerationAuthorInput } from '../../src/shared/generation-owner-contract';
+import type { VisibleCompositionReceipt, VisibleCompositionAlgorithm, DirectoryGenerationProgress, DirectoryGenerationCatalog, BlueprintRecoveryDiagnostic, PlanningContinuationReceipt, BlueprintAuthorEditReceipt, GenerationAuthorInput } from '../../src/shared/generation-owner-contract';
 import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../src/shared/visible-continuation';
 import { composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, isDraftVisibleTextVersion, sanitizeDraftText } from '../../src/shared/draft-visible-text';
 import { DRAFT_RECONCILE_PURPOSE } from '../../src/shared/draft-reconciliation';
@@ -63,6 +63,10 @@ export interface GenerationExecutionReceipt {
     unsavedTail?: string;
     failureCode?: string;
 }
+type BlueprintRecoveryRead =
+    | { kind: 'available'; progress: DirectoryGenerationProgress[]; authorEdit: BlueprintAuthorEditReceipt | null; predecessor: DirectoryGenerationProgress | null }
+    | { kind: 'retired' | 'invalid'; diagnostic: BlueprintRecoveryDiagnostic };
+interface DirectoryProgressRow { run_id: string; usage_receipt_json: string }
 interface ReceiptRow {
     attempt_id: string; run_id: string; ordinal: number; attempt_json: string; usage_receipt_json: string;
     artifact_id: string | null; artifact_run_id: string | null; artifact_json: string | null; revision: number | null; artifact_status: string | null;
@@ -120,8 +124,8 @@ export class GenerationRunRepository {
         } | undefined;
         if (!row)
             fail('GENERATION_RUN_MISSING');
-        const { $runEffects, ...frozen } = JSON.parse(row.binding_json) as RunBinding & { $runEffects?: unknown };
-        void $runEffects;
+        const { $runEffects, $blueprintRetirement, ...frozen } = JSON.parse(row.binding_json) as RunBinding & { $runEffects?: unknown; $blueprintRetirement?: unknown };
+        void $runEffects; void $blueprintRetirement;
         return { runId: row.run_id, rootActionId: row.root_action_id, binding: frozen, status: row.status };
     }
     private authorEditedRoot(rootId: string): boolean {
@@ -210,6 +214,7 @@ export class GenerationRunRepository {
     }
     recordBlueprintAuthorEdit(receipt: BlueprintAuthorEditReceipt): void {
         if (!this.db().inTransaction) fail('GENERATION_DIRECTORY_TRANSACTION_REQUIRED');
+        this.assertBlueprintRecoveryWritable(receipt.sourceHandle.runId);
         this.assertPlotOutlineWritable(receipt.sourceHandle.runId);
         const original = this.db().prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(receipt.sourceHandle.runId) as string;
         const binding = JSON.parse(original);
@@ -220,6 +225,7 @@ export class GenerationRunRepository {
     }
     recordPlanningContinuation(receipt: PlanningContinuationReceipt): void {
         if (!this.db().inTransaction) fail('GENERATION_PLOT_OUTLINE_TRANSACTION_REQUIRED');
+        this.assertBlueprintRecoveryWritable(receipt.sourceHandle.runId);
         if (this.readPlanningContinuation(receipt.sourceHandle.runId)) fail('GENERATION_PLANNING_CONTINUATION_EXISTS');
         const original = this.db().prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(receipt.sourceHandle.runId) as string;
         const binding = JSON.parse(original);
@@ -256,10 +262,17 @@ export class GenerationRunRepository {
             let action: RootAction = { projectId: request.projectId, epoch: request.epoch, operation: request.operation, uiActionNonce: request.uiActionNonce, frozenInputHash: request.frozenInputHash, rootActionId: randomUUID(), status: 'active' };
             const key = rootActionIdempotencyKey(action);
             const openKey = encode([key, request.parentRootActionId ?? null]);
+            if (request.operation === 'chapter-blueprint-directory') {
+                const priorRuns = this.db().prepare(`SELECT r.run_id FROM generation_runs r JOIN generation_roots root ON root.root_action_id=r.root_action_id
+                    WHERE json_extract(root.action_json,'$.projectId')=? AND json_extract(root.action_json,'$.operation')=?
+                    AND json_extract(root.action_json,'$.uiActionNonce')=?`).all(request.projectId, request.operation, request.uiActionNonce) as { run_id: string }[];
+                for (const prior of priorRuns) this.assertBlueprintRecoveryWritable(prior.run_id);
+            }
             const existing = this.db().prepare('SELECT run_id FROM generation_runs WHERE open_key=?').get(openKey) as {
                 run_id: string;
             } | undefined;
             if (existing) {
+                this.assertBlueprintRecoveryWritable(existing.run_id);
                 this.assertPlotOutlineWritable(existing.run_id);
                 const prior = this.get(existing.run_id);
                 if (!isDeepStrictEqual(prior.binding.sourceManifest, frozen.sourceManifest) || !isDeepStrictEqual(prior.binding.sourceRefs.map(ref => { const copy: Partial<SourceRef> = { ...ref }; delete copy.epoch; return copy; }), frozen.sourceRefs.map(ref => { const copy: Partial<SourceRef> = { ...ref }; delete copy.epoch; return copy; })) || encode(prior.binding.fingerprint) !== encode(frozen.fingerprint) || prior.binding.contextSnapshotId !== frozen.contextSnapshotId || encode(this.budget(prior.rootActionId).policy) !== encode(request.budget))
@@ -287,6 +300,7 @@ export class GenerationRunRepository {
         const frozen = binding(next);
         return this.transaction(() => {
             const run = this.get(runId), budget = this.budget(run.rootActionId);
+            this.assertBlueprintRecoveryWritable(runId);
             this.assertPlotOutlineWritable(runId);
             if (!isDeepStrictEqual(run.binding, expected)) fail('GENERATION_BINDING_CONFLICT');
             if (run.status !== 'running' || budget.root.status !== 'active' || this.attemptCount(runId) > 0 || budget.blockedCode)
@@ -308,6 +322,7 @@ export class GenerationRunRepository {
     }
     reserve(runId: string, nonce: string, requestHash: string, reservedTokens: number, requestedOutputTokens: number, usagePolicy?: ProviderUsagePolicy, purpose?: string, replayTask?: import('../../src/services/generation/generation-harness').GenerationTask, budgetDecision?: import('../../src/services/generation/task-budget-planner').TaskBudgetDecision, reconciliationInjected?: boolean): GenerationExecutionReceipt {
         return this.transaction(() => {
+            this.assertBlueprintRecoveryWritable(runId);
             this.assertPlotOutlineWritable(runId);
             const prior = this.findInvocation(runId, nonce, requestHash);
             if (prior)
@@ -385,6 +400,7 @@ export class GenerationRunRepository {
     markDispatched(attemptId: string): void {
         this.transaction(() => {
             const receipt = this.receipt(attemptId);
+            this.assertBlueprintRecoveryWritable(receipt.run.runId);
             if (receipt.budget.activeElapsedMs >= receipt.budget.policy.maxActiveElapsedMs || receipt.budget.root.status !== 'active' || receipt.budget.blockedCode)
                 fail('GENERATION_DISPATCH_BLOCKED');
             assertAttemptTransition(receipt.attempt.status, 'dispatch-marked');
@@ -483,43 +499,116 @@ export class GenerationRunRepository {
         }
         return { algorithm, text, textHash: textHash(text), artifactIds: [...artifactIds], sources, ...(outline ? { chapters } : {}) };
     }
-    listDirectoryProgress(): DirectoryGenerationProgress[] {
-        const rows = this.db().prepare('SELECT run_id,usage_receipt_json FROM generation_attempts ORDER BY rowid').all() as { run_id: string; usage_receipt_json: string }[];
-        return rows.flatMap(row => {
-            const stored = JSON.parse(row.usage_receipt_json).directoryProgress as DirectoryGenerationProgress | undefined;
-            if (!stored) return [];
-            if (!completeHandle(stored.sourceHandle) || stored.sourceHandle.runId !== row.run_id
-                || stored.sourceHandle.epoch !== JSON.parse(row.usage_receipt_json).artifactIdentity?.epoch || !stored.requestedRange || !stored.committedRange
-                || ![stored.requestedRange.startChapter, stored.requestedRange.endChapter, stored.committedRange.startChapter, stored.committedRange.endChapter].every(value => Number.isSafeInteger(value) && value > 0)
-                || stored.requestedRange.endChapter < stored.requestedRange.startChapter
-                || stored.requestedRange.endChapter - stored.requestedRange.startChapter >= 10000
-                || stored.committedRange.endChapter < stored.committedRange.startChapter) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
-            const run = this.get(stored.sourceHandle.runId);
-            const selected = run.binding.sourceManifest.selectedBlueprintChapterNumbers as number[] | undefined;
-            if (!selected || Array.from({ length: stored.requestedRange.endChapter - stored.requestedRange.startChapter + 1 }, (_, index) => stored.requestedRange.startChapter + index).some(chapter => !selected.includes(chapter)))
-                fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
-            const committed = this.db().prepare('SELECT payload_hash,start_chapter,end_chapter FROM blueprint_commit_operations WHERE operation_id=?').get(stored.operationId) as { payload_hash: string; start_chapter: number; end_chapter: number } | undefined;
-            if (!committed || committed.payload_hash !== stored.payloadHash || run.rootActionId !== stored.sourceHandle.rootActionId
-                || run.binding.projectId !== stored.sourceHandle.projectId || committed.start_chapter !== stored.committedRange.startChapter
-                || committed.end_chapter !== stored.committedRange.endChapter || stored.requestedRange.startChapter !== committed.start_chapter
-                || stored.requestedRange.endChapter < committed.end_chapter
-                || !isDeepStrictEqual(stored.remainingRange, committed.end_chapter < stored.requestedRange.endChapter
-                    ? { startChapter: committed.end_chapter + 1, endChapter: stored.requestedRange.endChapter } : null)) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
-            if (stored.continuationHandle) {
-                if (!completeHandle(stored.continuationHandle)) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
-                const child = this.get(stored.continuationHandle.runId);
-                if (child.rootActionId !== run.rootActionId || child.binding.projectId !== run.binding.projectId
-                    || stored.continuationHandle.rootActionId !== child.rootActionId || stored.continuationHandle.projectId !== child.binding.projectId
-                    || child.runId === run.runId) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
-                stored.continuationHandle = { ...stored.continuationHandle, epoch: child.binding.epoch };
+    private readDirectoryProgressProof(row: DirectoryProgressRow): DirectoryGenerationProgress {
+        const usage = JSON.parse(row.usage_receipt_json);
+        const stored = usage.directoryProgress as DirectoryGenerationProgress;
+        if (!stored || typeof stored !== 'object' || typeof stored.operationId !== 'string' || !isContentHash(stored.payloadHash))
+            fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        if (!completeHandle(stored.sourceHandle) || stored.sourceHandle.runId !== row.run_id
+            || stored.sourceHandle.epoch !== usage.artifactIdentity?.epoch || !stored.requestedRange || !stored.committedRange
+            || ![stored.requestedRange.startChapter, stored.requestedRange.endChapter, stored.committedRange.startChapter, stored.committedRange.endChapter].every(value => Number.isSafeInteger(value) && value > 0)
+            || stored.requestedRange.endChapter < stored.requestedRange.startChapter
+            || stored.requestedRange.endChapter - stored.requestedRange.startChapter >= 10000
+            || stored.committedRange.endChapter < stored.committedRange.startChapter) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        const run = this.get(row.run_id);
+        const selected = run.binding.sourceManifest.selectedBlueprintChapterNumbers as number[] | undefined;
+        if (!Array.isArray(selected) || Array.from({ length: stored.requestedRange.endChapter - stored.requestedRange.startChapter + 1 }, (_, index) => stored.requestedRange.startChapter + index).some(chapter => !selected.includes(chapter)))
+            fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        const committed = this.db().prepare('SELECT payload_hash,start_chapter,end_chapter FROM blueprint_commit_operations WHERE operation_id=?').get(stored.operationId) as { payload_hash: string; start_chapter: number; end_chapter: number } | undefined;
+        if (!committed || committed.payload_hash !== stored.payloadHash || run.rootActionId !== stored.sourceHandle.rootActionId
+            || run.binding.projectId !== stored.sourceHandle.projectId || committed.start_chapter !== stored.committedRange.startChapter
+            || committed.end_chapter !== stored.committedRange.endChapter || stored.requestedRange.startChapter !== committed.start_chapter
+            || stored.requestedRange.endChapter < committed.end_chapter
+            || !isDeepStrictEqual(stored.remainingRange, committed.end_chapter < stored.requestedRange.endChapter
+                ? { startChapter: committed.end_chapter + 1, endChapter: stored.requestedRange.endChapter } : null)) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        if (stored.continuationHandle) {
+            if (!completeHandle(stored.continuationHandle)) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+            const child = this.get(stored.continuationHandle.runId);
+            if (child.rootActionId !== run.rootActionId || child.binding.projectId !== run.binding.projectId
+                || stored.continuationHandle.rootActionId !== child.rootActionId || stored.continuationHandle.projectId !== child.binding.projectId
+                || child.runId === run.runId) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+            stored.continuationHandle = { ...stored.continuationHandle, epoch: child.binding.epoch };
+        }
+        return stored;
+    }
+    readBlueprintRecovery(runId: string): BlueprintRecoveryRead {
+        return this.blueprintRecovery(runId, new Set());
+    }
+    private blueprintRecovery(runId: string, visiting: Set<string>): BlueprintRecoveryRead {
+        const invalid = (code: BlueprintRecoveryDiagnostic['code']): BlueprintRecoveryRead => ({ kind: 'invalid', diagnostic: { runId, kind: 'invalid', code } });
+        if (visiting.has(runId)) return invalid('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        visiting.add(runId);
+        try {
+            const run = this.get(runId);
+            const marker = this.db().prepare(`SELECT json_type(binding_json,'$."$blueprintRetirement"') AS type,
+                json_extract(binding_json,'$."$blueprintRetirement"') AS value FROM generation_runs WHERE run_id=?`).get(runId) as { type: string | null; value: unknown };
+            if (marker.type !== null) {
+                if (run.binding.sourceManifest.operation !== 'chapter-blueprint-directory' || marker.value !== 'blueprints-cleared')
+                    return invalid('GENERATION_DIRECTORY_PROGRESS_INVALID');
+                return { kind: 'retired', diagnostic: { runId, kind: 'retired', code: 'GENERATION_BLUEPRINTS_CLEARED' } };
             }
-            return [stored];
-        });
+            const rows = this.db().prepare("SELECT run_id,usage_receipt_json FROM generation_attempts WHERE run_id=? AND json_type(usage_receipt_json,'$.directoryProgress') IS NOT NULL ORDER BY rowid").all(runId) as DirectoryProgressRow[];
+            const progress = rows.map(row => this.readDirectoryProgressProof(row));
+            const authorEdit = this.readBlueprintAuthorEdit(runId);
+            const parents = this.db().prepare(`SELECT DISTINCT t.run_id FROM generation_attempts t JOIN generation_runs r ON r.run_id=t.run_id
+                WHERE r.root_action_id=? AND json_extract(t.usage_receipt_json,'$.directoryProgress.continuationHandle.runId')=?`).all(run.rootActionId, runId) as { run_id: string }[];
+            if (parents.length > 1) return invalid('GENERATION_DIRECTORY_PROGRESS_INVALID');
+            let predecessor: DirectoryGenerationProgress | null = null;
+            for (const parent of parents) {
+                const recovery = this.blueprintRecovery(parent.run_id, visiting);
+                if (recovery.kind !== 'available') return { kind: recovery.kind, diagnostic: { ...recovery.diagnostic, runId } };
+                const matching = recovery.progress.filter(item => item.continuationHandle?.runId === runId);
+                if (matching.length !== 1 || matching[0].sourceHandle.rootActionId !== run.rootActionId)
+                    return invalid('GENERATION_DIRECTORY_PROGRESS_INVALID');
+                predecessor = matching[0];
+            }
+            return { kind: 'available', progress, authorEdit, predecessor };
+        } catch (error) {
+            if (error instanceof Error && error.message === 'GENERATION_BLUEPRINT_AUTHOR_RECEIPT_INVALID')
+                return invalid(error.message);
+            if (error instanceof SyntaxError || error instanceof Error && ['GENERATION_DIRECTORY_PROGRESS_INVALID', 'GENERATION_RUN_MISSING'].includes(error.message))
+                return invalid('GENERATION_DIRECTORY_PROGRESS_INVALID');
+            throw error;
+        } finally { visiting.delete(runId); }
+    }
+    assertBlueprintRecoveryWritable(runId: string): Extract<BlueprintRecoveryRead, { kind: 'available' }> {
+        const recovery = this.readBlueprintRecovery(runId);
+        if (recovery.kind !== 'available') fail(recovery.diagnostic.code);
+        return recovery;
+    }
+    readDirectoryProgress(operationId: string): DirectoryGenerationProgress | null {
+        const rows = this.db().prepare("SELECT run_id FROM generation_attempts WHERE json_extract(usage_receipt_json,'$.directoryProgress.operationId')=?").all(operationId) as { run_id: string }[];
+        if (!rows.length) return null;
+        if (rows.length !== 1) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        const recovery = this.assertBlueprintRecoveryWritable(rows[0].run_id);
+        return recovery.progress.find(item => item.operationId === operationId) ?? fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+    }
+    listDirectoryProgress(): DirectoryGenerationCatalog {
+        const rows = this.db().prepare(`SELECT r.run_id FROM generation_runs r WHERE json_extract(r.binding_json,'$.sourceManifest.operation')='chapter-blueprint-directory'
+            OR json_type(r.binding_json,'$."$blueprintRetirement"') IS NOT NULL
+            OR json_type(r.binding_json,'$."$runEffects".blueprintAuthorEdit') IS NOT NULL
+            OR EXISTS (SELECT 1 FROM generation_attempts t WHERE t.run_id=r.run_id AND json_type(t.usage_receipt_json,'$.directoryProgress') IS NOT NULL)
+            ORDER BY r.rowid`).all() as { run_id: string }[];
+        const catalog: DirectoryGenerationCatalog = { progress: [], diagnostics: [] };
+        for (const row of rows) {
+            const recovery = this.readBlueprintRecovery(row.run_id);
+            if (recovery.kind === 'available') catalog.progress.push(...recovery.progress);
+            else catalog.diagnostics.push(recovery.diagnostic);
+        }
+        return catalog;
+    }
+    retireBlueprintRecoveryWithinTransaction(): void {
+        if (!this.db().inTransaction) fail('GENERATION_DIRECTORY_TRANSACTION_REQUIRED');
+        const rows = this.db().prepare("SELECT run_id,root_action_id FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.operation')='chapter-blueprint-directory'").all() as { run_id: string; root_action_id: string }[];
+        const available = rows.filter(row => !this.portableFrozenRoot(row.root_action_id) && this.readBlueprintRecovery(row.run_id).kind === 'available');
+        const retire = this.db().prepare(`UPDATE generation_runs SET binding_json=json_set(binding_json,'$."$blueprintRetirement"','blueprints-cleared') WHERE run_id=?`);
+        for (const row of available) retire.run(row.run_id);
     }
     recordDirectoryProgress(progress: DirectoryGenerationProgress): void {
         if (!this.db().inTransaction) fail('GENERATION_DIRECTORY_TRANSACTION_REQUIRED');
+        this.assertBlueprintRecoveryWritable(progress.sourceHandle.runId);
         this.assertPlotOutlineWritable(progress.sourceHandle.runId);
-        const existing = this.listDirectoryProgress().find(item => item.operationId === progress.operationId);
+        const existing = this.readDirectoryProgress(progress.operationId);
         if (existing) {
             if (!isDeepStrictEqual(existing, progress)) fail('GENERATION_DIRECTORY_PROGRESS_CONFLICT');
             return;
@@ -530,7 +619,7 @@ export class GenerationRunRepository {
         if (!row || JSON.parse(row.usage_receipt_json).directoryProgress) fail('GENERATION_DIRECTORY_PROGRESS_CONFLICT');
         if (!['settled', 'unknown'].includes(this.receipt(row.attempt_id).attempt.status)) fail('GENERATION_DIRECTORY_ATTEMPT_NOT_TERMINAL');
         this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ ...JSON.parse(row.usage_receipt_json), directoryProgress: progress }), row.attempt_id);
-        this.listDirectoryProgress();
+        this.assertBlueprintRecoveryWritable(progress.sourceHandle.runId);
     }
     activateRootForCommittedStage(rootId: string, project: ProjectEpoch): void {
         if (!this.db().inTransaction) fail('GENERATION_DIRECTORY_TRANSACTION_REQUIRED');
@@ -542,14 +631,17 @@ export class GenerationRunRepository {
         this.db().prepare('UPDATE generation_roots SET action_json=? WHERE root_action_id=?').run(encode(budget.root), rootId);
     }
     bindDirectoryContinuation(operationId: string, handle: DirectoryGenerationProgress['sourceHandle']): void {
+        if (!this.db().inTransaction) fail('GENERATION_DIRECTORY_TRANSACTION_REQUIRED');
+        this.assertBlueprintRecoveryWritable(handle.runId);
         this.assertPlotOutlineWritable(handle.runId);
-        const rows = this.db().prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts').all() as { attempt_id: string; usage_receipt_json: string }[];
-        const row = rows.find(row => JSON.parse(row.usage_receipt_json).directoryProgress?.operationId === operationId);
-        if (!row || !this.db().inTransaction) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        const progress = this.readDirectoryProgress(operationId);
+        if (!progress) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        if (progress.continuationHandle) fail('GENERATION_DIRECTORY_CONTINUATION_EXISTS');
+        const row = this.db().prepare("SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE json_extract(usage_receipt_json,'$.directoryProgress.operationId')=?").get(operationId) as { attempt_id: string; usage_receipt_json: string };
         const receipt = JSON.parse(row.usage_receipt_json);
-        if (receipt.directoryProgress.continuationHandle) fail('GENERATION_DIRECTORY_CONTINUATION_EXISTS');
         receipt.directoryProgress.continuationHandle = handle;
         this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode(receipt), row.attempt_id);
+        this.assertBlueprintRecoveryWritable(handle.runId);
     }
     readVisibleComposition(runId: string): VisibleCompositionReceipt | null {
         return this.compositionFrom(this.readState(this.get(runId)));
@@ -656,6 +748,7 @@ export class GenerationRunRepository {
     }
     resume(runId: string, next: RunBinding): void {
         this.transaction(() => {
+            this.assertBlueprintRecoveryWritable(runId);
             this.assertPlotOutlineWritable(runId);
             const run = this.get(runId), budget = this.budget(run.rootActionId);
             binding(next);
@@ -684,7 +777,9 @@ export class GenerationRunRepository {
         });
     }
     private frozenRoot(rootId: string): boolean {
-        if (this.authorEditedRoot(rootId)) return true;
+        return this.authorEditedRoot(rootId) || this.portableFrozenRoot(rootId);
+    }
+    private portableFrozenRoot(rootId: string): boolean {
         if (this.isFrozen('generation_roots', rootId)) return true;
         const runIds = this.db().prepare('SELECT run_id FROM generation_runs WHERE root_action_id=?').all(rootId) as { run_id: string }[];
         if (runIds.some(row => this.isFrozen('generation_runs', row.run_id))) return true;

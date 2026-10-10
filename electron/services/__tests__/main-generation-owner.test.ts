@@ -18,6 +18,7 @@ import type { ArchitecturePlanningIntent, BeginGenerationRequest } from '../../.
 import { generationOutputContract, MAX_BATCH_CHAPTERS } from '../../../src/shared/generation-owner-contract'
 import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
+import { createMainOwnedGenerationRuntime, type MainGenerationSnapshot, type MainGenerationTransport } from '../../../src/services/generation/generation-runtime'
 import { formatGenerationBudgetDiagnostic } from '../../../src/services/generation/prompt-budget-failure'
 import { composeVisibleContinuation } from '../../../src/shared/visible-continuation'
 import { sanitizeDraftText, DRAFT_VISIBLE_TEXT_VERSION, type DraftVisibleTextVersion } from '../../../src/shared/draft-visible-text'
@@ -29,7 +30,9 @@ import { RevisionRepository } from '../../repositories/revision-repository'
 import { DraftRepository } from '../../repositories/draft-repository'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
-import { getProjectDb } from '../../database'
+import { getProjectDb, getCurrentProjectPath } from '../../database'
+import { ProjectClearRepository } from '../../repositories/project-clear-repository'
+import { CANONICAL_PROJECT_DIRECTORY } from '../../../src/shared/project-format'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from '../../repositories/blueprint-repository'
 import { commitCharacterIdentities, refreshCharacterIdentityProjection } from '../../repositories/character-roster-repository'
 import { proveCharacterProposal } from '../generation-character-proposal-proof'
@@ -584,6 +587,31 @@ describe('explicit planning recovery with real SQLite', () => {
     expect(f.db.prepare('SELECT * FROM generation_attempts').all()).toEqual(attempts)
     expect(dispatch).toHaveBeenCalledTimes(2)
   })
+  it.each(['clear', 'orphan'] as const)('rejects author-save and restart replay after %s without invalidating an independent new root', async cause => {
+    const f = fixture(), run = f.owner.begin(directorySelection(f))
+    const request: BlueprintRangeCommitRequest = { mode: 'replace-range', operationId: 'saved-author-prefix', startChapter: 1, endChapter: 1,
+      blueprints: [blueprint(1)], authorRecovery: { sourceHandle: run.handle, leaseEpoch: 'epoch-1' } }
+    const save = () => f.db.transaction(() => f.owner.commitBlueprintAuthorEdit(request)).immediate()
+    save()
+    const restart = { ...directorySelection(f, 2), uiActionNonce: 'independent-author-action' }
+    const next = f.owner.restart(run.handle, restart)
+    expect(f.owner.restart(run.handle, restart).handle).toEqual(next.handle)
+    const receipt = f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(run.handle.runId)
+    if (cause === 'clear') BlueprintRepository.clearAll()
+    else f.db.prepare('DELETE FROM blueprint_commit_operations WHERE operation_id=?').run(request.operationId)
+    const code = cause === 'clear' ? 'GENERATION_BLUEPRINTS_CLEARED' : 'GENERATION_BLUEPRINT_AUTHOR_RECEIPT_INVALID'
+    expect(() => save()).toThrow(code)
+    expect(() => f.owner.restart(run.handle, restart)).toThrow(code)
+    expect(f.owner.readContext(run.handle)).toMatchObject({ blueprintRecovery: { writeState: 'unavailable', editRange: null, saved: null, diagnostic: { code } } })
+    expect(f.owner.readContext(run.handle).planningContinuation).toBeUndefined()
+    if (cause === 'orphan') {
+      expect(f.owner.readContext(next.handle).planningContinuation?.state).toBe('ready')
+      expect(() => f.owner.assertSourcesCurrent(next.handle, { startChapter: 2, endChapter: 3 })).not.toThrow()
+      BlueprintRepository.clearAll()
+      expect(f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(run.handle.runId)).toBe(receipt)
+      expect(new GenerationRunRepository(() => f.db).readBlueprintRecovery(run.handle.runId).kind).toBe('invalid')
+    }
+  })
   it('rolls back corrected blueprints if the author receipt cannot persist and rejects malformed identities', () => {
     const f = fixture(), run = f.owner.begin(directorySelection(f)), context = f.owner.readContext(run.handle)
     const request: BlueprintRangeCommitRequest = { mode: 'replace-range', operationId: 'author-atomic', startChapter: 1, endChapter: 1,
@@ -904,6 +932,46 @@ describe('automatic short outline binding', () => {
       .toBe(reserved.attempt.attemptId)
     expect(dispatch).toHaveBeenCalledTimes(1)
   })
+  it('continues from outline to prose after an owner running notification arrives behind the completed receipt', async () => {
+    const emitted: MainGenerationSnapshot[] = []
+    let listener: ((snapshot: MainGenerationSnapshot) => void) | undefined
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: dispatch.mock.calls.length === 1 ? outline : '正文。' })
+      return { finishReason: 'stop', usage: { promptTokens: 20, completionTokens: 20, totalTokens: 40,
+        reasoningTokens: 0, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }
+    })
+    const f = fixture(dispatch, false, undefined, snapshot => {
+      emitted.push(snapshot)
+      if (snapshot.status !== 'running') listener?.(snapshot)
+    })
+    const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    const transport: MainGenerationTransport = {
+      read: async handle => f.owner.read(handle), list: async () => f.owner.list(),
+      execute: request => f.owner.execute(request), cancel: async handle => f.owner.cancel(handle),
+      subscribe: (_handle, callback) => { listener = callback; return () => { listener = undefined } },
+    }
+    const shown = vi.fn()
+    const runtime = await createMainOwnedGenerationRuntime({ runHandle: run.handle, onSnapshot: shown }, transport)
+    try {
+      await expect(runtime.execute(({ session }) => session.complete(outlineTask, { invocationNonce: 'outline' })))
+        .resolves.toMatchObject({ status: 'completed', content: outline })
+      expect(emitted.map(({ status, revision, durableRevision, text }) => ({ status, revision, durableRevision, text }))).toEqual([
+        { status: 'running', revision: 0, durableRevision: 0, text: '' },
+        { status: 'running', revision: 1, durableRevision: 1, text: outline },
+        { status: 'completed', revision: 1, durableRevision: 1, text: outline },
+      ])
+      const lateRunning = emitted.filter(snapshot => snapshot.status === 'running').at(-1)
+      if (!lateRunning || !listener) throw new Error('TEST_EXPECTED_OWNER_NOTIFICATION')
+      listener(lateRunning)
+      await expect(runtime.execute(({ session }) => session.complete(draftTask(composed), { invocationNonce: 'prose' })))
+        .resolves.toMatchObject({ status: 'completed', content: '正文。' })
+      expect(shown.mock.calls.map(([snapshot]) => ({ status: snapshot.status, text: snapshot.text }))).toEqual([
+        { status: 'completed', text: outline }, { status: 'completed', text: '正文。' },
+      ])
+      expect(dispatch).toHaveBeenCalledTimes(2)
+      expect(f.owner.read(run.handle).ledger?.physicalRequests).toBe(2)
+    } finally { await runtime.close() }
+  })
   it('requires and consumes its native artifact, then preserves the exact draft task across reopen', async () => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
       options.onVisible({ kind: 'delta', text: (request as { task: GenerationTask }).task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE ? outline : '正文。' })
@@ -1046,7 +1114,7 @@ describe('durable directory commit and remaining stage', () => {
       return { finishReason: 'stop', usage: null }
     })
     const f = fixture(dispatch)
-    const selection = { ...f.begin, operation, selectedBlueprintChapterNumbers: Array.from({ length: chapters }, (_, index) => index + 1),
+    const selection = { ...f.begin, chapterNumber: undefined, operation, selectedBlueprintChapterNumbers: Array.from({ length: chapters }, (_, index) => index + 1),
       authorInputs: operation === 'directory' ? authorInputs : [authorInputs[0],
         { id: 'directory:author-config', text: JSON.stringify({ totalChapters: chapters }) },
         { id: 'directory:requested-range', text: JSON.stringify({ mode: 'full', startChapter: 1, endChapter: chapters }) }], output: 'structured-data' as const }
@@ -1062,6 +1130,124 @@ describe('durable directory commit and remaining stage', () => {
     }).immediate()
     return { ...f, fixture: f, selection, run, dispatch, request, commit }
   }
+  it.each(['blueprint', 'project'] as const)('retires directory recovery through the %s clear while independent generation remains usable', async entry => {
+    const f = directoryFixture('chapter-blueprint-directory'), range = { startChapter: 1, endChapter: 3 }
+    await f.owner.execute({ handle: f.run.handle, invocationNonce: 'original', task: directoryTask })
+    f.commit(f.owner, f.run.handle, f.request('cleared-prefix', 1, 2), range)
+    const repository = new GenerationRunRepository(() => f.fixture.db), original = repository.get(f.run.handle.runId)
+    const tables = ['generation_roots', 'generation_attempts', 'generation_artifacts']
+    const history = tables.map(table => f.fixture.db.prepare(`SELECT * FROM ${table}`).all())
+    const clear = () => entry === 'blueprint' ? BlueprintRepository.clearAll() : ProjectClearRepository.clearGeneratedData({ blueprints: true })
+    clear()
+    expect(repository.get(f.run.handle.runId)).toEqual(original)
+    tables.forEach((table, index) => expect(f.fixture.db.prepare(`SELECT * FROM ${table}`).all()).toEqual(history[index]))
+    expect(f.owner.listDirectoryProgress()).toEqual({ progress: [], diagnostics: [{ runId: f.run.handle.runId, kind: 'retired', code: 'GENERATION_BLUEPRINTS_CLEARED' }] })
+    expect(f.owner.readContext(f.run.handle)).toMatchObject({ blueprintRecovery: { draft: '[{"chapterNumber":1,"title":"启程"}]', writeState: 'unavailable', editRange: null, saved: null } })
+    expect(f.owner.readContext(f.run.handle).planningContinuation).toBeUndefined()
+    expect(() => f.owner.begin(f.selection)).toThrow('GENERATION_BLUEPRINTS_CLEARED')
+    expect(() => f.owner.restart(f.run.handle, { ...f.selection, uiActionNonce: 'restart-cleared' })).toThrow('GENERATION_BLUEPRINTS_CLEARED')
+    await expect(f.owner.resume(f.run.handle)).rejects.toThrow('GENERATION_BLUEPRINTS_CLEARED')
+    expect(() => f.commit(f.owner, f.run.handle, f.request('cleared-prefix', 1, 2), range)).toThrow('GENERATION_BLUEPRINTS_CLEARED')
+    const marked = f.fixture.db.prepare('SELECT * FROM generation_runs').all()
+    clear()
+    expect(f.fixture.db.prepare('SELECT * FROM generation_runs').all()).toEqual(marked)
+    const next = f.owner.begin({ ...f.selection, uiActionNonce: 'independent' })
+    expect(f.owner.readContext(next.handle).blueprintRecovery?.writeState).toBe('ready')
+    await f.owner.execute({ handle: next.handle, invocationNonce: 'new', task: directoryTask })
+    f.commit(f.owner, next.handle, f.request('new-directory', 1, 3), range)
+    expect(f.owner.listDirectoryProgress().progress.map(item => item.operationId)).toEqual(['new-directory'])
+    expect(f.dispatch).toHaveBeenCalledTimes(2)
+  })
+  it('rolls back retirement and all blueprint tables when deletion fails', async () => {
+    const f = directoryFixture('chapter-blueprint-directory')
+    await f.owner.execute({ handle: f.run.handle, invocationNonce: 'original', task: directoryTask })
+    f.commit(f.owner, f.run.handle, f.request('rollback-prefix', 1, 2), { startChapter: 1, endChapter: 3 })
+    const tables = ['generation_runs', 'blueprints', 'blueprint_commit_operations', 'blueprint_character_sync_operations']
+    const before = tables.map(table => f.fixture.db.prepare(`SELECT * FROM ${table}`).all())
+    f.fixture.db.exec("CREATE TRIGGER reject_blueprint_clear BEFORE DELETE ON blueprints BEGIN SELECT RAISE(ABORT,'CLEAR_DISK_FAILURE'); END")
+    expect(() => BlueprintRepository.clearAll()).toThrow('CLEAR_DISK_FAILURE')
+    tables.forEach((table, index) => expect(f.fixture.db.prepare(`SELECT * FROM ${table}`).all()).toEqual(before[index]))
+    expect(f.owner.listDirectoryProgress().progress).toHaveLength(1)
+    f.fixture.db.exec('DROP TRIGGER reject_blueprint_clear')
+  })
+  it('keeps missing-commit history invalid after clear and rejects only its dependent continuation', async () => {
+    const f = directoryFixture('chapter-blueprint-directory')
+    await f.owner.execute({ handle: f.run.handle, invocationNonce: 'prefix', task: directoryTask })
+    f.commit(f.owner, f.run.handle, f.request('orphan-prefix', 1, 2), { startChapter: 1, endChapter: 3 })
+    const child = f.owner.begin({ ...f.selection, uiActionNonce: 'same-root', continueDirectoryOperationId: 'orphan-prefix',
+      authorInputs: f.selection.authorInputs.map(item => item.id === 'directory:requested-range' ? { ...item, text: '{"mode":"append","startChapter":3,"endChapter":3}' } : item) })
+    f.fixture.db.prepare('DELETE FROM blueprint_commit_operations WHERE operation_id=?').run('orphan-prefix')
+    const repository = new GenerationRunRepository(() => f.fixture.db)
+    expect(repository.readBlueprintRecovery(child.handle.runId)).toMatchObject({ kind: 'invalid', diagnostic: { runId: child.handle.runId } })
+    expect(f.owner.readContext(child.handle).blueprintRecovery?.writeState).toBe('unavailable')
+    await expect(f.owner.execute({ handle: child.handle, invocationNonce: 'blocked', task: directoryTask })).rejects.toThrow('GENERATION_DIRECTORY_PROGRESS_INVALID')
+    expect(() => repository.readDirectoryProgress('orphan-prefix')).toThrow('GENERATION_DIRECTORY_PROGRESS_INVALID')
+    expect(repository.readDirectoryProgress('manual-operation')).toBeNull()
+    const next = f.owner.begin({ ...f.selection, uiActionNonce: 'unrelated' })
+    expect(() => f.owner.assertSourcesCurrent(next.handle, { startChapter: 1, endChapter: 3 })).not.toThrow()
+    const before = f.fixture.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE run_id=?').all(f.run.handle.runId)
+    BlueprintRepository.clearAll()
+    expect(f.fixture.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE run_id=?').all(f.run.handle.runId)).toEqual(before)
+    expect(f.fixture.db.prepare("SELECT json_type(binding_json,'$.\"$blueprintRetirement\"') AS marker FROM generation_runs WHERE run_id IN (?,?)").all(f.run.handle.runId, child.handle.runId)).toEqual([
+      { marker: null }, { marker: null }])
+    expect(repository.readBlueprintRecovery(f.run.handle.runId).kind).toBe('invalid')
+    expect(repository.readBlueprintRecovery(child.handle.runId).kind).toBe('invalid')
+  })
+  it('classifies a valid parent and its unstarted same-root child before retiring either', async () => {
+    const f = directoryFixture('chapter-blueprint-directory')
+    await f.owner.execute({ handle: f.run.handle, invocationNonce: 'prefix', task: directoryTask })
+    f.commit(f.owner, f.run.handle, f.request('parent-prefix', 1, 2), { startChapter: 1, endChapter: 3 })
+    const child = f.owner.begin({ ...f.selection, uiActionNonce: 'child', continueDirectoryOperationId: 'parent-prefix',
+      authorInputs: f.selection.authorInputs.map(item => item.id === 'directory:requested-range' ? { ...item, text: '{"mode":"append","startChapter":3,"endChapter":3}' } : item) })
+    BlueprintRepository.clearAll()
+    expect(f.fixture.db.prepare("SELECT json_extract(binding_json,'$.\"$blueprintRetirement\"') AS marker FROM generation_runs").all())
+      .toEqual([{ marker: 'blueprints-cleared' }, { marker: 'blueprints-cleared' }])
+    const repository = new GenerationRunRepository(() => f.fixture.db), childRun = repository.get(child.handle.runId)
+    expect(() => repository.replaceUnstartedBinding(childRun.runId, childRun.binding, childRun.binding)).toThrow('GENERATION_BLUEPRINTS_CLEARED')
+    expect(() => repository.reserve(childRun.runId, 'reserved', textHash('request'), 1000, 128)).toThrow('GENERATION_BLUEPRINTS_CLEARED')
+  })
+  it.each(['reserved', 'dispatched'] as const)('handles a %s request when its blueprints are cleared', state => {
+    const f = directoryFixture('chapter-blueprint-directory'), repository = new GenerationRunRepository(() => f.fixture.db)
+    const receipt = repository.reserve(f.run.handle.runId, 'in-flight', textHash('request'), 1000, 128)
+    if (state === 'dispatched') repository.markDispatched(receipt.attempt.attemptId)
+    BlueprintRepository.clearAll()
+    if (state === 'reserved') {
+      expect(() => repository.markDispatched(receipt.attempt.attemptId)).toThrow('GENERATION_BLUEPRINTS_CLEARED')
+      expect(repository.receipt(receipt.attempt.attemptId).attempt.status).toBe('reserved')
+    } else {
+      repository.snapshot(receipt.attempt.attemptId, 0, '清空前已派发的完整响应。')
+      const settled = repository.settle(receipt.attempt.attemptId, { trusted: true, actualTokens: 42,
+        policy: { estimatorVersion: 'test', safetyMarginTokens: 0, reasoning: 'included-in-completion', canBoundTotalLiability: true } }, 'stop')
+      expect(settled.artifact?.text).toBe('清空前已派发的完整响应。')
+      expect(settled.attempt).toMatchObject({ status: 'settled', actualTokens: 42, rootActionId: f.run.handle.rootActionId })
+      expect(() => f.commit(f.owner, f.run.handle, f.request('late-response', 1, 3), { startChapter: 1, endChapter: 3 })).toThrow('GENERATION_BLUEPRINTS_CLEARED')
+    }
+    expect(() => repository.reserve(f.run.handle.runId, 'in-flight', textHash('request'), 1000, 128)).toThrow('GENERATION_BLUEPRINTS_CLEARED')
+    expect(f.dispatch).not.toHaveBeenCalled()
+  })
+  it.each([null, true, 'other', {}])('keeps a noncanonical retirement marker invalid: %j', marker => {
+    const f = directoryFixture('chapter-blueprint-directory'), repository = new GenerationRunRepository(() => f.fixture.db)
+    f.fixture.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.\"$blueprintRetirement\"',json(?)) WHERE run_id=?").run(JSON.stringify(marker), f.run.handle.runId)
+    const before = f.fixture.db.prepare('SELECT binding_json FROM generation_runs').pluck().get()
+    expect(repository.readBlueprintRecovery(f.run.handle.runId).kind).toBe('invalid')
+    BlueprintRepository.clearAll()
+    expect(f.fixture.db.prepare('SELECT binding_json FROM generation_runs').pluck().get()).toBe(before)
+    expect(() => f.owner.restart(f.run.handle, { ...f.selection, uiActionNonce: 'no-fallback' })).toThrow('GENERATION_DIRECTORY_PROGRESS_INVALID')
+  })
+  it('does not add retirement markers to portable frozen generation history', () => {
+    const f = directoryFixture('chapter-blueprint-directory'), storage = path.join(f.root, CANONICAL_PROJECT_DIRECTORY)
+    fs.mkdirSync(storage)
+    fs.writeFileSync(path.join(storage, 'portable-runtime-freeze.json'), JSON.stringify({ version: 1,
+      originProjectId: '00000000-0000-4000-8000-000000000000', snapshotGeneration: 'test', nonReplayable: true,
+      requiresRuntimeFreezeGuard: true, avatarReferenceProjections: [], records: [{ projectionId: 'run-history', table: 'generation_runs',
+        recordId: f.run.handle.runId, terminalState: 'paused', projection: {}, projectionHash: textHash('{}'),
+        excludedFields: [], nonReplayable: true, originalReceiptVerified: false }] }))
+    const before = f.fixture.db.prepare('SELECT * FROM generation_runs').all()
+    vi.mocked(getCurrentProjectPath).mockReturnValue(f.root)
+    try { BlueprintRepository.clearAll() } finally { vi.mocked(getCurrentProjectPath).mockReturnValue(null) }
+    expect(f.fixture.db.prepare('SELECT * FROM generation_runs').all()).toEqual(before)
+    expect(BlueprintRepository.getAll()).toEqual([])
+  })
   it('keeps the original 50-chapter planning allowance after committing a prefix and reopening its remaining range', async () => {
     const f = directoryFixture('chapter-blueprint-directory', 50)
     new GenerationRunRepository(() => f.fixture.db).pause(f.run.handle.rootActionId)
@@ -1092,7 +1278,7 @@ describe('durable directory commit and remaining stage', () => {
     await f.owner.execute({ handle: f.run.handle, invocationNonce: 'first', task: directoryTask })
     f.commit(f.owner, f.run.handle, f.request('saved-prefix', 1, 2), { startChapter: 1, endChapter: 3 })
     const reopened = f.reopen()
-    expect(reopened.listDirectoryProgress()).toMatchObject([{ operationId: 'saved-prefix', remainingRange: { startChapter: 3, endChapter: 3 }, authorInputs }])
+    expect(reopened.listDirectoryProgress().progress).toMatchObject([{ operationId: 'saved-prefix', remainingRange: { startChapter: 3, endChapter: 3 }, authorInputs }])
     f.fixture.db.exec("UPDATE blueprints SET title='作者修订的已完成章' WHERE chapter_number=1")
     const selection = { ...f.selection, uiActionNonce: 'remaining', selectedBlueprintChapterNumbers: [3, 1, 2], continueDirectoryOperationId: 'saved-prefix' }
     expect(() => reopened.begin({ ...selection, selectedBlueprintChapterNumbers: [1, 2] })).toThrow('GENERATION_DIRECTORY_CONTINUATION_INVALID')
@@ -1108,7 +1294,7 @@ describe('durable directory commit and remaining stage', () => {
     expect(final.remainingRange).toBeNull()
     expect(reopened.read(next.handle).ledger?.physicalRequests).toBe(2)
     expect(f.fixture.db.prepare('SELECT title FROM blueprints WHERE chapter_number=1').pluck().get()).toBe('作者修订的已完成章')
-    expect(reopened.listDirectoryProgress()[0].continuationHandle).toEqual(next.handle)
+    expect(reopened.listDirectoryProgress().progress[0].continuationHandle).toEqual(next.handle)
     expect(f.dispatch).toHaveBeenCalledTimes(2)
   })
   it('rolls back formal rows and their operation when durable progress cannot be recorded', async () => {
@@ -1118,7 +1304,7 @@ describe('durable directory commit and remaining stage', () => {
     expect(() => f.commit(f.owner, f.run.handle, f.request('atomic-prefix', 1, 2), { startChapter: 1, endChapter: 3 })).toThrow('PROGRESS_DISK_FAILURE')
     expect(f.fixture.db.prepare('SELECT title FROM blueprints WHERE chapter_number=1').pluck().get()).toBe('第一章')
     expect(f.fixture.db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
-    expect(f.owner.listDirectoryProgress()).toEqual([])
+    expect(f.owner.listDirectoryProgress()).toEqual({ progress: [], diagnostics: [] })
     f.fixture.db.exec('DROP TRIGGER reject_progress')
     const saved = f.commit(f.owner, f.run.handle, f.request('atomic-prefix', 1, 2), { startChapter: 1, endChapter: 3 })
     f.fixture.db.exec("UPDATE blueprints SET title='作者后写' WHERE chapter_number=1")
@@ -1142,7 +1328,8 @@ describe('durable directory commit and remaining stage', () => {
     await f.owner.execute({ handle: f.run.handle, invocationNonce: 'first', task: directoryTask })
     f.commit(f.owner, f.run.handle, f.request('corrupt-prefix', 1, 2), { startChapter: 1, endChapter: 3 })
     f.fixture.db.exec("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.directoryProgress.requestedRange.endChapter',3.5)")
-    expect(() => f.owner.listDirectoryProgress()).toThrow('GENERATION_DIRECTORY_PROGRESS_INVALID')
+    expect(f.owner.listDirectoryProgress()).toMatchObject({ progress: [], diagnostics: [{ runId: f.run.handle.runId, kind: 'invalid', code: 'GENERATION_DIRECTORY_PROGRESS_INVALID' }] })
+    expect(() => new GenerationRunRepository(() => f.fixture.db).assertBlueprintRecoveryWritable(f.run.handle.runId)).toThrow('GENERATION_DIRECTORY_PROGRESS_INVALID')
   })
   it.each(['sourceHandle.epoch', 'continuationHandle.epoch'])('rejects progress with missing %s before exposing a typed handle', async field => {
     const f = directoryFixture()
@@ -1150,7 +1337,8 @@ describe('durable directory commit and remaining stage', () => {
     f.commit(f.owner, f.run.handle, f.request('identity-prefix', 1, 2), { startChapter: 1, endChapter: 3 })
     f.owner.begin({ ...f.selection, uiActionNonce: 'remaining', continueDirectoryOperationId: 'identity-prefix' })
     f.fixture.db.prepare('UPDATE generation_attempts SET usage_receipt_json=json_remove(usage_receipt_json,?)').run(`$.directoryProgress.${field}`)
-    expect(() => f.owner.listDirectoryProgress()).toThrow('GENERATION_DIRECTORY_PROGRESS_INVALID')
+    expect(f.owner.listDirectoryProgress()).toMatchObject({ progress: [], diagnostics: [{ runId: f.run.handle.runId, kind: 'invalid', code: 'GENERATION_DIRECTORY_PROGRESS_INVALID' }] })
+    expect(() => new GenerationRunRepository(() => f.fixture.db).assertBlueprintRecoveryWritable(f.run.handle.runId)).toThrow('GENERATION_DIRECTORY_PROGRESS_INVALID')
   })
 })
 
@@ -1571,7 +1759,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
       expect(resumed.ledger).toMatchObject({ physicalRequests: 1, tokenLiability: result.run.ledger!.tokenLiability,
         policy: result.run.ledger!.policy })
       expect(reopened.readVisibleComposition(resumed.handle)).toBeNull()
-      expect(reopened.listDirectoryProgress()).toEqual([])
+      expect(reopened.listDirectoryProgress()).toEqual({ progress: [], diagnostics: [] })
       expect(BlueprintRepository.getAll()).toEqual(formalBefore)
       expect(f.db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
       expect(fetch).toHaveBeenCalledTimes(1)

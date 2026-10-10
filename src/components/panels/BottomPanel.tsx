@@ -1,5 +1,3 @@
-import { CharacterProposalSelectionPanel } from '../characters/CharacterProposalSelectionPanel'
-import { ipc } from '../../services/ipc-client'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import {
   Trash2, ChevronsDown, Loader2, CheckCircle2, XCircle, Clock,
@@ -142,7 +140,6 @@ function TaskRunView({ activeRuns, history }: { activeRuns: WorkflowRun[]; histo
   const cancelWorkflow = useWorkflowStore(s => s.cancelWorkflow)
   const pauseWorkflow = useWorkflowStore(s => s.pauseWorkflow)
   const resumeWorkflow = useWorkflowStore(s => s.resumeWorkflow)
-  const confirmContinue = useWorkflowStore(s => s.confirmContinue)
 
   console.log('[BottomPanel] TaskRunView render: activeRuns=', activeRuns.map(r => r.id.slice(0,8) + ':' + r.status + ':' + r.steps.map(s=>s.status).join('/')))
 
@@ -168,7 +165,6 @@ function TaskRunView({ activeRuns, history }: { activeRuns: WorkflowRun[]; histo
                   run={run}
                   waitingForConfirm={runWaiting?.waitingForConfirm ?? false}
                   waitingAfterStepIndex={runWaiting?.waitingAfterStepIndex ?? -1}
-                  onConfirm={() => confirmContinue(run.id)}
                   onCancel={() => cancelWorkflow(run.id)}
                   onPause={() => pauseWorkflow(run.id)}
                   onResume={() => resumeWorkflow(run.id)}
@@ -223,7 +219,6 @@ function ActiveRunPanel({
   run,
   waitingForConfirm,
   waitingAfterStepIndex,
-  onConfirm,
   onCancel,
   onPause,
   onResume,
@@ -231,27 +226,12 @@ function ActiveRunPanel({
   run: WorkflowRun
   waitingForConfirm: boolean
   waitingAfterStepIndex: number
-  onConfirm: () => void
   onCancel: () => void
   onPause: () => void
   onResume: () => void
 }) {
   const text = (zhCNText: string, enUSText: string) => run.uiLocale === 'en-US' ? enUSText : zhCNText
   const [expanded, setExpanded] = useState(true)
-  const currentProject = useProjectStore(state => state.currentProject)
-  const proposalSessionCurrent = sameProjectSessionContext(run.projectSession, projectSessionContextFromProject(currentProject))
-  const [identityView, setIdentityView] = useState<{ runId: string; values: Array<{characterId: string; name: string; role?: string}> }>()
-  useEffect(() => {
-    if (!waitingForConfirm || !run.characterProposalBatch || !run.projectSession || !proposalSessionCurrent) return
-    let disposed = false
-    const session = run.projectSession
-    void ipc.invokeWithProjectSession(session, 'character-identity:read').then(snapshot => {
-      if (!disposed && sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) setIdentityView({ runId: run.id, values: snapshot.characters.filter(c => !c.retired).map(c => ({ characterId: c.characterId, name: c.fields.name, role: c.fields.role })) })
-    }).catch(() => { if (!disposed) setIdentityView(undefined) })
-    return () => { disposed = true }
-  }, [waitingForConfirm, run.id, run.characterProposalBatch, run.projectSession, proposalSessionCurrent])
-
-
   // 需要确认时自动展开
   useEffect(() => {
     let mounted = true
@@ -268,7 +248,6 @@ function ActiveRunPanel({
   const totalCount = run.steps.length
   const progress = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0
   const nextStepName = run.steps[waitingAfterStepIndex + 1]?.name
-  const confirmationPreview = run.steps[waitingAfterStepIndex]?.result
   const isActive = run.status === 'running' || run.status === 'waiting' || run.status === 'paused' || run.status === 'cancelling'
   const isBatchTask = run.type === 'batch_generate'
 
@@ -375,80 +354,16 @@ function ActiveRunPanel({
               <WorkflowStepItem key={step.id} step={step} index={i} isLast={i === run.steps.length - 1} uiLocale={run.uiLocale} />
             ))}
           </div>
-
-          {/* ── 等待确认操作区 ── */}
-          {waitingForConfirm && nextStepName && (
-            <div
-              data-testid="workflow-confirmation-panel"
-              className="mx-4 mt-2 px-3 py-2 rounded flex flex-col gap-2"
-              style={{
-                backgroundColor: 'rgba(var(--color-accent-rgb), 0.07)',
-                border: '1px solid rgba(var(--color-accent-rgb), 0.25)',
-              }}
-            >
-              {confirmationPreview && (
-                <pre
-                  data-testid="workflow-confirmation-preview"
-                  className="max-h-48 w-full overflow-auto whitespace-pre-wrap text-xs font-sans"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                >
-                  {confirmationPreview}
-                </pre>
-              )}
-              {run.characterProposalBatch && run.characterProposalChoices && proposalSessionCurrent && <CharacterProposalSelectionPanel
-                batch={run.characterProposalBatch} choices={run.characterProposalChoices} disabled={identityView?.runId !== run.id}
-                identities={identityView?.runId === run.id ? identityView.values : []}
-                onChange={choices => { useWorkflowStore.getState().setCharacterProposalChoices(run.id, choices) }} />}
-              <div className="flex w-full items-center gap-2">
-                <Clock size={11} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
-                <span className="text-xs flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
-                  {text('下一步：', 'Next: ')}{nextStepName}
-                </span>
-                <button
-                  data-testid="workflow-confirmation-cancel"
-                  onClick={onCancel}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium flex-shrink-0"
-                  style={{ color: 'var(--color-text-secondary)', border: '1px solid var(--color-border)' }}
-                >
-                  <X size={10} /> {text('取消工作流', 'Cancel workflow')}
-                </button>
-                <button
-                  data-testid="workflow-confirmation-confirm"
-                  disabled={!!run.characterProposalBatch && (!proposalSessionCurrent || identityView?.runId !== run.id)}
-                  onClick={onConfirm}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium flex-shrink-0"
-                  style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
-                >
-                  <Play size={10} /> {nextStepName}
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
-      {/* ── 折叠时若等待确认：状态条下方显示简洁提示 ── */}
-      {waitingForConfirm && !expanded && nextStepName && (
-        <div
-          className="mx-3 mb-2 px-2.5 py-1.5 rounded flex items-center gap-2"
-          style={{
-            backgroundColor: 'rgba(var(--color-accent-rgb), 0.07)',
-            border: '1px solid rgba(var(--color-accent-rgb), 0.25)',
-          }}
-        >
-          <Clock size={11} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
-          <span className="text-xs flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
-            {text('下一步：', 'Next: ')}{nextStepName}
-          </span>
-          <button
-            disabled={!!run.characterProposalBatch && (!proposalSessionCurrent || identityView?.runId !== run.id)}
-            onClick={(e) => { e.stopPropagation(); onConfirm() }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium flex-shrink-0"
-            style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
-          >
-            <Play size={10} /> {text('继续', 'Continue')}
-          </button>
-        </div>
+      {waitingForConfirm && nextStepName && (
+        <button type="button" data-testid="workflow-confirmation-open"
+          onClick={() => useLayoutStore.getState().openRightPanel('ai-output', run.id)}
+          className="mx-3 mb-2 flex items-center gap-1 rounded px-2.5 py-1.5 text-xs"
+          style={{ color: 'var(--color-accent)', border: '1px solid var(--color-border)' }}>
+          <ChevronRight size={11} /> {text('在 AI 输出中确认', 'Confirm in AI output')}
+        </button>
       )}
     </div>
   )

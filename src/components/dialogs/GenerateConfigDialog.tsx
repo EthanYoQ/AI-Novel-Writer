@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Sparkles, Hash, FileText } from 'lucide-react'
 import { useLLMStore } from '../../stores/llm-store'
 import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
@@ -33,7 +33,14 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
   const startWorkflow = useWorkflowStore.getState().startWorkflow
   const currentProject = useProjectStore(s => s.currentProject)
   const updateNovelConfig = useProjectStore(s => s.updateNovelConfig)
+  const defaultIdea = currentProject?.novelConfig?.coreOutline || ''
   const [idea, setIdea] = useState('')
+  const wasOpen = useRef(false)
+
+  useEffect(() => {
+    if (isOpen && !wasOpen.current) setIdea(defaultIdea)
+    wasOpen.current = isOpen
+  }, [isOpen, defaultIdea])
 
   // 控制当外部 Confirm 弹窗显示时，阻止本 Dialog 因为"点击外部"而意外关闭
   const [confirming, setConfirming] = useState(false)
@@ -133,9 +140,6 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
     // 确认弹框期间不允许关闭
     if (!open && !confirming) onClose()
   }
-
-  // 每次打开时预填当前项目的核心大纲
-  const defaultIdea = currentProject?.novelConfig?.coreOutline || ''
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
@@ -259,7 +263,7 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
             <Textarea
               autoFocus
               rows={5}
-              placeholder={defaultIdea || text('示例：我想写一个小人物在废土世界捡到远古文明遗物后逆袭的末世流小说，男频爽文风格，主角性格隐忍但有谋略...', 'Example: A quiet but strategic survivor discovers an ancient relic in a post-apocalyptic world and rises against the ruling order...')}
+              placeholder={text('示例：我想写一个小人物在废土世界捡到远古文明遗物后逆袭的末世流小说，男频爽文风格，主角性格隐忍但有谋略...', 'Example: A quiet but strategic survivor discovers an ancient relic in a post-apocalyptic world and rises against the ruling order...')}
               value={idea}
               onChange={e => setIdea(e.target.value)}
               onKeyDown={e => {

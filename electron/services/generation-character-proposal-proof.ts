@@ -125,7 +125,7 @@ export function proveCharacterProposal(db: Database.Database, runs: GenerationRu
       return { selectionKey: `${blueprint.chapterNumber}:${index}`, sourceId: `${operation.operation_id}:${blueprint.chapterNumber}:${index}`,
         fields: { name: candidate.name, role: candidate.role }, relationships, rawValue: { candidate: structuredClone(candidate), characters: [...blueprint.characters], relationshipHints: blueprint.relationshipHints } }
     }))
-    const progress = runs.listDirectoryProgress().find(item => item.operationId === operation.operation_id)
+    const progress = runs.readDirectoryProgress(operation.operation_id)
     if (progress && progress.sourceHandle.projectId !== projectId) throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
     if (forWrite && progress) assertSources(progress.sourceHandle, blueprints.map(blueprint => blueprint.chapterNumber))
     const model = progress ? runs.get(progress.sourceHandle.runId).binding.sourceManifest.modelReceipt as { modelRevision: string } : undefined

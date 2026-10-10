@@ -1,6 +1,7 @@
 import { ipc } from './ipc-client'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { FinalizationGenerationSlot, FinalizationGenerationRecovery } from '../shared/finalization-generation'
+import type { FinalizedCharacterArtifact } from '../shared/finalized-character-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
 
 /** Reuses one durable main slot. Saved effects never rebuild prompts or execute. */
@@ -9,6 +10,7 @@ export async function runFinalizationGeneration(options: {
   slot: FinalizationGenerationSlot
   modelId: () => string
   parentRootActionId?: string
+  retryOf?: FinalizedCharacterArtifact
   cancelled: () => boolean
   onHandle?: (handle: MainGenerationRunHandle) => void
 }) {
@@ -41,16 +43,17 @@ export async function runFinalizationGeneration(options: {
     if (recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled') throw new Error('FINALIZATION_GENERATION_SOURCE_CHANGED')
     let candidates = recovery.view.candidates ?? recovery.view.artifacts
     let candidate = candidates.at(-1)
-    if (!candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
+    if (options.retryOf || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
       if (!candidate && recovery.attemptCount > 0) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
       const previous = recovery.view.handle
-      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous })
+      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(options.retryOf ? { retryOf: options.retryOf } : {}) })
       if (receipt.run.handle.projectId !== previous.projectId || receipt.run.handle.rootActionId !== previous.rootActionId || receipt.run.handle.runId !== previous.runId) throw new Error('FINALIZATION_GENERATION_IDENTITY_MISMATCH')
       recovery.view = receipt.run
       if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
       if (receipt.outcome.status !== 'completed' || receipt.outcome.finishReason !== 'stop') throw new Error('FINALIZATION_GENERATION_INCOMPLETE')
       candidates = receipt.run.candidates ?? receipt.run.artifacts
-      candidate = candidates.at(-1)
+      const reference = receipt.outcome.receipt.visibleArtifact
+      candidate = candidates.find(item => item.artifactId === reference?.artifactId && item.revision === reference.revision && item.textHash === reference.textHash)
     }
     if (!candidate || candidate.status !== 'completed' || candidate.compositionEligible !== true) throw new Error('FINALIZATION_GENERATION_ARTIFACT_REQUIRED')
     return await ipc.invokeWithProjectSession(session, 'finalization-generation:commit', { handle: recovery.view.handle,

@@ -31,7 +31,7 @@ function createMockDb() {
   const run = vi.fn()
   const all = vi.fn(() => [{ name: 'fact_hash' }])
   const get = vi.fn(() => ({ present: true }))
-  const prepare = vi.fn((sql: string) => ({ sql, run, all, get: sql.includes('character_identity_meta') ? () => undefined : get }))
+  const prepare = vi.fn((sql: string) => ({ sql, run, all, get: sql.includes('character_identity_meta') || sql.includes("name='generation_runs'") ? () => undefined : get }))
   const transaction = vi.fn((fn: () => void) => () => fn())
   const exec = vi.fn()
   return { prepare, transaction, run, exec }

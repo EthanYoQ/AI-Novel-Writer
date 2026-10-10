@@ -27,6 +27,15 @@ export interface DirectoryGenerationProgress {
   /** Read projection from the original run's immutable source manifest. */
   authorInputs?: readonly GenerationAuthorInput[]
 }
+export interface BlueprintRecoveryDiagnostic {
+  runId: string
+  kind: 'retired' | 'invalid'
+  code: 'GENERATION_BLUEPRINTS_CLEARED' | 'GENERATION_DIRECTORY_PROGRESS_INVALID' | 'GENERATION_BLUEPRINT_AUTHOR_RECEIPT_INVALID'
+}
+export interface DirectoryGenerationCatalog {
+  progress: DirectoryGenerationProgress[]
+  diagnostics: BlueprintRecoveryDiagnostic[]
+}
 export interface VisibleCompositionReceipt {
   algorithm: VisibleCompositionAlgorithm
   text: string
@@ -171,14 +180,21 @@ export interface BlueprintAuthorEditReceipt {
   remainingRange: { from: number; to: number } | null
   payloadHash: string
 }
-export interface BlueprintRecovery {
+export type BlueprintRecovery = {
   sourceHandle: MainGenerationRunHandle
   leaseEpoch: string
   draft: string
+} & ({
   editRange: { from: number; to: number } | null
   writeState: 'ready' | 'in-flight' | 'source-changed' | 'author-saved' | 'continued' | 'complete'
   saved: BlueprintAuthorEditReceipt | null
-}
+  diagnostic?: never
+} | {
+  writeState: 'unavailable'
+  editRange: null
+  saved: null
+  diagnostic: BlueprintRecoveryDiagnostic
+})
 export interface PlanningContinuation {
   sourceHandle: MainGenerationRunHandle
   remainingRange: { from: number; to: number } | null
@@ -282,7 +298,7 @@ export interface GenerationOwnerChannels {
   'generation:read-batch': { args: [{ batchId: string }]; return: GenerationBatchProgress }
   'generation:list-batches': { args: []; return: GenerationBatchHistory[] }
   'generation:confirm-batch-finalization': { args: [{ batchId: string; chapterNumber: number; finalizationId: string }]; return: GenerationBatchProgress }
-  'generation:list-directory-progress': { args: []; return: DirectoryGenerationProgress[] }
+  'generation:list-directory-progress': { args: []; return: DirectoryGenerationCatalog }
   'generation:compose-visible': { args: [MainGenerationRunHandle, string[], string | undefined, VisibleCompositionAlgorithm?]; return: VisibleCompositionReceipt }
   'generation:read-visible-composition': { args: [MainGenerationRunHandle]; return: VisibleCompositionReceipt | null }
   'generation:begin': { args: [BeginGenerationRequest]; return: MainGenerationRunView }

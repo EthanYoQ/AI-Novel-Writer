@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
 import type { ProjectData } from '../../../shared/ipc-channels'
+import type { GraphGenerationEffect, GraphGenerationRecovery } from '../../../shared/graph-generation'
+import type { PlotTreeSourceBundle } from '../../../shared/plot-tree'
 import { useProjectStore } from '../../../stores/project-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -1015,5 +1017,136 @@ describe('main-owned graph recovery', () => {
     }
     expect(invoke.mock.calls.filter(([channel]) => channel === 'graph-generation:confirm').map(([, request]) => request.index)).toEqual([0, 1])
     expect(invoke.mock.calls.some(([channel]) => ['db:narrative-thread-event-confirm', 'db:draft-get-full', 'graph-generation:execute'].includes(channel))).toBe(false)
+  })
+})
+
+describe('main-owned plot generation lifetime', () => {
+  function pendingPlot(recoverable = false) {
+    const sources: PlotTreeSourceBundle = {
+      writingLanguage: 'zh-CN', synopsis: { content: '离线剧情资料' },
+      blueprints: [{ chapterNumber: 2, title: '线索', purpose: '推进', keyEvents: '找到线索' }],
+      finalizedChapters: [], narrativeThreads: [], sourceRevision: 'a'.repeat(64), snapshot: null,
+    }
+    plotSources = { ...sources }
+    const recovery: GraphGenerationRecovery = {
+      view: {
+        handle: { projectId: 'thread-project', epoch: 'thread-lease', rootActionId: 'plot-root', runId: 'plot-run' },
+        operation: 'plot-tree-snapshot', status: 'running', artifacts: [], nonReplayable: true,
+        budget: { maxAttempts: 1, maxRequestedOutputTokens: 4096, maxRequestedOutputTokensPerAttempt: 4096, deadlineAt: Date.now() + 60_000 },
+      },
+      modelId: 'glm', attemptCount: 0, sourceStatus: 'current', effects: [],
+      context: { projectId: 'thread-project', originEpoch: 'thread-lease', key: 'plot-context', createdAt: '2026-10-10T00:00:00.000Z', writingLanguage: 'zh-CN', kind: 'plot', input: { kind: 'plot' }, sources, targetBaselineHash: 'b'.repeat(64) },
+    }
+    const effect: GraphGenerationEffect = {
+      success: true, kind: 'plot', index: 0, derivation: 'model',
+      snapshot: { version: 1, generatedAt: '2026-10-10T00:01:00.000Z', writingLanguage: 'zh-CN', sourceRevision: sources.sourceRevision, tracks: [{ id: 'main-new', title: '新剧情主线', role: 'main', startChapter: 1, endChapter: 3, summary: '主线推进', events: [{ status: 'planned', chapterNumber: 2, summary: '找到线索', sources: [{ type: 'blueprint', chapterNumber: 2 }] }] }] },
+    }
+    let finish = () => {}
+    const pending = new Promise<void>(resolve => { finish = resolve })
+    let began = recoverable
+    const previous = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'config:set') return { success: true }
+      if (channel === 'generation:list') return began ? [structuredClone(recovery.view)] : []
+      if (channel === 'graph-generation:begin') { began = true; return structuredClone(recovery) }
+      if (channel === 'graph-generation:read') return structuredClone(recovery)
+      if (channel === 'graph-generation:execute') {
+        recovery.attemptCount = 1
+        await pending
+        recovery.view.status = 'completed'
+        recovery.artifact = { artifactId: 'plot-artifact', revision: 1, textHash: 'c'.repeat(64) }
+        recovery.result = { kind: 'plot', snapshot: effect.snapshot, derivation: 'model' }
+        return { run: structuredClone(recovery.view) }
+      }
+      if (channel === 'graph-generation:confirm') {
+        recovery.effects.push(effect)
+        recovery.sourceStatus = 'conflict'
+        plotSources = { ...sources, snapshot: effect.snapshot }
+        return effect
+      }
+      return previous?.(channel, ...args)
+    })
+    return { recovery, finish }
+  }
+
+  it('shows the saved acknowledgement alongside the source conflict after confirmation', async () => {
+    const { finish } = pendingPlot()
+    await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />))
+    await vi.waitFor(() => expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '生成剧情树')?.disabled).toBe(false))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '生成剧情树')?.click())
+    await vi.waitFor(() => expect(container?.textContent).toContain('正在生成，请等待本次结果'))
+    await act(async () => finish())
+    await vi.waitFor(() => expect(container?.textContent).toContain('生成结果已保存'))
+    expect(container?.textContent).toContain('来源已变化，仅可查看和复制。')
+    expect(container?.textContent).not.toContain('正在生成，请等待本次结果')
+    expect(container?.textContent).not.toContain('生成已完成，结果尚未保存')
+    expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '保存原剧情树')?.disabled).toBe(true)
+    expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '继续原运行')?.disabled).toBe(true)
+    for (const channel of ['graph-generation:begin', 'graph-generation:execute', 'graph-generation:confirm']) {
+      expect(invoke.mock.calls.filter(([called]) => called === channel)).toHaveLength(1)
+    }
+    expect(invoke.mock.calls.some(([channel]) => ['db:plot-tree-save', 'graph-generation:cancel'].includes(channel))).toBe(false)
+  })
+
+  it('keeps a resumed plot run attached until the result is ready for confirmation', async () => {
+    const { finish } = pendingPlot(true)
+    await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />))
+    await vi.waitFor(() => expect(container?.textContent).toContain('恢复原生成'))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('恢复原生成'))?.click())
+    await vi.waitFor(() => expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '继续原运行')?.disabled).toBe(false))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '继续原运行')?.click())
+    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'graph-generation:execute')).toBe(true))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('恢复原生成'))?.click())
+    await act(async () => finish())
+    await vi.waitFor(() => expect(container?.textContent).toContain('生成已完成，结果尚未保存'))
+    expect(invoke.mock.calls.some(([channel]) => ['graph-generation:begin', 'graph-generation:confirm'].includes(channel))).toBe(false)
+    expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '保存原剧情树')?.disabled).toBe(false)
+  })
+  it.each(['source conflict', 'new session'] as const)('does not save a delayed result after %s', async change => {
+    const { recovery, finish } = pendingPlot()
+    await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />))
+    await vi.waitFor(() => expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '生成剧情树')?.disabled).toBe(false))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '生成剧情树')?.click())
+    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'graph-generation:execute')).toBe(true))
+    if (change === 'source conflict') recovery.sourceStatus = 'conflict'
+    else await act(async () => {
+      const currentProject = useProjectStore.getState().currentProject
+      if (currentProject) useProjectStore.setState({ currentProject: { ...currentProject, sessionLease: 'new-lease' } })
+    })
+    await act(async () => finish())
+    await vi.waitFor(() => expect(container?.textContent).not.toContain('生成中...'))
+    expect(invoke.mock.calls.some(([channel]) => ['graph-generation:confirm', 'db:plot-tree-save', 'graph-generation:cancel'].includes(channel))).toBe(false)
+    expect(plotSources.snapshot).toBeNull()
+    if (change === 'source conflict') {
+      expect(container?.textContent).toContain('剧情资料在生成期间已更新，本次结果未保存，请重新生成。')
+      expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '保存原剧情树')?.disabled).toBe(true)
+    }
+  })
+  it.each(['ordinary render', 'locale change', 'recover click', 'candidate dialog close'] as const)('keeps delayed plot generation attached through %s', async action => {
+    const { finish } = pendingPlot()
+    await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />))
+    await vi.waitFor(() => expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '生成剧情树')?.disabled).toBe(false))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '生成剧情树')?.click())
+    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'graph-generation:execute')).toBe(true))
+    if (action === 'locale change') await act(async () => useLocaleStore.getState().setLocale('en-US'))
+    if (action === 'ordinary render') await act(async () => {
+      const currentProject = useProjectStore.getState().currentProject
+      if (currentProject) useProjectStore.setState({ currentProject: { ...currentProject, characterStates: '刷新角色状态' } })
+    })
+    if (action === 'recover click') {
+      await vi.waitFor(() => expect(container?.textContent).toContain('恢复原生成'))
+      await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('恢复原生成'))?.click())
+    }
+    if (action === 'candidate dialog close') {
+      await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '计划清单')?.click())
+      await vi.waitFor(() => expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('AI 建议伏笔'))).toBeTruthy())
+      await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('AI 建议伏笔'))?.click())
+      await act(async () => Array.from(document.querySelectorAll('button')).find(button => button.textContent === '关闭')?.click())
+    }
+    await act(async () => finish())
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === 'graph-generation:confirm')).toHaveLength(1))
+    if (action === 'candidate dialog close') await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '剧情树')?.click())
+    expect(container?.textContent).toContain('新剧情主线')
+    expect(invoke.mock.calls.some(([channel]) => ['db:plot-tree-save', 'graph-generation:cancel'].includes(channel))).toBe(false)
   })
 })

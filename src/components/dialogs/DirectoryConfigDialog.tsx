@@ -10,7 +10,7 @@ import {
 import { Button } from '../ui/Button'
 import { Label } from '../ui/Label'
 import { Textarea } from '../ui/Textarea'
-import type { DirectoryGenerationProgress } from '../../shared/generation-owner-contract'
+import type { DirectoryGenerationCatalog } from '../../shared/generation-owner-contract'
 import { terminalDirectoryProgress } from '../../services/workflows/directory-workflow'
 import type { DirectoryWorkflowParams } from '../../services/workflows/directory-workflow'
 import {
@@ -97,7 +97,7 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   const [highestBlueprintChapter, setHighestBlueprintChapter] = useState<number | null>(null)
   const [authorityError, setAuthorityError] = useState<string | null>(null)
   const [authorityLoading, setAuthorityLoading] = useState(false)
-  const [directoryProgress, setDirectoryProgress] = useState<DirectoryGenerationProgress[]>([])
+  const [directoryCatalog, setDirectoryCatalog] = useState<DirectoryGenerationCatalog>({ progress: [], diagnostics: [] })
   const [progressError, setProgressError] = useState<string | null>(null)
   const [progressSessionKey, setProgressSessionKey] = useState('')
   useEffect(() => {
@@ -115,12 +115,12 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
     const session = captureProjectSession(currentProject)
     if (!session) return
     let disposed = false
-    void ipc.invokeWithProjectSession(session, 'generation:list-directory-progress').then(all => {
+    void ipc.invokeWithProjectSession(session, 'generation:list-directory-progress').then(catalog => {
       if (disposed || !isProjectSessionCurrent(session)) return
       setProgressSessionKey(session.projectId + ':' + session.leaseId); setProgressError(null)
-      const terminals = all.map(item => terminalDirectoryProgress(item, all))
-      setDirectoryProgress([...new Map(terminals.map(item => [item.operationId, item])).values()])
-    }).catch(error => { if (!disposed && isProjectSessionCurrent(session)) { setDirectoryProgress([]); setProgressSessionKey(session.projectId + ':' + session.leaseId); setProgressError(error instanceof Error ? error.message : String(error)) } })
+      const terminals = catalog.progress.map(item => terminalDirectoryProgress(item, catalog.progress))
+      setDirectoryCatalog({ ...catalog, progress: [...new Map(terminals.map(item => [item.operationId, item])).values()] })
+    }).catch(error => { if (!disposed && isProjectSessionCurrent(session)) { setDirectoryCatalog({ progress: [], diagnostics: [] }); setProgressSessionKey(session.projectId + ':' + session.leaseId); setProgressError(error instanceof Error ? error.message : String(error)) } })
     return () => { disposed = true }
   }, [currentProject, isOpen])
 
@@ -339,7 +339,19 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
 
         <div className="px-5 py-4 space-y-4">
           {progressSessionKey === currentProject.id + ':' + currentProject.sessionLease && progressError && <p role="alert" className="text-xs">{progressError}</p>}
-          {(progressSessionKey === currentProject.id + ':' + currentProject.sessionLease ? directoryProgress : []).map(progress => (
+          {progressSessionKey === currentProject.id + ':' + currentProject.sessionLease && directoryCatalog.diagnostics.length > 0 && (
+            <div role="status" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] p-3 text-xs space-y-1">
+              {[...new Set(directoryCatalog.diagnostics.map(item => item.code))].map(code => <p key={code}>
+                {code === 'GENERATION_BLUEPRINTS_CLEARED'
+                  ? text('蓝图已清空，旧生成记录不能续接', 'Blueprints were cleared. Previous generation runs cannot continue.')
+                  : code === 'GENERATION_DIRECTORY_PROGRESS_INVALID'
+                    ? text('旧蓝图生成进度校验失败，不能续接', 'Previous blueprint generation progress failed validation and cannot continue.')
+                    : text('旧蓝图作者保存记录校验失败，不能续接', 'A previous author save record failed validation and cannot continue.')}
+              </p>)}
+              <p>{text('旧恢复稿仍可编辑或复制，也可开始新的蓝图生成', 'You can still edit or copy old recovery drafts, or start new blueprint generation.')}</p>
+            </div>
+          )}
+          {(progressSessionKey === currentProject.id + ':' + currentProject.sessionLease ? directoryCatalog.progress : []).map(progress => (
             <div key={progress.operationId} className="rounded-lg border p-3 text-xs">
               <p>{text(
                 '已保存第 ' + progress.committedRange.startChapter + '–' + progress.committedRange.endChapter + ' 章蓝图。',

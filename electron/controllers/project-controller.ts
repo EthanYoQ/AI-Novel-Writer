@@ -8,6 +8,7 @@ import {
   type CreateProjectConfig,
   type ProjectSessionContext,
   type ProjectOpenTarget,
+  type ProjectDirectoryGrant,
 } from '../../src/shared/ipc-channels'
 import { DIR_PROMPTS } from '../../src/shared/project-paths'
 import { sameProjectPathKey } from '../../src/shared/project-session-context'
@@ -32,8 +33,12 @@ import { assertExpectedProjectPath, assertRequiredExpectedProjectPath } from '..
 import { sanitizeProjectName } from './project-path'
 import { projectStoragePreflightFailure } from '../services/project-storage-preflight'
 import { projectPeekService } from '../services/project-peek'
+import { probeProjectSqlite } from '../services/sqlite-project-migration'
 
 function projectRootSelectionFailure(error: unknown) {
+  if (error instanceof Error && error.message === 'PROJECT_LEGACY_IMPORT_REQUIRED') {
+    return { errorCode: 'PROJECT_LEGACY_IMPORT_REQUIRED' as const, error: '这是旧版项目，请创建新版副本后继续。旧项目会保留。' }
+  }
   if (error instanceof Error && ['PROJECT_MIGRATION_NOT_QUALIFIED', 'PROJECT_MIGRATION_DUAL_ROOT', 'PROJECT_MIGRATION_RECOVERY_REQUIRED'].includes(error.message)) {
     return { error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请通过“导入旧项目”创建完整副本。' }
   }
@@ -557,6 +562,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         }
       }
 
+      let legacyImportSource: ProjectDirectoryGrant | undefined
       try {
         const recent = typeof target === 'string'
           ? loadRecentProjects().find(project => project.path === target) : undefined
@@ -568,10 +574,20 @@ export function registerProjectController(options: ProjectControllerOptions = {}
             grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
           })
         if (!projectPath) throw new Error('项目未获授权，请重新选择项目目录。')
-        // Read-only probe; the compatibility adoption method now rejects unqualified legacy migration.
-        const trustedProject = projectAccess.adoptLegacyProject(
-          projectAccess.probeExistingProject(projectPath),
-        )
+        const probedProject = projectAccess.probeExistingProject(projectPath)
+        if (probedProject.kind === 'legacy' || probedProject.storageFormat === 'legacy') {
+          if (recent?.projectId && (probedProject.kind !== 'manifest' || recent.projectId !== probedProject.projectId)) {
+            throw new Error('历史项目身份已变化，请重新选择项目目录。')
+          }
+          if (fs.existsSync(path.join(probedProject.rootPath, '.ai-novel-migration'))) {
+            throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
+          }
+          const sqlite = probeProjectSqlite({ databasePath: path.join(probedProject.rootPath, '.vela', 'vela.db') })
+          if (sqlite.schemaVersion !== 0) throw new Error('LEGACY_IMPORT_UNSUPPORTED_SOURCE')
+          legacyImportSource = issueDirectoryGrant(event, probedProject.rootPath, 'legacy-import')
+          throw new Error('PROJECT_LEGACY_IMPORT_REQUIRED')
+        }
+        const trustedProject = projectAccess.adoptLegacyProject(probedProject)
         const resolvedProjectPath = trustedProject.rootPath
         if (recent?.projectId && recent.projectId !== trustedProject.projectId) {
           throw new Error('历史项目身份已变化，请重新选择项目目录。')
@@ -688,6 +704,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           requestToken,
           ...databaseState,
           ...(selectionFailure ?? {}),
+          ...(legacyImportSource ? { legacyImportSource } : {}),
           error: errorMessage,
         }
       }

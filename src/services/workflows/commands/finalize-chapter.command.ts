@@ -1,3 +1,4 @@
+import type { FinalizedCharacterArtifact } from '../../../shared/finalized-character-generation'
 import { runFinalizationGeneration } from '../../finalization-generation'
 import { useLLMStore } from '../../../stores/llm-store'
 import type { FinalizationGenerationEffect } from '../../../shared/finalization-generation'
@@ -311,6 +312,7 @@ export interface RunFinalizePostProcessParams {
   finalizedSource: FinalizedSourceIdentity
   stopOnFailure?: boolean
   onlyFailed?: boolean
+  retryInvalidResult?: boolean
   stepKey?: string
   chapterEntities?: readonly string[]
 }
@@ -350,12 +352,24 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         'The finalized manuscript source receipt is stale, so post-processing was not started.',
       ))
     }
+    // Capture once before the pipeline's withRetry; a transport retry must keep the same failed result.
+    let retryOf: FinalizedCharacterArtifact | undefined
+    if (this.params.retryInvalidResult && (!this.params.stepKey || this.params.stepKey === 'character_cards')) {
+      const recovery = await ipc.invokeWithProjectSession(projectSession, 'finalization-generation:read', {
+        slot: { source: this.params.finalizedSource, stepKey: 'character_cards' },
+      })
+      const candidate = (recovery?.view.candidates ?? recovery?.view.artifacts)?.at(-1)
+      if (!recovery?.effect && candidate?.status === 'completed' && candidate.compositionEligible) {
+        retryOf = { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash }
+      }
+    }
     const generation: FinalizePostProcessGeneration = {
       finalizedStage: (stepKey, generationContext) => runFinalizationGeneration({
         session: projectSession, slot: { source: this.params.finalizedSource, stepKey },
         modelId: () => generationContext.generationModelId ?? useLLMStore.getState().defaultModelId ?? '',
         ...(generationContext.data.generationBatchId && generationContext.mainGenerationRootHandle
           ? { parentRootActionId: generationContext.mainGenerationRootHandle.rootActionId } : {}),
+        ...(stepKey === 'character_cards' && retryOf ? { retryOf } : {}),
         cancelled: () => generationContext.cancelled,
         onHandle: handle => { generationContext.mainGenerationRunHandle = Object.freeze({ ...handle }) },
       }),

@@ -3,6 +3,7 @@ import { ipc } from '../services/ipc-client'
 import type {
   CreateProjectConfig,
   ProjectOpenTarget,
+  ProjectDirectoryGrant,
   ProjectChannels,
   ProjectData,
   ProjectSessionContext,
@@ -404,6 +405,8 @@ interface ProjectState {
   recentProjects: ProjectChannels['project:recent-list']['return']
   /** 是否正在加载 */
   loading: boolean
+  legacyImportNotice: string
+  legacyImportBusy: boolean
   /** 每次成功打开项目都递增；同一路径重开也属于新的渲染进程项目会话。 */
   projectSessionEpoch: number
 
@@ -412,6 +415,7 @@ interface ProjectState {
   createProject: (config: CreateProjectConfig) => Promise<boolean>
   /** 打开项目 */
   openProject: (target: ProjectOpenTarget) => Promise<boolean>
+  importLegacyProject: (source?: ProjectDirectoryGrant) => Promise<boolean>
   /** 保存项目 */
   saveProject: (expectedProjectSession?: ProjectSessionContext) => Promise<boolean>
   /** 更新小说配置 */
@@ -449,6 +453,8 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   fileTree: [],
   recentProjects: [],
   loading: false,
+  legacyImportNotice: '',
+  legacyImportBusy: false,
   projectSessionEpoch: 0,
 
   createProject: async (config) => {
@@ -784,6 +790,20 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         return true
       }
       if (!isLatestRequest()) return false
+      if (result.errorCode === 'PROJECT_LEGACY_IMPORT_REQUIRED' && result.legacyImportSource) {
+        const approved = await confirm(
+          projectText(
+            '这是旧版项目。继续操作将创建独立的新版副本，旧项目会保留。两份项目的后续修改不会自动同步。',
+            'This is a legacy project. Continue by creating an independent copy for this version. The original is kept, and future changes do not sync between the two projects.',
+          ),
+          {
+            title: projectText('导入旧项目', 'Import legacy project'),
+            confirmText: projectText('创建新版副本', 'Create new copy'),
+          },
+        )
+        if (!approved || !isLatestRequest()) return false
+        return await get().importLegacyProject(result.legacyImportSource)
+      }
       console.error('[Project] 打开失败:', result.error)
       alertError(
         projectError(result.errorCode ? result : result.error),
@@ -809,6 +829,39 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       return false
     } finally {
       if (isLatestRequest()) set({ loading: false })
+    }
+  },
+
+  importLegacyProject: async (source) => {
+    if (get().legacyImportBusy) return false
+    const requestSequence = openProjectRequestSequence
+    const isCurrent = () => requestSequence === openProjectRequestSequence
+    set({ legacyImportNotice: '', legacyImportBusy: true })
+    try {
+      const sourceRoot = source ?? await ipc.invoke('dialog:select-legacy-project')
+      if (!sourceRoot || !isCurrent()) return false
+      const sourceName = sourceRoot.displayName || projectText('旧项目', 'Legacy project')
+      const target = await ipc.invoke('dialog:select-project-restore-target', `${sourceName}-${projectText('新版副本', 'new copy')}`)
+      if (!target || !isCurrent()) return false
+      const result = await ipc.invoke('project:import-legacy-copy', sourceRoot.grantId, target.grantId)
+      if (result.state === 'cancelled') return false
+      if (result.state === 'blocked') {
+        set({ legacyImportNotice: projectText(
+          `导入未完成，旧项目保持原样。原因：${result.code}`,
+          `Import did not complete; the original project is unchanged. Reason: ${result.code}`,
+        ) })
+        return false
+      }
+      const opened = isCurrent() && await get().openProject(result.targetRoot).catch(() => false)
+      set({ legacyImportNotice: opened
+        ? projectText('旧项目已导入为独立副本。两份项目的后续修改不会自动同步。', 'Legacy project imported as an independent copy. Future changes do not sync between the two projects.')
+        : projectText(`副本已建立，但未能自动打开。请用“打开作品”选择：${result.targetRoot}`, `The copy was created but could not be opened. Use Open project to select: ${result.targetRoot}`) })
+      return opened
+    } catch (error) {
+      set({ legacyImportNotice: projectText(`导入未完成：${String(error)}`, `Import did not complete: ${String(error)}`) })
+      return false
+    } finally {
+      set({ legacyImportBusy: false })
     }
   },
 

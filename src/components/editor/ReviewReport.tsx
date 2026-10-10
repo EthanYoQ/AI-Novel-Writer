@@ -1060,7 +1060,7 @@ function ReviewReportSession({
                         : findingStatus === 'unknown'
                           ? text('待核实', 'Unknown')
                           : findingStatus === 'author-waived'
-                            ? text('作者带建议完成', 'Author waived')
+                            ? text('作者选择不修改', 'Author chose not to revise')
                             : findingStatus === 'unverified'
                               ? text('未验证', 'Unverified')
                               : null
@@ -1172,7 +1172,7 @@ function ReviewReportSession({
                                   {item.decision === 'apply'
                                     ? text('已纳入本次修稿', 'Included in this revision')
                                     : item.decision === 'waive'
-                                      ? text('作者已带建议完成，不会传给模型', 'Author waived; not sent to the model')
+                                      ? text('本项不纳入修稿，可在编辑清单时重新纳入。', 'This item is excluded from revision. You can include it again when editing the checklist.')
                                       : text('已忽略，不会传给模型', 'Ignored; not sent to the model')}
                                 </span>
                                 <div className="flex items-center gap-1">
@@ -1194,15 +1194,17 @@ function ReviewReportSession({
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      title={text('作者显式豁免（waive）', 'Explicit author waiver')}
+                                      title={item.decision === 'waive'
+                                        ? text('重新选择后，请决定是否将本项纳入修稿。', 'After choosing again, decide whether to include this item in revision.')
+                                        : text('本项不纳入修稿，可在编辑清单时重新纳入。', 'This item is excluded from revision. You can include it again when editing the checklist.')}
                                       onClick={() => updateItem(item.id, {
                                         decision: item.decision === 'waive' ? 'ignore' : 'waive',
                                       })}
                                     >
                                       <FileCheck2 size={12} />
                                       {item.decision === 'waive'
-                                        ? text('取消带建议完成', 'Cancel waiver')
-                                        : text('带建议完成', 'Complete with advisory note')}
+                                        ? text('重新选择', 'Choose again')
+                                        : text('不修改此项', 'Do not revise this item')}
                                     </Button>
                                   )}
                                   {item.origin === 'author' && (

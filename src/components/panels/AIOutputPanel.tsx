@@ -1,6 +1,7 @@
 import { canCommitRecoveredReview } from '../../services/workflows/commands/review-chapter.command'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import GenerationBudgetDiagnostics from './GenerationBudgetDiagnostics'
+import { WorkflowConfirmationPanel } from './WorkflowConfirmationPanel'
 import type { GenerationBatchHistory, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import type { ReviewRevisionRecovery } from '../../shared/review-revision-generation'
 import type { EditorInlineRecovery } from '../../shared/editor-inline-generation'
@@ -59,20 +60,34 @@ export default function AIOutputPanel() {
   const activeRunId = activeRun?.id
   const mainSession = useMemo(() => projectSessionContextFromProject(currentProject), [currentProject])
   const [viewRunId, setViewRunId] = useState<string | null>(null)
+  const requestedRunId = useLayoutStore(state => state.rightPanelRunId)
+  const lastActiveRunId = useRef<string | undefined>(undefined)
   const [recoveryCandidates, setRecoveryCandidates] = useState<RecoveryCandidate[]>([])
   const [recoveryError, setRecoveryError] = useState('')
 
   console.log('[AIOutputPanel] render: viewRunId=', viewRunId, 'activeRun=', activeRun?.id, activeRun?.status, 'activeRuns.len=', activeRuns.length)
 
-  // 自动跟随最新活跃任务
+  // 显式定位优先；消费请求后的重渲染不再触发自动跟随。
   useEffect(() => {
-    if (!activeRunId) return
-    // 异步安排状态同步，避免在 effect 提交阶段触发级联渲染。
+    const activeChanged = lastActiveRunId.current !== activeRunId
+    lastActiveRunId.current = activeRunId
+    if (!requestedRunId && !activeChanged) return
     const syncTimer = window.setTimeout(() => {
-      setViewRunId(previousRunId => previousRunId === activeRunId ? previousRunId : activeRunId)
+      if (requestedRunId) {
+        if (useLayoutStore.getState().rightPanelRunId !== requestedRunId) return
+        const workflow = useWorkflowStore.getState()
+        const target = workflow.activeRuns.find(run => run.id === requestedRunId)
+        if (target?.status === 'waiting' && workflow.waitingRuns[target.id]?.waitingForConfirm
+          && sameProjectSessionContext(target.projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))) {
+          setViewRunId(target.id)
+        }
+        useLayoutStore.setState(state => state.rightPanelRunId === requestedRunId ? { rightPanelRunId: null } : state)
+      } else if (activeRunId) {
+        setViewRunId(activeRunId)
+      }
     }, 0)
     return () => window.clearTimeout(syncTimer)
-  }, [activeRunId])
+  }, [activeRunId, requestedRunId, mainSession])
 
   useEffect(() => {
     const projectSession = projectSessionContextFromProject(currentProject)
@@ -192,6 +207,29 @@ export default function AIOutputPanel() {
 
   const recentHistory = history.slice(0, 10)
   const visibleLocale = viewRun?.uiLocale ?? currentLocale
+  const recoveryAndHistory = <>
+    <MainDraftRecoverySection session={mainSession} locale={currentLocale} refreshKey={history.length} />
+    {(recoveryCandidates.length > 0 || recoveryError) && (
+      <RecoveryCandidateSection
+        candidates={recoveryCandidates}
+        error={recoveryError}
+        locale={currentLocale}
+        onCopy={copyRecoveryCandidate}
+        onContinue={candidate => { void continueRecoveryCandidate(candidate) }}
+        onDiscard={candidate => { void discardRecoveryCandidate(candidate) }}
+      />
+    )}
+    {viewRun && (activeRun || recentHistory.length > 0) && (
+      <div className="max-h-36 overflow-y-auto border-b px-3 py-2" style={{ borderColor: 'var(--color-border)' }}>
+        {activeRun && viewRun.id !== activeRun.id && (
+          <button type="button" className="text-xs" onClick={() => setViewRunId(activeRun.id)}>
+            {runText(visibleLocale, '当前生成', 'Current generation')}
+          </button>
+        )}
+        {recentHistory.length > 0 && <HistoryList items={recentHistory} onSelect={setViewRunId} locale={visibleLocale} />}
+      </div>
+    )}
+  </>
 
   return (
     <div
@@ -222,47 +260,25 @@ export default function AIOutputPanel() {
       </div>
 
       {/* 内容区 */}
-      <div className="flex-1 overflow-hidden flex flex-col">
-        <MainDraftRecoverySection session={mainSession} locale={currentLocale} refreshKey={history.length} />
-        {(recoveryCandidates.length > 0 || recoveryError) && (
-          <RecoveryCandidateSection
-            candidates={recoveryCandidates}
-            error={recoveryError}
-            locale={currentLocale}
-            onCopy={copyRecoveryCandidate}
-            onContinue={candidate => { void continueRecoveryCandidate(candidate) }}
-            onDiscard={candidate => { void discardRecoveryCandidate(candidate) }}
-          />
-        )}
-        {viewRun && (activeRun || recentHistory.length > 0) && (
-          <div className="max-h-36 flex-shrink-0 overflow-y-auto border-b px-3 py-2" style={{ borderColor: 'var(--color-border)' }}>
-            {activeRun && viewRun.id !== activeRun.id && (
-              <button type="button" className="text-xs" onClick={() => setViewRunId(activeRun.id)}>
-                {runText(visibleLocale, '当前生成', 'Current generation')}
-              </button>
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+        {viewRun ? (
+          <ActiveRunView
+            run={viewRun}
+            activeRuns={activeRuns}
+            onSwitchRun={setViewRunId}
+          >{recoveryAndHistory}</ActiveRunView>
+        ) : (
+          <div className="h-full overflow-y-auto">
+            {recoveryAndHistory}
+            {recentHistory.length === 0 ? (
+              <EmptyState />
+            ) : (
+              <div className="px-3 py-3">
+                <HistoryList items={recentHistory} onSelect={setViewRunId} locale={visibleLocale} />
+              </div>
             )}
-            {recentHistory.length > 0 && <HistoryList items={recentHistory} onSelect={setViewRunId} locale={visibleLocale} />}
           </div>
         )}
-        <div className="flex-1 overflow-hidden">
-          {viewRun ? (
-            <ActiveRunView
-              run={viewRun}
-              activeRuns={activeRuns}
-              onSwitchRun={setViewRunId}
-            />
-          ) : (
-            <div className="h-full overflow-y-auto">
-              {recentHistory.length === 0 ? (
-                <EmptyState />
-              ) : (
-                <div className="px-3 py-3">
-                  <HistoryList items={recentHistory} onSelect={setViewRunId} locale={visibleLocale} />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   )
@@ -535,10 +551,12 @@ function ActiveRunView({
   run,
   activeRuns,
   onSwitchRun,
+  children,
 }: {
   run: WorkflowRun
   activeRuns: WorkflowRun[]
   onSwitchRun: (id: string) => void
+  children: ReactNode
 }) {
   const locale = run.uiLocale
   const transientReasoning = useWorkflowReasoningStore(state => state.entries[run.id]?.text ?? '')
@@ -619,7 +637,7 @@ function ActiveRunView({
     : 0
 
   return (
-    <div className="flex flex-col h-full overflow-hidden relative">
+    <div className="flex min-h-0 flex-col h-full overflow-hidden">
       {/* 多任务切换（多于1个任务时显示） */}
       {activeRuns.length > 1 && (
         <div
@@ -659,8 +677,9 @@ function ActiveRunView({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto"
+        className="flex-1 min-h-0 overflow-y-auto"
       >
+        {children}
         {/* 步骤进度区及独立输出流 */}
         <div className="px-2 pt-2 pb-4">
           {run.steps.map((step, i) => (
@@ -710,16 +729,15 @@ function ActiveRunView({
           )}
         </div>
 
-        {/* 底部操作占位符，避免滚动到底部被遮挡 */}
-        {isActive && <div className="h-10 w-full flex-shrink-0" />}
       </div>
 
-      {/* 固定在底部的操作悬浮区 */}
+      {/* 确认与中止操作保持在输出滚动区外 */}
       {isActive && canCancel && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10">
+        <div className="flex max-h-[75%] min-h-0 flex-shrink-0 flex-col gap-2 p-2">
+          <WorkflowConfirmationPanel key={run.id} run={run} />
           <button
             onClick={() => cancelWorkflow(run.id)}
-            className="flex items-center justify-center gap-1.5 text-xs px-3 py-1.5 rounded-full transition-all shadow-md backdrop-blur-md"
+            className="flex flex-shrink-0 self-center items-center justify-center gap-1.5 text-xs px-3 py-1.5 rounded-full transition-all"
             style={{
               color: 'var(--color-text)',
               backgroundColor: 'var(--color-hover)',

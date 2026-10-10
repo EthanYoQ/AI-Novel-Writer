@@ -216,6 +216,7 @@ export type AppErrorCode =
   | 'EMBEDDING_MODEL_NOT_CONFIGURED'
   | 'PROJECT_STORAGE_PATH_UNSUPPORTED'
   | 'PROJECT_ROOT_REQUIRED'
+  | 'PROJECT_LEGACY_IMPORT_REQUIRED'
 
 export interface AppFailure {
   success: false
@@ -373,6 +374,7 @@ export interface ProjectChannels {
       dbReady: boolean
       stale?: boolean
       error?: string
+      legacyImportSource?: ProjectDirectoryGrant
       errorCode?: AppErrorCode
     }
   }

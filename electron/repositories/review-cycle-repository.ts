@@ -624,7 +624,9 @@ export class ReviewCycleRepository {
       const confirmationOwner = db.prepare('SELECT cycle_id FROM review_cycles WHERE confirmation_review_id=?')
         .pluck().get(input.confirmationReviewId) as string | undefined
       if (confirmationOwner && confirmationOwner !== input.cycleId) conflict()
-      if (cycle.confirmation_review_id !== null) db.prepare("UPDATE review_findings SET status='unresolved',evidence_hash=NULL,confirmation_item_index=NULL WHERE cycle_id=? AND status='author-waived'").run(input.cycleId)
+      if (cycle.confirmation_review_id !== null) db.prepare(`UPDATE review_findings
+        SET status=CASE WHEN span_start IS NULL THEN 'unverified' ELSE 'unresolved' END,
+          evidence_hash=NULL,confirmation_item_index=NULL WHERE cycle_id=? AND status='author-waived'`).run(input.cycleId)
       const waivedFindingCount = bindAuthorWaivers({ cycleId: input.cycleId,
         confirmationContentHash: confirmation.contentHash }, confirmation.snapshot, db, true)
       const result = db.prepare(`UPDATE review_cycles SET confirmation_review_id=?,confirmation_content_hash=?

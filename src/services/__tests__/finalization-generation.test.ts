@@ -40,7 +40,7 @@ it('旧角色坏 JSON stop 候选交由 main 有界修复，仅提交最后有�
  const characterEffect = { success: true, stepKey: 'character_cards' }
  const invoke = vi.fn(async (channel: string, request: unknown) => {
   if (channel === 'finalization-generation:read' || channel === 'finalization-generation:begin') return { ...stored, context: { slot: characterSlot }, view: { ...view, artifacts: [{ ...candidate, text: '{bad' }] } }
-  if (channel === 'finalization-generation:execute') return { run: { ...view, artifacts: [candidate, repaired] }, outcome: { status: 'completed', finishReason: 'stop' } }
+  if (channel === 'finalization-generation:execute') return { run: { ...view, artifacts: [candidate, repaired] }, outcome: { status: 'completed', finishReason: 'stop', receipt: { visibleArtifact: { artifactId: repaired.artifactId, revision: repaired.revision, textHash: repaired.textHash } } } }
   expect(channel).toBe('finalization-generation:commit')
   expect(request).toEqual({ handle, artifact: { artifactId: repaired.artifactId, revision: repaired.revision, textHash: repaired.textHash } })
   return characterEffect
@@ -54,7 +54,7 @@ it.each([false, true])('重新准入缺失或取消的 slot 后执行，历史�
  const invoke = vi.fn(async (channel: string, request: unknown) => {
   if (channel === 'finalization-generation:read') return cancelled ? { ...stored, view: { ...view, status: 'cancelled' } } : null
   if (channel === 'finalization-generation:begin') { expect(request).toEqual({ slot, modelId: cancelled ? '原模型' : '新模型' }); return { ...stored, attemptCount: 0, view: { ...view, artifacts: [], ledger: { physicalRequests: 9 } } } }
-  if (channel === 'finalization-generation:execute') { expect(request).toEqual({ handle }); return { run: view, outcome: { status: 'completed', finishReason: 'stop' } } }
+  if (channel === 'finalization-generation:execute') { expect(request).toEqual({ handle }); return { run: view, outcome: { status: 'completed', finishReason: 'stop', receipt: { visibleArtifact: { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash } } } } }
   if (channel === 'finalization-generation:commit') return effect
   throw new Error(channel)
  })
@@ -89,4 +89,21 @@ it('即使有 ACK 也拒绝串用别的 finalization source', async () => {
  const invoke = vi.fn(async () => ({ ...stored, context: { slot: { ...slot, source: { ...source, finalizationId: '别的定稿' } } }, effect }))
  await expect(runFinalizationGeneration(setup(invoke))).rejects.toThrow('FINALIZATION_GENERATION_IDENTITY_MISMATCH')
  expect(invoke).toHaveBeenCalledTimes(1)
+})
+
+it.each(['completed', 'running'])('显式重试按 receipt 的历史 artifact 提交，当前候选 %s 时仍回放原请求', async status => {
+ const characterSlot = { ...slot, stepKey: 'character_cards' as const }
+ const retryOf = { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash }
+ const historical = { ...candidate, artifactId: '本次修复候选', textHash: 'c'.repeat(64) }
+ const latest = { ...candidate, artifactId: '后续修复候选', textHash: 'd'.repeat(64), status }
+ const invoke = vi.fn(async (channel: string, request: unknown) => {
+  if (channel === 'finalization-generation:read' || channel === 'finalization-generation:begin') return { ...stored, context: { slot: characterSlot }, view: { ...view, artifacts: [candidate, historical, latest] } }
+  if (channel === 'finalization-generation:execute') {
+   expect(request).toEqual({ handle, retryOf })
+   return { run: { ...view, artifacts: [candidate, historical, latest] }, outcome: { status: 'completed', finishReason: 'stop', receipt: { visibleArtifact: { artifactId: historical.artifactId, revision: historical.revision, textHash: historical.textHash } } } }
+  }
+  expect(request).toEqual({ handle, artifact: { artifactId: historical.artifactId, revision: historical.revision, textHash: historical.textHash } })
+  return { success: true, stepKey: 'character_cards' }
+ })
+ await runFinalizationGeneration({ ...setup(invoke), slot: characterSlot, retryOf })
 })

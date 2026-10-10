@@ -107,6 +107,23 @@ function legacyV100Fixture(official = false) {
   db.prepare("UPDATE sqlite_sequence SET seq=500 WHERE name='drafts'").run()
   return { db, root, source, target }
 }
+function legacyV092Fixture() {
+  const base = path.resolve('.runtime/.cache/novel-quality-modernization/s04-sqlite')
+  fs.mkdirSync(base, { recursive: true })
+  const root = fs.mkdtempSync(path.join(base, 'legacy-v092-')); roots.push(root)
+  const source = path.join(root, 'source.db'), target = path.join(root, 'target.db')
+  const db = new Database(source); handles.push(db)
+  db.pragma('journal_mode = WAL'); db.pragma('wal_autocheckpoint = 0'); db.pragma('foreign_keys = ON')
+  db.exec(fs.readFileSync(new URL('./legacy-v092-lazy-schema.sql', import.meta.url), 'utf8').replaceAll('\r\n', '\n'))
+  db.prepare('INSERT INTO project_core(rowid,id,project_name,characters_arch) VALUES (?,?,?,?)')
+    .run(7, 'main', '0.9.2 合成项目', '旧角色原文')
+  db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(11, '旧正文\r\n保留')
+  db.prepare('INSERT INTO drafts(id,chapter_number,version,content_id) VALUES (?,?,?,?)').run(19, 7, 1, 11)
+  db.prepare('INSERT INTO reviews(id,base_draft_id,review_index,content_id) VALUES (?,?,?,?)').run(21, 19, 1, 11)
+  db.prepare('INSERT INTO revisions(id,base_draft_id,revision_index,revision_type,content_id) VALUES (?,?,?,?,?)').run(22, 19, 1, 'refine', 11)
+  db.prepare("UPDATE sqlite_sequence SET seq=900 WHERE name='contents'").run()
+  return { db, root, source, target }
+}
 afterEach(() => {
   for (const db of handles.splice(0)) if (db.open) db.close()
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
@@ -266,6 +283,55 @@ describe('real SQLite schema probe and WAL staging backup', () => {
       .rejects.toThrow('UNRECOGNIZED_SCHEMA')
     expect(fs.existsSync(f.target)).toBe(false)
     expect(bytes(f.root)).toEqual(before)
+  })
+  it.each(['0.9.2', '1.0.0'] as const)('imports the official %s lazy blueprint schema without dropping old records', async version => {
+    const f = version === '0.9.2' ? legacyV092Fixture() : legacyV100Fixture(true)
+    ensureBaselineBlueprintTables(f.db)
+    const fingerprint = version === '0.9.2'
+      ? '7a34ee78ddace39804d64ce8a42c054f11d9d27a559ff99cbd345921088ba050'
+      : '29838d67b3b0338b717c7488a7a2841c40fdacbb58598a83358bd73b6bda4673'
+    expect(sqliteSchemaFingerprint(f.db)).toBe(fingerprint)
+    f.db.prepare('INSERT INTO blueprint_commit_operations(rowid,operation_id,payload_hash,mode,start_chapter,end_chapter,character_sync_input) VALUES (?,?,?,?,?,?,?)')
+      .run(41, 'old-commit', 'old-hash', 'full', 7, 7, '{"characters":["旧角色"]}')
+    f.db.prepare('INSERT INTO blueprint_character_sync_operations(rowid,operation_id,blueprint_commit_operation_id,blueprint_commit_payload_hash,start_chapter,end_chapter,character_sync_input) VALUES (?,?,?,?,?,?,?)')
+      .run(53, 'old-sync', 'old-commit', 'old-hash', 7, 7, '{"characters":["旧角色"]}')
+    const preservedTables = ['blueprint_commit_operations', 'blueprint_character_sync_operations', 'contents', 'reviews', 'revisions']
+    const originals = preservedTables.map(table => f.db.prepare(`SELECT rowid,* FROM ${table} ORDER BY rowid`).all())
+    const before = bytes(f.root)
+    expect(probeProjectSqlite({ databasePath: f.source })).toMatchObject({ schemaVersion: 0, fingerprint })
+    const result = await backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target })
+    expect(result.schemaVersion).toBe(7)
+    expect(verifyProjectSqlite({ databasePath: f.target })).toEqual(result)
+    const target = new Database(f.target, { readonly: true, fileMustExist: true }); handles.push(target)
+    for (const [index, table] of preservedTables.entries()) {
+      const rows = target.prepare(`SELECT rowid,* FROM ${table} ORDER BY rowid`).all()
+      expect(rows, table).toHaveLength(originals[index].length)
+      expect(rows, table).toMatchObject(originals[index])
+    }
+    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='contents'").pluck().get()).toBe(900)
+    if (version === '0.9.2') {
+      expect(target.prepare('SELECT source_draft_chapter_number,source_draft_version,source_draft_status,source_content FROM reviews').get())
+        .toEqual({ source_draft_chapter_number: null, source_draft_version: null, source_draft_status: null, source_content: null })
+      expect(target.prepare('SELECT COUNT(*) FROM recovery_candidates').pluck().get()).toBe(0)
+    }
+    expect(bytes(f.root)).toMatchObject(before)
+  })
+  it.each(['0.9.2', '1.0.0'] as const)('rejects unknown DDL and broken references in official %s lazy schemas before creating staging', async version => {
+    for (const fault of ['unknown-ddl', 'foreign-key']) {
+      const f = version === '0.9.2' ? legacyV092Fixture() : legacyV100Fixture(true)
+      ensureBaselineBlueprintTables(f.db)
+      if (fault === 'unknown-ddl') f.db.exec('ALTER TABLE blueprint_commit_operations ADD COLUMN unknown_fork TEXT')
+      else {
+        f.db.pragma('foreign_keys = OFF')
+        f.db.prepare('INSERT INTO blueprint_character_sync_operations(operation_id,blueprint_commit_operation_id,blueprint_commit_payload_hash,start_chapter,end_chapter,character_sync_input) VALUES (?,?,?,?,?,?)')
+          .run('orphan-sync', 'missing-commit', 'old-hash', 1, 1, '{}')
+      }
+      const before = bytes(f.root), code = fault === 'foreign-key' ? 'CORRUPT_SCHEMA' : 'UNRECOGNIZED_SCHEMA'
+      expect(() => probeProjectSqlite({ databasePath: f.source })).toThrow(code)
+      await expect(backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target })).rejects.toThrow(code)
+      expect(fs.existsSync(f.target)).toBe(false)
+      expect(bytes(f.root)).toEqual(before)
+    }
   })
   it('recognizes the qualified v1.1.0 old writer schema0 source', () => {
     const f = legacyV110Fixture(), before = bytes(f.root)

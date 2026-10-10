@@ -5,7 +5,8 @@
  */
 import { createHash } from 'node:crypto'
 
-import { getProjectDb } from '../database'
+import { getProjectDb, getCurrentProjectPath } from '../database'
+import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { ensureBaselineBlueprintTables } from '../migrations/baseline-blueprint-schema'
 import { CharacterRosterRepository } from './character-roster-repository'
 import { hasCharacterIdentitySchema } from './character-repository'
@@ -194,6 +195,10 @@ export function clearBlueprintFactsWithinTransaction(
     db: NonNullable<ReturnType<typeof getProjectDb>>,
 ): void {
     ensureBlueprintCommitSchema(db)
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_runs'").get()) {
+        const freeze = readPortableRuntimeFreeze(getCurrentProjectPath())
+        new GenerationRunRepository(() => db, Date.now, (table, recordId) => freeze.isFrozen(table, recordId)).retireBlueprintRecoveryWithinTransaction()
+    }
     db.prepare('DELETE FROM blueprint_character_sync_operations').run()
     db.prepare('DELETE FROM blueprint_commit_operations').run()
     db.prepare('DELETE FROM blueprints').run()

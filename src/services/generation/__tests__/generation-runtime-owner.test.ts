@@ -28,6 +28,43 @@ async function snapshot(text = '雨夜', revision = 1, durableRevision = revisio
 }
 
 describe('main owned generation facade', () => {
+  it.each(['completed', 'failed', 'cancelled', 'unknown'] as const)('ignores an unchanged late running snapshot after %s and permits the next request', async status => {
+    const f = fixture(), shown = vi.fn()
+    const runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
+    const running = await snapshot()
+    f.view.artifacts = [{ ...running, status }]
+    await runtime.read()
+    f.emit(running)
+    await expect(runtime.read()).resolves.toEqual(f.view)
+    expect(shown).toHaveBeenCalledExactlyOnceWith(f.view.artifacts[0])
+    await expect(runtime.execute(({ session }) => session.complete(task, { invocationNonce: 'next-request' }))).resolves.toEqual(f.outcome)
+    expect(f.transport.execute).toHaveBeenCalledTimes(1)
+    await runtime.close()
+  })
+  it.each(['epoch', 'attempt', 'hash', 'text', 'durable-regression', 'durable-advance', 'revision', 'terminal'] as const)('rejects a %s conflict after a terminal snapshot', async mutation => {
+    const f = fixture(), shown = vi.fn()
+    const runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
+    const settled = { ...await snapshot('雨夜', 2, 1), status: 'completed' as const }
+    f.emit(settled)
+    await runtime.read()
+    const next: MainGenerationSnapshot = { ...settled, status: 'running' }
+    if (mutation === 'epoch') next.epoch = '旧会话'
+    if (mutation === 'attempt') next.attemptId = '另一请求'
+    if (mutation === 'hash') next.textHash = 'f'.repeat(64)
+    if (mutation === 'text') { next.text = '雨夜来信'; next.textHash = await hashAuthorText(next.text) }
+    if (mutation === 'durable-regression') next.durableRevision = 0
+    if (mutation === 'durable-advance') next.durableRevision = 2
+    if (mutation === 'revision') next.revision = 3
+    if (mutation === 'terminal') next.status = 'cancelled'
+    f.emit(next)
+    const error = mutation === 'epoch' || mutation === 'hash' ? 'INVALID_MAIN_SNAPSHOT'
+      : mutation === 'attempt' ? 'MAIN_ARTIFACT_ATTEMPT_CHANGED' : 'MAIN_SNAPSHOT_REGRESSION'
+    await expect(runtime.read()).rejects.toThrow(error)
+    await expect(runtime.execute(({ session }) => session.complete(task, { invocationNonce: 'next-request' }))).rejects.toThrow(error)
+    expect(shown).toHaveBeenCalledTimes(1)
+    expect(f.transport.execute).not.toHaveBeenCalled()
+    await runtime.close()
+  })
   it.each(['failed', 'unknown'] as const)('accepts cancellation of unchanged %s artifacts but rejects changed text', async status => {
     const f = fixture(), shown = vi.fn()
     const runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)

@@ -2,7 +2,7 @@ import { act } from 'react'
 import { EditorView } from '@codemirror/view'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { GenerationRecoveryContext } from '../../../shared/generation-owner-contract'
+import type { BlueprintRecoveryDiagnostic, GenerationRecoveryContext } from '../../../shared/generation-owner-contract'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
 import { renderPlotOutlineRange } from '../../../shared/plot-outline-contract'
 import type { ProjectData } from '../../../shared/ipc-channels'
@@ -227,6 +227,45 @@ describe('planning recovery editors', () => {
     expect(savedPayload).toEqual(first)
     expect(useEditorStore.getState().tabs[0]).toMatchObject({ content: laterEdit ? later : canonical, savedContent: canonical, dirty: laterEdit })
     expect(editor().state.doc.toString()).toBe(laterEdit ? later : canonical)
+    noModel()
+  })
+  it.each([
+    { kind: 'retired', code: 'GENERATION_BLUEPRINTS_CLEARED', reason: '蓝图已清空，旧恢复稿不能保存或续接' },
+    { kind: 'invalid', code: 'GENERATION_DIRECTORY_PROGRESS_INVALID', reason: '蓝图生成进度校验失败，旧恢复稿不能保存或续接' },
+    { kind: 'invalid', code: 'GENERATION_BLUEPRINT_AUTHOR_RECEIPT_INVALID', reason: '蓝图作者保存记录校验失败，旧恢复稿不能保存或续接' },
+  ] satisfies (Omit<BlueprintRecoveryDiagnostic, 'runId'> & { reason: string })[])('unavailable blueprint $code keeps editable text without replaying a pending save', async diagnostic => {
+    context = fixture('blueprint')
+    await render('blueprint')
+    const original = useEditorStore.getState().tabs[0].originalContent
+    await edit(blueprintText)
+    pendingSave = async () => { throw new Error('IPC_ACK_LOST_AFTER_COMMIT') }
+    await act(async () => button('保存恢复蓝图').click())
+    expect(useEditorStore.getState().tabs[0].planningSaveSnapshot?.status).toBe('pending')
+    expect(invoke.mock.calls.filter(([name]) => name === 'db:blueprint-commit-range')).toHaveLength(1)
+    if (!context.blueprintRecovery) throw new Error('Missing blueprint recovery')
+    context = { ...context, planningContinuation: undefined, blueprintRecovery: {
+      ...context.blueprintRecovery, writeState: 'unavailable', editRange: null, saved: null,
+      diagnostic: { runId: handle.runId, kind: diagnostic.kind, code: diagnostic.code },
+    } }
+    await act(async () => root.render(null))
+    await render('blueprint')
+    expect(container.textContent).toContain(diagnostic.reason)
+    expect(container.querySelector('details pre')?.textContent).toBe(original)
+    expect(editor().state.doc.toString()).toBe(blueprintText)
+    expect(button('保存恢复蓝图').disabled).toBe(true)
+    expect(button('继续生成缺少的章节').disabled).toBe(true)
+    const later = blueprintText + '\n作者保留的修改'
+    await edit(later)
+    const data = new DataTransfer()
+    await act(async () => {
+      const view = editor(); view.focus(); view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
+      view.contentDOM.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }))
+      view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS', ctrlKey: true, bubbles: true, cancelable: true }))
+    })
+    expect(data.getData('text/plain')).toBe(later)
+    await act(async () => { await expect(saveDirtyEditorChangesForExit(session.projectPath)).rejects.toThrow() })
+    expect(invoke.mock.calls.filter(([name]) => name === 'db:blueprint-commit-range')).toHaveLength(1)
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({ content: later, originalContent: original, dirty: true })
     noModel()
   })
   for (const kind of ['outline', 'blueprint'] as const) {

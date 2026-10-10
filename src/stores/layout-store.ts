@@ -30,6 +30,7 @@ interface LayoutState {
   aiPanelWidth: number
   /** 右侧面板当前视图：Agent 对话 / AI 输出 */
   rightView: RightView
+  rightPanelRunId: string | null
 
   // ===== 底部面板 =====
   bottomPanelOpen: boolean
@@ -65,7 +66,7 @@ interface LayoutState {
   setAIPanelWidth: (width: number) => void
   setRightView: (view: RightView) => void
   /** 打开右侧面板并切换到指定视图 */
-  openRightPanel: (view: RightView) => void
+  openRightPanel: (view: RightView, runId?: string) => void
   toggleBottomPanel: () => void
   setBottomTab: (tab: BottomTab) => void
   setBottomPanelHeight: (height: number) => void
@@ -95,6 +96,7 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
   aiPanelOpen: true,
   aiPanelWidth: 320,
   rightView: 'agent',
+  rightPanelRunId: null,
 
   bottomPanelOpen: true,
   bottomTab: 'tasks',
@@ -137,9 +139,9 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
   setAIPanelOpen: (open) => set({ aiPanelOpen: open, ...(open ? { immersive: false, preImmersivePanels: null } : {}) }),
   setAIPanelWidth: (width) => set({ aiPanelWidth: Math.max(260, Math.min(600, width)) }),
   setRightView: (view) => set({ rightView: view }),
-  openRightPanel: (view) => {
+  openRightPanel: (view, runId) => {
     if (get().sidebarView === 'home') get().setSidebarView('project')
-    set({ aiPanelOpen: true, rightView: view, immersive: false, preImmersivePanels: null })
+    set({ aiPanelOpen: true, rightView: view, rightPanelRunId: view === 'ai-output' ? runId ?? null : null, immersive: false, preImmersivePanels: null })
   },
 
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen, immersive: false, preImmersivePanels: null })),
