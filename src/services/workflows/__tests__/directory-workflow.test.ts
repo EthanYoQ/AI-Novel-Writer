@@ -613,7 +613,7 @@ describe('durable directory continuation selection', () => {
     requestedRange: { startChapter: 1, endChapter: 200 }, committedRange: { startChapter: 1, endChapter: 160 }, remainingRange: { startChapter: 161, endChapter: 200 } }
   function arrange(all: DirectoryGenerationProgress[]) {
     useProjectStore.setState({ currentProject: { ...project(session.projectPath), id: session.projectId, sessionLease: session.leaseId } })
-    const invoke = stubIpcInvoke(all)
+    const invoke = stubIpcInvoke({ progress: all, diagnostics: [] })
     return invoke
   }
   it('overrides caller range from the exact committed receipt and retains the operation root', async () => {

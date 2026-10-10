@@ -50,7 +50,7 @@ beforeEach(() => {
       planningPreferences = { ...planningPreferences, ...patch }
       return { success: true }
     }
-    if (channel === 'generation:list-directory-progress') return []
+    if (channel === 'generation:list-directory-progress') return { progress: [], diagnostics: [] }
     if (channel === 'db:blueprint-character-sync-list-pending') return []
     if (channel === 'db:blueprint-get-all') {
       return blueprintChapterNumbers.map(chapterNumber => ({ chapterNumber }))
@@ -374,7 +374,7 @@ describe('workflow launch dialogs', () => {
       updatedAt: '2026-01-01 00:00:00',
     }
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
-      if (channel === 'generation:list-directory-progress') return []
+      if (channel === 'generation:list-directory-progress') return { progress: [], diagnostics: [] }
       if (channel === 'db:blueprint-get-all') return []
       if (channel === 'db:draft-authority-sequence') return {
         status: 'empty',
@@ -426,14 +426,14 @@ it('shows the committed directory chain endpoint and resumes only its explicit r
   const nextHandle = { ...handle, runId: '后续运行' }
   const original = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
   invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
-    if (channel === 'generation:list-directory-progress') return [
+    if (channel === 'generation:list-directory-progress') return { progress: [
       { operationId: '父提交', payloadHash: 'a'.repeat(64), sourceHandle: handle,
         requestedRange: { startChapter: 1, endChapter: 200 }, committedRange: { startChapter: 1, endChapter: 160 },
         remainingRange: { startChapter: 161, endChapter: 200 }, continuationHandle: nextHandle },
       { operationId: '末端提交', payloadHash: 'b'.repeat(64), sourceHandle: nextHandle,
         requestedRange: { startChapter: 161, endChapter: 200 }, committedRange: { startChapter: 161, endChapter: 180 },
         remainingRange: { startChapter: 181, endChapter: 200 } },
-    ]
+    ], diagnostics: [] }
     return original(channel, ...args)
   })
   const onConfirm = vi.fn(async () => {})
@@ -442,6 +442,28 @@ it('shows the committed directory chain endpoint and resumes only its explicit r
   await expect.element(page.getByRole('button', { name: '继续第 161–200 章（沿用原预算）' })).not.toBeInTheDocument()
   await act(async () => page.getByRole('button', { name: '继续第 181–200 章（沿用原预算）' }).click())
   expect(onConfirm).toHaveBeenCalledWith({ mode: 'append', continueDirectoryOperationId: '末端提交' })
+})
+
+
+it('shows blueprint recovery diagnostics without blocking independent generation', async () => {
+  const original = invoke.getMockImplementation()!
+  invoke.mockImplementation(async (channel, ...args) => {
+    if (channel === 'generation:list-directory-progress') return { progress: [], diagnostics: [
+      { runId: 'retired', kind: 'retired', code: 'GENERATION_BLUEPRINTS_CLEARED' },
+      { runId: 'invalid-progress', kind: 'invalid', code: 'GENERATION_DIRECTORY_PROGRESS_INVALID' },
+      { runId: 'invalid-author-save', kind: 'invalid', code: 'GENERATION_BLUEPRINT_AUTHOR_RECEIPT_INVALID' },
+    ] }
+    return original(channel, ...args)
+  })
+  const onConfirm = vi.fn(async () => {})
+  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+  await expect.element(page.getByText('蓝图已清空，旧生成记录不能续接')).toBeVisible()
+  await expect.element(page.getByText('旧蓝图生成进度校验失败，不能续接')).toBeVisible()
+  await expect.element(page.getByText('旧蓝图作者保存记录校验失败，不能续接')).toBeVisible()
+  await expect.element(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
+  await act(async () => page.getByRole('button', { name: '开始生成' }).click())
+  expect(onConfirm).toHaveBeenCalledOnce()
+  expect(onConfirm).toHaveBeenCalledWith({ mode: 'full', startChapter: 1, count: 5, targetUnits: 600, pacingGuidance: undefined })
 })
 
 
