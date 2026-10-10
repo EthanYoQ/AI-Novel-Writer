@@ -299,7 +299,7 @@ function installModel(): void {
   })
 }
 
-function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKey?: string } = {}) {
+function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKey?: string; retryInvalidResult?: boolean } = {}) {
   insertFinalizedDraft(7, 2, draftContent)
   const db = getProjectDb()!
   if (!db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get('fcs:finalization-7')) {
@@ -838,4 +838,32 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(repaired.steps.kb_import.ok).toBe(true)
     expect(repaired.steps.chapter_notes.ok).toBe(true)
   })
+})
+
+it('一次显式修复固定失败目标，withRetry 不得把第四份坏结果升级为第五次请求', async () => {
+ const content = 'Lin Lan says: the inspection is still pending.'
+ let calls = 0
+ let correct = false
+ useLLMStore.setState({ generateStream: vi.fn(async (_messages, streamCallbacks) => {
+  calls++
+  streamCallbacks.onDone?.(JSON.stringify({ updates: [{ characterId, currentState: { recentEvents: 'The inspection is pending.' },
+   evidence: { text: correct ? content : 'Lin Lan says, the inspection is still pending.' } }] }), undefined, 'stop')
+  return 'synthetic-request'
+ }) })
+ const execute = (retryInvalidResult = false) => command(content, { onlyFailed: true, stepKey: 'character_cards', retryInvalidResult })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect((await execute()).steps.character_cards.ok).toBe(false)
+ expect(calls).toBe(3)
+ expect((await execute()).steps.character_cards.ok).toBe(false)
+ expect(calls).toBe(3)
+ const failed = await execute(true)
+ expect(failed.steps.character_cards.ok).toBe(false)
+ expect(calls).toBe(4)
+ expect(commitRequests.slice(-3).every(value => JSON.stringify(value) === JSON.stringify(commitRequests.at(-1)))).toBe(true)
+ correct = true
+ expect((await execute(true)).steps.character_cards.ok).toBe(true)
+ expect(calls).toBe(5)
+ const db = getProjectDb()!
+ expect(db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+ expect(db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
 })

@@ -333,6 +333,7 @@ it.each(['length','unknown'] as const)('characters %s坏JSON不能触发修复�
  const next=f.reopen(),cached=await next.executeFinalizationGeneration({handle})
  expect(cached.run.artifacts).toEqual(result.run.artifacts)
  expect(next.readFinalizationGeneration({slot})?.effect).toBeUndefined()
+ await expect(next.executeFinalizationGeneration({handle,retryOf:f.artifactOf(result)})).rejects.toThrow('GENERATION_FINALIZATION_ARTIFACT_INVALID')
  expect(f.dispatch).toHaveBeenCalledTimes(1)
 })
 
@@ -565,4 +566,153 @@ it.each(['cancelled', 'notes-changed'] as const)('starts an explicit fresh final
  expect(f.owner.beginFinalizationGeneration({slot:f.slot,modelId:'synthetic'}).effect).toEqual(committed)
  expect(f.db.prepare("SELECT COUNT(*) FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.finalizationGenerationSlotKey') IS NOT NULL").pluck().get()).toBe(2)
  expect(f.dispatch).toHaveBeenCalledTimes(2)
+})
+
+it('显式重试三份坏引用只追加第四次，同 run/root 保留历史；普通恢复不生成', async () => {
+ const wrong = (id: string) => ({ updates: [{ characterId: id, currentState: { location: '记录室' }, evidence: { text: '林岚更正记录，核查仍未开始，原定安排等待雨停。' } }] })
+ const f = await splitEvidenceRun(undefined, [wrong, wrong, wrong, single])
+ const retryOf = f.artifactOf(f.result)
+ expect(() => f.owner.commitFinalizationGeneration({ handle: f.handle, artifact: retryOf })).toThrow('FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE')
+ const recovered = await f.owner.executeFinalizationGeneration({ handle: f.handle })
+ expect(recovered.outcome.receipt?.visibleArtifact?.artifactId).toBe(retryOf.artifactId)
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
+ const request = { handle: f.handle, retryOf }
+ const fixed = await f.owner.executeFinalizationGeneration(request)
+ expect(f.dispatch).toHaveBeenCalledTimes(4)
+ expect(fixed.run.handle).toEqual(f.handle)
+ expect(fixed.run.artifacts).toHaveLength(4)
+ expect(fixed.run.ledger?.physicalRequests).toBe(4)
+ expect(lastUserMessage(f.dispatch.mock.calls[3]![0])).toContain('updates[0].evidence.text')
+ expect(lastUserMessage(f.dispatch.mock.calls[3]![0])).toContain('精确匹配 0 次')
+ expect(f.owner.commitFinalizationGeneration({ handle: f.handle, artifact: f.artifactOf(fixed) })).toMatchObject({ success: true, applied: 1 })
+ expect((await f.owner.executeFinalizationGeneration(request)).outcome.receipt?.visibleArtifact).toEqual(fixed.outcome.receipt?.visibleArtifact)
+ expect((await f.owner.executeFinalizationGeneration({ handle: f.handle })).outcome.receipt?.visibleArtifact).toEqual(fixed.outcome.receipt?.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(4)
+})
+
+it('同 retryOf 并发与 ACK 丢失重开只追加一次，普通恢复和旧 retryOf 回放各自候选', async () => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false), joined(false), single])
+ const request = { handle: f.handle, retryOf: f.artifactOf(f.result) }
+ const next = f.reopen()
+ const [a, b] = await Promise.all([next.executeFinalizationGeneration(request), next.executeFinalizationGeneration(request)])
+ expect(a.outcome.receipt?.visibleArtifact).toEqual(b.outcome.receipt?.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(4)
+ expect((await next.executeFinalizationGeneration({ handle: a.run.handle })).outcome.receipt?.visibleArtifact).toEqual(a.outcome.receipt?.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(4)
+ const failed = a.outcome.receipt!.visibleArtifact!
+ const fixed = await next.executeFinalizationGeneration({ handle: a.run.handle, retryOf: { artifactId: failed.artifactId, revision: failed.revision, textHash: failed.textHash } })
+ expect(f.dispatch).toHaveBeenCalledTimes(5)
+ const oldReplay = await next.executeFinalizationGeneration(request)
+ expect(oldReplay.outcome.receipt?.visibleArtifact).toEqual(a.outcome.receipt?.visibleArtifact)
+ expect(oldReplay.outcome.receipt?.visibleArtifact).not.toEqual(fixed.outcome.receipt?.visibleArtifact)
+ expect((await next.executeFinalizationGeneration({ handle: a.run.handle })).outcome.receipt?.visibleArtifact).toEqual(fixed.outcome.receipt?.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(5)
+})
+
+it('历史 finalization:1/2 的旧提示 hash 只回放原 receipt，不与新反馈冲突', async () => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false), single])
+ f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.requestHash',?) WHERE invocation_nonce IN ('finalization:1','finalization:2')").run(textHash('old repair prompt'))
+ const replay = await f.owner.executeFinalizationGeneration({ handle: f.handle })
+ expect(replay.outcome.receipt?.visibleArtifact).toEqual(f.result.outcome.receipt?.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
+ const fixed = await f.owner.executeFinalizationGeneration({ handle: f.handle, retryOf: f.artifactOf(f.result) })
+ expect(f.dispatch).toHaveBeenCalledTimes(4)
+ const retry = f.db.prepare("SELECT attempt_id FROM generation_attempts WHERE invocation_nonce LIKE 'finalization:retry:%'").pluck().get()
+ f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.requestHash',?) WHERE attempt_id=?").run(textHash('prior explicit repair prompt'), retry)
+ expect((await f.owner.executeFinalizationGeneration({ handle: f.handle, retryOf: f.artifactOf(f.result) })).outcome.receipt?.visibleArtifact).toEqual(fixed.outcome.receipt?.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(4)
+})
+
+it('有效角色候选写入失败时显式重试仍只提交同一 artifact', async () => {
+ const f = await generated('character_cards')
+ f.db.exec("CREATE TRIGGER reject_character BEFORE UPDATE OF cs_location ON characters BEGIN SELECT RAISE(ABORT,'synthetic-write-failure'); END")
+ expect(() => f.owner.commitFinalizationGeneration(f.commitRequest)).toThrow('synthetic-write-failure')
+ const replay = await f.owner.executeFinalizationGeneration({ handle: f.commitRequest.handle, retryOf: f.commitRequest.artifact })
+ expect(replay.outcome.receipt?.visibleArtifact).toEqual(f.receipt.outcome.receipt?.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(1)
+ f.db.exec('DROP TRIGGER reject_character')
+ expect(f.owner.commitFinalizationGeneration(f.commitRequest)).toMatchObject({ applied: 1 })
+})
+
+it('显式重试耗尽原 root 的时间预算后 begin 不得换根绕过', async () => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false)])
+ f.db.prepare('UPDATE generation_roots SET active_elapsed_ms=? WHERE root_action_id=?').run(f.result.run.ledger!.policy.maxActiveElapsedMs, f.handle.rootActionId)
+ await expect(f.owner.executeFinalizationGeneration({ handle: f.handle, retryOf: f.artifactOf(f.result) })).rejects.toThrow(/BUDGET|ELAPSED/)
+ const recovery = f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic' })
+ expect(recovery.view.handle).toEqual(f.handle)
+ expect(recovery.view.ledger?.physicalRequests).toBe(3)
+ expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
+})
+
+it.each(['stale-target', 'forged-hash', 'discarded', 'source-changed', 'root-pending', 'blocked'] as const)('显式修正拒绝 %s 且不发新请求', async mode => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false)])
+ let retryOf = f.artifactOf(f.result)
+ if (mode === 'stale-target') { const first = f.result.run.artifacts[0]!; retryOf = { artifactId: first.artifactId, revision: first.revision, textHash: first.textHash } }
+ if (mode === 'forged-hash') retryOf = { ...retryOf, textHash: textHash('forged') }
+ if (mode === 'discarded') f.owner.discardCandidate(f.handle, retryOf.artifactId)
+ if (mode === 'source-changed') f.db.prepare('UPDATE finalization_outbox SET content_snapshot=?,content_hash=?').run('作者新正文', textHash('作者新正文'))
+ if (mode === 'root-pending') f.db.prepare("UPDATE generation_attempts SET attempt_json=json_set(attempt_json,'$.status','dispatch-marked') WHERE invocation_nonce='finalization:0'").run()
+ if (mode === 'blocked') f.db.prepare("UPDATE generation_roots SET blocked_code='ROOT_BUDGET_EXHAUSTED'").run()
+ await expect(f.owner.executeFinalizationGeneration({ handle: f.handle, retryOf })).rejects.toThrow()
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
+ expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(3)
+})
+
+it('显式修正重复调用在请求在途时加入原 promise，不多发请求', async () => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false)])
+ let release!: () => void, entered!: () => void
+ const pause = new Promise<void>(resolve => { release = resolve }), started = new Promise<void>(resolve => { entered = resolve })
+ f.dispatch.mockImplementationOnce(async (_request, options) => { entered(); await pause; options.onVisible({ kind: 'delta', text: JSON.stringify(single(f.characterId)) }); return { finishReason: 'stop', usage: null } })
+ const request = { handle: f.handle, retryOf: f.artifactOf(f.result) }
+ const first = f.owner.executeFinalizationGeneration(request)
+ await started
+ const duplicate = f.owner.executeFinalizationGeneration(request)
+ const ordinary = f.owner.executeFinalizationGeneration({ handle: f.handle })
+ expect(f.dispatch).toHaveBeenCalledTimes(4)
+ release()
+ const receipts = await Promise.all([first, duplicate, ordinary])
+ expect(receipts.map(receipt => receipt.outcome.receipt.visibleArtifact)).toEqual(Array(3).fill(receipts[0]!.outcome.receipt.visibleArtifact))
+ expect(f.dispatch).toHaveBeenCalledTimes(4)
+})
+
+it('角色显式重试保留共享 notes root 的 effect 与累计预算', async () => {
+ const f = await generated()
+ const notes = f.owner.commitFinalizationGeneration(f.commitRequest)
+ const slot: FinalizationGenerationSlot = { source: f.slot.source, stepKey: 'character_cards' }
+ const handle = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' }).view.handle
+ for (let i = 0; i < 3; i++) f.dispatch.mockImplementationOnce(async (_request, options) => { options.onVisible({ kind: 'delta', text: '{"updates": [' }); return { finishReason: 'stop', usage: null } })
+ const bad = await f.owner.executeFinalizationGeneration({ handle })
+ f.dispatch.mockImplementationOnce(async (_request, options) => { options.onVisible({ kind: 'delta', text: f.response() }); return { finishReason: 'stop', usage: null } })
+ const fixed = await f.owner.executeFinalizationGeneration({ handle, retryOf: f.artifactOf(bad) })
+ expect(fixed.run.handle.rootActionId).toBe(f.recovery.view.handle.rootActionId)
+ expect(fixed.run.ledger?.policy).toEqual(bad.run.ledger?.policy)
+ expect(fixed.run.ledger?.physicalRequests).toBe(5)
+ expect(fixed.run.ledger!.tokenLiability).toBeGreaterThan(bad.run.ledger!.tokenLiability)
+ expect(f.owner.readFinalizationGeneration({ slot: f.slot })?.effect).toEqual(notes)
+ expect(f.owner.read(f.recovery.view.handle).status).not.toBe('cancelled')
+ expect(f.owner.commitFinalizationGeneration({ handle, artifact: f.artifactOf(fixed) })).toMatchObject({ success: true, applied: 1 })
+ expect(f.dispatch).toHaveBeenCalledTimes(5)
+})
+
+it('证据反馈区分至少两次精确匹配与偏移错误，仍保留原错误码', async () => {
+ const f = await splitEvidenceRun(undefined, [single])
+ const repeated = { updates: [{ characterId: f.characterId, currentState: { location: '记录室' }, evidence: { text: '林岚' } }] }
+ expect(() => parseFinalizedCharacterStateResponse(JSON.stringify(repeated), f.prepared.context)).toThrow('FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE')
+ const duplicate = fixture(undefined, { content: splitProse })
+ duplicate.dispatch.mockImplementationOnce(async (_request, options) => { options.onVisible({ kind: 'delta', text: JSON.stringify({ updates: repeated.updates.map(update => ({ ...update, characterId: duplicate.characterId })) }) }); return { finishReason: 'stop', usage: null } })
+ const handle = duplicate.owner.beginFinalizationGeneration({ slot: { source: duplicate.prepared.context.source, stepKey: 'character_cards' }, modelId: 'synthetic' }).view.handle
+ await duplicate.owner.executeFinalizationGeneration({ handle })
+ expect(lastUserMessage(duplicate.dispatch.mock.calls[1]![0])).toContain('精确匹配至少 2 次')
+ const offset = await splitEvidenceRun(undefined, [joined(true), single])
+ expect(lastUserMessage(offset.dispatch.mock.calls[1]![0])).toContain('updates[0].evidence.text：start/end 与精确原文片段不符')
+})
+
+it('resume 等待期间失败 artifact 被丢弃后，不得按旧快照发修正请求', async () => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false)])
+ const next = f.reopen(), retryOf = f.artifactOf(f.result)
+ const executing = next.executeFinalizationGeneration({ handle: f.handle, retryOf })
+ f.db.prepare("UPDATE generation_artifacts SET status='discarded' WHERE artifact_id=?").run(retryOf.artifactId)
+ await expect(executing).rejects.toThrow('GENERATION_FINALIZATION_ARTIFACT_INVALID')
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
 })

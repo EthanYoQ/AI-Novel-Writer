@@ -1,14 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 
-import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
+import { useWorkflowStore, type StepCallbacks, type WorkflowContext } from '../../../stores/workflow-store'
+import { globalEventBus } from '../../../shared/event-bus'
+import type { PostProcessStatus } from '../workflow-utils'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { createChapterWorkflow, createRepairFinalizeWorkflow } from '../chapter-workflow'
 
 const postProcess = vi.hoisted(() => ({
   params: [] as Array<Record<string, unknown>>,
-  execute: vi.fn(async (params: unknown) => { void params }),
+  execute: vi.fn<(params: unknown) => Promise<PostProcessStatus>>(),
 }))
 
 vi.mock('../commands/finalize-chapter.command', () => ({
@@ -64,9 +66,36 @@ function callbacks(): StepCallbacks {
   return { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
 }
 
+function postProcessStatus(characterOk = true, notesOk = true): PostProcessStatus {
+  return {
+    scope: 'chapter_3_finalize',
+    sourceLabel: '第3章定稿',
+    createdAt: '',
+    updatedAt: '',
+    allCriticalPassed: notesOk,
+    steps: {
+      chapter_notes: {
+        label: '章节要点', critical: true, ok: notesOk, lastAttemptAt: '', attemptCount: 1,
+      },
+      character_cards: {
+        label: '角色状态', critical: false, ok: characterOk, lastAttemptAt: '', attemptCount: 1,
+        ...(!characterOk ? { error: '角色状态提取失败' } : {}),
+      },
+    },
+  }
+}
+
+beforeEach(() => {
+  postProcess.execute.mockResolvedValue(postProcessStatus())
+})
+
 afterEach(() => {
   postProcess.params.length = 0
-  postProcess.execute.mockClear()
+  postProcess.execute.mockReset()
+  useWorkflowStore.setState({
+    activeRuns: [], history: [], globalLogs: [], waitingRuns: {}, currentRun: null,
+    waitingForConfirm: false, waitingAfterStepIndex: -1,
+  })
   vi.unstubAllGlobals()
   useLocaleStore.setState({ locale: originalLocale })
   useProjectStore.setState({ currentProject: null })
@@ -143,9 +172,69 @@ describe('createRepairFinalizeWorkflow', () => {
       chapterNumber: 3,
       draftId: 17,
       onlyFailed: true,
+      retryInvalidResult: true,
       stepKey,
     })])
     expect(postProcess.execute).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['all failed-step repair still has a character failure', undefined, false, true, 'failed'],
+    ['selected character repair still fails', 'character_cards', false, true, 'failed'],
+    ['all failed-step repair succeeds', undefined, true, true, 'completed'],
+    ['selected character repair succeeds while notes still fail', 'character_cards', true, false, 'completed'],
+  ] as const)('%s reports the requested repair outcome', async (_label, stepKey, characterOk, notesOk, expectedStatus) => {
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    useProjectStore.setState({
+      currentProject: {
+        id: PROJECT_SESSION.projectId,
+        name: 'Repair finalize',
+        path: PROJECT_PATH,
+        sessionLease: PROJECT_SESSION.leaseId,
+        characterStates: '', createdAt: '', updatedAt: '',
+        novelConfig: {
+          genre: '', subGenre: '', targetAudience: '', totalChapters: 3, wordsPerChapter: 2000,
+          plotStructure: 'three_act', narrativePOV: 'third_limited', coreOutline: '',
+          worldSetting: '', goldenFinger: '', protagonistProfile: '', globalGuidance: '',
+        },
+      },
+    })
+    const invoke = vi.fn(async (channel: string) => {
+      switch (channel) {
+        case 'skills:list-user': return []
+        case 'fs:check-exists': return false
+        case 'db:draft-get-finalized': return { id: 17 }
+        case 'db:draft-get-full': return { content: '已定稿正文' }
+        case 'db:continuity-read-source': return finalizedSource('已定稿正文')
+        case 'db:blueprint-get': return { title: '定稿标题', characters: ['林舟'] }
+        default: throw new Error(`unexpected IPC: ${channel}`)
+      }
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
+    postProcess.execute.mockResolvedValue(postProcessStatus(characterOk, notesOk))
+    const workflow = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION, stepKey)
+    const completed = vi.fn()
+    const openResult = vi.fn()
+    const unsubscribe = globalEventBus.on('WORKFLOW_COMPLETE', completed)
+    try {
+      const runId = await useWorkflowStore.getState().startWorkflow({
+        ...workflow,
+        onComplete: { ...workflow.onComplete, mode: 'open', openResult },
+      })
+      expect(postProcess.execute).toHaveBeenCalledOnce()
+      const run = useWorkflowStore.getState().history.find(entry => entry.id === runId)
+      expect(run).toMatchObject({ status: expectedStatus, steps: [{ status: expectedStatus }] })
+      if (expectedStatus === 'failed') {
+        expect(run?.error).toContain('角色状态')
+        expect(completed).not.toHaveBeenCalled()
+        expect(openResult).not.toHaveBeenCalled()
+      } else {
+        expect(completed).toHaveBeenCalledOnce()
+        expect(openResult).toHaveBeenCalledOnce()
+      }
+    } finally {
+      unsubscribe()
+    }
   })
 
   it('freezes English repair copy, fallback metadata, and completion text at creation', async () => {
