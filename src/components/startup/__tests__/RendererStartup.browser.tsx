@@ -12,7 +12,8 @@ import { ipc } from '../../../services/ipc-client'
 
 let host: HTMLDivElement
 let root: Root
-const keys = [APPEARANCE_STORAGE_KEY, LEGACY_THEME_STORAGE_KEY, LEGACY_UI_STORAGE_KEY, 'startup-unrelated-model']
+const noticeStorageKey = 'ai-novel-writer-dismissed-migration-generation'
+const keys = [APPEARANCE_STORAGE_KEY, LEGACY_THEME_STORAGE_KEY, LEGACY_UI_STORAGE_KEY, noticeStorageKey, 'startup-unrelated-model']
 const dependencies = (overrides: Partial<AppearanceBootstrapDependencies> = {}): AppearanceBootstrapDependencies => ({
   waitForMainReady: async () => ({ state: 'ready', globalGeneration: '启动世代', skinRevision: 0 }),
   readSkinSnapshot: async () => ({ globalGeneration: '启动世代', skinRevision: 0, backgroundSkin: 'classic' }),
@@ -171,5 +172,65 @@ it('migration notice excludes its titlebar overlap from native dragging and dism
   expect(host.querySelector('[role="status"]')).toBeNull()
   expect(host.querySelector('textarea')).toBe(editor)
   expect(editor.value).toBe('保留作者正文')
+  expect(load).toHaveBeenCalledOnce()
+})
+
+it('同一迁移世代的通知关闭后重启不再出现，新迁移世代仍出现', async () => {
+  let generation = '启动世代'
+  const load = vi.fn(async () => ({ default: () => <p>合成工作台</p> }))
+  const dep = dependencies({
+    waitForMainReady: async () => ({ state: 'ready', globalGeneration: generation, skinRevision: 0,
+      migrationNotice: { legacySourceIgnored: true, preservedUnknownCount: 1 } }),
+    readSkinSnapshot: async () => ({ globalGeneration: generation, skinRevision: 0, backgroundSkin: 'classic' }),
+  })
+  await act(async () => root.render(<RendererStartup dependencies={dep} loadWorkspace={load} />))
+  await vi.waitFor(() => expect(host.textContent).toContain('合成工作台'))
+  await act(async () => page.getByRole('button', { name: '知道了', exact: true }).click())
+  expect(host.querySelector('.startup-migration-notice')).toBeNull()
+
+  await act(async () => root.unmount())
+  useAppearanceStore.setState(useAppearanceStore.getInitialState(), true)
+  root = createRoot(host)
+  await act(async () => root.render(<RendererStartup dependencies={dep} loadWorkspace={load} />))
+  await vi.waitFor(() => expect(host.textContent).toContain('合成工作台'))
+  expect(host.querySelector('.startup-migration-notice')).toBeNull()
+
+  await act(async () => root.unmount())
+  useAppearanceStore.setState(useAppearanceStore.getInitialState(), true)
+  generation = '新迁移世代'
+  root = createRoot(host)
+  await act(async () => root.render(<RendererStartup dependencies={dep} loadWorkspace={load} />))
+  await vi.waitFor(() => expect(host.textContent).toContain('合成工作台'))
+  expect(host.querySelector('.startup-migration-notice')).not.toBeNull()
+  expect(load).toHaveBeenCalledTimes(3)
+})
+
+it.each(['read', 'write'])('迁移通知的 %s storage 失败不阻断工作台或卸载编辑器', async failure => {
+  const load = vi.fn(async () => ({ default: () => <textarea defaultValue="保留作者正文" /> }))
+  const dep = dependencies({
+    waitForMainReady: async () => ({ state: 'ready', globalGeneration: '启动世代', skinRevision: 0,
+      migrationNotice: { legacySourceIgnored: true, preservedUnknownCount: 1 } }),
+    storage: () => ({
+      getItem(key) {
+        if (key === noticeStorageKey && failure === 'read') throw new Error('Storage read unavailable')
+        return localStorage.getItem(key)
+      },
+      setItem(key, value) {
+        if (key === noticeStorageKey && failure === 'write') throw new Error('Storage write unavailable')
+        localStorage.setItem(key, value)
+      },
+    }),
+  })
+  await act(async () => root.render(<RendererStartup dependencies={dep} loadWorkspace={load} />))
+  await vi.waitFor(() => expect(host.querySelector('textarea')).not.toBeNull())
+  const editor = host.querySelector('textarea')!
+  editor.value = '作者刚输入的新句子。'
+  const appearance = localStorage.getItem(APPEARANCE_STORAGE_KEY)
+  await act(async () => page.getByRole('button', { name: '知道了', exact: true }).click())
+  expect(host.querySelector('.startup-migration-notice')).toBeNull()
+  expect(host.querySelector('textarea')).toBe(editor)
+  expect(editor.value).toBe('作者刚输入的新句子。')
+  expect(useAppearanceStore.getState().phase).toBe('migrated')
+  expect(localStorage.getItem(APPEARANCE_STORAGE_KEY)).toBe(appearance)
   expect(load).toHaveBeenCalledOnce()
 })

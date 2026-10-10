@@ -18,6 +18,7 @@ import type { ArchitecturePlanningIntent, BeginGenerationRequest } from '../../.
 import { generationOutputContract, MAX_BATCH_CHAPTERS } from '../../../src/shared/generation-owner-contract'
 import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
+import { createMainOwnedGenerationRuntime, type MainGenerationSnapshot, type MainGenerationTransport } from '../../../src/services/generation/generation-runtime'
 import { formatGenerationBudgetDiagnostic } from '../../../src/services/generation/prompt-budget-failure'
 import { composeVisibleContinuation } from '../../../src/shared/visible-continuation'
 import { sanitizeDraftText, DRAFT_VISIBLE_TEXT_VERSION, type DraftVisibleTextVersion } from '../../../src/shared/draft-visible-text'
@@ -903,6 +904,46 @@ describe('automatic short outline binding', () => {
     expect((await reopened.retryDraftShortOutline({ handle: resumed.handle, failedAttemptId })).outcome.receipt.visibleArtifact?.attemptId)
       .toBe(reserved.attempt.attemptId)
     expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('continues from outline to prose after an owner running notification arrives behind the completed receipt', async () => {
+    const emitted: MainGenerationSnapshot[] = []
+    let listener: ((snapshot: MainGenerationSnapshot) => void) | undefined
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: dispatch.mock.calls.length === 1 ? outline : '正文。' })
+      return { finishReason: 'stop', usage: { promptTokens: 20, completionTokens: 20, totalTokens: 40,
+        reasoningTokens: 0, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }
+    })
+    const f = fixture(dispatch, false, undefined, snapshot => {
+      emitted.push(snapshot)
+      if (snapshot.status !== 'running') listener?.(snapshot)
+    })
+    const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    const transport: MainGenerationTransport = {
+      read: async handle => f.owner.read(handle), list: async () => f.owner.list(),
+      execute: request => f.owner.execute(request), cancel: async handle => f.owner.cancel(handle),
+      subscribe: (_handle, callback) => { listener = callback; return () => { listener = undefined } },
+    }
+    const shown = vi.fn()
+    const runtime = await createMainOwnedGenerationRuntime({ runHandle: run.handle, onSnapshot: shown }, transport)
+    try {
+      await expect(runtime.execute(({ session }) => session.complete(outlineTask, { invocationNonce: 'outline' })))
+        .resolves.toMatchObject({ status: 'completed', content: outline })
+      expect(emitted.map(({ status, revision, durableRevision, text }) => ({ status, revision, durableRevision, text }))).toEqual([
+        { status: 'running', revision: 0, durableRevision: 0, text: '' },
+        { status: 'running', revision: 1, durableRevision: 1, text: outline },
+        { status: 'completed', revision: 1, durableRevision: 1, text: outline },
+      ])
+      const lateRunning = emitted.filter(snapshot => snapshot.status === 'running').at(-1)
+      if (!lateRunning || !listener) throw new Error('TEST_EXPECTED_OWNER_NOTIFICATION')
+      listener(lateRunning)
+      await expect(runtime.execute(({ session }) => session.complete(draftTask(composed), { invocationNonce: 'prose' })))
+        .resolves.toMatchObject({ status: 'completed', content: '正文。' })
+      expect(shown.mock.calls.map(([snapshot]) => ({ status: snapshot.status, text: snapshot.text }))).toEqual([
+        { status: 'completed', text: outline }, { status: 'completed', text: '正文。' },
+      ])
+      expect(dispatch).toHaveBeenCalledTimes(2)
+      expect(f.owner.read(run.handle).ledger?.physicalRequests).toBe(2)
+    } finally { await runtime.close() }
   })
   it('requires and consumes its native artifact, then preserves the exact draft task across reopen', async () => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
