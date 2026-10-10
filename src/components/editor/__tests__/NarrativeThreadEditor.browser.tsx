@@ -1060,6 +1060,7 @@ describe('main-owned plot generation lifetime', () => {
       }
       if (channel === 'graph-generation:confirm') {
         recovery.effects.push(effect)
+        recovery.sourceStatus = 'conflict'
         plotSources = { ...sources, snapshot: effect.snapshot }
         return effect
       }
@@ -1067,6 +1068,25 @@ describe('main-owned plot generation lifetime', () => {
     })
     return { recovery, finish }
   }
+
+  it('shows the saved acknowledgement alongside the source conflict after confirmation', async () => {
+    const { finish } = pendingPlot()
+    await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} initialView="plot-tree" />))
+    await vi.waitFor(() => expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '生成剧情树')?.disabled).toBe(false))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '生成剧情树')?.click())
+    await vi.waitFor(() => expect(container?.textContent).toContain('正在生成，请等待本次结果'))
+    await act(async () => finish())
+    await vi.waitFor(() => expect(container?.textContent).toContain('生成结果已保存'))
+    expect(container?.textContent).toContain('来源已变化，仅可查看和复制。')
+    expect(container?.textContent).not.toContain('正在生成，请等待本次结果')
+    expect(container?.textContent).not.toContain('生成已完成，结果尚未保存')
+    expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '保存原剧情树')?.disabled).toBe(true)
+    expect(Array.from(container!.querySelectorAll('button')).find(button => button.textContent === '继续原运行')?.disabled).toBe(true)
+    for (const channel of ['graph-generation:begin', 'graph-generation:execute', 'graph-generation:confirm']) {
+      expect(invoke.mock.calls.filter(([called]) => called === channel)).toHaveLength(1)
+    }
+    expect(invoke.mock.calls.some(([channel]) => ['db:plot-tree-save', 'graph-generation:cancel'].includes(channel))).toBe(false)
+  })
 
   it('keeps a resumed plot run attached until the result is ready for confirmation', async () => {
     const { finish } = pendingPlot(true)
