@@ -54,13 +54,13 @@ export default function RendererStartup({
   }, [attempt, startupDependencies, loadWorkspace])
   // A later preference write failure must not unmount editors or discard in-memory author work.
   if (Workspace) return <>
+    <Workspace />
     {phase === 'blocked' && <div role="alert" className="fixed inset-x-0 top-10 z-50 bg-[var(--color-panel)] px-4 py-2 text-center text-[var(--color-warning-text)]">{notice}</div>}
     {phase !== 'blocked' && !noticeDismissed && migrationNotice && (migrationNotice.legacySourceIgnored || migrationNotice.preservedUnknownCount > 0) &&
-      <div role="status" className="fixed inset-x-0 top-10 z-50 flex items-center justify-center gap-4 bg-stone-100 px-4 py-2 text-stone-800">
+      <div role="status" className="startup-migration-notice fixed inset-x-0 top-10 z-50 flex items-center justify-center gap-4 bg-stone-100 px-4 py-2 text-stone-800">
         <span>{migrationNotice.legacySourceIgnored ? text('旧来源已保留，后续修改需明确导入，当前不会自动回灌。', 'The legacy source is preserved. Later changes require an explicit import and will not sync automatically. ') : ''}{migrationNotice.preservedUnknownCount > 0 ? text('未导入的内容已保留在原处。', 'Content that was not imported remains in its original location.') : ''}</span>
         <button type="button" className="rounded border border-stone-500 px-3 py-1" onClick={() => setNoticeDismissed(true)}>{text('知道了', 'Dismiss')}</button>
       </div>}
-    <Workspace />
   </>
   const blocked = phase === 'blocked' || loadFailed
   return (

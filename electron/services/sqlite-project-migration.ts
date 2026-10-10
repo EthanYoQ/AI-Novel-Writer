@@ -11,6 +11,7 @@ import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import { M02_ADDED_CHARACTER_COLUMNS, M02_AUXILIARY_TABLES } from '../migrations/m02-character-identity'
 import { M03_REVIEW_CYCLE_TABLES } from '../migrations/m03-review-cycle'
 import { initializeLegacyBaselineSchema } from '../migrations/baseline-schema'
+import { ensureBaselineBlueprintTables } from '../migrations/baseline-blueprint-schema'
 import { initializeCharacterRosterMetadata } from '../repositories/character-roster-schema'
 
 const require = createRequire(import.meta.url)
@@ -19,6 +20,12 @@ const QUALIFIED_V100_SCHEMA = '5e1ee5e03fa79bbf49694a680316ee74047f45901cd3f8aff
 const QUALIFIED_OFFICIAL_V100_SCHEMA = 'c536a35e30f51f681843a2a07a48592cc80e9840abeb7898fcd463297128ccf8'
 const QUALIFIED_V110_SCHEMA = '1207fd8203e31503e3cd09ba5b60a959c606ded34a8c8c7774a9e15edc8271ba'
 const QUALIFIED_EARLY_V110_SCHEMA = '2504dde08865f758f654d38ae3d972420c28fa60d1f747e92898390455272de6'
+const QUALIFIED_OFFICIAL_V100_LAZY_SCHEMA = '29838d67b3b0338b717c7488a7a2841c40fdacbb58598a83358bd73b6bda4673'
+const QUALIFIED_V092_LAZY_SCHEMA = '7a34ee78ddace39804d64ce8a42c054f11d9d27a559ff99cbd345921088ba050'
+const QUALIFIED_PRE_V110_SCHEMAS = [QUALIFIED_V100_SCHEMA, QUALIFIED_OFFICIAL_V100_SCHEMA,
+  QUALIFIED_OFFICIAL_V100_LAZY_SCHEMA, QUALIFIED_V092_LAZY_SCHEMA]
+const QUALIFIED_LEGACY_SCHEMAS = [...QUALIFIED_PRE_V110_SCHEMAS, QUALIFIED_V110_SCHEMA, QUALIFIED_EARLY_V110_SCHEMA]
+const V092_MISSING_REVIEW_COLUMNS = ['source_draft_chapter_number', 'source_draft_version', 'source_draft_status', 'source_content']
 const EARLY_V110_TABLES = [
   'blueprints', 'characters', 'contents', 'drafts', 'llm_calls', 'post_process_runs',
   'post_process_steps', 'project_core', 'reviews', 'revisions', 'summary_snapshots',
@@ -125,7 +132,7 @@ function inspect(db: BetterSqlite3.Database, registry: MigrationRegistry, target
 function qualifiedLegacySource(db: BetterSqlite3.Database): string | null {
   const adapter = new SqliteSchemaAdapter(db)
   const fingerprint = adapter.readSchemaFingerprint()
-  return adapter.readUserVersion() === 0 && [QUALIFIED_V100_SCHEMA, QUALIFIED_OFFICIAL_V100_SCHEMA, QUALIFIED_V110_SCHEMA, QUALIFIED_EARLY_V110_SCHEMA].includes(fingerprint)
+  return adapter.readUserVersion() === 0 && QUALIFIED_LEGACY_SCHEMAS.includes(fingerprint)
     && adapter.integrityCheck() && adapter.foreignKeyCheck() ? fingerprint : null
 }
 function inspectSource(db: BetterSqlite3.Database, registry: MigrationRegistry, allowLegacy: boolean): ProjectSqliteEvidence {
@@ -136,11 +143,15 @@ function inspectSource(db: BetterSqlite3.Database, registry: MigrationRegistry, 
 }
 function copyQualifiedLegacy(source: BetterSqlite3.Database, staging: BetterSqlite3.Database, sourceColumns: DomainColumns, fingerprint: string): void {
   initializeLegacyBaselineSchema(staging)
+  const v092 = fingerprint === QUALIFIED_V092_LAZY_SCHEMA
+  if (v092 || fingerprint === QUALIFIED_OFFICIAL_V100_LAZY_SCHEMA) ensureBaselineBlueprintTables(staging)
   const targetColumns = domainColumns(staging)
   const columnSets = (tables: DomainColumns) => tables.map(({ name, columns }) => [name, [...columns].sort()])
-  const expectedColumns = [QUALIFIED_V100_SCHEMA, QUALIFIED_OFFICIAL_V100_SCHEMA].includes(fingerprint) ? targetColumns
-    .filter(({ name }) => name !== 'continuity_projection_meta')
-    .map(({ name, columns }) => ({ name, columns: columns.filter(column => !V100_MISSING_COLUMNS[name]?.includes(column)) })) : targetColumns
+  const missingColumns = v092 ? { ...V100_MISSING_COLUMNS,
+    reviews: V092_MISSING_REVIEW_COLUMNS, revisions: V092_MISSING_REVIEW_COLUMNS } : V100_MISSING_COLUMNS
+  const expectedColumns = QUALIFIED_PRE_V110_SCHEMAS.includes(fingerprint) ? targetColumns
+    .filter(({ name }) => name !== 'continuity_projection_meta' && (!v092 || name !== 'recovery_candidates'))
+    .map(({ name, columns }) => ({ name, columns: columns.filter(column => !missingColumns[name]?.includes(column)) })) : targetColumns
   const earlyV110 = fingerprint === QUALIFIED_EARLY_V110_SCHEMA
   const expectedEarlyTables = [...EARLY_V110_TABLES].sort()
   const actualEarlyTables = sourceColumns.map(({ name }) => name)
@@ -214,7 +225,7 @@ export async function backupProjectSqlite(options: {
     source.pragma('foreign_keys = ON')
     const columnsBefore = domainColumns(source)
     const before = inspectSource(source, registry, !options.registry)
-    const legacySchema = !options.registry && [QUALIFIED_V100_SCHEMA, QUALIFIED_OFFICIAL_V100_SCHEMA, QUALIFIED_V110_SCHEMA, QUALIFIED_EARLY_V110_SCHEMA].includes(before.fingerprint)
+    const legacySchema = !options.registry && QUALIFIED_LEGACY_SCHEMAS.includes(before.fingerprint)
     // Reserve a new inode before the backup API can open it.
     const fd = fs.openSync(targetPath, 'wx', 0o600); fs.closeSync(fd)
     if (!legacySchema) await source.backup(targetPath)

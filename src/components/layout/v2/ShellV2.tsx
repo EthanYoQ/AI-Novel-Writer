@@ -47,7 +47,7 @@ export default function ShellV2({ theme, titleBar, rail, sidebar, editor, aiPane
         <Group orientation="vertical" className="writer-main">
           <Panel id="writer-top" defaultSize={75} minSize={30}>
             <Group orientation="horizontal" className="writer-main">
-              <Panel id="writer-sidebar" hidden={!sidebarOpen || magazineHome} defaultSize={20} minSize={12}>
+              <Panel id="writer-sidebar" hidden={!sidebarOpen || magazineHome} disabled={!sidebarOpen || magazineHome} defaultSize={20} minSize={12}>
                 <aside aria-label={text('作品资料', 'Project reference')} className="writer-panel">{sidebar}</aside>
               </Panel>
               {sidebarOpen && !magazineHome && <Separator className="writer-grip" aria-label={text('调整资料栏宽度', 'Resize reference panel')} />}
@@ -55,13 +55,13 @@ export default function ShellV2({ theme, titleBar, rail, sidebar, editor, aiPane
                 <main aria-label={text('写作区', 'Writing area')} className="writer-editor"><div className="writer-tabs-host">{tabs}</div><div className="writer-editor-content">{editor}</div></main>
               </Panel>
               {aiPanelOpen && !magazineHome && <Separator className="writer-grip" aria-label={text('调整助手宽度', 'Resize assistant panel')} />}
-              <Panel id="writer-assistant" hidden={!aiPanelOpen || magazineHome} defaultSize={20} minSize={12}>
+              <Panel id="writer-assistant" hidden={!aiPanelOpen || magazineHome} disabled={!aiPanelOpen || magazineHome} defaultSize={20} minSize={12}>
                 <aside aria-label={text('写作助手', 'Writing assistant')} className="writer-panel">{aiPanel}</aside>
               </Panel>
             </Group>
           </Panel>
           {bottomOpen && !magazineHome && <Separator className="writer-grip writer-grip-horizontal" aria-label={text('调整任务面板高度', 'Resize task panel')} />}
-          <Panel id="writer-bottom" hidden={!bottomOpen || magazineHome} defaultSize={25} minSize={8}>
+          <Panel id="writer-bottom" hidden={!bottomOpen || magazineHome} disabled={!bottomOpen || magazineHome} defaultSize={25} minSize={8}>
             <section aria-label={text('任务与日志', 'Tasks and logs')} className="writer-panel">{bottom}</section>
           </Panel>
         </Group>

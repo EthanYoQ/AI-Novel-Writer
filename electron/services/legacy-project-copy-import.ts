@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from 'node:util'
 import * as lancedb from '@lancedb/lancedb'
 import { KNOWLEDGE_COPY_MARKER, readKnowledgeCopy, writeKnowledgeCopy } from '../vector-store'
 import { m05CharacterAssetMigrationAdapter } from '../migrations/m05-character-assets'
-import { CharacterRosterRepository } from '../repositories/character-roster-repository'
+import { CharacterRosterRepository, refreshCharacterIdentityProjection } from '../repositories/character-roster-repository'
 import { adoptLegacyCards, readLegacyRosterSource } from './legacy-roster-source'
 import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../migrations/desktop-registry'
 import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY, createCanonicalProjectManifest, parseCanonicalProjectManifest } from '../../src/shared/project-format'
@@ -19,6 +19,7 @@ import { createLegacyCopyTransferAuthority, mapPortableTransferAuthority, serial
 import { backupProjectSqlite, probeProjectSqlite, verifyProjectSqlite } from './sqlite-project-migration'
 import { exportVectorStoreForMigration, importVectorStoreForMigration, verifyVectorStoreForMigration } from './vector-migration-snapshot'
 
+const COPIED_RAW_ASSETS = [...CANONICAL_RAW_PROJECT_ASSETS, 'trash'] as const
 const VECTOR_ASSETS = ['lancedb', 'embedding-spaces.json', 'vectors.json', 'vectors.json.migrated', 'vectors.json.migration-journal.json'] as const
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const RUNTIME_AUTHORITY_TABLES = [
@@ -244,14 +245,16 @@ async function adoptCopiedLegacyCards(db: import('better-sqlite3').Database, old
         let edges: unknown
         try { edges = row.relationships === '' ? [] : JSON.parse(row.relationships as string) } catch { return reject() }
         if (!Array.isArray(edges)) return reject()
-        const targets = new Set<string>()
+        const relationships = new Set<string>()
         for (const [index, edge] of edges.entries()) {
           if (!edge || typeof edge !== 'object' || Array.isArray(edge)
             || Object.keys(edge).sort().join(',') !== 'relation,target'
             || typeof edge.target !== 'string' || !edge.target.trim() || !byName.has(edge.target)
-            || edge.target === row.name || targets.has(edge.target)
+            || edge.target === row.name
             || typeof edge.relation !== 'string' || !edge.relation.trim()) return reject()
-          targets.add(edge.target)
+          const relationship = JSON.stringify([edge.target, edge.relation])
+          if (relationships.has(relationship)) return reject()
+          relationships.add(relationship)
           const binding = checkProposal(`${row.source_key}:relationships:${index}`, hash(row.relationships as string),
             JSON.stringify(edge), row.character_id, edge.target)!
           bindings.push({ ...binding, relation: edge.relation, sourceName: row.name })
@@ -282,6 +285,7 @@ async function adoptCopiedLegacyCards(db: import('better-sqlite3').Database, old
           binding.ownerId, binding.targetId, binding.relation, binding.sourceName, binding.targetName,
           JSON.stringify({ kind: 'legacy', sourceKey: binding.sourceKey, sourceHash: binding.sourceHash, migration: 'offline-project-copy' }), operationId)
       }
+      if (readySource) refreshCharacterIdentityProjection(db)
       const source = readLegacyRosterSource(db)
       if (readySource) {
         if (source.snapshot.migrationState !== 'ready' || source.snapshot.status !== 'ready') reject()
@@ -320,7 +324,7 @@ export async function importLegacyProjectCopy(options: {
     physicalDirectory(legacyRoot)
     if (exists(path.join(sourceRoot, CANONICAL_PROJECT_DIRECTORY)) || exists(path.join(sourceRoot, '.ai-novel-migration'))) fail('LEGACY_IMPORT_UNSUPPORTED_SOURCE')
     const sourceNames = fs.readdirSync(legacyRoot)
-    const allowed = new Set<string>([...DATABASE_FILES, 'project.json', 'avatars', ...CANONICAL_RAW_PROJECT_ASSETS, ...VECTOR_ASSETS])
+    const allowed = new Set<string>([...DATABASE_FILES, 'project.json', 'avatars', ...COPIED_RAW_ASSETS, ...VECTOR_ASSETS])
     if (!sourceNames.includes('vela.db') || sourceNames.some(name => !allowed.has(name))) fail('LEGACY_IMPORT_UNMAPPED_ASSET')
     let sourceProjectId: string | undefined
     const oldManifest = path.join(legacyRoot, 'project.json')
@@ -370,7 +374,7 @@ export async function importLegacyProjectCopy(options: {
     }
     if (!await m05CharacterAssetMigrationAdapter.verify({ sourceSnapshot: avatars, stagingTargetRoot: storage,
       stagingDatabasePath: newDatabase, receipt: avatarReceipt })) fail('LEGACY_IMPORT_AVATAR_INVALID')
-    for (const name of CANONICAL_RAW_PROJECT_ASSETS) if (exists(path.join(copiedLegacy, name))) {
+    for (const name of COPIED_RAW_ASSETS) if (exists(path.join(copiedLegacy, name))) {
       copyTree(path.join(copiedLegacy, name), path.join(storage, name))
       sameTree(path.join(copiedLegacy, name), path.join(storage, name))
     }
