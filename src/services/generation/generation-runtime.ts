@@ -182,6 +182,10 @@ export async function createMainOwnedGenerationRuntime(options: MainOwnedGenerat
         if (previous.attemptId !== captured.attemptId) throw new Error('MAIN_ARTIFACT_ATTEMPT_CHANGED')
         // Delivery order can differ from commit order. Older acknowledged views never replace newer ones.
         if (captured.revision < previous.revision) return
+        // A terminal read can overtake its last running notification without changing the artifact.
+        if (previous.status !== 'running' && captured.status === 'running'
+          && captured.revision === previous.revision && captured.durableRevision === previous.durableRevision
+          && captured.text === previous.text && captured.textHash === previous.textHash) return
         const cancelledSettledArtifact = (previous.status === 'failed' || previous.status === 'unknown') && captured.status === 'cancelled'
           && captured.revision === previous.revision && captured.durableRevision === previous.durableRevision
           && captured.text === previous.text && captured.textHash === previous.textHash

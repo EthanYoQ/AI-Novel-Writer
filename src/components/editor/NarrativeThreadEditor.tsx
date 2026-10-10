@@ -128,6 +128,24 @@ function plotTreeErrorMessage(
   }
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   const message = raw.replace(/^Error:\s*/, '')
+  if (message === 'GRAPH_GENERATION_DETACHED') {
+    return text(
+      '页面已与本次生成断开。请恢复生成记录查看结果。',
+      'This page disconnected from the generation. Recover the generation record to view its result.',
+    )
+  }
+  if (message === 'GRAPH_GENERATION_INCOMPLETE' || message === 'GRAPH_GENERATION_CANCELLED') {
+    return text(
+      '本次生成未完成保存。请恢复生成记录查看结果和取消状态。',
+      'This generation was not saved. Recover the generation record to check its result and cancellation status.',
+    )
+  }
+  if (message === 'GRAPH_GENERATION_NOT_CONFIRMABLE') {
+    return text(
+      '本次结果未保存。请恢复生成记录，检查来源是否变化或生成是否已取消。',
+      'The result was not saved. Recover the generation record to check whether its sources changed or it was cancelled.',
+    )
+  }
   if (message.startsWith('剧情树')
     && SNAPSHOT_VALIDATION_ERROR_ENDINGS.some(ending => message.endsWith(ending))) {
     return text('剧情树快照无效。', 'The plot-tree snapshot is invalid.')
@@ -276,8 +294,8 @@ export default function NarrativeThreadEditor({
   }, [projectKey, text])
   useEffect(() => {
     let active = true
-    queueMicrotask(() => { if (active) { setGraphRecovery(null); setGraphRuns([]); void loadGraphRuns() } })
-    return () => { active = false; graphClient.current?.detach(); graphClient.current = null }
+    queueMicrotask(() => { if (active) void loadGraphRuns() })
+    return () => { active = false }
   }, [loadGraphRuns, currentProject?.sessionLease])
   const showGraphRecovery = (value: GraphGenerationRecovery) => {
     setGraphRecovery(value)
@@ -313,6 +331,7 @@ export default function NarrativeThreadEditor({
     return { client, value }
   }
   const restoreGraph = async (run: MainGenerationRunView) => {
+    if (plotBusy || aiBusy) return
     const session = captureProjectSession(useProjectStore.getState().currentProject)
     if (!session || !isProjectSessionPath(session, projectKey)) return
     graphClient.current?.detach()
@@ -322,6 +341,21 @@ export default function NarrativeThreadEditor({
       const value = await client.open({ handle: run.handle })
       if (isProjectSessionCurrent(session) && graphClient.current === client) { showGraphRecovery(value); setGraphError('') }
     } catch { setGraphError(text('无法恢复原生成记录。', 'Could not recover the original generation.')) }
+  }
+  const continueGraph = async () => {
+    const client = graphClient.current
+    if (!client || !graphRecovery || plotBusy || aiBusy || !canExecuteGraph(graphRecovery)) return
+    const setGenerationBusy = graphRecovery.context.kind === 'plot' ? setPlotBusy : setAiBusy
+    setGenerationBusy(true)
+    setGraphError('')
+    try {
+      const value = await client.execute()
+      if (graphClient.current === client) showGraphRecovery(value)
+    } catch {
+      if (graphClient.current === client) setGraphError(text('原运行未完成，结果已保留。', 'The original run did not complete; its output is preserved.'))
+    } finally {
+      if (graphClient.current === client) setGenerationBusy(false)
+    }
   }
   const confirmGraph = async (index: number, expectedHandle?: MainGenerationRunHandle) => {
     const client = graphClient.current
@@ -404,9 +438,25 @@ export default function NarrativeThreadEditor({
     document.getElementById(`narrative-plan-${sourcePlanId}`)?.scrollIntoView({ block: 'center' })
   }, [sourcePlanId, threads, view])
 
-  useEffect(() => () => {
-    plotAbortRef.current?.abort()
-    graphClient.current?.detach()
+  useEffect(() => {
+    let active = true
+    queueMicrotask(() => {
+      if (!active) return
+      setGraphRecovery(null)
+      setGraphRuns([])
+      setPlotBusy(false)
+      setAiBusy(false)
+      setAiOpen(false)
+      setPlanCandidates([])
+      setEventCandidates([])
+    })
+    return () => {
+      active = false
+      plotAbortRef.current?.abort()
+      candidateAbortRef.current?.abort()
+      graphClient.current?.detach()
+      graphClient.current = null
+    }
   }, [currentProject?.sessionLease, projectKey])
 
   useEffect(() => {
@@ -432,7 +482,7 @@ export default function NarrativeThreadEditor({
     const uiText: LocaleText = (zhCNText, enUSText) => uiLocale === 'en-US' ? enUSText : zhCNText
     const frozenModelId = selectedPlotModel?.id
     if (!session || !isProjectSessionPath(session, projectKey) || !plotSources
-      || !frozenModelId || plotBusy) return
+      || !frozenModelId || plotBusy || aiBusy) return
     const controller = new AbortController()
     plotAbortRef.current?.abort()
     plotAbortRef.current = controller
@@ -444,6 +494,7 @@ export default function NarrativeThreadEditor({
       if (!plotTreeGenerator) {
         const { value } = await startGraph({ kind: 'plot' }, frozenModelId)
         if (value.result?.kind !== 'plot') throw new Error('GRAPH_GENERATION_KIND_MISMATCH')
+        if (value.sourceStatus !== 'current') throw new Error('剧情资料在生成期间已更新，本次结果未保存，请重新生成。')
         const effect = await confirmGraph(0, value.view.handle)
         if (effect.kind === 'plot' && isProjectSessionCurrent(session)) setPlotSources(previous => previous ? { ...previous, snapshot: effect.snapshot } : previous)
         return
@@ -565,6 +616,7 @@ export default function NarrativeThreadEditor({
   }
 
   const openAI = (mode: AICandidateMode) => {
+    if (plotBusy || aiBusy) return
     if (mode === 'event' && (eventPlanId === null || eventDraftId === 0)) return
     setAiMode(mode)
     setAiModelId(generationModels.some(model => model.id === defaultModelId)
@@ -583,7 +635,7 @@ export default function NarrativeThreadEditor({
     const blueprint = blueprints.find(item => item.chapterNumber === aiBlueprintChapter)
     const frozenModelId = selectedModel?.id
     const totalChapters = projectSnapshot?.novelConfig.totalChapters
-    if (!session || !isProjectSessionPath(session, projectKey) || !blueprint || !frozenModelId || !totalChapters || aiBusy) return
+    if (!session || !isProjectSessionPath(session, projectKey) || !blueprint || !frozenModelId || !totalChapters || aiBusy || plotBusy) return
     const controller = new AbortController()
     candidateAbortRef.current?.abort()
     candidateAbortRef.current = controller
@@ -617,7 +669,7 @@ export default function NarrativeThreadEditor({
     const draftSnapshot = finalizedDrafts.find(item => item.id === eventDraftId)
     const frozenModelId = selectedModel?.id
     if (!session || !isProjectSessionPath(session, projectKey) || !planSnapshot
-      || !draftSnapshot || !frozenModelId || aiBusy) return
+      || !draftSnapshot || !frozenModelId || aiBusy || plotBusy) return
     const controller = new AbortController()
     candidateAbortRef.current?.abort()
     candidateAbortRef.current = controller
@@ -800,15 +852,19 @@ export default function NarrativeThreadEditor({
         <section aria-label={text('生成记录恢复', 'Recover generation')} className="rounded-lg border p-3 space-y-2" style={{ borderColor: 'var(--color-border)' }}>
           <Button size="sm" variant="outline" onClick={() => void loadGraphRuns()}>{text('刷新生成记录', 'Refresh generation history')}</Button>
           {(aiBusy && !candidateGenerator || plotBusy && !plotTreeGenerator) && <Button size="sm" variant="outline" onClick={() => void cancelGraph()}>{text('取消当前生成', 'Cancel current generation')}</Button>}
-          {graphRuns.map(run => <Button key={run.handle.runId} size="sm" variant="ghost" onClick={() => void restoreGraph(run)}>{text('恢复原生成', 'Recover generation')} · {run.operation === 'plot-tree-snapshot' ? text('剧情树', 'Plot tree') : run.operation === 'narrative-thread-plan-candidate' ? text('计划候选', 'Plan candidates') : text('事件候选', 'Event candidates')} · {run.handle.runId}</Button>)}
+          {graphRuns.map(run => <Button key={run.handle.runId} size="sm" variant="ghost" disabled={plotBusy || aiBusy} onClick={() => void restoreGraph(run)}>{text('恢复原生成', 'Recover generation')} · {run.operation === 'plot-tree-snapshot' ? text('剧情树', 'Plot tree') : run.operation === 'narrative-thread-plan-candidate' ? text('计划候选', 'Plan candidates') : text('事件候选', 'Event candidates')} · {run.handle.runId}</Button>)}
           {graphError && <p role="alert">{graphError}</p>}
           {graphRecovery && <div className="space-y-2">
+            {(plotBusy || aiBusy) && <p role="status">{text('正在生成，请等待本次结果', 'Generation is in progress. Please wait for the result.')}</p>}
+            {!plotBusy && !aiBusy && graphRecovery.result?.kind === 'plot' && graphRecovery.sourceStatus === 'current' && graphRecovery.view.status !== 'cancelled' && <p role="status">{graphRecovery.effects.length > 0
+              ? text('生成结果已保存', 'The generated result has been saved.')
+              : text('生成已完成，结果尚未保存。请确认后保存', 'Generation is complete. Confirm and save the result.')}</p>}
             <p>{text('原模型', 'Original model')}: {graphRecovery.modelId} · {text('已确认', 'Confirmed')}: {graphRecovery.effects.length}</p>
             {graphRecovery.sourceStatus === 'conflict' && <p role="status">{text('来源已变化，仅可查看和复制。', 'Sources changed. Viewing and copying remain available.')}</p>}
             <Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(graphRecovery.result ? JSON.stringify(graphRecovery.result, null, 2) : (graphRecovery.view.candidates ?? graphRecovery.view.artifacts).map(item => item.text).join('\n'))}>{text('复制原结果', 'Copy original result')}</Button>
-            <Button size="sm" disabled={!canExecuteGraph(graphRecovery)} onClick={() => { const client = graphClient.current; if (client) void client.execute().then(value => { if (graphClient.current === client) showGraphRecovery(value) }).catch(() => setGraphError(text('原运行未完成，结果已保留。', 'The original run did not complete; its output is preserved.'))) }}>{text('继续原运行', 'Continue original run')}</Button>
+            <Button size="sm" disabled={plotBusy || aiBusy || !canExecuteGraph(graphRecovery)} onClick={() => void continueGraph()}>{text('继续原运行', 'Continue original run')}</Button>
             <Button size="sm" variant="outline" onClick={() => { const client = graphClient.current; if (client) void client.cancel().then(() => client.read()).then(value => { if (graphClient.current === client) showGraphRecovery(value) }).catch(() => setGraphError(text('取消状态尚未确认。', 'Cancellation is not confirmed.'))) }}>{text('取消原运行', 'Cancel original run')}</Button>
-            {graphRecovery.result?.kind === 'plot' && <><pre className="max-h-40 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(graphRecovery.result.snapshot, null, 2)}</pre><Button size="sm" disabled={graphRecovery.sourceStatus !== 'current' || graphRecovery.view.status === 'cancelled' || graphRecovery.effects.length > 0} onClick={() => void confirmGraph(0, graphRecovery.view.handle).then(() => loadPlotTree()).catch(() => setGraphError(text('无法保存原剧情树。', 'Could not save the original plot tree.')))}>{text('保存原剧情树', 'Save original plot tree')}</Button></>}
+            {graphRecovery.result?.kind === 'plot' && <><pre className="max-h-40 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(graphRecovery.result.snapshot, null, 2)}</pre><Button size="sm" disabled={plotBusy || aiBusy || graphRecovery.sourceStatus !== 'current' || graphRecovery.view.status === 'cancelled' || graphRecovery.effects.length > 0} onClick={() => void confirmGraph(0, graphRecovery.view.handle).then(() => loadPlotTree()).catch(() => setGraphError(text('无法保存原剧情树。', 'Could not save the original plot tree.')))}>{text('保存原剧情树', 'Save original plot tree')}</Button></>}
           </div>}
         </section>
 
@@ -820,7 +876,7 @@ export default function NarrativeThreadEditor({
             currentChapter={Math.max(1, ...(plotSources?.finalizedChapters.map(chapter => chapter.chapterNumber) ?? []))}
             models={generationModels}
             selectedModelId={selectedPlotModel?.id ?? null}
-            busy={plotBusy}
+            busy={plotBusy || aiBusy}
             error={plotError || plotModelSelectionError}
             sourceReady={Boolean(plotSources && hasUsablePlotTreeEventSource(plotSources))}
             storedSnapshotInvalid={plotSources?.storedSnapshotInvalid === true}
@@ -834,7 +890,7 @@ export default function NarrativeThreadEditor({
           <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
             {text('设置埋设与预计回收章节；活跃计划会自动注入后续写作，逾期或沉寂时提醒。只有人工确认的定稿内容才记为已发生事件。', 'Set setup and expected payoff chapters. Active plans are injected into later writing and flagged when overdue or dormant; only user-confirmed finalized text becomes an event.')}
           </p>
-          <Button className="shrink-0" variant="ai" size="sm" onClick={() => openAI('plan')} disabled={blueprints.length === 0}>
+          <Button className="shrink-0" variant="ai" size="sm" onClick={() => openAI('plan')} disabled={plotBusy || aiBusy || blueprints.length === 0}>
             <Sparkles size={13} />{text('AI 建议伏笔与线索', 'Suggest foreshadowing with AI')}
           </Button>
         </div>
@@ -977,7 +1033,7 @@ export default function NarrativeThreadEditor({
           <DialogFooter>
             {!candidateGenerator && (aiBusy || graphRecovery) && <Button variant="outline" onClick={() => void cancelGraph()}>{text('取消原运行', 'Cancel original run')}</Button>}
             <Button variant="ghost" onClick={closeAI} disabled={aiBusy}>{text('关闭', 'Close')}</Button>
-            <Button variant="ai" onClick={() => void (aiMode === 'plan' ? generatePlanCandidates() : generateEventCandidates())} disabled={aiBusy || Boolean(modelSelectionError) || (aiMode === 'plan' && !aiBlueprintChapter)}>
+            <Button variant="ai" onClick={() => void (aiMode === 'plan' ? generatePlanCandidates() : generateEventCandidates())} disabled={plotBusy || aiBusy || Boolean(modelSelectionError) || (aiMode === 'plan' && !aiBlueprintChapter)}>
               {aiBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
               {aiBusy ? text('识别中...', 'Analyzing...') : !candidateGenerator && graphRecovery ? text('生成新候选', 'Generate new candidates') : text('生成候选', 'Generate candidates')}
             </Button>

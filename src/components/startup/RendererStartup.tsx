@@ -10,6 +10,7 @@ const desktopStartup: AppearanceBootstrapDependencies = {
   acknowledgeReadback: ack => ipc.invoke('startup:appearance-ack', ack),
 }
 const loadApp = () => import('../../App')
+const MIGRATION_NOTICE_STORAGE_KEY = 'ai-novel-writer-dismissed-migration-generation'
 
 /** Business modules are not imported until main and the renderer storage writer acknowledge readiness. */
 export default function RendererStartup({
@@ -23,13 +24,22 @@ export default function RendererStartup({
   const [Workspace, setWorkspace] = useState<ComponentType | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [loadFailed, setLoadFailed] = useState(false)
-  const [migrationNotice, setMigrationNotice] = useState<StartupMigrationNotice>()
+  const [migrationNotice, setMigrationNotice] = useState<StartupMigrationNotice & { globalGeneration: string }>()
   const [blockedCode, setBlockedCode] = useState<StartupBlockedCode>()
   const [mainReady, setMainReady] = useState(false)
   const [noticeDismissed, setNoticeDismissed] = useState(false)
   const startupDependencies = useMemo(() => ({ ...dependencies, waitForMainReady: async () => {
     const state = await dependencies.waitForMainReady() as StartupState
-    setMigrationNotice(state.migrationNotice)
+    const nextNotice = state.state === 'ready' && state.migrationNotice
+      ? { ...state.migrationNotice, globalGeneration: state.globalGeneration } : undefined
+    setMigrationNotice(nextNotice)
+    let dismissed = false
+    if (nextNotice) {
+      try {
+        dismissed = (dependencies.storage ?? (() => window.localStorage))().getItem(MIGRATION_NOTICE_STORAGE_KEY) === nextNotice.globalGeneration
+      } catch { /* A display preference must not block startup. */ }
+    }
+    setNoticeDismissed(dismissed)
     setBlockedCode(state.code)
     setMainReady(state.state === 'ready')
     return state
@@ -59,7 +69,12 @@ export default function RendererStartup({
     {phase !== 'blocked' && !noticeDismissed && migrationNotice && (migrationNotice.legacySourceIgnored || migrationNotice.preservedUnknownCount > 0) &&
       <div role="status" className="startup-migration-notice fixed inset-x-0 top-10 z-50 flex items-center justify-center gap-4 bg-stone-100 px-4 py-2 text-stone-800">
         <span>{migrationNotice.legacySourceIgnored ? text('旧来源已保留，后续修改需明确导入，当前不会自动回灌。', 'The legacy source is preserved. Later changes require an explicit import and will not sync automatically. ') : ''}{migrationNotice.preservedUnknownCount > 0 ? text('未导入的内容已保留在原处。', 'Content that was not imported remains in its original location.') : ''}</span>
-        <button type="button" className="rounded border border-stone-500 px-3 py-1" onClick={() => setNoticeDismissed(true)}>{text('知道了', 'Dismiss')}</button>
+        <button type="button" className="rounded border border-stone-500 px-3 py-1" onClick={() => {
+          setNoticeDismissed(true)
+          try {
+            (dependencies.storage ?? (() => window.localStorage))().setItem(MIGRATION_NOTICE_STORAGE_KEY, migrationNotice.globalGeneration)
+          } catch { /* Keep this notice dismissed for the current session. */ }
+        }}>{text('知道了', 'Dismiss')}</button>
       </div>}
   </>
   const blocked = phase === 'blocked' || loadFailed
