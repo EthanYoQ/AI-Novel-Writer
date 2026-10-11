@@ -55,6 +55,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
   const projectStorageRoot = path.join(root, 'project'), globalDataRoot = path.join(root, 'global')
   fs.mkdirSync(projectStorageRoot); fs.mkdirSync(globalDataRoot)
   let db = new Database(path.join(root, 'project.db'))
+  db.pragma('journal_mode = WAL')
   vi.mocked(getProjectDb).mockImplementation(() => db)
   initializeLegacyBaselineSchema(db)
   migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
