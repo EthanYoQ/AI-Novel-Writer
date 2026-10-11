@@ -27,6 +27,19 @@ vi.mock('../../database', async importOriginal => ({
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 
+function prepareClearStorageFixture(projectPath: string) {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    initializeLegacyBaselineSchema(db)
+    migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+    const root = path.join(projectPath, CANONICAL_PROJECT_DIRECTORY)
+    fs.mkdirSync(root)
+    fs.writeFileSync(path.join(root, CANONICAL_PROJECT_DATABASE), db.serialize(), { flag: 'wx', mode: 0o600 })
+  } finally { db.close() }
+  prepareCanonicalStorageFixture(projectPath)
+}
+
 function createMockDb() {
   const run = vi.fn()
   const all = vi.fn(() => [{ name: 'fact_hash' }])
@@ -152,7 +165,7 @@ describe('project clear repositories', () => {
   it('removes generated root chapter txt files when generated text is cleared', () => {
     const db = createMockDb()
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-clear-'))
-    prepareCanonicalStorageFixture(projectPath)
+    prepareClearStorageFixture(projectPath)
     const generatedFile = path.join(projectPath, '第1章 夜航.txt')
     const generatedFileWithoutTitle = path.join(projectPath, '第2章.txt')
     const userFile = path.join(projectPath, '参考小说.txt')
@@ -182,7 +195,7 @@ describe('project clear repositories', () => {
       transaction: vi.fn(() => () => { throw new Error('db failed') }),
     }
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-clear-rollback-'))
-    prepareCanonicalStorageFixture(projectPath)
+    prepareClearStorageFixture(projectPath)
     const generatedFile = path.join(projectPath, '第3章 回滚.txt')
     fs.writeFileSync(generatedFile, 'chapter three')
     vi.mocked(getProjectDb).mockReturnValue(db as never)
@@ -198,7 +211,7 @@ describe('project clear repositories', () => {
 
   it('does not restore chapter files after a committed clear when trash cleanup fails', () => {
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-clear-committed-'))
-    prepareCanonicalStorageFixture(projectPath)
+    prepareClearStorageFixture(projectPath)
     const db = new Database(path.join(projectPath, CANONICAL_PROJECT_DIRECTORY, CANONICAL_PROJECT_DATABASE))
     const generatedFile = path.join(projectPath, '第1章 夜航.txt')
     fs.writeFileSync(generatedFile, 'chapter one')
