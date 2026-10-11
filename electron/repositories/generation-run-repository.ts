@@ -576,10 +576,11 @@ export class GenerationRunRepository {
         if (recovery.kind !== 'available') fail(recovery.diagnostic.code);
         return recovery;
     }
-    readDirectoryProgress(operationId: string): DirectoryGenerationProgress | null {
-        const rows = this.db().prepare("SELECT run_id FROM generation_attempts WHERE json_extract(usage_receipt_json,'$.directoryProgress.operationId')=?").all(operationId) as { run_id: string }[];
+    readDirectoryProgress(operationId: string, forWrite = true): DirectoryGenerationProgress | null {
+        const rows = this.db().prepare("SELECT run_id,usage_receipt_json FROM generation_attempts WHERE json_extract(usage_receipt_json,'$.directoryProgress.operationId')=?").all(operationId) as DirectoryProgressRow[];
         if (!rows.length) return null;
         if (rows.length !== 1) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        if (!forWrite) return this.readDirectoryProgressProof(rows[0]);
         const recovery = this.assertBlueprintRecoveryWritable(rows[0].run_id);
         return recovery.progress.find(item => item.operationId === operationId) ?? fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
     }

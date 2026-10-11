@@ -624,9 +624,20 @@ export class ReviewCycleRepository {
       const confirmationOwner = db.prepare('SELECT cycle_id FROM review_cycles WHERE confirmation_review_id=?')
         .pluck().get(input.confirmationReviewId) as string | undefined
       if (confirmationOwner && confirmationOwner !== input.cycleId) conflict()
-      if (cycle.confirmation_review_id !== null) db.prepare(`UPDATE review_findings
-        SET status=CASE WHEN span_start IS NULL THEN 'unverified' ELSE 'unresolved' END,
-          evidence_hash=NULL,confirmation_item_index=NULL WHERE cycle_id=? AND status='author-waived'`).run(input.cycleId)
+      if (cycle.confirmation_review_id !== null) {
+        const waived = db.prepare(`SELECT * FROM review_findings
+          WHERE cycle_id=? AND status='author-waived' LIMIT 1`).get(input.cycleId) as Record<string, unknown> | undefined
+        if (waived) {
+          const review = db.prepare(`SELECT r.base_draft_id,r.source_draft_version,r.source_content,c.body
+            FROM reviews r JOIN contents c ON c.id=r.content_id WHERE r.id=?`).get(cycle.review_id) as ReviewRow | undefined
+          if (!review || review.source_content === null) conflict()
+          const restore = db.prepare(`UPDATE review_findings SET status=?,evidence_hash=NULL,confirmation_item_index=NULL
+            WHERE cycle_id=? AND finding_id=? AND status='author-waived'`)
+          for (const item of buildFindings(parseSavedReport(review.body), persistedFinding(waived).source, review.source_content)) {
+            restore.run(item.status, input.cycleId, item.findingId)
+          }
+        }
+      }
       const waivedFindingCount = bindAuthorWaivers({ cycleId: input.cycleId,
         confirmationContentHash: confirmation.contentHash }, confirmation.snapshot, db, true)
       const result = db.prepare(`UPDATE review_cycles SET confirmation_review_id=?,confirmation_content_hash=?

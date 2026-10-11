@@ -42,6 +42,18 @@ function projectRootSelectionFailure(error: unknown) {
   if (error instanceof Error && ['PROJECT_MIGRATION_NOT_QUALIFIED', 'PROJECT_MIGRATION_DUAL_ROOT', 'PROJECT_MIGRATION_RECOVERY_REQUIRED'].includes(error.message)) {
     return { error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请通过“导入旧项目”创建完整副本。' }
   }
+  if (error instanceof Error && error.message === 'UNRECOGNIZED_SCHEMA') {
+    return { error: '无法识别项目格式，已拒绝打开。请核查创建该项目的软件和版本。' }
+  }
+  if (error instanceof Error && error.message === 'CORRUPT_SCHEMA') {
+    return { error: '项目数据结构已损坏，已拒绝打开。请保留原件并从备份恢复。' }
+  }
+  if (error instanceof Error && error.message === 'NEWER_SCHEMA_READ_ONLY') {
+    return { error: '该项目由更新版本创建，已拒绝打开。请升级软件后再打开。' }
+  }
+  if (error instanceof Error && error.message === 'LEGACY_IMPORT_UNSUPPORTED_SOURCE') {
+    return { error: '此项目版本不支持旧项目导入。请用原版本软件打开或导出。' }
+  }
   if (
     typeof error === 'object'
     && error !== null
