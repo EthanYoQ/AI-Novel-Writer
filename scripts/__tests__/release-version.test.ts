@@ -1,29 +1,30 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-describe('v1.2.1-Preview release metadata', () => {
-  it('uses the release version in package metadata', () => {
+describe('release metadata', () => {
+  it('has a valid package version and matching current release notes', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }
-    expect(pkg.version).toBe('1.2.1-Preview')
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/u)
+    const notes = readFileSync(`.release/notes/v${pkg.version}.md`, 'utf8')
+    expect(notes.split(/\r?\n/u)[0].trim()).toBe(`# ${pkg.version}`)
   })
 
-  it('resolves the release tag and exact seven-asset contract from the package version', () => {
+  it('resolves the exact seven-asset contract from the package version', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }
     const profile = JSON.parse(readFileSync('.release/release-profile.json', 'utf8')) as {
       releaseAssets: Array<{ name: string }>
       releaseChannel: { draft: boolean; prerelease: boolean; expectedLatest: boolean }
     }
 
-    expect(`v${pkg.version}`).toBe('v1.2.1-Preview')
     expect(profile.releaseChannel).toEqual({ draft: false, prerelease: false, expectedLatest: true })
     expect(profile.releaseAssets.map(({ name }) => name.replaceAll('{version}', pkg.version))).toEqual([
-      'ai-novel-writer-setup-1.2.1-Preview.exe',
-      'ai-novel-writer-setup-1.2.1-Preview.exe.blockmap',
+      `ai-novel-writer-setup-${pkg.version}.exe`,
+      `ai-novel-writer-setup-${pkg.version}.exe.blockmap`,
       'latest.yml',
-      'ai-novel-writer-mac-arm64-1.2.1-Preview-installer.dmg',
-      'ai-novel-writer-mac-arm64-1.2.1-Preview-installer.dmg.sha256',
-      'ai-novel-writer-mac-x64-1.2.1-Preview-installer.dmg',
-      'ai-novel-writer-mac-x64-1.2.1-Preview-installer.dmg.sha256',
+      `ai-novel-writer-mac-arm64-${pkg.version}-installer.dmg`,
+      `ai-novel-writer-mac-arm64-${pkg.version}-installer.dmg.sha256`,
+      `ai-novel-writer-mac-x64-${pkg.version}-installer.dmg`,
+      `ai-novel-writer-mac-x64-${pkg.version}-installer.dmg.sha256`,
     ])
   })
 
