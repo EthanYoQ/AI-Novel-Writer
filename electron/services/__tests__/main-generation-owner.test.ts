@@ -806,6 +806,37 @@ describe('automatic short outline binding', () => {
     coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author' as const, required: true, units: 1 }], omitted: [] }
   const outlineTask = { purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text' as const, messages: [{ role: 'user' as const, content: outlinePrompt }] }
   const draftTask = (content: string) => ({ ...task, messages: [{ role: 'user' as const, content }] })
+  it('generates and saves three chapters with edited blueprints in one owner session', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()
+    const f = fixture(dispatch)
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章'),(3,'第三章')")
+    const roots = new Set<string>(), runs = new Set<string>(), outlineArtifacts = new Set<string>()
+    for (const chapterNumber of [1, 2, 3]) {
+      f.db.prepare('UPDATE blueprints SET title=? WHERE chapter_number=?').run(`作者修改后的第${chapterNumber}章`, chapterNumber)
+      const chapterOutline = `第${chapterNumber}章：${outline}`, prose = `第${chapterNumber}章清晨，林岚带着昨日的线索走向城门。`
+      for (const text of [chapterOutline, prose]) dispatch.mockImplementationOnce(async (_request, options) => {
+        options.onVisible({ kind: 'delta', text })
+        return { finishReason: 'stop', usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30,
+          reasoningTokens: null, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }
+      })
+      const run = f.owner.begin({ ...f.begin, chapterNumber, uiActionNonce: `chapter-${chapterNumber}`, materialDecision: decision,
+        selectedBlueprintChapterNumbers: [chapterNumber], authorInputs: [{ id: 'draft:target-units', text: '20' }] })
+      roots.add(run.handle.rootActionId); runs.add(run.handle.runId)
+      await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: outlineTask })
+      const context = f.owner.readContext(run.handle)
+      expect(context.draftShortOutline?.completedOutput).toBe(chapterOutline)
+      outlineArtifacts.add(context.draftShortOutline!.artifactIds[0]!)
+      const drafted = await f.owner.execute({ handle: run.handle, invocationNonce: 'prose',
+        task: draftTask(`${base}\n\n${draftShortOutlineBlock('zh-CN', chapterOutline)}`) })
+      const visible = sanitizeDraftText(drafted.outcome.content)
+      f.owner.composeVisible(run.handle, [drafted.outcome.receipt.visibleArtifact!.artifactId], textHash(visible), DRAFT_VISIBLE_TEXT_VERSION)
+      expect(f.owner.commitDraft({ handle: run.handle, chapterNumber, source: 'write', expectedCompositionHash: textHash(visible) }).content).toBe(prose)
+      expect(f.owner.readContext(run.handle).draftSave.kind).toBe('current')
+      expect(f.owner.read(run.handle).ledger?.physicalRequests).toBe(2)
+    }
+    expect([roots.size, runs.size, outlineArtifacts.size]).toEqual([3, 3, 3])
+    expect(dispatch).toHaveBeenCalledTimes(6)
+  })
   it('retries one settled empty outline under the original root and preserves old invocations across reopen', async () => {
     let calls = 0
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
