@@ -4703,7 +4703,8 @@ test('实际SQLite唯一dispatch须匹配原handle、项目epoch与实际输出�
   } finally { db.close() }
 })
 
-test('campaign保留后续阶段计划分配，unknown与修复超出原22仍继续记账且不能换账', () => {
+// This integration case performs 78 durable appends; Intel macOS qualification took 6.8s.
+test('campaign保留后续阶段计划分配，unknown与修复超出原22仍继续记账且不能换账', { timeout: 20_000 }, () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/campaign-test-'))
   const file = path.join(dir, 'synthetic-ledger.jsonl')
   const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', ...protocolBinding, arm: 'baseline', codeSha: 'a'.repeat(40),
@@ -5312,7 +5313,8 @@ s14bHistoryTest('S14B 新 revision 认证历史边界与登记证据', ({ histor
   }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
 })
 
-s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝历史终态与代码身份漂移', ({ history: { real, synthetic, ledger, file } }) => {
+// Both historical integration cases validate full ledger prefixes and real Git ownership per mutation.
+s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝历史终态与代码身份漂移', { timeout: 20_000 }, ({ history: { real, synthetic, ledger, file } }) => {
   const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
   const planningAttempt = real.boundaries.historicalPlanningSavedOutlineBoundary.reserveAttempts.at(-1).attemptId
   const changedPlanning = raw => raw.replace(`"type":"unknown","attemptId":"${planningAttempt}"`,
@@ -5370,7 +5372,7 @@ s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝历史终态与
   fs.writeFileSync(file, synthetic.raw)
 })
 
-s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝前缀漂移并限制当前协议追加', ({ history: { real, synthetic, ledger, file } }) => {
+s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝前缀漂移并限制当前协议追加', { timeout: 20_000 }, ({ history: { real, synthetic, ledger, file } }) => {
   const partial = real.boundaries.historicalC16D021261fBoundary
   const diagnostic = real.boundaries.historicalSeparatedReviewB89b011aBoundary
   const ac3 = real.boundaries.historicalC16Ac3af420Boundary
