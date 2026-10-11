@@ -16,7 +16,7 @@ export interface WriterOverview {
 }
 export interface WelcomePageV2Props {
   overview: WriterOverview
-  recentProjects: readonly { id: string; name: string; onPreview: () => void; onOpen: () => void }[]
+  recentProjects: readonly { id: string; name: string; onPreview: () => void; onOpen: () => void; onRemove: () => void }[]
   onNewProject: () => void
   onOpenProject: () => void
   onImportLegacyProject?: () => void
@@ -59,7 +59,7 @@ export default function WelcomePageV2({ overview, recentProjects, onNewProject, 
         {onContinue && <button type="button" onClick={onContinue}>{text('继续写作', 'Continue writing')}</button>}
       </>}
     </section>
-    <section aria-label={text('最近作品', 'Recent projects')} className="writer-shelf"><h2>{text('书架', 'Shelf')}</h2>{recentProjects.length === 0 ? <p>{text('书架还空着，新故事值得期待。', 'Your shelf is empty. Start a new story.')}</p> : <div className="v3-bookcase"><ul>{recentProjects.map(project => <li key={project.id}><button type="button" onClick={project.onPreview} aria-label={text(`预览《${project.name}》`, `Preview ${project.name}`)}><BookOpen size={21} /><strong>{project.name}</strong></button><button type="button" onClick={project.onOpen} aria-label={text(`打开《${project.name}》`, `Open ${project.name}`)}>{text('进入作品', 'Enter project')}</button></li>)}</ul></div>}</section>
+    <section aria-label={text('最近作品', 'Recent projects')} className="writer-shelf"><h2>{text('书架', 'Shelf')}</h2>{recentProjects.length === 0 ? <p>{text('书架还空着，新故事值得期待。', 'Your shelf is empty. Start a new story.')}</p> : <div className="v3-bookcase"><ul>{recentProjects.map(project => <li key={project.id}><button type="button" onClick={project.onPreview} aria-label={text(`预览《${project.name}》`, `Preview ${project.name}`)}><BookOpen size={21} /><strong>{project.name}</strong></button><button type="button" onClick={project.onOpen} aria-label={text(`打开《${project.name}》`, `Open ${project.name}`)}>{text('进入作品', 'Enter project')}</button><button type="button" onClick={project.onRemove} aria-label={text(`从最近项目移除《${project.name}》`, `Remove ${project.name} from recent projects`)}>{text('移除记录', 'Remove entry')}</button></li>)}</ul></div>}</section>
     {backup && <section aria-label={text('项目存档', 'Project archives')}>{backup}</section>}{updates}
   </div>
 }

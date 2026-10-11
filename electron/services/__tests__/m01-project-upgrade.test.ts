@@ -37,6 +37,25 @@ afterEach(() => {
   closeProjectDatabase(); vi.restoreAllMocks()
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
+it('新建项目baseline写入失败时回滚已执行的schema', () => {
+  const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-m01')
+  fs.mkdirSync(base, { recursive: true })
+  const root = fs.mkdtempSync(path.join(base, '项目-')); roots.push(root)
+  const data = path.join(root, '.ai-novel'); fs.mkdirSync(data)
+  fs.writeFileSync(path.join(data, 'project.json'), JSON.stringify(createCanonicalProjectManifest({ projectId: randomUUID(), createdAt: new Date().toISOString() })))
+  const file = path.join(data, 'project.db'), execute = Database.prototype.exec
+  vi.spyOn(Database.prototype, 'exec').mockImplementation(function (this: import('better-sqlite3').Database, sql) {
+    return execute.call(this, this.name === file && sql.includes('CREATE TABLE IF NOT EXISTS character_roster_meta')
+      ? 'INSERT INTO missing_baseline_table VALUES (1)' : sql)
+  })
+  expect(() => createProjectDatabase(root)).toThrow('no such table: missing_baseline_table')
+  vi.restoreAllMocks()
+  const database = new Database(file, { readonly: true, fileMustExist: true })
+  try {
+    expect(database.prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all()).toEqual([])
+    expect(database.pragma('user_version', { simple: true })).toBe(0)
+  } finally { database.close() }
+})
 it('真实version1文件经唯一M01升级，关闭重开不重跑且正文不变', () => {
   const f = fixture(); const before = probeProjectSqlite({ databasePath: f.file })
   expect(before.schemaVersion).toBe(1)

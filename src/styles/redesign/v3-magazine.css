@@ -254,7 +254,7 @@
 
 .v3-magazine-shell .writer-welcome-actions button,
 .v3-magazine-shell .writer-welcome > button,
-.v3-magazine-shell .writer-shelf li > button:last-child {
+.v3-magazine-shell .writer-shelf li > button:not(:first-child) {
   border: 1px solid var(--v3-rule);
   border-radius: 0.25rem;
   background: var(--v3-panel);
@@ -518,7 +518,7 @@
   box-shadow: 2px 3px 2px #16151a33;
 }
 .v3-magazine-shell .writer-shelf li:nth-child(3n + 2) > button:first-child { border-left-color: var(--v3-sec-1); }
-.v3-magazine-shell .writer-shelf li > button:last-child { writing-mode: vertical-rl; height: 100px; padding: 8px 5px; }
+.v3-magazine-shell .writer-shelf li > button:not(:first-child) { writing-mode: vertical-rl; height: 100px; padding: 8px 5px; }
 
 /* Settings is a sibling portal in AppSkinRoot, not a child of ShellV2. */
 .v3-magazine-shell ~ .skin-solid-surface {

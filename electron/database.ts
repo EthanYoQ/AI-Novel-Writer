@@ -26,7 +26,7 @@ export function createProjectDatabase(projectPath: string, importSourceSecret?: 
   const database = new Database(file, { fileMustExist: true })
   try {
     database.pragma('foreign_keys = ON')
-    initializeLegacyBaselineSchema(database, importSourceSecret)
+    database.transaction(() => initializeLegacyBaselineSchema(database, importSourceSecret))()
     migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
   } finally { database.close() }
 }

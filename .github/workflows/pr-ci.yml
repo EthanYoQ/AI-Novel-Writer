@@ -16,25 +16,37 @@ on:
       - '.release/**'
       - '.github/**'
   workflow_dispatch:
+    inputs:
+      machines:
+        description: 'Windows test machines (1 for a same-commit timing baseline)'
+        type: choice
+        required: true
+        default: '4'
+        options: ['1', '4']
 
 # Test untrusted PR code without repository write access or model credentials.
 permissions:
   contents: read
 
 concurrency:
-  group: pr-ci-${{ github.event.pull_request.number || github.ref }}
+  group: pr-ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  desktop:
-    name: Desktop PR CI (Windows)
+  desktop-tests:
+    name: Windows tests (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: windows-2022
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.machines == '1' && '[1]' || '[1,2,3,4]') }}
     defaults:
       run:
         shell: pwsh
     env:
       CI: 'true'
+      TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
 
     steps:
       # Default PR checkout tests the proposed merge, not an unrelated branch.
@@ -55,18 +67,26 @@ jobs:
           node-version: 22.23.1
 
       - name: Record tested commit
-        run: git rev-parse HEAD
+        run: |
+          $testedCommit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "TESTED_COMMIT=$testedCommit" >> $env:GITHUB_ENV
+          "UNIT_REPORT=$env:RUNNER_TEMP/desktop-unit-results.json" >> $env:GITHUB_ENV
+          Write-Output "CI_TESTED_COMMIT=$testedCommit"
 
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Type-check
+        if: ${{ matrix.shard == 1 }}
         run: pnpm run typecheck
 
       - name: Lint
+        if: ${{ matrix.shard == 1 }}
         run: pnpm run lint
 
       - name: Check translation coverage
+        if: ${{ matrix.shard == 1 }}
         run: pnpm run check:i18n
 
       - name: Prepare and verify Node native modules
@@ -77,11 +97,11 @@ jobs:
           node -e "const fs = require('node:fs'); const os = require('node:os'); const original = os.tmpdir(); const physical = fs.realpathSync.native(original); fs.appendFileSync(process.env.GITHUB_ENV, 'TEMP=' + physical + '\nTMP=' + physical + '\n'); console.log('tempAlias=' + (physical.toLocaleLowerCase('en-US') !== original.toLocaleLowerCase('en-US')))"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Run complete desktop unit test suite
+      - name: Run desktop unit test shard
         id: desktop-unit-tests
         run: |
           "started=$([DateTime]::UtcNow.ToString('o'))" >> $env:GITHUB_OUTPUT
-          pnpm test --reporter=default --reporter=./scripts/vitest-worker-diagnostics.cjs --fileParallelism=false
+          pnpm test --reporter=default --reporter=./scripts/vitest-worker-diagnostics.cjs --fileParallelism=false --shard=$env:TEST_SHARD --reporter=json --outputFile.json=$env:UNIT_REPORT
           exit $LASTEXITCODE
 
       - name: Read Windows application failure metadata
@@ -90,15 +110,56 @@ jobs:
           TEST_STARTED_UTC: ${{ steps.desktop-unit-tests.outputs.started }}
         run: ./scripts/windows-test-failure-metadata.ps1 -SinceUtc $env:TEST_STARTED_UTC
 
+      - name: Record unit test coverage and counts
+        if: ${{ always() && steps.desktop-unit-tests.outputs.started != '' }}
+        run: |
+          @'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const report = JSON.parse(fs.readFileSync(process.env.UNIT_REPORT, 'utf8'));
+          for (const suite of report.testResults) {
+            const counts = {};
+            for (const test of suite.assertionResults) counts[test.status] = (counts[test.status] || 0) + 1;
+            console.log('CI_UNIT_FILE=' + JSON.stringify({
+              file: path.relative(process.cwd(), suite.name).split(path.sep).join('/'),
+              status: suite.status, tests: suite.assertionResults.length, counts,
+            }));
+          }
+          const result = {
+            testedCommit: process.env.TESTED_COMMIT, shard: process.env.TEST_SHARD,
+            files: report.testResults.length, tests: report.numTotalTests,
+            passed: report.numPassedTests, failed: report.numFailedTests,
+            pending: report.numPendingTests, todo: report.numTodoTests, success: report.success,
+          };
+          console.log('CI_UNIT_RESULT=' + JSON.stringify(result));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            `Commit ${result.testedCommit}, shard ${result.shard}: ${result.files} files, ${result.tests} tests, ${result.passed} passed, ${result.failed} failed, ${result.pending} pending, ${result.todo} todo.\n`);
+          '@ | node
+          exit $LASTEXITCODE
+
       - name: Install Playwright Chromium
+        if: ${{ matrix.shard == 1 }}
         run: pnpm exec playwright install chromium
 
       - name: Run renderer browser tests
+        if: ${{ matrix.shard == 1 }}
         run: pnpm run test:browser
 
       # Compile only: do not rebuild for Electron, package installers, or publish.
       - name: Compile renderer and Electron sources
+        if: ${{ matrix.shard == 1 }}
         run: pnpm run build
 
       # Intentionally no artifact uploads or dependency cache: keep this daily
       # gate separate from retained, release-qualified Windows/macOS packages.
+
+  desktop:
+    name: Desktop PR CI (Windows)
+    if: ${{ always() }}
+    needs: desktop-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every Windows shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.desktop-tests.result }}
+        run: test "$SHARD_RESULT" = success

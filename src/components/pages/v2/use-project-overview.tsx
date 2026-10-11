@@ -7,7 +7,7 @@ import { useLayoutStore } from '../../../stores/layout-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { captureProjectSession, isProjectSessionCurrent } from '../../project-session-gate'
-import { confirmDeleteCurrentProject } from '../../project-delete-action'
+import { confirmDeleteCurrentProject, confirmRemoveRecentProject } from '../../project-delete-action'
 import { UpdateSection } from '../../updates/UpdateSection'
 import WelcomePageV2, { type WriterOverview } from './WelcomePageV2'
 
@@ -95,6 +95,7 @@ function useProjectOverview() {
       name: project.name,
       onPreview: () => preview(project),
       onOpen: () => { void useProjectStore.getState().openProject(project.path) },
+      onRemove: () => { void confirmRemoveRecentProject(project) },
     })),
     hasCurrentProject: currentProject !== null && !activeSelection,
     deletableCurrentProject: currentProject && !activeSelection ? { name: currentProject.name, path: currentProject.path } : null,
