@@ -1323,6 +1323,52 @@ describe('durable directory commit and remaining stage', () => {
     expect(f.dispatch).toHaveBeenCalledTimes(MAIN_GENERATION_POLICY.budget.maxPhysicalRequests)
     expect(f.fixture.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
   })
+  it.each(['author-edit', 'other-progress', 'own-progress', 'own-hash', 'own-handle'] as const)(
+    'preserves directory proposal evidence while refusing invalid %s recovery', async fault => {
+      const f = directoryFixture('chapter-blueprint-directory')
+      await f.owner.execute({ handle: f.run.handle, invocationNonce: 'proposal', task: directoryTask })
+      const request = f.request('proposal-prefix', 1, 1)
+      request.blueprints[0] = { ...request.blueprints[0], characters: ['林岚'],
+        newCharacterCandidates: [{ name: '林岚', role: 'supporting' }],
+        relationshipHints: [{ from: '林岚', to: '周砚', relation: '同行' }] }
+      f.commit(f.owner, f.run.handle, request, { startChapter: 1, endChapter: 3 })
+      const operation = BlueprintRepository.getCommittedRangeOperation(request.operationId)!
+      const batch = f.owner.characterProposals.stage({ kind: 'directory', operationId: operation.characterSyncOperation.operationId })
+      const proposalRows = () => f.db.prepare('SELECT raw_value,source_hash FROM character_identity_proposals').all()
+      const original = proposalRows(), evidence = f.owner.characterProposals.evidence(batch.proposalBatchId), repository = new GenerationRunRepository(() => f.db)
+      const row = f.db.prepare("SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE json_extract(usage_receipt_json,'$.directoryProgress.operationId')=?")
+        .get(request.operationId) as { attempt_id: string; usage_receipt_json: string }
+      if (fault === 'author-edit') {
+        f.db.prepare('UPDATE generation_runs SET binding_json=json_set(binding_json,?,json(?)) WHERE run_id=?')
+          .run('$."$runEffects".blueprintAuthorEdit', JSON.stringify({ kind: 'blueprint-author-edit' }), f.run.handle.runId)
+      } else if (fault === 'other-progress') {
+        const attempt = repository.reserve(f.run.handle.runId, 'other-progress', textHash('other-progress'), 1000, 128)
+        repository.markDispatched(attempt.attempt.attemptId)
+        repository.snapshot(attempt.attempt.attemptId, 0, '另一条合成响应。')
+        repository.settle(attempt.attempt.attemptId, { trusted: true, actualTokens: 42,
+          policy: { estimatorVersion: 'test', safetyMarginTokens: 0, reasoning: 'included-in-completion', canBoundTotalLiability: true } }, 'stop')
+        const progress = { ...JSON.parse(row.usage_receipt_json).directoryProgress, operationId: 'missing-other-operation' }
+        f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.directoryProgress',json(?)) WHERE attempt_id=?")
+          .run(JSON.stringify(progress), attempt.attempt.attemptId)
+      } else {
+        const field = fault === 'own-progress' ? 'requestedRange.endChapter' : fault === 'own-hash' ? 'payloadHash' : 'sourceHandle.projectId'
+        const value = fault === 'own-progress' ? 3.5 : fault === 'own-hash' ? '0'.repeat(64) : 'other-project'
+        f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,?,?) WHERE attempt_id=?')
+          .run(`$.directoryProgress.${field}`, value, row.attempt_id)
+      }
+      const code = fault === 'author-edit' ? 'GENERATION_BLUEPRINT_AUTHOR_RECEIPT_INVALID' : 'GENERATION_DIRECTORY_PROGRESS_INVALID'
+      expect(() => repository.readDirectoryProgress(request.operationId)).toThrow(code)
+      if (fault === 'author-edit' || fault === 'other-progress') {
+        expect(f.owner.characterProposals.read(batch.proposalBatchId)).toEqual(batch)
+        expect(f.owner.characterProposals.evidence(batch.proposalBatchId)).toEqual(evidence)
+      } else expect(() => f.owner.characterProposals.read(batch.proposalBatchId)).toThrow(code)
+      expect(() => f.owner.approveCharacterProposal({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision,
+        operationId: `approve-${fault}`, selections: batch.items.map(item => ({ selectionKey: item.selectionKey, action: 'create' as const })) })).toThrow(code)
+      expect(proposalRows()).toEqual(original)
+      expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+      expect(f.dispatch).toHaveBeenCalledTimes(1)
+    },
+  )
   it('rejects invalid persisted progress instead of inferring a replacement range', async () => {
     const f = directoryFixture()
     await f.owner.execute({ handle: f.run.handle, invocationNonce: 'first', task: directoryTask })

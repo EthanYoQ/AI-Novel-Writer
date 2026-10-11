@@ -369,7 +369,10 @@ describe('ReviewReport human-confirmed revision flow', () => {
     await expect.element(skip).toHaveAttribute('title', '本项不纳入修稿，可在编辑清单时重新纳入。')
     await act(async () => skip.click())
     expect(container?.textContent).toContain('本项不纳入修稿，可在编辑清单时重新纳入。')
-    await act(async () => page.getByRole('button', { name: '确认审稿清单', exact: true }).click())
+    await act(async () => {
+      await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+    })
     const waived = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)
     expect(waived?.items[0]).toMatchObject({ findingId: 'finding-restore', decision: 'waive' })
     await act(async () => page.getByRole('button', { name: '按确认意见修稿', exact: true }).click())
@@ -380,7 +383,10 @@ describe('ReviewReport human-confirmed revision flow', () => {
     await act(async () => page.getByRole('button', { name: '编辑清单', exact: true }).click())
     await act(async () => page.getByRole('button', { name: restore, exact: true }).click())
     invoke.mockClear()
-    await act(async () => page.getByRole('button', { name: '重新确认审稿清单', exact: true }).click())
+    await act(async () => {
+      await page.getByRole('button', { name: '重新确认审稿清单', exact: true }).click()
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:review-create')).toBe(true))
+    })
     const applied = parseHumanConfirmedReviewSnapshot(confirmationCreateParams().content)
     expect(applied?.items[0]).toMatchObject({ findingId: 'finding-restore', decision: 'apply' })
     expect(waived?.items[0].decision).toBe('waive')
