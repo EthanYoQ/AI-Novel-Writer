@@ -2585,8 +2585,13 @@ ${headingPrefix}第3章：潮门
   })
 
   describe('automatic short outline', () => {
-    it.each(['stop', 'length', 'empty', 'cancelled', 'not-durable', 'outline-as-prose', 'draft-changed'] as const)(
-      'resumes before the one outline retry and checks its durable context before drafting: %s', async finish => {
+    it.each([
+      ['resume', 'stop'], ['resume', 'length'], ['resume', 'empty'], ['resume', 'cancelled'],
+      ['resume', 'not-durable'], ['resume', 'outline-as-prose'], ['resume', 'draft-changed'],
+      ['length', 'stop'], ['empty', 'stop'], ['length', 'length'], ['length', 'empty'],
+      ['length', 'cancelled'], ['length', 'unavailable'],
+    ] as const)(
+      'uses one authorized outline retry after %s and checks durable context before drafting: %s', async (start, finish) => {
         const hash = (text: string) => createHash('sha256').update(text).digest('hex')
         const planned = fakeOutcomes(outcome('潮'.repeat(900), 'stop'))
         const initial = setup({ runtime: planned, wordsTarget: 900 })
@@ -2595,16 +2600,18 @@ ${headingPrefix}第3章：潮门
         const selection = planned.createRuntime.mock.calls[0]![1]!.selection
         const oldHandle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: 'old-epoch', rootActionId: 'outline-root', runId: 'outline-run' }
         const handle = { ...oldHandle, epoch: 'lease-generation-runtime' }
-        const f = setup({ runtime: fakeOutcomes(), mainDefault: true, resumeHandle: oldHandle, wordsTarget: 900 })
+        const f = setup({ runtime: fakeOutcomes(), mainDefault: true,
+          ...(start === 'resume' ? { resumeHandle: oldHandle } : {}), wordsTarget: 900 })
         f.context.generationModelId = '合成模型'
         const outline = '目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。'
         const expected = '潮'.repeat(900)
         const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
           budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
-        let resumed = false, retried = false
+        let resumed = start !== 'resume', retried = false
         let cancelRetry: (() => void) | undefined
         const original = f.invoke.getMockImplementation()!
         f.invoke.mockImplementation(async (channel, ...args) => {
+          if (channel === 'generation:begin') return view
           if (channel === 'generation:read') return resumed ? view : { ...view, handle: oldHandle, status: 'paused', nonReplayable: true }
           if (channel === 'generation:resume') { resumed = true; return view }
           if (channel === 'generation:read-context') return { draftSave: { kind: retried && finish === 'draft-changed' ? 'changed' : 'absent' }, handle: resumed ? handle : oldHandle, operation: 'chapter-draft', chapterNumber: 1,
@@ -2613,7 +2620,7 @@ ${headingPrefix}第3章：潮门
             composition: null, lastCompositionFinishReason: null, attemptedPurposes: ['chapter-draft-short-outline'],
             draftShortOutline: { artifactIds: retried && finish !== 'not-durable' ? ['old-outline', 'retry-outline'] : ['old-outline'],
               completedOutput: retried ? outline : null, promptHash: selection.materialDecision!.shortOutlinePromptHash,
-              retry: retried ? { kind: 'unavailable' } : { kind: 'available', failedAttemptId: 'failed' } } }
+              retry: retried || finish === 'unavailable' ? { kind: 'unavailable' } : { kind: 'available', failedAttemptId: 'failed' } } }
           if (channel === 'generation:retry-draft-short-outline') {
             expect(resumed).toBe(true)
             expect(args[0]).toEqual({ handle, failedAttemptId: 'failed' })
@@ -2628,8 +2635,17 @@ ${headingPrefix}第3章：潮门
           }
           if (channel === 'generation:cancel') { cancelRetry?.(); return { ...view, status: 'cancelled' } }
           if (channel === 'generation:execute') {
+            const task = (args[0] as { task: GenerationTask }).task
+            if (task.purpose === 'chapter-draft-short-outline') {
+              expect(start).not.toBe('resume')
+              const result = outcome(start === 'empty' ? '' : '未完成的计划', start === 'empty' ? 'stop' : 'length')
+              result.receipt.visibleArtifact = { artifactId: 'old-outline', attemptId: 'failed', revision: 1, textHash: hash(result.content) }
+              return { outcome: result, run: view }
+            }
             expect(retried).toBe(true)
-            expect((args[0] as { task: GenerationTask }).task.purpose).toBe('chapter-draft')
+            expect(task.purpose).toBe('chapter-draft')
+            expect(task.messages.at(-1)!.content).toContain(outline)
+            expect(task.messages.at(-1)!.content).not.toContain('未完成的计划')
             const result = outcome(expected, 'stop')
             result.receipt.visibleArtifact = { artifactId: finish === 'outline-as-prose' ? 'retry-outline' : 'prose', attemptId: 'prose-attempt', revision: 1, textHash: hash(expected) }
             return { outcome: result, run: view }
@@ -2646,13 +2662,14 @@ ${headingPrefix}第3章：潮门
           await expect(execution).resolves.toBe(expected)
           const calls = f.invoke.mock.calls.map(([channel]) => channel)
           const retryIndex = calls.indexOf('generation:retry-draft-short-outline')
-          expect(calls.slice(retryIndex + 1, calls.indexOf('generation:execute'))).toContain('generation:read-context')
+          expect(calls.slice(retryIndex + 1, calls.indexOf('generation:execute', retryIndex + 1))).toContain('generation:read-context')
           expect(calls.indexOf('generation:compose-visible')).toBeLessThan(calls.indexOf('generation:commit-draft'))
         } else {
           await expect(execution).rejects.toThrow(finish === 'cancelled' ? '工作流已取消' : finish === 'draft-changed' ? 'GENERATION_DRAFT_RECEIPT_INVALID'
             : finish === 'outline-as-prose' ? 'GENERATION_COMPOSITION_SOURCE_INVALID' : 'GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
           expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
-          if (finish !== 'outline-as-prose') expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:execute')).toBe(false)
+          if (finish !== 'outline-as-prose') expect(f.invoke.mock.calls.some(([channel, request]) => channel === 'generation:execute'
+            && (request as { task: GenerationTask }).task.purpose === 'chapter-draft')).toBe(false)
         }
         if (finish === 'draft-changed') {
           expect(f.callbacks.replaceText).not.toHaveBeenCalled()
@@ -2660,7 +2677,9 @@ ${headingPrefix}第3章：潮门
           expect(f.context.data.draftContent).toBeUndefined()
           expect(openFile).not.toHaveBeenCalled()
         }
-        expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:retry-draft-short-outline')).toHaveLength(1)
+        expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:begin')).toHaveLength(start === 'resume' ? 0 : 1)
+        expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:retry-draft-short-outline')).toHaveLength(finish === 'unavailable' ? 0 : 1)
+        expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:recovery-candidate-record')).toBe(false)
         if (finish === 'cancelled') expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:cancel')).toHaveLength(1)
       },
     )
