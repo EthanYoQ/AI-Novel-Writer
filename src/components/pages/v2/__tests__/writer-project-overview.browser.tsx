@@ -148,6 +148,31 @@ it('exposes deletion of only the verified current project on the V3 home shelf',
   expect(container.textContent).not.toContain('继续写作')
 })
 
+it('removes an unavailable recent project from the V3 shelf without opening or deleting it', async () => {
+  const staleProject = { name: '旧作品', path: 'C:\\novels\\removed-legacy', updatedAt: '' }
+  const otherProject = { name: '保留作品', path: 'C:\\novels\\other', updatedAt: '' }
+  const openProject = vi.fn(async () => false)
+  useProjectStore.setState({ recentProjects: [staleProject, otherProject], openProject })
+  await render(<WriterWelcomePage onNewProject={vi.fn()} />)
+
+  const removeButton = container.querySelector<HTMLButtonElement>('[aria-label="从最近项目移除《旧作品》"]')
+  expect(removeButton).not.toBeNull()
+  await act(async () => removeButton!.click())
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain('不会删除项目文件'))
+  expect(invoke).not.toHaveBeenCalledWith('project:recent-remove', staleProject.path)
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[role="dialog"] button:last-child')!.click()
+    await new Promise(resolve => setTimeout(resolve, 250))
+  })
+
+  expect(invoke).toHaveBeenCalledWith('project:recent-remove', staleProject.path)
+  expect(useProjectStore.getState().recentProjects).toEqual([otherProject])
+  expect(container.querySelector('[aria-label="预览《旧作品》"]')).toBeNull()
+  expect(container.querySelector('[aria-label="预览《保留作品》"]')).not.toBeNull()
+  expect(openProject).not.toHaveBeenCalled()
+  expect(invoke.mock.calls.some(([channel]) => channel === 'project:delete')).toBe(false)
+})
+
 it('previews by capability only, opens on the second cover click, and direct entry uses the store gate', async () => {
   const openProject = vi.fn(async () => true)
   useProjectStore.setState({
