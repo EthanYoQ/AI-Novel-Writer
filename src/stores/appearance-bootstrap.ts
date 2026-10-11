@@ -26,10 +26,6 @@ export interface AppearanceBootstrapState {
   failureCode: string | null
   bootstrap(dependencies: AppearanceBootstrapDependencies): Promise<boolean>
   update(patch: AppearancePatch): boolean
-  /**
-   * User-initiated escape hatch for a blocked startup. Writes a valid default appearance profile so the
-   * next bootstrap succeeds even when the canonical key is absent and the legacy values are unusable.
-   */
   resetAppearance(): boolean
 }
 
@@ -104,7 +100,16 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
         try {
           const target = storage ?? (typeof window === 'undefined' ? null : window.localStorage)
           if (!target) return false
-          target.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify({ ...INITIAL_APPEARANCE }))
+          let revision = get().profile?.revision ?? 0
+          const existing = target.getItem(APPEARANCE_STORAGE_KEY)
+          if (existing !== null) {
+            try { revision = Math.max(revision, parseAppearanceProfile(existing).revision) }
+            catch (error) { if (!(error instanceof AppearanceProfileError)) throw error }
+          }
+          const next = parseAppearanceProfile(JSON.stringify({ ...INITIAL_APPEARANCE, revision: revision + 1, origin: 'author' }))
+          const serialized = JSON.stringify(next)
+          target.setItem(APPEARANCE_STORAGE_KEY, serialized)
+          if (target.getItem(APPEARANCE_STORAGE_KEY) !== serialized) throw new AppearanceProfileError('APPEARANCE_READBACK_FAILED')
           acknowledgedRaw = null
           set({ phase: 'pending', profile: null, snapshot: null, resolvedShell: 'classic', notice: null, failureCode: null })
           return true
