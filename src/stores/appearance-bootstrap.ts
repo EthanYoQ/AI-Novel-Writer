@@ -26,6 +26,11 @@ export interface AppearanceBootstrapState {
   failureCode: string | null
   bootstrap(dependencies: AppearanceBootstrapDependencies): Promise<boolean>
   update(patch: AppearancePatch): boolean
+  /**
+   * User-initiated escape hatch for a blocked startup. Writes a valid default appearance profile so the
+   * next bootstrap succeeds even when the canonical key is absent and the legacy values are unusable.
+   */
+  resetAppearance(): boolean
 }
 
 /** One writer per renderer. Importing the module performs no storage read or write. */
@@ -94,6 +99,16 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
           set({ profile: Object.freeze(next), resolvedShell: resolveShell(next.shellPreference, releaseDefault), notice: null, failureCode: null })
           return true
         } catch (error) { return block(error) }
+      },
+      resetAppearance() {
+        try {
+          const target = storage ?? (typeof window === 'undefined' ? null : window.localStorage)
+          if (!target) return false
+          target.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify({ ...INITIAL_APPEARANCE }))
+          acknowledgedRaw = null
+          set({ phase: 'pending', profile: null, snapshot: null, resolvedShell: 'classic', notice: null, failureCode: null })
+          return true
+        } catch { return false }
       },
     }
   })

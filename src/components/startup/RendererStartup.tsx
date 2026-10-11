@@ -87,6 +87,10 @@ export default function RendererStartup({
       {blocked && <>
         <p className="max-w-xl text-center text-sm">{text('若全局配置存在冲突，请处理后重新启动应用。此页面不会用默认值覆盖现有配置。', 'Resolve any global settings conflicts, then restart the app. This page will not replace your settings with defaults.')}</p>
         <button type="button" className="rounded border border-stone-500 px-4 py-2" onClick={() => { setLoadFailed(false); setAttempt(value => value + 1) }}>{text('重新检查', 'Check again')}</button>
+        <button type="button" className="rounded border border-stone-500 px-4 py-2" onClick={() => {
+          useAppearanceStore.getState().resetAppearance()
+          setLoadFailed(false); setAttempt(value => value + 1)
+        }}>{text('重置外观偏好为默认（不影响其它配置）', 'Reset appearance preferences to defaults (other settings are kept)')}</button>
         {mainReady && <button type="button" className="rounded border border-stone-500 px-4 py-2" onClick={() => { void ipc.invoke('window:close').catch(() => undefined) }}>{text('关闭应用', 'Close app')}</button>}
       </>}
     </main>
