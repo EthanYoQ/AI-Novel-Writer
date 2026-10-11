@@ -7,36 +7,14 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { ipc } from '../../../services/ipc-client'
 import { Button } from '../../ui/Button'
-import { confirm } from '../../ui/Confirm'
-import { toast } from '../../ui/Toast'
 import { useLocaleStore } from '../../../stores/locale-store'
-import { confirmDeleteCurrentProject } from '../../project-delete-action'
+import { confirmDeleteCurrentProject, confirmRemoveRecentProject } from '../../project-delete-action'
 
 export default function HomeSidebarPanel() {
   const currentProject = useProjectStore(s => s.currentProject)
   const recentProjects = useProjectStore(s => s.recentProjects)
   const openProject = useProjectStore(s => s.openProject)
-  const removeRecentProject = useProjectStore(s => s.removeRecentProject)
   const text = useLocaleStore(s => s.text)
-
-  const handleRemoveRecentProject = async (project: { name: string; path: string }) => {
-    const ok = await confirm(
-      text(
-        `确认从最近项目中移除「${project.name}」？\n这只会移除列表记录，不会删除项目文件。`,
-        `Remove “${project.name}” from recent projects?\nThis only removes the list entry and does not delete project files.`,
-      ),
-      {
-        title: text('从最近项目移除', 'Remove from recent projects'),
-        confirmText: text('移除记录', 'Remove entry'),
-      },
-    )
-    if (!ok) return
-
-    const success = await removeRecentProject(project.path)
-    if (success) {
-      toast.success(text(`已从最近项目移除「${project.name}」`, `Removed “${project.name}” from recent projects`))
-    }
-  }
 
   return (
     <div className="px-3 py-2 text-sm">
@@ -138,7 +116,7 @@ export default function HomeSidebarPanel() {
                     style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-error)' }}
                     onClick={(e) => {
                       e.stopPropagation()
-                      handleRemoveRecentProject(p)
+                      void confirmRemoveRecentProject(p)
                     }}
                   >
                     <Trash2 size={13} />

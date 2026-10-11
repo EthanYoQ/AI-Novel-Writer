@@ -159,7 +159,28 @@ it('removes an unavailable recent project from the V3 shelf without opening or d
   expect(removeButton).not.toBeNull()
   await act(async () => removeButton!.click())
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain('不会删除项目文件'))
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[role="dialog"] button')!.click()
+    await new Promise(resolve => setTimeout(resolve, 250))
+  })
   expect(invoke).not.toHaveBeenCalledWith('project:recent-remove', staleProject.path)
+  expect(useProjectStore.getState().recentProjects).toEqual([staleProject, otherProject])
+
+  invoke.mockImplementationOnce(async () => ({ success: false, error: 'fixture removal failure' }))
+  await act(async () => removeButton!.click())
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[role="dialog"] button:last-child')!.click()
+    await new Promise(resolve => setTimeout(resolve, 250))
+  })
+  await vi.waitFor(() => expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('fixture removal failure'))
+  expect(useProjectStore.getState().recentProjects).toEqual([staleProject, otherProject])
+  expect(container.querySelector('[aria-label="预览《旧作品》"]')).not.toBeNull()
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[role="alertdialog"] button')!.click()
+    await new Promise(resolve => setTimeout(resolve, 250))
+  })
+
+  await act(async () => removeButton!.click())
   await act(async () => {
     document.querySelector<HTMLButtonElement>('[role="dialog"] button:last-child')!.click()
     await new Promise(resolve => setTimeout(resolve, 250))
