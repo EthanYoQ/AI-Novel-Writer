@@ -141,6 +141,70 @@ it('重置写入失败保留原字节与加载失败页面', async () => {
   expect(load).toHaveBeenCalledOnce()
 })
 
+it.each([
+  ['corrupt', 'none'], ['removed', 'none'], ['removed', 'write'], ['corrupt', 'readback'],
+] as const)('ACK8 后存储 %s 且重置故障为 %s，再次重置保留已接受版本并恢复工作台', async (stored, fault) => {
+  localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify({ ...INITIAL_APPEARANCE, revision: 7 }))
+  const sender = { id: 1, mainFrame: { url: 'file:///startup/index.html' }, isDestroyed: () => false }
+  const event = { sender, senderFrame: sender.mainFrame }
+  const handlers = new Map<string, (event: StartupEvent, input?: unknown) => unknown>()
+  registerStartupController({
+    ipc: { handle: (channel, handler) => { handlers.set(channel, handler) } },
+    getTrustedSender: () => sender, rendererUrl: sender.mainFrame.url,
+    getSnapshot: () => ({ globalGeneration: '启动世代', skinRevision: 0, backgroundSkin: 'classic' }),
+    getBlockedCode: () => undefined,
+  })
+  const acknowledgements: { revision: number; accepted: boolean }[] = []
+  let failReset = false
+  const dep = dependencies({
+    storage: () => ({
+      getItem: key => localStorage.getItem(key),
+      setItem: (key, value) => {
+        if (failReset && fault === 'write') throw new DOMException('fixture quota', 'QuotaExceededError')
+        localStorage.setItem(key, value)
+        if (failReset && fault === 'readback') localStorage.removeItem(key)
+      },
+    }),
+    acknowledgeReadback: async ack => {
+      const accepted = handlers.get('startup:appearance-ack')!(event, ack) === true
+      acknowledgements.push({ revision: ack.profileRevision, accepted })
+      expect(useAppearanceStore.getState().update({ colorTheme: 'dark' })).toBe(false)
+      if (ack.profileRevision === 8 && accepted) {
+        if (stored === 'corrupt') localStorage.setItem(APPEARANCE_STORAGE_KEY, '{corrupt')
+        else localStorage.removeItem(APPEARANCE_STORAGE_KEY)
+      }
+      return accepted
+    },
+  })
+  const load = vi.fn(async () => ({ default: () => <p>再次重置恢复的工作台</p> }))
+    .mockRejectedValueOnce(new Error('fixture workspace module unavailable'))
+  await act(async () => root.render(<RendererStartup dependencies={dep} loadWorkspace={load} />))
+  await vi.waitFor(() => expect(host.textContent).toContain('工作台暂时无法加载'))
+  await act(async () => page.getByRole('button', { name: '重置外观偏好为默认（不影响其它配置）', exact: true }).click())
+  await vi.waitFor(() => expect(useAppearanceStore.getState()).toMatchObject({
+    phase: 'blocked', profile: null, failureCode: 'APPEARANCE_CHANGED_DURING_ACK',
+  }))
+  expect(acknowledgements).toEqual([{ revision: 7, accepted: true }, { revision: 8, accepted: true }])
+  expect(load).toHaveBeenCalledOnce()
+  if (fault !== 'none') {
+    failReset = true
+    await act(async () => page.getByRole('button', { name: '重置外观偏好为默认（不影响其它配置）', exact: true }).click())
+    expect(useAppearanceStore.getState()).toMatchObject({ phase: 'blocked', profile: null })
+    expect(acknowledgements).toHaveLength(2)
+    expect(load).toHaveBeenCalledOnce()
+    expect(host.querySelector('[role="alert"]')).not.toBeNull()
+    failReset = false
+  }
+  await act(async () => page.getByRole('button', { name: '重置外观偏好为默认（不影响其它配置）', exact: true }).click())
+  await vi.waitFor(() => expect(useAppearanceStore.getState().phase).not.toBe('pending'))
+  expect(acknowledgements).toEqual([
+    { revision: 7, accepted: true }, { revision: 8, accepted: true }, { revision: 9, accepted: true },
+  ])
+  await vi.waitFor(() => expect(host.textContent).toContain('再次重置恢复的工作台'))
+  expect(useAppearanceStore.getState().profile).toMatchObject({ revision: 9, origin: 'author' })
+  expect(load).toHaveBeenCalledTimes(2)
+})
+
 it('启动后偏好写入失败保留已挂载编辑器及其未保存正文', async () => {
   let unmounted = 0
   function Workspace() {

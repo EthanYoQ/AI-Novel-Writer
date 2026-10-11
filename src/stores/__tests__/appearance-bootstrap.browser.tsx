@@ -183,6 +183,9 @@ describe('appearance bootstrap in real browser storage', () => {
       return true
     } }))).toBe(false)
     expect(store.getState().failureCode).toBe('APPEARANCE_CHANGED_DURING_ACK')
+    const changed = localStorage.getItem(KEY)
+    expect(store.getState().update({ colorTheme: 'light' })).toBe(false)
+    expect(localStorage.getItem(KEY)).toBe(changed)
     expect(JSON.parse(localStorage.getItem(KEY)!).colorTheme).toBe('dark')
   })
 
