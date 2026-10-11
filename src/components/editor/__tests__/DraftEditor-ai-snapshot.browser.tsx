@@ -11,6 +11,7 @@ import { useEditorStore } from '../../../stores/editor-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore, type WorkflowDefinition } from '../../../stores/workflow-store'
 import DraftEditor from '../DraftEditor'
+import { toast } from '../../ui/Toast'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -31,6 +32,7 @@ let invoke: ReturnType<typeof vi.fn>
 let startWorkflow: ReturnType<typeof vi.fn>
 let refineExecute: ReturnType<typeof vi.spyOn>
 let reviewExecute: ReturnType<typeof vi.spyOn>
+let warningToast: ReturnType<typeof vi.spyOn>
 const originalEditorState = useEditorStore.getState()
 const originalProjectState = useProjectStore.getState()
 const originalWorkflowState = useWorkflowStore.getState()
@@ -38,6 +40,7 @@ const originalWorkflowState = useWorkflowStore.getState()
 beforeEach(async () => {
   refineExecute = vi.spyOn(RefineDraftCommand.prototype, 'execute').mockResolvedValue('')
   reviewExecute = vi.spyOn(ReviewChapterCommand.prototype, 'execute').mockResolvedValue('')
+  warningToast = vi.spyOn(toast, 'warning').mockImplementation(() => {})
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -154,6 +157,7 @@ afterEach(async () => {
   useWorkflowStore.setState(originalWorkflowState)
   refineExecute.mockRestore()
   reviewExecute.mockRestore()
+  warningToast.mockRestore()
   setActiveProjectSessionContext(null)
   Reflect.deleteProperty(window, 'aiNovelAPI')
 })
@@ -227,10 +231,11 @@ describe('DraftEditor AI source snapshot', () => {
         dirty: true,
       })
 
-      releaseDraftSave()
       await act(async () => {
-        await draftSaveGate
-        await new Promise(resolve => setTimeout(resolve, 20))
+        releaseDraftSave()
+        await vi.waitFor(() => expect(warningToast).toHaveBeenCalledWith(
+          '确认后正文已变化，本次 AI 操作未启动',
+        ))
       })
 
       expect(startWorkflow).not.toHaveBeenCalled()
