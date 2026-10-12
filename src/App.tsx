@@ -21,6 +21,7 @@ import BottomPanel from './components/panels/BottomPanel'
 import NewProjectDialog from './components/dialogs/NewProjectDialog'
 import ImportNovelDialog from './components/dialogs/ImportNovelDialog'
 import ChapterCreationDialog from './components/dialogs/ChapterCreationDialog'
+import DirectChapterImportDialog from './components/dialogs/DirectChapterImportDialog'
 import ExportDialog from './components/dialogs/ExportDialog'
 import SettingsModal from './components/settings/SettingsModal'
 import { ANIME_SKIN_URL } from './components/settings/AppearanceSettings'
@@ -113,6 +114,8 @@ export default function App() {
   const chapterCreationOpen = useLayoutStore(s => s.chapterCreationOpen)
   const chapterCreationPrefill = useLayoutStore(s => s.chapterCreationPrefill)
   const closeChapterCreation = useLayoutStore(s => s.closeChapterCreation)
+  const directChapterImportOpen = useLayoutStore(s => s.directChapterImportOpen)
+  const closeDirectChapterImport = useLayoutStore(s => s.closeDirectChapterImport)
   const initLLM = useLLMStore((s) => s.init)
   const loadRecentProjects = useProjectStore((s) => s.loadRecentProjects)
   const skinState = useSkinStore((s) => s.skinState)
@@ -295,6 +298,10 @@ export default function App() {
         isOpen={chapterCreationOpen}
         prefill={chapterCreationPrefill}
         onClose={closeChapterCreation}
+      />
+      <DirectChapterImportDialog
+        isOpen={directChapterImportOpen}
+        onClose={closeDirectChapterImport}
       />
       <ExportDialog
         isOpen={exportOpen}

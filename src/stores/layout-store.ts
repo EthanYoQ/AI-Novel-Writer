@@ -55,6 +55,8 @@ interface LayoutState {
   chapterCreationOpen: boolean
   /** 章节创建对话框的预填参数 */
   chapterCreationPrefill: ChapterCreationPrefill
+  /** 直接新增章节（粘贴导入草稿）对话框是否打开 */
+  directChapterImportOpen: boolean
 
   // ===== Actions =====
   toggleSidebar: () => void
@@ -83,6 +85,8 @@ interface LayoutState {
   closeImportNovel: () => void
   openChapterCreation: (prefill?: ChapterCreationPrefill) => void
   closeChapterCreation: () => void
+  openDirectChapterImport: () => void
+  closeDirectChapterImport: () => void
 }
 
 export const useLayoutStore = create<LayoutState>()((set, get) => ({
@@ -110,6 +114,7 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
   importNovelOpen: false,
   chapterCreationOpen: false,
   chapterCreationPrefill: null,
+  directChapterImportOpen: false,
 
   // Actions
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen, immersive: false, preImmersivePanels: null })),
@@ -187,4 +192,6 @@ export const useLayoutStore = create<LayoutState>()((set, get) => ({
   closeImportNovel: () => set({ importNovelOpen: false }),
   openChapterCreation: (prefill = null) => set({ chapterCreationOpen: true, chapterCreationPrefill: prefill }),
   closeChapterCreation: () => set({ chapterCreationOpen: false, chapterCreationPrefill: null }),
+  openDirectChapterImport: () => set({ directChapterImportOpen: true }),
+  closeDirectChapterImport: () => set({ directChapterImportOpen: false }),
 }))

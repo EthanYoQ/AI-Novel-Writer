@@ -3,10 +3,11 @@
  */
 
 import { useState, useEffect } from 'react'
-import { ChevronRight, ChevronDown, CheckCircle2, Circle, FileText, FolderOpen, Copy, Trash2, FilePen } from 'lucide-react'
+import { ChevronRight, ChevronDown, CheckCircle2, Circle, FileText, FolderOpen, Copy, Trash2, FilePen, Plus } from 'lucide-react'
 import type { DraftMeta } from '../../../stores/draft-store'
 import { useDraftStore, readDraftBody } from '../../../stores/draft-store'
 import { useEditorStore } from '../../../stores/editor-store'
+import { useLayoutStore } from '../../../stores/layout-store'
 import { confirm } from '../../ui/Confirm'
 import { DRAFT_STATUS_LABEL, DRAFT_STATUS_COLOR } from '../../../shared/draft-status'
 import { showSidebarMenu } from './sidebar-menu'
@@ -63,11 +64,25 @@ export default function DraftBoxGroup({
         }
         <FilePen size={14} style={{ color: 'var(--color-text-muted)' }} />
         <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{text('草稿箱', 'Draft box')}</span>
-        {activeChapterCount > 0 && (
-          <span className="ml-auto text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
-            {text(`${activeChapterCount} 章`, `${activeChapterCount} chapters`)}
-          </span>
-        )}
+        <span className="ml-auto flex items-center gap-1">
+          {activeChapterCount > 0 && (
+            <span className="text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
+              {text(`${activeChapterCount} 章`, `${activeChapterCount} chapters`)}
+            </span>
+          )}
+          <button
+            type="button"
+            className="opacity-70 hover:opacity-100 rounded p-0.5"
+            title={text('直接新增章节：粘贴别处写好的正文，存为可编辑草稿', 'Paste a new chapter: save text written elsewhere as an editable draft')}
+            onClick={(e) => {
+              e.stopPropagation()
+              useLayoutStore.getState().openDirectChapterImport()
+            }}
+            style={{ color: 'var(--color-text-muted)' }}
+          >
+            <Plus size={12} />
+          </button>
+        </span>
       </div>
 
       {open && (
