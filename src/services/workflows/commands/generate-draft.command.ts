@@ -3,6 +3,7 @@ import { appErrorMessage } from '../../../i18n/app-errors'
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
+import { chapterAuthorOutlineBlock } from '../../../shared/chapter-author-outline'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
@@ -255,6 +256,7 @@ type WriterChapterInfo = Pick<ChapterInfo,
   | 'keyEvents'
   | 'suspenseHook'
   | 'userGuidance'
+  | 'chapterOutline'
 >
 
 /** Keep workflow metadata out of both initial and continuation writer prompts. */
@@ -268,7 +270,13 @@ function toWriterChapterInfo(chapterInfo: ChapterInfo): WriterChapterInfo {
     keyEvents: chapterInfo.keyEvents,
     suspenseHook: chapterInfo.suspenseHook,
     userGuidance: chapterInfo.userGuidance,
+    chapterOutline: chapterInfo.chapterOutline,
   }
+}
+
+/** 作者大纲非空时优先生效：跳过自动短细纲，正文按作者大纲推进。 */
+function authorChapterOutline(chapterInfo: WriterChapterInfo): string {
+  return chapterInfo.chapterOutline?.trim() || ''
 }
 
 function hasSubstantialPreviousChapterReuse(
@@ -439,6 +447,10 @@ function draftAuthorMaterialBlock(writingLanguage: WritingLanguage, material: {
   reconciliation?: string
 }): string {
   const reconciliation = material.reconciliation ? `${material.reconciliation}\n\n` : ''
+  // 作者大纲在续写与压缩轮次保持与首稿相同的强化框架；否则长章后半段只剩
+  // 蓝图 JSON 里的一个普通字段，大纲约束最容易在这里松弛。
+  const authorOutline = authorChapterOutline(material.chapterInfo)
+  const authorOutlineSuffix = authorOutline ? `\n\n${chapterAuthorOutlineBlock(writingLanguage, authorOutline)}` : ''
   return promptLanguageText(
     writingLanguage,
     `【本章蓝图】
@@ -459,7 +471,7 @@ ${material.novelConfigFacts}
 
 ${material.chapterMaterials}
 
-${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo).authorItems}`,
+${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo).authorItems}${authorOutlineSuffix}`,
     `[Current chapter blueprint]
 ${JSON.stringify(material.chapterInfo, null, 2)}
 
@@ -478,7 +490,7 @@ ${material.novelConfigFacts}
 
 ${material.chapterMaterials}
 
-${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo).authorItems}`,
+${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo).authorItems}${authorOutlineSuffix}`,
   )
 }
 
@@ -834,11 +846,16 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       .filter(Boolean)
       .join('\n\n')
     const prompt = composeInitialPrompt('')
+    const authorOutline = authorChapterOutline(writerChapterInfo)
     const outlinePrompt = draftShortOutlinePrompt(writingLanguage, prompt)
+    const authorOutlineBlockText = authorOutline ? chapterAuthorOutlineBlock(writingLanguage, authorOutline) : ''
+    // 作者大纲优先时首个正文提示已含作者大纲块；主进程按整段用户消息校验 promptHash，
+    // 因此收据哈希必须覆盖含大纲块的完整提示（无大纲时保持仅基座提示，由主进程剥离生成计划块）。
+    const receiptPrompt = authorOutline ? `${prompt}\n\n${authorOutlineBlockText}` : prompt
     const withSkill = (content: string) => injectWritingSkillIntoTask({ purpose: 'chapter-draft', output: 'visible-text',
       messages: [{ role: 'user', content }] }, context, 'drafting').task.messages[0]!.content
-    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(withSkill(prompt)),
-      ...(!this.resumeHandle ? { shortOutlinePromptHash: await hashAuthorText(withSkill(outlinePrompt)) } : {}) }
+    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(withSkill(receiptPrompt)),
+      ...(!this.resumeHandle && !authorOutline ? { shortOutlinePromptHash: await hashAuthorText(withSkill(outlinePrompt)) } : {}) }
     const previousEnding = chapterMaterials.previousEnding
 
     callbacks.log(uiText(
@@ -987,7 +1004,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             reconciliationArtifactIds = new Set([...(recovery.draftReconciliation?.artifactIds ?? []), ...recovery.draftShortOutline.artifactIds])
             logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, retried.outcome.receipt)
           }
-          if (!recovery) {
+          if (!recovery && !authorOutline) {
             callbacks.log(uiText('生成短细纲...', 'Generating a short chapter outline...'))
             const outlined = await draftingSession.complete({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text',
               reasoningStage: 'planning', budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: 500, segmentable: false },
@@ -1000,7 +1017,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           if (recovery?.draftShortOutline && !shortOutline) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
           const reconciliationBlock = [recordedReconciliation ? draftReconciliationBlock(writingLanguage, recordedReconciliation) : '',
             shortOutline ? draftShortOutlineBlock(writingLanguage, shortOutline) : ''].filter(Boolean).join('\n\n')
-          const initialPrompt = shortOutline ? `${prompt}\n\n${draftShortOutlineBlock(writingLanguage, shortOutline)}`
+          // 作者大纲优先：直接以作者事实块注入并跳过自动短细纲；无作者大纲时沿用生成计划块。
+          const initialPrompt = authorOutline ? `${prompt}\n\n${authorOutlineBlockText}`
+            : shortOutline ? `${prompt}\n\n${draftShortOutlineBlock(writingLanguage, shortOutline)}`
             : composeInitialPrompt(reconciliationBlock)
           const originalDraftTask = recovery?.draftShortOutline?.initialDraftTask
           if (recovery?.draftShortOutline && (recovery.draftShortOutline.promptHash !== await hashAuthorText(withSkill(outlinePrompt))

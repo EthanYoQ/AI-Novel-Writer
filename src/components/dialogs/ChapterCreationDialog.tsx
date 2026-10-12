@@ -5,7 +5,7 @@ import { useProjectStore } from '../../stores/project-store'
 import { useLLMStore } from '../../stores/llm-store'
 import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
 
-import { createChapterWorkflow } from '../../services/workflows/chapter-workflow'
+import { createChapterRefineWorkflow, createChapterWorkflow } from '../../services/workflows/chapter-workflow'
 import {
   CHAPTER_WORDS_TARGET_MAX,
   CHAPTER_WORDS_TARGET_MIN,
@@ -97,8 +97,11 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
   const [keyEvents, setKeyEvents] = useState('')
   const [characters, setCharacters] = useState('')
   const [userGuidance, setUserGuidance] = useState('')
+  const [chapterOutline, setChapterOutline] = useState('')
   const [knowledgeHint, setKnowledgeHint] = useState('')
   const [wordsTarget, setWordsTarget] = useState<number | ''>(DEFAULT_CHAPTER_WORDS_TARGET)
+  /** 单章精修：写稿完成后自动串联 AI 审稿；修稿与定稿仍由作者人工把关。 */
+  const [autoReview, setAutoReview] = useState(true)
   const [loadedFromHistory, setLoadedFromHistory] = useState(false)
   const [loadedFromBlueprint, setLoadedFromBlueprint] = useState(false)
   const [guardError, setGuardError] = useState<string | null>(null)
@@ -216,6 +219,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
         setKeyEvents(String(prefill.keyEvents || ''))
         setCharacters(String(prefill.characters || ''))
         setUserGuidance(String(prefill.userGuidance || ''))
+        setChapterOutline(String(prefill.chapterOutline || ''))
         setWordsTarget(defaultWordsTarget)
         setLoadedFromBlueprint(true)
         setLoadedFromHistory(false)
@@ -371,7 +375,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
       return
     }
 
-    const workflow = createChapterWorkflow(createChapterInfoFromDialogInput({
+    const creationInput = {
       projectPath,
       chapterNumber,
       title,
@@ -380,10 +384,14 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
       keyEvents,
       characters,
       userGuidance,
+      chapterOutline,
       knowledgeQueryHint: knowledgeHint,
       wordsTarget: normalizedWordsTarget,
       defaultWordsTarget: currentProject?.novelConfig.wordsPerChapter ?? DEFAULT_CHAPTER_WORDS_TARGET,
-    }), projectSession, { generationModelId: frozenGenerationModelId })
+    }
+    const workflow = autoReview
+      ? createChapterRefineWorkflow(createChapterInfoFromDialogInput(creationInput), projectSession, { generationModelId: frozenGenerationModelId })
+      : createChapterWorkflow(createChapterInfoFromDialogInput(creationInput), projectSession, { generationModelId: frozenGenerationModelId })
 
     // 启动任务后关闭设定弹窗，由全局 Overlay 接管展示
     if (!isProjectSessionCurrent(projectSession)) return
@@ -541,6 +549,23 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
                   placeholder={text('如：「剑法传承」「草原地貌」（帮助 AI 检索相关设定）', 'e.g. “sword inheritance”, “grassland terrain”')}
                 />
               </div>
+
+              {/* 本章大纲状态 + 单章精修自动化程度 */}
+              <div className="p-3 rounded-lg border" style={{ borderColor: 'var(--color-border)' }}>
+                <p className="text-xs mb-2" style={{ color: chapterOutline.trim() ? 'var(--color-success-text)' : 'var(--color-text-muted)' }}>
+                  {chapterOutline.trim()
+                    ? text('已带入本章大纲（场景细纲）：写稿将按此推进，跳过自动细纲。可在章节蓝图编辑器中修改。', 'The chapter outline (scene-level) is included: drafting follows it and skips the auto plan. Edit it in the blueprint editor.')
+                    : text('未填写本章大纲：写稿时将自动生成短细纲。建议先在章节蓝图编辑器中用「AI 生成大纲」起草并确认。', 'No chapter outline: a short plan is auto-generated during drafting. Consider drafting one with “AI draft outline” in the blueprint editor first.')}
+                </p>
+                <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--color-text)' }}>
+                  <input
+                    type="checkbox"
+                    checked={autoReview}
+                    onChange={(e) => setAutoReview(e.target.checked)}
+                  />
+                  {text('生成后自动审稿（写稿+审稿串联；修稿/定稿仍由您把关）', 'Auto-review after drafting (draft + review chained; revision and finalization stay with you)')}
+                </label>
+              </div>
             </div>
 
             {consistencyPreflight && (consistencyPreflight.findings.length > 0 || consistencyPreflight.exemptions.some(item => !item.revoked)) ? (
@@ -568,7 +593,9 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
             ) : null}
             <DialogFooter className="sm:justify-between items-center">
               <span className="text-xs mt-2 sm:mt-0" style={{ color: 'var(--color-text-muted)' }}>
-                {text('流程：一键写稿（修稿/审稿后续在工具栏处理）', 'Flow: write the draft now; revise and review from the editor toolbar.')}
+                {autoReview
+                  ? text('流程：写稿 → 自动审稿（修稿/定稿在编辑器人工把关）', 'Flow: draft → auto review (revise and finalize manually in the editor).')
+                  : text('流程：一键写稿（修稿/审稿后续在工具栏处理）', 'Flow: write the draft now; revise and review from the editor toolbar.')}
               </span>
               <div className="flex items-center gap-2">
                 <Button variant="outline" onClick={onClose}>{text('取消', 'Cancel')}</Button>

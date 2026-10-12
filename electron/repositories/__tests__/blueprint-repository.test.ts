@@ -26,6 +26,7 @@ const blueprint: BlueprintData = {
   userGuidance: '',
   notes: '',
   notesUpdatedAt: '',
+  chapterOutline: '',
 }
 
 function rosterEntry(
@@ -72,6 +73,7 @@ function createBlueprintDb(filename: string | Buffer = ':memory:'): BetterSqlite
       user_guidance TEXT DEFAULT '',
       notes TEXT DEFAULT '',
       notes_updated_at TEXT DEFAULT '',
+      chapter_outline TEXT NOT NULL DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -213,6 +215,19 @@ describe('BlueprintRepository range commit', () => {
     } finally {
       if (db.open) db.close()
     }
+  })
+
+  it('persists the author chapter outline and treats missing outlines as empty', () => {
+    const db = createBlueprintDb()
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    try {
+      const authorOutline = '场景1：主角发现异常并决定调查。\n场景2：敲门声揭晓来人身份。'
+      BlueprintRepository.upsert({ ...blueprint, chapterOutline: authorOutline })
+      expect(BlueprintRepository.getByChapter(1)?.chapterOutline).toBe(authorOutline)
+      // 不携带大纲的提交（旧版调用方）视为未填写。
+      BlueprintRepository.upsert({ ...blueprint, chapterOutline: undefined })
+      expect(BlueprintRepository.getByChapter(1)?.chapterOutline).toBe('')
+    } finally { db.close() }
   })
 
   it('rolls back the whole logical range when transaction readback does not match', () => {

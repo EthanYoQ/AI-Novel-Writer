@@ -426,6 +426,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
     keyEvents?: string
     suspenseHook?: string
+    chapterOutline?: string
     knowledgeQueryHint?: string
     characterCards?: Array<{
       name: string
@@ -614,6 +615,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       purpose: '建立冲突',
       keyEvents: options.keyEvents ?? '开端',
       suspenseHook: options.suspenseHook,
+      chapterOutline: options.chapterOutline,
       characters: options.characters ?? [],
       wordsTarget: options.wordsTarget,
       userGuidance: options.userGuidance,
@@ -2554,6 +2556,46 @@ ${headingPrefix}第3章：潮门
   })
 
   describe('automatic short outline', () => {
+    it('skips the auto short outline and injects the author outline block when the author outline is present', async () => {
+      const runtime = fakeOutcomes(outcome('潮'.repeat(900), 'stop'))
+      const f = setup({ runtime, wordsTarget: 900, chapterOutline: '场景1：主角读信，发现异常，决定回乡。' })
+      await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+      expect(runtime.outline).not.toHaveBeenCalled()
+      expect(runtime.complete).toHaveBeenCalledTimes(1)
+      const selection = runtime.createRuntime.mock.calls[0]![1]!.selection
+      expect(selection.materialDecision?.shortOutlinePromptHash).toBeUndefined()
+      const prosePrompt = runtime.complete.mock.calls[0]![0].messages.map(message => message.content).join('\n')
+      expect(prosePrompt).toContain('【作者章节大纲：作者事实与要求】')
+      expect(prosePrompt).toContain('场景1：主角读信')
+      expect(prosePrompt).not.toContain('【生成短细纲：计划，不是事实依据】')
+      // 主进程按整段用户消息校验 promptHash（GENERATION_MATERIAL_PROMPT_MISMATCH 合同）。
+      const userMessage = runtime.complete.mock.calls[0]![0].messages
+        .filter(message => message.role === 'user').map(message => message.content).join('\n')
+      expect(createHash('sha256').update(userMessage).digest('hex')).toBe(selection.materialDecision!.promptHash)
+    })
+
+    it('keeps the auto short outline and omits the author block when no author outline is given', async () => {
+      const runtime = fakeOutcomes(outcome('潮'.repeat(900), 'stop'))
+      const f = setup({ runtime, wordsTarget: 900 })
+      await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+      expect(runtime.outline).toHaveBeenCalledTimes(1)
+      const selection = runtime.createRuntime.mock.calls[0]![1]!.selection
+      expect(selection.materialDecision?.shortOutlinePromptHash).toBeTruthy()
+      const prosePrompt = runtime.complete.mock.calls[0]![0].messages.map(message => message.content).join('\n')
+      expect(prosePrompt).not.toContain('【作者章节大纲：作者事实与要求】')
+    })
+    it('carries the author outline block with its framing into every continuation request', async () => {
+      const runtime = fakeOutcomes(outcome('初'.repeat(100), 'length'), outcome('续'.repeat(400), 'stop'))
+      const f = setup({ runtime, wordsTarget: 500, chapterOutline: '场景1：主角读信，发现异常，决定回乡。' })
+      await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+      expect(runtime.outline).not.toHaveBeenCalled()
+      expect(runtime.complete).toHaveBeenCalledTimes(2)
+      for (const [task] of runtime.complete.mock.calls) {
+        const prompt = task.messages.at(-1)!.content
+        expect(prompt).toContain('【作者章节大纲：作者事实与要求】')
+        expect(prompt).toContain('场景1：主角读信，发现异常，决定回乡。')
+      }
+    })
     it.each(['stop', 'length', 'empty', 'cancelled', 'not-durable', 'outline-as-prose', 'draft-changed'] as const)(
       'resumes before the one outline retry and checks its durable context before drafting: %s', async finish => {
         const hash = (text: string) => createHash('sha256').update(text).digest('hex')

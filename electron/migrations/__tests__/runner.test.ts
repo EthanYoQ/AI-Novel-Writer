@@ -49,7 +49,7 @@ class FixtureDatabase implements SchemaWriter {
   }
 }
 
-const identities = Array.from({ length: 8 }, (_, version) => ({ version, fingerprint: `fixture-schema-${version}` }))
+const identities = Array.from({ length: 9 }, (_, version) => ({ version, fingerprint: `fixture-schema-${version}` }))
 function implementations(): MigrationImplementation[] {
   return MIGRATION_LANE.map(slot => ({ ...slot,
     migrate(db) {
@@ -86,11 +86,11 @@ describe('desktop single schema lane', () => {
     }
   })
 
-  it('reserves exactly seven consecutive versions with a single declared owner for each', () => {
+  it('reserves exactly eight consecutive versions with a single declared owner for each', () => {
     expect(MIGRATION_LANE.map(s => [s.id, s.from, s.to, s.owner])).toEqual([
       ['M00', 0, 1, 'S04'], ['M01', 1, 2, 'S05'], ['M02', 2, 3, 'S08'],
       ['M03', 3, 4, 'S11'], ['M04', 4, 5, 'S12'], ['M05', 5, 6, 'F03'],
-      ['M06', 6, 7, 'S11'],
+      ['M06', 6, 7, 'S11'], ['M07', 7, 8, 'chapter-outline'],
     ])
     expect(migrationRegistry.implementations).toEqual([])
     expect(migrationRegistry.recognizedSchemas).toEqual([])
@@ -192,8 +192,8 @@ describe('desktop single schema lane', () => {
     const db = new FixtureDatabase()
     const registry = createMigrationRegistry(implementations(), identities)
     const result = migrateSchema(db, registry)
-    expect(result.version).toBe(7)
-    expect(verifySchema(db, registry, 7)).toEqual({ version: 7, fingerprint: 'fixture-schema-7' })
+    expect(result.version).toBe(8)
+    expect(verifySchema(db, registry, 8)).toEqual({ version: 8, fingerprint: 'fixture-schema-8' })
     expect(() => migrateSchema(db, registry, 5)).toThrow('SCHEMA_DOWNGRADE_REFUSED')
     expect(() => verifySchema(db, registry, 5)).toThrow('SCHEMA_VERSION_MISMATCH')
     expect(result.sessionFenced).toBe(false)

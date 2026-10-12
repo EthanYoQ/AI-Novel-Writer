@@ -116,6 +116,7 @@ function persistedBlueprint(item: BlueprintSemanticItem): ChapterBlueprint {
     userGuidance: '',
     notes: '',
     notesUpdatedAt: '',
+    chapterOutline: '',
   }
 }
 

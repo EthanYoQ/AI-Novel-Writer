@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "rules": {
     "D": ["preserve-domain", "signed-domain-value", "portable-domain-copy"],
     "H": ["historical-nonreplayable", "nonreplayable-history", "portable-history-projector"],
@@ -74,7 +74,7 @@
   "tables": {
     "blueprint_character_sync_operations": {"operation_id":"H","blueprint_commit_operation_id":"H","blueprint_commit_payload_hash":"R","status":"H","start_chapter":"H","end_chapter":"H","character_sync_input":"R","completion_receipt":"R","created_at":"H","updated_at":"H","completed_at":"H"},
     "blueprint_commit_operations": {"operation_id":"H","payload_hash":"R","mode":"H","start_chapter":"H","end_chapter":"H","character_sync_input":"R","committed_at":"H"},
-    "blueprints": {"chapter_number":"D","title":"D","role":"D","purpose":"D","key_events":"D","characters":"D","suspense_hook":"D","user_guidance":"D","notes":"D","notes_updated_at":"D","created_at":"D","updated_at":"D"},
+    "blueprints": {"chapter_number":"D","title":"D","role":"D","purpose":"D","key_events":"D","characters":"D","suspense_hook":"D","user_guidance":"D","chapter_outline":"D","notes":"D","notes_updated_at":"D","created_at":"D","updated_at":"D"},
     "chapter_deletion_operations": {"operation_id":"H","draft_id":"H","chapter_number":"H","chapter_title":"H","finalization_id":"H","target_file_name":"P","knowledge_document_id":"H","post_process_run_ids":"H","manuscript_status":"H","manuscript_error":"R","knowledge_status":"H","knowledge_error":"R","legacy_knowledge_authorization":"X","legacy_knowledge_authorized_at":"X","status":"H","attempt_count":"H","created_at":"H","updated_at":"H","completed_at":"H"},
     "character_aliases": {"character_id":"D","name":"D","source_key":"D","valid_from":"D","valid_through":"D"},
     "character_avatar_assets": {"character_id":"A","asset_revision":"A","relative_path":"A","content_hash":"A","mime":"A","byte_size":"A","source_reference":"A"},

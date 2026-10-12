@@ -29,6 +29,8 @@ export interface ChapterInfo {
   keyEvents: string
   suspenseHook?: string
   userGuidance?: string
+  /** 作者逐章场景级大纲；非空时跳过自动短细纲，直接按作者大纲推进。 */
+  chapterOutline?: string
   /** 本次单章创作的用户目标字数；未提供时沿用项目默认值。 */
   wordsTarget?: number
   /** 用户自定义知识库检索关键词（追加到向量搜索 query） */
@@ -273,6 +275,82 @@ export function createChapterWorkflow(
         uiLocale,
         `第${chapterInfo.chapterNumber}章草稿已生成`,
         `Chapter ${chapterInfo.chapterNumber} draft generated`,
+      ),
+    },
+  }
+}
+
+/** 单章精修：写稿 → 审稿 自动串联；修稿与定稿仍由作者人工把关。 */
+export function createChapterRefineWorkflow(
+  chapterInfo: ChapterInfo,
+  sourceProjectSession: ProjectSessionContext,
+  options: ChapterWorkflowOptions = {},
+): WorkflowDefinition {
+  const uiLocale = chapterWorkflowLocale(options.uiLocale)
+  const generationModelId = options.generationModelId?.trim() || undefined
+  const chapterWordsTarget = normalizeChapterWordsTarget(chapterInfo.wordsTarget)
+  const frozenChapterInfo = Object.freeze({ ...chapterInfo, wordsTarget: chapterWordsTarget })
+  return {
+    type: 'chapter_creation',
+    projectPath: chapterInfo.projectPath,
+    projectSession: workflowProjectSession(chapterInfo.projectPath, sourceProjectSession),
+    uiLocale,
+    ...(generationModelId ? { generationModelId } : {}),
+    chapterWordsTarget,
+    resourceKeys: [workflowResourceKey('chapter', chapterInfo.chapterNumber)],
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    title: localize(uiLocale,
+      `写稿+审稿 — 第 ${chapterInfo.chapterNumber} 章 · ${chapterInfo.title}`,
+      `Draft + review — Chapter ${chapterInfo.chapterNumber} · ${chapterInfo.title}`,
+    ),
+    steps: [
+      {
+        name: localize(uiLocale, '写稿', 'Draft chapter'),
+        description: localize(
+          uiLocale,
+          '基于架构 + 蓝图 + 上下文调用 Command 生成草稿',
+          'Generate a draft from the architecture, blueprint, and context',
+        ),
+        executor: async (step, context, callbacks) => {
+          const { GenerateDraftCommand } = await import('./commands/generate-draft.command')
+          const cmd = new GenerateDraftCommand(frozenChapterInfo)
+          return cmd.execute({ step, context, callbacks })
+        },
+      },
+      {
+        name: localize(uiLocale, '审稿', 'Review chapter'),
+        description: localize(
+          uiLocale,
+          '对刚生成的草稿执行一致性检查，生成审稿报告',
+          'Run the consistency review on the fresh draft and produce a report',
+        ),
+        executor: async (step, context, callbacks) => {
+          const draftId = context.data.draftId
+          const draftVersion = context.data.draftVersion
+          const draftPath = context.data.draftPath
+          const draftContent = context.data.draftContent
+          const chapterNumber = context.data.chapterNumber
+          if (typeof draftId !== 'number' || typeof draftVersion !== 'number' || typeof draftPath !== 'string'
+            || typeof draftContent !== 'string' || typeof chapterNumber !== 'number') {
+            throw new Error(localize(uiLocale, '上一步未产出已保存草稿，无法审稿', 'The previous step produced no saved draft to review'))
+          }
+          const { ReviewChapterCommand } = await import('./commands/review-chapter.command')
+          const cmd = new ReviewChapterCommand({
+            draftPath,
+            draftContent,
+            sourceDraft: { id: draftId, chapterNumber, version: draftVersion, status: 'draft', contentRevision: 0 },
+            chapterNumber,
+          })
+          return cmd.execute({ step, context, callbacks })
+        },
+      },
+    ],
+    onComplete: {
+      mode: 'open',
+      message: localize(
+        uiLocale,
+        `第${chapterInfo.chapterNumber}章写稿+审稿完成，请阅读审稿报告决定修稿`,
+        `Chapter ${chapterInfo.chapterNumber} draft and review completed; read the report and decide on revisions`,
       ),
     },
   }

@@ -6,6 +6,7 @@ import { applyM03ReviewCycle, applyM06ReviewCycleMerge, createM03Migration, crea
   verifyM03ReviewCycle } from './m03-review-cycle'
 import { applyM04ImportEffectLedger, createM04Migration } from './m04-import-effect-ledger'
 import { applyM05CharacterAssets, createM05Migration } from './m05-character-assets'
+import { applyM07BlueprintChapterOutline, createM07Migration } from './m07-blueprint-chapter-outline'
 import { createM00Migration } from './m00-baseline'
 import { initializeLegacyBaselineSchema, applyBaselineTables } from './baseline-schema'
 import { ensureBaselineBlueprintTables } from './baseline-blueprint-schema'
@@ -13,7 +14,7 @@ import { SqliteSchemaAdapter, sqliteSchemaFingerprint } from './sqlite-schema-ad
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
-export const CURRENT_DESKTOP_SCHEMA_VERSION = 7
+export const CURRENT_DESKTOP_SCHEMA_VERSION = 8
 let installed: MigrationRegistry | undefined
 
 function installKnownDonorAvatarColumn(db: import('better-sqlite3').Database): void {
@@ -78,10 +79,16 @@ export function getDesktopMigrationRegistry(): MigrationRegistry {
     const m06 = createM06Migration({ database: native,
       verifyKnownSchema: db => mergeSnapshotFingerprints.has(sqliteSchemaFingerprint(native(db)))
         && verifyM02CharacterIdentity(native(db)) })
-    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06], [
+    for (const db of references) db.transaction(() => applyM07BlueprintChapterOutline(db))()
+    const chapterOutlineSchemas = schemas(8), chapterOutlineFingerprints = new Set(chapterOutlineSchemas.map(item => item.fingerprint))
+    const m07 = createM07Migration({ database: native,
+      verifyKnownSchema: db => chapterOutlineFingerprints.has(sqliteSchemaFingerprint(native(db)))
+        && verifyM02CharacterIdentity(native(db)) })
+    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06, m07], [
       ...sourceSchemas, ...baselineSchemas.map(schema => ({ ...schema, version: 0 })),
       ...baselineSchemas, ...generationSchemas, ...identitySchemas,
       ...reviewCycleSchemas, ...importEffectSchemas, ...characterAssetSchemas, ...mergeSnapshotSchemas,
+      ...chapterOutlineSchemas,
     ])
     return installed
   } finally { reference.close(); donor.close() }

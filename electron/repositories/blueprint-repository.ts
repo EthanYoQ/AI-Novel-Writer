@@ -27,6 +27,7 @@ export interface BlueprintRow {
     user_guidance: string
     notes: string
     notes_updated_at: string
+    chapter_outline: string
     created_at: string
     updated_at: string
 }
@@ -51,6 +52,8 @@ export interface BlueprintData {
     userGuidance: string
     notes: string
     notesUpdatedAt: string
+    /** 作者逐章场景级大纲（章节细纲）；空串表示未填写。 */
+    chapterOutline?: string
 }
 
 export type BlueprintRangeCommitMode = 'full' | 'replace-range'
@@ -158,6 +161,7 @@ function rowToData(row: BlueprintRow): BlueprintData {
         userGuidance: row.user_guidance,
         notes: row.notes,
         notesUpdatedAt: row.notes_updated_at,
+        chapterOutline: row.chapter_outline ?? '',
     }
 }
 
@@ -454,6 +458,7 @@ function samePersistedBlueprint(left: BlueprintData, right: BlueprintData): bool
         && left.userGuidance === right.userGuidance
         && left.notes === right.notes
         && left.notesUpdatedAt === right.notesUpdatedAt
+        && (left.chapterOutline ?? '') === (right.chapterOutline ?? '')
 }
 
 export class BlueprintRepository {
@@ -495,8 +500,8 @@ export class BlueprintRepository {
         db.prepare(`
       INSERT INTO blueprints (
         chapter_number, title, role, purpose, key_events, characters,
-        suspense_hook, user_guidance, notes, notes_updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        suspense_hook, user_guidance, notes, notes_updated_at, chapter_outline
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(chapter_number) DO UPDATE SET
         title = excluded.title,
         role = excluded.role,
@@ -507,6 +512,7 @@ export class BlueprintRepository {
         user_guidance = excluded.user_guidance,
         notes = excluded.notes,
         notes_updated_at = excluded.notes_updated_at,
+        chapter_outline = excluded.chapter_outline,
         updated_at = datetime('now')
     `).run(
             data.chapterNumber,
@@ -519,6 +525,7 @@ export class BlueprintRepository {
             data.userGuidance,
             data.notes,
             data.notesUpdatedAt,
+            data.chapterOutline ?? '',
         )
     }
 

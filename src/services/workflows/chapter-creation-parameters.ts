@@ -13,6 +13,8 @@ export interface ChapterCreationDialogInput {
   keyEvents: string
   characters: string
   userGuidance: string
+  /** 作者逐章场景级大纲（可选，从蓝图预填）。 */
+  chapterOutline?: string
   knowledgeQueryHint: string
   wordsTarget: number | ''
   defaultWordsTarget: number
@@ -53,6 +55,7 @@ export function createChapterInfoFromDialogInput(input: ChapterCreationDialogInp
     characters: input.characters.split(/[、,，]/).map(s => s.trim()).filter(Boolean),
     keyEvents: input.keyEvents,
     userGuidance: input.userGuidance,
+    chapterOutline: input.chapterOutline?.trim() || undefined,
     wordsTarget: normalizeChapterWordsTarget(input.wordsTarget, input.defaultWordsTarget),
     knowledgeQueryHint: input.knowledgeQueryHint.trim() || undefined,
   }

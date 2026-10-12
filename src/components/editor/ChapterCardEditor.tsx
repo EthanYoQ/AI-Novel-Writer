@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Save, BookOpen, RefreshCw, Plus, Trash2,
-  Sparkles, PenLine, ListChecks, AlertTriangle
+  Sparkles, PenLine, ListChecks, AlertTriangle, Loader2
 } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
@@ -38,6 +38,8 @@ import { confirm } from '../ui/Confirm'
 import { globalEventBus } from '../../shared/event-bus'
 import { shouldRefreshBlueprints } from './blueprint-refresh'
 import { useLocaleStore } from '../../stores/locale-store'
+import { resolveWritingLanguage } from '../../shared/writing-language'
+import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
 import { openPlanningRecoveryDraft, registerEditorExitSaveHandler, useEditorStore, type EditorTab, type PlanningRecoverySaveSnapshot } from '../../stores/editor-store'
 import type { GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import CodeMirrorEditor from './CodeMirrorEditor'
@@ -268,6 +270,8 @@ function ChapterCardEditorSession({
   const [showBlueprintDialog, setShowBlueprintDialog] = useState(false)
   const [showBatchCreationDialog, setShowBatchCreationDialog] = useState(false)
   const [recoveringLegacyImportedText, setRecoveringLegacyImportedText] = useState(false)
+  // 本章大纲 AI 起草进行中（结果只填入编辑框，由作者确认后保存）
+  const [generatingOutline, setGeneratingOutline] = useState(false)
 
   useEffect(() => {
     if (loading || initialChapterNumber === undefined) return
@@ -623,6 +627,7 @@ function ChapterCardEditorSession({
       userGuidance: '',
       notes: '',
       notesUpdatedAt: '',
+      chapterOutline: '',
     }
     markChapterDirty([...currentBlueprints, newBlueprint], newBlueprint.chapterNumber)
     setSelectedIdx(currentBlueprints.length)
@@ -777,7 +782,55 @@ function ChapterCardEditorSession({
       keyEvents: bp.keyEvents,
       characters: bp.characters.join('、'),
       userGuidance: bp.userGuidance || '',
+      chapterOutline: bp.chapterOutline || '',
     })
+  }
+
+  /** AI 起草本章场景级大纲 — 只填充编辑框，由作者审阅修改后保存。 */
+  const handleGenerateOutline = async () => {
+    if (!selected || generatingOutline) return
+    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!projectSession || !sameProjectSessionContext(projectSession, currentProjectSessionForPath(projectKey))) return
+    setGeneratingOutline(true)
+    try {
+      const { GenerateChapterOutlineCommand, chapterOutlineRunId } = await import('../../services/workflows/commands/generate-chapter-outline.command')
+      if (!isProjectSessionCurrent(projectSession)) return
+      const cmd = new GenerateChapterOutlineCommand({
+        chapterNumber: selected.chapterNumber,
+        title: selected.title,
+        role: selected.role,
+        purpose: selected.purpose,
+        keyEvents: selected.keyEvents,
+        characters: selected.characters,
+        suspenseHook: selected.suspenseHook,
+        userGuidance: selected.userGuidance,
+      })
+      const outline = await cmd.execute({
+        step: { id: '', commandId: '', name: '', params: {} },
+        context: {
+          runId: chapterOutlineRunId(),
+          projectPath: projectSession.projectPath,
+          projectSession,
+          writingLanguage: resolveWritingLanguage(useProjectStore.getState().currentProject?.novelConfig.writingLanguage),
+          uiLocale: useLocaleStore.getState().locale,
+          data: {},
+          cancelled: false,
+        },
+        callbacks: {
+          log: (msg: string) => useWorkflowStore.getState().addLog('info', msg),
+          setProgress: () => { },
+          appendText: () => { },
+        },
+      })
+      if (!isProjectSessionCurrent(projectSession)) return
+      updateField('chapterOutline', outline)
+    } catch (err) {
+      if (isProjectSessionCurrent(projectSession)) {
+        addLog('error', text(`大纲生成失败：${err}`, `Outline generation failed: ${err}`))
+      }
+    } finally {
+      if (isProjectSessionCurrent(projectSession)) setGeneratingOutline(false)
+    }
   }
 
   /**
@@ -1048,6 +1101,15 @@ function ChapterCardEditorSession({
                       {text('有指导', 'Guidance')}
                     </span>
                   )}
+                  {(bp.chapterOutline || '').trim() && (
+                    <span
+                      className="text-[0.7rem] px-1 py-0.5 rounded"
+                      style={{ backgroundColor: 'rgba(var(--accent-rgb), 0.15)', color: 'var(--color-accent)' }}
+                      title={text('已有本章场景大纲', 'A chapter outline is available')}
+                    >
+                      {text('有大纲', 'Outline')}
+                    </span>
+                  )}
                   {bp.notes && (
                     <span
                       className="text-[0.7rem] px-1 py-0.5 rounded"
@@ -1170,6 +1232,47 @@ function ChapterCardEditorSession({
                   />
                 </div>
 
+                {/* 本章大纲（场景级细纲）— 作者大纲优先，写稿时跳过自动短细纲 */}
+                <div
+                  className="p-3 rounded-lg border"
+                  style={{
+                    borderColor: 'var(--color-border)',
+                    backgroundColor: 'rgba(var(--accent-rgb, 99 102 241), 0.04)',
+                  }}
+                >
+                  <div className="flex items-center justify-between">
+                    <Label className="flex items-center gap-1.5">
+                      <span>{text('本章大纲（场景细纲）', 'Chapter outline (scene-level)')}</span>
+                      <span
+                        className="text-[0.7rem] font-normal"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        {text('（写稿时按此推进，优先于自动细纲）', '(Prose drafting follows this outline instead of the auto plan.)')}
+                      </span>
+                    </Label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { void handleGenerateOutline() }}
+                      disabled={generatingOutline}
+                      title={text('AI 起草本章场景级大纲，生成后可手动编辑', 'Draft a scene-level outline with AI, then edit it by hand')}
+                    >
+                      {generatingOutline
+                        ? <><Loader2 size={12} className="animate-spin" /> {text('生成中...', 'Generating...')}</>
+                        : <><Sparkles size={12} /> {text('AI 生成大纲', 'AI draft outline')}</>}
+                    </Button>
+                  </div>
+                  <Textarea
+                    value={selected.chapterOutline || ''}
+                    onChange={e => updateField('chapterOutline', e.target.value)}
+                    placeholder={text(
+                      '按场景拆解本章：每条写清场景目标、冲突、关键转折与结束状态。\n留空则由 AI 在写稿时自动规划短细纲。',
+                      'Break this chapter into scenes: goal, conflict, key turn, and ending state per scene.\nLeave blank to let AI auto-plan a short outline during drafting.',
+                    )}
+                    rows={6}
+                    style={{ marginTop: 6 }}
+                  />
+                </div>
                 {/* 作者微操指导 — 特别标注，写稿时注入为最高优先级 */}
                 <div
                   className="p-3 rounded-lg border"
