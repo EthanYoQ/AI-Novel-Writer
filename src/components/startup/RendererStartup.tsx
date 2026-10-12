@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState, type ComponentType, type CSSProperties } from 'react'
 import { useLocaleStore } from '../../stores/locale-store'
 import { ipc } from '../../services/ipc-client'
 import { useAppearanceStore, type AppearanceBootstrapDependencies } from '../../stores/appearance-bootstrap'
@@ -36,6 +36,20 @@ export default function RendererStartup({
   } }), [dependencies])
   const phase = useAppearanceStore(state => state.phase)
   const notice = useAppearanceStore(state => state.notice)
+  const [noticeTop, setNoticeTop] = useState(40)
+  // The shell title bar is a native drag region whose height varies by shell (the v3
+  // masthead bar is taller than the classic 40px). Notices must clear its bottom edge
+  // and opt out of the drag region, or Electron swallows their clicks.
+  useLayoutEffect(() => {
+    if (!Workspace) return
+    const host = document.querySelector('.writer-title-host')
+    if (!host || typeof ResizeObserver === 'undefined') return
+    const update = () => setNoticeTop(host.getBoundingClientRect().bottom)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(host)
+    return () => observer.disconnect()
+  }, [Workspace])
   useEffect(() => {
     if (Workspace || !ipc.isElectron) return
     // No author editor exists before App mounts. After that App owns its dirty-work guard.
@@ -54,9 +68,9 @@ export default function RendererStartup({
   }, [attempt, startupDependencies, loadWorkspace])
   // A later preference write failure must not unmount editors or discard in-memory author work.
   if (Workspace) return <>
-    {phase === 'blocked' && <div role="alert" className="fixed inset-x-0 top-10 z-50 bg-[var(--color-panel)] px-4 py-2 text-center text-[var(--color-warning-text)]">{notice}</div>}
+    {phase === 'blocked' && <div role="alert" style={{ top: noticeTop, WebkitAppRegion: 'no-drag' } as CSSProperties} className="fixed inset-x-0 z-50 bg-[var(--color-panel)] px-4 py-2 text-center text-[var(--color-warning-text)]">{notice}</div>}
     {phase !== 'blocked' && !noticeDismissed && migrationNotice && (migrationNotice.legacySourceIgnored || migrationNotice.preservedUnknownCount > 0) &&
-      <div role="status" className="fixed inset-x-0 top-10 z-50 flex items-center justify-center gap-4 bg-stone-100 px-4 py-2 text-stone-800">
+      <div role="status" style={{ top: noticeTop, WebkitAppRegion: 'no-drag' } as CSSProperties} className="fixed inset-x-0 z-50 flex items-center justify-center gap-4 bg-stone-100 px-4 py-2 text-stone-800">
         <span>{migrationNotice.legacySourceIgnored ? text('旧来源已保留，后续修改需明确导入，当前不会自动回灌。', 'The legacy source is preserved. Later changes require an explicit import and will not sync automatically. ') : ''}{migrationNotice.preservedUnknownCount > 0 ? text('未导入的内容已保留在原处。', 'Content that was not imported remains in its original location.') : ''}</span>
         <button type="button" className="rounded border border-stone-500 px-3 py-1" onClick={() => setNoticeDismissed(true)}>{text('知道了', 'Dismiss')}</button>
       </div>}

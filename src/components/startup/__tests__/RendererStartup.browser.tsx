@@ -140,6 +140,28 @@ it('外观损坏时响应关闭请求，工作台接管后由业务决定未保�
   expect(invoke).toHaveBeenCalledExactlyOnceWith('window:resolve-close', 'after-editor', 'cancel')
 })
 
+it('迁移提示避开标题栏拖拽区，知道了按钮可关闭横幅', async () => {
+  const ready = { state: 'ready' as const, globalGeneration: '启动世代', skinRevision: 0,
+    migrationNotice: { legacySourceIgnored: true, preservedUnknownCount: 0 } }
+  function Workspace() {
+    return <div className="writer-title-host" style={{ height: 79 }} />
+  }
+  await act(async () => root.render(<RendererStartup
+    dependencies={dependencies({ waitForMainReady: async () => ready })}
+    loadWorkspace={async () => ({ default: Workspace })} />))
+  const banner = await vi.waitFor(() => {
+    const element = host.querySelector('[role="status"]')
+    expect(element).not.toBeNull()
+    return element as HTMLElement
+  })
+  const titleHost = host.querySelector('.writer-title-host') as HTMLElement
+  expect(banner.style.top).toBe(`${titleHost.getBoundingClientRect().bottom}px`)
+  expect(banner.style.getPropertyValue('-webkit-app-region')).toBe('no-drag')
+  expect(banner.textContent).toContain('旧来源已保留')
+  await act(async () => (banner.querySelector('button') as HTMLButtonElement).click())
+  expect(host.querySelector('[role="status"]')).toBeNull()
+})
+
 it('renders pending and blocked startup messages in English', async () => {
   useLocaleStore.setState({ locale: 'en-US' })
   let release!: () => void
