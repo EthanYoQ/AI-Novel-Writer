@@ -856,6 +856,43 @@ describe('StructuredBatchExecutor seam', () => {
     expect(complete).toHaveBeenCalledTimes(2)
   })
 
+  it('regenerates smaller batches after rejecting a fact-changing syntax repair', async () => {
+    let attempt = 0
+    const complete = vi.fn<GenerationSession['complete']>(async task => {
+      attempt += 1
+      let content: string
+      if (attempt === 1) {
+        content = '{"blueprints":[{"chapterNumber":1,"title":"原始事实"}'
+      } else if (task.purpose.endsWith(':structured-syntax-repair')) {
+        content = '{"blueprints":[{"chapterNumber":1,"title":"改写事实"}]}'
+      } else {
+        content = blueprintJson(taskPayload(task).items)
+      }
+      const receipt = attemptReceipt(attempt, 100, attempt * 100, 'stop')
+      const artifactId = `artifact-${attempt}`
+      receipt.visibleArtifact = { artifactId, attemptId: artifactId, revision: 1, textHash: 'a'.repeat(64) }
+      return { status: 'completed', content, finishReason: 'stop', receipt }
+    })
+    const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+
+    const result = await executor.execute({ items: [1, 2], limits: { maxBatchItems: 2 } })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: [{ chapterNumber: 1, title: '第1章' }, { chapterNumber: 2, title: '第2章' }],
+      receipt: { calls: 4, splitCount: 1, requestedTokens: 400 },
+    })
+    expect(result.receipt.acceptedArtifacts?.map(({ artifact, itemKeys }) => [artifact.artifactId, itemKeys]))
+      .toEqual([['artifact-3', [1]], ['artifact-4', [2]]])
+    expect(complete.mock.calls.filter(([task]) => task.purpose.endsWith(':structured-syntax-repair'))).toHaveLength(1)
+    expect(complete.mock.calls.filter(([task]) => task.purpose === 'chapter-blueprints').map(([task]) => taskPayload(task)))
+      .toEqual([
+        { items: [1, 2], validatedPrefix: [] },
+        { items: [1], validatedPrefix: [] },
+        { items: [2], validatedPrefix: [{ chapterNumber: 1, title: '第1章' }] },
+      ])
+  })
+
   it('rejects syntax repair that splits one primitive token into two values', async () => {
     let attempt = 0
     const complete = vi.fn<GenerationSession['complete']>(async () => {
@@ -878,7 +915,7 @@ describe('StructuredBatchExecutor seam', () => {
       session: { complete },
     })
 
-    const result = await executor.execute({ items: [1, 2], limits: { maxBatchItems: 2 } })
+    const result = await executor.execute({ items: [12], limits: { maxBatchItems: 1 } })
 
     expect(result).toMatchObject({ ok: false, failure: { reason: 'malformed_output' }, receipt: { calls: 2 } })
     expect(result).not.toHaveProperty('items')
