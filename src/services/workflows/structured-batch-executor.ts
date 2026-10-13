@@ -375,6 +375,13 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
               })
             }
             if (!preservesStructuredJsonEvidence(candidateContent, repaired.content)) {
+              if (items.length > 1) {
+                const midpoint = Math.floor(items.length / 2)
+                receipt.splitCount += 1
+                await executeBatch(items.slice(0, midpoint))
+                await executeBatch(items.slice(midpoint))
+                return
+              }
               throw new ExecutionFailure({
                 code: 'invalid_output',
                 reason: 'malformed_output',
