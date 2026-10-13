@@ -209,6 +209,36 @@ describe('character store project context', () => {
     )
   })
 
+  it('keeps reloaded remote fields through repeated saves of an avatar-only draft', async () => {
+    const original = { ...character('A 角色'), age: '20' }
+    const refreshed = { ...original, age: '31' }
+    const session = { projectId: 'a', leaseId: 'lease-a', projectPath: PROJECT_A }
+    invoke
+      .mockResolvedValueOnce([original])
+      .mockResolvedValueOnce([refreshed])
+      .mockResolvedValueOnce({ success: true })
+      .mockResolvedValueOnce({ success: true })
+      .mockResolvedValueOnce({ success: true })
+
+    await useCharacterStore.getState().load(PROJECT_A, session)
+    useCharacterStore.getState().stageAvatar('id:A 角色', {
+      kind: 'image', base64: 'synthetic-avatar', mime: 'image/png',
+    }, session)
+    await useCharacterStore.getState().load(PROJECT_A, session)
+    expect(useCharacterStore.getState().characters[0].age).toBe('31')
+
+    await useCharacterStore.getState().saveAll(PROJECT_A, session)
+    expect.soft(useCharacterStore.getState().characters[0].age).toBe('31')
+    expect(useCharacterStore.getState().avatarDrafts).toEqual({})
+    expect(invoke).toHaveBeenCalledWith('character-avatar:commit', 'id:A 角色', 'synthetic-avatar')
+    await useCharacterStore.getState().saveAll(PROJECT_A, session)
+
+    expect(invoke.mock.calls
+      .filter(([channel]) => channel === 'db:character-roster-commit')
+      .map(([, request]) => request.entries[0].age)).toEqual(['31', '31'])
+    expect(useCharacterStore.getState().characters[0].age).toBe('31')
+  })
+
   it('clears characters and relationships through one roster commit receipt', async () => {
     const linkedCharacter = {
       ...character('A 角色'),
