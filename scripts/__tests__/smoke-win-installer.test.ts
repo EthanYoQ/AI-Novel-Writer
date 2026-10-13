@@ -371,7 +371,7 @@ catch { [pscustomobject]@{ error = $_.Exception.Message; environmentRestored = $
     expect(failedRead.error).toContain('Installed package version reader failed')
     expect(failedRead.environmentRestored).toBe(true)
   } finally {
-    rmSync(fixtureRoot, { recursive: true, force: true })
+    rmSync(fixtureRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 })
   }
 })
 
