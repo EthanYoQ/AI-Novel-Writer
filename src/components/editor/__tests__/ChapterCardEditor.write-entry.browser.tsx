@@ -216,7 +216,8 @@ describe('ChapterCardEditor writing entry', () => {
       .find(span => span.textContent === '第一章')!.click())
     expect(input().value).toBe('Aster、Silas')
     await act(async () => userEvent.click(input()))
-    await act(async () => userEvent.keyboard('{Control>}a{/Control}{Backspace}'))
+    await act(async () => userEvent.clear(input()))
+    expect(input().value).toBe('')
     expect(document.activeElement).toBe(input())
     await act(async () => saveDirtyEditorChangesForExit(PROJECT_PATH))
     expect(invoke.mock.calls.filter(call => call[0] === 'db:blueprint-upsert-many').at(-1)?.[1]).toEqual([
