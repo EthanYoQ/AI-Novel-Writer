@@ -2269,10 +2269,11 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
-  it('fails closed after the single allowed detail JSON repair is still invalid', async () => {
+  it('fails closed when a single-item detail remains invalid after the one allowed repair', async () => {
     const malformed = '{"entries":['
     const generateStream = createResponseStream([
       JSON.stringify(manifestFor(rosterEntries)),
+      malformed,
       malformed,
       malformed,
     ])
@@ -2283,7 +2284,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
-        return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证第二次 JSON 仍无效时绝不继续重试或写入，同时避免测试因为前置长度不足而提前中止。' }
+        return { premise: '足够长的故事前提，确保角色架构命令能够开始生成并验证批次语法修复和单项重生成仍无效时停止且不写入，同时避免测试因为前置长度不足而提前中止。' }
       }
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
@@ -2304,9 +2305,16 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
     await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow(/语法修复|结构化/u)
+      .rejects.toThrow('结构化输出无法按合同解码；角色详情失败收据：code=invalid_output reason=invalid_item')
 
-    expect(generateStream).toHaveBeenCalledTimes(3)
+    expect(generateStream).toHaveBeenCalledTimes(4)
+    expect(generateStream.mock.calls[3]?.[0].find(message => message.role === 'user')?.content)
+      .toContain('【本批必须完整生成的 slotId】\nslot-1\n')
+    expect(context.data.characterDetailArtifacts).toEqual([
+      expect.objectContaining({ purpose: 'character-architecture-details', finishReason: 'stop' }),
+      expect.objectContaining({ purpose: 'character-architecture-details:structured-syntax-repair', finishReason: 'stop' }),
+      expect.objectContaining({ purpose: 'character-architecture-details', finishReason: 'stop' }),
+    ])
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
