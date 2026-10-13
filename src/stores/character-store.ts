@@ -358,9 +358,6 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
             ),
           )
         : { ledger: draftLedger, value: cards }
-      if (requestedProjectKey && getProjectEditorDraft(draftLedger, requestedProjectKey)) {
-        persistCharacterDraftLedger(restored.ledger)
-      }
       if (
         !isCharacterProjectSessionCurrent(projectSession)
         || requestSequence !== characterLoadSequence
@@ -383,6 +380,9 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
         selectedId: selected ? characterSelectionKey(selected, visibleCards.indexOf(selected)) : null,
         selectedName: selected?.name ?? null,
       })
+      if (requestedProjectKey && getProjectEditorDraft(draftLedger, requestedProjectKey)) {
+        persistCharacterDraftLedger(restored.ledger)
+      }
     } catch (error) {
       if (
         !isCharacterProjectSessionCurrent(projectSession)
