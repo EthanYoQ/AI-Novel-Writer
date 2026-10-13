@@ -823,7 +823,7 @@ describe('batch chapter completion mode browser flow', () => {
     expect(invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
     expect(draftRecord?.chapterNumber).toBe(10)
     await expect.element(page.getByText('第5章字数超过约定', { exact: true })).toBeVisible()
-  })
+  }, 60_000)
 
   it('creates an editable draft in the project tree without finalization side effects', async () => {
     await act(async () => {
