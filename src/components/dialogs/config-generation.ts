@@ -24,7 +24,7 @@ export function configFieldsToExpand(config: Partial<NovelConfig> | undefined, t
 
 /**
  * 按创作脑洞与当前规模在后台启动 AI 填充配置。没有默认模型、与正在运行的任务冲突时不启动，返回 false。
- * 旧外壳的生成配置对话框与新外壳的设定页共用。
+ * 设定页的 AI 补全与单项生成用它。
  */
 export function startConfigGeneration({ idea, projectSession, onGenerated }: {
   idea: string

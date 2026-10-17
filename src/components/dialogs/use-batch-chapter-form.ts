@@ -35,7 +35,7 @@ export interface BatchChapterProps {
 
 /**
  * 批量创作对话框的表单：起始章、章数、每章目标、完成模式（自动定稿要再确认一次）、本次模型与一致性预检。
- * 旧外壳的 BatchChapterCreationDialog 与新外壳的批量创作对话框共用；每次打开都应是新的实例，见各自的会话包装。
+ * 批量写稿对话框用它；每次打开都应是新的实例，见对话框的会话包装。
  */
 export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: BatchChapterProps) {
   const text = useLocaleStore(s => s.text)

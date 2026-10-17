@@ -11,7 +11,7 @@ import type { ReviewRevisionRecovery } from '../../shared/review-revision-genera
 import { workflowResourceKey, type WorkflowRun } from '../../stores/workflow-store'
 
 /**
- * 运行中断后可以接着做的事。两种外壳的运行界面都从这里取标题、提示、可复制的文字与动作是否可用，
+ * 运行中断后可以接着做的事。运行侧页从这里取标题、提示、可复制的文字与动作是否可用，
  * 各自只负责排版；数据由 use-run-recovery 读取，动作也由它执行。
  */
 export type RecoveryEntry = CandidateEntry | PlanningEntry | EditorEntry | ReviewEntry | BatchEntry | DraftEntry

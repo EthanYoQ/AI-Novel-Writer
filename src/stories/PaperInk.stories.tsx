@@ -17,7 +17,6 @@ import { SegmentedControl } from '../components/ui/SegmentedControl'
 import { Sheet } from '../components/ui/Sheet'
 import { StatGrid } from '../components/ui/StatGrid'
 import { toast } from '../components/ui/Toast'
-import { useAppearanceStore } from '../stores/appearance-bootstrap'
 import { paperInkFrame } from './paper-ink-frame'
 
 const meta = {
@@ -217,15 +216,13 @@ function DangerDemo() {
 
 export const Danger: Story = { render: () => <DangerDemo /> }
 
-/** 命令式弹窗与提示栈只在新外壳下走纸墨宿主，所以先把外壳切到 stage。 */
+/** 命令式弹窗与提示栈走纸墨宿主。 */
 function OverlaysDemo() {
-  const stage = () => useAppearanceStore.setState({ resolvedShell: 'stage' })
   return (
     <div style={row}>
-      <Button variant="secondary" onClick={() => { stage(); void alertError('不是有效的项目目录。\n\n请重新选择。', { title: '打开项目失败' }) }}>错误弹框</Button>
-      <Button variant="secondary" onClick={() => { stage(); void confirm('将删除第 3 章的定稿正文。删除后无法恢复。', { title: '删除定稿正文？', confirmText: '删除', danger: true }) }}>危险确认</Button>
+      <Button variant="secondary" onClick={() => { void alertError('不是有效的项目目录。\n\n请重新选择。', { title: '打开项目失败' }) }}>错误弹框</Button>
+      <Button variant="secondary" onClick={() => { void confirm('将删除第 3 章的定稿正文。删除后无法恢复。', { title: '删除定稿正文？', confirmText: '删除', danger: true }) }}>危险确认</Button>
       <Button variant="secondary" onClick={() => {
-        stage()
         toast.success('第 3 章已定稿\n\n正文已写入作品目录。')
         actionToast.show({ type: 'error', message: '第 3 章审稿失败\n\n模型连接超时，已保留草稿。', actions: [{ label: '查看' }, { label: '忽略', variant: 'ghost' }] })
         toast.warning('字数超出限制')

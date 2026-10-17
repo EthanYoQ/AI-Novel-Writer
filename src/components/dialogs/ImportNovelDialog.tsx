@@ -887,8 +887,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
           {costEstimate && (
             <div className="rounded-lg px-3 py-2.5 space-y-1.5"
               style={{
-                backgroundColor: 'rgba(107, 164, 220, 0.06)',
-                border: '1px solid rgba(107, 164, 220, 0.15)',
+                backgroundColor: 'color-mix(in srgb, var(--color-info) 6%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--color-info) 15%, transparent)',
               }}>
               <div className="flex items-center gap-1.5">
                 <Zap size={13} style={{ color: 'var(--color-accent)' }} />

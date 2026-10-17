@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { _electron as electron } from 'playwright'
 import yauzl from 'yauzl'
+import * as stage from './redesign/pages/stage.mjs'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -189,12 +190,12 @@ async function waitNotice(panel, expected, timeout = 30_000) {
   }
 }
 async function openBackup(page, projectName) {
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  await page.getByRole('button', { name: `打开《${projectName}》` }).click()
-  await page.locator('.writer-left-rail button[title="设置"]').click()
-  await page.getByRole('button', { name: '项目备份', exact: true }).click()
-  await page.getByRole('heading', { name: '项目备份', exact: true }).waitFor()
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, projectName)
+  await stage.waitForWork(page, projectName)
+  await stage.openSettings(page)
+  await stage.showSettingsPage(page, '项目备份')
   if (process.argv.includes('--probe-hidden-generation')) {
     await page.addStyleTag({ content: 'li:has(input[name="restore-generation"]) { display: none !important }' })
   }
@@ -210,7 +211,7 @@ async function launchProfile(profile) {
     args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
   try {
     const page = await app.firstWindow({ timeout: 30_000 })
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForStage(page)
     return { app, page }
   } catch (error) { await app.close(); throw error }
 }
@@ -228,18 +229,9 @@ async function runProfile(profile, endpoint) {
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
     steps.push({ stepId: `${profile.name}-packaged-startup`, assertion: 'isolated packaged process and ready IPC', outcome: 'PASS' })
 
-    // Test-profile setup only. Keep the release default untouched and verify the actual rendered shell.
-    await page.evaluate(() => {
-      const key = 'ai-novel-writer-appearance'
-      const profile = JSON.parse(localStorage.getItem(key))
-      profile.shellPreference = 'writer'
-      profile.revision += 1
-      profile.origin = 'author'
-      localStorage.setItem(key, JSON.stringify(profile))
-    })
-    await page.reload()
-    await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible', timeout: 30_000 })
-    steps.push({ stepId: `${profile.name}-v3-shell`, assertion: 'explicit profile selection rendered V3 Writer shell', outcome: 'PASS' })
+    // 纸墨外壳是唯一的外壳，不再写外观偏好；核对实际渲染出来的外壳。
+    assert.equal(await stage.root(page).getAttribute('data-shell-presentation'), 'stage')
+    steps.push({ stepId: `${profile.name}-stage-shell`, assertion: 'default profile rendered the paper-ink stage shell', outcome: 'PASS' })
 
     // Setup may use IPC. The U16 action starts after V3 opens this project through its own control.
     currentStep = `${profile.name}:project-setup`
@@ -257,7 +249,7 @@ async function runProfile(profile, endpoint) {
       assert.equal(seeded.success, true, seeded.error)
     }
     await page.reload()
-    await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
+    await stage.waitForStage(page)
     const panel = await openBackup(page, projectName)
     const project = await invoke(page, 'project:get-runtime-context')
     assert.equal(path.resolve(project.activeProjectPath), path.resolve(created.projectPath))
@@ -346,7 +338,7 @@ async function runProfile(profile, endpoint) {
     assert.notEqual(restarted.app.process()?.pid, firstPid, 'restart reused the original process')
     assert.equal(path.resolve(await restarted.app.evaluate(({ app }) => app.getPath('userData'))), profile.userData)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-    await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForStage(page)
     const panel = await openBackup(page, `U16-${profile.name}`)
     await panel.getByText('可写绑定：').waitFor({ state: 'visible', timeout: 30_000 })
     const before = davRequests.length

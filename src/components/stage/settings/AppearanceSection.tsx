@@ -1,14 +1,11 @@
 import { useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { Minus, Moon, Plus, Sun } from 'lucide-react'
 import type { Locale } from '../../../i18n/types'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { FONT_OPTIONS, useThemeStore, type FontId } from '../../../stores/theme-store'
 import { useAutoOpenNextChapter } from '../../settings/use-auto-open-next-chapter'
 import { Button } from '../../ui/Button'
 import { Check } from '../../ui/Check'
-import { SegmentedControl } from '../../ui/SegmentedControl'
-import { inkTheme } from '../ink-theme'
 import { commandLabel } from '../shortcut-keys'
 
 /** 一行设置：左边标题与说明，右边控件与标题对齐；children（示例句、错误）占整行，放在下面。 */
@@ -32,13 +29,12 @@ function ThemeChoice() {
   const text = useLocaleStore(s => s.text)
   const theme = useThemeStore(s => s.theme)
   const setTheme = useThemeStore(s => s.setTheme)
-  const ink = inkTheme(theme)
   const radios = useRef<(HTMLButtonElement | null)[]>([])
   const themes = [
     { id: 'light', icon: <Sun size={18} aria-hidden="true" />, name: text('浅色', 'Light'), desc: text('纸面与墨色', 'Paper and ink') },
     { id: 'dark', icon: <Moon size={18} aria-hidden="true" />, name: text('深色', 'Dark'), desc: text('夜里写作', 'For the night') },
   ] as const
-  const selected = themes.findIndex(option => option.id === ink)
+  const selected = themes.findIndex(option => option.id === theme)
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!THEME_KEYS.has(event.key) || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
@@ -53,8 +49,8 @@ function ThemeChoice() {
     <div className="stage-set-themes" role="radiogroup" aria-label={text('主题', 'Theme')} onKeyDown={onKeyDown}>
       {themes.map((option, index) => (
         <button key={option.id} ref={element => { radios.current[index] = element }} type="button" role="radio"
-          aria-checked={ink === option.id} tabIndex={index === selected ? 0 : -1} className="stage-set-theme"
-          data-theme-option={option.id} onClick={() => { if (ink !== option.id) setTheme(option.id) }}>
+          aria-checked={theme === option.id} tabIndex={index === selected ? 0 : -1} className="stage-set-theme"
+          data-theme-option={option.id} onClick={() => { if (theme !== option.id) setTheme(option.id) }}>
           {option.icon}
           <span className="stage-set-theme-name">{option.name}</span>
           <span className="stage-set-theme-desc">{option.desc}</span>
@@ -73,13 +69,12 @@ function FontSelect({ id, value, onChange }: { id: string; value: FontId; onChan
   )
 }
 
-/** 外观：界面布局、主题、语言、字体、缩放与定稿后打开下一章。改动立即生效。 */
+/** 外观：主题、语言、字体、缩放与定稿后打开下一章。改动立即生效。 */
 export default function AppearanceSection() {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
   const setLocale = useLocaleStore(s => s.setLocale)
   const { zoom, zoomIn, zoomOut, zoomReset, uiFont, setUiFont, writingFont, setWritingFont } = useThemeStore()
-  const resolvedShell = useAppearanceStore(s => s.resolvedShell)
   const autoOpenNext = useAutoOpenNextChapter()
   const languageId = useId()
   const uiFontId = useId()
@@ -124,18 +119,6 @@ export default function AppearanceSection() {
       >
         {autoOpenNext.error && <p className="stage-set-error" role="alert">{autoOpenNext.error}</p>}
       </Row>
-      <Row
-        title={text('界面布局', 'Layout')}
-        desc={text('创作流程按设定、架构、蓝图、正文组织一部作品，仍在完善中，随时可以切回工作台。', 'Creative flow organizes a book into setup, architecture, blueprint and manuscript. It is in preview; you can switch back to the workbench at any time.')}
-        control={(
-          <SegmentedControl
-            label={text('界面布局', 'Layout')}
-            value={resolvedShell === 'stage' ? 'stage' : 'workbench'}
-            options={[{ value: 'workbench', label: text('工作台', 'Workbench') }, { value: 'stage', label: text('创作流程（预览）', 'Creative flow (preview)') }]}
-            onChange={value => useAppearanceStore.getState().update({ shellPreference: value === 'stage' ? 'stage' : 'unset' })}
-          />
-        )}
-      />
     </div>
   )
 }

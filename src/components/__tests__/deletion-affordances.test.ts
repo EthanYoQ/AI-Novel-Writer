@@ -9,13 +9,11 @@ function source(file: string) {
 }
 
 describe('generated content deletion affordances', () => {
-  it('exposes visible all-generated-content clearing from the project tree', () => {
-    const projectTree = source('src/components/panels/sidebar/ProjectTree.tsx')
+  it('exposes clearing all generated content from the work menu', () => {
+    const shell = source('src/components/stage/StageShell.tsx')
 
-    expect(projectTree).toContain('清除全部')
-    expect(projectTree).toContain('清除项目生成内容')
-    expect(projectTree).toContain("text('工作流运行中，暂不能清除', 'A workflow is running. Project data cannot be cleared yet.')")
-    expect(projectTree).toContain("text('清除项目生成内容', 'Clear generated project data')")
+    expect(shell).toContain("text('清除生成内容…', 'Clear generated content…')")
+    expect(shell).toContain('ClearProjectDataDialog')
   })
 
   it('localizes architecture document fallback and refresh affordance', () => {
@@ -26,7 +24,7 @@ describe('generated content deletion affordances', () => {
   })
 
   it('supports deleting one blueprint and clearing all blueprints through persisted IPC', () => {
-    const chapterCards = source('src/components/editor/ChapterCardEditor.tsx') + source('src/components/editor/use-chapter-blueprints.ts')
+    const chapterCards = source('src/components/stage/blueprint/StageBlueprint.tsx') + source('src/components/editor/use-chapter-blueprints.ts')
     const dbController = source('electron/controllers/db-controller.ts')
     const ipcChannels = source('src/shared/ipc-channels.ts')
 
@@ -38,8 +36,8 @@ describe('generated content deletion affordances', () => {
   })
 
   it('supports deleting generated drafts and finalized manuscript chapters through persisted IPC', () => {
-    const draftBox = source('src/components/panels/sidebar/DraftBoxGroup.tsx')
-    const manuscript = source('src/components/panels/sidebar/ManuscriptGroup.tsx')
+    const draftBox = source('src/components/stage/chapter/ChapterActions.tsx')
+    const manuscript = source('src/components/stage/chapter/ChapterActions.tsx') + source('src/components/stage/chapter/DeletionCleanupNotices.tsx')
     const draftDeletion = source('src/components/panels/sidebar/draft-deletion.ts')
     const incompleteDeletions = source('src/components/panels/sidebar/use-incomplete-deletions.ts')
     const finalizedDeletion = source('src/components/panels/sidebar/finalized-chapter-deletion.ts')
@@ -63,8 +61,8 @@ describe('generated content deletion affordances', () => {
   })
 
   it('offers explicit legacy recovery and refreshes deletion receipts from both finalized surfaces', () => {
-    const draftBox = source('src/components/panels/sidebar/DraftBoxGroup.tsx')
-    const manuscript = source('src/components/panels/sidebar/ManuscriptGroup.tsx')
+    const draftBox = source('src/components/stage/chapter/ChapterActions.tsx')
+    const manuscript = source('src/components/stage/chapter/DeletionCleanupNotices.tsx')
     const incompleteDeletions = source('src/components/panels/sidebar/use-incomplete-deletions.ts')
     const finalizedDeletion = source('src/components/panels/sidebar/finalized-chapter-deletion.ts')
     const eventBus = source('src/shared/event-bus.ts')
@@ -101,12 +99,13 @@ describe('generated content deletion affordances', () => {
   })
 
   it('supports deleting recent and current projects through persisted IPC', () => {
-    const homeSidebar = source('src/components/panels/sidebar/HomeSidebarPanel.tsx')
+    const homeSidebar = source('src/components/stage/library/StageLibrary.tsx')
     const projectStore = source('src/stores/project-store.ts')
     const projectController = source('electron/controllers/project-controller.ts')
     const ipcChannels = source('src/shared/ipc-channels.ts')
 
-    expect(homeSidebar).toContain('删除项目')
+    expect(homeSidebar).toContain('删除作品')
+    expect(homeSidebar).toContain('从最近项目移除')
     expect(projectStore).toContain('deleteProject')
     expect(projectController).toContain("'project:delete'")
     expect(ipcChannels).toContain("'project:delete'")

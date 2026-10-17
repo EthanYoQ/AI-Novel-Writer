@@ -30,11 +30,11 @@ const MODAL_SELECTOR = '[role="dialog"]:not(.pi-popover), [role="alertdialog"]'
 
 /**
  * 界面上有模态层：旧的全局对话框（开关记在 layout-store）或页面上任何对话框、确认框、提示框。
- * 设置在新外壳里是页面而不是弹窗，不算模态层。
+ * 设置是页面而不是弹窗，不算模态层。
  * 模态层开着时外壳快捷键不在它下面再开层，否则新开的层被盖住，Radix 又抢走焦点，界面像冻住了一样。
  */
 export function isModalOpen(): boolean {
   const layout = useLayoutStore.getState()
-  return layout.exportOpen || layout.newProjectOpen || layout.importNovelOpen || layout.chapterCreationOpen
+  return layout.exportOpen || layout.newProjectOpen || layout.importNovelOpen
     || document.querySelector(MODAL_SELECTOR) !== null
 }

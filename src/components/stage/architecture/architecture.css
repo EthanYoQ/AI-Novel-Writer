@@ -1,6 +1,6 @@
 /*
  * 架构阶段。Claude Design 没有架构专属画板，版式取 prototype/architecture.html 与 architecture-confirm.html 的结构，
- * 外观按 design-system.md 与已合并的新外壳（纸面卡片、0 0 0 1px 的令牌描边、Instrument Serif 编号）外推。只引用纸墨令牌。
+ * 外观按 design-system.md 与外壳已有的做法（纸面卡片、0 0 0 1px 的令牌描边、Instrument Serif 编号）外推。只引用纸墨令牌。
  */
 .arch-page {
   flex: 1;

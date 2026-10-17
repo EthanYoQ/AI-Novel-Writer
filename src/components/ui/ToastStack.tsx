@@ -7,7 +7,7 @@ import { Button } from './Button'
 import { toastStackMount } from './ink-overlay'
 
 /**
- * 新外壳下 toast.* 与 actionToast.* 共用的提示栈：右下角一列，新的在下；鼠标停在栈上时所有计时暂停。
+ * toast.* 与 actionToast.* 共用的提示栈：右下角一列，新的在下；鼠标停在栈上时所有计时暂停。
  * 两个公共 API 的签名不变，只是往这里推条目。每条一到就露面，没有暗处排队：
  * 常驻、出错与带动作的通知从不让位，4 条上限只约束普通通知，超出时按 yieldRank 把已有的普通通知挤掉（播退场后拿掉）。
  * 同一句话再来一次不新起一条，原来那条重新计时。

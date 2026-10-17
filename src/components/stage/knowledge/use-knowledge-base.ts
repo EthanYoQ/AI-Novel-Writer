@@ -27,7 +27,7 @@ const EMPTY_STATS: KBStatsData = { documentCount: 0, totalChunks: 0, vectorDimen
 export const EMPTY_DRAFT: KnowledgeDraft = { docId: null, copy: null, content: '' }
 
 /**
- * 所选资料与改动存放的位置：旧外壳放在页面里，新外壳放在知识库标签上。
+ * 所选资料与改动存放的位置：知识库标签上，换页再回来不丢。
  * 第三项读此刻的值：读写返回时页面可能已换了实例，只认这一格里现在放着的。
  */
 export type KnowledgeDraftSlot = readonly [KnowledgeDraft, (next: KnowledgeDraft) => void, () => KnowledgeDraft]
@@ -38,7 +38,7 @@ export function isImportedDocument(document: KBDocument): boolean {
 }
 
 /**
- * 检索索引的状态与检查重建。新外壳把它放在设置的检索模型页，旧外壳仍在知识库页；
+ * 检索索引的状态与检查重建，放在设置的检索模型页；
  * 状态检查只读本地数据，重建会按当前检索模型补全或重建。
  */
 export function useKnowledgeIndex() {
@@ -112,7 +112,7 @@ export function useKnowledgeIndex() {
 
 /**
  * 知识库的数据：资料列表与统计、资料原文的项目副本（读、改、存、更新本地索引）、检索、清空与导入创作资料。
- * 新外壳的知识库页与旧外壳的 KnowledgeOverview 共用。确认（切换时放弃修改、清空、外发提取）由页面各自呈现，
+ * 知识库页用它。确认（切换时放弃修改、清空、外发提取）由页面呈现，
  * 这里只在确认之后执行。
  */
 export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
@@ -264,7 +264,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
   const dirty = knowledgeDraftDirty(draft)
   const setDraftContent = (content: string) => setDraft({ ...draft, content })
 
-  /** 保存项目副本。新外壳的 Ctrl S 与退出前保存在页面卸载后也会调到这里；正在保存时再调不重复发送。 */
+  /** 保存项目副本。Ctrl S 与退出前保存在页面卸载后也会调到这里；正在保存时再调不重复发送。 */
   const saveDocument = async () => {
     const session = captureProjectSession(useProjectStore.getState().currentProject)
     const current = readDraft()

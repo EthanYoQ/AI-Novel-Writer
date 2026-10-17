@@ -12,7 +12,7 @@ import type { SaveOutcome } from './save-feedback'
 
 /**
  * 角色档案的数据与操作：当前选中的角色、保存（含退出时保存）、删除一位、删除全部、改字段与改名。
- * 确认由调用方负责：旧外壳用 confirm()，新外壳用危险确认对话框。调用方在弹出确认前用 beginDelete 冻结项目会话，
+ * 确认由调用方负责（角色档案页用危险确认对话框）。调用方在弹出确认前用 beginDelete 冻结项目会话，
  * 确认期间换了项目时删除不会落到新项目上。
  */
 export function useCharacterProfile(projectKey: string) {

@@ -9,6 +9,9 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as blueprint from './redesign/pages/blueprint.mjs'
+import * as runSheet from './redesign/pages/run-sheet.mjs'
+import * as stage from './redesign/pages/stage.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const argument = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -39,15 +42,25 @@ const model = { id: 'v3-history-fixture', name: 'V3 history fixture', provider: 
 const steps = []
 const pass = (name, observed) => steps.push({ name, outcome: 'PASS', observed })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
-const assistant = page => page.locator('[aria-label="AI 输出"]')
 let secondRequestResolve
 const secondRequest = new Promise(resolve => { secondRequestResolve = resolve })
-const fixture = { requests: 0 }
-const server = createServer((request, response) => {
+// 写稿先要一份短细纲（只写短细纲），再写正文。细纲另计，requests 只数正文请求：第 1 次 A 写完，第 2 次 B 挂住等取消，第 3 次 A 可控失败。
+const fixture = { requests: 0, outlines: 0 }
+const shortOutline = '- 原目标：发现线索。\n- 结尾状态：线索指向旧车站。'
+const server = createServer(async (request, response) => {
   if (request.method !== 'POST' || request.url !== '/v1/chat/completions'
     || request.headers.authorization !== `Bearer ${model.apiKey}`) { response.writeHead(403).end(); return }
-  fixture.requests++
+  let raw = ''
+  for await (const chunk of request) raw += chunk
+  const prompt = (JSON.parse(raw).messages ?? []).map(message => String(message.content)).join('\n')
   response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+  if (prompt.includes('只写短细纲')) {
+    fixture.outlines++
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: shortOutline }, finish_reason: 'stop' }] })}\n\n`)
+    response.end('data: [DONE]\n\n')
+    return
+  }
+  fixture.requests++
   if (fixture.requests === 1) {
     response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: bodies.A }, finish_reason: 'stop' }] })}\n\n`)
     response.end('data: [DONE]\n\n')
@@ -61,6 +74,11 @@ const server = createServer((request, response) => {
     response.end('unexpected fixture request')
   }
 })
+
+// 纸墨外壳：写作此章从流程脊的章节进单章视图点「写作此章」；运行、历史与可恢复的内容都在运行侧页。
+// 旧外壳的 AI 输出历史按章节标题找按钮，而运行标题是「第 1 章 · 写稿」，那个查找总是落空（#381 R11）；
+// 这里按运行侧页「历史」分页的行与它展开后的输出判定，项目隔离按行数与正文判定，查不到就失败。
+const RUN_TITLE = '第 1 章 · 写稿'
 
 async function launch(port) {
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: profile.canonical, AI_NOVEL_LEGACY_SOURCE_HOME: profile.legacy,
@@ -78,33 +96,52 @@ async function launch(port) {
   }, port)
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  await stage.waitForStage(page)
   assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer', revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
   return { app, page }
 }
 
-async function dismissNotice(page) {
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-}
 async function openFromShelf(page, name) {
-  await dismissNotice(page)
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${name}》` }).click()
-  await page.locator('.writer-project-tree').getByText(name, { exact: true }).waitFor({ state: 'visible' })
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, name)
+  await stage.waitForWork(page, name)
 }
-async function startChapter(page) {
-  await page.locator('.writer-project-tree').getByText('章节蓝图', { exact: true }).click()
-  await page.getByRole('button', { name: '写作此章' }).click()
-  await page.getByRole('dialog').getByPlaceholder('3000').fill('100')
-  await page.getByRole('dialog').getByRole('button', { name: '开始创作' }).click()
+
+/** 从流程脊打开这一章（待写），点单章视图的「写作此章」：按蓝图与设定里的每章字数直接开始，运行侧页随之展开。 */
+async function startChapter(page, number) {
+  if (!await stage.chapterList(page).isVisible()) await stage.stageButton(page, '正文').click()
+  await stage.chapterButton(page, number).click()
+  await stage.root(page).getByRole('button', { name: '写作此章', exact: true }).click()
+  await runSheet.waitUntilOpen(page)
 }
+
+async function showRunSheetTab(page, name) {
+  await runSheet.openFromPalette(page)
+  await runSheet.tab(page, name).click()
+}
+
+/** 运行侧页「历史」分页里的行：标题、是否完成。没有记录时是空状态。 */
+async function historyRows(page) {
+  await showRunSheetTab(page, '历史')
+  const list = page.getByRole('list', { name: '运行历史' })
+  if (await list.count() === 0) return []
+  return list.getByRole('listitem').evaluateAll(items => items.map(item => ({
+    title: item.querySelector('.run-history-title')?.textContent ?? '',
+    completed: item.querySelector('.run-visually-hidden')?.textContent?.startsWith('已完成') ?? false,
+  })))
+}
+
+/** 展开历史里第 index 行，再展开其中每一步，返回展开后的文字。 */
+async function historyDetail(page, index) {
+  const item = page.getByRole('list', { name: '运行历史' }).getByRole('listitem').nth(index)
+  await item.locator('.run-history-row').click()
+  const detail = item.locator('.run-history-detail')
+  await detail.waitFor({ state: 'visible' })
+  for (const toggle of await detail.locator('button[aria-expanded="false"]').all()) await toggle.click()
+  return detail.innerText()
+}
+
 function savedDraft(projectPath) {
   const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { readonly: true })
   try { return db.prepare('SELECT d.id, d.version, d.status, c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=1 ORDER BY d.id').all() }
@@ -154,6 +191,9 @@ async function main() {
           name: '林岚', role: 'protagonist', gender: '', age: '', appearance: '', personality: '',
           background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '' }] }, created.projectPath, session)
       assert.equal(rosterCommit.success, true, rosterCommit.error)
+      // 纸墨外壳的写作此章不再填字数，按设定里的每章字数写；夹具一次回 120 字，目标定在 100。
+      const core = await invoke(page, 'db:project-core-update', { totalChapters: 1, wordsPerChapter: 100 }, created.projectPath, session)
+      assert.equal(core.success, true, core.error)
       assert.equal((await invoke(page, 'db:blueprint-upsert', { chapterNumber: 1, title: `${names[key]}章节`,
         role: '发展', purpose: '验证历史隔离', keyEvents: '发现线索', characters: [] }, created.projectPath, session)).success, true)
     }
@@ -165,57 +205,51 @@ async function main() {
     ;({ app, page } = await launch(port))
     lastPage = page
     await openFromShelf(page, names.A)
-    await startChapter(page)
-    await assistant(page).getByRole('button', { name: /中止生成|Stop generation/ }).waitFor({ state: 'visible' })
-    await assistant(page).getByRole('button', { name: /中止生成|Stop generation/ }).waitFor({ state: 'hidden', timeout: 30_000 })
+    await startChapter(page, 1)
+    await runSheet.waitForRunDone(page)
     assert.equal(fixture.requests, 1, 'A must make exactly one isolated provider request')
-    await assistant(page).getByText('整个工作流已全部完成', { exact: true }).waitFor({ state: 'visible' })
     const persistedA = savedDraft(projects.A)
     assert.equal(persistedA.length, 1)
     assert.deepEqual({ version: persistedA[0].version, status: persistedA[0].status, body: persistedA[0].body },
       { version: 1, status: 'draft', body: bodies.A })
-    const historyA = assistant(page).getByRole('button', { name: new RegExp(names.A + '章节') }).first()
-    await historyA.waitFor({ state: 'visible' })
-    await historyA.click()
-    await assistant(page).getByText('整个工作流已全部完成', { exact: true }).waitFor({ state: 'visible' })
-    await assistant(page).getByText('甲项目合成正文。', { exact: false }).first().waitFor({ state: 'visible' })
-    const candidateButtons = await assistant(page).locator('section[aria-label="持久正文候选"] button').evaluateAll(buttons => buttons.map(button => ({
+    const rowsA = await historyRows(page)
+    assert.deepEqual(rowsA, [{ title: RUN_TITLE, completed: true }], 'A history must list its one completed write run')
+    const detailA = await historyDetail(page, 0)
+    assert(detailA.includes('甲项目合成正文。'), 'A history detail must show the generated prose')
+    const historyButtons = await page.getByRole('list', { name: '运行历史' }).getByRole('button').evaluateAll(buttons => buttons.map(button => ({
       label: button.textContent?.trim(), clientWidth: button.clientWidth, scrollWidth: button.scrollWidth,
       clientHeight: button.clientHeight, scrollHeight: button.scrollHeight,
     })))
-    assert(candidateButtons.length >= 2, 'saved candidate copy and continue buttons missing')
-    for (const button of candidateButtons) {
+    for (const button of historyButtons) {
       assert(button.scrollWidth <= button.clientWidth && button.scrollHeight <= button.clientHeight,
-        `saved candidate button overflows: ${button.label} ${JSON.stringify(button)}`)
+        `history button overflows: ${button.label} ${JSON.stringify(button)}`)
     }
     pass('A-history', { project: names.A, draftStatus: persistedA[0].status, providerRequests: fixture.requests,
-      candidateButtons })
+      historyRows: rowsA, historyButtons: historyButtons.length })
     await page.screenshot({ path: path.join(receiptDir, 'a-history.png') })
 
     currentStep = 'A-to-B-isolation'
-    await page.locator('.writer-left-rail button[title="欢迎页"]').click()
-    await openFromShelf(page, names.B)
-    await page.getByRole('button', { name: 'AI 输出', exact: true }).click()
-    assert.equal(await assistant(page).getByRole('button', { name: new RegExp(names.A + '章节') }).count(), 0,
-      'A history title leaked into B project')
-    assert.equal((await assistant(page).innerText()).includes('甲项目合成正文。'), false, 'A body leaked into B project')
-    await startChapter(page)
-    const stop = assistant(page).getByRole('button', { name: /中止生成|Stop generation/ })
-    await stop.waitFor({ state: 'visible' })
+    await stage.backToLibrary(page, names.A)
+    await stage.openFromLibrary(page, names.B)
+    await stage.waitForWork(page, names.B)
+    assert.deepEqual(await historyRows(page), [], 'A run history leaked into B project')
+    assert.equal((await runSheet.sheet(page).innerText()).includes('甲项目合成正文。'), false, 'A body leaked into B project')
+    await startChapter(page, 1)
+    const cancel = runSheet.sheet(page).getByRole('button', { name: `取消「${RUN_TITLE}」` })
+    await cancel.waitFor({ state: 'visible' })
     await Promise.race([secondRequest, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('B provider request missing')), 30_000); timer.unref() })])
     assert.equal(fixture.requests, 2, 'B must reach the isolated provider fixture')
-    assert.equal(await assistant(page).getByRole('button', { name: new RegExp(names.A + '章节') }).count(), 0)
-    assert.equal((await assistant(page).innerText()).includes('甲项目合成正文。'), false,
+    assert.deepEqual(await runSheet.activeTitles(page), [RUN_TITLE], 'B active runs must only be its own write run')
+    assert.equal((await runSheet.sheet(page).innerText()).includes('甲项目合成正文。'), false,
       'A body leaked while B generation was running')
-    assert.equal((await page.locator('.writer-task-table').innerText()).includes(names.A), false,
-      'A task title leaked into B bottom task table while running')
-    await stop.click()
-    await stop.waitFor({ state: 'hidden', timeout: 30_000 })
+    await cancel.click()
+    await cancel.waitFor({ state: 'hidden', timeout: 30_000 })
     assert.deepEqual(savedDraft(projects.B), [], 'cancelled B must not save a draft')
-    assert.equal((await page.locator('.writer-task-table').innerText()).includes(names.A), false,
-      'A task title leaked into B bottom task table after stop')
-    pass('A-to-B-isolation', { project: names.B, oldHistoryVisible: false, oldBottomTaskVisible: false,
-      stopClicked: true, providerRequests: fixture.requests })
+    const rowsB = await historyRows(page)
+    assert.deepEqual(rowsB, [{ title: RUN_TITLE, completed: false }], 'B history must hold only its own stopped run')
+    assert.equal((await runSheet.sheet(page).innerText()).includes('甲项目合成正文。'), false, 'A body leaked into B after stop')
+    pass('A-to-B-isolation', { project: names.B, otherProjectHistoryVisible: false, stopClicked: true,
+      historyRows: rowsB, providerRequests: fixture.requests })
     await page.screenshot({ path: path.join(receiptDir, 'b-after-stop.png') })
     await app.close(); app = null
 
@@ -223,15 +257,18 @@ async function main() {
     ;({ app, page } = await launch(port))
     lastPage = page
     await openFromShelf(page, names.A)
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).waitFor({ state: 'visible' })
+    const reopenedProse = await stage.openChapter(page, 1)
+    assert.equal(await stage.proseBody(reopenedProse), bodies.A)
     assert.deepEqual(savedDraft(projects.A), persistedA)
-    await page.getByRole('button', { name: 'AI 输出', exact: true }).click()
-    const reopenedHistoryCount = await assistant(page).getByRole('button', { name: new RegExp(names.A + '章节') }).count()
-    pass('new-process-reopen', { persistedDraft: true, workflowHistoryEntryCount: reopenedHistoryCount })
+    const reopenedHistory = await historyRows(page)
+    pass('new-process-reopen', { persistedDraft: true, workflowHistoryEntryCount: reopenedHistory.length })
 
     currentStep = 'A-provider-failure'
-    await startChapter(page)
-    await assistant(page).getByText('工作流未完成', { exact: true }).waitFor({ state: 'visible', timeout: 30_000 })
+    // 第 1 章已有草稿时单章视图不再摆「写作此章」；没有定稿前权威的下一章仍是第 1 章，蓝图页的「写第 1 章」再写一稿。
+    await blueprint.open(page)
+    await blueprint.writeNext(page)
+    await runSheet.waitUntilOpen(page)
+    await runSheet.anyCard(page).filter({ hasText: /^上一次运行/ }).getByText(/ · 失败$/).waitFor({ state: 'visible', timeout: 30_000 })
     assert.equal(fixture.requests, 3, 'controlled failure must reach the provider fixture once')
     const failed = failedGeneration(projects.A)
     assert(failed, 'failed run must have a durable main-process artifact')
@@ -239,7 +276,8 @@ async function main() {
     assert.equal(failed.artifactStatus, 'partial', 'failed artifact must remain partial')
     assert.equal(JSON.parse(failed.attemptJson).status, 'unknown', 'failed provider attempt must retain unknown accounting')
     assert.deepEqual(savedDraft(projects.A), persistedA, 'failed generation must not add or replace any draft')
-    await assistant(page).locator('section[aria-label="持久正文候选"]').getByText(failedBody, { exact: false }).waitFor({ state: 'visible' })
+    await runSheet.tab(page, '进行中').click()
+    await runSheet.recovery(page).getByText(failedBody, { exact: false }).first().waitFor({ state: 'visible' })
     pass('A-provider-failure', { providerRequests: fixture.requests, runStatus: failed.runStatus,
       artifactStatus: failed.artifactStatus, draftUnchanged: true, visibleTextHash: createHash('sha256').update(failedBody).digest('hex') })
     await page.screenshot({ path: path.join(receiptDir, 'a-failed-candidate.png') })
@@ -249,12 +287,12 @@ async function main() {
     ;({ app, page } = await launch(port))
     lastPage = page
     await openFromShelf(page, names.A)
-    await page.getByRole('button', { name: 'AI 输出', exact: true }).click()
-    const candidate = assistant(page).locator('section[aria-label="持久正文候选"]')
-    await candidate.getByText(failedBody, { exact: false }).waitFor({ state: 'visible' })
-    assert.equal(await assistant(page).getByRole('button', { name: new RegExp(names.A + '章节') }).count(), 0,
-      'renderer workflow history should not be mistaken for durable recovery')
-    const copy = candidate.locator('article').filter({ hasText: failedBody }).getByRole('button', { name: '复制', exact: true })
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '进行中').click()
+    const candidate = runSheet.recovery(page).getByRole('article').filter({ hasText: failedBody })
+    await candidate.first().waitFor({ state: 'visible' })
+    // 候选里同一次运行的短细纲与正文各是一段摘录，各有自己的「复制」；复制的是带失败正文的那一段。
+    const copy = candidate.first().locator('figure').filter({ hasText: failedBody }).getByRole('button', { name: '复制', exact: true })
     const clipboardSentinel = `V3_RECOVERY_BEFORE_COPY_${runId}`
     assert.equal(await page.evaluate(async sentinel => {
       await navigator.clipboard.writeText(sentinel)
@@ -280,10 +318,10 @@ async function main() {
     server.closeAllConnections()
     if (server.listening) await new Promise(resolve => server.close(resolve))
     const receipt = { schemaVersion: 1, qualification: 'F04_V3_HISTORY_RECOVERY', outcome: failure ? 'FAIL' : 'PARTIAL',
-      evidenceLevel: 'electron', shell: 'writer-v3', checkoutHeadAtRun: git('rev-parse', 'HEAD'),
+      evidenceLevel: 'electron', shell: 'stage', checkoutHeadAtRun: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
       driver: { path: fileURLToPath(import.meta.url), sha256: sha256(fileURLToPath(import.meta.url)) },
-      profile: { scratch, projectPaths: projects }, fixture: { provider: 'loopback synthetic OpenAI SSE', requests: fixture.requests,
+      profile: { scratch, projectPaths: projects }, fixture: { provider: 'loopback synthetic OpenAI SSE', requests: fixture.requests, shortOutlines: fixture.outlines,
         mainProcessFetchPolicy: 'api.openai.com requests rewritten to loopback; other origins rejected' },
       steps, unverified: ['real model quality', 'durable renderer workflow history across restart'], failure }
     fs.writeFileSync(path.join(receiptDir, 'receipt.json'), JSON.stringify(receipt, null, 2))

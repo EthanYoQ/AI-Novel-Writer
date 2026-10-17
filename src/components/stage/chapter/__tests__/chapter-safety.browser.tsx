@@ -8,7 +8,6 @@ import { countDraftUnits } from '../../../../shared/draft-units'
 import { formatResourceUri } from '../../../../shared/project-paths'
 import { toast } from '../../../ui/Toast'
 import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
-import { useAppearanceStore } from '../../../../stores/appearance-bootstrap'
 import { useDraftStore } from '../../../../stores/draft-store'
 import { useEditorStore } from '../../../../stores/editor-store'
 import { useLLMStore } from '../../../../stores/llm-store'
@@ -26,7 +25,7 @@ import { AI_REVIEW, BLUEPRINT, ORIGINAL, REVISED, SESSION, chapterProject, creat
 
 const original = {
   editor: useEditorStore.getState(), project: useProjectStore.getState(), drafts: useDraftStore.getState(),
-  stage: useStageStore.getState(), llm: useLLMStore.getState(), workflow: useWorkflowStore.getState(), appearance: useAppearanceStore.getState(),
+  stage: useStageStore.getState(), llm: useLLMStore.getState(), workflow: useWorkflowStore.getState(),
 }
 
 let root: Root | undefined
@@ -87,7 +86,6 @@ afterEach(async () => {
   useStageStore.setState(original.stage, true)
   useLLMStore.setState(original.llm, true)
   useWorkflowStore.setState(original.workflow, true)
-  useAppearanceStore.setState(original.appearance, true)
 })
 
 describe('版本切换器', () => {
@@ -456,7 +454,6 @@ describe('写作此章、标签顶替与跨作品的请求', () => {
 
   it('删除正文的确认写的是新外壳里重试清理的位置', async () => {
     const draft = backend.addDraft({ status: 'finalized' })
-    useAppearanceStore.setState({ resolvedShell: 'stage' })
     await mount()
     await openDraft(draft.id)
     await click('更多操作')

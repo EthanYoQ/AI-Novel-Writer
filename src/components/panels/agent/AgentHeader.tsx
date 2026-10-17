@@ -1,11 +1,10 @@
-import { Plus, MoreHorizontal, X, Server, Sparkles, ChevronRight, History } from 'lucide-react'
+import { Plus, MoreHorizontal, Server, Sparkles, ChevronRight, History } from 'lucide-react'
 import { useAgentStore } from '../../../stores/agent-store'
-import { useLayoutStore } from '../../../stores/layout-store'
 import { useMCPStore } from '../../../stores/mcp-store'
 import { skillRegistry, type LoadedSkill } from '../../../services/agent/skill-registry'
 import { useRef, useState } from 'react'
 import { confirm } from '../../ui/Confirm'
-import { IconBtn } from '../../ui/IconBtn'
+import { Button } from '../../ui/Button'
 import { MenuItem } from '../../ui/MenuItem'
 import { useOutsideClick } from '../../../hooks/useOutsideClick'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -16,7 +15,6 @@ import { useLocaleStore } from '../../../stores/locale-store'
 export default function AgentHeader() {
   const text = useLocaleStore(s => s.text)
   const { createConversation, toggleHistory, showHistory, getActiveConversation } = useAgentStore()
-  const toggleAIPanel = useLayoutStore(s => s.toggleAIPanel)
   const [showMore, setShowMore] = useState(false)
   const [subView, setSubView] = useState<'main' | 'mcp' | 'skills'>('main')
   const moreRef = useRef<HTMLDivElement>(null)
@@ -34,11 +32,6 @@ export default function AgentHeader() {
   /** 新建会话 */
   const handleNew = () => {
     createConversation()
-  }
-
-  /** 关闭 AI 面板 */
-  const handleClose = () => {
-    toggleAIPanel()
   }
 
   // 当前会话为空（无消息）时禁止新建
@@ -65,35 +58,38 @@ export default function AgentHeader() {
       <div className="flex items-center gap-1.5 px-0.5 flex-shrink-0">
 
         {/* 新建对话按钮 */}
-        <IconBtn
-          title={isCurrentEmpty ? text('当前对话为空，请先发送消息', 'The current conversation is empty') : text('新建对话', 'New conversation')}
+        <Button
+          variant="icon"
+          size="sm"
+          aria-label={isCurrentEmpty ? text('当前对话为空，请先发送消息', 'The current conversation is empty') : text('新建对话', 'New conversation')}
           disabled={isCurrentEmpty}
           onClick={handleNew}
-          size={18}
         >
           <Plus size={13} strokeWidth={1.5} />
-        </IconBtn>
+        </Button>
 
         {/* 历史记录按钮 */}
-        <IconBtn
-          title={text('历史对话', 'Conversation history')}
+        <Button
+          variant="icon"
+          size="sm"
+          aria-label={text('历史对话', 'Conversation history')}
           onClick={toggleHistory}
-          active={showHistory}
-          size={18}
+          aria-pressed={showHistory}
         >
           <History size={15} strokeWidth={1.5} />
-        </IconBtn>
+        </Button>
 
         {/* 更多菜单 */}
         <div className="relative" ref={moreRef}>
-          <IconBtn
-            title={text('更多选项', 'More options')}
+          <Button
+            variant="icon"
+            size="sm"
+            aria-label={text('更多选项', 'More options')}
             onClick={() => { setShowMore(v => !v); setSubView('main') }}
-            active={showMore}
-            size={18}
+            aria-pressed={showMore}
           >
             <MoreHorizontal size={15} strokeWidth={1.5} />
-          </IconBtn>
+          </Button>
 
           {/* 更多菜单下拉 */}
           {showMore && (
@@ -103,7 +99,7 @@ export default function AgentHeader() {
                 width: subView === 'main' ? 200 : 260,
                 backgroundColor: 'var(--color-sidebar)',
                 border: '1px solid var(--color-border)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+                boxShadow: 'var(--shadow-popover)',
               }}
             >
               {/* ===== 主菜单视图 ===== */}
@@ -157,11 +153,6 @@ export default function AgentHeader() {
             </div>
           )}
         </div>
-
-        {/* 关闭面板按钮 */}
-        <IconBtn title={text('关闭 Agent 面板', 'Close Agent panel')} onClick={handleClose} size={18}>
-          <X size={15} strokeWidth={1.5} />
-        </IconBtn>
       </div>
     </div>
   )

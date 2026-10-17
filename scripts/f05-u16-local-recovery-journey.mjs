@@ -7,6 +7,7 @@ import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as stage from './redesign/pages/stage.mjs'
 import yauzl from 'yauzl'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
 import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
@@ -246,15 +247,8 @@ async function main() {
       args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
     const page = await app.firstWindow({ timeout: 30_000 })
     page.setDefaultTimeout(15_000)
-    await page.locator('.app-skin-root').waitFor({ state: 'visible' })
+    await stage.waitForStage(page)
     assert.equal(path.resolve(await app.evaluate(({ app }) => app.getPath('userData'))), profile.userData)
-    await page.evaluate(() => {
-      const key = 'ai-novel-writer-appearance'
-      const appearance = JSON.parse(localStorage.getItem(key))
-      localStorage.setItem(key, JSON.stringify({ ...appearance, shellPreference: 'writer', revision: appearance.revision + 1, origin: 'author' }))
-    })
-    await page.reload()
-    await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
     const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
@@ -266,15 +260,15 @@ async function main() {
       content: draftContent, wordCount: 4 }, created.projectPath, context)
     assert.equal(draft.success, true, draft.error)
     await page.reload()
-    await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
-    currentStep = 'v3-backup-entry'
-    const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-    await page.getByRole('button', { name: `打开《${name}》` }).click()
+    await stage.waitForStage(page)
+    currentStep = 'stage-backup-entry'
+    await stage.dismissMigrationNotice(page)
+    await stage.showLibrary(page)
+    await stage.openFromLibrary(page, name)
+    await stage.waitForWork(page, name)
     assert.equal(path.resolve((await invoke(page, 'project:get-runtime-context')).activeProjectPath), path.resolve(created.projectPath))
-    await page.locator('.writer-left-rail button[title="设置"]').click()
-    await page.getByRole('button', { name: '项目备份', exact: true }).click()
-    await page.getByRole('heading', { name: '项目备份', exact: true }).waitFor()
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '项目备份')
     panel = page.getByTestId('project-backup-panel')
     await panel.getByText('本地便携存档').waitFor()
     currentStep = 'U16.A01'
@@ -327,7 +321,7 @@ async function main() {
         args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
       assert.notEqual(app.process()?.pid, firstPid, 'reopen reused the original process')
       const reopenedPage = await app.firstWindow({ timeout: 30_000 })
-      await reopenedPage.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
+      await stage.waitForStage(reopenedPage)
       assert.equal((await invoke(reopenedPage, 'startup:get-state')).state, 'ready')
       const localRecent = await recentRestoredProject(reopenedPage, localCopy, created.projectId)
       const reopened = await invoke(reopenedPage, 'project:open', localRecent.path, randomUUID(), null)
@@ -348,7 +342,7 @@ async function main() {
       assert.equal(hash(scriptPath), driverSha256)
       assert.equal(hash(helperPath), helperSha256)
       assert.equal(provenance().asarSha256, source.asarSha256)
-      const receipt = { outcome: 'PARTIAL', qualification: 'F05_U16_A01_A02_PACKAGED_V3_ONLY', evidenceLevel: 'packaged-electron', presentation: 'writer-v3',
+      const receipt = { outcome: 'PARTIAL', qualification: 'F05_U16_A01_A02_PACKAGED_V3_ONLY', evidenceLevel: 'packaged-electron', presentation: 'stage',
         ...source, driverSha256, helperSha256, packageDir, localSha256, originalSha256,
         originProjectId: created.projectId, restoredProjectId: reopened.project.id,
         sourceDraftSha256: bytesHash(Buffer.from(draftContent)), restoredDraftSha256: bytesHash(Buffer.from(copyDraft.content)), firstPid, reopenedPid,
@@ -362,7 +356,7 @@ async function main() {
 
     if (process.argv.includes('--diagnose-after-local-restore')) {
       currentStep = 'diagnostic-post-local-restore-archive'
-      assert.equal(await page.locator('[data-shell-presentation]').getAttribute('data-shell-presentation'), 'writer')
+      assert.equal(await page.locator('[data-shell-presentation]').getAttribute('data-shell-presentation'), 'stage')
       const generations = fs.readdirSync(path.join(profile.canonical, 'generations'))
       assert.equal(generations.length, 1)
       const stagingParent = path.join(profile.canonical, 'generations', generations[0], 'cloud-backup-staging', `diagnostic-${runId}`)
@@ -458,7 +452,7 @@ async function main() {
       args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
     assert.notEqual(app.process()?.pid, firstPid, 'cloud copy reopen reused the original process')
     const reopenedPage = await app.firstWindow({ timeout: 30_000 })
-    await reopenedPage.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
+    await stage.waitForStage(reopenedPage)
     assert.equal((await invoke(reopenedPage, 'startup:get-state')).state, 'ready')
     const cloudRecent = await recentRestoredProject(reopenedPage, cloudCopy, created.projectId)
     const reopened = await invoke(reopenedPage, 'project:open', cloudRecent.path, randomUUID(), null)
@@ -479,7 +473,7 @@ async function main() {
     assert.equal(hash(scriptPath), driverSha256)
     assert.equal(hash(helperPath), helperSha256)
     assert.deepEqual(provenance().executableSha256, source.executableSha256)
-    const receipt = { outcome: 'PARTIAL', qualification: 'F05_U16_A07_A08_PACKAGED_V3_ONLY', evidenceLevel: 'packaged-electron', presentation: 'writer-v3',
+    const receipt = { outcome: 'PARTIAL', qualification: 'F05_U16_A07_A08_PACKAGED_V3_ONLY', evidenceLevel: 'packaged-electron', presentation: 'stage',
       ...source, driverSha256, helperSha256, packageDir, releaseDefaultQualified: false, physicalModelRequests: 0,
       setupActionIds: ['U16.A01', 'U16.A02'], qualifiedActionIds: ['U16.A07', 'U16.A08'],
       localSha256, originalSha256, beforeCloudRestoreSha256, generationId, remoteArchiveSha256: bytesHash(remoteArchive),

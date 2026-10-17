@@ -1,6 +1,6 @@
 /*
  * 纸墨组件原语。只引用 tokens.css 的变量，不写颜色字面量（scripts/check-color-literals.mjs 检查）。
- * 类名统一 pi- 前缀，避免与旧外壳的 .btn-primary 等全局类冲突；选择器不依赖元素位置或本地化文字。
+ * 类名统一 pi- 前缀，避免与沿用旧组件的全局类冲突；选择器不依赖元素位置或本地化文字。
  *
  * 材质模型（design-system.md「按钮与浮层」）：可按的从纸面凸起，可写的凹进纸面，浮在纸上的都是同一张笺（--layer），
  * 印在纸上的是字（提示条与后果说明没有盒子）。危险按钮是平的方肩朱印。
@@ -394,7 +394,7 @@
    动画名不能含进场的 pi-fade：Radix Presence 用子串比对动画名，进场被打断时的 animationcancel 会被当成退场结束 */
 .pi-scrim--prompt[data-state="closed"], .pi-dialog--prompt[data-state="closed"] { animation: pi-vanish var(--dur-fast) var(--ease) forwards; }
 /*
- * 旧 ui/Dialog 的调用方在新外壳下也用这张浮笺。宽度上限、高度上限与底栏排法仍听调用方的 Tailwind 类：
+ * 沿用的 ui/Dialog 调用方也用这张浮笺。宽度上限、高度上限与底栏排法仍听调用方的 Tailwind 类：
  * 那些类在 @layer utilities 里，会输给这里的无层样式，revert-layer 把这几项让回给它们。
  */
 .pi-dialog--legacy { width: calc(100vw - 48px); max-width: revert-layer; max-height: revert-layer; overflow: auto; }

@@ -7,9 +7,9 @@ import App from '../App'
 import type { Locale } from '../i18n/types'
 import type { ProjectData } from '../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../shared/project-session-context'
-import { useAppearanceStore } from '../stores/appearance-bootstrap'
 import { useLayoutStore } from '../stores/layout-store'
 import { useLocaleStore } from '../stores/locale-store'
+import { navigate } from '../stores/navigation/navigation-intents'
 import { useProjectStore } from '../stores/project-store'
 import { useWorkflowStore } from '../stores/workflow-store'
 
@@ -17,9 +17,12 @@ import { useWorkflowStore } from '../stores/workflow-store'
 
 const CHAT_WORDS = /Agent|助手|聊天|对话|assistant|chat/i
 const session = { projectId: '灯塔', projectPath: 'C:/novels/lighthouse', leaseId: '本次打开' }
-const project = { id: session.projectId, name: '灯塔', path: session.projectPath, sessionLease: session.leaseId, novelConfig: {} } as unknown as ProjectData
+const project = { id: session.projectId, name: '灯塔', path: session.projectPath, sessionLease: session.leaseId, novelConfig: {
+  coreOutline: '', genre: '', subGenre: '', targetAudience: '', totalChapters: 24, wordsPerChapter: 3000, worldSetting: '', goldenFinger: '',
+  protagonistProfile: '', globalGuidance: '', writingStyle: '', referenceWorks: '', narrativePOV: 'third_limited', plotStructure: 'three_act', writingLanguage: 'zh-CN',
+} } as unknown as ProjectData
 
-const restores = [useAppearanceStore, useLayoutStore, useLocaleStore, useProjectStore, useWorkflowStore].map(store => {
+const restores = [useLayoutStore, useLocaleStore, useProjectStore, useWorkflowStore].map(store => {
   const state = (store as StoreApi<unknown>).getState()
   return () => (store as StoreApi<unknown>).setState(state, true)
 })
@@ -42,10 +45,9 @@ beforeEach(() => {
   configLocale = 'zh-CN'
   invoke = vi.fn(async (channel: string) => reply(channel))
   Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {}, once: () => {}, send: () => {} } })
-  useAppearanceStore.setState({ resolvedShell: 'writer' })
   useProjectStore.setState({ currentProject: project })
   setActiveProjectSessionContext(session)
-  useLayoutStore.setState({ sidebarView: 'project', activeRailItem: 'project', aiPanelOpen: true, immersive: false })
+  useLayoutStore.setState({ sidebarView: 'project' })
   useWorkflowStore.setState({ activeRuns: [], history: [] })
   host = document.createElement('div')
   host.style.cssText = 'width: 1440px; height: 900px; display: flex'
@@ -63,18 +65,15 @@ afterEach(async () => {
 })
 
 describe('应用里没有 AI 聊天', () => {
-  it.each<[Locale, string]>([['zh-CN', 'AI 输出'], ['en-US', 'AI output']])('%s：旧外壳右侧面板是 AI 输出，不是聊天', async (locale, outputLabel) => {
+  it.each<Locale>(['zh-CN', 'en-US'])('%s：作品里的界面与运行侧页都没有聊天入口', async locale => {
     configLocale = locale
     useLocaleStore.setState({ locale })
     await act(async () => root.render(<App />))
-    const panel = await vi.waitFor(() => {
-      const region = host.querySelector<HTMLElement>(`aside[aria-label="${outputLabel}"]`)
-      expect(region?.querySelector(`button[title="${locale === 'en-US' ? 'Close AI output' : '收起 AI 输出'}"]`)).toBeTruthy()
-      return region!
-    })
-    expect(panel.textContent).toContain(outputLabel)
-    expect(panel.textContent).not.toMatch(CHAT_WORDS)
-    expect([...panel.querySelectorAll('[aria-label],[title],[placeholder]')]
+    await vi.waitFor(() => expect(host.querySelector('.stage-shell')).not.toBeNull())
+    await act(async () => navigate({ kind: 'run', facet: 'output' }))
+    await vi.waitFor(() => expect(host.querySelector('.stage-sheet-slot')).not.toBeNull())
+    expect(host.textContent).not.toMatch(CHAT_WORDS)
+    expect([...host.querySelectorAll('[aria-label],[title],[placeholder]')]
       .map(node => ['aria-label', 'title', 'placeholder'].map(name => node.getAttribute(name) ?? '').join(' ')).join(' ')).not.toMatch(CHAT_WORDS)
   })
 

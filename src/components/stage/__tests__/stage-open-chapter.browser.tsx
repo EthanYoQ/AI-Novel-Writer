@@ -3,7 +3,6 @@ import type { StoreApi } from 'zustand'
 
 import type { ProjectData, ProjectSessionContext } from '../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useDraftStore } from '../../../stores/draft-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { navigate } from '../../../stores/navigation/navigation-intents'
@@ -18,7 +17,7 @@ function snapshot<T>(store: StoreApi<T>): () => void {
   const state = store.getState()
   return () => store.setState(state, true)
 }
-const restores = [snapshot(useAppearanceStore), snapshot(useDraftStore), snapshot(useEditorStore), snapshot(useStageStore), snapshot(useProjectStore)]
+const restores = [snapshot(useDraftStore), snapshot(useEditorStore), snapshot(useStageStore), snapshot(useProjectStore)]
 
 /** 主进程的草稿接口：每章一份草稿，按章设定返回前的延迟，或直接失败。 */
 function installDrafts(behavior: Record<number, { delayMs?: number; error?: string; empty?: boolean }>) {
@@ -43,7 +42,6 @@ const activeTab = () => useEditorStore.getState().tabs.find(tab => tab.id === us
 const settle = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 beforeEach(() => {
-  useAppearanceStore.setState({ resolvedShell: 'stage' })
   setActiveProjectSessionContext(SESSION)
   useProjectStore.setState({ currentProject: { id: SESSION.projectId, sessionLease: SESSION.leaseId, name: '灯塔', path: PATH, novelConfig: {} } as unknown as ProjectData })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })

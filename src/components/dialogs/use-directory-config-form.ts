@@ -64,7 +64,7 @@ async function readHighestBlueprintChapter(
 
 /**
  * 生成章节蓝图对话框的表单：范围、每章目标、追加或覆盖、节奏指导、继续未完成的范围、重试角色同步。
- * 旧外壳的 DirectoryConfigDialog 与新外壳的生成蓝图对话框共用；没有打开作品时返回 null。
+ * 生成蓝图对话框用它；没有打开作品时返回 null。
  */
 export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfirm }: DirectoryConfigProps) {
   const text = useLocaleStore(s => s.text)

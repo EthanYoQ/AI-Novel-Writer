@@ -37,7 +37,7 @@ export default function CharacterRoster({ projectKey }: { projectKey: string }) 
           <Button variant="secondary" size="sm" disabled={identityBusy || !list.dataReady} onClick={() => useCharacterStore.getState().addCharacter()}>
             <Plus size={14} aria-hidden />{text('新建角色', 'New character')}
           </Button>
-          <CharacterCardImportButton projectKey={projectKey} ink disabled={identityBusy || !list.dataReady} />
+          <CharacterCardImportButton projectKey={projectKey} disabled={identityBusy || !list.dataReady} />
         </div>
       </div>
       <ul className="cast-list">

@@ -6,7 +6,7 @@ import type { ProjectData } from '../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
 import { useProjectStore } from '../../../stores/project-store'
 import { useLocaleStore } from '../../../stores/locale-store'
-import WorldBuildingEditor from '../WorldBuildingEditor'
+import StageArchitecture from '../../stage/architecture/StageArchitecture'
 import ArchFileViewer from '../ArchFileViewer'
 import ConfirmCard from '../../panels/agent/ConfirmCard'
 import { useAgentStore } from '../../../stores/agent-store'
@@ -74,10 +74,10 @@ afterEach(async () => {
 
 it.each(['architecture-page', 'outline-file'] as const)('passes the confirmed range and word target through %s', async entry => {
   await act(async () => root.render(entry === 'architecture-page'
-    ? <WorldBuildingEditor projectKey={project.path} />
+    ? <StageArchitecture projectKey={project.path} />
     : <ArchFileViewer tabId="planning-outline" filePath="ai-novel://core/synopsis" projectKey={project.path} content="" savedContent="" />))
   if (entry === 'architecture-page') {
-    await act(async () => page.getByRole('button', { name: 'AI 生成架构', exact: true }).click())
+    await act(async () => page.getByRole('button', { name: '继续生成架构', exact: true }).click())
   } else {
     await act(async () => page.getByRole('button', { name: 'AI 生成', exact: true }).click())
   }
@@ -85,7 +85,7 @@ it.each(['architecture-page', 'outline-file'] as const)('passes the confirmed ra
   await act(async () => {
     await page.getByRole('spinbutton', { name: '本次生成范围的结束章' }).fill('10')
     await page.getByRole('spinbutton', { name: '每章大纲目标词数' }).fill('1000')
-    await page.getByRole('button', { name: /确认生成/ }).click()
+    await page.getByRole('button', { name: entry === 'architecture-page' ? /开始生成/ : /确认生成/ }).click()
   })
   await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('generation:begin', expect.objectContaining({
     authorInputs: expect.arrayContaining([

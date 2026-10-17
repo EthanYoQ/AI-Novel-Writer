@@ -7,7 +7,7 @@ import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import ArchitectureConfirmDialog from '../ArchitectureConfirmDialog'
-import DirectoryConfigDialog from '../DirectoryConfigDialog'
+import GenerateBlueprintsDialog from '../../stage/blueprint/GenerateBlueprintsDialog'
 import { renderPlotOutlineSynopsis } from '../../../shared/plot-outline-contract'
 
 /** 数据库里还没有大纲。 */
@@ -91,6 +91,9 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  // 修复角色同步会推一条成功通知；提示栈跨用例保留，关掉它免得盖住下一个用例对话框的按钮
+  for (const close of document.querySelectorAll<HTMLButtonElement>('.pi-toast button[aria-label="关闭通知"]')) await act(async () => close.click())
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)) })
   await act(async () => root.unmount())
   container.remove()
   useProjectStore.setState({ currentProject: null })
@@ -121,7 +124,7 @@ describe('workflow launch dialogs', () => {
     })
     const onConfirm = vi.fn().mockResolvedValue(undefined)
     await act(async () => root.render(
-      <DirectoryConfigDialog isOpen onClose={vi.fn()} existingCount={0} onConfirm={onConfirm} />,
+      <GenerateBlueprintsDialog isOpen onClose={vi.fn()} existingCount={0} onConfirm={onConfirm} />,
     ))
 
     await act(async () => page.getByRole('button', { name: '开始生成' }).click())
@@ -133,7 +136,7 @@ describe('workflow launch dialogs', () => {
     authoritativeNextChapter = 10
     const onConfirm = vi.fn().mockResolvedValue(undefined)
     await act(async () => root.render(
-      <DirectoryConfigDialog
+      <GenerateBlueprintsDialog
         isOpen
         onClose={vi.fn()}
         existingCount={0}
@@ -141,7 +144,7 @@ describe('workflow launch dialogs', () => {
       />,
     ))
 
-    await expect.element(page.getByText(/从第 10 章起往后生成/)).toBeVisible()
+    await expect.element(page.getByText(/蓝图从第 10 章开始/)).toBeVisible()
     await act(async () => page.getByRole('button', { name: '开始生成' }).click())
 
     await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledOnce())
@@ -157,7 +160,7 @@ describe('workflow launch dialogs', () => {
     blueprintChapterNumbers = [1, 2, 3, 4]
     const onConfirm = vi.fn().mockResolvedValue(undefined)
     await act(async () => root.render(
-      <DirectoryConfigDialog
+      <GenerateBlueprintsDialog
         isOpen
         onClose={vi.fn()}
         existingCount={4}
@@ -165,7 +168,7 @@ describe('workflow launch dialogs', () => {
       />,
     ))
 
-    await expect.element(page.getByText(/从第 5 章起往后生成/)).toBeVisible()
+    await expect.element(page.getByText(/已有 4 章蓝图/)).toBeVisible()
     await act(async () => page.getByRole('spinbutton').nth(0).fill('4'))
     await act(async () => page.getByRole('button', { name: '开始生成' }).click())
 
@@ -182,7 +185,7 @@ describe('workflow launch dialogs', () => {
     blueprintChapterNumbers = [1, 3, 4]
     const onConfirm = vi.fn().mockResolvedValue(undefined)
     await act(async () => root.render(
-      <DirectoryConfigDialog
+      <GenerateBlueprintsDialog
         isOpen
         onClose={vi.fn()}
         existingCount={3}
@@ -190,7 +193,7 @@ describe('workflow launch dialogs', () => {
       />,
     ))
 
-    await expect.element(page.getByText(/从第 5 章起往后生成/)).toBeVisible()
+    await expect.element(page.getByText(/已有 3 章蓝图/)).toBeVisible()
     await act(async () => page.getByRole('button', { name: '开始生成' }).click())
 
     await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledOnce())
@@ -204,7 +207,7 @@ describe('workflow launch dialogs', () => {
     authorityGap = 4
     const onConfirm = vi.fn()
     await act(async () => root.render(
-      <DirectoryConfigDialog
+      <GenerateBlueprintsDialog
         isOpen
         onClose={vi.fn()}
         existingCount={0}
@@ -386,7 +389,7 @@ describe('workflow launch dialogs', () => {
   it('keeps directory configuration open and reports launcher rejection', async () => {
     const onClose = vi.fn()
     await act(async () => root.render(
-      <DirectoryConfigDialog
+      <GenerateBlueprintsDialog
         isOpen
         onClose={onClose}
         existingCount={0}
@@ -443,7 +446,7 @@ describe('workflow launch dialogs', () => {
     })
     const onConfirm = vi.fn()
     await act(async () => root.render(
-      <DirectoryConfigDialog
+      <GenerateBlueprintsDialog
         isOpen
         onClose={vi.fn()}
         existingCount={2}
@@ -480,10 +483,10 @@ it('shows the committed directory chain endpoint and resumes only its explicit r
     return original(channel, ...args)
   })
   const onConfirm = vi.fn(async () => true)
-  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={180} onConfirm={onConfirm} />))
-  await expect.element(page.getByText('已保存第 161–180 章蓝图。')).toBeVisible()
-  await expect.element(page.getByRole('button', { name: '继续第 161–200 章（沿用原预算）' })).not.toBeInTheDocument()
-  await act(async () => page.getByRole('button', { name: '继续第 181–200 章（沿用原预算）' }).click())
+  await act(async () => root.render(<GenerateBlueprintsDialog isOpen onClose={() => {}} existingCount={180} onConfirm={onConfirm} />))
+  await expect.element(page.getByText('已保存第 161～180 章蓝图')).toBeVisible()
+  await expect.element(page.getByRole('button', { name: '继续第 161～200 章' })).not.toBeInTheDocument()
+  await act(async () => page.getByRole('button', { name: '继续第 181～200 章' }).click())
   expect(onConfirm).toHaveBeenCalledWith({ mode: 'append', continueDirectoryOperationId: '末端提交' })
 })
 
@@ -499,7 +502,7 @@ it('shows blueprint recovery diagnostics without blocking independent generation
     return original(channel, ...args)
   })
   const onConfirm = vi.fn(async () => true)
-  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+  await act(async () => root.render(<GenerateBlueprintsDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
   await expect.element(page.getByText('蓝图已清空，旧生成记录不能续接')).toBeVisible()
   await expect.element(page.getByText('旧蓝图生成进度校验失败，不能续接')).toBeVisible()
   await expect.element(page.getByText('旧蓝图作者保存记录校验失败，不能续接')).toBeVisible()
@@ -513,7 +516,7 @@ it('shows blueprint recovery diagnostics without blocking independent generation
 it('rejects a new 200-chapter action while retaining the entered value', async () => {
   useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, totalChapters: 200 } } as never })
   const onConfirm = vi.fn(async () => true)
-  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+  await act(async () => root.render(<GenerateBlueprintsDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
   await act(async () => page.getByRole('spinbutton').nth(0).fill('200'))
   await expect.element(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
   await act(async () => page.getByRole('button', { name: '开始生成' }).click())
@@ -528,7 +531,7 @@ it.each(['outline', 'blueprint'] as const)('persists the %s target independently
   const onConfirm = vi.fn().mockResolvedValue(true)
   const renderDialog = async (isOpen: boolean) => act(async () => root.render(kind === 'outline'
     ? <ArchitectureConfirmDialog isOpen={isOpen} onClose={() => {}} synopsisSource={NO_OUTLINE} archStatus={{ premise: true, characters: true, worldbuilding: true }} initialSelectedSteps={['synopsis']} onConfirm={onConfirm} />
-    : <DirectoryConfigDialog isOpen={isOpen} onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+    : <GenerateBlueprintsDialog isOpen={isOpen} onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
   await renderDialog(true)
   const target = page.getByRole('spinbutton', { name: kind === 'outline' ? '每章大纲目标字数' : '每章蓝图目标字数' })
   await expect.element(target).toHaveValue(kind === 'outline' ? 700 : 800)
@@ -553,7 +556,7 @@ it.each(['outline', 'blueprint'] as const)('rejects eleven chapters and target 1
   const onConfirm = vi.fn().mockResolvedValue(true)
   await act(async () => root.render(kind === 'outline'
     ? <ArchitectureConfirmDialog isOpen onClose={() => {}} synopsisSource={NO_OUTLINE} archStatus={{}} initialSelectedSteps={['synopsis']} onConfirm={onConfirm} />
-    : <DirectoryConfigDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+    : <GenerateBlueprintsDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
   const count = page.getByRole('spinbutton', { name: kind === 'outline' ? '本次生成范围的结束章' : '本次蓝图章数' })
   const submit = page.getByRole('button', { name: kind === 'outline' ? /确认生成/ : '开始生成' })
   await act(async () => { await count.fill('11') })
@@ -581,7 +584,7 @@ it.each(['outline', 'blueprint'] as const)('retains %s input and does not start 
   const onClose = vi.fn()
   await act(async () => root.render(kind === 'outline'
     ? <ArchitectureConfirmDialog isOpen onClose={onClose} synopsisSource={NO_OUTLINE} archStatus={{}} initialSelectedSteps={['synopsis']} onConfirm={onConfirm} />
-    : <DirectoryConfigDialog isOpen onClose={onClose} existingCount={0} onConfirm={onConfirm} />))
+    : <GenerateBlueprintsDialog isOpen onClose={onClose} existingCount={0} onConfirm={onConfirm} />))
   const target = page.getByRole('spinbutton', { name: kind === 'outline' ? '每章大纲目标字数' : '每章蓝图目标字数' })
   await act(async () => { await target.fill('900'); await page.getByRole('button', { name: kind === 'outline' ? /确认生成/ : '开始生成' }).click() })
   await expect.element(page.getByText('目标字数偏好保存失败。请重试，输入已保留。')).toBeVisible()
@@ -593,11 +596,11 @@ it.each(['outline', 'blueprint'] as const)('retains %s input and does not start 
 it('rejects full-book generation above ten chapters and does not normalize an empty quantity', async () => {
   useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, totalChapters: 20 } } as never })
   const onConfirm = vi.fn(async () => true)
-  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
-  await act(async () => { await page.getByText('全量生成（共 20 章）').click(); await page.getByRole('button', { name: '开始生成' }).click() })
+  await act(async () => root.render(<GenerateBlueprintsDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+  await act(async () => { await page.getByText('全部 20 章').click(); await page.getByRole('button', { name: '开始生成' }).click() })
   expect(onConfirm).not.toHaveBeenCalled()
   await act(async () => {
-    await page.getByText('批量连续生成').click()
+    await page.getByText('接着生成').click()
     await page.getByRole('spinbutton', { name: '本次蓝图章数' }).fill('')
     await page.getByRole('button', { name: '开始生成' }).click()
   })

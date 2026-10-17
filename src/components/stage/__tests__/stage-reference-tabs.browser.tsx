@@ -3,7 +3,6 @@ import type { StoreApi } from 'zustand'
 
 import type { ProjectData } from '../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { navigate } from '../../../stores/navigation/navigation-intents'
@@ -17,10 +16,9 @@ function snapshot<T>(store: StoreApi<T>): () => void {
   const state = store.getState()
   return () => store.setState(state, true)
 }
-const restores = [useAppearanceStore, useEditorStore, useStageStore, useProjectStore, useLayoutStore].map(store => snapshot(store as StoreApi<unknown>))
+const restores = [useEditorStore, useStageStore, useProjectStore, useLayoutStore].map(store => snapshot(store as StoreApi<unknown>))
 
 beforeEach(() => {
-  useAppearanceStore.setState({ resolvedShell: 'stage' })
   useProjectStore.setState({ currentProject: { id: SESSION.projectId, path: PATH, sessionLease: SESSION.leaseId, name: '雨夜列车', novelConfig: {} } as unknown as ProjectData })
   setActiveProjectSessionContext(SESSION)
   useEditorStore.setState({

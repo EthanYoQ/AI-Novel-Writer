@@ -1004,28 +1004,35 @@ export const STAGE_SCENARIOS = {
     await runSheet.waitForRunDone(page)
     await stage.waitForProse(page, firstLine(FIXTURE_PROSE))
   } },
-  'stage-settings-switch': { model: false, setup: seedWithDraft, run: async ({ page }) => {
-    await openLatestDraft(page)
-    await settings.open(page)
-    await settings.chooseShell(page, '创作流程（预览）')
-    await stage.root(page).waitFor({ state: 'visible' })
-    await stage.settingsNav(page).waitFor({ state: 'visible' })
-    assert.equal(await stage.currentSettingsPage(page), '外观', '切换外壳后设置仍停在外观')
-    await stage.closeSettings(page)
-    await stage.spine(page).waitFor({ state: 'visible' })
-    await stage.waitForProse(page, FIXTURE_PROSE.slice(0, 12))
-    assert.deepEqual(await page.getByRole('navigation', { name: '位置' }).locator('span').allInnerTexts(), ['正文', '第 1 章'],
-      '切换外壳后停在原来打开的草稿，不跳到落点页')
-  } },
+  /**
+   * RD-10 之前的外观配置只在旧键里：去掉 v3 键、写入旧键后重载，按旧主题迁成深色或浅色，不阻塞启动，旧键逐字节不变（供回滚）。
+   * galaxy 与 paper 各走一遍，外壳偏好写成旧外壳也照样进纸墨外壳。
+   */
   'stage-migrate': { model: false, run: async ({ page, reload }) => {
-    const key = 'ai-novel-writer-appearance'
-    const current = JSON.parse(await page.evaluate(storageKey => localStorage.getItem(storageKey), key))
-    const v1 = JSON.stringify({ schemaVersion: 1, revision: current.revision + 1, shellPreference: 'writer', colorTheme: 'paper', zoom: 1.1,
-      writingFont: 'noto-serif-sc', uiFont: 'inter', origin: 'author', legacyImportCompleted: true, legacyFontDefaultsVersion: 1 })
-    await page.evaluate(([storageKey, raw]) => localStorage.setItem(storageKey, raw), [key, v1])
-    await reload()
-    await shell.firstInteractiveControl(page).waitFor({ state: 'visible' })
-    assert.equal(await page.evaluate(storageKey => localStorage.getItem(storageKey), key), v1, '启动不改写 v1 配置，旧版本仍能读')
+    const previousKey = 'ai-novel-writer-appearance'
+    const v3Key = 'ai-novel-writer-appearance-v3'
+    const observed = []
+    for (const [schemaVersion, colorTheme, shellPreference, expected] of [[1, 'galaxy', 'writer', 'dark'], [2, 'paper', 'classic', 'light']]) {
+      const previous = JSON.stringify({ schemaVersion, revision: 7, shellPreference, colorTheme, zoom: 1.1,
+        writingFont: 'noto-serif-sc', uiFont: 'inter', origin: 'author', legacyImportCompleted: true, legacyFontDefaultsVersion: 1 })
+      await page.evaluate(([v3, key, raw]) => { localStorage.removeItem(v3); localStorage.setItem(key, raw) }, [v3Key, previousKey, previous])
+      await reload()
+      await stage.root(page).waitFor({ state: 'visible' })
+      const stored = await page.evaluate(([v3, key]) => ({ v3: JSON.parse(localStorage.getItem(v3) ?? 'null'), previous: localStorage.getItem(key) }), [v3Key, previousKey])
+      observed.push({
+        from: colorTheme,
+        theme: await stage.root(page).getAttribute('data-theme'),
+        dark: await page.evaluate(() => document.documentElement.classList.contains('dark')),
+        v3: { schemaVersion: stored.v3?.schemaVersion, colorTheme: stored.v3?.colorTheme, zoom: stored.v3?.zoom },
+        previousUnchanged: stored.previous === previous,
+        blocked: await page.getByRole('heading', { name: '启动尚未完成' }).count() > 0,
+      })
+      assert.equal(observed.at(-1).theme, expected)
+    }
+    assert.deepEqual(observed, [
+      { from: 'galaxy', theme: 'dark', dark: true, v3: { schemaVersion: 3, colorTheme: 'dark', zoom: 1.1 }, previousUnchanged: true, blocked: false },
+      { from: 'paper', theme: 'light', dark: false, v3: { schemaVersion: 3, colorTheme: 'light', zoom: 1.1 }, previousUnchanged: true, blocked: false },
+    ], '旧主题迁成纸墨的深色或浅色，旧键原样保留')
   } },
   'stage-modal-layers': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ app, page }) => {
     await stage.stageButton(page, '设定').click()

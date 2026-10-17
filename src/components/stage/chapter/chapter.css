@@ -745,7 +745,7 @@
   }
 }
 
-/* ================= 选区工具条（旧外壳的编辑器也用它，自带纸墨作用域） ================= */
+/* ================= 选区工具条（架构文档页的编辑器也用它，自带纸墨作用域） ================= */
 .paper-ink.cm-selbar {
   position: fixed;
   z-index: 50;
@@ -822,4 +822,15 @@
   display: flex;
   justify-content: flex-end;
   gap: 6px;
+}
+
+/* ================= 恢复候选与只读修稿 ================= */
+.stage-doc-title {
+  font-size: 28px;
+}
+
+.stage-doc-meta {
+  margin: var(--s-2) 0 var(--s-6);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
 }

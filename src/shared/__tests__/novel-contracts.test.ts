@@ -222,7 +222,8 @@ describe('S01共享契约（纯合成，不是生产持久化资格）', () => {
     expect(() => assertDistinctStorageRoots([proof, { ...proof, canonicalRealPath: 'c:\\合成\\来源\\子目录' }])).toThrow()
     expect(() => assertDistinctStorageRoots([{ ...proof, reparseFree: false }])).toThrow()
     expect(mayHydrateAppearance({ state: 'blocked' })).toBe(false)
-    expect(mayHydrateAppearance({ state: 'ready', globalGeneration: '全局代一', skinRevision: 2 })).toBe(true)
+    expect(mayHydrateAppearance({ state: 'ready', globalGeneration: '全局代一' })).toBe(true)
+    expect(mayHydrateAppearance({ state: 'ready', globalGeneration: '' })).toBe(false)
   })
   it('恢复承接当前可读事实但绝不旧执行重放，失效来源不可读', () => {
     const receipt: TransferReadableAuthority = { transferId: '转移', origin: { projectId: '旧', epoch: '旧' }, target: identity, snapshotGeneration: '快照', domainId: '人物一', source: { draftId: 1, finalizationId: '定稿一', chapterNumber: 1, contentHash: h }, provenance: 'derived', sourceCurrent: true, sourceUnambiguous: true, restoredContentHash: h, nonReplayable: true }

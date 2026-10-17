@@ -1,22 +1,19 @@
-/* ================= 旧页面在新外壳里的配色 ================= */
+/* ================= 沿用的旧组件在纸墨里的配色 ================= */
 /*
- * RD-4 至 RD-9 重做各页之前，内容区与侧页里仍是旧编辑器，它们读旧外壳的 --color-* 变量。
- * 在这里把这些变量指向纸墨令牌，旧页面在新外壳中换成纸墨配色；旧外壳不受影响。RD-10 随旧编辑器一起删除。
+ * 提示词模板、写作 Skills、项目备份、模型表单、架构文档页、导入导出对话框与助手面板仍按旧颜色变量 --color-* 着色。
+ * 在内容区、书房、运行侧页、设置页的旧组件区与浮层宿主里，把这些变量指向纸墨令牌，旧组件随纸墨的浅色与深色换色。
  * 旧按钮在强调色底上固定写白字，深色主题的强调色是浅色：深色下取压暗到 55% 的黛蓝，白字对比 4.9:1，作文字色时对纸面仍有 3.4:1。
  */
 .stage-shell, .pi-overlay-host {
   --stage-legacy-accent: var(--accent);
-  --stage-legacy-accent-hover: var(--accent-hover);
 }
 
 .stage-shell[data-theme='dark'], .pi-overlay-host[data-theme='dark'] {
   --stage-legacy-accent: color-mix(in srgb, var(--accent) 55%, var(--frame));
-  --stage-legacy-accent-hover: color-mix(in srgb, var(--accent) 50%, var(--frame));
 }
 
 .stage-shell :where(.stage-content, .stage-library, .stage-sheet-slot, .stage-set-legacy), .pi-overlay-host {
   --color-bg: var(--surface);
-  --color-raised: var(--paper);
   --color-sidebar: var(--surface-2);
   --color-panel: var(--surface-2);
   --color-hover: var(--sunken);
@@ -26,46 +23,11 @@
   --color-text-muted: var(--ink-3);
   --color-border: var(--rule-strong);
   --color-accent: var(--stage-legacy-accent);
-  --color-accent-hover: var(--stage-legacy-accent-hover);
   --color-success-text: var(--ok);
   --color-warning-text: var(--warn);
   --color-error-text: var(--danger);
   --color-editor-bg: var(--paper);
   --color-editor-caret: var(--accent);
-  --color-editor-selection: var(--accent-soft);
-  --color-editor-line-highlight: transparent;
-  --color-tab-indicator: var(--accent);
-  --color-focus-ring: var(--accent-line);
   --color-badge-bg: var(--accent-soft);
   --color-badge-text: var(--accent);
-}
-
-/*
- * 旧外壳的 --writer-* 有两组：派生的一组在根上已按旧配色算好，这里按上面改过的 --color-* 重新声明，旧面板才会跟着换色；
- * 基础的 panel、line、muted、accent 只声明在 .writer-shell 上，新外壳里没有，书房的欢迎页读它们画按钮、概览框与书脊，这里补上。
- */
-.stage-shell :where(.stage-content, .stage-library, .stage-sheet-slot, .stage-set-legacy), .pi-overlay-host {
-  --writer-panel: var(--color-panel);
-  --writer-line: var(--color-border);
-  --writer-muted: var(--color-text-muted);
-  --writer-accent: var(--accent);
-  --writer-surface-project-tree: var(--color-sidebar);
-  --writer-surface-ai-panel: var(--color-panel);
-  --writer-surface-task-table: var(--color-panel);
-  --writer-surface-shell: var(--color-bg);
-  --writer-surface-card: var(--color-raised);
-  --writer-text-primary: var(--color-text);
-  --writer-text-muted: var(--color-text-muted);
-  --writer-panel-border: var(--color-border);
-  --writer-task-border: var(--color-border);
-  --writer-card-border: var(--color-border);
-  --writer-input-surface: var(--color-raised);
-  --writer-input-border: var(--color-border);
-  --writer-icon-muted: var(--color-text-muted);
-  --writer-item-hover: var(--color-hover);
-  --writer-item-active: var(--color-active);
-  --writer-item-indicator: var(--color-accent);
-  --writer-task-header: var(--color-hover);
-  --writer-task-row-border: var(--color-border);
-  --writer-primary-surface: var(--color-accent);
 }

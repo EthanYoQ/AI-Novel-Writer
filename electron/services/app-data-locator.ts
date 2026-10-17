@@ -34,7 +34,6 @@ let activeLegacySource = initial.legacySource
 export function assertGlobalDataReady(): void {
   if (!activeGeneration) throw new Error('GLOBAL_DATA_NOT_READY')
 }
-export function getGlobalDataGeneration(): string { assertGlobalDataReady(); return activeGeneration! }
 export function getGlobalDataRoot(): string { assertGlobalDataReady(); return VELA_HOME }
 /** Called exclusively by the successful startup migration coordinator. */
 export function installGlobalDataLocator(dataRoot: string, generation: string, legacySource: string): void {

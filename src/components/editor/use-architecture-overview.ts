@@ -35,7 +35,7 @@ import { planningTitle } from '../run/run-recovery'
 import { outlineProgress, type OutlineProgress } from '../../shared/plot-outline-checkpoint'
 import type { PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
 
-/** 架构四节的文档与旧外壳总览上的图标、说明；名字取 ARCH_STEP_NAMES。 */
+/** 架构四节的文档、图标与说明；名字取 ARCH_STEP_NAMES。 */
 export const ARCH_FILES: Array<{
   key: ArchStepKey
   fileName: string
@@ -56,7 +56,7 @@ interface GenerateIntent {
 
 /**
  * 故事架构总览的数据与操作：四节状态、未完成候选、大纲续写与续批、角色名单修复、打开单节文档与架构生成。
- * 旧外壳的 WorldBuildingEditor 与新外壳的架构阶段共用这一份。
+ * 架构阶段用这一份。
  */
 export function useArchitectureOverview(projectKey: string) {
   const currentProject = useProjectStore(s => s.currentProject)
@@ -482,7 +482,7 @@ export function useArchitectureOverview(projectKey: string) {
       repair: handleRepairCharacterRoster,
       refresh: loadCharacterRosterStatus,
     },
-    /** 两种外壳的生成对话框直接展开这一份：开关、入口预选、大纲进度与提交。 */
+    /** 生成对话框直接展开这一份：开关、入口预选、大纲进度与提交。 */
     generateDialog: {
       isOpen: generateIntent !== null,
       onClose: () => setGenerateIntent(null),

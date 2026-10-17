@@ -37,7 +37,7 @@ const openCast = (text: (zh: string, en: string) => string) => openBuiltinEditor
 
 /**
  * 架构阶段：故事前提、角色名单、世界观、情节大纲四节。编辑一节打开它的文档标签，角色名单打开名单页；
- * 数据与操作沿用旧外壳故事架构总览的 useArchitectureOverview。
+ * 数据与操作来自 useArchitectureOverview。
  */
 export default function StageArchitecture({ projectKey }: { projectKey: string }) {
   const text = useLocaleStore(s => s.text)

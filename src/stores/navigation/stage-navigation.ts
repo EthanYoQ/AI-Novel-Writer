@@ -21,7 +21,7 @@ import { useStageStore } from './stage-store'
  */
 function enterWork(): void {
   useStageStore.setState({ focus: false })
-  if (useLayoutStore.getState().sidebarView === 'home') useLayoutStore.setState({ sidebarView: 'project', activeRailItem: 'project' })
+  if (useLayoutStore.getState().sidebarView === 'home') useLayoutStore.setState({ sidebarView: 'project' })
 }
 
 function currentSession(): ProjectSessionContext | null {
@@ -42,7 +42,7 @@ export function chapterPlanTabId(chapterNumber: number, projectPath: string): st
   return createProjectScopedEditorTabId(`chapter-plan:${chapterNumber}`, 'chapter', projectPath)
 }
 
-/** 打开待写章的单章视图：显示本章蓝图与「写作此章」。草稿生成后，新外壳把它换成草稿标签。 */
+/** 打开待写章的单章视图：显示本章蓝图与「写作此章」。草稿生成后换成草稿标签。 */
 export function openChapterPlan(chapterNumber: number, title: string, session: ProjectSessionContext): void {
   const text = useLocaleStore.getState().text
   useEditorStore.getState().openFile({
@@ -132,7 +132,7 @@ async function openManuscript(): Promise<void> {
 }
 
 /**
- * 新外壳下各意图的落点。设置是内容面板里的设置页。
+ * 各意图的落点。设置是内容面板里的设置页。
  * 写作此章打开这一章的单章视图，由那里的写作按钮弹出写作弹层；参数取自蓝图，不再弹旧的创作对话框。
  */
 export function stageNavigate(intent: NavigationIntent): void {

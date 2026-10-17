@@ -9,6 +9,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
+import * as runSheet from './redesign/pages/run-sheet.mjs'
+import * as stage from './redesign/pages/stage.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
@@ -21,8 +23,9 @@ const expectedAsar = option('asar-sha256')
 assert(packageDir && packageSourceSha && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
   'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
 const priorPath = path.join(repository, '.runtime', '.cache', 'f05-u03-controls', '4d4c1bab-16f7-48c7-b7a8-7514b353eb76', 'receipt.json')
-const prior = JSON.parse(fs.readFileSync(priorPath, 'utf8'))
-assert.equal(prior.outcome, 'PASS', 'historical Writer controls receipt missing')
+// 旧外壳时期的历史回执只在当年的机器上；有就核对，没有就在回执里记下缺席，不挡本次旅程。
+const prior = fs.existsSync(priorPath) ? JSON.parse(fs.readFileSync(priorPath, 'utf8')) : null
+if (prior) assert.equal(prior.outcome, 'PASS', 'historical Writer controls receipt is not a PASS')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -46,13 +49,11 @@ const preconditions = []
 const pass = (stepId, actionId, assertion) => steps.push({ stepId, actionId, outcome: 'PASS', assertion })
 const recordPrecondition = (stepId, assertion) => preconditions.push({ stepId, assertion })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
-const writer = page => page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]')
-const settings = page => page.getByRole('button', { name: '关闭设置' }).locator('xpath=ancestor::div[contains(@class,"relative flex")]')
-
-async function assertWriter(page, actionId) {
-  await writer(page).waitFor({ state: 'visible' })
-  assert.equal(await writer(page).getAttribute('data-shell-variant'), 'v3', `${actionId}: current shell is not V3 writer`)
+async function assertStage(page, actionId) {
+  await stage.waitForStage(page)
+  assert.equal(await stage.root(page).getAttribute('data-shell-presentation'), 'stage', `${actionId}: current shell is not the paper-ink stage`)
 }
+const settingsHeading = (page, name) => stage.root(page).getByRole('heading', { level: 1, name, exact: true })
 
 async function main() {
   fs.mkdirSync(receiptDir, { recursive: true })
@@ -76,36 +77,26 @@ async function main() {
     app = await electron.launch({ executablePath, cwd: packageDir, args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
     const page = await app.firstWindow({ timeout: 30_000 })
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-    // The packaged artifact keeps its release default separate from test-profile selection.
-    // Select Writer explicitly before any journey action and then assert the selected shell.
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
-    await page.evaluate(() => {
-      const key = 'ai-novel-writer-appearance'
-      const appearance = JSON.parse(localStorage.getItem(key))
-      appearance.shellPreference = 'writer'
-      appearance.revision += 1
-      appearance.origin = 'author'
-      localStorage.setItem(key, JSON.stringify(appearance))
-    })
-    await page.reload()
-    await writer(page).waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForStage(page, 30_000)
+    await stage.dismissMigrationNotice(page)
 
-    currentStep = 'U03.A01-sidebar-settings'
-    await assertWriter(page, 'U03.A01')
-    await page.locator('.writer-left-rail button[title="设置"]').click()
-    await settings(page).getByRole('heading', { name: 'AI 生成模型' }).waitFor()
-    recordPrecondition('U03.A01-sidebar-settings', 'V3 shell assertion preceded the rail settings click and the real settings modal rendered')
-    await page.getByRole('button', { name: '关闭设置' }).click()
+    currentStep = 'U03.A01-library-settings'
+    await assertStage(page, 'U03.A01')
+    await stage.openSettings(page)
+    await settingsHeading(page, 'AI 模型').waitFor()
+    recordPrecondition('U03.A01-library-settings', 'stage shell assertion preceded the settings entry and the real settings page rendered')
+    await stage.closeSettings(page)
 
-    currentStep = 'U03.A02-statusbar-settings'
-    await assertWriter(page, 'U03.A02')
-    await page.locator('.writer-statusbar [title="点击配置模型"]').click()
-    await settings(page).getByRole('heading', { name: 'AI 生成模型' }).waitFor()
-    recordPrecondition('U03.A02-statusbar-settings', 'V3 shell assertion preceded the status bar model entry and the same real settings modal rendered')
-    await page.getByRole('button', { name: '关闭设置' }).click()
+    currentStep = 'U03.A02-model-notice-settings'
+    await assertStage(page, 'U03.A02')
+    // 旧外壳状态栏的「点击配置模型」在纸墨外壳里是「还没有连接 AI 模型」提示的「添加模型」。
+    await stage.modelMissingNotice(page).getByRole('button', { name: '添加模型', exact: true }).click()
+    await settingsHeading(page, 'AI 模型').waitFor()
+    recordPrecondition('U03.A02-model-notice-settings', 'stage shell assertion preceded the model-missing notice entry and the same settings page rendered')
+    await stage.closeSettings(page)
 
     currentStep = 'U03.A13-proxy-failure'
-    await assertWriter(page, 'U03.A13')
+    await assertStage(page, 'U03.A13')
     const generations = fs.readdirSync(path.join(profile.canonical, 'generations'))
     assert.equal(generations.length, 1, 'isolated profile must have one admitted global generation')
     const configPath = path.join(profile.canonical, 'generations', generations[0], 'config.json')
@@ -113,26 +104,30 @@ async function main() {
     const originalConfig = fs.existsSync(configPath) ? fs.readFileSync(configPath) : null
     const malformedConfig = '{ malformed proxy config'
     fs.writeFileSync(configPath, malformedConfig)
-    await page.locator('.writer-left-rail button[title="设置"]').click()
-    await settings(page).getByRole('button', { name: '网络代理', exact: true }).click()
-    await settings(page).getByRole('heading', { name: '网络代理' }).waitFor()
-    const proxySwitch = settings(page).getByRole('switch', { name: '启用代理' })
-    if (!(await proxySwitch.isChecked())) await proxySwitch.click()
-    await settings(page).getByRole('textbox').first().fill('127.0.0.1')
-    await settings(page).getByRole('button', { name: '保存代理配置', exact: true }).click()
-    const proxyAlert = settings(page).getByRole('alert')
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '网络代理')
+    const proxySwitch = stage.root(page).getByRole('switch', { name: '启用代理' })
+    // 开关是视觉隐藏的原生 checkbox，点它所在的 label。
+    if (!(await proxySwitch.isChecked())) await proxySwitch.locator('xpath=ancestor::label[1]').click()
+    await stage.root(page).getByLabel('主机地址', { exact: true }).fill('127.0.0.1')
+    await stage.root(page).getByRole('button', { name: '保存代理设置', exact: true }).click()
+    const proxyAlert = stage.root(page).locator('.stage-set-actions').getByRole('alert')
     await proxyAlert.waitFor()
     assert.match(await proxyAlert.textContent(), /代理配置保存失败/u)
     assert.equal(fs.readFileSync(configPath, 'utf8'), malformedConfig, 'malformed admitted config must remain untouched')
-    recordPrecondition('U03.A13-proxy-failure', 'V3 proxy save surfaced the malformed-global-config failure through the visible alert without replacing the protected file')
-    await page.getByRole('button', { name: '关闭设置' }).click()
+    recordPrecondition('U03.A13-proxy-failure', 'stage proxy save surfaced the malformed-global-config failure through the visible alert without replacing the protected file')
+    // 改过没存的代理设置会让返回时先问是否放弃；这里没有要留的修改。
+    await stage.settingsNav(page).getByRole('button', { name: /^返回(作品|书房)$/ }).click()
+    const discard = page.getByRole('dialog', { name: /放弃/ })
+    if (await discard.isVisible().catch(() => false)) await discard.getByRole('button', { name: /放弃/ }).last().click()
+    await stage.settingsNav(page).waitFor({ state: 'detached' })
     if (originalConfig) fs.writeFileSync(configPath, originalConfig)
     else fs.rmSync(configPath, { force: true })
     await page.reload()
-    await assertWriter(page, 'U03.A14')
+    await assertStage(page, 'U03.A14')
 
     currentStep = 'U03.A14-safe-diagnostic-copy'
-    await assertWriter(page, 'U03.A14')
+    await assertStage(page, 'U03.A14')
     const project = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: 'U03-controls', genre: 'fixture', targetAudience: 'fixture', writingLanguage: 'zh-CN' }, randomUUID(), null)
     projectCreateObservation = { success: project.success,
       stale: Object.hasOwn(project, 'stale') ? project.stale : 'absent',
@@ -150,11 +145,15 @@ async function main() {
       assert.equal(fixtureDb.prepare('SELECT purpose FROM llm_calls ORDER BY id DESC LIMIT 1').get().purpose, sensitivePurpose)
     } finally { fixtureDb.close() }
     await page.reload()
-    await writer(page).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '打开《U03-controls》' }).click()
+    await stage.waitForStage(page)
+    await stage.showLibrary(page)
+    await stage.openFromLibrary(page, 'U03-controls')
+    await stage.waitForWork(page, 'U03-controls')
     const context = await invoke(page, 'project:get-runtime-context')
     assert.equal(path.resolve(context.activeProjectPath), path.resolve(project.projectPath))
-    await page.locator('.writer-left-rail button[title="模型"]').click()
+    // 旧外壳左栏的「模型」调用记录在纸墨外壳的运行侧页「诊断」分页里。
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '诊断').click()
     await page.getByRole('button', { name: '复制安全诊断' }).waitFor()
     const clipboardSentinel = `pre-click-sentinel-${runId}`
     const previousClipboard = await app.evaluate(({ clipboard }) => ({
@@ -204,7 +203,7 @@ async function main() {
       copiedDiagnostic = copiedState.text
       if (copiedState.formats.length !== 1 || copiedState.formats[0] !== 'text/plain'
         || copiedDiagnostic === clipboardSentinel || !copiedDiagnostic.includes(runId)) {
-        throw new Error('V3 copy did not write this run’s diagnostic to the OS clipboard')
+        throw new Error('stage copy did not write this run’s diagnostic to the OS clipboard')
       }
       if (!copiedDiagnostic.includes('Grok 4') || !copiedDiagnostic.includes('content_filter')
         || /Authorization|request body|sk-do-not-copy|VibeCodingScratch/u.test(copiedDiagnostic)) {
@@ -233,14 +232,14 @@ async function main() {
     if (clipboardObservation.restoreStatus !== 'verified') {
       throw new Error(`OS clipboard restoration was not verified (${clipboardObservation.restoreStatus})`)
     }
-    pass('U03.A14-safe-diagnostic-copy', 'U03.A14', 'V3 button wrote the safe diagnostic to the OS clipboard, excluded fixture secrets and paths, and restored the prior supported clipboard state')
+    pass('U03.A14-safe-diagnostic-copy', 'U03.A14', 'stage run-sheet diagnostics button wrote the safe diagnostic to the OS clipboard, excluded fixture secrets and paths, and restored the prior supported clipboard state')
   } catch (error) { failure = error }
   finally { await app?.close() }
   const receipt = {
-    outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U03_A14_OS_CLIPBOARD_ONLY', shell: 'writer-v3',
+    outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U03_A14_OS_CLIPBOARD_ONLY', shell: 'stage',
     testedSha, currentHead: git('rev-parse', 'HEAD'), changedPaths,
-    reuseDecision: { testedSha, changedPaths, differences: changedPaths.join(', ') || 'none', reason: 'historical Writer UI is not reused; fixed V3 package hashes match and current V3 UI is exercised independently' },
-    dirtyProductPaths, buildReceipt: { path: priorPath, sha256: fileHash(priorPath) },
+    reuseDecision: { testedSha, changedPaths, differences: changedPaths.join(', ') || 'none', reason: 'historical Writer UI is not reused; fixed package hashes match and the current stage UI is exercised independently' },
+    dirtyProductPaths, buildReceipt: prior ? { path: priorPath, sha256: fileHash(priorPath) } : { path: priorPath, missing: true },
     sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean),
     artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
     driver: { path: fileURLToPath(import.meta.url), sha256: fileHash(fileURLToPath(import.meta.url)) },

@@ -13,7 +13,6 @@ import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useStageStore } from '../../../../stores/navigation/stage-store'
 import { useWorkflowStore, type WorkflowDefinition } from '../../../../stores/workflow-store'
-import ChapterCreationDialog from '../../../dialogs/ChapterCreationDialog'
 import BatchWriteDialog from '../../blueprint/BatchWriteDialog'
 import WriteChapterPopover from '../WriteChapterPopover'
 
@@ -145,12 +144,6 @@ async function render(node: React.ReactNode) {
   await act(async () => root?.render(<div className="paper-ink"><div style={{ display: 'flex', justifyContent: 'flex-end' }}>{node}</div></div>))
 }
 
-function reset() {
-  createChapterWorkflow.mockClear()
-  startWorkflow.mockClear()
-  writtenLogs = []
-}
-
 beforeEach(async () => {
   await page.viewport(1280, 900)
   // 视口变化的 resize 事件可能晚于渲染才到，浮层收到 resize 会关闭：先等它派发完。
@@ -188,52 +181,41 @@ afterEach(async () => {
   useStageStore.setState(originalStage)
 })
 
-describe('写作此章弹层', () => {
-  it('同一蓝图下直接写作，交给工作流的参数与旧的章节创作对话框完全一致', async () => {
-    const prefill = blueprintWritePrefill(BLUEPRINT)
-    await render(<ChapterCreationDialog isOpen onClose={vi.fn()} prefill={{ ...prefill, chapterNumber: BLUEPRINT.chapterNumber }} />)
-    await expect.element(page.getByRole('button', { name: '开始创作' })).toBeEnabled()
-    await act(async () => page.getByRole('button', { name: '开始创作' }).click())
-    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
-    const fromDialog = launched()
+/** 旧的章节创作对话框在同一蓝图下交给工作流的全部输入（RD-10 删除对话框前从它取得），弹层必须与它一致。 */
+function expectedLaunch(changes: { generationModelId: string; userGuidance: string; knowledgeQueryHint?: string }) {
+  const { generationModelId, userGuidance, knowledgeQueryHint } = changes
+  return {
+    chapterInfo: {
+      projectPath: PROJECT_PATH, chapterNumber: 5, title: '不要回头', role: '转折', purpose: '让林舟第一次违背信上的警告。',
+      characters: ['林舟', '老周', '阿满'], keyEvents: '阅读灯熄灭三次；老周查票时叫出林舟母亲的名字。',
+      userGuidance, wordsTarget: 2600, knowledgeQueryHint,
+    },
+    session: SESSION,
+    options: { generationModelId },
+    fields: { type: 'chapter_creation', projectPath: PROJECT_PATH, uiLocale: 'zh-CN', generationModelId, chapterWordsTarget: 2600,
+      resourceKeys: ['chapter:5'], readResourceKeys: ['novel-config', 'architecture', 'blueprints'], title: '第 5 章 · 写稿' },
+    projectSession: SESSION,
+    steps: ['写稿'],
+    onComplete: '第5章草稿已生成',
+    stepByStep: false,
+    savedParams: { chapterNumber: 5, title: '不要回头', role: '转折', purpose: '让林舟第一次违背信上的警告。',
+      keyEvents: '阅读灯熄灭三次；老周查票时叫出林舟母亲的名字。', characters: '林舟、老周、阿满', userGuidance, wordsTarget: 2600 },
+  }
+}
 
-    reset()
-    await act(async () => root?.render(null))
+describe('写作此章弹层', () => {
+  it('同一蓝图下直接写作，交给工作流的参数与旧的章节创作对话框一致', async () => {
+    const prefill = blueprintWritePrefill(BLUEPRINT)
     await render(<WriteChapterPopover chapterNumber={BLUEPRINT.chapterNumber} blueprint={prefill} label="写第 5 章" />)
     await act(async () => page.getByRole('button', { name: '写第 5 章' }).click())
     await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
-    const fromPopover = launched()
 
-    expect(fromPopover).toEqual(fromDialog)
-    expect(fromPopover.chapterInfo).toEqual({
-      projectPath: PROJECT_PATH,
-      chapterNumber: 5,
-      title: '不要回头',
-      role: '转折',
-      purpose: '让林舟第一次违背信上的警告。',
-      characters: ['林舟', '老周', '阿满'],
-      keyEvents: '阅读灯熄灭三次；老周查票时叫出林舟母亲的名字。',
-      userGuidance: '母亲的声音只出现一次，不要解释来源。',
-      wordsTarget: 2600,
-      knowledgeQueryHint: undefined,
-    })
-    expect(fromPopover.options).toEqual({ generationModelId: 'grok' })
+    expect(launched()).toEqual(expectedLaunch({ generationModelId: 'grok', userGuidance: '母亲的声音只出现一次，不要解释来源。' }))
     expect(page.getByRole('dialog', { name: '本次写作选项' }).query()).toBeNull()
   })
 
-  it('弹层改了模型、指导与检索关键词时，与旧对话框改同样三项的结果一致', async () => {
+  it('弹层改了模型、指导与检索关键词时，结果与旧对话框改同样三项一致', async () => {
     const prefill = blueprintWritePrefill(BLUEPRINT)
-    await render(<ChapterCreationDialog isOpen onClose={vi.fn()} prefill={{ ...prefill, chapterNumber: BLUEPRINT.chapterNumber }} />)
-    await expect.element(page.getByRole('button', { name: '开始创作' })).toBeEnabled()
-    await act(async () => page.getByLabelText('本次创作模型').selectOptions('glm'))
-    await act(async () => page.getByPlaceholder(/特殊要求/).fill('结尾停在回头之前。'))
-    await act(async () => page.getByPlaceholder(/剑法传承/).fill('列车时刻表'))
-    await act(async () => page.getByRole('button', { name: '开始创作' }).click())
-    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
-    const fromDialog = launched()
-
-    reset()
-    await act(async () => root?.render(null))
     await render(<WriteChapterPopover chapterNumber={BLUEPRINT.chapterNumber} blueprint={prefill} label="写第 5 章" />)
     await act(async () => page.getByRole('button', { name: '本次写作选项' }).click())
     const popover = page.getByRole('dialog', { name: '本次写作选项' })
@@ -245,9 +227,7 @@ describe('写作此章弹层', () => {
     await act(async () => page.getByRole('button', { name: '写第 5 章' }).click())
     await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
 
-    expect(launched()).toEqual(fromDialog)
-    expect(fromDialog.chapterInfo).toMatchObject({ userGuidance: '结尾停在回头之前。', knowledgeQueryHint: '列车时刻表' })
-    expect(fromDialog.options).toEqual({ generationModelId: 'glm' })
+    expect(launched()).toEqual(expectedLaunch({ generationModelId: 'glm', userGuidance: '结尾停在回头之前。', knowledgeQueryHint: '列车时刻表' }))
   })
 
   it('选项只用于这一次：写完后再打开，指导、模型与检索关键词回到蓝图与默认', async () => {

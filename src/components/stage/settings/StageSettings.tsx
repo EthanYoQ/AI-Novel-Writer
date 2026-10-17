@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { ArrowLeft } from 'lucide-react'
-import { useLayoutStore } from '../../../stores/layout-store'
+import { useLayoutStore, type SettingsSection } from '../../../stores/layout-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import ProjectBackupPanel from '../../backups/ProjectBackupPanel'
 import PromptSettings from '../../settings/PromptSettings'
@@ -15,9 +15,9 @@ import AboutSection from './AboutSection'
 import AppearanceSection from './AppearanceSection'
 import ModelsSection from './ModelsSection'
 import ProxySection from './ProxySection'
-import { SETTINGS_GROUPS, SETTINGS_PAGES, settingsPageOf, type SettingsPage } from './settings-pages'
+import { SETTINGS_GROUPS, SETTINGS_PAGES } from './settings-pages'
 
-function PageHeader({ page, action }: { page: SettingsPage; action?: ReactNode }) {
+function PageHeader({ page, action }: { page: SettingsSection; action?: ReactNode }) {
   const text = useLocaleStore(s => s.text)
   const spec = SETTINGS_PAGES.find(candidate => candidate.id === page)!
   return (
@@ -36,7 +36,7 @@ function Legacy({ children }: { children: ReactNode }) {
   return <div className="stage-set-legacy">{children}</div>
 }
 
-function PageBody({ page }: { page: SettingsPage }) {
+function PageBody({ page }: { page: SettingsSection }) {
   switch (page) {
     case 'llm':
       return <ModelsSection purposes={['generation', 'refinement', 'summary']} header={action => <PageHeader page="llm" action={action} />} />
@@ -73,11 +73,11 @@ const isTyping = (target: EventTarget | null) =>
 
 /**
  * 设置页：左侧按常用、高级、其他分组，右侧是当前一页。占满内容面板，书房与作品里都能打开；
- * 「返回」或 Esc 回到打开前的页面，有没保存的输入时先确认。当前分区记在 layout-store，切换外壳重挂后仍停在原处。
+ * 「返回」或 Esc 回到打开前的页面，有没保存的输入时先确认。当前分区记在 layout-store，书房与作品之间切换重挂后仍停在原处。
  */
 export default function StageSettings({ library }: { library: boolean }) {
   const text = useLocaleStore(s => s.text)
-  const page = settingsPageOf(useLayoutStore(s => s.settingsSection))
+  const page = useLayoutStore(s => s.settingsSection)
   const pendingLeave = useSettingsLeave(s => s.pending)
   useSettingsLeaveHost()
   const bodyRef = useRef<HTMLDivElement>(null)

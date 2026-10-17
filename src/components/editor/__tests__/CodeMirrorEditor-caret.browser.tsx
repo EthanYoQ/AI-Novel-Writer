@@ -12,10 +12,7 @@ let container: HTMLDivElement
 
 beforeEach(() => {
   container = document.createElement('div')
-  container.className = 'app-skin-root dark'
-  container.dataset.theme = 'dark'
-  container.dataset.skin = 'custom'
-  container.dataset.skinReadability = 'high-contrast'
+  container.className = 'dark'
   container.style.height = '300px'
   document.body.append(container)
   root = createRoot(container)
@@ -27,7 +24,7 @@ afterEach(async () => {
 })
 
 describe('CodeMirror writing caret', () => {
-  it('uses a text pointer and a high-contrast caret across editor skins', async () => {
+  it('uses a text pointer and a high-contrast caret in both themes', async () => {
     await act(async () => root.render(
       <CodeMirrorEditor content="光标可见" mode="prose" />,
     ))
@@ -41,16 +38,9 @@ describe('CodeMirror writing caret', () => {
     const caret = container.querySelector<HTMLElement>('.cm-cursor')
     expect(caret).toBeTruthy()
     expect(getComputedStyle(editableSurface!).cursor).toBe('text')
-    expect(getComputedStyle(caret!).borderLeftColor).toBe('rgb(250, 250, 250)')
-
-    container.className = 'app-skin-root galaxy'
-    container.dataset.theme = 'galaxy'
-    container.dataset.skin = 'classic'
-    delete container.dataset.skinReadability
     expect(getComputedStyle(caret!).borderLeftColor).toBe('rgb(255, 255, 255)')
 
-    container.className = 'app-skin-root light'
-    container.dataset.theme = 'light'
+    container.className = ''
     expect(getComputedStyle(caret!).borderLeftColor).toBe('rgb(122, 31, 18)')
   })
 })

@@ -53,6 +53,8 @@
 
 .stage-kb-docs .pi-seg-item {
   flex: 1;
+  padding: 0 var(--s-2);
+  white-space: nowrap;
 }
 
 .stage-kb-list {
@@ -186,6 +188,12 @@
   color: var(--ink);
   font: 15px/2 var(--font-prose);
   resize: vertical;
+}
+
+.stage-kb-original {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  resize: none;
 }
 
 .stage-kb-editor:focus-visible {

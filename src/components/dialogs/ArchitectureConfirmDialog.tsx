@@ -131,7 +131,7 @@ export default function ArchitectureConfirmDialog(props: ArchitectureConfirmForm
                         ? 'bg-yellow-500/15 text-[var(--color-warning-text)]'
                         : mark === 'keep'
                           ? 'bg-green-500/10 text-[var(--color-success-text)]'
-                          : 'bg-[rgba(var(--color-accent-rgb),0.1)] text-[var(--color-accent)]'
+                          : 'bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] text-[var(--color-accent)]'
                     }`}
                   >
                     {form.markLabel(f.key)}

@@ -25,7 +25,7 @@ export function getStepPresentation(step: PostProcessStatus['steps'][string]): S
 
 /**
  * 读一个后处理 scope 的最新一次运行，定稿完成或任一工作流结束时重读。
- * 旧外壳的后处理状态面板与新外壳定稿视图的后处理步骤共用。
+ * 定稿视图的后处理步骤用它。
  */
 export function usePostProcessStatus(scope: string) {
   const [status, setStatus] = useState<PostProcessStatus | null>(null)

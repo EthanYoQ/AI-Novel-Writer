@@ -4,7 +4,7 @@ import { useProjectStore } from '../../stores/project-store'
 import { ipc } from '../../services/ipc-client'
 import { useLocaleStore } from '../../stores/locale-store'
 
-/** 新建作品：名称与保存位置，创建后其余设定在设定页填写。旧外壳与新外壳的新建对话框共用。 */
+/** 新建作品：名称与保存位置，创建后其余设定在设定页填写。 */
 export function useNewProjectForm(open: boolean, onClose: () => void) {
   const createProject = useProjectStore((s) => s.createProject)
   const locale = useLocaleStore(s => s.locale)

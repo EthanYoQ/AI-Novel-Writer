@@ -17,7 +17,7 @@ export async function confirmDeleteCurrentProject(project: { name: string; path:
   if (ok) await deleteCurrentProject(project)
 }
 
-/** 确认之后的删除；新外壳书房用自己的危险确认（输入作品名），之后走这里。 */
+/** 确认之后的删除；书房先用危险确认（输入作品名），之后走这里。 */
 export async function deleteCurrentProject(project: { name: string; path: string }) {
   const text = useLocaleStore.getState().text
   if (await useProjectStore.getState().deleteProject(project.path)) {

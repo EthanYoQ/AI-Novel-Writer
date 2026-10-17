@@ -27,7 +27,7 @@ describe('Electron main window chrome contract', () => {
   it('registers window control IPC for frameless minimize maximize and close buttons', () => {
     const ipcHandlers = source('electron/ipc-handlers.ts')
     const ipcChannels = source('src/shared/ipc-channels.ts')
-    const titleBar = source('src/components/layout/TitleBar.tsx')
+    const titleBar = source('src/components/stage/StageTopBar.tsx')
 
     expect(ipcHandlers).toContain('registerWindowController')
     for (const channel of ['window:minimize', 'window:toggle-maximize', 'window:close']) {
@@ -68,7 +68,7 @@ describe('Electron main window chrome contract', () => {
     expect(main).toContain("from './services/release-official-homepage-smoke'")
     expect(main).toContain('releaseOfficialHomepageSmokeWasRequested(process.argv)')
     expect(main).toContain('claimReleaseOfficialHomepageSmokeInvocation(process.argv, process.env)')
-    expect(main).toContain('runPackagedOfficialHomepageSmoke(releaseHomepageSmokeInvocation.token)')
+    expect(main).toContain('runPackagedOfficialHomepageSmoke(releaseHomepageSmokeInvocation!.token)')
     expect(main).toContain("'release-homepage-smoke.html'")
     expect(main).toContain('show: false')
     expect(main).toContain('contextIsolation: true')
@@ -76,13 +76,9 @@ describe('Electron main window chrome contract', () => {
     expect(main).toContain('requestedSmokeModeCount !== 1 || invocationCount !== 1')
   })
 
-  it('runs the packaged skin qualification only with its own dual-gated invocation', () => {
+  it('has no packaged skin qualification once image skins are gone', () => {
     const main = source('electron/main.ts')
 
-    expect(main).toContain("from './services/release-skin-smoke'")
-    expect(main).toContain('releaseSkinSmokeWasRequested(process.argv)')
-    expect(main).toContain('claimReleaseSkinSmokeInvocation(process.argv, process.env)')
-    expect(main).toContain('runReleaseSkinSmoke(releaseSkinSmokeInvocation!.token)')
-    expect(main).toContain('Packaged skin smoke timed out after 90 seconds')
+    expect(main).not.toMatch(/release-skin-smoke|ReleaseSkinSmoke|skin-invocation-valid/)
   })
 })

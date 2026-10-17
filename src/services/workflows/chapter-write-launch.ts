@@ -22,7 +22,7 @@ import {
 /** 章节创作参数持久化路径（相对于项目路径） */
 export const CREATION_LOG_REL = `${CANONICAL_PROJECT_DIRECTORY}/chapter_creation_log.json`
 
-/** 写作一章的表单值：旧的章节创作对话框逐项可改，新外壳的写作弹层只改指导与检索关键词，其余取自蓝图。 */
+/** 写作一章的表单值：写作弹层只改指导与检索关键词，其余取自蓝图。 */
 export interface ChapterWriteForm {
   chapterNumber: number | ''
   title: string
@@ -163,7 +163,7 @@ export type ChapterWriteOutcome =
   | { kind: 'started' }
 
 /**
- * 启动单章写作工作流。旧的章节创作对话框与新外壳的写作弹层都走这里，同一组表单值发给工作流的参数完全相同：
+ * 启动单章写作工作流。写作弹层走这里：
  * 权威章号、写作前置条件、一致性预检、参数持久化、ChapterInfo 组装与资源冲突检查都只在这一处。
  */
 export async function launchChapterWrite({

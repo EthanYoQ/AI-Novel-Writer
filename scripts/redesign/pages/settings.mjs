@@ -15,11 +15,6 @@ export async function waitForSection(page, title) {
   await page.getByRole('heading', { name: title, level: 2, exact: true }).waitFor({ state: 'visible' })
 }
 
-export async function chooseShell(page, label) {
-  await page.getByRole('button', { name: '外观', exact: true }).click()
-  await page.getByRole('group', { name: '界面布局' }).getByRole('button', { name: label }).click()
-}
-
 export async function showSection(page, name) {
   await page.getByRole('button', { name, exact: true }).click()
   await waitForSection(page, name)

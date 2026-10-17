@@ -59,7 +59,7 @@ interface DraftTarget {
 
 /**
  * 一稿草稿的数据与动作：元数据、待合并修稿、审稿记录，以及保存、AI 修稿、AI 审稿、定稿、实体稿重试、修复定稿与修稿合并。
- * 旧外壳的 DraftEditor 与新外壳的单章视图共用；两边只是把这些动作摆在不同位置。
+ * 单章视图用它。
  * 所有动作都以标签里的正文为准（含未保存的修改），并在每次异步之后核对项目会话。
  */
 export function useDraftActions({ tabId, filePath, content, projectKey }: DraftTarget) {

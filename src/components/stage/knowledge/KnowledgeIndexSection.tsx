@@ -6,7 +6,7 @@ import { useKnowledgeIndex } from './use-knowledge-base'
 import { pluralEn } from '../../../shared/plural-en'
 
 /**
- * 设置「检索模型」页里的索引检查与重建。新外壳的知识库页不再放这项实现细节（ia.md「实现细节不进入创作界面」）。
+ * 设置「检索模型」页里的索引检查与重建。知识库页不放这项实现细节（ia.md「实现细节不进入创作界面」）。
  */
 export default function KnowledgeIndexSection() {
   const text = useLocaleStore(s => s.text)

@@ -6,8 +6,8 @@ import { useLocaleStore } from '../stores/locale-store'
 interface Props {
   children: ReactNode
   fallbackLabel?: string
-  /** 自定义的出错界面，替代默认的错误详情与重试按钮。 */
-  fallback?: ReactNode
+  /** 自定义的出错界面，替代默认的错误详情与重试按钮；传函数时拿到重试（清掉错误、重新渲染子树）。 */
+  fallback?: ReactNode | ((retry: () => void) => ReactNode)
 }
 
 interface State {
@@ -35,8 +35,11 @@ export class ErrorBoundary extends Component<Props, State> {
     this.setState({ componentStack: info.componentStack ?? '' })
   }
 
+  private retry = () => this.setState({ hasError: false, error: null, componentStack: '' })
+
   render() {
-    if (this.state.hasError && this.props.fallback !== undefined) return this.props.fallback
+    const { fallback } = this.props
+    if (this.state.hasError && fallback !== undefined) return typeof fallback === 'function' ? fallback(this.retry) : fallback
     if (this.state.hasError) {
       const text = useLocaleStore.getState().text
       return (
@@ -87,7 +90,7 @@ export class ErrorBoundary extends Component<Props, State> {
               fontSize: '0.8rem',
               transition: 'background-color var(--transition-fast)',
             }}
-            onClick={() => this.setState({ hasError: false, error: null, componentStack: '' })}
+            onClick={this.retry}
           >
             {text('重试', 'Retry')}
           </button>

@@ -17,7 +17,6 @@ import { useLocaleStore } from '../../../../stores/locale-store'
 import { useStageStore, type StageSheet } from '../../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore, type WorkflowRun } from '../../../../stores/workflow-store'
-import RightToolWindowBar from '../../../layout/RightToolWindowBar'
 import RunSheet from '../RunSheet'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -423,14 +422,9 @@ describe('运行侧页的说明文字', () => {
 })
 
 describe('聊天入口不可见', () => {
-  it.each<[Locale, string]>([['zh-CN', 'AI 输出'], ['en-US', 'AI output']])('%s：旧外壳右侧栏只有 AI 输出，运行侧页三个分页都没有聊天', async (locale, outputLabel) => {
+  it.each<Locale>(['zh-CN', 'en-US'])('%s：运行侧页三个分页都没有聊天', async locale => {
     useLocaleStore.setState({ locale })
-    useLayoutStore.setState({ aiPanelOpen: false, sidebarView: 'project' })
     useWorkflowStore.setState({ activeRuns: [run('4', 'running')], history: [run('3', 'completed')] })
-    await act(async () => root!.render(<RightToolWindowBar />))
-    const rail = [...host!.querySelectorAll('button')]
-    expect(rail.map(item => item.title)).toEqual([outputLabel])
-    expect(host!.innerHTML).not.toMatch(CHAT_WORDS)
 
     for (const tab of ['active', 'history', 'diagnostics'] as const) {
       await render({ kind: 'run', tab })

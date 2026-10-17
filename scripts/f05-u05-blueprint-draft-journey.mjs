@@ -10,6 +10,9 @@ import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { _electron as electron } from 'playwright'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
+import * as blueprint from './redesign/pages/blueprint.mjs'
+import * as runSheet from './redesign/pages/run-sheet.mjs'
+import * as stage from './redesign/pages/stage.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -49,6 +52,7 @@ const premise = '在潮汐城，林岚寻找旧港地图。守塔人保管潮汐
 const worldbuilding = '旧港城门按钟声和潮位开放；进入者必须登记姓名。'.repeat(3)
 const synopsis = '# 全书总纲\n林岚追查旧港地图。\n## 第1章：旧港线索1\n林岚找到地图。\n## 第2章：旧港线索2\n林岚核对潮汐。\n## 第3章：旧港线索3\n林岚抵达旧港。'
 const prose = '林岚沿旧港石阶核对钟声潮位地图线索'.repeat(5)
+const shortOutline = '- 原目标：核对旧港线索。\n- 结尾状态：线索指向下一次钟声。'
 const proseTwo = '守塔人到北堤寻找钟锤，盐仓船票揭示去向。林岚查出船票上的日期晚于地图失踪之夜，于是先封存票据，再请港务员核对出航簿。北堤钟楼传来三声短响，二人决定追查最后一艘离港货船。'
 const steps = []
 const timeout = 60_000
@@ -59,10 +63,9 @@ for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOK
 
 const pass = (stepId, actionId, assertion, observed) => steps.push({ stepId, actionId, outcome: 'PASS', assertion, observed })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
-async function assertWriter(page, step) {
-  const shell = page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]')
-  await shell.waitFor({ state: 'visible', timeout })
-  assert.equal(await shell.getAttribute('data-shell-variant'), 'v3', `${step}: not V3 Writer`)
+async function assertStage(page, step) {
+  await stage.waitForStage(page, timeout)
+  assert.equal(await stage.root(page).getAttribute('data-shell-presentation'), 'stage', `${step}: not the paper-ink stage`)
 }
 async function launch(port) {
   const app = await electron.launch({ executablePath, cwd: packageDir, args: [`--user-data-dir=${profile.userData}`], env, timeout })
@@ -77,7 +80,7 @@ async function launch(port) {
     }, port)
     const page = await app.firstWindow({ timeout })
     page.setDefaultTimeout(15_000)
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout })
+    await stage.waitForStage(page, timeout)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
     return { app, page }
   } catch (error) { await app.close(); throw error }
@@ -91,38 +94,51 @@ async function quit(app) {
   if (!closed) execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, encoding: 'utf8' })
   return { forced: !closed }
 }
-async function selectWriter(page) {
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const previous = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...previous, shellPreference: 'writer',
-      revision: Number(previous.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await assertWriter(page, 'writer-test-profile-selection')
-}
 async function openProject(page, name = projectName) {
-  await assertWriter(page, 'project-open')
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  if (!await page.locator('.writer-shelf').isVisible()) {
-    await page.locator('.writer-left-rail button[title="欢迎页"]').click()
-  }
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${name}》` }).click()
-  await page.locator('.writer-project-tree').getByText(name, { exact: true }).waitFor({ state: 'visible' })
+  await assertStage(page, 'project-open')
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, name)
+  await stage.waitForWork(page, name)
 }
 async function blueprintPage(page) {
-  await assertWriter(page, 'blueprint-page')
-  await page.locator('.writer-project-tree').getByText('章节蓝图', { exact: true }).click()
-  await page.getByRole('button', { name: 'AI 生成蓝图' }).waitFor({ state: 'visible' })
+  await assertStage(page, 'blueprint-page')
+  await blueprint.open(page)
 }
+/** 收起运行侧页：运行开始时它会自动展开，收起后才能用「展开了」判断下一次运行已经开始。 */
+async function closeRunSheet(page) {
+  if (!await runSheet.sheet(page).isVisible()) return
+  await runSheet.sheet(page).getByRole('button', { name: '收起运行侧页' }).first().click()
+  await runSheet.sheet(page).waitFor({ state: 'hidden' })
+}
+/** 大纲没写满全书时，生成蓝图前会先问「架构还不完整」；确认后照常生成。没有这一问就直接开始，运行侧页展开。 */
+async function confirmIncompleteArchitecture(page) {
+  const warning = page.getByRole('dialog', { name: '架构还不完整' })
+  await warning.or(runSheet.sheet(page)).first().waitFor({ state: 'visible', timeout })
+  if (!await warning.isVisible()) return false
+  await warning.getByRole('button', { name: '继续生成' }).click()
+  await runSheet.sheet(page).waitFor({ state: 'visible', timeout })
+  return true
+}
+/** 写作前的一致性预检有提示时停下等作者处理（这里选「仅本次忽略」）；没有提示就直接开始，运行侧页展开。 */
+async function passPreflight(page, scope) {
+  const ignore = scope.getByRole('button', { name: '仅本次忽略' })
+  await ignore.or(runSheet.sheet(page)).first().waitFor({ state: 'visible', timeout })
+  if (!await ignore.isVisible()) return false
+  await ignore.click()
+  await runSheet.sheet(page).waitFor({ state: 'visible', timeout })
+  return true
+}
+/** 「AI 生成蓝图」里「接着生成 N 章」：已有蓝图时从下一章往后补，保留已有的。 */
 async function requestBlueprints(page, count) {
-  await assertWriter(page, `blueprints-${count}`)
-  await page.getByRole('button', { name: 'AI 生成蓝图' }).click()
-  const dialog = page.getByRole('dialog', { name: '生成章节蓝图' })
-  await dialog.locator('input[type="number"]').first().fill(String(count))
+  await assertStage(page, `blueprints-${count}`)
+  await closeRunSheet(page)
+  await blueprint.openGenerate(page)
+  const dialog = blueprint.generateDialog(page)
+  await dialog.getByRole('spinbutton', { name: '本次蓝图章数' }).fill(String(count))
   await dialog.getByRole('button', { name: '开始生成' }).click()
   await dialog.waitFor({ state: 'hidden', timeout })
+  return confirmIncompleteArchitecture(page)
 }
 async function waitBlueprints(page, context, expected) {
   const deadline = Date.now() + timeout
@@ -179,18 +195,55 @@ async function waitBatch(page, context, expectedCompleted, mode) {
   }
   throw new Error(`batch did not commit ${expectedCompleted} chapters`)
 }
+/** 蓝图页的「批量创作」：写几章、每章目标字数、本次模型与写完之后的去向；自动定稿要再确认一次。 */
 async function batchDialog(page, count, mode) {
-  await assertWriter(page, `batch-${mode}`)
+  await assertStage(page, `batch-${mode}`)
   await blueprintPage(page)
+  await closeRunSheet(page)
   await page.getByRole('button', { name: '批量创作' }).click()
-  const dialog = page.getByRole('dialog', { name: '批量创作任务' })
-  await dialog.locator('#batch-chapter-count').fill(String(count))
-  await dialog.locator('#batch-chapter-words-target').fill('100')
-  await dialog.locator(`input[name="batch-completion-mode"][value="${mode}"]`).check()
-  await dialog.locator('#batch-writing-model').selectOption(model.id)
-  await dialog.getByRole('button', { name: mode === 'draft_review' ? '启动批量创作' : '继续确认自动定稿' }).click()
-  if (mode === 'auto_finalize') await dialog.getByRole('button', { name: '确认自动定稿并启动' }).click()
+  const dialog = blueprint.batchDialog(page)
+  await dialog.getByLabel(/^写几章/).fill(String(count))
+  await dialog.getByLabel('每章目标字数').fill('100')
+  await dialog.getByRole('radio', { name: mode === 'draft_review' ? /^留作草稿/ : /^自动定稿/ }).check()
+  await dialog.getByLabel(/^本次模型/).selectOption(model.id)
+  if (mode === 'auto_finalize') {
+    await dialog.getByRole('button', { name: '继续确认自动定稿' }).click()
+    await dialog.getByRole('button', { name: '确认自动定稿并开始' }).click()
+  } else {
+    await dialog.getByRole('button', { name: `开始写 ${count} 章` }).click()
+  }
+  await passPreflight(page, dialog)
   await dialog.waitFor({ state: 'hidden', timeout })
+}
+/** 运行侧页里这次批量创作的「取消」：只有进行中的运行才有。 */
+const batchCancel = page => runSheet.sheet(page).getByRole('button', { name: /^取消「批量草稿待审/ }).first()
+/** 运行侧页「历史」里标题为 title 的最近一次运行记为已完成。 */
+async function assertRunCompleted(page, title) {
+  await runSheet.openFromPalette(page)
+  await runSheet.tab(page, '历史').click()
+  const row = page.getByRole('list', { name: '运行历史' }).getByRole('listitem')
+    .filter({ has: page.locator('.run-history-title', { hasText: title }) }).first()
+  await row.locator('.run-history-row').filter({ hasText: '已完成，' }).waitFor({ state: 'visible', timeout })
+  await runSheet.tab(page, '进行中').click()
+}
+/** 定稿视图里的「定稿后处理」：每一步的名字、状态（success / pending / failed）与说明。 */
+const postProcess = page => stage.root(page).getByRole('region', { name: '定稿后处理' })
+async function waitPostProcess(page, accept, label) {
+  const deadline = Date.now() + timeout
+  let rows = []
+  while (Date.now() < deadline) {
+    rows = await postProcess(page).locator('.stage-ch-post-step').evaluateAll(items => items.map(item => ({
+      label: item.querySelector('b')?.textContent ?? '', state: item.getAttribute('data-state'),
+      detail: item.querySelector('.stage-ch-post-detail')?.textContent ?? '' }))).catch(() => [])
+    if (accept(rows)) return rows
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  throw new Error(`${label}: ${JSON.stringify(rows)}`)
+}
+/** 切到设定再回到第 1 章，定稿视图重新挂载、重读后处理记录。 */
+async function reopenChapterOne(page) {
+  await stage.stageButton(page, '设定').click()
+  await stage.openChapter(page, 1)
 }
 async function createConfiguredProject(app, page, name) {
   const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name,
@@ -199,7 +252,8 @@ async function createConfiguredProject(app, page, name) {
   const opened = await invoke(page, 'project:open', created.projectPath, randomUUID(), null)
   assert.equal(opened.success, true, opened.error)
   const session = { projectId: created.projectId, projectPath: created.projectPath, leaseId: opened.project.sessionLease }
-  assert.equal((await invoke(page, 'db:project-core-update', { premise, worldbuilding, synopsis }, created.projectPath, session)).success, true)
+  // 写作此章不再弹参数表单（UX-05），单章的目标字数取自作品设定的每章字数；合成正文约 85 字，设为下限 100，一次写完不续写。
+  assert.equal((await invoke(page, 'db:project-core-update', { premise, worldbuilding, synopsis, wordsPerChapter: 100 }, created.projectPath, session)).success, true)
   const roster = await invoke(page, 'db:character-roster-read', created.projectPath, session)
   assert.equal((await invoke(page, 'db:character-roster-commit', { operationId: randomUUID(),
     expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision, schemaVersion: 1,
@@ -222,9 +276,9 @@ async function main() {
   fs.mkdirSync(receiptDir, { recursive: true })
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
   fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U05', sourceProject: repository,
-    createdAt: new Date().toISOString(), ttlHours: 48, retainedReason: 'review Writer U05 receipt',
+    createdAt: new Date().toISOString(), ttlHours: 48, retainedReason: 'review stage U05 receipt',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  const fixture = { requests: [], chapters: [], mode: 'blueprint', blueprintQueue: [1], releaseFirst: null, releaseRetry: null }
+  const fixture = { requests: [], outlines: [], chapters: [], mode: 'blueprint', blueprintQueue: [1], releaseFirst: null, releaseRetry: null }
   const server = createServer(async (request, response) => {
     const authorized = request.headers.authorization === `Bearer ${model.apiKey}`
     if (request.method !== 'POST' || !authorized) { response.writeHead(403).end(); return }
@@ -247,6 +301,15 @@ async function main() {
       : fixture.mode === 'blueprint' && compact ? [Number(compact[1])] : []
     const synopsisChapterOne = prompt.includes('林岚找到地图。')
     const synopsisChapterTwo = prompt.includes('林岚核对潮汐。')
+    // 写稿先要一份短细纲（只写短细纲）再写正文：细纲照常回复、另记在 outlines，requests 只记蓝图与正文请求，挂起与失败也只作用于正文。
+    if (prompt.includes('只写短细纲')) {
+      fixture.outlines.push({ mode: fixture.mode, model: body.model, synopsisChapterOne, synopsisChapterTwo })
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: shortOutline }, finish_reason: 'stop' }] })}\n\n`)
+      response.write('data: {"choices":[],"usage":{"prompt_tokens":300,"completion_tokens":60,"total_tokens":360}}\n\n')
+      response.end('data: [DONE]\n\n')
+      return
+    }
     if (fixture.mode === 'draft_review' && synopsisChapterOne === synopsisChapterTwo) {
       response.writeHead(422).end('AMBIGUOUS_U05_DRAFT_CHAPTER'); return
     }
@@ -282,7 +345,8 @@ async function main() {
     response.write('data: {"choices":[],"usage":{"prompt_tokens":400,"completion_tokens":200,"total_tokens":600}}\n\n')
     response.end('data: [DONE]\n\n')
   })
-  let app, page, failure, failureUi, currentStep = 'setup', context, project, exit
+  // A04 的批次与请求供 A08 核对；两段各在自己的 if 里，所以提到这里声明。
+  let app, page, failure, failureUi, currentStep = 'setup', context, project, exit, batch, batchRequests
   const mark = step => { currentStep = step; process.stderr.write(`${step}\n`) }
   try {
     verifyWindowsPackage(packageDir)
@@ -292,19 +356,18 @@ async function main() {
     ;({ app, page } = await launch(server.address().port))
     assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
     assert.equal((await invoke(page, 'llm:set-default-model', model.id)).success, true)
-    await selectWriter(page)
     if (!selectedAction) {
     ;({ created: project, session: context } = await createConfiguredProject(app, page, projectName))
 
     mark('U05.A01-single-blueprint')
-    await requestBlueprints(page, 1)
+    const firstWarned = await requestBlueprints(page, 1)
     const first = await waitBlueprints(page, context, [1])
     assert.equal(first[0].title, '旧港线索1')
     assert.deepEqual(fixture.chapters, [1])
     assert.deepEqual(fixture.blueprintQueue, [])
     assertTrustedAttempts(context.projectPath, 1)
-    pass('U05.A01-single-blueprint', 'U05.A01', 'Writer button produced and persisted exactly chapter 1 blueprint',
-      { chapterNumbers: first.map(row => row.chapterNumber), requests: [...fixture.chapters] })
+    pass('U05.A01-single-blueprint', 'U05.A01', 'AI 生成蓝图 with 接着生成 1 章 produced and persisted exactly chapter 1 blueprint',
+      { chapterNumbers: first.map(row => row.chapterNumber), requests: [...fixture.chapters], incompleteArchitectureConfirmed: firstWarned })
 
     mark('U05.A02-batch-blueprints')
     fixture.blueprintQueue = [2, 3]
@@ -314,7 +377,7 @@ async function main() {
     while (Date.now() < appendDeadline) {
       const saved = readProjectDb(context.projectPath, db => db.prepare('SELECT chapter_number FROM blueprints ORDER BY chapter_number').all().map(row => row.chapter_number))
       if (JSON.stringify(saved) === '[1,2,3]') break
-      if (JSON.stringify(saved) === '[1,2]' && await page.locator('[role="alert"],[role="status"]').filter({ hasText: 'DIRECTORY_PARTIAL_COMMIT' }).isVisible()) {
+      if (JSON.stringify(saved) === '[1,2]' && await page.locator('[role="alert"],[role="status"]').filter({ hasText: 'DIRECTORY_PARTIAL_COMMIT' }).first().isVisible()) {
         const progress = readProjectDb(context.projectPath, db => db.prepare('SELECT usage_receipt_json FROM generation_attempts ORDER BY rowid').all()
           .map(row => JSON.parse(row.usage_receipt_json).directoryProgress)
           .find(row => row?.requestedRange?.startChapter === 2 && row.requestedRange.endChapter === 3))
@@ -322,11 +385,11 @@ async function main() {
         assert.deepEqual(progress?.remainingRange, { startChapter: 3, endChapter: 3 })
         assert.ok(progress.operationId && !progress.continuationHandle)
         continuedOperationId = progress.operationId
-        await assertWriter(page, 'blueprint-partial-continuation')
-        await page.getByRole('button', { name: 'AI 生成蓝图' }).click()
-        const dialog = page.getByRole('dialog', { name: '生成章节蓝图' })
-        const card = dialog.getByText('已保存第 2–2 章蓝图。', { exact: true }).locator('..')
-        const continueButton = card.getByRole('button', { name: '继续第 3–3 章（沿用原预算）', exact: true })
+        await assertStage(page, 'blueprint-partial-continuation')
+        await blueprint.openGenerate(page)
+        const dialog = blueprint.generateDialog(page)
+        const card = dialog.locator('.pi-notice').filter({ hasText: '已保存第 2～2 章蓝图' })
+        const continueButton = card.getByRole('button', { name: '继续第 3～3 章', exact: true })
         await continueButton.waitFor({ state: 'visible', timeout })
         assert.equal(await continueButton.count(), 1)
         await continueButton.click()
@@ -346,18 +409,17 @@ async function main() {
     assert.deepEqual(fixture.chapters, [1, 2, 3], 'provider dispatch duplicated or skipped a chapter')
     assert.deepEqual(fixture.blueprintQueue, [], 'provider dispatched fewer blueprint requests than selected range')
     assertTrustedAttempts(context.projectPath, 3)
-    pass('U05.A02-batch-blueprints', 'U05.A02', 'Writer append persisted ordered chapters 2–3 once and preserved chapter 1',
+    pass('U05.A02-batch-blueprints', 'U05.A02', '接着生成 2 章 appended ordered chapters 2–3 once and preserved chapter 1',
       { chapterNumbers: all.map(row => row.chapterNumber), requests: [...fixture.chapters], continuedOperationId })
 
     mark('U05.A03-single-draft')
     fixture.mode = 'draft'
-    await assertWriter(page, 'single-draft')
-    await page.getByRole('button', { name: '写作第1章' }).click()
-    const writing = page.getByRole('dialog', { name: /创作/ })
-    await writing.locator('#chapter-writing-model').selectOption(model.id)
-    await writing.getByPlaceholder('3000').fill('100')
-    await writing.getByRole('button', { name: '开始创作' }).click()
-    await writing.waitFor({ state: 'hidden', timeout })
+    await assertStage(page, 'single-draft')
+    await blueprintPage(page)
+    await closeRunSheet(page)
+    // 主按钮直接按蓝图与默认模型（这里就是隔离合成模型）开始写，不弹表单。
+    await blueprint.writeButton(page).click()
+    await passPreflight(page, blueprint.popover(page))
     const drafts = await waitDrafts(page, context, 1)
     assert.equal(drafts.length, 1)
     const savedDraft = readProjectDb(context.projectPath, db => db.prepare('SELECT c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(drafts[0].id))
@@ -366,8 +428,10 @@ async function main() {
     const draftRequests = fixture.requests.filter(row => row.mode === 'draft')
     assert.ok(draftRequests.length > 0)
     assert.ok(draftRequests.every(row => row.model === model.modelName && row.synopsisChapterOne && !row.synopsisChapterTwo))
-    assertTrustedAttempts(context.projectPath, 4)
-    pass('U05.A03-single-draft', 'U05.A03', 'Writer write button persisted chapter 1 prose from selected provider with current chapter synopsis',
+    const draftOutlines = fixture.outlines.filter(row => row.mode === 'draft')
+    assert.equal(draftOutlines.length, 1, 'single write should request exactly one short outline')
+    assertTrustedAttempts(context.projectPath, 3 + draftOutlines.length + draftRequests.length)
+    pass('U05.A03-single-draft', 'U05.A03', 'the blueprint page 写第 1 章 button persisted chapter 1 prose from the default provider with the current chapter synopsis',
       { draftId: drafts[0].id, chapterNumber: drafts[0].chapterNumber, units: prose.length, providerCalls: draftRequests.length })
 
     mark('U05.A04-batch-review')
@@ -381,7 +445,7 @@ async function main() {
     assert.deepEqual(fixture.blueprintQueue, [])
     fixture.mode = 'draft_review'
     await batchDialog(page, 2, 'draft_review')
-    const batch = await waitBatch(page, context, 2, 'draft_review')
+    batch = await waitBatch(page, context, 2, 'draft_review')
     const batchDrafts = await waitDrafts(page, context, 2)
     const savedBodies = readProjectDb(context.projectPath, db => db.prepare('SELECT d.chapter_number AS chapterNumber,c.body FROM drafts d JOIN contents c ON c.id=d.content_id ORDER BY d.chapter_number').all())
     assert.equal(batch.mode, 'draft_review')
@@ -394,14 +458,14 @@ async function main() {
     assert.ok(savedBodies[0].body.includes(prose) && !savedBodies[0].body.includes(proseTwo))
     assert.ok(savedBodies[1].body.includes(proseTwo) && !savedBodies[1].body.includes(prose))
     assert.ok(batchDrafts.every(row => row.status === 'draft'), 'review mode finalized a draft')
-    const batchRequests = fixture.requests.filter(row => row.mode === 'draft_review')
+    batchRequests = fixture.requests.filter(row => row.mode === 'draft_review')
     assert.ok(batchRequests.some(row => row.blueprintOne && row.synopsisChapterOne && !row.synopsisChapterTwo))
     assert.ok(batchRequests.some(row => row.blueprintTwo && row.synopsisChapterTwo && !row.synopsisChapterOne))
     assert.deepEqual(batchRequests.map(row => row.responseSha256), [createHash('sha256').update(prose).digest('hex'), createHash('sha256').update(proseTwo).digest('hex')])
-    assertTrustedAttempts(context.projectPath, 4)
-    await page.locator('.writer-ai-panel').getByRole('button', { name: /第1–2章/ }).last().click()
-    await page.locator('.writer-ai-panel').getByText('整个工作流已全部完成', { exact: true }).waitFor({ state: 'visible', timeout })
-    pass('U05.A04-batch-review', 'U05.A04', 'V3 batch review froze mode/range/model/budget and persisted two distinct unfinalized drafts',
+    // 两章蓝图各一次；每章正文两次尝试：短细纲与正文。
+    assertTrustedAttempts(context.projectPath, 2 + 2 * 2)
+    await assertRunCompleted(page, '批量草稿待审 · 第 1 至 2 章')
+    pass('U05.A04-batch-review', 'U05.A04', 'stage batch review froze mode/range/model/budget and persisted two distinct unfinalized drafts',
       { batchId: batch.batchId, range: batch.range, targetUnits: batch.targetUnits,
         draftIds: batchDrafts.map(row => row.id), requestCount: batchRequests.length })
     }
@@ -426,11 +490,13 @@ async function main() {
     }
     const budgetReceipts = readProjectDb(context.projectPath, db => db.prepare('SELECT run_id AS runId,usage_receipt_json AS receipt FROM generation_attempts').all()
       .filter(row => frozen.some(run => run.runId === row.runId))
-      .map(row => JSON.parse(row.receipt).budgetDecision))
+      .map(row => JSON.parse(row.receipt))
+      .filter(receipt => receipt.purpose === 'chapter-draft')
+      .map(receipt => receipt.budgetDecision))
     assert.equal(budgetReceipts.length, 2)
     assert.ok(budgetReceipts.every(receipt => receipt?.decision === 'ready' && receipt.reservationLiabilityTokens > 0))
     assert.deepEqual(batchRequests.map(row => [row.synopsisChapterOne, row.synopsisChapterTwo]), [[true, false], [false, true]])
-    pass('U05.A08-current-chapter-source-budget', 'U05.A08', 'two Writer batch chapters used their own frozen blueprint, synopsis and one shared bounded root',
+    pass('U05.A08-current-chapter-source-budget', 'U05.A08', 'two stage batch chapters used their own frozen blueprint, synopsis and one shared bounded root',
       { runIds: frozen.map(row => row.runId), rootActionId: frozen[0].rootActionId,
         requestedOutputTokens: budgetReceipts.map(row => row.requestedOutputTokens) })
 
@@ -446,22 +512,30 @@ async function main() {
     const cancelDeadline = Date.now() + timeout
     while (!fixture.releaseFirst && Date.now() < cancelDeadline) await new Promise(resolve => setTimeout(resolve, 100))
     assert.equal(typeof fixture.releaseFirst, 'function', 'first batch request did not reach controlled provider')
-    await assertWriter(page, 'batch-cancel')
-    await page.getByTitle('取消任务', { exact: true }).last().click()
+    await assertStage(page, 'batch-cancel')
+    await runSheet.openFromPalette(page)
+    await batchCancel(page).click()
     fixture.releaseFirst()
     fixture.releaseFirst = null
-    await page.getByTitle('取消任务', { exact: true }).waitFor({ state: 'hidden', timeout })
+    await batchCancel(page).waitFor({ state: 'hidden', timeout })
     const cancelRequests = fixture.requests.filter(row => row.mode === 'cancel_request')
     assert.equal(cancelRequests.length, 1)
     assert.ok(cancelRequests[0].synopsisChapterOne && !cancelRequests[0].synopsisChapterTwo)
-    const cancelState = readProjectDb(context.projectPath, db => ({
-      roots: db.prepare('SELECT action_json FROM generation_roots').all().map(row => JSON.parse(row.action_json)).filter(row => row.operation === 'batch-chapters'),
-      drafts: db.prepare('SELECT chapter_number FROM drafts ORDER BY chapter_number').all(),
-    }))
+    // 「取消」按下后运行先进入取消中，按钮随即消失；等根动作真的记为已取消再读。
+    let cancelState
+    const cancelledDeadline = Date.now() + timeout
+    while (Date.now() < cancelledDeadline) {
+      cancelState = readProjectDb(context.projectPath, db => ({
+        roots: db.prepare('SELECT action_json FROM generation_roots').all().map(row => JSON.parse(row.action_json)).filter(row => row.operation === 'batch-chapters'),
+        drafts: db.prepare('SELECT chapter_number FROM drafts ORDER BY chapter_number').all(),
+      }))
+      if (cancelState.roots[0]?.status === 'cancelled') break
+      await new Promise(resolve => setTimeout(resolve, 250))
+    }
     assert.equal(cancelState.roots.length, 1)
     assert.equal(cancelState.roots[0].status, 'cancelled')
     assert.ok(cancelState.drafts.every(row => row.chapter_number !== 2))
-    pass('U05.A06-stop-batch', 'U05.A06', 'Writer cancel stopped the active batch before chapter 2 dispatch or write',
+    pass('U05.A06-stop-batch', 'U05.A06', 'the run sheet 取消 stopped the active batch before chapter 2 dispatch or write',
       { rootActionId: cancelState.roots[0].rootActionId, status: cancelState.roots[0].status,
         requests: cancelRequests.length, savedChapters: cancelState.drafts.map(row => row.chapter_number) })
     }
@@ -476,8 +550,8 @@ async function main() {
     const a07RequestOffset = fixture.requests.length
     fixture.mode = 'fail_request'
     await batchDialog(page, 2, 'draft_review')
-    await page.getByTitle('取消任务', { exact: true }).waitFor({ state: 'visible', timeout })
-    await page.getByTitle('取消任务', { exact: true }).waitFor({ state: 'hidden', timeout })
+    await batchCancel(page).waitFor({ state: 'visible', timeout })
+    await batchCancel(page).waitFor({ state: 'hidden', timeout })
     const failedRequests = fixture.requests.slice(a07RequestOffset).filter(row => row.mode === 'fail_request')
     assert.equal(failedRequests.length, 1, 'initial batch failure should make one provider request before explicit retry')
     assert.ok(failedRequests.every(row => row.synopsisChapterOne && !row.synopsisChapterTwo))
@@ -485,7 +559,7 @@ async function main() {
     assert.deepEqual(failedDrafts, [])
     const failedRuns = readProjectDb(context.projectPath, db => db.prepare('SELECT r.run_id AS runId,r.binding_json AS binding,a.attempt_json AS attempt,a.usage_receipt_json AS receipt FROM generation_runs r LEFT JOIN generation_attempts a ON a.run_id=r.run_id').all()
       .map(row => ({ ...row, source: JSON.parse(row.binding).sourceManifest })))
-      .filter(row => row.source.operation === 'chapter-draft')
+      .filter(row => row.source.operation === 'chapter-draft' && (!row.receipt || JSON.parse(row.receipt).purpose === 'chapter-draft'))
     assert.deepEqual(failedRuns.map(row => row.source.chapterNumber), [1], 'failed batch opened a later chapter run')
     assert.equal(JSON.parse(failedRuns[0].attempt).status, 'unknown')
     assert.equal(JSON.parse(failedRuns[0].receipt).result?.failureCode, 'GENERATION_PROVIDER_FAILED')
@@ -493,7 +567,10 @@ async function main() {
     assert.ok(failedBatchId, 'failed chapter run is not bound to its batch')
 
     fixture.mode = 'retry_request'
-    await page.locator('.writer-ai-panel').getByRole('button', { name: '继续此批次', exact: true }).click()
+    // 失败的批次在运行侧页「进行中」的「可恢复的内容」里，可以「继续此批次」。
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '进行中').click()
+    await runSheet.recovery(page).getByRole('button', { name: '继续此批次', exact: true }).click()
     const retryDeadline = Date.now() + timeout
     while (!fixture.releaseRetry && Date.now() < retryDeadline) await new Promise(resolve => setTimeout(resolve, 100))
     assert.equal(typeof fixture.releaseRetry, 'function', 'explicit batch retry did not reach controlled provider')
@@ -521,7 +598,7 @@ async function main() {
     assert.equal(fixture.requests.slice(a07RequestOffset).filter(row => row.mode === 'draft_review').length, 1,
       'next chapter was not dispatched exactly once after the failed chapter retry succeeded')
     pass('U05.A07-failure-stops-explicit-retry-continues', 'U05.A07',
-      'first-chapter HTTP 503 stopped before chapter 2; explicit batch retry reissued chapter 1, then continued to chapter 2',
+      'first-chapter HTTP 503 stopped before chapter 2; 继续此批次 in the run sheet reissued chapter 1, then continued to chapter 2',
       { initialFailureRequests: failedRequests.length, retryRequests: retryRequests.length,
         batchId: resumedBatch.batchId, completedChapters: resumedBatch.completedChapters.map(row => row.chapterNumber),
         savedChapters: resumedDrafts.map(row => row.chapterNumber) })
@@ -558,10 +635,12 @@ async function main() {
     assert.equal(confirmed.completedChapters[0]?.postProcessComplete, true)
     const autoAttempts = readProjectDb(context.projectPath, db => db.prepare('SELECT r.binding_json AS binding,a.attempt_json AS attempt,a.usage_receipt_json AS receipt FROM generation_runs r JOIN generation_attempts a ON a.run_id=r.run_id').all()
       .map(row => ({ operation: JSON.parse(row.binding).sourceManifest.operation,
+        purpose: JSON.parse(row.receipt).purpose,
         status: JSON.parse(row.attempt).status,
         trusted: JSON.parse(row.receipt).result?.usage?.trusted,
         finishReason: JSON.parse(row.receipt).result?.finishReason }))
-      .filter(row => ['chapter-draft', 'finalized-chapter-notes', 'finalized-character-state'].includes(row.operation)))
+      .filter(row => ['chapter-draft', 'finalized-chapter-notes', 'finalized-character-state'].includes(row.operation)
+        && row.purpose !== 'chapter-draft-short-outline'))
     assert.deepEqual(autoAttempts.map(row => row.operation).sort(), ['chapter-draft', 'finalized-chapter-notes', 'finalized-character-state'])
     assert.ok(autoAttempts.every(row => row.status === 'settled' && row.trusted === true && row.finishReason === 'stop'))
     const finalizedBody = readProjectDb(context.projectPath, db => db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=1').get().body)
@@ -570,18 +649,15 @@ async function main() {
     assert.equal(fs.readFileSync(path.join(context.projectPath, '第1章 旧港线索1.txt'), 'utf8'), `第1章 旧港线索1\n\n${finalizedBody}`)
     assert.equal(fixture.requests.filter(row => row.mode === 'auto_finalize' && row.characterStateRequest).length, 1,
       'finalized character-state request was retried or skipped')
-    await page.locator('.writer-ai-panel').getByRole('button', { name: /第1–1章/ }).last().click()
-    await page.locator('.writer-ai-panel').getByText('整个工作流已全部完成', { exact: true }).waitFor({ state: 'visible', timeout })
-    pass('U05.A05-auto-finalize', 'U05.A05', 'Writer auto-finalize confirmation produced a published chapter with complete post-processing',
+    await assertRunCompleted(page, '批量自动定稿 · 第 1 章')
+    pass('U05.A05-auto-finalize', 'U05.A05', 'stage auto-finalize confirmation produced a published chapter with complete post-processing',
       { batchId: autoBatch.batchId, chapterNumber: finalized[0].chapterNumber, finalizationId: finalized[0].finalizationId,
         postProcessComplete: confirmed.completedChapters[0].postProcessComplete })
 
     mark('U13.A09-finalize-seal-three-states')
     const source = { draftId: finalized[0].draftId, chapterNumber: 1,
       finalizationId: finalized[0].finalizationId, contentHash: finalized[0].contentHash }
-    const manuscript = page.locator('.writer-project-tree .tree-item[title="点击打开 — 第1章 旧港线索1"]')
-    await manuscript.click()
-    await page.getByText('第1章定稿 完成（3/3）', { exact: true }).waitFor({ state: 'visible', timeout })
+    await stage.openChapter(page, 1)
     const successfulRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, batchSession)
     const successfulSteps = await invoke(page, 'db:post-process-get-steps', successfulRun.id, context.projectPath, batchSession)
     assert.equal(successfulRun.triggerSourceType, 'chapter_finalize')
@@ -590,6 +666,9 @@ async function main() {
     assert.equal(successfulRun.allCriticalPassed, true)
     assert.deepEqual(successfulSteps.map(step => step.stepKey), ['kb_import', 'chapter_notes', 'character_cards'])
     assert.ok(successfulSteps.every(step => step.ok && step.attemptCount > 0 && !step.errorMsg))
+    const labels = successfulSteps.map(step => step.label)
+    const stepRows = rows => labels.map(label => rows.find(row => row.label === label))
+    await waitPostProcess(page, rows => stepRows(rows).every(row => row?.state === 'success' && row.detail === '完成'), 'natural post-process success')
 
     const injected = await invoke(page, 'db:post-process-create-run', {
       triggerSourceType: 'chapter_finalize', triggerSourceId: '1', sourceLabel: successfulRun.sourceLabel,
@@ -604,9 +683,8 @@ async function main() {
     assert.equal(pendingRun.triggerSourceId, successfulRun.triggerSourceId)
     assert.deepEqual(pendingSteps.map(step => [step.stepKey, step.ok, step.attemptCount, step.errorMsg]),
       successfulSteps.map(step => [step.stepKey, false, 0, '']))
-    await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
-    await manuscript.click()
-    await page.getByText('第1章定稿 正在处理（0/3）', { exact: true }).waitFor({ state: 'visible', timeout })
+    await reopenChapterOne(page)
+    await waitPostProcess(page, rows => stepRows(rows).every(row => row?.state === 'pending' && row.detail === '处理中'), 'controlled pending post-process run')
 
     const sentinel = 'U13_A09_CONTROLLED_POST_PROCESS_FAILURE'
     const failed = await invoke(page, 'db:post-process-mark-step-failed', injected.id, pendingSteps[0].stepKey,
@@ -620,13 +698,14 @@ async function main() {
     assert.equal(failedSteps[0].attemptCount, 1)
     assert.equal(failedSteps[0].errorMsg, sentinel)
     assert.ok(failedSteps.slice(1).every(step => !step.ok && step.attemptCount === 0 && !step.errorMsg))
-    await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
-    await manuscript.click()
-    await page.getByText('第1章定稿 — 1 个步骤失败', { exact: true }).click()
-    await page.getByText(successfulSteps[0].label, { exact: true }).waitFor({ state: 'visible', timeout })
-    await page.getByText(sentinel, { exact: true }).waitFor({ state: 'visible', timeout })
+    await reopenChapterOne(page)
+    await waitPostProcess(page, rows => {
+      const [first, ...rest] = stepRows(rows)
+      return first?.state === 'failed' && first.detail === sentinel && rest.every(row => row?.state === 'pending')
+    }, 'controlled failed post-process step')
+    await postProcess(page).getByRole('button', { name: '重试失败步骤' }).waitFor({ state: 'visible', timeout })
     pass('U13.A09-finalize-seal-three-states', 'U13.A09',
-      'V3 DraftEditor projects the natural finalized success and controlled source-bound pending/failure SQLite runs',
+      'the stage chapter view lists the natural finalized success and the controlled source-bound pending and failed SQLite runs under 定稿后处理',
       { finalizedSource: source, naturalSuccessRunId: successfulRun.id, controlledRunId: injected.id,
         stepKeys: successfulSteps.map(step => step.stepKey), controlledFailure: sentinel })
     }
@@ -634,6 +713,7 @@ async function main() {
   } catch (error) {
     failure = error
     if (page) {
+      await page.screenshot({ path: path.join(receiptDir, 'failure.png') }).catch(() => {})
       try {
         failureUi = await page.evaluate(() => ({
           shell: document.querySelector('[data-shell-presentation]')?.getAttribute('data-shell-presentation'),
@@ -666,15 +746,15 @@ async function main() {
     .filter(actionId => !covered.has(actionId))
   const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U05_PACKAGED_V3_PARTIAL',
     selectedActions: selectedAction ? [selectedAction] : null,
-    evidenceLevel: 'electron', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths,
+    evidenceLevel: 'electron', shell: 'stage', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths,
     reuseDecision: { testedSha, changedPaths, differences: changedPaths.join(', ') || 'none',
-      reason: 'fixed verified V3 executable and asar hashes match, with no committed product-input changes since build; current driver hash is recorded' },
+      reason: 'fixed verified executable and asar hashes match, with no committed product-input changes since build; current driver hash is recorded' },
     sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean), dirtyProductPaths,
     packageSource: { testedSha, expectedExe, expectedAsar },
     artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
     driver: { path: fileURLToPath(import.meta.url), sha256: fileHash(fileURLToPath(import.meta.url)) },
     profile: { canonical: profile.canonical, userData: profile.userData, projectRoot: profile.projects },
-    project: { path: project?.projectPath ?? null }, syntheticRequests: fixture.requests,
+    project: { path: project?.projectPath ?? null }, syntheticRequests: fixture.requests, syntheticShortOutlines: fixture.outlines,
     externalModelRequests: 0, steps, unverified, failedStep: failure ? currentStep : null,
     error: failure ? String(failure) : null, failureUi, exit }
   assert.equal(JSON.stringify(receipt).includes(model.apiKey), false)

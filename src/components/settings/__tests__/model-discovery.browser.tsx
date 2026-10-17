@@ -8,7 +8,7 @@ import type { Locale } from '../../../i18n/types'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
-import SettingsModal from '../SettingsModal'
+import StageSettings from '../../stage/settings/StageSettings'
 
 const originalLayoutState = useLayoutStore.getState()
 const originalLLMState = useLLMStore.getState()
@@ -59,7 +59,6 @@ async function renderSettings(
   discoverModels: ReturnType<typeof useLLMStore.getState>['discoverModels'],
   locale: Locale = 'zh-CN',
   additionalModels: ModelProfile[] = [],
-  onClose = vi.fn(),
   persisted = true,
 ) {
   const saveModel = vi.fn<(model: ModelProfile) => Promise<boolean>>(async () => true)
@@ -88,9 +87,9 @@ async function renderSettings(
   document.body.append(container)
   root = createRoot(container)
   await act(async () => {
-    root?.render(<SettingsModal open onClose={onClose} />)
+    root?.render(<StageSettings library={false} />)
   })
-  return { saveModel, setDefaultModel, onClose }
+  return { saveModel, setDefaultModel }
 }
 
 afterEach(async () => {
@@ -111,7 +110,7 @@ describe('model discovery settings flow', () => {
       maxTokens: 16384, reasoningOverride: 'medium' })
     const { saveModel } = await renderSettings(model, vi.fn())
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '高级设置', exact: true }).click()
     })
     expect(container?.textContent).toContain('数字预算是应用映射')
@@ -127,7 +126,7 @@ describe('model discovery settings flow', () => {
     const saved = saveModel.mock.calls[0][0]
     await act(async () => { useLLMStore.setState({ models: [JSON.parse(JSON.stringify(saved))] }) })
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '高级设置', exact: true }).click()
     })
     expect(container?.querySelector('[data-reasoning-wire]')?.textContent).toBe('enable_thinking=true; thinking_budget=4096')
@@ -144,7 +143,7 @@ describe('model discovery settings flow', () => {
       models: [{ id: value, name: value, value, capabilities: declared }] }))
     const { saveModel } = await renderSettings(model, discoverModels)
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
       await page.getByLabelText('端点模型列表').selectOptions(value)
       await expect.element(page.getByLabelText('上下文窗口', { exact: true })).toHaveValue(context)
@@ -161,7 +160,7 @@ describe('model discovery settings flow', () => {
       capabilitySources: expect.objectContaining({ contextWindowTokens: 'manual', maxOutputTokens: declared ? 'endpoint' : 'preset' }) }))
     const saved = saveModel.mock.calls[0][0] as unknown as ModelProfile
     await act(async () => { useLLMStore.setState({ models: [JSON.parse(JSON.stringify(saved))] }) })
-    await act(async () => { await page.getByRole('button', { name: '编辑', exact: true }).click() })
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
     expect(container?.querySelector('[data-capability-sources]')?.textContent).toContain('上下文：手动设置')
     expect(container?.querySelector('[data-capability-sources]')?.textContent).toContain(declared ? '模型输出容量：接口取得' : '模型输出容量：资料匹配')
   })
@@ -169,7 +168,7 @@ describe('model discovery settings flow', () => {
   it('applies, rejects and clears an advanced mapping before saving', async () => {
     const { saveModel } = await renderSettings(savedProfile(), vi.fn())
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '高级设置', exact: true }).click()
       await page.getByText('高级参数映射', { exact: true }).click()
       await page.getByLabelText('推理参数映射 JSON').fill('{broken')
@@ -210,7 +209,7 @@ describe('model discovery settings flow', () => {
 
     expect(discoverModels).not.toHaveBeenCalled()
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
     })
     expect(discoverModels).not.toHaveBeenCalled()
 
@@ -229,9 +228,9 @@ describe('model discovery settings flow', () => {
       success: true as const,
       models: [{ id: 'fresh-model', name: 'Fresh model', value: 'fresh-model' }],
     }))
-    await renderSettings(model, discoverModels, 'zh-CN', [], vi.fn(), false)
+    await renderSettings(model, discoverModels, 'zh-CN', [], false)
     await act(async () => {
-      await page.getByRole('button', { name: '添加第一个生成模型', exact: true }).click()
+      await page.getByRole('button', { name: '添加模型', exact: true }).click()
     })
 
     const editedBaseUrl = 'https://edited-provider.invalid/v1'
@@ -265,28 +264,12 @@ describe('model discovery settings flow', () => {
     await expect.element(page.getByLabelText('端点模型列表')).toBeVisible()
   })
 
-  it('keeps configuration open on backdrop clicks and closes only from the explicit close button', async () => {
-    const model = savedProfile()
-    const discoverModels = vi.fn()
-    const { onClose } = await renderSettings(model, discoverModels)
-    const backdrop = container?.firstElementChild
-    if (!(backdrop instanceof HTMLDivElement)) throw new Error('Missing settings backdrop')
-
-    await act(async () => backdrop.click())
-    expect(onClose).not.toHaveBeenCalled()
-
-    await act(async () => {
-      await page.getByRole('button', { name: '关闭设置', exact: true }).click()
-    })
-    expect(onClose).toHaveBeenCalledTimes(1)
-  })
-
   it('allows saving a complete manual configuration without a display name', async () => {
     const model = savedProfile({ name: '' })
     const discoverModels = vi.fn()
     const { saveModel } = await renderSettings(model, discoverModels)
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
     })
 
     await expect.element(page.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled()
@@ -316,7 +299,7 @@ describe('model discovery settings flow', () => {
     }))
     const { saveModel, setDefaultModel } = await renderSettings(model, discoverModels)
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
     })
 
@@ -357,7 +340,7 @@ describe('model discovery settings flow', () => {
     }))
     const { saveModel } = await renderSettings(model, discoverModels)
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
     })
 
@@ -393,7 +376,7 @@ describe('model discovery settings flow', () => {
     const discoverModels = vi.fn(() => pendingDiscovery)
     await renderSettings(model, discoverModels)
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
     })
     await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(1))
@@ -432,7 +415,7 @@ describe('model discovery settings flow', () => {
     await renderSettings(first, discoverModels, 'zh-CN', [second])
 
     const clickEditButton = async (index: number) => {
-      const buttons = Array.from(document.querySelectorAll('button[title="编辑"]'))
+      const buttons = Array.from(document.querySelectorAll('button[aria-label^="编辑「"]'))
       const button = buttons[index]
       if (!(button instanceof HTMLButtonElement)) throw new Error(`Missing edit button ${index}`)
       await act(async () => button.click())
@@ -470,19 +453,19 @@ describe('model discovery settings flow', () => {
     const discoverModels = vi.fn(() => pendingDiscovery)
     await renderSettings(model, discoverModels)
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
     })
     await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(1))
 
     await act(async () => {
-      root?.render(<SettingsModal open={false} onClose={() => {}} />)
+      root?.render(<></>)
     })
     await act(async () => {
-      root?.render(<SettingsModal open onClose={() => {}} />)
+      root?.render(<StageSettings library={false} />)
     })
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       settleDiscovery({
         success: true,
         models: [{ id: 'stale-closed-model', name: 'Stale closed model', value: 'stale-closed-model' }],
@@ -550,7 +533,7 @@ describe('model discovery settings flow', () => {
     const discoverModels = vi.fn(async () => ({ success: false as const, errorCode }))
     await renderSettings(model, discoverModels, locale)
     await act(async () => {
-      await page.getByRole('button', { name: locale === 'zh-CN' ? '编辑' : 'Edit', exact: true }).click()
+      await page.getByRole('button', { name: locale === 'zh-CN' ? /^编辑「/ : /^Edit “/ }).click()
       await page.getByRole('button', { name: locale === 'zh-CN' ? '获取模型列表' : 'Refresh model list', exact: true }).click()
     })
     await expect.element(page.getByText(expected, { exact: true })).toBeVisible()
@@ -564,7 +547,7 @@ describe('model discovery settings flow', () => {
     })
     await renderSettings(model, discoverModels)
     await act(async () => {
-      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
     })
 

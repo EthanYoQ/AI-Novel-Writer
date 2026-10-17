@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import ArchFileViewer from '../ArchFileViewer'
-import WorldBuildingEditor from '../WorldBuildingEditor'
+import StageArchitecture from '../../stage/architecture/StageArchitecture'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -39,7 +39,7 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); setActiveProjectSessionContext(null); useProjectStore.setState({ currentProject: null }); useLLMStore.setState({ defaultModelId: originalModel }); vi.restoreAllMocks() })
 function button(label: string) { const el = [...container.querySelectorAll('button')].find(node => node.textContent?.includes(label)); if (!el) throw new Error(label); return el }
 it.each(['arch', 'world'])('%s真实入口恢复旧候选无需模型，冲突只读可复制，取消原run', async entry => {
- await act(async () => root.render(entry === 'arch' ? <ArchFileViewer tabId="角色" filePath="ai-novel://core/characters" projectKey={session.projectPath} content="" savedContent="" /> : <WorldBuildingEditor projectKey={session.projectPath} />))
+ await act(async () => root.render(entry === 'arch' ? <ArchFileViewer tabId="角色" filePath="ai-novel://core/characters" projectKey={session.projectPath} content="" savedContent="" /> : <StageArchitecture projectKey={session.projectPath} />))
  await vi.waitFor(() => expect(container.textContent).toContain('已移除的原模型'))
  expect(container.textContent).toContain('沈砺候选原文')
  expect(button('恢复原运行').disabled).toBe(true)
@@ -62,7 +62,7 @@ it.each(['arch', 'world'])('%s恢复原运行经过实际launcher确认门，批
   if (channel === 'character-proposal:approve') return { batch: { ...batch, status: 'approved' } }
   return original(channel, ...args)
  })
- await act(async () => root.render(entry === 'arch' ? <ArchFileViewer tabId="角色" filePath="ai-novel://core/characters" projectKey={session.projectPath} content="" savedContent="" /> : <WorldBuildingEditor projectKey={session.projectPath} />))
+ await act(async () => root.render(entry === 'arch' ? <ArchFileViewer tabId="角色" filePath="ai-novel://core/characters" projectKey={session.projectPath} content="" savedContent="" /> : <StageArchitecture projectKey={session.projectPath} />))
  await vi.waitFor(() => expect(container.textContent).toContain('已移除的原模型'))
  await act(async () => button('恢复原运行').click())
  await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('waiting'))
@@ -83,7 +83,7 @@ it.each(['arch', 'world'])('%s只有明确重新开始才新begin，原read无�
   if (channel === 'skills:list-user') return []
   return original(channel, ...args)
  })
- await act(async () => root.render(entry === 'arch' ? <ArchFileViewer tabId="角色" filePath="ai-novel://core/characters" projectKey={session.projectPath} content="" savedContent="" /> : <WorldBuildingEditor projectKey={session.projectPath} />))
+ await act(async () => root.render(entry === 'arch' ? <ArchFileViewer tabId="角色" filePath="ai-novel://core/characters" projectKey={session.projectPath} content="" savedContent="" /> : <StageArchitecture projectKey={session.projectPath} />))
  await vi.waitFor(() => expect(container.textContent).toContain('已移除的原模型'))
  expect(invoke.mock.calls.some(([channel]) => channel === 'legacy-roster:begin')).toBe(false)
  useLLMStore.setState({ defaultModelId: '作者新选模型' })
@@ -96,7 +96,7 @@ it.each(['arch', 'world'])('%s只有明确重新开始才新begin，原read无�
 it('已有历史但read失败仍显示错误和明确restart，不伪造可复制候选', async () => {
  const original = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
  invoke.mockImplementation(async (channel: string, ...args: unknown[]) => { if (channel === 'legacy-roster:read') throw new Error('合成读取失败'); return original(channel, ...args) })
- await act(async () => root.render(<WorldBuildingEditor projectKey={session.projectPath} />))
+ await act(async () => root.render(<StageArchitecture projectKey={session.projectPath} />))
  await vi.waitFor(() => expect(container.textContent).toContain('原运行暂时无法读取'))
  expect(button('明确重新开始').disabled).toBe(false)
  expect(container.textContent).not.toContain('复制原文与候选')

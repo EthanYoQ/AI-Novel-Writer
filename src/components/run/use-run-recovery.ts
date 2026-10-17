@@ -78,7 +78,7 @@ export interface RunRecovery {
 }
 
 /**
- * 运行界面的恢复区：两种外壳共用的数据与动作。每个动作开始前确认仍是读取时的那次项目会话，
+ * 运行侧页的恢复区：数据与动作。每个动作开始前确认仍是读取时的那次项目会话，
  * 换了作品或重开过就什么也不做，不把旧会话的恢复写进新会话。
  */
 export function useRunRecovery(): RunRecovery {

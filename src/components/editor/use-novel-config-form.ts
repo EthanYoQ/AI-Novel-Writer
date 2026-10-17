@@ -31,7 +31,7 @@ export function novelConfigSessionKey(currentProject: ProjectData | null, projec
 
 /**
  * 小说配置表单的数据逻辑：读写 project-store 里的配置、保存到磁盘、退出前保存、单字段与整体 AI 填充。
- * 旧外壳的小说配置页与新外壳的设定页共用；调用方按 novelConfigSessionKey 挂载。
+ * 设定页用它；调用方按 novelConfigSessionKey 挂载。
  */
 export function useNovelConfigForm(projectKey: string) {
   const currentProject = useProjectStore(s => s.currentProject)

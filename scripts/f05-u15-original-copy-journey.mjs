@@ -7,6 +7,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as refs from './redesign/pages/refs.mjs'
+import * as stage from './redesign/pages/stage.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -60,7 +62,11 @@ const pass = (stepId, assertion) => steps.push({ stepId, actionId: 'U15.A02', ou
 const invoke = (page, channel, ...args) => page.evaluate(
   ({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 const invokeProject = (page, session, channel, ...args) => invoke(page, channel, ...args, session)
-const writer = page => page.locator('.writer-shell[data-shell-presentation="writer"][data-shell-variant="v3"]')
+// 纸墨外壳知识库页的文案：保存后的过期提示、只有片段的资料、显式更新检索。
+const STALE_NOTICE = '改动还没进入检索'
+const SNIPPET_ONLY_NOTICE = '完整原文不可用'
+/** 资料列表显示文件名去掉扩展名。 */
+const materialName = source => source.name.replace(/\.[^.]+$/u, '')
 let app
 let phase = 'setup'
 
@@ -73,16 +79,8 @@ async function launch() {
     args: [`--user-data-dir=${roots.userData}`], env, timeout: 30_000 })
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  await stage.waitForStage(page)
   assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const previous = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...previous, shellPreference: 'writer',
-      revision: Number(previous.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await writer(page).waitFor({ state: 'visible', timeout: 30_000 })
   return page
 }
 
@@ -98,9 +96,8 @@ async function quit() {
 }
 
 async function openProject(page, expectedPath) {
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  if (!await page.locator('.writer-welcome').isVisible()) await page.locator('.writer-left-rail button[title="欢迎页"]').click()
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
   await app.evaluate(({ ipcMain }) => {
     const original = ipcMain._invokeHandlers.get('project:open')
     if (!original) throw new Error('project:open handler missing')
@@ -115,8 +112,8 @@ async function openProject(page, expectedPath) {
   })
   let project
   try {
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-    await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+    await stage.openFromLibrary(page, projectName)
+    await stage.waitForWork(page, projectName)
     project = await app.evaluate(() => globalThis.__u15OpenedProject)
   } finally {
     await app.evaluate(({ ipcMain }) => {
@@ -127,19 +124,18 @@ async function openProject(page, expectedPath) {
       delete globalThis.__u15OpenedProject
     })
   }
-  assert(project?.id && project.sessionLease, 'V3 open did not return a project session')
+  assert(project?.id && project.sessionLease, 'stage open did not return a project session')
   assert.equal(path.resolve(project.path), path.resolve(expectedPath))
-  await page.locator('.writer-left-rail button[title="小说"]').click()
-  await page.getByRole('heading', { name: '知识库', exact: true }).waitFor({ state: 'visible' })
+  await refs.open(page, 'knowledge')
+  await page.getByRole('heading', { level: 1, name: '知识库', exact: true }).waitFor({ state: 'visible' })
   return { projectId: project.id, leaseId: project.sessionLease, projectPath: project.path }
 }
 
 async function search(page, session, token, expectedCount) {
-  const field = page.getByPlaceholder('输入查询内容，如：主角的能力体系、世界观核心设定...')
-  await field.fill(token)
-  await page.getByRole('button', { name: '检索', exact: true }).click()
-  const resultHeading = page.getByText('检索结果（', { exact: false })
-  await resultHeading.waitFor({ state: expectedCount ? 'visible' : 'hidden' })
+  await refs.searchInput(page).fill(token)
+  await refs.searchInput(page).press('Enter')
+  if (expectedCount) await refs.results(page).getByRole('listitem').first().waitFor({ state: 'visible' })
+  else await page.getByText('没有找到相关的资料。', { exact: true }).waitFor({ state: 'visible' })
   const results = await invokeProject(page, session, 'kb:search', token, 10, session.projectPath)
   assert.equal(results.length, expectedCount, `Unexpected FTS results for ${token}`)
   const writing = await invokeProject(page, session, 'kb:search-writing-context', token, 10, session.projectPath)
@@ -188,23 +184,23 @@ async function main() {
         if (options.title !== '选择要导入的文档') throw new Error(`Unexpected native picker: ${options.title}`)
       }
     }, sources.map(source => source.path))
-    await page.getByRole('button', { name: '导入创作资料' }).click()
-    const originals = page.getByRole('heading', { name: '知识库原文' }).locator('..')
-    for (const source of sources) await originals.getByRole('button', { name: source.name }).waitFor({ state: 'visible', timeout: 30_000 })
+    await page.getByRole('button', { name: '导入创作资料' }).first().click()
+    const originals = refs.materials(page)
+    for (const source of sources) await originals.getByRole('button', { name: materialName(source) }).waitFor({ state: 'visible', timeout: 30_000 })
     const pickerCalls = await app.evaluate(() => globalThis.__u15KnowledgePickerCalls)
     assert.equal(pickerCalls.length, 1)
     const documents = await invokeProject(page, projectSession, 'kb:list-documents', projectPath)
     assert.equal(documents.length, 2)
     snippetDocId = documents.find(document => document.fileName === sources[1].name)?.id
     assert(snippetDocId)
-    await originals.getByRole('button', { name: sources[0].name }).click()
+    await originals.getByRole('button', { name: materialName(sources[0]) }).click()
     const editor = page.getByRole('textbox', { name: '项目副本内容' })
     assert.equal(await editor.inputValue(), originalText, 'UI showed a chunk instead of the full imported source')
     await search(page, projectSession, oldToken, 1)
     pass('U15.A02-full-original-and-import', 'V3 import kept complete source text and current FTS/writing-context results')
     await editor.fill(editedText)
-    await page.getByRole('button', { name: '保存项目副本' }).click()
-    await page.getByText('索引待更新；旧内容已停止参与新检索和生成').waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '保存副本', exact: true }).click()
+    await page.getByText(STALE_NOTICE, { exact: true }).waitFor({ state: 'visible' })
     assert.equal(await editor.inputValue(), editedText)
     await search(page, projectSession, oldToken, 0)
     await search(page, projectSession, newToken, 0)
@@ -222,20 +218,20 @@ async function main() {
     phase = 'writer-reopen-and-reindex'
     page = await launch()
     projectSession = await openProject(page, projectPath)
-    const originalsAfterReopen = page.getByRole('heading', { name: '知识库原文' }).locator('..')
-    await originalsAfterReopen.getByRole('button', { name: sources[0].name }).click()
+    const originalsAfterReopen = refs.materials(page)
+    await originalsAfterReopen.getByRole('button', { name: materialName(sources[0]) }).click()
     const editorAfterReopen = page.getByRole('textbox', { name: '项目副本内容' })
     assert.equal(await editorAfterReopen.inputValue(), editedText, 'Saved project copy was lost after process reopen')
-    await page.getByText('索引待更新；旧内容已停止参与新检索和生成').waitFor({ state: 'visible' })
+    await page.getByText(STALE_NOTICE, { exact: true }).waitFor({ state: 'visible' })
     await search(page, projectSession, oldToken, 0)
-    await originalsAfterReopen.getByRole('button', { name: sources[1].name }).click()
-    await page.getByText('完整原文不可用，请重新导入').waitFor({ state: 'visible' })
+    await originalsAfterReopen.getByRole('button', { name: materialName(sources[1]) }).click()
+    await page.getByText(SNIPPET_ONLY_NOTICE, { exact: true }).waitFor({ state: 'visible' })
     assert.equal(await page.getByRole('textbox', { name: '项目副本内容' }).count(), 0)
     await page.screenshot({ path: path.join(receiptDir, 'v3-snippet-only.png'), fullPage: true })
     pass('U15.A02-reopen-and-snippet-only', 'Process reopen retained the edited copy; chunk-only fixture showed reimport guidance without a fabricated editor')
-    await originalsAfterReopen.getByRole('button', { name: sources[0].name }).click()
-    await page.getByRole('button', { name: '更新本地全文索引' }).click()
-    await page.getByText('索引待更新；旧内容已停止参与新检索和生成').waitFor({ state: 'hidden' })
+    await originalsAfterReopen.getByRole('button', { name: materialName(sources[0]) }).click()
+    await page.getByRole('button', { name: '更新检索', exact: true }).click()
+    await page.getByText(STALE_NOTICE, { exact: true }).waitFor({ state: 'hidden' })
     assert.equal(await editorAfterReopen.inputValue(), editedText)
     await search(page, projectSession, newToken, 1)
     await search(page, projectSession, oldToken, 0)
@@ -245,6 +241,8 @@ async function main() {
     await quit()
   } catch (error) {
     failure = error
+    const windows = app ? app.windows() : []
+    await windows[0]?.screenshot({ path: path.join(receiptDir, 'failure.png') }).catch(() => {})
     if (app) { await app.close().catch(() => {}); app = null }
   }
   const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', sliceOutcome: failure ? 'FAIL' : 'PASS',

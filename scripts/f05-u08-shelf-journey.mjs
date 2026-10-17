@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { _electron as electron } from 'playwright'
+import * as stage from './redesign/pages/stage.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const priorReceiptPath = path.join(repository, '.runtime', '.cache', 'f05-u08-shelf', '6eb816db-a9b0-4b89-af50-0ee934a427dd', 'receipt.json')
@@ -31,9 +32,9 @@ const names = { a: '雨夜来信', b: '空白计划', c: '不可读副本' }
 const excerpt = '第1章正文：雨落在旧车站。'
 
 function provenance() {
-  assert(fs.existsSync(priorReceiptPath), 'Historical U08 receipt missing')
-  const prior = JSON.parse(fs.readFileSync(priorReceiptPath, 'utf8'))
-  assert.equal(prior.outcome, 'PASS')
+  // 旧外壳时期的历史回执只在当年的机器上：有就核对 PASS，没有就记下缺席。
+  const prior = fs.existsSync(priorReceiptPath) ? JSON.parse(fs.readFileSync(priorReceiptPath, 'utf8')) : null
+  if (prior) assert.equal(prior.outcome, 'PASS')
   const testedSha = git('rev-parse', `${packageSourceSha}^{commit}`)
   const executionHead = git('rev-parse', 'HEAD')
   const changedPaths = git('diff', '--name-only', `${testedSha}..${executionHead}`).split('\n').filter(Boolean)
@@ -47,8 +48,8 @@ function provenance() {
   const artifactHashes = { executable: sha256(executablePath), asar: sha256(asarPath) }
   assert.deepEqual(artifactHashes, { executable: expectedExe, asar: expectedAsar })
   return { testedSha, executionHead, changedPaths, dirtyProductPaths, artifactHashes,
-    priorReceipt: { path: priorReceiptPath, sha256: sha256(priorReceiptPath), testedSha: prior.testedSha },
-    reuseReason: 'Historical Writer UI is not reused; fixed V3 package and current UI are exercised independently.' }
+    priorReceipt: prior ? { path: priorReceiptPath, sha256: sha256(priorReceiptPath), testedSha: prior.testedSha } : { path: priorReceiptPath, missing: true },
+    reuseReason: 'Historical Writer UI is not reused; the fixed package and current stage UI are exercised independently.' }
 }
 
 function fixture() {
@@ -73,7 +74,7 @@ async function launch(roots) {
   try {
     const page = await app.firstWindow({ timeout: 30_000 })
     assert.equal(path.resolve(await app.evaluate(({ app }) => app.getPath('userData'))), roots.userData)
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForStage(page)
     return { app, page }
   } catch (error) { await app.close(); throw error }
 }
@@ -87,18 +88,22 @@ async function quit(app) {
 }
 
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
-const writer = page => page.locator('.writer-shell[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible', timeout: 30_000 })
+/** 书房：纸墨外壳就绪，收起迁移通知（文案照旧核对），打开着作品时回到书房。 */
 const home = async page => {
-  await writer(page)
-  const migrationNotice = page.locator('[role="status"].fixed.inset-x-0.top-10')
+  await stage.waitForStage(page)
+  const migrationNotice = page.locator('.startup-migration-notice')
   if (await migrationNotice.isVisible()) {
     assert.match(await migrationNotice.innerText(), /旧来源已保留，后续修改需明确导入，当前不会自动回灌。|未导入的内容已保留在原处。/)
     await migrationNotice.getByRole('button', { name: '知道了', exact: true }).click()
     await migrationNotice.waitFor({ state: 'detached' })
   }
-  if (!await page.locator('.writer-welcome').isVisible()) await page.locator('.writer-left-rail button[title="欢迎页"]').click()
-  await page.locator('.writer-welcome').waitFor({ state: 'visible', timeout: 30_000 })
+  await stage.showLibrary(page)
 }
+/** 概览卡的统计：正文字数、定稿章节、角色。 */
+const stats = overview => overview.getByRole('list', { name: '统计' }).innerText().catch(() => overview.innerText())
+const statOf = (text, label) => Number(new RegExp(`${label}\\s*([\\d,]+)`).exec(text)?.[1]?.replaceAll(',', '') ?? NaN)
+const bars = overview => overview.getByRole('list', { name: '阶段进度' }).locator('[data-stage]')
+  .evaluateAll(rows => rows.map(row => ({ stage: row.dataset.stage, state: row.dataset.state, label: row.textContent?.trim() ?? '' })))
 
 function sourceInventory(projectPath) {
   const result = {}
@@ -145,10 +150,6 @@ async function seed(app, page, roots) {
   const unsetTarget = await invoke(page, 'project:save', projects.b.id,
     { path: projects.b.path, novelConfig: { ...openedBlank.project.novelConfig, totalChapters: 0 } }, projects.b.path, blankContext)
   assert.equal(unsetTarget.success, true, unsetTarget.error)
-  await page.evaluate(key => {
-    const previous = JSON.parse(localStorage.getItem(key))
-    localStorage.setItem(key, JSON.stringify({ ...previous, shellPreference: 'writer', revision: previous.revision + 1, origin: 'author' }))
-  }, 'ai-novel-writer-appearance')
   return projects
 }
 
@@ -167,121 +168,119 @@ async function main() {
     fs.writeFileSync(path.join(projects.c.path, '.ai-novel', 'project.db'), 'invalid synthetic SQLite fixture')
     session = await launch(roots)
     const { page } = session
-    await writer(page)
     await home(page)
-    const shelf = page.locator('.writer-shelf')
 
+    // 纸墨书房：点封面只预览（右侧概览「预览」），概览里的主按钮「打开《书名》」才打开；打开着的书在概览里是「继续」。
     currentStep = 'U01.A02'
-    await shelf.getByRole('button', { name: `打开《${names.a}》` }).click()
-    await page.locator('.writer-project-tree').getByText(names.a, { exact: true }).waitFor({ state: 'visible' })
+    await stage.openFromLibrary(page, names.a)
+    await stage.waitForWork(page, names.a)
     await home(page)
-    const overview = page.getByRole('region', { name: '作品概览' })
-    await page.locator('.writer-welcome-heading h1').getByText(names.a, { exact: true }).waitFor()
-    assert.match(await overview.innerText(), new RegExp(excerpt))
-    pass('writer-open-authorized-project', 'U01.A02', 'Writer shelf open binds the selected project and main current overview session')
+    const overviewA = stage.overview(page, names.a)
+    await overviewA.waitFor({ state: 'visible' })
+    assert.match(await overviewA.innerText(), /^继续/)
+    assert.equal(await overviewA.locator('blockquote').innerText(), excerpt)
+    pass('library-open-authorized-project', 'U01.A02', 'Library overview button opens the selected project; its current overview shows the latest passage')
 
     currentStep = 'U08.A01'
-    assert.match(await overview.innerText(), /正文字数\s*12/)
-    assert.match(await overview.innerText(), /已定稿章节\s*0/)
-    assert.match(await overview.innerText(), /人物\s*1/)
-    pass('writer-current-real-statistics', 'U08.A01', 'Current main-owned project overview shows seeded draft units, active character and no finalized chapter')
+    const statsA = await stats(overviewA)
+    assert.deepEqual([statOf(statsA, '正文字数'), statOf(statsA, '定稿章节'), statOf(statsA, '角色')], [12, 0, 1], statsA)
+    pass('library-current-real-statistics', 'U08.A01', 'Current project overview shows seeded draft units, active character and no finalized chapter')
 
     currentStep = 'U08.A04'
-    const stages = overview.locator('.writer-stage-list li')
-    assert.equal(await stages.count(), 6)
-    for (const [index, label, status, count] of [[0, '配置', '进行中', '2'], [1, '架构', '进行中', '1'],
-      [2, '蓝图', '进行中', '1'], [3, '正文', '进行中', '1'], [4, '审稿', '未开始', '0'], [5, '定稿', '未开始', '0']]) {
-      const row = await stages.nth(index).innerText()
-      assert(row.includes(label) && row.includes(status) && row.includes(count), `Stage ${label} mismatched: ${row}`)
-    }
-    pass('writer-six-stage-real-counts', 'U08.A04', 'All six stage rows reflect seeded project facts and the configured chapter target')
+    // 旧欢迎页的六行（配置、架构、蓝图、正文、审稿、定稿）在纸墨外壳是与流程脊同源的四段，审稿与定稿并进正文。
+    const barsA = await bars(overviewA)
+    // 与流程脊同一口径：设定差一项、架构四节有一节（角色）、蓝图有 1 章即完成、正文 0 章定稿。
+    assert.deepEqual(barsA.map(item => [item.stage, item.state, item.label]), [['setup', 'active', '设定 还差 1 项'], ['architecture', 'active', '架构 1 / 4'],
+      ['blueprint', 'done', '蓝图 1 章'], ['manuscript', 'active', '正文 0 / 100']], JSON.stringify(barsA))
+    pass('library-four-stage-real-progress', 'U08.A04', 'All four stage bars reflect seeded project facts: setup one item short, one of four architecture sections, one planned chapter, no finalized chapter of 100')
 
     currentStep = 'U08.A02'
     const before = sourceInventory(projects.b.path)
-    await shelf.getByRole('button', { name: `预览《${names.b}》` }).click()
-    await page.locator('.writer-welcome-heading h1').getByText(names.b, { exact: true }).waitFor()
-    assert.equal(await overview.locator('blockquote').count(), 0)
+    await stage.previewBook(page, names.b)
+    const overviewB = stage.overview(page, names.b)
+    assert.match(await overviewB.innerText(), /^预览/)
+    assert.equal(await overviewB.locator('blockquote').count(), 0)
     assert.deepEqual(await invoke(page, 'project:get-runtime-context'), { activeProjectPath: projects.a.path, dbReady: true })
-    pass('writer-other-project-preview', 'U08.A02', 'First Writer cover click previews another authorized project without opening it or exposing current excerpt')
+    pass('library-other-project-preview', 'U08.A02', 'Cover click previews another authorized project without opening it or exposing an excerpt')
 
     currentStep = 'U08.A05'
-    const unknownRows = overview.locator('.writer-stage-list li')
-    assert.equal(await unknownRows.count(), 6)
-    for (const [index, label, status] of [[0, '配置', '未开始'], [1, '架构', '未开始'],
-      [2, '蓝图', '待读取'], [3, '正文', '待读取'], [4, '审稿', '待读取'], [5, '定稿', '待读取']]) {
-      const row = await unknownRows.nth(index).innerText()
-      assert(row.includes(label) && row.includes(status) && row.includes('0'), `Blank stage ${label} mismatched: ${row}`)
-    }
-    pass('writer-unknown-plan', 'U08.A05', 'A saved unset chapter target renders four dependent stages as unknown, without false completion')
+    const barsB = await bars(overviewB)
+    assert.deepEqual(barsB.map(item => item.stage), ['setup', 'architecture', 'blueprint', 'manuscript'])
+    assert.notEqual(barsB[2].state, 'done', 'blank project blueprint must not look complete')
+    assert.equal(barsB[3].state, 'todo', 'unset chapter target must not show manuscript progress')
+    assert.equal(barsB[3].label, '正文 0 章定稿', 'unset chapter target must not invent a planned total')
+    pass('library-unknown-plan', 'U08.A05', 'A saved unset chapter target shows no planned total and no false completion')
 
     currentStep = 'U08.A07'
     assert.deepEqual(sourceInventory(projects.b.path), before, 'Preview changed another project source files')
     assert.equal(fs.existsSync(path.join(projects.b.path, '.vela')), false)
     assert.equal(fs.existsSync(path.join(projects.b.path, '.ai-novel-migration')), false)
     assert.deepEqual(await invoke(page, 'project:peek-overview', projects.b.path), { state: 'unavailable' })
-    pass('writer-preview-source-zero-write', 'U08.A07', 'Writer preview leaves source bytes and metadata unchanged, creates no migration files, and raw path is refused')
+    pass('library-preview-source-zero-write', 'U08.A07', 'Library preview leaves source bytes and metadata unchanged, creates no migration files, and raw path is refused')
 
     currentStep = 'U08.A03'
     const beforeSwitchCaps = await invoke(page, 'project:recent-list')
     const oldCapability = beforeSwitchCaps.find(project => project.path === projects.a.path)?.previewCapabilityId
     assert(oldCapability)
     assert.equal((await invoke(page, 'project:peek-overview', oldCapability)).state, 'ready', 'A preview capability was invalid before the switch')
-    await shelf.getByRole('button', { name: `预览《${names.b}》` }).click()
-    await page.locator('.writer-project-tree').getByText(names.b, { exact: true }).waitFor({ state: 'visible' })
+    await overviewB.getByRole('button', { name: `打开《${names.b}》` }).click()
+    await stage.waitForWork(page, names.b)
     currentStep = 'U08.A06-switch-revocation'
     assert.deepEqual(await invoke(page, 'project:peek-overview', oldCapability), { state: 'unavailable' }, 'Switching to B kept an old A preview capability alive')
     currentStep = 'U08.A03'
     await home(page)
-    await page.locator('.writer-welcome-heading h1').getByText(names.b, { exact: true }).waitFor()
+    assert.match(await stage.overview(page, names.b).innerText(), /^继续/)
     assert.deepEqual(await invoke(page, 'project:get-runtime-context'), { activeProjectPath: projects.b.path, dbReady: true })
-    pass('writer-preview-second-click-opens', 'U08.A03', 'Second Writer cover click opens previewed project with a new main current session')
-    pass('writer-recent-project-entry', 'U01.A03', 'Recent shelf item enters its authorized project and current overview resolves to that project')
+    pass('library-preview-open-button-opens', 'U08.A03', 'The previewed book opens from its overview button with a new main current session')
+    pass('library-recent-project-entry', 'U01.A03', 'Recent shelf item enters its authorized project and the current overview resolves to that project')
 
     currentStep = 'U08.A05-unreadable'
-    await shelf.getByRole('button', { name: `预览《${names.c}》` }).click()
-    await overview.getByText('暂时无法读取这部作品', { exact: false }).waitFor({ state: 'visible' })
-    assert.match(await overview.innerText(), /暂时无法读取这部作品/)
-    assert.doesNotMatch(await overview.innerText(), /100%|正文字数\s*0/)
-    pass('writer-unreadable-project-unknown', 'U08.A05', 'Unreadable authorized recent project shows unavailable instead of invented zero or completion')
+    await stage.cover(page, names.c).click()
+    const overviewC = stage.overview(page, names.c)
+    await overviewC.getByText('暂时读不到这部作品的概览', { exact: false }).waitFor({ state: 'visible' })
+    assert.doesNotMatch(await overviewC.innerText(), /100%|正文字数\s*0/)
+    pass('library-unreadable-project-unknown', 'U08.A05', 'Unreadable authorized recent project shows unavailable instead of invented zero or completion')
 
     currentStep = 'U08.A06'
     const keys = await page.evaluate(() => [...Array(localStorage.length)].map((_, index) => localStorage.key(index)))
     assert(keys.every(key => !key.startsWith('vela:overview:')))
     assert.equal(await page.evaluate(marker => Object.values(localStorage).some(value => String(value).includes(marker)), excerpt), false)
-    assert.equal(await overview.locator('blockquote').count(), 0)
-    pass('writer-switch-revoke-private-summary', 'U08.A06', 'Switching preview clears current excerpt; old capability is revoked and no overview prose enters localStorage')
-    await shelf.getByRole('button', { name: `预览《${names.a}》` }).click()
-    await page.locator('.writer-welcome-heading h1').getByText(names.a, { exact: true }).waitFor()
-    assert.match(await overview.innerText(), /正文字数\s*12/)
+    assert.equal(await overviewC.locator('blockquote').count(), 0)
+    pass('library-switch-revoke-private-summary', 'U08.A06', 'Switching preview shows no excerpt; old capability is revoked and no overview prose enters localStorage')
+    await stage.previewBook(page, names.a)
+    const statsAgain = await stats(stage.overview(page, names.a))
+    assert.equal(statOf(statsAgain, '正文字数'), 12, statsAgain)
     assert.deepEqual(await invoke(page, 'project:get-runtime-context'), { activeProjectPath: projects.b.path, dbReady: true })
-    pass('writer-switch-reissued-shelf-preview', 'U08.A06', 'After switch, the shelf uses a fresh A preview capability without reopening A')
+    pass('library-switch-reissued-shelf-preview', 'U08.A06', 'After switch, the library uses a fresh A preview capability without reopening A')
 
     await quit(session.app)
     session = null
     assert.equal(sha256(fileURLToPath(import.meta.url)), driverSha256)
     assert.deepEqual(provenance().artifactHashes, source.artifactHashes)
     const requiredSteps = {
-      'U08.A01': ['writer-current-real-statistics'],
-      'U08.A02': ['writer-other-project-preview'],
-      'U08.A03': ['writer-preview-second-click-opens'],
-      'U08.A04': ['writer-six-stage-real-counts'],
-      'U08.A05': ['writer-unknown-plan', 'writer-unreadable-project-unknown'],
-      'U08.A06': ['writer-switch-revoke-private-summary', 'writer-switch-reissued-shelf-preview'],
-      'U08.A07': ['writer-preview-source-zero-write'],
+      'U08.A01': ['library-current-real-statistics'],
+      'U08.A02': ['library-other-project-preview'],
+      'U08.A03': ['library-preview-open-button-opens'],
+      'U08.A04': ['library-four-stage-real-progress'],
+      'U08.A05': ['library-unknown-plan', 'library-unreadable-project-unknown'],
+      'U08.A06': ['library-switch-revoke-private-summary', 'library-switch-reissued-shelf-preview'],
+      'U08.A07': ['library-preview-source-zero-write'],
     }
     const verifiedActions = Object.entries(requiredSteps).filter(([, ids]) => ids.every(id => steps.some(step => step.stepId === id && step.outcome === 'PASS')))
       .map(([actionId]) => actionId)
     assert.equal(verifiedActions.length, Object.keys(requiredSteps).length, 'required U08 action missing')
-    const receipt = { outcome: 'PARTIAL', qualification: 'F05_U08_V3_SHELF_ONLY', evidenceLevel: 'electron', shell: 'writer-v3', ...source,
+    const receipt = { outcome: 'PARTIAL', qualification: 'F05_U08_STAGE_LIBRARY_ONLY', evidenceLevel: 'electron', shell: 'stage', ...source,
       driverSha256, releaseDefaultQualified: false, physicalModelRequests: 0,
-      auxiliaryEvidence: ['src/components/pages/v2/__tests__/writer-project-overview.browser.tsx',
-        'electron/services/__tests__/project-peek-readonly.test.ts'], steps, verifiedActions,
+      auxiliaryEvidence: ['src/components/stage/library/__tests__', 'electron/services/__tests__/project-peek-readonly.test.ts'], steps, verifiedActions,
       unverifiedActions: ['F05 whole-product qualification, release default and physical model gates'] }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, testedSha: source.testedSha, executionHead: source.executionHead,
       driverSha256, receipt: path.relative(repository, receiptPath), steps: steps.map(step => step.stepId) })}\n`)
   } catch (error) {
-    if (session) await session.app.close().catch(() => {})
+    if (session) {
+      await session.page.screenshot({ path: path.join(path.dirname(receiptPath), 'failure.png') }).catch(() => {})
+      await session.app.close().catch(() => {})
+    }
     fs.writeFileSync(receiptPath, JSON.stringify({ outcome: 'FAIL', ...source, driverSha256, failedStep: currentStep,
       steps, error: String(error) }, null, 2))
     throw error

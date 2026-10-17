@@ -16,7 +16,7 @@ interface InkDialogProps {
 }
 
 /**
- * 新外壳里不涉及危险的对话框（新建作品、移除书架记录、更新拦截）。危险操作用 ui/DangerConfirm。
+ * 不涉及危险的对话框（新建作品、移除书架记录、更新拦截）。危险操作用 ui/DangerConfirm。
  * 与 DangerConfirm 一样 Portal 到最近的 .paper-ink 根，取到纸墨令牌与深色主题。
  */
 export function InkDialog({ open, onOpenChange, title, description, children, footer, keepOnOutsideClick = false }: InkDialogProps) {

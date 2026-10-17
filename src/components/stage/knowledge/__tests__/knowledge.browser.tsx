@@ -385,6 +385,47 @@ describe('知识库', () => {
     expect(document.querySelector('textarea')).toBeNull()
   })
 
+  it('定稿章节只读显示原文；旧外壳改过副本还没更新检索时提示并能更新检索，说明里不说重新定稿会自动更新', async () => {
+    const edited = `${copies.ch2}照片背面写着一个日期。`
+    const plain = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'kb:read-document-copy' && args[0] === 'ch2') return { available: true, content: edited, contentHash: 'h-ch2-edited', edited: true, indexStatus: 'stale' }
+      if (channel === 'kb:reindex-document-copy') return { success: true, docId: 'ch2', chunkCount: 4 }
+      return plain(channel, ...args)
+    })
+    await renderPage()
+    await click(/定稿章节 1/)
+    await click(/母亲的旧照片/)
+    await vi.waitFor(() => expect(document.body.textContent).toContain(edited))
+    expect(document.querySelector('textarea')).toBeNull()
+    expect(document.body.textContent).toContain('这一章由定稿自动收入')
+    expect(document.body.textContent).toContain('改动还没进入检索')
+    expect(document.body.textContent).not.toContain('自动更新')
+    expect(button('更新检索')?.disabled).toBe(false)
+
+    await click('更新检索')
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'kb:reindex-document-copy').map(([, docId]) => docId)).toEqual(['ch2'])
+  })
+
+  it('定稿章节的副本已进入检索时只读显示原文，不提供更新检索', async () => {
+    await renderPage()
+    await click(/定稿章节 1/)
+    await click(/母亲的旧照片/)
+    await vi.waitFor(() => expect(document.body.textContent).toContain(copies.ch2))
+    expect(document.querySelector('textarea')).toBeNull()
+    expect(button('更新检索')).toBeUndefined()
+    expect(document.body.textContent).not.toContain('自动更新')
+  })
+
+  it('没有项目副本的资料不叫作者重新导入：说明只能用来查找，不能在这里查看或修改', async () => {
+    await renderPage()
+    await click(/旧版地名表/)
+    const reader = () => document.querySelector('[aria-label="资料原文"]')?.textContent ?? ''
+    await vi.waitFor(() => expect(reader()).toContain('完整原文不可用'))
+    expect(reader()).not.toContain('重新导入')
+    expect(reader()).toContain('仍能用来查找')
+  })
+
   it('项目副本有未保存修改时切换资料先确认；继续编辑留住修改，放弃才切换', async () => {
     await renderPage()
     await click(/车站档案/)
@@ -680,6 +721,40 @@ describe('知识库', () => {
     await act(async () => releases[0]())
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
     expect(document.body.textContent).not.toContain('有 2 段资料还不能按意思查找')
+  })
+
+  it('1280 宽窗口开着运行侧页时（内容区约 623px）资料来源分段不折行', async () => {
+    host!.style.width = '623px'
+    await renderPage()
+    const items = [...document.querySelectorAll<HTMLButtonElement>('.stage-kb-docs .pi-seg-item')]
+    expect(items.map(item => item.textContent)).toEqual(['我导入的 3', '定稿章节 1'])
+    for (const item of items) expect(item.scrollHeight, item.textContent ?? '').toBeLessThanOrEqual(item.clientHeight)
+  })
+
+  it('英文界面同样宽度下资料来源分段既不折行也不溢出', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    host!.style.width = '623px'
+    await act(async () => root!.render(<StageKnowledge tabId={KB_TAB} />))
+    await vi.waitFor(() => expect(button(/Imported 3/)).toBeTruthy())
+    for (const item of document.querySelectorAll<HTMLButtonElement>('.stage-kb-docs .pi-seg-item')) {
+      expect(item.scrollHeight, item.textContent ?? '').toBeLessThanOrEqual(item.clientHeight)
+      expect(item.scrollWidth, item.textContent ?? '').toBeLessThanOrEqual(item.clientWidth)
+    }
+  })
+
+  it('索引状态读取失败后再读成功：失败提示消失', async () => {
+    const plain = invoke.getMockImplementation()!
+    let statusFails = true
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'kb:get-vector-rebuild-status' && statusFails) throw new Error('索引状态暂时读不出来')
+      return plain(channel, ...args)
+    })
+    await renderPage()
+    await vi.waitFor(() => expect(document.body.textContent).toContain('读取知识库失败'))
+    statusFails = false
+    await click('刷新资料')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('有 4 段资料还不能按意思查找'))
+    expect(document.body.textContent).not.toContain('读取知识库失败')
   })
 
   it('打开知识库页只读一次索引状态；点「刷新资料」再读一次', async () => {

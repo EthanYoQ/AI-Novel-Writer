@@ -194,7 +194,7 @@ function isGenerationModel(model: ModelProfile): boolean {
 
 /**
  * 剧情树与伏笔线索的数据：线索计划的增删改、定稿事件确认、剧情树生成与清除、AI 候选与生成记录恢复。
- * 新外壳的「剧情与伏笔」页与旧外壳的 NarrativeThreadEditor 共用；危险操作的确认由页面呈现。
+ * 「剧情与伏笔」页用它；危险操作的确认由页面呈现。
  */
 export function usePlotThreads(projectKey: string, {
   candidateGenerator,

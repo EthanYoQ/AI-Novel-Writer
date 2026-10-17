@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { runInstalledStartup, verifyOrdinaryStartup } from '../installed-startup-acceptance.mjs'
+import { runInstalledStartup, SETTINGS_BACK, STAGE_SHELL, verifyOrdinaryStartup } from '../installed-startup-acceptance.mjs'
 
 const roots: string[] = []
 function fixture() {
@@ -24,6 +24,30 @@ it('rejects a visible startup error before accepting or interacting with the wor
     locator,
   })).rejects.toThrow('Ordinary startup blocked: GLOBAL_DATA_BLOCKED')
   expect(locator).not.toHaveBeenCalled()
+})
+
+it('accepts the paper-ink shell: waits for its root, opens settings and leaves it with the back button', async () => {
+  const calls: string[] = []
+  const control = (name: string) => ({
+    first: () => control(name),
+    click: async () => { calls.push(`click ${name}`) },
+    waitFor: async ({ state }: { state: string }) => { calls.push(`${state} ${name}`) },
+  })
+  const result = await verifyOrdinaryStartup({
+    waitForFunction: async () => {},
+    evaluate: async () => ({ state: 'ready', globalGeneration: 'g' }),
+    locator: (selector: string) => ({
+      waitFor: async () => { calls.push(`wait ${selector}`) },
+      isVisible: async () => true,
+    }),
+    getByRole: (_role: string, { name }: { name: RegExp }) => control(name.source),
+  })
+  expect(result).toEqual({ startupState: 'ready', workbenchVisible: true, settingsOpenedAndClosed: true })
+  expect(calls).toEqual([
+    `wait ${STAGE_SHELL}`, 'click ^(设置|Settings)$',
+    `visible ${SETTINGS_BACK.source}`, `click ${SETTINGS_BACK.source}`, `hidden ${SETTINGS_BACK.source}`,
+  ])
+  expect(STAGE_SHELL).toBe('[data-shell-presentation="stage"]')
 })
 
 it('refuses default-profile access outside a disposable hosted runner', async () => {

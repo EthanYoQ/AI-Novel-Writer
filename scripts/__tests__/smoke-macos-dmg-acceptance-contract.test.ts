@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
+import * as stage from '../redesign/pages/stage.mjs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createStore } from 'zustand/vanilla'
 import { createLocaleState } from '../../src/stores/locale-store'
@@ -106,7 +107,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const run = vm.runInNewContext(`(${launch})`, {
       path, macMode, process: { env: {} }, exe: '/in-memory/app', packageDir: '/in-memory',
       electron: { launch: async () => ({ firstWindow: async () => page }) },
-      macStage() {}, receipt: {}, console: { error() {} },
+      macStage() {}, receipt: {}, console: { error() {} }, stage,
       closeMacApplication: async () => { calls.push('cleanup') },
     })
     if (macMode && !writeSucceeds) {
@@ -394,7 +395,6 @@ describe('macOS DMG acceptance receipt contract', () => {
     for (const priorFact of [
       'packaged-vector-smoke.json',
       'packaged-official-homepage-smoke.json',
-      'packaged-skin-smoke.json',
       'macos-dmg-smoke.json',
     ]) {
       expect(script).toContain(priorFact)
@@ -541,7 +541,6 @@ describe('macOS DMG acceptance receipt contract', () => {
     for (const [file, kind] of [
       ['packaged-vector-smoke.json', 'packaged-vector-smoke'],
       ['packaged-official-homepage-smoke.json', 'packaged-official-homepage-smoke'],
-      ['packaged-skin-smoke.json', 'packaged-skin-smoke'],
       ['macos-dmg-smoke.json', 'macos-dmg-smoke'],
     ] as const) {
       writeJson(path.join(releaseRoot, 'qualification', file), { schemaVersion: 1, kind, direct: { packaged: true } })
@@ -573,19 +572,17 @@ describe('macOS DMG acceptance receipt contract', () => {
       platform: 'darwin',
       arch: architecture,
       accepted: true,
-      observations: ['Validated vector, homepage, skin, and direct DMG smoke facts.'],
+      observations: ['Validated vector, homepage, and direct DMG smoke facts.'],
       direct: {
         architecture: architectureEvidence,
         secureFileSystemSmoke: true,
         vectorSmoke: true,
         officialHomepageSmoke: true,
-        skinSmoke: true,
         dmgSha256,
       },
       references: {
         vector: { kind: 'packaged-vector-smoke', path: 'qualification/packaged-vector-smoke.json', sha256: qualificationEvidenceSha256('packaged-vector-smoke.json') },
         homepage: { kind: 'packaged-official-homepage-smoke', path: 'qualification/packaged-official-homepage-smoke.json', sha256: qualificationEvidenceSha256('packaged-official-homepage-smoke.json') },
-        skin: { kind: 'packaged-skin-smoke', path: 'qualification/packaged-skin-smoke.json', sha256: qualificationEvidenceSha256('packaged-skin-smoke.json') },
         dmg: { kind: 'macos-dmg-smoke', path: 'qualification/macos-dmg-smoke.json', sha256: qualificationEvidenceSha256('macos-dmg-smoke.json') },
       },
     })

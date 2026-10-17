@@ -80,7 +80,6 @@ describe('cloud Windows build manifest', () => {
     for (const smoke of [
       ['packaged-vector-smoke.json', 'packaged-vector-smoke'],
       ['packaged-official-homepage-smoke.json', 'packaged-official-homepage-smoke'],
-      ['packaged-skin-smoke.json', 'packaged-skin-smoke'],
     ] as const) {
       writeJson(path.join(releaseDir, 'qualification', smoke[0]), {
         schemaVersion: 1,

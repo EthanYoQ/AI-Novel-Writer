@@ -2,11 +2,8 @@ import type { SettingsSection } from '../../../stores/layout-store'
 
 type Pair = readonly [string, string]
 
-/** 设置页的一页。旧外壳的「编辑器」分区并进外观，所以这里没有 editor。 */
-export type SettingsPage = Exclude<SettingsSection, 'editor'>
-
 export interface SettingsPageSpec {
-  id: SettingsPage
+  id: SettingsSection
   name: Pair
   lede: Pair
 }
@@ -30,7 +27,3 @@ export const SETTINGS_GROUPS: readonly { id: string; name: Pair; pages: readonly
 ]
 
 export const SETTINGS_PAGES: readonly SettingsPageSpec[] = SETTINGS_GROUPS.flatMap(group => group.pages)
-
-export function settingsPageOf(section: SettingsSection): SettingsPage {
-  return section === 'editor' ? 'appearance' : section
-}

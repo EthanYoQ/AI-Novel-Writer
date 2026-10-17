@@ -51,7 +51,7 @@ export function knowledgeDraftDirty(draft: KnowledgeDraft): boolean {
 export interface EditorTab {
   id: string
   name: string
-  /** knowledge 只由新外壳打开：旧外壳的知识库是侧栏视图，不是标签。 */
+  /** 知识库页的标签。 */
   type: 'chapter' | 'outline' | 'character' | 'config' | 'diff' | 'chapter-card' | 'world-building' | 'arch-file' | 'version-history' | 'review-report' | 'narrative-thread' | 'knowledge'
   filePath?: string
   content?: string

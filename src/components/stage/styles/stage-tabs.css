@@ -117,3 +117,19 @@
 .stage-tab[data-dirty] .stage-tab-close:hover svg {
   display: block;
 }
+
+/* 标签菜单固定在标签条右端，标签多到横向滚动时也够得着 */
+.stage-tabbar {
+  position: relative;
+  flex: none;
+}
+
+.stage-tabbar > .stage-tabs {
+  padding-right: 48px;
+}
+
+.stage-tab-menu {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+}

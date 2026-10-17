@@ -12,7 +12,7 @@ export interface ProxyDraft {
 
 const DEFAULT_PROXY: ProxyDraft = { enabled: false, type: 'http', host: '', port: 7890 }
 
-/** 网络代理的读取与保存。旧外壳设置弹窗与新外壳设置页共用。 */
+/** 网络代理的读取与保存。 */
 export function useProxySettings() {
   const text = useLocaleStore(s => s.text)
   const [proxy, setProxy] = useState<ProxyDraft>(DEFAULT_PROXY)

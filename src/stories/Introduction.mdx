@@ -8,11 +8,11 @@ AI小说作家是一个 AI 深度驱动的小说创作 IDE，其 UI 设计系统
 
 ## Design Tokens
 
-AI小说作家使用 CSS 自定义属性（CSS Variables）作为设计 token 的单一数据源，支持 `light`、`galaxy`、`paper` 和 `dark` 四套主题。下面的色板直接渲染运行时变量，不维护第二份颜色常量。
+AI小说作家使用 CSS 自定义属性（CSS Variables）作为设计 token 的单一数据源，支持 `light` 与 `dark` 两套主题。下面的色板直接渲染运行时变量，不维护第二份颜色常量。
 
 ## Color System
 
-{['light', 'galaxy', 'paper', 'dark'].map((theme) => (
+{['light', 'dark'].map((theme) => (
   <div
     key={theme}
     className={theme}
@@ -30,7 +30,7 @@ AI小说作家使用 CSS 自定义属性（CSS Variables）作为设计 token �
     <ColorPalette>
       <ColorItem title="Background" colors={{ bg: 'var(--color-bg)', sidebar: 'var(--color-sidebar)', panel: 'var(--color-panel)' }} />
       <ColorItem title="Text" colors={{ primary: 'var(--color-text)', secondary: 'var(--color-text-secondary)', muted: 'var(--color-text-muted)' }} />
-      <ColorItem title="Accent" colors={{ accent: 'var(--color-accent)', gold: 'var(--color-gold)' }} />
+      <ColorItem title="Accent" colors={{ accent: 'var(--color-accent)' }} />
       <ColorItem title="Semantic" colors={{ success: 'var(--color-success)', warning: 'var(--color-warning)', error: 'var(--color-error)', info: 'var(--color-info)' }} />
     </ColorPalette>
   </div>

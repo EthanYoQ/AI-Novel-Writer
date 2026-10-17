@@ -2,7 +2,6 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 
@@ -88,23 +87,49 @@ describe('UpdateNotifier 查看更新', () => {
     act(() => actions?.[0]?.onClick?.())
   }
 
-  it('新外壳书房里开着设置页时收起设置页，露出书房里的更新卡', async () => {
-    const restore = [useLayoutStore.getState(), useAppearanceStore.getState()] as const
-    useAppearanceStore.setState({ resolvedShell: 'stage' })
-    useLayoutStore.setState({ sidebarView: 'home', sidebarOpen: true, settingsOpen: true })
-    await viewUpdate('9.9.0')
+  it.each([
+    { where: '书房里', sidebarView: 'home', version: '9.9.0' },
+    { where: '作品里', sidebarView: 'project', version: '9.9.1' },
+  ] as const)('$where开着设置页时收起设置页，回到书房露出更新卡', async ({ sidebarView, version }) => {
+    const restore = useLayoutStore.getState()
+    useLayoutStore.setState({ sidebarView, settingsOpen: true })
+    await viewUpdate(version)
     expect(useLayoutStore.getState()).toMatchObject({ sidebarView: 'home', settingsOpen: false })
-    useLayoutStore.setState(restore[0], true)
-    useAppearanceStore.setState(restore[1], true)
+    useLayoutStore.setState(restore, true)
+  })
+})
+
+describe('UpdateNotifier 每个版本只提醒一次', () => {
+  async function renderNotifier(version: string) {
+    let emit: (state: unknown) => void = () => {}
+    const available = { status: 'available', currentVersion: '0.9.2', availableVersion: version, updateAction: 'download', isReminderDeferred: false }
+    vi.mocked(window.aiNovelAPI!.invoke).mockImplementation(async (channel: string) => channel === 'update:get-state' ? available : null)
+    vi.mocked(window.aiNovelAPI!.on).mockImplementation(((_channel: string, listener: (state: unknown) => void) => {
+      emit = listener
+      return () => {}
+    }) as never)
+    const dismiss = vi.fn()
+    const { actionToast } = await import('../../ui/ActionToast')
+    const show = vi.spyOn(actionToast, 'show').mockReturnValue(dismiss)
+    const { UpdateNotifier } = await import('../UpdateNotifier')
+    await act(async () => root.render(<UpdateNotifier />))
+    await vi.waitFor(() => expect(show).toHaveBeenCalledOnce())
+    return { show, dismiss, emit: (patch: object) => act(async () => emit({ ...available, ...patch })) }
+  }
+
+  it('同一版本从可下载变成已下载，仍只有一条常驻提醒', async () => {
+    const { show, dismiss, emit } = await renderNotifier('9.9.2')
+    expect(show).toHaveBeenCalledWith(expect.objectContaining({ duration: 0 }))
+    await emit({ status: 'downloaded' })
+    expect(show).toHaveBeenCalledOnce()
+    expect(dismiss).not.toHaveBeenCalled()
   })
 
-  it('旧外壳只切到书房视图，不关设置弹窗', async () => {
-    const restore = [useLayoutStore.getState(), useAppearanceStore.getState()] as const
-    useAppearanceStore.setState({ resolvedShell: 'writer' })
-    useLayoutStore.setState({ sidebarView: 'project', sidebarOpen: true, settingsOpen: true })
-    await viewUpdate('9.9.1')
-    expect(useLayoutStore.getState()).toMatchObject({ sidebarView: 'home', settingsOpen: true })
-    useLayoutStore.setState(restore[0], true)
-    useAppearanceStore.setState(restore[1], true)
+  it('延后提醒时收起提醒；不再延后后同一版本再提醒一次', async () => {
+    const { show, dismiss, emit } = await renderNotifier('9.9.3')
+    await emit({ status: 'downloaded', isReminderDeferred: true })
+    expect(dismiss).toHaveBeenCalledOnce()
+    await emit({ status: 'downloaded', isReminderDeferred: false })
+    expect(show).toHaveBeenCalledTimes(2)
   })
 })

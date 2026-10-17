@@ -5,6 +5,7 @@ import path from 'node:path'
 import { test } from 'vitest'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
+import * as stage from '../redesign/pages/stage.mjs'
 
 const driver = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../f05-a11-offline-import-journey.mjs'), 'utf8')
 const functionSource = (name, source = driver) => {
@@ -104,7 +105,7 @@ test('native project and legacy receipts require opaque grants consumed by their
 })
 
 test('Windows partial launch records bounded startup facts and kills its exact process tree', async () => {
-  const original = new Error('skin wait timed out')
+  const original = new Error('shell wait timed out')
   const receipt = {}
   const kills = []
   const app = {
@@ -117,7 +118,7 @@ test('Windows partial launch records bounded startup facts and kills its exact p
   }
   const deps = {
     assert, Buffer, setTimeout, clearTimeout, process: { env: {} }, path,
-    macMode: false, macStage: () => {}, packageDir: 'package', exe: 'app.exe', receipt,
+    macMode: false, macStage: () => {}, packageDir: 'package', exe: 'app.exe', receipt, stage,
     electron: { launch: async () => app },
     fs: { existsSync: () => true, readFileSync: () => Buffer.from([0xef, 0xbb, 0xbf]), readdirSync: () => [] },
     execFileSync: (command, args, options) => { kills.push({ command, args, options }); return '' },

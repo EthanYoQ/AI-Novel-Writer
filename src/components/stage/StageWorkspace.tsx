@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore, type EditorTab } from '../../stores/editor-store'
 import { useLayoutStore } from '../../stores/layout-store'
@@ -6,8 +6,9 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { navigate } from '../../stores/navigation/navigation-intents'
 import { useStageStore } from '../../stores/navigation/stage-store'
 import type { ProjectData } from '../../shared/ipc-channels'
+import { sameProjectPathKey } from '../../shared/project-session-context'
 import { ErrorBoundary } from '../ErrorBoundary'
-import EditorTabContent from '../panels/EditorTabContent'
+import ArchFileViewer from '../editor/ArchFileViewer'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { DangerConfirm } from '../ui/DangerConfirm'
@@ -19,29 +20,47 @@ import { SettingsPage, SetupPage } from './stage-pages'
 import StageHistory from './history/StageHistory'
 import StageKnowledge from './knowledge/StageKnowledge'
 import StagePlot from './plot/StagePlot'
+import StageTabMenu, { CloseTabsConfirm } from './StageTabMenu'
 import StageTabs from './StageTabs'
 import { commandLabel } from './shortcut-keys'
+import BlueprintRecovery from './blueprint/BlueprintRecovery'
 import StageBlueprint from './blueprint/StageBlueprint'
 import ChapterView from './chapter/ChapterView'
-import { installChapterTabRouting, isChapterViewTab } from './chapter/chapter-tab-routing'
+import ProseDocument from './chapter/ProseDocument'
+import { installChapterTabRouting, isChapterViewTab, isProseDocumentTab } from './chapter/chapter-tab-routing'
 import { stageTabName } from './stage-text'
-import { cancelCloseTab, confirmCloseTab, requestCloseTab, STAGE_CONTENT_ID } from './tab-close'
+import { cancelCloseTab, closeCleanTabs, confirmCloseTab, requestCloseTab, STAGE_CONTENT_ID } from './tab-close'
 
-/** 设定、架构、角色名单、蓝图、单章正文与资料页是新外壳的页面，其余标签沿用旧编辑区。 */
+/** 每种标签对应的页面。架构文档（含大纲恢复稿与角色名单全文）沿用 ArchFileViewer。 */
 function TabContent({ tab, project }: { tab: EditorTab; project: ProjectData }) {
+  const text = useLocaleStore(s => s.text)
+  const sameProject = sameProjectPathKey(tab.projectKey, project.path)
   if (tab.type === 'config' && tab.projectKey) return <SetupPage projectKey={tab.projectKey} />
   if (tab.type === 'world-building' && tab.projectKey) return <StageArchitecture projectKey={tab.projectKey} />
   if (tab.type === 'character' && tab.projectKey) return <StageCharacters projectKey={tab.projectKey} />
   if (isChapterViewTab(tab)) return <ChapterView tab={tab} />
-  if (tab.type === 'chapter-card' && tab.projectKey && !tab.planningRecovery) {
+  if (isProseDocumentTab(tab) && sameProject) return <ProseDocument tab={tab} project={project} />
+  if (tab.type === 'chapter-card' && tab.projectKey && tab.planningRecovery) {
+    return <BlueprintRecovery key={`${tab.id}:${project.sessionLease}`} tab={tab} projectKey={tab.projectKey} />
+  }
+  if (tab.type === 'chapter-card' && tab.projectKey) {
     return <StageBlueprint projectKey={tab.projectKey} initialChapterNumber={tab.chapterNumber} selectRequest={tab.chapterSelectRequest} />
   }
-  if (tab.type === 'version-history' && tab.projectKey === project.path) return <StageHistory projectKey={tab.projectKey} />
-  if (tab.type === 'knowledge' && tab.projectKey === project.path) return <StageKnowledge tabId={tab.id} />
-  if (tab.type === 'narrative-thread' && tab.projectKey === project.path) {
-    return <StagePlot projectKey={tab.projectKey} initialView={tab.narrativeThreadView ?? 'plans'} viewRequest={tab.narrativeThreadViewRequest} />
+  if (tab.type === 'version-history' && sameProject) return <StageHistory projectKey={project.path} />
+  if (tab.type === 'knowledge' && sameProject) return <StageKnowledge tabId={tab.id} />
+  if (tab.type === 'narrative-thread' && sameProject) {
+    return <StagePlot projectKey={project.path} initialView={tab.narrativeThreadView ?? 'plans'} viewRequest={tab.narrativeThreadViewRequest} />
   }
-  return <EditorTabContent activeTab={tab} currentProject={project} />
+  if (tab.type === 'arch-file' && tab.filePath && tab.projectKey) {
+    return <ArchFileViewer key={tab.id} tabId={tab.id} filePath={tab.filePath} projectKey={tab.projectKey} content={tab.content ?? ''} savedContent={tab.savedContent ?? tab.content ?? ''} />
+  }
+  return (
+    <EmptyState
+      heading={text('这个标签没有可显示的页面', 'This tab has no page to show')}
+      description={text('它可能属于另一部作品，或者来自旧版界面。关掉它不会改动作品。', 'It may belong to another book or come from the old interface. Closing it does not change the book.')}
+      action={<Button variant="secondary" onClick={() => requestCloseTab(tab.id)}>{text('关闭标签', 'Close tab')}</Button>}
+    />
+  )
 }
 
 export default function StageWorkspace({ library, focus }: { library: boolean; focus: boolean }) {
@@ -55,6 +74,11 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
   const closingTabId = useStageStore(s => s.closingTabId)
   const pending = tabs.find(tab => tab.id === closingTabId) ?? null
   const pendingName = pending ? stageTabName(pending, text) : ''
+  const [closingMany, setClosingMany] = useState<readonly string[] | null>(null)
+  const closeMany = (tabIds: readonly string[]) => {
+    const dirty = closeCleanTabs(tabIds)
+    if (dirty.length > 0) setClosingMany(dirty)
+  }
 
   const activeTab = tabs.find(tab => tab.id === activeTabId)
   useEffect(() => installChapterTabRouting(), [])
@@ -75,14 +99,17 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
   return (
     <main className="stage-panel">
       {showTabs && (
-        <StageTabs
-          tabs={tabs}
-          activeTabId={activeTab?.id ?? null}
-          onSelect={tabId => useEditorStore.getState().setActiveTab(tabId)}
-          onClose={requestCloseTab}
-          tabDomId={tabDomId}
-          panelId={STAGE_CONTENT_ID}
-        />
+        <div className="stage-tabbar">
+          <StageTabs
+            tabs={tabs}
+            activeTabId={activeTab?.id ?? null}
+            onSelect={tabId => useEditorStore.getState().setActiveTab(tabId)}
+            onClose={requestCloseTab}
+            tabDomId={tabDomId}
+            panelId={STAGE_CONTENT_ID}
+          />
+          <StageTabMenu tabs={tabs} activeTabId={activeTab?.id ?? null} onSelect={tabId => useEditorStore.getState().setActiveTab(tabId)} onCloseMany={closeMany} />
+        </div>
       )}
       <div className="stage-body">
         {settingsOpen && <SettingsPage library={false} />}
@@ -126,6 +153,7 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
         cancelLabel={text('继续编辑', 'Keep editing')}
         onConfirm={confirmCloseTab}
       />
+      <CloseTabsConfirm pending={closingMany} onSettled={() => setClosingMany(null)} />
     </main>
   )
 }

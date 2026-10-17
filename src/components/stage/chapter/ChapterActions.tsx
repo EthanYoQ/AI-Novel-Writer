@@ -28,6 +28,7 @@ import { Menu, type MenuGroupSpec } from '../../ui/Menu'
 import { Notice } from '../../ui/Notice'
 import { toast } from '../../ui/Toast'
 import { InkDialog } from '../InkDialog'
+import { commandLabel } from '../shortcut-keys'
 import SplitAction from '../write/SplitAction'
 import { useAnchoredLayer } from '../../ui/use-anchored-layer'
 import { useStageView } from '../use-stage-work'
@@ -248,7 +249,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
               <p className="stage-ch-options-foot">{text('只用于这一次审稿', 'Applies to this review only')}</p>
             </SplitAction>
             {more}
-            <span className="stage-ch-hint">{text('可以直接改正文，⌘S 保存', 'Edit the text directly; ⌘S saves')}</span>
+            <span className="stage-ch-hint">{text(`可以直接改正文，${commandLabel('s')} 保存`, `Edit the text directly; ${commandLabel('s')} saves`)}</span>
           </>
         )
       case 'reviewed':

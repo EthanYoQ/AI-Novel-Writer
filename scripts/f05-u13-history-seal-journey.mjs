@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { _electron as electron } from 'playwright'
 import { createServer } from 'node:http'
+import * as blueprint from './redesign/pages/blueprint.mjs'
+import * as runSheet from './redesign/pages/run-sheet.mjs'
+import * as stage from './redesign/pages/stage.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const Database = createRequire(import.meta.url)('better-sqlite3')
@@ -37,11 +40,8 @@ const projectName = `u13h-${runId.slice(0, 4)}`
 const steps = []
 const pass = (stepId, actionId, assertion, observed) => steps.push({ stepId, actionId, outcome: 'PASS', assertion, observed })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
-const writer = page => page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]')
-async function assertWriter(page, actionId) {
-  await writer(page).waitFor({ state: 'visible', timeout: 30_000 })
-  assert.equal(await writer(page).getAttribute('data-shell-variant'), 'v3', `${actionId}: shell is not V3`)
-}
+// 纸墨外壳：写作此章在单章视图，已有草稿后再写一稿走蓝图页「写第 1 章」；运行状态、历史与可恢复的内容都在运行侧页。
+const RUN_TITLE = '第 1 章 · 写稿'
 async function launch(port) {
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: profile.canonical, AI_NOVEL_LEGACY_SOURCE_HOME: profile.legacy, AI_NOVEL_VELA_HOME: profile.legacy, HOME: profile.home, USERPROFILE: profile.home, APPDATA: profile.appData, LOCALAPPDATA: profile.localAppData }
   for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT']) delete env[key]
@@ -56,26 +56,53 @@ async function launch(port) {
   }, port)
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  await stage.waitForStage(page)
   return { app, page }
 }
 async function quit(app) { await app.close().catch(() => {}) }
 async function openFromShelf(page, name) {
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${name}》` }).click()
-  await page.locator('.writer-project-tree').getByText(name, { exact: true }).waitFor({ state: 'visible' })
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, name)
+  await stage.waitForWork(page, name)
 }
-const assistant = page => page.locator('.writer-ai-panel')
+/** 运行侧页「历史」里的行，最新的在前。 */
+async function historyRows(page) {
+  await runSheet.openFromPalette(page)
+  await runSheet.tab(page, '历史').click()
+  const list = page.getByRole('list', { name: '运行历史' })
+  if (await list.count() === 0) return []
+  return list.getByRole('listitem').evaluateAll(items => items.map(item => ({
+    title: item.querySelector('.run-history-title')?.textContent ?? '',
+    completed: item.querySelector('.run-visually-hidden')?.textContent?.startsWith('已完成') ?? false,
+  })))
+}
+/** 展开历史第 index 行与其中每一步，返回展开后的文字；再点一次行就收起。 */
+async function historyDetail(page, index) {
+  const item = page.getByRole('list', { name: '运行历史' }).getByRole('listitem').nth(index)
+  await item.locator('.run-history-row').click()
+  const detail = item.locator('.run-history-detail')
+  await detail.waitFor({ state: 'visible' })
+  for (const toggle of await detail.locator('button[aria-expanded="false"]').all()) await toggle.click()
+  return detail.innerText()
+}
+/** 每次运行一条：写稿先发短细纲再发正文，同一运行有两次尝试，记正文那次（purpose chapter-draft）。 */
 function durableRuns(projectPath) {
   const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
-  try { return db.prepare(`SELECT r.run_id, r.binding_json, a.attempt_json, a.usage_receipt_json
-    FROM generation_runs r LEFT JOIN generation_attempts a ON a.run_id=r.run_id ORDER BY r.created_at_ms`).all()
-    .map(row => ({ runId: row.run_id, operation: JSON.parse(row.binding_json).sourceManifest?.operation,
-      attemptStatus: row.attempt_json && JSON.parse(row.attempt_json).status,
-      usageTrusted: row.usage_receipt_json && JSON.parse(row.usage_receipt_json).result?.usage?.trusted === true,
-      finishReason: row.usage_receipt_json && JSON.parse(row.usage_receipt_json).result?.finishReason })) }
-  finally { db.close() }
+  try {
+    const rows = db.prepare(`SELECT r.run_id, r.binding_json, a.attempt_json, a.usage_receipt_json
+      FROM generation_runs r LEFT JOIN generation_attempts a ON a.run_id=r.run_id ORDER BY r.created_at_ms, a.rowid`).all()
+    const runs = new Map()
+    for (const row of rows) {
+      const receipt = row.usage_receipt_json && JSON.parse(row.usage_receipt_json)
+      const entry = runs.get(row.run_id) ?? { runId: row.run_id, operation: JSON.parse(row.binding_json).sourceManifest?.operation, purposes: [] }
+      if (receipt) entry.purposes.push(receipt.purpose)
+      if (receipt?.purpose === 'chapter-draft') Object.assign(entry, { attemptStatus: JSON.parse(row.attempt_json).status,
+        usageTrusted: receipt.result?.usage?.trusted === true, finishReason: receipt.result?.finishReason })
+      runs.set(row.run_id, entry)
+    }
+    return [...runs.values()]
+  } finally { db.close() }
 }
 
 async function main() {
@@ -88,15 +115,21 @@ async function main() {
   assert.equal(sha256(asarPath), expectedAsar, 'packaged app changed')
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
   fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U13 HistoryList/workflow-status sub-evidence', sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
-    retainedReason: 'independent review of packaged V3 HistoryList and durable SQLite run identities',
+    retainedReason: 'independent review of packaged stage run history and durable SQLite run identities',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  const fixtureState = { requests: 0 }
-  const server = createServer((request, response) => {
+  // 写稿先要一份短细纲（只写短细纲）再写正文。细纲照常回复并另计；requests 只数正文请求，第 2 次回 500 作可控失败。
+  const fixtureState = { requests: 0, outlines: 0 }
+  const server = createServer(async (request, response) => {
     if (request.method !== 'POST' || request.headers.authorization !== `Bearer ${model.apiKey}` || request.url !== '/v1/chat/completions') { response.writeHead(403).end(); return }
-    fixtureState.requests++
-    if (fixtureState.requests === 2) { response.writeHead(500).end('fixture failure'); return }
+    let raw = ''
+    for await (const chunk of request) raw += chunk
+    const prompt = (JSON.parse(raw).messages ?? []).map(message => String(message.content)).join('\n')
+    const outline = prompt.includes('只写短细纲')
+    if (outline) fixtureState.outlines++
+    else fixtureState.requests++
+    if (!outline && fixtureState.requests === 2) { response.writeHead(500).end('fixture failure'); return }
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: syntheticProse }, finish_reason: 'stop' }] })}\n\n`)
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: outline ? '- 原目标：验证历史。' : syntheticProse }, finish_reason: 'stop' }] })}\n\n`)
     response.write('data: {"choices":[],"usage":{"prompt_tokens":400,"completion_tokens":200,"total_tokens":600}}\n\n')
     response.end('data: [DONE]\n\n')
   })
@@ -104,13 +137,12 @@ async function main() {
   let project
   let failure
   let currentStep = 'setup'
+  let lastPage
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
     const port = server.address().port
     ;({ app } = await launch(port))
     const page = await app.firstWindow()
-    await page.evaluate(() => { const key = 'ai-novel-writer-appearance'; const value = JSON.parse(localStorage.getItem(key) ?? '{}'); localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer', revision: Number(value.revision ?? 0) + 1, origin: 'author' })) })
-    await page.reload(); await assertWriter(page, 'writer-shell-selection')
     project = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName, genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(project.success, true, project.error)
     const opened = await invoke(page, 'project:open', project.projectPath, randomUUID(), null)
@@ -122,73 +154,61 @@ async function main() {
     const characterId = `draft:${randomUUID()}`
     const rosterCommit = await invoke(page, 'db:character-roster-commit', { operationId: randomUUID(), expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision, schemaVersion: 1, intent: 'manual_edit', entries: [{ characterId, name: '林岚', role: 'protagonist', gender: '', age: '', appearance: '', personality: '', background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '' }] }, project.projectPath, context)
     assert.equal(rosterCommit.success, true, JSON.stringify(rosterCommit))
+    // 纸墨外壳的写作此章按设定里的每章字数写；夹具一次回 120 字，目标定在 100。
+    const core = await invoke(page, 'db:project-core-update', { totalChapters: 1, wordsPerChapter: 100 }, project.projectPath, context)
+    assert.equal(core.success, true, core.error)
     assert.equal((await invoke(page, 'db:blueprint-upsert', { chapterNumber: 1, title: '历史印章章节', role: '发展', purpose: '验证历史', keyEvents: '验证状态', characters: [] }, project.projectPath, context)).success, true)
     await quit(app); app = null
     ;({ app } = await launch(port))
     const page2 = await app.firstWindow()
-    await assertWriter(page2, 'project-open')
+    lastPage = page2
     await openFromShelf(page2, projectName)
     assert.equal(path.resolve((await invoke(page2, 'project:get-runtime-context')).activeProjectPath), path.resolve(project.projectPath))
-    await page2.getByRole('button', { name: 'AI 输出', exact: true }).click()
-    await page2.locator('.writer-project-tree').getByText('章节蓝图', { exact: true }).click()
     currentStep = 'U13.workflow-status-pending'
-    await assertWriter(page2, 'U13.workflow-status-pending')
-    await page2.getByRole('button', { name: '写作此章' }).click()
-    await page2.getByRole('dialog').getByPlaceholder('3000').fill('100')
-    await page2.getByRole('dialog').getByRole('button', { name: '开始创作' }).click()
-    await page2.getByRole('button', { name: /中止生成|Stop generation/ }).waitFor({ state: 'visible' })
-    pass('u13-workflow-status-pending', null, 'Writer active run exposes controlled pending/stop workflow status before provider completion as sub-evidence')
-    await page2.getByRole('button', { name: /中止生成|Stop generation/ }).waitFor({ state: 'hidden', timeout: 30_000 })
+    if (!await stage.chapterList(page2).isVisible()) await stage.stageButton(page2, '正文').click()
+    await stage.chapterButton(page2, 1).click()
+    await stage.root(page2).getByRole('button', { name: '写作此章', exact: true }).click()
+    const cancel = runSheet.sheet(page2).getByRole('button', { name: `取消「${RUN_TITLE}」` })
+    await cancel.waitFor({ state: 'visible' })
+    pass('u13-workflow-status-pending', null, 'Stage run sheet exposes the running write card with its cancel control before provider completion as sub-evidence')
+    await runSheet.waitForRunDone(page2)
     assert.equal(fixtureState.requests, 1, `first generation must reach the isolated provider fixture; UI: ${(await page2.locator('body').innerText()).slice(-1600)}`)
-    await assertWriter(page2, 'U13.workflow-status-success-history')
-    await assertWriter(page2, 'U13.workflow-status-success')
-    await page2.getByText('合成正文', { exact: false }).first().waitFor({ state: 'visible', timeout: 5_000 })
-    await page2.getByText('整个工作流已全部完成', { exact: true }).waitFor({ state: 'visible', timeout: 5_000 })
     const db = new Database(path.join(project.projectPath, '.ai-novel', 'project.db'), { readonly: true })
     let savedDraft
     try { savedDraft = db.prepare('SELECT d.status, c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=1').get() } finally { db.close() }
     assert.equal(savedDraft?.body, syntheticProse, `first generation did not persist the completed draft; UI: ${(await page2.locator('body').innerText()).slice(-1000)}`)
     assert.equal(savedDraft?.status, 'draft', 'completed generation must remain an unfinalized draft')
+    await stage.waitForProse(page2, '合成正文')
     const successfulRuns = durableRuns(project.projectPath)
     assert.equal(successfulRuns.length, 1)
     assert.equal(successfulRuns[0].operation, 'chapter-draft')
+    assert.deepEqual(successfulRuns[0].purposes, ['chapter-draft-short-outline', 'chapter-draft'])
     assert.equal(successfulRuns[0].attemptStatus, 'settled')
     assert.equal(successfulRuns[0].usageTrusted, true)
     assert.equal(successfulRuns[0].finishReason, 'stop')
-    pass('u13-workflow-status-success', null, 'Writer completed workflow status, trusted settled provider attempt, visible output and persisted draft agree as sub-evidence',
+    pass('u13-workflow-status-success', null, 'Stage completed run status, trusted settled provider attempt, visible prose and persisted draft agree as sub-evidence',
       { status: savedDraft.status, attemptStatus: successfulRuns[0].attemptStatus, providerRequests: fixtureState.requests })
     currentStep = 'U13.workflow-status-failure'
-    await page2.locator('.writer-project-tree').getByText('章节蓝图', { exact: true }).click()
-    await assertWriter(page2, 'U13.workflow-status-failure')
-    await page2.getByRole('button', { name: '写作此章' }).click()
-    await page2.getByRole('dialog').getByPlaceholder('3000').fill('100')
-    await page2.getByRole('dialog').getByRole('button', { name: '开始创作' }).click()
-    await page2.getByText('工作流未完成', { exact: true }).waitFor({ state: 'visible', timeout: 30_000 })
+    // 第 1 章已有草稿时单章视图不再摆「写作此章」；没有定稿前权威的下一章仍是第 1 章，从蓝图页再写一稿。
+    await blueprint.open(page2)
+    await blueprint.writeNext(page2)
+    await runSheet.waitUntilOpen(page2)
+    await runSheet.anyCard(page2).filter({ hasText: /^上一次运行/ }).getByText(/ · 失败$/).waitFor({ state: 'visible', timeout: 30_000 })
     assert.equal(fixtureState.requests, 2, 'controlled failure must reach the fixture exactly once')
     const failureDb = new Database(path.join(project.projectPath, '.ai-novel', 'project.db'), { readonly: true })
     let draftCount
     try { draftCount = failureDb.prepare('SELECT count(*) AS count FROM drafts WHERE chapter_number=1').get().count } finally { failureDb.close() }
     assert.equal(draftCount, 1, 'failed provider request must not add another saved draft')
-    pass('u13-workflow-status-failure', null, 'Writer exposes controlled provider failure without adding a draft as sub-evidence', { providerRequests: fixtureState.requests, draftCount })
-    await assertWriter(page2, 'U13.workflow-status-failure-history')
+    pass('u13-workflow-status-failure', null, 'Stage run sheet exposes controlled provider failure without adding a draft as sub-evidence', { providerRequests: fixtureState.requests, draftCount })
     currentStep = 'U13.A08-select-history'
-    const historyButtons = assistant(page2).getByRole('button', { name: /历史印章章节/ })
-    await historyButtons.nth(1).waitFor({ state: 'visible' })
-    assert.equal(await historyButtons.count(), 2, 'V3 must expose both completed and failed runs in selectable history')
-    await historyButtons.nth(1).click()
-    const selectedView = assistant(page2).locator('div.flex.flex-col.h-full.overflow-hidden.relative')
-    assert.equal(await selectedView.count(), 1, 'selected V3 history result view is ambiguous')
-    await selectedView.getByText('整个工作流已全部完成', { exact: true }).waitFor({ state: 'visible' })
-    const selectedBody = selectedView.getByText(savedDraft.body, { exact: true })
-    for (const header of await selectedView.locator('[title="点击查看该步骤的历史输出"]').all()) {
-      if (await selectedBody.count()) break
-      await header.click()
-    }
-    await selectedBody.waitFor({ state: 'visible' })
-    assert.equal(await selectedBody.innerText(), savedDraft.body, 'selected completed history output differs from the persisted draft')
-    await historyButtons.nth(0).click()
-    await selectedView.getByText('工作流未完成', { exact: true }).waitFor({ state: 'visible' })
-    assert.equal(await selectedView.getByText(savedDraft.body, { exact: true }).count(), 0, 'failed history selection still shows completed-run body')
+    const rows = await historyRows(page2)
+    assert.deepEqual(rows, [{ title: RUN_TITLE, completed: false }, { title: RUN_TITLE, completed: true }],
+      'stage must expose both the failed and the completed run in selectable history, newest first')
+    const completedDetail = await historyDetail(page2, 1)
+    assert(completedDetail.includes(savedDraft.body), 'selected completed history output differs from the persisted draft')
+    await page2.getByRole('list', { name: '运行历史' }).getByRole('listitem').nth(1).locator('.run-history-row').click()
+    const failedDetail = await historyDetail(page2, 0)
+    assert.equal(failedDetail.includes(savedDraft.body), false, 'failed history selection still shows completed-run body')
     const runs = durableRuns(project.projectPath)
     assert.equal(runs.length, 2)
     assert(runs.every(run => run.operation === 'chapter-draft'))
@@ -200,27 +220,30 @@ async function main() {
     const readContext = { projectId: project.projectId, projectPath: project.projectPath, leaseId: readSession.project.sessionLease }
     const listedRuns = await invoke(page2, 'generation:list', readContext)
     assert.deepEqual(listedRuns.map(run => run.handle.runId).sort(), runs.map(run => run.runId).sort())
-    pass('u13-v3-select-history', 'U13.A08', 'V3 HistoryList selected the exact persisted success body then the failed run; main IPC and SQLite retain two distinct chapter-draft run identities',
+    pass('u13-v3-select-history', 'U13.A08', 'Stage run history selected the exact persisted success body then the failed run; main IPC and SQLite retain two distinct chapter-draft run identities',
       { runIds: runs.map(run => run.runId), selectedStatuses: ['completed', 'failed'], selectedSuccessBodySha256: createHash('sha256').update(savedDraft.body).digest('hex') })
     await quit(app); app = null
     currentStep = 'U13.A08-reopen-boundary'
     ;({ app } = await launch(port))
     const reopenedPage = await app.firstWindow()
-    await assertWriter(reopenedPage, 'U13.A08-reopen-boundary')
+    lastPage = reopenedPage
     await openFromShelf(reopenedPage, projectName)
-    await reopenedPage.getByRole('button', { name: 'AI 输出', exact: true }).click()
-    await assistant(reopenedPage).locator('section[aria-label="持久正文候选"]').waitFor({ state: 'visible' })
-    await assistant(reopenedPage).locator('section[aria-label="持久正文候选"]').getByText('合成正文', { exact: false }).first().waitFor({ state: 'visible' })
-    assert.equal(await assistant(reopenedPage).getByRole('button', { name: /历史印章章节/ }).count(), 0,
-      'renderer workflow HistoryList is expected to be empty after a new process')
+    await runSheet.openFromPalette(reopenedPage)
+    await runSheet.tab(reopenedPage, '进行中').click()
+    await runSheet.recovery(reopenedPage).getByText('合成正文', { exact: false }).first().waitFor({ state: 'visible' })
+    const reopenedRows = await historyRows(reopenedPage)
+    assert.deepEqual(reopenedRows, [], 'renderer run history is expected to be empty after a new process')
     assert.deepEqual(durableRuns(project.projectPath), runs, 'new process changed durable generation run identities')
-    pass('u13-reopen-limitation', null, 'New V3 process exposes durable candidates while in-memory renderer HistoryList is empty; no history persistence is claimed',
-      { durableRunIds: runs.map(run => run.runId), rendererHistoryCount: 0 })
-  } catch (error) { failure = error }
-  finally { if (app) await quit(app); if (server.listening) await new Promise(resolve => server.close(resolve)) }
-  const receipt = { schemaVersion: 1, qualification: 'F05_U13_PACKAGED_V3_HISTORY_WORKFLOW_STATUS_SUBEVIDENCE', outcome: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer', shellVariant: 'v3', scope: { kind: 'controlled-workflow-status-sub-evidence', workflowStatusSteps: ['u13-workflow-status-pending', 'u13-workflow-status-success', 'u13-workflow-status-failure'], verified: ['U13.A08 same-process V3 HistoryList selection', 'durable provider attempt and body assertions', 'new-process renderer HistoryList limitation'], excludes: ['U13.A09 DraftEditor PostProcessStatusPanel finalization pending/success/failure seal'] }, testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) }, driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { projectRoot: profile.projects, scratch }, fixture: { provider: 'loopback synthetic OpenAI SSE', requests: fixtureState.requests, externalModelRequests: 0 }, steps,
-    unverifiedActions: ['U13.A01 real model streaming', 'U13.A02 provider reasoning qualification', 'U13.A03-U13.A07', 'U13.A09 real DraftEditor PostProcessStatusPanel finalization pending/success/failure seal', 'release default and model quality'],
-    limitation: 'Renderer workflow HistoryList is in-memory and empty in a new process; durable main-generation candidates remain visible without reconstructing that list',
+    pass('u13-reopen-limitation', null, 'New process exposes durable candidates in the run sheet while the in-memory run history is empty; no history persistence is claimed',
+      { durableRunIds: runs.map(run => run.runId), rendererHistoryCount: reopenedRows.length })
+  } catch (error) {
+    failure = error
+    await lastPage?.screenshot({ path: path.join(repository, '.runtime', '.cache', 'f05-u13-history-seals', runId, 'failure.png') }).catch(() => {})
+  }
+  finally { if (app) await quit(app); if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) } }
+  const receipt = { schemaVersion: 1, qualification: 'F05_U13_PACKAGED_V3_HISTORY_WORKFLOW_STATUS_SUBEVIDENCE', outcome: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'stage', scope: { kind: 'controlled-workflow-status-sub-evidence', workflowStatusSteps: ['u13-workflow-status-pending', 'u13-workflow-status-success', 'u13-workflow-status-failure'], verified: ['U13.A08 same-process stage run history selection', 'durable provider attempt and body assertions', 'new-process run history limitation'], excludes: ['U13.A09 chapter view post-processing finalization pending/success/failure seal'] }, testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) }, driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { projectRoot: profile.projects, scratch }, fixture: { provider: 'loopback synthetic OpenAI SSE', requests: fixtureState.requests, shortOutlines: fixtureState.outlines, externalModelRequests: 0 }, steps,
+    unverifiedActions: ['U13.A01 real model streaming', 'U13.A02 provider reasoning qualification', 'U13.A03-U13.A07', 'U13.A09 real chapter view post-processing finalization pending/success/failure seal', 'release default and model quality'],
+    limitation: 'Renderer run history is in-memory and empty in a new process; durable main-generation candidates remain visible without reconstructing that list',
     failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
   const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u13-history-seals', runId, 'receipt.json'); fs.mkdirSync(path.dirname(receiptPath), { recursive: true }); fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2)); process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, receipt: receiptPath, steps: steps.map(step => step.stepId), testedSha })}\n`); if (failure) throw failure
 }

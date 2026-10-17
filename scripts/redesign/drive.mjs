@@ -43,8 +43,14 @@ const ROOT_NAMES = ['legacy', 'canonical', 'userData', 'home', 'appData', 'local
 const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS }
 /** 计时会话：先在同一隔离目录预启动一次写好外观（书房计时另建 20 部作品），再计之后那次冷启动。 */
 const TIMED_SESSIONS = new Set(['startup-timing', 'library-timing'])
+/** 空闲内存：与启动计时同样先预启动一次，第二次冷启动到可交互后静置，再按间隔采样全部进程的内存。 */
+const IDLE_SESSIONS = new Set(['idle-memory'])
+const PREPARED_SESSIONS = new Set([...TIMED_SESSIONS, ...IDLE_SESSIONS])
+const IDLE_SETTLE_MS = 10_000
+const IDLE_SAMPLES = 5
+const IDLE_SAMPLE_INTERVAL_MS = 1_000
 export const SHELF_BOOKS = 20
-const ALL_SCENARIOS = [...Object.keys(SCENARIOS), 'baseline-all', ...TIMED_SESSIONS]
+const ALL_SCENARIOS = [...Object.keys(SCENARIOS), 'baseline-all', ...PREPARED_SESSIONS]
 const USAGE = `用法: node scripts/redesign/drive.mjs --scenario <名称> [--theme light|dark] [--shell writer|stage] [--out <目录>] [--dump-dom] [--console] [--video] [--app-root <目录>]
 场景: ${ALL_SCENARIOS.join(', ')}`
 
@@ -251,19 +257,67 @@ async function launch({ roots, appRoot, fakeModelPort, diagnostics, failureBase,
 const invoke = (page, channel, ...args) =>
   page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 
+const APPEARANCE_V3_KEY = 'ai-novel-writer-appearance-v3'
+const APPEARANCE_PREVIOUS_KEY = 'ai-novel-writer-appearance'
+
 /**
- * 主题与外壳在同一次写入里改，只重载一次。shell 为 null 时不碰外壳偏好，旧外壳场景写入的内容与改动前相同。
- * 版本号与应用的 serializeAppearanceProfile 一致：只有新外壳写 v2，其余写 v1，trunk 也能读。
+ * 外观写到被测构建在读的那个键。RD-10 起只有 v3 键（只有浅色与深色，没有外壳偏好）；
+ * trunk 只有旧键，主题与外壳在同一次写入里改，shell 为 null 时不碰外壳偏好，版本号与它的 serializeAppearanceProfile 一致：
+ * 只有新外壳写 v2，其余写 v1。两个键都还没有时返回 null。
  */
-async function applyAppearance(page, { theme, shell }) {
-  await page.waitForFunction(() => localStorage.getItem('ai-novel-writer-appearance') !== null, null, { timeout: TIMEOUT })
-  await page.evaluate(({ colorTheme, shellPreference }) => {
-    const key = 'ai-novel-writer-appearance'
-    const current = JSON.parse(localStorage.getItem(key))
-    const next = { ...current, colorTheme, ...(shellPreference ? { shellPreference } : {}), revision: current.revision + 1, origin: 'author' }
-    next.schemaVersion = next.shellPreference === 'stage' ? 2 : 1
-    localStorage.setItem(key, JSON.stringify(next))
-  }, { colorTheme: theme, shellPreference: shell })
+export function appearanceWrite(stored, { theme, shell }) {
+  if (stored.v3 !== null) {
+    if (shell === 'writer') throw new Error('被测构建只有纸墨外壳，不能选 --shell writer')
+    const current = JSON.parse(stored.v3)
+    return { key: APPEARANCE_V3_KEY, value: { ...current, colorTheme: theme, revision: current.revision + 1, origin: 'author' } }
+  }
+  if (stored.previous === null) return null
+  const current = JSON.parse(stored.previous)
+  const value = { ...current, colorTheme: theme, ...(shell ? { shellPreference: shell } : {}), revision: current.revision + 1, origin: 'author' }
+  value.schemaVersion = value.shellPreference === 'stage' ? 2 : 1
+  return { key: APPEARANCE_PREVIOUS_KEY, value }
+}
+
+const median = values => {
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)
+}
+
+/**
+ * 空闲内存：每次采样是 app.getAppMetrics() 的全部进程，合计工作集与私有字节（KB，Windows 才有私有字节），
+ * 取各次合计的中位数；按进程类型的工作集也各取中位数。
+ */
+export function idleMemory(samples) {
+  if (samples.length === 0) throw new Error('空闲内存没有采样')
+  const total = (metrics, field) => metrics.reduce((sum, metric) => sum + (metric.memory[field] ?? 0), 0)
+  const types = [...new Set(samples.flatMap(metrics => metrics.map(metric => metric.type)))]
+  return {
+    samples: samples.length,
+    workingSetKB: median(samples.map(metrics => total(metrics, 'workingSetSize'))),
+    privateKB: median(samples.map(metrics => total(metrics, 'privateBytes'))),
+    byType: Object.fromEntries(types.map(type => [type,
+      median(samples.map(metrics => total(metrics.filter(metric => metric.type === type), 'workingSetSize')))])),
+  }
+}
+
+async function sampleIdleMemory(app) {
+  await delay(IDLE_SETTLE_MS)
+  const samples = []
+  for (let index = 0; index < IDLE_SAMPLES; index++) {
+    if (index > 0) await delay(IDLE_SAMPLE_INTERVAL_MS)
+    samples.push(await app.evaluate(({ app: electronApp }) => electronApp.getAppMetrics().map(({ type, memory }) => ({ type, memory }))))
+  }
+  return idleMemory(samples)
+}
+
+/** 改主题（trunk 上连同外壳偏好）后重载一次。 */
+async function applyAppearance(page, appearance) {
+  const keys = { v3: APPEARANCE_V3_KEY, previous: APPEARANCE_PREVIOUS_KEY }
+  await page.waitForFunction(({ v3, previous }) => localStorage.getItem(v3) !== null || localStorage.getItem(previous) !== null, keys, { timeout: TIMEOUT })
+  const stored = await page.evaluate(({ v3, previous }) => ({ v3: localStorage.getItem(v3), previous: localStorage.getItem(previous) }), keys)
+  const write = appearanceWrite(stored, appearance)
+  await page.evaluate(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), write)
   await page.reload()
   await waitForShell(page, TIMEOUT)
 }
@@ -370,12 +424,14 @@ async function runSession(sessionName, names, options) {
   try {
     const shelfBooks = sessionName === 'library-timing' ? SHELF_BOOKS : 0
     const failureBase = base(sessionName)
-    if (TIMED_SESSIONS.has(sessionName)) await prepareProfile({ roots, appRoot: options.appRoot, diagnostics, failureBase }, { theme: options.theme, shell }, shelfBooks)
+    if (PREPARED_SESSIONS.has(sessionName)) await prepareProfile({ roots, appRoot: options.appRoot, diagnostics, failureBase }, { theme: options.theme, shell }, shelfBooks)
     launched = await launch({ roots, appRoot: options.appRoot, fakeModelPort: fake?.port, diagnostics, failureBase, shelfBooks, renderTiming: TIMED_SESSIONS.has(sessionName) })
     shared.timing = launched.timing
     const shellShown = page => page.locator('[data-shell-presentation]').first().getAttribute('data-shell-presentation')
-    if (TIMED_SESSIONS.has(sessionName)) shared.shell = await shellShown(launched.page)
-    else {
+    if (PREPARED_SESSIONS.has(sessionName)) {
+      shared.shell = await shellShown(launched.page)
+      if (IDLE_SESSIONS.has(sessionName)) shared.memory = await sampleIdleMemory(launched.app)
+    } else {
       await applyAppearance(launched.page, { theme: options.theme, shell })
       shared.shell = await shellShown(launched.page)
       const context = {

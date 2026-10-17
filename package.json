@@ -19,7 +19,6 @@
     "check:i18n": "node scripts/check-i18n-coverage.mjs",
     "test": "vitest run",
     "test:browser": "vitest run --config vitest.browser.config.ts",
-    "test:renderer-surface:e2e": "node scripts/renderer-surface-e2e.mjs",
     "verify:drive": "node scripts/redesign/drive.mjs",
     "build": "tsc && vite build",
     "build:win": "pnpm run release:win:verify",

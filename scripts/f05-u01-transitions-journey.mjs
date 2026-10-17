@@ -9,6 +9,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as stage from './redesign/pages/stage.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const scriptPath = fileURLToPath(import.meta.url)
@@ -30,9 +31,9 @@ const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const priorPath = path.join(repository, '.runtime', '.cache', 'f05-u01-transitions', 'e0d1c6ed-4358-4840-98b1-155776f151a2', 'receipt.json')
 const runId = randomUUID()
 const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u01-transitions', runId, 'receipt.json')
-const screenshotPath = path.join(path.dirname(receiptPath), 'v3-shelf-1440x900.png')
+const screenshotPath = path.join(path.dirname(receiptPath), 'stage-shelf-1440x900.png')
 const nativePickerHelper = path.join(repository, 'scripts', 'f05-u16-native-picker.ps1')
-const deleteEntryScreenshotPath = path.join(path.dirname(receiptPath), 'v3-delete-entry-1440x900.png')
+const deleteEntryScreenshotPath = path.join(path.dirname(receiptPath), 'stage-delete-entry-1440x900.png')
 const scratch = path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Novel', `u01-${runId.slice(0, 8)}`)
 const roots = Object.fromEntries(['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'projects']
   .map(key => [key, path.join(scratch, key)]))
@@ -57,40 +58,25 @@ async function invoke(page, channel, ...args) {
     ])
   } finally { clearTimeout(timer) }
 }
-const writer = page => page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible', timeout: 30_000 })
+const productInputs = ['src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5']
 
+/** 安装包来源：打包之后产品输入没有再改（用例目录除外），两个哈希对得上。旧外壳时期的历史回执只记录，不再要求。 */
 function provenance() {
-  assert(fs.existsSync(priorPath), 'prior U01 receipt missing')
-  const prior = JSON.parse(fs.readFileSync(priorPath, 'utf8'))
-  assert.equal(prior.outcome, 'PARTIAL')
+  const prior = fs.existsSync(priorPath) ? JSON.parse(fs.readFileSync(priorPath, 'utf8')) : null
   const testedSha = packageSourceSha
+  assert.equal(git('rev-parse', `${testedSha}^{commit}`), testedSha, 'package source SHA is unavailable')
   const executionHead = git('rev-parse', 'HEAD')
   const changedPaths = git('diff', '--name-only', `${testedSha}..${executionHead}`).split('\n').filter(Boolean)
-  const packageInputChanges = git('diff', '--name-only', `${testedSha}..${executionHead}`, '--', 'src', 'electron', 'public', 'build',
-    'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5').split('\n').filter(Boolean)
-  const testOnlyChanges = new Set(['electron/migrations/__tests__/runner.test.ts',
-    'electron/services/__tests__/project-peek-readonly.test.ts', 'src/shared/__tests__/novel-contracts.test.ts'])
-  assert(packageInputChanges.every(file => testOnlyChanges.has(file)), 'product inputs changed since package source SHA')
-  const dirtyProductPaths = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build',
-    'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5').split('\n').filter(Boolean)
-  const deleteEntrySource = new Set(['src/components/pages/v2/WelcomePageV2.tsx',
-    'src/components/pages/v2/use-project-overview.tsx', 'src/components/panels/sidebar/HomeSidebarPanel.tsx',
-    'src/styles/redesign/v3-magazine.css', 'src/components/project-delete-action.ts',
-    'src/components/pages/v2/__tests__/writer-project-overview.browser.tsx'])
-  assert(dirtyProductPaths.every(line => deleteEntrySource.has(line.slice(3))
-    || /^\?\? src\/components\/(?:dialogs|editor|layout\/v2|panels|pages\/v2)\/__tests__\/__screenshots__\/$/.test(line)),
-  'Product inputs changed beyond the frozen delete-entry patch and test screenshots')
+  assert.equal(git('diff', '--name-only', `${testedSha}..${executionHead}`, '--', ...productInputs), '', 'product inputs changed since package source SHA')
+  const dirtyProductPaths = git('status', '--porcelain', '--', ...productInputs).split('\n').filter(Boolean)
+  assert.deepEqual(dirtyProductPaths.filter(line => !/src\/.*\/__tests__\//.test(line)), [], 'dirty product inputs since package build')
   assert.equal(hash(executablePath), expectedExe)
   assert.equal(hash(asarPath), expectedAsar)
-  const priorOwnerChanges = git('diff', '--name-only', `${prior.testedSha}..${testedSha}`, '--', 'src/stores/project-store.ts',
-    'src/services/project-transition.ts', 'src/stores/editor-store.ts', 'electron/controllers/project-controller.ts').split('\n').filter(Boolean)
   return { testedSha, executionHead, changedPaths, dirtyProductPaths,
-    packageSourceNote: dirtyProductPaths.some(line => deleteEntrySource.has(line.slice(3)))
-      ? 'Package base commit plus uncommitted delete-entry patch; exe and asar hashes identify the tested artifact'
-      : 'Package built from the tested source commit; exe and asar hashes identify the tested artifact',
+    packageSourceNote: 'Package built from the tested source commit; exe and asar hashes identify the tested artifact',
     artifactHashes: { executable: hash(executablePath), asar: hash(asarPath) },
-    priorReceipt: { path: priorPath, sha256: hash(priorPath), testedSha: prior.testedSha, ownerChanges: priorOwnerChanges },
-    reuseReason: 'Old Writer UI is not reused; current V3 shell is exercised. Prior core proof is bounded by owner changes, including project-store.' }
+    priorReceipt: prior ? { path: priorPath, sha256: hash(priorPath), testedSha: prior.testedSha, reused: false } : null,
+    reuseReason: 'The paper-ink stage shell is exercised end to end; no prior receipt is reused.' }
 }
 
 async function launch(fixturePort) {
@@ -110,7 +96,7 @@ async function launch(fixturePort) {
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(12_000)
   assert.equal(path.resolve(await app.evaluate(({ app }) => app.getPath('userData'))), roots.userData)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  await stage.waitForStage(page)
   return { app, page }
 }
 
@@ -122,22 +108,30 @@ async function quit(app) {
     { code: 0, signal: null })
 }
 
+/* 纸墨外壳的书房：开始一栏有「新建作品」「打开作品」；书架上点封面只预览，概览里的「打开《书名》」才打开；当前作品在书房里仍是当前作品。 */
 async function home(page) {
-  await writer(page)
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) {
-    await notice.getByRole('button', { name: '知道了', exact: true }).click()
-    await notice.waitFor({ state: 'detached' })
-  }
-  if (!await page.locator('.writer-welcome').isVisible()) await page.locator('.writer-left-rail button[title="欢迎页"]').click()
-  await page.locator('.writer-shelf').waitFor({ state: 'visible' })
+  await stage.waitForStage(page)
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
 }
-
 async function open(page, name) {
   await home(page)
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${name}》` }).click()
-  await page.locator('.writer-project-tree').getByText(name, { exact: true }).waitFor({ state: 'visible' })
+  await stage.openFromLibrary(page, name)
+  await stage.waitForWork(page, name)
 }
+/** 预览这本书，再点概览里的「打开《书名》」；当前作品有未保存的修改时，随后出现处理未保存内容的确认。 */
+async function requestOpen(page, name) {
+  await home(page)
+  await stage.previewBook(page, name)
+  await stage.overview(page, name).getByRole('button', { name: `打开《${name}》`, exact: true }).click()
+}
+/** 书房里用书的更多操作「回到作品」回到当前作品。 */
+async function backToWork(page, name) {
+  await home(page)
+  await stage.bookMenu(page, name, '回到作品')
+  await stage.waitForWork(page, name)
+}
+const savedState = (page, label) => stage.saveStatus(page).filter({ hasText: new RegExp(`^${label}$`) })
 function chooseNativeFile(target, title = '选择作者原稿文件') {
   const result = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', nativePickerHelper,
     '-Target', target, '-ExpectedExe', executablePath, '-DialogTitle', title],
@@ -168,12 +162,13 @@ function verifyNativeProjectGrants(calls) {
     return { purpose, senderId: choice.senderId, opaqueGrant: true, consumerMatched: true, projectId }
   })
 }
+/** 设定页的核心大纲是旧「小说配置」的创作想法；第 1 章正文在流程脊章节列表里打开。 */
 async function assertProjectFacts(page, projectPath, config, body) {
   assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projectPath)
-  await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
-  assert.equal(await page.getByPlaceholder('在此输入你的创作想法，或让 AI 根据这段话一键生成全部配置...').inputValue(), config)
-  await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-  assert.equal(await editorBody(page.locator('.cm-content[contenteditable="true"]')), body)
+  await stage.stageButton(page, '设定').click()
+  assert.equal(await stage.setupOutline(page).inputValue(), config)
+  await stage.openChapter(page, 1)
+  assert.equal(await editorBody(stage.prose(page)), body)
   const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
   try {
     assert.equal(db.prepare("SELECT core_outline FROM project_core WHERE id = 'main'").get().core_outline, config)
@@ -182,20 +177,20 @@ async function assertProjectFacts(page, projectPath, config, body) {
 }
 
 async function edit(page, marker) {
-  await writer(page)
-  await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
-  const field = page.getByPlaceholder('在此输入你的创作想法，或让 AI 根据这段话一键生成全部配置...')
+  await stage.waitForStage(page)
+  await stage.stageButton(page, '设定').click()
+  const field = stage.setupOutline(page)
   await field.fill(marker)
   assert.equal(await field.inputValue(), marker)
-  await page.getByText('未保存', { exact: true }).first().waitFor({ state: 'visible', timeout: 10_000 })
+  await savedState(page, '未保存').waitFor({ state: 'visible', timeout: 10_000 })
 }
 
 async function decision(page, save, discard) {
-  const first = page.getByRole('dialog').filter({ hasText: '处理未保存内容' })
+  const first = page.getByRole('dialog', { name: '处理未保存内容' })
   await first.waitFor({ state: 'visible' })
   await first.getByRole('button', { name: save ? '保存并继续' : '其他选项' }).click()
   if (!save) {
-    const second = page.getByRole('dialog').filter({ hasText: '放弃未保存内容' })
+    const second = page.getByRole('dialog', { name: '放弃未保存内容' })
     await second.waitFor({ state: 'visible' })
     await second.getByRole('button', { name: discard ? '放弃并继续' : '取消' }).click()
   }
@@ -216,7 +211,7 @@ async function main() {
   fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'codex/f05-u01',
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 72,
     cleanupCommand: `Remove-Item -LiteralPath '${scratch}' -Recurse -Force`,
-    retainReason: 'Synthetic Writer project transition receipt' }, null, 2))
+    retainReason: 'Synthetic stage project transition receipt' }, null, 2))
   let session
   let shelfScreenshot
   let deleteEntryScreenshot
@@ -289,15 +284,10 @@ async function main() {
     const coreOutline = () => dbA.prepare("SELECT core_outline FROM project_core WHERE id = 'main'").get().core_outline
     const projectFile = path.join(projects.a, '.ai-novel', 'project.json')
     const initialCore = coreOutline()
-    await session.page.evaluate(key => {
-      const previous = JSON.parse(localStorage.getItem(key) ?? '{}')
-      localStorage.setItem(key, JSON.stringify({ ...previous, shellPreference: 'writer', revision: Number(previous.revision ?? 0) + 1, origin: 'author' }))
-    }, 'ai-novel-writer-appearance')
     await quit(session.app)
     session = await launch(fixturePort)
     const { page } = session
     page.on('console', message => rendererLogs.push(message.text()))
-    await writer(page)
     const shelfWindow = await session.app.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0]
       window.setContentSize(1440, 900)
@@ -305,6 +295,8 @@ async function main() {
       return { windowSize: window.getSize(), contentSize: window.getContentSize(), zoomFactor: window.webContents.getZoomFactor() }
     })
     await home(page)
+    await stage.cover(page, names.a).waitFor({ state: 'visible' })
+    await stage.cover(page, names.b).waitFor({ state: 'visible' })
     const shelfPng = await page.screenshot({ path: screenshotPath })
     shelfScreenshot = { path: screenshotPath, sha256: hash(screenshotPath),
       pixels: [shelfPng.readUInt32BE(16), shelfPng.readUInt32BE(20)], ...shelfWindow,
@@ -338,9 +330,9 @@ async function main() {
       const beforeA = dbFacts(aDbPath)
       const beforeB = dbFacts(bDbPath)
       const bProjectHash = hash(path.join(projects.b, '.ai-novel', 'project.json'))
+      // 纸墨外壳里小说拆解在作品菜单的「小说拆解与仿写…」，打开的是同一个导入对话框。
       const openAuthorDialog = async () => {
-        await home(page)
-        await page.getByRole('button', { name: '小说拆解', exact: true }).click()
+        await stage.openWorkMenuItem(page, names.a, '小说拆解与仿写…')
         const dialog = page.getByRole('dialog')
         await dialog.getByTestId('import-purpose-author').click()
         assert.equal(await dialog.getByTestId('import-current-project-name').textContent(), `当前项目：${names.a}`)
@@ -353,7 +345,7 @@ async function main() {
       await dialog.waitFor({ state: 'hidden' })
       assert.deepEqual(dbFacts(aDbPath), beforeA)
       assert.deepEqual(dbFacts(bDbPath), beforeB)
-      pass('v3-author-import-cancel', 'U01.A10', 'V3 author-import dialog cancellation writes neither current A nor unrelated B')
+      pass('stage-author-import-cancel', 'U01.A10', 'author-import dialog from the work menu cancels without writing current A or unrelated B')
 
       currentStep = 'U01.A10-invalid-source'
       dialog = await openAuthorDialog()
@@ -363,7 +355,7 @@ async function main() {
       assert.deepEqual(dbFacts(aDbPath), beforeA)
       assert.deepEqual(dbFacts(bDbPath), beforeB)
       assert.equal(hash(invalidFile), invalidSha)
-      pass('v3-author-import-invalid-source', 'U01.A10', 'native-selected title-only source is rejected visibly without creating a run or changing A/B')
+      pass('stage-author-import-invalid-source', 'U01.A10', 'native-selected title-only source is rejected visibly without creating a run or changing A/B')
 
       currentStep = 'U01.A10-author-preview'
       await dialog.getByTestId('import-source-choose').click()
@@ -374,7 +366,7 @@ async function main() {
       assert.deepEqual(dbFacts(aDbPath), beforeA, 'author preview wrote A before confirmation')
       assert.deepEqual(dbFacts(bDbPath), beforeB)
       assert.equal(hash(sourceFile), originalSha)
-      pass('v3-author-native-picker-preview', 'U01.A10', 'V3 native picker selects exact synthetic source; visible authoritative preview leaves SQLite unchanged until confirmation')
+      pass('stage-author-native-picker-preview', 'U01.A10', 'native picker selects exact synthetic source; visible authoritative preview leaves SQLite unchanged until confirmation')
 
       currentStep = 'U01.A10-author-commit'
       await dialog.getByRole('button', { name: '确认导入（1 章）' }).click()
@@ -404,7 +396,7 @@ async function main() {
       assert.equal(hash(path.join(projects.b, '.ai-novel', 'project.json')), bProjectHash)
       assert.equal(hash(sourceFile), originalSha)
       assert.equal(hash(invalidFile), invalidSha)
-      pass('v3-author-import-committed', 'U01.A10', 'V3 confirmation completes import run, creates exact v2 finalized body and published file, preserves v1, B and original bytes')
+      pass('stage-author-import-committed', 'U01.A10', 'confirmation completes the import run, creates the exact v2 finalized body and published file, preserves v1, B and original bytes')
 
       currentStep = 'U01.A10-duplicate'
       dialog = await openAuthorDialog()
@@ -418,14 +410,14 @@ async function main() {
       assert.deepEqual(dbFacts(aDbPath), committedA)
       assert.deepEqual(dbFacts(bDbPath), beforeB)
       assert.equal(hash(sourceFile), originalSha)
-      pass('v3-author-import-exact-duplicate', 'U01.A10', 'same source visibly classified as identical and confirmation creates no run, draft or publication')
+      pass('stage-author-import-exact-duplicate', 'U01.A10', 'same source visibly classified as identical and confirmation creates no run, draft or publication')
 
       await quit(session.app)
       session = null
       assert.equal(hash(scriptPath), driverSha256)
       assert.deepEqual(provenance().artifactHashes, source.artifactHashes)
-      const receipt = { outcome: 'PARTIAL', qualification: 'F05_U01_V3_A10_ONLY', evidenceLevel: 'electron',
-        shell: 'writer-v3', ...source, driverSha256, releaseDefaultQualified: false, physicalModelRequests: 0,
+      const receipt = { outcome: 'PARTIAL', qualification: 'F05_U01_STAGE_A10_ONLY', evidenceLevel: 'electron',
+        shell: 'stage', ...source, driverSha256, releaseDefaultQualified: false, physicalModelRequests: 0,
         nativePickerHelperSha256: hash(nativePickerHelper), modelFixture: { kind: 'intercepted-main-fetch-to-loopback-SSE',
           physicalExternalRequests: 0, requests: modelRequests }, pickerEvidence: { invalid: invalidPickerEvidence,
           source: pickerEvidence, duplicate: duplicatePickerEvidence }, sourceFiles: [{ path: sourceFile, sha256: originalSha },
@@ -457,9 +449,10 @@ async function main() {
       }
     })
     currentStep = 'U01.A01'
-    await page.getByRole('button', { name: '新建作品', exact: true }).click()
-    const createDialog = page.getByRole('dialog', { name: '新建小说项目' })
-    await createDialog.getByPlaceholder('如：斗破苍穹').fill(names.c)
+    await home(page)
+    await stage.root(page).getByRole('button', { name: '新建作品', exact: true }).click()
+    const createDialog = page.getByRole('dialog', { name: '新建作品' })
+    await createDialog.getByLabel('作品名', { exact: true }).fill(names.c)
     if (!nativePickerOnly) await session.app.evaluate(({ dialog }, selectedPath) => {
       globalThis.__u01PickerOriginal = dialog.showOpenDialog
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
@@ -467,17 +460,18 @@ async function main() {
     try {
       await createDialog.getByRole('button', { name: '选择', exact: true }).click()
       if (nativePickerOnly) nativePickerEvidence.push(chooseNativeFile(roots.projects, '选择项目保存位置'))
-      await page.waitForFunction(displayName => document.querySelector('input[placeholder="选择项目保存目录"]')?.value === displayName,
-        path.basename(roots.projects))
+      const location = createDialog.getByLabel('保存位置', { exact: true })
+      await page.waitForFunction(({ id, displayName }) => document.getElementById(id)?.value === displayName,
+        { id: await location.getAttribute('id'), displayName: path.basename(roots.projects) })
     } finally {
       if (!nativePickerOnly) await session.app.evaluate(({ dialog }) => {
         dialog.showOpenDialog = globalThis.__u01PickerOriginal
         delete globalThis.__u01PickerOriginal
       })
     }
-    await createDialog.getByRole('button', { name: '创建项目', exact: true }).click()
+    await createDialog.getByRole('button', { name: '创建作品', exact: true }).click()
     const expectedC = path.join(roots.projects, names.c)
-    await page.locator('.writer-project-tree').getByText(names.c, { exact: true }).waitFor({ state: 'visible' })
+    await stage.waitForWork(page, names.c)
     projects.c = (await invoke(page, 'project:get-runtime-context')).activeProjectPath
     assert.equal(projects.c.toLowerCase(), expectedC.toLowerCase(), 'new project opened outside the isolated root')
     const dbC = new Database(path.join(projects.c, '.ai-novel', 'project.db'), { fileMustExist: true })
@@ -485,7 +479,7 @@ async function main() {
     assert.equal(cCore.project_name, names.c)
     cFile = hash(path.join(projects.c, '.ai-novel', 'project.json'))
     dbC.close()
-    pass('v3-create-project', 'U01.A01', 'V3 new-work dialog creates C, binds C in renderer and main, and initializes its SQLite project')
+    pass('stage-create-project', 'U01.A01', 'the library 新建作品 dialog creates C, binds C in renderer and main, and initializes its SQLite project')
 
     currentStep = 'U01.A02'
     await home(page)
@@ -494,9 +488,9 @@ async function main() {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
     }, projects.a)
     try {
-      await page.getByRole('button', { name: '打开作品', exact: true }).click()
+      await stage.root(page).getByRole('button', { name: '打开作品', exact: true }).click()
       if (nativePickerOnly) nativePickerEvidence.push(chooseNativeFile(projects.a, '选择项目目录'))
-      await page.locator('.writer-project-tree').getByText(names.a, { exact: true }).waitFor({ state: 'visible' })
+      await stage.waitForWork(page, names.a)
     } finally {
       if (!nativePickerOnly) await session.app.evaluate(({ dialog }) => {
         dialog.showOpenDialog = globalThis.__u01PickerOriginal
@@ -508,7 +502,7 @@ async function main() {
     try { assert.deepEqual(reopenedC.prepare("SELECT project_name, core_outline FROM project_core WHERE id = 'main'").get(), cCore) }
     finally { reopenedC.close() }
     assert.equal(hash(path.join(projects.c, '.ai-novel', 'project.json')), cFile, 'opening A rewrote C project file')
-    pass('v3-open-project', 'U01.A02', `V3 Open project action uses a ${nativePickerOnly ? 'native OS' : 'controlled'} folder choice and binds A without writing C`)
+    pass('stage-open-project', 'U01.A02', `the library 打开作品 action uses a ${nativePickerOnly ? 'native OS' : 'controlled'} folder choice and binds A without writing C`)
 
     if (nativePickerOnly) {
       const grants = verifyNativeProjectGrants(await session.app.evaluate(() => globalThis.__u01NativeCalls))
@@ -526,7 +520,7 @@ async function main() {
       assert.equal(hash(scriptPath), driverSha256)
       assert.deepEqual(provenance().artifactHashes, source.artifactHashes)
       const receipt = { outcome: 'PARTIAL', sliceOutcome: 'PASS', qualification: 'F05_U01_NATIVE_A01_A02_ONLY',
-        evidenceLevel: 'native-os-picker', shell: 'writer-v3', ...source, driverSha256,
+        evidenceLevel: 'native-os-picker', shell: 'stage', ...source, driverSha256,
         nativePickerHelperSha256: hash(nativePickerHelper), nativePickerEvidence, nativeProcessEvidence, grants, steps,
         verifiedActions: ['U01.A01', 'U01.A02'], physicalModelRequests: 0, releaseDefaultQualified: false,
         pickerFixture: 'Setup projects use controlled choices; qualified A01/A02 use untouched OS dialogs and original IPC handlers',
@@ -538,73 +532,65 @@ async function main() {
 
     currentStep = 'U01.A03'
     const aFileBeforeRecent = hash(projectFile)
-    await home(page)
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${names.b}》` }).click()
-    await page.locator('.writer-project-tree').getByText(names.b, { exact: true }).waitFor({ state: 'visible' })
+    await requestOpen(page, names.b)
+    await stage.waitForWork(page, names.b)
     await assertProjectFacts(page, projects.b, fixtureConfig.b, fixtureBody.b)
     assert.equal(coreOutline(), fixtureConfig.a)
     assert.equal(hash(projectFile), aFileBeforeRecent, 'recent B entry rewrote A project file')
-    pass('v3-recent-project-entry', 'U01.A03', 'V3 recent-work Enter button binds B without writing A')
+    pass('stage-recent-project-entry', 'U01.A03', 'the shelf preview and its 打开《B》 button bind B without writing A')
 
     currentStep = 'U01.A04'
     await home(page)
-    await page.locator('.writer-shelf').getByRole('button', { name: `预览《${names.a}》` }).click()
-    await page.locator('.writer-welcome-heading h1').getByText(names.a, { exact: true }).waitFor({ state: 'visible' })
-    assert.equal(await page.getByRole('region', { name: '作品概览' }).locator('blockquote').count(), 0, 'read-only preview exposed draft body')
+    await stage.previewBook(page, names.a)
+    const previewA = stage.overview(page, names.a)
+    assert.equal(await previewA.getByRole('button', { name: `打开《${names.a}》`, exact: true }).isVisible(), true)
     assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projects.b, 'preview switched the active project')
     assert.equal(coreOutline(), fixtureConfig.a, 'preview changed A configuration')
     assert.equal(hash(projectFile), aFileBeforeRecent, 'preview rewrote A project file')
-    await page.locator('.writer-shelf').getByRole('button', { name: `预览《${names.a}》` }).click()
-    await page.locator('.writer-project-tree').getByText(names.a, { exact: true }).waitFor({ state: 'visible' })
+    await previewA.getByRole('button', { name: `打开《${names.a}》`, exact: true }).click()
+    await stage.waitForWork(page, names.a)
     await assertProjectFacts(page, projects.a, fixtureConfig.a, fixtureBody.a)
-    pass('v3-preview-then-enter', 'U01.A04', 'V3 first cover click previews A without switching or writing; second click enters A')
-
-    await open(page, names.a)
-    assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projects.a)
+    pass('stage-preview-then-enter', 'U01.A04', 'a cover click previews A read-only without switching or writing; the overview 打开《A》 button enters A')
 
     currentStep = 'U01.A07'
     const cancelMarker = `取消保留 ${runId}`
     await edit(page, cancelMarker)
-    await home(page)
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${names.b}》` }).click()
+    await requestOpen(page, names.b)
     await decision(page, false, false)
     assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projects.a)
     assert.equal(coreOutline(), initialCore, 'cancel wrote A configuration')
-    await page.locator('.writer-left-rail button[title="项目"]').click()
-    await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
-    assert.equal(await page.getByPlaceholder('在此输入你的创作想法，或让 AI 根据这段话一键生成全部配置...').inputValue(), cancelMarker)
-    await page.getByText('未保存', { exact: true }).first().waitFor({ state: 'visible' })
-    pass('writer-cancel-retains-dirty', 'U01.A07', 'Second confirmation cancellation keeps A active and the author config edit visible')
+    await backToWork(page, names.a)
+    await stage.stageButton(page, '设定').click()
+    assert.equal(await stage.setupOutline(page).inputValue(), cancelMarker)
+    await savedState(page, '未保存').waitFor({ state: 'visible' })
+    pass('stage-cancel-retains-dirty', 'U01.A07', 'second confirmation cancellation keeps A active and the setup outline edit visible and unsaved')
 
     currentStep = 'U01.A05'
-    await home(page)
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${names.b}》` }).click()
+    await requestOpen(page, names.b)
     await decision(page, true)
-    await page.locator('.writer-project-tree').getByText(names.b, { exact: true }).waitFor({ state: 'visible' })
+    await stage.waitForWork(page, names.b)
     assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projects.b)
     assert.equal(coreOutline(), cancelMarker, 'save-before-switch did not persist A configuration')
-    pass('writer-save-before-switch', 'U01.A05', 'Writer save confirmation persists A config and binds B main current session')
+    pass('stage-save-before-switch', 'U01.A05', 'save confirmation persists the A setup outline and binds B in the main process')
 
     currentStep = 'U01.A11'
     await open(page, names.a)
-    const saved = page.getByPlaceholder('在此输入你的创作想法，或让 AI 根据这段话一键生成全部配置...')
-    await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
-    assert.equal(await saved.inputValue(), cancelMarker)
-    pass('writer-reopen-saved-project', 'U01.A11', 'Reopen A in Writer retains persisted config after the intervening B session')
+    await stage.stageButton(page, '设定').click()
+    assert.equal(await stage.setupOutline(page).inputValue(), cancelMarker)
+    pass('stage-reopen-saved-project', 'U01.A11', 'reopening A keeps the persisted setup outline after the intervening B session')
 
     currentStep = 'U01.A06'
     const discardMarker = `放弃内容 ${runId}`
     await edit(page, discardMarker)
-    await home(page)
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${names.b}》` }).click()
+    await requestOpen(page, names.b)
     await decision(page, false, true)
-    await page.locator('.writer-project-tree').getByText(names.b, { exact: true }).waitFor({ state: 'visible' })
+    await stage.waitForWork(page, names.b)
     assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projects.b)
     assert.equal(coreOutline(), cancelMarker, 'discard changed A persisted configuration')
     await open(page, names.a)
-    await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
-    assert.equal(await saved.inputValue(), cancelMarker)
-    pass('writer-discard-before-switch', 'U01.A06', 'Writer discard confirmation switches to B; reopening A shows saved content, not discarded draft')
+    await stage.stageButton(page, '设定').click()
+    assert.equal(await stage.setupOutline(page).inputValue(), cancelMarker)
+    pass('stage-discard-before-switch', 'U01.A06', 'discard confirmation switches to B; reopening A shows the saved outline, not the discarded draft')
 
     currentStep = 'U01.A08'
     const failedMarker = `失败保留 ${runId}`
@@ -612,10 +598,9 @@ async function main() {
     const beforeFailureFile = hash(projectFile)
     dbA.exec("CREATE TRIGGER u01_fail_core BEFORE UPDATE ON project_core BEGIN SELECT RAISE(ABORT, 'U01_INJECTED_SAVE_FAILURE'); END")
     try {
-      await home(page)
-      await page.locator('.writer-shelf').getByRole('button', { name: `打开《${names.b}》` }).click()
+      await requestOpen(page, names.b)
       await decision(page, true)
-      await page.getByRole('dialog').filter({ hasText: '处理未保存内容' }).waitFor({ state: 'hidden' })
+      await page.getByRole('dialog', { name: '处理未保存内容' }).waitFor({ state: 'hidden' })
       const saveError = page.getByRole('alertdialog', { name: '打开项目异常' })
       await saveError.waitFor({ state: 'visible' })
       assert((await saveError.innerText()).includes('项目配置未能写入磁盘'), 'save failure was not visible to the author')
@@ -625,22 +610,20 @@ async function main() {
         'failed save switched the main-process project')
       assert.equal(coreOutline(), cancelMarker, 'failed save changed A persisted configuration')
       assert.equal(hash(projectFile), beforeFailureFile, 'failed save changed A project file')
-      await page.locator('.writer-left-rail button[title="项目"]').click()
-      await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
-      assert.equal(await saved.inputValue(), failedMarker, 'failed save lost A author draft ledger')
-      await page.getByText('保存失败', { exact: true }).first().waitFor({ state: 'visible' })
-      assert(await page.locator('.writer-topbar [title="有未保存的修改"]').isVisible(), 'failed transition save cleared A dirty state')
-      pass('v3-failed-save-stays-on-a', 'U01.A08', 'failed V3 save leaves A active, persisted config and project file unchanged, and author draft dirty')
+      await backToWork(page, names.a)
+      await stage.stageButton(page, '设定').click()
+      assert.equal(await stage.setupOutline(page).inputValue(), failedMarker, 'failed save lost A author draft ledger')
+      await savedState(page, '未保存').waitFor({ state: 'visible' })
+      pass('stage-failed-save-stays-on-a', 'U01.A08', 'a failed save shows the error, leaves A active with persisted config and project file unchanged, and keeps the outline edit unsaved')
     } finally { dbA.exec('DROP TRIGGER IF EXISTS u01_fail_core') }
 
     currentStep = 'U01.A08-retry'
-    await home(page)
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${names.b}》` }).click()
+    await requestOpen(page, names.b)
     await decision(page, true)
-    await page.locator('.writer-project-tree').getByText(names.b, { exact: true }).waitFor({ state: 'visible' })
+    await stage.waitForWork(page, names.b)
     assert.equal(coreOutline(), failedMarker, 'save retry did not persist the retained author edit')
     expectedAConfig = failedMarker
-    pass('v3-failed-save-retry', 'U01.A08', 'retry saved the retained author edit and switched to B')
+    pass('stage-failed-save-retry', 'U01.A08', 'retry saved the retained outline edit and switched to B')
     dbA.close()
 
     currentStep = 'U01.A09'
@@ -661,26 +644,34 @@ async function main() {
         return result
       })
     }, projects.a)
+    // 回包要等后面的步骤做完才读；先挂一个空的 catch，超时时由下面的 await 抛出，不让进程因未处理的拒绝退出。
+    const openReply = () => {
+      const reply = page.waitForEvent('console', { timeout: 30_000,
+        predicate: message => message.text().includes('[ipc-client.invoke] 调用完成: project:open') })
+      reply.catch(() => {})
+      return reply
+    }
     try {
-      await home(page)
-      await page.locator('.writer-shelf').getByRole('button', { name: `打开《${names.a}》` }).click()
+      await requestOpen(page, names.a)
       await waitForOpenGate(session.app, 'aHeld')
       assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projects.a,
         'held A open did not commit in main process')
-      const newerReply = page.waitForEvent('console', { predicate: message => message.text().includes('[ipc-client.invoke] 调用完成: project:open') })
-      await page.locator('.writer-shelf').getByRole('button', { name: `打开《${names.b}》` }).click()
+      // A 还没回包时 B 仍是当前作品；书房里当前作品的按钮是「继续写作」，不会再打开一次，所以从 Ctrl K 重新打开 B，发出更新的打开请求。
+      const newerReply = openReply()
+      await stage.openFromPalette(page, names.b)
       await waitForOpenGate(session.app, 'bCommitted')
       await newerReply
       assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projects.b,
         'newer B open did not restore main process to B')
-      const lateReply = page.waitForEvent('console', { predicate: message => message.text().includes('[ipc-client.invoke] 调用完成: project:open') })
+      const lateReply = openReply()
       await session.app.evaluate(() => globalThis.__u01OpenGate.release())
       await lateReply
-      await page.locator('.writer-project-tree').getByText(names.b, { exact: true }).waitFor({ state: 'visible' })
+      await stage.waitForWork(page, names.b)
       assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projects.b)
       await edit(page, bMarker)
-      await page.getByRole('heading', { name: '小说配置' }).locator('xpath=../..').getByRole('button', { name: '保存', exact: true }).click()
-      await page.getByText('已保存', { exact: true }).first().waitFor({ state: 'visible' })
+      await stage.setupOutline(page).click()
+      await page.keyboard.press('ControlOrMeta+s')
+      await savedState(page, '已保存').waitFor({ state: 'visible' })
       const dbB = new Database(path.join(projects.b, '.ai-novel', 'project.db'), { fileMustExist: true })
       try {
         assert.equal(dbB.prepare("SELECT core_outline FROM project_core WHERE id = 'main'").get().core_outline, bMarker)
@@ -690,7 +681,7 @@ async function main() {
       try {
         assert.equal(verifyA.prepare("SELECT core_outline FROM project_core WHERE id = 'main'").get().core_outline, failedMarker)
       } finally { verifyA.close() }
-      pass('v3-late-open-response-isolated', 'U01.A09', 'observed old A IPC reply after newer B reply; V3 stayed on B and a subsequent edit persisted only to B')
+      pass('stage-late-open-response-isolated', 'U01.A09', 'observed the old A IPC reply after the newer B reply; the stage stayed on B and a subsequent edit persisted only to B')
     } finally {
       await session.app.evaluate(({ ipcMain }) => {
         const gate = globalThis.__u01OpenGate
@@ -707,7 +698,6 @@ async function main() {
 
     currentStep = 'U01.A11-new-process'
     session = await launch()
-    await writer(session.page)
     await open(session.page, names.b)
     await assertProjectFacts(session.page, projects.b, bMarker, fixtureBody.b)
     const verifyOldA = new Database(path.join(projects.a, '.ai-novel', 'project.db'), { fileMustExist: true })
@@ -715,25 +705,24 @@ async function main() {
       assert.equal(verifyOldA.prepare("SELECT core_outline FROM project_core WHERE id = 'main'").get().core_outline, failedMarker)
       assert.equal(verifyOldA.prepare('SELECT contents.body FROM drafts JOIN contents ON contents.id = drafts.content_id WHERE drafts.chapter_number = 1').get().body, fixtureBody.a)
     } finally { verifyOldA.close() }
-    pass('v3-new-process-reopen', 'U01.A11', 'new installed process reopened B with exact saved config and draft body while old A remained unchanged')
+    pass('stage-new-process-reopen', 'U01.A11', 'a new installed process reopened B with the exact saved outline and draft body while old A remained unchanged')
     } else {
       currentStep = 'U01.A12-setup'
       dbA.close()
-      assert(await page.getByRole('button', { name: '新建作品', exact: true }).isVisible())
-      assert(await page.getByRole('button', { name: '打开作品', exact: true }).isVisible())
+      await home(page)
+      assert(await stage.root(page).getByRole('button', { name: '新建作品', exact: true }).isVisible())
+      assert(await stage.root(page).getByRole('button', { name: '打开作品', exact: true }).isVisible())
       const aFileBeforeShelf = hash(projectFile)
-      const previewA = page.locator('.writer-shelf').getByRole('button', { name: `预览《${names.a}》` })
-      await previewA.click()
-      await page.locator('.writer-welcome-heading h1').getByText(names.a, { exact: true }).waitFor({ state: 'visible' })
+      await stage.previewBook(page, names.a)
       assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, null)
-      await previewA.click()
-      await page.locator('.writer-project-tree').getByText(names.a, { exact: true }).waitFor({ state: 'visible' })
+      await stage.overview(page, names.a).getByRole('button', { name: `打开《${names.a}》`, exact: true }).click()
+      await stage.waitForWork(page, names.a)
       await assertProjectFacts(page, projects.a, fixtureConfig.a, fixtureBody.a)
-      pass('v3-delete-entry-shelf-preview', 'U01.A04', 'new package V3 shelf previews A read-only, then opens A with exact configuration and draft')
+      pass('stage-delete-entry-shelf-preview', 'U01.A04', 'the shelf previews A read-only without opening it, then 打开《A》 opens A with its exact outline and draft')
       await open(page, names.b)
       await assertProjectFacts(page, projects.b, expectedBConfig, fixtureBody.b)
       assert.equal(hash(projectFile), aFileBeforeShelf, 'recent B entry rewrote A')
-      pass('v3-delete-entry-recent-open', 'U01.A03', 'new package V3 recent-work entry opens B without writing A; new/open controls remain visible')
+      pass('stage-delete-entry-recent-open', 'U01.A03', 'the shelf opens B without writing A; 新建作品 and 打开作品 remain visible')
     }
 
     currentStep = 'U01.A12'
@@ -751,9 +740,16 @@ async function main() {
       window.webContents.setZoomFactor(1)
       return { windowSize: window.getSize(), contentSize: window.getContentSize(), zoomFactor: window.webContents.getZoomFactor() }
     })
-    await session.page.locator('.writer-left-rail button[title="欢迎页"]').click()
-    const deleteEntryButton = session.page.getByRole('region', { name: '作品概览' }).getByRole('button', { name: '删除项目' })
-    await deleteEntryButton.waitFor({ state: 'visible' })
+    // 纸墨书房里删除作品在当前作品封面的更多操作里，确认时要输入作品名。
+    const deleteDialog = session.page.getByRole('dialog', { name: `删除《${names.b}》？` })
+    const requestDelete = async () => {
+      await home(session.page)
+      await stage.shelf(session.page).getByRole('button', { name: `《${names.b}》更多操作` }).click()
+      const item = session.page.getByRole('menuitem', { name: '删除作品…' })
+      await item.waitFor({ state: 'visible' })
+      return item
+    }
+    const deleteItem = await requestDelete()
     const deleteEntryPng = await session.page.screenshot({ path: deleteEntryScreenshotPath })
     deleteEntryScreenshot = { path: deleteEntryScreenshotPath, sha256: hash(deleteEntryScreenshotPath),
       pixels: [deleteEntryPng.readUInt32BE(16), deleteEntryPng.readUInt32BE(20)], ...deleteEntryWindow,
@@ -761,19 +757,21 @@ async function main() {
     assert.deepEqual(deleteEntryScreenshot.pixels, [1440, 900])
     assert.deepEqual(deleteEntryWindow.contentSize, [1440, 900])
     assert.equal(deleteEntryWindow.zoomFactor, 1)
-    await deleteEntryButton.click()
-    const deleteDialog = session.page.getByRole('dialog').filter({ hasText: `确认删除项目「${names.b}」` })
+    await deleteItem.click()
     await deleteDialog.waitFor({ state: 'visible' })
-    await deleteDialog.getByRole('button', { name: '取消' }).click()
+    assert.equal(await deleteDialog.getByRole('button', { name: '删除作品', exact: true }).isDisabled(), true, 'delete was possible before typing the title')
+    await deleteDialog.getByRole('button', { name: '取消', exact: true }).click()
     await deleteDialog.waitFor({ state: 'hidden' })
     assert.equal((await invoke(session.page, 'project:get-runtime-context')).activeProjectPath, projects.b)
     assert.equal(hash(bProjectFile), bProjectFileHash, 'cancelled deletion changed B project file')
-    await session.page.locator('.writer-left-rail button[title="项目"]').click()
+    await backToWork(session.page, names.b)
     await assertProjectFacts(session.page, projects.b, expectedBConfig, fixtureBody.b)
-    pass('v3-delete-cancel', 'U01.A12', 'V3 current-project delete confirmation cancelled without changing B identity, configuration or draft')
+    pass('stage-delete-cancel', 'U01.A12', 'the current-book delete confirmation cancelled without changing B identity, configuration or draft')
 
     currentStep = 'U01.A12-denied'
-    const sid = execFileSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' }).match(/"(S-1-[\d-]+)"\s*$/)?.[1]
+    // 用系统目录里的 whoami.exe：从 Git Bash 启动时 PATH 里先找到的是 coreutils 的 whoami，不认 /user。
+    const whoami = path.join(process.env.SystemRoot || process.env.windir, 'System32', 'whoami.exe')
+    const sid = execFileSync(whoami, ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' }).match(/"(S-1-[\d-]+)"\s*$/)?.[1]
     assert(sid, 'Windows user SID unavailable for the isolated ACL test')
     await session.app.evaluate(({ ipcMain }) => {
       const original = ipcMain._invokeHandlers.get('project:delete')
@@ -790,15 +788,15 @@ async function main() {
     try {
       execFileSync('icacls', [projects.b, '/deny', `*${sid}:(OI)(CI)(D,DC)`], { encoding: 'utf8' })
       try {
-        await session.page.locator('.writer-left-rail button[title="欢迎页"]').click()
-        await session.page.getByRole('region', { name: '作品概览' }).getByRole('button', { name: '删除项目' }).click()
+        await (await requestDelete()).click()
         await deleteDialog.waitFor({ state: 'visible' })
-        await deleteDialog.getByRole('button', { name: '删除项目' }).click()
+        await deleteDialog.getByRole('textbox').fill(names.b)
+        await deleteDialog.getByRole('button', { name: '删除作品', exact: true }).click()
         const deleteError = session.page.getByRole('alertdialog', { name: '删除项目失败' })
         await deleteError.waitFor({ state: 'visible' })
         await deleteError.getByRole('button', { name: '确定' }).click()
         const captured = await session.app.evaluate(() => globalThis.__u01DeleteCapture.calls.at(-1))
-        assert(captured?.context?.leaseId, 'V3 delete did not pass a current project lease')
+        assert(captured?.context?.leaseId, 'stage delete did not pass a current project lease')
         assert.equal(captured.result.success, false, 'NTFS-denied deletion unexpectedly succeeded')
         assert.equal(captured.result.directoryDeleted, false)
         assert.equal(captured.result.databaseRestored, true)
@@ -808,9 +806,9 @@ async function main() {
         if (fs.existsSync(projects.b)) execFileSync('icacls', [projects.b, '/remove:d', `*${sid}`, '/T', '/C'], { encoding: 'utf8' })
       }
       assert.equal(hash(bProjectFile), bProjectFileHash, 'NTFS-denied deletion changed B project file')
-      await session.page.locator('.writer-left-rail button[title="项目"]').click()
+      await backToWork(session.page, names.b)
       await assertProjectFacts(session.page, projects.b, expectedBConfig, fixtureBody.b)
-      pass('v3-delete-permission-denied', 'U01.A12', 'real Windows ACL denial leaves B directory, active DB, configuration and draft intact')
+      pass('stage-delete-permission-denied', 'U01.A12', 'a real Windows ACL denial leaves the B directory, active DB, configuration and draft intact')
       const crossProject = await invoke(session.page, 'project:delete', projects.a, projectIds.a, currentDeleteContext.leaseId, currentDeleteContext)
       assert.equal(crossProject.success, false)
       assert.equal(crossProject.directoryDeleted, false)
@@ -823,7 +821,7 @@ async function main() {
       await assertProjectFacts(session.page, projects.b, expectedBConfig, fixtureBody.b)
       assert.equal(hash(bProjectFile), bProjectFileHash)
       assert.equal(fs.existsSync(projects.a), true, 'cross-project delete removed A')
-      pass('v3-delete-cross-session-rejected', 'U01.A12', 'current B lease cannot delete A; expired B lease cannot delete B; both projects remain intact')
+      pass('stage-delete-cross-session-rejected', 'U01.A12', 'the current B lease cannot delete A; an expired B lease cannot delete B; both projects remain intact')
     } finally {
       await session.app.evaluate(({ ipcMain }) => {
         const capture = globalThis.__u01DeleteCapture
@@ -835,14 +833,14 @@ async function main() {
     }
 
     currentStep = 'U01.A12-authorized'
-    await session.page.locator('.writer-left-rail button[title="欢迎页"]').click()
-    await session.page.getByRole('region', { name: '作品概览' }).getByRole('button', { name: '删除项目' }).click()
+    await (await requestDelete()).click()
     await deleteDialog.waitFor({ state: 'visible' })
-    await deleteDialog.getByRole('button', { name: '删除项目' }).click()
+    await deleteDialog.getByRole('textbox').fill(names.b)
+    await deleteDialog.getByRole('button', { name: '删除作品', exact: true }).click()
     await session.page.getByText(`项目「${names.b}」已删除`).waitFor({ state: 'visible' })
-    assert.equal(fs.existsSync(projects.b), false, 'authorized V3 delete left B directory and database on disk')
+    assert.equal(fs.existsSync(projects.b), false, 'authorized stage delete left B directory and database on disk')
     assert.equal((await invoke(session.page, 'project:get-runtime-context')).activeProjectPath, null)
-    assert.equal(await session.page.locator('.writer-shelf').getByRole('button', { name: `打开《${names.b}》` }).count(), 0)
+    await stage.cover(session.page, names.b).waitFor({ state: 'detached' })
     assert.equal(hash(projectFile), aFileBeforeDelete, 'deleting B rewrote A project file')
     const afterDeleteA = new Database(path.join(projects.a, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
     try {
@@ -850,45 +848,46 @@ async function main() {
       assert.equal(afterDeleteA.prepare('SELECT contents.body FROM drafts JOIN contents ON contents.id = drafts.content_id WHERE drafts.chapter_number = 1').get().body, fixtureBody.a)
     } finally { afterDeleteA.close() }
     if (cFile) assert.equal(hash(path.join(projects.c, '.ai-novel', 'project.json')), cFile, 'deleting B rewrote C project file')
-    pass('v3-delete-authorized', 'U01.A12', 'V3 UI-confirmed authorized delete removes only B directory/DB and recent entry, then clears the active project')
+    pass('stage-delete-authorized', 'U01.A12', 'typing the title and confirming 删除作品 removes only the B directory, database and shelf entry, then clears the active project')
     await quit(session.app)
     session = null
     assert.equal(hash(scriptPath), driverSha256)
     assert.deepEqual(provenance().artifactHashes, source.artifactHashes)
     const allSteps = {
-      'U01.A01': ['v3-create-project'],
-      'U01.A02': ['v3-open-project'],
-      'U01.A03': ['v3-recent-project-entry'],
-      'U01.A04': ['v3-preview-then-enter'],
-      'U01.A05': ['writer-save-before-switch'],
-      'U01.A06': ['writer-discard-before-switch'],
-      'U01.A07': ['writer-cancel-retains-dirty'],
-      'U01.A08': ['v3-failed-save-stays-on-a', 'v3-failed-save-retry'],
-      'U01.A09': ['v3-late-open-response-isolated'],
-      'U01.A11': ['v3-new-process-reopen'],
-      'U01.A12': ['v3-delete-cancel', 'v3-delete-permission-denied', 'v3-delete-cross-session-rejected', 'v3-delete-authorized'],
+      'U01.A01': ['stage-create-project'],
+      'U01.A02': ['stage-open-project'],
+      'U01.A03': ['stage-recent-project-entry'],
+      'U01.A04': ['stage-preview-then-enter'],
+      'U01.A05': ['stage-save-before-switch'],
+      'U01.A06': ['stage-discard-before-switch'],
+      'U01.A07': ['stage-cancel-retains-dirty'],
+      'U01.A08': ['stage-failed-save-stays-on-a', 'stage-failed-save-retry'],
+      'U01.A09': ['stage-late-open-response-isolated'],
+      'U01.A11': ['stage-new-process-reopen'],
+      'U01.A12': ['stage-delete-cancel', 'stage-delete-permission-denied', 'stage-delete-cross-session-rejected', 'stage-delete-authorized'],
     }
     const requiredSteps = a12Only ? {
-      'U01.A03': ['v3-delete-entry-recent-open'],
-      'U01.A04': ['v3-delete-entry-shelf-preview'],
+      'U01.A03': ['stage-delete-entry-recent-open'],
+      'U01.A04': ['stage-delete-entry-shelf-preview'],
       'U01.A12': allSteps['U01.A12'],
     } : allSteps
     const verifiedActions = Object.entries(requiredSteps).filter(([, ids]) => ids.every(id => steps.some(step => step.stepId === id && step.outcome === 'PASS')))
       .map(([actionId]) => actionId)
     assert.equal(verifiedActions.length, Object.keys(requiredSteps).length, 'required transition step missing')
-    const receipt = { outcome: 'PARTIAL', qualification: a12Only ? 'F05_U01_V3_A03_A04_A12_ONLY' : 'F05_U01_V3_A01_A09_A11_A12_ONLY', evidenceLevel: 'electron', shell: 'writer-v3',
+    const receipt = { outcome: 'PARTIAL', qualification: a12Only ? 'F05_U01_STAGE_A03_A04_A12_ONLY' : 'F05_U01_STAGE_A01_A09_A11_A12_ONLY', evidenceLevel: 'electron', shell: 'stage',
       ...source, driverSha256, releaseDefaultQualified: false, physicalModelRequests: 0,
-      steps, verifiedActions, shelfScreenshot, deleteEntryScreenshot, pickerFixture: 'A02 uses the real V3 Open project action and main IPC with an isolated controlled folder choice; OS picker permission is not claimed',
+      steps, verifiedActions, shelfScreenshot, deleteEntryScreenshot, pickerFixture: 'A02 uses the library 打开作品 action and main IPC with an isolated controlled folder choice; OS picker permission is not claimed',
       unverifiedActions: a12Only ? ['U01.A01–A02, A05–A11 and final product qualification are not reverified in this run'] : ['U01.A10 import and final product qualification'] }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, receipt: path.relative(repository, receiptPath),
       testedSha: source.testedSha, executionHead: source.executionHead, driverSha256, steps: steps.map(step => step.stepId) })}\n`)
   } catch (error) {
     const diagnostic = session?.page ? await session.page.evaluate(() => ({
-      dialogs: [...document.querySelectorAll('[role="dialog"]')].map(e => e.textContent?.slice(0, 160)),
+      dialogs: [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].map(e => e.textContent?.slice(0, 160)),
       alerts: [...document.querySelectorAll('[role="alert"]')].map(e => e.textContent?.slice(0, 160)),
-      shell: document.querySelector('[data-shell-variant]')?.getAttribute('data-shell-variant'),
+      shell: document.querySelector('[data-shell-presentation]')?.getAttribute('data-shell-presentation'),
     })).catch(() => null) : null
+    if (session?.page && !session.page.isClosed()) await session.page.screenshot({ path: path.join(path.dirname(receiptPath), 'failure.png') }).catch(() => {})
     if (session) {
       const closed = await Promise.race([session.app.close().then(() => true).catch(() => false), new Promise(resolve => setTimeout(() => resolve(false), 5_000))])
       if (!closed) { try { session.app.process()?.kill() } catch { /* already closed */ } }
@@ -901,5 +900,5 @@ async function main() {
   }
 }
 
-if (process.argv.includes('--help')) process.stdout.write('Pass fixed Windows package hashes and source SHA; exercises isolated V3 project transitions.\n')
+if (process.argv.includes('--help')) process.stdout.write('Pass fixed Windows package hashes and source SHA; exercises isolated stage project transitions.\n')
 else main().catch(error => { console.error(error); process.exitCode = 1 })

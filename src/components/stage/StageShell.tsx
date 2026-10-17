@@ -12,14 +12,13 @@ import ClearProjectDataDialog from '../dialogs/ClearProjectDataDialog'
 import { leaveSettingsThen, openProjectFolder } from '../settings/unsaved-settings'
 import type { MenuGroupSpec } from '../ui/Menu'
 import NewWorkDialog from './library/NewWorkDialog'
-import { SETTINGS_PAGES, settingsPageOf } from './settings/settings-pages'
+import { SETTINGS_PAGES } from './settings/settings-pages'
 import { preloadStagePages } from './stage-pages'
 import StagePalette from './StagePalette'
 import { paletteItem, type PaletteItem } from './palette-filter'
 import StageSpine from './StageSpine'
 import StageTopBar from './StageTopBar'
 import StageWorkspace from './StageWorkspace'
-import { inkTheme } from './ink-theme'
 import { CHAPTER_PHASE_TEXT, CHAPTER_RUNNING_TEXT, RESOURCE_NAMES, STAGE_NAMES, stageTabName } from './stage-text'
 import { refreshStageWork, useLandingPage, useStageView, useStageWorkRefresh, type StageView } from './use-stage-work'
 import { useStageShortcuts } from './use-stage-shortcuts'
@@ -136,7 +135,7 @@ export default function StageShell({ theme }: { theme: Theme }) {
     return [...go, ...chapters, ...references, ...actions, ...(library ? books : [])]
   }, [view.stages, view.chapters, hasProject, library, text, toggleFocus, recentProjects])
 
-  const settingsName = SETTINGS_PAGES.find(page => page.id === settingsPageOf(settingsSection))?.name
+  const settingsName = SETTINGS_PAGES.find(page => page.id === settingsSection)?.name
   const crumbs = settingsOpen && settingsName ? [text('设置', 'Settings'), text(...settingsName)] : crumbsFor(view, library, activeName, text)
   const focusChapter = view.location?.kind === 'stage' ? view.location.chapter : undefined
   const focusRow = view.chapters.find(row => row.number === focusChapter)
@@ -146,7 +145,7 @@ export default function StageShell({ theme }: { theme: Theme }) {
     <div
       ref={setRoot}
       className="paper-ink stage-shell"
-      data-theme={inkTheme(theme)}
+      data-theme={theme}
       data-shell-presentation="stage"
       data-focus={focus || undefined}
       data-library={library || undefined}

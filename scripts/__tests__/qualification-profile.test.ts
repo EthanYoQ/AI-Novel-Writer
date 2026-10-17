@@ -52,7 +52,7 @@ Write-Output 'PROFILE_CONTRACT_OK'
 })
 it('every packaged Electron probe binds explicit profile roots and restores Windows environment', () => {
   const win = readFileSync(resolve('scripts/smoke-win-installer.ps1'), 'utf8')
-  for (const name of ['Vector', 'OfficialHomepage', 'Skin']) {
+  for (const name of ['Vector', 'OfficialHomepage']) {
     const section = win.split('function Invoke-AiNovelPackaged' + name + 'Smoke')[1].split('\nfunction ')[0]
     expect(section).toContain('New-AiNovelQualificationProfile')
     expect(section).toContain('--user-data-dir=')
@@ -61,8 +61,8 @@ it('every packaged Electron probe binds explicit profile roots and restores Wind
   }
   const mac = readFileSync(resolve('scripts/smoke-macos-dmg.sh'), 'utf8')
   expect(mac).toContain('mktemp -d "$repository_root/.runtime/.cache/')
-  expect(mac.match(/--user-data-dir=\$chromium_profile/g)).toHaveLength(2)
-  expect(mac).toContain('AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home"')
+  expect(mac.match(/--user-data-dir=\$chromium_profile/g)).toHaveLength(1)
+  expect(mac).toContain('AI_NOVEL_LEGACY_SOURCE_HOME="$legacy_source_home"')
   const update = readFileSync(resolve('scripts/windows-in-app-update-e2e.ps1'), 'utf8')
   expect(update).toContain('Get-E2eCanonicalGeneration -CanonicalHome $canonicalHome')
   expect(update).toContain('$legacyBeforeExplicitRestart.sha256 -eq $afterVelaHome.sha256')

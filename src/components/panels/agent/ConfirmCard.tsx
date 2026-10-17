@@ -139,7 +139,7 @@ function generateDescription(
         const unit = writingLanguage === 'zh-CN' ? text('字', 'characters') : text('词', 'words')
         const name = args.workflow === 'generate_architecture' ? text('故事架构', 'story architecture') : text('章节蓝图', 'chapter blueprints')
         return text(`将生成${name}，范围为第 ${args.start_chapter}–${end} 章，每章规划目标 ${args.target_units} ${unit}。实际内容可多可少。`,
-          `Generate ${name} for chapters ${args.start_chapter}-${end}, targeting ${args.target_units} ${unit} per chapter. Actual content may be longer or shorter.`)
+          `Generate ${name}: chapters ${args.start_chapter}-${end}, aiming for ${args.target_units} ${unit} per chapter. Actual content may be longer or shorter.`)
       }
       return text(
         `将启动工作流：${args.workflow ?? '未知工作流'}${args.chapter_number ? `（第 ${args.chapter_number} 章）` : ''}`,

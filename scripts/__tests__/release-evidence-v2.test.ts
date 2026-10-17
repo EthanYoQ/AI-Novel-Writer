@@ -51,10 +51,9 @@ function validWindowsReceipt(name: string, releaseRoot: string) {
     uninstall: { ...base, kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
     'upgrade-data': { ...base, kind: 'windows-upgrade-data', direct: { previousVersion: '0.2.5', legacyTableCount: 11, preservedAssetCount: 1, vectorDimension: 768, queryResultCount: 1, ...windowsV025CopyProof() } },
     'native-abi': { ...base, kind: 'windows-native-abi', direct: { restoreMode: 'monitored', nodeModuleAbi: '127', verificationTest: 'electron/repositories/__tests__/character-repository.test.ts' } },
-    'packaged-smoke': { ...base, kind: 'windows-packaged-smoke-summary', direct: { evidenceCount: 3, evidenceKinds: ['packaged-vector-smoke', 'packaged-official-homepage-smoke', 'packaged-skin-smoke'] }, evidence: [
+    'packaged-smoke': { ...base, kind: 'windows-packaged-smoke-summary', direct: { evidenceCount: 2, evidenceKinds: ['packaged-vector-smoke', 'packaged-official-homepage-smoke'] }, evidence: [
       reference('packaged-vector-smoke', 'packaged-vector-smoke.json'),
       reference('packaged-official-homepage-smoke', 'packaged-official-homepage-smoke.json'),
-      reference('packaged-skin-smoke', 'packaged-skin-smoke.json'),
     ] },
     signing: { ...base, kind: 'windows-signing', direct: { authenticodeStatus: 'NotSigned', installerSha256: sha256(path.join(releaseRoot, `ai-novel-writer-setup-${releaseVersion}.exe`)) }, status: 'unsigned', validationResult: 'NotSigned', unsignedDistributionImpact: 'Windows may display an unknown-publisher warning.' },
   }
@@ -339,9 +338,6 @@ describe('release evidence v2 CLI', () => {
     })
     writeJson(path.join(releaseRoot, 'qualification', 'packaged-official-homepage-smoke.json'), {
       schemaVersion: 1, kind: 'packaged-official-homepage-smoke', direct: { packaged: true },
-    })
-    writeJson(path.join(releaseRoot, 'qualification', 'packaged-skin-smoke.json'), {
-      schemaVersion: 1, kind: 'packaged-skin-smoke', direct: { packaged: true },
     })
     for (const receipt of [
       'install', 'launch', 'quiet-window', 'error-dialogs', 'uninstall', 'upgrade-data', 'native-abi', 'packaged-smoke',

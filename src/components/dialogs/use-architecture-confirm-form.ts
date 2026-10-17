@@ -40,7 +40,7 @@ export interface ArchitectureConfirmFormOptions {
   ) => Promise<void>
 }
 
-/** 架构确认对话框的表单：步骤勾选、大纲范围、每章目标字数、作者指导与提交前校验。新旧两种外壳的对话框共用。 */
+/** 架构确认对话框的表单：步骤勾选、大纲范围、每章目标字数、作者指导与提交前校验。架构阶段与架构文档页的生成对话框共用。 */
 export function useArchitectureConfirmForm({
   isOpen, onClose, archStatus, confirmed = archStatus, initialSelectedSteps, initialSynopsisRange = null, synopsisSource, onConfirm,
 }: ArchitectureConfirmFormOptions) {

@@ -172,7 +172,7 @@ describe('single global generation cutover using synthetic roots only', () => {
       const result = runGlobalDataMigration(roots); expect(result.state).toBe('ready')
     }
   })
-  it.each(['config.json', 'models.json', 'mcp_config.json', 'recent-projects.json', 'prompts/author.json', 'skins/manifest.json'])('blocks corrupt %s before creating target', name => {
+  it.each(['config.json', 'models.json', 'mcp_config.json', 'recent-projects.json', 'prompts/author.json'])('blocks corrupt %s before creating target', name => {
     const roots = fixture(); populate(roots.legacySource); put(roots.legacySource, name, '{broken')
     expect(runGlobalDataMigration(roots).state).toBe('blocked')
     expect(fs.existsSync(roots.canonicalTarget)).toBe(false)

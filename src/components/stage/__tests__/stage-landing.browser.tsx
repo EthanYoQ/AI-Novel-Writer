@@ -6,7 +6,6 @@ import { createRoot, type Root } from 'react-dom/client'
 
 import type { NovelConfig, ProjectData, ProjectSessionContext } from '../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useDraftStore } from '../../../stores/draft-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLayoutStore } from '../../../stores/layout-store'
@@ -24,7 +23,7 @@ function snapshot<T>(store: StoreApi<T>): () => void {
   const state = store.getState()
   return () => store.setState(state, true)
 }
-const restores = [snapshot(useAppearanceStore), snapshot(useDraftStore), snapshot(useEditorStore), snapshot(useLayoutStore), snapshot(useStageStore), snapshot(useProjectStore)]
+const restores = [snapshot(useDraftStore), snapshot(useEditorStore), snapshot(useLayoutStore), snapshot(useStageStore), snapshot(useProjectStore)]
 
 let root: Root | undefined
 let host: HTMLDivElement | undefined
@@ -58,7 +57,6 @@ async function open(context: ProjectSessionContext, novelConfig: Partial<NovelCo
 const tabTypes = () => useEditorStore.getState().tabs.map(tab => tab.type)
 
 beforeEach(async () => {
-  useAppearanceStore.setState({ resolvedShell: 'stage' })
   useStageStore.setState({ work: null, focus: false, palette: null, sheet: null, closingTabId: null })
   useDraftStore.setState({ draftsByChapter: {}, dataProjectSession: null, loading: false })
   host = document.createElement('div')

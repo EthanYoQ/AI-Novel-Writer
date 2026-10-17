@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { installGlobalDataLocator, type GlobalDataRoots } from './app-data-locator'
 
@@ -118,23 +118,6 @@ function validate(root: string): void {
           || (server.env !== undefined && (!record(server.env) || Object.values(server.env).some(entry => typeof entry !== 'string')))) fail('GLOBAL_MCP_INVALID')
       }
     }
-  }
-  const manifest = path.join(root, 'skins', 'manifest.json')
-  if (fs.existsSync(manifest)) {
-    const value = parse(manifest)
-    if (!record(value) || value.version !== 1 || !['classic', 'anime', 'custom'].includes(value.activeSkin as string)) fail('GLOBAL_SKIN_INVALID')
-    if (value.stateRevision !== undefined && (!Number.isSafeInteger(value.stateRevision) || Number(value.stateRevision) < 0)) fail('GLOBAL_SKIN_INVALID')
-    if (value.customSkin !== undefined) {
-      const custom = value.customSkin
-      if (!record(custom) || typeof custom.assetFile !== 'string' || !/^[a-f0-9]{64}\.(png|jpg)$/.test(custom.assetFile)
-        || !fs.existsSync(path.join(root, 'skins', 'assets', custom.assetFile))) fail('GLOBAL_SKIN_INVALID')
-      const bytes = fs.readFileSync(path.join(root, 'skins', 'assets', custom.assetFile))
-      if (!['image/png', 'image/jpeg'].includes(custom.mime as string) || !Number.isSafeInteger(custom.width) || !Number.isSafeInteger(custom.height)
-        || Number(custom.width) <= 0 || Number(custom.height) <= 0 || Number(custom.width) > 4096 || Number(custom.height) > 4096
-        || Number(custom.width) * Number(custom.height) > 16_000_000 || custom.assetFile !== `${custom.revision}.${custom.mime === 'image/png' ? 'png' : 'jpg'}`
-        || createHash('sha256').update(bytes).digest('hex') !== custom.revision) fail('GLOBAL_SKIN_INVALID')
-    }
-    if (value.activeSkin === 'custom' && !value.customSkin) fail('GLOBAL_SKIN_INVALID')
   }
   for (const name of names) {
     if (name.startsWith(`prompts${path.sep}`) && name.endsWith('.json') && !record(parse(path.join(root, name)))) fail('GLOBAL_PROMPT_INVALID')

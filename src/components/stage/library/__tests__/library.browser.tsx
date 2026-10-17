@@ -7,7 +7,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import type { ProjectData } from '../../../../shared/ipc-channels'
 import type { ProjectOverview } from '../../../../shared/project-overview'
 import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
-import { useAppearanceStore } from '../../../../stores/appearance-bootstrap'
 import { useDraftStore } from '../../../../stores/draft-store'
 import { useEditorStore } from '../../../../stores/editor-store'
 import { useLayoutStore } from '../../../../stores/layout-store'
@@ -26,7 +25,7 @@ function snapshot<T>(store: StoreApi<T>): () => void {
   const state = store.getState()
   return () => store.setState(state, true)
 }
-const restores = [snapshot(useLayoutStore), snapshot(useProjectStore), snapshot(useLLMStore), snapshot(useStageStore), snapshot(useDraftStore), snapshot(useAppearanceStore), snapshot(useEditorStore)]
+const restores = [snapshot(useLayoutStore), snapshot(useProjectStore), snapshot(useLLMStore), snapshot(useStageStore), snapshot(useDraftStore), snapshot(useEditorStore)]
 
 const LIGHTHOUSE = { name: '灯塔', path: 'C:\\novels\\lighthouse', updatedAt: '2026-10-11T21:14:00.000Z', previewCapabilityId: 'cap-lighthouse' }
 const ISLAND = { name: '雾岛', path: 'C:\\novels\\island', updatedAt: '2026-10-02T09:00:00.000Z', previewCapabilityId: 'cap-island' }
@@ -94,7 +93,6 @@ beforeEach(async () => {
     return undefined
   })
   win.aiNovelAPI = { invoke, on: () => () => undefined }
-  useAppearanceStore.setState({ resolvedShell: 'stage' })
   useLayoutStore.setState({ sidebarView: 'home' })
   useStageStore.setState({ work: null, spineFacts: null })
   useLLMStore.setState({ loaded: true, defaultModelId: 'model' })

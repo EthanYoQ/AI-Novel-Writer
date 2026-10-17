@@ -262,22 +262,6 @@ describe('chapter-card draft ledger', () => {
     expect(getChapterCardProjectDraft(ledger, 'project-a')?.dirtyChapterNumbers).toEqual([7])
   })
 
-  it('renders the chapter number as a readonly field with no ordinary renumber action', () => {
-    const source = normalizeSourceEol(
-      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
-    )
-    const hookSource = blueprintHookSource()
-    const chapterNumberInput = source.match(
-      /<Input\s+type="number"\s+value=\{selected\.chapterNumber\}[\s\S]*?\/>/,
-    )?.[0]
-
-    expect(hookSource).toContain('K extends EditableChapterBlueprintField')
-    expect(chapterNumberInput).toContain('readOnly')
-    expect(chapterNumberInput).not.toContain('onChange')
-    expect(chapterNumberInput).not.toContain('onBlur')
-    expect(source + hookSource).not.toContain("updateField('chapterNumber'")
-  })
-
   it('binds chapter-card IPC reads and writes to the loaded project identity', () => {
     const componentSource = blueprintHookSource()
     const workflowSource = normalizeSourceEol(
@@ -314,48 +298,4 @@ describe('chapter-card draft ledger', () => {
     )
   })
 
-  it('only exposes writing actions for an actual next blueprint instead of rendering a no-op button', () => {
-    const source = normalizeSourceEol(
-      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
-    )
-
-    expect(blueprintHookSource()).toContain(
-      'const nextWritableBlueprint = nextWriteChapter === null\n    ? null\n    : visibleBlueprints.find(blueprint => blueprint.chapterNumber === nextWriteChapter)',
-    )
-    expect(source).toContain('{projectDataReady && nextWritableBlueprint && (')
-    expect(source).toContain('onClick={() => handleWriteChapter(nextWritableBlueprint)}')
-    expect(source).not.toContain(
-      "const bp = visibleBlueprints.find(b => b.chapterNumber === nextWriteChapter)\n                if (bp) handleWriteChapter(bp)",
-    )
-  })
-
-  it('offers a confirmed recovery path when legacy imported text creates a writing gap', () => {
-    const source = normalizeSourceEol(
-      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
-    )
-    const hookSource = blueprintHookSource()
-    const confirmStart = source.indexOf('const handleClearLegacyImportedText = async () => {')
-    const confirmHandler = source.slice(confirmStart, source.indexOf('\n  if (loading)', confirmStart))
-    const handlerStart = hookSource.indexOf('const handleClearLegacyImportedText = async () => {')
-    const recoveryHandler = hookSource.slice(handlerStart, hookSource.indexOf('\n  const visibleBlueprints', handlerStart))
-
-    expect(hookSource).toContain(
-      'legacyImportedTextRecoveryChapter: projectDataReady ? legacyImportedTextRecoveryChapter : null',
-    )
-    expect(hookSource).toContain(
-      'const recoveryChapter = error instanceof AuthoritativeChapterSequenceError',
-    )
-    expect(hookSource).toContain('error.sequence.firstGapChapterNumber')
-    expect(hookSource).toContain('setLegacyImportedTextRecoveryChapter(recoveryChapter)')
-    expect(hookSource).toContain('setNextWriteChapter(null)')
-    expect(source).toContain('{canRecoverLegacyImportedText && (')
-    expect(source).toContain('onClick={handleClearLegacyImportedText}')
-    expect(confirmHandler).toContain("confirmText: text('清除误导入正文', 'Clear incorrectly imported text')")
-    expect(confirmHandler).toContain('danger: true')
-    expect(confirmHandler).toContain('if (ok) await clearLegacyImportedText()')
-    expect(recoveryHandler).toContain('await clearProjectData({ generatedText: true }, projectSession)')
-    expect(recoveryHandler).not.toContain('blueprints: true')
-    expect(recoveryHandler).not.toContain('creativeFields: true')
-    expect(recoveryHandler).toContain('await loadBlueprints()')
-  })
 })

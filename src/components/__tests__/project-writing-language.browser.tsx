@@ -6,12 +6,14 @@ import { createRoot, type Root } from 'react-dom/client'
 
 import type { CreateProjectConfig, ProjectData } from '../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../shared/project-session-context'
+import { useLayoutStore } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
 import { saveDirtyEditorChangesForExit, useEditorStore } from '../../stores/editor-store'
-import NewProjectDialog from '../dialogs/NewProjectDialog'
-import NovelConfigEditor from '../editor/NovelConfigEditor'
+import NewWorkDialog from '../stage/library/NewWorkDialog'
+import StageSetup from '../stage/setup/StageSetup'
 
+const originalLayoutState = useLayoutStore.getState()
 const originalLocaleState = useLocaleStore.getState()
 const originalProjectState = useProjectStore.getState()
 const originalEditorState = useEditorStore.getState()
@@ -33,6 +35,7 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
+  useLayoutStore.setState(originalLayoutState)
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
   useEditorStore.setState(originalEditorState, true)
@@ -68,7 +71,7 @@ function project(id: string, writingLanguage: 'zh-CN' | 'en-US'): ProjectData {
 }
 
 function writingLanguageSelect(): HTMLSelectElement {
-  const select = document.getElementById('project-writing-language')
+  const select = document.querySelector('.stage-setup-language select')
   if (!(select instanceof HTMLSelectElement)) throw new Error('Missing project writing language selector')
   return select
 }
@@ -80,11 +83,12 @@ describe('project writing language', () => {
     useLocaleStore.setState({ locale: 'en-US' })
     useProjectStore.setState({ createProject: createProject as never })
 
-    await mount(<NewProjectDialog open onClose={() => {}} />)
+    useLayoutStore.setState({ newProjectOpen: true })
+    await mount(<NewWorkDialog />)
     await act(async () => {
-      await page.getByPlaceholder('e.g. The Glass Observatory').fill('English novel')
+      await page.getByPlaceholder('e.g. The Night Train').fill('English novel')
       await page.getByRole('button', { name: 'Choose', exact: true }).click()
-      await page.getByRole('button', { name: 'Create project' }).click()
+      await page.getByRole('button', { name: 'Create book' }).click()
     })
 
     const expectedConfig: CreateProjectConfig = {
@@ -114,9 +118,9 @@ describe('project writing language', () => {
         projectPath: currentProject.path,
       })
 
-      await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+      await mount(<StageSetup projectKey={currentProject.path} />)
 
-      await expect.element(page.getByRole('combobox', { name: label })).toBeVisible()
+      await expect.element(page.getByRole('combobox', { name: new RegExp(`^${label}`) })).toBeVisible()
       expect(writingLanguageSelect().value).toBe(writingLanguage)
     },
   )
@@ -135,7 +139,7 @@ describe('project writing language', () => {
         projectPath: currentProject.path,
       })
 
-      await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+      await mount(<StageSetup projectKey={currentProject.path} />)
 
       const options = Array.from(document.querySelectorAll('option'))
       const genre = options.find(option => option.value === currentProject.novelConfig.genre)
@@ -152,8 +156,8 @@ describe('project writing language', () => {
   )
 
   it.each([
-    { uiLocale: 'zh-CN', labels: ['请选择类型', '请选择目标受众'] },
-    { uiLocale: 'en-US', labels: ['Select a genre', 'Select an audience'] },
+    { uiLocale: 'zh-CN', labels: ['请选择', '请选择'] },
+    { uiLocale: 'en-US', labels: ['Choose', 'Choose'] },
   ] as const)('shows empty configuration placeholders in a $uiLocale interface', async ({ uiLocale, labels }) => {
     const currentProject = project(`empty-config-${uiLocale}`, 'en-US')
     currentProject.novelConfig.genre = ''
@@ -166,7 +170,7 @@ describe('project writing language', () => {
       projectPath: currentProject.path,
     })
 
-    await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+    await mount(<StageSetup projectKey={currentProject.path} />)
 
     const emptyOptions = Array.from(document.querySelectorAll<HTMLOptionElement>('option[value=""]'))
     expect(emptyOptions.map(option => option.textContent)).toEqual(labels)
@@ -187,9 +191,8 @@ describe('project writing language', () => {
       projectPath: projectA.path,
     })
 
-    await mount(<NovelConfigEditor projectKey={projectA.path} />)
-    await expect.element(page.getByText('写作语言', { exact: true })).toBeVisible()
-    await expect.element(page.getByRole('combobox', { name: '写作语言' })).toBeVisible()
+    await mount(<StageSetup projectKey={projectA.path} />)
+    await expect.element(page.getByRole('combobox', { name: /^写作语言/ })).toBeVisible()
     expect(writingLanguageSelect().value).toBe('en-US')
 
     const projectB = project('B', 'zh-CN')
@@ -201,11 +204,10 @@ describe('project writing language', () => {
         leaseId: projectB.sessionLease!,
         projectPath: projectB.path,
       })
-      root?.render(<NovelConfigEditor projectKey={projectB.path} />)
+      root?.render(<StageSetup projectKey={projectB.path} />)
     })
 
-    await expect.element(page.getByText('Writing language', { exact: true })).toBeVisible()
-    await expect.element(page.getByRole('combobox', { name: 'Writing language' })).toBeVisible()
+    await expect.element(page.getByRole('combobox', { name: /^Writing language/ })).toBeVisible()
     expect(writingLanguageSelect().value).toBe('zh-CN')
   })
 
@@ -214,13 +216,14 @@ describe('project writing language', () => {
     const saveProject = vi.fn(async () => true)
     useLocaleStore.setState({ locale: 'zh-CN' })
     useProjectStore.setState({ currentProject, saveProject: saveProject as never })
+    useEditorStore.setState({ tabs: [{ id: 'config', name: '设定', type: 'config', projectKey: currentProject.path, dirty: false }], activeTabId: 'config' })
     setActiveProjectSessionContext({
       projectId: currentProject.id,
       leaseId: currentProject.sessionLease!,
       projectPath: currentProject.path,
     })
 
-    await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+    await mount(<StageSetup projectKey={currentProject.path} />)
     const originalOutline = currentProject.novelConfig.coreOutline
     await act(async () => {
       const select = writingLanguageSelect()
@@ -232,12 +235,12 @@ describe('project writing language', () => {
       writingLanguage: 'en-US',
       coreOutline: originalOutline,
     })
-    await act(async () => page.getByRole('button', { name: '保存', exact: true }).click())
+    await act(async () => page.getByRole('button', { name: /^保存/ }).click())
     await vi.waitFor(() => expect(saveProject).toHaveBeenCalledOnce())
     expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe(originalOutline)
   })
 
-  it('shows the project-scoped quality threshold, its effective value, and a bilingual reset', async () => {
+  it('shows the project-scoped dormant-thread threshold with its range, default, and a bilingual reset', async () => {
     const currentProject = project('quality-setting', 'zh-CN')
     currentProject.novelConfig.narrativeThreadDormantChapterThreshold = 9
     useLocaleStore.setState({ locale: 'zh-CN' })
@@ -248,27 +251,25 @@ describe('project writing language', () => {
       projectPath: currentProject.path,
     })
 
-    await mount(<NovelConfigEditor projectKey={currentProject.path} />)
-    await expect.element(page.getByText('质量与连续性', { exact: true })).toBeVisible()
-    await expect.element(page.getByText('作用范围：当前项目', { exact: true })).toBeVisible()
-    await expect.element(page.getByText('产品默认值：3 章', { exact: true })).toBeVisible()
-    await expect.element(page.getByText('当前生效值：9 章', { exact: true })).toBeVisible()
-    const threshold = document.getElementById('narrative-thread-dormant-threshold')
+    await mount(<StageSetup projectKey={currentProject.path} />)
+    await act(async () => page.getByRole('button', { name: /^高级/ }).click())
+    await expect.element(page.getByText('伏笔沉寂提醒（章）', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('一条伏笔连续这么多章没有推进，剧情页会提醒你。默认 3 章。', { exact: true })).toBeVisible()
+    const threshold = document.querySelector('.stage-setup-adv-ctl input')
     if (!(threshold instanceof HTMLInputElement)) throw new Error('Missing narrative thread threshold input')
     expect({ value: threshold.value, min: threshold.min, max: threshold.max }).toEqual({ value: '9', min: '1', max: '50' })
 
-    await act(async () => page.getByRole('button', { name: '恢复默认值' }).click())
+    await act(async () => page.getByRole('button', { name: '恢复默认' }).click())
     expect(useProjectStore.getState().currentProject?.novelConfig.narrativeThreadDormantChapterThreshold).toBe(3)
-    await expect.element(page.getByText('当前生效值：3 章', { exact: true })).toBeVisible()
+    expect(threshold.value).toBe('3')
 
     await act(async () => {
       useLocaleStore.setState({ locale: 'en-US' })
-      root?.render(<NovelConfigEditor projectKey={currentProject.path} />)
+      root?.render(<StageSetup projectKey={currentProject.path} />)
     })
-    await expect.element(page.getByText('Quality and continuity', { exact: true })).toBeVisible()
-    await expect.element(page.getByText('Scope: this project', { exact: true })).toBeVisible()
-    await expect.element(page.getByText('Product default: 3 chapters', { exact: true })).toBeVisible()
-    await expect.element(page.getByText('Effective now: 3 chapters', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('Dormant thread reminder (chapters)', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('The plot page flags a thread that has not moved for this many chapters. Default 3.', { exact: true })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'Restore default' })).toBeDisabled()
   })
 
   it('propagates configuration save failure to the exit gate', async () => {
@@ -289,7 +290,7 @@ describe('project writing language', () => {
       leaseId: currentProject.sessionLease!,
       projectPath: currentProject.path,
     })
-    await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+    await mount(<StageSetup projectKey={currentProject.path} />)
 
     let failure: unknown
     await act(async () => {
@@ -297,6 +298,6 @@ describe('project writing language', () => {
     })
     expect(failure).toEqual(expect.objectContaining({ message: '磁盘已满' }))
     expect(useEditorStore.getState().tabs[0].dirty).toBe(true)
-    expect(container?.textContent).toContain('保存失败')
+    expect(container?.textContent).toContain('没能保存')
   })
 })

@@ -254,7 +254,7 @@ export type HunkPick = 'original' | 'revised' | 'edit'
 
 /**
  * 修稿合并的数据：段落对齐后的片段、每处改动的选择与每段的合并文字。
- * 旧外壳的三栏合并与新外壳单章视图的合并视图共用；合并结果就是各段文字按顺序以换行连接。
+ * 单章视图的合并视图用它；合并结果就是各段文字按顺序以换行连接。
  */
 export function useMergeSegments(originalContent: string, modifiedContent: string) {
   const segments = useMemo(() => computeSegments(originalContent, modifiedContent), [originalContent, modifiedContent])

@@ -8,8 +8,10 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
-import { assertEditorReceipt, checkEditorExecutionBinding, checkEditorReceipt, isEditorEnvironmentInvalid,
+import { assertEditorReceipt, checkEditorReceipt, isEditorEnvironmentInvalid,
   recordEditorAttempt, resolveEditorProtocol } from '../docs/plans/novel-quality-program-v3-2026-09-13/checks/feature-union-check.mjs'
+import * as chapterView from './redesign/pages/chapter-view.mjs'
+import * as stage from './redesign/pages/stage.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const performanceMode = process.argv.includes('--performance')
@@ -32,30 +34,28 @@ const option = name => {
   assert(index !== -1 && process.argv[index + 1] && !process.argv[index + 1].startsWith('--'), `--${name} is required`)
   return process.argv[index + 1]
 }
-const packageOptions = ['package-dir', 'source-sha', 'exe-sha256', 'asar-sha256', 'build-receipt']
-const candidatePackage = !historicalClassicMode && packageOptions.some(name => process.argv.includes(`--${name}`))
-assert(!candidatePackage || packageOptions.every(name => process.argv.includes(`--${name}`)),
-  'candidate package override requires --package-dir --source-sha --exe-sha256 --asar-sha256 --build-receipt together')
-assert(!performanceMode || candidatePackage, '--performance requires the current merged V3 package and its build receipt')
+// 纸墨外壳（RD-10）起，正文、输入法与性能三种模式都用同一组固定安装包参数；旧外壳时期写死的历史包与 U16 新构建回执链去掉。
+// 历史 Classic 基线测的是另一份旧源码打出的旧包，参数另算，不在这里。
+const packageOptions = ['package-dir', 'source-sha', 'exe-sha256', 'asar-sha256']
+assert(historicalClassicMode || packageOptions.every(name => process.argv.includes(`--${name}`)),
+  'pass --package-dir <win-unpacked> --source-sha <sha> --exe-sha256 <hash> --asar-sha256 <hash>')
 assert(!process.argv.includes('--prior-receipt') || performanceMode && process.argv.includes('--rerun'), '--prior-receipt requires --performance --rerun')
 assert(!process.argv.includes('--rerun') || performanceMode && process.argv.includes('--prior-receipt'), '--rerun requires --performance --prior-receipt <path>')
-if (candidatePackage) {
+if (!historicalClassicMode) {
   assert.match(option('source-sha'), /^[a-f0-9]{40}$/u)
   assert.match(option('exe-sha256'), /^[a-f0-9]{64}$/u)
   assert.match(option('asar-sha256'), /^[a-f0-9]{64}$/u)
 }
 const rerunIndex = performanceMode && process.argv.includes('--rerun') ? 1 : 0
 const priorReceipt = rerunIndex ? path.resolve(option('prior-receipt')) : null
-const packageDir = candidatePackage ? path.resolve(option('package-dir')) :
-  path.join(repository, '.runtime', '.cache', 'f04-v3-build', imeMode ? 'world-rail-1' : 's13-core-1')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
-const asarPath = path.join(packageDir, 'resources', 'app.asar')
-const testedSha = candidatePackage ? option('source-sha') : imeMode ? '6cf79d36d8c9348911232b312cd852e60654f655' :
-  '7110f53d5ce173d70bc0dcef90209bccb38d9fff'
-const expectedExe = candidatePackage ? option('exe-sha256') : imeMode ? '183d7f5956495445d22c53e487232dedd20b6e29b5d9f06e15384732b72daa30' :
-  'c3864b55649358e6acae5e828861dc231521f75e5bfa0422212d86b3349f6669'
-const expectedAsar = candidatePackage ? option('asar-sha256') : imeMode ? 'a184d35de87eddcea44465da40b17a3727205c8e3e80455c47a9237565ebcf38' :
-  'bf2f5c95ae8b72e377710759bfdb392cd0344f9e4c2d67fb0ef0ecbfb7b37b66'
+const packageDir = historicalClassicMode ? null : path.resolve(option('package-dir'))
+const executablePath = packageDir && path.join(packageDir, 'AI小说作家.exe')
+const asarPath = packageDir && path.join(packageDir, 'resources', 'app.asar')
+const testedSha = historicalClassicMode ? null : option('source-sha')
+const expectedExe = historicalClassicMode ? null : option('exe-sha256')
+const expectedAsar = historicalClassicMode ? null : option('asar-sha256')
+/** 纸墨正文单章视图里的 CodeMirror。 */
+const PROSE_EDITOR = '.stage-ch-prose .cm-content[contenteditable="true"]'
 const scriptPath = fileURLToPath(import.meta.url)
 const fileHash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -84,72 +84,17 @@ const storedBody = (projectPath, draftId, historicalClassic = false) => {
   finally { db.close() }
 }
 
-function verifyCandidateBuildReceipt(receipt, receiptPath) {
-  const sourceRoot = path.resolve(packageDir, '..', '..', '..')
-  const samePath = (left, right) => path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
-  const sourceGit = (...args) => execFileSync('git', args, { cwd: sourceRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).trim()
-  const executionGit = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).trim()
-  const receiptRelative = path.relative(sourceRoot, receiptPath).replaceAll('\\', '/')
-  assert.match(receiptRelative, /^\.runtime\/\.cache\/f05-u16-packaged\/[0-9a-f-]{36}\/receipt\.json$/u, 'not a U16 build receipt path')
-  const version = JSON.parse(fs.readFileSync(path.join(sourceRoot, 'package.json'), 'utf8')).version
-  assert(samePath(packageDir, path.join(sourceRoot, 'release', version, 'win-unpacked')), 'non-canonical candidate package path')
-  assert(samePath(sourceGit('rev-parse', '--show-toplevel'), sourceRoot), 'candidate source root mismatch')
-  assert.equal(sourceGit('rev-parse', 'HEAD'), testedSha, 'candidate source HEAD mismatch')
-  assert.equal(sourceGit('status', '--porcelain', '--untracked-files=all'), '', 'candidate source dirty after build')
-  const executionHead = executionGit('rev-parse', 'HEAD'), sourceHead = sourceGit('rev-parse', 'HEAD')
-  const executionDirty = executionGit('status', '--porcelain', '--untracked-files=all') !== ''
-  const sourceDirty = sourceGit('status', '--porcelain', '--untracked-files=all') !== ''
-  const executionBinding = checkEditorExecutionBinding({ driverRepository:repository, sourceRoot,
-    executionHead, sourceHead, testedSha, executionDirty, sourceDirty })
-  if (performanceMode || imeMode) {
-    assert(executionBinding.ok, `U06 driver execution tree is not the clean U16 source: ${executionBinding.errors.join('; ')}`)
-  } else {
-    const editorPaths = ['src/components/editor/CodeMirrorEditor.tsx', 'src/components/editor/DraftEditor.tsx',
-      'src/components/panels/EditorArea.tsx', 'src/styles/redesign/v3-magazine.css']
-    assert.equal(sourceDirty, false, 'candidate package source is dirty')
-    assert.equal(executionGit('diff', '--name-only', `${testedSha}..HEAD`, '--', ...editorPaths), '',
-      'editor code changed since candidate package')
-    assert.equal(executionGit('diff', '--name-only', '--', ...editorPaths), '', 'editor code is dirty')
-  }
-  assert.equal(receipt.outcome, 'PARTIAL')
-  assert.equal(receipt.failedStep, null)
-  assert.equal(receipt.error, null)
-  assert.equal(receipt.sourceDirty, false)
-  assert.equal(receipt.testedSha, testedSha)
-  assert.equal(receipt.build?.command, 'pnpm run build:win-dir')
-  assert.equal(receipt.build?.buildSha, testedSha)
-  assert.equal(receipt.build?.reusedFromReceipt, undefined, 'reused package is not a fresh build')
-  assert.equal(receipt.build?.reuseDecision, undefined, 'reused package is not a fresh build')
-  assert.deepEqual(receipt.build?.dirtyPathsBefore, [])
-  assert.deepEqual(receipt.build?.dirtyPathsAfter, [])
-  assert.equal(receipt.steps?.filter(step => step.stepId === 'fresh-package-build' && step.outcome === 'PASS').length, 1)
-  const startedAt = Date.parse(receipt.build?.startedAt)
-  const completedAt = Date.parse(receipt.build?.completedAt)
-  assert(Number.isFinite(startedAt) && Number.isFinite(completedAt) && startedAt <= completedAt && completedAt <= Date.now() + 2_000,
-    'invalid fresh build time')
-  for (const file of [executablePath, asarPath]) {
-    const mtime = fs.statSync(file).mtimeMs
-    assert(mtime >= startedAt - 2_000 && mtime <= completedAt + 2_000, 'package bytes are outside fresh build window')
-  }
-  const inputHash = createHash('sha256')
-  const names = execFileSync('git', ['ls-files', '-z', '--', 'src', 'electron', 'scripts', 'public', 'build',
-    'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5'],
-  { cwd: sourceRoot, maxBuffer: 8 * 1024 * 1024 }).toString('utf8').split('\0').filter(Boolean)
-  for (const name of names) { inputHash.update(name); inputHash.update(fs.readFileSync(path.join(sourceRoot, name))) }
-  const inputSha256 = inputHash.digest('hex')
-  assert.equal(receipt.build?.inputSha256, inputSha256, 'stale build inputs')
-  assert.equal(receipt.artifact?.source, 'fresh build:win-dir in this driver run')
-  assert.equal(receipt.artifact?.buildSha, testedSha)
-  assert.equal(receipt.artifact?.inputSha256, inputSha256)
-  assert(samePath(receipt.artifact?.executablePath, executablePath), 'build executable path mismatch')
-  assert(samePath(receipt.artifact?.asarPath, asarPath), 'build asar path mismatch')
-  assert.equal(receipt.artifact?.executableSha256, expectedExe)
-  assert.equal(receipt.artifact?.asarSha256, expectedAsar)
-  assert(samePath(receipt.driver?.path, path.join(sourceRoot, 'scripts', 'f05-u16-packaged-journey.mjs')), 'U16 driver path mismatch')
-  assert.equal(receipt.driver?.sha256, fileHash(receipt.driver.path), 'U16 driver bytes changed')
-  return { path: receiptPath, sha256: fileHash(receiptPath), executionBinding: {
-    repository, sourceRoot, executionHead, sourceHead, testedSha, clean:!executionDirty && !sourceDirty,
-    mode: performanceMode || imeMode ? 'strict' : 'editor-code-unchanged' } }
+const productInputs = ['src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5']
+/** 安装包来源：两个哈希对得上，打包之后产品输入没有再改（提交与工作区都算，用例目录除外）。 */
+function verifyFixedPackage() {
+  assert.equal(git('rev-parse', `${testedSha}^{commit}`), testedSha, 'package source SHA is unavailable')
+  assert.equal(fileHash(executablePath), expectedExe, 'executable hash changed')
+  assert.equal(fileHash(asarPath), expectedAsar, 'bundle hash changed')
+  assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', ...productInputs), '', 'product input changed since fixed package')
+  const dirty = git('status', '--porcelain', '--', ...productInputs).split('\n').filter(Boolean)
+    .filter(line => !/src\/.*\/__tests__\//.test(line))
+  assert.deepEqual(dirty, [], 'dirty product input since fixed package')
+  return { testedSha, packageDir, executableSha256: expectedExe, asarSha256: expectedAsar }
 }
 
 async function launch() {
@@ -160,17 +105,24 @@ async function launch() {
   const app = await electron.launch({ executablePath, cwd: packageDir, args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  await stage.waitForStage(page)
   assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer', revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
   return { app, page }
 }
+
+/** 从书房打开作品，再从流程脊打开第 1 章，返回纸墨纸面上的正文编辑区。 */
+async function openChapterOne(page, name) {
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, name)
+  await stage.waitForWork(page, name)
+  await stage.openChapter(page, 1)
+  const body = page.locator(PROSE_EDITOR)
+  await body.waitFor({ state: 'visible' })
+  return body
+}
+/** 章节头的版本按钮写着「草稿 v1 · N 字」；字数随正文实时更新。 */
+const wordCount = (page, units) => chapterView.view(page).getByRole('button', { name: `本章版本：草稿 v1 · ${units} 字`, exact: true })
 
 async function quit(app) {
   const pid = app.process().pid
@@ -225,7 +177,7 @@ function topCpuStacks(profile) {
   return [...stacks].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([stack, sampledMs]) => ({ stack, sampledMs }))
 }
 
-async function measureEditorAction(page, action, editorSelector = '.writer-editor-content .cm-content[contenteditable="true"]', diagnostic = false, cpuProfileTitle = null) {
+async function measureEditorAction(page, action, editorSelector = PROSE_EDITOR, diagnostic = false, cpuProfileTitle = null) {
   await page.evaluate(({ action, editorSelector, diagnostic, cpuProfileTitle }) => {
     const editor = document.querySelector(editorSelector)
     if (!editor) throw new Error('PERF_EDITOR_MISSING')
@@ -295,7 +247,7 @@ async function measureEditorAction(page, action, editorSelector = '.writer-edito
   return result
 }
 
-async function measureEditorInteractionV2(page, action, expectedDocument, editorSelector = '.writer-editor-content .cm-content[contenteditable="true"]', diagnostic = false, cpuProfileTitle = null) {
+async function measureEditorInteractionV2(page, action, expectedDocument, editorSelector = PROSE_EDITOR, diagnostic = false, cpuProfileTitle = null) {
   await page.evaluate(({ action, expectedDocument, editorSelector, diagnostic, cpuProfileTitle }) => {
     const editor = document.querySelector(editorSelector)
     if (!editor) throw new Error('PERF_EDITOR_MISSING')
@@ -507,19 +459,14 @@ async function performanceMain() {
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 48,
     retainedReason: 'isolated packaged editor performance evidence',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  let app, page, failure, exit, buildReceipt = null, previous = null, currentSample = null
+  let app, page, failure, exit, packageProvenance = null, previous = null, currentSample = null
   let currentStep = 'package'
   const frozenProtocol = JSON.parse(fs.readFileSync(path.join(repository, 'docs/plans/novel-quality-program-v3-2026-09-13/feature-union.json'), 'utf8')).editorProtocol
   const protocol = resolveEditorProtocol(frozenProtocol, 'editor-interaction-v2')
   const samples = {}, sampleAttempts = [], phaseSamples = {}, cpuProfiles = [], fixtures = {}, fixtureBodies = {}, environment = {}
   let measurementConditions = null
   try {
-    assert.equal(fileHash(executablePath), expectedExe)
-    assert.equal(fileHash(asarPath), expectedAsar)
-    if (candidatePackage) {
-      const receiptPath = path.resolve(option('build-receipt'))
-      buildReceipt = verifyCandidateBuildReceipt(JSON.parse(fs.readFileSync(receiptPath, 'utf8')), receiptPath)
-    }
+    packageProvenance = verifyFixedPackage()
     previous = priorReceipt ? JSON.parse(fs.readFileSync(priorReceipt, 'utf8')) : null
     if (previous) {
       assert.equal(previous.outcome, 'INVALID', 'only an environment INVALID may be rerun')
@@ -556,8 +503,7 @@ async function performanceMain() {
     assert.equal(exit.forced, false)
     app = null
     ;({ app, page } = await launch())
-    const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
+    await stage.dismissMigrationNotice(page)
     await app.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0]
       window.setSize(1440, 900)
@@ -584,13 +530,10 @@ async function performanceMain() {
     })
     for (const units of protocol.units) {
       currentStep = `U06.${units === 3000 ? 'A08' : 'A09'}`
-      await page.locator('.writer-shelf').getByRole('button', { name: `打开《U06-${units}》` }).click()
-      await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-      const editor = page.locator('.writer-editor-content .cm-content[contenteditable="true"]')
-      await editor.waitFor({ state: 'visible' })
+      const editor = await openChapterOne(page, `U06-${units}`)
       await editor.locator('.cm-lp-dropcap-char').waitFor({ state: 'visible' })
-      await page.locator('.writer-editor-content').getByText(`${units.toLocaleString('zh-CN')} 字`, { exact: true }).waitFor({ state: 'visible' })
-      const font = await page.locator('.writer-editor-content .cm-scroller').evaluate(element => getComputedStyle(element).fontFamily)
+      await wordCount(page, units.toLocaleString('zh-CN')).waitFor({ state: 'visible' })
+      const font = await page.locator('.stage-ch-prose .cm-scroller').evaluate(element => getComputedStyle(element).fontFamily)
       const fontLoad = await editor.evaluate(async () => {
         await document.fonts.ready
         const faces = [...document.fonts].filter(face => face.family.replaceAll('"', '').includes('LXGW WenKai'))
@@ -601,7 +544,7 @@ async function performanceMain() {
       assert.equal(font, environment.font, 'font drift between fixed fixtures')
       environment.fontLoadedByUnits ??= {}
       environment.fontLoadedByUnits[units] = { loaded:fontLoaded, ...fontLoad }
-      assert.equal(fontLoaded, true, 'V3 LXGW WenKai font not loaded')
+      assert.equal(fontLoaded, true, 'default writing font LXGW WenKai not loaded')
       if (previous) assert.equal(font, previous.environment.font)
       if (!measurementConditions) {
         measurementConditions = { protocolId:protocol.protocolId, testedSha, driverSha256:fileHash(scriptPath),
@@ -675,13 +618,12 @@ async function performanceMain() {
       await cpuProfiler?.session?.detach()
       assert.equal(createHash('sha256').update(storedBody(fixtures[units].projectPath, fixtures[units].draftId)).digest('hex'),
         fixtures[units].bodySha256, 'unsaved measurements changed SQLite')
-      // Undo restores the source text, but editor-store keeps the tab dirty until Save.
-      await page.locator('button[title="保存（⌘S）"]').click()
-      await page.locator('.writer-editor-content').getByRole('status').filter({ hasText: '已保存' }).waitFor({ state: 'visible' })
+      // 撤销把正文改回原样；顶栏仍写「未保存」时按 Ctrl S 保存，保存后正文与夹具逐字相同。
+      if (await stage.saveStatus(page).filter({ hasText: /^未保存$/ }).count() > 0) await stage.saveProse(page)
+      await stage.saveStatus(page).filter({ hasText: /^已保存$/ }).waitFor({ state: 'visible' })
       assert.equal(createHash('sha256').update(storedBody(fixtures[units].projectPath, fixtures[units].draftId)).digest('hex'),
         fixtures[units].bodySha256, 'post-measurement save changed the fixed fixture')
-      await page.locator('.writer-left-rail button[title="欢迎页"]').click()
-      await page.locator('.writer-shelf').waitFor({ state: 'visible' })
+      await stage.showLibrary(page)
     }
     if (!phaseDiagnostic) {
       const sameConditions = !!previous && JSON.stringify(previous.measurementConditions) === JSON.stringify(measurementConditions)
@@ -712,14 +654,14 @@ async function performanceMain() {
       ? { kind:'environment', message:failure.message } : null
     const receipt = phaseDiagnostic ? { outcome: failure ? 'FAIL' : 'DIAGNOSTIC_ONLY', qualification: 'DIAGNOSTIC_ONLY',
       checker: 'NOT_RUN', sampleUse: 'NOT_ELIGIBLE_FOR_EDITOR_GATE', testedSha,
-      ...(candidatePackage ? { buildReceipt } : {}), executionHead: git('rev-parse', 'HEAD'),
+      packageProvenance, shell: 'stage', executionHead: git('rev-parse', 'HEAD'),
       measurement: 'trusted beforeinput handler to first rAF with visible .cm-line text to next rAF; DOM check, not painted pixels',
       artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
       driver: { path: scriptPath, sha256: fileHash(scriptPath) }, profile: { ...profile, scratch },
       fixtures, environment, phaseSamples, cpuProfiles, failure, exit } : {
       outcome: failure ? (invalidReason ? 'INVALID' : 'FAIL') : environment.checker?.ok ? 'PASS' : 'FAIL',
       qualification: 'F05_U06_EDITOR_INTERACTION_V2_RESPONSIVENESS',
-      testedSha, ...(candidatePackage ? { buildReceipt } : {}),
+      testedSha, packageProvenance, shell: 'stage',
       protocolId: 'editor-interaction-v2',
       measurementSource: protocol.measurementSource, rerunIndex, priorReceipt, priorReceiptSha256: priorReceipt ? fileHash(priorReceipt) : null,
       executionHead: git('rev-parse', 'HEAD'), changedPaths: git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean),
@@ -1014,18 +956,10 @@ async function imeMain() {
       process.stdin.once('data', () => { clearTimeout(timer); resolve() })
     })
   }
-  let app, page, projectPath, draftId, failure, exit, events = [], buildReceipt = null
+  let app, page, projectPath, draftId, failure, exit, events = [], packageProvenance = null
   let currentStep = 'package'
   try {
-    assert.equal(fileHash(executablePath), expectedExe)
-    assert.equal(fileHash(asarPath), expectedAsar)
-    if (candidatePackage) {
-      const receiptPath = path.resolve(option('build-receipt'))
-      buildReceipt = verifyCandidateBuildReceipt(JSON.parse(fs.readFileSync(receiptPath, 'utf8')), receiptPath)
-    }
-    const productInputs = ['src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5']
-    if (!candidatePackage) assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', ...productInputs), '', 'product input changed since fixed package')
-    assert.equal(git('diff', '--name-only', '--', ...productInputs), '', 'dirty product input changed since fixed package')
+    packageProvenance = verifyFixedPackage()
     currentStep = 'fixture'
     ;({ app, page } = await launch())
     const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: 'U06-IME',
@@ -1047,12 +981,7 @@ async function imeMain() {
 
     currentStep = 'editor-open'
     ;({ app, page } = await launch())
-    const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-    await page.locator('.writer-shelf').getByRole('button', { name: '打开《U06-IME》' }).click()
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    const body = page.locator('.writer-editor-content .cm-content[contenteditable="true"]')
-    await body.waitFor({ state: 'visible' })
+    const body = await openChapterOne(page, 'U06-IME')
     const baseline = await editorText(body)
     await body.evaluate(element => {
       window.__u06ImeEvents = []
@@ -1090,17 +1019,17 @@ async function imeMain() {
 
     await awaitSky('SAVE_READY')
     currentStep = 'U06.A03-save'
-    await page.locator('.writer-editor-content').getByRole('status').filter({ hasText: '已保存' }).waitFor({ state: 'visible' })
+    await stage.saveStatus(page).filter({ hasText: /^已保存$/ }).waitFor({ state: 'visible' })
     assert.equal(storedBody(projectPath, draftId), `${imeFixtureBody}你好`, 'saved SQLite draft differs from committed IME text')
     pass('os-ime-save', 'U06.A03', 'OS Ctrl+S persisted exact IME text through the packaged save path', { draftId })
-    await page.screenshot({ path: path.join(receiptDir, 'v3-ime-saved.png') })
+    await page.screenshot({ path: path.join(receiptDir, 'stage-ime-saved.png') })
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
     process.stdin.pause()
     if (app) try { exit = await quit(app) } catch (error) { failure ??= { step: 'exit', message: String(error) } }
     const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U06_OS_IME_PARTIAL',
-      testedSha, ...(candidatePackage ? { buildReceipt } : {}), executionHead: git('rev-parse', 'HEAD'), changedPaths: git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean),
+      testedSha, packageProvenance, shell: 'stage', executionHead: git('rev-parse', 'HEAD'), changedPaths: git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean),
       sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean),
       artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
       driver: { path: scriptPath, sha256: fileHash(scriptPath) }, profile: { ...profile, scratch }, projectPath, draftId,
@@ -1119,20 +1048,14 @@ async function main() {
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 48,
     retainedReason: 'isolated packaged editor receipt review',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  let app, page, projectPath, draftId, failure, exit, buildReceipt = null
+  let app, page, projectPath, draftId, failure, exit, packageProvenance = null
   let currentStep = 'package'
   try {
-    assert.equal(fileHash(executablePath), expectedExe)
-    assert.equal(fileHash(asarPath), expectedAsar)
-    if (candidatePackage) {
-      const receiptPath = path.resolve(option('build-receipt'))
-      buildReceipt = verifyCandidateBuildReceipt(JSON.parse(fs.readFileSync(receiptPath, 'utf8')), receiptPath)
-    }
+    packageProvenance = verifyFixedPackage()
     pass('package-bytes', null, 'fixed Windows executable and asar match their source attribution')
     currentStep = 'fixture'
     ;({ app, page } = await launch())
-    const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
+    await stage.dismissMigrationNotice(page)
     const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
@@ -1154,12 +1077,7 @@ async function main() {
 
     currentStep = 'editor-open'
     ;({ app, page } = await launch())
-    const homeNotice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await homeNotice.isVisible()) await homeNotice.getByRole('button', { name: '知道了', exact: true }).click()
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    const body = page.locator('.cm-content[contenteditable="true"]')
-    await body.waitFor({ state: 'visible' })
+    const body = await openChapterOne(page, projectName)
     assert.equal(await editorText(body), '# 雨夜\n\n林岚在旧港看见 灯火。\n\n尾声')
 
     currentStep = 'U06.A01'
@@ -1172,15 +1090,20 @@ async function main() {
     await body.locator('.cm-lp-strong').getByText('回声', { exact: true }).waitFor({ state: 'visible' })
     assert.equal(await body.locator('.cm-lp-h1').count(), 1)
     assert.equal(await storedBody(projectPath, draftId), fixtureBody, 'preview edit wrote SQLite before save')
-    pass('live-markdown-preview', 'U06.A01', 'real V3 CodeMirror rendered newly typed Markdown emphasis before saving')
+    pass('live-markdown-preview', 'U06.A01', 'the stage chapter CodeMirror rendered newly typed Markdown emphasis before saving')
 
     currentStep = 'U06.A02'
-    const paper = body.locator('.cm-lp-paperhead')
-    assert.equal(await paper.locator('h2').innerText(), '雨夜')
-    assert.equal(await body.locator('.cm-lp-dropcap-char').innerText(), '林')
-    assert.equal(await body.locator('.cm-lp-dropcap-char').evaluate(element =>
-      parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.closest('.cm-content')).fontSize)), true)
-    pass('paper-head-dropcap', 'U06.A02', 'V3 prose paper head and enlarged first body character are visible in the live editor')
+    // 纸墨外壳的纸面头是章节头：章号与蓝图标题在正文之上；画板的纸面正文没有首字下沉，首字与正文同样大小。
+    assert.equal(await chapterView.title(page).innerText(), '雨夜')
+    const numeral = chapterView.view(page).locator('.stage-ch-numeral')
+    assert.equal(await numeral.innerText(), '1')
+    assert.equal(await numeral.evaluate((element, editor) => parseFloat(getComputedStyle(element).fontSize)
+      > parseFloat(getComputedStyle(document.querySelector(editor)).fontSize), PROSE_EDITOR), true)
+    const firstCharacter = body.locator('.cm-lp-dropcap-char')
+    assert.equal(await firstCharacter.innerText(), '林')
+    assert.equal(await firstCharacter.evaluate(element =>
+      getComputedStyle(element).fontSize === getComputedStyle(element.closest('.cm-content')).fontSize), true)
+    pass('paper-head-chapter-head', 'U06.A02', 'the stage chapter head (numeral and blueprint title) is the paper head above the live prose; the first body character keeps body size per the paper-ink artboard')
 
     currentStep = 'U06.A04'
     const points = await body.evaluate(element => {
@@ -1218,47 +1141,44 @@ async function main() {
     await page.keyboard.press('Home')
     await page.keyboard.press('Tab')
     assert.equal(await body.locator('.cm-line').filter({ hasText: '林岚在旧港码头' }).evaluate(element => element.textContent.startsWith('\u2003\u2003林岚')), true)
-    await page.locator('.writer-left-rail button[title="设置"]').click()
-    const modal = page.locator('.skin-solid-surface').first()
-    await modal.locator('aside button').filter({ hasText: '编辑器' }).click()
-    const writingField = modal.getByText('写作字体', { exact: true }).locator('xpath=ancestor::div[contains(@class,"space-y-1.5")][1]')
-    await writingField.getByRole('button').first().click()
-    await writingField.getByRole('button').filter({ hasText: '思源宋体' }).last().click()
-    await modal.getByRole('button', { name: '关闭设置' }).click()
-    assert.match(await page.locator('.writer-editor-content .cm-scroller').evaluate(element => getComputedStyle(element).fontFamily), /Noto Serif SC/)
-    pass('indent-and-font', 'U06.A06', 'Tab inserted two em spaces and V3 font choice reached the live CodeMirror scroller')
+    const proseFont = () => page.locator('.stage-ch-prose .cm-scroller').evaluate(element => getComputedStyle(element).fontFamily)
+    const defaultFont = await proseFont()
+    assert.match(defaultFont, /LXGW WenKai/, 'default writing font is not LXGW WenKai')
+    // 写作字体在设置的「外观」页；设置是外壳里的一页，返回作品后这一章与未保存的改动都还在。
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await stage.root(page).getByLabel('写作字体', { exact: true }).selectOption('noto-serif-sc')
+    await stage.closeSettings(page)
+    await body.waitFor({ state: 'visible' })
+    assert.match(await proseFont(), /Noto Serif SC/)
+    assert.match(await editorText(body), /\u2003\u2003林岚在旧港码头看见/, 'unsaved edits were lost after visiting settings')
+    pass('indent-and-font', 'U06.A06', 'Tab inserted two em spaces and the 外观 writing-font choice reached the live CodeMirror scroller', { defaultFont })
 
     currentStep = 'U06.A07'
-    await page.locator('.writer-editor-content').getByText('17 字', { exact: true }).waitFor({ state: 'visible' })
+    await wordCount(page, '17').waitFor({ state: 'visible' })
     assert.equal(await storedBody(projectPath, draftId), fixtureBody, 'editor changes persisted before Save')
-    await page.locator('button[title="保存（⌘S）"]').click()
-    await page.locator('.writer-editor-content').getByRole('status').filter({ hasText: '已保存' }).waitFor({ state: 'visible' })
+    await stage.saveProse(page)
     assert.equal(await storedBody(projectPath, draftId), finalBody, 'saved Markdown source differs from real editor changes')
     pass('draft-units-and-save', 'U06.A07', 'visible 17-unit count agrees with exact persisted Markdown source', { draftId, units: 17 })
-    await page.screenshot({ path: path.join(receiptDir, 'v3-editor-preview.png') })
+    await page.screenshot({ path: path.join(receiptDir, 'stage-editor-preview.png') })
 
     currentStep = 'U06.A07-reopen'
     exit = await quit(app)
     assert.equal(exit.forced, false, 'saved editor did not close normally')
     app = null
     ;({ app, page } = await launch())
-    const reopenNotice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await reopenNotice.isVisible()) await reopenNotice.getByRole('button', { name: '知道了', exact: true }).click()
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    const reopenedBody = page.locator('.writer-editor-content .cm-content[contenteditable="true"]')
-    await reopenedBody.waitFor({ state: 'visible' })
+    const reopenedBody = await openChapterOne(page, projectName)
     await reopenedBody.locator('.cm-line').filter({ hasText: '旧港码头' }).waitFor({ state: 'visible' })
     await reopenedBody.locator('.cm-lp-strong').getByText('回声', { exact: true }).waitFor({ state: 'visible' })
-    await page.locator('.writer-editor-content').getByText('17 字', { exact: true }).waitFor({ state: 'visible' })
+    await wordCount(page, '17').waitFor({ state: 'visible' })
     assert.equal(await storedBody(projectPath, draftId), finalBody, 'reopened SQLite draft differs from saved Markdown source')
-    pass('saved-draft-reopen', 'U06.A07', 'new packaged process reopened the exact saved draft with its V3 text and 17-unit count')
+    pass('saved-draft-reopen', 'U06.A07', 'a new packaged process reopened the exact saved draft in the stage chapter view with its 17-unit count')
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
     if (app) try { exit = await quit(app) } catch (error) { failure ??= { step: 'exit', message: String(error) } }
     const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U06_PACKAGED_V3_PARTIAL',
-      testedSha, ...(candidatePackage ? { buildReceipt } : {}), executionHead: git('rev-parse', 'HEAD'), changedPaths: git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean),
+      testedSha, packageProvenance, shell: 'stage', executionHead: git('rev-parse', 'HEAD'), changedPaths: git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean),
       sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean),
       artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
       driver: { path: scriptPath, sha256: fileHash(scriptPath) }, profile: { ...profile, scratch }, projectPath, draftId,

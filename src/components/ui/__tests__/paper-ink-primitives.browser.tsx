@@ -308,11 +308,9 @@ describe('Button 纸墨六种', () => {
     expect(onToggle).toHaveBeenCalledTimes(1)
   })
 
-  it('旧外壳变体不受影响，仍走旧样式', async () => {
+  it('沿用旧变体名的调用方也画成纸墨按钮', async () => {
     const container = await mount(<Button variant="outline">旧按钮</Button>)
-    const button = container.querySelector('button')!
-    expect(button.className).not.toContain('pi-btn')
-    expect(button.className).toContain('border-[var(--color-border)]')
+    expect(container.querySelector('button')!.className).toBe('pi-btn pi-btn--secondary pi-btn--sm')
   })
 })
 

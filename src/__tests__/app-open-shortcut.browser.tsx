@@ -4,7 +4,6 @@ import type { StoreApi } from 'zustand'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '../App'
-import { useAppearanceStore } from '../stores/appearance-bootstrap'
 import { useEditorStore } from '../stores/editor-store'
 import { useLayoutStore } from '../stores/layout-store'
 import { useLLMStore } from '../stores/llm-store'
@@ -15,7 +14,7 @@ import { useProjectStore } from '../stores/project-store'
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const SKILL_URL = 'https://github.com/owner/skill'
-const restores = [useAppearanceStore, useEditorStore, useLayoutStore, useLLMStore, useLocaleStore, useStageStore, useProjectStore].map(store => {
+const restores = [useEditorStore, useLayoutStore, useLLMStore, useLocaleStore, useStageStore, useProjectStore].map(store => {
   const state = (store as StoreApi<unknown>).getState()
   return () => (store as StoreApi<unknown>).setState(state, true)
 })
@@ -48,7 +47,6 @@ beforeEach(async () => {
     return { success: true }
   })
   Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => undefined, once: () => undefined, send: () => undefined } })
-  useAppearanceStore.setState({ resolvedShell: 'stage' })
   useLocaleStore.setState({ locale: 'zh-CN' })
   useLLMStore.setState({ loaded: true, models: [], defaultModelId: null })
   useEditorStore.setState({ tabs: [], activeTabId: null })

@@ -25,14 +25,16 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-test('新原语与新外壳目录写入色值时检查失败', () => {
+test('原语、外壳与沿用的旧组件目录写入色值时检查都失败', () => {
   const root = fixture({
     'src/components/ui/Fresh.tsx': "export const style = { color: '#2C4A8C' }\n",
     'src/components/stage/Spine.tsx': "const a = 'rgba(0, 0, 0, .5)'\nconst b = 'hsl(220 50% 40%)'\n",
     'src/styles/paper-ink/primitives.css': '.pi-x { background: #fff; }\n.pi-y { color: RGB(255, 0, 0); }\n',
+    'src/components/editor/Old.tsx': "const c = '#123456'\n",
   })
-  const { violations } = checkColorLiterals(root, [])
+  const { violations } = checkColorLiterals(root)
   assert.deepEqual(violations.map(({ file, line, literal }) => `${file}:${line}:${literal}`).sort(), [
+    'src/components/editor/Old.tsx:1:#123456',
     'src/components/stage/Spine.tsx:1:rgba(',
     'src/components/stage/Spine.tsx:2:hsl(',
     'src/components/ui/Fresh.tsx:1:#2C4A8C',
@@ -41,21 +43,14 @@ test('新原语与新外壳目录写入色值时检查失败', () => {
   ].sort())
 })
 
-test('令牌文件、测试文件和允许清单里的旧文件不报错', () => {
+test('令牌文件与测试文件不报错', () => {
   const root = fixture({
     'src/styles/paper-ink/tokens.css': '.paper-ink { --ink: #17171A; }\n',
     'src/components/ui/__tests__/Fresh.browser.tsx': "expect(color).toBe('rgb(23, 23, 26)')\n",
     'src/components/ui/Probe.browser.tsx': "const c = '#000'\n",
-    'src/components/editor/Old.tsx': "const c = '#123456'\n",
     'src/components/ui/Clean.tsx': "export const style = { color: 'var(--ink)' }\n",
   })
-  assert.deepEqual(checkColorLiterals(root, ['src/components/editor/Old.tsx']), { violations: [], stale: [] })
-})
-
-test('允许清单里的文件不再含色值时报告为过期，清单只减不增', () => {
-  const root = fixture({ 'src/components/editor/Old.tsx': "const c = 'var(--ink)'\n" })
-  assert.deepEqual(checkColorLiterals(root, ['src/components/editor/Old.tsx', 'src/components/gone.tsx']).stale,
-    ['src/components/editor/Old.tsx', 'src/components/gone.tsx'])
+  assert.deepEqual(checkColorLiterals(root), { violations: [] })
 })
 
 test('注释、锚点、Issue 编号与 HTML 实体不算色值', () => {
@@ -86,7 +81,7 @@ test('行注释只在字符串外才算：紧贴代码的 // 注释不误报，�
 
 test('CSS 里没有行注释：url(//…) 之后的色值照样报出', () => {
   const root = fixture({ 'src/components/stage/x.css': '.x { background: url(//cdn/a.png); color: #fff; }\n' })
-  assert.deepEqual(checkColorLiterals(root, []).violations, [{ file: 'src/components/stage/x.css', line: 1, literal: '#fff' }])
+  assert.deepEqual(checkColorLiterals(root).violations, [{ file: 'src/components/stage/x.css', line: 1, literal: '#fff' }])
 })
 
 test('经 junction 或符号链接运行时照样检查，有违规就退出 1', () => {

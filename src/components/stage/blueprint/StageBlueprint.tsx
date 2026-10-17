@@ -28,7 +28,7 @@ type Ask =
 
 /**
  * 蓝图阶段：章节规划列表与单章蓝图编辑。主操作是写下一章（拆分按钮带写作弹层）；没有可写的章时主操作是 AI 生成蓝图。
- * 数据与旧外壳的章节蓝图页共用 useChapterBlueprints；未保存提示只在顶栏，⌘S 走同一个退出前保存。
+ * 数据来自 useChapterBlueprints；未保存提示只在顶栏，⌘S 走同一个退出前保存。
  */
 export default function StageBlueprint({ projectKey, initialChapterNumber, selectRequest }: {
   projectKey: string

@@ -242,7 +242,9 @@ export function useReviewCycle({ reportText, reviewId, projectKey, cycle, refres
 }) {
   const snapshot = parseHumanConfirmedReviewSnapshot(reportText)
   const cycleReviewId = confirmationSourceReviewId(snapshot, reviewId)
-  const [loadedCycle, setLoadedCycle] = useState<ReviewCycleProjection | null>(cycle ?? null)
+  // 读回的周期记着属于哪份审稿：重新审稿后新周期读回来之前，不把上一份审稿的周期当成这一份的。
+  const [loadedCycle, setLoadedCycle] = useState<{ reviewId: number | undefined; cycle: ReviewCycleProjection | null }>(
+    () => ({ reviewId: cycleReviewId, cycle: cycle ?? null }))
 
   const reloadCycle = async (): Promise<ReviewCycleProjection | null> => {
     if (!isReviewId(cycleReviewId)) return null
@@ -250,7 +252,7 @@ export function useReviewCycle({ reportText, reviewId, projectKey, cycle, refres
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return null
     const next = await ipc.invokeWithProjectSession(projectSession, 'db:review-cycle-get', cycleReviewId,
       projectSession.projectPath)
-    if (isProjectSessionCurrent(projectSession)) setLoadedCycle(next)
+    if (isProjectSessionCurrent(projectSession)) setLoadedCycle({ reviewId: cycleReviewId, cycle: next })
     return next
   }
 
@@ -262,12 +264,12 @@ export function useReviewCycle({ reportText, reviewId, projectKey, cycle, refres
     void (async () => {
       const next = await ipc.invokeWithProjectSession(projectSession, 'db:review-cycle-get', cycleReviewId,
         projectSession.projectPath)
-      if (!cancelled && isProjectSessionCurrent(projectSession)) setLoadedCycle(next)
+      if (!cancelled && isProjectSessionCurrent(projectSession)) setLoadedCycle({ reviewId: cycleReviewId, cycle: next })
     })()
     return () => { cancelled = true }
   }, [cycleReviewId, cycle, projectKey, refreshKey])
 
-  const resolvedCycle = cycle !== undefined ? cycle : loadedCycle
+  const resolvedCycle = cycle !== undefined ? cycle : loadedCycle.reviewId === cycleReviewId ? loadedCycle.cycle : null
   // 报告可以原地更新；会话键只在底层不可变报告变了时变，可编辑清单随之重置。
   const sessionKey = String(reviewId ?? 'untracked')
     + ':' + String(snapshot?.sourceReviewId ?? 'raw')
@@ -293,7 +295,7 @@ export interface ReviewChecklistInput {
 
 /**
  * 审稿清单：逐项纳入或忽略、作者补充问题与总体指导、确认为不可变快照、按确认意见修稿、合并后复验。
- * 旧外壳的审稿报告标签与新外壳单章视图的审稿侧页共用；挂载方用 useReviewCycle 的 sessionKey 作 key，报告变了就重置。
+ * 单章视图的审稿侧页用它；挂载方用 useReviewCycle 的 sessionKey 作 key，报告变了就重置。
  */
 export function useReviewChecklist({
   reportText,

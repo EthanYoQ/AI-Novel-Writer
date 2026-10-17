@@ -8,13 +8,10 @@ function source(file: string) {
 
 const sessionGatedAsyncFiles = [
   'src/components/stage/knowledge/use-knowledge-base.ts',
-  'src/components/panels/KnowledgePanel.tsx',
   'src/components/editor/ArchFileViewer.tsx',
   'src/components/dialogs/use-batch-chapter-form.ts',
-  'src/components/dialogs/ChapterCreationDialog.tsx',
   'src/components/dialogs/use-directory-config-form.ts',
   'src/components/editor/use-character-profile.ts',
-  'src/components/editor/DraftEditor.tsx',
   'src/components/stage/history/use-version-history.ts',
   'src/components/editor/use-architecture-overview.ts',
   'src/components/stage/plot/use-plot-threads.ts',
@@ -35,11 +32,9 @@ describe('UI project session gates', () => {
   it('uses frozen-session IPC for UI mutations instead of recapturing by path', () => {
     const mutationSurfaces = [
       'src/components/stage/knowledge/use-knowledge-base.ts',
-      'src/components/panels/KnowledgePanel.tsx',
-      'src/components/editor/ArchFileViewer.tsx',
+          'src/components/editor/ArchFileViewer.tsx',
       'src/components/dialogs/use-batch-chapter-form.ts',
-      'src/components/dialogs/ChapterCreationDialog.tsx',
-      'src/components/editor/use-draft-actions.ts',
+          'src/components/editor/use-draft-actions.ts',
       'src/components/stage/history/use-version-history.ts',
     ]
 
@@ -49,7 +44,7 @@ describe('UI project session gates', () => {
   })
 
   it('passes the frozen session through DraftEditor helper calls that perform async work', () => {
-    // 草稿编辑器的异步动作在 use-draft-actions 里（新旧两种外壳共用）。
+    // 单章视图的草稿异步动作在 use-draft-actions 里。
     const draftEditor = source('src/components/editor/use-draft-actions.ts')
 
     expect(draftEditor).toContain('parseDraftMeta(filePath, projectKey, projectSession)')

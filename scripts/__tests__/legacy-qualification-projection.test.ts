@@ -21,7 +21,6 @@ const evidence = [
   ...acceptance,
   'qualification/packaged-vector-smoke.json',
   'qualification/packaged-official-homepage-smoke.json',
-  'qualification/packaged-skin-smoke.json',
   'qualification/macos-dmg-smoke.json',
 ]
 

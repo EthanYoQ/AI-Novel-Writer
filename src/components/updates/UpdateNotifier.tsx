@@ -41,10 +41,7 @@ export function UpdateNotifier() {
       duration: 0,
       actions: [{
         label: text('查看更新', 'View update'),
-        onClick: () => leaveSettingsThen(() => {
-          const layout = useLayoutStore.getState()
-          if (layout.sidebarView !== 'home' || !layout.sidebarOpen) layout.setSidebarView('home')
-        }),
+        onClick: () => leaveSettingsThen(() => useLayoutStore.getState().setSidebarView('home')),
       }],
     })
     activeNotice.current = { version, dismiss }

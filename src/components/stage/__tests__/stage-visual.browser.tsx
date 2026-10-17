@@ -6,7 +6,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import '../../../index.css'
 import '../../../styles/paper-ink/index.css'
 import type { ProjectData } from '../../../shared/ipc-channels'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useEditorStore, type EditorTab } from '../../../stores/editor-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { ChevronDown } from 'lucide-react'
@@ -186,21 +185,15 @@ describe('新外壳的外观细节', () => {
   })
 
   it('旧面板用旧按钮做的标签页：选中的那个除了强调色边线，底边还有一道强调色线，不只靠颜色区分', async () => {
-    const restore = useAppearanceStore.getState()
-    useAppearanceStore.setState({ resolvedShell: 'stage' })
-    try {
-      const container = await mount(
-        <div role="tablist" aria-label="剧情编辑器视图">
-          <Button size="sm" variant="default" role="tab" aria-selected>剧情树</Button>
-          <Button size="sm" variant="outline" role="tab" aria-selected={false}>计划清单</Button>
-        </div>,
-      )
-      const [selected, other] = [...container.querySelectorAll<HTMLElement>('[role="tab"]')].map(tab => getComputedStyle(tab).boxShadow)
-      const accent = getComputedStyle(container.querySelector('[role="tab"]')!).borderTopColor
-      expect([selected.includes(`${accent} 0px -2px 0px 0px inset`), other.includes('-2px 0px 0px inset')]).toEqual([true, false])
-    } finally {
-      useAppearanceStore.setState(restore, true)
-    }
+    const container = await mount(
+      <div role="tablist" aria-label="剧情编辑器视图">
+        <Button size="sm" variant="default" role="tab" aria-selected>剧情树</Button>
+        <Button size="sm" variant="outline" role="tab" aria-selected={false}>计划清单</Button>
+      </div>,
+    )
+    const [selected, other] = [...container.querySelectorAll<HTMLElement>('[role="tab"]')].map(tab => getComputedStyle(tab).boxShadow)
+    const accent = getComputedStyle(container.querySelector('[role="tab"]')!).borderTopColor
+    expect([selected.includes(`${accent} 0px -2px 0px 0px inset`), other.includes('-2px 0px 0px inset')]).toEqual([true, false])
   })
 
   it('鼠标停在书房起步卡上再按 Tab 聚焦它，焦点环仍画得出来，不被悬停样式盖掉', async () => {

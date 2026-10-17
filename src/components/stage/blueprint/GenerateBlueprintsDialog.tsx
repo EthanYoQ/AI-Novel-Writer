@@ -12,7 +12,7 @@ import { pluralEn } from '../../../shared/plural-en'
 
 const numberValue = (value: string): number | '' => value === '' ? '' : Number(value)
 
-/** AI 生成蓝图：范围、每章目标、已有蓝图的处理方式与节奏指导。表单逻辑与旧外壳的目录配置对话框共用。 */
+/** AI 生成蓝图：范围、每章目标、已有蓝图的处理方式与节奏指导。表单逻辑在 useDirectoryConfigForm。 */
 export default function GenerateBlueprintsDialog(props: DirectoryConfigProps) {
   const form = useDirectoryConfigForm(props)
   const ids = { targetUnits: useId(), pacing: useId(), range: useId() }

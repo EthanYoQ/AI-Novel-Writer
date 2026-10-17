@@ -2,7 +2,6 @@ import type { ProjectData, ProjectSessionContext } from '../../../shared/ipc-cha
 import type { ChapterDeletionResult } from '../../../shared/chapter-deletion'
 import { globalEventBus } from '../../../shared/event-bus'
 import { ipc } from '../../../services/ipc-client'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useDraftStore } from '../../../stores/draft-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -47,10 +46,9 @@ function deletionSurfaceConfig(
   displayName: string,
   text: Localize,
 ): DeletionSurfaceConfig {
-  // 清理没做完时，旧外壳在侧栏正文章节下提示重试，新外壳在这一章的单章视图里提示。
-  const stage = useAppearanceStore.getState().resolvedShell === 'stage'
-  const retryWhere = stage ? '在这一章的页面里' : '在正文章节下'
-  const retryWhereEn = stage ? 'on this chapter’s page' : 'below Manuscript chapters'
+  // 清理没做完时，在这一章的单章视图里提示重试。
+  const retryWhere = '在这一章的页面里'
+  const retryWhereEn = 'on this chapter’s page'
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
       confirmation: text(

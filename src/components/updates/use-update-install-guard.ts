@@ -9,7 +9,7 @@ export type UpdateInstallBlock = 'workflow' | 'unsaved'
 
 /**
  * 重启更新前的拦截：有创作任务时只能返回处理任务；有未保存修改时返回保存，或明确放弃后再重启。
- * 欢迎页的更新卡、新外壳的书房与设置共用。
+ * 书房的更新卡与设置里的「关于与更新」共用。
  */
 export function useUpdateInstallGuard(requestInstall: () => Promise<void>) {
   const tabs = useEditorStore(s => s.tabs)
@@ -44,7 +44,8 @@ export function useUpdateInstallGuard(requestInstall: () => Promise<void>) {
 
   return {
     block,
-    dismiss: () => setBlock(null),
+    /** 只关掉指定的拦截：确认放弃后重查到任务时已换成任务拦截，随后确认框自己的关闭不能把它也关掉。 */
+    dismiss: (kind: UpdateInstallBlock) => setBlock(current => (current === kind ? null : current)),
     install,
     discardAndInstall,
     unsavedItemCount,

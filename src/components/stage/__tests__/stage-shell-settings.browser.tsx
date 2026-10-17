@@ -7,7 +7,6 @@ import '../../../index.css'
 import '../../../styles/paper-ink/index.css'
 import '../stage.css'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -23,7 +22,7 @@ function snapshot<T>(store: StoreApi<T>): () => void {
   const state = store.getState()
   return () => store.setState(state, true)
 }
-const restores = [useAppearanceStore, useEditorStore, useLayoutStore, useLLMStore, useLocaleStore, useStageStore, useProjectStore]
+const restores = [useEditorStore, useLayoutStore, useLLMStore, useLocaleStore, useStageStore, useProjectStore]
   .map(store => snapshot(store as StoreApi<unknown>))
 
 const TARGET = 'C:\\novels\\harbor-copy'
@@ -48,7 +47,6 @@ beforeEach(async () => {
     return channel.endsWith('-list') || channel.endsWith('get-all') ? [] : undefined
   })
   Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => undefined } })
-  useAppearanceStore.setState({ resolvedShell: 'stage' })
   useLocaleStore.setState({ locale: 'zh-CN' })
   useLLMStore.setState({ loaded: true, models: [], defaultModelId: null })
   useEditorStore.setState({ tabs: [], activeTabId: null })
@@ -59,7 +57,7 @@ beforeEach(async () => {
   host.style.cssText = 'width: 1280px; height: 800px; display: flex;'
   document.body.append(host)
   root = createRoot(host)
-  await act(async () => root!.render(<StageShell theme="paper" />))
+  await act(async () => root!.render(<StageShell theme="light" />))
   await vi.waitFor(() => expect(skillUrl()).toBeTruthy())
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(skillUrl(), 'https://github.com/owner/skill')

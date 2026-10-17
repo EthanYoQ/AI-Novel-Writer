@@ -13,17 +13,17 @@ describe('i18n core', () => {
   })
 
   it('translates and interpolates values as plain text', () => {
-    expect(translate('en-US', 'project.current', { name: '<b>Book</b>' }))
-      .toBe('Current project: <b>Book</b>')
+    expect(translate('en-US', 'error.unknown', { message: '<b>Book</b>' }))
+      .toBe('Something went wrong: <b>Book</b>')
   })
 
   it('falls back to English and then the key', () => {
     const localTranslate = createTranslator({
-      'en-US': { 'common.open': 'Open' },
+      'en-US': { 'error.projectNotOpen': 'Open a project first.' },
       'zh-CN': {},
     })
 
-    expect(localTranslate('zh-CN', 'common.open')).toBe('Open')
+    expect(localTranslate('zh-CN', 'error.projectNotOpen')).toBe('Open a project first.')
     expect(localTranslate('en-US', 'missing.key')).toBe('missing.key')
   })
 

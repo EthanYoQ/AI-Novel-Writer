@@ -83,7 +83,7 @@ describe('Agent reachable UI locale', () => {
     expect(container.textContent).toContain('Coming soon')
     expect(container.textContent).toContain('AI Writing Assistant')
 
-    const moreButton = container.querySelector<HTMLButtonElement>('[title="More options"]')
+    const moreButton = container.querySelector<HTMLButtonElement>('[aria-label="More options"]')
     expect(moreButton).not.toBeNull()
     await act(async () => moreButton?.click())
     const skillsButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))

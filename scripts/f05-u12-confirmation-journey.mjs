@@ -10,11 +10,14 @@ import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as blueprintPage from './redesign/pages/blueprint.mjs'
+import * as runSheet from './redesign/pages/run-sheet.mjs'
+import * as stage from './redesign/pages/stage.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U12.A01-A08 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256 [--a06-only] [--diagnose-a06-lifecycle]\n')
+  process.stdout.write('F05 U12.A01-A08 packaged review journey in the paper-ink stage: --package-dir --package-source-sha --exe-sha256 --asar-sha256 [--a06-only] [--diagnose-a06-lifecycle]\n')
   process.exit(0)
 }
 const packageDir = option('package-dir') && path.resolve(option('package-dir'))
@@ -64,8 +67,9 @@ const objectiveReport = JSON.stringify({ summary: '本章返抵灯塔违反作�
   goalReviews: [{ id: 'ch1:keyEvents:1', status: 'unmet', description: '林岚在本章返抵灯塔，违反不得返回的约束。',
     evidence: [{ quote: forbiddenReturnQuote }] }] })
 const unverifiedQuote = '第二天，她回到灯塔。'
+const keptStaticItem = '保留：核对林岚离开港口后的时间线。'
 const report = JSON.stringify({ summary: '三项待作者判断。', items: [
-  { category: '连续性', severity: 'error', description: '保留：核对林岚离开港口后的时间线。', quote: '第二天，她回到灯塔。' },
+  { category: '连续性', severity: 'error', description: keptStaticItem, quote: '第二天，她回到灯塔。' },
   { category: '节奏', severity: 'warning', description: '拒绝：删掉灯塔场景。', quote: '她回到灯塔。' },
   { category: '来源核实', severity: 'unknown', description: '缺失角色标识，需核对林岚返抵灯塔的记录。',
     quote: unverifiedQuote, sourceChapter: 1 },
@@ -170,25 +174,50 @@ async function launch(fixturePort) {
   }, fixturePort)
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  await stage.waitForStage(page)
   assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer',
-      revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
   return { app, page }
 }
-async function openReport(page, name = projectName) {
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${name}》` }).click()
-  await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-  await page.getByRole('button', { name: /审稿报告\(/ }).click()
-  await page.getByText('人工确认修稿清单', { exact: true }).waitFor({ state: 'visible' })
+/** 从书房打开作品，再从流程脊打开第 1 章。 */
+async function openChapter(page, name) {
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, name)
+  await stage.waitForWork(page, name)
+  return stage.openChapter(page, 1)
+}
+/** 单章视图的审稿侧页：已审稿的稿打开时默认展开；被运行侧页占着时从「更多操作」打开。 */
+const reviewSheet = page => page.getByRole('complementary', { name: '审稿报告' })
+const issues = page => reviewSheet(page).locator('.stage-ch-issues > .stage-ch-issue')
+const issue = (page, description) => issues(page).filter({ has: page.locator('.stage-ch-issue-text', { hasText: description }) })
+async function openReviewSheet(page) {
+  // 审稿结果读进单章视图后动作条才换成修稿按钮，「更多操作」里也才有「审稿报告」；侧页随后自动展开。
+  // 先等读完，再等侧页一会儿，最后才从菜单打开（侧页开着时菜单里没有这一项）。
+  await stage.root(page).locator('.stage-ch-actions').getByRole('button', { name: /^(按 \d+ 项意见修稿|确认不修改)$/ })
+    .waitFor({ state: 'visible', timeout: 30_000 })
+  await reviewSheet(page).waitFor({ state: 'visible', timeout: 5_000 }).catch(() => {})
+  if (await reviewSheet(page).isVisible()) return
+  await stage.root(page).getByRole('button', { name: '更多操作', exact: true }).click()
+  await page.getByRole('menuitem', { name: '审稿报告', exact: true }).click()
+  await reviewSheet(page).waitFor({ state: 'visible' })
+}
+async function issueStates(page) {
+  return issues(page).evaluateAll(items => items.map(item => ({
+    text: item.querySelector('.stage-ch-issue-text')?.textContent ?? '',
+    checked: item.querySelector('input[type="checkbox"]')?.checked ?? null,
+  })))
+}
+/** 章节动作条上的修稿主按钮「按 N 项意见修稿」：清单没确认或改过就先确认成新快照，再按它启动修稿。 */
+const reviseButton = (page, count) => stage.root(page).getByRole('button', { name: `按 ${count} 项意见修稿`, exact: true })
+const lastRunCard = page => runSheet.anyCard(page).filter({ hasText: /^上一次运行/ })
+const dangerToasts = page => stage.toastStack(page).locator(`${stage.LIVE_TOAST}[data-tone="danger"]`)
+const mergeView = page => stage.root(page).getByRole('region', { name: '修稿合并' })
+const originalColumns = async page => (await mergeView(page).locator('.stage-ch-hunk-col[data-kind="original"]').allInnerTexts()).join('\n').trim()
+/** 合并后若正文标签仍标未保存，按 Ctrl S 保存。 */
+async function saveIfDirty(page) {
+  if (await stage.saveStatus(page).filter({ hasText: /^未保存$/ }).count() === 0) return false
+  await stage.saveProse(page)
+  return true
 }
 
 async function main() {
@@ -209,13 +238,19 @@ async function main() {
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
     retainedReason: 'isolated SQLite and failure evidence for independent review',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  const fixture = { requests: [], externalModelRequests: 0, promptBoundaries: [], candidateReviewAccepted: false }
+  // 纸墨外壳里确认清单与启动修稿是同一个按钮：静态审稿项目（A03）确认时会顺带发起一次修稿，另记、回 422，不占在线项目的编号。
+  // 在线项目的第 2 次请求是原样返回的空修稿（A05，先挂住，等记下正式数据再放行），第 3 次才是真正的修稿（A04）。
+  const fixture = { requests: [], staticRequests: [], externalModelRequests: 0, promptBoundaries: [], candidateReviewAccepted: false,
+    noopHeld: false, releaseNoop: null }
   const server = createServer(async (request, response) => {
     const authorized = request.headers.authorization === `Bearer ${liveModel.apiKey}`
     const route = request.url
-    fixture.requests.push({ method: request.method, route, authorized })
-    if (request.method !== 'POST' || !authorized) { response.writeHead(403).end(); return }
+    if (request.method !== 'POST' || !authorized) {
+      fixture.requests.push({ method: request.method, route, authorized })
+      response.writeHead(403).end(); return
+    }
     if (route === '/v1/embeddings') {
+      fixture.requests.push({ method: request.method, route, authorized })
       const payload = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
       const inputs = Array.isArray(payload.input) ? payload.input : [payload.input]
       response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
@@ -223,11 +258,19 @@ async function main() {
       }))
       return
     }
-    if (route !== '/v1/chat/completions') { response.writeHead(404).end(); return }
+    if (route !== '/v1/chat/completions') {
+      fixture.requests.push({ method: request.method, route, authorized })
+      response.writeHead(404).end(); return
+    }
     const payload = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
-    const dispatch = fixture.requests.filter(item => item.route === '/v1/chat/completions').length
     const prompt = Array.isArray(payload.messages) ? payload.messages.map(message => typeof message?.content === 'string'
       ? message.content : JSON.stringify(message?.content ?? '')).join('\n') : ''
+    if (prompt.includes(keptStaticItem)) {
+      fixture.staticRequests.push({ method: request.method, route, authorized })
+      response.writeHead(422).end(); return
+    }
+    fixture.requests.push({ method: request.method, route, authorized })
+    const dispatch = fixture.requests.filter(item => item.route === '/v1/chat/completions').length
     const messageRoles = Array.isArray(payload.messages) ? payload.messages.map(message => message?.role ?? null) : []
     const candidateProject = prompt.includes('候选边界')
     const candidateSourceBound = prompt.includes(body) && prompt.includes('林岚离开港口')
@@ -259,7 +302,7 @@ async function main() {
     if (dispatch === 1) fixture.reviewFocusBound = payload.messages?.some(message =>
       typeof message.content === 'string' && message.content.includes(
         '★【作者要求重点检查的维度（如有，这些维度必须优先、深入检查）】★：\n剧情连贯性\n'))
-    const content = dispatch === 1 ? liveReport : dispatch === 2 ? revisedBody : dispatch === 3 ? body
+    const content = dispatch === 1 ? liveReport : dispatch === 2 ? body : dispatch === 3 ? revisedBody
       : dispatch === 4 ? objectiveReport : dispatch === 5 ? recheckedBody
         : dispatch === 6 && fixture.recheckFinding ? JSON.stringify({ summary: '返抵灯塔仍违反作者约束。', items: [{
           findingId: fixture.recheckFinding.findingId, targetId: fixture.recheckFinding.targetId,
@@ -270,18 +313,27 @@ async function main() {
     if (!content || payload.model !== liveModel.modelName || payload.stream !== true) {
       response.writeHead(422).end(); return
     }
+    if (dispatch === 2) await new Promise(resolve => { fixture.noopHeld = true; fixture.releaseNoop = resolve })
     if (candidateReview) fixture.candidateReviewAccepted = true
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
     response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\n`)
     response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`)
     response.end('data: [DONE]\n\n')
   })
+  const liveChatRequests = () => fixture.requests.filter(item => item.route === '/v1/chat/completions')
   let app, page, projectPath, sourceReviewId, draftId, failure, liveProjectPath, observedProcess
   const processState = () => ({ pid: observedProcess?.pid ?? null,
     exitCode: observedProcess?.exitCode ?? null, signalCode: observedProcess?.signalCode ?? null })
   let currentStep = 'fixture-persist'
   try {
-    ({ app, page } = await launch())
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const fixturePort = server.address().port
+    ;({ app, page } = await launch(fixturePort))
+    assert.equal((await invoke(page, 'llm:save-model', liveModel)).success, true)
+    assert.equal((await invoke(page, 'llm:set-default-model', liveModel.id)).success, true)
     const project = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(project.success, true, project.error)
@@ -289,9 +341,9 @@ async function main() {
     const opened = await invoke(page, 'project:open', projectPath, randomUUID(), null)
     assert.equal(opened.success, true, opened.error)
     const session = { projectId: project.projectId, projectPath, leaseId: opened.project.sessionLease }
-    const blueprint = await invoke(page, 'db:blueprint-upsert', { chapterNumber: 1, title: '港口灯塔',
+    const seededBlueprint = await invoke(page, 'db:blueprint-upsert', { chapterNumber: 1, title: '港口灯塔',
       role: '发展', purpose: '核对审稿决定', keyEvents: '林岚离开港口', characters: [] }, projectPath, session)
-    assert.equal(blueprint.success, true, blueprint.error)
+    assert.equal(seededBlueprint.success, true, seededBlueprint.error)
     const draft = await invoke(page, 'db:draft-create', { chapterNumber: 1, version: 1, source: 'write',
       content: body, wordCount: body.length }, projectPath, session)
     assert.equal(draft.success, true, draft.error)
@@ -311,41 +363,40 @@ async function main() {
       { draftId, sourceReviewId, sourceReviewSha256: createHash('sha256').update(report).digest('hex') })
     await app.close(); app = null
 
-    currentStep = 'U12.A02-v3-evidence'
-    ;({ app, page } = await launch())
-    await openReport(page)
-    const issueFields = page.locator('textarea[aria-label="审稿问题"]')
-    assert.equal(await issueFields.count(), 3, 'V3 must show all seeded review issues')
-    assert.equal(await issueFields.nth(2).inputValue(), '缺失角色标识，需核对林岚返抵灯塔的记录。')
-    const unverifiedSeverity = page.getByRole('combobox', { name: '严重程度' }).nth(2)
+    currentStep = 'U12.A02-stage-evidence'
+    ;({ app, page } = await launch(fixturePort))
+    await openChapter(page, projectName)
+    await openReviewSheet(page)
+    assert.equal(await issues(page).count(), 3, 'the review sheet must show all seeded review issues')
+    // 点「编辑」后说明文字换成输入框，按标签（严重程度 · 分类）认这一条。
+    const unverified = issues(page).filter({ has: page.locator('.stage-ch-issue-tag', { hasText: '待核实 · 来源核实' }) })
+    assert.equal(await unverified.locator('.stage-ch-issue-text').innerText(), '缺失角色标识，需核对林岚返抵灯塔的记录。')
+    assert.equal(await unverified.locator('.stage-ch-issue-tag').innerText(), '待核实 · 来源核实')
+    assert.equal(await unverified.locator('.stage-ch-issue-quote').innerText(), unverifiedQuote)
+    await unverified.getByText('来源：第1章', { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await unverified.getByRole('checkbox').isChecked(), false, 'the unverified item must not enter revision by default')
+    await unverified.getByRole('button', { name: '编辑', exact: true }).click()
+    assert.equal(await unverified.getByRole('textbox', { name: '审稿问题' }).inputValue(), '缺失角色标识，需核对林岚返抵灯塔的记录。')
+    const unverifiedSeverity = unverified.getByRole('combobox', { name: '严重程度' })
     assert.equal(await unverifiedSeverity.inputValue(), 'unknown')
     assert.equal(await unverifiedSeverity.locator('option:checked').innerText(), '待核实')
-    assert.equal(await page.getByRole('textbox', { name: '相关原文（可选）' }).nth(2).inputValue(), unverifiedQuote)
-    await page.getByText('来源：第1章', { exact: true }).waitFor({ state: 'visible' })
-    assert.equal(await page.getByText('已忽略，不会传给模型', { exact: true }).count(), 1,
-      'the unverified item must not enter revision by default')
-    assert.equal(await page.getByRole('button', { name: '明确纳入修稿', exact: true }).count(), 1)
+    assert.equal(await unverified.getByRole('textbox', { name: '相关原文（可选）' }).inputValue(), unverifiedQuote)
+    await unverified.getByRole('button', { name: '收起', exact: true }).click()
+    assert.deepEqual((await issueStates(page)).map(item => item.checked), [true, true, false], 'AI error and suggestion are included by default')
+    assert.equal(await reviewSheet(page).locator('.stage-ch-sheet-count').innerText(), '2 / 3')
     assert.deepEqual(reviewRows(projectPath).map(row => row.content), [report], 'viewing changed the source review')
     assert.deepEqual(draftRow(projectPath, draftId), sourceDraft, 'viewing changed the source draft')
-    pass('U12.A02-v3-evidence', 'V3 shows a locatable source quote as unverified and leaves the source draft and AI report unchanged',
+    pass('U12.A02-stage-evidence', 'The stage review sheet shows a locatable source quote as 待核实, unchecked by default, and leaves the source draft and AI report unchanged',
       { sourceReviewId, draftId, quote: unverifiedQuote, sourceChapter: 1, defaultDecision: 'ignore' }, 'U12.A02')
 
-    currentStep = 'U12.A03-v3-confirm'
-    assert.equal(await issueFields.nth(1).inputValue(), '拒绝：删掉灯塔场景。')
-    assert.equal(await page.getByRole('button', { name: '忽略', exact: true }).count(), 2,
-      'both fixture review items must default to included')
-    await page.getByRole('button', { name: '忽略', exact: true }).nth(1).click()
-    await page.getByRole('heading', { name: '节奏', exact: true }).locator('..')
-      .getByText('已忽略，不会传给模型', { exact: true }).waitFor({ state: 'visible' })
-    assert.equal(await page.getByRole('heading', { name: '来源核实', exact: true }).locator('..')
-      .getByText('已忽略，不会传给模型', { exact: true }).count(), 1,
-      'unverified item must remain ignored after the author rejects the second item')
-    assert.equal(await page.getByText('已纳入本次修稿', { exact: true }).count(), 1,
-      'first item must remain included in the UI')
-    await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
-    await page.getByText('已确认', { exact: true }).waitFor({ state: 'visible' })
-    const rows = reviewRows(projectPath)
-    assert.equal(rows.length, 2, 'UI confirmation must append exactly one review row')
+    currentStep = 'U12.A03-stage-confirm'
+    const rejected = issue(page, '拒绝：删掉灯塔场景。')
+    await rejected.locator('label.pi-check').click()
+    assert.deepEqual((await issueStates(page)).map(item => item.checked), [true, false, false])
+    // 纸墨外壳没有单独的「确认审稿清单」：「按 N 项意见修稿」先把清单确认成新快照，再按它启动修稿（夹具对这次修稿回 422）。
+    await reviseButton(page, 1).click()
+    const confirmedStatic = await waitForRows(projectPath, state => state.reviews.length === 2)
+    const rows = confirmedStatic.reviews
     assert.equal(rows[0].id, sourceReviewId)
     assert.equal(rows[0].content, report, 'original AI review was rewritten')
     assert.equal(rows[0].sourceContent, body)
@@ -354,31 +405,35 @@ async function main() {
     assert.equal(confirmation.sourceReviewId, sourceReviewId)
     assert.deepEqual(confirmation.sourceDraft, sourceDraft)
     assert.deepEqual(confirmation.items.map(item => [item.description, item.decision, item.origin]), [
-      ['保留：核对林岚离开港口后的时间线。', 'apply', 'ai'],
+      [keptStaticItem, 'apply', 'ai'],
       ['拒绝：删掉灯塔场景。', 'ignore', 'ai'],
       ['缺失角色标识，需核对林岚返抵灯塔的记录。', 'ignore', 'ai'],
     ])
     assert.equal(rows[1].baseDraftId, draftId)
     assert.equal(rows[1].reviewIndex, rows[0].reviewIndex + 1)
-    pass('U12.A03-v3-confirm', 'V3 UI kept one suggestion, rejected another, and appended an exact source-bound snapshot without changing the AI report',
-      { sourceReviewId, confirmationReviewId: rows[1].id, decisions: confirmation.items.map(item => item.decision) }, 'U12.A03')
+    // 顺带发起的修稿被夹具拒绝：等它结束（运行失败或审稿侧页报错），不留进行中的运行。
+    await lastRunCard(page).locator('.run-card-meta').filter({ hasText: / · 失败$/ })
+      .or(reviewSheet(page).getByRole('alert')).first().waitFor({ state: 'visible', timeout: 60_000 })
+    assert.deepEqual(formalRows(projectPath).revisions, [], 'the rejected static revision stored a revision')
+    assert.deepEqual(draftRow(projectPath, draftId), sourceDraft)
+    pass('U12.A03-stage-confirm', 'Unchecking one AI suggestion and choosing 按 1 项意见修稿 appended an exact source-bound snapshot (apply / ignore / ignore) without changing the AI report; the fixture refused the revision itself, so no revision was stored',
+      { sourceReviewId, confirmationReviewId: rows[1].id, decisions: confirmation.items.map(item => item.decision),
+        staticRevisionRequests: fixture.staticRequests.length }, 'U12.A03')
     await app.close(); app = null
 
     currentStep = 'U12.A03-process-reopen'
-    ;({ app, page } = await launch())
-    await openReport(page)
-    await page.getByRole('button', { name: '按确认意见修稿', exact: true }).waitFor({ state: 'visible' })
+    ;({ app, page } = await launch(fixturePort))
+    await openChapter(page, projectName)
+    await openReviewSheet(page)
+    await reviewSheet(page).getByText('清单已确认，保存为新的不可变快照；原始 AI 审稿没有被修改。', { exact: true }).waitFor({ state: 'visible' })
+    assert.deepEqual((await issueStates(page)).map(item => item.checked), [true, false, false])
+    await reviseButton(page, 1).waitFor({ state: 'visible' })
     assert.deepEqual(reviewRows(projectPath), rows, 'restart changed persisted reviews')
-    pass('U12.A03-process-reopen', 'A new Electron process renders the confirmed review and retains both immutable rows',
+    pass('U12.A03-process-reopen', 'A new Electron process renders the confirmed checklist with its decisions and retains both immutable rows',
       { sourceReviewId, confirmationReviewId: rows[1].id, reviewCount: rows.length }, 'U12.A03')
     await app.close(); app = null
 
     currentStep = 'U12.A01-production-review'
-    await new Promise((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(0, '127.0.0.1', resolve)
-    })
-    const fixturePort = server.address().port
     ;({ app, page } = await launch(fixturePort))
     const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: liveProjectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
@@ -388,8 +443,6 @@ async function main() {
     assert.equal(openedLive.success, true, openedLive.error)
     const liveSession = { projectId: created.projectId, projectPath: liveProjectPath,
       leaseId: openedLive.project.sessionLease }
-    assert.equal((await invoke(page, 'llm:save-model', liveModel)).success, true)
-    assert.equal((await invoke(page, 'llm:set-default-model', liveModel.id)).success, true)
     const liveBlueprint = await invoke(page, 'db:blueprint-upsert', { chapterNumber: 1, title: '港口灯塔',
       role: '发展', purpose: '核对审稿决定', keyEvents: '林岚离开港口', characters: [] }, liveProjectPath, liveSession)
     assert.equal(liveBlueprint.success, true, liveBlueprint.error)
@@ -401,17 +454,16 @@ async function main() {
     fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
     await app.close(); app = null
     ;({ app, page } = await launch(fixturePort))
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${liveProjectName}》` }).click()
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    await page.getByRole('button', { name: 'AI 审稿', exact: true }).click()
-    await page.getByRole('heading', { name: 'AI 审稿确认' }).waitFor({ state: 'visible' })
+    await openChapter(page, liveProjectName)
+    // 「AI 审稿」拆分按钮旁的「检查维度」：这次只留剧情连贯性。
+    await stage.root(page).getByRole('button', { name: '检查维度', exact: true }).click()
+    const focusPopover = page.getByRole('dialog', { name: '检查维度' })
     const dimensionLabels = ['剧情连贯性', '剧情合理性', '角色状态', '前后章节串联']
-    const dimension = label => page.getByRole('dialog').locator('label').filter({ hasText: label })
-    for (const label of dimensionLabels) await dimension(label).click()
-    await dimension('剧情连贯性').click()
-    for (const label of dimensionLabels) assert.equal(await dimension(label).locator('svg').count(),
-      label === '剧情连贯性' ? 1 : 0, `incorrect selected review dimension: ${label}`)
-    await page.getByRole('button', { name: '确认执行', exact: true }).click()
+    const dimension = label => focusPopover.locator('label.pi-check').filter({ hasText: label })
+    for (const label of dimensionLabels.slice(1)) await dimension(label).click()
+    for (const label of dimensionLabels) assert.equal(await dimension(label).getByRole('checkbox').isChecked(),
+      label === '剧情连贯性', `incorrect selected review dimension: ${label}`)
+    await stage.root(page).getByRole('button', { name: 'AI 审稿', exact: true }).click()
     const reviewed = await waitForRows(liveProjectPath, state => state.reviews.length === 1 && state.cycles.length === 1)
     assert.equal(fixture.reviewFocusBound, true, 'selected dimension was not bound into the production review request')
     const liveReview = reviewed.reviews[0]
@@ -425,74 +477,39 @@ async function main() {
     assert.equal(reviewed.cycles[0].reviewId, liveReview.id)
     assert.equal(reviewed.cycles[0].revisionStatus, 'not-generated')
     assert.deepEqual(draftRow(liveProjectPath, liveDraft.id), liveSourceDraft)
-    pass('U12.A01-production-review', 'V3 selected review dimensions and checked the frozen chapter goal through the production owner and cycle',
+    pass('U12.A01-production-review', 'The 检查维度 popover narrowed the review to 剧情连贯性 and AI 审稿 checked the frozen chapter goal through the production owner and cycle',
       { projectId: created.projectId, reviewId: liveReview.id, cycleId: reviewed.cycles[0].cycleId,
         goalIds: parsedReview.goalReview.items.map(item => item.id), providerRequests: fixture.requests.length }, 'U12.A01')
 
-    currentStep = 'U12.A04-confirmed-revision'
-    assert.equal(await page.getByText('人工确认修稿清单', { exact: true }).isVisible(), true,
-      'production review did not open its confirmation report')
-    await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
+    currentStep = 'U12.A05-noop-negative-control'
+    // 纸墨外壳有待合并的修稿时不能再按意见修稿（先合并或丢弃），所以先做原样返回的空修稿对照，再做真正的修稿（A04）。
+    await reviseButton(page, 1).waitFor({ state: 'visible', timeout: 30_000 })
+    const beforeGeneration = generationRows(liveProjectPath)
+    await reviseButton(page, 1).click()
     const confirmedRows = await waitForRows(liveProjectPath, state => state.reviews.length === 2)
     const confirmedReview = confirmedRows.reviews[1]
     const confirmed = JSON.parse(confirmedReview.content)
     assert.equal(confirmed.sourceReviewId, liveReview.id)
     assert(confirmed.items.some(item => item.decision === 'apply'))
     assert.equal(confirmedRows.reviews[0].content, liveReview.content)
-    await page.getByRole('button', { name: '按确认意见修稿', exact: true }).click()
-    await page.getByLabel('本次修稿模型').selectOption(liveModel.id)
-    await page.getByRole('button', { name: '开始修稿', exact: true }).click()
-    const revised = await waitForRows(liveProjectPath, state => state.revisions.length === 1
-      && state.cycles[0]?.revisionStatus === 'generated')
-    const revision = revised.revisions[0]
-    assert.equal(revision.baseDraftId, liveDraft.id)
-    assert.equal(revision.reviewSourceId, confirmedReview.id)
-    assert.equal(revision.revisionType, 'review-fix')
-    assert.equal(revision.status, 'pending')
-    assert.equal(revision.content, revisedBody)
-    assert.notEqual(revision.content, body)
-    assert.equal(revised.cycles[0].revisionId, revision.id)
-    assert.equal(revised.cycles[0].confirmationReviewId, confirmedReview.id)
-    assert.equal(revised.effects.filter(effect => effect.kind === 'revision' && effect.id === revision.id
-      && effect.projectId === created.projectId).length, 1)
-    assert.deepEqual(draftRow(liveProjectPath, liveDraft.id), liveSourceDraft)
-    assert.equal(revised.reviews[0].content, liveReview.content)
-    assert.equal(revised.outboxCount, 0)
-    assert.deepEqual(revised.draftStatuses, [{ id: liveDraft.id, status: 'draft' }])
-    fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
-    assert.equal(fixture.externalModelRequests, 0)
-    assert(fixture.requests.every(item => item.method === 'POST' && item.authorized
-      && ['/v1/chat/completions', '/v1/embeddings'].includes(item.route)))
-    assert.deepEqual(fixture.requests.filter(item => item.route === '/v1/chat/completions')
-      .map(item => [item.method, item.authorized]), [['POST', true], ['POST', true]])
-    pass('U12.A04-confirmed-revision', 'V3 author confirmation drove a controlled provider revision into a pending formal review-fix candidate',
-      { reviewId: liveReview.id, confirmationReviewId: confirmedReview.id, revisionId: revision.id,
-        cycleId: revised.cycles[0].cycleId, providerRequests: fixture.requests.length,
-        externalModelRequests: fixture.externalModelRequests }, 'U12.A04')
-
-    currentStep = 'U12.A05-noop-negative-control'
+    const heldDeadline = Date.now() + 60_000
+    while (!fixture.noopHeld && Date.now() < heldDeadline) await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(fixture.noopHeld, true, 'the no-op revision request did not reach the provider fixture')
     const beforeNoop = formalRows(liveProjectPath)
-    const beforeGeneration = generationRows(liveProjectPath)
-    await page.getByRole('dialog', { name: /^修稿合并 — 审稿修复/ })
-      .getByRole('button', { name: '关闭', exact: true }).click()
-    await page.getByText('审稿报告：第1章', { exact: true }).click()
-    await page.getByText('已确认', { exact: true }).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '按确认意见修稿', exact: true }).click()
-    await page.getByLabel('本次修稿模型').selectOption(liveModel.id)
-    await page.getByRole('button', { name: '开始修稿', exact: true }).click()
-    const failedNotice = page.locator('.writer-ai-panel').getByRole('alert')
-      .filter({ hasText: 'GENERATION_REVIEW_REVISION_NOOP' })
-    await failedNotice.waitFor({ state: 'visible', timeout: 60_000 })
-    assert.match(await failedNotice.innerText(), /工作流未完成.*GENERATION_REVIEW_REVISION_NOOP/s)
-    const copyOnly = page.getByRole('region', { name: '持久正文候选' }).locator('article')
-      .filter({ hasText: '候选未通过保存校验；可复制保留' })
+    fixture.releaseNoop()
+    const noopCard = lastRunCard(page)
+    await noopCard.locator('.run-card-meta').filter({ hasText: / · 失败$/ }).waitFor({ state: 'visible', timeout: 60_000 })
+    const failedNotice = noopCard.locator('.pi-notice[data-tone="danger"]')
+    assert.match(await failedNotice.innerText(), /GENERATION_REVIEW_REVISION_NOOP/)
+    const copyOnly = runSheet.recovery(page).getByRole('article').filter({ hasText: '候选未通过保存校验；可复制保留' })
     await copyOnly.waitFor({ state: 'visible', timeout: 30_000 })
     assert.equal(await copyOnly.count(), 1)
-    assert.equal(await copyOnly.getByText(body, { exact: true }).count(), 1)
+    assert.equal(await copyOnly.locator('.run-excerpt-text').filter({ hasText: new RegExp(`^${body}$`) }).count(), 1)
     assert.equal(await copyOnly.getByRole('button', { name: '复制', exact: true }).count(), 1)
     assert.equal(await copyOnly.getByRole('button', { name: '恢复此审修任务' }).isDisabled(), true)
     const afterNoop = formalRows(liveProjectPath)
     assert.deepEqual(afterNoop, beforeNoop, 'no-op changed formal drafts, reviews, revisions, cycles, bindings, effects or outbox')
+    assert.deepEqual(afterNoop.revisions, [], 'no-op stored a revision')
     const afterGeneration = generationRows(liveProjectPath)
     const newRuns = afterGeneration.runs.filter(row => !beforeGeneration.runs.some(before => before.runId === row.runId))
     const newAttempts = afterGeneration.attempts.filter(row => !beforeGeneration.attempts.some(before => before.attemptId === row.attemptId))
@@ -517,13 +534,42 @@ async function main() {
     assert.notEqual(newArtifacts[0].status, 'discarded')
     fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
     assert.equal(fixture.externalModelRequests, 0)
-    assert.deepEqual(fixture.requests.filter(item => item.route === '/v1/chat/completions')
-      .map(item => [item.method, item.authorized]), [['POST', true], ['POST', true], ['POST', true]])
-    pass('U12.A05-noop-negative-control', 'A fresh V3 revision returned the exact source; UI failure and copy-only artifact remained while all formal rows stayed unchanged',
-      { confirmationReviewId: confirmedReview.id, preservedRevisionId: revision.id,
-        runId: newRuns[0].runId, rootActionId: newRuns[0].rootActionId,
+    assert.deepEqual(liveChatRequests().map(item => [item.method, item.authorized]), [['POST', true], ['POST', true]])
+    pass('U12.A05-noop-negative-control', 'A confirmed revision that returned the exact source failed as GENERATION_REVIEW_REVISION_NOOP; the run sheet kept a copy-only artifact while all formal rows stayed unchanged',
+      { confirmationReviewId: confirmedReview.id, runId: newRuns[0].runId, rootActionId: newRuns[0].rootActionId,
         attemptId: newAttempts[0].attemptId, artifactId: newArtifacts[0].artifactId,
         externalModelRequests: fixture.externalModelRequests }, 'U12.A05')
+
+    currentStep = 'U12.A04-confirmed-revision'
+    // 清单已确认、没再改：再按「按 1 项意见修稿」沿用同一份确认快照，不再追加审稿行。
+    await reviseButton(page, 1).click()
+    const revised = await waitForRows(liveProjectPath, state => state.revisions.length === 1
+      && state.cycles[0]?.revisionStatus === 'generated')
+    assert.equal(revised.reviews.length, 2, 'reusing the confirmed checklist appended another review row')
+    const revision = revised.revisions[0]
+    assert.equal(revision.baseDraftId, liveDraft.id)
+    assert.equal(revision.reviewSourceId, confirmedReview.id)
+    assert.equal(revision.revisionType, 'review-fix')
+    assert.equal(revision.status, 'pending')
+    assert.equal(revision.content, revisedBody)
+    assert.notEqual(revision.content, body)
+    assert.equal(revised.cycles[0].revisionId, revision.id)
+    assert.equal(revised.cycles[0].confirmationReviewId, confirmedReview.id)
+    assert.equal(revised.effects.filter(effect => effect.kind === 'revision' && effect.id === revision.id
+      && effect.projectId === created.projectId).length, 1)
+    assert.deepEqual(draftRow(liveProjectPath, liveDraft.id), liveSourceDraft)
+    assert.equal(revised.reviews[0].content, liveReview.content)
+    assert.equal(revised.outboxCount, 0)
+    assert.deepEqual(revised.draftStatuses, [{ id: liveDraft.id, status: 'draft' }])
+    fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+    assert.equal(fixture.externalModelRequests, 0)
+    assert(fixture.requests.every(item => item.method === 'POST' && item.authorized
+      && ['/v1/chat/completions', '/v1/embeddings'].includes(item.route)))
+    assert.deepEqual(liveChatRequests().map(item => [item.method, item.authorized]), [['POST', true], ['POST', true], ['POST', true]])
+    pass('U12.A04-confirmed-revision', 'The confirmed checklist drove a controlled provider revision into a pending formal review-fix candidate',
+      { reviewId: liveReview.id, confirmationReviewId: confirmedReview.id, revisionId: revision.id,
+        cycleId: revised.cycles[0].cycleId, providerRequests: fixture.requests.length,
+        externalModelRequests: fixture.externalModelRequests }, 'U12.A04')
 
     currentStep = 'U12.A06-merge-unverified-control'
     const oldFinding = formalRows(liveProjectPath).findings
@@ -531,41 +577,33 @@ async function main() {
     assert.equal(oldFinding[0].cycle_id, revised.cycles[0].cycleId)
     assert.deepEqual([oldFinding[0].kind, oldFinding[0].status, oldFinding[0].target_id],
       ['literary', 'unverified', null], 'the old unanchored finding cannot be a recheck positive control')
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    await page.getByRole('button', { name: '待合并(1)' }).click()
-    const oldMerge = page.getByRole('dialog', { name: /^修稿合并 — 第1章/ })
-    await oldMerge.getByRole('button', { name: '全部修稿' }).click()
-    await oldMerge.getByRole('button', { name: '完成合并' }).click()
+    // 有待合并的修稿时单章视图直接摆出合并视图。
+    await mergeView(page).waitFor({ state: 'visible', timeout: 30_000 })
+    assert.equal(await originalColumns(page), body, 'the first comparison is not based on the source draft')
+    await mergeView(page).getByRole('button', { name: '全部用修稿', exact: true }).click()
+    await mergeView(page).getByRole('button', { name: '完成合并', exact: true }).click()
     const oldMerged = await waitForRows(liveProjectPath, state => state.cycles[0]?.revisionStatus === 'merge-committed'
       && state.revisions[0]?.status === 'merged' && state.draftStatuses[0]?.status === 'revised')
     assert.equal(draftRow(liveProjectPath, liveDraft.id).content, revisedBody)
     assert.equal(oldMerged.cycles[0].revisionId, revision.id)
     assert.equal(oldMerged.cycles[0].recheckCount, 0)
     assert.equal(formalRows(liveProjectPath).findings[0].status, 'unverified')
-    await oldMerge.waitFor({ state: 'hidden' })
-    const draftSave = page.getByRole('button', { name: '保存', exact: true })
-    assert.equal(await draftSave.locator('..').locator('[title="有未保存的修改"]').count(), 1,
-      'the first merge did not leave the observed unsaved chapter tab')
-    assert.equal((await page.locator('.cm-content').innerText()).trim(), `港口灯塔\n第 1 章\n${revisedBody}`,
-      'the unsaved editor body differs from the committed first merge')
-    await draftSave.click()
-    await draftSave.waitFor({ state: 'hidden' })
+    await mergeView(page).waitFor({ state: 'hidden' })
+    assert.equal(await stage.proseBody(stage.prose(page)), revisedBody, 'the chapter view does not show the committed first merge')
+    const savedAfterFirstMerge = await saveIfDirty(page)
     assert.deepEqual(draftRow(liveProjectPath, liveDraft.id), { ...liveSourceDraft, status: 'revised', content: revisedBody })
     assert.equal(formalRows(liveProjectPath).revisions[0].status, 'merged')
 
     currentStep = 'U12.A06-objective-review'
-    await page.locator('.writer-left-rail button[title="章节蓝图"]').click()
-    const keyEventsInput = page.getByPlaceholder('主角做了什么，遭遇了什么反转，金手指怎么用的...')
-    await keyEventsInput.waitFor({ state: 'visible' })
+    await blueprintPage.open(page)
+    await blueprintPage.planItem(page, 1).click()
+    const keyEventsInput = blueprintPage.card(page).getByLabel('冲突与转折', { exact: true })
     assert.equal(await keyEventsInput.inputValue(), '林岚离开港口')
     await keyEventsInput.fill(forbiddenReturn)
-    await page.getByRole('heading', { name: '第 1 章：港口灯塔' }).locator('..')
-      .getByRole('button', { name: '保存', exact: true }).click()
+    await blueprintPage.card(page).getByRole('button', { name: '保存此章', exact: true }).click()
     await waitForRows(liveProjectPath, state => state.blueprintKeyEvents === forbiddenReturn)
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    await page.getByRole('button', { name: 'AI 审稿', exact: true }).click()
-    await page.getByRole('heading', { name: 'AI 审稿确认' }).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '确认执行', exact: true }).click()
+    await stage.openChapter(page, 1)
+    await stage.root(page).getByRole('button', { name: '重新审稿', exact: true }).click()
     const objectiveReviewed = await waitForRows(liveProjectPath, state => state.reviews.length === 3
       && state.cycles.length === 2)
     assert.equal(fixture.objectiveBound, true, 'the changed blueprint was not frozen in the production review request')
@@ -585,18 +623,18 @@ async function main() {
       problem: objective.goalReview.items[0].description, expected: forbiddenReturn.replace(/^本章/, '') }
 
     currentStep = 'U12.A06-objective-revision'
-    await page.getByText('人工确认修稿清单', { exact: true }).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '明确纳入修稿', exact: true }).click()
-    await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
+    await openReviewSheet(page)
+    const goalIssue = issue(page, objective.goalReview.items[0].description)
+    await goalIssue.waitFor({ state: 'visible' })
+    assert.equal(await goalIssue.getByRole('checkbox').isChecked(), false, 'an unmet goal must not enter revision by default')
+    await goalIssue.locator('label.pi-check').click()
+    await reviseButton(page, 1).click()
     const objectiveConfirmed = await waitForRows(liveProjectPath, state => state.reviews.length === 4)
     const objectiveConfirmation = objectiveConfirmed.reviews[3]
     const objectiveSnapshot = JSON.parse(objectiveConfirmation.content)
     assert.equal(objectiveSnapshot.sourceReviewId, objectiveReview.id)
     assert.deepEqual(objectiveSnapshot.items.map(item => [item.goalId, item.decision]),
       [[undefined, 'ignore'], ['ch1:keyEvents:1', 'apply']])
-    await page.getByRole('button', { name: '按确认意见修稿', exact: true }).click()
-    await page.getByLabel('本次修稿模型').selectOption(liveModel.id)
-    await page.getByRole('button', { name: '开始修稿', exact: true }).click()
     const objectiveRevised = await waitForRows(liveProjectPath, state => state.revisions.length === 2
       && state.cycles.find(cycle => cycle.cycleId === objectiveCycle.cycleId)?.revisionStatus === 'generated')
     const objectiveRevision = objectiveRevised.revisions.find(row => row.reviewSourceId === objectiveConfirmation.id)
@@ -633,26 +671,24 @@ async function main() {
         recordLifecycle('renderer-cdp-unavailable', { message: error?.message ?? String(error) })
       }
     }
-    const objectiveMerge = page.getByRole('dialog', { name: /^修稿合并 — 审稿修复/ })
-    await objectiveMerge.waitFor({ state: 'visible' })
-    assert.equal((await objectiveMerge.locator('.twm-cell-left').innerText()).trim(), revisedBody,
-      'the second comparison is not based on the committed source draft')
-    await objectiveMerge.getByRole('button', { name: '全部修稿' }).click()
-    await objectiveMerge.getByRole('button', { name: '完成合并' }).click()
+    await mergeView(page).waitFor({ state: 'visible', timeout: 30_000 })
+    assert.equal(await originalColumns(page), revisedBody, 'the second comparison is not based on the committed source draft')
+    await mergeView(page).getByRole('button', { name: '全部用修稿', exact: true }).click()
+    await mergeView(page).getByRole('button', { name: '完成合并', exact: true }).click()
     const committedRows = waitForRows(liveProjectPath, state => state.reviews.length === 5
       && state.cycles.find(cycle => cycle.cycleId === objectiveCycle.cycleId)?.recheckCount === 1)
-    const mergeErrorToast = page.locator('#ai-novel-toast-root span').filter({
+    const mergeErrorToast = dangerToasts(page).filter({
       hasText: /^(?:项目会话已失效，未合并修订内容|打开对比后正文已变化，未提交修订；请保存后重新打开|合并失败：|合并出错：)/,
     })
-    const toastFailure = mergeErrorToast.waitFor({ state: 'visible', timeout: 60_000 }).then(async () => {
+    const toastFailure = mergeErrorToast.first().waitFor({ state: 'visible', timeout: 60_000 }).then(async () => {
       const toast = await mergeErrorToast.first().innerText()
-      const rows = liveRows(liveProjectPath)
+      const state = liveRows(liveProjectPath)
       const error = new Error('F05_U12_MERGE_TOAST')
       error.diagnostic = {
-        toast, modalVisible: await objectiveMerge.isVisible(),
-        draft: draftRow(liveProjectPath, liveDraft.id), reviewCount: rows.reviews.length,
-        revisions: rows.revisions.map(row => ({ id: row.id, status: row.status })),
-        cycles: rows.cycles.map(row => ({ cycleId: row.cycleId, revisionStatus: row.revisionStatus,
+        toast, mergeVisible: await mergeView(page).isVisible(),
+        draft: draftRow(liveProjectPath, liveDraft.id), reviewCount: state.reviews.length,
+        revisions: state.revisions.map(row => ({ id: row.id, status: row.status })),
+        cycles: state.cycles.map(row => ({ cycleId: row.cycleId, revisionStatus: row.revisionStatus,
           mergedHash: row.mergedHash, recheckCount: row.recheckCount })),
       }
       throw error
@@ -690,26 +726,22 @@ async function main() {
       throw error
     }
     assert.equal(fixture.externalModelRequests, 0)
-    assert.equal(fixture.requests.filter(item => item.route === '/v1/chat/completions').length, 6)
-    pass('U12.A06-merge-not-resolved', 'V3 merged the old unverified control and a new anchored unresolved objective; the production post-merge recheck retained unresolved with matching cycle and hashes',
+    assert.equal(liveChatRequests().length, 6)
+    pass('U12.A06-merge-not-resolved', 'The merge view merged the old unverified control and a new anchored unresolved objective; the production post-merge recheck retained unresolved with matching cycle and hashes',
       { oldCycleId: oldMerged.cycles[0].cycleId, cycleId: objectiveCycle.cycleId,
         findingId: objectiveFinding.finding_id, revisionId: objectiveRevision.id,
         recheckAttemptId: committedCycle.recheckAttemptId, mergedHash: committedCycle.mergedHash,
         findingSetHash: committedCycle.findingSetHash, recheckCount: committedCycle.recheckCount,
-        externalModelRequests: fixture.externalModelRequests }, 'U12.A06')
+        firstMergeNeededSave: savedAfterFirstMerge, externalModelRequests: fixture.externalModelRequests }, 'U12.A06')
+    await mergeView(page).waitFor({ state: 'hidden' })
+    await saveIfDirty(page)
     if (a06Only) {
       currentStep = 'U12.A06-process-reopen'
-      await objectiveMerge.waitFor({ state: 'hidden' })
-      if (await draftSave.isVisible()) {
-        await draftSave.click()
-        await draftSave.waitFor({ state: 'hidden' })
-      }
       assert.equal(draftRow(liveProjectPath, liveDraft.id).content, recheckedBody)
       await app.close(); app = null
       ;({ app, page } = await launch(fixturePort))
-      await page.locator('.writer-shelf').getByRole('button', { name: `打开《${liveProjectName}》` }).click()
-      await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-      assert.equal((await page.locator('.cm-content').innerText()).trim(), `港口灯塔\n第 1 章\n${recheckedBody}`)
+      const reopenedProse = await openChapter(page, liveProjectName)
+      assert.equal(await stage.proseBody(reopenedProse), recheckedBody)
       const reopened = formalRows(liveProjectPath)
       assert.equal(reopened.revisions.find(row => row.id === objectiveRevision.id)?.status, 'merged')
       assert.equal(reopened.cycles.find(row => row.cycle_id === objectiveCycle.cycleId)?.revision_status, 'merge-committed')
@@ -720,23 +752,21 @@ async function main() {
       ['unresolved', objectiveCycle.cycleId, 'unverified'])
       assert.equal(draftRow(liveProjectPath, liveDraft.id).content, recheckedBody)
       assert.equal(reopened.outbox.length, 0)
-      assert.equal(fixture.requests.filter(item => item.route === '/v1/chat/completions').length, 6)
+      assert.equal(liveChatRequests().length, 6)
       fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
       assert.equal(fixture.externalModelRequests, 0)
-      pass('U12.A06-reopen-unresolved', 'A new V3 process reopened the merged draft while the objective remained unresolved and the separate unverified finding stayed unverified',
+      pass('U12.A06-reopen-unresolved', 'A new process reopened the merged draft while the objective remained unresolved and the separate unverified finding stayed unverified',
         { projectId: created.projectId, draftId: liveDraft.id, cycleId: objectiveCycle.cycleId,
           findingId: objectiveFinding.finding_id, recheckCount: 1, externalModelRequests: fixture.externalModelRequests }, 'U12.A06')
       return
     }
 
     currentStep = 'U12.A07-finalize-and-publish'
-    await objectiveMerge.waitFor({ state: 'hidden' })
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    assert.equal((await page.locator('.cm-content').innerText()).trim(), `港口灯塔\n第 1 章\n${recheckedBody}`,
-      'V3 editor does not show the rechecked revision being finalized')
-    assert.deepEqual(liveRows(liveProjectPath).publicationStatuses, [], 'outbox existed before V3 finalization')
-    await page.getByRole('button', { name: '定稿', exact: true }).click()
-    const finalizationConfirm = page.getByRole('dialog').filter({ hasText: '确定要将第 1 章定稿吗？' })
+    assert.equal(await stage.proseBody(stage.prose(page)), recheckedBody,
+      'the chapter view does not show the rechecked revision being finalized')
+    assert.deepEqual(liveRows(liveProjectPath).publicationStatuses, [], 'outbox existed before finalization')
+    await stage.root(page).locator('.stage-ch-actions').getByRole('button', { name: '定稿', exact: true }).click()
+    const finalizationConfirm = page.getByRole('dialog', { name: '定稿第 1 章？' })
     await finalizationConfirm.getByRole('button', { name: '确认定稿', exact: true }).click()
     await waitForRows(liveProjectPath, state => state.draftStatuses.some(row => row.id === liveDraft.id
       && row.status === 'finalized') && state.publicationStatuses.some(row => row.draftId === liveDraft.id
@@ -762,25 +792,20 @@ async function main() {
     const manuscriptBytes = fs.readFileSync(manuscriptPath)
     const expectedManuscript = `第1章 港口灯塔\n\n${recheckedBody}`
     assert.deepEqual(manuscriptBytes, Buffer.from(expectedManuscript, 'utf8'), 'published manuscript bytes differ')
-    await page.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible' })
-    await page.locator('.writer-ai-panel').getByText('整个工作流已全部完成', { exact: true })
-      .waitFor({ state: 'visible', timeout: 60_000 })
+    await stage.root(page).getByText('已定稿，只读', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '进行中').click()
+    await runSheet.sheet(page).getByRole('button', { name: /^取消「/ }).first().waitFor({ state: 'detached', timeout: 60_000 })
     fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
     assert.equal(fixture.externalModelRequests, 0)
     await app.close(); app = null
 
     currentStep = 'U12.A07-process-reopen'
     ;({ app, page } = await launch(fixturePort))
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${liveProjectName}》` }).click()
-    await page.locator(`.writer-project-tree .tree-item[title="点击打开 — 第1章 港口灯塔"]`).click()
-    await page.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible' })
-    const reopenedBody = await page.locator('.writer-editor-content .cm-content[contenteditable="false"]')
-      .evaluate(element => Array.from(element.querySelectorAll('.cm-line'), line => {
-        const copy = line.cloneNode(true)
-        copy.querySelector('.cm-lp-paperhead')?.remove()
-        return copy.textContent
-      }).join('\n'))
-    assert.equal(reopenedBody, recheckedBody)
+    const finalProse = await openChapter(page, liveProjectName)
+    await stage.root(page).getByText('已定稿，只读', { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await finalProse.getAttribute('contenteditable'), 'false', 'the finalized chapter is editable')
+    assert.equal(await stage.proseBody(finalProse), recheckedBody)
     assert.equal(draftRow(liveProjectPath, liveDraft.id).status, 'finalized')
     const reopenedOutbox = formalRows(liveProjectPath).outbox
     assert.equal(reopenedOutbox.length, 1)
@@ -791,7 +816,7 @@ async function main() {
     assert.deepEqual(fs.readFileSync(manuscriptPath), manuscriptBytes, 'reopen changed the UTF-8 manuscript')
     fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
     assert.equal(fixture.externalModelRequests, 0)
-    pass('U12.A07-finalize-publish-reopen', 'V3 finalized the rechecked revision; SQLite draft and outbox, UTF-8 manuscript, and a new process agree on frozen content',
+    pass('U12.A07-finalize-publish-reopen', '定稿 finalized the rechecked revision; SQLite draft and outbox, UTF-8 manuscript, and a new process agree on frozen content',
       { draftId: liveDraft.id, finalizationId: outbox.finalization_id, contentHash,
         contentRevision: outbox.content_revision, publicationStatus: outbox.publication_status,
         targetFileName: outbox.target_file_name,
@@ -799,15 +824,15 @@ async function main() {
         externalModelRequests: fixture.externalModelRequests }, 'U12.A07')
 
     currentStep = 'U12.A08-failed-candidate-reopen'
-    await page.getByRole('button', { name: 'AI 输出', exact: true }).click()
-    const failedCandidate = page.getByRole('region', { name: '持久正文候选' }).locator('article')
-      .filter({ hasText: body })
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '进行中').click()
+    const failedCandidate = runSheet.recovery(page).getByRole('article').filter({ has: page.locator('.run-excerpt-text', { hasText: new RegExp(`^${body}$`) }) })
     await failedCandidate.waitFor({ state: 'visible' })
     assert.equal(await failedCandidate.getByRole('button', { name: '复制', exact: true }).count(), 1)
     assert.equal(await failedCandidate.getByRole('button', { name: '恢复此审修任务' }).isDisabled(), true)
     assert.equal(generationRows(liveProjectPath).artifacts.find(row => row.artifactId === newArtifacts[0].artifactId)?.artifactId,
       newArtifacts[0].artifactId, 'the failed no-op artifact disappeared after process reopen')
-    pass('U12.A08-failed-candidate-reopen', 'The failed no-op revision keeps its original copyable artifact after process reopen',
+    pass('U12.A08-failed-candidate-reopen', 'The failed no-op revision keeps its original copyable artifact in the run sheet after process reopen',
       { projectId: created.projectId, runId: newRuns[0].runId, artifactId: newArtifacts[0].artifactId,
         candidateTextSha256: createHash('sha256').update(body).digest('hex') }, 'U12.A08')
     await app.close(); app = null
@@ -830,32 +855,25 @@ async function main() {
     assert.equal(candidateDraft.success, true, candidateDraft.error)
     await app.close(); app = null
     ;({ app, page } = await launch(fixturePort))
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${candidateProjectName}》` }).click()
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    await page.getByRole('button', { name: 'AI 审稿', exact: true }).click()
-    await page.getByRole('heading', { name: 'AI 审稿确认' }).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '确认执行', exact: true }).click()
-    await waitForRows(candidateProjectPath, rows => rows.reviews.length === 1 && rows.cycles.length === 1)
-    await page.getByText('人工确认修稿清单', { exact: true }).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
-    await waitForRows(candidateProjectPath, rows => rows.reviews.length === 2)
-    await page.getByRole('button', { name: '按确认意见修稿', exact: true }).click()
-    await page.getByLabel('本次修稿模型').selectOption(liveModel.id)
-    await page.getByRole('button', { name: '开始修稿', exact: true }).click()
-    const candidateRows = await waitForRows(candidateProjectPath, rows => rows.revisions.length === 1
-      && rows.cycles[0]?.revisionStatus === 'generated')
+    await openChapter(page, candidateProjectName)
+    await stage.root(page).getByRole('button', { name: 'AI 审稿', exact: true }).click()
+    await waitForRows(candidateProjectPath, state => state.reviews.length === 1 && state.cycles.length === 1)
+    await reviseButton(page, 1).waitFor({ state: 'visible', timeout: 30_000 })
+    await reviseButton(page, 1).click()
+    await waitForRows(candidateProjectPath, state => state.reviews.length === 2)
+    const candidateRows = await waitForRows(candidateProjectPath, state => state.revisions.length === 1
+      && state.cycles[0]?.revisionStatus === 'generated')
     const candidateRevision = candidateRows.revisions[0]
     assert.deepEqual([candidateRevision.baseDraftId, candidateRevision.status, candidateRevision.content],
       [candidateDraft.id, 'pending', revisedBody])
     assert.equal(candidateRows.outboxCount, 0)
-    pass('U12.A08-isolated-candidate', 'V3 generated a pending source-bound review-fix candidate in a separate project',
+    pass('U12.A08-isolated-candidate', 'A separate project generated a pending source-bound review-fix candidate through AI 审稿 and 按 1 项意见修稿',
       { projectId: candidateProject.projectId, draftId: candidateDraft.id, revisionId: candidateRevision.id,
         cycleId: candidateRows.cycles[0].cycleId }, 'U12.A08')
 
     currentStep = 'U12.A08-session-conflict'
-    const candidateMerge = page.getByRole('dialog', { name: /^修稿合并 — 审稿修复/ })
-    await candidateMerge.waitFor({ state: 'visible' })
-    await candidateMerge.getByRole('button', { name: '全部修稿' }).click()
+    await mergeView(page).waitFor({ state: 'visible', timeout: 30_000 })
+    await mergeView(page).getByRole('button', { name: '全部用修稿', exact: true }).click()
     const renewed = await invoke(page, 'project:open', candidateProjectPath, randomUUID(), null)
     assert.equal(renewed.success, true, renewed.error)
     const renewedSession = { projectId: candidateProject.projectId, projectPath: candidateProjectPath,
@@ -866,45 +884,47 @@ async function main() {
     assert.equal(concurrentSave.success, true, concurrentSave.error)
     const beforeRejectedMerge = formalRows(candidateProjectPath)
     const beforeRejectedGeneration = generationRows(candidateProjectPath)
-    await candidateMerge.getByRole('button', { name: '完成合并' }).click()
-    await page.locator('#ai-novel-toast-root').getByText(/项目会话已失效|合并失败/).first()
-      .waitFor({ state: 'visible' })
+    await mergeView(page).getByRole('button', { name: '完成合并', exact: true }).click()
+    await dangerToasts(page).filter({ hasText: /项目会话已失效|合并失败/ }).first().waitFor({ state: 'visible' })
     assert.deepEqual(formalRows(candidateProjectPath), beforeRejectedMerge,
-      'stale V3 session merged or changed formal rows after a concurrent author save')
+      'stale session merged or changed formal rows after a concurrent author save')
     assert.deepEqual(generationRows(candidateProjectPath), beforeRejectedGeneration)
     assert.equal(draftRow(candidateProjectPath, candidateDraft.id).content, concurrentBody)
-    pass('U12.A08-session-conflict', 'V3 merge attempt rejected an expired project lease after a legal concurrent draft save',
+    pass('U12.A08-session-conflict', 'The merge view’s 完成合并 was rejected for an expired project lease after a legal concurrent draft save',
       { projectId: candidateProject.projectId, draftId: candidateDraft.id,
         revisionId: candidateRevision.id, preservedStatus: 'pending' }, 'U12.A08')
     await app.close(); app = null
 
     currentStep = 'U12.A08-stale-source-reopen'
     ;({ app, page } = await launch(fixturePort))
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${candidateProjectName}》` }).click()
-    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    await page.getByRole('button', { name: '待合并(1)' }).click()
-    const staleMerge = page.getByRole('dialog', { name: /^修稿合并 — 第1章/ })
-    await staleMerge.getByRole('alert').getByText('当前草稿已不是该修订稿的生成时源稿，修订仍可查看但不能合并。')
-      .waitFor({ state: 'visible' })
-    assert.equal((await staleMerge.locator('.twm-cell-left').innerText()).trim(), body,
-      'stale comparison no longer shows the frozen source')
-    await staleMerge.getByRole('button', { name: '全部修稿' }).click()
+    await openChapter(page, candidateProjectName)
+    // 源稿已变的修稿不能再合并：单章视图提示「有 1 份修稿不能再合并」，「查看修稿」只读打开合并视图。
+    const staleNotice = stage.root(page).locator('.pi-notice').filter({ hasText: '有 1 份修稿不能再合并' })
+    await staleNotice.waitFor({ state: 'visible', timeout: 30_000 })
+    await staleNotice.getByRole('button', { name: '查看修稿', exact: true }).click()
+    await mergeView(page).waitFor({ state: 'visible' })
+    await mergeView(page).locator('.pi-notice').filter({ hasText: '这份修稿不能合并' })
+      .getByText('当前草稿已不是该修订稿的生成时源稿，修订仍可查看但不能合并。').waitFor({ state: 'visible' })
+    assert.equal(await originalColumns(page), body, 'stale comparison no longer shows the frozen source')
+    await mergeView(page).getByRole('button', { name: '全部用修稿', exact: true }).click()
     const beforeStaleClick = formalRows(candidateProjectPath)
-    await staleMerge.getByRole('button', { name: '完成合并' }).click()
-    assert.deepEqual(formalRows(candidateProjectPath), beforeStaleClick,
-      'stale V3 merge button changed formal rows')
+    assert.equal(await mergeView(page).getByRole('button', { name: '完成合并', exact: true }).isDisabled(), true,
+      'a stale revision must not offer 完成合并')
+    assert.deepEqual(formalRows(candidateProjectPath), beforeStaleClick, 'the stale merge view changed formal rows')
     assert.equal(draftRow(candidateProjectPath, candidateDraft.id).content, concurrentBody)
     assert.equal(formalRows(candidateProjectPath).outbox.length, 0)
-    await staleMerge.getByRole('button', { name: '关闭', exact: true }).click()
-    await page.getByRole('button', { name: '待合并(1)' }).click()
-    await staleMerge.getByRole('alert').waitFor({ state: 'visible' })
+    await mergeView(page).getByRole('button', { name: '稍后再合并', exact: true }).click()
+    await mergeView(page).waitFor({ state: 'hidden' })
+    await staleNotice.getByRole('button', { name: '查看修稿', exact: true }).click()
+    await mergeView(page).locator('.pi-notice').filter({ hasText: '这份修稿不能合并' }).waitFor({ state: 'visible' })
     assert.equal(formalRows(candidateProjectPath).revisions[0].status, 'pending')
-    pass('U12.A08-stale-source-reopen', 'V3 reopened the frozen candidate, explained the stale source, and refused to write draft, review, revision or outbox on merge',
+    pass('U12.A08-stale-source-reopen', 'A new process showed the frozen candidate read-only, explained the stale source, kept 完成合并 disabled and wrote no draft, review, revision or outbox',
       { projectId: candidateProject.projectId, draftId: candidateDraft.id,
         revisionId: candidateRevision.id, sourceTextSha256: createHash('sha256').update(body).digest('hex'),
         currentTextSha256: createHash('sha256').update(concurrentBody).digest('hex'),
         persistedCandidateTextSha256: createHash('sha256').update(revisedBody).digest('hex') }, 'U12.A08')
   } catch (error) {
+    if (page && !page.isClosed()) await page.screenshot({ path: path.join(path.dirname(receiptPath), 'failure.png') }).catch(() => {})
     failure = { step: currentStep, name: error?.name, message: error?.message,
       ...(lifecycle ? { stack: error?.stack } : {}),
       ...(error?.diagnostic ? { diagnostic: error.diagnostic } : {}),
@@ -919,10 +939,11 @@ async function main() {
                   : currentStep.startsWith('U12.A08') ? 'U12.A08' : 'U12.A03',
       outcome: 'RED', assertion: 'first failing boundary', observed: failure })
   } finally {
+    fixture.releaseNoop?.()
     if (app && failure) fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0).catch(() => 0)
     const closing = app?.close().catch(() => {})
     if (closing && page) {
-      const exitDialog = page.getByRole('dialog', { name: '退出前处理未保存内容' })
+      const exitDialog = page.getByRole('dialog', { name: '退出前处理未保存的内容' })
       const needsDiscard = await Promise.race([
         closing.then(() => false),
         exitDialog.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true, () => false),
@@ -937,12 +958,16 @@ async function main() {
     const requiredA06Steps = a06Only ? ['U12.A06-merge-not-resolved', 'U12.A06-reopen-unresolved']
       : ['U12.A06-merge-not-resolved']
     const receipt = { schemaVersion: 1, qualification: a06Only ? 'F05_U12_A06_PACKAGED_V3' : 'F05_U12_A01_A08_PACKAGED_V3_FINALIZATION',
-      overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
+      overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'stage',
       scope: a06Only ? ['U12.A06'] : ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08'], testedSha, executionHead: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
       driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath, liveProjectPath },
-      provider: { kind: 'loopback-synthetic-openai-sse', localRequests: fixture.requests,
+      provider: { kind: 'loopback-synthetic-openai-sse', localRequests: fixture.requests, staticProjectRequests: fixture.staticRequests,
         externalModelRequests: fixture.externalModelRequests, promptBoundaries: fixture.promptBoundaries },
+      deviations: [
+        'U12.A03: the stage confirms the checklist inside 按 N 项意见修稿; the confirmation also starts a revision, which the fixture refuses for the static project.',
+        'U12.A05 runs before U12.A04: the stage requires a pending revision to be merged or discarded before another review revision can start.',
+      ],
       steps, unverifiedActions: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08']
         .filter(actionId => a06Only && actionId !== 'U12.A06' ? true
           : actionId === 'U12.A08'

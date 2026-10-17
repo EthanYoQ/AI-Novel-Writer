@@ -212,17 +212,13 @@ describe('Windows heavy integration timeout contract', () => {
     })
   })
 
-  it('bounds every real PowerShell child and the real Vite server hook without changing ordinary test timeouts', () => {
+  it('bounds every real PowerShell child without changing ordinary test timeouts', () => {
     const smokeInstallerTests = readFileSync(
       resolve(process.cwd(), 'scripts/__tests__/smoke-win-installer.test.ts'),
       'utf8',
     )
     const updateE2eTests = readFileSync(
       resolve(process.cwd(), 'scripts/__tests__/windows-in-app-update-e2e.test.ts'),
-      'utf8',
-    )
-    const updateInteractionTests = readFileSync(
-      resolve(process.cwd(), 'scripts/__tests__/update-section.interaction.test.ts'),
       'utf8',
     )
 
@@ -237,10 +233,6 @@ describe('Windows heavy integration timeout contract', () => {
     const updateCoverage = powerShellTestCoverage(updateE2eTests)
     expect(updateCoverage.relevant.length).toBeGreaterThan(0)
     expect(updateCoverage.unbounded).toEqual([])
-
-    expect(updateInteractionTests).toContain('VITE_SERVER_HOOK_TIMEOUT_MS = 30_000')
-    expect(updateInteractionTests.match(/\bbeforeAll\(/g)).toHaveLength(1)
-    expect(updateInteractionTests).toContain('}, VITE_SERVER_HOOK_TIMEOUT_MS)')
   })
 })
 

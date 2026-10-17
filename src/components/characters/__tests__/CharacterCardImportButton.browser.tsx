@@ -66,11 +66,11 @@ afterEach(async () => {
 })
 
 describe('角色卡导入入口', () => {
-  it('发送前需同意，取消同意后保留全文且不启动工作流', async () => {
+  it('发送前需同意，返回后保留全文且不启动工作流', async () => {
     await paste('姓名：林舟\n背景：旧港调查员')
     await click('AI 提取并预览')
     expect(document.body.textContent).toContain(model.baseUrl)
-    await click('取消')
+    await click('返回')
     expect(start).not.toHaveBeenCalled()
     expect(document.querySelector('textarea')?.value).toContain('旧港调查员')
   })
@@ -96,7 +96,7 @@ describe('角色卡导入入口', () => {
     expect(document.querySelector('textarea')?.value).toBe('姓名：林舟')
   })
 
-  it('导航离开后确认取消，仍恢复粘贴内容和已选文件', async () => {
+  it('确认外发时导航离开，回来后仍恢复粘贴内容和已选文件', async () => {
     invoke.mockImplementation((channel: string) => Promise.resolve(channel === 'dialog:select-knowledge-files'
       ? [{ grantId: 'grant', displayName: '角色.txt' }]
       : { success: true, content: '姓名：林舟' }))
@@ -104,7 +104,6 @@ describe('角色卡导入入口', () => {
     await click('选择文件')
     await click('AI 提取并预览')
     await act(async () => root.unmount())
-    await click('取消')
     root = createRoot(container)
     await act(async () => root.render(<CharacterCardImportButton projectKey={project.path} />))
     await click('粘贴 / 导入角色卡')

@@ -6,7 +6,6 @@ import { page, userEvent } from 'vitest/browser'
 
 import '../../../index.css'
 import { APPEARANCE_STORAGE_KEY } from '../../../shared/appearance-profile'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import type { WindowCloseGuard } from '../../layout/use-window-close-guard'
 import { alertError } from '../../ui/AlertDialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../ui/Dialog'
@@ -34,7 +33,7 @@ async function mount(guard: WindowCloseGuard, children: ReactNode = <Broken />) 
   document.body.append(host)
   root = createRoot(host)
   vi.spyOn(console, 'error').mockImplementation(() => undefined)
-  await act(async () => root!.render(<StageRoot theme="paper" exitGuard={guard}>{children}</StageRoot>))
+  await act(async () => root!.render(<StageRoot theme="light" exitGuard={guard}>{children}</StageRoot>))
 }
 
 afterEach(async () => {
@@ -45,26 +44,24 @@ afterEach(async () => {
   vi.restoreAllMocks()
   localStorage.removeItem(APPEARANCE_STORAGE_KEY)
   document.getElementById('ai-novel-ink-overlay')?.remove()
-  useAppearanceStore.setState({ resolvedShell: 'classic' })
 })
 
 describe('新外壳渲染出错', () => {
-  it('显示出错界面，「切回工作台」写回 unset，下次启动进工作台，存储是旧版本也能读的 v1', async () => {
-    localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify({ schemaVersion: 2, revision: 3, shellPreference: 'stage', colorTheme: 'paper',
-      zoom: 1, writingFont: 'lxgw-wenkai', uiFont: 'noto-sans-sc', origin: 'author', legacyImportCompleted: true }))
-    await useAppearanceStore.getState().bootstrap({
-      waitForMainReady: async () => ({ state: 'ready', globalGeneration: 'g', skinRevision: 1 }),
-      readSkinSnapshot: async () => ({ globalGeneration: 'g', skinRevision: 1, backgroundSkin: 'classic' }),
-      acknowledgeReadback: async () => true,
-    })
-    expect(useAppearanceStore.getState().resolvedShell).toBe('stage')
-    await mount(idleGuard())
+  it('显示出错界面，「重试」重新渲染外壳：这次不再出错就回到界面，不改外观偏好', async () => {
+    let fail = true
+    function Flaky() {
+      if (fail) throw new Error('外壳渲染失败')
+      return <p>恢复的外壳</p>
+    }
+    await mount(idleGuard(), <Flaky />)
     expect(host!.querySelector('h3')?.textContent).toBe('创作流程界面出错了')
-    const button = [...host!.querySelectorAll('button')].find(candidate => candidate.textContent === '切回工作台')!
+    const button = [...host!.querySelectorAll('button')].find(candidate => candidate.textContent === '重试')!
     expect(button.classList.contains('pi-btn--primary')).toBe(true)
+    fail = false
     await act(async () => button.click())
-    expect(useAppearanceStore.getState().resolvedShell).toBe('writer')
-    expect(JSON.parse(localStorage.getItem(APPEARANCE_STORAGE_KEY)!)).toMatchObject({ schemaVersion: 1, shellPreference: 'unset', revision: 4 })
+    expect(host!.textContent).toContain('恢复的外壳')
+    expect(host!.querySelector('h3')).toBeNull()
+    expect(localStorage.getItem(APPEARANCE_STORAGE_KEY)).toBeNull()
   })
 
   it('外壳出错后关窗，退出确认仍在纸墨作用域里，按钮能用', async () => {
@@ -80,11 +77,10 @@ describe('新外壳渲染出错', () => {
   })
 
   it('退出确认点「取消」或按 Esc 关闭后，焦点回到弹出它之前的元素', async () => {
-    useAppearanceStore.setState({ resolvedShell: 'stage' })
     function Harness() {
       const [exitRequest, setExitRequest] = useState<WindowCloseGuard['exitRequest']>(null)
       return (
-        <StageRoot theme="paper" exitGuard={idleGuard({ exitRequest, cancelExit: async () => setExitRequest(null) })}>
+        <StageRoot theme="light" exitGuard={idleGuard({ exitRequest, cancelExit: async () => setExitRequest(null) })}>
           <button type="button" onClick={() => setExitRequest({ requestId: 'close-3' })}>第 3 章</button>
         </StageRoot>
       )
@@ -108,7 +104,6 @@ describe('新外壳渲染出错', () => {
   })
 
   it('导出等旧对话框开着时关窗，退出确认与遮罩画在它上面', async () => {
-    useAppearanceStore.setState({ resolvedShell: 'stage' })
     await mount(idleGuard({ exitRequest: { requestId: 'close-2' } }), (
       <Dialog open>
         <DialogContent><DialogHeader><DialogTitle>导出项目</DialogTitle></DialogHeader></DialogContent>
@@ -161,7 +156,6 @@ function hitOutside(lower: Element, upper: Element) {
 
 describe('退出确认与错误提示谁后弹出谁在上面', () => {
   it('退出确认开着时弹出错误提示：提示画在退出确认上面、点得到「确定」，确定后退出确认还在', async () => {
-    useAppearanceStore.setState({ resolvedShell: 'stage' })
     const cancelExit = vi.fn(async () => undefined)
     await mount(idleGuard({ exitRequest: { requestId: 'close-4' }, cancelExit }), <p>正文</p>)
     expect(exitDialog()).not.toBeNull()
@@ -177,12 +171,11 @@ describe('退出确认与错误提示谁后弹出谁在上面', () => {
   })
 
   it('错误提示开着时关窗：退出确认画在提示上面，焦点在退出确认里', async () => {
-    useAppearanceStore.setState({ resolvedShell: 'stage' })
     let request!: (next: WindowCloseGuard['exitRequest']) => void
     function Harness() {
       const [exitRequest, setExitRequest] = useState<WindowCloseGuard['exitRequest']>(null)
       useEffect(() => { request = setExitRequest }, [])
-      return <StageRoot theme="paper" exitGuard={idleGuard({ exitRequest, cancelExit: async () => setExitRequest(null) })}><p>正文</p></StageRoot>
+      return <StageRoot theme="light" exitGuard={idleGuard({ exitRequest, cancelExit: async () => setExitRequest(null) })}><p>正文</p></StageRoot>
     }
     host = document.createElement('div')
     document.body.append(host)
@@ -213,7 +206,6 @@ describe('渲染期不建纸墨宿主', () => {
     ['退出确认', () => <ExitGuardDialog guard={idleGuard({ exitRequest: { requestId: 'close-6' } })} />],
     ['迁移后的旧对话框', () => <Dialog open><DialogContent><DialogHeader><DialogTitle>导出项目</DialogTitle></DialogHeader></DialogContent></Dialog>],
   ])('%s所在的树挂起、没有提交时，body 下没有多出宿主', async (_case, dialog) => {
-    useAppearanceStore.setState({ resolvedShell: 'stage' })
     function Pending(): never {
       throw new Promise(() => undefined)
     }

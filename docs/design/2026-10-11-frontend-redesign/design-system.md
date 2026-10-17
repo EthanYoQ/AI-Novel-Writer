@@ -60,7 +60,7 @@
 
 ## 字体
 
-- 界面：Noto Sans SC，13px 为基准，已随安装包内置，声明目前在旧样式 `src/index.css` 中。RD-10 删除旧样式前，须把它移入 `src/styles/paper-ink/fonts.css`。回退顺序为 Microsoft YaHei UI、PingFang SC、system-ui。
+- 界面：Noto Sans SC，13px 为基准，已随安装包内置，声明在 `src/styles/paper-ink/fonts.css`（RD-10 从旧样式 `src/index.css` 移入）。回退顺序为 Microsoft YaHei UI、PingFang SC、system-ui。
 - 标题与阶段名：Noto Serif SC 600。
 - 正文：Noto Serif SC 18px，行高 2.05，首行缩进两字。
 - 数字：Instrument Serif 斜体，用于章节号与统计数字。

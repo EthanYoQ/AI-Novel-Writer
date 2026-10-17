@@ -170,7 +170,7 @@ export function useStageView(): StageView {
 
 /**
  * 打开作品时把内容区放到下一步：设定没填完就停在设定，否则等架构、蓝图与草稿载入后落到第一个未完成的阶段。
- * 每次打开（项目会话）只落一次；这次打开已有标签时保持原样（例如从旧外壳切过来）。
+ * 每次打开（项目会话）只落一次；这次打开已有标签时保持原样。
  */
 export function useLandingPage(view: StageView): void {
   const project = useProjectStore(s => s.currentProject)

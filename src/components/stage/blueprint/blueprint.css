@@ -492,3 +492,47 @@
   font-size: var(--fs-12);
   color: var(--ink-3);
 }
+
+/* ================= 蓝图恢复稿 ================= */
+.stage-bp-recovery-end {
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-bp-recovery-end-input {
+  width: 72px;
+}
+
+.stage-bp-recovery-error {
+  flex: none;
+  margin: var(--s-3) 28px 0;
+  font-size: var(--fs-12);
+}
+
+.stage-bp-recovery-original {
+  flex: none;
+  margin: var(--s-3) 28px 0;
+}
+
+.stage-bp-recovery-original > pre {
+  max-height: 160px;
+  overflow: auto;
+  margin: var(--s-2) 0 0;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  color: var(--ink-2);
+  font: var(--fs-12)/1.6 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.stage-bp-recovery-editor {
+  flex: 1;
+  min-height: 0;
+  margin: var(--s-3) 28px 28px;
+  overflow: hidden;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+}

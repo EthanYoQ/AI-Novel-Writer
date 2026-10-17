@@ -5,7 +5,7 @@ import { useCharacterAvatars } from '../editor/use-character-avatars'
 
 const CHARACTER_PAGE_SIZE = 50
 
-/** 角色列表：按名字搜索、每页 50 位分页，并取当前页的头像。旧外壳侧栏与新外壳角色名单共用。 */
+/** 角色列表：按名字搜索、每页 50 位分页，并取当前页的头像。角色名单页用它。 */
 export function useCharacterList() {
   const [searchQuery, setSearchQuery] = useState('')
   const [page, setPage] = useState(0)

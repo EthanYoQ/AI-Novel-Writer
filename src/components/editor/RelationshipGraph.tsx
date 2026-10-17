@@ -148,6 +148,7 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
       const canvasStyles = getComputedStyle(canvas)
       const readableTextColor = canvasStyles.color
       const relationshipLabelColor = canvasStyles.getPropertyValue('--color-text-secondary').trim()
+      const edgeColor = canvasStyles.getPropertyValue('--color-border').trim()
       const nodes = new Map(nodesRef.current.map(node => [node.characterId, node]))
       context.clearRect(0, 0, canvas.width, canvas.height)
       context.save()
@@ -165,7 +166,7 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
         context.beginPath()
         context.moveTo(from.x, from.y)
         context.lineTo(to.x, to.y)
-        context.strokeStyle = 'rgba(148,163,184,0.3)'
+        context.strokeStyle = edgeColor
         context.stroke()
         const firstRelation = edge.relations[0]?.label
         if (firstRelation) {
@@ -228,12 +229,10 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
     } else drawFrame()
 
     const themeObserver = new MutationObserver(drawFrame)
-    const skinRoot = canvas.closest<HTMLElement>('.app-skin-root')
-    for (const root of new Set<HTMLElement>([document.documentElement, ...(skinRoot ? [skinRoot] : [])])) {
-      themeObserver.observe(root, {
-        attributes: true,
-        attributeFilter: ['class', 'style', 'data-theme', 'data-skin', 'data-skin-readability'],
-      })
+    // 深浅色切换时根元素换 .dark，纸墨作用域换 data-theme，两处都要重画
+    const inkRoot = canvas.closest<HTMLElement>('.paper-ink')
+    for (const root of new Set<HTMLElement>([document.documentElement, ...(inkRoot ? [inkRoot] : [])])) {
+      themeObserver.observe(root, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
     }
     return () => { themeObserver.disconnect(); drawRef.current = null }
   }, [characters, duplicateNames, graph, canvasSize, fitView])
@@ -279,15 +278,16 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
 
   return (
     <div className="relative flex h-full overflow-hidden">
-      <div className="relative min-w-0 flex-1 overflow-hidden">
-        <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-md border px-1 py-1" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-panel)', color: 'var(--color-text)' }}>
-          <span className="max-w-32 truncate px-1 text-[11px]" title={centerName}>{text('中心', 'Center')}: {centerName}</span>
-          <button type="button" className="rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text('缩小关系图谱', 'Zoom out of character graph')} onClick={() => updateZoom(viewRef.current.scale - 0.1)}><ZoomOut size={14} aria-hidden="true" /></button>
-          <span className="min-w-10 text-center text-[11px] tabular-nums">{zoomPercent}%</span>
-          <button type="button" className="rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text('放大关系图谱', 'Zoom in to character graph')} onClick={() => updateZoom(viewRef.current.scale + 0.1)}><ZoomIn size={14} aria-hidden="true" /></button>
-          <button type="button" className="rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text('适合视图', 'Fit character graph to view')} onClick={fitView}><Maximize2 size={14} aria-hidden="true" /></button>
-          <button type="button" className="rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text('重置图谱布局', 'Reset character graph layout')} onClick={resetLayout}><RotateCcw size={14} aria-hidden="true" /></button>
-          <button type="button" className="rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text(sidebarOpen ? '折叠人物侧栏' : '展开人物侧栏', sidebarOpen ? 'Collapse character sidebar' : 'Expand character sidebar')} onClick={() => setSidebarOpen(open => !open)}>{sidebarOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}</button>
+      {/* 图谱框窄时（1024 宽窗口的角色名单页约 385px）：工具条不越出画布框，中心人物让位给按钮，人物侧栏跟着收窄 */}
+      <div className="@container relative min-w-0 flex-1 overflow-hidden">
+        <div className="absolute right-3 top-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center justify-end gap-1 rounded-md border px-1 py-1" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-panel)', color: 'var(--color-text)' }}>
+          <span className="min-w-0 max-w-32 truncate px-1 text-[11px] @max-[22rem]:hidden" title={centerName}>{text('中心', 'Center')}: {centerName}</span>
+          <button type="button" className="shrink-0 rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text('缩小关系图谱', 'Zoom out of character graph')} onClick={() => updateZoom(viewRef.current.scale - 0.1)}><ZoomOut size={14} aria-hidden="true" /></button>
+          <span className="min-w-10 shrink-0 text-center text-[11px] tabular-nums">{zoomPercent}%</span>
+          <button type="button" className="shrink-0 rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text('放大关系图谱', 'Zoom in to character graph')} onClick={() => updateZoom(viewRef.current.scale + 0.1)}><ZoomIn size={14} aria-hidden="true" /></button>
+          <button type="button" className="shrink-0 rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text('适合视图', 'Fit character graph to view')} onClick={fitView}><Maximize2 size={14} aria-hidden="true" /></button>
+          <button type="button" className="shrink-0 rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text('重置图谱布局', 'Reset character graph layout')} onClick={resetLayout}><RotateCcw size={14} aria-hidden="true" /></button>
+          <button type="button" className="shrink-0 rounded p-1 hover:bg-[var(--color-hover)]" aria-label={text(sidebarOpen ? '折叠人物侧栏' : '展开人物侧栏', sidebarOpen ? 'Collapse character sidebar' : 'Expand character sidebar')} onClick={() => setSidebarOpen(open => !open)}>{sidebarOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}</button>
         </div>
         <canvas
           ref={canvasRef}
@@ -336,7 +336,7 @@ export default function RelationshipGraph({ characters, selectedCharacterId, onO
         />
       </div>
       {sidebarOpen && (
-        <aside className="flex w-56 flex-shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-panel)]" aria-label={text('图谱人物侧栏', 'Graph character sidebar')}>
+        <aside className="flex w-[min(14rem,45%)] flex-shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-panel)]" aria-label={text('图谱人物侧栏', 'Graph character sidebar')}>
           <div className="relative border-b border-[var(--color-border)] p-2">
             <Search size={12} className="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
             <input value={searchQuery} onChange={event => { setSearchQuery(event.target.value); setPage(0) }} aria-label={text('搜索图谱人物', 'Search graph characters')} placeholder={text('搜索人物', 'Search characters')} className="h-7 w-full rounded border border-[var(--color-border)] bg-[var(--color-bg)] pl-7 pr-2 text-xs text-[var(--color-text)]" />

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { captureFailure, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs, sessionIsClean } from '../drive.mjs'
+import { appearanceWrite, captureFailure, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs, sessionIsClean } from '../drive.mjs'
 import { BASELINE_SESSIONS, SCENARIOS } from '../scenarios.mjs'
 
 const parents = []
@@ -98,3 +98,35 @@ it('启动失败的取证：截图失败也照样写 DOM 与无障碍树，且�
   await captureFailure(undefined, base)
 })
 
+it('外观写入跟着被测构建走：head 只有 v3 键，只改主题；trunk 只有旧键，照旧写外壳偏好与 v1、v2', () => {
+  const v3 = { schemaVersion: 3, revision: 4, colorTheme: 'light', zoom: 1, writingFont: 'lxgw-wenkai', uiFont: 'noto-sans-sc', origin: 'legacy-import', legacyImportCompleted: true }
+  assert.deepEqual(appearanceWrite({ v3: JSON.stringify(v3), previous: JSON.stringify({ schemaVersion: 1 }) }, { theme: 'dark', shell: 'stage' }), {
+    key: 'ai-novel-writer-appearance-v3',
+    value: { ...v3, colorTheme: 'dark', revision: 5, origin: 'author' },
+  })
+  assert.throws(() => appearanceWrite({ v3: JSON.stringify(v3), previous: null }, { theme: 'dark', shell: 'writer' }), /只有纸墨外壳/)
+
+  const previous = { schemaVersion: 1, revision: 2, shellPreference: 'unset', colorTheme: 'light', zoom: 1 }
+  assert.deepEqual(appearanceWrite({ v3: null, previous: JSON.stringify(previous) }, { theme: 'dark', shell: 'stage' }), {
+    key: 'ai-novel-writer-appearance',
+    value: { ...previous, schemaVersion: 2, shellPreference: 'stage', colorTheme: 'dark', revision: 3, origin: 'author' },
+  })
+  assert.deepEqual(appearanceWrite({ v3: null, previous: JSON.stringify(previous) }, { theme: 'light', shell: null }).value,
+    { ...previous, revision: 3, origin: 'author' })
+  assert.equal(appearanceWrite({ v3: null, previous: null }, { theme: 'light', shell: null }), null)
+})
+
+it('空闲内存取各次采样全部进程合计的中位数，按进程类型分列，单位 KB', () => {
+  const sample = (browser, renderer, gpu) => [
+    { type: 'Browser', memory: { workingSetSize: browser, privateBytes: browser - 10 } },
+    { type: 'Tab', memory: { workingSetSize: renderer, privateBytes: renderer - 10 } },
+    { type: 'GPU', memory: { workingSetSize: gpu, privateBytes: gpu - 10 } },
+  ]
+  assert.deepEqual(idleMemory([sample(100, 300, 50), sample(110, 290, 60), sample(90, 400, 40)]), {
+    samples: 3,
+    workingSetKB: 460,
+    privateKB: 430,
+    byType: { Browser: 100, Tab: 300, GPU: 50 },
+  })
+  assert.throws(() => idleMemory([]), /没有采样/)
+})

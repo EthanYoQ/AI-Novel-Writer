@@ -7,7 +7,7 @@ import { keepToastStackClickable } from '../ui/ToastStack'
 import type { WindowCloseGuard } from '../layout/use-window-close-guard'
 
 /**
- * 关窗时还有未保存内容或运行中的任务。判定与处理在 useWindowCloseGuard，这里只是新外壳的呈现。
+ * 关窗时还有未保存内容或运行中的任务。判定与处理在 useWindowCloseGuard，这里只是呈现。
  * 挂在命令式弹窗所在的纸墨宿主里、自成一层 .pi-prompt-layer：退出确认与错误提示谁后弹出谁在上面。
  */
 export default function ExitGuardDialog({ guard }: { guard: WindowCloseGuard }) {

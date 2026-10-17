@@ -18,14 +18,14 @@ export type StagePalette = 'commands' | 'chapters'
 export interface StageWork {
   /** 这份数据属于哪次打开；同一路径重新打开是新的会话，旧数据不能当新的用。 */
   session: ProjectSessionContext
-  /** 故事前提、角色名单、世界观、情节大纲是否已有内容（与旧外壳侧栏同一判定）。 */
+  /** 故事前提、角色名单、世界观、情节大纲是否已有内容。 */
   architecture: Readonly<Record<string, boolean>>
   blueprints: readonly { chapterNumber: number; title: string }[]
 }
 
 interface StageState {
   sheet: StageSheet | null
-  /** 沉浸写作：只留正文与章节动作条。与旧外壳的 immersive 分开保存。 */
+  /** 沉浸写作：只留正文与章节动作条。 */
   focus: boolean
   palette: StagePalette | null
   work: StageWork | null
@@ -41,7 +41,7 @@ interface StageState {
   spineFacts: ProjectSessionContext | null
 }
 
-/** 新外壳自己的界面状态。书房与作品的切换沿用 layout-store 的 sidebarView === 'home'，两种外壳共用。 */
+/** 外壳的界面状态。书房与作品的切换在 layout-store 的 sidebarView。 */
 export const useStageStore = create<StageState>()(() => ({
   sheet: null,
   focus: false,

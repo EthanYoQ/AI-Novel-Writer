@@ -52,7 +52,7 @@ function openTab(id: string, dirty = false) {
 beforeEach(() => {
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
   useStageStore.setState({ palette: null, focus: false, closingTabId: null, sheet: null })
-  useLayoutStore.setState({ settingsOpen: false, exportOpen: false, newProjectOpen: false, importNovelOpen: false, chapterCreationOpen: false })
+  useLayoutStore.setState({ settingsOpen: false, exportOpen: false, newProjectOpen: false, importNovelOpen: false })
 })
 
 afterEach(async () => {

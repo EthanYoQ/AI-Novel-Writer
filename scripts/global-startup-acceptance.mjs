@@ -5,9 +5,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import { STAGE_SHELL } from './redesign/pages/stage.mjs'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const appearanceKey = 'ai-novel-writer-appearance'
+// RD-10 起外观只读写 v3 键；旧键（v1、v2）只读不写。
+const appearanceKey = 'ai-novel-writer-appearance-v3'
+const previousAppearanceKey = 'ai-novel-writer-appearance'
 const themeKey = 'ai-novel-writer-theme'
 const shellKey = 'ai-novel-writer-ui-version'
 const root = path.join(repositoryRoot, '.runtime', '.cache', 'global-startup-acceptance', randomUUID())
@@ -39,7 +42,7 @@ async function launch(roots) {
   } catch (error) { await app.close(); throw error }
 }
 async function ready(page) {
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  await page.locator(STAGE_SHELL).waitFor({ state: 'visible', timeout: 30_000 })
   return page.evaluate(() => window.aiNovelAPI.invoke('startup:get-state'))
 }
 async function blockedScenario(name, populate, expectedCode) {
@@ -51,7 +54,7 @@ async function blockedScenario(name, populate, expectedCode) {
     await page.getByRole('heading', { name: '启动尚未完成' }).waitFor()
     const state = await page.evaluate(() => window.aiNovelAPI.invoke('startup:get-state'))
     assert.equal(state.state, 'blocked'); assert.equal(state.code, expectedCode)
-    assert.equal(await page.locator('.app-skin-root').count(), 0)
+    assert.equal(await page.locator(STAGE_SHELL).count(), 0)
     assert.equal(await page.evaluate(key => localStorage.getItem(key), appearanceKey), null)
     const writableRejected = await page.evaluate(async () => {
       try { await window.aiNovelAPI.invoke('config:set', {}); return false } catch { return true }
@@ -81,14 +84,15 @@ if (process.argv.includes('--help')) {
       assert.equal(state.migrationNotice.legacySourceIgnored, true)
       assert.equal(state.migrationNotice.preservedUnknownCount, 1)
       assert.match(await session.page.getByRole('status').filter({ hasText: '旧来源已保留' }).innerText(), /明确导入/)
-      const staleAck = await session.page.evaluate(({ appearanceKey, state }) => window.aiNovelAPI.invoke('startup:appearance-ack', {
-        storageKey: appearanceKey, profileRevision: 1, globalGeneration: 'stale', skinRevision: state.skinRevision,
-      }), { appearanceKey, state })
+      const staleAck = await session.page.evaluate(({ appearanceKey }) => window.aiNovelAPI.invoke('startup:appearance-ack', {
+        storageKey: appearanceKey, profileRevision: 1, globalGeneration: 'stale',
+      }), { appearanceKey })
       assert.equal(staleAck, false)
-      await session.page.evaluate(({ appearanceKey, themeKey, shellKey, oldTheme }) => {
-        localStorage.removeItem(appearanceKey); localStorage.setItem(themeKey, oldTheme); localStorage.setItem(shellKey, 'v1')
+      await session.page.evaluate(({ appearanceKey, previousAppearanceKey, themeKey, shellKey, oldTheme }) => {
+        localStorage.removeItem(appearanceKey); localStorage.removeItem(previousAppearanceKey)
+        localStorage.setItem(themeKey, oldTheme); localStorage.setItem(shellKey, 'v1')
         localStorage.setItem('startup-unrelated-selection', 'synthetic-selected-model')
-      }, { appearanceKey, themeKey, shellKey, oldTheme })
+      }, { appearanceKey, previousAppearanceKey, themeKey, shellKey, oldTheme })
     } finally { await session.app.close() }
     assert.deepEqual(inventory(roots.legacy), sourceBefore)
     // This now-invalid old source must never regain write authority after cutover.
@@ -102,7 +106,7 @@ if (process.argv.includes('--help')) {
         canonical: JSON.parse(localStorage.getItem(appearanceKey)), theme: localStorage.getItem(themeKey),
         shell: localStorage.getItem(shellKey), unrelated: localStorage.getItem('startup-unrelated-selection'),
       }), { appearanceKey, themeKey, shellKey })
-      assert.equal(stored.canonical.shellPreference, 'writer'); assert.equal(stored.canonical.colorTheme, 'dark')
+      assert.equal(stored.canonical.schemaVersion, 3); assert.equal('shellPreference' in stored.canonical, false); assert.equal(stored.canonical.colorTheme, 'dark')
       assert.equal(stored.canonical.zoom, 1.1); assert.equal(stored.canonical.uiFont, 'system'); assert.equal(stored.canonical.writingFont, 'system')
       assert.equal(stored.theme, oldTheme); assert.equal(stored.shell, 'v1'); assert.equal(stored.unrelated, 'synthetic-selected-model')
     } finally { await session.app.close() }
@@ -124,7 +128,7 @@ if (process.argv.includes('--help')) {
     session = await launch(brokenAppearance)
     try {
       await session.page.getByRole('heading', { name: '启动尚未完成' }).waitFor()
-      assert.equal(await session.page.locator('.app-skin-root').count(), 0)
+      assert.equal(await session.page.locator(STAGE_SHELL).count(), 0)
       assert.equal(await session.page.evaluate(key => localStorage.getItem(key), appearanceKey), '{corrupt appearance')
       const closed = session.app.waitForEvent('close', { timeout: 10_000 })
       await session.page.getByRole('button', { name: '关闭应用', exact: true }).click()

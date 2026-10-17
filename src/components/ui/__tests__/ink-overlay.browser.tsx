@@ -6,7 +6,6 @@ import { page, userEvent } from 'vitest/browser'
 import '../../../index.css'
 import type { ProjectData } from '../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useProjectStore } from '../../../stores/project-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useThemeStore } from '../../../stores/theme-store'
@@ -81,8 +80,7 @@ const onOpenChange = vi.fn()
 
 beforeEach(async () => {
   await page.viewport(1100, 760)
-  useAppearanceStore.setState({ resolvedShell: 'stage' })
-  useThemeStore.setState({ resolvedTheme: 'paper' })
+  useThemeStore.setState({ resolvedTheme: 'light' })
 })
 
 afterEach(async () => {
@@ -94,10 +92,7 @@ afterEach(async () => {
   root = undefined
   container = undefined
   host()?.remove()
-  document.getElementById('ai-novel-toast-root')?.remove()
-  document.getElementById('ai-novel-action-toast-root')?.remove()
-  useAppearanceStore.setState({ resolvedShell: 'classic' })
-  useThemeStore.setState({ resolvedTheme: 'paper' })
+  useThemeStore.setState({ resolvedTheme: 'light' })
 })
 
 describe('命令式弹窗', () => {
@@ -124,7 +119,7 @@ describe('命令式弹窗', () => {
   it('主题切换时宿主跟着换 data-theme', async () => {
     await act(async () => { void alertError('写入失败') })
     expect(host()!.dataset.theme).toBe('light')
-    await act(async () => useThemeStore.setState({ resolvedTheme: 'galaxy' }))
+    await act(async () => useThemeStore.setState({ resolvedTheme: 'dark' }))
     expect(host()!.dataset.theme).toBe('dark')
     await userEvent.keyboard('{Escape}')
   })
@@ -266,78 +261,6 @@ describe('命令式弹窗', () => {
     expect(document.elementFromPoint(box.left - 6, box.top + 20)!.classList.contains('pi-scrim')).toBe(true)
     expect(document.elementFromPoint(box.left + 60, box.top - 6)!.classList.contains('pi-scrim')).toBe(true)
     await userEvent.keyboard('{Escape}')
-  })
-
-  it('旧外壳仍走旧弹窗，不建纸墨宿主', async () => {
-    useAppearanceStore.setState({ resolvedShell: 'classic' })
-    await act(async () => { void alertError('写入失败') })
-    expect(document.querySelector('[role="alertdialog"]')!.closest('.paper-ink')).toBeNull()
-    expect(host()).toBeNull()
-    await userEvent.keyboard('{Escape}')
-    await wait(250)
-  })
-})
-
-describe('旧外壳原样', () => {
-  beforeEach(() => useAppearanceStore.setState({ resolvedShell: 'classic' }))
-
-  it('confirm 仍是旧弹窗，点确认得到 true，不建纸墨宿主', async () => {
-    let answer: boolean | undefined
-    await act(async () => { void confirm('切换项目？').then(value => { answer = value }) })
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
-    expect(dialog.closest('.paper-ink')).toBeNull()
-    expect(dialog.className).not.toContain('pi-dialog')
-    await userEvent.click(buttonNamed(dialog, '确认'))
-    await wait(250)
-    expect(answer).toBe(true)
-    expect(host()).toBeNull()
-  })
-
-  it('toast 与 actionToast 仍进各自的旧容器，动作照常执行后关闭', async () => {
-    const open = vi.fn()
-    await act(async () => {
-      toast.success('已保存')
-      actionToast.show({ message: '「第 2 章」已完成', actions: [{ label: '打开查看', onClick: open }] })
-    })
-    await vi.waitFor(() => expect(document.getElementById('ai-novel-toast-root')!.textContent).toContain('已保存'))
-    const actionRoot = document.getElementById('ai-novel-action-toast-root')!
-    await vi.waitFor(() => expect(actionRoot.textContent).toContain('「第 2 章」已完成'))
-    expect(document.querySelector('.pi-toast')).toBeNull()
-    await userEvent.click(buttonNamed(actionRoot, '打开查看'))
-    expect(open).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() => expect(actionRoot.textContent).not.toContain('「第 2 章」已完成'))
-  })
-
-  it('ui/Dialog 不进纸墨宿主，仍是旧外观', async () => {
-    container = document.createElement('div')
-    document.body.append(container)
-    root = createRoot(container)
-    await act(async () => root!.render(
-      <Dialog open>
-        <DialogContent className="max-w-[420px]">
-          <DialogHeader><DialogTitle>导出项目</DialogTitle></DialogHeader>
-        </DialogContent>
-      </Dialog>,
-    ))
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
-    expect(dialog.closest('.paper-ink')).toBeNull()
-    expect(dialog.className).not.toContain('pi-dialog')
-    expect(dialog.className).toContain('rounded-2xl')
-    expect(host()).toBeNull()
-  })
-
-  it('清除生成内容仍是旧对话框，Esc 关闭', async () => {
-    const onClose = vi.fn()
-    container = document.createElement('div')
-    document.body.append(container)
-    root = createRoot(container)
-    await act(async () => root!.render(<ClearProjectDataDialog open onClose={onClose} />))
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
-    expect(dialog.getAttribute('aria-labelledby')).toBe('clear-project-data-title')
-    expect(dialog.className).not.toContain('pi-dialog')
-    expect(dialog.querySelectorAll('input[type="checkbox"]')).toHaveLength(3)
-    await userEvent.keyboard('{Escape}')
-    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -548,7 +471,7 @@ describe('提示栈', () => {
   })
 
   it.each(['light', 'dark'] as const)('%s 主题溢出的栈滚到底时，最上面露出半截的卡片仍不透明，页面不从卡片里透出；上沿有提示还有更多的淡出带，滚到顶时消失', async (theme) => {
-    await act(async () => useThemeStore.setState({ resolvedTheme: theme === 'dark' ? 'dark' : 'paper' }))
+    await act(async () => useThemeStore.setState({ resolvedTheme: theme }))
     // 卡片背后铺一层纯红：卡片哪里变透明，截图里那里就带红
     const backdrop = document.createElement('div')
     backdrop.style.cssText = 'position: fixed; inset: 0; background: rgb(255, 0, 0);'
@@ -701,7 +624,7 @@ describe('旧 ui/Dialog 在新外壳下', () => {
     root = createRoot(container)
     await act(async () => root!.render(
       <Dialog open>
-        <DialogContent className="max-w-[420px]">
+        <DialogContent className="max-w-[480px]">
           <DialogHeader><DialogTitle>导出项目</DialogTitle></DialogHeader>
           <p className="px-6 text-[var(--color-accent)]">正文</p>
           <DialogFooter className="justify-end"><button type="button">导出</button></DialogFooter>
@@ -711,7 +634,7 @@ describe('旧 ui/Dialog 在新外壳下', () => {
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
     expect(dialog.closest('.paper-ink')).toBe(host())
     expect(dialog.className).toContain('pi-dialog')
-    expect(dialog.getBoundingClientRect().width).toBe(420)
+    expect(dialog.getBoundingClientRect().width).toBe(480)
     expect(getComputedStyle(dialog.querySelector('p')!).color).toBe(LIGHT.accent)
     expect(getComputedStyle(dialog.querySelector('.pi-dialog-foot')!).justifyContent).toBe('flex-end')
     expect(dialog.querySelector('.pi-dialog-close')!.className).toContain('pi-btn--icon')

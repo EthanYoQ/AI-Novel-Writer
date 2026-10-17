@@ -7,7 +7,6 @@ import { createRoot, type Root } from 'react-dom/client'
 
 import type { NovelConfig, ProjectData } from '../../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
-import { useAppearanceStore } from '../../../../stores/appearance-bootstrap'
 import { useEditorStore } from '../../../../stores/editor-store'
 import { useLayoutStore } from '../../../../stores/layout-store'
 import { useLLMStore } from '../../../../stores/llm-store'
@@ -22,7 +21,7 @@ function snapshot<T>(store: StoreApi<T>): () => void {
   const state = store.getState()
   return () => store.setState(state, true)
 }
-const restores = [snapshot(useLayoutStore), snapshot(useProjectStore), snapshot(useLLMStore), snapshot(useEditorStore), snapshot(useAppearanceStore), snapshot(useWorkflowStore)]
+const restores = [snapshot(useLayoutStore), snapshot(useProjectStore), snapshot(useLLMStore), snapshot(useEditorStore), snapshot(useWorkflowStore)]
 
 const PATH = 'C:\\novels\\island'
 const SESSION = { projectId: 'island', leaseId: 'lease-1', projectPath: PATH }
@@ -89,7 +88,6 @@ async function write(textarea: HTMLTextAreaElement, value: string) {
 
 beforeEach(() => {
   useWorkflowStore.setState({ startWorkflow: vi.fn(async () => undefined), getResourceConflict: () => null } as never)
-  useAppearanceStore.setState({ resolvedShell: 'stage' })
   useLLMStore.setState({ loaded: true, defaultModelId: 'model' })
   useEditorStore.setState({ tabs: [], activeTabId: null })
   useProjectStore.setState({ saveProject: vi.fn(async () => true) } as never)

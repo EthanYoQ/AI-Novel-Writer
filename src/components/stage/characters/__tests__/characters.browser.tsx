@@ -60,6 +60,20 @@ const click = async (name: string | RegExp) => {
   await act(async () => target!.click())
 }
 const banner = () => host!.querySelector('[aria-label="待处理的角色建议"]')
+/** 纸墨对话框标题下的说明，也是对话框的无障碍描述。 */
+const dialogDescription = () => {
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')
+  return dialog ? document.getElementById(dialog.getAttribute('aria-describedby') ?? '')?.textContent ?? null : null
+}
+/** 外发确认这一步作者读到的全文：发什么、发给哪个模型与端点、确认前不写名单。 */
+const fixtureConsent = [
+  '本次粘贴及选中文件的全部文本将发送到以下模型端点，用于提取角色卡。提取后需预览并确认，才会写入角色名单；不会直接覆盖角色名单。',
+  '',
+  '模型：夹具模型 (fixture-1)',
+  '端点：https://fixture.example/v1',
+  '',
+  '是否发送并提取？',
+].join('\n')
 
 async function render() {
   await act(async () => root!.render(<StageCharacters projectKey={session.projectPath} />))
@@ -302,8 +316,7 @@ describe('角色名单', () => {
       source.dispatchEvent(new Event('input', { bubbles: true }))
     })
     await click('AI 提取并预览')
-    expect(dialog().textContent).toContain('https://fixture.example/v1')
-    expect(dialog().textContent).toContain('不会直接覆盖角色名单')
+    expect(dialogDescription()).toBe(fixtureConsent)
     expect(document.querySelectorAll('[role="dialog"], [role="alertdialog"]')).toHaveLength(1)
     await click('返回')
     expect(dialog().querySelector('textarea')?.value).toBe('林舟：末班车上的乘客。')
@@ -330,6 +343,32 @@ describe('角色名单', () => {
     expect(button('选择头像')).toBeTruthy()
   })
 
+  it('1024 宽窗口里的关系图谱：工具条与人物侧栏的控件都在图谱框里、点得到；宽时显示中心人物', async () => {
+    // 1024 宽窗口去掉流程脊与边距，角色名单页约 738px：名单 272，档案两侧各留 40，图谱框只剩约 385。
+    host!.style.width = '738px'
+    await render()
+    await click('关系图谱')
+    const graph = host!.querySelector<HTMLElement>('.cast-graph')!
+    const controls = ['缩小关系图谱', '放大关系图谱', '适合视图', '重置图谱布局', '折叠人物侧栏', '搜索图谱人物', '下一页人物']
+    // 只看名单页自己的层：被裁掉的控件在那个点上不会出现，被页内元素盖住时最上面的是别人。别的用例留下的全局通知不算。
+    const unreachable = () => controls.filter(label => {
+      const control = graph.querySelector<HTMLElement>(`[aria-label="${label}"]`)
+      if (!control) return true
+      const rect = control.getBoundingClientRect()
+      const hit = document.elementsFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2).find(element => host!.contains(element))
+      return !hit || !control.contains(hit)
+    })
+    await vi.waitFor(() => expect(unreachable()).toEqual([]))
+
+    host!.style.width = '1200px'
+    await vi.waitFor(() => {
+      const centerLabel = [...graph.querySelectorAll<HTMLElement>('span')].find(span => span.textContent === '中心: 林舟')
+      expect(centerLabel, '中心人物').toBeTruthy()
+      expect(getComputedStyle(centerLabel!).display).not.toBe('none')
+    })
+    expect(unreachable()).toEqual([])
+  })
+
   it('外发确认不能被第一步按钮上的双击或连按回车跳过，只有在第二步单独确认才发送', async () => {
     useLLMStore.setState({ models: [{ id: 'm1', name: '夹具模型', modelName: 'fixture-1', baseUrl: 'https://fixture.example/v1' }], defaultModelId: 'm1' } as never)
     const startWorkflow = vi.fn(async () => 'r1')
@@ -342,7 +381,7 @@ describe('角色名单', () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(source, '林舟：末班车上的乘客。')
       source.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    const consentShown = () => dialog().textContent?.includes('https://fixture.example/v1') ?? false
+    const consentShown = () => dialogDescription() === fixtureConsent
 
     await userEvent.dblClick(button('AI 提取并预览')!)
     await vi.waitFor(() => expect(consentShown()).toBe(true))

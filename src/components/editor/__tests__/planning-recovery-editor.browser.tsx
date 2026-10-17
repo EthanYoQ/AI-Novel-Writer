@@ -13,9 +13,11 @@ import { useWorkflowStore } from '../../../stores/workflow-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { globalEventBus } from '../../../shared/event-bus'
 import ArchFileViewer from '../ArchFileViewer'
-import ChapterCardEditor from '../ChapterCardEditor'
-import WorldBuildingEditor from '../WorldBuildingEditor'
-import AIOutputPanel from '../../panels/AIOutputPanel'
+import StageArchitecture from '../../stage/architecture/StageArchitecture'
+import StageBlueprint from '../../stage/blueprint/StageBlueprint'
+import RunSheet from '../../stage/run/RunSheet'
+import BlueprintRecovery from '../../stage/blueprint/BlueprintRecovery'
+import StageWorkspace from '../../stage/StageWorkspace'
 
 const session = { projectId: 'recovery-project', leaseId: 'lease-1', projectPath: 'C:\\synthetic\\planning-recovery' }
 const handle = { projectId: session.projectId, epoch: 'epoch-original', rootActionId: 'root-1', runId: 'run-1' }
@@ -100,7 +102,7 @@ async function render(kind: 'outline' | 'blueprint') {
   const tab = useEditorStore.getState().tabs[0]
   await act(async () => root.render(kind === 'outline'
     ? <ArchFileViewer tabId={tab.id} filePath="ai-novel://core/synopsis" projectKey={session.projectPath} content={tab.content ?? ''} savedContent={tab.savedContent ?? ''} />
-    : <ChapterCardEditor tabId={tab.id} projectKey={session.projectPath} />))
+    : <BlueprintRecovery tab={tab} projectKey={session.projectPath} />))
   await vi.waitFor(() => expect(container.querySelector('.cm-editor')).not.toBeNull())
 }
 function editor(): EditorView {
@@ -118,6 +120,22 @@ function button(label: string): HTMLButtonElement {
 function noModel() { expect(invoke.mock.calls.some(([channel]) => channel === 'generation:execute' || channel === 'generation:begin' || channel === 'generation:restart')).toBe(false) }
 
 describe('planning recovery editors', () => {
+  it('新外壳里蓝图恢复稿标签打开纸墨恢复页：保存终点、保存与继续两个按钮、原始候选，保存只按作者选的终点写入', async () => {
+    context = fixture('blueprint')
+    openPlanningRecoveryDraft(context, session.projectPath, '蓝图恢复稿')
+    await act(async () => root.render(<StageWorkspace library={false} focus={false} />))
+    await vi.waitFor(() => expect(container.querySelector('.cm-editor')).not.toBeNull())
+    const page = container.querySelector('[aria-label="蓝图恢复"]')!
+    expect(page.querySelector('h1')?.textContent).toBe('补齐中断的蓝图')
+    expect(page.querySelector<HTMLInputElement>('input[type="number"]')?.value).toBe('1')
+    expect(page.querySelector('details pre')?.textContent).toBe(context.blueprintRecovery!.draft)
+    expect(button('继续生成缺少的章节').disabled).toBe(false)
+    await edit(blueprintText)
+    await act(async () => button('保存恢复蓝图').click())
+    expect(savedPayload).toMatchObject({ mode: 'replace-range', startChapter: 1, endChapter: 1 })
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({ content: blueprintText, dirty: false })
+    noModel()
+  })
   it.each(['button', 'workflow'] as const)('reports a rejected recovery refresh from %s', async source => {
     await render('outline')
     invoke.mockRejectedValueOnce(new Error('Recovery context reload failed'))
@@ -549,8 +567,8 @@ describe('planning recovery editors', () => {
   it.each(['architecture', 'blueprint', 'failure-panel'] as const)('%s opens the same editable recovery draft twice without replacing dirty text', async entry => {
     showCandidate = true
     context = fixture(entry === 'blueprint' ? 'blueprint' : 'outline')
-    await act(async () => root.render(entry === 'architecture' ? <WorldBuildingEditor projectKey={session.projectPath} />
-      : entry === 'blueprint' ? <ChapterCardEditor projectKey={session.projectPath} /> : <AIOutputPanel />))
+    await act(async () => root.render(entry === 'architecture' ? <StageArchitecture projectKey={session.projectPath} />
+      : entry === 'blueprint' ? <StageBlueprint projectKey={session.projectPath} /> : <RunSheet sheet={{ kind: 'run', tab: 'active' }} />))
     await vi.waitFor(() => expect(button('编辑恢复稿')).toBeDefined())
     await act(async () => button('编辑恢复稿').click())
     const tab = useEditorStore.getState().tabs[0]

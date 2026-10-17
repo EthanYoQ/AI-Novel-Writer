@@ -118,20 +118,10 @@ describe('packaged vector qualification wiring', () => {
     expect(installer).toContain('$result.failedOpenExternal.rendererError.enUS -eq \'Unable to open the official homepage. Please try again later.\'')
   })
 
-  it('runs the installed package against an isolated Vela home to prove the anime asset and custom skin persistence', () => {
+  it('no longer runs a packaged skin qualification once image skins are gone', () => {
     const installer = readFileSync(installerScript, 'utf8')
 
-    expect(installer).toContain('Invoke-AiNovelPackagedSkinSmoke')
-    expect(installer).toContain("$env:AI_NOVEL_RELEASE_SKIN_SMOKE = '1'")
-    expect(installer).toContain('AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN')
-    expect(installer).toContain('AI_NOVEL_VELA_HOME')
-    expect(installer).toContain('--ai-novel-release-skin-smoke=')
-    expect(installer).toContain('packaged-skin-smoke.json')
-    expect(installer).toContain("$result.kind -eq 'packaged-skin-smoke'")
-    expect(installer).toContain("$result.builtInAnime.asset -eq 'skins/anime-night.webp'")
-    expect(installer).toContain('$result.customSkin.importSucceeded -eq $true')
-    expect(installer).toContain('$result.customSkin.readSucceeded -eq $true')
-    expect(installer).toContain('$result.customSkin.stateRestored -eq $true')
+    expect(installer).not.toMatch(/skin/i)
   })
 })
 
@@ -174,7 +164,6 @@ describe('Windows v2 acceptance receipts', () => {
     expect(installer).toContain('Assert-AiNovelUninstallPostcondition')
     expect(installer).toContain('packaged-vector-smoke.json')
     expect(installer).toContain('packaged-official-homepage-smoke.json')
-    expect(installer).toContain('packaged-skin-smoke.json')
     expect(app).toContain('[string]$AcceptanceDirectory')
     expect(app).toContain('[string]$ExpectedVersion')
     expect(app).toContain("'launch.json'")

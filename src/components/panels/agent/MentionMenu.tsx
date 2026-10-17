@@ -88,7 +88,7 @@ export default function MentionMenu({ query, onSelect, onClose, position }: Prop
         overflowY: 'auto',
         backgroundColor: 'var(--color-sidebar)',
         border: '1px solid var(--color-border)',
-        boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+        boxShadow: 'var(--shadow-popover)',
       }}
     >
       <div className="text-[0.68rem] px-3 py-1" style={{ color: 'var(--color-text-muted)' }}>

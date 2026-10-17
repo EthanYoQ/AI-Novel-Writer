@@ -73,7 +73,7 @@ export function isCurrentProjectSession(projectSession: ProjectSessionContext): 
 
 /**
  * 章节蓝图的数据：读写蓝图表、未保存修改的草稿账本（顶栏保存状态与 ⌘S 都认它）、权威下一章、蓝图恢复候选。
- * 旧外壳的 ChapterCardEditor 与新外壳的蓝图阶段共用；删除、清空、生成前警告的确认由各自界面负责。
+ * 蓝图阶段用它；删除、清空、生成前警告的确认由页面负责。
  */
 export function useChapterBlueprints({
   projectKey,

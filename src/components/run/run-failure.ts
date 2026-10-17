@@ -8,7 +8,7 @@ import type { WorkflowRun } from '../../stores/workflow-store'
 import { toast } from '../ui/Toast'
 import { presentWorkflowFailure, type WorkflowFailurePresentation } from '../panels/ai-output-failure-presentation'
 
-/** 失败运行在两种外壳里都显示的内容：标题、原因、错误码，以及能接着做什么。 */
+/** 失败运行显示的内容：标题、原因、错误码，以及能接着做什么。 */
 export interface RunFailure {
   title: string
   errorCode?: string

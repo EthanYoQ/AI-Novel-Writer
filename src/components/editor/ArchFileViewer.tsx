@@ -7,7 +7,6 @@ import { renderIcon } from '../panels/sidebar/sidebar-icons'
 import { registerEditorExitSaveHandler, useEditorStore, type PlanningRecoverySaveSnapshot } from '../../stores/editor-store'
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 import { ARCH_STEP_NAMES, type ArchStepKey } from '../../services/architecture-step-selection'
-import { useAppearanceStore } from '../../stores/appearance-bootstrap'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
@@ -116,7 +115,6 @@ function ArchFileViewerSession({
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
-  const stageShell = useAppearanceStore(s => s.resolvedShell === 'stage')
   const recoveryTab = useEditorStore(s => s.tabs.find(tab => tab.id === tabId && tab.planningRecovery))
   const [recovery, setRecovery] = useState(recoveryTab?.planningRecovery)
   const [authorEnd, setAuthorEnd] = useState(String(recoveryTab?.planningSaveEnd ?? ''))
@@ -728,9 +726,7 @@ function ArchFileViewerSession({
             borderBottom: '1px solid var(--color-border)',
           }}
         >
-          <span>{stageShell
-            ? text('这是角色名单的只读全文，由名单自动生成。修改角色身份、档案和关系请到「角色名单」页。', 'This is the read-only text of the cast, generated from it. Edit identities, profiles and relationships on the Cast page.')
-            : text('这是角色名单的只读全文，由名单自动生成。修改角色身份、资料和关系请到「角色管理」。', 'This is the read-only text of the cast, generated from it. Edit identities, profiles and relationships in Characters.')}</span>
+          <span>{text('这是角色名单的只读全文，由名单自动生成。修改角色身份、档案和关系请到「角色名单」页。', 'This is the read-only text of the cast, generated from it. Edit identities, profiles and relationships on the Cast page.')}</span>
           {isDirty && (
             <Button
               variant="outline"

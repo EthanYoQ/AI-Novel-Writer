@@ -28,15 +28,11 @@ export function assertDistinctStorageRoots(roots: readonly StorageRootProof[]): 
     if (paths[i] === paths[j] || paths[i]!.startsWith(paths[j]! + '/') || paths[j]!.startsWith(paths[i]! + '/')) throw new Error('STORAGE_ROOT_INTERSECTION')
   }
 }
-export type MainReady = { state: 'pending' | 'blocked' } | { state: 'ready'; globalGeneration: string; skinRevision: number }
-export interface AppearanceProfile {
-  revision: number; shellPreference: 'unset' | 'classic' | 'writer' | 'stage'
-  colorTheme: string; zoom: number; writingFont: string; uiFont: string
-  origin: 'legacy-import' | 'author'; legacyImportCompleted: boolean
+export type MainReady = { state: 'pending' | 'blocked' } | { state: 'ready'; globalGeneration: string }
+/** 主进程的全局数据就绪后，渲染进程才读写外观偏好。 */
+export function mayHydrateAppearance(ready: MainReady): ready is Extract<MainReady, { state: 'ready' }> {
+  return ready.state === 'ready' && typeof ready.globalGeneration === 'string' && ready.globalGeneration.length > 0
 }
-export interface AppearanceSnapshot { profile: AppearanceProfile; skinRevision: number; backgroundSkin: string }
-/** No cross-process atomic generation claim: main skin and renderer appearance retain distinct writers. */
-export function mayHydrateAppearance(ready: MainReady): boolean { return ready.state === 'ready' && Boolean(ready.globalGeneration) && Number.isSafeInteger(ready.skinRevision) && ready.skinRevision >= 0 }
 export interface TransferReadableAuthority {
   transferId: string; origin: ProjectEpoch; target: ProjectEpoch; snapshotGeneration: string
   domainId: string; source: FinalizedSourceIdentity; provenance: 'author' | 'derived'

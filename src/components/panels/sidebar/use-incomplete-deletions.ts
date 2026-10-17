@@ -12,7 +12,7 @@ import { confirmLegacyKnowledgeAbsentAndContinue } from './finalized-chapter-del
 
 /**
  * 没做完的正文删除（F-070）：派生投影清理失败或待人工核对的操作，可以重试清理或确认人工核对后继续。
- * 草稿箱的正文章节组与新外壳待写章的单章视图共用。
+ * 待写章的单章视图用它。
  */
 export function useIncompleteDeletions(projectPath: string) {
   const text = useLocaleStore(s => s.text)

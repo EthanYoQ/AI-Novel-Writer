@@ -24,7 +24,7 @@ const EMPTY_OVERVIEW: ShelfOverview = { state: 'empty' }
 
 /**
  * 书架与作品概览。当前作品读 `project:overview-current`（带摘录），其他书只用 `project:peek-overview` 预览，不正式打开。
- * 旧外壳的欢迎页与新外壳的书房共用这份数据。
+ * 书房用这份数据。
  */
 export function useShelfOverview() {
   const currentProject = useProjectStore(state => state.currentProject)

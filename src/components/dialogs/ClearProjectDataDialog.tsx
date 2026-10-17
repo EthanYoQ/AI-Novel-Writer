@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { AlertTriangle, FileText, FolderTree, Loader2, Map, OctagonAlert, Trash2 } from 'lucide-react'
+import { OctagonAlert } from 'lucide-react'
 
 import { clearProjectData, type ClearProjectDataOptions } from '../../services/project-clear-service'
 import { alertError } from '../ui/AlertDialog'
@@ -32,7 +32,6 @@ const OPTIONS: Array<{
   labelEn: string
   descZh: string
   descEn: string
-  Icon: typeof FolderTree
 }> = [
   {
     key: 'creativeFields',
@@ -40,7 +39,6 @@ const OPTIONS: Array<{
     labelEn: 'Story architecture and outline',
     descZh: '清空前提、世界观、角色卡与角色架构、情节大纲、文风分析与全局创作指导。',
     descEn: 'Clear premise, world building, character cards and architecture, plot outline, style analysis, and global guidance.',
-    Icon: FolderTree,
   },
   {
     key: 'blueprints',
@@ -48,7 +46,6 @@ const OPTIONS: Array<{
     labelEn: 'Chapter blueprints',
     descZh: '清空所有章节蓝图与章节级规划，后续可重新生成。',
     descEn: 'Clear every chapter blueprint and chapter-level plan. You can generate them again later.',
-    Icon: Map,
   },
   {
     key: 'generatedText',
@@ -56,7 +53,6 @@ const OPTIONS: Array<{
     labelEn: 'Drafts, manuscripts, and reviews',
     descZh: '清空草稿、定稿正文、修订、审稿报告、后处理记录与全局摘要快照。',
     descEn: 'Clear drafts, final manuscript text, revisions, review reports, post-processing records, and summary snapshots.',
-    Icon: FileText,
   },
 ]
 
@@ -83,7 +79,7 @@ function ClearProjectDataDialogContents({
   const [clearingSession, setClearingSession] = useState<ProjectSessionContext | null>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
   const sentinelRef = useRef<HTMLSpanElement>(null)
-  // 新外壳里挂在 .paper-ink 下，走标准危险确认；旧外壳的项目树里找不到纸墨根，保留旧样式
+  // 挂在外壳的 .paper-ink 下，走标准危险确认
   const inkRoot = usePaperInkRoot(sentinelRef)
   const focusReturn = useDialogFocusReturn()
   const text = useLocaleStore(s => s.text)
@@ -99,14 +95,6 @@ function ClearProjectDataDialogContents({
     return () => window.clearTimeout(focusTimer)
   }, [])
 
-  useEffect(() => {
-    if (inkRoot) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !clearing) onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [clearing, inkRoot, onClose])
 
   const handleClear = async () => {
     if (selectedCount === 0) return
@@ -129,189 +117,73 @@ function ClearProjectDataDialogContents({
     }
   }
 
-  if (inkRoot === undefined) return <span ref={sentinelRef} hidden />
+  if (!inkRoot) return <span ref={sentinelRef} hidden />
 
-  if (inkRoot) {
-    const chosen = OPTIONS.filter(option => selected[option.key]).map(option => text(option.labelZh, option.labelEn))
-    return (
-      <DialogPrimitive.Root open onOpenChange={next => { if (!next && !clearing) onClose() }}>
-        <DialogPrimitive.Portal container={inkRoot}>
-          <DialogPrimitive.Overlay className="pi-scrim" />
-          <DialogPrimitive.Content
-            className="pi-dialog pi-dialog--marked"
-            onPointerDownOutside={keepToastStackClickable}
-            onOpenAutoFocus={event => {
-              focusReturn.remember()
-              event.preventDefault()
-              cancelRef.current?.focus()
-            }}
-            onCloseAutoFocus={focusReturn.onCloseAutoFocus}
-          >
-            <div className="pi-dialog-head">
-              <span className="pi-dialog-mark" aria-hidden><OctagonAlert /></span>
-              <div className="pi-dialog-heading">
-                <DialogPrimitive.Title className="pi-dialog-title">{text('清除项目生成内容', 'Clear generated project data')}</DialogPrimitive.Title>
-                <DialogPrimitive.Description className="pi-dialog-sub">
-                  {text('此操作只清除所选数据，不删除项目目录或模型配置。', 'Only the selected data will be removed. The project folder and model settings are preserved.')}
-                </DialogPrimitive.Description>
-              </div>
-            </div>
-            <div className="pi-dialog-body">
-              <div className="pi-check-list" role="group" aria-label={text('要清除的内容', 'Data to clear')}>
-                {OPTIONS.map(({ key, labelZh, labelEn, descZh, descEn }) => (
-                  <div key={key} className="pi-check-row">
-                    <Check
-                      checked={selected[key]}
-                      disabled={clearing}
-                      onChange={checked => setSelected(current => ({ ...current, [key]: checked }))}
-                      label={(
-                        <>
-                          <span className="pi-check-title">{text(labelZh, labelEn)}</span>
-                          <span className="pi-check-desc">{text(descZh, descEn)}</span>
-                        </>
-                      )}
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="pi-dialog-consequence">
-                <p>
-                  {selectedCount === 0
-                    ? text('请至少选择一类内容。', 'Select at least one kind of data.')
-                    : text(`将清除 ${selectedCount} 类内容：${chosen.join('、')}。`, `Clears ${selectedCount} ${pluralEn(selectedCount, 'kind')} of data: ${chosen.join(', ')}.`)}
-                </p>
-                <p className="pi-dialog-recover">{text('清除后不会自动恢复。', 'Cleared data is not restored automatically.')}</p>
-                <p>{text('若需要保留当前内容，请先复制到外部文件或导出项目备份。', 'To keep the current content, copy it elsewhere or export a project backup first.')}</p>
-              </div>
-            </div>
-            <div className="pi-dialog-foot">
-              <Button ref={cancelRef} variant="secondary" disabled={clearing} onClick={onClose}>{text('取消', 'Cancel')}</Button>
-              <Button
-                variant="danger-solid"
-                disabled={clearing || selectedCount === 0}
-                aria-busy={clearing || undefined}
-                onClick={handleClear}
-              >
-                {clearing ? text('清除中…', 'Clearing…') : text('清除所选', 'Clear selected')}
-              </Button>
-            </div>
-          </DialogPrimitive.Content>
-        </DialogPrimitive.Portal>
-      </DialogPrimitive.Root>
-    )
-  }
-
+  const chosen = OPTIONS.filter(option => selected[option.key]).map(option => text(option.labelZh, option.labelEn))
   return (
-    <div
-      className="fixed inset-0 z-[9998] flex items-center justify-center"
-      style={{
-        backgroundColor: 'var(--color-backdrop)',
-        backdropFilter: 'blur(8px)',
-      }}
-      onClick={() => {
-        if (!clearing) onClose()
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="clear-project-data-title"
-        className="w-[min(92vw,520px)] overflow-hidden"
-        style={{
-          backgroundColor: 'var(--color-sidebar)',
-          border: '1px solid var(--color-border)',
-          borderRadius: 'var(--radius-xl)',
-          boxShadow: 'var(--shadow-popover)',
-        }}
-        onClick={event => event.stopPropagation()}
-      >
-        <div
-          className="flex items-center gap-2 px-4 py-3"
-          style={{ borderBottom: '1px solid var(--color-border)' }}
+    <DialogPrimitive.Root open onOpenChange={next => { if (!next && !clearing) onClose() }}>
+      <DialogPrimitive.Portal container={inkRoot}>
+        <DialogPrimitive.Overlay className="pi-scrim" />
+        <DialogPrimitive.Content
+          className="pi-dialog pi-dialog--marked"
+          onPointerDownOutside={keepToastStackClickable}
+          onOpenAutoFocus={event => {
+            focusReturn.remember()
+            event.preventDefault()
+            cancelRef.current?.focus()
+          }}
+          onCloseAutoFocus={focusReturn.onCloseAutoFocus}
         >
-          <Trash2 size={16} style={{ color: 'var(--color-error)' }} />
-          <div className="min-w-0 flex-1">
-            <div
-              id="clear-project-data-title"
-              className="text-sm font-semibold"
-              style={{ color: 'var(--color-text)' }}
-            >
-              {text('清除项目生成内容', 'Clear generated project data')}
-            </div>
-            <div className="mt-0.5 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              {text('此操作只清除所选数据，不删除项目目录或模型配置。', 'Only the selected data will be removed. The project folder and model settings are preserved.')}
+          <div className="pi-dialog-head">
+            <span className="pi-dialog-mark" aria-hidden><OctagonAlert /></span>
+            <div className="pi-dialog-heading">
+              <DialogPrimitive.Title className="pi-dialog-title">{text('清除项目生成内容', 'Clear generated project data')}</DialogPrimitive.Title>
+              <DialogPrimitive.Description className="pi-dialog-sub">
+                {text('此操作只清除所选数据，不删除项目目录或模型配置。', 'Only the selected data will be removed. The project folder and model settings are preserved.')}
+              </DialogPrimitive.Description>
             </div>
           </div>
-        </div>
-
-        <div className="space-y-2 p-4">
-          {OPTIONS.map(({ key, labelZh, labelEn, descZh, descEn, Icon }) => (
-            <label
-              key={key}
-              className="flex cursor-pointer gap-3 rounded-[var(--radius-md)] px-3 py-2.5"
-              style={{
-                border: '1px solid var(--color-border)',
-                backgroundColor: selected[key] ? 'var(--color-hover)' : 'transparent',
-              }}
-            >
-              <input
-                type="checkbox"
-                className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
-                checked={selected[key]}
-                disabled={clearing}
-                onChange={event => setSelected(current => ({ ...current, [key]: event.target.checked }))}
-              />
-              <Icon size={15} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--color-text-muted)' }} />
-              <span className="min-w-0">
-                <span className="block text-xs font-semibold" style={{ color: 'var(--color-text)' }}>
-                  {text(labelZh, labelEn)}
-                </span>
-                <span className="mt-1 block text-xs leading-5" style={{ color: 'var(--color-text-secondary)' }}>
-                  {text(descZh, descEn)}
-                </span>
-              </span>
-            </label>
-          ))}
-
-          <div
-            className="flex gap-2 rounded-[var(--radius-md)] px-3 py-2.5 text-xs leading-5"
-            style={{
-              border: '1px solid color-mix(in srgb, var(--color-error) 36%, var(--color-border))',
-              color: 'var(--color-text-secondary)',
-              backgroundColor: 'color-mix(in srgb, var(--color-error) 8%, transparent)',
-            }}
-          >
-            <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--color-error)' }} />
-            <span>
-              {text('清除后不会自动恢复。若需要保留当前内容，请先复制到外部文件或导出项目备份。', 'Cleared data is not restored automatically. Copy important content elsewhere or export a backup first.')}
-            </span>
+          <div className="pi-dialog-body">
+            <div className="pi-check-list" role="group" aria-label={text('要清除的内容', 'Data to clear')}>
+              {OPTIONS.map(({ key, labelZh, labelEn, descZh, descEn }) => (
+                <div key={key} className="pi-check-row">
+                  <Check
+                    checked={selected[key]}
+                    disabled={clearing}
+                    onChange={checked => setSelected(current => ({ ...current, [key]: checked }))}
+                    label={(
+                      <>
+                        <span className="pi-check-title">{text(labelZh, labelEn)}</span>
+                        <span className="pi-check-desc">{text(descZh, descEn)}</span>
+                      </>
+                    )}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="pi-dialog-consequence">
+              <p>
+                {selectedCount === 0
+                  ? text('请至少选择一类内容。', 'Select at least one kind of data.')
+                  : text(`将清除 ${selectedCount} 类内容：${chosen.join('、')}。`, `Clears ${selectedCount} ${pluralEn(selectedCount, 'kind')} of data: ${chosen.join(', ')}.`)}
+              </p>
+              <p className="pi-dialog-recover">{text('清除后不会自动恢复。', 'Cleared data is not restored automatically.')}</p>
+              <p>{text('若需要保留当前内容，请先复制到外部文件或导出项目备份。', 'To keep the current content, copy it elsewhere or export a project backup first.')}</p>
+            </div>
           </div>
-        </div>
-
-        <div
-          className="flex justify-end gap-2 px-4 py-3"
-          style={{ borderTop: '1px solid var(--color-border)' }}
-        >
-          <Button
-            ref={cancelRef}
-            variant="ghost"
-            size="sm"
-            disabled={clearing}
-            onClick={onClose}
-          >
-            {text('取消', 'Cancel')}
-          </Button>
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={clearing || selectedCount === 0}
-            onClick={handleClear}
-          >
-            {clearing ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
-            {text('清除所选', 'Clear selected')}
-          </Button>
-        </div>
-      </div>
-    </div>
+          <div className="pi-dialog-foot">
+            <Button ref={cancelRef} variant="secondary" disabled={clearing} onClick={onClose}>{text('取消', 'Cancel')}</Button>
+            <Button
+              variant="danger-solid"
+              disabled={clearing || selectedCount === 0}
+              aria-busy={clearing || undefined}
+              onClick={handleClear}
+            >
+              {clearing ? text('清除中…', 'Clearing…') : text('清除所选', 'Clear selected')}
+            </Button>
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 }

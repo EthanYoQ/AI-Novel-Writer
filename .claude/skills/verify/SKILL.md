@@ -30,11 +30,17 @@ node scripts/redesign/drive.mjs --scenario <名称> ...
 ```
 
 - `--theme` 默认 `light`，即外观里的「浅色」；`dark` 为「深色」。
-- `--shell` 不给时不碰外观里的外壳偏好（旧外壳）；`stage` 为 RD-3 起的新外壳（流程脊）。与主题在同一次写入里改，只重载一次。新外壳场景自己声明 `shell: 'stage'`，不必再传；`startup-timing` 与 `chapter-switch` 两种外壳都能跑，用 `--shell stage` 选新外壳。trunk（RD-2 及以前）不认识 `stage`，对 trunk 不要传。
+- `--shell` 只对 RD-10 之前的构建（`--app-root` 指向的 trunk）有意义：不给时不碰外观里的外壳偏好（旧外壳），`stage` 选 RD-3 起的流程脊外壳，与主题在同一次写入里改，只重载一次；RD-2 及更早的 trunk 不认识 `stage`，不要传。RD-10 起的构建只有纸墨外壳，外观写在 v3 键里，没有外壳偏好：`--shell` 不必传，传 `writer` 直接报错。
 - `--video` 在每个截图点的 `run` 期间录屏：CDP `Page.startScreencast` 收帧，按帧时间戳交给本机 `ffmpeg` 编成 H.264 mp4，写到 `<场景>-<主题>.mp4`。不需要 Playwright 自带的 ffmpeg。
 - `--out` 默认 `.runtime/redesign-baseline/`（已被 git 忽略）。
 - `--app-root` 默认当前工作树。性能对照时指向 trunk 的工作树，用同一个驱动测两边；目标工作树也要先跑完上面三条命令，它加载的是自己的 `dist-electron/` 和 `better-sqlite3`。
 - 退出码：0 全部通过；1 有场景失败、残留进程或隔离目录外写入；2 参数错误。
+
+RD-10 删除旧外壳之后，场景分三类：
+
+- 只走旧外壳的场景只对 trunk 跑（`--app-root`）：下面「场景」表的 8 个基线场景与 `baseline-all`、`nav-*`、`write-latency`、`settings-appearance`、`run-write-steps`、`legacy-no-chat`、`arch-legacy-sidebar`。对照时 head 一侧改跑对应的新外壳场景。
+- 两种外壳都能跑的场景运行时按页面上有没有纸墨外壳选页面对象，head 与 trunk 用同一条命令：`startup-timing`、`idle-memory`、`chapter-switch`、`chapter-open`、`typing-latency`、`chapter-regression`、`blueprint-regression`、`blueprint-timing`、`refs-regression`、`refs-timing`、`new-project-files`。
+- 其余声明了 `shell: 'stage'` 的场景只对 RD-3 及以后的构建跑。
 
 ## 场景
 
@@ -108,6 +114,15 @@ node scripts/redesign/drive.mjs --scenario startup-timing --app-root <trunk 工�
 node scripts/redesign/drive.mjs --scenario startup-timing --out <目录>
 ```
 
+## 空闲内存
+
+`idle-memory` 与 `startup-timing` 一样先在同一隔离目录预启动一次写好主题，再冷启动一次；第二次启动到书房可交互后静置 10 秒，再每隔 1 秒用 `app.getAppMetrics()` 采样 5 次全部进程的内存，结果写进 `memory`：`workingSetKB`、`privateKB`（Windows 才有私有字节）是各次合计的中位数，`byType` 按进程类型（Browser、Tab、GPU、Utility 等）各取工作集中位数，`samples` 是采样次数。不截图、不用夹具模型。计划 RD-10 的性能复测与启动耗时交替跑：trunk 与 head 各 5 次，取中位数比较，跑的时候机器上不开别的程序。
+
+```bash
+node scripts/redesign/drive.mjs --scenario idle-memory --app-root <trunk 工作树> --out <目录>
+node scripts/redesign/drive.mjs --scenario idle-memory --out <目录>
+```
+
 ## 不进 baseline-all 的场景
 
 `scenarios.mjs` 的 `EXTRA_SCENARIOS` 只能单跑，不进 `baseline-all`。`run` 的返回值写进结果的 `measured`。需要卡住模型调用时，场景从上下文的 `fake.gate` 调 `hold()`，在 `after` 里 `release()`。`hold()` 只卡对话请求；只走嵌入的步骤（参考文本入库）用 `hold({ embeddings: true })` 连嵌入一起卡。`fake.gate.waiting` 是正卡在门上的请求数，截图前等它大于 0，画面才停在确定的那一步。
@@ -142,8 +157,7 @@ node scripts/redesign/drive.mjs --scenario startup-timing --out <目录>
 | `stage-find-chapter` | Ctrl P 输入「4」回车打开第 4 章，再输入「第3章」打开第 3 章，流程脊当前章随之变化 | 第 3 章正文 | 否 | lane 7 |
 | `stage-focus` | 沉浸写作后流程脊与标签条消失，正文与章节动作条（AI 审稿等）在；`after` 按 Esc 恢复 | 沉浸写作 | 否 | lane 8 |
 | `stage-1280` | 视口 1280×900：页面无横向滚动，外壳里的名称、章名、位置、搜索提示、保存状态都没有被截断或折行 | 1280 宽 | 否 | lane 9 |
-| `stage-migrate` | 写入一份 v1 外观配置后重载：进入工作台、不出现启动阻塞，存储逐字节不变（只有选新外壳时才写成 v2） | 工作台（旧外壳，v1 没有 stage） | 否 | lane 10 |
-| `stage-settings-switch` | 从旧外壳打开设置 → 外观 → 界面布局选「创作流程（预览）」，新外壳出现，设置仍停在「外观」 | 新外壳 | 否 | You see |
+| `stage-migrate` | RD-10 起：去掉 v3 键、在旧键写入 RD-10 之前的配置后重载，galaxy（v1、旧外壳偏好）与 paper（v2）各走一遍：进入纸墨外壳且不出现启动阻塞，galaxy 迁成深色、paper 迁成浅色，缩放照旧，旧键逐字节不变（供回滚） | 纸墨外壳 | 否 | RD-10 lane 3、4 |
 | `stage-palette` | Ctrl K 输入「灯」，结果里有第 6 章；`after` 按 Esc 关闭 | Ctrl K 结果 | 否 | |
 | `stage-run` | 卡住模型后从章节蓝图写下一章：运行侧页自动打开，顶栏胶囊展开并显示进度；`after` 先确认侧页开着时 Ctrl K 仍能打开搜索（侧页不是模态层），再放行、等侧页里「上一次运行」显示已完成、新草稿打开 | 运行侧页与胶囊 | 是 | |
 | `stage-library` | 没有打开作品时是书房，没有流程脊；书架空着时唯一的主按钮是「新建作品」，没有模型时有「还没有连接 AI 模型」引导；书房文字对比度 | 空书房 | 否 | RD-5 lane 2 |
@@ -159,7 +173,7 @@ node scripts/redesign/drive.mjs --scenario startup-timing --out <目录>
 
 lane 1 的旧外壳部分：head 与 trunk 各跑一次 `baseline-all`，逐张 `pixel-diff.mjs`，`maxRatio` 小于 0.005。
 
-perf：三组交替，各预热 2 次不计，再各计 5 次：trunk 旧外壳、head 旧外壳、head 新外壳。head 旧外壳对 trunk 旧外壳量的是新外壳模块被 `App.tsx` 静态引入后旧外壳用户付出的启动代价。
+perf：三组交替，各预热 2 次不计，再各计 5 次：trunk 旧外壳、head 旧外壳、head 新外壳。head 旧外壳对 trunk 旧外壳量的是新外壳模块被 `App.tsx` 静态引入后旧外壳用户付出的启动代价。这是 RD-3 到 RD-9 的做法；RD-10 起 head 没有旧外壳，只比 trunk 旧外壳与 head 纸墨外壳两组，下面带 `--shell stage` 的命令对 head 去掉 `--shell`。
 
 ```bash
 node scripts/redesign/drive.mjs --scenario startup-timing --app-root <trunk 工作树> --out <目录>

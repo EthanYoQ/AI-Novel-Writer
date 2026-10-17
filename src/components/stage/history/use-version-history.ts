@@ -24,7 +24,7 @@ const NO_VERSIONS: VersionRecord[] = []
 type LoadedVersions = { chapter: number } & ({ ok: true; versions: VersionRecord[] } | { ok: false })
 
 /**
- * 版本历史的数据：章节列表、所选章的各稿，以及读取对比两边与回退。新外壳的版本历史页与旧外壳的 VersionHistory 共用。
+ * 版本历史的数据：章节列表、所选章的各稿，以及读取对比两边与回退。版本历史页用它。
  * 回退不覆盖任何一稿，而是用旧稿的正文新建一稿，返回新稿的版本号。
  */
 export function useVersionHistory(projectKey: string) {

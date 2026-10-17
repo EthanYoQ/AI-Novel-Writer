@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { ipc } from '../../services/ipc-client'
-import { useAppearanceStore } from '../../stores/appearance-bootstrap'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
@@ -9,9 +8,6 @@ import { toast } from '../ui/Toast'
 
 /** 设置页里还没保存的输入：各页用 useUnsavedSettings 登记，离开设置页或换页前由 leaveSettings 统一确认。 */
 const unsaved = new Set<symbol>()
-/** 显示放弃确认的新外壳设置页挂着几个。旧外壳的设置弹窗也会登记脏输入，但没有确认框，这时离开照旧执行。 */
-let hosts = 0
-
 export function useUnsavedSettings(dirty: boolean): void {
   useEffect(() => {
     if (!dirty) return
@@ -32,14 +28,9 @@ export function settleSettingsLeave(discard: boolean): void {
   else pending?.stay?.()
 }
 
+/** 设置页卸载时，还开着的放弃确认按作者留下结算。 */
 export function useSettingsLeaveHost(): void {
-  useEffect(() => {
-    hosts += 1
-    return () => {
-      hosts -= 1
-      settleSettingsLeave(false)
-    }
-  }, [])
+  useEffect(() => () => settleSettingsLeave(false), [])
 }
 
 /**
@@ -47,7 +38,7 @@ export function useSettingsLeaveHost(): void {
  * 新请求立即收到 stay，原请求由作者的回答结算，每个请求都恰好结算一次。作者按了却没反应会以为没按到，所以提示他先处理确认框。
  */
 export function leaveSettings(action: () => void, stay?: () => void): void {
-  if (unsaved.size === 0 || hosts === 0) action()
+  if (unsaved.size === 0) action()
   else if (useSettingsLeave.getState().pending) {
     stay?.()
     toast.info(useLocaleStore.getState().text('请先处理「放弃未保存的修改？」', 'Resolve “Discard unsaved changes?” first'))
@@ -55,15 +46,10 @@ export function leaveSettings(action: () => void, stay?: () => void): void {
 }
 
 /**
- * 会让新外壳设置页收起的导航（去别的阶段、回到书房、打开或新建作品）：有没保存的输入时先确认，取消就不走；
+ * 会让设置页收起的导航（去别的阶段、回到书房、打开或新建作品）：有没保存的输入时先确认，取消就不走；
  * 确认后先收起设置页再执行，之后的自动落点（打开作品后落到哪一步）不会再问一次。
- * 旧外壳照原样直接执行：它的设置弹窗没有放弃确认，也不该被这些导航关掉。
  */
 export function leaveSettingsThen(action: () => void, stay?: () => void): void {
-  if (useAppearanceStore.getState().resolvedShell !== 'stage') {
-    action()
-    return
-  }
   leaveSettings(() => {
     useLayoutStore.getState().closeSettings()
     action()
@@ -72,12 +58,12 @@ export function leaveSettingsThen(action: () => void, stay?: () => void): void {
 
 /**
  * 打开作品（作品菜单、命令面板、Ctrl O）：先确认放弃输入，再选文件夹，选到了才收起设置页去打开；
- * 选文件夹时取消，设置页与输入原样留着。旧外壳的设置弹窗不随打开作品关闭。
+ * 选文件夹时取消，设置页与输入原样留着。
  */
 export function openProjectFolder(): void {
   leaveSettings(() => void ipc.invoke('dialog:select-folder', 'project-open').then(folder => {
     if (!folder) return
-    if (useAppearanceStore.getState().resolvedShell === 'stage') useLayoutStore.getState().closeSettings()
+    useLayoutStore.getState().closeSettings()
     return useProjectStore.getState().openProject(folder)
   }))
 }
