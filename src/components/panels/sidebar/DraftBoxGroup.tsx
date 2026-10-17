@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect } from 'react'
-import { ChevronRight, ChevronDown, CheckCircle2, Circle, FileText, FolderOpen, Copy, Trash2, FilePen } from 'lucide-react'
+import { ChevronRight, ChevronDown, CheckCircle2, Circle, FileText, FolderOpen, Copy, Trash2, FilePen, Plus } from 'lucide-react'
 import type { DraftMeta } from '../../../stores/draft-store'
 import { openDraftTab } from '../../../stores/open-draft-tab'
 import { useEditorStore } from '../../../stores/editor-store'
@@ -21,6 +21,10 @@ import {
 import { deleteFinalizedChapter } from './finalized-chapter-deletion'
 import { deleteDraftVersion } from './draft-deletion'
 import { pluralEn } from '../../../shared/plural-en'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../ui/Dialog'
+import { Button } from '../../ui/Button'
+import { toast } from '../../ui/Toast'
+import { countDraftUnits } from '../../../shared/draft-units'
 
 const DRAFT_STATUS_EN: Record<string, string> = {
   draft: 'Draft', revising: 'Revising', reviewed: 'Reviewed', finalized: 'Finalized', archived: 'Archived',
@@ -30,12 +34,19 @@ const DRAFT_STATUS_EN: Record<string, string> = {
 
 export default function DraftBoxGroup({
   draftsByChapter,
+  onRefresh,
 }: {
   draftsByChapter: Record<number, DraftMeta[]>
+  onRefresh?: () => void
 }) {
   const [open, setOpen] = useState(true)
+  const [newDraftOpen, setNewDraftOpen] = useState(false)
+  const [newChapterNumber, setNewChapterNumber] = useState('')
+  const [newContent, setNewContent] = useState('')
+  const [creating, setCreating] = useState(false)
   const text = useLocaleStore(s => s.text)
   const projectKey = useProjectStore(s => s.currentProject?.path)
+  const currentProject = useProjectStore(s => s.currentProject)
   if (!projectKey) return null
 
   // 所有章节号排序
@@ -47,6 +58,42 @@ export default function DraftBoxGroup({
   const activeChapterCount = chapterNums.filter(n =>
     (draftsByChapter[n] || []).some(d => d.status !== 'archived')
   ).length
+
+  const handleCreateDraft = async () => {
+    const chapterNum = Number(newChapterNumber)
+    if (!Number.isInteger(chapterNum) || chapterNum < 1) {
+      toast.error(text('请输入有效的章节号（正整数）', 'Enter a valid chapter number (positive integer)'))
+      return
+    }
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectSession) return
+    setCreating(true)
+    try {
+      const versionResult = await ipc.invokeWithProjectSession(projectSession, 'db:draft-next-version', chapterNum, projectKey)
+      const version = typeof versionResult === 'number' ? versionResult : 1
+      const wordCount = countDraftUnits(newContent)
+      const result = await ipc.invokeWithProjectSession(projectSession, 'db:draft-create', {
+        chapterNumber: chapterNum,
+        version,
+        source: 'write',
+        content: newContent,
+        wordCount,
+      }, projectKey)
+      if (!result.success) {
+        toast.error(text(`创建草稿失败：${result.error}`, `Failed to create draft: ${result.error}`))
+        return
+      }
+      toast.success(text('草稿已创建', 'Draft created'))
+      setNewDraftOpen(false)
+      setNewChapterNumber('')
+      setNewContent('')
+      onRefresh?.()
+    } catch (error) {
+      toast.error(text(`创建草稿失败：${String(error)}`, `Failed to create draft: ${String(error)}`))
+    } finally {
+      setCreating(false)
+    }
+  }
 
   return (
     <div>
@@ -68,6 +115,18 @@ export default function DraftBoxGroup({
             {text(`${activeChapterCount} 章`, `${activeChapterCount} ${pluralEn(activeChapterCount, 'chapter')}`)}
           </span>
         )}
+        <button
+          type="button"
+          className="ml-1 opacity-60 hover:opacity-100 rounded p-0.5"
+          title={text('新建草稿', 'New draft')}
+          onClick={(e) => {
+            e.stopPropagation()
+            setNewDraftOpen(true)
+          }}
+          style={{ color: 'var(--color-text-muted)' }}
+        >
+          <Plus size={13} />
+        </button>
       </div>
 
       {open && (
@@ -77,7 +136,7 @@ export default function DraftBoxGroup({
               className="text-xs py-1"
               style={{ paddingLeft: 34, color: 'var(--color-text-muted)' }}
             >
-              {text('暂无草稿（从章节蓝图点击「写作此章」创作）', 'No drafts. Use “Write chapter” from a chapter blueprint.')}
+              {text('暂无草稿（点击右上角 + 手动新建，或从章节蓝图点击「写作此章」创作）', 'No drafts yet. Click + to create one manually, or use "Write chapter" from a blueprint.')}
             </div>
           ) : (
             chapterNums.map(chNum => (
@@ -91,6 +150,64 @@ export default function DraftBoxGroup({
           )}
         </div>
       )}
+
+      {/* 新建草稿弹窗 */}
+      <Dialog open={newDraftOpen} onOpenChange={setNewDraftOpen}>
+        <DialogContent className="max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>{text('新建草稿', 'New draft')}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 px-1">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+                {text('章节号', 'Chapter number')}
+              </label>
+              <input
+                type="number"
+                min={1}
+                value={newChapterNumber}
+                onChange={e => setNewChapterNumber(e.target.value)}
+                placeholder={text('例如：1', 'e.g. 1')}
+                className="w-full rounded-md border px-3 py-1.5 text-sm"
+                style={{
+                  borderColor: 'var(--color-border)',
+                  background: 'var(--surface)',
+                  color: 'var(--color-text)',
+                }}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+                {text('正文内容', 'Content')}
+              </label>
+              <textarea
+                value={newContent}
+                onChange={e => setNewContent(e.target.value)}
+                placeholder={text('在此输入章节正文…', 'Enter the chapter content here…')}
+                rows={10}
+                className="w-full rounded-md border px-3 py-2 text-sm resize-y"
+                style={{
+                  borderColor: 'var(--color-border)',
+                  background: 'var(--surface)',
+                  color: 'var(--color-text)',
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={() => setNewDraftOpen(false)}>
+              {text('取消', 'Cancel')}
+            </Button>
+            <Button
+              variant="default"
+              onClick={handleCreateDraft}
+              disabled={creating || !newChapterNumber.trim()}
+            >
+              {creating ? text('创建中…', 'Creating…') : text('创建', 'Create')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -337,10 +337,10 @@ export default function ProjectTree() {
       />
 
       {/* 4. 草稿箱 — 独立分区，按章节分组展示草稿 */}
-      <DraftBoxGroup draftsByChapter={draftsByChapter} />
+      <DraftBoxGroup draftsByChapter={draftsByChapter} onRefresh={() => { void refreshAll() }} />
 
       {/* 5. 正文章节 — 仅显示已定稿 */}
-      <ManuscriptGroup files={manuscriptFiles} projectPath={p} />
+
     </div>
   )
 }
