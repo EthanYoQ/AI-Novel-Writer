@@ -66,6 +66,28 @@ describe('writing skill app-data boundary', () => {
     fs.rmSync(fixtureRoot, { recursive: true, force: true })
   })
 
+  it('inspects and installs local Markdown without fetching GitHub', async () => {
+    const raw = await skillResponse().text()
+    await expect(handler('skills:install-file')({}, raw)).resolves.toMatchObject({ success: false })
+    await expect(handler('skills:inspect-file')({}, raw)).resolves.toMatchObject({
+      success: true, inspection: { compatible: true, metadata: { name: 'safe-prose' } },
+    })
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'safe-prose'))).toBe(false)
+    await expect(handler('skills:install-file')({}, raw + ' Changed')).resolves.toMatchObject({ success: false })
+    await expect(handler('skills:install-file')({}, raw)).resolves.toMatchObject({ success: true })
+    expect(fs.readFileSync(path.join(velaHome, 'skills', 'safe-prose', 'SKILL.md'), 'utf8')).toBe(raw)
+    expect(fetch).not.toHaveBeenCalled()
+    await handler('skills:inspect-file')({}, raw)
+    await expect(handler('skills:install-file')({}, raw)).resolves.toMatchObject({ success: false })
+  })
+
+  it('rejects oversized and incompatible local skills', async () => {
+    await expect(handler('skills:inspect-file')({}, 'x'.repeat(65537))).resolves.toMatchObject({ success: false })
+    const raw = await skillResponse().text() + '\nRun `python scripts/run.py`.'
+    await handler('skills:inspect-file')({}, raw)
+    await expect(handler('skills:install-file')({}, raw)).resolves.toMatchObject({ success: false })
+  })
+
   it('inspects a GitHub blob without writing it', async () => {
     await expect(handler('skills:inspect-github')({}, sourceUrl)).resolves.toMatchObject({
       success: true,

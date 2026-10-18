@@ -21,7 +21,7 @@ function ipcResult(channel: string) {
   if (channel === 'fs:read-file') return { success: false, content: '', error: 'missing' }
   if (channel === 'fs:write-file') return { success: true }
   if (channel === 'config:set') return { success: true }
-  if (channel === 'skills:inspect-github') return {
+  if (channel === 'skills:inspect-github' || channel === 'skills:inspect-file') return {
     success: true,
     inspection: {
       sourceUrl: 'https://github.com/acme/scene-craft',
@@ -72,6 +72,22 @@ afterEach(async () => {
 })
 
 describe('writing skill settings', () => {
+  it('inspects a selected local Markdown file before installation', async () => {
+    const content = '---\nname: scene-craft\n---\nWrite concrete scenes.'
+    const input = container?.querySelector<HTMLInputElement>('input[type="file"]')
+    expect(input).not.toBeNull()
+    const files = new DataTransfer()
+    files.items.add(new File([content], 'skill.md', { type: 'text/markdown' }))
+    await act(async () => {
+      input!.files = files.files
+      input!.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await expect.element(page.getByText('scene-craft', { exact: true })).toBeVisible()
+    expect(invoke).toHaveBeenCalledWith('skills:inspect-file', content)
+    expect(invoke).not.toHaveBeenCalledWith('skills:inspect-github', expect.anything())
+    await expect.element(page.getByRole('button', { name: 'Confirm install' })).toBeEnabled()
+  })
+
   it('inspects a GitHub candidate before offering installation', async () => {
     await act(async () => {
       await page.getByLabelText('GitHub skill URL').fill('https://github.com/acme/scene-craft')

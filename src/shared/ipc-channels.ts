@@ -690,6 +690,14 @@ export interface AppDataChannels {
     args: [sourceUrl: string]
     return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
   }
+  'skills:inspect-file': {
+    args: [content: string]
+    return: { success: boolean; inspection?: import('./writing-skills').RemoteWritingSkillInspection; error?: string }
+  }
+  'skills:install-file': {
+    args: [content: string]
+    return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
+  }
   'skills:uninstall-user': {
     args: [name: string]
     return: { success: boolean; error?: string }

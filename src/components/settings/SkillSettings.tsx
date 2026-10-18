@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Download, Link2, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, Download, FileText, Link2, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { projectSessionContextFromProject } from '../../shared/project-session-context'
 import {
@@ -104,6 +104,8 @@ export default function SkillSettings() {
   const [skills, setSkills] = useState<LoadedSkill[]>([])
   const [bindings, setBindings] = useState<Partial<Record<WritingSkillStage, string>>>({})
   const [sourceUrl, setSourceUrl] = useState('')
+  const [localContent, setLocalContent] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [inspection, setInspection] = useState<RemoteWritingSkillInspection | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -142,6 +144,7 @@ export default function SkillSettings() {
     setBusy(true)
     setError(null)
     setInspection(null)
+    setLocalContent(null)
     try {
       const result = await ipc.invoke('skills:inspect-github', sourceUrl.trim())
       if (!result.success || !result.inspection) throw new Error(result.error || text('Skill 检查失败', 'Skill inspection failed'))
@@ -153,20 +156,42 @@ export default function SkillSettings() {
     }
   }
 
+  const inspectFile = async (file: File) => {
+    setBusy(true)
+    setError(null)
+    setInspection(null)
+    setLocalContent(null)
+    try {
+      if (file.size > 64 * 1024) throw new Error(text('SKILL.md 不可超过 64 KiB', 'SKILL.md must not exceed 64 KiB'))
+      const content = await file.text()
+      const result = await ipc.invoke('skills:inspect-file', content)
+      if (!result.success || !result.inspection) throw new Error(result.error || text('Skill 检查失败', 'Skill inspection failed'))
+      setLocalContent(content)
+      setInspection(result.inspection)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const installSource = async () => {
     if (!inspection?.compatible) return
     if (!await confirmAction(text(
-      `确认把“${inspection.metadata.name}”安装到全局写作 Skill 库？安装时会重新下载并验证。`,
-      `Install “${inspection.metadata.name}” in the global writing skill library? It will be downloaded and validated again.`,
+      `确认把“${inspection.metadata.name}”安装到全局写作 Skill 库？ 安装时会再次验证内容。`,
+      `Install “${inspection.metadata.name}” in the global writing skill library? Its content will be validated again.`,
     ), { title: text('安装写作 Skill', 'Install writing skill') })) return
     setBusy(true)
     setError(null)
     try {
-      const result = await ipc.invoke('skills:install-github', inspection.sourceUrl)
+      const result = localContent !== null
+        ? await ipc.invoke('skills:install-file', localContent)
+        : await ipc.invoke('skills:install-github', inspection.sourceUrl)
       if (!result.success) throw new Error(result.error || text('Skill 安装失败', 'Skill installation failed'))
       await reload()
       setInspection(null)
       setSourceUrl('')
+      setLocalContent(null)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -221,31 +246,64 @@ export default function SkillSettings() {
 
   return (
     <div className="space-y-5">
-      <section className="space-y-2" aria-labelledby="writing-skill-source-title">
+      <section className="space-y-3" aria-labelledby="writing-skill-source-title">
         <div>
           <h3 id="writing-skill-source-title" className="text-sm font-semibold text-[var(--color-text)]">
-            {text('从 GitHub 检查写作 Skill', 'Inspect a writing skill from GitHub')}
+            {text('汇入写作 Skill', 'Import a writing skill')}
           </h3>
           <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
             {text('仅支持自包含的提示词型 SKILL.md。脚本、hook、相对引用、子代理和工具执行要求不会被安装。', 'Only self-contained prompt SKILL.md files are supported. Scripts, hooks, relative references, subagents, and tool requirements are not installed.')}
           </p>
         </div>
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <Link2 size={14} className="absolute left-2.5 top-2 text-[var(--color-text-muted)]" />
-            <Input
-              value={sourceUrl}
-              onChange={event => setSourceUrl(event.target.value)}
-              placeholder="https://github.com/owner/repository"
-              aria-label={text('GitHub Skill 地址', 'GitHub skill URL')}
-              className="pl-8"
-            />
+        <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)]">
+          <div className="flex flex-wrap items-center gap-3 p-4">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg)] text-[var(--color-text-secondary)]">
+              <FileText size={18} aria-hidden />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-[var(--color-text)]">{text('本机档案', 'Local file')}</div>
+              <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">{text('选择 SKILL.md，预览后安装 · 最大 64 KiB', 'Choose SKILL.md, then preview and install · Up to 64 KiB')}</p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()} disabled={busy}>
+              <Upload size={14} aria-hidden />
+              {text('选择档案', 'Choose file')}
+            </Button>
           </div>
-          <Button variant="outline" onClick={inspectSource} disabled={busy || !sourceUrl.trim()}>
-            <RefreshCw size={13} className={busy ? 'animate-spin' : ''} />
-            {text('只读检查', 'Inspect')}
-          </Button>
+          <div className="space-y-2 border-t border-[var(--color-border)] p-4">
+            <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)]">
+              <Link2 size={13} aria-hidden />
+              {text('从 GitHub 汇入', 'Import from GitHub')}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-0 flex-1 basis-48">
+                <Input
+                  value={sourceUrl}
+                  onChange={event => setSourceUrl(event.target.value)}
+                  placeholder="https://github.com/owner/repository"
+                  aria-label={text('GitHub Skill 地址', 'GitHub skill URL')}
+                  className="w-full"
+                />
+              </div>
+              <Button variant="secondary" size="sm" onClick={inspectSource} disabled={busy || !sourceUrl.trim()}>
+                <RefreshCw size={13} className={busy ? 'animate-spin' : ''} />
+                {text('只读检查', 'Inspect')}
+              </Button>
+            </div>
+          </div>
         </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".md,text/markdown"
+          aria-label={text('汇入 SKILL.md 档案', 'Import SKILL.md file')}
+          disabled={busy}
+          className="hidden"
+          onChange={event => {
+            const file = event.currentTarget.files?.[0]
+            event.currentTarget.value = ''
+            if (file) void inspectFile(file)
+          }}
+        />
         {inspection && (
           <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-3">
             <div className="flex items-start gap-3">

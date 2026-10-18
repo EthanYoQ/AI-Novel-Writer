@@ -205,6 +205,15 @@ function promptLanguageFromFilename(filename: string): WritingLanguage | undefin
  * 已准入全局 generation 的提示词和用户 Skill 只能由此固定根目录控制器访问；渲染层不接收
  * 任意 app-data 路径，也不借用外部文件授权。
  */
+function inspectLocalWritingSkill(raw: string) {
+  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > MAX_WRITING_SKILL_BYTES) {
+    throw new Error(text('SKILL.md 必须为不超过 64 KiB 的文本', 'SKILL.md must be text no larger than 64 KiB'))
+  }
+  const { metadata, compatible, reasons, suggestedStage, utf8Bytes } = inspectWritingSkillMarkdown(raw)
+  const contentSha256 = createHash('sha256').update(raw, 'utf8').digest('hex')
+  return { raw, inspection: { metadata, compatible, reasons, suggestedStage, utf8Bytes, contentSha256, sourceUrl: contentSha256, resolvedUrl: 'local:SKILL.md' } }
+}
+
 export function registerAppDataController(): void {
   assertGlobalDataReady()
   const inspectedWritingSkills = new Map<string, Pick<RemoteWritingSkillInspection, 'contentSha256' | 'resolvedUrl'>>()
@@ -343,6 +352,75 @@ export function registerAppDataController(): void {
       inspectedWritingSkills.delete(sourceUrl)
       // Refetch after confirmation. Renderer-provided inspection data is never trusted as install input.
       const { raw, inspection } = await fetchGitHubWritingSkill(sourceUrl)
+      if (
+        inspection.contentSha256 !== confirmedInspection.contentSha256
+        || inspection.resolvedUrl !== confirmedInspection.resolvedUrl
+      ) {
+        throw new Error(text(
+          'Writing Skill 在检查后已发生变化，请重新检查',
+          'The Writing Skill changed after inspection; inspect it again',
+        ))
+      }
+      if (!inspection.compatible) {
+        throw new Error(text(
+          `该 Skill 不是自包含提示词：${inspection.reasons.join(', ')}`,
+          `This is not a self-contained prompt skill: ${inspection.reasons.join(', ')}`,
+        ))
+      }
+      const requestedDirectory = writingSkillDirectory(inspection.metadata.name)
+      if (fs.existsSync(requestedDirectory)) {
+        throw new Error(text(
+          `同名 Writing Skill 已安装：${inspection.metadata.name}`,
+          `A Writing Skill with this name is already installed: ${inspection.metadata.name}`,
+        ))
+      }
+      const { filePath } = ensureOwnedSkillTarget(inspection.metadata.name)
+      fs.writeFileSync(filePath, raw, { encoding: 'utf8', mode: 0o600 })
+      const skill: InstalledWritingSkill = {
+        name: inspection.metadata.name,
+        source: 'user',
+        version: inspection.metadata.version,
+        language: inspection.metadata.language,
+        compatible: true,
+        utf8Bytes: inspection.utf8Bytes,
+      }
+      return { success: true, skill }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('skills:inspect-file', async (_event, content: string) => {
+    try {
+      if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_WRITING_SKILL_BYTES) {
+        throw new Error(text('SKILL.md 内容无效', 'The SKILL.md content is invalid'))
+      }
+      const { inspection } = inspectLocalWritingSkill(content)
+      inspectedWritingSkills.set(inspection.contentSha256, {
+        contentSha256: inspection.contentSha256,
+        resolvedUrl: inspection.resolvedUrl,
+      })
+      return { success: true, inspection }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('skills:install-file', async (_event, content: string) => {
+    try {
+      if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_WRITING_SKILL_BYTES) {
+        throw new Error(text('SKILL.md 内容无效', 'The SKILL.md content is invalid'))
+      }
+      const { raw, inspection } = inspectLocalWritingSkill(content)
+      const confirmedInspection = inspectedWritingSkills.get(inspection.contentSha256)
+      if (!confirmedInspection) {
+        throw new Error(text(
+          '请先检查该本机 Writing Skill，再确认安装',
+          'Inspect this local Writing Skill before confirming installation',
+        ))
+      }
+      inspectedWritingSkills.delete(inspection.contentSha256)
+      // Only the exact inspected content may be written to the managed library.
       if (
         inspection.contentSha256 !== confirmedInspection.contentSha256
         || inspection.resolvedUrl !== confirmedInspection.resolvedUrl
