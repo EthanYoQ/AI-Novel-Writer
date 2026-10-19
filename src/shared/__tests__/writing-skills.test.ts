@@ -59,8 +59,66 @@ Write a chapter.`)
     expect(result.reasons).toContain('tool-dependency')
   })
 
+  it('reads folded and literal block scalars in Agent Skills frontmatter', () => {
+    const result = inspectWritingSkillMarkdown(`---
+name: block-skill
+description: >-
+  Keep the voice steady.
+  Use for drafting.
+version: |
+  2.0.0
+---
+Write.`)
+
+    expect(result.metadata).toMatchObject({ description: 'Keep the voice steady. Use for drafting.', version: '2.0.0' })
+  })
+
+  it('merges cited reference files, including ones they cite, into the prompt', () => {
+    const files: Record<string, string> = {
+      'references/voice.md': 'Close third person. See [tone](tone.md).',
+      'references/tone.md': 'Dry humour.',
+      'FORMS.md': 'Use short paragraphs.',
+    }
+    const result = inspectWritingSkillMarkdown(`---
+name: voice
+description: Voice rules
+---
+Follow references/voice.md and [forms](FORMS.md).`, { readFile: relativePath => files[relativePath] })
+
+    expect(result).toMatchObject({
+      compatible: true,
+      bundledFiles: ['references/voice.md', 'FORMS.md', 'references/tone.md'],
+    })
+    expect(result.content).toContain('Close third person.')
+    expect(result.content).toContain('Dry humour.')
+    expect(result.utf8Bytes).toBe(new TextEncoder().encode(result.content).byteLength)
+  })
+
   it.each([
-    ['https://github.com/acme/story-skill', { owner: 'acme', repo: 'story-skill', path: 'SKILL.md' }],
+    ['a missing file', 'Read [forms](FORMS.md).'],
+    ['a parent-directory escape', 'Read [secret](../secret.md).'],
+    ['a non-text file', 'Use assets/cover.png as the mood board.'],
+    ['a bare skill directory variable', 'Look inside ${SKILL_DIR} first.'],
+    ['a non-ASCII file name', '先读 references/风格.md。'],
+  ])('keeps a skill that cites %s incompatible', (_label, body) => {
+    const result = inspectWritingSkillMarkdown(`---\nname: cites\n---\n${body}`, {
+      readFile: relativePath => relativePath === 'FORMS.md' ? undefined : 'any text',
+    })
+
+    expect(result.reasons).toContain('relative-reference')
+    expect(result.bundledFiles).toEqual([])
+  })
+
+  it('checks scripts cited from a merged reference file', () => {
+    const result = inspectWritingSkillMarkdown('---\nname: nested\n---\nRead references/steps.md.', {
+      readFile: relativePath => relativePath === 'references/steps.md' ? 'Run scripts/build.py first.' : undefined,
+    })
+
+    expect(result.reasons).toContain('script-dependency')
+  })
+
+  it.each([
+    ['https://github.com/acme/story-skill',{ owner: 'acme', repo: 'story-skill', path: 'SKILL.md' }],
     ['https://github.com/acme/story-skill/tree/main/skills/prose', { owner: 'acme', repo: 'story-skill', ref: 'main', path: 'skills/prose/SKILL.md' }],
     ['https://github.com/acme/story-skill/blob/release/SKILL.md', { owner: 'acme', repo: 'story-skill', ref: 'release', path: 'SKILL.md' }],
     ['https://raw.githubusercontent.com/acme/story-skill/main/SKILL.md', { owner: 'acme', repo: 'story-skill', ref: 'main', path: 'SKILL.md' }],

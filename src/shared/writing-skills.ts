@@ -23,11 +23,26 @@ export interface WritingSkillMetadata {
 
 export interface WritingSkillInspection {
   metadata: WritingSkillMetadata
+  /** 注入提示词的正文；被引用的附带文本文件按引用顺序并入末尾。 */
   content: string
   compatible: boolean
   reasons: WritingSkillCompatibilityReason[]
   suggestedStage: WritingSkillStage
   utf8Bytes: number
+  /** 已并入 content 的附带文件，相对 Skill 根目录的 POSIX 路径。 */
+  bundledFiles: string[]
+}
+
+/**
+ * 按 Skill 根目录相对路径读取附带文本文件；不存在、不是文本或不安全时返回 undefined。
+ * 传入的路径已规范化：只含安全片段，不含 `..`，扩展名属于 WRITING_SKILL_TEXT_EXTENSIONS。
+ */
+export type WritingSkillFileReader = (relativePath: string) => string | undefined
+
+export interface WritingSkillInspectOptions {
+  readFile?: WritingSkillFileReader
+  /** frontmatter 缺少 name 时使用，例如 Skill 文件夹名。 */
+  fallbackName?: string
 }
 
 export interface GitHubWritingSkillLocation {
@@ -44,6 +59,19 @@ export interface RemoteWritingSkillInspection extends Omit<WritingSkillInspectio
   contentSha256: string
 }
 
+export type LocalWritingSkillSourceKind = 'file' | 'folder'
+
+/** 主进程读取本机文件或文件夹后的检查结果；渲染层只拿到候选 id，拿不到路径或读文件能力。 */
+export interface LocalWritingSkillInspection extends Omit<WritingSkillInspection, 'content'> {
+  candidateId: string
+  sourceKind: LocalWritingSkillSourceKind
+  /** 所选文件或文件夹的名称（不含上级路径）。 */
+  sourceName: string
+  contentSha256: string
+  /** 文件夹里不会安装的文件：脚本、二进制、未被 SKILL.md 引用的文本等。 */
+  skippedFiles: string[]
+}
+
 export interface InstalledWritingSkill {
   name: string
   source: 'user'
@@ -53,7 +81,10 @@ export interface InstalledWritingSkill {
   utf8Bytes: number
 }
 
-const MAX_SKILL_BYTES = 64 * 1024
+export const MAX_WRITING_SKILL_BYTES = 64 * 1024
+export const WRITING_SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+export const WRITING_SKILL_TEXT_EXTENSIONS = ['.md', '.markdown', '.txt'] as const
+const MAX_BUNDLED_FILES = 16
 const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/
 
 function unquote(value: string): string {
@@ -70,11 +101,95 @@ function parseFrontmatter(raw: string): { fields: Record<string, string>; conten
   const match = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/)
   if (!match) return { fields: {}, content: raw.trim() }
   const fields: Record<string, string> = {}
-  for (const line of match[1].split(/\r?\n/)) {
-    const field = line.match(/^\s*([^:#][^:]*):\s*(.*?)\s*$/)
-    if (field) fields[field[1].trim().toLowerCase()] = unquote(field[2])
+  const lines = match[1].split(/\r?\n/)
+  for (let index = 0; index < lines.length; index++) {
+    const field = lines[index].match(/^\s*([^:#][^:]*):\s*(.*?)\s*$/)
+    if (!field) continue
+    const key = field[1].trim().toLowerCase()
+    const blockStyle = field[2].match(/^([>|])[+-]?$/)?.[1]
+    if (!blockStyle) {
+      fields[key] = unquote(field[2])
+      continue
+    }
+    // Agent Skills 常用 YAML 块标量写多行 description：`>` 折叠成一行，`|` 保留换行。
+    const block: string[] = []
+    while (index + 1 < lines.length && (/^\s+\S/.test(lines[index + 1]) || !lines[index + 1].trim())) {
+      block.push(lines[++index].trim())
+    }
+    fields[key] = blockStyle === '>'
+      ? block.filter(Boolean).join(' ')
+      : block.join('\n').trim()
   }
   return { fields, content: raw.slice(match[0].length).trim() }
+}
+
+const LINK_TARGET = /\]\(\s*<?([^)\s>]+)/g
+const BARE_REFERENCE = /(?:^|[\s`'"(])((?:\$\{skill_dir\}[/\\])?(?:references?|assets?)[/\\][^\s`'")]+)/gim
+const SKILL_DIR_REFERENCE = /\$\{skill_dir\}(?:[/\\]([^\s`'")]+))?/gi
+
+/** 按出现顺序列出正文里的相对引用：Markdown 链接目标、references/ 与 assets/ 路径、${SKILL_DIR}。 */
+function referencedPaths(text: string): string[] {
+  const found: Array<{ at: number; path: string }> = []
+  for (const match of text.matchAll(LINK_TARGET)) {
+    if (!/^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(match[1])) found.push({ at: match.index, path: match[1] })
+  }
+  for (const match of text.matchAll(BARE_REFERENCE)) found.push({ at: match.index, path: match[1] })
+  for (const match of text.matchAll(SKILL_DIR_REFERENCE)) found.push({ at: match.index, path: match[1] ?? '' })
+  return found.sort((left, right) => left.at - right.at).map(reference => reference.path)
+}
+
+/** 把引用解析成 Skill 根目录内的规范 POSIX 路径；越出根目录或含不安全片段时返回 null。 */
+function resolveReference(reference: string, baseSegments: string[]): string | null {
+  // 路径只取开头的 ASCII 路径字符：中文句读、锚点或查询串在此截断，非 ASCII 文件名留下的残段解析不到文本文件。
+  const cleaned = reference
+    .replace(/^\$\{skill_dir\}[/\\]?/i, '')
+    .match(/^[A-Za-z0-9._/\\-]*/)![0]
+    .replace(/[.]+$/, '')
+    .replace(/\\/g, '/')
+  if (!cleaned) return null
+  const segments = [...baseSegments]
+  for (const part of cleaned.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (!segments.length) return null
+      segments.pop()
+      continue
+    }
+    if (!SAFE_SEGMENT.test(part)) return null
+    segments.push(part)
+  }
+  const resolved = segments.join('/')
+  return WRITING_SKILL_TEXT_EXTENSIONS.some(extension => resolved.toLowerCase().endsWith(extension)) ? resolved : null
+}
+
+/**
+ * 运行时只把 Skill 当作一段提示词注入，读不到旁边的文件。被引用的附带文本因此在检查时就并入正文，
+ * 引用了却并不进来的文件（缺失、越界、非文本）让 Skill 不兼容。
+ */
+function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | undefined): {
+  files: Array<{ path: string; content: string }>
+  unresolved: boolean
+} {
+  const files: Array<{ path: string; content: string }> = []
+  const queue = referencedPaths(body).map(reference => ({ reference, base: [] as string[] }))
+  let unresolved = false
+  while (queue.length) {
+    const { reference, base } = queue.shift()!
+    const candidates = [...new Set([resolveReference(reference, base), resolveReference(reference, [])])]
+      .filter((candidate): candidate is string => candidate !== null)
+    if (candidates.some(candidate => files.some(file => file.path === candidate))) continue
+    const bundled = files.length < MAX_BUNDLED_FILES
+      ? candidates.map(path => ({ path, content: readFile?.(path) })).find(file => file.content !== undefined)
+      : undefined
+    if (!bundled) {
+      unresolved = true
+      continue
+    }
+    files.push({ path: bundled.path, content: bundled.content!.trim() })
+    const directory = bundled.path.split('/').slice(0, -1)
+    queue.push(...referencedPaths(bundled.content!).map(reference => ({ reference, base: directory })))
+  }
+  return { files, unresolved }
 }
 
 function normalizedLanguage(value: string | undefined): WritingSkillLanguage {
@@ -98,19 +213,24 @@ function suggestedStage(fields: Record<string, string>, content: string): Writin
   return 'drafting'
 }
 
-export function inspectWritingSkillMarkdown(raw: string): WritingSkillInspection {
+export function inspectWritingSkillMarkdown(
+  raw: string,
+  options: WritingSkillInspectOptions = {},
+): WritingSkillInspection {
   if (typeof raw !== 'string') throw new Error('SKILL.md content must be text')
-  const { fields, content } = parseFrontmatter(raw)
-  const name = fields.name?.trim() || 'unnamed-writing-skill'
+  const { fields, content: skillBody } = parseFrontmatter(raw)
+  const name = fields.name?.trim() || options.fallbackName || 'unnamed-writing-skill'
   const reasons = new Set<WritingSkillCompatibilityReason>()
-  const byteLength = new TextEncoder().encode(raw).byteLength
+  const bundle = bundleReferencedFiles(skillBody, options.readFile)
+  const content = [skillBody, ...bundle.files.map(file => `---\n\n## ${file.path}\n\n${file.content}`)].join('\n\n')
+  const utf8Bytes = new TextEncoder().encode(content).byteLength
   const body = content.toLowerCase()
   const declaredCapabilities = Object.keys(fields).join(' ')
 
-  if (byteLength > MAX_SKILL_BYTES) reasons.add('content-too-large')
-  if (/\]\(\s*(?:\.\.?[/\\]|(?:references?|assets?)[/\\])/i.test(content)
-    || /(?:^|[\s`'"(])(?:references?|assets?)[/\\][^\s`'")]+/im.test(content)
-    || /\$\{skill_dir\}/i.test(content)) reasons.add('relative-reference')
+  if (new TextEncoder().encode(raw).byteLength > MAX_WRITING_SKILL_BYTES || utf8Bytes > MAX_WRITING_SKILL_BYTES) {
+    reasons.add('content-too-large')
+  }
+  if (bundle.unresolved) reasons.add('relative-reference')
   if (/(?:^|[\s`'"(])scripts?[/\\][^\s`'")]+/im.test(content)
     || /\b(?:run|execute)\s+(?:the\s+)?script\b/i.test(content)
     || /运行.{0,12}脚本/.test(content)) reasons.add('script-dependency')
@@ -138,7 +258,8 @@ export function inspectWritingSkillMarkdown(raw: string): WritingSkillInspection
     compatible: reasons.size === 0,
     reasons: [...reasons],
     suggestedStage: stage,
-    utf8Bytes: new TextEncoder().encode(content).byteLength,
+    utf8Bytes,
+    bundledFiles: bundle.files.map(file => file.path),
   }
 }
 

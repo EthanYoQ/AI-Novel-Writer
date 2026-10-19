@@ -680,7 +680,8 @@ export interface AppDataChannels {
   'prompt:delete-global': { args: [key: string, writingLanguage: WritingLanguage]; return: { success: boolean; error?: string } }
   'skills:list-user': {
     args: []
-    return: Array<{ name: string; content: string; baseDir: string; filePath: string }>
+    /** files：并入提示词的附带文本，键为相对 Skill 根目录的 POSIX 路径。 */
+    return: Array<{ name: string; content: string; baseDir: string; filePath: string; files: Record<string, string> }>
   }
   'skills:inspect-github': {
     args: [sourceUrl: string]

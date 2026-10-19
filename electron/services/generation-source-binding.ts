@@ -522,12 +522,19 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         const text = scope === 'builtin' ? deps.readBuiltinSkill?.(name, facts.language) : observe(scope === 'project' ? deps.projectStorageRoot : deps.globalDataRoot, `skills/${name}/SKILL.md`)!.toString('utf8');
         if (!text)
             fail('GENERATION_SKILL_MISSING');
-        const inspected = inspectWritingSkillMarkdown(text);
+        // 用户库里的文件夹 Skill 会把被引用的附带文本并入提示词；附带文件同样纳入快照比对与身份哈希。
+        const read = new Map<string, string>();
+        const inspected = inspectWritingSkillMarkdown(text, scope === 'user' ? { readFile: relative => {
+            const content = observe(deps.globalDataRoot, `skills/${name}/${relative}`, true)?.toString('utf8');
+            if (content !== undefined) read.set(relative, content);
+            return content;
+        } } : {});
+        const bundled = inspected.bundledFiles.flatMap(relative => [relative, read.get(relative)!]);
         // Bundled skills are an existing product capability, selected through
         // the trusted pure getter. External imports retain their stricter gate.
         if (scope !== 'builtin' && !inspected.compatible || !['bilingual', facts.language].includes(inspected.metadata.language))
             fail('GENERATION_SKILL_INCOMPATIBLE');
-        skills.push({ stage, identity: id, hash: hash(text) });
+        skills.push({ stage, identity: id, hash: hash(bundled.length ? JSON.stringify([text, ...bundled]) : text) });
     }
     for (const file of observed) {
         const now = readFile(file.root, file.relative, true);

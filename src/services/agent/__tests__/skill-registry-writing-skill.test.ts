@@ -30,6 +30,23 @@ describe('writing skill registry identity and tool exposure', () => {
     expect(skillRegistry.getById('user:"quoted-skill"')).toBeUndefined()
   })
 
+  it('loads a user folder skill as one bindable prompt with its cited references merged', async () => {
+    invoke.mockResolvedValue([{
+      name: 'scene-voice',
+      baseDir: 'managed://skills/scene-voice',
+      filePath: 'managed://skills/scene-voice/SKILL.md',
+      content: '---\nname: scene-voice\ndescription: Voice\n---\nFollow references/voice.md.',
+      files: { 'references/voice.md': 'Stay in close third person.' },
+    }])
+
+    const { skillRegistry } = await import('../skill-registry')
+    await skillRegistry.loadAll()
+
+    const skill = skillRegistry.getById('user:scene-voice')
+    expect(skill?.writingSkill).toMatchObject({ compatible: true, bundledFiles: ['references/voice.md'] })
+    expect(skill?.content).toContain('Stay in close third person.')
+  })
+
   it('serializes atomic reloads without exposing a cleared or partial registry', async () => {
     const deferred = <T,>() => {
       let resolve!: (value: T) => void
@@ -128,7 +145,7 @@ it('pure builtin data preserves all registry metadata, inspections and localized
   await skillRegistry.loadAll()
   const data = getBuiltinWritingSkills()
   expect(data).toHaveLength(7)
-  expect(createHash('sha256').update(JSON.stringify(data)).digest('hex')).toMatchInlineSnapshot(`"c43b4c0d77da3518c850c00ca15b9b96f317c0a951389578d2780f10046ccd51"`)
+  expect(createHash('sha256').update(JSON.stringify(data)).digest('hex')).toMatchInlineSnapshot(`"77c61d7a34d2a5f9aa58418f6467c077ee09d775bd9186229b6611c00df91177"`)
   for (const entry of data) {
     expect(skillRegistry.getById(`builtin:${entry.metadata.name}`)).toMatchObject(entry)
     for (const language of ['zh-CN', 'en-US'] as const) {

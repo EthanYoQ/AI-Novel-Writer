@@ -129,7 +129,7 @@ class SkillRegistryImpl {
     try {
       const entries = await ipc.invoke('skills:list-user')
       for (const entry of entries) {
-        const skill = parseSkillMd(entry.content, entry.name, 'user', entry.baseDir, entry.filePath)
+        const skill = parseSkillMd(entry.content, entry.name, 'user', entry.baseDir, entry.filePath, undefined, entry.files)
         if (!skill) continue
         target.set(skill.skillId, skill)
         count++
@@ -369,8 +369,11 @@ export function parseSkillMd(
   baseDir: string,
   filePath: string,
   projectSession?: ProjectSessionContext,
+  bundledFiles: Readonly<Record<string, string>> = {},
 ): LoadedSkill | null {
-  const writingSkill = inspectWritingSkillMarkdown(raw)
+  const writingSkill = inspectWritingSkillMarkdown(raw, {
+    readFile: relativePath => Object.hasOwn(bundledFiles, relativePath) ? bundledFiles[relativePath] : undefined,
+  })
   const inspectedName = writingSkill.metadata.name === 'unnamed-writing-skill'
     ? fallbackName
     : writingSkill.metadata.name

@@ -176,6 +176,7 @@ async function fetchGitHubWritingSkill(sourceUrl: string): Promise<{
     reasons: inspected.reasons,
     suggestedStage: inspected.suggestedStage,
     utf8Bytes: inspected.utf8Bytes,
+    bundledFiles: inspected.bundledFiles,
   }
   return {
     raw,
