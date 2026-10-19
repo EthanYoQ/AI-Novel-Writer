@@ -362,12 +362,16 @@ describe('版本历史', () => {
     expect(versionsColumn()).not.toContain('没能读出这一章的各稿')
   })
 
-  it('点的那一稿已被删掉（列表还没刷新）：对比区回到「选一稿」，不停在正在读取', async () => {
+  it('点的那一稿已被删掉（列表还没刷新）：对比区说明这一稿已不存在，并刷新列表去掉它，不停在正在读取', async () => {
     await openChapterThree()
     drafts = drafts.filter(draft => draft.id !== 11)
     await click(/草稿 v1/)
-    await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toBe('选一稿，与当前稿逐字对比。'))
-    expect(button(/草稿 v1/)!.getAttribute('aria-pressed')).toBe('false')
+    await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toBe('这一稿已不存在，可能已被删除。列表已刷新。'))
+    await vi.waitFor(() => expect(button(/草稿 v1/)).toBeUndefined())
+    expect(button(/草稿 v2/)).toBeTruthy()
+
+    await click(/草稿 v2/)
+    await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toContain('与当前稿相同'))
   })
 
   it('当前稿查到了却读不出正文（刚被删掉）：说这一章还没有当前稿，不当成空正文对比', async () => {
