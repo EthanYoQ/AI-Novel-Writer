@@ -111,6 +111,7 @@ const coveredBy = (sheet: DOMRect) => (element: Element) => {
   const rect = element.getBoundingClientRect()
   return rect.width > 0 && rect.left >= sheet.left - 1 && rect.right <= sheet.right + 1
 }
+const tabbable = (root: Element) => [...root.querySelectorAll<HTMLElement>('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"])')]
 const sheetOpen = () => host!.querySelector('.stage-sheet-slot') !== null
 
 describe('运行侧页浮起时盖在内容区上面，被它盖住的东西点不到也走不到', () => {
@@ -148,7 +149,7 @@ describe('运行侧页浮起时盖在内容区上面，被它盖住的东西点�
     const { sheet } = await renderAt(790)
     const slot = host!.querySelector('.stage-sheet-slot')!
     const content = host!.querySelector<HTMLElement>('.stage-content')!
-    const covered = [...content.querySelectorAll<HTMLElement>('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"])')].filter(coveredBy(sheet))
+    const covered = tabbable(content).filter(coveredBy(sheet))
     expect(covered.length).toBeGreaterThan(0)
     content.focus()
     const visited: Element[] = []
@@ -158,5 +159,15 @@ describe('运行侧页浮起时盖在内容区上面，被它盖住的东西点�
     }
     expect(slot.contains(document.activeElement)).toBe(true)
     expect(visited.filter(element => covered.includes(element as HTMLElement)).map(element => element.textContent || element.getAttribute('aria-label'))).toEqual([])
+  })
+
+  it('Shift+Tab 从侧页回到内容区时落在看得见的控件上', async () => {
+    const { sheet } = await renderAt(790)
+    const slot = host!.querySelector('.stage-sheet-slot')!
+    tabbable(slot)[0].focus()
+    await userEvent.keyboard('{Shift>}{Tab}{/Shift}')
+    const landed = document.activeElement!
+    expect(host!.querySelector('.stage-content')!.contains(landed)).toBe(true)
+    expect(coveredBy(sheet)(landed)).toBe(false)
   })
 })
