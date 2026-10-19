@@ -264,23 +264,31 @@ export function plotOutlineConfirmedPrefix(expected: PlotOutlineRangeSource, ran
 
 /**
  * 这一批交给主进程会怎样：invalid 为 begin 时 plotOutlineConfirmedPrefix 会拒绝；overwrite 为替换已有的第 from–to 章
- * （没有按章标题时 whole 为整份替换），其余章节由 renderPlotOutlineRange 原样保留；continue 为紧接已有章节往后写。
+ * （没有按章标题时 whole 为整份替换），其余章节由 renderPlotOutlineRange 原样保留，prologue 为开头有第 0 章序章（同样保留）；
+ * continue 为紧接已有章节往后写，after 为 0 即接在序章之后。
  */
 export type PlotOutlineRangeEffect =
   | { kind: 'invalid'; lastChapter: number; hasEntries: boolean; orderIssue: PlotOutlineOrderIssue | null }
   | { kind: 'new' }
   | { kind: 'continue'; after: number }
-  | { kind: 'overwrite'; whole: boolean; from: number; to: number; lastChapter: number }
+  | { kind: 'overwrite'; whole: boolean; from: number; to: number; lastChapter: number; prologue: boolean }
 
 export function plotOutlineRangeEffect(source: PlotOutlineRangeSource, range: PlotOutlineRange): PlotOutlineRangeEffect {
   const entries = headings(source.synopsis)
   const lastChapter = entries.reduce((last, entry) => Math.max(last, entry.to), 0)
   try { plotOutlineConfirmedPrefix(source, range) } catch { return { kind: 'invalid', lastChapter, hasEntries: entries.length > 0, orderIssue: chapterOrderIssue(entries) } }
   if (!source.synopsis.trim()) return { kind: 'new' }
-  if (!entries.length) return { kind: 'overwrite', whole: true, from: range.from, to: range.to, lastChapter }
+  if (!entries.length) return { kind: 'overwrite', whole: true, from: range.from, to: range.to, lastChapter, prologue: false }
+  const prologue = entries[0].from === 0
   const replaced = entries.filter(entry => entry.from >= range.from && entry.from <= range.to)
-  if (!replaced.length) return range.from > 1 ? { kind: 'continue', after: range.from - 1 } : { kind: 'new' }
-  return { kind: 'overwrite', whole: false, from: replaced[0].from, to: replaced[replaced.length - 1].to, lastChapter }
+  if (!replaced.length) return range.from > 1 || prologue ? { kind: 'continue', after: range.from - 1 } : { kind: 'new' }
+  return { kind: 'overwrite', whole: false, from: replaced[0].from, to: replaced[replaced.length - 1].to, lastChapter, prologue }
+}
+
+/** 已有大纲按章标题写到的最后一章；没有按章标题时为 null。只有第 0 章序章时为 0。 */
+export function plotOutlineLastChapter(synopsis: string): number | null {
+  const entries = headings(synopsis)
+  return entries.length ? entries.reduce((last, entry) => Math.max(last, entry.to), 0) : null
 }
 
 /** 下一批的默认起始章：已有大纲能紧接着往后写时取最后一章的下一章，否则从第 1 章起。 */
