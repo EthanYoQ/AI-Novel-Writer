@@ -202,6 +202,12 @@ describe('writing skill app-data boundary', () => {
       path.join(installed, '.pagekin-bundle.json'),
       JSON.stringify({ version: 1, files: [{ path: '../outside.md', sha256: '0'.repeat(64) }] }),
     )],
+    ['a manifest that lists one file twice in different letter cases', (installed: string) => {
+      const manifestPath = path.join(installed, '.pagekin-bundle.json')
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { files: Array<{ path: string; sha256: string }> }
+      manifest.files.push({ ...manifest.files[0], path: manifest.files[0].path.toUpperCase() })
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest))
+    }],
   ])('lists an installed folder skill with %s as damaged and unbindable', async (_label, damage) => {
     const folder = writeLocalSkill('scene-voice', {
       'SKILL.md': agentSkill,
