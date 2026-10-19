@@ -371,9 +371,18 @@ export function plotOutlineRecoveryDraft(progress: PlotOutlineProgress, failedCa
   return renderPlotOutlineRange(body, { from: progress.range.from, to: Math.min(chapter, progress.range.to) }, progress.sourceExpected)
 }
 
+/** 开头的第 0 章序章条目（到下一章标题或末尾的覆盖说明为止）；没有序章时为空串。 */
+function plotOutlinePrologue(synopsis: string): string {
+  const [first, second] = headings(synopsis)
+  if (first?.from !== 0 || first.to !== 0) return ''
+  return stripStaleCoverageNotes(synopsis.slice(first.index, second?.index).trim())
+}
+
 export function plotOutlineRequestContract(progress: PlotOutlineProgress, chapter: number, attempt: PlotOutlineAttemptKind): string {
   if (progress.confirmedPrefix === null) throw new Error('GENERATION_PLOT_OUTLINE_PREFIX_INVALID')
-  const prefix = joinPlotOutlineEntries(progress.confirmedPrefix, progress.composition?.text ?? '')
+  // 从第 1 章起的一批没有已确认前缀，但序章原样保留在最前（renderPlotOutlineRange），模型写第 1 章时要看到它。
+  const accepted = progress.range.from === 1 ? plotOutlinePrologue(progress.sourceExpected.synopsis) : progress.confirmedPrefix
+  const prefix = joinPlotOutlineEntries(accepted, progress.composition?.text ?? '')
   const english = progress.sourceExpected.writingLanguage === 'en-US'
   return english
     ? `[Accepted outline prefix]\n${prefix}\n[/Accepted outline prefix]\n\n`
