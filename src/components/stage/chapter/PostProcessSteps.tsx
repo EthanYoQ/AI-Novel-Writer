@@ -1,5 +1,6 @@
 import { RefreshCw } from 'lucide-react'
 import { getChapterFinalizeScope } from '../../../services/workflows/workflow-utils'
+import { describeFinalizationStepError } from '../../../shared/finalization-step-error'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { Button } from '../../ui/Button'
 import { usePostProcessStatus } from '../../ui/use-post-process-status'
@@ -38,7 +39,8 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
       presentation,
       detail: presentation === 'success'
         ? text('完成', 'Done')
-        : presentation === 'pending' ? text('处理中', 'In progress') : step.error || text('失败', 'Failed'),
+        : presentation === 'pending' ? text('处理中', 'In progress')
+          : step.error ? describeFinalizationStepError(step.error, text) : text('失败', 'Failed'),
       retry: () => onRetryStep(key),
       retryLabel: text('重试', 'Retry'),
     })),

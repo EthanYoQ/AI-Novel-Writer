@@ -45,6 +45,7 @@ import { writingLanguageText } from '../../../shared/writing-language'
 import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
 import type { FinalizedCharacterGenerationReceipt } from '../../../shared/finalized-character-generation'
+import { finalizationStepErrorCode } from '../../../shared/finalization-step-error'
 
 export interface FinalizeChapterParams {
   draftPath: string
@@ -304,34 +305,10 @@ export function buildFinalizePostProcessSteps(
 
 type FinalizationStepKey = 'chapter_notes' | 'character_cards'
 
-// 定稿生成层错误码 → 作者可读说明；retry 表示再点一次「重试」有意义。
-const FINALIZATION_GENERATION_ERRORS: { code: RegExp; zh: string; en: string; retry: boolean }[] = [
-  { code: /^FINALIZATION_GENERATION_INCOMPLETE$/, retry: true,
-    zh: '模型这次没有返回完整结果（连接中断或输出被截断）。', en: 'The model did not return a complete result (the connection dropped or the output was cut off).' },
-  { code: /^FINALIZATION_GENERATION_(ARTIFACT_REQUIRED|OUTCOME_UNKNOWN)$/, retry: true,
-    zh: '上一次生成没有完成，本次没有发出新的模型请求。', en: 'The previous generation did not finish, and no new model request was sent.' },
-  { code: /^GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE$/, retry: true,
-    zh: '这一步的生成记录已变化，本次没有重新生成。', en: "This step's generation record changed, so it was not generated again." },
-  { code: /^GENERATION_DISPATCH_BLOCKED$/, retry: true,
-    zh: '这一步还有模型请求未结束，本次没有重新生成。', en: 'A model request for this step is still unfinished, so it was not generated again.' },
-  { code: /^(ROOT_BUDGET_EXHAUSTED|GENERATION_[A-Z_]*BUDGET[A-Z_]*)$/, retry: false,
-    zh: '这次后处理的模型调用额度已用完。', en: 'The model-call budget for this post-processing run is used up.' },
-  { code: /^(FINALIZATION_GENERATION_SOURCE_CHANGED|GENERATION_FINALIZATION_SOURCE_CHANGED|GENERATION_SOURCE_CHANGED|GENERATION_MODEL_CHANGED)$/, retry: false,
-    zh: '定稿正文或模型设置已变化，这一步不能沿用原记录。请重新定稿本章后再处理。', en: 'The finalized manuscript or model settings changed, so this step cannot reuse its record. Finalize this chapter again, then retry.' },
-  { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: false,
-    zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
-]
-
-/** 未知错误原样保留，交由通用错误展示处理。 */
-function finalizationGenerationError(error: unknown, context: WorkflowContext): unknown {
-  if (!(error instanceof Error)) return error
-  const code = error.message.replace(/^Error invoking remote method '[^']+': Error: /u, '')
-  const entry = FINALIZATION_GENERATION_ERRORS.find(item => item.code.test(code))
-  if (!entry) return error
-  return new Error(workflowUiText(context,
-    entry.zh + (entry.retry ? '请点「重试」重新生成这一步。' : ''),
-    entry.en + (entry.retry ? ' Select Retry to generate this step again.' : ''),
-  ), { cause: error })
+/** 本流程认识的错误码去掉 IPC 包装后原样记入步骤，界面展示时再换成可读说明。 */
+function finalizationGenerationError(error: unknown): unknown {
+  const code = error instanceof Error ? finalizationStepErrorCode(error.message) : undefined
+  return code ? new Error(code, { cause: error }) : error
 }
 
 export interface RunFinalizePostProcessParams {
@@ -392,12 +369,11 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         const recovery = await ipc.invokeWithProjectSession(projectSession, 'finalization-generation:read', {
           slot: { source: this.params.finalizedSource, stepKey },
         })
-        const latest = recovery?.view.budgetDiagnostics?.at(-1)
-        if (!recovery || recovery.effect || !latest || latest.actualState === 'reserved') continue
+        // 章节要点与角色状态共用一个 root，只能看本运行自己的最近一次尝试。
+        const latest = recovery?.latestAttempt
+        if (!recovery || recovery.effect || !latest || latest.inFlight) continue
         const candidate = (recovery.view.candidates ?? recovery.view.artifacts).at(-1)
-        // budgetDiagnostics 把根的 blockedCode 填进每次尝试；只有尝试自身的失败才算未成功，阻断时仍可提交已完成结果。
-        const failed = !!latest.failureCode && latest.failureCode !== recovery.view.ledger?.blockedCode
-        const usable = !failed && latest.finishReason === 'stop' && candidate?.status === 'completed' && candidate.compositionEligible
+        const usable = !latest.failureCode && latest.finishReason === 'stop' && candidate?.status === 'completed' && candidate.compositionEligible
         if (!usable) explicit[stepKey] = { recoverFrom: latest.attemptId }
         else if (stepKey === 'character_cards') explicit[stepKey] = { retryOf: { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash } }
       }
@@ -411,7 +387,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         ...explicit[stepKey],
         cancelled: () => generationContext.cancelled,
         onHandle: handle => { generationContext.mainGenerationRunHandle = Object.freeze({ ...handle }) },
-      }).catch(error => { throw finalizationGenerationError(error, generationContext) }),
+      }).catch(error => { throw finalizationGenerationError(error) }),
       complete: async () => { throw new Error('FINALIZATION_GENERATION_MAIN_REQUIRED') },
     }
     const allSteps = buildFinalizePostProcessSteps(

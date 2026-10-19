@@ -1,0 +1,39 @@
+/**
+ * 定稿后处理步骤的错误码。步骤记录里存错误码本身，界面展示时再按当前界面语言换成作者可读说明。
+ * retry 表示再点一次「重试」有意义。
+ */
+const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: boolean }[] = [
+  { code: /^FINALIZATION_GENERATION_INCOMPLETE$/, retry: true,
+    zh: '模型这次没有返回完整结果（连接中断或输出被截断）。', en: 'The model did not return a complete result (the connection dropped or the output was cut off).' },
+  { code: /^FINALIZATION_GENERATION_(ARTIFACT_REQUIRED|OUTCOME_UNKNOWN)$/, retry: true,
+    zh: '上一次生成没有完成，本次没有发出新的模型请求。', en: 'The previous generation did not finish, and no new model request was sent.' },
+  { code: /^GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE$/, retry: true,
+    zh: '这一步的生成记录已变化，本次没有重新生成。', en: "This step's generation record changed, so it was not generated again." },
+  { code: /^GENERATION_DISPATCH_BLOCKED$/, retry: true,
+    zh: '这一步还有模型请求未结束，本次没有重新生成。', en: 'A model request for this step is still unfinished, so it was not generated again.' },
+  { code: /^(ROOT_BUDGET_EXHAUSTED|USAGE_EXCEEDED_RESERVATION)$/, retry: false,
+    zh: '这次后处理的模型调用额度已用完（请求超时或用量超出预留），再点「重试」也不会重新生成。',
+    en: 'The model-call budget for this post-processing run is used up (a request timed out or exceeded its reserved usage). Retrying will not generate this step again.' },
+  { code: /^(FINALIZATION_GENERATION_SOURCE_CHANGED|GENERATION_FINALIZATION_SOURCE_CHANGED|GENERATION_SOURCE_CHANGED|GENERATION_MODEL_CHANGED)$/, retry: false,
+    zh: '定稿正文或模型设置已变化，这一步不能沿用原记录。请重新定稿本章后再处理。', en: 'The finalized manuscript or model settings changed, so this step cannot reuse its record. Finalize this chapter again, then retry.' },
+  { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: false,
+    zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
+]
+
+const IPC_PREFIX = /^Error invoking remote method '[^']+': Error: /u
+
+/** 本流程认识的错误码（去掉 IPC 包装）；不认识时返回 undefined，原错误照常保留。 */
+export function finalizationStepErrorCode(message: string): string | undefined {
+  const code = message.replace(IPC_PREFIX, '')
+  return FINALIZATION_STEP_ERRORS.some(item => item.code.test(code)) ? code : undefined
+}
+
+/** 步骤记录里的错误码换成作者可读说明；其他错误原样返回。 */
+export function describeFinalizationStepError(error: string, text: (zhCNText: string, enUSText: string) => string): string {
+  const entry = FINALIZATION_STEP_ERRORS.find(item => item.code.test(error))
+  if (!entry) return error
+  return text(
+    entry.zh + (entry.retry ? '请点「重试」重新生成这一步。' : ''),
+    entry.en + (entry.retry ? ' Select Retry to generate this step again.' : ''),
+  )
+}

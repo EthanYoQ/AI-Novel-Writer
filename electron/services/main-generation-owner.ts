@@ -944,8 +944,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const context = readFinalizationGenerationContext(run), effect = finalizations.readEffect(run)
     let current = false
     try { current = repository.budget(run.rootActionId).root.status !== 'cancelled' && compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))) } catch { /* History remains readable without current source/model admission. */ }
+    const attempts = runAttempts(run.runId), last = attempts.at(-1)
+    const receipt = last && (volatileReceipts.get(last.attemptId) ?? repository.receipt(last.attemptId))
     return { view: viewOf(run), context, modelId: modelReceipt(run.binding).modelId, sourceStatus: current ? 'current' : 'conflict',
-      attemptCount: deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) as number, ...(effect ? { effect } : {}) }
+      attemptCount: attempts.length, ...(effect ? { effect } : {}),
+      ...(receipt ? { latestAttempt: { attemptId: receipt.attempt.attemptId, inFlight: ['reserved', 'dispatch-marked'].includes(receipt.attempt.status),
+        finishReason: receipt.result?.finishReason ?? null, failureCode: receipt.failureCode ?? null } } : {}) }
   }
   const assertFinalizationSources = (run: DurableGenerationRun) => {
     assertCurrent()
@@ -1168,7 +1172,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const assertRootIdle = () => {
         if (service.readUnsavedTails().some(tail => repository.receipt(tail.attemptId).run.rootActionId === run.rootActionId)) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
         const budget = repository.budget(run.rootActionId)
-        if (budget.blockedCode || !['active', 'paused'].includes(budget.root.status)
+        // 根被阻断时给出阻断原因（如超时后的 ROOT_BUDGET_EXHAUSTED），再点重试也不会解除。
+        if (budget.blockedCode) throw new Error(budget.blockedCode)
+        if (!['active', 'paused'].includes(budget.root.status)
           || budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))
           || [...pending.keys()].some(key => repository.get(JSON.parse(key)[0]).rootActionId === run.rootActionId)) throw new Error('GENERATION_DISPATCH_BLOCKED')
       }
@@ -1187,11 +1193,37 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         assertAvailable()
         return execute({ handle: handleOf(run), invocationNonce, task: task() }, false, false, false, true)
       }
-      if (request.recoverFrom !== undefined) {
-        const failedAttemptId = request.recoverFrom
-        const invocationNonce = `finalization:recover:${failedAttemptId}`
-        const prior = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
-        if (prior) return replay(prior)
+      // 角色状态结果 JSON 不合格时在同一运行里自动修正，连首个请求共 3 次；nonceOf 给出每一轮的幂等键，已有的轮次只回放。
+      const generateWithRepairs = async (nonceOf: (ordinal: number) => string, first: () => Promise<MainGenerationExecuteReceipt>) => {
+        let invalidText: string | undefined, failure: Error | undefined
+        for (let ordinal = 0; ordinal < 3; ordinal++) {
+          const invocationNonce = nonceOf(ordinal)
+          const prior = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
+          let result: MainGenerationExecuteReceipt
+          if (prior) result = await replay(prior)
+          else if (ordinal === 0) result = await first()
+          else {
+            if (runAttempts(run.runId).at(-1)?.invocationNonce !== nonceOf(ordinal - 1)) throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
+            const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
+            result = await execute({ handle: current.handle, invocationNonce, task: repairTask(invalidText, invocationNonce.slice('finalization:'.length), failure) }, false, false, false, true)
+          }
+          run = repository.get(run.runId)
+          if (context.slot.stepKey !== 'character_cards' || result.outcome.status !== 'completed' || ordinal === 2
+            || repository.budget(run.rootActionId).root.status === 'cancelled') return result
+          const reference = result.outcome.receipt.visibleArtifact
+          const candidate = (result.run.candidates ?? result.run.artifacts).find(item => item.artifactId === reference?.artifactId)
+          if (!candidate?.compositionEligible) return result
+          if (textHash(candidate.text) !== candidate.textHash) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
+          failure = failureOf(result.outcome.content)
+          if (!failure) return result
+          invalidText = result.outcome.content
+        }
+        throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
+      }
+      const failedAttemptId = request.recoverFrom
+      const recoverNonce = (ordinal: number) => `finalization:recover:${failedAttemptId}${ordinal ? `:${ordinal}` : ''}`
+      // recoverFrom 只对本运行的尝试有效；属于同 root 的另一步骤或已被新运行取代时，按普通路径处理。
+      if (failedAttemptId !== undefined && runAttempts(run.runId).some(attempt => attempt.attemptId === failedAttemptId || attempt.invocationNonce === recoverNonce(0))) {
         const assertAvailable = () => {
           finalizations.assertMutable(run)
           assertFinalizationSources(run)
@@ -1202,8 +1234,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
             || !receipt.failureCode && !receipt.unsavedTail && receipt.result?.finishReason === 'stop' && !!receipt.artifact?.text.trim()) throw new Error('GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE')
           assertRootIdle()
         }
-        assertAvailable()
-        return explicitExecute(invocationNonce, assertAvailable, () => initialTask)
+        return generateWithRepairs(recoverNonce, () => { assertAvailable(); return explicitExecute(recoverNonce(0), assertAvailable, () => initialTask) })
       }
       if (request.retryOf !== undefined) {
         if (context.slot.stepKey !== 'character_cards') throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
@@ -1229,29 +1260,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       // Dedicated requests own these nonces; old prompts need only their saved purpose and receipt for replay.
       const latestExplicit = runAttempts(run.runId).reverse().find(attempt => /^finalization:(retry|recover):/.test(attempt.invocationNonce))
       if (latestExplicit) return replay(latestExplicit)
-      let invalidText: string | undefined, failure: Error | undefined
-      for (let ordinal = 0; ordinal < 3; ordinal++) {
-        const invocationNonce = `finalization:${ordinal}`
-        const prior = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
-        let result: MainGenerationExecuteReceipt
-        if (prior) result = await replay(prior)
-        else {
-          if (runAttempts(run.runId).length !== ordinal) throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
-          const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
-          result = await execute({ handle: current.handle, invocationNonce, task: repairTask(invalidText, ordinal, failure) }, false, false, false, true)
-        }
-        run = repository.get(run.runId)
-        if (context.slot.stepKey !== 'character_cards' || result.outcome.status !== 'completed' || ordinal === 2
-          || repository.budget(run.rootActionId).root.status === 'cancelled') return result
-        const reference = result.outcome.receipt.visibleArtifact
-        const candidate = (result.run.candidates ?? result.run.artifacts).find(item => item.artifactId === reference?.artifactId)
-        if (!candidate?.compositionEligible) return result
-        if (textHash(candidate.text) !== candidate.textHash) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
-        failure = failureOf(result.outcome.content)
-        if (!failure) return result
-        invalidText = result.outcome.content
-      }
-      throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
+      return generateWithRepairs(ordinal => `finalization:${ordinal}`, async () => {
+        if (runAttempts(run.runId).length !== 0) throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
+        const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
+        return execute({ handle: current.handle, invocationNonce: 'finalization:0', task: initialTask }, false, false, false, true)
+      })
     },
     commitFinalizationGeneration: (request: FinalizationGenerationChannels['finalization-generation:commit']['args'][0]) => {
       assertCurrent()

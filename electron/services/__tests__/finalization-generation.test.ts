@@ -778,3 +778,23 @@ it('#420 请求在途时关闭项目，重开后显式恢复经 resume 只重发
  expect((await next.executeFinalizationGeneration({ handle, recoverFrom })).outcome.receipt.visibleArtifact).toEqual(recovered.outcome.receipt.visibleArtifact)
  expect(f.dispatch).toHaveBeenCalledTimes(2)
 })
+
+it('#420 recoverFrom 指向同 root 另一步骤的尝试时，按本运行的普通路径只请求一次', async () => {
+ const f = fixture(async (request, options) => {
+  const characters = (request as { task: { purpose: string } }).task.purpose.includes('character')
+  options.onVisible({ kind: 'delta', text: characters ? f.response() : '林岚进入北塔。' }); return { finishReason: 'stop', usage: null }
+ })
+ const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey: 'character_cards' }
+ const notes = f.owner.beginFinalizationGeneration({ slot: { ...slot, stepKey: 'chapter_notes' }, modelId: 'synthetic' })
+ f.owner.commitFinalizationGeneration({ handle: notes.view.handle, artifact: f.artifactOf(await f.owner.executeFinalizationGeneration({ handle: notes.view.handle })) })
+ const notesAttempt = f.owner.readFinalizationGeneration({ slot: { ...slot, stepKey: 'chapter_notes' } })!.latestAttempt!.attemptId
+ const characters = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' })
+ expect(characters.view.handle.rootActionId).toBe(notes.view.handle.rootActionId)
+ expect(characters.view.budgetDiagnostics!.at(-1)!.attemptId).toBe(notesAttempt)
+ expect(characters.latestAttempt).toBeUndefined()
+ const before = f.dispatch.mock.calls.length
+ const result = await f.owner.executeFinalizationGeneration({ handle: characters.view.handle, recoverFrom: notesAttempt })
+ expect(result.outcome).toMatchObject({ status: 'completed', finishReason: 'stop' })
+ expect(f.dispatch).toHaveBeenCalledTimes(before + 1)
+ expect(f.owner.readFinalizationGeneration({ slot })!.latestAttempt).toMatchObject({ inFlight: false, finishReason: 'stop', failureCode: null })
+})

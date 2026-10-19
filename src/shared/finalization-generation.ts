@@ -27,6 +27,8 @@ export type FinalizationGenerationEffect = {
 } | (FinalizedCharacterGenerationReceipt & { success: true; stepKey: 'character_cards' })
 export interface FinalizationGenerationRecovery {
   attemptCount: number
+  /** 本运行（不是整个 root）最近一次尝试。章节要点与角色状态共用一个 root，显式重试只能据此冻结 recoverFrom。 */
+  latestAttempt?: { attemptId: string; inFlight: boolean; finishReason: string | null; failureCode: string | null }
   view: MainGenerationRunView
   modelId: string
   context: FinalizationGenerationContext

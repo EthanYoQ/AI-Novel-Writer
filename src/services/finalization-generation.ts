@@ -45,10 +45,10 @@ export async function runFinalizationGeneration(options: {
     if (recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled') throw new Error('FINALIZATION_GENERATION_SOURCE_CHANGED')
     let candidates = recovery.view.candidates ?? recovery.view.artifacts
     let candidate = candidates.at(-1)
-    // 显式引用只对冻结它的那次运行有效；取消后 begin 换了新运行时按普通路径重新请求。
+    // 显式引用只对冻结它的那次运行有效；begin 换了新运行时按普通路径重新请求。recoverFrom 是否属于本运行由主进程判断。
     const requested = options.retryOf
     const retryOf = requested && candidates.some(item => item.artifactId === requested.artifactId) ? requested : undefined
-    const recoverFrom = options.recoverFrom && recovery.view.budgetDiagnostics?.some(item => item.attemptId === options.recoverFrom) ? options.recoverFrom : undefined
+    const recoverFrom = options.recoverFrom
     if (retryOf || recoverFrom || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
       if (!candidate && recovery.attemptCount > 0 && !recoverFrom) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
       const previous = recovery.view.handle

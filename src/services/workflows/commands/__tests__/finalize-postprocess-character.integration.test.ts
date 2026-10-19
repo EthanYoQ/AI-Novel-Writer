@@ -421,7 +421,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(invalidatedDuringNotes).toBe(true)
     expect(staleRun.steps.chapter_notes).toMatchObject({
       ok: false,
-      error: expect.stringContaining('The finalized manuscript or model settings changed'),
+      error: 'FINALIZATION_GENERATION_SOURCE_CHANGED',
     })
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
       chapterNotes: 'Existing projection remains available only as stale material.',
@@ -872,7 +872,7 @@ it('一次显式修复固定失败目标，withRetry 不得把第四份坏结果
  expect(db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
  expect(db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
 })
-it('#420 角色状态断流后，用户重试每次只发一次新请求，失败给可读说明，成功后只写一次', async () => {
+it('#420 角色状态断流后，用户重试每次只发一次新请求，失败记下错误码，成功后只写一次', async () => {
  insertFinalizedDraft(7, 2)
  let characterCalls = 0
  let failures = 2
@@ -890,10 +890,10 @@ it('#420 角色状态断流后，用户重试每次只发一次新请求，失�
  const initial = await run(false)
  expect(initial.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: false } })
  expect(characterCalls).toBe(1)
- expect(initial.steps.character_cards.error).not.toMatch(/[A-Z]+_[A-Z_]+/)
+ expect(initial.steps.character_cards.error).toBe('FINALIZATION_GENERATION_ARTIFACT_REQUIRED')
  const failedAgain = await run(true)
  expect(failedAgain.steps.character_cards.ok).toBe(false)
- expect(failedAgain.steps.character_cards.error).not.toMatch(/[A-Z]+_[A-Z_]+/)
+ expect(failedAgain.steps.character_cards.error).toBe('FINALIZATION_GENERATION_INCOMPLETE')
  expect(characterCalls).toBe(2)
  const repaired = await run(true)
  expect(repaired.steps.character_cards.ok).toBe(true)
@@ -966,5 +966,45 @@ it('#420 角色状态运行已开始但还没发请求，重试按本运行的�
   .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
  expect(repaired.steps.character_cards).toMatchObject({ ok: true })
  expect(characterCalls).toBe(1)
+ expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+})
+
+it('#420 生成根被超时阻断后，重试记下额度用完的错误码，不再请求模型', async () => {
+ insertFinalizedDraft(7, 2)
+ let characterCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  characterCalls++
+  streamCallbacks.onError?.('synthetic stream interrupted')
+  return 'interrupted'
+ }) })
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps.character_cards.ok).toBe(false)
+ getProjectDb()!.prepare("UPDATE generation_roots SET blocked_code='ROOT_BUDGET_EXHAUSTED'").run()
+ const retried = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(retried.steps.character_cards).toMatchObject({ ok: false, error: 'ROOT_BUDGET_EXHAUSTED' })
+ expect(characterCalls).toBe(1)
+})
+
+it('#420 断流后重试拿到坏 JSON 时，同一次点击里自动修正一次并成功', async () => {
+ insertFinalizedDraft(7, 2)
+ const replies = ['interrupted', 'not json', JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })]
+ let characterCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  const reply = replies[characterCalls++]
+  if (reply === 'interrupted') streamCallbacks.onError?.('synthetic stream interrupted')
+  else streamCallbacks.onDone?.(modelFixtureResponse(reply), undefined, 'stop')
+  return reply
+ }) })
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps.character_cards.ok).toBe(false)
+ const repaired = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(repaired.steps.character_cards).toMatchObject({ ok: true })
+ expect(characterCalls).toBe(3)
  expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
 })
