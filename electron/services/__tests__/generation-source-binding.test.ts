@@ -576,3 +576,16 @@ it('accepts a legacy reviewed draft as the current working draft and still rejec
     f.db.exec("UPDATE drafts SET status='draft' WHERE id=1; INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(2,2,'reviewed',1)");
     expect(() => f.build()).toThrow('GENERATION_DRAFT_NOT_CURRENT');
 });
+
+it('leaves a draft superseded by a newer reviewed version out of the continuity catalog (#411)', () => {
+    const f = fixture();
+    migrateSchema(new SqliteSchemaAdapter(f.db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION);
+    f.db.exec("INSERT INTO blueprints(chapter_number,title,user_guidance) VALUES(3,'第三章','章指导'); INSERT INTO contents(id,body) VALUES(4,'审过的第二版'); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(4,2,2,'reviewed',4)");
+    Object.assign(f.input, { operation: 'chapter-draft', chapterNumber: 3, selectedDraftIds: [4], selectedFinalizedDraftIds: [] });
+    const before = f.build();
+    // 旧的第一版已被审过的第二版取代：改它不应让使用第二版的运行判定来源变化。
+    f.db.exec("UPDATE contents SET body='改过的旧稿' WHERE id=1");
+    expect(f.build().binding.contextSnapshotId).toBe(before.binding.contextSnapshotId);
+    f.db.exec("UPDATE contents SET body='改过的第二版' WHERE id=4");
+    expect(f.build().binding.contextSnapshotId).not.toBe(before.binding.contextSnapshotId);
+});
