@@ -36,7 +36,7 @@ describe('writing skill registry identity and tool exposure', () => {
       baseDir: 'managed://skills/scene-voice',
       filePath: 'managed://skills/scene-voice/SKILL.md',
       content: '---\nname: scene-voice\ndescription: Voice\n---\nFollow references/voice.md.',
-      files: { 'references/voice.md': 'Stay in close third person.' },
+      bundle: { status: 'intact', files: [{ path: 'references/voice.md', content: 'Stay in close third person.' }] },
     }])
 
     const { skillRegistry } = await import('../skill-registry')
@@ -45,6 +45,21 @@ describe('writing skill registry identity and tool exposure', () => {
     const skill = skillRegistry.getById('user:scene-voice')
     expect(skill?.writingSkill).toMatchObject({ compatible: true, bundledFiles: ['references/voice.md'] })
     expect(skill?.content).toContain('Stay in close third person.')
+  })
+
+  it('lists a user skill whose installed reference files were damaged as unbindable', async () => {
+    invoke.mockResolvedValue([{
+      name: 'scene-voice',
+      baseDir: 'managed://skills/scene-voice',
+      filePath: 'managed://skills/scene-voice/SKILL.md',
+      content: '---\nname: scene-voice\ndescription: Voice\n---\nFollow references/voice.md.',
+      bundle: { status: 'damaged' },
+    }])
+
+    const { skillRegistry } = await import('../skill-registry')
+    await skillRegistry.loadAll()
+
+    expect(skillRegistry.getById('user:scene-voice')?.writingSkill).toMatchObject({ compatible: false, reasons: expect.arrayContaining(['bundle-damaged']) })
   })
 
   it('serializes atomic reloads without exposing a cleared or partial registry', async () => {
@@ -145,7 +160,7 @@ it('pure builtin data preserves all registry metadata, inspections and localized
   await skillRegistry.loadAll()
   const data = getBuiltinWritingSkills()
   expect(data).toHaveLength(7)
-  expect(createHash('sha256').update(JSON.stringify(data)).digest('hex')).toMatchInlineSnapshot(`"c009add22a5b151b50b96b5ddc975c513dee83beaa30ba5ad74d9827f0ccd23e"`)
+  expect(createHash('sha256').update(JSON.stringify(data)).digest('hex')).toMatchInlineSnapshot(`"c43b4c0d77da3518c850c00ca15b9b96f317c0a951389578d2780f10046ccd51"`)
   for (const entry of data) {
     expect(skillRegistry.getById(`builtin:${entry.metadata.name}`)).toMatchObject(entry)
     for (const language of ['zh-CN', 'en-US'] as const) {

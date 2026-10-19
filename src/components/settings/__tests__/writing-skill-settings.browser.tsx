@@ -49,8 +49,6 @@ function ipcResult(channel: string) {
       reasons: [],
       suggestedStage: 'drafting',
       utf8Bytes: 128,
-      bundledFiles: [],
-      unbundledReferences: [],
     },
   }
   throw new Error(`Unexpected IPC channel ${channel}`)
@@ -157,6 +155,26 @@ describe('writing skill settings', () => {
       : ipcResult(channel))
     await act(async () => page.getByRole('button', { name: 'Choose folder' }).click())
     await expect.element(page.getByRole('alert')).toHaveTextContent(/symbolic link/u)
+  })
+
+  it('marks an installed skill whose reference files were damaged and keeps it out of stage bindings', async () => {
+    invoke.mockImplementation(async (channel: string) => channel === 'skills:list-user'
+      ? [{
+          name: 'scene-voice',
+          baseDir: 'managed://skills/scene-voice',
+          filePath: 'managed://skills/scene-voice/SKILL.md',
+          content: '---\nname: scene-voice\ndescription: Keep a steady narrative voice\n---\nFollow references/voice.md.',
+          bundle: { status: 'damaged' },
+        }]
+      : ipcResult(channel))
+    await act(async () => root?.unmount())
+    root = createRoot(container!)
+    await act(async () => root?.render(<SkillSettings />))
+
+    const library = page.getByRole('region', { name: 'Skill library' })
+    await expect.element(library.getByText('Damaged', { exact: true })).toBeVisible()
+    await expect.element(library.getByText(/uninstall and import the skill again/u)).toBeVisible()
+    expect(container?.querySelector('option[value="user:scene-voice"]')).toBeNull()
   })
 
   it('inspects a GitHub candidate before offering installation', async () => {

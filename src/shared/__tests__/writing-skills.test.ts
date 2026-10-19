@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  inspectLocalWritingSkill,
   inspectWritingSkillMarkdown,
   parseGitHubWritingSkillUrl,
   type WritingSkillStage,
@@ -60,8 +61,8 @@ Write a chapter.`)
     expect(result.reasons).toContain('tool-dependency')
   })
 
-  it('reads folded and literal block scalars in Agent Skills frontmatter', () => {
-    const result = inspectWritingSkillMarkdown(`---
+  it('reads folded and literal block scalars in a locally imported skill', () => {
+    const result = inspectLocalWritingSkill(`---
 name: block-skill
 description: >-
   Keep the voice steady.
@@ -80,7 +81,7 @@ Write.`)
       'references/tone.md': 'Dry humour.',
       'FORMS.md': 'Use short paragraphs.',
     }
-    const result = inspectWritingSkillMarkdown(`---
+    const result = inspectLocalWritingSkill(`---
 name: voice
 description: Voice rules
 ---
@@ -104,7 +105,7 @@ Follow references/voice.md and [forms](FORMS.md).`, { readFile: relativePath => 
     ['a bare skill directory variable', 'Look inside ${SKILL_DIR} first.'],
     ['a non-ASCII file name', '先读 references/风格.md。'],
   ])('keeps a skill that cites %s incompatible', (_label, body) => {
-    const result = inspectWritingSkillMarkdown(`---\nname: cites\n---\n${body}`, {
+    const result = inspectLocalWritingSkill(`---\nname: cites\n---\n${body}`, {
       readFile: relativePath => relativePath.includes('missing') ? undefined : 'any text',
     })
 
@@ -113,7 +114,7 @@ Follow references/voice.md and [forms](FORMS.md).`, { readFile: relativePath => 
   })
 
   it('keeps plain relative links compatible and lists the files they point at', () => {
-    const result = inspectWritingSkillMarkdown(`---
+    const result = inspectLocalWritingSkill(`---
 name: links
 ---
 Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), read [风格](风格.md) and [forms](FORMS.md) again.`, {
@@ -129,12 +130,12 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
   })
 
   it('keeps angle-bracket links compatible as before, unless they name ${SKILL_DIR}', () => {
-    const angled = inspectWritingSkillMarkdown('---\nname: angled\n---\nRead [voice](<./missing.md>) and [notes](<references/missing.md>).', {
+    const angled = inspectLocalWritingSkill('---\nname: angled\n---\nRead [voice](<./missing.md>) and [notes](<references/missing.md>).', {
       readFile: () => undefined,
     })
     expect(angled).toMatchObject({ compatible: true, unbundledReferences: ['./missing.md', 'references/missing.md'] })
 
-    const skillDir = inspectWritingSkillMarkdown('---\nname: angled-dir\n---\nRead [voice](<${SKILL_DIR}/notes.md>).', {
+    const skillDir = inspectLocalWritingSkill('---\nname: angled-dir\n---\nRead [voice](<${SKILL_DIR}/notes.md>).', {
       readFile: () => undefined,
     })
     expect(skillDir.reasons).toContain('relative-reference')
@@ -143,7 +144,7 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
   it('treats links back to the root SKILL.md as already part of the skill', () => {
     const raw = '---\nname: loop\n---\nOpening rules. Read [voice](references/voice.md), or jump to [the top](skill.md#top).'
     const files: Record<string, string> = { 'SKILL.md': raw, 'references/voice.md': 'Close third. [Back](../SKILL.md)' }
-    const result = inspectWritingSkillMarkdown(raw, {
+    const result = inspectLocalWritingSkill(raw, {
       readFile: relativePath => Object.entries(files).find(([name]) => name.toLowerCase() === relativePath.toLowerCase())?.[1],
     })
 
@@ -152,7 +153,7 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
   })
 
   it('merges a file once however its references spell its letter case', () => {
-    const result = inspectWritingSkillMarkdown('---\nname: cased\n---\nRead references/voice.md, then [voice](References/Voice.md).', {
+    const result = inspectLocalWritingSkill('---\nname: cased\n---\nRead references/voice.md, then [voice](References/Voice.md).', {
       readFile: relativePath => relativePath.toLowerCase() === 'references/voice.md' ? 'Close third.' : undefined,
     })
 
@@ -161,7 +162,7 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
   })
 
   it('checks scripts cited from a merged reference file', () => {
-    const result = inspectWritingSkillMarkdown('---\nname: nested\n---\nRead references/steps.md.', {
+    const result = inspectLocalWritingSkill('---\nname: nested\n---\nRead references/steps.md.', {
       readFile: relativePath => relativePath === 'references/steps.md' ? 'Run scripts/build.py first.' : undefined,
     })
 

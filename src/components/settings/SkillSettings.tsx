@@ -43,6 +43,7 @@ const REASON_COPY: Record<string, readonly [string, string]> = {
   'subagent-dependency': ['依赖子代理', 'Requires subagents'],
   'tool-dependency': ['依赖工具调用', 'Requires tool calls'],
   'content-too-large': ['内容超过 64 KiB', 'Content exceeds 64 KiB'],
+  'bundle-damaged': ['安装的附带文件缺失或已被改动，请卸载后重新导入', 'Installed reference files are missing or changed; uninstall and import the skill again'],
 }
 
 const BUILTIN_SKILL_COPY_EN: Record<string, readonly [string, string]> = {
@@ -130,16 +131,16 @@ function CandidateCard({ candidate, busy, onInstall }: {
             <span>{text('语言', 'Language')}: {inspection.metadata.language}</span>
             <span>{text('大小', 'Size')}: {formatBytes(inspection.utf8Bytes)}</span>
           </div>
-          {inspection.bundledFiles.length > 0 && (
+          {local && local.bundledFiles.length > 0 && (
             <p className="mt-2 break-words text-xs leading-5 text-[var(--color-text-secondary)]">
-              {text('并入提示词', 'Merged into the prompt')}: {inspection.bundledFiles.join(text('、', ', '))}
+              {text('并入提示词', 'Merged into the prompt')}: {local.bundledFiles.join(text('、', ', '))}
             </p>
           )}
-          {inspection.unbundledReferences.length > 0 && (
+          {local && local.unbundledReferences.length > 0 && (
             <p className="mt-1 break-words text-xs leading-5 text-[var(--color-text-muted)]">
               {text(
-                `SKILL.md 引用了这些文件，但它们不会随 Skill 安装，模型看不到：${inspection.unbundledReferences.join('、')}`,
-                `SKILL.md links to these files, but they are not installed with the skill and the model cannot see them: ${inspection.unbundledReferences.join(', ')}`,
+                `SKILL.md 引用了这些文件，但它们不会随 Skill 安装，模型看不到：${local.unbundledReferences.join('、')}`,
+                `SKILL.md links to these files, but they are not installed with the skill and the model cannot see them: ${local.unbundledReferences.join(', ')}`,
               )}
             </p>
           )}
@@ -417,6 +418,7 @@ export default function SkillSettings() {
           </div>
         ) : skills.map(skill => {
           const activeStages = WRITING_SKILL_STAGES.filter(stage => bindings[stage] === skill.skillId)
+          const damaged = skill.writingSkill.reasons.includes('bundle-damaged')
           return (
             <div key={skill.skillId} className="flex items-start gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-3">
               <div className="min-w-0 flex-1">
@@ -426,10 +428,15 @@ export default function SkillSettings() {
                     {text(SOURCE_COPY[skill.source][0], SOURCE_COPY[skill.source][1])}
                   </span>
                   <span className={`text-[0.68rem] ${skill.writingSkill.compatible ? 'text-[var(--color-success-text)]' : 'text-[var(--color-warning-text)]'}`}>
-                    {skill.writingSkill.compatible ? text('兼容', 'Compatible') : text('不兼容', 'Incompatible')}
+                    {skill.writingSkill.compatible ? text('兼容', 'Compatible') : damaged ? text('已损坏', 'Damaged') : text('不兼容', 'Incompatible')}
                   </span>
                 </div>
                 <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">{localizedSkillDescription(skill, text)}</p>
+                {damaged && (
+                  <p className="mt-1 text-xs leading-5 text-[var(--color-warning-text)]">
+                    {text(REASON_COPY['bundle-damaged'][0], REASON_COPY['bundle-damaged'][1])}
+                  </p>
+                )}
                 <div className="mt-1 flex flex-wrap gap-x-4 text-[0.7rem] text-[var(--color-text-secondary)]">
                   <span>{text('版本', 'Version')}: {skill.metadata.version ?? '—'}</span>
                   <span>{text('语言', 'Language')}: {skill.writingSkill.metadata.language}</span>

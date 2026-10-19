@@ -680,8 +680,8 @@ export interface AppDataChannels {
   'prompt:delete-global': { args: [key: string, writingLanguage: WritingLanguage]; return: { success: boolean; error?: string } }
   'skills:list-user': {
     args: []
-    /** files：并入提示词的附带文本，键为相对 Skill 根目录的 POSIX 路径。 */
-    return: Array<{ name: string; content: string; baseDir: string; filePath: string; files: Record<string, string> }>
+    /** bundle：按安装清单读到的附带文本；没有清单的 Skill 为 none，只看 SKILL.md。 */
+    return: Array<{ name: string; content: string; baseDir: string; filePath: string; bundle: import('./writing-skills').InstalledWritingSkillBundle }>
   }
   'skills:inspect-github': {
     args: [sourceUrl: string]

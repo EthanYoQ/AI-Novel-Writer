@@ -10,17 +10,23 @@ import {
   parseGitHubWritingSkillUrl,
   WRITING_SKILL_NAME_PATTERN,
   type InstalledWritingSkill,
+  type InstalledWritingSkillBundle,
   type LocalWritingSkillInspection,
   type LocalWritingSkillSourceKind,
   type RemoteWritingSkillInspection,
+  type WritingSkillBundledFile,
   type WritingSkillInspection,
+  type WritingSkillPackageInspection,
 } from '../../src/shared/writing-skills'
 import { mainText } from '../i18n'
 import { VELA_HOME, writeJsonFile } from '../utils/config-utils'
 import { assertGlobalDataReady } from '../services/app-data-locator'
 import {
   loadLocalWritingSkill,
-  skillDirectoryFileReader,
+  readInstalledSkillFile,
+  readInstalledWritingSkillBundle,
+  WRITING_SKILL_BUNDLE_MANIFEST,
+  writingSkillBundleManifest,
   WritingSkillPackageError,
   type WritingSkillPackageErrorCode,
   type WritingSkillSource,
@@ -172,11 +178,14 @@ function loadLocalSkillOrThrow(source: WritingSkillSource) {
   return loaded
 }
 
-/** 把已确认的候选写入全局用户 Skill 库：SKILL.md 原文加上并入提示词的附带文件。 */
+/**
+ * 把已确认的候选写入全局用户 Skill 库。GitHub 导入只写 SKILL.md（bundle 为 undefined，与旧版一致）；
+ * 本机导入另写并入的附带文件和安装清单，清单为空也写，列表与生成据此只读清单里的文件。
+ */
 function installUserWritingSkill(
   inspection: Pick<WritingSkillInspection, 'metadata' | 'compatible' | 'reasons' | 'utf8Bytes'>,
   raw: string,
-  bundledFiles: ReadonlyMap<string, string>,
+  bundle?: readonly WritingSkillBundledFile[],
 ): InstalledWritingSkill {
   if (!inspection.compatible) {
     throw new Error(text(
@@ -194,13 +203,16 @@ function installUserWritingSkill(
   const { directory, filePath } = ensureOwnedSkillTarget(inspection.metadata.name)
   try {
     fs.writeFileSync(filePath, raw, { encoding: 'utf8', mode: 0o600 })
-    for (const [relativePath, content] of bundledFiles) {
+    for (const { path: relativePath, content } of bundle ?? []) {
       const target = path.resolve(directory, ...relativePath.split('/'))
       if (!isContainedPath(directory, target) || target === directory) {
         throw new Error(text('附带文件超出 Skill 目录', 'A bundled file is outside its skill directory'))
       }
       fs.mkdirSync(path.dirname(target), { recursive: true })
       fs.writeFileSync(target, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    }
+    if (bundle) {
+      fs.writeFileSync(path.join(directory, WRITING_SKILL_BUNDLE_MANIFEST), writingSkillBundleManifest(bundle), { encoding: 'utf8', mode: 0o600, flag: 'wx' })
     }
   } catch (error) {
     fs.rmSync(directory, { recursive: true, force: true })
@@ -223,7 +235,7 @@ function installUserWritingSkill(
 }
 
 /** 回给渲染层的检查结果不带提示词正文，安装时以主进程重新读取的内容为准。 */
-function withoutContent(inspection: WritingSkillInspection): Omit<WritingSkillInspection, 'content'> {
+function withoutContent(inspection: WritingSkillPackageInspection): Omit<WritingSkillPackageInspection, 'content'> {
   const { metadata, compatible, reasons, suggestedStage, utf8Bytes, bundledFiles, unbundledReferences } = inspection
   return { metadata, compatible, reasons, suggestedStage, utf8Bytes, bundledFiles, unbundledReferences }
 }
@@ -269,8 +281,15 @@ async function fetchGitHubWritingSkill(sourceUrl: string): Promise<{
   if (Buffer.byteLength(raw, 'utf8') > MAX_WRITING_SKILL_BYTES) {
     throw new Error('SKILL.md is larger than 64 KiB')
   }
-  const publicInspection = withoutContent(inspectWritingSkillMarkdown(raw))
+  const inspected = inspectWritingSkillMarkdown(raw)
   const contentSha256 = createHash('sha256').update(raw, 'utf8').digest('hex')
+  const publicInspection = {
+    metadata: inspected.metadata,
+    compatible: inspected.compatible,
+    reasons: inspected.reasons,
+    suggestedStage: inspected.suggestedStage,
+    utf8Bytes: inspected.utf8Bytes,
+  }
   return {
     raw,
     inspection: {
@@ -386,7 +405,7 @@ export function registerAppDataController(): void {
     if (!fs.existsSync(skillsDirectory)) return []
 
     const canonicalSkillsDirectory = ensureOwnedSkillsRoot()
-    const skills: Array<{ name: string; content: string; baseDir: string; filePath: string; files: Record<string, string> }> = []
+    const skills: Array<{ name: string; content: string; baseDir: string; filePath: string; bundle: InstalledWritingSkillBundle }> = []
     for (const entry of fs.readdirSync(canonicalSkillsDirectory, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.isSymbolicLink()) continue
       try {
@@ -394,15 +413,13 @@ export function registerAppDataController(): void {
         if (!isContainedPath(canonicalSkillsDirectory, baseDir)) continue
         const filePath = fs.realpathSync.native(path.join(baseDir, 'SKILL.md'))
         if (!isContainedPath(baseDir, filePath) || !fs.statSync(filePath).isFile()) continue
-        const content = fs.readFileSync(filePath, 'utf8')
-        const files = new Map<string, string>()
-        const { bundledFiles } = inspectWritingSkillMarkdown(content, { readFile: skillDirectoryFileReader(baseDir, files) })
         skills.push({
           name: entry.name,
-          content,
+          content: fs.readFileSync(filePath, 'utf8'),
           baseDir,
           filePath,
-          files: Object.fromEntries(bundledFiles.map(file => [file, files.get(file)!])),
+          // 与生成来源绑定共用同一条读取与判定：没有清单只看 SKILL.md，有清单只读清单里的文件。
+          bundle: readInstalledWritingSkillBundle(relativePath => readInstalledSkillFile(baseDir, relativePath)),
         })
       } catch {
         // 单个用户 Skill 无效时不阻断其余 Skill。
@@ -452,7 +469,7 @@ export function registerAppDataController(): void {
           'The Writing Skill changed after inspection; inspect it again',
         ))
       }
-      return { success: true, skill: installUserWritingSkill(inspection, raw, new Map()) }
+      return { success: true, skill: installUserWritingSkill(inspection, raw) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

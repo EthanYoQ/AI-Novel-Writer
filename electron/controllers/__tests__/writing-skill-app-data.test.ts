@@ -67,7 +67,7 @@ type PickResult = {
   success: boolean
   cancelled?: boolean
   error?: string
-  inspection?: { candidateId: string; compatible: boolean; reasons: string[]; bundledFiles: string[]; unbundledReferences: string[]; skippedFiles: string[] }
+  inspection?: { candidateId: string; compatible: boolean; reasons: string[]; utf8Bytes: number; bundledFiles: string[]; unbundledReferences: string[]; skippedFiles: string[] }
 }
 
 async function pickLocal(kind: 'file' | 'folder', picked: string): Promise<PickResult> {
@@ -162,11 +162,57 @@ describe('writing skill app-data boundary', () => {
     expect(fs.existsSync(path.join(installed, 'scripts'))).toBe(false)
     expect(fetch).not.toHaveBeenCalled()
 
-    const listed = await handler('skills:list-user')({}) as Array<{ name: string; files: Record<string, string> }>
+    const listed = await handler('skills:list-user')({}) as Array<{ name: string; bundle: unknown }>
     expect(listed).toEqual([expect.objectContaining({
       name: 'scene-voice',
-      files: { 'references/voice.md': 'Stay in close third person.', 'references/pacing.md': 'Alternate long and short scenes.' },
+      bundle: {
+        status: 'intact',
+        files: [
+          { path: 'references/voice.md', content: 'Stay in close third person.' },
+          { path: 'references/pacing.md', content: 'Alternate long and short scenes.' },
+        ],
+      },
     })])
+    const shown = await settingsView('user:scene-voice')
+    expect(shown?.writingSkill).toMatchObject({
+      compatible: true,
+      bundledFiles: ['references/voice.md', 'references/pacing.md'],
+      utf8Bytes: picked.inspection!.utf8Bytes,
+      metadata: { description: 'Keep each scene in a consistent narrative voice. Use when drafting or revising chapters.' },
+    })
+  })
+
+  it.each([
+    ['a changed reference file', (installed: string) => fs.writeFileSync(path.join(installed, 'references', 'voice.md'), 'Edited by hand.')],
+    ['a deleted reference file', (installed: string) => fs.rmSync(path.join(installed, 'references', 'voice.md'))],
+    ['a reference file replaced by a hard link', (installed: string) => {
+      const outside = path.join(pickRoot, 'hard-voice.md')
+      fs.writeFileSync(outside, 'Stay in close third person.')
+      fs.rmSync(path.join(installed, 'references', 'voice.md'))
+      fs.linkSync(outside, path.join(installed, 'references', 'voice.md'))
+    }],
+    ['a references folder replaced by a junction', (installed: string) => {
+      const outside = writeLocalSkill('junction-target', { 'voice.md': 'Stay in close third person.', 'pacing.md': 'Alternate long and short scenes.' })
+      fs.rmSync(path.join(installed, 'references'), { recursive: true })
+      fs.symlinkSync(outside, path.join(installed, 'references'), process.platform === 'win32' ? 'junction' : 'dir')
+    }],
+    ['an unreadable manifest', (installed: string) => fs.writeFileSync(path.join(installed, '.pagekin-bundle.json'), '{')],
+    ['a manifest that points outside the skill', (installed: string) => fs.writeFileSync(
+      path.join(installed, '.pagekin-bundle.json'),
+      JSON.stringify({ version: 1, files: [{ path: '../outside.md', sha256: '0'.repeat(64) }] }),
+    )],
+  ])('lists an installed folder skill with %s as damaged and unbindable', async (_label, damage) => {
+    const folder = writeLocalSkill('scene-voice', {
+      'SKILL.md': agentSkill,
+      'references/voice.md': 'Stay in close third person.',
+      'references/pacing.md': 'Alternate long and short scenes.',
+    })
+    const picked = await pickLocal('folder', folder)
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true })
+    damage(path.join(velaHome, 'skills', 'scene-voice'))
+
+    const shown = await settingsView('user:scene-voice')
+    expect(shown?.writingSkill).toMatchObject({ compatible: false, reasons: expect.arrayContaining(['bundle-damaged']) })
   })
 
   it('imports a single SKILL.md file and names a nameless one after its file', async () => {
@@ -175,6 +221,7 @@ describe('writing skill app-data boundary', () => {
     expect(picked).toMatchObject({ success: true, inspection: { compatible: true, metadata: { name: 'quiet-prose' } } })
     await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true })
     expect(fs.readFileSync(path.join(velaHome, 'skills', 'quiet-prose', 'SKILL.md'), 'utf8')).toBe('Prefer plain verbs.')
+    expect((await settingsView('user:quiet-prose'))?.writingSkill).toMatchObject({ compatible: true, bundledFiles: [] })
   })
 
   it('marks a single file that cites reference files as incompatible', async () => {
@@ -196,7 +243,7 @@ describe('writing skill app-data boundary', () => {
       inspection: { compatible: true, reasons: [], bundledFiles: [], unbundledReferences: ['FORMS.md', 'image.png'], skippedFiles: ['image.png'] },
     })
     await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true, skill: { name: 'forms' } })
-    expect(fs.readdirSync(path.join(velaHome, 'skills', 'forms'))).toEqual(['SKILL.md'])
+    expect(fs.readdirSync(path.join(velaHome, 'skills', 'forms')).sort()).toEqual(['.pagekin-bundle.json', 'SKILL.md'])
   })
 
   it('installs a folder whose reference file links back to SKILL.md and keeps the body once', async () => {
@@ -210,8 +257,11 @@ describe('writing skill app-data boundary', () => {
 
     await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true, skill: { name: 'backlink' } })
     expect(fs.readFileSync(path.join(velaHome, 'skills', 'backlink', 'SKILL.md'), 'utf8')).toBe(skill)
-    const listed = await handler('skills:list-user')({}) as Array<{ name: string; files: Record<string, string> }>
-    expect(listed).toEqual([expect.objectContaining({ name: 'backlink', files: { 'references/voice.md': 'Close third. [Back](../SKILL.md)' } })])
+    const listed = await handler('skills:list-user')({}) as Array<{ name: string; bundle: unknown }>
+    expect(listed).toEqual([expect.objectContaining({
+      name: 'backlink',
+      bundle: { status: 'intact', files: [{ path: 'references/voice.md', content: 'Close third. [Back](../SKILL.md)' }] },
+    })])
   })
 
   it('installs a file cited in two letter cases once', async () => {

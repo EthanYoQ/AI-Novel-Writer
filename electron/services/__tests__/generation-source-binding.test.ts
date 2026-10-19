@@ -21,6 +21,7 @@ import { selectFrozenReviewRevisionMaterials } from '../../../src/services/workf
 import { FinalizationRepository } from '../../repositories/finalization-repository';
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture';
 import { LEGACY_INSTALLED_SKILL_CASES, masterInspectWritingSkillMarkdown, plantLegacyInstalledSkill } from '../../../test/helpers/installed-writing-skill-fixture';
+import { WRITING_SKILL_BUNDLE_MANIFEST, writingSkillBundleManifest } from '../writing-skill-package';
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3');
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0))
@@ -382,15 +383,41 @@ describe('main rebuilt generation sources', () => {
     it('resolves project over global over builtin while retaining immutable builtin contract changes', () => { const f = fixture(), a = f.build(); put(f.deps.globalDataRoot, 'prompts/draft.zh-CN.json', JSON.stringify({ key: 'draft', writingLanguage: 'zh-CN', content: 'global' })); const global = f.build(); expect(global.binding.fingerprint.templateHash).not.toBe(a.binding.fingerprint.templateHash); put(f.deps.projectStorageRoot, 'prompts/draft.json', JSON.stringify({ key: 'draft', content: 'project' })); const project = f.build(); put(f.deps.globalDataRoot, 'prompts/draft.zh-CN.json', JSON.stringify({ key: 'draft', writingLanguage: 'zh-CN', content: 'unused global edit' })); expect(f.build().binding.fingerprint.templateHash).toBe(project.binding.fingerprint.templateHash); f.deps.readBuiltinPrompt = () => JSON.stringify({ key: 'draft', content: 'builtin', systemRole: 'changed system contract' }); expect(f.build().binding.fingerprint.templateHash).not.toBe(project.binding.fingerprint.templateHash); });
     it('hashes raw selected custom prompt bytes including whitespace', () => { const f = fixture(); put(f.deps.projectStorageRoot, 'prompts/draft.json', '{"key":"draft","content":"同文"}'); const a = f.build(); put(f.deps.projectStorageRoot, 'prompts/draft.json', '{ "key":"draft","content":"同文"}'); expect(f.build().binding.fingerprint.templateHash).not.toBe(a.binding.fingerprint.templateHash); });
     it('binds actual selected Skill bytes and rejects a missing binding target', () => { const f = fixture(); put(f.deps.projectStorageRoot, 'writing-skills.json', JSON.stringify({ version: 1, bindings: { drafting: 'project:author' } })); expect(() => f.build()).toThrow(); put(f.deps.projectStorageRoot, 'skills/author/SKILL.md', '---\nname: author\nlanguage: zh-CN\nstage: drafting\n---\n保持作者事实。'); const a = f.build(); put(f.deps.projectStorageRoot, 'skills/author/SKILL.md', '---\nname: author\nlanguage: zh-CN\nstage: drafting\n---\n新作者规则。'); expect(f.build().binding.fingerprint.skillSnapshotHash).not.toBe(a.binding.fingerprint.skillSnapshotHash); });
-    it('binds a user folder Skill together with the reference files it merges', () => {
-        const f = fixture();
+    const installFolderSkill = (f: ReturnType<typeof fixture>, files: { path: string; content: string }[]) => {
+        const skill = '---\nname: voice\nlanguage: zh-CN\n---\n遵循 references/voice.md。';
         put(f.deps.projectStorageRoot, 'writing-skills.json', JSON.stringify({ version: 1, bindings: { drafting: 'user:voice' } }));
-        put(f.deps.globalDataRoot, 'skills/voice/SKILL.md', '---\nname: voice\nlanguage: zh-CN\n---\n遵循 references/voice.md。');
-        expect(() => f.build()).toThrow('GENERATION_SKILL_INCOMPATIBLE');
-        put(f.deps.globalDataRoot, 'skills/voice/references/voice.md', '第三人称近距离。');
-        const a = f.build();
-        put(f.deps.globalDataRoot, 'skills/voice/references/voice.md', '第一人称。');
-        expect(f.build().binding.fingerprint.skillSnapshotHash).not.toBe(a.binding.fingerprint.skillSnapshotHash);
+        put(f.deps.globalDataRoot, 'skills/voice/SKILL.md', skill);
+        for (const file of files) put(f.deps.globalDataRoot, `skills/voice/${file.path}`, file.content);
+        put(f.deps.globalDataRoot, `skills/voice/${WRITING_SKILL_BUNDLE_MANIFEST}`, writingSkillBundleManifest(files));
+        return skill;
+    };
+    it('binds a user folder Skill together with the reference files its manifest lists', () => {
+        const f = fixture();
+        const files = [{ path: 'references/voice.md', content: '第三人称近距离。' }];
+        const skill = installFolderSkill(f, files);
+        expect(f.build().binding.fingerprint.skillSnapshotHash).toBe(hash(JSON.stringify([{ hash: hash(JSON.stringify([skill, 'references/voice.md', '第三人称近距离。'])), identity: 'user:voice', stage: 'drafting' }])));
+        put(f.deps.globalDataRoot, 'skills/voice/notes.md', '清单之外的笔记。');
+        expect(f.build().binding.fingerprint.skillSnapshotHash).toBe(hash(JSON.stringify([{ hash: hash(JSON.stringify([skill, 'references/voice.md', '第三人称近距离。'])), identity: 'user:voice', stage: 'drafting' }])));
+    });
+    it.each([
+        ['a changed reference file', (directory: string) => fs.writeFileSync(path.join(directory, 'references', 'voice.md'), '第一人称。')],
+        ['a deleted reference file', (directory: string) => fs.rmSync(path.join(directory, 'references', 'voice.md'))],
+        ['a reference file replaced by a hard link', (directory: string, outside: string) => {
+            put(outside, 'hard-voice.md', '第三人称近距离。');
+            fs.rmSync(path.join(directory, 'references', 'voice.md'));
+            fs.linkSync(path.join(outside, 'hard-voice.md'), path.join(directory, 'references', 'voice.md'));
+        }],
+        ['a references folder replaced by a junction', (directory: string, outside: string) => {
+            put(outside, 'junction-target/voice.md', '第三人称近距离。');
+            fs.rmSync(path.join(directory, 'references'), { recursive: true });
+            fs.symlinkSync(path.join(outside, 'junction-target'), path.join(directory, 'references'), process.platform === 'win32' ? 'junction' : 'dir');
+        }],
+        ['an unreadable manifest', (directory: string) => fs.writeFileSync(path.join(directory, WRITING_SKILL_BUNDLE_MANIFEST), '{')],
+    ])('refuses to bind a user folder Skill with %s, as the settings list does', (_label, damage) => {
+        const f = fixture();
+        installFolderSkill(f, [{ path: 'references/voice.md', content: '第三人称近距离。' }]);
+        damage(path.join(f.deps.globalDataRoot, 'skills', 'voice'), path.join(f.root, 'outside'));
+        expect(() => f.build()).toThrow('GENERATION_SKILL_BUNDLE_DAMAGED');
     });
     it('keeps binding a user Skill whose plain relative link points at a file it never shipped', () => {
         const f = fixture();

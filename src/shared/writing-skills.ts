@@ -11,6 +11,8 @@ export type WritingSkillCompatibilityReason =
   | 'subagent-dependency'
   | 'tool-dependency'
   | 'content-too-large'
+  /** 安装清单里的附带文件缺失、被改动或不再是普通文件。 */
+  | 'bundle-damaged'
 
 export interface WritingSkillMetadata {
   name: string
@@ -23,12 +25,17 @@ export interface WritingSkillMetadata {
 
 export interface WritingSkillInspection {
   metadata: WritingSkillMetadata
-  /** 注入提示词的正文；被引用的附带文本文件按引用顺序并入末尾。 */
   content: string
   compatible: boolean
   reasons: WritingSkillCompatibilityReason[]
   suggestedStage: WritingSkillStage
   utf8Bytes: number
+}
+
+/** 带附带文件的 Skill（本机导入的候选，或按清单安装的 Skill）的检查结果。 */
+export interface WritingSkillPackageInspection extends WritingSkillInspection {
+  /** 注入提示词的正文；附带文本按引用顺序并入末尾。 */
+  content: string
   /** 已并入 content 的附带文件，相对 Skill 根目录的 POSIX 路径。 */
   bundledFiles: string[]
   /** 正文引用了、但没有并入的普通相对链接（如 `FORMS.md`、`image.png`）；模型看不到它们，但不影响兼容。 */
@@ -41,11 +48,26 @@ export interface WritingSkillInspection {
  */
 export type WritingSkillFileReader = (relativePath: string) => string | undefined
 
-export interface WritingSkillInspectOptions {
+export interface LocalWritingSkillInspectOptions {
   readFile?: WritingSkillFileReader
   /** frontmatter 缺少 name 时使用，例如 Skill 文件夹名。 */
   fallbackName?: string
 }
+
+export interface WritingSkillBundledFile {
+  /** 相对 Skill 根目录的 POSIX 路径。 */
+  path: string
+  content: string
+}
+
+/**
+ * 已安装 Skill 的附带文件，以安装清单为准。
+ * none：没有清单（本机导入出现之前装的 Skill、GitHub 导入），只看 SKILL.md，与旧版逐字节一致。
+ */
+export type InstalledWritingSkillBundle =
+  | { status: 'none' }
+  | { status: 'intact'; files: WritingSkillBundledFile[] }
+  | { status: 'damaged' }
 
 export interface GitHubWritingSkillLocation {
   owner: string
@@ -64,7 +86,7 @@ export interface RemoteWritingSkillInspection extends Omit<WritingSkillInspectio
 export type LocalWritingSkillSourceKind = 'file' | 'folder'
 
 /** 主进程读取本机文件或文件夹后的检查结果；渲染层只拿到候选 id，拿不到路径或读文件能力。 */
-export interface LocalWritingSkillInspection extends Omit<WritingSkillInspection, 'content'> {
+export interface LocalWritingSkillInspection extends Omit<WritingSkillPackageInspection, 'content'> {
   candidateId: string
   sourceKind: LocalWritingSkillSourceKind
   /** 所选文件或文件夹的名称（不含上级路径）。 */
@@ -86,7 +108,7 @@ export interface InstalledWritingSkill {
 export const MAX_WRITING_SKILL_BYTES = 64 * 1024
 export const WRITING_SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 export const WRITING_SKILL_TEXT_EXTENSIONS = ['.md', '.markdown', '.txt'] as const
-const MAX_BUNDLED_FILES = 16
+export const MAX_WRITING_SKILL_BUNDLED_FILES = 16
 const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/
 
 function unquote(value: string): string {
@@ -99,7 +121,8 @@ function unquote(value: string): string {
   return trimmed
 }
 
-function parseFrontmatter(raw: string): { fields: Record<string, string>; content: string } {
+/** blockScalars 只用于带附带文件的 Skill；只看 SKILL.md 的旧规则逐行解析，与 master 一致。 */
+function parseFrontmatter(raw: string, blockScalars: boolean): { fields: Record<string, string>; content: string } {
   const match = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/)
   if (!match) return { fields: {}, content: raw.trim() }
   const fields: Record<string, string> = {}
@@ -108,7 +131,7 @@ function parseFrontmatter(raw: string): { fields: Record<string, string>; conten
     const field = lines[index].match(/^\s*([^:#][^:]*):\s*(.*?)\s*$/)
     if (!field) continue
     const key = field[1].trim().toLowerCase()
-    const blockStyle = field[2].match(/^([>|])[+-]?$/)?.[1]
+    const blockStyle = blockScalars ? field[2].match(/^([>|])[+-]?$/)?.[1] : undefined
     if (!blockStyle) {
       fields[key] = unquote(field[2])
       continue
@@ -181,11 +204,11 @@ function resolveReference(reference: string, baseSegments: string[]): string | n
  * 并不进来的引用（缺失、越界、非文本）若是拦截型引用则让 Skill 不兼容，其余只列给用户看。
  */
 function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | undefined): {
-  files: Array<{ path: string; content: string }>
+  files: WritingSkillBundledFile[]
   blocked: boolean
   unbundled: string[]
 } {
-  const files: Array<{ path: string; content: string }> = []
+  const files: WritingSkillBundledFile[] = []
   const unbundled = new Set<string>()
   // 已在包内的路径按小写比对：Windows 与 macOS 上大小写不同的写法是同一个文件。根 SKILL.md 本身就是正文，回链它不算附带文件。
   const included = new Set(['skill.md'])
@@ -196,7 +219,7 @@ function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | 
     const candidates = [...new Set([resolveReference(reference, base), resolveReference(reference, [])])]
       .filter((candidate): candidate is string => candidate !== null)
     if (candidates.some(candidate => included.has(candidate.toLowerCase()))) continue
-    const bundled = files.length < MAX_BUNDLED_FILES
+    const bundled = files.length < MAX_WRITING_SKILL_BUNDLED_FILES
       ? candidates.map(path => ({ path, content: readFile?.(path) })).find(file => file.content !== undefined)
       : undefined
     if (!bundled) {
@@ -234,16 +257,24 @@ function suggestedStage(fields: Record<string, string>, content: string): Writin
   return 'drafting'
 }
 
-export function inspectWritingSkillMarkdown(
-  raw: string,
-  options: WritingSkillInspectOptions = {},
-): WritingSkillInspection {
-  if (typeof raw !== 'string') throw new Error('SKILL.md content must be text')
-  const { fields, content: skillBody } = parseFrontmatter(raw)
-  const name = fields.name?.trim() || options.fallbackName || 'unnamed-writing-skill'
+/** master 拦截的三种写法：要求模型去读 Skill 目录里的文件。 */
+function citesSkillDirectory(content: string): boolean {
+  return /\]\(\s*(?:\.\.?[/\\]|(?:references?|assets?)[/\\])/i.test(content)
+    || /(?:^|[\s`'"(])(?:references?|assets?)[/\\][^\s`'")]+/im.test(content)
+    || /\$\{skill_dir\}/i.test(content)
+}
+
+function inspectSkill(raw: string, parsed: {
+  fields: Record<string, string>
+  body: string
+  files: WritingSkillBundledFile[]
+  relativeReference: boolean
+  fallbackName?: string
+}): WritingSkillInspection {
+  const { fields, body: skillBody, files } = parsed
+  const name = fields.name?.trim() || parsed.fallbackName || 'unnamed-writing-skill'
   const reasons = new Set<WritingSkillCompatibilityReason>()
-  const bundle = bundleReferencedFiles(skillBody, options.readFile)
-  const content = [skillBody, ...bundle.files.map(file => `---\n\n## ${file.path}\n\n${file.content}`)].join('\n\n')
+  const content = [skillBody, ...files.map(file => `---\n\n## ${file.path}\n\n${file.content}`)].join('\n\n')
   const utf8Bytes = new TextEncoder().encode(content).byteLength
   const body = content.toLowerCase()
   const declaredCapabilities = Object.keys(fields).join(' ')
@@ -251,7 +282,7 @@ export function inspectWritingSkillMarkdown(
   if (new TextEncoder().encode(raw).byteLength > MAX_WRITING_SKILL_BYTES || utf8Bytes > MAX_WRITING_SKILL_BYTES) {
     reasons.add('content-too-large')
   }
-  if (bundle.blocked) reasons.add('relative-reference')
+  if (parsed.relativeReference) reasons.add('relative-reference')
   if (/(?:^|[\s`'"(])scripts?[/\\][^\s`'")]+/im.test(content)
     || /\b(?:run|execute)\s+(?:the\s+)?script\b/i.test(content)
     || /运行.{0,12}脚本/.test(content)) reasons.add('script-dependency')
@@ -280,9 +311,48 @@ export function inspectWritingSkillMarkdown(
     reasons: [...reasons],
     suggestedStage: stage,
     utf8Bytes,
+  }
+}
+
+/** 只看 SKILL.md：GitHub 导入、项目 Skill、内置 Skill 和没有安装清单的已安装 Skill 都走这条规则。 */
+export function inspectWritingSkillMarkdown(raw: string): WritingSkillInspection {
+  if (typeof raw !== 'string') throw new Error('SKILL.md content must be text')
+  const { fields, content } = parseFrontmatter(raw, false)
+  return inspectSkill(raw, { fields, body: content, files: [], relativeReference: citesSkillDirectory(content) })
+}
+
+/** 检查本机选中的 SKILL.md 或 Skill 文件夹：按引用读取附带文本并入正文。 */
+export function inspectLocalWritingSkill(raw: string, options: LocalWritingSkillInspectOptions = {}): WritingSkillPackageInspection {
+  if (typeof raw !== 'string') throw new Error('SKILL.md content must be text')
+  const { fields, content: body } = parseFrontmatter(raw, true)
+  const bundle = bundleReferencedFiles(body, options.readFile)
+  return {
+    ...inspectSkill(raw, { fields, body, files: bundle.files, relativeReference: bundle.blocked, fallbackName: options.fallbackName }),
     bundledFiles: bundle.files.map(file => file.path),
     unbundledReferences: bundle.unbundled,
   }
+}
+
+/**
+ * 检查已安装的 Skill。没有清单时与 inspectWritingSkillMarkdown 相同。
+ * 有清单时只并入清单里的文件、按清单顺序；引用只用来判断拦截型引用是否都落在清单里。
+ */
+export function inspectInstalledWritingSkill(raw: string, bundle: InstalledWritingSkillBundle): WritingSkillInspection {
+  if (bundle.status === 'none') return inspectWritingSkillMarkdown(raw)
+  if (typeof raw !== 'string') throw new Error('SKILL.md content must be text')
+  const { fields, content: body } = parseFrontmatter(raw, true)
+  const files = bundle.status === 'intact' ? bundle.files.map(file => ({ path: file.path, content: file.content.trim() })) : []
+  // 安装时在大小写不敏感的文件系统上解析过引用，这里同样按小写对上清单。
+  const listed = new Map(files.map(file => [file.path.toLowerCase(), file.content]))
+  const references = bundleReferencedFiles(body, relativePath => listed.get(relativePath.toLowerCase()))
+  const inspection: WritingSkillPackageInspection = {
+    ...inspectSkill(raw, { fields, body, files, relativeReference: references.blocked }),
+    bundledFiles: files.map(file => file.path),
+    unbundledReferences: references.unbundled,
+  }
+  return bundle.status === 'damaged'
+    ? { ...inspection, compatible: false, reasons: [...inspection.reasons, 'bundle-damaged'] }
+    : inspection
 }
 
 function safePart(value: string, label: string): string {
