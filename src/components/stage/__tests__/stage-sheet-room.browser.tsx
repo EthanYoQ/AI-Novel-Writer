@@ -114,6 +114,25 @@ const coveredBy = (sheet: DOMRect) => (element: Element) => {
 const tabbable = (root: Element) => [...root.querySelectorAll<HTMLElement>('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"])')]
 const sheetOpen = () => host!.querySelector('.stage-sheet-slot') !== null
 
+describe('运行侧页开着普通分页时，架构页页头只在真放不下时换行', () => {
+  // 夹具里页头动作约 344px 宽：内容区 710px 时标题还有约 246px，放得下「故事的骨架」，动作应与标题同一行并靠右（与 master 一致）
+  it('标题旁放得下动作时，动作与标题同一行、靠右', async () => {
+    useStageStore.setState({ sheet: { kind: 'run', tab: 'active' } })
+    const { content, title } = await renderAt(1100)
+    const box = (selector: string) => host!.querySelector(selector)!.getBoundingClientRect()
+    expect(content.width).toBe(710)
+    expect(box('.arch-header-actions').left).toBeGreaterThanOrEqual(box('.arch-heading').right)
+    expect(Math.round(box('.arch-header-actions').right)).toBe(Math.round(box('.arch-header').right))
+    expect(lineCount(title!)).toBe(1)
+  })
+
+  it('标题旁放不下时动作换到下一行，标题不被挤断', async () => {
+    useStageStore.setState({ sheet: { kind: 'run', tab: 'active' } })
+    const { title } = await renderAt(1004)
+    expect(lineCount(title!)).toBe(1)
+  })
+})
+
 describe('运行侧页浮起时盖在内容区上面，被它盖住的东西点不到也走不到', () => {
   it('关系图谱的工具条不画在侧页上面，侧页区域里的点都属于侧页', async () => {
     const { sheet } = await renderAt(790, 'character')
@@ -131,9 +150,8 @@ describe('运行侧页浮起时盖在内容区上面，被它盖住的东西点�
   })
 
   it('焦点在内容区时按 Esc 也关掉浮起的侧页', async () => {
-    const { sheet } = await renderAt(790)
-    const visible = [...host!.querySelectorAll<HTMLElement>('.stage-content button')].find(button => button.getBoundingClientRect().right < sheet.left)!
-    visible.focus()
+    await renderAt(790)
+    host!.querySelector<HTMLElement>('.stage-content')!.focus()
     await act(async () => userEvent.keyboard('{Escape}'))
     expect(sheetOpen()).toBe(false)
   })
