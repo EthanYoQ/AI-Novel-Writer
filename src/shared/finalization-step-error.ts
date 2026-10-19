@@ -7,6 +7,8 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: b
     zh: '模型这次没有返回完整结果（连接中断或输出被截断）。', en: 'The model did not return a complete result (the connection dropped or the output was cut off).' },
   { code: /^FINALIZATION_GENERATION_(ARTIFACT_REQUIRED|OUTCOME_UNKNOWN)$/, retry: true,
     zh: '上一次生成没有完成，本次没有发出新的模型请求。', en: 'The previous generation did not finish, and no new model request was sent.' },
+  { code: /^FINALIZATION_GENERATION_RESULT_UNUSABLE$/, retry: true,
+    zh: '模型返回了内容，但结果不可用（例如为空）。', en: 'The model returned a response, but the result was unusable (for example, empty).' },
   { code: /^GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE$/, retry: true,
     zh: '这一步的生成记录已变化，本次没有重新生成。', en: "This step's generation record changed, so it was not generated again." },
   { code: /^GENERATION_DISPATCH_BLOCKED$/, retry: true,

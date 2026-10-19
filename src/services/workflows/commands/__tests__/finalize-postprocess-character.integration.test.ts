@@ -905,6 +905,25 @@ it('#420 角色状态断流后，用户重试每次只发一次新请求，失�
  expect(CharacterRosterRepository.read().revision).toBe(before + 1)
 })
 
+it('#420 模型正常结束但返回空文本：步骤记结果不可用（不说没发请求），自动重试不再计费，作者重试发一次新请求后成功', async () => {
+ insertFinalizedDraft(7, 2)
+ let notesCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (system.includes('character records')) { streamCallbacks.onDone?.(modelFixtureResponse('{"updates":[]}'), undefined, 'stop'); return 'characters' }
+  if (++notesCalls === 1) { streamCallbacks.onDone?.('', undefined, 'stop'); return '' }
+  streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop')
+  return 'notes'
+ }) })
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps.chapter_notes).toMatchObject({ ok: false, error: 'FINALIZATION_GENERATION_RESULT_UNUSABLE' })
+ expect(notesCalls).toBe(1)
+ const repaired = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(repaired.steps.chapter_notes).toMatchObject({ ok: true })
+ expect(notesCalls).toBe(2)
+})
+
 it('#420 运行中取消后，界面的重试（retryInvalidResult）在新运行里重新请求，不被旧运行的失败引用卡住', async () => {
  insertFinalizedDraft(7, 2)
  let characterCalls = 0
