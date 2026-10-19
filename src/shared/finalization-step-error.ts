@@ -34,7 +34,9 @@ export function finalizationStepErrorCode(message: string): string | undefined {
 
 /** 步骤记录里的错误码换成作者可读说明；其他错误原样返回。 */
 export function describeFinalizationStepError(error: string, text: (zhCNText: string, enUSText: string) => string): string {
-  const entry = FINALIZATION_STEP_ERRORS.find(item => item.code.test(error))
+  // 旧版本存下的步骤错误带 IPC 包装，先去掉再查表。
+  const code = error.replace(IPC_PREFIX, '')
+  const entry = FINALIZATION_STEP_ERRORS.find(item => item.code.test(code))
   if (!entry) return error
   return text(
     entry.zh + (entry.retry ? '请点「重试」重新生成这一步。' : ''),

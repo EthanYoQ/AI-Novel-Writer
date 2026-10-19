@@ -23,6 +23,11 @@ describe('定稿后处理步骤错误', () => {
     expect(describeFinalizationStepError('GENERATION_STORAGE_FAILED', en)).not.toMatch(/GENERATION_STORAGE_FAILED|Select Retry/)
   })
 
+  it('旧版本存下的带 IPC 包装的步骤错误也换成可读说明', () => {
+    expect(describeFinalizationStepError("Error invoking remote method 'project-session:invoke': Error: FINALIZATION_GENERATION_INCOMPLETE", zh))
+      .toBe(describeFinalizationStepError('FINALIZATION_GENERATION_INCOMPLETE', zh))
+  })
+
   it('源变化与模型变化给同一说明，未知错误原样显示', () => {
     expect(describeFinalizationStepError('GENERATION_MODEL_CHANGED', en)).toBe(describeFinalizationStepError('FINALIZATION_GENERATION_SOURCE_CHANGED', en))
     expect(describeFinalizationStepError('network error: socket hang up', en)).toBe('network error: socket hang up')

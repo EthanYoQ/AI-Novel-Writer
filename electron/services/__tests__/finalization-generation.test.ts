@@ -749,6 +749,7 @@ it.each([['chapter_notes', 'before-visible'], ['chapter_notes', 'partial'], ['ch
  expect((await next.executeFinalizationGeneration({ handle })).outcome.receipt.visibleArtifact).toEqual(recovered.outcome.receipt.visibleArtifact)
  const succeeded = next.readFinalizationGeneration({ slot })!.view.budgetDiagnostics!.at(-1)!.attemptId
  await expect(next.executeFinalizationGeneration({ handle, recoverFrom: succeeded })).rejects.toThrow('GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE')
+ await expect(next.executeFinalizationGeneration({ handle, recoverFrom: `${recoverFrom}:2` })).rejects.toThrow('GENERATION_FINALIZATION_REQUEST_INVALID')
  expect(next.commitFinalizationGeneration({ handle, artifact: f.artifactOf(recovered) })).toMatchObject({ success: true, stepKey })
  const changes = f.db.prepare('SELECT total_changes()').pluck().get()
  expect((await next.executeFinalizationGeneration({ handle, recoverFrom })).outcome.receipt.visibleArtifact).toEqual(recovered.outcome.receipt.visibleArtifact)

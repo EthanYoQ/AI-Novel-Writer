@@ -1,5 +1,8 @@
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
+
+// 尝试 id 都由 randomUUID 生成；recoverFrom 还拼进 nonce，只收 UUID，免得拼出别的尝试的 nonce。
+const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
 import { isDeepStrictEqual } from 'node:util'
 import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, ShortOutlineRetry, PlanningContinuation } from '../../src/shared/generation-owner-contract'
 import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
@@ -1139,7 +1142,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     executeFinalizationGeneration: async (request: FinalizationGenerationChannels['finalization-generation:execute']['args'][0]) => {
       assertCurrent()
       if (!request || Object.keys(request).some(key => !['handle', 'retryOf', 'recoverFrom'].includes(key))
-        || request.recoverFrom !== undefined && (request.retryOf !== undefined || typeof request.recoverFrom !== 'string' || !request.recoverFrom)) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
+        || request.recoverFrom !== undefined && (request.retryOf !== undefined || typeof request.recoverFrom !== 'string' || !ATTEMPT_ID.test(request.recoverFrom))) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
       let run = finalizations.require(request.handle)
       const initialTask = finalizations.task(run), context = readFinalizationGenerationContext(run)
       const replay = (attempt: ReturnType<typeof runAttempts>[number]) => pending.get(JSON.stringify([run.runId, attempt.invocationNonce]))?.promise
