@@ -108,6 +108,17 @@ it('作品设定途中被改：仍报告通用的来源已变，不误报成模�
   expect(dispatch).toHaveBeenCalledTimes(1)
 })
 
+it('模型与作品设定途中都被改：报告通用的来源已变，不只说模型变了', async () => {
+  const dispatch = chapterDispatch(), f = fixture(dispatch)
+  const handle = await generateAndAcceptFirstChapter(f)
+  f.model.modelName = 'deepseek-ai/DeepSeek-V4.1-Flash'
+  f.db.prepare("UPDATE project_core SET global_guidance='改过的全局要求' WHERE id='main'").run()
+  const next = f.owner.read(handle).plotOutline!
+  await expect(f.owner.execute({ handle, invocationNonce: 'chapter-2', task: outlineTask(next) }))
+    .rejects.toThrow(/^GENERATION_SOURCE_CHANGED$/)
+  expect(dispatch).toHaveBeenCalledTimes(1)
+})
+
 it('主进程每发出一次模型请求，运行侧页的 AI 调用记录就多一条', async () => {
   let fail = false
   const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {

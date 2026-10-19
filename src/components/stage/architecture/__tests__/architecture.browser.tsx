@@ -34,6 +34,7 @@ let host: HTMLDivElement | undefined
 let core: Record<string, unknown>
 let partial: Record<string, unknown> | null
 let rosterStatus: 'empty' | 'ready'
+let recoveryContext: Record<string, unknown> | null
 let invoke: ReturnType<typeof vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>>
 
 const button = (name: string | RegExp) => [...document.querySelectorAll('button')]
@@ -89,13 +90,15 @@ async function render() {
 beforeEach(() => {
   core = { premise: PREMISE, worldbuilding: '', synopsis: '', totalChapters: 24, writingLanguage: 'zh-CN' }
   partial = null
+  recoveryContext = null
   rosterStatus = 'empty'
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'db:project-core-get') return core
     if (channel === 'fs:read-json') return partial ? { success: true, data: partial } : { success: false, error: 'not found' }
     if (channel === 'db:character-roster-read') return { schemaVersion: 1, revision: 1, migrationState: 'ready', status: rosterStatus, entries: [], renderedMarkdown: '林舟、沈砚', projectionHash: 'p', factHash: 'f' }
     if (channel === 'generation:list') return []
-    if (channel === 'generation:read-context' || channel === 'generation:read-visible-composition') return null
+    if (channel === 'generation:read-context') return recoveryContext
+    if (channel === 'generation:read-visible-composition') return null
     if (channel === 'config:get') return { outlineTargetUnits: 300 }
     if (channel === 'config:set') return { success: true }
     if (channel === 'db:project-core-update') {
@@ -228,6 +231,31 @@ describe('架构阶段', () => {
     expect(Number(to?.value)).toBeGreaterThanOrEqual(17)
     expect(Number(to?.value)).toBeLessThanOrEqual(24)
     expect(mark('synopsis')).toBe('续写')
+  })
+
+  it('第 6–10 章那批途中改了模型、恢复稿写回被封锁：提示只能查看或复制并从第 6 章重新生成，按钮直接打开从第 6 章起的对话框', async () => {
+    const body = outlineBody(1, 5)
+    core = { ...core, synopsis: renderPlotOutlineSynopsis(body, 5, OUTLINE_SOURCE) }
+    const handle = { projectId: session.projectId, epoch: '本次', rootActionId: '大纲动作', runId: '第二批' }
+    partial = { synopsis_result: outlineBody(6, 6), synopsis_incomplete: true, synopsis_generation_handle: handle }
+    recoveryContext = { handle, plotOutline: { range: { from: 6, to: 10 } },
+      plotOutlineRecovery: { draft: outlineBody(6, 6), completeChapters: [6], writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null } }
+    filledSpine(['premise', 'synopsis'])
+    await render()
+    const outline = host!.querySelector('[data-section="synopsis"]')!
+    expect(outline.textContent).not.toContain('续写从停下的地方')
+    expect(outline.textContent).toContain('只能查看或复制')
+    expect(outline.textContent).toContain('从第 6 章重新生成')
+    const restart = [...outline.querySelectorAll('button')].find(item => item.textContent === '从第 6 章重新生成')
+    expect(restart?.className).toContain('pi-btn--secondary')
+    expect([...outline.querySelectorAll('button')].find(item => item.textContent === '查看恢复稿')?.className).toContain('pi-btn--text')
+    expect(button('编辑恢复稿')).toBeUndefined()
+
+    await act(async () => restart!.click())
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="本次生成范围的起始章"]')?.value).toBe('6')
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="本次生成范围的结束章"]')?.value).toBe('10')
+    expect(stepChecked('synopsis')).toBe(true)
+    expect(stepChecked('worldbuilding')).toBe(false)
   })
 
   it.each([
