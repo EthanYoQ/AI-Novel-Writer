@@ -24,6 +24,7 @@ import { createMainGenerationOwner } from '../services/main-generation-owner'
 import { readMainGenerationPolicy, TaskBudgetPreflightError } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
 import { LegacyVectorMigrationBlockedError } from '../services/knowledge-base-migration-error'
+import { errorStackFrames } from '../services/error-stack-frames'
 import { readPortableCurrentAuthority } from '../services/portable-current-authority'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
@@ -94,8 +95,8 @@ export function generationIpcErrorCode(channel: string, error: unknown): string 
     channel,
     name: error instanceof Error ? error.name : typeof error,
     message: (error instanceof Error ? error.message : String(error)).slice(0, DIAGNOSTIC_MESSAGE_LIMIT),
-    // 多行消息会出现在 stack 开头几行，只留调用栈帧，免得绕过消息截断。
-    stack: error instanceof Error ? error.stack?.split('\n').filter(line => /^\s+at /u.test(line)).slice(0, 7).join('\n') : undefined,
+    // stack 开头带着完整消息，只留调用栈帧，免得绕过消息截断。
+    stack: error instanceof Error ? errorStackFrames(error, 7) : undefined,
   })
   return 'GENERATION_REQUEST_FAILED'
 }
