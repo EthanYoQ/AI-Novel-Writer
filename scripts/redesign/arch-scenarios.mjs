@@ -70,12 +70,12 @@ async function addCharacters({ page, invoke, path, session }, names) {
  * 落在第 4 章时进架构后关掉第 4 章的标签，只剩架构一页，与落在架构的版本截图一致。
  * 会话追踪先挂上，界面重载后打开作品的那次会话就能拿来读库。
  */
-function seedArch({ clear = [], totalChapters, characters = [] } = {}) {
+function seedArch({ clear = [], totalChapters, characters = [], core = {} } = {}) {
   return async context => {
     await trackOpenedSession(context.app)
     await seedStageSample(context, { totalChapters, landOnChapter3: clear.length === 0, beforeReload: async ({ page, invoke, path, session }) => {
       if (clear.length > 0) {
-        const cleared = await invoke(page, 'db:project-core-update', Object.fromEntries(clear.map(key => [key, ''])), path, session)
+        const cleared = await invoke(page, 'db:project-core-update', { ...Object.fromEntries(clear.map(key => [key, ''])), ...core }, path, session)
         assert.equal(cleared.success, true, cleared.error)
       }
       if (characters.length > 0) await addCharacters({ page, invoke, path, session }, characters)
@@ -173,7 +173,37 @@ async function archContrastFailures(page) {
   })
 }
 
+/** 作者写的短世界观（不足 50 字）与只有序章的大纲（#426、#417）。 */
+const SHORT_WORLD = '雾港的钟每晚早响一刻。'
+const PROLOGUE_ONLY = `# 情节大纲
+
+## 第0章：序章
+${'守塔人在风暴前夜听见第十三声钟，灯塔从那一夜起熄灭。'.repeat(3)}`
+const seedShortSections = seedArch({ clear: ['worldbuilding', 'synopsis'], totalChapters: 24, core: { worldbuilding: SHORT_WORLD, synopsis: PROLOGUE_ONLY } })
+
 export const ARCH_SCENARIOS = {
+  /** 短世界观显示内容、徽标为不完整；只有序章的大纲徽标为待生成，页头只数已确认的两节。 */
+  'arch-short-sections': { model: false, shell: 'stage', setup: seedShortSections, run: async ({ page }) => {
+    await openArchitecture(page)
+    assert.equal(await arch.summary(page, 'worldbuilding').innerText(), SHORT_WORLD)
+    assert.deepEqual(await badges(page), { premise: '已确认', characters: '已确认', worldbuilding: '不完整', synopsis: '待生成' })
+    assert.match(await arch.summary(page, 'synopsis').innerText(), /守塔人在风暴前夜/)
+    assert.equal(await arch.primary(page).innerText(), '继续生成架构')
+  } },
+  /** 只有序章时生成对话框：默认接在序章之后写，起始章跳过第 1 章时说明要从第 1 章开始。 */
+  'arch-prologue-dialog': { model: false, shell: 'stage', setup: seedShortSections, run: async ({ page }) => {
+    await openArchitecture(page)
+    await arch.primary(page).click()
+    await arch.dialog(page).waitFor({ state: 'visible' })
+    assert.equal(await arch.mark(page, 'worldbuilding').innerText(), '将覆盖')
+    assert.equal(await arch.mark(page, 'synopsis').innerText(), '续写')
+    assert.equal(await arch.dialog(page).locator('.arch-range-effect').innerText(), '接在序章之后写第 1–5 章，序章不动。')
+    await arch.dialog(page).getByRole('spinbutton', { name: '本次生成范围的起始章' }).fill('2')
+    assert.equal(await arch.dialog(page).locator('.arch-range-issue').innerText(), '已有大纲只有序章，不能跳到第 2 章开始。请从第 1 章起生成，序章会原样保留。')
+  }, after: async ({ page }) => {
+    await arch.dialog(page).getByRole('button', { name: '取消' }).click()
+    await arch.dialog(page).waitFor({ state: 'hidden' })
+  } },
   /** lane 1：trunk 与 head 都从架构页用夹具模型生成前提、世界观与大纲（角色名单已预置），记下四份文档。 */
   'arch-regression': { model: true, shell: 'stage', setup: seedArch({ clear: ['premise', 'worldbuilding', 'synopsis'] }), run: async context => {
     const { page } = context

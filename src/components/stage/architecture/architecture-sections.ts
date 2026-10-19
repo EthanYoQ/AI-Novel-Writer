@@ -1,5 +1,6 @@
 import type { ArchStepKey } from '../../../services/architecture-step-selection'
 import type { ArchitectureOverview } from '../../editor/use-architecture-overview'
+import { plotOutlineLastChapter } from '../../../shared/plot-outline-contract'
 
 type Text = (zh: string, en: string) => string
 
@@ -36,13 +37,18 @@ export function sectionBadge(key: ArchStepKey, overview: ArchitectureOverview): 
       case 'interrupted':
       case 'unresumable': return { kind: 'incomplete' }
       case 'empty':
-      case 'complete': return candidate ? { kind: 'candidate' } : { kind: 'empty' }
+      case 'complete': return candidate ? { kind: 'candidate' } : synopsisStarted(overview) ? { kind: 'incomplete' } : { kind: 'empty' }
       default: return progress satisfies never
     }
   }
   if (key === 'worldbuilding' && overview.worldBuilding.candidate) return { kind: 'candidate' }
   // 有内容但不到确认门槛（作者写的短内容）：与生成对话框的状态文字一致，叫「不完整」而不是「待生成」。
   return overview.archStatus[key] ? { kind: 'incomplete' } : { kind: 'empty' }
+}
+
+/** 大纲有内容但还没写到第 1 章以后：不到确认门槛的短大纲算不完整；只有第 0 章序章算还没开始（与生成对话框同一判定）。 */
+function synopsisStarted(overview: ArchitectureOverview): boolean {
+  return Boolean(overview.archStatus.synopsis) && plotOutlineLastChapter(overview.contents.synopsis ?? '') !== 0
 }
 
 export function badgeText(badge: SectionBadge, text: Text): string {
