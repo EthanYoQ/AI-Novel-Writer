@@ -10,17 +10,21 @@ const visibleBrandSurfaces = [
   'src/services/agent/tools/open-editor.tool.ts',
   'src/services/agent/tools/start-workflow.tool.ts',
   'src/stores/agent-store.ts',
+  'src/services/safe-call-diagnostic.ts',
+  'src/i18n/messages/zh-CN.ts',
+  'src/i18n/messages/en-US.ts',
 ]
 
 const legacyNamePattern = new RegExp('\\bVe' + 'la\\b')
 const legacyHiddenDirPattern = new RegExp('\\.' + 've' + 'la(?!API)', 'i')
 const legacyPrefixPattern = new RegExp('ve' + 'la-', 'i')
+const formerNamePattern = /AI ?小说作家|AI Novel Writer/
 
 describe('APP_BRAND', () => {
-  it('uses AI小说作家 visible product language', () => {
-    expect(APP_BRAND.zhName).toBe('AI小说作家')
-    expect(APP_BRAND.enName).toBe('AI Novel Writer')
-    expect(APP_BRAND.shortName).toBe('AI小说作家')
+  it('uses 书童 / Pagekin visible product language', () => {
+    expect(APP_BRAND.zhName).toBe('书童')
+    expect(APP_BRAND.enName).toBe('Pagekin')
+    expect(APP_BRAND.shortName).toBe('书童')
     expect(Object.values(APP_BRAND).join(' ')).not.toMatch(legacyNamePattern)
   })
 
@@ -31,6 +35,7 @@ describe('APP_BRAND', () => {
       expect(source, file).not.toMatch(legacyNamePattern)
       expect(source, file).not.toMatch(legacyHiddenDirPattern)
       expect(source, file).not.toMatch(legacyPrefixPattern)
+      expect(source, file).not.toMatch(formerNamePattern)
     }
   })
 })

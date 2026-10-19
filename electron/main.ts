@@ -134,7 +134,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 640,
-    title: startupBlockedCode ? 'AI Novel Writer' : mainT(app.getLocale(), 'app.windowTitle'),
+    title: startupBlockedCode ? 'Pagekin' : mainT(app.getLocale(), 'app.windowTitle'),
     icon: path.join(process.env.APP_ROOT!, 'build', 'icon.png'),
     // 使用应用内自绘标题栏，避免 Windows 原生标题栏与棕色标题栏重复显示。
     frame: Boolean(startupBlockedCode),

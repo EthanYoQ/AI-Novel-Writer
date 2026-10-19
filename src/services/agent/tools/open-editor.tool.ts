@@ -9,8 +9,8 @@ import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requir
 
 export const openEditorTool = buildAgentTool({
   name: 'open_editor',
-  description: '在 AI小说作家编辑器中打开指定文件的 Tab 页。用户可以直接在编辑器中查看和编辑内容。',
-  descriptionEn: 'Open a project file in an AI Novel Writer editor tab so the user can view or edit it.',
+  description: '在书童的编辑器中打开指定文件的 Tab 页。用户可以直接在编辑器中查看和编辑内容。',
+  descriptionEn: 'Open a project file in a Pagekin editor tab so the user can view or edit it.',
   source: 'builtin',
   inputSchema: {
     type: 'object',

@@ -57,7 +57,7 @@ describe('formatSafeCallDiagnostic', () => {
       },
     })
 
-    expect(diagnostic).toContain('# AI Novel Writer safe diagnostics')
+    expect(diagnostic).toContain('# Pagekin safe diagnostics')
     expect(diagnostic).toContain('- Actual model: Grok 4')
     expect(diagnostic).toContain('- Model ID: 2f491640-c201-4c6e-922b-3103e8c2c5f7')
     expect(diagnostic).toContain('- Purpose: chapter-draft')

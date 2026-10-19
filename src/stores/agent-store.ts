@@ -142,7 +142,7 @@ const generateHelpText = (locale: Locale): string => {
   const skillCount = skillRegistry.listAll().length
   const commands = getAllSlashCommands(locale)
   const lines: string[] = [
-    text('## AI小说作家 AI 助手 — 帮助', '## AI Novel Writer Assistant — Help'),
+    text('## 书童 AI 助手 — 帮助', '## Pagekin Assistant — Help'),
     '',
     text('### 可用命令', '### Available commands'),
     ...commands
