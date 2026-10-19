@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { validPlotOutlineEntry, plotOutlineConfirmedPrefix, plotOutlineRangeEffect, renderPlotOutlineRange, renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix,
+import { validPlotOutlineEntry, plotOutlineConfirmedPrefix, plotOutlineRangeEffect, renderPlotOutlineRange, renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, isPlotOutlineCoverageNote,
   plotOutlineNextChapter, derivePlotOutlineCursor, plotOutlineRecoveryDraft, PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL } from '../plot-outline-contract'
 import { outlineProgress } from '../plot-outline-checkpoint'
 import type { ProjectCoreSynopsisExpected } from '../../../electron/repositories/project-core-repository'
@@ -196,5 +196,49 @@ describe('chapter Markdown outline contract', () => {
       `${confirmedPrefix.replace('保留原章', '替换原章')}\n\n${authored}`, `${confirmedPrefix}\n\n${authored}\n\n## 第4章：越界\n未来。`]) {
       expect(validPlotOutlineAuthorPrefix(renderPlotOutlineSynopsis(body, 2, expected), progress, { from: 2, to: 2 })).toBe(false)
     }
+  })
+
+  describe('只有序章时开头的标准标题与末尾旧覆盖说明（#418）', () => {
+    const expected = (synopsis: string) => ({ synopsis, totalChapters: 24, writingLanguage: 'zh-CN' as const })
+    const zhNote = (n: number) => `> 本大纲已覆盖至第 ${n} 章（全书 24 章），其余章节将在后续批次继续生成。`
+    const body = '## 第1章：新\n新事。\n\n## 第2章：新\n新事。'
+    const saved = (authored: string) => `# 情节大纲\n\n${authored}\n\n${body}\n\n${zhNote(2)}`
+
+    it('夹着十万行空白时清理旧说明仍是线性耗时', () => {
+      for (const filler of ['\n', '\n \t']) {
+        const synopsis = `# 情节大纲\n\n## 第0章：序章\n灯塔熄灭前夜。${filler.repeat(100_000)}\n备注`
+        const started = performance.now()
+        const result = renderPlotOutlineRange(body, { from: 1, to: 2 }, expected(synopsis))
+        expect(performance.now() - started).toBeLessThan(1_000)
+        expect(result.startsWith('# 情节大纲\n\n## 第0章：序章\n灯塔熄灭前夜。')).toBe(true)
+        expect(result.endsWith(`备注\n\n${body}\n\n${zhNote(2)}`)).toBe(true)
+      }
+    })
+
+    it('CRLF 换行的大纲生成后开头只有一行标准标题，旧覆盖说明（可连续多条）都去掉', () => {
+      const crlf = (text: string) => text.replaceAll('\n', '\r\n')
+      const synopsis = crlf(`# 情节大纲\n\n## 第0章：序章\n灯塔熄灭前夜。\n\n${zhNote(3)}\n\n${zhNote(5)}`)
+      const result = renderPlotOutlineRange(body, { from: 1, to: 2 }, expected(synopsis))
+      expect(result.match(/# 情节大纲/gu)).toHaveLength(1)
+      expect(result).toBe(saved('## 第0章：序章\r\n灯塔熄灭前夜。'))
+    })
+
+    it('前言写在标准标题之前时，生成后也只有一行标准标题，前言原样保留', () => {
+      const result = renderPlotOutlineRange(body, { from: 1, to: 2 }, expected('全书基调：冷。\n\n# 情节大纲\n\n## 第0章：序章\n灯塔熄灭前夜。'))
+      expect(result).toBe(saved('全书基调：冷。\n\n## 第0章：序章\n灯塔熄灭前夜。'))
+    })
+
+    it('与覆盖说明只差几个字的作者末行不当作旧说明删掉', () => {
+      const authored = `## 第0章：序章\n灯塔熄灭前夜。\n\n${zhNote(3).replace('继续生成', '慢慢生成')}`
+      expect(renderPlotOutlineRange(body, { from: 1, to: 2 }, expected(`# 情节大纲\n\n${authored}`))).toBe(saved(authored))
+    })
+
+    it('写入的覆盖说明能被同一来源认出：中英文、任意章数', () => {
+      for (const language of ['zh-CN', 'en-US'] as const) {
+        const tail = renderPlotOutlineSynopsis('', 7, { totalChapters: 30, writingLanguage: language }).split('\n').at(-1)!
+        expect(isPlotOutlineCoverageNote(tail)).toBe(true)
+        expect(isPlotOutlineCoverageNote(`${tail} `)).toBe(false)
+      }
+    })
   })
 })
