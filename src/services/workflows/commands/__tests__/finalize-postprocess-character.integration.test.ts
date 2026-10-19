@@ -43,6 +43,7 @@ let characterId = ''
 const selections: unknown[] = []
 const commitRequests: unknown[] = []
 let commitFailures = 0
+let characterExecuteFailures = 0
 let changeFieldBeforeCommit = false
 let actualOwner: ReturnType<typeof createMainGenerationOwner> | undefined
 const stageByRun = new Map<string, string>()
@@ -187,7 +188,11 @@ function installRealRepositoryIpc(): void {
             stageByRun.set(value.view.handle.runId, value.context.slot.stepKey)
             return value
           }
-          case 'finalization-generation:execute': { const r = await owner().executeFinalizationGeneration(args[0] as Parameters<ReturnType<typeof owner>['executeFinalizationGeneration']>[0]); return r }
+          case 'finalization-generation:execute': {
+            const request = args[0] as Parameters<ReturnType<typeof owner>['executeFinalizationGeneration']>[0]
+            if (stageByRun.get(request.handle.runId) === 'character_cards' && characterExecuteFailures-- > 0) throw new Error('network error: synthetic lost execute')
+            return owner().executeFinalizationGeneration(request)
+          }
           case 'finalization-generation:cancel': return owner().cancelFinalizationGeneration(args[0] as Parameters<ReturnType<typeof owner>['cancelFinalizationGeneration']>[0])
           case 'finalization-generation:commit': {
             const request = args[0] as Parameters<ReturnType<typeof owner>['commitFinalizationGeneration']>[0]
@@ -327,7 +332,7 @@ beforeEach(() => {
   const cache = path.resolve('.runtime/.cache/novel-quality-modernization/s09b-finalize-consumer')
   fs.mkdirSync(cache, { recursive: true })
   projectPath = fs.mkdtempSync(path.join(cache, 'case-'))
-  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; changeFieldBeforeCommit = false
+  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; characterExecuteFailures = 0; changeFieldBeforeCommit = false
   initProjectDatabase(projectPath)
   const db = CharacterRosterRepository.read()
   expect(db.status).toBe('empty')
@@ -919,5 +924,47 @@ it('#420 运行中取消后，界面的重试（retryInvalidResult）在新运�
  expect(status.steps.character_cards).toMatchObject({ ok: true })
  expect(characterCalls).toBe(2)
  expect(runs()).toBe(before + 1)
+ expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+})
+
+it('#420 章节要点断流后作者改了本章蓝图要点，重试在新开的运行里重新请求并成功', async () => {
+ insertFinalizedDraft(7, 2)
+ let notesCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (system.includes('character records')) { streamCallbacks.onDone?.(modelFixtureResponse('{"updates":[]}'), undefined, 'stop'); return 'characters' }
+  if (++notesCalls === 1) { streamCallbacks.onError?.('synthetic stream interrupted'); return 'interrupted' }
+  streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop')
+  return 'notes'
+ }) })
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps.chapter_notes.ok).toBe(false)
+ expect(notesCalls).toBe(1)
+ getProjectDb()!.prepare("INSERT INTO blueprints (chapter_number, title, notes) VALUES (2, 'The Handoff', 'Author-edited notes')").run()
+ const repaired = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(repaired.steps.chapter_notes).toMatchObject({ ok: true })
+ expect(repaired.steps.character_cards).toMatchObject({ ok: true })
+ expect(notesCalls).toBe(2)
+})
+
+it('#420 角色状态运行已开始但还没发请求，重试按本运行的状态发出请求，不被章节要点的尝试卡住', async () => {
+ insertFinalizedDraft(7, 2)
+ let characterCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  characterCalls++
+  streamCallbacks.onDone?.(modelFixtureResponse(JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })), undefined, 'stop')
+  return 'characters'
+ }) })
+ characterExecuteFailures = 3
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: false } })
+ expect(characterCalls).toBe(0)
+ const repaired = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(repaired.steps.character_cards).toMatchObject({ ok: true })
+ expect(characterCalls).toBe(1)
  expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
 })
