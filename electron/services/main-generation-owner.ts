@@ -593,7 +593,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     legacyRosters.assertMutable(run)
     const operation = (async () => {
     const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
-    if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
+    // 途中在设置里保存了模型是作者最常见的来源变化，单列一个码，界面才能说清是模型变了。
+    if (!isDeepStrictEqual(current, run.binding)) throw new Error(isDeepStrictEqual(current.sourceManifest.modelReceipt, run.binding.sourceManifest.modelReceipt)
+      ? 'GENERATION_SOURCE_CHANGED' : 'GENERATION_SOURCE_CHANGED_MODEL')
     const leaseId = runLeases.get(run.runId)
     if (!leaseId) throw new Error('GENERATION_RESUME_REQUIRED')
     const model = deps.leases.resolve(leaseId)

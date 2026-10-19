@@ -28,7 +28,7 @@ function arrangeOutlineRejectedAtChapter7(rejection: string) {
   const plotOutline: PlotOutlineProgress = { protocol: PLOT_OUTLINE_PROTOCOL, content: PLOT_OUTLINE_CONTENT, range: { from: 6, to: 10 },
     targetUnits: 300, cursor: { kind: 'request', chapterNumber: 7, attempt: 'normal' }, sourceExpected,
     confirmedPrefix: sourceExpected.synopsis,
-    composition: { artifactIds: ['第6章'], text: '## 第6章：雨夜\n林岚确认证词。', textHash: 'a'.repeat(64), revision: 1 } as PlotOutlineProgress['composition'] }
+    composition: { artifactIds: ['第6章'], text: '## 第6章：雨夜\n林岚确认证词。', textHash: 'a'.repeat(64), revision: 1 } as unknown as PlotOutlineProgress['composition'] }
   const view = { handle, status: 'running', operation: 'generate-plot-outline', nonReplayable: false, artifacts: [], plotOutline,
     budget: { maxAttempts: 32, maxRequestedOutputTokens: 2097152, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 } } as MainGenerationRunView
   const execute = vi.fn(async () => { throw new Error(`Error invoking remote method 'generation:execute': Error: ${rejection}`) })

@@ -138,6 +138,22 @@ export class PlotOutlineResumeAvailableError extends Error {
   }
 }
 
+/**
+ * 情节大纲生成途中，冻结的来源（模型设置、作品设定、提示词模板、写作 Skill）被改动，主进程拒绝了下一章。
+ * 同一运行无法恢复，errorCode 供运行侧页给出「去架构页重新生成」入口。
+ */
+export const PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE = 'architecture-synopsis-source-changed'
+
+export class PlotOutlineSourceChangedError extends Error {
+  readonly code = PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'PlotOutlineSourceChangedError'
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
 export const WORLD_BUILDING_RESUME_ERROR_CODE = 'architecture-world-building-resume-available'
 
 export class WorldBuildingResumeAvailableError extends Error {
@@ -2161,8 +2177,24 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       } else {
         callbacks.log(text(`正在生成第 ${cursor.chapterNumber} 章大纲${cursor.attempt === 'compact' ? '，进行唯一一次原事实重建' : ''}。`,
           `Generating the outline for chapter ${cursor.chapterNumber}${cursor.attempt === 'compact' ? ' with its single rebuild from original facts' : ''}.`))
-        await this.callLLMResult(`${originalPrompt}\n\n${plotOutlineRequestContract(outline, cursor.chapterNumber, cursor.attempt)}`,
-          `${promptBuilder.getSystemRole()}\n\n${planningTargetInstruction('outline', outline.targetUnits, language)}`, callbacks, { purpose: plotOutlinePurpose(cursor.chapterNumber, cursor.attempt), reasoningStage: 'planning', writingSkillStage: 'planning' }, context)
+        try {
+          await this.callLLMResult(`${originalPrompt}\n\n${plotOutlineRequestContract(outline, cursor.chapterNumber, cursor.attempt)}`,
+            `${promptBuilder.getSystemRole()}\n\n${planningTargetInstruction('outline', outline.targetUnits, language)}`, callbacks, { purpose: plotOutlinePurpose(cursor.chapterNumber, cursor.attempt), reasoningStage: 'planning', writingSkillStage: 'planning' }, context)
+        } catch (error) {
+          const changed = error instanceof Error ? /GENERATION_SOURCE_CHANGED(_MODEL)?(?![A-Z_])/u.exec(error.message) : null
+          if (!changed) throw error
+          const { from } = outline.range, stoppedAt = cursor.chapterNumber
+          const cause = changed[1]
+            ? text('生成途中模型设置被修改', 'The model settings were changed during generation')
+            : text('生成途中作品设定、提示词模板或写作 Skill 被修改', 'The book settings, a prompt template or a writing skill changed during generation')
+          const kept = stoppedAt <= from ? ''
+            : stoppedAt - 1 === from
+              ? text(`本批已生成的第 ${from} 章保留在「大纲恢复稿」中，可查看和复制。`, `Chapter ${from}, already generated in this batch, is kept in the outline recovery draft to view and copy. `)
+              : text(`本批已生成的第 ${from}–${stoppedAt - 1} 章保留在「大纲恢复稿」中，可查看和复制。`, `Chapters ${from}–${stoppedAt - 1}, already generated in this batch, are kept in the outline recovery draft to view and copy. `)
+          throw new PlotOutlineSourceChangedError(text(
+            `${cause}，这批大纲已在第 ${stoppedAt} 章停止，没有再发送请求。${kept}正式大纲未被改动。请到「架构」页重新生成情节大纲，从第 ${from} 章开始。`,
+            `${cause}, so this outline batch stopped at chapter ${stoppedAt} without sending another request. ${kept}The saved outline was not changed. Open Architecture and generate the plot outline again from chapter ${from}.`))
+        }
       }
       const current = await ipc.invokeWithProjectSession(session, 'generation:read', handle)
       if (!current.plotOutline) throw new Error('GENERATION_PLOT_OUTLINE_SOURCE_INVALID')
