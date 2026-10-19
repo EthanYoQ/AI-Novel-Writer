@@ -18,7 +18,7 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
   onRetryPublication: () => void
 }) {
   const text = useLocaleStore(s => s.text)
-  const { loading, steps } = usePostProcessStatus(getChapterFinalizeScope(chapterNumber))
+  const { loading, steps } = usePostProcessStatus(getChapterFinalizeScope(chapterNumber), busy)
   if (loading && !publication) return null
 
   const rows = [
