@@ -20,6 +20,7 @@ import type { PrepareReviewRevisionRequest } from '../../../src/shared/review-re
 import { selectFrozenReviewRevisionMaterials } from '../../../src/services/workflows/commands/review-revision-materials';
 import { FinalizationRepository } from '../../repositories/finalization-repository';
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture';
+import { LEGACY_INSTALLED_SKILL_CASES, masterInspectWritingSkillMarkdown, plantLegacyInstalledSkill } from '../../../test/helpers/installed-writing-skill-fixture';
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3');
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0))
@@ -410,6 +411,18 @@ describe('main rebuilt generation sources', () => {
         put(f.deps.globalDataRoot, 'skills/anchor/SKILL.md', text);
         const singleFileSkillHash = hash(JSON.stringify([{ hash: hash(text), identity: 'user:anchor', stage: 'drafting' }]));
         expect(f.build().binding.fingerprint.skillSnapshotHash).toBe(singleFileSkillHash);
+    });
+    it.each(LEGACY_INSTALLED_SKILL_CASES)('binds a user Skill installed without a manifest exactly as master did: $label', testCase => {
+        const f = fixture();
+        put(f.deps.projectStorageRoot, 'writing-skills.json', JSON.stringify({ version: 1, bindings: { drafting: `user:${testCase.name}` } }));
+        plantLegacyInstalledSkill(path.join(f.deps.globalDataRoot, 'skills'), path.join(f.root, 'outside'), testCase);
+        const master = masterInspectWritingSkillMarkdown(testCase.skill);
+        if (!master.compatible || !['bilingual', 'zh-CN'].includes(master.metadata.language)) {
+            expect(() => f.build()).toThrow('GENERATION_SKILL_INCOMPATIBLE');
+            return;
+        }
+        const masterSkillHash = hash(JSON.stringify([{ hash: hash(testCase.skill), identity: `user:${testCase.name}`, stage: 'drafting' }]));
+        expect(f.build().binding.fingerprint.skillSnapshotHash).toBe(masterSkillHash);
     });
     it.each(['missing', 'obsolete', 'hash', 'receipt'])('rejects %s selected source authority', kind => { const f = fixture(); if (kind === 'missing')
         f.input.selectedDraftIds = [999]; if (kind === 'obsolete') {

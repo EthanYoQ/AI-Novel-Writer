@@ -4,6 +4,7 @@ import {
   parseGitHubWritingSkillUrl,
   type WritingSkillStage,
 } from '../writing-skills'
+import { LEGACY_INSTALLED_SKILL_CASES, masterInspectWritingSkillMarkdown, masterVisibleFields } from '../../../test/helpers/installed-writing-skill-fixture'
 
 describe('writing skill compatibility', () => {
   it('accepts a self-contained prompt-only SKILL.md', () => {
@@ -183,5 +184,11 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
     'https://github.com/acme/story-skill/issues/1',
   ])('rejects unsupported source %s', (url) => {
     expect(() => parseGitHubWritingSkillUrl(url)).toThrow()
+  })
+})
+
+describe('SKILL.md read on its own, as GitHub imports and skills without a manifest are', () => {
+  it.each(LEGACY_INSTALLED_SKILL_CASES)('inspects exactly as master did: $label', ({ skill }) => {
+    expect(masterVisibleFields(inspectWritingSkillMarkdown(skill))).toEqual(masterInspectWritingSkillMarkdown(skill))
   })
 })

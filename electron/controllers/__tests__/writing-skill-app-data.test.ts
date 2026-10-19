@@ -2,6 +2,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  LEGACY_INSTALLED_SKILL_CASES,
+  masterInspectWritingSkillMarkdown,
+  masterVisibleFields,
+  plantLegacyInstalledSkill,
+} from '../../../test/helpers/installed-writing-skill-fixture'
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
 
@@ -16,6 +22,13 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn((channel: string, handler: IpcHandler) => mocks.handlers.set(channel, handler)) },
 }))
 vi.mock('../../i18n', () => ({ mainText: (_locale: string, _zh: string, en: string) => en }))
+// 设置页经由 Skill 注册中心读取 skills:list-user；这里把渲染层的 IPC 直接接到主进程处理器上。
+vi.mock('../../../src/services/ipc-client', () => ({
+  ipc: { invoke: (channel: string, ...args: unknown[]) => handler(channel)({}, ...args) },
+}))
+vi.mock('../../../src/stores/project-store', () => ({
+  useProjectStore: { getState: () => ({ currentProject: null }) },
+}))
 
 let fixtureRoot = ''
 let velaHome: string
@@ -77,6 +90,13 @@ metadata:
 ---
 Follow the voice rules in [the voice guide](references/voice.md).
 See also \`references/pacing.md\`.`
+
+/** 设置页看到的已安装 Skill：经注册中心解析 skills:list-user 的结果。 */
+async function settingsView(id: string) {
+  const { skillRegistry } = await import('../../../src/services/agent/skill-registry')
+  await skillRegistry.loadAll()
+  return skillRegistry.getById(id)
+}
 
 async function inspectThenInstall(url = sourceUrl) {
   const inspected = await handler('skills:inspect-github')({}, url) as {
@@ -429,5 +449,15 @@ Keep concrete action.`)))
     })
     expect(fs.existsSync(path.join(velaHome, 'skills', 'quoted-prose', 'SKILL.md'))).toBe(true)
     await expect(handler('skills:uninstall-user')({}, 'quoted-prose')).resolves.toEqual({ success: true })
+  })
+
+  it.each(LEGACY_INSTALLED_SKILL_CASES)('shows a skill installed without a manifest exactly as master did: $label', async (testCase) => {
+    plantLegacyInstalledSkill(path.join(velaHome, 'skills'), path.join(pickRoot, 'outside'), testCase)
+
+    const skill = await settingsView(`user:${testCase.name}`)
+
+    const master = masterInspectWritingSkillMarkdown(testCase.skill)
+    expect(masterVisibleFields(skill?.writingSkill)).toEqual(master)
+    expect(skill?.content).toBe(master.content)
   })
 })
