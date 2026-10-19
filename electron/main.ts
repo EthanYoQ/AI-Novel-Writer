@@ -149,7 +149,8 @@ function createWindow() {
   // A diagnostic-only window has no editor and no business close responder.
   if (!startupBlockedCode) installWindowCloseGuard(win)
 
-  if (process.platform === 'darwin') {
+  // 打包后的 Dock 图标来自 icon.icns（按 macOS 网格留了边）；icon.png 是满版的，只在开发时顶上。
+  if (process.platform === 'darwin' && !app.isPackaged) {
     app.dock?.setIcon(path.join(process.env.APP_ROOT!, 'build', 'icon.png'))
   }
 
