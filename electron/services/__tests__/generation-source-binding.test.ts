@@ -568,3 +568,11 @@ describe('material decision receipt binding (S10B step 3)', () => {
         expect(decisionOf(restored)).toEqual(input.materialDecision);
     });
 });
+
+it('accepts a legacy reviewed draft as the current working draft and still rejects an older one (#411)', () => {
+    const f = fixture();
+    f.db.exec("UPDATE drafts SET status='reviewed' WHERE id=1");
+    expect(f.build().binding.sourceRefs.some(ref => ref.sourceId === 'draft:1')).toBe(true);
+    f.db.exec("UPDATE drafts SET status='draft' WHERE id=1; INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(2,2,'reviewed',1)");
+    expect(() => f.build()).toThrow('GENERATION_DRAFT_NOT_CURRENT');
+});
