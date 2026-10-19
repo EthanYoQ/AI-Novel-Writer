@@ -189,6 +189,15 @@ function dependencyIsCurrent(
         && state.receiptContentMatches
 }
 
+/**
+ * 当前权威定稿是作者确认过的事实，只按自身正文与收据判定，不再追溯它当初由哪一稿写成。
+ * 否则作者在「留作草稿」批次后改过前面某章再逐章定稿，之后每一章都会被早已确认的
+ * 历史永久拒绝保存（#438）。候选稿仍沿整条链追溯。
+ */
+function sealsLineage(dependency: DraftSourceDependency): boolean {
+    return 'chapterNumber' in dependency
+}
+
 function dependencyLineageIsCurrent(
     rootId: number,
     states: ReadonlyMap<number, DraftDependencyState>,
@@ -222,7 +231,7 @@ function dependencyLineageIsCurrent(
         if (!dependency) {
             memo.set(frame.draftId, state.sourceDependencies.every(source => (
                 dependencyIsCurrent(source, states.get(source.draftId))
-                && memo.get(source.draftId) === true
+                && (sealsLineage(source) || memo.get(source.draftId) === true)
             )))
             visiting.delete(frame.draftId)
             stack.pop()
@@ -234,7 +243,7 @@ function dependencyLineageIsCurrent(
             memo.set(frame.draftId, false)
             continue
         }
-        if (memo.has(dependency.draftId)) continue
+        if (sealsLineage(dependency) || memo.has(dependency.draftId)) continue
         if (visiting.has(dependency.draftId)) {
             memo.set(frame.draftId, false)
             continue
@@ -253,7 +262,7 @@ function dependenciesAreCurrent(
 ): boolean {
     return dependencies.every(dependency => (
         dependencyIsCurrent(dependency, states.get(dependency.draftId))
-        && dependencyLineageIsCurrent(dependency.draftId, states, memo)
+        && (sealsLineage(dependency) || dependencyLineageIsCurrent(dependency.draftId, states, memo))
     ))
 }
 
@@ -314,13 +323,13 @@ export class DraftRepository {
         const tx = db.transaction(() => {
             const serializedDependencies = JSON.stringify(params.sourceDependencies ?? [])
             const parsedDependencies = parseDependencies(serializedDependencies)
-            if (!parsedDependencies.valid) throw new Error('草稿来源依赖无效')
+            if (!parsedDependencies.valid) throw new Error('GENERATION_DRAFT_DEPENDENCY_INVALID')
             const states = dependencyStates(
                 db,
                 parsedDependencies.dependencies.map(dependency => dependency.draftId),
             )
             if (!dependenciesAreCurrent(parsedDependencies.dependencies, states, new Map())) {
-                throw new Error('草稿来源依赖已变化或不再是当前定稿，已拒绝保存')
+                throw new Error('GENERATION_DRAFT_DEPENDENCY_STALE')
             }
 
             const row = db.prepare(`
