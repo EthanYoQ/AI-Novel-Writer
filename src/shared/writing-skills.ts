@@ -187,13 +187,15 @@ function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | 
 } {
   const files: Array<{ path: string; content: string }> = []
   const unbundled = new Set<string>()
+  // 已在包内的路径按小写比对：Windows 与 macOS 上大小写不同的写法是同一个文件。根 SKILL.md 本身就是正文，回链它不算附带文件。
+  const included = new Set(['skill.md'])
   const queue = referencedPaths(body).map(reference => ({ ...reference, base: [] as string[] }))
   let blocked = false
   while (queue.length) {
     const { path: reference, blocking, base } = queue.shift()!
     const candidates = [...new Set([resolveReference(reference, base), resolveReference(reference, [])])]
       .filter((candidate): candidate is string => candidate !== null)
-    if (candidates.some(candidate => files.some(file => file.path === candidate))) continue
+    if (candidates.some(candidate => included.has(candidate.toLowerCase()))) continue
     const bundled = files.length < MAX_BUNDLED_FILES
       ? candidates.map(path => ({ path, content: readFile?.(path) })).find(file => file.content !== undefined)
       : undefined
@@ -204,6 +206,7 @@ function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | 
       continue
     }
     files.push({ path: bundled.path, content: bundled.content!.trim() })
+    included.add(bundled.path.toLowerCase())
     const directory = bundled.path.split('/').slice(0, -1)
     queue.push(...referencedPaths(bundled.content!).map(reference => ({ ...reference, base: directory })))
   }
