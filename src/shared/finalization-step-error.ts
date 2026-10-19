@@ -16,6 +16,10 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: b
     en: 'The model-call budget for this post-processing run is used up (a request timed out or exceeded its reserved usage). Retrying will not generate this step again.' },
   { code: /^(FINALIZATION_GENERATION_SOURCE_CHANGED|GENERATION_FINALIZATION_SOURCE_CHANGED|GENERATION_SOURCE_CHANGED|GENERATION_MODEL_CHANGED)$/, retry: false,
     zh: '定稿正文或模型设置已变化，这一步不能沿用原记录。请重新定稿本章后再处理。', en: 'The finalized manuscript or model settings changed, so this step cannot reuse its record. Finalize this chapter again, then retry.' },
+  // 写生成记录失败时主进程把整个 root 阻断，重试同样被拦下。
+  { code: /^GENERATION_STORAGE_FAILED$/, retry: false,
+    zh: '保存这次后处理的生成记录时写入失败，后处理已停止，再点「重试」也不会重新生成。请检查磁盘空间后重新定稿本章。',
+    en: 'Saving the generation record for this post-processing run failed, so it stopped. Retrying will not generate this step again. Check disk space, then finalize this chapter again.' },
   { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: false,
     zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
 ]

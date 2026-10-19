@@ -17,6 +17,12 @@ describe('定稿后处理步骤错误', () => {
     expect(describeFinalizationStepError('ROOT_BUDGET_EXHAUSTED', en)).not.toMatch(/Select Retry/)
   })
 
+  it('生成记录写入失败阻断了 root：给可读说明，不提示重试', () => {
+    expect(finalizationStepErrorCode("Error invoking remote method 'project-session:invoke': Error: GENERATION_STORAGE_FAILED")).toBe('GENERATION_STORAGE_FAILED')
+    expect(describeFinalizationStepError('GENERATION_STORAGE_FAILED', zh)).toContain('再点「重试」也不会重新生成')
+    expect(describeFinalizationStepError('GENERATION_STORAGE_FAILED', en)).not.toMatch(/GENERATION_STORAGE_FAILED|Select Retry/)
+  })
+
   it('源变化与模型变化给同一说明，未知错误原样显示', () => {
     expect(describeFinalizationStepError('GENERATION_MODEL_CHANGED', en)).toBe(describeFinalizationStepError('FINALIZATION_GENERATION_SOURCE_CHANGED', en))
     expect(describeFinalizationStepError('network error: socket hang up', en)).toBe('network error: socket hang up')
