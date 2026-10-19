@@ -206,6 +206,41 @@ describe('标签与外壳', () => {
     expect(useStageStore.getState().chapterRequest).toBeNull()
   })
 
+  it.each([
+    { case: '作者已点去别的标签', switchProject: false },
+    { case: '作品已经换掉', switchProject: true },
+  ])('读稿期间$case：已删除的稿不把作者拉回第 3 章', async ({ switchProject }) => {
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => undefined)
+    warning.mockClear()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const base = backend.invoke.getMockImplementation()!
+    await mount()
+    backend.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:draft-list') await gate
+      return base(channel, ...args)
+    })
+    const deletedPath = formatResourceUri({ kind: 'draft', id: 999 })
+    await act(async () => useEditorStore.getState().openFile({
+      id: `review-${deletedPath}-1`, name: '审稿报告：第3章', type: 'review-report', content: AI_REVIEW, filePath: deletedPath,
+      reviewReport: AI_REVIEW, chapterNumber: 3, chapterDir: 'ai-novel://draft/ch3', reviewId: 1, projectKey: SESSION.projectPath,
+    }))
+    await act(async () => {
+      if (switchProject) setActiveProjectSessionContext({ projectId: 'other-book', leaseId: 'other-lease', projectPath: `${SESSION.projectPath}-other` })
+      else useEditorStore.getState().openFile({ id: 'elsewhere', name: '设定', type: 'config', projectKey: SESSION.projectPath })
+    })
+    const before = useEditorStore.getState().activeTabId
+    await act(async () => { release(); await gate })
+
+    if (switchProject) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+      expect(warning).not.toHaveBeenCalled()
+    } else {
+      await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('第 3 章这一稿已被删除。'))
+    }
+    expect(useEditorStore.getState().activeTabId).toBe(before)
+  })
+
   it('修稿完成时命令打开的合并标签改道到单章视图的合并视图', async () => {
     const draft = backend.addDraft({ status: 'draft' })
     await mount()
