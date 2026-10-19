@@ -386,6 +386,17 @@ describe('版本历史', () => {
     expect(versionsColumn()).not.toContain('正在读取…')
   })
 
+  it('重新打开作品时已有新的最新稿：清掉上次选的稿与对比，页头不和旧对比对不上', async () => {
+    await openChapterThree()
+    await click(/草稿 v1/)
+    await vi.waitFor(() => expect(host!.querySelector('article[aria-readonly="true"]')).toBeTruthy())
+    drafts.push({ id: 13, chapterNumber: 3, version: 3, status: 'draft', content: '雨停了。' })
+    await reopenSameBook()
+    await vi.waitFor(() => expect(button(/草稿 v3/)).toBeTruthy())
+    expect(document.querySelector('.stage-hist-diff')!.textContent).toBe('选一稿，与当前稿逐字对比。')
+    expect(button(/草稿 v1/)!.getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('当前稿查到了却读不出正文（刚被删掉）：说这一章还没有当前稿，不当成空正文对比', async () => {
     await openChapterThree()
     const base = invoke.getMockImplementation()!
