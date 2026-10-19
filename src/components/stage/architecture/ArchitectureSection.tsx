@@ -1,6 +1,7 @@
 import { Copy, Ellipsis, Eye, EyeOff, PenLine, RotateCw, Sparkles, Users } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ARCH_STEP_NAMES, type ArchStepKey } from '../../../services/architecture-step-selection'
+import { outlineSourceChangedNote } from '../../run/run-recovery'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { LegacyRosterRecoveryPanel } from '../../editor/LegacyRosterRecoveryPanel'
 import type { ArchitectureOverview } from '../../editor/use-architecture-overview'
@@ -26,6 +27,9 @@ function CandidateNotice({ sectionKey, overview }: { sectionKey: 'worldbuilding'
   const text = useLocaleStore(s => s.text)
   const state = sectionKey === 'synopsis' ? overview.synopsis : overview.worldBuilding
   const editDraft = sectionKey === 'synopsis' && overview.planningRecovery !== null
+  // 来源已变的恢复稿不能写回：主动作是从本批起始章重新生成，打开恢复稿只作查看。
+  const restart = sectionKey === 'synopsis' ? overview.outlineRestartRange : null
+  const locale = useLocaleStore(s => s.locale)
   const filled = Boolean(overview.archStatus[sectionKey])
   const resume = () => editDraft
     ? overview.openRecoveryDraft()
@@ -46,16 +50,29 @@ function CandidateNotice({ sectionKey, overview }: { sectionKey: 'worldbuilding'
             <Button variant="text" size="sm" onClick={() => { void overview.copyCandidate(state.candidate) }}>
               <Copy size={14} aria-hidden />{text('复制', 'Copy')}
             </Button>
-            <Button variant="secondary" size="sm" disabled={state.busy || !state.handle || overview.loading} onClick={resume}>
-              <RotateCw size={14} aria-hidden />
-              {editDraft ? text('编辑恢复稿', 'Edit recovery draft') : state.busy ? text('续写中…', 'Resuming…') : text('断点续写', 'Resume')}
-            </Button>
+            {restart ? (
+              <>
+                <Button variant="text" size="sm" disabled={overview.loading} onClick={() => overview.openRecoveryDraft()}>
+                  <PenLine size={14} aria-hidden />{text('查看恢复稿', 'View recovery draft')}
+                </Button>
+                <Button variant="secondary" size="sm" disabled={overview.loading} onClick={overview.openOutlineRestart}>
+                  <Sparkles size={14} aria-hidden />{text(`从第 ${restart.from} 章重新生成`, `Generate again from ch. ${restart.from}`)}
+                </Button>
+              </>
+            ) : (
+              <Button variant="secondary" size="sm" disabled={state.busy || !state.handle || overview.loading} onClick={resume}>
+                <RotateCw size={14} aria-hidden />
+                {editDraft ? text('编辑恢复稿', 'Edit recovery draft') : state.busy ? text('续写中…', 'Resuming…') : text('断点续写', 'Resume')}
+              </Button>
+            )}
           </>
         )}
       >
-        {state.handle
-          ? text('续写从停下的地方接着生成，不会改动已保存的部分。', 'Resuming continues from where it stopped and leaves saved content alone.')
-          : text('无法确认这份候选的来源，只能查看或复制，然后重新生成。', 'The source of this candidate cannot be confirmed. View or copy it, then generate again.')}
+        {restart && overview.planningRecovery
+          ? outlineSourceChangedNote(overview.planningRecovery, locale)
+          : state.handle
+            ? text('续写从停下的地方接着生成，不会改动已保存的部分。', 'Resuming continues from where it stopped and leaves saved content alone.')
+            : text('无法确认这份候选的来源，只能查看或复制，然后重新生成。', 'The source of this candidate cannot be confirmed. View or copy it, then generate again.')}
       </Notice>
       {state.candidateShown && <pre className="arch-candidate" role="region" aria-label={text('未完成候选', 'Unfinished candidate')}>{state.candidate}</pre>}
     </>

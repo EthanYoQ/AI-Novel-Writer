@@ -170,15 +170,28 @@ export function outlineSourceInvalidNote(recovery: Pick<GenerationRecoveryContex
   return plotOutlineSourceInvalidText(recovery.plotOutline?.sourceExpected.synopsis ?? '', locale)
 }
 
+/** 大纲恢复稿因来源（模型设置、作品设定、提示词模板或写作 Skill）已变而不能写回：只能查看或复制，从本批起始章重新生成；其余情况为 null。 */
+export function outlineSourceChangedNote(recovery: Pick<GenerationRecoveryContext, 'plotOutline' | 'plotOutlineRecovery'>, locale: Locale): string | null {
+  const writeState = recovery.plotOutlineRecovery?.writeState
+  if (writeState?.kind !== 'blocked' || writeState.reason !== 'source-changed') return null
+  const t = lang(locale), from = recovery.plotOutline?.range.from
+  return from
+    ? t(`模型设置、作品设定、提示词模板或写作 Skill 已经变了，恢复稿不能覆盖正式内容，只能查看或复制。请从第 ${from} 章重新生成情节大纲。`,
+      `The model settings, book settings, a prompt template or a writing skill changed, so this recovery draft cannot replace saved content. View or copy it, then generate the plot outline again from chapter ${from}.`)
+    : t('模型设置、作品设定、提示词模板或写作 Skill 已经变了，恢复稿不能覆盖正式内容，只能查看或复制。请重新生成情节大纲。',
+      'The model settings, book settings, a prompt template or a writing skill changed, so this recovery draft cannot replace saved content. View or copy it, then generate the plot outline again.')
+}
+
 function planningEntry(recovery: GenerationRecoveryContext, locale: Locale): PlanningEntry {
   const t = lang(locale)
+  const sourceChanged = outlineSourceChangedNote(recovery, locale)
   return {
     kind: 'planning',
     key: recovery.handle.runId,
     title: planningTitle(recovery, locale),
-    note: outlineSourceInvalidNote(recovery, locale)
+    note: outlineSourceInvalidNote(recovery, locale) ?? sourceChanged
       ?? t('自动生成已保留候选。可编辑并本地保存，或明确继续缺少的章节。', 'The candidate is preserved. Edit and save it locally, or explicitly generate the remaining chapters.'),
-    actionLabel: t('编辑恢复稿', 'Edit recovery draft'),
+    actionLabel: sourceChanged ? t('查看恢复稿', 'View recovery draft') : t('编辑恢复稿', 'Edit recovery draft'),
     recovery,
   }
 }

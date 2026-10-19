@@ -615,8 +615,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const operation = (async () => {
     const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
     // 途中在设置里保存了模型是作者最常见的来源变化，单列一个码，界面才能说清是模型变了。
-    if (!isDeepStrictEqual(current, run.binding)) throw new Error(isDeepStrictEqual(current.sourceManifest.modelReceipt, run.binding.sourceManifest.modelReceipt)
-      ? 'GENERATION_SOURCE_CHANGED' : 'GENERATION_SOURCE_CHANGED_MODEL')
+    // 用冻结的模型凭据再重建一次：仍与原绑定一致才是只有模型变了；作品设定等也变了时报通用码。
+    if (!isDeepStrictEqual(current, run.binding)) throw new Error(isDeepStrictEqual(deps.rebuildBinding(run.binding, modelReceipt(run.binding)), run.binding)
+      ? 'GENERATION_SOURCE_CHANGED_MODEL' : 'GENERATION_SOURCE_CHANGED')
     const leaseId = runLeases.get(run.runId)
     if (!leaseId) throw new Error('GENERATION_RESUME_REQUIRED')
     const model = deps.leases.resolve(leaseId)
