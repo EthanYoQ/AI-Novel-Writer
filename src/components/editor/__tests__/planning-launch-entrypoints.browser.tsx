@@ -97,6 +97,22 @@ it.each(['architecture-page', 'outline-file'] as const)('passes the confirmed ra
   expect(invoke.mock.calls.some(([channel]) => channel === 'generation:execute')).toBe(false)
 })
 
+it('文档页里不足 50 字的一节点 AI 生成：标为将覆盖，不当成新生成', async () => {
+  const short = '雾港的钟每晚早响一刻。'
+  const base = invoke.getMockImplementation()!
+  invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:project-core-get'
+    ? { premise: '故事前提'.repeat(20), worldbuilding: short, synopsis: '', totalChapters: 20 }
+    : base(channel, ...args))
+  await act(async () => root.render(<ArchFileViewer tabId="planning-world" filePath="ai-novel://core/worldbuilding" projectKey={project.path} content={short} savedContent={short} />))
+  await act(async () => page.getByRole('button', { name: 'AI 生成', exact: true }).click())
+  const row = await vi.waitFor(() => {
+    const label = [...document.querySelectorAll('label')].find(node => node.textContent?.startsWith('世界观'))
+    expect(label).toBeTruthy()
+    return label!
+  })
+  expect(row.querySelector('[data-mark]')?.textContent).toBe('将覆盖')
+})
+
 it.each(['generate_architecture', 'generate_blueprint'] as const)('shows the approved %s range and target without replacing them with defaults', async workflow => {
   const resolveToolConfirmation = vi.fn()
   useAgentStore.setState({ resolveToolConfirmation })
