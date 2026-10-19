@@ -16,7 +16,7 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: b
   { code: /^(ROOT_BUDGET_EXHAUSTED|USAGE_EXCEEDED_RESERVATION)$/, retry: false,
     zh: '这次后处理的模型调用额度已用完（请求超时或用量超出预留），再点「重试」也不会重新生成。',
     en: 'The model-call budget for this post-processing run is used up (a request timed out or exceeded its reserved usage). Retrying will not generate this step again.' },
-  { code: /^(FINALIZATION_GENERATION_SOURCE_CHANGED|GENERATION_FINALIZATION_SOURCE_CHANGED|GENERATION_SOURCE_CHANGED|GENERATION_MODEL_CHANGED)$/, retry: false,
+  { code: /^(FINALIZATION_GENERATION_SOURCE_CHANGED|GENERATION_FINALIZATION_SOURCE_CHANGED|GENERATION_SOURCE_CHANGED|GENERATION_SOURCE_CHANGED_MODEL|GENERATION_MODEL_CHANGED)$/, retry: false,
     zh: '定稿正文或模型设置已变化，这一步不能沿用原记录。请重新定稿本章后再处理。', en: 'The finalized manuscript or model settings changed, so this step cannot reuse its record. Finalize this chapter again, then retry.' },
   // 写生成记录失败时主进程把整个 root 阻断，重试同样被拦下。
   { code: /^GENERATION_STORAGE_FAILED$/, retry: false,

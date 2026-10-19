@@ -30,6 +30,7 @@ describe('定稿后处理步骤错误', () => {
 
   it('源变化与模型变化给同一说明，未知错误原样显示', () => {
     expect(describeFinalizationStepError('GENERATION_MODEL_CHANGED', en)).toBe(describeFinalizationStepError('FINALIZATION_GENERATION_SOURCE_CHANGED', en))
+    expect(describeFinalizationStepError('GENERATION_SOURCE_CHANGED_MODEL', en)).toBe(describeFinalizationStepError('FINALIZATION_GENERATION_SOURCE_CHANGED', en))
     expect(describeFinalizationStepError('network error: socket hang up', en)).toBe('network error: socket hang up')
   })
 
