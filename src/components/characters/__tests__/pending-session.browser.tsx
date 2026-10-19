@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
