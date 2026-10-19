@@ -153,11 +153,13 @@ export function loadLocalWritingSkill(source: WritingSkillSource): LoadedWriting
     fallbackName: path.basename(source.path),
   })
   const bundledFiles = inspection.bundledFiles.map(file => ({ path: file, content: read.get(file)! }))
+  // 引用写法与磁盘上的大小写可以不同（`](Forms.md)` 读到 forms.md），比对时不分大小写。
+  const bundledLower = new Set(inspection.bundledFiles.map(file => file.toLowerCase()))
   return {
     raw,
     inspection,
     bundledFiles,
-    skippedFiles: files.filter(file => file !== skillFile && !inspection.bundledFiles.includes(file)),
+    skippedFiles: files.filter(file => file !== skillFile && !bundledLower.has(file.toLowerCase())),
     sourceName: path.basename(source.path),
     contentSha256: packageSha256(raw, bundledFiles),
   }

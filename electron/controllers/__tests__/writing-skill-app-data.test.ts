@@ -50,6 +50,7 @@ Revise with concrete action and varied sentence rhythm.`): Response {
   return new Response(body, { status: 200, headers: { 'content-type': 'text/plain' } })
 }
 
+const caseInsensitiveFileSystem = fs.existsSync(os.tmpdir().toUpperCase()) && fs.existsSync(os.tmpdir().toLowerCase())
 const sourceUrl = 'https://github.com/acme/story-skill/blob/main/SKILL.md'
 const rendererEvent = { sender: { id: 7, isDestroyed: () => false } }
 let pickRoot = ''
@@ -214,6 +215,18 @@ describe('writing skill app-data boundary', () => {
     const shown = await settingsView('user:scene-voice')
     expect(shown?.writingSkill).toMatchObject({ compatible: false, reasons: expect.arrayContaining(['bundle-damaged']) })
   })
+
+  it.runIf(caseInsensitiveFileSystem)(
+    'does not list a file merged under another letter case as not installed',
+    async () => {
+      const folder = writeLocalSkill('cased-link', {
+        'SKILL.md': '---\nname: cased-link\n---\nFill [the form](Forms.md).',
+        'forms.md': 'Three columns.',
+      })
+      const picked = await pickLocal('folder', folder)
+      expect(picked).toMatchObject({ success: true, inspection: { compatible: true, bundledFiles: ['Forms.md'], skippedFiles: [] } })
+    },
+  )
 
   it('imports a single SKILL.md file and names a nameless one after its file', async () => {
     const file = path.join(writeLocalSkill('downloads', { 'quiet-prose.md': 'Prefer plain verbs.' }), 'quiet-prose.md')
