@@ -2850,3 +2850,47 @@ it('keeps the next plot-outline recovery chapter empty instead of duplicating th
  expect(recovery.draft.split(outlineEntry(1))).toHaveLength(2)
  expect(recovery.draft).toContain('## 第2章：')
 })
+
+describe('next chapter after editing a reviewed batch draft (#438)', () => {
+  it('saves the next chapter when an earlier draft was edited before the author finalized the chain', async () => {
+    const outline = '前驱：信已送到；行动：读信；结果：获知消息。'
+    const base = '原目标：读信。'
+    const decision = { version: 1 as const, verdict: 'admitted' as const,
+      promptHash: textHash(base), shortOutlinePromptHash: textHash('短细纲输入'),
+      capacity: { maxInputUnits: 8000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: 1 },
+      coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author' as const, required: true, units: 1 }], omitted: [] }
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()
+    const f = fixture(dispatch)
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章'),(3,'第三章')")
+    const finalize = (draftId: number, chapterNumber: number, content: string) => FinalizationRepository.commit({
+      finalizationId: `finalization-${chapterNumber}`, draftId, chapterNumber, chapterTitle: `第${chapterNumber}章`, content,
+      contentHash: textHash(content), contentRevision: 1, targetFileName: `chapter-${chapterNumber}.md` })
+    // 「留作草稿，等我审稿」批次：第 2 章以第 1 章候选稿为前驱。
+    const first = DraftRepository.create({ chapterNumber: 1, source: 'write', content: '第一章原稿。', wordCount: 6 })
+    const second = DraftRepository.create({ chapterNumber: 2, source: 'write', content: '第二章原稿。', wordCount: 6,
+      sourceDependencies: [{ kind: 'candidate', draftId: first, contentHash: textHash('第一章原稿。') }] })
+    // 作者审稿时改了第 1 章（编辑保存或合并修稿都是原地改正文），然后逐章定稿。
+    DraftRepository.updateContent(first, '第一章作者改过的稿。', 10)
+    finalize(first, 1, '第一章作者改过的稿。')
+    finalize(second, 2, '第二章原稿。')
+
+    const prose = '第三章清晨，林岚带着昨日的线索走向城门。'
+    for (const text of [`第3章：${outline}`, prose]) dispatch.mockImplementationOnce(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text })
+      return { finishReason: 'stop', usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30,
+        reasoningTokens: null, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }
+    })
+    const run = f.owner.begin({ ...f.begin, chapterNumber: 3, uiActionNonce: 'chapter-3', materialDecision: decision,
+      selectedFinalizedDraftIds: [first, second], selectedBlueprintChapterNumbers: [3], authorInputs: [{ id: 'draft:target-units', text: '20' }] })
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: { purpose: DRAFT_SHORT_OUTLINE_PURPOSE,
+      output: 'visible-text' as const, messages: [{ role: 'user' as const, content: '短细纲输入' }] } })
+    const drafted = await f.owner.execute({ handle: run.handle, invocationNonce: 'prose', task: { ...task,
+      messages: [{ role: 'user' as const, content: `${base}\n\n${draftShortOutlineBlock('zh-CN', `第3章：${outline}`)}` }] } })
+    const visible = sanitizeDraftText(drafted.outcome.content)
+    f.owner.composeVisible(run.handle, [drafted.outcome.receipt.visibleArtifact!.artifactId], textHash(visible), DRAFT_VISIBLE_TEXT_VERSION)
+
+    const saved = f.owner.commitDraft({ handle: run.handle, chapterNumber: 3, source: 'write', expectedCompositionHash: textHash(visible) })
+    expect(saved.content).toBe(prose)
+    expect(DraftRepository.getMeta(saved.id)?.dependenciesStale).toBe(false)
+  })
+})
