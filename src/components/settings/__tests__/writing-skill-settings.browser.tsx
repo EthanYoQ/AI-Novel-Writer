@@ -5,6 +5,7 @@ import { page } from 'vitest/browser'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import SkillSettings from '../SkillSettings'
+import { leaveSettings } from '../unsaved-settings'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -126,6 +127,21 @@ describe('writing skill settings', () => {
     expect(invoke).toHaveBeenCalledWith('skills:pick-local', 'file')
     expect(invoke).not.toHaveBeenCalledWith('skills:install-github', expect.anything())
     await vi.waitFor(() => expect(page.getByRole('group', { name: 'Skill to install' }).query()).toBeNull())
+  })
+
+  it('drops the candidate the main process discarded when installation fails', async () => {
+    invoke.mockImplementation(async (channel: string) => channel === 'skills:install-local'
+      ? { success: false, error: 'The skill files could not be written, so nothing was installed. Choose the skill again to retry.' }
+      : ipcResult(channel))
+    await act(async () => page.getByRole('button', { name: 'Choose folder' }).click())
+    await act(async () => page.getByRole('button', { name: 'Confirm install' }).click())
+    await act(async () => page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click())
+
+    await expect.element(page.getByRole('alert')).toHaveTextContent(/Choose the skill again to retry/u)
+    expect(page.getByRole('group', { name: 'Skill to install' }).query()).toBeNull()
+    const leave = vi.fn()
+    leaveSettings(leave)
+    expect(leave).toHaveBeenCalledOnce()
   })
 
   it('keeps the page unchanged when the picker is cancelled and shows main-process errors', async () => {

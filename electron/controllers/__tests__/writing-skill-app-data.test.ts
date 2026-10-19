@@ -105,6 +105,7 @@ describe('writing skill app-data boundary', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
     delete process.env.AI_NOVEL_VELA_HOME
     delete process.env.AI_NOVEL_APP_DATA_HOME
@@ -176,6 +177,51 @@ describe('writing skill app-data boundary', () => {
     })
     await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true, skill: { name: 'forms' } })
     expect(fs.readdirSync(path.join(velaHome, 'skills', 'forms'))).toEqual(['SKILL.md'])
+  })
+
+  it('installs a folder whose reference file links back to SKILL.md and keeps the body once', async () => {
+    const skill = '---\nname: backlink\n---\nOpening rules. Read [voice](references/voice.md).'
+    const folder = writeLocalSkill('backlink', { 'SKILL.md': skill, 'references/voice.md': 'Close third. [Back](../SKILL.md)' })
+    const picked = await pickLocal('folder', folder)
+    expect(picked).toMatchObject({
+      success: true,
+      inspection: { compatible: true, bundledFiles: ['references/voice.md'], unbundledReferences: [], skippedFiles: [] },
+    })
+
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true, skill: { name: 'backlink' } })
+    expect(fs.readFileSync(path.join(velaHome, 'skills', 'backlink', 'SKILL.md'), 'utf8')).toBe(skill)
+    const listed = await handler('skills:list-user')({}) as Array<{ name: string; files: Record<string, string> }>
+    expect(listed).toEqual([expect.objectContaining({ name: 'backlink', files: { 'references/voice.md': 'Close third. [Back](../SKILL.md)' } })])
+  })
+
+  it('installs a file cited in two letter cases once', async () => {
+    const folder = writeLocalSkill('cased', {
+      'SKILL.md': '---\nname: cased\n---\nRead references/voice.md, then [voice](References/Voice.md).',
+      'references/voice.md': 'Close third.',
+    })
+    const picked = await pickLocal('folder', folder)
+    expect(picked).toMatchObject({ success: true, inspection: { compatible: true, bundledFiles: ['references/voice.md'], skippedFiles: [] } })
+
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true, skill: { name: 'cased' } })
+    expect(fs.readdirSync(path.join(velaHome, 'skills', 'cased', 'references'))).toEqual(['voice.md'])
+  })
+
+  it('reports a failed file write in plain words and leaves nothing installed', async () => {
+    const folder = writeLocalSkill('scene-voice', { 'SKILL.md': agentSkill, 'references/voice.md': 'x', 'references/pacing.md': 'y' })
+    const picked = await pickLocal('folder', folder)
+    const write = fs.writeFileSync
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+      if (String(args[0]).endsWith('pacing.md')) {
+        throw Object.assign(new Error(`EACCES: permission denied, open '${String(args[0])}'`), { code: 'EACCES' })
+      }
+      return write(...args)
+    })
+
+    const result = await installLocal(picked.inspection!.candidateId) as { success: boolean; error?: string }
+    expect(result.success).toBe(false)
+    expect(result.error).not.toMatch(/EACCES|permission denied|[\\/]/u)
+    expect(result.error).toMatch(/choose the skill again/iu)
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'scene-voice'))).toBe(false)
   })
 
   it('never bundles a reference that escapes the skill folder', async () => {

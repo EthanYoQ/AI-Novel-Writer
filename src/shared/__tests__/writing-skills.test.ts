@@ -139,6 +139,26 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
     expect(skillDir.reasons).toContain('relative-reference')
   })
 
+  it('treats links back to the root SKILL.md as already part of the skill', () => {
+    const raw = '---\nname: loop\n---\nOpening rules. Read [voice](references/voice.md), or jump to [the top](skill.md#top).'
+    const files: Record<string, string> = { 'SKILL.md': raw, 'references/voice.md': 'Close third. [Back](../SKILL.md)' }
+    const result = inspectWritingSkillMarkdown(raw, {
+      readFile: relativePath => Object.entries(files).find(([name]) => name.toLowerCase() === relativePath.toLowerCase())?.[1],
+    })
+
+    expect(result).toMatchObject({ compatible: true, bundledFiles: ['references/voice.md'], unbundledReferences: [] })
+    expect(result.content.split('Opening rules.')).toHaveLength(2)
+  })
+
+  it('merges a file once however its references spell its letter case', () => {
+    const result = inspectWritingSkillMarkdown('---\nname: cased\n---\nRead references/voice.md, then [voice](References/Voice.md).', {
+      readFile: relativePath => relativePath.toLowerCase() === 'references/voice.md' ? 'Close third.' : undefined,
+    })
+
+    expect(result).toMatchObject({ compatible: true, bundledFiles: ['references/voice.md'] })
+    expect(result.content.split('Close third.')).toHaveLength(2)
+  })
+
   it('checks scripts cited from a merged reference file', () => {
     const result = inspectWritingSkillMarkdown('---\nname: nested\n---\nRead references/steps.md.', {
       readFile: relativePath => relativePath === 'references/steps.md' ? 'Run scripts/build.py first.' : undefined,

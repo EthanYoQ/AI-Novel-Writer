@@ -400,6 +400,17 @@ describe('main rebuilt generation sources', () => {
         put(f.deps.globalDataRoot, 'skills/forms/image.png', 'not text');
         expect(f.build().binding.fingerprint.skillSnapshotHash).toBe(a.binding.fingerprint.skillSnapshotHash);
     });
+    it.each([
+        ['a short', 1],
+        ['a 34 KiB', 1_420],
+    ])('keeps %s bound user Skill that links to its own SKILL.md on the hash it had before reference files were merged', (_label, repeat) => {
+        const f = fixture();
+        put(f.deps.projectStorageRoot, 'writing-skills.json', JSON.stringify({ version: 1, bindings: { drafting: 'user:anchor' } }));
+        const text = `---\nname: anchor\nlanguage: zh-CN\n---\n${'保持节奏与视角。'.repeat(repeat)}\n[回到开头](SKILL.md#top)`;
+        put(f.deps.globalDataRoot, 'skills/anchor/SKILL.md', text);
+        const singleFileSkillHash = hash(JSON.stringify([{ hash: hash(text), identity: 'user:anchor', stage: 'drafting' }]));
+        expect(f.build().binding.fingerprint.skillSnapshotHash).toBe(singleFileSkillHash);
+    });
     it.each(['missing', 'obsolete', 'hash', 'receipt'])('rejects %s selected source authority', kind => { const f = fixture(); if (kind === 'missing')
         f.input.selectedDraftIds = [999]; if (kind === 'obsolete') {
         f.db.exec("INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(2,2,'draft',1)");
