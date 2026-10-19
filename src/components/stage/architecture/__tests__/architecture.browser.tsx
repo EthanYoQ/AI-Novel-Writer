@@ -619,6 +619,7 @@ ${LONG_PROLOGUE}` }
       expect(host!.querySelector('.arch-eyebrow')?.textContent).toContain('1 / 4 已确认')
 
       await openOutlineRegenerate()
+      expect(document.querySelector('[data-step="synopsis"] .arch-step-status')?.textContent).toBe('待生成')
       expect(inputValue('本次生成范围的起始章')).toBe('1')
       expect(mark('synopsis')).toBe('续写')
       expect(effect()).toBe('接在序章之后写第 1–5 章，序章不动。')
