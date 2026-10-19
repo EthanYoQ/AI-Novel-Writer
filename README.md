@@ -15,7 +15,8 @@
 <p align="center">
   <strong>开源免费的 AI 小说写作桌面软件，为长篇小说和网文连载设计。</strong><br />
   从设定、架构、章节蓝图到正文、审稿、修稿、定稿，一章一章把书写完；也能拆解参考小说来仿写、导入原稿接着续写，或按你的要求改写。<br />
-  本地优先：作品存在你自己的电脑上。软件不带模型：接你自己的 API Key，或用 Ollama 跑本地模型。
+  本地优先：作品存在你自己的电脑上。软件不带模型：接你自己的 API Key，连接 ChatGPT 订阅免 API Key 生成文字，或用 Ollama 跑本地模型。<br />
+  使用订阅时，在模型设置中选择<strong>ChatGPT 订阅</strong>，点击<strong>使用 ChatGPT 继续</strong>登录并授权，再获取模型列表、选择模型并保存。可用模型与用量限制取决于账号授权；检索用的 embedding 模型仍需单独配置。详见<a href="docs/chatgpt-subscription.md">连接指南</a>。
 </p>
 
 <p align="center">

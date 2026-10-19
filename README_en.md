@@ -15,7 +15,8 @@
 <p align="center">
   <strong>Free, open-source AI novel writing software for the desktop, built for long novels and serialized web fiction.</strong><br />
   Go from setup, story architecture, and chapter blueprints to drafting, review, revision, and final chapters, one chapter at a time. You can also break down a reference novel to imitate its style, import your manuscript and continue it, or rewrite to your own instructions.<br />
-  Local-first: your books stay on your own computer. No model is bundled: use your own API key, or run a local model with Ollama.
+  Local-first: your books stay on your own computer. No model is bundled: use your own API key, connect your ChatGPT subscription for text generation without an API key, or run a local model with Ollama.<br />
+  To connect your subscription, choose <strong>ChatGPT subscription</strong> in model settings, sign in with <strong>Continue with ChatGPT</strong>, then refresh the model list and save your selection. Available models and usage limits depend on your account authorization; embeddings require a separate model. See the <a href="docs/chatgpt-subscription.md">connection guide</a>.
 </p>
 
 <p align="center">
