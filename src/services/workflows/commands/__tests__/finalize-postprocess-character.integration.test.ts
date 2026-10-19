@@ -867,3 +867,35 @@ it('一次显式修复固定失败目标，withRetry 不得把第四份坏结果
  expect(db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
  expect(db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
 })
+it('#420 角色状态断流后，用户重试每次只发一次新请求，失败给可读说明，成功后只写一次', async () => {
+ insertFinalizedDraft(7, 2)
+ let characterCalls = 0
+ let failures = 2
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  characterCalls++
+  if (failures-- > 0) { streamCallbacks.onError?.('synthetic stream interrupted'); return 'interrupted' }
+  streamCallbacks.onDone?.(modelFixtureResponse(JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })), undefined, 'stop')
+  return 'recovered'
+ }) })
+ const run = (repair: boolean) => command('The brass key changes hands.', repair ? { onlyFailed: true, retryInvalidResult: true } : {})
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ const before = CharacterRosterRepository.read().revision
+ const initial = await run(false)
+ expect(initial.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: false } })
+ expect(characterCalls).toBe(1)
+ expect(initial.steps.character_cards.error).not.toMatch(/[A-Z]+_[A-Z_]+/)
+ const failedAgain = await run(true)
+ expect(failedAgain.steps.character_cards.ok).toBe(false)
+ expect(failedAgain.steps.character_cards.error).not.toMatch(/[A-Z]+_[A-Z_]+/)
+ expect(characterCalls).toBe(2)
+ const repaired = await run(true)
+ expect(repaired.steps.character_cards.ok).toBe(true)
+ expect(characterCalls).toBe(3)
+ expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+ expect(CharacterRosterRepository.read().revision).toBe(before + 1)
+ expect((await run(true)).steps.character_cards.ok).toBe(true)
+ expect(characterCalls).toBe(3)
+ expect(CharacterRosterRepository.read().revision).toBe(before + 1)
+})
