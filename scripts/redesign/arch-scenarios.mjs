@@ -284,7 +284,7 @@ export const ARCH_SCENARIOS = {
   /**
    * #441 #442：续写第 6–10 章时卡住第 6 章，在设置里把同一个模型条目改名保存（与用户现场相同），放行后第 7 章被拒。
    * 上一次运行写明是模型设置变了、停在第 7 章、第 6 章在大纲恢复稿里、正式大纲未被改动，有「打开架构页」，界面不出现原始错误码；
-   * 诊断里的 AI 调用记录与真实请求一致（1–5 章与第 6 章）。after 点「打开架构页」，生成对话框从第 6 章起，用新模型重新生成到第 10 章。
+   * 诊断里的 AI 调用记录与真实请求一致（1–5 章与第 6 章）。after 点「打开架构页」，大纲提示只能查看或复制恢复稿，点「从第 6 章重新生成」打开第 6–10 章的对话框，用新模型重新生成到第 10 章。
    */
   'arch-model-change': { model: true, shell: 'stage', setup: seedArch({ clear: ['synopsis'], totalChapters: 24 }), run: async context => {
     const { page, invoke, fake } = context
@@ -321,8 +321,18 @@ export const ARCH_SCENARIOS = {
     const { page } = context
     await runSheet.anyCard(page).filter({ hasText: /^上一次运行/ }).getByRole('button', { name: '打开架构页' }).click()
     await arch.waitReady(page)
-    await arch.primary(page).click()
+    const outline = arch.section(page, 'synopsis')
+    const restart = outline.getByRole('button', { name: '从第 6 章重新生成' })
+    await restart.waitFor({ state: 'visible', timeout: 10_000 })
+    const note = await outline.innerText()
+    assert.match(note, /只能查看或复制。请从第 6 章重新生成情节大纲/)
+    assert.doesNotMatch(note, /续写从停下的地方|可编辑并本地保存/, '恢复稿不能写回时不承诺续写或本地保存')
+    assert.equal(await outline.getByRole('button', { name: '编辑恢复稿' }).count(), 0)
+    await context.shoot('arch-model-change-architecture')
+    await restart.click()
     assert.equal(await arch.dialog(page).getByRole('spinbutton', { name: '本次生成范围的起始章' }).inputValue(), '6', '生成对话框从第 6 章起')
+    assert.equal(await arch.dialog(page).getByRole('spinbutton', { name: '本次生成范围的结束章' }).inputValue(), '10', '生成对话框沿用本批范围')
+    await context.shoot('arch-model-change-dialog')
     await arch.selectOnly(page, ['synopsis'])
     await arch.startGenerate(page)
     await waitForRunDone(page)
