@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
@@ -285,6 +285,42 @@ export const X1_SCENARIOS = {
     await discardDialog(page).getByRole('button', { name: '放弃修改' }).click()
     await stage.root(page).getByRole('heading', { level: 1, name: '项目备份', exact: true }).waitFor({ state: 'visible' })
     return kept
+  } },
+
+  // 本机 Skill 文件夹导入：系统对话框打桩为隔离目录里的 Agent Skill 文件夹，检查卡列出并入与跳过的文件，确认安装后能绑定到阶段。
+  'skills-import-local': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ app, page, roots, shoot }) => {
+    const folder = join(roots.temp, 'scene-voice')
+    mkdirSync(join(folder, 'references'), { recursive: true })
+    mkdirSync(join(folder, 'scripts'), { recursive: true })
+    writeFileSync(join(folder, 'SKILL.md'), [
+      '---', 'name: scene-voice', 'description: >-', '  让每一场戏保持统一的叙述声音。', '  起草和修稿时使用。', 'license: Apache-2.0', '---',
+      '遵循 [声音规则](references/voice.md)。',
+    ].join('\n'))
+    writeFileSync(join(folder, 'references', 'voice.md'), '使用第三人称近距离视角，动作先于心理。')
+    writeFileSync(join(folder, 'scripts', 'lint.py'), 'print("lint")')
+    await app.evaluate(({ dialog }, picked) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
+    }, folder)
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '写作 Skills')
+    await stage.root(page).getByRole('button', { name: '选择文件夹' }).click()
+    const card = stage.root(page).getByRole('group', { name: '待安装的 Skill' })
+    await card.waitFor({ state: 'visible' })
+    const inspected = await card.innerText()
+    assert.match(inspected, /并入提示词: references\/voice\.md/u, '检查卡列出并入提示词的引用文件')
+    assert.match(inspected, /scripts\/lint\.py/u, '检查卡列出不会安装的脚本')
+    await shoot('skills-import-local-inspected')
+    await card.getByRole('button', { name: '确认安装' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click()
+    await card.waitFor({ state: 'hidden' })
+    const drafting = stage.root(page).getByLabel('章节正文 Skill')
+    await drafting.selectOption('user:scene-voice')
+    await page.waitForFunction(() => !document.querySelector('select[aria-label="章节正文 Skill"]')?.disabled, null, { timeout: 10_000 })
+    const alerts = await stage.root(page).getByRole('alert').allInnerTexts()
+    assert.deepEqual(alerts, [], '绑定没有报错')
+    const bound = await drafting.inputValue()
+    assert.equal(bound, 'user:scene-voice', '安装后的文件夹 Skill 兼容，可以绑定到章节正文')
+    return { inspected, bound }
   } },
 
   // #387 C1：保存一致性安排的回复还没到时换了作品，回复到了也不在新作品里按旧蓝图开写。
