@@ -358,6 +358,17 @@ describe('角色名单', () => {
     expect(button('选择头像')).toBeTruthy()
   })
 
+  it.each(['zh-CN', 'en-US'] as const)('1024 宽窗口里档案标题不被保存按钮挤掉，名字完整显示（%s）', async locale => {
+    useLocaleStore.setState({ locale })
+    host!.style.width = '738px'
+    await render()
+    const name = host!.querySelector<HTMLElement>('.cast-profile-name')!
+    const save = button(locale === 'en-US' ? 'Save character' : '保存角色')!
+    const [nameBox, saveBox] = [name.getBoundingClientRect(), save.getBoundingClientRect()]
+    const overlap = nameBox.left < saveBox.right && saveBox.left < nameBox.right && nameBox.top < saveBox.bottom && saveBox.top < nameBox.bottom
+    expect({ text: name.textContent, clipped: name.scrollWidth > name.clientWidth + 1, overlap }).toEqual({ text: '林舟', clipped: false, overlap: false })
+  })
+
   it('1024 宽窗口里的关系图谱：工具条与人物侧栏的控件都在图谱框里、点得到；宽时显示中心人物', async () => {
     // 1024 宽窗口去掉流程脊与边距，角色名单页约 738px：名单 272，档案两侧各留 40，图谱框只剩约 385。
     host!.style.width = '738px'
