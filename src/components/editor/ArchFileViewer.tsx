@@ -521,14 +521,15 @@ function ArchFileViewerSession({
         status[key] = hasContent(value)
         confirmed[key] = status[key] && value!.length > 50
       }
-      if (sections.synopsis && plotOutlineLastChapter(sections.synopsis) === 0) confirmed.synopsis = false
-
       // 对于当前文件，如果编辑器内已修改但未保存，也暂时以前面的基准为准即可
       const editing = currentContentRef.current
       if (hasContent(editing)) {
         status[stepKey] = true
         if (editing.length > 50) confirmed[stepKey] = true
       }
+      // 只有序章的大纲仍是待生成（#417），编辑器里的未保存内容也按同一口径判定。
+      const synopsis = stepKey === 'synopsis' && hasContent(editing) ? editing : sections.synopsis
+      if (synopsis && plotOutlineLastChapter(synopsis) === 0) confirmed.synopsis = false
       setFullArchStatus(status)
       setFullArchConfirmed(confirmed)
       setSynopsisSource({
