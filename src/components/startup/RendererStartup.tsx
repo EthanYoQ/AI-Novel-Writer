@@ -3,6 +3,8 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { ipc } from '../../services/ipc-client'
 import { useAppearanceStore, type AppearanceBootstrapDependencies } from '../../stores/appearance-bootstrap'
 import type { StartupState, StartupMigrationNotice, StartupBlockedCode } from '../../shared/startup-contract'
+import type { ColorTheme } from '../../shared/appearance-profile'
+import { Button } from '../ui/Button'
 
 const desktopStartup: AppearanceBootstrapDependencies = {
   waitForMainReady: () => ipc.invoke('startup:get-state'),
@@ -10,6 +12,7 @@ const desktopStartup: AppearanceBootstrapDependencies = {
 }
 const loadApp = () => import('../../App')
 const MIGRATION_NOTICE_STORAGE_KEY = 'ai-novel-writer-dismissed-migration-generation'
+const systemColorTheme = (): ColorTheme => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 
 /** Business modules are not imported until main and the renderer storage writer acknowledge readiness. */
 export default function RendererStartup({
@@ -45,6 +48,8 @@ export default function RendererStartup({
   } }), [dependencies])
   const phase = useAppearanceStore(state => state.phase)
   const notice = useAppearanceStore(state => state.notice)
+  // 这一层在外壳的纸墨作用域之外，自己挂 .paper-ink 才取得到令牌；外观偏好还没读出（或读坏了）时跟随系统深浅色。
+  const theme = useAppearanceStore(state => state.profile?.colorTheme) ?? (dependencies.systemTheme ?? systemColorTheme)()
   useEffect(() => {
     if (Workspace || !ipc.isElectron) return
     // No author editor exists before App mounts. After that App owns its dirty-work guard.
@@ -66,31 +71,31 @@ export default function RendererStartup({
     <Workspace />
     {phase === 'blocked' && <div role="alert" className="fixed inset-x-0 top-10 z-50 bg-[var(--color-panel)] px-4 py-2 text-center text-[var(--color-warning-text)]">{notice}</div>}
     {phase !== 'blocked' && !noticeDismissed && migrationNotice && (migrationNotice.legacySourceIgnored || migrationNotice.preservedUnknownCount > 0) &&
-      <div role="status" className="startup-migration-notice fixed inset-x-0 top-10 z-50 [-webkit-app-region:no-drag] flex items-center justify-center gap-4 bg-stone-100 px-4 py-2 text-stone-800">
+      <div className="paper-ink pi-overlay-host" data-theme={theme}><div role="status" className="startup-migration-notice fixed inset-x-0 top-10 z-50 [-webkit-app-region:no-drag] flex items-center justify-center gap-4 border-b border-[var(--rule-strong)] bg-[var(--surface)] px-4 py-2 text-[var(--ink)]">
         <span>{migrationNotice.legacySourceIgnored ? text('旧来源已保留，后续修改需明确导入，当前不会自动回灌。', 'The legacy source is preserved. Later changes require an explicit import and will not sync automatically. ') : ''}{migrationNotice.preservedUnknownCount > 0 ? text('未导入的内容已保留在原处。', 'Content that was not imported remains in its original location.') : ''}</span>
-        <button type="button" className="rounded border border-stone-500 px-3 py-1" onClick={() => {
+        <Button variant="secondary" size="sm" onClick={() => {
           setNoticeDismissed(true)
           try {
             (dependencies.storage ?? (() => window.localStorage))().setItem(MIGRATION_NOTICE_STORAGE_KEY, migrationNotice.globalGeneration)
           } catch { /* Keep this notice dismissed for the current session. */ }
-        }}>{text('知道了', 'Dismiss')}</button>
-      </div>}
+        }}>{text('知道了', 'Dismiss')}</Button>
+      </div></div>}
   </>
   const blocked = phase === 'blocked' || loadFailed
   return (
-    <main className="flex h-screen flex-col items-center justify-center gap-4 bg-stone-100 px-8 text-stone-800" aria-busy={!blocked}>
+    <main className="paper-ink flex h-screen flex-col items-center justify-center gap-4 px-8" data-theme={theme} aria-busy={!blocked}>
       <h1 className="text-xl font-semibold">{blocked ? text('启动尚未完成', 'Startup is incomplete') : text('正在检查现有配置', 'Checking existing settings')}</h1>
       <p role={blocked ? 'alert' : 'status'} className="max-w-xl text-center">
         {blocked ? blockedCode === 'GLOBAL_MODEL_CREDENTIALS_DIFFER' ? text('新旧配置中同一模型的凭据不同。两份配置均已保留，请处理冲突后重新启动应用。', 'The same model has different credentials in the old and new settings. Both copies are preserved. Resolve the conflict and restart the app.') : notice ?? text('工作台暂时无法加载。现有配置已保留，请重新启动应用。', 'The workspace could not be loaded. Your settings are preserved. Please restart the app.') : text('确认配置和外观偏好后，将打开工作台。', 'The workspace will open after settings and appearance preferences are verified.')}
       </p>
       {blocked && <>
-        <p className="max-w-xl text-center text-sm">{text('若全局配置存在冲突，请处理后重新启动应用。此页面不会用默认值覆盖现有配置。', 'Resolve any global settings conflicts, then restart the app. This page will not replace your settings with defaults.')}</p>
-        <button type="button" className="rounded border border-stone-500 px-4 py-2" onClick={() => { setLoadFailed(false); setAttempt(value => value + 1) }}>{text('重新检查', 'Check again')}</button>
-        <button type="button" className="rounded border border-stone-500 px-4 py-2" onClick={() => {
+        <p className="max-w-xl text-center text-sm text-[var(--ink-2)]">{text('若全局配置存在冲突，请处理后重新启动应用。此页面不会用默认值覆盖现有配置。', 'Resolve any global settings conflicts, then restart the app. This page will not replace your settings with defaults.')}</p>
+        <Button variant="secondary" onClick={() => { setLoadFailed(false); setAttempt(value => value + 1) }}>{text('重新检查', 'Check again')}</Button>
+        <Button variant="secondary" onClick={() => {
           if (!useAppearanceStore.getState().resetAppearance()) return
           setLoadFailed(false); setAttempt(value => value + 1)
-        }}>{text('重置外观偏好为默认（不影响其它配置）', 'Reset appearance preferences to defaults (other settings are kept)')}</button>
-        {mainReady && <button type="button" className="rounded border border-stone-500 px-4 py-2" onClick={() => { void ipc.invoke('window:close').catch(() => undefined) }}>{text('关闭应用', 'Close app')}</button>}
+        }}>{text('重置外观偏好为默认（不影响其它配置）', 'Reset appearance preferences to defaults (other settings are kept)')}</Button>
+        {mainReady && <Button variant="secondary" onClick={() => { void ipc.invoke('window:close').catch(() => undefined) }}>{text('关闭应用', 'Close app')}</Button>}
       </>}
     </main>
   )
