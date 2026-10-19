@@ -73,7 +73,7 @@ async function renderAt(width: number) {
   await act(async () => root!.render(<StageWorkspace library={false} focus={false} />))
   await vi.waitFor(() => expect(host!.querySelector('.arch-page:not([data-loading]):not([data-cast-loading]) .arch-title')).not.toBeNull())
   const box = (selector: string) => host!.querySelector(selector)!.getBoundingClientRect()
-  return { body: box('.stage-body'), content: box('.stage-content'), sheet: box('.stage-sheet-slot > aside'), title: host!.querySelector<HTMLElement>('.arch-title')! }
+  return { body: box('.stage-body'), content: box('.stage-content'), sheet: box('.stage-sheet-slot'), title: host!.querySelector<HTMLElement>('.arch-title')! }
 }
 
 /** 一段文字排成了几行。 */
