@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
@@ -98,6 +98,14 @@ async function untilStubCalls(app, channel, count, timeoutMs = 10_000) {
 }
 
 const discardDialog = page => page.getByRole('dialog', { name: '放弃未保存的修改？' })
+
+/** 在 root 下按名字找一个目录；找不到时报错。 */
+function findDirectory(root, name) {
+  const found = readdirSync(root, { withFileTypes: true, recursive: true })
+    .find(entry => entry.isDirectory() && entry.name === name)
+  assert.ok(found, `${root} 下没有 ${name} 目录`)
+  return join(found.parentPath, found.name)
+}
 
 /** 设置页「写作 Skills」里填一个没保存的 GitHub 地址。 */
 async function dirtySkillsPage(page) {
@@ -288,7 +296,7 @@ export const X1_SCENARIOS = {
   } },
 
   // 本机 Skill 文件夹导入：系统对话框打桩为隔离目录里的 Agent Skill 文件夹，检查卡列出并入与跳过的文件，确认安装后能绑定到阶段。
-  'skills-import-local': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ app, page, roots, shoot }) => {
+  'skills-import-local': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ app, page, roots, fake, shoot }) => {
     const folder = join(roots.temp, 'scene-voice')
     mkdirSync(join(folder, 'references'), { recursive: true })
     mkdirSync(join(folder, 'scripts'), { recursive: true })
@@ -321,7 +329,39 @@ export const X1_SCENARIOS = {
     assert.deepEqual(alerts, [], '绑定没有报错')
     const bound = await drafting.inputValue()
     assert.equal(bound, 'user:scene-voice', '安装后的文件夹 Skill 兼容，可以绑定到章节正文')
-    return { inspected, bound }
+
+    const installed = findDirectory(roots.canonical, 'scene-voice')
+    // 旧版装的 Skill 没有清单，目录里被引用的文件（含工具措辞）一概不读，与 master 一样兼容。
+    const legacy = join(installed, '..', 'legacy-forms')
+    mkdirSync(legacy)
+    writeFileSync(join(legacy, 'SKILL.md'), '---\nname: legacy-forms\nlanguage: zh-CN\n---\n按 [表单](forms.md) 的格式写。')
+    writeFileSync(join(legacy, 'forms.md'), 'Use the bash tool. 使用搜索工具。')
+    await stage.closeSettings(page)
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '写作 Skills')
+    const draftingOptions = stage.root(page).getByLabel('章节正文 Skill').locator('option')
+    await draftingOptions.filter({ hasText: 'scene-voice' }).waitFor({ state: 'attached' })
+    const options = await draftingOptions.evaluateAll(nodes => nodes.map(node => node.value))
+    assert.ok(options.includes('user:legacy-forms'), '没有清单的旧 Skill 仍按 master 判为兼容，可以绑定')
+    const manifest = JSON.parse(readFileSync(join(installed, '.pagekin-bundle.json'), 'utf8'))
+    assert.deepEqual(manifest.files.map(file => file.path), ['references/voice.md'], '安装清单只列并入的 voice.md')
+    await page.waitForFunction(() => document.querySelector('select[aria-label="章节正文 Skill"]')?.value === 'user:scene-voice', null, { timeout: 10_000 })
+    await shoot('skills-import-local-bound')
+
+    await stage.closeSettings(page)
+    await blueprint.open(page)
+    await blueprint.writeNext(page)
+    await runSheet.waitUntilOpen(page)
+    const deadline = Date.now() + 60_000
+    while (!fake.chats.some(chat => chat.kind === 'prose')) {
+      assert.ok(Date.now() < deadline, '60 秒内假模型没有收到写正文的请求')
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+    const prose = JSON.stringify(fake.chats.find(chat => chat.kind === 'prose').messages)
+    assert.ok(prose.includes('使用第三人称近距离视角'), '写正文的请求带上了按清单并入的 voice.md')
+    assert.ok(!prose.includes('print(\\"lint\\")'), '没有安装的脚本不进提示词')
+    await runSheet.waitForRunDone(page)
+    return { inspected, bound, manifest: manifest.files.map(file => file.path), legacyBindable: true, proseHasBundledFile: true }
   } },
 
   // #387 C1：保存一致性安排的回复还没到时换了作品，回复到了也不在新作品里按旧蓝图开写。
