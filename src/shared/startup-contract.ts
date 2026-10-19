@@ -10,7 +10,12 @@ export interface AppearanceReadbackAck {
 
 export interface StartupMigrationNotice { legacySourceIgnored: boolean; preservedUnknownCount: number }
 export type StartupBlockedCode = 'GLOBAL_DATA_BLOCKED' | 'GLOBAL_MODEL_CREDENTIALS_DIFFER'
-export type StartupState = MainReady & { code?: StartupBlockedCode; migrationNotice?: StartupMigrationNotice }
+export type StartupState = MainReady & {
+  code?: StartupBlockedCode
+  migrationNotice?: StartupMigrationNotice
+  /** 这个窗口此前已确认过的外观修订号。重载后存储坏了时，重置要写得比它大，主进程才接受。 */
+  appearanceRevisionFloor?: number
+}
 export interface StartupChannels {
   'startup:get-state': { args: []; return: StartupState }
   'startup:appearance-ack': { args: [ack: AppearanceReadbackAck]; return: boolean }

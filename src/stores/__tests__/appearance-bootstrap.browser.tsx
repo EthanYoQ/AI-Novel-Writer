@@ -4,6 +4,8 @@ import { createThemeStore } from '../theme-store'
 import {
   APPEARANCE_STORAGE_KEY as KEY, LEGACY_THEME_STORAGE_KEY as THEME, PREVIOUS_APPEARANCE_STORAGE_KEY as PREVIOUS,
 } from '../../shared/appearance-profile'
+import { registerStartupController, type StartupEvent } from '../../../electron/controllers/startup-controller'
+import type { AppearanceReadbackAck, StartupState } from '../../shared/startup-contract'
 import { parseAppearanceProfileV1 } from '../../shared/__tests__/fixtures/appearance-profile-v1-parser.fixture'
 
 /** 旧版本单独存的界面版本键：迁移不读也不写，只用来确认它原样留着。 */
@@ -122,6 +124,29 @@ describe('appearance bootstrap in real browser storage', () => {
     expect(localStorage.getItem(PREVIOUS)).toBe(previous)
     expect(await store.getState().bootstrap(dependencies())).toBe(true)
     expect(store.getState()).toMatchObject({ phase: 'migrated' })
+  })
+
+  it('同一窗口确认过较新的外观后重载、存储被写坏：受阻页重置外观偏好后主进程接受，工作台能打开', async () => {
+    const handlers = new Map<string, (event: StartupEvent, input?: unknown) => unknown>()
+    const sender = { id: 7, mainFrame: { url: 'file:///app/index.html' }, isDestroyed: () => false }
+    const event = { sender, senderFrame: sender.mainFrame }
+    registerStartupController({ ipc: { handle: (channel, handler) => { handlers.set(channel, handler) } },
+      getTrustedSender: () => sender, rendererUrl: 'file:///app/index.html',
+      getGlobalGeneration: () => 'synthetic-main-generation', getBlockedCode: () => undefined })
+    const main: AppearanceBootstrapDependencies = {
+      waitForMainReady: async () => handlers.get('startup:get-state')!(event) as StartupState,
+      acknowledgeReadback: async (ack: AppearanceReadbackAck) => handlers.get('startup:appearance-ack')!(event, ack) as boolean,
+    }
+    localStorage.setItem(KEY, JSON.stringify({ schemaVersion: 3, revision: 9, colorTheme: 'dark', zoom: 1, writingFont: 'lxgw-wenkai',
+      uiFont: 'noto-sans-sc', origin: 'author', legacyImportCompleted: true }))
+    expect(await createAppearanceStore().getState().bootstrap(main)).toBe(true)
+
+    localStorage.setItem(KEY, '{broken')
+    const reloaded = createAppearanceStore()
+    expect(await reloaded.getState().bootstrap(main)).toBe(false)
+    expect(reloaded.getState().resetAppearance()).toBe(true)
+    expect(await reloaded.getState().bootstrap(main)).toBe(true)
+    expect(reloaded.getState()).toMatchObject({ phase: 'migrated', profile: { colorTheme: 'light', revision: 10 } })
   })
 
   it.each(['legacy-json', 'previous-json', 'previous-stage-in-v1', 'canonical-json', 'canonical-shell'] as const)('preserves %s and blocks without writing defaults', async kind => {
