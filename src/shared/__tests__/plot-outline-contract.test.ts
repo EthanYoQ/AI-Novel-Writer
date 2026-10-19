@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { validPlotOutlineEntry, plotOutlineConfirmedPrefix, plotOutlineRangeEffect, renderPlotOutlineRange, renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, isPlotOutlineCoverageNote,
-  plotOutlineNextChapter, derivePlotOutlineCursor, plotOutlineRecoveryDraft, PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL } from '../plot-outline-contract'
+  plotOutlineNextChapter, plotOutlineRequestContract, derivePlotOutlineCursor, plotOutlineRecoveryDraft, PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL } from '../plot-outline-contract'
 import { outlineProgress } from '../plot-outline-checkpoint'
 import type { ProjectCoreSynopsisExpected } from '../../../electron/repositories/project-core-repository'
 import { synopsisForDraftChapter } from '../../services/workflows/commands/generate-draft.command'
@@ -261,6 +261,30 @@ describe('chapter Markdown outline contract', () => {
       expect(plotOutlineNextChapter(source)).toBe(1)
       const withChapters = { ...source, synopsis: `${source.synopsis}\n\n${[1, 2, 3, 4, 5].map(n => `## 第${n}章：第${n}夜\n这一夜的事。`).join('\n\n')}` }
       expect(plotOutlineRangeEffect(withChapters, { from: 3, to: 5 })).toEqual({ kind: 'overwrite', whole: false, from: 3, to: 5, lastChapter: 5, prologue: true })
+    })
+  })
+
+  describe('从第 1 章起生成时发给模型的已接受前缀（#417）', () => {
+    const request = (synopsis: string) => {
+      const sourceExpected: ProjectCoreSynopsisExpected = { synopsis, premise: '前提', charactersArch: '角色', worldbuilding: '世界',
+        genre: '悬疑', totalChapters: 24, wordsPerChapter: 2000, writingLanguage: 'zh-CN', plotStructure: 'three_act', narrativePov: 'third_limited', globalGuidance: '' }
+      const range = { from: 1, to: 2 }
+      const prompt = plotOutlineRequestContract({ protocol: PLOT_OUTLINE_PROTOCOL, range, content: PLOT_OUTLINE_CONTENT, targetUnits: 600,
+        cursor: { kind: 'request', chapterNumber: 1, attempt: 'normal' }, sourceExpected, confirmedPrefix: plotOutlineConfirmedPrefix(sourceExpected, range), composition: null }, 1, 'normal')
+      return prompt.slice(prompt.indexOf('【已接受大纲前缀】'), prompt.indexOf('【已接受大纲前缀结束】') + '【已接受大纲前缀结束】'.length)
+    }
+    const PROLOGUE = '## 第0章：序章\n守塔人听见第十三声钟。'
+
+    it('有序章时模型写第 1 章能看到作者的序章，看不到被替换的旧章与覆盖说明', () => {
+      expect(request(`# 情节大纲\n\n${PROLOGUE}\n\n> 本大纲已覆盖至第 2 章（全书 24 章），其余章节将在后续批次继续生成。`))
+        .toBe(`【已接受大纲前缀】\n${PROLOGUE}\n【已接受大纲前缀结束】`)
+      expect(request(`# 情节大纲\n\n${PROLOGUE}\n\n## 第1章：旧\n旧事。\n\n## 第3章：留\n留下。`))
+        .toBe(`【已接受大纲前缀】\n${PROLOGUE}\n【已接受大纲前缀结束】`)
+    })
+
+    it('没有序章时前缀仍为空', () => {
+      expect(request('# 情节大纲\n\n## 第1章：旧\n旧事。')).toBe('【已接受大纲前缀】\n\n【已接受大纲前缀结束】')
+      expect(request('')).toBe('【已接受大纲前缀】\n\n【已接受大纲前缀结束】')
     })
   })
 })
