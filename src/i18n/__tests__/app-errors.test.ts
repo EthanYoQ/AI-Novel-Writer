@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appErrorMessage } from '../app-errors'
+import { appErrorMessage, knownAppErrorMessage } from '../app-errors'
 
 describe('localized application errors', () => {
   it('maps stable error codes to localized messages', () => {
@@ -23,4 +23,26 @@ describe('localized application errors', () => {
 it.each(['KNOWLEDGE_BASE_NATIVE_UNAVAILABLE','LEGACY_VECTOR_MIGRATION_BLOCKED'])('maps knowledge preparation IPC error %s without exposing internal details', code => {
  expect(appErrorMessage('en-US',new Error(`Error invoking remote method 'generation:prepare-draft-context': Error: ${code}`)))
    .toBe(appErrorMessage('en-US',{errorCode:code}))
+})
+
+describe('generation error codes from the main process', () => {
+  it.each([
+    ["Error invoking remote method 'generation:commit-draft': Error: GENERATION_DRAFT_DEPENDENCY_STALE", '前一章'],
+    ["Error invoking remote method 'generation:begin': Error: GENERATION_DRAFT_NOT_CURRENT", '当前稿'],
+    ["Error invoking remote method 'review-revision:prepare': Error: GENERATION_REVIEW_LINEAGE_UNPROVEN", '重新审稿'],
+    ["Error invoking remote method 'character-proposal:list-pending-finalized': Error: GENERATION_PROJECT_SESSION_STALE", '重新打开'],
+    ['Error: GENERATION_REQUEST_FAILED', '重试'],
+  ])('turns %s into a full sentence without the IPC wrapper', (raw, hint) => {
+    for (const error of [raw, new Error(raw)]) {
+      const zh = knownAppErrorMessage('zh-CN', error)
+      expect(zh).toContain(hint)
+      expect(zh).not.toMatch(/Error invoking|GENERATION_/u)
+      expect(knownAppErrorMessage('en-US', error)).toMatch(/^[A-Z][^_]+\.$/u)
+    }
+  })
+
+  it('leaves unregistered codes and prose to the caller', () => {
+    expect(knownAppErrorMessage('zh-CN', "Error invoking remote method 'generation:begin': Error: GENERATION_SOMETHING_NEW")).toBeUndefined()
+    expect(knownAppErrorMessage('zh-CN', '模型服务返回 HTTP 429')).toBeUndefined()
+  })
 })
