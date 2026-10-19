@@ -224,9 +224,11 @@ describe('writing skill app-data boundary', () => {
     expect(fs.existsSync(path.join(velaHome, 'skills', 'first'))).toBe(false)
   })
 
-  it('returns cancelled when the dialog is dismissed', async () => {
+  it('keeps the pending candidate when a later dialog is dismissed', async () => {
+    const picked = await pickLocal('file', path.join(writeLocalSkill('a', { 'kept.md': 'Kept.' }), 'kept.md'))
     mocks.pickedPaths = []
     await expect(handler('skills:pick-local')(rendererEvent, 'folder')).resolves.toEqual({ success: true, cancelled: true })
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true, skill: { name: 'kept' } })
   })
 
   it('inspects a GitHub blob without writing it', async () => {

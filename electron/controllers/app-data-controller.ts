@@ -456,7 +456,6 @@ export function registerAppDataController(): void {
     try {
       if (!validSender(event)) throw new Error(text('请求来源无效', 'The request sender is invalid'))
       if (kind !== 'file' && kind !== 'folder') throw new Error(text('导入方式无效', 'The import kind is invalid'))
-      localCandidates.delete(event.sender.id)
       const selection = await dialog.showOpenDialog(kind === 'folder'
         ? { title: text('选择 Skill 文件夹', 'Choose a skill folder'), properties: ['openDirectory'] }
         : {
@@ -465,6 +464,7 @@ export function registerAppDataController(): void {
             filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
           })
       if (selection.canceled || selection.filePaths.length === 0) return { success: true, cancelled: true }
+      localCandidates.delete(event.sender.id)
       if (selection.filePaths.length !== 1) throw new Error(text('请只选择一项', 'Choose exactly one item'))
       const source = { kind, path: selection.filePaths[0] }
       const loaded = loadLocalSkillOrThrow(source)
