@@ -434,8 +434,9 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
                     add(`finalized:${id}:${receipt.finalization_id}`, receipt.content_revision, row.body, 'finalized-fact', 'explicit current finalized source');
                 }
                 else {
-                    const latest = deps.db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status IN ('draft','revised','finalized') ORDER BY version DESC,id DESC LIMIT 1").pluck().get(row.chapter_number);
-                    if (!['draft', 'revised'].includes(row.status) || latest !== id)
+                    // 旧版本审稿后会把稿设为 reviewed；它与 review-revision-context、修稿合并一样算可继续工作的当前稿。
+                    const latest = deps.db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status IN ('draft','revised','reviewed','finalized') ORDER BY version DESC,id DESC LIMIT 1").pluck().get(row.chapter_number);
+                    if (!['draft', 'revised', 'reviewed'].includes(row.status) || latest !== id)
                         fail('GENERATION_DRAFT_NOT_CURRENT');
                     add(`draft:${id}`, row.version, row.body, 'unconfirmed-continuity', 'explicit selected current draft');
                 }
