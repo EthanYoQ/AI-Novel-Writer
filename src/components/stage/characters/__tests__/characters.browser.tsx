@@ -247,6 +247,21 @@ describe('角色名单', () => {
     expect(banner()!.querySelector('.pi-notice-title')?.textContent).toBe('1 项待处理的角色建议')
   })
 
+  it('部分建议读取失败时提示条用提醒色；收起列表后失败说明与「重新读取」仍然看得到', async () => {
+    pendingDecisions = 1
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel, ...args) => channel === 'finalized-character:list-state-candidates'
+      ? Promise.reject(ipcError(channel)) : base(channel, ...args))
+    await render()
+    await vi.waitFor(() => expect(banner()?.querySelector('[role="alert"]')).toBeTruthy())
+    expect(banner()!.querySelector('.pi-notice')?.getAttribute('data-tone')).toBe('warn')
+    await click('收起')
+    expect(banner()!.querySelector('.cast-suggestion-list')).toBeNull()
+    const alert = banner()!.querySelector<HTMLElement>('[role="alert"]')
+    expect(alert?.textContent).toBe('有一部分角色建议这次没读出来或没处理完，可以重新读取。重新读取')
+    expect(alert!.getBoundingClientRect().height).toBeGreaterThan(0)
+  })
+
   it('接受状态建议已提交、随后刷新状态建议列表失败：只说这次没读出来、可以重新读取，不说名单没改', async () => {
     pendingDecisions = 1
     pendingStates = [stateCandidate('s-location', 'location', '北塔')]

@@ -78,6 +78,10 @@
   gap: var(--s-2);
 }
 
+.cast-suggestions > .cast-suggestion-error {
+  margin-left: var(--s-6);
+}
+
 .cast-suggestion-error .cast-suggestion-text {
   color: var(--warn);
   white-space: normal;
