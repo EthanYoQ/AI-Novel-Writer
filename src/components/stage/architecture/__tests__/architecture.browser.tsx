@@ -585,4 +585,22 @@ describe('架构阶段', () => {
     await render()
     expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent?.startsWith('收到匿名信的林舟')).toBe(true)
   })
+
+  it('某节只写了不足 50 字：摘要显示这段内容、动作是编辑，徽标不算已确认；生成时标「将覆盖」而不是「新生成」', async () => {
+    const SHORT = '末班车上，每盏阅读灯都对应一个失踪者。'
+    core = { ...core, premise: '', worldbuilding: SHORT }
+    await render()
+    const world = host!.querySelector('[data-section="worldbuilding"]')!
+    expect(world.querySelector('.arch-section-summary')?.textContent).toBe(SHORT)
+    expect(world.textContent).not.toContain('还没有内容')
+    expect(world.querySelector('.arch-badge')?.textContent).toBe('不完整')
+    expect([...world.querySelectorAll('button')].map(node => node.textContent)).toContain('编辑')
+    expect(host!.querySelector('.arch-eyebrow')?.textContent).toContain('0 / 4 已确认')
+    expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent).toContain('还没有内容')
+
+    await click('AI 生成架构')
+    expect(stepChecked('worldbuilding')).toBe(true)
+    expect(mark('worldbuilding')).toBe('将覆盖')
+    expect(mark('premise')).toBe('新生成')
+  })
 })
