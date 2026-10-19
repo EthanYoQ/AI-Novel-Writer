@@ -52,7 +52,87 @@ async function seedCalls({ page, invoke, path: projectPath, session }) {
   }
 }
 
+/** 运行侧页开着时逐页走一遍的页面。被挤到零宽的页面看不见，所以只等它进入 DOM。 */
+const attached = locator => locator.first().waitFor({ state: 'attached' })
+const SHEET_PAGES = [
+  ['chapter', async page => {
+    const chapterTab = stage.tab(page, /^第 3 章/)
+    if (await chapterTab.isVisible()) await chapterTab.click()
+    await attached(stage.prose(page))
+  }],
+  ['setup', async page => { await stage.stageButton(page, '设定').click(); await attached(stage.setupOutline(page)) }],
+  ['architecture', async page => { await stage.stageButton(page, '架构').click(); await attached(stage.root(page).locator('.arch-page:not([data-loading]):not([data-cast-loading]) .arch-section')) }],
+  ['blueprint', async page => { await stage.stageButton(page, '蓝图').click(); await attached(blueprint.card(page)) }],
+  ['characters', async page => {
+    await page.keyboard.press('Control+K')
+    await stage.paletteInput(page).fill('角色')
+    await stage.palette(page).getByRole('option', { name: /^角色/ }).first().click()
+    await stage.palette(page).waitFor({ state: 'detached' })
+  }],
+  ['plot', page => stage.stageButton(page, '剧情与伏笔').click()],
+  ['knowledge', page => stage.stageButton(page, '知识库').click()],
+  ['history', page => stage.stageButton(page, '版本历史').click()],
+  ['settings', stage.openSettings],
+]
+
+/**
+ * 主区域里排成一字一行的文字：一段至少三个字的文字排出的行数不少于字数的六成。被挤窄的标题、说明与竖排的状态标签都是这个样子；
+ * 正常折行的段落每行有很多字，不会命中。逐个文本节点查，再按直接含文字的元素整体查（「正文 · 定稿」由几个短节点拼成）。
+ */
+const crushedText = page => page.evaluate(() => {
+  const area = document.querySelector('.stage-body')
+  const found = new Set()
+  const check = (target, text) => {
+    const chars = [...text.replace(/\s/g, '')].length
+    if (chars < 3) return
+    const range = document.createRange()
+    range.selectNodeContents(target)
+    const lines = new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => Math.round(rect.top))).size
+    if (lines >= 3 && lines >= chars * 0.6) found.add(`${text.trim().replace(/\s+/g, ' ').slice(0, 20)}（${chars} 字 ${lines} 行）`)
+  }
+  const walker = document.createTreeWalker(area, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const owner = node.parentElement
+    if (!node.textContent.trim() || owner.closest('.stage-sheet-slot, [hidden]')) continue
+    check(node, node.textContent)
+    if (!owner.querySelector('div, p, section, article, ul, ol, li, table, textarea, input, button')) check(owner, owner.textContent)
+  }
+  return [...found]
+})
+
+const areaWidths = page => page.evaluate(() => {
+  const width = selector => Math.round(document.querySelector(selector)?.getBoundingClientRect().width ?? 0)
+  return { body: width('.stage-body'), content: width('.stage-content:not([hidden]), .stage-body > .stage-settings'), sheet: width('.stage-sheet-slot'),
+    sheetInner: width('.stage-sheet-slot > .pi-sheet'), overlay: getComputedStyle(document.querySelector('.stage-sheet-slot')).position === 'absolute' }
+})
+
+/** 1152×720 与 820×640 是 1440×900、1024×768 的窗口在界面缩放 125% 时的 CSS 视口。 */
+const SHEET_VIEWPORTS = [[1440, 900], [1280, 800], [1152, 720], [1024, 768], [820, 640]]
+
 export const VISUAL_SCENARIOS = {
+  // 运行侧页的诊断分页开着时，在 SHEET_VIEWPORTS 的每种视口下逐页检查：主区域不被挤到一字一行。
+  'rdv-sheet-squeeze': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '诊断').click()
+    const measured = {}
+    const failures = []
+    for (const [width, height] of SHEET_VIEWPORTS) {
+      await page.setViewportSize({ width, height })
+      await page.waitForFunction(size => innerWidth === size.width, { width })
+      for (const [name, open] of SHEET_PAGES) {
+        await open(page)
+        await runSheet.sheet(page).waitFor({ state: 'visible' })
+        await settle(page)
+        const crushed = await crushedText(page)
+        measured[`${name}-${width}`] = { ...await areaWidths(page), crushed }
+        if (crushed.length) failures.push(`${name} @${width}：${crushed.join('、')}`)
+        await shoot(`rdv-sheet-${name}-${width}`)
+        if (name === 'settings') await stage.closeSettings(page)
+      }
+    }
+    assert.deepEqual(failures, [], '诊断侧页开着时没有一字一行的文字')
+    return measured
+  } },
   'rdv-clear': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page }) => {
     await openWorkMenuItem(page, '清除生成内容…')
     const dialog = page.getByRole('dialog', { name: '清除项目生成内容' })
