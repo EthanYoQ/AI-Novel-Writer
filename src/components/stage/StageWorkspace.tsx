@@ -22,7 +22,7 @@ import StageKnowledge from './knowledge/StageKnowledge'
 import StagePlot from './plot/StagePlot'
 import StageTabMenu, { CloseTabsConfirm } from './StageTabMenu'
 import StageTabs from './StageTabs'
-import { commandLabel } from './shortcut-keys'
+import { commandLabel, isComposing, isModalOpen } from './shortcut-keys'
 import BlueprintRecovery from './blueprint/BlueprintRecovery'
 import StageBlueprint from './blueprint/StageBlueprint'
 import ChapterView from './chapter/ChapterView'
@@ -67,6 +67,9 @@ const TABBABLE = 'a[href], button, input, select, textarea, [contenteditable="tr
 const tabbables = (root: Element) => [...root.querySelectorAll<HTMLElement>(TABBABLE)]
   .filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0)
 
+const isEditable = (target: EventTarget | null) => target instanceof HTMLElement
+  && (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)
+
 /** 侧页浮起（stage-panel.css 的容器查询）时才盖住内容区右侧；以样式为准，不在这里重复浮起的宽度阈值。 */
 const floatingSheet = (slot: HTMLElement | null) => slot && getComputedStyle(slot).position === 'absolute' ? slot : null
 
@@ -76,9 +79,10 @@ function skipCoveredFocus(event: FocusEvent<HTMLElement>, slot: HTMLElement | nu
   if (!sheet) return
   const covered = (element: Element) => element.getBoundingClientRect().left >= sheet.left
   const target = event.target
+  if (!covered(target)) return
   const order = tabbables(event.currentTarget)
   const index = order.indexOf(target)
-  if (index < 0 || !covered(target)) return
+  if (index < 0) return
   const backward = event.relatedTarget instanceof Node && (target.compareDocumentPosition(event.relatedTarget) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
   const next = (backward ? order.slice(0, index).reverse() : order.slice(index + 1)).find(element => !covered(element))
   ;(next ?? (backward ? event.currentTarget : tabbables(slot!)[0]))?.focus()
@@ -98,8 +102,10 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
   const [closingMany, setClosingMany] = useState<readonly string[] | null>(null)
   const sheetSlotRef = useRef<HTMLDivElement>(null)
   // 浮起的侧页盖着内容区，焦点在内容区时 Esc 也收起它；并排时 Esc 只在侧页里有效，与原来一样。
+  // 打字处（输入框、正文编辑器）与输入法组字时的 Esc 属于输入，设置页与对话框的 Esc 归它们自己。
   const closeFloatingSheet = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key !== 'Escape' || event.defaultPrevented || !event.currentTarget.contains(event.target as Node)) return
+    if (isComposing(event.nativeEvent) || isModalOpen() || settingsOpen || isEditable(event.target)) return
     if (floatingSheet(sheetSlotRef.current)) useStageStore.setState({ sheet: null })
   }
   const closeMany = (tabIds: readonly string[]) => {

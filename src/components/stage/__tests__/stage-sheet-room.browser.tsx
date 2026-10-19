@@ -156,6 +156,20 @@ describe('运行侧页浮起时盖在内容区上面，被它盖住的东西点�
     expect(sheetOpen()).toBe(false)
   })
 
+  it('浮起时在输入框里或输入法组字中按 Esc 不关侧页', async () => {
+    await renderAt(790)
+    const content = host!.querySelector<HTMLElement>('.stage-content')!
+    const input = document.createElement('input')
+    content.prepend(input)
+    input.focus()
+    await act(async () => userEvent.keyboard('{Escape}'))
+    expect(sheetOpen()).toBe(true)
+    content.focus()
+    await act(async () => { content.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, keyCode: 229, bubbles: true })) })
+    expect(sheetOpen()).toBe(true)
+    input.remove()
+  })
+
   it('并排（不浮起）时焦点在内容区按 Esc 不关侧页，与原来一样', async () => {
     await renderAt(1010)
     host!.querySelector<HTMLElement>('.stage-content button')!.focus()
