@@ -102,6 +102,11 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
     selectChapter(chapterNumber)
   }
 
+  const reloadDraftCounts = () => {
+    const session = projectSessionContextFromProject(useProjectStore.getState().currentProject)
+    if (session) void useDraftStore.getState().loadAllDrafts(session.projectPath, session)
+  }
+
   const pickVersion = async (versionId: number) => {
     const request = ++comparisonRequest.current
     setSelectedVersionId(versionId)
@@ -111,10 +116,11 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
       const next = await readComparison(versionId)
       if (request !== comparisonRequest.current) return
       if (next === 'missing') {
-        // 这一稿已被删掉：说明一句，并重读列表把它去掉。
+        // 这一稿已被删掉：说明一句，并重读各稿与左列稿数把它去掉。
         setSelectedVersionId(null)
         setMissingPicked(true)
         reloadVersions()
+        reloadDraftCounts()
       } else if (next === null) {
         // 作品已重新打开：回到「选一稿」，不停在正在读取。
         setSelectedVersionId(null)
@@ -136,8 +142,7 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
       toast.success(created.version === null
         ? text('已新建回滚草稿，原有各稿都保留', 'Rollback draft created. Every earlier version is kept.')
         : text(`已新建草稿 v${created.version}，原有各稿都保留`, `Draft v${created.version} created. Every earlier version is kept.`))
-      const session = projectSessionContextFromProject(useProjectStore.getState().currentProject)
-      if (session) void useDraftStore.getState().loadAllDrafts(session.projectPath, session)
+      reloadDraftCounts()
       comparisonRequest.current++
       setSelectedVersionId(null)
       setComparison(null)
