@@ -388,7 +388,7 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | `x1-kb-late-read` | 导入两份资料；点「守塔人小传」时读取卡住，切到版本历史再切回，改「沉船名录」后放行：编辑框仍是改过的沉船名录，带未保存标记 | 知识库 | 是 | #388 T1 |
 | `x1-setup-leave` | 设定页改一句点「下一步」，保存卡住时回书房，放行后仍在书房 | 书房 | 否 | #380 C4 |
 | `x1-settings-section` | 写作 Skills 填地址不保存：Ctrl K「设置」先确认，继续编辑留在原页、输入还在；作品菜单「项目备份」确认放弃后到项目备份 | 项目备份 | 否 | #380 C1 |
-| `skills-import-local` | 系统对话框打桩为隔离 TEMP 里的 Agent Skill 文件夹（SKILL.md 引用 references/voice.md 和不存在的 FORMS.md，另有 scripts/lint.py）：设置 → 写作 Skills →「选择文件夹」，检查卡列出并入、模型看不到与不会安装的文件，中途拍 `skills-import-local-inspected`；确认安装后把它绑定到「章节正文」 | 绑定后的写作 Skills 页 | 否 | 本机 Skill 导入 |
+| `skills-import-local` | 系统对话框打桩为隔离 TEMP 里的 Agent Skill 文件夹（SKILL.md 引用 references/voice.md、大小写不同的 References/Voice.md 和不存在的 FORMS.md，voice.md 回链 ../SKILL.md，另有 scripts/lint.py）：设置 → 写作 Skills →「选择文件夹」，检查卡只列一次并入的 references/voice.md，另列模型看不到与不会安装的文件，中途拍 `skills-import-local-inspected`；确认安装后把它绑定到「章节正文」 | 绑定后的写作 Skills 页 | 否 | 本机 Skill 导入 |
 | `x1-write-switch` | 一致性预检里保存安排、回复卡住时回书房用 Ctrl K 打开港口（作品条目只在书房的 Ctrl K 里），放行后港口里没有写作的启动调用，模型没收到正文请求 | 港口 | 是 | #387 C1 |
 | `x1-waive-all` | 第 4 章 AI 审稿（复验周期由审稿写回建立，才有「不修改此项」），侧页每条都选「不修改此项」：主按钮变成「确认不修改」，确认后提示已确认；换到第 3 章再回来仍是已确认（读自数据库） | 第 4 章 | 是 | #392 T1 |
 | `x1-cleanup-retry` | 第 3 章另有草稿 v1；把 v2 定稿（真实后处理写出正文文件），另起 PowerShell 进程只共享读地占住正文 txt（按 PID 结束），删除正文：落在 v1 的单章视图上，有「删除正文后的清理没有完成」且原因是 EBUSY；放开文件后点重试清理，提示消失、文件已删 | v1 单章视图 | 是 | #392 T2 |
