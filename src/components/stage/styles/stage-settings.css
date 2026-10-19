@@ -434,13 +434,25 @@
   place-items: center;
   border-radius: var(--radius-panel);
   background: var(--ink);
-  color: var(--frame);
-  font: 600 var(--fs-24)/1 var(--font-display);
+}
+
+.stage-set-about-mark::before {
+  content: "";
+  width: 34px;
+  height: 38px;
+  background: var(--frame);
+  mask: url("../../../assets/brand/pagekin-mark.svg") center / contain no-repeat;
 }
 
 .stage-set-about-name {
   margin: 0;
   font: 600 22px/1.3 var(--font-display);
+}
+
+.stage-set-about-former {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
 }
 
 .stage-set-about-version {
