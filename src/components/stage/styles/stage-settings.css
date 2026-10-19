@@ -136,9 +136,16 @@
 
 .stage-set-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--s-6);
+  gap: var(--s-4) var(--s-6);
+}
+
+/* 中文的最小内容宽度只有一个字：不给底线时，窄窗口下标题会被右侧按钮挤成一字一行；放不下就让按钮换到下一行 */
+.stage-set-head > :first-child {
+  flex: 1 1 16em;
+  min-width: 0;
 }
 
 .stage-set-title {
