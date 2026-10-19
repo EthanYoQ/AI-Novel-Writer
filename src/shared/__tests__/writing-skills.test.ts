@@ -127,6 +127,18 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
     })
   })
 
+  it('keeps angle-bracket links compatible as before, unless they name ${SKILL_DIR}', () => {
+    const angled = inspectWritingSkillMarkdown('---\nname: angled\n---\nRead [voice](<./missing.md>) and [notes](<references/missing.md>).', {
+      readFile: () => undefined,
+    })
+    expect(angled).toMatchObject({ compatible: true, unbundledReferences: ['./missing.md', 'references/missing.md'] })
+
+    const skillDir = inspectWritingSkillMarkdown('---\nname: angled-dir\n---\nRead [voice](<${SKILL_DIR}/notes.md>).', {
+      readFile: () => undefined,
+    })
+    expect(skillDir.reasons).toContain('relative-reference')
+  })
+
   it('checks scripts cited from a merged reference file', () => {
     const result = inspectWritingSkillMarkdown('---\nname: nested\n---\nRead references/steps.md.', {
       readFile: relativePath => relativePath === 'references/steps.md' ? 'Run scripts/build.py first.' : undefined,

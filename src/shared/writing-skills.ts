@@ -125,19 +125,31 @@ function parseFrontmatter(raw: string): { fields: Record<string, string>; conten
   return { fields, content: raw.slice(match[0].length).trim() }
 }
 
-const LINK_TARGET = /\]\(\s*<?([^)\s>]+)/g
+const LINK_TARGET = /\]\(\s*(<?)([^)\s>]+)/g
 const BARE_REFERENCE = /(?:^|[\s`'"(])((?:\$\{skill_dir\}[/\\])?(?:references?|assets?)[/\\][^\s`'")]+)/gim
 const SKILL_DIR_REFERENCE = /\$\{skill_dir\}(?:[/\\][^\s`'")]+)?/gi
 
+// 这些写法明确要求模型去读 Skill 目录里的文件；读不到就不兼容。普通相对链接（如 `](FORMS.md)`）以前就放行，保持放行。
+const DIRECTORY_REFERENCE = /^(?:\.\.?[/\\]|(?:references?|assets?)[/\\])|\$\{skill_dir\}/i
+
+interface SkillReference {
+  path: string
+  /** 读不到时是否让 Skill 不兼容。尖括号链接 `](<./x.md>)` 以前从不拦截，只有其中的 ${SKILL_DIR} 才拦。 */
+  blocking: boolean
+}
+
 /** 按出现顺序列出正文里的相对引用：Markdown 链接目标、references/ 与 assets/ 路径、${SKILL_DIR}。 */
-function referencedPaths(text: string): string[] {
-  const found: Array<{ at: number; path: string }> = []
+function referencedPaths(text: string): SkillReference[] {
+  const found: Array<SkillReference & { at: number }> = []
   for (const match of text.matchAll(LINK_TARGET)) {
-    if (!/^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(match[1])) found.push({ at: match.index, path: match[1] })
+    const [, angled, path] = match
+    if (/^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(path)) continue
+    const blocking = angled ? /\$\{skill_dir\}/i.test(path) : DIRECTORY_REFERENCE.test(path)
+    found.push({ at: match.index, path, blocking })
   }
-  for (const match of text.matchAll(BARE_REFERENCE)) found.push({ at: match.index, path: match[1] })
-  for (const match of text.matchAll(SKILL_DIR_REFERENCE)) found.push({ at: match.index, path: match[0] })
-  return found.sort((left, right) => left.at - right.at).map(reference => reference.path)
+  for (const match of text.matchAll(BARE_REFERENCE)) found.push({ at: match.index, path: match[1], blocking: true })
+  for (const match of text.matchAll(SKILL_DIR_REFERENCE)) found.push({ at: match.index, path: match[0], blocking: true })
+  return found.sort((left, right) => left.at - right.at).map(({ path, blocking }) => ({ path, blocking }))
 }
 
 /** 把引用解析成 Skill 根目录内的规范 POSIX 路径；越出根目录或含不安全片段时返回 null。 */
@@ -164,12 +176,9 @@ function resolveReference(reference: string, baseSegments: string[]): string | n
   return WRITING_SKILL_TEXT_EXTENSIONS.some(extension => resolved.toLowerCase().endsWith(extension)) ? resolved : null
 }
 
-// 这些写法明确要求模型去读 Skill 目录里的文件；读不到就不兼容。普通相对链接（如 `](FORMS.md)`）以前就放行，保持放行。
-const DIRECTORY_REFERENCE = /^(?:\.\.?[/\\]|(?:references?|assets?)[/\\])|\$\{skill_dir\}/i
-
 /**
  * 运行时只把 Skill 当作一段提示词注入，读不到旁边的文件。被引用的附带文本因此在检查时就并入正文。
- * 并不进来的引用（缺失、越界、非文本）若属于 DIRECTORY_REFERENCE 则让 Skill 不兼容，其余只列给用户看。
+ * 并不进来的引用（缺失、越界、非文本）若是拦截型引用则让 Skill 不兼容，其余只列给用户看。
  */
 function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | undefined): {
   files: Array<{ path: string; content: string }>
@@ -178,10 +187,10 @@ function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | 
 } {
   const files: Array<{ path: string; content: string }> = []
   const unbundled = new Set<string>()
-  const queue = referencedPaths(body).map(reference => ({ reference, base: [] as string[] }))
+  const queue = referencedPaths(body).map(reference => ({ ...reference, base: [] as string[] }))
   let blocked = false
   while (queue.length) {
-    const { reference, base } = queue.shift()!
+    const { path: reference, blocking, base } = queue.shift()!
     const candidates = [...new Set([resolveReference(reference, base), resolveReference(reference, [])])]
       .filter((candidate): candidate is string => candidate !== null)
     if (candidates.some(candidate => files.some(file => file.path === candidate))) continue
@@ -190,13 +199,13 @@ function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | 
       : undefined
     if (!bundled) {
       const shown = reference.replace(/[#?].*$/, '')
-      if (DIRECTORY_REFERENCE.test(reference)) blocked = true
+      if (blocking) blocked = true
       else if (shown) unbundled.add(shown)
       continue
     }
     files.push({ path: bundled.path, content: bundled.content!.trim() })
     const directory = bundled.path.split('/').slice(0, -1)
-    queue.push(...referencedPaths(bundled.content!).map(reference => ({ reference, base: directory })))
+    queue.push(...referencedPaths(bundled.content!).map(reference => ({ ...reference, base: directory })))
   }
   return { files, blocked, unbundled: [...unbundled] }
 }
