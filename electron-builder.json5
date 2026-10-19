@@ -64,6 +64,10 @@
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
+    // 只换快捷方式与「应用和功能」里显示的名字。productName 决定 exe 名、安装目录和 userData 目录，不能动；
+    // 升级时 NSIS 按注册表里的旧 ShortcutName 找到旧快捷方式并改名，不会多出一份。
+    "shortcutName": "书童 Pagekin",
+    "uninstallDisplayName": "书童 Pagekin ${version}",
     "deleteAppDataOnUninstall": false
   },
   "linux": {
