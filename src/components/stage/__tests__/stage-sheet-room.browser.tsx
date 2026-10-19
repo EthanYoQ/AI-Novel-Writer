@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
+import { userEvent } from 'vitest/browser'
 import { createRoot, type Root } from 'react-dom/client'
 import type { StoreApi } from 'zustand'
 
@@ -34,6 +35,7 @@ beforeEach(() => {
     if (channel === 'db:project-core-get') return { premise: '一座本该停用的灯塔仍在夜里报时。', worldbuilding: '', synopsis: '', totalChapters: 12, writingLanguage: 'zh-CN' }
     if (channel === 'fs:read-json') return { success: false, error: 'not found' }
     if (channel === 'db:character-roster-read') return { schemaVersion: 1, revision: 1, migrationState: 'ready', status: 'ready', entries: [], renderedMarkdown: '林岚', projectionHash: 'p', factHash: 'f' }
+    if (channel === 'character-avatar:read-batch') return { success: true, avatars: [] }
     if (channel === 'config:get') return { outlineTargetUnits: 300 }
     if (channel === 'db:get-llm-stats') return { totalCalls: 0, successfulCalls: 0, failedCalls: 0, knownUsageCalls: 0, totalTokens: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }
     if (/list|history/i.test(channel)) return []
@@ -64,16 +66,19 @@ afterEach(async () => {
 })
 
 /** 外壳里放工作区的那一栏宽 width：面板右缘留 10px，所以内容面板（侧页与内容区所在处）比它窄 10px。 */
-async function renderAt(width: number) {
+async function renderAt(width: number, tab: 'world-building' | 'character' = 'world-building') {
+  useEditorStore.setState({ tabs: [{ id: tab, type: tab, name: tab, projectKey: session.projectPath }], activeTabId: tab })
   host = document.createElement('div')
   host.className = 'paper-ink stage-shell'
   host.style.cssText = `width: ${width}px; height: 800px; display: flex`
   document.body.append(host)
   root = createRoot(host)
   await act(async () => root!.render(<StageWorkspace library={false} focus={false} />))
-  await vi.waitFor(() => expect(host!.querySelector('.arch-page:not([data-loading]):not([data-cast-loading]) .arch-title')).not.toBeNull())
+  await vi.waitFor(() => expect(host!.querySelector(tab === 'character'
+    ? '.cast-view-switch button'
+    : '.arch-page:not([data-loading]):not([data-cast-loading]) .arch-title')).not.toBeNull())
   const box = (selector: string) => host!.querySelector(selector)!.getBoundingClientRect()
-  return { body: box('.stage-body'), content: box('.stage-content'), sheet: box('.stage-sheet-slot'), title: host!.querySelector<HTMLElement>('.arch-title')! }
+  return { body: box('.stage-body'), content: box('.stage-content'), sheet: box('.stage-sheet-slot'), title: host!.querySelector<HTMLElement>('.arch-title') }
 }
 
 /** 一段文字排成了几行。 */
@@ -89,7 +94,7 @@ describe('运行侧页的诊断分页开着时，内容区不被挤窄', () => {
     expect(content.width).toBeGreaterThanOrEqual(600)
     expect(sheet.width).toBeGreaterThanOrEqual(380)
     expect(content.width + sheet.width).toBeLessThanOrEqual(body.width + 1)
-    expect(lineCount(title)).toBe(1)
+    expect(lineCount(title!)).toBe(1)
   })
 
   it('并排放不下时侧页浮在内容区上，内容区保持整个面板的宽度', async () => {
@@ -97,6 +102,61 @@ describe('运行侧页的诊断分页开着时，内容区不被挤窄', () => {
     expect(content.width).toBe(body.width)
     expect(sheet.width).toBeGreaterThanOrEqual(380)
     expect(sheet.right).toBeLessThanOrEqual(body.right + 1)
-    expect(lineCount(title)).toBe(1)
+    expect(lineCount(title!)).toBe(1)
+  })
+})
+
+/** 元素整个落在侧页的横向范围里：侧页浮起时它被完全盖住。 */
+const coveredBy = (sheet: DOMRect) => (element: Element) => {
+  const rect = element.getBoundingClientRect()
+  return rect.width > 0 && rect.left >= sheet.left - 1 && rect.right <= sheet.right + 1
+}
+const sheetOpen = () => host!.querySelector('.stage-sheet-slot') !== null
+
+describe('运行侧页浮起时盖在内容区上面，被它盖住的东西点不到也走不到', () => {
+  it('关系图谱的工具条不画在侧页上面，侧页区域里的点都属于侧页', async () => {
+    const { sheet } = await renderAt(790, 'character')
+    const graphView = host!.querySelectorAll<HTMLButtonElement>('.cast-view-switch button')[2]
+    await act(async () => graphView.click())
+    await vi.waitFor(() => expect(host!.querySelector('.cast-graph canvas')).not.toBeNull())
+    const toolbarButtons = [...host!.querySelectorAll<HTMLElement>('.cast-graph button')].filter(coveredBy(sheet))
+    expect(toolbarButtons.length).toBeGreaterThan(0)
+    const slot = host!.querySelector('.stage-sheet-slot')!
+    for (const button of toolbarButtons) {
+      const rect = button.getBoundingClientRect()
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      expect(slot.contains(hit), button.getAttribute('aria-label') ?? '').toBe(true)
+    }
+  })
+
+  it('焦点在内容区时按 Esc 也关掉浮起的侧页', async () => {
+    const { sheet } = await renderAt(790)
+    const visible = [...host!.querySelectorAll<HTMLElement>('.stage-content button')].find(button => button.getBoundingClientRect().right < sheet.left)!
+    visible.focus()
+    await act(async () => userEvent.keyboard('{Escape}'))
+    expect(sheetOpen()).toBe(false)
+  })
+
+  it('并排（不浮起）时焦点在内容区按 Esc 不关侧页，与原来一样', async () => {
+    await renderAt(1010)
+    host!.querySelector<HTMLElement>('.stage-content button')!.focus()
+    await act(async () => userEvent.keyboard('{Escape}'))
+    expect(sheetOpen()).toBe(true)
+  })
+
+  it('Tab 从内容区走到侧页，一路不落在被侧页盖住的控件上', async () => {
+    const { sheet } = await renderAt(790)
+    const slot = host!.querySelector('.stage-sheet-slot')!
+    const content = host!.querySelector<HTMLElement>('.stage-content')!
+    const covered = [...content.querySelectorAll<HTMLElement>('button, a[href], input, textarea, select, [tabindex]:not([tabindex="-1"])')].filter(coveredBy(sheet))
+    expect(covered.length).toBeGreaterThan(0)
+    content.focus()
+    const visited: Element[] = []
+    for (let step = 0; step < 60 && !slot.contains(document.activeElement); step++) {
+      await userEvent.keyboard('{Tab}')
+      if (content.contains(document.activeElement)) visited.push(document.activeElement!)
+    }
+    expect(slot.contains(document.activeElement)).toBe(true)
+    expect(visited.filter(element => covered.includes(element as HTMLElement)).map(element => element.textContent || element.getAttribute('aria-label'))).toEqual([])
   })
 })
