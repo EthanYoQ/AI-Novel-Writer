@@ -243,7 +243,7 @@ export function ModelForm({
   }
 
   const discoveryNoticeText = discoveryNotice === 'auth'
-      ? isChatgptPlan ? text('請重新連接 ChatGPT 並授權訂閱用量。', 'Reconnect ChatGPT and authorize plan usage.') : text('鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.')
+      ? isChatgptPlan ? text('请重新连接 ChatGPT 并授权订阅用量。', 'Reconnect ChatGPT and authorize plan usage.') : text('鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.')
       : discoveryNotice === 'unsupported'
         ? text('该端点不支持标准模型列表接口。请继续手工填写模型 ID。', 'This endpoint does not support the standard model-list API. Continue with a manual model ID.')
         : discoveryNotice === 'network'
@@ -282,7 +282,7 @@ export function ModelForm({
             onChange={(e) => handleProviderChange(e.target.value as ModelProfile['provider'])}
           >
             <option value="openai">OpenAI</option>
-            {!isEmbedding && <option value="chatgpt-plan">{text('ChatGPT 訂閱', 'ChatGPT subscription')}</option>}
+            {!isEmbedding && <option value="chatgpt-plan">{text('ChatGPT 订阅', 'ChatGPT subscription')}</option>}
             <option value="novelai">NovelAI</option>
             <option value="deepseek">DeepSeek</option>
             <option value="gemini">Google Gemini</option>
@@ -399,7 +399,7 @@ export function ModelForm({
           <div>
             <Label className="mb-0">{text('端点模型列表', 'Endpoint model list')}</Label>
             <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
-              {isChatgptPlan ? text('連接 ChatGPT 後取得帳號可用模型，選擇後儲存。', 'Connect ChatGPT, refresh available models, then choose and save.') : text('填写端点与 API Key 后即可获取；选择模型后再保存配置。', 'Enter the endpoint and API key to refresh, then save after choosing a model.')}
+              {isChatgptPlan ? text('连接 ChatGPT 後取得帐号可用模型，选择後储存。', 'Connect ChatGPT, refresh available models, then choose and save.') : text('填写端点与 API Key 后即可获取；选择模型后再保存配置。', 'Enter the endpoint and API key to refresh, then save after choosing a model.')}
             </p>
           </div>
           <Button type="button" size="sm" variant="outline" onClick={handleDiscoverModels} disabled={discovering}>
@@ -520,7 +520,7 @@ export function ModelForm({
                     }}
                   />
                   <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
-                    {isChatgptPlan ? text('ChatGPT 訂閱使用模型預設溫度。', 'ChatGPT subscription uses the model default temperature.') : text('模型级采样偏好；固定温度模型不会收到此参数。', 'Model-level sampling preference. Fixed-temperature models do not receive this parameter.')}
+                    {isChatgptPlan ? text('ChatGPT 订阅使用模型预设温度。', 'ChatGPT subscription uses the model default temperature.') : text('模型级采样偏好；固定温度模型不会收到此参数。', 'Model-level sampling preference. Fixed-temperature models do not receive this parameter.')}
                   </p>
                 </div>
                 <div>
