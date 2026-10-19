@@ -97,6 +97,7 @@ function stageCopy(text: (zhCN: string, enUS: string) => string, stage: WritingS
   return text(copy[0], copy[1])
 }
 
+/** Render skill inspection, confirmed installation, and project stage bindings. */
 export default function SkillSettings() {
   const text = useLocaleStore(state => state.text)
   const project = useProjectStore(state => state.currentProject)
@@ -140,6 +141,7 @@ export default function SkillSettings() {
     return () => { disposed = true }
   }, [projectSession])
 
+  /** Inspect a GitHub source and clear any previously selected local content. */
   const inspectSource = async () => {
     setBusy(true)
     setError(null)
@@ -156,6 +158,7 @@ export default function SkillSettings() {
     }
   }
 
+  /** Inspect a local file up to 64 KiB and retain its exact content for installation. */
   const inspectFile = async (file: File) => {
     setBusy(true)
     setError(null)
@@ -175,6 +178,7 @@ export default function SkillSettings() {
     }
   }
 
+  /** Confirm and install the compatible local or GitHub candidate, then refresh skills. */
   const installSource = async () => {
     if (!inspection?.compatible) return
     if (!await confirmAction(text(

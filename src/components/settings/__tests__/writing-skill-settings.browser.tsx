@@ -14,6 +14,7 @@ const invoke = vi.fn()
 const originalProjectState = useProjectStore.getState()
 const originalLocaleState = useLocaleStore.getState()
 
+/** Supply deterministic IPC responses for skill inspection and settings rendering. */
 function ipcResult(channel: string) {
   if (channel === 'skills:list-user') return []
   if (channel === 'fs:list-dir') return []

@@ -214,6 +214,10 @@ function inspectLocalWritingSkill(raw: string) {
   return { raw, inspection: { metadata, compatible, reasons, suggestedStage, utf8Bytes, contentSha256, sourceUrl: contentSha256, resolvedUrl: 'local:SKILL.md' } }
 }
 
+/**
+ * 已准入全局 generation 的提示词和用户 Skill 只能由此固定根目录控制器访问；渲染层不接收
+ * 任意 app-data 路径，也不借用外部文件授权。
+ */
 export function registerAppDataController(): void {
   assertGlobalDataReady()
   const inspectedWritingSkills = new Map<string, Pick<RemoteWritingSkillInspection, 'contentSha256' | 'resolvedUrl'>>()
