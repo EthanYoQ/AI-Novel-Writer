@@ -104,12 +104,13 @@ export function useVersionHistory(projectKey: string) {
   }, [loadVersions, selectedChapter])
 
 
-  /** 读出这一稿与这一章最新一稿的正文；会话已切换或这一稿不存在时返回 null，读取出错时抛出。空正文照常对比。 */
-  const readComparison = useCallback(async (versionId: number): Promise<VersionComparison | null> => {
+  /** 读出这一稿与这一章最新一稿的正文；这一稿已不存在时返回 'missing'，会话已切换时返回 null，读取出错时抛出。空正文照常对比。 */
+  const readComparison = useCallback(async (versionId: number): Promise<VersionComparison | 'missing' | null> => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey) || selectedChapter === null) return null
     const older = (await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', versionId, projectSession.projectPath))?.content
-    if (!isProjectSessionCurrent(projectSession) || older === undefined) return null
+    if (!isProjectSessionCurrent(projectSession)) return null
+    if (older === undefined) return 'missing'
     const latest = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-latest', selectedChapter, projectSession.projectPath)
     if (!isProjectSessionCurrent(projectSession)) return null
     if (latest?.id === undefined) return { older, current: null }

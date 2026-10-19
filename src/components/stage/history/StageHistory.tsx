@@ -80,6 +80,8 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
   const { chapters, loading, selectedChapter, selectChapter, versions, versionsLoading, versionsFailed, reloadVersions, readComparison, createRollbackDraft } = useVersionHistory(projectKey)
   const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null)
   const [comparison, setComparison] = useState<VersionComparison | null>(null)
+  /** 刚点的那一稿已不存在（被删掉而列表还没刷新）；再点别的稿或换章时清掉。 */
+  const [missingPicked, setMissingPicked] = useState(false)
   const [reverting, setReverting] = useState(false)
   const [revertOpen, setRevertOpen] = useState(false)
   const comparisonRequest = useRef(0)
@@ -96,6 +98,7 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
     comparisonRequest.current++
     setSelectedVersionId(null)
     setComparison(null)
+    setMissingPicked(false)
     selectChapter(chapterNumber)
   }
 
@@ -103,12 +106,19 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
     const request = ++comparisonRequest.current
     setSelectedVersionId(versionId)
     setComparison(null)
+    setMissingPicked(false)
     try {
       const next = await readComparison(versionId)
       if (request !== comparisonRequest.current) return
-      // 读不到（这一稿已被删掉、作品已重新打开）时回到「选一稿」，不停在正在读取。
-      if (next === null) setSelectedVersionId(null)
-      else setComparison(next)
+      if (next === 'missing') {
+        // 这一稿已被删掉：说明一句，并重读列表把它去掉。
+        setSelectedVersionId(null)
+        setMissingPicked(true)
+        reloadVersions()
+      } else if (next === null) {
+        // 作品已重新打开：回到「选一稿」，不停在正在读取。
+        setSelectedVersionId(null)
+      } else setComparison(next)
     } catch (error) {
       if (request !== comparisonRequest.current) return
       setSelectedVersionId(null)
@@ -252,9 +262,11 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
               ? <p className="stage-hist-help">{text('这一章还没有当前稿。', 'This chapter has no current draft.')}</p>
               : <DiffView older={comparison.older} current={comparison.current} />}
           </> : (
-            <p className="stage-hist-help stage-hist-hint">{selectedVersionId === null
-              ? text('选一稿，与当前稿逐字对比。', 'Pick a version to compare it with the current draft.')
-              : text('正在读取…', 'Loading…')}</p>
+            <p className="stage-hist-help stage-hist-hint" role={missingPicked ? 'status' : undefined}>{selectedVersionId !== null
+              ? text('正在读取…', 'Loading…')
+              : missingPicked
+              ? text('这一稿已不存在，可能已被删除。列表已刷新。', 'This version no longer exists. It may have been deleted. The list has been refreshed.')
+              : text('选一稿，与当前稿逐字对比。', 'Pick a version to compare it with the current draft.')}</p>
           )}
         </section>
 
