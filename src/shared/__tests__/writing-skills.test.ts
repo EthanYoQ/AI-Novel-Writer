@@ -95,18 +95,36 @@ Follow references/voice.md and [forms](FORMS.md).`, { readFile: relativePath => 
   })
 
   it.each([
-    ['a missing file', 'Read [forms](FORMS.md).'],
+    ['a missing file under references/', 'Read [voice](references/missing.md).'],
+    ['a missing file under ./', 'Read [voice](./missing.md).'],
+    ['a missing file under ${SKILL_DIR}', 'Read ${SKILL_DIR}/references/missing.md.'],
     ['a parent-directory escape', 'Read [secret](../secret.md).'],
     ['a non-text file', 'Use assets/cover.png as the mood board.'],
     ['a bare skill directory variable', 'Look inside ${SKILL_DIR} first.'],
     ['a non-ASCII file name', '先读 references/风格.md。'],
   ])('keeps a skill that cites %s incompatible', (_label, body) => {
     const result = inspectWritingSkillMarkdown(`---\nname: cites\n---\n${body}`, {
-      readFile: relativePath => relativePath === 'FORMS.md' ? undefined : 'any text',
+      readFile: relativePath => relativePath.includes('missing') ? undefined : 'any text',
     })
 
     expect(result.reasons).toContain('relative-reference')
     expect(result.bundledFiles).toEqual([])
+  })
+
+  it('keeps plain relative links compatible and lists the files they point at', () => {
+    const result = inspectWritingSkillMarkdown(`---
+name: links
+---
+Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), read [风格](风格.md) and [forms](FORMS.md) again.`, {
+      readFile: () => undefined,
+    })
+
+    expect(result).toMatchObject({
+      compatible: true,
+      reasons: [],
+      bundledFiles: [],
+      unbundledReferences: ['FORMS.md', 'image.png', 'docs', '风格.md'],
+    })
   })
 
   it('checks scripts cited from a merged reference file', () => {

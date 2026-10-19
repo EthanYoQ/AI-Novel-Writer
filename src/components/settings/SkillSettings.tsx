@@ -135,6 +135,14 @@ function CandidateCard({ candidate, busy, onInstall }: {
               {text('并入提示词', 'Merged into the prompt')}: {inspection.bundledFiles.join(text('、', ', '))}
             </p>
           )}
+          {inspection.unbundledReferences.length > 0 && (
+            <p className="mt-1 break-words text-xs leading-5 text-[var(--color-text-muted)]">
+              {text(
+                `SKILL.md 引用了这些文件，但它们不会随 Skill 安装，模型看不到：${inspection.unbundledReferences.join('、')}`,
+                `SKILL.md links to these files, but they are not installed with the skill and the model cannot see them: ${inspection.unbundledReferences.join(', ')}`,
+              )}
+            </p>
+          )}
           {local && local.skippedFiles.length > 0 && (
             <p className="mt-1 break-words text-xs leading-5 text-[var(--color-text-muted)]">
               {text(

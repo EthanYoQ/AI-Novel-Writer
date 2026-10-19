@@ -25,6 +25,7 @@ const localInspection = {
   suggestedStage: 'drafting',
   utf8Bytes: 2048,
   bundledFiles: ['references/voice.md'],
+  unbundledReferences: [] as string[],
   skippedFiles: ['scripts/lint.py'],
 }
 
@@ -48,6 +49,7 @@ function ipcResult(channel: string) {
       suggestedStage: 'drafting',
       utf8Bytes: 128,
       bundledFiles: [],
+      unbundledReferences: [],
     },
   }
   throw new Error(`Unexpected IPC channel ${channel}`)
@@ -97,6 +99,22 @@ describe('writing skill settings', () => {
     await expect.element(card.getByText(/scripts\/lint\.py/u)).toBeVisible()
     expect(invoke).toHaveBeenCalledWith('skills:pick-local', 'folder')
     await expect.element(page.getByRole('button', { name: 'Confirm install' })).toBeEnabled()
+  })
+
+  it('lists links the skill cites but cannot install while still allowing installation', async () => {
+    invoke.mockImplementation(async (channel: string) => channel === 'skills:pick-local'
+      ? { success: true, cancelled: false, inspection: { ...localInspection, unbundledReferences: ['FORMS.md', 'image.png'] } }
+      : ipcResult(channel))
+    await act(async () => page.getByRole('button', { name: 'Choose folder' }).click())
+    const card = page.getByRole('group', { name: 'Skill to install' })
+    await expect.element(card.getByText(/the model cannot see them: FORMS\.md, image\.png/u)).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'Confirm install' })).toBeEnabled()
+
+    // text 是稳定函数，切换语言不触发重渲染；重新检查一次让卡片按中文重绘。
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    await act(async () => page.getByRole('button', { name: 'Choose folder' }).click())
+    await expect.element(page.getByRole('group', { name: '待安装的 Skill' })
+      .getByText('SKILL.md 引用了这些文件，但它们不会随 Skill 安装，模型看不到：FORMS.md、image.png')).toBeVisible()
   })
 
   it('installs a local candidate by its id after the application confirmation', async () => {

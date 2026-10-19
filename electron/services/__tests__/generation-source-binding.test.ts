@@ -391,6 +391,15 @@ describe('main rebuilt generation sources', () => {
         put(f.deps.globalDataRoot, 'skills/voice/references/voice.md', '第一人称。');
         expect(f.build().binding.fingerprint.skillSnapshotHash).not.toBe(a.binding.fingerprint.skillSnapshotHash);
     });
+    it('keeps binding a user Skill whose plain relative link points at a file it never shipped', () => {
+        const f = fixture();
+        put(f.deps.projectStorageRoot, 'writing-skills.json', JSON.stringify({ version: 1, bindings: { drafting: 'user:forms' } }));
+        put(f.deps.globalDataRoot, 'skills/forms/SKILL.md', '---\nname: forms\nlanguage: zh-CN\n---\n按 [表单说明](FORMS.md) 的格式写，配图见 ![](image.png)。');
+        const a = f.build();
+        put(f.deps.globalDataRoot, 'skills/forms/notes.md', '没有被引用的笔记。');
+        put(f.deps.globalDataRoot, 'skills/forms/image.png', 'not text');
+        expect(f.build().binding.fingerprint.skillSnapshotHash).toBe(a.binding.fingerprint.skillSnapshotHash);
+    });
     it.each(['missing', 'obsolete', 'hash', 'receipt'])('rejects %s selected source authority', kind => { const f = fixture(); if (kind === 'missing')
         f.input.selectedDraftIds = [999]; if (kind === 'obsolete') {
         f.db.exec("INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(2,2,'draft',1)");

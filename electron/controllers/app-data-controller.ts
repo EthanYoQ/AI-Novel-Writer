@@ -218,8 +218,8 @@ function installUserWritingSkill(
 
 /** 回给渲染层的检查结果不带提示词正文，安装时以主进程重新读取的内容为准。 */
 function withoutContent(inspection: WritingSkillInspection): Omit<WritingSkillInspection, 'content'> {
-  const { metadata, compatible, reasons, suggestedStage, utf8Bytes, bundledFiles } = inspection
-  return { metadata, compatible, reasons, suggestedStage, utf8Bytes, bundledFiles }
+  const { metadata, compatible, reasons, suggestedStage, utf8Bytes, bundledFiles, unbundledReferences } = inspection
+  return { metadata, compatible, reasons, suggestedStage, utf8Bytes, bundledFiles, unbundledReferences }
 }
 
 function githubRawUrl(owner: string, repo: string, ref: string, filePath: string): string {

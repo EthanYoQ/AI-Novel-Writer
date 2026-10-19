@@ -294,7 +294,7 @@ export const X1_SCENARIOS = {
     mkdirSync(join(folder, 'scripts'), { recursive: true })
     writeFileSync(join(folder, 'SKILL.md'), [
       '---', 'name: scene-voice', 'description: >-', '  让每一场戏保持统一的叙述声音。', '  起草和修稿时使用。', 'license: Apache-2.0', '---',
-      '遵循 [声音规则](references/voice.md)。',
+      '遵循 [声音规则](references/voice.md)。格式参照 [表单说明](FORMS.md)。',
     ].join('\n'))
     writeFileSync(join(folder, 'references', 'voice.md'), '使用第三人称近距离视角，动作先于心理。')
     writeFileSync(join(folder, 'scripts', 'lint.py'), 'print("lint")')
@@ -309,6 +309,7 @@ export const X1_SCENARIOS = {
     const inspected = await card.innerText()
     assert.match(inspected, /并入提示词: references\/voice\.md/u, '检查卡列出并入提示词的引用文件')
     assert.match(inspected, /scripts\/lint\.py/u, '检查卡列出不会安装的脚本')
+    assert.match(inspected, /模型看不到：FORMS\.md/u, '检查卡列出没有随 Skill 安装的普通链接')
     await shoot('skills-import-local-inspected')
     await card.getByRole('button', { name: '确认安装' }).click()
     await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click()

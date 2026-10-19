@@ -54,7 +54,7 @@ type PickResult = {
   success: boolean
   cancelled?: boolean
   error?: string
-  inspection?: { candidateId: string; compatible: boolean; reasons: string[]; bundledFiles: string[]; skippedFiles: string[] }
+  inspection?: { candidateId: string; compatible: boolean; reasons: string[]; bundledFiles: string[]; unbundledReferences: string[]; skippedFiles: string[] }
 }
 
 async function pickLocal(kind: 'file' | 'folder', picked: string): Promise<PickResult> {
@@ -162,6 +162,20 @@ describe('writing skill app-data boundary', () => {
     expect(picked).toMatchObject({ success: true, inspection: { compatible: false, reasons: ['relative-reference'], bundledFiles: [] } })
     await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: false })
     expect(fs.existsSync(path.join(velaHome, 'skills', 'scene-voice'))).toBe(false)
+  })
+
+  it('installs a folder whose plain links point at files it cannot ship and reports them', async () => {
+    const folder = writeLocalSkill('forms', {
+      'SKILL.md': '---\nname: forms\n---\nFill [the form](FORMS.md) and match ![](image.png).',
+      'image.png': '\u0089PNG',
+    })
+    const picked = await pickLocal('folder', folder)
+    expect(picked).toMatchObject({
+      success: true,
+      inspection: { compatible: true, reasons: [], bundledFiles: [], unbundledReferences: ['FORMS.md', 'image.png'], skippedFiles: ['image.png'] },
+    })
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true, skill: { name: 'forms' } })
+    expect(fs.readdirSync(path.join(velaHome, 'skills', 'forms'))).toEqual(['SKILL.md'])
   })
 
   it('never bundles a reference that escapes the skill folder', async () => {

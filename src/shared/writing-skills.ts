@@ -31,6 +31,8 @@ export interface WritingSkillInspection {
   utf8Bytes: number
   /** 已并入 content 的附带文件，相对 Skill 根目录的 POSIX 路径。 */
   bundledFiles: string[]
+  /** 正文引用了、但没有并入的普通相对链接（如 `FORMS.md`、`image.png`）；模型看不到它们，但不影响兼容。 */
+  unbundledReferences: string[]
 }
 
 /**
@@ -125,7 +127,7 @@ function parseFrontmatter(raw: string): { fields: Record<string, string>; conten
 
 const LINK_TARGET = /\]\(\s*<?([^)\s>]+)/g
 const BARE_REFERENCE = /(?:^|[\s`'"(])((?:\$\{skill_dir\}[/\\])?(?:references?|assets?)[/\\][^\s`'")]+)/gim
-const SKILL_DIR_REFERENCE = /\$\{skill_dir\}(?:[/\\]([^\s`'")]+))?/gi
+const SKILL_DIR_REFERENCE = /\$\{skill_dir\}(?:[/\\][^\s`'")]+)?/gi
 
 /** 按出现顺序列出正文里的相对引用：Markdown 链接目标、references/ 与 assets/ 路径、${SKILL_DIR}。 */
 function referencedPaths(text: string): string[] {
@@ -134,7 +136,7 @@ function referencedPaths(text: string): string[] {
     if (!/^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(match[1])) found.push({ at: match.index, path: match[1] })
   }
   for (const match of text.matchAll(BARE_REFERENCE)) found.push({ at: match.index, path: match[1] })
-  for (const match of text.matchAll(SKILL_DIR_REFERENCE)) found.push({ at: match.index, path: match[1] ?? '' })
+  for (const match of text.matchAll(SKILL_DIR_REFERENCE)) found.push({ at: match.index, path: match[0] })
   return found.sort((left, right) => left.at - right.at).map(reference => reference.path)
 }
 
@@ -162,17 +164,22 @@ function resolveReference(reference: string, baseSegments: string[]): string | n
   return WRITING_SKILL_TEXT_EXTENSIONS.some(extension => resolved.toLowerCase().endsWith(extension)) ? resolved : null
 }
 
+// 这些写法明确要求模型去读 Skill 目录里的文件；读不到就不兼容。普通相对链接（如 `](FORMS.md)`）以前就放行，保持放行。
+const DIRECTORY_REFERENCE = /^(?:\.\.?[/\\]|(?:references?|assets?)[/\\])|\$\{skill_dir\}/i
+
 /**
- * 运行时只把 Skill 当作一段提示词注入，读不到旁边的文件。被引用的附带文本因此在检查时就并入正文，
- * 引用了却并不进来的文件（缺失、越界、非文本）让 Skill 不兼容。
+ * 运行时只把 Skill 当作一段提示词注入，读不到旁边的文件。被引用的附带文本因此在检查时就并入正文。
+ * 并不进来的引用（缺失、越界、非文本）若属于 DIRECTORY_REFERENCE 则让 Skill 不兼容，其余只列给用户看。
  */
 function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | undefined): {
   files: Array<{ path: string; content: string }>
-  unresolved: boolean
+  blocked: boolean
+  unbundled: string[]
 } {
   const files: Array<{ path: string; content: string }> = []
+  const unbundled = new Set<string>()
   const queue = referencedPaths(body).map(reference => ({ reference, base: [] as string[] }))
-  let unresolved = false
+  let blocked = false
   while (queue.length) {
     const { reference, base } = queue.shift()!
     const candidates = [...new Set([resolveReference(reference, base), resolveReference(reference, [])])]
@@ -182,14 +189,16 @@ function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | 
       ? candidates.map(path => ({ path, content: readFile?.(path) })).find(file => file.content !== undefined)
       : undefined
     if (!bundled) {
-      unresolved = true
+      const shown = reference.replace(/[#?].*$/, '')
+      if (DIRECTORY_REFERENCE.test(reference)) blocked = true
+      else if (shown) unbundled.add(shown)
       continue
     }
     files.push({ path: bundled.path, content: bundled.content!.trim() })
     const directory = bundled.path.split('/').slice(0, -1)
     queue.push(...referencedPaths(bundled.content!).map(reference => ({ reference, base: directory })))
   }
-  return { files, unresolved }
+  return { files, blocked, unbundled: [...unbundled] }
 }
 
 function normalizedLanguage(value: string | undefined): WritingSkillLanguage {
@@ -230,7 +239,7 @@ export function inspectWritingSkillMarkdown(
   if (new TextEncoder().encode(raw).byteLength > MAX_WRITING_SKILL_BYTES || utf8Bytes > MAX_WRITING_SKILL_BYTES) {
     reasons.add('content-too-large')
   }
-  if (bundle.unresolved) reasons.add('relative-reference')
+  if (bundle.blocked) reasons.add('relative-reference')
   if (/(?:^|[\s`'"(])scripts?[/\\][^\s`'")]+/im.test(content)
     || /\b(?:run|execute)\s+(?:the\s+)?script\b/i.test(content)
     || /运行.{0,12}脚本/.test(content)) reasons.add('script-dependency')
@@ -260,6 +269,7 @@ export function inspectWritingSkillMarkdown(
     suggestedStage: stage,
     utf8Bytes,
     bundledFiles: bundle.files.map(file => file.path),
+    unbundledReferences: bundle.unbundled,
   }
 }
 
