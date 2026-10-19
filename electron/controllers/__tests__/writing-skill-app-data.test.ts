@@ -220,7 +220,7 @@ describe('writing skill app-data boundary', () => {
     const result = await installLocal(picked.inspection!.candidateId) as { success: boolean; error?: string }
     expect(result.success).toBe(false)
     expect(result.error).not.toMatch(/EACCES|permission denied|[\\/]/u)
-    expect(result.error).toMatch(/choose the skill again/iu)
+    expect(result.error).toMatch(/inspect the skill again to retry/iu)
     expect(fs.existsSync(path.join(velaHome, 'skills', 'scene-voice'))).toBe(false)
   })
 

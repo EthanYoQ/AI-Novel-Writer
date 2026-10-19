@@ -204,7 +204,13 @@ function installUserWritingSkill(
     }
   } catch (error) {
     fs.rmSync(directory, { recursive: true, force: true })
-    throw error
+    // 文件系统错误（EEXIST、EACCES、ENOSPC 等）带本机路径，界面只给可读说明，原文留在日志里。
+    if (typeof (error as NodeJS.ErrnoException)?.code !== 'string') throw error
+    console.error('[skills] writing skill install failed', error)
+    throw new Error(text(
+      '写入 Skill 文件失败，本次没有安装任何内容。请重新选择或检查该 Skill 后再试。',
+      'The skill files could not be written, so nothing was installed. Choose or inspect the skill again to retry.',
+    ))
   }
   return {
     name: inspection.metadata.name,

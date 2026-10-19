@@ -263,6 +263,8 @@ export default function SkillSettings() {
       setCandidate(null)
       if (candidate.origin === 'github') setSourceUrl('')
     } catch (cause) {
+      // 主进程在安装前就丢弃了候选，失败后卡片已无法再安装；GitHub 地址保留，作者可直接重新检查。
+      setCandidate(null)
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
