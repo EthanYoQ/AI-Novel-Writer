@@ -18,7 +18,7 @@
   gap: 28px;
 }
 
-/* 标题与动作并排放不下时动作换到下一行，标题不被挤成一字一行 */
+/* 标题旁留不出 240px（「故事的骨架」一行约 180px）时动作换到下一行，标题不被挤断；留得出时与标题同一行、靠右 */
 .arch-header {
   display: flex;
   flex-wrap: wrap;
@@ -27,7 +27,7 @@
 }
 
 .arch-heading {
-  flex: 1 1 320px;
+  flex: 1 1 240px;
   min-width: 0;
 }
 
