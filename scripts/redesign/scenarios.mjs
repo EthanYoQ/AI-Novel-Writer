@@ -524,7 +524,7 @@ const CHROME_CONTRAST = [
   ['.stage-ov-title', 4.5], ['.stage-ov-meta', 3], ['.stage-ov-bar-label', 3], ['.stage-ov .pi-stat-label', 3],
   ['.stage-setup-title', 4.5], ['.stage-setup-lede', 4.5], ['.stage-setup-label', 4.5], ['.stage-setup-hint', 3], ['.stage-chip', 4.5],
   ['.stage-setup-panel-title', 4.5], ['.stage-setup-panel-desc', 3], ['.stage-setup-outline-foot', 3],
-  ['.stage-set-title', 4.5], ['.stage-set-lede', 4.5], ['.stage-set-link', 4.5], ['.stage-set-group-label', 3], ['.stage-set-row-title', 4.5],
+  ['.stage-set-title', 4.5], ['.stage-set-lede', 4.5], ['.stage-set-link', 4.5], ['.stage-set-required', 4.5], ['.stage-set-group-label', 3], ['.stage-set-row-title', 4.5],
   ['.stage-set-row-desc', 3], ['.stage-set-model-name', 4.5], ['.stage-set-model-meta', 3], ['.stage-badge', 4.5], ['.stage-set-theme-name', 4.5],
   ['.stage-set-theme-desc', 3], ['.pi-empty-title', 4.5], ['.pi-empty-text', 3],
   ['.stage-update-title', 4.5], ['.stage-update-text', 3], ['.stage-library .pi-btn:not(.pi-btn--icon)', 4.5], ['.stage-library .pi-btn--icon', 3], ['.pi-notice-title', 4.5], ['.pi-notice-text', 3],

@@ -60,9 +60,9 @@ export default function ModelsSection({ purposes, header }: { purposes: ModelPro
           <Notice
             tone="warn"
             title={text('检索模型是必需配置', 'A retrieval model is required')}
-            actions={<Button variant={section.models.length === 0 ? 'secondary' : 'primary'} onClick={signUp}><ExternalLink size={14} aria-hidden="true" />{text('去 SiliconFlow 免费注册', 'Sign up free at SiliconFlow')}</Button>}
+            actions={<Button variant="secondary" onClick={signUp}><ExternalLink size={14} aria-hidden="true" />{text('去 SiliconFlow 免费注册', 'Sign up free at SiliconFlow')}</Button>}
           >
-            <p>{text('知识库靠它按意思找回伏笔、人物和前文，没有它这些都查不到。SiliconFlow 免费提供 BAAI/bge-m3，注册后把密钥填进来就能用。', 'The knowledge base uses it to recall foreshadowing, characters and earlier chapters by meaning. Without it, none of that can be found. SiliconFlow offers BAAI/bge-m3 for free: sign up and add your key.')}</p>
+            <p>{text('知识库靠它按意思找回伏笔、人物和前文。没有单独配置时只能借用生成模型，而多数生成模型不支持向量检索。SiliconFlow 免费提供 BAAI/bge-m3，注册后把密钥填进来就能用。', 'The knowledge base uses it to recall foreshadowing, characters and earlier chapters by meaning. Without one, it can only borrow the generation model, and most generation models cannot embed text. SiliconFlow offers BAAI/bge-m3 for free: sign up and add your key.')}</p>
             {section.models.length > 0 && <p>{text('已经添加过的话，在下面的「更多」菜单里把它设为默认。', 'If you already added one, make it the default from its “More” menu below.')}</p>}
           </Notice>
         )
