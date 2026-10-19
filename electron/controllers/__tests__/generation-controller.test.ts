@@ -564,6 +564,10 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect(detail.message.length).toBeLessThanOrEqual(200)
     expect(generationIpcErrorCode('generation:commit-draft', new Error('GENERATION_DRAFT_DEPENDENCY_STALE'))).toBe('GENERATION_DRAFT_DEPENDENCY_STALE')
     expect(error).toHaveBeenCalledTimes(1)
+    generationIpcErrorCode('generation:commit-draft', new Error('第一行\n第二行正文不该进日志'))
+    const { stack } = error.mock.calls[1][1] as { stack: string }
+    expect(stack).not.toContain('第二行正文')
+    expect(stack.split('\n').every(line => /^\s+at /u.test(line))).toBe(true)
   })
   it('rejects missing, stale, foreign-root and forged handle authority before touching an owner', async () => {
     const fetch = stream()
