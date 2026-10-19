@@ -374,6 +374,17 @@ describe('版本历史', () => {
     await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toContain('与当前稿相同'))
   })
 
+  it('同一部作品重新打开后、各稿重读完成前：不显示上一次打开读到的各稿，显示正在读取', async () => {
+    await openChapterThree()
+    const release = gateList(3)
+    await reopenSameBook()
+    await vi.waitFor(() => expect(versionsColumn()).toContain('正在读取…'))
+    expect(button(/草稿 v1/)).toBeUndefined()
+    await act(async () => release())
+    await vi.waitFor(() => expect(button(/草稿 v1/)).toBeTruthy())
+    expect(versionsColumn()).not.toContain('正在读取…')
+  })
+
   it('当前稿查到了却读不出正文（刚被删掉）：说这一章还没有当前稿，不当成空正文对比', async () => {
     await openChapterThree()
     const base = invoke.getMockImplementation()!
