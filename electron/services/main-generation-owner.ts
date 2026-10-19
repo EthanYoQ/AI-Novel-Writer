@@ -1134,7 +1134,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     executeFinalizationGeneration: async (request: FinalizationGenerationChannels['finalization-generation:execute']['args'][0]) => {
       assertCurrent()
-      if (!request || Object.keys(request).some(key => !['handle', 'retryOf'].includes(key))) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
+      if (!request || Object.keys(request).some(key => !['handle', 'retryOf', 'recoverFrom'].includes(key))
+        || request.recoverFrom !== undefined && (request.retryOf !== undefined || typeof request.recoverFrom !== 'string' || !request.recoverFrom)) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
       let run = finalizations.require(request.handle)
       const initialTask = finalizations.task(run), context = readFinalizationGenerationContext(run)
       const replay = (attempt: ReturnType<typeof runAttempts>[number]) => pending.get(JSON.stringify([run.runId, attempt.invocationNonce]))?.promise
@@ -1164,6 +1165,46 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
             ? `The preceding response does not satisfy the required ${repairKind === 'generic' ? 'JSON structure or exact source evidence' : 'exact source evidence'}.${guidance}${detail} Return a corrected JSON object using only the original frozen source and character IDs. Do not change or invent evidence. Return {"updates":[]} when there is no supported update.`
             : `${repairKind === 'generic' ? '上一份回答未满足要求的 JSON 结构或原文证据校验。' : guidance}${detail}请仅依据原始冻结正文和角色 ID 返回修正后的 JSON 对象，不得改写或虚构证据。没有可靠更新时返回 {"updates":[]}。` }] }
       }
+      const assertRootIdle = () => {
+        if (service.readUnsavedTails().some(tail => repository.receipt(tail.attemptId).run.rootActionId === run.rootActionId)) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
+        const budget = repository.budget(run.rootActionId)
+        if (budget.blockedCode || !['active', 'paused'].includes(budget.root.status)
+          || budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))
+          || [...pending.keys()].some(key => repository.get(JSON.parse(key)[0]).rootActionId === run.rootActionId)) throw new Error('GENERATION_DISPATCH_BLOCKED')
+      }
+      // 显式请求按幂等 nonce 先回放；首次才在 resume 前后各校验一次可用性再发出。
+      const explicitExecute = async (invocationNonce: string, assertAvailable: () => void, task: () => GenerationTask) => {
+        if (viewOf(run).nonReplayable) {
+          try { await resume(handleOf(run)) } catch (error) {
+            const existing = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
+            if (existing) return replay(existing)
+            if (!(error instanceof Error) || error.message !== 'GENERATION_RESUME_REFUSED' || viewOf(repository.get(run.runId)).nonReplayable) throw error
+          }
+        }
+        run = repository.get(run.runId)
+        const existing = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
+        if (existing) return replay(existing)
+        assertAvailable()
+        return execute({ handle: handleOf(run), invocationNonce, task: task() }, false, false, false, true)
+      }
+      if (request.recoverFrom !== undefined) {
+        const failedAttemptId = request.recoverFrom
+        const invocationNonce = `finalization:recover:${failedAttemptId}`
+        const prior = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
+        if (prior) return replay(prior)
+        const assertAvailable = () => {
+          finalizations.assertMutable(run)
+          assertFinalizationSources(run)
+          if (runAttempts(run.runId).at(-1)?.attemptId !== failedAttemptId) throw new Error('GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE')
+          const receipt = volatileReceipts.get(failedAttemptId) ?? repository.receipt(failedAttemptId)
+          // 只有未产出可用结果的尝试才可重发：可用的 stop 结果走提交或 retryOf 修正，不重复计费。
+          if (['reserved', 'dispatch-marked'].includes(receipt.attempt.status)
+            || !receipt.failureCode && !receipt.unsavedTail && receipt.result?.finishReason === 'stop' && !!receipt.artifact?.text.trim()) throw new Error('GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE')
+          assertRootIdle()
+        }
+        assertAvailable()
+        return explicitExecute(invocationNonce, assertAvailable, () => initialTask)
+      }
       if (request.retryOf !== undefined) {
         if (context.slot.stepKey !== 'character_cards') throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
         const retryOf = structuredClone(request.retryOf)
@@ -1177,31 +1218,17 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
           if (runAttempts(run.runId).at(-1)?.attemptId !== proof.attemptId) throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
           const currentProof = finalizations.artifact(run, retryOf)
           const receipt = volatileReceipts.get(proof.attemptId) ?? currentProof.receipt
-          if (receipt.failureCode || receipt.unsavedTail || service.readUnsavedTails().some(tail => repository.receipt(tail.attemptId).run.rootActionId === run.rootActionId)) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
-          const budget = repository.budget(run.rootActionId)
-          if (budget.blockedCode || !['active', 'paused'].includes(budget.root.status)
-            || budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))
-            || [...pending.keys()].some(key => repository.get(JSON.parse(key)[0]).rootActionId === run.rootActionId)) throw new Error('GENERATION_DISPATCH_BLOCKED')
+          if (receipt.failureCode || receipt.unsavedTail) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
+          assertRootIdle()
         }
         assertAvailable()
         const failure = failureOf(proof.artifact.text)
         if (!failure) return outcomeOf(proof.receipt, { purpose: attemptPurpose(proof.attemptId) })
-        if (viewOf(run).nonReplayable) {
-          try { await resume(handleOf(run)) } catch (error) {
-            const existing = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
-            if (existing) return replay(existing)
-            if (!(error instanceof Error) || error.message !== 'GENERATION_RESUME_REFUSED' || viewOf(repository.get(run.runId)).nonReplayable) throw error
-          }
-        }
-        run = repository.get(run.runId)
-        const existing = runAttempts(run.runId).find(attempt => attempt.invocationNonce === invocationNonce)
-        if (existing) return replay(existing)
-        assertAvailable()
-        return execute({ handle: handleOf(run), invocationNonce, task: repairTask(proof.artifact.text, proof.attemptId, failure) }, false, false, false, true)
+        return explicitExecute(invocationNonce, assertAvailable, () => repairTask(proof.artifact.text, proof.attemptId, failure))
       }
       // Dedicated requests own these nonces; old prompts need only their saved purpose and receipt for replay.
-      const latestRetry = runAttempts(run.runId).reverse().find(attempt => attempt.invocationNonce.startsWith('finalization:retry:'))
-      if (latestRetry) return replay(latestRetry)
+      const latestExplicit = runAttempts(run.runId).reverse().find(attempt => /^finalization:(retry|recover):/.test(attempt.invocationNonce))
+      if (latestExplicit) return replay(latestExplicit)
       let invalidText: string | undefined, failure: Error | undefined
       for (let ordinal = 0; ordinal < 3; ordinal++) {
         const invocationNonce = `finalization:${ordinal}`

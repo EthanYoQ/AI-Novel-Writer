@@ -11,6 +11,8 @@ export async function runFinalizationGeneration(options: {
   modelId: () => string
   parentRootActionId?: string
   retryOf?: FinalizedCharacterArtifact
+  /** 作者显式重试时冻结的最近一次未成功尝试；主进程按它只重发一次。 */
+  recoverFrom?: string
   cancelled: () => boolean
   onHandle?: (handle: MainGenerationRunHandle) => void
 }) {
@@ -43,10 +45,10 @@ export async function runFinalizationGeneration(options: {
     if (recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled') throw new Error('FINALIZATION_GENERATION_SOURCE_CHANGED')
     let candidates = recovery.view.candidates ?? recovery.view.artifacts
     let candidate = candidates.at(-1)
-    if (options.retryOf || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
-      if (!candidate && recovery.attemptCount > 0) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
+    if (options.retryOf || options.recoverFrom || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
+      if (!candidate && recovery.attemptCount > 0 && !options.recoverFrom) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
       const previous = recovery.view.handle
-      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(options.retryOf ? { retryOf: options.retryOf } : {}) })
+      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(options.retryOf ? { retryOf: options.retryOf } : {}), ...(options.recoverFrom ? { recoverFrom: options.recoverFrom } : {}) })
       if (receipt.run.handle.projectId !== previous.projectId || receipt.run.handle.rootActionId !== previous.rootActionId || receipt.run.handle.runId !== previous.runId) throw new Error('FINALIZATION_GENERATION_IDENTITY_MISMATCH')
       recovery.view = receipt.run
       if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }

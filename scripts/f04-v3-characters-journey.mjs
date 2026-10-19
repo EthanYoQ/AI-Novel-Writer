@@ -327,7 +327,7 @@ async function main() {
         await new Promise(resolve => setTimeout(resolve, 250))
       }
       assert.equal(rejected?.ok, 0, 'old source result was accepted')
-      assert.equal(rejected.errorMsg, 'FINALIZATION_GENERATION_SOURCE_CHANGED',
+      assert.match(rejected.errorMsg, /定稿正文或模型设置已变化|finalized manuscript or model settings changed/,
         'old source was rejected for a different reason')
       const row = importDb.prepare('SELECT cs_location AS location,cs_provenance AS provenance FROM characters WHERE character_id=?').get(lateId)
       assert.equal(row.location, '', 'old source overwrote the character after newer finalization')

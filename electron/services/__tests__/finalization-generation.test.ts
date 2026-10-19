@@ -756,3 +756,25 @@ it.each([['chapter_notes', 'before-visible'], ['chapter_notes', 'partial'], ['ch
  expect(f.dispatch).toHaveBeenCalledTimes(before + 2)
  expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(handle.runId)).toBe(2)
 })
+
+it('#420 请求在途时关闭项目，重开后显式恢复经 resume 只重发一次并可提交', async () => {
+ let hang = true
+ const f = fixture(async (_request, options) => {
+  if (hang) { hang = false; return new Promise<never>(() => {}) }
+  options.onVisible({ kind: 'delta', text: '林岚进入北塔。' }); return { finishReason: 'stop', usage: null }
+ })
+ const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey: 'chapter_notes' }
+ const { handle } = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' }).view
+ void f.owner.executeFinalizationGeneration({ handle }).catch(() => undefined)
+ await vi.waitFor(() => expect(f.dispatch).toHaveBeenCalledTimes(1))
+ const next = f.reopen()
+ expect((await next.executeFinalizationGeneration({ handle })).outcome.status).not.toBe('completed')
+ expect(f.dispatch).toHaveBeenCalledTimes(1)
+ const recoverFrom = next.readFinalizationGeneration({ slot })!.view.budgetDiagnostics!.at(-1)!.attemptId
+ const recovered = await next.executeFinalizationGeneration({ handle, recoverFrom })
+ expect(recovered.outcome).toMatchObject({ status: 'completed', content: '林岚进入北塔。' })
+ expect(f.dispatch).toHaveBeenCalledTimes(2)
+ expect(next.commitFinalizationGeneration({ handle, artifact: f.artifactOf(recovered) })).toMatchObject({ success: true, chapterNotes: '林岚进入北塔。' })
+ expect((await next.executeFinalizationGeneration({ handle, recoverFrom })).outcome.receipt.visibleArtifact).toEqual(recovered.outcome.receipt.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(2)
+})

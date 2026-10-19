@@ -416,7 +416,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(invalidatedDuringNotes).toBe(true)
     expect(staleRun.steps.chapter_notes).toMatchObject({
       ok: false,
-      error: expect.stringContaining('FINALIZATION_GENERATION_SOURCE_CHANGED'),
+      error: expect.stringContaining('The finalized manuscript or model settings changed'),
     })
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
       chapterNotes: 'Existing projection remains available only as stale material.',
