@@ -94,6 +94,17 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
 
   const formatTime = (value: string) => sqliteTime(value).toLocaleString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 
+  // 选的稿与对比只属于这次打开：重新打开作品后各稿重读、最新稿可能已换，留着旧对比会与新页头对不上。
+  // 还在读的旧对比不用作废：会话已切换时 readComparison 返回 null，回到「选一稿」。
+  const sessionLease = project?.sessionLease
+  const [pickLease, setPickLease] = useState(sessionLease)
+  if (pickLease !== sessionLease) {
+    setPickLease(sessionLease)
+    setSelectedVersionId(null)
+    setComparison(null)
+    setMissingPicked(false)
+  }
+
   const pickChapter = (chapterNumber: number) => {
     comparisonRequest.current++
     setSelectedVersionId(null)
