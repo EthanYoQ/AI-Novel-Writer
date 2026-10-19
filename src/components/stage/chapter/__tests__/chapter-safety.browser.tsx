@@ -187,6 +187,25 @@ describe('标签与外壳', () => {
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith('打开第 3 章失败：数据库忙'))
   })
 
+  it.each([
+    { case: '这一章还有别的稿', hasDraft: true },
+    { case: '这一章已经没有稿', hasDraft: false },
+  ])('审稿报告标签指向的稿已被删除（$case）：提示作者，并打开这一章当前的单章视图', async ({ hasDraft }) => {
+    const current = hasDraft ? backend.addDraft({ status: 'draft' }) : undefined
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => undefined)
+    await mount()
+    const deletedPath = formatResourceUri({ kind: 'draft', id: 999 })
+    await act(async () => useEditorStore.getState().openFile({
+      id: `review-${deletedPath}-1`, name: '审稿报告：第3章', type: 'review-report', content: AI_REVIEW, filePath: deletedPath,
+      reviewReport: AI_REVIEW, chapterNumber: 3, chapterDir: 'ai-novel://draft/ch3', reviewId: 1, projectKey: SESSION.projectPath,
+    }))
+    await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('第 3 章这一稿已被删除，已打开这一章现在的内容。'))
+    await vi.waitFor(() => expect(activeTab()).toMatchObject({ type: 'chapter', chapterNumber: 3 }))
+    expect(activeTab()!.filePath).toBe(current ? formatResourceUri({ kind: 'draft', id: current.id }) : undefined)
+    expect(tabs().some(tab => tab.filePath === deletedPath)).toBe(false)
+    expect(useStageStore.getState().chapterRequest).toBeNull()
+  })
+
   it('修稿完成时命令打开的合并标签改道到单章视图的合并视图', async () => {
     const draft = backend.addDraft({ status: 'draft' })
     await mount()

@@ -6,7 +6,7 @@ import { getActiveProjectSessionContext, sameProjectPathKey } from '../../../sha
 import { fetchChapterDrafts, useDraftStore } from '../../../stores/draft-store'
 import { useEditorStore, type EditorTab } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
-import { chapterPlanTabId } from '../../../stores/navigation/stage-navigation'
+import { chapterPlanTabId, openChapter } from '../../../stores/navigation/stage-navigation'
 import { useStageStore } from '../../../stores/navigation/stage-store'
 import { openDraftTab } from '../../../stores/open-draft-tab'
 import { toast } from '../../ui/Toast'
@@ -68,7 +68,14 @@ async function showDraft(filePath: string, chapterNumber: number, session: Proje
     return
   }
   const draft = (await fetchChapterDrafts(chapterNumber, session)).find(candidate => candidate.filePath === filePath)
-  if (!draft) return
+  if (!draft) {
+    // 指向的稿已经删掉，标签也已关掉：说明一句，落到这一章现在的稿（没有稿就是待写页），而不是什么也不打开。
+    if (useStageStore.getState().chapterRequest?.filePath === filePath) useStageStore.setState({ chapterRequest: null })
+    const text = useLocaleStore.getState().text
+    toast.warning(text(`第 ${chapterNumber} 章这一稿已被删除，已打开这一章现在的内容。`, `That draft of chapter ${chapterNumber} was deleted. Opened the chapter's current content instead.`))
+    await openChapter(chapterNumber)
+    return
+  }
   const plan = useEditorStore.getState().tabs.find(tab => tab.id === chapterPlanTabId(chapterNumber, session.projectPath))
   const opener = () => openDraftInChapterView(draft, draft.chapterTitle ?? '', session)
   if (plan) await swapChapterTab(plan.id, opener)
