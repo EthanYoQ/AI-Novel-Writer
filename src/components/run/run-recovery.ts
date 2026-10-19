@@ -174,7 +174,13 @@ export function outlineSourceInvalidNote(recovery: Pick<GenerationRecoveryContex
 export function outlineSourceChangedNote(recovery: Pick<GenerationRecoveryContext, 'plotOutline' | 'plotOutlineRecovery'>, locale: Locale): string | null {
   const writeState = recovery.plotOutlineRecovery?.writeState
   if (writeState?.kind !== 'blocked' || writeState.reason !== 'source-changed') return null
-  const t = lang(locale), from = recovery.plotOutline?.range.from
+  const t = lang(locale), outline = recovery.plotOutline
+  // 已写完的一批不需要重新生成，只说明恢复稿不能写回。
+  if (outline?.cursor.kind === 'complete') {
+    return t('这批大纲已经生成完毕。模型设置、作品设定、提示词模板或写作 Skill 之后变了，恢复稿不能覆盖正式内容，只能查看或复制。',
+      'This outline batch finished. The model settings, book settings, a prompt template or a writing skill changed afterwards, so this recovery draft cannot replace saved content. You can view or copy it.')
+  }
+  const from = outline?.range.from
   return from
     ? t(`模型设置、作品设定、提示词模板或写作 Skill 已经变了，恢复稿不能覆盖正式内容，只能查看或复制。请从第 ${from} 章重新生成情节大纲。`,
       `The model settings, book settings, a prompt template or a writing skill changed, so this recovery draft cannot replace saved content. View or copy it, then generate the plot outline again from chapter ${from}.`)

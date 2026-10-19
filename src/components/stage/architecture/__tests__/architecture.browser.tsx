@@ -238,7 +238,7 @@ describe('架构阶段', () => {
     core = { ...core, synopsis: renderPlotOutlineSynopsis(body, 5, OUTLINE_SOURCE) }
     const handle = { projectId: session.projectId, epoch: '本次', rootActionId: '大纲动作', runId: '第二批' }
     partial = { synopsis_result: outlineBody(6, 6), synopsis_incomplete: true, synopsis_generation_handle: handle }
-    recoveryContext = { handle, plotOutline: { range: { from: 6, to: 10 } },
+    recoveryContext = { handle, plotOutline: { range: { from: 6, to: 10 }, cursor: { kind: 'request', chapterNumber: 7, attempt: 'normal' } },
       plotOutlineRecovery: { draft: outlineBody(6, 6), completeChapters: [6], writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null } }
     filledSpine(['premise', 'synopsis'])
     await render()

@@ -441,7 +441,8 @@ export function useArchitectureOverview(projectKey: string) {
 
   /** 恢复稿因来源已变不能写回时，本批的章节范围：作者从它的起始章重新生成；能写回或没有恢复稿时为 null。 */
   const writeState = planningRecovery?.plotOutlineRecovery?.writeState
-  const outlineRestartRange = writeState?.kind === 'blocked' && writeState.reason === 'source-changed' ? planningRecovery?.plotOutline?.range ?? null : null
+  const outlineRestartRange = writeState?.kind === 'blocked' && writeState.reason === 'source-changed' && planningRecovery?.plotOutline?.cursor.kind !== 'complete'
+    ? planningRecovery?.plotOutline?.range ?? null : null
   const openOutlineRestart = () => {
     if (outlineRestartRange) setGenerateIntent({ steps: ['synopsis'], synopsisRange: { from: outlineRestartRange.from, to: outlineRestartRange.to } })
   }
