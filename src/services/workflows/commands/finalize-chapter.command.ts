@@ -395,7 +395,9 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         const latest = recovery?.view.budgetDiagnostics?.at(-1)
         if (!recovery || recovery.effect || !latest || latest.actualState === 'reserved') continue
         const candidate = (recovery.view.candidates ?? recovery.view.artifacts).at(-1)
-        const usable = !latest.failureCode && latest.finishReason === 'stop' && candidate?.status === 'completed' && candidate.compositionEligible
+        // budgetDiagnostics 把根的 blockedCode 填进每次尝试；只有尝试自身的失败才算未成功，阻断时仍可提交已完成结果。
+        const failed = !!latest.failureCode && latest.failureCode !== recovery.view.ledger?.blockedCode
+        const usable = !failed && latest.finishReason === 'stop' && candidate?.status === 'completed' && candidate.compositionEligible
         if (!usable) explicit[stepKey] = { recoverFrom: latest.attemptId }
         else if (stepKey === 'character_cards') explicit[stepKey] = { retryOf: { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash } }
       }

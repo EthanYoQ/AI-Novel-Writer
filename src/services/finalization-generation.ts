@@ -45,10 +45,14 @@ export async function runFinalizationGeneration(options: {
     if (recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled') throw new Error('FINALIZATION_GENERATION_SOURCE_CHANGED')
     let candidates = recovery.view.candidates ?? recovery.view.artifacts
     let candidate = candidates.at(-1)
-    if (options.retryOf || options.recoverFrom || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
-      if (!candidate && recovery.attemptCount > 0 && !options.recoverFrom) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
+    // 显式引用只对冻结它的那次运行有效；取消后 begin 换了新运行时按普通路径重新请求。
+    const requested = options.retryOf
+    const retryOf = requested && candidates.some(item => item.artifactId === requested.artifactId) ? requested : undefined
+    const recoverFrom = options.recoverFrom && recovery.view.budgetDiagnostics?.some(item => item.attemptId === options.recoverFrom) ? options.recoverFrom : undefined
+    if (retryOf || recoverFrom || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
+      if (!candidate && recovery.attemptCount > 0 && !recoverFrom) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
       const previous = recovery.view.handle
-      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(options.retryOf ? { retryOf: options.retryOf } : {}), ...(options.recoverFrom ? { recoverFrom: options.recoverFrom } : {}) })
+      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(retryOf ? { retryOf } : {}), ...(recoverFrom ? { recoverFrom } : {}) })
       if (receipt.run.handle.projectId !== previous.projectId || receipt.run.handle.rootActionId !== previous.rootActionId || receipt.run.handle.runId !== previous.runId) throw new Error('FINALIZATION_GENERATION_IDENTITY_MISMATCH')
       recovery.view = receipt.run
       if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
