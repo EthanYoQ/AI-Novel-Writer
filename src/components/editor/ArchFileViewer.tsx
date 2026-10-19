@@ -20,7 +20,7 @@ import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
-import { renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, type PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
+import { plotOutlineLastChapter, renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, type PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { outlineSourceInvalidNote } from '../run/run-recovery'
 import { globalEventBus } from '../../shared/event-bus'
@@ -154,6 +154,7 @@ function ArchFileViewerSession({
   const [showDialog, setShowDialog] = useState(false)
   const [checkingArch, setCheckingArch] = useState(false)
   const [fullArchStatus, setFullArchStatus] = useState<Record<string, boolean>>({})
+  const [fullArchConfirmed, setFullArchConfirmed] = useState<Record<string, boolean>>({})
   const [synopsisSource, setSynopsisSource] = useState<PlotOutlineRangeSource>({ synopsis: '', totalChapters: 0, writingLanguage: 'zh-CN' })
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
   const [refreshBlockedMessage, setRefreshBlockedMessage] = useState<string | null>(null)
@@ -511,19 +512,25 @@ function ArchFileViewerSession({
         projectSession.projectPath,
       )
       if (!isProjectSessionCurrent(projectSession)) return
-      const status: Record<string, boolean> = {
-        premise: !!core?.premise && core.premise.length > 50 && !core.premise.includes('待生成'),
-        characters: rosterSnapshot?.status === 'ready',
-        worldbuilding: !!core?.worldbuilding && core.worldbuilding.length > 50 && !core.worldbuilding.includes('待生成'),
-        synopsis: !!core?.synopsis && core.synopsis.length > 50 && !core.synopsis.includes('待生成'),
+      // 有内容即算有（决定覆盖还是新生成）；超过 50 字才算已确认（决定状态文字与默认勾选），与架构页同一判定。
+      const hasContent = (value: string | undefined) => !!value?.trim() && !value.includes('待生成')
+      const sections = { premise: core?.premise, worldbuilding: core?.worldbuilding, synopsis: core?.synopsis }
+      const status: Record<string, boolean> = { characters: rosterSnapshot?.status === 'ready' }
+      const confirmed: Record<string, boolean> = { characters: status.characters }
+      for (const [key, value] of Object.entries(sections)) {
+        status[key] = hasContent(value)
+        confirmed[key] = status[key] && value!.length > 50
       }
+      if (sections.synopsis && plotOutlineLastChapter(sections.synopsis) === 0) confirmed.synopsis = false
 
       // 对于当前文件，如果编辑器内已修改但未保存，也暂时以前面的基准为准即可
-      const EditorContentLen = currentContentRef.current.length;
-      if (EditorContentLen > 50 && !currentContentRef.current.includes('待生成')) {
+      const editing = currentContentRef.current
+      if (hasContent(editing)) {
         status[stepKey] = true
+        if (editing.length > 50) confirmed[stepKey] = true
       }
       setFullArchStatus(status)
+      setFullArchConfirmed(confirmed)
       setSynopsisSource({
         synopsis: core?.synopsis ?? '',
         totalChapters: Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0,
@@ -779,6 +786,7 @@ function ArchFileViewerSession({
           isOpen={showDialog}
           onClose={() => setShowDialog(false)}
           archStatus={fullArchStatus}
+          confirmed={fullArchConfirmed}
           synopsisSource={synopsisSource}
           initialSelectedSteps={[stepKey]}
           onConfirm={handleConfirm}

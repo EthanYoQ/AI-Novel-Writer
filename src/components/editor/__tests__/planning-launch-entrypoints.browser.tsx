@@ -99,7 +99,7 @@ it.each(['architecture-page', 'outline-file'] as const)('passes the confirmed ra
 
 it('文档页里不足 50 字的一节点 AI 生成：标为将覆盖，不当成新生成', async () => {
   const short = '雾港的钟每晚早响一刻。'
-  const base = invoke.getMockImplementation()!
+  const base = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
   invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:project-core-get'
     ? { premise: '故事前提'.repeat(20), worldbuilding: short, synopsis: '', totalChapters: 20 }
     : base(channel, ...args))
