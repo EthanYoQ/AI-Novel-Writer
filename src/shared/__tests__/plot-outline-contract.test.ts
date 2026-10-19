@@ -22,7 +22,7 @@ describe('chapter Markdown outline contract', () => {
   it.each(['第0章', '第零章', '第〇章', 'Chapter 0'])('带「%s」序章的大纲从第 1 章起重写：有效并保留序章；序章真重复时仍拒绝', prologue => {
     const synopsis = `# 情节大纲\n\n## ${prologue}：序章\n灯塔熄灭前夜。\n\n${[1, 2].map(n => `## 第${n}章：第${n}夜\n这一夜的事。`).join('\n\n')}`
     const source = { synopsis, totalChapters: 2, writingLanguage: 'zh-CN' as const }
-    expect(plotOutlineRangeEffect(source, { from: 1, to: 2 })).toEqual({ kind: 'overwrite', whole: false, from: 1, to: 2, lastChapter: 2 })
+    expect(plotOutlineRangeEffect(source, { from: 1, to: 2 })).toEqual({ kind: 'overwrite', whole: false, from: 1, to: 2, lastChapter: 2, prologue: true })
     expect(plotOutlineRangeEffect(source, { from: 3, to: 4 }).kind).toBe('invalid')
     expect(renderPlotOutlineRange('## 第1章：新\n新事。\n\n## 第2章：新\n新事。', { from: 1, to: 2 }, source))
       .toBe(`# 情节大纲\n\n## ${prologue}：序章\n灯塔熄灭前夜。\n\n## 第1章：新\n新事。\n\n## 第2章：新\n新事。`)
@@ -128,7 +128,7 @@ describe('chapter Markdown outline contract', () => {
   it.each([['zh-CN', '第0章'], ['en-US', 'Chapter 0']] as const)('序章加第 1–5 章（%s）从第 3 章重写第 3–5 章：有效，序章与第 1–2 章原样保留', (language, prologue) => {
     const { head, tail, expected, join } = prologueBook(language, prologue)
     const source = expected(`${head}\n\n${join(1, 2, 3, 4, 5)}\n\n${tail(5)}`)
-    expect(plotOutlineRangeEffect(source, { from: 3, to: 5 })).toEqual({ kind: 'overwrite', whole: false, from: 3, to: 5, lastChapter: 5 })
+    expect(plotOutlineRangeEffect(source, { from: 3, to: 5 })).toEqual({ kind: 'overwrite', whole: false, from: 3, to: 5, lastChapter: 5, prologue: true })
     const rewritten = language === 'zh-CN' ? '## 第3章：新\n新事。\n\n## 第4章：新\n新事。\n\n## 第5章：新\n新事。' : '## Chapter 3: New\nNew.\n\n## Chapter 4: New\nNew.\n\n## Chapter 5: New\nNew.'
     expect(renderPlotOutlineRange(rewritten, { from: 3, to: 5 }, source)).toBe(`${head}\n\n${join(1, 2)}\n\n${rewritten}\n\n${tail(5)}`)
   })
@@ -239,6 +239,28 @@ describe('chapter Markdown outline contract', () => {
         expect(isPlotOutlineCoverageNote(tail)).toBe(true)
         expect(isPlotOutlineCoverageNote(`${tail} `)).toBe(false)
       }
+    })
+  })
+
+  describe('只有序章的大纲（#417）', () => {
+    const prologueOnly = (language: 'zh-CN' | 'en-US') => language === 'zh-CN'
+      ? `# 情节大纲\n\n## 第0章：序章\n${'守塔人听见第十三声钟，灯塔在那一夜熄灭。'.repeat(4)}`
+      : `# Plot Outline\n\n## Chapter 0: Prologue\n${'The keeper hears the thirteenth bell and the lighthouse goes dark. '.repeat(2)}`
+
+    it.each(['zh-CN', 'en-US'] as const)('超过 50 字也算还没开始生成（%s），不是已完成', language => {
+      expect(outlineProgress(prologueOnly(language), null, language, 24)).toEqual({ kind: 'empty' })
+    })
+
+    it('没有按章标题的整份大纲仍算已完成', () => {
+      expect(outlineProgress(`# 情节大纲\n\n${'全书分三幕，林舟追查失踪者。'.repeat(6)}`, null, 'zh-CN', 24)).toEqual({ kind: 'complete' })
+    })
+
+    it('从第 1 章起写是接在序章之后续写；重写中间几章时说明序章也保留', () => {
+      const source = { synopsis: prologueOnly('zh-CN'), totalChapters: 24, writingLanguage: 'zh-CN' as const }
+      expect(plotOutlineRangeEffect(source, { from: 1, to: 5 })).toEqual({ kind: 'continue', after: 0 })
+      expect(plotOutlineNextChapter(source)).toBe(1)
+      const withChapters = { ...source, synopsis: `${source.synopsis}\n\n${[1, 2, 3, 4, 5].map(n => `## 第${n}章：第${n}夜\n这一夜的事。`).join('\n\n')}` }
+      expect(plotOutlineRangeEffect(withChapters, { from: 3, to: 5 })).toEqual({ kind: 'overwrite', whole: false, from: 3, to: 5, lastChapter: 5, prologue: true })
     })
   })
 })
