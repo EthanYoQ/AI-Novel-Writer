@@ -337,7 +337,8 @@ export function inspectLocalWritingSkill(raw: string, options: LocalWritingSkill
  * 检查已安装的 Skill。没有清单时与 inspectWritingSkillMarkdown 相同。
  * 有清单时只并入清单里的文件、按清单顺序；引用只用来判断拦截型引用是否都落在清单里。
  */
-export function inspectInstalledWritingSkill(raw: string, bundle: InstalledWritingSkillBundle): WritingSkillInspection {
+/** fallbackName 只用于有清单的本机导入（安装时缺 name 的取了文件夹名）；没有清单时与旧版一样不用。 */
+export function inspectInstalledWritingSkill(raw: string, bundle: InstalledWritingSkillBundle, fallbackName?: string): WritingSkillInspection {
   if (bundle.status === 'none') return inspectWritingSkillMarkdown(raw)
   if (typeof raw !== 'string') throw new Error('SKILL.md content must be text')
   const { fields, content: body } = parseFrontmatter(raw, true)
@@ -346,7 +347,7 @@ export function inspectInstalledWritingSkill(raw: string, bundle: InstalledWriti
   const listed = new Map(files.map(file => [file.path.toLowerCase(), file.content]))
   const references = bundleReferencedFiles(body, relativePath => listed.get(relativePath.toLowerCase()))
   const inspection: WritingSkillPackageInspection = {
-    ...inspectSkill(raw, { fields, body, files, relativeReference: references.blocked }),
+    ...inspectSkill(raw, { fields, body, files, relativeReference: references.blocked, fallbackName }),
     bundledFiles: files.map(file => file.path),
     unbundledReferences: references.unbundled,
   }

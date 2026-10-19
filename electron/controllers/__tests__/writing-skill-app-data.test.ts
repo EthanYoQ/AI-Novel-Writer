@@ -222,6 +222,19 @@ describe('writing skill app-data boundary', () => {
     expect(shown?.writingSkill).toMatchObject({ compatible: false, reasons: expect.arrayContaining(['bundle-damaged']) })
   })
 
+  it('keeps the folder name a nameless folder skill was previewed with after installing', async () => {
+    const folder = writeLocalSkill('voice', {
+      'SKILL.md': '---\ndescription: Keep the narrative voice steady.\n---\nFollow [voice](references/voice.md).',
+      'references/voice.md': 'Stay in close third person.',
+    })
+    const picked = await pickLocal('folder', folder)
+    expect(picked.inspection!.metadata.name).toBe('voice')
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true })
+
+    const shown = await settingsView('user:voice')
+    expect(shown?.writingSkill?.metadata.name).toBe('voice')
+  })
+
   it.runIf(caseInsensitiveFileSystem)(
     'does not list a file merged under another letter case as not installed',
     async () => {

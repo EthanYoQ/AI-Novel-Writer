@@ -202,6 +202,10 @@ function installUserWritingSkill(
   }
   const { directory, filePath } = ensureOwnedSkillTarget(inspection.metadata.name)
   try {
+    // 清单先写：安装中途崩溃时目录被判为「已损坏」而不是按旧规则「兼容」却缺了附带内容。
+    if (bundle) {
+      fs.writeFileSync(path.join(directory, WRITING_SKILL_BUNDLE_MANIFEST), writingSkillBundleManifest(bundle), { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    }
     fs.writeFileSync(filePath, raw, { encoding: 'utf8', mode: 0o600 })
     for (const { path: relativePath, content } of bundle ?? []) {
       const target = path.resolve(directory, ...relativePath.split('/'))
@@ -210,9 +214,6 @@ function installUserWritingSkill(
       }
       fs.mkdirSync(path.dirname(target), { recursive: true })
       fs.writeFileSync(target, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
-    }
-    if (bundle) {
-      fs.writeFileSync(path.join(directory, WRITING_SKILL_BUNDLE_MANIFEST), writingSkillBundleManifest(bundle), { encoding: 'utf8', mode: 0o600, flag: 'wx' })
     }
   } catch (error) {
     fs.rmSync(directory, { recursive: true, force: true })

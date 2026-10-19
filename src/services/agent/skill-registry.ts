@@ -373,7 +373,7 @@ export function parseSkillMd(
   projectSession?: ProjectSessionContext,
   bundle: InstalledWritingSkillBundle = { status: 'none' },
 ): LoadedSkill | null {
-  const writingSkill = inspectInstalledWritingSkill(raw, bundle)
+  const writingSkill = inspectInstalledWritingSkill(raw, bundle, fallbackName)
   const inspectedName = writingSkill.metadata.name === 'unnamed-writing-skill'
     ? fallbackName
     : writingSkill.metadata.name

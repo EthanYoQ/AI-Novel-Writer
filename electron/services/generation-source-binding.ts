@@ -529,7 +529,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
             : { status: 'none' };
         if (bundle.status === 'damaged')
             fail('GENERATION_SKILL_BUNDLE_DAMAGED');
-        const inspected = inspectInstalledWritingSkill(text, bundle);
+        const inspected = inspectInstalledWritingSkill(text, bundle, name);
         const bundled = bundle.status === 'intact' ? bundle.files.flatMap(file => [file.path, file.content]) : [];
         // Bundled skills are an existing product capability, selected through
         // the trusted pure getter. External imports retain their stricter gate.
