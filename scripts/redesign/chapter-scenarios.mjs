@@ -444,6 +444,51 @@ export const CHAPTER_SCENARIOS = {
     return { before, after: await chapterView.postProcessSteps(page), retried }
   } },
 
+  /**
+   * #420：角色状态请求断流两次。自动后处理只发一次请求、失败说明不含错误码；重开应用后点「重试失败步骤」恰好再发一次，
+   * 仍断流时说明换成「没有返回完整结果」；再点这一步的「重试」第三次请求成功，后处理回到 3 / 3（重开后不再列正文文件一行）。
+   */
+  'chapter-retry-stream': { model: true, shell: 'stage', setup: seed(), run: async context => {
+    const { fake } = context
+    const characterRequests = () => fake.requests.filter(kind => kind === 'character-state').length
+    const detail = () => chapterView.postProcess(context.page).locator('li[data-state="failed"] .stage-ch-post-detail').first()
+    fake.dropCharacterState(2)
+    await chapterView.open(context.page, 3)
+    const finalizing = await runsStarted(context.page)
+    await chapterView.finalize(context.page, 3)
+    await waitRunDone(context.page, finalizing)
+    await detail().waitFor({ state: 'visible', timeout: 60_000 })
+    assert.equal(characterRequests(), 1, '自动后处理只发了一次角色状态请求')
+    const firstError = await detail().innerText()
+    await context.restart()
+    const opened = await Promise.race([
+      stage.spine(context.page).waitFor({ state: 'visible', timeout: 60_000 }).then(() => true),
+      stage.cover(context.page, STAGE_SAMPLE.name).waitFor({ state: 'visible', timeout: 60_000 }).then(() => false),
+    ])
+    if (!opened) {
+      await stage.previewBook(context.page, STAGE_SAMPLE.name)
+      await stage.overview(context.page, STAGE_SAMPLE.name).getByRole('button', { name: `打开《${STAGE_SAMPLE.name}》` }).click()
+      await stage.spine(context.page).waitFor({ state: 'visible', timeout: 60_000 })
+    }
+    await afterProjectOpenSettles(context.page)
+    await chapterView.open(context.page, 3)
+    await detail().waitFor({ state: 'visible', timeout: 60_000 })
+    const retrying = await runsStarted(context.page)
+    await chapterView.postProcess(context.page).getByRole('button', { name: '重试失败步骤' }).click()
+    await waitRunDone(context.page, retrying)
+    assert.equal(characterRequests(), 2, '重开后点重试恰好发出一次新请求')
+    await detail().filter({ hasText: '没有返回完整结果' }).waitFor({ state: 'visible', timeout: 60_000 })
+    const secondError = await detail().innerText()
+    for (const error of [firstError, secondError]) assert.doesNotMatch(error, /[A-Z]+_[A-Z_]+/, '失败说明不应是原始错误码')
+    await context.shoot('chapter-retry-stream-failed')
+    const fixing = await runsStarted(context.page)
+    await chapterView.postProcess(context.page).locator('li[data-state="failed"]').getByRole('button', { name: '重试' }).click()
+    await waitRunDone(context.page, fixing)
+    await chapterView.postProcess(context.page).getByText('3 / 3 完成').waitFor({ state: 'visible', timeout: 60_000 })
+    assert.equal(characterRequests(), 3, '第二次重试发出第三次请求并成功')
+    return { firstError, secondError, characterRequests: characterRequests(), steps: await chapterView.postProcessSteps(context.page) }
+  } },
+
   /** lane 8：选中一段正文用选区工具条润色，预览后替换；再选一段润色后取消，正文不变。 */
   'chapter-selection': { model: true, shell: 'stage', setup: seed(), run: async ({ page }) => {
     await chapterView.open(page, 4)

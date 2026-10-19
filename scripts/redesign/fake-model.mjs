@@ -93,6 +93,7 @@ export async function startFakeModel(diagnostics) {
   let stream = null
   let extraction = 0
   let brokenCharacterState = false
+  let droppedCharacterStates = 0
   let plotTree = false
   let failedProse = false
   let review = null
@@ -118,6 +119,8 @@ export async function startFakeModel(diagnostics) {
   }
   /** 定稿后处理的角色状态更新收到不是 JSON 的回复，这一步失败；传 false 恢复，用来演示只重试失败的步骤。 */
   const breakCharacterState = (broken = true) => { brokenCharacterState = broken }
+  /** 之后 times 次角色状态请求回 200 后不发任何内容就断开连接（#420 的断流），用来演示重试真的重新请求。 */
+  const dropCharacterState = (times = 1) => { droppedCharacterStates = times }
   /** 之后的剧情树整理回一份两轨（主线加支线）的合法 JSON。 */
   const replyPlotTree = () => { plotTree = true }
   /** 之后的正文回复以 content_filter 结束：写稿在这次打开里失败，留下可恢复的候选。传 false 恢复。 */
@@ -150,6 +153,12 @@ export async function startFakeModel(diagnostics) {
     chats.push({ kind, model: body.model, messages: body.messages })
     record(kind, prompt.slice(0, 120).replace(/\s+/g, ' '))
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+    if (kind === 'character-state' && droppedCharacterStates > 0) {
+      droppedCharacterStates--
+      response.flushHeaders()
+      response.destroy()
+      return
+    }
     const finish = kind === 'prose' && failedProse ? 'content_filter' : 'stop'
     if (kind === 'prose' && stream) {
       for (const [index, chunk] of stream.chunks.entries()) {
@@ -166,6 +175,6 @@ export async function startFakeModel(diagnostics) {
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   server.unref()
-  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, replyPlotTree, failProse, replyReview,
+  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview,
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(() => resolve()) }) }
 }
