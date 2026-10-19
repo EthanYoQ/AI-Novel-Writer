@@ -365,6 +365,62 @@ export const CHAPTER_SCENARIOS = {
     await assertContrast(page, CONTRAST.sheet, '审稿侧页')
   } },
 
+  /**
+   * #438：「留作草稿」批次里第 4 章以第 3 章候选稿为前驱写成；作者随后改了第 3 章，再把 3、4 章逐章定稿。
+   * 写第 5 章时模型照常出稿，保存不能因为第 4 章当初依据的第 3 章旧稿而被拒。
+   */
+  'chapter-write-after-edited-chain': { model: true, shell: 'stage', setup: seed({ extra: async ({ page, invoke, path, session }) => {
+    const [third] = await invoke(page, 'db:draft-list', 3, path, session)
+    const original = (await invoke(page, 'db:draft-get-full', third.id, path, session)).content
+    const fourth = STAGE_SAMPLE.drafts[4].text
+    const created = await invoke(page, 'db:draft-create', { chapterNumber: 4, version: 2, source: 'rewrite', content: fourth, wordCount: countUnits(fourth),
+      sourceDependencies: [{ kind: 'candidate', draftId: third.id, contentHash: createHash('sha256').update(original, 'utf8').digest('hex') }] }, path, session)
+    assert.equal(created.success, true, created.error)
+    const edited = `${original}\n\n作者审稿时补的一句：雾钟停了。`
+    assert.equal((await invoke(page, 'db:draft-update-content', third.id, edited, countUnits(edited), path, session)).success, true)
+  } }), run: async ({ page, fake }) => {
+    for (const chapterNumber of [3, 4]) {
+      await chapterView.open(page, chapterNumber)
+      await chapterView.more(page, '定稿…')
+      const finalizing = await runsStarted(page)
+      await chapterView.finalizeDialog(page, chapterNumber).getByRole('button', { name: '确认定稿', exact: true }).click()
+      await chapterView.view(page).getByText('已定稿，只读', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
+      await waitRunDone(page, finalizing)
+      await chapterView.postProcess(page).getByText('4 / 4 完成').waitFor({ state: 'visible', timeout: 60_000 })
+    }
+    // 侧页开着时 waitRunDone 看的是「上一次运行」卡，会把第 4 章定稿当成这次写作；收起后改等顶栏胶囊。
+    if (await runSheet.sheet(page).isVisible()) await runSheet.sheet(page).getByRole('button', { name: '收起运行侧页' }).first().click()
+    await chapterView.open(page, 5)
+    const proseBefore = fake.chats.filter(chat => chat.kind === 'prose').length
+    const started = await runsStarted(page)
+    await chapterView.view(page).getByRole('button', { name: '写作此章', exact: true }).click()
+    await waitRunDone(page, started)
+    await runSheet.openFromPalette(page)
+    const after = {
+      proseRequests: fake.chats.filter(chat => chat.kind === 'prose').length - proseBefore,
+      savedProse: await chapterView.prose(page).getByText(firstLine(FIXTURE_PROSE)).count() > 0,
+      rawIpcError: await runSheet.sheet(page).getByText(/Error invoking remote method|GENERATION_/).count(),
+    }
+    assert.deepEqual(after, { proseRequests: 1, savedProse: true, rawIpcError: 0 }, '第 5 章写完并保存，运行侧页没有原始错误')
+    return after
+  } },
+
+  /** #411：第 3 章是旧版本留下的 reviewed 稿，重新审稿要真的请求模型并写回审稿，运行侧页不露原始 IPC 错误。 */
+  'chapter-rereview-legacy': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake }) => {
+    await chapterView.open(page, 3)
+    const reviewsBefore = fake.chats.filter(chat => chat.kind === 'review').length
+    const started = await runsStarted(page)
+    await chapterView.view(page).getByRole('button', { name: '重新审稿', exact: true }).click()
+    await waitRunDone(page, started)
+    await runSheet.openFromPalette(page)
+    const after = {
+      reviewRequests: fake.chats.filter(chat => chat.kind === 'review').length - reviewsBefore,
+      rawIpcError: await runSheet.sheet(page).getByText(/Error invoking remote method/).count(),
+    }
+    assert.deepEqual(after, { reviewRequests: 1, rawIpcError: 0 }, '重新审稿请求了模型，运行侧页没有原始 IPC 错误')
+    return after
+  } },
+
   /** lane 4：添加作者意见后修稿，修稿请求里带着这条意见。 */
   'chapter-manual': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake }) => {
     await chapterView.open(page, 4)
