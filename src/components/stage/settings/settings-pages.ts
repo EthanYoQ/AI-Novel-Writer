@@ -6,16 +6,18 @@ export interface SettingsPageSpec {
   id: SettingsSection
   name: Pair
   lede: Pair
+  /** 不配置就有功能用不了的页：导航与页头标「必需」，没配好时标「未配置」。 */
+  required?: true
 }
 
 /** ia.md 的三组：常用、高级、其他。 */
 export const SETTINGS_GROUPS: readonly { id: string; name: Pair; pages: readonly SettingsPageSpec[] }[] = [
   { id: 'common', name: ['常用', 'Common'], pages: [
-    { id: 'llm', name: ['AI 模型', 'AI models'], lede: ['写作、审稿、修稿都用这里的模型。标为默认的会预先选好，每次运行前仍可临时换。', 'Writing, reviews and revisions use these models. The default is preselected and can be changed before each run.'] },
+    { id: 'llm', required: true, name: ['AI 模型', 'AI models'], lede: ['写作、审稿、修稿都用这里的模型。标为默认的会预先选好，每次运行前仍可临时换。', 'Writing, reviews and revisions use these models. The default is preselected and can be changed before each run.'] },
+    { id: 'embedding', required: true, name: ['检索模型', 'Retrieval model'], lede: ['知识库用它理解资料的意思，按意思找到相关段落；伏笔、人物与前文都靠它找回。', 'The knowledge base uses it to understand your material and find passages by meaning, which is how foreshadowing, characters and earlier chapters are recalled.'] },
     { id: 'appearance', name: ['外观', 'Appearance'], lede: ['改动立即生效，不需要保存。', 'Changes apply right away. No need to save.'] },
   ] },
   { id: 'advanced', name: ['高级', 'Advanced'], pages: [
-    { id: 'embedding', name: ['检索模型', 'Retrieval model'], lede: ['知识库用它理解资料的意思，按意思找到相关段落。', 'The knowledge base uses it to understand your material and find passages by meaning.'] },
     { id: 'proxy', name: ['网络代理', 'Network proxy'], lede: ['连接模型服务需要经过代理时在这里设置，所有 AI 请求都会走它。', 'Set this when model services must be reached through a proxy. Every AI request goes through it.'] },
     { id: 'prompts', name: ['提示词模板', 'Prompt templates'], lede: ['调整 AI 在每个创作环节收到的指导。可以只改这部作品，也可以改成全局默认。', 'Adjust the guidance AI receives at each writing step, for this book or as the global default.'] },
     { id: 'skills', name: ['写作 Skills', 'Writing skills'], lede: ['安装提示词型的写作 Skill，并绑定到创作阶段。安装前会先让你检查内容。', 'Install prompt-only writing skills and bind them to writing stages. You review each one before installing.'] },
