@@ -13,6 +13,7 @@ import { NativeSelect } from '../ui/NativeSelect'
 import { cn } from '../../lib/utils'
 import { useLocaleStore } from '../../stores/locale-store'
 import { ModelReasoningOverrideSettings, ModelCapabilitySources, ProjectCreativeStrategySettings } from './ReasoningPolicySettings'
+import { ChatgptPlanAccount } from './ChatgptPlanAccount'
 import { openModelProviderResource } from './model-provider-resource'
 
 /** 模型编辑表单 */
@@ -71,6 +72,7 @@ export function ModelForm({
     setDiscoveryNotice(null)
   }
 
+  const isChatgptPlan = model.provider === 'chatgpt-plan'
   const isEmbedding = model.purposes?.includes('embedding')
   const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
   // 将预设数组转换为以 provider 为键的 Map 方便查找
@@ -164,9 +166,10 @@ export function ModelForm({
       maxTokens: capabilities?.maxOutputTokens ?? firstModel?.maxTokens ?? 4096,
       capabilities: capabilities ? { ...capabilities } : undefined,
     }
-    onChange(isEmbedding ? selection : applyModelProfileSelection(model, {
+    const updated = isEmbedding ? selection : applyModelProfileSelection(model, {
       provider, protocol: selection.protocol, baseUrl: selection.baseUrl, modelName: selection.modelName,
-    }))
+    })
+    onChange(provider === 'chatgpt-plan' ? { ...updated, apiKey: '' } : updated)
   }
 
   /** 选择预设模型或切换到自定义输入 */
@@ -240,7 +243,7 @@ export function ModelForm({
   }
 
   const discoveryNoticeText = discoveryNotice === 'auth'
-      ? text('鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.')
+      ? isChatgptPlan ? text('請重新連接 ChatGPT 並授權訂閱用量。', 'Reconnect ChatGPT and authorize plan usage.') : text('鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.')
       : discoveryNotice === 'unsupported'
         ? text('该端点不支持标准模型列表接口。请继续手工填写模型 ID。', 'This endpoint does not support the standard model-list API. Continue with a manual model ID.')
         : discoveryNotice === 'network'
@@ -279,6 +282,7 @@ export function ModelForm({
             onChange={(e) => handleProviderChange(e.target.value as ModelProfile['provider'])}
           >
             <option value="openai">OpenAI</option>
+            {!isEmbedding && <option value="chatgpt-plan">{text('ChatGPT 訂閱', 'ChatGPT subscription')}</option>}
             <option value="novelai">NovelAI</option>
             <option value="deepseek">DeepSeek</option>
             <option value="gemini">Google Gemini</option>
@@ -292,6 +296,7 @@ export function ModelForm({
         <div>
           <Label>{text('调用协议', 'Protocol')}</Label>
           <NativeSelect
+            disabled={isChatgptPlan}
             value={model.protocol}
             onChange={(e) => up('protocol', e.target.value as 'openai' | 'gemini')}
           >
@@ -350,7 +355,9 @@ export function ModelForm({
         )}
       </div>
 
+      {isChatgptPlan && <ChatgptPlanAccount onChanged={invalidateDiscovery} />}
       {/* Base URL */}
+      {!isChatgptPlan && <>
       <div>
         <Label>{text('base_url', 'base_url')}</Label>
         <Input
@@ -386,12 +393,13 @@ export function ModelForm({
         </div>
       </div>
 
+      </>}
       <div className="space-y-2 rounded-lg p-3" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-hover)' }}>
         <div className="flex items-center justify-between gap-3">
           <div>
             <Label className="mb-0">{text('端点模型列表', 'Endpoint model list')}</Label>
             <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
-              {text('填写端点与 API Key 后即可获取；选择模型后再保存配置。', 'Enter the endpoint and API key to refresh, then save after choosing a model.')}
+              {isChatgptPlan ? text('連接 ChatGPT 後取得帳號可用模型，選擇後儲存。', 'Connect ChatGPT, refresh available models, then choose and save.') : text('填写端点与 API Key 后即可获取；选择模型后再保存配置。', 'Enter the endpoint and API key to refresh, then save after choosing a model.')}
             </p>
           </div>
           <Button type="button" size="sm" variant="outline" onClick={handleDiscoverModels} disabled={discovering}>
@@ -502,6 +510,7 @@ export function ModelForm({
                   <Label>{text('温度', 'Temperature')}</Label>
                   <Input
                     aria-label={text('温度', 'Temperature')}
+                    disabled={isChatgptPlan}
                     type="number" min={0} max={2} step={0.1}
                     value={model.temperature}
                     onChange={(e) => up('temperature', (e.target.value === '' ? '' : parseFloat(e.target.value)) as number)}
@@ -511,7 +520,7 @@ export function ModelForm({
                     }}
                   />
                   <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
-                    {text('模型级采样偏好；固定温度模型不会收到此参数。', 'Model-level sampling preference. Fixed-temperature models do not receive this parameter.')}
+                    {isChatgptPlan ? text('ChatGPT 訂閱使用模型預設溫度。', 'ChatGPT subscription uses the model default temperature.') : text('模型级采样偏好；固定温度模型不会收到此参数。', 'Model-level sampling preference. Fixed-temperature models do not receive this parameter.')}
                   </p>
                 </div>
                 <div>
@@ -596,7 +605,7 @@ export function ModelForm({
         <Button
           variant="outline"
           onClick={handleTest}
-          disabled={testing || !model.baseUrl || (!model.apiKey && model.provider !== 'ollama')}
+          disabled={testing || !model.baseUrl || (!model.apiKey && model.provider !== 'ollama' && !isChatgptPlan)}
         >
           <Zap size={13} />
           {testing ? text('测试中...', 'Testing...') : text('测试连接', 'Test connection')}
@@ -604,7 +613,7 @@ export function ModelForm({
         <Button
           className="flex-1"
           onClick={onSave}
-          disabled={saving || !model.baseUrl.trim() || !model.modelName.trim() || (!model.apiKey.trim() && model.provider !== 'ollama')}
+          disabled={saving || !model.baseUrl.trim() || !model.modelName.trim() || (!model.apiKey.trim() && model.provider !== 'ollama' && !isChatgptPlan)}
         >
           <Save size={13} />
           {saving ? text('保存中...', 'Saving...') : text('保存配置', 'Save configuration')}

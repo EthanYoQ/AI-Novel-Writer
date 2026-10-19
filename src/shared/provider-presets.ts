@@ -186,6 +186,14 @@ export function createProviderCatalog(): ProviderPreset[] {
     embeddingModels: ['text-embedding-3-small', 'text-embedding-3-large', 'text-embedding-ada-002'],
   },
   {
+    provider: 'chatgpt-plan',
+    displayName: 'ChatGPT',
+    baseUrl: 'https://api.openai.com/v1',
+    protocol: 'openai',
+    models: [],
+    embeddingModels: [],
+  },
+  {
     provider: 'xai',
     displayName: 'xAI(Grok)',
     baseUrl: 'https://api.x.ai/v1',

@@ -518,6 +518,18 @@ export type ModelDiscoveryRequest = Pick<
 >
 
 export interface LLMChannels {
+  'llm:chatgpt-status': {
+    args: []
+    return: { success: boolean; connected: boolean; sharing: boolean; email?: string }
+  }
+  'llm:chatgpt-sign-in': {
+    args: []
+    return: { success: boolean; connected: boolean; sharing: boolean; email?: string }
+  }
+  'llm:chatgpt-disconnect': {
+    args: []
+    return: { success: boolean }
+  }
   'llm:begin-execution-lease': {
     args: [modelId: string]
     return: {
@@ -783,7 +795,7 @@ export interface TokenUsage {
 export interface ModelProfile {
   id: string
   name: string
-  provider: 'openai' | 'gemini' | 'deepseek' | 'ollama' | 'bigmodel' | 'novelai' | 'xai' | 'siliconflow' | 'custom'
+  provider: 'openai' | 'gemini' | 'deepseek' | 'ollama' | 'bigmodel' | 'novelai' | 'xai' | 'siliconflow' | 'custom' | 'chatgpt-plan'
   protocol: 'openai' | 'gemini'
   modelName: string
   apiKey: string

@@ -20,6 +20,7 @@ import {
   ModelExecutionLeaseRegistry,
 } from '../services/model-execution-lease'
 import { ModelDiscoveryService } from '../services/model-discovery-service'
+import { chatgptPlanStatus, signInChatgptPlan, disconnectChatgptPlan, chatgptPlanModels } from '../services/chatgpt-plan'
 
 interface ActiveStream {
   controller: AbortController
@@ -113,6 +114,18 @@ function recordProviderOutcome(
 }
 
 export function registerLLMController() {
+  ipcMain.handle('llm:chatgpt-status', () => {
+    try { return { success: true, ...chatgptPlanStatus() } }
+    catch { return { success: false, connected: false, sharing: false } }
+  })
+  ipcMain.handle('llm:chatgpt-sign-in', async () => {
+    try { return { success: true, ...await signInChatgptPlan() } }
+    catch { return { success: false, connected: false, sharing: false } }
+  })
+  ipcMain.handle('llm:chatgpt-disconnect', () => {
+    try { disconnectChatgptPlan(); return { success: true } }
+    catch { return { success: false } }
+  })
   const modelExecutionLeases = new ModelExecutionLeaseRegistry({ loadModel: getModelConfig })
   const modelDiscovery = new ModelDiscoveryService()
   const closedExecutionLeaseTombstones = new Map<string, number>()
@@ -271,6 +284,13 @@ export function registerLLMController() {
   ipcMain.handle('llm:discover-models', async (_event, request: ModelDiscoveryRequest) => {
     try {
       applyProxyConfig()
+      if (request.provider === 'chatgpt-plan') {
+        if (!chatgptPlanStatus().sharing) return { success: false, errorCode: 'auth' as const }
+        try {
+          const models = (await chatgptPlanModels()).map(model => ({ id: model.slug, value: model.slug, name: model.name }))
+          return models.length ? { success: true, models } : { success: false, errorCode: 'empty' as const }
+        } catch { return { success: false, errorCode: 'network' as const } }
+      }
       return await modelDiscovery.discoverModels(request)
     } catch {
       return { success: false, errorCode: 'invalid_response' as const }
@@ -279,6 +299,10 @@ export function registerLLMController() {
 
   ipcMain.handle('llm:save-model', async (_event, model: ModelProfile) => {
     try {
+      if (model.provider === 'chatgpt-plan') {
+        if (model.purposes.includes('embedding')) throw new Error('ChatGPT subscription does not support embeddings')
+        model = { ...model, apiKey: '', protocol: 'openai', baseUrl: 'https://api.openai.com/v1' }
+      }
       if (model.reasoningMapping !== undefined && (!isReasoningMapping(model.reasoningMapping)
         || (model.protocol === 'gemini') !== (model.reasoningMapping.adapter === 'gemini-thinking-budget'))) {
         throw new Error('INVALID_REASONING_MAPPING')
