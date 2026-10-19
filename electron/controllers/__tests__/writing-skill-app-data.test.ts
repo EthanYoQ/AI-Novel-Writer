@@ -68,7 +68,7 @@ type PickResult = {
   success: boolean
   cancelled?: boolean
   error?: string
-  inspection?: { candidateId: string; compatible: boolean; reasons: string[]; utf8Bytes: number; bundledFiles: string[]; unbundledReferences: string[]; skippedFiles: string[] }
+  inspection?: { candidateId: string; metadata: { name: string }; compatible: boolean; reasons: string[]; utf8Bytes: number; bundledFiles: string[]; unbundledReferences: string[]; skippedFiles: string[] }
 }
 
 async function pickLocal(kind: 'file' | 'folder', picked: string): Promise<PickResult> {
