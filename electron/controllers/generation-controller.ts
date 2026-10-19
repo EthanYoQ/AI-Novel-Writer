@@ -18,7 +18,7 @@ import { readBuiltinWritingSkill } from '../../src/shared/builtin-writing-skills
 import { getProjectDb, getCurrentProjectPath, onProjectDatabaseBeforeClose } from '../database'
 import { getGlobalDataRoot } from '../services/app-data-locator'
 import { getProjectDataRoot } from '../services/project-data-locator'
-import { projectAccess } from '../services/project-access'
+import { projectAccess, ProjectSessionStaleError } from '../services/project-access'
 import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
 import { createMainGenerationOwner } from '../services/main-generation-owner'
 import { readMainGenerationPolicy, TaskBudgetPreflightError } from '../services/main-generation-plan'
@@ -72,6 +72,31 @@ export function assertImportGenerationSourcesCurrent(handle: MainGenerationRunHa
   const database = getProjectDb(), entry = database && owners.get(database)
   if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
   entry.owner.assertImportGenerationSources(handle, slot, allowLegacyStyle)
+}
+
+const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER)_[A-Z_]+$/u
+const DIAGNOSTIC_MESSAGE_LIMIT = 200
+
+/**
+ * 生成 IPC 只向渲染端返回错误码。没有错误码的异常要先留下主进程诊断，再统一成
+ * GENERATION_REQUEST_FAILED；诊断只记通道、异常类型、截断的消息与堆栈，不记请求参数，
+ * 因为参数里可能有正文。
+ */
+export function generationIpcErrorCode(channel: string, error: unknown): string {
+  if (error instanceof TaskBudgetPreflightError) return error.message
+  if (error instanceof KnowledgeBaseUnavailableError || error instanceof LegacyVectorMigrationBlockedError) return error.code
+  if (error instanceof ProjectSessionStaleError) {
+    console.warn('[generation] stale project session rejected', { channel })
+    return 'GENERATION_PROJECT_SESSION_STALE'
+  }
+  if (error instanceof Error && (error.message === 'SOURCE_DRAFT_CHANGED' || GENERATION_ERROR_CODE.test(error.message))) return error.message
+  console.error('[generation] unmapped failure', {
+    channel,
+    name: error instanceof Error ? error.name : typeof error,
+    message: (error instanceof Error ? error.message : String(error)).slice(0, DIAGNOSTIC_MESSAGE_LIMIT),
+    stack: error instanceof Error ? error.stack?.split('\n').slice(1, 8).join('\n') : undefined,
+  })
+  return 'GENERATION_REQUEST_FAILED'
 }
 
 export function registerGenerationController(options: {
@@ -155,11 +180,7 @@ export function registerGenerationController(options: {
         projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
         return result
       } catch (error) {
-        if (error instanceof TaskBudgetPreflightError) throw new Error(error.message)
-        if (error instanceof KnowledgeBaseUnavailableError || error instanceof LegacyVectorMigrationBlockedError) throw new Error(error.code)
-        const code = error instanceof Error && (error.message === 'SOURCE_DRAFT_CHANGED' || /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER)_[A-Z_]+$/u.test(error.message))
-          ? error.message : 'GENERATION_REQUEST_FAILED'
-        throw new Error(code)
+        throw new Error(generationIpcErrorCode(channel, error))
       }
     })
   }
