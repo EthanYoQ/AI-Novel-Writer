@@ -56,3 +56,9 @@ it('does not promise that a stale-session action never ran', () => {
   expect(en).toContain('result')
   expect(en).not.toMatch(/did not run|was not run/iu)
 })
+
+it('explains a model change mid-generation instead of falling back to the raw code', () => {
+  const wrapped = "Error invoking remote method 'generation:execute': Error: GENERATION_SOURCE_CHANGED_MODEL"
+  expect(knownAppErrorMessage('zh-CN', wrapped)).toContain('模型设置被修改')
+  expect(knownAppErrorMessage('en-US', wrapped)).not.toContain('GENERATION_SOURCE_CHANGED_MODEL')
+})

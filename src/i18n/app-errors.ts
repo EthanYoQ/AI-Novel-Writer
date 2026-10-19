@@ -18,6 +18,8 @@ const ERROR_KEYS = {
   GENERATION_DRAFT_DEPENDENCY_STALE: 'error.generationDraftDependencyStale',
   GENERATION_DRAFT_DEPENDENCY_INVALID: 'error.generationDraftDependencyInvalid',
   GENERATION_SOURCE_CHANGED: 'error.generationSourceChanged',
+  // 途中保存了模型设置时主进程抛的细分码（#441）。
+  GENERATION_SOURCE_CHANGED_MODEL: 'error.generationModelChanged',
   GENERATION_FINALIZED_SOURCE_NOT_CURRENT: 'error.generationFinalizedSourceNotCurrent',
   GENERATION_DRAFT_INCOMPLETE: 'error.generationDraftIncomplete',
   SOURCE_DRAFT_CHANGED: 'error.sourceDraftChanged',
