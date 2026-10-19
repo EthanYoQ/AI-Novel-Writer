@@ -369,6 +369,7 @@ describe('版本历史', () => {
     await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toBe('这一稿已不存在，可能已被删除。列表已刷新。'))
     await vi.waitFor(() => expect(button(/草稿 v1/)).toBeUndefined())
     expect(button(/草稿 v2/)).toBeTruthy()
+    await vi.waitFor(() => expect(button(/雨夜车站/)!.textContent).toContain('1 稿'))
 
     await click(/草稿 v2/)
     await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toContain('与当前稿相同'))
