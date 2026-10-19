@@ -147,7 +147,41 @@ export const VISUAL_SCENARIOS = {
       await settle(page)
       await shoot(`rdv-sheet-${name}-683-closed`)
     }
-    assert.deepEqual(failures, [], '诊断侧页开着时没有一字一行的文字')
+    // 面板 790 宽（1076 视口）：诊断侧页浮在关系图谱上，图谱工具条不画在侧页上面、不截走点击
+    await page.setViewportSize({ width: 1076, height: 768 })
+    await page.waitForFunction(width => innerWidth === width, 1076)
+    // 视图切换按钮在内容区右侧，侧页浮起后被盖住，所以先切到关系图谱再开侧页
+    await SHEET_PAGES.find(([name]) => name === 'characters')[1](page)
+    await stage.root(page).locator('.cast-view-switch').getByRole('button', { name: '关系图谱' }).click()
+    await stage.root(page).locator('.cast-graph canvas').waitFor({ state: 'visible' })
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '诊断').click()
+    await settle(page)
+    const toolbarOverSheet = await page.evaluate(() => {
+      const slot = document.querySelector('.stage-sheet-slot')
+      const sheet = slot.getBoundingClientRect()
+      return [...document.querySelectorAll('.cast-graph button')].filter(button => {
+        const rect = button.getBoundingClientRect()
+        const x = rect.left + rect.width / 2
+        const y = rect.top + rect.height / 2
+        return x > sheet.left && !slot.contains(document.elementFromPoint(x, y))
+      }).map(button => button.getAttribute('aria-label'))
+    })
+    measured['characters-graph-1076'] = { ...await areaWidths(page), toolbarOverSheet }
+    if (toolbarOverSheet.length) failures.push(`关系图谱工具条画在浮起的侧页上：${toolbarOverSheet.join('、')}`)
+    await shoot('rdv-sheet-characters-graph-1076')
+    // 1280 视口开着普通侧页（内容区约 614px）：架构页页头放得下时动作与标题同一行
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.waitForFunction(width => innerWidth === width, 1280)
+    await runSheet.tab(page, '进行中').click()
+    await SHEET_PAGES.find(([name]) => name === 'architecture')[1](page)
+    await settle(page)
+    measured['architecture-1280-active'] = { ...await areaWidths(page), header: await page.evaluate(() => {
+      const box = selector => document.querySelector(selector).getBoundingClientRect()
+      return { headingRight: Math.round(box('.arch-heading').right), actionsLeft: Math.round(box('.arch-header-actions').left), sameRow: box('.arch-header-actions').top < box('.arch-heading').bottom }
+    }) }
+    await shoot('rdv-sheet-architecture-1280-active')
+    assert.deepEqual(failures, [], '诊断侧页开着时没有一字一行的文字，浮起的侧页不被内容区的浮层压住')
     return measured
   } },
   'rdv-clear': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page }) => {
