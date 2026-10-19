@@ -41,7 +41,6 @@ const sourceUrl = 'https://github.com/acme/story-skill/blob/main/SKILL.md'
 const rendererEvent = { sender: { id: 7, isDestroyed: () => false } }
 let pickRoot = ''
 
-/** 在临时目录里写出一个本机 Skill，键是相对路径。 */
 function writeLocalSkill(folder: string, files: Record<string, string>): string {
   const root = path.join(pickRoot, folder)
   for (const [relative, content] of Object.entries(files)) {
