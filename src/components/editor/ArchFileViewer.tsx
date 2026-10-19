@@ -20,8 +20,10 @@ import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
-import { plotOutlineLastChapter, renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, type PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
+import { renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, type PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
 import { useWorkflowStore } from '../../stores/workflow-store'
+import { outlineProgress } from '../../shared/plot-outline-checkpoint'
+import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
 import { outlineSourceInvalidNote } from '../run/run-recovery'
 import { globalEventBus } from '../../shared/event-bus'
 import {
@@ -512,7 +514,18 @@ function ArchFileViewerSession({
         projectSession.projectPath,
       )
       if (!isProjectSessionCurrent(projectSession)) return
-      // 有内容即算有（决定覆盖还是新生成）；超过 50 字才算已确认（决定状态文字与默认勾选），与架构页同一判定。
+      const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
+      const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US' ? 'en-US' : 'zh-CN'
+      // 分批检查点只用来认出被打断的一批；读不到时与架构页一样按没有检查点判定。
+      const partial = await ipc.invokeWithProjectSession(
+        projectSession,
+        'fs:read-json',
+        `${projectSession.projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
+        projectSession.projectPath,
+      ).catch(() => null)
+      if (!isProjectSessionCurrent(projectSession)) return
+      const checkpoint = partial?.success === true ? (partial as { data?: Record<string, unknown> }).data : undefined
+      // 有内容即算有（决定覆盖还是新生成）；已确认（决定默认勾选）与架构页同一判定：前提、世界观超过 50 字，大纲按进度写满全书。
       const hasContent = (value: string | undefined) => !!value?.trim() && !value.includes('待生成')
       const sections = { premise: core?.premise, worldbuilding: core?.worldbuilding, synopsis: core?.synopsis }
       const status: Record<string, boolean> = { characters: rosterSnapshot?.status === 'ready' }
@@ -521,21 +534,15 @@ function ArchFileViewerSession({
         status[key] = hasContent(value)
         confirmed[key] = status[key] && value!.length > 50
       }
-      // 对于当前文件，如果编辑器内已修改但未保存，也暂时以前面的基准为准即可
-      const editing = currentContentRef.current
-      if (hasContent(editing)) {
-        status[stepKey] = true
-        if (editing.length > 50) confirmed[stepKey] = true
-      }
-      // 只有序章的大纲仍是待生成（#417），编辑器里的未保存内容也按同一口径判定。
-      const synopsis = stepKey === 'synopsis' && hasContent(editing) ? editing : sections.synopsis
-      if (synopsis && plotOutlineLastChapter(synopsis) === 0) confirmed.synopsis = false
+      confirmed.synopsis = outlineProgress(core?.synopsis ?? '', checkpoint, writingLanguage, totalChapters).kind === 'complete'
+      // 当前文件在编辑器里有未保存的内容时，生成会覆盖它而不是新生成。是否已确认只影响默认勾选，而当前文件总是勾选的，不必按编辑器内容再判。
+      if (hasContent(currentContentRef.current)) status[stepKey] = true
       setFullArchStatus(status)
       setFullArchConfirmed(confirmed)
       setSynopsisSource({
         synopsis: core?.synopsis ?? '',
-        totalChapters: Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0,
-        writingLanguage: (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US' ? 'en-US' : 'zh-CN',
+        totalChapters,
+        writingLanguage,
       })
       setShowDialog(true)
     } catch (error) {
