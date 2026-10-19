@@ -899,3 +899,25 @@ it('#420 角色状态断流后，用户重试每次只发一次新请求，失�
  expect(characterCalls).toBe(3)
  expect(CharacterRosterRepository.read().revision).toBe(before + 1)
 })
+
+it('#420 运行中取消后，界面的重试（retryInvalidResult）在新运行里重新请求，不被旧运行的失败引用卡住', async () => {
+ insertFinalizedDraft(7, 2)
+ let characterCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  if (++characterCalls === 1) workflowContext.cancelled = true
+  streamCallbacks.onDone?.(modelFixtureResponse(JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })), undefined, 'stop')
+  return 'character'
+ }) })
+ await expect(command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow(/cancelled/i)
+ const runs = () => getProjectDb()!.prepare("SELECT COUNT(*) FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.finalizationGenerationSlotKey') IS NOT NULL").pluck().get() as number
+ const before = runs()
+ workflowContext.cancelled = false
+ const status = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(status.steps.character_cards).toMatchObject({ ok: true })
+ expect(characterCalls).toBe(2)
+ expect(runs()).toBe(before + 1)
+ expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+})
