@@ -10,7 +10,7 @@ export const enUS = {
   'error.projectRootRequired': `Select the project root folder that contains ${CANONICAL_PROJECT_DIRECTORY}/project.json, not its parent folder.`,
   'error.unknown': 'Something went wrong: {message}',
   'error.generationRequestFailed': 'The generation request failed before its result was saved. Try again. If it keeps happening, report this message and when it occurred.',
-  'error.generationProjectSessionStale': 'The book was switched or reopened, so this action from the earlier session did not run. Repeat it in the book that is open now.',
+  'error.generationProjectSessionStale': 'The book was switched or reopened, so the result of this action from the earlier session is unavailable. Check the book that is open now and repeat the action if needed.',
   'error.generationDraftNotCurrent': 'The selected draft is no longer the current draft of this chapter (a newer draft exists or it was finalized). No model request was sent. Open the current draft and try again.',
   'error.generationReviewLineageUnproven': 'This review has no traceable generation record, so it cannot drive a revision. Review the chapter again, then revise from the new review.',
   'error.generationDraftDependencyStale': 'An earlier draft this chapter was written from has changed, so the new prose was not saved. Rewrite or finalize the current draft of the previous chapter, then write this chapter again.',

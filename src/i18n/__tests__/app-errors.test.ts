@@ -46,3 +46,13 @@ describe('generation error codes from the main process', () => {
     expect(knownAppErrorMessage('zh-CN', '模型服务返回 HTTP 429')).toBeUndefined()
   })
 })
+
+it('does not promise that a stale-session action never ran', () => {
+  // 主进程可能已经处理完，只是结果因会话失效被拒；文案只能说结果不可用。
+  const raw = "Error invoking remote method 'generation:begin': Error: GENERATION_PROJECT_SESSION_STALE"
+  const zh = knownAppErrorMessage('zh-CN', raw)!, en = knownAppErrorMessage('en-US', raw)!
+  expect(zh).toContain('结果不可用')
+  expect(zh).not.toMatch(/没有执行|未执行/u)
+  expect(en).toContain('result')
+  expect(en).not.toMatch(/did not run|was not run/iu)
+})
