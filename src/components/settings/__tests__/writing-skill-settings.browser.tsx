@@ -14,7 +14,20 @@ const invoke = vi.fn()
 const originalProjectState = useProjectStore.getState()
 const originalLocaleState = useLocaleStore.getState()
 
-/** Supply deterministic IPC responses for skill inspection and settings rendering. */
+const localInspection = {
+  candidateId: 'candidate-1',
+  sourceKind: 'folder',
+  sourceName: 'scene-voice',
+  contentSha256: 'a'.repeat(64),
+  metadata: { name: 'scene-voice', description: 'Keep a steady narrative voice', language: 'bilingual' },
+  compatible: true,
+  reasons: [],
+  suggestedStage: 'drafting',
+  utf8Bytes: 2048,
+  bundledFiles: ['references/voice.md'],
+  skippedFiles: ['scripts/lint.py'],
+}
+
 function ipcResult(channel: string) {
   if (channel === 'skills:list-user') return []
   if (channel === 'fs:list-dir') return []
@@ -22,7 +35,9 @@ function ipcResult(channel: string) {
   if (channel === 'fs:read-file') return { success: false, content: '', error: 'missing' }
   if (channel === 'fs:write-file') return { success: true }
   if (channel === 'config:set') return { success: true }
-  if (channel === 'skills:inspect-github' || channel === 'skills:inspect-file') return {
+  if (channel === 'skills:pick-local') return { success: true, cancelled: false, inspection: localInspection }
+  if (channel === 'skills:install-local') return { success: true, skill: { name: 'scene-voice' } }
+  if (channel === 'skills:inspect-github') return {
     success: true,
     inspection: {
       sourceUrl: 'https://github.com/acme/scene-craft',
@@ -32,6 +47,7 @@ function ipcResult(channel: string) {
       reasons: [],
       suggestedStage: 'drafting',
       utf8Bytes: 128,
+      bundledFiles: [],
     },
   }
   throw new Error(`Unexpected IPC channel ${channel}`)
@@ -73,20 +89,40 @@ afterEach(async () => {
 })
 
 describe('writing skill settings', () => {
-  it('inspects a selected local Markdown file before installation', async () => {
-    const content = '---\nname: scene-craft\n---\nWrite concrete scenes.'
-    const input = container?.querySelector<HTMLInputElement>('input[type="file"]')
-    expect(input).not.toBeNull()
-    const files = new DataTransfer()
-    files.items.add(new File([content], 'skill.md', { type: 'text/markdown' }))
-    await act(async () => {
-      input!.files = files.files
-      input!.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    await expect.element(page.getByText('scene-craft', { exact: true })).toBeVisible()
-    expect(invoke).toHaveBeenCalledWith('skills:inspect-file', content)
-    expect(invoke).not.toHaveBeenCalledWith('skills:inspect-github', expect.anything())
+  it('inspects a local skill folder picked in the main process and lists what it merges and skips', async () => {
+    await act(async () => page.getByRole('button', { name: 'Choose folder' }).click())
+    const card = page.getByRole('group', { name: 'Skill to install' })
+    await expect.element(card.getByText('scene-voice', { exact: true })).toBeVisible()
+    await expect.element(card.getByText(/references\/voice\.md/u)).toBeVisible()
+    await expect.element(card.getByText(/scripts\/lint\.py/u)).toBeVisible()
+    expect(invoke).toHaveBeenCalledWith('skills:pick-local', 'folder')
     await expect.element(page.getByRole('button', { name: 'Confirm install' })).toBeEnabled()
+  })
+
+  it('installs a local candidate by its id after the application confirmation', async () => {
+    await act(async () => page.getByRole('button', { name: 'Choose file' }).click())
+    await expect.element(page.getByRole('group', { name: 'Skill to install' })).toBeVisible()
+    await act(async () => page.getByRole('button', { name: 'Confirm install' }).click())
+    await act(async () => page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click())
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('skills:install-local', 'candidate-1'))
+    expect(invoke).toHaveBeenCalledWith('skills:pick-local', 'file')
+    expect(invoke).not.toHaveBeenCalledWith('skills:install-github', expect.anything())
+    await vi.waitFor(() => expect(page.getByRole('group', { name: 'Skill to install' }).query()).toBeNull())
+  })
+
+  it('keeps the page unchanged when the picker is cancelled and shows main-process errors', async () => {
+    invoke.mockImplementation(async (channel: string) => channel === 'skills:pick-local'
+      ? { success: true, cancelled: true }
+      : ipcResult(channel))
+    await act(async () => page.getByRole('button', { name: 'Choose folder' }).click())
+    expect(page.getByRole('group', { name: 'Skill to install' }).query()).toBeNull()
+    expect(page.getByRole('alert').query()).toBeNull()
+
+    invoke.mockImplementation(async (channel: string) => channel === 'skills:pick-local'
+      ? { success: false, error: 'The skill contains a symbolic link or junction and was rejected' }
+      : ipcResult(channel))
+    await act(async () => page.getByRole('button', { name: 'Choose folder' }).click())
+    await expect.element(page.getByRole('alert')).toHaveTextContent(/symbolic link/u)
   })
 
   it('inspects a GitHub candidate before offering installation', async () => {

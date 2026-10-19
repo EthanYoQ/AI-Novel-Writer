@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Download, FileText, Link2, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, Download, FileText, FolderOpen, Link2, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { projectSessionContextFromProject } from '../../shared/project-session-context'
 import {
   WRITING_SKILL_STAGES,
+  type LocalWritingSkillInspection,
+  type LocalWritingSkillSourceKind,
   type RemoteWritingSkillInspection,
   type WritingSkillStage,
 } from '../../shared/writing-skills'
@@ -35,7 +37,7 @@ const SOURCE_COPY = {
 } as const
 
 const REASON_COPY: Record<string, readonly [string, string]> = {
-  'relative-reference': ['包含相对引用', 'Contains relative references'],
+  'relative-reference': ['引用了未随 Skill 提供的文件', 'References files that are not included with the skill'],
   'script-dependency': ['依赖脚本', 'Requires scripts'],
   'hook-dependency': ['依赖 hook', 'Requires hooks'],
   'subagent-dependency': ['依赖子代理', 'Requires subagents'],
@@ -74,6 +76,11 @@ const BUILTIN_SKILL_COPY_EN: Record<string, readonly [string, string]> = {
   ],
 }
 
+/** 待确认安装的候选：GitHub 候选按地址重新下载，本机候选由主进程按 candidateId 重新读盘。 */
+type SkillCandidate =
+  | { origin: 'github'; inspection: RemoteWritingSkillInspection }
+  | { origin: 'local'; inspection: LocalWritingSkillInspection }
+
 function formatBytes(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`
 }
@@ -97,7 +104,67 @@ function stageCopy(text: (zhCN: string, enUS: string) => string, stage: WritingS
   return text(copy[0], copy[1])
 }
 
-/** Render skill inspection, confirmed installation, and project stage bindings. */
+function CandidateCard({ candidate, busy, onInstall }: {
+  candidate: SkillCandidate
+  busy: boolean
+  onInstall: () => void
+}) {
+  const text = useLocaleStore(state => state.text)
+  const { inspection } = candidate
+  const local = candidate.origin === 'local' ? candidate.inspection : null
+  const sourceLabel = local
+    ? text(`${local.sourceKind === 'folder' ? '本机文件夹' : '本机文件'} ${local.sourceName}`, `Local ${local.sourceKind} ${local.sourceName}`)
+    : 'GitHub'
+  return (
+    <div role="group" aria-label={text('待安装的 Skill', 'Skill to install')} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-3">
+      <div className="flex items-start gap-3">
+        {inspection.compatible
+          ? <ShieldCheck size={17} aria-hidden className="mt-0.5 shrink-0 text-[var(--color-success-text)]" />
+          : <AlertTriangle size={17} aria-hidden className="mt-0.5 shrink-0 text-[var(--color-warning-text)]" />}
+        <div className="min-w-0 flex-1">
+          <div className="break-words text-sm font-medium text-[var(--color-text)]">{inspection.metadata.name}</div>
+          <p className="mt-0.5 break-words text-xs leading-5 text-[var(--color-text-muted)]">{inspection.metadata.description}</p>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--color-text-secondary)]">
+            <span>{text('来源', 'Source')}: {sourceLabel}</span>
+            <span>{text('建议阶段', 'Suggested stage')}: {stageCopy(text, inspection.suggestedStage)}</span>
+            <span>{text('语言', 'Language')}: {inspection.metadata.language}</span>
+            <span>{text('大小', 'Size')}: {formatBytes(inspection.utf8Bytes)}</span>
+          </div>
+          {inspection.bundledFiles.length > 0 && (
+            <p className="mt-2 break-words text-xs leading-5 text-[var(--color-text-secondary)]">
+              {text('并入提示词', 'Merged into the prompt')}: {inspection.bundledFiles.join(text('、', ', '))}
+            </p>
+          )}
+          {local && local.skippedFiles.length > 0 && (
+            <p className="mt-1 break-words text-xs leading-5 text-[var(--color-text-muted)]">
+              {text(
+                `不会安装（写作流程只读取提示词，用不到这些文件）：${local.skippedFiles.join('、')}`,
+                `Not installed (writing workflows only read the prompt and cannot use these files): ${local.skippedFiles.join(', ')}`,
+              )}
+            </p>
+          )}
+          {!inspection.compatible && (
+            <p role="alert" className="mt-2 text-xs leading-5 text-[var(--color-warning-text)]">
+              {inspection.reasons.map((reason) => {
+                const copy = REASON_COPY[reason]
+                return copy ? text(copy[0], copy[1]) : reason
+              }).join(text('；', '; '))}
+              {local?.sourceKind === 'file' && inspection.reasons.includes('relative-reference') && text(
+                '。如果 Skill 附带 references 文件，请改用「选择文件夹」导入整个 Skill。',
+                '. If the skill ships reference files, use Choose folder to import the whole skill.',
+              )}
+            </p>
+          )}
+        </div>
+        <Button onClick={onInstall} disabled={busy || !inspection.compatible}>
+          <Download size={13} aria-hidden />
+          {text('确认安装', 'Confirm install')}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export default function SkillSettings() {
   const text = useLocaleStore(state => state.text)
   const project = useProjectStore(state => state.currentProject)
@@ -105,12 +172,10 @@ export default function SkillSettings() {
   const [skills, setSkills] = useState<LoadedSkill[]>([])
   const [bindings, setBindings] = useState<Partial<Record<WritingSkillStage, string>>>({})
   const [sourceUrl, setSourceUrl] = useState('')
-  const [localContent, setLocalContent] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [inspection, setInspection] = useState<RemoteWritingSkillInspection | null>(null)
+  const [candidate, setCandidate] = useState<SkillCandidate | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useUnsavedSettings(sourceUrl.trim() !== '')
+  useUnsavedSettings(sourceUrl.trim() !== '' || candidate !== null)
 
   const reload = async (session: ProjectSessionContext | null = projectSession) => {
     await skillRegistry.loadAll()
@@ -141,16 +206,14 @@ export default function SkillSettings() {
     return () => { disposed = true }
   }, [projectSession])
 
-  /** Inspect a GitHub source and clear any previously selected local content. */
   const inspectSource = async () => {
     setBusy(true)
     setError(null)
-    setInspection(null)
-    setLocalContent(null)
+    setCandidate(null)
     try {
       const result = await ipc.invoke('skills:inspect-github', sourceUrl.trim())
       if (!result.success || !result.inspection) throw new Error(result.error || text('Skill 检查失败', 'Skill inspection failed'))
-      setInspection(result.inspection)
+      setCandidate({ origin: 'github', inspection: result.inspection })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -158,19 +221,15 @@ export default function SkillSettings() {
     }
   }
 
-  /** Inspect a local file up to 64 KiB and retain its exact content for installation. */
-  const inspectFile = async (file: File) => {
+  const pickLocal = async (kind: LocalWritingSkillSourceKind) => {
     setBusy(true)
     setError(null)
-    setInspection(null)
-    setLocalContent(null)
     try {
-      if (file.size > 64 * 1024) throw new Error(text('SKILL.md 不可超过 64 KiB', 'SKILL.md must not exceed 64 KiB'))
-      const content = await file.text()
-      const result = await ipc.invoke('skills:inspect-file', content)
+      const result = await ipc.invoke('skills:pick-local', kind)
+      if (result.success && result.cancelled) return
+      setCandidate(null)
       if (!result.success || !result.inspection) throw new Error(result.error || text('Skill 检查失败', 'Skill inspection failed'))
-      setLocalContent(content)
-      setInspection(result.inspection)
+      setCandidate({ origin: 'local', inspection: result.inspection })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -178,24 +237,23 @@ export default function SkillSettings() {
     }
   }
 
-  /** Confirm and install the compatible local or GitHub candidate, then refresh skills. */
-  const installSource = async () => {
-    if (!inspection?.compatible) return
+  const installCandidate = async () => {
+    if (!candidate?.inspection.compatible) return
+    const { inspection } = candidate
     if (!await confirmAction(text(
-      `确认把“${inspection.metadata.name}”安装到全局写作 Skill 库？ 安装时会再次验证内容。`,
-      `Install “${inspection.metadata.name}” in the global writing skill library? Its content will be validated again.`,
+      `确认把“${inspection.metadata.name}”安装到全局写作 Skill 库？安装时会重新读取并核对内容。`,
+      `Install “${inspection.metadata.name}” in the global writing skill library? Its content will be read again and verified.`,
     ), { title: text('安装写作 Skill', 'Install writing skill') })) return
     setBusy(true)
     setError(null)
     try {
-      const result = localContent !== null
-        ? await ipc.invoke('skills:install-file', localContent)
-        : await ipc.invoke('skills:install-github', inspection.sourceUrl)
+      const result = candidate.origin === 'local'
+        ? await ipc.invoke('skills:install-local', candidate.inspection.candidateId)
+        : await ipc.invoke('skills:install-github', candidate.inspection.sourceUrl)
       if (!result.success) throw new Error(result.error || text('Skill 安装失败', 'Skill installation failed'))
       await reload()
-      setInspection(null)
-      setSourceUrl('')
-      setLocalContent(null)
+      setCandidate(null)
+      if (candidate.origin === 'github') setSourceUrl('')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -253,30 +311,39 @@ export default function SkillSettings() {
       <section className="space-y-3" aria-labelledby="writing-skill-source-title">
         <div>
           <h3 id="writing-skill-source-title" className="text-sm font-semibold text-[var(--color-text)]">
-            {text('汇入写作 Skill', 'Import a writing skill')}
+            {text('导入写作 Skill', 'Import a writing skill')}
           </h3>
           <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
-            {text('仅支持自包含的提示词型 SKILL.md。脚本、hook、相对引用、子代理和工具执行要求不会被安装。', 'Only self-contained prompt SKILL.md files are supported. Scripts, hooks, relative references, subagents, and tool requirements are not installed.')}
+            {text(
+              '支持 Agent Skills 格式：单个 SKILL.md，或根目录含 SKILL.md 的文件夹。SKILL.md 引用的 references 文本会并入提示词；脚本、hook、子代理和工具调用不会安装。',
+              'Agent Skills format: a single SKILL.md, or a folder with SKILL.md at its root. Text files that SKILL.md references are merged into the prompt; scripts, hooks, subagents, and tool calls are not installed.',
+            )}
           </p>
         </div>
         <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)]">
           <div className="flex flex-wrap items-center gap-3 p-4">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg)] text-[var(--color-text-secondary)]">
-              <FileText size={18} aria-hidden />
+            <FolderOpen size={18} aria-hidden className="shrink-0 text-[var(--color-text-secondary)]" />
+            <div className="min-w-0 flex-1 basis-48">
+              <div className="text-sm font-medium text-[var(--color-text)]">{text('本机 Skill', 'Local skill')}</div>
+              <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
+                {text('Skill 文件夹或单个 .md 文件，合并后不超过 64 KiB', 'A skill folder or a single .md file, up to 64 KiB after merging')}
+              </p>
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-[var(--color-text)]">{text('本机档案', 'Local file')}</div>
-              <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">{text('选择 SKILL.md，预览后安装 · 最大 64 KiB', 'Choose SKILL.md, then preview and install · Up to 64 KiB')}</p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => pickLocal('folder')} disabled={busy}>
+                <FolderOpen size={13} aria-hidden />
+                {text('选择文件夹', 'Choose folder')}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => pickLocal('file')} disabled={busy}>
+                <FileText size={13} aria-hidden />
+                {text('选择文件', 'Choose file')}
+              </Button>
             </div>
-            <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()} disabled={busy}>
-              <Upload size={14} aria-hidden />
-              {text('选择档案', 'Choose file')}
-            </Button>
           </div>
           <div className="space-y-2 border-t border-[var(--color-border)] p-4">
             <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)]">
               <Link2 size={13} aria-hidden />
-              {text('从 GitHub 汇入', 'Import from GitHub')}
+              {text('从 GitHub 导入', 'Import from GitHub')}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="min-w-0 flex-1 basis-48">
@@ -288,56 +355,14 @@ export default function SkillSettings() {
                   className="w-full"
                 />
               </div>
-              <Button variant="secondary" size="sm" onClick={inspectSource} disabled={busy || !sourceUrl.trim()}>
-                <RefreshCw size={13} className={busy ? 'animate-spin' : ''} />
+              <Button variant="outline" size="sm" onClick={inspectSource} disabled={busy || !sourceUrl.trim()}>
+                <RefreshCw size={13} aria-hidden className={busy ? 'animate-spin' : ''} />
                 {text('只读检查', 'Inspect')}
               </Button>
             </div>
           </div>
         </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".md,text/markdown"
-          aria-label={text('汇入 SKILL.md 档案', 'Import SKILL.md file')}
-          disabled={busy}
-          className="hidden"
-          onChange={event => {
-            const file = event.currentTarget.files?.[0]
-            event.currentTarget.value = ''
-            if (file) void inspectFile(file)
-          }}
-        />
-        {inspection && (
-          <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-3">
-            <div className="flex items-start gap-3">
-              {inspection.compatible
-                ? <ShieldCheck size={17} className="mt-0.5 shrink-0 text-[var(--color-success-text)]" />
-                : <AlertTriangle size={17} className="mt-0.5 shrink-0 text-[var(--color-warning-text)]" />}
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-[var(--color-text)]">{inspection.metadata.name}</div>
-                <p className="mt-0.5 text-xs leading-5 text-[var(--color-text-muted)]">{inspection.metadata.description}</p>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--color-text-secondary)]">
-                  <span>{text('建议阶段', 'Suggested stage')}: {stageCopy(text, inspection.suggestedStage)}</span>
-                  <span>{text('语言', 'Language')}: {inspection.metadata.language}</span>
-                  <span>{text('大小', 'Size')}: {formatBytes(inspection.utf8Bytes)}</span>
-                </div>
-                {!inspection.compatible && (
-                  <p role="alert" className="mt-2 text-xs text-[var(--color-warning-text)]">
-                    {inspection.reasons.map((reason) => {
-                      const copy = REASON_COPY[reason]
-                      return copy ? text(copy[0], copy[1]) : reason
-                    }).join('；')}
-                  </p>
-                )}
-              </div>
-              <Button onClick={installSource} disabled={busy || !inspection.compatible}>
-                <Download size={13} />
-                {text('确认安装', 'Confirm install')}
-              </Button>
-            </div>
-          </div>
-        )}
+        {candidate && <CandidateCard candidate={candidate} busy={busy} onInstall={installCandidate} />}
         {error && <p role="alert" className="text-xs text-[var(--color-error-text)]">{error}</p>}
       </section>
 

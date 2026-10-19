@@ -691,12 +691,13 @@ export interface AppDataChannels {
     args: [sourceUrl: string]
     return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
   }
-  'skills:inspect-file': {
-    args: [content: string]
-    return: { success: boolean; inspection?: import('./writing-skills').RemoteWritingSkillInspection; error?: string }
+  /** 主进程弹出系统对话框选择本机 SKILL.md 或 Skill 文件夹，只读检查后返回候选。 */
+  'skills:pick-local': {
+    args: [kind: import('./writing-skills').LocalWritingSkillSourceKind]
+    return: { success: boolean; cancelled?: boolean; inspection?: import('./writing-skills').LocalWritingSkillInspection; error?: string }
   }
-  'skills:install-file': {
-    args: [content: string]
+  'skills:install-local': {
+    args: [candidateId: string]
     return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
   }
   'skills:uninstall-user': {

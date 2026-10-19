@@ -1,18 +1,32 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
-import { app, ipcMain } from 'electron'
+import { createHash, randomUUID } from 'node:crypto'
+import { app, dialog, ipcMain } from 'electron'
 import type { AppPromptLoadReceipt, AppPromptTemplate } from '../../src/shared/ipc-channels'
 import type { WritingLanguage } from '../../src/shared/writing-language'
 import {
   inspectWritingSkillMarkdown,
+  MAX_WRITING_SKILL_BYTES,
   parseGitHubWritingSkillUrl,
+  WRITING_SKILL_NAME_PATTERN,
   type InstalledWritingSkill,
+  type LocalWritingSkillInspection,
+  type LocalWritingSkillSourceKind,
   type RemoteWritingSkillInspection,
+  type WritingSkillInspection,
 } from '../../src/shared/writing-skills'
 import { mainText } from '../i18n'
 import { VELA_HOME, writeJsonFile } from '../utils/config-utils'
 import { assertGlobalDataReady } from '../services/app-data-locator'
+import {
+  loadLocalWritingSkill,
+  skillDirectoryFileReader,
+  WritingSkillPackageError,
+  type WritingSkillPackageErrorCode,
+  type WritingSkillSource,
+} from '../services/writing-skill-package'
+
+type SkillEvent = { sender: { id: number; isDestroyed: () => boolean } }
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
@@ -56,11 +70,13 @@ function isPromptTemplate(value: unknown): value is AppPromptTemplate {
     )
 }
 
-const WRITING_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
-const MAX_WRITING_SKILL_BYTES = 64 * 1024
+function validSender(event: SkillEvent): boolean {
+  return Boolean(event?.sender && Number.isSafeInteger(event.sender.id) && event.sender.id > 0
+    && typeof event.sender.isDestroyed === 'function' && !event.sender.isDestroyed())
+}
 
 function writingSkillDirectory(name: string): string {
-  if (!WRITING_SKILL_NAME.test(name) || name === '.' || name === '..') {
+  if (!WRITING_SKILL_NAME_PATTERN.test(name) || name === '.' || name === '..') {
     throw new Error(text('写作 Skill 名称无效', 'The writing skill name is invalid'))
   }
   const root = path.join(VELA_HOME, 'skills')
@@ -127,6 +143,85 @@ function ensureOwnedSkillTarget(name: string): { directory: string; filePath: st
   return { directory, filePath }
 }
 
+function packageErrorText(code: WritingSkillPackageErrorCode): string {
+  const copy: Record<WritingSkillPackageErrorCode, readonly [string, string]> = {
+    SOURCE_INVALID: ['无法读取所选的文件或文件夹', 'The selected file or folder cannot be read'],
+    SYMLINK: ['Skill 中包含符号链接或快捷方式，已拒绝导入', 'The skill contains a symbolic link or junction and was rejected'],
+    SKILL_MD_MISSING: ['文件夹根目录里没有 SKILL.md', 'The folder has no SKILL.md at its root'],
+    SKILL_MD_INVALID: ['SKILL.md 必须是不超过 64 KiB 的 UTF-8 文本', 'SKILL.md must be UTF-8 text no larger than 64 KiB'],
+    FOLDER_TOO_LARGE: ['文件夹内文件过多或层级过深（最多 200 项、4 层）', 'The folder has too many entries or levels (up to 200 entries, 4 levels)'],
+  }
+  return text(copy[code][0], copy[code][1])
+}
+
+function loadLocalSkillOrThrow(source: WritingSkillSource) {
+  let loaded: ReturnType<typeof loadLocalWritingSkill>
+  try {
+    loaded = loadLocalWritingSkill(source)
+  } catch (error) {
+    if (error instanceof WritingSkillPackageError) throw new Error(packageErrorText(error.code))
+    throw error
+  }
+  const { name } = loaded.inspection.metadata
+  if (!WRITING_SKILL_NAME_PATTERN.test(name)) {
+    throw new Error(text(
+      `Skill 名称“${name}”无效：只能使用字母、数字、点、下划线和连字符`,
+      `The skill name "${name}" is invalid: use letters, digits, dots, underscores, and hyphens`,
+    ))
+  }
+  return loaded
+}
+
+/** 把已确认的候选写入全局用户 Skill 库：SKILL.md 原文加上并入提示词的附带文件。 */
+function installUserWritingSkill(
+  inspection: Pick<WritingSkillInspection, 'metadata' | 'compatible' | 'reasons' | 'utf8Bytes'>,
+  raw: string,
+  bundledFiles: ReadonlyMap<string, string>,
+): InstalledWritingSkill {
+  if (!inspection.compatible) {
+    throw new Error(text(
+      `该 Skill 不是自包含提示词：${inspection.reasons.join(', ')}`,
+      `This is not a self-contained prompt skill: ${inspection.reasons.join(', ')}`,
+    ))
+  }
+  const requestedDirectory = writingSkillDirectory(inspection.metadata.name)
+  if (fs.existsSync(requestedDirectory)) {
+    throw new Error(text(
+      `同名 Writing Skill 已安装：${inspection.metadata.name}`,
+      `A Writing Skill with this name is already installed: ${inspection.metadata.name}`,
+    ))
+  }
+  const { directory, filePath } = ensureOwnedSkillTarget(inspection.metadata.name)
+  try {
+    fs.writeFileSync(filePath, raw, { encoding: 'utf8', mode: 0o600 })
+    for (const [relativePath, content] of bundledFiles) {
+      const target = path.resolve(directory, ...relativePath.split('/'))
+      if (!isContainedPath(directory, target) || target === directory) {
+        throw new Error(text('附带文件超出 Skill 目录', 'A bundled file is outside its skill directory'))
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.writeFileSync(target, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    }
+  } catch (error) {
+    fs.rmSync(directory, { recursive: true, force: true })
+    throw error
+  }
+  return {
+    name: inspection.metadata.name,
+    source: 'user',
+    version: inspection.metadata.version,
+    language: inspection.metadata.language,
+    compatible: true,
+    utf8Bytes: inspection.utf8Bytes,
+  }
+}
+
+/** 回给渲染层的检查结果不带提示词正文，安装时以主进程重新读取的内容为准。 */
+function withoutContent(inspection: WritingSkillInspection): Omit<WritingSkillInspection, 'content'> {
+  const { metadata, compatible, reasons, suggestedStage, utf8Bytes, bundledFiles } = inspection
+  return { metadata, compatible, reasons, suggestedStage, utf8Bytes, bundledFiles }
+}
+
 function githubRawUrl(owner: string, repo: string, ref: string, filePath: string): string {
   const segments = [owner, repo, ref, ...filePath.split('/')].map(encodeURIComponent)
   return `https://raw.githubusercontent.com/${segments.join('/')}`
@@ -149,7 +244,7 @@ async function fetchGitHubWritingSkill(sourceUrl: string): Promise<{
     )
     if (!repositoryResponse.ok) throw new Error(`GitHub repository lookup failed (${repositoryResponse.status})`)
     const repository = await repositoryResponse.json() as { default_branch?: unknown }
-    if (typeof repository.default_branch !== 'string' || !WRITING_SKILL_NAME.test(repository.default_branch)) {
+    if (typeof repository.default_branch !== 'string' || !WRITING_SKILL_NAME_PATTERN.test(repository.default_branch)) {
       throw new Error('GitHub returned an unsupported default branch name')
     }
     ref = repository.default_branch
@@ -168,16 +263,8 @@ async function fetchGitHubWritingSkill(sourceUrl: string): Promise<{
   if (Buffer.byteLength(raw, 'utf8') > MAX_WRITING_SKILL_BYTES) {
     throw new Error('SKILL.md is larger than 64 KiB')
   }
-  const inspected = inspectWritingSkillMarkdown(raw)
+  const publicInspection = withoutContent(inspectWritingSkillMarkdown(raw))
   const contentSha256 = createHash('sha256').update(raw, 'utf8').digest('hex')
-  const publicInspection = {
-    metadata: inspected.metadata,
-    compatible: inspected.compatible,
-    reasons: inspected.reasons,
-    suggestedStage: inspected.suggestedStage,
-    utf8Bytes: inspected.utf8Bytes,
-    bundledFiles: inspected.bundledFiles,
-  }
   return {
     raw,
     inspection: {
@@ -206,22 +293,11 @@ function promptLanguageFromFilename(filename: string): WritingLanguage | undefin
  * 已准入全局 generation 的提示词和用户 Skill 只能由此固定根目录控制器访问；渲染层不接收
  * 任意 app-data 路径，也不借用外部文件授权。
  */
-function inspectLocalWritingSkill(raw: string) {
-  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > MAX_WRITING_SKILL_BYTES) {
-    throw new Error(text('SKILL.md 必须为不超过 64 KiB 的文本', 'SKILL.md must be text no larger than 64 KiB'))
-  }
-  const { metadata, compatible, reasons, suggestedStage, utf8Bytes } = inspectWritingSkillMarkdown(raw)
-  const contentSha256 = createHash('sha256').update(raw, 'utf8').digest('hex')
-  return { raw, inspection: { metadata, compatible, reasons, suggestedStage, utf8Bytes, contentSha256, sourceUrl: contentSha256, resolvedUrl: 'local:SKILL.md' } }
-}
-
-/**
- * 已准入全局 generation 的提示词和用户 Skill 只能由此固定根目录控制器访问；渲染层不接收
- * 任意 app-data 路径，也不借用外部文件授权。
- */
 export function registerAppDataController(): void {
   assertGlobalDataReady()
   const inspectedWritingSkills = new Map<string, Pick<RemoteWritingSkillInspection, 'contentSha256' | 'resolvedUrl'>>()
+  // 每个渲染进程最多保留一个待安装的本机候选，新的选择会替换旧的。
+  const localCandidates = new Map<number, { candidateId: string; source: WritingSkillSource; contentSha256: string }>()
   ipcMain.handle('prompt:load-global', async (): Promise<AppPromptLoadReceipt> => {
     const promptsDirectory = path.join(VELA_HOME, 'prompts')
     if (!fs.existsSync(promptsDirectory)) return { templates: [], diagnostics: [] }
@@ -304,7 +380,7 @@ export function registerAppDataController(): void {
     if (!fs.existsSync(skillsDirectory)) return []
 
     const canonicalSkillsDirectory = ensureOwnedSkillsRoot()
-    const skills: Array<{ name: string; content: string; baseDir: string; filePath: string }> = []
+    const skills: Array<{ name: string; content: string; baseDir: string; filePath: string; files: Record<string, string> }> = []
     for (const entry of fs.readdirSync(canonicalSkillsDirectory, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.isSymbolicLink()) continue
       try {
@@ -312,11 +388,15 @@ export function registerAppDataController(): void {
         if (!isContainedPath(canonicalSkillsDirectory, baseDir)) continue
         const filePath = fs.realpathSync.native(path.join(baseDir, 'SKILL.md'))
         if (!isContainedPath(baseDir, filePath) || !fs.statSync(filePath).isFile()) continue
+        const content = fs.readFileSync(filePath, 'utf8')
+        const files = new Map<string, string>()
+        const { bundledFiles } = inspectWritingSkillMarkdown(content, { readFile: skillDirectoryFileReader(baseDir, files) })
         skills.push({
           name: entry.name,
-          content: fs.readFileSync(filePath, 'utf8'),
+          content,
           baseDir,
           filePath,
+          files: Object.fromEntries(bundledFiles.map(file => [file, files.get(file)!])),
         })
       } catch {
         // 单个用户 Skill 无效时不阻断其余 Skill。
@@ -366,99 +446,64 @@ export function registerAppDataController(): void {
           'The Writing Skill changed after inspection; inspect it again',
         ))
       }
-      if (!inspection.compatible) {
-        throw new Error(text(
-          `该 Skill 不是自包含提示词：${inspection.reasons.join(', ')}`,
-          `This is not a self-contained prompt skill: ${inspection.reasons.join(', ')}`,
-        ))
-      }
-      const requestedDirectory = writingSkillDirectory(inspection.metadata.name)
-      if (fs.existsSync(requestedDirectory)) {
-        throw new Error(text(
-          `同名 Writing Skill 已安装：${inspection.metadata.name}`,
-          `A Writing Skill with this name is already installed: ${inspection.metadata.name}`,
-        ))
-      }
-      const { filePath } = ensureOwnedSkillTarget(inspection.metadata.name)
-      fs.writeFileSync(filePath, raw, { encoding: 'utf8', mode: 0o600 })
-      const skill: InstalledWritingSkill = {
-        name: inspection.metadata.name,
-        source: 'user',
-        version: inspection.metadata.version,
-        language: inspection.metadata.language,
-        compatible: true,
-        utf8Bytes: inspection.utf8Bytes,
-      }
-      return { success: true, skill }
+      return { success: true, skill: installUserWritingSkill(inspection, raw, new Map()) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
 
-  ipcMain.handle('skills:inspect-file', async (_event, content: string) => {
+  ipcMain.handle('skills:pick-local', async (event: SkillEvent, kind: LocalWritingSkillSourceKind) => {
     try {
-      if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_WRITING_SKILL_BYTES) {
-        throw new Error(text('SKILL.md 内容无效', 'The SKILL.md content is invalid'))
+      if (!validSender(event)) throw new Error(text('请求来源无效', 'The request sender is invalid'))
+      if (kind !== 'file' && kind !== 'folder') throw new Error(text('导入方式无效', 'The import kind is invalid'))
+      localCandidates.delete(event.sender.id)
+      const selection = await dialog.showOpenDialog(kind === 'folder'
+        ? { title: text('选择 Skill 文件夹', 'Choose a skill folder'), properties: ['openDirectory'] }
+        : {
+            title: text('选择 SKILL.md 文件', 'Choose a SKILL.md file'),
+            properties: ['openFile'],
+            filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+          })
+      if (selection.canceled || selection.filePaths.length === 0) return { success: true, cancelled: true }
+      if (selection.filePaths.length !== 1) throw new Error(text('请只选择一项', 'Choose exactly one item'))
+      const source = { kind, path: selection.filePaths[0] }
+      const loaded = loadLocalSkillOrThrow(source)
+      const candidateId = randomUUID()
+      localCandidates.set(event.sender.id, { candidateId, source, contentSha256: loaded.contentSha256 })
+      const inspection: LocalWritingSkillInspection = {
+        ...withoutContent(loaded.inspection),
+        candidateId,
+        sourceKind: kind,
+        sourceName: loaded.sourceName,
+        contentSha256: loaded.contentSha256,
+        skippedFiles: loaded.skippedFiles,
       }
-      const { inspection } = inspectLocalWritingSkill(content)
-      inspectedWritingSkills.set(inspection.contentSha256, {
-        contentSha256: inspection.contentSha256,
-        resolvedUrl: inspection.resolvedUrl,
-      })
-      return { success: true, inspection }
+      return { success: true, cancelled: false, inspection }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
 
-  ipcMain.handle('skills:install-file', async (_event, content: string) => {
+  ipcMain.handle('skills:install-local', async (event: SkillEvent, candidateId: string) => {
     try {
-      if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_WRITING_SKILL_BYTES) {
-        throw new Error(text('SKILL.md 内容无效', 'The SKILL.md content is invalid'))
-      }
-      const { raw, inspection } = inspectLocalWritingSkill(content)
-      const confirmedInspection = inspectedWritingSkills.get(inspection.contentSha256)
-      if (!confirmedInspection) {
+      if (!validSender(event)) throw new Error(text('请求来源无效', 'The request sender is invalid'))
+      const pending = localCandidates.get(event.sender.id)
+      if (!pending || pending.candidateId !== candidateId) {
         throw new Error(text(
           '请先检查该本机 Writing Skill，再确认安装',
           'Inspect this local Writing Skill before confirming installation',
         ))
       }
-      inspectedWritingSkills.delete(inspection.contentSha256)
-      // Only the exact inspected content may be written to the managed library.
-      if (
-        inspection.contentSha256 !== confirmedInspection.contentSha256
-        || inspection.resolvedUrl !== confirmedInspection.resolvedUrl
-      ) {
+      localCandidates.delete(event.sender.id)
+      // 确认后重新读盘，只安装与检查时逐字节相同的内容。
+      const loaded = loadLocalSkillOrThrow(pending.source)
+      if (loaded.contentSha256 !== pending.contentSha256) {
         throw new Error(text(
           'Writing Skill 在检查后已发生变化，请重新检查',
           'The Writing Skill changed after inspection; inspect it again',
         ))
       }
-      if (!inspection.compatible) {
-        throw new Error(text(
-          `该 Skill 不是自包含提示词：${inspection.reasons.join(', ')}`,
-          `This is not a self-contained prompt skill: ${inspection.reasons.join(', ')}`,
-        ))
-      }
-      const requestedDirectory = writingSkillDirectory(inspection.metadata.name)
-      if (fs.existsSync(requestedDirectory)) {
-        throw new Error(text(
-          `同名 Writing Skill 已安装：${inspection.metadata.name}`,
-          `A Writing Skill with this name is already installed: ${inspection.metadata.name}`,
-        ))
-      }
-      const { filePath } = ensureOwnedSkillTarget(inspection.metadata.name)
-      fs.writeFileSync(filePath, raw, { encoding: 'utf8', mode: 0o600 })
-      const skill: InstalledWritingSkill = {
-        name: inspection.metadata.name,
-        source: 'user',
-        version: inspection.metadata.version,
-        language: inspection.metadata.language,
-        compatible: true,
-        utf8Bytes: inspection.utf8Bytes,
-      }
-      return { success: true, skill }
+      return { success: true, skill: installUserWritingSkill(loaded.inspection, loaded.raw, loaded.bundledFiles) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

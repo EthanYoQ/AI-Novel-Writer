@@ -5,10 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
 
-const mocks = vi.hoisted(() => ({ handlers: new Map<string, IpcHandler>() }))
+const mocks = vi.hoisted(() => ({
+  handlers: new Map<string, IpcHandler>(),
+  pickedPaths: [] as string[],
+}))
 
 vi.mock('electron', () => ({
   app: { getLocale: () => 'en-US' },
+  dialog: { showOpenDialog: vi.fn(async () => ({ canceled: mocks.pickedPaths.length === 0, filePaths: mocks.pickedPaths })) },
   ipcMain: { handle: vi.fn((channel: string, handler: IpcHandler) => mocks.handlers.set(channel, handler)) },
 }))
 vi.mock('../../i18n', () => ({ mainText: (_locale: string, _zh: string, en: string) => en }))
@@ -34,6 +38,46 @@ Revise with concrete action and varied sentence rhythm.`): Response {
 }
 
 const sourceUrl = 'https://github.com/acme/story-skill/blob/main/SKILL.md'
+const rendererEvent = { sender: { id: 7, isDestroyed: () => false } }
+let pickRoot = ''
+
+/** 在临时目录里写出一个本机 Skill，键是相对路径。 */
+function writeLocalSkill(folder: string, files: Record<string, string>): string {
+  const root = path.join(pickRoot, folder)
+  for (const [relative, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true })
+    fs.writeFileSync(path.join(root, relative), content)
+  }
+  return root
+}
+
+type PickResult = {
+  success: boolean
+  cancelled?: boolean
+  error?: string
+  inspection?: { candidateId: string; compatible: boolean; reasons: string[]; bundledFiles: string[]; skippedFiles: string[] }
+}
+
+async function pickLocal(kind: 'file' | 'folder', picked: string): Promise<PickResult> {
+  mocks.pickedPaths = [picked]
+  return await handler('skills:pick-local')(rendererEvent, kind) as PickResult
+}
+
+function installLocal(candidateId: string) {
+  return handler('skills:install-local')(rendererEvent, candidateId)
+}
+
+const agentSkill = `---
+name: scene-voice
+description: >-
+  Keep each scene in a consistent narrative voice.
+  Use when drafting or revising chapters.
+license: Apache-2.0
+metadata:
+  author: acme
+---
+Follow the voice rules in [the voice guide](references/voice.md).
+See also \`references/pacing.md\`.`
 
 async function inspectThenInstall(url = sourceUrl) {
   const inspected = await handler('skills:inspect-github')({}, url) as {
@@ -53,6 +97,8 @@ describe('writing skill app-data boundary', () => {
     mocks.handlers.clear()
     velaHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-writing-skills-'))
     fixtureRoot = velaHome
+    pickRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-skill-pick-'))
+    mocks.pickedPaths = []
     velaHome = await (await import('../../services/__tests__/global-data-fixture')).prepareGlobalDataFixture(fixtureRoot)
     vi.stubGlobal('fetch', vi.fn(async () => skillResponse()))
     const { registerAppDataController } = await import('../app-data-controller')
@@ -64,28 +110,124 @@ describe('writing skill app-data boundary', () => {
     delete process.env.AI_NOVEL_VELA_HOME
     delete process.env.AI_NOVEL_APP_DATA_HOME
     fs.rmSync(fixtureRoot, { recursive: true, force: true })
+    fs.rmSync(pickRoot, { recursive: true, force: true })
   })
 
-  it('inspects and installs local Markdown without fetching GitHub', async () => {
-    const raw = await skillResponse().text()
-    await expect(handler('skills:install-file')({}, raw)).resolves.toMatchObject({ success: false })
-    await expect(handler('skills:inspect-file')({}, raw)).resolves.toMatchObject({
-      success: true, inspection: { compatible: true, metadata: { name: 'safe-prose' } },
+  it('imports a generic Agent Skill folder and merges the references it cites', async () => {
+    const folder = writeLocalSkill('scene-voice', {
+      'SKILL.md': agentSkill,
+      'references/voice.md': 'Stay in close third person.',
+      'references/pacing.md': 'Alternate long and short scenes.',
+      'references/unused.md': 'Never cited.',
+      'scripts/lint.py': 'print(1)',
+      'assets/cover.png': '\u0089PNG',
     })
-    expect(fs.existsSync(path.join(velaHome, 'skills', 'safe-prose'))).toBe(false)
-    await expect(handler('skills:install-file')({}, raw + ' Changed')).resolves.toMatchObject({ success: false })
-    await expect(handler('skills:install-file')({}, raw)).resolves.toMatchObject({ success: true })
-    expect(fs.readFileSync(path.join(velaHome, 'skills', 'safe-prose', 'SKILL.md'), 'utf8')).toBe(raw)
+    const picked = await pickLocal('folder', folder)
+    expect(picked).toMatchObject({
+      success: true,
+      inspection: {
+        compatible: true,
+        metadata: { name: 'scene-voice', description: 'Keep each scene in a consistent narrative voice. Use when drafting or revising chapters.' },
+        bundledFiles: ['references/voice.md', 'references/pacing.md'],
+      },
+    })
+    expect(picked.inspection!.skippedFiles.sort()).toEqual(['assets/cover.png', 'references/unused.md', 'scripts/lint.py'])
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'scene-voice'))).toBe(false)
+
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true, skill: { name: 'scene-voice' } })
+    const installed = path.join(velaHome, 'skills', 'scene-voice')
+    expect(fs.readFileSync(path.join(installed, 'SKILL.md'), 'utf8')).toBe(agentSkill)
+    expect(fs.readFileSync(path.join(installed, 'references', 'voice.md'), 'utf8')).toBe('Stay in close third person.')
+    expect(fs.existsSync(path.join(installed, 'references', 'unused.md'))).toBe(false)
+    expect(fs.existsSync(path.join(installed, 'scripts'))).toBe(false)
     expect(fetch).not.toHaveBeenCalled()
-    await handler('skills:inspect-file')({}, raw)
-    await expect(handler('skills:install-file')({}, raw)).resolves.toMatchObject({ success: false })
+
+    const listed = await handler('skills:list-user')({}) as Array<{ name: string; files: Record<string, string> }>
+    expect(listed).toEqual([expect.objectContaining({
+      name: 'scene-voice',
+      files: { 'references/voice.md': 'Stay in close third person.', 'references/pacing.md': 'Alternate long and short scenes.' },
+    })])
   })
 
-  it('rejects oversized and incompatible local skills', async () => {
-    await expect(handler('skills:inspect-file')({}, 'x'.repeat(65537))).resolves.toMatchObject({ success: false })
-    const raw = await skillResponse().text() + '\nRun `python scripts/run.py`.'
-    await handler('skills:inspect-file')({}, raw)
-    await expect(handler('skills:install-file')({}, raw)).resolves.toMatchObject({ success: false })
+  it('imports a single SKILL.md file and names a nameless one after its file', async () => {
+    const file = path.join(writeLocalSkill('downloads', { 'quiet-prose.md': 'Prefer plain verbs.' }), 'quiet-prose.md')
+    const picked = await pickLocal('file', file)
+    expect(picked).toMatchObject({ success: true, inspection: { compatible: true, metadata: { name: 'quiet-prose' } } })
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: true })
+    expect(fs.readFileSync(path.join(velaHome, 'skills', 'quiet-prose', 'SKILL.md'), 'utf8')).toBe('Prefer plain verbs.')
+  })
+
+  it('marks a single file that cites reference files as incompatible', async () => {
+    const folder = writeLocalSkill('scene-voice', { 'SKILL.md': agentSkill, 'references/voice.md': 'x', 'references/pacing.md': 'y' })
+    const picked = await pickLocal('file', path.join(folder, 'SKILL.md'))
+    expect(picked).toMatchObject({ success: true, inspection: { compatible: false, reasons: ['relative-reference'], bundledFiles: [] } })
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: false })
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'scene-voice'))).toBe(false)
+  })
+
+  it('never bundles a reference that escapes the skill folder', async () => {
+    writeLocalSkill('', { 'secret.md': 'outside the skill' })
+    const folder = writeLocalSkill('escape', { 'SKILL.md': '---\nname: escape\n---\nRead [this](../secret.md).' })
+    const picked = await pickLocal('folder', folder)
+    expect(picked).toMatchObject({ success: true, inspection: { compatible: false, reasons: ['relative-reference'], bundledFiles: [] } })
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({ success: false })
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'escape'))).toBe(false)
+  })
+
+  it('rejects a skill folder that contains a symbolic link', async () => {
+    const outside = writeLocalSkill('outside', { 'voice.md': 'linked' })
+    const folder = writeLocalSkill('linked', { 'SKILL.md': '---\nname: linked\n---\nRead references/voice.md.' })
+    fs.symlinkSync(outside, path.join(folder, 'references'), process.platform === 'win32' ? 'junction' : 'dir')
+    await expect(pickLocal('folder', folder)).resolves.toMatchObject({ success: false, error: expect.stringMatching(/symbolic link/u) })
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'linked'))).toBe(false)
+  })
+
+  it.each([
+    ['an oversized SKILL.md', { 'SKILL.md': `---\nname: huge\n---\n${'x'.repeat(65 * 1024)}` }, /64 KiB/u],
+    ['a folder without SKILL.md', { 'README.md': 'not a skill' }, /no SKILL\.md/u],
+    ['an invalid skill name', { 'SKILL.md': '---\nname: My Skill\n---\nWrite.' }, /name "My Skill" is invalid/u],
+  ])('rejects %s before anything is written', async (_label, files, message) => {
+    const picked = await pickLocal('folder', writeLocalSkill('bad', files))
+    expect(picked).toMatchObject({ success: false, error: expect.stringMatching(message) })
+    expect(fs.existsSync(path.join(velaHome, 'skills'))).toBe(false)
+  })
+
+  it('marks merged content over 64 KiB as incompatible', async () => {
+    const folder = writeLocalSkill('big', {
+      'SKILL.md': '---\nname: big\n---\nRead references/a.md and references/b.md.',
+      'references/a.md': 'a'.repeat(40 * 1024),
+      'references/b.md': 'b'.repeat(40 * 1024),
+    })
+    await expect(pickLocal('folder', folder)).resolves.toMatchObject({
+      success: true,
+      inspection: { compatible: false, reasons: ['content-too-large'] },
+    })
+  })
+
+  it('rejects installation when the folder changed after inspection', async () => {
+    const folder = writeLocalSkill('scene-voice', { 'SKILL.md': agentSkill, 'references/voice.md': 'v1', 'references/pacing.md': 'p' })
+    const picked = await pickLocal('folder', folder)
+    fs.writeFileSync(path.join(folder, 'references', 'voice.md'), 'v2')
+    await expect(installLocal(picked.inspection!.candidateId)).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/changed after inspection/u),
+    })
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'scene-voice'))).toBe(false)
+  })
+
+  it('installs only the latest inspected local candidate, once, for the renderer that picked it', async () => {
+    const first = await pickLocal('file', path.join(writeLocalSkill('a', { 'first.md': 'One.' }), 'first.md'))
+    const second = await pickLocal('file', path.join(writeLocalSkill('b', { 'second.md': 'Two.' }), 'second.md'))
+    await expect(installLocal(first.inspection!.candidateId)).resolves.toMatchObject({ success: false })
+    await expect(handler('skills:install-local')({}, second.inspection!.candidateId)).resolves.toMatchObject({ success: false })
+    await expect(installLocal(second.inspection!.candidateId)).resolves.toMatchObject({ success: true })
+    await expect(installLocal(second.inspection!.candidateId)).resolves.toMatchObject({ success: false })
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'first'))).toBe(false)
+  })
+
+  it('returns cancelled when the dialog is dismissed', async () => {
+    mocks.pickedPaths = []
+    await expect(handler('skills:pick-local')(rendererEvent, 'folder')).resolves.toEqual({ success: true, cancelled: true })
   })
 
   it('inspects a GitHub blob without writing it', async () => {
