@@ -181,11 +181,29 @@ export function joinPlotOutlineEntries(prefix: string, next: string): string {
   return [prefix.trim(), next.trim()].filter(Boolean).join('\n\n')
 }
 
+const COVERAGE_NOTE: Record<WritingLanguage, (coveredTo: string, totalChapters: string) => string> = {
+  'zh-CN': (coveredTo, totalChapters) => `> 本大纲已覆盖至第 ${coveredTo} 章（全书 ${totalChapters} 章），其余章节将在后续批次继续生成。`,
+  'en-US': (coveredTo, totalChapters) => `> This outline covers chapters 1-${coveredTo} of ${totalChapters}; the remaining chapters will be generated in later batches.`,
+}
+
+/** 分批生成没写满全书时，应用写在大纲末尾的覆盖说明。写入、续批校验与清理旧说明都从这一句出发。 */
+export function plotOutlineCoverageNote(coveredTo: number, totalChapters: number, writingLanguage: WritingLanguage): string {
+  return COVERAGE_NOTE[writingLanguage](String(coveredTo), String(totalChapters))
+}
+
+const NUMBER_SLOT = '\u0000'
+/** 任意章数的一行覆盖说明，由 COVERAGE_NOTE 生成：改措辞时清理与识别随之更新。 */
+const COVERAGE_NOTE_LINE = new RegExp(`^(?:${Object.values(COVERAGE_NOTE)
+  .map(note => note(NUMBER_SLOT, NUMBER_SLOT).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&').replaceAll(NUMBER_SLOT, '\\d+'))
+  .join('|')})$`, 'u')
+
+export function isPlotOutlineCoverageNote(line: string): boolean {
+  return COVERAGE_NOTE_LINE.test(line)
+}
+
 export function renderPlotOutlineSynopsis(body: string, coveredTo: number, expected: Pick<ProjectCoreSynopsisExpected, 'totalChapters' | 'writingLanguage'>): string {
   const english = expected.writingLanguage === 'en-US'
-  const tail = coveredTo < expected.totalChapters ? english
-    ? `> This outline covers chapters 1-${coveredTo} of ${expected.totalChapters}; the remaining chapters will be generated in later batches.`
-    : `> 本大纲已覆盖至第 ${coveredTo} 章（全书 ${expected.totalChapters} 章），其余章节将在后续批次继续生成。` : ''
+  const tail = coveredTo < expected.totalChapters ? plotOutlineCoverageNote(coveredTo, expected.totalChapters, expected.writingLanguage) : ''
   return `# ${english ? 'Plot Outline' : '情节大纲'}\n\n${joinPlotOutlineEntries(body, tail)}`.trim()
 }
 
@@ -271,8 +289,23 @@ export function plotOutlineNextChapter(source: PlotOutlineRangeSource): number {
   return next > 1 && next <= source.totalChapters && plotOutlineRangeEffect(source, { from: next, to: next }).kind === 'continue' ? next : 1
 }
 
-/** renderPlotOutlineSynopsis 写在末尾的覆盖说明，章数与全书章数不限：大纲改过章数或删过章节后留下的旧说明。 */
-const STALE_COVERAGE_TAIL = /(?:\s*\n> (?:本大纲已覆盖至第 \d+ 章（全书 \d+ 章），其余章节将在后续批次继续生成。|This outline covers chapters 1-\d+ of \d+; the remaining chapters will be generated in later batches\.))+$/u
+/**
+ * 去掉末尾应用写的覆盖说明（章数不限：大纲改过章数或删过章节后留下的旧说明），可连续多条，说明不会是第一行。
+ * 逐行从末尾往前看，不用跨行正则：大量空行时正则回溯按平方增长。
+ */
+function stripStaleCoverageNotes(text: string): string {
+  let rest = text
+  for (let cut = rest.lastIndexOf('\n'); cut >= 0 && isPlotOutlineCoverageNote(rest.slice(cut + 1)); cut = rest.lastIndexOf('\n')) {
+    rest = rest.slice(0, cut).trimEnd()
+  }
+  return rest
+}
+
+/** 去掉第一个章节标题之前的那一行标准标题（可能写在作者前言之后、可能是 CRLF 换行）；其余前置文字原样保留。 */
+function stripStandardTitle(text: string, title: string): string {
+  const firstEntry = headings(text)[0]?.index ?? text.length
+  return text.slice(0, firstEntry).replace(new RegExp(`^${title}[\\t \\r]*(?:\\n|$)(?:[\\t \\r]*\\n)*`, 'mu'), '') + text.slice(firstEntry)
+}
 
 /** Replace only the explicitly committed chapter range; keep the surrounding source text. */
 export function renderPlotOutlineRange(body: string, range: PlotOutlineRange, expected: PlotOutlineRangeSource): string {
@@ -291,7 +324,7 @@ export function renderPlotOutlineRange(body: string, range: PlotOutlineRange, ex
   // 已有章节都在第 1 章之前，只能是第 0 章序章：作者原文逐字留在前面、新章接在后面，按续批要求的形式重建标准标题与覆盖说明。
   // 自定义顶层标题与其他前置文字一样算作者原文保留；原有的标准标题行和应用写的旧覆盖说明不再带入。
   if (range.from === 1) {
-    const authored = expected.synopsis.trim().replace(new RegExp(`^${title.trim()}[\\t ]*(?=\\n|$)`, 'u'), '').replace(STALE_COVERAGE_TAIL, '')
+    const authored = stripStaleCoverageNotes(stripStandardTitle(expected.synopsis.trim(), title.trim()))
     return renderPlotOutlineSynopsis(joinPlotOutlineEntries(authored, body), range.to, expected)
   }
   return renderPlotOutlineSynopsis(joinPlotOutlineEntries(plotOutlineConfirmedPrefix(expected, range), body), range.to, expected)
