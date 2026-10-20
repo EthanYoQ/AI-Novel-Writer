@@ -4,14 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   resolveDirectoryContinuation,
   terminalDirectoryProgress,
-  assertBlueprintCoverage,
   commitDirectoryBlueprintRange,
   parseTextBlueprints,
   parseTextBlueprintsStrict,
   createDirectoryWorkflow,
   saveAllBlueprints,
   saveChapterBlueprint,
-  verifyBlueprintsPersisted,
   type ChapterBlueprint,
 } from '../directory-workflow'
 import { useProjectStore } from '../../../stores/project-store'
@@ -229,12 +227,12 @@ describe('parseTextBlueprintsStrict', () => {
   it('preserves author recovery fields exactly while model parsing retains its existing persistence boundary', () => {
     const fields = { userGuidance: '  作者指导。\r\n', notes: '<think>作者原文</think>', notesUpdatedAt: '2026-10-04T13:00:00.000Z' }
     const raw = JSON.stringify([{ ...blueprint, ...fields }])
-    expect(parseTextBlueprintsStrict(raw, 1, 1, 'author')[0]).toMatchObject(fields)
-    expect(parseTextBlueprintsStrict(raw, 1, 1)[0]).toMatchObject({ userGuidance: '', notes: '', notesUpdatedAt: '' })
-    expect(() => parseTextBlueprintsStrict(JSON.stringify([{ ...blueprint, notes: 123 }]), 1, 1, 'author')).toThrow('invalid_type')
+    expect(parseTextBlueprintsStrict(raw, 1, 1, 'zh-CN', 'author')[0]).toMatchObject(fields)
+    expect(parseTextBlueprintsStrict(raw, 1, 1, 'zh-CN')[0]).toMatchObject({ userGuidance: '', notes: '', notesUpdatedAt: '' })
+    expect(() => parseTextBlueprintsStrict(JSON.stringify([{ ...blueprint, notes: 123 }]), 1, 1, 'zh-CN', 'author')).toThrow('invalid_type')
   })
   it('returns parsed blueprints for valid array input', () => {
-    const result = parseTextBlueprintsStrict(JSON.stringify([{ ...blueprint, relationships: [] }]), 1, 1)
+    const result = parseTextBlueprintsStrict(JSON.stringify([{ ...blueprint, relationships: [] }]), 1, 1, 'zh-CN')
 
     expect(result).toHaveLength(1)
     expect(result[0].title).toBe('启程')
@@ -242,7 +240,7 @@ describe('parseTextBlueprintsStrict', () => {
 
   it('throws when JSON is malformed', () => {
     try {
-      parseTextBlueprintsStrict('{not json', 1, 3)
+      parseTextBlueprintsStrict('{not json', 1, 3, 'zh-CN')
       expect.unreachable('expected typed structured diagnostic')
     } catch (error) {
       expect(error).toBeInstanceOf(StructuredContractDiagnostic)
@@ -255,6 +253,7 @@ describe('parseTextBlueprintsStrict', () => {
       JSON.stringify([{ ...blueprint, chapterNumber: 9, relationships: [] }]),
       1,
       3,
+      'zh-CN',
     )).toThrow('结构化合同诊断 code=unexpected_item path=blueprints field=blueprints')
   })
 
@@ -266,6 +265,7 @@ describe('parseTextBlueprintsStrict', () => {
       ]),
       1,
       1,
+      'zh-CN',
     )).toThrow('结构化合同诊断 code=duplicate_item path=blueprints field=blueprints')
   })
 
@@ -273,14 +273,8 @@ describe('parseTextBlueprintsStrict', () => {
     const incomplete = { ...blueprint } as Record<string, unknown>
     delete incomplete.relationshipHints
 
-    expect(() => parseTextBlueprintsStrict(JSON.stringify([incomplete]), 1, 1))
+    expect(() => parseTextBlueprintsStrict(JSON.stringify([incomplete]), 1, 1, 'zh-CN'))
       .toThrow('结构化合同诊断 code=missing_field path=blueprints[0].relationships field=relationships')
-  })
-})
-
-describe('assertBlueprintCoverage', () => {
-  it('throws when the generated result skips a chapter inside the target range', () => {
-    expect(() => assertBlueprintCoverage([{ ...blueprint, chapterNumber: 3 }], 1, 3)).toThrow(/缺少目标章节/)
   })
 })
 
@@ -290,31 +284,29 @@ describe('blueprint persistence helpers', () => {
   it('throws when saving one blueprint returns an IPC failure', async () => {
     stubIpcInvoke({ success: false, error: 'DB 未打开' })
 
-    await expect(saveChapterBlueprint(blueprint, 'C:/NovelA', session)).rejects.toThrow('DB 未打开')
+    await expect(saveChapterBlueprint(blueprint, 'C:/NovelA', session, 'zh-CN')).rejects.toThrow('保存章节蓝图失败：DB 未打开')
+  })
+
+  it('英文界面下主进程拒绝保存蓝图：报英文说明，不转出主进程的中文原文（#471）', async () => {
+    stubIpcInvoke({ success: false, error: 'Error: 项目数据库未打开' })
+
+    await expect(saveChapterBlueprint(blueprint, 'C:/NovelA', session, 'en-US'))
+      .rejects.toThrow(/^Could not save the chapter blueprint\.$/u)
+    await expect(saveAllBlueprints([blueprint], 'C:/NovelA', session, 'en-US'))
+      .rejects.toThrow(/^Could not save the chapter blueprints\.$/u)
   })
 
   it('throws when saving many blueprints returns an IPC failure', async () => {
     stubIpcInvoke({ success: false, error: '写入失败' })
 
-    await expect(saveAllBlueprints([blueprint], 'C:/NovelA', session)).rejects.toThrow('写入失败')
+    await expect(saveAllBlueprints([blueprint], 'C:/NovelA', session, 'zh-CN')).rejects.toThrow('写入失败')
   })
 
   it('resolves when the IPC save succeeds', async () => {
     const invoke = stubIpcInvoke({ success: true })
 
-    await expect(saveAllBlueprints([blueprint], 'C:/NovelA', session)).resolves.toBeUndefined()
+    await expect(saveAllBlueprints([blueprint], 'C:/NovelA', session, 'zh-CN')).resolves.toBeUndefined()
     expect(invoke).toHaveBeenCalledWith('db:blueprint-upsert-many', [blueprint], 'C:/NovelA', session)
-  })
-
-  it('throws when persisted blueprint content does not match the generated result', async () => {
-    stubIpcInvoke({ ...blueprint, title: '旧标题' })
-
-    await expect(verifyBlueprintsPersisted(
-      [blueprint],
-      'C:/NovelA',
-      { startChapter: 1, endChapter: 1 },
-      session,
-    )).rejects.toThrow(/内容与本次生成结果不一致/)
   })
 
   it('returns the atomic range-commit receipt from the main-process seam', async () => {
@@ -339,6 +331,7 @@ describe('blueprint persistence helpers', () => {
       { mode: 'replace-range', startChapter: 1, endChapter: 1 },
       'directory-run-1',
       session,
+      'zh-CN',
     )).resolves.toEqual(receipt)
     expect(invoke).toHaveBeenCalledWith(
       'db:blueprint-commit-range',
@@ -374,10 +367,24 @@ describe('blueprint persistence helpers', () => {
       { mode: 'replace-range', startChapter: 1, endChapter: 1 },
       'directory-run-1',
       session,
+      'zh-CN',
     )).rejects.toThrow()
     unsubscribe()
 
     expect(refreshEvents).toEqual([])
+  })
+
+  it('英文界面下提交蓝图被主进程拒绝：报英文说明（#471）', async () => {
+    stubIpcInvoke({ success: false, error: '写入失败' })
+
+    await expect(commitDirectoryBlueprintRange(
+      [blueprint],
+      'C:/NovelA',
+      { mode: 'replace-range', startChapter: 1, endChapter: 1 },
+      'directory-run-1',
+      session,
+      'en-US',
+    )).rejects.toThrow(/^Could not commit the chapter blueprints\.$/u)
   })
 })
 
@@ -618,14 +625,14 @@ describe('durable directory continuation selection', () => {
   }
   it('overrides caller range from the exact committed receipt and retains the operation root', async () => {
     const invoke = arrange([base])
-    await expect(resolveDirectoryContinuation({ mode: 'full', startChapter: 1, count: 200, continueDirectoryOperationId: base.operationId }, session))
+    await expect(resolveDirectoryContinuation({ mode: 'full', startChapter: 1, count: 200, continueDirectoryOperationId: base.operationId }, session, 'zh-CN'))
       .resolves.toMatchObject({ mode: 'append', pacingGuidance: '  缓慢递进。\r\n', startChapter: 161, count: 40, continueDirectoryOperationId: base.operationId })
     expect(invoke).toHaveBeenCalledWith('generation:list-directory-progress', session)
   })
   it('uses an issued exact handle after restart instead of starting the continuation twice', async () => {
     const continuationHandle = { ...handle, runId: '已有剩余运行' }
     arrange([{ ...base, continuationHandle }])
-    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: base.operationId }, session))
+    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: base.operationId }, session, 'zh-CN'))
       .resolves.toMatchObject({ startChapter: 161, count: 40, resumeHandle: continuationHandle, continueDirectoryOperationId: undefined })
   })
   it('follows only the explicit chain and never regenerates the already committed child prefix', async () => {
@@ -635,9 +642,14 @@ describe('durable directory continuation selection', () => {
       requestedRange: { startChapter: 161, endChapter: 200 }, committedRange: { startChapter: 161, endChapter: 180 }, remainingRange: { startChapter: 181, endChapter: 200 } }
     arrange([parent, child])
     expect(terminalDirectoryProgress(parent, [parent, child])).toEqual(child)
-    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: parent.operationId }, session))
+    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: parent.operationId }, session, 'zh-CN'))
       .resolves.toMatchObject({ startChapter: 181, count: 20, continueDirectoryOperationId: child.operationId })
     arrange([parent, { ...child, remainingRange: null }])
-    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: parent.operationId }, session)).rejects.toThrow('DIRECTORY_PROGRESS_COMPLETE')
+    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: parent.operationId }, session, 'zh-CN')).rejects.toThrow('DIRECTORY_PROGRESS_COMPLETE')
+  })
+  it('英文界面下旧进度缺少冻结作者输入：说明是英文（#471）', async () => {
+    arrange([{ ...base, authorInputs: [] }])
+    await expect(resolveDirectoryContinuation({ mode: 'full', continueDirectoryOperationId: base.operationId }, session, 'en-US'))
+      .rejects.toThrow(/^This older blueprint progress has no frozen author input/u)
   })
 })

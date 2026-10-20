@@ -400,7 +400,7 @@ export function useChapterBlueprints({
     setSaving(true)
     setSaveOutcome('idle')
     try {
-      await saveChapterBlueprint(selected, projectKey, projectSession)
+      await saveChapterBlueprint(selected, projectKey, projectSession, locale)
       if (!isCurrentProjectSession(projectSession)) return
       const current = currentWorkingState(projectKey, projectSession)
       const nextDirty = reconcileSavedBlueprintSnapshots(
@@ -437,7 +437,7 @@ export function useChapterBlueprints({
     setSaving(true)
     setSaveOutcome('idle')
     try {
-      await saveAllBlueprints(saveInput, projectKey, projectSession)
+      await saveAllBlueprints(saveInput, projectKey, projectSession, locale)
       if (!isCurrentProjectSession(projectSession)) return
       const current = currentWorkingState(projectKey, projectSession)
       const nextDirty = reconcileSavedBlueprintSnapshots(

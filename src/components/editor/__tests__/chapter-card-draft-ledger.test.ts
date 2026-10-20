@@ -278,8 +278,8 @@ describe('chapter-card draft ledger', () => {
       'sameProjectSessionContext(dataProjectSessionRef.current, projectSession)',
     )
     expect(componentSource).toContain('loadRemote: () => loadDirectoryBlueprints(projectKey, projectSession)')
-    expect(componentSource).toContain('await saveChapterBlueprint(selected, projectKey, projectSession)')
-    expect(componentSource).toContain('await saveAllBlueprints(saveInput, projectKey, projectSession)')
+    expect(componentSource).toContain('await saveChapterBlueprint(selected, projectKey, projectSession, locale)')
+    expect(componentSource).toContain('await saveAllBlueprints(saveInput, projectKey, projectSession, locale)')
     expect(componentSource).toContain(
       "'db:blueprint-delete',\n      target.chapterNumber,\n      projectKey,",
     )

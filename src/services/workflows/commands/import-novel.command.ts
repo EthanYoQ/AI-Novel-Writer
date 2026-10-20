@@ -786,6 +786,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
         commitReceipt.characterSyncOperation.operationId,
         context.projectPath,
         projectSession,
+        context.uiLocale,
       )
       context.data.blueprintCharacterSyncReceipt = syncReceipt
     } catch {

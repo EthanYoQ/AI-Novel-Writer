@@ -15,6 +15,8 @@ import {
 } from '../../shared/character-role'
 
 type RawCard = RawCharacterCard
+/** 按调用方冻结的界面语言选文案。 */
+type UiText = (zhCNText: string, enUSText: string) => string
 export type CharacterRelationshipEdge = { target: string; relation: string }
 
 const RELATIONSHIP_DESCRIPTOR_KEYS: ReadonlySet<string> = new Set([
@@ -294,12 +296,15 @@ function mergeModelAndSourceCards(
   return deduplicateRawCards(merged)
 }
 
-function assertModelCardsMatchSource(modelCards: readonly RawCard[], sourceCards: readonly RawCard[]): void {
+function assertModelCardsMatchSource(modelCards: readonly RawCard[], sourceCards: readonly RawCard[], text: UiText): void {
   const sourceKeys = new Set(deduplicateRawCards(sourceCards).map(card => characterKey(characterName(card))))
   for (const model of deduplicateRawCards(modelCards)) {
     const name = characterName(model)
     if (name && !sourceKeys.has(characterKey(name))) {
-      throw new Error(`模型角色「${name}」不在角色名单完整清单中，未写入角色列表`)
+      throw new Error(text(
+        `模型角色「${name}」不在角色名单完整清单中，未写入角色列表`,
+        `The model character "${name}" is not in the complete cast list. No characters were written.`,
+      ))
     }
   }
 }
@@ -338,22 +343,29 @@ function assertCompleteCharacterCards(
   cards: readonly CharacterData[],
   sourceCards: readonly RawCard[],
   mergedRawCards: readonly RawCard[],
+  text: UiText,
 ): void {
   const names = new Set(cards.map(card => characterKey(card.name)))
   if (names.size !== cards.length) {
-    throw new Error('角色卡包含重复角色名，未写入角色列表')
+    throw new Error(text('角色卡包含重复角色名，未写入角色列表', 'The character cards repeat a name. No characters were written.'))
   }
 
   for (const source of sourceCards) {
     const sourceName = characterName(source)
     if (!sourceName || !names.has(characterKey(sourceName))) {
-      throw new Error(`角色名单中的「${sourceName || '未命名角色'}」未被补齐，未写入角色列表`)
+      throw new Error(text(
+        `角色名单中的「${sourceName || '未命名角色'}」未被补齐，未写入角色列表`,
+        `The cast entry "${sourceName || 'unnamed character'}" was not completed. No characters were written.`,
+      ))
     }
     const sourceRole = readMeaningfulField(source, CHARACTER_FIELD_ALIASES.role)
     if (sourceRole === undefined) continue
     const persisted = cards.find(card => characterKey(card.name) === characterKey(sourceName))
     if (!persisted || persisted.role !== normalizeRole(sourceRole)) {
-      throw new Error(`角色名单中的「${sourceName}」角色定位未被保留，未写入角色列表`)
+      throw new Error(text(
+        `角色名单中的「${sourceName}」角色定位未被保留，未写入角色列表`,
+        `The role of the cast entry "${sourceName}" was not kept. No characters were written.`,
+      ))
     }
   }
 
@@ -361,7 +373,10 @@ function assertCompleteCharacterCards(
     const relationships = readMeaningfulField(card, CHARACTER_FIELD_ALIASES.relationships)
     for (const target of explicitRelationshipTargets(relationships)) {
       if (!names.has(characterKey(target))) {
-        throw new Error(`角色关系目标「${target}」不在完整角色清单中，未写入角色列表`)
+        throw new Error(text(
+          `角色关系目标「${target}」不在完整角色清单中，未写入角色列表`,
+          `The relationship target "${target}" is not in the complete cast list. No characters were written.`,
+        ))
       }
     }
   }
@@ -371,83 +386,12 @@ function assertCompleteCharacterCards(
     const targets = parsed === null ? null : structuredRelationshipTargets(parsed)
     if (!targets) continue
     if (targets.some(target => !names.has(characterKey(target)))) {
-      throw new Error(`角色「${card.name}」包含无效关系目标，未写入角色列表`)
+      throw new Error(text(
+        `角色「${card.name}」包含无效关系目标，未写入角色列表`,
+        `The character "${card.name}" has an invalid relationship target. No characters were written.`,
+      ))
     }
   }
-}
-
-const PERSISTED_TEXT_FIELDS: Array<Exclude<keyof CharacterData, 'name' | 'currentState'>> = [
-  'role', 'gender', 'age', 'appearance', 'personality', 'background', 'abilities',
-  'motivation', 'relationships', 'arc', 'notes',
-]
-
-function hasManualValue(value: unknown): boolean {
-  if (typeof value === 'string') return value.trim().length > 0
-  if (typeof value === 'number') return Number.isFinite(value) && value !== 0
-  return Boolean(value)
-}
-
-function assertSafeCharacterIdentities(cards: readonly CharacterData[]): void {
-  const names = new Set<string>()
-  for (const card of cards) {
-    const name = typeof card?.name === 'string' ? card.name.trim() : ''
-    if (!name || names.has(characterKey(name))) {
-      throw new Error('无法安全合并已有角色卡，未写入角色列表')
-    }
-    names.add(characterKey(name))
-  }
-}
-
-function mergeCurrentStateManualWins(
-  existing: CharacterStateData | undefined,
-  generated: CharacterStateData | undefined,
-): CharacterStateData | undefined {
-  if (!existing && !generated) return undefined
-  const merged = { ...(generated ?? {}), ...(existing ?? {}) } as CharacterStateData
-  const stateFields: Array<keyof CharacterStateData> = [
-    'location', 'powerLevel', 'physicalState', 'mentalState', 'keyItems', 'recentEvents', 'updatedAtChapter',
-  ]
-
-  for (const field of stateFields) {
-    if (!hasManualValue(existing?.[field]) && generated?.[field] !== undefined) {
-      Object.assign(merged, { [field]: generated[field] })
-    }
-  }
-  return merged
-}
-
-function mergeExistingCharacterManualWins(existing: CharacterData, generated: CharacterData): CharacterData {
-  const merged = { ...existing, name: existing.name.trim() }
-  for (const field of PERSISTED_TEXT_FIELDS) {
-    if (!hasManualValue(existing[field]) && hasManualValue(generated[field])) {
-      Object.assign(merged, { [field]: generated[field] })
-    }
-  }
-  merged.currentState = mergeCurrentStateManualWins(existing.currentState, generated.currentState)
-  return merged
-}
-
-/**
- * Automatic extraction may enrich a manual card, but never replaces an
- * existing non-empty field or removes a card omitted from the architecture.
- */
-export function mergeExtractedCharacterCardsWithExisting(
-  generatedCards: readonly CharacterData[],
-  existingCards: readonly CharacterData[],
-): CharacterData[] {
-  assertSafeCharacterIdentities(generatedCards)
-  assertSafeCharacterIdentities(existingCards)
-
-  const generatedByName = new Map(
-    generatedCards.map(card => [characterKey(card.name), card]),
-  )
-  const mergedExisting = existingCards.map((existing) => {
-    const generated = generatedByName.get(characterKey(existing.name))
-    return generated ? mergeExistingCharacterManualWins(existing, generated) : { ...existing }
-  })
-  const existingNames = new Set(existingCards.map(card => characterKey(card.name)))
-  const additions = generatedCards.filter(card => !existingNames.has(characterKey(card.name)))
-  return [...mergedExisting, ...additions]
 }
 
 /**
@@ -456,21 +400,27 @@ export function mergeExtractedCharacterCardsWithExisting(
  * safe to save because `character-save-all` may overwrite matching manual
  * cards.
  */
-export function extractCompleteCharacterCards(modelText: string, sourceText: string): CharacterData[] {
+export function extractCompleteCharacterCards(modelText: string, sourceText: string, text: UiText): CharacterData[] {
   const modelCards = parseModelCharacterCards(modelText)
   const sourceRoster = parseArchitectureCharacterRoster(sourceText)
   if (!sourceRoster.complete) {
-    throw new Error('无法从角色名单中安全识别完整角色清单，未写入角色列表')
+    throw new Error(text(
+      '无法从角色名单中安全识别完整角色清单，未写入角色列表',
+      'The complete cast list could not be identified safely. No characters were written.',
+    ))
   }
   const sourceCards = sourceRoster.cards
 
-  assertModelCardsMatchSource(modelCards, sourceCards)
+  assertModelCardsMatchSource(modelCards, sourceCards, text)
   const mergedRawCards = mergeModelAndSourceCards(modelCards, sourceCards, false)
   const cards = normalizeCharacterCardsForPersistence(mergedRawCards)
   if (cards.length === 0) {
-    throw new Error('未能从 AI 输出或角色名单中提取到有效角色卡，未写入角色列表')
+    throw new Error(text(
+      '未能从 AI 输出或角色名单中提取到有效角色卡，未写入角色列表',
+      'No valid character cards could be extracted from the AI output or the cast list. No characters were written.',
+    ))
   }
-  assertCompleteCharacterCards(cards, sourceCards, mergedRawCards)
+  assertCompleteCharacterCards(cards, sourceCards, mergedRawCards, text)
   return cards
 }
 

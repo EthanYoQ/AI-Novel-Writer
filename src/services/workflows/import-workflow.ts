@@ -200,6 +200,7 @@ function productionDependencies(
           committed.characterSyncOperation.operationId,
           projectPath,
           session,
+          run.locale,
         )
         return
       }

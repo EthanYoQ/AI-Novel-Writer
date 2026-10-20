@@ -211,11 +211,13 @@ async function runOneBatchChapter(
   const guardedChapterNumber = completionMode === 'draft_review' && chapterNumber > batchStartChapterNumber
     ? undefined
     : chapterNumber
-  const guard = await guardChapterWriting(guardedChapterNumber, projectPath, projectSession)
+  const guard = await guardChapterWriting(guardedChapterNumber, projectPath, projectSession, uiLocale)
   if (!guard.ok) {
-    throw new Error(uiLocale === 'en-US'
-      ? `Chapter ${chapterNumber} does not meet the writing prerequisites.`
-      : guard.message || `第${chapterNumber}章不满足创作前置条件`)
+    throw new Error(guard.message || localeText(
+      uiLocale,
+      `第${chapterNumber}章不满足创作前置条件`,
+      `Chapter ${chapterNumber} does not meet the writing prerequisites.`,
+    ))
   }
 
   const [blueprint, existingDraft] = await Promise.all([
@@ -354,13 +356,13 @@ async function runOneBatchChapter(
  * 截断到不一致状态。后处理任一步骤最终失败会抛出错误，阻止后续章节启动。
  */
 export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): BatchChapterWorkflowDefinition {
+  const uiLocale: Locale = params.locale === 'en-US' ? 'en-US' : 'zh-CN'
   if (!sameProjectPathKey(params.projectSession.projectPath, params.projectPath)) {
-    throw new Error('批量创作项目会话与目标路径不匹配')
+    throw new Error(localeText(uiLocale, '批量创作项目会话与目标路径不匹配', 'The batch-writing project session does not match the target path.'))
   }
   const projectPath = params.projectPath
   const startChapterNumber = Math.max(1, Math.trunc(Number(params.startChapterNumber) || 1))
   const chapterCount = normalizeBatchChapterCount(params.chapterCount)
-  const uiLocale: Locale = params.locale === 'en-US' ? 'en-US' : 'zh-CN'
   const generationModelId = normalizeGenerationModelId(params.generationModelId)
   if (!generationModelId) {
     throw new Error(localeText(

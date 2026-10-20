@@ -1536,6 +1536,7 @@ describe('GenerateDirectoryCommand', () => {
       committedFailure.retryOperationId,
       projectSnapshot.expectedProjectPath,
       context.projectSession!,
+      'zh-CN',
     )
 
     expect(retryReceipt).toMatchObject({
