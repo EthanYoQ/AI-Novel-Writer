@@ -159,11 +159,9 @@ describe('角色名单', () => {
     expect({ overlap, clipped, lines, footClipped }).toEqual({ overlap: false, clipped: [], lines: 1, footClipped: false })
   })
 
-  // 740 与 994 是 1024、1280 宽窗口里角色名单页实测的宽度（#465）。
-  it.each([
-    { locale: 'en-US', width: 740 }, { locale: 'en-US', width: 994 },
-    { locale: 'zh-CN', width: 740 }, { locale: 'zh-CN', width: 994 },
-  ] as const)('$locale 界面、名单页 $width 宽：按钮不超出名单栏，定位下拉框放得下每个选项', async ({ locale, width }) => {
+  // 740 与 994 是 1024、1280 宽窗口里角色名单页实测的宽度，600 是 1280 宽窗口开着运行侧页时的宽度（#465）。
+  const fitCases = (['en-US', 'zh-CN'] as const).flatMap(locale => [600, 740, 994].map(width => ({ locale, width })))
+  it.each(fitCases)('$locale 界面、名单页 $width 宽：按钮不超出名单栏，定位下拉框放得下每个选项，档案首行的输入框都留得出写字的地方', async ({ locale, width }) => {
     useLocaleStore.setState({ locale })
     useCharacterStore.setState({ characters: [linzhou] })
     host!.style.width = `${width}px`
@@ -183,7 +181,12 @@ describe('角色名单', () => {
       probe.remove()
       return needed > select.getBoundingClientRect().width
     }).map(option => option.textContent)
-    expect({ overflowing, clippedRoles }).toEqual({ overflowing: [], clippedRoles: [] })
+    // 至少放得下三个汉字。
+    const crampedInputs = [...host!.querySelectorAll<HTMLInputElement>('.cast-row-fields input')].filter(input => {
+      const style = getComputedStyle(input)
+      return input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) < 3 * parseFloat(style.fontSize)
+    }).map(input => input.closest('.cast-field')?.querySelector('label')?.textContent)
+    expect({ overflowing, clippedRoles, crampedInputs }).toEqual({ overflowing: [], clippedRoles: [], crampedInputs: [] })
   })
 
   it('名单列出全部角色，改动后保存角色走名单的保存', async () => {
