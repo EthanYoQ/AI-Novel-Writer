@@ -286,6 +286,24 @@ describe('ProjectPeekService source-zero-write overview', { timeout: 20_000 }, (
     expect(external.stages[5]).toEqual({ id: 'finalization', status: 'not-started', count: 0 })
   })
 
+  it('treats a later reviewed draft as the chapter current draft for words and excerpt (#452)', () => {
+    const f = fixture()
+    addChapter(f.database, 1, { draft: true })
+    const reviewed = f.database.prepare('INSERT INTO contents (body) VALUES (?)').run('第1章审过的新稿：灯塔亮了。')
+    f.database.prepare(`
+      INSERT INTO drafts (chapter_number,version,status,source,content_id,word_count)
+      VALUES (1,2,'reviewed','revise',?,30)
+    `).run(reviewed.lastInsertRowid)
+    const service = new ProjectPeekService({ scratchRoot: f.scratch })
+    const current = service.readCurrent(f.projectId, f.database)
+
+    ready(current)
+    expect(current.totalWords).toBe(30)
+    expect(current.excerpt).toContain('灯塔亮了')
+    expect(current.excerpt).not.toContain('雨落在旧车站')
+    expect(current.stages[3]).toEqual({ id: 'drafting', status: 'in-progress', count: 1 })
+  })
+
   it('allows an excerpt only for the already-open current database and performs SELECT-only aggregation', () => {
     const f = fixture()
     addChapter(f.database, 1, { draft: true })

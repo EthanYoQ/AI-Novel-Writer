@@ -12,6 +12,7 @@ import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLan
 import * as arch from './redesign/pages/architecture.mjs'
 import * as blueprint from './redesign/pages/blueprint.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const argument = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -25,7 +26,7 @@ assert(packageDir && packageSourceSha && /^[a-f0-9]{64}$/.test(expectedExe ?? ''
 // A06 由本次编辑区里的 Ctrl S 直接验证；A07 在纸墨外壳里没有重放，记为未验证。
 const previousU14Path = path.join(repository, '.runtime', '.cache', 'f05-u14-save-feedback', '9e6e279e-9d5a-4683-bdcf-e7bc4b72152b', 'receipt.json')
 const previousU14 = fs.existsSync(previousU14Path) ? JSON.parse(fs.readFileSync(previousU14Path, 'utf8')) : null
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const fileHash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()

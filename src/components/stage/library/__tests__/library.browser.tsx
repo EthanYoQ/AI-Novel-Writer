@@ -43,10 +43,10 @@ let root: Root | undefined
 let host: HTMLDivElement | undefined
 let invoke: ReturnType<typeof vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>>
 
-async function mount() {
+async function mount(width = 1440, height = 900) {
   host = document.createElement('div')
   host.className = 'paper-ink stage-shell'
-  host.style.cssText = 'width: 1440px; height: 900px;'
+  host.style.cssText = `width: ${width}px; height: ${height}px;`
   document.body.append(host)
   root = createRoot(host)
   await act(async () => root!.render(<div className="stage-library"><StageLibrary /></div>))
@@ -238,6 +238,28 @@ describe('书房', () => {
     await click(button('移除记录'))
     expect(useProjectStore.getState().removeRecentProject).toHaveBeenCalledWith(ISLAND.path)
     expect(useProjectStore.getState().deleteProject).not.toHaveBeenCalled()
+  })
+
+  it('窗口最窄 1024×640 时书房不横向溢出，书架菜单与确认框照常可用', async () => {
+    // 真实应用的最小窗口（electron/main.ts 的 minWidth、minHeight）。
+    await page.viewport(1024, 640)
+    openCurrent()
+    useProjectStore.setState({ recentProjects: [LIGHTHOUSE, ISLAND] })
+    await mount(1024, 640)
+    await vi.waitFor(() => expect(overviewOf('灯塔')?.textContent).toContain('守塔人把灯又擦了一遍。'))
+
+    expect(host!.scrollWidth, '书房内容不超出窗口宽度').toBeLessThanOrEqual(host!.clientWidth)
+    const overflowing = [...host!.querySelectorAll<HTMLElement>('button, h1, h2, [data-stage]')]
+      .filter(element => element.getClientRects().length > 0 && element.getBoundingClientRect().right > host!.getBoundingClientRect().right + 0.5)
+      .map(element => element.getAttribute('aria-label') ?? element.textContent)
+    expect(overflowing).toEqual([])
+
+    await click(await chooseFromBookMenu('雾岛', '从最近项目移除…'))
+    await click(button('取消'))
+    await click(await chooseFromBookMenu('雾岛', '从最近项目移除…'))
+    await click(button('移除记录'))
+    expect(useProjectStore.getState().removeRecentProject).toHaveBeenCalledWith(ISLAND.path)
+    expect(document.scrollingElement!.scrollLeft, '对话框关闭后焦点回到菜单按钮，不横向滚动页面').toBe(0)
   })
 
   it('删除作品只对打开的作品可用，要输入完整作品名才能确认', async () => {

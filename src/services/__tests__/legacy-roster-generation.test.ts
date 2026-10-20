@@ -77,7 +77,7 @@ it('launcher既有卡模式被改变时拒绝改为模型流程', async () => {
   if (channel === 'fs:check-exists') return false
   throw new Error(channel)
  }); install(invoke)
- await expect(migrateLegacyCharacterRoster(session.projectPath)).rejects.toThrow('SOURCE_MODE_CHANGED')
+ await expect(migrateLegacyCharacterRoster(session.projectPath)).rejects.toThrow('旧版角色名单发生了变化')
  expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('legacy-roster:begin')
 })
 

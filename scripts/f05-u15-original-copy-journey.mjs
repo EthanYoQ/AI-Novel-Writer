@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import * as refs from './redesign/pages/refs.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -35,7 +36,7 @@ const dirtyProductPaths = git('status', '--porcelain', '--untracked-files=all', 
   .split('\n').filter(Boolean).filter(line => packageInput(line.slice(3)))
 assert.deepEqual(changedProductPaths, [], 'Packaged product source changed after the fixed build SHA')
 assert.deepEqual(dirtyProductPaths, [], 'Dirty packaged product inputs make this run unbound')
-const exe = path.join(packageDir, 'AI小说作家.exe')
+const exe = resolveWindowsExecutable(packageDir)
 const asar = path.join(packageDir, 'resources', 'app.asar')
 assert.equal(fileHash(exe), expectedExe, 'Executable hash does not match the fixed package')
 assert.equal(fileHash(asar), expectedAsar, 'ASAR hash does not match the fixed package')
