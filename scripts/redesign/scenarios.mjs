@@ -381,17 +381,24 @@ export async function seedStageSample(context,
  * 对照用的旧构建落在第 3 章，不用切。
  */
 async function moveToChapter3(page) {
-  const chapter3 = stage.prose(page).getByText(firstLine(STAGE_SAMPLE.drafts[3].text))
+  const chapter3Text = firstLine(STAGE_SAMPLE.drafts[3].text)
+  const chapter3 = stage.prose(page).getByText(chapter3Text)
   await stage.prose(page).filter({ hasText: /\S/ }).first().waitFor({ state: 'visible', timeout: 20_000 })
-  const otherTabs = stage.tabList(page).getByRole('button', { name: /^关闭「(?!第 3 章 ·)/ })
+  const otherTabs = stage.closeOtherTabButtons(page, `第 3 章 · ${stageChapterTitle(3)}`)
   if (await chapter3.count() > 0 && await otherTabs.count() === 0) return
   await stage.chapterButton(page, 3).click()
-  await stage.waitForProse(page, firstLine(STAGE_SAMPLE.drafts[3].text))
-  for (let open = await otherTabs.count(); open > 0; open -= 1) {
-    await otherTabs.first().click()
-    await otherTabs.nth(open - 1).waitFor({ state: 'detached' })
+  await stage.waitForProse(page, chapter3Text)
+  while (await otherTabs.count() > 0) {
+    const closing = otherTabs.first()
+    const name = await closing.getAttribute('aria-label')
+    assert.ok(name, '标签的关闭按钮带 aria-label，才能等这一个消失')
+    await closing.click()
+    // 等刚点的这个标签消失，不等某个下标：关掉一个后下标会前移，旧下标的等待会立即通过。
+    await stage.tabList(page).getByRole('button', { name, exact: true }).waitFor({ state: 'detached' })
   }
+  // 只剩一个标签与一个都不剩时标签条都会收起，所以还要确认留下的是第 3 章。
   await stage.tabList(page).waitFor({ state: 'detached' })
+  assert.equal(await chapter3.isVisible(), true, '关掉其他标签后第 3 章仍开着')
 }
 
 /**
