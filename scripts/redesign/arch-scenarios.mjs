@@ -341,6 +341,55 @@ export const ARCH_SCENARIOS = {
   } },
 
   /**
+   * #441 双审计 P2：本批最后一章（第 6 章，范围 6–6）生成期间改模型，候选生成完、正式保存被来源检查拒绝。
+   * 上一次运行不出现原始错误码；架构页的大纲提示只能查看或复制并给「从第 6 章重新生成」，不再退回续写与「编辑恢复稿」。
+   */
+  'arch-model-change-last': { model: true, shell: 'stage', setup: seedArch({ clear: ['synopsis'], totalChapters: 24 }), run: async context => {
+    const { page, invoke, fake } = context
+    await openArchitecture(page)
+    await arch.primary(page).click()
+    await arch.selectOnly(page, ['synopsis'])
+    await arch.setRange(page, 1, 5)
+    await arch.startGenerate(page)
+    await waitForRunDone(page)
+    await arch.badge(page, 'synopsis').filter({ hasText: '部分完成 · 5 / 24 章' }).waitFor({ timeout: 30_000 })
+    await arch.section(page, 'synopsis').getByRole('button', { name: '续写第 6 章起' }).click()
+    await arch.setRange(page, 6, 6)
+    fake.gate.hold()
+    await arch.startGenerate(page)
+    await untilGateHolds(fake.gate, 60_000)
+    assert.equal((await invoke(page, 'llm:save-model', { ...FAKE_MODEL, modelName: 'gpt-4.1-mini' })).success, true)
+    fake.gate.release()
+    const last = runSheet.anyCard(page).filter({ hasText: /^上一次运行/ })
+    await last.waitFor({ state: 'visible', timeout: 60_000 })
+    const notice = await last.innerText()
+    assert.doesNotMatch(notice, /GENERATION_SOURCE_CHANGED|Error invoking remote method/, '界面不出现原始错误码')
+    assert.match(notice, /本批第 6 章大纲已生成完，但保存前.*正式保存被拒绝/)
+    assert.equal(await last.getByRole('button', { name: '继续生成情节大纲' }).count(), 0, '不提供必然被拒的断点续写')
+    await openArchitecture(page)
+    await arch.waitReady(page)
+    const outline = arch.section(page, 'synopsis')
+    const restart = outline.getByRole('button', { name: '从第 6 章重新生成' })
+    await restart.waitFor({ state: 'visible', timeout: 10_000 })
+    const note = await outline.innerText()
+    assert.match(note, /只能查看或复制。请从第 6 章重新生成情节大纲/)
+    assert.doesNotMatch(note, /续写从停下的地方|可编辑并本地保存|已经生成完毕/, '正式保存被拒时不承诺续写，也不说这批已生成完毕')
+    assert.equal(await outline.getByRole('button', { name: '编辑恢复稿' }).count(), 0)
+    assert.deepEqual(Object.keys(outlineChapters((await readCore(context)).synopsis)).map(Number), [1, 2, 3, 4, 5], '正式大纲仍停在第 5 章')
+    return { notice, note }
+  }, after: async context => {
+    const { page } = context
+    await arch.section(page, 'synopsis').getByRole('button', { name: '从第 6 章重新生成' }).click()
+    assert.equal(await arch.dialog(page).getByRole('spinbutton', { name: '本次生成范围的起始章' }).inputValue(), '6', '生成对话框从第 6 章起')
+    assert.equal(await arch.dialog(page).getByRole('spinbutton', { name: '本次生成范围的结束章' }).inputValue(), '6', '生成对话框沿用本批范围')
+    await arch.selectOnly(page, ['synopsis'])
+    await arch.startGenerate(page)
+    await waitForRunDone(page)
+    await arch.badge(page, 'synopsis').filter({ hasText: '部分完成 · 6 / 24 章' }).waitFor({ timeout: 30_000 })
+    assert.deepEqual(Object.keys(outlineChapters((await readCore(context)).synopsis)).map(Number), Array.from({ length: 6 }, (_, index) => index + 1))
+  } },
+
+  /**
    * 修复第 2 轮补的 lane：真实主进程下大纲分批写到 16 / 24 章后重写第 1–5 章，对话框标「将覆盖第 1–5 章」并能提交；
    * after 生成并核对第 6 章起的正文逐字不变，大纲仍是部分完成 16 / 24，页头、流程脊同为 3 / 4。
    */
