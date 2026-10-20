@@ -175,8 +175,9 @@ function referencedPaths(text: string): SkillReference[] {
   return found.sort((left, right) => left.at - right.at).map(({ path, blocking }) => ({ path, blocking }))
 }
 
-/** 把引用解析成 Skill 根目录内的规范 POSIX 路径；越出根目录或含不安全片段时返回 null。 */
+/** 把引用解析成 Skill 根目录内的规范 POSIX 路径；越出根目录或含不安全片段时返回 null。${SKILL_DIR} 开头的引用总从根目录解析。 */
 function resolveReference(reference: string, baseSegments: string[]): string | null {
+  const fromRoot = /^\$\{skill_dir\}/i.test(reference)
   // 路径只取开头的 ASCII 路径字符：中文句读、锚点或查询串在此截断，非 ASCII 文件名留下的残段解析不到文本文件。
   const cleaned = reference
     .replace(/^\$\{skill_dir\}[/\\]?/i, '')
@@ -184,7 +185,7 @@ function resolveReference(reference: string, baseSegments: string[]): string | n
     .replace(/[.]+$/, '')
     .replace(/\\/g, '/')
   if (!cleaned) return null
-  const segments = [...baseSegments]
+  const segments = fromRoot ? [] : [...baseSegments]
   for (const part of cleaned.split('/')) {
     if (!part || part === '.') continue
     if (part === '..') {
@@ -218,20 +219,31 @@ function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | 
     const { path: reference, blocking, base } = queue.shift()!
     const candidates = [...new Set([resolveReference(reference, base), resolveReference(reference, [])])]
       .filter((candidate): candidate is string => candidate !== null)
-    if (candidates.some(candidate => included.has(candidate.toLowerCase()))) continue
-    const bundled = files.length < MAX_WRITING_SKILL_BUNDLED_FILES
-      ? candidates.map(path => ({ path, content: readFile?.(path) })).find(file => file.content !== undefined)
-      : undefined
-    if (!bundled) {
+    // 按解析顺序取第一个已并入或读得到的文件作为实际目标，再按它去重：备用的同名根目录文件已并入，不代表当前目录的那份也已并入。
+    let bundled: WritingSkillBundledFile | undefined
+    let alreadyIncluded = false
+    for (const path of candidates) {
+      if (included.has(path.toLowerCase())) {
+        alreadyIncluded = true
+        break
+      }
+      const content = readFile?.(path)
+      if (content !== undefined) {
+        bundled = { path, content }
+        break
+      }
+    }
+    if (alreadyIncluded) continue
+    if (!bundled || files.length >= MAX_WRITING_SKILL_BUNDLED_FILES) {
       const shown = reference.replace(/[#?].*$/, '')
       if (blocking) blocked = true
       else if (shown) unbundled.add(shown)
       continue
     }
-    files.push({ path: bundled.path, content: bundled.content!.trim() })
+    files.push({ path: bundled.path, content: bundled.content.trim() })
     included.add(bundled.path.toLowerCase())
     const directory = bundled.path.split('/').slice(0, -1)
-    queue.push(...referencedPaths(bundled.content!).map(reference => ({ ...reference, base: directory })))
+    queue.push(...referencedPaths(bundled.content).map(reference => ({ ...reference, base: directory })))
   }
   return { files, blocked, unbundled: [...unbundled] }
 }
