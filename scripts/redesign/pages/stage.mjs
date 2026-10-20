@@ -123,8 +123,10 @@ export function settingsGroups(page) {
   })))
 }
 
-export async function closeSettings(page) {
-  await settingsNav(page).getByRole('button', { name: /^返回(作品|书房)$/ }).click()
+/** dispatch：浮起的运行侧页盖住「返回」时直接对按钮派发点击。 */
+export async function closeSettings(page, { dispatch = false } = {}) {
+  const back = settingsNav(page).getByRole('button', { name: /^返回(作品|书房)$/ })
+  await (dispatch ? back.dispatchEvent('click') : back.click())
   await settingsNav(page).waitFor({ state: 'detached' })
 }
 
