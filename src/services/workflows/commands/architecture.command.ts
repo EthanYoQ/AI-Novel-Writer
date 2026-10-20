@@ -147,16 +147,16 @@ export const PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE = 'architecture-synopsis-sou
 /**
  * 主进程按冻结来源拒绝下一次请求时抛出的错误码（main-generation-owner.ts assertSourcesCurrent）：
  * 模型设置变了是 GENERATION_SOURCE_CHANGED_MODEL，其余来源是 GENERATION_SOURCE_CHANGED。经 IPC 后 code 属性丢失、
- * 外面还包着「Error invoking remote method …」，只能匹配 message；结尾的负向前瞻排除更长的码（如 _DURING_SNAPSHOT）。
- * 第 1 组有值即为模型设置变了。
+ * 外面还包着「Error invoking remote method …」，只能匹配 message；两侧的断言排除更长的码
+ * （如 _DURING_SNAPSHOT、FINALIZATION_GENERATION_SOURCE_CHANGED）。第 1 组有值即为模型设置变了。
  */
-const PLOT_OUTLINE_SOURCE_CHANGED_PATTERN = /GENERATION_SOURCE_CHANGED(_MODEL)?(?![A-Z_])/u
+const PLOT_OUTLINE_SOURCE_CHANGED_PATTERN = /(?<![A-Z_])GENERATION_SOURCE_CHANGED(_MODEL)?(?![A-Z_])/u
 
 export class PlotOutlineSourceChangedError extends Error {
   readonly code = PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE
 
-  constructor(message: string) {
-    super(message)
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
     this.name = 'PlotOutlineSourceChangedError'
     Object.setPrototypeOf(this, new.target.prototype)
   }
@@ -2117,6 +2117,11 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
   private async executeChapterOutline({ context, callbacks }: Pick<CommandExecuteParams, 'context' | 'callbacks'>, recovery: GenerationRecoveryContext, initial: PlotOutlineProgress): Promise<string> {
     const session = requireWorkflowProjectSession(context), handle = context.mainGenerationRunHandle!
     const text = (zh: string, en: string) => workflowUiText(context, zh, en)
+    // 来源变了以后运行侧页直接显示这两段说明，口径与架构页的恢复稿提示（run-recovery.ts outlineSourceChangedNote）一致。
+    const keptInRecoveryDraft = (zh: string, en: string) => text(`${zh}保留在「大纲恢复稿」中，只能查看或复制，不能覆盖正式内容。`,
+      `${en} kept in the outline recovery draft, which can be viewed or copied but cannot replace saved content. `)
+    const restartFrom = (from: number) => text(`正式大纲未被改动。请到「架构」页重新生成情节大纲，从第 ${from} 章开始。`,
+      `The saved outline was not changed. Open Architecture and generate the plot outline again from chapter ${from}.`)
     const { expectedProjectPath } = this.snapshot
     const sourceExpected = initial.sourceExpected
     const configInput = recovery.authorInputs.find(input => input.id === 'architecture:author-config')
@@ -2197,11 +2202,11 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
             : text('生成途中作品设定、提示词模板或写作 Skill 被修改', 'The book settings, a prompt template or a writing skill changed during generation')
           const lastKept = stoppedAt - 1
           let kept = ''
-          if (lastKept === from) kept = text(`本批已生成的第 ${from} 章保留在「大纲恢复稿」中，可查看和复制。`, `Chapter ${from}, already generated in this batch, is kept in the outline recovery draft to view and copy. `)
-          else if (lastKept > from) kept = text(`本批已生成的第 ${from}–${lastKept} 章保留在「大纲恢复稿」中，可查看和复制。`, `Chapters ${from}–${lastKept}, already generated in this batch, are kept in the outline recovery draft to view and copy. `)
+          if (lastKept === from) kept = keptInRecoveryDraft(`本批已生成的第 ${from} 章`, `Chapter ${from}, already generated in this batch, is`)
+          else if (lastKept > from) kept = keptInRecoveryDraft(`本批已生成的第 ${from}–${lastKept} 章`, `Chapters ${from}–${lastKept}, already generated in this batch, are`)
           throw new PlotOutlineSourceChangedError(text(
-            `${cause}，这批大纲已在第 ${stoppedAt} 章停止，没有再发送请求。${kept}正式大纲未被改动。请到「架构」页重新生成情节大纲，从第 ${from} 章开始。`,
-            `${cause}, so this outline batch stopped at chapter ${stoppedAt} without sending another request. ${kept}The saved outline was not changed. Open Architecture and generate the plot outline again from chapter ${from}.`))
+            `${cause}，这批大纲已在第 ${stoppedAt} 章停止，没有再发送请求。`,
+            `${cause}, so this outline batch stopped at chapter ${stoppedAt} without sending another request. `) + kept + restartFrom(from), { cause: error })
         }
       }
       const current = await ipc.invokeWithProjectSession(session, 'generation:read', handle)
@@ -2221,8 +2226,9 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       const { from, to } = outline.range
       const chapters = from === to ? text(`第 ${from} 章`, `chapter ${from}`) : text(`第 ${from}–${to} 章`, `chapters ${from}–${to}`)
       throw new PlotOutlineSourceChangedError(text(
-        `本批${chapters}大纲已生成完，但保存前模型设置、作品设定、提示词模板或写作 Skill 被修改，正式保存被拒绝。这批大纲保留在「大纲恢复稿」中，可查看和复制。正式大纲未被改动。请到「架构」页重新生成情节大纲，从第 ${from} 章开始。`,
-        `The outline for ${chapters} finished, but the model settings, book settings, a prompt template or a writing skill changed before it was saved, so saving was refused. The batch is kept in the outline recovery draft to view and copy. The saved outline was not changed. Open Architecture and generate the plot outline again from chapter ${from}.`))
+        `本批${chapters}大纲已生成完，但保存前模型设置、作品设定、提示词模板或写作 Skill 被修改，正式保存被拒绝。`,
+        `The outline for ${chapters} finished, but the model settings, book settings, a prompt template or a writing skill changed before it was saved, so saving was refused. `)
+        + keptInRecoveryDraft('这批大纲', 'The batch is') + restartFrom(from), { cause: error })
     }
     await saveNavigation(outline, true)
     const { globalEventBus } = await import('../../../shared/event-bus')

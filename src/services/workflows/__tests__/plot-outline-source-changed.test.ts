@@ -71,6 +71,8 @@ it('途中改了模型设置：说清楚停在第 7 章、第 6 章还在恢复�
   expect(error.message).toContain('模型设置')
   expect(error.message).toContain('第 7 章')
   expect(error.message).toContain('第 6 章')
+  // 运行侧页直接显示这段原因，口径与架构页的恢复稿提示一致：恢复稿不能覆盖正式内容。
+  expect(error.message).toContain('不能覆盖正式内容')
   expect(error.message).toContain('正式大纲未被改动')
   expect(error.message).toContain('从第 6 章')
 })
@@ -92,6 +94,13 @@ it('与来源无关的失败照原样抛出，不被误报成来源变化', asyn
   expect(error.message).toContain('GENERATION_PROVIDER_FAILED')
 })
 
+it('前缀更长的其他错误码（定稿生成的来源变化）照原样抛出，不被误报成大纲来源变化', async () => {
+  const journey = arrangeOutlineRejectedAtChapter7('FINALIZATION_GENERATION_SOURCE_CHANGED')
+  const error = await failure(journey.run)
+  expect(error.code).not.toBe(PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE)
+  expect(error.message).toContain('FINALIZATION_GENERATION_SOURCE_CHANGED')
+})
+
 it('最后一章生成完、正式保存时被来源检查拒绝：不出原始错误码，说清这批没写入正式大纲，从第 6 章重新生成', async () => {
   const journey = arrangeOutlineRejectedAtChapter7('GENERATION_SOURCE_CHANGED', true)
   const error = await failure(journey.run)
@@ -100,6 +109,7 @@ it('最后一章生成完、正式保存时被来源检查拒绝：不出原始�
   expect(error.code).toBe(PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE)
   expect(error.message).not.toContain('GENERATION_SOURCE_CHANGED')
   expect(error.message).toContain('第 6–10 章')
+  expect(error.message).toContain('不能覆盖正式内容')
   expect(error.message).toContain('正式大纲未被改动')
   expect(error.message).toContain('从第 6 章')
 })
