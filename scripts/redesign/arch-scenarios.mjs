@@ -196,8 +196,9 @@ export const ARCH_SCENARIOS = {
     await openArchitecture(page)
     await arch.primary(page).click()
     await arch.dialog(page).waitFor({ state: 'visible' })
+    // 默认勾选与范围在对话框打开后的 effect 里才设好，首帧大纲还显示「将覆盖」：等它变成「续写」再读。
+    await arch.mark(page, 'synopsis').filter({ hasText: /^续写$/ }).waitFor()
     assert.equal(await arch.mark(page, 'worldbuilding').innerText(), '将覆盖')
-    assert.equal(await arch.mark(page, 'synopsis').innerText(), '续写')
     assert.equal(await arch.dialog(page).locator('.arch-range-effect').innerText(), '接在序章之后写第 1–5 章，序章不动。')
     await arch.dialog(page).getByRole('spinbutton', { name: '本次生成范围的起始章' }).fill('2')
     assert.equal(await arch.dialog(page).locator('.arch-range-issue').innerText(), '已有大纲只有序章，不能跳到第 2 章开始。请从第 1 章起生成，序章会原样保留。')
