@@ -192,7 +192,7 @@ describe('规划恢复稿', () => {
 
   it('已写进正式大纲的一批在来源变了之后：只说明只能查看或复制，不叫作者从这批起始章重新生成', () => {
     const recovery = { handle, plotOutline: { range: { from: 1, to: 5 }, cursor: { kind: 'complete' } },
-      plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' }, formalCovered: true } } as never
+      plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' }, inFormalOutline: true } } as never
     const entry = buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'zh-CN')[0]
     expect(entry.kind === 'planning' && entry.note).toContain('只能查看或复制')
     expect(entry.kind === 'planning' && entry.note).not.toContain('重新生成')
@@ -200,7 +200,7 @@ describe('规划恢复稿', () => {
 
   it('最后一章生成完、正式保存被来源检查拒绝的一批：不说已经生成完毕，叫作者从本批起始章重新生成', () => {
     const recovery = { handle, plotOutline: { range: { from: 6, to: 6 }, cursor: { kind: 'complete' } },
-      plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' }, formalCovered: false } } as never
+      plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' }, inFormalOutline: false } } as never
     const zh = buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'zh-CN')[0]
     const en = buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'en-US')[0]
     expect(zh.kind === 'planning' && zh.note).not.toContain('已经生成完毕')

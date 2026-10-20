@@ -54,7 +54,7 @@ import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { readLegacyRosterSource, adoptLegacyCards } from './legacy-roster-source'
 import { buildLegacyRosterJsonRepairTask, buildLegacyRosterReplacementTask, parseLegacyRosterJson } from '../../src/shared/legacy-roster-generation-pure'
 import { validateGraphGenerationInput, readGraphGenerationContext } from './graph-generation-source'
-import { planningTargetInstruction, parsePlanningTargetUnits, renderPlotOutlineRange, plotOutlineLastChapter, plotOutlineRecoveryDraft, plotOutlineSourceInvalid, validPlotOutlineAuthorPrefix, type PlotOutlineSource, type PlotOutlineProgress, type PlotOutlineRecovery, type PlotOutlineAuthorEditReceipt } from '../../src/shared/plot-outline-contract'
+import { planningTargetInstruction, parsePlanningTargetUnits, renderPlotOutlineRange, plotOutlineRecoveryDraft, plotOutlineSourceInvalid, validPlotOutlineAuthorPrefix, type PlotOutlineSource, type PlotOutlineProgress, type PlotOutlineRecovery, type PlotOutlineAuthorEditReceipt } from '../../src/shared/plot-outline-contract'
 import { ProjectCoreRepository, type ProjectCoreSynopsisExpected, type ProjectCoreSynopsisCommitRequest } from '../repositories/project-core-repository'
 // 尝试 id 都由 randomUUID 生成；recoverFrom 还拼进 nonce，只收 UUID，免得拼出别的尝试的 nonce。
 const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
@@ -801,8 +801,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         writeState = projectGenerationInFlight() ? { kind: 'blocked', reason: 'in-flight' } : { kind: 'ready' }
       }
     } catch { /* Frozen proposals remain readable when current sources are unavailable. */ }
-    const formalLast = plotOutlineLastChapter(ProjectCoreRepository.get(deps.database)?.synopsis ?? '')
-    return { sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft, formalCovered: formalLast !== null && formalLast >= outline.range.to,
+    const batch = outline.cursor.kind === 'complete' ? outline.composition?.text.trim() : undefined
+    const inFormalOutline = !!batch && (ProjectCoreRepository.get(deps.database)?.synopsis ?? '').includes(batch)
+    return { sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft, inFormalOutline,
       completeChapters: [...(outline.composition?.chapters?.map(chapter => chapter.chapterNumber) ?? []),
         ...(outline.cursor.kind === 'accept' ? [outline.cursor.chapterNumber] : [])],
       writeState, saved }

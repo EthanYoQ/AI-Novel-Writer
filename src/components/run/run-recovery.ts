@@ -183,7 +183,7 @@ export function outlineSourceChangedBlocked(recovery: Pick<GenerationRecoveryCon
 export function outlineSourceChangedNote(recovery: Pick<GenerationRecoveryContext, 'plotOutline' | 'plotOutlineRecovery'>, locale: Locale): string | null {
   if (!outlineSourceChangedBlocked(recovery)) return null
   const t = lang(locale), outline = recovery.plotOutline
-  if (recovery.plotOutlineRecovery?.formalCovered) {
+  if (recovery.plotOutlineRecovery?.inFormalOutline) {
     return t('这批大纲已经生成完毕，但模型设置、作品设定、提示词模板或写作 Skill 已经变了，恢复稿不能覆盖正式内容，只能查看或复制。',
       'This outline batch finished, but the model settings, book settings, a prompt template or a writing skill have changed, so this recovery draft cannot replace saved content. You can view or copy it.')
   }
