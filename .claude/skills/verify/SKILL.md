@@ -301,7 +301,7 @@ node scripts/redesign/drive.mjs --scenario blueprint-timing --shell stage --out 
 
 ## 正文单章视图（RD-8 起）
 
-场景在 `scripts/redesign/chapter-scenarios.mjs`，页面对象在 `scripts/redesign/pages/chapter-view.mjs`（单章视图是 `.stage-ch`，审稿侧页是 `complementary`「审稿报告」，修稿合并是 `region`「修稿合并」，定稿后处理是 `region`「定稿后处理」，版本切换器是按钮「本章版本：…」，定稿确认是 `dialog`「定稿第 N 章？」）。新外壳打开第 N 章就是单章视图，示例作品第 3 章带一份审稿（已审稿，打开时默认展开审稿侧页）；待写章显示本章蓝图与「写作此章」，草稿状态主按钮是 AI 审稿，已审稿是「按 N 项意见修稿」，有待合并修稿时直接摆出合并视图，已修稿是定稿，定稿后列出后处理各步。假模型另有 `fake.breakCharacterState()`：之后定稿后处理的角色状态更新收到不是 JSON 的回复而失败，传 `false` 恢复。
+场景在 `scripts/redesign/chapter-scenarios.mjs`，页面对象在 `scripts/redesign/pages/chapter-view.mjs`（单章视图是 `.stage-ch`，审稿侧页是 `complementary`「审稿报告」，修稿合并是 `region`「修稿合并」，定稿后处理是 `region`「定稿后处理」，版本切换器是按钮「本章版本：…」，定稿确认是 `dialog`「定稿第 N 章？」）。新外壳打开第 N 章就是单章视图，示例作品第 3 章带一份审稿（已审稿，打开时默认展开审稿侧页）；待写章显示本章蓝图与「写作此章」，草稿状态主按钮是 AI 审稿，已审稿是「按 N 项意见修稿」，有待合并修稿时直接摆出合并视图，已修稿是定稿，定稿后列出后处理各步。假模型另有 `fake.breakCharacterState()`：之后定稿后处理的角色状态更新收到不是 JSON 的回复而失败，传 `false` 恢复；`fake.dropCharacterState(n)`：之后 n 次角色状态请求回 200 后不发内容就断开。
 
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应计划 |
 |---|---|---|---|---|
@@ -312,6 +312,7 @@ node scripts/redesign/drive.mjs --scenario blueprint-timing --shell stage --out 
 | `chapter-merge` | 修稿后合并视图第一处用修稿（多于一处时第二处手动编辑）；`after` 完成合并，正文里是选中的文字 | 逐段选择 | 是 | lane 5 |
 | `chapter-finalize` | 第 3 章从「更多」定稿，确认后正文只读，后处理「4 / 4 完成」（正文文件与三步后处理） | 定稿视图 | 是 | lane 6 |
 | `chapter-retry` | 角色状态更新失败后点「重试失败步骤」：之后假模型只收到角色状态请求，后处理回到 4 / 4 | 重试后的定稿视图 | 是 | lane 7 |
+| `chapter-retry-stream` | 角色状态请求两次断流（`fake.dropCharacterState(2)`）：自动后处理只请求一次，失败说明不含错误码；重开应用后点「重试失败步骤」恰好再请求一次，说明换成「没有返回完整结果」（中途截图 `chapter-retry-stream-failed`）；再点这一步的「重试」第三次请求成功，回到 3 / 3（重开后不列正文文件） | 重试成功后的定稿视图 | 是 | #420 |
 | `chapter-selection` | 选中一段：工具条四个纸墨按钮（润色、扩写、续写、改成对话）；润色预览后替换，再选一段润色后取消，原文不变 | 选区工具条 | 是 | lane 8 |
 | `chapter-delete` | 第 4 章有 v1、v2：从「更多」删除这一稿出现危险确认；`after` 确认后版本切换器只剩 v1 | 危险确认 | 否 | lane 9 |
 | `chapter-1280` | 视口 1280×900（配 `--theme dark`）：第 3 章打开时审稿侧页已展开，收起它后正文一行 32～35 字；运行侧页打开后不少于 24 字，页面没有横向滚动 | 运行侧页与纸面 | 否 | lane 10 |

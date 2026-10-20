@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useProjectStore } from '../../stores/project-store'
 import { readPostProcessStatus, type PostProcessStatus } from '../../services/workflows/workflow-utils'
 import { globalEventBus } from '../../shared/event-bus'
@@ -25,9 +25,9 @@ export function getStepPresentation(step: PostProcessStatus['steps'][string]): S
 
 /**
  * 读一个后处理 scope 的最新一次运行，定稿完成或任一工作流结束时重读。
- * 定稿视图的后处理步骤用它。
+ * 定稿视图的后处理步骤用它。busy 由忙转闲时也重读：失败的修复不发 WORKFLOW_COMPLETE，否则失败说明会停在上一次。
  */
-export function usePostProcessStatus(scope: string) {
+export function usePostProcessStatus(scope: string, busy = false) {
   const [status, setStatus] = useState<PostProcessStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const project = useProjectStore(s => s.currentProject)
@@ -70,6 +70,12 @@ export function usePostProcessStatus(scope: string) {
     })
     return () => { unsub1(); unsub2() }
   }, [loadStatus, project])
+
+  const wasBusy = useRef(busy)
+  useEffect(() => {
+    if (wasBusy.current && !busy) void loadStatus()
+    wasBusy.current = busy
+  }, [busy, loadStatus])
 
   const steps = status
     ? Object.entries(status.steps).map(([key, step]) => ({ key, step, presentation: getStepPresentation(step) }))
