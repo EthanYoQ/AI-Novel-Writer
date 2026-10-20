@@ -29,6 +29,13 @@ function versionName(version: VersionRecord, text: Text): string {
   return text(`${zh} v${version.version}`, `${en} v${version.version}`)
 }
 
+/** 对比区还没有对比时的一句。稿已删除时各稿正在后台重读、可能失败，不担保列表已刷新。 */
+function comparisonHint(reading: boolean, missingPicked: boolean, text: Text): string {
+  if (reading) return text('正在读取…', 'Loading…')
+  if (missingPicked) return text('这一稿已不存在，可能已被删除，请另选一稿。', 'This version no longer exists. It may have been deleted. Pick another version.')
+  return text('选一稿，与当前稿逐字对比。', 'Pick a version to compare it with the current draft.')
+}
+
 function DiffView({ older, current }: { older: string; current: string }) {
   const text = useLocaleStore(s => s.text)
   const diff = useMemo(() => diffProse(older, current), [older, current])
@@ -278,11 +285,7 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
               ? <p className="stage-hist-help">{text('这一章还没有当前稿。', 'This chapter has no current draft.')}</p>
               : <DiffView older={comparison.older} current={comparison.current} />}
           </> : (
-            <p className="stage-hist-help stage-hist-hint" role={missingPicked ? 'status' : undefined}>{selectedVersionId !== null
-              ? text('正在读取…', 'Loading…')
-              : missingPicked
-              ? text('这一稿已不存在，可能已被删除。列表已刷新。', 'This version no longer exists. It may have been deleted. The list has been refreshed.')
-              : text('选一稿，与当前稿逐字对比。', 'Pick a version to compare it with the current draft.')}</p>
+            <p className="stage-hist-help stage-hist-hint" role="status">{comparisonHint(selectedVersionId !== null, missingPicked, text)}</p>
           )}
         </section>
 

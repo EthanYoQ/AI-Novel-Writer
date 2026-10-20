@@ -263,7 +263,7 @@ export const REFS_SCENARIOS = {
     const deleted = await invoke(page, 'db:draft-delete', first.id, session.projectPath, session)
     assert.equal(deleted.success, true, deleted.error)
     await refs.versionButton(page, '草稿 v1').click()
-    await refs.comparison(page).getByText('这一稿已不存在，可能已被删除。列表已刷新。').waitFor({ state: 'visible' })
+    await refs.comparison(page).getByText('这一稿已不存在，可能已被删除，请另选一稿。').waitFor({ state: 'visible' })
     await refs.versionButton(page, '草稿 v1').waitFor({ state: 'detached' })
     await refs.versionButton(page, '草稿 v2').waitFor({ state: 'visible' })
     await refs.historyChapters(page).getByRole('button', { name: /雾钟/ }).getByText('1 稿').waitFor({ state: 'visible' })

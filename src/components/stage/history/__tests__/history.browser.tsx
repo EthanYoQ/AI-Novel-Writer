@@ -366,13 +366,25 @@ describe('版本历史', () => {
     await openChapterThree()
     drafts = drafts.filter(draft => draft.id !== 11)
     await click(/草稿 v1/)
-    await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toBe('这一稿已不存在，可能已被删除。列表已刷新。'))
+    await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toBe('这一稿已不存在，可能已被删除，请另选一稿。'))
     await vi.waitFor(() => expect(button(/草稿 v1/)).toBeUndefined())
     expect(button(/草稿 v2/)).toBeTruthy()
     await vi.waitFor(() => expect(button(/雨夜车站/)!.textContent).toContain('1 稿'))
 
     await click(/草稿 v2/)
     await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toContain('与当前稿相同'))
+  })
+
+  it('点的那一稿已被删掉、重读各稿又失败：对比区不声称列表已刷新，各稿栏给出重新读取', async () => {
+    await openChapterThree()
+    drafts = drafts.filter(draft => draft.id !== 11)
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel, ...args) => channel === 'db:draft-list' ? Promise.reject(new Error('数据库忙')) : base(channel, ...args))
+    await click(/草稿 v1/)
+    await vi.waitFor(() => expect(versionsColumn()).toContain('没能读出这一章的各稿'))
+    const hint = document.querySelector('.stage-hist-hint')!
+    expect(hint.textContent).toContain('这一稿已不存在')
+    expect(hint.textContent).not.toContain('已刷新')
   })
 
   it('同一部作品重新打开后、各稿重读完成前：不显示上一次打开读到的各稿，显示正在读取', async () => {
