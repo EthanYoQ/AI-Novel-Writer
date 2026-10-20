@@ -328,6 +328,36 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
+  it('rejects workflow command errors that reach the failure panel unlocalized, as raw codes, or as forwarded main-process text (#408)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-command-errors-'))
+    try {
+      writeFixture(root, 'src/services/workflows/commands/legacy-character-roster-repair.command.ts', `
+        const text = (zh: string, en: string) => zh || en
+        export async function run(result: { success: boolean; error?: string }, mismatch: boolean) {
+          if (mismatch) throw new Error('LEGACY_ROSTER_PROJECT_MISMATCH')
+          if (!result.success) throw new Error(result.error || text('修复失败', 'The repair failed.'))
+          throw new Error('旧版角色名单已变更')
+        }
+        export function localized(cause: unknown) {
+          if (cause) throw cause
+          throw new Error(text('当前项目已切换', 'The project changed.'))
+        }
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      const lines = result.output.split(/\r?\n/).filter(line => line.includes('[thrown-error]'))
+      expect(lines).toHaveLength(3)
+      expect(lines.join(' ')).toContain('LEGACY_ROSTER_PROJECT_MISMATCH')
+      expect(lines.join(' ')).toContain('result.error')
+      expect(lines.join(' ')).toContain('旧版角色名单已变更')
+      expect(result.output).not.toContain('当前项目已切换')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('permits localized boundary copy while ignoring prompts, parsers, and internal logs', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-policy-'))
     try {
