@@ -820,7 +820,7 @@ export const STAGE_SCENARIOS = {
     await stage.openSettings(page)
     await stage.showSettingsPage(page, '关于与更新')
     await stage.root(page).getByText('书童 Pagekin', { exact: true }).waitFor({ state: 'visible' })
-    await stage.root(page).getByText('原名「AI 小说作家」', { exact: true }).waitFor({ state: 'visible' })
+    await stage.root(page).getByText('原名「AI小说作家」', { exact: true }).waitFor({ state: 'visible' })
     const marks = await page.evaluate(() => ['.stage-brand', '.stage-set-about-mark'].map(selector => {
       const mark = document.querySelector(selector)
       return mark ? getComputedStyle(mark, '::before').maskImage : 'missing'
