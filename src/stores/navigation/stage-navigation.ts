@@ -37,6 +37,11 @@ async function chapterDrafts(chapterNumber: number, session: ProjectSessionConte
 
 let openChapterRequest = 0
 
+/** 章节导航的序号：作者每点一次章、阶段或资料页就变。自动打开在等待期间看到它变了，就是作者已经去了别处。 */
+export function chapterNavigationEpoch(): number {
+  return openChapterRequest
+}
+
 /** 待写章的单章视图标签：还没有稿，所以没有 filePath，按章号区分；与其他正文标签一样按作品加后缀。 */
 export function chapterPlanTabId(chapterNumber: number, projectPath: string): string {
   return createProjectScopedEditorTabId(`chapter-plan:${chapterNumber}`, 'chapter', projectPath)
@@ -58,16 +63,17 @@ export function openChapterPlan(chapterNumber: number, title: string, session: P
 /**
  * 打开一章：已有这一稿的标签就直接切过去；否则读出正文开新标签。待写的章还没有正文，打开它的单章视图，那里有「写作此章」。
  * 连续点几章时只有最后一次生效；读取失败时提示作者，而不是点了没反应。
+ * 自动打开传入 stillIntended，读取期间它变成 false 就放弃。返回这一章最后有没有切到前台。
  */
-export async function openChapter(chapterNumber: number): Promise<void> {
+export async function openChapter(chapterNumber: number, stillIntended: () => boolean = () => true): Promise<boolean> {
   const request = ++openChapterRequest
   const session = currentSession()
-  if (!session) return
+  if (!session) return false
   const text = useLocaleStore.getState().text
-  const stillWanted = () => request === openChapterRequest && sameProjectSessionContext(session, currentSession())
+  const stillWanted = () => request === openChapterRequest && sameProjectSessionContext(session, currentSession()) && stillIntended()
   try {
     const drafts = await chapterDrafts(chapterNumber, session)
-    if (!stillWanted()) return
+    if (!stillWanted()) return false
     const work = useStageStore.getState().work
     const [row] = deriveChapters({
       blueprints: (work && sameProjectSessionContext(work.session, session) ? work.blueprints : [])
@@ -78,7 +84,7 @@ export async function openChapter(chapterNumber: number): Promise<void> {
     const draft = row?.draft
     if (!draft) {
       openChapterPlan(chapterNumber, row?.title ?? '', session)
-      return
+      return true
     }
     // 已经有稿的章没有写作此章；写作请求（比如定稿后自动打开下一章）落空，不能留到别处再弹出。
     if (useStageStore.getState().writeRequest?.chapterNumber === chapterNumber) useStageStore.setState({ writeRequest: null })
@@ -86,13 +92,14 @@ export async function openChapter(chapterNumber: number): Promise<void> {
     const open = editor.tabs.find(tab => tab.type === 'chapter' && tab.projectKey === session.projectPath && tab.filePath === draft.filePath)
     if (open) {
       editor.setActiveTab(open.id)
-      return
+      return true
     }
-    await openDraftTab(draft, chapterTabName(chapterNumber, row.title, text), session, stillWanted)
+    return await openDraftTab(draft, chapterTabName(chapterNumber, row.title, text), session, stillWanted)
   } catch (error) {
-    if (!stillWanted()) return
+    if (!stillWanted()) return false
     const reason = error instanceof Error ? error.message : String(error)
     toast.error(text(`打开第 ${chapterNumber} 章失败：${reason}`, `Could not open chapter ${chapterNumber}: ${reason}`))
+    return false
   }
 }
 

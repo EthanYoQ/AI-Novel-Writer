@@ -2,6 +2,7 @@ import { createGenerationRuntime } from '../../generation/generation-runtime'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useLLMStore } from '../../../stores/llm-store'
+import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import type { CharacterRosterEntry, CharacterRosterSnapshot } from '../../../shared/character-roster'
@@ -142,6 +143,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: null })
   useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [] })
   useLLMStore.setState({
@@ -330,6 +332,19 @@ describe('legacy character roster repair public workflow seam', () => {
       projectPath,
       projectSession,
     )
+  })
+
+  it('英文界面下已有修复运行时再次发起修复，报错是英文', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'legacy-roster:read-source') return { snapshot: pendingLegacyRoster }
+      if (channel === 'generation:list') return [{ operation: 'legacy-character-roster-repair', handle: { runId: 'earlier-repair' } }]
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    installVela(invoke)
+
+    await expect(migrateLegacyCharacterRoster(projectPath)).rejects
+      .toThrow('A legacy cast repair run already exists. View or resume it explicitly; starting over is a separate choice.')
   })
 
   it('does not commit a completed candidate when the frozen project session changes', async () => {

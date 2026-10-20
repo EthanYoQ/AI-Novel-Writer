@@ -29,6 +29,12 @@ describe('真实启动来源与外观确认边界', () => {
     blocked = 'GLOBAL_DATA_BLOCKED'
     expect(invoke('startup:get-state')).toEqual({ state: 'blocked', code: 'GLOBAL_DATA_BLOCKED' })
   })
+  it('窗口确认过外观后，ready 带上这个窗口已确认的修订号，供重载后的重置写得更大', () => {
+    expect(invoke('startup:appearance-ack', ack(9))).toBe(true)
+    expect(invoke('startup:get-state')).toEqual({ state: 'ready', globalGeneration: '世代甲', appearanceRevisionFloor: 9 })
+    expect(invoke('startup:appearance-ack', ack(1))).toBe(false)
+    expect(invoke('startup:appearance-ack', ack(10))).toBe(true)
+  })
   it('不再提供皮肤快照通道', () => {
     expect([...handlers.keys()].sort()).toEqual(['startup:appearance-ack', 'startup:get-state'])
   })

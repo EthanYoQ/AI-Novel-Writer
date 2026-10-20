@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react'
 import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore, type EditorTab } from '../../stores/editor-store'
 import { useLayoutStore } from '../../stores/layout-store'
@@ -22,7 +22,7 @@ import StageKnowledge from './knowledge/StageKnowledge'
 import StagePlot from './plot/StagePlot'
 import StageTabMenu, { CloseTabsConfirm } from './StageTabMenu'
 import StageTabs from './StageTabs'
-import { commandLabel } from './shortcut-keys'
+import { commandLabel, isComposing, isModalOpen } from './shortcut-keys'
 import BlueprintRecovery from './blueprint/BlueprintRecovery'
 import StageBlueprint from './blueprint/StageBlueprint'
 import ChapterView from './chapter/ChapterView'
@@ -63,6 +63,42 @@ function TabContent({ tab, project }: { tab: EditorTab; project: ProjectData }) 
   )
 }
 
+const TABBABLE = 'a[href], button, input, select, textarea, [contenteditable="true"], [tabindex]'
+const tabbables = (root: Element) => [...root.querySelectorAll<HTMLElement>(TABBABLE)]
+  .filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0)
+
+const isEditable = (target: EventTarget | null) => target instanceof HTMLElement
+  && (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)
+
+/** 侧页浮起（stage-panel.css 的容器查询）时才盖住内容区右侧；以样式为准，不在这里重复浮起的宽度阈值。 */
+const floatingSheet = (slot: HTMLElement | null) => slot && getComputedStyle(slot).position === 'absolute' ? slot : null
+
+/**
+ * 浮起时焦点不停在被侧页整个盖住的控件上（内容区与设置页都算；Tab、方向键、程序化 focus、窗口变窄都算）：
+ * 顺着焦点移动的方向跳到下一个看得见的，后面没有了就进侧页，前面没有了就停在所在区域本身（可聚焦时）或进侧页。
+ */
+function moveFocusOffSheet(body: Element, target: Element, sheetSlot: HTMLElement, backward: boolean) {
+  if (sheetSlot.contains(target)) return
+  const sheet = sheetSlot.getBoundingClientRect()
+  const covered = (element: Element) => element.getBoundingClientRect().left >= sheet.left
+  if (!covered(target)) return
+  const region = [...body.children].find(child => child.contains(target)) as HTMLElement | undefined
+  if (!region) return
+  // 方向键换选的分段按钮在换选前还是 tabIndex -1，不在 Tab 序列里，所以按文档位置而不是序列下标找下一个
+  const follows = (element: Element) => (target.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  const order = tabbables(region).filter(element => element !== target && follows(element) !== backward)
+  const next = (backward ? order.reverse() : order).find(element => !covered(element))
+  ;(next ?? (backward && region.hasAttribute('tabindex') ? region : tabbables(sheetSlot)[0]))?.focus()
+}
+
+function skipCoveredFocus(event: FocusEvent<HTMLElement>, slot: HTMLElement | null) {
+  const sheetSlot = floatingSheet(slot)
+  if (!sheetSlot) return
+  const target = event.target
+  const backward = event.relatedTarget instanceof Node && (target.compareDocumentPosition(event.relatedTarget) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  moveFocusOffSheet(event.currentTarget, target, sheetSlot, backward)
+}
+
 export default function StageWorkspace({ library, focus }: { library: boolean; focus: boolean }) {
   const settingsOpen = useLayoutStore(s => s.settingsOpen)
   const text = useLocaleStore(s => s.text)
@@ -75,6 +111,14 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
   const pending = tabs.find(tab => tab.id === closingTabId) ?? null
   const pendingName = pending ? stageTabName(pending, text) : ''
   const [closingMany, setClosingMany] = useState<readonly string[] | null>(null)
+  const sheetSlotRef = useRef<HTMLDivElement>(null)
+  // 浮起的侧页盖着内容区，焦点在内容区时 Esc 也收起它；并排时 Esc 只在侧页里有效，与原来一样。
+  // 打字处（输入框、正文编辑器）与输入法组字时的 Esc 属于输入，设置页与对话框的 Esc 归它们自己。
+  const closeFloatingSheet = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape' || event.defaultPrevented || !event.currentTarget.contains(event.target as Node)) return
+    if (isComposing(event.nativeEvent) || isModalOpen() || settingsOpen || isEditable(event.target)) return
+    if (floatingSheet(sheetSlotRef.current)) useStageStore.setState({ sheet: null })
+  }
   const closeMany = (tabIds: readonly string[]) => {
     const dirty = closeCleanTabs(tabIds)
     if (dirty.length > 0) setClosingMany(dirty)
@@ -82,6 +126,20 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
 
   const activeTab = tabs.find(tab => tab.id === activeTabId)
   useEffect(() => installChapterTabRouting(), [])
+  // 窗口变窄让侧页浮起时没有焦点事件，焦点可能还停在刚被盖住的控件上：主区域尺寸变化时查一次。
+  const sheetMounted = sheet?.kind === 'run' && !focus && !library && project !== null
+  useEffect(() => {
+    const slot = sheetSlotRef.current
+    const body = slot?.parentElement
+    if (!sheetMounted || !slot || !body) return
+    const observer = new ResizeObserver(() => {
+      const sheetSlot = floatingSheet(slot)
+      const active = document.activeElement
+      if (sheetSlot && active && body.contains(active)) moveFocusOffSheet(body, active, sheetSlot, false)
+    })
+    observer.observe(body)
+    return () => observer.disconnect()
+  }, [sheetMounted])
   useEffect(() => {
     if (tabs.length > 0 && !activeTab) useEditorStore.getState().setActiveTab(tabs[0].id)
   }, [tabs, activeTab])
@@ -111,7 +169,7 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
           <StageTabMenu tabs={tabs} activeTabId={activeTab?.id ?? null} onSelect={tabId => useEditorStore.getState().setActiveTab(tabId)} onCloseMany={closeMany} />
         </div>
       )}
-      <div className="stage-body">
+      <div className="stage-body" onKeyDown={closeFloatingSheet} onFocus={event => skipCoveredFocus(event, sheetSlotRef.current)}>
         {settingsOpen && <SettingsPage library={false} />}
         <div
           className="stage-content"
@@ -136,7 +194,7 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
             )}
         </div>
         {sheet?.kind === 'run' && !focus && (
-          <div className="stage-sheet-slot" data-wide={sheet.tab === 'diagnostics' || undefined}>
+          <div ref={sheetSlotRef} className="stage-sheet-slot" data-wide={sheet.tab === 'diagnostics' || undefined}>
             <ErrorBoundary fallbackLabel={text('运行侧页渲染失败', 'Run sheet failed to render')}>
               <RunSheet sheet={sheet} />
             </ErrorBoundary>
