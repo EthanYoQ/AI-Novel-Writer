@@ -73,19 +73,25 @@ const isEditable = (target: EventTarget | null) => target instanceof HTMLElement
 /** 侧页浮起（stage-panel.css 的容器查询）时才盖住内容区右侧；以样式为准，不在这里重复浮起的宽度阈值。 */
 const floatingSheet = (slot: HTMLElement | null) => slot && getComputedStyle(slot).position === 'absolute' ? slot : null
 
-/** 浮起时焦点不停在被侧页整个盖住的控件上：顺着 Tab 的方向跳到下一个看得见的，前面没有了就进侧页，后面没有了就停在内容区。 */
+/**
+ * 浮起时焦点不停在被侧页整个盖住的控件上（内容区与设置页都算；Tab、方向键、程序化 focus 都算）：
+ * 顺着焦点移动的方向跳到下一个看得见的，后面没有了就进侧页，前面没有了就停在所在区域本身（可聚焦时）或进侧页。
+ */
 function skipCoveredFocus(event: FocusEvent<HTMLElement>, slot: HTMLElement | null) {
-  const sheet = floatingSheet(slot)?.getBoundingClientRect()
-  if (!sheet) return
-  const covered = (element: Element) => element.getBoundingClientRect().left >= sheet.left
+  const sheetSlot = floatingSheet(slot)
   const target = event.target
+  if (!sheetSlot || sheetSlot.contains(target)) return
+  const sheet = sheetSlot.getBoundingClientRect()
+  const covered = (element: Element) => element.getBoundingClientRect().left >= sheet.left
   if (!covered(target)) return
-  const order = tabbables(event.currentTarget)
-  const index = order.indexOf(target)
-  if (index < 0) return
+  const region = [...event.currentTarget.children].find(child => child.contains(target)) as HTMLElement | undefined
+  if (!region) return
   const backward = event.relatedTarget instanceof Node && (target.compareDocumentPosition(event.relatedTarget) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-  const next = (backward ? order.slice(0, index).reverse() : order.slice(index + 1)).find(element => !covered(element))
-  ;(next ?? (backward ? event.currentTarget : tabbables(slot!)[0]))?.focus()
+  // 方向键换选的分段按钮在换选前还是 tabIndex -1，不在 Tab 序列里，所以按文档位置而不是序列下标找下一个
+  const follows = (element: Element) => (target.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  const order = tabbables(region).filter(element => element !== target && follows(element) !== backward)
+  const next = (backward ? order.reverse() : order).find(element => !covered(element))
+  ;(next ?? (backward && region.hasAttribute('tabindex') ? region : tabbables(sheetSlot)[0]))?.focus()
 }
 
 export default function StageWorkspace({ library, focus }: { library: boolean; focus: boolean }) {
@@ -144,7 +150,7 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
           <StageTabMenu tabs={tabs} activeTabId={activeTab?.id ?? null} onSelect={tabId => useEditorStore.getState().setActiveTab(tabId)} onCloseMany={closeMany} />
         </div>
       )}
-      <div className="stage-body" onKeyDown={closeFloatingSheet}>
+      <div className="stage-body" onKeyDown={closeFloatingSheet} onFocus={event => skipCoveredFocus(event, sheetSlotRef.current)}>
         {settingsOpen && <SettingsPage library={false} />}
         <div
           className="stage-content"
@@ -153,7 +159,6 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
           tabIndex={-1}
           role={showTabs ? 'tabpanel' : undefined}
           aria-labelledby={showTabs && activeTab ? tabDomId(activeTab.id) : undefined}
-          onFocus={event => skipCoveredFocus(event, sheetSlotRef.current)}
         >
           {activeTab
             ? (
