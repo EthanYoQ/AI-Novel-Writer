@@ -176,7 +176,7 @@ function dependencyIsCurrent(
     state: DraftDependencyState | undefined,
 ): boolean {
     if (!state || state.contentHash !== dependency.contentHash) return false
-    if (!('chapterNumber' in dependency)) return true
+    if (!sealsLineage(dependency)) return true
     if (
         state.status !== 'finalized'
         || !state.authoritativeFinalized
@@ -194,7 +194,9 @@ function dependencyIsCurrent(
  * 否则作者在「留作草稿」批次后改过前面某章再逐章定稿，之后每一章都会被早已确认的
  * 历史永久拒绝保存（#438）。候选稿仍沿整条链追溯。
  */
-function sealsLineage(dependency: DraftSourceDependency): boolean {
+function sealsLineage(
+    dependency: DraftSourceDependency,
+): dependency is Extract<DraftSourceDependency, { chapterNumber: number }> {
     return 'chapterNumber' in dependency
 }
 
