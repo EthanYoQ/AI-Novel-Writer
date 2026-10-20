@@ -166,7 +166,9 @@ function loadLocalSkillOrThrow(source: WritingSkillSource) {
     loaded = loadLocalWritingSkill(source)
   } catch (error) {
     if (error instanceof WritingSkillPackageError) throw new Error(packageErrorText(error.code))
-    throw error
+    // 读盘时的系统错误（EACCES 等）带本机路径，界面只给可读说明，原文留在日志里。
+    console.error('[skills] reading a local writing skill failed', error)
+    throw new Error(packageErrorText('SOURCE_INVALID'))
   }
   const { name } = loaded.inspection.metadata
   if (!WRITING_SKILL_NAME_PATTERN.test(name)) {
