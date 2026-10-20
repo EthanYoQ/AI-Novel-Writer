@@ -8,6 +8,7 @@ import type { ContextSnapshot, SourceRef } from '../../src/shared/source-ref';
 import { isContentHash } from '../../src/shared/source-ref';
 import { inspectWritingSkillMarkdown, WRITING_SKILL_STAGES, type WritingSkillStage } from '../../src/shared/writing-skills';
 import type { WritingLanguage } from '../../src/shared/writing-language';
+import { CURRENT_DRAFT_STATUSES, WORKING_DRAFT_STATUSES } from '../../src/shared/draft-status';
 import type { RunBinding } from '../repositories/generation-run-repository';
 import type { GenerationAuthorInput, GenerationBatchIntent, MaterialDecisionIncludedSource, MaterialDecisionOmittedSource, MaterialDecisionReceipt } from '../../src/shared/generation-owner-contract';
 import { MATERIAL_DECISION_CATEGORIES, MATERIAL_DECISION_MAX_INPUT_UNITS, MATERIAL_DECISION_MAX_SOURCES,
@@ -94,6 +95,7 @@ export interface GenerationSourceBindingResult {
 }
 function fail(code: string): never { throw new Error(code); }
 const hash = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
+const CURRENT_DRAFT_STATUS_SQL = CURRENT_DRAFT_STATUSES.map(status => `'${status}'`).join(',');
 function stable(value: unknown): string {
     const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, item]) => [k, sorted(item)])) : v;
     return JSON.stringify(sorted(value));
@@ -386,7 +388,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
             add('narrative-thread-context:all', 0, stable({ plans: plans.map(row => without(row, ['created_at', 'updated_at'])), events }), 'unconfirmed-continuity', 'author plans and confirmed event evidence used to select active narrative context');
             const currentDraft = deps.db.prepare('SELECT d.id,d.version,d.status,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1').get(input.chapterNumber) ?? null;
             add(`draft-target:${input.chapterNumber}`, 0, stable(currentDraft), 'author-constraint', 'prevent a later draft or author edit from being silently superseded');
-            const catalog = deps.db.prepare("SELECT d.id,d.chapter_number,d.version,d.status,c.body,o.finalization_id,o.content_hash,o.content_snapshot FROM drafts d JOIN contents c ON c.id=d.content_id LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.chapter_number < ? AND (d.status='finalized' OR NOT EXISTS (SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number AND newer.status IN ('draft','revised','reviewed','finalized') AND newer.version>d.version)) ORDER BY d.id").all(input.chapterNumber) as Record<string, unknown>[];
+            const catalog = deps.db.prepare(`SELECT d.id,d.chapter_number,d.version,d.status,c.body,o.finalization_id,o.content_hash,o.content_snapshot FROM drafts d JOIN contents c ON c.id=d.content_id LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.chapter_number < ? AND (d.status='finalized' OR NOT EXISTS (SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL}) AND newer.version>d.version)) ORDER BY d.id`).all(input.chapterNumber) as Record<string, unknown>[];
             add('draft-continuity-catalog', 0, stable(catalog.map(row => ({ ...without(row, ['body', 'content_snapshot']), bodyHash: hash(String(row.body)), snapshotHash: row.content_snapshot === null ? null : hash(String(row.content_snapshot)) }))), 'unconfirmed-continuity', 'source catalog frozen before renderer selects continuity material');
             const locators = deps.db.prepare('SELECT * FROM summary_snapshots WHERE draft_id IS NOT NULL AND chapter_number < ? ORDER BY draft_id,id').all(input.chapterNumber) as Record<string, unknown>[];
             const watermark = deps.db.prepare("SELECT * FROM continuity_projection_meta WHERE id='main'").get();
@@ -434,9 +436,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
                     add(`finalized:${id}:${receipt.finalization_id}`, receipt.content_revision, row.body, 'finalized-fact', 'explicit current finalized source');
                 }
                 else {
-                    // 旧版本审稿后会把稿设为 reviewed；它与 review-revision-context、修稿合并一样算可继续工作的当前稿。
-                    const latest = deps.db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status IN ('draft','revised','reviewed','finalized') ORDER BY version DESC,id DESC LIMIT 1").pluck().get(row.chapter_number);
-                    if (!['draft', 'revised', 'reviewed'].includes(row.status) || latest !== id)
+                    const latest = deps.db.prepare(`SELECT id FROM drafts WHERE chapter_number=? AND status IN (${CURRENT_DRAFT_STATUS_SQL}) ORDER BY version DESC,id DESC LIMIT 1`).pluck().get(row.chapter_number);
+                    if (!(WORKING_DRAFT_STATUSES as readonly string[]).includes(row.status) || latest !== id)
                         fail('GENERATION_DRAFT_NOT_CURRENT');
                     add(`draft:${id}`, row.version, row.body, 'unconfirmed-continuity', 'explicit selected current draft');
                 }
