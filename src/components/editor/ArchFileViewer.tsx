@@ -516,11 +516,15 @@ function ArchFileViewerSession({
       if (!isProjectSessionCurrent(projectSession)) return
       const source = archOutlineSource(core, currentProject?.novelConfig)
       // 分批检查点只用来认出被打断的一批；读不到时与架构页一样按没有检查点判定。
-      const checkpoint = await readArchCheckpoint(projectSession)
+      // 名单视图的 hook 只在角色页启用，其他文档页要直接读库，否则就绪的名单会被当成新生成并默认勾选重写。
+      const [checkpoint, roster] = await Promise.all([
+        readArchCheckpoint(projectSession),
+        ipc.invokeWithProjectSession(projectSession, 'db:character-roster-read', projectSession.projectPath),
+      ])
       if (!isProjectSessionCurrent(projectSession)) return
       // 有内容决定覆盖还是新生成，已确认决定默认勾选；两者与架构页共用 judgeArchCore。
       const judged = judgeArchCore(core, outlineProgress(source.synopsis, checkpoint, source.writingLanguage, source.totalChapters).kind)
-      const rosterReady = rosterSnapshot?.status === 'ready'
+      const rosterReady = roster.status === 'ready'
       const status: Record<string, boolean> = { ...judged.hasContent, characters: rosterReady }
       const confirmed: Record<string, boolean> = { ...judged.confirmed, characters: rosterReady }
       // 当前文件在编辑器里有未保存的内容时，生成会覆盖它而不是新生成。是否已确认只影响默认勾选，而当前文件总是勾选的，不必按编辑器内容再判。

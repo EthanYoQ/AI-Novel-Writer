@@ -131,6 +131,18 @@ it('文档页里写着「待生成」字样的一节与架构页一样算有内�
   expect(row.querySelector('[data-mark]')?.textContent).toBe('将覆盖')
 })
 
+it('从其他架构文档页打开生成对话框：已就绪的角色名单默认保留，不当成新生成被重写', async () => {
+  const premise = '故事前提'.repeat(20)
+  await act(async () => root.render(<ArchFileViewer tabId="planning-premise" filePath="ai-novel://core/premise" projectKey={project.path} content={premise} savedContent={premise} />))
+  await act(async () => page.getByRole('button', { name: 'AI 重新生成', exact: true }).click())
+  const mark = await vi.waitFor(() => {
+    const row = [...document.querySelectorAll('label')].find(node => node.textContent?.startsWith('角色'))
+    expect(row).toBeTruthy()
+    return row!.querySelector('[data-mark]')!.getAttribute('data-mark')
+  })
+  expect(mark).toBe('keep')
+})
+
 describe('其他架构文档页的生成对话框按大纲进度判定情节大纲是否已确认，与架构页一致', () => {
   const chapters = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index)
     .map(n => `## 第${n}章：第${n}盏灯\n林舟在第${n}站认出一位失踪者的座位。`).join('\n\n')
