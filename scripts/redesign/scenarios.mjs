@@ -388,7 +388,7 @@ async function moveToChapter3(page) {
   if (await chapter3.count() > 0 && await otherTabs.count() === 0) return
   await stage.chapterButton(page, 3).click()
   await stage.waitForProse(page, chapter3Text)
-  for (let open = await otherTabs.count(); open > 0; open = await otherTabs.count()) {
+  while (await otherTabs.count() > 0) {
     const closing = otherTabs.first()
     const name = await closing.getAttribute('aria-label')
     assert.ok(name, '标签的关闭按钮带 aria-label，才能等这一个消失')
