@@ -143,7 +143,7 @@
 }
 
 /* 中文的最小内容宽度只有一个字：不给底线时，窄窗口下标题会被右侧按钮挤成一字一行；放不下就让按钮换到下一行 */
-.stage-set-head > :first-child {
+.stage-set-head-text {
   flex: 1 1 16em;
   min-width: 0;
 }

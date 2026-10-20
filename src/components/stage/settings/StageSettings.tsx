@@ -18,39 +18,37 @@ import ModelsSection from './ModelsSection'
 import ProxySection from './ProxySection'
 import { SETTINGS_GROUPS, SETTINGS_PAGES, type SettingsPageSpec } from './settings-pages'
 
-/** 必需页没配好的判据：没有默认模型，对应功能就用不了。配置载入前不下结论。 */
-function useRequiredMissing(page: SettingsSection): boolean {
-  return useLLMStore(s => s.loaded && (
-    page === 'llm' ? !s.defaultModelId
-      : page === 'embedding' ? !s.defaultEmbeddingModelId
-        : false
-  ))
+interface RequiredState {
+  missing: boolean
+  label: string
 }
 
-function useRequiredLabel(page: SettingsSection): string {
+/** 必需页的标签状态，非必需页为 null。配置载入前不下结论，只标「必需」。 */
+function useRequiredState(spec: SettingsPageSpec): RequiredState | null {
   const text = useLocaleStore(s => s.text)
-  return useRequiredMissing(page) ? text('未配置', 'Not set') : text('必需', 'Required')
+  const missing = useLLMStore(s => s.loaded && spec.required !== undefined && spec.required.missing(s))
+  if (!spec.required) return null
+  return { missing, label: missing ? text('未配置', 'Not set') : text('必需', 'Required') }
 }
 
-function RequiredMark({ page, hidden }: { page: SettingsSection; hidden?: boolean }) {
-  const missing = useRequiredMissing(page)
-  return <span className="stage-set-required" data-missing={missing || undefined} aria-hidden={hidden || undefined}>{useRequiredLabel(page)}</span>
+function RequiredMark({ state, decorative }: { state: RequiredState; decorative?: boolean }) {
+  return <span className="stage-set-required" data-missing={state.missing || undefined} aria-hidden={decorative || undefined}>{state.label}</span>
 }
 
 /** 导航按钮的名字只是页名（读屏和按名定位都靠它），必需与否放进描述里读出。 */
 function SettingsLink({ spec, current }: { spec: SettingsPageSpec; current: SettingsSection }) {
   const text = useLocaleStore(s => s.text)
-  const required = useRequiredLabel(spec.id)
+  const required = useRequiredState(spec)
   return (
     <button
       type="button"
       className="stage-set-link"
       aria-current={spec.id === current ? 'page' : undefined}
-      aria-description={spec.required ? required : undefined}
+      aria-description={required?.label}
       onClick={() => { if (spec.id !== current) leaveSettings(() => useLayoutStore.setState({ settingsSection: spec.id })) }}
     >
       <span className="stage-set-link-name">{text(...spec.name)}</span>
-      {spec.required && <RequiredMark page={spec.id} hidden />}
+      {required && <RequiredMark state={required} decorative />}
     </button>
   )
 }
@@ -58,12 +56,13 @@ function SettingsLink({ spec, current }: { spec: SettingsPageSpec; current: Sett
 function PageHeader({ page, action }: { page: SettingsSection; action?: ReactNode }) {
   const text = useLocaleStore(s => s.text)
   const spec = SETTINGS_PAGES.find(candidate => candidate.id === page)!
+  const required = useRequiredState(spec)
   return (
     <header className="stage-set-head">
-      <div>
+      <div className="stage-set-head-text">
         <div className="stage-set-titleline">
           <h1 className="stage-set-title">{text(...spec.name)}</h1>
-          {spec.required && <RequiredMark page={page} />}
+          {required && <RequiredMark state={required} />}
         </div>
         <p className="stage-set-lede">{text(...spec.lede)}</p>
       </div>

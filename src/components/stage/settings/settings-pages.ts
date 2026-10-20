@@ -2,19 +2,25 @@ import type { SettingsSection } from '../../../stores/layout-store'
 
 type Pair = readonly [string, string]
 
+/** 必需页判据读的模型配置（llm-store 的同名字段）。 */
+interface ModelDefaults {
+  defaultModelId: string | null
+  defaultEmbeddingModelId: string | null
+}
+
 export interface SettingsPageSpec {
   id: SettingsSection
   name: Pair
   lede: Pair
-  /** 不配置就有功能用不了的页：导航与页头标「必需」，没配好时标「未配置」。 */
-  required?: true
+  /** 不配置就有功能用不了的页：导航与页头标「必需」；missing 为真时标「未配置」。 */
+  required?: { missing: (models: ModelDefaults) => boolean }
 }
 
 /** ia.md 的三组：常用、高级、其他。 */
 export const SETTINGS_GROUPS: readonly { id: string; name: Pair; pages: readonly SettingsPageSpec[] }[] = [
   { id: 'common', name: ['常用', 'Common'], pages: [
-    { id: 'llm', required: true, name: ['AI 模型', 'AI models'], lede: ['写作、审稿、修稿都用这里的模型。标为默认的会预先选好，每次运行前仍可临时换。', 'Writing, reviews and revisions use these models. The default is preselected and can be changed before each run.'] },
-    { id: 'embedding', required: true, name: ['检索模型', 'Retrieval model'], lede: ['知识库用它理解资料的意思，按意思找到相关段落；伏笔、人物与前文都靠它找回。', 'The knowledge base uses it to understand your material and find passages by meaning, which is how foreshadowing, characters and earlier chapters are recalled.'] },
+    { id: 'llm', required: { missing: models => !models.defaultModelId }, name: ['AI 模型', 'AI models'], lede: ['写作、审稿、修稿都用这里的模型。标为默认的会预先选好，每次运行前仍可临时换。', 'Writing, reviews and revisions use these models. The default is preselected and can be changed before each run.'] },
+    { id: 'embedding', required: { missing: models => !models.defaultEmbeddingModelId }, name: ['检索模型', 'Retrieval model'], lede: ['知识库用它理解资料的意思，按意思找到相关段落；伏笔、人物与前文都靠它找回。', 'The knowledge base uses it to understand your material and find passages by meaning, which is how foreshadowing, characters and earlier chapters are recalled.'] },
     { id: 'appearance', name: ['外观', 'Appearance'], lede: ['改动立即生效，不需要保存。', 'Changes apply right away. No need to save.'] },
   ] },
   { id: 'advanced', name: ['高级', 'Advanced'], pages: [
