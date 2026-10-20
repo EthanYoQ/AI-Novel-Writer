@@ -5,6 +5,14 @@ import { useLocaleStore } from '../../../stores/locale-store'
 import { Button } from '../../ui/Button'
 import { usePostProcessStatus } from '../../ui/use-post-process-status'
 
+type Text = (zhCNText: string, enUSText: string) => string
+
+function stepDetail(presentation: 'success' | 'pending' | 'failed', error: string | undefined, text: Text): string {
+  if (presentation === 'success') return text('完成', 'Done')
+  if (presentation === 'pending') return text('处理中', 'In progress')
+  return error ? describeFinalizationStepError(error, text) : text('失败', 'Failed')
+}
+
 /**
  * 定稿视图里的后处理（F-090、F-091）：正文文件与后处理流水线逐步列出完成、处理中或失败。
  * 失败的步骤各自可以重试；「重试失败步骤」只重跑失败的那些。正文文件写入失败时重试的是已提交的发布（F-089），不重新定稿。
@@ -37,10 +45,7 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
       key,
       label: step.label,
       presentation,
-      detail: presentation === 'success'
-        ? text('完成', 'Done')
-        : presentation === 'pending' ? text('处理中', 'In progress')
-          : step.error ? describeFinalizationStepError(step.error, text) : text('失败', 'Failed'),
+      detail: stepDetail(presentation, step.error, text),
       retry: () => onRetryStep(key),
       retryLabel: text('重试', 'Retry'),
     })),
