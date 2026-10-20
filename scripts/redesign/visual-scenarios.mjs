@@ -242,12 +242,14 @@ export const VISUAL_SCENARIOS = {
     await runSheet.tab(page, '进行中').click()
     await openSheetPage(page, 'architecture')
     await settle(page)
-    measured['architecture-1280-active'] = { ...await areaWidths(page), header: await page.evaluate(() => {
+    const header = await page.evaluate(() => {
       const box = selector => document.querySelector(selector).getBoundingClientRect()
       return { headingRight: Math.round(box('.arch-heading').right), actionsLeft: Math.round(box('.arch-header-actions').left), sameRow: box('.arch-header-actions').top < box('.arch-heading').bottom }
-    }) }
+    })
+    measured['architecture-1280-active'] = { ...await areaWidths(page), header }
+    if (!header.sameRow) failures.push(`1280 视口开着侧页时架构页页头的动作换到了标题下面：${JSON.stringify(header)}`)
     await shoot('rdv-sheet-architecture-1280-active')
-    assert.deepEqual(failures, [], '诊断侧页开着时没有一字一行的文字，浮起的侧页不被内容区的浮层压住')
+    assert.deepEqual(failures, [], '诊断侧页开着时没有一字一行的文字，浮起的侧页不被内容区的浮层压住，1280 下架构页页头不换行')
     return measured
   } },
   'rdv-clear': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page }) => {
