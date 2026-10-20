@@ -101,11 +101,11 @@ describe('设置页', () => {
     await mount()
     const groups = [...host!.querySelectorAll('nav [role="group"]')].map(group => ({
       group: group.getAttribute('aria-label'),
-      pages: [...group.querySelectorAll('button')].map(button => button.textContent),
+      pages: [...group.querySelectorAll('.stage-set-link-name')].map(name => name.textContent),
     }))
     expect(groups).toEqual([
-      { group: '常用', pages: ['AI 模型', '外观'] },
-      { group: '高级', pages: ['检索模型', '网络代理', '提示词模板', '写作 Skills'] },
+      { group: '常用', pages: ['AI 模型', '检索模型', '外观'] },
+      { group: '高级', pages: ['网络代理', '提示词模板', '写作 Skills'] },
       { group: '其他', pages: ['项目备份', '关于与更新'] },
     ])
     expect(heading()).toBe('项目备份')
@@ -114,6 +114,24 @@ describe('设置页', () => {
     await click(byName('关于与更新'))
     expect(useLayoutStore.getState().settingsSection).toBe('about')
     expect(heading()).toBe('关于与更新')
+  })
+
+  it('AI 模型与检索模型标为必需，没配默认模型时导航和页头都标「未配置」', async () => {
+    await mount()
+    const mark = (name: string) => [...host!.querySelectorAll('.stage-set-link')]
+      .find(link => link.querySelector('.stage-set-link-name')?.textContent === name)
+      ?.querySelector('.stage-set-required')?.textContent ?? null
+    expect(mark('AI 模型')).toBe('必需')
+    expect(mark('检索模型')).toBe('未配置')
+    expect(mark('外观')).toBeNull()
+    expect(host!.querySelector('.stage-set-head .stage-set-required')?.textContent).toBe('必需')
+
+    await act(async () => useLLMStore.setState({ defaultModelId: null }))
+    expect(mark('AI 模型')).toBe('未配置')
+    expect(host!.querySelector('.stage-set-head .stage-set-required')?.textContent).toBe('未配置')
+
+    await act(async () => useLLMStore.setState({ defaultModelId: 'flash', defaultEmbeddingModelId: 'local' }))
+    expect(mark('检索模型')).toBe('必需')
   })
 
   it('检索模型页带当前作品的检索索引检查与重建', async () => {
