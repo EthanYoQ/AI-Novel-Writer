@@ -5,12 +5,15 @@ import {
   AppearanceProfileError, migrateLegacyAppearance, migratePreviousAppearance, parseAppearanceProfile, serializeAppearanceProfile,
   type AppearancePatch, type CanonicalAppearanceProfile, type ColorTheme,
 } from '../shared/appearance-profile'
-import { mayHydrateAppearance, type MainReady } from '../shared/project-storage'
-import type { AppearanceReadbackAck } from '../shared/startup-contract'
+import { mayHydrateAppearance } from '../shared/project-storage'
+import type { AppearanceReadbackAck, StartupState } from '../shared/startup-contract'
 export type { AppearanceReadbackAck } from '../shared/startup-contract'
+/** 系统当前的深浅色：外观偏好还没读出来（或要新建）时用它。 */
+export const systemColorTheme = (): ColorTheme => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+
 export interface AppearanceBootstrapDependencies {
   /** Main's real startup coordinator. Renderer fallback must never manufacture ready. */
-  waitForMainReady(): Promise<MainReady>
+  waitForMainReady(): Promise<StartupState>
   /** Main validates sender/origin and generation, then records this read-back acknowledgement. */
   acknowledgeReadback(ack: AppearanceReadbackAck): Promise<boolean>
   storage?: () => Pick<Storage, 'getItem' | 'setItem'>
@@ -42,6 +45,8 @@ function readOrMigrate(storage: Pick<Storage, 'getItem'>, systemTheme: () => Col
 export function createAppearanceStore() {
   let storage: Pick<Storage, 'getItem' | 'setItem'> | null = null
   let acknowledgedRaw: string | null = null
+  // 主进程按窗口记着确认过的修订号，同进程重载后内存清空但它还在；重置时的修订号不能低于它。
+  let mainRevisionFloor = 0
   let inFlight: Promise<boolean> | null = null
   return create<AppearanceBootstrapState>()((set, get) => {
     const block = (error: unknown) => {
@@ -61,10 +66,11 @@ export function createAppearanceStore() {
           set({ phase: 'pending', notice: null, failureCode: null })
           try {
             const ready = await dependencies.waitForMainReady()
+            mainRevisionFloor = Math.max(mainRevisionFloor, ready.appearanceRevisionFloor ?? 0)
             if (!mayHydrateAppearance(ready)) throw new AppearanceProfileError('MAIN_NOT_READY')
             storage = (dependencies.storage ?? (() => window.localStorage))()
             const { profile, stored } = readOrMigrate(storage,
-              dependencies.systemTheme ?? (() => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))
+              dependencies.systemTheme ?? systemColorTheme)
             const serialized = stored ?? serializeAppearanceProfile(profile)
             if (stored === null) storage.setItem(APPEARANCE_STORAGE_KEY, serialized)
             if (storage.getItem(APPEARANCE_STORAGE_KEY) !== serialized) throw new AppearanceProfileError('APPEARANCE_READBACK_FAILED')
@@ -98,7 +104,7 @@ export function createAppearanceStore() {
         try {
           const target = storage ?? (typeof window === 'undefined' ? null : window.localStorage)
           if (!target) return false
-          let revision = Math.max(get().profile?.revision ?? 0, acknowledgedRaw ? parseAppearanceProfile(acknowledgedRaw).revision : 0)
+          let revision = Math.max(mainRevisionFloor, get().profile?.revision ?? 0, acknowledgedRaw ? parseAppearanceProfile(acknowledgedRaw).revision : 0)
           const existing = target.getItem(APPEARANCE_STORAGE_KEY)
           if (existing !== null) {
             try { revision = Math.max(revision, parseAppearanceProfile(existing).revision) }

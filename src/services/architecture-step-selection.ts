@@ -1,4 +1,37 @@
+import type { OutlineProgress } from '../shared/plot-outline-checkpoint'
+
 export type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
+
+type ArchCoreKey = Exclude<ArchStepKey, 'characters'>
+
+/** 一节有没有内容：去掉空白后不为空，作者写的短内容也算（要显示出来，生成时会被覆盖）。 */
+export function archSectionHasContent(value: string | null | undefined): boolean {
+  return Boolean(value?.trim())
+}
+
+/**
+ * 前提、世界观、情节大纲三节「有内容」与「已确认」的唯一判定，架构页、架构文档页的生成对话框与流程脊共用；角色名单由调用方按名单是否就绪补上。
+ * 有内容见 archSectionHasContent。
+ * 已确认：有内容，且前提、世界观超过 50 字，情节大纲按分批进度写满全书。
+ */
+export function judgeArchCore(
+  core: Partial<Record<ArchCoreKey, string | null>> | null | undefined,
+  synopsisProgress: OutlineProgress['kind'],
+): { hasContent: Record<ArchCoreKey, boolean>; confirmed: Record<ArchCoreKey, boolean> } {
+  const confirmedProse = (value: string | null | undefined) => archSectionHasContent(value) && (value ?? '').length > 50
+  return {
+    hasContent: {
+      premise: archSectionHasContent(core?.premise),
+      worldbuilding: archSectionHasContent(core?.worldbuilding),
+      synopsis: archSectionHasContent(core?.synopsis),
+    },
+    confirmed: {
+      premise: confirmedProse(core?.premise),
+      worldbuilding: confirmedProse(core?.worldbuilding),
+      synopsis: archSectionHasContent(core?.synopsis) && synopsisProgress === 'complete',
+    },
+  }
+}
 
 const ARCH_STEP_ORDER: ArchStepKey[] = ['premise', 'characters', 'worldbuilding', 'synopsis']
 

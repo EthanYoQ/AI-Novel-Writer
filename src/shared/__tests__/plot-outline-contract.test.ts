@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { validPlotOutlineEntry, plotOutlineConfirmedPrefix, plotOutlineRangeEffect, renderPlotOutlineRange, renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix,
-  plotOutlineNextChapter, derivePlotOutlineCursor, plotOutlineRecoveryDraft, PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL } from '../plot-outline-contract'
+import { validPlotOutlineEntry, plotOutlineConfirmedPrefix, plotOutlineRangeEffect, renderPlotOutlineRange, renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, isPlotOutlineCoverageNote,
+  plotOutlineNextChapter, plotOutlineRequestContract, derivePlotOutlineCursor, plotOutlineRecoveryDraft, PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL } from '../plot-outline-contract'
 import { outlineProgress } from '../plot-outline-checkpoint'
 import type { ProjectCoreSynopsisExpected } from '../../../electron/repositories/project-core-repository'
 import { synopsisForDraftChapter } from '../../services/workflows/commands/generate-draft.command'
@@ -22,7 +22,7 @@ describe('chapter Markdown outline contract', () => {
   it.each(['第0章', '第零章', '第〇章', 'Chapter 0'])('带「%s」序章的大纲从第 1 章起重写：有效并保留序章；序章真重复时仍拒绝', prologue => {
     const synopsis = `# 情节大纲\n\n## ${prologue}：序章\n灯塔熄灭前夜。\n\n${[1, 2].map(n => `## 第${n}章：第${n}夜\n这一夜的事。`).join('\n\n')}`
     const source = { synopsis, totalChapters: 2, writingLanguage: 'zh-CN' as const }
-    expect(plotOutlineRangeEffect(source, { from: 1, to: 2 })).toEqual({ kind: 'overwrite', whole: false, from: 1, to: 2, lastChapter: 2 })
+    expect(plotOutlineRangeEffect(source, { from: 1, to: 2 })).toEqual({ kind: 'overwrite', whole: false, from: 1, to: 2, lastChapter: 2, prologue: true })
     expect(plotOutlineRangeEffect(source, { from: 3, to: 4 }).kind).toBe('invalid')
     expect(renderPlotOutlineRange('## 第1章：新\n新事。\n\n## 第2章：新\n新事。', { from: 1, to: 2 }, source))
       .toBe(`# 情节大纲\n\n## ${prologue}：序章\n灯塔熄灭前夜。\n\n## 第1章：新\n新事。\n\n## 第2章：新\n新事。`)
@@ -128,7 +128,7 @@ describe('chapter Markdown outline contract', () => {
   it.each([['zh-CN', '第0章'], ['en-US', 'Chapter 0']] as const)('序章加第 1–5 章（%s）从第 3 章重写第 3–5 章：有效，序章与第 1–2 章原样保留', (language, prologue) => {
     const { head, tail, expected, join } = prologueBook(language, prologue)
     const source = expected(`${head}\n\n${join(1, 2, 3, 4, 5)}\n\n${tail(5)}`)
-    expect(plotOutlineRangeEffect(source, { from: 3, to: 5 })).toEqual({ kind: 'overwrite', whole: false, from: 3, to: 5, lastChapter: 5 })
+    expect(plotOutlineRangeEffect(source, { from: 3, to: 5 })).toEqual({ kind: 'overwrite', whole: false, from: 3, to: 5, lastChapter: 5, prologue: true })
     const rewritten = language === 'zh-CN' ? '## 第3章：新\n新事。\n\n## 第4章：新\n新事。\n\n## 第5章：新\n新事。' : '## Chapter 3: New\nNew.\n\n## Chapter 4: New\nNew.\n\n## Chapter 5: New\nNew.'
     expect(renderPlotOutlineRange(rewritten, { from: 3, to: 5 }, source)).toBe(`${head}\n\n${join(1, 2)}\n\n${rewritten}\n\n${tail(5)}`)
   })
@@ -196,5 +196,95 @@ describe('chapter Markdown outline contract', () => {
       `${confirmedPrefix.replace('保留原章', '替换原章')}\n\n${authored}`, `${confirmedPrefix}\n\n${authored}\n\n## 第4章：越界\n未来。`]) {
       expect(validPlotOutlineAuthorPrefix(renderPlotOutlineSynopsis(body, 2, expected), progress, { from: 2, to: 2 })).toBe(false)
     }
+  })
+
+  describe('只有序章时开头的标准标题与末尾旧覆盖说明（#418）', () => {
+    const expected = (synopsis: string) => ({ synopsis, totalChapters: 24, writingLanguage: 'zh-CN' as const })
+    const zhNote = (n: number) => `> 本大纲已覆盖至第 ${n} 章（全书 24 章），其余章节将在后续批次继续生成。`
+    const body = '## 第1章：新\n新事。\n\n## 第2章：新\n新事。'
+    const saved = (authored: string) => `# 情节大纲\n\n${authored}\n\n${body}\n\n${zhNote(2)}`
+
+    it('夹着十万行空白时清理旧说明仍是线性耗时', () => {
+      for (const filler of ['\n', '\n \t']) {
+        const synopsis = `# 情节大纲\n\n## 第0章：序章\n灯塔熄灭前夜。${filler.repeat(100_000)}\n备注`
+        const started = performance.now()
+        const result = renderPlotOutlineRange(body, { from: 1, to: 2 }, expected(synopsis))
+        expect(performance.now() - started).toBeLessThan(1_000)
+        expect(result.startsWith('# 情节大纲\n\n## 第0章：序章\n灯塔熄灭前夜。')).toBe(true)
+        expect(result.endsWith(`备注\n\n${body}\n\n${zhNote(2)}`)).toBe(true)
+      }
+    })
+
+    it('CRLF 换行的大纲生成后开头只有一行标准标题，旧覆盖说明（可连续多条）都去掉', () => {
+      const crlf = (text: string) => text.replaceAll('\n', '\r\n')
+      const synopsis = crlf(`# 情节大纲\n\n## 第0章：序章\n灯塔熄灭前夜。\n\n${zhNote(3)}\n\n${zhNote(5)}`)
+      const result = renderPlotOutlineRange(body, { from: 1, to: 2 }, expected(synopsis))
+      expect(result.match(/# 情节大纲/gu)).toHaveLength(1)
+      expect(result).toBe(saved('## 第0章：序章\r\n灯塔熄灭前夜。'))
+    })
+
+    it('前言写在标准标题之前时，生成后也只有一行标准标题，前言原样保留', () => {
+      const result = renderPlotOutlineRange(body, { from: 1, to: 2 }, expected('全书基调：冷。\n\n# 情节大纲\n\n## 第0章：序章\n灯塔熄灭前夜。'))
+      expect(result).toBe(saved('全书基调：冷。\n\n## 第0章：序章\n灯塔熄灭前夜。'))
+    })
+
+    it('与覆盖说明只差几个字的作者末行不当作旧说明删掉', () => {
+      const authored = `## 第0章：序章\n灯塔熄灭前夜。\n\n${zhNote(3).replace('继续生成', '慢慢生成')}`
+      expect(renderPlotOutlineRange(body, { from: 1, to: 2 }, expected(`# 情节大纲\n\n${authored}`))).toBe(saved(authored))
+    })
+
+    it('写入的覆盖说明能被同一来源认出：中英文、任意章数', () => {
+      for (const language of ['zh-CN', 'en-US'] as const) {
+        const tail = renderPlotOutlineSynopsis('', 7, { totalChapters: 30, writingLanguage: language }).split('\n').at(-1)!
+        expect(isPlotOutlineCoverageNote(tail)).toBe(true)
+        expect(isPlotOutlineCoverageNote(`${tail} `)).toBe(false)
+      }
+    })
+  })
+
+  describe('只有序章的大纲（#417）', () => {
+    const prologueOnly = (language: 'zh-CN' | 'en-US') => language === 'zh-CN'
+      ? `# 情节大纲\n\n## 第0章：序章\n${'守塔人听见第十三声钟，灯塔在那一夜熄灭。'.repeat(4)}`
+      : `# Plot Outline\n\n## Chapter 0: Prologue\n${'The keeper hears the thirteenth bell and the lighthouse goes dark. '.repeat(2)}`
+
+    it.each(['zh-CN', 'en-US'] as const)('超过 50 字也算还没开始生成（%s），不是已完成', language => {
+      expect(outlineProgress(prologueOnly(language), null, language, 24)).toEqual({ kind: 'empty' })
+    })
+
+    it('没有按章标题的整份大纲仍算已完成', () => {
+      expect(outlineProgress(`# 情节大纲\n\n${'全书分三幕，林舟追查失踪者。'.repeat(6)}`, null, 'zh-CN', 24)).toEqual({ kind: 'complete' })
+    })
+
+    it('从第 1 章起写是接在序章之后续写；重写中间几章时说明序章也保留', () => {
+      const source = { synopsis: prologueOnly('zh-CN'), totalChapters: 24, writingLanguage: 'zh-CN' as const }
+      expect(plotOutlineRangeEffect(source, { from: 1, to: 5 })).toEqual({ kind: 'continue', after: 0 })
+      expect(plotOutlineNextChapter(source)).toBe(1)
+      const withChapters = { ...source, synopsis: `${source.synopsis}\n\n${[1, 2, 3, 4, 5].map(n => `## 第${n}章：第${n}夜\n这一夜的事。`).join('\n\n')}` }
+      expect(plotOutlineRangeEffect(withChapters, { from: 3, to: 5 })).toEqual({ kind: 'overwrite', whole: false, from: 3, to: 5, lastChapter: 5, prologue: true })
+    })
+  })
+
+  describe('从第 1 章起生成时发给模型的已接受前缀（#417）', () => {
+    const request = (synopsis: string) => {
+      const sourceExpected: ProjectCoreSynopsisExpected = { synopsis, premise: '前提', charactersArch: '角色', worldbuilding: '世界',
+        genre: '悬疑', totalChapters: 24, wordsPerChapter: 2000, writingLanguage: 'zh-CN', plotStructure: 'three_act', narrativePov: 'third_limited', globalGuidance: '' }
+      const range = { from: 1, to: 2 }
+      const prompt = plotOutlineRequestContract({ protocol: PLOT_OUTLINE_PROTOCOL, range, content: PLOT_OUTLINE_CONTENT, targetUnits: 600,
+        cursor: { kind: 'request', chapterNumber: 1, attempt: 'normal' }, sourceExpected, confirmedPrefix: plotOutlineConfirmedPrefix(sourceExpected, range), composition: null }, 1, 'normal')
+      return prompt.slice(prompt.indexOf('【已接受大纲前缀】'), prompt.indexOf('【已接受大纲前缀结束】') + '【已接受大纲前缀结束】'.length)
+    }
+    const PROLOGUE = '## 第0章：序章\n守塔人听见第十三声钟。'
+
+    it('有序章时模型写第 1 章能看到作者的序章，看不到被替换的旧章与覆盖说明', () => {
+      expect(request(`# 情节大纲\n\n${PROLOGUE}\n\n> 本大纲已覆盖至第 2 章（全书 24 章），其余章节将在后续批次继续生成。`))
+        .toBe(`【已接受大纲前缀】\n${PROLOGUE}\n【已接受大纲前缀结束】`)
+      expect(request(`# 情节大纲\n\n${PROLOGUE}\n\n## 第1章：旧\n旧事。\n\n## 第3章：留\n留下。`))
+        .toBe(`【已接受大纲前缀】\n${PROLOGUE}\n【已接受大纲前缀结束】`)
+    })
+
+    it('没有序章时前缀仍为空', () => {
+      expect(request('# 情节大纲\n\n## 第1章：旧\n旧事。')).toBe('【已接受大纲前缀】\n\n【已接受大纲前缀结束】')
+      expect(request('')).toBe('【已接受大纲前缀】\n\n【已接受大纲前缀结束】')
+    })
   })
 })

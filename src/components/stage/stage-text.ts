@@ -4,9 +4,6 @@ import type { ChapterPhase } from '../../stores/navigation/stage-progress'
 
 type Text = (zh: string, en: string) => string
 
-/** 纸墨的字标，与画板一致；是标识，不随界面语言变化。 */
-export const BRAND_MARK = '墨'
-
 export const STAGE_NAMES: Record<WorkStage, [string, string]> = {
   setup: ['设定', 'Setup'],
   architecture: ['架构', 'Architecture'],

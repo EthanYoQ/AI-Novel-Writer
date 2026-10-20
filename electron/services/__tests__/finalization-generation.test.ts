@@ -10,7 +10,7 @@ import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '..
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { SummaryRepository } from '../../repositories/summary-repository'
 import { getProjectDb } from '../../database'
-import { textHash } from '../../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import { generationOutputContract, type BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
@@ -715,4 +715,101 @@ it('resume 等待期间失败 artifact 被丢弃后，不得按旧快照发修�
  f.db.prepare("UPDATE generation_artifacts SET status='discarded' WHERE artifact_id=?").run(retryOf.artifactId)
  await expect(executing).rejects.toThrow('GENERATION_FINALIZATION_ARTIFACT_INVALID')
  expect(f.dispatch).toHaveBeenCalledTimes(3)
+})
+
+it.each([['chapter_notes', 'before-visible'], ['chapter_notes', 'partial'], ['character_cards', 'partial']] as const)('#420 %s 传输失败（%s）后显式恢复只重发一次，并发、重开与提交后都收敛', async (stepKey, failure) => {
+ let failNext = false
+ const f = fixture(async (request, options) => {
+  const characters = (request as { task: { purpose: string } }).task.purpose.includes('character')
+  if (failNext && characters === (stepKey === 'character_cards')) {
+   failNext = false
+   if (failure === 'partial') options.onVisible({ kind: 'delta', text: '林岚' })
+   throw new Error('合成断流')
+  }
+  options.onVisible({ kind: 'delta', text: characters ? f.response() : '林岚进入北塔。' }); return { finishReason: 'stop', usage: null }
+ })
+ const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey }
+ if (stepKey === 'character_cards') {
+  const notes = f.owner.beginFinalizationGeneration({ slot: { ...slot, stepKey: 'chapter_notes' }, modelId: 'synthetic' })
+  f.owner.commitFinalizationGeneration({ handle: notes.view.handle, artifact: f.artifactOf(await f.owner.executeFinalizationGeneration({ handle: notes.view.handle })) })
+ }
+ const before = f.dispatch.mock.calls.length
+ failNext = true
+ const { handle } = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' }).view
+ expect((await f.owner.executeFinalizationGeneration({ handle })).outcome.status).not.toBe('completed')
+ expect((await f.owner.executeFinalizationGeneration({ handle })).outcome.status).not.toBe('completed')
+ expect(f.dispatch).toHaveBeenCalledTimes(before + 1)
+ const recoverFrom = f.owner.readFinalizationGeneration({ slot })!.view.budgetDiagnostics!.at(-1)!.attemptId
+ const [recovered, duplicate] = await Promise.all([f.owner.executeFinalizationGeneration({ handle, recoverFrom }), f.owner.executeFinalizationGeneration({ handle, recoverFrom })])
+ expect(recovered.outcome).toMatchObject({ status: 'completed', finishReason: 'stop' })
+ expect(duplicate.outcome.receipt.visibleArtifact).toEqual(recovered.outcome.receipt.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(before + 2)
+ const next = f.reopen()
+ expect((await next.executeFinalizationGeneration({ handle, recoverFrom })).outcome.receipt.visibleArtifact).toEqual(recovered.outcome.receipt.visibleArtifact)
+ expect((await next.executeFinalizationGeneration({ handle })).outcome.receipt.visibleArtifact).toEqual(recovered.outcome.receipt.visibleArtifact)
+ const succeeded = next.readFinalizationGeneration({ slot })!.view.budgetDiagnostics!.at(-1)!.attemptId
+ await expect(next.executeFinalizationGeneration({ handle, recoverFrom: succeeded })).rejects.toThrow('GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE')
+ await expect(next.executeFinalizationGeneration({ handle, recoverFrom: `${recoverFrom}:2` })).rejects.toThrow('GENERATION_FINALIZATION_REQUEST_INVALID')
+ expect(next.commitFinalizationGeneration({ handle, artifact: f.artifactOf(recovered) })).toMatchObject({ success: true, stepKey })
+ const changes = f.db.prepare('SELECT total_changes()').pluck().get()
+ expect((await next.executeFinalizationGeneration({ handle, recoverFrom })).outcome.receipt.visibleArtifact).toEqual(recovered.outcome.receipt.visibleArtifact)
+ expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+ expect(f.dispatch).toHaveBeenCalledTimes(before + 2)
+ expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(handle.runId)).toBe(2)
+})
+
+it('#420 请求在途时关闭项目，重开后显式恢复经 resume 只重发一次并可提交', async () => {
+ let hang = true
+ const f = fixture(async (_request, options) => {
+  if (hang) { hang = false; return new Promise<never>(() => {}) }
+  options.onVisible({ kind: 'delta', text: '林岚进入北塔。' }); return { finishReason: 'stop', usage: null }
+ })
+ const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey: 'chapter_notes' }
+ const { handle } = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' }).view
+ void f.owner.executeFinalizationGeneration({ handle }).catch(() => undefined)
+ await vi.waitFor(() => expect(f.dispatch).toHaveBeenCalledTimes(1))
+ const next = f.reopen()
+ expect((await next.executeFinalizationGeneration({ handle })).outcome.status).not.toBe('completed')
+ expect(f.dispatch).toHaveBeenCalledTimes(1)
+ const recoverFrom = next.readFinalizationGeneration({ slot })!.view.budgetDiagnostics!.at(-1)!.attemptId
+ const recovered = await next.executeFinalizationGeneration({ handle, recoverFrom })
+ expect(recovered.outcome).toMatchObject({ status: 'completed', content: '林岚进入北塔。' })
+ expect(f.dispatch).toHaveBeenCalledTimes(2)
+ expect(next.commitFinalizationGeneration({ handle, artifact: f.artifactOf(recovered) })).toMatchObject({ success: true, chapterNotes: '林岚进入北塔。' })
+ expect((await next.executeFinalizationGeneration({ handle, recoverFrom })).outcome.receipt.visibleArtifact).toEqual(recovered.outcome.receipt.visibleArtifact)
+ expect(f.dispatch).toHaveBeenCalledTimes(2)
+})
+
+it('#420 recoverFrom 指向同 root 另一步骤的尝试时，按本运行的普通路径只请求一次', async () => {
+ const f = fixture(async (request, options) => {
+  const characters = (request as { task: { purpose: string } }).task.purpose.includes('character')
+  options.onVisible({ kind: 'delta', text: characters ? f.response() : '林岚进入北塔。' }); return { finishReason: 'stop', usage: null }
+ })
+ const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey: 'character_cards' }
+ const notes = f.owner.beginFinalizationGeneration({ slot: { ...slot, stepKey: 'chapter_notes' }, modelId: 'synthetic' })
+ f.owner.commitFinalizationGeneration({ handle: notes.view.handle, artifact: f.artifactOf(await f.owner.executeFinalizationGeneration({ handle: notes.view.handle })) })
+ const notesAttempt = f.owner.readFinalizationGeneration({ slot: { ...slot, stepKey: 'chapter_notes' } })!.latestAttempt!.attemptId
+ const characters = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' })
+ expect(characters.view.handle.rootActionId).toBe(notes.view.handle.rootActionId)
+ expect(characters.view.budgetDiagnostics!.at(-1)!.attemptId).toBe(notesAttempt)
+ expect(characters.latestAttempt).toBeUndefined()
+ const before = f.dispatch.mock.calls.length
+ const result = await f.owner.executeFinalizationGeneration({ handle: characters.view.handle, recoverFrom: notesAttempt })
+ expect(result.outcome).toMatchObject({ status: 'completed', finishReason: 'stop' })
+ expect(f.dispatch).toHaveBeenCalledTimes(before + 1)
+ expect(f.owner.readFinalizationGeneration({ slot })!.latestAttempt).toMatchObject({ inFlight: false, finishReason: 'stop', failureCode: null })
+})
+
+it('#420 生成记录写入失败后点重试：报出写入失败本身，而不是界面认不出的记录无效', async () => {
+ const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text: '林岚进入北塔。' }); return { finishReason: 'stop', usage: null } })
+ const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey: 'chapter_notes' }
+ const { handle } = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' }).view
+ const snapshot = vi.spyOn(GenerationRunRepository.prototype, 'snapshot').mockImplementation(() => { throw new Error('disk full') })
+ const failed = await f.owner.executeFinalizationGeneration({ handle })
+ expect(failed.outcome.status).not.toBe('completed')
+ snapshot.mockRestore()
+ const recoverFrom = f.owner.readFinalizationGeneration({ slot })!.latestAttempt!.attemptId
+ await expect(f.owner.executeFinalizationGeneration({ handle, recoverFrom })).rejects.toThrow('GENERATION_STORAGE_FAILED')
+ expect(f.dispatch).toHaveBeenCalledTimes(1)
+ f.owner.discardCandidate(handle, f.artifactOf(failed).artifactId)
 })

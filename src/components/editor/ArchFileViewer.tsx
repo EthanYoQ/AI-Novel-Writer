@@ -6,7 +6,7 @@ import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
 import { registerEditorExitSaveHandler, useEditorStore, type PlanningRecoverySaveSnapshot } from '../../stores/editor-store'
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
-import { ARCH_STEP_NAMES, type ArchStepKey } from '../../services/architecture-step-selection'
+import { ARCH_STEP_NAMES, archSectionHasContent, judgeArchCore, type ArchStepKey } from '../../services/architecture-step-selection'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
@@ -22,6 +22,8 @@ import { launchCreativeWorkflow } from '../../services/workflows/creative-workfl
 import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
 import { renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, type PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
 import { useWorkflowStore } from '../../stores/workflow-store'
+import { outlineProgress } from '../../shared/plot-outline-checkpoint'
+import { archOutlineSource, readArchCheckpoint } from '../../services/architecture-service'
 import { outlineSourceChangedNote, outlineSourceInvalidNote } from '../run/run-recovery'
 import { globalEventBus } from '../../shared/event-bus'
 import {
@@ -154,6 +156,7 @@ function ArchFileViewerSession({
   const [showDialog, setShowDialog] = useState(false)
   const [checkingArch, setCheckingArch] = useState(false)
   const [fullArchStatus, setFullArchStatus] = useState<Record<string, boolean>>({})
+  const [fullArchConfirmed, setFullArchConfirmed] = useState<Record<string, boolean>>({})
   const [synopsisSource, setSynopsisSource] = useState<PlotOutlineRangeSource>({ synopsis: '', totalChapters: 0, writingLanguage: 'zh-CN' })
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
   const [refreshBlockedMessage, setRefreshBlockedMessage] = useState<string | null>(null)
@@ -511,24 +514,24 @@ function ArchFileViewerSession({
         projectSession.projectPath,
       )
       if (!isProjectSessionCurrent(projectSession)) return
-      const status: Record<string, boolean> = {
-        premise: !!core?.premise && core.premise.length > 50 && !core.premise.includes('待生成'),
-        characters: rosterSnapshot?.status === 'ready',
-        worldbuilding: !!core?.worldbuilding && core.worldbuilding.length > 50 && !core.worldbuilding.includes('待生成'),
-        synopsis: !!core?.synopsis && core.synopsis.length > 50 && !core.synopsis.includes('待生成'),
-      }
-
-      // 对于当前文件，如果编辑器内已修改但未保存，也暂时以前面的基准为准即可
-      const EditorContentLen = currentContentRef.current.length;
-      if (EditorContentLen > 50 && !currentContentRef.current.includes('待生成')) {
-        status[stepKey] = true
-      }
+      const source = archOutlineSource(core, currentProject?.novelConfig)
+      // 分批检查点只用来认出被打断的一批；读不到时与架构页一样按没有检查点判定。
+      // 名单视图的 hook 只在角色页启用，其他文档页要直接读库，否则就绪的名单会被当成新生成并默认勾选重写。
+      const [checkpoint, roster] = await Promise.all([
+        readArchCheckpoint(projectSession),
+        ipc.invokeWithProjectSession(projectSession, 'db:character-roster-read', projectSession.projectPath),
+      ])
+      if (!isProjectSessionCurrent(projectSession)) return
+      // 有内容决定覆盖还是新生成，已确认决定默认勾选；两者与架构页共用 judgeArchCore。
+      const judged = judgeArchCore(core, outlineProgress(source.synopsis, checkpoint, source.writingLanguage, source.totalChapters).kind)
+      const rosterReady = roster.status === 'ready'
+      const status: Record<string, boolean> = { ...judged.hasContent, characters: rosterReady }
+      const confirmed: Record<string, boolean> = { ...judged.confirmed, characters: rosterReady }
+      // 当前文件在编辑器里有未保存的内容时，生成会覆盖它而不是新生成。是否已确认只影响默认勾选，而当前文件总是勾选的，不必按编辑器内容再判。
+      if (archSectionHasContent(currentContentRef.current)) status[stepKey] = true
       setFullArchStatus(status)
-      setSynopsisSource({
-        synopsis: core?.synopsis ?? '',
-        totalChapters: Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0,
-        writingLanguage: (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US' ? 'en-US' : 'zh-CN',
-      })
+      setFullArchConfirmed(confirmed)
+      setSynopsisSource(source)
       setShowDialog(true)
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
@@ -779,6 +782,7 @@ function ArchFileViewerSession({
           isOpen={showDialog}
           onClose={() => setShowDialog(false)}
           archStatus={fullArchStatus}
+          confirmed={fullArchConfirmed}
           synopsisSource={synopsisSource}
           initialSelectedSteps={[stepKey]}
           onConfirm={handleConfirm}

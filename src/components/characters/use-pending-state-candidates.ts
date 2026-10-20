@@ -20,6 +20,8 @@ export function usePendingStateCandidates(session: ProjectSessionContext) {
   const [error, setError] = useState('')
 
   const loadSummaries = useCallback(async (failure = '') => {
+    // 换开或重开作品后，旧会话的读请求必然被主进程拒绝；新会话会以新的 session 重新读取。
+    if (!isProjectSessionCurrent(session)) return
     try {
       const pending = await ipc.invokeWithProjectSession(session, 'finalized-character:list-state-candidates')
       if (!isProjectSessionCurrent(session)) return

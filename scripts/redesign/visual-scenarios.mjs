@@ -52,7 +52,206 @@ async function seedCalls({ page, invoke, path: projectPath, session }) {
   }
 }
 
+/** 运行侧页开着时逐页走一遍的页面。被挤到零宽的页面看不见，所以只等它进入 DOM。 */
+const attached = locator => locator.first().waitFor({ state: 'attached' })
+/** 资料页挂上后经 IPC 读数据，读完前显示「正在读取…」：等页面的内容标记进入 DOM、读取提示消失再量。 */
+async function loaded(page, selector) {
+  await attached(stage.root(page).locator(selector))
+  await page.waitForFunction(() => !document.querySelector('.stage-content')?.innerText.includes('正在读取'))
+}
+const SHEET_PAGES = [
+  ['chapter', async page => {
+    const chapterTab = stage.tab(page, /^第 3 章/)
+    if (await chapterTab.isVisible()) await chapterTab.click()
+    await attached(stage.prose(page))
+  }],
+  ['setup', async page => { await stage.stageButton(page, '设定').click(); await attached(stage.setupOutline(page)) }],
+  ['architecture', async page => { await stage.stageButton(page, '架构').click(); await attached(stage.root(page).locator('.arch-page:not([data-loading]):not([data-cast-loading]) .arch-section')) }],
+  ['blueprint', async page => { await stage.stageButton(page, '蓝图').click(); await attached(blueprint.card(page)) }],
+  ['characters', async page => {
+    await page.keyboard.press('Control+K')
+    await stage.paletteInput(page).fill('角色')
+    await stage.palette(page).getByRole('option', { name: /^角色/ }).first().click()
+    await stage.palette(page).waitFor({ state: 'detached' })
+    // 名单读完才列出角色行：等到行出现，免得量到上一页。
+    await attached(stage.characterList(page).locator('.cast-row'))
+  }],
+  ['plot', async page => { await stage.stageButton(page, '剧情与伏笔').click(); await loaded(page, '.stage-plot') }],
+  ['knowledge', async page => { await stage.stageButton(page, '知识库').click(); await loaded(page, '.stage-kb-docs') }],
+  ['history', async page => { await stage.stageButton(page, '版本历史').click(); await loaded(page, '.stage-hist-chapter') }],
+  ['settings', stage.openSettings],
+]
+
+/**
+ * 主区域里排成一字一行的文字：一段至少三个字的文字排出的行数不少于字数的六成。被挤窄的标题、说明与竖排的状态标签都是这个样子；
+ * 正常折行的段落每行有很多字，不会命中。逐个文本节点查，再按直接含文字的元素整体查（「正文 · 定稿」由几个短节点拼成）。
+ */
+const crushedText = page => page.evaluate(() => {
+  const area = document.querySelector('.stage-body')
+  const found = new Set()
+  const check = (target, text) => {
+    const chars = [...text.replace(/\s/g, '')].length
+    if (chars < 3) return
+    const range = document.createRange()
+    range.selectNodeContents(target)
+    const lines = new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => Math.round(rect.top))).size
+    if (lines >= 3 && lines >= chars * 0.6) found.add(`${text.trim().replace(/\s+/g, ' ').slice(0, 20)}（${chars} 字 ${lines} 行）`)
+  }
+  const walker = document.createTreeWalker(area, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const owner = node.parentElement
+    if (!node.textContent.trim() || owner.closest('.stage-sheet-slot, [hidden]')) continue
+    check(node, node.textContent)
+    if (!owner.querySelector('div, p, section, article, ul, ol, li, table, textarea, input, button')) check(owner, owner.textContent)
+  }
+  return [...found]
+})
+
+const areaWidths = page => page.evaluate(() => {
+  const width = selector => Math.round(document.querySelector(selector)?.getBoundingClientRect().width ?? 0)
+  return { body: width('.stage-body'), content: width('.stage-content:not([hidden]), .stage-body > .stage-settings'), sheet: width('.stage-sheet-slot'),
+    sheetInner: width('.stage-sheet-slot > .pi-sheet'), overlay: getComputedStyle(document.querySelector('.stage-sheet-slot')).position === 'absolute' }
+})
+
+/**
+ * 1152×720 与 820×640 是 1440×900、1024×768 的窗口在界面缩放 125% 时的 CSS 视口；683×512 是最小窗口 1024×768 在最大缩放 150% 时的，
+ * 也就是主区域能被挤到的最窄处。
+ */
+const SHEET_VIEWPORTS = [[1440, 900], [1280, 800], [1152, 720], [1024, 768], [820, 640], [683, 512]]
+
+async function resize(page, width, height) {
+  await page.setViewportSize({ width, height })
+  await page.waitForFunction(expected => innerWidth === expected, width)
+}
+
+function openSheetPage(page, name) {
+  const entry = SHEET_PAGES.find(([candidate]) => candidate === name)
+  if (!entry) throw new Error(`SHEET_PAGES 里没有「${name}」`)
+  return entry[1](page)
+}
+
+/**
+ * 三击选中编辑器里的一行，量选区工具条实际画在哪：工具条用视口坐标定位（底边中点对准选区上方），
+ * 实际底边中点与它内联的 top/left 之差就是被祖先包含块带偏的距离。
+ */
+async function selbarOffset(page, line) {
+  // 点行首附近：窄视口里浮起的侧页盖住行的右半边
+  await line.click({ clickCount: 3, position: { x: 24, y: 8 } })
+  const toolbar = page.getByRole('toolbar', { name: '选中文字的操作' })
+  await toolbar.waitFor({ state: 'visible' })
+  await page.waitForTimeout(200)
+  return toolbar.evaluate(bar => {
+    const rect = bar.getBoundingClientRect()
+    const selection = window.getSelection().getRangeAt(0).getBoundingClientRect()
+    const anchorLeft = parseFloat(bar.style.left)
+    const anchorTop = parseFloat(bar.style.top)
+    // 没有内联坐标时差值是 NaN，与容差比较恒为假，断言会空过。
+    if (!Number.isFinite(anchorLeft) || !Number.isFinite(anchorTop)) throw new Error(`选区工具条没有内联的 left/top：「${bar.style.cssText}」`)
+    return {
+      dx: Math.round(rect.left + rect.width / 2 - anchorLeft),
+      dy: Math.round(rect.bottom - anchorTop),
+      gapAboveSelection: Math.round(selection.top - rect.bottom),
+    }
+  })
+}
+
 export const VISUAL_SCENARIOS = {
+  // 选区工具条画在选区正上方：正文与架构文档两处编辑器，运行侧页浮起时也一样。
+  'rdv-selbar-anchor': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
+    const measured = {}
+    const failures = []
+    const check = async (name, line) => {
+      const offset = await selbarOffset(page, line)
+      measured[name] = offset
+      if (Math.abs(offset.dx) > 2 || Math.abs(offset.dy) > 2) failures.push(`${name}：${JSON.stringify(offset)}`)
+      await shoot(`rdv-selbar-${name}`)
+    }
+    const chapterTab = stage.tab(page, /^第 3 章/)
+    if (await chapterTab.isVisible()) await chapterTab.click()
+    await check('chapter', stage.prose(page).locator('.cm-line').filter({ hasText: /\S{6}/ }).nth(2))
+    await stage.stageButton(page, '架构').click()
+    const premise = stage.root(page).getByRole('region', { name: '故事前提', exact: true })
+    await premise.getByRole('button', { name: '编辑' }).click()
+    const archLine = stage.root(page).locator('.stage-content .cm-content .cm-line').filter({ hasText: /\S{6}/ }).first()
+    await archLine.waitFor({ state: 'visible' })
+    await check('architecture', archLine)
+    await resize(page, 820, 640)
+    await runSheet.openFromPalette(page)
+    await settle(page)
+    await check('architecture-820-sheet', archLine)
+    assert.deepEqual(failures, [], '选区工具条的底边中点落在它定位的视口坐标上')
+    return measured
+  } },
+
+  // 运行侧页的诊断分页开着时，在 SHEET_VIEWPORTS 的每种视口下逐页检查：主区域不被挤到一字一行。
+  'rdv-sheet-squeeze': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '诊断').click()
+    const measured = {}
+    const failures = []
+    for (const [width, height] of SHEET_VIEWPORTS) {
+      await resize(page, width, height)
+      for (const [name, open] of SHEET_PAGES) {
+        await open(page)
+        await runSheet.sheet(page).waitFor({ state: 'visible' })
+        await settle(page)
+        const crushed = await crushedText(page)
+        measured[`${name}-${width}`] = { ...await areaWidths(page), crushed }
+        // 设置页的分组导航固定 232px，最窄视口里留给设置内容的宽度不够；设置导航由另一项工作处理，这里只记录不判失败
+        const owned = name === 'settings' && width < 820
+        if (crushed.length && !owned) failures.push(`${name} @${width}：${crushed.join('、')}`)
+        await shoot(`rdv-sheet-${name}-${width}`)
+        // 最窄的视口里侧页浮在设置页上、盖住「返回作品」
+        if (name === 'settings') await stage.closeSettings(page, { dispatch: true })
+      }
+    }
+    // 最窄视口里侧页盖住了大半内容区，收起侧页再拍一遍，看内容区自己的窄版排版
+    await runSheet.sheet(page).getByRole('button', { name: '收起运行侧页' }).click()
+    await runSheet.sheet(page).waitFor({ state: 'detached' })
+    for (const [name, open] of SHEET_PAGES.filter(([name]) => name !== 'settings')) {
+      await open(page)
+      await settle(page)
+      await shoot(`rdv-sheet-${name}-683-closed`)
+    }
+    // 面板 790 宽（1076 视口）：诊断侧页浮在关系图谱上，图谱工具条不画在侧页上面、不截走点击
+    await resize(page, 1076, 768)
+    // 视图切换按钮在内容区右侧，侧页浮起后被盖住，所以先切到关系图谱再开侧页
+    await openSheetPage(page, 'characters')
+    await stage.root(page).locator('.cast-view-switch').getByRole('button', { name: '关系图谱' }).click()
+    await stage.root(page).locator('.cast-graph canvas').waitFor({ state: 'visible' })
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '诊断').click()
+    await settle(page)
+    const toolbarOverSheet = await page.evaluate(() => {
+      const slot = document.querySelector('.stage-sheet-slot')
+      const sheet = slot.getBoundingClientRect()
+      // 只查中心点落在侧页矩形里的按钮；中心在视口外时 elementFromPoint 为 null，不算画在侧页上
+      return [...document.querySelectorAll('.cast-graph button')].filter(button => {
+        const rect = button.getBoundingClientRect()
+        const x = rect.left + rect.width / 2
+        const y = rect.top + rect.height / 2
+        const hit = rect.width > 0 && x >= sheet.left && x <= sheet.right && y >= sheet.top && y <= sheet.bottom ? document.elementFromPoint(x, y) : null
+        return hit !== null && !slot.contains(hit)
+      }).map(button => button.getAttribute('aria-label') ?? button.textContent.trim())
+    })
+    measured['characters-graph-1076'] = { ...await areaWidths(page), toolbarOverSheet }
+    if (toolbarOverSheet.length) failures.push(`关系图谱工具条画在浮起的侧页上：${toolbarOverSheet.join('、')}`)
+    await shoot('rdv-sheet-characters-graph-1076')
+    // 1280 视口开着普通侧页（内容区约 614px）：架构页页头放得下时动作与标题同一行
+    await resize(page, 1280, 800)
+    await runSheet.tab(page, '进行中').click()
+    await openSheetPage(page, 'architecture')
+    await settle(page)
+    const header = await page.evaluate(() => {
+      const box = selector => document.querySelector(selector).getBoundingClientRect()
+      return { headingRight: Math.round(box('.arch-heading').right), actionsLeft: Math.round(box('.arch-header-actions').left), sameRow: box('.arch-header-actions').top < box('.arch-heading').bottom }
+    })
+    measured['architecture-1280-active'] = { ...await areaWidths(page), header }
+    if (!header.sameRow) failures.push(`1280 视口开着侧页时架构页页头的动作换到了标题下面：${JSON.stringify(header)}`)
+    await shoot('rdv-sheet-architecture-1280-active')
+    assert.deepEqual(failures, [], '诊断侧页开着时没有一字一行的文字，浮起的侧页不被内容区的浮层压住，1280 下架构页页头不换行')
+    return measured
+  } },
   'rdv-clear': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page }) => {
     await openWorkMenuItem(page, '清除生成内容…')
     const dialog = page.getByRole('dialog', { name: '清除项目生成内容' })

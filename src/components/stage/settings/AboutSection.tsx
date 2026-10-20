@@ -1,7 +1,6 @@
 import { APP_BRAND } from '../../../shared/brand'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { UpdateSettings } from '../StageUpdate'
-import { BRAND_MARK } from '../stage-text'
 
 /** 关于与更新：应用名、版本、定位说明，以及检查更新与更新状态。 */
 export default function AboutSection() {
@@ -9,9 +8,10 @@ export default function AboutSection() {
   return (
     <div className="stage-set-rows">
       <div className="stage-set-about">
-        <span className="stage-set-about-mark" aria-hidden="true">{BRAND_MARK}</span>
+        <span className="stage-set-about-mark" aria-hidden="true" />
         <div>
-          <p className="stage-set-about-name">{text(APP_BRAND.zhName, APP_BRAND.enName)}</p>
+          <p className="stage-set-about-name">{text(`${APP_BRAND.zhName} ${APP_BRAND.enName}`, APP_BRAND.enName)}</p>
+          <p className="stage-set-about-former">{text(`原名「${APP_BRAND.formerZhName}」`, `Formerly “${APP_BRAND.formerEnName}”`)}</p>
           <p className="stage-set-about-version">{text('版本', 'Version')} <span className="pi-num">{__APP_VERSION__}</span></p>
         </div>
       </div>

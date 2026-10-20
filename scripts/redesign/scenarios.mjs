@@ -524,7 +524,7 @@ const CHROME_CONTRAST = [
   ['.stage-ov-title', 4.5], ['.stage-ov-meta', 3], ['.stage-ov-bar-label', 3], ['.stage-ov .pi-stat-label', 3],
   ['.stage-setup-title', 4.5], ['.stage-setup-lede', 4.5], ['.stage-setup-label', 4.5], ['.stage-setup-hint', 3], ['.stage-chip', 4.5],
   ['.stage-setup-panel-title', 4.5], ['.stage-setup-panel-desc', 3], ['.stage-setup-outline-foot', 3],
-  ['.stage-set-title', 4.5], ['.stage-set-lede', 4.5], ['.stage-set-link', 4.5], ['.stage-set-group-label', 3], ['.stage-set-row-title', 4.5],
+  ['.stage-set-title', 4.5], ['.stage-set-lede', 4.5], ['.stage-set-link', 4.5], ['.stage-set-required', 4.5], ['.stage-set-group-label', 3], ['.stage-set-row-title', 4.5],
   ['.stage-set-row-desc', 3], ['.stage-set-model-name', 4.5], ['.stage-set-model-meta', 3], ['.stage-badge', 4.5], ['.stage-set-theme-name', 4.5],
   ['.stage-set-theme-desc', 3], ['.pi-empty-title', 4.5], ['.pi-empty-text', 3],
   ['.stage-update-title', 4.5], ['.stage-update-text', 3], ['.stage-library .pi-btn:not(.pi-btn--icon)', 4.5], ['.stage-library .pi-btn--icon', 3], ['.pi-notice-title', 4.5], ['.pi-notice-text', 3],
@@ -797,8 +797,8 @@ export const STAGE_SCENARIOS = {
   'stage-settings-groups': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page }) => {
     await stage.openSettings(page)
     assert.deepEqual(await stage.settingsGroups(page), [
-      { group: '常用', pages: ['AI 模型', '外观'] },
-      { group: '高级', pages: ['检索模型', '网络代理', '提示词模板', '写作 Skills'] },
+      { group: '常用', pages: ['AI 模型', '检索模型', '外观'] },
+      { group: '高级', pages: ['网络代理', '提示词模板', '写作 Skills'] },
       { group: '其他', pages: ['项目备份', '关于与更新'] },
     ], '设置按常用、高级、其他三组')
     assert.equal(await stage.currentSettingsPage(page), 'AI 模型', '从流程脊打开时落在 AI 模型')
@@ -815,6 +815,34 @@ export const STAGE_SCENARIOS = {
     await page.keyboard.press('Escape')
     await stage.settingsNav(page).waitFor({ state: 'detached' })
     await stage.waitForProse(page, firstLine(STAGE_SAMPLE.drafts[3].text))
+  } },
+  'stage-settings-required': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
+    await stage.openSettings(page)
+    const mark = name => stage.settingsLink(page, name).locator('.stage-set-required').innerText()
+    assert.deepEqual([await mark('AI 模型'), await mark('检索模型')], ['必需', '未配置'], '导航标出必需页，检索模型还没配默认')
+    assert.equal(await stage.settingsLink(page, '检索模型').getAttribute('aria-description'), '未配置', '读屏能听到未配置')
+    await shoot('settings-llm-required')
+    await stage.showSettingsPage(page, '检索模型')
+    await stage.root(page).getByText('检索模型是必需配置', { exact: true }).waitFor({ state: 'visible' })
+    assert.deepEqual(await stage.primaryButtons(page), ['添加检索模型'], '没有检索模型时唯一的主按钮是添加')
+    assert.equal(await stage.root(page).getByRole('button', { name: '去 SiliconFlow 免费注册' }).isVisible(), true, '去注册是一枚完整按钮')
+    assert.deepEqual(await chromeContrastFailures(page), [], '检索模型页文字对比度不足')
+    await shoot('settings-embedding-missing')
+  }, after: async ({ page }) => {
+    await page.keyboard.press('Escape')
+    await stage.settingsNav(page).waitFor({ state: 'detached' })
+  } },
+  'stage-settings-about': { model: false, shell: 'stage', setup: seedStageSample, run: async ({ page }) => {
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '关于与更新')
+    await stage.root(page).getByText('书童 Pagekin', { exact: true }).waitFor({ state: 'visible' })
+    await stage.root(page).getByText('原名「AI小说作家」', { exact: true }).waitFor({ state: 'visible' })
+    const marks = await page.evaluate(() => ['.stage-brand', '.stage-set-about-mark'].map(selector => {
+      const mark = document.querySelector(selector)
+      return mark ? getComputedStyle(mark, '::before').maskImage : 'missing'
+    }))
+    assert.ok(marks.every(image => image.includes('pagekin-mark')), `顶栏与关于页都用书页精灵标识：${marks.join(' | ')}`)
+    assert.deepEqual(await chromeContrastFailures(page), [], '关于页文字对比度不足')
   } },
   'stage-settings-dark': { model: false, shell: 'stage', setup: seedStageSample, run: async context => {
     await stage.openSettings(context.page)

@@ -1,7 +1,8 @@
 /*
  * 正文单章视图。视觉基准为 claude-design/Main.dc.html 的纸面与审稿侧页、Focus.dc.html 的沉浸写作与选区工具条；
  * 待写、合并、定稿确认与定稿视图的结构按 prototype/chapter-*.html。只引用纸墨令牌。
- * 审稿侧页与运行侧页同一时间只开一个，侧页总是与纸面并排、从不覆盖正文；page 容器查询按纸面可用宽度收紧版心。
+ * 审稿侧页与运行侧页同一时间只开一个，审稿侧页总是与纸面并排、从不覆盖正文（运行侧页在面板放不下时浮起，见 stage-panel.css）；
+ * page 容器查询按纸面可用宽度收紧版心。
  */
 .stage-ch {
   position: relative;

@@ -107,3 +107,22 @@ it.each(['completed', 'running'])('显式重试按 receipt 的历史 artifact �
  })
  await runFinalizationGeneration({ ...setup(invoke), slot: characterSlot, retryOf })
 })
+it('已发请求且模型正常结束但结果不可用：报结果不可用，不说没有发出请求', async () => {
+ const empty = { ...candidate, artifactId: '空候选', text: '', compositionEligible: false }
+ const invoke = vi.fn(async (channel: string) => {
+  if (channel === 'finalization-generation:read') return null
+  if (channel === 'finalization-generation:begin') return { ...stored, attemptCount: 0, view: { ...view, artifacts: [] } }
+  if (channel === 'finalization-generation:execute') return { run: { ...view, artifacts: [empty] }, outcome: { status: 'completed', finishReason: 'stop', receipt: { visibleArtifact: { artifactId: empty.artifactId, revision: empty.revision, textHash: empty.textHash } } } }
+  throw new Error(channel)
+ })
+ await expect(runFinalizationGeneration(setup(invoke))).rejects.toThrow('FINALIZATION_GENERATION_RESULT_UNUSABLE')
+ expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['finalization-generation:read', 'finalization-generation:begin', 'finalization-generation:execute'])
+})
+it('回放已有的正常结束但不可用的候选：同样报结果不可用，不重发', async () => {
+ const invoke = vi.fn(async (channel: string) => {
+  if (channel === 'finalization-generation:read' || channel === 'finalization-generation:begin') return { ...stored, view: { ...view, artifacts: [{ ...candidate, text: '', compositionEligible: false }] } }
+  throw new Error(channel)
+ })
+ await expect(runFinalizationGeneration(setup(invoke))).rejects.toThrow('FINALIZATION_GENERATION_RESULT_UNUSABLE')
+ expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['finalization-generation:read', 'finalization-generation:begin'])
+})
