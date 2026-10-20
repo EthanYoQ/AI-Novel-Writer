@@ -231,6 +231,8 @@ export function readInstalledWritingSkillBundle(read: (relativePath: string) => 
 export function readInstalledSkillFile(root: string, relativePath: string): Buffer | null {
   let cursor = root
   const segments = relativePath.split('/')
+  // 不依赖调用方先校验：`.`/`..` 片段一律拒绝，读取不会越出 Skill 目录。
+  if (segments.some(segment => segment === '.' || segment === '..')) throw new Error('WRITING_SKILL_FILE_UNSAFE')
   for (const [index, segment] of segments.entries()) {
     cursor = path.join(cursor, segment)
     let info: fs.Stats
