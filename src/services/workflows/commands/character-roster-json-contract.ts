@@ -23,6 +23,8 @@ export interface CharacterRosterJsonRepairRequest {
  * 只编排一次 JSON 语法修复，绝不判断角色身份、关系或业务语义。
  */
 export interface CharacterRosterJsonRepairPort {
+  /** 按运行冻结的界面语言选说明文案。 */
+  text(zhCN: string, enUS: string): string
   parseJson(text: string): unknown
   assertNotCancelled(): void
   log(message: string): void
@@ -34,9 +36,12 @@ export interface CharacterRosterJsonRepairOptions {
   repairPurpose: string
 }
 
-export function parseCharacterRosterJsonCandidate(candidate: unknown): CharacterRosterJsonCandidate {
+function parseCharacterRosterJsonCandidate(
+  candidate: unknown,
+  text: CharacterRosterJsonRepairPort['text'],
+): CharacterRosterJsonCandidate {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
-    throw new Error('AI 返回的角色名单不是 JSON 对象，未保存任何角色数据')
+    throw new Error(text('AI 返回的角色名单不是 JSON 对象，未保存任何角色数据', 'The AI cast is not a JSON object. No character data was saved.'))
   }
   const record = candidate as Record<string, unknown>
   return {
@@ -60,7 +65,7 @@ export async function parseCharacterRosterJsonResponse(
     parsed = port.parseJson(rawText)
   } catch {
     port.assertNotCancelled()
-    port.log('角色名单 JSON 格式异常，正在执行一次格式修复...')
+    port.log(port.text('角色名单 JSON 格式异常，正在执行一次格式修复...', 'The cast JSON is malformed; running one format repair...'))
     const repairedText = await port.repair({
       prompt: buildCharacterRosterJsonRepairPrompt(rawText),
       systemPrompt: options.repairSystemPrompt,
@@ -69,8 +74,8 @@ export async function parseCharacterRosterJsonResponse(
     try {
       parsed = port.parseJson(repairedText)
     } catch {
-      throw new Error('AI 返回的角色名单 JSON 格式仍无效，未保存任何角色数据')
+      throw new Error(port.text('AI 返回的角色名单 JSON 格式仍无效，未保存任何角色数据', 'The AI cast JSON is still invalid. No character data was saved.'))
     }
   }
-  return parseCharacterRosterJsonCandidate(parsed)
+  return parseCharacterRosterJsonCandidate(parsed, port.text)
 }
