@@ -486,7 +486,7 @@ export async function msFromClickToProse(page, target, proseSelector, text, dead
 }
 
 /**
- * 文字与它实际落在的底色之间的对比度。checks 是 [选择器, 最低比值]：名称与正文类文字 4.5，说明文字 3；scope 是加在每个选择器前的祖先。
+ * 文字与它实际落在的底色之间的对比度。checks 是 [选择器, 最低比值]：普通字号的文字（说明文字也算）4.5，图标等非文字元素 3；scope 是加在每个选择器前的祖先。
  * 底色沿祖先逐层叠加半透明背景求出，与画面上的颜色一致。
  */
 export async function contrastFailures(page, checks, scope = '') {
@@ -524,17 +524,17 @@ export async function contrastFailures(page, checks, scope = '') {
 
 const CHROME_CONTRAST = [
   ['.stage-row-name', 4.5], ['.stage-row-label', 4.5], ['.stage-chapter:not([data-phase="todo"]) .stage-chapter-title', 4.5],
-  ['.stage-work-title', 4.5], ['.stage-row-meta', 3], ['.stage-chapter-status', 3], ['.stage-chapter[data-phase="todo"] .stage-chapter-title', 3],
-  ['.stage-crumb', 3], ['.stage-search-hint', 3], ['.stage-saved', 3], ['.stage-spine-label', 3], ['.stage-chapter-no', 3],
-  ['.stage-library-title', 4.5], ['.stage-eyebrow', 3], ['.stage-start-text > b', 4.5], ['.stage-start-text > span', 3],
-  ['.stage-shelf-title', 4.5], ['.stage-shelf-hint', 3], ['.stage-book-title', 4.5], ['.stage-book-name', 4.5], ['.stage-book-meta', 3],
-  ['.stage-ov-title', 4.5], ['.stage-ov-meta', 3], ['.stage-ov-bar-label', 3], ['.stage-ov .pi-stat-label', 3],
-  ['.stage-setup-title', 4.5], ['.stage-setup-lede', 4.5], ['.stage-setup-label', 4.5], ['.stage-setup-hint', 3], ['.stage-chip', 4.5],
-  ['.stage-setup-panel-title', 4.5], ['.stage-setup-panel-desc', 3], ['.stage-setup-outline-foot', 3],
-  ['.stage-set-title', 4.5], ['.stage-set-lede', 4.5], ['.stage-set-link', 4.5], ['.stage-set-required', 4.5], ['.stage-set-group-label', 3], ['.stage-set-row-title', 4.5],
-  ['.stage-set-row-desc', 3], ['.stage-set-model-name', 4.5], ['.stage-set-model-meta', 3], ['.stage-badge', 4.5], ['.stage-set-theme-name', 4.5],
-  ['.stage-set-theme-desc', 3], ['.pi-empty-title', 4.5], ['.pi-empty-text', 3],
-  ['.stage-update-title', 4.5], ['.stage-update-text', 3], ['.stage-library .pi-btn:not(.pi-btn--icon)', 4.5], ['.stage-library .pi-btn--icon', 3], ['.pi-notice-title', 4.5], ['.pi-notice-text', 3],
+  ['.stage-work-title', 4.5], ['.stage-row-meta', 4.5], ['.stage-chapter-status', 4.5], ['.stage-chapter[data-phase="todo"] .stage-chapter-title', 4.5],
+  ['.stage-crumb', 4.5], ['.stage-search-hint', 4.5], ['.stage-saved', 4.5], ['.stage-spine-label', 4.5], ['.stage-chapter-no', 4.5],
+  ['.stage-library-title', 4.5], ['.stage-eyebrow', 4.5], ['.stage-start-text > b', 4.5], ['.stage-start-text > span', 4.5],
+  ['.stage-shelf-title', 4.5], ['.stage-shelf-hint', 4.5], ['.stage-book-title', 4.5], ['.stage-book-name', 4.5], ['.stage-book-meta', 4.5],
+  ['.stage-ov-title', 4.5], ['.stage-ov-meta', 4.5], ['.stage-ov-bar-label', 4.5], ['.stage-ov .pi-stat-label', 4.5],
+  ['.stage-setup-title', 4.5], ['.stage-setup-lede', 4.5], ['.stage-setup-label', 4.5], ['.stage-setup-hint', 4.5], ['.stage-chip', 4.5],
+  ['.stage-setup-panel-title', 4.5], ['.stage-setup-panel-desc', 4.5], ['.stage-setup-outline-foot', 4.5],
+  ['.stage-set-title', 4.5], ['.stage-set-lede', 4.5], ['.stage-set-link', 4.5], ['.stage-set-required', 4.5], ['.stage-set-group-label', 4.5], ['.stage-set-row-title', 4.5],
+  ['.stage-set-row-desc', 4.5], ['.stage-set-model-name', 4.5], ['.stage-set-model-meta', 4.5], ['.stage-badge', 4.5], ['.stage-set-theme-name', 4.5],
+  ['.stage-set-theme-desc', 4.5], ['.pi-empty-title', 4.5], ['.pi-empty-text', 4.5],
+  ['.stage-update-title', 4.5], ['.stage-update-text', 4.5], ['.stage-library .pi-btn:not(.pi-btn--icon)', 4.5], ['.stage-library .pi-btn--icon', 3], ['.pi-notice-title', 4.5], ['.pi-notice-text', 4.5],
 ]
 
 /** 新外壳里的文字对比度：checks 默认查外壳文字，页面场景传自己的选择器。 */

@@ -25,10 +25,10 @@ export const MATERIALS = Object.freeze({
  */
 const REFS_CONTRAST = [
   ['.stage-plot-title', 4.5], ['.stage-plot-note', 4.5], ['.stage-plot-lane b', 4.5], ['.stage-plot-event[data-state="occurred"]', 4.5],
-  ['.stage-plot-event[data-state="planned"]', 3], ['.stage-plot-chapter', 3], ['.stage-plot-help', 3], ['.stage-plot-stamp', 3],
-  ['.stage-kb-title', 4.5], ['.stage-kb-doc', 4.5], ['.stage-kb-help', 3], ['.stage-kb-result p', 4.5], ['.stage-kb-result-source', 3],
-  ['.stage-hist-title', 4.5], ['.stage-hist-name', 4.5], ['.stage-hist-chapter small', 3], ['.stage-hist-version-name', 4.5],
-  ['.stage-hist-meta', 3], ['.stage-hist-page span', 4.5], ['.stage-hist-page ins', 4.5], ['.stage-hist-page del', 4.5],
+  ['.stage-plot-event[data-state="planned"]', 4.5], ['.stage-plot-chapter', 4.5], ['.stage-plot-help', 4.5], ['.stage-plot-stamp', 4.5],
+  ['.stage-kb-title', 4.5], ['.stage-kb-doc', 4.5], ['.stage-kb-help', 4.5], ['.stage-kb-result p', 4.5], ['.stage-kb-result-source', 4.5],
+  ['.stage-hist-title', 4.5], ['.stage-hist-name', 4.5], ['.stage-hist-chapter small', 4.5], ['.stage-hist-version-name', 4.5],
+  ['.stage-hist-meta', 4.5], ['.stage-hist-page span', 4.5], ['.stage-hist-page ins', 4.5], ['.stage-hist-page del', 4.5],
   ['.stage-hist-chapter[aria-current="true"] .stage-hist-no', 4.5], ['.stage-hist-chapter[aria-current="true"] small', 4.5],
   ['.stage-hist-version[aria-pressed="true"] .stage-hist-meta', 4.5],
 ]
