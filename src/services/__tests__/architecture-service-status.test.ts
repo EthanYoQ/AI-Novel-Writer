@@ -90,6 +90,16 @@ describe('流程脊的架构四节是否已确认：与架构页徽标同一判�
     expect(outlineProgress(sparse, null, 'zh-CN', 24)).toEqual({ kind: 'complete' })
   })
 
+  it('只有空白（超过 50 个字符）与没有内容一样未确认', async () => {
+    const blank = ' \n'.repeat(40)
+    invoke.mockImplementation(async (_session: unknown, channel: string) => {
+      if (channel === 'db:project-core-get') return { premise: blank, worldbuilding: blank, synopsis: blank, totalChapters: 24, writingLanguage: 'zh-CN' }
+      if (channel === 'fs:read-json') return { success: false, error: 'not found' }
+      return { status: 'ready' }
+    })
+    expect(await checkArchConfirmed(session)).toEqual({ premise: false, characters: true, worldbuilding: false, synopsis: false })
+  })
+
   it('没有内容：未确认', async () => {
     synopsis = ''
     expect((await checkArchConfirmed(session)).synopsis).toBe(false)

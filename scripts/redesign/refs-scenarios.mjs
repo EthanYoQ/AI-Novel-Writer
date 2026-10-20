@@ -253,6 +253,22 @@ export const REFS_SCENARIOS = {
     await page.getByRole('list', { name: '已确认的定稿事件' }).waitFor({ state: 'visible' })
     assert.deepEqual(await refs.routeStates(page, THREAD.title), ['done', 'none', 'todo'], '确认后埋设一站变成已发生')
   } },
+  /** 版本历史点一稿时它已被删掉（列表还没刷新）：对比区说明这一稿已不存在，列表重读后去掉它（#414）。 */
+  'refs-history-missing': { model: false, shell: 'stage', setup: seedRefs, run: async ({ app, page, invoke }) => {
+    await watchSession(app)
+    await openChapterThreeVersions(page)
+    const session = await lastSession(app)
+    assert.ok(session?.leaseId, '记下了界面的作品会话')
+    const first = (await invoke(page, 'db:draft-list', 3, session.projectPath, session)).find(draft => draft.version === 1)
+    assert.ok(first, '第 3 章预置了 v1 稿')
+    const deleted = await invoke(page, 'db:draft-delete', first.id, session.projectPath, session)
+    assert.equal(deleted.success, true, deleted.error)
+    await refs.versionButton(page, '草稿 v1').click()
+    await refs.comparison(page).getByText('这一稿已不存在，可能已被删除，请另选一稿。').waitFor({ state: 'visible' })
+    await refs.versionButton(page, '草稿 v1').waitFor({ state: 'detached' })
+    await refs.versionButton(page, '草稿 v2').waitFor({ state: 'visible' })
+    await refs.historyChapters(page).getByRole('button', { name: /雾钟/ }).getByText('1 稿').waitFor({ state: 'visible' })
+  } },
   'refs-delete': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
     await refs.open(page, 'plot')
     await refs.plotView(page, '伏笔线索').click()

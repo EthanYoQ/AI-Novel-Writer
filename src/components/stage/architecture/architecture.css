@@ -6,6 +6,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  container-type: inline-size;
 }
 
 .arch-inner {
@@ -17,14 +18,16 @@
   gap: 28px;
 }
 
+/* 标题旁留不出 240px（「故事的骨架」一行约 180px）时动作换到下一行，标题不被挤断；留得出时与标题同一行、靠右 */
 .arch-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
-  gap: var(--s-6);
+  gap: var(--s-4) var(--s-6);
 }
 
 .arch-heading {
-  flex: 1;
+  flex: 1 1 240px;
   min-width: 0;
 }
 
@@ -360,4 +363,16 @@
   align-self: center;
   color: var(--ink-3);
   font-size: var(--fs-12);
+}
+
+/* ================= 窄宽度（按架构页自身的宽度，运行侧页并排时也成立） ================= */
+@container (width < 560px) {
+  .arch-inner {
+    padding: 36px 24px 48px;
+  }
+
+  /* 分节卡的动作换到标题与摘要下面 */
+  .arch-section-actions {
+    grid-column: 2;
+  }
 }

@@ -22,8 +22,15 @@
   place-items: center;
   border-radius: 6px;
   background: var(--ink);
-  color: var(--frame);
-  font: 600 12px/1 var(--font-display);
+}
+
+/* 书页精灵：单色剪影，眼睛是镂空，透出底色；颜色跟令牌走，深浅主题自动反转 */
+.stage-brand::before {
+  content: "";
+  width: 15px;
+  height: 16px;
+  background: var(--frame);
+  mask: url("../../../assets/brand/pagekin-mark.svg") center / contain no-repeat;
 }
 
 .stage-topbar .stage-work-title {

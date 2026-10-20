@@ -1,4 +1,5 @@
 import '../../../index.css'
+import '../../../styles/paper-ink/index.css'
 import { page } from 'vitest/browser'
 import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -342,6 +343,38 @@ it('migration notice excludes its titlebar overlap from native dragging and dism
   expect(host.querySelector('textarea')).toBe(editor)
   expect(editor.value).toBe('保留作者正文')
   expect(load).toHaveBeenCalledOnce()
+})
+
+/** 计算出的颜色的相对亮度（0 黑 1 白）。先画到画布上换成 sRGB，oklch 等写法也能比。 */
+const luminance = (color: string) => {
+  const context = document.createElement('canvas').getContext('2d')!
+  context.fillStyle = color
+  context.fillRect(0, 0, 1, 1)
+  const [r, g, b] = [...context.getImageData(0, 0, 1, 1).data].slice(0, 3).map(value => {
+    const channel = value / 255
+    return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+it.each(['dark', 'light'] as const)('迁移提示条跟随外观主题用纸墨面板与文字色（%s）', async colorTheme => {
+  localStorage.setItem(APPEARANCE_STORAGE_KEY, serializeAppearanceProfile({ ...INITIAL_APPEARANCE, colorTheme, revision: 3, origin: 'author' }))
+  const dep = dependencies({ waitForMainReady: async () => ({
+    state: 'ready', globalGeneration: '启动世代', migrationNotice: { legacySourceIgnored: true, preservedUnknownCount: 0 } }) })
+  await act(async () => root.render(<RendererStartup dependencies={dep} loadWorkspace={async () => ({ default: () => <p>合成工作台</p> })} />))
+  await vi.waitFor(() => expect(host.querySelector('.startup-migration-notice')).not.toBeNull())
+  const notice = host.querySelector<HTMLElement>('.startup-migration-notice')!
+  const [background, ink] = [luminance(getComputedStyle(notice).backgroundColor), luminance(getComputedStyle(notice).color)]
+  expect(colorTheme === 'dark' ? background < 0.05 && ink > 0.5 : background > 0.8 && ink < 0.05).toBe(true)
+})
+
+it('启动受阻页在深色系统主题下是深底浅字', async () => {
+  localStorage.setItem(LEGACY_THEME_STORAGE_KEY, '{损坏的偏好')
+  await act(async () => root.render(<RendererStartup dependencies={dependencies({ systemTheme: () => 'dark' })} />))
+  await vi.waitFor(() => expect(host.querySelector('[role="alert"]')).not.toBeNull())
+  const main = host.querySelector<HTMLElement>('main')!
+  expect(luminance(getComputedStyle(main).backgroundColor)).toBeLessThan(0.05)
+  expect(luminance(getComputedStyle(main.querySelector('h1')!).color)).toBeGreaterThan(0.5)
 })
 
 it('同一迁移世代的通知关闭后重启不再出现，新迁移世代仍出现', async () => {

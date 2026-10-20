@@ -11,7 +11,6 @@ import { Button } from '../ui/Button'
 import { Menu, type MenuGroupSpec } from '../ui/Menu'
 import RunCapsule from './RunCapsule'
 import { commandLabel } from './shortcut-keys'
-import { BRAND_MARK } from './stage-text'
 
 
 interface StageTopBarProps {
@@ -66,7 +65,7 @@ export default function StageTopBar({ crumbs, library, focus, focusTitle, workMe
 
   return (
     <header className="stage-topbar">
-      <span className="stage-brand" aria-hidden="true">{BRAND_MARK}</span>
+      <span className="stage-brand" aria-hidden="true" />
       {library || !projectName
         ? <span className="stage-work-title">{text(APP_BRAND.zhName, APP_BRAND.enName)}</span>
         : (

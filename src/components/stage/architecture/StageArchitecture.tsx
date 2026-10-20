@@ -81,7 +81,7 @@ export default function StageArchitecture({ projectKey }: { projectKey: string }
   const summary = (key: ArchStepKey) => {
     if (key === 'characters') return cast.summary
     const content = overview.contents[key] ?? ''
-    return overview.archStatus[key] && content
+    return content.trim()
       ? excerpt(content, text('……', '…'))
       : text('还没有内容。可以让 AI 按设定生成，也可以自己写。', 'Nothing here yet. Let AI draft it from the setup, or write it yourself.')
   }

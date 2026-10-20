@@ -5,10 +5,33 @@
  * 使用场景：Sidebar、流程脊
  */
 
-import type { ProjectSessionContext } from '../shared/ipc-channels'
+import type { NovelConfig, ProjectSessionContext } from '../shared/ipc-channels'
 import { CANONICAL_PROJECT_DIRECTORY } from '../shared/project-format'
 import { outlineProgress } from '../shared/plot-outline-checkpoint'
+import type { PlotOutlineRangeSource } from '../shared/plot-outline-contract'
+import { resolveWritingLanguage } from '../shared/writing-language'
 import { ipc } from './ipc-client'
+import { judgeArchCore } from './architecture-step-selection'
+
+/** 读架构生成的分批检查点 partial_arch.json；没有、读不到或读失败都按没有检查点（undefined）。 */
+export async function readArchCheckpoint(projectSession: ProjectSessionContext): Promise<Record<string, unknown> | undefined> {
+  const { projectPath } = projectSession
+  const result = await ipc.invokeWithProjectSession(projectSession, 'fs:read-json', `${projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`, projectPath)
+    .catch(() => null)
+  return result?.success === true ? (result as { data?: Record<string, unknown> }).data : undefined
+}
+
+/** 作品核心里情节大纲的范围来源：章数与写作语言以作品核心为准，作品核心读不到时用作品设置。 */
+export function archOutlineSource(
+  core: { synopsis?: string | null; totalChapters?: number | null; writingLanguage?: string | null } | null | undefined,
+  novelConfig?: Pick<NovelConfig, 'totalChapters' | 'writingLanguage'>,
+): PlotOutlineRangeSource {
+  return {
+    synopsis: core?.synopsis ?? '',
+    totalChapters: Number(core?.totalChapters ?? novelConfig?.totalChapters) || 0,
+    writingLanguage: resolveWritingLanguage(core?.writingLanguage ?? novelConfig?.writingLanguage),
+  }
+}
 
 /**
  * 检查所有架构块的生成状态
@@ -48,28 +71,22 @@ export async function checkArchStatus(
 }
 
 /**
- * 流程脊的架构四节是否已确认：与架构页徽标同一判定。前提、世界观有内容即确认，角色名单要结构化名单就绪，
- * 情节大纲还要分批检查点表明全书写完、没有中断的批次（outlineProgress）。
+ * 流程脊的架构四节是否已确认：与架构页徽标同一判定（judgeArchCore），角色名单要结构化名单就绪。
  */
 export async function checkArchConfirmed(
   projectSession: ProjectSessionContext,
+  novelConfig?: Pick<NovelConfig, 'totalChapters' | 'writingLanguage'>,
 ): Promise<Record<string, boolean>> {
   const { projectPath } = projectSession
-  const [core, roster, partial] = await Promise.all([
+  const [core, roster, checkpoint] = await Promise.all([
     ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath),
     ipc.invokeWithProjectSession(projectSession, 'db:character-roster-read', projectPath),
-    ipc.invokeWithProjectSession(projectSession, 'fs:read-json', `${projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`, projectPath)
-      .catch(() => null),
+    readArchCheckpoint(projectSession),
   ])
   if (!core) return { premise: false, characters: false, worldbuilding: false, synopsis: false }
-  const checkpoint = partial?.success === true ? (partial as { data?: unknown }).data : undefined
-  const progress = outlineProgress(core.synopsis ?? '', checkpoint, core.writingLanguage === 'en-US' ? 'en-US' : 'zh-CN', Number(core.totalChapters) || 0)
-  return {
-    premise: (core.premise?.length ?? 0) > 50,
-    characters: roster.status === 'ready',
-    worldbuilding: (core.worldbuilding?.length ?? 0) > 50,
-    synopsis: progress.kind === 'complete',
-  }
+  const { synopsis, totalChapters, writingLanguage } = archOutlineSource(core, novelConfig)
+  const progress = outlineProgress(synopsis, checkpoint, writingLanguage, totalChapters)
+  return { ...judgeArchCore(core, progress.kind).confirmed, characters: roster.status === 'ready' }
 }
 
 /**
