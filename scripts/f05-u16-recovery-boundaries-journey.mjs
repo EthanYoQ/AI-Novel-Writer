@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad } from './verify-win-package.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const scriptPath = fileURLToPath(import.meta.url)
@@ -31,7 +32,7 @@ if (prior) {
   assert(prior.build?.buildSha && prior.testedSha === prior.build.buildSha && prior.artifact?.asarSha256)
 }
 const packageDir = path.resolve(fixedPackage ?? path.join(repository, 'release', JSON.parse(fs.readFileSync(path.join(repository, 'package.json'))).version, 'win-unpacked'))
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const runId = randomUUID()
 const receiptDir = path.join(repository, '.runtime', '.cache', 'f05-u16-recovery-boundaries', runId)

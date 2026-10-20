@@ -13,6 +13,7 @@ import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLan
 import * as arch from './redesign/pages/architecture.mjs'
 import * as runSheet from './redesign/pages/run-sheet.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
@@ -30,7 +31,7 @@ const priorPath = path.join(repository, '.runtime', '.cache', 'f05-u04-architect
 // 旧外壳时期的历史回执只在当年的机器上：有就核对，没有就记下缺席。
 const prior = fs.existsSync(priorPath) ? JSON.parse(fs.readFileSync(priorPath, 'utf8')) : null
 if (prior) assert.equal(prior.outcome, 'PARTIAL')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const fileHash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()

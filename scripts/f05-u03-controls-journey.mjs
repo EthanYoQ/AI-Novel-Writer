@@ -11,6 +11,7 @@ import { _electron as electron } from 'playwright'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
 import * as runSheet from './redesign/pages/run-sheet.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
@@ -26,7 +27,7 @@ const priorPath = path.join(repository, '.runtime', '.cache', 'f05-u03-controls'
 // 旧外壳时期的历史回执只在当年的机器上；有就核对，没有就在回执里记下缺席，不挡本次旅程。
 const prior = fs.existsSync(priorPath) ? JSON.parse(fs.readFileSync(priorPath, 'utf8')) : null
 if (prior) assert.equal(prior.outcome, 'PASS', 'historical Writer controls receipt is not a PASS')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 const fileHash = file => sha256(fs.readFileSync(file))

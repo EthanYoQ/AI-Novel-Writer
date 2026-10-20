@@ -12,6 +12,7 @@ import { _electron as electron } from 'playwright'
 import * as arch from './redesign/pages/architecture.mjs'
 import * as stage from './redesign/pages/stage.mjs'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
@@ -23,7 +24,7 @@ assert((fixedPackage && !priorPath) || (!fixedPackage && priorPath),
   'pass --reuse-package=<prior build receipt> or --package-dir=<win-unpacked> with hashes')
 const version = JSON.parse(fs.readFileSync(path.join(repository, 'package.json'), 'utf8')).version
 const packageDir = path.resolve(fixedPackage ?? path.join(repository, 'release', version, 'win-unpacked'))
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 const fileHash = file => sha256(fs.readFileSync(file))

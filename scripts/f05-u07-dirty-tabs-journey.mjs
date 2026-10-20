@@ -15,13 +15,14 @@ import * as blueprint from './redesign/pages/blueprint.mjs'
 import * as refs from './redesign/pages/refs.mjs'
 import * as runSheet from './redesign/pages/run-sheet.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const argument = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 const packageArgs = ['package-dir', 'package-source-sha', 'exe-sha256', 'asar-sha256'].map(argument)
 assert(packageArgs.every(Boolean), 'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
 const packageDir = path.resolve(repository, packageArgs[0])
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const [, packageSourceSha, expectedExeSha, expectedAsarSha] = packageArgs
 assert(/^[a-f0-9]{40}$/.test(packageSourceSha) && [expectedExeSha, expectedAsarSha].every(value => /^[a-f0-9]{64}$/.test(value)), 'invalid package source or artifact SHA')

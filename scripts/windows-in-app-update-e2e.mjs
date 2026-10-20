@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, win32 } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { WINDOWS_PROCESS_TARGET_NAMES } from './product-identity.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const repositoryRoot = resolve(dirname(scriptPath), '..')
@@ -599,9 +600,7 @@ async function runWindowsInAppUpdateE2e(plan, evidenceRoot) {
       relatedTargetNames: [
         plan.from.assets.installer.name,
         plan.expected.assets.installer.name,
-        'AI小说作家.exe',
-        'AI小说作家',
-        'ai-novel-writer',
+        ...WINDOWS_PROCESS_TARGET_NAMES,
       ],
       legacyBridge,
     })

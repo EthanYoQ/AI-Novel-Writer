@@ -11,6 +11,7 @@ import { _electron as electron } from 'playwright'
 import yauzl from 'yauzl'
 import * as stage from './redesign/pages/stage.mjs'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
+import { resolvePackagedWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 if (process.argv.includes('--help')) {
@@ -20,7 +21,8 @@ if (process.argv.includes('--help')) {
 const packageVersion = JSON.parse(fs.readFileSync(path.join(repository, 'package.json'), 'utf8')).version
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 const packageDir = path.resolve(option('package-dir') ?? path.join(repository, 'release', packageVersion, 'win-unpacked'))
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const freshBuild = !option('package-dir') && !process.argv.some(arg => arg.startsWith('--reuse-package='))
+const executablePath = resolvePackagedWindowsExecutable(packageDir, { freshBuild })
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).trim()
