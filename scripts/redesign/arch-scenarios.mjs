@@ -174,6 +174,26 @@ async function archContrastFailures(page) {
   })
 }
 
+/** 两个改模型场景共用：生成 1–5 章，续写第 6–to 章时卡在假模型门上，改名保存夹具模型后放行；返回「上一次运行」卡片。 */
+async function stallOutlineBatchAndChangeModel(context, to) {
+  const { page, invoke, fake } = context
+  await openArchitecture(page)
+  await arch.primary(page).click()
+  await arch.selectOnly(page, ['synopsis'])
+  await arch.setRange(page, 1, 5)
+  await arch.startGenerate(page)
+  await waitForRunDone(page)
+  await arch.badge(page, 'synopsis').filter({ hasText: '部分完成 · 5 / 24 章' }).waitFor({ timeout: 30_000 })
+  await arch.section(page, 'synopsis').getByRole('button', { name: '续写第 6 章起' }).click()
+  await arch.setRange(page, 6, to)
+  fake.gate.hold()
+  await arch.startGenerate(page)
+  await untilGateHolds(fake.gate, 60_000)
+  assert.equal((await invoke(page, 'llm:save-model', { ...FAKE_MODEL, modelName: 'gpt-4.1-mini' })).success, true)
+  fake.gate.release()
+  return runSheet.anyCard(page).filter({ hasText: /^上一次运行/ })
+}
+
 export const ARCH_SCENARIOS = {
   /** lane 1：trunk 与 head 都从架构页用夹具模型生成前提、世界观与大纲（角色名单已预置），记下四份文档。 */
   'arch-regression': { model: true, shell: 'stage', setup: seedArch({ clear: ['premise', 'worldbuilding', 'synopsis'] }), run: async context => {
@@ -287,22 +307,8 @@ export const ARCH_SCENARIOS = {
    * 诊断里的 AI 调用记录与真实请求一致（1–5 章与第 6 章）。after 点「打开架构页」，大纲提示只能查看或复制恢复稿，点「从第 6 章重新生成」打开第 6–10 章的对话框，用新模型重新生成到第 10 章。
    */
   'arch-model-change': { model: true, shell: 'stage', setup: seedArch({ clear: ['synopsis'], totalChapters: 24 }), run: async context => {
-    const { page, invoke, fake } = context
-    await openArchitecture(page)
-    await arch.primary(page).click()
-    await arch.selectOnly(page, ['synopsis'])
-    await arch.setRange(page, 1, 5)
-    await arch.startGenerate(page)
-    await waitForRunDone(page)
-    await arch.badge(page, 'synopsis').filter({ hasText: '部分完成 · 5 / 24 章' }).waitFor({ timeout: 30_000 })
-    await arch.section(page, 'synopsis').getByRole('button', { name: '续写第 6 章起' }).click()
-    await arch.setRange(page, 6, 10)
-    fake.gate.hold()
-    await arch.startGenerate(page)
-    await untilGateHolds(fake.gate, 60_000)
-    assert.equal((await invoke(page, 'llm:save-model', { ...FAKE_MODEL, modelName: 'gpt-4.1-mini' })).success, true)
-    fake.gate.release()
-    const last = runSheet.anyCard(page).filter({ hasText: /^上一次运行/ })
+    const { page } = context
+    const last = await stallOutlineBatchAndChangeModel(context, 10)
     await last.getByRole('button', { name: '打开架构页' }).waitFor({ state: 'visible', timeout: 60_000 })
     const notice = await last.innerText()
     assert.match(notice, /生成途中模型设置被修改，这批大纲已在第 7 章停止/)
@@ -345,22 +351,8 @@ export const ARCH_SCENARIOS = {
    * 上一次运行不出现原始错误码；架构页的大纲提示只能查看或复制并给「从第 6 章重新生成」，不再退回续写与「编辑恢复稿」。
    */
   'arch-model-change-last': { model: true, shell: 'stage', setup: seedArch({ clear: ['synopsis'], totalChapters: 24 }), run: async context => {
-    const { page, invoke, fake } = context
-    await openArchitecture(page)
-    await arch.primary(page).click()
-    await arch.selectOnly(page, ['synopsis'])
-    await arch.setRange(page, 1, 5)
-    await arch.startGenerate(page)
-    await waitForRunDone(page)
-    await arch.badge(page, 'synopsis').filter({ hasText: '部分完成 · 5 / 24 章' }).waitFor({ timeout: 30_000 })
-    await arch.section(page, 'synopsis').getByRole('button', { name: '续写第 6 章起' }).click()
-    await arch.setRange(page, 6, 6)
-    fake.gate.hold()
-    await arch.startGenerate(page)
-    await untilGateHolds(fake.gate, 60_000)
-    assert.equal((await invoke(page, 'llm:save-model', { ...FAKE_MODEL, modelName: 'gpt-4.1-mini' })).success, true)
-    fake.gate.release()
-    const last = runSheet.anyCard(page).filter({ hasText: /^上一次运行/ })
+    const { page } = context
+    const last = await stallOutlineBatchAndChangeModel(context, 6)
     await last.waitFor({ state: 'visible', timeout: 60_000 })
     const notice = await last.innerText()
     assert.doesNotMatch(notice, /GENERATION_SOURCE_CHANGED|Error invoking remote method/, '界面不出现原始错误码')
