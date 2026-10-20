@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), globalRo
 vi.mock('electron', () => ({ ipcMain: { handle: (channel: string, handler: Handler) => mocks.handlers.set(channel, handler) } }))
 vi.mock('../../services/app-data-locator', () => ({ getGlobalDataRoot: () => mocks.globalRoot }))
 vi.mock('../kb-controller', () => ({ getEmbeddingConfig: () => null }))
-import { registerGenerationController } from '../generation-controller'
+import { generationIpcErrorCode, registerGenerationController } from '../generation-controller'
 import { registerDatabaseController } from '../db-controller'
 import { ProjectCoreRepository } from '../../repositories/project-core-repository'
 import { getProjectDataRoot } from '../../services/project-data-locator'
@@ -554,12 +554,29 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect(JSON.stringify(result)).not.toContain(model.apiKey)
     expect(fetch).toHaveBeenCalledTimes(1)
   })
+  it('logs an uncoded failure without request arguments before returning the generic code', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(generationIpcErrorCode('generation:commit-draft', new TypeError(`坏收据${'长'.repeat(400)}`))).toBe('GENERATION_REQUEST_FAILED')
+    expect(error).toHaveBeenCalledTimes(1)
+    const [label, detail] = error.mock.calls[0] as [string, { channel: string; name: string; message: string }]
+    expect(label).toBe('[generation] unmapped failure')
+    expect(detail).toMatchObject({ channel: 'generation:commit-draft', name: 'TypeError' })
+    expect(detail.message.length).toBeLessThanOrEqual(200)
+    expect(generationIpcErrorCode('generation:commit-draft', new Error('GENERATION_DRAFT_DEPENDENCY_STALE'))).toBe('GENERATION_DRAFT_DEPENDENCY_STALE')
+    expect(error).toHaveBeenCalledTimes(1)
+    generationIpcErrorCode('generation:commit-draft', new Error('第一行\n    at 第二行正文不该进日志'))
+    const { stack } = error.mock.calls[1][1] as { stack: string }
+    expect(stack).not.toContain('第二行正文')
+    expect(stack.split('\n').every(line => /^\s+at /u.test(line))).toBe(true)
+  })
   it('rejects missing, stale, foreign-root and forged handle authority before touching an owner', async () => {
     const fetch = stream()
     await expect(mocks.handlers.get('generation:begin')!({ sender }, request)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const invalid of [{ ...session, leaseId: 'forged' }, { ...session, projectPath: mocks.globalRoot }, { ...session, projectId: 'foreign' }]) {
-      await expect(mocks.handlers.get('generation:begin')!({ sender }, request, invalid)).rejects.toThrow('GENERATION_REQUEST_FAILED')
+      await expect(mocks.handlers.get('generation:begin')!({ sender }, request, invalid)).rejects.toThrow('GENERATION_PROJECT_SESSION_STALE')
     }
+    expect(warn).toHaveBeenCalledWith('[generation] stale project session rejected', { channel: 'generation:begin' })
     const run = await invoke('generation:begin', request)
     await expect(invoke('generation:read', { ...run.handle, rootActionId: 'foreign' })).rejects.toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
     expect(fetch).not.toHaveBeenCalled()

@@ -311,6 +311,8 @@ node scripts/redesign/drive.mjs --scenario blueprint-timing --shell stage --out 
 | `chapter-manual` | 添加我的意见后修稿，假模型收到的修稿请求里有这条意见 | 合并视图 | 是 | lane 4 |
 | `chapter-merge` | 修稿后合并视图第一处用修稿（多于一处时第二处手动编辑）；`after` 完成合并，正文里是选中的文字 | 逐段选择 | 是 | lane 5 |
 | `chapter-finalize` | 第 3 章从「更多」定稿，确认后正文只读，后处理「4 / 4 完成」（正文文件与三步后处理） | 定稿视图 | 是 | lane 6 |
+| `chapter-write-after-edited-chain` | 预置第 4 章 v2 以第 3 章候选稿为前驱，再改第 3 章正文；3、4 章逐章定稿后写第 5 章：假模型收到 1 次正文请求，正文保存，运行侧页没有原始 IPC 错误 | 第 5 章与运行侧页 | 是 | #438 |
+| `chapter-rereview-legacy` | 第 3 章（旧版本留下的 reviewed 稿）点「重新审稿」：假模型收到 1 次审稿请求，运行侧页没有原始 IPC 错误 | 第 3 章与运行侧页 | 是 | #411 |
 | `chapter-retry` | 角色状态更新失败后点「重试失败步骤」：之后假模型只收到角色状态请求，后处理回到 4 / 4 | 重试后的定稿视图 | 是 | lane 7 |
 | `chapter-retry-stream` | 角色状态请求两次断流（`fake.dropCharacterState(2)`）：自动后处理只请求一次，失败说明不含错误码；重开应用后点「重试失败步骤」恰好再请求一次，说明换成「没有返回完整结果」（中途截图 `chapter-retry-stream-failed`）；再点这一步的「重试」第三次请求成功，回到 3 / 3（重开后不列正文文件） | 重试成功后的定稿视图 | 是 | #420 |
 | `chapter-selection` | 选中一段：工具条四个纸墨按钮（润色、扩写、续写、改成对话）；润色预览后替换，再选一段润色后取消，原文不变 | 选区工具条 | 是 | lane 8 |
