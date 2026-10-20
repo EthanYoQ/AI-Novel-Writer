@@ -163,6 +163,13 @@ export function planningTitle(recovery: Pick<GenerationRecoveryContext, 'plotOut
   return t(`大纲恢复稿 · 第 ${chapters} 章`, `Outline recovery draft · ch. ${chapters}`)
 }
 
+/** 恢复稿编辑器顶部的待完成范围；只剩一章时与标题一样写「第 6 章」。 */
+export function planningRemainingText(range: { from: number; to: number }, targetUnits: number, unit: string, text: (zh: string, en: string) => string): string {
+  return range.from === range.to
+    ? text(`待完成第 ${range.from} 章，每章目标 ${targetUnits} ${unit}。`, `Chapter ${range.from} remains. Target ${targetUnits} ${unit} per chapter.`)
+    : text(`待完成第 ${range.from} 至 ${range.to} 章，每章目标 ${targetUnits} ${unit}。`, `Chapters ${range.from} to ${range.to} remain. Target ${targetUnits} ${unit} per chapter.`)
+}
+
 /** 升级前以现行规则判无效的大纲开跑、不能继续的大纲恢复稿：说明是重复章号、乱序还是章号与范围对不上；不是来源无效时为 null，由调用方用通用说明。 */
 export function outlineSourceInvalidNote(recovery: Pick<GenerationRecoveryContext, 'plotOutline' | 'plotOutlineRecovery'>, locale: Locale): string | null {
   const writeState = recovery.plotOutlineRecovery?.writeState

@@ -401,6 +401,8 @@ export const ARCH_SCENARIOS = {
     await content.getByText(/请从第 6 章重新生成情节大纲/).waitFor({ state: 'visible', timeout: 10_000 })
     const viewer = await content.innerText()
     assert.doesNotMatch(viewer, /已经生成完毕/, '恢复稿页不说这批已生成完毕')
+    assert.match(viewer, /待完成第 6 章，每章目标/, '恢复稿页顶部的待完成范围只剩一章时写「第 6 章」')
+    assert.doesNotMatch(viewer, /第 6 至 6 章/)
     return { card: cardText.replace(/\s+/g, ' ').slice(0, 200), viewer: viewer.replace(/\s+/g, ' ').slice(0, 300) }
   } },
 
