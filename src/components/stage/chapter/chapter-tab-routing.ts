@@ -67,27 +67,35 @@ async function showDraft(filePath: string, chapterNumber: number, session: Proje
     editor.setActiveTab(open.id)
     return
   }
-  const activeBefore = editor.activeTabId
+  // 作者从这里起有没有去过别处：切过标签（哪怕又切回原处，只比较前后两刻看不出来）或点了章、阶段、资料页（那边可能还在读，标签没变）。
   const epoch = chapterNavigationEpoch()
-  const draft = (await fetchChapterDrafts(chapterNumber, session)).find(candidate => candidate.filePath === filePath)
-  if (!draft) {
-    // 指向的稿已经删掉，标签也已关掉：说明一句，落到这一章现在的稿（没有稿就是待写页），而不是什么也不打开。
-    // 读稿期间换了作品就不再动；作者切了标签或点了别的章（哪怕那一章还在读），一直到真正打开前都不把他拉回这一章。
-    if (!sameProjectSessionContext(session, getActiveProjectSessionContext())) return
-    if (useStageStore.getState().chapterRequest?.filePath === filePath) useStageStore.setState({ chapterRequest: null })
-    const stayed = () => useEditorStore.getState().activeTabId === activeBefore
-    const opened = stayed() && chapterNavigationEpoch() === epoch && await openChapter(chapterNumber, stayed)
-    if (!sameProjectSessionContext(session, getActiveProjectSessionContext())) return
-    const text = useLocaleStore.getState().text
-    toast.warning(opened
-      ? text(`第 ${chapterNumber} 章这一稿已被删除，已打开这一章现在的内容。`, `That draft of chapter ${chapterNumber} was deleted. Opened the chapter's current content instead.`)
-      : text(`第 ${chapterNumber} 章这一稿已被删除。`, `That draft of chapter ${chapterNumber} was deleted.`))
-    return
+  let switched = false
+  const unsubscribe = useEditorStore.subscribe((state, previous) => {
+    if (state.activeTabId !== previous.activeTabId) switched = true
+  })
+  try {
+    const draft = (await fetchChapterDrafts(chapterNumber, session)).find(candidate => candidate.filePath === filePath)
+    if (!draft) {
+      // 指向的稿已经删掉，标签也已关掉：说明一句，落到这一章现在的稿（没有稿就是待写页），而不是什么也不打开。
+      // 读稿期间换了作品就不再动；作者去过别处，一直到真正打开前都不把他拉回这一章。
+      if (!sameProjectSessionContext(session, getActiveProjectSessionContext())) return
+      if (useStageStore.getState().chapterRequest?.filePath === filePath) useStageStore.setState({ chapterRequest: null })
+      const stayed = () => !switched
+      const opened = stayed() && chapterNavigationEpoch() === epoch && await openChapter(chapterNumber, stayed)
+      if (!sameProjectSessionContext(session, getActiveProjectSessionContext())) return
+      const text = useLocaleStore.getState().text
+      toast.warning(opened
+        ? text(`第 ${chapterNumber} 章这一稿已被删除，已打开这一章现在的内容。`, `That draft of chapter ${chapterNumber} was deleted. Opened the chapter's current content instead.`)
+        : text(`第 ${chapterNumber} 章这一稿已被删除。`, `That draft of chapter ${chapterNumber} was deleted.`))
+      return
+    }
+    const plan = useEditorStore.getState().tabs.find(tab => tab.id === chapterPlanTabId(chapterNumber, session.projectPath))
+    const opener = () => openDraftInChapterView(draft, draft.chapterTitle ?? '', session)
+    if (plan) await swapChapterTab(plan.id, opener)
+    else await opener()
+  } finally {
+    unsubscribe()
   }
-  const plan = useEditorStore.getState().tabs.find(tab => tab.id === chapterPlanTabId(chapterNumber, session.projectPath))
-  const opener = () => openDraftInChapterView(draft, draft.chapterTitle ?? '', session)
-  if (plan) await swapChapterTab(plan.id, opener)
-  else await opener()
 }
 
 /**
