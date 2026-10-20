@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { restoreNativeWithIndependentFallback } from './release-native-restore.mjs'
+import { WINDOWS_PROCESS_TARGET_NAMES } from './product-identity.mjs'
 
 export const releasePreMonitorSteps = [
   'test',
@@ -635,9 +636,7 @@ async function main() {
           'pnpm',
           'electron',
           'electron-builder',
-          'AI小说作家.exe',
-          'AI小说作家',
-          'ai-novel-writer',
+          ...WINDOWS_PROCESS_TARGET_NAMES,
       ])
       await waitForMonitorState(['monitoring'], 10_000, step)
       await releaseArmedNodeProcess(step, launch)

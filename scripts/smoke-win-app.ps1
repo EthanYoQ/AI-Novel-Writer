@@ -936,6 +936,34 @@ function Get-AiNovelInstalledVersion {
   return [pscustomobject]@{ productVersion = $productVersion; packageVersion = $packageVersion }
 }
 
+# 安装包产品名（exe 与卸载程序的文件名）。1.3.0 之后由 AI小说作家 改为书童（ADR-0022）：
+# 本次构建用第一个，升级测试里的旧版本用第二个。名单与 scripts/product-identity.mjs 一致。
+function Get-AiNovelProductNames {
+  return @('书童', 'AI小说作家')
+}
+
+function Get-AiNovelProductExecutableNames {
+  return @(Get-AiNovelProductNames | ForEach-Object { "$_.exe" })
+}
+
+function Get-AiNovelProductUninstallerNames {
+  return @(Get-AiNovelProductNames | ForEach-Object { "Uninstall $_.exe" })
+}
+
+# 安装目录或解包目录里实际存在的 exe：新名优先；都不存在时返回新名路径，由调用方报缺失。
+function Resolve-AiNovelProductExecutable {
+  param([Parameter(Mandatory = $true)][string]$Directory)
+
+  $names = @(Get-AiNovelProductExecutableNames)
+  foreach ($name in $names) {
+    $candidate = Join-Path $Directory $name
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+      return $candidate
+    }
+  }
+  return (Join-Path $Directory $names[0])
+}
+
 if ($LoadProbeLibrary) {
   return
 }
@@ -943,7 +971,7 @@ if ($LoadProbeLibrary) {
 if ([string]::IsNullOrWhiteSpace($ExePath)) {
   $root = Split-Path -Parent $PSScriptRoot
   $packageJson = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
-  $ExePath = Join-Path $root ("release\{0}\win-unpacked\AI小说作家.exe" -f [string]$packageJson.version)
+  $ExePath = Join-Path $root ("release\{0}\win-unpacked\{1}" -f [string]$packageJson.version, (Get-AiNovelProductExecutableNames)[0])
 }
 
 $resolvedExe = (Resolve-Path -LiteralPath $ExePath).Path
@@ -1046,9 +1074,9 @@ $appProcessStartTimeTicks = @{}
 $targetNames = @(
   [System.IO.Path]::GetFileName($resolvedExe),
   [System.IO.Path]::GetFileNameWithoutExtension($resolvedExe),
-  'AI小说作家.exe',
-  'AI小说作家',
   'ai-novel-writer'
+  Get-AiNovelProductExecutableNames
+  Get-AiNovelProductNames
   $RelatedTargetNames
 )
 $baselineWindowIdentities = $WindowBaselineIdentities

@@ -171,7 +171,8 @@ if [[ -z "$app" ]]; then
   echo 'Mounted DMG does not contain an application bundle.' >&2
   exit 1
 fi
-executable="$app/Contents/MacOS/AI小说作家"
+# 可执行文件与 .app 同名（产品名，1.3.0 之后由 AI小说作家 改为书童，ADR-0022）。
+executable="$app/Contents/MacOS/$(basename "$app" .app)"
 if [[ ! -x "$executable" ]]; then
   echo "Missing executable in mounted application: $executable" >&2
   exit 1
@@ -443,7 +444,7 @@ const a11OfflineImport = Object.fromEntries([['v1.0.0', a11V100File], ['v1.1.0',
     throw new Error(`Mounted app A11 ${version} qualification or official source binding is incomplete`)
   }
   if (provenance?.dmgSha256 !== sha256(dmg)
-    || provenance.executableSha256 !== sha256(path.join(app, 'Contents', 'MacOS', 'AI小说作家'))
+    || provenance.executableSha256 !== sha256(path.join(app, 'Contents', 'MacOS', path.basename(app, '.app')))
     || provenance.asarSha256 !== sha256(path.join(app, 'Contents', 'Resources', 'app.asar'))
     || provenance.driverSha256 !== sha256(driver) || provenance.sourceManifestSha256 !== sha256(sourceManifest)
     || provenance.appPathSha256 !== hashText(fs.realpathSync(app))

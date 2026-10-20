@@ -12,7 +12,8 @@
     "node_modules/@lancedb/lancedb-win32-*/**/*",
     "node_modules/@lancedb/lancedb-win32-x64-msvc/**/*"
   ],
-  "productName": "AI小说作家",
+  // exe、.app、卸载程序与任务管理器里显示的名字。安装目录、注册表键、设置目录与更新缓存都不随它变（ADR-0022）。
+  "productName": "书童",
   "directories": {
     "output": "release/${version}"
   },
@@ -64,10 +65,9 @@
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
-    // 只换快捷方式与「应用和功能」里显示的名字。productName 决定 exe 名、安装目录和 userData 目录，不能动；
-    // 升级不会多出一份快捷方式（按 app-builder-lib 26.15.3 的 NSIS 模板核实）：手动运行新安装包时先跑旧版卸载程序，
-    // 它删掉自己建的快捷方式（名字取注册表 ShortcutName，旧版没写就是 productName），新安装包再按新名字建；
-    // 自动更新保留快捷方式时，按同一个旧名字把它改名。「应用和功能」的条目按 appId 定位，只改显示名。
+    // 快捷方式与「应用和功能」里显示中英双名（按 app-builder-lib 26.15.3 的 NSIS 模板核实，见 ADR-0022）。
+    // 从 AI小说作家.exe 升级时新 exe 尚不存在，不走保留快捷方式的改名分支：旧卸载程序按注册表里的旧 ShortcutName
+    // 删掉旧快捷方式，新安装程序再按新名字建，不会多出一份。「应用和功能」的条目按 appId 定位，只改显示名。
     "shortcutName": "书童 Pagekin",
     "uninstallDisplayName": "书童 Pagekin ${version}",
     "deleteAppDataOnUninstall": false

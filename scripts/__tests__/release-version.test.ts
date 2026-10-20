@@ -126,6 +126,7 @@ describe('release metadata', () => {
   it('lets the Windows smoke command discover the current release executable', () => {
     const smokeScript = readFileSync('scripts/smoke-win-app.ps1', 'utf8')
     expect(smokeScript).toContain('package.json')
-    expect(smokeScript).toContain('AI小说作家.exe')
+    // 默认 exe 名取自共享名单的第一个；名单与 productName 一致由 product-identity.test.ts 保证。
+    expect(smokeScript).toContain('win-unpacked\\{1}" -f [string]$packageJson.version, (Get-AiNovelProductExecutableNames)[0]')
   })
 })
