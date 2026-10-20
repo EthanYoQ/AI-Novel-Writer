@@ -78,3 +78,15 @@ it('does not blame a book switch when the request carried no session at all', ()
   expect(zh).not.toContain('已切换')
   expect(en).not.toMatch(/switched/iu)
 })
+
+// 审计点名的四个码与已登记的 GENERATION_SOURCE_CHANGED 走同一条转发路径、同一种作者情境（生成途中依据变了）。
+it.each([
+  'GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT',
+  'GENERATION_ASSET_CHANGED_DURING_SNAPSHOT',
+  'GENERATION_REVIEW_CONTEXT_CHANGED',
+  'GENERATION_AUTHOR_DRAFT_CHANGED',
+])('explains %s as a mid-run source change', code => {
+  const wrapped = `Error invoking remote method 'generation:begin': Error: ${code}`
+  expect(knownAppErrorMessage('zh-CN', wrapped)).toBe(knownAppErrorMessage('zh-CN', 'GENERATION_SOURCE_CHANGED'))
+  expect(knownAppErrorMessage('en-US', wrapped)).toBe(knownAppErrorMessage('en-US', 'GENERATION_SOURCE_CHANGED'))
+})

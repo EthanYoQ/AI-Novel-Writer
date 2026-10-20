@@ -21,6 +21,19 @@ export const enUS = {
   'error.generationFinalizedSourceNotCurrent': 'A finalized earlier chapter this request relied on was replaced, so the result was not saved. Start writing this chapter again.',
   'error.generationDraftIncomplete': 'The model output did not finish or fell short of the target length, so the prose was not saved. Try again.',
   'error.sourceDraftChanged': 'The source draft changed while AI was working on it, so the result was not saved. Reopen the current draft and try again.',
+  'error.generationSavedWithNewerAuthorDraft': 'The generated result was saved, but you edited the settings while it ran. Those edits are kept as an unsaved draft. Review them, then save.',
+  'error.generationPlotOutlineAuthorSaved': 'You saved this plot outline by hand, so the earlier generation cannot continue it. Generate a new outline if you need one.',
+  'error.generationCancelled': 'Generation was cancelled.',
+  'error.generationProviderFailed': 'The model service did not return a complete result. Check your network and model settings, then try again.',
+  'error.generationStorageFailed': 'The generated text could not be written to local storage. Check free disk space and write access to the book folder, then try again.',
+  'error.generationModelMissing': 'The model for this generation could not be found. Select or add a model in Settings, then try again.',
+  'error.generationStopped': 'This generation was stopped, paused, or used up its allowance, so it cannot send more requests to the model. Generate again if you need to.',
+  'error.generationBusy': 'Another generation is still running. Wait for it to finish, then try again.',
+  'error.generationKnowledgeBusy': 'The knowledge base is updating. Wait a moment, then generate again.',
+  'error.generationInputTooLarge': 'The settings, earlier text, or prose for this request are too large to give to the model, so nothing was generated. Shorten them, then try again.',
+  'error.generationNoProgress': 'The model continuation did not add enough new text, so it was not added to the result. Try again.',
+  'error.generationRevisionUnchanged': 'The revision came back empty or identical to the original, so it was not saved. Adjust the review notes, then try again.',
+  'error.generationSkillUnavailable': 'A selected writing Skill was removed or is not compatible with this book (for example, it is in another language). Choose the Skills again in Settings, then generate.',
 } as const
 
 export type MessageKey = keyof typeof enUS
