@@ -74,24 +74,29 @@ const isEditable = (target: EventTarget | null) => target instanceof HTMLElement
 const floatingSheet = (slot: HTMLElement | null) => slot && getComputedStyle(slot).position === 'absolute' ? slot : null
 
 /**
- * 浮起时焦点不停在被侧页整个盖住的控件上（内容区与设置页都算；Tab、方向键、程序化 focus 都算）：
+ * 浮起时焦点不停在被侧页整个盖住的控件上（内容区与设置页都算；Tab、方向键、程序化 focus、窗口变窄都算）：
  * 顺着焦点移动的方向跳到下一个看得见的，后面没有了就进侧页，前面没有了就停在所在区域本身（可聚焦时）或进侧页。
  */
-function skipCoveredFocus(event: FocusEvent<HTMLElement>, slot: HTMLElement | null) {
-  const sheetSlot = floatingSheet(slot)
-  const target = event.target
-  if (!sheetSlot || sheetSlot.contains(target)) return
+function moveFocusOffSheet(body: Element, target: Element, sheetSlot: HTMLElement, backward: boolean) {
+  if (sheetSlot.contains(target)) return
   const sheet = sheetSlot.getBoundingClientRect()
   const covered = (element: Element) => element.getBoundingClientRect().left >= sheet.left
   if (!covered(target)) return
-  const region = [...event.currentTarget.children].find(child => child.contains(target)) as HTMLElement | undefined
+  const region = [...body.children].find(child => child.contains(target)) as HTMLElement | undefined
   if (!region) return
-  const backward = event.relatedTarget instanceof Node && (target.compareDocumentPosition(event.relatedTarget) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
   // 方向键换选的分段按钮在换选前还是 tabIndex -1，不在 Tab 序列里，所以按文档位置而不是序列下标找下一个
   const follows = (element: Element) => (target.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
   const order = tabbables(region).filter(element => element !== target && follows(element) !== backward)
   const next = (backward ? order.reverse() : order).find(element => !covered(element))
   ;(next ?? (backward && region.hasAttribute('tabindex') ? region : tabbables(sheetSlot)[0]))?.focus()
+}
+
+function skipCoveredFocus(event: FocusEvent<HTMLElement>, slot: HTMLElement | null) {
+  const sheetSlot = floatingSheet(slot)
+  if (!sheetSlot) return
+  const target = event.target
+  const backward = event.relatedTarget instanceof Node && (target.compareDocumentPosition(event.relatedTarget) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  moveFocusOffSheet(event.currentTarget, target, sheetSlot, backward)
 }
 
 export default function StageWorkspace({ library, focus }: { library: boolean; focus: boolean }) {
@@ -121,6 +126,20 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
 
   const activeTab = tabs.find(tab => tab.id === activeTabId)
   useEffect(() => installChapterTabRouting(), [])
+  // 窗口变窄让侧页浮起时没有焦点事件，焦点可能还停在刚被盖住的控件上：主区域尺寸变化时查一次。
+  const sheetMounted = sheet?.kind === 'run' && !focus && !library && project !== null
+  useEffect(() => {
+    const slot = sheetSlotRef.current
+    const body = slot?.parentElement
+    if (!sheetMounted || !slot || !body) return
+    const observer = new ResizeObserver(() => {
+      const sheetSlot = floatingSheet(slot)
+      const active = document.activeElement
+      if (sheetSlot && active && body.contains(active)) moveFocusOffSheet(body, active, sheetSlot, false)
+    })
+    observer.observe(body)
+    return () => observer.disconnect()
+  }, [sheetMounted])
   useEffect(() => {
     if (tabs.length > 0 && !activeTab) useEditorStore.getState().setActiveTab(tabs[0].id)
   }, [tabs, activeTab])

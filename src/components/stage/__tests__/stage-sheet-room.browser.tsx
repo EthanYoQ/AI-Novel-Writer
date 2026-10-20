@@ -224,6 +224,23 @@ describe('运行侧页浮起时盖在内容区上面，被它盖住的东西点�
     expect(host!.querySelector('.stage-content')!.contains(landed) && coveredBy(sheet)(landed), landed.textContent ?? '').toBe(false)
   })
 
+  it('焦点停在内容区右侧时窗口变窄、侧页浮起盖住它，焦点移开', async () => {
+    await renderAt(1400)
+    const content = host!.querySelector<HTMLElement>('.stage-content')!
+    const rightmost = tabbable(content).filter(element => element.getBoundingClientRect().width > 0)
+      .reduce((best, element) => element.getBoundingClientRect().right > best.getBoundingClientRect().right ? element : best)
+    rightmost.focus()
+    expect(document.activeElement).toBe(rightmost)
+    host!.style.width = '790px'
+    const slot = host!.querySelector<HTMLElement>('.stage-sheet-slot')!
+    await vi.waitFor(() => expect(getComputedStyle(slot).position).toBe('absolute'))
+    const sheet = slot.getBoundingClientRect()
+    expect(coveredBy(sheet)(rightmost), '变窄后原来的焦点控件被侧页盖住').toBe(true)
+    await vi.waitFor(() => expect(document.activeElement).not.toBe(rightmost))
+    const landed = document.activeElement!
+    expect(content.contains(landed) && coveredBy(sheet)(landed), landed.textContent ?? '').toBe(false)
+  })
+
   it('Shift+Tab 从侧页回到内容区时落在看得见的控件上', async () => {
     const { sheet } = await renderAt(790)
     const slot = host!.querySelector('.stage-sheet-slot')!
