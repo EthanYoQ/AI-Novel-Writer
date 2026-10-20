@@ -249,22 +249,22 @@
   display: flex;
   flex-direction: column;
   overflow: auto;
-  container-type: inline-size;
 }
 
+/*
+ * 按内容换行（同设置页标题，#440）：标题的弹性基准是名字那一行的完整宽度，一行放得下头像、名字与操作区就一行；
+ * 放不下（名字会被截断）时操作区换到下一行靠右，名字那一行再放不下才省略。
+ */
 .cast-profile-head {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: var(--s-5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--s-3) var(--s-5);
   padding: 28px 40px 16px;
 }
 
-.cast-profile-head-empty {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
 .cast-profile-avatar {
+  flex: none;
   width: 72px;
   height: 72px;
   display: inline-flex;
@@ -279,7 +279,10 @@
 }
 
 .cast-profile-heading {
+  flex: 1 1 auto;
   min-width: 0;
+  /* 名字再长也和头像留在第一行：换行判断按的宽度不超过头像旁边的余量，超出的部分在这一行里省略。 */
+  max-width: calc(100% - 72px - var(--s-5));
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -310,6 +313,11 @@
   font: 500 var(--fs-11)/1.5 var(--font-ui);
 }
 
+/* 名字下面的说明、头像操作与报错不撑宽标题：它们的固有宽度记为 0，换行判断只看名字那一行。 */
+.cast-profile-heading > :not(.cast-profile-titleline) {
+  contain: inline-size;
+}
+
 .cast-profile-sub,
 .cast-profile-note {
   margin: 0;
@@ -325,32 +333,27 @@
 
 .cast-avatar-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--s-1);
   margin-left: calc(-1 * var(--s-2));
 }
 
 .cast-profile-actions {
+  flex: none;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: var(--s-2);
 }
 
-/* 档案窄（1024 宽窗口约 470px）时保存按钮一行放不下标题，换到标题下面一行，靠右。 */
-@container (max-width: 720px) {
-  .cast-profile-head:not(.cast-profile-head-empty) {
-    grid-template-columns: auto minmax(0, 1fr);
-    row-gap: var(--s-3);
-  }
-
-  .cast-profile-head:not(.cast-profile-head-empty) .cast-profile-actions {
-    grid-column: 1 / -1;
-    justify-self: end;
-  }
-}
-
 .cast-save-state {
   color: var(--ink-3);
   font-size: var(--fs-12);
+}
+
+/* 没有保存状态时不占位，连同它后面的间距一起收掉；留在无障碍树里，状态出现时照常播报。 */
+.cast-save-state:empty {
+  margin-right: calc(-1 * var(--s-2));
 }
 
 .cast-view-switch {
@@ -519,14 +522,5 @@
   .cast-roster {
     border-right: 0;
     border-bottom: 1px solid var(--rule);
-  }
-
-  /* 档案头的保存与更多操作换到名字下面，名字不被挤掉 */
-  .cast-profile-head:not(.cast-profile-head-empty) {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .cast-profile-head:not(.cast-profile-head-empty) .cast-profile-actions {
-    grid-column: 2;
   }
 }

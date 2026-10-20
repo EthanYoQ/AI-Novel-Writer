@@ -372,10 +372,13 @@ describe('角色名单', () => {
     const title = host!.querySelector<HTMLElement>('.cast-profile-name')!
     const save = button(locale === 'en-US' ? 'Save character' : '保存角色')!
     const [titleBox, saveBox] = [title.getBoundingClientRect(), save.getBoundingClientRect()]
+    const avatarBox = host!.querySelector<HTMLElement>('.cast-profile-avatar')!.getBoundingClientRect()
     const overlap = titleBox.left < saveBox.right && saveBox.left < titleBox.right && titleBox.top < saveBox.bottom && saveBox.top < titleBox.bottom
     const observed = { clipped: title.scrollWidth > title.clientWidth + 1, wrapped: saveBox.top >= titleBox.bottom }
-    expect({ text: title.textContent, overlap, ...('clipped' in expected ? observed : { wrapped: observed.wrapped }) })
-      .toEqual({ text: name, overlap: false, ...expected })
+    // 名字总和头像在同一行，不会自己掉到头像下面。
+    const besideAvatar = titleBox.top < avatarBox.bottom && titleBox.left >= avatarBox.right
+    expect({ text: title.textContent, overlap, besideAvatar, ...('clipped' in expected ? observed : { wrapped: observed.wrapped }) })
+      .toEqual({ text: name, overlap: false, besideAvatar: true, ...expected })
   })
 
   it('1024 宽窗口里的关系图谱：工具条与人物侧栏的控件都在图谱框里、点得到；宽时显示中心人物', async () => {
