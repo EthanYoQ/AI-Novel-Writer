@@ -423,7 +423,7 @@ export const CHAPTER_SCENARIOS = {
     const after = {
       reviewRequests: fake.chats.filter(chat => chat.kind === 'review').length - reviewsBefore,
       reportShown,
-      rawIpcError: await runSheet.sheet(page).getByText(/Error invoking remote method/).count(),
+      rawIpcError: await runSheet.sheet(page).getByText(/Error invoking remote method|GENERATION_/).count(),
     }
     assert.deepEqual(after, { reviewRequests: 1, reportShown: true, rawIpcError: 0 }, '重新审稿请求了模型并写回审稿报告，运行侧页没有原始 IPC 错误')
     return after
