@@ -188,6 +188,11 @@
   color: var(--ink);
 }
 
+/* 选中行的黛蓝薄底比面板深，--ink-3 在上面不到 4.5:1，身份换成 --ink-2（与版本历史选中项的说明一致） */
+.cast-row[aria-pressed='true'] .cast-row-role {
+  color: var(--ink-2);
+}
+
 .cast-avatar {
   width: 30px;
   height: 30px;
