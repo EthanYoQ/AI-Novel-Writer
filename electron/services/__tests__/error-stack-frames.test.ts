@@ -29,4 +29,10 @@ describe('errorStackFrames', () => {
     bare.stack = undefined
     expect(errorStackFrames(bare, 7)).toBeUndefined()
   })
+
+  it('读 stack 抛错时不记栈，也不让诊断本身变成失败', () => {
+    const error = new Error('x')
+    Object.defineProperty(error, 'stack', { get() { throw new Error('stack getter') } })
+    expect(errorStackFrames(error, 7)).toBeUndefined()
+  })
 })
