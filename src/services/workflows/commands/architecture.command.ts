@@ -2212,8 +2212,18 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(session, context)
     const synopsis = renderPlotOutlineRange(outline.composition?.text ?? '', outline.range, sourceExpected)
-    const committed = await ipc.invokeWithProjectSession(session, 'db:project-core-synopsis-commit', { synopsis, expected: sourceExpected, generationRunHandle: handle }, expectedProjectPath)
-    requireIpcSuccess(committed, text('保存完整情节大纲', 'Save the complete plot outline'))
+    try {
+      const committed = await ipc.invokeWithProjectSession(session, 'db:project-core-synopsis-commit', { synopsis, expected: sourceExpected, generationRunHandle: handle }, expectedProjectPath)
+      requireIpcSuccess(committed, text('保存完整情节大纲', 'Save the complete plot outline'))
+    } catch (error) {
+      // 最后一章生成完、正式保存前来源变了：主进程在保存这一步只报通用码，不分模型还是其他来源。
+      if (!(error instanceof Error && PLOT_OUTLINE_SOURCE_CHANGED_PATTERN.test(error.message))) throw error
+      const { from, to } = outline.range
+      const chapters = from === to ? text(`第 ${from} 章`, `chapter ${from}`) : text(`第 ${from}–${to} 章`, `chapters ${from}–${to}`)
+      throw new PlotOutlineSourceChangedError(text(
+        `本批${chapters}大纲已生成完，但保存前模型设置、作品设定、提示词模板或写作 Skill 被修改，正式保存被拒绝。这批大纲保留在「大纲恢复稿」中，可查看和复制。正式大纲未被改动。请到「架构」页重新生成情节大纲，从第 ${from} 章开始。`,
+        `The outline for ${chapters} finished, but the model settings, book settings, a prompt template or a writing skill changed before it was saved, so saving was refused. The batch is kept in the outline recovery draft to view and copy. The saved outline was not changed. Open Architecture and generate the plot outline again from chapter ${from}.`))
+    }
     await saveNavigation(outline, true)
     const { globalEventBus } = await import('../../../shared/event-bus')
     globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: 'synopsis.md', projectPath: expectedProjectPath, projectSession: session, runId: context.runId })
