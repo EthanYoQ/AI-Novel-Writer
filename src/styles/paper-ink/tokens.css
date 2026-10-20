@@ -60,13 +60,15 @@
   --radius-sm: 4px; --radius: 6px; --radius-control: 9px; --radius-lg: 10px; --radius-panel: 14px; --radius-pill: 999px;
 
   --sheet-w: 380px; --sheet-w-wide: 620px;
+  /* 侧页与内容区并排时内容区至少留这么宽；放不下普通侧页时侧页改为浮在内容区上（stage-panel.css 的容器查询写着同一个和：600 + 380） */
+  --content-min-w: 600px;
 
   --ease: cubic-bezier(.2, .8, .2, 1);
   --dur-fast: 140ms; --dur: 220ms;
 
   /* 层级刻度。模态的遮罩与对话框远高于外壳内容：沿用的旧对话框开着时关窗，退出确认必须看得见、点得到。
      弹层与菜单只需在外壳内容之上。 */
-  --z-popover: 15; --z-scrim: 10010; --z-dialog: 10011;
+  --z-sheet: 5; --z-popover: 15; --z-scrim: 10010; --z-dialog: 10011;
   /* 退出确认与命令式弹窗（alertError、confirm）高一级，迁移后的旧对话框盖不住它们。每一层的遮罩与对话框包在一个
      .pi-prompt-layer 层叠上下文里、同在纸墨宿主下：谁后弹出谁在上，上层遮罩整个压住下层，和 Radix 把焦点交给最新一层一致 */
   --z-prompt: 10012;
