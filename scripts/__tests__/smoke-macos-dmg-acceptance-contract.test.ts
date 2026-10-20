@@ -21,6 +21,8 @@ const smokeScriptPath = path.join(repositoryRoot, 'scripts', 'smoke-macos-dmg.sh
 const evidenceScript = path.join(repositoryRoot, 'scripts', 'release-evidence-v2.mjs')
 const fixtures: string[] = []
 const RECEIPT_FINALIZE_TIMEOUT_MS = 15_000
+// 旧版作者源复制只等一个子进程：f05 旅程脚本加载 playwright 与 LanceDB 后复制夹具，空闲时约 0.8 s，构建机负载下实测到过 7.2 s（#428）。
+const OLD_SOURCE_COPY_CHILD_DEADLINE_MS = 30_000
 
 function readRequired(file: string) {
   expect(existsSync(file), `Missing macOS DMG smoke contract: ${file}`).toBe(true)
@@ -256,7 +258,8 @@ describe('macOS DMG acceptance receipt contract', () => {
     const result = spawnSync(process.execPath, [
       path.join(repositoryRoot, 'scripts', 'f05-a11-offline-import-journey.mjs'),
       '--mac-fixture-only=1', `--mac-version=${version}`, `--scratch-root=${scratch}`,
-    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    ], { cwd: repositoryRoot, encoding: 'utf8', timeout: OLD_SOURCE_COPY_CHILD_DEADLINE_MS })
+    expect(result.signal, `旧版作者源复制子进程在 ${OLD_SOURCE_COPY_CHILD_DEADLINE_MS} ms 内没有退出`).toBeNull()
     expect(result.status, result.stderr).toBe(0)
     const fact = JSON.parse(result.stdout.trim())
     expect(fact).toMatchObject({ kind: 'official-old-app-mac-fixture', sourceVersion: version, llmCalls: 0,
@@ -282,7 +285,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const manifest = JSON.parse(readFileSync(path.join(repositoryRoot, 'scripts/fixtures/s14c-official-old-sources/manifest.json'), 'utf8'))
     expect(files).toEqual(manifest.cases.find((entry: { version: string }) => `v${entry.version}` === version).files)
     expect(fact.sourceInventorySha256).toBe(createHash('sha256').update(JSON.stringify(files)).digest('hex'))
-  })
+  }, OLD_SOURCE_COPY_CHILD_DEADLINE_MS + 5_000)
 
   it('classifies an exit-zero ad-hoc signature as lacking a Developer ID distribution identity', () => {
     const observation = classifyMacosCodeSigning({

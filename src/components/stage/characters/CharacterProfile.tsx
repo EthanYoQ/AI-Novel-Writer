@@ -120,7 +120,7 @@ export default function CharacterProfile({ projectKey }: { projectKey: string })
           </div>
         </header>
       ) : (
-        <header className="cast-profile-head cast-profile-head-empty">
+        <header className="cast-profile-head">
           <div className="cast-profile-heading"><h1 className="cast-profile-name">{text('角色档案', 'Character profile')}</h1></div>
           <div className="cast-profile-actions">{menu}</div>
         </header>

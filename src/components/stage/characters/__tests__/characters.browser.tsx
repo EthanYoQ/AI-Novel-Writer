@@ -358,15 +358,37 @@ describe('角色名单', () => {
     expect(button('选择头像')).toBeTruthy()
   })
 
-  it.each(['zh-CN', 'en-US'] as const)('1024 宽窗口里档案标题不被保存按钮挤掉，名字完整显示（%s）', async locale => {
+  // 角色名单页宽：1024 宽窗口约 738px，1280 宽约 994px（窗口宽减去流程脊与边距）。
+  const profileHeadCases = (['zh-CN', 'en-US'] as const).flatMap(locale => ([[1024, 738], [1280, 994]] as const)
+    .flatMap(([windowWidth, pageWidth]) => [
+      { locale, windowWidth, pageWidth, name: '林舟', expected: { clipped: false, wrapped: false } },
+      { locale, windowWidth, pageWidth, name: '林舟远赴北境寻找失踪灯塔的守灯人', expected: { wrapped: true } },
+    ]))
+  it.each(profileHeadCases)('档案头按内容换行：$windowWidth 宽、$locale、名字「$name」', async ({ locale, pageWidth, name, expected }) => {
     useLocaleStore.setState({ locale })
-    host!.style.width = '738px'
+    useCharacterStore.setState({ characters: [{ ...linzhou, name }, shenyan] } as never)
+    host!.style.width = `${pageWidth}px`
     await render()
-    const name = host!.querySelector<HTMLElement>('.cast-profile-name')!
+    const title = host!.querySelector<HTMLElement>('.cast-profile-name')!
     const save = button(locale === 'en-US' ? 'Save character' : '保存角色')!
-    const [nameBox, saveBox] = [name.getBoundingClientRect(), save.getBoundingClientRect()]
-    const overlap = nameBox.left < saveBox.right && saveBox.left < nameBox.right && nameBox.top < saveBox.bottom && saveBox.top < nameBox.bottom
-    expect({ text: name.textContent, clipped: name.scrollWidth > name.clientWidth + 1, overlap }).toEqual({ text: '林舟', clipped: false, overlap: false })
+    const [titleBox, saveBox] = [title.getBoundingClientRect(), save.getBoundingClientRect()]
+    const avatarBox = host!.querySelector<HTMLElement>('.cast-profile-avatar')!.getBoundingClientRect()
+    const overlap = titleBox.left < saveBox.right && saveBox.left < titleBox.right && titleBox.top < saveBox.bottom && saveBox.top < titleBox.bottom
+    const observed = { clipped: title.scrollWidth > title.clientWidth + 1, wrapped: saveBox.top >= titleBox.bottom }
+    // 名字总和头像在同一行，不会自己掉到头像下面。
+    const besideAvatar = titleBox.top < avatarBox.bottom && titleBox.left >= avatarBox.right
+    expect({ text: title.textContent, overlap, besideAvatar, ...('clipped' in expected ? observed : { wrapped: observed.wrapped }) })
+      .toEqual({ text: name, overlap: false, besideAvatar: true, ...expected })
+  })
+
+  it.each(['zh-CN', 'en-US'] as const)('没有选中角色时的档案头没有头像，标题不按头像扣宽度（%s）', async locale => {
+    useLocaleStore.setState({ locale })
+    useCharacterStore.setState({ characters: [], selectedId: null } as never)
+    host!.style.width = '600px'
+    await render()
+    const title = host!.querySelector<HTMLElement>('.cast-profile-name')!
+    expect({ avatar: host!.querySelector('.cast-profile-avatar'), text: title.textContent, clipped: title.scrollWidth > title.clientWidth + 1 })
+      .toEqual({ avatar: null, text: locale === 'en-US' ? 'Character profile' : '角色档案', clipped: false })
   })
 
   it('1024 宽窗口里的关系图谱：工具条与人物侧栏的控件都在图谱框里、点得到；宽时显示中心人物', async () => {

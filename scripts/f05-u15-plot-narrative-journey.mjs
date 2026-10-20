@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import * as refs from './redesign/pages/refs.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const driverPath = fileURLToPath(import.meta.url)
@@ -33,7 +34,7 @@ const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'publ
   'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5')
   .split('\n').filter(Boolean)
 assert.deepEqual(dirtyProduct, [], 'Dirty product inputs since packaged build')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 assert.equal(sha256(executablePath), expectedExe)
 assert.equal(sha256(asarPath), expectedAsar)

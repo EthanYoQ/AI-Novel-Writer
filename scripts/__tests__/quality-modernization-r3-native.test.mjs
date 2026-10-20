@@ -14,6 +14,7 @@ import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificat
 import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasoningFor,
   forwardQualificationWindowFor, hash, updateLedger } from '../quality-modernization-run.mjs'
 import { resolveOpenAIChatCompletionsUrl } from '../../electron/llm/openai-compatible-endpoint.ts'
+import { removeTemporaryTree } from '../../test/helpers/remove-temporary-tree.mjs'
 
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
@@ -867,7 +868,7 @@ test('saved first-review continuation preserves old files, counts the exact hist
     }
     assert.throws(() => runner.updateLedger(ledgerPath, { type: 'reserve', attemptId: 'candidate:fifth', binding: controlBinding }, controlLedgerOptions), /SAVED_NATIVE_ATTEMPT_UNAVAILABLE/)
     assert.equal(fs.readFileSync(ledgerPath, 'utf8').slice(0, closedRaw.length), closedRaw)
-  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+  } finally { removeTemporaryTree(directory, path.join(ROOT, '.runtime/.cache')) }
 })
 
 afterEach(() => {

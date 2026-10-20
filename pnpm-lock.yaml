@@ -148,9 +148,6 @@ importers:
       '@storybook/react-vite':
         specifier: ^10.5.10
         version: 10.6.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(storybook@10.6.0(@types/react@19.2.14)(react@19.2.5))(typescript@6.0.2)(vite@8.2.2(@types/node@25.6.0)(esbuild@0.28.2)(jiti@2.7.0))
-      '@tailwindcss/typography':
-        specifier: ^0.5.19
-        version: 0.5.20(tailwindcss@4.2.2)
       '@tailwindcss/vite':
         specifier: ^4.2.2
         version: 4.2.2(vite@8.2.2(@types/node@25.6.0)(esbuild@0.28.2)(jiti@2.7.0))
@@ -1817,11 +1814,6 @@ packages:
     resolution: {integrity: sha512-qEUA07+E5kehxYp9BVMpq9E8vnJuBHfJEC0vPC5e7iL/hw7HR61aDKoVoKzrG+QKp56vhNZe4qwkRmMC0zDLvg==}
     engines: {node: '>= 20'}
 
-  '@tailwindcss/typography@0.5.20':
-    resolution: {integrity: sha512-hwbzQuNUfcPvbegQFatVPl/MY/tcM9KLl963hQ5laJKPh81TEZ1+dNG9PirGvcaDBkp+BCshExAyKVPW91dozw==}
-    peerDependencies:
-      tailwindcss: '>=3.0.0 || >=4.0.0 || insiders'
-
   '@tailwindcss/vite@4.2.2':
     resolution: {integrity: sha512-mEiF5HO1QqCLXoNEfXVA1Tzo+cYsrqV7w9Juj2wdUFyW07JRenqMG225MvPwr3ZD9N1bFQj46X7r33iHxLUW0w==}
     peerDependencies:
@@ -2495,11 +2487,6 @@ packages:
 
   css.escape@1.5.1:
     resolution: {integrity: sha512-YUifsXXuknHlUsmlgyY0PKzgPOr7/FjCePfHNt0jxm83wHZi44VDMQ7/fGNkjY3/jV1MC+1CmZbaHzugyeRtpg==}
-
-  cssesc@3.0.0:
-    resolution: {integrity: sha512-/Tb/JcjK111nNScGob5MNtsntNM1aCNUDipB/TkwZFhyDrrE47SOx/18wF2bbjgc3ZzCSKW1T5nt5EbFoAz/Vg==}
-    engines: {node: '>=4'}
-    hasBin: true
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
@@ -3812,10 +3799,6 @@ packages:
   pngjs@7.0.0:
     resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
     engines: {node: '>=14.19.0'}
-
-  postcss-selector-parser@6.0.10:
-    resolution: {integrity: sha512-IQ7TZdoaqbT+LCpShg46jnZVlhWD2w6iQYAcYXfHARZ7X1t/UGhhceQDs5X0cGqKvYlHNOuv7Oa1xmb0oQuA3w==}
-    engines: {node: '>=4'}
 
   postcss@8.5.28:
     resolution: {integrity: sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==}
@@ -6272,11 +6255,6 @@ snapshots:
       '@tailwindcss/oxide-win32-arm64-msvc': 4.2.2
       '@tailwindcss/oxide-win32-x64-msvc': 4.2.2
 
-  '@tailwindcss/typography@0.5.20(tailwindcss@4.2.2)':
-    dependencies:
-      postcss-selector-parser: 6.0.10
-      tailwindcss: 4.2.2
-
   '@tailwindcss/vite@4.2.2(vite@8.2.2(@types/node@25.6.0)(esbuild@0.28.2)(jiti@2.7.0))':
     dependencies:
       '@tailwindcss/node': 4.2.2
@@ -7094,8 +7072,6 @@ snapshots:
       which: 2.0.2
 
   css.escape@1.5.1: {}
-
-  cssesc@3.0.0: {}
 
   csstype@3.2.3: {}
 
@@ -8697,11 +8673,6 @@ snapshots:
       xmlbuilder: 15.1.1
 
   pngjs@7.0.0: {}
-
-  postcss-selector-parser@6.0.10:
-    dependencies:
-      cssesc: 3.0.0
-      util-deprecate: 1.0.2
 
   postcss@8.5.28:
     dependencies:

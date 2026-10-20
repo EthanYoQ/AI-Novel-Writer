@@ -347,6 +347,45 @@ describe('legacy character roster repair public workflow seam', () => {
       .toThrow('A legacy cast repair run already exists. View or resume it explicitly; starting over is a separate choice.')
   })
 
+  it('英文界面下修复确认后旧版角色名单换了修复方式：报英文说明，不报内部错误码（#408）', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    let reads = 0
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'legacy-roster:read-source') {
+        reads += 1
+        return { snapshot: reads === 1 ? pendingLegacyRoster : { ...pendingLegacyRoster, migrationState: 'legacy_cards_preserved' } }
+      }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    installVela(invoke)
+
+    const failure = await migrateLegacyCharacterRoster(projectPath).then(() => null, (error: unknown) => error as Error)
+    expect(failure?.message).not.toMatch(/LEGACY_ROSTER_|\p{Script=Han}/u)
+    expect(failure?.message).toMatch(/legacy cast/)
+  })
+
+  it('英文界面下主进程拒绝提交修复结果：报英文说明，不转出主进程的中文原文（#408）', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    const generateStream = vi.fn((
+      _messages: Parameters<typeof originalGenerateStream>[0],
+      callbacks: Parameters<typeof originalGenerateStream>[1],
+    ) => {
+      callbacks.onDone?.('{"schemaVersion":1,"entries":[]}', undefined, 'stop')
+      return Promise.resolve('legacy-semantic-invalid-en')
+    })
+    useLLMStore.setState({ generateStream })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:character-roster-read') return pendingLegacyRoster
+      if (channel === 'db:character-roster-commit') return { success: false, error: 'Error: 角色名单不能为空' }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    installVela(invoke)
+
+    const failure = await migrateLegacyCharacterRoster(projectPath, { generationDependencies: { createRuntime: options => createGenerationRuntime(options) } })
+      .then(() => null, (error: unknown) => error as Error)
+    expect(failure?.message).toBe('The legacy cast repair failed. No character data was saved.')
+  })
+
   it('does not commit a completed candidate when the frozen project session changes', async () => {
     const response = JSON.stringify({ schemaVersion: 1, entries: repairedEntries })
     let finishGeneration: (() => void) | undefined

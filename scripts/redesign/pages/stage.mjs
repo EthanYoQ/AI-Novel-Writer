@@ -77,6 +77,8 @@ export async function waitForProse(page, text) {
 
 export const tab = (page, name) => tabList(page).getByRole('tab', { name })
 export const closeTabButton = (page, name) => tabList(page).getByRole('button', { name: new RegExp(`^关闭「${escape(name)}」`) })
+/** 除名为 keep 的标签外，其余标签的关闭按钮。 */
+export const closeOtherTabButtons = (page, keep) => tabList(page).getByRole('button', { name: new RegExp(`^关闭「(?!${escape(keep)}」)`) })
 
 export const saveStatus = page => root(page).getByRole('banner').getByRole('status')
 
