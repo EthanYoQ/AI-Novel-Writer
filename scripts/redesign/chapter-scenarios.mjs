@@ -273,20 +273,23 @@ function charsPerLine(page) {
 
 const LONG_CHAPTER = 5
 /** 1 万字的第 5 章草稿：50 段，每段 200 字，段首带段号便于定位。 */
+const longParagraphHead = index => `第${index + 1}段。`
 const LONG_TEXT = Array.from({ length: 50 }, (_, index) => {
-  const head = `第${index + 1}段。`
+  const head = longParagraphHead(index)
   return head + '雾是从海面上一层一层爬上来的林岚把潮汐表压在值班室的窗台上用铅笔圈出昨夜的那一格钟声比往常早了一刻潮水却没有任何变化'.repeat(4).slice(0, 200 - head.length)
 }).join('\n\n')
+/** 长章第 1 段的段首，用来判断长章正文是否已显示；与 LONG_TEXT 同源，改了正文守卫不会静默失效。 */
+const LONG_TEXT_HEAD = longParagraphHead(0)
 
 /** 打开 1 万字的第 5 章：新外壳点流程脊里的章，旧外壳点草稿箱里的草稿。 */
 async function openLongChapter(page) {
   const target = await isStage(page) ? stage.chapterButton(page, LONG_CHAPTER) : project.draftOfChapter(page, LONG_CHAPTER)
-  const longProse = (await proseOf(page)).getByText('第1段。', { exact: false })
+  const longProse = (await proseOf(page)).getByText(LONG_TEXT_HEAD, { exact: false })
   assert.equal(await longProse.count(), 0, '点击前第 5 章没有打开，计时从点击算起')
   await target.scrollIntoViewIfNeeded()
   await target.hover()
   await page.waitForTimeout(300)
-  return openTiming(page, target, '第1段。')
+  return openTiming(page, target, LONG_TEXT_HEAD)
 }
 
 const proseOf = async page => await isStage(page) ? chapterView.prose(page) : chapter.editor(page)
@@ -712,7 +715,7 @@ export const CHAPTER_SCENARIOS = {
   'typing-latency': { model: false, setup: seed({ extra: args => createDraft(args, LONG_CHAPTER, 1, LONG_TEXT) }), run: async ({ page }) => {
     await openLongChapter(page)
     const content = await proseOf(page)
-    await content.getByText('第1段。', { exact: false }).first().click()
+    await content.getByText(LONG_TEXT_HEAD, { exact: false }).first().click()
     await page.keyboard.press('End')
     const keys = 'abcdefghijklmnopqrstuvwxyzabcdefghijklmn'.split('')
     return { ...await typingLatency(page, content, keys), shell: await isStage(page) ? 'stage' : 'writer' }

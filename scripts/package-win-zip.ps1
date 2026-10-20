@@ -4,6 +4,10 @@
 
 $ErrorActionPreference = "Stop"
 
+# 产品名与 exe 名统一取自 smoke-win-app.ps1 的库函数（与 scripts/product-identity.mjs 保持一致）。
+. (Join-Path $PSScriptRoot "smoke-win-app.ps1") -LoadProbeLibrary
+$exeName = (Get-AiNovelProductExecutableNames)[0]
+
 $root = Split-Path -Parent $PSScriptRoot
 $packageJsonPath = Join-Path $root "package.json"
 $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw | ConvertFrom-Json
@@ -41,7 +45,7 @@ try {
   $packageDir = Join-Path $releaseDir "AI-Novel-Writer"
   $zipPath = Join-Path $releaseDir "AI-Novel-Writer-$version-windows-x64.zip"
   $hashPath = Join-Path $releaseDir "SHA256SUMS.txt"
-  $exePath = Join-Path $sourceDir "AI小说作家.exe"
+  $exePath = Join-Path $sourceDir $exeName
 
   if (-not (Test-Path -LiteralPath $sourceDir)) {
     throw "缺少打包目录：$sourceDir"
@@ -76,14 +80,14 @@ try {
 
   @(
     "$zipHash  $(Split-Path -Leaf $zipPath)",
-    "$exeHash  win-unpacked/AI小说作家.exe"
+    "$exeHash  win-unpacked/$exeName"
   ) | Set-Content -LiteralPath $hashPath -Encoding utf8
 
   Write-Host "Windows zip package created:"
   Write-Host "  $zipPath"
   Write-Host "  Size: $sizeMb MB"
   Write-Host "  SHA256: $zipHash"
-  Write-Host "  Launcher: AI-Novel-Writer\AI小说作家.exe"
+  Write-Host "  Launcher: AI-Novel-Writer\$exeName"
   Write-Host "  Hash manifest: $hashPath"
 }
 finally {

@@ -6,3 +6,6 @@ export const WORKING_DRAFT_STATUSES = ['draft', 'revised', 'reviewed'] as const 
 
 /** 参与「这一章最新一稿」比较的状态：工作稿加定稿，不含已归档。 */
 export const CURRENT_DRAFT_STATUSES = [...WORKING_DRAFT_STATUSES, 'finalized'] as const satisfies readonly DraftStatus[]
+
+/** CURRENT_DRAFT_STATUSES 的 SQL IN 列表片段，主进程查询「最新一稿」时共用。 */
+export const CURRENT_DRAFT_STATUS_SQL = CURRENT_DRAFT_STATUSES.map(status => `'${status}'`).join(',')

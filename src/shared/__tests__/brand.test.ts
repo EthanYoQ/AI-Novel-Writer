@@ -29,10 +29,12 @@ describe('APP_BRAND', () => {
   })
 
   it('原名与旧版实际发布的产品名逐字一致', () => {
-    const builderConfig = readFileSync(resolve(process.cwd(), 'electron-builder.json5'), 'utf8')
-    const productName = builderConfig.match(/"productName":\s*"([^"]+)"/)?.[1]
+    // v1.3.0 正式安装包里 exe 的 VersionInfo ProductName（ADR-0022 取证）；1.3.0 之后 productName 改为书童。
+    const lastReleasedProductName = 'AI小说作家'
+    const legacyNames = readFileSync(resolve(process.cwd(), 'scripts/product-identity.mjs'), 'utf8')
 
-    expect(APP_BRAND.formerZhName).toBe(productName)
+    expect(APP_BRAND.formerZhName).toBe(lastReleasedProductName)
+    expect(legacyNames).toContain(`const LEGACY_PRODUCT_NAME = '${lastReleasedProductName}'`)
   })
 
   it('does not expose legacy product naming in visible brand surfaces', () => {
