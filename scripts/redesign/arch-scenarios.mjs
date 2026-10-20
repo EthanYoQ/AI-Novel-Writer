@@ -382,6 +382,32 @@ export const ARCH_SCENARIOS = {
    * #441 双审计 P2：本批最后一章（第 6 章，范围 6–6）生成期间改模型，候选生成完、正式保存被来源检查拒绝。
    * 上一次运行不出现原始错误码；架构页的大纲提示只能查看或复制并给「从第 6 章重新生成」，不再退回续写与「编辑恢复稿」。
    */
+  /**
+   * #441 后续与 #453 的 CodeRabbit 意见：同 arch-model-change-last，第 6 章（范围 6–6）生成完、正式保存被拒。
+   * 从架构页点「查看恢复稿」打开的恢复稿与运行侧页的恢复卡，标题都写「第 6 章」，说明不说已经生成完毕，叫作者从第 6 章重新生成。
+   */
+  'rst-outline-last-note': { model: true, shell: 'stage', setup: seedArch({ clear: ['synopsis'], totalChapters: 24 }), run: async context => {
+    const { page } = context
+    const last = await stallOutlineBatchAndChangeModel(context, 6)
+    await last.waitFor({ state: 'visible', timeout: 60_000 })
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: /大纲恢复稿 · 第 6/ })
+    await card.waitFor({ state: 'visible', timeout: 10_000 })
+    const cardText = await card.innerText()
+    assert.match(cardText, /大纲恢复稿 · 第 6 章\n/, '运行侧页恢复卡标题不写「6–6」')
+    assert.match(cardText, /请从第 6 章重新生成情节大纲/)
+    assert.doesNotMatch(cardText, /已经生成完毕/)
+    await openArchitecture(page)
+    await arch.waitReady(page)
+    await arch.section(page, 'synopsis').getByRole('button', { name: '查看恢复稿' }).click()
+    const tab = stage.tab(page, '大纲恢复稿 · 第 6 章')
+    await tab.waitFor({ state: 'visible', timeout: 10_000 })
+    const content = stage.root(page).locator('.stage-content')
+    await content.getByText(/请从第 6 章重新生成情节大纲/).waitFor({ state: 'visible', timeout: 10_000 })
+    const viewer = await content.innerText()
+    assert.doesNotMatch(viewer, /已经生成完毕/, '恢复稿页不说这批已生成完毕')
+    return { card: cardText.replace(/\s+/g, ' ').slice(0, 200), viewer: viewer.replace(/\s+/g, ' ').slice(0, 300) }
+  } },
+
   'arch-model-change-last': { model: true, shell: 'stage', setup: seedArch({ clear: ['synopsis'], totalChapters: 24 }), run: async context => {
     const { page } = context
     const last = await stallOutlineBatchAndChangeModel(context, 6)
