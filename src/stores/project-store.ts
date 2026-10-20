@@ -15,6 +15,7 @@ import { confirm } from '../components/ui/Confirm'
 import { appErrorMessage } from '../i18n/app-errors'
 import { saveDirtyEditorChangesForExit, useEditorStore } from './editor-store'
 import { countUnsavedEditorItemsForProject } from './editor-unsaved'
+import { useLayoutStore } from './layout-store'
 import { useLocaleStore } from './locale-store'
 import { requireIpcSuccess } from '../services/ipc-result'
 import {
@@ -582,6 +583,11 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     const requestSequence = ++openProjectRequestSequence
     const requestToken = `${Date.now()}-${requestSequence}-${Math.random().toString(36).slice(2)}`
     const isLatestRequest = () => requestSequence === openProjectRequestSequence
+    // 作者点的入口已先确认并收起设置页；外部打开请求、新建后自动打开到这里时设置页可能还开着，换作品会卸载它、丢掉输入。
+    if (useLayoutStore.getState().settingsOpen) {
+      const { confirmLeaveSettings } = await import('../components/settings/unsaved-settings')
+      if (await confirmLeaveSettings() !== 'left' || !isLatestRequest()) return false
+    }
     let rendererProject = get().currentProject
     let rendererProjectPath = rendererProject?.path ?? null
     let mainOpenWasAccepted = false
