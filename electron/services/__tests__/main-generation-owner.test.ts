@@ -2894,3 +2894,27 @@ describe('next chapter after editing a reviewed batch draft (#438)', () => {
     expect(DraftRepository.getMeta(saved.id)?.dependenciesStale).toBe(false)
   })
 })
+
+describe('大纲恢复稿是否已写进正式大纲', () => {
+  it.each([['正常保存过', true, false], ['正式保存被拒', false, false], ['重写正式大纲里已有的章、正式保存被拒', false, true]] as const)('一批写完后来源变了（%s）：恢复稿如实标出这一批是否已在正式大纲里', async (_case, save, rewrite) => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      const chapter = Number((request as { task: GenerationTask }).task.purpose.split(':')[2])
+      options.onVisible({ kind: 'delta', text: outlineEntry(chapter) })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    f.db.prepare('UPDATE project_core SET total_chapters=?').run(1)
+    if (rewrite) f.db.prepare('UPDATE project_core SET synopsis=?').run(renderPlotOutlineSynopsis('## 第1章：旧的一夜\n林岚第一次到旧港。', 1, { totalChapters: 1, writingLanguage: 'zh-CN' }))
+    const run = f.owner.begin(outlineSelection(f, 1))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'outline-1', task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+    acceptOutline(f.owner, run.handle)
+    const progress = f.owner.readContext(run.handle).plotOutline!
+    const synopsis = renderPlotOutlineRange(progress.composition!.text, progress.range, progress.sourceExpected)
+    if (save) f.db.transaction(() => f.owner.assertSynopsisCommit(run.handle, synopsis, progress.sourceExpected)
+      || ProjectCoreRepository.commitSynopsis({ synopsis, expected: progress.sourceExpected, generationRunHandle: run.handle }, f.db)).immediate()
+    f.db.exec("UPDATE project_core SET premise='作者已修改前提' WHERE id='main'")
+    const context = f.owner.readContext(run.handle)
+    expect(context.plotOutline!.cursor).toEqual({ kind: 'complete' })
+    expect(context.plotOutlineRecovery).toMatchObject({ writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null, inFormalOutline: save })
+  })
+})

@@ -3,6 +3,7 @@ import { ChevronRight, Save, Sparkles } from 'lucide-react'
 import { useEditorStore, type EditorTab } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import CodeMirrorEditor from '../../editor/CodeMirrorEditor'
+import { planningRemainingText } from '../../run/run-recovery'
 import { Button } from '../../ui/Button'
 import { Notice } from '../../ui/Notice'
 import { useBlueprintRecovery } from './use-blueprint-recovery'
@@ -71,7 +72,7 @@ export default function BlueprintRecovery({ tab, projectKey }: { tab: EditorTab;
         <Notice title={text('蓝图未完整生成，原文已保留', 'The incomplete blueprint text is preserved')}>
           {text('请补齐 JSON 中的引号、括号和必填内容，只保留要保存的连续完整章节。保存只写入本地，不会调用模型。', 'Complete the JSON quotes, brackets and required fields. Keep only complete consecutive chapters to save. Saving is local and does not call a model.')}
           {continuation?.remainingRange && (
-            <> {text(`待完成第 ${continuation.remainingRange.from} 至 ${continuation.remainingRange.to} 章，每章目标 ${continuation.targetUnits} ${recovery.planningTargetUnit}。`, `Chapters ${continuation.remainingRange.from} to ${continuation.remainingRange.to} remain. Target ${continuation.targetUnits} ${recovery.planningTargetUnit} per chapter.`)}</>
+            <> {planningRemainingText(continuation.remainingRange, continuation.targetUnits, recovery.planningTargetUnit, text)}</>
           )}
         </Notice>
       )}

@@ -802,7 +802,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         writeState = projectGenerationInFlight() ? { kind: 'blocked', reason: 'in-flight' } : { kind: 'ready' }
       }
     } catch { /* Frozen proposals remain readable when current sources are unavailable. */ }
-    return { sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft,
+    const batch = outline.cursor.kind === 'complete' ? outline.composition?.text.trim() : undefined
+    const inFormalOutline = !!batch && (ProjectCoreRepository.get(deps.database)?.synopsis ?? '').includes(batch)
+    return { sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft, inFormalOutline,
       completeChapters: [...(outline.composition?.chapters?.map(chapter => chapter.chapterNumber) ?? []),
         ...(outline.cursor.kind === 'accept' ? [outline.cursor.chapterNumber] : [])],
       writeState, saved }

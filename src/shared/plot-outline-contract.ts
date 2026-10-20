@@ -58,6 +58,11 @@ export interface PlotOutlineRecovery {
   completeChapters: number[]
   writeState: { kind: 'ready' } | { kind: 'blocked'; reason: 'in-flight' | 'source-changed' | 'author-saved' | 'source-invalid' }
   saved: PlotOutlineAuthorEditReceipt | null
+  /**
+   * 本批生成完的整段内容现在原样在正式大纲里。来源变了以后，正常保存过的一批与正式保存被拒的一批在游标和写回状态上一模一样，
+   * 只有看正式大纲才知道作者要不要从本批起始章重新生成；只比章号不够，重写已有的章时旧大纲早就写到了那里。
+   */
+  inFormalOutline: boolean
 }
 export interface PlotOutlineSource {
   version: 1

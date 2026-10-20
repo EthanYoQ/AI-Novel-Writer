@@ -457,4 +457,57 @@ export const RUN_SCENARIOS = {
       chunks: chunks.length,
     }
   }, after: ({ page }) => waitForRunDone(page) },
+
+  /** #409：第 3 章单章写作在本次打开里失败后，接着跑含第 3 章的批量（卡在假模型门上）：第 3 章的恢复卡照样列在运行侧页。 */
+  'rst-batch-draft-card': { model: true, shell: 'stage', setup: context => seedStageSample(context, { landOnChapter3: false, beforeReload: async ({ page, invoke, path: projectPath, session }) => {
+    for (const chapterNumber of [3, 4]) {
+      for (const draft of await invoke(page, 'db:draft-list', chapterNumber, projectPath, session)) {
+        assert.equal((await invoke(page, 'db:draft-delete', draft.id, projectPath, session)).success, true)
+      }
+    }
+  } }), run: async ({ page, fake }) => {
+    fake.failProse()
+    await writeNextFromBlueprint(page)
+    await runSheet.anyCard(page).filter({ hasText: /^上一次运行/ }).getByText(/失败|出错|未完成/).first().waitFor({ state: 'visible', timeout: 60_000 })
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: /第3章候选/ })
+    await card.waitFor({ state: 'visible', timeout: 10_000 })
+    fake.failProse(false)
+    fake.gate.hold()
+    await blueprint.open(page)
+    await blueprint.startBatch(page, 2)
+    await runSheet.waitUntilOpen(page)
+    await untilGateHolds(fake.gate)
+    const active = await runSheet.activeTitles(page)
+    assert.ok(active.some(title => /^批量草稿待审 · 第 3 至 4 章/.test(title)), `批量运行含第 3 章：${active}`)
+    await card.waitFor({ state: 'visible', timeout: 5000 })
+    return { active, card: (await card.innerText()).replace(/\s+/g, ' ').slice(0, 160) }
+  }, after: async ({ page, fake }) => {
+    fake.gate.release()
+    await runSheet.waitForRunDone(page, 120_000)
+  } },
+
+  /** #441 后续：第 3 章正在用夹具模型写（卡在假模型门上），在设置里改这个模型后保存：先提示，等生成结束再保存则不保存、表单留着。 */
+  'rst-model-save-prompt': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake }) => {
+    fake.gate.hold()
+    await writeNextFromBlueprint(page)
+    await untilGateHolds(fake.gate)
+    await stage.openSettings(page)
+    const models = page.getByRole('list', { name: 'AI 模型' })
+    await models.getByRole('button', { name: `编辑「${FAKE_MODEL.name}」` }).click()
+    await page.getByRole('button', { name: '保存配置' }).click()
+    const prompt = page.getByRole('dialog', { name: '这个模型正在生成' })
+    await prompt.waitFor({ state: 'visible' })
+    const message = await prompt.innerText()
+    assert.match(message, /当前有生成在用这个模型（「.+」），保存后这次生成会在下一章停下/)
+    return { message: message.replace(/\s+/g, ' ') }
+  }, after: async ({ page, fake }) => {
+    const before = fake.requests.length
+    await page.getByRole('dialog', { name: '这个模型正在生成' }).getByRole('button', { name: '等生成结束再保存' }).click()
+    await page.getByRole('dialog', { name: '这个模型正在生成' }).waitFor({ state: 'detached' })
+    await page.getByRole('button', { name: '保存配置' }).waitFor({ state: 'visible' })
+    fake.gate.release()
+    await runSheet.waitForRunDone(page, 120_000)
+    assert.ok(fake.requests.length > before, '没保存模型，这次生成照常写完')
+    assert.doesNotMatch(await runSheet.anyCard(page).filter({ hasText: /^上一次运行/ }).innerText(), /失败|GENERATION_SOURCE_CHANGED/)
+  } },
 }

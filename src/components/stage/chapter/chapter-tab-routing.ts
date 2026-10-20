@@ -1,7 +1,7 @@
 import type { DraftMeta } from '../../../services/draft-index'
 import { chapterTabName } from '../../../shared/chapter-label'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
-import { parseResourceUri } from '../../../shared/project-paths'
+import { isResourceUri, parseResourceUri } from '../../../shared/project-paths'
 import { getActiveProjectSessionContext, sameProjectPathKey, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { fetchChapterDrafts, useDraftStore } from '../../../stores/draft-store'
 import { useEditorStore, type EditorTab } from '../../../stores/editor-store'
@@ -13,9 +13,15 @@ import { toast } from '../../ui/Toast'
 
 export const RECOVERY_PREFIX = 'ai-novel://recovery/'
 
-/** 不由单章视图承接的正文标签：运行侧页「继续编辑」打开的恢复候选，与已经合并或放弃、只能查看的修稿。 */
+/** 助手 open_editor 或产物卡按作品目录里的路径打开的章节、大纲：不是数据库资源，没有对应的纸墨页面，只读显示。 */
+export function isProjectFileTab(tab: EditorTab): boolean {
+  return (tab.type === 'chapter' || tab.type === 'outline') && Boolean(tab.filePath) && !isResourceUri(tab.filePath!)
+}
+
+/** 不由单章视图承接的正文标签：运行侧页「继续编辑」打开的恢复候选、已经合并或放弃只能查看的修稿，与作品目录里的文件。 */
 export function isProseDocumentTab(tab: EditorTab): boolean {
   return tab.type === 'chapter' && Boolean(tab.filePath?.startsWith(RECOVERY_PREFIX) || tab.filePath?.startsWith('ai-novel://revision/'))
+    || isProjectFileTab(tab)
 }
 
 /** 正文类标签里由单章视图承接的：一稿草稿或定稿（ai-novel://draft/、ai-novel://manuscript/），以及待写章（没有 filePath）。 */

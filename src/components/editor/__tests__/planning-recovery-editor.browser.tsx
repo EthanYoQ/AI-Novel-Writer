@@ -41,7 +41,7 @@ function fixture(kind: 'outline' | 'blueprint'): GenerationRecoveryContext {
   return { ...common, plotOutline: { protocol: 'chapter-outline-v3', range: { from: 1, to: 3 }, content: { maxAttemptsPerChapter: 2 },
     targetUnits: 600, cursor: { kind: 'stopped', chapterNumber: 1, reason: 'attempts-exhausted' }, sourceExpected: { ...sourceExpected },
     confirmedPrefix: '', composition: null },
-  plotOutlineRecovery: { sourceHandle: handle, leaseEpoch: session.leaseId, draft: '# 情节大纲\n\n## 第1章：未完成\n', completeChapters: [], writeState: { kind: 'ready' }, saved: null } }
+  plotOutlineRecovery: { sourceHandle: handle, leaseEpoch: session.leaseId, draft: '# 情节大纲\n\n## 第1章：未完成\n', completeChapters: [], writeState: { kind: 'ready' }, saved: null, inFormalOutline: false } }
 }
 const blueprintText = JSON.stringify([{ chapterNumber: 1, title: '雨夜', role: '建置', purpose: '寻找证据', keyEvents: '找到信件',
   characters: ['沈砺'], relationships: [], suspenseHook: '信封有新线索', userGuidance: '保留作者指示', notes: '作者笔记', notesUpdatedAt: '2026-10-04T00:00:00Z' }])
@@ -592,6 +592,17 @@ describe('planning recovery editors', () => {
       await render(kind)
       expect(container.textContent).toContain('每章目标 600 词')
       noModel()
+    })
+    it.each([
+      ['zh-CN', '待完成第 6 章，每章目标 600', '第 6 至 6 章'],
+      ['en-US', 'Chapter 6 remains.', 'Chapters 6 to 6'],
+    ] as const)(`${kind} 只剩一章待完成时（%s）写「第 6 章」，不写成「6 至 6」`, async (locale, expected, wrong) => {
+      context = fixture(kind)
+      context.planningContinuation!.remainingRange = { from: 6, to: 6 }
+      useLocaleStore.setState({ locale })
+      await render(kind)
+      expect(container.textContent).toContain(expected)
+      expect(container.textContent).not.toContain(wrong)
     })
   }
   it.each(['architecture', 'blueprint', 'failure-panel'] as const)('%s opens the same editable recovery draft twice without replacing dirty text', async entry => {
