@@ -31,7 +31,7 @@ import { DEFAULT_PLANNING_ACTION_CHAPTERS } from '../../shared/plot-outline-cont
 import type { GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import type { ArchitectureConfirmFormOptions } from '../dialogs/use-architecture-confirm-form'
 import { openPlanningRecoveryDraft } from '../../stores/editor-store'
-import { planningTitle } from '../run/run-recovery'
+import { outlineSourceChangedBlocked, planningTitle } from '../run/run-recovery'
 import { outlineProgress, type OutlineProgress } from '../../shared/plot-outline-checkpoint'
 import type { PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
 
@@ -423,6 +423,15 @@ export function useArchitectureOverview(projectKey: string) {
   /** 普通生成入口；steps 是「AI 生成此节」那一节，不携带续批预填。 */
   const openGenerateDialog = (steps?: ArchStepKey[]) => setGenerateIntent({ steps })
 
+  /**
+   * 恢复稿因来源已变不能写回时，本批的章节范围：作者从它的起始章重新生成；能写回或没有恢复稿时为 null。
+   * 这里的恢复稿只在检查点记着本批未完成时读取，即正式大纲没有写入这一批；候选生成完、正式保存被拒也一样要重新生成。
+   */
+  const outlineRestartRange = planningRecovery && outlineSourceChangedBlocked(planningRecovery) ? planningRecovery.plotOutline?.range ?? null : null
+  const openOutlineRestart = () => {
+    if (outlineRestartRange) setGenerateIntent({ steps: ['synopsis'], synopsisRange: { from: outlineRestartRange.from, to: outlineRestartRange.to } })
+  }
+
   /** 情节大纲有可编辑的恢复稿时打开它。 */
   const openRecoveryDraft = () => {
     if (!planningRecovery) return
@@ -486,6 +495,8 @@ export function useArchitectureOverview(projectKey: string) {
     handleContinueOutlineBatch,
     openGenerateDialog,
     openRecoveryDraft,
+    outlineRestartRange,
+    openOutlineRestart,
   }
 }
 

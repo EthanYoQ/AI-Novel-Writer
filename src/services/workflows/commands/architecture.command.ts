@@ -138,6 +138,30 @@ export class PlotOutlineResumeAvailableError extends Error {
   }
 }
 
+/**
+ * 情节大纲生成途中，冻结的来源（模型设置、作品设定、提示词模板、写作 Skill）被改动，主进程拒绝了下一章。
+ * 同一运行无法恢复，errorCode 供运行侧页给出「去架构页重新生成」入口。
+ */
+export const PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE = 'architecture-synopsis-source-changed'
+
+/**
+ * 主进程按冻结来源拒绝下一次请求时抛出的错误码（main-generation-owner.ts assertSourcesCurrent）：
+ * 模型设置变了是 GENERATION_SOURCE_CHANGED_MODEL，其余来源是 GENERATION_SOURCE_CHANGED。经 IPC 后 code 属性丢失、
+ * 外面还包着「Error invoking remote method …」，只能匹配 message；两侧的断言排除更长的码
+ * （如 _DURING_SNAPSHOT、FINALIZATION_GENERATION_SOURCE_CHANGED）。第 1 组有值即为模型设置变了。
+ */
+const PLOT_OUTLINE_SOURCE_CHANGED_PATTERN = /(?<![A-Z_])GENERATION_SOURCE_CHANGED(_MODEL)?(?![A-Z_])/u
+
+export class PlotOutlineSourceChangedError extends Error {
+  readonly code = PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'PlotOutlineSourceChangedError'
+    Object.setPrototypeOf(this, new.target.prototype)
+  }
+}
+
 export const WORLD_BUILDING_RESUME_ERROR_CODE = 'architecture-world-building-resume-available'
 
 export class WorldBuildingResumeAvailableError extends Error {
@@ -2093,6 +2117,11 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
   private async executeChapterOutline({ context, callbacks }: Pick<CommandExecuteParams, 'context' | 'callbacks'>, recovery: GenerationRecoveryContext, initial: PlotOutlineProgress): Promise<string> {
     const session = requireWorkflowProjectSession(context), handle = context.mainGenerationRunHandle!
     const text = (zh: string, en: string) => workflowUiText(context, zh, en)
+    // 来源变了以后运行侧页直接显示这两段说明，口径与架构页的恢复稿提示（run-recovery.ts outlineSourceChangedNote）一致。
+    const keptInRecoveryDraft = (zh: string, en: string) => text(`${zh}保留在「大纲恢复稿」中，只能查看或复制，不能覆盖正式内容。`,
+      `${en} kept in the outline recovery draft, which can be viewed or copied but cannot replace saved content. `)
+    const restartFrom = (from: number) => text(`正式大纲未被改动。请到「架构」页重新生成情节大纲，从第 ${from} 章开始。`,
+      `The saved outline was not changed. Open Architecture and generate the plot outline again from chapter ${from}.`)
     const { expectedProjectPath } = this.snapshot
     const sourceExpected = initial.sourceExpected
     const configInput = recovery.authorInputs.find(input => input.id === 'architecture:author-config')
@@ -2161,8 +2190,24 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       } else {
         callbacks.log(text(`正在生成第 ${cursor.chapterNumber} 章大纲${cursor.attempt === 'compact' ? '，进行唯一一次原事实重建' : ''}。`,
           `Generating the outline for chapter ${cursor.chapterNumber}${cursor.attempt === 'compact' ? ' with its single rebuild from original facts' : ''}.`))
-        await this.callLLMResult(`${originalPrompt}\n\n${plotOutlineRequestContract(outline, cursor.chapterNumber, cursor.attempt)}`,
-          `${promptBuilder.getSystemRole()}\n\n${planningTargetInstruction('outline', outline.targetUnits, language)}`, callbacks, { purpose: plotOutlinePurpose(cursor.chapterNumber, cursor.attempt), reasoningStage: 'planning', writingSkillStage: 'planning' }, context)
+        try {
+          await this.callLLMResult(`${originalPrompt}\n\n${plotOutlineRequestContract(outline, cursor.chapterNumber, cursor.attempt)}`,
+            `${promptBuilder.getSystemRole()}\n\n${planningTargetInstruction('outline', outline.targetUnits, language)}`, callbacks, { purpose: plotOutlinePurpose(cursor.chapterNumber, cursor.attempt), reasoningStage: 'planning', writingSkillStage: 'planning' }, context)
+        } catch (error) {
+          const changed = error instanceof Error ? PLOT_OUTLINE_SOURCE_CHANGED_PATTERN.exec(error.message) : null
+          if (!changed) throw error
+          const { from } = outline.range, stoppedAt = cursor.chapterNumber
+          const cause = changed[1]
+            ? text('生成途中模型设置被修改', 'The model settings were changed during generation')
+            : text('生成途中作品设定、提示词模板或写作 Skill 被修改', 'The book settings, a prompt template or a writing skill changed during generation')
+          const lastKept = stoppedAt - 1
+          let kept = ''
+          if (lastKept === from) kept = keptInRecoveryDraft(`本批已生成的第 ${from} 章`, `Chapter ${from}, already generated in this batch, is`)
+          else if (lastKept > from) kept = keptInRecoveryDraft(`本批已生成的第 ${from}–${lastKept} 章`, `Chapters ${from}–${lastKept}, already generated in this batch, are`)
+          throw new PlotOutlineSourceChangedError(text(
+            `${cause}，这批大纲已在第 ${stoppedAt} 章停止，没有再发送请求。`,
+            `${cause}, so this outline batch stopped at chapter ${stoppedAt} without sending another request. `) + kept + restartFrom(from), { cause: error })
+        }
       }
       const current = await ipc.invokeWithProjectSession(session, 'generation:read', handle)
       if (!current.plotOutline) throw new Error('GENERATION_PLOT_OUTLINE_SOURCE_INVALID')
@@ -2172,8 +2217,19 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(session, context)
     const synopsis = renderPlotOutlineRange(outline.composition?.text ?? '', outline.range, sourceExpected)
-    const committed = await ipc.invokeWithProjectSession(session, 'db:project-core-synopsis-commit', { synopsis, expected: sourceExpected, generationRunHandle: handle }, expectedProjectPath)
-    requireIpcSuccess(committed, text('保存完整情节大纲', 'Save the complete plot outline'))
+    try {
+      const committed = await ipc.invokeWithProjectSession(session, 'db:project-core-synopsis-commit', { synopsis, expected: sourceExpected, generationRunHandle: handle }, expectedProjectPath)
+      requireIpcSuccess(committed, text('保存完整情节大纲', 'Save the complete plot outline'))
+    } catch (error) {
+      // 最后一章生成完、正式保存前来源变了：主进程在保存这一步只报通用码，不分模型还是其他来源。
+      if (!(error instanceof Error && PLOT_OUTLINE_SOURCE_CHANGED_PATTERN.test(error.message))) throw error
+      const { from, to } = outline.range
+      const chapters = from === to ? text(`第 ${from} 章`, `chapter ${from}`) : text(`第 ${from}–${to} 章`, `chapters ${from}–${to}`)
+      throw new PlotOutlineSourceChangedError(text(
+        `本批${chapters}大纲已生成完，但保存前模型设置、作品设定、提示词模板或写作 Skill 被修改，正式保存被拒绝。`,
+        `The outline for ${chapters} finished, but the model settings, book settings, a prompt template or a writing skill changed before it was saved, so saving was refused. `)
+        + keptInRecoveryDraft('这批大纲', 'The batch is') + restartFrom(from), { cause: error })
+    }
     await saveNavigation(outline, true)
     const { globalEventBus } = await import('../../../shared/event-bus')
     globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: 'synopsis.md', projectPath: expectedProjectPath, projectSession: session, runId: context.runId })

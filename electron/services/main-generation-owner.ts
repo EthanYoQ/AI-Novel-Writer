@@ -14,6 +14,7 @@ import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunB
 import { getCurrentProjectPath } from '../database'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, type GenerationRunServiceDependencies } from './generation-run-service'
+import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { assertSemanticGenerationTask, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy, planningGenerationScope, readMainGenerationPolicy, type MainGenerationPlan, type MainGenerationPolicy } from './main-generation-plan'
 import { LLMFactory } from '../llm/llm-factory'
 import type { GenerationAttemptReceipt, GenerationTask } from '../../src/services/generation/generation-harness'
@@ -239,7 +240,32 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ...(receipt.diagnostics ? { diagnostics: receipt.diagnostics } : {}),
       revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status, compositionEligible }
   }
-  const service = createGenerationRunService({ repository, dispatch: deps.dispatch ?? dispatchProvider,
+  const providerDispatch = deps.dispatch ?? dispatchProvider
+  /** 还没结束的请求；关闭作品时在关库前把它们记成已取消。 */
+  const unrecordedCalls = new Set<() => void>()
+  /** 每次真正发出的模型请求都记入运行侧页的 AI 调用记录，每次只记一行；记录只作诊断，写不进去也不改变生成结果。 */
+  const recordedDispatch: GenerationRunServiceDependencies['dispatch'] = async (request, options) => {
+    const { model, task } = request as ProviderRequest, startedAt = Date.now()
+    const record = (success: boolean, usage: Awaited<ReturnType<typeof providerDispatch>>['usage'], errorMessage?: string) => {
+      if (!unrecordedCalls.delete(recordCancelled)) return
+      try {
+        LLMHistoryRepository.logCall({ modelId: model.id, modelName: model.name || model.modelName, purpose: task.purpose,
+          promptTokens: usage?.promptTokens ?? null, completionTokens: usage?.completionTokens ?? null, totalTokens: usage?.totalTokens ?? null,
+          durationMs: Math.max(0, Date.now() - startedAt), success, errorMessage }, deps.database)
+      } catch (error) { console.warn('[AI Novel Writer] LLM call statistics were not recorded.', error) }
+    }
+    const recordCancelled = () => record(false, null, 'cancelled')
+    unrecordedCalls.add(recordCancelled)
+    try {
+      const result = await providerDispatch(request, options)
+      record(result.finishReason === 'stop', result.usage, result.finishReason === 'stop' ? undefined : `finish:${result.finishReason ?? 'unknown'}`)
+      return result
+    } catch (error) {
+      record(false, null, error instanceof Error ? error.message : String(error))
+      throw error
+    }
+  }
+  const service = createGenerationRunService({ repository, dispatch: recordedDispatch,
     onReasoning: event => deps.onReasoning?.({ projectId: deps.projectId, epoch: deps.epoch, ...event }),
     validateRecovery: async (previous, next) => {
       assertCurrent()
@@ -595,7 +621,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     legacyRosters.assertMutable(run)
     const operation = (async () => {
     const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
-    if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
+    // 途中在设置里保存了模型是作者最常见的来源变化，单列一个码，界面才能说清是模型变了。
+    // 用冻结的模型凭据再重建一次：仍与原绑定一致才是只有模型变了；作品设定等也变了时报通用码。
+    if (!isDeepStrictEqual(current, run.binding)) throw new Error(isDeepStrictEqual(deps.rebuildBinding(run.binding, modelReceipt(run.binding)), run.binding)
+      ? 'GENERATION_SOURCE_CHANGED_MODEL' : 'GENERATION_SOURCE_CHANGED')
     const leaseId = runLeases.get(run.runId)
     if (!leaseId) throw new Error('GENERATION_RESUME_REQUIRED')
     const model = deps.leases.resolve(leaseId)
@@ -1512,6 +1541,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       finalizedCharacters.close()
       reviewRevisions.close()
       if (closed) return
+      for (const recordCancelled of [...unrecordedCalls]) recordCancelled()
       service.suspendForProjectClose()
       closed = true
       for (const leaseId of runLeases.values()) deps.leases.close(leaseId)

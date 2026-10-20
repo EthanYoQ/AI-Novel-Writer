@@ -24,7 +24,7 @@ import { renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, type PlotOutli
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { outlineProgress } from '../../shared/plot-outline-checkpoint'
 import { archOutlineSource, readArchCheckpoint } from '../../services/architecture-service'
-import { outlineSourceInvalidNote } from '../run/run-recovery'
+import { outlineSourceChangedNote, outlineSourceInvalidNote } from '../run/run-recovery'
 import { globalEventBus } from '../../shared/event-bus'
 import {
   ARCH_REFRESH_BLOCKED_MESSAGE,
@@ -693,7 +693,7 @@ function ArchFileViewerSession({
         <p>{recovery.planningContinuation?.remainingRange
           ? text(`待完成第 ${recovery.planningContinuation.remainingRange.from} 至 ${recovery.planningContinuation.remainingRange.to} 章，每章目标 ${recovery.planningContinuation.targetUnits} ${planningTargetUnit}。`, `Chapters ${recovery.planningContinuation.remainingRange.from} to ${recovery.planningContinuation.remainingRange.to} remain. Target ${recovery.planningContinuation.targetUnits} ${planningTargetUnit} per chapter.`)
           : text('本次所选章节已保存。', 'The selected chapters are saved.')}</p>
-        {recovery.plotOutlineRecovery?.writeState.kind === 'blocked' && <p>{outlineSourceInvalidNote(recovery, locale) ?? text('生成尚在进行、来源已变化或本稿已保存时，不能覆盖正式内容。草稿仍可编辑和复制。', 'Active generation, changed sources or an already saved draft prevent replacing saved content. You can still edit and copy this draft.')}</p>}
+        {recovery.plotOutlineRecovery?.writeState.kind === 'blocked' && <p>{outlineSourceInvalidNote(recovery, locale) ?? outlineSourceChangedNote(recovery, locale) ?? text('生成尚在进行、来源已变化或本稿已保存时，不能覆盖正式内容。草稿仍可编辑和复制。', 'Active generation, changed sources or an already saved draft prevent replacing saved content. You can still edit and copy this draft.')}</p>}
         <button type="button" className="btn-secondary" disabled={continuing || saving || !projectMatches || !recovery.planningContinuation?.remainingRange || !['ready', 'continued'].includes(recovery.planningContinuation.state)} onClick={() => { void continuePlanning() }}>{text('继续生成缺少的章节', 'Generate remaining chapters')}</button>
         <details><summary>{text('原始候选', 'Original candidate')}</summary><pre className="whitespace-pre-wrap max-h-40 overflow-auto">{recoveryTab?.originalContent}</pre></details>
         {recoveryError && <p role="alert">{recoveryError}</p>}
