@@ -69,6 +69,16 @@ describe('还在写的生成', () => {
     expect(isInFlight(draft({}), '会话', [])).toBe(false)
   })
 
+  it('单章写作在这次打开里失败后，接着跑包含这一章的批量（含暂停）时，单章恢复卡照样列出', () => {
+    const entry = buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, drafts: [{
+      view: view('正文', { status: 'running', artifacts: [artifact('甲', true)], unsavedTails: [{ attemptId: '尾段', artifactId: '甲', durableRevision: 1, text: '未落盘的尾段', failureCode: 'X' }] }) as never,
+      recovery: { handle, operation: 'chapter-draft', chapterNumber: 4, attemptedPurposes: ['chapter-draft'], draftSave: { kind: 'absent' } } as never,
+    }] }, 'zh-CN')[0]
+    const batch = { type: 'batch_generate' as const, resourceKeys: ['chapter:3', 'chapter:4', 'chapter:5'] }
+    expect(isInFlight(entry, '会话', [batch])).toBe(false)
+    expect(isInFlight(entry, '会话', [{ type: 'chapter_creation', resourceKeys: ['chapter:4'] }])).toBe(true)
+  })
+
   it('审稿在这次打开里失败、持久状态仍是 running 时也算可恢复', () => {
     const entry = buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, reviews: [{
       view: view('审稿', { status: 'running' }) as never,
