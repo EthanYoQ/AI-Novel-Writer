@@ -12,13 +12,14 @@ const ERROR_KEYS = {
   PROJECT_LEGACY_IMPORT_REQUIRED: 'error.projectLegacyImportRequired',
   GENERATION_REQUEST_FAILED: 'error.generationRequestFailed',
   GENERATION_PROJECT_SESSION_STALE: 'error.generationProjectSessionStale',
-  GENERATION_PROJECT_SESSION_REQUIRED: 'error.generationProjectSessionStale',
+  GENERATION_PROJECT_SESSION_REQUIRED: 'error.generationProjectSessionRequired',
   GENERATION_DRAFT_NOT_CURRENT: 'error.generationDraftNotCurrent',
   GENERATION_REVIEW_LINEAGE_UNPROVEN: 'error.generationReviewLineageUnproven',
   GENERATION_DRAFT_DEPENDENCY_STALE: 'error.generationDraftDependencyStale',
   GENERATION_DRAFT_DEPENDENCY_INVALID: 'error.generationDraftDependencyInvalid',
   GENERATION_SOURCE_CHANGED: 'error.generationSourceChanged',
-  // 途中保存了模型设置时主进程抛的细分码（#441）。
+  // 途中保存了模型设置：续跑情节大纲时主进程抛前者，#453 的分派复核抛后者（#441）。
+  GENERATION_MODEL_CHANGED: 'error.generationModelChanged',
   GENERATION_SOURCE_CHANGED_MODEL: 'error.generationModelChanged',
   GENERATION_FINALIZED_SOURCE_NOT_CURRENT: 'error.generationFinalizedSourceNotCurrent',
   GENERATION_DRAFT_INCOMPLETE: 'error.generationDraftIncomplete',
