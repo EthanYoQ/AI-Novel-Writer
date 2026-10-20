@@ -19,8 +19,6 @@ $runtimeRoot = Join-Path (Join-Path $repositoryRoot '.runtime\.cache') ('update-
 $transcriptPath = Join-Path $resolvedEvidenceRoot 'runner-transcript.log'
 $evidencePath = Join-Path $resolvedEvidenceRoot 'in-app-update-e2e.json'
 $failureWindowsPath = Join-Path $resolvedEvidenceRoot 'failure-windows.json'
-$appExecutableName = "AI$([char]0x5C0F)$([char]0x8BF4)$([char]0x4F5C)$([char]0x5BB6).exe"
-$appDisplayName = [System.IO.Path]::GetFileNameWithoutExtension($appExecutableName)
 
 function Get-E2eCanonicalGeneration {
   param([Parameter(Mandatory = $true)][string]$CanonicalHome)
@@ -836,8 +834,9 @@ function Get-E2eInstalledAppProcesses {
   param([Parameter(Mandatory = $true)][string]$ExePath)
 
   $canonicalExe = [System.IO.Path]::GetFullPath($ExePath)
+  $exeName = [System.IO.Path]::GetFileName($canonicalExe)
   return @(
-    $entries = @(Get-CimInstance Win32_Process -Filter "Name = '$appExecutableName'" -ErrorAction Stop | Where-Object {
+    $entries = @(Get-CimInstance Win32_Process -Filter "Name = '$exeName'" -ErrorAction Stop | Where-Object {
       -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
       [System.IO.Path]::GetFullPath([string]$_.ExecutablePath).Equals($canonicalExe, [System.StringComparison]::OrdinalIgnoreCase)
     })
@@ -1047,9 +1046,10 @@ try {
   foreach ($name in @(
     [System.IO.Path]::GetFileName($fromInstaller),
     [System.IO.Path]::GetFileNameWithoutExtension($fromInstaller),
-    $appExecutableName,
-    $appDisplayName,
     'ai-novel-writer'
+    # from_tag and expected_tag may straddle the product rename (ADR-0022), so track both names.
+    Get-AiNovelProductExecutableNames
+    Get-AiNovelProductNames
   )) {
     if (-not [string]::IsNullOrWhiteSpace($name)) { [void]$script:roundTargetNames.Add($name) }
   }
@@ -1062,7 +1062,7 @@ try {
     -StandardOutputPath $oldInstallerStdout `
     -StandardErrorPath $oldInstallerStderr `
     -HideWindow
-  $oldExe = Join-Path $e2eInstallRoot $appExecutableName
+  $oldExe = Resolve-AiNovelProductExecutable -Directory $e2eInstallRoot
   Assert-E2eCondition -Condition (Test-Path -LiteralPath $oldExe -PathType Leaf) -Message "v$($plan.from.version) application is missing after silent installation: $oldExe"
   $electronRunner = Join-Path $repositoryRoot 'node_modules\electron\dist\electron.exe'
   Assert-E2eCondition -Condition (Test-Path -LiteralPath $electronRunner -PathType Leaf) -Message "Project Electron runner is missing: $electronRunner"
@@ -1158,11 +1158,12 @@ try {
     -QuietSeconds $PostExitQuietSeconds `
     -LastWindowSnapshot ([ref]$postOldExitSnapshot)
 
-  $updatedExe = Join-Path $e2eInstallRoot $appExecutableName
+  # Resolve the updated executable only after the installer exits: the update may rename it (ADR-0022).
   Wait-E2ePendingInstallerRootExit `
     -Identity $pendingInstallerIdentity `
     -ExpectedImagePath $expectedPendingInstallerPath `
     -TimeoutSeconds $ApplicationTimeoutSeconds
+  $updatedExe = Resolve-AiNovelProductExecutable -Directory $e2eInstallRoot
   Stop-E2eExistingInstalledApps -ExePath $updatedExe
   $installedUpdatedVersion = Wait-E2eInstallRootStable `
     -InstallRoot $e2eInstallRoot `

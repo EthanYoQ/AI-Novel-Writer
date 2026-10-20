@@ -11,6 +11,7 @@ import * as stage from './redesign/pages/stage.mjs'
 import yauzl from 'yauzl'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
 import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const scriptPath = fileURLToPath(import.meta.url)
@@ -30,7 +31,7 @@ const prior = fixedPackage ? null : JSON.parse(fs.readFileSync(priorPath, 'utf8'
 if (prior) assert(prior.build?.buildSha && prior.artifact, 'prior package receipt lacks build attribution')
 const version = JSON.parse(fs.readFileSync(path.join(repository, 'package.json'), 'utf8')).version
 const packageDir = path.resolve(fixedPackage ?? path.join(repository, 'release', version, 'win-unpacked'))
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const runId = randomUUID()
 const receiptDir = path.join(repository, '.runtime', '.cache', 'f05-u16-local-recovery', runId)

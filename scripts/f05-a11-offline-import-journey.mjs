@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import * as lancedb from '@lancedb/lancedb'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveMacExecutable, resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const arg = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -116,7 +117,7 @@ function unpackedPackageProvenance() {
 
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const hashText = value => createHash('sha256').update(value).digest('hex')
-const exe = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'MacOS', 'AI小说作家') : path.join(packageDir ?? '', 'AI小说作家.exe')
+const exe = macMode && !macFixtureOnly ? resolveMacExecutable(macMountedApp) : resolveWindowsExecutable(packageDir ?? '')
 const asar = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'Resources', 'app.asar') : path.join(packageDir ?? '', 'resources', 'app.asar')
 if (macMode && !macFixtureOnly) assert(fs.statSync(exe).isFile() && fs.statSync(asar).isFile(), 'Mounted app executable or ASAR missing')
 if (winMode) {
