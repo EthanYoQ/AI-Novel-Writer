@@ -104,6 +104,51 @@ async function openArchitecture(page) {
   else await arch.waitReady(page)
 }
 
+/**
+ * #465：窗口 1024 与 1280 宽、中英文界面下，角色名单页的导入按钮不超出名单栏，定位下拉框放得下每个选项。
+ * 截图停在角色名单页，返回实测的宽度。
+ */
+async function castFitAt({ page, invoke, reload }, locale, width) {
+  await page.setViewportSize({ width, height: 768 })
+  if (locale === 'en-US') {
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await reload()
+    await stage.openFromLibraryEn(page, '灯塔')
+    await page.getByRole('navigation', { name: 'Writing flow' }).getByRole('button', { name: /^Architecture/ }).click()
+    await root(page).locator('.arch-page:not([data-loading]):not([data-cast-loading])').waitFor({ state: 'visible', timeout: 30_000 })
+    await root(page).getByRole('region', { name: 'Cast', exact: true }).getByRole('button', { name: 'Open cast' }).click()
+  } else {
+    await openArchitecture(page)
+    await arch.openCast(page)
+  }
+  await root(page).locator('.cast-select').waitFor({ state: 'visible' })
+  const measured = await page.evaluate(() => {
+    const roster = document.querySelector('.cast-roster').getBoundingClientRect()
+    const buttons = [...document.querySelectorAll('.cast-roster-actions .pi-btn')].map(button => {
+      const box = button.getBoundingClientRect()
+      return { label: button.textContent, left: Math.round(box.left), right: Math.round(box.right), height: Math.round(box.height) }
+    })
+    // 原生下拉框的箭头画在内容区里：同样样式、只含这一个选项、按内容取宽的副本有多宽，选中它时就要多宽才放得下。
+    const select = document.querySelector('.cast-select')
+    const needed = Object.fromEntries([...select.options].map(option => {
+      const probe = select.cloneNode(false)
+      probe.append(option.cloneNode(true))
+      probe.style.cssText = 'position: absolute; visibility: hidden; width: auto; min-width: 0'
+      select.parentElement.append(probe)
+      const width = Math.ceil(probe.getBoundingClientRect().width)
+      probe.remove()
+      return [option.textContent, width]
+    }))
+    return { rosterRight: Math.round(roster.right), buttons, role: { width: Math.round(select.getBoundingClientRect().width), needed } }
+  })
+  const problems = [
+    ...measured.buttons.filter(button => button.right > measured.rosterRight).map(button => `「${button.label}」超出名单栏`),
+    ...Object.entries(measured.role.needed).filter(([, needed]) => needed > measured.role.width).map(([option]) => `定位下拉框放不下「${option}」`),
+  ]
+  assert.deepEqual(problems, [], JSON.stringify(measured))
+  return measured
+}
+
 /** RD-4 的运行侧页在工作流开始后自动打开；trunk 的旧运行面板没有「进行中」分页，调用方改为轮询数据库里的结果。 */
 async function waitForRunDone(page, timeout = 120_000) {
   const opened = await runSheet.tab(page, '进行中').waitFor({ state: 'visible', timeout: 10_000 }).then(() => true, () => false)
@@ -547,6 +592,9 @@ export const ARCH_SCENARIOS = {
     await root(page).locator('.cast-roster-foot').filter({ hasText: '1 character · page 1 / 1' }).waitFor()
     return { regions }
   } },
+
+  ...Object.fromEntries(['zh-CN', 'en-US'].flatMap(locale => [1024, 1280].map(width =>
+    [`cast-fit-${locale === 'en-US' ? 'en' : 'zh'}-${width}`, { model: false, shell: 'stage', setup: seedArch(), run: context => castFitAt(context, locale, width) }]))),
 
   /** lane 6：清空此节出现危险确认；after 取消，界面与数据库里的世界观都没变。 */
   'arch-clear': { model: false, shell: 'stage', setup: seedArch(), run: async context => {

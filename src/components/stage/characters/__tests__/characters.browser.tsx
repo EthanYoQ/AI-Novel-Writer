@@ -159,6 +159,33 @@ describe('角色名单', () => {
     expect({ overlap, clipped, lines, footClipped }).toEqual({ overlap: false, clipped: [], lines: 1, footClipped: false })
   })
 
+  // 740 与 994 是 1024、1280 宽窗口里角色名单页实测的宽度（#465）。
+  it.each([
+    { locale: 'en-US', width: 740 }, { locale: 'en-US', width: 994 },
+    { locale: 'zh-CN', width: 740 }, { locale: 'zh-CN', width: 994 },
+  ] as const)('$locale 界面、名单页 $width 宽：按钮不超出名单栏，定位下拉框放得下每个选项', async ({ locale, width }) => {
+    useLocaleStore.setState({ locale })
+    useCharacterStore.setState({ characters: [linzhou] })
+    host!.style.width = `${width}px`
+    await render()
+    const roster = host!.querySelector('.cast-roster')!.getBoundingClientRect()
+    const overflowing = [...host!.querySelectorAll<HTMLElement>('.cast-roster-actions .pi-btn')]
+      .filter(button => button.getBoundingClientRect().right > roster.right)
+      .map(button => button.textContent)
+    // 原生下拉框的箭头画在内容区里：同样样式、只含这一个选项、按内容取宽的副本有多宽，选中它时就要多宽才放得下。
+    const select = host!.querySelector<HTMLSelectElement>('.cast-select')!
+    const clippedRoles = [...select.options].filter(option => {
+      const probe = select.cloneNode(false) as HTMLSelectElement
+      probe.append(option.cloneNode(true))
+      probe.style.cssText = 'position: absolute; visibility: hidden; width: auto; min-width: 0'
+      select.parentElement!.append(probe)
+      const needed = probe.getBoundingClientRect().width
+      probe.remove()
+      return needed > select.getBoundingClientRect().width
+    }).map(option => option.textContent)
+    expect({ overflowing, clippedRoles }).toEqual({ overflowing: [], clippedRoles: [] })
+  })
+
   it('名单列出全部角色，改动后保存角色走名单的保存', async () => {
     await render()
     const rows = [...host!.querySelectorAll('.cast-row')].map(row => row.querySelector('.cast-row-name')?.textContent)
