@@ -158,9 +158,9 @@ export function planningTitle(recovery: Pick<GenerationRecoveryContext, 'plotOut
   const t = lang(locale)
   if (!recovery.plotOutlineRecovery) return t('蓝图恢复稿', 'Blueprint recovery draft')
   const range = recovery.plotOutline?.range
-  return range
-    ? t(`大纲恢复稿 · 第 ${range.from}–${range.to} 章`, `Outline recovery draft · ch. ${range.from}–${range.to}`)
-    : t('大纲恢复稿', 'Outline recovery draft')
+  if (!range) return t('大纲恢复稿', 'Outline recovery draft')
+  const chapters = range.from === range.to ? `${range.from}` : `${range.from}–${range.to}`
+  return t(`大纲恢复稿 · 第 ${chapters} 章`, `Outline recovery draft · ch. ${chapters}`)
 }
 
 /** 升级前以现行规则判无效的大纲开跑、不能继续的大纲恢复稿：说明是重复章号、乱序还是章号与范围对不上；不是来源无效时为 null，由调用方用通用说明。 */
@@ -177,14 +177,13 @@ export function outlineSourceChangedBlocked(recovery: Pick<GenerationRecoveryCon
 }
 
 /**
- * 来源已变的大纲恢复稿：只能查看或复制，从本批起始章重新生成；其余情况为 null。
- * batchUnsaved：调用方确知本批没有写入正式大纲（例如最后一章生成完、正式保存被来源检查拒绝），
- * 这时即使候选已生成完也要重新生成；不确定时按「生成完毕即已保存」只说明不能写回。
+ * 来源已变的大纲恢复稿：只能查看或复制；正式大纲还没有这一批时（含最后一章生成完、正式保存被来源检查拒绝）
+ * 要从本批起始章重新生成。其余情况为 null。
  */
-export function outlineSourceChangedNote(recovery: Pick<GenerationRecoveryContext, 'plotOutline' | 'plotOutlineRecovery'>, locale: Locale, batchUnsaved = false): string | null {
+export function outlineSourceChangedNote(recovery: Pick<GenerationRecoveryContext, 'plotOutline' | 'plotOutlineRecovery'>, locale: Locale): string | null {
   if (!outlineSourceChangedBlocked(recovery)) return null
   const t = lang(locale), outline = recovery.plotOutline
-  if (outline?.cursor.kind === 'complete' && !batchUnsaved) {
+  if (recovery.plotOutlineRecovery?.formalCovered) {
     return t('这批大纲已经生成完毕，但模型设置、作品设定、提示词模板或写作 Skill 已经变了，恢复稿不能覆盖正式内容，只能查看或复制。',
       'This outline batch finished, but the model settings, book settings, a prompt template or a writing skill have changed, so this recovery draft cannot replace saved content. You can view or copy it.')
   }

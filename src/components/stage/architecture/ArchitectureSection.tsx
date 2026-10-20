@@ -34,7 +34,7 @@ function CandidateNotice({ sectionKey, overview }: { sectionKey: 'worldbuilding'
   let note = state.handle
     ? text('续写从停下的地方接着生成，不会改动已保存的部分。', 'Resuming continues from where it stopped and leaves saved content alone.')
     : text('无法确认这份候选的来源，只能查看或复制，然后重新生成。', 'The source of this candidate cannot be confirmed. View or copy it, then generate again.')
-  if (restart && overview.planningRecovery) note = outlineSourceChangedNote(overview.planningRecovery, locale, true) ?? note
+  if (restart && overview.planningRecovery) note = outlineSourceChangedNote(overview.planningRecovery, locale) ?? note
   const resume = () => editDraft
     ? overview.openRecoveryDraft()
     : void (sectionKey === 'synopsis' ? overview.handleResumeSynopsis() : overview.handleResumeWorldBuilding())
