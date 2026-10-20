@@ -186,6 +186,17 @@ describe('不是作者点的打开作品（外部打开请求、新建或导入�
     expect(useLayoutStore.getState().settingsOpen).toBe(false)
     expect(discardDialog()).toBeUndefined()
   })
+
+  it('确认框开着时又来一个打开请求：新请求不打开，也不让原请求失效，选放弃修改后打开原来那部', async () => {
+    const OTHER = 'C:\\novels\\other'
+    await act(async () => { void useProjectStore.getState().openProject(TARGET) })
+    await vi.waitFor(() => expect(discardDialog()).toBeTruthy())
+    let second!: Promise<boolean>
+    await act(async () => { second = useProjectStore.getState().openProject(OTHER) })
+    await expect(second).resolves.toBe(false)
+    await act(async () => dialogButton('放弃修改')!.click())
+    await vi.waitFor(() => expect(opens().map(([, target]) => target)).toEqual([TARGET]))
+  })
 })
 
 describe('放弃确认开着时又来了离开请求', () => {
