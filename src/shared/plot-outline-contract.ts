@@ -275,7 +275,7 @@ export type PlotOutlineRangeEffect =
 
 export function plotOutlineRangeEffect(source: PlotOutlineRangeSource, range: PlotOutlineRange): PlotOutlineRangeEffect {
   const entries = headings(source.synopsis)
-  const lastChapter = entries.reduce((last, entry) => Math.max(last, entry.to), 0)
+  const lastChapter = lastEntryChapter(entries)
   try { plotOutlineConfirmedPrefix(source, range) } catch { return { kind: 'invalid', lastChapter, hasEntries: entries.length > 0, orderIssue: chapterOrderIssue(entries) } }
   if (!source.synopsis.trim()) return { kind: 'new' }
   if (!entries.length) return { kind: 'overwrite', whole: true, from: range.from, to: range.to, lastChapter, prologue: false }
@@ -288,12 +288,16 @@ export function plotOutlineRangeEffect(source: PlotOutlineRangeSource, range: Pl
 /** 已有大纲按章标题写到的最后一章；没有按章标题时为 null。只有第 0 章序章时为 0。 */
 export function plotOutlineLastChapter(synopsis: string): number | null {
   const entries = headings(synopsis)
-  return entries.length ? entries.reduce((last, entry) => Math.max(last, entry.to), 0) : null
+  return entries.length ? lastEntryChapter(entries) : null
+}
+
+function lastEntryChapter(entries: ReturnType<typeof headings>): number {
+  return entries.reduce((last, entry) => Math.max(last, entry.to), 0)
 }
 
 /** 下一批的默认起始章：已有大纲能紧接着往后写时取最后一章的下一章，否则从第 1 章起。 */
 export function plotOutlineNextChapter(source: PlotOutlineRangeSource): number {
-  const next = headings(source.synopsis).reduce((last, entry) => Math.max(last, entry.to), 0) + 1
+  const next = lastEntryChapter(headings(source.synopsis)) + 1
   return next > 1 && next <= source.totalChapters && plotOutlineRangeEffect(source, { from: next, to: next }).kind === 'continue' ? next : 1
 }
 
