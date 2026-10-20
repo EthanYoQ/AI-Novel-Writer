@@ -380,7 +380,8 @@ export const CHAPTER_SCENARIOS = {
     assert.equal(created.success, true, created.error)
     const edited = `${original}\n\n作者审稿时补的一句：雾钟停了。`
     assert.equal((await invoke(page, 'db:draft-update-content', third.id, edited, countUnits(edited), path, session)).success, true)
-  } }), run: async ({ page, fake }) => {
+  } }), run: async context => {
+    const { page, fake, invoke, projectPath } = context
     for (const chapterNumber of [3, 4]) {
       await chapterView.open(page, chapterNumber)
       await chapterView.more(page, '定稿…')
@@ -396,12 +397,16 @@ export const CHAPTER_SCENARIOS = {
     // 运行侧页可能还停在第 4 章定稿那张「已完成」卡上，不能据它判断写完；只认第 5 章正文出现在纸面上。
     await chapterView.prose(page).getByText(firstLine(FIXTURE_PROSE)).first().waitFor({ state: 'visible', timeout: 90_000 })
     await runSheet.openFromPalette(page)
-    const after = {
-      proseRequests: fake.chats.filter(chat => chat.kind === 'prose').length - proseBefore,
-      savedProse: await chapterView.prose(page).getByText(firstLine(FIXTURE_PROSE)).count() > 0,
-      rawIpcError: await runSheet.sheet(page).getByText(/Error invoking remote method|GENERATION_/).count(),
-    }
-    assert.deepEqual(after, { proseRequests: 1, savedProse: true, rawIpcError: 0 }, '第 5 章写完并保存，运行侧页没有原始错误')
+    const proseRequests = fake.chats.filter(chat => chat.kind === 'prose').length - proseBefore
+    const rawIpcError = await runSheet.sheet(page).getByText(/Error invoking remote method|GENERATION_/).count()
+    // 纸面出字只说明生成过；#438 是保存被拒，要从库里读回第 5 章的稿才算保存了。
+    const session = await reopenForReading(context)
+    const saved = await invoke(page, 'db:draft-list', 5, projectPath, session)
+    const contents = await Promise.all(saved.map(async draft => (await invoke(page, 'db:draft-get-full', draft.id, projectPath, session))?.content ?? ''))
+    const after = { proseRequests, rawIpcError, savedDrafts: saved.length, savedHasFixtureProse: contents.some(content => content.includes(FIXTURE_PROSE)) }
+    assert.deepEqual(after, { proseRequests: 1, rawIpcError: 0, savedDrafts: 1, savedHasFixtureProse: true }, '第 5 章写完并存进库，运行侧页没有原始错误')
+    await stage.openFromLibrary(page, STAGE_SAMPLE.name)
+    await chapterView.open(page, 5)
     return after
   } },
 
