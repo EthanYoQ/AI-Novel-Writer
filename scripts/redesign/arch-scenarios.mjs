@@ -379,10 +379,6 @@ export const ARCH_SCENARIOS = {
   } },
 
   /**
-   * #441 双审计 P2：本批最后一章（第 6 章，范围 6–6）生成期间改模型，候选生成完、正式保存被来源检查拒绝。
-   * 上一次运行不出现原始错误码；架构页的大纲提示只能查看或复制并给「从第 6 章重新生成」，不再退回续写与「编辑恢复稿」。
-   */
-  /**
    * #441 后续与 #453 的 CodeRabbit 意见：同 arch-model-change-last，第 6 章（范围 6–6）生成完、正式保存被拒。
    * 从架构页点「查看恢复稿」打开的恢复稿与运行侧页的恢复卡，标题都写「第 6 章」，说明不说已经生成完毕，叫作者从第 6 章重新生成。
    */
@@ -408,6 +404,10 @@ export const ARCH_SCENARIOS = {
     return { card: cardText.replace(/\s+/g, ' ').slice(0, 200), viewer: viewer.replace(/\s+/g, ' ').slice(0, 300) }
   } },
 
+  /**
+   * #441 双审计 P2：本批最后一章（第 6 章，范围 6–6）生成期间改模型，候选生成完、正式保存被来源检查拒绝。
+   * 上一次运行不出现原始错误码；架构页的大纲提示只能查看或复制并给「从第 6 章重新生成」，不再退回续写与「编辑恢复稿」。
+   */
   'arch-model-change-last': { model: true, shell: 'stage', setup: seedArch({ clear: ['synopsis'], totalChapters: 24 }), run: async context => {
     const { page } = context
     const last = await stallOutlineBatchAndChangeModel(context, 6)

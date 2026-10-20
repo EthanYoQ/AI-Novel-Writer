@@ -475,6 +475,7 @@ export const RUN_SCENARIOS = {
     fake.gate.hold()
     await blueprint.open(page)
     await blueprint.startBatch(page, 2)
+    await runSheet.waitUntilOpen(page)
     await untilGateHolds(fake.gate)
     const active = await runSheet.activeTitles(page)
     assert.ok(active.some(title => /^批量草稿待审 · 第 3 至 4 章/.test(title)), `批量运行含第 3 章：${active}`)
