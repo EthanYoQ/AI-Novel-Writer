@@ -8,12 +8,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const packageDir = process.argv.find(arg => arg.startsWith('--package-dir='))?.slice('--package-dir='.length)
 const expectedAsar = process.argv.find(arg => arg.startsWith('--asar-sha256='))?.slice('--asar-sha256='.length)
 assert(packageDir && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''), 'pass --package-dir=<fresh win-unpacked> --asar-sha256=<fresh bundle hash>')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 assert(fs.statSync(executablePath).isFile() && fs.statSync(asarPath).isFile())
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')

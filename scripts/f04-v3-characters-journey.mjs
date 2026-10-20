@@ -14,6 +14,7 @@ import * as arch from './redesign/pages/architecture.mjs'
 import * as chapterView from './redesign/pages/chapter-view.mjs'
 import * as runSheet from './redesign/pages/run-sheet.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
@@ -31,7 +32,7 @@ const expectedExe = option('exe-sha256')
 const expectedAsar = option('asar-sha256')
 assert(packageDir && packageSourceSha && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
   'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
-const exe = path.join(packageDir, 'AI小说作家.exe')
+const exe = resolveWindowsExecutable(packageDir)
 const asar = path.join(packageDir, 'resources', 'app.asar')
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()

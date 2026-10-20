@@ -125,7 +125,8 @@ describe('release metadata', () => {
 
   it('lets the Windows smoke command discover the current release executable', () => {
     const smokeScript = readFileSync('scripts/smoke-win-app.ps1', 'utf8')
+    const productName = /"productName":\s*"([^"]+)"/.exec(readFileSync('electron-builder.json5', 'utf8'))?.[1]
     expect(smokeScript).toContain('package.json')
-    expect(smokeScript).toContain('AI小说作家.exe')
+    expect(smokeScript).toContain(`win-unpacked\\${productName}.exe`)
   })
 })

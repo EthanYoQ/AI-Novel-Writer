@@ -11,6 +11,7 @@ import { _electron as electron } from 'playwright'
 import * as blueprint from './redesign/pages/blueprint.mjs'
 import * as runSheet from './redesign/pages/run-sheet.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const runRoot = join(repository, '.runtime', '.cache', 'f05-u13', randomUUID())
@@ -44,7 +45,7 @@ const diagnosticOverlay = process.argv.includes('--diagnostic-overlay')
 const overlayPaths = ['electron/services/main-generation-owner.ts',
   'src/services/generation/generation-harness.ts', 'src/services/workflows/commands/generate-draft.command.ts']
 const packageDir = option('package-dir') && resolve(repository, option('package-dir'))
-const executablePath = packageDir && join(packageDir, 'AI小说作家.exe')
+const executablePath = packageDir && resolveWindowsExecutable(packageDir)
 const asarPath = packageDir && join(packageDir, 'resources', 'app.asar')
 
 function git(...args) {
