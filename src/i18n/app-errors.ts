@@ -20,6 +20,7 @@ const ERROR_KEYS = {
   GENERATION_SOURCE_CHANGED: 'error.generationSourceChanged',
   // 途中保存了模型设置：续跑情节大纲时主进程抛前者，#453 的分派复核抛后者（#441）。
   GENERATION_MODEL_CHANGED: 'error.generationModelChanged',
+  GENERATION_IMPORT_MODEL_CHANGED: 'error.generationModelChanged',
   GENERATION_SOURCE_CHANGED_MODEL: 'error.generationModelChanged',
   GENERATION_FINALIZED_SOURCE_NOT_CURRENT: 'error.generationFinalizedSourceNotCurrent',
   GENERATION_DRAFT_INCOMPLETE: 'error.generationDraftIncomplete',

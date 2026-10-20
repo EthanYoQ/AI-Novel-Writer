@@ -57,8 +57,8 @@ it('does not promise that a stale-session action never ran', () => {
   expect(en).not.toMatch(/did not run|was not run/iu)
 })
 
-// GENERATION_MODEL_CHANGED 由主进程续跑情节大纲时抛出；GENERATION_SOURCE_CHANGED_MODEL 由 #453 抛出。
-it.each(['GENERATION_MODEL_CHANGED', 'GENERATION_SOURCE_CHANGED_MODEL'])('explains %s mid-generation instead of falling back to the raw code', code => {
+// GENERATION_MODEL_CHANGED 由主进程续跑情节大纲时抛出，GENERATION_IMPORT_MODEL_CHANGED 由导入生成抛出；GENERATION_SOURCE_CHANGED_MODEL 由 #453 抛出。
+it.each(['GENERATION_MODEL_CHANGED', 'GENERATION_IMPORT_MODEL_CHANGED', 'GENERATION_SOURCE_CHANGED_MODEL'])('explains %s mid-generation instead of falling back to the raw code', code => {
   const wrapped = `Error invoking remote method 'generation:execute': Error: ${code}`
   expect(knownAppErrorMessage('zh-CN', wrapped)).toContain('模型设置被修改')
   expect(knownAppErrorMessage('en-US', wrapped)).toContain('model settings changed')
