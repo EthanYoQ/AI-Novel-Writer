@@ -10,7 +10,7 @@ import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '..
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { SummaryRepository } from '../../repositories/summary-repository'
 import { getProjectDb } from '../../database'
-import { textHash } from '../../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import { generationOutputContract, type BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
@@ -798,4 +798,18 @@ it('#420 recoverFrom 指向同 root 另一步骤的尝试时，按本运行的�
  expect(result.outcome).toMatchObject({ status: 'completed', finishReason: 'stop' })
  expect(f.dispatch).toHaveBeenCalledTimes(before + 1)
  expect(f.owner.readFinalizationGeneration({ slot })!.latestAttempt).toMatchObject({ inFlight: false, finishReason: 'stop', failureCode: null })
+})
+
+it('#420 生成记录写入失败后点重试：报出写入失败本身，而不是界面认不出的记录无效', async () => {
+ const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text: '林岚进入北塔。' }); return { finishReason: 'stop', usage: null } })
+ const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey: 'chapter_notes' }
+ const { handle } = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' }).view
+ const snapshot = vi.spyOn(GenerationRunRepository.prototype, 'snapshot').mockImplementation(() => { throw new Error('disk full') })
+ const failed = await f.owner.executeFinalizationGeneration({ handle })
+ expect(failed.outcome.status).not.toBe('completed')
+ snapshot.mockRestore()
+ const recoverFrom = f.owner.readFinalizationGeneration({ slot })!.latestAttempt!.attemptId
+ await expect(f.owner.executeFinalizationGeneration({ handle, recoverFrom })).rejects.toThrow('GENERATION_STORAGE_FAILED')
+ expect(f.dispatch).toHaveBeenCalledTimes(1)
+ f.owner.discardCandidate(handle, f.artifactOf(failed).artifactId)
 })

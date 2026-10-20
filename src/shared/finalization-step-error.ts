@@ -22,6 +22,9 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: b
   { code: /^GENERATION_STORAGE_FAILED$/, retry: false,
     zh: '保存这次后处理的生成记录时写入失败，后处理已停止，再点「重试」也不会重新生成。请检查磁盘空间后重新定稿本章。',
     en: 'Saving the generation record for this post-processing run failed, so it stopped. Retrying will not generate this step again. Check disk space, then finalize this chapter again.' },
+  // 生成记录缺了没写进去的尾部、已被丢弃或校验不符，不能拿来提交或修正。
+  { code: /^GENERATION_FINALIZATION_ARTIFACT_INVALID$/, retry: false,
+    zh: '这一步的生成记录不完整或已失效，不能沿用。请重新定稿本章后再处理。', en: "This step's generation record is incomplete or no longer valid, so it cannot be reused. Finalize this chapter again, then retry." },
   { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: false,
     zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
 ]

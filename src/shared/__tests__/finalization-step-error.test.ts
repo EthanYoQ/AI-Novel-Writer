@@ -17,6 +17,12 @@ describe('定稿后处理步骤错误', () => {
     expect(describeFinalizationStepError('ROOT_BUDGET_EXHAUSTED', en)).not.toMatch(/Select Retry/)
   })
 
+  it('生成记录不完整或已失效：给可读说明，不提示重试', () => {
+    expect(finalizationStepErrorCode("Error invoking remote method 'project-session:invoke': Error: GENERATION_FINALIZATION_ARTIFACT_INVALID")).toBe('GENERATION_FINALIZATION_ARTIFACT_INVALID')
+    expect(describeFinalizationStepError('GENERATION_FINALIZATION_ARTIFACT_INVALID', zh)).toContain('重新定稿本章')
+    expect(describeFinalizationStepError('GENERATION_FINALIZATION_ARTIFACT_INVALID', en)).not.toMatch(/GENERATION_|Select Retry/)
+  })
+
   it('生成记录写入失败阻断了 root：给可读说明，不提示重试', () => {
     expect(finalizationStepErrorCode("Error invoking remote method 'project-session:invoke': Error: GENERATION_STORAGE_FAILED")).toBe('GENERATION_STORAGE_FAILED')
     expect(describeFinalizationStepError('GENERATION_STORAGE_FAILED', zh)).toContain('再点「重试」也不会重新生成')

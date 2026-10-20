@@ -1,8 +1,5 @@
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
-
-// 尝试 id 都由 randomUUID 生成；recoverFrom 还拼进 nonce，只收 UUID，免得拼出别的尝试的 nonce。
-const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
 import { isDeepStrictEqual } from 'node:util'
 import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, ShortOutlineRetry, PlanningContinuation } from '../../src/shared/generation-owner-contract'
 import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
@@ -58,6 +55,8 @@ import { buildLegacyRosterJsonRepairTask, buildLegacyRosterReplacementTask, pars
 import { validateGraphGenerationInput, readGraphGenerationContext } from './graph-generation-source'
 import { planningTargetInstruction, parsePlanningTargetUnits, renderPlotOutlineRange, plotOutlineRecoveryDraft, plotOutlineSourceInvalid, validPlotOutlineAuthorPrefix, type PlotOutlineSource, type PlotOutlineProgress, type PlotOutlineRecovery, type PlotOutlineAuthorEditReceipt } from '../../src/shared/plot-outline-contract'
 import { ProjectCoreRepository, type ProjectCoreSynopsisExpected, type ProjectCoreSynopsisCommitRequest } from '../repositories/project-core-repository'
+// 尝试 id 都由 randomUUID 生成；recoverFrom 还拼进 nonce，只收 UUID，免得拼出别的尝试的 nonce。
+const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
 const graphOperations = { plot: 'plot-tree-snapshot', plan: 'narrative-thread-plan-candidate', event: 'narrative-thread-event-candidate' } as const
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
@@ -1173,10 +1172,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
             : `${repairKind === 'generic' ? '上一份回答未满足要求的 JSON 结构或原文证据校验。' : guidance}${detail}请仅依据原始冻结正文和角色 ID 返回修正后的 JSON 对象，不得改写或虚构证据。没有可靠更新时返回 {"updates":[]}。` }] }
       }
       const assertRootIdle = () => {
-        if (service.readUnsavedTails().some(tail => repository.receipt(tail.attemptId).run.rootActionId === run.rootActionId)) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
         const budget = repository.budget(run.rootActionId)
-        // 根被阻断时给出阻断原因（如超时后的 ROOT_BUDGET_EXHAUSTED），再点重试也不会解除。
+        // 根被阻断时先给出阻断原因（如超时后的 ROOT_BUDGET_EXHAUSTED、写入失败的 GENERATION_STORAGE_FAILED），再点重试也不会解除。
         if (budget.blockedCode) throw new Error(budget.blockedCode)
+        if (service.readUnsavedTails().some(tail => repository.receipt(tail.attemptId).run.rootActionId === run.rootActionId)) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
         if (!['active', 'paused'].includes(budget.root.status)
           || budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))
           || [...pending.keys()].some(key => repository.get(JSON.parse(key)[0]).rootActionId === run.rootActionId)) throw new Error('GENERATION_DISPATCH_BLOCKED')
