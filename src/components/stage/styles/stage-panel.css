@@ -18,13 +18,17 @@
 }
 
 .stage-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
+  container-type: inline-size;
 }
 
+/* 内容区自成层叠上下文：里面的层级（关系图谱工具条 z-10、选区工具条 z 50）只在内容区内部比较，浮起的侧页（--z-sheet）总在它们上面 */
 .stage-content {
   position: relative;
+  isolation: isolate;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -56,7 +60,10 @@
   overflow: auto;
 }
 
-/* 侧页贴在面板右缘，与画板里的审稿、运行侧页一致：不再浮起，用一条分隔线区分 */
+/*
+ * 放得下时侧页贴在面板右缘，与画板里的审稿、运行侧页一致：不浮起，用一条分隔线区分。
+ * 侧页让着内容区：宽版（诊断）只用内容区留够 --content-min-w 之后剩下的宽度，最窄退回普通侧页宽。
+ */
 .stage-sheet-slot {
   width: var(--sheet-w);
   flex: none;
@@ -68,7 +75,17 @@
 }
 
 .stage-sheet-slot[data-wide] {
-  width: var(--sheet-w-wide);
+  width: clamp(var(--sheet-w), 100cqw - var(--content-min-w), var(--sheet-w-wide));
+}
+
+/* 连普通侧页也并排不下（--content-min-w + --sheet-w）：侧页浮在内容区上，内容区保持整个面板的宽度，关掉侧页即复原 */
+@container (width < 980px) {
+  .stage-sheet-slot {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: var(--z-sheet);
+    box-shadow: var(--shadow-pop);
+  }
 }
 
 .stage-sheet-slot > .pi-sheet {

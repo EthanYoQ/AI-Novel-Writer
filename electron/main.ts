@@ -38,6 +38,7 @@ import { resolveGlobalDataRoots } from './services/app-data-locator'
 import { runGlobalDataMigration, activateGlobalData } from './services/global-data-migration'
 import { ensureVelaHome } from './utils/config-utils'
 import type { StartupBlockedCode, StartupMigrationNotice } from '../src/shared/startup-contract'
+import { APP_BRAND } from '../src/shared/brand'
 
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
@@ -134,7 +135,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 640,
-    title: startupBlockedCode ? 'AI Novel Writer' : mainT(app.getLocale(), 'app.windowTitle'),
+    title: startupBlockedCode ? APP_BRAND.enName : mainT(app.getLocale(), 'app.windowTitle'),
     icon: path.join(process.env.APP_ROOT!, 'build', 'icon.png'),
     // 使用应用内自绘标题栏，避免 Windows 原生标题栏与棕色标题栏重复显示。
     frame: Boolean(startupBlockedCode),
@@ -149,7 +150,8 @@ function createWindow() {
   // A diagnostic-only window has no editor and no business close responder.
   if (!startupBlockedCode) installWindowCloseGuard(win)
 
-  if (process.platform === 'darwin') {
+  // 打包后的 Dock 图标来自 icon.icns（按 macOS 网格留了边）；icon.png 是满版的，只在开发时顶上。
+  if (process.platform === 'darwin' && !app.isPackaged) {
     app.dock?.setIcon(path.join(process.env.APP_ROOT!, 'build', 'icon.png'))
   }
 

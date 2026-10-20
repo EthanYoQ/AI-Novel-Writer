@@ -7,6 +7,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
 }
 
 .stage-bp-loading {
@@ -198,8 +199,10 @@
   gap: 22px;
 }
 
+/* 状态与按钮并排放不下时按钮换行，状态文字不被挤成一字一行 */
 .stage-bp-card-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-2);
 }
@@ -535,4 +538,33 @@
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-lg);
   background: var(--paper);
+}
+
+/* ================= 窄宽度（按蓝图页自身的宽度，运行侧页并排时也成立） ================= */
+@container (width < 760px) {
+  .stage-bp-plan {
+    width: 240px;
+  }
+
+  .stage-bp-card {
+    padding: 20px 24px 40px;
+  }
+}
+
+/* 章节规划与单章蓝图上下排：规划在上、限高滚动 */
+@container (width < 520px) {
+  .stage-bp-head {
+    padding: 20px 20px 16px;
+  }
+
+  .stage-bp-body {
+    flex-direction: column;
+  }
+
+  .stage-bp-plan {
+    width: auto;
+    max-height: 40%;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
 }

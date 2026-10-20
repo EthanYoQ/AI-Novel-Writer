@@ -1,8 +1,9 @@
 import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
 import type { MessageKey } from './en-US'
+import { APP_BRAND } from '../../shared/brand'
 
 export const zhCN = {
-  'app.windowTitle': 'AI小说作家 — AI Novel Writer',
+  'app.windowTitle': `${APP_BRAND.zhName} ${APP_BRAND.enName}`,
   'error.knowledgeBaseNativeUnavailable': '知识库不可用：Windows 原生组件加载失败。请重新安装或下载完整发布包。',
   'error.legacyVectorMigrationBlocked': '旧版知识库数据需要先修复后才能继续。请修正项目中的 vectors.json，然后重试。',
   'error.projectNotOpen': '请先打开项目。',

@@ -7,6 +7,7 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
 }
 
 /* ================= 角色建议提示条 ================= */
@@ -354,6 +355,7 @@
 
 .cast-view-switch {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-4);
   margin: 0 40px;
@@ -486,4 +488,45 @@
 
 .cast-import-consent {
   white-space: pre-line;
+}
+
+/* ================= 窄宽度（按角色页自身的宽度，运行侧页并排时也成立） ================= */
+@container (width < 760px) {
+  .cast-body {
+    grid-template-columns: 224px minmax(0, 1fr);
+  }
+
+  .cast-profile-head {
+    padding: 24px 24px 16px;
+  }
+
+  .cast-view-switch {
+    margin: 0 24px;
+  }
+
+  .cast-profile-body {
+    padding: var(--s-5) 24px 32px;
+  }
+}
+
+/* 名单与档案上下排：名单在上、限高滚动 */
+@container (width < 560px) {
+  .cast-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 2fr) minmax(0, 3fr);
+  }
+
+  .cast-roster {
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  /* 档案头的保存与更多操作换到名字下面，名字不被挤掉 */
+  .cast-profile-head:not(.cast-profile-head-empty) {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .cast-profile-head:not(.cast-profile-head-empty) .cast-profile-actions {
+    grid-column: 2;
+  }
 }
