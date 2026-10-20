@@ -169,6 +169,36 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
     expect(result.reasons).toContain('script-dependency')
   })
 
+  it('merges a sibling file that shares its name with a root file already merged', () => {
+    const files: Record<string, string> = {
+      'tone.md': 'Root tone.',
+      'references/guide.md': 'Pair with [tone](tone.md).',
+      'references/tone.md': 'Guide tone.',
+    }
+    const result = inspectLocalWritingSkill('---\nname: twins\n---\nRead [tone](tone.md) and references/guide.md.', {
+      readFile: relativePath => files[relativePath],
+    })
+
+    expect(result).toMatchObject({ compatible: true, bundledFiles: ['tone.md', 'references/guide.md', 'references/tone.md'] })
+    expect(result.content).toContain('Root tone.')
+    expect(result.content).toContain('Guide tone.')
+  })
+
+  it('reads ${SKILL_DIR} references from the skill root even inside a nested file', () => {
+    const files: Record<string, string> = {
+      'rules.md': 'Root rules.',
+      'references/guide.md': 'Apply ${SKILL_DIR}/rules.md.',
+      'references/rules.md': 'Nested rules.',
+    }
+    const result = inspectLocalWritingSkill('---\nname: rooted\n---\nRead references/guide.md.', {
+      readFile: relativePath => files[relativePath],
+    })
+
+    expect(result).toMatchObject({ compatible: true, bundledFiles: ['references/guide.md', 'rules.md'] })
+    expect(result.content).toContain('Root rules.')
+    expect(result.content).not.toContain('Nested rules.')
+  })
+
   it.each([
     ['https://github.com/acme/story-skill',{ owner: 'acme', repo: 'story-skill', path: 'SKILL.md' }],
     ['https://github.com/acme/story-skill/tree/main/skills/prose', { owner: 'acme', repo: 'story-skill', ref: 'main', path: 'skills/prose/SKILL.md' }],
