@@ -971,7 +971,7 @@ if ($LoadProbeLibrary) {
 if ([string]::IsNullOrWhiteSpace($ExePath)) {
   $root = Split-Path -Parent $PSScriptRoot
   $packageJson = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
-  $ExePath = Join-Path $root ("release\{0}\win-unpacked\书童.exe" -f [string]$packageJson.version)
+  $ExePath = Join-Path $root ("release\{0}\win-unpacked\{1}" -f [string]$packageJson.version, (Get-AiNovelProductExecutableNames)[0])
 }
 
 $resolvedExe = (Resolve-Path -LiteralPath $ExePath).Path

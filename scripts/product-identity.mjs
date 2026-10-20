@@ -7,11 +7,11 @@ import path from 'node:path'
  * PowerShell 脚本里有同样的名单，改这里时一并改。
  */
 export const PRODUCT_NAME = '书童'
-export const LEGACY_PRODUCT_NAME = 'AI小说作家'
+const LEGACY_PRODUCT_NAME = 'AI小说作家'
 export const PRODUCT_NAMES = [PRODUCT_NAME, LEGACY_PRODUCT_NAME]
 
 export const WINDOWS_EXECUTABLE_NAME = `${PRODUCT_NAME}.exe`
-export const WINDOWS_EXECUTABLE_NAMES = PRODUCT_NAMES.map(name => `${name}.exe`)
+const WINDOWS_EXECUTABLE_NAMES = PRODUCT_NAMES.map(name => `${name}.exe`)
 
 /** 进程监控按名字认领的目标：exe 名、去掉扩展名的名字，加上 package.json 的 name。 */
 export const WINDOWS_PROCESS_TARGET_NAMES = [

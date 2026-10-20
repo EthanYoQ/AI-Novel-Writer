@@ -1250,9 +1250,13 @@ catch {
 }
 finally {
   # 本次安装没完成时，留下的可能是升级前的旧版本，它的卸载程序与 exe 还是旧名。
-  $installedUninstaller = Get-AiNovelProductUninstallerNames |
-    ForEach-Object { Join-Path $installRoot $_ } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+  # 卸载程序与 exe 从同一个产品名推出，不靠拆文件名。
+  $installedProduct = Get-AiNovelProductNames |
+    ForEach-Object { [pscustomobject]@{
+      Uninstaller = Join-Path $installRoot "Uninstall $_.exe"
+      Executable = Join-Path $installRoot "$_.exe"
+    } } |
+    Where-Object { Test-Path -LiteralPath $_.Uninstaller -PathType Leaf } |
     Select-Object -First 1
   if ($currentInstallCompleted -and -not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
     if ($null -eq $failureRecord) {
@@ -1265,18 +1269,15 @@ finally {
     }
     $smokeSucceeded = $false
   }
-  elseif ($null -ne $installedUninstaller) {
-    $installedExecutable = Join-Path $installRoot (
-      [System.IO.Path]::GetFileName($installedUninstaller).Substring('Uninstall '.Length)
-    )
+  elseif ($null -ne $installedProduct) {
     try {
       Invoke-AiNovelMonitoredExecutable `
-        -Path $installedUninstaller `
+        -Path $installedProduct.Uninstaller `
         -Arguments @('/S') `
         -Operation 'Uninstaller'
       $uninstallReceipt = Assert-AiNovelUninstallPostcondition `
         -InstallRoot $installRoot `
-        -InstalledExecutable $installedExecutable
+        -InstalledExecutable $installedProduct.Executable
       Write-AiNovelAcceptanceReceipt `
         -Directory $script:aiNovelAcceptanceDirectory `
         -FileName 'uninstall.json' `
