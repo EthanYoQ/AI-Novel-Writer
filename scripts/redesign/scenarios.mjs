@@ -391,6 +391,7 @@ async function moveToChapter3(page) {
   for (let open = await otherTabs.count(); open > 0; open = await otherTabs.count()) {
     const closing = otherTabs.first()
     const name = await closing.getAttribute('aria-label')
+    assert.ok(name, '标签的关闭按钮带 aria-label，才能等这一个消失')
     await closing.click()
     // 等刚点的这个标签消失，不等某个下标：关掉一个后下标会前移，旧下标的等待会立即通过。
     await stage.tabList(page).getByRole('button', { name, exact: true }).waitFor({ state: 'detached' })

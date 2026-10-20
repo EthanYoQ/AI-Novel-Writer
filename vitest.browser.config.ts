@@ -15,7 +15,8 @@ const freeLoopbackPort = () => new Promise<number>((resolve, reject) => {
 })
 
 const executablePath = process.env.AI_NOVEL_VITEST_CHROMIUM
-// 浏览器的 navigator.language 固定为中文，不跟运行器系统语言走；设 AI_NOVEL_VITEST_LOCALE=en-US 可在本机复现英文 CI。
+// 浏览器的 navigator.language 固定为中文，不跟运行器系统语言走。设 AI_NOVEL_VITEST_LOCALE=en-US 可在本机复现英文 CI：
+// 此时断言中文文案的用例（包括 runner-locale.browser.tsx）会像英文运行器上那样失败。
 const browserLocale = process.env.AI_NOVEL_VITEST_LOCALE || 'zh-CN'
 const browserApiPort = Number(process.env.AI_NOVEL_VITEST_BROWSER_API_PORT || 0) || await freeLoopbackPort()
 const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
