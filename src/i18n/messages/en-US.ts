@@ -34,6 +34,8 @@ export const enUS = {
   'error.generationNoProgress': 'The model continuation did not add enough new text, so it was not added to the result. Try again.',
   'error.generationRevisionUnchanged': 'The revision came back empty or identical to the original, so it was not saved. Adjust the review notes, then try again.',
   'error.generationSkillUnavailable': 'A selected writing Skill was removed or is not compatible with this book (for example, it is in another language). Choose the Skills again in Settings, then generate.',
+  'error.generationSkillBundleDamaged': 'Files bundled with a selected writing Skill were changed or are missing, so nothing was generated. Re-import the Skill in Settings, then generate.',
+  'error.generationFinalizationRecoveryUnavailable': "This step's generation record changed, so it was not generated again.",
 } as const
 
 export type MessageKey = keyof typeof enUS

@@ -64,6 +64,16 @@ it.each(['GENERATION_MODEL_CHANGED', 'GENERATION_IMPORT_MODEL_CHANGED', 'GENERAT
   expect(knownAppErrorMessage('en-US', wrapped)).toContain('model settings changed')
 })
 
+// GENERATION_SKILL_BUNDLE_DAMAGED 由 #443 抛出，GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE 由 #447 抛出；无论哪个 PR 先合入都已登记。
+it.each([
+  ['GENERATION_SKILL_BUNDLE_DAMAGED', '重新导入', 'import'],
+  ['GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE', '生成记录已变化', 'generation record changed'],
+])('explains %s instead of falling back to the raw code', (code, zh, en) => {
+  const wrapped = `Error invoking remote method 'generation:execute': Error: ${code}`
+  expect(knownAppErrorMessage('zh-CN', wrapped)).toContain(zh)
+  expect(knownAppErrorMessage('en-US', wrapped)).toContain(en)
+})
+
 // 这两个码在保存时的来源复核里也会抛出，那时模型已经回答过。
 it.each(['GENERATION_DRAFT_NOT_CURRENT', 'GENERATION_FINALIZED_SOURCE_NOT_CURRENT'])('does not promise that %s happened before any model request', code => {
   const raw = `Error invoking remote method 'generation:commit-draft': Error: ${code}`

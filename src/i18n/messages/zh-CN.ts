@@ -36,4 +36,6 @@ export const zhCN = {
   'error.generationNoProgress': '模型这次续写没有新增足够的内容，没有并入结果。请重试。',
   'error.generationRevisionUnchanged': '修稿结果为空或与原稿相同，没有保存。请调整修改意见后重试。',
   'error.generationSkillUnavailable': '选用的写作 Skill 已被删除，或与这本书不兼容（例如语言不同）。请在设置里重新选择后再生成。',
+  'error.generationSkillBundleDamaged': '选用的写作 Skill 附带的文件被改动或缺失，结果没有生成。请在设置里重新导入这个 Skill 后再生成。',
+  'error.generationFinalizationRecoveryUnavailable': '这一步的生成记录已变化，本次没有重新生成。',
 } satisfies Record<MessageKey, string>

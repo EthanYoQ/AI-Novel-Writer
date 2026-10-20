@@ -78,6 +78,7 @@ const ERROR_KEYS = {
   GENERATION_MODEL_REQUIRED: 'error.generationModelMissing',
   GENERATION_AGENT_MODEL_REQUIRED: 'error.generationModelMissing',
   GENERATION_DISPATCH_BLOCKED: 'error.generationStopped',
+  GENERATION_FINALIZATION_RECOVERY_UNAVAILABLE: 'error.generationFinalizationRecoveryUnavailable',
   GENERATION_AGENT_ACTION_BLOCKED: 'error.generationStopped',
   GENERATION_DIRECTORY_CONTINUATION_BLOCKED: 'error.generationStopped',
   GENERATION_IMPORT_EXECUTION_STALE: 'error.generationStopped',
@@ -92,6 +93,7 @@ const ERROR_KEYS = {
   GENERATION_REVIEW_REVISION_NOOP: 'error.generationRevisionUnchanged',
   GENERATION_SKILL_MISSING: 'error.generationSkillUnavailable',
   GENERATION_SKILL_INCOMPATIBLE: 'error.generationSkillUnavailable',
+  GENERATION_SKILL_BUNDLE_DAMAGED: 'error.generationSkillBundleDamaged',
   // 途中保存了模型设置：续跑情节大纲时主进程抛前者，#453 的分派复核抛后者（#441）。
   GENERATION_MODEL_CHANGED: 'error.generationModelChanged',
   GENERATION_IMPORT_MODEL_CHANGED: 'error.generationModelChanged',
