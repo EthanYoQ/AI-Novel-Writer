@@ -68,7 +68,8 @@ function opaqueBounds(png: Buffer) {
       bottom = Math.max(bottom, y)
     }
   }
-  return { width, height, margins: { left, top, right: width - 1 - right, bottom: height - 1 - bottom } }
+  const corners = [alpha(0, 0), alpha(width - 1, 0), alpha(0, height - 1), alpha(width - 1, height - 1)]
+  return { width, height, corners, margins: { left, top, right: width - 1 - right, bottom: height - 1 - bottom } }
 }
 
 const buildDir = resolve(process.cwd(), 'build')
@@ -79,11 +80,13 @@ const frames = [
 
 describe('build/ 下提交的应用图标', () => {
   it.each(frames)('$name 的图形完整居中，没有被截掉', ({ png, fullBleed }) => {
-    const { width, margins } = opaqueBounds(png)
+    const { width, corners, margins } = opaqueBounds(png)
 
     expect(margins.right, '图形为空').toBeLessThan(width)
     expect(Math.abs(margins.top - margins.bottom), `上下留白 ${margins.top}/${margins.bottom}`).toBeLessThanOrEqual(1)
     expect(Math.abs(margins.left - margins.right), `左右留白 ${margins.left}/${margins.right}`).toBeLessThanOrEqual(1)
     if (fullBleed) expect(margins).toEqual({ left: 0, top: 0, right: 0, bottom: 0 })
+    // 满版帧的图形铺满画布，上面的留白检查发现不了背景不透明；图标是圆角方块，四角按设计透明。
+    expect(corners, '四角透明').toEqual([0, 0, 0, 0])
   })
 })

@@ -65,8 +65,9 @@
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
-    // 快捷方式与「应用和功能」里显示中英双名。从 AI小说作家.exe 升级时旧卸载程序按注册表里的旧 ShortcutName 删掉旧快捷方式，
-    // 新安装程序再建新的，不会多出一份。
+    // 快捷方式与「应用和功能」里显示中英双名（按 app-builder-lib 26.15.3 的 NSIS 模板核实，见 ADR-0022）。
+    // 从 AI小说作家.exe 升级时新 exe 尚不存在，不走保留快捷方式的改名分支：旧卸载程序按注册表里的旧 ShortcutName
+    // 删掉旧快捷方式，新安装程序再按新名字建，不会多出一份。「应用和功能」的条目按 appId 定位，只改显示名。
     "shortcutName": "书童 Pagekin",
     "uninstallDisplayName": "书童 Pagekin ${version}",
     "deleteAppDataOnUninstall": false

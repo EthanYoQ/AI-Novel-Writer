@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { useLayoutStore, type SettingsSection } from '../../../stores/layout-store'
+import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import ProjectBackupPanel from '../../backups/ProjectBackupPanel'
 import PromptSettings from '../../settings/PromptSettings'
@@ -15,15 +16,54 @@ import AboutSection from './AboutSection'
 import AppearanceSection from './AppearanceSection'
 import ModelsSection from './ModelsSection'
 import ProxySection from './ProxySection'
-import { SETTINGS_GROUPS, SETTINGS_PAGES } from './settings-pages'
+import { SETTINGS_GROUPS, SETTINGS_PAGES, type SettingsPageSpec } from './settings-pages'
+
+interface RequiredState {
+  missing: boolean
+  label: string
+}
+
+/** 必需页的标签状态，非必需页为 null。配置载入前不下结论，只标「必需」。 */
+function useRequiredState(spec: SettingsPageSpec): RequiredState | null {
+  const text = useLocaleStore(s => s.text)
+  const missing = useLLMStore(s => s.loaded && spec.required !== undefined && spec.required.missing(s))
+  if (!spec.required) return null
+  return { missing, label: missing ? text('未配置', 'Not set') : text('必需', 'Required') }
+}
+
+function RequiredMark({ state, decorative }: { state: RequiredState; decorative?: boolean }) {
+  return <span className="stage-set-required" data-missing={state.missing || undefined} aria-hidden={decorative || undefined}>{state.label}</span>
+}
+
+/** 导航按钮的名字只是页名（读屏和按名定位都靠它），必需与否放进描述里读出。 */
+function SettingsLink({ spec, current }: { spec: SettingsPageSpec; current: SettingsSection }) {
+  const text = useLocaleStore(s => s.text)
+  const required = useRequiredState(spec)
+  return (
+    <button
+      type="button"
+      className="stage-set-link"
+      aria-current={spec.id === current ? 'page' : undefined}
+      aria-description={required?.label}
+      onClick={() => { if (spec.id !== current) leaveSettings(() => useLayoutStore.setState({ settingsSection: spec.id })) }}
+    >
+      <span className="stage-set-link-name">{text(...spec.name)}</span>
+      {required && <RequiredMark state={required} decorative />}
+    </button>
+  )
+}
 
 function PageHeader({ page, action }: { page: SettingsSection; action?: ReactNode }) {
   const text = useLocaleStore(s => s.text)
   const spec = SETTINGS_PAGES.find(candidate => candidate.id === page)!
+  const required = useRequiredState(spec)
   return (
     <header className="stage-set-head">
-      <div>
-        <h1 className="stage-set-title">{text(...spec.name)}</h1>
+      <div className="stage-set-head-text">
+        <div className="stage-set-titleline">
+          <h1 className="stage-set-title">{text(...spec.name)}</h1>
+          {required && <RequiredMark state={required} />}
+        </div>
         <p className="stage-set-lede">{text(...spec.lede)}</p>
       </div>
       {action}
@@ -107,17 +147,7 @@ export default function StageSettings({ library }: { library: boolean }) {
         {SETTINGS_GROUPS.map(group => (
           <div key={group.id} className="stage-set-group" role="group" aria-label={text(...group.name)}>
             <p className="stage-set-group-label" aria-hidden="true">{text(...group.name)}</p>
-            {group.pages.map(spec => (
-              <button
-                key={spec.id}
-                type="button"
-                className="stage-set-link"
-                aria-current={spec.id === page ? 'page' : undefined}
-                onClick={() => { if (spec.id !== page) leaveSettings(() => useLayoutStore.setState({ settingsSection: spec.id })) }}
-              >
-                {text(...spec.name)}
-              </button>
-            ))}
+            {group.pages.map(spec => <SettingsLink key={spec.id} spec={spec} current={page} />)}
           </div>
         ))}
       </nav>

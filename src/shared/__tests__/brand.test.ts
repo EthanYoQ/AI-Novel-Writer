@@ -28,6 +28,13 @@ describe('APP_BRAND', () => {
     expect(Object.values(APP_BRAND).join(' ')).not.toMatch(legacyNamePattern)
   })
 
+  it('原名与旧版实际发布的产品名逐字一致', () => {
+    const builderConfig = readFileSync(resolve(process.cwd(), 'electron-builder.json5'), 'utf8')
+    const productName = builderConfig.match(/"productName":\s*"([^"]+)"/)?.[1]
+
+    expect(APP_BRAND.formerZhName).toBe(productName)
+  })
+
   it('does not expose legacy product naming in visible brand surfaces', () => {
     for (const file of visibleBrandSurfaces) {
       const source = readFileSync(resolve(process.cwd(), file), 'utf8')
