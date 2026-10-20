@@ -392,6 +392,8 @@ export const ARCH_SCENARIOS = {
     assert.match(cardText, /大纲恢复稿 · 第 6 章\n/, '运行侧页恢复卡标题不写「6–6」')
     assert.match(cardText, /请从第 6 章重新生成情节大纲/)
     assert.doesNotMatch(cardText, /已经生成完毕/)
+    const titles = await runSheet.recovery(page).getByRole('article').locator('h3').allInnerTexts()
+    assert.deepEqual(titles.filter(title => /大纲恢复稿/.test(title)), ['大纲恢复稿 · 第 6 章'], '已原样写进正式大纲的第 1–5 章不列为可恢复（#464）')
     await openArchitecture(page)
     await arch.waitReady(page)
     await arch.section(page, 'synopsis').getByRole('button', { name: '查看恢复稿' }).click()
