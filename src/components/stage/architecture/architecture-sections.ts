@@ -37,7 +37,9 @@ export function sectionBadge(key: ArchStepKey, overview: ArchitectureOverview): 
       case 'interrupted':
       case 'unresumable': return { kind: 'incomplete' }
       case 'empty':
-      case 'complete': return candidate ? { kind: 'candidate' } : synopsisStarted(overview) ? { kind: 'incomplete' } : { kind: 'empty' }
+      case 'complete':
+        if (candidate) return { kind: 'candidate' }
+        return synopsisStarted(overview) ? { kind: 'incomplete' } : { kind: 'empty' }
       default: return progress satisfies never
     }
   }
