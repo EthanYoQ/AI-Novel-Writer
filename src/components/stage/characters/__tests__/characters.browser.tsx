@@ -381,6 +381,16 @@ describe('角色名单', () => {
       .toEqual({ text: name, overlap: false, besideAvatar: true, ...expected })
   })
 
+  it.each(['zh-CN', 'en-US'] as const)('没有选中角色时的档案头没有头像，标题不按头像扣宽度（%s）', async locale => {
+    useLocaleStore.setState({ locale })
+    useCharacterStore.setState({ characters: [], selectedId: null } as never)
+    host!.style.width = '600px'
+    await render()
+    const title = host!.querySelector<HTMLElement>('.cast-profile-name')!
+    expect({ avatar: host!.querySelector('.cast-profile-avatar'), text: title.textContent, clipped: title.scrollWidth > title.clientWidth + 1 })
+      .toEqual({ avatar: null, text: locale === 'en-US' ? 'Character profile' : '角色档案', clipped: false })
+  })
+
   it('1024 宽窗口里的关系图谱：工具条与人物侧栏的控件都在图谱框里、点得到；宽时显示中心人物', async () => {
     // 1024 宽窗口去掉流程脊与边距，角色名单页约 738px：名单 272，档案两侧各留 40，图谱框只剩约 385。
     host!.style.width = '738px'
