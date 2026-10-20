@@ -3,6 +3,7 @@ import { AlertTriangle, Download, FileText, FolderOpen, Link2, RefreshCw, Shield
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { projectSessionContextFromProject } from '../../shared/project-session-context'
 import {
+  MAX_WRITING_SKILL_BYTES,
   WRITING_SKILL_STAGES,
   type LocalWritingSkillInspection,
   type LocalWritingSkillSourceKind,
@@ -35,6 +36,11 @@ const SOURCE_COPY = {
   user: ['用户', 'User'],
   project: ['项目', 'Project'],
 } as const
+
+const LOCAL_SOURCE_COPY: Record<LocalWritingSkillSourceKind, readonly [string, string]> = {
+  folder: ['本机文件夹', 'Local folder'],
+  file: ['本机文件', 'Local file'],
+}
 
 const REASON_COPY: Record<string, readonly [string, string]> = {
   'relative-reference': ['引用了未随 Skill 提供的文件', 'References files that are not included with the skill'],
@@ -114,7 +120,7 @@ function CandidateCard({ candidate, busy, onInstall }: {
   const { inspection } = candidate
   const local = candidate.origin === 'local' ? candidate.inspection : null
   const sourceLabel = local
-    ? text(`${local.sourceKind === 'folder' ? '本机文件夹' : '本机文件'} ${local.sourceName}`, `Local ${local.sourceKind} ${local.sourceName}`)
+    ? text(`${LOCAL_SOURCE_COPY[local.sourceKind][0]} ${local.sourceName}`, `${LOCAL_SOURCE_COPY[local.sourceKind][1]} ${local.sourceName}`)
     : 'GitHub'
   return (
     <div role="group" aria-label={text('待安装的 Skill', 'Skill to install')} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-3">
@@ -337,7 +343,10 @@ export default function SkillSettings() {
             <div className="min-w-0 flex-1 basis-48">
               <div className="text-sm font-medium text-[var(--color-text)]">{text('本机 Skill', 'Local skill')}</div>
               <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
-                {text('Skill 文件夹或单个 .md 文件，合并后不超过 64 KiB', 'A skill folder or a single .md file, up to 64 KiB after merging')}
+                {text(
+                  `Skill 文件夹或单个 .md 文件，合并后不超过 ${MAX_WRITING_SKILL_BYTES / 1024} KiB`,
+                  `A skill folder or a single .md file, up to ${MAX_WRITING_SKILL_BYTES / 1024} KiB after merging`,
+                )}
               </p>
             </div>
             <div className="flex gap-2">
@@ -419,6 +428,9 @@ export default function SkillSettings() {
         ) : skills.map(skill => {
           const activeStages = WRITING_SKILL_STAGES.filter(stage => bindings[stage] === skill.skillId)
           const damaged = skill.writingSkill.reasons.includes('bundle-damaged')
+          let statusLabel = text('不兼容', 'Incompatible')
+          if (skill.writingSkill.compatible) statusLabel = text('兼容', 'Compatible')
+          else if (damaged) statusLabel = text('已损坏', 'Damaged')
           return (
             <div key={skill.skillId} className="flex items-start gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] px-4 py-3">
               <div className="min-w-0 flex-1">
@@ -428,7 +440,7 @@ export default function SkillSettings() {
                     {text(SOURCE_COPY[skill.source][0], SOURCE_COPY[skill.source][1])}
                   </span>
                   <span className={`text-[0.68rem] ${skill.writingSkill.compatible ? 'text-[var(--color-success-text)]' : 'text-[var(--color-warning-text)]'}`}>
-                    {skill.writingSkill.compatible ? text('兼容', 'Compatible') : damaged ? text('已损坏', 'Damaged') : text('不兼容', 'Incompatible')}
+                    {statusLabel}
                   </span>
                 </div>
                 <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">{localizedSkillDescription(skill, text)}</p>
