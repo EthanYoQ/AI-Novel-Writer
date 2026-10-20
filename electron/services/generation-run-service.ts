@@ -50,6 +50,8 @@ export interface ExecuteGenerationRequest {
     /** 首稿提示经主进程复核确实带有生成前定稿对账注入块；恢复据此决定续写/压缩是否沿用对账结果。 */
     reconciliationInjected?: boolean;
 }
+/** 作者暂停、取消、重开或本次运行总时长用尽时中止请求的原因；调用记录据此记为已取消，而不是服务商失败。 */
+export const GENERATION_STOPPED = new DOMException('GENERATION_STOPPED', 'AbortError');
 export interface GenerationRunServiceDependencies {
     repository: GenerationRunRepository;
     dispatch: (request: unknown, options: {
@@ -204,7 +206,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 catch {
                     storageFailed = true;
                     failedRoots.add(run.rootActionId);
-                } controller.abort(); }, remaining);
+                } controller.abort(GENERATION_STOPPED); }, remaining);
                 const cancelled = new Promise<never>((_resolve, reject) => { const abort = () => reject(new Error('GENERATION_CANCELLED')); controller.signal.addEventListener('abort', abort, { once: true }); removeAbortListener = () => controller.signal.removeEventListener('abort', abort); });
                 const provider = deps.dispatch(request.providerRequest, { signal: controller.signal, onDiagnostics: value => {
                         if (terminal || storageFailed || controller.signal.aborted) return;
@@ -341,15 +343,15 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
         },
         pause: (rootId: string) => { deps.repository.pause(rootId); for (const item of controllers.values())
             if (item.rootId === rootId)
-                item.controller.abort(); },
+                item.controller.abort(GENERATION_STOPPED); },
         cancel: (rootId: string) => { deps.repository.pause(rootId, true); for (const item of controllers.values())
             if (item.rootId === rootId)
-                item.controller.abort(); },
+                item.controller.abort(GENERATION_STOPPED); },
         resume: async (runId: string, next: RunBinding) => { const old = deps.repository.get(runId); if (!isDeepStrictEqual(old.binding.fingerprint, next.fingerprint) || old.binding.contextSnapshotId !== next.contextSnapshotId || !isDeepStrictEqual(old.binding.sourceManifest, next.sourceManifest) || !deps.validateRecovery || !await deps.validateRecovery(old.binding, next))
             throw new Error('GENERATION_RECOVERY_UNAUTHORIZED'); deps.repository.resume(runId, next); return deps.repository.get(runId); },
         restart: (oldRootId: string, request: OpenGenerationRunRequest) => { deps.repository.pause(oldRootId, true); for (const item of controllers.values())
             if (item.rootId === oldRootId)
-                item.controller.abort(); return deps.repository.open(request); },
+                item.controller.abort(GENERATION_STOPPED); return deps.repository.open(request); },
         recoverInterrupted: () => deps.repository.recoverInterrupted(),
     };
 }
