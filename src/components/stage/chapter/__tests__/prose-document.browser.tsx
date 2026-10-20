@@ -15,6 +15,8 @@ import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore } from '../../../../stores/workflow-store'
 import { toast } from '../../../ui/Toast'
 import StageWorkspace from '../../StageWorkspace'
+import { openEditorTool } from '../../../../services/agent/tools/open-editor.tool'
+import { createAgentExecutionContext } from '../../../../services/agent/tools/project-context'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -141,5 +143,22 @@ describe('恢复候选与只读修稿', () => {
     await act(async () => root!.render(<StageWorkspace library={false} focus={false} />))
     await vi.waitFor(() => expect(host!.textContent).toContain('林岚从海港带回了信。'))
     expect(host!.textContent).not.toContain('这个标签没有可显示的页面')
+  })
+})
+
+describe('助手 open_editor 打开的作品目录文件', () => {
+  it.each([['chapter', '第1章 雾钟.txt'], ['outline', '情节大纲.md']] as const)('%s 标签在纸墨外壳里显示文件内容，只读，按 Ctrl S 不写任何东西', async (tabType, filePath) => {
+    const plain = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel, ...args) => channel === 'fs:read-file'
+      ? { success: true, content: '潮水退去，钟声早了一刻。' } : plain(channel, ...args))
+    const result = await openEditorTool.execute({ file_path: filePath, tab_type: tabType }, createAgentExecutionContext())
+    expect(result.success).toBe(true)
+    await act(async () => root!.render(<StageWorkspace library={false} focus={false} />))
+    await vi.waitFor(() => expect(host!.textContent).toContain('潮水退去，钟声早了一刻。'))
+    expect(host!.textContent).not.toContain('这个标签没有可显示的页面')
+    expect(host!.querySelector('h1')?.textContent).toBe(filePath)
+    expect(host!.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('false')
+    await act(async () => { saveKey(host!.querySelector<HTMLElement>('.cm-content')!) })
+    expect(writes()).toEqual([])
   })
 })
