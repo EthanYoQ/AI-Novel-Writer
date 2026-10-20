@@ -144,6 +144,14 @@ export class PlotOutlineResumeAvailableError extends Error {
  */
 export const PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE = 'architecture-synopsis-source-changed'
 
+/**
+ * 主进程按冻结来源拒绝下一次请求时抛出的错误码（main-generation-owner.ts assertSourcesCurrent）：
+ * 模型设置变了是 GENERATION_SOURCE_CHANGED_MODEL，其余来源是 GENERATION_SOURCE_CHANGED。经 IPC 后 code 属性丢失、
+ * 外面还包着「Error invoking remote method …」，只能匹配 message；结尾的负向前瞻排除更长的码（如 _DURING_SNAPSHOT）。
+ * 第 1 组有值即为模型设置变了。
+ */
+const PLOT_OUTLINE_SOURCE_CHANGED_PATTERN = /GENERATION_SOURCE_CHANGED(_MODEL)?(?![A-Z_])/u
+
 export class PlotOutlineSourceChangedError extends Error {
   readonly code = PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE
 
@@ -2181,16 +2189,16 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
           await this.callLLMResult(`${originalPrompt}\n\n${plotOutlineRequestContract(outline, cursor.chapterNumber, cursor.attempt)}`,
             `${promptBuilder.getSystemRole()}\n\n${planningTargetInstruction('outline', outline.targetUnits, language)}`, callbacks, { purpose: plotOutlinePurpose(cursor.chapterNumber, cursor.attempt), reasoningStage: 'planning', writingSkillStage: 'planning' }, context)
         } catch (error) {
-          const changed = error instanceof Error ? /GENERATION_SOURCE_CHANGED(_MODEL)?(?![A-Z_])/u.exec(error.message) : null
+          const changed = error instanceof Error ? PLOT_OUTLINE_SOURCE_CHANGED_PATTERN.exec(error.message) : null
           if (!changed) throw error
           const { from } = outline.range, stoppedAt = cursor.chapterNumber
           const cause = changed[1]
             ? text('生成途中模型设置被修改', 'The model settings were changed during generation')
             : text('生成途中作品设定、提示词模板或写作 Skill 被修改', 'The book settings, a prompt template or a writing skill changed during generation')
-          const kept = stoppedAt <= from ? ''
-            : stoppedAt - 1 === from
-              ? text(`本批已生成的第 ${from} 章保留在「大纲恢复稿」中，可查看和复制。`, `Chapter ${from}, already generated in this batch, is kept in the outline recovery draft to view and copy. `)
-              : text(`本批已生成的第 ${from}–${stoppedAt - 1} 章保留在「大纲恢复稿」中，可查看和复制。`, `Chapters ${from}–${stoppedAt - 1}, already generated in this batch, are kept in the outline recovery draft to view and copy. `)
+          const lastKept = stoppedAt - 1
+          let kept = ''
+          if (lastKept === from) kept = text(`本批已生成的第 ${from} 章保留在「大纲恢复稿」中，可查看和复制。`, `Chapter ${from}, already generated in this batch, is kept in the outline recovery draft to view and copy. `)
+          else if (lastKept > from) kept = text(`本批已生成的第 ${from}–${lastKept} 章保留在「大纲恢复稿」中，可查看和复制。`, `Chapters ${from}–${lastKept}, already generated in this batch, are kept in the outline recovery draft to view and copy. `)
           throw new PlotOutlineSourceChangedError(text(
             `${cause}，这批大纲已在第 ${stoppedAt} 章停止，没有再发送请求。${kept}正式大纲未被改动。请到「架构」页重新生成情节大纲，从第 ${from} 章开始。`,
             `${cause}, so this outline batch stopped at chapter ${stoppedAt} without sending another request. ${kept}The saved outline was not changed. Open Architecture and generate the plot outline again from chapter ${from}.`))
