@@ -66,4 +66,20 @@ describe('removeTemporaryTree', () => {
     expect(() => removeTemporaryTree(os.tmpdir(), os.tmpdir())).toThrow(/Refusing to remove/)
     expect(fs.existsSync(path.join(outside, 'electron', 'main.ts'))).toBe(true)
   })
+
+  it('refuses a target that is itself a link out of the given parent', () => {
+    const { outside, scratch } = fixture()
+
+    expect(() => removeTemporaryTree(path.join(scratch, 'adapter', 'linked'), scratch)).toThrow(/Refusing to remove/)
+    expect(fs.readFileSync(path.join(outside, 'electron', 'main.ts'), 'utf8')).toBe('kept')
+  })
+
+  it('removes an entry whose name only starts with two dots', () => {
+    const { scratch } = fixture()
+    fs.mkdirSync(path.join(scratch, '..cache'))
+
+    removeTemporaryTree(path.join(scratch, '..cache'), scratch)
+
+    expect(fs.existsSync(path.join(scratch, '..cache'))).toBe(false)
+  })
 })
