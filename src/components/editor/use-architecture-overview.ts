@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
+import { archOutlineSource, readArchCheckpoint } from '../../services/architecture-service'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { ipc } from '../../services/ipc-client'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
-import { ARCH_STEP_NAMES, type ArchStepKey } from '../../services/architecture-step-selection'
+import { ARCH_STEP_NAMES, judgeArchCore, type ArchStepKey } from '../../services/architecture-step-selection'
 import { globalEventBus } from '../../shared/event-bus'
 import {
   createProjectArchTabId,
@@ -139,21 +139,10 @@ export function useArchitectureOverview(projectKey: string) {
     let confirmedWorldHandle: MainGenerationRunHandle | null = null
     let confirmedSynopsisHandle: MainGenerationRunHandle | null = null
     let recoveredPlanning: GenerationRecoveryContext | null = null
-    const dbSynopsis = core?.synopsis || ''
-    const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
-    const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US'
-      ? 'en-US'
-      : 'zh-CN'
+    const outlineSource = archOutlineSource(core, currentProject?.novelConfig)
+    const { synopsis: dbSynopsis, totalChapters, writingLanguage } = outlineSource
     try {
-      const partialResult = await ipc.invokeWithProjectSession(
-        projectSession,
-        'fs:read-json',
-        `${projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
-        projectPath,
-      )
-      const partial = partialResult?.success === true
-        ? (partialResult as { data?: Record<string, unknown> }).data
-        : undefined
+      const partial = await readArchCheckpoint(projectSession)
       recoveredWorldBuildingCandidate = partial?.world_building_incomplete === true && typeof partial.world_building_partial_result === 'string'
         ? partial.world_building_partial_result : ''
       recoveredSynopsisCandidate = partial?.synopsis_incomplete === true && typeof partial.synopsis_result === 'string'
@@ -190,11 +179,7 @@ export function useArchitectureOverview(projectKey: string) {
       recoveryFailed = progress.kind === 'unresumable'
       recoveredWorldBuildingCandidate = ''
     }
-    const status: Record<string, boolean> = {
-      premise: (core?.premise?.length ?? 0) > 50,
-      worldbuilding: (core?.worldbuilding?.length ?? 0) > 50,
-      synopsis: (core?.synopsis?.length ?? 0) > 50,
-    }
+    const status: Record<string, boolean> = judgeArchCore(core, progress.kind).hasContent
     const counts: Record<string, number> = {
       premise: status.premise ? (core?.premise?.length ?? 0) : 0,
       worldbuilding: status.worldbuilding ? (core?.worldbuilding?.length ?? 0) : 0,
@@ -209,7 +194,7 @@ export function useArchitectureOverview(projectKey: string) {
     setContents({ premise: core?.premise ?? '', worldbuilding: core?.worldbuilding ?? '', synopsis: core?.synopsis ?? '' })
     setSynopsisProgress(progress)
     setSynopsisRecoveryFailed(recoveryFailed && Boolean(status.synopsis))
-    setSynopsisSource({ synopsis: dbSynopsis, totalChapters, writingLanguage })
+    setSynopsisSource(outlineSource)
     setSynopsisCandidate(recoveredSynopsisCandidate)
     setSynopsisHandle(confirmedSynopsisHandle)
     setPlanningRecovery(recoveredPlanning)
@@ -223,13 +208,14 @@ export function useArchitectureOverview(projectKey: string) {
 
   if (!firstReadEnded && coreReadEnded && (!projectMatches || rosterSettled)) setFirstReadEnded(true)
 
+  /** 每节是否已有内容（不论长短）；是否已确认看 confirmed。 */
   const archStatus = useMemo<Record<string, boolean>>(() => ({
     ...coreStatus,
     characters: rosterSnapshot?.status === 'ready',
   }), [coreStatus, rosterSnapshot])
   /**
-   * 每节是否已确认：架构页徽标、页头计数、主按钮与生成对话框的默认勾选共用，流程脊用同一判定（checkArchConfirmed）。
-   * 情节大纲还要分批写完、没有中断的批次；角色名单要名单就绪且不需要修复。
+   * 每节是否已确认：架构页徽标、页头计数、主按钮与生成对话框的默认勾选共用；前提、世界观、大纲的判定见 judgeArchCore。
+   * 角色名单要名单就绪且不需要修复。
    */
   const rosterPresentation = getCharacterRosterRepairPresentation(
     rosterSnapshot,
@@ -238,11 +224,9 @@ export function useArchitectureOverview(projectKey: string) {
   )
   const rosterReady = rosterPresentation?.kind === 'ready'
   const confirmed = useMemo<Record<ArchStepKey, boolean>>(() => ({
-    premise: Boolean(coreStatus.premise),
+    ...judgeArchCore(contents, synopsisProgress.kind).confirmed,
     characters: rosterReady,
-    worldbuilding: Boolean(coreStatus.worldbuilding),
-    synopsis: synopsisProgress.kind === 'complete',
-  }), [coreStatus, rosterReady, synopsisProgress])
+  }), [contents, rosterReady, synopsisProgress])
   const wordCounts = useMemo<Record<string, number>>(() => ({
     ...coreWordCounts,
     characters: rosterSnapshot?.status === 'ready' ? rosterSnapshot.renderedMarkdown.length : 0,

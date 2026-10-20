@@ -29,6 +29,13 @@ function versionName(version: VersionRecord, text: Text): string {
   return text(`${zh} v${version.version}`, `${en} v${version.version}`)
 }
 
+/** 对比区还没有对比时的一句。稿已删除时各稿正在后台重读、可能失败，不担保列表已刷新。 */
+function comparisonHint(reading: boolean, missingPicked: boolean, text: Text): string {
+  if (reading) return text('正在读取…', 'Loading…')
+  if (missingPicked) return text('这一稿已不存在，可能已被删除，请另选一稿。', 'This version no longer exists. It may have been deleted. Pick another version.')
+  return text('选一稿，与当前稿逐字对比。', 'Pick a version to compare it with the current draft.')
+}
+
 function DiffView({ older, current }: { older: string; current: string }) {
   const text = useLocaleStore(s => s.text)
   const diff = useMemo(() => diffProse(older, current), [older, current])
@@ -80,6 +87,8 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
   const { chapters, loading, selectedChapter, selectChapter, versions, versionsLoading, versionsFailed, reloadVersions, readComparison, createRollbackDraft } = useVersionHistory(projectKey)
   const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null)
   const [comparison, setComparison] = useState<VersionComparison | null>(null)
+  /** 刚点的那一稿已不存在（被删掉而列表还没刷新）；再点别的稿或换章时清掉。 */
+  const [missingPicked, setMissingPicked] = useState(false)
   const [reverting, setReverting] = useState(false)
   const [revertOpen, setRevertOpen] = useState(false)
   const comparisonRequest = useRef(0)
@@ -92,23 +101,48 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
 
   const formatTime = (value: string) => sqliteTime(value).toLocaleString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 
+  // 选的稿与对比只属于这次打开：重新打开作品后各稿重读、最新稿可能已换，留着旧对比会与新页头对不上。
+  // 还在读的旧对比不用作废：会话已切换时 readComparison 返回 null，回到「选一稿」。
+  const sessionLease = project?.sessionLease
+  const [pickLease, setPickLease] = useState(sessionLease)
+  if (pickLease !== sessionLease) {
+    setPickLease(sessionLease)
+    setSelectedVersionId(null)
+    setComparison(null)
+    setMissingPicked(false)
+  }
+
   const pickChapter = (chapterNumber: number) => {
     comparisonRequest.current++
     setSelectedVersionId(null)
     setComparison(null)
+    setMissingPicked(false)
     selectChapter(chapterNumber)
+  }
+
+  const reloadDraftCounts = () => {
+    const session = projectSessionContextFromProject(useProjectStore.getState().currentProject)
+    if (session) void useDraftStore.getState().loadAllDrafts(session.projectPath, session)
   }
 
   const pickVersion = async (versionId: number) => {
     const request = ++comparisonRequest.current
     setSelectedVersionId(versionId)
     setComparison(null)
+    setMissingPicked(false)
     try {
       const next = await readComparison(versionId)
       if (request !== comparisonRequest.current) return
-      // 读不到（这一稿已被删掉、作品已重新打开）时回到「选一稿」，不停在正在读取。
-      if (next === null) setSelectedVersionId(null)
-      else setComparison(next)
+      if (next === 'missing') {
+        // 这一稿已被删掉：说明一句，并重读各稿与左列稿数把它去掉。
+        setSelectedVersionId(null)
+        setMissingPicked(true)
+        reloadVersions()
+        reloadDraftCounts()
+      } else if (next === null) {
+        // 作品已重新打开：回到「选一稿」，不停在正在读取。
+        setSelectedVersionId(null)
+      } else setComparison(next)
     } catch (error) {
       if (request !== comparisonRequest.current) return
       setSelectedVersionId(null)
@@ -126,8 +160,7 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
       toast.success(created.version === null
         ? text('已新建回滚草稿，原有各稿都保留', 'Rollback draft created. Every earlier version is kept.')
         : text(`已新建草稿 v${created.version}，原有各稿都保留`, `Draft v${created.version} created. Every earlier version is kept.`))
-      const session = projectSessionContextFromProject(useProjectStore.getState().currentProject)
-      if (session) void useDraftStore.getState().loadAllDrafts(session.projectPath, session)
+      reloadDraftCounts()
       comparisonRequest.current++
       setSelectedVersionId(null)
       setComparison(null)
@@ -252,9 +285,7 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
               ? <p className="stage-hist-help">{text('这一章还没有当前稿。', 'This chapter has no current draft.')}</p>
               : <DiffView older={comparison.older} current={comparison.current} />}
           </> : (
-            <p className="stage-hist-help stage-hist-hint">{selectedVersionId === null
-              ? text('选一稿，与当前稿逐字对比。', 'Pick a version to compare it with the current draft.')
-              : text('正在读取…', 'Loading…')}</p>
+            <p className="stage-hist-help stage-hist-hint" role="status">{comparisonHint(selectedVersionId !== null, missingPicked, text)}</p>
           )}
         </section>
 
