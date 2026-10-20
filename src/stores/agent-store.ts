@@ -26,6 +26,7 @@ import { useLocaleStore } from './locale-store'
 import { useLLMStore } from './llm-store'
 import { useEditorStore } from './editor-store'
 import type { Locale } from '../i18n/types'
+import { APP_BRAND } from '../shared/brand'
 
 export const AGENT_GENERATION_BUDGET = Object.freeze({
   maxAttempts: 8,
@@ -142,7 +143,7 @@ const generateHelpText = (locale: Locale): string => {
   const skillCount = skillRegistry.listAll().length
   const commands = getAllSlashCommands(locale)
   const lines: string[] = [
-    text('## 书童 AI 助手 — 帮助', '## Pagekin Assistant — Help'),
+    text(`## ${APP_BRAND.zhName} AI 助手 — 帮助`, `## ${APP_BRAND.enName} Assistant — Help`),
     '',
     text('### 可用命令', '### Available commands'),
     ...commands

@@ -5,11 +5,12 @@ import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { launchCreativeWorkflow, type CreativeIntent } from '../../workflows/creative-workflow-launcher'
 import { assertAgentToolActive, requireAgentProject } from './project-context'
 import { DEFAULT_WRITING_LANGUAGE, writingLanguageText } from '../../../shared/writing-language'
+import { APP_BRAND } from '../../../shared/brand'
 
 export const startWorkflowTool = buildAgentTool({
   name: 'start_workflow',
-  description: '触发书童的创作工作流。支持写稿、修稿、审稿、定稿、生成蓝图等工作流。这将在 AI 输出面板中执行对应的多步骤创作流程。',
-  descriptionEn: 'Start a Pagekin creative workflow for drafting, review, refinement, finalization, blueprint generation, or architecture generation.',
+  description: `触发${APP_BRAND.zhName}的创作工作流。支持写稿、修稿、审稿、定稿、生成蓝图等工作流。这将在 AI 输出面板中执行对应的多步骤创作流程。`,
+  descriptionEn: `Start a ${APP_BRAND.enName} creative workflow for drafting, review, refinement, finalization, blueprint generation, or architecture generation.`,
   source: 'builtin',
   inputSchema: {
     type: 'object',
