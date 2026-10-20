@@ -57,8 +57,24 @@ it('does not promise that a stale-session action never ran', () => {
   expect(en).not.toMatch(/did not run|was not run/iu)
 })
 
-it('explains a model change mid-generation instead of falling back to the raw code', () => {
-  const wrapped = "Error invoking remote method 'generation:execute': Error: GENERATION_SOURCE_CHANGED_MODEL"
+// GENERATION_MODEL_CHANGED 由主进程续跑情节大纲时抛出；GENERATION_SOURCE_CHANGED_MODEL 由 #453 抛出。
+it.each(['GENERATION_MODEL_CHANGED', 'GENERATION_SOURCE_CHANGED_MODEL'])('explains %s mid-generation instead of falling back to the raw code', code => {
+  const wrapped = `Error invoking remote method 'generation:execute': Error: ${code}`
   expect(knownAppErrorMessage('zh-CN', wrapped)).toContain('模型设置被修改')
-  expect(knownAppErrorMessage('en-US', wrapped)).not.toContain('GENERATION_SOURCE_CHANGED_MODEL')
+  expect(knownAppErrorMessage('en-US', wrapped)).toContain('model settings changed')
+})
+
+// 这两个码在保存时的来源复核里也会抛出，那时模型已经回答过。
+it.each(['GENERATION_DRAFT_NOT_CURRENT', 'GENERATION_FINALIZED_SOURCE_NOT_CURRENT'])('does not promise that %s happened before any model request', code => {
+  const raw = `Error invoking remote method 'generation:commit-draft': Error: ${code}`
+  expect(knownAppErrorMessage('zh-CN', raw)).not.toMatch(/没有调用模型|未调用模型/u)
+  expect(knownAppErrorMessage('en-US', raw)).not.toMatch(/no model request/iu)
+})
+
+it('does not blame a book switch when the request carried no session at all', () => {
+  const raw = "Error invoking remote method 'generation:begin': Error: GENERATION_PROJECT_SESSION_REQUIRED"
+  const zh = knownAppErrorMessage('zh-CN', raw)!, en = knownAppErrorMessage('en-US', raw)!
+  expect(zh).toContain('重新打开')
+  expect(zh).not.toContain('已切换')
+  expect(en).not.toMatch(/switched/iu)
 })
