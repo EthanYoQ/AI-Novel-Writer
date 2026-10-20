@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useLocaleStore } from '../../stores/locale-store'
 import { ipc } from '../../services/ipc-client'
 import { systemColorTheme, useAppearanceStore, type AppearanceBootstrapDependencies } from '../../stores/appearance-bootstrap'
-import type { StartupState, StartupMigrationNotice, StartupBlockedCode } from '../../shared/startup-contract'
+import type { StartupMigrationNotice, StartupBlockedCode } from '../../shared/startup-contract'
 import { Button } from '../ui/Button'
 
 const desktopStartup: AppearanceBootstrapDependencies = {
@@ -29,7 +29,7 @@ export default function RendererStartup({
   const [mainReady, setMainReady] = useState(false)
   const [noticeDismissed, setNoticeDismissed] = useState(false)
   const startupDependencies = useMemo(() => ({ ...dependencies, waitForMainReady: async () => {
-    const state = await dependencies.waitForMainReady() as StartupState
+    const state = await dependencies.waitForMainReady()
     const nextNotice = state.state === 'ready' && state.migrationNotice
       ? { ...state.migrationNotice, globalGeneration: state.globalGeneration } : undefined
     setMigrationNotice(nextNotice)
