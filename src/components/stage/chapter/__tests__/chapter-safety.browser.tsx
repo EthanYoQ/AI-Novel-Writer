@@ -241,6 +241,65 @@ describe('标签与外壳', () => {
     expect(useEditorStore.getState().activeTabId).toBe(before)
   })
 
+  it('改道到这一章现在的稿、正在读正文时作者点去别的标签：读完不把作者拉回第 3 章', async () => {
+    const current = backend.addDraft({ status: 'draft' })
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => undefined)
+    warning.mockClear()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const base = backend.invoke.getMockImplementation()!
+    await mount()
+    backend.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:draft-get-full' && Number(args[0]) === current.id) await gate
+      return base(channel, ...args)
+    })
+    const deletedPath = formatResourceUri({ kind: 'draft', id: 999 })
+    await act(async () => useEditorStore.getState().openFile({
+      id: `review-${deletedPath}-1`, name: '审稿报告：第3章', type: 'review-report', content: AI_REVIEW, filePath: deletedPath,
+      reviewReport: AI_REVIEW, chapterNumber: 3, chapterDir: 'ai-novel://draft/ch3', reviewId: 1, projectKey: SESSION.projectPath,
+    }))
+    await vi.waitFor(() => expect(backend.invoke.mock.calls.some(([channel, ...args]) => channel === 'db:draft-get-full' && Number(args[0]) === current.id)).toBe(true))
+    await act(async () => useEditorStore.getState().openFile({ id: 'elsewhere', name: '设定', type: 'config', projectKey: SESSION.projectPath }))
+    const before = useEditorStore.getState().activeTabId
+    await act(async () => { release(); await gate })
+
+    await vi.waitFor(() => expect(warning).toHaveBeenCalled())
+    expect(useEditorStore.getState().activeTabId).toBe(before)
+    expect(warning.mock.calls).toEqual([['第 3 章这一稿已被删除。']])
+  })
+
+  it('读已删除的稿期间作者点开了另一章、那一章还在读：改道不顶掉作者的这次打开', async () => {
+    const other = backend.addDraft({ status: 'draft', chapterNumber: 5 })
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => undefined)
+    warning.mockClear()
+    let releaseList!: () => void
+    const listGate = new Promise<void>(resolve => { releaseList = resolve })
+    let releaseBody!: () => void
+    const bodyGate = new Promise<void>(resolve => { releaseBody = resolve })
+    const base = backend.invoke.getMockImplementation()!
+    await mount()
+    backend.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:draft-list' && Number(args[0]) === 3) await listGate
+      if (channel === 'db:draft-get-full' && Number(args[0]) === other.id) await bodyGate
+      return base(channel, ...args)
+    })
+    const deletedPath = formatResourceUri({ kind: 'draft', id: 999 })
+    await act(async () => useEditorStore.getState().openFile({
+      id: `review-${deletedPath}-1`, name: '审稿报告：第3章', type: 'review-report', content: AI_REVIEW, filePath: deletedPath,
+      reviewReport: AI_REVIEW, chapterNumber: 3, chapterDir: 'ai-novel://draft/ch3', reviewId: 1, projectKey: SESSION.projectPath,
+    }))
+    await act(async () => stageNavigate({ kind: 'chapter', chapterNumber: 5 }))
+    await vi.waitFor(() => expect(backend.invoke.mock.calls.some(([channel, ...args]) => channel === 'db:draft-get-full' && Number(args[0]) === other.id)).toBe(true))
+    await act(async () => { releaseList(); await listGate })
+    await vi.waitFor(() => expect(warning).toHaveBeenCalled())
+    await act(async () => { releaseBody(); await bodyGate })
+
+    await vi.waitFor(() => expect(activeTab()?.chapterNumber).toBeDefined())
+    expect(activeTab()?.filePath).toBe(formatResourceUri({ kind: 'draft', id: other.id }))
+    expect(tabs().some(tab => tab.chapterNumber === 3)).toBe(false)
+    expect(warning.mock.calls).toEqual([['第 3 章这一稿已被删除。']])
+  })
+
   it('修稿完成时命令打开的合并标签改道到单章视图的合并视图', async () => {
     const draft = backend.addDraft({ status: 'draft' })
     await mount()
