@@ -84,7 +84,7 @@ describe('embedding registration entry', () => {
 
     await renderEmbeddingSettings(models)
 
-    await expect.element(page.getByRole('button', { name: '去注册', exact: true })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: /^去 SiliconFlow (免费)?注册$/ })).toBeVisible()
   })
 
   it('opens the fixed SiliconFlow registration resource through IPC', async () => {
@@ -101,7 +101,7 @@ describe('embedding registration entry', () => {
 
     await renderEmbeddingSettings([])
     await act(async () => {
-      await page.getByRole('button', { name: '去注册', exact: true }).click()
+      await page.getByRole('button', { name: /^去 SiliconFlow (免费)?注册$/ }).click()
     })
 
     await vi.waitFor(() => {
@@ -128,5 +128,6 @@ describe('embedding registration entry', () => {
 
     await expect.element(page.getByText('向量化高级参数', { exact: true })).toBeVisible()
     expect(document.body.textContent).not.toContain('免费的检索模型')
+    expect(document.body.textContent).not.toContain('检索模型是必需配置')
   })
 })

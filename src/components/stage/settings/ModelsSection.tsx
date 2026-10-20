@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react'
-import { Cpu, MoreHorizontal, Plus } from 'lucide-react'
+import { Cpu, ExternalLink, MoreHorizontal, Plus } from 'lucide-react'
 import type { ModelProfile } from '../../../shared/ipc-channels'
 import { BUILTIN_PRESETS } from '../../../shared/provider-presets'
+import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { openModelProviderResource } from '../../settings/model-provider-resource'
 import { useUnsavedSettings } from '../../settings/unsaved-settings'
@@ -26,6 +27,8 @@ export default function ModelsSection({ purposes, header }: { purposes: ModelPro
   const [deleting, setDeleting] = useState<ModelProfile | null>(null)
   const retrieval = section.isEmbeddingSection
   const kind = retrieval ? text('检索模型', 'retrieval model') : text('模型', 'model')
+  const embeddingMissing = useLLMStore(s => retrieval && s.loaded && !s.defaultEmbeddingModelId)
+  const signUp = () => void openModelProviderResource('siliconflow-invite', text)
   const add = <Button variant="secondary" onClick={section.add}><Plus size={14} aria-hidden="true" />{text(`添加${kind}`, `Add ${kind}`)}</Button>
 
   if (section.editingModel) {
@@ -52,15 +55,26 @@ export default function ModelsSection({ purposes, header }: { purposes: ModelPro
   return (
     <>
       {header(section.models.length > 0 ? add : null)}
-      {retrieval && (
-        <Notice
-          tone="info"
-          title={text('免费的检索模型', 'A free retrieval model')}
-          actions={<Button variant="text" size="sm" onClick={() => void openModelProviderResource('siliconflow-invite', text)}>{text('去注册', 'Sign up')}</Button>}
-        >
-          {text('SiliconFlow 提供免费的 BAAI/bge-m3，注册后填上密钥就能用。', 'SiliconFlow offers BAAI/bge-m3 for free. Sign up and add your key.')}
-        </Notice>
-      )}
+      {retrieval && (embeddingMissing
+        ? (
+          <Notice
+            tone="warn"
+            title={text('检索模型是必需配置', 'A retrieval model is required')}
+            actions={<Button variant="secondary" onClick={signUp}><ExternalLink size={14} aria-hidden="true" />{text('去 SiliconFlow 免费注册', 'Sign up free at SiliconFlow')}</Button>}
+          >
+            <p>{text('知识库靠它按意思找回伏笔、人物和前文。没有单独配置时只能借用生成模型，而多数生成模型不支持向量检索。SiliconFlow 免费提供 BAAI/bge-m3，注册后把密钥填进来就能用。', 'The knowledge base uses it to recall foreshadowing, characters and earlier chapters by meaning. Without one, it can only borrow the generation model, and most generation models cannot embed text. SiliconFlow offers BAAI/bge-m3 for free: sign up and add your key.')}</p>
+            {section.models.length > 0 && <p>{text('已经添加过的话，在下面的「更多」菜单里把它设为默认。', 'If you already added one, make it the default from its “More” menu below.')}</p>}
+          </Notice>
+        )
+        : (
+          <Notice
+            tone="info"
+            title={text('免费的检索模型', 'A free retrieval model')}
+            actions={<Button variant="secondary" size="sm" onClick={signUp}><ExternalLink size={14} aria-hidden="true" />{text('去 SiliconFlow 注册', 'Sign up at SiliconFlow')}</Button>}
+          >
+            {text('SiliconFlow 提供免费的 BAAI/bge-m3，注册后填上密钥就能用。', 'SiliconFlow offers BAAI/bge-m3 for free. Sign up and add your key.')}
+          </Notice>
+        ))}
       {section.models.length === 0
         ? (
           <div className="stage-set-card">

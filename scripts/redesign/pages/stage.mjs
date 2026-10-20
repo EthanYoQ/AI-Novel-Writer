@@ -112,14 +112,14 @@ export async function showSettingsPage(page, name) {
 }
 
 export function currentSettingsPage(page) {
-  return settingsNav(page).locator('[aria-current="page"]').innerText()
+  return settingsNav(page).locator('[aria-current="page"] .stage-set-link-name').innerText()
 }
 
 /** 设置分组导航：每组的名字与其中各页。 */
 export function settingsGroups(page) {
   return settingsNav(page).getByRole('group').evaluateAll(groups => groups.map(group => ({
     group: group.getAttribute('aria-label'),
-    pages: [...group.querySelectorAll('button')].map(button => button.textContent.trim()),
+    pages: [...group.querySelectorAll('.stage-set-link-name')].map(name => name.textContent.trim()),
   })))
 }
 

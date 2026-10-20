@@ -273,8 +273,13 @@ function Test-AiNovelVisibleMainWindow {
   if ([string]::IsNullOrWhiteSpace($title)) {
     return $false
   }
-  return $title.IndexOf('AI小说作家', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 `
-    -or $title.IndexOf('AI Novel Writer', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+  # 1.3.0 之后窗口标题改为「书童 Pagekin」；升级测试里的旧版本仍用旧标题，两种都认。
+  foreach ($productTitle in @('书童', 'Pagekin', 'AI小说作家', 'AI Novel Writer')) {
+    if ($title.IndexOf($productTitle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+      return $true
+    }
+  }
+  return $false
 }
 
 function New-AiNovelMainWindowContinuityState {
