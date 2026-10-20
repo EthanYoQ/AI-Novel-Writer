@@ -6,7 +6,7 @@ import { completeBoundedCompletion } from '../../services/workflows/bounded-comp
 
 class ExistingParser extends BaseWorkflowCommand<string> {
   async execute() { return '' }
-  parse(text: string) { return this.parseJSON<unknown>(text) }
+  parse(text: string) { return this.parseJSON<unknown>(text, 'zh-CN') }
 }
 const originalParser = new ExistingParser()
 

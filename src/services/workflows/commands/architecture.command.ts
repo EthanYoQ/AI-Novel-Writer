@@ -29,6 +29,7 @@ import {
   workflowUiLocale,
   workflowUiText,
   workflowWritingLanguage,
+  workflowMainProcessError,
 } from '../workflow-project-session'
 import { characterArchitecturePrompts, promptLanguageText } from '../../prompt-language'
 import { stripThinkingTags } from '../workflow-utils'
@@ -518,6 +519,7 @@ function decodeCompleteNovelConfig(
   content: string,
   expectedTotalChapters: number,
   expectedWordsPerChapter: number,
+  text: UiText,
 ): NovelConfig {
   let value: unknown
   try {
@@ -525,22 +527,22 @@ function decodeCompleteNovelConfig(
     const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
     value = JSON.parse(fenced?.[1].trim() ?? trimmed)
   } catch {
-    throw new Error('AI 返回的小说配置不是完整 JSON 对象')
+    throw new Error(text('AI 返回的小说配置不是完整 JSON 对象', 'The AI novel configuration is not a complete JSON object.'))
   }
-  if (!isRecord(value)) throw new Error('AI 返回的小说配置必须是 JSON 对象')
+  if (!isRecord(value)) throw new Error(text('AI 返回的小说配置必须是 JSON 对象', 'The AI novel configuration must be a JSON object.'))
 
   const textFields: Record<(typeof REQUIRED_CONFIG_TEXT_FIELDS)[number], string> = {} as never
   for (const field of REQUIRED_CONFIG_TEXT_FIELDS) {
     if (typeof value[field] !== 'string' || !value[field].trim()) {
-      throw new Error(`AI 返回的小说配置缺少非空字段：${field}`)
+      throw new Error(text(`AI 返回的小说配置缺少非空字段：${field}`, `The AI novel configuration is missing the non-empty field ${field}.`))
     }
     textFields[field] = value[field].trim()
   }
   if (typeof value.plotStructure !== 'string' || !PLOT_STRUCTURES.has(value.plotStructure as NovelConfig['plotStructure'])) {
-    throw new Error('AI 返回的小说配置包含非法 plotStructure')
+    throw new Error(text('AI 返回的小说配置包含非法 plotStructure', 'The AI novel configuration has an invalid plotStructure.'))
   }
   if (typeof value.narrativePOV !== 'string' || !NARRATIVE_POVS.has(value.narrativePOV as NovelConfig['narrativePOV'])) {
-    throw new Error('AI 返回的小说配置包含非法 narrativePOV')
+    throw new Error(text('AI 返回的小说配置包含非法 narrativePOV', 'The AI novel configuration has an invalid narrativePOV.'))
   }
   for (const [field, expected] of [
     ['totalChapters', expectedTotalChapters],
@@ -553,11 +555,14 @@ function decodeCompleteNovelConfig(
       || candidate <= 0
       || candidate !== expected
     )) {
-      throw new Error(`AI 返回的小说配置包含无效 ${field}，不得回退或覆盖作者设置`)
+      throw new Error(text(
+        `AI 返回的小说配置包含无效 ${field}，不得回退或覆盖作者设置`,
+        `The AI novel configuration has an invalid ${field}; it may not replace or override the author's setting.`,
+      ))
     }
   }
   if (value.referenceWorks !== undefined && typeof value.referenceWorks !== 'string') {
-    throw new Error('AI 返回的小说配置包含无效 referenceWorks')
+    throw new Error(text('AI 返回的小说配置包含无效 referenceWorks', 'The AI novel configuration has an invalid referenceWorks.'))
   }
 
   return {
@@ -648,7 +653,7 @@ async function writeArchToDb(
   expectedProjectPath: string,
   runId: string,
   projectSession: ProjectSessionContext,
-  fallbackError: string,
+  context: CommandExecuteParams['context'],
   generationRunHandle?: MainGenerationRunHandle,
 ): Promise<void> {
   const cleanContent = stripThinkingTags(content)
@@ -656,7 +661,7 @@ async function writeArchToDb(
     ? await ipc.invokeWithProjectSession(projectSession, 'db:project-core-commit-generated', { data: { [key]: cleanContent }, generationRunHandle }, expectedProjectPath)
     : await ipc.invokeWithProjectSession(projectSession, 'db:project-core-update', { [key]: cleanContent }, expectedProjectPath)
   if (!result.success) {
-    throw new Error(result.error || fallbackError)
+    throw workflowMainProcessError(context, result.error, '故事架构写入数据库失败', 'Failed to write story architecture to the database.')
   }
 
   // 通知 UI 层实时刷新架构完成状态
@@ -784,11 +789,12 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
     ))
     let parsed: NovelConfig
     try {
-      parsed = decodeCompleteNovelConfig(resultRaw, this.totalChapters, this.wordsPerChapter)
+      parsed = decodeCompleteNovelConfig(resultRaw, this.totalChapters, this.wordsPerChapter, text)
     } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
       throw new Error(text(
-        'AI 返回的小说配置不完整或无效，结果未应用。详细信息: ' + String(e),
-        'The AI novel configuration was incomplete or invalid, so the result was not applied.',
+        `AI 返回的小说配置不完整或无效，结果未应用。详细信息：${detail}`,
+        `The AI novel configuration was incomplete or invalid, so the result was not applied. Details: ${detail}`,
       ))
     }
     if (!isGeneratedGlobalGuidanceValid(parsed.globalGuidance)) {
@@ -937,7 +943,7 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
       expectedProjectPath,
       context.runId,
       projectSession,
-      text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
+      context,
       this.requireGenerationExecution().mainOwned ? context.mainGenerationRunHandle : undefined,
     )
     this.assertNotCancelled(context)
@@ -1518,7 +1524,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       expectedProjectPath,
       context.runId,
       projectSession,
-      text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
+      context,
       this.requireGenerationExecution().mainOwned ? context.mainGenerationRunHandle : undefined,
     )
     this.assertNotCancelled(context)

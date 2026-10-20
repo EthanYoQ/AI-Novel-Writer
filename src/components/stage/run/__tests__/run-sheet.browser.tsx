@@ -279,6 +279,27 @@ describe('运行侧页', () => {
     expect(button('继续此批次')?.disabled).toBe(false)
   })
 
+  it('来源变了以后，已原样写进正式大纲的一批不列为可恢复，只列没保存的那批', async () => {
+    const outlineRun = (runId: string, from: number, to: number, inFormalOutline: boolean) => {
+      const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: `${runId}根`, runId }
+      return { handle, operation: 'architecture', draftSave: { kind: 'absent' },
+        plotOutline: { range: { from, to }, cursor: { kind: 'complete' } },
+        plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' }, inFormalOutline, completeChapters: [], saved: null },
+        planningContinuation: { state: 'source-changed' } }
+    }
+    const saved = outlineRun('第一批', 1, 5, true)
+    const unsaved = outlineRun('第二批', 6, 6, false)
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list') return [saved, unsaved].map(item => ({ handle: item.handle, status: 'failed', artifacts: [] }))
+      if (channel === 'generation:read-context') return (args[0] as { handle: { runId: string } }).handle.runId === '第一批' ? saved : unsaved
+      return fallback(channel, ...args)
+    })
+    await render()
+    await vi.waitFor(() => expect(host!.textContent).toContain('大纲恢复稿 · 第 6 章'))
+    expect([...host!.querySelectorAll('article h3')].map(title => title.textContent)).toEqual(['大纲恢复稿 · 第 6 章'])
+  })
+
   it('恢复候选：继续编辑或放弃的调用失败时显示错误', async () => {
     candidates = [candidate()]
     const fallback = invoke.getMockImplementation()!

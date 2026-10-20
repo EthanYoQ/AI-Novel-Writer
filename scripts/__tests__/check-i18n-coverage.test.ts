@@ -390,6 +390,39 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
+  it('rejects Chinese-only and forwarded errors in every workflow command file, while stable error codes stay to the error-code registry (#466)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-all-command-errors-'))
+    try {
+      writeFixture(root, 'src/services/workflows/commands/generate-draft.command.ts', `
+        declare const context: { uiLocale: 'zh-CN' | 'en-US' }
+        declare function workflowUiText(context: unknown, zh: string, en: string): string
+        const uiText = (zh: string, en: string) => workflowUiText(context, zh, en)
+        export function run(result: { error?: string }, step: number) {
+          if (step === 1) throw new Error('定稿后处理缺少冻结工作流上下文')
+          if (step === 2) throw new Error(result.error || uiText('保存失败', 'Saving failed.'))
+          if (step === 3) throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
+          if (step === 4) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+          throw new Error(uiText('当前项目已切换', 'The project changed.'))
+        }
+      `)
+      writeFixture(root, 'src/services/workflows/commands/__tests__/generate-draft.test.ts', `
+        throw new Error('测试里的中文不进界面')
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      const lines = result.output.split(/\r?\n/).filter(line => line.includes('[thrown-error]'))
+      expect(lines).toHaveLength(2)
+      expect(lines.join(' ')).toContain('定稿后处理缺少冻结工作流上下文')
+      expect(lines.join(' ')).toContain('result.error')
+      expect(result.output).not.toContain('GENERATION_DRAFT_RECEIPT_INVALID')
+      expect(result.output).not.toContain('测试里的中文')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('permits localized boundary copy while ignoring prompts, parsers, and internal logs', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-policy-'))
     try {

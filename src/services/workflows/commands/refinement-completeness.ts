@@ -1,4 +1,5 @@
 import type { Locale } from '../../../i18n/types'
+import { localize } from '../../../i18n/core'
 import { assertMechanicallyCompleteVisibleText } from '../../../shared/visible-text-integrity'
 
 const MIN_REFINEMENT_COMPLETION_RATIO = 0.6
@@ -42,8 +43,10 @@ export function assertMateriallyCompleteRevision(
     Math.max(MIN_REFINEMENT_UNITS, Math.floor(boundedTarget * MIN_REFINEMENT_COMPLETION_RATIO)),
   )
   if (revisionUnits < minimumUnits) {
-    throw new Error(uiLocale === 'en-US'
-      ? 'The revision is materially shorter than the source and may be incomplete. Nothing was saved; retry or narrow the revision scope.'
-      : '修稿结果明显短于原稿，可能仍不完整，结果未被保存。请重试或缩短本次修稿范围。')
+    throw new Error(localize(
+      uiLocale,
+      '修稿结果明显短于原稿，可能仍不完整，结果未被保存。请重试或缩短本次修稿范围。',
+      'The revision is materially shorter than the source and may be incomplete. Nothing was saved; retry or narrow the revision scope.',
+    ))
   }
 }

@@ -192,7 +192,7 @@ function outlineChapters(synopsis) {
 }
 
 /**
- * 对比用的文字对比度：名称与正文类至少 4.5:1，说明类至少 3:1，底色沿祖先叠加求出。
+ * 对比用的文字对比度：普通字号的文字（说明类也算）至少 4.5:1，底色沿祖先叠加求出。
  * 另核对分节卡片的底色来自纸墨令牌 --paper（计算值与令牌的计算值相同）。
  */
 async function archContrastFailures(page) {
@@ -221,7 +221,7 @@ async function archContrastFailures(page) {
       return (high + 0.05) / (low + 0.05)
     }
     const checks = [['.arch-title', 4.5], ['.arch-section-title', 4.5], ['.arch-section-summary', 4.5], ['.arch-lede', 4.5],
-      ['.arch-eyebrow', 3], ['.arch-badge', 3], ['.arch-section-num', 3], ['.pi-notice-title', 4.5], ['.pi-notice-text', 4.5]]
+      ['.arch-eyebrow', 4.5], ['.arch-badge', 4.5], ['.arch-section-num', 4.5], ['.pi-notice-title', 4.5], ['.pi-notice-text', 4.5]]
     const contrast = checks.flatMap(([selector, minimum]) => [...document.querySelectorAll(`[data-shell-presentation="stage"] ${selector}`)].map(element => {
       const value = ratio(parse(getComputedStyle(element).color), backdrop(element))
       return { selector, text: element.textContent.slice(0, 30), ratio: Math.round(value * 100) / 100, minimum }
@@ -456,6 +456,8 @@ export const ARCH_SCENARIOS = {
     assert.match(cardText, /大纲恢复稿 · 第 6 章\n/, '运行侧页恢复卡标题不写「6–6」')
     assert.match(cardText, /请从第 6 章重新生成情节大纲/)
     assert.doesNotMatch(cardText, /已经生成完毕/)
+    const titles = await runSheet.recovery(page).getByRole('article').locator('h3').allInnerTexts()
+    assert.deepEqual(titles.filter(title => /大纲恢复稿/.test(title)), ['大纲恢复稿 · 第 6 章'], '已原样写进正式大纲的第 1–5 章不列为可恢复（#464）')
     await openArchitecture(page)
     await arch.waitReady(page)
     await arch.section(page, 'synopsis').getByRole('button', { name: '查看恢复稿' }).click()

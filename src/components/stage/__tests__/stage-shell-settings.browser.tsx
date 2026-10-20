@@ -165,6 +165,40 @@ describe('书房里的设置页有没保存的输入时，导入旧项目副本�
   })
 })
 
+describe('不是作者点的打开作品（外部打开请求、新建或导入完成后自动打开），书房里的设置页有没保存的输入', () => {
+  it('先确认放弃；继续编辑就不打开，设置页与输入都留着', async () => {
+    let opening!: Promise<boolean>
+    await act(async () => { opening = useProjectStore.getState().openProject(TARGET) })
+    await vi.waitFor(() => expect(discardDialog()?.textContent).toContain('这一页有还没保存的修改，离开后会丢失。'))
+    expect(opens()).toEqual([])
+    await act(async () => dialogButton('继续编辑')!.click())
+    await expect(opening).resolves.toBe(false)
+    expect(opens()).toEqual([])
+    expect(useLayoutStore.getState().settingsOpen).toBe(true)
+    expect(skillUrl().value).toBe('https://github.com/owner/skill')
+  })
+
+  it('选放弃修改才收起设置页并打开，只问一次', async () => {
+    await act(async () => { void useProjectStore.getState().openProject(TARGET) })
+    await vi.waitFor(() => expect(discardDialog()).toBeTruthy())
+    await act(async () => dialogButton('放弃修改')!.click())
+    await vi.waitFor(() => expect(opens().map(([, target]) => target)).toEqual([TARGET]))
+    expect(useLayoutStore.getState().settingsOpen).toBe(false)
+    expect(discardDialog()).toBeUndefined()
+  })
+
+  it('确认框开着时又来一个打开请求：新请求不打开，也不让原请求失效，选放弃修改后打开原来那部', async () => {
+    const OTHER = 'C:\\novels\\other'
+    await act(async () => { void useProjectStore.getState().openProject(TARGET) })
+    await vi.waitFor(() => expect(discardDialog()).toBeTruthy())
+    let second!: Promise<boolean>
+    await act(async () => { second = useProjectStore.getState().openProject(OTHER) })
+    await expect(second).resolves.toBe(false)
+    await act(async () => dialogButton('放弃修改')!.click())
+    await vi.waitFor(() => expect(opens().map(([, target]) => target)).toEqual([TARGET]))
+  })
+})
+
 describe('放弃确认开着时又来了离开请求', () => {
   const toastTitles = () => [...document.querySelectorAll('.pi-toast-title')].map(node => node.textContent)
 
