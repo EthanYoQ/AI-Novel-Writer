@@ -8,6 +8,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 import { assertEditorReceipt, checkEditorReceipt, isEditorEnvironmentInvalid,
   recordEditorAttempt, resolveEditorProtocol } from '../docs/plans/novel-quality-program-v3-2026-09-13/checks/feature-union-check.mjs'
 import * as chapterView from './redesign/pages/chapter-view.mjs'
@@ -49,7 +50,7 @@ if (!historicalClassicMode) {
 const rerunIndex = performanceMode && process.argv.includes('--rerun') ? 1 : 0
 const priorReceipt = rerunIndex ? path.resolve(option('prior-receipt')) : null
 const packageDir = historicalClassicMode ? null : path.resolve(option('package-dir'))
-const executablePath = packageDir && path.join(packageDir, 'AI小说作家.exe')
+const executablePath = packageDir && resolveWindowsExecutable(packageDir)
 const asarPath = packageDir && path.join(packageDir, 'resources', 'app.asar')
 const testedSha = historicalClassicMode ? null : option('source-sha')
 const expectedExe = historicalClassicMode ? null : option('exe-sha256')
@@ -685,7 +686,7 @@ async function historicalClassicMain() {
   const executableSha256 = option('exe-sha256')
   const asarSha256 = option('asar-sha256')
   const driverSha256 = option('driver-sha256')
-  const historicalExe = path.join(historicalPackageDir, 'AI小说作家.exe')
+  const historicalExe = resolveWindowsExecutable(historicalPackageDir)
   const historicalAsar = path.join(historicalPackageDir, 'resources', 'app.asar')
   const oldGit = (...args) => execFileSync('git', args, { cwd: sourceRoot, encoding: 'utf8' }).trim()
   const invokeClassic = (page, channel, ...args) => page.evaluate(({ channel, args }) =>

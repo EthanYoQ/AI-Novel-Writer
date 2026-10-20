@@ -1303,6 +1303,27 @@ function Test-AiNovelGateDirectChildDirectory {
   }
 }
 
+function Test-AiNovelGateProductExecutableInRoot {
+  param(
+    [AllowEmptyString()][string]$ExecutablePath,
+    [Parameter(Mandatory = $true)][string]$InstallRoot
+  )
+
+  # 升级测试里的旧版本与新版本 exe 名不同（ADR-0022），安装目录下的任一产品 exe 都算。
+  return @(Get-AiNovelProductExecutableNames | Where-Object {
+    Test-AiNovelGateSameAbsolutePath -Left $ExecutablePath -Right ([System.IO.Path]::Combine($InstallRoot, $_))
+  }).Count -eq 1
+}
+
+function Test-AiNovelGateNsisSetupWindowTitle {
+  param([AllowEmptyString()][string]$Title)
+
+  $normalizedTitle = ([string]$Title).TrimEnd()
+  return @(Get-AiNovelProductNames | Where-Object {
+    [string]::Equals($normalizedTitle, "$_ Setup", [System.StringComparison]::Ordinal)
+  }).Count -eq 1
+}
+
 function Test-AiNovelGateNsisUninstallerImage {
   param([AllowEmptyString()][string]$ImagePath)
 
@@ -1310,11 +1331,11 @@ function Test-AiNovelGateNsisUninstallerImage {
     return $false
   }
   try {
-    return [string]::Equals(
-      [System.IO.Path]::GetFileName([System.IO.Path]::GetFullPath($ImagePath)),
-      'Uninstall AI小说作家.exe',
-      [System.StringComparison]::OrdinalIgnoreCase
-    )
+    $imageName = [System.IO.Path]::GetFileName([System.IO.Path]::GetFullPath($ImagePath))
+    # 升级时新安装程序会调起旧版本的卸载程序，新旧产品名都要认（ADR-0022）。
+    return @(Get-AiNovelProductUninstallerNames | Where-Object {
+      [string]::Equals($imageName, $_, [System.StringComparison]::OrdinalIgnoreCase)
+    }).Count -eq 1
   }
   catch {
     return $false
@@ -1473,22 +1494,23 @@ function Get-AiNovelGateNsisCmdProcessCheckVariants {
   # (perMachine is false). Older templates pipe tasklist into find.exe; 26.15
   # adds /NH and pipes into an anchored findstr.exe. FilterArguments is the
   # child command line exactly as cmd.exe rebuilds it after argv[0].
-  return @(
+  # 升级时新安装程序查新 exe 名，它调起的旧卸载程序查旧 exe 名（ADR-0022），两种都是预期命令。
+  return @(foreach ($exeName in Get-AiNovelProductExecutableNames) {
     [pscustomobject]@{
       FilterFileName = 'find.exe'
-      CmdPrefix = ' /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI小说作家.exe" /FO CSV | "'
-      CmdSuffix = '" "AI小说作家.exe"'
-      FilterArguments = '  "AI小说作家.exe"'
+      CmdPrefix = ' /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ' + $exeName + '" /FO CSV | "'
+      CmdSuffix = '" "' + $exeName + '"'
+      FilterArguments = '  "' + $exeName + '"'
       Classification = 'expected-nsis-find-no-match'
-    },
+    }
     [pscustomobject]@{
       FilterFileName = 'findstr.exe'
-      CmdPrefix = ' /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq AI小说作家.exe" /FO CSV /NH | "'
-      CmdSuffix = '" /B /I /C:"\"AI小说作家.exe\""'
-      FilterArguments = '  /B /I /C:"\"AI小说作家.exe\""'
+      CmdPrefix = ' /C tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq ' + $exeName + '" /FO CSV /NH | "'
+      CmdSuffix = '" /B /I /C:"\"' + $exeName + '\""'
+      FilterArguments = '  /B /I /C:"\"' + $exeName + '\""'
       Classification = 'expected-nsis-findstr-no-match'
     }
-  )
+  })
 }
 
 function Get-AiNovelGateNsisCmdProcessCheckVariant {
@@ -2117,11 +2139,13 @@ function Get-AiNovelGateExpectedNsisFilterNoMatchClassification {
     -CommandLine ([string]$ParentIdentity.commandLine) `
     -CmdImagePath ([string]$ParentIdentity.executablePath)
   # The filter child must be the one its own cmd.exe parent named, so a
-  # find.exe child never borrows a findstr.exe template or the reverse.
+  # find.exe child never borrows a findstr.exe template or the reverse, nor
+  # another product executable name.
   if (
     $null -eq $filterVariant -or
     $null -eq $cmdVariant -or
     -not [string]::Equals($filterVariant.FilterFileName, $cmdVariant.FilterFileName, [System.StringComparison]::Ordinal) -or
+    -not [string]::Equals($filterVariant.FilterArguments, $cmdVariant.FilterArguments, [System.StringComparison]::Ordinal) -or
     -not (Test-AiNovelGateSystemUtilityImage `
       -ImagePath ([string]$ProcessIdentity.executablePath) `
       -FileName $filterVariant.FilterFileName) -or
@@ -2408,11 +2432,10 @@ function Request-AiNovelGateLegacyBridgeArm {
     throw 'Release gate rejected a legacy bridge arm request without an absolute install root.'
   }
   $resolvedInstallRoot = [System.IO.Path]::GetFullPath($installRoot)
-  $expectedOldApplication = Join-Path $resolvedInstallRoot ('AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + '.exe')
   if (
     [int]$Control.processId -le 0 -or
     [string]::IsNullOrWhiteSpace([string]$Control.processStartTimeTicks) -or
-    -not (Test-AiNovelGateSameAbsolutePath -Left ([string]$Control.executablePath) -Right $expectedOldApplication)
+    -not (Test-AiNovelGateProductExecutableInRoot -ExecutablePath ([string]$Control.executablePath) -InstallRoot $resolvedInstallRoot)
   ) {
     throw 'Release gate rejected a legacy bridge arm request with an invalid old application identity.'
   }
@@ -2557,30 +2580,26 @@ function Test-AiNovelGateNativeUpdaterOldApplicationIdentity {
   }
 
   try {
-    $oldApplicationName = 'AI小说作家.exe'
-    $expectedOldApplicationPath = [System.IO.Path]::GetFullPath(
-      [System.IO.Path]::Combine(
-        $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT,
-        'runtime',
-        'installed-app',
-        $oldApplicationName
-      )
-    )
+    $oldApplicationPath = [string]$OldApplicationIdentity.executablePath
     if ($null -ne $script:AiNovelNativeUpdaterOldApplication) {
       $registered = $script:AiNovelNativeUpdaterOldApplication
       if (-not (Test-AiNovelGateExactIdentity -Identity $OldApplicationIdentity `
         -ProcessId $registered.processId -StartTimeTicks $registered.startTimeTicks -ExecutablePath $registered.executablePath)) {
         return $false
       }
-      $expectedOldApplicationPath = $registered.executablePath
+      $oldApplicationExpected = (Get-AiNovelProductExecutableNames) -contains [System.IO.Path]::GetFileName($oldApplicationPath) -and
+        (Test-AiNovelGateSameAbsolutePath -Left $oldApplicationPath -Right $registered.executablePath)
     }
-    if (-not [string]::Equals(
-      [System.IO.Path]::GetFileName([string]$OldApplicationIdentity.executablePath),
-      $oldApplicationName,
-      [System.StringComparison]::OrdinalIgnoreCase
-    ) -or -not (Test-AiNovelGateSameAbsolutePath `
-      -Left ([string]$OldApplicationIdentity.executablePath) `
-      -Right $expectedOldApplicationPath) -or
+    else {
+      $oldApplicationExpected = Test-AiNovelGateProductExecutableInRoot `
+        -ExecutablePath $oldApplicationPath `
+        -InstallRoot ([System.IO.Path]::GetFullPath([System.IO.Path]::Combine(
+          $env:AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT,
+          'runtime',
+          'installed-app'
+        )))
+    }
+    if (-not $oldApplicationExpected -or
       -not $TrackedProcessIdentities.ContainsKey([int]$OldApplicationIdentity.processId)) {
       return $false
     }
@@ -3002,9 +3021,7 @@ function Test-AiNovelGateLegacyBridgeWizardWindow {
   ) {
     return $false
   }
-  $expectedTitle = 'AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup'
-  $normalizedTitle = ([string]$Window.Title).TrimEnd()
-  if (-not [string]::Equals($normalizedTitle, $expectedTitle, [System.StringComparison]::Ordinal)) {
+  if (-not (Test-AiNovelGateNsisSetupWindowTitle -Title ([string]$Window.Title))) {
     return $false
   }
   $key = Get-AiNovelGateLegacyBridgeWindowKey -Window $Window
@@ -3084,8 +3101,7 @@ function Test-AiNovelGateLegacyBridgeTerminationArmedCleanupWindow {
   if ([string]::IsNullOrWhiteSpace($title)) {
     return $true
   }
-  $expectedTitle = 'AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup'
-  return [string]::Equals($title.TrimEnd(), $expectedTitle, [System.StringComparison]::Ordinal)
+  return (Test-AiNovelGateNsisSetupWindowTitle -Title $title)
 }
 
 function Test-AiNovelGateLegacyBridgeTerminationCleanupWindow {
@@ -3128,8 +3144,7 @@ function Test-AiNovelGateLegacyBridgeTerminationCleanupWindow {
   if ([string]::IsNullOrWhiteSpace($title)) {
     return $true
   }
-  $expectedTitle = 'AI' + [char]0x5C0F + [char]0x8BF4 + [char]0x4F5C + [char]0x5BB6 + ' Setup'
-  return [string]::Equals($title.TrimEnd(), $expectedTitle, [System.StringComparison]::Ordinal)
+  return (Test-AiNovelGateNsisSetupWindowTitle -Title $title)
 }
 
 if ($LoadMonitorLibrary) {
@@ -3147,8 +3162,8 @@ $trackedProcessStartTimeTicks = @{}
 $trackedProcessIdentities = @{}
 $trackedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($name in @(
-  'AI小说作家.exe',
-  'AI小说作家',
+  Get-AiNovelProductExecutableNames
+  Get-AiNovelProductNames
   'ai-novel-writer',
   'electron-builder',
   'electron-rebuild',
@@ -3295,7 +3310,6 @@ try {
         $installRoot = [string]$control.installRoot
         $cacheRoot = Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime\.cache'
         $runtimeRoot = [System.IO.Path]::GetDirectoryName($installRoot)
-        $expectedApplication = Join-Path $installRoot 'AI小说作家.exe'
         if ($activeStep -ne 'windows-in-app-update-e2e' -or [string]$control.step -ne $activeStep -or
           $null -ne $legacyBridge -or $null -ne $script:AiNovelNativeUpdaterOldApplication -or
           $installRoot -notmatch '^[A-Za-z]:\\' -or
@@ -3303,7 +3317,7 @@ try {
           [System.IO.Path]::GetFileName($runtimeRoot) -notmatch '^update-e2e-[a-f0-9]{32}$' -or
           -not (Test-AiNovelGateSameAbsolutePath -Left ([System.IO.Path]::GetDirectoryName($runtimeRoot)) -Right $cacheRoot) -or
           [int]$control.processId -le 0 -or [string]::IsNullOrWhiteSpace([string]$control.processStartTimeTicks) -or
-          -not (Test-AiNovelGateSameAbsolutePath -Left ([string]$control.executablePath) -Right $expectedApplication)) {
+          -not (Test-AiNovelGateProductExecutableInRoot -ExecutablePath ([string]$control.executablePath) -InstallRoot $installRoot)) {
           throw 'Release gate rejected native updater old application registration.'
         }
         $script:AiNovelNativeUpdaterOldApplication = [pscustomobject]@{

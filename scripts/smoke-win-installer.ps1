@@ -52,7 +52,8 @@ $globalConfig = Join-Path $velaHome 'config.json'
 $recentProjects = Join-Path $velaHome 'recent-projects.json'
 $upgradeFixtureRoot = Join-Path $smokeRoot 'user-projects\upgrade-preservation-fixture'
 $v025SaveProofPath = Join-Path $smokeRoot 'v025-save-proof.json'
-$uninstaller = Join-Path $installRoot 'Uninstall AI小说作家.exe'
+# 本次安装包的卸载程序用新产品名；升级前装上的旧版本可能还是旧名（ADR-0022）。
+$uninstaller = Join-Path $installRoot (Get-AiNovelProductUninstallerNames)[0]
 $lastWindowSnapshot = @()
 $observedProcessIds = [System.Collections.Generic.HashSet[int]]::new()
 $observedProcessStartTimeTicks = @{}
@@ -60,9 +61,9 @@ $roundTargetNames = [System.Collections.Generic.List[string]]::new()
 foreach ($name in @(
   [System.IO.Path]::GetFileName($resolvedInstaller),
   [System.IO.Path]::GetFileNameWithoutExtension($resolvedInstaller),
-  'AI小说作家.exe',
-  'AI小说作家',
   'ai-novel-writer'
+  Get-AiNovelProductExecutableNames
+  Get-AiNovelProductNames
 )) {
   if (-not [string]::IsNullOrWhiteSpace($name) -and -not $roundTargetNames.Contains($name)) {
     $roundTargetNames.Add($name)
@@ -171,7 +172,7 @@ function Invoke-AiNovelOfficialOldSourceJourney {
     throw "Official old-source manifest has no unique $Version case."
   }
   $scratch = New-AiNovelOfficialJourneyScratch
-  $exeSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'AI小说作家.exe')).ToLowerInvariant()
+  $exeSha256 = (Get-AiNovelFileSha256 -Path (Resolve-AiNovelProductExecutable -Directory $installRoot)).ToLowerInvariant()
   $asarSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'resources\app.asar')).ToLowerInvariant()
   $arguments = @(
     (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs'),
@@ -975,10 +976,12 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($PreviousPortableZipPath)) {
       $portableExtractRoot = Join-Path $smokeRoot 'previous-portable'
       Expand-Archive -LiteralPath (Resolve-Path -LiteralPath $PreviousPortableZipPath).Path -DestinationPath $portableExtractRoot -Force
-      $portableExecutable = Get-ChildItem -LiteralPath $portableExtractRoot -Recurse -File -Filter 'AI小说作家.exe' |
+      $productExecutableNames = @(Get-AiNovelProductExecutableNames)
+      $portableExecutable = Get-ChildItem -LiteralPath $portableExtractRoot -Recurse -File |
+        Where-Object { $productExecutableNames -contains $_.Name } |
         Select-Object -First 1
       if ($null -eq $portableExecutable) {
-        throw 'Official previous-version portable package does not contain AI小说作家.exe.'
+        throw "Official previous-version portable package does not contain $($productExecutableNames -join ' or ')."
       }
       New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
       Copy-Item -Path (Join-Path $portableExecutable.Directory.FullName '*') -Destination $installRoot -Recurse -Force
@@ -1015,7 +1018,7 @@ try {
       [System.IO.File]::WriteAllText($recentProjects, $recentJson, [System.Text.UTF8Encoding]::new($false))
     }
 
-    $legacyExePath = Join-Path $installRoot 'AI小说作家.exe'
+    $legacyExePath = Resolve-AiNovelProductExecutable -Directory $installRoot
     if (-not (Test-Path -LiteralPath $legacyExePath -PathType Leaf)) {
       throw "Previous-version application is missing after installation: $legacyExePath"
     }
@@ -1060,7 +1063,7 @@ try {
   Install-Silently $resolvedInstaller
 $currentInstallCompleted = $true
 
-  $exePath = Join-Path $installRoot 'AI小说作家.exe'
+  $exePath = Join-Path $installRoot (Get-AiNovelProductExecutableNames)[0]
   if (-not (Test-Path -LiteralPath $exePath)) {
     throw "Installed application is missing: $exePath"
   }
@@ -1246,6 +1249,15 @@ catch {
     -ObservedProcessIds @($observedProcessIds)
 }
 finally {
+  # 本次安装没完成时，留下的可能是升级前的旧版本，它的卸载程序与 exe 还是旧名。
+  # 卸载程序与 exe 从同一个产品名推出，不靠拆文件名。
+  $installedProduct = Get-AiNovelProductNames |
+    ForEach-Object { [pscustomobject]@{
+      Uninstaller = Join-Path $installRoot "Uninstall $_.exe"
+      Executable = Join-Path $installRoot "$_.exe"
+    } } |
+    Where-Object { Test-Path -LiteralPath $_.Uninstaller -PathType Leaf } |
+    Select-Object -First 1
   if ($currentInstallCompleted -and -not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
     if ($null -eq $failureRecord) {
       $failureRecord = [System.Management.Automation.ErrorRecord]::new(
@@ -1257,15 +1269,15 @@ finally {
     }
     $smokeSucceeded = $false
   }
-  elseif (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
+  elseif ($null -ne $installedProduct) {
     try {
       Invoke-AiNovelMonitoredExecutable `
-        -Path $uninstaller `
+        -Path $installedProduct.Uninstaller `
         -Arguments @('/S') `
         -Operation 'Uninstaller'
       $uninstallReceipt = Assert-AiNovelUninstallPostcondition `
         -InstallRoot $installRoot `
-        -InstalledExecutable (Join-Path $installRoot 'AI小说作家.exe')
+        -InstalledExecutable $installedProduct.Executable
       Write-AiNovelAcceptanceReceipt `
         -Directory $script:aiNovelAcceptanceDirectory `
         -FileName 'uninstall.json' `

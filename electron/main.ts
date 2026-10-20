@@ -34,7 +34,7 @@ import {
 import { configureSingleInstanceRuntime } from './services/single-instance-runtime'
 import { installWindowCloseGuard } from './controllers/window-controller'
 import { registerStartupController } from './controllers/startup-controller'
-import { resolveGlobalDataRoots } from './services/app-data-locator'
+import { resolveDefaultUserData, resolveGlobalDataRoots } from './services/app-data-locator'
 import { runGlobalDataMigration, activateGlobalData } from './services/global-data-migration'
 import { ensureVelaHome } from './utils/config-utils'
 import type { StartupBlockedCode, StartupMigrationNotice } from '../src/shared/startup-contract'
@@ -75,6 +75,9 @@ const explicitUserData = app.commandLine.getSwitchValue('user-data-dir')
 if (explicitUserData) {
   if (!path.isAbsolute(explicitUserData)) throw new Error('USER_DATA_PATH_MUST_BE_ABSOLUTE')
   app.setPath('userData', explicitUserData)
+} else {
+  // 必须早于下面的单实例锁：锁按 userData 路径区分，新旧版本要锁同一处才会互斥。
+  app.setPath('userData', resolveDefaultUserData(app.getPath('appData')))
 }
 
 // The installed-package vector qualification is deliberately opt-in and

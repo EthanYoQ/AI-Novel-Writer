@@ -13,6 +13,7 @@ import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLan
 import * as blueprint from './redesign/pages/blueprint.mjs'
 import * as runSheet from './redesign/pages/run-sheet.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -24,7 +25,7 @@ const expectedAsar = option('asar-sha256')
 const packageDir = option('package-dir') && path.resolve(repository, option('package-dir'))
 assert(packageDir && testedSha && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
   'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const fileHash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()

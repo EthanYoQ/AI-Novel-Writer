@@ -307,6 +307,38 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
+  it('checks {name} placeholders filled from the params argument like template interpolations', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-plural-placeholder-'))
+    try {
+      writeFixture(root, 'src/components/stage/Placeholders.tsx', `
+        const text = (zh: string, en: string, params?: Record<string, unknown>) => zh || en || params
+        const localize = (locale: string, zh: string, en: string, params?: Record<string, unknown>) => locale || zh || en || params
+        const pluralEn = (count: number, noun: string) => count === 1 ? noun : noun + 's'
+        export function Merge({ done, total, name }: { done: number; total: number; name: string }) {
+          return <p>
+            {text('已采用 {done}/{total} 处变更', '{done}/{total} changes applied', { done, total })}
+            {text('已采用 {done}/{total} 处变更', \`{done}/{total} \${pluralEn(total, 'change')} applied\`, { done, total })}
+            {text('共 {count} 处变更', '{count} {noun} applied', { count: total, noun: pluralEn(total, 'change') })}
+            {text('{count} 个文件未保存', '{count} {noun} have unsaved changes', { count: total, noun: pluralEn(total, 'file') })}
+            {localize('en-US', '已关闭 {count} 个文件', 'Closed {count} files', { count: total })}
+            {text('{name} 已保存', '{name} is saved', { name })}
+            {text('示例', 'Write {count} chapters literally')}
+          </p>
+        }
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('Found 3 unlocalized visible strings')
+      expect(result.output).toContain("src/components/stage/Placeholders.tsx:7 [english-plural] '{done}/{total} changes applied'")
+      expect(result.output).toContain("src/components/stage/Placeholders.tsx:10 [english-plural] '{count} {noun} have unsaved changes'")
+      expect(result.output).toContain("src/components/stage/Placeholders.tsx:11 [english-plural] 'Closed {count} files'")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('checks visible copy in review-checklist.ts like the review report it was moved out of', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-review-checklist-'))
     try {

@@ -183,3 +183,58 @@ it('生成途中切换作品会话（库不关）：中断的请求只记一次�
 
   expect(callRows(f.db)).toEqual([{ purpose: 'plot-outline:chapter:1:normal', success: 0 }])
 })
+
+/** 与真实 dispatchProvider 一致：请求被中止时服务商回调 onError，再以 GENERATION_PROVIDER_FAILED 拒绝。 */
+function providerLikeDispatch(onStart?: (options: Parameters<GenerationRunServiceDependencies['dispatch']>[1]) => void) {
+  let markStarted!: () => void
+  const started = new Promise<void>(resolve => { markStarted = resolve })
+  const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>((_request, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new Error('GENERATION_PROVIDER_FAILED')), { once: true })
+    markStarted()
+    onStart?.(options)
+  }))
+  return { dispatch, started }
+}
+
+const historyRows = () => LLMHistoryRepository.getHistory(10) as { purpose: string, success: number, finishReason: string | null }[]
+
+it('作者取消生成：AI 调用记录记为已取消，不记成服务商失败', async () => {
+  const { dispatch, started } = providerLikeDispatch(), f = fixture(dispatch)
+  const run = f.owner.begin(f.selection)
+  const pending = f.owner.execute({ handle: run.handle, invocationNonce: 'chapter-1', task: outlineTask(run.plotOutline!) }).catch(() => undefined)
+  await started
+
+  f.owner.cancel(run.handle)
+  await pending
+  await vi.waitFor(() => expect(historyRows()).toHaveLength(1))
+
+  expect(historyRows()).toMatchObject([{ purpose: 'plot-outline:chapter:1:normal', success: 0, finishReason: 'cancelled' }])
+})
+
+it('服务商流不合规被中止：调用记录仍是失败，不误记成已取消', async () => {
+  const { dispatch, started } = providerLikeDispatch(options => options.onVisible({ kind: 'delta', text: '<think>泄露的推理' }))
+  const f = fixture(dispatch)
+  const run = f.owner.begin(f.selection)
+  const pending = f.owner.execute({ handle: run.handle, invocationNonce: 'chapter-1', task: outlineTask(run.plotOutline!) }).catch(() => undefined)
+  await started
+  await pending
+  await vi.waitFor(() => expect(historyRows()).toHaveLength(1))
+
+  expect(historyRows()).toMatchObject([{ purpose: 'plot-outline:chapter:1:normal', success: 0, finishReason: null }])
+})
+
+it('请求用完本次运行的总时长被中止：调用记录记为已取消，不记成服务商失败', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  cleanups.push(() => vi.useRealTimers())
+  const { dispatch, started } = providerLikeDispatch(), f = fixture(dispatch)
+  const run = f.owner.begin(f.selection)
+  const pending = f.owner.execute({ handle: run.handle, invocationNonce: 'chapter-1', task: outlineTask(run.plotOutline!) }).catch(error => error)
+  await started
+
+  await vi.advanceTimersByTimeAsync(3_600_000)
+  expect(JSON.stringify(await pending)).toContain('ROOT_BUDGET_EXHAUSTED')
+  vi.useRealTimers()
+  await vi.waitFor(() => expect(historyRows()).toHaveLength(1))
+
+  expect(historyRows()).toMatchObject([{ purpose: 'plot-outline:chapter:1:normal', success: 0, finishReason: 'cancelled' }])
+})

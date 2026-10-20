@@ -12,6 +12,7 @@ import { _electron as electron } from 'playwright'
 import * as arch from './redesign/pages/architecture.mjs'
 import * as runSheet from './redesign/pages/run-sheet.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const a08Only = process.argv.includes('--v3-a08-only')
@@ -42,7 +43,7 @@ assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', ...productIn
 const dirtyProduct = git('status', '--porcelain', '--', ...productInputs)
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 assert.equal(sha256(executablePath), expectedExe)
 assert.equal(sha256(asarPath), expectedAsar)

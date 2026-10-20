@@ -3,7 +3,7 @@ import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runGlobalDataMigration, activateGlobalData, GLOBAL_OBJECTS, type GlobalMigrationOptions } from '../global-data-migration'
-import { resolveGlobalDataRoots } from '../app-data-locator'
+import { resolveDefaultUserData, resolveGlobalDataRoots } from '../app-data-locator'
 
 const created: string[] = []
 const retainedFailures = new Set<string>()
@@ -78,9 +78,14 @@ describe('single global generation cutover using synthetic roots only', () => {
     expect(() => resolveGlobalDataRoots(roots.userData, () => 'relative', {})).toThrow('GLOBAL_APP_DATA_PATH_REQUIRED')
     expect(fs.existsSync(appData)).toBe(false)
   })
+  it('keeps settings where every released build kept them, independent of the product name (ADR-0022)', () => {
+    const appData = path.join(path.dirname(fixture().userData), 'electron-app-data')
+    expect(resolveDefaultUserData(appData)).toBe(path.join(appData, 'ai-novel-writer'))
+    expect(fs.existsSync(appData)).toBe(false)
+  })
   it.each(['empty', 'legacy'])('separates the default canonical root from Electron userData for %s installs', source => {
     const roots = fixture(), appData = path.dirname(roots.userData)
-    const userData = path.join(appData, 'ai-novel-writer')
+    const userData = resolveDefaultUserData(appData)
     const resolved = resolveGlobalDataRoots(userData, appData, {}, path.join(appData, 'home'))
     expect(resolved.canonicalTarget).toBe(path.join(appData, 'ai-novel-writer-data'))
     if (source === 'legacy') populate(resolved.legacySource)

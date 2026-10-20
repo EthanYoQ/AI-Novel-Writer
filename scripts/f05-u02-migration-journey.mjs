@@ -8,11 +8,12 @@ import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { _electron as electron } from 'playwright'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const arg = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
 const packageDir = arg('package-dir') && path.resolve(arg('package-dir'))
-const executablePath = path.join(packageDir ?? '', 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir ?? '')
 const asarPath = path.join(packageDir ?? '', 'resources', 'app.asar')
 const testedSha = arg('package-source-sha')
 const expectedExeSha = arg('exe-sha256')

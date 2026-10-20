@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import * as arch from './redesign/pages/architecture.mjs'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -22,7 +23,7 @@ const expectedAsar = option('asar-sha256')
 assert(packageArg && packageSourceSha && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
   'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
 const packageDir = path.resolve(packageArg)
-const exe = path.join(packageDir, 'AI小说作家.exe')
+const exe = resolveWindowsExecutable(packageDir)
 const asar = path.join(packageDir, 'resources', 'app.asar')
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()

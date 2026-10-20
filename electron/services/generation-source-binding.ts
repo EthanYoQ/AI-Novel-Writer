@@ -9,7 +9,7 @@ import { isContentHash } from '../../src/shared/source-ref';
 import { inspectInstalledWritingSkill, WRITING_SKILL_STAGES, type InstalledWritingSkillBundle, type WritingSkillStage } from '../../src/shared/writing-skills';
 import { readInstalledWritingSkillBundle } from './writing-skill-package';
 import type { WritingLanguage } from '../../src/shared/writing-language';
-import { CURRENT_DRAFT_STATUSES, WORKING_DRAFT_STATUSES } from '../../src/shared/draft-status';
+import { CURRENT_DRAFT_STATUS_SQL, WORKING_DRAFT_STATUSES } from '../../src/shared/draft-status';
 import type { RunBinding } from '../repositories/generation-run-repository';
 import type { GenerationAuthorInput, GenerationBatchIntent, MaterialDecisionIncludedSource, MaterialDecisionOmittedSource, MaterialDecisionReceipt } from '../../src/shared/generation-owner-contract';
 import { MATERIAL_DECISION_CATEGORIES, MATERIAL_DECISION_MAX_INPUT_UNITS, MATERIAL_DECISION_MAX_SOURCES,
@@ -96,7 +96,6 @@ export interface GenerationSourceBindingResult {
 }
 function fail(code: string): never { throw new Error(code); }
 const hash = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
-const CURRENT_DRAFT_STATUS_SQL = CURRENT_DRAFT_STATUSES.map(status => `'${status}'`).join(',');
 function stable(value: unknown): string {
     const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, item]) => [k, sorted(item)])) : v;
     return JSON.stringify(sorted(value));
