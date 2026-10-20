@@ -23,6 +23,8 @@ import { VELA_HOME, writeJsonFile } from '../utils/config-utils'
 import { assertGlobalDataReady } from '../services/app-data-locator'
 import {
   loadLocalWritingSkill,
+  MAX_FOLDER_DEPTH,
+  MAX_FOLDER_ENTRIES,
   readInstalledSkillFile,
   readInstalledWritingSkillBundle,
   WRITING_SKILL_BUNDLE_MANIFEST,
@@ -155,7 +157,10 @@ function packageErrorText(code: WritingSkillPackageErrorCode): string {
     SYMLINK: ['Skill 中包含符号链接或快捷方式，已拒绝导入', 'The skill contains a symbolic link or junction and was rejected'],
     SKILL_MD_MISSING: ['文件夹根目录里没有 SKILL.md', 'The folder has no SKILL.md at its root'],
     SKILL_MD_INVALID: ['SKILL.md 必须是不超过 64 KiB 的 UTF-8 文本', 'SKILL.md must be UTF-8 text no larger than 64 KiB'],
-    FOLDER_TOO_LARGE: ['文件夹内文件过多或层级过深（最多 200 项、4 层）', 'The folder has too many entries or levels (up to 200 entries, 4 levels)'],
+    FOLDER_TOO_LARGE: [
+      `文件夹内文件过多或层级过深（最多 ${MAX_FOLDER_ENTRIES} 项、${MAX_FOLDER_DEPTH} 层）`,
+      `The folder has too many entries or levels (up to ${MAX_FOLDER_ENTRIES} entries, ${MAX_FOLDER_DEPTH} levels)`,
+    ],
   }
   return text(copy[code][0], copy[code][1])
 }

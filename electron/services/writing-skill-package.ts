@@ -12,8 +12,8 @@ import {
   type WritingSkillPackageInspection,
 } from '../../src/shared/writing-skills'
 
-const MAX_FOLDER_ENTRIES = 200
-const MAX_FOLDER_DEPTH = 4
+export const MAX_FOLDER_ENTRIES = 200
+export const MAX_FOLDER_DEPTH = 4
 
 export type WritingSkillPackageErrorCode =
   | 'SOURCE_INVALID'
