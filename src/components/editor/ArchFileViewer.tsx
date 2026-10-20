@@ -6,7 +6,7 @@ import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
 import { registerEditorExitSaveHandler, useEditorStore, type PlanningRecoverySaveSnapshot } from '../../stores/editor-store'
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
-import { ARCH_STEP_NAMES, type ArchStepKey } from '../../services/architecture-step-selection'
+import { ARCH_STEP_NAMES, archSectionHasContent, judgeArchCore, type ArchStepKey } from '../../services/architecture-step-selection'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
@@ -525,18 +525,13 @@ function ArchFileViewerSession({
       ).catch(() => null)
       if (!isProjectSessionCurrent(projectSession)) return
       const checkpoint = partial?.success === true ? (partial as { data?: Record<string, unknown> }).data : undefined
-      // 有内容即算有（决定覆盖还是新生成）；已确认（决定默认勾选）与架构页同一判定：前提、世界观超过 50 字，大纲按进度写满全书。
-      const hasContent = (value: string | undefined) => !!value?.trim() && !value.includes('待生成')
-      const sections = { premise: core?.premise, worldbuilding: core?.worldbuilding, synopsis: core?.synopsis }
-      const status: Record<string, boolean> = { characters: rosterSnapshot?.status === 'ready' }
-      const confirmed: Record<string, boolean> = { characters: status.characters }
-      for (const [key, value] of Object.entries(sections)) {
-        status[key] = hasContent(value)
-        confirmed[key] = status[key] && value!.length > 50
-      }
-      confirmed.synopsis = outlineProgress(core?.synopsis ?? '', checkpoint, writingLanguage, totalChapters).kind === 'complete'
+      // 有内容决定覆盖还是新生成，已确认决定默认勾选；两者与架构页共用 judgeArchCore。
+      const judged = judgeArchCore(core, outlineProgress(core?.synopsis ?? '', checkpoint, writingLanguage, totalChapters).kind)
+      const rosterReady = rosterSnapshot?.status === 'ready'
+      const status: Record<string, boolean> = { ...judged.hasContent, characters: rosterReady }
+      const confirmed: Record<string, boolean> = { ...judged.confirmed, characters: rosterReady }
       // 当前文件在编辑器里有未保存的内容时，生成会覆盖它而不是新生成。是否已确认只影响默认勾选，而当前文件总是勾选的，不必按编辑器内容再判。
-      if (hasContent(currentContentRef.current)) status[stepKey] = true
+      if (archSectionHasContent(currentContentRef.current)) status[stepKey] = true
       setFullArchStatus(status)
       setFullArchConfirmed(confirmed)
       setSynopsisSource({

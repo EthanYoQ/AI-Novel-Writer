@@ -5,7 +5,7 @@ import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { ipc } from '../../services/ipc-client'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
-import { ARCH_STEP_NAMES, type ArchStepKey } from '../../services/architecture-step-selection'
+import { ARCH_STEP_NAMES, judgeArchCore, type ArchStepKey } from '../../services/architecture-step-selection'
 import { globalEventBus } from '../../shared/event-bus'
 import {
   createProjectArchTabId,
@@ -190,12 +190,7 @@ export function useArchitectureOverview(projectKey: string) {
       recoveryFailed = progress.kind === 'unresumable'
       recoveredWorldBuildingCandidate = ''
     }
-    // 有内容即算有：作者写的短内容也要显示、生成时也会被覆盖。是否已确认另按 50 字门槛判定（confirmed）。
-    const status: Record<string, boolean> = {
-      premise: Boolean(core?.premise?.trim()),
-      worldbuilding: Boolean(core?.worldbuilding?.trim()),
-      synopsis: Boolean(core?.synopsis?.trim()),
-    }
+    const status: Record<string, boolean> = judgeArchCore(core, progress.kind).hasContent
     const counts: Record<string, number> = {
       premise: status.premise ? (core?.premise?.length ?? 0) : 0,
       worldbuilding: status.worldbuilding ? (core?.worldbuilding?.length ?? 0) : 0,
@@ -230,8 +225,8 @@ export function useArchitectureOverview(projectKey: string) {
     characters: rosterSnapshot?.status === 'ready',
   }), [coreStatus, rosterSnapshot])
   /**
-   * 每节是否已确认：架构页徽标、页头计数、主按钮与生成对话框的默认勾选共用，流程脊用同一判定（checkArchConfirmed）。
-   * 情节大纲还要分批写完、没有中断的批次；角色名单要名单就绪且不需要修复。
+   * 每节是否已确认：架构页徽标、页头计数、主按钮与生成对话框的默认勾选共用；前提、世界观、大纲的判定见 judgeArchCore。
+   * 角色名单要名单就绪且不需要修复。
    */
   const rosterPresentation = getCharacterRosterRepairPresentation(
     rosterSnapshot,
@@ -240,10 +235,8 @@ export function useArchitectureOverview(projectKey: string) {
   )
   const rosterReady = rosterPresentation?.kind === 'ready'
   const confirmed = useMemo<Record<ArchStepKey, boolean>>(() => ({
-    premise: (contents.premise?.length ?? 0) > 50,
+    ...judgeArchCore(contents, synopsisProgress.kind).confirmed,
     characters: rosterReady,
-    worldbuilding: (contents.worldbuilding?.length ?? 0) > 50,
-    synopsis: synopsisProgress.kind === 'complete',
   }), [contents, rosterReady, synopsisProgress])
   const wordCounts = useMemo<Record<string, number>>(() => ({
     ...coreWordCounts,

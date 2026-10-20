@@ -9,6 +9,7 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 import { CANONICAL_PROJECT_DIRECTORY } from '../shared/project-format'
 import { outlineProgress } from '../shared/plot-outline-checkpoint'
 import { ipc } from './ipc-client'
+import { judgeArchCore } from './architecture-step-selection'
 
 /**
  * 检查所有架构块的生成状态
@@ -48,8 +49,7 @@ export async function checkArchStatus(
 }
 
 /**
- * 流程脊的架构四节是否已确认：与架构页徽标同一判定。前提、世界观有内容即确认，角色名单要结构化名单就绪，
- * 情节大纲还要分批检查点表明全书写完、没有中断的批次（outlineProgress）。
+ * 流程脊的架构四节是否已确认：与架构页徽标同一判定（judgeArchCore），角色名单要结构化名单就绪。
  */
 export async function checkArchConfirmed(
   projectSession: ProjectSessionContext,
@@ -64,12 +64,7 @@ export async function checkArchConfirmed(
   if (!core) return { premise: false, characters: false, worldbuilding: false, synopsis: false }
   const checkpoint = partial?.success === true ? (partial as { data?: unknown }).data : undefined
   const progress = outlineProgress(core.synopsis ?? '', checkpoint, core.writingLanguage === 'en-US' ? 'en-US' : 'zh-CN', Number(core.totalChapters) || 0)
-  return {
-    premise: (core.premise?.length ?? 0) > 50,
-    characters: roster.status === 'ready',
-    worldbuilding: (core.worldbuilding?.length ?? 0) > 50,
-    synopsis: progress.kind === 'complete',
-  }
+  return { ...judgeArchCore(core, progress.kind).confirmed, characters: roster.status === 'ready' }
 }
 
 /**
