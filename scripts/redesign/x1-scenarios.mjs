@@ -4,9 +4,10 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
+import { proseRequest } from './blueprint-scenarios.mjs'
 import * as blueprint from './pages/blueprint.mjs'
 import * as chapterView from './pages/chapter-view.mjs'
 import * as refs from './pages/refs.mjs'
@@ -307,6 +308,7 @@ export const X1_SCENARIOS = {
     writeFileSync(join(folder, 'references', 'voice.md'), '使用第三人称近距离视角，动作先于心理。[返回](../SKILL.md)')
     writeFileSync(join(folder, 'scripts', 'lint.py'), 'print("lint")')
     await app.evaluate(({ dialog }, picked) => {
+      globalThis.__skillsImportDialog = dialog.showOpenDialog
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
     }, folder)
     await stage.openSettings(page)
@@ -314,6 +316,7 @@ export const X1_SCENARIOS = {
     await stage.root(page).getByRole('button', { name: '选择文件夹' }).click()
     const card = stage.root(page).getByRole('group', { name: '待安装的 Skill' })
     await card.waitFor({ state: 'visible' })
+    await app.evaluate(({ dialog }) => { dialog.showOpenDialog = globalThis.__skillsImportDialog })
     const inspected = await card.innerText()
     assert.match(inspected, /^并入提示词: references\/voice\.md$/mu, '回链的 SKILL.md 与大小写不同的同一文件都只算一次，只并入 voice.md')
     assert.match(inspected, /scripts\/lint\.py/u, '检查卡列出不会安装的脚本')
@@ -322,9 +325,10 @@ export const X1_SCENARIOS = {
     await card.getByRole('button', { name: '确认安装' }).click()
     await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click()
     await card.waitFor({ state: 'hidden' })
+    assert.deepEqual(await stage.root(page).getByRole('alert').allInnerTexts(), [], '安装没有报错')
     const drafting = stage.root(page).getByLabel('章节正文 Skill')
     await drafting.selectOption('user:scene-voice')
-    await page.waitForFunction(() => !document.querySelector('select[aria-label="章节正文 Skill"]')?.disabled, null, { timeout: 10_000 })
+    await page.waitForFunction(() => document.querySelector('select[aria-label="章节正文 Skill"]')?.value === 'user:scene-voice', null, { timeout: 10_000 })
     const alerts = await stage.root(page).getByRole('alert').allInnerTexts()
     assert.deepEqual(alerts, [], '绑定没有报错')
     const bound = await drafting.inputValue()
@@ -332,7 +336,7 @@ export const X1_SCENARIOS = {
 
     const installed = findDirectory(roots.canonical, 'scene-voice')
     // 旧版装的 Skill 没有清单，目录里被引用的文件（含工具措辞）一概不读，与 master 一样兼容。
-    const legacy = join(installed, '..', 'legacy-forms')
+    const legacy = join(dirname(installed), 'legacy-forms')
     mkdirSync(legacy)
     writeFileSync(join(legacy, 'SKILL.md'), '---\nname: legacy-forms\nlanguage: zh-CN\n---\n按 [表单](forms.md) 的格式写。')
     writeFileSync(join(legacy, 'forms.md'), 'Use the bash tool. 使用搜索工具。')
@@ -352,12 +356,8 @@ export const X1_SCENARIOS = {
     await blueprint.open(page)
     await blueprint.writeNext(page)
     await runSheet.waitUntilOpen(page)
-    const deadline = Date.now() + 60_000
-    while (!fake.chats.some(chat => chat.kind === 'prose')) {
-      assert.ok(Date.now() < deadline, '60 秒内假模型没有收到写正文的请求')
-      await new Promise(resolve => setTimeout(resolve, 200))
-    }
-    const prose = JSON.stringify(fake.chats.find(chat => chat.kind === 'prose').messages)
+    const chats = await proseRequest(fake, 60_000)
+    const prose = JSON.stringify(chats.find(chat => chat.kind === 'prose').messages)
     assert.ok(prose.includes('使用第三人称近距离视角'), '写正文的请求带上了按清单并入的 voice.md')
     assert.ok(!prose.includes('print(\\"lint\\")'), '没有安装的脚本不进提示词')
     await runSheet.waitForRunDone(page)
