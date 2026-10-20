@@ -193,6 +193,37 @@ describe('运行侧页浮起时盖在内容区上面，被它盖住的东西点�
     expect(visited.filter(element => covered.includes(element as HTMLElement)).map(element => element.textContent || element.getAttribute('aria-label'))).toEqual([])
   })
 
+  it('设置页开着时 Tab 走到侧页，一路不落在被侧页盖住的设置控件上', async () => {
+    useStageStore.setState({ sheet: { kind: 'run', tab: 'active' } })
+    useLayoutStore.setState({ settingsOpen: true, settingsSection: 'appearance' })
+    const { sheet } = await renderAt(790)
+    const slot = host!.querySelector('.stage-sheet-slot')!
+    await vi.waitFor(() => expect(host!.querySelector('.stage-settings')).not.toBeNull())
+    const settings = host!.querySelector<HTMLElement>('.stage-settings')!
+    await vi.waitFor(() => expect(tabbable(settings).filter(coveredBy(sheet)).length).toBeGreaterThan(0))
+    const covered = tabbable(settings).filter(coveredBy(sheet))
+    tabbable(settings)[0].focus()
+    const visited: Element[] = []
+    for (let step = 0; step < 60 && !slot.contains(document.activeElement); step++) {
+      await userEvent.keyboard('{Tab}')
+      if (settings.contains(document.activeElement)) visited.push(document.activeElement!)
+    }
+    expect(slot.contains(document.activeElement)).toBe(true)
+    expect(visited.filter(element => covered.includes(element as HTMLElement)).map(element => element.textContent || element.getAttribute('aria-label'))).toEqual([])
+  })
+
+  it('方向键把焦点移到被侧页盖住的分段按钮时，焦点不留在被盖住的内容区控件上', async () => {
+    useStageStore.setState({ sheet: { kind: 'run', tab: 'active' } })
+    const { sheet } = await renderAt(790, 'character')
+    const segments = [...host!.querySelectorAll<HTMLButtonElement>('.cast-view-switch button')]
+    expect(coveredBy(sheet)(segments.at(-1)!)).toBe(true)
+    segments[0].focus()
+    await userEvent.keyboard('{End}')
+    await vi.waitFor(() => expect(segments.at(-1)!.getAttribute('aria-pressed')).toBe('true'))
+    const landed = document.activeElement!
+    expect(host!.querySelector('.stage-content')!.contains(landed) && coveredBy(sheet)(landed), landed.textContent ?? '').toBe(false)
+  })
+
   it('Shift+Tab 从侧页回到内容区时落在看得见的控件上', async () => {
     const { sheet } = await renderAt(790)
     const slot = host!.querySelector('.stage-sheet-slot')!
