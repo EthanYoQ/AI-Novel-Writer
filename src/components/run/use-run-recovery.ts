@@ -20,7 +20,10 @@ function currentSession(): ProjectSessionContext | null {
   return projectSessionContextFromProject(useProjectStore.getState().currentProject)
 }
 
-/** 读取这部作品所有可恢复的中断运行。助手任务（agent-round）随聊天隐藏，不读取也不列出，磁盘记录保留。 */
+/**
+ * 读取这部作品所有可恢复的中断运行。助手任务（agent-round）随聊天隐藏，不读取也不列出，磁盘记录保留。
+ * 规划恢复稿只列没写进正式内容的：续写已完成的，或来源变了但本批已原样在正式大纲里的，都不算可恢复。
+ */
 async function loadGenerationSources(session: ProjectSessionContext): Promise<{ sources: Omit<RecoverySources, 'candidates'>; partial: boolean }> {
   const [views, progress] = await Promise.all([
     ipc.invokeWithProjectSession(session, 'generation:list'),
@@ -38,7 +41,8 @@ async function loadGenerationSources(session: ProjectSessionContext): Promise<{ 
     partial: [...reviews, ...editors].some(result => result.status === 'rejected'),
     sources: {
       planning: contexts.flatMap(item => (item.recovery.plotOutlineRecovery || item.recovery.blueprintRecovery)
-        && item.recovery.planningContinuation?.state !== 'complete' && ours(item.recovery.handle.projectId) ? [item.recovery] : []),
+        && item.recovery.planningContinuation?.state !== 'complete' && !item.recovery.plotOutlineRecovery?.inFormalOutline
+        && ours(item.recovery.handle.projectId) ? [item.recovery] : []),
       reviews: reviews.flatMap(result => result.status === 'fulfilled' && ours(result.value.view.handle.projectId) ? [result.value] : []),
       editors: editors.flatMap(result => result.status === 'fulfilled' && ours(result.value.view.handle.projectId) ? [result.value] : []),
       drafts: contexts.filter(item => item.recovery.operation === 'chapter-draft' && !item.recovery.batchId && ours(item.view.handle.projectId)
