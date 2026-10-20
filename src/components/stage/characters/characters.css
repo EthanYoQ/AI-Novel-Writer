@@ -148,7 +148,7 @@
   gap: var(--s-2);
 }
 
-/* 中文两个按钮并排；英文的「Paste / import character cards」放不下时换到下一行，不再挤出按钮。 */
+/* 中文两个按钮并排；英文放不下时换到下一行。窄档名单栏内容只有 200px，英文文案要在一行内放下（#465）。 */
 .cast-roster-actions .pi-btn {
   flex: 1 1 auto;
   justify-content: center;
@@ -408,7 +408,8 @@
 .cast-row-fields {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr);
+  /* 原生下拉框按选中项截断：定位一栏至少按最长的选项取宽（英文 Supporting character），不够时由其余三栏让出（#465）。 */
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(max-content, 1.4fr);
   gap: var(--s-4);
 }
 
