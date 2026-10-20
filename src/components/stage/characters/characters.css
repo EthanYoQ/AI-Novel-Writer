@@ -256,6 +256,7 @@
  * 放不下（名字会被截断）时操作区换到下一行靠右，名字那一行再放不下才省略。
  */
 .cast-profile-head {
+  --cast-avatar-size: 72px;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -265,8 +266,8 @@
 
 .cast-profile-avatar {
   flex: none;
-  width: 72px;
-  height: 72px;
+  width: var(--cast-avatar-size);
+  height: var(--cast-avatar-size);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -313,7 +314,7 @@
 
 /* 名字再长也和头像留在第一行：换行判断按的宽度不超过头像旁边的余量，超出的部分在这一行里省略。没有头像的空档案头不扣。 */
 .cast-profile-avatar + .cast-profile-heading {
-  max-width: calc(100% - 72px - var(--s-5));
+  max-width: calc(100% - var(--cast-avatar-size) - var(--s-5));
 }
 
 /* 名字下面的说明、头像操作与报错不撑宽标题：它们的固有宽度记为 0，换行判断只看名字那一行。 */
