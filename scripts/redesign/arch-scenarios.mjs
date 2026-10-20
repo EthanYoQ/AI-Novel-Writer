@@ -74,7 +74,7 @@ function seedArch({ clear = [], totalChapters, characters = [], core = {} } = {}
   return async context => {
     await trackOpenedSession(context.app)
     await seedStageSample(context, { totalChapters, landOnChapter3: clear.length === 0, beforeReload: async ({ page, invoke, path, session }) => {
-      if (clear.length > 0) {
+      if (clear.length > 0 || Object.keys(core).length > 0) {
         const cleared = await invoke(page, 'db:project-core-update', { ...Object.fromEntries(clear.map(key => [key, ''])), ...core }, path, session)
         assert.equal(cleared.success, true, cleared.error)
       }
@@ -188,6 +188,7 @@ export const ARCH_SCENARIOS = {
     assert.equal(await arch.summary(page, 'worldbuilding').innerText(), SHORT_WORLD)
     assert.deepEqual(await badges(page), { premise: '已确认', characters: '已确认', worldbuilding: '不完整', synopsis: '待生成' })
     assert.match(await arch.summary(page, 'synopsis').innerText(), /守塔人在风暴前夜/)
+    assert.match(await arch.page(page).locator('.arch-eyebrow').innerText(), /2 \/ 4 已确认/, '页头只数已确认的节，短内容不算已确认')
     assert.equal(await arch.primary(page).innerText(), '继续生成架构')
   } },
   /** 只有序章时生成对话框：默认接在序章之后写，起始章跳过第 1 章时说明要从第 1 章开始。 */

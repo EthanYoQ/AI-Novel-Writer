@@ -260,6 +260,7 @@ export const REFS_SCENARIOS = {
     const session = await lastSession(app)
     assert.ok(session?.leaseId, '记下了界面的作品会话')
     const first = (await invoke(page, 'db:draft-list', 3, session.projectPath, session)).find(draft => draft.version === 1)
+    assert.ok(first, '第 3 章预置了 v1 稿')
     const deleted = await invoke(page, 'db:draft-delete', first.id, session.projectPath, session)
     assert.equal(deleted.success, true, deleted.error)
     await refs.versionButton(page, '草稿 v1').click()
