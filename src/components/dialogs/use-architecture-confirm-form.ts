@@ -5,7 +5,7 @@ import { ARCH_STEP_NAMES, createDefaultArchitectureSelection, type ArchStepKey }
 import { toast } from '../ui/Toast'
 import { useLocaleStore } from '../../stores/locale-store'
 import { ipc } from '../../services/ipc-client'
-import { assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS, DEFAULT_PLANNING_TARGET_UNITS, parsePlanningTargetUnits, PLANNING_ACTION_CHAPTER_LIMIT, PLANNING_TARGET_UNITS_LIMIT, plotOutlineNextChapter, plotOutlineRangeEffect, type PlotOutlineRangeEffect, type PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
+import { assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS, DEFAULT_PLANNING_TARGET_UNITS, parsePlanningTargetUnits, PLANNING_ACTION_CHAPTER_LIMIT, PLANNING_TARGET_UNITS_LIMIT, plotOutlineLastChapter, plotOutlineNextChapter, plotOutlineRangeEffect, type PlotOutlineRangeEffect, type PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
 
 /**
  * 每节在本次生成里的结果：已有内容且勾选为覆盖，未勾选为保留，还没有内容为新生成。
@@ -131,6 +131,8 @@ export function useArchitectureConfirmForm({
     if (!synopsisSource.synopsis.trim()) return text('还没有情节大纲，请从第 1 章起生成。', 'There is no plot outline yet. Start from chapter 1.')
     if (!synopsisEffect.hasEntries) return text('已有大纲没有按章的标题，只能从第 1 章起整份重写。', 'The existing outline has no chapter headings, so it can only be rewritten whole from chapter 1.')
     const { orderIssue, lastChapter } = synopsisEffect
+    if (!orderIssue && lastChapter < 1) return text(`已有大纲只有序章，不能跳到第 ${from} 章开始。请从第 1 章起生成，序章会原样保留。`,
+      `The outline only has a prologue, so it cannot skip to chapter ${from}. Start from chapter 1; the prologue stays as it is.`)
     if (orderIssue?.kind === 'duplicate') return text(`已有大纲里第 ${orderIssue.chapter} 章出现了不止一次，按范围重写会打乱或丢掉其他章，后台会拒绝。请先删掉或改正重复的那一章。`,
       `Chapter ${orderIssue.chapter} appears more than once in the existing outline, so rewriting a range would scramble or drop other chapters and would be rejected. Remove or correct the duplicate first.`)
     if (orderIssue) return text('已有大纲的章节没有按章号顺序排列，按范围重写会打乱或丢掉其他章，后台会拒绝。请先把大纲里的章节按章号排好。', 'The chapters in the existing outline are out of order, so rewriting a range would scramble or drop other chapters and would be rejected. Put the outline chapters in order first.')
@@ -143,16 +145,23 @@ export function useArchitectureConfirmForm({
   /** 选定范围的说明：覆盖哪几章、哪几章原样保留；续写接在哪一章之后。 */
   const synopsisEffectNote = (): string | null => {
     if (!synopsisEffect) return null
+    if (synopsisEffect.kind === 'continue' && synopsisEffect.after === 0) return text(`接在序章之后写第 ${from}–${to} 章，序章不动。`, `Chapters ${from}–${to} follow the prologue; the prologue stays as it is.`)
     if (synopsisEffect.kind === 'continue') return text(`接在第 ${synopsisEffect.after} 章之后写第 ${from}–${to} 章，已有章节不动。`, `Chapters ${from}–${to} follow chapter ${synopsisEffect.after}; existing chapters stay as they are.`)
     if (synopsisEffect.kind !== 'overwrite') return null
     if (synopsisEffect.whole) return text('已有大纲没有按章的标题，整份按本次结果替换。', 'The existing outline has no chapter headings, so it is replaced whole.')
-    const kept = [
+    const chapters = [
       ...(synopsisEffect.from > 1 ? [`1–${synopsisEffect.from - 1}`] : []),
       ...(synopsisEffect.lastChapter > synopsisEffect.to ? [`${synopsisEffect.to + 1}–${synopsisEffect.lastChapter}`] : []),
     ]
     const replaced = text(`第 ${synopsisEffect.from}–${synopsisEffect.to} 章按本次结果替换`, `Chapters ${synopsisEffect.from}–${synopsisEffect.to} are replaced`)
-    return kept.length
-      ? text(`${replaced}，第 ${kept.join('、')} 章原样保留。`, `${replaced}; chapters ${kept.join(', ')} stay as they are.`)
+    const keptChapters = chapters.length ? text(`第 ${chapters.join('、')} 章`, `chapters ${chapters.join(', ')}`) : ''
+    if (synopsisEffect.prologue) {
+      return keptChapters
+        ? text(`${replaced}，序章与${keptChapters}原样保留。`, `${replaced}; the prologue and ${keptChapters} stay as they are.`)
+        : text(`${replaced}，序章原样保留。`, `${replaced}; the prologue stays as it is.`)
+    }
+    return keptChapters
+      ? text(`${replaced}，${keptChapters}原样保留。`, `${replaced}; ${keptChapters} stay as they are.`)
       : text(`${replaced}。`, `${replaced}.`)
   }
 
@@ -172,10 +181,12 @@ export function useArchitectureConfirmForm({
     return text(...MARK_TEXT[mark])
   }
 
-  /** 状态文字：已确认；有内容但未确认（大纲没写完或被打断、名单待修复）为不完整，与架构页徽标同一叫法；没有内容为待生成。 */
-  const statusLabel = (key: ArchStepKey): string => confirmed[key]
-    ? text('已确认', 'Confirmed')
-    : archStatus[key] ? text('不完整', 'Incomplete') : text('待生成', 'Not started')
+  /** 状态文字：已确认；有内容但未确认（大纲没写完或被打断、名单待修复）为不完整，与架构页徽标同一叫法；没有内容或大纲只有序章为待生成。 */
+  const statusLabel = (key: ArchStepKey): string => {
+    if (confirmed[key]) return text('已确认', 'Confirmed')
+    const prologueOnly = key === 'synopsis' && plotOutlineLastChapter(synopsisSource.synopsis) === 0
+    return archStatus[key] && !prologueOnly ? text('不完整', 'Incomplete') : text('待生成', 'Not started')
+  }
 
   const resolveSynopsisRange = (): { ok: true; range?: { from: number; to: number } } | { ok: false; message?: string } => {
     if (!checked.synopsis) return { ok: true }

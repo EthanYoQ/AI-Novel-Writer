@@ -29,6 +29,14 @@ export class ProjectRootRequiredError extends Error {
   }
 }
 
+/** 请求携带的会话已被换开或重开的作品取代；属于预期竞态，不是故障。 */
+export class ProjectSessionStaleError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ProjectSessionStaleError'
+  }
+}
+
 export interface TrustedProject {
   kind: 'manifest'
   projectId: string
@@ -242,7 +250,7 @@ export class ProjectAccessService {
       || active.projectId !== lease.projectId
       || active.leaseId !== lease.leaseId
     ) {
-      throw new Error('项目会话已失效，已拒绝操作')
+      throw new ProjectSessionStaleError('项目会话已失效，已拒绝操作')
     }
     return active
   }
@@ -263,10 +271,10 @@ export class ProjectAccessService {
       leaseId: context.leaseId,
     })
     if (!this.sameCanonicalProjectRoot(active.rootPath, context.projectPath)) {
-      throw new Error('项目会话根目录不匹配，已拒绝操作')
+      throw new ProjectSessionStaleError('项目会话根目录不匹配，已拒绝操作')
     }
     if (!currentProjectPath || !this.sameCanonicalProjectRoot(active.rootPath, currentProjectPath)) {
-      throw new Error('项目会话与当前数据库不匹配，已拒绝操作')
+      throw new ProjectSessionStaleError('项目会话与当前数据库不匹配，已拒绝操作')
     }
     return active
   }

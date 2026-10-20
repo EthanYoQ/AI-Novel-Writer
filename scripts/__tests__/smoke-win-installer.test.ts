@@ -1301,7 +1301,9 @@ $windows = @(
   [pscustomobject]@{ ProcessId = 909; Visible = $true; ClassName = 'Chrome_WidgetWin_1'; Title = 'AI小说作家 — AI Novel Writer' },
   [pscustomobject]@{ ProcessId = 505; Visible = $false; ClassName = 'Chrome_WidgetWin_1'; Title = 'AI小说作家 — AI Novel Writer' },
   [pscustomobject]@{ ProcessId = 505; Visible = $true; ClassName = 'Chrome_WidgetWin_1'; Title = 'Unrelated Electron Window' },
-  [pscustomobject]@{ ProcessId = 505; Visible = $true; ClassName = 'Chrome_WidgetWin_1'; Title = 'AI小说作家 — AI Novel Writer' }
+  [pscustomobject]@{ ProcessId = 505; Visible = $true; ClassName = 'Chrome_WidgetWin_1'; Title = 'AI小说作家 — AI Novel Writer' },
+  [pscustomobject]@{ ProcessId = 505; Visible = $true; ClassName = 'Chrome_WidgetWin_1'; Title = '书童 Pagekin' },
+  [pscustomobject]@{ ProcessId = 505; Visible = $true; ClassName = 'Chrome_WidgetWin_1'; Title = 'Pagekin' }
 )
 $results = @($windows | ForEach-Object {
   Test-AiNovelVisibleMainWindow -Window $_ -TargetProcessIds $appProcessIds
@@ -1310,7 +1312,7 @@ $results = @($windows | ForEach-Object {
 `)
     const result = parseLastJsonLine(output)
 
-    expect(result.Results).toEqual([false, false, false, false, false, false, false, true])
+    expect(result.Results).toEqual([false, false, false, false, false, false, false, true, true, true])
   })
 
   windowsPowerShellIt('detects new global error windows when both target collections are empty', () => {

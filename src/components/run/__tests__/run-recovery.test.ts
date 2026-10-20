@@ -165,4 +165,26 @@ describe('规划恢复稿', () => {
     expect(buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'en-US')[0])
       .toMatchObject({ kind: 'planning', note: 'When this run started, the outline chapter numbers did not line up with the selected range or a chapter was missing, so it cannot continue and the recovery draft cannot be saved. Copy the generated chapters, fix the outline, then generate again.' })
   })
+
+  it('来源已变的大纲恢复稿：说明只能查看或复制、从本批起始章重新生成，不再说可编辑并本地保存', () => {
+    const recovery = { handle, plotOutline: { range: { from: 6, to: 10 }, cursor: { kind: 'request', chapterNumber: 7, attempt: 'normal' } },
+      plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' } } } as never
+    const zh = buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'zh-CN')[0]
+    const en = buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'en-US')[0]
+    expect(zh).toMatchObject({ kind: 'planning', actionLabel: '查看恢复稿' })
+    expect(zh.kind === 'planning' && zh.note).toContain('只能查看或复制')
+    expect(zh.kind === 'planning' && zh.note).toContain('从第 6 章重新生成')
+    expect(zh.kind === 'planning' && zh.note).not.toContain('可编辑并本地保存')
+    expect(en).toMatchObject({ kind: 'planning', actionLabel: 'View recovery draft' })
+    expect(en.kind === 'planning' && en.note).toContain('from chapter 6')
+    expect(en.kind === 'planning' && en.note).not.toMatch(/save it locally/i)
+  })
+
+  it('已写完的一批在来源变了之后：只说明只能查看或复制，不叫作者从这批起始章重新生成', () => {
+    const recovery = { handle, plotOutline: { range: { from: 1, to: 5 }, cursor: { kind: 'complete' } },
+      plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' } } } as never
+    const entry = buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'zh-CN')[0]
+    expect(entry.kind === 'planning' && entry.note).toContain('只能查看或复制')
+    expect(entry.kind === 'planning' && entry.note).not.toContain('重新生成')
+  })
 })

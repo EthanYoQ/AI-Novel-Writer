@@ -33,7 +33,7 @@ function SessionSuggestions({ session }: { session: ProjectSessionContext }) {
   return (
     <div className="cast-suggestions" role="region" aria-label={text('待处理的角色建议', 'Pending character suggestions')}>
       <Notice
-        tone={count > 0 ? 'info' : 'warn'}
+        tone={failed ? 'warn' : 'info'}
         title={count > 0 ? text(`${count} 项待处理的角色建议`, `${count} pending character ${pluralEn(count, 'suggestion')}`) : text('角色建议读取失败', 'Could not read character suggestions')}
         actions={count > 0 ? (
           <Button variant="text" size="sm" aria-expanded={!collapsed} onClick={() => setCollapsed(value => !value)}>
@@ -92,13 +92,14 @@ function SessionSuggestions({ session }: { session: ProjectSessionContext }) {
               </div>
             </li>
           )}
-          {failed && (
-            <li role="alert" className="cast-suggestion cast-suggestion-error">
-              <span className="cast-suggestion-text">{text('有一部分角色建议这次没读出来或没处理完，可以重新读取。', 'Some character suggestions could not be read or handled this time. You can read them again.')}</span>
-              <Button variant="text" size="sm" disabled={busy} onClick={reload}>{text('重新读取', 'Read again')}</Button>
-            </li>
-          )}
         </ul>
+      )}
+      {/* 失败说明放在列表外：收起列表后作者仍要知道有一部分没读出来。 */}
+      {count > 0 && failed && (
+        <div role="alert" className="cast-suggestion cast-suggestion-error">
+          <span className="cast-suggestion-text">{text('有一部分角色建议这次没读出来或没处理完，可以重新读取。', 'Some character suggestions could not be read or handled this time. You can read them again.')}</span>
+          <Button variant="text" size="sm" disabled={busy} onClick={reload}>{text('重新读取', 'Read again')}</Button>
+        </div>
       )}
     </div>
   )
