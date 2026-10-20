@@ -423,6 +423,40 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
+  it('rejects Chinese-only errors thrown anywhere under the workflows directory, translated or not (#471)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-workflow-errors-'))
+    try {
+      writeFixture(root, 'src/services/workflows/directory-workflow.ts', `
+        declare function localeText(locale: string, zh: string, en: string): string
+        declare function textForLocale(locale: string, zh: string, en: string): string
+        export function run(result: { error?: string }, guard: { message?: string }, locale: string, step: number) {
+          if (step === 1) throw new Error('蓝图保存后验证失败')
+          if (step === 2) throw new Error(result.error || '提交章节蓝图失败')
+          if (step === 3) throw new Error(locale === 'en-US' ? 'Not ready.' : guard.message || '前置条件未满足')
+          if (step === 4) throw new Error(localeText(locale, '批量创作已取消', 'Batch writing was cancelled.'))
+          if (step === 5) throw new Error(textForLocale(locale, '当前项目已切换', 'The project changed.'))
+          if (step === 6) throw new Error(guard.message || localeText(locale, '前置条件未满足', 'Prerequisites are not met.'))
+          throw new Error('DIRECTORY_PROGRESS_NOT_FOUND')
+        }
+      `)
+      writeFixture(root, 'src/services/workflows/__tests__/directory-workflow.test.ts', `
+        throw new Error('测试里的中文不进界面')
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      const lines = result.output.split(/\r?\n/).filter(line => line.includes('[thrown-error]'))
+      expect(lines.map(line => line.replace(/^.*\[thrown-error\] /u, ''))).toEqual([
+        "'蓝图保存后验证失败'",
+        "result.error || '提交章节蓝图失败'",
+        "locale === 'en-US' ? 'Not ready.' : guard.message || '前置条件未满足'",
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('permits localized boundary copy while ignoring prompts, parsers, and internal logs', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-policy-'))
     try {

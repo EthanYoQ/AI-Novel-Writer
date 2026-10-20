@@ -44,19 +44,20 @@ const errorCode = /^[A-Z][A-Z0-9_]*$/u
 /**
  * 主进程拒绝时只回 String(err)：多是只有中文的原文，也可能是错误码。登记过的码按界面语言说明；
  * 未登记的码原样附上供反馈定位，并挂在 code 上；其余原文只附在中文说明后面，英文界面只给英文说明。
+ * 只用到界面语言：没有运行上下文的调用方传 { uiLocale }。
  */
 export function workflowMainProcessError(
-  context: WorkflowContext,
+  context: Pick<WorkflowContext, 'uiLocale'>,
   error: unknown,
   zhCNSummary: string,
   enUSSummary: string,
 ): Error {
-  const english = workflowUiLocale(context) === 'en-US'
+  const english = context.uiLocale === 'en-US'
   const summary = english ? enUSSummary : zhCNSummary
   const raw = typeof error === 'string' ? error.trim().replace(/^Error: /u, '') : ''
   if (!raw) return new Error(summary)
   const code = errorCode.test(raw) ? raw : undefined
-  const reason = knownAppErrorMessage(workflowUiLocale(context), raw) ?? (code || !english ? raw : undefined)
+  const reason = knownAppErrorMessage(context.uiLocale, raw) ?? (code || !english ? raw : undefined)
   const failure = new Error(reason ? `${summary}${english ? ' ' : '：'}${reason}` : summary)
   return code ? Object.assign(failure, { code }) : failure
 }

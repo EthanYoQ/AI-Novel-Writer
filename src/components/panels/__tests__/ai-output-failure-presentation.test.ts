@@ -117,6 +117,15 @@ describe('generation error codes on the run card', () => {
     expect(failure.reason).toContain('前一章')
   })
 
+  it('英文界面下非 GENERATION_ 前缀的登记码也按界面语言说明，不显示原码（#471）', () => {
+    expect(presentWorkflowFailure(undefined, 'LEGACY_ROSTER_GENERATION_CANCELLED', 'en-US', false).reason)
+      .toBe('Generation was cancelled.')
+    expect(presentWorkflowFailure(undefined, "Error invoking remote method 'character-proposal:approve': Error: CHARACTER_PROPOSAL_SOURCE_CHANGED", 'en-US', false).reason)
+      .toBe('The settings, blueprint, or earlier text this generation relied on changed while it ran, so the result was not saved. Generate it again.')
+    expect(presentWorkflowFailure(undefined, 'NO_DEFAULT_MODEL', 'en-US', false).reason)
+      .toBe('The model for this generation could not be found. Select or add a model in Settings, then try again.')
+  })
+
   it('keeps an uncoded reason as written', () => {
     expect(presentWorkflowFailure(undefined, '模型服务返回 HTTP 429', 'zh-CN', false).reason).toBe('模型服务返回 HTTP 429')
   })

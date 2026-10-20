@@ -26,7 +26,7 @@ import {
   blueprintSemanticGenerationContract,
   validateBlueprintSemanticItem,
 } from '../../../shared/blueprint-semantic-contract'
-import { requireWorkflowProjectSession, workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowUiLocale, workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
 import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
 export {
@@ -380,6 +380,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         content,
         activeRange.startChapter,
         activeRange.endChapter,
+        workflowUiLocale(context),
       ),
       validateItem: validateBlueprintSemanticItem,
       syntaxRepairContract: ({ items }) => (
@@ -428,13 +429,13 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           const prefixEnd = startChapter + prefix.length - 1
           const receipt = await commitDirectoryBlueprintRange(prefix, expectedProjectPath,
             { mode: 'replace-range', startChapter, endChapter: prefixEnd },
-            `directory-${context.runId}-${startChapter}-${prefixEnd}-partial`, context.projectSession, context.mainGenerationRunHandle, { startChapter, endChapter })
+            `directory-${context.runId}-${startChapter}-${prefixEnd}-partial`, context.projectSession, workflowUiLocale(context), context.mainGenerationRunHandle, { startChapter, endChapter })
           context.data.blueprintCommitReceipt = receipt
           context.data.newBlueprints = [...receipt.snapshot]
           context.data.remainingBlueprintRange = { startChapter: prefixEnd + 1, endChapter }
           if (context.cancelled) throw new DirectoryPostCommitCancellationError(receipt)
           try {
-            await retryDirectoryCharacterSync(receipt.characterSyncOperation.operationId, expectedProjectPath, context.projectSession)
+            await retryDirectoryCharacterSync(receipt.characterSyncOperation.operationId, expectedProjectPath, context.projectSession, workflowUiLocale(context))
           } catch { throw new DirectoryPostCommitSyncError(receipt) }
           throw new DirectoryPartialCommitError(receipt, { startChapter: prefixEnd + 1, endChapter }, batchResult.failure, workflowUiText(context,
             `已保存第 ${startChapter}–${prefixEnd} 章完整蓝图；第 ${prefixEnd + 1}–${endChapter} 章未完成。原运行的候选与失败原因已保留。`,
@@ -473,6 +474,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         },
         `directory-${context.runId}-${startChapter}-${endChapter}`,
         context.projectSession,
+        workflowUiLocale(context),
         context.mainGenerationRunHandle,
         { startChapter, endChapter },
       )
@@ -487,6 +489,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           commitReceipt.characterSyncOperation.operationId,
           expectedProjectPath,
           context.projectSession,
+          workflowUiLocale(context),
         )
         context.data.blueprintCharacterSyncReceipt = syncReceipt
       } catch {

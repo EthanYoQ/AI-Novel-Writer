@@ -5,6 +5,7 @@ import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workf
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { Locale } from '../../i18n/types'
+import { localize } from '../../i18n/core'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { globalEventBus } from '../../shared/event-bus'
 import {
@@ -27,7 +28,7 @@ import type {
   BlueprintRangeCommitReceipt,
 } from '../../../electron/repositories/blueprint-repository'
 import { stripThinkingTags } from './workflow-utils'
-import { requireWorkflowProjectSession } from './workflow-project-session'
+import { requireWorkflowProjectSession, workflowMainProcessError } from './workflow-project-session'
 
 // ==========================================
 // 1. 结构与类型导出 (保留对外的向后兼容)
@@ -64,7 +65,7 @@ export function terminalDirectoryProgress(progress: DirectoryGenerationProgress,
   }
 }
 
-export async function resolveDirectoryContinuation(params: DirectoryWorkflowParams, session: ProjectSessionContext): Promise<DirectoryWorkflowParams & { resumeHandle?: MainGenerationRunHandle; authorConfig?: DirectoryWorkflowProjectSnapshot['novelConfig'] }> {
+export async function resolveDirectoryContinuation(params: DirectoryWorkflowParams, session: ProjectSessionContext, uiLocale: Locale): Promise<DirectoryWorkflowParams & { resumeHandle?: MainGenerationRunHandle; authorConfig?: DirectoryWorkflowProjectSnapshot['novelConfig'] }> {
   if (!params.continueDirectoryOperationId) return params
   const { progress: all } = await ipc.invokeWithProjectSession(session, 'generation:list-directory-progress')
   const selected = all.find(item => item.operationId === params.continueDirectoryOperationId)
@@ -73,7 +74,13 @@ export async function resolveDirectoryContinuation(params: DirectoryWorkflowPara
   if (!terminal.remainingRange) throw new Error('DIRECTORY_PROGRESS_COMPLETE')
   const pacing = terminal.authorInputs?.find(item => item.id === 'directory:pacing-guidance')
   const config = terminal.authorInputs?.find(item => item.id === 'directory:author-config')
-  if (!pacing || !config) throw new Error('旧目录进度缺少冻结作者输入，不能自动继续；已保存蓝图保持不变。')
+  if (!pacing || !config) {
+    throw new Error(localize(
+      uiLocale,
+      '旧目录进度缺少冻结作者输入，不能自动继续；已保存蓝图保持不变。',
+      'This older blueprint progress has no frozen author input, so it cannot continue automatically. The saved blueprints are unchanged.',
+    ))
+  }
   const authorConfig: DirectoryWorkflowProjectSnapshot['novelConfig'] = JSON.parse(config.text)
   if (!authorConfig || !Number.isSafeInteger(authorConfig.totalChapters) || authorConfig.totalChapters < terminal.remainingRange.endChapter) throw new Error('DIRECTORY_FROZEN_CONFIG_INVALID')
   return { ...params, targetUnits: Number(terminal.authorInputs?.find(item => item.id === 'planning:target-units')?.text ?? DEFAULT_PLANNING_TARGET_UNITS), pacingGuidance: pacing.text, authorConfig, mode: 'append', startChapter: terminal.remainingRange.startChapter,
@@ -152,7 +159,13 @@ export function parseTextBlueprints(content: string, startNum: number, endNum: n
   return []
 }
 
-export function parseTextBlueprintsStrict(content: string, startNum: number, endNum: number, source: 'model' | 'author' = 'model'): ChapterBlueprint[] {
+export function parseTextBlueprintsStrict(
+  content: string,
+  startNum: number,
+  endNum: number,
+  uiLocale: Locale,
+  source: 'model' | 'author' = 'model',
+): ChapterBlueprint[] {
   try {
     if (source === 'author') return parseBlueprintAuthorResponseText(content, chapterRange(startNum, endNum))
     return parseBlueprintSemanticResponseText(
@@ -162,23 +175,7 @@ export function parseTextBlueprintsStrict(content: string, startNum: number, end
   } catch (error) {
     if (structuredContractDiagnostic(error)) throw error
     const detail = error instanceof Error ? error.message : String(error)
-    throw new Error(`蓝图 JSON 解析失败：${detail}`)
-  }
-}
-
-export function assertBlueprintCoverage(
-  blueprints: ChapterBlueprint[],
-  startChapter: number,
-  endChapter: number,
-): void {
-  const chapterSet = new Set(blueprints.map((item) => item.chapterNumber))
-  const missing: number[] = []
-  for (let chapter = startChapter; chapter <= endChapter; chapter++) {
-    if (!chapterSet.has(chapter)) missing.push(chapter)
-  }
-
-  if (missing.length > 0) {
-    throw new Error(`蓝图生成缺少目标章节：第 ${missing.join('、')} 章`)
+    throw new Error(localize(uiLocale, `蓝图 JSON 解析失败：${detail}`, `Could not parse the blueprint JSON: ${detail}`))
   }
 }
 
@@ -190,28 +187,28 @@ export async function loadDirectoryBlueprints(
   return blueprints.sort((a, b) => a.chapterNumber - b.chapterNumber)
 }
 
-function assertIpcSuccess(result: { success: boolean; error?: string }, action: string): void {
-  if (!result.success) {
-    throw new Error(result.error || `${action}失败`)
-  }
-}
-
 export async function saveChapterBlueprint(
   blueprint: ChapterBlueprint,
   expectedProjectPath: string,
   projectSession: ProjectSessionContext,
+  uiLocale: Locale,
 ): Promise<void> {
   const result = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-upsert', blueprint, expectedProjectPath)
-  assertIpcSuccess(result, '保存章节蓝图')
+  if (!result.success) {
+    throw workflowMainProcessError({ uiLocale }, result.error, '保存章节蓝图失败', 'Could not save the chapter blueprint.')
+  }
 }
 
 export async function saveAllBlueprints(
   blueprints: ChapterBlueprint[],
   expectedProjectPath: string,
   projectSession: ProjectSessionContext,
+  uiLocale: Locale,
 ): Promise<void> {
   const result = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-upsert-many', blueprints, expectedProjectPath)
-  assertIpcSuccess(result, '保存章节蓝图')
+  if (!result.success) {
+    throw workflowMainProcessError({ uiLocale }, result.error, '保存章节蓝图失败', 'Could not save the chapter blueprints.')
+  }
 }
 
 export async function commitDirectoryBlueprintRange(
@@ -220,6 +217,7 @@ export async function commitDirectoryBlueprintRange(
   range: { mode: BlueprintRangeCommitMode; startChapter: number; endChapter: number },
   operationId: string,
   projectSession: ProjectSessionContext,
+  uiLocale: Locale,
   generationRunHandle?: MainGenerationRunHandle,
   generationRequestedRange?: { startChapter: number; endChapter: number },
 ): Promise<BlueprintRangeCommitReceipt> {
@@ -237,7 +235,7 @@ export async function commitDirectoryBlueprintRange(
     expectedProjectPath,
   )
   if (!result.success || !result.receipt) {
-    throw new Error(result.error || '提交章节蓝图失败')
+    throw workflowMainProcessError({ uiLocale }, result.error, '提交章节蓝图失败', 'Could not commit the chapter blueprints.')
   }
   globalEventBus.emit('REFRESH_RESOURCE', {
     resources: ['blueprints'],
@@ -245,34 +243,6 @@ export async function commitDirectoryBlueprintRange(
     projectSession,
   })
   return result.receipt
-}
-
-export async function verifyBlueprintsPersisted(
-  blueprints: ChapterBlueprint[],
-  expectedProjectPath: string,
-  expectedRange?: { startChapter: number; endChapter: number },
-  projectSession?: ProjectSessionContext,
-): Promise<void> {
-  if (!projectSession) throw new Error('验证章节蓝图时缺少冻结项目会话')
-  if (expectedRange) {
-    assertBlueprintCoverage(blueprints, expectedRange.startChapter, expectedRange.endChapter)
-  }
-
-  for (const blueprint of blueprints) {
-    const saved = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get', blueprint.chapterNumber, expectedProjectPath)
-    if (!saved) {
-      throw new Error(`蓝图保存后验证失败：第 ${blueprint.chapterNumber} 章未写入数据库`)
-    }
-    if (
-      saved.title !== blueprint.title ||
-      saved.role !== blueprint.role ||
-      saved.purpose !== blueprint.purpose ||
-      saved.keyEvents !== blueprint.keyEvents ||
-      saved.suspenseHook !== blueprint.suspenseHook
-    ) {
-      throw new Error(`蓝图保存后验证失败：第 ${blueprint.chapterNumber} 章内容与本次生成结果不一致`)
-    }
-  }
 }
 
 export async function getBlueprintCount(
@@ -394,7 +364,7 @@ export function createDirectoryWorkflow(
         ),
         executor: async (_step, context, callbacks) => {
           const directoryCommand = await import('./commands/directory.command')
-          const resolvedParams = await resolveDirectoryContinuation(params, projectSession)
+          const resolvedParams = await resolveDirectoryContinuation(params, projectSession, frozenUiLocale)
           context.data.directoryResumeHandle = resolvedParams.resumeHandle
           if (params.continueDirectoryOperationId) context.data.pacingGuidance = resolvedParams.pacingGuidance
           const cmd = new directoryCommand.GenerateDirectoryCommand(resolvedParams, resolvedParams.authorConfig ? { ...projectSnapshot, novelConfig: resolvedParams.authorConfig } : projectSnapshot)

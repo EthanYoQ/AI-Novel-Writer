@@ -361,10 +361,10 @@ describe('batch chapter workflow completion mode', () => {
   })
 
   it('reports workflow guard failures in the frozen English UI locale', async () => {
-    doubles.guardChapterWriting.mockResolvedValue({
+    doubles.guardChapterWriting.mockImplementation(async (_chapter?: number, _path?: string, _session?: unknown, uiLocale?: string) => ({
       ok: false,
-      message: '中文门禁详情',
-    })
+      message: uiLocale === 'en-US' ? 'Chapter 1 has no blueprint yet.' : '第 1 章还没有蓝图。',
+    }))
     const workflow = createBatchChapterWorkflow({
       projectPath,
       projectSession: projectSession(),
@@ -379,7 +379,7 @@ describe('batch chapter workflow completion mode', () => {
 
     expect(useWorkflowStore.getState().history[0]).toMatchObject({
       status: 'failed',
-      error: 'Chapter 1 does not meet the writing prerequisites.',
+      error: 'Chapter 1 has no blueprint yet.',
     })
     expect(doubles.generateDraftExecute).not.toHaveBeenCalled()
   })

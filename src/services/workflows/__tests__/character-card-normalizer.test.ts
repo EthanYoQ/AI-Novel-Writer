@@ -6,6 +6,8 @@ import {
   parseCharacterCardsFromModelOrSource,
 } from '../character-card-normalizer'
 
+const zhCN = (zhCNText: string) => zhCNText
+
 describe('character card normalizer', () => {
   it('preserves extracted cards that use Chinese field names', () => {
     const cards = normalizeCharacterCardsForPersistence([
@@ -154,7 +156,7 @@ describe('character card normalizer', () => {
       '- 能力：侵蚀陈默的意志',
     ].join('\n')
 
-    const cards = extractCompleteCharacterCards('', source)
+    const cards = extractCompleteCharacterCards('', source, zhCN)
 
     expect(cards.map(card => card.name)).toEqual(['陈默', '苍青', '墨无极', '陶厌', '深渊魔主残魂'])
     expect(cards.map(card => card.role)).toEqual([
@@ -179,7 +181,7 @@ describe('character card normalizer', () => {
       '### 第2章：墨色风暴',
     ].join('\n')
 
-    const cards = extractCompleteCharacterCards('', source)
+    const cards = extractCompleteCharacterCards('', source, zhCN)
 
     expect(cards.map(card => card.name)).toEqual(['苍青'])
   })
@@ -195,7 +197,7 @@ describe('character card normalizer', () => {
       '- 主题：陈默必须在自由与责任之间作出选择',
     ].join('\n')
 
-    const cards = extractCompleteCharacterCards('', source)
+    const cards = extractCompleteCharacterCards('', source, zhCN)
 
     expect(cards.map(card => card.name)).toEqual(['陈默'])
   })
@@ -209,8 +211,22 @@ describe('character card normalizer', () => {
       '- 目标：阻止陈默离开深渊',
     ].join('\n')
 
-    expect(() => extractCompleteCharacterCards('', source)).toThrow(
+    expect(() => extractCompleteCharacterCards('', source, zhCN)).toThrow(
       '无法从角色名单中安全识别完整角色清单',
+    )
+  })
+
+  it('英文界面下无法识别完整角色清单的说明是英文（#471）', () => {
+    const source = [
+      '# 角色图谱',
+      '## 主角：陈默',
+      '- 性别：男',
+      '## 反派：',
+      '- 目标：阻止陈默离开深渊',
+    ].join('\n')
+
+    expect(() => extractCompleteCharacterCards('', source, (_zhCN, enUS) => enUS)).toThrow(
+      /^The complete cast list could not be identified safely\. No characters were written\.$/u,
     )
   })
 
@@ -223,7 +239,7 @@ describe('character card normalizer', () => {
       '- 目标：阻止陈默离开深渊',
     ].join('\n')
 
-    expect(() => extractCompleteCharacterCards('', source)).toThrow(
+    expect(() => extractCompleteCharacterCards('', source, zhCN)).toThrow(
       '无法从角色名单中安全识别完整角色清单',
     )
   })
@@ -235,7 +251,7 @@ describe('character card normalizer', () => {
       ],
     })
 
-    const cards = extractCompleteCharacterCards('', source)
+    const cards = extractCompleteCharacterCards('', source, zhCN)
 
     expect(cards).toEqual([
       expect.objectContaining({ name: '陈默', relationships: '[暂无明确关系]' }),
@@ -260,7 +276,7 @@ describe('character card normalizer', () => {
       '沈砺与陆沉争夺矿脉，叶霜夹在救人和保守秘密之间。',
     ].join('\n')
 
-    const cards = extractCompleteCharacterCards('', source)
+    const cards = extractCompleteCharacterCards('', source, zhCN)
 
     expect(cards.map(card => card.name)).toEqual(['沈砺', '叶霜', '陆沉'])
     expect(cards.map(card => card.role)).toEqual(['protagonist', 'supporting', 'supporting'])
@@ -291,7 +307,7 @@ describe('character card normalizer', () => {
       ],
     })
 
-    const cards = extractCompleteCharacterCards(model, source)
+    const cards = extractCompleteCharacterCards(model, source, zhCN)
 
     expect(cards.map(card => card.name)).toEqual(['沈砺', '老周', '陈默', '小邱'])
     expect(cards.map(card => card.role)).toEqual(['protagonist', 'supporting', 'antagonist', 'supporting'])
@@ -305,7 +321,7 @@ describe('character card normalizer', () => {
       '- 身份背景：这是一段叙事说明，不是角色条目。',
     ].join('\n')
 
-    expect(() => extractCompleteCharacterCards('', source)).toThrow(
+    expect(() => extractCompleteCharacterCards('', source, zhCN)).toThrow(
       '无法从角色名单中安全识别完整角色清单',
     )
   })
@@ -329,7 +345,7 @@ describe('character card normalizer', () => {
       ],
     })
 
-    const cards = extractCompleteCharacterCards(model, source)
+    const cards = extractCompleteCharacterCards(model, source, zhCN)
 
     expect(cards.map(card => card.name)).toEqual(['沈砺', '顾湘', '宋延军'])
     expect(cards.map(card => card.role)).toEqual(['protagonist', 'supporting', 'antagonist'])
@@ -343,7 +359,7 @@ describe('character card normalizer', () => {
       '- 身份背景：原矿场检修员。',
     ].join('\n')
 
-    expect(() => extractCompleteCharacterCards('', source)).toThrow(
+    expect(() => extractCompleteCharacterCards('', source, zhCN)).toThrow(
       '无法从角色名单中安全识别完整角色清单',
     )
   })
@@ -356,7 +372,7 @@ describe('character card normalizer', () => {
       '- 身份背景：矿区安保负责人，主张用稳定压过真相。',
     ].join('\n')
 
-    const cards = extractCompleteCharacterCards('', source)
+    const cards = extractCompleteCharacterCards('', source, zhCN)
 
     expect(cards).toEqual([
       expect.objectContaining({ name: '宋延军', role: 'antagonist' }),
@@ -369,7 +385,7 @@ describe('character card normalizer', () => {
       '## 【核心冲突：主角与反派】宿命之战',
     ].join('\n')
 
-    expect(() => extractCompleteCharacterCards('', source)).toThrow(
+    expect(() => extractCompleteCharacterCards('', source, zhCN)).toThrow(
       '无法从角色名单中安全识别完整角色清单',
     )
   })
@@ -382,7 +398,7 @@ describe('character card normalizer', () => {
       '- 身份背景：矿区培训体系说明。',
     ].join('\n')
 
-    expect(() => extractCompleteCharacterCards('', source)).toThrow(
+    expect(() => extractCompleteCharacterCards('', source, zhCN)).toThrow(
       '无法从角色名单中安全识别完整角色清单',
     )
   })
@@ -394,7 +410,7 @@ describe('character card normalizer', () => {
       '- 身份背景：被内在人格持续侵蚀的矿区工程师。',
     ].join('\n')
 
-    expect(() => extractCompleteCharacterCards('', source)).toThrow(
+    expect(() => extractCompleteCharacterCards('', source, zhCN)).toThrow(
       '无法从角色名单中安全识别完整角色清单',
     )
   })
