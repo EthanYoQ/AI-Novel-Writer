@@ -199,6 +199,20 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
     expect(result.content).not.toContain('Nested rules.')
   })
 
+  it('does not substitute a nested namesake when the ${SKILL_DIR} root file is missing', () => {
+    const files: Record<string, string> = {
+      'references/guide.md': 'Apply ${SKILL_DIR}/rules.md.',
+      'references/rules.md': 'Nested rules.',
+    }
+    const result = inspectLocalWritingSkill('---\nname: rooted\n---\nRead references/guide.md.', {
+      readFile: relativePath => files[relativePath],
+    })
+
+    expect(result.reasons).toContain('relative-reference')
+    expect(result.bundledFiles).not.toContain('references/rules.md')
+    expect(result.content).not.toContain('Nested rules.')
+  })
+
   it.each([
     ['https://github.com/acme/story-skill',{ owner: 'acme', repo: 'story-skill', path: 'SKILL.md' }],
     ['https://github.com/acme/story-skill/tree/main/skills/prose', { owner: 'acme', repo: 'story-skill', ref: 'main', path: 'skills/prose/SKILL.md' }],
