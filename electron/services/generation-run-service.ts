@@ -50,7 +50,7 @@ export interface ExecuteGenerationRequest {
     /** 首稿提示经主进程复核确实带有生成前定稿对账注入块；恢复据此决定续写/压缩是否沿用对账结果。 */
     reconciliationInjected?: boolean;
 }
-/** 作者暂停、取消、重开或本次运行总时长用尽时中止请求的原因；调用记录据此记为已取消，而不是服务商失败。 */
+/** 作者暂停、取消、重开或本次运行总时长用尽时中止请求的原因；调用记录据此记为已取消，而不是服务商失败。存储失败、流不合规与关闭作品的中止不带它。 */
 export const GENERATION_STOPPED = new DOMException('GENERATION_STOPPED', 'AbortError');
 export interface GenerationRunServiceDependencies {
     repository: GenerationRunRepository;
@@ -319,6 +319,9 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             pending.delete(key);
         }
     };
+    const stopRoot = (rootId: string) => { for (const item of controllers.values())
+        if (item.rootId === rootId)
+            item.controller.abort(GENERATION_STOPPED); };
     return {
         open: (request: OpenGenerationRunRequest) => deps.repository.open(request), execute,
         suspendForProjectClose: () => {
@@ -341,17 +344,11 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             deps.repository.discardCandidate(id);
             for (const [attemptId, tail] of unsavedTails) if (tail.artifactId === id) unsavedTails.delete(attemptId);
         },
-        pause: (rootId: string) => { deps.repository.pause(rootId); for (const item of controllers.values())
-            if (item.rootId === rootId)
-                item.controller.abort(GENERATION_STOPPED); },
-        cancel: (rootId: string) => { deps.repository.pause(rootId, true); for (const item of controllers.values())
-            if (item.rootId === rootId)
-                item.controller.abort(GENERATION_STOPPED); },
+        pause: (rootId: string) => { deps.repository.pause(rootId); stopRoot(rootId); },
+        cancel: (rootId: string) => { deps.repository.pause(rootId, true); stopRoot(rootId); },
         resume: async (runId: string, next: RunBinding) => { const old = deps.repository.get(runId); if (!isDeepStrictEqual(old.binding.fingerprint, next.fingerprint) || old.binding.contextSnapshotId !== next.contextSnapshotId || !isDeepStrictEqual(old.binding.sourceManifest, next.sourceManifest) || !deps.validateRecovery || !await deps.validateRecovery(old.binding, next))
             throw new Error('GENERATION_RECOVERY_UNAUTHORIZED'); deps.repository.resume(runId, next); return deps.repository.get(runId); },
-        restart: (oldRootId: string, request: OpenGenerationRunRequest) => { deps.repository.pause(oldRootId, true); for (const item of controllers.values())
-            if (item.rootId === oldRootId)
-                item.controller.abort(GENERATION_STOPPED); return deps.repository.open(request); },
+        restart: (oldRootId: string, request: OpenGenerationRunRequest) => { deps.repository.pause(oldRootId, true); stopRoot(oldRootId); return deps.repository.open(request); },
         recoverInterrupted: () => deps.repository.recoverInterrupted(),
     };
 }

@@ -261,7 +261,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       record(result.finishReason === 'stop', result.usage, result.finishReason === 'stop' ? undefined : `finish:${result.finishReason ?? 'unknown'}`)
       return result
     } catch (error) {
-      record(false, null, options.signal.reason === GENERATION_STOPPED ? 'cancelled' : error instanceof Error ? error.message : String(error))
+      if (options.signal.reason === GENERATION_STOPPED) recordCancelled()
+      else record(false, null, error instanceof Error ? error.message : String(error))
       throw error
     }
   }
