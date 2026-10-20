@@ -31,6 +31,10 @@ function CandidateNotice({ sectionKey, overview }: { sectionKey: 'worldbuilding'
   const restart = sectionKey === 'synopsis' ? overview.outlineRestartRange : null
   const locale = useLocaleStore(s => s.locale)
   const filled = Boolean(overview.archStatus[sectionKey])
+  let note = state.handle
+    ? text('续写从停下的地方接着生成，不会改动已保存的部分。', 'Resuming continues from where it stopped and leaves saved content alone.')
+    : text('无法确认这份候选的来源，只能查看或复制，然后重新生成。', 'The source of this candidate cannot be confirmed. View or copy it, then generate again.')
+  if (restart && overview.planningRecovery) note = outlineSourceChangedNote(overview.planningRecovery, locale, true) ?? note
   const resume = () => editDraft
     ? overview.openRecoveryDraft()
     : void (sectionKey === 'synopsis' ? overview.handleResumeSynopsis() : overview.handleResumeWorldBuilding())
@@ -68,11 +72,7 @@ function CandidateNotice({ sectionKey, overview }: { sectionKey: 'worldbuilding'
           </>
         )}
       >
-        {restart && overview.planningRecovery
-          ? outlineSourceChangedNote(overview.planningRecovery, locale)
-          : state.handle
-            ? text('续写从停下的地方接着生成，不会改动已保存的部分。', 'Resuming continues from where it stopped and leaves saved content alone.')
-            : text('无法确认这份候选的来源，只能查看或复制，然后重新生成。', 'The source of this candidate cannot be confirmed. View or copy it, then generate again.')}
+        {note}
       </Notice>
       {state.candidateShown && <pre className="arch-candidate" role="region" aria-label={text('未完成候选', 'Unfinished candidate')}>{state.candidate}</pre>}
     </>

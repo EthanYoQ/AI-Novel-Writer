@@ -170,13 +170,21 @@ export function outlineSourceInvalidNote(recovery: Pick<GenerationRecoveryContex
   return plotOutlineSourceInvalidText(recovery.plotOutline?.sourceExpected.synopsis ?? '', locale)
 }
 
-/** 大纲恢复稿因来源（模型设置、作品设定、提示词模板或写作 Skill）已变而不能写回：只能查看或复制，从本批起始章重新生成；其余情况为 null。 */
-export function outlineSourceChangedNote(recovery: Pick<GenerationRecoveryContext, 'plotOutline' | 'plotOutlineRecovery'>, locale: Locale): string | null {
+/** 大纲恢复稿因来源（模型设置、作品设定、提示词模板或写作 Skill）已变而被封锁写回。 */
+export function outlineSourceChangedBlocked(recovery: Pick<GenerationRecoveryContext, 'plotOutlineRecovery'>): boolean {
   const writeState = recovery.plotOutlineRecovery?.writeState
-  if (writeState?.kind !== 'blocked' || writeState.reason !== 'source-changed') return null
+  return writeState?.kind === 'blocked' && writeState.reason === 'source-changed'
+}
+
+/**
+ * 来源已变的大纲恢复稿：只能查看或复制，从本批起始章重新生成；其余情况为 null。
+ * batchUnsaved：调用方确知本批没有写入正式大纲（例如最后一章生成完、正式保存被来源检查拒绝），
+ * 这时即使候选已生成完也要重新生成；不确定时按「生成完毕即已保存」只说明不能写回。
+ */
+export function outlineSourceChangedNote(recovery: Pick<GenerationRecoveryContext, 'plotOutline' | 'plotOutlineRecovery'>, locale: Locale, batchUnsaved = false): string | null {
+  if (!outlineSourceChangedBlocked(recovery)) return null
   const t = lang(locale), outline = recovery.plotOutline
-  // 已写完的一批不需要重新生成，只说明恢复稿不能写回。
-  if (outline?.cursor.kind === 'complete') {
+  if (outline?.cursor.kind === 'complete' && !batchUnsaved) {
     return t('这批大纲已经生成完毕。模型设置、作品设定、提示词模板或写作 Skill 之后变了，恢复稿不能覆盖正式内容，只能查看或复制。',
       'This outline batch finished. The model settings, book settings, a prompt template or a writing skill changed afterwards, so this recovery draft cannot replace saved content. You can view or copy it.')
   }
