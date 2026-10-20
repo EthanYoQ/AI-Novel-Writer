@@ -5,8 +5,36 @@ import { knownAppErrorMessage } from '../app-errors'
 
 /**
  * 生成 IPC 会把任何 GENERATION_* 码原样转给渲染端，工作流失败面板对未登记的码只能显示原码。
+ * 下面这些前缀的码同样会进工作流失败面板：工作流与生成运行时直接抛出，或由工作流调用的主进程服务
+ * （角色提议、定稿角色状态、旧版角色名单、生成记录）经 IPC 转来（#471）。
  * 所以代码里出现的每个码都要二选一：在 app-errors.ts 登记文案，或在这里按理由列为不登记。
+ *
+ * 其余前缀（备份与迁移、安全文件系统、头像与图片、EPUB 导入、外观、编辑器等）不在这里：
+ * 它们不经工作流失败面板，由各自的主进程控制器或页面按自己的映射说明。
  */
+const COVERED_PREFIXES = [
+  'GENERATION_',
+  'LEGACY_ROSTER_',
+  'CHARACTER_PROPOSAL_',
+  'FINALIZED_CHARACTER_',
+  'IMPORT_GENERATION_',
+  'DIRECTORY_',
+  'ARTIFACT_',
+  'ROOT_BUDGET_',
+  'TASK_BUDGET_',
+  'ATTEMPT_BUDGET_',
+  'USAGE_',
+  'DEADLINE_',
+  'MAIN_',
+  'INVALID_MAIN_',
+  'LEASE_',
+  'RUNTIME_',
+  'MATERIAL_DECISION_',
+  'CHAPTER_MATERIAL_',
+  'PLANNING_MATERIAL_',
+  'MODEL_NOT_',
+  'NO_DEFAULT_',
+] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
   // 或被外部改坏的作品库才会触发。界面给不出作者能照做的建议，原码留给反馈定位。
@@ -275,6 +303,100 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'GENERATION_SOURCE_BINDING_INVALID',
     'GENERATION_SOURCE_MANIFEST_INVALID',
     'GENERATION_WORKFLOW_ADVANCE_UNAVAILABLE',
+    // #471 扩到的前缀：生成运行时与主进程生成记录的句柄、租约、快照和收据校验，
+    // 角色提议与定稿角色状态的事务与来源证明，旧版角色名单的身份与采用收据。
+    'ARTIFACT_ATTEMPT_TERMINAL',
+    'ARTIFACT_INTEGRITY_FAILED',
+    'ARTIFACT_SNAPSHOT_CONFLICT',
+    'CHAPTER_MATERIAL_REQUIRED_PREDECESSOR_AMBIGUOUS',
+    'CHARACTER_PROPOSAL_APPROVAL_INVALID',
+    'CHARACTER_PROPOSAL_ARTIFACT_INVALID',
+    'CHARACTER_PROPOSAL_CONFLICT',
+    'CHARACTER_PROPOSAL_CONTEXT_UNPROVEN',
+    'CHARACTER_PROPOSAL_DIRECTORY_OPERATION_REQUIRED',
+    'CHARACTER_PROPOSAL_EDIT_INVALID',
+    'CHARACTER_PROPOSAL_EVIDENCE_REQUIRED',
+    'CHARACTER_PROPOSAL_GENERATION_ARTIFACT_REQUIRED',
+    'CHARACTER_PROPOSAL_KIND_INVALID',
+    'CHARACTER_PROPOSAL_MANIFEST_INVALID',
+    'CHARACTER_PROPOSAL_PROVENANCE_REQUIRED',
+    'CHARACTER_PROPOSAL_RECEIPT_INVALID',
+    'CHARACTER_PROPOSAL_SOURCE_INVALID',
+    'CHARACTER_PROPOSAL_SOURCE_MISSING',
+    'DIRECTORY_FROZEN_CONFIG_INVALID',
+    'DIRECTORY_PROGRESS_AMBIGUOUS',
+    'DIRECTORY_PROGRESS_CYCLE',
+    'DIRECTORY_VALIDATED_PREFIX_NOT_CONTIGUOUS',
+    'FINALIZED_CHARACTER_FIELD_REVISION_INVALID',
+    'FINALIZED_CHARACTER_MAIN_REQUIRED',
+    'FINALIZED_CHARACTER_SCOPE_REQUIRED',
+    'FINALIZED_CHARACTER_SNAPSHOT_INVALID',
+    'FINALIZED_CHARACTER_SNAPSHOT_REQUIRED',
+    'FINALIZED_CHARACTER_TEMPLATE_REQUIRED',
+    'FINALIZED_CHARACTER_TRANSACTION_REQUIRED',
+    'IMPORT_GENERATION_CONTEXT_REQUIRED',
+    'IMPORT_GENERATION_EXECUTION_REQUIRED',
+    'INVALID_MAIN_OUTCOME',
+    'INVALID_MAIN_RUN_HANDLE',
+    'INVALID_MAIN_SNAPSHOT',
+    'LEASE_CAPABILITY_INVALID',
+    'LEASE_CLOSE_FAILED',
+    'LEASE_IDENTITY_MISMATCH',
+    'LEGACY_ROSTER_ADOPTION_INVALID',
+    'LEGACY_ROSTER_ADOPTION_NONCE_CONFLICT',
+    'LEGACY_ROSTER_ADOPTION_READBACK_INVALID',
+    'LEGACY_ROSTER_ADOPTION_RECEIPT_INVALID',
+    'LEGACY_ROSTER_GENERATION_IDENTITY_MISMATCH',
+    'LEGACY_ROSTER_ID_INVALID',
+    'LEGACY_ROSTER_ID_SCHEMA_REQUIRED',
+    'LEGACY_ROSTER_SOURCE_INVALID',
+    'MAIN_ARTIFACT_ATTEMPT_CHANGED',
+    'MAIN_CANCEL_REQUIRES_EXPLICIT_ACTION',
+    'MAIN_GENERATION_TRANSPORT_REQUIRED',
+    'MAIN_INVOCATION_NONCE_REQUIRED',
+    'MAIN_OWNER_CONTROLS_BUDGET_AND_MODEL',
+    'MAIN_RUN_IDENTITY_MISMATCH',
+    'MAIN_RUN_NON_REPLAYABLE',
+    'MAIN_SNAPSHOT_CALLBACK_REQUIRED',
+    'MAIN_SNAPSHOT_REGRESSION',
+    'MATERIAL_DECISION_CAPACITY_INVALID',
+    'MATERIAL_DECISION_DUPLICATE_OMISSION',
+    'MATERIAL_DECISION_IDENTITY_CONFLICT',
+    'MATERIAL_DECISION_INCLUDED_EMPTY',
+    'MATERIAL_DECISION_INCLUDED_IDENTITY_CONFLICT',
+    'PLANNING_MATERIAL_TEMPLATE_MISSING',
+    'RUNTIME_CLOSED',
+    'TASK_BUDGET_INPUT_INVALID',
+  ],
+  // 模型输出不合角色提议或定稿角色状态的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住；
+  // 定稿后处理把码记在步骤上并原样显示，供反馈定位。没有现成文案能告诉作者除重试以外还能做什么。
+  modelOutputContract: [
+    'CHARACTER_PROPOSAL_COVERAGE_INCOMPLETE',
+    'CHARACTER_PROPOSAL_DETAIL_FIELD_INVALID',
+    'CHARACTER_PROPOSAL_EMPTY_DETAILS',
+    'CHARACTER_PROPOSAL_ENVELOPE_INVALID',
+    'CHARACTER_PROPOSAL_KEYS_INVALID',
+    'CHARACTER_PROPOSAL_ROLE_INVALID',
+    'CHARACTER_PROPOSAL_SLOT_MISMATCH',
+    'FINALIZED_CHARACTER_DUPLICATE_ID',
+    'FINALIZED_CHARACTER_EVIDENCE_INVALID',
+    'FINALIZED_CHARACTER_EVIDENCE_MISSING',
+    'FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE',
+    'FINALIZED_CHARACTER_FIELD_INVALID',
+    'FINALIZED_CHARACTER_IDENTITY_REQUIRED',
+    'FINALIZED_CHARACTER_UPDATES_INVALID',
+    'FINALIZED_CHARACTER_UPDATE_INVALID',
+  ],
+  // 角色建议页（待批准的角色提议、定稿角色状态候选）的决策请求：不经工作流失败面板。
+  // 页面目前原样显示主进程报错，见 #471 的后续项。
+  characterSuggestionsPage: [
+    'CHARACTER_PROPOSAL_ALREADY_APPROVED',
+    'CHARACTER_PROPOSAL_NOT_PENDING_FINALIZED',
+    'FINALIZED_CHARACTER_STATE_CANDIDATE_INVALID',
+    'FINALIZED_CHARACTER_STATE_CANDIDATE_NOT_FOUND',
+    'FINALIZED_CHARACTER_STATE_DECISION_INVALID',
+    'FINALIZED_CHARACTER_STATE_FIELD_CONFLICT',
+    'FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT',
   ],
   // 恢复与续跑的顺序约束：界面只从恢复列表或当前运行发起这些请求，按记录状态给出可用操作；
   // 只有绕过界面直接调用才会撞上。
@@ -307,6 +429,17 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'GENERATION_WORKFLOW_ADVANCE_REFUSED',
     'GENERATION_WORKFLOW_RESUME_REQUIRED',
     'GENERATION_WORKFLOW_ROOT_CHANGED',
+    // #471 扩到的前缀：目录续跑只从进度列表里未完成的一项发起；旧版名单恢复面板按记录状态给出可用操作；
+    // 采用角色前必须先看过提议预览；素材裁决未就绪时不会发起写稿。
+    'CHARACTER_PROPOSAL_PREVIEW_REQUIRED',
+    'DIRECTORY_PROGRESS_COMPLETE',
+    'DIRECTORY_PROGRESS_NOT_FOUND',
+    'LEGACY_ROSTER_CARDS_REQUIRED',
+    'LEGACY_ROSTER_GENERATION_NOT_OPEN',
+    'LEGACY_ROSTER_GENERATION_NOT_STAGEABLE',
+    'LEGACY_ROSTER_GENERATION_OUTCOME_UNKNOWN',
+    'LEGACY_ROSTER_MODEL_SOURCE_REQUIRED',
+    'MATERIAL_DECISION_NOT_READY',
   ],
   // 不经工作流失败面板：界面自己识别并给出专门提示、主进程内部捕获，或只在启动装配与关闭收尾时抛出。
   handledElsewhere: [
@@ -317,6 +450,13 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'GENERATION_STOPPED',
     'GENERATION_TRANSPORT_ALREADY_INSTALLED',
     'GENERATION_UNSAVED_TAIL_PRESENT',
+    // 错误本身带按界面语言写好的说明，码只供调用方分流：素材容量冲突、目录部分提交与范围过大。
+    'CHAPTER_MATERIAL_CAPACITY_CONFLICT',
+    'DIRECTORY_PARTIAL_COMMIT',
+    'DIRECTORY_TASK_COST_LIMIT',
+    // 启动时外观设置与主进程握手，失败只影响主题初始化，不进任何失败面板。
+    'MAIN_ACK_REJECTED',
+    'MAIN_NOT_READY',
   ],
 }
 
@@ -332,10 +472,12 @@ function sourceFiles(dir: string): string[] {
   })
 }
 
-function generationCodesInSource(): Map<string, string> {
+const CODE_LITERAL = new RegExp(`['"\`]((?:${COVERED_PREFIXES.join('|')})[A-Z0-9_]*[A-Z0-9])['"\`]`, 'gu')
+
+function coveredCodesInSource(): Map<string, string> {
   const codes = new Map<string, string>()
   for (const file of SCANNED.flatMap(dir => sourceFiles(join(ROOT, dir)))) {
-    for (const match of readFileSync(file, 'utf8').matchAll(/['"`](GENERATION_[A-Z0-9_]*[A-Z0-9])['"`]/gu)) {
+    for (const match of readFileSync(file, 'utf8').matchAll(CODE_LITERAL)) {
       if (!codes.has(match[1]!)) codes.set(match[1]!, relative(ROOT, file).split(sep).join('/'))
     }
   }
@@ -345,11 +487,12 @@ function generationCodesInSource(): Map<string, string> {
 const unregistered = new Set(Object.values(UNREGISTERED).flat())
 const isRegistered = (code: string) => knownAppErrorMessage('zh-CN', code) !== undefined
 
-describe('GENERATION_* error code coverage', () => {
-  const codes = generationCodesInSource()
+describe('error codes that reach the workflow failure panel', () => {
+  const codes = coveredCodesInSource()
 
   it('finds the codes the scan is meant to cover', () => {
     expect(codes.has('GENERATION_SOURCE_CHANGED')).toBe(true)
+    expect(codes.has('LEGACY_ROSTER_GENERATION_CANCELLED')).toBe(true)
     expect(codes.size).toBeGreaterThan(300)
   })
 
