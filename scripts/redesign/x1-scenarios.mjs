@@ -303,22 +303,30 @@ export const X1_SCENARIOS = {
     mkdirSync(join(folder, 'scripts'), { recursive: true })
     writeFileSync(join(folder, 'SKILL.md'), [
       '---', 'name: scene-voice', 'description: >-', '  让每一场戏保持统一的叙述声音。', '  起草和修稿时使用。', 'license: Apache-2.0', '---',
-      '遵循 [声音规则](references/voice.md)。格式参照 [表单说明](FORMS.md)。收尾前再读一遍 [声音规则](References/Voice.md)。',
+      '遵循 [声音规则](references/voice.md)。格式参照 [表单说明](FORMS.md)。收尾前再读一遍 [声音规则](References/Voice.md)。节奏见 [节奏][pace]。',
+      '', '[pace]: ./pace.md',
     ].join('\n'))
     writeFileSync(join(folder, 'references', 'voice.md'), '使用第三人称近距离视角，动作先于心理。[返回](../SKILL.md)')
+    writeFileSync(join(folder, 'pace.md'), '短句推进动作，长句留给回想。')
     writeFileSync(join(folder, 'scripts', 'lint.py'), 'print("lint")')
     await app.evaluate(({ dialog }, picked) => {
       globalThis.__skillsImportDialog = dialog.showOpenDialog
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
     }, folder)
-    await stage.openSettings(page)
-    await stage.showSettingsPage(page, '写作 Skills')
-    await stage.root(page).getByRole('button', { name: '选择文件夹' }).click()
     const card = stage.root(page).getByRole('group', { name: '待安装的 Skill' })
-    await card.waitFor({ state: 'visible' })
-    await app.evaluate(({ dialog }) => { dialog.showOpenDialog = globalThis.__skillsImportDialog })
+    try {
+      await stage.openSettings(page)
+      await stage.showSettingsPage(page, '写作 Skills')
+      await stage.root(page).getByRole('button', { name: '选择文件夹' }).click()
+      await card.waitFor({ state: 'visible' })
+    } finally {
+      await app.evaluate(({ dialog }) => {
+        dialog.showOpenDialog = globalThis.__skillsImportDialog
+        delete globalThis.__skillsImportDialog
+      })
+    }
     const inspected = await card.innerText()
-    assert.match(inspected, /^并入提示词: references\/voice\.md$/mu, '回链的 SKILL.md 与大小写不同的同一文件都只算一次，只并入 voice.md')
+    assert.match(inspected, /^并入提示词: references\/voice\.md、pace\.md$/mu, '回链的 SKILL.md 与大小写不同的同一文件只算一次；引用式链接定义指向的 pace.md 也并入')
     assert.match(inspected, /scripts\/lint\.py/u, '检查卡列出不会安装的脚本')
     assert.match(inspected, /模型看不到：FORMS\.md/u, '检查卡列出没有随 Skill 安装的普通链接')
     await shoot('skills-import-local-inspected')
@@ -348,7 +356,7 @@ export const X1_SCENARIOS = {
     const options = await draftingOptions.evaluateAll(nodes => nodes.map(node => node.value))
     assert.ok(options.includes('user:legacy-forms'), '没有清单的旧 Skill 仍按 master 判为兼容，可以绑定')
     const manifest = JSON.parse(readFileSync(join(installed, '.pagekin-bundle.json'), 'utf8'))
-    assert.deepEqual(manifest.files.map(file => file.path), ['references/voice.md'], '安装清单只列并入的 voice.md')
+    assert.deepEqual(manifest.files.map(file => file.path), ['references/voice.md', 'pace.md'], '安装清单只列并入的 voice.md 与 pace.md')
     await page.waitForFunction(() => document.querySelector('select[aria-label="章节正文 Skill"]')?.value === 'user:scene-voice', null, { timeout: 10_000 })
     await shoot('skills-import-local-bound')
 
@@ -359,6 +367,7 @@ export const X1_SCENARIOS = {
     const chats = await proseRequest(fake, 60_000)
     const prose = JSON.stringify(chats.find(chat => chat.kind === 'prose').messages)
     assert.ok(prose.includes('使用第三人称近距离视角'), '写正文的请求带上了按清单并入的 voice.md')
+    assert.ok(prose.includes('短句推进动作'), '写正文的请求带上了引用式链接指向的 pace.md')
     assert.ok(!prose.includes('print(\\"lint\\")'), '没有安装的脚本不进提示词')
     await runSheet.waitForRunDone(page)
     return { inspected, bound, manifest: manifest.files.map(file => file.path), legacyBindable: true, proseHasBundledFile: true }
