@@ -18,6 +18,7 @@ import type {
 } from '../../src/shared/project-overview'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
 import { verifySchema } from '../migrations/runner'
+import { CURRENT_DRAFT_STATUS_SQL } from '../../src/shared/draft-status'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 
 const require = createRequire(import.meta.url)
@@ -204,11 +205,11 @@ function aggregateProject(
   const currentDrafts = database.prepare(`
     SELECT drafts.chapter_number AS chapterNumber, drafts.word_count AS wordCount
     FROM drafts
-    WHERE drafts.status IN ('draft','revised','finalized')
+    WHERE drafts.status IN (${CURRENT_DRAFT_STATUS_SQL})
       AND NOT EXISTS (
         SELECT 1 FROM drafts newer
         WHERE newer.chapter_number=drafts.chapter_number
-          AND newer.status IN ('draft','revised','finalized')
+          AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL})
           AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)
       )
   `).all() as { chapterNumber: number; wordCount: number }[]
@@ -262,11 +263,11 @@ function aggregateProject(
       SELECT contents.body
       FROM drafts
       JOIN contents ON contents.id=drafts.content_id
-      WHERE drafts.status IN ('draft','revised','finalized')
+      WHERE drafts.status IN (${CURRENT_DRAFT_STATUS_SQL})
         AND NOT EXISTS (
           SELECT 1 FROM drafts newer
           WHERE newer.chapter_number=drafts.chapter_number
-            AND newer.status IN ('draft','revised','finalized')
+            AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL})
             AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)
         )
       ORDER BY drafts.chapter_number DESC, drafts.version DESC, drafts.id DESC
