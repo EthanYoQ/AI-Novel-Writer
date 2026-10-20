@@ -43,6 +43,7 @@ let characterId = ''
 const selections: unknown[] = []
 const commitRequests: unknown[] = []
 let commitFailures = 0
+let characterExecuteFailures = 0
 let changeFieldBeforeCommit = false
 let actualOwner: ReturnType<typeof createMainGenerationOwner> | undefined
 const stageByRun = new Map<string, string>()
@@ -187,7 +188,11 @@ function installRealRepositoryIpc(): void {
             stageByRun.set(value.view.handle.runId, value.context.slot.stepKey)
             return value
           }
-          case 'finalization-generation:execute': { const r = await owner().executeFinalizationGeneration(args[0] as Parameters<ReturnType<typeof owner>['executeFinalizationGeneration']>[0]); return r }
+          case 'finalization-generation:execute': {
+            const request = args[0] as Parameters<ReturnType<typeof owner>['executeFinalizationGeneration']>[0]
+            if (stageByRun.get(request.handle.runId) === 'character_cards' && characterExecuteFailures-- > 0) throw new Error('network error: synthetic lost execute')
+            return owner().executeFinalizationGeneration(request)
+          }
           case 'finalization-generation:cancel': return owner().cancelFinalizationGeneration(args[0] as Parameters<ReturnType<typeof owner>['cancelFinalizationGeneration']>[0])
           case 'finalization-generation:commit': {
             const request = args[0] as Parameters<ReturnType<typeof owner>['commitFinalizationGeneration']>[0]
@@ -327,7 +332,7 @@ beforeEach(() => {
   const cache = path.resolve('.runtime/.cache/novel-quality-modernization/s09b-finalize-consumer')
   fs.mkdirSync(cache, { recursive: true })
   projectPath = fs.mkdtempSync(path.join(cache, 'case-'))
-  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; changeFieldBeforeCommit = false
+  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; characterExecuteFailures = 0; changeFieldBeforeCommit = false
   initProjectDatabase(projectPath)
   const db = CharacterRosterRepository.read()
   expect(db.status).toBe('empty')
@@ -416,7 +421,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(invalidatedDuringNotes).toBe(true)
     expect(staleRun.steps.chapter_notes).toMatchObject({
       ok: false,
-      error: expect.stringContaining('FINALIZATION_GENERATION_SOURCE_CHANGED'),
+      error: 'FINALIZATION_GENERATION_SOURCE_CHANGED',
     })
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
       chapterNotes: 'Existing projection remains available only as stale material.',
@@ -866,4 +871,159 @@ it('一次显式修复固定失败目标，withRetry 不得把第四份坏结果
  const db = getProjectDb()!
  expect(db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
  expect(db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
+})
+it('#420 角色状态断流后，用户重试每次只发一次新请求，失败记下错误码，成功后只写一次', async () => {
+ insertFinalizedDraft(7, 2)
+ let characterCalls = 0
+ let failures = 2
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  characterCalls++
+  if (failures-- > 0) { streamCallbacks.onError?.('synthetic stream interrupted'); return 'interrupted' }
+  streamCallbacks.onDone?.(modelFixtureResponse(JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })), undefined, 'stop')
+  return 'recovered'
+ }) })
+ const run = (repair: boolean) => command('The brass key changes hands.', repair ? { onlyFailed: true, retryInvalidResult: true } : {})
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ const before = CharacterRosterRepository.read().revision
+ const initial = await run(false)
+ expect(initial.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: false } })
+ expect(characterCalls).toBe(1)
+ expect(initial.steps.character_cards.error).toBe('FINALIZATION_GENERATION_ARTIFACT_REQUIRED')
+ const failedAgain = await run(true)
+ expect(failedAgain.steps.character_cards.ok).toBe(false)
+ expect(failedAgain.steps.character_cards.error).toBe('FINALIZATION_GENERATION_INCOMPLETE')
+ expect(characterCalls).toBe(2)
+ const repaired = await run(true)
+ expect(repaired.steps.character_cards.ok).toBe(true)
+ expect(characterCalls).toBe(3)
+ expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+ expect(CharacterRosterRepository.read().revision).toBe(before + 1)
+ expect((await run(true)).steps.character_cards.ok).toBe(true)
+ expect(characterCalls).toBe(3)
+ expect(CharacterRosterRepository.read().revision).toBe(before + 1)
+})
+
+it('#420 模型正常结束但返回空文本：步骤记结果不可用（不说没发请求），自动重试不再计费，作者重试发一次新请求后成功', async () => {
+ insertFinalizedDraft(7, 2)
+ let notesCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (system.includes('character records')) { streamCallbacks.onDone?.(modelFixtureResponse('{"updates":[]}'), undefined, 'stop'); return 'characters' }
+  if (++notesCalls === 1) { streamCallbacks.onDone?.('', undefined, 'stop'); return '' }
+  streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop')
+  return 'notes'
+ }) })
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps.chapter_notes).toMatchObject({ ok: false, error: 'FINALIZATION_GENERATION_RESULT_UNUSABLE' })
+ expect(notesCalls).toBe(1)
+ const repaired = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(repaired.steps.chapter_notes).toMatchObject({ ok: true })
+ expect(notesCalls).toBe(2)
+})
+
+it('#420 运行中取消后，界面的重试（retryInvalidResult）在新运行里重新请求，不被旧运行的失败引用卡住', async () => {
+ insertFinalizedDraft(7, 2)
+ let characterCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  if (++characterCalls === 1) workflowContext.cancelled = true
+  streamCallbacks.onDone?.(modelFixtureResponse(JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })), undefined, 'stop')
+  return 'character'
+ }) })
+ await expect(command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow(/cancelled/i)
+ const runs = () => getProjectDb()!.prepare("SELECT COUNT(*) FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.finalizationGenerationSlotKey') IS NOT NULL").pluck().get() as number
+ const before = runs()
+ workflowContext.cancelled = false
+ const status = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(status.steps.character_cards).toMatchObject({ ok: true })
+ expect(characterCalls).toBe(2)
+ expect(runs()).toBe(before + 1)
+ expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+})
+
+it('#420 章节要点断流后作者改了本章蓝图要点，重试在新开的运行里重新请求并成功', async () => {
+ insertFinalizedDraft(7, 2)
+ let notesCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (system.includes('character records')) { streamCallbacks.onDone?.(modelFixtureResponse('{"updates":[]}'), undefined, 'stop'); return 'characters' }
+  if (++notesCalls === 1) { streamCallbacks.onError?.('synthetic stream interrupted'); return 'interrupted' }
+  streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop')
+  return 'notes'
+ }) })
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps.chapter_notes.ok).toBe(false)
+ expect(notesCalls).toBe(1)
+ getProjectDb()!.prepare("INSERT INTO blueprints (chapter_number, title, notes) VALUES (2, 'The Handoff', 'Author-edited notes')").run()
+ const repaired = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(repaired.steps.chapter_notes).toMatchObject({ ok: true })
+ expect(repaired.steps.character_cards).toMatchObject({ ok: true })
+ expect(notesCalls).toBe(2)
+})
+
+it('#420 角色状态运行已开始但还没发请求，重试按本运行的状态发出请求，不被章节要点的尝试卡住', async () => {
+ insertFinalizedDraft(7, 2)
+ let characterCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  characterCalls++
+  streamCallbacks.onDone?.(modelFixtureResponse(JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })), undefined, 'stop')
+  return 'characters'
+ }) })
+ characterExecuteFailures = 3
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: false } })
+ expect(characterCalls).toBe(0)
+ const repaired = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(repaired.steps.character_cards).toMatchObject({ ok: true })
+ expect(characterCalls).toBe(1)
+ expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+})
+
+it('#420 生成根被超时阻断后，重试记下额度用完的错误码，不再请求模型', async () => {
+ insertFinalizedDraft(7, 2)
+ let characterCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  characterCalls++
+  streamCallbacks.onError?.('synthetic stream interrupted')
+  return 'interrupted'
+ }) })
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps.character_cards.ok).toBe(false)
+ getProjectDb()!.prepare("UPDATE generation_roots SET blocked_code='ROOT_BUDGET_EXHAUSTED'").run()
+ const retried = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(retried.steps.character_cards).toMatchObject({ ok: false, error: 'ROOT_BUDGET_EXHAUSTED' })
+ expect(characterCalls).toBe(1)
+})
+
+it('#420 断流后重试拿到坏 JSON 时，同一次点击里自动修正一次并成功', async () => {
+ insertFinalizedDraft(7, 2)
+ const replies = ['interrupted', 'not json', JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })]
+ let characterCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  const reply = replies[characterCalls++]
+  if (reply === 'interrupted') streamCallbacks.onError?.('synthetic stream interrupted')
+  else streamCallbacks.onDone?.(modelFixtureResponse(reply), undefined, 'stop')
+  return reply
+ }) })
+ const initial = await command('The brass key changes hands.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps.character_cards.ok).toBe(false)
+ const repaired = await command('The brass key changes hands.', { onlyFailed: true, retryInvalidResult: true })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(repaired.steps.character_cards).toMatchObject({ ok: true })
+ expect(characterCalls).toBe(3)
+ expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
 })

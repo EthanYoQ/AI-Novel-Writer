@@ -4,6 +4,8 @@ import type { VersionRecord } from '../../../services/version-service'
 import { countDraftUnits } from '../../../shared/draft-units'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
+import type { ProjectSessionContext } from '../../../shared/ipc-channels'
+import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../../project-session-gate'
 
 export interface VersionChapter {
@@ -19,8 +21,8 @@ export interface VersionComparison {
 
 const NO_VERSIONS: VersionRecord[] = []
 
-/** 某一章各稿的读取结果：读到的各稿，或读取失败（稿还在数据库里，只是这次没读出来）。 */
-type LoadedVersions = { chapter: number } & ({ ok: true; versions: VersionRecord[] } | { ok: false })
+/** 某一章各稿的读取结果：读到的各稿，或读取失败（稿还在数据库里，只是这次没读出来）。session 为读取时的作品会话。 */
+type LoadedVersions = { chapter: number; session: ProjectSessionContext | null } & ({ ok: true; versions: VersionRecord[] } | { ok: false })
 
 /**
  * 版本历史的数据：章节列表、所选章的各稿，以及读取对比两边与回退。版本历史页用它。
@@ -31,7 +33,7 @@ export function useVersionHistory(projectKey: string) {
   const text = useLocaleStore(s => s.text)
   const [chapters, setChapters] = useState<VersionChapter[]>([])
   const [selectedChapter, setSelectedChapter] = useState<number | null>(null)
-  // 各稿按章号记下：再点当前章不必清空，换章时还没读到的章就是「正在读取」。
+  // 各稿按章号与会话记下：再点当前章不必清空，换章或重新打开作品后还没读到的就是「正在读取」。
   const [loaded, setLoaded] = useState<LoadedVersions | null>(null)
   const versionRequest = useRef(0)
   const [loading, setLoading] = useState(true)
@@ -62,10 +64,11 @@ export function useVersionHistory(projectKey: string) {
 
   /** 读这一章的各稿；只有最后一次读取写进列表，连续点几章时先点那章的结果晚到也不会盖住后点的。 */
   const loadVersions = useCallback(async (chapterNumber: number): Promise<VersionRecord[]> => {
-    const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
+    const project = useProjectStore.getState().currentProject
+    const projectSession = captureProjectSession(project)
     const request = ++versionRequest.current
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
-      setLoaded({ chapter: chapterNumber, ok: true, versions: [] })
+      setLoaded({ chapter: chapterNumber, session: projectSessionContextFromProject(project), ok: true, versions: [] })
       return []
     }
     const latest = () => request === versionRequest.current && isProjectSessionCurrent(projectSession)
@@ -80,10 +83,10 @@ export function useVersionHistory(projectKey: string) {
         created_at: draft.createdAt,
         dependencies_stale: draft.dependenciesStale,
       }))
-      if (latest()) setLoaded({ chapter: chapterNumber, ok: true, versions: loaded })
+      if (latest()) setLoaded({ chapter: chapterNumber, session: projectSession, ok: true, versions: loaded })
       return loaded
     } catch {
-      if (latest()) setLoaded({ chapter: chapterNumber, ok: false })
+      if (latest()) setLoaded({ chapter: chapterNumber, session: projectSession, ok: false })
       return []
     }
   }, [projectKey])
@@ -104,12 +107,13 @@ export function useVersionHistory(projectKey: string) {
   }, [loadVersions, selectedChapter])
 
 
-  /** 读出这一稿与这一章最新一稿的正文；会话已切换或这一稿不存在时返回 null，读取出错时抛出。空正文照常对比。 */
-  const readComparison = useCallback(async (versionId: number): Promise<VersionComparison | null> => {
+  /** 读出这一稿与这一章最新一稿的正文；这一稿已不存在时返回 'missing'，会话已切换时返回 null，读取出错时抛出。空正文照常对比。 */
+  const readComparison = useCallback(async (versionId: number): Promise<VersionComparison | 'missing' | null> => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey) || selectedChapter === null) return null
     const older = (await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', versionId, projectSession.projectPath))?.content
-    if (!isProjectSessionCurrent(projectSession) || older === undefined) return null
+    if (!isProjectSessionCurrent(projectSession)) return null
+    if (older === undefined) return 'missing'
     const latest = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-latest', selectedChapter, projectSession.projectPath)
     if (!isProjectSessionCurrent(projectSession)) return null
     if (latest?.id === undefined) return { older, current: null }
@@ -144,7 +148,11 @@ export function useVersionHistory(projectKey: string) {
     return { version: refreshed.find(version => version.id === created.id)?.version ?? null }
   }, [loadVersions, projectKey, selectedChapter, text])
 
-  const versionsLoading = selectedChapter !== null && loaded?.chapter !== selectedChapter
+  const currentSession = projectSessionContextFromProject(currentProject)
+  const loadedThisSession = loaded !== null && (loaded.session === null
+    ? currentSession === null
+    : sameProjectSessionContext(loaded.session, currentSession))
+  const versionsLoading = selectedChapter !== null && (loaded?.chapter !== selectedChapter || !loadedThisSession)
   const versionsFailed = !versionsLoading && loaded?.ok === false
   const versions = !versionsLoading && loaded?.ok ? loaded.versions : NO_VERSIONS
   return {

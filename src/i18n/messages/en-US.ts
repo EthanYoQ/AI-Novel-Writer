@@ -1,6 +1,7 @@
 import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
+import { APP_BRAND } from '../../shared/brand'
 export const enUS = {
-  'app.windowTitle': 'AI Novel Writer',
+  'app.windowTitle': APP_BRAND.enName,
   'error.knowledgeBaseNativeUnavailable': 'The knowledge base is unavailable because its Windows native component could not be loaded. Reinstall or download the complete release package.',
   'error.legacyVectorMigrationBlocked': 'Legacy knowledge-base data must be repaired before continuing. Fix vectors.json in the project, then try again.',
   'error.projectNotOpen': 'Open a project first.',

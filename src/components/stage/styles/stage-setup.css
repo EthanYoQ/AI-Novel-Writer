@@ -336,9 +336,11 @@
 }
 
 /* ---------- 底部操作栏 ---------- */
+/* 放不下时整项换行，提示文字至少留 10em，不被按钮挤成一字一行 */
 .stage-setup-foot {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: var(--s-3) var(--s-6);
@@ -351,6 +353,7 @@
 }
 
 .stage-setup-hint {
+  flex: 1 1 10em;
   margin-left: auto;
   font-size: var(--fs-12);
   color: var(--ink-3);

@@ -362,11 +362,50 @@ describe('版本历史', () => {
     expect(versionsColumn()).not.toContain('没能读出这一章的各稿')
   })
 
-  it('点的那一稿已被删掉（列表还没刷新）：对比区回到「选一稿」，不停在正在读取', async () => {
+  it('点的那一稿已被删掉（列表还没刷新）：对比区说明这一稿已不存在，并刷新列表去掉它，不停在正在读取', async () => {
     await openChapterThree()
     drafts = drafts.filter(draft => draft.id !== 11)
     await click(/草稿 v1/)
-    await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toBe('选一稿，与当前稿逐字对比。'))
+    await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toBe('这一稿已不存在，可能已被删除，请另选一稿。'))
+    await vi.waitFor(() => expect(button(/草稿 v1/)).toBeUndefined())
+    expect(button(/草稿 v2/)).toBeTruthy()
+    await vi.waitFor(() => expect(button(/雨夜车站/)!.textContent).toContain('1 稿'))
+
+    await click(/草稿 v2/)
+    await vi.waitFor(() => expect(document.querySelector('.stage-hist-diff')!.textContent).toContain('与当前稿相同'))
+  })
+
+  it('点的那一稿已被删掉、重读各稿又失败：对比区不声称列表已刷新，各稿栏给出重新读取', async () => {
+    await openChapterThree()
+    drafts = drafts.filter(draft => draft.id !== 11)
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel, ...args) => channel === 'db:draft-list' ? Promise.reject(new Error('数据库忙')) : base(channel, ...args))
+    await click(/草稿 v1/)
+    await vi.waitFor(() => expect(versionsColumn()).toContain('没能读出这一章的各稿'))
+    const hint = document.querySelector('.stage-hist-hint')!
+    expect(hint.textContent).toContain('这一稿已不存在')
+    expect(hint.textContent).not.toContain('已刷新')
+  })
+
+  it('同一部作品重新打开后、各稿重读完成前：不显示上一次打开读到的各稿，显示正在读取', async () => {
+    await openChapterThree()
+    const release = gateList(3)
+    await reopenSameBook()
+    await vi.waitFor(() => expect(versionsColumn()).toContain('正在读取…'))
+    expect(button(/草稿 v1/)).toBeUndefined()
+    await act(async () => release())
+    await vi.waitFor(() => expect(button(/草稿 v1/)).toBeTruthy())
+    expect(versionsColumn()).not.toContain('正在读取…')
+  })
+
+  it('重新打开作品时已有新的最新稿：清掉上次选的稿与对比，页头不和旧对比对不上', async () => {
+    await openChapterThree()
+    await click(/草稿 v1/)
+    await vi.waitFor(() => expect(host!.querySelector('article[aria-readonly="true"]')).toBeTruthy())
+    drafts.push({ id: 13, chapterNumber: 3, version: 3, status: 'draft', content: '雨停了。' })
+    await reopenSameBook()
+    await vi.waitFor(() => expect(button(/草稿 v3/)).toBeTruthy())
+    expect(document.querySelector('.stage-hist-diff')!.textContent).toBe('选一稿，与当前稿逐字对比。')
     expect(button(/草稿 v1/)!.getAttribute('aria-pressed')).toBe('false')
   })
 
