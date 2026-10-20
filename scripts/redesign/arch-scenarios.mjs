@@ -105,10 +105,10 @@ async function openArchitecture(page) {
 }
 
 /**
- * #465：窗口 1024 与 1280 宽、中英文界面下，角色名单页的导入按钮不超出名单栏，定位下拉框放得下每个选项。
- * 截图停在角色名单页，返回实测的宽度。
+ * #465：窗口 1024 与 1280 宽（后者另测开着运行侧页）、中英文界面下，角色名单页的导入按钮不超出名单栏，
+ * 定位下拉框放得下每个选项，档案首行的输入框文字区至少放得下三个字。截图停在角色名单页，返回实测的宽度。
  */
-async function castFitAt({ page, invoke, reload }, locale, width) {
+async function castFitAt({ page, invoke, reload }, locale, width, sheet) {
   await page.setViewportSize({ width, height: 768 })
   if (locale === 'en-US') {
     assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
@@ -122,6 +122,14 @@ async function castFitAt({ page, invoke, reload }, locale, width) {
     await arch.openCast(page)
   }
   await root(page).locator('.cast-select').waitFor({ state: 'visible' })
+  if (sheet) {
+    await page.keyboard.press('Control+K')
+    await page.getByRole('dialog').getByRole('combobox').waitFor({ state: 'visible' })
+    await page.keyboard.type(locale === 'en-US' ? 'Run sheet' : '运行侧页')
+    await page.keyboard.press('Enter')
+    await runSheet.sheet(page).waitFor({ state: 'visible' })
+    await page.waitForTimeout(400)
+  }
   const measured = await page.evaluate(() => {
     const roster = document.querySelector('.cast-roster').getBoundingClientRect()
     const buttons = [...document.querySelectorAll('.cast-roster-actions .pi-btn')].map(button => {
@@ -139,11 +147,22 @@ async function castFitAt({ page, invoke, reload }, locale, width) {
       probe.remove()
       return [option.textContent, width]
     }))
-    return { rosterRight: Math.round(roster.right), buttons, role: { width: Math.round(select.getBoundingClientRect().width), needed } }
+    const inputs = Object.fromEntries([...document.querySelectorAll('.cast-row-fields input')].map(input => {
+      const style = getComputedStyle(input)
+      return [input.closest('.cast-field').querySelector('label').textContent, {
+        text: Math.floor(input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
+        needed: Math.ceil(3 * parseFloat(style.fontSize)),
+      }]
+    }))
+    return {
+      page: Math.round(document.querySelector('.cast-body').getBoundingClientRect().width),
+      rosterRight: Math.round(roster.right), buttons, role: { width: Math.round(select.getBoundingClientRect().width), needed }, inputs,
+    }
   })
   const problems = [
     ...measured.buttons.filter(button => button.right > measured.rosterRight).map(button => `「${button.label}」超出名单栏`),
     ...Object.entries(measured.role.needed).filter(([, needed]) => needed > measured.role.width).map(([option]) => `定位下拉框放不下「${option}」`),
+    ...Object.entries(measured.inputs).filter(([, input]) => input.text < input.needed).map(([label]) => `「${label}」输入框太窄`),
   ]
   assert.deepEqual(problems, [], JSON.stringify(measured))
   return measured
@@ -593,8 +612,8 @@ export const ARCH_SCENARIOS = {
     return { regions }
   } },
 
-  ...Object.fromEntries(['zh-CN', 'en-US'].flatMap(locale => [1024, 1280].map(width =>
-    [`cast-fit-${locale === 'en-US' ? 'en' : 'zh'}-${width}`, { model: false, shell: 'stage', setup: seedArch(), run: context => castFitAt(context, locale, width) }]))),
+  ...Object.fromEntries(['zh-CN', 'en-US'].flatMap(locale => [[1024, false], [1280, false], [1280, true]].map(([width, sheet]) =>
+    [`cast-fit-${locale === 'en-US' ? 'en' : 'zh'}-${width}${sheet ? '-sheet' : ''}`, { model: false, shell: 'stage', setup: seedArch(), run: context => castFitAt(context, locale, width, sheet) }]))),
 
   /** lane 6：清空此节出现危险确认；after 取消，界面与数据库里的世界观都没变。 */
   'arch-clear': { model: false, shell: 'stage', setup: seedArch(), run: async context => {
