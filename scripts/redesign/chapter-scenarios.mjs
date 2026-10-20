@@ -371,7 +371,9 @@ export const CHAPTER_SCENARIOS = {
    */
   'chapter-write-after-edited-chain': { model: true, shell: 'stage', setup: seed({ extra: async ({ page, invoke, path, session }) => {
     const [third] = await invoke(page, 'db:draft-list', 3, path, session)
-    const original = (await invoke(page, 'db:draft-get-full', third.id, path, session)).content
+    assert.ok(third, '示例作品有第 3 章稿')
+    const original = (await invoke(page, 'db:draft-get-full', third.id, path, session))?.content
+    assert.equal(typeof original, 'string', '读到第 3 章正文')
     const fourth = STAGE_SAMPLE.drafts[4].text
     const created = await invoke(page, 'db:draft-create', { chapterNumber: 4, version: 2, source: 'rewrite', content: fourth, wordCount: countUnits(fourth),
       sourceDependencies: [{ kind: 'candidate', draftId: third.id, contentHash: createHash('sha256').update(original, 'utf8').digest('hex') }] }, path, session)
@@ -388,13 +390,11 @@ export const CHAPTER_SCENARIOS = {
       await waitRunDone(page, finalizing)
       await chapterView.postProcess(page).getByText('4 / 4 完成').waitFor({ state: 'visible', timeout: 60_000 })
     }
-    // 侧页开着时 waitRunDone 看的是「上一次运行」卡，会把第 4 章定稿当成这次写作；收起后改等顶栏胶囊。
-    if (await runSheet.sheet(page).isVisible()) await runSheet.sheet(page).getByRole('button', { name: '收起运行侧页' }).first().click()
     await chapterView.open(page, 5)
     const proseBefore = fake.chats.filter(chat => chat.kind === 'prose').length
-    const started = await runsStarted(page)
     await chapterView.view(page).getByRole('button', { name: '写作此章', exact: true }).click()
-    await waitRunDone(page, started)
+    // 运行侧页可能还停在第 4 章定稿那张「已完成」卡上，不能据它判断写完；只认第 5 章正文出现在纸面上。
+    await chapterView.prose(page).getByText(firstLine(FIXTURE_PROSE)).first().waitFor({ state: 'visible', timeout: 90_000 })
     await runSheet.openFromPalette(page)
     const after = {
       proseRequests: fake.chats.filter(chat => chat.kind === 'prose').length - proseBefore,
@@ -412,12 +412,15 @@ export const CHAPTER_SCENARIOS = {
     const started = await runsStarted(page)
     await chapterView.view(page).getByRole('button', { name: '重新审稿', exact: true }).click()
     await waitRunDone(page, started)
+    const reportShown = await chapterView.reviewSheet(page).getByRole('button', { name: '添加我的意见' })
+      .waitFor({ state: 'visible', timeout: 30_000 }).then(() => true, () => false)
     await runSheet.openFromPalette(page)
     const after = {
       reviewRequests: fake.chats.filter(chat => chat.kind === 'review').length - reviewsBefore,
+      reportShown,
       rawIpcError: await runSheet.sheet(page).getByText(/Error invoking remote method/).count(),
     }
-    assert.deepEqual(after, { reviewRequests: 1, rawIpcError: 0 }, '重新审稿请求了模型，运行侧页没有原始 IPC 错误')
+    assert.deepEqual(after, { reviewRequests: 1, reportShown: true, rawIpcError: 0 }, '重新审稿请求了模型并写回审稿报告，运行侧页没有原始 IPC 错误')
     return after
   } },
 
