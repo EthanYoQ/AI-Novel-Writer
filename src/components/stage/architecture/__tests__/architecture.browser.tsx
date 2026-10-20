@@ -604,6 +604,15 @@ describe('架构阶段', () => {
     expect(mark('premise')).toBe('新生成')
   })
 
+  it('某节只有空白（超过 50 个字符）：与空节一样显示还没有内容、徽标待生成，不算已确认', async () => {
+    core = { ...core, worldbuilding: ' \n'.repeat(40) }
+    await render()
+    const world = host!.querySelector('[data-section="worldbuilding"]')!
+    expect(world.querySelector('.arch-section-summary')?.textContent).toContain('还没有内容')
+    expect(world.querySelector('.arch-badge')?.textContent).toBe('待生成')
+    expect(host!.querySelector('.arch-eyebrow')?.textContent).toContain('1 / 4 已确认')
+  })
+
   describe('只有序章的大纲（#417）', () => {
     const LONG_PROLOGUE = `## 第0章：序章
 ${'守塔人听见第十三声钟，灯塔在那一夜熄灭。'.repeat(4)}`

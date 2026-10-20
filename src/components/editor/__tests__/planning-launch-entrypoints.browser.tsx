@@ -114,6 +114,23 @@ it('文档页里不足 50 字的一节点 AI 生成：标为将覆盖，不当�
   expect(row.querySelector('[data-mark]')?.textContent).toBe('将覆盖')
 })
 
+it('文档页里写着「待生成」字样的一节与架构页一样算有内容：生成时标为将覆盖', async () => {
+  const draft = '雾港的身世待生成，先记下钟楼每晚早响一刻。'
+  const base = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+  invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:project-core-get'
+    ? { premise: '故事前提'.repeat(20), worldbuilding: draft, synopsis: '', totalChapters: 20 }
+    : base(channel, ...args))
+  const premise = '故事前提'.repeat(20)
+  await act(async () => root.render(<ArchFileViewer tabId="planning-premise" filePath="ai-novel://core/premise" projectKey={project.path} content={premise} savedContent={premise} />))
+  await act(async () => page.getByRole('button', { name: 'AI 重新生成', exact: true }).click())
+  const row = await vi.waitFor(() => {
+    const label = [...document.querySelectorAll('label')].find(node => node.textContent?.startsWith('世界观'))
+    expect(label).toBeTruthy()
+    return label!
+  })
+  expect(row.querySelector('[data-mark]')?.textContent).toBe('将覆盖')
+})
+
 describe('其他架构文档页的生成对话框按大纲进度判定情节大纲是否已确认，与架构页一致', () => {
   const chapters = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index)
     .map(n => `## 第${n}章：第${n}盏灯\n林舟在第${n}站认出一位失踪者的座位。`).join('\n\n')
