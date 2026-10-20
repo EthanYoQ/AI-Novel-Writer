@@ -42,6 +42,10 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
     // `artifact-open` receives fs:read-file failures through this controller.
     'electron/controllers/fs-controller.ts',
   ],
+  // 工作流命令里 throw new Error(...) 的说明原样进运行卡片的失败说明：不能是只有中文的原文、内部错误码或主进程转来的原文。
+  workflowCommandErrorBoundaries: [
+    'src/services/workflows/commands/legacy-character-roster-repair.command.ts',
+  ],
 })
 
 /**
@@ -416,6 +420,18 @@ function inspectMainReturnErrors(violations, root, file, sourceFile) {
   visit(sourceFile)
 }
 
+function inspectThrownErrors(violations, root, file, sourceFile) {
+  const bindings = collectBindings(sourceFile)
+  const visit = (node) => {
+    const thrown = ts.isThrowStatement(node) && node.expression
+    if (thrown && ts.isNewExpression(thrown) && thrown.expression.getText(sourceFile) === 'Error' && thrown.arguments?.[0]) {
+      inspectBoundaryExpression(violations, root, file, sourceFile, thrown.arguments[0], 'thrown-error', bindings)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+}
+
 export function collectI18nCoverageViolations(root = process.cwd()) {
   const violations = []
   const rendererRoots = [
@@ -446,6 +462,12 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
     const source = fs.readFileSync(file, 'utf8')
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
     inspectMainReturnErrors(violations, root, file, sourceFile)
+  }
+  for (const relative of I18N_COVERAGE_BOUNDARIES.workflowCommandErrorBoundaries) {
+    const file = path.join(root, relative)
+    if (!fs.existsSync(file)) continue
+    const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    inspectThrownErrors(violations, root, file, sourceFile)
   }
   return violations
 }

@@ -15,7 +15,8 @@ import {
   sameProjectSessionContext,
   sameProjectPathKey,
 } from '../../../shared/project-session-context'
-import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowUiLocale, workflowUiText } from '../workflow-project-session'
+import { knownAppErrorMessage } from '../../../i18n/app-errors'
 import {
   CHARACTER_ROSTER_SCHEMA_VERSION,
   type CharacterRosterCommitRequest,
@@ -30,6 +31,17 @@ import {
 } from './character-roster-json-contract'
 
 type UiText = (zhCN: string, enUS: string) => string
+
+/**
+ * 主进程拒绝提交时只回 String(err)：多是只有中文的原文，也可能是错误码。登记过的码按界面语言说明；
+ * 其余原文只附在中文说明后面，英文界面只给英文说明。
+ */
+function rosterCommitError(context: CommandExecuteParams['context'], error: string | undefined, summary: string): Error {
+  const english = workflowUiLocale(context) === 'en-US'
+  const reason = knownAppErrorMessage(workflowUiLocale(context), error) ?? (english ? undefined : error?.replace(/^Error: /u, ''))
+  const message = reason ? `${summary}${english ? ' ' : '：'}${reason}` : summary
+  return new Error(message)
+}
 
 function assertLegacyRepairSessionCurrent(projectSession: CommandExecuteParams['context']['projectSession'], text: UiText): void {
   if (!sameProjectSessionContext(
@@ -195,7 +207,7 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
       expectedProjectPath,
     )
     if (!commitResult.success) {
-      throw new Error(commitResult.error || text('既有角色卡采用失败，未改动任何角色数据', 'Adopting the existing character cards failed. No character data was changed.'))
+      throw rosterCommitError(context, commitResult.error, text('既有角色卡采用失败，未改动任何角色数据', 'Adopting the existing character cards failed. No character data was changed.'))
     }
     assertCommittedRosterReadable(
       commitResult.receipt,
@@ -224,13 +236,13 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
   private async executeDedicated({ context, callbacks }: CommandExecuteParams): Promise<string> {
     const session = requireWorkflowProjectSession(context)
     const text: UiText = (zh, en) => workflowUiText(context, zh, en)
-    if (!sameProjectPathKey(session.projectPath, this.input.expectedProjectPath)) throw new Error('LEGACY_ROSTER_PROJECT_MISMATCH')
+    if (!sameProjectPathKey(session.projectPath, this.input.expectedProjectPath)) throw new Error(text('当前项目已切换，旧版角色名单修复已停止以避免写入错误项目', 'The project changed, so the legacy cast repair stopped to avoid writing to the wrong project.'))
     assertLegacyRepairSessionCurrent(session, text)
     this.assertNotCancelled(context)
     const source = this.input.recoveryHandle ? undefined : await ipc.invokeWithProjectSession(session, 'legacy-roster:read-source')
     assertLegacyRepairSessionCurrent(session, text)
     this.assertNotCancelled(context)
-    if (source && this.input.expectedMode && (source.snapshot.migrationState === 'legacy_cards_preserved' ? 'existing' : 'model') !== this.input.expectedMode) throw new Error('LEGACY_ROSTER_SOURCE_MODE_CHANGED')
+    if (source && this.input.expectedMode && (source.snapshot.migrationState === 'legacy_cards_preserved' ? 'existing' : 'model') !== this.input.expectedMode) throw new Error(text('确认修复后旧版角色名单发生了变化，本次修复已停止，未改动任何角色数据。请重新发起修复。', 'The legacy cast changed after you confirmed the repair, so this repair stopped. No character data was changed. Start the repair again.'))
     if (source && source.snapshot.migrationState === 'legacy_cards_preserved') {
       const result = await ipc.invokeWithProjectSession(session, 'legacy-roster:adopt-existing', {
         operationId: `legacy-cards:${context.runId}`, expectedRevision: source.snapshot.revision,
@@ -342,7 +354,7 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
       expectedProjectPath,
     )
     if (!commitResult.success) {
-      throw new Error(commitResult.error || text('旧版角色名单修复失败，未保存任何角色数据', 'The legacy cast repair failed. No character data was saved.'))
+      throw rosterCommitError(context, commitResult.error, text('旧版角色名单修复失败，未保存任何角色数据', 'The legacy cast repair failed. No character data was saved.'))
     }
     assertCommittedRosterReadable(commitResult.receipt, candidate.entries, legacyMarkdown, text)
 
