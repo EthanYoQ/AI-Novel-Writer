@@ -121,7 +121,10 @@ function unquote(value: string): string {
   return trimmed
 }
 
-/** blockScalars 只用于带附带文件的 Skill；只看 SKILL.md 的旧规则逐行解析，与 master 一致。 */
+/**
+ * blockScalars 只用于本机导入与带安装清单的 Skill（单文件导入写空清单，也算），读回时与导入时显示的元数据一致；
+ * 没有清单的 Skill（GitHub 导入、旧版安装）按旧规则逐行解析，与 master 一致。
+ */
 function parseFrontmatter(raw: string, blockScalars: boolean): { fields: Record<string, string>; content: string } {
   const match = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/)
   if (!match) return { fields: {}, content: raw.trim() }
