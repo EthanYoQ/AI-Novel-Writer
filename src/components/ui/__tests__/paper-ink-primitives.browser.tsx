@@ -115,14 +115,19 @@ describe('Button 纸墨六种', () => {
     expect([danger.color, danger.backgroundColor, dangerSolid.backgroundColor]).not.toContain(ACCENT.light)
   })
 
-  it.each(['light', 'dark'] as const)('%s 主题正文对比度不低于 4.5:1，说明文字不低于 3:1', async (theme) => {
+  it.each(['light', 'dark'] as const)('%s 主题正文与说明文字在外框、面板、悬停底、纸面上对比度都不低于 4.5:1，墨色仍分得出层级', async (theme) => {
     const container = await mount(<p>正文</p>, theme)
     const tokens = getComputedStyle(container)
     const value = (name: string) => tokenColor(container, name)
-    for (const surface of ['--paper', '--surface', '--frame']) {
-      expect(contrast(value('--ink'), value(surface))).toBeGreaterThanOrEqual(4.5)
-      expect(contrast(value('--ink-2'), value(surface))).toBeGreaterThanOrEqual(4.5)
-      expect(contrast(value('--ink-3'), value(surface))).toBeGreaterThanOrEqual(3)
+    for (const surface of ['--paper', '--surface', '--surface-2', '--frame']) {
+      const [ink, ink2, ink3, ink4] = ['--ink', '--ink-2', '--ink-3', '--ink-4'].map((name) => contrast(value(name), value(surface)))
+      expect(ink).toBeGreaterThanOrEqual(4.5)
+      expect(ink2).toBeGreaterThanOrEqual(4.5)
+      expect(ink3).toBeGreaterThanOrEqual(4.5)
+      // 说明文字提亮后不能贴上次要文字，也不能和占位一样淡：相邻两级的对比度至少差 1.25 倍
+      expect(ink / ink2).toBeGreaterThanOrEqual(1.25)
+      expect(ink2 / ink3).toBeGreaterThanOrEqual(1.25)
+      expect(ink3 / ink4).toBeGreaterThanOrEqual(1.25)
     }
     expect(contrast(value('--accent-ink'), value('--accent'))).toBeGreaterThanOrEqual(4.5)
     expect(contrast(value('--danger-ink'), value('--danger'))).toBeGreaterThanOrEqual(4.5)
@@ -803,14 +808,14 @@ describe('SegmentedControl 与 Check', () => {
     )
   }
 
-  it.each(['light', 'dark'] as const)('%s 主题未选中项在凹陷底叠加到各表面后对比度不低于 3:1', async (theme) => {
+  it.each(['light', 'dark'] as const)('%s 主题未选中项在凹陷底叠加到各表面后对比度不低于 4.5:1', async (theme) => {
     const container = await mount(<Harness />, theme)
     const seg = container.querySelector<HTMLElement>('.pi-seg')!
     const unpressed = seg.querySelector('[aria-pressed="false"]')!
     expect(getComputedStyle(seg).backgroundColor).toBe(tokenColor(container, '--sunken'))
     for (const surface of ['--frame', '--surface', '--paper']) {
       const background = composite(getComputedStyle(seg).backgroundColor, tokenColor(container, surface))
-      expect(contrast(getComputedStyle(unpressed).color, background)).toBeGreaterThanOrEqual(3)
+      expect(contrast(getComputedStyle(unpressed).color, background)).toBeGreaterThanOrEqual(4.5)
     }
   })
 
@@ -943,12 +948,12 @@ describe('StatGrid、Notice、Lifecycle', () => {
     expect(getComputedStyle(steps[2]).color).toBe(ACCENT.light)
   })
 
-  it.each(['light', 'dark'] as const)('%s 主题未开始步骤为轨道色条，标签对纸面、面板、外框对比度不低于 3:1', async (theme) => {
+  it.each(['light', 'dark'] as const)('%s 主题未开始步骤为轨道色条，标签对纸面、面板、外框对比度不低于 4.5:1', async (theme) => {
     const container = await mount(<Lifecycle label="第 4 章进度" steps={['写作', '审稿', '修稿', '定稿']} current={2} />, theme)
     const todo = container.querySelectorAll('li')[3]
     expect(getComputedStyle(todo.querySelector('.pi-life-bar')!).backgroundColor).toBe(tokenColor(container, '--track'))
     for (const surface of ['--paper', '--surface', '--frame']) {
-      expect(contrast(getComputedStyle(todo).color, tokenColor(container, surface))).toBeGreaterThanOrEqual(3)
+      expect(contrast(getComputedStyle(todo).color, tokenColor(container, surface))).toBeGreaterThanOrEqual(4.5)
     }
     await shot(`rd1-lifecycle-${theme}`)
   })
