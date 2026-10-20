@@ -326,6 +326,20 @@ describe('writing skill app-data boundary', () => {
     expect(fs.existsSync(path.join(velaHome, 'skills', 'scene-voice'))).toBe(false)
   })
 
+  it('reports an unreadable folder in plain words when picking a skill', async () => {
+    const folder = writeLocalSkill('locked', { 'SKILL.md': agentSkill, 'references/voice.md': 'x' })
+    const readdir = fs.readdirSync
+    vi.spyOn(fs, 'readdirSync').mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+      if (String(args[0]).endsWith('references')) {
+        throw Object.assign(new Error(`EACCES: permission denied, scandir '${String(args[0])}'`), { code: 'EACCES' })
+      }
+      return readdir(...args)
+    }) as typeof fs.readdirSync)
+
+    const picked = await pickLocal('folder', folder)
+    expect(picked).toMatchObject({ success: false, error: 'The selected file or folder cannot be read' })
+  })
+
   it('never bundles a reference that escapes the skill folder', async () => {
     writeLocalSkill('', { 'secret.md': 'outside the skill' })
     const folder = writeLocalSkill('escape', { 'SKILL.md': '---\nname: escape\n---\nRead [this](../secret.md).' })
