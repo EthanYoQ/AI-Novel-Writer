@@ -600,7 +600,7 @@ describe('explicit planning recovery with real SQLite', () => {
       newCharacterCandidates: characters.map(name => ({ name, role: 'supporting' as const })),
       userGuidance: '  作者指导保留原字节。\r\n', notes: '<think>作者备注中的原文标签</think>\n第二行。', notesUpdatedAt: '2026-10-04T13:00:00.000Z' }
     const request: BlueprintRangeCommitRequest = { mode: 'replace-range', operationId: 'author-blueprint', startChapter: 1, endChapter: 1,
-      blueprints: parseTextBlueprintsStrict(JSON.stringify([repaired]), 1, 1, 'author'), authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } }
+      blueprints: parseTextBlueprintsStrict(JSON.stringify([repaired]), 1, 1, 'zh-CN', 'author'), authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } }
     const save = () => f.db.transaction(() => f.owner.commitBlueprintAuthorEdit(request)).immediate()
     const saved = save()
     expect(saved.authorEdit).toMatchObject({ committedRange: { from: 1, to: 1 }, remainingRange: { from: 2, to: 3 } })

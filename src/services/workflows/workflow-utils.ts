@@ -14,14 +14,17 @@ import { ipc } from '../ipc-client'
 import { localize } from '../../i18n/core'
 import type { Locale } from '../../i18n/types'
 
-/** Project-level post-processing is fail-closed: never borrow the active lease. */
+/**
+ * Project-level post-processing is fail-closed: never borrow the active lease.
+ * 这里没有界面语言：抛已登记的码，由显示处按界面语言解释（读状态的调用方吞掉失败，流水线入口已先按语言拦过）。
+ */
 function invokeForProjectSession<C extends InvokeChannel>(
   projectSession: ProjectSessionContext | undefined,
   channel: C,
   ...args: AllInvokeChannels[C]['args']
 ): Promise<AllInvokeChannels[C]['return']> {
   if (!projectSession) {
-    throw new Error('后处理缺少冻结项目会话，已拒绝项目数据访问')
+    throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
   }
   return ipc.invokeWithProjectSession(projectSession, channel, ...args)
 }
@@ -283,8 +286,6 @@ export async function runPostProcessPipeline(
       updatedAt: createdAt,
     }
   }
-
-  if (!run) throw new Error('跑批获取异常')
 
   const runId = run.id
   const runSteps = await invokeForProjectSession(projectSession, 'db:post-process-get-steps', runId, projectPath)

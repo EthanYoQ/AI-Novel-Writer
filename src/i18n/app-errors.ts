@@ -3,7 +3,8 @@ import type { Locale } from './types'
 
 /**
  * 稳定错误码 → 界面文案键。新增可读错误码只在这里登记一行，并在两份语言资源里补文案。
- * 代码里出现的每个 GENERATION_* 码要么登记在这里，要么在 generation-error-codes.test.ts 里写明不登记的理由。
+ * 代码里出现的每个 GENERATION_* 码（以及该测试 COVERED_PREFIXES 列出的其他前缀的码）要么登记在这里，
+ * 要么在 generation-error-codes.test.ts 里写明不登记的理由。
  */
 const ERROR_KEYS = {
   KNOWLEDGE_BASE_NATIVE_UNAVAILABLE: 'error.knowledgeBaseNativeUnavailable',
@@ -101,6 +102,31 @@ const ERROR_KEYS = {
   GENERATION_FINALIZED_SOURCE_NOT_CURRENT: 'error.generationFinalizedSourceNotCurrent',
   GENERATION_DRAFT_INCOMPLETE: 'error.generationDraftIncomplete',
   SOURCE_DRAFT_CHANGED: 'error.sourceDraftChanged',
+  // 以下前缀不是 GENERATION_，但同样会进工作流失败面板（#471）。
+  LEGACY_ROSTER_GENERATION_CANCELLED: 'error.generationCancelled',
+  CHARACTER_PROPOSAL_CANCELLED: 'error.generationCancelled',
+  LEGACY_ROSTER_GENERATION_SOURCE_CONFLICT: 'error.generationSourceChanged',
+  LEGACY_ROSTER_ADOPTION_SOURCE_CHANGED: 'error.generationSourceChanged',
+  CHARACTER_PROPOSAL_SOURCE_CHANGED: 'error.generationSourceChanged',
+  CHARACTER_PROPOSAL_CHOICES_STALE: 'error.generationSourceChanged',
+  FINALIZED_CHARACTER_SOURCE_CHANGED: 'error.generationSourceChanged',
+  FINALIZED_CHARACTER_STATE_SOURCE_CHANGED: 'error.generationSourceChanged',
+  FINALIZED_CHARACTER_CONTEXT_CHANGED: 'error.generationSourceChanged',
+  // 定稿后处理途中作者删掉了这个角色。
+  FINALIZED_CHARACTER_ID_RETIRED: 'error.generationSourceChanged',
+  LEGACY_ROSTER_GENERATION_ALREADY_OPEN: 'error.generationBusy',
+  LEGACY_ROSTER_GENERATION_DETACHED: 'error.generationStopped',
+  // 调用额度、截止时间或用量预留用完：失败面板先按结构化失败原因说明，这里是没带失败原因时的兜底。
+  ROOT_BUDGET_EXHAUSTED: 'error.generationStopped',
+  ATTEMPT_BUDGET_EXHAUSTED: 'error.generationStopped',
+  DEADLINE_EXHAUSTED: 'error.generationStopped',
+  USAGE_EXCEEDED_RESERVATION: 'error.generationStopped',
+  TASK_BUDGET_CAPACITY_CONFLICT: 'error.generationInputTooLarge',
+  TASK_BUDGET_SPLIT_REQUIRED: 'error.generationInputTooLarge',
+  TASK_BUDGET_SCOPE_SPLIT_REQUIRED: 'error.generationInputTooLarge',
+  MODEL_NOT_FOUND: 'error.generationModelMissing',
+  NO_DEFAULT_MODEL: 'error.generationModelMissing',
+  LEASE_BEGIN_FAILED: 'error.generationRequestFailed',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

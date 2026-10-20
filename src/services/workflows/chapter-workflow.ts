@@ -1,8 +1,7 @@
 import { formatResourceUri } from '../../shared/project-paths'
-import { canonicalResourceUri, parseResourceUri, resourceWriteAllowed } from '../../shared/project-paths'
+import { canonicalResourceUri, parseResourceUri } from '../../shared/project-paths'
 import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workflow-store'
 import type { DraftMeta } from '../draft-index'
-import { requireIpcSuccess } from '../ipc-result'
 import { ipc } from '../ipc-client'
 
 import type { DraftStatus } from '../../shared/draft-status'
@@ -159,7 +158,11 @@ export async function parseDraftMeta(
   if (!resource || !['draft', 'manuscript', 'chapter'].includes(resource.kind)) return null
   filePath = canonicalResourceUri(filePath)!
   if (!sameProjectPathKey(projectSession.projectPath, expectedProjectPath)) {
-    throw new Error('读取草稿元数据时项目会话与目标路径不匹配')
+    throw new Error(localize(
+      chapterWorkflowLocale(),
+      '读取草稿元数据时项目会话与目标路径不匹配',
+      'The project session does not match the target path, so the draft metadata was not read.',
+    ))
   }
 
   // 优先处理 ai-novel://draft/{id} 纯数字 ID 格式（DB 化后的标准路径）
@@ -200,29 +203,6 @@ export async function parseDraftMeta(
   )
   const d = drafts.find((draft) => draft.version === version)
   return d ? (d as unknown as DraftMeta) : null
-}
-
-export async function updateDraftStatus(
-  filePath: string,
-  newStatus: DraftStatus,
-  expectedProjectPath: string,
-  projectSession: ProjectSessionContext,
-): Promise<void> {
-  if (!resourceWriteAllowed(filePath)) throw new Error('资源只读或无效')
-  const meta = await parseDraftMeta(filePath, expectedProjectPath, projectSession)
-  if (meta) {
-    requireIpcSuccess(
-      await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:draft-update-status',
-        meta.id,
-        newStatus,
-        undefined,
-        expectedProjectPath,
-      ),
-      '更新草稿状态',
-    )
-  }
 }
 
 // ==========================================

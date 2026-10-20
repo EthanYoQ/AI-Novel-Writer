@@ -21,6 +21,7 @@ import { createChapterWorkflow } from './chapter-workflow'
 import { createDirectoryWorkflow, type DirectoryWorkflowParams } from './directory-workflow'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 import type { Locale } from '../../i18n/types'
+import { localize } from '../../i18n/core'
 import type { AgentToolActionRef } from '../../shared/agent-generation'
 
 export type CreativeWorkflowName =
@@ -74,9 +75,7 @@ export interface CreativeWorkflowLaunchOptions {
 
 function requireGuardAccepted(result: GuardResult, uiLocale: Locale): void {
   if (!result.ok) {
-    throw new Error(result.message ?? (uiLocale === 'en-US'
-      ? 'Creative workflow prerequisites are not satisfied'
-      : '创作工作流前置条件未满足'))
+    throw new Error(result.message ?? localize(uiLocale, '创作工作流前置条件未满足', 'Creative workflow prerequisites are not satisfied'))
   }
 }
 
@@ -107,10 +106,10 @@ async function guardIntent(
   }
 }
 
-function currentProjectFor(projectSession: ProjectSessionContext) {
+function currentProjectFor(projectSession: ProjectSessionContext, uiLocale: Locale) {
   const project = useProjectStore.getState().currentProject
   if (!project || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(project))) {
-    throw new Error('当前项目会话已切换，工作流未启动')
+    throw new Error(localize(uiLocale, '当前项目会话已切换，工作流未启动', 'The project session changed, so the workflow did not start.'))
   }
   return project
 }
@@ -118,10 +117,10 @@ function currentProjectFor(projectSession: ProjectSessionContext) {
 async function definitionFor(
   intent: CreativeIntent,
   projectSession: ProjectSessionContext,
-  generationModelId?: string,
-  uiLocale?: Locale,
+  generationModelId: string | undefined,
+  uiLocale: Locale,
 ): Promise<WorkflowDefinition> {
-  const project = currentProjectFor(projectSession)
+  const project = currentProjectFor(projectSession, uiLocale)
 
   if (intent.workflow === 'generate_architecture') {
     return createArchitectureWorkflow({
@@ -141,7 +140,7 @@ async function definitionFor(
   }
   if (intent.workflow === 'generate_draft') {
     if (!Number.isInteger(intent.chapterNumber) || intent.chapterNumber < 1) {
-      throw new Error('写稿需要有效的 chapter_number（从 1 开始）')
+      throw new Error(localize(uiLocale, '写稿需要有效的 chapter_number（从 1 开始）', 'Drafting needs a valid chapter_number (starting from 1).'))
     }
     const blueprint = await ipc.invokeWithProjectSession(
       projectSession,
@@ -149,9 +148,13 @@ async function definitionFor(
       intent.chapterNumber,
       project.path,
     )
-    currentProjectFor(projectSession)
+    currentProjectFor(projectSession, uiLocale)
     if (!blueprint) {
-      throw new Error(`第 ${intent.chapterNumber} 章蓝图不存在；请先运行 generate_blueprint 工作流`)
+      throw new Error(localize(
+        uiLocale,
+        `第 ${intent.chapterNumber} 章蓝图不存在；请先运行 generate_blueprint 工作流`,
+        `Chapter ${intent.chapterNumber} has no blueprint. Run the generate_blueprint workflow first.`,
+      ))
     }
     return createChapterWorkflow({
       projectPath: project.path,
@@ -167,7 +170,11 @@ async function definitionFor(
     }, projectSession, { generationModelId, uiLocale })
   }
 
-  throw new Error(`${intent.workflow} 需要明确的草稿 ID 和不可变正文快照；请先打开目标草稿后从编辑器启动`)
+  throw new Error(localize(
+    uiLocale,
+    `${intent.workflow} 需要明确的草稿 ID 和不可变正文快照；请先打开目标草稿后从编辑器启动`,
+    `${intent.workflow} needs an explicit draft ID and a fixed snapshot of its text. Open the target draft and start it from the editor.`,
+  ))
 }
 
 /** The sole seam for turning a creative intent into an observable workflow run. */
@@ -178,7 +185,7 @@ export async function launchCreativeWorkflow(
 ): Promise<CreativeWorkflowLaunchReceipt> {
   let generationModelId = options.generationModelId?.trim() || undefined
   const uiLocale = useLocaleStore.getState().locale
-  currentProjectFor(projectSession)
+  currentProjectFor(projectSession, uiLocale)
   const registration = options.agentToolAction ? await ipc.invokeWithProjectSession(projectSession, 'agent-generation:register-workflow', { ref: options.agentToolAction }) : undefined
   if (registration) {
     if (intent.workflow !== registration.workflow || intent.workflow === 'generate_draft' && intent.chapterNumber !== registration.chapterNumber
@@ -198,14 +205,14 @@ export async function launchCreativeWorkflow(
     }
   }
   await guardIntent(intent, projectSession, uiLocale)
-  currentProjectFor(projectSession)
+  currentProjectFor(projectSession, uiLocale)
   const definition = await definitionFor(
     intent,
     Object.freeze({ ...projectSession }),
     generationModelId,
     uiLocale,
   )
-  currentProjectFor(projectSession)
+  currentProjectFor(projectSession, uiLocale)
 
   // Definition loading can yield. A concurrent replay may have registered the
   // same main-issued workflow while this caller was awaiting its definition.
@@ -241,7 +248,11 @@ export async function launchCreativeWorkflow(
   const registered = state.activeRuns.find(run => run.id === runId)
     ?? state.history.find(run => run.id === runId)
   if (!registered || registered.status === 'failed') {
-    throw new Error(registered?.error ?? '工作流未能注册到任务中心，已拒绝报告启动成功')
+    throw new Error(registered?.error ?? localize(
+      uiLocale,
+      '工作流未能注册到任务中心，已拒绝报告启动成功',
+      'The workflow was not registered in the task center, so its launch was not reported as successful.',
+    ))
   }
   options.onRegistered?.()
 
