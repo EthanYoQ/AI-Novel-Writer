@@ -6,7 +6,8 @@ import type Database from 'better-sqlite3';
 import type { ModelExecutionLeaseReceipt } from '../../src/shared/ipc-channels';
 import type { ContextSnapshot, SourceRef } from '../../src/shared/source-ref';
 import { isContentHash } from '../../src/shared/source-ref';
-import { inspectWritingSkillMarkdown, WRITING_SKILL_STAGES, type WritingSkillStage } from '../../src/shared/writing-skills';
+import { inspectInstalledWritingSkill, WRITING_SKILL_STAGES, type InstalledWritingSkillBundle, type WritingSkillStage } from '../../src/shared/writing-skills';
+import { readInstalledWritingSkillBundle } from './writing-skill-package';
 import type { WritingLanguage } from '../../src/shared/writing-language';
 import { CURRENT_DRAFT_STATUSES, WORKING_DRAFT_STATUSES } from '../../src/shared/draft-status';
 import type { RunBinding } from '../repositories/generation-run-repository';
@@ -524,12 +525,19 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         const text = scope === 'builtin' ? deps.readBuiltinSkill?.(name, facts.language) : observe(scope === 'project' ? deps.projectStorageRoot : deps.globalDataRoot, `skills/${name}/SKILL.md`)!.toString('utf8');
         if (!text)
             fail('GENERATION_SKILL_MISSING');
-        const inspected = inspectWritingSkillMarkdown(text);
+        // 用户 Skill 按安装清单读附带文件，与设置页列表同一条判定；没有清单时只看 SKILL.md，与旧版逐字节一致。
+        const bundle: InstalledWritingSkillBundle = scope === 'user'
+            ? readInstalledWritingSkillBundle(relative => observe(deps.globalDataRoot, `skills/${name}/${relative}`, true))
+            : { status: 'none' };
+        if (bundle.status === 'damaged')
+            fail('GENERATION_SKILL_BUNDLE_DAMAGED');
+        const inspected = inspectInstalledWritingSkill(text, bundle, name);
+        const bundled = bundle.status === 'intact' ? bundle.files.flatMap(file => [file.path, file.content]) : [];
         // Bundled skills are an existing product capability, selected through
         // the trusted pure getter. External imports retain their stricter gate.
         if (scope !== 'builtin' && !inspected.compatible || !['bilingual', facts.language].includes(inspected.metadata.language))
             fail('GENERATION_SKILL_INCOMPATIBLE');
-        skills.push({ stage, identity: id, hash: hash(text) });
+        skills.push({ stage, identity: id, hash: hash(bundled.length ? JSON.stringify([text, ...bundled]) : text) });
     }
     for (const file of observed) {
         const now = readFile(file.root, file.relative, true);

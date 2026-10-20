@@ -104,7 +104,7 @@ Every generation run appears in the run sheet, with In progress, History, and Di
 
 ### Writing skills: bring your own writing rules
 
-On the "Writing skills" settings page, enter the address of a skill on GitHub to import a prompt-only writing skill, such as one that removes the typical AI tone, or one for a particular style or genre. The app downloads the skill and shows you its content before you install it. Bind it to the planning, drafting, review, or revision stage, and every generation in that stage includes it.
+On the "Writing skills" settings page, choose a local skill folder or a single SKILL.md, or enter the address of a skill on GitHub, to import a prompt-only writing skill, such as one that removes the typical AI tone, or one for a particular style or genre. Reference text files that SKILL.md cites are included. The app reads the skill and shows you its content before you install it. Bind it to the planning, drafting, review, or revision stage, and every generation in that stage includes it.
 
 Only self-contained SKILL.md prompts are supported. Scripts, hooks, subagents, and tool requirements are not installed, so a skill cannot run code on your computer.
 
@@ -215,7 +215,7 @@ Yes. The interface is available in Chinese and English, and each book's writing 
 If you have 1.1.0 or 1.2.x installed, upgrade through the in-app updater (on macOS, download the new installer by hand). Upgrading leaves your books unchanged and migrates the old appearance preference to light or dark. To convert an older project to the new format, choose "Import" in the library and then "Import an old project copy". Importing creates a new copy and leaves the original project untouched.
 
 **Can I import skills, such as one that removes the AI tone?**
-Yes. On the "Writing skills" settings page, enter the skill's GitHub address, review its content, install it, and bind it to a stage such as drafting or revision. Only prompt-only SKILL.md files are supported; no scripts are installed or run.
+Yes. On the "Writing skills" settings page, choose a local skill folder or SKILL.md, or enter the skill's GitHub address, review its content, install it, and bind it to a stage such as drafting or revision. Only prompt-only SKILL.md files are supported; no scripts are installed or run.
 
 **Where did the assistant chat go?**
 The new 1.3.0 interface hides the assistant chat entry for now. It will return separately. Drafting, review, revision, and the rest of the workflow are unaffected.

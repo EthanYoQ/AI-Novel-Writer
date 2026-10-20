@@ -30,6 +30,38 @@ describe('writing skill registry identity and tool exposure', () => {
     expect(skillRegistry.getById('user:"quoted-skill"')).toBeUndefined()
   })
 
+  it('loads a user folder skill as one bindable prompt with its cited references merged', async () => {
+    invoke.mockResolvedValue([{
+      name: 'scene-voice',
+      baseDir: 'managed://skills/scene-voice',
+      filePath: 'managed://skills/scene-voice/SKILL.md',
+      content: '---\nname: scene-voice\ndescription: Voice\n---\nFollow references/voice.md.',
+      bundle: { status: 'intact', files: [{ path: 'references/voice.md', content: 'Stay in close third person.' }] },
+    }])
+
+    const { skillRegistry } = await import('../skill-registry')
+    await skillRegistry.loadAll()
+
+    const skill = skillRegistry.getById('user:scene-voice')
+    expect(skill?.writingSkill).toMatchObject({ compatible: true, bundledFiles: ['references/voice.md'] })
+    expect(skill?.content).toContain('Stay in close third person.')
+  })
+
+  it('lists a user skill whose installed reference files were damaged as unbindable', async () => {
+    invoke.mockResolvedValue([{
+      name: 'scene-voice',
+      baseDir: 'managed://skills/scene-voice',
+      filePath: 'managed://skills/scene-voice/SKILL.md',
+      content: '---\nname: scene-voice\ndescription: Voice\n---\nFollow references/voice.md.',
+      bundle: { status: 'damaged' },
+    }])
+
+    const { skillRegistry } = await import('../skill-registry')
+    await skillRegistry.loadAll()
+
+    expect(skillRegistry.getById('user:scene-voice')?.writingSkill).toMatchObject({ compatible: false, reasons: expect.arrayContaining(['bundle-damaged']) })
+  })
+
   it('serializes atomic reloads without exposing a cleared or partial registry', async () => {
     const deferred = <T,>() => {
       let resolve!: (value: T) => void

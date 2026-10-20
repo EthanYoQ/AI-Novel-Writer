@@ -680,7 +680,8 @@ export interface AppDataChannels {
   'prompt:delete-global': { args: [key: string, writingLanguage: WritingLanguage]; return: { success: boolean; error?: string } }
   'skills:list-user': {
     args: []
-    return: Array<{ name: string; content: string; baseDir: string; filePath: string }>
+    /** bundle：按安装清单读到的附带文本；没有清单的 Skill 为 none，只看 SKILL.md。 */
+    return: Array<{ name: string; content: string; baseDir: string; filePath: string; bundle: import('./writing-skills').InstalledWritingSkillBundle }>
   }
   'skills:inspect-github': {
     args: [sourceUrl: string]
@@ -688,6 +689,15 @@ export interface AppDataChannels {
   }
   'skills:install-github': {
     args: [sourceUrl: string]
+    return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
+  }
+  /** 主进程弹出系统对话框选择本机 SKILL.md 或 Skill 文件夹，只读检查后返回候选。 */
+  'skills:pick-local': {
+    args: [kind: import('./writing-skills').LocalWritingSkillSourceKind]
+    return: { success: boolean; cancelled?: boolean; inspection?: import('./writing-skills').LocalWritingSkillInspection; error?: string }
+  }
+  'skills:install-local': {
+    args: [candidateId: string]
     return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
   }
   'skills:uninstall-user': {

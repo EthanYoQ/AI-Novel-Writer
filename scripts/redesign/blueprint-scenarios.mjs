@@ -65,7 +65,7 @@ async function writeNextEitherShell(page) {
   await page.getByRole('dialog').getByRole('button', { name: '开始创作' }).click()
 }
 
-async function proseRequest(fake, timeoutMs = 30_000) {
+export async function proseRequest(fake, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs
   while (!fake.chats.some(chat => chat.kind === 'prose')) {
     assert.ok(Date.now() < deadline, `${timeoutMs} ms 内假模型没有收到写正文的请求`)
