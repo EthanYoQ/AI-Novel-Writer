@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
+import { archOutlineSource, readArchCheckpoint } from '../../services/architecture-service'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -139,21 +139,10 @@ export function useArchitectureOverview(projectKey: string) {
     let confirmedWorldHandle: MainGenerationRunHandle | null = null
     let confirmedSynopsisHandle: MainGenerationRunHandle | null = null
     let recoveredPlanning: GenerationRecoveryContext | null = null
-    const dbSynopsis = core?.synopsis || ''
-    const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
-    const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US'
-      ? 'en-US'
-      : 'zh-CN'
+    const outlineSource = archOutlineSource(core, currentProject?.novelConfig)
+    const { synopsis: dbSynopsis, totalChapters, writingLanguage } = outlineSource
     try {
-      const partialResult = await ipc.invokeWithProjectSession(
-        projectSession,
-        'fs:read-json',
-        `${projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
-        projectPath,
-      )
-      const partial = partialResult?.success === true
-        ? (partialResult as { data?: Record<string, unknown> }).data
-        : undefined
+      const partial = await readArchCheckpoint(projectSession)
       recoveredWorldBuildingCandidate = partial?.world_building_incomplete === true && typeof partial.world_building_partial_result === 'string'
         ? partial.world_building_partial_result : ''
       recoveredSynopsisCandidate = partial?.synopsis_incomplete === true && typeof partial.synopsis_result === 'string'
@@ -205,7 +194,7 @@ export function useArchitectureOverview(projectKey: string) {
     setContents({ premise: core?.premise ?? '', worldbuilding: core?.worldbuilding ?? '', synopsis: core?.synopsis ?? '' })
     setSynopsisProgress(progress)
     setSynopsisRecoveryFailed(recoveryFailed && Boolean(status.synopsis))
-    setSynopsisSource({ synopsis: dbSynopsis, totalChapters, writingLanguage })
+    setSynopsisSource(outlineSource)
     setSynopsisCandidate(recoveredSynopsisCandidate)
     setSynopsisHandle(confirmedSynopsisHandle)
     setPlanningRecovery(recoveredPlanning)

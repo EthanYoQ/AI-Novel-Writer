@@ -23,7 +23,7 @@ import { createArchitectureWorkflow } from '../../services/workflows/architectur
 import { renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, type PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { outlineProgress } from '../../shared/plot-outline-checkpoint'
-import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
+import { archOutlineSource, readArchCheckpoint } from '../../services/architecture-service'
 import { outlineSourceInvalidNote } from '../run/run-recovery'
 import { globalEventBus } from '../../shared/event-bus'
 import {
@@ -514,19 +514,12 @@ function ArchFileViewerSession({
         projectSession.projectPath,
       )
       if (!isProjectSessionCurrent(projectSession)) return
-      const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
-      const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US' ? 'en-US' : 'zh-CN'
+      const source = archOutlineSource(core, currentProject?.novelConfig)
       // 分批检查点只用来认出被打断的一批；读不到时与架构页一样按没有检查点判定。
-      const partial = await ipc.invokeWithProjectSession(
-        projectSession,
-        'fs:read-json',
-        `${projectSession.projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
-        projectSession.projectPath,
-      ).catch(() => null)
+      const checkpoint = await readArchCheckpoint(projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
-      const checkpoint = partial?.success === true ? (partial as { data?: Record<string, unknown> }).data : undefined
       // 有内容决定覆盖还是新生成，已确认决定默认勾选；两者与架构页共用 judgeArchCore。
-      const judged = judgeArchCore(core, outlineProgress(core?.synopsis ?? '', checkpoint, writingLanguage, totalChapters).kind)
+      const judged = judgeArchCore(core, outlineProgress(source.synopsis, checkpoint, source.writingLanguage, source.totalChapters).kind)
       const rosterReady = rosterSnapshot?.status === 'ready'
       const status: Record<string, boolean> = { ...judged.hasContent, characters: rosterReady }
       const confirmed: Record<string, boolean> = { ...judged.confirmed, characters: rosterReady }
@@ -534,11 +527,7 @@ function ArchFileViewerSession({
       if (archSectionHasContent(currentContentRef.current)) status[stepKey] = true
       setFullArchStatus(status)
       setFullArchConfirmed(confirmed)
-      setSynopsisSource({
-        synopsis: core?.synopsis ?? '',
-        totalChapters,
-        writingLanguage,
-      })
+      setSynopsisSource(source)
       setShowDialog(true)
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
