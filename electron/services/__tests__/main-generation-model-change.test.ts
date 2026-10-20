@@ -140,3 +140,46 @@ it('主进程每发出一次模型请求，运行侧页的 AI 调用记录就多
     modelId: 'model', modelName: '硅基流动', promptTokens: 40, completionTokens: 12, totalTokens: 52, success: 1 })
   expect(history.find(call => call.purpose === 'plot-outline:chapter:2:normal')).toMatchObject({ success: 0 })
 })
+
+/** 请求发出后一直挂起，直到生成被中止才以 GENERATION_CANCELLED 结束。 */
+function hangingDispatch() {
+  let markStarted!: () => void
+  const started = new Promise<void>(resolve => { markStarted = resolve })
+  const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>((_request, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new Error('GENERATION_CANCELLED')), { once: true })
+    markStarted()
+  }))
+  return { dispatch, started }
+}
+
+const callRows = (db: InstanceType<typeof Database>) =>
+  db.prepare('SELECT purpose, success FROM llm_calls ORDER BY id').all() as { purpose: string, success: number }[]
+
+it('生成途中关闭作品：已发出的请求在关库前记入调用记录，重新打开作品仍能看到', async () => {
+  const { dispatch, started } = hangingDispatch(), f = fixture(dispatch)
+  const run = f.owner.begin(f.selection)
+  const pending = f.owner.execute({ handle: run.handle, invocationNonce: 'chapter-1', task: outlineTask(run.plotOutline!) }).catch(() => undefined)
+  await started
+
+  f.owner.suspendForProjectClose()
+  const dbPath = f.db.name
+  f.db.close()
+  await pending
+
+  const reopened = new Database(dbPath, { readonly: true })
+  try {
+    expect(callRows(reopened)).toEqual([{ purpose: 'plot-outline:chapter:1:normal', success: 0 }])
+  } finally { reopened.close() }
+})
+
+it('生成途中切换作品会话（库不关）：中断的请求只记一次，不在请求结束后再记第二次', async () => {
+  const { dispatch, started } = hangingDispatch(), f = fixture(dispatch)
+  const run = f.owner.begin(f.selection)
+  const pending = f.owner.execute({ handle: run.handle, invocationNonce: 'chapter-1', task: outlineTask(run.plotOutline!) }).catch(() => undefined)
+  await started
+
+  f.owner.suspendForProjectClose()
+  await pending
+
+  expect(callRows(f.db)).toEqual([{ purpose: 'plot-outline:chapter:1:normal', success: 0 }])
+})

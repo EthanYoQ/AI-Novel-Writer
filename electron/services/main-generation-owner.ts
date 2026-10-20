@@ -239,16 +239,21 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status, compositionEligible }
   }
   const providerDispatch = deps.dispatch ?? dispatchProvider
-  /** 每次真正发出的模型请求都记入运行侧页的 AI 调用记录；记录只作诊断，写不进去也不改变生成结果。 */
+  /** 还没结束的请求；关闭作品时在关库前把它们记成已取消。 */
+  const unrecordedCalls = new Set<() => void>()
+  /** 每次真正发出的模型请求都记入运行侧页的 AI 调用记录，每次只记一行；记录只作诊断，写不进去也不改变生成结果。 */
   const recordedDispatch: GenerationRunServiceDependencies['dispatch'] = async (request, options) => {
     const { model, task } = request as ProviderRequest, startedAt = Date.now()
     const record = (success: boolean, usage: Awaited<ReturnType<typeof providerDispatch>>['usage'], errorMessage?: string) => {
+      if (!unrecordedCalls.delete(recordCancelled)) return
       try {
         LLMHistoryRepository.logCall({ modelId: model.id, modelName: model.name || model.modelName, purpose: task.purpose,
           promptTokens: usage?.promptTokens ?? null, completionTokens: usage?.completionTokens ?? null, totalTokens: usage?.totalTokens ?? null,
           durationMs: Math.max(0, Date.now() - startedAt), success, errorMessage }, deps.database)
       } catch (error) { console.warn('[AI Novel Writer] LLM call statistics were not recorded.', error) }
     }
+    const recordCancelled = () => record(false, null, 'cancelled')
+    unrecordedCalls.add(recordCancelled)
     try {
       const result = await providerDispatch(request, options)
       record(result.finishReason === 'stop', result.usage, result.finishReason === 'stop' ? undefined : `finish:${result.finishReason ?? 'unknown'}`)
@@ -1494,6 +1499,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       finalizedCharacters.close()
       reviewRevisions.close()
       if (closed) return
+      for (const recordCancelled of [...unrecordedCalls]) recordCancelled()
       service.suspendForProjectClose()
       closed = true
       for (const leaseId of runLeases.values()) deps.leases.close(leaseId)
