@@ -79,6 +79,10 @@
   gap: var(--s-2);
 }
 
+.cast-suggestions > .cast-suggestion-error {
+  margin-left: var(--s-6);
+}
+
 .cast-suggestion-error .cast-suggestion-text {
   color: var(--warn);
   white-space: normal;
@@ -245,6 +249,7 @@
   display: flex;
   flex-direction: column;
   overflow: auto;
+  container-type: inline-size;
 }
 
 .cast-profile-head {
@@ -328,6 +333,19 @@
   display: flex;
   align-items: center;
   gap: var(--s-2);
+}
+
+/* 档案窄（1024 宽窗口约 470px）时保存按钮一行放不下标题，换到标题下面一行，靠右。 */
+@container (max-width: 720px) {
+  .cast-profile-head:not(.cast-profile-head-empty) {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: var(--s-3);
+  }
+
+  .cast-profile-head:not(.cast-profile-head-empty) .cast-profile-actions {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
 }
 
 .cast-save-state {
