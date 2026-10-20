@@ -1,6 +1,7 @@
 import type { Locale } from '../i18n/types'
 import { safeReceiptPurpose } from './generation/generation-harness'
 import type { LLMCallRecord } from './stats-service'
+import { APP_BRAND } from '../shared/brand'
 
 type PromptBudgetSection = { sectionName?: unknown; utf8Bytes?: unknown }
 
@@ -96,13 +97,13 @@ export function formatSafeCallDiagnostic(input: SafeCallDiagnosticInput): string
     : []
 
   const labels = zh ? {
-    title: 'AI 小说作家安全诊断', environment: '环境', call: '模型调用', workflow: '工作流', budget: '提示词预算',
+    title: `${APP_BRAND.zhName}安全诊断`, environment: '环境', call: '模型调用', workflow: '工作流', budget: '提示词预算',
     version: '应用版本', platform: '平台', actualModel: '实际模型', model: '模型 ID', purpose: '用途', requested: '请求时间', duration: '耗时（毫秒）',
     prompt: '输入 Tokens', completion: '输出 Tokens', total: '总 Tokens', result: '调用结果', success: '成功', failure: '失败',
     status: '工作流状态', failureCode: '工作流失败码', step: '步骤', stepStatus: '步骤状态', stepFailure: '步骤失败码', finish: '结束原因',
     actual: '实际字节', limit: '限制字节', reserved: '预留输出 Tokens', section: '区段', bytes: '字节',
   } : {
-    title: 'AI Novel Writer safe diagnostics', environment: 'Environment', call: 'Model call', workflow: 'Workflow', budget: 'Prompt budget',
+    title: `${APP_BRAND.enName} safe diagnostics`, environment: 'Environment', call: 'Model call', workflow: 'Workflow', budget: 'Prompt budget',
     version: 'App version', platform: 'Platform', actualModel: 'Actual model', model: 'Model ID', purpose: 'Purpose', requested: 'Request time', duration: 'Duration (ms)',
     prompt: 'Prompt tokens', completion: 'Completion tokens', total: 'Total tokens', result: 'Call result', success: 'success', failure: 'failure',
     status: 'Workflow status', failureCode: 'Workflow failure code', step: 'Step', stepStatus: 'Step status', stepFailure: 'Step failure code', finish: 'Finish reason',
