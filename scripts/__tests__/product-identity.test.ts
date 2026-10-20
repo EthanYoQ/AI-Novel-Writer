@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { PRODUCT_NAME, PRODUCT_NAMES, resolveWindowsExecutable } from '../product-identity.mjs'
+import { PRODUCT_NAME, PRODUCT_NAMES, resolvePackagedWindowsExecutable, resolveWindowsExecutable } from '../product-identity.mjs'
 
 const windowsIt = process.platform === 'win32' ? it : it.skip
 
@@ -37,6 +37,25 @@ describe('product identity used by release scripts', () => {
       writeFileSync(join(legacyOnly, '书童.exe'), '')
       expect(resolveWindowsExecutable(legacyOnly)).toBe(join(legacyOnly, '书童.exe'))
       expect(resolveWindowsExecutable(join(root, 'missing'))).toBe(join(root, 'missing', '书童.exe'))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('targets the current product name when the run rebuilds over a pre-rename package', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-product-identity-'))
+    try {
+      // 同一版本号下 win-unpacked 里还留着改名前的构建：本次构建会清掉它、产出新名 exe。
+      writeFileSync(join(root, 'AI小说作家.exe'), '')
+      const selected = resolvePackagedWindowsExecutable(root, { freshBuild: true })
+      rmSync(join(root, 'AI小说作家.exe'))
+      writeFileSync(join(root, '书童.exe'), '')
+      expect(selected).toBe(join(root, '书童.exe'))
+      expect(existsSync(selected)).toBe(true)
+      // 复用已有产物时，仍按实际存在的文件找。
+      rmSync(join(root, '书童.exe'))
+      writeFileSync(join(root, 'AI小说作家.exe'), '')
+      expect(resolvePackagedWindowsExecutable(root, { freshBuild: false })).toBe(join(root, 'AI小说作家.exe'))
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

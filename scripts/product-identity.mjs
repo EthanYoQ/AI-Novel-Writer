@@ -25,6 +25,14 @@ export function resolveWindowsExecutable(directory) {
   return candidates.find(candidate => existsSync(candidate)) ?? candidates[0]
 }
 
+/**
+ * 验收脚本选 exe。freshBuild 表示随后会在本进程里重新打包：目录里现有的文件会被清掉，
+ * 产物一定是当前产品名，不能按构建前的文件去找（同版本号下可能还留着改名前的构建）。
+ */
+export function resolvePackagedWindowsExecutable(directory, { freshBuild }) {
+  return freshBuild ? path.join(directory, WINDOWS_EXECUTABLE_NAME) : resolveWindowsExecutable(directory)
+}
+
 /** macOS：.app 包内 Contents/MacOS 下的可执行文件，规则同上。 */
 export function resolveMacExecutable(appBundle) {
   const candidates = PRODUCT_NAMES.map(name => path.join(appBundle, 'Contents', 'MacOS', name))
