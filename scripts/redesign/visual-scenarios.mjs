@@ -73,6 +73,8 @@ const SHEET_PAGES = [
     await stage.paletteInput(page).fill('角色')
     await stage.palette(page).getByRole('option', { name: /^角色/ }).first().click()
     await stage.palette(page).waitFor({ state: 'detached' })
+    // 名单读完才列出角色行：等到行出现，免得量到上一页。
+    await attached(stage.characterList(page).locator('.cast-row'))
   }],
   ['plot', async page => { await stage.stageButton(page, '剧情与伏笔').click(); await loaded(page, '.stage-plot') }],
   ['knowledge', async page => { await stage.stageButton(page, '知识库').click(); await loaded(page, '.stage-kb-docs') }],
@@ -141,9 +143,13 @@ async function selbarOffset(page, line) {
   return toolbar.evaluate(bar => {
     const rect = bar.getBoundingClientRect()
     const selection = window.getSelection().getRangeAt(0).getBoundingClientRect()
+    const anchorLeft = parseFloat(bar.style.left)
+    const anchorTop = parseFloat(bar.style.top)
+    // 没有内联坐标时差值是 NaN，与容差比较恒为假，断言会空过。
+    if (!Number.isFinite(anchorLeft) || !Number.isFinite(anchorTop)) throw new Error(`选区工具条没有内联的 left/top：「${bar.style.cssText}」`)
     return {
-      dx: Math.round(rect.left + rect.width / 2 - parseFloat(bar.style.left)),
-      dy: Math.round(rect.bottom - parseFloat(bar.style.top)),
+      dx: Math.round(rect.left + rect.width / 2 - anchorLeft),
+      dy: Math.round(rect.bottom - anchorTop),
       gapAboveSelection: Math.round(selection.top - rect.bottom),
     }
   })
