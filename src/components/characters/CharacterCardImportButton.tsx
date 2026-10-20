@@ -81,7 +81,7 @@ function SessionImportButton({ session, disabled }: Props & { session: ProjectSe
   }, [sessionKey])
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
-  const label = text('粘贴 / 导入角色卡', 'Paste / import character cards')
+  const label = text('粘贴 / 导入角色卡', 'Paste or import cards')
 
   async function chooseFiles() {
     const draftWhenSelected = draft
