@@ -7,13 +7,13 @@
  * 宁可少一条诊断也不把正文写进日志。
  */
 export function errorStackFrames(error: Error, limit: number): string | undefined {
-  let header: string
+  let header: string, stack: unknown
   try {
     header = Error.prototype.toString.call(error)
+    stack = error.stack
   } catch {
     return undefined
   }
-  const stack = error.stack
   if (typeof stack !== 'string' || !stack.startsWith(`${header}\n`)) return undefined
   return stack.slice(header.length + 1).split('\n').slice(0, limit).join('\n')
 }
