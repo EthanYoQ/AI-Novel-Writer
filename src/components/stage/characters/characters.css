@@ -281,8 +281,6 @@
 .cast-profile-heading {
   flex: 1 1 auto;
   min-width: 0;
-  /* 名字再长也和头像留在第一行：换行判断按的宽度不超过头像旁边的余量，超出的部分在这一行里省略。 */
-  max-width: calc(100% - 72px - var(--s-5));
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -311,6 +309,11 @@
   background: var(--accent-soft);
   color: var(--accent);
   font: 500 var(--fs-11)/1.5 var(--font-ui);
+}
+
+/* 名字再长也和头像留在第一行：换行判断按的宽度不超过头像旁边的余量，超出的部分在这一行里省略。没有头像的空档案头不扣。 */
+.cast-profile-avatar + .cast-profile-heading {
+  max-width: calc(100% - 72px - var(--s-5));
 }
 
 /* 名字下面的说明、头像操作与报错不撑宽标题：它们的固有宽度记为 0，换行判断只看名字那一行。 */
