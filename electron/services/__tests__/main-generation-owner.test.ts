@@ -2894,3 +2894,26 @@ describe('next chapter after editing a reviewed batch draft (#438)', () => {
     expect(DraftRepository.getMeta(saved.id)?.dependenciesStale).toBe(false)
   })
 })
+
+describe('大纲恢复稿是否已写进正式大纲', () => {
+  it.each([true, false])('一批写完后来源变了：正式保存过=%s 时，恢复稿如实标出正式大纲是否已有这一批', async save => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      const chapter = Number((request as { task: GenerationTask }).task.purpose.split(':')[2])
+      options.onVisible({ kind: 'delta', text: outlineEntry(chapter) })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    f.db.prepare('UPDATE project_core SET total_chapters=?').run(1)
+    const run = f.owner.begin(outlineSelection(f, 1))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'outline-1', task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+    acceptOutline(f.owner, run.handle)
+    const progress = f.owner.readContext(run.handle).plotOutline!
+    const synopsis = renderPlotOutlineRange(progress.composition!.text, progress.range, progress.sourceExpected)
+    if (save) f.db.transaction(() => f.owner.assertSynopsisCommit(run.handle, synopsis, progress.sourceExpected)
+      || ProjectCoreRepository.commitSynopsis({ synopsis, expected: progress.sourceExpected, generationRunHandle: run.handle }, f.db)).immediate()
+    f.db.exec("UPDATE project_core SET premise='作者已修改前提' WHERE id='main'")
+    const context = f.owner.readContext(run.handle)
+    expect(context.plotOutline!.cursor).toEqual({ kind: 'complete' })
+    expect(context.plotOutlineRecovery).toMatchObject({ writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null, formalCovered: save })
+  })
+})
