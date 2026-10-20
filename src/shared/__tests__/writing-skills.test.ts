@@ -213,6 +213,50 @@ Fill [the form](FORMS.md#usage), compare ![](image.png), browse [docs](docs), re
     expect(result.content).not.toContain('Nested rules.')
   })
 
+  it('does not substitute a root namesake when an explicit ./ file next to the citing file is missing', () => {
+    const files: Record<string, string> = {
+      'rules.md': 'Root rules.',
+      'references/guide.md': 'Apply [rules](./rules.md).',
+    }
+    const result = inspectLocalWritingSkill('---\nname: explicit\n---\nRead references/guide.md.', {
+      readFile: relativePath => files[relativePath],
+    })
+
+    expect(result.reasons).toContain('relative-reference')
+    expect(result.bundledFiles).not.toContain('rules.md')
+    expect(result.content).not.toContain('Root rules.')
+  })
+
+  it('merges files named by reference-style link definitions', () => {
+    const files: Record<string, string> = {
+      'voice.md': 'Close third person.',
+      'references/tone.md': 'Dry humour.',
+    }
+    const result = inspectLocalWritingSkill(`---
+name: reference-links
+---
+Follow the [voice rules][voice] and the [tone][].
+
+[voice]: ./voice.md "Voice"
+  [tone]: <references/tone.md>`, { readFile: relativePath => files[relativePath] })
+
+    expect(result).toMatchObject({ compatible: true, bundledFiles: ['voice.md', 'references/tone.md'], unbundledReferences: [] })
+    expect(result.content).toContain('Close third person.')
+    expect(result.content).toContain('Dry humour.')
+  })
+
+  it('applies the inline-link rules to reference-style definitions that cannot be merged', () => {
+    const explicit = inspectLocalWritingSkill('---\nname: missing-def\n---\nSee [voice][v].\n\n[v]: ./missing.md', {
+      readFile: () => undefined,
+    })
+    expect(explicit.reasons).toContain('relative-reference')
+
+    const plain = inspectLocalWritingSkill('---\nname: plain-def\n---\nSee [forms][f] and [site][s].[^1]\n\n[f]: FORMS.md\n[s]: https://example.com\n[^1]: Footnote text.', {
+      readFile: () => undefined,
+    })
+    expect(plain).toMatchObject({ compatible: true, unbundledReferences: ['FORMS.md'] })
+  })
+
   it.each([
     ['https://github.com/acme/story-skill',{ owner: 'acme', repo: 'story-skill', path: 'SKILL.md' }],
     ['https://github.com/acme/story-skill/tree/main/skills/prose', { owner: 'acme', repo: 'story-skill', ref: 'main', path: 'skills/prose/SKILL.md' }],

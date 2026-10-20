@@ -152,6 +152,8 @@ function parseFrontmatter(raw: string, blockScalars: boolean): { fields: Record<
 }
 
 const LINK_TARGET = /\]\(\s*(<?)([^)\s>]+)/g
+// 引用式链接 `[文字][id]` 的目标写在定义行 `[id]: ./voice.md` 里，与行内链接同样处理；脚注定义 `[^1]:` 不是链接。
+const LINK_DEFINITION = /^ {0,3}\[(?!\^)[^\]\n]+\]:[ \t]*(<?)([^\s>]+)/gm
 const BARE_REFERENCE = /(?:^|[\s`'"(])((?:\$\{skill_dir\}[/\\])?(?:references?|assets?)[/\\][^\s`'")]+)/gim
 const SKILL_DIR_REFERENCE = /\$\{skill_dir\}(?:[/\\][^\s`'")]+)?/gi
 
@@ -164,10 +166,10 @@ interface SkillReference {
   blocking: boolean
 }
 
-/** 按出现顺序列出正文里的相对引用：Markdown 链接目标、references/ 与 assets/ 路径、${SKILL_DIR}。 */
+/** 按出现顺序列出正文里的相对引用：Markdown 链接目标（含引用式定义）、references/ 与 assets/ 路径、${SKILL_DIR}。 */
 function referencedPaths(text: string): SkillReference[] {
   const found: Array<SkillReference & { at: number }> = []
-  for (const match of text.matchAll(LINK_TARGET)) {
+  for (const match of [...text.matchAll(LINK_TARGET), ...text.matchAll(LINK_DEFINITION)]) {
     const [, angled, path] = match
     if (/^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(path)) continue
     const blocking = angled ? /\$\{skill_dir\}/i.test(path) : DIRECTORY_REFERENCE.test(path)
@@ -220,7 +222,9 @@ function bundleReferencedFiles(body: string, readFile: WritingSkillFileReader | 
   let blocked = false
   while (queue.length) {
     const { path: reference, blocking, base } = queue.shift()!
-    const candidates = [...new Set([resolveReference(reference, base), resolveReference(reference, [])])]
+    // 显式 ./ 与 ../ 只相对引用文件所在目录解析；其余写法在当前目录读不到时再试 Skill 根目录。
+    const explicit = /^\.\.?[/\\]/.test(reference)
+    const candidates = [...new Set([resolveReference(reference, base), explicit ? null : resolveReference(reference, [])])]
       .filter((candidate): candidate is string => candidate !== null)
     // 按解析顺序取第一个已并入或读得到的文件作为实际目标，再按它去重：备用的同名根目录文件已并入，不代表当前目录的那份也已并入。
     let bundled: WritingSkillBundledFile | undefined
