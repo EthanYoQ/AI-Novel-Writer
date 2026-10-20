@@ -41,7 +41,8 @@ async function render(size, contentRatio) {
   }
 }
 
-// 截图不对就别写进图标：尺寸、非全透明、图形落在预期的留白里（四边都对上，才说明没被截掉或挪位）。
+// 截图不对就别写进图标：尺寸、非全透明、四角透明、图形落在预期的留白里（四边都对上，才说明没被截掉或挪位）。
+// 满版渲染时图形铺满画布，包围盒发现不了背景不透明；图标是圆角方块，四角按设计透明，用它兜底。
 // 小尺寸圆角的抗锯齿会向外渗 1 像素，所以每边容差 1。
 function assertPlaced(image, size, margin) {
   const { width, height } = image.getSize()
@@ -58,6 +59,8 @@ function assertPlaced(image, size, margin) {
     }
   }
   if (right < 0) throw new Error(`${size}px 截图全透明`)
+  const cornerAlphas = [[0, 0], [size - 1, 0], [0, size - 1], [size - 1, size - 1]].map(([x, y]) => bitmap[(y * size + x) * 4 + 3])
+  if (cornerAlphas.some(alpha => alpha !== 0)) throw new Error(`${size}px 四角不透明（alpha ${cornerAlphas.join(',')}），背景没有保持透明`)
   const expected = [margin, margin, size - 1 - margin, size - 1 - margin]
   if ([left, top, right, bottom].some((value, index) => Math.abs(value - expected[index]) > 1)) {
     throw new Error(`${size}px 图形位置不对：要 ${expected.join(',')}，得到 ${[left, top, right, bottom].join(',')}`)
