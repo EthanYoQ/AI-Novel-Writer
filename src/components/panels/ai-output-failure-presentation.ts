@@ -1,3 +1,4 @@
+import { knownAppErrorMessage } from '../../i18n/app-errors'
 import type { Locale } from '../../i18n/types'
 import type { PromptBudgetReport } from '../../services/generation/generation-harness'
 import type { WorkflowFailureCode, WorkflowStep } from '../../stores/workflow-store'
@@ -129,7 +130,7 @@ export function presentWorkflowFailure(
   if (activity?.operation === 'review-chapter') {
     const diagnostic = activity.diagnostics
     const code = diagnostic?.causeCode ?? diagnostic?.errorCode
-    let reason = error?.trim() || (locale === 'zh-CN' ? '审稿未完成，原因未知。' : 'The review did not finish; the cause is unknown.')
+    let reason = knownAppErrorMessage(locale, error) ?? (error?.trim() || (locale === 'zh-CN' ? '审稿未完成，原因未知。' : 'The review did not finish; the cause is unknown.'))
     if (diagnostic?.endReason === 'failed') {
       const zh = locale === 'zh-CN'
       reason = code === 'UND_ERR_BODY_TIMEOUT'
@@ -173,14 +174,14 @@ export function presentWorkflowFailure(
   return locale === 'zh-CN'
     ? {
         heading: '工作流未完成',
-        reason: error?.trim() || '生成在完成前停止。',
+        reason: knownAppErrorMessage(locale, error) ?? (error?.trim() || '生成在完成前停止。'),
         persistence: isUnpersistedChapterDraft
           ? '本次未保存草稿或正文章节。请调整章节要求后重试。'
           : undefined,
       }
     : {
         heading: 'Workflow did not finish',
-        reason: error?.trim() || 'Generation stopped before it completed.',
+        reason: knownAppErrorMessage(locale, error) ?? (error?.trim() || 'Generation stopped before it completed.'),
         persistence: isUnpersistedChapterDraft
           ? 'This attempt did not save a draft or manuscript chapter. Adjust the chapter request and try again.'
           : undefined,

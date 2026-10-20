@@ -22,7 +22,9 @@ import {
 import { toolRegistry, type AgentExecutionContext, type AgentTool } from './tool-registry'
 import type { WritingLanguage } from '../../shared/writing-language'
 import {
+  inspectInstalledWritingSkill,
   inspectWritingSkillMarkdown,
+  type InstalledWritingSkillBundle,
   type WritingSkillInspection,
   type WritingSkillSource,
 } from '../../shared/writing-skills'
@@ -129,7 +131,7 @@ class SkillRegistryImpl {
     try {
       const entries = await ipc.invoke('skills:list-user')
       for (const entry of entries) {
-        const skill = parseSkillMd(entry.content, entry.name, 'user', entry.baseDir, entry.filePath)
+        const skill = parseSkillMd(entry.content, entry.name, 'user', entry.baseDir, entry.filePath, undefined, entry.bundle)
         if (!skill) continue
         target.set(skill.skillId, skill)
         count++
@@ -369,8 +371,9 @@ export function parseSkillMd(
   baseDir: string,
   filePath: string,
   projectSession?: ProjectSessionContext,
+  bundle: InstalledWritingSkillBundle = { status: 'none' },
 ): LoadedSkill | null {
-  const writingSkill = inspectWritingSkillMarkdown(raw)
+  const writingSkill = inspectInstalledWritingSkill(raw, bundle, fallbackName)
   const inspectedName = writingSkill.metadata.name === 'unnamed-writing-skill'
     ? fallbackName
     : writingSkill.metadata.name

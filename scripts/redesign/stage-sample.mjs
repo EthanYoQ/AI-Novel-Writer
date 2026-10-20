@@ -27,7 +27,7 @@ export const STAGE_SAMPLE = Object.freeze({
       '林岚把纸条夹进父亲的地图里。窗外，第一盏航标灯亮了，接着是第二盏、第三盏，一路亮到她从没去过的那片海湾。',
       '楼下传来守塔人的咳嗽声。她忽然意识到，从她进门到现在，他一次也没有问过她为什么来。',
     ].join('\n\n'),
-    // 已审稿看的是审稿记录而不是稿状态（数据库里没有代码把稿设为 reviewed），所以第 3 章带一份审稿。
+    // 已审稿看的是审稿记录而不是稿状态。当前版本不再把稿设为 reviewed，第 3 章保留它来代表旧版本升级上来的数据，并带一份审稿。
     review: JSON.stringify({ summary: '线索推进清楚，有一处时间对不上。', items: [
       { category: '连续性', severity: 'warning', description: '第 1 章写钟声早了一刻，这里又写潮水没有变化，两处要对上。', quote: '潮水却没有任何变化' },
       { category: '措辞', severity: 'pass', description: '语言自然。' },

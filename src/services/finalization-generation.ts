@@ -11,6 +11,8 @@ export async function runFinalizationGeneration(options: {
   modelId: () => string
   parentRootActionId?: string
   retryOf?: FinalizedCharacterArtifact
+  /** 作者显式重试时冻结的最近一次未成功尝试；主进程按它只重发一次。 */
+  recoverFrom?: string
   cancelled: () => boolean
   onHandle?: (handle: MainGenerationRunHandle) => void
 }) {
@@ -43,10 +45,16 @@ export async function runFinalizationGeneration(options: {
     if (recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled') throw new Error('FINALIZATION_GENERATION_SOURCE_CHANGED')
     let candidates = recovery.view.candidates ?? recovery.view.artifacts
     let candidate = candidates.at(-1)
-    if (options.retryOf || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
-      if (!candidate && recovery.attemptCount > 0) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
+    // 显式引用只对冻结它的那次运行有效；begin 换了新运行时按普通路径重新请求。recoverFrom 是否属于本运行由主进程判断。
+    const requested = options.retryOf
+    const retryOf = requested && candidates.some(item => item.artifactId === requested.artifactId) ? requested : undefined
+    const recoverFrom = options.recoverFrom
+    let executed = false
+    if (retryOf || recoverFrom || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
+      if (!candidate && recovery.attemptCount > 0 && !recoverFrom) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
       const previous = recovery.view.handle
-      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(options.retryOf ? { retryOf: options.retryOf } : {}) })
+      executed = true
+      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(retryOf ? { retryOf } : {}), ...(recoverFrom ? { recoverFrom } : {}) })
       if (receipt.run.handle.projectId !== previous.projectId || receipt.run.handle.rootActionId !== previous.rootActionId || receipt.run.handle.runId !== previous.runId) throw new Error('FINALIZATION_GENERATION_IDENTITY_MISMATCH')
       recovery.view = receipt.run
       if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
@@ -55,7 +63,10 @@ export async function runFinalizationGeneration(options: {
       const reference = receipt.outcome.receipt.visibleArtifact
       candidate = candidates.find(item => item.artifactId === reference?.artifactId && item.revision === reference.revision && item.textHash === reference.textHash)
     }
-    if (!candidate || candidate.status !== 'completed' || candidate.compositionEligible !== true) throw new Error('FINALIZATION_GENERATION_ARTIFACT_REQUIRED')
+    if (!candidate || candidate.status !== 'completed' || candidate.compositionEligible !== true) {
+      // 本次已发请求、或回放的是模型正常结束的候选：模型确实返回过结果，只是不可用，不能说成没发请求。
+      throw new Error(executed || candidate?.status === 'completed' ? 'FINALIZATION_GENERATION_RESULT_UNUSABLE' : 'FINALIZATION_GENERATION_ARTIFACT_REQUIRED')
+    }
     return await ipc.invokeWithProjectSession(session, 'finalization-generation:commit', { handle: recovery.view.handle,
       artifact: { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash },
     })

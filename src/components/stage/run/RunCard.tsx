@@ -8,7 +8,7 @@ import { useWorkflowReasoningStore } from '../../../stores/workflow-reasoning-st
 import { useWorkflowStore, type WorkflowRun, type WorkflowStep } from '../../../stores/workflow-store'
 import { runProgress } from '../../../stores/navigation/stage-progress'
 import { CharacterProposalSelectionPanel } from '../../characters/CharacterProposalSelectionPanel'
-import { isCurrentSessionRun, openNovelConfigurationFor, runFailure, useResumePlotOutline } from '../../run/run-failure'
+import { isCurrentSessionRun, openArchitectureFor, openNovelConfigurationFor, runFailure, useResumePlotOutline } from '../../run/run-failure'
 import { ACTIVE_RUN_STATUSES, splitThinking } from '../../run/run-output'
 import { useReviewWaitLines } from '../../run/use-review-wait'
 import { useWorkflowConfirmation, type WorkflowConfirmation } from '../../run/use-workflow-confirmation'
@@ -248,7 +248,7 @@ function StepOutput({ content, live, text }: { content: string; live: boolean; t
 
 function RunFailureNotice({ run, primary }: { run: WorkflowRun; primary: boolean }) {
   const text = (zh: string, en: string) => run.uiLocale === 'en-US' ? en : zh
-  const { presentation, errorCode, canResumeOutline } = runFailure(run)
+  const { presentation, errorCode, canResumeOutline, canRestartOutline } = runFailure(run)
   const current = useProjectStore(() => isCurrentSessionRun(run))
   const outline = useResumePlotOutline(run)
   const openConfig = presentation.action === 'open-novel-config' && presentation.actionLabel
@@ -262,11 +262,16 @@ function RunFailureNotice({ run, primary }: { run: WorkflowRun; primary: boolean
         <p>{text('已完成的部分已保存为不完整大纲，不会被覆盖；续写会让模型接着上次的末尾写。',
           'The completed part is saved as an incomplete outline and will not be lost; continuing picks up where it stopped.')}</p>
       )}
-      {(openConfig || canResumeOutline) && (
+      {(openConfig || canResumeOutline || canRestartOutline) && (
         <div className="run-notice-actions">
           {canResumeOutline && (
             <Button variant={primary ? 'primary' : 'secondary'} size="sm" disabled={!current || outline.resuming} onClick={() => void outline.resume()}>
               {outline.resuming ? text('正在从断点续写…', 'Resuming…') : text('继续生成情节大纲', 'Continue the plot outline')}
+            </Button>
+          )}
+          {canRestartOutline && (
+            <Button variant={primary ? 'primary' : 'secondary'} size="sm" disabled={!current} onClick={() => openArchitectureFor(run)}>
+              {text('打开架构页', 'Open Architecture')}
             </Button>
           )}
           {openConfig && (
@@ -276,7 +281,7 @@ function RunFailureNotice({ run, primary }: { run: WorkflowRun; primary: boolean
           )}
         </div>
       )}
-      {(openConfig || canResumeOutline) && !current && (
+      {(openConfig || canResumeOutline || canRestartOutline) && !current && (
         <p className="run-note">{text('这次运行属于另一次打开的作品，回到那部作品后才能继续。', 'This run belongs to another open session of the book. Switch back to it to continue.')}</p>
       )}
     </Notice>

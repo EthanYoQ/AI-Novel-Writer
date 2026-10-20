@@ -1,5 +1,5 @@
 import type { MainGenerationRunHandle } from '../services/generation/generation-runtime'
-import { PLOT_OUTLINE_PROTOCOL, plotOutlineNextChapter } from './plot-outline-contract'
+import { PLOT_OUTLINE_PROTOCOL, plotOutlineCoverageNote, plotOutlineLastChapter, plotOutlineNextChapter } from './plot-outline-contract'
 import type { WritingLanguage } from './writing-language'
 
 /** partial_arch.json 里情节大纲的分批检查点字段。 */
@@ -61,9 +61,7 @@ export function renderSynopsisDbText(
   }
   const coveredTo = checkpoint.synopsis_covered_to ?? totalChapters
   const visibleBody = coveredTo < totalChapters
-    ? `${body}\n\n${english
-      ? `> This outline covers chapters 1-${coveredTo} of ${totalChapters}; the remaining chapters will be generated in later batches.`
-      : `> 本大纲已覆盖至第 ${coveredTo} 章（全书 ${totalChapters} 章），其余章节将在后续批次继续生成。`}`
+    ? `${body}\n\n${plotOutlineCoverageNote(coveredTo, totalChapters, writingLanguage)}`
     : body
   return `# ${heading}\n\n${visibleBody}`.trim()
 }
@@ -192,6 +190,8 @@ export type OutlineProgress =
 export function outlineProgress(synopsis: string, checkpoint: unknown, writingLanguage: WritingLanguage, totalChapters: number): OutlineProgress {
   if (synopsis.length <= 50) return { kind: 'empty' }
   if (isRecoverableSynopsisCheckpoint(checkpoint, synopsis, writingLanguage, totalChapters)) return { kind: 'interrupted' }
+  // 只有第 0 章序章：正文再长也还没开始生成。
+  if (plotOutlineLastChapter(synopsis) === 0) return { kind: 'empty' }
   const next = plotOutlineNextChapter({ synopsis, totalChapters, writingLanguage })
   if (next > 1) return { kind: 'partial', coveredTo: next - 1, total: totalChapters }
   return hasVisiblePartialSynopsisMarker(synopsis) ? { kind: 'unresumable' } : { kind: 'complete' }

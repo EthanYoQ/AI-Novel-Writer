@@ -37,7 +37,7 @@ export async function refreshStageWork(text: (zh: string, en: string) => string)
     && useProjectStore.getState().projectSessionEpoch === projectSessionEpoch
   try {
     const [architecture, blueprints] = await Promise.all([
-      checkArchConfirmed(session),
+      checkArchConfirmed(session, currentProject?.novelConfig),
       ipc.invokeWithProjectSession(session, 'db:blueprint-get-all', session.projectPath),
       useDraftStore.getState().loadAllDrafts(session.projectPath, session),
     ])

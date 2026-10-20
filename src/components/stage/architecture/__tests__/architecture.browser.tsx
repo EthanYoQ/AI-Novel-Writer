@@ -34,6 +34,7 @@ let host: HTMLDivElement | undefined
 let core: Record<string, unknown>
 let partial: Record<string, unknown> | null
 let rosterStatus: 'empty' | 'ready'
+let recoveryContext: Record<string, unknown> | null
 let invoke: ReturnType<typeof vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>>
 
 const button = (name: string | RegExp) => [...document.querySelectorAll('button')]
@@ -89,13 +90,15 @@ async function render() {
 beforeEach(() => {
   core = { premise: PREMISE, worldbuilding: '', synopsis: '', totalChapters: 24, writingLanguage: 'zh-CN' }
   partial = null
+  recoveryContext = null
   rosterStatus = 'empty'
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'db:project-core-get') return core
     if (channel === 'fs:read-json') return partial ? { success: true, data: partial } : { success: false, error: 'not found' }
     if (channel === 'db:character-roster-read') return { schemaVersion: 1, revision: 1, migrationState: 'ready', status: rosterStatus, entries: [], renderedMarkdown: '林舟、沈砚', projectionHash: 'p', factHash: 'f' }
     if (channel === 'generation:list') return []
-    if (channel === 'generation:read-context' || channel === 'generation:read-visible-composition') return null
+    if (channel === 'generation:read-context') return recoveryContext
+    if (channel === 'generation:read-visible-composition') return null
     if (channel === 'config:get') return { outlineTargetUnits: 300 }
     if (channel === 'config:set') return { success: true }
     if (channel === 'db:project-core-update') {
@@ -228,6 +231,35 @@ describe('架构阶段', () => {
     expect(Number(to?.value)).toBeGreaterThanOrEqual(17)
     expect(Number(to?.value)).toBeLessThanOrEqual(24)
     expect(mark('synopsis')).toBe('续写')
+  })
+
+  it.each([
+    ['第 7 章请求前被拒', { kind: 'request', chapterNumber: 7, attempt: 'normal' }, [6]],
+    // 最后一章生成完、候选已齐，正式保存时被来源检查拒绝：检查点仍记着本批未完成，同样只能重新生成。
+    ['第 10 章生成完、正式保存被拒', { kind: 'complete' }, [6, 7, 8, 9, 10]],
+  ] as const)('第 6–10 章那批途中改了模型（%s）、恢复稿写回被封锁：提示只能查看或复制并从第 6 章重新生成，按钮直接打开从第 6 章起的对话框', async (_case, cursor, completeChapters) => {
+    const body = outlineBody(1, 5)
+    core = { ...core, synopsis: renderPlotOutlineSynopsis(body, 5, OUTLINE_SOURCE) }
+    const handle = { projectId: session.projectId, epoch: '本次', rootActionId: '大纲动作', runId: '第二批' }
+    const draft = outlineBody(6, completeChapters.at(-1)!)
+    partial = { synopsis_result: draft, synopsis_incomplete: true, synopsis_generation_handle: handle }
+    recoveryContext = { handle, plotOutline: { range: { from: 6, to: 10 }, cursor },
+      plotOutlineRecovery: { draft, completeChapters, writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null } }
+    filledSpine(['premise', 'synopsis'])
+    await render()
+    const outline = host!.querySelector('[data-section="synopsis"]')!
+    expect(outline.textContent).not.toContain('续写从停下的地方')
+    expect(outline.textContent).toContain('只能查看或复制。请从第 6 章重新生成情节大纲')
+    const restart = [...outline.querySelectorAll('button')].find(item => item.textContent === '从第 6 章重新生成')
+    expect(restart?.className).toContain('pi-btn--secondary')
+    expect([...outline.querySelectorAll('button')].find(item => item.textContent === '查看恢复稿')?.className).toContain('pi-btn--text')
+    expect(button('编辑恢复稿')).toBeUndefined()
+
+    await act(async () => restart!.click())
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="本次生成范围的起始章"]')?.value).toBe('6')
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="本次生成范围的结束章"]')?.value).toBe('10')
+    expect(stepChecked('synopsis')).toBe(true)
+    expect(stepChecked('worldbuilding')).toBe(false)
   })
 
   it.each([
@@ -584,5 +616,75 @@ describe('架构阶段', () => {
     filledSpine(['premise'])
     await render()
     expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent?.startsWith('收到匿名信的林舟')).toBe(true)
+  })
+
+  it('某节只写了不足 50 字：摘要显示这段内容、动作是编辑，徽标不算已确认；生成时标「将覆盖」而不是「新生成」', async () => {
+    const SHORT = '末班车上，每盏阅读灯都对应一个失踪者。'
+    core = { ...core, premise: '', worldbuilding: SHORT }
+    await render()
+    const world = host!.querySelector('[data-section="worldbuilding"]')!
+    expect(world.querySelector('.arch-section-summary')?.textContent).toBe(SHORT)
+    expect(world.textContent).not.toContain('还没有内容')
+    expect(world.querySelector('.arch-badge')?.textContent).toBe('不完整')
+    expect([...world.querySelectorAll('button')].map(node => node.textContent)).toContain('编辑')
+    expect(host!.querySelector('.arch-eyebrow')?.textContent).toContain('0 / 4 已确认')
+    expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent).toContain('还没有内容')
+
+    await click('AI 生成架构')
+    expect(stepChecked('worldbuilding')).toBe(true)
+    expect(mark('worldbuilding')).toBe('将覆盖')
+    expect(mark('premise')).toBe('新生成')
+  })
+
+  it('某节只有空白（超过 50 个字符）：与空节一样显示还没有内容、徽标待生成，不算已确认', async () => {
+    core = { ...core, worldbuilding: ' \n'.repeat(40) }
+    await render()
+    const world = host!.querySelector('[data-section="worldbuilding"]')!
+    expect(world.querySelector('.arch-section-summary')?.textContent).toContain('还没有内容')
+    expect(world.querySelector('.arch-badge')?.textContent).toBe('待生成')
+    expect(host!.querySelector('.arch-eyebrow')?.textContent).toContain('1 / 4 已确认')
+  })
+
+  describe('只有序章的大纲（#417）', () => {
+    const LONG_PROLOGUE = `## 第0章：序章
+${'守塔人听见第十三声钟，灯塔在那一夜熄灭。'.repeat(4)}`
+
+    it('徽标是待生成、不算已确认；默认从第 1 章起接在序章之后写，起始章选 2 时说明要从第 1 章开始', async () => {
+      core = { ...core, synopsis: `# 情节大纲
+
+${LONG_PROLOGUE}` }
+      await render()
+      const outline = host!.querySelector('[data-section="synopsis"]')!
+      expect(outline.querySelector('.arch-badge')?.textContent).toBe('待生成')
+      expect(outline.querySelector('.arch-section-summary')?.textContent).toContain('守塔人')
+      expect(host!.querySelector('.arch-eyebrow')?.textContent).toContain('1 / 4 已确认')
+
+      await openOutlineRegenerate()
+      expect(document.querySelector('[data-step="synopsis"] .arch-step-status')?.textContent).toBe('待生成')
+      expect(inputValue('本次生成范围的起始章')).toBe('1')
+      expect(mark('synopsis')).toBe('续写')
+      expect(effect()).toBe('接在序章之后写第 1–5 章，序章不动。')
+      await range(2, 3)
+      expect(mark('synopsis')).toBe('范围无效')
+      expect(issue()).toBe('已有大纲只有序章，不能跳到第 2 章开始。请从第 1 章起生成，序章会原样保留。')
+      expect(issue()).not.toContain('1–0')
+      expect(submit().disabled).toBe(true)
+    })
+
+    it('序章加第 1–5 章重写其中几章：覆盖说明写明序章原样保留', async () => {
+      core = { ...core, synopsis: `# 情节大纲
+
+${LONG_PROLOGUE}
+
+${outlineBody(1, 5)}` }
+      await render()
+      await openOutlineRegenerate()
+      await range(3, 5)
+      expect(effect()).toBe('第 3–5 章按本次结果替换，序章与第 1–2 章原样保留。')
+      await range(1, 2)
+      expect(effect()).toBe('第 1–2 章按本次结果替换，序章与第 3–5 章原样保留。')
+      await range(1, 5)
+      expect(effect()).toBe('第 1–5 章按本次结果替换，序章原样保留。')
+    })
   })
 })

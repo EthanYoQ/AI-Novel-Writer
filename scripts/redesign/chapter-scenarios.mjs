@@ -365,6 +365,70 @@ export const CHAPTER_SCENARIOS = {
     await assertContrast(page, CONTRAST.sheet, '审稿侧页')
   } },
 
+  /**
+   * #438：「留作草稿」批次里第 4 章以第 3 章候选稿为前驱写成；作者随后改了第 3 章，再把 3、4 章逐章定稿。
+   * 写第 5 章时模型照常出稿，保存不能因为第 4 章当初依据的第 3 章旧稿而被拒。
+   */
+  'chapter-write-after-edited-chain': { model: true, shell: 'stage', setup: seed({ extra: async ({ page, invoke, path, session }) => {
+    const [third] = await invoke(page, 'db:draft-list', 3, path, session)
+    assert.ok(third, '示例作品有第 3 章稿')
+    const original = (await invoke(page, 'db:draft-get-full', third.id, path, session))?.content
+    assert.equal(typeof original, 'string', '读到第 3 章正文')
+    const fourth = STAGE_SAMPLE.drafts[4].text
+    const created = await invoke(page, 'db:draft-create', { chapterNumber: 4, version: 2, source: 'rewrite', content: fourth, wordCount: countUnits(fourth),
+      sourceDependencies: [{ kind: 'candidate', draftId: third.id, contentHash: createHash('sha256').update(original, 'utf8').digest('hex') }] }, path, session)
+    assert.equal(created.success, true, created.error)
+    const edited = `${original}\n\n作者审稿时补的一句：雾钟停了。`
+    assert.equal((await invoke(page, 'db:draft-update-content', third.id, edited, countUnits(edited), path, session)).success, true)
+  } }), run: async context => {
+    const { page, fake, invoke, projectPath } = context
+    for (const chapterNumber of [3, 4]) {
+      await chapterView.open(page, chapterNumber)
+      await chapterView.more(page, '定稿…')
+      const finalizing = await runsStarted(page)
+      await chapterView.finalizeDialog(page, chapterNumber).getByRole('button', { name: '确认定稿', exact: true }).click()
+      await chapterView.view(page).getByText('已定稿，只读', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
+      await waitRunDone(page, finalizing)
+      await chapterView.postProcess(page).getByText('4 / 4 完成').waitFor({ state: 'visible', timeout: 60_000 })
+    }
+    await chapterView.open(page, 5)
+    const proseBefore = fake.chats.filter(chat => chat.kind === 'prose').length
+    await chapterView.view(page).getByRole('button', { name: '写作此章', exact: true }).click()
+    // 运行侧页可能还停在第 4 章定稿那张「已完成」卡上，不能据它判断写完；只认第 5 章正文出现在纸面上。
+    await chapterView.prose(page).getByText(firstLine(FIXTURE_PROSE)).first().waitFor({ state: 'visible', timeout: 90_000 })
+    await runSheet.openFromPalette(page)
+    const proseRequests = fake.chats.filter(chat => chat.kind === 'prose').length - proseBefore
+    const rawIpcError = await runSheet.sheet(page).getByText(/Error invoking remote method|GENERATION_/).count()
+    // 纸面出字只说明生成过；#438 是保存被拒，要从库里读回第 5 章的稿才算保存了。
+    const session = await reopenForReading(context)
+    const saved = await invoke(page, 'db:draft-list', 5, projectPath, session)
+    const contents = await Promise.all(saved.map(async draft => (await invoke(page, 'db:draft-get-full', draft.id, projectPath, session))?.content ?? ''))
+    const after = { proseRequests, rawIpcError, savedDrafts: saved.length, savedHasFixtureProse: contents.some(content => content.includes(FIXTURE_PROSE)) }
+    assert.deepEqual(after, { proseRequests: 1, rawIpcError: 0, savedDrafts: 1, savedHasFixtureProse: true }, '第 5 章写完并存进库，运行侧页没有原始错误')
+    await stage.openFromLibrary(page, STAGE_SAMPLE.name)
+    await chapterView.open(page, 5)
+    return after
+  } },
+
+  /** #411：第 3 章是旧版本留下的 reviewed 稿，重新审稿要真的请求模型并写回审稿，运行侧页不露原始 IPC 错误。 */
+  'chapter-rereview-legacy': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake }) => {
+    await chapterView.open(page, 3)
+    const reviewsBefore = fake.chats.filter(chat => chat.kind === 'review').length
+    const started = await runsStarted(page)
+    await chapterView.view(page).getByRole('button', { name: '重新审稿', exact: true }).click()
+    await waitRunDone(page, started)
+    const reportShown = await chapterView.reviewSheet(page).getByRole('button', { name: '添加我的意见' })
+      .waitFor({ state: 'visible', timeout: 30_000 }).then(() => true, () => false)
+    await runSheet.openFromPalette(page)
+    const after = {
+      reviewRequests: fake.chats.filter(chat => chat.kind === 'review').length - reviewsBefore,
+      reportShown,
+      rawIpcError: await runSheet.sheet(page).getByText(/Error invoking remote method|GENERATION_/).count(),
+    }
+    assert.deepEqual(after, { reviewRequests: 1, reportShown: true, rawIpcError: 0 }, '重新审稿请求了模型并写回审稿报告，运行侧页没有原始 IPC 错误')
+    return after
+  } },
+
   /** lane 4：添加作者意见后修稿，修稿请求里带着这条意见。 */
   'chapter-manual': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake }) => {
     await chapterView.open(page, 4)
@@ -442,6 +506,45 @@ export const CHAPTER_SCENARIOS = {
     const retried = fake.requests.slice(from)
     assert.deepEqual([...new Set(retried)], ['character-state'], '只重试了失败的角色状态更新')
     return { before, after: await chapterView.postProcessSteps(page), retried }
+  } },
+
+  /**
+   * #420：角色状态请求断流两次。自动后处理只发一次请求、失败说明不含错误码；重开应用后点「重试失败步骤」恰好再发一次，
+   * 仍断流时说明换成「没有返回完整结果」；再点这一步的「重试」第三次请求成功，后处理回到 3 / 3（重开后不再列正文文件一行）。
+   */
+  'chapter-retry-stream': { model: true, shell: 'stage', setup: seed(), run: async context => {
+    const { fake } = context
+    const characterRequests = () => fake.requests.filter(kind => kind === 'character-state').length
+    const detail = () => chapterView.postProcess(context.page).locator('li[data-state="failed"] .stage-ch-post-detail').first()
+    fake.dropCharacterState(2)
+    await chapterView.open(context.page, 3)
+    const finalizing = await runsStarted(context.page)
+    await chapterView.finalize(context.page, 3)
+    await waitRunDone(context.page, finalizing)
+    await detail().waitFor({ state: 'visible', timeout: 60_000 })
+    assert.equal(characterRequests(), 1, '自动后处理只发了一次角色状态请求')
+    const firstError = await detail().innerText()
+    await context.restart()
+    // 重启后可能直接回到作品，也可能停在书房：用一个组合定位等其一出现，不留下没人接的等待。
+    await stage.spine(context.page).or(stage.cover(context.page, STAGE_SAMPLE.name)).first().waitFor({ state: 'visible', timeout: 60_000 })
+    if (!await stage.spine(context.page).isVisible()) await stage.openFromLibrary(context.page, STAGE_SAMPLE.name)
+    await afterProjectOpenSettles(context.page)
+    await chapterView.open(context.page, 3)
+    await detail().waitFor({ state: 'visible', timeout: 60_000 })
+    const retrying = await runsStarted(context.page)
+    await chapterView.postProcess(context.page).getByRole('button', { name: '重试失败步骤' }).click()
+    await waitRunDone(context.page, retrying)
+    assert.equal(characterRequests(), 2, '重开后点重试恰好发出一次新请求')
+    await detail().filter({ hasText: '没有返回完整结果' }).waitFor({ state: 'visible', timeout: 60_000 })
+    const secondError = await detail().innerText()
+    for (const error of [firstError, secondError]) assert.doesNotMatch(error, /[A-Z]+_[A-Z_]+/, '失败说明不应是原始错误码')
+    await context.shoot('chapter-retry-stream-failed')
+    const fixing = await runsStarted(context.page)
+    await chapterView.postProcess(context.page).locator('li[data-state="failed"]').getByRole('button', { name: '重试' }).click()
+    await waitRunDone(context.page, fixing)
+    await chapterView.postProcess(context.page).getByText('3 / 3 完成').waitFor({ state: 'visible', timeout: 60_000 })
+    assert.equal(characterRequests(), 3, '第二次重试发出第三次请求并成功')
+    return { firstError, secondError, characterRequests: characterRequests(), steps: await chapterView.postProcessSteps(context.page) }
   } },
 
   /** lane 8：选中一段正文用选区工具条润色，预览后替换；再选一段润色后取消，正文不变。 */

@@ -128,7 +128,7 @@ describe('draft source dependencies', () => {
       content: '不应保存的下游草稿。',
       wordCount: 10,
       sourceDependencies: [{ draftId: sourceId, contentHash: sha256(sourceContent) }],
-    })).toThrow(/来源依赖已变化/u)
+    })).toThrow('GENERATION_DRAFT_DEPENDENCY_STALE')
     expect(DraftRepository.listByChapter(2)).toEqual([])
   })
 
@@ -166,7 +166,7 @@ describe('draft source dependencies', () => {
       content: '不应继承过期前史的第四章。',
       wordCount: 13,
       sourceDependencies: [{ draftId: thirdId, contentHash: sha256(thirdContent) }],
-    })).toThrow(/来源依赖已变化/u)
+    })).toThrow('GENERATION_DRAFT_DEPENDENCY_STALE')
     expect(DraftRepository.listByChapter(4)).toEqual([])
   })
 
@@ -196,7 +196,7 @@ describe('draft source dependencies', () => {
       content: '不应继承环形前史的第三章。',
       wordCount: 13,
       sourceDependencies: [{ draftId: secondId, contentHash: sha256(secondContent) }],
-    })).toThrow(/来源依赖已变化/u)
+    })).toThrow('GENERATION_DRAFT_DEPENDENCY_STALE')
   })
 
   it('historical fixture normalization (not production admission) treats legacy drafts as source-unknown without claiming stale evidence', () => {
@@ -222,6 +222,26 @@ describe('draft source dependencies', () => {
     expect(DraftRepository.getMeta(downstreamId)?.dependenciesStale).toBe(false)
   })
 
+  it('treats a current finalized source as confirmed history even when its own predecessor draft changed later', () => {
+    const firstId = DraftRepository.create({ chapterNumber: 1, source: 'write', content: '第一章原稿。', wordCount: 6 })
+    const secondContent = '第二章原稿。'
+    const secondId = DraftRepository.create({
+      chapterNumber: 2, source: 'write', content: secondContent, wordCount: 6,
+      sourceDependencies: [{ kind: 'candidate', draftId: firstId, contentHash: sha256('第一章原稿。') }],
+    })
+    DraftRepository.updateContent(firstId, '第一章作者改过的稿。', 10)
+    finalize(firstId, 1, '第一章作者改过的稿。', 'finalization-1')
+    finalize(secondId, 2, secondContent, 'finalization-2')
+
+    const thirdId = DraftRepository.create({
+      chapterNumber: 3, source: 'write', content: '第三章正文。', wordCount: 6,
+      sourceDependencies: [finalizedDependency(secondId, 2, secondContent, 'finalization-2')],
+    })
+
+    expect(DraftRepository.getMeta(secondId)?.dependenciesStale).toBe(true)
+    expect(DraftRepository.getMeta(thirdId)?.dependenciesStale).toBe(false)
+  })
+
   it('rejects an in-flight save after the frozen finalized source is replaced with identical prose', () => {
     const content = '不可变的第一章正文。'
     const sourceId = DraftRepository.create({
@@ -241,7 +261,7 @@ describe('draft source dependencies', () => {
       content: '不应落盘的第二章。',
       wordCount: 9,
       sourceDependencies: [dependency],
-    })).toThrow(/不再是当前定稿/u)
+    })).toThrow('GENERATION_DRAFT_DEPENDENCY_STALE')
     expect(DraftRepository.listByChapter(2)).toEqual([])
   })
 
