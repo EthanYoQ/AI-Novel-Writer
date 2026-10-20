@@ -37,7 +37,7 @@
 - 单实例锁：Electron 按 userData 路径加锁。显式设置发生在 `configureSingleInstanceRuntime` 调用 `requestSingleInstanceLock` 之前，路径与旧版一致，新旧版本仍然互斥。
 - `--user-data-dir`：显式参数优先，仍走原来的分支。发布冒烟测试都使用这个参数。
 - 自动更新缓存：electron-updater 使用 `app-update.yml` 里的 `updaterCacheDirName: ai-novel-writer-updater`。这个值由 `package.json` 的 `name` 生成。`.updaterId` 写在 userData 里，路径也不变。
-- Windows AppUserModelID：Electron 默认值是 `electron.app.` 加 `app.name`，仍为 `electron.app.ai-novel-writer`。
+- Windows AppUserModelID：Electron 二进制里的默认格式是 `electron.app.` 加 `app.name`，`app.name` 不变，所以它也不变。启动时是否实际设置了这个值，没有在本机核实。
 
 ### NSIS 升级沿用旧安装目录，不会出现两份安装
 
@@ -63,6 +63,7 @@ exe 和 `.app` 使用中文名已在 1.3.0 及更早版本中经过验证（`AI�
 ## 后果
 
 - 发布、冒烟和验收脚本要同时识别新旧两个名字。凡是可能遇到旧版本的地方（升级测试中的旧 exe、旧卸载程序、进程白名单、NSIS 进程检测命令、上一版便携包）都接受 `书童` 和 `AI小说作家`。只验证本次构建产物的地方要求新名字。名字统一定义在 `scripts/product-identity.mjs`，PowerShell 脚本中的对应列表要与它保持一致。
+- 从 1.3.0 及更早版本升级时，旧的桌面和开始菜单快捷方式会被删掉再新建。曾经手动删掉桌面快捷方式的用户，升级后会重新看到它，仅此一次。
 - 已知影响：用户固定到任务栏的旧图标指向 `AI小说作家.exe`，升级后会失效，需要重新固定。NSIS 无法在不读取 `.lnk` 目标的情况下安全地改写它们。如果用 PowerShell 改写，安装过程会多出发布门禁监控的白名单之外的进程。本次不处理，记为后续事项。
 - 显式运行 `Uninstall 书童.exe --delete-app-data` 时，NSIS 删除 `$APPDATA\ai-novel-writer` 和 `$APPDATA\书童`。改名前删的是 `$APPDATA\ai-novel-writer` 和 `$APPDATA\AI小说作家`，后者本来就不存在，所以实际效果不变。`deleteAppDataOnUninstall` 为 false，普通卸载不删除数据。
 - macOS 默认菜单里的「关于」「退出」等菜单项使用 `app.name`，显示为 `ai-novel-writer`，改名前后都是这样。要让这些菜单项也显示书童，需要自定义应用菜单，不在本次范围内。
