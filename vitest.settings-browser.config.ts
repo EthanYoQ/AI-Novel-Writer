@@ -5,6 +5,9 @@ import { readFileSync } from 'node:fs'
 
 const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 const executablePath = process.env.AI_NOVEL_VITEST_CHROMIUM
+// 浏览器的 navigator.language 固定为中文，不跟运行器系统语言走。设 AI_NOVEL_VITEST_LOCALE=en-US 可在本机复现英文 CI：
+// 此时断言中文文案的用例（包括 runner-locale.browser.tsx）会像英文运行器上那样失败。
+const browserLocale = process.env.AI_NOVEL_VITEST_LOCALE || 'zh-CN'
 
 /**
  * Runs the few settings interactions that need a real browser DOM without
@@ -23,7 +26,7 @@ export default defineConfig({
     ],
     browser: {
       enabled: true,
-      provider: playwright(executablePath ? { launchOptions: { executablePath } } : undefined),
+      provider: playwright({ ...(executablePath ? { launchOptions: { executablePath } } : {}), contextOptions: { locale: browserLocale } }),
       instances: [{ browser: 'chromium' }],
       headless: true,
       fileParallelism: false,

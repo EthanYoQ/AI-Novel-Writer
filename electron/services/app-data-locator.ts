@@ -3,6 +3,13 @@ import path from 'node:path'
 import { STORAGE_ENVIRONMENT } from '../../src/shared/project-storage'
 
 export interface GlobalDataRoots { legacySource: string; canonicalTarget: string; userData: string }
+/**
+ * 设置目录（Electron userData）。打包版一直按 package.json 的 name 落在这里，与 productName 无关；
+ * 显式写死，免得以后改产品名或加 productName 时把老用户切到空目录（ADR-0022）。
+ */
+export function resolveDefaultUserData(appData: string): string {
+  return path.join(appData, 'ai-novel-writer')
+}
 /** Resolving names never creates a directory or reads author configuration. */
 export function resolveGlobalDataRoots(userData: string, appData: string | (() => string), env: Record<string, string | undefined> = process.env, home = os.homedir()): GlobalDataRoots {
   let canonicalTarget = env[STORAGE_ENVIRONMENT.canonicalTarget]?.trim()

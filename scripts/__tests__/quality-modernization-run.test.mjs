@@ -2366,6 +2366,19 @@ function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits
   })
 }
 
+/**
+ * continuityResults 每次都为五个案例重写产物文件、新建 SQLite 评审库，单次约 150 ms（#428 里 C17-B 用例因此建了 28 次）。
+ * 连续用同一参数只落盘一次、之后给深拷贝；参数一变就重建，盘上文件始终属于最近一次构建。
+ */
+function reusingContinuityResults(dir) {
+  let lastKey, last
+  return (options = {}) => {
+    const key = JSON.stringify(options)
+    if (key !== lastKey) [lastKey, last] = [key, continuityResults(dir, options)]
+    return structuredClone(last)
+  }
+}
+
 test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且首稿超上限须可复核', () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/condense-result-test-'))
   try {
@@ -2427,13 +2440,14 @@ test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且�
 
 test('C17-B 重新定稿后处理：notes/cards 绑定替换后的新 finalizationId，attempt 记账含 cards 原生 repair', () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/c17b-post-process-test-'))
+  const build = reusingContinuityResults(dir)
   try {
     const check = (results, expected, message, mode = 'synthetic') => assert.deepEqual(validateCandidateContinuityResults(results, mode), expected, message)
     const failure = code => ({ status: 'failed', candidateFailure: code })
-    check(continuityResults(dir), { status: 'passed' })
-    check(continuityResults(dir, { mode: 'real', proposed: false, authorProtected: false }), { status: 'pending-independent-oracle-review' }, 'real', 'real')
+    check(build(), { status: 'passed' })
+    check(build({ mode: 'real', proposed: false, authorProtected: false }), { status: 'pending-independent-oracle-review' }, 'real', 'real')
     // 案例 operation 与登记不符：C17-B 缺后处理即拒绝。
-    const missing = continuityResults(dir)
+    const missing = build()
     missing[4].operations = missing[4].operations.filter(item => item.kind === 'draft')
     check(missing, failure('CANDIDATE_OPERATION_MISMATCH'))
     // 后处理正式效果缺失、步骤不全，或来源仍是替换前的旧 finalizationId，都失败。
@@ -2455,23 +2469,23 @@ test('C17-B 重新定稿后处理：notes/cards 绑定替换后的新 finalizati
       [evidence => { evidence.cardsReadback.sourceFinalizationId = null }, 'FINALIZATION_SOURCE_NOT_BOUND'],
       [evidence => { delete evidence.source.contentHash }, 'FINALIZATION_SOURCE_NOT_BOUND'],
     ]) {
-      const results = continuityResults(dir)
+      const results = build()
       mutate(results[4].finalizationEvidence)
       check(results, failure(code))
     }
-    const noEvidence = continuityResults(dir)
+    const noEvidence = build()
     delete noEvidence[4].finalizationEvidence
     check(noEvidence, failure('FINALIZATION_EFFECT_MISSING'))
     // 同一规则也约束 C16-C：后处理必须绑定该案重新定稿后的来源。
-    const c16c = continuityResults(dir)
+    const c16c = build()
     c16c[2].sourceReplacement.after = { ...c16c[2].sourceReplacement.after, finalizationId: 'other-finalization' }
     check(c16c, failure('FINALIZATION_SOURCE_NOT_BOUND'))
-    const unreplaced = continuityResults(dir)
+    const unreplaced = build()
     unreplaced[4].restoration.sourceReplacement.before.finalizationId = unreplaced[4].restoration.sourceReplacement.after.finalizationId
     check(unreplaced, failure('FINALIZATION_SOURCE_NOT_BOUND'))
     // cards 原生 repair：同 operation 至多三次、repair 用途序号、只有末次带正式效果、物理计数含 repair。
     const repaired = (count, mode = 'synthetic') => {
-      const results = continuityResults(dir, { mode, proposed: mode === 'synthetic', authorProtected: mode === 'synthetic' })
+      const results = build({ mode, proposed: mode === 'synthetic', authorProtected: mode === 'synthetic' })
       const result = results[4], operation = '恢复副本重新定稿角色状态'
       const base = result.attempts.findIndex(attempt => attempt.binding.operation === operation)
       for (let ordinal = 1; ordinal < count; ordinal++) {
@@ -2506,7 +2520,7 @@ test('C17-B 重新定稿后处理：notes/cards 绑定替换后的新 finalizati
     const uncounted = repaired(2)
     uncounted[4].syntheticDispatches -= 1
     check(uncounted, failure('PHYSICAL_CALL_COUNT_MISMATCH'))
-    const extraNotes = continuityResults(dir)
+    const extraNotes = build()
     const notesAttempt = structuredClone(extraNotes[4].attempts[0])
     notesAttempt.attemptId = 'candidate:4-chapter_notes-extra'; notesAttempt.binding.actual.attemptId = '4-chapter_notes-extra'
     extraNotes[4].attempts.splice(1, 0, notesAttempt)
@@ -2514,7 +2528,7 @@ test('C17-B 重新定稿后处理：notes/cards 绑定替换后的新 finalizati
     extraNotes[4].syntheticDispatches += 1
     check(extraNotes, failure('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'))
     // 后处理 attempt 必须在恢复副本的项目内：派发到原项目即失败。
-    const oldProject = continuityResults(dir)
+    const oldProject = build()
     oldProject[4].attempts[0].binding.actual.projectId = 'project-source'
     check(oldProject, failure('ACTUAL_OWNER_IDENTITY_MISMATCH'))
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
@@ -2591,10 +2605,11 @@ this.restoreGrantIssuer = restoreGrantIssuer`, sandbox)
 
 test('C17-B 替换后前驱：readback 与 parity 记录续写实际纳入的新来源，替换前另存，且与 materialDecision 一致', () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/c17b-predecessor-test-'))
+  const build = reusingContinuityResults(dir)
   try {
     const failure = { status: 'failed', candidateFailure: 'PREDECESSOR_AFTER_REPLACEMENT_MISMATCH' }
     const check = (results, expected, message) => assert.deepEqual(validateCandidateContinuityResults(results, 'synthetic'), expected, message)
-    const passing = continuityResults(dir)
+    const passing = build()
     check(passing, { status: 'passed' })
     const [required] = passing[4].physicalProject.readback.predecessors
     assert.equal(required.sourceId, `finalized:${passing[4].restoration.sourceReplacement.draftId}`)
@@ -2624,17 +2639,17 @@ test('C17-B 替换后前驱：readback 与 parity 记录续写实际纳入的新
       result => { delete draftAttempt(result).optionalMaterialEvidence },
     ]
     for (const [index, mutate] of mutations.entries()) {
-      const results = continuityResults(dir)
+      const results = build()
       mutate(results[4])
       check(results, failure, `mutation ${index}`)
     }
     // 其他恢复案同样要求 readback 必需前驱与续写实际纳入的来源一致。
-    const c18 = continuityResults(dir)
+    const c18 = build()
     c18[5].attempts[0].optionalMaterialEvidence.materialDecision.included = []
     check(c18, failure)
     // 登记的唯一压缩 attempt 也须纳入同一来源。
     const { syntheticDraftText } = syntheticLengthHelpers()
-    const condensed = continuityResults(dir, { condensedIndex: 4, primaryText: syntheticDraftText(countDraftUnits, C17_RANGE.maximum + 60) })
+    const condensed = build({ condensedIndex: 4, primaryText: syntheticDraftText(countDraftUnits, C17_RANGE.maximum + 60) })
     check(condensed, { status: 'passed' })
     condensed[4].attempts.filter(attempt => attempt.binding.actual.purpose.startsWith('chapter-draft')).at(-1).optionalMaterialEvidence.materialDecision.included[0].sourceId = 'finalized:3'
     check(condensed, failure)

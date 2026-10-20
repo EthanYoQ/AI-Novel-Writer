@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { _electron as electron } from 'playwright'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const priorReceiptPath = path.join(repository, '.runtime', '.cache', 'f05-u08-shelf', '6eb816db-a9b0-4b89-af50-0ee934a427dd', 'receipt.json')
@@ -18,7 +19,7 @@ const expectedExe = argument('exe-sha256')
 const expectedAsar = argument('asar-sha256')
 assert(packageDir && packageSourceSha && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
   'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const runId = randomUUID()
 const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u08-shelf', runId, 'receipt.json')

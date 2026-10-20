@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { _electron as electron } from 'playwright'
 import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -14,7 +15,7 @@ const packageDir = option('package-dir') && path.resolve(option('package-dir'))
 const packageBaseSha = option('package-base-sha')
 const expectedExe = option('exe-sha256')
 const expectedAsar = option('asar-sha256')
-const executablePath = path.join(packageDir ?? '', 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir ?? '')
 const asarPath = path.join(packageDir ?? '', 'resources', 'app.asar')
 const appearanceKey = 'ai-novel-writer-appearance-v3'
 const previousAppearanceKey = 'ai-novel-writer-appearance'
