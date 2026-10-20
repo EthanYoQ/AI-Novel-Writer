@@ -44,7 +44,7 @@ export function registerStartupController(options: StartupControllerOptions): vo
     const notice = options.getMigrationNotice?.()
     const appearanceRevisionFloor = acknowledgedRevisions.get(event.sender.id)
     return { state: 'ready', globalGeneration,
-      ...(appearanceRevisionFloor ? { appearanceRevisionFloor } : {}),
+      ...(appearanceRevisionFloor !== undefined ? { appearanceRevisionFloor } : {}),
       ...(notice ? { migrationNotice: { legacySourceIgnored: notice.legacySourceIgnored, preservedUnknownCount: notice.preservedUnknownCount } } : {}) }
   })
   options.ipc.handle('startup:appearance-ack', (event, input) => {

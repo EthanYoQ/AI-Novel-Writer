@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useLocaleStore } from '../../stores/locale-store'
 import { ipc } from '../../services/ipc-client'
-import { useAppearanceStore, type AppearanceBootstrapDependencies } from '../../stores/appearance-bootstrap'
+import { systemColorTheme, useAppearanceStore, type AppearanceBootstrapDependencies } from '../../stores/appearance-bootstrap'
 import type { StartupState, StartupMigrationNotice, StartupBlockedCode } from '../../shared/startup-contract'
-import type { ColorTheme } from '../../shared/appearance-profile'
 import { Button } from '../ui/Button'
 
 const desktopStartup: AppearanceBootstrapDependencies = {
@@ -12,7 +11,6 @@ const desktopStartup: AppearanceBootstrapDependencies = {
 }
 const loadApp = () => import('../../App')
 const MIGRATION_NOTICE_STORAGE_KEY = 'ai-novel-writer-dismissed-migration-generation'
-const systemColorTheme = (): ColorTheme => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 
 /** Business modules are not imported until main and the renderer storage writer acknowledge readiness. */
 export default function RendererStartup({

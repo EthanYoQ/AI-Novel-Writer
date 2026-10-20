@@ -8,6 +8,9 @@ import {
 import { mayHydrateAppearance } from '../shared/project-storage'
 import type { AppearanceReadbackAck, StartupState } from '../shared/startup-contract'
 export type { AppearanceReadbackAck } from '../shared/startup-contract'
+/** 系统当前的深浅色：外观偏好还没读出来（或要新建）时用它。 */
+export const systemColorTheme = (): ColorTheme => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+
 export interface AppearanceBootstrapDependencies {
   /** Main's real startup coordinator. Renderer fallback must never manufacture ready. */
   waitForMainReady(): Promise<StartupState>
@@ -67,7 +70,7 @@ export function createAppearanceStore() {
             if (!mayHydrateAppearance(ready)) throw new AppearanceProfileError('MAIN_NOT_READY')
             storage = (dependencies.storage ?? (() => window.localStorage))()
             const { profile, stored } = readOrMigrate(storage,
-              dependencies.systemTheme ?? (() => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))
+              dependencies.systemTheme ?? systemColorTheme)
             const serialized = stored ?? serializeAppearanceProfile(profile)
             if (stored === null) storage.setItem(APPEARANCE_STORAGE_KEY, serialized)
             if (storage.getItem(APPEARANCE_STORAGE_KEY) !== serialized) throw new AppearanceProfileError('APPEARANCE_READBACK_FAILED')
