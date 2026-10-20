@@ -184,6 +184,15 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
     expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('')
   })
 
+  it('英文界面下主进程拒绝保存文风：报英文说明，不转出主进程的中文原文（#466）', async () => {
+    stubIpcInvoke({ success: false, error: '项目数据库未打开' })
+    const command = new AnalyzeWritingStyleCommand({ sampleTexts: ['短句密集，动作推进快。'] })
+    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue('Tight pacing.')
+
+    await expect(command.execute({ step: {}, context: { ...context, uiLocale: 'en-US' }, callbacks }))
+      .rejects.toThrow(/^Failed to save the writing-style profile\.$/u)
+  })
+
   it('does not apply the persisted result to a newly switched project', async () => {
     let resolveSave: ((value: { success: boolean }) => void) | undefined
     const invoke = vi.fn((channel: string) => {

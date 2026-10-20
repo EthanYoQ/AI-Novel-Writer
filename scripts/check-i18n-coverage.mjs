@@ -17,10 +17,10 @@ const pluralBeforeCount = /\b(?:these|those)\s$/i
 const pluralVerbAfterCount = /^ (?:have|are|were)\b/
 const pluralHint = "Write the noun with pluralEn(count, 'chapter'); pass irregular plurals explicitly, as in pluralEn(count, 'entry', 'entries'). Write a verb that follows the count the same way, as in pluralEn(count, 'has', 'have')."
 /**
- * 英文文案在哪个实参（从 0 数）：(locale, 中文, 英文) 形式的翻译函数与 projectError、artifactError（error, 中文兜底, 英文兜底）
- * 在第 3 个，其余在第 2 个。
+ * 英文文案在哪个实参（从 0 数）：(locale, 中文, 英文) 形式的翻译函数与 projectError、artifactError（error, 中文兜底, 英文兜底）、
+ * workflowUiText（context, 中文, 英文）在第 3 个，其余在第 2 个。
  */
-const englishArgumentIndex = new Map([['localize', 2], ['stepDesc', 2], ['mainText', 2], ['projectError', 2], ['artifactError', 2]])
+const englishArgumentIndex = new Map([['localize', 2], ['stepDesc', 2], ['mainText', 2], ['projectError', 2], ['artifactError', 2], ['workflowUiText', 2]])
 
 /**
  * The broad renderer roots preserve the existing visible-copy check.  The
@@ -42,8 +42,14 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
     // `artifact-open` receives fs:read-file failures through this controller.
     'electron/controllers/fs-controller.ts',
   ],
-  // 工作流命令里 throw new Error(...) 的说明原样进运行卡片的失败说明：不能是只有中文的原文、内部错误码或主进程转来的原文。
+  // 工作流命令里 throw new Error(...) 的说明原样进运行卡片的失败说明：不能是只有中文的原文或主进程转来的原文。
+  // 整串的稳定错误码（GENERATION_DRAFT_RECEIPT_INVALID）不在这里拦：登记过的由失败面板按界面语言解释，
+  // 其余按 src/i18n/__tests__/generation-error-codes.test.ts 的约定原样留给反馈定位。
   workflowCommandErrorBoundaries: [
+    'src/services/workflows/commands',
+  ],
+  // 这些命令连错误码也不能直接抛（#408）：每条失败都要给作者能读的说明。
+  strictWorkflowCommandErrorBoundaries: [
     'src/services/workflows/commands/legacy-character-roster-repair.command.ts',
   ],
 })
@@ -101,6 +107,9 @@ const localizationCallees = new Set([
   'artifactError',
   // Main-process colocated translator.
   'mainText',
+  // 工作流命令按运行上下文里冻结的界面语言选文案；uiText 是命令里绑好上下文的简写。
+  'workflowUiText',
+  'uiText',
 ])
 
 function filesAt(target) {
@@ -459,12 +468,15 @@ function inspectMainReturnErrors(violations, root, file, sourceFile) {
   visit(sourceFile)
 }
 
-function inspectThrownErrors(violations, root, file, sourceFile) {
+const errorCode = /^[A-Z][A-Z0-9_]*$/
+
+function inspectThrownErrors(violations, root, file, sourceFile, allowErrorCodes) {
   const bindings = collectBindings(sourceFile)
   const visit = (node) => {
     const thrown = ts.isThrowStatement(node) && node.expression
-    if (thrown && ts.isNewExpression(thrown) && thrown.expression.getText(sourceFile) === 'Error' && thrown.arguments?.[0]) {
-      inspectBoundaryExpression(violations, root, file, sourceFile, thrown.arguments[0], 'thrown-error', bindings)
+    const message = thrown && ts.isNewExpression(thrown) && thrown.expression.getText(sourceFile) === 'Error' && thrown.arguments?.[0]
+    if (message && !(allowErrorCodes && ts.isStringLiteralLike(message) && errorCode.test(message.text))) {
+      inspectBoundaryExpression(violations, root, file, sourceFile, message, 'thrown-error', bindings)
     }
     ts.forEachChild(node, visit)
   }
@@ -502,11 +514,12 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
     inspectMainReturnErrors(violations, root, file, sourceFile)
   }
-  for (const relative of I18N_COVERAGE_BOUNDARIES.workflowCommandErrorBoundaries) {
-    const file = path.join(root, relative)
-    if (!fs.existsSync(file)) continue
+  for (const file of I18N_COVERAGE_BOUNDARIES.workflowCommandErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative)))) {
+    const relativeFile = relativePath(root, file)
+    if (!file.endsWith('.ts') || relativeFile.split('/').includes('__tests__')) continue
     const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-    inspectThrownErrors(violations, root, file, sourceFile)
+    const allowErrorCodes = !I18N_COVERAGE_BOUNDARIES.strictWorkflowCommandErrorBoundaries.includes(relativeFile)
+    inspectThrownErrors(violations, root, file, sourceFile, allowErrorCodes)
   }
   return violations
 }

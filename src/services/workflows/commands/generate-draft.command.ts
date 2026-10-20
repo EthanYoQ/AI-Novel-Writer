@@ -27,6 +27,7 @@ import {
   requireWorkflowProjectSession,
   workflowUiText,
   workflowWritingLanguage,
+  workflowMainProcessError,
 } from '../workflow-project-session'
 import {
   DIR_PROMPTS
@@ -1003,9 +1004,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
               ? uiText('模型输出被截断', 'the model output was truncated')
               : !outlined.content.trim() ? uiText('模型未返回可见内容', 'the model returned no visible content')
                 : uiText('模型未正常完成输出', 'the model did not complete the output normally')
-            throw new Error(uiText(`短细纲生成失败：${reason}。正文尚未开始。`,
-              `The short chapter outline failed: ${reason}. Drafting has not started.`)
-              + ` (GENERATION_DRAFT_SHORT_OUTLINE_FAILED; status=${outlined.status}; finishReason=${outlined.finishReason})`)
+            const diagnostic = `(GENERATION_DRAFT_SHORT_OUTLINE_FAILED; status=${outlined.status}; finishReason=${outlined.finishReason})`
+            throw new Error(uiText(`短细纲生成失败：${reason}。正文尚未开始。${diagnostic}`,
+              `The short chapter outline failed: ${reason}. Drafting has not started. ${diagnostic}`))
           }
           if (recovery?.draftShortOutline && !shortOutline) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
           const reconciliationBlock = [recordedReconciliation ? draftReconciliationBlock(writingLanguage, recordedReconciliation) : '',
@@ -1226,7 +1227,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       })()
       const nextVersion = createResult.version
       if (!createResult.success || !createResult.id) {
-        throw new Error(('error' in createResult ? String(createResult.error) : '') || uiText('章节草稿保存失败', 'Failed to save the chapter draft.'))
+        throw workflowMainProcessError(context, 'error' in createResult ? createResult.error : undefined, '章节草稿保存失败', 'Failed to save the chapter draft.')
       }
       this.assertNotCancelled(context)
       draftPersisted = true
@@ -1255,7 +1256,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             expectedProjectPath,
           )
           if (!result.success || !result.candidate) {
-            throw new Error(result.error || uiText('未知存储错误', 'Unknown storage error.'))
+            throw workflowMainProcessError(context, result.error, '存储层拒绝写入', 'Storage rejected the write.')
           }
           callbacks.log(uiText(
             '生成未能安全完成；已收到的可见正文已保存为项目恢复候选，未进入草稿库。',
