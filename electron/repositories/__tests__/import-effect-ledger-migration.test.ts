@@ -175,7 +175,7 @@ describe('M04 import effect ledger', () => {
     db.transaction(() => applyM04ImportEffectLedger(db))()
     const execution = ImportRunRepository.startOrResume('unknown-run', 'worker').execution
     expect(() => ImportRunRepository.completeBatch('unknown-run', 'refresh', 'done', execution))
-      .toThrow('导入历史效果状态未知')
+      .toThrow('IMPORT_RUN_EFFECT_HISTORY_UNKNOWN')
     expect(db.prepare("SELECT state,diagnostic_code FROM import_effect_ledger WHERE run_id='unknown-run'").get())
       .toEqual({ state: 'unknown', diagnostic_code: 'LEGACY_CHECKPOINT_WITHOUT_DURABLE_EFFECT' })
   })
@@ -189,7 +189,7 @@ describe('M04 import effect ledger', () => {
     const renewed = ImportRunRepository.renewExecution('heartbeat-run', execution, now + 1_000, 10_000)
     const batchId = createImportRunChapterBatchCheckpointId(request('heartbeat-run').chapters)
     expect(() => ImportRunRepository.completeBatch('heartbeat-run', 'knowledge', batchId, execution))
-      .toThrow('参照知识 receipt 未完成或与冻结章节不匹配')
+      .toThrow('IMPORT_RUN_REFERENCE_RECEIPT_INCOMPLETE')
     expect(renewed).toMatchObject({ owner: execution.owner, epoch: execution.epoch, expiresAt: now + 11_000 })
   })
 })
