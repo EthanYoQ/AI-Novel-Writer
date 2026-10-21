@@ -293,7 +293,9 @@ export const VISUAL_SCENARIOS = {
   } },
 
   // #474 B4：主进程只交错误码（PROJECT_DIRECTORY_EXISTS、PROJECT_DIRECTORY_MISSING），英文界面的报错弹框按码写成英文。
-  'project-errors-en': { model: false, shell: 'stage', run: async ({ app, page, roots, invoke, reload, shoot }) => {
+  'project-errors-en': { model: false, shell: 'stage', run: async context => {
+    const { app, roots, invoke, shoot } = context
+    let { page } = context
     await app.evaluate(({ dialog }, selected) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
     }, roots.projects)
@@ -301,7 +303,7 @@ export const VISUAL_SCENARIOS = {
     await stage.spine(page).waitFor({ state: 'visible' })
     await stage.backToLibrary(page, '雾岛')
     assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
-    await reload()
+    await context.reload()
     await page.getByRole('list', { name: 'Recent books' }).waitFor({ state: 'visible' })
     const alert = page.getByRole('alertdialog')
     const observed = {}
@@ -320,11 +322,18 @@ export const VISUAL_SCENARIOS = {
     await page.keyboard.press('Escape')
     await form.waitFor({ state: 'hidden' })
 
-    // 最近作品的文件夹在应用外被移走，再从书房打开
+    // 最近作品的文件夹在应用外被移走，再从书房打开。冷重启后作品文件不再被占用；驱动的重启按中文书房判断就绪，先切回中文。
+    assert.equal((await invoke(page, 'config:set', { locale: 'zh-CN' })).success, true)
+    await context.restart()
+    page = context.page
     fs.rmSync(path.join(roots.projects, '雾岛'), { recursive: true, force: true })
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await context.reload()
+    await page.getByRole('list', { name: 'Recent books' }).waitFor({ state: 'visible' })
     await stage.openFromLibraryEn(page, '雾岛')
-    await alert.waitFor({ state: 'visible' })
-    observed.missing = await alert.innerText()
+    const missingAlert = page.getByRole('alertdialog')
+    await missingAlert.waitFor({ state: 'visible' })
+    observed.missing = await missingAlert.innerText()
     await settle(page)
     await shoot('project-missing-en')
 
