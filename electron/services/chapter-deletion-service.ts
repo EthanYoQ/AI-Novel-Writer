@@ -28,23 +28,18 @@ const defaultCleaner: ChapterDeletionProjectionCleaner = {
     const result = await knowledgeBaseLoader.run((kb) => kb.removeDocument(documentId, projectRoot))
     if (result !== true) {
       if (result && typeof result === 'object' && 'errorCode' in result) {
-        throw new Error('知识库原生模块不可用')
+        throw new Error('KNOWLEDGE_BASE_NATIVE_UNAVAILABLE')
       }
-      throw new Error('知识库未确认文档已删除')
+      throw new Error('CHAPTER_DELETE_KNOWLEDGE_NOT_REMOVED')
     }
   },
 }
 
+/** 每项投影各自的失败原因留在 operation 的 manuscriptError、knowledgeError 上，由删除清理提示逐项显示。 */
 function operationError(operation: ChapterDeletionOperation): string | undefined {
-  const failures = [
-    operation.manuscriptStatus === 'failed'
-      ? `实体稿清理失败：${operation.manuscriptError || '未知错误'}`
-      : '',
-    operation.knowledgeStatus === 'failed'
-      ? `知识库清理失败：${operation.knowledgeError || '未知错误'}`
-      : '',
-  ].filter(Boolean)
-  return failures.length > 0 ? failures.join('；') : undefined
+  return operation.manuscriptStatus === 'failed' || operation.knowledgeStatus === 'failed'
+    ? 'CHAPTER_DELETE_CLEANUP_INCOMPLETE'
+    : undefined
 }
 
 function legacyKnowledgeAuthorizationRequired(
@@ -54,13 +49,13 @@ function legacyKnowledgeAuthorizationRequired(
     success: false,
     committed: false,
     operation,
-    error: '旧定稿缺少可靠知识文档身份，已保留章节事实和知识库内容；请人工核对后确认没有需要应用自动删除的知识投影',
+    error: 'CHAPTER_DELETE_LEGACY_KNOWLEDGE_CHECK_REQUIRED',
   }
 }
 
 function frozenLegacyOperation(projectRoot: string, operation: ChapterDeletionOperation): ChapterDeletionResult | null {
   if (!readPortableRuntimeFreeze(projectRoot).isFrozen('chapter_deletion_operations', operation.operationId)) return null
-  return { success: false, committed: false, error: '旧项目章节删除操作仅保留为历史，不能在新项目中重试或继续清理' }
+  return { success: false, committed: false, error: 'CHAPTER_DELETE_LEGACY_OPERATION_FROZEN' }
 }
 
 export class ChapterDeletionService {
@@ -79,7 +74,7 @@ export class ChapterDeletionService {
     const existing = ChapterDeletionRepository.getByDraftId(request.draftId)
     if (existing) {
       if (existing.draftId !== request.draftId || existing.chapterNumber !== request.chapterNumber) {
-        return { success: false, committed: false, error: '章节删除请求与已冻结操作身份不匹配' }
+        return { success: false, committed: false, error: 'CHAPTER_DELETE_REQUEST_MISMATCH' }
       }
       const frozen = frozenLegacyOperation(projectRoot, existing)
       if (frozen) return frozen
@@ -126,7 +121,7 @@ export class ChapterDeletionService {
   async retry(projectRoot: string, operationId: string): Promise<ChapterDeletionResult> {
     const operation = ChapterDeletionRepository.get(operationId)
     if (!operation) {
-      return { success: false, committed: false, error: '未找到可重试的章节删除操作' }
+      return { success: false, committed: false, error: 'CHAPTER_DELETE_OPERATION_NOT_FOUND' }
     }
     const frozen = frozenLegacyOperation(projectRoot, operation)
     if (frozen) return frozen
@@ -143,7 +138,7 @@ export class ChapterDeletionService {
 
   private async resume(projectRoot: string, operationId: string): Promise<ChapterDeletionResult> {
     let operation = ChapterDeletionRepository.get(operationId)
-    if (!operation) return { success: false, committed: false, error: '章节删除操作不存在' }
+    if (!operation) return { success: false, committed: false, error: 'CHAPTER_DELETE_OPERATION_NOT_FOUND' }
     const frozen = frozenLegacyOperation(projectRoot, operation)
     if (frozen) return frozen
     if (operation.status === 'completed') {

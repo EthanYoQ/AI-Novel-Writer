@@ -396,6 +396,26 @@ describe('标签与外壳', () => {
     await expect.element(page.getByText('删除正文后的清理没有完成')).not.toBeInTheDocument()
   })
 
+  it.each([
+    ['zh-CN', '删除正文后的清理没有完成', '知识库没有确认这一章的资料已删除。请稍后在这一章的页面里重试清理。', '知识库不可用：Windows 原生组件加载失败。'],
+    ['en-US', 'Cleanup after deleting the manuscript is unfinished', "The knowledge base did not confirm that this chapter's entry was removed.", 'The knowledge base is unavailable because'],
+  ] as const)('删除清理提示把主进程记下的错误码按界面语言说明（%s，#474）', async (locale, title, knowledgeReason, nativeReason) => {
+    useLocaleStore.setState({ locale })
+    backend.state.incompleteDeletions = [
+      { operationId: 'deletion-1', chapterNumber: 3, draftId: 9, chapterTitle: '雨夜车站', status: 'failed',
+        manuscriptStatus: 'failed', manuscriptError: 'EBUSY: resource busy or locked', knowledgeStatus: 'failed', knowledgeError: 'CHAPTER_DELETE_KNOWLEDGE_NOT_REMOVED', legacyKnowledgeAuthorization: 'not-required' },
+      { operationId: 'deletion-2', chapterNumber: 3, draftId: 8, chapterTitle: '雨夜车站', status: 'failed',
+        manuscriptStatus: 'completed', manuscriptError: '', knowledgeStatus: 'failed', knowledgeError: 'KNOWLEDGE_BASE_NATIVE_UNAVAILABLE', legacyKnowledgeAuthorization: 'not-required' },
+    ]
+    await mount()
+    await act(async () => openChapterPlan(3, BLUEPRINT.title, SESSION))
+    await expect.element(page.getByText(title).first()).toBeVisible()
+    await expect.element(page.getByText(knowledgeReason, { exact: false })).toBeVisible()
+    await expect.element(page.getByText('EBUSY: resource busy or locked', { exact: false })).toBeVisible()
+    await expect.element(page.getByText(nativeReason, { exact: false })).toBeVisible()
+    expect(document.body.textContent).not.toMatch(/CHAPTER_DELETE_|KNOWLEDGE_BASE_NATIVE_UNAVAILABLE/u)
+  })
+
   it('删除正文后清理没做完、这一章另有未定稿的稿：那一稿的单章视图也提示并可以重试清理', async () => {
     backend.state.incompleteDeletions = [{ operationId: 'deletion-1', chapterNumber: 3, draftId: 9, chapterTitle: '雨夜车站', status: 'failed',
       manuscriptStatus: 'failed', manuscriptError: '正文文件被占用', knowledgeStatus: 'done', legacyKnowledgeAuthorization: 'not-required' }]

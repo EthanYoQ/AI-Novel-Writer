@@ -1,6 +1,6 @@
 {
   "description": "electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。",
-  "total": 422,
+  "total": 399,
   "files": {
     "electron/controllers/finalization-controller.ts": {
       "registerFinalizationController": 4
@@ -51,15 +51,6 @@
       "MCPManagerImpl.disconnect": 1,
       "MCPManagerImpl.loadConfig": 5,
       "MCPManagerImpl.sendRequest": 1
-    },
-    "electron/repositories/chapter-deletion-repository.ts": {
-      "ChapterDeletionRepository.begin": 2,
-      "ChapterDeletionRepository.confirmLegacyKnowledgeAbsent": 7,
-      "ChapterDeletionRepository.markProjection": 1,
-      "ChapterDeletionRepository.startAttempt": 1,
-      "refreshAggregateStatus": 1,
-      "requireDatabase": 1,
-      "requireFinalizedTarget": 3
     },
     "electron/repositories/consistency-exemption-repository.ts": {
       "ConsistencyExemptionRepository.revoke": 1,
@@ -181,14 +172,6 @@
       "SummaryRepository.readFinalizedSource": 1,
       "SummaryRepository.saveFinalizedCharacterStateCandidates": 5,
       "SummaryRepository.saveFinalizedContinuity": 5
-    },
-    "electron/services/chapter-deletion-service.ts": {
-      "ChapterDeletionService.delete": 1,
-      "ChapterDeletionService.resume": 1,
-      "ChapterDeletionService.retry": 1,
-      "frozenLegacyOperation": 1,
-      "legacyKnowledgeAuthorizationRequired": 1,
-      "removeKnowledgeDocument": 2
     },
     "electron/services/finalization-service.ts": {
       "FinalizationService.finalize": 1,

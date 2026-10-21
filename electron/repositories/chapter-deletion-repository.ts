@@ -40,7 +40,7 @@ interface FinalizedChapterTarget {
 
 function requireDatabase() {
   const db = getProjectDb()
-  if (!db) throw new Error('项目数据库未打开')
+  if (!db) throw new Error('PROJECT_NOT_OPEN')
   return db
 }
 
@@ -72,10 +72,10 @@ function requireFinalizedTarget(
   `).get(draftId) as (Omit<FinalizedChapterTarget, 'finalization_id'> & {
     finalization_id: string | null
   }) | undefined
-  if (!target) throw new Error(`草稿不存在：${draftId}`)
-  if (target.chapter_number !== chapterNumber) throw new Error('草稿与待删除章节身份不匹配')
+  if (!target) throw new Error('DRAFT_NOT_FOUND')
+  if (target.chapter_number !== chapterNumber) throw new Error('CHAPTER_DELETE_TARGET_MISMATCH')
   if (target.status !== 'finalized' || !target.finalization_id) {
-    throw new Error('只有具备定稿提交收据的章节才能通过章节生命周期入口删除')
+    throw new Error('CHAPTER_DELETE_NOT_FINALIZED')
   }
   return target as FinalizedChapterTarget
 }
@@ -156,7 +156,7 @@ function getRow(operationId: string): ChapterDeletionRow | undefined {
 function refreshAggregateStatus(operationId: string): void {
   const db = requireDatabase()
   const row = getRow(operationId)
-  if (!row) throw new Error(`章节删除操作不存在：${operationId}`)
+  if (!row) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
   const finished = (status: ChapterDeletionProjectionStatus) => (
     status === 'completed' || status === 'not_required'
   )
@@ -187,7 +187,7 @@ export class ChapterDeletionRepository {
       `).get(input.draftId) as ChapterDeletionRow | undefined
       if (existing) {
         if (existing.chapter_number !== input.chapterNumber) {
-          throw new Error('章节删除请求与已冻结操作不匹配')
+          throw new Error('CHAPTER_DELETE_REQUEST_MISMATCH')
         }
         return existing.operation_id
       }
@@ -225,7 +225,7 @@ export class ChapterDeletionRepository {
 
     const operationId = transaction()
     const operation = ChapterDeletionRepository.get(operationId)
-    if (!operation) throw new Error(`章节删除操作不存在：${operationId}`)
+    if (!operation) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
     return operation
   }
 
@@ -235,12 +235,12 @@ export class ChapterDeletionRepository {
       const row = db.prepare(`
         SELECT * FROM chapter_deletion_operations WHERE operation_id = ?
       `).get(operationId) as ChapterDeletionRow | undefined
-      if (!row) throw new Error(`章节删除操作不存在：${operationId}`)
+      if (!row) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
       if (
         row.status !== 'authorization_required'
         || row.legacy_knowledge_authorization !== 'required'
       ) {
-        throw new Error('legacy 知识投影人工确认是一次性授权，当前删除收据不允许再次确认')
+        throw new Error('CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED')
       }
 
       const target = requireFinalizedTarget(db, row.draft_id, row.chapter_number)
@@ -250,14 +250,14 @@ export class ChapterDeletionRepository {
         || (target.target_file_name ?? '') !== row.target_file_name
         || (target.knowledge_document_id ?? '') !== ''
       ) {
-        throw new Error('章节事实或定稿收据在人工确认前已变化，已拒绝继续删除')
+        throw new Error('CHAPTER_DELETE_SOURCE_CHANGED')
       }
 
       const frozenRunIds = parsePostProcessRunIds(row.post_process_run_ids)
-      if (!frozenRunIds) throw new Error('删除收据中的后处理身份损坏，已拒绝继续删除')
+      if (!frozenRunIds) throw new Error('CHAPTER_DELETE_RECEIPT_CORRUPT')
       const currentRunIds = listPostProcessRunIds(db, row.chapter_number, row.finalization_id)
       if (JSON.stringify(currentRunIds) !== JSON.stringify(frozenRunIds)) {
-        throw new Error('章节后处理记录在人工确认前已变化，已拒绝继续删除')
+        throw new Error('CHAPTER_DELETE_SOURCE_CHANGED')
       }
 
       const updated = db.prepare(`
@@ -271,7 +271,7 @@ export class ChapterDeletionRepository {
           AND legacy_knowledge_authorization = 'required'
       `).run(operationId)
       if (updated.changes !== 1) {
-        throw new Error('legacy 知识投影人工确认是一次性授权，当前删除收据不允许再次确认')
+        throw new Error('CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED')
       }
       deleteChapterFacts(db, target, frozenRunIds)
       return operationId
@@ -279,7 +279,7 @@ export class ChapterDeletionRepository {
 
     const confirmedOperationId = transaction()
     const operation = ChapterDeletionRepository.get(confirmedOperationId)
-    if (!operation) throw new Error(`章节删除操作不存在：${confirmedOperationId}`)
+    if (!operation) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
     return operation
   }
 
@@ -311,7 +311,7 @@ export class ChapterDeletionRepository {
       SET attempt_count = attempt_count + 1, status = 'pending', updated_at = datetime('now')
       WHERE operation_id = ? AND status != 'authorization_required'
     `).run(operationId)
-    if (result.changes !== 1) throw new Error(`章节删除操作不存在：${operationId}`)
+    if (result.changes !== 1) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
     return ChapterDeletionRepository.get(operationId)!
   }
 
@@ -329,7 +329,7 @@ export class ChapterDeletionRepository {
       SET ${statusColumn} = ?, ${errorColumn} = ?, updated_at = datetime('now')
       WHERE operation_id = ?
     `).run(status, error, operationId)
-    if (result.changes !== 1) throw new Error(`章节删除操作不存在：${operationId}`)
+    if (result.changes !== 1) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
     refreshAggregateStatus(operationId)
     return ChapterDeletionRepository.get(operationId)!
   }

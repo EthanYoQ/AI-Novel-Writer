@@ -71,4 +71,11 @@ export const zhCN = {
   'error.narrativeThreadEvidenceNotInSource': '请粘贴所选定稿章节中实际出现的短原文。',
   'error.draftNotFound': '这份草稿已经不在了（可能已被删除），本次修改没有保存。',
   'error.draftFinalizedReadOnly': '这一章已经定稿，定稿正文是只读的，本次修改没有保存。',
+  'error.chapterDeleteOperationNotFound': '这次删除的记录已经不在了（可能已经完成或被清理），请刷新后再看。',
+  'error.chapterDeleteLegacyConfirmationConsumed': '这次删除的人工核对已经确认过，不能再确认一次。请刷新后查看删除进度。',
+  'error.chapterDeleteSourceChanged': '这一章的正文、定稿记录或后处理记录在你确认前有了变化，已停止删除。请刷新后重新删除。',
+  'error.chapterDeleteKnowledgeNotRemoved': '知识库没有确认这一章的资料已删除。请稍后在这一章的页面里重试清理。',
+  'error.chapterDeleteLegacyKnowledgeCheckRequired': '这份旧定稿缺少可靠的知识库资料身份，章节内容和知识库资料都已保留。请先人工核对知识库，再确认继续删除。',
+  'error.chapterDeleteLegacyOperationFrozen': '这条删除记录来自旧项目，只作历史保留，不能在这个项目里重试或继续清理。',
+  'error.chapterDeleteCleanupIncomplete': '实体稿文件或知识库资料没有清理完',
 } satisfies Record<MessageKey, string>

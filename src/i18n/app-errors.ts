@@ -195,6 +195,15 @@ const ERROR_KEYS = {
   NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE: 'error.narrativeThreadEvidenceNotInSource',
   DRAFT_NOT_FOUND: 'error.draftNotFound',
   DRAFT_FINALIZED_READ_ONLY: 'error.draftFinalizedReadOnly',
+  // 删除已定稿的这一章（#474 B5）：删除与清理重试时作者能照着处理的拒绝原因。
+  CHAPTER_DELETE_OPERATION_NOT_FOUND: 'error.chapterDeleteOperationNotFound',
+  CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED: 'error.chapterDeleteLegacyConfirmationConsumed',
+  CHAPTER_DELETE_SOURCE_CHANGED: 'error.chapterDeleteSourceChanged',
+  CHAPTER_DELETE_KNOWLEDGE_NOT_REMOVED: 'error.chapterDeleteKnowledgeNotRemoved',
+  CHAPTER_DELETE_LEGACY_KNOWLEDGE_CHECK_REQUIRED: 'error.chapterDeleteLegacyKnowledgeCheckRequired',
+  CHAPTER_DELETE_LEGACY_OPERATION_FROZEN: 'error.chapterDeleteLegacyOperationFrozen',
+  // 拼进「正文已删除，但派生投影仍待清理：……」与「重试清理失败」，所以文案不带句末标点；逐项原因在删除清理提示里。
+  CHAPTER_DELETE_CLEANUP_INCOMPLETE: 'error.chapterDeleteCleanupIncomplete',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

@@ -69,6 +69,13 @@ export const enUS = {
   'error.narrativeThreadEvidenceNotInSource': 'Paste a short excerpt that appears in the selected finalized chapter.',
   'error.draftNotFound': 'This draft no longer exists (it may have been deleted), so the change was not saved.',
   'error.draftFinalizedReadOnly': 'This chapter is finalized and its text is read-only, so the change was not saved.',
+  'error.chapterDeleteOperationNotFound': 'The record of this deletion no longer exists (it may have finished or been cleaned up). Refresh to see the current state.',
+  'error.chapterDeleteLegacyConfirmationConsumed': 'The manual check for this deletion was already confirmed and cannot be confirmed again. Refresh to see the deletion progress.',
+  'error.chapterDeleteSourceChanged': "This chapter's text, finalization record, or post-processing record changed before you confirmed, so the deletion stopped. Refresh and delete it again.",
+  'error.chapterDeleteKnowledgeNotRemoved': "The knowledge base did not confirm that this chapter's entry was removed. Retry cleanup on this chapter's page later.",
+  'error.chapterDeleteLegacyKnowledgeCheckRequired': 'This older finalized chapter has no reliable knowledge base identity, so the chapter and its knowledge base entries were kept. Check the knowledge base manually, then confirm to continue the deletion.',
+  'error.chapterDeleteLegacyOperationFrozen': 'This deletion record came from an older project. It is kept only as history and cannot be retried or continued in this project.',
+  'error.chapterDeleteCleanupIncomplete': 'The manuscript file or knowledge base entry was not cleaned up',
 } as const
 
 export type MessageKey = keyof typeof enUS

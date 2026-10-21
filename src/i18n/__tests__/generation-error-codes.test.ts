@@ -17,6 +17,9 @@ import { knownAppErrorMessage } from '../app-errors'
  * 角色名单、蓝图与剧情资料（#474 B2）的码经 db 通道的 { error: String(err) } 或 IPC 异常到角色页、蓝图与剧情页；
  * CHARACTER_ROSTER_* 还会经生成 IPC 原样转给工作流失败面板（generation-controller 放行 CHARACTER_ 前缀）。
  *
+ * 定稿、实体稿、修订、恢复稿、摘要与章节删除（#474 B5）的码经 finalization:*、chapter:* 与 db 通道的 { error } 到定稿运行卡片、
+ * 删除提示、修订合并与恢复列表；摘要与角色状态的校验还经生成 IPC，在那里统一成 GENERATION_REQUEST_FAILED。
+ *
  * 其余前缀（备份与迁移、安全文件系统、头像与图片、EPUB 导入、外观、编辑器等）不在这里：
  * 它们不经生成 IPC，由各自的主进程控制器或页面按自己的映射说明，逐族审显示面随主进程批次处理。
  */
@@ -69,6 +72,8 @@ const COVERED_PREFIXES = [
   'NARRATIVE_THREAD_',
   'DRAFT_',
   'IMPORT_RUN_',
+  // 定稿、实体稿、修订、恢复稿、连续性摘要、一致性豁免、后处理与章节删除（#474 B5）。
+  'CHAPTER_DELETE_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
@@ -496,6 +501,11 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'DRAFT_MAIN_GENERATION_REQUEST_REQUIRED',
     'DRAFT_TARGET_UNITS_INVALID',
     'IMPORT_RUN_CHECKPOINT_STAGE_INVALID',
+    // #474 B5：删除请求与冻结删除收据、待删章节与定稿收据的一致性。界面只对列表里已定稿的这一章发起删除。
+    'CHAPTER_DELETE_NOT_FINALIZED',
+    'CHAPTER_DELETE_RECEIPT_CORRUPT',
+    'CHAPTER_DELETE_REQUEST_MISMATCH',
+    'CHAPTER_DELETE_TARGET_MISMATCH',
   ],
   // 模型输出不合角色提议或定稿角色状态的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住；
   // 定稿后处理把码记在步骤上并原样显示，供反馈定位。没有现成文案能告诉作者除重试以外还能做什么。

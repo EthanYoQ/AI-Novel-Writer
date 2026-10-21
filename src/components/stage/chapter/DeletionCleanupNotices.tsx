@@ -1,3 +1,4 @@
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useIncompleteDeletions } from '../../panels/sidebar/use-incomplete-deletions'
 import { Button } from '../../ui/Button'
@@ -9,6 +10,7 @@ import { Notice } from '../../ui/Notice'
  */
 export default function DeletionCleanupNotices({ projectKey, chapterNumber }: { projectKey: string; chapterNumber: number }) {
   const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
   const deletions = useIncompleteDeletions(projectKey)
   return deletions.operations.filter(operation => operation.chapterNumber === chapterNumber).map(operation => {
     const manual = operation.legacyKnowledgeAuthorization === 'required'
@@ -23,7 +25,9 @@ export default function DeletionCleanupNotices({ projectKey, chapterNumber }: { 
           </Button>
         )}
       >
-        {[operation.manuscriptStatus === 'failed' ? operation.manuscriptError : '', operation.knowledgeStatus === 'failed' ? operation.knowledgeError : ''].filter(Boolean).join('；') || null}
+        {/* 主进程记下的是错误码或原始系统报错；旧版本记下的中文原文原样显示。 */}
+        {[operation.manuscriptStatus === 'failed' ? operation.manuscriptError : '', operation.knowledgeStatus === 'failed' ? operation.knowledgeError : '']
+          .filter(Boolean).map(reason => displayedErrorMessage(locale, reason)).join(text('；', '; ')) || null}
       </Notice>
     )
   })
