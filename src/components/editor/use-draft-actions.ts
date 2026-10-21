@@ -171,7 +171,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     setSaveOutcome('idle')
     try {
       const resource = parseResourceUri(filePath)
-      if (!resourceWriteAllowed(filePath) || resource?.kind !== 'draft') throw new Error('资源只读或无效')
+      if (!resourceWriteAllowed(filePath) || resource?.kind !== 'draft') throw new Error(text('资源只读或无效', 'This resource is read-only or invalid.'))
       const result = await ipc.invokeWithProjectSession(
         projectSession,
         'db:draft-update-content',

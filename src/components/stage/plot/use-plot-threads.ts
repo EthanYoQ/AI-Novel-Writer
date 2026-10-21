@@ -482,7 +482,10 @@ export function usePlotThreads(projectKey: string, {
       if (!plotTreeGenerator) {
         const { value } = await startGraph({ kind: 'plot' }, frozenModelId)
         if (value.result?.kind !== 'plot') throw new Error('GRAPH_GENERATION_KIND_MISMATCH')
-        if (value.sourceStatus !== 'current') throw new Error('剧情资料在生成期间已更新，本次结果未保存，请重新生成。')
+        if (value.sourceStatus !== 'current') throw new Error(uiText(
+          '剧情资料在生成期间已更新，本次结果未保存，请重新生成。',
+          'Plot sources changed during generation. This result was not saved; generate it again.',
+        ))
         const effect = await confirmGraph(0, value.view.handle)
         if (effect.kind === 'plot' && isProjectSessionCurrent(session)) setPlotSources(previous => previous ? { ...previous, snapshot: effect.snapshot } : previous)
         return
@@ -505,7 +508,7 @@ export function usePlotThreads(projectKey: string, {
         )
       } catch {
         failureCode = 'save_failed'
-        throw new Error('剧情树快照保存失败')
+        throw new Error(uiText('剧情树快照保存失败', 'Could not save the plot-tree snapshot.'))
       }
       if (!isProjectSessionCurrent(session) || controller.signal.aborted) return
       const savedSnapshot = saved.snapshot
@@ -521,7 +524,7 @@ export function usePlotThreads(projectKey: string, {
               '剧情资料在生成期间已更新，本次结果未保存，请重新生成。',
               'Plot sources changed during generation. This result was not saved; generate it again.',
             )
-          : '剧情树快照保存失败')
+          : uiText('剧情树快照保存失败', 'Could not save the plot-tree snapshot.'))
       }
       setPlotSources(previous => previous ? { ...previous, snapshot: savedSnapshot } : previous)
     } catch (error) {

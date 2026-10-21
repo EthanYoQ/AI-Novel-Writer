@@ -54,6 +54,12 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
   workflowErrorBoundaries: [
     'src/services/workflows',
   ],
+  // 工作流目录以外的渲染层文件（含与主进程共用的 src/shared）抛出的说明会经各处 catch 显示给作者（#474）：
+  // 同样不能写只有中文的原文。纯内部断言或只进日志的，在 throw 所在行或上一行写 `// i18n-exempt: <理由>`。
+  rendererThrowErrorBoundaries: [
+    'src/App.tsx',
+    'src/components',
+  ],
   // 这些命令连错误码也不能直接抛（#408）：每条失败都要给作者能读的说明。
   strictWorkflowCommandErrorBoundaries: [
     'src/services/workflows/commands/legacy-character-roster-repair.command.ts',
@@ -478,6 +484,22 @@ function inspectMainReturnErrors(violations, root, file, sourceFile) {
 }
 
 const errorCode = /^[A-Z][A-Z0-9_]*$/
+const exemptDirective = /\/\/\s*i18n-exempt:(.*)$/u
+
+/**
+ * throw 所在行行尾、或紧挨着的上一行（整行注释）的 `// i18n-exempt: <理由>`。
+ * 理由是空的也算违规：豁免必须说得出为什么作者看不到。
+ */
+function exemption(sourceFile, node) {
+  const lines = sourceFile.getFullText().split(/\r?\n/u)
+  const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line
+  const above = lines[line - 1]?.trimStart().startsWith('//') ? lines[line - 1] : undefined
+  for (const text of [lines[line], above]) {
+    const match = text && exemptDirective.exec(text)
+    if (match) return match[1].trim() ? 'exempt' : 'missing-reason'
+  }
+  return undefined
+}
 
 /** mode：'command' 拦一切未翻译的文字与转出的原文；'chinese' 只拦翻译函数以外的汉字。 */
 function inspectThrownErrors(violations, root, file, sourceFile, mode, allowErrorCodes) {
@@ -485,7 +507,12 @@ function inspectThrownErrors(violations, root, file, sourceFile, mode, allowErro
   const visit = (node) => {
     const thrown = ts.isThrowStatement(node) && node.expression
     const message = thrown && ts.isNewExpression(thrown) && thrown.expression.getText(sourceFile) === 'Error' && thrown.arguments?.[0]
-    if (message && mode === 'chinese') {
+    const exempt = message && exemption(sourceFile, node)
+    if (exempt === 'missing-reason') {
+      add(violations, root, file, sourceFile, node, message.getText(sourceFile), 'exempt-without-reason')
+    } else if (exempt) {
+      // 写明理由的豁免：作者看不到这条说明。
+    } else if (message && mode === 'chinese') {
       inspectVisibleExpression(violations, root, file, sourceFile, message, 'thrown-error')
     } else if (message && !(allowErrorCodes && ts.isStringLiteralLike(message) && errorCode.test(message.text))) {
       inspectBoundaryExpression(violations, root, file, sourceFile, message, 'thrown-error', bindings)
@@ -534,6 +561,14 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
     const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
     const allowErrorCodes = !I18N_COVERAGE_BOUNDARIES.strictWorkflowCommandErrorBoundaries.includes(relativeFile)
     inspectThrownErrors(violations, root, file, sourceFile, commandFiles.has(file) ? 'command' : 'chinese', allowErrorCodes)
+  }
+  const rendererThrowFiles = new Set(I18N_COVERAGE_BOUNDARIES.rendererThrowErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative))))
+  for (const file of rendererThrowFiles) {
+    if (workflowFiles.has(file) || !/\.tsx?$/u.test(file) || file.endsWith('.d.ts')) continue
+    if (relativePath(root, file).split('/').includes('__tests__')) continue
+    const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true,
+      file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+    inspectThrownErrors(violations, root, file, sourceFile, 'chinese', true)
   }
   return violations
 }
