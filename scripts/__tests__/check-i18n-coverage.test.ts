@@ -457,6 +457,45 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
+  it('rejects English-only errors thrown under the workflows directory, except codes, exemptions and files still pending in #475 (#474)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-workflow-english-'))
+    try {
+      writeFixture(root, 'src/services/workflows/import-run-orchestrator.ts', `
+        declare function localize(locale: string, zh: string, en: string): string
+        export function run(result: { error?: string }, locale: string, chapter: number, step: number) {
+          if (step === 1) throw new Error('Import cancelled at a safe boundary.')
+          if (step === 2) throw new Error(\`The receipt is missing Chapter \${chapter}.\`)
+          if (step === 3) throw new Error(result.error || 'Could not save the import checkpoint.')
+          if (step === 4) throw new Error(locale === 'en-US' ? 'Not ready.' : 'Still not ready.')
+          if (step === 5) throw new Error(localize(locale, '导入已取消', 'Import cancelled.'))
+          if (step === 6) throw new Error(result.error || localize(locale, '保存失败', 'Could not save.'))
+          if (step === 7) throw new Error(\`\${chapter}\`)
+          // i18n-exempt: 接线错误，作者到不了
+          if (step === 8) throw new Error('Dependency is unavailable.')
+          throw new Error('IMPORT_RUN_RECEIPT_CORRUPT')
+        }
+      `)
+      writeFixture(root, 'src/services/workflows/import-workflow.ts', `
+        export function run() {
+          throw new Error('Committed import effect receipt does not match durable storage.')
+        }
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      const lines = result.output.split(/\r?\n/).filter(line => line.includes('[thrown-error]'))
+      expect(lines.map(line => line.replace(/^.*?:(\d+) \[thrown-error\] /u, '$1 '))).toEqual([
+        "4 'Import cancelled at a safe boundary.'",
+        '5 `The receipt is missing Chapter ${chapter}.`',
+        "6 result.error || 'Could not save the import checkpoint.'",
+        "7 locale === 'en-US' ? 'Not ready.' : 'Still not ready.'",
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects Chinese-only errors thrown in renderer files outside the workflows directory unless a reasoned exemption sits beside them (#474)', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-renderer-errors-'))
     try {
