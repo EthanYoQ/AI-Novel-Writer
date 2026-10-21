@@ -279,6 +279,34 @@ describe('运行侧页', () => {
     expect(button('继续此批次')?.disabled).toBe(false)
   })
 
+  it('审稿候选：卡片显示审稿结论与要点而不是原始 JSON，复制拿到原文', async () => {
+    const reviewRun = { projectId: session.projectId, epoch: '旧会话', rootActionId: '审稿根', runId: '审稿' }
+    const report = JSON.stringify({ summary: '时间线需要核对。', items: [
+      { category: '连续性', severity: 'warning', description: '核对钟声提前一刻与潮位的关系。', quote: '昨夜的钟声比往常早了一刻' },
+    ], goalReviews: [] })
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list') return [{ handle: reviewRun, status: 'completed', artifacts: [{ ...reviewRun, artifactId: '报告', attemptId: '报告-请求', text: report, status: 'completed' }] }]
+      if (channel === 'generation:read-context') return { handle: reviewRun, operation: 'review-chapter' }
+      if (channel === 'review-revision:read-recovery') return { handle: reviewRun, modelId: '原模型', sourceStatus: 'current', canResume: true,
+        saved: { success: true, kind: 'review', id: 1 }, attemptedPurposes: ['review-chapter'], context: { operation: 'review-chapter', source: { chapterNumber: 3 } } }
+      return fallback(channel, ...args)
+    })
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    await render()
+    const card = await vi.waitFor(() => {
+      const found = [...host!.querySelectorAll('article')].find(article => article.textContent?.includes('第3章审稿候选'))
+      expect(found).toBeTruthy()
+      return found!
+    })
+    expect(card.textContent).toContain('时间线需要核对。')
+    expect(card.textContent).toContain('核对钟声提前一刻与潮位的关系。')
+    expect(card.textContent).not.toContain('"summary"')
+
+    await click('复制')
+    expect(writeText).toHaveBeenCalledWith(report)
+  })
+
   it('来源变了以后，已原样写进正式大纲的一批不列为可恢复，只列没保存的那批', async () => {
     const outlineRun = (runId: string, from: number, to: number, inFormalOutline: boolean) => {
       const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: `${runId}根`, runId }

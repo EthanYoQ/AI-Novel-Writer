@@ -59,8 +59,8 @@ function RecoveryCard({ entry, recovery, text }: { entry: RecoveryEntry; recover
         <RecoveryShell title={entry.title} text={text} notes={[entry.usage, ...entry.notes]}
           budget={<GenerationBudgetDiagnostics diagnostics={entry.budget} locale={locale} />}
           actions={<Button variant="secondary" size="sm" disabled={busy || !entry.canAct} onClick={() => recovery.resumeReview(entry)}>{entry.actionLabel}</Button>}>
-          {entry.artifacts.map(item => <Excerpt key={item.id} text={item.text} copyLabel={entry.labels.copy} onCopy={() => recovery.copy(item.text)} />)}
-          {entry.tails.map(item => <Excerpt key={item.id} text={item.text} copyLabel={entry.labels.copyTail} onCopy={() => recovery.copy(item.text)} />)}
+          {entry.artifacts.map(item => <Excerpt key={item.id} text={item.display} copyLabel={entry.labels.copy} onCopy={() => recovery.copy(item.text)} />)}
+          {entry.tails.map(item => <Excerpt key={item.id} text={item.display} copyLabel={entry.labels.copyTail} onCopy={() => recovery.copy(item.text)} />)}
         </RecoveryShell>
       )
     case 'batch':
