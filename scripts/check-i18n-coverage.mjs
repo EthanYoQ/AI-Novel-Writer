@@ -531,7 +531,7 @@ function exemption(sourceFile, node) {
 /** 显示处：通知与提示框、报错状态的 setter、store 的 set({ error })。 */
 const errorDisplayCalls = new Set(['alertError', 'confirm', 'addLog', 'toast.error', 'toast.warning', 'toast.success', 'toast.info'])
 const errorStateSetter = /^set\w*(?:Error|Message|Warning|Notice|Failure|Reason)$/u
-const errorStateKey = /error|message|warning|reason|notice/iu
+const errorStateKey = /error|message|warning|reason|notice|^text$/iu
 /** 第一个实参是界面语言、其余实参里拼着原因的翻译函数。 */
 const textCallees = new Set(['text', 'localize', 'translate', 'workflowUiText', 'uiText', 'localeText', 'textForLocale', 'agentToolText'])
 

@@ -2315,11 +2315,11 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
         )
       } catch (rollbackError) {
         // 只有回滚也失败时才拼成一句；单独的 commitError 原样抛出，由失败面板按码说明。
-        const committed = displayedErrorMessage(context.uiLocale, commitError)
+        const commitDetail = displayedErrorMessage(context.uiLocale, commitError)
         const detail = displayedErrorMessage(context.uiLocale, rollbackError)
         throw new Error(text(
-          `${committed} 同时无法安全恢复旧检查点：${detail}`,
-          `${committed} The previous checkpoint also could not be restored safely: ${detail}`,
+          `${commitDetail} 同时无法安全恢复旧检查点：${detail}`,
+          `${commitDetail} The previous checkpoint also could not be restored safely: ${detail}`,
         ))
       }
       throw new Error(commitError)

@@ -686,9 +686,8 @@ export function useReviewChecklist({
       return null
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return null
-      return error instanceof Error
-        ? error.message
-        : text('启动审稿修稿时发生错误。', 'An error occurred while starting the review-driven revision.')
+      return displayedErrorMessage(useLocaleStore.getState().locale, error,
+        text('启动审稿修稿时发生错误。', 'An error occurred while starting the review-driven revision.'))
     } finally {
       if (isProjectSessionCurrent(projectSession)) setProcessing(false)
     }
@@ -759,8 +758,8 @@ export function useReviewChecklist({
       ))
       setRecheckMessage({ kind: 'success', text: text('合并后复验已完成。', 'The post-merge recheck is complete.') })
     } catch (error) {
-      if (isProjectSessionCurrent(projectSession)) setRecheckMessage({ kind: 'error', text: error instanceof Error
-        ? error.message : text('启动合并后复验时发生错误。', 'An error occurred while starting the post-merge recheck.') })
+      if (isProjectSessionCurrent(projectSession)) setRecheckMessage({ kind: 'error', text: displayedErrorMessage(useLocaleStore.getState().locale, error,
+        text('启动合并后复验时发生错误。', 'An error occurred while starting the post-merge recheck.')) })
     } finally {
       if (isProjectSessionCurrent(projectSession)) setRechecking(false)
     }
