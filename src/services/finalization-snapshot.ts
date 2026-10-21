@@ -4,6 +4,7 @@ import {
   sameProjectSessionContext,
 } from '../shared/project-session-context'
 import type { EditorTab } from '../stores/editor-store'
+import { useLocaleStore } from '../stores/locale-store'
 
 export type FinalizationPublicationStatus = 'pending' | 'published'
 
@@ -44,13 +45,13 @@ export function captureFinalizationSnapshot(input: {
 }): FinalizationSnapshot {
   const { tab, projectSession, chapterTitle } = input
   if (!tab.projectKey || !sameProjectPathKey(tab.projectKey, projectSession.projectPath)) {
-    throw new Error('定稿目标不属于当前项目会话')
+    throw new Error(useLocaleStore.getState().text('定稿目标不属于当前项目会话', 'This chapter does not belong to the open book session.'))
   }
   if (!Number.isInteger(tab.draftId) || tab.draftId === undefined) {
-    throw new Error('定稿目标缺少草稿身份')
+    throw new Error(useLocaleStore.getState().text('定稿目标缺少草稿身份', 'This chapter tab is not linked to a saved draft.'))
   }
   if (!Number.isInteger(tab.chapterNumber) || tab.chapterNumber === undefined) {
-    throw new Error('定稿目标缺少章节身份')
+    throw new Error(useLocaleStore.getState().text('定稿目标缺少章节身份', 'This chapter tab has no chapter number.'))
   }
 
   const frozenSession = Object.freeze({ ...projectSession })

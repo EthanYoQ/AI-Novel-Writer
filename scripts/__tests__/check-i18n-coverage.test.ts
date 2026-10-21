@@ -457,6 +457,55 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
+  it('rejects Chinese-only errors thrown in renderer files outside the workflows directory unless a reasoned exemption sits beside them (#474)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-renderer-errors-'))
+    try {
+      writeFixture(root, 'src/components/stage/use-thing.ts', `
+        declare function text(zh: string, en: string): string
+        export function run(step: number) {
+          if (step === 1) throw new Error('剧情树快照保存失败')
+          if (step === 2) throw new Error(text('剧情树快照保存失败', 'Could not save the plot tree.'))
+          if (step === 3) throw new Error('PLOT_TREE_SNAPSHOT_FAILED')
+          // i18n-exempt: 只在开发构建的懒加载装配里抛出，作者看不到
+          if (step === 4) throw new Error('页面代码块没有默认导出')
+          if (step === 5) throw new Error('资源只读') // i18n-exempt:
+          if (step === 6) return Promise.reject(new Error('角色数据仍在切换项目'))
+          throw new Error('Only English')
+        }
+      `)
+      writeFixture(root, 'src/shared/plot-tree.ts', `
+        /** 校验快照。 */
+        // i18n-exempt: 只在主进程校验，失败在 IPC 边界换成错误码
+        export function assertSnapshot(value: unknown) {
+          if (!value) throw new Error('剧情树快照无效')
+          return () => { throw new Error('剧情树轨道无效') }
+        }
+        export const assertTrack = (value: unknown) => {
+          if (!value) throw new Error('剧情树事件无效')
+        }
+      `)
+      for (const name of ['use-thing.test.ts', 'use-thing.spec.tsx', 'use-thing.browser.tsx', 'Thing.stories.tsx']) {
+        writeFixture(root, `src/components/stage/${name}`, "throw new Error('测试文件名的中文不进界面')")
+      }
+      writeFixture(root, 'src/components/stage/__tests__/use-thing.test.ts', `
+        throw new Error('测试里的中文不进界面')
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      const lines = result.output.split(/\r?\n/).filter(line => /\[(?:thrown-error|exempt-without-reason)\]/u.test(line))
+      expect(lines).toEqual([
+        "src/components/stage/use-thing.ts:4 [thrown-error] '剧情树快照保存失败'",
+        "src/components/stage/use-thing.ts:9 [exempt-without-reason] '资源只读'",
+        "src/components/stage/use-thing.ts:10 [thrown-error] '角色数据仍在切换项目'",
+        "src/shared/plot-tree.ts:9 [thrown-error] '剧情树事件无效'",
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('permits localized boundary copy while ignoring prompts, parsers, and internal logs', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-policy-'))
     try {

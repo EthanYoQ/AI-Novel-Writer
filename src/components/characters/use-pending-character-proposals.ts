@@ -4,7 +4,12 @@ import { createCharacterProposalChoices, type CharacterProposalChoices } from '.
 import type { CharacterProposalBatch, PendingFinalizedCharacterProposalSummary } from '../../shared/character-proposal'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { useCharacterStore } from '../../stores/character-store'
+import { useLocaleStore } from '../../stores/locale-store'
+import { appErrorMessage } from '../../i18n/app-errors'
 import { isProjectSessionCurrent } from '../project-session-gate'
+
+/** 主进程只回错误码（经 Electron 加上通道前缀）：按界面语言说明，不把原码给作者看。 */
+const failureText = (cause: unknown) => appErrorMessage(useLocaleStore.getState().locale, cause)
 
 /** 定稿或导入产生的待处理角色决策：列出、检查、接受、拒绝。 */
 export function usePendingCharacterProposals(session: ProjectSessionContext) {
@@ -27,7 +32,7 @@ export function usePendingCharacterProposals(session: ProjectSessionContext) {
       setSummaries(pending)
       setError(failure)
     } catch (cause) {
-      if (isProjectSessionCurrent(session)) setError(cause instanceof Error ? cause.message : String(cause))
+      if (isProjectSessionCurrent(session)) setError(failureText(cause))
     }
   }, [session])
 
@@ -44,7 +49,7 @@ export function usePendingCharacterProposals(session: ProjectSessionContext) {
       if (!isProjectSessionCurrent(session)) return
       setBatch(next); setChoices(createCharacterProposalChoices(next))
     } catch (cause) {
-      if (isProjectSessionCurrent(session)) setError(cause instanceof Error ? cause.message : String(cause))
+      if (isProjectSessionCurrent(session)) setError(failureText(cause))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }
@@ -69,7 +74,7 @@ export function usePendingCharacterProposals(session: ProjectSessionContext) {
     } catch (cause) {
       if (!isProjectSessionCurrent(session)) return
       setBatch(null); setChoices(null)
-      await loadSummaries(cause instanceof Error ? cause.message : String(cause))
+      await loadSummaries(failureText(cause))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }

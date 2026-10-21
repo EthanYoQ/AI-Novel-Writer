@@ -124,8 +124,10 @@ export default function App() {
     void ipc.invoke('project:smoke-open-request').then(async (request) => {
       if (!request) return
       const opened = await useProjectStore.getState().openProject(request.projectPath)
+      // i18n-exempt: 烟测打开只在测试驱动发起，失败只进控制台日志
       if (!opened) throw new Error('烟测项目打开失败')
       const confirmed = await ipc.invoke('project:smoke-open-confirm', request.projectPath)
+      // i18n-exempt: 同上，只进控制台日志
       if (!confirmed.success) throw new Error(confirmed.error || '烟测项目确认失败')
     }).catch(error => console.error('[SmokeProjectOpen]', error))
   }, [])

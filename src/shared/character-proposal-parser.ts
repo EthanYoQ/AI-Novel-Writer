@@ -125,6 +125,7 @@ function findCompleteJsonObjectEnd(source: string, start: number): number | unde
 }
 
 /** Review generation skips whole arrays instead of selecting their inner objects; character defaults stay unchanged. */
+// i18n-exempt: 调用方 catch 后改走重建或给出按语言的说明，不显示这条原文
 export function extractSingleCompleteJsonObject(content: string, excludeArrayRoots = false): string {
   const source = stripThinkingTags(content).trim()
   const candidates: string[] = []
@@ -154,6 +155,7 @@ export function extractSingleCompleteJsonObject(content: string, excludeArrayRoo
   throw new Error('AI 返回未包含一个完整 JSON 对象')
 }
 
+// i18n-exempt: architecture.command 在调用处按界面语言包装：英文界面只给英文概要，中文界面附这条细节
 export function decodeCharacterIdentityManifest(content: string): CharacterIdentitySlot[] {
   const parsed = JSON.parse(extractSingleCompleteJsonObject(content)) as { slots?: unknown }
   if (!Array.isArray(parsed.slots)) throw new Error('角色身份清单缺少 slots')
@@ -356,6 +358,7 @@ export function parseMaterialExtraction(content: string): MaterialExtraction[] {
 }
 
 
+// i18n-exempt: 调用方 catch 后改走重建或给出按语言的说明，不显示这条原文
 export function decodeCharacterDetails(content: string, version: ArchitectureDerivationVersion = 2): CharacterDetailOutput[] {
   const parsed = JSON.parse(extractSingleCompleteJsonObject(content)) as { entries?: unknown }
   if (!Array.isArray(parsed.entries)) throw new Error('角色详情响应缺少 entries')

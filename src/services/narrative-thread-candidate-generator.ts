@@ -38,6 +38,7 @@ export function createNarrativeThreadCandidateGenerator(
       try {
         const outcome = await runtime.execute(({ session }) => session.complete(buildNarrativeThreadPlanTask(input), { signal: input.signal }))
         if (outcome.status !== 'completed' || outcome.finishReason !== 'stop') {
+          // i18n-exempt: 只有测试注入 dependencies 时走这条路径；正式路径由主进程图谱生成
           throw new Error(promptLanguageText(
             input.writingLanguage,
             '叙事线索计划候选生成未完整完成',
@@ -45,6 +46,7 @@ export function createNarrativeThreadCandidateGenerator(
           ))
         }
         const candidates = parseNarrativeThreadPlanCandidates(outcome.content, input.totalChapters)
+        // i18n-exempt: 只有测试注入 dependencies 时走这条路径；正式路径由主进程图谱生成
         if (candidates.length === 0) throw new Error(promptLanguageText(
           input.writingLanguage,
           '模型未返回有效的叙事线索计划候选',
@@ -70,6 +72,7 @@ export function createNarrativeThreadCandidateGenerator(
       try {
         const outcome = await runtime.execute(({ session }) => session.complete(buildNarrativeThreadEventTask(input), { signal: input.signal }))
         if (outcome.status !== 'completed' || outcome.finishReason !== 'stop') {
+          // i18n-exempt: 只有测试注入 dependencies 时走这条路径；正式路径由主进程图谱生成
           throw new Error(promptLanguageText(
             input.writingLanguage,
             '叙事线索事件候选生成未完整完成',
@@ -77,6 +80,7 @@ export function createNarrativeThreadCandidateGenerator(
           ))
         }
         const candidates = parseNarrativeThreadEventCandidates(outcome.content, input.finalizedContent)
+        // i18n-exempt: 只有测试注入 dependencies 时走这条路径；正式路径由主进程图谱生成
         if (candidates.length === 0) throw new Error(promptLanguageText(
           input.writingLanguage,
           '模型未返回带有效定稿证据的事件候选',

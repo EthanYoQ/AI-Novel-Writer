@@ -100,3 +100,9 @@ it.each([
   expect(knownAppErrorMessage('zh-CN', wrapped)).toBe(knownAppErrorMessage('zh-CN', 'GENERATION_SOURCE_CHANGED'))
   expect(knownAppErrorMessage('en-US', wrapped)).toBe(knownAppErrorMessage('en-US', 'GENERATION_SOURCE_CHANGED'))
 })
+
+// 名单版本冲突与角色不存在既来自批准角色提议，也来自普通的角色卡保存：说明不能只指向提议（#474 审计）。
+it.each(['CHARACTER_ID_REVISION_CONFLICT', 'CHARACTER_ID_UNKNOWN'])('explains %s without assuming a proposal is open', code => {
+  expect(knownAppErrorMessage('en-US', code)).not.toMatch(/proposal/iu)
+  expect(knownAppErrorMessage('zh-CN', code)).not.toContain('提议')
+})

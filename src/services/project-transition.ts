@@ -1,4 +1,5 @@
 import { sameProjectPathKey } from '../shared/project-session-context'
+import { useLocaleStore } from '../stores/locale-store'
 
 export interface ProjectTransitionDraft {
   projectKey: string
@@ -58,7 +59,7 @@ export async function saveProjectTransitionDrafts(projectKey: string): Promise<v
   }))
   for (const { draft } of pending) await draft.save()
   if (pending.some(({ draft, version }) => draft.version() !== version)) {
-    throw new Error('保存期间助手输入发生变化，已取消项目切换')
+    throw new Error(useLocaleStore.getState().text('保存期间助手输入发生变化，已取消项目切换', 'The assistant input changed while saving, so switching books was cancelled.'))
   }
 }
 
