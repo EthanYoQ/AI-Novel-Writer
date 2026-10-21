@@ -165,6 +165,51 @@ describe('planning recovery editors', () => {
     expect(useEditorStore.getState().tabs[0].dirty).toBe(true)
     noModel()
   })
+  it('英文界面下恢复稿不合蓝图格式时，按英文说明哪个字段出了什么问题，不带中文诊断前缀（#474）', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    context = fixture('blueprint')
+    await render('blueprint')
+    await edit(JSON.stringify([{ ...JSON.parse(blueprintText)[0], relationships: undefined }]))
+    await act(async () => button('Save recovered blueprints').click())
+    const alert = await vi.waitFor(() => {
+      const found = container.querySelector('[role="alert"]')?.textContent
+      expect(found).toBeTruthy()
+      return found!
+    })
+    expect(alert).toMatch(/relationships/u)
+    expect(alert).toMatch(/missing/iu)
+    expect(alert).not.toMatch(/\p{Script=Han}/u)
+    expect(savedPayload).toBeUndefined()
+  })
+  it('英文界面下主进程以中文诊断拒绝保存时，提示只给英文说明（#474）', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    context = fixture('blueprint')
+    await render('blueprint')
+    await edit(blueprintText)
+    rejectSave = 'StructuredContractDiagnostic: 结构化合同诊断 code=missing_field path=blueprints[0].relationships field=relationships'
+    await act(async () => button('Save recovered blueprints').click())
+    const alert = await vi.waitFor(() => {
+      const found = container.querySelector('[role="alert"]')?.textContent
+      expect(found).toBeTruthy()
+      return found!
+    })
+    expect(alert).toMatch(/^Could not save the recovered blueprints/u)
+    expect(alert).not.toMatch(/\p{Script=Han}/u)
+  })
+  it('英文界面下读恢复上下文被主进程以错误码拒绝时，不露 Electron 通道前缀与原码（#474）', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    context = fixture('blueprint')
+    openPlanningRecoveryDraft(context, session.projectPath, 'Blueprint recovery')
+    const plain = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:read-context') throw new Error("Error invoking remote method 'generation:read-context': Error: GENERATION_PROJECT_SESSION_STALE")
+      return plain(channel, ...args)
+    })
+    const tab = useEditorStore.getState().tabs[0]
+    await act(async () => root.render(<BlueprintRecovery tab={tab} projectKey={session.projectPath} />))
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/switched or reopened/iu))
+    expect(container.querySelector('[role="alert"]')?.textContent).not.toMatch(/Error invoking|GENERATION_/u)
+  })
 
   it.each(['button', 'workflow'] as const)('reports a rejected recovery refresh from %s', async source => {
     await render('outline')

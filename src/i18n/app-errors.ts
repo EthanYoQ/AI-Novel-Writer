@@ -180,3 +180,13 @@ export function appErrorMessage(locale: Locale, error: unknown): string {
   return knownAppErrorMessage(locale, error)
     ?? translate(locale, 'error.unknown', { message: readMessage(error) })
 }
+
+/**
+ * 同一处既接渲染端按界面语言写好的报错、又接主进程经 IPC 转来的码时用：
+ * 登记过的码按语言解释，IPC 转来的其他报错按 appErrorMessage 兜底，渲染端自己的说明原样显示。
+ */
+export function displayedErrorMessage(locale: Locale, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (IPC_PREFIX.test(message)) return appErrorMessage(locale, error)
+  return knownAppErrorMessage(locale, error) ?? message
+}
