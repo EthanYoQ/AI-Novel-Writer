@@ -470,6 +470,8 @@ describe('i18n coverage boundary scanner', () => {
           if (step === 5) throw new Error(localize(locale, '导入已取消', 'Import cancelled.'))
           if (step === 6) throw new Error(result.error || localize(locale, '保存失败', 'Could not save.'))
           if (step === 7) throw new Error(\`\${chapter}\`)
+          if (step === 9) throw new Error((result as Record<string, string>)['message'])
+          if (step === 10) throw new Error(({ copy: 'Inline fallback.' } as Record<string, string>)['copy'])
           // i18n-exempt: 接线错误，作者到不了
           if (step === 8) throw new Error('Dependency is unavailable.')
           throw new Error('IMPORT_RUN_RECEIPT_CORRUPT')
@@ -490,6 +492,7 @@ describe('i18n coverage boundary scanner', () => {
         '5 `The receipt is missing Chapter ${chapter}.`',
         "6 result.error || 'Could not save the import checkpoint.'",
         "7 locale === 'en-US' ? 'Not ready.' : 'Still not ready.'",
+        "12 ({ copy: 'Inline fallback.' } as Record<string, string>)['copy']",
       ])
     } finally {
       rmSync(root, { recursive: true, force: true })

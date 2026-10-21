@@ -225,6 +225,8 @@ function nodeContainsEnglishCopy(node, sourceFile) {
   if (ts.isConditionalExpression(node)) {
     return nodeContainsEnglishCopy(node.whenTrue, sourceFile) || nodeContainsEnglishCopy(node.whenFalse, sourceFile)
   }
+  // result['message'] 的键是属性名，不是文案；只查被访问的值。
+  if (ts.isElementAccessExpression(node)) return nodeContainsEnglishCopy(node.expression, sourceFile)
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return !errorCode.test(node.text) && latinWord.test(node.text)
   }
