@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { dialog, ipcMain } from 'electron'
+import { app, dialog, ipcMain } from 'electron'
 
 import type {
   ExternalFileGrant,
@@ -26,7 +26,7 @@ import { mainText } from '../i18n'
 const require = createRequire(import.meta.url)
 
 function text(zhCNText: string, enUSText: string): string {
-  return mainText(undefined, zhCNText, enUSText)
+  return mainText(app.getLocale(), zhCNText, enUSText)
 }
 const BetterSqlite = require('better-sqlite3') as typeof import('better-sqlite3')
 const portableAssets = createPortableProjectAssetProvider()

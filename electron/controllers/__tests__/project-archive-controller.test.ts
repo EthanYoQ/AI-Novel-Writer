@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
+  app: { getLocale: () => 'zh-CN' },
   ipcMain: {
     handle: vi.fn((channel: string, handler: IpcHandler) => mocks.handlers.set(channel, handler)),
   },

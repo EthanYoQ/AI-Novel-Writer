@@ -50,7 +50,9 @@ const mocks = vi.hoisted(() => ({
     leaseId: string
   },
   leaseSequence: 0,
-  locale: 'zh-CN' as 'zh-CN' | 'en-US',
+  /** 作者在设置里保存过的界面语言；没保存时主进程按系统语言选。 */
+  storedLocale: undefined as undefined | 'zh-CN' | 'en-US',
+  systemLocale: 'zh-CN',
   projectPeekService: {
     issueCapability: vi.fn(),
     revokeCapability: vi.fn(),
@@ -60,6 +62,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
+  app: { getLocale: () => mocks.systemLocale },
   dialog: {
     showOpenDialog: mocks.showOpenDialog,
     showMessageBox: mocks.showMessageBox,
@@ -170,7 +173,8 @@ vi.mock('../../services/project-access', () => ({
 }))
 
 vi.mock('../../i18n', () => ({
-  mainText: (_locale: unknown, zhCNText: string, enUSText: string) => mocks.locale === 'en-US' ? enUSText : zhCNText,
+  mainText: (systemLocale: string | undefined, zhCNText: string, enUSText: string) =>
+    (mocks.storedLocale ?? (systemLocale?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')) === 'en-US' ? enUSText : zhCNText,
 }))
 
 vi.mock('../../services/project-peek', () => ({
@@ -336,6 +340,23 @@ beforeEach(() => {
   }))
   mocks.projectPeekService.peek.mockReturnValue({ state: 'unavailable' })
   mocks.projectPeekService.readCurrent.mockReturnValue({ state: 'unavailable' })
+})
+
+describe('native dialogs follow the interface language (#474)', () => {
+  it('falls back to the system language when no interface language was saved', async () => {
+    mocks.storedLocale = undefined
+    mocks.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    for (const [systemLocale, title] of [['zh-CN', '选择项目目录'], ['en-US', 'Choose the project folder']]) {
+      mocks.systemLocale = systemLocale
+      await handler('dialog:select-folder')({ sender: { id: 17, once: vi.fn() } }, 'project-open')
+      expect(mocks.showOpenDialog).toHaveBeenLastCalledWith(expect.objectContaining({ title }))
+    }
+    mocks.systemLocale = 'zh-CN'
+    mocks.storedLocale = 'en-US'
+    await handler('dialog:select-folder')({ sender: { id: 17, once: vi.fn() } }, 'project-create')
+    expect(mocks.showOpenDialog).toHaveBeenLastCalledWith(expect.objectContaining({ title: 'Choose where to save the project' }))
+    mocks.storedLocale = undefined
+  })
 })
 
 describe('project controller project identity', () => {

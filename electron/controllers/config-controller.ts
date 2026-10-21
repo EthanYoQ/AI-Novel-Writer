@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import {
   readJsonFile,
   tryReadJsonFile,
@@ -25,7 +25,7 @@ export function registerConfigController() {
         return {
           success: false,
           error: mainText(
-            undefined,
+            app.getLocale(),
             '全局配置文件已损坏，已拒绝覆盖。请修复或删除应用数据目录里的 config.json 后重试。',
             'The global config file is damaged, so it was not overwritten. Repair or delete config.json in the app data folder, then try again.',
           ),

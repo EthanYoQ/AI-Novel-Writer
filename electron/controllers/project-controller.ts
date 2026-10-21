@@ -1,4 +1,4 @@
-import { ipcMain, dialog } from 'electron'
+import { app, ipcMain, dialog } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readJsonFile, writeJsonFile, RECENT_PROJECTS_PATH } from '../utils/config-utils'
@@ -36,9 +36,9 @@ import { projectPeekService } from '../services/project-peek'
 import { probeProjectSqlite } from '../services/sqlite-project-migration'
 import { mainText } from '../i18n'
 
+/** 按作者保存的界面语言选文案；没保存过时按系统语言，与渲染层一致。 */
 function text(zhCNText: string, enUSText: string): string {
-  // 单元测试里没有 Electron 的 app 单例；界面语言以持久化设置为准，与 fs-controller 相同。
-  return mainText(undefined, zhCNText, enUSText)
+  return mainText(app.getLocale(), zhCNText, enUSText)
 }
 
 /**
