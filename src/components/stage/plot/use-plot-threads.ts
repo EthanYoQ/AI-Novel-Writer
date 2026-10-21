@@ -796,7 +796,7 @@ export function usePlotThreads(projectKey: string, {
       await reload()
     } catch (error) {
       if (!isProjectSessionCurrent(session)) return
-      // 主进程按码拒绝（短证据不在定稿正文里、会话失效等）时在表单里说明原因，作者改完能直接重试。
+      // 主进程用登记过的码拒绝（如短证据不在定稿正文里）时在表单里说明原因，作者改完能直接重试；其余仍是笼统提示。
       const reason = knownAppErrorMessage(useLocaleStore.getState().locale, error)
       if (reason) setEventError(reason)
       else toast.error(text('保存定稿事件失败', 'Could not save finalized event'))
