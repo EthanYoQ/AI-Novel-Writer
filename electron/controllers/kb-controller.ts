@@ -93,6 +93,47 @@ async function readGrantedKnowledgeFolder(
   return imported
 }
 
+/**
+ * 参照导入的运行卡片原样显示 result.error（#474）。作者能照做的知识库错误码按导入运行的界面语言说明，
+ * 与 src/i18n/messages 里同名码的文案一致；其余码原样留着供反馈定位。
+ */
+const INDEX_DAMAGED = [
+  '当前作品的检索索引记录已损坏，现有资料没有改动。请从备份恢复作品，或清空知识库后重新导入资料。',
+  'The search index records of this book are damaged. Your material was not changed. Restore the book from a backup, or clear the knowledge base and import the material again.',
+] as const
+const REFERENCE_IMPORT_FAILURES: Readonly<Record<string, readonly [zhCN: string, enUS: string]>> = {
+  PROJECT_NOT_OPEN: ['请先打开项目。', 'Open a project first.'],
+  KNOWLEDGE_BASE_TEXT_EMPTY: ['资料内容是空的，没有可导入的文字。', 'The material is empty; there is no text to import.'],
+  EMBEDDING_RESPONSE_INVALID: [
+    '检索模型返回的结果不合格（条数、维度或数值不对），本次没有写入。请检查检索模型的 Base URL，或换一个检索模型。',
+    'The retrieval model returned an unusable result (wrong count, size, or values), so nothing was written. Check the retrieval model’s Base URL or choose another retrieval model.',
+  ],
+  EMBEDDING_SPACE_REINDEX_REQUIRED: [
+    '当前检索模型与已建好的检索索引不一致。请先在设置的「检索模型」页检查并重建索引，再导入。',
+    'The current retrieval model does not match the search index already built. Check and rebuild the index on the Retrieval model page in Settings, then import again.',
+  ],
+  EMBEDDING_SPACE_REGISTRY_INVALID: INDEX_DAMAGED,
+  EMBEDDING_SPACE_UNREGISTERED_DATA: INDEX_DAMAGED,
+  EMBEDDING_SPACE_BUSY: ['检索索引正在建立，请稍后再试。', 'The search index is being built. Try again in a moment.'],
+}
+
+/** 参照导入的幂等收据与完整性校验：没有作者能照做的建议，给按运行语言的说明并附上码供反馈定位。 */
+function referenceIntegrityFailure(code: string): readonly [zhCN: string, enUS: string] | undefined {
+  if (!code.startsWith('KNOWLEDGE_BASE_REFERENCE_')) return undefined
+  return [
+    `参照章节未能写入知识库（校验未通过：${code}）。`,
+    `The reference chapter could not be written to the knowledge base (check failed: ${code}).`,
+  ]
+}
+
+function explainReferenceImportFailure<T extends { success: boolean; error?: string }>(result: T, runId: string): T | (T & { errorCode: string }) {
+  const code = !result.success ? result.error : undefined
+  const explained = code ? REFERENCE_IMPORT_FAILURES[code] ?? referenceIntegrityFailure(code) : undefined
+  if (!code || !explained) return result
+  const locale = ImportRunRepository.get(runId)?.locale ?? 'zh-CN'
+  return { ...result, errorCode: code, error: locale === 'en-US' ? explained[1] : explained[0] }
+}
+
 function legacyMigrationBlockedFailure() {
   return {
     success: false as const,
@@ -311,7 +352,7 @@ export function registerKBController(
           runId, executionAuthority, chapterNumber, result.docId,
         )
       }
-      return result
+      return explainReferenceImportFailure(result, runId)
     })
   })
 

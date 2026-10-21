@@ -92,6 +92,17 @@ export const enUS = {
   'error.recoveryCandidateTextEmpty': 'The recovered draft has no visible text, so it was not saved. Add text, then save.',
   'error.consistencyExemptionReasonInvalid': 'Enter a reason for the exemption (500 characters or fewer).',
   'error.postProcessSourceChanged': "This chapter's finalized text changed before post-processing started (it may have been deleted or finalized again), so post-processing did not start. Refresh to see the current state.",
+  'error.embeddingRequestFailed': 'The retrieval model request failed. Check the retrieval model’s Base URL, gateway, and API key.',
+  'error.embeddingOllamaNativeUrl': 'This is Ollama’s native /api address, but the app uses the OpenAI-compatible API. Change the end of the retrieval model’s Base URL from /api to /v1.',
+  'error.embeddingResponseInvalid': 'The retrieval model returned an unusable result (wrong count, size, or values), so nothing was written. Check the retrieval model’s Base URL or choose another retrieval model.',
+  'error.knowledgeIndexDamaged': 'The search index records of this book are damaged. Your material was not changed. Restore the book from a backup, or clear the knowledge base and import the material again.',
+  'error.knowledgeIndexBusy': 'The search index is being built. Try again in a moment.',
+  'error.knowledgeIndexChanged': 'The knowledge base or search index changed during the check, and the existing index was not touched. Check and rebuild again.',
+  'error.knowledgeIndexReindexRequired': 'The current retrieval model does not match the search index already built. Check and rebuild the index on the Retrieval model page in Settings, then import again.',
+  'error.knowledgeCopyUnavailable': 'This material has no full text. It can be searched but not edited here.',
+  'error.knowledgeCopyChanged': 'The project copy was changed elsewhere, so this save was skipped. Reopen the material, then edit again.',
+  'error.knowledgeCopyEmpty': 'The project copy is empty, so search cannot be updated. Add text and save first.',
+  'error.knowledgeTextEmpty': 'The material is empty; there is no text to import.',
 } as const
 
 export type MessageKey = keyof typeof enUS

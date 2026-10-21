@@ -1,6 +1,6 @@
 {
   "description": "electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。",
-  "total": 299,
+  "total": 219,
   "files": {
     "electron/controllers/import-controller.ts": {
       "registerImportController": 2
@@ -9,23 +9,6 @@
       "loadGlobalConfigForUpdate": 1,
       "loadModelConfigsForUpdate": 1,
       "registerLLMController": 5
-    },
-    "electron/embedding.ts": {
-      "embeddingHttpError": 1,
-      "embedOpenAI": 1
-    },
-    "electron/knowledge-base.ts": {
-      "assertReferenceImportAuthority": 1,
-      "backfillVectors": 3,
-      "currentFlightAuthority": 2,
-      "ensureMigration": 1,
-      "importDocument": 2,
-      "importReferenceText": 1,
-      "importTextInternal": 1,
-      "performReferenceTextImport": 5,
-      "reindexDocumentCopy": 2,
-      "runReferenceImportSingleFlight": 1,
-      "saveDocumentCopy": 4
     },
     "electron/llm/gemini-provider.ts": {
       "assertVisibleStreamPayload": 2,
@@ -130,22 +113,6 @@
       "ModelExecutionLeaseRegistry.resolve": 2,
       "normalizeEndpoint": 1,
       "resolveModelExecutionCapabilityEvidence": 1
-    },
-    "electron/vector-store.ts": {
-      "activatePlannedEmbeddingSpaceInternal": 3,
-      "addChunksInternal": 2,
-      "createLegacyMigrationPlan": 12,
-      "createOwnedEmbeddingTable": 1,
-      "migrateFromJSONOnce": 5,
-      "planEmbeddingRebuild": 1,
-      "preflightLegacyMigrationTarget": 4,
-      "readLegacyMigrationJournal": 2,
-      "readRegistry": 1,
-      "rebuildPlannedEmbeddingSpaceInternal": 9,
-      "removeEmptyUnregisteredTableDirectory": 1,
-      "updateChunkVectorsInternal": 4,
-      "validateRegistry": 4,
-      "validateVectorsForChunks": 6
     }
   }
 }

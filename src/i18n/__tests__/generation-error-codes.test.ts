@@ -83,6 +83,10 @@ const COVERED_PREFIXES = [
   'CONSISTENCY_EXEMPTION_',
   'POST_PROCESS_',
   'CONTINUITY_',
+  // 知识库、项目副本与检索索引（#474 B3）：经 kb 通道的 { error } 或 IPC 异常到知识库页、设置的检索索引检查，
+  // 以及导入创作资料、定稿收入知识库与参照导入的工作流。
+  'KNOWLEDGE_BASE_',
+  'EMBEDDING_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
@@ -553,6 +557,21 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'CONTINUITY_INVALIDATION_CHAPTER_INVALID',
     'CONTINUITY_SOURCE_DRAFT_INVALID',
     'CONTINUITY_TARGET_CHAPTER_INVALID',
+    // 知识库与检索索引（#474 B3）：重建计划与执行之间的内部约定、新代际写入后的完整性复核、
+    // 参照导入与冻结章节的绑定、single-flight 与幂等收据。updateChunkVectors 只有测试调用。
+    'EMBEDDING_SPACE_BACKFILL_DUPLICATE_ID',
+    'EMBEDDING_SPACE_BACKFILL_TARGET_MISSING',
+    'EMBEDDING_SPACE_PLAN_MODE_INVALID',
+    'EMBEDDING_SPACE_REBUILD_VECTORS_MISMATCH',
+    'EMBEDDING_SPACE_VERIFY_FAILED',
+    'KNOWLEDGE_BASE_CHUNKS_INVALID',
+    'KNOWLEDGE_BASE_COPY_REQUEST_INVALID',
+    'KNOWLEDGE_BASE_REFERENCE_AUTHORITY_MISMATCH',
+    'KNOWLEDGE_BASE_REFERENCE_CLEANUP_FAILED',
+    'KNOWLEDGE_BASE_REFERENCE_FLIGHT_INVALID',
+    'KNOWLEDGE_BASE_REFERENCE_KEY_INVALID',
+    'KNOWLEDGE_BASE_REFERENCE_RECEIPT_CONFLICT',
+    'KNOWLEDGE_BASE_REFERENCE_VERIFY_FAILED',
   ],
   // 模型输出不合角色提议或定稿角色状态的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住；
   // 定稿后处理把码记在步骤上并原样显示，供反馈定位。没有现成文案能告诉作者除重试以外还能做什么。
