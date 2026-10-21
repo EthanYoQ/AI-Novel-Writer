@@ -11,6 +11,9 @@ import { knownAppErrorMessage } from '../app-errors'
  *
  * 角色建议页（待批准的角色提议、定稿角色状态建议）的决策请求同样经生成 IPC 原样转来码，按同一约定登记（#474）。
  *
+ * 项目会话与外部文件授权（#474 B4）的码经各控制器的 { error: String(err) } 或 IPC 异常原样到项目页、知识库与工作流：
+ * 同样要么登记、要么写明理由。
+ *
  * 其余前缀（备份与迁移、安全文件系统、头像与图片、EPUB 导入、外观、编辑器等）不在这里：
  * 它们不经生成 IPC，由各自的主进程控制器或页面按自己的映射说明，逐族审显示面随主进程批次处理。
  */
@@ -43,6 +46,19 @@ const COVERED_PREFIXES = [
   'CHARACTER_AUTHOR_',
   'CHARACTER_FIELDS_',
   'CHARACTER_PROVENANCE_',
+  // 项目会话、项目路径守卫，打开、创建、删除项目与外部文件授权（#474 B4）。
+  'PROJECT_SESSION_',
+  'PROJECT_CONTEXT_',
+  'PROJECT_FILE_',
+  'PROJECT_DIRECTORY_',
+  'PROJECT_OPEN_',
+  'PROJECT_ROLLBACK_',
+  'PROJECT_DELETE_',
+  'PROJECT_RECENT_',
+  'PROJECT_ARCHIVE_',
+  'PROJECT_CORE_',
+  'PROJECT_SCHEMA_',
+  'EXTERNAL_FILE_GRANT_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
@@ -400,6 +416,24 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'CHARACTER_RELATIONSHIP_ID_REQUIRED',
     'CHARACTER_RELATIONSHIP_INVALID',
     'CHARACTER_RELATIONSHIP_PROPOSAL_INVALID',
+    // #474 B4：项目路径与回滚快照的内部校验、删除目标与当前会话的一致性、只读字段写入与旧库迁移的完整性。
+    // 界面只从项目页对当前项目发起这些请求，作者照常操作碰不到；碰到说明代码缺陷或项目文件夹被外部改坏。
+    'PROJECT_CORE_CHARACTERS_ARCH_READ_ONLY',
+    'PROJECT_DELETE_IDENTITY_MISMATCH',
+    'PROJECT_DELETE_TARGET_MISMATCH',
+    'PROJECT_DIRECTORY_GRANT_PURPOSE_INVALID',
+    'PROJECT_DIRECTORY_OUTSIDE_PARENT',
+    'PROJECT_DIRECTORY_REQUIRED',
+    'PROJECT_FILE_PARENT_UNRESOLVABLE',
+    'PROJECT_OPEN_DATABASE_UNAVAILABLE',
+    'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
+    'PROJECT_ROLLBACK_NEUTRAL_FAILED',
+    'PROJECT_ROLLBACK_ROOT_MISMATCH',
+    'PROJECT_ROLLBACK_SNAPSHOT_STALE',
+    'PROJECT_ROLLBACK_UNTRUSTED',
+    'PROJECT_SCHEMA_IMPORT_RUN_FOREIGN_KEY_BROKEN',
+    'PROJECT_SCHEMA_IMPORT_SOURCE_SALT_INVALID',
+    'PROJECT_SCHEMA_IMPORT_SOURCE_SECRET_INVALID',
   ],
   // 模型输出不合角色提议或定稿角色状态的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住；
   // 定稿后处理把码记在步骤上并原样显示，供反馈定位。没有现成文案能告诉作者除重试以外还能做什么。
@@ -479,6 +513,22 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     // 启动时外观设置与主进程握手，失败只影响主题初始化，不进任何失败面板。
     'MAIN_ACK_REJECTED',
     'MAIN_NOT_READY',
+    // 外部文件授权的路径、范围、窗口与签发参数校验（#474 B4）：external-file-grant-controller 按码换成按界面语言的说明，
+    // 归档、知识库、云备份与旧项目导入各自折叠成不含路径的码或说明，不原样交给界面。
+    'EXTERNAL_FILE_GRANT_DIRECTORY_REQUIRED',
+    'EXTERNAL_FILE_GRANT_FILE_REQUIRED',
+    'EXTERNAL_FILE_GRANT_OPERATION_DENIED',
+    'EXTERNAL_FILE_GRANT_PARENT_REQUIRED',
+    'EXTERNAL_FILE_GRANT_PATH_ABSOLUTE',
+    'EXTERNAL_FILE_GRANT_PATH_INVALID',
+    'EXTERNAL_FILE_GRANT_PATH_TRAVERSAL',
+    'EXTERNAL_FILE_GRANT_SCOPE_MISMATCH',
+    'EXTERNAL_FILE_GRANT_SUBPATH_REJECTED',
+    'EXTERNAL_FILE_GRANT_TARGET_CHANGED',
+    'EXTERNAL_FILE_GRANT_TARGET_INVALID',
+    'EXTERNAL_FILE_GRANT_TTL_INVALID',
+    'EXTERNAL_FILE_GRANT_USES_INVALID',
+    'EXTERNAL_FILE_GRANT_WRONG_WINDOW',
   ],
 }
 

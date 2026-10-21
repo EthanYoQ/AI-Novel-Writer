@@ -54,7 +54,8 @@ export function workflowMainProcessError(
 ): Error {
   const english = context.uiLocale === 'en-US'
   const summary = english ? enUSSummary : zhCNSummary
-  const raw = typeof error === 'string' ? error.trim().replace(/^Error: /u, '') : ''
+  // String(err) 的前缀是错误类名：多数是 "Error: "，带名字的错误类（ProjectSessionStaleError）是它自己的类名。
+  const raw = typeof error === 'string' ? error.trim().replace(/^[A-Za-z]*Error: /u, '') : ''
   if (!raw) return new Error(summary)
   const code = errorCode.test(raw) ? raw : undefined
   const reason = knownAppErrorMessage(context.uiLocale, raw) ?? (code || !english ? raw : undefined)

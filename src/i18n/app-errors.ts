@@ -14,6 +14,40 @@ const ERROR_KEYS = {
   PROJECT_STORAGE_PATH_UNSUPPORTED: 'error.projectStoragePathUnsupported',
   PROJECT_ROOT_REQUIRED: 'error.projectRootRequired',
   PROJECT_LEGACY_IMPORT_REQUIRED: 'error.projectLegacyImportRequired',
+  // 项目会话与外部文件授权（#474 B4）：主进程的会话守卫、项目路径守卫与打开、创建、删除项目时的拒绝原因。
+  PROJECT_SESSION_REQUIRED: 'error.projectSessionRequired',
+  PROJECT_CONTEXT_REQUIRED: 'error.projectSessionRequired',
+  PROJECT_SESSION_STALE: 'error.projectSessionStale',
+  PROJECT_SESSION_ROOT_MISMATCH: 'error.projectSessionStale',
+  PROJECT_SESSION_DATABASE_MISMATCH: 'error.projectSessionStale',
+  PROJECT_SESSION_IDENTITY_MISMATCH: 'error.projectSessionStale',
+  PROJECT_CONTEXT_CHANGED: 'error.projectSessionStale',
+  PROJECT_FILE_OUTSIDE_PROJECT: 'error.projectFileOutsideProject',
+  PROJECT_DIRECTORY_EXISTS: 'error.projectDirectoryExists',
+  PROJECT_DIRECTORY_MISSING: 'error.projectDirectoryMissing',
+  PROJECT_DIRECTORY_NOT_FOLDER: 'error.projectDirectoryMissing',
+  PROJECT_DIRECTORY_DRIVE_ROOT: 'error.projectDirectoryReserved',
+  PROJECT_DIRECTORY_HOME: 'error.projectDirectoryReserved',
+  PROJECT_DIRECTORY_UNSAFE: 'error.projectDirectoryUnsafe',
+  PROJECT_DIRECTORY_MANIFEST_UNREADABLE: 'error.projectManifestInvalid',
+  PROJECT_DIRECTORY_MANIFEST_INVALID: 'error.projectManifestInvalid',
+  PROJECT_MANIFEST_INVALID: 'error.projectManifestInvalid',
+  PROJECT_OPEN_GRANT_REQUIRED: 'error.projectOpenGrantRequired',
+  PROJECT_OPEN_RECENT_IDENTITY_CHANGED: 'error.projectRecentIdentityChanged',
+  PROJECT_MIGRATION_NOT_QUALIFIED: 'error.projectMigrationNotQualified',
+  PROJECT_MIGRATION_DUAL_ROOT: 'error.projectMigrationNotQualified',
+  PROJECT_MIGRATION_RECOVERY_REQUIRED: 'error.projectMigrationNotQualified',
+  UNRECOGNIZED_SCHEMA: 'error.projectSchemaUnrecognized',
+  CORRUPT_SCHEMA: 'error.projectSchemaCorrupt',
+  NEWER_SCHEMA_READ_ONLY: 'error.projectSchemaNewer',
+  LEGACY_IMPORT_UNSUPPORTED_SOURCE: 'error.legacyImportUnsupportedSource',
+  PROJECT_DELETE_FAILED: 'error.projectDeleteFailed',
+  PROJECT_RECENT_LIST_UPDATE_FAILED: 'error.projectRecentListUpdateFailed',
+  PROJECT_ARCHIVE_TARGET_EXISTS: 'error.projectArchiveTargetExists',
+  // 选择文件或文件夹后授权已过期、用尽或被撤销（例如选完很久才确认）。
+  EXTERNAL_FILE_GRANT_NOT_FOUND: 'error.externalFileGrantExpired',
+  EXTERNAL_FILE_GRANT_EXPIRED: 'error.externalFileGrantExpired',
+  EXTERNAL_FILE_GRANT_EXHAUSTED: 'error.externalFileGrantExpired',
   GENERATION_REQUEST_FAILED: 'error.generationRequestFailed',
   GENERATION_PROJECT_SESSION_STALE: 'error.generationProjectSessionStale',
   GENERATION_PROJECT_SESSION_REQUIRED: 'error.generationProjectSessionRequired',
@@ -145,8 +179,11 @@ function isKnownCode(code: unknown): code is KnownErrorCode {
   return typeof code === 'string' && Object.hasOwn(ERROR_KEYS, code)
 }
 
-/** 主进程只返回错误码；Electron 会在前面加上调用通道，`String(error)` 还会加 "Error: "。 */
-const WRAPPED_CODE = /^(?:Error invoking remote method '[^']+': )?(?:Error: )?([A-Z][A-Z0-9_]*)$/u
+/**
+ * 主进程只返回错误码；Electron 会在前面加上调用通道，`String(error)` 还会加 "Error: "。
+ * 带名字的错误类（ProjectSessionStaleError）加的是自己的类名。
+ */
+const WRAPPED_CODE = /^(?:Error invoking remote method '[^']+': )?(?:[A-Za-z]*Error: )?([A-Z][A-Z0-9_]*)$/u
 
 function readCode(error: unknown): KnownErrorCode | undefined {
   const message = typeof error === 'string' ? error : error instanceof Error ? error.message : undefined
@@ -164,7 +201,7 @@ function readCode(error: unknown): KnownErrorCode | undefined {
 }
 
 /** Electron 在主进程报错前加的调用通道前缀对作者没有意义，兜底说明里去掉。 */
-const IPC_PREFIX = /^Error invoking remote method '[^']+': (?:Error: )?/u
+const IPC_PREFIX = /^Error invoking remote method '[^']+': (?:[A-Za-z]*Error: )?/u
 
 function readMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).replace(IPC_PREFIX, '')

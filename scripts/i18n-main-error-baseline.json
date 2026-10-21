@@ -1,18 +1,12 @@
 {
   "description": "electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。",
-  "total": 630,
+  "total": 549,
   "files": {
-    "electron/controllers/config-controller.ts": {
-      "registerConfigController": 1
-    },
     "electron/controllers/db-controller.ts": {
       "registerDatabaseController": 7
     },
     "electron/controllers/finalization-controller.ts": {
       "registerFinalizationController": 4
-    },
-    "electron/controllers/fs-controller.ts": {
-      "registerFilesystemHandler": 1
     },
     "electron/controllers/import-controller.ts": {
       "registerImportController": 2
@@ -21,16 +15,6 @@
       "loadGlobalConfigForUpdate": 1,
       "loadModelConfigsForUpdate": 1,
       "registerLLMController": 5
-    },
-    "electron/controllers/project-archive-controller.ts": {
-      "registerProjectArchiveController": 2
-    },
-    "electron/controllers/project-controller.ts": {
-      "assertRequiredProjectSession": 3,
-      "projectRootSelectionFailure": 6,
-      "registerProjectController": 13,
-      "restoreProjectRollbackBoundary": 2,
-      "restoreTrustedProjectDatabase": 2
     },
     "electron/embedding.ts": {
       "embeddingHttpError": 1,
@@ -70,9 +54,6 @@
       "MCPManagerImpl.disconnect": 1,
       "MCPManagerImpl.loadConfig": 5,
       "MCPManagerImpl.sendRequest": 1
-    },
-    "electron/migrations/baseline-schema.ts": {
-      "initializeLegacyBaselineSchema": 3
     },
     "electron/repositories/blueprint-repository.ts": {
       "assertAuthoritativeCharacterSyncCompletion": 1,
@@ -230,13 +211,6 @@
       "PostProcessRepository.markStepFailed": 1,
       "PostProcessRepository.markStepOk": 1
     },
-    "electron/repositories/project-clear-repository.ts": {
-      "ProjectClearRepository.clearGeneratedData": 2
-    },
-    "electron/repositories/project-core-repository.ts": {
-      "ProjectCoreRepository.commitSynopsis": 1,
-      "ProjectCoreRepository.update": 2
-    },
     "electron/repositories/recovery-candidate-repository.ts": {
       "assertText": 1,
       "RecoveryCandidateRepository.record": 5,
@@ -273,17 +247,6 @@
       "legacyKnowledgeAuthorizationRequired": 1,
       "removeKnowledgeDocument": 2
     },
-    "electron/services/external-file-grant-service.ts": {
-      "assertSafeRelativePath": 3,
-      "ExternalFileGrantService.issue": 2,
-      "ExternalFileGrantService.issueDirectory": 1,
-      "ExternalFileGrantService.issueFile": 1,
-      "ExternalFileGrantService.issueNewChild": 2,
-      "ExternalFileGrantService.resolveDirectoryPath": 2,
-      "ExternalFileGrantService.resolveExactPath": 2,
-      "ExternalFileGrantService.resolveRequest": 7,
-      "normalizedRelativePath": 1
-    },
     "electron/services/finalization-service.ts": {
       "FinalizationService.finalize": 1,
       "FinalizationService.retry": 1
@@ -307,22 +270,6 @@
       "ModelExecutionLeaseRegistry.resolve": 2,
       "normalizeEndpoint": 1,
       "resolveModelExecutionCapabilityEvidence": 1
-    },
-    "electron/services/project-access.ts": {
-      "ProjectAccessService.assertCurrentProjectContext": 3,
-      "ProjectAccessService.assertCurrentSession": 1,
-      "ProjectAccessService.assertProjectChildPath": 1,
-      "ProjectAccessService.authorizeDeletion": 2,
-      "ProjectAccessService.canonicalExistingDirectory": 3,
-      "ProjectAccessService.canonicalProjectRoot": 2,
-      "ProjectAccessService.createProject": 2,
-      "ProjectAccessService.probeExistingProject": 4
-    },
-    "electron/utils/project-context.ts": {
-      "assertContainedPath": 1,
-      "assertExpectedProjectPath": 1,
-      "assertRequiredExpectedProjectPath": 1,
-      "canonicalWritableTarget": 1
     },
     "electron/vector-store.ts": {
       "activatePlannedEmbeddingSpaceInternal": 3,

@@ -148,7 +148,7 @@ describe('ProjectAccessService project session seam', () => {
     expect(reopened.projectId).toBe(first.projectId)
     expect(reopened.rootPath).toBe(first.rootPath)
     expect(reopened.leaseId).not.toBe(first.leaseId)
-    expect(() => access.assertCurrentSession(first)).toThrow('项目会话已失效')
+    expect(() => access.assertCurrentSession(first)).toThrow('PROJECT_SESSION_STALE')
     expect(access.assertCurrentSession(reopened)).toEqual(reopened)
   })
 
@@ -171,7 +171,7 @@ describe('ProjectAccessService project session seam', () => {
     expect(Object.isFrozen(snapshot)).toBe(true)
     expect(snapshot?.leaseId).toBe('lease-1')
     expect(reopened.leaseId).toBe('lease-2')
-    expect(() => access.assertCurrentSession(snapshot!)).toThrow('项目会话已失效')
+    expect(() => access.assertCurrentSession(snapshot!)).toThrow('PROJECT_SESSION_STALE')
   })
 
   it('accepts only the active lease bound to the active canonical project root', () => {
@@ -191,7 +191,7 @@ describe('ProjectAccessService project session seam', () => {
       projectId: oldLease.projectId,
       leaseId: oldLease.leaseId,
       projectPath: root,
-    }, root)).toThrow('项目会话已失效')
+    }, root)).toThrow('PROJECT_SESSION_STALE')
     expect(access.assertCurrentProjectContext({
       projectId: activeLease.projectId,
       leaseId: activeLease.leaseId,
@@ -201,7 +201,7 @@ describe('ProjectAccessService project session seam', () => {
       projectId: activeLease.projectId,
       leaseId: activeLease.leaseId,
       projectPath: otherRoot,
-    }, root)).toThrow('项目会话根目录不匹配')
+    }, root)).toThrow('PROJECT_SESSION_ROOT_MISMATCH')
   })
 
   it('creates a stable manifest before a new directory can be probed as a project', () => {
@@ -244,7 +244,7 @@ describe('ProjectAccessService project session seam', () => {
       rootPath: created.rootPath,
       leaseId: 'lease-2',
     })
-    expect(() => access.assertCurrentSession(firstSession)).toThrow('项目会话已失效')
+    expect(() => access.assertCurrentSession(firstSession)).toThrow('PROJECT_SESSION_STALE')
   })
 
   it('identifies an ordinary parent directory as a selection error without trusting it', () => {
@@ -270,7 +270,7 @@ describe('ProjectAccessService project session seam', () => {
     // Windows may canonicalize a temporary parent from its short (8.3) form
     // to its long form. Project identity is the canonical root, not spelling.
     expect(access.sameCanonicalProjectRoot(created.rootPath, path.join(home, 'home-child'))).toBe(true)
-    expect(() => access.probeExistingProject(home)).toThrow('用户主目录')
+    expect(() => access.probeExistingProject(home)).toThrow('PROJECT_DIRECTORY_HOME')
   })
 
   it('recognizes only a trusted legacy SQLite fingerprint without writing during probe, then refuses unqualified adoption', () => {
@@ -303,7 +303,7 @@ describe('ProjectAccessService project session seam', () => {
       homePath: path.join(os.tmpdir(), 'not-the-project-home'),
     })
 
-    expect(() => access.probeExistingProject(root)).toThrow('可信旧版指纹')
+    expect(() => access.probeExistingProject(root)).toThrow('PROJECT_ROOT_REQUIRED')
   })
 
   it('canonicalizes a Windows junction to the same trusted project root', () => {
@@ -329,7 +329,7 @@ describe('ProjectAccessService project session seam', () => {
       homePath: path.join(os.tmpdir(), 'not-the-project-home'),
     })
 
-    expect(() => access.probeExistingProject(root)).toThrow('项目存储目录越界')
+    expect(() => access.probeExistingProject(root)).toThrow('PROJECT_DIRECTORY_UNSAFE')
   })
 
   it('authorizes deletion only for the active leased project root', () => {
@@ -345,15 +345,15 @@ describe('ProjectAccessService project session seam', () => {
 
     expect(access.authorizeDeletion(lease, root)).toEqual(lease.rootPath)
     expect(() => access.authorizeDeletion(lease, path.dirname(root)))
-      .toThrow('当前项目根目录')
+      .toThrow('PROJECT_DELETE_TARGET_MISMATCH')
     expect(() => access.authorizeDeletion(lease, outside))
-      .toThrow('当前项目根目录')
+      .toThrow('PROJECT_DELETE_TARGET_MISMATCH')
     expect(() => access.authorizeDeletion(lease, path.parse(root).root))
-      .toThrow('磁盘根目录')
+      .toThrow('PROJECT_DIRECTORY_DRIVE_ROOT')
     expect(() => access.authorizeDeletion(lease, home))
-      .toThrow('用户主目录')
+      .toThrow('PROJECT_DIRECTORY_HOME')
     expect(() => access.authorizeDeletion({ ...lease, leaseId: 'old-lease' }, root))
-      .toThrow('项目会话已失效')
+      .toThrow('PROJECT_SESSION_STALE')
   })
 
   it('rejects an ordinary directory, the user home, and a drive root as project roots', () => {
@@ -363,11 +363,11 @@ describe('ProjectAccessService project session seam', () => {
     const access = new ProjectAccessService({ homePath: home })
 
     expect(() => access.probeExistingProject(ordinaryDirectory))
-      .toThrow('可信旧版指纹')
+      .toThrow('PROJECT_ROOT_REQUIRED')
     expect(() => access.probeExistingProject(home))
-      .toThrow('用户主目录')
+      .toThrow('PROJECT_DIRECTORY_HOME')
     expect(() => access.probeExistingProject(path.parse(home).root))
-      .toThrow('磁盘根目录')
+      .toThrow('PROJECT_DIRECTORY_DRIVE_ROOT')
   })
 })
 

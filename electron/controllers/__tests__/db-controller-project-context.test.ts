@@ -286,9 +286,9 @@ beforeEach(() => {
   mocks.assertCurrentProjectContext.mockImplementation((context: {
     projectPath?: string
   } | undefined, currentProjectPath: string) => {
-    if (!context?.projectPath) throw new Error('缺少项目会话上下文，已拒绝操作')
+    if (!context?.projectPath) throw new Error('PROJECT_SESSION_REQUIRED')
     if (context.projectPath !== currentProjectPath) {
-      throw new Error('项目会话与当前数据库不匹配，已拒绝操作')
+      throw new Error('PROJECT_SESSION_DATABASE_MISMATCH')
     }
     return { rootPath: currentProjectPath }
   })
@@ -517,7 +517,7 @@ describe('database controller project context guard', () => {
       'C:/projects/A',
     )).resolves.toMatchObject({
       success: false,
-      error: expect.stringContaining('项目上下文已切换'),
+      error: 'Error: PROJECT_CONTEXT_CHANGED',
     })
     expect(mocks.importRunFinalizeParsing).not.toHaveBeenCalled()
   })
@@ -690,7 +690,7 @@ describe('database controller project context guard', () => {
 
     expect(result).toMatchObject({
       success: false,
-      error: expect.stringContaining('项目会话'),
+      error: 'Error: PROJECT_SESSION_REQUIRED',
     })
     expect(mocks.characterRosterCommit).not.toHaveBeenCalled()
   })
@@ -824,14 +824,14 @@ describe('database controller project context guard', () => {
     mocks.currentProjectPath = 'C:/projects/B'
 
     await expect(handler('db:character-get-all')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     const characterCommit = await handler('db:character-roster-commit')(
       {},
       { operationId: 'stale-A', expectedRevision: 0, schemaVersion: 1, entries: [] },
       'C:/projects/A',
     )
     await expect(handler('db:blueprint-get-all')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     const blueprintUpsert = await handler('db:blueprint-upsert')(
       {},
       blueprint(),
@@ -928,7 +928,7 @@ describe('database controller project context guard', () => {
     await expect(handler('db:draft-get-full')({}, 1, 'C:/projects/B'))
       .resolves.toMatchObject({ id: 1, content: 'B content' })
     await expect(handler('db:draft-get-full')({}, 1, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     const staleWrite = await handler('db:draft-update-content')(
       {},
       1,
@@ -959,7 +959,7 @@ describe('database controller project context guard', () => {
 
     mocks.currentProjectPath = 'C:/projects/B'
     await expect(handler('db:draft-list-all')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     expect(mocks.draftListAll).toHaveBeenCalledOnce()
   })
 
@@ -1004,7 +1004,7 @@ describe('database controller project context guard', () => {
 
   it('rejects draft access that omits the required project identity', async () => {
     await expect(rawHandler('db:draft-get-full')({}, 1))
-      .rejects.toThrow(/缺少项目会话上下文/)
+      .rejects.toThrow('PROJECT_SESSION_REQUIRED')
     expect(mocks.draftGetFull).not.toHaveBeenCalled()
   })
 
@@ -1048,7 +1048,7 @@ describe('database controller project context guard', () => {
     await expect(handler('db:recovery-candidate-record')({}, request, 'C:/projects/A'))
       .resolves.toMatchObject({ success: false })
     await expect(handler('db:recovery-candidate-list')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     await expect(handler('db:recovery-candidate-update')({}, 'candidate-1', '候选正文', 'C:/projects/A'))
       .resolves.toMatchObject({ success: false })
     await expect(handler('db:recovery-candidate-resolve')({}, 'candidate-1', 'discarded', 'C:/projects/A'))
@@ -1071,9 +1071,9 @@ describe('database controller project context guard', () => {
     mocks.closeProjectDatabase.mockClear()
     mocks.currentProjectPath = 'C:/projects/B'
     await expect(handler('db:close')({}, 'C:/projects/A'))
-      .resolves.toMatchObject({ success: false, error: expect.stringContaining('项目上下文已切换') })
+      .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_CONTEXT_CHANGED' })
     await expect(rawHandler('db:close')({}))
-      .resolves.toMatchObject({ success: false, error: expect.stringContaining('项目会话上下文') })
+      .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_SESSION_REQUIRED' })
     expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
     expect(mocks.invalidateCurrentSession).toHaveBeenCalledOnce()
   })

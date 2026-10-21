@@ -15,20 +15,20 @@ describe('ExternalFileGrantService', () => {
     try {
       for (const operation of ['project-create', 'project-open', 'legacy-import'] as const) {
         const request = { grantId: issue(operation), webContentsId: 17, operation }
-        expect(() => grants.resolveDirectoryPath({ ...request, grantId: root })).toThrow('不存在')
-        expect(() => grants.resolveDirectoryPath({ ...request, webContentsId: 18 })).toThrow('不属于')
-        expect(() => grants.resolveDirectoryPath({ ...request, operation: 'write' })).toThrow('未授予')
-        expect(() => grants.resolveDirectoryPath({ ...request, operation: operation === 'project-open' ? 'legacy-import' : 'project-open' })).toThrow('未授予')
+        expect(() => grants.resolveDirectoryPath({ ...request, grantId: root })).toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
+        expect(() => grants.resolveDirectoryPath({ ...request, webContentsId: 18 })).toThrow('EXTERNAL_FILE_GRANT_WRONG_WINDOW')
+        expect(() => grants.resolveDirectoryPath({ ...request, operation: 'write' })).toThrow('EXTERNAL_FILE_GRANT_OPERATION_DENIED')
+        expect(() => grants.resolveDirectoryPath({ ...request, operation: operation === 'project-open' ? 'legacy-import' : 'project-open' })).toThrow('EXTERNAL_FILE_GRANT_OPERATION_DENIED')
         expect(grants.resolveDirectoryPath(request)).toBe(fs.realpathSync.native(root))
-        expect(() => grants.resolveDirectoryPath(request)).toThrow('不存在')
+        expect(() => grants.resolveDirectoryPath(request)).toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
       }
       const expired = issue('project-open')
       now += 500
-      expect(() => grants.resolveDirectoryPath({ grantId: expired, webContentsId: 17, operation: 'project-open' })).toThrow('过期')
+      expect(() => grants.resolveDirectoryPath({ grantId: expired, webContentsId: 17, operation: 'project-open' })).toThrow('EXTERNAL_FILE_GRANT_EXPIRED')
       const file = path.join(root, 'book.txt')
       fs.writeFileSync(file, 'book')
       const fileGrant = grants.issueFile({ webContentsId: 17, filePath: file, operations: ['project-open'], ttlMs: 500 })
-      expect(() => grants.resolveDirectoryPath({ grantId: fileGrant.grantId, webContentsId: 17, operation: 'project-open' })).toThrow('范围不符')
+      expect(() => grants.resolveDirectoryPath({ grantId: fileGrant.grantId, webContentsId: 17, operation: 'project-open' })).toThrow('EXTERNAL_FILE_GRANT_SCOPE_MISMATCH')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -43,7 +43,7 @@ describe('ExternalFileGrantService', () => {
       grantId: 'forged-grant-id',
       webContentsId: 17,
       operation: 'read',
-    })).toThrow('外部文件授权不存在')
+    })).toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
   })
 
   it('拒绝把绝对路径伪装成目录授权的相对路径', () => {
@@ -65,7 +65,7 @@ describe('ExternalFileGrantService', () => {
       webContentsId: 17,
       operation: 'read',
       relativePath: outside,
-    })).toThrow('相对路径不能是绝对路径')
+    })).toThrow('EXTERNAL_FILE_GRANT_PATH_ABSOLUTE')
 
     fs.rmSync(root, { recursive: true, force: true })
     fs.rmSync(outside, { recursive: true, force: true })
@@ -89,7 +89,7 @@ describe('ExternalFileGrantService', () => {
       webContentsId: 17,
       operation: 'read',
       relativePath: '../outside.txt',
-    })).toThrow('相对路径不得包含父目录遍历')
+    })).toThrow('EXTERNAL_FILE_GRANT_PATH_TRAVERSAL')
 
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -112,7 +112,7 @@ describe('ExternalFileGrantService', () => {
       webContentsId: 17,
       operation: 'read',
       relativePath: 'chapter\0.txt',
-    })).toThrow('相对路径无效')
+    })).toThrow('EXTERNAL_FILE_GRANT_PATH_INVALID')
 
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -135,7 +135,7 @@ describe('ExternalFileGrantService', () => {
       webContentsId: 18,
       operation: 'read',
       relativePath: 'chapter.txt',
-    })).toThrow('外部文件授权不属于当前窗口')
+    })).toThrow('EXTERNAL_FILE_GRANT_WRONG_WINDOW')
 
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -160,7 +160,7 @@ describe('ExternalFileGrantService', () => {
       webContentsId: 17,
       operation: 'read',
       relativePath: 'chapter.txt',
-    })).toThrow('外部文件授权已过期')
+    })).toThrow('EXTERNAL_FILE_GRANT_EXPIRED')
 
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -183,7 +183,7 @@ describe('ExternalFileGrantService', () => {
       webContentsId: 17,
       operation: 'write',
       relativePath: 'chapter.txt',
-    })).toThrow('未授予 write 操作')
+    })).toThrow('EXTERNAL_FILE_GRANT_OPERATION_DENIED')
 
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -263,7 +263,7 @@ describe('ExternalFileGrantService', () => {
       webContentsId: 17,
       operation: 'read',
       relativePath: 'sibling.txt',
-    })).toThrow('精确文件授权不接受子路径')
+    })).toThrow('EXTERNAL_FILE_GRANT_SUBPATH_REJECTED')
 
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -308,7 +308,7 @@ describe('ExternalFileGrantService', () => {
       scope: 'directory',
     })
     expect(grants.activeCount()).toBe(1)
-    expect(() => grants.resolve(request)).toThrow('外部文件授权已用尽')
+    expect(() => grants.resolve(request)).toThrow('EXTERNAL_FILE_GRANT_EXHAUSTED')
 
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -334,7 +334,7 @@ describe('ExternalFileGrantService', () => {
       webContentsId: 17,
       operation: 'read',
       relativePath: 'chapter.txt',
-    })).toThrow('外部文件授权不存在或已失效')
+    })).toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
 
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -379,7 +379,7 @@ describe('ExternalFileGrantService', () => {
     })
     grants.resolve(request)
     expect(grants.activeCount()).toBe(0)
-    expect(() => grants.revalidate(request)).toThrow('外部文件授权不存在或已失效')
+    expect(() => grants.revalidate(request)).toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
 
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -410,7 +410,7 @@ describe('ExternalFileGrantService 精确路径授权（供仍以路径为入参
     // 单次授权：消费后即删除，不能重放。
     expect(grants.activeCount()).toBe(0)
     expect(() => grants.resolveExactPath({ grantId: grant.grantId, webContentsId: 17, operation: 'create' }))
-      .toThrow('外部文件授权不存在或已失效')
+      .toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
   })
 
   it('已存在文件的精确授权同样解析成主进程持有的路径', () => {
@@ -435,13 +435,13 @@ describe('ExternalFileGrantService 精确路径授权（供仍以路径为入参
     })
     const request = { grantId: grant.grantId, webContentsId: 17, operation: 'create' as const }
 
-    expect(() => grants.resolveExactPath({ ...request, grantId: 'forged' })).toThrow('外部文件授权不存在')
-    expect(() => grants.resolveExactPath({ ...request, webContentsId: 18 })).toThrow('外部文件授权不属于当前窗口')
-    expect(() => grants.resolveExactPath({ ...request, operation: 'read' })).toThrow('未授予 read 操作')
+    expect(() => grants.resolveExactPath({ ...request, grantId: 'forged' })).toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
+    expect(() => grants.resolveExactPath({ ...request, webContentsId: 18 })).toThrow('EXTERNAL_FILE_GRANT_WRONG_WINDOW')
+    expect(() => grants.resolveExactPath({ ...request, operation: 'read' })).toThrow('EXTERNAL_FILE_GRANT_OPERATION_DENIED')
     expect(grants.activeCount()).toBe(1)
 
     now = 1_501
-    expect(() => grants.resolveExactPath(request)).toThrow('外部文件授权已过期')
+    expect(() => grants.resolveExactPath(request)).toThrow('EXTERNAL_FILE_GRANT_EXPIRED')
   })
 
   it('拒绝目录范围授权冒充精确路径授权，并且不消费该目录授权', () => {
@@ -453,7 +453,7 @@ describe('ExternalFileGrantService 精确路径授权（供仍以路径为入参
 
     expect(() => grants.resolveExactPath({
       grantId: directoryGrant.grantId, webContentsId: 17, operation: 'create',
-    })).toThrow('外部文件授权范围不符')
+    })).toThrow('EXTERNAL_FILE_GRANT_SCOPE_MISMATCH')
     expect(grants.activeCount()).toBe(1)
     expect(grants.resolve({
       grantId: directoryGrant.grantId, webContentsId: 17, operation: 'create', relativePath: 'later.md',
@@ -469,7 +469,7 @@ describe('ExternalFileGrantService 精确路径授权（供仍以路径为入参
     })).toThrow()
     expect(() => grants.issueNewChild({
       webContentsId: 17, filePath: path.join(root, 'bad:name'), operations: ['create'], ttlMs: 500,
-    })).toThrow('相对路径无效')
+    })).toThrow('EXTERNAL_FILE_GRANT_PATH_INVALID')
     expect(grants.activeCount()).toBe(0)
   })
 
@@ -486,6 +486,6 @@ describe('ExternalFileGrantService 精确路径授权（供仍以路径为入参
     fs.mkdirSync(parent)
 
     expect(() => grants.resolveExactPath({ grantId: grant.grantId, webContentsId: 17, operation: 'create' }))
-      .toThrow('外部文件授权目标已变化')
+      .toThrow('EXTERNAL_FILE_GRANT_TARGET_CHANGED')
   })
 })

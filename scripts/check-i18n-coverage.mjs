@@ -112,6 +112,7 @@ const localizationCallees = new Set([
   'translate',
   'stepDesc',
   'appErrorMessage',
+  'displayedErrorMessage',
   // Small module-local wrappers used at renderer notification boundaries.
   'projectText',
   'projectError',
