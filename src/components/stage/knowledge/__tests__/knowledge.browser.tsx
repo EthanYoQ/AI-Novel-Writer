@@ -253,6 +253,20 @@ describe('知识库', () => {
       await vi.waitFor(() => expect(words.toasts).toHaveLength(1))
       expectExplained(words.toasts[0], zh, en)
     })
+
+    it(`${locale} 下没登记的码接在按界面语言写的说明后面，供反馈定位`, async () => {
+      useLocaleStore.setState({ locale })
+      const plain = invoke.getMockImplementation()!
+      invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'kb:backfill-vectors'
+        ? { success: false, processed: 0, failed: 1, error: 'EMBEDDING_SPACE_VERIFY_FAILED' }
+        : plain(channel, ...args))
+      const words = wordCollector()
+      await act(async () => root!.render(<KnowledgeIndexSection />))
+      await vi.waitFor(() => expect(document.querySelector('section button')).toBeTruthy())
+      await act(async () => document.querySelector<HTMLButtonElement>('section button')!.click())
+      await vi.waitFor(() => expect(words.toasts).toHaveLength(1))
+      expect(words.toasts[0]).toBe(say('重建检索失败：EMBEDDING_SPACE_VERIFY_FAILED', 'Could not rebuild search. EMBEDDING_SPACE_VERIFY_FAILED'))
+    })
   }
 
   it('查找结果里标出查找词，定稿章节分开列出', async () => {
