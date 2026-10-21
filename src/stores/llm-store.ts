@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { ipc } from '../services/ipc-client'
 import { requireIpcSuccess } from '../services/ipc-result'
+import { knownAppErrorMessage } from '../i18n/app-errors'
+import { useLocaleStore } from './locale-store'
 import { alertError } from '../components/ui/AlertDialog'
 import type {
   LLMFinishReason,
@@ -122,7 +124,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
   deleteModel: async (modelId) => {
     const result = await ipc.invoke('llm:delete-model', modelId)
     if (!result.success) {
-      alertError(result.error || '删除模型失败', { title: '模型删除失败' })
+      alertError(knownAppErrorMessage(useLocaleStore.getState().locale, result.error) ?? (result.error || '删除模型失败'), { title: '模型删除失败' })
       return false
     }
     await get().loadModels()

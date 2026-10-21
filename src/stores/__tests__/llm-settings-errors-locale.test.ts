@@ -44,4 +44,24 @@ describe('model settings refusals from the main process (#474 B6)', () => {
     expect(chinese).toContain('模型设置文件已损坏')
     expect(chinese).not.toContain('LLM_')
   })
+
+  it.each([
+    ['Error: LLM_DEFAULT_MODEL_ROLLBACK_FAILED', 'The model was not deleted', '模型没有删除'],
+    ['Error: LLM_MODEL_CONFIG_CORRUPT', 'The model settings file is damaged', '模型设置文件已损坏'],
+  ])('explains a refused model deletion (%s) in the interface language', async (error, english, chinese) => {
+    invoke.mockImplementation(async (called: string) => (called === 'llm:delete-model' ? { success: false, error } : undefined))
+
+    const shownEnglish = await shownError('en-US', () => useLLMStore.getState().deleteModel('model-1'))
+    expect(shownEnglish).toContain(english)
+    expect(shownEnglish).not.toMatch(/LLM_|\p{Script=Han}/u)
+
+    const shownChinese = await shownError('zh-CN', () => useLLMStore.getState().deleteModel('model-1'))
+    expect(shownChinese).toContain(chinese)
+    expect(shownChinese).not.toContain('LLM_')
+  })
+
+  it('keeps an unregistered deletion failure as the main process reported it', async () => {
+    invoke.mockImplementation(async (called: string) => (called === 'llm:delete-model' ? { success: false, error: 'Error: EBUSY: models.json' } : undefined))
+    await expect(shownError('en-US', () => useLLMStore.getState().deleteModel('model-1'))).resolves.toBe('Error: EBUSY: models.json')
+  })
 })
