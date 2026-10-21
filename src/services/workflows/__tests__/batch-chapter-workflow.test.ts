@@ -489,6 +489,22 @@ describe('batch chapter workflow completion mode', () => {
     expect(doubles.repairPostProcess).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['zh-CN', '实体稿没有重新发布：这一章的定稿记录已经不在了（可能已被删除），请刷新后再看。'],
+    ['en-US', 'The manuscript was not published again. The finalization record for this chapter no longer exists (it may have been deleted). Refresh to see the current state.'],
+  ] as const)('重试发布时定稿记录已不在，不说定稿已提交（%s，#474）', async (locale, error) => {
+    const root = { projectId: 'test-project', epoch: '原会话', rootActionId: '原预算根', runId: '原批次' }
+    doubles.batch = { batchId: '原批次', modelId: '原模型', rootHandle: root, mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 },
+      targetUnits: 2000, authorInputs: [], nextChapterNumber: 1,
+      completedChapters: [{ chapterNumber: 1, draftId: 101, version: 1,
+        contentHash: createHash('sha256').update('generated draft').digest('hex'), sourceRunHandle: root,
+        pendingFinalizationId: '原定稿', postProcessComplete: false }] }
+    doubles.retryPublication.mockResolvedValueOnce({ success: false, committed: false, error: 'FINALIZATION_COMMIT_NOT_FOUND' })
+    await useWorkflowStore.getState().startWorkflow(createBatchChapterWorkflow({ projectPath, projectSession: projectSession(), startChapterNumber: 1,
+      chapterCount: 1, chapterWordsTarget: 2000, generationModelId: '原模型', completionMode: 'auto_finalize', resumeBatchId: '原批次', locale }))
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({ status: 'failed', error })
+  })
+
   it('keeps auto-finalize failure-stop semantics and does not start a later chapter', async () => {
     doubles.finalizeChapterExecute
       .mockResolvedValueOnce(undefined)

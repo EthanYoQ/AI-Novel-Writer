@@ -313,12 +313,10 @@ async function runOneBatchChapter(
     if (saved?.pendingFinalizationId) {
       const publication = await retryFinalizationPublication(existingFinalizationId, projectSession)
       if (!publication.success) {
-        throw workflowMainProcessError(
-          { uiLocale },
-          publication.error,
-          '定稿已提交、实体稿待发布',
-          'Finalization was committed, but manuscript publication is still pending.',
-        )
+        // committed 为 false 时重试根本没执行（定稿记录已不在、会话不对），不能说定稿已提交。
+        throw publication.committed
+          ? workflowMainProcessError({ uiLocale }, publication.error, '定稿已提交、实体稿待发布', 'Finalization was committed, but manuscript publication is still pending.')
+          : workflowMainProcessError({ uiLocale }, publication.error, '实体稿没有重新发布', 'The manuscript was not published again.')
       }
     }
     if (!saved?.postProcessComplete) {
