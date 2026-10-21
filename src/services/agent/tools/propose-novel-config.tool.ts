@@ -2,7 +2,7 @@ import type { NovelConfig } from '../../../shared/ipc-channels'
 import { useProjectStore } from '../../../stores/project-store'
 import { ipc } from '../../ipc-client'
 import { buildAgentTool, type AgentExecutionContext } from '../tool-registry'
-import { agentToolText, assertAgentToolActive, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 
 const STRING_FIELDS = new Set<keyof NovelConfig>([
   'genre', 'subGenre', 'targetAudience', 'coreOutline', 'worldSetting', 'goldenFinger',
@@ -111,7 +111,7 @@ export const proposeNovelConfigTool = buildAgentTool({
       projectSession, 'project:update-config', project.id, { novelConfig: nextConfig }, project.path,
     )
     if (!result.success) {
-      const detail = result.error
+      const detail = agentToolErrorDetail(context, result.error)
       return {
         success: false,
         content: '',

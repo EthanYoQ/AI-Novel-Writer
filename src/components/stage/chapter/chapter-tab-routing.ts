@@ -6,6 +6,7 @@ import { getActiveProjectSessionContext, sameProjectPathKey, sameProjectSessionC
 import { fetchChapterDrafts, useDraftStore } from '../../../stores/draft-store'
 import { useEditorStore, type EditorTab } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { chapterNavigationEpoch, chapterPlanTabId, openChapter } from '../../../stores/navigation/stage-navigation'
 import { useStageStore } from '../../../stores/navigation/stage-store'
 import { openDraftTab } from '../../../stores/open-draft-tab'
@@ -135,8 +136,8 @@ export function installChapterTabRouting(): () => void {
       const chapterNumber = active.chapterNumber
       // 改道时那个标签已经关了：读不出这一章的稿就告诉作者，不能什么也不打开。
       void showDraft(active.filePath, chapterNumber, session).catch(error => {
-        const text = useLocaleStore.getState().text
-        const reason = error instanceof Error ? error.message : String(error)
+        const { locale, text } = useLocaleStore.getState()
+        const reason = displayedErrorMessage(locale, error)
         toast.error(text(`打开第 ${chapterNumber} 章失败：${reason}`, `Could not open chapter ${chapterNumber}: ${reason}`))
       })
       return

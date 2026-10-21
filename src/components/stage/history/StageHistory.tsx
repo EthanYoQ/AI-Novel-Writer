@@ -3,6 +3,7 @@ import { ArrowRight, Lock, RotateCcw } from 'lucide-react'
 import type { VersionRecord } from '../../../services/version-service'
 import { useDraftStore } from '../../../stores/draft-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { navigate } from '../../../stores/navigation/navigation-intents'
 import { useProjectStore } from '../../../stores/project-store'
 import { sameProjectSessionContext, projectSessionContextFromProject } from '../../../shared/project-session-context'
@@ -146,7 +147,8 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
     } catch (error) {
       if (request !== comparisonRequest.current) return
       setSelectedVersionId(null)
-      toast.error(text(`读取这一稿失败：${error instanceof Error ? error.message : String(error)}`, `Could not read this version: ${error instanceof Error ? error.message : String(error)}`))
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, error)
+      toast.error(text(`读取这一稿失败：${reason}`, `Could not read this version: ${reason}`))
     }
   }
 
@@ -165,7 +167,7 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
       setSelectedVersionId(null)
       setComparison(null)
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, error)
       toast.error(text(`回退失败：${reason}`, `Could not revert: ${reason}`))
     } finally {
       setReverting(false)

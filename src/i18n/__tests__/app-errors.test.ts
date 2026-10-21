@@ -130,6 +130,33 @@ describe('project session and external file errors from the main process (#474 B
   })
 })
 
+describe('显示处统一的报错说明（#474 渲染层消费处）', () => {
+  it.each(['zh-CN', 'en-US'] as const)('%s：剥掉通道与类名前缀再认码，认不出的保留原文，没有内容时用兜底', locale => {
+    const stale = knownAppErrorMessage(locale, 'PROJECT_SESSION_STALE')!
+    for (const raw of [
+      'PROJECT_SESSION_STALE',
+      'Error: PROJECT_SESSION_STALE',
+      new Error('PROJECT_SESSION_STALE'),
+      new Error("Error invoking remote method 'kb:clear-all': Error: PROJECT_SESSION_STALE"),
+      { errorCode: 'PROJECT_SESSION_STALE' },
+    ]) expect(displayedErrorMessage(locale, raw, '兜底')).toBe(stale)
+    expect(displayedErrorMessage(locale, "Error invoking remote method 'fs:read': Error: EBUSY: resource busy", '兜底')).toBe('EBUSY: resource busy')
+    expect(displayedErrorMessage(locale, new Error("Error invoking remote method 'fs:read': TypeError: boom"), '兜底')).toBe('boom')
+    expect(displayedErrorMessage(locale, '模型服务返回 HTTP 429', '兜底')).toBe('模型服务返回 HTTP 429')
+    for (const empty of [undefined, null, '', '  ', new Error('')]) expect(displayedErrorMessage(locale, empty, '兜底')).toBe('兜底')
+    // IPC 之外 reject 的普通对象：有字符串 message 就用它，没有就用兜底，不显示 [object Object]。
+    expect(displayedErrorMessage(locale, { message: '磁盘只读' }, '兜底')).toBe('磁盘只读')
+    expect(displayedErrorMessage(locale, { success: false }, '兜底')).toBe('兜底')
+  })
+
+  // project:create / project:open 的 catch 把 resolveDirectoryPath 抛出的码经 String(error) 原样放进 result.error。
+  it.each(['zh-CN', 'en-US'] as const)('%s：选好的文件夹在使用前被移动或替换时，不把 EXTERNAL_FILE_GRANT_TARGET_CHANGED 交给作者', locale => {
+    const shown = displayedErrorMessage(locale, 'Error: EXTERNAL_FILE_GRANT_TARGET_CHANGED')
+    expect(shown).not.toMatch(/EXTERNAL_FILE_GRANT|Error:/u)
+    expect(appErrorMessage(locale, 'Error: EXTERNAL_FILE_GRANT_TARGET_CHANGED')).toBe(shown)
+  })
+})
+
 describe('cast, blueprint and draft errors from the main process (#474 B2)', () => {
   it.each([
     // 可写 db 通道返回 { error: String(error) }。

@@ -9,6 +9,7 @@ import { formatRelationshipsForEditor } from '../../shared/relationship-presenta
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../project-session-gate'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { SaveOutcome } from './save-feedback'
+import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 
 /**
  * 角色档案的数据与操作：当前选中的角色、保存（含退出时保存）、删除一位、删除全部、改字段与改名。
@@ -94,8 +95,9 @@ export function useCharacterProfile(projectKey: string) {
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
         setSaveOutcome('failed')
-        setSaveError(error instanceof Error ? error.message : String(error))
-        addLog('error', text(`角色卡保存失败：${error}`, 'Could not save character cards.'))
+        const reason = displayedErrorMessage(useLocaleStore.getState().locale, error)
+        setSaveError(reason)
+        addLog('error', text(`角色卡保存失败：${reason}`, englishWithReason('Could not save character cards.', reason)))
       }
       if (propagateFailure) throw error
     }

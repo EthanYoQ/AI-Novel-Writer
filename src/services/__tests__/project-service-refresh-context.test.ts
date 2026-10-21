@@ -277,3 +277,25 @@ describe('ProjectService REFRESH_RESOURCE project identity', () => {
     })
   })
 })
+
+describe('打开作品时的读取警告（#474）', () => {
+  it('英文界面也带上登记过的原因，主进程未登记的中文原文只给英文概述', async () => {
+    const { useLocaleStore } = await import('../../stores/locale-store')
+    const previous = useLocaleStore.getState().locale
+    useLocaleStore.setState({ locale: 'en-US' })
+    useCharacterStore.setState({ lastError: null })
+    vi.spyOn(useCharacterStore.getState(), 'load').mockResolvedValue()
+    const session = { projectId: 'B', leaseId: 'lease-B', projectPath: projectBPath }
+    try {
+      vi.spyOn(useDraftStore.getState(), 'loadAllDrafts')
+        .mockRejectedValueOnce(new Error("Error invoking remote method 'db:draft-list': Error: PROJECT_SESSION_STALE"))
+        .mockRejectedValueOnce(new Error('草稿表读取失败'))
+      const stale = await onProjectOpened(session)
+      expect(stale.warnings).toHaveLength(1)
+      expect(stale.warnings[0]).toMatch(/^Could not load the draft list\. The project was switched or reopened/u)
+      await expect(onProjectOpened(session)).resolves.toEqual({ warnings: ['Could not load the draft list.'] })
+    } finally {
+      useLocaleStore.setState({ locale: previous })
+    }
+  })
+})

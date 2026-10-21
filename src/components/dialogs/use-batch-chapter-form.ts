@@ -26,6 +26,7 @@ import {
   isGenerationModel,
   preferredGenerationModelId,
 } from '../../services/workflows/chapter-write-launch'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 export interface BatchChapterProps {
   isOpen: boolean
@@ -86,7 +87,7 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
       } catch (cause) {
         if (disposed || !isProjectSessionCurrent(projectSession)) return
         setAuthoritativeStart(null)
-        setAuthorityError(cause instanceof Error ? cause.message : String(cause))
+        setAuthorityError(displayedErrorMessage(useLocaleStore.getState().locale, cause))
       } finally {
         if (!disposed && isProjectSessionCurrent(projectSession)) setAuthorityLoading(false)
       }
@@ -183,7 +184,7 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
       if (!guard.ok) {
         setError(frozenLocale === 'en-US'
           ? 'Writing prerequisites are not met. Complete the project setup and previous finalized chapter before starting.'
-          : guard.message || '前置条件未满足。')
+          : displayedErrorMessage(frozenLocale, guard.message, '前置条件未满足。'))
         return
       }
 
@@ -225,7 +226,7 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
       onClose()
     } catch (cause) {
       if (!isProjectSessionCurrent(projectSession)) return
-      const message = cause instanceof Error ? cause.message : String(cause)
+      const message = displayedErrorMessage(useLocaleStore.getState().locale, cause)
       if (cause && typeof cause === 'object' && 'code' in cause && cause.code === 'AUTHORITATIVE_CHAPTER_SEQUENCE_INVALID') {
         setAuthorityError(message)
       } else {
@@ -246,7 +247,7 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
       requireIpcSuccess(await call(session), action)
       return true
     } catch (cause) {
-      if (isProjectSessionCurrent(session)) setError(cause instanceof Error ? cause.message : String(cause))
+      if (isProjectSessionCurrent(session)) setError(displayedErrorMessage(useLocaleStore.getState().locale, cause))
       return false
     } finally {
       setStarting(false)

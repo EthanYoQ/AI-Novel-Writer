@@ -12,6 +12,7 @@ import type { StepCallbacks, WorkflowContext } from '../../stores/workflow-store
 import type { AllInvokeChannels, InvokeChannel, ProjectSessionContext } from '../../shared/ipc-channels'
 import { ipc } from '../ipc-client'
 import { localize } from '../../i18n/core'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import type { Locale } from '../../i18n/types'
 
 /**
@@ -64,11 +65,13 @@ export async function withRetry(
       return { ok: true, attempts: attempt + 1 }
     } catch (err) {
       if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+      // 原始原因随步骤失败记录保存；日志按冻结的界面语言说明。
       const errMsg = err instanceof Error ? err.message : String(err)
       if (attempt < maxRetries) {
+        const reason = displayedErrorMessage(uiLocale, err)
         callbacks.log(text(
-          `  ${label} 第${attempt + 1}次失败，正在重试...（${errMsg}）`,
-          `  ${label} failed on attempt ${attempt + 1}; retrying... (${errMsg})`,
+          `  ${label} 第${attempt + 1}次失败，正在重试...（${reason}）`,
+          `  ${label} failed on attempt ${attempt + 1}; retrying... (${reason})`,
         ))
       } else {
         return { ok: false, error: errMsg, attempts: attempt + 1 }
@@ -267,7 +270,7 @@ export async function runPostProcessPipeline(
       ...(options?.finalizedSource ? { finalizedSource: options.finalizedSource } : {})
     }, projectPath)
     if (!createRes.success || !createRes.id) {
-      const error = createRes.error || text('未知错误', 'Unknown error')
+      const error = displayedErrorMessage(uiLocale, createRes.error)
       throw new Error(text(
         `创建跑批失败: ${error}`,
         `Failed to create the post-processing run: ${error}`,
@@ -318,9 +321,10 @@ export async function runPostProcessPipeline(
       assertNotCancelled()
       const markResult = await invokeForProjectSession(projectSession, 'db:post-process-mark-step-ok', runId, step.key, projectPath)
       if (!markResult.success) {
+        const reason = displayedErrorMessage(uiLocale, markResult.error)
         throw new Error(text(
-          `记录后处理成功状态失败: ${markResult.error || '未知错误'}`,
-          `Failed to record the successful post-processing state: ${markResult.error || 'Unknown error'}`,
+          `记录后处理成功状态失败: ${reason}`,
+          `Failed to record the successful post-processing state: ${reason}`,
         ))
       }
     } else {
@@ -335,15 +339,17 @@ export async function runPostProcessPipeline(
         projectPath,
       )
       if (!markResult.success) {
+        const reason = displayedErrorMessage(uiLocale, markResult.error)
         throw new Error(text(
-          `记录后处理失败状态失败: ${markResult.error || '未知错误'}`,
-          `Failed to record the failed post-processing state: ${markResult.error || 'Unknown error'}`,
+          `记录后处理失败状态失败: ${reason}`,
+          `Failed to record the failed post-processing state: ${reason}`,
         ))
       }
       if (stopOnFailure) {
+        const reason = displayedErrorMessage(uiLocale, stepError)
         throw new Error(text(
-          `后处理步骤失败：${step.label} — ${stepError}`,
-          `Post-processing step failed: ${step.label} — ${stepError}`,
+          `后处理步骤失败：${step.label} — ${reason}`,
+          `Post-processing step failed: ${step.label} — ${reason}`,
         ))
       }
     }
@@ -384,9 +390,10 @@ export async function runPostProcessPipeline(
     `${sourceLabel} post-processing summary`,
   ))
   for (const [, r] of Object.entries(status.steps)) {
+    const reason = r.ok ? '' : ` — ${displayedErrorMessage(uiLocale, r.error)}`
     callbacks.log(text(
-      `  ${r.ok ? '成功' : '失败'}：${r.label}${r.ok ? '' : ` — ${r.error}`}`,
-      `  ${r.ok ? 'Succeeded' : 'Failed'}: ${r.label}${r.ok ? '' : ` — ${r.error}`}`,
+      `  ${r.ok ? '成功' : '失败'}：${r.label}${reason}`,
+      `  ${r.ok ? 'Succeeded' : 'Failed'}: ${r.label}${reason}`,
     ))
   }
   callbacks.log(text(

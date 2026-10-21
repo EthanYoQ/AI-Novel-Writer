@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 
 
 export const readBlueprintTool = buildAgentTool({
@@ -55,11 +55,11 @@ export const readBlueprintTool = buildAgentTool({
       )).join('\n')
       return { success: true, content: text(`📋 蓝图列表（${bps.length} 个）\n${list}\n\n使用 chapter_number 参数可以读取具体章节蓝图的内容。`, `📋 Blueprint list (${bps.length})\n${list}\n\nUse chapter_number to read a specific chapter blueprint.`) }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = agentToolErrorDetail(context, error)
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail)
+        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
           ? text('读取蓝图失败', 'Could not read blueprints')
           : text(`读取蓝图失败：${detail}`, `Could not read blueprints: ${detail}`),
       }

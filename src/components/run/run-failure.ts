@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import { PLOT_OUTLINE_RESUME_ERROR_CODE, PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE } from '../../services/workflows/commands/architecture.command'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { projectSessionContextFromProject, sameProjectPathKey, sameProjectSessionContext } from '../../shared/project-session-context'
@@ -63,7 +64,7 @@ export function useResumePlotOutline(run: WorkflowRun) {
     try {
       await launchCreativeWorkflow({ workflow: 'generate_architecture', selectedSteps: ['synopsis'], resumeSynopsis: true }, run.projectSession)
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = displayedErrorMessage(run.uiLocale, error)
       toast.error(run.uiLocale === 'en-US' ? `Failed to start the continuation: ${detail}` : `续写启动失败：${detail}`)
     } finally {
       setResuming(false)

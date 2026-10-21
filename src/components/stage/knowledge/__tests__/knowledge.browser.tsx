@@ -752,6 +752,30 @@ describe('知识库', () => {
     await vi.waitFor(() => expect(invoke.mock.calls.map(([channel]) => channel)).toContain('kb:clear-all'))
   })
 
+  it.each([
+    ['zh-CN', '清空知识库…', '清空知识库', '项目已切换或重新打开', '清空知识库失败'],
+    ['en-US', 'Clear knowledge base…', 'Clear knowledge base', 'The project was switched or reopened', 'Could not clear the knowledge base.'],
+  ] as const)('%s 界面：清空被主进程拒绝时，登记的码显示说明，未登记的原文保留，没有原因时用兜底', async (locale, open, confirmLabel, stale, fallback) => {
+    useLocaleStore.setState({ locale })
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => undefined)
+    const base = invoke.getMockImplementation()!
+    let reason: string | undefined
+    invoke.mockImplementation(async (channel, ...args) => channel === 'kb:clear-all' ? { success: false, error: reason } : base(channel, ...args))
+    await act(async () => root!.render(<StageKnowledge tabId={KB_TAB} />))
+    await vi.waitFor(() => expect(button(/车站档案/)).toBeTruthy())
+    for (const [raw, shown] of [
+      ['PROJECT_SESSION_STALE', expect.stringContaining(stale)],
+      ['SOMETHING_NEW_FROM_MAIN', expect.stringContaining('SOMETHING_NEW_FROM_MAIN')],
+      [undefined, fallback],
+    ] as const) {
+      reason = raw
+      error.mockClear()
+      await click(open)
+      await click(confirmLabel)
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(shown))
+    }
+  })
+
   it('查找之后清空知识库，或查找出错：不说「没有找到相关的资料」', async () => {
     vi.spyOn(toast, 'error').mockImplementation(() => undefined)
     await renderPage()

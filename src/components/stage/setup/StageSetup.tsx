@@ -14,6 +14,7 @@ import type { GeneratableField } from '../../../services/workflows/commands/gene
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { navigate } from '../../../stores/navigation/navigation-intents'
 import { missingSetup, type SetupField } from '../../../stores/navigation/stage-progress'
 import { useProjectStore } from '../../../stores/project-store'
@@ -105,9 +106,10 @@ function AiButton({ field, label, form, disabledReason }: { field: GeneratableFi
 function GenerateError({ field, label, form }: { field: GeneratableField; label: string; form: Form }) {
   const text = useLocaleStore(s => s.text)
   if (form.generateError?.field !== field) return null
+  const reason = displayedErrorMessage(useLocaleStore.getState().locale, form.generateError.message)
   return (
     <p className="stage-setup-error" role="alert">
-      {text(`「${label}」没有生成：${form.generateError.message}。原来的内容没有改动。`, `“${label}” was not generated: ${form.generateError.message}. Nothing was changed.`)}
+      {text(`「${label}」没有生成：${reason}。原来的内容没有改动。`, `“${label}” was not generated: ${reason}. Nothing was changed.`)}
     </p>
   )
 }

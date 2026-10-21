@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../project-session-gate'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import { useLLMStore } from '../../stores/llm-store'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
@@ -559,9 +560,11 @@ export function useReviewChecklist({
       return saved
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return null
-      setChecklistError(error instanceof Error
-        ? error.message
-        : text('确认审稿清单时发生错误。', 'An error occurred while confirming the review checklist.'))
+      setChecklistError(displayedErrorMessage(
+        useLocaleStore.getState().locale,
+        error,
+        text('确认审稿清单时发生错误。', 'An error occurred while confirming the review checklist.'),
+      ))
     } finally {
       if (isProjectSessionCurrent(projectSession)) setConfirming(false)
     }
@@ -683,9 +686,8 @@ export function useReviewChecklist({
       return null
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return null
-      return error instanceof Error
-        ? error.message
-        : text('启动审稿修稿时发生错误。', 'An error occurred while starting the review-driven revision.')
+      return displayedErrorMessage(useLocaleStore.getState().locale, error,
+        text('启动审稿修稿时发生错误。', 'An error occurred while starting the review-driven revision.'))
     } finally {
       if (isProjectSessionCurrent(projectSession)) setProcessing(false)
     }
@@ -756,8 +758,8 @@ export function useReviewChecklist({
       ))
       setRecheckMessage({ kind: 'success', text: text('合并后复验已完成。', 'The post-merge recheck is complete.') })
     } catch (error) {
-      if (isProjectSessionCurrent(projectSession)) setRecheckMessage({ kind: 'error', text: error instanceof Error
-        ? error.message : text('启动合并后复验时发生错误。', 'An error occurred while starting the post-merge recheck.') })
+      if (isProjectSessionCurrent(projectSession)) setRecheckMessage({ kind: 'error', text: displayedErrorMessage(useLocaleStore.getState().locale, error,
+        text('启动合并后复验时发生错误。', 'An error occurred while starting the post-merge recheck.')) })
     } finally {
       if (isProjectSessionCurrent(projectSession)) setRechecking(false)
     }

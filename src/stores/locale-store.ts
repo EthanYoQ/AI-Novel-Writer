@@ -1,6 +1,7 @@
 import { create, type StateCreator } from 'zustand'
 import { ipc } from '../services/ipc-client'
 import { localize, resolveLocale, translate, type MessageKey, type MessageParams } from '../i18n/core'
+import { displayedErrorMessage } from '../i18n/app-errors'
 import type { Locale } from '../i18n/types'
 import type { GlobalConfig } from '../shared/ipc-channels'
 
@@ -56,12 +57,9 @@ export function createLocaleState(dependencies: LocaleDependencies): StateCreato
             set({ locale: previousLocale, ...localeReaders() })
             dependencies.setDocumentLanguage(previousLocale)
           }
+          const reason = displayedErrorMessage(previousLocale, error)
           await dependencies.reportError?.(
-            localize(
-              previousLocale,
-              `语言设置保存失败：${error instanceof Error ? error.message : String(error)}`,
-              `Could not save the language setting: ${error instanceof Error ? error.message : String(error)}`,
-            ),
+            localize(previousLocale, `语言设置保存失败：${reason}`, `Could not save the language setting: ${reason}`),
             localize(previousLocale, '语言设置保存失败', 'Could not save language setting'),
           )
         }

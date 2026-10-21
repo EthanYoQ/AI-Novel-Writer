@@ -10,6 +10,7 @@ import { ipc } from './ipc-client'
 import { requireIpcSuccess } from './ipc-result'
 import { useWorkflowStore } from '../stores/workflow-store'
 import { useLocaleStore } from '../stores/locale-store'
+import { displayedErrorMessage } from '../i18n/app-errors'
 import type { Locale } from '../i18n/types'
 import type { FileWriteCommitState, ProjectSessionContext } from '../shared/ipc-channels'
 import type {
@@ -458,7 +459,7 @@ export async function exportNovel(
       : activeWritePath && commitState === 'unknown'
         ? unknownSingleWriteDetail(uiLocale, activeWritePath)
         : ''
-    const errorMessage = `${String(error)}${partialWriteDetail}`
+    const errorMessage = `${displayedErrorMessage(uiLocale, error)}${partialWriteDetail}`
     addLog('error', text(`导出失败: ${errorMessage}`, `Export failed: ${errorMessage}`), uiLocale)
     return { success: false, error: errorMessage }
   }
