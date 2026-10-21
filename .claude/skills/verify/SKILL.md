@@ -352,6 +352,7 @@ node scripts/redesign/drive.mjs --scenario typing-latency --shell stage --out <�
 | `refs-threads` | 线索路线起初是埋设未到、推进不显示、解决未到；记录第 1 章定稿里的变化后，埋设一站变成已发生 | 推进后的线索 | 否 | lane 4 |
 | `refs-delete` | 线索行「更多」里的「删除线索…」弹出危险确认；`after` 取消，线索仍在 | 危险确认 | 否 | lane 5 |
 | `refs-thread-evidence-en` | 切到英文界面后记录第 1 章定稿里的变化，原文填一句定稿里没有的话：主进程只交 `NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE`，表单里的提示是英文、不带汉字与错误码，作者的输入留着 | 表单里的英文提示 | 否 | #474 |
+| `refs-kb-index-damaged-en` | 导入两份资料后把作品的检索索引登记文件（`.ai-novel/embedding-spaces.json`）写坏，在设置外观里切到英文，到「Retrieval model」页点检查重建：主进程只交 `EMBEDDING_SPACE_REGISTRY_INVALID`，失败提示是英文、不带汉字与错误码 | 英文的失败提示 | 是 | #474 |
 | `refs-kb` | 导入两份资料后查「雾钟」，结果片段里标出查找词；整窗文字、可访问名称、提示与占位里没有 LanceDB、FTS、BM25、Embedding、向量、query、MCP、token | 查找结果 | 是 | lane 6 |
 | `refs-kb-dirty` | 改了项目副本不保存就点另一份资料，弹出放弃修改的确认；`after` 选「继续编辑」，修改还在，再按 Ctrl S 保存后「有未保存的修改」消失 | 未保存确认 | 是 | lane 7 |
 | `refs-diff` | 第 3 章选草稿 v1：对比是 `aria-readonly` 的差异页，标出新增，区域里没有输入框、可编辑元素或编辑器，没有「完成合并」 | 只读对比 | 否 | lane 8 |

@@ -59,7 +59,7 @@ async function ensureMigration(projectPath: string): Promise<void> {
   }
 }
 
-function migrationFailureDetails(error: unknown): { error: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED } {
+function knowledgeFailureDetails(error: unknown): { error: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED } {
   if (error instanceof LegacyVectorMigrationBlockedError) {
     return { error: error.code, errorCode: error.code }
   }
@@ -320,7 +320,7 @@ async function importTextInternal(
     }
     return { success: true, docId, chunkCount: chunks.length }
   } catch (error) {
-    return { success: false, ...migrationFailureDetails(error) }
+    return { success: false, ...knowledgeFailureDetails(error) }
   }
 }
 
@@ -577,7 +577,7 @@ async function performReferenceTextImport(
     `).run(documentId)
     return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: false }
   } catch (error) {
-    return { success: false, ...migrationFailureDetails(error) }
+    return { success: false, ...knowledgeFailureDetails(error) }
   }
 }
 
@@ -631,7 +631,7 @@ export async function importReferenceText(
       },
     )
   } catch (error) {
-    return { success: false, ...migrationFailureDetails(error) }
+    return { success: false, ...knowledgeFailureDetails(error) }
   }
 }
 
@@ -745,7 +745,7 @@ export async function backfillVectors(
       success: false,
       processed: 0,
       failed: 0,
-      ...migrationFailureDetails(error),
+      ...knowledgeFailureDetails(error),
     }
   }
 }

@@ -293,6 +293,27 @@ export const REFS_SCENARIOS = {
     assert.equal(await page.getByLabel('Quote from the final').inputValue(), '这句话不在定稿里', '表单留着作者的输入，改完能直接重试')
     return observed
   } },
+  // #474 B3：检索索引的登记文件损坏时，主进程只交 EMBEDDING_SPACE_REGISTRY_INVALID；英文界面的提示是英文、不带汉字与错误码。
+  'refs-kb-index-damaged-en': { model: true, shell: 'stage', setup: seedRefs, run: async context => {
+    const { page, shoot } = context
+    await importMaterials(context)
+    fs.writeFileSync(path.join(context.samplePath, '.ai-novel', 'embedding-spaces.json'), '{ "damaged": ')
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    const sections = page.getByRole('navigation', { name: 'Settings sections' })
+    await sections.getByRole('button', { name: 'Retrieval model', exact: true }).click()
+    const index = stage.root(page).getByRole('region', { name: 'Search index of the current book' })
+    await index.getByRole('button').first().click({ timeout: 15_000 })
+    const toast = page.locator('.pi-toast[data-tone="danger"]:not([data-exiting]) .pi-toast-body').first()
+    await toast.waitFor({ state: 'visible', timeout: 30_000 })
+    const observed = { toast: await toast.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await shoot('refs-kb-index-damaged-en')
+    assert.equal(observed.lang, 'en-US')
+    assert.match(observed.toast, /search index records of this book are damaged/)
+    assert.doesNotMatch(observed.toast, /[A-Z]{3,}_|\p{Script=Han}/u, JSON.stringify(observed))
+    return observed
+  } },
   'refs-delete': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
     await refs.open(page, 'plot')
     await refs.plotView(page, '伏笔线索').click()
