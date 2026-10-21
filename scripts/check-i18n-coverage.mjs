@@ -486,7 +486,9 @@ function inspectMainReturnErrors(violations, root, file, sourceFile) {
 }
 
 const errorCode = /^[A-Z][A-Z0-9_]*$/
-const exemptDirective = /\/\/\s*i18n-exempt:(.*)$/u
+/** 不在 __tests__ 目录里的测试、浏览器测试、Storybook 与类型声明文件也不进界面。 */
+const testOrDeclarationFile = /\.(?:test|spec)\.tsx?$|\.browser\.tsx?$|\.stories\.tsx?$|\.d\.ts$/u
+const exemptDirective =/\/\/\s*i18n-exempt:(.*)$/u
 
 /**
  * throw 所在行行尾、或紧挨着的上一行（整行注释）的 `// i18n-exempt: <理由>`。
@@ -575,7 +577,7 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
   }
   const rendererThrowFiles = new Set(I18N_COVERAGE_BOUNDARIES.rendererThrowErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative))))
   for (const file of rendererThrowFiles) {
-    if (workflowFiles.has(file) || !/\.tsx?$/u.test(file) || file.endsWith('.d.ts')) continue
+    if (workflowFiles.has(file) || !/\.tsx?$/u.test(file) || testOrDeclarationFile.test(file)) continue
     if (relativePath(root, file).split('/').includes('__tests__')) continue
     const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true,
       file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)

@@ -484,6 +484,9 @@ describe('i18n coverage boundary scanner', () => {
           if (!value) throw new Error('剧情树事件无效')
         }
       `)
+      for (const name of ['use-thing.test.ts', 'use-thing.spec.tsx', 'use-thing.browser.tsx', 'Thing.stories.tsx']) {
+        writeFixture(root, `src/components/stage/${name}`, "throw new Error('测试文件名的中文不进界面')")
+      }
       writeFixture(root, 'src/components/stage/__tests__/use-thing.test.ts', `
         throw new Error('测试里的中文不进界面')
       `)
