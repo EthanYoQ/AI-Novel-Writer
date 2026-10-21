@@ -144,3 +144,29 @@ describe('cast, blueprint and draft errors from the main process (#474 B2)', () 
     expect(displayedErrorMessage('zh-CN', new Error(raw))).not.toMatch(/[A-Z]{3,}_/u)
   })
 })
+
+describe('knowledge base and search index errors from the main process (#474 B3)', () => {
+  it.each([
+    // kb 通道的结果值：{ success: false, error: 码 }。
+    ['KNOWLEDGE_BASE_COPY_CHANGED', 'Reopen the material', '请重新打开这份资料'],
+    ['EMBEDDING_RESPONSE_INVALID', 'returned an unusable result', '返回的结果不合格'],
+    // 检索与读取原样抛出：Electron 包上通道名与 "Error: "。
+    ["Error invoking remote method 'kb:search': Error: EMBEDDING_SPACE_REGISTRY_INVALID", 'search index records of this book are damaged', '检索索引记录已损坏'],
+    // vector-store 的 catch 曾用 String(error) 交出 "Error: 码"。
+    ['Error: EMBEDDING_SPACE_UNREGISTERED_DATA', 'search index records of this book are damaged', '检索索引记录已损坏'],
+  ])('explains %s in the interface language without the code', (raw, english, chinese) => {
+    expect(appErrorMessage('en-US', raw)).toContain(english)
+    expect(appErrorMessage('en-US', raw)).not.toMatch(/[A-Z]{3,}_|\p{Script=Han}/u)
+    expect(appErrorMessage('zh-CN', raw)).toContain(chinese)
+    expect(appErrorMessage('zh-CN', raw)).not.toMatch(/[A-Z]{3,}_/u)
+  })
+
+  it('prefers the code of a result whose error text was written in the system language', () => {
+    const blocked = {
+      success: false,
+      errorCode: 'LEGACY_VECTOR_MIGRATION_BLOCKED',
+      error: '旧版知识库数据需要先修复后才能继续。请修正项目中的 vectors.json，然后重试。',
+    }
+    expect(knownAppErrorMessage('en-US', blocked)).toContain('Legacy knowledge-base data must be repaired')
+  })
+})

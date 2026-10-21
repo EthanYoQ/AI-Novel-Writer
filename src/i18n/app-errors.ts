@@ -195,6 +195,19 @@ const ERROR_KEYS = {
   NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE: 'error.narrativeThreadEvidenceNotInSource',
   DRAFT_NOT_FOUND: 'error.draftNotFound',
   DRAFT_FINALIZED_READ_ONLY: 'error.draftFinalizedReadOnly',
+  // 知识库与检索索引（#474 B3）：知识库页、设置里的检索索引检查、导入创作资料与定稿收入知识库按码说明。
+  EMBEDDING_REQUEST_FAILED: 'error.embeddingRequestFailed',
+  EMBEDDING_OLLAMA_NATIVE_URL: 'error.embeddingOllamaNativeUrl',
+  EMBEDDING_RESPONSE_INVALID: 'error.embeddingResponseInvalid',
+  EMBEDDING_SPACE_REGISTRY_INVALID: 'error.knowledgeIndexDamaged',
+  EMBEDDING_SPACE_UNREGISTERED_DATA: 'error.knowledgeIndexDamaged',
+  EMBEDDING_SPACE_BUSY: 'error.knowledgeIndexBusy',
+  EMBEDDING_SPACE_CHANGED: 'error.knowledgeIndexChanged',
+  EMBEDDING_SPACE_REINDEX_REQUIRED: 'error.knowledgeIndexReindexRequired',
+  KNOWLEDGE_BASE_COPY_UNAVAILABLE: 'error.knowledgeCopyUnavailable',
+  KNOWLEDGE_BASE_COPY_CHANGED: 'error.knowledgeCopyChanged',
+  KNOWLEDGE_BASE_COPY_EMPTY: 'error.knowledgeCopyEmpty',
+  KNOWLEDGE_BASE_TEXT_EMPTY: 'error.knowledgeTextEmpty',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

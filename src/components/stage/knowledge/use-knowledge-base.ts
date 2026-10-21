@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { appErrorMessage } from '../../../i18n/app-errors'
+import { appErrorMessage, knownAppErrorMessage } from '../../../i18n/app-errors'
+import type { Locale } from '../../../i18n/types'
 import { ipc } from '../../../services/ipc-client'
 import {
   selectPlanningMaterials,
@@ -25,6 +26,14 @@ import { pluralEn } from '../../../shared/plural-en'
 
 const EMPTY_STATS: KBStatsData = { documentCount: 0, totalChunks: 0, vectorDimension: 0 }
 export const EMPTY_DRAFT: KnowledgeDraft = { docId: null, copy: null, content: '' }
+
+/**
+ * kb 通道返回的失败结果：主进程交的是错误码（#474）。登记过的码按界面语言说明，errorCode 优先，
+ * 因为同一结果里的 error 可能是按系统语言写好的说明；没登记的原样显示供反馈定位，没给原因就用兜底。
+ */
+function knowledgeFailureMessage(locale: Locale, result: { error?: string; errorCode?: string }, fallback: string): string {
+  return knownAppErrorMessage(locale, result) ?? knownAppErrorMessage(locale, result.error) ?? (result.error || fallback)
+}
 
 /**
  * 所选资料与改动存放的位置：知识库标签上，换页再回来不丢。
@@ -88,7 +97,7 @@ export function useKnowledgeIndex() {
           ? text('检查完成，当前检索模型不需要重建', 'Check complete. The current retrieval model needs no rebuild.')
           : text(`检索已重建：处理了 ${result.processed} 段资料${result.failed > 0 ? `，${result.failed} 段失败` : ''}`, `Search rebuilt: ${result.processed} ${pluralEn(result.processed, 'passage')} processed${result.failed > 0 ? `, ${result.failed} failed` : ''}`))
       } else {
-        toast.error(result.error || text('重建检索失败', 'Could not rebuild search'))
+        toast.error(knowledgeFailureMessage(locale, result, text('重建检索失败', 'Could not rebuild search')))
       }
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
@@ -275,7 +284,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
     try {
       const result = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(session, 'kb:save-document-copy', docId, current.content, copy.contentHash, session.projectPath))
       if (!isProjectSessionCurrent(session)) return
-      if (!result.success) { toast.error(result.error || text('保存失败', 'Save failed')); return }
+      if (!result.success) { toast.error(knowledgeFailureMessage(locale, result, text('保存失败', 'Save failed'))); return }
       if (readDraft() === saving) await openDocument(docId, true)
       clearResults()
       toast.success(text('项目副本已保存；更新检索后，写作时才能查到新内容', 'Project copy saved. Update search so writing can find the new text.'))
@@ -295,7 +304,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
     try {
       const result = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(session, 'kb:reindex-document-copy', current.docId, session.projectPath))
       if (!isProjectSessionCurrent(session)) return
-      if (!result.success || !result.docId) { toast.error(result.error || text('更新检索失败', 'Could not update search')); return }
+      if (!result.success || !result.docId) { toast.error(knowledgeFailureMessage(locale, result, text('更新检索失败', 'Could not update search'))); return }
       await loadData()
       await loadStatus()
       if (readDraft() === reindexing) await openDocument(result.docId, true)
