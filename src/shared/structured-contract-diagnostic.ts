@@ -70,7 +70,9 @@ export function structuredContractDiagnosticText(
   diagnostic: Pick<StructuredContractDiagnostic, 'code' | 'path'>,
 ): string {
   const [zhCN, enUS] = DIAGNOSTIC_TEXT[diagnostic.code]
+  // 根路径 `$` 对作者是暗号，说成「整体内容」。
+  const root = diagnostic.path === '$'
   return locale === 'en-US'
-    ? `The content does not match the expected format: ${diagnostic.path} ${enUS}.`
-    : `内容格式不对：${diagnostic.path} ${zhCN}。`
+    ? `The content does not match the expected format: ${root ? 'the whole content' : diagnostic.path} ${enUS}.`
+    : `内容格式不对：${root ? '整体内容' : `${diagnostic.path} `}${zhCN}。`
 }

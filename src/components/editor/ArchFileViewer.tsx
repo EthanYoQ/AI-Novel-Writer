@@ -488,10 +488,9 @@ function ArchFileViewerSession({
     targetUnits?: number,
   ) => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
-    if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) {
+    if (!projectSession || !isProjectSessionPath(projectSession, projectKey) || !isProjectSessionCurrent(projectSession)) {
       throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation did not start.'))
     }
-    if (!isProjectSessionCurrent(projectSession)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation did not start.'))
     await launchCreativeWorkflow({
       workflow: 'generate_architecture',
       selectedSteps,

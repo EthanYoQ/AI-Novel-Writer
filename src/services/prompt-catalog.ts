@@ -7,6 +7,8 @@ import { useLocaleStore } from '../stores/locale-store'
 import type { PromptTemplate } from './prompt-templates'
 import { resolveWritingLanguage, type WritingLanguage } from '../shared/writing-language'
 
+const sessionChangedError = () => new Error(useLocaleStore.getState().text('项目会话已变化，已拒绝读取项目提示词', 'The book session changed, so project prompts were not read.'))
+
 export type PromptSource = 'builtin' | 'global' | 'project'
 
 export interface ResolvedPrompt {
@@ -130,7 +132,7 @@ export class PromptCatalog {
   ): Promise<ResolvedPrompt | undefined> {
     await this.ensureGlobalLoaded()
     if (projectSession && !await this.ensureProjectLoaded(projectSession)) {
-      throw new Error(useLocaleStore.getState().text('项目会话已变化，已拒绝读取项目提示词', 'The book session changed, so project prompts were not read.'))
+      throw sessionChangedError()
     }
     const projectPrompts = this.projectPromptsFor(projectSession)
     const localized = localizedKey(key, writingLanguage)
@@ -152,7 +154,7 @@ export class PromptCatalog {
   ): Promise<ResolvedPrompt[]> {
     await this.ensureGlobalLoaded()
     if (projectSession && !await this.ensureProjectLoaded(projectSession)) {
-      throw new Error(useLocaleStore.getState().text('项目会话已变化，已拒绝读取项目提示词', 'The book session changed, so project prompts were not read.'))
+      throw sessionChangedError()
     }
     const projectDiagnostics = projectSession
       && this.projectCache
