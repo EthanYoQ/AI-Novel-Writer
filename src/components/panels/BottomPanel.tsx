@@ -600,7 +600,7 @@ function ModelsView() {
             <span className="font-bold text-sm text-[var(--color-text)]">{stats.totalCalls}</span> {text('次调用', 'calls')}
           </div>
           <div className="text-[0.7rem] text-[var(--color-text-muted)]">
-            <span className="font-bold text-sm text-[var(--color-text)]">{stats.totalTokens == null ? text('未知', 'Unknown') : `${(stats.totalTokens / 1000).toFixed(1)}k`}</span> Tokens
+            {text('总用量', 'Total usage')} <span className="font-bold text-sm text-[var(--color-text)]">{stats.totalTokens == null ? text('未知', 'Unknown') : `${(stats.totalTokens / 1000).toFixed(1)}k`}</span>
             {stats.knownUsageCalls < stats.totalCalls && (
               <span>{text(`（${stats.knownUsageCalls}/${stats.totalCalls} 次已报告）`, ` (${stats.knownUsageCalls}/${stats.totalCalls} reported)`)}</span>
             )}
@@ -626,7 +626,7 @@ function ModelsView() {
                 <th className="text-left px-4 py-1 font-medium">{text('时间', 'Time')}</th>
                 <th className="text-left px-2 py-1 font-medium">{text('模型', 'Model')}</th>
                 <th className="text-left px-2 py-1 font-medium">{text('用途', 'Purpose')}</th>
-                <th className="text-right px-2 py-1 font-medium">Tokens</th>
+                <th className="text-right px-2 py-1 font-medium">{text('用量', 'Usage')}</th>
                 <th className="text-right px-2 py-1 font-medium">{text('耗时', 'Duration')}</th>
                 <th className="text-center px-2 py-1 font-medium">{text('状态', 'Status')}</th>
                 <th className="text-center px-2 py-1 font-medium">{text('诊断', 'Diagnostics')}</th>

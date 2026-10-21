@@ -397,9 +397,9 @@ function contextBudgetExhaustedMessage(input: {
         .join(', ')
     : 'prompt sections unavailable'
   return '当前生成输入没有安全的输出空间。'
-    + `模型=${input.modelId}；上下文=${input.contextWindowTokens} tokens；`
-    + `估算输入=${input.estimatedInputTokens} tokens；`
-    + `安全保留=${CONTEXT_SAFETY_RESERVE_TOKENS} tokens；输出保留=0 tokens；`
+    + `模型=${input.modelId}；上下文=${input.contextWindowTokens}；`
+    + `估算输入=${input.estimatedInputTokens}；`
+    + `安全预留额度=${CONTEXT_SAFETY_RESERVE_TOKENS}；输出预留额度=0；`
     + `主要区段=${contributors}。`
 }
 
@@ -591,7 +591,7 @@ export function createGenerationHarness(dependencies: {
           if (remainingRequestedTokens <= 0) {
             throw new GenerationHarnessError(
               'REQUESTED_TOKEN_BUDGET_EXHAUSTED',
-              '生成会话已用尽请求 Token 预算。',
+              '生成会话已用尽请求输出额度。',
             )
           }
 

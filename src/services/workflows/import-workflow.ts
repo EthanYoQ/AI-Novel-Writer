@@ -587,9 +587,9 @@ export function estimateImportCost(_totalWords: number, chapterCount: number): {
     estimatedTokens,
     estimatedMinutes,
     breakdown: [
-      `· 全局推演：~${(globalInferTokens / 1_000).toFixed(0)}K tokens`,
-      `· 蓝图推演：~${(totalBlueprintTokens / 1_000).toFixed(0)}K tokens`,
-      `· 总计：~${(estimatedTokens / 1_000).toFixed(0)}K tokens`,
+      `· 全局推演：~${(globalInferTokens / 1_000).toFixed(0)}K`,
+      `· 蓝图推演：~${(totalBlueprintTokens / 1_000).toFixed(0)}K`,
+      `· 总计：~${(estimatedTokens / 1_000).toFixed(0)}K`,
     ].join('\n'),
   }
 }

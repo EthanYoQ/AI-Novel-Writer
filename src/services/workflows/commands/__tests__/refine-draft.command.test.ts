@@ -533,7 +533,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     ['provider error', new Error('provider unavailable')],
     [
       'budget exhaustion',
-      new GenerationHarnessError('REQUESTED_TOKEN_BUDGET_EXHAUSTED', '生成会话已用尽请求 Token 预算。'),
+      new GenerationHarnessError('REQUESTED_TOKEN_BUDGET_EXHAUSTED', '生成会话已用尽请求输出额度。'),
     ],
   ])('keeps revision storage untouched on %s', async (_label, failure) => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()

@@ -27,6 +27,15 @@ describe('writing skill prompt budget diagnostics', () => {
 
     expect(formatPromptBudgetFailure(report, 'en-US')).toContain('Writing Skill: Scene Craft 2,400')
     expect(formatPromptBudgetFailure(report, 'zh-CN')).toContain('写作 Skill：Scene Craft 2,400')
+    for (const locale of ['zh-CN', 'en-US'] as const) {
+      const message = formatPromptBudgetFailure(report, locale)
+      expect(message).not.toMatch(/token/iu)
+      expect(message).toContain('16,384')
+      expect(message).toContain('3,200')
+      expect(message).toContain('4,096')
+    }
+    expect(formatPromptBudgetFailure(report, 'zh-CN')).toContain('输出预留额度为 4,096')
+    expect(formatPromptBudgetFailure(report, 'en-US')).toContain('the reserved output allowance is 4,096')
     expect(JSON.stringify(report)).not.toContain('Prefer concrete action')
   })
 
@@ -44,9 +53,15 @@ describe('writing skill prompt budget diagnostics', () => {
     }
 
     const message = formatGenerationBudgetDiagnostic(diagnostic, 'zh-CN')
-    expect(message).toContain('需求输出 7,712 tokens')
-    expect(message).toContain('总预留 9,224 tokens')
-    expect(message).toContain('实际总量 4,160 tokens')
+    expect(message).toContain('需求输出 7,712')
+    expect(message).toContain('总预留额度 9,224')
+    expect(message).toContain('实际总用量 4,160')
+    expect(message).not.toMatch(/token/iu)
+    const english = formatGenerationBudgetDiagnostic(diagnostic, 'en-US')
+    expect(english).toContain('requested output 7,712')
+    expect(english).toContain('total reserved allowance 9,224')
+    expect(english).toContain('actual total usage 4,160')
+    expect(english).not.toMatch(/token/iu)
     expect(message).toContain('推理 210')
     expect(message).toContain('裁决依据：模型输出上限')
   })
@@ -76,8 +91,9 @@ describe('writing skill prompt budget diagnostics', () => {
         { code: 'liability-bound-unknown', selected: true },
       ],
     }, locale)
-    expect(message).toContain(locale === 'zh-CN' ? '语义输出估算 1,712 tokens' : 'semantic output estimate 1,712 tokens')
-    expect(message).toContain(locale === 'zh-CN' ? '物理输出上限 16,384 tokens' : 'physical output limit 16,384 tokens')
+    expect(message).toContain(locale === 'zh-CN' ? '语义输出估算 1,712' : 'semantic output estimate 1,712')
+    expect(message).toContain(locale === 'zh-CN' ? '物理输出额度 16,384' : 'physical output allowance 16,384')
+    expect(message).not.toMatch(/token/iu)
     expect(message).toContain(locale === 'zh-CN' ? '实际用量未知' : 'actual usage is unknown')
   })
 
@@ -113,10 +129,11 @@ describe('writing skill prompt budget diagnostics', () => {
     }, 'zh-CN')
 
     expect(message).toContain('已取消')
-    expect(message).toContain('原总预留 8,192 tokens')
+    expect(message).toContain('原总预留额度 8,192')
+    expect(message).not.toMatch(/token/iu)
     expect(message).toContain('请求未发送，预留已释放')
     expect(message).not.toContain('实际用量')
-    expect(message).not.toContain('实际总量 0')
+    expect(message).not.toContain('实际总用量 0')
   })
 
   it('explains a preflight conflict without exposing prompt content', () => {
@@ -141,5 +158,8 @@ describe('writing skill prompt budget diagnostics', () => {
     expect(message).toContain('本次未发送')
     expect(message).toContain('此正文任务不能安全分段')
     expect(message).not.toContain('任何作者正文')
+    expect(message).toContain(`任务需要输出额度 ${decision.requestedOutputTokens.toLocaleString('zh-CN')}`)
+    expect(message).not.toMatch(/token/iu)
+    expect(formatTaskBudgetDecisionFailure(decision, 'en-US')).not.toMatch(/token/iu)
   })
 })
