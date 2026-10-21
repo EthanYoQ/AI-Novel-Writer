@@ -788,7 +788,7 @@ describe('ImportRunOrchestrator failure copy follows the import run locale', () 
       chapterNumbers: [1],
       drafts: [{
         chapterNumber: 1, draftId: 1, finalizationId: 'final-1', contentHash: 'f'.repeat(64),
-        targetFileName: 'Chapter 1.txt', status: 'finalized', publicationStatus: 'published',
+        targetFileName: 'Chapter 1.txt', status: 'finalized', publicationStatus: 'pending',
       }],
       idempotent: false,
     }
