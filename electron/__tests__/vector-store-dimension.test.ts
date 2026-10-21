@@ -559,8 +559,7 @@ describe('知识库向量维度', () => {
     )
 
     expect(invalid.success).toBe(false)
-    expect(invalid.error).toMatch(/向量|批次|有限/)
-    expect(invalid.error).not.toContain('Arrow')
+    expect(invalid.error).toBe('EMBEDDING_RESPONSE_INVALID')
 
     const valid = await addChunks(
       projectPath,
@@ -609,7 +608,7 @@ describe('知识库向量维度', () => {
       newSpace,
     )
 
-    expect(mismatch).toMatchObject({ success: false, chunkCount: 0, error: expect.stringMatching(/reindex_required/i) })
+    expect(mismatch).toMatchObject({ success: false, chunkCount: 0, error: 'EMBEDDING_SPACE_REINDEX_REQUIRED' })
     const registry = await getEmbeddingSpaces(projectPath)
     const [first] = registry.spaces
     expect(registry).toEqual(beforeRegistry)
@@ -650,7 +649,7 @@ describe('知识库向量维度', () => {
       undefined,
       undefined,
       newSpace,
-    )).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reindex_required/i) })
+    )).resolves.toMatchObject({ success: false, error: 'EMBEDDING_SPACE_REINDEX_REQUIRED' })
     expect(await getEmbeddingSpaces(projectPath)).toEqual(before)
     await expect(search(projectPath, '模型 A', vector, 5, oldSpace)).resolves.toEqual([
       expect.objectContaining({ fileName: 'model-a.txt' }),
@@ -968,7 +967,7 @@ describe('知识库向量维度', () => {
       )).resolves.toMatchObject({
         success: false,
         chunkCount: 0,
-        error: expect.stringContaining('存在未登记数据，已拒绝覆盖'),
+        error: 'EMBEDDING_SPACE_UNREGISTERED_DATA',
       })
     }
 

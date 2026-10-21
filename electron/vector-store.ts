@@ -275,13 +275,13 @@ function normalizedIdentity(identity?: EmbeddingSpaceIdentity, dimension?: numbe
 function validateVectorsForChunks(chunks: readonly unknown[], vectors?: unknown): { vectors?: number[][]; dimension?: number; error?: string } {
   if (vectors === undefined) return {}
   if (!Array.isArray(vectors)) {
-    return { error: '向量批次无效：必须是与文本块一一对应的数组' }
+    return { error: 'EMBEDDING_RESPONSE_INVALID' }
   }
   if (vectors.length !== chunks.length) {
-    return { error: `向量批次数量不匹配：期望 ${chunks.length}，实际 ${vectors.length}` }
+    return { error: 'EMBEDDING_RESPONSE_INVALID' }
   }
   if (vectors.length === 0) {
-    return { error: '向量批次为空，无法建立嵌入空间' }
+    return { error: 'EMBEDDING_RESPONSE_INVALID' }
   }
 
   let dimension: number | undefined
@@ -289,17 +289,17 @@ function validateVectorsForChunks(chunks: readonly unknown[], vectors?: unknown)
   for (let index = 0; index < vectors.length; index += 1) {
     const vector = vectors[index]
     if (!Array.isArray(vector) || vector.length === 0) {
-      return { error: `第 ${index + 1} 个向量为空或无效` }
+      return { error: 'EMBEDDING_RESPONSE_INVALID' }
     }
     if (dimension === undefined) {
       dimension = vector.length
     } else if (vector.length !== dimension) {
-      return { error: `向量维度不一致：第 1 个为 ${dimension} 维，第 ${index + 1} 个为 ${vector.length} 维` }
+      return { error: 'EMBEDDING_RESPONSE_INVALID' }
     }
     const values: number[] = []
     for (const value of vector) {
       if (typeof value !== 'number' || !Number.isFinite(value)) {
-        return { error: `第 ${index + 1} 个向量包含非有限数值` }
+        return { error: 'EMBEDDING_RESPONSE_INVALID' }
       }
       values.push(value)
     }
@@ -356,11 +356,11 @@ function emptyRegistry(): EmbeddingSpaceRegistry {
 
 export function validateRegistry(value: unknown): EmbeddingSpaceRegistry {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('嵌入空间元数据损坏，未修改现有向量表')
+    throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID')
   }
   const candidate = value as Partial<EmbeddingSpaceRegistry>
   if (candidate.version !== 1 || !Array.isArray(candidate.spaces)) {
-    throw new Error('嵌入空间元数据版本无效，未修改现有向量表')
+    throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID')
   }
   const spaces = candidate.spaces.map((space) => {
     if (
@@ -380,13 +380,13 @@ export function validateRegistry(value: unknown): EmbeddingSpaceRegistry {
       || !['active', 'building', 'inactive'].includes(space.status)
       || typeof space.createdAt !== 'string'
     ) {
-      throw new Error('嵌入空间元数据字段无效，未修改现有向量表')
+      throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID')
     }
     return { ...space }
   })
   const activeGeneration = candidate.activeGeneration ?? null
   if (activeGeneration !== null && (!Number.isInteger(activeGeneration) || !spaces.some(space => space.generation === activeGeneration))) {
-    throw new Error('嵌入空间 active 指针无效，未修改现有向量表')
+    throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID')
   }
   return { version: 1, activeGeneration, spaces }
 }
@@ -397,8 +397,7 @@ function readRegistry(projectPath: string): EmbeddingSpaceRegistry | undefined {
   try {
     return validateRegistry(JSON.parse(fs.readFileSync(filePath, 'utf8')))
   } catch (error) {
-    if (error instanceof Error && error.message.includes('嵌入空间')) throw error
-    throw new Error('嵌入空间元数据无法读取，未修改现有向量表')
+    throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID', { cause: error })
   }
 }
 
@@ -504,7 +503,7 @@ function removeEmptyUnregisteredTableDirectory(projectPath: string, tableName: s
   if (!fs.existsSync(tableDirectory)) return
   const stat = fs.statSync(tableDirectory)
   if (!stat.isDirectory() || fs.readdirSync(tableDirectory).length > 0) {
-    throw new Error(`嵌入空间 ${tableName} 存在未登记数据，已拒绝覆盖；请修复知识库后重试`)
+    throw new Error('EMBEDDING_SPACE_UNREGISTERED_DATA')
   }
   fs.rmdirSync(tableDirectory)
 }
@@ -536,7 +535,7 @@ async function createOwnedEmbeddingTable(
 ): Promise<void> {
   const ownershipKey = `${databasePath(projectPath)}\0${space.tableName}`
   if (embeddingTableCreationOwners.has(ownershipKey)) {
-    throw new Error(`嵌入空间 ${space.tableName} 正在创建，请稍后重试`)
+    throw new Error('EMBEDDING_SPACE_BUSY')
   }
 
   embeddingTableCreationOwners.add(ownershipKey)
@@ -794,7 +793,7 @@ export async function planEmbeddingRebuild(
 ): Promise<EmbeddingRebuildPlanResult> {
   const validation = validateVectorsForChunks(['canonical probe'], [probeVector])
   if (validation.error || validation.dimension === undefined) {
-    return { success: false, error: validation.error ?? '嵌入探测响应为空，无法确定向量维度' }
+    return { success: false, error: validation.error ?? 'EMBEDDING_RESPONSE_INVALID' }
   }
 
   const identity = normalizedIdentity(embeddingSpace, validation.dimension)
@@ -867,7 +866,7 @@ async function activatePlannedEmbeddingSpaceInternal(
   plan: EmbeddingRebuildPlan,
 ): Promise<{ success: boolean; error?: string }> {
   if (plan.mode !== 'activate') {
-    return { success: false, error: '当前嵌入空间不允许直接激活' }
+    return { success: false, error: 'EMBEDDING_SPACE_PLAN_MODE_INVALID' }
   }
   try {
     const db = await getConnection(projectPath)
@@ -875,10 +874,10 @@ async function activatePlannedEmbeddingSpaceInternal(
     const registry = readRegistry(projectPath) ?? await inferLegacyRegistry(db, tableNames)
     const matching = matchingSpace(registry, plan.identity, plan.vectorDimension)
     if (!matching || !tableNames.includes(matching.tableName)) {
-      return { success: false, error: '目标嵌入空间不存在，未修改当前索引' }
+      return { success: false, error: 'EMBEDDING_SPACE_CHANGED' }
     }
     if (!(await completeForCanonicalTable(db, matching)) || !(await verifyQueryableEmbeddingSpace(db, matching))) {
-      return { success: false, error: '目标嵌入空间未完整验证，旧索引保持不变' }
+      return { success: false, error: 'EMBEDDING_SPACE_CHANGED' }
     }
     writeRegistry(projectPath, registryWithActiveGeneration(registry, matching.generation))
     return { success: true }
@@ -907,17 +906,17 @@ async function rebuildPlannedEmbeddingSpaceInternal(
   updates: Array<{ id: string; vector: number[] }>,
 ): Promise<{ success: boolean; count: number; error?: string }> {
   if (plan.mode !== 'rebuild') {
-    return { success: false, count: 0, error: '当前嵌入空间不需要新建代际' }
+    return { success: false, count: 0, error: 'EMBEDDING_SPACE_PLAN_MODE_INVALID' }
   }
   if (updates.length !== plan.chunks.length || new Set(updates.map(update => update.id)).size !== updates.length) {
-    return { success: false, count: 0, error: '重建向量与冻结文本块不一致，未修改当前索引' }
+    return { success: false, count: 0, error: 'EMBEDDING_SPACE_REBUILD_VECTORS_MISMATCH' }
   }
   const validation = validateVectorsForChunks(plan.chunks.map(chunk => chunk.id), updates.map(update => update.vector))
   if (validation.error || !validation.vectors || validation.dimension === undefined) {
-    return { success: false, count: 0, error: validation.error ?? '重建向量无效' }
+    return { success: false, count: 0, error: validation.error ?? 'EMBEDDING_RESPONSE_INVALID' }
   }
   if (validation.dimension !== plan.vectorDimension) {
-    return { success: false, count: 0, error: '重建期间向量维度发生变化，旧索引保持不变' }
+    return { success: false, count: 0, error: 'EMBEDDING_RESPONSE_INVALID' }
   }
 
   let db: lancedb.Connection | undefined
@@ -927,7 +926,7 @@ async function rebuildPlannedEmbeddingSpaceInternal(
     db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
     if (!tableNames.includes(TABLE_NAME)) {
-      return { success: false, count: 0, error: '知识库文本块不存在，未修改当前索引' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_CHANGED' }
     }
     const registry = readRegistry(projectPath) ?? await inferLegacyRegistry(db, tableNames)
     const canonical = await canonicalRecordsForEmbeddingRebuild(db)
@@ -937,7 +936,7 @@ async function rebuildPlannedEmbeddingSpaceInternal(
       || plannedById.size !== plan.chunks.length
       || canonical.some(record => plannedById.get(record.id) !== record.text)
     ) {
-      return { success: false, count: 0, error: '知识库文本已变化，请重新检查并重建向量索引' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_CHANGED' }
     }
     // A concurrent completed rebuild should be observed and replanned rather
     // than appended to. An incomplete generation is intentionally left alone;
@@ -949,12 +948,12 @@ async function rebuildPlannedEmbeddingSpaceInternal(
       && await completeForCanonicalTable(db, existing)
       && await verifyQueryableEmbeddingSpace(db, existing)
     ) {
-      return { success: false, count: 0, error: '嵌入空间状态已变化，请重新检查并重建向量索引' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_CHANGED' }
     }
 
     const vectorsById = new Map(updates.map((update, index) => [update.id, validation.vectors![index]]))
     if (vectorsById.size !== canonical.length || canonical.some(record => !vectorsById.has(record.id))) {
-      return { success: false, count: 0, error: '重建向量缺少文本块，旧索引保持不变' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_REBUILD_VECTORS_MISMATCH' }
     }
     newSpace = nextSpace(registry, plan.identity, plan.vectorDimension)
     const records = canonical.map(record => ({ ...record, vector: vectorsById.get(record.id)! }))
@@ -968,7 +967,7 @@ async function rebuildPlannedEmbeddingSpaceInternal(
     tableCreated = true
 
     if (!(await completeForCanonicalTable(db, newSpace)) || !(await verifyQueryableEmbeddingSpace(db, newSpace))) {
-      throw new Error('新嵌入空间未通过完整性验证')
+      throw new Error('EMBEDDING_SPACE_VERIFY_FAILED')
     }
     const nextRegistry = registryWithActiveGeneration({
       version: 1,
@@ -1112,7 +1111,7 @@ async function addChunksInternal(
   embeddingSpace?: EmbeddingSpaceIdentity,
 ): Promise<{ success: boolean; chunkCount: number; error?: string }> {
   if (!validateChunks(chunks)) {
-    return { success: false, chunkCount: 0, error: '文本块为空或格式无效' }
+    return { success: false, chunkCount: 0, error: 'KNOWLEDGE_BASE_CHUNKS_INVALID' }
   }
   const validation = validateVectorsForChunks(chunks, vectors)
   if (validation.error) {
@@ -1152,13 +1151,14 @@ async function addChunksInternal(
       // 文本但尚未显式回填时，调用方必须进入明确的 rebuild/backfill 流程。
       if (!existingSpace && (registry.spaces.length > 0 || canonicalHasRows)) {
         const active = activeSpace(registry)
-        const current = active
-          ? `${active.modelFingerprint} / ${active.vectorDimension} 维`
-          : '当前全文知识库'
+        console.warn('[AI Novel VectorStore] 导入的嵌入空间与现有索引不兼容，需要先显式重建', {
+          incoming: { ...identity, vectorDimension: validation.dimension },
+          active: active ? { modelFingerprint: active.modelFingerprint, vectorDimension: active.vectorDimension } : 'fts-only',
+        })
         return {
           success: false,
           chunkCount: 0,
-          error: `reindex_required: 嵌入空间与${current}不兼容；请先执行显式向量回填/重建，旧代际未被修改`,
+          error: 'EMBEDDING_SPACE_REINDEX_REQUIRED',
         }
       }
       const vectorRecords = canonicalRecords.map((record, index) => ({
@@ -1218,7 +1218,7 @@ async function addChunksInternal(
       await compensateEmbeddingWrite(db, embeddingWrite, chunkIds)
     }
     console.error('[AI Novel VectorStore] 写入失败:', error)
-    return { success: false, chunkCount: 0, error: String(error) }
+    return { success: false, chunkCount: 0, error: error instanceof Error ? error.message : String(error) }
   }
 }
 
@@ -2021,10 +2021,10 @@ async function updateChunkVectorsInternal(
 ): Promise<{ success: boolean; count: number; error?: string }> {
   const validation = validateVectorsForChunks(updates.map(update => update.id), updates.map(update => update.vector))
   if (validation.error || !validation.vectors || validation.dimension === undefined) {
-    return { success: false, count: 0, error: validation.error ?? '向量批次为空，无法回填' }
+    return { success: false, count: 0, error: validation.error ?? 'EMBEDDING_RESPONSE_INVALID' }
   }
   if (new Set(updates.map(update => update.id)).size !== updates.length) {
-    return { success: false, count: 0, error: '回填向量包含重复块标识' }
+    return { success: false, count: 0, error: 'EMBEDDING_SPACE_BACKFILL_DUPLICATE_ID' }
   }
 
   let db: lancedb.Connection | undefined
@@ -2032,7 +2032,7 @@ async function updateChunkVectorsInternal(
   try {
     db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
-    if (!tableNames.includes(TABLE_NAME)) return { success: false, count: 0, error: 'chunks 表不存在' }
+    if (!tableNames.includes(TABLE_NAME)) return { success: false, count: 0, error: 'EMBEDDING_SPACE_BACKFILL_TARGET_MISSING' }
     const canonicalRows = await (await db.openTable(TABLE_NAME)).query().toArray()
     const updateById = new Map(updates.map(update => [update.id, update.vector]))
     const records = canonicalRows
@@ -2042,7 +2042,7 @@ async function updateChunkVectorsInternal(
         vector: updateById.get((row as { id: string }).id)!,
       })) as ChunkRecord[]
     if (records.length !== updates.length) {
-      return { success: false, count: 0, error: '回填目标块不存在，未修改任何嵌入空间' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_BACKFILL_TARGET_MISSING' }
     }
 
     const registry = await loadOrRegisterLegacyRegistry(projectPath, db, tableNames)
@@ -2061,6 +2061,6 @@ async function updateChunkVectorsInternal(
       await compensateEmbeddingWrite(db, write, updates.map(update => update.id))
     }
     console.error('[AI Novel VectorStore] 批量更新向量失败:', error)
-    return { success: false, count: 0, error: String(error) }
+    return { success: false, count: 0, error: error instanceof Error ? error.message : String(error) }
   }
 }
