@@ -18,9 +18,9 @@ const pluralVerbAfterCount = /^ (?:have|are|were)\b/
 const pluralHint = "Write the noun with pluralEn(count, 'chapter'); pass irregular plurals explicitly, as in pluralEn(count, 'entry', 'entries'). Write a verb that follows the count the same way, as in pluralEn(count, 'has', 'have')."
 /**
  * 英文文案在哪个实参（从 0 数）：(locale, 中文, 英文) 形式的翻译函数与 projectError、artifactError（error, 中文兜底, 英文兜底）、
- * workflowUiText（context, 中文, 英文）与工作流文件里的 localeText、textForLocale（locale, 中文, 英文）在第 3 个，其余在第 2 个。
+ * workflowUiText（context, 中文, 英文）与工作流文件里的 localeText、textForLocale（locale, 中文, 英文）、Agent 工具的 agentToolText（context, 中文, 英文）在第 3 个，其余在第 2 个。
  */
-const englishArgumentIndex = new Map([['localize', 2], ['stepDesc', 2], ['mainText', 2], ['projectError', 2], ['artifactError', 2], ['workflowUiText', 2], ['localeText', 2], ['textForLocale', 2]])
+const englishArgumentIndex = new Map([['localize', 2], ['stepDesc', 2], ['mainText', 2], ['projectError', 2], ['artifactError', 2], ['workflowUiText', 2], ['localeText', 2], ['textForLocale', 2], ['agentToolText', 2]])
 
 /**
  * The broad renderer roots preserve the existing visible-copy check.  The
@@ -60,6 +60,7 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
     'src/App.tsx',
     'src/components',
     'src/stores',
+    'src/services',
   ],
   // 这些命令连错误码也不能直接抛（#408）：每条失败都要给作者能读的说明。
   strictWorkflowCommandErrorBoundaries: [
@@ -126,6 +127,8 @@ const localizationCallees = new Set([
   // 批量创作与导入工作流里按冻结界面语言选文案的本地函数。
   'localeText',
   'textForLocale',
+  // Agent 工具的说明按作品写作语言选文案（工具结果同时回给模型）。
+  'agentToolText',
 ])
 
 function filesAt(target) {

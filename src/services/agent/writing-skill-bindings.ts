@@ -8,6 +8,8 @@ import {
 } from '../../shared/writing-skills'
 import { ipc } from '../ipc-client'
 import { skillRegistry } from './skill-registry'
+import { useLocaleStore } from '../../stores/locale-store'
+import { workflowMainProcessError } from '../workflows/workflow-project-session'
 
 interface WritingSkillBindingFile {
   version: 1
@@ -34,11 +36,11 @@ function bindingPath(projectPath: string): string {
 
 function parseBindings(value: unknown): WritingSkillBindingFile {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('写作 Skill 绑定文件已损坏（Writing skill binding file is invalid）')
+    throw new Error(useLocaleStore.getState().text('写作 Skill 绑定文件已损坏', 'The writing Skill binding file is damaged.'))
   }
   const candidate = value as { version?: unknown; bindings?: unknown }
   if (candidate.version !== 1 || !candidate.bindings || typeof candidate.bindings !== 'object') {
-    throw new Error('写作 Skill 绑定文件已损坏（Writing skill binding file is invalid）')
+    throw new Error(useLocaleStore.getState().text('写作 Skill 绑定文件已损坏', 'The writing Skill binding file is damaged.'))
   }
   const bindings: Partial<Record<WritingSkillStage, string>> = {}
   for (const stage of WRITING_SKILL_STAGES) {
@@ -48,7 +50,7 @@ function parseBindings(value: unknown): WritingSkillBindingFile {
       typeof skillId !== 'string'
       || !/^(?:builtin|user|project):[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(skillId)
     ) {
-      throw new Error(`写作 Skill 绑定无效：${stage}（Invalid writing skill binding）`)
+      throw new Error(useLocaleStore.getState().text(`写作 Skill 绑定无效：${stage}`, `Invalid writing Skill binding: ${stage}`))
     }
     bindings[stage] = skillId
   }
@@ -81,23 +83,23 @@ export async function loadWritingSkillBindings(
     projectSession.projectPath,
   )
   if (!result.success) {
-    throw new Error(`无法读取写作 Skill 绑定（Could not read writing skill bindings）：${result.error || 'unknown error'}`)
+    throw workflowMainProcessError({ uiLocale: useLocaleStore.getState().locale }, result.error, '无法读取写作 Skill 绑定', 'Could not read the writing Skill bindings.')
   }
   try {
     return parseBindings(JSON.parse(result.content))
   } catch (error) {
-    if (error instanceof Error && /Skill/.test(error.message)) throw error
-    throw new Error('写作 Skill 绑定文件已损坏（Writing skill binding file is invalid）')
+    if (!(error instanceof SyntaxError)) throw error
+    throw new Error(useLocaleStore.getState().text('写作 Skill 绑定文件已损坏', 'The writing Skill binding file is damaged.'))
   }
 }
 
 function requireBoundSkill(skillId: string) {
   const skill = skillRegistry.getById(skillId)
   if (!skill) {
-    throw new Error(`写作 Skill 绑定目标不存在：${skillId}（Writing skill binding target is missing）`)
+    throw new Error(useLocaleStore.getState().text(`写作 Skill 绑定目标不存在：${skillId}`, `The bound writing Skill is missing: ${skillId}`))
   }
   if (!skill.writingSkill.compatible) {
-    throw new Error(`写作 Skill 绑定目标不兼容：${skillId}（Writing skill binding target is incompatible）`)
+    throw new Error(useLocaleStore.getState().text(`写作 Skill 绑定目标不兼容：${skillId}`, `The bound writing Skill is incompatible with this book: ${skillId}`))
   }
   return skill
 }

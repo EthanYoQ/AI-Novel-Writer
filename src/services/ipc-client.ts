@@ -19,6 +19,8 @@ import type { AiNovelAPI } from '../shared/desktop-api'
 function getAPI(): AiNovelAPI {
   const api = typeof window === 'undefined' ? undefined : window.aiNovelAPI
   if (!api) {
+    // i18n-exempt: 只在 Electron 以外（单元测试、纯浏览器调试）出现，作者用的桌面应用总有 aiNovelAPI
+    // i18n-exempt: 只在 Electron 以外（单元测试、纯浏览器调试）出现，作者用的桌面应用总有 aiNovelAPI
     throw new Error('桌面接口 aiNovelAPI 未就绪，请重新启动应用')
   }
   return api
@@ -69,7 +71,7 @@ function invokeWithSession<C extends InvokeChannel>(
   }
   const projectSession = context ?? getActiveProjectSessionContext()
   if (!projectSession) {
-    throw new Error('缺少当前项目会话，已拒绝项目数据访问')
+    throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
   }
   return getAPI().invoke(channel, ...args, projectSession) as Promise<AllInvokeChannels[C]['return']>
 }
@@ -99,6 +101,8 @@ export const ipc = {
     ...args: AllInvokeChannels[C]['args']
   ): Promise<AllInvokeChannels[C]['return']> => {
     if (!isProjectScopedChannel(channel)) {
+      // i18n-exempt: 通道类型已限定在项目会话范围内，只有绕过类型的调用才会触发
+      // i18n-exempt: 通道类型已限定在项目会话范围内，只有绕过类型的调用才会触发
       throw new Error(`通道不属于项目会话范围：${channel}`)
     }
     return invokeWithSession(channel, args, context)

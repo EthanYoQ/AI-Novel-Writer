@@ -11,6 +11,7 @@ import { hashAuthorText, isContentHash } from '../../shared/source-ref'
 import { ipc } from '../ipc-client'
 import { useLLMStore } from '../../stores/llm-store'
 import { useProjectStore } from '../../stores/project-store'
+import { useLocaleStore } from '../../stores/locale-store'
 import {
   assertGenerationHarnessPolicy,
   createGenerationHarness,
@@ -343,7 +344,7 @@ function createDefaultEnvironment(): GenerationRuntimeEnvironment {
     completeWithLease(request) {
       const frozenModelId = leaseModels.get(request.leaseId)
       if (!frozenModelId) {
-        return Promise.reject(new Error('模型执行租约无效或已关闭'))
+        return Promise.reject(new Error(useLocaleStore.getState().text('模型执行租约无效或已关闭', 'The model execution lease is invalid or already closed.')))
       }
       const llmStore = useLLMStore.getState()
       return new Promise<ProviderCompletion>((resolve, reject) => {

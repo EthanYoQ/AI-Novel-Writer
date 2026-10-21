@@ -3,6 +3,7 @@ import type { PromptLoadDiagnostic, ProjectSessionContext } from '../shared/ipc-
 import { sameProjectSessionContext } from '../shared/project-session-context'
 import { ipc } from './ipc-client'
 import { requireIpcSuccess } from './ipc-result'
+import { useLocaleStore } from '../stores/locale-store'
 import type { PromptTemplate } from './prompt-templates'
 import { resolveWritingLanguage, type WritingLanguage } from '../shared/writing-language'
 
@@ -129,7 +130,7 @@ export class PromptCatalog {
   ): Promise<ResolvedPrompt | undefined> {
     await this.ensureGlobalLoaded()
     if (projectSession && !await this.ensureProjectLoaded(projectSession)) {
-      throw new Error('项目会话已变化，已拒绝读取项目提示词')
+      throw new Error(useLocaleStore.getState().text('项目会话已变化，已拒绝读取项目提示词', 'The book session changed, so project prompts were not read.'))
     }
     const projectPrompts = this.projectPromptsFor(projectSession)
     const localized = localizedKey(key, writingLanguage)
@@ -151,7 +152,7 @@ export class PromptCatalog {
   ): Promise<ResolvedPrompt[]> {
     await this.ensureGlobalLoaded()
     if (projectSession && !await this.ensureProjectLoaded(projectSession)) {
-      throw new Error('项目会话已变化，已拒绝读取项目提示词')
+      throw new Error(useLocaleStore.getState().text('项目会话已变化，已拒绝读取项目提示词', 'The book session changed, so project prompts were not read.'))
     }
     const projectDiagnostics = projectSession
       && this.projectCache
@@ -377,12 +378,12 @@ export const ipcPromptPersistence: PromptPersistence = {
         requireIpcSuccess(result, '读取项目提示词')
         if (!result.content.trim()) continue
         const parsed = JSON.parse(result.content) as PromptTemplate
-        if (!validTemplate(parsed)) throw new Error('提示词内容结构无效')
+        if (!validTemplate(parsed)) throw new Error(useLocaleStore.getState().text('提示词内容结构无效', 'The prompt file has an invalid structure.'))
         const filenameKey = file.name.slice(0, -'.json'.length)
         const expectedFilename = parsed.writingLanguage
           ? `${parsed.key}.${resolveWritingLanguage(parsed.writingLanguage)}`
           : parsed.key
-        if (expectedFilename !== filenameKey) throw new Error('提示词标识或语言与文件名不一致')
+        if (expectedFilename !== filenameKey) throw new Error(useLocaleStore.getState().text('提示词标识或语言与文件名不一致', 'The prompt key or language does not match its file name.'))
         prompts.push(parsed)
       } catch (error) {
         diagnostics.push({
