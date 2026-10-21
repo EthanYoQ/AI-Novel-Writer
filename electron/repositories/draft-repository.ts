@@ -319,7 +319,7 @@ export class DraftRepository {
         sourceDependencies?: DraftSourceDependency[]
     }, capturedDatabase?: BetterSqlite3.Database): number {
         const db = capturedDatabase ?? getProjectDb()
-        if (!db) throw new Error('[DraftRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         // 事务内原子分配 version，避免 getNextVersion + create 竞态
         const tx = db.transaction(() => {
@@ -466,10 +466,10 @@ export class DraftRepository {
         const meta = DraftRepository.getMeta(id)
         if (!meta) return
         if (meta.status === 'finalized' && status !== 'finalized') {
-            throw new Error('已定稿正文为不可变事实；如需再编辑，请创建新草稿或处理定稿冲突')
+            throw new Error('DRAFT_FINALIZED_READ_ONLY')
         }
         if (meta.status !== 'finalized' && status === 'finalized') {
-            throw new Error('定稿必须通过原子定稿提交，不能单独更新草稿状态')
+            throw new Error('DRAFT_FINALIZATION_REQUIRES_COMMIT')
         }
 
         if (wordCount !== undefined) {
@@ -490,7 +490,7 @@ export class DraftRepository {
         const meta = DraftRepository.getMeta(id)
         if (!meta) return
         if (meta.status === 'finalized') {
-            throw new Error('已定稿正文为不可变事实；如需再编辑，请创建新草稿或处理定稿冲突')
+            throw new Error('DRAFT_FINALIZED_READ_ONLY')
         }
 
         ContentRepository.updateBody(meta.contentId, content)
@@ -518,7 +518,7 @@ export class DraftRepository {
             if (!target) return
             if (target.status === 'finalized') {
                 throw Object.assign(
-                    new Error('草稿已定稿，请通过定稿删除入口清理正文及派生投影'),
+                    new Error('FINALIZED_DRAFT_DELETE_REQUIRED'),
                     { code: 'FINALIZED_DRAFT_DELETE_REQUIRED' as const },
                 )
             }
@@ -534,7 +534,7 @@ export class DraftRepository {
     /** 清空所有生成正文与派生产物，不删除角色卡或项目配置 */
     static clearAll(): void {
         const db = getProjectDb()
-        if (!db) throw new Error('[DraftRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         const tx = db.transaction(() => {
             db.prepare('DELETE FROM finalized_draft_import_operations').run()

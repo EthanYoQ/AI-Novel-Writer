@@ -35,7 +35,7 @@ interface RecoveryCandidateRow {
 
 function requireDb() {
   const db = getProjectDb()
-  if (!db) throw new Error('项目数据库未打开')
+  if (!db) throw new Error('PROJECT_NOT_OPEN')
   return db
 }
 
@@ -72,9 +72,9 @@ function visibleOnly(text: string): string {
     .trim()
 }
 
-function assertText(value: string, label: string, max: number): string {
+function assertText(value: string, max: number): string {
   const normalized = value.trim()
-  if (!normalized || normalized.length > max) throw new Error(`${label}无效`)
+  if (!normalized || normalized.length > max) throw new Error('RECOVERY_CANDIDATE_IDENTITY_INVALID')
   return normalized
 }
 
@@ -103,7 +103,7 @@ function sourceIsCurrent(row: RecoveryCandidateRow): boolean {
 
 function toCandidate(row: RecoveryCandidateRow, frozen = false): RecoveryCandidate {
   if ((!frozen && sha256(row.source_snapshot) !== row.source_hash) || sha256(row.visible_text) !== row.content_hash) {
-    throw new Error('恢复候选完整性校验失败')
+    throw new Error('RECOVERY_CANDIDATE_INTEGRITY_FAILED')
   }
   return {
     candidateId: row.candidate_id,
@@ -128,14 +128,14 @@ function toCandidate(row: RecoveryCandidateRow, frozen = false): RecoveryCandida
 export class RecoveryCandidateRepository {
   static record(request: RecoveryCandidateRecordRequest): RecoveryCandidate {
     const db = requireDb()
-    const runId = assertText(request.runId, '候选任务身份', 160)
-    const stepId = assertText(request.stepId, '候选步骤身份', 160)
-    const projectId = assertText(request.projectId, '候选项目身份', 160)
+    const runId = assertText(request.runId, 160)
+    const stepId = assertText(request.stepId, 160)
+    const projectId = assertText(request.projectId, 160)
     if (!Number.isSafeInteger(request.chapterNumber) || request.chapterNumber < 1) {
-      throw new Error('候选章节身份无效')
+      throw new Error('RECOVERY_CANDIDATE_CHAPTER_INVALID')
     }
     if (request.source.chapterNumber !== request.chapterNumber) {
-      throw new Error('候选源章节身份不一致')
+      throw new Error('RECOVERY_CANDIDATE_SOURCE_MISMATCH')
     }
     if (request.sourceDraft !== null && (
       !request.sourceDraft
@@ -143,9 +143,9 @@ export class RecoveryCandidateRepository {
       || request.sourceDraft.id < 1
       || !Number.isSafeInteger(request.sourceDraft.version)
       || request.sourceDraft.version < 1
-    )) throw new Error('候选源草稿身份无效')
+    )) throw new Error('RECOVERY_CANDIDATE_SOURCE_DRAFT_INVALID')
     const visibleText = visibleOnly(request.visibleText)
-    if (!visibleText) throw new Error('恢复候选没有可见正文')
+    if (!visibleText) throw new Error('RECOVERY_CANDIDATE_TEXT_EMPTY')
     const serialized = serializedSource(request.source)
     const candidateId = randomUUID()
 
@@ -164,7 +164,7 @@ export class RecoveryCandidateRepository {
         || replaced.run_id !== runId
         || replaced.project_id !== projectId
         || replaced.chapter_number !== request.chapterNumber
-      ) throw new Error('替代候选关系无效')
+      ) throw new Error('RECOVERY_CANDIDATE_REPLACEMENT_INVALID')
     }
 
     db.prepare(`
@@ -210,17 +210,17 @@ export class RecoveryCandidateRepository {
 
   static updatePending(candidateId: string, text: string): RecoveryCandidate {
     const db = requireDb()
-    const id = assertText(candidateId, '恢复候选身份', 160)
+    const id = assertText(candidateId, 160)
     readPortableRuntimeFreeze(getCurrentProjectPath()).assertMutable('recovery_candidates', id)
     const row = db.prepare(`
       SELECT * FROM recovery_candidates
       WHERE candidate_id = ? AND status = 'pending'
     `).get(id) as RecoveryCandidateRow | undefined
-    if (!row) throw new Error('恢复候选不存在或已处理')
+    if (!row) throw new Error('RECOVERY_CANDIDATE_NOT_PENDING')
     toCandidate(row)
-    if (!sourceIsCurrent(row)) throw new Error('恢复候选的源章节已变化，已拒绝保存')
+    if (!sourceIsCurrent(row)) throw new Error('RECOVERY_CANDIDATE_SOURCE_CHANGED')
     const visibleText = visibleOnly(text)
-    if (!visibleText) throw new Error('恢复候选没有可见正文')
+    if (!visibleText) throw new Error('RECOVERY_CANDIDATE_TEXT_EMPTY')
 
     db.prepare(`
       UPDATE recovery_candidates
@@ -234,7 +234,7 @@ export class RecoveryCandidateRepository {
   }
 
   static resolve(candidateId: string, status: Exclude<RecoveryCandidateStatus, 'pending'>): void {
-    if (status !== 'continued' && status !== 'discarded') throw new Error('恢复候选动作无效')
+    if (status !== 'continued' && status !== 'discarded') throw new Error('RECOVERY_CANDIDATE_ACTION_INVALID')
     const db = requireDb()
     readPortableRuntimeFreeze(getCurrentProjectPath()).assertMutable('recovery_candidates', candidateId)
     if (status === 'continued') {
@@ -242,13 +242,13 @@ export class RecoveryCandidateRepository {
         SELECT * FROM recovery_candidates
         WHERE candidate_id = ? AND status = 'pending'
       `).get(candidateId) as RecoveryCandidateRow | undefined
-      if (!row || !sourceIsCurrent(row)) throw new Error('恢复候选的源章节已变化，已拒绝继续')
+      if (!row || !sourceIsCurrent(row)) throw new Error('RECOVERY_CANDIDATE_SOURCE_CHANGED')
     }
     const result = db.prepare(`
       UPDATE recovery_candidates
       SET status = ?, resolved_at = datetime('now')
       WHERE candidate_id = ? AND status = 'pending'
     `).run(status, candidateId)
-    if (result.changes !== 1) throw new Error('恢复候选不存在或已处理')
+    if (result.changes !== 1) throw new Error('RECOVERY_CANDIDATE_NOT_PENDING')
   }
 }

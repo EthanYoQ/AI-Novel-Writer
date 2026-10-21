@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { resolveManuscriptTarget } from '../manuscript-publisher'
+import { publishManuscript, resolveManuscriptTarget } from '../manuscript-publisher'
 
 const roots: string[] = []
 
@@ -56,5 +56,15 @@ describe('manuscript publisher target seam', () => {
     expect(first.fileName).toBe('第2章.txt')
     expect(second.absolutePath).not.toBe(first.absolutePath)
     expect(fs.readFileSync(first.absolutePath, 'utf8')).toBe('pre-existing user manuscript')
+  })
+
+  it('refuses to overwrite a frozen target edited outside the app and reports a stable code (#474)', async () => {
+    const projectRoot = makeRoot()
+    fs.writeFileSync(path.join(projectRoot, '第3章 雨夜.txt'), '作者在应用外改过的正文', 'utf8')
+    await expect(publishManuscript({ projectRoot, targetFileName: '第3章 雨夜.txt', chapterNumber: 3, chapterTitle: '雨夜', content: '定稿正文' }))
+      .rejects.toThrow(/^MANUSCRIPT_TARGET_CONFLICT$/u)
+    await expect(publishManuscript({ projectRoot, targetFileName: '../escape.txt', chapterNumber: 3, chapterTitle: '雨夜', content: '定稿正文' }))
+      .rejects.toThrow(/^MANUSCRIPT_STORED_TARGET_INVALID$/u)
+    expect(fs.readFileSync(path.join(projectRoot, '第3章 雨夜.txt'), 'utf8')).toBe('作者在应用外改过的正文')
   })
 })

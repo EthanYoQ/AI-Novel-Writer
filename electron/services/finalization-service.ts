@@ -82,7 +82,7 @@ function hasSameFrozenRequest(
 function snapshotIntegrityError(record: FinalizationRecord): string | null {
   return snapshotHash(record.contentSnapshot) === record.contentHash
     ? null
-    : '已提交定稿的不可变正文快照与内容哈希不一致，已拒绝发布'
+    : 'FINALIZATION_SNAPSHOT_HASH_MISMATCH'
 }
 
 /**
@@ -109,7 +109,7 @@ export class FinalizationService {
           return {
             success: false,
             committed: false,
-            error: '该草稿已有内容不同的不可替换定稿提交',
+            error: 'FINALIZATION_COMMIT_CONFLICT',
           }
         }
         // 上次响应可能在客户端收到前丢失。复用既有 finalizationId 与目标文件名，
@@ -158,7 +158,7 @@ export class FinalizationService {
         success: false,
         committed: false,
         finalizationId: request.finalizationId,
-        error: '未找到可重试的定稿提交',
+        error: 'FINALIZATION_COMMIT_NOT_FOUND',
       }
     }
     const integrityError = snapshotIntegrityError(record)
@@ -193,13 +193,15 @@ export class FinalizationService {
       })
       return toResult(FinalizationRepository.markPublished(record.finalizationId), true)
     } catch (error) {
+      // committed: true 已表明定稿已提交、实体稿待发布，各显示处自己写这句；error 只带原因（错误码或系统报错）。
       const message = String(error)
       try {
         const pending = FinalizationRepository.markPublicationPending(record.finalizationId, message)
-        return toResult(pending, false, `定稿已提交、实体稿待发布：${message}`)
+        return toResult(pending, false, message)
       } catch (markError) {
         // outbox 在事务内已经以 pending 创建；即使补记错误失败，也不能把已提交事实伪装为回滚。
-        return toResult(record, false, `定稿已提交、实体稿待发布：${message}；待发布状态记录失败：${String(markError)}`)
+        console.error('[finalization] 实体稿待发布状态记录失败:', markError)
+        return toResult(record, false, message)
       }
     }
   }

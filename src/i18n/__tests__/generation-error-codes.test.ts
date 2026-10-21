@@ -17,6 +17,9 @@ import { knownAppErrorMessage } from '../app-errors'
  * 角色名单、蓝图与剧情资料（#474 B2）的码经 db 通道的 { error: String(err) } 或 IPC 异常到角色页、蓝图与剧情页；
  * CHARACTER_ROSTER_* 还会经生成 IPC 原样转给工作流失败面板（generation-controller 放行 CHARACTER_ 前缀）。
  *
+ * 定稿、实体稿、修订、恢复稿、摘要与章节删除（#474 B5）的码经 finalization:*、chapter:* 与 db 通道的 { error } 到定稿运行卡片、
+ * 删除提示、修订合并与恢复列表；摘要与角色状态的校验还经生成 IPC，在那里统一成 GENERATION_REQUEST_FAILED。
+ *
  * 模型调用、模型设置与执行租约（#474 B6）的码经 llm 通道的 { error } 或 IPC 异常到模型设置与生成运行时；
  * 连接测试的结果由主进程按界面语言写好再交给模型表单。
  *
@@ -72,6 +75,17 @@ const COVERED_PREFIXES = [
   'NARRATIVE_THREAD_',
   'DRAFT_',
   'IMPORT_RUN_',
+  // 定稿、实体稿、修订、恢复稿、连续性摘要、一致性豁免、后处理与章节删除（#474 B5）。
+  'CHAPTER_DELETE_',
+  'FINALIZATION_COMMIT_',
+  'FINALIZATION_EXPORT_',
+  'FINALIZATION_SNAPSHOT_',
+  'MANUSCRIPT_',
+  'REVISION_',
+  'RECOVERY_CANDIDATE_',
+  'CONSISTENCY_EXEMPTION_',
+  'POST_PROCESS_',
+  'CONTINUITY_',
   // 知识库、项目副本与检索索引（#474 B3）：经 kb 通道的 { error } 或 IPC 异常到知识库页、设置的检索索引检查，
   // 以及导入创作资料、定稿收入知识库与参照导入的工作流。
   'KNOWLEDGE_BASE_',
@@ -149,7 +163,6 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'GENERATION_BATCH_PROGRESS_CONFLICT',
     'GENERATION_BATCH_PROGRESS_INVALID',
     'GENERATION_BATCH_PROJECT_REQUIRED',
-    'GENERATION_BATCH_PUBLICATION_PENDING',
     'GENERATION_BEGIN_INVALID',
     'GENERATION_BINDING_CONFLICT',
     'GENERATION_BINDING_INVALID',
@@ -509,6 +522,50 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'DRAFT_MAIN_GENERATION_REQUEST_REQUIRED',
     'DRAFT_TARGET_UNITS_INVALID',
     'IMPORT_RUN_CHECKPOINT_STAGE_INVALID',
+    // #474 B5：删除请求与冻结删除收据、待删章节与定稿收据的一致性。界面只对列表里已定稿的这一章发起删除。
+    'CHAPTER_DELETE_NOT_FINALIZED',
+    'CHAPTER_DELETE_RECEIPT_CORRUPT',
+    'CHAPTER_DELETE_REQUEST_MISMATCH',
+    'CHAPTER_DELETE_TARGET_MISMATCH',
+    // #474 B5：定稿快照的形状、会话与哈希，定稿收据与发布记录、导出快照的一致性，实体稿目标路径的边界。
+    // 界面从冻结的编辑器快照与库内收据构造这些请求；碰到说明代码缺陷或作品库、正文文件夹被外部改坏。
+    'FINALIZATION_COMMIT_CHAPTER_MISMATCH',
+    'FINALIZATION_COMMIT_ID_REQUIRED',
+    'FINALIZATION_COMMIT_KNOWLEDGE_DOCUMENT_REQUIRED',
+    'FINALIZATION_COMMIT_OUTBOX_MISSING',
+    'FINALIZATION_EXPORT_CONTENT_EMPTY',
+    'FINALIZATION_EXPORT_CONTENT_MISMATCH',
+    'FINALIZATION_EXPORT_DUPLICATE_CHAPTER',
+    'FINALIZATION_EXPORT_IDENTITY_MISMATCH',
+    'FINALIZATION_EXPORT_SNAPSHOT_INVALID',
+    'FINALIZATION_EXPORT_SUMMARY_MISMATCH',
+    'FINALIZATION_SNAPSHOT_HASH_MISMATCH',
+    'FINALIZATION_SNAPSHOT_INVALID',
+    'FINALIZATION_SNAPSHOT_SESSION_MISMATCH',
+    'MANUSCRIPT_CHAPTER_NUMBER_INVALID',
+    'MANUSCRIPT_STORED_TARGET_INVALID',
+    'MANUSCRIPT_TARGET_OUTSIDE_PROJECT',
+    // #474 B5：修订稿与目标草稿的从属关系、审稿修订只能走原子合并入口。界面只合并这一稿自己的修订稿。
+    'REVISION_MERGE_REQUIRED',
+    'REVISION_TARGET_MISMATCH',
+    // #474 B5：恢复稿的请求身份、库内哈希与替代关系，一致性豁免的事实键，草稿定稿只能走原子定稿提交，
+    // 后处理运行必须绑定定稿收据。界面从运行记录与库内事实构造这些请求。
+    'CONSISTENCY_EXEMPTION_KEY_INVALID',
+    'DRAFT_FINALIZATION_REQUIRES_COMMIT',
+    'POST_PROCESS_FINALIZATION_SOURCE_REQUIRED',
+    'RECOVERY_CANDIDATE_ACTION_INVALID',
+    'RECOVERY_CANDIDATE_CHAPTER_INVALID',
+    'RECOVERY_CANDIDATE_IDENTITY_INVALID',
+    'RECOVERY_CANDIDATE_INTEGRITY_FAILED',
+    'RECOVERY_CANDIDATE_REPLACEMENT_INVALID',
+    'RECOVERY_CANDIDATE_SOURCE_DRAFT_INVALID',
+    'RECOVERY_CANDIDATE_SOURCE_MISMATCH',
+    // #474 B5：连续性事实与读取请求的形状、失效章节号、定稿来源草稿号。蓝图与导入提交、读前文时由界面或主进程自己构造。
+    'CONTINUITY_CHARACTER_REF_INVALID',
+    'CONTINUITY_FACTS_INVALID',
+    'CONTINUITY_INVALIDATION_CHAPTER_INVALID',
+    'CONTINUITY_SOURCE_DRAFT_INVALID',
+    'CONTINUITY_TARGET_CHAPTER_INVALID',
     // 知识库与检索索引（#474 B3）：重建计划与执行之间的内部约定、新代际写入后的完整性复核、
     // 参照导入与冻结章节的绑定、single-flight 与幂等收据。updateChunkVectors 只有测试调用。
     'EMBEDDING_SPACE_BACKFILL_DUPLICATE_ID',
@@ -547,6 +604,8 @@ const UNREGISTERED: Record<string, readonly string[]> = {
   // 恢复与续跑的顺序约束：界面只从恢复列表或当前运行发起这些请求，按记录状态给出可用操作；
   // 只有绕过界面直接调用才会撞上。
   recoverySequencing: [
+    // 后处理步骤收据只由这次定稿后处理自己的运行写入；步骤已被新的后处理运行替换时才会撞上（#474 B5）。
+    'POST_PROCESS_STEP_NOT_FOUND',
     'GENERATION_AGENT_WORKFLOW_RECOVERY_REQUIRED',
     'GENERATION_BATCH_ALREADY_COMPLETED',
     'GENERATION_BATCH_FINALIZATION_REQUIRED',
@@ -591,6 +650,15 @@ const UNREGISTERED: Record<string, readonly string[]> = {
   ],
   // 不经工作流失败面板：界面自己识别并给出专门提示、主进程内部捕获，或只在启动装配与关闭收尾时抛出。
   handledElsewhere: [
+    // 定稿连续性摘要与角色状态候选只经定稿生成 IPC 提交（#474 B5）：generation-controller 不放行 CONTINUITY_ 前缀，
+    // 记下诊断日志后统一成 GENERATION_REQUEST_FAILED；原码只进日志。
+    'CONTINUITY_CHARACTER_STATE_CANDIDATES_INVALID',
+    'CONTINUITY_EVIDENCE_NOT_IN_SOURCE',
+    'CONTINUITY_GENERATION_STALE',
+    'CONTINUITY_PROJECTION_INVALID',
+    'CONTINUITY_PROJECTION_MISSING',
+    'CONTINUITY_ROSTER_NAME_CONFLICT',
+    'CONTINUITY_SOURCE_STALE',
     'GENERATION_BLUEPRINTS_CLEARED',
     'GENERATION_INPUT_CAPACITY_EXCEEDED',
     'GENERATION_KNOWLEDGE_SPACE_NOT_MATCHED',

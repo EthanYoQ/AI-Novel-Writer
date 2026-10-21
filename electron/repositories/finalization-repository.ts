@@ -102,7 +102,7 @@ function rowToRecord(row: FinalizationRow): FinalizationRecord {
 
 function requireDatabase() {
   const db = getProjectDb()
-  if (!db) throw new Error('项目数据库未打开')
+  if (!db) throw new Error('PROJECT_NOT_OPEN')
   return db
 }
 
@@ -127,7 +127,7 @@ function selectAuthoritativeExportRows(
     const selectedVersion = selectedVersions.get(row.chapter_number)
     if (selectedVersion !== undefined) {
       if (selectedVersion === row.version) {
-        throw new Error(`第 ${row.chapter_number} 章存在重复定稿版本，无法确定导出正文`)
+        throw new Error('FINALIZATION_EXPORT_DUPLICATE_CHAPTER')
       }
       continue
     }
@@ -135,24 +135,24 @@ function selectAuthoritativeExportRows(
       !Number.isSafeInteger(row.draft_id) || row.draft_id < 1
       || !Number.isSafeInteger(row.chapter_number) || row.chapter_number < 1
       || !Number.isSafeInteger(row.version) || row.version < 1
-    ) throw new Error('定稿导出快照身份无效')
+    ) throw new Error('FINALIZATION_EXPORT_SNAPSHOT_INVALID')
     if (typeof row.body !== 'string' || row.body.trim().length === 0) {
-      throw new Error(`第 ${row.chapter_number} 章定稿正文为空`)
+      throw new Error('FINALIZATION_EXPORT_CONTENT_EMPTY')
     }
 
     const contentHash = createHash('sha256').update(row.body, 'utf8').digest('hex')
     if (row.finalization_id !== null) {
       if (typeof row.finalization_id !== 'string' || row.finalization_id.trim().length === 0) {
-        throw new Error('定稿导出快照身份无效')
+        throw new Error('FINALIZATION_EXPORT_SNAPSHOT_INVALID')
       }
       if (row.outbox_chapter_number !== row.chapter_number) {
-        throw new Error('定稿导出快照身份不一致')
+        throw new Error('FINALIZATION_EXPORT_IDENTITY_MISMATCH')
       }
       if (row.content_snapshot !== row.body) {
-        throw new Error('定稿导出快照正文不一致')
+        throw new Error('FINALIZATION_EXPORT_CONTENT_MISMATCH')
       }
       if (row.content_hash !== contentHash) {
-        throw new Error('定稿导出快照摘要不一致')
+        throw new Error('FINALIZATION_EXPORT_SUMMARY_MISMATCH')
       }
     }
 
@@ -245,7 +245,7 @@ export class FinalizationRepository {
         if (hasSameFinalizationInput(existing, input)) {
           return rowToRecord(existing)
         }
-        throw new Error('该草稿已有不可替换的定稿提交')
+        throw new Error('FINALIZATION_COMMIT_CONFLICT')
       }
 
       const draft = db.prepare(`
@@ -256,12 +256,12 @@ export class FinalizationRepository {
         status: string
         content_id: number
       } | undefined
-      if (!draft) throw new Error(`草稿不存在：${input.draftId}`)
+      if (!draft) throw new Error('DRAFT_NOT_FOUND')
       if (draft.chapter_number !== input.chapterNumber) {
-        throw new Error('草稿与定稿章节不匹配')
+        throw new Error('FINALIZATION_COMMIT_CHAPTER_MISMATCH')
       }
       if (draft.status === 'finalized') {
-        throw new Error('草稿已定稿但缺少可恢复发布记录')
+        throw new Error('FINALIZATION_COMMIT_OUTBOX_MISSING')
       }
 
       const replacesFinalized = db.prepare(`
@@ -341,21 +341,21 @@ export class FinalizationRepository {
 
   static linkKnowledgeDocument(draftId: number, documentId: string): FinalizationRecord {
     const normalizedDocumentId = documentId.trim()
-    if (!normalizedDocumentId) throw new Error('知识库文档身份不能为空')
+    if (!normalizedDocumentId) throw new Error('FINALIZATION_COMMIT_KNOWLEDGE_DOCUMENT_REQUIRED')
     const db = requireDatabase()
     const existing = db.prepare(`
       SELECT finalization_id FROM finalization_outbox WHERE draft_id = ?
     `).get(draftId) as { finalization_id: string } | undefined
-    if (!existing) throw new Error(`草稿缺少定稿提交：${draftId}`)
+    if (!existing) throw new Error('FINALIZATION_COMMIT_NOT_FOUND')
     readPortableRuntimeFreeze(getCurrentProjectPath()).assertMutable('finalization_outbox', existing.finalization_id)
     const result = db.prepare(`
       UPDATE finalization_outbox
       SET knowledge_document_id = ?, updated_at = datetime('now')
       WHERE draft_id = ? AND finalization_id = ?
     `).run(normalizedDocumentId, draftId, existing.finalization_id)
-    if (result.changes !== 1) throw new Error(`草稿缺少定稿提交：${draftId}`)
+    if (result.changes !== 1) throw new Error('FINALIZATION_COMMIT_NOT_FOUND')
     const record = FinalizationRepository.getByDraftId(draftId)
-    if (!record) throw new Error(`草稿缺少定稿提交：${draftId}`)
+    if (!record) throw new Error('FINALIZATION_COMMIT_NOT_FOUND')
     return record
   }
 
@@ -366,9 +366,9 @@ export class FinalizationRepository {
       SET publication_status = 'pending', last_error = ?, updated_at = datetime('now')
       WHERE finalization_id = ?
     `).run(error, finalizationId)
-    if (result.changes !== 1) throw new Error(`定稿提交不存在：${finalizationId}`)
+    if (result.changes !== 1) throw new Error('FINALIZATION_COMMIT_NOT_FOUND')
     const record = FinalizationRepository.get(finalizationId)
-    if (!record) throw new Error(`定稿提交不存在：${finalizationId}`)
+    if (!record) throw new Error('FINALIZATION_COMMIT_NOT_FOUND')
     return record
   }
 
@@ -380,9 +380,9 @@ export class FinalizationRepository {
           published_at = datetime('now'), updated_at = datetime('now')
       WHERE finalization_id = ?
     `).run(finalizationId)
-    if (result.changes !== 1) throw new Error(`定稿提交不存在：${finalizationId}`)
+    if (result.changes !== 1) throw new Error('FINALIZATION_COMMIT_NOT_FOUND')
     const record = FinalizationRepository.get(finalizationId)
-    if (!record) throw new Error(`定稿提交不存在：${finalizationId}`)
+    if (!record) throw new Error('FINALIZATION_COMMIT_NOT_FOUND')
     return record
   }
 }

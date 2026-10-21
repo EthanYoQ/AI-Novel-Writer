@@ -1,41 +1,9 @@
 {
   "description": "electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。",
-  "total": 307,
+  "total": 184,
   "files": {
-    "electron/controllers/finalization-controller.ts": {
-      "registerFinalizationController": 4
-    },
     "electron/controllers/import-controller.ts": {
       "registerImportController": 2
-    },
-    "electron/repositories/chapter-deletion-repository.ts": {
-      "ChapterDeletionRepository.begin": 2,
-      "ChapterDeletionRepository.confirmLegacyKnowledgeAbsent": 7,
-      "ChapterDeletionRepository.markProjection": 1,
-      "ChapterDeletionRepository.startAttempt": 1,
-      "refreshAggregateStatus": 1,
-      "requireDatabase": 1,
-      "requireFinalizedTarget": 3
-    },
-    "electron/repositories/consistency-exemption-repository.ts": {
-      "ConsistencyExemptionRepository.revoke": 1,
-      "ConsistencyExemptionRepository.save": 1,
-      "requireText": 1
-    },
-    "electron/repositories/draft-repository.ts": {
-      "DraftRepository.clearAll": 1,
-      "DraftRepository.create": 1,
-      "DraftRepository.delete": 2,
-      "DraftRepository.updateContent": 1,
-      "DraftRepository.updateStatus": 2
-    },
-    "electron/repositories/finalization-repository.ts": {
-      "FinalizationRepository.commit": 4,
-      "FinalizationRepository.linkKnowledgeDocument": 4,
-      "FinalizationRepository.markPublicationPending": 2,
-      "FinalizationRepository.markPublished": 2,
-      "requireDatabase": 1,
-      "selectAuthoritativeExportRows": 7
     },
     "electron/repositories/finalized-draft-import-repository.ts": {
       "authorityRows": 1,
@@ -105,51 +73,6 @@
       "normalizedLocation": 1,
       "requireSecret": 1
     },
-    "electron/repositories/post-process-repository.ts": {
-      "PostProcessRepository.createRun": 1,
-      "PostProcessRepository.markStepFailed": 1,
-      "PostProcessRepository.markStepOk": 1
-    },
-    "electron/repositories/recovery-candidate-repository.ts": {
-      "assertText": 1,
-      "RecoveryCandidateRepository.record": 5,
-      "RecoveryCandidateRepository.resolve": 3,
-      "RecoveryCandidateRepository.updatePending": 3,
-      "requireDb": 1,
-      "toCandidate": 1
-    },
-    "electron/repositories/review-repository.ts": {
-      "ReviewRepository.create": 1
-    },
-    "electron/repositories/revision-repository.ts": {
-      "RevisionRepository.create": 1,
-      "RevisionRepository.markDiscarded": 2,
-      "RevisionRepository.markMerged": 3,
-      "RevisionRepository.mergeIntoDraft": 12,
-      "RevisionRepository.replacePending": 1
-    },
-    "electron/repositories/summary-repository.ts": {
-      "invalidateContinuityProjectionFrom": 1,
-      "normalizeCharacterStateCandidates": 4,
-      "normalizedFacts": 4,
-      "SummaryRepository.commitFinalizedCharacterStates": 1,
-      "SummaryRepository.listFinalizedContinuityBefore": 1,
-      "SummaryRepository.readFinalizedSource": 1,
-      "SummaryRepository.saveFinalizedCharacterStateCandidates": 5,
-      "SummaryRepository.saveFinalizedContinuity": 5
-    },
-    "electron/services/chapter-deletion-service.ts": {
-      "ChapterDeletionService.delete": 1,
-      "ChapterDeletionService.resume": 1,
-      "ChapterDeletionService.retry": 1,
-      "frozenLegacyOperation": 1,
-      "legacyKnowledgeAuthorizationRequired": 1,
-      "removeKnowledgeDocument": 2
-    },
-    "electron/services/finalization-service.ts": {
-      "FinalizationService.finalize": 1,
-      "FinalizationService.retry": 1
-    },
     "electron/services/import-inspection-store.ts": {
       "ImportInspectionStore.consume": 1,
       "ImportInspectionStore.create": 7,
@@ -157,12 +80,6 @@
     },
     "electron/services/import-source-identity-secret.ts": {
       "readValidSecret": 1
-    },
-    "electron/services/manuscript-publisher.ts": {
-      "containedDirectChild": 1,
-      "publishManuscript": 1,
-      "resolveManuscriptTarget": 2,
-      "resolveStoredManuscriptTarget": 1
     }
   }
 }

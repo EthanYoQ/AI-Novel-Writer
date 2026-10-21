@@ -197,6 +197,34 @@ const ERROR_KEYS = {
   NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE: 'error.narrativeThreadEvidenceNotInSource',
   DRAFT_NOT_FOUND: 'error.draftNotFound',
   DRAFT_FINALIZED_READ_ONLY: 'error.draftFinalizedReadOnly',
+  // 删除已定稿的这一章（#474 B5）：删除与清理重试时作者能照着处理的拒绝原因。
+  CHAPTER_DELETE_OPERATION_NOT_FOUND: 'error.chapterDeleteOperationNotFound',
+  CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED: 'error.chapterDeleteLegacyConfirmationConsumed',
+  CHAPTER_DELETE_SOURCE_CHANGED: 'error.chapterDeleteSourceChanged',
+  CHAPTER_DELETE_KNOWLEDGE_NOT_REMOVED: 'error.chapterDeleteKnowledgeNotRemoved',
+  CHAPTER_DELETE_LEGACY_KNOWLEDGE_CHECK_REQUIRED: 'error.chapterDeleteLegacyKnowledgeCheckRequired',
+  CHAPTER_DELETE_LEGACY_OPERATION_FROZEN: 'error.chapterDeleteLegacyOperationFrozen',
+  // 拼进「正文已删除，但派生投影仍待清理：……」与「重试清理失败」，所以文案不带句末标点；逐项原因在删除清理提示里。
+  CHAPTER_DELETE_CLEANUP_INCOMPLETE: 'error.chapterDeleteCleanupIncomplete',
+  // 定稿提交与实体稿发布（#474 B5）。
+  FINALIZATION_COMMIT_CONFLICT: 'error.finalizationCommitConflict',
+  FINALIZATION_COMMIT_NOT_FOUND: 'error.finalizationCommitNotFound',
+  MANUSCRIPT_TARGET_CONFLICT: 'error.manuscriptTargetConflict',
+  MANUSCRIPT_TARGET_COLLISIONS: 'error.manuscriptTargetCollisions',
+  // 合并、丢弃审稿修订稿（#474 B5）。
+  REVISION_NOT_FOUND: 'error.revisionNotFound',
+  REVISION_NOT_PENDING: 'error.revisionAlreadyHandled',
+  REVISION_ALREADY_MERGED: 'error.revisionAlreadyMerged',
+  REVISION_TARGET_NOT_EDITABLE: 'error.revisionTargetNotEditable',
+  REVISION_TARGET_CHANGED: 'error.revisionTargetChanged',
+  REVISION_SOURCE_MISSING: 'error.revisionSourceMissing',
+  REVISION_SOURCE_MISMATCH: 'error.revisionSourceMismatch',
+  // 运行恢复稿、一致性豁免与定稿后处理（#474 B5）。
+  RECOVERY_CANDIDATE_NOT_PENDING: 'error.recoveryCandidateAlreadyHandled',
+  RECOVERY_CANDIDATE_SOURCE_CHANGED: 'error.recoveryCandidateSourceChanged',
+  RECOVERY_CANDIDATE_TEXT_EMPTY: 'error.recoveryCandidateTextEmpty',
+  CONSISTENCY_EXEMPTION_REASON_INVALID: 'error.consistencyExemptionReasonInvalid',
+  POST_PROCESS_FINALIZATION_SOURCE_CHANGED: 'error.postProcessSourceChanged',
   // 知识库与检索索引（#474 B3）：知识库页、设置里的检索索引检查、导入创作资料与定稿收入知识库按码说明。
   EMBEDDING_REQUEST_FAILED: 'error.embeddingRequestFailed',
   EMBEDDING_OLLAMA_NATIVE_URL: 'error.embeddingOllamaNativeUrl',

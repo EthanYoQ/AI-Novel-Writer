@@ -472,6 +472,39 @@ describe('batch chapter workflow completion mode', () => {
     expect(doubles.repairPostProcess).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    ['zh-CN', '定稿已提交、实体稿待发布：正文文件夹里这一章的文件已存在且内容不同（可能在应用外改过），已拒绝覆盖。请移走或改名这个文件后重试发布。'],
+    ['en-US', "Finalization was committed, but manuscript publication is still pending. The chapter's file in the manuscript folder already exists with different content (it may have been edited outside the app), so it was not overwritten. Move or rename that file, then retry publishing."],
+  ] as const)('重试发布仍失败时按界面语言说明主进程的错误码（%s，#474）', async (locale, error) => {
+    const root = { projectId: 'test-project', epoch: '原会话', rootActionId: '原预算根', runId: '原批次' }
+    doubles.batch = { batchId: '原批次', modelId: '原模型', rootHandle: root, mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 },
+      targetUnits: 2000, authorInputs: [], nextChapterNumber: 1,
+      completedChapters: [{ chapterNumber: 1, draftId: 101, version: 1,
+        contentHash: createHash('sha256').update('generated draft').digest('hex'), sourceRunHandle: root,
+        pendingFinalizationId: '原定稿', postProcessComplete: false }] }
+    doubles.retryPublication.mockResolvedValueOnce({ success: false, committed: true, error: 'Error: MANUSCRIPT_TARGET_CONFLICT' })
+    await useWorkflowStore.getState().startWorkflow(createBatchChapterWorkflow({ projectPath, projectSession: projectSession(), startChapterNumber: 1,
+      chapterCount: 1, chapterWordsTarget: 2000, generationModelId: '原模型', completionMode: 'auto_finalize', resumeBatchId: '原批次', locale }))
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({ status: 'failed', error })
+    expect(doubles.repairPostProcess).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['zh-CN', '实体稿没有重新发布：这一章的定稿记录已经不在了（可能已被删除），请刷新后再看。'],
+    ['en-US', 'The manuscript was not published again. The finalization record for this chapter no longer exists (it may have been deleted). Refresh to see the current state.'],
+  ] as const)('重试发布时定稿记录已不在，不说定稿已提交（%s，#474）', async (locale, error) => {
+    const root = { projectId: 'test-project', epoch: '原会话', rootActionId: '原预算根', runId: '原批次' }
+    doubles.batch = { batchId: '原批次', modelId: '原模型', rootHandle: root, mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 },
+      targetUnits: 2000, authorInputs: [], nextChapterNumber: 1,
+      completedChapters: [{ chapterNumber: 1, draftId: 101, version: 1,
+        contentHash: createHash('sha256').update('generated draft').digest('hex'), sourceRunHandle: root,
+        pendingFinalizationId: '原定稿', postProcessComplete: false }] }
+    doubles.retryPublication.mockResolvedValueOnce({ success: false, committed: false, error: 'FINALIZATION_COMMIT_NOT_FOUND' })
+    await useWorkflowStore.getState().startWorkflow(createBatchChapterWorkflow({ projectPath, projectSession: projectSession(), startChapterNumber: 1,
+      chapterCount: 1, chapterWordsTarget: 2000, generationModelId: '原模型', completionMode: 'auto_finalize', resumeBatchId: '原批次', locale }))
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({ status: 'failed', error })
+  })
+
   it('keeps auto-finalize failure-stop semantics and does not start a later chapter', async () => {
     doubles.finalizeChapterExecute
       .mockResolvedValueOnce(undefined)

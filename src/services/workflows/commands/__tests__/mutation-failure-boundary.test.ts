@@ -348,7 +348,7 @@ describe('workflow mutation failure boundaries', () => {
       contentRevision: 8,
       draftId: 1,
       publicationStatus: 'pending',
-      error: '定稿已提交、实体稿待发布：disk unavailable',
+      error: 'Error: MANUSCRIPT_TARGET_CONFLICT',
     })
     const command = new FinalizeChapterCommand({
       draftPath: 'ai-novel://draft/1',
@@ -375,7 +375,7 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: context(),
       callbacks: callbacks(),
-    })).rejects.toThrow('实体稿待发布')
+    })).rejects.toThrow('定稿已提交、实体稿待发布：正文文件夹里这一章的文件已存在且内容不同')
     expect(finalizationClient.commitFinalizationSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ content: '编辑器冻结正文', contentRevision: 8 }),
     )

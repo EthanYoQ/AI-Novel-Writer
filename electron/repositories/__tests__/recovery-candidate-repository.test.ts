@@ -188,7 +188,7 @@ describe('RecoveryCandidateRepository project-local seam', () => {
 
     expect(RecoveryCandidateRepository.listPending()[0]?.sourceCurrent).toBe(false)
     expect(() => RecoveryCandidateRepository.resolve(recorded.candidateId, 'continued'))
-      .toThrow(/源章节已变化/u)
+      .toThrow('RECOVERY_CANDIDATE_SOURCE_CHANGED')
     expect(() => RecoveryCandidateRepository.resolve(recorded.candidateId, 'discarded'))
       .not.toThrow()
   })
@@ -223,9 +223,9 @@ describe('RecoveryCandidateRepository project-local seam', () => {
 
     expect(RecoveryCandidateRepository.listPending()[0]?.sourceCurrent).toBe(false)
     expect(() => RecoveryCandidateRepository.updatePending(recorded.candidateId, '编辑后的候选'))
-      .toThrow(/源章节已变化/u)
+      .toThrow('RECOVERY_CANDIDATE_SOURCE_CHANGED')
     expect(() => RecoveryCandidateRepository.resolve(recorded.candidateId, 'continued'))
-      .toThrow(/源章节已变化/u)
+      .toThrow('RECOVERY_CANDIDATE_SOURCE_CHANGED')
   })
 
   it('keeps the original-to-replacement relation and resolves explicitly', () => {
@@ -267,5 +267,8 @@ describe('RecoveryCandidateRepository project-local seam', () => {
     RecoveryCandidateRepository.resolve(replacement.candidateId, 'continued')
 
     expect(RecoveryCandidateRepository.listPending()).toEqual([])
+    // 已处理的恢复稿再保存或再处理：稳定码，界面按语言说明（#474）。
+    expect(() => RecoveryCandidateRepository.resolve(original.candidateId, 'discarded')).toThrow(/^RECOVERY_CANDIDATE_NOT_PENDING$/u)
+    expect(() => RecoveryCandidateRepository.updatePending(replacement.candidateId, '再改一次')).toThrow(/^RECOVERY_CANDIDATE_NOT_PENDING$/u)
   })
 })
