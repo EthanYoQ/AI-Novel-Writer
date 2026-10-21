@@ -251,6 +251,23 @@ const ERROR_KEYS = {
   MCP_CONNECT_FAILED: 'error.mcpConnectFailed',
   MCP_REQUEST_TIMEOUT: 'error.mcpRequestTimeout',
   MCP_SERVER_NOT_CONNECTED: 'error.mcpServerNotConnected',
+  // 导入运行与导入回执（#474 B1）：导入对话框、导入运行卡片与可继续的导入列表里作者能照着处理的原因。
+  // 主进程在导入通道的 IPC 边界按导入运行的语言把这些码写成说明，原码放在 errorCode。
+  IMPORT_RUN_EXECUTION_STALE: 'error.importRunExecutionStale',
+  IMPORT_RUN_EXECUTOR_BUSY: 'error.importRunExecutorBusy',
+  IMPORT_RUN_ANOTHER_RUNNING: 'error.importRunAnotherRunning',
+  IMPORT_RUN_NOT_STARTABLE: 'error.importRunNotStartable',
+  IMPORT_RUN_NOT_RESTARTABLE: 'error.importRunNotRestartable',
+  IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN: 'error.importRunAuthorRestartForbidden',
+  IMPORT_RUN_NOT_CANCELLABLE: 'error.importRunNotCancellable',
+  IMPORT_RUN_PARSING_INCOMPLETE: 'error.importRunParsingIncomplete',
+  IMPORT_RUN_REAUTHORIZE_UNAVAILABLE: 'error.importRunReauthorizeUnavailable',
+  IMPORT_RUN_REAUTHORIZE_SOURCES_MISMATCH: 'error.importRunReauthorizeSourcesMismatch',
+  IMPORT_RUN_REAUTHORIZE_CONTENT_CHANGED: 'error.importRunReauthorizeContentChanged',
+  IMPORT_RUN_EFFECT_HISTORY_UNKNOWN: 'error.importRunEffectHistoryUnknown',
+  IMPORT_INSPECTION_EXPIRED: 'error.importInspectionExpired',
+  IMPORT_INSPECTION_LIMIT: 'error.importInspectionLimit',
+  FINALIZED_IMPORT_PREVIEW_STALE: 'error.finalizedImportPreviewStale',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

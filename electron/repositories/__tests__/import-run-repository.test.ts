@@ -452,7 +452,7 @@ describe('ImportRunRepository', () => {
 
   it('rejects an empty frozen manifest before it can become a zero-word resumable run', () => {
     expect(() => ImportRunRepository.prepare(request([chapter(1, '')])))
-      .toThrow(/快照无效/)
+      .toThrow('IMPORT_RUN_CHAPTERS_INVALID')
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_runs').get())
       .toEqual({ count: 0 })
   })
@@ -558,7 +558,7 @@ describe('ImportRunRepository', () => {
       )
     `).run()
     expect(() => ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
   })
 
   it('binds an incremental author confirmation to the full manifest while committing only appended chapters', () => {
@@ -676,7 +676,7 @@ describe('ImportRunRepository', () => {
     }, execution)
 
     expect(() => ImportRunRepository.commitEffectReceipt(runId, 'author-commit', 'done', execution))
-      .toThrow(/权威章节已变化|预览已过期/)
+      .toThrow('FINALIZED_IMPORT_PREVIEW_STALE')
     expect(ImportRunRepository.getEffectReceipt(runId, 'author-commit', 'done'))
       .toMatchObject({ state: 'prepared' })
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts WHERE status = ?').get('finalized'))
@@ -740,7 +740,7 @@ describe('ImportRunRepository', () => {
         sourceFingerprint,
         authorityFingerprint: originalPreview.authorityFingerprint,
         expectedManifestFingerprint: originalPreview.manifestFingerprint,
-      }))).toThrow(/权威章节已变化|预览已过期/)
+      }))).toThrow('AUTHOR_IMPORT_PREVIEW_STALE')
       expect(ImportRunRepository.get(oldRunId)).toMatchObject({
         status: interruptedStatus,
         resumable: true,
@@ -843,7 +843,7 @@ describe('ImportRunRepository', () => {
     })
 
     expect(() => ImportRunRepository.restart(runId, 'forbidden-author-restart'))
-      .toThrow(/作者原稿.*继续|author.*continue/i)
+      .toThrow('IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN')
     expect(ImportRunRepository.get('forbidden-author-restart')).toBeNull()
     expect(ImportRunRepository.get(runId)).toMatchObject({
       stage: 'author-publish', status: 'failed', resumable: true,
@@ -921,7 +921,7 @@ describe('ImportRunRepository', () => {
       runId: 'gapped-author', purpose: 'author-manuscript',
       authorityFingerprint: preview.authorityFingerprint,
       expectedManifestFingerprint: preview.manifestFingerprint,
-    }))).toThrow(/清单.*预览|预览.*清单/)
+    }))).toThrow('IMPORT_RUN_AUTHOR_MANIFEST_MISMATCH')
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM import_runs').get()).toEqual({ count: 0 })
   })
 
@@ -978,12 +978,12 @@ describe('ImportRunRepository', () => {
 
     expect(() => ImportRunRepository.completeBatch(
       'import-run-1', 'knowledge', checkpoint, execution,
-    )).toThrow(/receipt/)
+    )).toThrow('IMPORT_RUN_REFERENCE_RECEIPT_INCOMPLETE')
 
     commitKnowledge('import-run-1', execution, [chapters[0]!])
     expect(() => ImportRunRepository.completeBatch(
       'import-run-1', 'knowledge', checkpoint, execution,
-    )).toThrow(/receipt/)
+    )).toThrow('IMPORT_RUN_REFERENCE_RECEIPT_INCOMPLETE')
 
     commitKnowledge('import-run-1', execution, [chapters[1]!])
     expect(ImportRunRepository.completeBatch(
@@ -1276,12 +1276,12 @@ describe('ImportRunRepository', () => {
     expect(() => ImportRunRepository.prepare(request(
       [...maximum, chapter(5_001, 'x')],
       { runId: 'too-many' },
-    ))).toThrow(/章节清单/)
+    ))).toThrow('IMPORT_RUN_CHAPTERS_INVALID')
     const sharedLargeContent = 'x'.repeat(15 * 1024 * 1024)
     expect(() => ImportRunRepository.prepare(request(
       Array.from({ length: 9 }, (_, index) => chapter(index + 1, sharedLargeContent)),
       { runId: 'too-large' },
-    ))).toThrow(/总字节数/)
+    ))).toThrow('IMPORT_RUN_CONTENT_TOO_LARGE')
     expect(getProjectDb()!.prepare(`
       SELECT COUNT(*) AS count FROM import_runs WHERE id IN ('too-many', 'too-large')
     `).get()).toEqual({ count: 0 })

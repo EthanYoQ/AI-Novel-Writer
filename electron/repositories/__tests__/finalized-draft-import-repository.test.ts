@@ -168,7 +168,7 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
       expectedAuthorityFingerprint: preview.authorityFingerprint,
       expectedManifestFingerprint: preview.manifestFingerprint,
       chapters: candidate,
-    })).toThrow('预览已过期')
+    })).toThrow('FINALIZED_IMPORT_PREVIEW_STALE')
     expect(getProjectDb()!.prepare('SELECT COUNT(*) AS count FROM drafts').get()).toEqual({ count: 1 })
   })
 
@@ -323,7 +323,7 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     expect(() => FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'import-payload-bound',
       chapters: changed,
-    })).toThrow('operationId 已绑定不同载荷')
+    })).toThrow('FINALIZED_IMPORT_OPERATION_CONFLICT')
 
     const db = getProjectDb()!
     expect(db.prepare('SELECT COUNT(*) AS count FROM drafts').get()).toEqual({ count: 9 })

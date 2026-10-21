@@ -25,25 +25,25 @@ const SHA256 = /^[a-f0-9]{64}$/u
 
 function database() {
   const current = getProjectDb()
-  if (!current) throw new Error('项目数据库未打开')
+  if (!current) throw new Error('PROJECT_NOT_OPEN')
   return current
 }
 
 function requireSecret(secret: Buffer): Buffer {
-  if (!Buffer.isBuffer(secret) || secret.byteLength < 32) throw new Error('导入来源应用密钥无效')
+  if (!Buffer.isBuffer(secret) || secret.byteLength < 32) throw new Error('IMPORT_SOURCE_SECRET_INVALID')
   return secret
 }
 
 function normalizedLocation(value: string): string {
   const location = value?.trim().normalize('NFC')
-  if (!location || location.length > 32_000 || location.includes('\0')) throw new Error('导入来源位置身份无效')
+  if (!location || location.length > 32_000 || location.includes('\0')) throw new Error('IMPORT_SOURCE_IDENTITY_INVALID')
   return process.platform === 'win32' ? location.toLocaleLowerCase('en-US') : location
 }
 
 function normalizedFileIdentity(value: string | undefined): string | undefined {
   if (value === undefined) return undefined
   const identity = value.trim()
-  if (!identity || identity.length > 1_024 || identity.includes('\0')) throw new Error('导入来源文件身份无效')
+  if (!identity || identity.length > 1_024 || identity.includes('\0')) throw new Error('IMPORT_SOURCE_IDENTITY_INVALID')
   return identity
 }
 
@@ -68,7 +68,7 @@ function legacySalt(secret: Buffer): Buffer | undefined {
     if (salt.byteLength !== 32) throw new Error('invalid length')
     return salt
   } catch {
-    throw new Error('旧导入来源身份桥接数据无效')
+    throw new Error('IMPORT_SOURCE_LEGACY_BRIDGE_INVALID')
   }
 }
 
@@ -84,9 +84,9 @@ export class ImportSourceIdentityRepository {
     purpose: ImportPurpose,
     applicationSecret: Buffer,
   ): EncodedImportSourceIdentity[] {
-    if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('导入用途无效')
+    if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('IMPORT_SOURCE_PURPOSE_INVALID')
     if (!Array.isArray(sources) || sources.length === 0 || sources.length > MAX_IMPORT_SOURCE_FILES) {
-      throw new Error('导入来源身份无效')
+      throw new Error('IMPORT_SOURCE_IDENTITY_INVALID')
     }
     const secret = requireSecret(applicationSecret)
     const bridgeSalt = legacySalt(secret)
@@ -112,13 +112,13 @@ export class ImportSourceIdentityRepository {
     legacySourceFingerprints?: string[]
     legacyCollectionFingerprint?: string
   } {
-    if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('导入用途无效')
+    if (purpose !== 'reference' && purpose !== 'author-manuscript') throw new Error('IMPORT_SOURCE_PURPOSE_INVALID')
     if (!Array.isArray(sources) || sources.length === 0 || sources.length > MAX_IMPORT_SOURCE_FILES) {
-      throw new Error('导入来源身份无效')
+      throw new Error('IMPORT_SOURCE_IDENTITY_INVALID')
     }
     for (const source of sources) {
       if (!SHA256.test(source.locationAliasDigest) || (source.fileAliasDigest && !SHA256.test(source.fileAliasDigest))) {
-        throw new Error('导入来源别名无效')
+        throw new Error('IMPORT_SOURCE_IDENTITY_INVALID')
       }
     }
     const secret = requireSecret(applicationSecret)

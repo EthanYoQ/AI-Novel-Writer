@@ -13,6 +13,8 @@ import {
 import { ImportSourceIdentityRepository } from '../repositories/import-source-identity-repository'
 import { loadApplicationImportSourceSecret } from '../services/import-source-identity-secret'
 import { mainText } from '../i18n'
+import { importRunLocale } from './import-run-failure'
+import { knownAppErrorMessage } from '../../src/i18n/app-errors'
 import {
   windowsSafeFileSystem,
   type WindowsSafeFileSystem,
@@ -137,6 +139,9 @@ function importSelectionErrorMessage(
       'The EPUB is damaged or lacks a valid container.xml, OPF package, or textual reading order.',
     )
   }
+  // 导入运行与检查里作者能照做的码（#474 B1），例如文件检查过期、待确认的导入太多、补选的文件不一致。
+  const known = knownAppErrorMessage(importRunLocale(undefined, locale), code)
+  if (known) return known
   return importText(
     locale,
     '无法读取所选文件；请重新选择后再试。',
@@ -311,7 +316,7 @@ export function registerImportController(
       !Number.isSafeInteger(value)
       || value < 1
       || value > DEFAULT_IMPORT_RESOURCE_LIMITS[key]
-    ) throw new Error(`导入资源限制 ${key} 无效`)
+    ) throw new Error('IMPORT_RESOURCE_LIMIT_INVALID')
   }
   // Selection, bounded reading, and inspection are one main-process operation.
   // The renderer receives only the final inspection token and safe display facts.
@@ -387,7 +392,7 @@ export function registerImportController(
         ? (() => {
             assertFrozenProject()
             const projectDb = getProjectDb()
-            if (!projectDb) throw new Error('项目数据库未打开')
+            if (!projectDb) throw new Error('PROJECT_NOT_OPEN')
             return projectDb.transaction(() => {
               const resolvedIdentity = ImportSourceIdentityRepository.resolveEncodedSources(
                 encodedIdentities,

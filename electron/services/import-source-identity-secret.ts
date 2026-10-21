@@ -8,7 +8,7 @@ const SECRET_FILE_NAME = 'import-source-identity.secret'
 
 function readValidSecret(secretPath: string): Buffer {
   const secret = fs.readFileSync(secretPath)
-  if (secret.byteLength !== SECRET_BYTES) throw new Error('导入来源应用密钥损坏')
+  if (secret.byteLength !== SECRET_BYTES) throw new Error('IMPORT_SOURCE_SECRET_INVALID')
   return secret
 }
 

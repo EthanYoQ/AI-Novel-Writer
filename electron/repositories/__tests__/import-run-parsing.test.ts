@@ -269,7 +269,7 @@ describe('persisted per-source parsing', () => {
       sourceIds: [SOURCE_C],
       sourceFingerprints: ['e'.repeat(64)],
       sourceDisplay: [{ displayName: 'injected.txt', mediaType: 'text/plain', size: 5 }],
-    })).toThrow(/来源清单|重新授权/)
+    })).toThrow('IMPORT_RUN_REAUTHORIZE_SOURCES_MISMATCH')
     expect(getProjectDb()!.serialize().equals(before)).toBe(true)
 
     expect(() => reauthorize({
@@ -278,7 +278,7 @@ describe('persisted per-source parsing', () => {
       sourceIds: [SOURCE_A],
       sourceFingerprints: ['b'.repeat(64)],
       sourceDisplay: [{ displayName: 'a-again.txt', mediaType: 'text/plain', size: 99 }],
-    })).toThrow(/来源清单|重新授权/)
+    })).toThrow('IMPORT_RUN_REAUTHORIZE_SOURCES_MISMATCH')
     expect(getProjectDb()!.serialize().equals(before)).toBe(true)
   })
 
@@ -288,7 +288,7 @@ describe('persisted per-source parsing', () => {
     expect(() => reauthorize({
       sourceIds: [SOURCE_A, '33333333-3333-4333-8333-333333333333'],
       sourceFingerprints: ['b'.repeat(64), 'd'.repeat(64)],
-    })).toThrow(/来源清单|重新授权/)
+    })).toThrow('IMPORT_RUN_REAUTHORIZE_SOURCES_MISMATCH')
     expect(ImportRunRepository.get('parse-run')).toMatchObject({
       id: 'parse-run',
       sourceDisplay: [
@@ -304,7 +304,7 @@ describe('persisted per-source parsing', () => {
     expect(() => ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, [
       chapter(1),
       { ...chapter(2), contentFingerprint: '0'.repeat(64) },
-    ])).toThrow(/快照|指纹/)
+    ])).toThrow('IMPORT_RUN_PARSED_SOURCE_MISMATCH')
     expect(getProjectDb()!.serialize().equals(before)).toBe(true)
     expect(ImportRunRepository.get('parse-run')).toMatchObject({ completedSources: 0, completedChapters: 0 })
   })
@@ -313,7 +313,7 @@ describe('persisted per-source parsing', () => {
     begin()
 
     expect(() => ImportRunRepository.commitParsedSource('parse-run', SOURCE_A, []))
-      .toThrow(/没有可导入的正文|不能为空/)
+      .toThrow('IMPORT_RUN_PARSED_SOURCE_EMPTY')
     expect(ImportRunRepository.get('parse-run')).toMatchObject({
       stage: 'parsing', status: 'ready', completedSources: 0, completedChapters: 0,
     })
@@ -322,9 +322,9 @@ describe('persisted per-source parsing', () => {
   it('rejects starting or finalizing incomplete parsing without changing persisted state', () => {
     begin()
     const before = getProjectDb()!.serialize()
-    expect(() => ImportRunRepository.startOrResume('parse-run', 'renderer')).toThrow(/重新选择|授权/)
+    expect(() => ImportRunRepository.startOrResume('parse-run', 'renderer')).toThrow('IMPORT_RUN_PARSING_INCOMPLETE')
     expect(getProjectDb()!.serialize().equals(before)).toBe(true)
-    expect(() => ImportRunRepository.finalizeParsing('parse-run')).toThrow(/尚未完成|来源/)
+    expect(() => ImportRunRepository.finalizeParsing('parse-run')).toThrow('IMPORT_RUN_PARSING_INCOMPLETE')
     expect(getProjectDb()!.serialize().equals(before)).toBe(true)
   })
 

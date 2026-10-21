@@ -214,7 +214,7 @@ describe('import-run durable effect receipt', () => {
     `)
 
     expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
   })
 
   it('rejects an already-satisfied claim without a durable proposal under the ID schema', () => {
@@ -232,7 +232,7 @@ describe('import-run durable effect receipt', () => {
     `)
 
     expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
   })
 
   it('freezes generated output before effect commit and atomically commits effect with checkpoint after reopen', () => {
@@ -283,12 +283,12 @@ describe('import-run durable effect receipt', () => {
     expect(() => ImportRunRepository.prepareEffectReceipt({
       ...request,
       payload: { writingStyle: 'Different' },
-    }, first.execution, base + 2)).toThrow(/不同载荷/)
+    }, first.execution, base + 2)).toThrow('IMPORT_RUN_RECEIPT_CONFLICT')
 
     ImportRunRepository.startOrResume('receipt-run', 'renderer-b', base + 101, 100)
     expect(() => ImportRunRepository.commitEffectReceipt(
       'receipt-run', 'style', 'done', first.execution, base + 102,
-    )).toThrow(/执行租约/)
+    )).toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 
   it.each([
@@ -303,7 +303,7 @@ describe('import-run durable effect receipt', () => {
     tamperOffline(mutation)
 
     expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'style', 'done'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
   })
 
   it('fails closed after reopen when a committed effect result is not valid for its kind', () => {
@@ -312,7 +312,7 @@ describe('import-run durable effect receipt', () => {
     tamperOffline(`UPDATE import_run_receipts SET effect_receipt_json = '{}'`)
 
     expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'style', 'done'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
   })
 
   it('fails closed after reopen when a blueprint receipt swaps its nested sync operation', () => {
@@ -344,7 +344,7 @@ describe('import-run durable effect receipt', () => {
     `)
 
     expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
     expect(getProjectDb()!.prepare(`
       SELECT stage, status FROM import_runs WHERE id = 'receipt-run'
     `).get()).toEqual({ stage: 'blueprints', status: 'running' })
@@ -359,7 +359,7 @@ describe('import-run durable effect receipt', () => {
     tamperOffline(mutation)
 
     expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
     expect(getProjectDb()!.prepare(`
       SELECT stage, status FROM import_runs WHERE id = 'receipt-run'
     `).get()).toEqual({ stage: 'blueprints', status: 'running' })
@@ -373,7 +373,7 @@ describe('import-run durable effect receipt', () => {
     `)
 
     expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
     expect(getProjectDb()!.prepare(`
       SELECT COUNT(*) AS count FROM blueprint_commit_operations
       WHERE operation_id = 'import-blueprints-receipt-run-1-1'
@@ -390,7 +390,7 @@ describe('import-run durable effect receipt', () => {
     tamperOffline(`UPDATE import_run_receipts SET effect_receipt_json = ${expression}`)
 
     expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
     expect(getProjectDb()!.prepare(`
       SELECT status FROM blueprint_character_sync_operations
       WHERE operation_id = 'blueprint-sync-import-blueprints-receipt-run-1-1'
@@ -406,6 +406,6 @@ describe('import-run durable effect receipt', () => {
     `)
 
     expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'global', 'done'))
-      .toThrow(/receipt.*损坏|收据.*损坏/i)
+      .toThrow('IMPORT_RUN_RECEIPT_CORRUPT')
   })
 })

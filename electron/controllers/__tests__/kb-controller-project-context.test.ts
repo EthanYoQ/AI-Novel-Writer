@@ -416,4 +416,32 @@ describe('reference import failures', () => {
     expect(result.error).toContain(code)
     if (locale === 'en-US') expect(result.error).not.toMatch(/\p{Script=Han}/u)
   })
+  // 导入运行的授权与收据校验（#474 B1）：先于写入抛出的与知识库交回的码都按导入运行的语言说明。
+  it('explains an expired import execution in the run language before anything is written', async () => {
+    mocks.getRun.mockReturnValue({ locale: 'en-US' })
+    mocks.resolveReferenceImportAuthority.mockImplementationOnce(() => { throw new Error('IMPORT_RUN_EXECUTION_STALE') })
+    const result = await rawHandler('kb:import-reference-text')({}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+      projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+    })
+    expect(result).toEqual({
+      success: false,
+      errorCode: 'IMPORT_RUN_EXECUTION_STALE',
+      error: 'This import was taken over by another window, or it paused after going unresponsive, so this window can no longer write to it. Resume the import from the import dialog.',
+    })
+    expect(mocks.run).not.toHaveBeenCalled()
+  })
+
+  it('explains an import-run code returned by the knowledge base in the run language', async () => {
+    mocks.getRun.mockReturnValue({ locale: 'zh-CN' })
+    mocks.run.mockImplementation(async (operation: (kb: { importReferenceText: () => Promise<unknown> }) => unknown) =>
+      operation({ importReferenceText: async () => ({ success: false, error: 'IMPORT_RUN_REFERENCE_UNBOUND' }) }))
+    const result = await rawHandler('kb:import-reference-text')({}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+      projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+    })
+    expect(result).toEqual({
+      success: false,
+      errorCode: 'IMPORT_RUN_REFERENCE_UNBOUND',
+      error: '导入没能继续：校验没有通过（IMPORT_RUN_REFERENCE_UNBOUND）。请重试；如果仍然出现，请把这段说明反馈给我们。',
+    })
+  })
 })

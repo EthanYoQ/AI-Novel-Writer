@@ -29,7 +29,7 @@ describe('ImportInspectionStore bounds', () => {
     expect(summary).toMatchObject({ sourceCount: 1, sourceDisplayNames: ['book.txt'] })
     expect(JSON.stringify(consumed.sources[0])).not.toContain('canonicalLocation')
     expect(JSON.stringify(consumed.sources[0])).not.toContain('fileIdentity')
-    expect(() => store.consume(summary.inspectionId, 7)).toThrow(/失效/)
+    expect(() => store.consume(summary.inspectionId, 7)).toThrow('IMPORT_INSPECTION_EXPIRED')
 
     const expiring = store.create({
       webContentsId: 7,
@@ -38,7 +38,7 @@ describe('ImportInspectionStore bounds', () => {
       chapters: [chapter(2)],
     })
     now = 1_101
-    expect(() => store.consume(expiring.inspectionId, 7)).toThrow(/失效/)
+    expect(() => store.consume(expiring.inspectionId, 7)).toThrow('IMPORT_INSPECTION_EXPIRED')
   })
 
   it('rejects 5001 chapters and aggregate bytes before caching any inspection', () => {
@@ -48,13 +48,13 @@ describe('ImportInspectionStore bounds', () => {
       purpose: 'reference',
       sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 5_001 }],
       chapters: Array.from({ length: 5_001 }, (_, index) => chapter(index + 1)),
-    })).toThrow(/5000/)
+    })).toThrow('IMPORT_CHAPTER_COUNT_EXCEEDED')
     expect(() => store.create({
       webContentsId: 7,
       purpose: 'reference',
       sources: [{ locationAliasDigest: 'a'.repeat(64), displayName: 'book.txt', mediaType: 'text/plain', size: 11 }],
       chapters: [chapter(1, '12345678901')],
-    })).toThrow(/字节/)
+    })).toThrow('IMPORT_SOURCE_BYTES_EXCEEDED')
     expect(store.activeCount()).toBe(0)
   })
 
@@ -65,7 +65,7 @@ describe('ImportInspectionStore bounds', () => {
       purpose: 'reference',
       sources: [{ locationAliasDigest: 'not-an-alias', displayName: 'C:/private/book.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(1)],
-    })).toThrow(/来源/)
+    })).toThrow('IMPORT_INSPECTION_INVALID')
     expect(store.activeCount()).toBe(0)
   })
 
@@ -82,7 +82,7 @@ describe('ImportInspectionStore bounds', () => {
       purpose: 'reference',
       sources: [{ locationAliasDigest: 'b'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 1 }],
       chapters: [chapter(2, 'x')],
-    })).toThrow(/待处理导入检查过多/)
+    })).toThrow('IMPORT_INSPECTION_LIMIT')
   })
 
   it('keeps the previous valid inspection when a replacement fails validation', () => {
@@ -99,7 +99,7 @@ describe('ImportInspectionStore bounds', () => {
       purpose: 'reference',
       sources: [{ locationAliasDigest: 'b'.repeat(64), displayName: 'book2.txt', mediaType: 'text/plain', size: 11 }],
       chapters: [chapter(2, '12345678901')],
-    })).toThrow(/字节/)
+    })).toThrow('IMPORT_SOURCE_BYTES_EXCEEDED')
 
     expect(store.consume(valid.inspectionId, 7).chapters[0].content).toBe('x')
   })
@@ -119,7 +119,7 @@ describe('ImportInspectionStore bounds', () => {
       chapters: [chapter(2, '1234567890')],
     })
 
-    expect(() => store.consume(previous.inspectionId, 7)).toThrow(/失效/)
+    expect(() => store.consume(previous.inspectionId, 7)).toThrow('IMPORT_INSPECTION_EXPIRED')
     expect(store.consume(replacement.inspectionId, 7).chapters[0].content).toBe('1234567890')
   })
 })

@@ -27,6 +27,7 @@ import {
   projectStoragePreflightFailure,
 } from '../services/project-storage-preflight'
 import { ImportRunRepository } from '../repositories/import-run-repository'
+import { explainImportRunFailure, importRunLocale } from './import-run-failure'
 import { FinalizationRepository } from '../repositories/finalization-repository'
 
 function text(zhCNText: string, enUSText: string): string {
@@ -129,9 +130,13 @@ function referenceIntegrityFailure(code: string): readonly [zhCN: string, enUS: 
 function explainReferenceImportFailure<T extends { success: boolean; error?: string }>(result: T, runId: string): T | (T & { errorCode: string }) {
   const code = !result.success ? result.error : undefined
   const explained = code ? REFERENCE_IMPORT_FAILURES[code] ?? referenceIntegrityFailure(code) : undefined
-  if (!code || !explained) return result
-  const locale = ImportRunRepository.get(runId)?.locale ?? 'zh-CN'
-  return { ...result, errorCode: code, error: locale === 'en-US' ? explained[1] : explained[0] }
+  if (!code) return result
+  if (!explained) {
+    // 导入运行的授权与收据校验（#474 B1）按同一套说明写。
+    const importFailure = explainImportRunFailure(code, () => importRunLocale(runId))
+    return importFailure ? { ...result, ...importFailure } : result
+  }
+  return { ...result, errorCode: code, error: importRunLocale(runId) === 'en-US' ? explained[1] : explained[0] }
 }
 
 function legacyMigrationBlockedFailure() {
@@ -326,34 +331,37 @@ export function registerKBController(
   ) => {
     const projectPath = getCurrentProjectPath()
     if (!projectPath) throw new Error(text('项目数据库未打开', 'The project database is not open.'))
-    const binding = ImportRunRepository.resolveReferenceImportAuthority(
-      runId,
-      executionAuthority,
-      chapterNumber,
-    )
-    const fileName = referenceImportDisplayName(binding)
-    const embConfig = getEmbeddingConfig()
-    const protocol = embConfig?.protocol ?? 'openai'
-    const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
-    return knowledgeBaseLoader.run(async (kb) => {
-      const result = await kb.importReferenceText(
-        binding.content,
-        fileName,
-        binding.stableKey,
-        chapterNumber,
-        runId,
-        executionAuthority,
-        projectPath,
-        protocol,
-        model,
-      )
-      if (result.success && result.docId) {
-        ImportRunRepository.commitReferenceImportReceipt(
-          runId, executionAuthority, chapterNumber, result.docId,
+    try {
+      const binding = ImportRunRepository.resolveReferenceImportAuthority(runId, executionAuthority, chapterNumber)
+      const fileName = referenceImportDisplayName(binding)
+      const embConfig = getEmbeddingConfig()
+      const protocol = embConfig?.protocol ?? 'openai'
+      const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
+      return await knowledgeBaseLoader.run(async (kb) => {
+        const result = await kb.importReferenceText(
+          binding.content,
+          fileName,
+          binding.stableKey,
+          chapterNumber,
+          runId,
+          executionAuthority,
+          projectPath,
+          protocol,
+          model,
         )
-      }
-      return explainReferenceImportFailure(result, runId)
-    })
+        if (result.success && result.docId) {
+          ImportRunRepository.commitReferenceImportReceipt(
+            runId, executionAuthority, chapterNumber, result.docId,
+          )
+        }
+        return explainReferenceImportFailure(result, runId)
+      })
+    } catch (error) {
+      // 运行卡片原样显示这条通道的报错：导入运行的授权与收据校验按导入运行的语言写成说明（#474 B1）。
+      const importFailure = explainImportRunFailure(error, () => importRunLocale(runId))
+      if (importFailure) return { success: false as const, ...importFailure }
+      throw error
+    }
   })
 
   ipcMain.handle('kb:search', async (_event, query: string, topK: number | undefined, expectedProjectPath: string) => {
