@@ -9,8 +9,10 @@ import { knownAppErrorMessage } from '../app-errors'
  * （角色提议、定稿角色状态、旧版角色名单、生成记录）经 IPC 转来（#471）。
  * 所以代码里出现的每个码都要二选一：在 app-errors.ts 登记文案，或在这里按理由列为不登记。
  *
+ * 角色建议页（待批准的角色提议、定稿角色状态建议）的决策请求同样经生成 IPC 原样转来码，按同一约定登记（#474）。
+ *
  * 其余前缀（备份与迁移、安全文件系统、头像与图片、EPUB 导入、外观、编辑器等）不在这里：
- * 它们不经工作流失败面板，由各自的主进程控制器或页面按自己的映射说明。
+ * 它们不经生成 IPC，由各自的主进程控制器或页面按自己的映射说明，逐族审显示面随主进程批次处理。
  */
 const COVERED_PREFIXES = [
   'GENERATION_',
@@ -34,6 +36,13 @@ const COVERED_PREFIXES = [
   'PLANNING_MATERIAL_',
   'MODEL_NOT_',
   'NO_DEFAULT_',
+  // 角色身份提交链路（批准角色提议时同一事务内提交）：经生成 IPC 原样转给角色建议页（#474）。
+  'CHARACTER_ID_',
+  'CHARACTER_APPROVAL_',
+  'CHARACTER_RELATIONSHIP_',
+  'CHARACTER_AUTHOR_',
+  'CHARACTER_FIELDS_',
+  'CHARACTER_PROVENANCE_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
@@ -369,6 +378,28 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'PLANNING_MATERIAL_TEMPLATE_MISSING',
     'RUNTIME_CLOSED',
     'TASK_BUDGET_INPUT_INVALID',
+    // #474 扩到的前缀：角色身份提交的请求形状、事务、批准收据与回读校验。
+    'CHARACTER_APPROVAL_INVALID',
+    'CHARACTER_APPROVAL_MUTATED',
+    'CHARACTER_APPROVAL_REQUIRED',
+    'CHARACTER_APPROVAL_SELECTION_INVALID',
+    'CHARACTER_APPROVAL_SELECTION_REQUIRED',
+    'CHARACTER_AUTHOR_ENTRY_INVALID',
+    'CHARACTER_AUTHOR_READBACK_FAILED',
+    'CHARACTER_AUTHOR_RECEIPT_INVALID',
+    'CHARACTER_AUTHOR_REQUEST_INVALID',
+    'CHARACTER_AUTHOR_SCOPE_REQUIRED',
+    'CHARACTER_FIELDS_INVALID',
+    'CHARACTER_ID_CONFIRMATION_REQUIRED',
+    'CHARACTER_ID_CONFLICT',
+    'CHARACTER_ID_DUPLICATE',
+    'CHARACTER_ID_SCHEMA_REQUIRED',
+    'CHARACTER_ID_TRANSACTION_REQUIRED',
+    'CHARACTER_ID_WRITE_REQUIRED',
+    'CHARACTER_PROVENANCE_INVALID',
+    'CHARACTER_RELATIONSHIP_ID_REQUIRED',
+    'CHARACTER_RELATIONSHIP_INVALID',
+    'CHARACTER_RELATIONSHIP_PROPOSAL_INVALID',
   ],
   // 模型输出不合角色提议或定稿角色状态的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住；
   // 定稿后处理把码记在步骤上并原样显示，供反馈定位。没有现成文案能告诉作者除重试以外还能做什么。
