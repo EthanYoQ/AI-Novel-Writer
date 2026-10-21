@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => ({
   importRunGetEffectReceipt: vi.fn(),
   importRunFail: vi.fn(),
   importRunBeginParsing: vi.fn(),
+  importRunPrepareEffectReceipt: vi.fn(),
   draftGetFull: vi.fn(() => ({
     id: 1,
     content: mocks.currentProjectPath.endsWith('/A') ? 'A content' : 'B content',
@@ -205,6 +206,7 @@ vi.mock('../../repositories/import-run-repository', () => ({
     getEffectReceipt: mocks.importRunGetEffectReceipt,
     fail: mocks.importRunFail,
     beginParsing: mocks.importRunBeginParsing,
+    prepareEffectReceipt: mocks.importRunPrepareEffectReceipt,
   },
 }))
 
@@ -573,6 +575,18 @@ describe('database controller project context guard', () => {
       expect(result.errorCode).toBe('IMPORT_RUN_ID_CONFLICT')
       expect(result.error).toBe('The import could not continue because a check failed (IMPORT_RUN_ID_CONFLICT). Try again; if it keeps happening, send us this message.')
       expect(result.error).not.toMatch(han)
+    })
+
+    it('does not hand a bare generation-source code to the run card', async () => {
+      mocks.importRunPrepareEffectReceipt.mockImplementationOnce(() => { throw new Error('GENERATION_IMPORT_SLOT_AMBIGUOUS') })
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      await expect(handler('db:import-run-effect-receipt-prepare')(
+        {}, { runId: 'run', stage: 'style', batchId: 'done' }, { owner: 'renderer', epoch: 1, expiresAt: 1 }, 'C:/projects/A',
+      )).resolves.toEqual({
+        success: false,
+        errorCode: 'GENERATION_IMPORT_SLOT_AMBIGUOUS',
+        error: 'The import could not continue because a check failed (GENERATION_IMPORT_SLOT_AMBIGUOUS). Try again; if it keeps happening, send us this message.',
+      })
     })
 
     it('puts the explanation into the thrown message of read channels', async () => {
