@@ -8,6 +8,8 @@
 import { create } from 'zustand'
 import { ipc } from '../services/ipc-client'
 import { toolRegistry } from '../services/agent/tool-registry'
+import { displayedErrorMessage } from '../i18n/app-errors'
+import { useLocaleStore } from './locale-store'
 import type {
   MCPResourceDescription,
   MCPServerStatus,
@@ -51,6 +53,12 @@ interface MCPState {
   registerMCPToolsToRegistry: () => void
 }
 
+/** 主进程转来的 MCP 失败原因：登记过的码按界面语言说明，其余原样保留，没有原因时用兜底。 */
+function mcpErrorText(error: string | undefined, zhCN: string, enUS: string): string {
+  const { locale, text } = useLocaleStore.getState()
+  return displayedErrorMessage(locale, error, text(zhCN, enUS))
+}
+
 export const useMCPStore = create<MCPState>()((set, get) => ({
   servers: [],
   tools: [],
@@ -69,7 +77,7 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
       // 加载配置
       const result = await ipc.invoke('mcp:load-config')
       if (!result.success) {
-        set({ loading: false, error: result.error ?? 'MCP 配置加载失败' })
+        set({ loading: false, error: mcpErrorText(result.error, 'MCP 配置加载失败', 'Could not load the MCP configuration') })
         return
       }
 
@@ -78,11 +86,11 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
         try {
           const connection = await ipc.invoke('mcp:connect', server.id)
           if (!connection.success) {
-            set({ error: connection.error ?? '连接失败' })
+            set({ error: mcpErrorText(connection.error, '连接失败', 'Connection failed') })
           }
         } catch (e) {
           console.warn(`[MCP] 连接 ${server.id} 失败:`, e)
-          set({ error: 'MCP 服务器连接失败' })
+          set({ error: useLocaleStore.getState().text('MCP 服务器连接失败', 'Could not connect to the MCP server') })
         }
       }
 
@@ -95,7 +103,7 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
 
       set({ loading: false })
     } catch (error) {
-      set({ loading: false, error: String(error) })
+      set({ loading: false, error: displayedErrorMessage(useLocaleStore.getState().locale, error) })
     }
   },
 
@@ -111,7 +119,7 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
   connectServer: async (serverId) => {
     const result = await ipc.invoke('mcp:connect', serverId)
     if (!result.success) {
-      set({ error: result.error ?? '连接失败' })
+      set({ error: mcpErrorText(result.error, '连接失败', 'Connection failed') })
       return
     }
     await get().refreshStatus()
@@ -169,7 +177,7 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
           return {
             success: result.success,
             content: result.content,
-            error: result.error,
+            error: result.error && displayedErrorMessage(useLocaleStore.getState().locale, result.error),
           }
         },
       }
