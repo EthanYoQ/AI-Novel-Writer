@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Archive, Cloud, Download, Upload } from 'lucide-react'
 
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import { ipc } from '../../services/ipc-client'
 import type {
   CloudBackupAccountView,
@@ -17,7 +18,8 @@ import { Label } from '../ui/Label'
 
 type Notice = { kind: 'error' | 'success' | 'info'; text: string } | null
 
-const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
+// 主进程登记过的码（例如导出目标已存在）按界面语言说明；其余码与渲染端自己的说明原样显示。
+const errorText = (error: unknown) => displayedErrorMessage(useLocaleStore.getState().locale, error)
 
 export default function ProjectBackupPanel() {
   const project = useProjectStore(state => state.currentProject)

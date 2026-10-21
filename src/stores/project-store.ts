@@ -12,7 +12,7 @@ import type {
 } from '../shared/ipc-channels'
 import { alertError } from '../components/ui/AlertDialog'
 import { confirm } from '../components/ui/Confirm'
-import { appErrorMessage } from '../i18n/app-errors'
+import { appErrorMessage, displayedErrorMessage } from '../i18n/app-errors'
 import { saveDirtyEditorChangesForExit, useEditorStore } from './editor-store'
 import { countUnsavedEditorItemsForProject } from './editor-unsaved'
 import { useLayoutStore } from './layout-store'
@@ -1159,8 +1159,9 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         return false
       }
       if (result.warning) {
+        // 主进程已按界面语言写好清理未完成的说明（带原始文件系统错误），不再套「发生错误」。
         alertError(
-          projectError(result.warning),
+          displayedErrorMessage(useLocaleStore.getState().locale, result.warning),
           { title: projectText('项目已删除，部分清理未完成', 'Project deleted with some cleanup incomplete') },
         )
       }
