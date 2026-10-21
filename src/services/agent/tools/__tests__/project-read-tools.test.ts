@@ -213,6 +213,24 @@ describe('agent project read tools', () => {
     })
   })
 
+  it.each(['zh-CN', 'en-US'] as const)('%s：没有失败原因时用工具自己的说明，不拼出以冒号结尾的半句或空说明', async writingLanguage => {
+    useProjectStore.setState({
+      currentProject: { ...project(projectAPath), novelConfig: { writingLanguage } } as never,
+    })
+    // reject 的值是 undefined（没有任何原因）。
+    const invoke = vi.fn(() => Promise.reject(undefined))
+    vi.stubGlobal('window', { aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() } })
+    const context = createAgentExecutionContext()
+    for (const result of [
+      await readArchitectureTool.execute({}, context),
+      await searchKnowledgeTool.execute({ query: 'campus' }, context),
+    ]) {
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/\S/u)
+      expect(result.error).not.toMatch(/[:：]\s*$/u)
+    }
+  })
+
   it('uses the frozen Agent language for knowledge-search failures', async () => {
     useProjectStore.setState({
       currentProject: {

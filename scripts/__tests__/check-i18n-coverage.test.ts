@@ -536,6 +536,10 @@ describe('i18n coverage boundary scanner', () => {
           setDeleteError(result.error ?? '')
         }
       `)
+      writeFixture(root, 'src/stores/run-log.ts', `
+        declare function get(): { addLog(level: string, message: string, locale: string): void }
+        export const cancel = (request: Promise<void>) => request.catch(error => get().addLog('error', String(error), 'zh-CN'))
+      `)
       writeFixture(root, 'src/components/dialogs/ImportNovelDialog.tsx', `
         declare function setSplitError(message: string): void
         export const fail = (error: Error) => setSplitError(error.message)
@@ -558,6 +562,7 @@ describe('i18n coverage boundary scanner', () => {
         'src/components/stage/use-delete.ts:17 [raw-error-display:alertError] String(error)',
         "src/components/stage/use-delete.ts:18 [raw-error-display:setDeleteError] error instanceof Error ? error.message : text('删除失败', 'Delete failed')",
         'src/components/stage/use-delete.ts:19 [raw-error-display:text] error',
+        'src/stores/run-log.ts:3 [raw-error-display:get().addLog] String(error)',
       ])
     } finally {
       rmSync(root, { recursive: true, force: true })

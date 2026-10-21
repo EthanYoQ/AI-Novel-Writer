@@ -144,6 +144,9 @@ describe('显示处统一的报错说明（#474 渲染层消费处）', () => {
     expect(displayedErrorMessage(locale, new Error("Error invoking remote method 'fs:read': TypeError: boom"), '兜底')).toBe('boom')
     expect(displayedErrorMessage(locale, '模型服务返回 HTTP 429', '兜底')).toBe('模型服务返回 HTTP 429')
     for (const empty of [undefined, null, '', '  ', new Error('')]) expect(displayedErrorMessage(locale, empty, '兜底')).toBe('兜底')
+    // IPC 之外 reject 的普通对象：有字符串 message 就用它，没有就用兜底，不显示 [object Object]。
+    expect(displayedErrorMessage(locale, { message: '磁盘只读' }, '兜底')).toBe('磁盘只读')
+    expect(displayedErrorMessage(locale, { success: false }, '兜底')).toBe('兜底')
   })
 
   // project:create / project:open 的 catch 把 resolveDirectoryPath 抛出的码经 String(error) 原样放进 result.error。
