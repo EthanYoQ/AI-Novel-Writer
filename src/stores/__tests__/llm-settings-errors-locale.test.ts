@@ -60,8 +60,8 @@ describe('model settings refusals from the main process (#474 B6)', () => {
     expect(shownChinese).not.toContain('LLM_')
   })
 
-  it('keeps an unregistered deletion failure as the main process reported it', async () => {
+  it('keeps an unregistered deletion failure as the main process reported it, without the class-name prefix', async () => {
     invoke.mockImplementation(async (called: string) => (called === 'llm:delete-model' ? { success: false, error: 'Error: EBUSY: models.json' } : undefined))
-    await expect(shownError('en-US', () => useLLMStore.getState().deleteModel('model-1'))).resolves.toBe('Error: EBUSY: models.json')
+    await expect(shownError('en-US', () => useLLMStore.getState().deleteModel('model-1'))).resolves.toBe('EBUSY: models.json')
   })
 })

@@ -366,7 +366,7 @@ describe('Issue #90 AI assistant project actions', () => {
 
   it('没有失败原因时按作品写作语言说明启动失败，不给中文作品英文句子', async () => {
     const invoke = stubWorkflowIpc()
-    const base = invoke.getMockImplementation()!
+    const base = invoke.getMockImplementation() as (channel: string, request?: unknown) => Promise<unknown>
     invoke.mockImplementation((channel: string, request?: unknown) => channel === 'agent-generation:register-workflow'
       ? Promise.reject(undefined)
       : base(channel, request))
