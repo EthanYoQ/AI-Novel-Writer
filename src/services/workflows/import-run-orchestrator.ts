@@ -17,6 +17,8 @@ import {
 } from '../../shared/import-run'
 import type { StepCallbacks } from '../../stores/workflow-store'
 import type { FinalizedDraftImportDraftReceipt, FinalizedDraftImportReceipt } from '../../shared/finalized-draft-import'
+import { appErrorMessage } from '../../i18n/app-errors'
+import { localize } from '../../i18n/core'
 
 export const IMPORT_CHAPTER_PAGE_SIZE = 100
 export const IMPORT_KNOWLEDGE_BATCH_SIZE = IMPORT_RUN_KNOWLEDGE_BATCH_SIZE
@@ -136,13 +138,32 @@ function stageIndex(run: Pick<ImportRunSnapshot, 'purpose'>, stage: ImportRunSta
   return stagesFor(run).indexOf(stage)
 }
 
+type ImportRunLocale = ImportRunSnapshot['locale']
+
 function requiredAuthorDependency<T>(value: T | undefined, name: string): T {
+  // i18n-exempt: 生产依赖（import-workflow.ts 的 productionDependencies）总会提供作者原稿的四个依赖，缺了是接线错误
   if (!value) throw new Error(`Author-manuscript import dependency is unavailable: ${name}.`)
   return value
 }
 
 function cancellationRequested(context: ImportRunExecutionContext): boolean {
   return context.cancelled || context.cancelRequested === true
+}
+
+/** 取消在安全边界生效：这句进运行卡片的步骤详情与日志，按导入运行的语言写。 */
+function stopIfCancelled(context: ImportRunExecutionContext, locale: ImportRunLocale): void {
+  if (cancellationRequested(context)) {
+    throw new Error(localize(locale, '导入已取消，停在了已保存的进度处。', 'Import cancelled at a safe boundary.'))
+  }
+}
+
+/** 收据或检查点与持久化记录对不上：作者照做不了什么，只能从导入对话框继续或重新导入，说明里留下是哪一项。 */
+function importRecordError(locale: ImportRunLocale, zhCNText: string, enUSText: string): Error {
+  return new Error(localize(
+    locale,
+    `${zhCNText}请在导入对话框里继续这次导入；如果仍然出现，请重新导入并把这段说明反馈给我们。`,
+    `${enUSText} Resume the import from the import dialog; if this keeps happening, start the import again and send us this message.`,
+  ))
 }
 
 function splitContiguousBatches(
@@ -167,7 +188,7 @@ export class ImportRunOrchestrator {
   constructor(private readonly dependencies: ImportRunOrchestratorDependencies) {}
 
   private async withLeaseHeartbeat<T>(
-    runId: string,
+    run: Pick<ImportRunSnapshot, 'id' | 'locale'>,
     execution: ImportRunExecutionState,
     operation: (lease: {
       authority: ImportRunExecutionAuthority
@@ -187,9 +208,10 @@ export class ImportRunOrchestrator {
       const renewal = renewalTail.then(async () => {
         if (heartbeatError) throw heartbeatError
         try {
-          const renewed = await this.dependencies.renewExecution(runId, execution.current)
+          const renewed = await this.dependencies.renewExecution(run.id, execution.current)
           if (renewed.owner !== initialAuthority.owner || renewed.epoch !== initialAuthority.epoch) {
-            throw new Error('Import execution authority changed during lease renewal.')
+            // 续租拿回的执行身份变了，与主进程判定的执行代号过期是同一件事，用同一句说明。
+            throw new Error(appErrorMessage(run.locale, 'IMPORT_RUN_EXECUTION_STALE'))
           }
           execution.current = renewed
           return execution.current
@@ -251,9 +273,11 @@ export class ImportRunOrchestrator {
     callbacks: StepCallbacks,
   ): Promise<void> {
     const existing = await this.dependencies.getRun(runId)
+    // i18n-exempt: 导入运行只在 parsing 阶段被删（import-run-repository 的两处 DELETE），工作流从解析之后的阶段起步，执行中没有删除路径
     if (!existing) throw new Error('Import run does not exist.')
     const requestedIndex = stageIndex(existing, requestedStage)
     if (requestedIndex < 0) {
+      // i18n-exempt: createImportWorkflow 按运行的 purpose 排步骤，阶段不属于这个 purpose 只会是接线错误
       throw new Error(`Import stage ${requestedStage} does not belong to ${existing.purpose}.`)
     }
     if (existing.status === 'completed' || stageIndex(existing, existing.stage) > requestedIndex) return
@@ -261,6 +285,7 @@ export class ImportRunOrchestrator {
     const run = started.run
     const execution: ImportRunExecutionState = { current: started.execution }
     if (run.status === 'completed' || stageIndex(run, run.stage) > stageIndex(run, requestedStage)) return
+    // i18n-exempt: 步骤按阶段顺序执行，前一步不推进阶段就会抛错停下工作流，阶段只进不退，到不了这里
     if (run.stage !== requestedStage) throw new Error(`Import run is waiting at ${run.stage}, not ${requestedStage}.`)
 
     try {
@@ -339,11 +364,11 @@ export class ImportRunOrchestrator {
       for (const batch of splitContiguousBatches(page, IMPORT_KNOWLEDGE_BATCH_SIZE)) {
         const checkpoint = createImportRunChapterBatchCheckpointId(batch)
         if (!run.completedBatches.knowledge?.includes(checkpoint)) {
-          if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+          stopIfCancelled(context, run.locale)
           for (const chapter of batch) {
             execution.current = await this.dependencies.renewExecution(run.id, execution.current)
             await this.withLeaseHeartbeat(
-              run.id,
+              run,
               execution,
               lease => this.dependencies.importReference(
                 chapter,
@@ -360,13 +385,13 @@ export class ImportRunOrchestrator {
         }
         visited += batch.length
         callbacks.setProgress(Math.min(99, Math.round((visited / run.totalChapters) * 100)))
-        if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+        stopIfCancelled(context, run.locale)
       }
       after = page.at(-1)!.number
       page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)
     }
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     await this.dependencies.advanceStage(run.id, 'knowledge', 'global', execution.current)
   }
 
@@ -405,13 +430,13 @@ export class ImportRunOrchestrator {
         run.id, stage, batchId, execution.current,
       )
       await this.withLeaseHeartbeat(
-        run.id,
+        run,
         execution,
         () => this.dependencies.replayCommittedEffect(committed.receipt, committed.run),
       )
       return { run: committed.run, execution: execution.current }
     }
-    const keptAlive = await this.withLeaseHeartbeat(run.id, execution, lease => generate(async payload => {
+    const keptAlive = await this.withLeaseHeartbeat(run, execution, lease => generate(async payload => {
       execution.current = await lease.renew()
       await this.dependencies.prepareEffectReceipt({
         runId: run.id, stage, batchId, effectKey, kind, payload,
@@ -426,7 +451,11 @@ export class ImportRunOrchestrator {
     execution.current = keptAlive.execution
     const committedReceipt = await this.dependencies.getEffectReceipt(run.id, stage, batchId)
     if (!committedReceipt || committedReceipt.state !== 'committed') {
-      throw new Error('Generated import effect was not durably committed.')
+      throw importRecordError(
+        run.locale,
+        '这一步生成的结果没有保存下来。',
+        'The result generated in this step was not saved.',
+      )
     }
     return { run, execution: execution.current }
   }
@@ -439,14 +468,18 @@ export class ImportRunOrchestrator {
   ): Promise<{ run: ImportRunSnapshot; execution: ImportRunExecutionLease }> {
     const existing = await this.dependencies.getEffectReceipt(run.id, stage, batchId)
     if (!existing) {
-      throw new Error('A completed import checkpoint is missing its durable effect receipt.')
+      throw importRecordError(
+        run.locale,
+        '已完成的导入批次缺少保存记录，无法按原结果恢复。',
+        'A completed import batch is missing its saved record, so its result cannot be restored.',
+      )
     }
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
     const committed = await this.dependencies.commitEffectReceipt(
       run.id, stage, batchId, execution.current,
     )
     await this.withLeaseHeartbeat(
-      run.id,
+      run,
       execution,
       () => this.dependencies.replayCommittedEffect(committed.receipt, committed.run),
     )
@@ -455,7 +488,7 @@ export class ImportRunOrchestrator {
 
   private async executeGlobal(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
     if (!run.completedBatches.global?.includes('done')) {
-      if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+      stopIfCancelled(context, run.locale)
       const sample = await this.representativeChapters(run.id)
       const committed = await this.executeDurableEffect(
         run, execution, 'global', 'done', 'global-facts', 'project-global-facts',
@@ -468,15 +501,15 @@ export class ImportRunOrchestrator {
       execution.current = committed.execution
     }
     callbacks.setProgress(100)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     await this.dependencies.advanceStage(run.id, 'global', 'style', execution.current)
   }
 
   private async executeStyle(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
     if (!run.completedBatches.style?.includes('done')) {
-      if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+      stopIfCancelled(context, run.locale)
       const sample = await this.representativeChapters(run.id)
       const committed = await this.executeDurableEffect(
         run, execution, 'style', 'done', 'writing-style', 'project-writing-style',
@@ -486,9 +519,9 @@ export class ImportRunOrchestrator {
       execution.current = committed.execution
     }
     callbacks.setProgress(100)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     await this.dependencies.advanceStage(run.id, 'style', 'blueprints', execution.current)
   }
 
@@ -509,7 +542,7 @@ export class ImportRunOrchestrator {
           run = replayed.run
           execution.current = replayed.execution
         } else {
-          if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+          stopIfCancelled(context, run.locale)
           const committed = await this.executeDurableEffect(
             run,
             execution,
@@ -524,13 +557,13 @@ export class ImportRunOrchestrator {
         }
         visited += batch.length
         callbacks.setProgress(Math.min(99, Math.round((visited / run.totalChapters) * 100)))
-        if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+        stopIfCancelled(context, run.locale)
       }
       after = page.at(-1)!.number
       page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)
     }
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     await this.dependencies.advanceStage(run.id, 'blueprints', 'refresh', execution.current)
   }
 
@@ -542,7 +575,7 @@ export class ImportRunOrchestrator {
   ): Promise<void> {
     let run = initialRun
     if (!run.completedBatches['author-commit']?.includes('done')) {
-      if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+      stopIfCancelled(context, run.locale)
       const commitAuthorManuscript = requiredAuthorDependency(
         this.dependencies.commitAuthorManuscript,
         'commitAuthorManuscript',
@@ -560,9 +593,9 @@ export class ImportRunOrchestrator {
       execution.current = committed.execution
     }
     callbacks.setProgress(100)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     await this.dependencies.advanceStage(run.id, 'author-commit', 'author-publish', execution.current)
   }
 
@@ -583,7 +616,13 @@ export class ImportRunOrchestrator {
       ? requiredAuthorDependency(this.dependencies.publishAuthorChapter, 'publishAuthorChapter')
       : requiredAuthorDependency(this.dependencies.postprocessAuthorChapter, 'postprocessAuthorChapter')
     const receipt = await getReceipt(run.id)
-    if (!receipt) throw new Error('The committed author-manuscript receipt is unavailable.')
+    if (!receipt) {
+      throw importRecordError(
+        run.locale,
+        '读不到已保存的作者原稿记录。',
+        'The saved author-manuscript record could not be read.',
+      )
+    }
     const draftsByChapter = new Map(receipt.drafts.map(draft => [draft.chapterNumber, draft]))
     let after = 0
     let visited = 0
@@ -592,14 +631,18 @@ export class ImportRunOrchestrator {
       for (const chapter of page) {
         const checkpoint = `chapter:${chapter.number}`
         if (!run.completedBatches[stage]?.includes(checkpoint)) {
-          if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+          stopIfCancelled(context, run.locale)
           const draft = draftsByChapter.get(chapter.number)
           if (!draft) {
-            throw new Error(`The author-manuscript receipt is missing Chapter ${chapter.number}.`)
+            throw importRecordError(
+              run.locale,
+              `已保存的作者原稿记录里缺少第 ${chapter.number} 章。`,
+              `The saved author-manuscript record is missing Chapter ${chapter.number}.`,
+            )
           }
           execution.current = await this.dependencies.renewExecution(run.id, execution.current)
           await this.withLeaseHeartbeat(
-            run.id,
+            run,
             execution,
             () => projectChapter(chapter, draft, run),
           )
@@ -614,27 +657,27 @@ export class ImportRunOrchestrator {
         }
         visited += 1
         callbacks.setProgress(Math.min(99, Math.round((visited / run.totalChapters) * 100)))
-        if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+        stopIfCancelled(context, run.locale)
       }
       after = page.at(-1)!.number
       page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)
     }
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     await this.dependencies.advanceStage(run.id, stage, nextStage, execution.current)
   }
 
   private async executeRefresh(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
     if (!run.completedBatches.refresh?.includes('done')) {
-      if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
-      await this.withLeaseHeartbeat(run.id, execution, () => this.dependencies.refresh(run))
+      stopIfCancelled(context, run.locale)
+      await this.withLeaseHeartbeat(run, execution, () => this.dependencies.refresh(run))
       execution.current = await this.dependencies.renewExecution(run.id, execution.current)
       await this.dependencies.completeBatch(run.id, 'refresh', 'done', execution.current)
     }
     callbacks.setProgress(100)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
-    if (cancellationRequested(context)) throw new Error('Import cancelled at a safe boundary.')
+    stopIfCancelled(context, run.locale)
     await this.dependencies.complete(run.id, execution.current)
   }
 }
