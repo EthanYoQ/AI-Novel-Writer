@@ -5,6 +5,7 @@ import {
   saveDirtyEditorChangesForExit,
   useEditorStore,
 } from '../editor-store'
+import { useLocaleStore } from '../locale-store'
 
 const PROJECT_A = 'C:\\novels\\exit-a'
 const PROJECT_B = 'C:\\novels\\exit-b'
@@ -40,6 +41,19 @@ describe('editor exit save settlement', () => {
     expect(saveChapter).toHaveBeenCalledOnce()
     expect(saveArch).toHaveBeenCalledOnce()
     expect(useEditorStore.getState().tabs.every(tab => !tab.dirty)).toBe(true)
+  })
+
+  it('explains a blocked exit in the English interface (#474)', async () => {
+    const original = useLocaleStore.getState()
+    useLocaleStore.setState({ locale: 'en-US' })
+    try {
+      useEditorStore.setState({
+        tabs: [{ id: 'chapter-b', name: 'Chapter 2', type: 'chapter', projectKey: PROJECT_B, content: 'B', contentRevision: 1, dirty: true }],
+      })
+      await expect(saveDirtyEditorChangesForExit(PROJECT_A)).rejects.toThrow(/^Another book has unsaved changes/u)
+    } finally {
+      useLocaleStore.setState(original, true)
+    }
   })
 
   it('keeps the exit blocked when saving fails', async () => {

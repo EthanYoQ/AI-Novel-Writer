@@ -59,6 +59,7 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
   rendererThrowErrorBoundaries: [
     'src/App.tsx',
     'src/components',
+    'src/stores',
   ],
   // 这些命令连错误码也不能直接抛（#408）：每条失败都要给作者能读的说明。
   strictWorkflowCommandErrorBoundaries: [
@@ -505,7 +506,9 @@ function exemption(sourceFile, node) {
 function inspectThrownErrors(violations, root, file, sourceFile, mode, allowErrorCodes) {
   const bindings = collectBindings(sourceFile)
   const visit = (node) => {
-    const thrown = ts.isThrowStatement(node) && node.expression
+    // Promise.reject(new Error(...)) 与 throw 同样把说明交给调用方的 catch。
+    const thrown = ts.isThrowStatement(node) ? node.expression
+      : ts.isCallExpression(node) && callName(node, sourceFile) === 'Promise.reject' && node.arguments[0]
     const message = thrown && ts.isNewExpression(thrown) && thrown.expression.getText(sourceFile) === 'Error' && thrown.arguments?.[0]
     const exempt = message && exemption(sourceFile, node)
     if (exempt === 'missing-reason') {

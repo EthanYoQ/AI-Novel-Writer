@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import type { DraftStatus } from '../shared/draft-status'
 import { sameProjectPathKey } from '../shared/project-session-context'
 import { countUnsavedEditorItems, countUnsavedEditorItemsForProject } from './editor-unsaved'
+import { useLocaleStore } from './locale-store'
 import { canonicalResourceUri } from '../shared/project-paths'
 import type { GenerationRecoveryContext } from '../shared/generation-owner-contract'
 import type { AllInvokeChannels } from '../shared/ipc-channels'
@@ -549,17 +550,18 @@ export async function saveDirtyEditorChangesForExit(
     : countUnsavedEditorItems(state.tabs, state.draftLedgers)
   const initial = useEditorStore.getState()
   if (countUnsaved(initial) === 0) return
+  const text = useLocaleStore.getState().text
 
   const handlers = new Set<EditorExitSaveHandler>()
   for (const tab of initial.tabs) {
     if (!tab.dirty) continue
     if (scope === 'project' && tab.projectKey !== currentProjectKey) continue
     if (!tab.projectKey || !currentProjectKey || !sameProjectPathKey(tab.projectKey, currentProjectKey)) {
-      throw new Error('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出')
+      throw new Error(text('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出', 'Another book has unsaved changes. Switch back to it to save them, or cancel exiting.'))
     }
     const handler = exitSaveHandlers.get(`tab:${tab.id}`)
       ?? exitSaveHandlers.get(exitSaveTypeKey(tab.type, tab.projectKey))
-    if (!handler) throw new Error(`“${tab.name}”当前无法安全保存，请取消退出并在编辑器中保存`)
+    if (!handler) throw new Error(text(`“${tab.name}”当前无法安全保存，请取消退出并在编辑器中保存`, `“${tab.name}” cannot be saved safely right now. Cancel exiting and save it in its editor.`))
     handlers.add(handler)
   }
 
@@ -573,16 +575,16 @@ export async function saveDirtyEditorChangesForExit(
       if (!Array.isArray(parsed.projects)) throw new Error('invalid ledger')
       projects = parsed.projects
     } catch {
-      throw new Error('存在无法识别的未保存编辑内容，请取消退出并恢复该编辑器')
+      throw new Error(text('存在无法识别的未保存编辑内容，请取消退出并恢复该编辑器', 'Some unsaved edits could not be recognized. Cancel exiting and restore that editor.'))
     }
     for (const project of projects) {
       if (typeof project.projectKey !== 'string') continue
       if (scope === 'project' && project.projectKey !== currentProjectKey) continue
       if (!currentProjectKey || !sameProjectPathKey(project.projectKey, currentProjectKey)) {
-        throw new Error('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出')
+        throw new Error(text('另一个项目仍有未保存内容，请切回该项目后再保存或取消退出', 'Another book has unsaved changes. Switch back to it to save them, or cancel exiting.'))
       }
       const handler = exitSaveHandlers.get(exitSaveTypeKey(type, project.projectKey))
-      if (!handler) throw new Error('当前编辑内容无法安全保存，请取消退出并在对应编辑器中保存')
+      if (!handler) throw new Error(text('当前编辑内容无法安全保存，请取消退出并在对应编辑器中保存', 'These edits cannot be saved safely right now. Cancel exiting and save them in their editor.'))
       handlers.add(handler)
     }
   }
@@ -591,6 +593,6 @@ export async function saveDirtyEditorChangesForExit(
 
   const settled = useEditorStore.getState()
   if (countUnsaved(settled) !== 0) {
-    throw new Error('保存期间仍有未保存修改，已取消退出')
+    throw new Error(text('保存期间仍有未保存修改，已取消退出', 'New edits were made while saving, so exiting was cancelled.'))
   }
 }

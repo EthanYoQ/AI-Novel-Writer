@@ -23,6 +23,7 @@ import { useProjectStore } from './project-store'
 import { requireIpcSuccess } from '../services/ipc-result'
 import { countDraftUnits } from '../shared/draft-units'
 import { useEditorStore } from './editor-store'
+import { useLocaleStore } from './locale-store'
 
 let loadAllDraftsRequestSequence = 0
 
@@ -406,7 +407,7 @@ export async function readDraftBody(
   expectedProjectSession?: ProjectSessionContext,
 ): Promise<string> {
   const projectSession = currentDraftProjectSession(expectedProjectPath, expectedProjectSession)
-  if (!projectSession) throw new Error('读取草稿时缺少匹配的冻结项目会话')
+  if (!projectSession) throw new Error(useLocaleStore.getState().text('读取草稿时缺少匹配的冻结项目会话', 'The draft was not read because the book session changed.'))
 
   const content = await readResourceContent(filePath, projectSession)
   return isDraftProjectSessionCurrent(projectSession) ? content : ''

@@ -548,7 +548,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       }
       // 使用主进程返回的实际项目路径（跨平台安全，避免路径分隔符问题）
       const projectDir = result.projectPath
-      if (!projectDir) throw new Error('创建结果缺少项目路径')
+      if (!projectDir) throw new Error(projectText('创建结果缺少项目路径', 'The created project did not report its folder.'))
       if (rendererProject && preparedTransition) {
         if (!isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)) return false
         createOpenTransitionAuthorization = {

@@ -469,6 +469,7 @@ describe('i18n coverage boundary scanner', () => {
           // i18n-exempt: 只在开发构建的懒加载装配里抛出，作者看不到
           if (step === 4) throw new Error('页面代码块没有默认导出')
           if (step === 5) throw new Error('资源只读') // i18n-exempt:
+          if (step === 6) return Promise.reject(new Error('角色数据仍在切换项目'))
           throw new Error('Only English')
         }
       `)
@@ -483,6 +484,7 @@ describe('i18n coverage boundary scanner', () => {
       expect(lines).toEqual([
         "src/components/stage/use-thing.ts:4 [thrown-error] '剧情树快照保存失败'",
         "src/components/stage/use-thing.ts:9 [exempt-without-reason] '资源只读'",
+        "src/components/stage/use-thing.ts:10 [thrown-error] '角色数据仍在切换项目'",
       ])
     } finally {
       rmSync(root, { recursive: true, force: true })
