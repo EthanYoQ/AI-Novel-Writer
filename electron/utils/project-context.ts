@@ -14,7 +14,7 @@ export function assertExpectedProjectPath(
     !currentProjectPath
     || normalizedProjectPath(currentProjectPath) !== normalizedProjectPath(expectedProjectPath)
   ) {
-    throw new Error('项目上下文已切换，已拒绝跨项目读写')
+    throw new Error('PROJECT_CONTEXT_CHANGED')
   }
 }
 
@@ -24,7 +24,7 @@ export function assertRequiredExpectedProjectPath(
   expectedProjectPath: string | undefined,
 ): asserts expectedProjectPath is string {
   if (!expectedProjectPath) {
-    throw new Error('缺少项目上下文，已拒绝项目数据访问')
+    throw new Error('PROJECT_CONTEXT_REQUIRED')
   }
   assertExpectedProjectPath(currentProjectPath, expectedProjectPath)
 }
@@ -36,7 +36,7 @@ function assertContainedPath(root: string, target: string): void {
     || relative.startsWith(`..${path.sep}`)
     || path.isAbsolute(relative)
   ) {
-    throw new Error('文件路径超出当前项目目录，已拒绝访问')
+    throw new Error('PROJECT_FILE_OUTSIDE_PROJECT')
   }
 }
 
@@ -50,7 +50,7 @@ function canonicalWritableTarget(filePath: string): string {
   while (!fs.existsSync(existingAncestor)) {
     const parent = path.dirname(existingAncestor)
     if (parent === existingAncestor) {
-      throw new Error('无法解析文件目标的现有父目录')
+      throw new Error('PROJECT_FILE_PARENT_UNRESOLVABLE')
     }
     missingSegments.unshift(path.basename(existingAncestor))
     existingAncestor = parent

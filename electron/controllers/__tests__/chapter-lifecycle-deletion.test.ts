@@ -332,7 +332,7 @@ describe('chapter lifecycle deletion IPC', () => {
     )).resolves.toMatchObject({
       success: false,
       committed: false,
-      error: expect.stringContaining('会话'),
+      error: 'PROJECT_SESSION_STALE',
     })
     await expect(handler(
       {},

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appErrorMessage, knownAppErrorMessage } from '../app-errors'
+import { appErrorMessage, displayedErrorMessage, knownAppErrorMessage } from '../app-errors'
 
 describe('localized application errors', () => {
   it('maps stable error codes to localized messages', () => {
@@ -105,4 +105,27 @@ it.each([
 it.each(['CHARACTER_ID_REVISION_CONFLICT', 'CHARACTER_ID_UNKNOWN'])('explains %s without assuming a proposal is open', code => {
   expect(knownAppErrorMessage('en-US', code)).not.toMatch(/proposal/iu)
   expect(knownAppErrorMessage('zh-CN', code)).not.toContain('提议')
+})
+
+describe('project session and external file errors from the main process (#474 B4)', () => {
+  it.each([
+    // db 读通道原样抛出：Electron 包上通道名，错误类名代替了 "Error"。
+    ["Error invoking remote method 'db:draft-list': ProjectSessionStaleError: PROJECT_SESSION_DATABASE_MISMATCH", 'The project was switched or reopened'],
+    // db 写通道返回 { error: String(error) }。
+    ['ProjectSessionStaleError: PROJECT_SESSION_STALE', 'The project was switched or reopened'],
+    ["Error invoking remote method 'kb:stats': Error: PROJECT_SESSION_REQUIRED", 'did not carry the session of the open project'],
+    ['Error: PROJECT_CONTEXT_CHANGED', 'The project was switched or reopened'],
+    ["Error invoking remote method 'project:create': Error: EXTERNAL_FILE_GRANT_EXPIRED", 'Choose it again'],
+  ])('explains %s in English without the wrapper or the code', (raw, english) => {
+    expect(appErrorMessage('en-US', raw)).toContain(english)
+    expect(appErrorMessage('en-US', raw)).not.toMatch(/Error|PROJECT_|EXTERNAL_/u)
+    expect(appErrorMessage('zh-CN', raw)).not.toMatch(/[A-Z]{3,}_/u)
+  })
+
+  it('translates a registered code thrown by a dialog handler and keeps renderer copy as is', () => {
+    const exists = new Error("Error invoking remote method 'dialog:select-project-archive-export': Error: PROJECT_ARCHIVE_TARGET_EXISTS")
+    expect(displayedErrorMessage('en-US', exists)).toBe('The target file already exists. Choose another file name; project archives never overwrite existing files.')
+    expect(displayedErrorMessage('zh-CN', exists)).toBe('目标文件已存在，请选择其他文件名。项目存档不会覆盖已有文件。')
+    expect(displayedErrorMessage('en-US', new Error('PORTABLE_GRANT_INVALID'))).toBe('PORTABLE_GRANT_INVALID')
+  })
 })

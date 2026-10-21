@@ -60,41 +60,44 @@ function isMissingFileError(error: unknown): boolean {
     || message === 'SECURE_FS_NOT_FOUND'
 }
 
+/** 项目会话与路径守卫（project-access、project-context）的错误码按码说明；其他错误不在这里解释。 */
+function projectAccessMessage(error: unknown): string | undefined {
+  switch (error instanceof Error ? error.message : undefined) {
+    case 'PROJECT_SESSION_STALE':
+    case 'PROJECT_SESSION_ROOT_MISMATCH':
+    case 'PROJECT_SESSION_DATABASE_MISMATCH':
+      return text(
+        '项目租约已失效，已拒绝操作。',
+        'The project lease has expired; the operation was rejected.',
+      )
+    case 'PROJECT_SESSION_REQUIRED':
+    case 'PROJECT_CONTEXT_REQUIRED':
+      return text(
+        '缺少项目会话上下文，已拒绝操作。',
+        'Project session context is missing; the operation was rejected.',
+      )
+    case 'PROJECT_FILE_OUTSIDE_PROJECT':
+      return text(
+        '目标超出当前项目范围，已拒绝操作。',
+        'The target is outside the current project; the operation was rejected.',
+      )
+    case 'PROJECT_CONTEXT_CHANGED':
+      return text(
+        '检测到跨项目读写，已拒绝操作。',
+        'Cross-project file access was rejected.',
+      )
+    default:
+      return undefined
+  }
+}
+
 /** Do not expose filesystem paths or raw Node errors across the IPC boundary. */
 function projectFilesystemFailure(
   channel: string,
   error: unknown,
   commitState: FileWriteCommitState = 'not_committed',
 ): unknown {
-  const internalMessage = error instanceof Error ? error.message : ''
-  const projectAccessMessage = () => {
-    if (/缺少项目会话上下文/.test(internalMessage)) {
-      return text(
-        '缺少项目会话上下文，已拒绝操作。',
-        'Project session context is missing; the operation was rejected.',
-      )
-    }
-    if (/超出当前项目/.test(internalMessage)) {
-      return text(
-        '目标超出当前项目范围，已拒绝操作。',
-        'The target is outside the current project; the operation was rejected.',
-      )
-    }
-    if (/跨项目读写/.test(internalMessage)) {
-      return text(
-        '检测到跨项目读写，已拒绝操作。',
-        'Cross-project file access was rejected.',
-      )
-    }
-    if (/项目会话已失效|租约已失效/.test(internalMessage)) {
-      return text(
-        '项目租约已失效，已拒绝操作。',
-        'The project lease has expired; the operation was rejected.',
-      )
-    }
-    return undefined
-  }
-  const accessMessage = projectAccessMessage()
+  const accessMessage = projectAccessMessage(error)
   if (channel === 'fs:read-file') {
     const missingFileMessage = isMissingFileError(error)
       ? text(
@@ -134,7 +137,7 @@ function registerFilesystemHandler<Args extends unknown[]>(
     try {
       projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
       if (!context) {
-        throw new Error('缺少项目会话上下文，已拒绝操作')
+        throw new Error('PROJECT_SESSION_REQUIRED')
       }
       return await handler(event, context, ...(args as Args))
     } catch (error) {

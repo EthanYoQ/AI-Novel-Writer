@@ -105,9 +105,9 @@ beforeEach(() => {
     stableKey: 'reference:key:1:fingerprint',
   })
   mocks.assertCurrentProjectContext.mockImplementation((context: { projectPath?: string } | undefined, currentProjectPath: string) => {
-    if (!context?.projectPath) throw new Error('缺少项目会话上下文，已拒绝操作')
+    if (!context?.projectPath) throw new Error('PROJECT_SESSION_REQUIRED')
     if (context.projectPath !== currentProjectPath) {
-      throw new Error('项目会话与当前数据库不匹配，已拒绝操作')
+      throw new Error('PROJECT_SESSION_DATABASE_MISMATCH')
     }
     return { rootPath: currentProjectPath }
   })
@@ -205,7 +205,7 @@ describe('knowledge-base controller project context guard', () => {
 
   it('rejects a matching project path that omits its session context', async () => {
     await expect(rawHandler('kb:clear-all')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目会话/)
+      .rejects.toThrow('PROJECT_SESSION_REQUIRED')
     expect(mocks.run).not.toHaveBeenCalled()
   })
 
@@ -227,9 +227,9 @@ describe('knowledge-base controller project context guard', () => {
     mocks.currentProjectPath = 'C:/projects/B'
 
     await expect(handler(channel)({}, ...args, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     await expect(rawHandler(channel)({}, ...args))
-      .rejects.toThrow(/缺少项目(?:上下文|会话)/)
+      .rejects.toThrow(/PROJECT_(?:CONTEXT|SESSION)_REQUIRED/)
     expect(mocks.run).not.toHaveBeenCalled()
   })
 
@@ -316,7 +316,7 @@ describe('knowledge-base controller project context guard', () => {
     mocks.currentProjectPath = 'C:/projects/B'
 
     await expect(handler('kb:clear-all')({}, confirmedProjectPath))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     expect(mocks.run).not.toHaveBeenCalled()
   })
 

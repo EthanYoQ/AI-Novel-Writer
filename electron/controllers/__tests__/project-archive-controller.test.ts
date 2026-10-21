@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
+  app: { getLocale: () => 'zh-CN' },
   ipcMain: {
     handle: vi.fn((channel: string, handler: IpcHandler) => mocks.handlers.set(channel, handler)),
   },
@@ -63,6 +64,10 @@ vi.mock('../../services/project-access', () => ({
     invalidateCurrentSession: mocks.invalidateCurrentSession,
   },
 }))
+vi.mock('../../i18n', () => ({
+  mainText: (_locale: unknown, zhCNText: string) => zhCNText,
+}))
+
 vi.mock('../../services/project-archive-service', () => ({
   exportPortableProject: mocks.exportPortableProject,
 }))
@@ -180,7 +185,7 @@ beforeEach(() => {
       || context.leaseId !== mocks.activeSession.leaseId
       || context.projectPath !== mocks.activeSession.projectPath
       || currentProjectPath !== mocks.activeSession.rootPath) {
-      throw new Error('项目会话已失效，已拒绝操作')
+      throw new Error('PROJECT_SESSION_STALE')
     }
     return mocks.activeSession
   })
@@ -253,7 +258,7 @@ describe('project archive choosers issue sender-bound grants instead of raw path
     mocks.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: archive })
 
     await expect(handler('dialog:select-project-archive-export')(event(), '项目'))
-      .rejects.toThrow('目标文件已存在，请选择其他文件名。项目存档不会覆盖已有文件。')
+      .rejects.toThrow('PROJECT_ARCHIVE_TARGET_EXISTS')
 
     expect(grants.activeCount()).toBe(0)
     expect(mocks.exportPortableProject).not.toHaveBeenCalled()
@@ -432,7 +437,7 @@ describe('project:archive-export', () => {
     const root = tempRoot('b01-export-stale-')
     const grantId = newTargetGrant(path.join(root, 'current.ainovel'))
     mocks.assertCurrentProjectContext.mockImplementationOnce(() => {
-      throw new Error('项目会话已失效，已拒绝操作')
+      throw new Error('PROJECT_SESSION_STALE')
     })
 
     await expect(handler('project:archive-export')(event(), {
@@ -440,7 +445,7 @@ describe('project:archive-export', () => {
       projectSession: { ...projectSession(), leaseId: 'stale-lease' },
     })).resolves.toMatchObject({
       success: false,
-      error: expect.stringContaining('项目会话已失效'),
+      error: 'PROJECT_SESSION_STALE',
     })
     expect(mocks.exportPortableProject).not.toHaveBeenCalled()
     expect(grants.activeCount()).toBe(1)
@@ -456,7 +461,7 @@ describe('project:archive-export', () => {
       projectSession: projectSession(),
     })).resolves.toMatchObject({
       success: false,
-      error: expect.stringContaining('项目会话已失效'),
+      error: 'PROJECT_SESSION_STALE',
     })
     expect(mocks.exportPortableProject).not.toHaveBeenCalled()
   })
@@ -662,7 +667,7 @@ describe('project:archive-restore', () => {
       success: true,
       receipt: restoreReceipt(targetProjectRoot),
       recentProjectUpdated: false,
-      warning: '项目已恢复，但最近项目列表暂未更新',
+      warning: 'PROJECT_RECENT_LIST_UPDATE_FAILED',
     })
     expect(fs.readFileSync(restoredMarker, 'utf8')).toBe('restored')
   })

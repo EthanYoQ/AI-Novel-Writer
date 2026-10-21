@@ -728,7 +728,7 @@ export function initializeLegacyBaselineSchema(db: BetterSqlite3.Database, impor
       db.pragma('foreign_keys = ON')
     }
     const violations = db.pragma('foreign_key_check') as unknown[]
-    if (violations.length > 0) throw new Error('导入运行阶段迁移破坏了外键约束')
+    if (violations.length > 0) throw new Error('PROJECT_SCHEMA_IMPORT_RUN_FOREIGN_KEY_BROKEN')
   }
   const importChapterColumns = new Set(
     (db.prepare('PRAGMA table_info(import_run_chapters)').all() as Array<{ name: string }>).map(column => column.name),
@@ -881,13 +881,13 @@ export function initializeLegacyBaselineSchema(db: BetterSqlite3.Database, impor
   if (legacyIdentityTable) {
     const migrationSecret = importSourceSecret ?? loadApplicationImportSourceSecret()
     if (!Buffer.isBuffer(migrationSecret) || migrationSecret.byteLength !== 32) {
-      throw new Error('旧导入来源身份迁移需要有效的应用密钥')
+      throw new Error('PROJECT_SCHEMA_IMPORT_SOURCE_SECRET_INVALID')
     }
     const legacy = db.prepare('SELECT salt_hex FROM import_source_identity WHERE id = ?')
       .get('main') as { salt_hex: string } | undefined
     if (legacy) {
       const salt = Buffer.from(legacy.salt_hex, 'hex')
-      if (salt.byteLength !== 32) throw new Error('旧导入来源身份盐损坏')
+      if (salt.byteLength !== 32) throw new Error('PROJECT_SCHEMA_IMPORT_SOURCE_SALT_INVALID')
       const iv = randomBytes(12)
       const cipher = createCipheriv('aes-256-gcm', migrationSecret, iv)
       cipher.setAAD(Buffer.from('ai-novel:legacy-import-source-salt:v1', 'utf8'))

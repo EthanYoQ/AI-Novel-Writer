@@ -14,7 +14,7 @@ beforeEach(() => {
 
 describe('ProjectCoreRepository without an opened project DB', () => {
   it('throws when updating project core data', () => {
-    expect(() => ProjectCoreRepository.update({ writingStyle: '冷峻紧凑' })).toThrow(/项目数据库未打开/)
+    expect(() => ProjectCoreRepository.update({ writingStyle: '冷峻紧凑' })).toThrow('PROJECT_NOT_OPEN')
   })
 })
 

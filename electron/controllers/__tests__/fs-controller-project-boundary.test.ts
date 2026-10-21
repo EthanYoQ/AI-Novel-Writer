@@ -140,12 +140,12 @@ beforeEach(() => {
   vi.restoreAllMocks()
   vi.clearAllMocks()
   mocks.assertCurrentProjectContext.mockImplementation((context: { projectPath?: string; leaseId?: string } | undefined, currentProjectPath: string) => {
-    if (!context?.projectPath) throw new Error('缺少项目会话上下文，已拒绝操作')
+    if (!context?.projectPath) throw new Error('PROJECT_SESSION_REQUIRED')
     if (context.projectPath !== currentProjectPath) {
-      throw new Error('项目会话与当前数据库不匹配，已拒绝操作')
+      throw new Error('PROJECT_SESSION_DATABASE_MISMATCH')
     }
     if (context.leaseId !== mocks.activeLeaseId) {
-      throw new Error('项目会话租约已失效，已拒绝操作')
+      throw new Error('PROJECT_SESSION_STALE')
     }
     return { rootPath: currentProjectPath }
   })

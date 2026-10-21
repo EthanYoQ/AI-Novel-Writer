@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { dialog, ipcMain } from 'electron'
+import { app, dialog, ipcMain } from 'electron'
 
 import type {
   ExternalFileGrant,
@@ -21,8 +21,13 @@ import { exportPortableProject } from '../services/project-archive-service'
 import { createPortableProjectAssetProvider } from '../services/portable-project-assets'
 import { restorePortableProject } from '../services/project-restore-service'
 import { registerRecentProject } from './project-controller'
+import { mainText } from '../i18n'
 
 const require = createRequire(import.meta.url)
+
+function text(zhCNText: string, enUSText: string): string {
+  return mainText(app.getLocale(), zhCNText, enUSText)
+}
 const BetterSqlite = require('better-sqlite3') as typeof import('better-sqlite3')
 const portableAssets = createPortableProjectAssetProvider()
 const ARCHIVE_EXTENSION = 'ainovel'
@@ -141,14 +146,14 @@ export function registerProjectArchiveController(
 ): void {
   ipcMain.handle('dialog:select-project-archive-export', async (event: ArchiveGrantEvent, suggestedName: string) => {
     const result = await dialog.showSaveDialog({
-      title: '导出项目存档',
+      title: text('导出项目存档', 'Export project archive'),
       defaultPath: `${safeSuggestedName(suggestedName, 'project-backup')}.${ARCHIVE_EXTENSION}`,
       filters: [{ name: 'AI Novel Archive', extensions: [ARCHIVE_EXTENSION] }],
       properties: ['createDirectory'],
     })
     if (result.canceled || !result.filePath) return null
     if (fs.existsSync(result.filePath)) {
-      throw new Error('目标文件已存在，请选择其他文件名。项目存档不会覆盖已有文件。')
+      throw new Error('PROJECT_ARCHIVE_TARGET_EXISTS')
     }
     const issued = grants.issueNewChild({
       webContentsId: event.sender.id,
@@ -162,7 +167,7 @@ export function registerProjectArchiveController(
 
   ipcMain.handle('dialog:select-project-archive', async (event: ArchiveGrantEvent) => {
     const result = await dialog.showOpenDialog({
-      title: '选择项目存档',
+      title: text('选择项目存档', 'Choose a project archive'),
       filters: [{ name: 'AI Novel Archive', extensions: [ARCHIVE_EXTENSION] }],
       properties: ['openFile'],
     })
@@ -179,7 +184,7 @@ export function registerProjectArchiveController(
   })
 
   ipcMain.handle('dialog:select-project-restore-target', async (event: ArchiveGrantEvent, suggestedName: string) => {
-    const result = await dialog.showOpenDialog({ title: '选择恢复副本所在文件夹', properties: ['openDirectory', 'createDirectory'] })
+    const result = await dialog.showOpenDialog({ title: text('选择恢复副本所在文件夹', 'Choose the folder for the restored copy'), properties: ['openDirectory', 'createDirectory'] })
     const parent = result.canceled ? undefined : result.filePaths[0]
     if (!parent) return null
     const targetPath = availableRestoreTarget(parent, suggestedName)
@@ -235,7 +240,7 @@ export function registerProjectArchiveController(
           success: true as const,
           receipt,
           recentProjectUpdated: false,
-          warning: '项目已恢复，但最近项目列表暂未更新',
+          warning: 'PROJECT_RECENT_LIST_UPDATE_FAILED',
         }
       }
     } catch (error) {

@@ -20,19 +20,31 @@ interface ProjectManifest {
   createdAt: string
 }
 
+/** 所选目录缺少有效项目清单或可信旧版指纹。 */
 export class ProjectRootRequiredError extends Error {
   readonly code = PROJECT_ROOT_REQUIRED
 
   constructor() {
-    super('所选目录不是项目根目录：目录缺少有效项目清单或可信旧版指纹')
+    super(PROJECT_ROOT_REQUIRED)
     this.name = 'ProjectRootRequiredError'
   }
 }
 
-/** 请求携带的会话已被换开或重开的作品取代；属于预期竞态，不是故障。 */
+/**
+ * 请求携带的会话已被换开或重开的作品取代；属于预期竞态，不是故障。
+ * 租约不符、声称的项目根不符、主进程当前数据库不符分开记码，便于反馈定位；界面按同一种情况说明。
+ */
+export type ProjectSessionStaleCode =
+  | 'PROJECT_SESSION_STALE'
+  | 'PROJECT_SESSION_ROOT_MISMATCH'
+  | 'PROJECT_SESSION_DATABASE_MISMATCH'
+
 export class ProjectSessionStaleError extends Error {
-  constructor(message: string) {
-    super(message)
+  readonly code: ProjectSessionStaleCode
+
+  constructor(code: ProjectSessionStaleCode) {
+    super(code)
+    this.code = code
     this.name = 'ProjectSessionStaleError'
   }
 }
@@ -141,11 +153,11 @@ export class ProjectAccessService {
       || relative.startsWith(`..${path.sep}`)
       || path.isAbsolute(relative)
     ) {
-      throw new Error('新项目目录必须位于所选父目录内')
+      throw new Error('PROJECT_DIRECTORY_OUTSIDE_PARENT')
     }
     assertProjectStoragePathSupported(requestedRoot, this.storagePreflightOptions)
     if (fs.existsSync(requestedRoot)) {
-      throw new Error('项目目录已存在，已拒绝覆盖')
+      throw new Error('PROJECT_DIRECTORY_EXISTS')
     }
 
     fs.mkdirSync(requestedRoot)
@@ -160,27 +172,27 @@ export class ProjectAccessService {
     const hasCanonical = fs.existsSync(canonicalRoot)
     if (hasCanonical && fs.existsSync(path.join(rootPath, '.vela'))) throw new Error('PROJECT_MIGRATION_DUAL_ROOT')
     const storageRoot = hasCanonical ? canonicalRoot : path.join(rootPath, '.vela')
-    if (fs.existsSync(storageRoot) && (fs.lstatSync(storageRoot).isSymbolicLink() || !fs.lstatSync(storageRoot).isDirectory())) throw new Error('项目存储目录越界或为链接，已拒绝打开')
+    if (fs.existsSync(storageRoot) && (fs.lstatSync(storageRoot).isSymbolicLink() || !fs.lstatSync(storageRoot).isDirectory())) throw new Error('PROJECT_DIRECTORY_UNSAFE')
     const manifestPath = path.join(rootPath, hasCanonical ? PROJECT_MANIFEST_RELATIVE_PATH : path.join('.vela', 'project.json'))
     if (fs.existsSync(manifestPath) && fs.statSync(manifestPath).isFile()) {
-      if (fs.lstatSync(manifestPath).isSymbolicLink() || fs.lstatSync(manifestPath).nlink !== 1) throw new Error('项目清单为链接，已拒绝打开')
-      this.assertProjectChildPath(rootPath, manifestPath, '项目清单')
+      if (fs.lstatSync(manifestPath).isSymbolicLink() || fs.lstatSync(manifestPath).nlink !== 1) throw new Error('PROJECT_DIRECTORY_UNSAFE')
+      this.assertProjectChildPath(rootPath, manifestPath)
       let parsed: unknown
       try {
         parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
       } catch {
-        throw new Error('项目清单无法读取，已拒绝打开')
+        throw new Error('PROJECT_DIRECTORY_MANIFEST_UNREADABLE')
       }
       if (hasCanonical) parseCanonicalProjectManifest(parsed)
       else if (!isProjectManifest(parsed)) {
-        throw new Error('项目清单无效，已拒绝打开')
+        throw new Error('PROJECT_DIRECTORY_MANIFEST_INVALID')
       }
       const migrationJournal = path.join(rootPath, '.ai-novel-migration', 'journal.json')
       const migrationDirectory = path.dirname(migrationJournal)
       if (hasCanonical && fs.existsSync(migrationDirectory)) {
         const directoryInfo = fs.lstatSync(migrationDirectory)
         if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
-        this.assertProjectChildPath(rootPath, migrationDirectory, '迁移记录目录')
+        this.assertProjectChildPath(rootPath, migrationDirectory)
       }
       if (hasCanonical && fs.existsSync(migrationJournal)) {
         const info = fs.lstatSync(migrationJournal)
@@ -250,7 +262,7 @@ export class ProjectAccessService {
       || active.projectId !== lease.projectId
       || active.leaseId !== lease.leaseId
     ) {
-      throw new ProjectSessionStaleError('项目会话已失效，已拒绝操作')
+      throw new ProjectSessionStaleError('PROJECT_SESSION_STALE')
     }
     return active
   }
@@ -264,17 +276,17 @@ export class ProjectAccessService {
     currentProjectPath: string | null,
   ): ProjectSessionLease {
     if (!context?.projectId || !context.leaseId || !context.projectPath) {
-      throw new Error('缺少项目会话上下文，已拒绝操作')
+      throw new Error('PROJECT_SESSION_REQUIRED')
     }
     const active = this.assertCurrentSession({
       projectId: context.projectId,
       leaseId: context.leaseId,
     })
     if (!this.sameCanonicalProjectRoot(active.rootPath, context.projectPath)) {
-      throw new ProjectSessionStaleError('项目会话根目录不匹配，已拒绝操作')
+      throw new ProjectSessionStaleError('PROJECT_SESSION_ROOT_MISMATCH')
     }
     if (!currentProjectPath || !this.sameCanonicalProjectRoot(active.rootPath, currentProjectPath)) {
-      throw new ProjectSessionStaleError('项目会话与当前数据库不匹配，已拒绝操作')
+      throw new ProjectSessionStaleError('PROJECT_SESSION_DATABASE_MISMATCH')
     }
     return active
   }
@@ -287,11 +299,11 @@ export class ProjectAccessService {
     const active = this.assertCurrentSession(lease)
     const rootPath = this.canonicalProjectRoot(candidatePath)
     if (projectPathKey(rootPath) !== projectPathKey(active.rootPath)) {
-      throw new Error('删除目标不是当前项目根目录，已拒绝删除')
+      throw new Error('PROJECT_DELETE_TARGET_MISMATCH')
     }
     const trusted = this.probeExistingProject(rootPath)
     if (trusted.kind !== 'manifest' || trusted.projectId !== active.projectId) {
-      throw new Error('删除目标的项目身份不匹配，已拒绝删除')
+      throw new Error('PROJECT_DELETE_IDENTITY_MISMATCH')
     }
     return rootPath
   }
@@ -299,25 +311,25 @@ export class ProjectAccessService {
   private canonicalProjectRoot(candidatePath: string): string {
     const rootPath = this.canonicalExistingDirectory(candidatePath)
     if (projectPathKey(rootPath) === projectPathKey(path.parse(rootPath).root)) {
-      throw new Error('拒绝将磁盘根目录作为项目')
+      throw new Error('PROJECT_DIRECTORY_DRIVE_ROOT')
     }
     if (projectPathKey(rootPath) === projectPathKey(path.resolve(this.homePath))) {
-      throw new Error('拒绝将用户主目录作为项目')
+      throw new Error('PROJECT_DIRECTORY_HOME')
     }
     return rootPath
   }
 
   private canonicalExistingDirectory(candidatePath: string): string {
     if (!candidatePath || !candidatePath.trim()) {
-      throw new Error('项目目录不能为空')
+      throw new Error('PROJECT_DIRECTORY_REQUIRED')
     }
     const resolved = path.resolve(candidatePath)
     if (!fs.existsSync(resolved)) {
-      throw new Error('项目目录不存在')
+      throw new Error('PROJECT_DIRECTORY_MISSING')
     }
     const rootPath = path.normalize(fs.realpathSync.native(resolved))
     if (!fs.statSync(rootPath).isDirectory()) {
-      throw new Error('项目根必须是目录')
+      throw new Error('PROJECT_DIRECTORY_NOT_FOLDER')
     }
     return rootPath
   }
@@ -354,10 +366,10 @@ export class ProjectAccessService {
     }
   }
 
-  private assertProjectChildPath(rootPath: string, candidatePath: string, label: string): void {
+  private assertProjectChildPath(rootPath: string, candidatePath: string): void {
     const canonicalCandidate = path.normalize(fs.realpathSync.native(candidatePath))
     if (!isContainedPath(rootPath, canonicalCandidate)) {
-      throw new Error(`${label}越界，已拒绝打开`)
+      throw new Error('PROJECT_DIRECTORY_UNSAFE')
     }
   }
 }

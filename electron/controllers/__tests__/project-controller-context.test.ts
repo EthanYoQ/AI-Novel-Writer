@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { appErrorMessage } from '../../../src/i18n/app-errors'
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
 
@@ -49,6 +50,9 @@ const mocks = vi.hoisted(() => ({
     leaseId: string
   },
   leaseSequence: 0,
+  /** 作者在设置里保存过的界面语言；没保存时主进程按系统语言选。 */
+  storedLocale: undefined as undefined | 'zh-CN' | 'en-US',
+  systemLocale: 'zh-CN',
   projectPeekService: {
     issueCapability: vi.fn(),
     revokeCapability: vi.fn(),
@@ -58,6 +62,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
+  app: { getLocale: () => mocks.systemLocale },
   dialog: {
     showOpenDialog: mocks.showOpenDialog,
     showMessageBox: mocks.showMessageBox,
@@ -159,6 +164,17 @@ vi.mock('../../services/sqlite-project-migration', () => ({
 }))
 vi.mock('../../services/project-access', () => ({
   projectAccess: mocks.projectAccess,
+  ProjectSessionStaleError: class ProjectSessionStaleError extends Error {
+    constructor(readonly code = 'PROJECT_SESSION_STALE') {
+      super(code)
+      this.name = 'ProjectSessionStaleError'
+    }
+  },
+}))
+
+vi.mock('../../i18n', () => ({
+  mainText: (systemLocale: string | undefined, zhCNText: string, enUSText: string) =>
+    (mocks.storedLocale ?? (systemLocale?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')) === 'en-US' ? enUSText : zhCNText,
 }))
 
 vi.mock('../../services/project-peek', () => ({
@@ -232,7 +248,7 @@ beforeEach(() => {
   mocks.probeProjectSqlite.mockReset().mockReturnValue({ schemaVersion: 0 })
   mocks.issueDirectory.mockReturnValue({ grantId: 'legacy-source-grant' })
   mocks.resolveDirectoryPath.mockImplementation(({ grantId }: { grantId: string }) => {
-    if (!grantId?.startsWith('selected:')) throw new Error('外部文件授权不存在')
+    if (!grantId?.startsWith('selected:')) throw new Error('EXTERNAL_FILE_GRANT_NOT_FOUND')
     return grantId.slice(9)
   })
   mocks.rmSync.mockImplementation(() => undefined)
@@ -282,7 +298,7 @@ beforeEach(() => {
       || active.projectId !== lease.projectId
       || active.leaseId !== lease.leaseId
     ) {
-      throw new Error('项目会话已失效，已拒绝操作')
+      throw new Error('PROJECT_SESSION_STALE')
     }
     return { ...active }
   })
@@ -292,7 +308,7 @@ beforeEach(() => {
     projectPath?: string
   } | undefined, currentProjectPath: string | null) => {
     if (!context?.projectId || !context.leaseId || !context.projectPath) {
-      throw new Error('缺少项目会话上下文，已拒绝操作')
+      throw new Error('PROJECT_SESSION_REQUIRED')
     }
     const active = mocks.activeSession
     if (
@@ -301,17 +317,17 @@ beforeEach(() => {
       || active.leaseId !== context.leaseId
       || !mocks.projectAccess.sameCanonicalProjectRoot(active.rootPath, context.projectPath)
     ) {
-      throw new Error('项目会话已失效，已拒绝操作')
+      throw new Error('PROJECT_SESSION_STALE')
     }
     if (!currentProjectPath || !mocks.projectAccess.sameCanonicalProjectRoot(context.projectPath, currentProjectPath)) {
-      throw new Error('项目会话与当前数据库不匹配，已拒绝操作')
+      throw new Error('PROJECT_SESSION_DATABASE_MISMATCH')
     }
     return { ...active }
   })
   mocks.projectAccess.authorizeDeletion.mockImplementation((lease: unknown, projectPath: string) => {
     const credential = lease as { projectId?: string; leaseId?: string }
     if (!credential.projectId || !credential.leaseId) {
-      throw new Error('项目会话已失效，已拒绝操作')
+      throw new Error('PROJECT_SESSION_STALE')
     }
     return path.resolve(projectPath)
   })
@@ -324,6 +340,23 @@ beforeEach(() => {
   }))
   mocks.projectPeekService.peek.mockReturnValue({ state: 'unavailable' })
   mocks.projectPeekService.readCurrent.mockReturnValue({ state: 'unavailable' })
+})
+
+describe('native dialogs follow the interface language (#474)', () => {
+  it('falls back to the system language when no interface language was saved', async () => {
+    mocks.storedLocale = undefined
+    mocks.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    for (const [systemLocale, title] of [['zh-CN', '选择项目目录'], ['en-US', 'Choose the project folder']]) {
+      mocks.systemLocale = systemLocale
+      await handler('dialog:select-folder')({ sender: { id: 17, once: vi.fn() } }, 'project-open')
+      expect(mocks.showOpenDialog).toHaveBeenLastCalledWith(expect.objectContaining({ title }))
+    }
+    mocks.systemLocale = 'zh-CN'
+    mocks.storedLocale = 'en-US'
+    await handler('dialog:select-folder')({ sender: { id: 17, once: vi.fn() } }, 'project-create')
+    expect(mocks.showOpenDialog).toHaveBeenLastCalledWith(expect.objectContaining({ title: 'Choose where to save the project' }))
+    mocks.storedLocale = undefined
+  })
 })
 
 describe('project controller project identity', () => {
@@ -348,7 +381,7 @@ describe('project controller project identity', () => {
     await expect(handler('dialog:select-folder')({ sender }, 'project-open')).resolves.toBeNull()
     await expect(handler('dialog:select-legacy-project')({ sender })).resolves.toBeNull()
     expect(mocks.issueDirectory).not.toHaveBeenCalled()
-    await expect(handler('dialog:select-folder')({ sender }, 'write')).rejects.toThrow('用途无效')
+    await expect(handler('dialog:select-folder')({ sender }, 'write')).rejects.toThrow('PROJECT_DIRECTORY_GRANT_PURPOSE_INVALID')
   })
 
   it('rejects an unselected, unregistered raw project path before probing it', async () => {
@@ -362,7 +395,7 @@ describe('project controller project identity', () => {
     await expect(handler('project:create')(sender, { name: 'B', path: projectB }, 'raw-create'))
       .resolves.toMatchObject({ success: false })
     expect(mocks.projectAccess.createProject).not.toHaveBeenCalled()
-    mocks.resolveDirectoryPath.mockImplementation(() => { throw new Error('外部文件授权已过期') })
+    mocks.resolveDirectoryPath.mockImplementation(() => { throw new Error('EXTERNAL_FILE_GRANT_EXPIRED') })
     await expect(handler('project:open')(sender, selectedProject(projectB), 'expired-open'))
       .resolves.toMatchObject({ success: false })
     expect(mocks.projectAccess.probeExistingProject).not.toHaveBeenCalled()
@@ -641,13 +674,13 @@ describe('project controller project identity', () => {
   })
 
   it.each([
-    ['PROJECT_MIGRATION_RECOVERY_REQUIRED', '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请通过“导入旧项目”创建完整副本。'],
-    ['UNRECOGNIZED_SCHEMA', '无法识别项目格式，已拒绝打开。请核查创建该项目的软件和版本。'],
-    ['CORRUPT_SCHEMA', '项目数据结构已损坏，已拒绝打开。请保留原件并从备份恢复。'],
-    ['NEWER_SCHEMA_READ_ONLY', '该项目由更新版本创建，已拒绝打开。请升级软件后再打开。'],
-    ['LEGACY_IMPORT_UNSUPPORTED_SOURCE', '此项目版本不支持旧项目导入。请用原版本软件打开或导出。'],
+    ['PROJECT_MIGRATION_RECOVERY_REQUIRED', '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请通过“导入旧项目”创建完整副本。', 'This project cannot be converted safely yet. The original was kept and nothing was written. Use Import legacy project to create a complete copy.'],
+    ['UNRECOGNIZED_SCHEMA', '无法识别项目格式，已拒绝打开。请核查创建该项目的软件和版本。', 'The project format is not recognized, so it was not opened. Check which app and version created it.'],
+    ['CORRUPT_SCHEMA', '项目数据结构已损坏，已拒绝打开。请保留原件并从备份恢复。', 'The project data structure is damaged, so it was not opened. Keep the original and restore from a backup.'],
+    ['NEWER_SCHEMA_READ_ONLY', '该项目由更新版本创建，已拒绝打开。请升级软件后再打开。', 'This project was created by a newer version, so it was not opened. Update the app, then open it again.'],
+    ['LEGACY_IMPORT_UNSUPPORTED_SOURCE', '此项目版本不支持旧项目导入。请用原版本软件打开或导出。', 'Projects from this version cannot be imported as legacy projects. Open or export it with the app version that created it.'],
   ])(
-    'explains %s without offering an import grant for a legacy project', async (reason, error) => {
+    'explains %s without offering an import grant for a legacy project', async (reason, zhCN, enUS) => {
       mocks.projectAccess.probeExistingProject.mockReturnValueOnce({
         kind: 'manifest', projectId: 'old-B', rootPath: projectB, storageFormat: 'legacy',
       })
@@ -659,10 +692,11 @@ describe('project controller project identity', () => {
       } else {
         mocks.probeProjectSqlite.mockImplementationOnce(() => { throw new Error(reason) })
       }
-      const result = await handler('project:open')({ sender: { id: 17, once: vi.fn() } }, selectedProject(projectB), 'request-legacy-blocked')
+      const result = await handler('project:open')({ sender: { id: 17, once: vi.fn() } }, selectedProject(projectB), 'request-legacy-blocked') as { error: string }
+      expect(appErrorMessage('zh-CN', result.error)).toBe(zhCN)
+      expect(appErrorMessage('en-US', result.error)).toBe(enUS)
       expect(result).toMatchObject({
         success: false,
-        error,
         databaseRestored: true,
         dbReady: true,
         activeProjectPath: projectA,
@@ -678,11 +712,11 @@ describe('project controller project identity', () => {
     mocks.projectAccess.probeExistingProject.mockImplementationOnce(() => {
       throw new Error('PROJECT_MIGRATION_NOT_QUALIFIED')
     })
-    const result = await handler('project:open')({ sender: { id: 17 } }, selectedProject(ordinaryDirectory), 'request-unqualified-legacy')
+    const result = await handler('project:open')({ sender: { id: 17 } }, selectedProject(ordinaryDirectory), 'request-unqualified-legacy') as { error: string }
     expect(result).not.toHaveProperty('errorCode')
+    expect(appErrorMessage('en-US', result.error)).toBe('This project cannot be converted safely yet. The original was kept and nothing was written. Use Import legacy project to create a complete copy.')
     expect(result).toMatchObject({
       success: false,
-      error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请通过“导入旧项目”创建完整副本。',
       databaseRestored: true,
       dbReady: true,
     })
@@ -870,7 +904,7 @@ describe('project controller project identity', () => {
       activeProjectPath: null,
       databaseRestored: false,
       dbReady: false,
-      error: expect.stringContaining('缺少可信项目回滚快照'),
+      error: expect.stringContaining('PROJECT_ROLLBACK_UNTRUSTED'),
     })
 
     expect(mocks.initCalls).toEqual([projectD])
@@ -1001,7 +1035,7 @@ describe('project controller project identity', () => {
 
     expect(result).toMatchObject({
       success: false,
-      error: expect.stringContaining('项目会话'),
+      error: 'Error: PROJECT_SESSION_REQUIRED',
     })
     expect(mocks.projectCoreUpdate).not.toHaveBeenCalled()
   })
@@ -1075,7 +1109,7 @@ describe('project controller project identity', () => {
 
   it('rejects a supplied stale session lease before a project config write commits', async () => {
     mocks.projectAccess.assertCurrentProjectContext.mockImplementationOnce(() => {
-      throw new Error('项目会话已失效，已拒绝操作')
+      throw new Error('PROJECT_SESSION_STALE')
     })
     const data = {
       path: projectA,
@@ -1086,7 +1120,7 @@ describe('project controller project identity', () => {
     await expect(handler('project:save')({}, 'project-A', data, projectA, projectSession('project-A', projectA, 'stale-lease')))
       .resolves.toMatchObject({
         success: false,
-        error: expect.stringContaining('项目会话已失效'),
+        error: 'Error: PROJECT_SESSION_STALE',
       })
     expect(mocks.projectCoreUpdate).not.toHaveBeenCalled()
   })
@@ -1182,14 +1216,14 @@ describe('project controller project identity', () => {
     await expect(handler('project:delete')({}, projectA)).resolves.toMatchObject({
       success: false,
       directoryDeleted: false,
-      error: expect.stringContaining('缺少项目会话上下文'),
+      error: 'Error: PROJECT_SESSION_REQUIRED',
     })
     expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
   })
 
   it('rejects a stale session context for deletion even when the same project path is still open', async () => {
     mocks.projectAccess.assertCurrentProjectContext.mockImplementationOnce(() => {
-      throw new Error('项目会话已失效，已拒绝操作')
+      throw new Error('PROJECT_SESSION_STALE')
     })
 
     await expect(handler('project:delete')(
@@ -1201,7 +1235,7 @@ describe('project controller project identity', () => {
     )).resolves.toMatchObject({
       success: false,
       directoryDeleted: false,
-      error: expect.stringContaining('项目会话已失效'),
+      error: 'Error: PROJECT_SESSION_STALE',
     })
     expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
   })
@@ -1213,7 +1247,7 @@ describe('project controller project identity', () => {
       .resolves.toMatchObject({
         success: false,
         directoryDeleted: false,
-        error: expect.stringContaining('当前数据库'),
+        error: expect.stringContaining('PROJECT_SESSION_DATABASE_MISMATCH'),
       })
     expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
   })
@@ -1264,7 +1298,7 @@ describe('legacy project copy import target grant', () => {
   })
 
   it('never reaches the importer when the grant is refused or the argument is not a grant id', async () => {
-    mocks.resolveExactPath.mockImplementation(() => { throw new Error('外部文件授权不属于当前窗口') })
+    mocks.resolveExactPath.mockImplementation(() => { throw new Error('EXTERNAL_FILE_GRANT_WRONG_WINDOW') })
 
     await expect(handler('project:import-legacy-copy')(sender, `selected:${legacyRoot}`, path.resolve('C:/attacker/raw-target')))
       .resolves.toEqual({ state: 'blocked', code: 'LEGACY_IMPORT_PATH_INVALID' })
