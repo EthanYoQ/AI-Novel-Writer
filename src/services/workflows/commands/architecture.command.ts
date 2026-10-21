@@ -49,7 +49,7 @@ import {
   isGeneratedGlobalGuidanceValid,
   mergeExpandedNovelConfig,
 } from '../novel-config-expansion'
-import { displayedErrorMessage } from '../../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason } from '../../../i18n/app-errors'
 
 // --- 基础工具库 ---
 
@@ -1101,7 +1101,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       const detail = displayedErrorMessage(context.uiLocale, error)
       throw new Error(text(
         detail,
-        'The character identity manifest was invalid, so no character data was saved.',
+        englishWithReason('The character identity manifest was invalid, so no character data was saved.', detail),
       ))
     }
     this.assertNotCancelled(context)

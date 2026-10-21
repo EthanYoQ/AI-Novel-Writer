@@ -68,11 +68,11 @@ export const listChaptersTool = buildAgentTool({
         ),
       }
     } catch (e: unknown) {
-      const detail = agentToolErrorDetail(context, e) ?? ''
+      const detail = agentToolErrorDetail(context, e)
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail)
+        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
           ? text('获取章节进度失败', 'Could not load chapter progress')
           : text(`获取失败: ${detail}`, `Could not load chapter progress: ${detail}`),
       }

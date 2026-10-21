@@ -50,11 +50,11 @@ export const searchKnowledgeTool = buildAgentTool({
         projectPath,
       ))
     } catch (error) {
-      const detail = agentToolErrorDetail(context, error) ?? ''
+      const detail = agentToolErrorDetail(context, error)
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail)
+        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
           ? text('知识库搜索失败', 'Could not search the knowledge base')
           : detail,
       }

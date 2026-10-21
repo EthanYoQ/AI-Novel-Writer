@@ -268,6 +268,20 @@ const DISPLAY_PREFIX = /^(?:Error invoking remote method '[^']+': )?(?:[A-Za-z]*
 export function displayedErrorMessage(locale: Locale, error: unknown, fallback?: string): string {
   const known = knownAppErrorMessage(locale, error)
   if (known) return known
-  const raw = error instanceof Error ? error.message : error == null ? '' : String(error)
-  return raw.trim().replace(DISPLAY_PREFIX, '') || fallback || localize(locale, '未知错误', 'Unknown error')
+  return displayedRaw(error).trim().replace(DISPLAY_PREFIX, '') || fallback || localize(locale, '未知错误', 'Unknown error')
+}
+
+/** 报错里能给作者看的原文：字符串本身、Error 或普通对象的字符串 message；别的对象没有可读内容，交给兜底。 */
+function displayedRaw(error: unknown): string {
+  if (typeof error === 'string') return error
+  if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message
+    return typeof message === 'string' ? message : ''
+  }
+  return error == null ? '' : String(error)
+}
+
+/** 英文句子后附上原因；原因里仍有汉字（主进程未登记的中文原文）时只给英文概述，不把中文拼进英文句子。 */
+export function englishWithReason(summary: string, reason: string, separator = ' '): string {
+  return !reason.trim() || /\p{Script=Han}/u.test(reason) ? summary : `${summary}${separator}${reason}`
 }

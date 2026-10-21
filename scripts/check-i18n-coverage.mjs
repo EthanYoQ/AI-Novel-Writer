@@ -579,8 +579,10 @@ function inspectRawErrorDisplays(violations, root, file, sourceFile) {
     if (ts.isCallExpression(node)) {
       const name = callName(node, sourceFile)
       const [first] = node.arguments
-      if (errorDisplayCalls.has(name) || (ts.isIdentifier(node.expression) && errorStateSetter.test(name))) {
-        const values = name === 'addLog' ? node.arguments.slice(1, 2) : first ? [first] : []
+      // get().addLog、useWorkflowStore.getState().addLog 这类成员调用也是日志显示处。
+      const isAddLog = name === 'addLog' || name.endsWith('.addLog')
+      if (isAddLog || errorDisplayCalls.has(name) || (ts.isIdentifier(node.expression) && errorStateSetter.test(name))) {
+        const values = isAddLog ? node.arguments.slice(1, 2) : first ? [first] : []
         for (const value of values) {
           const forwarded = ts.isObjectLiteralExpression(value)
             ? value.properties.find(property => ts.isPropertyAssignment(property) && errorStateKey.test(property.name.getText(sourceFile))

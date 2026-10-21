@@ -104,11 +104,11 @@ export const startWorkflowTool = buildAgentTool({
         })],
       }
     } catch (error) {
-      const detail = agentToolErrorDetail(context, error) ?? ''
+      const detail = agentToolErrorDetail(context, error)
       return {
         success: false,
         content: '',
-        error: writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail)
+        error: !detail || (writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
           ? `Could not start the ${displayName}${chapterInfo} workflow.`
           : detail,
       }

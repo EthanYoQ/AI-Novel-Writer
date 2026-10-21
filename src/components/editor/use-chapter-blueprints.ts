@@ -48,7 +48,7 @@ import {
   AuthoritativeChapterSequenceError,
   readAuthoritativeNextChapter,
 } from '../../services/authoritative-chapter-sequence'
-import { displayedErrorMessage } from '../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 
 function readDraftLedgerFromFixedTab() {
   return parseChapterCardDraftLedger(
@@ -416,8 +416,8 @@ export function useChapterBlueprints({
     } catch (err) {
       if (!isCurrentProjectSession(projectSession)) return
       const message = displayedErrorMessage(useLocaleStore.getState().locale, err)
-      addLog('error', text(`保存第 ${selected.chapterNumber} 章蓝图失败：${message}`, `Could not save the blueprint for Chapter ${selected.chapterNumber}.`))
-      toast.error(text(`保存失败\n\n${message}`, 'Could not save the blueprint.'))
+      addLog('error', text(`保存第 ${selected.chapterNumber} 章蓝图失败：${message}`, englishWithReason(`Could not save the blueprint for Chapter ${selected.chapterNumber}.`, message)))
+      toast.error(text(`保存失败\n\n${message}`, englishWithReason('Could not save the blueprint.', message, '\n\n')))
       setSaveOutcome('failed')
       if (propagateFailure) throw err
     } finally {
@@ -453,8 +453,8 @@ export function useChapterBlueprints({
     } catch (err) {
       if (!isCurrentProjectSession(projectSession)) return
       const message = displayedErrorMessage(useLocaleStore.getState().locale, err)
-      addLog('error', text(`保存全部蓝图失败：${message}`, 'Could not save all chapter blueprints.'))
-      toast.error(text(`保存失败\n\n${message}`, 'Could not save the blueprints.'))
+      addLog('error', text(`保存全部蓝图失败：${message}`, englishWithReason('Could not save all chapter blueprints.', message)))
+      toast.error(text(`保存失败\n\n${message}`, englishWithReason('Could not save the blueprints.', message, '\n\n')))
       setSaveOutcome('failed')
       if (propagateFailure) throw err
     } finally {
@@ -537,7 +537,8 @@ export function useChapterBlueprints({
     )
     if (!isCurrentProjectSession(projectSession)) return
     if (!result.success) {
-      toast.error(text(`删除失败\n\n${displayedErrorMessage(useLocaleStore.getState().locale, result.error)}`, 'Could not delete the chapter blueprint.'))
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, result.error)
+      toast.error(text(`删除失败\n\n${reason}`, englishWithReason('Could not delete the chapter blueprint.', reason, '\n\n')))
       return
     }
     const current = currentWorkingState(projectKey, projectSession)
@@ -577,7 +578,8 @@ export function useChapterBlueprints({
     )
     if (!isCurrentProjectSession(projectSession)) return
     if (!result.success) {
-      toast.error(text(`清空失败\n\n${displayedErrorMessage(useLocaleStore.getState().locale, result.error)}`, 'Could not clear the chapter blueprints.'))
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, result.error)
+      toast.error(text(`清空失败\n\n${reason}`, englishWithReason('Could not clear the chapter blueprints.', reason, '\n\n')))
       return
     }
     const current = currentWorkingState(projectKey, projectSession)

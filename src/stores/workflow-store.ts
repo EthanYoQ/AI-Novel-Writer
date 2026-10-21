@@ -838,7 +838,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           ...(failureCode ? { failureCode } : {}),
           ...(promptBudgetFailure ? { promptBudgetReport: promptBudgetFailure.report } : {}),
         })
-        const reason = displayedErrorMessage(context.uiLocale, errorMsg)
+        // 普通步骤失败交原错误，带 code 的按码说明；预算失败已写好说明。
+        const reason = displayedErrorMessage(context.uiLocale, promptBudgetFailure ? errorMsg : error)
         get().addLog('error', uiText(
           context.uiLocale,
           `[失败] [${definition.title}] 步骤: ${stepDef.name} — ${reason}`,
@@ -973,7 +974,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         else ctx.cancelled = true
         ctx.pauseRequested = false
         if (targetRun.type !== 'novel_import') {
-          void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), targetRun.uiLocale))
+          void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', displayedErrorMessage(targetRun.uiLocale, error), targetRun.uiLocale))
         }
       }
       // 如果在步进等待，解除 Promise
@@ -1030,7 +1031,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         else ctx.cancelled = true
         ctx.pauseRequested = false
         if (run.type !== 'novel_import') {
-          void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), run.uiLocale))
+          void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', displayedErrorMessage(run.uiLocale, error), run.uiLocale))
         }
         const resolve = continueResolveRefs.get(id)
         if (resolve) { resolve(); continueResolveRefs.delete(id) }

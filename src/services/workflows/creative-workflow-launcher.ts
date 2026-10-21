@@ -1,3 +1,4 @@
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
 import { randomUUID } from '../../utils/id'
@@ -238,8 +239,8 @@ export async function launchCreativeWorkflow(
     useWorkflowStore.getState().addLog(
       'error',
       uiLocale === 'en-US'
-        ? `[Failed] Workflow errored after launch: ${String(error)}`
-        : `[失败] 工作流启动后异常：${String(error)}`,
+        ? `[Failed] Workflow errored after launch: ${displayedErrorMessage(uiLocale, error)}`
+        : `[失败] 工作流启动后异常：${displayedErrorMessage(uiLocale, error)}`,
       uiLocale,
     )
   })
