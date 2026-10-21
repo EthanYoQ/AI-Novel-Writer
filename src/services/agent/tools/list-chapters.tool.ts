@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 
 
 export const listChaptersTool = buildAgentTool({
@@ -68,7 +68,7 @@ export const listChaptersTool = buildAgentTool({
         ),
       }
     } catch (e: unknown) {
-      const detail = e instanceof Error ? e.message : String(e)
+      const detail = agentToolErrorDetail(context, e) ?? ''
       return {
         success: false,
         content: '',

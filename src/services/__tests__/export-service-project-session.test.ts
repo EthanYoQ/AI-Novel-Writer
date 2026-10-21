@@ -107,11 +107,11 @@ describe('exportNovel project session ownership', () => {
       projectSession,
     )).resolves.toEqual({
       success: false,
-      error: 'Error: Failed to write the exported file.',
+      error: 'Failed to write the exported file.',
     })
     expect(addLog).toHaveBeenLastCalledWith(
       'error',
-      'Export failed: Error: Failed to write the exported file.',
+      'Export failed: Failed to write the exported file.',
       'en-US',
     )
   })

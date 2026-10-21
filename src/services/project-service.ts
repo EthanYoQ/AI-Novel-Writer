@@ -20,6 +20,7 @@ import { useDraftStore } from '../stores/draft-store'
 import { useEditorStore } from '../stores/editor-store'
 import { useWorkflowStore } from '../stores/workflow-store'
 import { useLocaleStore } from '../stores/locale-store'
+import { displayedErrorMessage } from '../i18n/app-errors'
 import {
   projectSessionContextFromProject,
   sameProjectSessionContext,
@@ -251,13 +252,13 @@ export async function onProjectOpened(
   ))
   if (results[0].status === 'rejected' && !characterError) {
     warnings.push(text(
-      `角色卡读取失败：${String(results[0].reason)}`,
+      `角色卡读取失败：${displayedErrorMessage(useLocaleStore.getState().locale, results[0].reason)}`,
       'Could not load character cards.',
     ))
   }
   if (results[1].status === 'rejected') {
     warnings.push(text(
-      `草稿列表读取失败：${String(results[1].reason)}`,
+      `草稿列表读取失败：${displayedErrorMessage(useLocaleStore.getState().locale, results[1].reason)}`,
       'Could not load the draft list.',
     ))
   }

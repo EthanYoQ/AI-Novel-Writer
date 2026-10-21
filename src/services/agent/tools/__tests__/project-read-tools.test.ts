@@ -227,14 +227,13 @@ describe('agent project read tools', () => {
     vi.stubGlobal('window', { aiNovelAPI: { invoke } })
     const context = createAgentExecutionContext()
 
-    await expect(searchKnowledgeTool.execute({ query: 'campus' }, context)).resolves.toMatchObject({
-      success: false,
-      error: 'Could not search the knowledge base',
-    })
-    await expect(searchKnowledgeTool.execute({ query: 'campus' }, context)).resolves.toMatchObject({
-      success: false,
-      error: 'Legacy knowledge-base data must be repaired',
-    })
+    // 登记过的码按作品写作语言说明，不把主进程转来的中文原文交给英文作品。
+    for (let call = 0; call < 2; call += 1) {
+      await expect(searchKnowledgeTool.execute({ query: 'campus' }, context)).resolves.toMatchObject({
+        success: false,
+        error: expect.stringMatching(/^Legacy knowledge-base data must be repaired before continuing\./u),
+      })
+    }
     useProjectStore.setState({
       currentProject: {
         ...project(projectAPath),
@@ -246,7 +245,7 @@ describe('agent project read tools', () => {
       createAgentExecutionContext(),
     )).resolves.toMatchObject({
       success: false,
-      error: '旧版知识库数据需要先修复',
+      error: expect.stringMatching(/^旧版知识库数据需要先修复后才能继续/u),
     })
   })
 

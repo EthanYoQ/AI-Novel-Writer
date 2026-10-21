@@ -2,6 +2,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import type { AgentExecutionContext } from '../tool-registry'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { Locale } from '../../../i18n/types'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import {
   projectSessionContextFromProject,
   sameProjectSessionContext,
@@ -27,6 +28,18 @@ export function agentToolText(
     zhCN,
     enUS,
   )
+}
+
+/**
+ * 工具失败的原因：主进程登记过的码按作品写作语言说明（工具结果同时显示给作者、回给模型），
+ * 其余去掉通道前缀后原样保留；没有原因时返回 undefined，由工具用自己的兜底说明。
+ */
+export function agentToolErrorDetail(
+  context: AgentExecutionContext | undefined,
+  error: unknown,
+): string | undefined {
+  if (error === undefined || error === null || (typeof error === 'string' && !error.trim())) return undefined
+  return displayedErrorMessage(context?.writingLanguage ?? DEFAULT_WRITING_LANGUAGE, error)
 }
 
 export function createAgentExecutionContext(

@@ -3,7 +3,7 @@
  */
 import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { launchCreativeWorkflow, type CreativeIntent } from '../../workflows/creative-workflow-launcher'
-import { assertAgentToolActive, requireAgentProject } from './project-context'
+import { assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 import { DEFAULT_WRITING_LANGUAGE, writingLanguageText } from '../../../shared/writing-language'
 import { APP_BRAND } from '../../../shared/brand'
 
@@ -104,7 +104,7 @@ export const startWorkflowTool = buildAgentTool({
         })],
       }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = agentToolErrorDetail(context, error) ?? ''
       return {
         success: false,
         content: '',

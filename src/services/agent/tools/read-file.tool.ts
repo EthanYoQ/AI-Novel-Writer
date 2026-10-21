@@ -5,7 +5,7 @@ import { CANONICAL_PROJECT_DIRECTORY } from '../../../shared/project-format'
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
 import { validatePath } from './safe-path'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 
 export const readFileTool = buildAgentTool({
   name: 'read_file',
@@ -41,7 +41,7 @@ export const readFileTool = buildAgentTool({
     const result = await ipc.invokeWithProjectSession(projectSession, 'fs:read-file', pathCheck.fullPath, project.path)
     assertAgentProjectCurrent(context)
     if (!result.success) {
-      const detail = result.error
+      const detail = agentToolErrorDetail(context, result.error)
       return {
         success: false,
         content: '',
