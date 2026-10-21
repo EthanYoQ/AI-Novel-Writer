@@ -149,11 +149,11 @@ describe('model discovery settings flow', () => {
       await expect.element(page.getByLabelText('上下文窗口', { exact: true })).toHaveValue(context)
       await page.getByLabelText('上下文窗口', { exact: true }).fill('32000')
       await page.getByRole('button', { name: '高级设置', exact: true }).click()
-      await page.getByLabelText('最大输出 Token', { exact: true }).fill('1024')
+      await page.getByLabelText('最大输出 Tokens', { exact: true }).fill('1024')
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
     })
     expect(saveModel).not.toHaveBeenCalled()
-    await expect.element(page.getByLabelText('最大输出 Token', { exact: true })).toHaveValue(1024)
+    await expect.element(page.getByLabelText('最大输出 Tokens', { exact: true })).toHaveValue(1024)
     await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
     expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ modelName: value, maxTokens: 1024,
       capabilities: expect.objectContaining({ contextWindowTokens: 32000, maxOutputTokens: output, reasoning: true }),

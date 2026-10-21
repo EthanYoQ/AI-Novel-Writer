@@ -21,7 +21,7 @@ describe('model settings contract', () => {
 
     expect(settingsModal).toContain("text('高级设置', 'Advanced settings')")
     expect(settingsModal).toContain("text('温度', 'Temperature')")
-    expect(settingsModal).toContain("text('最大输出 Token', 'Max output tokens')")
+    expect(settingsModal).toContain("text('最大输出 Tokens', 'Max output tokens')")
     expect(settingsModal).toContain("text('恢复默认值', 'Restore defaults')")
 
     for (const provider of ['xai', 'siliconflow']) {
