@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { appErrorMessage } from '../../../i18n/app-errors'
+import { appErrorMessage, displayedErrorMessage } from '../../../i18n/app-errors'
 import { ipc } from '../../../services/ipc-client'
 import {
   selectPlanningMaterials,
@@ -88,7 +88,7 @@ export function useKnowledgeIndex() {
           ? text('检查完成，当前检索模型不需要重建', 'Check complete. The current retrieval model needs no rebuild.')
           : text(`检索已重建：处理了 ${result.processed} 段资料${result.failed > 0 ? `，${result.failed} 段失败` : ''}`, `Search rebuilt: ${result.processed} ${pluralEn(result.processed, 'passage')} processed${result.failed > 0 ? `, ${result.failed} failed` : ''}`))
       } else {
-        toast.error(result.error || text('重建检索失败', 'Could not rebuild search'))
+        toast.error(displayedErrorMessage(locale, result.error, text('重建检索失败', 'Could not rebuild search')))
       }
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
@@ -275,7 +275,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
     try {
       const result = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(session, 'kb:save-document-copy', docId, current.content, copy.contentHash, session.projectPath))
       if (!isProjectSessionCurrent(session)) return
-      if (!result.success) { toast.error(result.error || text('保存失败', 'Save failed')); return }
+      if (!result.success) { toast.error(displayedErrorMessage(locale, result.error, text('保存失败', 'Save failed'))); return }
       if (readDraft() === saving) await openDocument(docId, true)
       clearResults()
       toast.success(text('项目副本已保存；更新检索后，写作时才能查到新内容', 'Project copy saved. Update search so writing can find the new text.'))
@@ -295,7 +295,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
     try {
       const result = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(session, 'kb:reindex-document-copy', current.docId, session.projectPath))
       if (!isProjectSessionCurrent(session)) return
-      if (!result.success || !result.docId) { toast.error(result.error || text('更新检索失败', 'Could not update search')); return }
+      if (!result.success || !result.docId) { toast.error(displayedErrorMessage(locale, result.error, text('更新检索失败', 'Could not update search'))); return }
       await loadData()
       await loadStatus()
       if (readDraft() === reindexing) await openDocument(result.docId, true)
@@ -356,7 +356,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
         globalEventBus.emit('REFRESH_RESOURCE', { resources: ['all'], projectPath: expectedProjectPath, projectSession })
         toast.success(text('知识库已清空', 'Knowledge base cleared'))
       } else {
-        toast.error(result.error || text('清空知识库失败', 'Could not clear the knowledge base'))
+        toast.error(displayedErrorMessage(locale, result.error, text('清空知识库失败', 'Could not clear the knowledge base')))
       }
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
