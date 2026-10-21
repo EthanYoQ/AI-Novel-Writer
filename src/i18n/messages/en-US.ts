@@ -38,7 +38,7 @@ export const enUS = {
   'error.generationSkillBundleDamaged': 'Files bundled with a selected writing Skill were changed or are missing, so nothing was generated. Re-import the Skill in Settings, then generate.',
   'error.generationFinalizationRecoveryUnavailable': "This step's generation record changed, so it was not generated again.",
   'error.characterProposalAlreadyDecided': 'These character proposals were already handled, so this action had no effect. Refresh the list to see their current state.',
-  'error.characterRosterChanged': 'The cast changed after you opened these proposals (a character was added, renamed, or removed), so nothing was adopted. Open the proposals again and confirm.',
+  'error.characterRosterChanged': 'The cast changed in the meantime (a character was added, renamed, or removed), so this change did not take effect. Refresh and try again.',
   'error.characterRosterNotReady': 'The cast is not ready yet, so proposals cannot be adopted. Resolve the cast notice on the Characters page first.',
   'error.characterSuggestionGone': 'This suggestion no longer exists (it was handled, or its source chapter changed). Refresh the list to see current suggestions.',
   'error.characterStateChanged': "This character's state field changed after this suggestion was made, so it was not applied. Refresh and decide again.",
