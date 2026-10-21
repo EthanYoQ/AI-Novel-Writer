@@ -1,10 +1,7 @@
 {
   "description": "electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。",
-  "total": 399,
+  "total": 368,
   "files": {
-    "electron/controllers/finalization-controller.ts": {
-      "registerFinalizationController": 4
-    },
     "electron/controllers/import-controller.ts": {
       "registerImportController": 2
     },
@@ -63,14 +60,6 @@
       "DraftRepository.delete": 2,
       "DraftRepository.updateContent": 1,
       "DraftRepository.updateStatus": 2
-    },
-    "electron/repositories/finalization-repository.ts": {
-      "FinalizationRepository.commit": 4,
-      "FinalizationRepository.linkKnowledgeDocument": 4,
-      "FinalizationRepository.markPublicationPending": 2,
-      "FinalizationRepository.markPublished": 2,
-      "requireDatabase": 1,
-      "selectAuthoritativeExportRows": 7
     },
     "electron/repositories/finalized-draft-import-repository.ts": {
       "authorityRows": 1,
@@ -173,10 +162,6 @@
       "SummaryRepository.saveFinalizedCharacterStateCandidates": 5,
       "SummaryRepository.saveFinalizedContinuity": 5
     },
-    "electron/services/finalization-service.ts": {
-      "FinalizationService.finalize": 1,
-      "FinalizationService.retry": 1
-    },
     "electron/services/import-inspection-store.ts": {
       "ImportInspectionStore.consume": 1,
       "ImportInspectionStore.create": 7,
@@ -184,12 +169,6 @@
     },
     "electron/services/import-source-identity-secret.ts": {
       "readValidSecret": 1
-    },
-    "electron/services/manuscript-publisher.ts": {
-      "containedDirectChild": 1,
-      "publishManuscript": 1,
-      "resolveManuscriptTarget": 2,
-      "resolveStoredManuscriptTarget": 1
     },
     "electron/services/model-execution-lease.ts": {
       "ModelExecutionLeaseRegistry.begin": 1,

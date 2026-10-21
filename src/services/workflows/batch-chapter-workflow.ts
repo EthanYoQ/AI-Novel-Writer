@@ -16,7 +16,7 @@ import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
 import { finalizationContentRevision, type FinalizationSnapshot } from '../finalization-snapshot'
 import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
-import { requireWorkflowProjectSession } from './workflow-project-session'
+import { requireWorkflowProjectSession, workflowMainProcessError } from './workflow-project-session'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 
 /** 单次批量创作的安全上限，避免无边界调用模型；主进程准入（assertGenerationBatchIntent）同样执行。 */
@@ -312,7 +312,14 @@ async function runOneBatchChapter(
   if (existingFinalizationId) {
     if (saved?.pendingFinalizationId) {
       const publication = await retryFinalizationPublication(existingFinalizationId, projectSession)
-      if (!publication.success) throw new Error(publication.error || 'GENERATION_BATCH_PUBLICATION_PENDING')
+      if (!publication.success) {
+        throw workflowMainProcessError(
+          { uiLocale },
+          publication.error,
+          '定稿已提交、实体稿待发布',
+          'Finalization was committed, but manuscript publication is still pending.',
+        )
+      }
     }
     if (!saved?.postProcessComplete) {
       const project = useProjectStore.getState().currentProject

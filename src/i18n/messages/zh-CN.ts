@@ -78,4 +78,8 @@ export const zhCN = {
   'error.chapterDeleteLegacyKnowledgeCheckRequired': '这份旧定稿缺少可靠的知识库资料身份，章节内容和知识库资料都已保留。请先人工核对知识库，再确认继续删除。',
   'error.chapterDeleteLegacyOperationFrozen': '这条删除记录来自旧项目，只作历史保留，不能在这个项目里重试或继续清理。',
   'error.chapterDeleteCleanupIncomplete': '实体稿文件或知识库资料没有清理完',
+  'error.finalizationCommitConflict': '这一稿已经用不同的内容定稿过，已拒绝覆盖。请刷新后查看已定稿的正文。',
+  'error.finalizationCommitNotFound': '这一章的定稿记录已经不在了（可能已被删除），请刷新后再看。',
+  'error.manuscriptTargetConflict': '正文文件夹里这一章的文件已存在且内容不同（可能在应用外改过），已拒绝覆盖。请移走或改名这个文件后重试发布。',
+  'error.manuscriptTargetCollisions': '正文文件夹里这一章的同名文件太多，已拒绝覆盖。请清理正文文件夹里这一章的旧文件后重试。',
 } satisfies Record<MessageKey, string>

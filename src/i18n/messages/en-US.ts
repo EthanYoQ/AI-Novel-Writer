@@ -76,6 +76,10 @@ export const enUS = {
   'error.chapterDeleteLegacyKnowledgeCheckRequired': 'This older finalized chapter has no reliable knowledge base identity, so the chapter and its knowledge base entries were kept. Check the knowledge base manually, then confirm to continue the deletion.',
   'error.chapterDeleteLegacyOperationFrozen': 'This deletion record came from an older project. It is kept only as history and cannot be retried or continued in this project.',
   'error.chapterDeleteCleanupIncomplete': 'The manuscript file or knowledge base entry was not cleaned up',
+  'error.finalizationCommitConflict': 'This draft was already finalized with different content, so it was not overwritten. Refresh to see the finalized text.',
+  'error.finalizationCommitNotFound': 'The finalization record for this chapter no longer exists (it may have been deleted). Refresh to see the current state.',
+  'error.manuscriptTargetConflict': "The chapter's file in the manuscript folder already exists with different content (it may have been edited outside the app), so it was not overwritten. Move or rename that file, then retry publishing.",
+  'error.manuscriptTargetCollisions': "The manuscript folder already has too many files named after this chapter, so nothing was overwritten. Remove old copies of this chapter from the manuscript folder, then try again.",
 } as const
 
 export type MessageKey = keyof typeof enUS
