@@ -112,6 +112,25 @@ describe('版本切换器', () => {
     await expect.element(page.getByText('已归档，只读')).toBeVisible()
   })
 
+  it('保存时主进程按码拒绝（这一稿已在别处定稿）：提示写明原因，不显示错误码', async () => {
+    backend.addDraft({ status: 'archived', version: 1 })
+    const v2 = backend.addDraft({ status: 'draft', version: 2 })
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => undefined)
+    const answer = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation(async (channel, ...args) => channel === 'db:draft-update-content'
+      ? { success: false, error: 'Error: DRAFT_FINALIZED_READ_ONLY' }
+      : answer(channel, ...args))
+    await mount()
+    await openDraft(v2.id)
+    await type('作者打的字')
+    await versions()
+    await act(async () => page.getByRole('menuitemcheckbox', { name: /显示已归档/ }).click())
+    await act(async () => page.getByRole('menuitemradio', { name: /已归档 v1/ }).click())
+    await click('保存并切换')
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('这一章已经定稿，定稿正文是只读的，本次修改没有保存。'))
+    expect(error.mock.calls.flat().join('')).not.toContain('DRAFT_')
+  })
+
   it('放弃修改并切换：不写入，换上那一稿', async () => {
     backend.addDraft({ status: 'archived', version: 1 })
     const v2 = backend.addDraft({ status: 'draft', version: 2 })
