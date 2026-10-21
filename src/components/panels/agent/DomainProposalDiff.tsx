@@ -6,6 +6,7 @@ import { ipc } from '../../../services/ipc-client'
 import { buildChapterBlueprintProposal } from '../../../services/agent/tools/propose-chapter-blueprint.tool'
 import { buildNovelConfigProposal, type ProposalFieldDiff } from '../../../services/agent/tools/propose-novel-config.tool'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { useProjectStore } from '../../../stores/project-store'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 
@@ -101,7 +102,7 @@ export default function DomainProposalDiff({ toolCall, preview }: { toolCall: To
   if (preview.kind === 'none') return null
   if (preview.kind === 'loading') return <div className="text-xs opacity-70">{text('正在读取当前值…', 'Loading current values…')}</div>
   if (preview.kind === 'stale') return <div className="text-xs text-[var(--color-error-text)]">{text('项目已切换，此提案已过期，不会写入。', 'The project changed. This proposal is stale and will not be written.')}</div>
-  if (preview.kind === 'invalid') return <div className="text-xs text-[var(--color-error-text)]">{text(`提案无效：${preview.error ?? '未知错误'}`, 'Invalid proposal fields or target.')}</div>
+  if (preview.kind === 'invalid') return <div className="text-xs text-[var(--color-error-text)]">{text(`提案无效：${displayedErrorMessage(locale, preview.error)}`, 'Invalid proposal fields or target.')}</div>
   const labels = toolCall.toolName === 'propose_novel_config' ? CONFIG_LABELS : BLUEPRINT_LABELS
   return (
     <div className="space-y-2" aria-label={text('字段变更', 'Field changes')}>

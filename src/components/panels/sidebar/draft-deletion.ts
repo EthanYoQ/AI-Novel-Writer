@@ -4,6 +4,7 @@ import { ipc } from '../../../services/ipc-client'
 import { globalEventBus } from '../../../shared/event-bus'
 import type { ProjectData } from '../../../shared/ipc-channels'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { toast } from '../../ui/Toast'
 import {
   captureProjectSession,
@@ -53,7 +54,8 @@ export async function deleteDraftVersion({ draft, displayName, projectKey, proje
     return false
   }
   if (!result.success) {
-    toast.error(text(`删除失败\n\n${result.error ?? '未知错误'}`, `Delete failed\n\n${result.error ?? 'Unknown error'}`))
+    const reason = displayedErrorMessage(useLocaleStore.getState().locale, result.error)
+    toast.error(text(`删除失败\n\n${reason}`, `Delete failed\n\n${reason}`))
     return false
   }
   await useDraftStore.getState().loadChapterDrafts(

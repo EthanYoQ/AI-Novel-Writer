@@ -9,6 +9,7 @@ import { ipc } from '../../../services/ipc-client'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { toast } from '../../ui/Toast'
 import {
   captureProjectSession,
@@ -38,12 +39,10 @@ export async function confirmCurrentProjectSession(
     : null
 }
 
-function reportFileReadFailure(error: string | undefined): void {
-  const text = useLocaleStore.getState().text
-  toast.error(text(
-    `无法读取文件：${error ?? '未知错误'}`,
-    `Could not read file: ${error ?? 'Unknown error'}`,
-  ))
+function reportFileReadFailure(error: unknown): void {
+  const { locale, text } = useLocaleStore.getState()
+  const reason = displayedErrorMessage(locale, error)
+  toast.error(text(`无法读取文件：${reason}`, `Could not read file: ${reason}`))
 }
 
 /** 打开架构文件（带 AI 生成工具栏；若 tab 已存在则刷新内容） */
@@ -61,7 +60,7 @@ export async function openArchFile(filePath: string, name: string): Promise<void
     try {
       content = await readCoreContent(filePath, projectSession)
     } catch (error) {
-      if (isProjectSessionCurrent(projectSession)) reportFileReadFailure(String(error))
+      if (isProjectSessionCurrent(projectSession)) reportFileReadFailure(error)
       return
     }
   } else {
@@ -138,7 +137,7 @@ export async function openChapterFile(filePath: string, name: string): Promise<v
       content = result.content
     }
   } catch (error) {
-    if (isProjectSessionCurrent(projectSession)) reportFileReadFailure(String(error))
+    if (isProjectSessionCurrent(projectSession)) reportFileReadFailure(error)
     return
   }
   if (!isProjectSessionCurrent(projectSession)) return

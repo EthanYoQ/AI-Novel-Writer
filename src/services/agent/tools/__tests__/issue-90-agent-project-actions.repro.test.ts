@@ -364,6 +364,23 @@ describe('Issue #90 AI assistant project actions', () => {
     expect(failure.error).toBe('Could not start the review (Chapter 1) workflow.')
   })
 
+  it('没有失败原因时按作品写作语言说明启动失败，不给中文作品英文句子', async () => {
+    const invoke = stubWorkflowIpc()
+    const base = invoke.getMockImplementation() as (channel: string, request?: unknown) => Promise<unknown>
+    invoke.mockImplementation((channel: string, request?: unknown) => channel === 'agent-generation:register-workflow'
+      ? Promise.reject(undefined)
+      : base(channel, request))
+    useProjectStore.setState({
+      currentProject: { ...project, novelConfig: { ...project.novelConfig, writingLanguage: 'zh-CN' } } as never,
+    })
+
+    const failure = await startWorkflowTool.execute({ workflow: 'generate_draft', chapter_number: 1 }, createAgentExecutionContext())
+
+    expect(failure.success).toBe(false)
+    expect(failure.error).toMatch(/^启动/u)
+    expect(failure.error).not.toMatch(/Could not start/u)
+  })
+
   it('executes a confirmed raw start_workflow response through the real draft launcher', async () => {
     stubWorkflowIpc()
     toolRegistry.register(startWorkflowTool)

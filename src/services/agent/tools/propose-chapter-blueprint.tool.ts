@@ -1,7 +1,7 @@
 import type { BlueprintData } from '../../../../electron/repositories/blueprint-repository'
 import { ipc } from '../../ipc-client'
 import { buildAgentTool, type AgentExecutionContext } from '../tool-registry'
-import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 import type { ProposalFieldDiff } from './propose-novel-config.tool'
 
 const STRING_FIELDS = new Set<keyof BlueprintData>([
@@ -111,7 +111,7 @@ export const proposeChapterBlueprintTool = buildAgentTool({
       projectSession, 'db:blueprint-upsert', { ...current, ...proposal.changes }, project.path,
     )
     if (!result.success) {
-      const detail = result.error
+      const detail = agentToolErrorDetail(context, result.error)
       return {
         success: false,
         content: '',

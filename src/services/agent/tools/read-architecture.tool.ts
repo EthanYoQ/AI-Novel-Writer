@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 
 
 export const readArchitectureTool = buildAgentTool({
@@ -65,11 +65,11 @@ export const readArchitectureTool = buildAgentTool({
 
       return { success: true, content: text(`📐 故事架构（${contents.length} 个文件）\n\n${contents.join('\n\n---\n\n')}`, `📐 Story architecture (${contents.length} files)\n\n${contents.join('\n\n---\n\n')}`) }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = agentToolErrorDetail(context, error)
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail)
+        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
           ? text('读取架构失败', 'Could not read the architecture')
           : text(`读取架构失败：${detail}`, `Could not read the architecture: ${detail}`),
       }

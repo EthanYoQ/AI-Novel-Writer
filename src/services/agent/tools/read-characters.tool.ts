@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 
 
 export const readCharactersTool = buildAgentTool({
@@ -68,11 +68,11 @@ export const readCharactersTool = buildAgentTool({
       const list = chars.map((c) => `  - ${c.name} (${c.role}) · character_id=${c.characterId ?? "unresolved"}`).join('\n')
       return { success: true, content: text(`👤 角色列表（${chars.length} 个）\n${list}\n\n使用 character_id 参数读取确切角色；名字多义时不会自动选择。`, `👤 Character list (${chars.length})\n${list}\n\nUse character_id for an exact character. Ambiguous names are never selected automatically.`) }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = agentToolErrorDetail(context, error)
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail)
+        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
           ? text('读取角色列表失败', 'Could not read the character list')
           : text(`读取角色列表失败：${detail}`, `Could not read the character list: ${detail}`),
       }

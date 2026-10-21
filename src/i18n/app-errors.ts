@@ -1,4 +1,4 @@
-import { translate } from './core'
+import { localize, translate } from './core'
 import type { Locale } from './types'
 
 /**
@@ -48,6 +48,8 @@ const ERROR_KEYS = {
   EXTERNAL_FILE_GRANT_NOT_FOUND: 'error.externalFileGrantExpired',
   EXTERNAL_FILE_GRANT_EXPIRED: 'error.externalFileGrantExpired',
   EXTERNAL_FILE_GRANT_EXHAUSTED: 'error.externalFileGrantExpired',
+  // 新建、打开项目时，所选文件夹在选择之后被移动、改名或替换：project-controller 经 String(error) 原样转给界面。
+  EXTERNAL_FILE_GRANT_TARGET_CHANGED: 'error.externalFileGrantExpired',
   GENERATION_REQUEST_FAILED: 'error.generationRequestFailed',
   GENERATION_PROJECT_SESSION_STALE: 'error.generationProjectSessionStale',
   GENERATION_PROJECT_SESSION_REQUIRED: 'error.generationProjectSessionRequired',
@@ -268,12 +270,31 @@ export function appErrorMessage(locale: Locale, error: unknown): string {
     ?? translate(locale, 'error.unknown', { message: readMessage(error) })
 }
 
+/** 显示处去掉的前缀：Electron 的调用通道，以及 "Error: "、"TypeError: " 这类类名。 */
+const DISPLAY_PREFIX = /^(?:Error invoking remote method '[^']+': )?(?:[A-Za-z]*Error: )?/u
+
 /**
- * 同一处既接渲染端按界面语言写好的报错、又接主进程经 IPC 转来的码时用：
- * 登记过的码按语言解释，IPC 转来的其他报错按 appErrorMessage 兜底，渲染端自己的说明原样显示。
+ * 把报错交给作者看的统一入口（toast、提示框、内联提示）：主进程的 result.error、IPC 抛出的错误
+ * 与渲染端按界面语言写好的说明都可以直接传进来。登记过的码按界面语言说明；认不出的去掉通道与类名前缀后
+ * 保留原文，不吞掉信息；完全没有内容时用该处的兜底说明（调用方用 text(zh, en) 写好）。
  */
-export function displayedErrorMessage(locale: Locale, error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
-  if (IPC_PREFIX.test(message)) return appErrorMessage(locale, error)
-  return knownAppErrorMessage(locale, error) ?? message
+export function displayedErrorMessage(locale: Locale, error: unknown, fallback?: string): string {
+  const known = knownAppErrorMessage(locale, error)
+  if (known) return known
+  return displayedRaw(error).trim().replace(DISPLAY_PREFIX, '') || fallback || localize(locale, '未知错误', 'Unknown error')
+}
+
+/** 报错里能给作者看的原文：字符串本身、Error 或普通对象的字符串 message；别的对象没有可读内容，交给兜底。 */
+function displayedRaw(error: unknown): string {
+  if (typeof error === 'string') return error
+  if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message
+    return typeof message === 'string' ? message : ''
+  }
+  return error == null ? '' : String(error)
+}
+
+/** 英文句子后附上原因；原因里仍有汉字（主进程未登记的中文原文）时只给英文概述，不把中文拼进英文句子。 */
+export function englishWithReason(summary: string, reason: string, separator = ' '): string {
+  return !reason.trim() || /\p{Script=Han}/u.test(reason) ? summary : `${summary}${separator}${reason}`
 }

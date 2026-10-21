@@ -1,6 +1,6 @@
 import { ipc } from '../../ipc-client'
 import { buildAgentTool } from '../tool-registry'
-import { agentToolText } from './project-context'
+import { agentToolText, agentToolErrorDetail } from './project-context'
 
 export const inspectWritingSkillTool = buildAgentTool({
   name: 'inspect_writing_skill',
@@ -29,7 +29,7 @@ export const inspectWritingSkillTool = buildAgentTool({
     }
     const result = await ipc.invoke('skills:inspect-github', sourceUrl)
     if (!result.success || !result.inspection) {
-      const detail = result.error
+      const detail = agentToolErrorDetail(context, result.error)
       return {
         success: false,
         content: '',

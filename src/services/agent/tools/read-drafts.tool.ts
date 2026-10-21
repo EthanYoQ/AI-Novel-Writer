@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 
 
 export const readDraftsTool = buildAgentTool({
@@ -76,11 +76,11 @@ export const readDraftsTool = buildAgentTool({
       }
       return { success: true, content: text(`📝 第 ${chapterNum} 章草稿（${targetName}）\n\n${fullDraft.content}`, `📝 Chapter ${chapterNum} draft (${targetName})\n\n${fullDraft.content}`) }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = agentToolErrorDetail(context, error)
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail)
+        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
           ? text('读取草稿失败', 'Could not read drafts')
           : text(`读取草稿失败：${detail}`, `Could not read drafts: ${detail}`),
       }

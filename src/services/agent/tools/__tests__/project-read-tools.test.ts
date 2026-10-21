@@ -213,6 +213,24 @@ describe('agent project read tools', () => {
     })
   })
 
+  it.each(['zh-CN', 'en-US'] as const)('%s：没有失败原因时用工具自己的说明，不拼出以冒号结尾的半句或空说明', async writingLanguage => {
+    useProjectStore.setState({
+      currentProject: { ...project(projectAPath), novelConfig: { writingLanguage } } as never,
+    })
+    // reject 的值是 undefined（没有任何原因）。
+    const invoke = vi.fn(() => Promise.reject(undefined))
+    vi.stubGlobal('window', { aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() } })
+    const context = createAgentExecutionContext()
+    for (const result of [
+      await readArchitectureTool.execute({}, context),
+      await searchKnowledgeTool.execute({ query: 'campus' }, context),
+    ]) {
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/\S/u)
+      expect(result.error).not.toMatch(/[:：]\s*$/u)
+    }
+  })
+
   it('uses the frozen Agent language for knowledge-search failures', async () => {
     useProjectStore.setState({
       currentProject: {
@@ -227,14 +245,13 @@ describe('agent project read tools', () => {
     vi.stubGlobal('window', { aiNovelAPI: { invoke } })
     const context = createAgentExecutionContext()
 
-    await expect(searchKnowledgeTool.execute({ query: 'campus' }, context)).resolves.toMatchObject({
-      success: false,
-      error: 'Could not search the knowledge base',
-    })
-    await expect(searchKnowledgeTool.execute({ query: 'campus' }, context)).resolves.toMatchObject({
-      success: false,
-      error: 'Legacy knowledge-base data must be repaired',
-    })
+    // 登记过的码按作品写作语言说明，不把主进程转来的中文原文交给英文作品。
+    for (let call = 0; call < 2; call += 1) {
+      await expect(searchKnowledgeTool.execute({ query: 'campus' }, context)).resolves.toMatchObject({
+        success: false,
+        error: expect.stringMatching(/^Legacy knowledge-base data must be repaired before continuing\./u),
+      })
+    }
     useProjectStore.setState({
       currentProject: {
         ...project(projectAPath),
@@ -246,7 +263,7 @@ describe('agent project read tools', () => {
       createAgentExecutionContext(),
     )).resolves.toMatchObject({
       success: false,
-      error: '旧版知识库数据需要先修复',
+      error: expect.stringMatching(/^旧版知识库数据需要先修复后才能继续/u),
     })
   })
 

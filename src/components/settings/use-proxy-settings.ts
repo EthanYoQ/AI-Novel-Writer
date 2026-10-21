@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ipc } from '../../services/ipc-client'
 import { useLocaleStore } from '../../stores/locale-store'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 export interface ProxyDraft {
   enabled: boolean
@@ -47,10 +48,8 @@ export function useProxySettings() {
       setTimeout(() => setSaved(false), 2000)
     } catch (error) {
       setSaved(false)
-      setSaveError(text(
-        `代理配置保存失败：${error instanceof Error ? error.message : String(error)}`,
-        `Could not save proxy settings: ${error instanceof Error ? error.message : String(error)}`,
-      ))
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, error)
+      setSaveError(text(`代理配置保存失败：${reason}`, `Could not save proxy settings: ${reason}`))
     } finally {
       setSaving(false)
     }

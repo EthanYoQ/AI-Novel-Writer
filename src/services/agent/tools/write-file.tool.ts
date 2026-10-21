@@ -4,7 +4,7 @@
 import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { ipc } from '../../ipc-client'
 import { validatePath } from './safe-path'
-import { agentToolText, assertAgentToolActive, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 import { projectFactWorkflowForFilePath } from '../../project-fact-targets'
 
 export const writeFileTool = buildAgentTool({
@@ -92,7 +92,7 @@ export const writeFileTool = buildAgentTool({
           artifacts: [artifact],
         }
       }
-      const detail = result.error
+      const detail = agentToolErrorDetail(context, result.error)
       return {
         success: false,
         commitState,

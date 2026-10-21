@@ -226,6 +226,7 @@ node scripts/redesign/drive.mjs --scenario chapter-switch --shell stage --out <�
 | `library-timing` | 计时会话（与 `startup-timing` 同样先预启动一次，另用公开 IPC 新建 20 部作品）：`readyToShowToInteractiveMs`（书房「新建作品」可见），以及页面里记下的 `renderInteractiveMs`（「新建作品」进入 DOM）与 `renderShelfMs`（20 个「预览《书名》」按钮都进入 DOM），都以导航开始为 0。旧欢迎页与新书房的书本按钮同名，所以对 trunk 也能跑 | 不截图 | 否 | perf |
 | `stage-lazy-retry` | 主进程 `webRequest` 拦下设定页代码块（`blockChunks`），重载后打开示例作品点「设定」，出现「页面没有载入」与「重试」；`after` 放行后点重试，设定页出现，且请求日志里有带 `?retry=` 的设定页代码块 | 载入失败 | 否 | RD-5 修复第 1 轮 |
 | `stage-setup-save-fail` | 设定页改一句后让 `project:save` 返回失败（`failProjectSaves` 换掉主进程处理函数）：Ctrl S 与「下一步」都在页脚出现 role=alert 的失败说明，仍停在设定、仍是未保存；`after` 换回处理函数再点保存，变为已保存、失败说明消失 | 保存失败 | 否 | RD-5 修复第 1 轮 |
+| `stage-error-code-display` | 主进程的错误码在显示处按界面语言说明（#474）：选好上级文件夹后换成同名新文件夹再新建作品，断言 `measured.createAfterParentReplaced` 是主进程原样返回的 `Error: EXTERNAL_FILE_GRANT_TARGET_CHANGED`；试改名打开着的作品文件夹（Windows 上被作品库占用，`measured.rename` 为 `EPERM`；改得动也立刻改回），再让 `kb:clear-all` 返回 `PROJECT_SESSION_STALE`；中文、英文各从知识库清空一次，提示是登记的说明、没有裸错误码 | 中文、英文的报错提示（`stage-error-code-display-zh`、`-en`） | 否 | #474 渲染层消费处 |
 | `stage-setup-short` | 新建「雾岛」：必填项先不标红；1440×900、1280×800、1280×720 下「类型」「目标读者」都在底栏之上；`after` 点开「全局写作要求」，面板不在底栏后面、焦点在它的输入框里 | 1280×720 设定页 | 否 | RD-5 修复第 1 轮 |
 | `stage-settings-legacy` | 模型编辑表单的输入框 40px 高；`context.shoot` 中途拍下模型编辑、提示词模板、写作 Skills；项目备份页只有「导出本地存档」一个实心主按钮 | 项目备份 | 否 | RD-5 修复第 1 轮 |
 | `stage-settings-leave` | 编辑夹具模型改名，输入框里按 Esc 设置页不关；焦点移出后 Esc 弹「放弃未保存的修改？」；`after` 继续编辑修改还在，「返回作品」再确认放弃才关；再开设置页从 Ctrl K 选「角色」，设置页收起、「角色」标签选中 | 放弃确认 | 否 | RD-5 修复第 1 轮 |

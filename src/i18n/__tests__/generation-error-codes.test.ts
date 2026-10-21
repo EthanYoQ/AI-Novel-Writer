@@ -607,6 +607,7 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'MAIN_NOT_READY',
     // 外部文件授权的路径、范围、窗口与签发参数校验（#474 B4）：external-file-grant-controller 按码换成按界面语言的说明，
     // 归档、知识库、云备份与旧项目导入各自折叠成不含路径的码或说明，不原样交给界面。
+    // 新建、打开项目经 String(error) 原样转出：作者能遇到的 TARGET_CHANGED 已登记；其余只有窗口或调用参数不对才会出现。
     'EXTERNAL_FILE_GRANT_DIRECTORY_REQUIRED',
     'EXTERNAL_FILE_GRANT_FILE_REQUIRED',
     'EXTERNAL_FILE_GRANT_OPERATION_DENIED',
@@ -616,7 +617,6 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'EXTERNAL_FILE_GRANT_PATH_TRAVERSAL',
     'EXTERNAL_FILE_GRANT_SCOPE_MISMATCH',
     'EXTERNAL_FILE_GRANT_SUBPATH_REJECTED',
-    'EXTERNAL_FILE_GRANT_TARGET_CHANGED',
     'EXTERNAL_FILE_GRANT_TARGET_INVALID',
     'EXTERNAL_FILE_GRANT_TTL_INVALID',
     'EXTERNAL_FILE_GRANT_USES_INVALID',

@@ -732,7 +732,7 @@ describe('清除生成内容', () => {
     await act(async () => finishClear({ success: false, error: '磁盘只读' }))
     const alert = await vi.waitFor(() => document.querySelector<HTMLElement>('[role="alertdialog"]')!)
     expect(alert.querySelector('.pi-dialog-title')!.textContent).toBe('清除失败')
-    expect(alert.querySelector('.pi-dialog-message')!.textContent).toBe('Error: 磁盘只读')
+    expect(alert.querySelector('.pi-dialog-message')!.textContent).toBe('磁盘只读')
     await userEvent.click(buttonNamed(alert, '确定'))
     await vi.waitFor(() => expect(buttonNamed(dialog, '清除所选').disabled).toBe(false))
     expect(onClose).not.toHaveBeenCalled()

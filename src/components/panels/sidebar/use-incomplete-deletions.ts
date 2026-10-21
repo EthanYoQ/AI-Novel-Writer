@@ -5,6 +5,7 @@ import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { formatResourceUri } from '../../../shared/project-paths'
 import { ipc } from '../../../services/ipc-client'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { useProjectStore } from '../../../stores/project-store'
 import { toast } from '../../ui/Toast'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../../project-session-gate'
@@ -56,10 +57,8 @@ export function useIncompleteDeletions(projectPath: string) {
       globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts', 'fileTree'], projectPath, projectSession })
       toast.success(text(`第${operation.chapterNumber}章派生投影清理完成`, `Chapter ${operation.chapterNumber} projection cleanup completed.`))
     } else {
-      toast.error(text(
-        `重试清理失败\n\n${result.error ?? '未知错误'}`,
-        `Cleanup retry failed\n\n${result.error ?? 'Unknown error'}`,
-      ))
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, result.error)
+      toast.error(text(`重试清理失败\n\n${reason}`, `Cleanup retry failed\n\n${reason}`))
     }
   }
 

@@ -366,7 +366,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
         globalEventBus.emit('REFRESH_RESOURCE', { resources: ['all'], projectPath: expectedProjectPath, projectSession })
         toast.success(text('知识库已清空', 'Knowledge base cleared'))
       } else {
-        toast.error(result.error || text('清空知识库失败', 'Could not clear the knowledge base'))
+        toast.error(knowledgeFailureMessage(locale, result, '清空知识库失败', 'Could not clear the knowledge base.'))
       }
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return

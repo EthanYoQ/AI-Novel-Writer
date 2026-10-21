@@ -15,6 +15,7 @@ import {
   isProjectSessionPath,
 } from '../project-session-gate'
 import type { SaveOutcome } from './save-feedback'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 /** 正在写盘的设定保存，按作品会话记：设定页随切标签重挂，实例 state 会丢，在途的保存要跨重挂认得出，不能再发一次。 */
 const useSavesInFlight = create<Record<string, boolean>>(() => ({}))
@@ -92,7 +93,8 @@ export function useNovelConfigForm(projectKey: string) {
       if (isProjectSessionCurrent(projectSession)) {
         setSaveOutcome('failed')
         console.error('[NovelConfigEditor] 保存失败:', error)
-        addLog('error', text(`保存失败：${error}`, `Save failed: ${error}`))
+        const reason = displayedErrorMessage(useLocaleStore.getState().locale, error)
+        addLog('error', text(`保存失败：${reason}`, `Save failed: ${reason}`))
       }
       if (propagateFailure) throw error
       return false
@@ -150,15 +152,16 @@ export function useNovelConfigForm(projectKey: string) {
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
       const draftChanged = e instanceof Error && e.message === 'GENERATION_AUTHOR_DRAFT_CHANGED'
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, e)
       addLog('error', draftChanged
         ? text(
           '生成期间小说配置已修改。已保留你的修改，请按当前配置重新生成。',
           'The novel configuration changed during generation. Your edits have been preserved. Generate again using the current configuration.',
         )
-        : text(`生成失败：${e}`, `Generation failed: ${e}`))
+        : text(`生成失败：${reason}`, `Generation failed: ${reason}`))
       setGenerateError({ field: fieldKey, message: draftChanged
         ? text('生成期间设定改过了，已保留你的修改，请再生成一次', 'The setup changed while generating. Your edits are kept; generate again')
-        : (e instanceof Error ? e.message : String(e)).replace(/[。.]\s*$/, '') })
+        : reason.replace(/[。.]\s*$/, '') })
     } finally {
       if (isProjectSessionCurrent(projectSession)) setGeneratingField(null)
     }

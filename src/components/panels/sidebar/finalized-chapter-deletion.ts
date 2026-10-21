@@ -5,6 +5,7 @@ import { ipc } from '../../../services/ipc-client'
 import { useDraftStore } from '../../../stores/draft-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { confirm } from '../../ui/Confirm'
 import { toast } from '../../ui/Toast'
 import {
@@ -93,10 +94,8 @@ function emitDeletionStatusUpdated(
 }
 
 function showUncommittedError(result: ChapterDeletionResult, text: Localize): void {
-  toast.error(text(
-    `删除失败\n\n${result.error ?? '未知错误'}`,
-    `Delete failed\n\n${result.error ?? 'Unknown error'}`,
-  ))
+  const reason = displayedErrorMessage(useLocaleStore.getState().locale, result.error)
+  toast.error(text(`删除失败\n\n${reason}`, `Delete failed\n\n${reason}`))
 }
 
 async function finishCommittedDeletion(
@@ -104,7 +103,6 @@ async function finishCommittedDeletion(
   projectSession: ProjectSessionContext,
   result: ChapterDeletionResult,
   config: DeletionSurfaceConfig,
-  text: Localize,
 ): Promise<ChapterDeletionResult | null> {
   const editor = useEditorStore.getState()
   const tab = editor.tabs.find(candidate =>
@@ -124,7 +122,7 @@ async function finishCommittedDeletion(
   if (result.success) {
     toast.success(config.success)
   } else {
-    toast.warning(config.partialFailure(result.error ?? text('未知错误', 'Unknown error')), 8000)
+    toast.warning(config.partialFailure(displayedErrorMessage(useLocaleStore.getState().locale, result.error)), 8000)
   }
   return result
 }
@@ -158,7 +156,7 @@ async function confirmLegacyKnowledgeAbsent(
     showUncommittedError(result, text)
     return result
   }
-  return finishCommittedDeletion(input, projectSession, result, config, text)
+  return finishCommittedDeletion(input, projectSession, result, config)
 }
 
 /** 删除已定稿的这一章：单章视图的章节操作直接调用，删除这一稿（draft-deletion）删到定稿时也走这里。 */
@@ -198,7 +196,7 @@ export async function deleteFinalizedChapter(
     showUncommittedError(result, text)
     return result
   }
-  return finishCommittedDeletion(input, projectSession, result, config, text)
+  return finishCommittedDeletion(input, projectSession, result, config)
 }
 
 /** Resume a persisted legacy-provenance receipt from the Manuscript status row. */

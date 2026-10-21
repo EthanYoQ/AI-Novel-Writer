@@ -919,6 +919,68 @@ export const STAGE_SCENARIOS = {
     await stage.saveStatus(page).filter({ hasText: '已保存' }).waitFor({ state: 'visible' })
     assert.equal(await stage.setupFoot(page).getByRole('alert').count(), 0, '再保存成功后失败说明消失')
   } },
+  /**
+   * 主进程的错误码在显示处按界面语言说明（#474）。先试把打开着的作品文件夹改名（真实触发，结果记进 measured.rename）；
+   * 改不动时让 kb:clear-all 返回会话失效码（与作品切换后守卫拒绝的返回同形）。中文、英文各从知识库清空一次并截图：
+   * 提示是登记的说明，不出现裸错误码。
+   */
+  'stage-error-code-display': { model: false, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: async ({ page, invoke, path, session }) => {
+    const imported = await invoke(page, 'kb:import-planning-text', '灯塔建于旧港北岸，守塔人每晚记录潮汐。', '灯塔资料.txt', path, session)
+    assert.equal(imported.success, true, imported.error)
+  } }), run: async context => {
+    const { app, page, invoke, reload, shoot } = context
+    const measured = {}
+    // 新建作品：选好上级文件夹后它被换成同名的新文件夹，主进程按授权目标已变化拒绝（#478 CodeRabbit 提的路径）。
+    const parent = path.join(context.roots.projects, 'replaced-parent')
+    fs.mkdirSync(parent)
+    const grant = await chooseProjectDirectoryGrant(app, page, parent)
+    fs.renameSync(parent, `${parent}-old`)
+    fs.mkdirSync(parent)
+    const created = await invoke(page, 'project:create', { parentGrantId: grant.grantId, name: '雾岛', genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
+    measured.createAfterParentReplaced = created.success ? 'created' : created.error
+    assert.equal(measured.createAfterParentReplaced, 'Error: EXTERNAL_FILE_GRANT_TARGET_CHANGED', '主进程按授权目标已变化拒绝新建')
+    // 只记录真实触发能否成立；改得动也立刻改回，下面一律用替换的返回，画面每次相同。
+    try {
+      fs.renameSync(context.samplePath, `${context.samplePath}-moved`)
+      fs.renameSync(`${context.samplePath}-moved`, context.samplePath)
+      measured.rename = 'moved'
+    } catch (error) {
+      measured.rename = error.code ?? String(error)
+    }
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain._invokeHandlers.set('kb:clear-all', async () => ({ success: false, error: 'PROJECT_SESSION_STALE' }))
+    })
+    const openKnowledge = async name => {
+      await page.keyboard.press('Control+K')
+      const input = page.getByRole('dialog').getByRole('combobox')
+      await input.waitFor({ state: 'visible' })
+      await page.keyboard.type(name)
+      await page.keyboard.press('Enter')
+      await input.waitFor({ state: 'hidden' })
+    }
+    for (const [locale, knowledge, open, confirm, expected] of [
+      ['zh-CN', '知识库', '清空知识库…', '清空知识库', '项目已切换或重新打开'],
+      ['en-US', 'Knowledge base', 'Clear knowledge base…', 'Clear knowledge base', 'The project was switched or reopened'],
+    ]) {
+      if (locale === 'en-US') {
+        assert.equal((await invoke(page, 'config:set', { locale })).success, true)
+        await reload()
+        await page.getByRole('list', { name: 'Recent books' }).waitFor({ state: 'visible' })
+        await stage.openFromLibraryEn(page, STAGE_SAMPLE.name)
+        await page.getByRole('navigation', { name: 'Writing flow' }).waitFor({ state: 'visible' })
+      }
+      await openKnowledge(knowledge)
+      await page.getByRole('button', { name: open, exact: true }).click()
+      await page.getByRole('button', { name: confirm, exact: true }).click()
+      const toast = page.locator('.pi-toast').last()
+      await toast.waitFor({ state: 'visible' })
+      measured[locale] = (await toast.innerText()).trim()
+      await shoot(`stage-error-code-display-${locale === 'zh-CN' ? 'zh' : 'en'}`)
+      assert.doesNotMatch(measured[locale], /PROJECT_SESSION_STALE|Error invoking remote method/u, `${locale} 提示里是裸错误码：${measured[locale]}`)
+      assert.ok(measured[locale].includes(expected), `${locale} 提示不是登记的说明：${measured[locale]}`)
+    }
+    return measured
+  } },
   'stage-settings-legacy': { model: false, shell: 'stage', setup: seedStageSample, run: async context => {
     const { page } = context
     await stage.openSettings(page)

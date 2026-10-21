@@ -14,6 +14,7 @@ import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { ChapterWritePrefill } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { useStageStore } from '../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { captureProjectSession, isProjectSessionCurrent } from '../../project-session-gate'
@@ -113,7 +114,7 @@ export default function WriteChapterPopover({ chapterNumber, blueprint, label, a
           show()
           return
         default:
-          setMessage(outcome.message)
+          setMessage(displayedErrorMessage(useLocaleStore.getState().locale, outcome.message))
           show()
       }
     } finally {
@@ -133,7 +134,7 @@ export default function WriteChapterPopover({ chapterNumber, blueprint, label, a
       if (!result.success) throw new Error(result.error || failure)
       return session
     } catch (error) {
-      if (isProjectSessionCurrent(session)) setMessage(error instanceof Error ? error.message : String(error))
+      if (isProjectSessionCurrent(session)) setMessage(displayedErrorMessage(useLocaleStore.getState().locale, error))
       return null
     } finally {
       setBusy(false)

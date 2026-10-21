@@ -8,6 +8,7 @@ import { fetchChapterDrafts, useDraftStore } from '../draft-store'
 import { createProjectScopedEditorTabId, useEditorStore } from '../editor-store'
 import { useLayoutStore } from '../layout-store'
 import { useLocaleStore } from '../locale-store'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import { openDraftTab } from '../open-draft-tab'
 import { useProjectStore } from '../project-store'
 import type { NavigationIntent } from './navigation-intents'
@@ -97,7 +98,7 @@ export async function openChapter(chapterNumber: number, stillIntended: () => bo
     return await openDraftTab(draft, chapterTabName(chapterNumber, row.title, text), session, stillWanted)
   } catch (error) {
     if (!stillWanted()) return false
-    const reason = error instanceof Error ? error.message : String(error)
+    const reason = displayedErrorMessage(useLocaleStore.getState().locale, error)
     toast.error(text(`打开第 ${chapterNumber} 章失败：${reason}`, `Could not open chapter ${chapterNumber}: ${reason}`))
     return false
   }
