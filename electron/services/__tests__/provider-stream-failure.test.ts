@@ -26,7 +26,7 @@ async function classify(provider: OpenAIProvider | GeminiProvider, model: ModelP
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
   const onError = vi.fn()
   await provider.generateStream(model, [{ role: 'user', content: 'write' }], {
-    maxTokens: 64, signal: new AbortController().signal, visibleOnly: true,
+    temperature: 0, maxTokens: 64, signal: new AbortController().signal, visibleOnly: true,
     onChunk: vi.fn(), onDone: vi.fn(), onError,
   })
   expect(onError).toHaveBeenCalledOnce()
