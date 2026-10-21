@@ -38,7 +38,7 @@ function loadModelConfigs(): ModelProfile[] {
 function loadModelConfigsForUpdate(): ModelProfile[] {
   const result = tryReadJsonFile<ModelProfile[]>(MODELS_CONFIG_PATH)
   if (result.status === 'error') {
-    throw new Error('模型配置损坏，已拒绝覆盖', { cause: result.error })
+    throw new Error('LLM_MODEL_CONFIG_CORRUPT', { cause: result.error })
   }
   return result.status === 'ok' ? result.value : []
 }
@@ -46,7 +46,7 @@ function loadModelConfigsForUpdate(): ModelProfile[] {
 function loadGlobalConfigForUpdate(): GlobalConfig {
   const result = tryReadJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH)
   if (result.status === 'error') {
-    throw new Error('全局配置损坏，已拒绝覆盖', { cause: result.error })
+    throw new Error('LLM_GLOBAL_CONFIG_CORRUPT', { cause: result.error })
   }
   return result.status === 'ok' ? result.value : { ...DEFAULT_GLOBAL_CONFIG }
 }
@@ -151,17 +151,9 @@ export function registerLLMController() {
       return { success: true, lease: modelExecutionLeases.begin(modelId) }
     } catch (error) {
       if (error instanceof ModelExecutionLeaseError && error.code === 'MODEL_NOT_FOUND') {
-        return {
-          success: false,
-          errorCode: 'MODEL_NOT_FOUND' as const,
-          error: '指定的生成模型不存在或已被删除。',
-        }
+        return { success: false, errorCode: 'MODEL_NOT_FOUND' as const }
       }
-      return {
-        success: false,
-        errorCode: 'LEASE_BEGIN_FAILED' as const,
-        error: '无法创建模型执行租约。',
-      }
+      return { success: false, errorCode: 'LEASE_BEGIN_FAILED' as const }
     }
   })
 
@@ -176,7 +168,7 @@ export function registerLLMController() {
       return { success: true }
     }
     if (closedExecutionLeaseTombstones.has(leaseId)) return { success: true }
-    return { success: false, error: '模型执行租约无效或已关闭' }
+    return { success: false, error: 'MODEL_EXECUTION_LEASE_INVALID' }
   })
 
   ipcMain.handle('llm:generate', async (_event, request: LLMRequest) => {
@@ -187,7 +179,7 @@ export function registerLLMController() {
       model = request.modelExecutionLeaseId
         ? modelExecutionLeases.resolve(request.modelExecutionLeaseId)
         : getModelConfig(request.modelId)
-      if (!model) return { success: false, content: '', finishReason: 'error', error: '未找到模型配置' }
+      if (!model) return { success: false, content: '', finishReason: 'error', error: 'MODEL_NOT_FOUND' }
 
       const provider = LLMFactory.getProvider(model)
       const result = await provider.generate(
@@ -322,10 +314,10 @@ export function registerLLMController() {
     let configChanged = false
     try {
       const modelsRead = tryReadJsonFile<ModelProfile[]>(MODELS_CONFIG_PATH)
-      if (modelsRead.status === 'error') throw modelsRead.error
+      if (modelsRead.status === 'error') throw new Error('LLM_MODEL_CONFIG_CORRUPT', { cause: modelsRead.error })
       const originalModels = modelsRead.status === 'ok' ? modelsRead.value : []
       const configRead = tryReadJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH)
-      if (configRead.status === 'error') throw configRead.error
+      if (configRead.status === 'error') throw new Error('LLM_GLOBAL_CONFIG_CORRUPT', { cause: configRead.error })
       originalConfig = configRead.status === 'ok'
         ? configRead.value
         : { ...DEFAULT_GLOBAL_CONFIG }
@@ -350,7 +342,8 @@ export function registerLLMController() {
           try {
             writeJsonFile(GLOBAL_CONFIG_PATH, originalConfig)
           } catch (rollbackError) {
-            throw new Error(`${String(error)}；恢复默认模型配置失败：${String(rollbackError)}`)
+            console.error('[AI Novel Writer] Model deletion failed and the default model settings were not restored.', { error, rollbackError })
+            throw new Error('LLM_DEFAULT_MODEL_ROLLBACK_FAILED', { cause: rollbackError })
           }
         }
         throw error

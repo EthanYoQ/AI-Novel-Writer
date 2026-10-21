@@ -208,6 +208,12 @@ const ERROR_KEYS = {
   KNOWLEDGE_BASE_COPY_CHANGED: 'error.knowledgeCopyChanged',
   KNOWLEDGE_BASE_COPY_EMPTY: 'error.knowledgeCopyEmpty',
   KNOWLEDGE_BASE_TEXT_EMPTY: 'error.knowledgeTextEmpty',
+  // 模型调用与设置（#474 B6）：保存或删除模型、设默认模型，以及按模型设置建执行租约时作者能照着改的原因。
+  LLM_MODEL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
+  LLM_GLOBAL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
+  LLM_DEFAULT_MODEL_ROLLBACK_FAILED: 'error.defaultModelRollbackFailed',
+  MODEL_ENDPOINT_INVALID: 'error.modelEndpointInvalid',
+  MODEL_OUTPUT_LIMIT_INVALID: 'error.modelOutputLimitInvalid',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

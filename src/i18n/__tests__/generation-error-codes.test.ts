@@ -17,6 +17,9 @@ import { knownAppErrorMessage } from '../app-errors'
  * 角色名单、蓝图与剧情资料（#474 B2）的码经 db 通道的 { error: String(err) } 或 IPC 异常到角色页、蓝图与剧情页；
  * CHARACTER_ROSTER_* 还会经生成 IPC 原样转给工作流失败面板（generation-controller 放行 CHARACTER_ 前缀）。
  *
+ * 模型调用、模型设置与执行租约（#474 B6）的码经 llm 通道的 { error } 或 IPC 异常到模型设置与生成运行时；
+ * 连接测试的结果由主进程按界面语言写好再交给模型表单。
+ *
  * 其余前缀（备份与迁移、安全文件系统、头像与图片、EPUB 导入、外观、编辑器等）不在这里：
  * 它们不经生成 IPC，由各自的主进程控制器或页面按自己的映射说明，逐族审显示面随主进程批次处理。
  */
@@ -73,6 +76,11 @@ const COVERED_PREFIXES = [
   // 以及导入创作资料、定稿收入知识库与参照导入的工作流。
   'KNOWLEDGE_BASE_',
   'EMBEDDING_',
+  // 模型调用、模型设置与执行租约（#474 B6）。
+  'LLM_',
+  'MODEL_ENDPOINT_',
+  'MODEL_OUTPUT_',
+  'MODEL_EXECUTION_LEASE_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
@@ -623,6 +631,10 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'PLOT_TREE_PROJECT_CORE_MISSING',
     'PLOT_TREE_SAVE_FAILED',
     'PLOT_TREE_SOURCES_CHANGED',
+    // 模型执行租约失效或过期（#474 B6）：渲染端生成运行时把租约通道的失败统一成 LEASE_* 码，
+    // 主进程生成经生成 IPC 统一成 GENERATION_REQUEST_FAILED，这两个码只进日志。
+    'MODEL_EXECUTION_LEASE_EXPIRED',
+    'MODEL_EXECUTION_LEASE_INVALID',
   ],
 }
 

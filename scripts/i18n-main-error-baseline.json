@@ -1,17 +1,12 @@
 {
   "description": "electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。",
-  "total": 342,
+  "total": 330,
   "files": {
     "electron/controllers/finalization-controller.ts": {
       "registerFinalizationController": 4
     },
     "electron/controllers/import-controller.ts": {
       "registerImportController": 2
-    },
-    "electron/controllers/llm-controller.ts": {
-      "loadGlobalConfigForUpdate": 1,
-      "loadModelConfigsForUpdate": 1,
-      "registerLLMController": 5
     },
     "electron/llm/gemini-provider.ts": {
       "assertVisibleStreamPayload": 2,
@@ -190,12 +185,6 @@
       "publishManuscript": 1,
       "resolveManuscriptTarget": 2,
       "resolveStoredManuscriptTarget": 1
-    },
-    "electron/services/model-execution-lease.ts": {
-      "ModelExecutionLeaseRegistry.begin": 1,
-      "ModelExecutionLeaseRegistry.resolve": 2,
-      "normalizeEndpoint": 1,
-      "resolveModelExecutionCapabilityEvidence": 1
     }
   }
 }

@@ -82,4 +82,8 @@ export const zhCN = {
   'error.knowledgeCopyChanged': '项目副本在别处被改过，本次没有保存。请重新打开这份资料后再修改。',
   'error.knowledgeCopyEmpty': '项目副本是空的，无法更新检索。请先写入内容并保存。',
   'error.knowledgeTextEmpty': '资料内容是空的，没有可导入的文字。',
+  'error.modelSettingsFileDamaged': '模型设置文件已损坏，为免覆盖，本次没有保存。请修复或移走用户配置目录里损坏的设置文件后重试。',
+  'error.defaultModelRollbackFailed': '模型没有删除，默认模型设置也没能恢复。请检查用户配置目录能否写入，再到设置里重新选择默认模型。',
+  'error.modelEndpointInvalid': '模型的 Base URL 无效。请在设置里改正这个模型的 Base URL 后重试。',
+  'error.modelOutputLimitInvalid': '模型的最大输出 Token 无效。请在设置里为这个模型填一个正整数后重试。',
 } satisfies Record<MessageKey, string>

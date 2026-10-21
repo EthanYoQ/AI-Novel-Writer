@@ -487,14 +487,14 @@ describe('llm model execution lease controller integration', () => {
     })).resolves.toMatchObject({
       success: false,
       content: '',
-      error: expect.stringContaining('模型执行租约无效'),
+      error: expect.stringContaining('MODEL_EXECUTION_LEASE_INVALID'),
     })
     expect(mocks.generate).not.toHaveBeenCalled()
     await expect(handler('llm:close-execution-lease')({}, leaseId)).resolves.toEqual({ success: true })
 
     await expect(handler('llm:close-execution-lease')({}, 'never-issued-lease')).resolves.toEqual({
       success: false,
-      error: '模型执行租约无效或已关闭',
+      error: 'MODEL_EXECUTION_LEASE_INVALID',
     })
   })
 
@@ -509,7 +509,7 @@ describe('llm model execution lease controller integration', () => {
     })).resolves.toEqual({
       requestId: 'unknown-lease-stream',
       started: false,
-      error: expect.stringContaining('模型执行租约无效'),
+      error: expect.stringContaining('MODEL_EXECUTION_LEASE_INVALID'),
     })
     expect(mocks.generateStream).not.toHaveBeenCalled()
   })
