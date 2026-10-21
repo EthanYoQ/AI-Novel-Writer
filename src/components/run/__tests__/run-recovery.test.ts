@@ -16,13 +16,15 @@ function draft(recovery: Record<string, unknown>, artifacts = [artifact('甲', t
   return buildRecoveryEntries(sources, 'zh-CN')[0] as DraftEntry
 }
 
-function review(recovery: Record<string, unknown>, status = 'failed'): ReviewEntry {
+function review(recovery: Record<string, unknown>, { status = 'failed', output = {}, operation = 'review-chapter', locale = 'zh-CN' }: {
+  status?: string; output?: Record<string, unknown>; operation?: string; locale?: 'zh-CN' | 'en-US'
+} = {}): ReviewEntry {
   const sources: RecoverySources = { ...EMPTY_RECOVERY_SOURCES, reviews: [{
-    view: view('审稿', { status }) as never,
-    recovery: { handle, modelId: '模型', sourceStatus: 'current', canResume: true, attemptedPurposes: ['review-chapter'],
-      context: { operation: 'review-chapter', source: { chapterNumber: 3 } }, ...recovery } as never,
+    view: view('审稿', { status, ...output }) as never,
+    recovery: { handle, modelId: '模型', sourceStatus: 'current', canResume: true, attemptedPurposes: [operation],
+      context: { operation, source: { chapterNumber: 3 } }, ...recovery } as never,
   }] }
-  return buildRecoveryEntries(sources, 'zh-CN')[0] as ReviewEntry
+  return buildRecoveryEntries(sources, locale)[0] as ReviewEntry
 }
 
 describe('单章写作中断', () => {
@@ -118,7 +120,51 @@ describe('审稿与修稿中断', () => {
   })
 
   it('已取消的审稿不能恢复', () => {
-    expect(review({}, 'cancelled').canAct).toBe(false)
+    expect(review({}, { status: 'cancelled' }).canAct).toBe(false)
+  })
+})
+
+describe('审稿候选的片段', () => {
+  const REPORT = JSON.stringify({ summary: '时间线需要核对。', items: [
+    { category: '连续性', severity: 'pass', description: '人物称呼前后一致。' },
+    { category: '节奏', severity: 'warning', description: '第二段铺垫偏长。', quote: '她顺着螺旋楼梯往上走' },
+    { category: '连续性', severity: 'error', description: '钟声提前一刻与潮位表矛盾。', quote: '钟声比往常早了一刻' },
+  ], goalReviews: [] })
+  const output = (text: string, extra: Record<string, unknown> = {}) => ({ output: {
+    artifacts: [{ ...handle, artifactId: '报告', attemptId: '报告-请求', text, status: 'completed' }], ...extra,
+  } })
+
+  it('审稿报告显示为结论、意见条数与先列问题的要点，复制拿到原文', () => {
+    const [item] = review({}, output(REPORT)).artifacts
+    expect(item.text).toBe(REPORT)
+    expect(item.display).toContain('时间线需要核对。')
+    expect(item.display).toContain('3 条意见')
+    expect(item.display.split('\n')[1]).toContain('钟声提前一刻与潮位表矛盾。')
+    expect(item.display).toContain('第二段铺垫偏长。')
+    expect(item.display).not.toContain('{')
+  })
+
+  it('英文界面用英文写条数与级别', () => {
+    const [item] = review({}, { ...output(REPORT), locale: 'en-US' }).artifacts
+    expect(item.display).toContain('3 items')
+    expect(item.display).not.toMatch(/条意见|问题|建议/)
+  })
+
+  it('解析不了的审稿输出与未落盘的半截报告退回说明，不显示原始 JSON，复制仍是原文', () => {
+    const truncated = REPORT.slice(0, 40)
+    const entry = review({}, output('{"summary": 没写完', { unsavedTails: [{ attemptId: '尾请求', artifactId: '尾片', durableRevision: 0, text: truncated, failureCode: 'STORAGE_FAILED' }] }))
+    expect(entry.artifacts.map(item => item.text)).toEqual(['{"summary": 没写完'])
+    expect(entry.tails.map(item => item.text)).toEqual([truncated])
+    for (const item of [...entry.artifacts, ...entry.tails]) {
+      expect(item.display).toContain('结构化')
+      expect(item.display).not.toContain('summary')
+    }
+  })
+
+  it('修稿候选是正文，按原文显示', () => {
+    const prose = '雾是从海面上一层一层爬上来的。'
+    const [item] = review({}, { ...output(prose), operation: 'refine-draft' }).artifacts
+    expect(item).toMatchObject({ text: prose, display: prose })
   })
 })
 
