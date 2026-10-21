@@ -349,6 +349,59 @@ export const VISUAL_SCENARIOS = {
     await page.getByRole('alertdialog').waitFor({ state: 'hidden' })
   } },
 
+  // #474 B1：英文界面导入参考小说，参照章节写入知识库前这次导入的执行租约被别处收回（用公开的 db:import-run-cancel-at-boundary
+  // 按卡住的请求里的执行身份收回）。主进程的导入运行仓储只交 IMPORT_RUN_EXECUTION_STALE，运行卡片的失败说明是英文、不带汉字与错误码。
+  'import-run-error-en': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ app, page, roots, invoke, shoot }) => {
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    await page.keyboard.press('Escape')
+    await page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ state: 'detached' })
+    const file = path.join(roots.temp, 'reference-novel.txt')
+    fs.writeFileSync(file, `第1章 旧港\n旧港的潮水刚退，青石上还留着一层薄薄的盐霜。\n\n第2章 北堤\n北堤上的风很大。\n`)
+    assert.ok(await app.evaluate(({ dialog, ipcMain }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
+      const handlers = ipcMain._invokeHandlers
+      const original = handlers.get('kb:import-reference-text')
+      if (!original) return false
+      const gate = Promise.withResolvers()
+      globalThis.__driveReferenceGate = { release: gate.resolve, held: null }
+      handlers.set('kb:import-reference-text', async (event, chapterNumber, runId, authority, session) => {
+        globalThis.__driveReferenceGate.held ??= { runId, authority, session }
+        await gate.promise
+        return original(event, chapterNumber, runId, authority, session)
+      })
+      return true
+    }, file), '能在主进程里卡住参照章节入库')
+
+    await stage.root(page).getByRole('banner').getByRole('button', { name: `“${STAGE_SAMPLE.name}” menu` }).click()
+    await page.getByRole('menuitem', { name: 'Novel breakdown & imitation…', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Novel analysis and style study' })
+    await dialog.getByTestId('import-target-current').click()
+    await dialog.getByRole('button', { name: 'Choose', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Import into current project (2 chapters)', disabled: false }).click()
+    await dialog.waitFor({ state: 'hidden' })
+
+    let held = null
+    for (const deadline = Date.now() + 20_000; !held; await new Promise(resolve => setTimeout(resolve, 50))) {
+      assert.ok(Date.now() < deadline, '20 秒内参照章节入库没有卡在门上')
+      held = await app.evaluate(() => globalThis.__driveReferenceGate.held)
+    }
+    const lease = { ...held.authority, expiresAt: Date.now() + 60_000 }
+    const fenced = await invoke(page, 'db:import-run-cancel-at-boundary', held.runId, lease, held.session.projectPath, held.session)
+    assert.equal(fenced.success, true, fenced.error)
+    await app.evaluate(() => globalThis.__driveReferenceGate.release())
+
+    const failure = page.getByText('This import was taken over by another window', { exact: false }).first()
+    await failure.waitFor({ state: 'visible', timeout: 30_000 })
+    const observed = { failure: await failure.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await settle(page)
+    await shoot('import-run-error-en')
+    assert.equal(observed.lang, 'en-US')
+    assert.doesNotMatch(observed.failure, /\p{Script=Han}|IMPORT_RUN_/u, '失败说明不带汉字与错误码')
+    return observed
+  } },
+
   'rdv-toasts': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: seedCalls }), run: async ({ page }) => {
     const copy = await diagnosticsCopyButton(page)
     await stubClipboard(page, true)
