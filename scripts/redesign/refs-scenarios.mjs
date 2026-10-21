@@ -269,6 +269,30 @@ export const REFS_SCENARIOS = {
     await refs.versionButton(page, '草稿 v2').waitFor({ state: 'visible' })
     await refs.historyChapters(page).getByRole('button', { name: /雾钟/ }).getByText('1 稿').waitFor({ state: 'visible' })
   } },
+  // #474 B2：主进程只交 NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE，英文界面在记录表单里按码说明，不带汉字与错误码。
+  'refs-thread-evidence-en': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page, shoot }) => {
+    await refs.open(page, 'plot')
+    await refs.plotView(page, '伏笔线索').click()
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    await page.keyboard.press('Escape')
+    await page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ state: 'detached' })
+    await page.getByRole('button', { name: `More actions for “${THREAD.title}”` }).click()
+    await refs.menuItem(page, 'Record a change from a final').click()
+    await page.getByLabel('Final chapter').selectOption({ label: 'Chapter 1 · final v1' })
+    await page.getByLabel('Quote from the final').fill('这句话不在定稿里')
+    await page.getByLabel('Why').fill('Testing a quote that is not in the final.')
+    await page.getByRole('button', { name: 'Record', exact: true }).click()
+    const alert = page.locator('.stage-plot-error[role="alert"]')
+    await alert.waitFor({ state: 'visible' })
+    const observed = { alert: await alert.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await shoot('refs-thread-evidence-en')
+    assert.equal(observed.lang, 'en-US')
+    assert.equal(observed.alert, 'Paste a short excerpt that appears in the selected finalized chapter.')
+    assert.equal(await page.getByLabel('Quote from the final').inputValue(), '这句话不在定稿里', '表单留着作者的输入，改完能直接重试')
+    return observed
+  } },
   'refs-delete': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
     await refs.open(page, 'plot')
     await refs.plotView(page, '伏笔线索').click()
