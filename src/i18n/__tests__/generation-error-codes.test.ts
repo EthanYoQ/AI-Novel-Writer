@@ -81,6 +81,7 @@ const COVERED_PREFIXES = [
   'MODEL_ENDPOINT_',
   'MODEL_OUTPUT_',
   'MODEL_EXECUTION_LEASE_',
+  'MCP_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
@@ -646,6 +647,10 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'LLM_STREAM_INVALID',
     'LLM_STREAM_PROVIDER_ERROR',
     'LLM_STREAM_UNREADABLE',
+    // MCP 连接前的配置与传输检查（#474 B6）：connect 与 mcp:connect 通道把它们统一成 MCP_CONNECT_FAILED。
+    'MCP_SERVER_NOT_CONFIGURED',
+    'MCP_SSE_UNSUPPORTED',
+    'MCP_STDIO_COMMAND_REQUIRED',
   ],
 }
 
