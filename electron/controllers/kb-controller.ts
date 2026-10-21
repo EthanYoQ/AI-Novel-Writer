@@ -117,11 +117,21 @@ const REFERENCE_IMPORT_FAILURES: Readonly<Record<string, readonly [zhCN: string,
   EMBEDDING_SPACE_BUSY: ['检索索引正在建立，请稍后再试。', 'The search index is being built. Try again in a moment.'],
 }
 
+/** 参照导入的幂等收据与完整性校验：没有作者能照做的建议，给按运行语言的说明并附上码供反馈定位。 */
+function referenceIntegrityFailure(code: string): readonly [zhCN: string, enUS: string] | undefined {
+  if (!code.startsWith('KNOWLEDGE_BASE_REFERENCE_')) return undefined
+  return [
+    `参照章节未能写入知识库（校验未通过：${code}）。`,
+    `The reference chapter could not be written to the knowledge base (check failed: ${code}).`,
+  ]
+}
+
 function explainReferenceImportFailure<T extends { success: boolean; error?: string }>(result: T, runId: string): T | (T & { errorCode: string }) {
-  const explained = !result.success && result.error ? REFERENCE_IMPORT_FAILURES[result.error] : undefined
-  if (!explained) return result
+  const code = !result.success ? result.error : undefined
+  const explained = code ? REFERENCE_IMPORT_FAILURES[code] ?? referenceIntegrityFailure(code) : undefined
+  if (!code || !explained) return result
   const locale = ImportRunRepository.get(runId)?.locale ?? 'zh-CN'
-  return { ...result, errorCode: result.error!, error: locale === 'en-US' ? explained[1] : explained[0] }
+  return { ...result, errorCode: code, error: locale === 'en-US' ? explained[1] : explained[0] }
 }
 
 function legacyMigrationBlockedFailure() {
