@@ -99,3 +99,34 @@ it.each([
   expect(presentation.persistence).toBe('本次未保存完整审稿报告，原稿保留。')
   expect(presentation.guidance).toContain('重新审稿会重新调用模型')
 })
+
+describe('generation error codes on the run card', () => {
+  it('explains a rejected re-review instead of showing the raw IPC error', () => {
+    const raw = "Error invoking remote method 'generation:begin': Error: GENERATION_DRAFT_NOT_CURRENT"
+    const review = presentWorkflowFailure(undefined, raw, 'zh-CN', false, undefined, { operation: 'review-chapter' } as never)
+    expect(review.reason).toContain('当前稿')
+    expect(review.reason).not.toContain('Error invoking')
+    const english = presentWorkflowFailure(undefined, raw, 'en-US', false)
+    expect(english.reason).toContain('current draft')
+    expect(english.reason).not.toContain('GENERATION_')
+  })
+
+  it('tells the author what to do when the next chapter cannot be saved', () => {
+    const failure = presentWorkflowFailure(undefined, "Error invoking remote method 'generation:commit-draft': Error: GENERATION_DRAFT_DEPENDENCY_STALE", 'zh-CN', true)
+    expect(failure.heading).toBe('工作流未完成')
+    expect(failure.reason).toContain('前一章')
+  })
+
+  it('英文界面下非 GENERATION_ 前缀的登记码也按界面语言说明，不显示原码（#471）', () => {
+    expect(presentWorkflowFailure(undefined, 'LEGACY_ROSTER_GENERATION_CANCELLED', 'en-US', false).reason)
+      .toBe('Generation was cancelled.')
+    expect(presentWorkflowFailure(undefined, "Error invoking remote method 'character-proposal:approve': Error: CHARACTER_PROPOSAL_SOURCE_CHANGED", 'en-US', false).reason)
+      .toBe('The settings, blueprint, or earlier text this generation relied on changed while it ran, so the result was not saved. Generate it again.')
+    expect(presentWorkflowFailure(undefined, 'NO_DEFAULT_MODEL', 'en-US', false).reason)
+      .toBe('The model for this generation could not be found. Select or add a model in Settings, then try again.')
+  })
+
+  it('keeps an uncoded reason as written', () => {
+    expect(presentWorkflowFailure(undefined, '模型服务返回 HTTP 429', 'zh-CN', false).reason).toBe('模型服务返回 HTTP 429')
+  })
+})

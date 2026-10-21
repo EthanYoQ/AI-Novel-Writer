@@ -6,24 +6,100 @@
   "heroes": {
     "zh": {
       "readme": "README.md",
-      "output": "docs/assets/readme/hero-zh-v2.png",
+      "output": "docs/assets/readme/v130-hero-zh.webp",
       "ui_locale": "zh-CN",
       "screenshots": [
-        { "path": "docs/assets/readme/hero-captures/zh/01-overview.png", "role": "primary", "capture_provenance": "computer-use-capture", "complete_window": true, "ui_locale": "zh-CN" },
-        { "path": "docs/assets/readme/hero-captures/zh/02-model-activity.png", "role": "supporting", "capture_provenance": "computer-use-capture", "complete_window": true, "ui_locale": "zh-CN" },
-        { "path": "docs/assets/readme/hero-captures/zh/03-model-settings.png", "role": "supporting", "capture_provenance": "computer-use-capture", "complete_window": true, "ui_locale": "zh-CN" },
-        { "path": "docs/assets/readme/hero-captures/zh/04-about.png", "role": "supporting", "capture_provenance": "computer-use-capture", "complete_window": true, "ui_locale": "zh-CN" }
+        {
+          "path": "docs/assets/readme/hero-captures/v130/zh/01-library.webp",
+          "role": "primary",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "zh-CN"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/zh/02-chapter.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "zh-CN"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/zh/03-blueprint.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "zh-CN"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/zh/04-run.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "zh-CN"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/zh/05-architecture.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "zh-CN"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/zh/06-cast.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "zh-CN"
+        }
       ]
     },
     "en": {
       "readme": "README_en.md",
-      "output": "docs/assets/readme/hero-en-v2.png",
+      "output": "docs/assets/readme/v130-hero-en.webp",
       "ui_locale": "en",
       "screenshots": [
-        { "path": "docs/assets/readme/hero-captures/en/01-overview.png", "role": "primary", "capture_provenance": "project-authored-screenshot", "complete_window": true, "ui_locale": "en" },
-        { "path": "docs/assets/readme/hero-captures/en/02-model-settings.png", "role": "supporting", "capture_provenance": "computer-use-capture", "complete_window": true, "ui_locale": "en" },
-        { "path": "docs/assets/readme/hero-captures/en/03-prompt-settings.png", "role": "supporting", "capture_provenance": "computer-use-capture", "complete_window": true, "ui_locale": "en" },
-        { "path": "docs/assets/readme/hero-captures/en/04-about.png", "role": "supporting", "capture_provenance": "computer-use-capture", "complete_window": true, "ui_locale": "en" }
+        {
+          "path": "docs/assets/readme/hero-captures/v130/en/01-library.webp",
+          "role": "primary",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "en"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/en/02-chapter.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "en"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/en/03-blueprint.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "en"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/en/04-run.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "en"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/en/05-architecture.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "en"
+        },
+        {
+          "path": "docs/assets/readme/hero-captures/v130/en/06-cast.webp",
+          "role": "supporting",
+          "capture_provenance": "playwright-capture",
+          "complete_window": true,
+          "ui_locale": "en"
+        }
       ]
     }
   }

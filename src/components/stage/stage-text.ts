@@ -16,6 +16,7 @@ export const CHAPTER_PHASE_TEXT: Record<ChapterPhase, [string, string]> = {
   todo: ['待写', 'To write'],
   draft: ['待审稿', 'To review'],
   reviewed: ['待修稿', 'To revise'],
+  merge: ['待合并', 'To merge'],
   revised: ['待定稿', 'To finalize'],
   final: ['定稿', 'Final'],
 }
@@ -28,17 +29,18 @@ export const RESOURCE_NAMES: Record<ResourcePage, [string, string]> = {
   history: ['版本历史', 'Version history'],
 }
 
-/** 阶段与资料页的标签在新外壳里用流程脊上的名字，同一个页面只有一个名字；旧外壳打开时存的标签名不变。 */
+/** 阶段、资料页与角色名单的标签用固定的名字（阶段与资料页取流程脊上的名字），同一个页面只有一个名字。 */
 const PAGE_TAB_NAMES: Partial<Record<EditorTab['type'], [string, string]>> = {
   config: STAGE_NAMES.setup,
   'world-building': STAGE_NAMES.architecture,
+  character: ['角色名单', 'Cast'],
   'chapter-card': STAGE_NAMES.blueprint,
   'narrative-thread': RESOURCE_NAMES.plot,
   knowledge: RESOURCE_NAMES.knowledge,
   'version-history': RESOURCE_NAMES.history,
 }
 
-/** 标签在新外壳里显示的名字。正文、审稿报告、角色与恢复草稿等标签沿用各自的名字。 */
+/** 标签显示的名字。正文、审稿报告与恢复草稿等标签沿用各自的名字。 */
 export function stageTabName(tab: Pick<EditorTab, 'type' | 'name' | 'planningRecovery'>, text: Text): string {
   const name = tab.planningRecovery ? undefined : PAGE_TAB_NAMES[tab.type]
   return name ? text(...name) : tab.name

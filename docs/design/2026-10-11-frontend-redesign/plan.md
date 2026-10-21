@@ -420,7 +420,7 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 
 **Build.**
 
-- [ ] 四个分节就地编辑，架构确认对话框沿用 `ArchitectureConfirmDialog` 的数据，按新样式呈现覆盖与保留标记。
+- [ ] 四个分节就地编辑，架构确认对话框沿用 `ArchitectureConfirmDialog` 的数据，按新样式呈现覆盖与保留标记。实际做法：分节卡只显示状态与摘要，「编辑」打开该节的单节文档标签（`ArchFileViewer`），因为未保存提示、退出保存与 ⌘S 都绑在编辑器标签上，内嵌编辑会复制一套这样的保护。
 - [ ] 大纲续写、恢复稿、角色名单修复与旧修复恢复（F-033 至 F-039）以提示条呈现。
 - [ ] 角色建议与状态建议（F-117、F-118）合为一个提示条。
 

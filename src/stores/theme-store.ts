@@ -1,8 +1,10 @@
 import { create } from 'zustand'
 import { useAppearanceStore, type AppearanceStore } from './appearance-bootstrap'
 import { ipc } from '../services/ipc-client'
+import type { ColorTheme } from '../shared/appearance-profile'
 
-export type Theme = 'light' | 'galaxy' | 'paper' | 'dark'
+/** 纸墨只有浅色与深色两套。 */
+export type Theme = ColorTheme
 
 // ─── 共享字体库 ─────────────────────────────────────────────────────────────
 
@@ -95,8 +97,8 @@ const BASE_FONT_SIZE = 14 as const
 interface ThemeState {
   /** 用户选择的主题 */
   theme: Theme
-  /** 实际应用的主题（解析 system 后） */
-  resolvedTheme: 'light' | 'galaxy' | 'paper' | 'dark'
+  /** 当前应用到界面的主题，外观偏好载入之前是浅色 */
+  resolvedTheme: Theme
   /** 当前缩放级别（1.0 = 100%） */
   zoom: number
   /** 当前写作字体（正文编辑区 → --font-writing） */
@@ -124,7 +126,7 @@ interface ThemeState {
 /** Legacy-facing projection only; appearance-bootstrap owns all persistence. */
 export function createThemeStore(appearance: AppearanceStore = useAppearanceStore) {
   const store = create<ThemeState>()((set, get) => ({
-    theme: 'paper', resolvedTheme: 'paper', zoom: 1, writingFont: 'lxgw-wenkai', uiFont: 'noto-sans-sc',
+    theme: 'light', resolvedTheme: 'light', zoom: 1, writingFont: 'lxgw-wenkai', uiFont: 'noto-sans-sc',
     setTheme: theme => { appearance.getState().update({ colorTheme: theme }) },
     initTheme: () => {
       const state = appearance.getState()
@@ -155,17 +157,9 @@ export function createThemeStore(appearance: AppearanceStore = useAppearanceStor
 
 export const useThemeStore = createThemeStore()
 
-/** 应用主题到 DOM — 支持互斥的主题 */
-function applyTheme(theme: 'light' | 'galaxy' | 'paper' | 'dark') {
-  const root = document.documentElement
-  root.classList.remove('galaxy', 'paper', 'dark')
-  if (theme === 'galaxy') {
-    root.classList.add('galaxy')
-  } else if (theme === 'paper') {
-    root.classList.add('paper')
-  } else if (theme === 'dark') {
-    root.classList.add('dark')
-  }
+/** 深色时给根元素加 .dark：纸墨作用域之外的旧颜色变量与 Tailwind 的 dark 变体靠它切换。 */
+function applyTheme(theme: Theme) {
+  document.documentElement.classList.toggle('dark', theme === 'dark')
 }
 
 /**

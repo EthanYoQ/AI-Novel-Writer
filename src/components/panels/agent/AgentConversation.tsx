@@ -199,7 +199,7 @@ function ActiveConversation() {
 /**
  * 重构后的工具栏：贴合小说创作场景
  * 左侧：快速引用按钮（架构、角色、蓝图）
- * 右侧：打开 AI 输出面板按钮
+ * 右侧：打开运行侧页的按钮
  */
 function AgentToolbar() {
   const text = useLocaleStore(s => s.text)
@@ -207,7 +207,7 @@ function AgentToolbar() {
   return (
     <div className="flex items-center justify-end mb-1.5">
 
-      {/* 右侧：打开 AI 输出面板 */}
+      {/* 右侧：打开运行侧页 */}
       <button
         onClick={() => navigate({ kind: 'run', facet: 'output' })}
         className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all select-none"

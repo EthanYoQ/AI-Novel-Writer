@@ -42,8 +42,8 @@ it('prose execution consumes the exact recovered task and composes only the pros
     if (channel === 'generation:execute') {
       assert.deepEqual(args[0].task, expected.initialDraftTask)
       assert.deepEqual(args[0].handle, handle)
-      return { outcome: { finishReason: 'length', receipt: { visibleArtifact: { artifactId: 'prose' } } }, run: { handle, ledger: { physicalRequests }, artifacts: [
-        { artifactId: 'prose', status: 'failed', compositionEligible: true },
+      return { outcome: { finishReason: 'stop', receipt: { visibleArtifact: { artifactId: 'prose' } } }, run: { handle, ledger: { physicalRequests }, artifacts: [
+        { artifactId: 'prose', status: 'completed', compositionEligible: true },
       ] } }
     }
     if (channel === 'generation:compose-visible') {

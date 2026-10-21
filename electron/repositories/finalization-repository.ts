@@ -323,6 +323,14 @@ export class FinalizationRepository {
     return row ? rowToRecord(row) : null
   }
 
+  /** 定稿收进知识库的文档身份到章号；知识库凭它区分定稿章节与作者导入的资料（两者都写项目副本）。 */
+  static knowledgeDocumentChapters(): Map<string, number> {
+    const rows = requireDatabase().prepare(`
+      SELECT knowledge_document_id, chapter_number FROM finalization_outbox WHERE knowledge_document_id != ''
+    `).all() as Array<{ knowledge_document_id: string; chapter_number: number }>
+    return new Map(rows.map(row => [row.knowledge_document_id, row.chapter_number]))
+  }
+
   static getByDraftId(draftId: number): FinalizationRecord | null {
     const db = requireDatabase()
     const row = db.prepare(`

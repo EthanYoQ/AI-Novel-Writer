@@ -6,6 +6,7 @@ import { chapterLabel } from '../../shared/chapter-label'
 import type { ChapterRow, StageLocation, StageProgress, StageStatus } from '../../stores/navigation/stage-progress'
 import { ProgressRing } from './ProgressRing'
 import { CHAPTER_PHASE_TEXT, CHAPTER_RUNNING_TEXT, RESOURCE_NAMES, STAGE_NAMES } from './stage-text'
+import { pluralEn } from '../../shared/plural-en'
 
 type Text = (zh: string, en: string) => string
 
@@ -22,8 +23,8 @@ function stageMeta(status: StageStatus, text: Text): string {
     case 'blueprint':
       if (todo) return text('逐章规划', 'Plan each chapter')
       return status.total > status.planned
-        ? text(`${status.planned} / ${status.total} 章`, `${status.planned} / ${status.total} chapters`)
-        : text(`${status.planned} 章`, `${status.planned} chapters`)
+        ? text(`${status.planned} / ${status.total} 章`, `${status.planned} / ${status.total} ${pluralEn(status.total, 'chapter')}`)
+        : text(`${status.planned} 章`, `${status.planned} ${pluralEn(status.planned, 'chapter')}`)
     case 'manuscript':
       if (todo) return text('写作、审稿、修稿、定稿', 'Write, review, revise, finalize')
       return status.total > 0
@@ -52,18 +53,23 @@ interface StageSpineProps {
   onStage: (stage: WorkStage) => void
   onChapter: (chapterNumber: number) => void
   onResource: (page: ResourcePage) => void
+  /** 设置页开着时只有「设置」是当前位置。 */
+  settingsOpen?: boolean
   onSettings: () => void
 }
 
-export default function StageSpine({ stages, chapters, location, onStage, onChapter, onResource, onSettings }: StageSpineProps) {
+export default function StageSpine({ stages, chapters, location: activeLocation, settingsOpen, onStage, onChapter, onResource, onSettings }: StageSpineProps) {
+  const location = settingsOpen ? null : activeLocation
   const text = useLocaleStore(s => s.text)
   const currentStage = location?.kind === 'stage' ? location.stage : null
   const currentChapter = location?.kind === 'stage' ? location.chapter : undefined
   const currentRow = useRef<HTMLButtonElement>(null)
+  const chapterListShown = currentStage === 'manuscript' && chapters.length > 0
 
+  // 章节列表可能晚于当前章出现（打开作品时草稿索引后到），列表出现时也要把当前章滚进来
   useEffect(() => {
     currentRow.current?.scrollIntoView({ block: 'nearest' })
-  }, [currentChapter])
+  }, [currentChapter, chapterListShown])
 
   const row = (key: string, current: boolean, onClick: () => void, children: ReactNode, attributes: Record<string, string> = {}) => (
     <li key={key}>
@@ -84,7 +90,7 @@ export default function StageSpine({ stages, chapters, location, onStage, onChap
         </>, { 'data-state': status.progress.state, 'data-stage': status.stage }))}
       </ol>
 
-      {currentStage === 'manuscript' && chapters.length > 0 && (
+      {chapterListShown && (
         <ol className="stage-chapters" aria-label={text('章节', 'Chapters')}>
           {chapters.map(chapter => {
             const current = chapter.number === currentChapter
@@ -120,7 +126,7 @@ export default function StageSpine({ stages, chapters, location, onStage, onChap
       </ul>
 
       <div className="stage-spine-foot">
-        <button type="button" className="stage-row" onClick={onSettings}>
+        <button type="button" className="stage-row" aria-current={settingsOpen ? 'page' : undefined} onClick={onSettings}>
           <Settings className="stage-row-icon" size={16} strokeWidth={1.75} aria-hidden="true" />
           <span className="stage-row-label">{text('设置', 'Settings')}</span>
         </button>

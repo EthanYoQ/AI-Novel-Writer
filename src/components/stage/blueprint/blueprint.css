@@ -1,0 +1,570 @@
+/*
+ * 蓝图阶段。视觉基准是 claude-design/Blueprint.dc.html 的内容面板：页头、左侧章节规划、右侧单章蓝图；
+ * 恢复稿提示条、单章操作条与列表标记按 prototype/blueprint.html 补齐。只引用纸墨令牌。
+ */
+.stage-bp {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+}
+
+.stage-bp-loading {
+  padding: var(--s-8);
+  color: var(--ink-3);
+}
+
+/* ================= 页头 ================= */
+.stage-bp-head {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-4);
+  padding: 26px 28px 20px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.stage-bp-heading {
+  flex: 1;
+  min-width: 260px;
+}
+
+.stage-bp-kicker {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+}
+
+.stage-bp-numeral {
+  font: italic 400 40px/0.8 var(--font-num);
+  color: var(--ink);
+}
+
+.stage-bp-eyebrow {
+  font: 400 var(--fs-12) var(--font-display);
+  letter-spacing: .24em;
+  color: var(--ink-3);
+}
+
+.stage-bp-h1 {
+  margin: 14px 0 0;
+  font: 600 28px/1.25 var(--font-display);
+  color: var(--ink);
+}
+
+.stage-bp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.stage-bp > .pi-notice {
+  flex: none;
+  margin: var(--s-3) 28px 0;
+}
+
+.stage-bp-prewrap {
+  white-space: pre-line;
+}
+
+.stage-bp-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+}
+
+/* ================= 主体 ================= */
+.stage-bp-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.stage-bp-plan {
+  width: 340px;
+  flex: none;
+  overflow: auto;
+  padding: var(--s-4) var(--s-3) var(--s-6);
+  border-right: 1px solid var(--rule);
+}
+
+.stage-bp-plan-top {
+  padding: 6px 12px 8px;
+  font-size: var(--fs-11);
+  letter-spacing: .16em;
+  color: var(--ink-3);
+}
+
+.stage-bp-plan-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 几百章时只排版看得见的行：换章与打开蓝图不为屏幕外的行重新排版。 */
+.stage-bp-plan-list > li {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
+}
+
+.stage-bp-plan-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stage-bp-plan-item:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+/* 选中边与焦点环都画在行内：列表项的 content-visibility 带绘制包含，画在行外的部分会被裁得只剩四角。 */
+.stage-bp-plan-item[aria-current] {
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.stage-bp-plan-item:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.stage-bp-plan-no {
+  font: italic 18px var(--font-num);
+  color: var(--ink-3);
+}
+
+.stage-bp-plan-item[aria-current] .stage-bp-plan-no {
+  color: var(--accent);
+}
+
+.stage-bp-plan-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-bp-plan-item[aria-current] .stage-bp-plan-name {
+  font-weight: 600;
+}
+
+.stage-bp-plan-marks {
+  display: inline-flex;
+  gap: 4px;
+  color: var(--ink-3);
+}
+
+.stage-bp-plan-status {
+  font-size: var(--fs-11);
+  color: var(--ink-3);
+}
+
+.stage-bp-plan-status[data-next] {
+  color: var(--ink-2);
+}
+
+.stage-bp-plan-status[data-status="final"] {
+  color: var(--ok);
+}
+
+.stage-bp-plan-status:is([data-status="draft"], [data-status="reviewed"], [data-status="revised"], [data-status="running"]) {
+  color: var(--accent);
+}
+
+/* ================= 单章蓝图 ================= */
+.stage-bp-card {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  contain: content;
+  padding: 20px 36px 48px;
+}
+
+.stage-bp-card-inner {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* 状态与按钮并排放不下时按钮换行，状态文字不被挤成一字一行 */
+.stage-bp-card-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.stage-bp-card-status {
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-bp-card-gap {
+  flex: 1;
+}
+
+.stage-bp-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.stage-bp-title-no {
+  font: italic 30px/1 var(--font-num);
+  color: var(--accent);
+}
+
+.stage-bp-title {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: transparent;
+  font: 600 var(--fs-24) var(--font-display);
+  color: var(--ink);
+}
+
+.stage-bp-title:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.stage-bp-title::placeholder,
+.stage-bp-person-input::placeholder,
+.stage-bp-ctl::placeholder {
+  color: var(--ink-4);
+}
+
+.stage-bp-role select {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+
+.stage-bp-role select:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.stage-bp-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.stage-bp-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.stage-bp-field > label {
+  font-size: var(--fs-12);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.stage-bp-field > label em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+.stage-bp-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: var(--s-4);
+}
+
+.stage-bp-ctl {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  font: 15px/1.8 var(--font-prose);
+  color: var(--ink);
+  resize: vertical;
+}
+
+.stage-bp-ctl:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.stage-bp-people {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.stage-bp-person {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--rule-strong);
+}
+
+.stage-bp-person .pi-btn--icon {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+}
+
+.stage-bp-person-input {
+  min-width: 10em;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-12);
+  color: var(--ink);
+}
+
+.stage-bp-person-input:focus-visible {
+  outline: none;
+  border-style: solid;
+  border-color: var(--accent);
+}
+
+/* ================= 生成蓝图与批量创作对话框 ================= */
+.stage-dialog:has(.stage-bp-dialog-body) {
+  width: 580px;
+}
+
+.stage-bp-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.stage-bp-dialog-body .pi-field em {
+  font-style: normal;
+  color: var(--ink-3);
+}
+
+.stage-bp-dialog-line {
+  display: block;
+}
+
+.stage-bp-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: var(--fs-13);
+}
+
+.stage-bp-dialog-field > legend {
+  margin-bottom: var(--s-2);
+  padding: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-bp-option {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.stage-bp-option input[type="radio"],
+.stage-bp-mode input[type="radio"] {
+  accent-color: var(--accent);
+}
+
+.stage-bp-num {
+  width: 72px;
+  height: 30px;
+}
+
+.stage-bp-dialog-hint {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-bp-dialog-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-4);
+  align-items: end;
+}
+
+.stage-bp-dialog-row-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.stage-bp-dialog-textarea {
+  height: auto;
+  padding: var(--s-2) var(--s-3);
+  line-height: 1.7;
+  resize: vertical;
+}
+
+.stage-bp-readonly {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--s-3);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+  font-size: var(--fs-13);
+  color: var(--ink);
+}
+
+.stage-bp-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-2);
+}
+
+.stage-bp-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 1px var(--rule-strong);
+  cursor: pointer;
+}
+
+.stage-bp-mode:has(input:checked) {
+  box-shadow: 0 0 0 1.5px var(--accent);
+  background: var(--accent-soft);
+}
+
+.stage-bp-mode[data-tone="warn"]:has(input:checked) {
+  box-shadow: 0 0 0 1.5px var(--warn);
+  background: var(--warn-soft);
+}
+
+.stage-bp-mode b {
+  display: block;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stage-bp-mode small {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-bp-dialog-note {
+  margin-right: auto;
+  align-self: center;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+/* ================= 蓝图恢复稿 ================= */
+.stage-bp-recovery-end {
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-bp-recovery-end-input {
+  width: 72px;
+}
+
+.stage-bp-recovery-error {
+  flex: none;
+  margin: var(--s-3) 28px 0;
+  font-size: var(--fs-12);
+}
+
+.stage-bp-recovery-original {
+  flex: none;
+  margin: var(--s-3) 28px 0;
+}
+
+.stage-bp-recovery-original > pre {
+  max-height: 160px;
+  overflow: auto;
+  margin: var(--s-2) 0 0;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  color: var(--ink-2);
+  font: var(--fs-12)/1.6 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.stage-bp-recovery-editor {
+  flex: 1;
+  min-height: 0;
+  margin: var(--s-3) 28px 28px;
+  overflow: hidden;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+}
+
+/* ================= 窄宽度（按蓝图页自身的宽度，运行侧页并排时也成立） ================= */
+@container (width < 760px) {
+  .stage-bp-plan {
+    width: 240px;
+  }
+
+  .stage-bp-card {
+    padding: 20px 24px 40px;
+  }
+}
+
+/* 章节规划与单章蓝图上下排：规划在上、限高滚动 */
+@container (width < 520px) {
+  .stage-bp-head {
+    padding: 20px 20px 16px;
+  }
+
+  .stage-bp-body {
+    flex-direction: column;
+  }
+
+  .stage-bp-plan {
+    width: auto;
+    max-height: 40%;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+}

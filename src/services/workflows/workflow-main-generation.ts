@@ -4,12 +4,12 @@ import type { BeginGenerationRequest } from '../../shared/generation-owner-contr
 import { createMainGenerationTransport } from '../generation/main-generation-transport'
 import { createMainOwnedGenerationRuntime, type GenerationRuntime, type MainGenerationRunHandle, type MainGenerationRunView, type MainGenerationSnapshot } from '../generation/generation-runtime'
 import { GenerationAttemptError, type GenerationSession } from '../generation/generation-harness'
-import { requireWorkflowProjectSession } from './workflow-project-session'
+import { requireWorkflowProjectSession, workflowUiLocale } from './workflow-project-session'
 import { ipc } from '../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
-import { PLOT_OUTLINE_PROTOCOL } from '../../shared/plot-outline-contract'
+import { PLOT_OUTLINE_PROTOCOL, plotOutlineSourceInvalidText } from '../../shared/plot-outline-contract'
 
 export interface WorkflowMainGenerationSelection extends Omit<BeginGenerationRequest, 'uiActionNonce' | 'modelId' | 'parentRootActionId' | 'selectedDraftIds' | 'selectedFinalizedDraftIds'> {
   selectedDraftIds?: number[]
@@ -92,7 +92,12 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
         const stored = await transport.read(resumeHandle)
         if (context.mainGenerationRootHandle && context.mainGenerationRootHandle.rootActionId !== resumeHandle.rootActionId)
           throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
-        view = stored.nonReplayable && !importStage ? await transport.resume(projectSession, resumeHandle) : stored
+        view = stored.nonReplayable && !importStage ? await transport.resume(projectSession, resumeHandle).catch((error: unknown) => {
+          // 主进程按设计拒绝续写来源无效的大纲任务，只给错误码；换成与恢复稿入口相同的说明。
+          if (stored.plotOutline?.protocol === PLOT_OUTLINE_PROTOCOL && String((error as Error)?.message ?? error).includes('GENERATION_PLOT_OUTLINE_PREFIX_INVALID'))
+            throw new Error(plotOutlineSourceInvalidText(stored.plotOutline.sourceExpected.synopsis, workflowUiLocale(context)))
+          throw error
+        }) : stored
       } else {
         if (!modelId) throw new Error('GENERATION_MODEL_REQUIRED')
         const parent = intent.continueDirectoryOperationId || restartHandle ? undefined : context.mainGenerationRootHandle

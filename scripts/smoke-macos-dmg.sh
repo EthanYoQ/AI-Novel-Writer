@@ -38,7 +38,7 @@ mkdir -p "$repository_root/.runtime/.cache"
 smoke_root="$(mktemp -d "$repository_root/.runtime/.cache/ai-novel-macos-dmg-smoke.XXXXXX")"
 mount_point="$smoke_root/mount"
 smoke_home="$smoke_root/home"
-skin_home="$smoke_root/legacy-source"
+legacy_source_home="$smoke_root/legacy-source"
 canonical_home="$smoke_root/canonical"
 chromium_profile="$smoke_root/chromium-profile"
 mounted=0
@@ -157,7 +157,7 @@ NODE
 }
 trap cleanup EXIT
 
-mkdir -p "$mount_point" "$smoke_home" "$skin_home" "$chromium_profile" "$qualification_directory" "$acceptance_directory"
+mkdir -p "$mount_point" "$smoke_home" "$legacy_source_home" "$chromium_profile" "$qualification_directory" "$acceptance_directory"
 dmg_sha256="$(shasum -a 256 "$dmg" | awk '{print $1}')"
 if [[ ! "$dmg_sha256" =~ ^[a-fA-F0-9]{64}$ ]]; then
   echo "Could not calculate SHA-256 for macOS DMG: $dmg" >&2
@@ -171,7 +171,8 @@ if [[ -z "$app" ]]; then
   echo 'Mounted DMG does not contain an application bundle.' >&2
   exit 1
 fi
-executable="$app/Contents/MacOS/AI小说作家"
+# 可执行文件与 .app 同名（产品名，1.3.0 之后由 AI小说作家 改为书童，ADR-0022）。
+executable="$app/Contents/MacOS/$(basename "$app" .app)"
 if [[ ! -x "$executable" ]]; then
   echo "Missing executable in mounted application: $executable" >&2
   exit 1
@@ -349,36 +350,22 @@ if (escaped?.ok === true || escaped?.code !== 'SECURE_FS_REPARSE_POINT') {
 NODE
 
 token="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
-skin_token="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
 vector_evidence="$qualification_directory/packaged-vector-smoke.json"
 homepage_evidence="$qualification_directory/packaged-official-homepage-smoke.json"
-skin_evidence="$qualification_directory/packaged-skin-smoke.json"
 
 run_with_timeout 'packaged vector smoke' 120 env \
-  ELECTRON_RUN_AS_NODE=1 HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
+  ELECTRON_RUN_AS_NODE=1 HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$legacy_source_home" AI_NOVEL_VELA_HOME="$legacy_source_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
   "$executable" "$vector_runner" "--ai-novel-release-smoke=$token" > "$vector_evidence"
 run_with_timeout 'packaged official homepage smoke' 300 env \
-  HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
+  HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$legacy_source_home" AI_NOVEL_VELA_HOME="$legacy_source_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
   "$executable" "--user-data-dir=$chromium_profile" "--ai-novel-release-homepage-smoke=$token" > "$homepage_evidence"
-run_with_timeout 'packaged skin smoke' 120 env \
-  HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_SKIN_SMOKE=1 AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN="$skin_token" \
-  "$executable" "--user-data-dir=$chromium_profile" "--ai-novel-release-skin-smoke=$skin_token" > "$skin_evidence"
-
-node - "$vector_evidence" "$homepage_evidence" "$skin_evidence" <<'NODE'
+node - "$vector_evidence" "$homepage_evidence" <<'NODE'
 const fs = require('node:fs')
-const [vectorFile, homepageFile, skinFile] = process.argv.slice(2)
+const [vectorFile, homepageFile] = process.argv.slice(2)
 const vector = JSON.parse(fs.readFileSync(vectorFile, 'utf8'))
 const homepage = JSON.parse(fs.readFileSync(homepageFile, 'utf8'))
-const skin = JSON.parse(fs.readFileSync(skinFile, 'utf8'))
 if (vector?.schemaVersion !== 1 || vector?.kind !== 'packaged-vector-smoke') throw new Error('Invalid vector smoke evidence')
 if (homepage?.schemaVersion !== 1 || homepage?.kind !== 'packaged-official-homepage-smoke') throw new Error('Invalid homepage smoke evidence')
-if (skin?.schemaVersion !== 1 || skin?.kind !== 'packaged-skin-smoke') throw new Error('Invalid skin smoke evidence')
-if (skin?.builtInAnime?.asset !== 'skins/anime-night.webp' || skin?.builtInAnime?.present !== true || skin?.builtInAnime?.format !== 'webp') {
-  throw new Error('Packaged anime skin evidence is incomplete')
-}
-if (skin?.customSkin?.importSucceeded !== true || skin?.customSkin?.readSucceeded !== true || skin?.customSkin?.stateRestored !== true) {
-  throw new Error('Packaged custom skin persistence evidence is incomplete')
-}
 NODE
 
 tested_sha="$(git rev-parse HEAD)"
@@ -408,16 +395,15 @@ fs.writeFileSync(output, `${JSON.stringify({
   dmgSha256: sha256,
   vectorSmoke: true,
   officialHomepageSmoke: true,
-  skinSmoke: true,
   architecture: { target: targetArch, runnerMachine },
 }, null, 2)}\n`)
 NODE
 
-node - "$packaged_smoke_receipt" "$release_directory" "$vector_evidence" "$homepage_evidence" "$skin_evidence" "$qualification_directory/macos-dmg-smoke.json" "$target_arch" "$runner_machine_arch" "$smoke_root/a11-v1.0.0/receipt.json" "$smoke_root/a11-v1.1.0/receipt.json" "$app" "$mount_point" "$dmg" "$tested_sha" "$repository_root/scripts/f05-a11-offline-import-journey.mjs" "$repository_root/scripts/fixtures/s14c-official-old-sources/manifest.json" <<'NODE'
+node - "$packaged_smoke_receipt" "$release_directory" "$vector_evidence" "$homepage_evidence" "$qualification_directory/macos-dmg-smoke.json" "$target_arch" "$runner_machine_arch" "$smoke_root/a11-v1.0.0/receipt.json" "$smoke_root/a11-v1.1.0/receipt.json" "$app" "$mount_point" "$dmg" "$tested_sha" "$repository_root/scripts/f05-a11-offline-import-journey.mjs" "$repository_root/scripts/fixtures/s14c-official-old-sources/manifest.json" <<'NODE'
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
-const [output, releaseDirectory, vectorFile, homepageFile, skinFile, macosDmgSmokeFile, targetArch, runnerMachine,
+const [output, releaseDirectory, vectorFile, homepageFile, macosDmgSmokeFile, targetArch, runnerMachine,
   a11V100File, a11V110File, app, mountPoint, dmg, testedSha, driver, sourceManifest] = process.argv.slice(2)
 
 function sha256(file) {
@@ -436,7 +422,6 @@ function reference(label, file, expectedKind) {
 
 const vector = reference('vector', vectorFile, 'packaged-vector-smoke')
 const homepage = reference('official homepage', homepageFile, 'packaged-official-homepage-smoke')
-const skin = reference('skin', skinFile, 'packaged-skin-smoke')
 const macosDmgSmoke = JSON.parse(fs.readFileSync(macosDmgSmokeFile, 'utf8'))
 if (macosDmgSmoke?.schemaVersion !== 1 || macosDmgSmoke?.kind !== 'macos-dmg-smoke') {
   throw new Error('Invalid macOS DMG smoke fact')
@@ -459,7 +444,7 @@ const a11OfflineImport = Object.fromEntries([['v1.0.0', a11V100File], ['v1.1.0',
     throw new Error(`Mounted app A11 ${version} qualification or official source binding is incomplete`)
   }
   if (provenance?.dmgSha256 !== sha256(dmg)
-    || provenance.executableSha256 !== sha256(path.join(app, 'Contents', 'MacOS', 'AI小说作家'))
+    || provenance.executableSha256 !== sha256(path.join(app, 'Contents', 'MacOS', path.basename(app, '.app')))
     || provenance.asarSha256 !== sha256(path.join(app, 'Contents', 'Resources', 'app.asar'))
     || provenance.driverSha256 !== sha256(driver) || provenance.sourceManifestSha256 !== sha256(sourceManifest)
     || provenance.appPathSha256 !== hashText(fs.realpathSync(app))
@@ -491,7 +476,6 @@ const direct = {
   dmgSha256: macosDmgSmoke.dmgSha256,
   vectorSmoke: macosDmgSmoke.vectorSmoke,
   officialHomepageSmoke: macosDmgSmoke.officialHomepageSmoke,
-  skinSmoke: macosDmgSmoke.skinSmoke,
   a11OfflineImport,
   architecture: { target: targetArch, runnerMachine },
 }
@@ -505,13 +489,11 @@ fs.writeFileSync(output, `${JSON.stringify({
   references: {
     vector,
     officialHomepage: homepage,
-    skin,
     macosDmgSmoke: macosDmgSmokeReference,
   },
   observations: [
     'Validated the packaged vector smoke fact.',
     'Validated the packaged official-homepage smoke fact.',
-    'Validated the packaged skin smoke fact.',
     'Validated the direct macOS DMG smoke fact.',
     'Validated official v1.0.0 and v1.1.0 old-app sources, offline imports, target saves, and new-process reopens in the mounted application.',
   ],

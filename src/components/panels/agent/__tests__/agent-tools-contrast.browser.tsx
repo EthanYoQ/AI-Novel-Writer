@@ -15,8 +15,6 @@ afterEach(() => container.remove())
 describe('Agent tool information text contrast', () => {
   it.each([
     ['light', 'rgb(56, 96, 66)', 'rgb(143, 48, 32)', 'rgb(122, 84, 20)', 'rgb(43, 42, 38)', 'rgb(82, 122, 91)', 'rgb(181, 64, 44)', 'rgb(198, 138, 58)', 'rgb(255, 255, 255)'],
-    ['paper', 'rgb(56, 96, 66)', 'rgb(143, 48, 32)', 'rgb(122, 84, 20)', 'rgb(43, 42, 38)', 'rgb(82, 122, 91)', 'rgb(181, 64, 44)', 'rgb(198, 138, 58)', 'rgb(255, 255, 255)'],
-    ['galaxy', 'rgb(74, 222, 128)', 'rgb(251, 113, 133)', 'rgb(251, 191, 36)', 'rgb(224, 236, 244)', 'rgb(74, 222, 128)', 'rgb(251, 113, 133)', 'rgb(251, 191, 36)', 'rgb(10, 22, 40)'],
     ['dark', 'rgb(137, 209, 133)', 'rgb(255, 138, 138)', 'rgb(204, 167, 0)', 'rgb(212, 212, 212)', 'rgb(137, 209, 133)', 'rgb(241, 76, 76)', 'rgb(204, 167, 0)', 'rgb(24, 24, 24)'],
   ])('uses readable semantic copy while retaining decorative status icons in %s', (theme, successText, errorText, warningText, ordinaryText, successDecoration, errorDecoration, warningDecoration, successForeground) => {
     container.className = theme

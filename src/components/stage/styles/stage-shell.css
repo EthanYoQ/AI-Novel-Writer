@@ -24,7 +24,8 @@
   font: inherit;
 }
 
-.stage-shell :where(button, [role='option'], .stage-search):focus-visible {
+/* 纸墨按钮自己把焦点环与材质合成到 box-shadow，这里只管外壳自己的按钮 */
+.stage-shell :where(button:not(.pi-btn, .pi-menu-item), [role='option'], .stage-search):focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -58,11 +59,8 @@
 }
 
 /* ================= 对话框 ================= */
-.stage-dialog-title {
-  color: var(--ink);
-}
-
 .stage-dialog-error {
   margin: 0;
   color: var(--danger);
 }
+

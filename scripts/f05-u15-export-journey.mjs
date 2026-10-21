@@ -8,6 +8,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as refs from './redesign/pages/refs.mjs'
+import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const driverPath = fileURLToPath(import.meta.url)
@@ -32,7 +35,7 @@ const dirtyProductPaths = git('status', '--porcelain', '--untracked-files=all', 
   .split('\n').filter(Boolean)
 assert.deepEqual(dirtyProductPaths, [], 'Dirty product inputs since packaged build')
 
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 assert.equal(hashFile(executablePath), expectedExe)
 assert.equal(hashFile(asarPath), expectedAsar)
@@ -76,7 +79,6 @@ const invoke = (page, channel, ...args) => page.evaluate(
   ({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args),
   { channel, args },
 )
-const writer = page => page.locator('.writer-shell[data-shell-presentation="writer"][data-shell-variant="v3"]')
 const addPass = (stepId, relatedActionId, assertion, evidence = {}) => steps.push({
   stepId, relatedActionId, outcome: 'PASS', assertion, ...evidence,
 })
@@ -116,16 +118,8 @@ async function launch() {
     }, exportRoot)
     const page = await opened.firstWindow({ timeout: 30_000 })
     page.setDefaultTimeout(15_000)
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForStage(page)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-    await page.evaluate(() => {
-      const key = 'ai-novel-writer-appearance'
-      const previous = JSON.parse(localStorage.getItem(key) ?? '{}')
-      localStorage.setItem(key, JSON.stringify({ ...previous, shellPreference: 'writer',
-        revision: Number(previous.revision ?? 0) + 1, origin: 'author' }))
-    })
-    await page.reload()
-    await writer(page).waitFor({ state: 'visible', timeout: 30_000 })
     return { opened, page }
   } catch (error) {
     await opened.close()
@@ -152,17 +146,17 @@ async function quit() {
 }
 
 async function openProject(page) {
-  await writer(page).waitFor({ state: 'visible' })
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  await page.locator('.writer-left-rail button[title="欢迎页"]').click()
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-  await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+  await stage.waitForStage(page)
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, projectName)
+  await stage.waitForWork(page, projectName)
 }
 
+/** 导出在顶栏作品菜单的「导出…」里，打开的是同一个导出对话框。 */
 async function exportThroughWriter(page, label, observationId) {
-  await writer(page).waitFor({ state: 'visible' })
-  await page.locator('.writer-topbar button[title="导出"]').click()
+  await stage.waitForStage(page)
+  await stage.openWorkMenuItem(page, projectName, '导出…')
   const dialog = page.getByRole('dialog', { name: '导出项目' })
   await dialog.waitFor({ state: 'visible' })
   await dialog.getByText(label, { exact: true }).click()
@@ -329,10 +323,10 @@ async function main() {
     session = await launch()
     app = session.opened
     await openProject(session.page)
-    await session.page.locator('.writer-left-rail button[title="版本历史"]').click()
-    await session.page.getByText('章节列表', { exact: true }).waitFor({ state: 'visible' })
-    await session.page.locator('main.writer-editor').getByText('来源追踪').click()
-    const staleBadge = session.page.getByText('来源已过期', { exact: true })
+    // 版本历史是作品资料里的一页：左列章节，中列这一章的各稿（时间线），右列与当前稿的对比。
+    await refs.open(session.page, 'history')
+    await refs.historyChapters(session.page).getByRole('button', { name: /来源追踪/ }).click()
+    const staleBadge = refs.versionButton(session.page, '草稿 v1').getByText('来源已过期', { exact: true })
     await staleBadge.waitFor({ state: 'visible' })
     assert.match(await staleBadge.getAttribute('title'), /草稿会保留.*连续性需要复核/u)
     await session.page.screenshot({ path: path.join(receiptDir, 'writer-version-history-stale.png') })
@@ -344,34 +338,34 @@ async function main() {
         screenshot: path.relative(repository, path.join(receiptDir, 'writer-version-history-stale.png')) })
 
     phase = 'writer-history-diff'
-    const historyEditor = session.page.locator('main.writer-editor')
-    const versionRow = version => historyEditor.getByText(`v${version}`, { exact: true }).locator('..').locator('..')
-    await versionRow(1).getByRole('button', { name: '对比', exact: true }).click()
-    const diffDialog = session.page.getByRole('dialog', { name: /修稿合并.*v1.*当前/u })
-    await diffDialog.waitFor({ state: 'visible' })
-    await diffDialog.locator('.twm-cell-left').getByText(dependentBody, { exact: true }).waitFor({ state: 'visible' })
-    await diffDialog.locator('.twm-cell-right').getByText(dependentV2Body, { exact: true }).waitFor({ state: 'visible' })
+    // 点一稿就在右列与当前稿逐字对比：只读，旧文字划掉、新文字标出，不再打开修稿合并。
+    await refs.versionButton(session.page, '草稿 v1').click()
+    const diffPage = refs.diffPage(session.page)
+    await diffPage.waitFor({ state: 'visible' })
+    assert.equal(await diffPage.getAttribute('aria-readonly'), 'true')
+    const [selectedTag, currentTag] = await refs.comparison(session.page).locator('.stage-hist-tag').allInnerTexts()
+    assert(selectedTag.startsWith('草稿 v1 · '), selectedTag)
+    assert.equal(currentTag, '当前 · 草稿 v2')
+    assert.equal((await diffPage.innerText()).replace(/\s/gu, ''), dependentV2Body)
+    assert.equal(await diffPage.locator('ins').innerText(), '（第二版）')
     const diffScreenshot = path.join(receiptDir, 'writer-version-history-diff.png')
     await session.page.screenshot({ path: diffScreenshot })
     addPass('writer-history-diff', 'U15.A01',
-      'The visible v1 Compare action opened a current-project-scoped diff containing the exact v1 body and latest v2 body.',
+      'Picking v1 in the version timeline showed a read-only comparison against current v2 that marks exactly the text v2 added.',
       { projectPath, oldDraftId: dependentDraft.id, latestDraftId: dependentV2Draft.id,
         oldBodySha256: hashBytes(Buffer.from(dependentBody, 'utf8')),
         latestBodySha256: hashBytes(Buffer.from(dependentV2Body, 'utf8')),
         screenshot: path.relative(repository, diffScreenshot) })
-    await diffDialog.getByRole('button', { name: '关闭', exact: true }).click()
-    await session.page.locator('.writer-editor-content .skin-workspace-page > .no-select')
-      .getByText('版本历史', { exact: true }).click()
-    await historyEditor.getByText('来源追踪').click()
 
     phase = 'writer-history-revert'
-    await versionRow(1).getByRole('button', { name: '回退', exact: true }).click()
-    await versionRow(3).waitFor({ state: 'visible' })
-    for (const version of [1, 2, 3]) assert.equal(await versionRow(version).isVisible(), true)
+    await session.page.getByRole('button', { name: '回退到此版本…' }).click()
+    await refs.dialog(session.page).getByRole('button', { name: '新建回滚草稿' }).click()
+    await refs.versionButton(session.page, '草稿 v3').waitFor({ state: 'visible' })
+    assert.deepEqual(await refs.versionNames(session.page), ['草稿 v3', '草稿 v2', '草稿 v1'])
     const revertScreenshot = path.join(receiptDir, 'writer-version-history-revert.png')
     await session.page.screenshot({ path: revertScreenshot })
     addPass('writer-history-revert', 'U15.A01',
-      'The visible v1 Revert action retained v1 and v2 while adding a visible v3 history entry.',
+      'Reverting to v1 from the comparison created a visible v3 rollback draft while retaining v1 and v2.',
       { preservedDraftIds: [dependentDraft.id, dependentV2Draft.id], createdVersion: 3,
         screenshot: path.relative(repository, revertScreenshot) })
     await quit()
@@ -456,7 +450,7 @@ async function main() {
       asarPath, asarSha256: hashFile(asarPath) },
     packageReuseReason: 'Fixed artifact hashes match and tracked or untracked product inputs do not differ from the tested SHA.',
     evidenceLevel: 'packaged-electron+real-file-grant+windows-filesystem',
-    shell: 'writer-v3',
+    shell: 'stage',
     fixture: { kind: 'synthetic-finalized-chapters', projectPath,
       chapters: chapters.map(({ chapterNumber, wordCount }) => ({ chapterNumber, wordCount })) },
     picker: { responseInjection: 'dialog.showOpenDialog only; production IPC handler issued every opaque grant', calls: pickerCalls },

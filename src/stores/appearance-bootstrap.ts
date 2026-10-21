@@ -1,27 +1,27 @@
 import { create } from 'zustand'
 import { useLocaleStore } from './locale-store'
 import {
-  APPEARANCE_STORAGE_KEY, LEGACY_THEME_STORAGE_KEY, LEGACY_UI_STORAGE_KEY, INITIAL_APPEARANCE,
-  AppearanceProfileError, migrateLegacyAppearance, parseAppearanceProfile, resolveShell, RELEASE_DEFAULT_SHELL, serializeAppearanceProfile,
-  type AppearancePatch, type CanonicalAppearanceProfile, type Shell,
+  APPEARANCE_STORAGE_KEY, INITIAL_APPEARANCE, LEGACY_THEME_STORAGE_KEY, PREVIOUS_APPEARANCE_STORAGE_KEY,
+  AppearanceProfileError, migrateLegacyAppearance, migratePreviousAppearance, parseAppearanceProfile, serializeAppearanceProfile,
+  type AppearancePatch, type CanonicalAppearanceProfile, type ColorTheme,
 } from '../shared/appearance-profile'
-import { mayHydrateAppearance, type MainReady } from '../shared/project-storage'
-import type { AppearanceSkinSnapshot, AppearanceReadbackAck } from '../shared/startup-contract'
-export type { AppearanceSkinSnapshot, AppearanceReadbackAck } from '../shared/startup-contract'
+import { mayHydrateAppearance } from '../shared/project-storage'
+import type { AppearanceReadbackAck, StartupState } from '../shared/startup-contract'
+export type { AppearanceReadbackAck } from '../shared/startup-contract'
+/** 系统当前的深浅色：外观偏好还没读出来（或要新建）时用它。 */
+export const systemColorTheme = (): ColorTheme => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+
 export interface AppearanceBootstrapDependencies {
   /** Main's real startup coordinator. Renderer fallback must never manufacture ready. */
-  waitForMainReady(): Promise<MainReady>
-  readSkinSnapshot(ready: Extract<MainReady, { state: 'ready' }>): Promise<AppearanceSkinSnapshot>
+  waitForMainReady(): Promise<StartupState>
   /** Main validates sender/origin and generation, then records this read-back acknowledgement. */
   acknowledgeReadback(ack: AppearanceReadbackAck): Promise<boolean>
   storage?: () => Pick<Storage, 'getItem' | 'setItem'>
-  systemTheme?: () => 'light' | 'dark'
+  systemTheme?: () => ColorTheme
 }
 export interface AppearanceBootstrapState {
   phase: 'pending' | 'migrated' | 'blocked'
   profile: Readonly<CanonicalAppearanceProfile> | null
-  snapshot: Readonly<AppearanceSkinSnapshot> | null
-  resolvedShell: Shell
   notice: string | null
   failureCode: string | null
   bootstrap(dependencies: AppearanceBootstrapDependencies): Promise<boolean>
@@ -29,10 +29,24 @@ export interface AppearanceBootstrapState {
   resetAppearance(): boolean
 }
 
+/**
+ * 读出这台机器上的外观偏好：已有 v3 就用它；没有时依次从 RD-10 之前的配置、更早的主题键迁移，都没有就用初始偏好。
+ * 旧键只读，回退到旧版本时它们原样还在。
+ */
+function readOrMigrate(storage: Pick<Storage, 'getItem'>, systemTheme: () => ColorTheme): { profile: CanonicalAppearanceProfile; stored: string | null } {
+  const stored = storage.getItem(APPEARANCE_STORAGE_KEY)
+  if (stored !== null) return { profile: parseAppearanceProfile(stored), stored }
+  const previous = storage.getItem(PREVIOUS_APPEARANCE_STORAGE_KEY)
+  if (previous !== null) return { profile: migratePreviousAppearance(previous), stored: null }
+  return { profile: migrateLegacyAppearance(storage.getItem(LEGACY_THEME_STORAGE_KEY), systemTheme()), stored: null }
+}
+
 /** One writer per renderer. Importing the module performs no storage read or write. */
-export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SHELL) {
+export function createAppearanceStore() {
   let storage: Pick<Storage, 'getItem' | 'setItem'> | null = null
   let acknowledgedRaw: string | null = null
+  // 主进程按窗口记着确认过的修订号，同进程重载后内存清空但它还在；重置时的修订号不能低于它。
+  let mainRevisionFloor = 0
   let inFlight: Promise<boolean> | null = null
   return create<AppearanceBootstrapState>()((set, get) => {
     const block = (error: unknown) => {
@@ -44,7 +58,7 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
       return false
     }
     return {
-      phase: 'pending', profile: null, snapshot: null, resolvedShell: 'classic', notice: null, failureCode: null,
+      phase: 'pending', profile: null, notice: null, failureCode: null,
       bootstrap(dependencies) {
         if (inFlight) return inFlight
         if (get().phase === 'migrated') return Promise.resolve(true)
@@ -52,29 +66,20 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
           set({ phase: 'pending', notice: null, failureCode: null })
           try {
             const ready = await dependencies.waitForMainReady()
-            if (ready.state !== 'ready' || typeof ready.globalGeneration !== 'string' || !mayHydrateAppearance(ready)) throw new AppearanceProfileError('MAIN_NOT_READY')
-            const skin = await dependencies.readSkinSnapshot(ready)
-            if (skin.globalGeneration !== ready.globalGeneration || skin.skinRevision !== ready.skinRevision
-              || !['classic', 'anime', 'custom'].includes(skin.backgroundSkin)) throw new AppearanceProfileError('SKIN_SNAPSHOT_NOT_READY')
+            mainRevisionFloor = Math.max(mainRevisionFloor, ready.appearanceRevisionFloor ?? 0)
+            if (!mayHydrateAppearance(ready)) throw new AppearanceProfileError('MAIN_NOT_READY')
             storage = (dependencies.storage ?? (() => window.localStorage))()
-            const existing = storage.getItem(APPEARANCE_STORAGE_KEY)
-            const imported = existing === null
-              ? migrateLegacyAppearance(storage.getItem(LEGACY_THEME_STORAGE_KEY), storage.getItem(LEGACY_UI_STORAGE_KEY),
-                (dependencies.systemTheme ?? (() => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))())
-              : parseAppearanceProfile(existing)
-            const profile: CanonicalAppearanceProfile = existing !== null && releaseDefault === 'writer' && imported.shellPreference === 'classic'
-              ? { ...imported, shellPreference: 'writer', revision: imported.revision + 1 }
-              : imported
-            const serialized = profile === imported && existing !== null ? existing : serializeAppearanceProfile(profile)
-            if (serialized !== existing) storage.setItem(APPEARANCE_STORAGE_KEY, serialized)
+            const { profile, stored } = readOrMigrate(storage,
+              dependencies.systemTheme ?? systemColorTheme)
+            const serialized = stored ?? serializeAppearanceProfile(profile)
+            if (stored === null) storage.setItem(APPEARANCE_STORAGE_KEY, serialized)
             if (storage.getItem(APPEARANCE_STORAGE_KEY) !== serialized) throw new AppearanceProfileError('APPEARANCE_READBACK_FAILED')
             const accepted = await dependencies.acknowledgeReadback({ storageKey: APPEARANCE_STORAGE_KEY,
-              profileRevision: profile.revision, globalGeneration: skin.globalGeneration, skinRevision: skin.skinRevision })
+              profileRevision: profile.revision, globalGeneration: ready.globalGeneration })
             if (accepted !== true) throw new AppearanceProfileError('MAIN_ACK_REJECTED')
             acknowledgedRaw = serialized
             if (storage.getItem(APPEARANCE_STORAGE_KEY) !== serialized) throw new AppearanceProfileError('APPEARANCE_CHANGED_DURING_ACK')
-            set({ phase: 'migrated', profile: Object.freeze(profile), snapshot: Object.freeze({ ...skin }),
-              resolvedShell: resolveShell(profile.shellPreference, releaseDefault), notice: null, failureCode: null })
+            set({ phase: 'migrated', profile: Object.freeze(profile), notice: null, failureCode: null })
             return true
           } catch (error) { return block(error) }
         }
@@ -91,7 +96,7 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
           storage.setItem(APPEARANCE_STORAGE_KEY, serialized)
           if (storage.getItem(APPEARANCE_STORAGE_KEY) !== serialized) throw new AppearanceProfileError('APPEARANCE_READBACK_FAILED')
           acknowledgedRaw = serialized
-          set({ profile: Object.freeze(next), resolvedShell: resolveShell(next.shellPreference, releaseDefault), notice: null, failureCode: null })
+          set({ profile: Object.freeze(next), notice: null, failureCode: null })
           return true
         } catch (error) { return block(error) }
       },
@@ -99,7 +104,7 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
         try {
           const target = storage ?? (typeof window === 'undefined' ? null : window.localStorage)
           if (!target) return false
-          let revision = Math.max(get().profile?.revision ?? 0, acknowledgedRaw ? parseAppearanceProfile(acknowledgedRaw).revision : 0)
+          let revision = Math.max(mainRevisionFloor, get().profile?.revision ?? 0, acknowledgedRaw ? parseAppearanceProfile(acknowledgedRaw).revision : 0)
           const existing = target.getItem(APPEARANCE_STORAGE_KEY)
           if (existing !== null) {
             try { revision = Math.max(revision, parseAppearanceProfile(existing).revision) }
@@ -108,7 +113,7 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
           const serialized = serializeAppearanceProfile({ ...INITIAL_APPEARANCE, revision: revision + 1, origin: 'author' })
           target.setItem(APPEARANCE_STORAGE_KEY, serialized)
           if (target.getItem(APPEARANCE_STORAGE_KEY) !== serialized) throw new AppearanceProfileError('APPEARANCE_READBACK_FAILED')
-          set({ phase: 'pending', profile: null, snapshot: null, resolvedShell: 'classic', notice: null, failureCode: null })
+          set({ phase: 'pending', profile: null, notice: null, failureCode: null })
           return true
         } catch { return false }
       },

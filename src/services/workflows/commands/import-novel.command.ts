@@ -26,6 +26,7 @@ import {
   requireWorkflowProjectSession,
   workflowUiText,
   workflowWritingLanguage,
+  workflowMainProcessError,
 } from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
 import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
@@ -512,10 +513,12 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         commitRequest,
         context.projectPath,
       )
-      if (!commitResult.success) throw new Error(commitResult.error || text(
+      if (!commitResult.success) throw workflowMainProcessError(
+        context,
+        commitResult.error,
         '导入全局事实原子提交失败',
         'The imported global facts could not be committed atomically.',
-      ))
+      )
       rawCommitReceipt = commitResult.receipt
     }
     const commitReceipt = requireImportGlobalFactsReceipt(
@@ -762,10 +765,12 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
         context.projectPath,
       )
       if (!commit.success || !commit.receipt) {
-        throw new Error(commit.error || text(
+        throw workflowMainProcessError(
+          context,
+          commit.error,
           '导入蓝图未能作为完整范围一次提交并回读。',
           'The imported blueprints could not be committed and read back as one complete range.',
-        ))
+        )
       }
       commitReceipt = commit.receipt
     }
@@ -781,6 +786,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
         commitReceipt.characterSyncOperation.operationId,
         context.projectPath,
         projectSession,
+        context.uiLocale,
       )
       context.data.blueprintCharacterSyncReceipt = syncReceipt
     } catch {

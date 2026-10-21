@@ -1,0 +1,375 @@
+// RD-9 作品资料页（剧情与伏笔、知识库、版本历史）的实机场景：对应计划 RD-9 的 live lane 1～10、perf 的 refs-timing 与评审视频。
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+
+import * as chapterView from './pages/chapter-view.mjs'
+import * as refs from './pages/refs.mjs'
+import * as runSheet from './pages/run-sheet.mjs'
+import * as shell from './pages/shell.mjs'
+import * as stage from './pages/stage.mjs'
+import { chromeContrastFailures, msFromClickToProse, seedStageSample } from './scenarios.mjs'
+import { countUnits, STAGE_SAMPLE } from './stage-sample.mjs'
+
+const THREAD = Object.freeze({ title: '雾钟为何提前', type: '主线', targetStartChapter: 1, targetEndChapter: 6, authorIntent: '钟声提前一刻与三十年前的沉船有关。' })
+const SECOND_DRAFT = `${STAGE_SAMPLE.drafts[3].text}\n\n林岚把纸条又读了一遍，决定等到下一次大潮再上灯室。`
+const IMPLEMENTATION_TERMS = /LanceDB|FTS|BM25|Embedding|向量|query|MCP|token/i
+export const MATERIALS = Object.freeze({
+  '守塔人小传.txt': '守塔人姓周，在灯塔守了三十年，记得每一次雾钟提前的夜晚。',
+  '沉船名录.txt': '三十年前北堤外沉没的货船名叫启明号，船上的测绘员姓林。',
+})
+
+/**
+ * 资料页的文字与它实际落在的底色之间的对比度：标题与正文 4.5:1，说明 3:1。
+ * 选中行的底色更深，选中章的序号与选中稿的说明是小字，按 4.5:1 查；对比里删去的字与正文同字号，也按 4.5:1。
+ */
+const REFS_CONTRAST = [
+  ['.stage-plot-title', 4.5], ['.stage-plot-note', 4.5], ['.stage-plot-lane b', 4.5], ['.stage-plot-event[data-state="occurred"]', 4.5],
+  ['.stage-plot-event[data-state="planned"]', 4.5], ['.stage-plot-chapter', 4.5], ['.stage-plot-help', 4.5], ['.stage-plot-stamp', 4.5],
+  ['.stage-kb-title', 4.5], ['.stage-kb-doc', 4.5], ['.stage-kb-help', 4.5], ['.stage-kb-result p', 4.5], ['.stage-kb-result-source', 4.5],
+  ['.stage-hist-title', 4.5], ['.stage-hist-name', 4.5], ['.stage-hist-chapter small', 4.5], ['.stage-hist-version-name', 4.5],
+  ['.stage-hist-meta', 4.5], ['.stage-hist-page span', 4.5], ['.stage-hist-page ins', 4.5], ['.stage-hist-page del', 4.5],
+  ['.stage-hist-chapter[aria-current="true"] .stage-hist-no', 4.5], ['.stage-hist-chapter[aria-current="true"] small', 4.5],
+  ['.stage-hist-version[aria-pressed="true"] .stage-hist-meta', 4.5],
+]
+
+/** 示例作品加一条伏笔线索与第 3 章的第二稿（v1 已审稿，v2 是新草稿）。 */
+const seedRefs = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path: projectPath, session }) => {
+  const plan = await invoke(page, 'db:narrative-thread-plan-create', THREAD, projectPath, session)
+  assert.equal(plan.success, true, plan.error)
+  const draft = await invoke(page, 'db:draft-create', { chapterNumber: 3, version: 2, source: 'write', content: SECOND_DRAFT,
+    wordCount: countUnits(SECOND_DRAFT) }, projectPath, session)
+  assert.equal(draft.success, true, draft.error)
+} })
+
+/** 系统打开对话框直接返回这些文件，不弹窗。 */
+async function stubOpenFiles(app, files) {
+  await app.evaluate(({ dialog }, selected) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: selected })
+  }, files)
+}
+
+/** 记下界面发给主进程的最近一次带项目会话的调用参数，驱动用同一会话读数据库，不必重开作品。 */
+async function watchSession(app) {
+  await app.evaluate(({ ipcMain }) => {
+    for (const [channel, handler] of ipcMain._invokeHandlers) {
+      ipcMain._invokeHandlers.set(channel, (event, ...args) => {
+        const session = args.at(-1)
+        if (session && typeof session === 'object' && 'leaseId' in session) globalThis.__driveSession = session
+        return handler(event, ...args)
+      })
+    }
+  })
+}
+
+const lastSession = app => app.evaluate(() => globalThis.__driveSession ?? null)
+
+/** 整个窗口里的可见文字，加上可访问名称、提示与占位。 */
+function everyWord(page) {
+  return page.evaluate(() => [document.body.innerText, ...[...document.querySelectorAll('[aria-label], [title], [placeholder]')]
+    .map(node => `${node.getAttribute('aria-label') ?? ''} ${node.getAttribute('title') ?? ''} ${node.getAttribute('placeholder') ?? ''}`)].join('\n'))
+}
+
+export async function importMaterials({ app, page, roots }) {
+  const files = Object.entries(MATERIALS).map(([name, content]) => {
+    const file = path.join(roots.temp, name)
+    fs.writeFileSync(file, content)
+    return file
+  })
+  await stubOpenFiles(app, files)
+  await refs.open(page, 'knowledge')
+  await refs.materials(page).getByRole('button', { name: '导入创作资料' }).click()
+  await refs.dialog(page).getByRole('button', { name: '取消', exact: true }).click()
+  for (const name of Object.keys(MATERIALS)) await refs.materialButton(page, name.replace(/\.txt$/, '')).waitFor({ state: 'visible', timeout: 30_000 })
+}
+
+async function openChapterThreeVersions(page) {
+  await refs.open(page, 'history')
+  await refs.historyChapters(page).getByRole('button', { name: /雾钟/ }).click()
+  await refs.versionButton(page, '草稿 v2').waitFor({ state: 'visible' })
+}
+
+async function assertComparisonReadOnly(page) {
+  await refs.versionButton(page, '草稿 v1').click()
+  await refs.diffPage(page).waitFor({ state: 'visible' })
+  assert.equal(await refs.diffPage(page).getAttribute('aria-readonly'), 'true')
+  assert.equal(await refs.comparison(page).locator('textarea, input, [contenteditable="true"], .cm-editor').count(), 0, '对比里没有可编辑的地方')
+  assert.ok(await refs.diffPage(page).locator('ins').count() > 0, '对比标出了新增')
+  assert.equal(await page.getByText('完成合并').count(), 0, '不再打开修稿合并')
+}
+
+/**
+ * perf 的 refs-timing 用：100 章、每章 5 稿，再用夹具模型整理出剧情树（剧情树只能经生成保存）。
+ * 两种外壳都停在剧情树页上，计时从别的资料页点回来开始。
+ */
+async function seedHundred(context) {
+  await seedHundredChapters(context)
+  const { page, fake } = context
+  fake.replyPlotTree()
+  if (await stage.root(page).count() > 0) {
+    await refs.open(page, 'plot')
+    await refs.buildPlotTree(page)
+  } else {
+    await shell.clickRail(page, '剧情')
+    await page.getByRole('button', { name: '生成剧情树' }).click()
+  }
+  await page.getByRole('button', { name: '刷新剧情树' }).waitFor({ state: 'visible', timeout: 60_000 })
+}
+
+const seedHundredChapters = context => seedStageSample(context, { totalChapters: 100, blueprintCount: 100, landOnChapter3: false, beforeReload: async ({ page, invoke, path: projectPath, session }) => {
+  for (let chapterNumber = STAGE_SAMPLE.titles.length + 1; chapterNumber <= 100; chapterNumber++) {
+    const upserted = await invoke(page, 'db:blueprint-upsert', { chapterNumber, title: `潮汐第${chapterNumber}夜`, role: '发展', purpose: '推进灯塔与沉船的线索',
+      keyEvents: '林岚在灯塔里找到新的线索', characters: [] }, projectPath, session)
+    assert.equal(upserted.success, true, upserted.error)
+  }
+  for (let chapterNumber = 1; chapterNumber <= 100; chapterNumber++) {
+    const existing = (await invoke(page, 'db:draft-list', chapterNumber, projectPath, session)).length
+    const content = STAGE_SAMPLE.drafts[chapterNumber]?.text ?? STAGE_SAMPLE.drafts[4].text
+    for (let version = existing + 1; version <= 5; version++) {
+      const created = await invoke(page, 'db:draft-create', { chapterNumber, version, source: 'write', content, wordCount: countUnits(content) }, projectPath, session)
+      assert.equal(created.success, true, created.error)
+    }
+  }
+} })
+
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+/** 元素里的文字排成了几行；标签与标题在窄宽度下不该逐字折行。 */
+function lineCount(locator) {
+  return locator.evaluate(node => {
+    const range = document.createRange()
+    range.selectNodeContents(node)
+    return new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size
+  })
+}
+
+/**
+ * 运行侧页开着时资料页的布局（计划 RD-9 的窄内容宽度）：1440 宽时内容区约 770px，1280 宽时约 620px。
+ * 导入资料会让侧页自动展开；之后确认侧页仍开着，再看各页有没有被挤坏。
+ */
+const narrowSetup = width => async context => {
+  await context.page.setViewportSize({ width, height: 900 })
+  await seedRefs(context)
+  await importMaterials(context)
+  await runSheet.openFromPalette(context.page)
+}
+
+const NARROW = Object.fromEntries([1280, 1440].flatMap(width => [
+  [`refs-narrow-plot-${width}`, { model: true, shell: 'stage', setup: narrowSetup(width), run: async ({ page, fake }) => {
+    fake.replyPlotTree()
+    await refs.open(page, 'plot')
+    await refs.buildPlotTree(page)
+    const tops = await page.locator('.stage-plot-actions').evaluate(group => [...group.children].map(child => Math.round(child.getBoundingClientRect().top + child.getBoundingClientRect().height / 2)))
+    assert.equal(new Set(tops).size, 1, `模型、生成与「更多」在同一行：${tops}`)
+    await refs.plotView(page, '伏笔线索').click()
+    assert.equal(await lineCount(page.locator('.stage-thread-name b').filter({ hasText: THREAD.title })), 1, '线索名称不折行')
+    const route = await refs.threadRoute(page, THREAD.title).boundingBox()
+    const more = await refs.threadMore(page, THREAD.title).boundingBox()
+    assert.ok(Math.abs((route.y + route.height / 2) - (more.y + more.height / 2)) < route.height, '「更多」与线索路线在同一行')
+    return { contentWidth: await page.locator('.stage-content').evaluate(node => node.clientWidth) }
+  } }],
+  [`refs-narrow-kb-${width}`, { model: true, shell: 'stage', setup: narrowSetup(width), run: async ({ page }) => {
+    await refs.open(page, 'knowledge')
+    await refs.materialButton(page, '守塔人小传').click()
+    await refs.copyEditor(page).waitFor({ state: 'visible' })
+    await refs.search(page, '雾钟')
+    const editor = await refs.copyEditor(page).boundingBox()
+    assert.ok(editor.width >= 300, `原文编辑区有可读的宽度：${editor.width}`)
+    return { contentWidth: await page.locator('.stage-content').evaluate(node => node.clientWidth), editorWidth: Math.round(editor.width) }
+  } }],
+  [`refs-narrow-history-${width}`, { model: true, shell: 'stage', setup: narrowSetup(width), run: async ({ page }) => {
+    await openChapterThreeVersions(page)
+    await refs.versionButton(page, '草稿 v1').click()
+    await refs.diffPage(page).waitFor({ state: 'visible' })
+    for (const tag of await page.locator('.stage-hist-tag').all()) assert.equal(await lineCount(tag), 1, `对比头的标签不折行：${await tag.innerText()}`)
+    const diff = await refs.diffPage(page).boundingBox()
+    assert.ok(diff.width >= 420, `对比正文有可读的宽度：${diff.width}`)
+    return { contentWidth: await page.locator('.stage-content').evaluate(node => node.clientWidth), diffWidth: Math.round(diff.width) }
+  } }],
+]))
+
+export const REFS_SCENARIOS = {
+  ...NARROW,
+  'refs-kb-finalized': { model: true, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
+    await chapterView.finalize(page, 3, { untilReadOnly: false })
+    await runSheet.waitForRunDone(page)
+    await refs.open(page, 'knowledge')
+    const shelves = page.getByRole('group', { name: '资料来源' })
+    await shelves.getByRole('button', { name: '定稿章节 1' }).waitFor({ state: 'visible', timeout: 30_000 })
+    assert.equal(await shelves.getByRole('button', { name: /^我导入的/ }).innerText(), '我导入的 0', '定稿章节不进「我导入的」')
+    await shelves.getByRole('button', { name: '定稿章节 1' }).click()
+    await refs.materialButton(page, /雾钟/).click()
+    await page.getByText('这一章由定稿自动收入').waitFor({ state: 'visible' })
+    assert.equal(await refs.copyEditor(page).count(), 0, '定稿章节在知识库里只读')
+  } },
+  'refs-regression': { model: true, setup: seedRefs, run: async ({ app, page, fake, invoke }) => {
+    fake.replyPlotTree()
+    await watchSession(app)
+    if (await stage.root(page).count() > 0) {
+      await refs.open(page, 'plot')
+      await refs.buildPlotTree(page)
+    } else {
+      await shell.clickRail(page, '剧情')
+      await page.getByRole('button', { name: '生成剧情树' }).click()
+    }
+    await page.getByRole('button', { name: '刷新剧情树' }).waitFor({ state: 'visible', timeout: 60_000 })
+    const session = await lastSession(app)
+    const { snapshot } = await invoke(page, 'db:plot-tree-read', session.projectPath, session)
+    assert.ok(snapshot, '剧情树已保存')
+    return { tracks: snapshot.tracks }
+  } },
+  'refs-plot': { model: true, shell: 'stage', setup: seedRefs, run: async ({ page, fake }) => {
+    fake.replyPlotTree()
+    await refs.open(page, 'plot')
+    await refs.buildPlotTree(page)
+    const lanes = await refs.plotLanes(page)
+    assert.deepEqual(lanes.map(lane => lane.lane), ['主线雾钟与沉船', '支线父亲的地图'], '主线与支线两轨')
+    assert.ok(lanes[0].events.some(event => event.startsWith('occurred:')), '主线有已定稿发生的事件')
+    assert.match(await page.getByText(/不参与写作/).innerText(), /只读快照/)
+    await refs.plotTable(page).getByRole('button', { name: '旧港' }).click()
+    await page.getByRole('button', { name: '打开来源：第 1 章定稿' }).waitFor({ state: 'visible' })
+  } },
+  'refs-clear': { model: true, shell: 'stage', setup: seedRefs, run: async ({ page, fake }) => {
+    fake.replyPlotTree()
+    await refs.open(page, 'plot')
+    await refs.buildPlotTree(page)
+    await refs.plotMore(page).click()
+    await refs.menuItem(page, '清除剧情树…').click()
+    await refs.dialog(page).getByRole('heading', { name: '清除剧情树？' }).waitFor({ state: 'visible' })
+  }, after: async ({ page }) => {
+    await refs.dialog(page).getByRole('button', { name: '取消', exact: true }).click()
+    await refs.plotTable(page).waitFor({ state: 'visible' })
+  } },
+  'refs-threads': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
+    await refs.open(page, 'plot')
+    await refs.plotView(page, '伏笔线索').click()
+    assert.deepEqual(await refs.routeStates(page, THREAD.title), ['todo', 'none', 'todo'])
+    await refs.threadMore(page, THREAD.title).click()
+    await refs.menuItem(page, '记录定稿里的变化').click()
+    await page.getByLabel('定稿章节').selectOption({ label: '第 1 章 · 定稿 v1' })
+    await page.getByLabel('定稿里的原文').fill('潮水刚退')
+    await page.getByLabel('理由').fill('林岚第一次听说钟声提前')
+    await page.getByRole('button', { name: '记入线索' }).click()
+    await page.getByRole('list', { name: '已确认的定稿事件' }).waitFor({ state: 'visible' })
+    assert.deepEqual(await refs.routeStates(page, THREAD.title), ['done', 'none', 'todo'], '确认后埋设一站变成已发生')
+  } },
+  /** 版本历史点一稿时它已被删掉（列表还没刷新）：对比区说明这一稿已不存在，列表重读后去掉它（#414）。 */
+  'refs-history-missing': { model: false, shell: 'stage', setup: seedRefs, run: async ({ app, page, invoke }) => {
+    await watchSession(app)
+    await openChapterThreeVersions(page)
+    const session = await lastSession(app)
+    assert.ok(session?.leaseId, '记下了界面的作品会话')
+    const first = (await invoke(page, 'db:draft-list', 3, session.projectPath, session)).find(draft => draft.version === 1)
+    assert.ok(first, '第 3 章预置了 v1 稿')
+    const deleted = await invoke(page, 'db:draft-delete', first.id, session.projectPath, session)
+    assert.equal(deleted.success, true, deleted.error)
+    await refs.versionButton(page, '草稿 v1').click()
+    await refs.comparison(page).getByText('这一稿已不存在，可能已被删除，请另选一稿。').waitFor({ state: 'visible' })
+    await refs.versionButton(page, '草稿 v1').waitFor({ state: 'detached' })
+    await refs.versionButton(page, '草稿 v2').waitFor({ state: 'visible' })
+    await refs.historyChapters(page).getByRole('button', { name: /雾钟/ }).getByText('1 稿').waitFor({ state: 'visible' })
+  } },
+  'refs-delete': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
+    await refs.open(page, 'plot')
+    await refs.plotView(page, '伏笔线索').click()
+    await refs.threadMore(page, THREAD.title).click()
+    await refs.menuItem(page, '删除线索…').click()
+    await refs.dialog(page).getByRole('heading', { name: '删除这条线索？' }).waitFor({ state: 'visible' })
+  }, after: async ({ page }) => {
+    await refs.dialog(page).getByRole('button', { name: '取消', exact: true }).click()
+    await refs.threadRoute(page, THREAD.title).waitFor({ state: 'visible' })
+  } },
+  'refs-kb': { model: true, shell: 'stage', setup: seedRefs, run: async context => {
+    const { page } = context
+    await importMaterials(context)
+    await refs.materialButton(page, '守塔人小传').click()
+    await refs.copyEditor(page).waitFor({ state: 'visible' })
+    await refs.search(page, '雾钟')
+    assert.ok((await refs.results(page).locator('mark').allInnerTexts()).includes('雾钟'), '结果片段里标出了查找词')
+    assert.doesNotMatch(await everyWord(page), IMPLEMENTATION_TERMS, '知识库页不出现实现术语')
+  } },
+  'refs-kb-dirty': { model: true, shell: 'stage', setup: seedRefs, run: async context => {
+    const { page } = context
+    await importMaterials(context)
+    await refs.materialButton(page, '守塔人小传').click()
+    await refs.copyEditor(page).fill(`${MATERIALS['守塔人小传.txt']}他从不让人上灯室。`)
+    await page.getByText('有未保存的修改').waitFor({ state: 'visible' })
+    await refs.materialButton(page, '沉船名录').click()
+    await refs.dialog(page).getByRole('heading', { name: '放弃未保存的修改？' }).waitFor({ state: 'visible' })
+  }, after: async ({ page }) => {
+    await refs.dialog(page).getByRole('button', { name: '继续编辑' }).click()
+    assert.match(await refs.copyEditor(page).inputValue(), /他从不让人上灯室。$/, '继续编辑后修改还在')
+    await page.keyboard.press('Control+S')
+    await page.getByText('有未保存的修改').waitFor({ state: 'detached' })
+  } },
+  'refs-diff': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
+    await openChapterThreeVersions(page)
+    await assertComparisonReadOnly(page)
+  } },
+  'refs-revert': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
+    await openChapterThreeVersions(page)
+    await refs.versionButton(page, '草稿 v1').click()
+    await page.getByRole('button', { name: '回退到此版本…' }).click()
+    assert.match(await refs.dialog(page).innerText(), /新建一份草稿 v3/)
+    await refs.dialog(page).getByRole('button', { name: '新建回滚草稿' }).click()
+    await refs.versionButton(page, '草稿 v3').waitFor({ state: 'visible' })
+    assert.deepEqual(await refs.versionNames(page), ['草稿 v3', '草稿 v2', '草稿 v1'], '新建 v3，v1 与 v2 都保留')
+    await refs.versionButton(page, '草稿 v3').click()
+    await page.getByText('与当前稿相同').waitFor({ state: 'visible' })
+  } },
+  'refs-dark': { model: true, shell: 'stage', setup: seedRefs, run: async context => {
+    const { page, fake } = context
+    fake.replyPlotTree()
+    await importMaterials(context)
+    await refs.materialButton(page, '守塔人小传').click()
+    await refs.search(page, '雾钟')
+    assert.deepEqual(await chromeContrastFailures(page, REFS_CONTRAST), [], '知识库对比度不足')
+    await openChapterThreeVersions(page)
+    await assertComparisonReadOnly(page)
+    assert.deepEqual(await chromeContrastFailures(page, REFS_CONTRAST), [], '版本历史对比度不足')
+    await refs.open(page, 'plot')
+    await refs.buildPlotTree(page)
+    assert.deepEqual(await chromeContrastFailures(page, REFS_CONTRAST), [], '剧情树对比度不足')
+    assert.deepEqual(await chromeContrastFailures(page), [], '外壳对比度不足')
+  } },
+  'refs-tour': { model: true, shell: 'stage', setup: seedRefs, run: async context => {
+    const { page, fake } = context
+    fake.replyPlotTree()
+    await refs.open(page, 'plot')
+    await pause(2500)
+    await refs.buildPlotTree(page)
+    await pause(2500)
+    await refs.plotTable(page).getByRole('button', { name: '旧港' }).click()
+    await pause(3000)
+    await refs.plotMore(page).click()
+    await refs.menuItem(page, '清除剧情树…').click()
+    await pause(2500)
+    await refs.dialog(page).getByRole('button', { name: '取消', exact: true }).click()
+    await refs.plotView(page, '伏笔线索').click()
+    await pause(2500)
+    await importMaterials(context)
+    await refs.materialButton(page, '守塔人小传').click()
+    await pause(2500)
+    await refs.search(page, '雾钟')
+    await pause(2500)
+    await openChapterThreeVersions(page)
+    await refs.versionButton(page, '草稿 v1').click()
+    await refs.diffPage(page).waitFor({ state: 'visible' })
+    await pause(3000)
+    await page.getByRole('button', { name: '回退到此版本…' }).click()
+    await pause(2500)
+    await refs.dialog(page).getByRole('button', { name: '新建回滚草稿' }).click()
+    await refs.versionButton(page, '草稿 v3').waitFor({ state: 'visible' })
+    await pause(3000)
+    await stage.tab(page, '剧情与伏笔').click()
+    await pause(3000)
+  } },
+  'refs-timing': { model: true, setup: seedHundred, run: async ({ page }) => {
+    const onStage = await stage.root(page).count() > 0
+    const rail = name => page.locator('.writer-left-rail').getByRole('button', { name: new RegExp(`^${name}`) })
+    const historyOpenMs = await msFromClickToProse(page, onStage ? refs.resourceButton(page, 'history') : rail('历史'),
+      '.stage-hist-chapter, .cursor-pointer', '潮汐第100夜')
+    const plotOpenMs = await msFromClickToProse(page, onStage ? refs.resourceButton(page, 'plot') : rail('剧情'), 'table button', STAGE_SAMPLE.titles[0])
+    return { plotOpenMs, historyOpenMs }
+  } },
+}

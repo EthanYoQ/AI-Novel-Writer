@@ -1239,7 +1239,7 @@ $event = [pscustomobject]@{ ProcessId = 42; ExitCodeCaptured = $true; ExitCode =
     }
   }, 45_000)
 
-  windowsIt('accepts the exact electron-builder process-check chain from one captured installer instance', async () => {
+  windowsIt.each(['smoke:win-installer', 'windows-in-app-update-e2e'])('accepts the exact electron-builder process-check chain from one captured installer instance during %s', async (step) => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-nsis-probes-'))
     const controlPath = join(root, 'control.jsonl')
     const statusPath = join(root, 'status.json')
@@ -1358,17 +1358,27 @@ internal static class ExactNsisProbeParent {
     return RunCommand(cmdPath, commandLine);
   }
 
+  private static int RunCmdFindstrProcessCheck(string cmdPath) {
+    string findstrPath = Path.Combine(Path.GetDirectoryName(cmdPath), "findstr.exe");
+    string commandLine =
+      "\"" + cmdPath + "\" /C tasklist /FI \"USERNAME eq %USERNAME%\" /FI \"IMAGENAME eq AI\u5c0f\u8bf4\u4f5c\u5bb6.exe\" /FO CSV /NH | \"" +
+      findstrPath +
+      "\" /B /I /C:\"\\\"AI\u5c0f\u8bf4\u4f5c\u5bb6.exe\\\"\"";
+    return RunCommand(cmdPath, commandLine);
+  }
+
   public static int Main(string[] args) {
     string[] payloads = new[] {
       "if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }",
       "if ((Get-ExecutionPolicy -Scope Process) -eq 'Restricted') { exit 1 } else { exit 0 }",
       "if ((Get-CimInstance -ClassName Win32_Process | ? {$_.Path -and $_.Path.StartsWith('C:\\ai-novel-release-probe-empty', 'CurrentCultureIgnoreCase')}).Count -gt 0) { exit 0 } else { exit 1 }"
     };
-    int[] results = new int[payloads.Length + 1];
+    int[] results = new int[payloads.Length + 2];
     for (int index = 0; index < payloads.Length; index++) {
       results[index] = RunProbe(args[0], payloads[index], index != 1);
     }
     results[3] = RunCmdProcessCheck(args[1]);
+    results[4] = RunCmdFindstrProcessCheck(args[1]);
     File.WriteAllText(args[2], String.Join(",", results));
     return 0;
   }
@@ -1413,7 +1423,7 @@ internal static class ExactNsisProbeParent {
         `${JSON.stringify({
           sequence: 1,
           state: 'running',
-          step: 'smoke:win-installer',
+          step,
           rootProcessId: gate.child.pid,
           rootProcessStartTimeTicks: windowsProcessStartTimeTicks(gate.child.pid),
           relatedTargetNames: ['ai-novel-writer-setup-0.4.0', 'powershell'],
@@ -1424,14 +1434,15 @@ internal static class ExactNsisProbeParent {
       writeFileSync(gate.releasePath, 'release', 'utf8')
       expect(await settleWithin(gate.child, 30_000)).toEqual({ code: 0, signal: null })
       const probeResults = readFileSync(probeResultPath, 'utf8').split(',').map(Number)
-      expect(probeResults).toHaveLength(4)
+      expect(probeResults).toHaveLength(5)
       expect(probeResults.every(exitCode => exitCode === 0 || exitCode === 1)).toBe(true)
       expect(probeResults.at(2)).toBe(1)
       expect(probeResults.at(3)).toBe(1)
+      expect(probeResults.at(4)).toBe(1)
 
       appendFileSync(
         controlPath,
-        `${JSON.stringify({ sequence: 2, state: 'step-complete', step: 'smoke:win-installer' })}\n`,
+        `${JSON.stringify({ sequence: 2, state: 'step-complete', step })}\n`,
         'utf8',
       )
       await waitForGateStatus(statusPath, 'step-completed', 30_000)
@@ -1448,19 +1459,21 @@ internal static class ExactNsisProbeParent {
         const identity = event.processIdentity as Record<string, unknown> | undefined
         return event.kind === 'process-exit' && identity?.processName === 'powershell'
       })
-      const cmdExit = events.find(event => {
+      const cmdExits = events.filter(event => {
         const identity = event.processIdentity as Record<string, unknown> | undefined
         return event.kind === 'process-exit'
           && event.exitCode === 1
           && identity?.processName === 'cmd'
           && identity?.parentExecutablePath === installerPath
       })
-      const findExit = events.find(event => {
+      const filterExit = (processName: string) => events.find(event => {
         const identity = event.processIdentity as Record<string, unknown> | undefined
         return event.kind === 'process-exit'
           && event.exitCode === 1
-          && identity?.processName === 'find'
+          && identity?.processName === processName
       })
+      const findExit = filterExit('find')
+      const findstrExit = filterExit('findstr')
 
       expect(powerShellExits).toHaveLength(3)
       expect(powerShellExits.map(event => event.exitClassification)).toEqual(
@@ -1476,10 +1489,16 @@ internal static class ExactNsisProbeParent {
         expect(identity.parentProcessStartTimeTicks).toEqual(expect.any(String))
         expect(identity).not.toHaveProperty('commandLine')
       }
-      expect(cmdExit).toMatchObject({ exitClassification: 'expected-nsis-cmd-process-check' })
+      expect(cmdExits.map(event => event.exitClassification)).toEqual([
+        'expected-nsis-cmd-process-check',
+        'expected-nsis-cmd-process-check',
+      ])
       expect(findExit).toMatchObject({ exitClassification: 'expected-nsis-find-no-match' })
-      expect((cmdExit?.processIdentity as Record<string, unknown>)).not.toHaveProperty('commandLine')
-      expect((findExit?.processIdentity as Record<string, unknown>)).not.toHaveProperty('commandLine')
+      expect(findstrExit).toMatchObject({ exitClassification: 'expected-nsis-findstr-no-match' })
+      for (const event of [...cmdExits, findExit, findstrExit]) {
+        expect((event?.processIdentity as Record<string, unknown>)).not.toHaveProperty('commandLine')
+      }
+      expect(events.some(event => event.kind === 'process-exit' && event.exitClassification === 'failure')).toBe(false)
       expect(rawEvidence).not.toContain('Get-CimInstance')
       expect(rawEvidence).not.toContain('tasklist /FI')
     } catch (error) {

@@ -7,12 +7,13 @@ import {
   GeneratePlotArchitectureCommand,
   PLOT_OUTLINE_RESUME_ERROR_CODE,
   PlotOutlineResumeAvailableError,
-  synopsisFactsFingerprint,
 } from '../architecture.command'
+import { synopsisFactsFingerprint } from '../../../../shared/plot-outline-checkpoint'
 import { createWorkflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 import { clearProjectCustomPrompts, getBuiltinPromptTemplate } from '../../../prompt-templates'
 import { composeVisibleContinuation } from '../../../../shared/visible-continuation'
 import type { GenerationRecoveryContext, VisibleCompositionReceipt } from '../../../../shared/generation-owner-contract'
+import { PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL, type PlotOutlineProgress } from '../../../../shared/plot-outline-contract'
 
 /**
  * 情节大纲批次状态机：
@@ -240,7 +241,7 @@ function makeCommand(options?: { resumeSynopsis?: boolean; synopsisRange?: { fro
   )
 }
 
-function mainOwnedResponses(harness: IpcHarness, output: string | Error) {
+function mainOwnedResponses(harness: IpcHarness, output: string | Error, plotOutline?: PlotOutlineProgress) {
   const original = harness.invoke.getMockImplementation()! as (channel: string, ...args: unknown[]) => Promise<unknown>
   const handle = { projectId: 'main', epoch: 'lease-main', rootActionId: '合成恢复根', runId: '合成恢复运行' }
   const view = { handle, status: 'running', nonReplayable: false, artifacts: [], budget: { maxAttempts: 32, maxRequestedOutputTokens: 2097152, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 } }
@@ -254,8 +255,9 @@ function mainOwnedResponses(harness: IpcHarness, output: string | Error) {
     if (channel === 'generation:begin' || channel === 'generation:read') return view
     if (channel === 'generation:read-context') return {
       modelId: 'model-1', handle, operation: 'generate-plot-outline',
-      authorInputs: [], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [],
+      authorInputs: plotOutline ? [{ id: 'architecture:author-config', text: JSON.stringify(novelConfig) }] : [], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [],
       composition, lastCompositionFinishReason: null, attemptedPurposes: [], draftSave: { kind: 'absent' },
+      ...(plotOutline ? { plotOutline } : {}),
     } satisfies GenerationRecoveryContext
     if (channel === 'generation:read-visible-composition') return composition
     if (channel === 'generation:execute') return execute()
@@ -663,6 +665,50 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
 
     await expect(makeCommand({ synopsisRange: { from: 21, to: 100 } }, true).execute({ step: {}, context, callbacks })).rejects.toThrow('项目源事实自上次生成后已变化')
 
+    expect(generation.execute).not.toHaveBeenCalled()
+    expect(harness.synopsisCommits).toHaveLength(0)
+  })
+
+  it('升级前以乱序大纲开跑、来源无效的逐章大纲任务续写时给出与恢复入口一致的说明，不露内部原因码', async () => {
+    useLLMStore.setState({ defaultModelId: '合成模型' })
+    const harness = harnessWith()
+    const synopsis = `# 情节大纲\n\n${[1, 5, 2, 3, 4].map(n => `## 第${n}章：第${n}夜\n这一夜的事。`).join('\n\n')}`
+    const generation = mainOwnedResponses(harness, '不会发送', {
+      protocol: PLOT_OUTLINE_PROTOCOL, range: { from: 3, to: 5 }, content: PLOT_OUTLINE_CONTENT, targetUnits: 600,
+      cursor: { kind: 'stopped', chapterNumber: 4, reason: 'source-invalid' }, confirmedPrefix: null, composition: null,
+      sourceExpected: { synopsis, premise, charactersArch, worldbuilding, genre: novelConfig.genre, totalChapters: 5, wordsPerChapter: 3000,
+        writingLanguage: 'zh-CN', plotStructure: 'three_act', narrativePov: 'third_limited', globalGuidance: novelConfig.globalGuidance },
+    })
+
+    const failure = await makeCommand({ resumeSynopsis: true }, true).execute({ step: {}, context, callbacks }).catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe('这次生成开跑时，大纲的章节没有按章号顺序排列，不能接着生成，恢复稿也不能保存。可以复制已生成的章节，把大纲排好后重新生成。')
+    expect(generation.execute).not.toHaveBeenCalled()
+    expect(harness.synopsisCommits).toHaveLength(0)
+  })
+
+  it('暂停的来源无效大纲任务点「断点续写」：主进程拒绝续写时说明与恢复入口一致，不露内部错误码', async () => {
+    useLLMStore.setState({ defaultModelId: '合成模型' })
+    const harness = harnessWith()
+    const synopsis = `# 情节大纲\n\n${[1, 5, 2, 3, 4].map(n => `## 第${n}章：第${n}夜\n这一夜的事。`).join('\n\n')}`
+    const plotOutline: PlotOutlineProgress = {
+      protocol: PLOT_OUTLINE_PROTOCOL, range: { from: 3, to: 5 }, content: PLOT_OUTLINE_CONTENT, targetUnits: 600,
+      cursor: { kind: 'stopped', chapterNumber: 3, reason: 'source-invalid' }, confirmedPrefix: null, composition: null,
+      sourceExpected: { synopsis, premise, charactersArch, worldbuilding, genre: novelConfig.genre, totalChapters: 5, wordsPerChapter: 3000,
+        writingLanguage: 'zh-CN', plotStructure: 'three_act', narrativePov: 'third_limited', globalGuidance: novelConfig.globalGuidance },
+    }
+    const generation = mainOwnedResponses(harness, '不会发送', plotOutline)
+    const original = harness.invoke.getMockImplementation()! as (channel: string, ...args: unknown[]) => Promise<unknown>
+    harness.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:read') return { ...(await original(channel, ...args) as object), status: 'paused', nonReplayable: true, plotOutline }
+      if (channel === 'generation:resume') throw new Error("Error invoking remote method 'generation:resume': Error: GENERATION_PLOT_OUTLINE_PREFIX_INVALID")
+      return original(channel, ...args)
+    })
+
+    const failure = await makeCommand({ resumeSynopsis: true }, true).execute({ step: {}, context, callbacks }).catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe('这次生成开跑时，大纲的章节没有按章号顺序排列，不能接着生成，恢复稿也不能保存。可以复制已生成的章节，把大纲排好后重新生成。')
+    expect(harness.invoke.mock.calls.some(([channel]) => channel === 'generation:resume')).toBe(true)
     expect(generation.execute).not.toHaveBeenCalled()
     expect(harness.synopsisCommits).toHaveLength(0)
   })

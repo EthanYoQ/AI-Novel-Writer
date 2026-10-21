@@ -189,6 +189,14 @@ export function parseHumanConfirmedReviewSnapshot(
   }
 }
 
+/** 确认后的清单另存为一份审稿，复验周期挂在它指向的原始审稿上；原始 AI 审稿就挂在自己身上。 */
+export function confirmationSourceReviewId<Id extends number | undefined>(
+  snapshot: HumanConfirmedReviewSnapshot | null,
+  reviewId: Id,
+): number | Id {
+  return snapshot?.sourceReviewId ?? reviewId
+}
+
 /** Constructs a canonical snapshot that can be persisted without mutating its source AI review. */
 export function createHumanConfirmedReviewSnapshot(
   input: HumanConfirmedReviewSnapshotInput,

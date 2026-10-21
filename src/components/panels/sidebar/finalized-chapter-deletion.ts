@@ -12,7 +12,6 @@ import {
   isProjectSessionCurrent,
   isProjectSessionPath,
 } from '../../project-session-gate'
-import { clearChapterTitleCache } from './manuscript-title-cache'
 
 type SessionProject = Pick<ProjectData, 'id' | 'path' | 'sessionLease'>
 type DeletionSurface = 'draft' | 'manuscript'
@@ -33,7 +32,6 @@ interface DeletionSurfaceConfig {
   confirmationTitle: string
   success: string
   partialFailure: (error: string) => string
-  prepareRefresh: (tabFilePath: string) => void
   refreshDrafts: (
     projectPath: string,
     chapterNumber: number,
@@ -46,27 +44,29 @@ function deletionSurfaceConfig(
   displayName: string,
   text: Localize,
 ): DeletionSurfaceConfig {
+  // 清理没做完时，在这一章的单章视图里提示重试。
+  const retryWhere = '在这一章的页面里'
+  const retryWhereEn = 'on this chapter’s page'
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
       confirmation: text(
-        `确认删除 "${displayName}"？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；失败的投影清理可在正文章节下重试。`,
-        `Delete “${displayName}”?\nThis removes the finalized fact and cleans its manuscript, knowledge, and post-processing projections. Failed cleanup can be retried below Manuscript chapters.`,
+        `确认删除 "${displayName}"？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；失败的投影清理可${retryWhere}重试。`,
+        `Delete “${displayName}”?\nThis removes the finalized fact and cleans its manuscript, knowledge, and post-processing projections. Failed cleanup can be retried ${retryWhereEn}.`,
       ),
       confirmationTitle: text('删除这一稿', 'Delete draft'),
       success: text(`已删除 ${displayName}`, `Deleted ${displayName}`),
       partialFailure: error => text(
-        `正文已删除，但派生投影仍待清理：${error}。请在正文章节下使用“重试清理”。`,
-        `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup” below Manuscript chapters.`,
+        `正文已删除，但派生投影仍待清理：${error}。请${retryWhere}使用“重试清理”。`,
+        `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup” ${retryWhereEn}.`,
       ),
-      prepareRefresh: () => undefined,
       refreshDrafts: (projectPath, chapterNumber, projectSession) => (
         useDraftStore.getState().loadChapterDrafts(chapterNumber, projectPath, projectSession)
       ),
     },
     manuscript: {
       confirmation: text(
-        `确认删除正文「${displayName}」？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；蓝图会保留。清理失败时可在正文章节下重试。`,
-        `Delete manuscript “${displayName}”?\nThis removes the finalized fact and cleans its manuscript file, knowledge document, and post-processing projections. The blueprint is preserved, and failed cleanup can be retried below Manuscript chapters.`,
+        `确认删除正文「${displayName}」？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；蓝图会保留。清理失败时可${retryWhere}重试。`,
+        `Delete manuscript “${displayName}”?\nThis removes the finalized fact and cleans its manuscript file, knowledge document, and post-processing projections. The blueprint is preserved, and failed cleanup can be retried ${retryWhereEn}.`,
       ),
       confirmationTitle: text('删除正文', 'Delete manuscript'),
       success: text(
@@ -74,10 +74,9 @@ function deletionSurfaceConfig(
         `Deleted manuscript “${displayName}” and its derived projections.`,
       ),
       partialFailure: error => text(
-        `正文已删除，但派生投影仍待清理：${error}。请使用“重试清理”。`,
-        `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup”.`,
+        `正文已删除，但派生投影仍待清理：${error}。请${retryWhere}使用“重试清理”。`,
+        `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup” ${retryWhereEn}.`,
       ),
-      prepareRefresh: clearChapterTitleCache,
       refreshDrafts: (projectPath, _chapterNumber, projectSession) => (
         useDraftStore.getState().loadAllDrafts(projectPath, projectSession)
       ),
@@ -114,7 +113,6 @@ async function finishCommittedDeletion(
   )
   if (tab) editor.closeTab(tab.id)
 
-  config.prepareRefresh(input.tabFilePath)
   await config.refreshDrafts(input.projectPath, input.chapterNumber, projectSession)
   if (!isProjectSessionCurrent(projectSession)) return null
   globalEventBus.emit('REFRESH_RESOURCE', {
@@ -163,7 +161,7 @@ async function confirmLegacyKnowledgeAbsent(
   return finishCommittedDeletion(input, projectSession, result, config, text)
 }
 
-/** Shared renderer action for both finalized-chapter sidebar surfaces. */
+/** 删除已定稿的这一章：单章视图的章节操作直接调用，删除这一稿（draft-deletion）删到定稿时也走这里。 */
 export async function deleteFinalizedChapter(
   input: DeleteFinalizedChapterInput,
 ): Promise<ChapterDeletionResult | null> {

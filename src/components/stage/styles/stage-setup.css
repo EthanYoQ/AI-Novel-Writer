@@ -1,0 +1,416 @@
+/* ================= 设定页 ================= */
+/* 视觉基准 claude-design/Setup.dc.html：760 宽的版心，核心大纲是首屏的主角，底部一条操作栏。 */
+.stage-setup {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--surface);
+}
+
+.stage-setup--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.stage-setup-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.stage-setup-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 56px var(--s-10) var(--s-12);
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.stage-setup-kicker {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+}
+
+.stage-setup-numeral {
+  font: italic 400 44px/0.8 var(--font-num);
+  color: var(--ink);
+}
+
+.stage-setup-title {
+  margin: var(--s-4) 0 10px;
+  font: 600 36px/1.25 var(--font-display);
+  letter-spacing: .02em;
+  color: var(--ink);
+}
+
+.stage-setup-lede {
+  margin: 0;
+  max-width: 34em;
+  font-size: var(--fs-14);
+  color: var(--ink-2);
+  text-wrap: balance;
+}
+
+/* ---------- 核心大纲 ---------- */
+.stage-setup-outline {
+  padding: var(--s-5) var(--s-6) var(--s-4);
+  border-radius: var(--radius-panel);
+  background: var(--paper);
+  box-shadow: var(--stage-card-drop);
+  transition: box-shadow var(--dur-fast) var(--ease);
+}
+
+.stage-setup-outline:focus-within {
+  box-shadow: 0 0 0 1px var(--accent-line), 0 0 0 4px var(--accent-soft), var(--stage-card-drop);
+}
+
+.stage-setup-outline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.stage-setup-label {
+  font-size: var(--fs-12);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.stage-setup-label[data-missing] {
+  color: var(--danger);
+}
+
+.stage-setup-required-mark {
+  font-weight: 400;
+}
+
+.stage-setup-outline-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 120px;
+  margin-top: var(--s-2);
+  padding: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  field-sizing: content;
+  background: transparent;
+  color: var(--ink);
+  font: 400 var(--fs-20)/1.9 var(--font-prose);
+}
+
+.stage-setup-outline-input::placeholder,
+.stage-setup-textarea::placeholder,
+.stage-shell .stage-setup .pi-input::placeholder {
+  color: var(--ink-4);
+}
+
+.stage-setup-outline-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--rule);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-setup-language {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stage-setup-language > select {
+  appearance: none;
+  padding: 2px var(--s-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.stage-setup-language > select:hover {
+  background: var(--sunken);
+  color: var(--ink);
+}
+
+.stage-setup-language > select:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.stage-shell .stage-setup-ai {
+  color: var(--accent);
+}
+
+.stage-shell .stage-setup-ai:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---------- 三项必填 ---------- */
+.stage-setup-required {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: var(--s-4);
+}
+
+.stage-setup-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.stage-setup-field:has(.stage-setup-label[data-missing]) .stage-select {
+  border-color: var(--danger-line);
+}
+
+.stage-setup-length {
+  height: 40px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink-3);
+  font-size: var(--fs-13);
+  white-space: nowrap;
+}
+
+.stage-setup-field:has(.stage-setup-label[data-missing]) .stage-setup-length {
+  border-color: var(--danger-line);
+}
+
+.stage-setup-length:focus-within {
+  box-shadow: var(--focus-ring);
+}
+
+.stage-setup-length > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-setup-num-input {
+  flex: none;
+  field-sizing: content;
+  min-width: 3ch;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  font: 500 var(--fs-14)/1 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.stage-setup-num-input::-webkit-inner-spin-button,
+.stage-setup-num-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.stage-setup-num-input:hover {
+  background: var(--sunken);
+}
+
+.stage-setup-num-input:focus-visible {
+  outline: none;
+  background: var(--accent-soft);
+}
+
+/* ---------- 更多设定 ---------- */
+.stage-setup-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.stage-setup-chips-label {
+  margin-right: var(--s-1);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-setup-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-5) var(--s-5);
+  border-radius: var(--radius-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--rule);
+  animation: pi-rise var(--dur) var(--ease);
+}
+
+.stage-setup-panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+}
+
+.stage-setup-panel-head > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.stage-setup-panel-title {
+  display: block;
+  margin: 0;
+  font: 600 var(--fs-16)/1.4 var(--font-display);
+  color: var(--ink);
+}
+
+.stage-setup-panel-desc {
+  margin: 2px 0 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-setup-textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 96px;
+  padding: 10px var(--s-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 var(--fs-16)/1.85 var(--font-prose);
+  resize: vertical;
+  field-sizing: content;
+}
+
+.stage-setup-textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.stage-setup-adv-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.stage-setup-adv-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.stage-setup-adv-ctl {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.stage-setup-adv-ctl .stage-setup-num-input {
+  min-width: 5ch;
+  height: 36px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-control);
+  background: var(--paper);
+}
+
+.stage-setup-adv-ctl .stage-setup-num-input:focus-visible {
+  background: var(--paper);
+  box-shadow: var(--focus-ring);
+}
+
+/* ---------- 底部操作栏 ---------- */
+/* 放不下时整项换行，提示文字至少留 10em，不被按钮挤成一字一行 */
+.stage-setup-foot {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: var(--s-3) var(--s-6);
+  border-top: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--surface) 92%, var(--paper));
+}
+
+.stage-setup-spark {
+  color: var(--accent);
+}
+
+.stage-setup-hint {
+  flex: 1 1 10em;
+  margin-left: auto;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+  text-align: right;
+}
+
+.stage-setup-hint[data-ready] {
+  color: var(--ok);
+}
+
+.stage-setup-foot kbd {
+  margin-left: var(--s-1);
+}
+
+.stage-setup-expand-list {
+  margin: 0;
+  padding-left: 1.2em;
+  color: var(--ink);
+}
+
+.pi-num-ui {
+  font-variant-numeric: tabular-nums;
+}
+
+.stage-setup-hint[data-tone='danger'],
+.stage-setup-error {
+  color: var(--danger);
+}
+
+.stage-setup-error {
+  margin: var(--s-2) 0 0;
+  font-size: var(--fs-12);
+}
+
+/* 矮窗口（1280×720 等）：首屏要放下核心大纲与三项必填，收紧留白，缺模型提示并成一行，大纲输入框先矮一些（随内容长高）。 */
+@media (max-height: 760px) {
+  .stage-setup-inner {
+    padding-top: var(--s-6);
+    gap: var(--s-4);
+  }
+
+  .stage-setup-title {
+    margin: 10px 0 6px;
+  }
+
+  .stage-setup .pi-notice-body {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: var(--s-2);
+  }
+
+  .stage-setup-outline {
+    padding-top: var(--s-4);
+  }
+
+  .stage-setup-outline-input {
+    min-height: 68px;
+  }
+}

@@ -40,11 +40,13 @@ import {
   workflowUiLocale,
   workflowUiText,
   workflowWritingLanguage,
+  workflowMainProcessError,
 } from '../workflow-project-session'
 import { writingLanguageText } from '../../../shared/writing-language'
 import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
 import type { FinalizedCharacterGenerationReceipt } from '../../../shared/finalized-character-generation'
+import { finalizationStepErrorCode } from '../../../shared/finalization-step-error'
 
 export interface FinalizeChapterParams {
   draftPath: string
@@ -112,7 +114,7 @@ export function buildFinalizePostProcessSteps(
     label: text('导入知识库', 'Import into knowledge base'),
     critical: true,
     executor: async (callbacks, context) => {
-      if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
+      if (!context) throw new Error(text('定稿后处理缺少冻结工作流上下文', 'Post-finalization processing is missing the frozen workflow context.'))
       if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
       const projectSession = requireWorkflowProjectSession(context)
       const writingLanguage = workflowWritingLanguage(context)
@@ -163,7 +165,7 @@ export function buildFinalizePostProcessSteps(
       label: text('章节剧情要点', 'Chapter plot notes'),
       critical: true,
       executor: async (callbacks, context) => {
-        if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
+        if (!context) throw new Error(text('定稿后处理缺少冻结工作流上下文', 'Post-finalization processing is missing the frozen workflow context.'))
         if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         if (
           finalizedDraftId !== undefined
@@ -302,6 +304,14 @@ export function buildFinalizePostProcessSteps(
   return steps
 }
 
+type FinalizationStepKey = 'chapter_notes' | 'character_cards'
+
+/** 本流程认识的错误码去掉 IPC 包装后原样记入步骤，界面展示时再换成可读说明。 */
+function finalizationGenerationError(error: unknown): unknown {
+  const code = error instanceof Error ? finalizationStepErrorCode(error.message) : undefined
+  return code ? new Error(code, { cause: error }) : error
+}
+
 export interface RunFinalizePostProcessParams {
   project: { path: string }
   chapterNumber: number
@@ -353,14 +363,20 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       ))
     }
     // Capture once before the pipeline's withRetry; a transport retry must keep the same failed result.
-    let retryOf: FinalizedCharacterArtifact | undefined
-    if (this.params.retryInvalidResult && (!this.params.stepKey || this.params.stepKey === 'character_cards')) {
-      const recovery = await ipc.invokeWithProjectSession(projectSession, 'finalization-generation:read', {
-        slot: { source: this.params.finalizedSource, stepKey: 'character_cards' },
-      })
-      const candidate = (recovery?.view.candidates ?? recovery?.view.artifacts)?.at(-1)
-      if (!recovery?.effect && candidate?.status === 'completed' && candidate.compositionEligible) {
-        retryOf = { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash }
+    const explicit: Partial<Record<FinalizationStepKey, { retryOf: FinalizedCharacterArtifact } | { recoverFrom: string }>> = {}
+    if (this.params.retryInvalidResult) {
+      for (const stepKey of ['chapter_notes', 'character_cards'] as const) {
+        if (this.params.stepKey && this.params.stepKey !== stepKey) continue
+        const recovery = await ipc.invokeWithProjectSession(projectSession, 'finalization-generation:read', {
+          slot: { source: this.params.finalizedSource, stepKey },
+        })
+        // 章节要点与角色状态共用一个 root，只能看本运行自己的最近一次尝试。
+        const latest = recovery?.latestAttempt
+        if (!recovery || recovery.effect || !latest || latest.inFlight) continue
+        const candidate = (recovery.view.candidates ?? recovery.view.artifacts).at(-1)
+        const usable = !latest.failureCode && latest.finishReason === 'stop' && candidate?.status === 'completed' && candidate.compositionEligible
+        if (!usable) explicit[stepKey] = { recoverFrom: latest.attemptId }
+        else if (stepKey === 'character_cards') explicit[stepKey] = { retryOf: { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash } }
       }
     }
     const generation: FinalizePostProcessGeneration = {
@@ -369,10 +385,10 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         modelId: () => generationContext.generationModelId ?? useLLMStore.getState().defaultModelId ?? '',
         ...(generationContext.data.generationBatchId && generationContext.mainGenerationRootHandle
           ? { parentRootActionId: generationContext.mainGenerationRootHandle.rootActionId } : {}),
-        ...(stepKey === 'character_cards' && retryOf ? { retryOf } : {}),
+        ...explicit[stepKey],
         cancelled: () => generationContext.cancelled,
         onHandle: handle => { generationContext.mainGenerationRunHandle = Object.freeze({ ...handle }) },
-      }),
+      }).catch(error => { throw finalizationGenerationError(error) }),
       complete: async () => { throw new Error('FINALIZATION_GENERATION_MAIN_REQUIRED') },
     }
     const allSteps = buildFinalizePostProcessSteps(
@@ -457,10 +473,7 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
     this.assertNotCancelled(context)
     const commit = await commitFinalizationSnapshot(snapshot)
     if (!commit.committed || !commit.finalizationId || !commit.contentHash || commit.draftId === undefined) {
-      throw new Error(commit.error || uiText(
-        '定稿事务未提交',
-        'The finalization transaction was not committed.',
-      ))
+      throw workflowMainProcessError(context, commit.error, '定稿事务未提交', 'The finalization transaction was not committed.')
     }
 
     // 事实已提交就立即通知 reconciliation；即使实体稿或后处理随后失败，也绝不
@@ -481,12 +494,14 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
       source: this.params.eventSource ?? 'manual',
     })
     if (!commit.success) {
-      const publicationError = commit.error || uiText(
+      const publicationError = workflowMainProcessError(
+        context,
+        commit.error,
         '定稿已提交、实体稿待发布',
         'Finalization was committed, but manuscript publication is still pending.',
       )
-      callbacks.log(publicationError)
-      throw new Error(publicationError)
+      callbacks.log(publicationError.message)
+      throw publicationError
     }
     callbacks.log(uiText(
       `定稿内容已提交到 SQLite 并发布实体稿（第${snapshot.chapterNumber}章）`,
@@ -556,7 +571,7 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
     const projectSession = requireWorkflowProjectSession(context)
     const dbDraft = await readWorkflowDraftMeta(this.params.draftPath, projectPath, projectSession)
     this.assertNotCancelled(context)
-    if (!dbDraft) throw new Error('内部状态流转异常：无法定位待定稿草稿')
+    if (!dbDraft) throw new Error(workflowUiText(context, '内部状态流转异常：无法定位待定稿草稿', 'Internal state error: the draft to finalize could not be found.'))
     return Object.freeze({
       tabId: `batch:${context.runId}:${dbDraft.id}`,
       projectPath,

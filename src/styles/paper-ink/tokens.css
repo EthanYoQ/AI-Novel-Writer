@@ -1,7 +1,7 @@
 /*
- * 纸墨令牌：渲染进程唯一含颜色字面量的文件。原语与新外壳只引用这里的变量。
- * 令牌挂在 .paper-ink 作用域而不是 :root，因为旧外壳已有同名的 --radius-sm、--radius-lg、--font-mono，
- * 放到 :root 会改变旧外壳外观；RD-10 删除旧外壳后再考虑上移。
+ * 纸墨令牌：组件与纸墨样式里唯一含颜色字面量的文件。原语与外壳只引用这里的变量。
+ * 令牌挂在 .paper-ink 作用域而不是 :root：深浅两套随作用域的 data-theme 切换；index.css 的 :root 还留着沿用旧组件用的
+ * 同名 --radius-sm、--radius-lg、--font-mono，上移会互相覆盖。
  * 色值来源：design-system.md「视觉基准」表与 claude-design/Language.dc.html。
  */
 .paper-ink {
@@ -15,7 +15,7 @@
 
   --ink: #17171A;
   --ink-2: #55555E;
-  --ink-3: #84848D;
+  --ink-3: #696972;
   --ink-4: #A1A1A8;
   --rule: rgba(23, 23, 26, .07);
   --rule-strong: rgba(23, 23, 26, .14);
@@ -60,13 +60,51 @@
   --radius-sm: 4px; --radius: 6px; --radius-control: 9px; --radius-lg: 10px; --radius-panel: 14px; --radius-pill: 999px;
 
   --sheet-w: 380px; --sheet-w-wide: 620px;
+  /* 侧页与内容区并排时内容区至少留这么宽；放不下普通侧页时侧页改为浮在内容区上（stage-panel.css 的容器查询写着同一个和：600 + 380） */
+  --content-min-w: 600px;
 
   --ease: cubic-bezier(.2, .8, .2, 1);
   --dur-fast: 140ms; --dur: 220ms;
 
-  /* 层级刻度。旧外壳的全屏层从 z 50（设置、旧对话框）到 10000（错误提示），纸墨的模态层画在它们之上：
-     旧弹窗开着时关窗，退出确认必须看得见、点得到。弹层与菜单只需在外壳内容之上。 */
-  --z-popover: 15; --z-scrim: 10010; --z-dialog: 10011;
+  /* 层级刻度。模态的遮罩与对话框远高于外壳内容：沿用的旧对话框开着时关窗，退出确认必须看得见、点得到。
+     弹层与菜单只需在外壳内容之上。 */
+  --z-sheet: 5; --z-popover: 15; --z-scrim: 10010; --z-dialog: 10011;
+  /* 退出确认与命令式弹窗（alertError、confirm）高一级，迁移后的旧对话框盖不住它们。每一层的遮罩与对话框包在一个
+     .pi-prompt-layer 层叠上下文里、同在纸墨宿主下：谁后弹出谁在上，上层遮罩整个压住下层，和 Radix 把焦点交给最新一层一致 */
+  --z-prompt: 10012;
+  /* 提示栈画在模态之上：对话框开着时到达的结果也看得见 */
+  --z-toast: 10020;
+
+  /* 浮笺：菜单、弹层、通知、对话框共用的一张纸 */
+  --layer: var(--paper);
+  --shadow-dialog: 0 0 0 1px rgba(23, 23, 26, .08), 0 2px 6px -2px rgba(23, 23, 26, .08), 0 28px 56px -24px rgba(23, 23, 26, .42);
+
+  /* 按钮材质。派生色一律从基础令牌 color-mix 得出，换主色时不漂移。
+     浅色的按下色从 --accent-hover 派生：从 --accent 派生会比悬停色还浅，按下去反而变亮。 */
+  --accent-edge: color-mix(in srgb, var(--accent) 70%, var(--ink));
+  --accent-press: color-mix(in srgb, var(--accent-hover) 82%, var(--ink));
+  --accent-base: color-mix(in srgb, var(--accent) 56%, var(--ink));
+  --accent-top: color-mix(in oklab, var(--accent) 97%, white);
+  --accent-hover-top: color-mix(in oklab, var(--accent-hover) 97%, white);
+  --hi: rgba(255, 255, 255, .28);
+  --paper-hi: rgba(255, 255, 255, .9);
+  --paper-top: var(--paper);
+  --paper-foot: color-mix(in oklab, var(--paper) 98.5%, var(--ink));
+  --paper-edge: color-mix(in srgb, var(--ink) 16%, transparent);
+  /* 次按钮按下：纸片被压进桌面，比纸面（也就是悬停时的底色）更深 */
+  --paper-press: var(--surface-2);
+  /* 控件边线：--edge 在外框、面板、纸面上都刚过 3:1，--edge-strong 用于底沿与悬停 */
+  --edge: color-mix(in srgb, var(--ink) 49%, transparent);
+  --edge-strong: color-mix(in srgb, var(--ink) 66%, transparent);
+  --lift: rgba(23, 23, 26, .16);
+  --lift-soft: rgba(23, 23, 26, .1);
+  --lift-accent: color-mix(in srgb, var(--accent-edge) 72%, transparent);
+  --sink: rgba(23, 23, 26, .2);
+  --wash: color-mix(in srgb, var(--ink) 6%, transparent);
+  --wash-strong: color-mix(in srgb, var(--ink) 11%, transparent);
+  --danger-edge: color-mix(in srgb, var(--danger) 70%, transparent);
+  --danger-hover: color-mix(in srgb, var(--danger) 86%, var(--ink));
+  --danger-press: color-mix(in srgb, var(--danger) 74%, var(--ink));
 
   background: var(--frame);
   color: var(--ink);
@@ -86,7 +124,7 @@
 
   --ink: #E6E4DF;
   --ink-2: #A3A2AB;
-  --ink-3: #77767F;
+  --ink-3: #8B8A93;
   --ink-4: #5E5D66;
   --rule: rgba(255, 255, 255, .08);
   --rule-strong: rgba(255, 255, 255, .16);
@@ -113,4 +151,26 @@
   --shadow-pop: 0 0 0 1px rgba(255, 255, 255, .08), 0 20px 48px -12px rgba(0, 0, 0, .65);
   --shadow-seg: 0 1px 2px rgba(0, 0, 0, .5);
   --scrim: rgba(0, 0, 0, .55);
+
+  --shadow-dialog: 0 0 0 1px rgba(255, 255, 255, .08), 0 2px 6px -2px rgba(0, 0, 0, .5), 0 32px 72px -24px rgba(0, 0, 0, .8);
+  /* 深色下 --ink 是浅色，外沿与按下要往 --frame 方向压暗 */
+  --accent-edge: color-mix(in srgb, var(--accent) 62%, var(--frame));
+  --accent-press: color-mix(in srgb, var(--accent) 84%, var(--frame));
+  --accent-base: color-mix(in srgb, var(--accent) 48%, var(--frame));
+  --hi: rgba(255, 255, 255, .5);
+  --paper-hi: rgba(255, 255, 255, .06);
+  --paper-top: color-mix(in oklab, var(--paper) 97%, var(--ink));
+  --paper-foot: var(--paper);
+  --paper-edge: rgba(0, 0, 0, .55);
+  /* 深色的 --surface-2 比纸面亮，按下要往 --frame 方向压 */
+  --paper-press: color-mix(in srgb, var(--paper) 55%, var(--frame));
+  --edge: color-mix(in srgb, var(--ink) 40%, transparent);
+  --edge-strong: color-mix(in srgb, var(--ink) 56%, transparent);
+  --lift: rgba(0, 0, 0, .5);
+  --lift-soft: rgba(0, 0, 0, .4);
+  --lift-accent: rgba(0, 0, 0, .55);
+  --sink: rgba(0, 0, 0, .45);
+  --wash: color-mix(in srgb, var(--ink) 7%, transparent);
+  --wash-strong: color-mix(in srgb, var(--ink) 12%, transparent);
+  --danger-press: color-mix(in srgb, var(--danger) 80%, var(--frame));
 }

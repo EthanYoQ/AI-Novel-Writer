@@ -7,17 +7,15 @@ function source(file: string) {
 }
 
 const sessionGatedAsyncFiles = [
-  'src/components/pages/KnowledgeOverview.tsx',
-  'src/components/panels/KnowledgePanel.tsx',
+  'src/components/stage/knowledge/use-knowledge-base.ts',
   'src/components/editor/ArchFileViewer.tsx',
-  'src/components/dialogs/BatchChapterCreationDialog.tsx',
-  'src/components/dialogs/ChapterCreationDialog.tsx',
-  'src/components/dialogs/DirectoryConfigDialog.tsx',
-  'src/components/editor/CharacterEditor.tsx',
-  'src/components/editor/DraftEditor.tsx',
-  'src/components/editor/VersionHistory.tsx',
-  'src/components/editor/WorldBuildingEditor.tsx',
-  'src/components/editor/NovelConfigEditor.tsx',
+  'src/components/dialogs/use-batch-chapter-form.ts',
+  'src/components/dialogs/use-directory-config-form.ts',
+  'src/components/editor/use-character-profile.ts',
+  'src/components/stage/history/use-version-history.ts',
+  'src/components/editor/use-architecture-overview.ts',
+  'src/components/stage/plot/use-plot-threads.ts',
+  'src/components/editor/use-novel-config-form.ts',
   'src/components/dialogs/ExportDialog.tsx',
   'src/components/dialogs/ClearProjectDataDialog.tsx',
 ]
@@ -33,13 +31,11 @@ describe('UI project session gates', () => {
 
   it('uses frozen-session IPC for UI mutations instead of recapturing by path', () => {
     const mutationSurfaces = [
-      'src/components/pages/KnowledgeOverview.tsx',
-      'src/components/panels/KnowledgePanel.tsx',
-      'src/components/editor/ArchFileViewer.tsx',
-      'src/components/dialogs/BatchChapterCreationDialog.tsx',
-      'src/components/dialogs/ChapterCreationDialog.tsx',
-      'src/components/editor/DraftEditor.tsx',
-      'src/components/editor/VersionHistory.tsx',
+      'src/components/stage/knowledge/use-knowledge-base.ts',
+          'src/components/editor/ArchFileViewer.tsx',
+      'src/components/dialogs/use-batch-chapter-form.ts',
+          'src/components/editor/use-draft-actions.ts',
+      'src/components/stage/history/use-version-history.ts',
     ]
 
     for (const file of mutationSurfaces) {
@@ -48,7 +44,8 @@ describe('UI project session gates', () => {
   })
 
   it('passes the frozen session through DraftEditor helper calls that perform async work', () => {
-    const draftEditor = source('src/components/editor/DraftEditor.tsx')
+    // 单章视图的草稿异步动作在 use-draft-actions 里。
+    const draftEditor = source('src/components/editor/use-draft-actions.ts')
 
     expect(draftEditor).toContain('parseDraftMeta(filePath, projectKey, projectSession)')
     expect(draftEditor).toContain('readDraftBody(filePath, projectKey, projectSession)')

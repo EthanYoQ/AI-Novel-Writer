@@ -71,8 +71,8 @@ describe('structured character roster static contract', () => {
     const projectClear = source('electron/repositories/project-clear-repository.ts')
     const roster = source('electron/repositories/character-roster-repository.ts')
     const workflow = source('src/services/workflows/architecture-workflow.ts')
-    const projectTree = source('src/components/panels/sidebar/ProjectTree.tsx')
-    const worldBuilding = source('src/components/editor/WorldBuildingEditor.tsx')
+    const architectureSection = source('src/components/stage/architecture/ArchitectureSection.tsx')
+    const worldBuilding = source('src/components/editor/use-architecture-overview.ts')
     const archFileViewer = source('src/components/editor/ArchFileViewer.tsx')
 
     for (const channel of [
@@ -97,8 +97,7 @@ describe('structured character roster static contract', () => {
     expect(workflow).not.toContain('runArchCharacterExtract')
     expect(workflow).not.toContain('createCharacterExtractSteps')
     expect(workflow).not.toContain('runPostProcessPipeline')
-    expect(projectTree).toContain("const isCharacterProjection = f.key === 'characters'")
-    expect(projectTree).toContain('...(isCharacterProjection ? [] : [')
+    expect(architectureSection).toContain("...(!cast && filled ? [{ id: 'danger'")
     expect(worldBuilding).toContain('useCharacterRosterRepair')
     expect(archFileViewer).toContain('useCharacterRosterRepair')
     expect(worldBuilding).toContain("characters: rosterSnapshot?.status === 'ready'")

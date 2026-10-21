@@ -7,12 +7,14 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const packageDir = process.argv.find(arg => arg.startsWith('--package-dir='))?.slice('--package-dir='.length)
 const expectedAsar = process.argv.find(arg => arg.startsWith('--asar-sha256='))?.slice('--asar-sha256='.length)
 assert(packageDir && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''), 'pass --package-dir=<fresh win-unpacked> --asar-sha256=<fresh bundle hash>')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 assert(fs.statSync(executablePath).isFile() && fs.statSync(asarPath).isFile())
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -29,11 +31,7 @@ const marker = `V3 合成正文 ${runId}`
 const steps = []
 const pass = (name, observed) => steps.push({ name, outcome: 'PASS', observed })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
-const editorBody = locator => locator.evaluate(element => Array.from(element.querySelectorAll('.cm-line'), line => {
-  const copy = line.cloneNode(true)
-  copy.querySelector('.cm-lp-paperhead')?.remove()
-  return copy.textContent
-}).join('\n'))
+const editorBody = stage.proseBody
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
 async function launch() {
@@ -45,24 +43,17 @@ async function launch() {
   try {
     const page = await app.firstWindow({ timeout: 30_000 })
     page.setDefaultTimeout(15_000)
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForStage(page)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-    await page.evaluate(() => {
-      const key = 'ai-novel-writer-appearance'
-      const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-      localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer', revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
-    })
-    await page.reload()
-    await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
     return { app, page }
   } catch (error) { await app.close().catch(() => {}); throw error }
 }
 
 async function openViaShelf(page) {
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-  await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, projectName)
+  await stage.waitForWork(page, projectName)
 }
 
 async function main() {
@@ -79,8 +70,7 @@ async function main() {
   try {
     app = (await launch()).app
     const page = await app.firstWindow()
-    const startupNotice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await startupNotice.isVisible()) await startupNotice.getByRole('button', { name: '知道了', exact: true }).click()
+    await stage.dismissMigrationNotice(page)
     await page.screenshot({ path: path.join(receiptDir, 'v3-shelf-empty.png') })
     currentStep = 'fixture-create-via-IPC'
     const project = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName,
@@ -105,20 +95,17 @@ async function main() {
     ;({ app } = await launch())
     const editorPage = await app.firstWindow()
     await openViaShelf(editorPage)
-    assert.equal(await editorPage.locator('[data-shell-variant="v3"]').count(), 1)
+    assert.equal(await stage.root(editorPage).count(), 1)
     pass('shelf-open', { projectName })
     currentStep = 'edit-save'
-    await editorPage.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    const body = editorPage.locator('.cm-content[contenteditable="true"]')
-    await body.waitFor({ state: 'visible' })
+    const body = await stage.openChapterVersion(editorPage, 1, 1)
     assert.equal(await editorBody(body), fixtureBody, 'fixture body missing before edit')
     await body.click()
     await editorPage.keyboard.press('Control+End')
     await editorPage.keyboard.type(marker)
     const savedUiBody = await editorBody(body)
     assert.equal(savedUiBody, fixtureBody + marker, 'UI body changed beyond requested append')
-    await editorPage.locator('button[title="保存（⌘S）"]').click()
-    await editorPage.getByRole('status').filter({ hasText: /^已保存$/ }).waitFor({ state: 'visible' })
+    await stage.saveProse(editorPage)
     const dbPath = path.join(projectPath, '.ai-novel', 'project.db')
     assert.equal(path.relative(scratch, dbPath).startsWith('..'), false)
     const db = new Database(dbPath, { fileMustExist: true, readonly: true })
@@ -134,8 +121,7 @@ async function main() {
     ;({ app } = await launch())
     const reopenedPage = await app.firstWindow()
     await openViaShelf(reopenedPage)
-    await reopenedPage.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-    const reopenedBody = reopenedPage.locator('.cm-content[contenteditable="true"]')
+    const reopenedBody = await stage.openChapterVersion(reopenedPage, 1, 1)
     await reopenedBody.getByText(marker, { exact: false }).waitFor({ state: 'visible' })
     assert.equal(await editorBody(reopenedBody), savedUiBody, 'reopened UI body differs from saved UI')
     pass('new-process-reopen', { draftId, marker })

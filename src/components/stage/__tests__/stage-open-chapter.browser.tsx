@@ -3,7 +3,6 @@ import type { StoreApi } from 'zustand'
 
 import type { ProjectData, ProjectSessionContext } from '../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
-import { useAppearanceStore } from '../../../stores/appearance-bootstrap'
 import { useDraftStore } from '../../../stores/draft-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { navigate } from '../../../stores/navigation/navigation-intents'
@@ -18,7 +17,7 @@ function snapshot<T>(store: StoreApi<T>): () => void {
   const state = store.getState()
   return () => store.setState(state, true)
 }
-const restores = [snapshot(useAppearanceStore), snapshot(useDraftStore), snapshot(useEditorStore), snapshot(useStageStore), snapshot(useProjectStore)]
+const restores = [snapshot(useDraftStore), snapshot(useEditorStore), snapshot(useStageStore), snapshot(useProjectStore)]
 
 /** 主进程的草稿接口：每章一份草稿，按章设定返回前的延迟，或直接失败。 */
 function installDrafts(behavior: Record<number, { delayMs?: number; error?: string; empty?: boolean }>) {
@@ -43,7 +42,6 @@ const activeTab = () => useEditorStore.getState().tabs.find(tab => tab.id === us
 const settle = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 beforeEach(() => {
-  useAppearanceStore.setState({ resolvedShell: 'stage' })
   setActiveProjectSessionContext(SESSION)
   useProjectStore.setState({ currentProject: { id: SESSION.projectId, sessionLease: SESSION.leaseId, name: '灯塔', path: PATH, novelConfig: {} } as unknown as ProjectData })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
@@ -69,6 +67,29 @@ describe('在新外壳里打开一章', () => {
     expect(activeTab()).toMatchObject({ chapterNumber: 5, content: '第 5 章的正文', name: '第 5 章 · 第5章标题' })
   })
 
+  it.each([
+    ['设定', { kind: 'stage', stage: 'setup' } as const, 'config'],
+    ['版本历史', { kind: 'resource', page: 'history' } as const, 'version-history'],
+  ])('点了一章、正文还没读完就去%s：读完的那一章不抢回标签', async (_name, intent, type) => {
+    installDrafts({ 4: { delayMs: 80 } })
+    navigate({ kind: 'chapter', chapterNumber: 4 })
+    navigate(intent)
+    await vi.waitFor(() => expect(activeTab()?.type).toBe(type))
+    await settle(150)
+    expect(activeTab()?.type).toBe(type)
+    expect(useEditorStore.getState().tabs.map(tab => tab.type)).toEqual([type])
+  })
+
+  it('点「正文」时几章都在写：打开最后一章在写的，只有空稿的章不算', async () => {
+    installDrafts({})
+    const draft = (chapterNumber: number, wordCount: number) => [{ id: chapterNumber * 10 + 1, chapterNumber, version: 1, status: 'draft', wordCount,
+      createdAt: '2026-10-12 00:00:00', source: 'write', filePath: `ai-novel://draft/${chapterNumber * 10 + 1}`, fileName: 'draft_v1.md' }]
+    useDraftStore.setState({ draftsByChapter: { 4: draft(4, 1800), 5: draft(5, 2400), 6: draft(6, 0) } as never, dataProjectSession: SESSION, loading: false })
+    navigate({ kind: 'stage', stage: 'manuscript' })
+    await vi.waitFor(() => expect(activeTab()?.chapterNumber).toBe(5))
+    expect(activeTab()).toMatchObject({ chapterNumber: 5, content: '第 5 章的正文' })
+  })
+
   it('读取失败时提示作者，而不是点了没反应', async () => {
     installDrafts({ 6: { error: '磁盘读取失败' } })
     const error = vi.spyOn(toast, 'error').mockImplementation(() => undefined)
@@ -77,14 +98,15 @@ describe('在新外壳里打开一章', () => {
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
-  it('待写的章落到蓝图并选中它；再点一次同一章，选中请求递增，蓝图页会重新选中', async () => {
+  it('待写的章打开它的单章视图（RD-8）：再点一次同一章只切过去，不再开第二个标签', async () => {
     installDrafts({ 7: { empty: true } })
     navigate({ kind: 'chapter', chapterNumber: 7 })
-    await vi.waitFor(() => expect(activeTab()).toMatchObject({ type: 'chapter-card', chapterNumber: 7, chapterSelectRequest: 1 }))
-    navigate({ kind: 'chapter', chapterNumber: 7 })
-    await vi.waitFor(() => expect(activeTab()?.chapterSelectRequest).toBe(2))
+    await vi.waitFor(() => expect(activeTab()).toMatchObject({ type: 'chapter', chapterNumber: 7, name: '第 7 章 · 第7章标题' }))
+    expect(activeTab()?.filePath).toBeUndefined()
     openBuiltinEditor('chapter-card-editor', '章节蓝图', 'chapter-card')
-    expect(activeTab()?.chapterSelectRequest).toBe(2)
+    navigate({ kind: 'chapter', chapterNumber: 7 })
+    await vi.waitFor(() => expect(activeTab()?.type).toBe('chapter'))
+    expect(useEditorStore.getState().tabs.map(tab => tab.type)).toEqual(['chapter', 'chapter-card'])
   })
 
   it('草稿已按这次会话载入完时直接用 store 里的草稿，不再单独读', async () => {

@@ -27,6 +27,7 @@ import {
   projectStoragePreflightFailure,
 } from '../services/project-storage-preflight'
 import { ImportRunRepository } from '../repositories/import-run-repository'
+import { FinalizationRepository } from '../repositories/finalization-repository'
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
@@ -361,7 +362,14 @@ export function registerKBController(
 
   ipcMain.handle('kb:list-documents', async (_event, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
-    return knowledgeBaseLoader.run((kb) => kb.listDocuments(projectPath))
+    return knowledgeBaseLoader.run(async (kb) => {
+      const documents = await kb.listDocuments(projectPath)
+      const chapters = FinalizationRepository.knowledgeDocumentChapters()
+      return documents.map(document => {
+        const finalizedChapter = chapters.get(document.id)
+        return finalizedChapter === undefined ? document : { ...document, finalizedChapter }
+      })
+    })
   })
 
   ipcMain.handle('kb:read-document-copy', async (_event, docId: string, expectedProjectPath: string) => {

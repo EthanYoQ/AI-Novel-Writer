@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { PLOT_OUTLINE_RESUME_ERROR_CODE } from '../../services/workflows/commands/architecture.command'
+import { PLOT_OUTLINE_RESUME_ERROR_CODE, PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE } from '../../services/workflows/commands/architecture.command'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { projectSessionContextFromProject, sameProjectPathKey, sameProjectSessionContext } from '../../shared/project-session-context'
 import { navigate } from '../../stores/navigation/navigation-intents'
@@ -8,18 +8,21 @@ import type { WorkflowRun } from '../../stores/workflow-store'
 import { toast } from '../ui/Toast'
 import { presentWorkflowFailure, type WorkflowFailurePresentation } from '../panels/ai-output-failure-presentation'
 
-/** 失败运行在两种外壳里都显示的内容：标题、原因、错误码，以及能接着做什么。 */
+/** 运行侧页为一次失败的运行显示的内容：标题、原因、错误码，以及能接着做什么。 */
 export interface RunFailure {
   title: string
   errorCode?: string
   presentation: WorkflowFailurePresentation
   /** 情节大纲生成被截断且已完成部分已保存：可以从断点续写。 */
   canResumeOutline: boolean
+  /** 情节大纲途中来源被改：同一运行不能恢复，只能到架构页从本批起始章重新生成。 */
+  canRestartOutline: boolean
 }
 
 export function runFailure(run: WorkflowRun): RunFailure {
   const failedStep = run.steps.find(step => step.status === 'failed')
   const currentStep = run.steps[run.currentStepIndex] ?? run.steps[0]
+  const failedWith = (code: string) => run.errorCode === code || failedStep?.errorCode === code
   return {
     title: run.title,
     errorCode: run.errorCode ?? failedStep?.errorCode,
@@ -31,7 +34,8 @@ export function runFailure(run: WorkflowRun): RunFailure {
       run.promptBudgetReport ?? currentStep?.promptBudgetReport,
       failedStep?.generationActivity ?? currentStep?.generationActivity,
     ),
-    canResumeOutline: run.errorCode === PLOT_OUTLINE_RESUME_ERROR_CODE || failedStep?.errorCode === PLOT_OUTLINE_RESUME_ERROR_CODE,
+    canResumeOutline: failedWith(PLOT_OUTLINE_RESUME_ERROR_CODE),
+    canRestartOutline: failedWith(PLOT_OUTLINE_SOURCE_CHANGED_ERROR_CODE),
   }
 }
 
@@ -44,6 +48,10 @@ export function isCurrentSessionRun(run: Pick<WorkflowRun, 'projectPath' | 'proj
 
 export function openNovelConfigurationFor(run: WorkflowRun): void {
   if (isCurrentSessionRun(run)) navigate({ kind: 'stage', stage: 'setup' })
+}
+
+export function openArchitectureFor(run: WorkflowRun): void {
+  if (isCurrentSessionRun(run)) navigate({ kind: 'stage', stage: 'architecture' })
 }
 
 /** 从断点续写情节大纲：已完成部分已存为不完整大纲，这次让模型接着末尾写。 */

@@ -1,4 +1,4 @@
-import { assertGlobalDataReady, getGlobalDataGeneration } from './services/app-data-locator'
+import { assertGlobalDataReady } from './services/app-data-locator'
 import { getCurrentProjectPath, getProjectDb } from './database'
 
 import { registerConfigController } from './controllers/config-controller'
@@ -18,9 +18,7 @@ import { registerFinalizationController } from './controllers/finalization-contr
 import { registerChapterLifecycleController } from './controllers/chapter-lifecycle-controller'
 import { registerExternalFileGrantController } from './controllers/external-file-grant-controller'
 import { registerAppDataController } from './controllers/app-data-controller'
-import { registerSkinController } from './controllers/skin-controller'
 import { registerCharacterAvatarController } from './controllers/character-avatar-controller'
-import { skinService } from './services/skin-service'
 import { CharacterAssetService } from './services/character-asset-service'
 import { projectAccess } from './services/project-access'
 import { getProjectDataRoot } from './services/project-data-locator'
@@ -32,8 +30,6 @@ import { CloudProjectBindingStore } from './services/cloud-project-binding-store
  */
 export function registerIPCHandlers() {
   assertGlobalDataReady()
-  skinService.getStartupSnapshot(getGlobalDataGeneration())
-  registerSkinController()
 
   // 挂载控制器路由
   registerWindowController()

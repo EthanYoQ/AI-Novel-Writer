@@ -18,6 +18,7 @@ import {
   sameProjectSessionContext,
 } from '../shared/project-session-context'
 import { localize } from '../i18n/core'
+import { ARCH_STEP_NAMES } from './architecture-step-selection'
 import type { Locale } from '../i18n/types'
 
 import { readPostProcessStatus, getChapterFinalizeScope, getFailedStepLabels } from './workflows/workflow-utils'
@@ -118,7 +119,7 @@ export async function guardDirectoryGeneration(
   const premiseLabel = localize(uiLocale, '故事前提', 'Story premise')
   if (!core || !checkHasContent(core.premise)) missing.push(premiseLabel)
   if (!core || !checkHasContent(core.charactersArch)) {
-    missing.push(localize(uiLocale, '角色图谱', 'Character graph'))
+    missing.push(localize(uiLocale, ...ARCH_STEP_NAMES.characters))
   }
   if (!core || !checkHasContent(core.worldbuilding)) {
     missing.push(localize(uiLocale, '世界观', 'Worldbuilding'))
@@ -147,8 +148,8 @@ export async function guardDirectoryGeneration(
       ok: false,
       message: localize(
         uiLocale,
-        '角色卡不存在（数据库中没有角色记录）。\n\n请先在「故事架构」中生成角色图谱（会自动创建角色卡），或在「角色管理」中手动创建角色卡。',
-        'No character cards exist (the database has no character records).\n\nGenerate the character graph in Story Architecture, or create character cards manually.',
+        '角色卡不存在（数据库中没有角色记录）。\n\n请先在架构里生成角色名单（会同时建立角色卡），或手动添加角色。',
+        'No character cards exist (the database has no character records).\n\nGenerate the cast in the architecture (this creates the cards), or add characters manually.',
       ),
     }
   }
@@ -210,8 +211,8 @@ export async function guardChapterWriting(
       ok: false,
       message: localize(
         uiLocale,
-        '角色卡不存在（数据库中没有角色记录）。\n\nAI 写稿需要角色状态作为上下文，请先在「故事架构」中生成角色图谱，或在「角色管理」中手动创建角色卡。',
-        'No character cards exist (the database has no character records).\n\nAI drafting needs character state as context. Generate the character graph in Story Architecture or create character cards manually.',
+        '角色卡不存在（数据库中没有角色记录）。\n\nAI 写稿需要角色状态作为上下文，请先在架构里生成角色名单，或手动添加角色。',
+        'No character cards exist (the database has no character records).\n\nAI drafting needs character state as context. Generate the cast in the architecture, or add characters manually.',
       ),
     }
   }

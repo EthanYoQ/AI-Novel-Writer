@@ -118,6 +118,13 @@ describe('FinalizationRepository transaction seam', () => {
       .toEqual({ knowledge_document_id: '' })
   })
 
+  it('maps only linked knowledge documents to their finalized chapter', () => {
+    commitSnapshot()
+    expect(FinalizationRepository.knowledgeDocumentChapters()).toEqual(new Map())
+    FinalizationRepository.linkKnowledgeDocument(17, 'knowledge-document')
+    expect(FinalizationRepository.knowledgeDocumentChapters()).toEqual(new Map([['knowledge-document', 1]]))
+  })
+
   it('commits content, word count, finalized status, and pending publication outbox as one fact', () => {
     const committed = commitSnapshot()
 

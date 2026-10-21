@@ -9,6 +9,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad } from './verify-win-package.mjs'
+import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const scriptPath = fileURLToPath(import.meta.url)
@@ -19,7 +21,7 @@ const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.s
 const fixedPackage = option('package-dir')
 const priorPath = option('reuse-package')
 if (process.argv.includes('--help')) {
-  process.stdout.write('Use --package-dir=<win-unpacked> --build-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash> for isolated packaged V3 U16 recovery boundaries.\n')
+  process.stdout.write('Use --package-dir=<win-unpacked> --build-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash> for isolated packaged stage U16 recovery boundaries.\n')
   process.exit(0)
 }
 assert(fixedPackage || priorPath && fs.existsSync(priorPath), 'pass fixed package and hashes or --reuse-package=<verified build receipt>')
@@ -30,7 +32,7 @@ if (prior) {
   assert(prior.build?.buildSha && prior.testedSha === prior.build.buildSha && prior.artifact?.asarSha256)
 }
 const packageDir = path.resolve(fixedPackage ?? path.join(repository, 'release', JSON.parse(fs.readFileSync(path.join(repository, 'package.json'))).version, 'win-unpacked'))
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const runId = randomUUID()
 const receiptDir = path.join(repository, '.runtime', '.cache', 'f05-u16-recovery-boundaries', runId)
@@ -214,37 +216,46 @@ async function launch(profile) {
     fs.appendFileSync(path.join(receiptDir, 'main-process.log'), String(chunk).replaceAll(scratch, '<isolated-scratch>')))
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible' })
+  await stage.waitForStage(page)
   assert.equal(path.resolve(await app.evaluate(({ app }) => app.getPath('userData'))), profile.userData)
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const appearance = JSON.parse(localStorage.getItem(key))
-    localStorage.setItem(key, JSON.stringify({ ...appearance, shellPreference: 'writer', revision: appearance.revision + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await page.locator('.writer-shell[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
   runningApps.add(app)
   return { app, page }
 }
 
 async function close(app) { await app.close(); runningApps.delete(app) }
 
+/** 从书房打开作品，再经设置分组进入「项目备份」。 */
 async function openPanel(page, name) {
-  await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  await page.locator('.writer-left-rail button[title="欢迎页"]').click()
-  const shelf = page.locator('.writer-shelf')
-  await shelf.waitFor({ state: 'visible' })
-  await shelf.getByRole('button', { name: `打开《${name}》` }).click()
-  await page.locator('.writer-left-rail button[title="设置"]').click()
-  await page.getByRole('complementary').getByRole('button', { name: '项目备份', exact: true }).click()
-  await page.getByRole('heading', { name: '项目备份', exact: true }).waitFor()
+  await stage.waitForStage(page)
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, name)
+  await stage.waitForWork(page, name)
+  await stage.openSettings(page)
+  await stage.showSettingsPage(page, '项目备份')
   const panel = page.getByTestId('project-backup-panel')
   await panel.getByText('本地便携存档').waitFor()
   currentPanel = panel
   currentPage = page
   return panel
+}
+
+/**
+ * 书架上同名的书有两本（原稿与刚恢复的分支副本）时，按书架顺序取最近打开的那本。
+ * 它若已是当前作品，点封面回到「继续」概览，从「继续写作」进入；否则从概览的「打开」进入。
+ */
+async function enterNewestBook(page, name) {
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.shelf(page).getByRole('listitem').nth(0).getByRole('button', { name: `预览《${name}》` }).click()
+  const overview = stage.overview(page, name)
+  await overview.waitFor({ state: 'visible' })
+  if (await overview.locator('.stage-eyebrow').filter({ hasText: /^继续$/ }).count() > 0) {
+    await overview.getByRole('button', { name: /^继续写作/ }).click()
+  } else {
+    await overview.getByRole('button', { name: `打开《${name}》` }).click()
+  }
+  await stage.spine(page).waitFor({ state: 'visible' })
 }
 
 async function bind(panel, endpoint, parents = []) {
@@ -360,7 +371,7 @@ async function main() {
   for (const profile of Object.values(profiles)) for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
   fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'codex/f05-u16-recovery-boundaries',
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 72,
-    retainReason: 'Review isolated packaged Writer U16 recovery evidence',
+    retainReason: 'Review isolated packaged stage U16 recovery evidence',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch}' -Recurse -Force` }, null, 2))
   const source = provenance()
   let outcome = 'FAIL'
@@ -386,7 +397,7 @@ async function main() {
       content: `分叉起点 ${runId}`, wordCount: 4 }, created.projectPath, context)
     assert.equal(draft.success, true, draft.error)
     await a.page.reload()
-    await a.page.locator('[data-shell-presentation="writer"]').waitFor()
+    await stage.waitForStage(a.page)
     const panelA = await openPanel(a.page, name)
     await bind(panelA, endpoint)
     const root = await upload(panelA)
@@ -402,7 +413,7 @@ async function main() {
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(bootstrap.success, true, bootstrap.error)
     await b.page.reload()
-    await b.page.locator('.writer-shell[data-shell-presentation="writer"]').waitFor()
+    await stage.waitForStage(b.page)
     const panelB = await openPanel(b.page, '恢复入口')
     await bind(panelB, endpoint)
     const copy = await restoreGeneration(b.page, panelB, root.generationId, profiles.b.restored, '恢复入口-恢复副本')
@@ -439,7 +450,7 @@ async function main() {
     assert.equal(finalized.success, true, finalized.error)
     const oldRun = seedFrozenOldRun(path.join(copy, '.ai-novel', 'project.db'), copyOpen.project.id)
     await restarted.page.reload()
-    await restarted.page.locator('.writer-shell[data-shell-presentation="writer"]').waitFor()
+    await stage.waitForStage(restarted.page)
     copyPanel = await openPanel(restarted.page, name)
     await bind(copyPanel, endpoint, [root.generationId])
     const childB = await upload(copyPanel)
@@ -486,7 +497,7 @@ async function main() {
     const freeze = JSON.parse(fs.readFileSync(freezeFile, 'utf8'))
     assert(freeze.records.some(record => record.table === 'generation_runs' && record.recordId === oldRun.oldRun && record.nonReplayable))
     assert(freeze.records.some(record => record.table === 'generation_attempts' && record.recordId === oldRun.oldAttempt && record.nonReplayable))
-    pass('U16.A09', 'V3 showed both same-parent branches, selected and restored B as a separate copy, and retained both immutable completion objects',
+    pass('U16.A09', 'The project backup panel showed both same-parent branches, selected and restored B as a separate copy, and retained both immutable completion objects',
       { root: root.generationId, childA: childA.generationId, childB: childB.generationId,
         originalSerializedDbSha256: originalSerializedSha,
         selectedBranchCopyDbSha256: sha(path.join(selectedBranchCopy, '.ai-novel', 'project.db')) })
@@ -524,7 +535,7 @@ async function main() {
     assert.equal(sha(path.join(selectedBranchCopy, '.ai-novel', 'project.db')), beforeError.branch)
     assert.equal(path.resolve((await invoke(resumedA.page, 'project:get-runtime-context')).activeProjectPath), path.resolve(created.projectPath))
     files.set(archiveKey, intactArchive)
-    pass('U16.A11', 'V3 native restore cancellation caused no download/write; altered remote archive was rejected without changing source, prior copy or active project')
+    pass('U16.A11', 'Native restore cancellation caused no download/write; altered remote archive was rejected without changing source, prior copy or active project')
     currentStep = 'U16.A12-continuity-and-continue-writing'
     const selectedRecent = await recentRestoredProject(resumedA.page, selectedBranchCopy, created.projectId)
     const selectedOpen = await invoke(resumedA.page, 'project:open', selectedRecent.path, randomUUID(), null)
@@ -545,38 +556,19 @@ async function main() {
       content: initialBody, wordCount: 7 }, selectedBranchCopy, selectedSession)
     assert.equal(draft2.success, true, draft2.error)
     await resumedA.page.reload()
-    const writerShell = resumedA.page.locator('.writer-shell[data-shell-presentation="writer"][data-shell-variant="v3"]')
-    await writerShell.waitFor({ state: 'visible' })
-    assert.equal(await writerShell.getAttribute('data-shell-presentation'), 'writer')
-    const notice = resumedA.page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await notice.isVisible()) {
-      assert.equal(await notice.count(), 1, 'unexpected overlapping startup notices')
-      const acknowledge = notice.getByRole('button', { name: '知道了', exact: true })
-      await acknowledge.waitFor({ state: 'visible' })
-      await acknowledge.click()
-      await notice.waitFor({ state: 'hidden' })
-    }
-    await resumedA.page.locator('.writer-left-rail button[title="欢迎页"]').click()
-    const shelf = resumedA.page.locator('.writer-shelf')
-    await shelf.waitFor()
-    await shelf.getByRole('button', { name: `打开《${name}》` }).first().click()
+    await stage.waitForStage(resumedA.page)
+    assert.equal(await stage.root(resumedA.page).getAttribute('data-shell-presentation'), 'stage')
+    assert(await resumedA.page.locator('.startup-migration-notice').count() <= 1, 'unexpected overlapping startup notices')
+    await enterNewestBook(resumedA.page, name)
     assert.equal(path.resolve((await invoke(resumedA.page, 'project:get-runtime-context')).activeProjectPath), path.resolve(selectedBranchCopy),
-      'V3 shelf did not enter the selected restored branch')
-    await resumedA.page.locator('.writer-project-tree [title*="点击打开 — 第2章 v1"]').click()
-    const editor = resumedA.page.locator('.cm-content[contenteditable="true"]')
-    await editor.waitFor({ state: 'visible' })
-    const visibleBody = await editor.evaluate(element => [...element.querySelectorAll('.cm-line')].map(line => {
-      const copy = line.cloneNode(true)
-      copy.querySelector('.cm-lp-paperhead')?.remove()
-      return copy.textContent
-    }).join('\n'))
-    assert.equal(visibleBody, initialBody, 'V3 editor did not display the draft body before continuation')
+      'library did not enter the selected restored branch')
+    const editor = await stage.openChapter(resumedA.page, 2)
+    assert.equal(await stage.proseBody(editor), initialBody, 'chapter editor did not display the draft body before continuation')
     const continued = ` 续写-${runId.slice(0, 8)}`
     await editor.click()
     await resumedA.page.keyboard.press('Control+End')
     await resumedA.page.keyboard.type(continued)
-    await resumedA.page.locator('button[title="保存（⌘S）"]').click()
-    await resumedA.page.getByText('已保存', { exact: true }).first().waitFor({ state: 'visible' })
+    await stage.saveProse(resumedA.page)
     const savedOpen = await invoke(resumedA.page, 'project:open', selectedRecent.path, randomUUID(), null)
     assert.equal(savedOpen.success, true, savedOpen.error)
     assert.equal(savedOpen.project.id, selectedRecent.projectId)
@@ -587,7 +579,7 @@ async function main() {
     const freezeAfter = JSON.parse(fs.readFileSync(freezeFile, 'utf8'))
     assert.deepEqual(freezeAfter, freeze, 'continuing in restored copy changed old runtime freeze')
     assert.equal(serializedDbSha(originalDb), originalSerializedSha, 'continuing in restored copy changed original database snapshot')
-    pass('U16.A12', 'Selected restored branch retained current finalized chapter and non-replayable old run/unknown attempt; V3 editor saved a new chapter in the copy while original and freeze stayed unchanged',
+    pass('U16.A12', 'Selected restored branch retained current finalized chapter and non-replayable old run/unknown attempt; the stage chapter editor saved a new chapter in the copy while original and freeze stayed unchanged',
       { restoredProjectId: selectedOpen.project.id, finalizedDraftId: currentFinalized.id,
         continuedDraftId: draft2.id, oldRun: oldRun.oldRun, oldAttempt: oldRun.oldAttempt })
     detail = { root: root.generationId, childA: childA.generationId, childB: childB.generationId,
@@ -610,7 +602,7 @@ async function main() {
   } finally {
     if (dav.listening) await new Promise(resolve => dav.close(() => resolve()))
     const receipt = { outcome, qualification: 'F05_U16_RECOVERY_BOUNDARIES_A09_A10_A11_A12',
-      evidenceLevel: 'packaged-electron+controlled-service', presentation: 'writer-v3', releaseDefaultQualified: false,
+      evidenceLevel: 'packaged-electron+controlled-service', presentation: 'stage', releaseDefaultQualified: false,
       ...source, packageDir, failedStep: errorText ? currentStep : null, error: errorText, steps, detail, uiDiagnostic,
       pickerEvidence, controlledDav: { requests, fileKeys: [...files.keys()] },
       unverifiedActions: steps.length === 4 ? [] : ['U16.A09', 'U16.A10', 'U16.A11', 'U16.A12'].filter(actionId => !steps.some(step => step.actionId === actionId && step.outcome === 'PASS')) }

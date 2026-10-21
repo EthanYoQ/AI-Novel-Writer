@@ -9,6 +9,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as arch from './redesign/pages/architecture.mjs'
+import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -20,7 +23,7 @@ const expectedAsar = option('asar-sha256')
 assert(packageArg && packageSourceSha && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
   'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
 const packageDir = path.resolve(packageArg)
-const exe = path.join(packageDir, 'AI小说作家.exe')
+const exe = resolveWindowsExecutable(packageDir)
 const asar = path.join(packageDir, 'resources', 'app.asar')
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -97,17 +100,21 @@ async function launch() {
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
   await page.setViewportSize({ width: 1440, height: 900 })
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  await stage.waitForStage(page)
   assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer', revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
-    window.aiNovelAPI.setZoomLevel(0)
-  })
-  await page.reload()
-  await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
+  await page.evaluate(() => window.aiNovelAPI.setZoomLevel(0))
   return { app, page }
+}
+
+/** 角色名单页：架构阶段的「角色名单」一节进入；名单里的行带 data-character-id。 */
+async function openRosterFromArchitecture(page) {
+  await arch.open(page)
+  await arch.openCast(page)
+}
+const castRowById = (page, characterId) => arch.castRoster(page).locator(`[data-character-id="${characterId}"]`)
+async function saveCharacter(page) {
+  await stage.root(page).getByRole('button', { name: '保存角色', exact: true }).click()
+  await stage.root(page).locator('.cast-save-state').filter({ hasText: '已保存' }).waitFor({ state: 'visible', timeout: 20_000 })
 }
 
 async function main() {
@@ -135,36 +142,37 @@ async function main() {
     app = null;
 
     ({ app, page } = await launch())
-    const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
+    await stage.dismissMigrationNotice(page)
     currentStep = 'open-project-from-shelf'
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-    await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+    await stage.showLibrary(page)
+    await stage.openFromLibrary(page, projectName)
+    await stage.waitForWork(page, projectName)
     pass('open-project-from-shelf', { name: projectName })
 
-    currentStep = 'rail-settings-paper'
-    await page.locator('.writer-left-rail button[title="设置"]').click()
-    await page.getByRole('heading', { name: 'AI 生成模型' }).waitFor({ state: 'visible' })
+    currentStep = 'spine-settings-paper'
+    await stage.openSettings(page)
+    await stage.root(page).getByRole('heading', { level: 1, name: 'AI 模型' }).waitFor({ state: 'visible' })
     const style = await page.evaluate(() => {
-      const shell = document.querySelector('.v3-magazine-shell')
-      const dialog = document.querySelector('.skin-solid-surface > div')
-      if (!shell || !dialog) throw new Error('V3 shell or settings sheet missing')
-      const sheet = getComputedStyle(dialog)
+      const shell = document.querySelector('[data-shell-presentation="stage"]')
+      const title = document.querySelector('.stage-set-title')
+      const nav = document.querySelector('.stage-set-nav')
+      if (!shell || !title || !nav) throw new Error('paper-ink shell or settings page missing')
+      const page = getComputedStyle(nav)
       return { viewport: [innerWidth, innerHeight], zoomLevel: window.aiNovelAPI.getZoomLevel(),
-        devicePixelRatio, paper: getComputedStyle(shell).getPropertyValue('--v3-paper').trim(),
-        sheetPaper: sheet.getPropertyValue('--v3-paper').trim(), background: sheet.backgroundColor,
-        fontFamily: sheet.fontFamily, borderRadius: sheet.borderRadius }
+        devicePixelRatio, paper: getComputedStyle(shell).getPropertyValue('--paper').trim(),
+        settingsPaper: page.getPropertyValue('--paper').trim(), insidePaperInk: Boolean(nav.closest('.paper-ink')),
+        fontFamily: page.fontFamily, titleFont: getComputedStyle(title).fontFamily }
     })
     assert.deepEqual(style.viewport, [1440, 900])
     assert.equal(style.zoomLevel, 0)
-    assert.equal(style.sheetPaper, style.paper)
+    assert.equal(style.insidePaperInk, true)
+    assert.equal(style.settingsPaper, style.paper)
     assert(style.fontFamily.includes('Noto Sans SC'), `unexpected settings font: ${style.fontFamily}`)
-    pass('rail-settings-paper', style)
+    pass('spine-settings-paper', style)
     await page.screenshot({ path: path.join(receiptDir, 'v3-settings.png') })
 
     currentStep = 'settings-backup-section'
-    await page.getByRole('button', { name: '项目备份' }).click()
-    await page.getByRole('heading', { name: '项目备份' }).waitFor({ state: 'visible' })
+    await stage.showSettingsPage(page, '项目备份')
     await page.locator('[data-testid="project-backup-panel"]').getByText('WebDAV', { exact: true }).waitFor({ state: 'visible' })
     assert(await page.getByRole('button', { name: '导出本地存档' }).isEnabled())
     assert(await page.getByRole('button', { name: '从本地存档恢复副本' }).isEnabled())
@@ -174,15 +182,14 @@ async function main() {
     await page.screenshot({ path: path.join(receiptDir, 'v3-backup-from-settings.png') })
 
     currentStep = 'v3-avatar-source'
-    await page.getByRole('button', { name: '关闭设置' }).click()
-    await page.locator('.writer-left-rail button[title="角色"]').click()
-    await page.getByTitle('新建角色').click()
-    await page.getByText('姓名', { exact: true }).locator('xpath=..').locator('input').fill(characterName)
-    await page.getByRole('button', { name: '保存', exact: true }).last().click()
-    await page.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
-    const sourceCard = page.locator('[data-character-id]').filter({ hasText: characterName })
+    await stage.closeSettings(page)
+    await openRosterFromArchitecture(page)
+    await arch.castRoster(page).getByRole('button', { name: '新建角色' }).click()
+    await page.getByLabel('姓名', { exact: true }).fill(characterName)
+    await saveCharacter(page)
+    const sourceCard = arch.castRoster(page).locator('[data-character-id]').filter({ hasText: characterName })
     const characterId = await sourceCard.getAttribute('data-character-id')
-    assert(characterId, 'new character has no stable ID')
+    assert(characterId && !characterId.startsWith('draft:'), 'new character has no stable ID')
     const avatarFile = path.join(scratch, 'avatar-source.png')
     const base64 = await page.evaluate(() => {
       const canvas = document.createElement('canvas')
@@ -196,23 +203,24 @@ async function main() {
     await page.getByRole('button', { name: '选择头像', exact: true }).click()
     picker('选择角色头像', avatarFile)
     await page.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '保存', exact: true }).last().click()
-    await page.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    await saveCharacter(page)
+    // 第一次保存留下的「已保存」可能还在，等暂存的头像提交完（「取消头像更改」消失）再读数据库
+    await page.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'detached', timeout: 20_000 })
     sourceSnapshot = avatarState(project.projectPath, characterId)
     assert.equal(sourceSnapshot.character.name, characterName)
-    await sourceCard.locator('img').waitFor({ state: 'visible' })
-    assert.equal(await imageHash(sourceCard.locator('img')), sourceSnapshot.assetSha256)
-    await sourceCard.click()
-    assert.equal(await imageHash(page.locator(`img[alt="${characterName}头像预览"]`)), sourceSnapshot.assetSha256)
+    await castRowById(page, characterId).locator('img').waitFor({ state: 'visible' })
+    assert.equal(await imageHash(castRowById(page, characterId).locator('img')), sourceSnapshot.assetSha256)
+    await castRowById(page, characterId).click()
+    assert.equal(await imageHash(page.locator(`img[alt="${characterName}头像"]`)), sourceSnapshot.assetSha256)
     pass('v3-avatar-source', { characterId, characterName, avatar: sourceSnapshot.avatar, assetSha256: sourceSnapshot.assetSha256 })
     await page.screenshot({ path: path.join(receiptDir, 'v3-avatar-source.png') })
 
-    currentStep = 'masthead-backup-entry'
-    await page.locator('.writer-topbar button[title="备份"]').click()
-    await page.getByRole('heading', { name: '项目备份' }).waitFor({ state: 'visible' })
-    assert.equal(await page.locator('.skin-solid-surface').count(), 1)
-    pass('masthead-backup-entry', { sameSettingsSheet: true })
-    await page.screenshot({ path: path.join(receiptDir, 'v3-backup-from-masthead.png') })
+    currentStep = 'work-menu-backup-entry'
+    await stage.openWorkMenuItem(page, projectName, '项目备份')
+    await stage.root(page).getByRole('heading', { level: 1, name: '项目备份' }).waitFor({ state: 'visible' })
+    assert.equal(await stage.currentSettingsPage(page), '项目备份')
+    pass('work-menu-backup-entry', { sameSettingsPage: true })
+    await page.screenshot({ path: path.join(receiptDir, 'v3-backup-from-work-menu.png') })
 
     const panel = page.getByTestId('project-backup-panel')
     currentStep = 'u10-a12-export'
@@ -262,22 +270,23 @@ async function main() {
     app = null
     ;({ app, page } = await launch())
     assert.notEqual(app.process()?.pid, priorPid, 'reopen reused source Electron process')
-    const reopenedNotice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await reopenedNotice.isVisible()) await reopenedNotice.getByRole('button', { name: '知道了', exact: true }).click()
+    await stage.dismissMigrationNotice(page)
     const reopenedRecent = await invoke(page, 'project:recent-list')
     assert.equal(path.resolve(reopenedRecent[0]?.path ?? ''), path.resolve(restoredPath), 'restored copy not persisted in recent projects')
-    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).first().click()
-    await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+    // 原作品与恢复副本同名：书架按最近项目排，第一本是刚恢复的副本。
+    await stage.showLibrary(page)
+    await stage.openFromLibraryAt(page, projectName, 0)
+    await stage.waitForWork(page, projectName)
     assert.equal(path.resolve((await invoke(page, 'project:get-runtime-context')).activeProjectPath), path.resolve(restoredPath),
-      'V3 shelf opened original instead of restored copy')
-    await page.locator('.writer-left-rail button[title="角色"]').click()
-    const restoredCard = page.locator(`[data-character-id="${characterId}"]`)
+      'library opened original instead of restored copy')
+    await openRosterFromArchitecture(page)
+    const restoredCard = castRowById(page, characterId)
     await restoredCard.waitFor({ state: 'visible' })
     await restoredCard.locator('img').waitFor({ state: 'visible' })
     assert.equal(await imageHash(restoredCard.locator('img')), sourceSnapshot.assetSha256, 'reopened V3 card avatar differs')
     await restoredCard.click()
-    assert.equal(await imageHash(page.locator(`img[alt="${characterName}头像预览"]`)), sourceSnapshot.assetSha256,
-      'reopened V3 preview avatar differs')
+    assert.equal(await imageHash(page.locator(`img[alt="${characterName}头像"]`)), sourceSnapshot.assetSha256,
+      'reopened profile avatar differs')
     const reopenedCopy = avatarState(restoredPath, characterId)
     assert.deepEqual(reopenedCopy.avatar, sourceSnapshot.avatar, 'reopened copy avatar row changed')
     assert(reopenedCopy.assetBytes.equals(sourceSnapshot.assetBytes), 'reopened copy avatar bytes changed')

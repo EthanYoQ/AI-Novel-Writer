@@ -12,6 +12,7 @@ import {
   WINDOWS_RELEASE_MONITOR_READY_TIMEOUT_MS,
   WINDOWS_UPDATE_RUNNER_COMMAND,
   appendMonitorControl,
+  childProcessEnvironment,
   createLegacyUpdateBridgePlan,
   createOfficialUpdatePlan,
   normalizeFinalReleaseTag,
@@ -168,9 +169,11 @@ function fixtureFetcher(fromTag: string, expectedTag: string, options: { latestT
   }
   const latestTag = options.latestTag ?? expectedTag
   const requests: string[] = []
-  const fetcher = async (url: string | URL) => {
+  const authorizations: string[] = []
+  const fetcher = async (url: string | URL, init?: RequestInit) => {
     const value = String(url)
     requests.push(value)
+    authorizations.push(`${new URL(value).host} ${new Headers(init?.headers).get('authorization') ?? '(none)'}`)
     if (value === 'https://api.github.com/repos/EthanYoQ/AI-Novel-Writer/releases/latest') {
       return response({ ...expected.release, tag_name: latestTag })
     }
@@ -184,7 +187,30 @@ function fixtureFetcher(fromTag: string, expectedTag: string, options: { latestT
     if (bytes) return response(bytes, 'application/octet-stream')
     return new Response('not found', { status: 404 })
   }
-  return { fetcher, requests }
+  return { fetcher, requests, authorizations }
+}
+
+function spawnEnvironmentSources(source: string): { command: string, env: string }[] {
+  const file = ts.createSourceFile('orchestration.mjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
+  const calls: { command: string, env: string }[] = []
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && ['spawn', 'spawnSync'].includes(node.expression.text)) {
+      const options = node.arguments.at(-1)
+      const env = options && ts.isObjectLiteralExpression(options)
+        ? options.properties.find(property => ts.isPropertyAssignment(property) && property.name.getText(file) === 'env')
+        : undefined
+      const initializer = env && ts.isPropertyAssignment(env) ? env.initializer : undefined
+      calls.push({
+        command: node.arguments[0]?.getText(file) ?? '',
+        env: !initializer
+          ? '(inherited)'
+          : ts.isCallExpression(initializer) ? initializer.expression.getText(file) : initializer.getText(file),
+      })
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return calls
 }
 
 afterEach(() => {
@@ -212,17 +238,13 @@ describe('Windows heavy integration timeout contract', () => {
     })
   })
 
-  it('bounds every real PowerShell child and the real Vite server hook without changing ordinary test timeouts', () => {
+  it('bounds every real PowerShell child without changing ordinary test timeouts', () => {
     const smokeInstallerTests = readFileSync(
       resolve(process.cwd(), 'scripts/__tests__/smoke-win-installer.test.ts'),
       'utf8',
     )
     const updateE2eTests = readFileSync(
       resolve(process.cwd(), 'scripts/__tests__/windows-in-app-update-e2e.test.ts'),
-      'utf8',
-    )
-    const updateInteractionTests = readFileSync(
-      resolve(process.cwd(), 'scripts/__tests__/update-section.interaction.test.ts'),
       'utf8',
     )
 
@@ -237,10 +259,6 @@ describe('Windows heavy integration timeout contract', () => {
     const updateCoverage = powerShellTestCoverage(updateE2eTests)
     expect(updateCoverage.relevant.length).toBeGreaterThan(0)
     expect(updateCoverage.unbounded).toEqual([])
-
-    expect(updateInteractionTests).toContain('VITE_SERVER_HOOK_TIMEOUT_MS = 30_000')
-    expect(updateInteractionTests.match(/\bbeforeAll\(/g)).toHaveLength(1)
-    expect(updateInteractionTests).toContain('}, VITE_SERVER_HOOK_TIMEOUT_MS)')
   })
 })
 
@@ -299,6 +317,63 @@ describe('Windows official in-app update E2E contract', () => {
       'https://api.github.com/repos/EthanYoQ/AI-Novel-Writer/releases/tags/v0.6.0',
     ]))
     expect(requests.every(url => url.includes('EthanYoQ/AI-Novel-Writer') || url.startsWith('https://downloads.example.test/'))).toBe(true)
+  })
+
+  it('authenticates only GitHub API metadata requests and downloads assets anonymously', async () => {
+    const authenticated = fixtureFetcher('v0.5.2', 'v0.6.0')
+    await createOfficialUpdatePlan({
+      fromTag: 'v0.5.2',
+      expectedTag: 'v0.6.0',
+      evidenceRoot: temporaryRoot(),
+      fetcher: authenticated.fetcher,
+      githubToken: 'test-token',
+    })
+    expect(new Set(authenticated.authorizations)).toEqual(new Set([
+      'api.github.com Bearer test-token',
+      'downloads.example.test (none)',
+    ]))
+    expect(authenticated.authorizations.filter(entry => entry.startsWith('api.github.com '))).toHaveLength(3)
+
+    const anonymous = fixtureFetcher('v0.5.2', 'v0.6.0')
+    await createOfficialUpdatePlan({
+      fromTag: 'v0.5.2',
+      expectedTag: 'v0.6.0',
+      evidenceRoot: temporaryRoot(),
+      fetcher: anonymous.fetcher,
+      githubToken: '',
+    })
+    expect(new Set(anonymous.authorizations)).toEqual(new Set([
+      'api.github.com (none)',
+      'downloads.example.test (none)',
+    ]))
+  })
+
+  it('hands child processes, including the app under test, no credential-shaped environment', () => {
+    expect(childProcessEnvironment({ AI_NOVEL_RELEASE_GATE: 'windows-in-app-update-e2e' }, {
+      Path: 'C:\\Windows\\System32',
+      LOCALAPPDATA: 'C:\\Users\\runneradmin\\AppData\\Local',
+      GITHUB_TOKEN: 'ghs_example',
+      GH_TOKEN: 'gho_example',
+      github_token: 'lowercase',
+      ACTIONS_RUNTIME_TOKEN: 'runtime',
+      AWS_SECRET_ACCESS_KEY: 'secret',
+      SIGNING_KEY_PATH: 'C:\\keys\\release.pfx',
+      NPM_PASSWORD: 'password',
+    })).toEqual({
+      Path: 'C:\\Windows\\System32',
+      LOCALAPPDATA: 'C:\\Users\\runneradmin\\AppData\\Local',
+      AI_NOVEL_RELEASE_GATE: 'windows-in-app-update-e2e',
+    })
+  })
+
+  it('routes every spawned child through the scrubbed environment', () => {
+    const orchestration = readFileSync(resolve(process.cwd(), 'scripts/windows-in-app-update-e2e.mjs'), 'utf8')
+    expect(spawnEnvironmentSources(orchestration)).toEqual([
+      { command: "'powershell.exe'", env: 'childProcessEnvironment' },
+      { command: "'taskkill.exe'", env: 'childProcessEnvironment' },
+      { command: "'powershell.exe'", env: 'childProcessEnvironment' },
+      { command: 'process.execPath', env: 'childProcessEnvironment' },
+    ])
   })
 
   it('rejects a non-latest expected tag and any mismatched GitHub asset digest', async () => {
@@ -380,7 +455,13 @@ describe('Windows official in-app update E2E contract', () => {
 
     expect(workflow).toContain('workflow_dispatch:')
     expect(workflow).not.toMatch(/^\s*(push|pull_request|schedule):/m)
-    expect(workflow).toContain('contents: read')
+    expect(workflow).toMatch(/^permissions:\r?\n {2}contents: read\r?\n\r?\n/m)
+    const updateStep = workflow.slice(
+      workflow.indexOf('- name: Upgrade the official installed app through its live UI'),
+      workflow.indexOf('- name: Upload official update E2E evidence'),
+    )
+    expect(updateStep).toContain('GITHUB_TOKEN: ${{ github.token }}')
+    expect(workflow.match(/GITHUB_TOKEN/g)).toHaveLength(1)
     expect(workflow).toContain('retention-days: 7')
     expect(workflow).toContain('${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}/*.json')
     expect(workflow).not.toContain('path: ${{ env.AI_NOVEL_UPDATE_E2E_EVIDENCE_ROOT }}')
@@ -450,8 +531,9 @@ describe('Windows official in-app update E2E contract', () => {
     const capturePendingInstallerIndex = powershell.indexOf('$pendingInstallerIdentity = Wait-E2ePendingInstallerIdentity')
     const waitForOldAppExitIndex = powershell.indexOf('$oldAppProcess.WaitForExit', capturePendingInstallerIndex)
     const waitForPendingInstallerRootExitIndex = powershell.indexOf('Wait-E2ePendingInstallerRootExit `', waitForOldAppExitIndex)
-    const stopForceRunAppIndex = powershell.indexOf('Stop-E2eExistingInstalledApps -ExePath $updatedExe', waitForPendingInstallerRootExitIndex)
-    const pendingInstallerRootExitCall = powershell.slice(waitForPendingInstallerRootExitIndex, stopForceRunAppIndex)
+    const resolveUpdatedExeIndex = powershell.indexOf('$updatedExe = Resolve-AiNovelProductExecutable', waitForPendingInstallerRootExitIndex)
+    const stopForceRunAppIndex = powershell.indexOf('Stop-E2eExistingInstalledApps -ExePath $updatedExe', resolveUpdatedExeIndex)
+    const pendingInstallerRootExitCall = powershell.slice(waitForPendingInstallerRootExitIndex, resolveUpdatedExeIndex)
     const waitForStableInstallRootIndex = powershell.indexOf('$installedUpdatedVersion = Wait-E2eInstallRootStable', stopForceRunAppIndex)
     const launchUpdatedAppIndex = powershell.indexOf('$newAppProcess = Start-Process')
 
@@ -459,7 +541,8 @@ describe('Windows official in-app update E2E contract', () => {
     expect(capturePendingInstallerIndex).toBeGreaterThan(triggerIndex)
     expect(waitForOldAppExitIndex).toBeGreaterThan(capturePendingInstallerIndex)
     expect(waitForPendingInstallerRootExitIndex).toBeGreaterThan(waitForOldAppExitIndex)
-    expect(stopForceRunAppIndex).toBeGreaterThan(waitForPendingInstallerRootExitIndex)
+    expect(resolveUpdatedExeIndex).toBeGreaterThan(waitForPendingInstallerRootExitIndex)
+    expect(stopForceRunAppIndex).toBeGreaterThan(resolveUpdatedExeIndex)
     expect(pendingInstallerRootExitCall.trimEnd()).toMatch(/-TimeoutSeconds \$ApplicationTimeoutSeconds$/)
     expect(waitForStableInstallRootIndex).toBeGreaterThan(stopForceRunAppIndex)
     expect(launchUpdatedAppIndex).toBeGreaterThan(waitForStableInstallRootIndex)

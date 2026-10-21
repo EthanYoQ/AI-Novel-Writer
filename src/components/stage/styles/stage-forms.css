@@ -1,0 +1,99 @@
+/* ================= 表单控件（设定页、设置页共用） ================= */
+/* 画板 Setup.dc.html 的 .ctl 与 .chip：40px 高、10px 圆角的纸面控件，标签按钮为胶囊。 */
+.stage-shell .stage-select,
+.stage-shell .stage-setup .pi-input,
+.stage-shell .stage-settings .pi-input {
+  height: 40px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 13.5px/1.4 var(--font-ui);
+}
+
+.stage-shell .stage-select {
+  appearance: none;
+  padding-right: 34px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-3) 50%),
+    linear-gradient(135deg, var(--ink-3) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+.stage-shell .stage-select[data-placeholder] {
+  color: var(--ink-3);
+}
+
+.stage-shell .stage-select option {
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.stage-shell .stage-select:focus-visible,
+.stage-shell .stage-setup .pi-input:focus-visible,
+.stage-shell .stage-settings .pi-input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.stage-chip {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  color: var(--ink-2);
+  font: 400 var(--fs-13)/1 var(--font-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.stage-chip:hover {
+  border-color: color-mix(in srgb, var(--ink) 24%, transparent);
+  color: var(--ink);
+}
+
+.stage-chip[data-filled] {
+  color: var(--ink);
+}
+
+.stage-chip-value {
+  color: var(--ink-2);
+}
+
+.stage-chip[data-dashed] {
+  border-style: dashed;
+}
+
+.stage-chip[aria-expanded='true'] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.stage-chip:active {
+  background: var(--paper-press);
+  box-shadow: inset 0 1px 2px var(--sink);
+}
+
+.stage-chip[aria-expanded='true']:active {
+  background: color-mix(in srgb, var(--accent-soft), var(--accent) 8%);
+}
+
+.stage-chip[aria-expanded='true'] .stage-chip-value {
+  color: inherit;
+}
+
+.stage-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}

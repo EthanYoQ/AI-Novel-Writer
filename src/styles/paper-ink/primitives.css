@@ -1,45 +1,196 @@
 /*
  * 纸墨组件原语。只引用 tokens.css 的变量，不写颜色字面量（scripts/check-color-literals.mjs 检查）。
- * 类名统一 pi- 前缀，避免与旧外壳的 .btn-primary 等全局类冲突；选择器不依赖元素位置或本地化文字。
+ * 类名统一 pi- 前缀，避免与沿用旧组件的全局类冲突；选择器不依赖元素位置或本地化文字。
+ *
+ * 材质模型（design-system.md「按钮与浮层」）：可按的从纸面凸起，可写的凹进纸面，浮在纸上的都是同一张笺（--layer），
+ * 印在纸上的是字（提示条与后果说明没有盒子）。危险按钮是平的方肩朱印。
  */
 .pi-num { font-family: var(--font-num); font-style: italic; font-variant-numeric: oldstyle-nums; }
 .pi-display { font-family: var(--font-display); font-weight: 600; }
 
+/* 按钮与菜单项自己合成焦点环，不在这里 */
 .pi-focusable:focus-visible,
-.paper-ink :where(.pi-btn, .pi-seg-item, .pi-menu-item, .pi-check-input):focus-visible {
+.paper-ink :where(.pi-seg-item, .pi-check-input):focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
 /* ================= 按钮 ================= */
+/*
+ * 主按钮是压印块：顶沿受光、底边更深、≤2% 同色相纵向受光、一片带黛蓝色相的投影。次按钮是纸片：侧沿与上沿刚过 3:1，
+ * 底沿更深，底下贴一线墨。幽灵与图标按钮只有墨色薄雾。危险按钮是平的方肩朱印：不受光、不投影、不下沉。
+ * box-shadow = --pi-ring（键盘焦点）+ --pi-shadow（材质），任何状态都不会互相盖掉。
+ * 受光渐变的两端是注册成颜色的 --pi-top/--pi-foot：background-image 本身不可插值，换两端颜色才能与底色、投影同步过渡。
+ */
+@property --pi-top { syntax: '<color>'; inherits: false; initial-value: transparent; }
+@property --pi-foot { syntax: '<color>'; inherits: false; initial-value: transparent; }
 .pi-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);
-  height: 36px; padding: 0 var(--s-4); border: 1px solid transparent; border-radius: var(--radius-control);
-  background: transparent; color: var(--ink); cursor: pointer;
-  font: 500 var(--fs-13)/1 var(--font-ui); white-space: nowrap;
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  --pi-radius: var(--radius-control);
+  --pi-ring: 0 0 0 0 transparent;
+  --pi-shadow: 0 0 0 0 transparent;
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 36px; padding: 0 var(--s-4);
+  border: 1px solid transparent; border-radius: var(--pi-radius);
+  background: transparent; color: var(--ink);
+  font: 500 var(--fs-13)/1 var(--font-ui); letter-spacing: .05em; white-space: nowrap; font-variant-numeric: tabular-nums;
+  cursor: pointer; user-select: none; outline: none;
+  box-shadow: var(--pi-ring), var(--pi-shadow);
+  transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease), --pi-top var(--dur-fast) var(--ease), --pi-foot var(--dur-fast) var(--ease);
 }
-.pi-btn--sm { height: 28px; padding: 0 var(--s-3); font-size: var(--fs-12); gap: 6px; border-radius: var(--radius); }
-.pi-btn--lg { height: 40px; padding: 0 var(--s-5); font-size: var(--fs-14); }
-.pi-btn--primary { background: var(--accent); color: var(--accent-ink); box-shadow: var(--shadow-button); }
-.pi-btn--primary:hover { background: var(--accent-hover); }
-.pi-btn--secondary { border-color: var(--rule-strong); background: var(--paper); }
-.pi-btn--secondary:hover { background: var(--surface-2); }
+.pi-btn > svg { flex: none; width: 15px; height: 15px; stroke-width: 1.75; }
+/* .05em 是给汉字留的气口，拉丁字母这么排会散 */
+:lang(en) .pi-btn { letter-spacing: .01em; }
+/* 图标一侧少 2px，图标加文字看起来才居中 */
+.pi-btn:not(.pi-btn--icon, .pi-split-toggle) > svg:first-child { margin-inline-start: -2px; }
+/* 键盘焦点环要立即出现：聚焦期间 box-shadow 不参与过渡 */
+.pi-btn:focus-visible { --pi-ring: var(--focus-ring); transition-property: background-color, border-color, color, transform, --pi-top, --pi-foot; }
+
+.pi-btn--sm { height: 28px; padding: 0 var(--s-3); gap: 6px; font-size: var(--fs-12); --pi-radius: var(--radius); }
+.pi-btn--sm > svg { width: 14px; height: 14px; }
+.pi-btn--lg { height: 40px; padding: 0 var(--s-5); gap: 8px; font-size: var(--fs-14); --pi-radius: var(--radius-lg); }
+.pi-btn--lg > svg { width: 16px; height: 16px; }
+
+.pi-btn--primary {
+  --pi-top: var(--accent-top); --pi-foot: var(--accent);
+  background-color: var(--accent); background-image: linear-gradient(180deg, var(--pi-top), var(--pi-foot));
+  color: var(--accent-ink); border-color: var(--accent-edge); border-bottom-color: var(--accent-base); font-weight: 600;
+  --pi-shadow: inset 0 1px 0 var(--hi), inset 0 -1px 0 color-mix(in srgb, var(--accent-base) 65%, transparent),
+    0 1px 1px var(--lift), 0 5px 11px -5px var(--lift-accent);
+}
+.pi-btn--primary:hover:not(:disabled, :active, [aria-expanded="true"]) {
+  --pi-top: var(--accent-hover-top); --pi-foot: var(--accent-hover); background-color: var(--accent-hover);
+  --pi-shadow: inset 0 1px 0 var(--hi), inset 0 -1px 0 color-mix(in srgb, var(--accent-base) 65%, transparent),
+    0 1px 1px var(--lift), 0 7px 14px -7px var(--lift-accent);
+}
+/* 按下：块被压平，上下边颜色对调，受光撤掉 */
+.pi-btn--primary:active, .pi-btn--primary[aria-expanded="true"] {
+  --pi-top: var(--accent-press); --pi-foot: var(--accent-press); background-color: var(--accent-press); transform: translateY(1px);
+  border-top-color: var(--accent-base); border-bottom-color: var(--accent-edge);
+  --pi-shadow: inset 0 2px 4px var(--sink);
+}
+
+.pi-btn--secondary {
+  --pi-top: var(--paper-top); --pi-foot: var(--paper-foot);
+  background-color: var(--paper); background-image: linear-gradient(180deg, var(--pi-top), var(--pi-foot));
+  color: var(--ink); border-color: var(--edge) var(--edge) var(--edge-strong);
+  --pi-shadow: inset 0 1px 0 var(--paper-hi), 0 1px 0 var(--paper-edge), 0 3px 5px -3px var(--lift-soft);
+}
+.pi-btn--secondary > svg { color: var(--ink-2); }
+.pi-btn--secondary:hover:not(:disabled, :active, [aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"]) {
+  border-color: var(--edge-strong);
+  --pi-shadow: inset 0 1px 0 var(--paper-hi), 0 1px 0 var(--paper-edge), 0 5px 9px -5px var(--lift);
+}
+.pi-btn--secondary:hover:not(:disabled, :active, [aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"]) > svg { color: var(--ink); }
+.pi-btn--secondary:active, .pi-btn--secondary[aria-expanded="true"] {
+  --pi-top: var(--paper-press); --pi-foot: var(--paper-press); background-color: var(--paper-press); border-color: var(--edge-strong); transform: translateY(1px);
+  --pi-shadow: inset 0 2px 4px var(--sink);
+}
+/* 旧面板的切换按钮：选中项是强调色边线加淡底，aria-pressed 的还带对勾（Button 加），不靠底色深浅区分；不下沉，免得与同组错开一像素 */
+.pi-btn--secondary:is([aria-pressed="true"], [aria-selected="true"]) {
+  --pi-top: transparent; --pi-foot: transparent; background-color: var(--accent-soft); border-color: var(--accent);
+  --pi-shadow: 0 0 0 0 transparent;
+}
+.pi-btn--secondary:is([aria-pressed="true"], [aria-selected="true"]) > svg { color: var(--accent); }
+/* 选中项的对勾替下功能图标，两个图标不挤在一起；标签页没有对勾，底边加一道强调色线，同样不只靠颜色区分 */
+.pi-btn--secondary[aria-pressed="true"] > .lucide-check ~ svg { display: none; }
+.pi-btn--secondary[aria-selected="true"] { --pi-shadow: inset 0 -2px 0 var(--accent); }
+
 .pi-btn--text { padding: 0 var(--s-3); color: var(--ink-2); }
-.pi-btn--text:hover { background: var(--surface-2); color: var(--ink); }
-/* 危险按钮从不使用强调色：描边红字用于危险分组外的入口，实心只出现在危险确认对话框里 */
-.pi-btn--danger { border-color: var(--danger-line); color: var(--danger); }
-.pi-btn--danger:hover { background: var(--danger-soft); border-color: var(--danger); }
-.pi-btn--danger-solid { background: var(--danger); color: var(--danger-ink); }
 .pi-btn--icon { width: 36px; padding: 0; color: var(--ink-2); }
-.pi-btn--icon:hover { background: var(--surface-2); color: var(--ink); }
-.pi-btn--icon.pi-btn--sm { width: 28px; }
-.pi-btn--icon.pi-btn--lg { width: 40px; }
-.pi-btn:disabled { opacity: .38; cursor: not-allowed; box-shadow: none; }
-.pi-btn--primary:disabled:hover { background: var(--accent); }
-.pi-btn--danger-solid:disabled:hover { background: var(--danger); }
-.pi-btn--secondary:disabled:hover { background: var(--paper); }
-.pi-btn--text:disabled:hover, .pi-btn--icon:disabled:hover, .pi-btn--danger:disabled:hover { background: transparent; }
+.pi-btn--icon.pi-btn--sm { width: 28px; padding: 0; }
+.pi-btn--icon.pi-btn--lg { width: 40px; padding: 0; }
+.pi-btn--icon > svg { width: 16px; height: 16px; }
+.pi-btn--icon.pi-btn--sm > svg { width: 14px; height: 14px; }
+.pi-btn--icon.pi-btn--lg > svg { width: 18px; height: 18px; }
+.pi-btn--text:hover:not(:disabled, :active, [aria-expanded="true"]),
+.pi-btn--icon:hover:not(:disabled, :active, [aria-expanded="true"], [aria-pressed="true"]) { background-color: var(--wash); color: var(--ink); }
+.pi-btn--text:active, .pi-btn--icon:active,
+.pi-btn--text[aria-expanded="true"], .pi-btn--icon[aria-expanded="true"], .pi-btn--icon[aria-pressed="true"] {
+  background-color: var(--wash-strong); color: var(--ink);
+}
+.pi-btn--text:active, .pi-btn--icon:active { --pi-shadow: inset 0 1px 2px var(--sink); }
+.pi-btn--icon:active { transform: scale(.96); }
+
+/* 去掉颜色，方肩、单线框、不投影的朱印与圆角带影的压印块仍然不是一个东西；单线框也不会与焦点环混淆 */
+.pi-btn--danger, .pi-btn--danger-solid { --pi-radius: var(--radius-sm); }
+.pi-btn--danger { color: var(--danger); border-color: var(--danger-edge); }
+.pi-btn--danger:hover:not(:disabled, :active) { background-color: var(--danger-soft); border-color: var(--danger); }
+.pi-btn--danger:active { background-color: var(--danger-soft); border-color: var(--danger); --pi-shadow: inset 0 1px 2px var(--sink); }
+.pi-btn--danger-solid { background-color: var(--danger); color: var(--danger-ink); border-color: var(--danger-press); font-weight: 600; }
+.pi-btn--danger-solid:hover:not(:disabled, :active) { background-color: var(--danger-hover); }
+.pi-btn--danger-solid:active { background-color: var(--danger-press); --pi-shadow: inset 0 1px 2px var(--sink); }
+
+/* 禁用是一块没上墨的平面：撤掉材质与受光，外形保留，不用 opacity */
+.pi-btn:disabled:not([aria-busy="true"]) {
+  background-color: var(--wash); background-image: none; color: var(--ink-3); border-color: transparent;
+  cursor: not-allowed; transform: none; --pi-shadow: 0 0 0 0 transparent;
+}
+.pi-btn:disabled:not([aria-busy="true"]) > svg { color: inherit; }
+.pi-btn--text:disabled:not([aria-busy="true"]), .pi-btn--icon:disabled:not([aria-busy="true"]) { background-color: transparent; }
+
+/* 加载中：调用方给 disabled 再加 aria-busy="true"。外观不变，悬停也不变（悬停样式只给可用的按钮）；底沿一道墨线画过去再淡出；不吞悬停提示 */
+.pi-btn[aria-busy="true"] { cursor: progress; }
+.pi-btn[aria-busy="true"]::before, .pi-btn[aria-busy="true"]::after {
+  content: ""; position: absolute; left: 12px; right: 12px; bottom: 3px; height: 2px; border-radius: 2px; background: currentColor; pointer-events: none;
+}
+.pi-btn[aria-busy="true"]::before { opacity: .24; }
+.pi-btn[aria-busy="true"]::after { transform-origin: 0 50%; transform: scaleX(.5); animation: pi-ink-draw 1.2s var(--ease) infinite; }
+.pi-btn--sm[aria-busy="true"]::before, .pi-btn--sm[aria-busy="true"]::after { left: 10px; right: 10px; bottom: 2px; }
+.pi-btn--icon[aria-busy="true"]::before, .pi-btn--icon[aria-busy="true"]::after { left: 9px; right: 9px; bottom: 3px; }
+
+/* ================= 拆分主按钮 ================= */
+/*
+ * 一整块压印被刻开：投影挂在组上，两半只各自受光，中间一道上下留白的刻痕。
+ * 主体禁用时根上加 .pi-split--main-off（由调用方已有的 disabled 推出），箭头仍能打开选项。
+ * 刻痕占用 .pi-split-toggle::before，所以箭头半边不能带 aria-busy（加载墨线也用 ::before）。
+ */
+.pi-split {
+  position: relative; display: inline-flex; border-radius: var(--radius-control);
+  box-shadow: 0 1px 1px var(--lift), 0 5px 11px -5px var(--lift-accent);
+}
+.pi-split > .pi-btn--primary, .pi-split > .pi-btn--primary:hover {
+  --pi-shadow: inset 0 1px 0 var(--hi), inset 0 -1px 0 color-mix(in srgb, var(--accent-base) 65%, transparent);
+}
+.pi-split > .pi-btn--primary:active, .pi-split > .pi-btn--primary[aria-expanded="true"] { transform: none; --pi-shadow: inset 0 2px 4px var(--sink); }
+.pi-split > .pi-btn:focus-visible { z-index: 1; }
+.pi-split-main { border-right-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.pi-split-toggle { width: 30px; padding: 0; border-left-width: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.pi-split-toggle.pi-btn--sm { width: 26px; }
+.pi-split-toggle.pi-btn--lg { width: 34px; }
+.pi-split-toggle::before {
+  content: ""; position: absolute; top: 7px; bottom: 7px; left: 0; width: 1px;
+  background: var(--accent-base); box-shadow: 1px 0 0 var(--hi);
+}
+.pi-split-toggle.pi-btn--sm::before { top: 5px; bottom: 5px; }
+.pi-split-toggle > svg { width: 14px; height: 14px; transition: transform var(--dur-fast) var(--ease); }
+.pi-split-toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.pi-split--main-off { box-shadow: none; }
+.pi-split--main-off > .pi-split-toggle {
+  background-color: var(--wash); background-image: none; border-color: transparent; color: var(--ink-2); --pi-shadow: 0 0 0 0 transparent;
+}
+.pi-split--main-off > .pi-split-toggle:hover { background-color: var(--wash-strong); color: var(--ink); }
+.pi-split--main-off > .pi-split-toggle::before { background: var(--edge); box-shadow: none; }
+
+/* ================= 输入框 ================= */
+/* 凹陷可以写：灰槽底，整圈 --edge（刚过 3:1），不加深底沿，与次按钮的白纸片区分 */
+.pi-field { display: flex; flex-direction: column; gap: 7px; font-size: var(--fs-12); color: var(--ink-2); }
+.pi-field em { font-style: normal; color: var(--ink-3); }
+.pi-input {
+  height: 36px; padding: 0 var(--s-3); border: 1px solid var(--edge); border-radius: var(--radius-control);
+  background: var(--sunken); color: var(--ink); font: inherit; font-size: var(--fs-13);
+  box-shadow: inset 0 1px 2px -1px var(--sink);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.pi-input::placeholder { color: var(--ink-3); }
+.pi-input:hover:not(:focus-visible, :disabled) { border-color: var(--edge-strong); }
+.pi-input:focus-visible {
+  outline: none; border-color: var(--accent);
+  box-shadow: inset 0 1px 2px -1px var(--sink), 0 0 0 1px var(--accent), 0 0 0 4px var(--accent-soft);
+}
+/* 禁用与按钮同一规则：没上墨的平面，撤掉边线与内凹 */
+.pi-input:disabled { background: var(--wash); color: var(--ink-3); border-color: transparent; box-shadow: none; cursor: not-allowed; }
 
 /* ================= 侧页 ================= */
 .pi-sheet {
@@ -63,6 +214,7 @@
   border-radius: var(--radius-control); background: var(--sunken); }
 .pi-sheet--segmented .pi-sheet-tab { flex: 1; height: 28px; padding: 0 10px; margin: 0; border: 0; border-radius: 7px; color: var(--ink-2); }
 .pi-sheet--segmented .pi-sheet-tab[aria-selected="true"] { background: var(--paper); color: var(--ink); box-shadow: var(--shadow-seg); }
+.pi-sheet--segmented .pi-sheet-tab[aria-selected="true"]:focus-visible { box-shadow: var(--focus-ring), var(--shadow-seg); }
 .pi-sheet--segmented .pi-sheet-body { padding-top: 0; }
 .pi-sheet-body { flex: 1; min-height: 0; overflow: auto; padding: var(--s-4); display: flex; flex-direction: column; gap: var(--s-3); }
 .pi-sheet-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2);
@@ -70,40 +222,54 @@
 
 /* ================= 弹层与菜单 ================= */
 .pi-anchor { display: inline-flex; }
-/* 浮层 Portal 到 .paper-ink 根，top/left/right 由 use-anchored-layer 按触发按钮写入 */
+/* 浮层 Portal 到 .paper-ink 根，位置与 max-height 由 use-anchored-layer 按触发按钮写入，放不下的在浮层内部滚动 */
 .pi-popover, .pi-menu {
+  overflow-y: auto; overscroll-behavior: contain;
   position: fixed; z-index: var(--z-popover);
-  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-pop);
-  animation: pi-rise var(--dur-fast) var(--ease);
+  border-radius: var(--radius-panel); background: var(--layer); color: var(--ink); box-shadow: var(--shadow-pop);
 }
 .pi-popover:focus { outline: none; }
-.pi-popover { width: 340px; padding: var(--s-4); display: flex; flex-direction: column; gap: var(--s-2); }
-.pi-popover-title { margin: 0; font: 600 var(--fs-14)/1.4 var(--font-ui); }
-.pi-menu { min-width: 220px; padding: 6px; display: flex; flex-direction: column; }
-.pi-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--radius);
-  background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
-.pi-menu-item:hover, .pi-menu-item:focus-visible { background: var(--surface-2); }
+/* 弹层偶尔出现，140ms 浮现；菜单每天几十次且常由键盘打开，不做进场动画 */
+.pi-popover { width: 340px; padding: var(--s-5); display: flex; flex-direction: column; gap: var(--s-3); animation: pi-rise var(--dur-fast) var(--ease); }
+/* 向上展开时从上方落进来：两种方向的起点都在离触发按钮远的一侧 */
+.pi-popover[data-upward] { animation-name: pi-drop; }
+/* 弹层到了 max-height 时内容在里面滚动，不被 flex 压扁 */
+.pi-popover > * { flex-shrink: 0; }
+.pi-popover-title { margin: 0; font: 600 var(--fs-16)/1.4 var(--font-display); letter-spacing: .02em; }
+.pi-menu { min-width: 232px; padding: 6px; display: flex; flex-direction: column; }
+.pi-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-radius: var(--radius-control);
+  background: none; color: var(--ink); font: inherit; letter-spacing: .02em; text-align: left; cursor: pointer;
+}
+.pi-menu-item:hover { background: var(--wash); }
+/* 菜单里键盘焦点画在项内侧：外圈会压到相邻项 */
+.pi-menu-item:focus-visible { outline: none; background: var(--wash); box-shadow: inset 0 0 0 2px var(--accent); }
 .pi-menu-item[data-tone="danger"] { color: var(--danger); }
 .pi-menu-item[data-tone="danger"]:hover, .pi-menu-item[data-tone="danger"]:focus-visible { background: var(--danger-soft); }
-.pi-menu-item:disabled { color: var(--ink-4); cursor: not-allowed; background: none; }
+.pi-menu-item:disabled, .pi-menu-item[data-tone="danger"]:disabled { color: var(--ink-3); cursor: not-allowed; background: none; }
 .pi-menu-sep { height: 1px; margin: 6px 4px; background: var(--rule); }
-.pi-menu-label { padding: 6px 10px 4px; font-size: var(--fs-11); letter-spacing: .1em; color: var(--ink-3); }
+.pi-menu-label { padding: 6px 10px 4px; font-size: var(--fs-11); letter-spacing: .14em; color: var(--ink-3); }
 
 /* ================= 分段控件与勾选 ================= */
 .pi-seg { display: inline-flex; padding: 2px; border-radius: var(--radius); background: var(--sunken); }
 .pi-seg-item { height: 26px; padding: 0 var(--s-3); border: 0; border-radius: var(--radius-sm); background: none;
   color: var(--ink-2); font: inherit; font-size: var(--fs-12); cursor: pointer; }
 .pi-seg-item[aria-pressed="true"] { background: var(--paper); color: var(--ink); box-shadow: var(--shadow-seg); font-weight: 500; }
+/* 整组只有选中项能拿到焦点，焦点环要叠在选中项的阴影上 */
+.pi-seg-item[aria-pressed="true"]:focus-visible { box-shadow: var(--focus-ring), var(--shadow-seg); }
 
 .pi-check { position: relative; display: inline-flex; align-items: center; gap: var(--s-2); cursor: pointer; color: var(--ink); }
 .pi-check-input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+/* 勾选框边线用 --edge：--rule-strong 只有约 1.3:1，在对话框里看不清 */
 .pi-check-box { position: relative; display: grid; place-items: center; flex: none; width: 16px; height: 16px;
-  border: 1.5px solid var(--rule-strong); border-radius: var(--radius-sm); background: var(--paper); color: var(--accent-ink); }
+  border: 1.5px solid var(--edge); border-radius: var(--radius-sm); background: var(--paper); color: var(--accent-ink); }
 .pi-check-box > svg { width: 11px; height: 11px; visibility: hidden; }
 .pi-check-input:checked + .pi-check-box { background: var(--accent); border-color: var(--accent); }
 .pi-check-input:checked + .pi-check-box > svg { visibility: visible; }
 .pi-check-input:focus-visible + .pi-check-box { box-shadow: var(--focus-ring); }
-.pi-check-input:disabled + .pi-check-box, .pi-check-input:disabled ~ .pi-check-label { opacity: .38; }
+/* 禁用是没上墨的平面，不用 opacity */
+.pi-check-input:disabled + .pi-check-box { background: var(--wash-strong); border-color: transparent; color: var(--ink-3); }
+.pi-check-input:disabled ~ .pi-check-label, .pi-check-input:disabled ~ .pi-check-label :is(.pi-check-title, .pi-check-desc) { color: var(--ink-3); }
 .pi-switch { position: relative; flex: none; width: 32px; height: 18px; border-radius: var(--radius-pill); background: var(--rule-strong);
   transition: background var(--dur-fast) var(--ease); }
 .pi-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
@@ -111,6 +277,19 @@
 .pi-check-input:checked + .pi-switch { background: var(--accent); }
 .pi-check-input:checked + .pi-switch::after { transform: translateX(14px); }
 .pi-check-input:focus-visible + .pi-switch { box-shadow: var(--focus-ring); }
+/* 禁用开关同样是没上墨的平面：开着也撤掉强调色，开关状态只由滑块位置说出 */
+.pi-check-input:disabled + .pi-switch { background: var(--wash-strong); }
+/*
+ * 勾选行（例如清除生成内容的三类内容）：每个 <Check> 外包 div.pi-check-row。行容器向左让出 12px，标签再留 12px 内边距，
+ * 勾选框正好落回正文左边线，悬停底色向左溢出 12px。
+ */
+.pi-check-list { display: flex; flex-direction: column; gap: 2px; }
+.pi-check-row { margin-inline: calc(-1 * var(--s-3)); }
+.pi-check-row > .pi-check { display: flex; align-items: flex-start; gap: var(--s-3); padding: 10px var(--s-3); border-radius: var(--radius-lg); }
+.pi-check-row > .pi-check:hover { background: var(--wash); }
+.pi-check-row .pi-check-box { margin-top: 2px; }
+.pi-check-title { display: block; font-weight: 600; color: var(--ink); }
+.pi-check-desc { display: block; margin-top: 2px; font-size: var(--fs-12); line-height: 1.6; color: var(--ink-2); }
 
 /* ================= 统计格 ================= */
 .pi-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1px; margin: 0;
@@ -120,49 +299,135 @@
 .pi-stat-value { order: -1; margin: 0; font: italic 400 var(--fs-30)/1.1 var(--font-num); color: var(--ink); }
 .pi-stat-hint { margin: 0; font-size: var(--fs-11); color: var(--ink-3); }
 
-/* ================= 提示条与就地确认 ================= */
-.pi-notice { display: flex; align-items: flex-start; gap: var(--s-3); padding: var(--s-3) var(--s-4);
-  border-radius: var(--radius-lg); background: var(--surface-2); color: var(--ink); }
-.pi-notice > svg { flex: none; width: 16px; height: 16px; margin-top: 2px; color: var(--ink-3); }
-.pi-notice[data-tone="ok"] { background: var(--ok-soft); }
-.pi-notice[data-tone="ok"] > svg { color: var(--ok); }
-.pi-notice[data-tone="warn"] { background: var(--warn-soft); }
-.pi-notice[data-tone="warn"] > svg { color: var(--warn); }
-.pi-notice[data-tone="danger"] { background: var(--danger-soft); }
-.pi-notice[data-tone="danger"] > svg { color: var(--danger); }
-.pi-notice-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.pi-notice-title { margin: 0; font-weight: 600; }
-.pi-notice-text { margin: 0; color: var(--ink-2); }
-.pi-notice-actions { display: flex; align-items: center; gap: var(--s-2); flex: none; }
+/* ================= 提示条与就地确认：朱批 ================= */
+/*
+ * 提示是编辑写在稿纸上的批注，不是贴在纸上的盒子：没有底色、描边和圆角。
+ * 两列：16px 页边符号 | 文字；动作排在文字下面、与文字左对齐。宽窄两处同一种排法。
+ * 语气两条通道：符号颜色 + 符号外形（圆 i = 信息，圆勾 = 完成，三角 = 提醒，八角 = 危险或失败）。
+ */
+.pi-notice {
+  --pi-tone: var(--ink-2);
+  display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; row-gap: 10px; align-items: start;
+  color: var(--ink);
+}
+.pi-notice[data-tone="ok"] { --pi-tone: var(--ok); }
+.pi-notice[data-tone="warn"] { --pi-tone: var(--warn); }
+.pi-notice[data-tone="danger"] { --pi-tone: var(--danger); }
+/* 标题 14px、行高 1.6，首行 22.4px；16px 符号下移 3px 落在首行中线 */
+.pi-notice > svg { grid-column: 1; width: 16px; height: 16px; margin-top: 3px; color: var(--pi-tone); stroke-width: 1.75; }
+.pi-notice-body { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pi-notice-title { margin: 0; font: 600 var(--fs-14)/1.6 var(--font-display); letter-spacing: .02em; color: var(--ink); text-wrap: pretty; }
+.pi-notice-text { margin: 0; max-width: 44em; color: var(--ink-2); line-height: 1.7; text-wrap: pretty; }
+.pi-notice-text > p { margin: 0; }
+.pi-notice-text > p + p { margin-top: 2px; }
+.pi-notice-actions { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
 
-/* 带操作的通知（运行完成提示）。挂在页面根上，自带纸墨作用域，所以要盖掉 .paper-ink 的外框底色 */
-.paper-ink.pi-toast { pointer-events: auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--s-2);
-  width: 340px; padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4); border-radius: var(--radius-lg);
-  background: var(--surface); box-shadow: var(--shadow-pop); animation: pi-rise var(--dur) var(--ease); }
-.paper-ink.pi-toast[data-exiting] { opacity: 0; transition: opacity var(--dur) var(--ease); }
-.pi-toast-text { margin: 4px 0 0; color: var(--ink); overflow-wrap: anywhere; }
-.pi-toast-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: var(--s-2); }
+/* 就地确认：一句朱批（后果与能否恢复）加取消与危险描边按钮，排在原来那排按钮的位置上 */
+.pi-inline-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-3); }
+.pi-inline-confirm-text {
+  flex: 1 1 12em; min-width: 0; margin: 0;
+  font: 500 var(--fs-14)/1.6 var(--font-display); letter-spacing: .02em; color: var(--danger); text-wrap: pretty;
+}
 
-.pi-inline-confirm { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
-  border-radius: var(--radius-lg); background: var(--danger-soft); }
-.pi-inline-confirm-text { flex: 1; min-width: 0; margin: 0; color: var(--ink); }
+/* ================= 通知 ================= */
+/*
+ * 一张小浮笺：页边符号 | 标题与说明 | 关闭；动作行与文字左对齐。没有左色条、没有毛玻璃。
+ * 进场用 transition + @starting-style（连续弹出可打断），退场 140ms 快于进场 220ms。
+ */
+.pi-toast { --pi-tone: var(--ink-2); }
+.pi-toast[data-tone="ok"] { --pi-tone: var(--ok); }
+.pi-toast[data-tone="warn"] { --pi-tone: var(--warn); }
+.pi-toast[data-tone="danger"] { --pi-tone: var(--danger); }
+.pi-toast {
+  pointer-events: auto; position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: start;
+  column-gap: var(--s-3); row-gap: var(--s-2);
+  width: 360px; max-width: calc(100vw - 2 * var(--s-5)); padding: var(--s-3) var(--s-2) var(--s-3) var(--s-3); border-radius: var(--radius-lg);
+  background: var(--layer); color: var(--ink); box-shadow: var(--shadow-pop);
+  font: 400 var(--fs-13)/1.55 var(--font-ui); font-variant-numeric: tabular-nums;
+  opacity: 1; transform: none; transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+@starting-style { .pi-toast { opacity: 0; transform: translateY(6px); } }
+.pi-toast[data-exiting] { opacity: 0; transform: translateY(4px); transition-duration: var(--dur-fast); }
+.pi-toast-mark { display: grid; place-items: center; width: 16px; height: 24px; color: var(--pi-tone); }
+.pi-toast-mark > svg { width: 16px; height: 16px; stroke-width: 1.75; }
+.pi-toast-body { display: flex; flex-direction: column; gap: 2px; padding-top: 3px; min-width: 0; }
+.pi-toast-title { margin: 0; font-weight: 500; letter-spacing: .02em; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; text-wrap: pretty; }
+.pi-toast-text { margin: 0; color: var(--ink-2); white-space: pre-line; overflow-wrap: anywhere; text-wrap: pretty; }
+.pi-toast-actions { grid-column: 2 / -1; display: flex; justify-content: flex-start; gap: var(--s-2); }
 
-/* ================= 危险确认对话框 ================= */
+/* ================= 对话框 ================= */
+/*
+ * 一张大浮笺落在桌沿上：纸面 --layer，底栏是桌沿 --surface；标题衬线、恒为墨色。
+ * 危险确认加 .pi-dialog--marked：标题左边挂一枚 18px 线描符号，正文、输入框、勾选行与标题共用一条左边线。
+ * 后果说明 .pi-dialog-consequence 只是一组段落，没有框：发生什么用墨色，「能否恢复」用朱批 .pi-dialog-recover。
+ */
 .pi-scrim { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim); animation: pi-fade var(--dur) var(--ease); }
-.pi-dialog { position: fixed; z-index: var(--z-dialog); top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: 480px; max-width: calc(100vw - 48px); max-height: calc(100vh - 96px); display: flex; flex-direction: column;
-  border-radius: var(--radius-panel); background: var(--surface); box-shadow: var(--shadow-pop); color: var(--ink);
-  font: 400 var(--fs-13)/1.55 var(--font-ui); animation: pi-fade var(--dur) var(--ease); }
-.pi-dialog-head { padding: var(--s-5) var(--s-6) var(--s-2); }
-.pi-dialog-title { margin: 0; font: 600 var(--fs-20)/1.35 var(--font-display); color: var(--danger); }
-.pi-dialog-body { display: flex; flex-direction: column; gap: var(--s-3); padding: 0 var(--s-6) var(--s-5); overflow: auto; }
-.pi-dialog-text { margin: 0; color: var(--ink-2); }
+.pi-dialog {
+  position: fixed; z-index: var(--z-dialog); top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 480px; max-width: calc(100vw - 48px); max-height: calc(100vh - 96px); display: flex; flex-direction: column; overflow: hidden;
+  border-radius: var(--radius-panel); background: var(--layer); box-shadow: var(--shadow-dialog); color: var(--ink);
+  font: 400 var(--fs-13)/1.6 var(--font-ui); font-variant-numeric: tabular-nums; animation: pi-fade var(--dur) var(--ease);
+}
+.pi-dialog:focus { outline: none; }
+.pi-dialog-head { display: flex; align-items: flex-start; gap: var(--s-3); padding: 22px var(--s-6) var(--s-2); }
+.pi-dialog-heading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pi-dialog-title { margin: 0; font: 600 var(--fs-20)/1.4 var(--font-display); letter-spacing: .02em; color: var(--ink); text-wrap: balance; }
+.pi-dialog-sub { margin: 0; font-size: var(--fs-12); color: var(--ink-2); }
+.pi-dialog-body { display: flex; flex-direction: column; gap: var(--s-4); padding: var(--s-1) var(--s-6) var(--s-6); overflow: auto; }
+.pi-dialog-text { margin: 0; color: var(--ink-2); text-wrap: pretty; }
 .pi-dialog-text > p { margin: 0; }
-.pi-field { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-12); color: var(--ink-2); }
-.pi-input { height: 36px; padding: 0 var(--s-3); border: 1px solid var(--rule-strong); border-radius: var(--radius-control);
-  background: var(--paper); color: var(--ink); font: inherit; font-size: var(--fs-13); }
-.pi-input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.pi-dialog-foot { display: flex; justify-content: flex-end; gap: var(--s-2); padding: var(--s-4) var(--s-6); border-top: 1px solid var(--rule); }
+/* 命令式 alertError/confirm 的消息是纯字符串，常带 \n\n */
+.pi-dialog-message { white-space: pre-line; overflow-wrap: anywhere; }
+.pi-dialog-mark { flex: none; display: grid; place-items: center; width: 18px; height: 28px; color: var(--danger); }
+.pi-dialog-mark > svg { width: 18px; height: 18px; stroke-width: 1.75; }
+.pi-dialog--marked .pi-dialog-body { padding-left: calc(var(--s-6) + 18px + var(--s-3)); }
+.pi-dialog-consequence { display: flex; flex-direction: column; gap: 6px; color: var(--ink); }
+.pi-dialog-consequence > p { margin: 0; }
+/* 用语气色排正文的白名单之一（design-system.md「语气色排正文只限白名单」）：用户最需要读到的那句话最显眼 */
+.pi-dialog-recover { font: 500 var(--fs-14)/1.7 var(--font-display); letter-spacing: .02em; color: var(--danger); }
+.pi-dialog-foot {
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2);
+  padding: var(--s-3) var(--s-6); border-top: 1px solid var(--rule); background: var(--surface);
+}
+.pi-dialog-close { position: absolute; top: var(--s-4); right: var(--s-4); }
+/* 命令式 alertError()/confirm() 关掉时 140ms 淡出，与通知退场同一节奏；Radix 等动画走完才卸载，调用方随后拿到结果。
+   动画名不能含进场的 pi-fade：Radix Presence 用子串比对动画名，进场被打断时的 animationcancel 会被当成退场结束 */
+.pi-scrim--prompt[data-state="closed"], .pi-dialog--prompt[data-state="closed"] { animation: pi-vanish var(--dur-fast) var(--ease) forwards; }
+/*
+ * 沿用的 ui/Dialog 调用方也用这张浮笺。宽度上限、高度上限与底栏排法仍听调用方的 Tailwind 类：
+ * 那些类在 @layer utilities 里，会输给这里的无层样式，revert-layer 把这几项让回给它们。
+ */
+.pi-dialog--legacy { width: calc(100vw - 48px); max-width: revert-layer; max-height: revert-layer; overflow: auto; }
+.pi-dialog--legacy .pi-dialog-head { flex-direction: column; gap: 2px; padding-right: 56px; }
+.pi-dialog--legacy .pi-dialog-foot { justify-content: revert-layer; }
+
+/* ================= 命令式浮层的宿主与提示栈 ================= */
+/*
+ * alertError()/confirm()/toast 在 body 下建的宿主带 .paper-ink 与 data-theme，才取得到令牌与深色。
+ * display: contents 让它不画外框底色、不建层叠上下文，里面的 fixed 元素各自定位。
+ * 提示栈：toast 与 actionToast 共用的一个栈（右下角、新的在下），画在模态之上。
+ */
+.paper-ink.pi-overlay-host { display: contents; }
+/* 退出确认与命令式弹窗的一层：自成层叠上下文，里面的遮罩与对话框按 --z-scrim/--z-dialog 排，层与层之间按挂载先后 */
+.pi-prompt-layer { position: relative; z-index: var(--z-prompt); }
+/* 栈本身接指针：卡片之间的空隙也算在栈上，指针经过时悬停暂停不会断。模态给 body 设 pointer-events: none，栈会继承，所以显式写 auto */
+.pi-toast-stack {
+  pointer-events: auto; position: fixed; right: var(--s-5); bottom: var(--s-12); z-index: var(--z-toast);
+  display: flex; flex-direction: column; align-items: flex-end; gap: var(--s-2);
+  max-height: calc(100vh - 2 * var(--s-12));
+}
+/* 常驻与出错不受条数上限约束，栈最高到顶栏以下（上沿留 48px，窗口按钮仍点得到），再高就栈内滚动（ToastStack 量出溢出才标记，平时不裁卡片投影）；左侧留出投影的位置 */
+.pi-toast-stack[data-overflow] { overflow-y: auto; overscroll-behavior: contain; padding: var(--s-4) 0 0 var(--s-6); }
+/*
+ * 上面还有卡片的提示：卡片列上沿 16px 由卡片底色淡到透明，盖在卡片上而不是把卡片变透明（mask 会让页面文字从卡片里透出）。
+ * 粘在滚动区顶上，不占位；随滚动在头 16px 里淡入，滚到顶时消失，最早一条整张露出来。
+ */
+.pi-toast-stack[data-overflow]::before {
+  content: ''; position: sticky; top: 0; z-index: 1; flex: none; pointer-events: none;
+  width: 360px; max-width: calc(100vw - 2 * var(--s-5)); height: var(--s-4); margin-bottom: calc(-1 * (var(--s-4) + var(--s-2)));
+  background: linear-gradient(var(--layer), transparent);
+  animation: pi-fade linear both; animation-timeline: scroll(); animation-range: 0 var(--s-4);
+}
 
 /* ================= 空状态 ================= */
 .pi-empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-12) var(--s-6);
@@ -182,8 +447,18 @@
 
 @keyframes pi-sheet-in { from { transform: translateX(12px); opacity: 0; } }
 @keyframes pi-rise { from { transform: translateY(6px); opacity: 0; } }
+@keyframes pi-drop { from { transform: translateY(-6px); opacity: 0; } }
 @keyframes pi-fade { from { opacity: 0; } }
+@keyframes pi-vanish { to { opacity: 0; } }
+@keyframes pi-ink-draw {
+  0% { transform: scaleX(.04); opacity: 1; }
+  70% { transform: scaleX(1); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 0; }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .paper-ink, .paper-ink *, .paper-ink *::before, .paper-ink *::after { animation: none !important; transition: none !important; }
+  /* 提示栈淡出带的透明度跟着滚动位置走，不随时间动，所以不关 */
+  .paper-ink, .paper-ink *, .paper-ink *:not(.pi-toast-stack)::before, .paper-ink *::after { animation: none !important; transition: none !important; }
+  /* 按下的下沉与缩小也是位移；按下的反馈留给颜色与内凹投影 */
+  .paper-ink .pi-btn:is(:active, [aria-expanded="true"]) { transform: none; }
 }

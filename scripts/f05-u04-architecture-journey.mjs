@@ -10,6 +10,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
+import * as arch from './redesign/pages/architecture.mjs'
+import * as runSheet from './redesign/pages/run-sheet.mjs'
+import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
@@ -24,10 +28,10 @@ assert(packageDir && packageSourceSha && /^[a-f0-9]{64}$/.test(expectedExe ?? ''
 const a01A04Only = process.argv.includes('--a01-a04-only')
 assert(a01A04Only || process.argv.includes('--include-recovery'), 'pass --a01-a04-only; recovery actions A05–A08 require explicit --include-recovery')
 const priorPath = path.join(repository, '.runtime', '.cache', 'f05-u04-architecture', '45f2cfb2-e7a1-494d-a7cd-a3c5d39c5241', 'receipt.json')
-assert(fs.existsSync(priorPath), 'historical Writer U04 receipt missing')
-const prior = JSON.parse(fs.readFileSync(priorPath, 'utf8'))
-assert.equal(prior.outcome, 'PARTIAL')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+// 旧外壳时期的历史回执只在当年的机器上：有就核对，没有就记下缺席。
+const prior = fs.existsSync(priorPath) ? JSON.parse(fs.readFileSync(priorPath, 'utf8')) : null
+if (prior) assert.equal(prior.outcome, 'PARTIAL')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const fileHash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -65,10 +69,9 @@ for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOK
 async function invoke(page, channel, ...args) {
   return page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 }
-async function assertWriter(page, actionId) {
-  const shell = page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]')
-  await shell.waitFor({ state: 'visible', timeout })
-  assert.equal(await shell.getAttribute('data-shell-variant'), 'v3', `${actionId}: not V3 Writer`)
+async function assertStage(page, actionId) {
+  await stage.waitForStage(page, timeout)
+  assert.equal(await stage.root(page).getAttribute('data-shell-presentation'), 'stage', `${actionId}: not the paper-ink stage`)
 }
 async function launch(port) {
   const app = await electron.launch({ executablePath, cwd: packageDir, args: [`--user-data-dir=${profile.userData}`], env, timeout })
@@ -83,7 +86,7 @@ async function launch(port) {
     }, port)
     const page = await app.firstWindow({ timeout })
     page.setDefaultTimeout(15_000)
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout })
+    await stage.waitForStage(page, timeout)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
     return { app, page }
   } catch (error) { await app.close(); throw error }
@@ -97,54 +100,56 @@ async function quit(app) {
   if (!closed) execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, encoding: 'utf8' })
   return { forced: !closed }
 }
-async function selectWriter(page) {
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const previous = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...previous, shellPreference: 'writer', revision: Number(previous.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await assertWriter(page, 'writer-selection')
-}
 async function openProject(page) {
-  await assertWriter(page, 'project-open')
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-  await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+  await assertStage(page, 'project-open')
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, projectName)
+  await stage.waitForWork(page, projectName)
+}
+/** 设定页的核心大纲（旧外壳的「小说配置」创作想法），改完 Ctrl S。 */
+async function saveCoreOutline(page, value) {
+  await stage.stageButton(page, '设定').click()
+  await stage.setupOutline(page).fill(value)
+  await page.keyboard.press('ControlOrMeta+s')
+  await stage.saveStatus(page).filter({ hasText: /^已保存$/ }).waitFor({ state: 'visible' })
 }
 async function architecture(page) {
-  await assertWriter(page, 'architecture-entry')
-  await page.locator('.writer-project-tree').getByText('故事架构', { exact: true }).click()
-  await page.getByRole('button', { name: 'AI 生成架构' }).waitFor({ state: 'visible' })
+  await assertStage(page, 'architecture-entry')
+  await arch.open(page)
 }
-async function selectOnly(dialog, selected) {
-  await dialog.getByRole('button', { name: '全选' }).click()
-  for (const label of ['故事前提', '角色图谱', '世界观', '情节大纲']) {
-    if (label !== selected) await dialog.locator('label').filter({ hasText: label }).click()
+const SECTION_KEYS = { 故事前提: 'premise', 角色名单: 'characters', 世界观: 'worldbuilding', 情节大纲: 'synopsis' }
+/** 四节都有内容后主按钮是「下一步」，生成在「架构的更多操作」里；否则主按钮就是生成。 */
+async function openGenerateDialog(page) {
+  if (await arch.primary(page).filter({ hasText: /生成架构/ }).count() > 0) await arch.primary(page).click()
+  else {
+    await page.getByRole('button', { name: '架构的更多操作' }).click()
+    await page.getByRole('menuitem', { name: 'AI 生成架构…' }).click()
   }
+  await arch.dialog(page).waitFor({ state: 'visible' })
+  return arch.dialog(page)
 }
-async function generate(page, selected, range) {
-  await assertWriter(page, `generate-${selected}`)
-  await page.getByRole('button', { name: 'AI 生成架构' }).click()
-  const dialog = page.getByRole('dialog')
-  await selectOnly(dialog, selected)
-  if (range) {
-    await dialog.getByRole('spinbutton', { name: '本次生成范围的起始章' }).fill(String(range.from))
-    await dialog.getByRole('spinbutton', { name: '本次生成范围的结束章' }).fill(String(range.to))
-  }
-  await dialog.getByRole('button', { name: '确认生成（1/4）' }).click()
+async function startGenerate(page) {
+  const dialog = arch.dialog(page)
+  await dialog.getByRole('button', { name: /^开始生成 \d+ 项$/ }).click()
   try {
     await dialog.waitFor({ state: 'hidden' })
   } catch (error) {
     const state = await dialog.evaluate(element => ({
-      guardError: element.querySelector('span.whitespace-pre-line')?.textContent?.slice(0, 500) ?? null,
-      confirm: [...element.querySelectorAll('button')].filter(button => /确认生成|校验中/.test(button.textContent ?? ''))
+      guardError: element.querySelector('span.arch-guard')?.textContent?.slice(0, 500) ?? null,
+      confirm: [...element.querySelectorAll('button')].filter(button => /开始生成|校验中/.test(button.textContent ?? ''))
         .map(button => ({ text: button.textContent?.trim().slice(0, 80), disabled: button.disabled })),
       range: [...element.querySelectorAll('input[type="number"]')].map(input => input.value),
     }))
     throw new Error(`architecture dialog remained open: ${JSON.stringify(state)}; ${String(error)}`)
   }
+}
+async function generate(page, selected, range) {
+  await assertStage(page, `generate-${selected}`)
+  await openGenerateDialog(page)
+  await arch.selectOnly(page, [SECTION_KEYS[selected]])
+  if (range) await arch.setRange(page, range.from, range.to)
+  await startGenerate(page)
 }
 async function readCore(_page, context) {
   const projectRoot = path.resolve(context.projectPath)
@@ -175,15 +180,35 @@ async function waitCore(page, context, predicate, label) {
   }
   throw new Error(`Timed out waiting for ${label}`)
 }
-const historyRows = page => page.locator('.writer-task-table').getByText('历史任务', { exact: true })
-  .locator('xpath=following-sibling::div[1]/div')
-async function waitWorkflowReleased(page, previousCount) {
-  await page.waitForFunction(count => {
-    const heading = [...document.querySelectorAll('.writer-task-table div')]
-      .find(element => element.textContent?.trim() === '历史任务')
-    return (heading?.nextElementSibling?.children.length ?? 0) > count
-  }, previousCount, { timeout })
+// 旧外壳底部任务表的「历史任务」在纸墨外壳是运行侧页「历史」分页：数行数，判断这次运行已经结束、锁已释放。
+const historyRows = page => page.getByRole('list', { name: '运行历史' }).getByRole('listitem')
+async function showRunHistory(page) {
+  await runSheet.openFromPalette(page)
+  await runSheet.tab(page, '历史').click()
 }
+/** 失败时的诊断：运行历史只在「历史」页挂载，先切过去再读；读不到就返回空，不盖掉原来的错误。 */
+async function historyTextsForDiagnostics(page) {
+  try {
+    await showRunHistory(page)
+    return await historyRows(page).allTextContents()
+  } catch {
+    return []
+  }
+}
+async function waitWorkflowReleased(page, previousCount) {
+  await showRunHistory(page)
+  await page.waitForFunction(count => (document.querySelector('[aria-label="运行历史"]')?.children.length ?? 0) > count, previousCount, { timeout })
+  await runSheet.tab(page, '进行中').click()
+}
+async function runCount(page) {
+  await showRunHistory(page)
+  const count = await historyRows(page).count()
+  await runSheet.tab(page, '进行中').click()
+  return count
+}
+/** 世界观或大纲半途停下时的提示条：正式内容保留，候选可看、可复制、可断点续写。 */
+const candidateNotice = page => stage.root(page).locator('.pi-notice').filter({ hasText: /^上次生成在半途停下/ })
+const alertTexts = page => stage.root(page).locator('[role="alert"], .pi-notice[data-tone="danger"]').allTextContents()
 async function readPartial(_page, context) {
   const projectRoot = path.resolve(context.projectPath)
   assert.equal(path.dirname(projectRoot), path.resolve(profile.projects), 'partial checkpoint escaped isolated project root')
@@ -226,7 +251,7 @@ async function main() {
   fs.mkdirSync(receiptDir, { recursive: true })
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
   fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U04 architecture', sourceProject: repository,
-    createdAt: new Date().toISOString(), ttlHours: 48, retainedReason: 'review Writer U04 receipt',
+    createdAt: new Date().toISOString(), ttlHours: 48, retainedReason: 'review stage U04 receipt',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
   const fixture = { mode: 'idle', requests: [], pending: null }
   const server = createServer(async (request, response) => {
@@ -283,58 +308,56 @@ async function main() {
     assert(outlinedCore?.charactersArch?.includes('林岚'), 'outline prerequisite roster projection was not persisted')
     assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
     assert.equal((await invoke(page, 'llm:set-default-model', model.id)).success, true)
-    await selectWriter(page)
+    await page.reload()
     await openProject(page)
-    await page.locator('.writer-project-tree').getByText('小说配置', { exact: true }).click()
-    await page.getByPlaceholder('在此输入你的创作想法，或让 AI 根据这段话一键生成全部配置...').fill(premise)
-    await page.getByRole('heading', { name: '小说配置' }).locator('xpath=../..').getByRole('button', { name: '保存', exact: true }).click()
-    await page.getByRole('status').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
+    await saveCoreOutline(page, premise)
     await architecture(page)
 
     mark('U04.A01-worldbuilding')
     fixture.mode = 'world-stop'
-    let priorRuns = await historyRows(page).count()
+    let priorRuns = await runCount(page)
     await generate(page, '世界观')
     await waitCore(page, context, core => core?.worldbuilding?.includes(worldText), 'formal worldbuilding')
     await waitWorkflowReleased(page, priorRuns)
-    pass('U04.A01-worldbuilding', 'U04.A01', 'Writer generate button produced formal worldbuilding through shared workflow and project core', { syntheticRequests: fixture.requests.length })
+    pass('U04.A01-worldbuilding', 'U04.A01', 'The architecture generate dialog produced formal worldbuilding through the shared workflow and project core', { syntheticRequests: fixture.requests.length })
 
     mark('U04.A02-outline-range')
     fixture.mode = 'outline-first'
-    priorRuns = await historyRows(page).count()
+    priorRuns = await runCount(page)
     await generate(page, '情节大纲', { from: 1, to: 2 })
     let first
     try {
       first = await waitCore(page, context, core => core?.synopsis?.includes('第1章：旧港线索1') && core?.synopsis?.includes('已覆盖至第 2 章'), 'first outline batch')
     } catch (error) {
-      const notice = await page.locator('.writer-ai-panel [role="alert"]').allTextContents()
-      const taskHistory = await historyRows(page).allTextContents()
+      const notice = await alertTexts(page)
+      const taskHistory = await historyTextsForDiagnostics(page)
       throw new Error(`first outline batch failed: ${JSON.stringify({ notice: notice.map(text => text.slice(0, 500)), taskHistory: taskHistory.slice(0, 3) })}; ${String(error)}`)
     }
     await waitWorkflowReleased(page, priorRuns)
     assert.equal(first.synopsis.includes('第3章：旧港线索3'), false)
     assert(first.synopsis.includes('第2章：旧港线索2'))
-    pass('U04.A02-outline-range', 'U04.A02', 'Writer explicit 1..2 batch persisted only its requested range', { from: 1, to: 2 })
+    pass('U04.A02-outline-range', 'U04.A02', 'The explicit 1..2 batch persisted only its requested range', { from: 1, to: 2 })
 
     mark('U04.A03-completed-range')
-    await page.getByText('已覆盖至第 2 章 · 待续批', { exact: true }).waitFor({ state: 'visible' })
-    pass('U04.A03-completed-range', 'U04.A03', 'Writer displayed completed range from persisted 1..2 checkpoint', { coveredTo: 2 })
+    await architecture(page)
+    await arch.section(page, 'synopsis').getByText(/^上次生成到第 2 章停下了，第 3–\d+ 章还没有大纲。$/).waitFor({ state: 'visible' })
+    pass('U04.A03-completed-range', 'U04.A03', 'The outline section displayed the completed range from the persisted 1..2 checkpoint', { coveredTo: 2 })
 
     mark('U04.A04-continue-batch')
     fixture.mode = 'outline-next'
-    priorRuns = await historyRows(page).count()
-    await page.getByRole('button', { name: '续批（第 3 章起）' }).click()
-    const batchDialog = page.getByRole('dialog')
-    assert.equal(await batchDialog.getByRole('spinbutton', { name: '本次生成范围的起始章' }).inputValue(), '3')
-    await batchDialog.getByRole('spinbutton', { name: '本次生成范围的结束章' }).fill('4')
-    await selectOnly(batchDialog, '情节大纲')
-    await batchDialog.getByRole('button', { name: '确认生成（1/4）' }).click()
+    priorRuns = await runCount(page)
+    await arch.section(page, 'synopsis').getByRole('button', { name: '续写第 3 章起' }).click()
+    await arch.dialog(page).waitFor({ state: 'visible' })
+    assert.equal(await arch.dialog(page).getByRole('spinbutton', { name: '本次生成范围的起始章' }).inputValue(), '3')
+    await arch.dialog(page).getByRole('spinbutton', { name: '本次生成范围的结束章' }).fill('4')
+    await arch.selectOnly(page, ['synopsis'])
+    await startGenerate(page)
     try {
       await waitCore(page, context, core => core?.synopsis?.includes('第4章：旧港线索4') && core?.synopsis?.includes('已覆盖至第 4 章'), 'continued outline batch')
     } catch (error) {
       const dialog = await page.getByRole('dialog').allTextContents()
-      const notice = await page.locator('.writer-ai-panel [role="alert"]').allTextContents()
-      const taskHistory = await historyRows(page).allTextContents()
+      const notice = await alertTexts(page)
+      const taskHistory = await historyTextsForDiagnostics(page)
       throw new Error(`continued outline batch failed: ${JSON.stringify({ dialog: dialog.map(text => text.slice(0, 500)), notice: notice.map(text => text.slice(0, 500)), taskHistory: taskHistory.slice(0, 3) })}; ${String(error)}`)
     }
     await waitWorkflowReleased(page, priorRuns)
@@ -351,8 +374,8 @@ async function main() {
       ['outline-first', 'POST', '/v1/chat/completions', true],
       ['outline-next', 'POST', '/v1/chat/completions', true],
       ['outline-next', 'POST', '/v1/chat/completions', true],
-    ], 'V3 UI actions did not reach the five expected loopback generation requests')
-    pass('U04.A04-continue-batch', 'U04.A04', 'Writer continuation started at chapter 3 and preserved chapter 1 while extending through chapter 4', { from: 3, to: 4 })
+    ], 'stage UI actions did not reach the five expected loopback generation requests')
+    pass('U04.A04-continue-batch', 'U04.A04', 'The outline continuation started at chapter 3 and preserved chapters 1–2 while extending through chapter 4', { from: 3, to: 4 })
 
     if (!a01A04Only) {
     mark('U04.A05-length-candidate')
@@ -366,21 +389,22 @@ async function main() {
       texts => texts.length === 2 && texts.every(text => text === heldText), 'two length candidate artifacts')
     assert.equal(readAttemptCount(context, interrupted.world_building_generation_handle), 2, 'length continuation was not recorded on one run')
     try {
-      await page.getByText('正式内容保留 · 有未完成候选', { exact: true }).waitFor({ state: 'visible', timeout })
+      await architecture(page)
+      await candidateNotice(page).waitFor({ state: 'visible', timeout })
     } catch (error) {
       const partial = await readPartial(page, context)
       const composition = partial?.world_building_generation_handle
         ? await invoke(page, 'generation:read-visible-composition', partial.world_building_generation_handle, context).catch(() => null)
         : null
-      const taskHistory = await historyRows(page).allTextContents()
-      const alerts = await page.locator('.writer-ai-panel [role="alert"]').allTextContents()
+      const taskHistory = await historyTextsForDiagnostics(page)
+      const alerts = await alertTexts(page)
       const statuses = await page.getByRole('status').allTextContents()
       throw new Error(`length candidate UI missing: ${JSON.stringify({
         candidateMirrorPresent: Boolean(partial?.world_building_partial_result),
         handlePresent: Boolean(partial?.world_building_generation_handle),
         composition: composition ? { algorithm: composition.algorithm, textLength: composition.text?.length ?? 0,
           artifactCount: composition.artifactIds?.length ?? 0 } : null,
-        candidateButtonCount: await page.getByRole('button', { name: '查看候选' }).count(),
+        candidateButtonCount: await page.getByRole('button', { name: '查看未完成候选' }).count(),
         syntheticRequestsSinceLength: fixture.requests.length - requestsBeforeLength,
         statuses: statuses.slice(0, 8).map(value => value.slice(0, 160)),
         alerts: alerts.slice(0, 3).map(value => value.slice(0, 300)),
@@ -391,38 +415,40 @@ async function main() {
     assert.equal((await readCore(page, context)).worldbuilding, beforeLength, 'length result overwrote formal worldbuilding')
     await quit(app); app = null
     ;({ app, page } = await launch(port))
-    await assertWriter(page, 'U04.A05')
+    await assertStage(page, 'U04.A05')
     await openProject(page)
     await architecture(page)
     assert.deepEqual((await readPartial(page, context))?.world_building_generation_handle, interrupted.world_building_generation_handle,
       'reopened candidate did not retain the exact run handle')
     assert.equal((await readCore(page, context)).worldbuilding, beforeLength, 'reopened candidate changed formal worldbuilding')
-    await page.getByText('正式内容保留 · 有未完成候选', { exact: true }).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '查看候选' }).click()
-    await page.getByText(heldText, { exact: false }).waitFor({ state: 'visible' })
+    await candidateNotice(page).waitFor({ state: 'visible' })
+    await candidateNotice(page).getByRole('button', { name: '查看未完成候选' }).click()
+    await stage.root(page).getByRole('region', { name: '未完成候选' }).getByText(heldText, { exact: false }).waitFor({ state: 'visible' })
     pass('U04.A05-length-candidate', 'U04.A05', 'Two length-ended synthetic responses retained an inspectable candidate after installed-process restart without changing formal worldbuilding',
       { candidateHandle: Boolean(interrupted.world_building_generation_handle) })
 
     mark('U04.A07-safe-world-resume')
     fixture.mode = 'world-resume'
-    priorRuns = await historyRows(page).count()
-    await page.getByRole('button', { name: '断点续写', exact: true }).click()
+    priorRuns = await runCount(page)
+    await candidateNotice(page).getByRole('button', { name: '断点续写', exact: true }).click()
     await waitCore(page, context, core => core?.worldbuilding?.includes(recoveryText), 'resumed formal worldbuilding')
     await waitWorkflowReleased(page, priorRuns)
     assert.equal(readAttemptCount(context, interrupted.world_building_generation_handle), 3, 'resume did not add an attempt to the selected run')
     assert((await readCore(page, context)).worldbuilding.includes(heldText), 'resume discarded selected candidate text')
     assert.equal((await readPartial(page, context))?.world_building_incomplete, undefined)
-    pass('U04.A07-safe-world-resume', 'U04.A07', 'Writer resumed persisted candidate by its exact handle and committed new formal worldbuilding',
+    pass('U04.A07-safe-world-resume', 'U04.A07', 'The candidate notice resumed the persisted candidate by its exact handle and committed new formal worldbuilding',
       { priorCandidateHandle: Boolean(interrupted.world_building_generation_handle) })
 
     mark('U04.A06-cancel-candidate')
     fixture.mode = 'world-hold'
     fixture.pending = null
-    priorRuns = await historyRows(page).count()
+    priorRuns = await runCount(page)
     const beforeCancel = (await readCore(page, context)).worldbuilding
     await generate(page, '世界观')
     await waitPending(fixture)
-    await page.getByRole('button', { name: '中止生成' }).click()
+    // 旧外壳 AI 输出的「中止生成」是运行侧页里这次运行卡片的「取消」。
+    await runSheet.openFromPalette(page)
+    await runSheet.sheet(page).getByRole('button', { name: /^取消「/ }).click()
     const cancelled = await waitPartial(page, context, partial => partial?.world_building_incomplete === true
       && partial?.world_building_generation_handle, 'cancelled candidate checkpoint')
     await waitWorkflowReleased(page, priorRuns)
@@ -430,7 +456,7 @@ async function main() {
     await waitArtifacts(context, cancelled.world_building_generation_handle,
       texts => texts.some(text => text?.includes(heldText)), 'stopped candidate artifact')
     assert.equal((await readCore(page, context)).worldbuilding, beforeCancel, 'stop changed formal worldbuilding')
-    pass('U04.A06-cancel-candidate', 'U04.A06', 'Writer stop kept partial worldbuilding candidate and left prior formal worldbuilding intact',
+    pass('U04.A06-cancel-candidate', 'U04.A06', 'Cancelling the run kept the partial worldbuilding candidate and left prior formal worldbuilding intact',
       { candidateHandle: Boolean(cancelled.world_building_generation_handle) })
 
     mark('U04.A08-source-change')
@@ -441,10 +467,7 @@ async function main() {
     const beforeChange = (await readCore(page, context)).worldbuilding
     const checkpointPath = path.join(context.projectPath, '.ai-novel', 'partial_arch.json')
     const checkpointBefore = fs.statSync(checkpointPath).mtimeMs
-    await page.locator('.writer-project-tree').getByText('小说配置', { exact: true }).click()
-    await page.getByPlaceholder('在此输入你的创作想法，或让 AI 根据这段话一键生成全部配置...').fill(`${premise} 作者新增前提。`)
-    await page.getByRole('heading', { name: '小说配置' }).locator('xpath=../..').getByRole('button', { name: '保存', exact: true }).click()
-    await page.getByRole('status').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
+    await saveCoreOutline(page, `${premise} 作者新增前提。`)
     assert.equal((await readCore(page, context)).core_outline, `${premise} 作者新增前提。`, 'source change was not persisted before stale completion')
     stream.send(staleText)
     const deadline = Date.now() + timeout
@@ -456,13 +479,13 @@ async function main() {
       const composition = partial?.world_building_generation_handle
         ? await invoke(page, 'generation:read-visible-composition', partial.world_building_generation_handle, context).catch(() => null)
         : null
-      const alerts = await page.locator('.writer-ai-panel [role="alert"]').allTextContents()
-      const taskHistory = await historyRows(page).allTextContents()
+      const alerts = await alertTexts(page)
+      const taskHistory = await historyTextsForDiagnostics(page)
       throw new Error(`source-change candidate was not persisted after provider completed: ${JSON.stringify({
         handlePresent: Boolean(partial?.world_building_generation_handle),
         incomplete: partial?.world_building_incomplete,
         composition: composition ? { textLength: composition.text?.length ?? 0, artifactCount: composition.artifactIds?.length ?? 0 } : null,
-        candidateButtonCount: await page.getByRole('button', { name: '查看候选' }).count(),
+        candidateButtonCount: await page.getByRole('button', { name: '查看未完成候选' }).count(),
         syntheticRequests: fixture.requests.length,
         alerts: alerts.slice(0, 3).map(value => value.slice(0, 300)),
         taskHistory: taskHistory.slice(0, 3).map(value => value.slice(0, 500)),
@@ -476,35 +499,42 @@ async function main() {
       texts => texts.some(text => text?.includes(staleText)), 'source-change candidate artifact')
     assert.equal((await readCore(page, context)).worldbuilding, beforeChange, 'stale result overwrote formal worldbuilding')
     await architecture(page)
-    await page.getByRole('button', { name: '刷新状态' }).click()
+    await page.getByRole('button', { name: '架构的更多操作' }).click()
+    await page.getByRole('menuitem', { name: '刷新状态' }).click()
     try {
-      await page.getByText('正式内容保留 · 有未完成候选', { exact: true }).waitFor({ state: 'visible' })
-      await page.getByRole('button', { name: '查看候选' }).click()
-      await page.locator('main.writer-editor').locator('pre').filter({ hasText: staleText }).waitFor({ state: 'visible' })
+      await candidateNotice(page).waitFor({ state: 'visible' })
+      await candidateNotice(page).getByRole('button', { name: '查看未完成候选' }).click()
+      await stage.root(page).getByRole('region', { name: '未完成候选' }).filter({ hasText: staleText }).waitFor({ state: 'visible' })
     } catch (error) {
       const partial = await readPartial(page, context)
       const composition = partial?.world_building_generation_handle
         ? await invoke(page, 'generation:read-visible-composition', partial.world_building_generation_handle, context).catch(() => null)
         : null
-      const alerts = await page.locator('.writer-ai-panel [role="alert"]').allTextContents()
-      const taskHistory = await historyRows(page).allTextContents()
+      const alerts = await alertTexts(page)
+      const taskHistory = await historyTextsForDiagnostics(page)
       throw new Error(`source-change candidate UI missing: ${JSON.stringify({
         candidateMirrorPresent: Boolean(partial?.world_building_partial_result),
         handlePresent: Boolean(partial?.world_building_generation_handle),
         composition: composition ? { algorithm: composition.algorithm, textLength: composition.text?.length ?? 0,
           artifactCount: composition.artifactIds?.length ?? 0 } : null,
-        candidateButtonCount: await page.getByRole('button', { name: '查看候选' }).count(),
+        candidateButtonCount: await page.getByRole('button', { name: '查看未完成候选' }).count(),
         alerts: alerts.slice(0, 3).map(value => value.slice(0, 300)),
         taskHistory: taskHistory.slice(0, 3).map(value => value.slice(0, 500)),
       })}; ${String(error)}`)
     }
-    await page.locator('.writer-ai-panel [role="alert"]')
-      .filter({ hasText: '世界观生成期间故事前提、小说配置或模板已变化，本次结果已保留为候选且未写入正式世界观' })
+    // 运行侧页「历史」里这次失败的运行写明了原因。
+    await showRunHistory(page)
+    const latestRun = historyRows(page).first()
+    if (await latestRun.locator('.run-history-row').getAttribute('aria-expanded') !== 'true') await latestRun.locator('.run-history-row').click()
+    await latestRun.getByText('世界观生成期间故事前提、小说配置或模板已变化，本次结果已保留为候选且未写入正式世界观', { exact: false }).first()
       .waitFor({ state: 'visible' })
-    pass('U04.A08-source-change', 'U04.A08', 'Changing premise while Writer recovery was streaming rejected stale formal write and retained candidate',
+    pass('U04.A08-source-change', 'U04.A08', 'Changing premise while the worldbuilding run was streaming rejected the stale formal write and retained a candidate',
       { changedSource: 'coreOutline', formalUnchanged: true })
     }
-  } catch (error) { failure = error }
+  } catch (error) {
+    failure = error
+    if (page) await page.screenshot({ path: path.join(receiptDir, 'failure.png') }).catch(() => {})
+  }
   finally {
     if (app) try { await quit(app) } catch (error) { failure ??= error }
     if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
@@ -513,15 +543,15 @@ async function main() {
   const unverified = Array.from({ length: 8 }, (_, index) => `U04.A${String(index + 1).padStart(2, '0')}`)
     .filter(actionId => !coveredActions.has(actionId))
   const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: a01A04Only ? 'F05_U04_V3_ARCHITECTURE_A01_A04_ONLY' : 'F05_U04_V3_ARCHITECTURE_RECOVERY_EXPERIMENT',
-    evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths,
+    evidenceLevel: 'electron', shell: 'stage', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths,
     reuseDecision: { testedSha, changedPaths, differences: changedPaths.join(', ') || 'none',
-      reason: 'historical Writer UI is not reused; fixed V3 package hashes match and current V3 UI is exercised independently' },
+      reason: 'historical Writer receipts are not reused; fixed package hashes match and the current paper-ink stage UI is exercised independently' },
     sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean), dirtyProductPaths,
-    buildReceipt: { path: priorPath, sha256: fileHash(priorPath) },
+    buildReceipt: prior ? { path: priorPath, sha256: fileHash(priorPath) } : { path: priorPath, missing: true },
     artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
     driver: { path: fileURLToPath(import.meta.url), sha256: fileHash(fileURLToPath(import.meta.url)) },
     profile: { canonical: profile.canonical, userData: profile.userData, projectRoot: profile.projects },
-    project: { path: project?.projectPath ?? null }, persistenceRead: 'isolated project SQLite readonly; Writer action and write remain production UI/IPC',
+    project: { path: project?.projectPath ?? null }, persistenceRead: 'isolated project SQLite readonly; stage actions and writes remain production UI/IPC',
     setupFixture: 'formal premise via project-core-update; protagonist roster via character-roster-commit derives charactersArch; neither counted as U04 action',
     syntheticRequests: fixture.requests, externalModelRequests: 0, steps,
     unverified,

@@ -3,6 +3,7 @@ import { sameProjectPathKey } from '../../shared/project-session-context'
 import type { WorkflowContext } from '../../stores/workflow-store'
 import type { WritingLanguage } from '../../shared/writing-language'
 import type { Locale } from '../../i18n/types'
+import { knownAppErrorMessage } from '../../i18n/app-errors'
 
 /**
  * 取出工作流启动时冻结的项目会话。
@@ -36,4 +37,27 @@ export function workflowUiText(
   enUSText: string,
 ): string {
   return workflowUiLocale(context) === 'en-US' ? enUSText : zhCNText
+}
+
+const errorCode = /^[A-Z][A-Z0-9_]*$/u
+
+/**
+ * 主进程拒绝时只回 String(err)：多是只有中文的原文，也可能是错误码。登记过的码按界面语言说明；
+ * 未登记的码原样附上供反馈定位，并挂在 code 上；其余原文只附在中文说明后面，英文界面只给英文说明。
+ * 只用到界面语言：没有运行上下文的调用方传 { uiLocale }。
+ */
+export function workflowMainProcessError(
+  context: Pick<WorkflowContext, 'uiLocale'>,
+  error: unknown,
+  zhCNSummary: string,
+  enUSSummary: string,
+): Error {
+  const english = context.uiLocale === 'en-US'
+  const summary = english ? enUSSummary : zhCNSummary
+  const raw = typeof error === 'string' ? error.trim().replace(/^Error: /u, '') : ''
+  if (!raw) return new Error(summary)
+  const code = errorCode.test(raw) ? raw : undefined
+  const reason = knownAppErrorMessage(context.uiLocale, raw) ?? (code || !english ? raw : undefined)
+  const failure = new Error(reason ? `${summary}${english ? ' ' : '：'}${reason}` : summary)
+  return code ? Object.assign(failure, { code }) : failure
 }

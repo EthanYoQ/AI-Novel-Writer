@@ -2,6 +2,7 @@ import { useId, useMemo, useState, type KeyboardEvent } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { ArrowUpDown, CornerDownLeft, Search } from 'lucide-react'
 import { useLocaleStore } from '../../stores/locale-store'
+import { keepToastStackClickable } from '../ui/ToastStack'
 import type { StagePalette as PaletteMode } from '../../stores/navigation/stage-store'
 import { filterPalette, GROUP_LABELS, GROUP_ORDER, type PaletteItem } from './palette-filter'
 import { commandLabel, isComposing } from './shortcut-keys'
@@ -118,7 +119,7 @@ export default function StagePalette({ mode, items, container, onClose }: StageP
     <DialogPrimitive.Root open={mode !== null} onOpenChange={open => { if (!open) onClose() }}>
       <DialogPrimitive.Portal container={container}>
         <DialogPrimitive.Overlay className="stage-palette-scrim" />
-        <DialogPrimitive.Content className="stage-palette" aria-describedby={undefined}>
+        <DialogPrimitive.Content className="stage-palette" aria-describedby={undefined} onPointerDownOutside={keepToastStackClickable}>
           <DialogPrimitive.Title className="stage-visually-hidden">
             {mode === 'chapters' ? text('查找章节', 'Find a chapter') : text('搜索与跳转', 'Search and jump')}
           </DialogPrimitive.Title>

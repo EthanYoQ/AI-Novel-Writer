@@ -23,6 +23,7 @@ import {
 } from '../shared/project-session-context'
 import type { WritingLanguage } from '../shared/writing-language'
 import { randomUUID } from '../utils/id'
+import { pluralEn } from '../shared/plural-en'
 
 
 export type ExportFormat = 'merged-md' | 'split-md' | 'txt'
@@ -280,7 +281,7 @@ export async function exportNovel(
     if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
     addLog('info', text(
       `找到 ${chapterContents.length} 个已定稿章节`,
-      `Found ${chapterContents.length} finalized chapters.`,
+      `Found ${chapterContents.length} finalized ${pluralEn(chapterContents.length, 'chapter')}.`,
     ), uiLocale)
 
     let outputPath = ''

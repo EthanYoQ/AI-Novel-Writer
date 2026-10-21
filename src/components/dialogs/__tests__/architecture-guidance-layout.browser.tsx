@@ -51,7 +51,7 @@ it.each([
   const onClose = vi.fn()
   function DialogHarness() {
     const [isOpen, setOpen] = useState(true)
-    return <ArchitectureConfirmDialog isOpen={isOpen} archStatus={{}} onConfirm={onConfirm} onClose={() => { onClose(); setOpen(false) }} />
+    return <ArchitectureConfirmDialog isOpen={isOpen} archStatus={{}} synopsisSource={{ synopsis: '', totalChapters: 10, writingLanguage: 'zh-CN' }} onConfirm={onConfirm} onClose={() => { onClose(); setOpen(false) }} />
   }
   await act(async () => root.render(<DialogHarness />))
   await act(async () => page.getByRole('button', { name: '为每个步骤添加补充指导（可选）' }).click())

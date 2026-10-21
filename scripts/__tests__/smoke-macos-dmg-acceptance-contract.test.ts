@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
+import * as stage from '../redesign/pages/stage.mjs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createStore } from 'zustand/vanilla'
 import { createLocaleState } from '../../src/stores/locale-store'
@@ -20,6 +21,8 @@ const smokeScriptPath = path.join(repositoryRoot, 'scripts', 'smoke-macos-dmg.sh
 const evidenceScript = path.join(repositoryRoot, 'scripts', 'release-evidence-v2.mjs')
 const fixtures: string[] = []
 const RECEIPT_FINALIZE_TIMEOUT_MS = 15_000
+// 旧版作者源复制只等一个子进程：f05 旅程脚本加载 playwright 与 LanceDB 后复制夹具，空闲时约 0.8 s，构建机负载下实测到过 7.2 s（#428）。
+const OLD_SOURCE_COPY_CHILD_DEADLINE_MS = 30_000
 
 function readRequired(file: string) {
   expect(existsSync(file), `Missing macOS DMG smoke contract: ${file}`).toBe(true)
@@ -106,7 +109,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const run = vm.runInNewContext(`(${launch})`, {
       path, macMode, process: { env: {} }, exe: '/in-memory/app', packageDir: '/in-memory',
       electron: { launch: async () => ({ firstWindow: async () => page }) },
-      macStage() {}, receipt: {}, console: { error() {} },
+      macStage() {}, receipt: {}, console: { error() {} }, stage,
       closeMacApplication: async () => { calls.push('cleanup') },
     })
     if (macMode && !writeSucceeds) {
@@ -255,7 +258,8 @@ describe('macOS DMG acceptance receipt contract', () => {
     const result = spawnSync(process.execPath, [
       path.join(repositoryRoot, 'scripts', 'f05-a11-offline-import-journey.mjs'),
       '--mac-fixture-only=1', `--mac-version=${version}`, `--scratch-root=${scratch}`,
-    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    ], { cwd: repositoryRoot, encoding: 'utf8', timeout: OLD_SOURCE_COPY_CHILD_DEADLINE_MS })
+    expect(result.signal, `旧版作者源复制子进程在 ${OLD_SOURCE_COPY_CHILD_DEADLINE_MS} ms 内没有退出`).toBeNull()
     expect(result.status, result.stderr).toBe(0)
     const fact = JSON.parse(result.stdout.trim())
     expect(fact).toMatchObject({ kind: 'official-old-app-mac-fixture', sourceVersion: version, llmCalls: 0,
@@ -281,7 +285,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const manifest = JSON.parse(readFileSync(path.join(repositoryRoot, 'scripts/fixtures/s14c-official-old-sources/manifest.json'), 'utf8'))
     expect(files).toEqual(manifest.cases.find((entry: { version: string }) => `v${entry.version}` === version).files)
     expect(fact.sourceInventorySha256).toBe(createHash('sha256').update(JSON.stringify(files)).digest('hex'))
-  })
+  }, OLD_SOURCE_COPY_CHILD_DEADLINE_MS + 5_000)
 
   it('classifies an exit-zero ad-hoc signature as lacking a Developer ID distribution identity', () => {
     const observation = classifyMacosCodeSigning({
@@ -394,7 +398,6 @@ describe('macOS DMG acceptance receipt contract', () => {
     for (const priorFact of [
       'packaged-vector-smoke.json',
       'packaged-official-homepage-smoke.json',
-      'packaged-skin-smoke.json',
       'macos-dmg-smoke.json',
     ]) {
       expect(script).toContain(priorFact)
@@ -541,7 +544,6 @@ describe('macOS DMG acceptance receipt contract', () => {
     for (const [file, kind] of [
       ['packaged-vector-smoke.json', 'packaged-vector-smoke'],
       ['packaged-official-homepage-smoke.json', 'packaged-official-homepage-smoke'],
-      ['packaged-skin-smoke.json', 'packaged-skin-smoke'],
       ['macos-dmg-smoke.json', 'macos-dmg-smoke'],
     ] as const) {
       writeJson(path.join(releaseRoot, 'qualification', file), { schemaVersion: 1, kind, direct: { packaged: true } })
@@ -573,19 +575,17 @@ describe('macOS DMG acceptance receipt contract', () => {
       platform: 'darwin',
       arch: architecture,
       accepted: true,
-      observations: ['Validated vector, homepage, skin, and direct DMG smoke facts.'],
+      observations: ['Validated vector, homepage, and direct DMG smoke facts.'],
       direct: {
         architecture: architectureEvidence,
         secureFileSystemSmoke: true,
         vectorSmoke: true,
         officialHomepageSmoke: true,
-        skinSmoke: true,
         dmgSha256,
       },
       references: {
         vector: { kind: 'packaged-vector-smoke', path: 'qualification/packaged-vector-smoke.json', sha256: qualificationEvidenceSha256('packaged-vector-smoke.json') },
         homepage: { kind: 'packaged-official-homepage-smoke', path: 'qualification/packaged-official-homepage-smoke.json', sha256: qualificationEvidenceSha256('packaged-official-homepage-smoke.json') },
-        skin: { kind: 'packaged-skin-smoke', path: 'qualification/packaged-skin-smoke.json', sha256: qualificationEvidenceSha256('packaged-skin-smoke.json') },
         dmg: { kind: 'macos-dmg-smoke', path: 'qualification/macos-dmg-smoke.json', sha256: qualificationEvidenceSha256('macos-dmg-smoke.json') },
       },
     })

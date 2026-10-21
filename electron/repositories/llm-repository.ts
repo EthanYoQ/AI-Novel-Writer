@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3'
 import { getProjectDb } from '../database'
 
 export class LLMHistoryRepository {
@@ -12,8 +13,7 @@ export class LLMHistoryRepository {
     durationMs: number
     success: boolean
     errorMessage?: string
-  }): void {
-    const db = getProjectDb()
+  }, db: Database.Database | null = getProjectDb()): void {
     if (!db) return
 
     db.prepare(`

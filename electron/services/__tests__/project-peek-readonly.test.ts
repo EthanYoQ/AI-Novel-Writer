@@ -216,6 +216,23 @@ describe('ProjectPeekService source-zero-write overview', { timeout: 20_000 }, (
     ])
   })
 
+  it('reports setup readiness from the four required fields and the planned chapter count, not the nine-field count', () => {
+    const f = fixture()
+    const service = new ProjectPeekService({ scratchRoot: f.scratch })
+    const peek = () => {
+      const overview = service.peek(service.issueCapability(f.root)!.capabilityId)
+      ready(overview)
+      return { setupReady: overview.setupReady, plannedChapters: overview.plannedChapters, configuration: overview.stages[0].count }
+    }
+    expect(peek()).toEqual({ setupReady: true, plannedChapters: 3, configuration: 9 })
+    f.database.prepare("UPDATE project_core SET world_setting='', golden_finger=''").run()
+    expect(peek()).toEqual({ setupReady: true, plannedChapters: 3, configuration: 7 })
+    f.database.prepare("UPDATE project_core SET target_audience=' '").run()
+    expect(peek()).toMatchObject({ setupReady: false })
+    f.database.prepare("UPDATE project_core SET target_audience='成年读者', words_per_chapter=0").run()
+    expect(peek()).toMatchObject({ setupReady: false })
+  })
+
   it('does not count a finalized status whose frozen outbox fact is inconsistent', () => {
     const f = fixture()
     f.database.prepare('UPDATE project_core SET total_chapters=1').run()
@@ -267,6 +284,24 @@ describe('ProjectPeekService source-zero-write overview', { timeout: 20_000 }, (
     expect(external.finalizedChapters).toBe(0)
     expect(current.finalizedChapters).toBe(0)
     expect(external.stages[5]).toEqual({ id: 'finalization', status: 'not-started', count: 0 })
+  })
+
+  it('treats a later reviewed draft as the chapter current draft for words and excerpt (#452)', () => {
+    const f = fixture()
+    addChapter(f.database, 1, { draft: true })
+    const reviewed = f.database.prepare('INSERT INTO contents (body) VALUES (?)').run('第1章审过的新稿：灯塔亮了。')
+    f.database.prepare(`
+      INSERT INTO drafts (chapter_number,version,status,source,content_id,word_count)
+      VALUES (1,2,'reviewed','revise',?,30)
+    `).run(reviewed.lastInsertRowid)
+    const service = new ProjectPeekService({ scratchRoot: f.scratch })
+    const current = service.readCurrent(f.projectId, f.database)
+
+    ready(current)
+    expect(current.totalWords).toBe(30)
+    expect(current.excerpt).toContain('灯塔亮了')
+    expect(current.excerpt).not.toContain('雨落在旧车站')
+    expect(current.stages[3]).toEqual({ id: 'drafting', status: 'in-progress', count: 1 })
   })
 
   it('allows an excerpt only for the already-open current database and performs SELECT-only aggregation', () => {

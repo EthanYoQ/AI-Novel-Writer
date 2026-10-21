@@ -385,7 +385,7 @@ describe('createImportWorkflow', () => {
 
     await workflow.steps[3].executor({} as never, context(), callbacks)
 
-    expect(characterSyncMocks.retry).toHaveBeenCalledWith('sync-1', session.projectPath, session)
+    expect(characterSyncMocks.retry).toHaveBeenCalledWith('sync-1', session.projectPath, session, 'zh-CN')
     expect(snapshot.stage).toBe('refresh')
     expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('llm:generate')
   })

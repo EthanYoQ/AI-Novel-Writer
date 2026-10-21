@@ -3,12 +3,13 @@ import { tree } from './project.mjs'
 
 const SHELF = '.writer-shelf'
 
+/** 旧外壳的对话框叫「新建小说项目」，新外壳书房的叫「新建作品」；两者都是作品名、选择保存位置、创建。 */
 export async function createProject(page, name) {
   await page.getByRole('button', { name: '新建作品', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '新建小说项目' })
-  await dialog.getByPlaceholder('如：斗破苍穹').fill(name)
+  const dialog = page.getByRole('dialog', { name: /^(新建小说项目|新建作品)$/ })
+  await dialog.getByRole('textbox').first().fill(name)
   await dialog.getByRole('button', { name: '选择', exact: true }).click()
-  await dialog.getByRole('button', { name: '创建项目', exact: true }).click()
+  await dialog.getByRole('button', { name: /^(创建项目|创建作品)$/ }).click()
   await dialog.waitFor({ state: 'hidden' })
 }
 

@@ -15,6 +15,7 @@ import { confirm } from '../components/ui/Confirm'
 import { appErrorMessage } from '../i18n/app-errors'
 import { saveDirtyEditorChangesForExit, useEditorStore } from './editor-store'
 import { countUnsavedEditorItemsForProject } from './editor-unsaved'
+import { useLayoutStore } from './layout-store'
 import { useLocaleStore } from './locale-store'
 import { requireIpcSuccess } from '../services/ipc-result'
 import {
@@ -403,6 +404,8 @@ interface ProjectState {
   fileTree: FileNode[]
   /** 最近项目列表 */
   recentProjects: ProjectChannels['project:recent-list']['return']
+  /** 这次启动已经读到过一次最近项目；读到之前空列表不代表书架是空的。 */
+  recentProjectsLoaded: boolean
   /** 是否正在加载 */
   loading: boolean
   legacyImportNotice: string
@@ -452,6 +455,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   currentProject: null,
   fileTree: [],
   recentProjects: [],
+  recentProjectsLoaded: false,
   loading: false,
   legacyImportNotice: '',
   legacyImportBusy: false,
@@ -576,6 +580,12 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
 
   openProject: async (target) => {
     const projectPath = typeof target === 'string' ? target : ''
+    // 作者点的入口已先确认并收起设置页；外部打开请求、新建后自动打开到这里时设置页可能还开着，换作品会卸载它、丢掉输入。
+    // 确认完才领请求序号：确认框开着时被拒的请求不能让还在等确认的那个失效。
+    if (useLayoutStore.getState().settingsOpen) {
+      const { confirmLeaveSettings } = await import('../components/settings/unsaved-settings')
+      if (await confirmLeaveSettings() !== 'left') return false
+    }
     const requestSequence = ++openProjectRequestSequence
     const requestToken = `${Date.now()}-${requestSequence}-${Math.random().toString(36).slice(2)}`
     const isLatestRequest = () => requestSequence === openProjectRequestSequence
@@ -717,12 +727,8 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           return false
         }
         if (!sameRendererProject(rendererProject, get().currentProject)) return false
-        const [{ useLayoutStore }, { navigate }] = await Promise.all([
-          import('./layout-store'),
-          import('./navigation/navigation-intents'),
-        ])
+        const { navigate } = await import('./navigation/navigation-intents')
         if (!isLatestRequest() || !sameRendererProject(rendererProject, get().currentProject)) return false
-        const layoutBeforeCommit = useLayoutStore.getState()
         if (rendererProjectPath) {
           if (preparedTransition?.decision === 'discard') {
             discardProjectTransitionDrafts(rendererProjectPath)
@@ -735,6 +741,8 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
             ? result.project!.novelConfig : restored.value },
           projectSessionEpoch: state.projectSessionEpoch + 1,
         }))
+        // 默认落点与提交同步落下：之后读文件树、最近项目期间作者的导航（回书房、开运行侧页、换侧栏）都在它之后，不会被改回。
+        navigate({ kind: 'stage' })
         const partialLoadWarnings: string[] = []
         // Opening a project revokes old shelf preview capabilities in main.
         // Refresh the visible shelf handles without turning a successful open into a failure.
@@ -763,17 +771,6 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         }
         // 此后渲染进程已经提交返回项目；过期状态只影响派生视图，可以安全退出。
         if (!isLatestRequest()) return false
-        // 文件树加载期间的显式导航优先于项目打开时的默认侧栏。
-        const layout = useLayoutStore.getState()
-        if (
-          layout.sidebarView === layoutBeforeCommit.sidebarView
-          && layout.activeRailItem === layoutBeforeCommit.activeRailItem
-          && layout.sidebarOpen === layoutBeforeCommit.sidebarOpen
-        ) {
-          navigate({ kind: 'stage' })
-        } else {
-          useLayoutStore.setState({ immersive: false, preImmersivePanels: null })
-        }
         // 统一初始化第二层状态仓库（角色卡、草稿等）
         let layer2Warnings: string[] = []
         try {
@@ -856,10 +853,16 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         ) })
         return false
       }
-      const opened = isCurrent() && await get().openProject(result.targetRoot).catch(() => false)
+      const { confirmLeaveSettings } = await import('../components/settings/unsaved-settings')
+      const leave = isCurrent() ? await confirmLeaveSettings() : 'left'
+      const opened = leave === 'left' && isCurrent() && await get().openProject(result.targetRoot).catch(() => false)
       set({ legacyImportNotice: opened
         ? projectText('旧项目已导入为独立副本。两份项目的后续修改不会自动同步。', 'Legacy project imported as an independent copy. Future changes do not sync between the two projects.')
-        : projectText(`副本已建立，但未能自动打开。请用“打开作品”选择：${result.targetRoot}`, `The copy was created but could not be opened. Use Open project to select: ${result.targetRoot}`) })
+        : leave === 'stayed'
+          ? projectText(`副本已建立。你选了继续编辑设置，所以没有自动打开；之后可用“打开作品”选择：${result.targetRoot}`, `The copy was created. You chose to keep editing settings, so it was not opened. Use Open project to select it later: ${result.targetRoot}`)
+          : leave === 'busy'
+            ? projectText(`副本已建立。另一个「放弃未保存的修改？」确认还开着，所以没有自动打开；之后可用“打开作品”选择：${result.targetRoot}`, `The copy was created. Another “Discard unsaved changes?” confirmation was still open, so it was not opened. Use Open project to select it later: ${result.targetRoot}`)
+            : projectText(`副本已建立，但未能自动打开。请用“打开作品”选择：${result.targetRoot}`, `The copy was created but could not be opened. Use Open project to select: ${result.targetRoot}`) })
       return opened
     } catch (error) {
       set({ legacyImportNotice: projectText(`导入未完成：${String(error)}`, `Import did not complete: ${String(error)}`) })
@@ -1044,7 +1047,14 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
 
   loadRecentProjects: async () => {
     const requestId = ++recentProjectsRequestSequence
-    const list = await ipc.invoke('project:recent-list')
+    let list: ProjectChannels['project:recent-list']['return']
+    try {
+      list = await ipc.invoke('project:recent-list')
+    } catch (error) {
+      // 读不到也算读过：书房据此显示空书房，而不是一直停在等待里。
+      if (requestId === recentProjectsRequestSequence) set({ recentProjectsLoaded: true })
+      throw error
+    }
     if (requestId !== recentProjectsRequestSequence) return
     const seenProjectPaths = new Set<string>()
     const recentProjects = list.filter((project) => {
@@ -1053,7 +1063,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       seenProjectPaths.add(key)
       return true
     })
-    set({ recentProjects })
+    set({ recentProjects, recentProjectsLoaded: true })
   },
 
   removeRecentProject: async (projectPath) => {

@@ -1,0 +1,378 @@
+/*
+ * 架构阶段。Claude Design 没有架构专属画板，版式取 prototype/architecture.html 与 architecture-confirm.html 的结构，
+ * 外观按 design-system.md 与外壳已有的做法（纸面卡片、0 0 0 1px 的令牌描边、Instrument Serif 编号）外推。只引用纸墨令牌。
+ */
+.arch-page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  container-type: inline-size;
+}
+
+.arch-inner {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 52px 48px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* 标题旁留不出 240px（「故事的骨架」一行约 180px）时动作换到下一行，标题不被挤断；留得出时与标题同一行、靠右 */
+.arch-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-4) var(--s-6);
+}
+
+.arch-heading {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.arch-eyebrow {
+  margin: 0 0 10px;
+  color: var(--ink-3);
+  font: 500 var(--fs-12)/1 var(--font-ui);
+  letter-spacing: 0.08em;
+}
+
+.arch-title {
+  margin: 0;
+  color: var(--ink);
+  font: 600 var(--fs-36)/1.2 var(--font-display);
+}
+
+.arch-lede {
+  margin: 12px 0 0;
+  color: var(--ink-2);
+  font: 400 var(--fs-14)/1.6 var(--font-ui);
+}
+
+.arch-header-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.arch-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ================= 编号分节卡 ================= */
+.arch-section {
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--rule);
+  transition: box-shadow var(--dur-fast) var(--ease);
+}
+
+.arch-section:focus-within {
+  box-shadow: 0 0 0 1px var(--rule-strong);
+}
+
+.arch-section-head {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-4);
+  padding: 18px 20px 18px 16px;
+}
+
+.arch-section-num {
+  justify-self: center;
+  color: var(--ink-3);
+  font: italic var(--fs-20)/1 var(--font-num);
+}
+
+.arch-section-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arch-section-titleline {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.arch-section-title {
+  margin: 0;
+  color: var(--ink);
+  font: 600 var(--fs-16)/1.3 var(--font-display);
+}
+
+.arch-section-summary {
+  margin: 0;
+  color: var(--ink-2);
+  font: 400 var(--fs-13)/1.6 var(--font-ui);
+  overflow-wrap: anywhere;
+}
+
+.arch-section-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.arch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  font: 500 var(--fs-11)/1.4 var(--font-ui);
+  white-space: nowrap;
+}
+
+.arch-badge::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.arch-badge[data-tone='ok'] {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.arch-badge[data-tone='warn'] {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.arch-badge[data-tone='muted'] {
+  background: var(--surface-2);
+  color: var(--ink-3);
+}
+
+.arch-badge[data-tone='muted']::before {
+  display: none;
+}
+
+.arch-section-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: 0 20px 18px 72px;
+}
+
+/* 没有要提示的情况时不占位：旧角色修复面板与大纲提示在多数状态下什么也不渲染。 */
+.arch-notes-collapsible:not(:has(.pi-notice, section)) {
+  display: none;
+}
+
+.arch-legacy-roster:empty {
+  display: none;
+}
+
+.arch-legacy-roster > section {
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+.arch-candidate {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--radius-lg);
+  background: var(--sunken);
+  color: var(--ink-2);
+  font: 400 var(--fs-13)/1.7 var(--font-prose);
+  white-space: pre-wrap;
+}
+
+.arch-page[data-loading] .arch-section-summary,
+.arch-page[data-cast-loading] [data-section='characters'] .arch-section-summary {
+  opacity: 0.6;
+}
+
+/*
+ * 第一次读到状态之前各节按「没有内容」渲染，动作会先闪一下「自己写 / AI 生成此节」再变成「编辑」。先占位不画：
+ * 那一帧的次按钮描边会让 GPU 现编一个着色器（冷启动约 20ms），排在架构页第一帧之前。之后刷新状态时不隐藏。
+ */
+.arch-page[data-status-unread] .arch-section-actions {
+  visibility: hidden;
+}
+
+/* ================= 生成架构对话框 ================= */
+.arch-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.pi-dialog:has(.arch-dialog) {
+  width: 640px;
+}
+
+.arch-steps {
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+
+.arch-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: 12px 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.arch-step-all {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 0;
+  background: color-mix(in srgb, var(--surface) 60%, var(--paper));
+  border-radius: 12px 12px 0 0;
+}
+
+.arch-step-count {
+  color: var(--ink-3);
+  font-size: var(--fs-12);
+}
+
+.arch-step-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.arch-step-status {
+  margin-left: var(--s-2);
+  color: var(--ink-3);
+  font-size: var(--fs-12);
+}
+
+.arch-mark {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font: 500 var(--fs-11)/1.5 var(--font-ui);
+}
+
+.arch-mark[data-mark='overwrite'] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.arch-mark[data-mark='invalid'] {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.arch-mark[data-mark='keep'] {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+.arch-mark[data-mark='new'],
+.arch-mark[data-mark='continue'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.arch-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  padding-left: 26px;
+}
+
+.arch-range-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: var(--fs-12);
+}
+
+.arch-range-field .pi-input {
+  width: 72px;
+  height: 32px;
+}
+
+.arch-range-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--fs-12);
+}
+
+.arch-range-effect {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-12);
+}
+
+.arch-range-issue {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--fs-12);
+}
+
+.arch-guidance {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.arch-guidance > .pi-btn {
+  align-self: flex-start;
+}
+
+.arch-guidance-hint {
+  margin-left: var(--s-2);
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+.arch-guidance-input {
+  height: auto;
+  padding: var(--s-2) var(--s-3);
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.arch-guard {
+  white-space: pre-line;
+}
+
+.arch-dialog-warning {
+  flex: 1;
+  margin: 0;
+  align-self: center;
+  color: var(--ink-3);
+  font-size: var(--fs-12);
+}
+
+/* ================= 窄宽度（按架构页自身的宽度，运行侧页并排时也成立） ================= */
+@container (width < 560px) {
+  .arch-inner {
+    padding: 36px 24px 48px;
+  }
+
+  /* 分节卡的动作换到标题与摘要下面 */
+  .arch-section-actions {
+    grid-column: 2;
+  }
+}

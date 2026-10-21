@@ -28,10 +28,10 @@ const ATTENTION: Partial<Record<WorkflowRun['status'], number>> = { waiting: 0, 
 const close = () => useStageStore.setState({ sheet: null })
 
 /**
- * 运行侧页：合并旧外壳的 AI 输出、底部任务与状态栏进度。进行中看步骤、实时输出、等确认与可恢复的内容；
+ * 运行侧页：AI 输出、任务与进度在一处。进行中看步骤、实时输出、等确认与可恢复的内容；
  * 历史看结束的运行；诊断是宽版，放日志与 AI 调用记录。要看的运行已经结束时，「进行中」自动换成「历史」并展开它。
  */
-export default function RunSheet({ sheet }: { sheet: StageSheet }) {
+export default function RunSheet({ sheet }: { sheet: Extract<StageSheet, { kind: 'run' }> }) {
   const text = useLocaleStore(s => s.text)
   const projectPath = useProjectStore(s => s.currentProject?.path)
   const active = projectRuns(useWorkflowStore(s => s.activeRuns), projectPath)

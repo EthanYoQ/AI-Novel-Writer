@@ -268,7 +268,7 @@ export default function AgentInputBox() {
             width: 180,
             backgroundColor: 'var(--color-sidebar)',
             border: '1px solid var(--color-border)',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+            boxShadow: 'var(--shadow-popover)',
           }}
         >
           <div className="text-[0.7rem] px-3 pb-1 pt-1" style={{ color: 'var(--color-text-muted)' }}>
@@ -365,7 +365,7 @@ export default function AgentInputBox() {
                   width: 240,
                   backgroundColor: 'var(--color-sidebar)',
                   border: '1px solid var(--color-border)',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+                  boxShadow: 'var(--shadow-popover)',
                 }}
               >
                 <div className="text-[0.7rem] px-3 py-1" style={{ color: 'var(--color-text-muted)' }}>
@@ -426,7 +426,7 @@ export default function AgentInputBox() {
                   width: 220,
                   backgroundColor: 'var(--color-sidebar)',
                   border: '1px solid var(--color-border)',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+                  boxShadow: 'var(--shadow-popover)',
                   maxHeight: 280,
                   overflowY: 'auto',
                 }}
@@ -468,8 +468,8 @@ export default function AgentInputBox() {
                 ? 'var(--color-text-secondary)'
                 : canSend
                 ? 'var(--color-accent)'
-                : 'rgba(128,128,128,0.3)',
-              color: '#ffffff',
+                : 'var(--color-active)',
+              color: 'var(--accent-ink)',
               cursor: !generating && !canSend ? 'not-allowed' : 'pointer',
               opacity: !generating && !canSend ? 0.5 : 1,
             }}

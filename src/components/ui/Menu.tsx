@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
-import { Button } from './Button'
+import { Button, type InkButtonSize } from './Button'
 import { useAnchoredLayer } from './use-anchored-layer'
 
 export interface MenuItemSpec {
@@ -22,7 +22,7 @@ interface MenuProps {
   label: string
   icon?: ReactNode
   /** 文字触发按钮的内容与样式，例如顶栏的作品名加下拉箭头；label 仍作为可访问名称。 */
-  trigger?: { content: ReactNode; className?: string }
+  trigger?: { content: ReactNode; className?: string; size?: InkButtonSize }
   groups: readonly MenuGroupSpec[]
   align?: 'start' | 'end'
 }
@@ -85,7 +85,7 @@ export function Menu({ label, icon, trigger, groups, align = 'start' }: MenuProp
   return (
     <div className="pi-anchor" ref={anchorRef}>
       {trigger
-        ? <Button variant="text" className={trigger.className} aria-label={label} {...triggerProps}>{trigger.content}</Button>
+        ? <Button variant="text" size={trigger.size} className={trigger.className} aria-label={label} {...triggerProps}>{trigger.content}</Button>
         : icon
           ? <Button variant="icon" aria-label={label} {...triggerProps}>{icon}</Button>
           : <Button variant="secondary" {...triggerProps}>{label}</Button>}

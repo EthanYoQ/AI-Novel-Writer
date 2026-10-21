@@ -25,11 +25,33 @@ export type PlanningRecoverySaveSnapshot = EditorTabSaveSnapshot & {
   }
 }[PlanningSaveChannel]
 
+/** 知识库读到的一份资料的项目副本。 */
+export interface KnowledgeDocumentCopy {
+  available: boolean
+  content?: string
+  contentHash?: string
+  edited?: boolean
+  indexStatus: 'current' | 'stale' | 'unavailable'
+}
+
+/** 知识库里所选的资料、读到的项目副本与正在改的文字。 */
+export interface KnowledgeDraft {
+  docId: string | null
+  copy: KnowledgeDocumentCopy | null
+  content: string
+  /** 保存或更新检索在途。放在标签上，页面切走再切回也认得出。 */
+  busy?: boolean
+}
+
+export function knowledgeDraftDirty(draft: KnowledgeDraft): boolean {
+  return Boolean(draft.copy?.available && draft.content !== draft.copy.content)
+}
+
 /** 编辑器 Tab 数据 */
 export interface EditorTab {
   id: string
   name: string
-  /** knowledge 只由新外壳打开：旧外壳的知识库是侧栏视图，不是标签。 */
+  /** 知识库页的标签。 */
   type: 'chapter' | 'outline' | 'character' | 'config' | 'diff' | 'chapter-card' | 'world-building' | 'arch-file' | 'version-history' | 'review-report' | 'narrative-thread' | 'knowledge'
   filePath?: string
   content?: string
@@ -78,6 +100,8 @@ export interface EditorTab {
   /** 章节蓝图页按 chapterNumber 选中一章的请求次数；只有带章号打开时才递增，重复打开同一章也会重新选中。 */
   chapterSelectRequest?: number
   planningRecovery?: GenerationRecoveryContext
+  /** 知识库标签的所选资料与未保存的改动；页面随标签切换卸载后靠它留住。 */
+  knowledgeDraft?: KnowledgeDraft
   planningSaveOperationId?: string
   planningSaveEnd?: string
   planningSaveSnapshot?: PlanningRecoverySaveSnapshot
@@ -127,6 +151,8 @@ interface EditorState {
     projectKey: string,
     dirty: boolean,
   ) => void
+  /** 写入知识库标签的所选资料与改动，并按改动同步未保存标记。 */
+  setKnowledgeDraft: (tabId: string, draft: KnowledgeDraft) => void
   /** 关闭 Tab */
   closeTab: (tabId: string) => void
   /** 激活 Tab */
@@ -363,6 +389,12 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
           ? { ...tab, dirty }
           : tab
       )),
+    }))
+  },
+
+  setKnowledgeDraft: (tabId, draft) => {
+    set(state => ({
+      tabs: state.tabs.map(tab => tab.id === tabId ? { ...tab, knowledgeDraft: draft, dirty: knowledgeDraftDirty(draft) } : tab),
     }))
   },
 

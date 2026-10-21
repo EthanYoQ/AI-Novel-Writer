@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react'
 import CodeMirror, { ReactCodeMirrorRef, EditorView, ViewUpdate } from '@uiw/react-codemirror'
-import { keymap } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
-import { EditorState, Prec, type Extension } from '@codemirror/state'
+import { EditorState, type Extension } from '@codemirror/state'
 import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
 import { Sparkles, Bold, Check } from 'lucide-react'
-import { cn } from '../../lib/utils'
+import { Button } from '../ui/Button'
+import { paragraphIndent } from './paragraph-indent'
+import { proseTab } from './prose-tab'
+import { useThemeStore } from '../../stores/theme-store'
 import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
 import { createEditorInlineGeneration } from '../../services/editor-inline-generation'
 import { useLLMStore } from '../../stores/llm-store'
@@ -29,21 +31,24 @@ export type CodeMirrorEditorProps = {
   hideStatusBar?: boolean
   mode?: 'document' | 'prose'
   paperHead?: PaperHead | null
+  /** 编辑器随内容长高、不自己滚动，由外层页面一起滚动（单章视图的纸面）。 */
+  fitContent?: boolean
+  /** 段落首行缩进两字（只是显示，见 paragraph-indent）。 */
+  paragraphIndent?: boolean
 }
 
 type EditorAIAction = {
   key: 'refine' | 'expand' | 'continue' | 'dialogue'
   label: readonly [string, string]
-  color: string
   prompt: readonly [string, string]
   reasoningStage: GenerationReasoningStage
 }
 
 const AI_ACTIONS = [
-  { key: 'refine', label: ['润色', 'Refine'], color: 'text-[var(--color-category-progress-text)]', prompt: ['润色这部分，使语言自然、具体并增强场景表现力。', 'Refine this passage for natural, specific language and stronger scene craft.'], reasoningStage: 'review' },
-  { key: 'expand', label: ['扩写', 'Expand'], color: 'text-[var(--color-warning-text)]', prompt: ['扩写这部分，补充与情节有关的动作、感官和环境细节。', 'Expand this passage with plot-relevant action, sensory detail, and setting.'], reasoningStage: 'drafting' },
-  { key: 'continue', label: ['续写', 'Continue'], color: 'text-[var(--color-category-review-text)]', prompt: ['根据现有因果和人物动机，自然续写接下来的情节。', 'Continue naturally from the established causality and character motivation.'], reasoningStage: 'drafting' },
-  { key: 'dialogue', label: ['对话', 'Dialogue'], color: 'text-[var(--color-success-text)]', prompt: ['将这部分改写为有区分度、能推动冲突的自然对话。', 'Rewrite this passage as distinct, natural dialogue that advances the conflict.'], reasoningStage: 'drafting' },
+  { key: 'refine', label: ['润色', 'Refine'], prompt: ['润色这部分，使语言自然、具体并增强场景表现力。', 'Refine this passage for natural, specific language and stronger scene craft.'], reasoningStage: 'review' },
+  { key: 'expand', label: ['扩写', 'Expand'], prompt: ['扩写这部分，补充与情节有关的动作、感官和环境细节。', 'Expand this passage with plot-relevant action, sensory detail, and setting.'], reasoningStage: 'drafting' },
+  { key: 'continue', label: ['续写', 'Continue'], prompt: ['根据现有因果和人物动机，自然续写接下来的情节。', 'Continue naturally from the established causality and character motivation.'], reasoningStage: 'drafting' },
+  { key: 'dialogue', label: ['改成对话', 'To dialogue'], prompt: ['将这部分改写为有区分度、能推动冲突的自然对话。', 'Rewrite this passage as distinct, natural dialogue that advances the conflict.'], reasoningStage: 'drafting' },
 ] satisfies readonly EditorAIAction[]
 
 export default function CodeMirrorEditor({
@@ -58,7 +63,10 @@ export default function CodeMirrorEditor({
   placeholder,
   mode = 'document',
   paperHead = null,
+  fitContent = false,
+  paragraphIndent: indentParagraphs = false,
 }: CodeMirrorEditorProps) {
+  const inkThemeName = useThemeStore(s => s.resolvedTheme)
   const uiText = useLocaleStore(s => s.text)
   const uiLocale = useLocaleStore(s => s.locale)
   const editorRef = useRef<ReactCodeMirrorRef>(null)
@@ -214,7 +222,8 @@ export default function CodeMirrorEditor({
     if (!bubbleOpen || !selectionRange || !editorRef.current?.view) return;
 
     const view = editorRef.current.view;
-    const scrollDOM = view.scrollDOM;
+    // 随内容长高时滚动的是外层页面，选区是否还在可见范围要按那个滚动容器算。
+    const scrollDOM = fitContent ? scrollParentOf(view.dom) ?? view.scrollDOM : view.scrollDOM;
 
     let rafId: number;
 
@@ -268,7 +277,7 @@ export default function CodeMirrorEditor({
       window.removeEventListener('resize', onScrollOrResize)
       if (rafId) cancelAnimationFrame(rafId)
     }
-  }, [bubbleOpen, selectionRange])
+  }, [bubbleOpen, selectionRange, fitContent])
 
   // 主题配置
   const cmTheme = useMemo(() => EditorView.theme({
@@ -334,22 +343,7 @@ export default function CodeMirrorEditor({
     const exts: Extension[] = [
       search({ top: true }),
       EditorView.lineWrapping,
-      ...(mode === 'prose' ? [Prec.highest(keymap.of([
-        {
-          key: 'Tab',
-          run: (target) => {
-            if (target.state.readOnly || target.state.selection.ranges.length !== 1 || !target.state.selection.main.empty) return false
-            // 插入两个 em 空格（U+2003）= 2em = 标准中文首行缩进两字符宽
-            // 使用 \u2003 而非 \u3000（全角空格），因为 em 空格在任何 Unicode 字体下
-            // 都精确等于 1em，不依赖 CJK 字体加载
-            target.dispatch({
-              changes: { from: target.state.selection.main.head, insert: '\u2003\u2003' },
-              selection: { anchor: target.state.selection.main.head + 2 }
-            })
-            return true
-          }
-        }
-      ]))] : []),
+      ...(mode === 'prose' ? [proseTab] : []),
       // 汉化 Search / UI 文本（涵盖官方大小写所有变种）
       EditorState.phrases.of(uiLocale === 'zh-CN' ? {
         "Find": "查找",
@@ -390,9 +384,10 @@ export default function CodeMirrorEditor({
       }))
     }
     if (mode === 'prose') exts.push(...livePreview())
+    if (indentParagraphs) exts.push(paragraphIndent)
     exts.push(paperHeadFacet.of(stablePaperHead))
     return exts
-  }, [mode, stablePaperHead, uiLocale])
+  }, [mode, stablePaperHead, uiLocale, indentParagraphs])
 
   // AI 菜单处理（流式调用，实时显示生成内容）
   const handleAIAction = async (action: EditorAIAction) => {
@@ -501,6 +496,7 @@ export default function CodeMirrorEditor({
   }
 
   // 固定 basicSetup 内存引用，防止 React 每次渲染生成新对象导致内部扩展被重载（搜索框消失的罪魁祸首）
+  // 正文不要补全：打字后补全请求还没结束时，它的键位表会先把 Esc 吞掉，「先 Esc 再 Tab」就移不出编辑区。
   const cmBasicSetup = useMemo(() => ({
     lineNumbers: false,
     foldGutter: false,
@@ -510,10 +506,12 @@ export default function CodeMirrorEditor({
     highlightActiveLine: false,
     highlightActiveLineGutter: false,
     searchKeymap: true,
-  }), [])
+    autocompletion: mode !== 'prose',
+    completionKeymap: mode !== 'prose',
+  }), [mode])
 
   return (
-    <div className="relative h-full flex flex-col min-h-0"
+    <div className={fitContent ? 'relative' : 'relative h-full flex flex-col min-h-0'}
       onCompositionStartCapture={handleCompositionStart}
       onCompositionEndCapture={handleCompositionEnd}
       onKeyDownCapture={(e) => {
@@ -540,19 +538,14 @@ export default function CodeMirrorEditor({
           void Promise.resolve(onSave?.(lastEmittedContentRef.current)).catch(() => undefined)
         }
       }}>
-      <div className="flex-1 relative min-h-0 overflow-hidden"
-        onMouseDown={() => {
-          // 点击空白处关闭 Bubble Menu
-          if (aiResult) return;
-          // setBubbleOpen(false) 交给 handleUpdate 里面的 selection empty 判断即可
-        }}>
-        <div className="absolute inset-0">
+      <div className={fitContent ? 'relative' : 'flex-1 relative min-h-0 overflow-hidden'}>
+        <div className={fitContent ? undefined : 'absolute inset-0'}>
           <CodeMirror
             ref={editorRef}
             value={editorContent}
             placeholder={placeholder}
-            height="100%"
-            className="h-full"
+            height={fitContent ? undefined : '100%'}
+            className={fitContent ? undefined : 'h-full'}
             theme={cmTheme}
             extensions={extensions}
             readOnly={!editable}
@@ -563,89 +556,54 @@ export default function CodeMirrorEditor({
         </div>
       </div>
 
-      {/* Bubble Menu */}
+      {/* 选区工具条：纸墨浮层，自带纸墨令牌与深浅色 */}
       {bubbleOpen && (editable || aiResult !== null) && bubblePos.top !== 0 && (
         <div
-          className="fixed z-50 flex items-center gap-0.5 p-1 rounded-xl border select-none shadow-xl transform -translate-x-1/2 -translate-y-full"
-          style={{
-            top: bubblePos.top,
-            left: bubblePos.left,
-            backgroundColor: 'var(--color-sidebar)',
-            borderColor: 'var(--color-border)',
-          }}
+          role="toolbar"
+          aria-label={uiText('选中文字的操作', 'Actions for the selected text')}
+          className="paper-ink cm-selbar"
+          data-theme={inkThemeName}
+          data-preview={aiResult !== null || undefined}
+          style={{ top: bubblePos.top, left: bubblePos.left }}
           onMouseDown={(e) => e.preventDefault()} // 防止编辑器失焦
         >
           {aiResult !== null ? (
-            <div className="w-[360px] max-h-[260px] overflow-y-auto p-2">
-              <div
-                className="text-[10px] mb-1.5 font-medium flex items-center gap-1"
-                style={{ color: 'var(--color-text-muted)' }}
-              >
-                <Sparkles size={11} style={{ color: 'var(--color-accent)' }} /> {activeAIAction
+            <div className="cm-selbar-preview">
+              <div className="cm-selbar-title">
+                <Sparkles size={13} aria-hidden="true" />
+                {activeAIAction
                   ? uiText(`${activeAIAction}预览`, `${activeAIAction} preview`)
                   : uiText('AI 预览', 'AI preview')}
               </div>
-              {/* 流式输入中显示动态内容 */}
               {aiError ? (
                 <>
-                  <div
-                    className="text-xs leading-relaxed mb-3"
-                    style={{ color: 'var(--color-error-text)' }}
-                  >
-                    {aiError}
-                  </div>
-                  {aiResult && (
-                    <div
-                      className="text-xs whitespace-pre-wrap leading-relaxed mb-3"
-                      style={{ color: 'var(--color-text-secondary)' }}
-                    >
-                      {aiResult}
-                    </div>
-                  )}
+                  <p className="cm-selbar-error" role="alert">{aiError}</p>
+                  {aiResult && <p className="cm-selbar-text">{aiResult}</p>}
                 </>
               ) : aiResult === '' ? (
-                <div
-                  className="text-xs leading-relaxed mb-3"
-                  style={{ color: 'var(--color-text-muted)' }}
-                >
-                  {uiText('正在生成', 'Generating')} {loadingDots}
-                </div>
+                <p className="cm-selbar-status" role="status">{uiText('正在生成', 'Generating')} {loadingDots}</p>
               ) : (
-                <div
-                  className="text-xs whitespace-pre-wrap leading-relaxed mb-3"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                >
-                  {aiResult}
-                </div>
+                <p className="cm-selbar-text">{aiResult}</p>
               )}
-              <div className="flex items-center gap-2 justify-end">
-                {canResumeAI && <button onClick={handleResumeAI}>{uiText('继续原运行', 'Continue original run')}</button>}
-                <button
-                  className="px-2.5 py-1 text-xs rounded-md transition-colors"
-                  style={{ border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)' }}
-                  onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  onClick={handleRejectAI}
-                >{uiText('取消', 'Cancel')}</button>
-                <button
-                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md font-medium transition-colors"
-                  style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
-                  onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
-                  onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+              <div className="cm-selbar-actions">
+                {canResumeAI && <Button variant="text" size="sm" onClick={handleResumeAI}>{uiText('继续原运行', 'Continue original run')}</Button>}
+                <Button variant="secondary" size="sm" onClick={handleRejectAI}>{uiText('取消', 'Cancel')}</Button>
+                <Button
+                  variant="primary"
+                  size="sm"
                   disabled={aiResult === '' || aiError !== null}
                   onClick={handleAcceptAI}
-                ><Check size={12} aria-hidden="true" />{uiText('替换', 'Replace')}</button>
+                ><Check size={13} aria-hidden="true" />{uiText('替换', 'Replace')}</Button>
               </div>
             </div>
           ) : (
             <>
               {mode === 'document' && (
                 <>
-                  <button
-                    className="p-1 rounded"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-hover)')}
-                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  <Button
+                    variant="icon"
+                    size="sm"
+                    aria-label={uiText('加粗', 'Bold')}
                     onClick={() => {
                       // document模式下的格式转换
                       if (selectionRange && editorRef.current?.view) {
@@ -656,26 +614,15 @@ export default function CodeMirrorEditor({
                         })
                       }
                     }}
-                  ><Bold size={14} /></button>
-                  <div className="w-[1px] h-3 mx-1" style={{ backgroundColor: 'var(--color-border)' }} />
+                  ><Bold size={14} aria-hidden="true" /></Button>
+                  <span className="cm-selbar-sep" aria-hidden="true" />
                 </>
               )}
-              <div
-                className="flex items-center gap-0.5 pl-0.5 pr-1 text-[10px]"
-                style={{ color: 'var(--color-text-muted)' }}
-              >
-                <Sparkles size={11} />AI
-              </div>
-              {AI_ACTIONS.map(action => (
-                <button
-                  key={action.key}
-                  className={cn('p-1.5 rounded flex items-center gap-1 transition-colors', action.color)}
-                  onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  onClick={() => handleAIAction(action)}
-                >
-                  <span className="text-[10px] tracking-widest">{uiText(...action.label)}</span>
-                </button>
+              {AI_ACTIONS.map((action, index) => (
+                <Button key={action.key} variant="text" size="sm" className="cm-selbar-tool" onClick={() => handleAIAction(action)}>
+                  {index === 0 && <Sparkles size={13} aria-hidden="true" />}
+                  {uiText(...action.label)}
+                </Button>
               ))}
             </>
           )}
@@ -683,4 +630,13 @@ export default function CodeMirrorEditor({
       )}
     </div>
   )
+}
+
+/** 最近的会纵向滚动的祖先；随内容长高的编辑器靠它判断选区是否滚出了可见范围。 */
+function scrollParentOf(element: HTMLElement): HTMLElement | null {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    const overflow = getComputedStyle(node).overflowY
+    if (overflow === 'auto' || overflow === 'scroll') return node
+  }
+  return null
 }

@@ -17,7 +17,6 @@ export interface LocaleState {
   initialized: boolean
   init: () => Promise<void>
   setLocale: (locale: Locale) => Promise<void>
-  toggleLocale: () => Promise<void>
   t: (key: MessageKey, params?: MessageParams) => string
   text: (zhCNText: string, enUSText: string, params?: MessageParams) => string
 }
@@ -66,9 +65,6 @@ export function createLocaleState(dependencies: LocaleDependencies): StateCreato
             localize(previousLocale, '语言设置保存失败', 'Could not save language setting'),
           )
         }
-      },
-      async toggleLocale() {
-        await get().setLocale(get().locale === 'zh-CN' ? 'en-US' : 'zh-CN')
       },
     }
   }

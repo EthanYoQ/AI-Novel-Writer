@@ -97,3 +97,21 @@ it('keeps the project error visible when a later global retry succeeds', async (
   await vi.waitFor(() => expect(globalAttempt).toBeGreaterThan(1))
   await expect.element(page.getByText(/项目提示词加载失败/)).toBeVisible()
 })
+
+it('lists every built-in prompt template by its English name and description in the English interface', async () => {
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+    throw new Error(`Unexpected IPC channel: ${channel}`)
+  })
+  ;(window as unknown as { aiNovelAPI: { invoke: typeof invoke } }).aiNovelAPI = { invoke }
+  useLocaleStore.setState({ locale: 'en-US' })
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  await act(async () => { root?.render(<PromptSettings />) })
+
+  await expect.element(page.getByText('Planning material character extraction', { exact: true })).toBeVisible()
+  const headers = [...container.querySelectorAll('button .text-sm.font-medium, button .text-xs.truncate')].map(element => element.textContent ?? '')
+  expect(headers.length).toBeGreaterThan(20)
+  expect(headers.filter(header => /\p{Script=Han}/u.test(header))).toEqual([])
+})

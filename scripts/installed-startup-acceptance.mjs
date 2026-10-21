@@ -7,6 +7,10 @@ import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 
+/** 纸墨外壳的根；设置是外壳里的一页，「返回书房」或「返回作品」收起它。 */
+export const STAGE_SHELL = '[data-shell-presentation="stage"]'
+export const SETTINGS_BACK = /^(返回书房|Back to library|返回作品|Back to the book)$/
+
 export async function verifyOrdinaryStartup(page) {
   await page.waitForFunction(async () => {
     if (!window.aiNovelAPI) return false
@@ -15,13 +19,14 @@ export async function verifyOrdinaryStartup(page) {
   }, null, { timeout: 30_000 })
   const state = await page.evaluate(() => window.aiNovelAPI.invoke('startup:get-state'))
   assert.equal(state.state, 'ready', `Ordinary startup blocked: ${state.code ?? state.state}`)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  const shell = page.locator(STAGE_SHELL)
+  await shell.waitFor({ state: 'visible', timeout: 30_000 })
   await page.getByRole('button', { name: /^(设置|Settings)$/ }).first().click()
-  const close = page.getByRole('button', { name: /^(关闭设置|Close settings)$/ })
-  await close.waitFor({ state: 'visible' })
-  await close.click()
-  await close.waitFor({ state: 'hidden' })
-  assert.equal(await page.locator('.app-skin-root').isVisible(), true)
+  const back = page.getByRole('button', { name: SETTINGS_BACK })
+  await back.waitFor({ state: 'visible' })
+  await back.click()
+  await back.waitFor({ state: 'hidden' })
+  assert.equal(await shell.isVisible(), true)
   return { startupState: state.state, workbenchVisible: true, settingsOpenedAndClosed: true }
 }
 

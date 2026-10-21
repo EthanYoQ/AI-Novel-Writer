@@ -58,12 +58,6 @@ import type {
   UpdateState,
 } from './update-types'
 import type {
-  SkinCommand,
-  SkinExecuteResponse,
-  SkinReadCustomAssetResponse,
-  SkinState,
-} from './skin-types'
-import type {
   ChapterDeletionOperation,
   ChapterDeletionResult,
   DeleteFinalizedChapterRequest,
@@ -128,22 +122,6 @@ export interface UpdateChannels {
 
 export interface UpdateStateEvents {
   'update:state': UpdateState
-}
-
-// ===== 图片皮肤 =====
-export interface SkinChannels {
-  'skin:get-state': {
-    args: []
-    return: SkinState
-  }
-  'skin:execute': {
-    args: [command: SkinCommand]
-    return: SkinExecuteResponse
-  }
-  'skin:read-custom-asset': {
-    args: []
-    return: SkinReadCustomAssetResponse
-  }
 }
 
 // ===== 窗口控制 =====
@@ -702,7 +680,8 @@ export interface AppDataChannels {
   'prompt:delete-global': { args: [key: string, writingLanguage: WritingLanguage]; return: { success: boolean; error?: string } }
   'skills:list-user': {
     args: []
-    return: Array<{ name: string; content: string; baseDir: string; filePath: string }>
+    /** bundle：按安装清单读到的附带文本；没有清单的 Skill 为 none，只看 SKILL.md。 */
+    return: Array<{ name: string; content: string; baseDir: string; filePath: string; bundle: import('./writing-skills').InstalledWritingSkillBundle }>
   }
   'skills:inspect-github': {
     args: [sourceUrl: string]
@@ -710,6 +689,15 @@ export interface AppDataChannels {
   }
   'skills:install-github': {
     args: [sourceUrl: string]
+    return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
+  }
+  /** 主进程弹出系统对话框选择本机 SKILL.md 或 Skill 文件夹，只读检查后返回候选。 */
+  'skills:pick-local': {
+    args: [kind: import('./writing-skills').LocalWritingSkillSourceKind]
+    return: { success: boolean; cancelled?: boolean; inspection?: import('./writing-skills').LocalWritingSkillInspection; error?: string }
+  }
+  'skills:install-local': {
+    args: [candidateId: string]
     return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
   }
   'skills:uninstall-user': {
@@ -1193,7 +1181,7 @@ export interface KnowledgeBaseChannels {
   'kb:search': { args: [query: string, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:search-writing-context': { args: [query: string, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:search-with-scope': { args: [query: string, fromChapter: number, toChapter: number, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
-  'kb:list-documents': { args: [expectedProjectPath: string]; return: AppResult<Array<{ id: string; fileName: string; importedAt: string; chunkCount: number; filePath: string }>> }
+  'kb:list-documents': { args: [expectedProjectPath: string]; return: AppResult<Array<{ id: string; fileName: string; importedAt: string; chunkCount: number; filePath: string; finalizedChapter?: number }>> }
   'kb:read-document-copy': {
     args: [docId: string, expectedProjectPath: string]
     return: AppResult<{ available: boolean; content?: string; contentHash?: string; edited?: boolean; indexStatus: 'current' | 'stale' | 'unavailable' }>
@@ -1317,7 +1305,7 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = LegacyRosterGenerationChannels & CharacterAvatarChannels & CloudBackupChannels & GraphGenerationChannels & FinalizationGenerationChannels & EditorInlineGenerationChannels & ImportGenerationChannels & AgentGenerationChannels & ReviewRevisionGenerationInvokeChannels & FinalizedCharacterGenerationChannels & CharacterProposalChannels & GenerationOwnerChannels & StartupChannels & WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
+export type AllInvokeChannels = LegacyRosterGenerationChannels & CharacterAvatarChannels & CloudBackupChannels & GraphGenerationChannels & FinalizationGenerationChannels & EditorInlineGenerationChannels & ImportGenerationChannels & AgentGenerationChannels & ReviewRevisionGenerationInvokeChannels & FinalizedCharacterGenerationChannels & CharacterProposalChannels & GenerationOwnerChannels & StartupChannels & WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
 export type AllEventChannels = GenerationOwnerEvents & LLMStreamEvents & UpdateStateEvents & WindowEvents
 
 /** 提取 invoke 频道名 */

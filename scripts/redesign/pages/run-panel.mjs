@@ -61,6 +61,10 @@ export async function waitUntilOpen(page) {
   await panel(page).getByText('AI 输出', { exact: true }).waitFor({ state: 'visible' })
 }
 
+export async function waitUntilClosed(page) {
+  await panel(page).getByText('AI 输出', { exact: true }).waitFor({ state: 'hidden' })
+}
+
 export async function openFromCompletionToast(page) {
   await page.getByRole('button', { name: '打开查看', exact: true }).first().click()
 }

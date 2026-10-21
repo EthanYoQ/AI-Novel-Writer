@@ -1,17 +1,18 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 import type { ProjectData } from '../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
 import { useProjectStore } from '../../../stores/project-store'
 import { useLocaleStore } from '../../../stores/locale-store'
-import WorldBuildingEditor from '../WorldBuildingEditor'
+import StageArchitecture from '../../stage/architecture/StageArchitecture'
 import ArchFileViewer from '../ArchFileViewer'
 import ConfirmCard from '../../panels/agent/ConfirmCard'
 import { useAgentStore } from '../../../stores/agent-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
+import { PLOT_OUTLINE_PROTOCOL, renderPlotOutlineSynopsis } from '../../../shared/plot-outline-contract'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -74,10 +75,10 @@ afterEach(async () => {
 
 it.each(['architecture-page', 'outline-file'] as const)('passes the confirmed range and word target through %s', async entry => {
   await act(async () => root.render(entry === 'architecture-page'
-    ? <WorldBuildingEditor projectKey={project.path} />
+    ? <StageArchitecture projectKey={project.path} />
     : <ArchFileViewer tabId="planning-outline" filePath="ai-novel://core/synopsis" projectKey={project.path} content="" savedContent="" />))
   if (entry === 'architecture-page') {
-    await act(async () => page.getByRole('button', { name: 'AI 生成架构', exact: true }).click())
+    await act(async () => page.getByRole('button', { name: '继续生成架构', exact: true }).click())
   } else {
     await act(async () => page.getByRole('button', { name: 'AI 生成', exact: true }).click())
   }
@@ -85,7 +86,7 @@ it.each(['architecture-page', 'outline-file'] as const)('passes the confirmed ra
   await act(async () => {
     await page.getByRole('spinbutton', { name: '本次生成范围的结束章' }).fill('10')
     await page.getByRole('spinbutton', { name: '每章大纲目标词数' }).fill('1000')
-    await page.getByRole('button', { name: /确认生成/ }).click()
+    await page.getByRole('button', { name: entry === 'architecture-page' ? /开始生成/ : /确认生成/ }).click()
   })
   await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('generation:begin', expect.objectContaining({
     authorInputs: expect.arrayContaining([
@@ -95,6 +96,88 @@ it.each(['architecture-page', 'outline-file'] as const)('passes the confirmed ra
   }), expect.anything()))
   await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns).toHaveLength(0))
   expect(invoke.mock.calls.some(([channel]) => channel === 'generation:execute')).toBe(false)
+})
+
+it('文档页里不足 50 字的一节点 AI 生成：标为将覆盖，不当成新生成', async () => {
+  const short = '雾港的钟每晚早响一刻。'
+  const base = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+  invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:project-core-get'
+    ? { premise: '故事前提'.repeat(20), worldbuilding: short, synopsis: '', totalChapters: 20 }
+    : base(channel, ...args))
+  await act(async () => root.render(<ArchFileViewer tabId="planning-world" filePath="ai-novel://core/worldbuilding" projectKey={project.path} content={short} savedContent={short} />))
+  await act(async () => page.getByRole('button', { name: 'AI 生成', exact: true }).click())
+  const row = await vi.waitFor(() => {
+    const label = [...document.querySelectorAll('label')].find(node => node.textContent?.startsWith('世界观'))
+    expect(label).toBeTruthy()
+    return label!
+  })
+  expect(row.querySelector('[data-mark]')?.textContent).toBe('将覆盖')
+})
+
+it('文档页里写着「待生成」字样的一节与架构页一样算有内容：生成时标为将覆盖', async () => {
+  const draft = '雾港的身世待生成，先记下钟楼每晚早响一刻。'
+  const base = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+  invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:project-core-get'
+    ? { premise: '故事前提'.repeat(20), worldbuilding: draft, synopsis: '', totalChapters: 20 }
+    : base(channel, ...args))
+  const premise = '故事前提'.repeat(20)
+  await act(async () => root.render(<ArchFileViewer tabId="planning-premise" filePath="ai-novel://core/premise" projectKey={project.path} content={premise} savedContent={premise} />))
+  await act(async () => page.getByRole('button', { name: 'AI 重新生成', exact: true }).click())
+  const row = await vi.waitFor(() => {
+    const label = [...document.querySelectorAll('label')].find(node => node.textContent?.startsWith('世界观'))
+    expect(label).toBeTruthy()
+    return label!
+  })
+  expect(row.querySelector('[data-mark]')?.textContent).toBe('将覆盖')
+})
+
+it('从其他架构文档页打开生成对话框：已就绪的角色名单默认保留，不当成新生成被重写', async () => {
+  const premise = '故事前提'.repeat(20)
+  await act(async () => root.render(<ArchFileViewer tabId="planning-premise" filePath="ai-novel://core/premise" projectKey={project.path} content={premise} savedContent={premise} />))
+  await act(async () => page.getByRole('button', { name: 'AI 重新生成', exact: true }).click())
+  const mark = await vi.waitFor(() => {
+    const row = [...document.querySelectorAll('label')].find(node => node.textContent?.startsWith('角色'))
+    expect(row).toBeTruthy()
+    return row!.querySelector('[data-mark]')!.getAttribute('data-mark')
+  })
+  expect(mark).toBe('keep')
+})
+
+describe('其他架构文档页的生成对话框按大纲进度判定情节大纲是否已确认，与架构页一致', () => {
+  const chapters = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index)
+    .map(n => `## 第${n}章：第${n}盏灯\n林舟在第${n}站认出一位失踪者的座位。`).join('\n\n')
+  const OUTLINE_SOURCE = { totalChapters: 24, writingLanguage: 'zh-CN' as const }
+
+  /** 从前提文档页打开生成对话框，返回情节大纲那一行的标记。未确认的节默认勾选，已确认的默认保留。 */
+  async function outlineMarkFromPremisePage(synopsis: string, checkpoint: Record<string, unknown> = {}) {
+    const premise = '故事前提'.repeat(20)
+    const base = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:project-core-get') return { premise, worldbuilding: '世界设定'.repeat(20), synopsis, totalChapters: 24, writingLanguage: 'zh-CN' }
+      if (channel === 'fs:read-json') return { success: true, data: checkpoint }
+      return base(channel, ...args)
+    })
+    await act(async () => root.render(<ArchFileViewer tabId="planning-premise" filePath="ai-novel://core/premise" projectKey={project.path} content={premise} savedContent={premise} />))
+    await act(async () => page.getByRole('button', { name: 'AI 重新生成', exact: true }).click())
+    return vi.waitFor(() => {
+      const row = [...document.querySelectorAll('label')].find(node => node.textContent?.startsWith('情节大纲'))
+      expect(row).toBeTruthy()
+      return row!.querySelector('[data-mark]')!.getAttribute('data-mark')
+    })
+  }
+
+  it('只写到第 1–5 章（全书 24 章）的大纲没确认：默认勾选续写，不当已确认保留', async () => {
+    expect(await outlineMarkFromPremisePage(renderPlotOutlineSynopsis(chapters(1, 5), 5, OUTLINE_SOURCE))).toBe('continue')
+  })
+
+  it('写满全书但有一批被打断的大纲没确认：默认勾选，不当已确认保留', async () => {
+    const checkpoint = { synopsis_protocol: PLOT_OUTLINE_PROTOCOL, synopsis_incomplete: true, synopsis_generation_handle: { runId: 'interrupted-outline' } }
+    expect(await outlineMarkFromPremisePage(renderPlotOutlineSynopsis(chapters(1, 24), 24, OUTLINE_SOURCE), checkpoint)).not.toBe('keep')
+  })
+
+  it('写满全书的大纲已确认：默认保留', async () => {
+    expect(await outlineMarkFromPremisePage(renderPlotOutlineSynopsis(chapters(1, 24), 24, OUTLINE_SOURCE))).toBe('keep')
+  })
 })
 
 it.each(['generate_architecture', 'generate_blueprint'] as const)('shows the approved %s range and target without replacing them with defaults', async workflow => {

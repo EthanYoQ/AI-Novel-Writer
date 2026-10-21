@@ -33,15 +33,15 @@ export function LegacyRosterRecoveryPanel({ onRecover, busy }: {
     return () => { disposed = true; client.detach() }
   }, [key, busy, project])
   if (key !== sessionKey || !shown && !error) return null
-  if (!shown) return <section className="p-2 text-xs space-y-2" aria-label={text('旧角色修复恢复', 'Legacy roster recovery')} onClick={event => event.stopPropagation()}>
+  if (!shown) return <section className="p-2 text-xs space-y-2" aria-label={text('旧版角色名单修复恢复', 'Legacy cast repair recovery')} onClick={event => event.stopPropagation()}>
     <p role="alert">{text('原运行暂时无法读取；未开始新的请求。', 'The original run could not be read; no new request was started.')} {error}</p>
     <Button size="sm" disabled={busy} onClick={() => { void onRecover({ restart: true }) }}>{text('明确重新开始', 'Start a new run explicitly')}</Button>
   </section>
   const candidates = shown.view.candidates ?? shown.view.artifacts
   const candidateText = shown.proposal ? formatCharacterProposalPreview(shown.proposal, text) : candidates.map(item => item.text).join('\n\n')
   const canRecover = canContinueLegacyRoster(shown)
-  return <section className="p-2 text-xs space-y-2" aria-label={text('旧角色修复恢复', 'Legacy roster recovery')} onClick={event => event.stopPropagation()}>
-    <div>{text('已保存旧角色修复运行', 'Saved legacy roster repair')} · {shown.modelId}</div>
+  return <section className="p-2 text-xs space-y-2" aria-label={text('旧版角色名单修复恢复', 'Legacy cast repair recovery')} onClick={event => event.stopPropagation()}>
+    <div>{text('已保存旧版角色名单修复运行', 'Saved legacy cast repair')} · {shown.modelId}</div>
     <pre className="max-h-40 overflow-auto whitespace-pre-wrap">{candidateText || shown.context.source.rawLegacy}</pre>
     <p>{text('当前状态原文仅保留为候选；确认采用不会将其变成定稿状态。', 'Original current state remains a candidate; confirmation does not make it finalized state.')}</p>
     {error && <p role="alert">{error}</p>}

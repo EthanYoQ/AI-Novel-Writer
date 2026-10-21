@@ -30,13 +30,13 @@ describe('character roster repair UI state', () => {
       kind: 'empty', label: '尚未生成角色名单',
     })
     expect(getCharacterRosterRepairPresentation(snapshot({ status: 'ready', migrationState: 'ready', entries: [{ name: '林舟' } as never] }), english))
-      .toMatchObject({ kind: 'ready', label: 'Character roster ready' })
+      .toMatchObject({ kind: 'ready', label: 'Cast ready' })
     const repair = getCharacterRosterRepairPresentation(snapshot({
       status: 'legacy_repair_required',
       migrationState: 'legacy_markdown_pending',
       legacyMarkdown: '旧角色图谱原文',
     }), english)
-    expect(repair).toMatchObject({ kind: 'repair_required', actionLabel: 'Repair character roster' })
+    expect(repair).toMatchObject({ kind: 'repair_required', actionLabel: 'Repair cast' })
     expect(canExplicitlyRepairCharacterRoster(repair)).toBe(true)
 
     const adoption = getCharacterRosterRepairPresentation(snapshot({
@@ -44,7 +44,7 @@ describe('character roster repair UI state', () => {
       migrationState: 'legacy_cards_preserved',
       entries: [{ name: '旧角色' } as never],
     }), text)
-    expect(adoption).toMatchObject({ kind: 'adoption_required', actionLabel: '重建只读图谱' })
+    expect(adoption).toMatchObject({ kind: 'adoption_required', actionLabel: '重建角色名单全文' })
     expect(canExplicitlyRepairCharacterRoster(adoption)).toBe(true)
   })
 

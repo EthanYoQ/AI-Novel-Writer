@@ -40,6 +40,11 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
+/** 蓝图页的数据逻辑在 use-chapter-blueprints.ts，旧外壳的 ChapterCardEditor 与新外壳的蓝图阶段共用。 */
+function blueprintHookSource(): string {
+  return normalizeSourceEol(readFileSync('src/components/editor/use-chapter-blueprints.ts', 'utf8'))
+}
+
 describe('chapter-card draft ledger', () => {
   it('always writes the fixed chapter-card tab and remains dirty until every project is saved', () => {
     const projectA = [blueprint(1, 'A 未保存')]
@@ -257,25 +262,8 @@ describe('chapter-card draft ledger', () => {
     expect(getChapterCardProjectDraft(ledger, 'project-a')?.dirtyChapterNumbers).toEqual([7])
   })
 
-  it('renders the chapter number as a readonly field with no ordinary renumber action', () => {
-    const source = normalizeSourceEol(
-      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
-    )
-    const chapterNumberInput = source.match(
-      /<Input\s+type="number"\s+value=\{selected\.chapterNumber\}[\s\S]*?\/>/,
-    )?.[0]
-
-    expect(source).toContain('K extends EditableChapterBlueprintField')
-    expect(chapterNumberInput).toContain('readOnly')
-    expect(chapterNumberInput).not.toContain('onChange')
-    expect(chapterNumberInput).not.toContain('onBlur')
-    expect(source).not.toContain("updateField('chapterNumber'")
-  })
-
   it('binds chapter-card IPC reads and writes to the loaded project identity', () => {
-    const componentSource = normalizeSourceEol(
-      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
-    )
+    const componentSource = blueprintHookSource()
     const workflowSource = normalizeSourceEol(
       readFileSync('src/services/workflows/directory-workflow.ts', 'utf8'),
     )
@@ -290,10 +278,10 @@ describe('chapter-card draft ledger', () => {
       'sameProjectSessionContext(dataProjectSessionRef.current, projectSession)',
     )
     expect(componentSource).toContain('loadRemote: () => loadDirectoryBlueprints(projectKey, projectSession)')
-    expect(componentSource).toContain('await saveChapterBlueprint(selected, projectKey, projectSession)')
-    expect(componentSource).toContain('await saveAllBlueprints(saveInput, projectKey, projectSession)')
+    expect(componentSource).toContain('await saveChapterBlueprint(selected, projectKey, projectSession, locale)')
+    expect(componentSource).toContain('await saveAllBlueprints(saveInput, projectKey, projectSession, locale)')
     expect(componentSource).toContain(
-      "'db:blueprint-delete',\n      selected.chapterNumber,\n      projectKey,",
+      "'db:blueprint-delete',\n      target.chapterNumber,\n      projectKey,",
     )
     expect(componentSource).toContain(
       "'db:blueprint-clear-all',\n      projectKey,",
@@ -310,46 +298,4 @@ describe('chapter-card draft ledger', () => {
     )
   })
 
-  it('only exposes writing actions for an actual next blueprint instead of rendering a no-op button', () => {
-    const source = normalizeSourceEol(
-      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
-    )
-
-    expect(source).toContain(
-      'const nextWritableBlueprint = nextWriteChapter === null\n    ? null\n    : visibleBlueprints.find(blueprint => blueprint.chapterNumber === nextWriteChapter)',
-    )
-    expect(source).toContain('{projectDataReady && nextWritableBlueprint && (')
-    expect(source).toContain('onClick={() => handleWriteChapter(nextWritableBlueprint)}')
-    expect(source).not.toContain(
-      "const bp = visibleBlueprints.find(b => b.chapterNumber === nextWriteChapter)\n                if (bp) handleWriteChapter(bp)",
-    )
-  })
-
-  it('offers a confirmed recovery path when legacy imported text creates a writing gap', () => {
-    const source = normalizeSourceEol(
-      readFileSync('src/components/editor/ChapterCardEditor.tsx', 'utf8'),
-    )
-    const handlerStart = source.indexOf('const handleClearLegacyImportedText = async () => {')
-    const handlerEnd = source.indexOf('\n  if (loading)', handlerStart)
-    const recoveryHandler = source.slice(handlerStart, handlerEnd)
-
-    expect(source).toContain(
-      'const canRecoverLegacyImportedText = projectDataReady\n    && legacyImportedTextRecoveryChapter !== null',
-    )
-    expect(source).toContain(
-      'const recoveryChapter = error instanceof AuthoritativeChapterSequenceError',
-    )
-    expect(source).toContain('error.sequence.firstGapChapterNumber')
-    expect(source).toContain('setLegacyImportedTextRecoveryChapter(recoveryChapter)')
-    expect(source).toContain('setNextWriteChapter(null)')
-    expect(source).toContain('{canRecoverLegacyImportedText && (')
-    expect(source).toContain('onClick={handleClearLegacyImportedText}')
-    expect(recoveryHandler).toContain("confirmText: text('清除误导入正文', 'Clear incorrectly imported text')")
-    expect(recoveryHandler).toContain('danger: true')
-    expect(recoveryHandler).toContain('if (!ok || !isCurrentProjectSession(projectSession)) return')
-    expect(recoveryHandler).toContain('await clearProjectData({ generatedText: true }, projectSession)')
-    expect(recoveryHandler).not.toContain('blueprints: true')
-    expect(recoveryHandler).not.toContain('creativeFields: true')
-    expect(recoveryHandler).toContain('await loadBlueprints()')
-  })
 })

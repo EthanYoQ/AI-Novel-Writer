@@ -33,6 +33,10 @@ describe('draft unit counting', () => {
     expect(countDraftUnits('... ！😀 🚀')).toBe(0)
   })
 
+  it('counts each text on its own when two texts of the same length alternate', () => {
+    expect(['林岚推门', '....', '林岚推门', '....'].map(countDraftUnits)).toEqual([4, 0, 4, 0])
+  })
+
   it('retains the v0.9.0 algorithm only for durable replay compatibility', () => {
     expect(countLegacyDraftUnitsV1('Café')).toBe(2)
     expect(countDraftUnits('Café')).toBe(1)

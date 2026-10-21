@@ -1,0 +1,600 @@
+/* ================= 剧情与伏笔 ================= */
+/* 容器查询只作用于后代：查询容器放在外框上，页面本身的页边距才能随内容区宽度收窄 */
+.stage-plot-frame {
+  container-type: inline-size;
+  overflow: auto;
+}
+
+.stage-plot {
+  padding: var(--s-8) var(--s-12) var(--s-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.stage-plot > * {
+  flex: none;
+}
+
+.stage-plot-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-6);
+}
+
+.stage-plot-eyebrow {
+  font: 400 var(--fs-12)/1.4 var(--font-display);
+  letter-spacing: 0.16em;
+  color: var(--ink-3);
+}
+
+.stage-plot-title {
+  margin: var(--s-1) 0 0;
+  font: 600 var(--fs-30)/1.3 var(--font-display);
+  color: var(--ink);
+}
+
+.stage-plot-h2 {
+  margin: 0;
+  font: 600 var(--fs-14)/1.4 var(--font-ui);
+  color: var(--ink);
+}
+
+.stage-plot-count {
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+.stage-plot-help {
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+
+.stage-plot-error {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--danger);
+}
+
+.stage-plot-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--sunken);
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-plot-note > svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.stage-plot-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-3);
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.stage-plot-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius);
+  background: var(--sunken);
+}
+
+.stage-plot-range {
+  padding: 0 var(--s-2);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stage-plot-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-plot-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stage-plot-legend i,
+.stage-plot-node {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.stage-plot-legend i[data-state='occurred'],
+.stage-plot-event[data-state='occurred'] .stage-plot-node {
+  background: var(--ink);
+}
+
+.stage-plot-legend i[data-state='planned'],
+.stage-plot-event[data-state='planned'] .stage-plot-node {
+  border: 1.5px dashed var(--ink-3);
+}
+
+.stage-plot-stamp {
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+/* 模型、生成与更多操作是一组，窄宽度下整组换到下一行，不把「更多」单独挤下去 */
+.stage-plot-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2) var(--s-3);
+  margin-left: auto;
+}
+
+.stage-plot-model {
+  height: 34px;
+  max-width: 200px;
+  font-size: var(--fs-12);
+}
+
+.stage-plot-spin {
+  animation: stage-plot-spin 1s linear infinite;
+}
+
+@keyframes stage-plot-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-plot-spin { animation: none; }
+}
+
+.stage-plot-grid-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.stage-plot-grid {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.stage-plot-corner,
+.stage-plot-chapter {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-12);
+  font-weight: 400;
+  text-align: left;
+  vertical-align: top;
+  color: var(--ink-3);
+}
+
+.stage-plot-corner {
+  width: 120px;
+}
+
+/* 表格按固定列宽排：章节一多就比容器宽，横向滚动 */
+.stage-plot-chapter {
+  width: 150px;
+  border-left: 1px solid var(--rule);
+}
+
+.stage-plot-chapter-no {
+  font: italic var(--fs-13)/1 var(--font-num);
+}
+
+.stage-plot-chapter b {
+  display: block;
+  font: 500 var(--fs-13)/1.4 var(--font-display);
+  color: var(--ink);
+}
+
+.stage-plot-chapter small {
+  font: 400 var(--fs-11) var(--font-ui);
+  color: var(--ok);
+}
+
+.stage-plot-lane {
+  padding: 0 12px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  font-weight: 400;
+}
+
+.stage-plot-lane b {
+  display: block;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stage-plot-lane span {
+  display: block;
+  font-size: var(--fs-11);
+  color: var(--ink-3);
+}
+
+.stage-plot-grid tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.stage-plot-cell {
+  position: relative;
+  height: 104px;
+  padding: 12px 10px;
+  border-left: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+}
+
+/* 轨道起止章之间画一条线：主线实线，支线虚线 */
+.stage-plot-cell[data-inside]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  background: var(--rule-strong);
+}
+
+tr[data-role='subplot'] .stage-plot-cell[data-inside]::before {
+  background: repeating-linear-gradient(90deg, var(--rule-strong) 0 6px, transparent 6px 10px);
+}
+
+.stage-plot-event {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  margin: 2px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stage-plot-event .stage-plot-node {
+  margin-top: 4px;
+}
+
+.stage-plot-event:hover {
+  border-color: var(--rule-strong);
+}
+
+.stage-plot-event[data-state='planned'] {
+  border-style: dashed;
+  background: var(--surface);
+  color: var(--ink-3);
+}
+
+.stage-plot-event[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  color: var(--ink);
+}
+
+.stage-plot-event[aria-pressed='true'] .stage-plot-node {
+  background: var(--accent);
+}
+
+.stage-plot-event:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 1px;
+}
+
+.stage-plot-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s-2) var(--s-6);
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.stage-plot-detail h3 {
+  margin: var(--s-1) 0 0;
+  font: 600 var(--fs-16)/1.5 var(--font-display);
+  color: var(--ink);
+}
+
+.stage-plot-meta {
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-plot-sources {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.stage-plot-records {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-plot-records-head,
+.stage-plot-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+/* 把收起按钮推到标题行右端 */
+.stage-plot-gap {
+  flex: 1;
+}
+
+.stage-plot-runs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stage-plot-recovery p {
+  margin: 0 0 var(--s-1);
+}
+
+/* ================= 伏笔线索 ================= */
+.stage-threads {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: var(--s-6);
+  align-items: start;
+}
+
+/* 运行侧页开着时内容区变窄：线索列表占满一行，定稿变化与 AI 建议排到下面 */
+@container (max-width: 880px) {
+  .stage-threads {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container (max-width: 1040px) {
+  .stage-plot {
+    padding: var(--s-6) var(--s-6) var(--s-10);
+  }
+}
+
+.stage-threads-plans,
+.stage-threads-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.stage-threads-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.stage-thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.stage-thread {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 236px auto;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--rule);
+}
+
+.stage-thread:first-child {
+  border-top: 0;
+}
+
+.stage-thread[data-source],
+.stage-thread[data-event] {
+  background: var(--accent-soft);
+}
+
+.stage-thread-name b {
+  display: block;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.stage-thread-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-thread-sub[data-tone='warn'] {
+  color: var(--warn);
+}
+
+.stage-thread-route {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stage-thread-route::before {
+  content: '';
+  position: absolute;
+  left: 16%;
+  right: 16%;
+  top: 5px;
+  height: 1px;
+  background: var(--rule-strong);
+}
+
+.stage-thread-route li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-11);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.stage-thread-route li::before {
+  content: '';
+  width: 11px;
+  height: 11px;
+  border: 1.5px dashed var(--ink-3);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.stage-thread-route li[data-state='done']::before {
+  border: 1.5px solid var(--ink);
+  background: var(--ink);
+}
+
+.stage-thread-route li[data-state='late'] {
+  color: var(--warn);
+}
+
+.stage-thread-route li[data-state='late']::before {
+  border: 1.5px solid var(--warn);
+  background: var(--warn-soft);
+}
+
+.stage-thread-route li[data-state='none'] {
+  visibility: hidden;
+}
+
+.stage-thread-events {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--s-3);
+  border-left: 2px solid var(--rule-strong);
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-threads-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.stage-threads-form,
+.stage-threads-plan-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.stage-threads-target {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stage-threads-actions,
+.stage-candidate-foot {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.stage-threads-ai {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.stage-threads-intent {
+  height: auto;
+  min-height: 84px;
+  padding: var(--s-2) var(--s-3);
+  resize: vertical;
+}
+
+.stage-candidate {
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+}
+
+.stage-candidate-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-candidate-head b {
+  font-size: var(--fs-13);
+  color: var(--ink);
+}
+
+.stage-candidate blockquote {
+  margin: 10px 0 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--rule-strong);
+  font: var(--fs-14)/1.8 var(--font-prose);
+  color: var(--ink-2);
+}
+
+.stage-candidate p {
+  margin: 0 0 var(--s-2);
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  color: var(--ink-3);
+}

@@ -5,7 +5,7 @@ import { page } from 'vitest/browser'
 
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLocaleStore } from '../../../stores/locale-store'
-import SettingsModal from '../SettingsModal'
+import StageSettings from '../../stage/settings/StageSettings'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -13,9 +13,9 @@ let root: Root
 let container: HTMLDivElement
 let invoke: ReturnType<typeof vi.fn>
 
-async function renderSection(section: 'proxy' | 'editor') {
+async function renderSection(section: 'proxy' | 'appearance') {
   useLayoutStore.setState({ settingsSection: section })
-  await act(async () => root.render(<SettingsModal open onClose={() => {}} />))
+  await act(async () => root.render(<StageSettings library={false} />))
 }
 
 beforeEach(() => {
@@ -52,7 +52,7 @@ describe('settings persistence truthfulness', () => {
     })
     await renderSection('proxy')
 
-    await act(async () => page.getByRole('button', { name: '保存代理配置' }).click())
+    await act(async () => page.getByRole('button', { name: '保存代理设置' }).click())
 
     await expect.element(page.getByText(/代理配置保存失败/)).toBeVisible()
     await expect.element(page.getByText('已保存')).not.toBeInTheDocument()
@@ -64,11 +64,11 @@ describe('settings persistence truthfulness', () => {
       if (channel === 'config:set') return { success: false, error: 'read only' }
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
-    await renderSection('editor')
+    await renderSection('appearance')
     const toggle = page.getByRole('switch', { name: '定稿后打开下一章' })
     await expect.element(toggle).not.toBeChecked()
 
-    await act(async () => toggle.click())
+    await act(async () => (toggle.element() as HTMLInputElement).click())
 
     await expect.element(toggle).not.toBeChecked()
     await expect.element(page.getByText(/自动打开下一章设置保存失败/)).toBeVisible()

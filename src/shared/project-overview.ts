@@ -26,6 +26,10 @@ export interface ReadyProjectOverview {
   characters: number
   finalizedChapters: number
   stages: readonly ProjectOverviewStage[]
+  /** 设定四项必填（核心大纲、类型、篇幅、目标读者）是否齐全，与流程脊的「设定完成」同一口径。 */
+  setupReady?: boolean
+  /** 规划总章数；0 表示还没定。 */
+  plannedChapters?: number
   /** Present only when main reads the already-open current project. */
   excerpt?: string
 }

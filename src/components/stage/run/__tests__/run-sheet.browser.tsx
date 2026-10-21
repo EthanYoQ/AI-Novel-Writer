@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { page, userEvent } from 'vitest/browser'
 import type { StoreApi } from 'zustand'
 
 import '../../../../index.css'
@@ -16,7 +17,6 @@ import { useLocaleStore } from '../../../../stores/locale-store'
 import { useStageStore, type StageSheet } from '../../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore, type WorkflowRun } from '../../../../stores/workflow-store'
-import RightToolWindowBar from '../../../layout/RightToolWindowBar'
 import RunSheet from '../RunSheet'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -59,7 +59,7 @@ async function render(sheet: StageSheet = { kind: 'run', tab: 'active' }) {
 
 function Sheet() {
   const sheet = useStageStore(s => s.sheet)
-  return sheet ? <RunSheet sheet={sheet} /> : null
+  return sheet?.kind === 'run' ? <RunSheet sheet={sheet} /> : null
 }
 
 const button = (name: string | RegExp) => [...host!.querySelectorAll('button')]
@@ -279,6 +279,27 @@ describe('运行侧页', () => {
     expect(button('继续此批次')?.disabled).toBe(false)
   })
 
+  it('来源变了以后，已原样写进正式大纲的一批不列为可恢复，只列没保存的那批', async () => {
+    const outlineRun = (runId: string, from: number, to: number, inFormalOutline: boolean) => {
+      const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: `${runId}根`, runId }
+      return { handle, operation: 'architecture', draftSave: { kind: 'absent' },
+        plotOutline: { range: { from, to }, cursor: { kind: 'complete' } },
+        plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' }, inFormalOutline, completeChapters: [], saved: null },
+        planningContinuation: { state: 'source-changed' } }
+    }
+    const saved = outlineRun('第一批', 1, 5, true)
+    const unsaved = outlineRun('第二批', 6, 6, false)
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list') return [saved, unsaved].map(item => ({ handle: item.handle, status: 'failed', artifacts: [] }))
+      if (channel === 'generation:read-context') return (args[0] as { handle: { runId: string } }).handle.runId === '第一批' ? saved : unsaved
+      return fallback(channel, ...args)
+    })
+    await render()
+    await vi.waitFor(() => expect(host!.textContent).toContain('大纲恢复稿 · 第 6 章'))
+    expect([...host!.querySelectorAll('article h3')].map(title => title.textContent)).toEqual(['大纲恢复稿 · 第 6 章'])
+  })
+
   it('恢复候选：继续编辑或放弃的调用失败时显示错误', async () => {
     candidates = [candidate()]
     const fallback = invoke.getMockImplementation()!
@@ -332,6 +353,17 @@ describe('运行侧页', () => {
     expect(host!.querySelector('table')!.textContent).toContain('坏时间模型')
   })
 
+  it('日志满 500 行之后新来的一行仍然自动滚到底', async () => {
+    useWorkflowStore.setState({ globalLogs: Array.from({ length: 500 }, (_, index) => ({ time: '08:10:00', level: 'info' as const, message: `第 ${index + 1} 行` })) })
+    await render({ kind: 'run', tab: 'diagnostics' })
+    const log = host!.querySelector<HTMLOListElement>('.run-log')!
+    await vi.waitFor(() => expect(log.scrollTop + log.clientHeight).toBeGreaterThanOrEqual(log.scrollHeight - 1))
+    log.scrollTop = 0
+    await act(async () => useWorkflowStore.getState().addLog('info', '第 501 行'))
+    expect(useWorkflowStore.getState().globalLogs).toHaveLength(500)
+    expect(log.scrollTop + log.clientHeight).toBeGreaterThanOrEqual(log.scrollHeight - 1)
+  })
+
   it('清空日志要就地确认，写明行数', async () => {
     useWorkflowStore.setState({ globalLogs: [
       { time: '08:10:00', level: 'info', message: '开始' },
@@ -343,17 +375,77 @@ describe('运行侧页', () => {
     await click('清空')
     expect(useWorkflowStore.getState().globalLogs).toEqual([])
   })
+
+  it('清空日志选「保留」或按 Esc 后，焦点回到「清空日志…」按钮', async () => {
+    useWorkflowStore.setState({ globalLogs: [{ time: '08:10:00', level: 'info', message: '开始' }] })
+    await render({ kind: 'run', tab: 'diagnostics' })
+    const trigger = page.getByRole('button', { name: '清空日志…' })
+    const open = async () => {
+      trigger.element().focus()
+      await userEvent.keyboard('{Enter}')
+      await vi.waitFor(() => expect(document.activeElement?.textContent).toBe('保留'))
+    }
+    await open()
+    await userEvent.keyboard('{Escape}')
+    expect(document.activeElement).toBe(trigger.element())
+    await open()
+    await userEvent.click(page.getByRole('button', { name: '保留' }))
+    expect(document.activeElement).toBe(trigger.element())
+  })
+
+  it('恢复候选「放弃…」的确认条选「保留」或按 Esc 后，焦点回到重新出现的「放弃…」按钮', async () => {
+    candidates = [candidate()]
+    await render()
+    const discard = page.getByRole('button', { name: '放弃…' })
+    await expect.element(discard).toBeVisible()
+    await userEvent.click(discard)
+    await userEvent.click(page.getByRole('button', { name: '保留' }))
+    expect(document.activeElement?.textContent).toBe('放弃…')
+    await userEvent.click(discard)
+    await userEvent.keyboard('{Escape}')
+    expect(document.activeElement?.textContent).toBe('放弃…')
+  })
+})
+
+describe('运行侧页的说明文字', () => {
+  it.each(['light', 'dark'] as const)('%s 主题步骤用时、待执行与跳过的步骤、日志时间都用 --ink-3，不用 --ink-4', async (theme) => {
+    host!.dataset.theme = theme
+    const ink = (name: string) => {
+      const probe = document.createElement('span')
+      probe.style.color = `var(${name})`
+      host!.append(probe)
+      const color = getComputedStyle(probe).color
+      probe.remove()
+      return color
+    }
+    useWorkflowStore.setState({
+      activeRuns: [run('4', 'running', { steps: [
+        { id: 'a', name: '读设定', description: '', status: 'completed', progress: 100, logs: [], startedAt: '2026-10-12T08:10:00.000Z', completedAt: '2026-10-12T08:10:41.000Z' },
+        { id: 'b', name: '写稿', description: '', status: 'running', progress: 40, logs: [] },
+        { id: 'c', name: '审稿', description: '', status: 'pending', progress: 0, logs: [] },
+        { id: 'd', name: '修稿', description: '', status: 'skipped', progress: 0, logs: [] },
+      ] } as Partial<WorkflowRun>)],
+      globalLogs: [{ time: '08:10:00', level: 'info', message: '开始' }],
+    })
+    await render()
+    const step = (status: string) => host!.querySelector<HTMLElement>(`.run-step[data-status="${status}"]`)!
+    const color = (element: Element) => getComputedStyle(element).color
+    expect(ink('--ink-3')).not.toBe(ink('--ink-4'))
+    expect(color(step('completed').querySelector('.run-step-meta')!)).toBe(ink('--ink-3'))
+    for (const status of ['pending', 'skipped']) {
+      expect(color(step(status).querySelector('.run-step-row')!)).toBe(ink('--ink-3'))
+      expect(color(step(status).querySelector('.run-step-meta')!)).toBe(ink('--ink-3'))
+    }
+    expect(color(step('pending').querySelector('.run-step-icon')!)).toBe(ink('--ink-3'))
+    await click('诊断')
+    expect(color(host!.querySelector('.run-log-time')!)).toBe(ink('--ink-3'))
+  })
 })
 
 describe('聊天入口不可见', () => {
-  it.each<[Locale, string]>([['zh-CN', 'AI 输出'], ['en-US', 'AI output']])('%s：旧外壳右侧栏只有 AI 输出，运行侧页三个分页都没有聊天', async (locale, outputLabel) => {
+  it.each<Locale>(['zh-CN', 'en-US'])('%s：运行侧页三个分页都没有聊天', async locale => {
     useLocaleStore.setState({ locale })
-    useLayoutStore.setState({ aiPanelOpen: false, sidebarView: 'project' })
     useWorkflowStore.setState({ activeRuns: [run('4', 'running')], history: [run('3', 'completed')] })
-    await act(async () => root!.render(<RightToolWindowBar />))
-    const rail = [...host!.querySelectorAll('button')]
-    expect(rail.map(item => item.title)).toEqual([outputLabel])
-    expect(host!.innerHTML).not.toMatch(CHAT_WORDS)
 
     for (const tab of ['active', 'history', 'diagnostics'] as const) {
       await render({ kind: 'run', tab })

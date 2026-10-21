@@ -155,7 +155,6 @@ export function classifyMacosCodeSigning({ detailsExitCode, verificationExitCode
 const MACOS_PACKAGED_SMOKE_EVIDENCE = Object.freeze([
   { file: 'qualification/packaged-vector-smoke.json', kind: 'packaged-vector-smoke' },
   { file: 'qualification/packaged-official-homepage-smoke.json', kind: 'packaged-official-homepage-smoke' },
-  { file: 'qualification/packaged-skin-smoke.json', kind: 'packaged-skin-smoke' },
   { file: 'qualification/macos-dmg-smoke.json', kind: 'macos-dmg-smoke' },
 ])
 
@@ -163,7 +162,6 @@ const PACKAGED_SMOKE_EVIDENCE = {
   windows: [
     { file: 'qualification/packaged-vector-smoke.json', kind: 'packaged-vector-smoke' },
     { file: 'qualification/packaged-official-homepage-smoke.json', kind: 'packaged-official-homepage-smoke' },
-    { file: 'qualification/packaged-skin-smoke.json', kind: 'packaged-skin-smoke' },
   ],
   'macos-arm64': MACOS_PACKAGED_SMOKE_EVIDENCE,
   'macos-x64': MACOS_PACKAGED_SMOKE_EVIDENCE,
@@ -732,9 +730,8 @@ function validateWindowsReceipt(receipt, name, bundleRoot, version) {
     const expected = [
       { kind: 'packaged-vector-smoke', path: 'qualification/packaged-vector-smoke.json' },
       { kind: 'packaged-official-homepage-smoke', path: 'qualification/packaged-official-homepage-smoke.json' },
-      { kind: 'packaged-skin-smoke', path: 'qualification/packaged-skin-smoke.json' },
     ]
-    assert(direct.evidenceCount === 3 && JSON.stringify(direct.evidenceKinds) === JSON.stringify(expected.map(record => record.kind)), 'Windows packaged-smoke receipt summary is invalid')
+    assert(direct.evidenceCount === 2 && JSON.stringify(direct.evidenceKinds) === JSON.stringify(expected.map(record => record.kind)), 'Windows packaged-smoke receipt summary is invalid')
     validateReferenceSet(receipt, expected, bundleRoot, 'Windows packaged-smoke receipt')
   } else if (name === 'signing') {
     const expectedStatus = receipt.status === 'signed' ? 'Valid' : 'NotSigned'
@@ -759,11 +756,10 @@ function validateMacosReceipt(receipt, name, bundleRoot, version, platform) {
     assert(direct.executable?.present === true && direct.helper?.present === true && direct.mount?.attached === true && direct.unmount?.attempted === true && direct.unmount?.succeeded === true, 'macOS DMG mount receipt facts are invalid')
     assert(direct.hash?.algorithm === 'sha256' && direct.hash?.value?.toLowerCase() === dmgSha256, 'macOS DMG mount receipt hash is invalid')
   } else if (name === 'packaged-smoke') {
-    assert(direct.secureFileSystemSmoke === true && direct.vectorSmoke === true && direct.officialHomepageSmoke === true && direct.skinSmoke === true && direct.dmgSha256?.toLowerCase() === dmgSha256, 'macOS packaged-smoke receipt facts are invalid')
+    assert(direct.secureFileSystemSmoke === true && direct.vectorSmoke === true && direct.officialHomepageSmoke === true && direct.dmgSha256?.toLowerCase() === dmgSha256, 'macOS packaged-smoke receipt facts are invalid')
     validateReferenceSet(receipt, [
       { kind: 'packaged-vector-smoke', path: 'qualification/packaged-vector-smoke.json' },
       { kind: 'packaged-official-homepage-smoke', path: 'qualification/packaged-official-homepage-smoke.json' },
-      { kind: 'packaged-skin-smoke', path: 'qualification/packaged-skin-smoke.json' },
       { kind: 'macos-dmg-smoke', path: 'qualification/macos-dmg-smoke.json' },
     ], bundleRoot, 'macOS packaged-smoke receipt')
   } else if (name === 'signing') {

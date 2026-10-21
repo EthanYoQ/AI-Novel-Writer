@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent } from 'react'
+import { useEffect, useRef, type KeyboardEvent } from 'react'
 import { X } from 'lucide-react'
 import type { EditorTab } from '../../stores/editor-store'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -17,6 +17,11 @@ interface StageTabsProps {
 export default function StageTabs({ tabs, activeTabId, onSelect, onClose, tabDomId, panelId }: StageTabsProps) {
   const text = useLocaleStore(s => s.text)
   const list = useRef<HTMLDivElement>(null)
+
+  // 标签条隐藏了滚动条，激活标签在可视区外时作者看不到它，也没有可拖的滚动条
+  useEffect(() => {
+    list.current?.querySelector('[aria-selected="true"]')?.parentElement?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeTabId])
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     const target = event.key === 'ArrowRight' ? tabs[(index + 1) % tabs.length]

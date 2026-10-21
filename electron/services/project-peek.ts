@@ -18,6 +18,7 @@ import type {
 } from '../../src/shared/project-overview'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
 import { verifySchema } from '../migrations/runner'
+import { CURRENT_DRAFT_STATUS_SQL } from '../../src/shared/draft-status'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 
 const require = createRequire(import.meta.url)
@@ -153,6 +154,7 @@ interface CoreRow {
   subGenre: string
   targetAudience: string
   totalChapters: number
+  wordsPerChapter: number
   coreOutline: string
   worldSetting: string
   goldenFinger: string
@@ -185,6 +187,7 @@ function aggregateProject(
   const core = database.prepare(`
     SELECT project_name AS projectName, genre, sub_genre AS subGenre,
            target_audience AS targetAudience, total_chapters AS totalChapters,
+           words_per_chapter AS wordsPerChapter,
            core_outline AS coreOutline, world_setting AS worldSetting,
            golden_finger AS goldenFinger, protagonist_profile AS protagonistProfile,
            global_guidance AS globalGuidance, writing_style AS writingStyle,
@@ -202,11 +205,11 @@ function aggregateProject(
   const currentDrafts = database.prepare(`
     SELECT drafts.chapter_number AS chapterNumber, drafts.word_count AS wordCount
     FROM drafts
-    WHERE drafts.status IN ('draft','revised','finalized')
+    WHERE drafts.status IN (${CURRENT_DRAFT_STATUS_SQL})
       AND NOT EXISTS (
         SELECT 1 FROM drafts newer
         WHERE newer.chapter_number=drafts.chapter_number
-          AND newer.status IN ('draft','revised','finalized')
+          AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL})
           AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)
       )
   `).all() as { chapterNumber: number; wordCount: number }[]
@@ -244,6 +247,9 @@ function aggregateProject(
     + (Number.isSafeInteger(row.wordCount) && row.wordCount >= 0 ? row.wordCount : 0), 0)
   const characters = Number(database.prepare('SELECT COUNT(*) FROM characters WHERE retired=0').pluck().get())
   const plannedChapters = Number.isSafeInteger(core.totalChapters) ? core.totalChapters : 0
+  const filled = (value: unknown) => typeof value === 'string' && Boolean(value.trim())
+  const setupReady = filled(core.coreOutline) && filled(core.genre) && filled(core.targetAudience)
+    && plannedChapters > 0 && Number.isSafeInteger(core.wordsPerChapter) && core.wordsPerChapter > 0
   const stages: ProjectOverviewStage[] = [
     { id: 'configuration', status: configurationCount === 9 ? 'completed' : configurationCount ? 'in-progress' : 'not-started', count: configurationCount },
     { id: 'architecture', status: architectureCount === 4 ? 'completed' : architectureCount ? 'in-progress' : 'not-started', count: architectureCount },
@@ -257,11 +263,11 @@ function aggregateProject(
       SELECT contents.body
       FROM drafts
       JOIN contents ON contents.id=drafts.content_id
-      WHERE drafts.status IN ('draft','revised','finalized')
+      WHERE drafts.status IN (${CURRENT_DRAFT_STATUS_SQL})
         AND NOT EXISTS (
           SELECT 1 FROM drafts newer
           WHERE newer.chapter_number=drafts.chapter_number
-            AND newer.status IN ('draft','revised','finalized')
+            AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL})
             AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)
         )
       ORDER BY drafts.chapter_number DESC, drafts.version DESC, drafts.id DESC
@@ -286,6 +292,8 @@ function aggregateProject(
     characters: Number.isSafeInteger(characters) && characters >= 0 ? characters : 0,
     finalizedChapters: finalizedChapters.length,
     stages: Object.freeze(stages),
+    setupReady,
+    plannedChapters: Math.max(0, plannedChapters),
     ...(latestDraftBody ? { excerpt: tailExcerpt(latestDraftBody) } : {}),
   })
 }

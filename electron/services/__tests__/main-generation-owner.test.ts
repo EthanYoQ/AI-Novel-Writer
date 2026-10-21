@@ -118,6 +118,23 @@ function acceptOutline(owner: ReturnType<typeof fixture>['owner'], handle: Param
   return owner.composeVisible(handle, [...(progress.composition?.artifactIds ?? []), ...progress.cursor.artifactIds], textHash(text), PLOT_OUTLINE_PROTOCOL)
 }
 const outlineEntry = (chapter: number) => `## 第${chapter}章：线索${chapter}\n林岚确认第${chapter}份证词，与同伴商议下一步。`
+/**
+ * 旧版本开跑时不查章号顺序：冻结来源与正式大纲都换成 legacy，整份绑定（指纹、上下文快照、来源引用）按它重算，
+ * 已生成章节的指纹随之改写，等同升级前在这份大纲上开跑并落库的任务。
+ */
+function freezeLegacyOutline(f: ReturnType<typeof fixture>, runId: string, legacy: string) {
+  f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.plotOutlineSource.core.synopsis',?) WHERE run_id=?").run(legacy, runId)
+  f.db.prepare('UPDATE project_core SET synopsis=?').run(legacy)
+  const frozen = new GenerationRunRepository(() => f.db).get(runId).binding
+  const rebuilt = rebuildGenerationSourceBinding({ db: f.db, projectStorageRoot: path.join(f.root, 'project'), globalDataRoot: path.join(f.root, 'global'),
+    readBuiltinPrompt: (key, language) => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill },
+  frozen, frozen.epoch, undefined, readMainGenerationPolicy(frozen.sourceManifest.policy)).binding
+  const fingerprint = JSON.stringify(rebuilt.fingerprint)
+  f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.fingerprint',json(?),'$.contextSnapshotId',?,'$.sourceRefs',json(?)) WHERE run_id=?")
+    .run(fingerprint, rebuilt.contextSnapshotId, JSON.stringify(rebuilt.sourceRefs), runId)
+  f.db.prepare("UPDATE generation_artifacts SET artifact_json=json_set(artifact_json,'$.fingerprint',json(?)) WHERE run_id=?").run(fingerprint, runId)
+  f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.artifactIdentity.fingerprint',json(?)) WHERE run_id=? AND json_extract(usage_receipt_json,'$.artifactIdentity') IS NOT NULL").run(fingerprint, runId)
+}
 
 function openAggregateRun(f: ReturnType<typeof fixture>, selection: BeginGenerationRequest) {
   const inputs = selection.authorInputs!
@@ -482,6 +499,66 @@ describe('explicit planning recovery with real SQLite', () => {
     expect(next.plotOutline?.confirmedPrefix).toBe(outlineEntry(1))
     expect(dispatch).toHaveBeenCalledTimes(3)
   })
+  it('升级前以乱序大纲（1、5、2、3、4）开跑的第 3–5 章任务：列表与恢复照常读出，判为不能继续，派发、续接与保存都拒绝', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      options.onVisible({ kind: 'delta', text: outlineEntry(Number((request as { task: GenerationTask }).task.purpose.split(':')[2])) })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch), expected = { totalChapters: 5, writingLanguage: 'zh-CN' as const }
+    f.db.prepare('UPDATE project_core SET synopsis=?,total_chapters=5').run(renderPlotOutlineSynopsis([1, 2, 3, 4, 5].map(outlineEntry).join('\n\n'), 5, expected))
+    const run = f.owner.begin(outlineSelection(f, 5, 3))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'three', task: outlineTask(run.plotOutline!) }); acceptOutline(f.owner, run.handle)
+    const legacy = renderPlotOutlineSynopsis([1, 5, 2, 3, 4].map(outlineEntry).join('\n\n'), 5, expected)
+    freezeLegacyOutline(f, run.handle.runId, legacy)
+    const repository = new GenerationRunRepository(() => f.db)
+    repository.pause(run.handle.rootActionId)
+
+    expect(f.owner.list().find(view => view.handle.runId === run.handle.runId)?.plotOutline?.cursor).toEqual({ kind: 'stopped', chapterNumber: 4, reason: 'source-invalid' })
+    const context = f.owner.readContext(run.handle)
+    expect(context.plotOutlineRecovery).toMatchObject({ draft: outlineEntry(3), writeState: { kind: 'blocked', reason: 'source-invalid' } })
+    expect(context.planningContinuation?.state).toBe('source-invalid')
+    expect(context.plotOutline?.confirmedPrefix).toBeNull()
+    const paused = { root: repository.budget(run.handle.rootActionId).root, run: repository.get(run.handle.runId) }
+    expect(paused.root.status).toBe('paused')
+    await expect(f.owner.resume(run.handle)).rejects.toThrow('GENERATION_PLOT_OUTLINE_PREFIX_INVALID')
+    expect(repository.budget(run.handle.rootActionId).root).toEqual(paused.root)
+    expect(repository.get(run.handle.runId)).toEqual(paused.run)
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'after-upgrade', task: { ...task, purpose: plotOutlinePurpose(4, 'normal') } }))
+      .rejects.toThrow('GENERATION_PLOT_OUTLINE_PREFIX_INVALID')
+    expect(() => f.owner.restart(run.handle, { ...outlineSelection(f, 5, 4), uiActionNonce: 'continue-after-upgrade' })).toThrow('GENERATION_PLANNING_CONTINUATION_SOURCE_INVALID')
+    const payload: ProjectCoreSynopsisCommitRequest = { synopsis: legacy, expected: context.plotOutline!.sourceExpected,
+      authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.plotOutlineRecovery!.leaseEpoch, operationId: 'save-after-upgrade', committedRange: { from: 3, to: 3 } } }
+    expect(() => f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit(payload)).immediate()).toThrow('GENERATION_PLOT_OUTLINE_PREFIX_INVALID')
+    expect(ProjectCoreRepository.get(f.db)!.synopsis).toBe(legacy)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('升级前以乱序大纲开跑、已存下作者编辑的任务：同一编辑的重试仍返回已保存，换一次新的写入仍拒绝', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      options.onVisible({ kind: 'delta', text: outlineEntry(Number((request as { task: GenerationTask }).task.purpose.split(':')[2])) })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch), expected = { totalChapters: 5, writingLanguage: 'zh-CN' as const }
+    f.db.prepare('UPDATE project_core SET synopsis=?,total_chapters=5').run(renderPlotOutlineSynopsis([1, 2, 3, 4, 5].map(outlineEntry).join('\n\n'), 5, expected))
+    const run = f.owner.begin(outlineSelection(f, 5, 3))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'three', task: outlineTask(run.plotOutline!) }); acceptOutline(f.owner, run.handle)
+    const legacy = renderPlotOutlineSynopsis([1, 5, 2, 3, 4].map(outlineEntry).join('\n\n'), 5, expected)
+    freezeLegacyOutline(f, run.handle.runId, legacy)
+    const repository = new GenerationRunRepository(() => f.db)
+    // 旧版本照当时的规则存下了作者对第 3 章的编辑：回执与正式大纲一起落库，渲染端的快照还停在待确认。
+    const saved = legacy.replace('林岚确认第3份证词', '作者改写了第3份证词')
+    f.db.transaction(() => {
+      repository.recordPlotOutlineAuthorEdit(repository.plotOutlineAuthorEditReceipt(run.handle.runId, 'saved-before-upgrade', { from: 3, to: 3 }, textHash(saved)))
+      f.db.prepare('UPDATE project_core SET synopsis=?').run(saved)
+    }).immediate()
+
+    const context = f.owner.readContext(run.handle)
+    const edit = (operationId: string): ProjectCoreSynopsisCommitRequest => ({ synopsis: saved, expected: context.plotOutline!.sourceExpected,
+      authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.plotOutlineRecovery!.leaseEpoch, operationId, committedRange: { from: 3, to: 3 } } })
+    expect(f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit(edit('saved-before-upgrade'))).immediate())
+      .toMatchObject({ operationId: 'saved-before-upgrade', committedRange: { from: 3, to: 3 }, idempotent: true })
+    expect(() => f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit(edit('another-after-upgrade'))).immediate()).toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_RECEIPT_CONFLICT')
+    expect(ProjectCoreRepository.get(f.db)!.synopsis).toBe(saved)
+  })
   it('rejects explicit continuation while in flight or after a source change without creating a replacement', async () => {
     let release!: () => void
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => {
@@ -523,7 +600,7 @@ describe('explicit planning recovery with real SQLite', () => {
       newCharacterCandidates: characters.map(name => ({ name, role: 'supporting' as const })),
       userGuidance: '  作者指导保留原字节。\r\n', notes: '<think>作者备注中的原文标签</think>\n第二行。', notesUpdatedAt: '2026-10-04T13:00:00.000Z' }
     const request: BlueprintRangeCommitRequest = { mode: 'replace-range', operationId: 'author-blueprint', startChapter: 1, endChapter: 1,
-      blueprints: parseTextBlueprintsStrict(JSON.stringify([repaired]), 1, 1, 'author'), authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } }
+      blueprints: parseTextBlueprintsStrict(JSON.stringify([repaired]), 1, 1, 'zh-CN', 'author'), authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } }
     const save = () => f.db.transaction(() => f.owner.commitBlueprintAuthorEdit(request)).immediate()
     const saved = save()
     expect(saved.authorEdit).toMatchObject({ committedRange: { from: 1, to: 1 }, remainingRange: { from: 2, to: 3 } })
@@ -2772,4 +2849,72 @@ it('keeps the next plot-outline recovery chapter empty instead of duplicating th
  const recovery=f.owner.readContext(run.handle).plotOutlineRecovery!
  expect(recovery.draft.split(outlineEntry(1))).toHaveLength(2)
  expect(recovery.draft).toContain('## 第2章：')
+})
+
+describe('next chapter after editing a reviewed batch draft (#438)', () => {
+  it('saves the next chapter when an earlier draft was edited before the author finalized the chain', async () => {
+    const outline = '前驱：信已送到；行动：读信；结果：获知消息。'
+    const base = '原目标：读信。'
+    const decision = { version: 1 as const, verdict: 'admitted' as const,
+      promptHash: textHash(base), shortOutlinePromptHash: textHash('短细纲输入'),
+      capacity: { maxInputUnits: 8000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: 1 },
+      coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author' as const, required: true, units: 1 }], omitted: [] }
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()
+    const f = fixture(dispatch)
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章'),(3,'第三章')")
+    const finalize = (draftId: number, chapterNumber: number, content: string) => FinalizationRepository.commit({
+      finalizationId: `finalization-${chapterNumber}`, draftId, chapterNumber, chapterTitle: `第${chapterNumber}章`, content,
+      contentHash: textHash(content), contentRevision: 1, targetFileName: `chapter-${chapterNumber}.md` })
+    // 「留作草稿，等我审稿」批次：第 2 章以第 1 章候选稿为前驱。
+    const first = DraftRepository.create({ chapterNumber: 1, source: 'write', content: '第一章原稿。', wordCount: 6 })
+    const second = DraftRepository.create({ chapterNumber: 2, source: 'write', content: '第二章原稿。', wordCount: 6,
+      sourceDependencies: [{ kind: 'candidate', draftId: first, contentHash: textHash('第一章原稿。') }] })
+    // 作者审稿时改了第 1 章（编辑保存或合并修稿都是原地改正文），然后逐章定稿。
+    DraftRepository.updateContent(first, '第一章作者改过的稿。', 10)
+    finalize(first, 1, '第一章作者改过的稿。')
+    finalize(second, 2, '第二章原稿。')
+
+    const prose = '第三章清晨，林岚带着昨日的线索走向城门。'
+    for (const text of [`第3章：${outline}`, prose]) dispatch.mockImplementationOnce(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text })
+      return { finishReason: 'stop', usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30,
+        reasoningTokens: null, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }
+    })
+    const run = f.owner.begin({ ...f.begin, chapterNumber: 3, uiActionNonce: 'chapter-3', materialDecision: decision,
+      selectedFinalizedDraftIds: [first, second], selectedBlueprintChapterNumbers: [3], authorInputs: [{ id: 'draft:target-units', text: '20' }] })
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: { purpose: DRAFT_SHORT_OUTLINE_PURPOSE,
+      output: 'visible-text' as const, messages: [{ role: 'user' as const, content: '短细纲输入' }] } })
+    const drafted = await f.owner.execute({ handle: run.handle, invocationNonce: 'prose', task: { ...task,
+      messages: [{ role: 'user' as const, content: `${base}\n\n${draftShortOutlineBlock('zh-CN', `第3章：${outline}`)}` }] } })
+    const visible = sanitizeDraftText(drafted.outcome.content)
+    f.owner.composeVisible(run.handle, [drafted.outcome.receipt.visibleArtifact!.artifactId], textHash(visible), DRAFT_VISIBLE_TEXT_VERSION)
+
+    const saved = f.owner.commitDraft({ handle: run.handle, chapterNumber: 3, source: 'write', expectedCompositionHash: textHash(visible) })
+    expect(saved.content).toBe(prose)
+    expect(DraftRepository.getMeta(saved.id)?.dependenciesStale).toBe(false)
+  })
+})
+
+describe('大纲恢复稿是否已写进正式大纲', () => {
+  it.each([['正常保存过', true, false], ['正式保存被拒', false, false], ['重写正式大纲里已有的章、正式保存被拒', false, true]] as const)('一批写完后来源变了（%s）：恢复稿如实标出这一批是否已在正式大纲里', async (_case, save, rewrite) => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      const chapter = Number((request as { task: GenerationTask }).task.purpose.split(':')[2])
+      options.onVisible({ kind: 'delta', text: outlineEntry(chapter) })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    f.db.prepare('UPDATE project_core SET total_chapters=?').run(1)
+    if (rewrite) f.db.prepare('UPDATE project_core SET synopsis=?').run(renderPlotOutlineSynopsis('## 第1章：旧的一夜\n林岚第一次到旧港。', 1, { totalChapters: 1, writingLanguage: 'zh-CN' }))
+    const run = f.owner.begin(outlineSelection(f, 1))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'outline-1', task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+    acceptOutline(f.owner, run.handle)
+    const progress = f.owner.readContext(run.handle).plotOutline!
+    const synopsis = renderPlotOutlineRange(progress.composition!.text, progress.range, progress.sourceExpected)
+    if (save) f.db.transaction(() => f.owner.assertSynopsisCommit(run.handle, synopsis, progress.sourceExpected)
+      || ProjectCoreRepository.commitSynopsis({ synopsis, expected: progress.sourceExpected, generationRunHandle: run.handle }, f.db)).immediate()
+    f.db.exec("UPDATE project_core SET premise='作者已修改前提' WHERE id='main'")
+    const context = f.owner.readContext(run.handle)
+    expect(context.plotOutline!.cursor).toEqual({ kind: 'complete' })
+    expect(context.plotOutlineRecovery).toMatchObject({ writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null, inFormalOutline: save })
+  })
 })

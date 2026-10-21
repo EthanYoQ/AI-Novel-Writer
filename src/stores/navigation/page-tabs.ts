@@ -6,7 +6,7 @@ import type { ResourcePage, WorkStage } from './navigation-intents'
 
 type Text = (zh: string, en: string) => string
 
-/** 阶段与资料页对应的标签，两种外壳共用。正文与知识库没有固定标签，由各外壳自己处理。 */
+/** 阶段与资料页对应的标签。正文与知识库没有固定标签，由各自的页面处理。 */
 const PAGE_TABS: Partial<Record<WorkStage | ResourcePage, (text: Text) => void>> = {
   architecture: text => openBuiltinEditor('world-building-editor', text('故事架构', 'Story architecture'), 'world-building'),
   blueprint: text => openBuiltinEditor('chapter-card-editor', text('章节蓝图', 'Chapter blueprint'), 'chapter-card'),

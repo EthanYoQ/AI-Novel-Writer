@@ -46,7 +46,7 @@ function writing(progress: number): WorkflowRun {
 beforeEach(async () => {
   setActiveProjectSessionContext(SESSION)
   useProjectStore.setState({ currentProject: { id: SESSION.projectId, sessionLease: SESSION.leaseId, name: '灯塔', path: PATH, novelConfig: {} } as unknown as ProjectData })
-  useStageStore.setState({ work: { session: SESSION, architecture: {}, blueprints: [1, 2].map(chapterNumber => ({ chapterNumber, title: `第${chapterNumber}章` })) } })
+  useStageStore.setState({ work: { session: SESSION, architecture: {}, blueprints: [1, 2].map(chapterNumber => ({ chapterNumber, title: `第${chapterNumber}章` })) }, spineFacts: SESSION })
   useDraftStore.setState({ dataProjectSession: SESSION, loading: false, draftsByChapter: {} })
   useWorkflowStore.setState({ activeRuns: [writing(10)] })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })

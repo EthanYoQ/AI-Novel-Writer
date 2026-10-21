@@ -60,6 +60,7 @@ jobs:
         env:
           E2E_FROM_TAG: ${{ inputs.from_tag }}
           E2E_EXPECTED_TAG: ${{ inputs.expected_tag }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           & node scripts/windows-in-app-update-e2e.mjs run `
             --from-tag $env:E2E_FROM_TAG `

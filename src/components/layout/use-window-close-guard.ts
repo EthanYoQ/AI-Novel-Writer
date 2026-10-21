@@ -15,7 +15,7 @@ export interface ExitRequest {
 
 /**
  * 主进程关窗前发来 window:close-requested，渲染端必须回复，否则窗口关不掉。
- * App 在两种外壳之外调用一次，外壳渲染出错时也照样回复；两种外壳只负责呈现确认对话框。
+ * App 在外壳之外调用一次，外壳渲染出错时也照样回复；外壳只负责呈现确认对话框。
  */
 export function useWindowCloseGuard() {
   const text = useLocaleStore(s => s.text)

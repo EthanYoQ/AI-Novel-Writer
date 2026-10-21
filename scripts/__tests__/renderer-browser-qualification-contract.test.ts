@@ -9,10 +9,9 @@ const browserTestPath = path.join(
   repositoryRoot,
   'src',
   'components',
-  'panels',
-  'sidebar',
+  'stage',
   '__tests__',
-  'sidebar-legacy-character-render.browser.tsx',
+  'stage-root.browser.tsx',
 )
 
 function readRequired(relativePath: string) {

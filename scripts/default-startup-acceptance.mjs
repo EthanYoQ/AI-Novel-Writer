@@ -5,11 +5,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { _electron as electron } from 'playwright'
+import { STAGE_SHELL } from './redesign/pages/stage.mjs'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const root = path.join(repositoryRoot, '.runtime', '.cache', 'default-startup-acceptance', randomUUID())
 const packageJson = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8'))
-const appearanceKey = 'ai-novel-writer-appearance'
+// RD-10 起外观只读写 v3 键；旧键（v1、v2）只读不写。两个都去掉，下次启动就从更早的主题键迁移。
+const appearanceKey = 'ai-novel-writer-appearance-v3'
+const previousAppearanceKey = 'ai-novel-writer-appearance'
 const themeKey = 'ai-novel-writer-theme'
 const shellKey = 'ai-novel-writer-ui-version'
 const legacyTheme = JSON.stringify({ state: { theme: 'dark', zoom: 1.1, writingFont: 'system', uiFont: 'system' }, version: 0 })
@@ -40,7 +43,7 @@ async function launch(roots) {
     await page.waitForFunction(() => Boolean(window.aiNovelAPI))
     const state = await page.evaluate(() => window.aiNovelAPI.invoke('startup:get-state'))
     assert.equal(state.state, 'ready', 'default directories must admit startup')
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    await page.locator(STAGE_SHELL).waitFor({ state: 'visible', timeout: 30_000 })
     return { app, page, state, userData }
   } catch (error) { await app.close(); throw error }
 }
@@ -58,22 +61,25 @@ async function verify() {
       const receipt = JSON.parse(fs.readFileSync(path.join(roots.appData, 'ai-novel-writer-data', '.migration', 'receipt.json'), 'utf8'))
       assert.equal(receipt.generation, generation)
       if (name === 'legacy-and-restart') {
-        await session.page.evaluate(({ appearanceKey, themeKey, shellKey, legacyTheme }) => {
+        await session.page.evaluate(({ appearanceKey, previousAppearanceKey, themeKey, shellKey, legacyTheme }) => {
           localStorage.removeItem(appearanceKey)
+          localStorage.removeItem(previousAppearanceKey)
           localStorage.setItem(themeKey, legacyTheme)
           localStorage.setItem(shellKey, 'v1')
           localStorage.setItem('startup-unrelated-selection', 'synthetic-selected-model')
-        }, { appearanceKey, themeKey, shellKey, legacyTheme })
+        }, { appearanceKey, previousAppearanceKey, themeKey, shellKey, legacyTheme })
       }
     } finally { await session.app.close() }
     if (name === 'legacy-and-restart') {
       session = await launch(roots)
       try {
         assert.equal(session.state.globalGeneration, generation)
-        const stored = await session.page.evaluate(({ appearanceKey, themeKey, shellKey }) => ({
-          profile: JSON.parse(localStorage.getItem(appearanceKey)), theme: localStorage.getItem(themeKey),
-          shell: localStorage.getItem(shellKey), unrelated: localStorage.getItem('startup-unrelated-selection'),
-        }), { appearanceKey, themeKey, shellKey })
+        const stored = await session.page.evaluate(({ appearanceKey, previousAppearanceKey, themeKey, shellKey }) => ({
+          profile: JSON.parse(localStorage.getItem(appearanceKey)), previous: localStorage.getItem(previousAppearanceKey),
+          theme: localStorage.getItem(themeKey), shell: localStorage.getItem(shellKey), unrelated: localStorage.getItem('startup-unrelated-selection'),
+        }), { appearanceKey, previousAppearanceKey, themeKey, shellKey })
+        assert.equal(stored.previous, null, 'migration must not write the previous appearance key')
+        assert.equal(stored.profile.schemaVersion, 3)
         assert.equal(stored.profile.colorTheme, 'dark')
         assert.equal(stored.profile.zoom, 1.1)
         assert.equal(stored.profile.writingFont, 'system')

@@ -9,7 +9,7 @@ import { useLayoutStore } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
-import SettingsModal from '../SettingsModal'
+import StageSettings from '../../stage/settings/StageSettings'
 
 const originalLayoutState = useLayoutStore.getState()
 const originalLLMState = useLLMStore.getState()
@@ -71,12 +71,12 @@ async function renderSettings(locale: Locale = 'zh-CN') {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
-  await act(async () => root?.render(<SettingsModal open onClose={() => {}} />))
+  await act(async () => root?.render(<StageSettings library={false} />))
   return { saveModel }
 }
 
 async function clickEdit(label = '编辑') {
-  await act(async () => page.getByRole('button', { name: label, exact: true }).click())
+  await act(async () => page.getByRole('button', { name: new RegExp(`^${label} ?[「“]`) }).click())
 }
 
 afterEach(async () => {

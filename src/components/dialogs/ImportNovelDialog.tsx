@@ -28,6 +28,7 @@ import { Label } from '../ui/Label'
 import { useLocaleStore } from '../../stores/locale-store'
 import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
 import { randomUUID } from '../../utils/id'
+import { pluralEn } from '../../shared/plural-en'
 
 interface ImportNovelDialogProps {
   open: boolean
@@ -648,11 +649,11 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                     size="sm"
                     variant={run.id === resumableRun.id ? 'default' : 'outline'}
                     aria-pressed={run.id === resumableRun.id}
-                    className="w-full justify-between"
+                    className="w-full"
                     data-testid={`import-resumable-choice-${run.id}`}
                     onClick={() => setSelectedResumableRunId(run.id)}
                   >
-                    <span className="truncate">{
+                    <span className="min-w-0 flex-1 truncate text-left">{
                       (run.stage === 'parsing' ? run.unfinishedSourceDisplay?.[0]?.displayName : undefined)
                       ?? run.sourceDisplay[0]?.displayName
                       ?? run.id
@@ -722,7 +723,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
               >
                 <BookOpen size={14} style={{ flexShrink: 0 }} />
                 {inspection
-                  ? text(`${inspection.sourceCount} 个文件已选择`, `${inspection.sourceCount} files selected`)
+                  ? text(`${inspection.sourceCount} 个文件已选择`, `${inspection.sourceCount} ${pluralEn(inspection.sourceCount, 'file')} selected`)
                   : text('支持 .txt / .md / .epub 文件（单个或多个）', 'Supports one or more .txt / .md / .epub files')}
               </div>
               <Button
@@ -773,15 +774,15 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
               <div className="flex items-center gap-4 px-3 py-2"
                 style={{ backgroundColor: 'var(--color-hover)' }}>
                 <span className="text-xs font-medium" style={{ color: 'var(--color-text)' }}>
-                  {text(`共 ${inspection.chapterCount} 章`, `${inspection.chapterCount} chapters`)}
+                  {text(`共 ${inspection.chapterCount} 章`, `${inspection.chapterCount} ${pluralEn(inspection.chapterCount, 'chapter')}`)}
                 </span>
                 <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  {text(`${inspection.totalWords.toLocaleString()} 字`, `${inspection.totalWords.toLocaleString()} words`)}
+                  {text(`${inspection.totalWords.toLocaleString()} 字`, `${inspection.totalWords.toLocaleString()} ${pluralEn(inspection.totalWords, 'word')}`)}
                 </span>
                 <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
                   {text(
                     `平均 ${Math.round(inspection.totalWords / inspection.chapterCount).toLocaleString()} 字/章`,
-                    `Average ${Math.round(inspection.totalWords / inspection.chapterCount).toLocaleString()} words/chapter`,
+                    `Average ${Math.round(inspection.totalWords / inspection.chapterCount).toLocaleString()} ${pluralEn(Math.round(inspection.totalWords / inspection.chapterCount), 'word')}/chapter`,
                   )}
                 </span>
               </div>
@@ -795,7 +796,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                       {text(`第${ch.number}章 ${ch.title}`, `Chapter ${ch.number} ${ch.title}`)}
                     </span>
                     <span className="flex items-center gap-2" style={{ color: 'var(--color-text-muted)' }}>
-                      <span>{text(`${ch.wordCount.toLocaleString()} 字`, `${ch.wordCount.toLocaleString()} words`)}</span>
+                      <span>{text(`${ch.wordCount.toLocaleString()} 字`, `${ch.wordCount.toLocaleString()} ${pluralEn(ch.wordCount, 'word')}`)}</span>
                       {purpose === 'author-manuscript' && 'disposition' in ch && (
                         <span data-testid={`author-preview-target-${ch.number}`}>
                           {ch.disposition === 'new'
@@ -844,7 +845,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 : authorPreview?.classification === 'ready'
                   ? text(
                     `确认后将新增 ${authorPreview.newChapterNumbers.length} 章权威定稿；下一章为第 ${authorPreview.nextChapterNumber} 章。确认前不会写入项目。`,
-                    `Confirmation will add ${authorPreview.newChapterNumbers.length} authoritative finalized chapters; the next chapter will be ${authorPreview.nextChapterNumber}. The project is not changed before confirmation.`,
+                    `Confirmation will add ${authorPreview.newChapterNumbers.length} authoritative finalized ${pluralEn(authorPreview.newChapterNumbers.length, 'chapter')}; the next chapter will be ${authorPreview.nextChapterNumber}. The project is not changed before confirmation.`,
                   )
                   : authorPreview?.classification === 'exact-duplicate'
                     ? text('全部章节已存在且内容相同；确认后也不会重复发布。', 'All chapters already exist with identical content. Confirmation will not republish them.')
@@ -886,8 +887,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
           {costEstimate && (
             <div className="rounded-lg px-3 py-2.5 space-y-1.5"
               style={{
-                backgroundColor: 'rgba(107, 164, 220, 0.06)',
-                border: '1px solid rgba(107, 164, 220, 0.15)',
+                backgroundColor: 'color-mix(in srgb, var(--color-info) 6%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--color-info) 15%, transparent)',
               }}>
               <div className="flex items-center gap-1.5">
                 <Zap size={13} style={{ color: 'var(--color-accent)' }} />
@@ -908,7 +909,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 <Clock size={11} />
                 {text(
                   `预计耗时 ~${costEstimate.estimatedMinutes} 分钟（因模型速度而异）`,
-                  `About ${costEstimate.estimatedMinutes} minutes, depending on model speed`,
+                  `About ${costEstimate.estimatedMinutes} ${pluralEn(costEstimate.estimatedMinutes, 'minute')}, depending on model speed`,
                 )}
               </div>
             </div>
@@ -935,10 +936,10 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
             {importing
               ? (purpose === 'author-manuscript' ? text('导入中...', 'Importing...') : text('拆解中...', 'Analyzing...'))
               : purpose === 'author-manuscript'
-                ? text(`确认导入（${inspection?.chapterCount ?? 0} 章）`, `Confirm import (${inspection?.chapterCount ?? 0} chapters)`)
+                ? text(`确认导入（${inspection?.chapterCount ?? 0} 章）`, `Confirm import (${inspection?.chapterCount ?? 0} ${pluralEn(inspection?.chapterCount ?? 0, 'chapter')})`)
               : targetMode === 'current'
-                ? text(`导入当前项目（${inspection?.chapterCount ?? 0} 章）`, `Import into current project (${inspection?.chapterCount ?? 0} chapters)`)
-                : text(`开始拆解仿写（${inspection?.chapterCount ?? 0} 章）`, `Start analysis (${inspection?.chapterCount ?? 0} chapters)`)}
+                ? text(`导入当前项目（${inspection?.chapterCount ?? 0} 章）`, `Import into current project (${inspection?.chapterCount ?? 0} ${pluralEn(inspection?.chapterCount ?? 0, 'chapter')})`)
+                : text(`开始拆解仿写（${inspection?.chapterCount ?? 0} 章）`, `Start analysis (${inspection?.chapterCount ?? 0} ${pluralEn(inspection?.chapterCount ?? 0, 'chapter')})`)}
           </Button>
         </DialogFooter>
       </DialogContent>

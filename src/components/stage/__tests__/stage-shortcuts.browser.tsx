@@ -52,7 +52,7 @@ function openTab(id: string, dirty = false) {
 beforeEach(() => {
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
   useStageStore.setState({ palette: null, focus: false, closingTabId: null, sheet: null })
-  useLayoutStore.setState({ settingsOpen: false, exportOpen: false, newProjectOpen: false, importNovelOpen: false, chapterCreationOpen: false })
+  useLayoutStore.setState({ settingsOpen: false, exportOpen: false, newProjectOpen: false, importNovelOpen: false })
 })
 
 afterEach(async () => {
@@ -104,16 +104,16 @@ describe('新外壳快捷键', () => {
     expect(useEditorStore.getState().tabs).toHaveLength(1)
   })
 
-  it('设置等旧弹窗或任何对话框开着时，Ctrl K、Ctrl P、Ctrl W 不在它下面开层', async () => {
+  it('导出等旧弹窗或任何对话框开着时，Ctrl K、Ctrl P、Ctrl W 不在它下面开层', async () => {
     await mount(<Shortcuts library={false} focus={false} />)
     openTab('config', true)
-    useLayoutStore.setState({ settingsOpen: true })
+    useLayoutStore.setState({ exportOpen: true })
     press(document.body, ctrl('k'))
     press(document.body, ctrl('p'))
     press(document.body, ctrl('w'))
     expect(useStageStore.getState()).toMatchObject({ palette: null, closingTabId: null })
 
-    useLayoutStore.setState({ settingsOpen: false })
+    useLayoutStore.setState({ exportOpen: false })
     const alert = document.createElement('div')
     alert.setAttribute('role', 'alertdialog')
     alert.dataset.testLayer = ''
@@ -178,10 +178,10 @@ describe('新外壳快捷键', () => {
     document.body.append(editor)
     press(editor, { key: 'Escape' })
     expect(useStageStore.getState().focus).toBe(true)
-    useLayoutStore.setState({ settingsOpen: true })
+    useLayoutStore.setState({ exportOpen: true })
     press(document.body, { key: 'Escape' })
     expect(useStageStore.getState().focus).toBe(true)
-    useLayoutStore.setState({ settingsOpen: false })
+    useLayoutStore.setState({ exportOpen: false })
     press(document.body, { key: 'Escape' })
     expect(useStageStore.getState().focus).toBe(false)
   })
@@ -191,13 +191,27 @@ describe('新外壳快捷键', () => {
     openTab('config', true)
     const save = vi.fn(async () => undefined)
     const unregister = registerEditorExitSaveHandler({ tabId: useEditorStore.getState().activeTabId!, type: 'config', projectKey: PROJECT, save })
-    useLayoutStore.setState({ settingsOpen: true })
+    useLayoutStore.setState({ exportOpen: true })
     press(document.body, ctrl('s'))
     expect(save).not.toHaveBeenCalled()
-    useLayoutStore.setState({ settingsOpen: false })
+    useLayoutStore.setState({ exportOpen: false })
     press(document.body, ctrl('s'))
     expect(save).toHaveBeenCalledOnce()
     unregister()
+  })
+
+  it('设置页不是模态层：Ctrl K 照常打开搜索；Ctrl W 收起设置页，不关背后的标签', async () => {
+    await mount(<Shortcuts library={false} focus={false} />)
+    openTab('config', true)
+    useLayoutStore.setState({ settingsOpen: true })
+    press(document.body, ctrl('w'))
+    expect(useLayoutStore.getState().settingsOpen).toBe(false)
+    expect(useStageStore.getState().closingTabId).toBeNull()
+    expect(useEditorStore.getState().tabs).toHaveLength(1)
+
+    useLayoutStore.setState({ settingsOpen: true })
+    press(document.body, ctrl('k'))
+    expect(useStageStore.getState().palette).toBe('commands')
   })
 })
 

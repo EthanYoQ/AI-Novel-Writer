@@ -1,5 +1,5 @@
 /*
- * 新外壳（流程脊）。视觉基准为 claude-design/Main.dc.html 的外壳部分：外框色铺满窗口，
+ * 外壳（流程脊）。视觉基准为 claude-design/Main.dc.html 的外壳部分：外框色铺满窗口，
  * 顶栏与流程脊直接放在外框上，内容在 14px 圆角的悬浮面板里，层次靠阴影区分。
  * 只引用纸墨令牌；画板里令牌之间的过渡色用 color-mix 从令牌调出，不写颜色字面量。
  */
@@ -9,5 +9,17 @@
 @import './styles/stage-panel.css';
 @import './styles/stage-tabs.css';
 @import './styles/stage-palette.css';
+@import './styles/stage-library.css';
+@import './styles/stage-forms.css';
+@import './styles/stage-setup.css';
+@import './styles/stage-settings.css';
 @import './styles/stage-legacy-bridge.css';
 @import './run/run-sheet.css';
+@import './architecture/architecture.css';
+@import './characters/characters.css';
+@import './blueprint/blueprint.css';
+@import './write/write-popover.css';
+@import './chapter/chapter.css';
+@import './history/history.css';
+@import './knowledge/knowledge.css';
+@import './plot/plot.css';

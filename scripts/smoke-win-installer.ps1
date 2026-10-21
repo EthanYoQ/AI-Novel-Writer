@@ -30,7 +30,6 @@ if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $script:aiNovelPackagedVectorEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-vector-smoke.json" -f [string]$packageJson.version)
 $script:aiNovelPackagedOfficialHomepageEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-official-homepage-smoke.json" -f [string]$packageJson.version)
-$script:aiNovelPackagedSkinEvidencePath = Join-Path $root ("release\{0}\qualification\packaged-skin-smoke.json" -f [string]$packageJson.version)
 $script:aiNovelAcceptanceDirectory = if (-not [string]::IsNullOrWhiteSpace($env:AI_NOVEL_RELEASE_EVIDENCE_ROOT)) {
   Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance'
 } else {
@@ -53,7 +52,8 @@ $globalConfig = Join-Path $velaHome 'config.json'
 $recentProjects = Join-Path $velaHome 'recent-projects.json'
 $upgradeFixtureRoot = Join-Path $smokeRoot 'user-projects\upgrade-preservation-fixture'
 $v025SaveProofPath = Join-Path $smokeRoot 'v025-save-proof.json'
-$uninstaller = Join-Path $installRoot 'Uninstall AI小说作家.exe'
+# 本次安装包的卸载程序用新产品名；升级前装上的旧版本可能还是旧名（ADR-0022）。
+$uninstaller = Join-Path $installRoot (Get-AiNovelProductUninstallerNames)[0]
 $lastWindowSnapshot = @()
 $observedProcessIds = [System.Collections.Generic.HashSet[int]]::new()
 $observedProcessStartTimeTicks = @{}
@@ -61,9 +61,9 @@ $roundTargetNames = [System.Collections.Generic.List[string]]::new()
 foreach ($name in @(
   [System.IO.Path]::GetFileName($resolvedInstaller),
   [System.IO.Path]::GetFileNameWithoutExtension($resolvedInstaller),
-  'AI小说作家.exe',
-  'AI小说作家',
   'ai-novel-writer'
+  Get-AiNovelProductExecutableNames
+  Get-AiNovelProductNames
 )) {
   if (-not [string]::IsNullOrWhiteSpace($name) -and -not $roundTargetNames.Contains($name)) {
     $roundTargetNames.Add($name)
@@ -172,7 +172,7 @@ function Invoke-AiNovelOfficialOldSourceJourney {
     throw "Official old-source manifest has no unique $Version case."
   }
   $scratch = New-AiNovelOfficialJourneyScratch
-  $exeSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'AI小说作家.exe')).ToLowerInvariant()
+  $exeSha256 = (Get-AiNovelFileSha256 -Path (Resolve-AiNovelProductExecutable -Directory $installRoot)).ToLowerInvariant()
   $asarSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'resources\app.asar')).ToLowerInvariant()
   $arguments = @(
     (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs'),
@@ -788,100 +788,6 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
   }
 }
 
-function Invoke-AiNovelPackagedSkinSmoke {
-  param([Parameter(Mandatory = $true)][string]$Path)
-
-  # The package receives only a one-time token. Its storage root is the
-  # installer smoke's isolated Vela home, never a user profile or caller path.
-  $token = [guid]::NewGuid().ToString('N')
-  $stdoutPath = Join-Path $smokeRoot 'packaged-skin-smoke.stdout'
-  $stderrPath = Join-Path $smokeRoot 'packaged-skin-smoke.stderr'
-  $previousReleaseSkinSmoke = $env:AI_NOVEL_RELEASE_SKIN_SMOKE
-  $previousReleaseSkinSmokeToken = $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN
-  $previousVelaHome = $env:AI_NOVEL_VELA_HOME
-  $profile = New-AiNovelQualificationProfile -Root (Join-Path $smokeRoot 'qualification-skin')
-  $previousCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
-  $previousLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
-  $previousProfileAlias = $env:AI_NOVEL_VELA_HOME
-  $evidenceSucceeded = $false
-
-  try {
-    New-Item -ItemType Directory -Path $profile.userData -Force | Out-Null
-    $env:AI_NOVEL_APP_DATA_HOME = $profile.canonical
-    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $profile.legacy
-    $env:AI_NOVEL_VELA_HOME = $profile.legacy
-    $env:AI_NOVEL_RELEASE_SKIN_SMOKE = '1'
-    $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN = $token
-    Invoke-AiNovelMonitoredExecutable `
-      -Path $Path `
-      -Arguments @("--user-data-dir=`"$($profile.userData)`"", "--ai-novel-release-skin-smoke=$token") `
-      -Operation 'Packaged skin qualification' `
-      -StandardOutputPath $stdoutPath `
-      -StandardErrorPath $stderrPath `
-      -HideWindow
-
-    $resultLine = @(Get-AiNovelUtf8NonEmptyLines -Path $stdoutPath | Select-Object -Last 1)
-    if ($resultLine.Count -ne 1) {
-      throw 'Packaged skin qualification did not produce exactly one JSON evidence line.'
-    }
-    try {
-      $result = $resultLine[0] | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-      throw "Packaged skin qualification produced invalid JSON evidence: $($_.Exception.Message)"
-    }
-    $validEvidence = (
-      $result.schemaVersion -eq 1 -and
-      $result.kind -eq 'packaged-skin-smoke' -and
-      $null -ne $result.builtInAnime -and
-      $result.builtInAnime.asset -eq 'skins/anime-night.webp' -and
-      $result.builtInAnime.present -eq $true -and
-      $result.builtInAnime.format -eq 'webp' -and
-      $null -ne $result.customSkin -and
-      $result.customSkin.importSucceeded -eq $true -and
-      $result.customSkin.readSucceeded -eq $true -and
-      $result.customSkin.stateRestored -eq $true -and
-      $result.customSkin.activeSkin -eq 'custom' -and
-      $result.customSkin.mime -eq 'image/png' -and
-      [int]$result.customSkin.width -gt 0 -and
-      [int]$result.customSkin.height -gt 0
-    )
-    if (-not $validEvidence) {
-      throw 'Packaged skin qualification returned incomplete or unexpected evidence.'
-    }
-
-    $evidenceDirectory = Split-Path -Parent $script:aiNovelPackagedSkinEvidencePath
-    New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
-    $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $script:aiNovelPackagedSkinEvidencePath -Encoding utf8
-    Write-Host "Packaged skin smoke evidence: $script:aiNovelPackagedSkinEvidencePath"
-    $evidenceSucceeded = $true
-  }
-  catch {
-    $stderr = if (Test-Path -LiteralPath $stderrPath) {
-      (Get-AiNovelUtf8NonEmptyLines -Path $stderrPath) -join [Environment]::NewLine
-    }
-    else {
-      ''
-    }
-    if ([string]::IsNullOrWhiteSpace($stderr)) {
-      throw
-    }
-    throw "Packaged skin qualification failed: $($_.Exception.Message)$([Environment]::NewLine)$stderr"
-  }
-  finally {
-    $env:AI_NOVEL_APP_DATA_HOME = $previousCanonicalHome
-    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $previousLegacySourceHome
-    $env:AI_NOVEL_VELA_HOME = $previousProfileAlias
-    $env:AI_NOVEL_RELEASE_SKIN_SMOKE = $previousReleaseSkinSmoke
-    $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN = $previousReleaseSkinSmokeToken
-    $env:AI_NOVEL_VELA_HOME = $previousVelaHome
-    if ($evidenceSucceeded) {
-      Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
-      Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
-    }
-  }
-}
-
 function Install-Silently {
   param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -998,7 +904,6 @@ function Write-AiNovelPackagedSmokeAcceptanceReceipt {
   $records = @(
     @{ kind = 'packaged-vector-smoke'; path = $script:aiNovelPackagedVectorEvidencePath }
     @{ kind = 'packaged-official-homepage-smoke'; path = $script:aiNovelPackagedOfficialHomepageEvidencePath }
-    @{ kind = 'packaged-skin-smoke'; path = $script:aiNovelPackagedSkinEvidencePath }
   ) | ForEach-Object {
     if (-not (Test-Path -LiteralPath $_.path -PathType Leaf)) {
       throw "Packaged smoke evidence is missing: $($_.path)"
@@ -1020,7 +925,7 @@ function Write-AiNovelPackagedSmokeAcceptanceReceipt {
       schemaVersion = 2
       kind = 'windows-packaged-smoke-summary'
       accepted = $true
-      observations = @('The installed package produced the required vector, official-homepage, and skin smoke evidence.')
+      observations = @('The installed package produced the required vector and official-homepage smoke evidence.')
       direct = [ordered]@{ evidenceCount = @($records).Count; evidenceKinds = @($records | ForEach-Object { $_.kind }) }
       evidence = @($records)
     })
@@ -1071,10 +976,12 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($PreviousPortableZipPath)) {
       $portableExtractRoot = Join-Path $smokeRoot 'previous-portable'
       Expand-Archive -LiteralPath (Resolve-Path -LiteralPath $PreviousPortableZipPath).Path -DestinationPath $portableExtractRoot -Force
-      $portableExecutable = Get-ChildItem -LiteralPath $portableExtractRoot -Recurse -File -Filter 'AI小说作家.exe' |
+      $productExecutableNames = @(Get-AiNovelProductExecutableNames)
+      $portableExecutable = Get-ChildItem -LiteralPath $portableExtractRoot -Recurse -File |
+        Where-Object { $productExecutableNames -contains $_.Name } |
         Select-Object -First 1
       if ($null -eq $portableExecutable) {
-        throw 'Official previous-version portable package does not contain AI小说作家.exe.'
+        throw "Official previous-version portable package does not contain $($productExecutableNames -join ' or ')."
       }
       New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
       Copy-Item -Path (Join-Path $portableExecutable.Directory.FullName '*') -Destination $installRoot -Recurse -Force
@@ -1111,7 +1018,7 @@ try {
       [System.IO.File]::WriteAllText($recentProjects, $recentJson, [System.Text.UTF8Encoding]::new($false))
     }
 
-    $legacyExePath = Join-Path $installRoot 'AI小说作家.exe'
+    $legacyExePath = Resolve-AiNovelProductExecutable -Directory $installRoot
     if (-not (Test-Path -LiteralPath $legacyExePath -PathType Leaf)) {
       throw "Previous-version application is missing after installation: $legacyExePath"
     }
@@ -1156,7 +1063,7 @@ try {
   Install-Silently $resolvedInstaller
 $currentInstallCompleted = $true
 
-  $exePath = Join-Path $installRoot 'AI小说作家.exe'
+  $exePath = Join-Path $installRoot (Get-AiNovelProductExecutableNames)[0]
   if (-not (Test-Path -LiteralPath $exePath)) {
     throw "Installed application is missing: $exePath"
   }
@@ -1205,7 +1112,6 @@ $currentInstallCompleted = $true
     })
   Invoke-AiNovelPackagedVectorSmoke -Path $exePath
   Invoke-AiNovelPackagedOfficialHomepageSmoke -Path $exePath
-  Invoke-AiNovelPackagedSkinSmoke -Path $exePath
   Write-AiNovelPackagedSmokeAcceptanceReceipt
   $appSmokeParameters = @{
     ExePath = $exePath
@@ -1343,6 +1249,15 @@ catch {
     -ObservedProcessIds @($observedProcessIds)
 }
 finally {
+  # 本次安装没完成时，留下的可能是升级前的旧版本，它的卸载程序与 exe 还是旧名。
+  # 卸载程序与 exe 从同一个产品名推出，不靠拆文件名。
+  $installedProduct = Get-AiNovelProductNames |
+    ForEach-Object { [pscustomobject]@{
+      Uninstaller = Join-Path $installRoot "Uninstall $_.exe"
+      Executable = Join-Path $installRoot "$_.exe"
+    } } |
+    Where-Object { Test-Path -LiteralPath $_.Uninstaller -PathType Leaf } |
+    Select-Object -First 1
   if ($currentInstallCompleted -and -not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
     if ($null -eq $failureRecord) {
       $failureRecord = [System.Management.Automation.ErrorRecord]::new(
@@ -1354,15 +1269,15 @@ finally {
     }
     $smokeSucceeded = $false
   }
-  elseif (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
+  elseif ($null -ne $installedProduct) {
     try {
       Invoke-AiNovelMonitoredExecutable `
-        -Path $uninstaller `
+        -Path $installedProduct.Uninstaller `
         -Arguments @('/S') `
         -Operation 'Uninstaller'
       $uninstallReceipt = Assert-AiNovelUninstallPostcondition `
         -InstallRoot $installRoot `
-        -InstalledExecutable (Join-Path $installRoot 'AI小说作家.exe')
+        -InstalledExecutable $installedProduct.Executable
       Write-AiNovelAcceptanceReceipt `
         -Directory $script:aiNovelAcceptanceDirectory `
         -FileName 'uninstall.json' `

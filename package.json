@@ -1,6 +1,6 @@
 {
   "name": "ai-novel-writer",
-  "version": "1.2.3-Preview",
+  "version": "1.3.1",
   "description": "AI Novel Writer - a local-first production workspace for long-form fiction",
   "author": "AI Novel Writer Maintainers",
   "private": true,
@@ -19,7 +19,6 @@
     "check:i18n": "node scripts/check-i18n-coverage.mjs",
     "test": "vitest run",
     "test:browser": "vitest run --config vitest.browser.config.ts",
-    "test:renderer-surface:e2e": "node scripts/renderer-surface-e2e.mjs",
     "verify:drive": "node scripts/redesign/drive.mjs",
     "build": "tsc && vite build",
     "build:win": "pnpm run release:win:verify",
@@ -88,7 +87,6 @@
     "@storybook/addon-onboarding": "^10.5.10",
     "@storybook/addon-vitest": "^10.5.10",
     "@storybook/react-vite": "^10.5.10",
-    "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.2.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/diff-match-patch": "^1.0.36",

@@ -8,6 +8,7 @@ import { ipc } from './ipc-client'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { LLMFinishReason } from '../shared/ipc-channels'
 import { sameProjectPathKey } from '../shared/project-session-context'
+import { SQLITE_TIMESTAMP } from '../shared/sqlite-time'
 import type { WorkflowRun } from '../stores/workflow-store'
 import type { SafeDiagnosticWorkflow } from './safe-call-diagnostic'
 
@@ -37,8 +38,6 @@ export interface LLMCallRecord {
   createdAt: string
 }
 
-const SQLITE_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/u
-
 function callCompletionRange(createdAt: string): [number, number] | null {
   const sqlite = SQLITE_TIMESTAMP.exec(createdAt)
   if (sqlite) {
@@ -47,11 +46,6 @@ function callCompletionRange(createdAt: string): [number, number] | null {
   }
   const timestamp = Date.parse(createdAt)
   return Number.isFinite(timestamp) ? [timestamp, timestamp] : null
-}
-
-/** 调用记录的时刻。SQLite 的 CURRENT_TIMESTAMP 是不带时区的 UTC，直接交给 Date 会被当成本地时间。 */
-export function llmCallTime(createdAt: string): Date {
-  return new Date(callCompletionRange(createdAt)?.[0] ?? Date.parse(createdAt))
 }
 
 function timestamp(value: string | undefined): number | null {

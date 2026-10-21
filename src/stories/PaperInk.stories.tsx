@@ -1,7 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react' // eslint-disable-line storybook/no-renderer-packages
-import { useState } from 'react'
-import { Ellipsis, Feather } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { ChevronDown, Ellipsis, Feather, PenLine } from 'lucide-react'
+import { actionToast } from '../components/ui/ActionToast'
+import { alertError } from '../components/ui/AlertDialog'
 import { Button } from '../components/ui/Button'
+import { confirm } from '../components/ui/Confirm'
 import { Check } from '../components/ui/Check'
 import { DangerConfirm } from '../components/ui/DangerConfirm'
 import { EmptyState } from '../components/ui/EmptyState'
@@ -13,6 +16,7 @@ import { Popover } from '../components/ui/Popover'
 import { SegmentedControl } from '../components/ui/SegmentedControl'
 import { Sheet } from '../components/ui/Sheet'
 import { StatGrid } from '../components/ui/StatGrid'
+import { toast } from '../components/ui/Toast'
 import { paperInkFrame } from './paper-ink-frame'
 
 const meta = {
@@ -42,6 +46,18 @@ export const Buttons: Story = {
         <Button variant="primary" size="sm">小号</Button>
         <Button variant="primary" size="lg">大号</Button>
         <Button variant="primary" disabled>不可用</Button>
+        <Button variant="secondary" disabled>不可用</Button>
+        <Button variant="primary" disabled aria-busy>保存中</Button>
+      </div>
+      <div style={row}>
+        <div className="pi-split">
+          <Button variant="primary" className="pi-split-main"><PenLine aria-hidden />写第 3 章</Button>
+          <Button variant="primary" className="pi-split-toggle" aria-label="更多写法"><ChevronDown aria-hidden /></Button>
+        </div>
+        <div className="pi-split pi-split--main-off">
+          <Button variant="primary" className="pi-split-main" disabled>按 0 项意见修稿</Button>
+          <Button variant="primary" className="pi-split-toggle" aria-label="更多修稿方式"><ChevronDown aria-hidden /></Button>
+        </div>
       </div>
     </div>
   ),
@@ -159,14 +175,19 @@ export const Stats: Story = {
 
 function NoticesDemo() {
   const [confirming, setConfirming] = useState(true)
+  const clearButton = useRef<HTMLButtonElement>(null)
   return (
     <div style={column}>
       <Notice title="继续上次的写作" actions={<Button variant="secondary" size="sm">继续</Button>}>第 4 章停在第 3 段。</Notice>
       <Notice tone="ok" title="第 3 章已定稿" />
       <Notice tone="warn" title="有 2 处与设定冲突">可在审稿报告中逐条处理。</Notice>
+      <Notice tone="warn" title="有 1 份修稿不能再合并" actions={<><Button variant="secondary" size="sm">查看修稿</Button><Button variant="danger" size="sm">丢弃…</Button></>}>
+        修稿生成之后正文又改过，合并会覆盖这些修改。
+      </Notice>
+      <Notice tone="danger" title="第 3 章审稿失败">模型连接超时，已保留草稿，未丢失任何内容。</Notice>
       {confirming
-        ? <InlineConfirm message="清空后无法恢复这 12 条日志。" confirmLabel="清空" cancelLabel="取消" onConfirm={() => setConfirming(false)} onCancel={() => setConfirming(false)} />
-        : <Button variant="text" onClick={() => setConfirming(true)}>清空日志…</Button>}
+        ? <InlineConfirm message="清空后无法恢复这 12 条日志。" confirmLabel="清空" cancelLabel="取消" onConfirm={() => setConfirming(false)} onCancel={() => setConfirming(false)} returnFocusRef={clearButton} />
+        : <Button ref={clearButton} variant="text" onClick={() => setConfirming(true)}>清空日志…</Button>}
     </div>
   )
 }
@@ -194,6 +215,23 @@ function DangerDemo() {
 }
 
 export const Danger: Story = { render: () => <DangerDemo /> }
+
+/** 命令式弹窗与提示栈走纸墨宿主。 */
+function OverlaysDemo() {
+  return (
+    <div style={row}>
+      <Button variant="secondary" onClick={() => { void alertError('不是有效的项目目录。\n\n请重新选择。', { title: '打开项目失败' }) }}>错误弹框</Button>
+      <Button variant="secondary" onClick={() => { void confirm('将删除第 3 章的定稿正文。删除后无法恢复。', { title: '删除定稿正文？', confirmText: '删除', danger: true }) }}>危险确认</Button>
+      <Button variant="secondary" onClick={() => {
+        toast.success('第 3 章已定稿\n\n正文已写入作品目录。')
+        actionToast.show({ type: 'error', message: '第 3 章审稿失败\n\n模型连接超时，已保留草稿。', actions: [{ label: '查看' }, { label: '忽略', variant: 'ghost' }] })
+        toast.warning('字数超出限制')
+      }}>提示栈</Button>
+    </div>
+  )
+}
+
+export const Overlays: Story = { render: () => <OverlaysDemo /> }
 
 export const Empty: Story = {
   render: () => (

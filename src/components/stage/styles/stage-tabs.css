@@ -1,15 +1,32 @@
 /* ================= 标签条 ================= */
-.stage-tabs {
-  height: 40px;
+/* 分两格：左边是横向滚动的标签，右边是标签菜单。菜单不随标签滚动，标签多到要滚动时也不会被滚到它底下；底线与底色画在整条上 */
+.stage-tabbar {
   flex: none;
+  display: flex;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--surface) 45%, var(--paper));
+}
+
+.stage-tabs {
+  height: 39px;
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--rule);
-  background: color-mix(in srgb, var(--surface) 45%, var(--paper));
+  padding: 0 4px 0 12px;
+  /* 激活标签滚进来时两端也留出与平时一样的空 */
+  scroll-padding-inline: 12px 4px;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+/* 与标签同高，按钮比它高出的 1px 压在底线上，与原先绝对定位时的位置一样 */
+.stage-tab-menu {
+  flex: none;
+  height: 39px;
+  padding: 4px 8px 0 0;
 }
 
 .stage-tab {
@@ -53,6 +70,21 @@
 
 .stage-tab[data-active] .stage-tab-label {
   font-weight: 500;
+}
+
+/* 焦点在文字按钮上，环套住整个标签（含关闭按钮）。激活标签的 clip-path 会裁掉外圈，所以画在内侧，底边离开接缝 */
+.stage-shell .stage-tab-label:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.stage-tab:has(> .stage-tab-label:focus-visible)::after {
+  content: '';
+  position: absolute;
+  inset: 2px 2px 3px;
+  border: 2px solid var(--accent);
+  border-radius: 7px 7px 4px 4px;
+  pointer-events: none;
 }
 
 .stage-tab-close {

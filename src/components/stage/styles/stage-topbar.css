@@ -22,8 +22,15 @@
   place-items: center;
   border-radius: 6px;
   background: var(--ink);
-  color: var(--frame);
-  font: 600 12px/1 var(--font-display);
+}
+
+/* 书页精灵：单色剪影，眼睛是镂空，透出底色；颜色跟令牌走，深浅主题自动反转 */
+.stage-brand::before {
+  content: "";
+  width: 15px;
+  height: 16px;
+  background: var(--frame);
+  mask: url("../../../assets/brand/pagekin-mark.svg") center / contain no-repeat;
 }
 
 .stage-topbar .stage-work-title {
@@ -39,6 +46,24 @@
 .stage-topbar span.stage-work-title {
   display: inline-flex;
   align-items: center;
+}
+
+/* 作品名很长时收成省略号，不把右侧的窗口按钮挤出无边框窗口 */
+.stage-topbar > .pi-anchor {
+  min-width: 0;
+  max-width: 320px;
+  flex: 0 1 auto;
+}
+
+.stage-topbar .pi-anchor > .stage-work-title {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.stage-work-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stage-topbar .stage-work-title:hover {

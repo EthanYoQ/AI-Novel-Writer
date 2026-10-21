@@ -2,7 +2,7 @@ import type { Preview } from '@storybook/react'
 import '../src/styles/paper-ink/index.css'
 import '../src/index.css'
 
-const themes = ['light', 'galaxy', 'paper', 'dark'] as const
+const themes = ['light', 'dark'] as const
 
 const preview: Preview = {
   parameters: {
@@ -15,9 +15,7 @@ const preview: Preview = {
     backgrounds: {
       default: 'light',
       values: [
-        { name: 'light', value: '#F7F9FC' },
-        { name: 'galaxy', value: '#0A1628' },
-        { name: 'paper', value: '#F5F0E8' },
+        { name: 'light', value: '#F7F3E8' },
         { name: 'dark', value: '#1E1E1E' },
       ],
     },

@@ -8,6 +8,7 @@ import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import { STAGE_SHELL } from './redesign/pages/stage.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runId = randomUUID()
@@ -180,7 +181,7 @@ async function launch(profile) {
     assert.equal(path.resolve(electronPaths.appDataEnv), profile.appData)
     assert.equal(path.resolve(electronPaths.localAppDataEnv), profile.localAppData)
     assert.equal(path.resolve(electronPaths.userData), profile.userData)
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    await page.locator(STAGE_SHELL).waitFor({ state: 'visible', timeout: 30_000 })
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
     return { app, page }
   } catch (error) {

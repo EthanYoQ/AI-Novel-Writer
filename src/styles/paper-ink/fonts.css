@@ -1,8 +1,48 @@
 /*
- * 纸墨自带的字体声明，不依赖旧外壳的 src/index.css。
- * 标题与正文用 Noto Serif SC，与旧外壳指向同一个本地文件；数字字体只含拉丁子集。
- * 界面无衬线不随纸墨声明，按 --font-ui 的回退顺序取系统字体。
+ * 随安装包内置的全部字体声明，不联网加载。
+ * 界面用 Noto Sans SC，标题与正文用 Noto Serif SC；数字字体只含拉丁子集。
+ * Inter 与霞鹜文楷供外观设置里的界面字体与写作字体选择。
  */
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-VariableFont_opsz,wght.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Italic-VariableFont_opsz,wght.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'LXGW WenKai';
+  src: url('/fonts/LXGWWenKai-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'LXGW WenKai';
+  src: url('/fonts/LXGWWenKai-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Sans SC';
+  src: url('/fonts/NotoSansSC-VariableFont_wght.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 @font-face {
   font-family: 'Noto Serif SC';
   src: url('/fonts/NotoSerifSC-VariableFont_wght.ttf') format('truetype');

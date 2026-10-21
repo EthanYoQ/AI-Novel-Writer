@@ -199,7 +199,7 @@ export interface PlanningContinuation {
   sourceHandle: MainGenerationRunHandle
   remainingRange: { from: number; to: number } | null
   targetUnits: number
-  state: 'ready' | 'in-flight' | 'source-changed' | 'save-prefix' | 'complete' | 'continued'
+  state: 'ready' | 'in-flight' | 'source-changed' | 'source-invalid' | 'save-prefix' | 'complete' | 'continued'
   nextHandle?: MainGenerationRunHandle
 }
 export interface PrepareDraftContextRequest {

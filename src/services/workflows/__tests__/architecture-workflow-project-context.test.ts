@@ -239,7 +239,7 @@ describe('architecture workflow project context', () => {
     await expect(workflow.steps[1].executor(
       {
         id: 'characters',
-        name: '角色图谱',
+        name: '角色名单',
         description: '',
         status: 'running',
         logs: [],

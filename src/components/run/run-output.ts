@@ -8,14 +8,6 @@ export function projectRuns(runs: readonly WorkflowRun[], projectPath: string | 
   return projectPath ? runs.filter(run => sameProjectPathKey(run.projectPath, projectPath)) : []
 }
 
-/** 运行面板默认看的那条：运行中优先，其次等确认、已暂停、正在取消。 */
-export function primaryRun(runs: readonly WorkflowRun[]): WorkflowRun | undefined {
-  return runs.find(run => run.status === 'running')
-    ?? runs.find(run => run.status === 'waiting')
-    ?? runs.find(run => run.status === 'paused')
-    ?? runs.find(run => run.status === 'cancelling')
-}
-
 /**
  * 步骤输出里最后一段 `<think>` 是思考过程，`</think>` 之后才是正文；思考还没结束时没有正文。
  * 有的命令把数组或对象当结果返回，统一转成文字。

@@ -1,0 +1,35 @@
+# Pagekin (书童), formerly AI Novel Writer (AI 小说作家)
+
+> Pagekin (书童, formerly AI Novel Writer) is a free, open-source (GPL-3.0) desktop application for Windows and macOS for writing long novels and serialized web fiction with AI. It guides a book through setup, story architecture, chapter blueprints, drafting, review, revision, and finalization. Books are stored locally, and users bring their own model through an OpenAI-compatible API, native Google Gemini, or a local Ollama server.
+
+Key facts:
+
+- Platforms: Windows x64, macOS Apple Silicon (arm64), macOS Intel (x64). Installers are published on GitHub Releases. The Windows installer is not code-signed; the macOS installers are ad-hoc signed and not notarized.
+- Interface languages: Chinese and English. Each book's writing language can be Chinese or English.
+- Model presets: DeepSeek, SiliconFlow, BigModel (Zhipu), OpenAI, xAI (Grok), Google Gemini, Ollama (local), NovelAI, and custom OpenAI-compatible endpoints. The app does not provide or host models.
+- Data: books live in the user's book folder and a local SQLite database. Model settings and API keys are stored in the app data directory on the user's computer (`%APPDATA%\ai-novel-writer` on Windows, `~/Library/Application Support/ai-novel-writer` on macOS).
+- Workflow: library, setup, architecture (premise, cast, worldbuilding, plot outline), chapter blueprints, single-chapter drafting with AI review and diff-based revision, finalization, run sheet for generation runs, plot threads, knowledge base, version history, export to Markdown or plain text, local and WebDAV backups.
+- Novel breakdown and imitation: import a reference novel (.txt, .md, .epub); AI breaks down its structure, extracts its style, infers chapter blueprints, and produces imitation constraints.
+- Continuation: import an existing manuscript as finalized chapters and continue writing from it; in the prose editor, selected text can be continued, refined, expanded, or rewritten as dialogue.
+- Rewriting: revise a whole chapter to the author's own instructions and selected review notes; the result is shown as a paragraph-by-paragraph diff for the author to accept.
+- Writing skills: install prompt-only SKILL.md writing skills from GitHub (for example, a skill that removes the typical AI tone), review them before installing, and bind them to the planning, drafting, review, or revision stage. Scripts and tool requirements are not installed.
+- Batch writing handles up to 10 chapters per run. There is no fixed limit on total chapters.
+- The 1.3.0 release introduced the Paper and Ink interface and temporarily hides the assistant chat entry.
+
+## Docs
+
+- [README (Chinese)](https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/README.md): product overview, supported models, installation, data and privacy, FAQ
+- [README (English)](https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/README_en.md): the same content in English
+- [Contributing guide](https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/CONTRIBUTING.md): how to file issues and submit pull requests
+- [Developer documentation index](https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/docs/README.md): documentation authority, ADRs, and development rules
+
+## Downloads
+
+- [Latest release](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest): Windows and macOS installers
+- [1.3.0 release notes](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v1.3.0): changes in the Paper and Ink interface release
+- [All releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases): release history
+
+## Optional
+
+- [DeepSeek Harness plugin](https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/plugins/dsh-ai-novel-writer/README.md): a frozen 0.1.0 Web plugin preview (MIT), far smaller than the desktop app
+- [License](https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/LICENSE): GPL-3.0

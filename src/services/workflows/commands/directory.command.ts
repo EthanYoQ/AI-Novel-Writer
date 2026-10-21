@@ -26,7 +26,7 @@ import {
   blueprintSemanticGenerationContract,
   validateBlueprintSemanticItem,
 } from '../../../shared/blueprint-semantic-contract'
-import { requireWorkflowProjectSession, workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
+import { requireWorkflowProjectSession, workflowUiLocale, workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
 import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
 export {
@@ -276,7 +276,11 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       || startChapter > totalChapters
       || endChapter < startChapter
     ) {
-      throw new Error(`章节范围无效：第 ${startChapter}–${endChapter} 章`)
+      throw new Error(workflowUiText(
+        context,
+        `章节范围无效：第 ${startChapter}–${endChapter} 章`,
+        `Invalid chapter range: chapters ${startChapter}–${endChapter}.`,
+      ))
     }
 
     if (!context.data.directoryResumeHandle) assertPlanningActionRange({ from: startChapter, to: endChapter })
@@ -293,7 +297,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       (_, index) => startChapter + index,
     )
     const template = await resolvePromptTemplate('chapter_blueprint_chunk', projectSession, writingLanguage)
-    if (!template) throw new Error('模板丢失')
+    if (!template) throw new Error(workflowUiText(context, '章节蓝图模板丢失', 'The chapter blueprint template is missing.'))
 
     let activeRange = { startChapter, endChapter }
     const compactTaskFor = (
@@ -321,7 +325,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         const batchStart = items[0]
         const batchEnd = items.at(-1)
         if (batchStart === undefined || batchEnd === undefined) {
-          throw new Error('章节蓝图批次不能为空')
+          throw new Error(workflowUiText(context, '章节蓝图批次不能为空', 'The chapter blueprint batch cannot be empty.'))
         }
         activeRange = { startChapter: batchStart, endChapter: batchEnd }
         callbacks.log(workflowUiText(
@@ -376,6 +380,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         content,
         activeRange.startChapter,
         activeRange.endChapter,
+        workflowUiLocale(context),
       ),
       validateItem: validateBlueprintSemanticItem,
       syntaxRepairContract: ({ items }) => (
@@ -424,13 +429,13 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           const prefixEnd = startChapter + prefix.length - 1
           const receipt = await commitDirectoryBlueprintRange(prefix, expectedProjectPath,
             { mode: 'replace-range', startChapter, endChapter: prefixEnd },
-            `directory-${context.runId}-${startChapter}-${prefixEnd}-partial`, context.projectSession, context.mainGenerationRunHandle, { startChapter, endChapter })
+            `directory-${context.runId}-${startChapter}-${prefixEnd}-partial`, context.projectSession, workflowUiLocale(context), context.mainGenerationRunHandle, { startChapter, endChapter })
           context.data.blueprintCommitReceipt = receipt
           context.data.newBlueprints = [...receipt.snapshot]
           context.data.remainingBlueprintRange = { startChapter: prefixEnd + 1, endChapter }
           if (context.cancelled) throw new DirectoryPostCommitCancellationError(receipt)
           try {
-            await retryDirectoryCharacterSync(receipt.characterSyncOperation.operationId, expectedProjectPath, context.projectSession)
+            await retryDirectoryCharacterSync(receipt.characterSyncOperation.operationId, expectedProjectPath, context.projectSession, workflowUiLocale(context))
           } catch { throw new DirectoryPostCommitSyncError(receipt) }
           throw new DirectoryPartialCommitError(receipt, { startChapter: prefixEnd + 1, endChapter }, batchResult.failure, workflowUiText(context,
             `已保存第 ${startChapter}–${prefixEnd} 章完整蓝图；第 ${prefixEnd + 1}–${endChapter} 章未完成。原运行的候选与失败原因已保留。`,
@@ -450,9 +455,11 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
             context.uiLocale,
           )
         }
-        throw new Error(context.uiLocale === 'en-US'
-          ? `Blueprint generation failed: code=${batchResult.failure.code} reason=${batchResult.failure.reason ?? 'unknown'}; ${generationSummary}`
-          : `${batchResult.failure.message}；${generationSummary}`)
+        throw new Error(workflowUiText(
+          context,
+          `${batchResult.failure.message}；${generationSummary}`,
+          `Blueprint generation failed: code=${batchResult.failure.code} reason=${batchResult.failure.reason ?? 'unknown'}; ${generationSummary}`,
+        ))
       }
 
       this.assertNotCancelled(context)
@@ -467,6 +474,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         },
         `directory-${context.runId}-${startChapter}-${endChapter}`,
         context.projectSession,
+        workflowUiLocale(context),
         context.mainGenerationRunHandle,
         { startChapter, endChapter },
       )
@@ -481,6 +489,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           commitReceipt.characterSyncOperation.operationId,
           expectedProjectPath,
           context.projectSession,
+          workflowUiLocale(context),
         )
         context.data.blueprintCharacterSyncReceipt = syncReceipt
       } catch {

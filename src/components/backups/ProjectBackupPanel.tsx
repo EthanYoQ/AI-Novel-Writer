@@ -319,7 +319,7 @@ function ProjectBackupPanelSession({
         }} /></div>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" onClick={() => void connectAndBind()} disabled={busy || bindingRefreshFailed}>{text('连接并绑定', 'Connect and bind')}</Button>
+        <Button type="button" variant="outline" onClick={() => void connectAndBind()} disabled={busy || bindingRefreshFailed}>{text('连接并绑定', 'Connect and bind')}</Button>
         {account && <Button type="button" variant="outline" onClick={() => void confirmRebind()} disabled={busy}>{text('确认父世代并重新绑定', 'Confirm parents and rebind')}</Button>}
         {(account || binding) && <Button type="button" variant="outline" onClick={() => void listGenerations()} disabled={busy}>{text('刷新云端世代', 'Refresh cloud generations')}</Button>}
         {(account || binding?.localEndpointAccountId) && !confirmClearCredential && <Button type="button" variant="outline" onClick={() => setConfirmClearCredential(true)} disabled={busy}>{text('清除本机凭据', 'Clear local credential')}</Button>}
@@ -343,7 +343,7 @@ function ProjectBackupPanelSession({
 
       <label className="flex items-start gap-2 text-xs text-[var(--color-text-secondary)]"><input type="checkbox" name="cloud-disclosure" checked={disclosureConfirmed} onChange={event => setDisclosureConfirmed(event.target.checked)} /><span>{text('我确认：此备份不是端到端加密，内容对我的云端服务可见，并包含项目正文、配置和便携资产。', 'I understand this backup is not end-to-end encrypted, is visible to my cloud provider, and includes the manuscript, configuration, and portable assets.')}</span></label>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" onClick={() => void backupNow()} disabled={busy || !writable}>{text('立即云备份', 'Back up now')}</Button>
+        <Button type="button" variant="outline" onClick={() => void backupNow()} disabled={busy || !writable}>{text('立即云备份', 'Back up now')}</Button>
         <Button type="button" variant="outline" onClick={() => void restoreCloudCopy()} disabled={busy || !selectedGenerationId}>{text('恢复所选云端世代为副本', 'Restore selected cloud generation as a copy')}</Button>
         {activeOperationId && <Button type="button" variant="destructive" onClick={() => void cancelActiveOperation()}>{text('取消当前云操作', 'Cancel current cloud operation')}</Button>}
       </div>

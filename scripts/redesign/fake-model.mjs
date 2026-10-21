@@ -13,19 +13,63 @@ const REVIEW = JSON.stringify({ summary: '时间线需要核对。', items: [
 ], goalReviews: [] })
 
 /** 创作资料角色提取：每个资料块回一张守塔人与一张林岚（示例作品已有林岚，可以对应已有角色）。 */
-function characterExtraction(prompt) {
+function characterExtraction(prompt, cards) {
   const sourceIds = [...prompt.matchAll(/【资料 ([^｜】]+)｜/gu)].map(match => match[1])
   return JSON.stringify({ results: sourceIds.map(sourceId => ({ sourceId, characterCards: [
     { name: '守塔人', role: 'supporting', background: '灯塔看守，记得每一次钟声。' },
     { name: '林岚', role: 'protagonist', background: '旧港潮汐记录的测绘师。' },
-  ] })) })
+  ].slice(0, cards) })) })
 }
 
-function responseFor(prompt, { extraction }) {
+/** AI 填充小说配置：按配置 JSON 合同给出 9 个必填字段与两个枚举；规模字段省略，由作者设置决定。 */
+export const FIXTURE_CONFIG = Object.freeze({
+  genre: '悬疑', targetAudience: '全龄', subGenre: '海港悬疑',
+  coreOutline: '测绘师在停用的灯塔里追查一条沉船。',
+  worldSetting: '旧港以潮汐计时，港务局的档案按潮期装订。',
+  goldenFinger: '林岚能从潮位刻痕里读出年份。',
+  protagonistProfile: '林岚，测绘师，冷静而执拗，相信一切都能量出来。',
+  globalGuidance: ['对白克制，不替人物解释动机。', '每章至少写到一次潮水或灯光。', '线索先于解释出现。', '不使用倒叙开篇。'].join('\n'),
+  writingStyle: '短句为主，多用潮汐与灯光的意象，叙述距离贴近林岚。',
+  plotStructure: 'three_act', narrativePOV: 'third_limited',
+})
+
+/** 情节大纲逐章生成：每次只要一章，回这一章的二级标题与一段正文，章号取自请求。 */
+export const outlineChapter = number => `## 第${number}章：灯下第${number}夜
+林岚在第${number}夜核对雾钟与潮位，找到一条新的线索，并决定下一步去问守塔人。她把这一夜的发现记进父亲的地图边上。`
+
+/**
+ * 剧情树夹具：定稿章与单数位的蓝图章进主线，双数位的蓝图章进一条支线。来源全部取自提示里的资料，能通过主进程的校验；
+ * 不开时假模型回正文，剧情树落到按资料整理的单轨快照。
+ */
+export function fixturePlotTree(facts) {
+  const finals = new Set(facts.finalizedChapters.map(chapter => chapter.chapterNumber))
+  const planned = facts.blueprints.filter(blueprint => !finals.has(blueprint.chapterNumber))
+  const plan = blueprint => ({ status: 'planned', chapterNumber: blueprint.chapterNumber, summary: blueprint.title,
+    sources: [{ type: 'blueprint', chapterNumber: blueprint.chapterNumber }] })
+  const main = [
+    ...facts.finalizedChapters.map(chapter => ({ status: 'occurred', chapterNumber: chapter.chapterNumber, summary: chapter.title,
+      sources: [{ type: 'finalized-chapter', draftId: chapter.draftId, chapterNumber: chapter.chapterNumber }] })),
+    ...planned.filter((_, index) => index % 2 === 0).map(plan),
+  ].sort((left, right) => left.chapterNumber - right.chapterNumber)
+  const side = planned.filter((_, index) => index % 2 === 1).map(plan)
+  const span = events => ({ startChapter: Math.min(...events.map(event => event.chapterNumber)), endChapter: Math.max(...events.map(event => event.chapterNumber)) })
+  return { tracks: [
+    { id: 'main', title: '雾钟与沉船', role: 'main', ...span([...main, ...side]), summary: '林岚追查钟声提前的原因。', events: main },
+    ...(side.length > 0 ? [{ id: 'side', title: '父亲的地图', role: 'subplot', parentTrackId: 'main', ...span(side), summary: '父亲留下的地图指向北堤外。', events: side }] : []),
+  ] }
+}
+
+function responseFor(prompt, { extraction, plotTree, review }) {
+  if (prompt.includes('不可变小说配置 JSON 合同') || prompt.includes('Immutable novel-configuration JSON contract')) {
+    return { kind: 'config', content: JSON.stringify(FIXTURE_CONFIG) }
+  }
+  const outline = prompt.match(/本次只写第 (\d+) 章/)
+  if (outline) return { kind: 'outline-chapter', content: outlineChapter(Number(outline[1])) }
   if (prompt.includes('【已确认纳入本次修稿的审稿项】')) return { kind: 'revision', content: FIXTURE_REVISED }
-  if (prompt.includes('goalReviews')) return { kind: 'review', content: REVIEW }
+  if (prompt.includes('goalReviews')) return { kind: 'review', content: review ?? REVIEW }
   if (prompt.includes('{"updates"')) return { kind: 'character-state', content: '{"updates":[]}' }
-  if (extraction && prompt.includes('【资料 ')) return { kind: 'character-extraction', content: characterExtraction(prompt) }
+  if (extraction && prompt.includes('【资料 ')) return { kind: 'character-extraction', content: characterExtraction(prompt, extraction) }
+  if (plotTree && prompt.includes('小说剧情结构编辑')) return { kind: 'plot-tree', content: JSON.stringify(fixturePlotTree(JSON.parse(prompt.split('\n').find(line => line.startsWith('{"synopsis"'))))) }
   if (prompt.includes('只写短细纲')) return { kind: 'outline', content: FIXTURE_PROSE }
   return { kind: 'prose', content: FIXTURE_PROSE }
 }
@@ -41,11 +85,18 @@ export function streamingProse(chunks, chunkChars) {
 
 export async function startFakeModel(diagnostics) {
   const requests = []
+  /** 对话请求的模型与消息原文，按到达顺序；场景用它核对两边发给模型的参数是否一致。 */
+  const chats = []
   let held = null
   let holdEmbeddings = false
   let waiting = 0
   let stream = null
-  let extraction = false
+  let extraction = 0
+  let brokenCharacterState = false
+  let droppedCharacterStates = 0
+  let plotTree = false
+  let failedProse = false
+  let review = null
   const streamLog = []
   const gate = {
     /** 卡住之后的模型调用；embeddings 为 true 时连嵌入也卡住（参考文本入库这类只走嵌入的步骤）。 */
@@ -61,8 +112,21 @@ export async function startFakeModel(diagnostics) {
   }
   /** 之后的正文回复按 chunks 逐块发出，块间隔 intervalMs；每块发出的时刻记进 streamLog（epoch 毫秒与累计块数）。 */
   const streamProse = plan => { stream = plan; streamLog.length = 0 }
-  /** 之后的创作资料角色提取回一份合法 JSON；不开时与以前一样回正文，提取失败，导入类场景不会停在等你确认。 */
-  const replyCharacterCards = () => { extraction = true }
+  /** 之后的创作资料角色提取回一份合法 JSON（每份资料默认两张卡，cards 限定张数，夹具只有 1–2 张）；不开时与以前一样回正文，提取失败，导入类场景不会停在等你确认。 */
+  const replyCharacterCards = (cards = 2) => {
+    if (cards !== 1 && cards !== 2) throw new Error(`replyCharacterCards: cards 只能是 1 或 2，收到 ${cards}`)
+    extraction = cards
+  }
+  /** 定稿后处理的角色状态更新收到不是 JSON 的回复，这一步失败；传 false 恢复，用来演示只重试失败的步骤。 */
+  const breakCharacterState = (broken = true) => { brokenCharacterState = broken }
+  /** 之后 times 次角色状态请求回 200 后不发任何内容就断开连接（#420 的断流），用来演示重试真的重新请求。 */
+  const dropCharacterState = (times = 1) => { droppedCharacterStates = times }
+  /** 之后的剧情树整理回一份两轨（主线加支线）的合法 JSON。 */
+  const replyPlotTree = () => { plotTree = true }
+  /** 之后的正文回复以 content_filter 结束：写稿在这次打开里失败，留下可恢复的候选。传 false 恢复。 */
+  const failProse = (failed = true) => { failedProse = failed }
+  /** 之后的审稿（含合并后的复验）回这份 JSON；不调用时回默认审稿。 */
+  const replyReview = content => { review = content }
   const record = (kind, detail) => {
     requests.push(kind)
     diagnostics.push(`[fake-model] ${kind} <- ${detail}`)
@@ -83,24 +147,34 @@ export async function startFakeModel(diagnostics) {
     if (request.url !== '/v1/chat/completions') { response.writeHead(404).end(); return }
     await pass()
     const prompt = (body.messages ?? []).map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n')
-    const { kind, content } = responseFor(prompt, { extraction })
+    const reply = responseFor(prompt, { extraction, plotTree, review })
+    const { kind } = reply
+    const content = kind === 'character-state' && brokenCharacterState ? '角色状态暂时无法整理。' : reply.content
+    chats.push({ kind, model: body.model, messages: body.messages })
     record(kind, prompt.slice(0, 120).replace(/\s+/g, ' '))
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+    if (kind === 'character-state' && droppedCharacterStates > 0) {
+      droppedCharacterStates--
+      response.flushHeaders()
+      response.destroy()
+      return
+    }
+    const finish = kind === 'prose' && failedProse ? 'content_filter' : 'stop'
     if (kind === 'prose' && stream) {
       for (const [index, chunk] of stream.chunks.entries()) {
         response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk }, finish_reason: null }] })}\n\n`)
         streamLog.push({ at: Date.now(), count: index + 1 })
         await new Promise(resolve => setTimeout(resolve, stream.intervalMs))
       }
-      response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`)
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finish }] })}\n\n`)
     } else {
-      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\n`)
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: finish }] })}\n\n`)
     }
     response.write('data: {"choices":[],"usage":{"prompt_tokens":400,"completion_tokens":200,"total_tokens":600}}\n\n')
     response.end('data: [DONE]\n\n')
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   server.unref()
-  return { port: server.address().port, requests, gate, streamProse, streamLog, replyCharacterCards,
+  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview,
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(() => resolve()) }) }
 }

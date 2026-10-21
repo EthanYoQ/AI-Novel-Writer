@@ -257,24 +257,6 @@ export async function getNextReviewIndex(chapterDir: string, baseVersion: number
   return await ipc.invoke('db:review-next-index', baseDraftId, expectedProjectPath)
 }
 
-export async function getLatestReview(
-  chapterDir: string,
-  baseVersion: number,
-  expectedProjectPath: string,
-): Promise<ReviewEntry | null> {
-  const matchCh = chapterDir.match(/ch(\d+)$/)
-  if (!matchCh) return null
-  const chapterNumber = parseInt(matchCh[1])
-
-  const baseDraftId = await getDraftId(chapterNumber, baseVersion, expectedProjectPath)
-  if (!baseDraftId) return null
-
-  const review: DB_ReviewMeta | null = await ipc.invoke('db:review-get-latest', baseDraftId, expectedProjectPath)
-  if (!review) return null
-
-  return mapReviewEntry(review, baseVersion)
-}
-
 export async function getReviewsForVersion(
   chapterDir: string,
   baseVersion: number,

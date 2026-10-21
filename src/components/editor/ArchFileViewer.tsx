@@ -6,6 +6,7 @@ import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
 import { registerEditorExitSaveHandler, useEditorStore, type PlanningRecoverySaveSnapshot } from '../../stores/editor-store'
 import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
+import { ARCH_STEP_NAMES, archSectionHasContent, judgeArchCore, type ArchStepKey } from '../../services/architecture-step-selection'
 import { Button } from '../ui/Button'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
@@ -19,8 +20,11 @@ import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
-import { renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix } from '../../shared/plot-outline-contract'
+import { renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, type PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
 import { useWorkflowStore } from '../../stores/workflow-store'
+import { outlineProgress } from '../../shared/plot-outline-checkpoint'
+import { archOutlineSource, readArchCheckpoint } from '../../services/architecture-service'
+import { outlineSourceChangedNote, outlineSourceInvalidNote, planningRemainingText } from '../run/run-recovery'
 import { globalEventBus } from '../../shared/event-bus'
 import {
   ARCH_REFRESH_BLOCKED_MESSAGE,
@@ -46,14 +50,22 @@ import {
   isProjectSessionPath,
 } from '../project-session-gate'
 
-type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
 
 /** 与 Sidebar / WorldBuildingEditor 保持一致的架构文件元信息 */
-const ARCH_META: Record<ArchStepKey, { iconName: string; label: string; labelEn: string; desc: string; descEn: string }> = {
-  premise: { iconName: 'target', label: '故事前提', labelEn: 'Premise', desc: 'Logline、核心冲突、金手指定位', descEn: 'Logline, central conflict, and story hook' },
-  characters: { iconName: 'users', label: '角色图谱', labelEn: 'Character graph', desc: '角色弧光、关系网、矛盾交织', descEn: 'Character arcs, relationships, and conflicts' },
-  worldbuilding: { iconName: 'globe', label: '世界观', labelEn: 'Worldbuilding', desc: '核心规则、阶层断层、深层危机', descEn: 'Core rules, social divides, and deeper crises' },
-  synopsis: { iconName: 'map', label: '情节大纲', labelEn: 'Synopsis', desc: '三幕式情节骨架', descEn: 'Three-act story structure' },
+/** 视图头与生成按钮的名字取 ARCH_STEP_NAMES；角色名单一节在这里看到的是名单的只读全文。 */
+const ARCH_META: Record<ArchStepKey, { iconName: string; view: readonly [string, string]; desc: string; descEn: string }> = {
+  premise: { iconName: 'target', view: ARCH_STEP_NAMES.premise, desc: 'Logline、核心冲突、金手指定位', descEn: 'Logline, central conflict, and story hook' },
+  characters: { iconName: 'users', view: ['角色名单全文', 'Cast as text'], desc: '角色弧光、关系网、矛盾交织', descEn: 'Character arcs, relationships, and conflicts' },
+  worldbuilding: { iconName: 'globe', view: ARCH_STEP_NAMES.worldbuilding, desc: '核心规则、阶层断层、深层危机', descEn: 'Core rules, social divides, and deeper crises' },
+  synopsis: { iconName: 'map', view: ARCH_STEP_NAMES.synopsis, desc: '三幕式情节骨架', descEn: 'Three-act story structure' },
+}
+
+/**
+ * 名单全文由主进程按名单生成，开头的「# 角色图谱」标题是持久投影的一部分（改它会让既有作品的投影校验全部失配），
+ * 只在查看时去掉，标签与视图头已写明「角色名单全文」。
+ */
+function castTextForView(markdown: string): string {
+  return markdown.replace(/^# (?:角色图谱|Character graph)\n+/u, '')
 }
 
 /** 从文件路径推断出 ArchStepKey */
@@ -104,6 +116,7 @@ function ArchFileViewerSession({
   const meta = stepKey ? ARCH_META[stepKey] : null
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
+  const locale = useLocaleStore(s => s.locale)
   const recoveryTab = useEditorStore(s => s.tabs.find(tab => tab.id === tabId && tab.planningRecovery))
   const [recovery, setRecovery] = useState(recoveryTab?.planningRecovery)
   const [authorEnd, setAuthorEnd] = useState(String(recoveryTab?.planningSaveEnd ?? ''))
@@ -143,6 +156,8 @@ function ArchFileViewerSession({
   const [showDialog, setShowDialog] = useState(false)
   const [checkingArch, setCheckingArch] = useState(false)
   const [fullArchStatus, setFullArchStatus] = useState<Record<string, boolean>>({})
+  const [fullArchConfirmed, setFullArchConfirmed] = useState<Record<string, boolean>>({})
+  const [synopsisSource, setSynopsisSource] = useState<PlotOutlineRangeSource>({ synopsis: '', totalChapters: 0, writingLanguage: 'zh-CN' })
   const lastCompletedArchitectureRunRef = useRef<string | null>(null)
   const [refreshBlockedMessage, setRefreshBlockedMessage] = useState<string | null>(null)
   const reloadGateRef = useRef(new ArchReloadGate())
@@ -499,19 +514,24 @@ function ArchFileViewerSession({
         projectSession.projectPath,
       )
       if (!isProjectSessionCurrent(projectSession)) return
-      const status: Record<string, boolean> = {
-        premise: !!core?.premise && core.premise.length > 50 && !core.premise.includes('待生成'),
-        characters: rosterSnapshot?.status === 'ready',
-        worldbuilding: !!core?.worldbuilding && core.worldbuilding.length > 50 && !core.worldbuilding.includes('待生成'),
-        synopsis: !!core?.synopsis && core.synopsis.length > 50 && !core.synopsis.includes('待生成'),
-      }
-
-      // 对于当前文件，如果编辑器内已修改但未保存，也暂时以前面的基准为准即可
-      const EditorContentLen = currentContentRef.current.length;
-      if (EditorContentLen > 50 && !currentContentRef.current.includes('待生成')) {
-        status[stepKey] = true
-      }
+      const source = archOutlineSource(core, currentProject?.novelConfig)
+      // 分批检查点只用来认出被打断的一批；读不到时与架构页一样按没有检查点判定。
+      // 名单视图的 hook 只在角色页启用，其他文档页要直接读库，否则就绪的名单会被当成新生成并默认勾选重写。
+      const [checkpoint, roster] = await Promise.all([
+        readArchCheckpoint(projectSession),
+        ipc.invokeWithProjectSession(projectSession, 'db:character-roster-read', projectSession.projectPath),
+      ])
+      if (!isProjectSessionCurrent(projectSession)) return
+      // 有内容决定覆盖还是新生成，已确认决定默认勾选；两者与架构页共用 judgeArchCore。
+      const judged = judgeArchCore(core, outlineProgress(source.synopsis, checkpoint, source.writingLanguage, source.totalChapters).kind)
+      const rosterReady = roster.status === 'ready'
+      const status: Record<string, boolean> = { ...judged.hasContent, characters: rosterReady }
+      const confirmed: Record<string, boolean> = { ...judged.confirmed, characters: rosterReady }
+      // 当前文件在编辑器里有未保存的内容时，生成会覆盖它而不是新生成。是否已确认只影响默认勾选，而当前文件总是勾选的，不必按编辑器内容再判。
+      if (archSectionHasContent(currentContentRef.current)) status[stepKey] = true
       setFullArchStatus(status)
+      setFullArchConfirmed(confirmed)
+      setSynopsisSource(source)
       setShowDialog(true)
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
@@ -571,7 +591,7 @@ function ArchFileViewerSession({
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="flex-shrink-0" style={{ color: 'var(--color-text-muted)', opacity: 0.6 }}>{meta ? renderIcon(meta.iconName, 14) : <FileText size={14} />}</span>
           <span className="text-xs font-medium flex-shrink-0" style={{ color: 'var(--color-text-secondary)' }}>
-            {meta ? text(meta.label, meta.labelEn) : text('架构文档', 'Architecture document')}
+            {meta ? text(...meta.view) : text('架构文档', 'Architecture document')}
           </span>
           {meta && (
             <span className="text-xs truncate hidden sm:inline" style={{ color: 'var(--color-text-muted)' }}>
@@ -652,8 +672,8 @@ function ArchFileViewerSession({
               onClick={handleOpenDialog}
               disabled={checkingArch || !projectMatches}
               title={generated
-                ? text(`AI 重新生成「${meta.label}」`, `AI Regenerate “${meta.labelEn}”`)
-                : text(`AI 生成「${meta.label}」`, `AI Generate “${meta.labelEn}”`)}
+                ? text(`AI 重新生成「${ARCH_STEP_NAMES[stepKey][0]}」`, `AI Regenerate “${ARCH_STEP_NAMES[stepKey][1]}”`)
+                : text(`AI 生成「${ARCH_STEP_NAMES[stepKey][0]}」`, `AI Generate “${ARCH_STEP_NAMES[stepKey][1]}”`)}
             >
               {checkingArch ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
               {generated ? text('AI 重新生成', 'AI Regenerate') : text('AI 生成', 'AI Generate')}
@@ -671,9 +691,9 @@ function ArchFileViewerSession({
           useEditorStore.setState(state => ({ tabs: state.tabs.map(tab => tab.id === tabId ? { ...tab, planningSaveEnd: value } : tab) }))
         }} /></label>
         <p>{recovery.planningContinuation?.remainingRange
-          ? text(`待完成第 ${recovery.planningContinuation.remainingRange.from} 至 ${recovery.planningContinuation.remainingRange.to} 章，每章目标 ${recovery.planningContinuation.targetUnits} ${planningTargetUnit}。`, `Chapters ${recovery.planningContinuation.remainingRange.from} to ${recovery.planningContinuation.remainingRange.to} remain. Target ${recovery.planningContinuation.targetUnits} ${planningTargetUnit} per chapter.`)
+          ? planningRemainingText(recovery.planningContinuation.remainingRange, recovery.planningContinuation.targetUnits, planningTargetUnit, text)
           : text('本次所选章节已保存。', 'The selected chapters are saved.')}</p>
-        {recovery.plotOutlineRecovery?.writeState.kind === 'blocked' && <p>{text('生成尚在进行、来源已变化或本稿已保存时，不能覆盖正式内容。草稿仍可编辑和复制。', 'Active generation, changed sources or an already saved draft prevent replacing saved content. You can still edit and copy this draft.')}</p>}
+        {recovery.plotOutlineRecovery?.writeState.kind === 'blocked' && <p>{outlineSourceInvalidNote(recovery, locale) ?? outlineSourceChangedNote(recovery, locale) ?? text('生成尚在进行、来源已变化或本稿已保存时，不能覆盖正式内容。草稿仍可编辑和复制。', 'Active generation, changed sources or an already saved draft prevent replacing saved content. You can still edit and copy this draft.')}</p>}
         <button type="button" className="btn-secondary" disabled={continuing || saving || !projectMatches || !recovery.planningContinuation?.remainingRange || !['ready', 'continued'].includes(recovery.planningContinuation.state)} onClick={() => { void continuePlanning() }}>{text('继续生成缺少的章节', 'Generate remaining chapters')}</button>
         <details><summary>{text('原始候选', 'Original candidate')}</summary><pre className="whitespace-pre-wrap max-h-40 overflow-auto">{recoveryTab?.originalContent}</pre></details>
         {recoveryError && <p role="alert">{recoveryError}</p>}
@@ -709,16 +729,13 @@ function ArchFileViewerSession({
             borderBottom: '1px solid var(--color-border)',
           }}
         >
-          <span>{text(
-            '角色图谱由角色名单自动生成，只读展示。请到「角色管理」修改角色身份、资料和关系。',
-            'The character graph is a read-only projection of the roster. Edit identity, profile, and relationships in Character Management.',
-          )}</span>
+          <span>{text('这是角色名单的只读全文，由名单自动生成。修改角色身份、档案和关系请到「角色名单」页。', 'This is the read-only text of the cast, generated from it. Edit identities, profiles and relationships on the Cast page.')}</span>
           {isDirty && (
             <Button
               variant="outline"
               size="sm"
               onClick={discardCharacterProjectionDraft}
-              title={text('旧草稿可先复制；点击后明确放弃并加载当前角色图谱', 'Copy the legacy draft first; this explicitly discards it and loads the current character graph.')}
+              title={text('旧草稿可先复制；点击后明确放弃并加载当前的角色名单全文', 'Copy the legacy draft first; this explicitly discards it and loads the current cast text.')}
             >
               {text('放弃旧草稿并加载投影', 'Discard draft and load projection')}
             </Button>
@@ -745,7 +762,7 @@ function ArchFileViewerSession({
       <div className="flex-1 overflow-hidden">
         <CodeMirrorEditor
           mode="document"
-          content={editorContent}
+          content={isCharacterProjection && rosterSnapshot?.status === 'ready' ? castTextForView(editorContent) : editorContent}
           filePath={filePath}
           editable={!isCharacterProjection}
           onChange={isCharacterProjection ? undefined : handleChange}
@@ -765,6 +782,8 @@ function ArchFileViewerSession({
           isOpen={showDialog}
           onClose={() => setShowDialog(false)}
           archStatus={fullArchStatus}
+          confirmed={fullArchConfirmed}
+          synopsisSource={synopsisSource}
           initialSelectedSteps={[stepKey]}
           onConfirm={handleConfirm}
         />

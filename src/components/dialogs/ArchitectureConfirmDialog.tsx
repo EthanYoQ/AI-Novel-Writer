@@ -1,9 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
 import { Wand2, AlertCircle, AlertTriangle, Check, ChevronDown, ChevronRight } from 'lucide-react'
-import { useProjectStore } from '../../stores/project-store'
-import { guardArchitectureGeneration, guardCharacterRegeneration } from '../../services/workflow-guards'
-import { createDefaultArchitectureSelection } from '../../services/architecture-step-selection'
-import { toast } from '../ui/Toast'
+import { ARCH_STEP_NAMES, type ArchStepKey } from '../../services/architecture-step-selection'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
@@ -11,189 +7,35 @@ import { Button } from '../ui/Button'
 import { Textarea } from '../ui/Textarea'
 import { useLocaleStore } from '../../stores/locale-store'
 import { AUDIENCE_EN, GENRE_EN } from '../editor/novel-config-labels'
-import { ipc } from '../../services/ipc-client'
 import { resolveWritingLanguage } from '../../shared/writing-language'
-import { assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS, DEFAULT_PLANNING_TARGET_UNITS, parsePlanningTargetUnits, PLANNING_ACTION_CHAPTER_LIMIT, PLANNING_TARGET_UNITS_LIMIT } from '../../shared/plot-outline-contract'
+import { PLANNING_ACTION_CHAPTER_LIMIT, PLANNING_TARGET_UNITS_LIMIT } from '../../shared/plot-outline-contract'
+import { useArchitectureConfirmForm, type ArchitectureConfirmFormOptions } from './use-architecture-confirm-form'
+import { pluralEn } from '../../shared/plural-en'
 
-type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
-
-const ARCH_FILES: Array<{
-  key: ArchStepKey
-  fileName: string
-  label: string
-  labelEn: string
-  iconName: string
-  desc: string
-  descEn: string
-}> = [
-  { key: 'premise', fileName: 'premise.md', label: '故事前提', labelEn: 'Premise', iconName: 'target', desc: 'Logline、核心冲突、金手指定位', descEn: 'Logline, core conflict, and protagonist advantage' },
-  { key: 'characters', fileName: 'characters.md', label: '角色图谱', labelEn: 'Characters', iconName: 'users', desc: '角色弧光、关系网、矛盾交织', descEn: 'Character arcs, relationships, and conflicts' },
-  { key: 'worldbuilding', fileName: 'worldbuilding.md', label: '世界观', labelEn: 'World building', iconName: 'globe', desc: '核心规则、阶层断层、深层危机', descEn: 'Core rules, social fault lines, and hidden crises' },
-  { key: 'synopsis', fileName: 'synopsis.md', label: '情节大纲', labelEn: 'Synopsis', iconName: 'map', desc: '三幕式情节骨架', descEn: 'Three-act plot structure' },
+/** 四节的说明；名字取 ARCH_STEP_NAMES。 */
+const ARCH_FILES: Array<{ key: ArchStepKey; desc: string; descEn: string }> = [
+  { key: 'premise', desc: 'Logline、核心冲突、金手指定位', descEn: 'Logline, core conflict, and protagonist advantage' },
+  { key: 'characters', desc: '角色弧光、关系网、矛盾交织', descEn: 'Character arcs, relationships, and conflicts' },
+  { key: 'worldbuilding', desc: '核心规则、阶层断层、深层危机', descEn: 'Core rules, social fault lines, and hidden crises' },
+  { key: 'synopsis', desc: '三幕式情节骨架', descEn: 'Three-act plot structure' },
 ]
 
-interface Props {
-  isOpen: boolean
-  onClose: () => void
-  /** 各架构文件的生成状态 */
-  archStatus: Record<string, boolean>
-  /** 预先选中的步骤（单文件生成时传入） */
-  initialSelectedSteps?: ArchStepKey[]
-  /** 打开时预填的情节大纲续批范围（从已确认的下一章开始；to 可在弹窗内调整）。 */
-  initialSynopsisRange?: { from: number; to: number } | null
-  onConfirm: (
-    selectedSteps: ArchStepKey[],
-    stepGuidance: Record<string, string>,
-    synopsisRange?: { from: number; to: number },
-    targetUnits?: number,
-  ) => Promise<void>
-}
-
 /** 生成架构确认弹框（含步骤勾选） */
-export default function ArchitectureConfirmDialog({
-  isOpen, onClose, archStatus, initialSelectedSteps, initialSynopsisRange = null, onConfirm,
-}: Props) {
-  const currentProject = useProjectStore(s => s.currentProject)
+export default function ArchitectureConfirmDialog(props: ArchitectureConfirmFormOptions) {
+  const { isOpen, onClose } = props
   const text = useLocaleStore(s => s.text)
-  const locale = useLocaleStore(s => s.locale)
+  const form = useArchitectureConfirmForm(props)
+  const {
+    config, checked, toggleStep, setAll, selectedSteps, noneSelected, stepGuidance, showGuidance, setShowGuidance,
+    synopsisFrom, setSynopsisFrom, synopsisTo, setSynopsisTo, targetUnits, setTargetUnits, preferenceLoading,
+    isConfirming, guardError, totalChapters, handleConfirm, handleOpenChange,
+  } = form
 
-  // 默认：未生成的全部勾选；或使用 initialSelectedSteps 覆盖
-  const [checked, setChecked] = useState<Record<ArchStepKey, boolean>>(() => {
-    return createDefaultArchitectureSelection(archStatus, initialSelectedSteps)
-  })
-  const wasOpen = useRef(false)
-
-  // 每步的补充指导
-  const [stepGuidance, setStepGuidance] = useState<Record<string, string>>({})
-  // 是否展开指导输入区
-  const [showGuidance, setShowGuidance] = useState(false)
-  const [synopsisFrom, setSynopsisFrom] = useState('')
-  const [synopsisTo, setSynopsisTo] = useState('')
-  const [targetUnits, setTargetUnits] = useState(String(DEFAULT_PLANNING_TARGET_UNITS))
-  const [preferenceLoading, setPreferenceLoading] = useState(true)
-  const [isConfirming, setIsConfirming] = useState(false)
-  const [guardError, setGuardError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!isOpen) return
-    let disposed = false
-    void ipc.invoke('config:get').then(config => {
-      if (!disposed) setTargetUnits(String(parsePlanningTargetUnits(config.outlineTargetUnits)))
-    }).catch(error => {
-      if (!disposed) setGuardError(error instanceof Error ? error.message : String(error))
-    }).finally(() => { if (!disposed) setPreferenceLoading(false) })
-    return () => { disposed = true; setPreferenceLoading(true) }
-  }, [isOpen])
-
-  // 每次弹窗打开时重置选中状态；续批入口会预填起止章并勾选情节大纲
-  const resetChecked = useCallback(() => {
-    const defaults = createDefaultArchitectureSelection(archStatus, initialSelectedSteps)
-    if (initialSynopsisRange) {
-      defaults.synopsis = true
-      setSynopsisFrom(String(initialSynopsisRange.from))
-      setSynopsisTo(String(Math.min(initialSynopsisRange.to, initialSynopsisRange.from + PLANNING_ACTION_CHAPTER_LIMIT - 1)))
-    } else {
-      const total = Number(currentProject?.novelConfig.totalChapters) || 0
-      setSynopsisFrom('1')
-      setSynopsisTo(String(Math.min(total, DEFAULT_PLANNING_ACTION_CHAPTERS)))
-    }
-    setChecked(defaults)
-  }, [archStatus, currentProject?.novelConfig.totalChapters, initialSelectedSteps, initialSynopsisRange])
-
-  useEffect(() => {
-    if (isOpen && !wasOpen.current) {
-      resetChecked()
-    }
-    wasOpen.current = isOpen
-  }, [isOpen, resetChecked])
-
-  if (!currentProject) return null
-  const config = currentProject.novelConfig
+  if (!config) return null
   const genre = [text(config.genre, GENRE_EN[config.genre] ?? config.genre), config.subGenre]
     .filter(Boolean)
     .join(' · ')
   const audience = text(config.targetAudience, AUDIENCE_EN[config.targetAudience] ?? config.targetAudience)
-
-  const toggleStep = (key: ArchStepKey) =>
-    setChecked(prev => ({ ...prev, [key]: !prev[key] }))
-
-  const selectedSteps = (Object.keys(checked) as ArchStepKey[]).filter(k => checked[k])
-  const noneSelected = selectedSteps.length === 0
-
-  const totalChapters = Number(config.totalChapters) > 0 ? Number(config.totalChapters) : 0
-  const resolveSynopsisRange = (): { ok: true; range?: { from: number; to: number } } | { ok: false } => {
-    if (!checked.synopsis) return { ok: true }
-    const range = { from: Number(synopsisFrom), to: Number(synopsisTo) }
-    try { assertPlanningActionRange(range) } catch { return { ok: false } }
-    return range.to <= totalChapters ? { ok: true, range } : { ok: false }
-  }
-
-  const handleConfirm = async () => {
-    if (noneSelected) return
-    setIsConfirming(true)
-    try {
-      // 前置校验 1：小说配置是否填写
-      const configGuard = guardArchitectureGeneration()
-      if (!configGuard.ok) {
-        setGuardError(configGuard.message || text('配置校验失败', 'Configuration validation failed.'))
-        return
-      }
-
-      // 范围合法性（超出总章数或起大于止）
-      const resolution = resolveSynopsisRange()
-      if (!resolution.ok) {
-        setGuardError(text(
-          `情节大纲范围无效。请选择第 1–${totalChapters} 章内连续的 1–${PLANNING_ACTION_CHAPTER_LIMIT} 章。`,
-          `Invalid plot-outline range. Select 1-${PLANNING_ACTION_CHAPTER_LIMIT} consecutive chapters within chapters 1-${totalChapters}.`,
-        ))
-        return
-      }
-
-      // 前置校验 2：如果勾选了角色图谱（意味着将重新生成角色卡），则必须确保蓝图为空
-      if (selectedSteps.includes('characters') && archStatus.characters) {
-        const charGuard = await guardCharacterRegeneration(undefined, locale)
-        if (!charGuard.ok) {
-          setGuardError(charGuard.message || text('角色卡不可重新生成', 'Character cards cannot be regenerated.'))
-          return
-        }
-      }
-
-      setGuardError(null)
-      let target: number | undefined
-      if (checked.synopsis) {
-        try { target = parsePlanningTargetUnits(Number(targetUnits)) } catch {
-          setGuardError(text(`每章大纲目标须为 1–${PLANNING_TARGET_UNITS_LIMIT} 的整数。`, `The outline target must be an integer from 1 to ${PLANNING_TARGET_UNITS_LIMIT}.`))
-          return
-        }
-        try {
-          const saved = await ipc.invoke('config:set', { outlineTargetUnits: target })
-          if (!saved.success) throw new Error(saved.error)
-        } catch {
-          setGuardError(text('目标字数偏好保存失败。请重试，输入已保留。', 'Could not save the target preference. Your input is retained. Please retry.'))
-          return
-        }
-      }
-      await onConfirm(selectedSteps, stepGuidance, resolution.range, target)
-      onClose()
-      const stepNames = selectedSteps.map(k => {
-        const item = ARCH_FILES.find(f => f.key === k)
-        return item ? text(item.label, item.labelEn) : ''
-      }).filter(Boolean).join(text('、', ', '))
-      toast.info(text(`已提交：正在生成${stepNames}...`, `Submitted: generating ${stepNames}...`))
-    } catch (error) {
-      setGuardError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setIsConfirming(false)
-    }
-  }
-
-  const handleOpenChange = (open: boolean) => {
-    if (!open) {
-      onClose()
-    } else {
-      resetChecked()
-    }
-  }
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
@@ -221,7 +63,7 @@ export default function ArchitectureConfirmDialog({
               <ConfigRow label={text('类型', 'Genre')} value={genre} />
               <ConfigRow label={text('受众', 'Audience')} value={audience} />
               <ConfigRow label={text('总章数', 'Chapters')} value={text(`${config.totalChapters} 章`, `${config.totalChapters}`)} />
-              <ConfigRow label={text('每章字数', 'Words/chapter')} value={text(`${config.wordsPerChapter} 字`, `${config.wordsPerChapter} words`)} />
+              <ConfigRow label={text('每章字数', 'Words/chapter')} value={text(`${config.wordsPerChapter} 字`, `${config.wordsPerChapter} ${pluralEn(config.wordsPerChapter, 'word')}`)} />
             </div>
             {config.coreOutline && (
               <p
@@ -243,7 +85,7 @@ export default function ArchitectureConfirmDialog({
                 {text('勾选要生成的步骤', 'Sections to generate')}
               </p>
               <button
-                onClick={() => setChecked({ premise: true, characters: true, worldbuilding: true, synopsis: true })}
+                onClick={() => setAll(true)}
                 className="text-xs underline"
                 style={{ color: 'var(--color-text-muted)' }}
               >
@@ -252,7 +94,7 @@ export default function ArchitectureConfirmDialog({
             </div>
 
             {ARCH_FILES.map(f => {
-              const exists = archStatus[f.key]
+              const mark = form.stepMark(f.key)
               const isChecked = checked[f.key]
               return (
                 <label
@@ -275,7 +117,7 @@ export default function ArchitectureConfirmDialog({
 
                   {/* 步骤名 */}
                   <span className="text-xs flex-1" style={{ color: isChecked ? 'var(--color-text)' : 'var(--color-text-muted)' }}>
-                    {text(f.label, f.labelEn)}
+                    {text(...ARCH_STEP_NAMES[f.key])}
                     <span className="ml-1 text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
                       — {text(f.desc, f.descEn)}
                     </span>
@@ -283,15 +125,16 @@ export default function ArchitectureConfirmDialog({
 
                   {/* 状态标签 */}
                   <span
+                    data-mark={mark}
                     className={`text-[0.7rem] px-1.5 py-0.5 rounded flex-shrink-0 ${
-                      exists
-                        ? isChecked
-                          ? 'bg-yellow-500/15 text-[var(--color-warning-text)]'
-                          : 'bg-green-500/10 text-[var(--color-success-text)]'
-                        : 'bg-[rgba(var(--color-accent-rgb),0.1)] text-[var(--color-accent)]'
+                      mark === 'overwrite' || mark === 'invalid'
+                        ? 'bg-yellow-500/15 text-[var(--color-warning-text)]'
+                        : mark === 'keep'
+                          ? 'bg-green-500/10 text-[var(--color-success-text)]'
+                          : 'bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] text-[var(--color-accent)]'
                     }`}
                   >
-                    {exists ? (isChecked ? text('将覆盖', 'Overwrite') : text('保留', 'Keep')) : text('待生成', 'New')}
+                    {form.markLabel(f.key)}
                   </span>
                 </label>
               )
@@ -312,7 +155,7 @@ export default function ArchitectureConfirmDialog({
                 className="text-xs leading-relaxed m-0"
                 style={{ color: 'var(--color-text-secondary)' }}
               >
-                  {text(`全书共 ${totalChapters} 章，每次最多生成 ${PLANNING_ACTION_CHAPTER_LIMIT} 章。完成后可继续下一批。`, `The book has ${totalChapters} chapters. Generate up to ${PLANNING_ACTION_CHAPTER_LIMIT} chapters per action, then continue with the next batch.`)}
+                  {text(`全书共 ${totalChapters} 章，每次最多生成 ${PLANNING_ACTION_CHAPTER_LIMIT} 章。完成后可继续下一批。`, `The book has ${totalChapters} ${pluralEn(totalChapters, 'chapter')}. Generate up to ${PLANNING_ACTION_CHAPTER_LIMIT} ${pluralEn(PLANNING_ACTION_CHAPTER_LIMIT, 'chapter')} per action, then continue with the next batch.`)}
                 </p>
                 <div className="flex items-center gap-1.5 text-xs">
                   <span style={{ color: 'var(--color-text-muted)' }}>{text('第', 'From ch.')}</span>
@@ -363,6 +206,8 @@ export default function ArchitectureConfirmDialog({
                   />
                 </label>
                 <p className="text-xs text-[var(--color-text-muted)]">{text('仅作生成目标，实际内容可多可少。', 'A generation target. Actual content may be longer or shorter.')}</p>
+                {form.synopsisEffectNote && <p className="text-xs m-0" style={{ color: 'var(--color-text-secondary)' }}>{form.synopsisEffectNote}</p>}
+                {form.synopsisRangeIssue && <p role="alert" className="text-xs m-0 text-[var(--color-warning-text)]">{form.synopsisRangeIssue}</p>}
             </div>
           )}
 
@@ -385,12 +230,12 @@ export default function ArchitectureConfirmDialog({
                   {ARCH_FILES.filter(f => checked[f.key]).map(f => (
                     <div key={f.key}>
                       <label className="text-[0.7rem] font-medium mb-1 block" style={{ color: 'var(--color-text-muted)' }}>
-                        {text(f.label, f.labelEn)}
+                        {text(...ARCH_STEP_NAMES[f.key])}
                       </label>
                       <Textarea
                         value={stepGuidance[f.key] || ''}
-                        onChange={e => setStepGuidance(prev => ({ ...prev, [f.key]: e.target.value }))}
-                        placeholder={text(`对「${f.label}」生成的特殊要求，如：“多强调金手指的限制”`, `Special requirements for “${f.labelEn}”, such as limitations on the protagonist advantage`)}
+                        onChange={e => form.setStepGuidance(f.key, e.target.value)}
+                        placeholder={text(`对「${ARCH_STEP_NAMES[f.key][0]}」生成的特殊要求，如：“多强调金手指的限制”`, `Special requirements for “${ARCH_STEP_NAMES[f.key][1]}”, such as limitations on the protagonist advantage`)}
                         rows={2}
                         className="text-xs"
                       />
@@ -418,7 +263,7 @@ export default function ArchitectureConfirmDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={isConfirming}>{text('取消', 'Cancel')}</Button>
-          <Button variant="default" onClick={handleConfirm} disabled={noneSelected || isConfirming || (checked.synopsis && preferenceLoading)}>
+          <Button variant="default" onClick={handleConfirm} disabled={noneSelected || isConfirming || form.synopsisRangeIssue !== null || (checked.synopsis && preferenceLoading)}>
             <Wand2 size={13} />
             {isConfirming ? text('校验中...', 'Validating...') : text(`确认生成（${selectedSteps.length}/4）`, `Generate (${selectedSteps.length}/4)`)}
           </Button>

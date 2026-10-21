@@ -18,7 +18,7 @@ type IdentityView = { runId: string; session: ProjectSessionContext } & (
   | { status: 'failed' }
 )
 
-/** 等作者确认才继续的那一步。两种外壳的确认区都读它，只负责排版。 */
+/** 等作者确认才继续的那一步。运行侧页的确认区读它，只负责排版。 */
 export interface WorkflowConfirmation {
   nextStepName: string
   /** 这一步要作者为新出现的角色选采用方式；没有时为 undefined。 */

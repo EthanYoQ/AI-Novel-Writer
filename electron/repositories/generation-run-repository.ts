@@ -12,7 +12,7 @@ import { getProjectDb } from '../database';
 import type { PortableRuntimeFreezeTable } from '../services/portable-runtime-freeze';
 import { assertReservation, assertAttemptTransition, rootActionIdempotencyKey, type RootAction, type RootBudget, type PhysicalAttempt, type VisibleArtifact, type ProviderUsagePolicy } from '../../src/shared/generation-contract';
 import { isContentHash, sameProjectEpoch, type FrozenInputFingerprint, type SourceRef, type ProjectEpoch } from '../../src/shared/source-ref';
-import { PLOT_OUTLINE_PROTOCOL, plotOutlinePolicy, plotOutlineExpected, plotOutlineConfirmedPrefix, derivePlotOutlineCursor, parsePlotOutlinePurpose, plotOutlinePurpose, validPlotOutlineEntry, joinPlotOutlineEntries, plotOutlineRequestContract, type PlotOutlineProgress, type PlotOutlineAuthorEditReceipt, type PlotOutlineRange } from '../../src/shared/plot-outline-contract';
+import { PLOT_OUTLINE_PROTOCOL, plotOutlinePolicy, plotOutlineExpected, plotOutlineConfirmedPrefix, plotOutlineSourceInvalid, derivePlotOutlineCursor, parsePlotOutlinePurpose, plotOutlinePurpose, validPlotOutlineEntry, joinPlotOutlineEntries, plotOutlineRequestContract, type PlotOutlineProgress, type PlotOutlineAuthorEditReceipt, type PlotOutlineRange } from '../../src/shared/plot-outline-contract';
 export interface RunBinding extends ProjectEpoch {
     fingerprint: FrozenInputFingerprint;
     contextSnapshotId: string;
@@ -420,7 +420,9 @@ export class GenerationRunRepository {
         if (!policy) return null;
         if (composition === undefined) composition = this.compositionFrom(read);
         const sourceExpected = plotOutlineExpected(run.binding.sourceManifest.plotOutlineSource);
-        const confirmedPrefix = plotOutlineConfirmedPrefix(sourceExpected, policy.range);
+        // 升级前开跑的任务可能冻结了现行规则判无效的大纲（章节乱序或重复）：读取照常，判为不能继续；开跑与写回仍按现行规则拒绝。
+        let confirmedPrefix: string | null = null;
+        try { confirmedPrefix = plotOutlineConfirmedPrefix(sourceExpected, policy.range); } catch { /* source-invalid */ }
         const acceptedCount = composition?.chapters?.length ?? 0;
         const chapter = policy.range.from + acceptedCount;
         const rows = this.db().prepare("SELECT attempt_id,json_extract(usage_receipt_json,'$.purpose') AS purpose FROM generation_attempts WHERE run_id=? AND json_extract(usage_receipt_json,'$.purpose') IN (?,?) ORDER BY rowid")
@@ -434,12 +436,13 @@ export class GenerationRunRepository {
         });
         return { protocol: PLOT_OUTLINE_PROTOCOL, ...policy, sourceExpected, confirmedPrefix, composition,
             targetUnits: parsePlanningTargetUnits(Number((run.binding.sourceManifest.authorInputs as { id: string; text: string }[]).find(input => input.id === 'planning:target-units')?.text ?? DEFAULT_PLANNING_TARGET_UNITS)),
-            cursor: derivePlotOutlineCursor(policy.range, acceptedCount, attempts) };
+            cursor: confirmedPrefix === null ? { kind: 'stopped', chapterNumber: chapter, reason: 'source-invalid' } : derivePlotOutlineCursor(policy.range, acceptedCount, attempts) };
     }
     assertPlotOutlineRequest(runId: string, purpose: string | undefined, task?: import('../../src/services/generation/generation-harness').GenerationTask, omitAttemptId?: string): void {
         this.assertPlotOutlineWritable(runId);
         const outline = this.readPlotOutline(runId, omitAttemptId);
         if (!outline) return;
+        if (plotOutlineSourceInvalid(outline)) fail('GENERATION_PLOT_OUTLINE_PREFIX_INVALID');
         const cursor = outline.cursor;
         if (cursor.kind !== 'request' || purpose !== plotOutlinePurpose(cursor.chapterNumber, cursor.attempt)
             || !task?.messages.some(message => message.role === 'user' && message.content.endsWith(plotOutlineRequestContract(outline, cursor.chapterNumber, cursor.attempt))))

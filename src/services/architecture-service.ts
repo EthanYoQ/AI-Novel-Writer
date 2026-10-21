@@ -2,25 +2,36 @@
  * architecture-service — 架构文件状态检查服务
  *
  * 全量 DB 化后，这里直接查 project_core 和 blueprints 表，不再读取文件。
- * 使用场景：Sidebar、WorldBuildingEditor
+ * 使用场景：Sidebar、流程脊
  */
 
-import type { ProjectSessionContext } from '../shared/ipc-channels'
+import type { NovelConfig, ProjectSessionContext } from '../shared/ipc-channels'
+import { CANONICAL_PROJECT_DIRECTORY } from '../shared/project-format'
+import { outlineProgress } from '../shared/plot-outline-checkpoint'
+import type { PlotOutlineRangeSource } from '../shared/plot-outline-contract'
+import { resolveWritingLanguage } from '../shared/writing-language'
 import { ipc } from './ipc-client'
+import { judgeArchCore } from './architecture-step-selection'
 
-export type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
+/** 读架构生成的分批检查点 partial_arch.json；没有、读不到或读失败都按没有检查点（undefined）。 */
+export async function readArchCheckpoint(projectSession: ProjectSessionContext): Promise<Record<string, unknown> | undefined> {
+  const { projectPath } = projectSession
+  const result = await ipc.invokeWithProjectSession(projectSession, 'fs:read-json', `${projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`, projectPath)
+    .catch(() => null)
+  return result?.success === true ? (result as { data?: Record<string, unknown> }).data : undefined
+}
 
-export const ARCH_FILES: Array<{
-  key: ArchStepKey
-  label: string
-  emoji: string
-  desc: string
-}> = [
-    { key: 'premise', label: '故事前提', emoji: '🎯', desc: 'Logline · 核心冲突链 · 金手指定位 · 悬念骨架' },
-    { key: 'characters', label: '角色图谱', emoji: '👥', desc: '角色弧光 · 关系网络 · 矛盾交织' },
-    { key: 'worldbuilding', label: '世界观', emoji: '🌍', desc: '核心规则 · 阶层断层 · 深层危机' },
-    { key: 'synopsis', label: '情节大纲', emoji: '🗺️', desc: '三幕结构 · 拐点节奏 · 伏笔闭环' },
-  ]
+/** 作品核心里情节大纲的范围来源：章数与写作语言以作品核心为准，作品核心读不到时用作品设置。 */
+export function archOutlineSource(
+  core: { synopsis?: string | null; totalChapters?: number | null; writingLanguage?: string | null } | null | undefined,
+  novelConfig?: Pick<NovelConfig, 'totalChapters' | 'writingLanguage'>,
+): PlotOutlineRangeSource {
+  return {
+    synopsis: core?.synopsis ?? '',
+    totalChapters: Number(core?.totalChapters ?? novelConfig?.totalChapters) || 0,
+    writingLanguage: resolveWritingLanguage(core?.writingLanguage ?? novelConfig?.writingLanguage),
+  }
+}
 
 /**
  * 检查所有架构块的生成状态
@@ -60,42 +71,22 @@ export async function checkArchStatus(
 }
 
 /**
- * 检查架构状态（包含字数统计）
+ * 流程脊的架构四节是否已确认：与架构页徽标同一判定（judgeArchCore），角色名单要结构化名单就绪。
  */
-export async function checkArchStatusWithWordCount(projectSession: ProjectSessionContext): Promise<{
-  status: Record<string, boolean>
-  wordCounts: Record<string, number>
-}> {
-  const status: Record<string, boolean> = { premise: false, characters: false, worldbuilding: false, synopsis: false }
-  const wordCounts: Record<string, number> = { premise: 0, characters: 0, worldbuilding: 0, synopsis: 0 }
-
-  const [core, roster] = await Promise.all([
-    ipc.invokeWithProjectSession(
-      projectSession,
-      'db:project-core-get',
-      projectSession.projectPath,
-    ),
-    ipc.invokeWithProjectSession(
-      projectSession,
-      'db:character-roster-read',
-      projectSession.projectPath,
-    ),
+export async function checkArchConfirmed(
+  projectSession: ProjectSessionContext,
+  novelConfig?: Pick<NovelConfig, 'totalChapters' | 'writingLanguage'>,
+): Promise<Record<string, boolean>> {
+  const { projectPath } = projectSession
+  const [core, roster, checkpoint] = await Promise.all([
+    ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath),
+    ipc.invokeWithProjectSession(projectSession, 'db:character-roster-read', projectPath),
+    readArchCheckpoint(projectSession),
   ])
-  if (!core) return { status, wordCounts }
-
-  const check = (key: ArchStepKey, content: string | undefined | null) => {
-    const len = content?.length ?? 0
-    const hasContent = len > 50
-    status[key] = hasContent
-    wordCounts[key] = hasContent ? len : 0
-  }
-
-  check('premise', core.premise)
-  check('characters', roster.status === 'ready' ? roster.renderedMarkdown : '')
-  check('worldbuilding', core.worldbuilding)
-  check('synopsis', core.synopsis)
-
-  return { status, wordCounts }
+  if (!core) return { premise: false, characters: false, worldbuilding: false, synopsis: false }
+  const { synopsis, totalChapters, writingLanguage } = archOutlineSource(core, novelConfig)
+  const progress = outlineProgress(synopsis, checkpoint, writingLanguage, totalChapters)
+  return { ...judgeArchCore(core, progress.kind).confirmed, characters: roster.status === 'ready' }
 }
 
 /**
@@ -111,45 +102,5 @@ export async function getBlueprintCount(projectSession: ProjectSessionContext): 
     return blueprints.length
   } catch {
     return 0
-  }
-}
-
-/**
- * 获取具体架构块的内容
- */
-export async function readArchFile(
-  key: ArchStepKey,
-  projectSession: ProjectSessionContext,
-): Promise<{ success: boolean; content: string }> {
-  try {
-    if (key === 'characters') {
-      const roster = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:character-roster-read',
-        projectSession.projectPath,
-      )
-      return {
-        success: true,
-        content: roster.status === 'ready'
-          ? roster.renderedMarkdown
-          : roster.legacyMarkdown ?? '',
-      }
-    }
-    const core = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:project-core-get',
-      projectSession.projectPath,
-    )
-    if (!core) return { success: false, content: '' }
-
-    let content = ''
-    switch (key) {
-      case 'premise': content = core.premise; break
-      case 'worldbuilding': content = core.worldbuilding; break
-      case 'synopsis': content = core.synopsis; break
-    }
-    return { success: true, content: content ?? '' }
-  } catch {
-    return { success: false, content: '' }
   }
 }

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react'
 import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore, type EditorTab } from '../../stores/editor-store'
 import { useLayoutStore } from '../../stores/layout-store'
@@ -6,33 +6,101 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { navigate } from '../../stores/navigation/navigation-intents'
 import { useStageStore } from '../../stores/navigation/stage-store'
 import type { ProjectData } from '../../shared/ipc-channels'
+import { sameProjectPathKey } from '../../shared/project-session-context'
 import { ErrorBoundary } from '../ErrorBoundary'
-import EditorTabContent from '../panels/EditorTabContent'
-import CharactersView from '../panels/sidebar/CharactersView'
-import { WriterWelcomePage } from '../pages/v2/use-project-overview'
+import ArchFileViewer from '../editor/ArchFileViewer'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import RunSheet from './run/RunSheet'
+import StageArchitecture from './architecture/StageArchitecture'
+import StageCharacters from './characters/StageCharacters'
+import StageLibrary from './library/StageLibrary'
+import { SettingsPage, SetupPage } from './stage-pages'
+import StageHistory from './history/StageHistory'
+import StageKnowledge from './knowledge/StageKnowledge'
+import StagePlot from './plot/StagePlot'
+import StageTabMenu, { CloseTabsConfirm } from './StageTabMenu'
 import StageTabs from './StageTabs'
-import { commandLabel } from './shortcut-keys'
+import { commandLabel, isComposing, isModalOpen } from './shortcut-keys'
+import BlueprintRecovery from './blueprint/BlueprintRecovery'
+import StageBlueprint from './blueprint/StageBlueprint'
+import ChapterView from './chapter/ChapterView'
+import ProseDocument from './chapter/ProseDocument'
+import { installChapterTabRouting, isChapterViewTab, isProseDocumentTab } from './chapter/chapter-tab-routing'
 import { stageTabName } from './stage-text'
-import { cancelCloseTab, confirmCloseTab, requestCloseTab, STAGE_CONTENT_ID } from './tab-close'
+import { cancelCloseTab, closeCleanTabs, confirmCloseTab, requestCloseTab, STAGE_CONTENT_ID } from './tab-close'
 
-/** 角色在 RD-6 并入架构阶段之前，标签里并排放旧的角色列表与角色档案。 */
+/** 每种标签对应的页面。架构文档（含大纲恢复稿与角色名单全文）沿用 ArchFileViewer。 */
 function TabContent({ tab, project }: { tab: EditorTab; project: ProjectData }) {
-  if (tab.type === 'character') {
-    return (
-      <div className="stage-characters">
-        <div className="stage-characters-list"><CharactersView /></div>
-        <div className="stage-characters-editor"><EditorTabContent activeTab={tab} currentProject={project} /></div>
-      </div>
-    )
+  const text = useLocaleStore(s => s.text)
+  const sameProject = sameProjectPathKey(tab.projectKey, project.path)
+  if (tab.type === 'config' && tab.projectKey) return <SetupPage projectKey={tab.projectKey} />
+  if (tab.type === 'world-building' && tab.projectKey) return <StageArchitecture projectKey={tab.projectKey} />
+  if (tab.type === 'character' && tab.projectKey) return <StageCharacters projectKey={tab.projectKey} />
+  if (isChapterViewTab(tab)) return <ChapterView tab={tab} />
+  if (isProseDocumentTab(tab) && sameProject) return <ProseDocument tab={tab} project={project} />
+  if (tab.type === 'chapter-card' && tab.projectKey && tab.planningRecovery) {
+    return <BlueprintRecovery key={`${tab.id}:${project.sessionLease}`} tab={tab} projectKey={tab.projectKey} />
   }
-  return <EditorTabContent activeTab={tab} currentProject={project} />
+  if (tab.type === 'chapter-card' && tab.projectKey) {
+    return <StageBlueprint projectKey={tab.projectKey} initialChapterNumber={tab.chapterNumber} selectRequest={tab.chapterSelectRequest} />
+  }
+  if (tab.type === 'version-history' && sameProject) return <StageHistory projectKey={project.path} />
+  if (tab.type === 'knowledge' && sameProject) return <StageKnowledge tabId={tab.id} />
+  if (tab.type === 'narrative-thread' && sameProject) {
+    return <StagePlot projectKey={project.path} initialView={tab.narrativeThreadView ?? 'plans'} viewRequest={tab.narrativeThreadViewRequest} />
+  }
+  if (tab.type === 'arch-file' && tab.filePath && tab.projectKey) {
+    return <ArchFileViewer key={tab.id} tabId={tab.id} filePath={tab.filePath} projectKey={tab.projectKey} content={tab.content ?? ''} savedContent={tab.savedContent ?? tab.content ?? ''} />
+  }
+  return (
+    <EmptyState
+      heading={text('这个标签没有可显示的页面', 'This tab has no page to show')}
+      description={text('它可能属于另一部作品，或者来自旧版界面。关掉它不会改动作品。', 'It may belong to another book or come from the old interface. Closing it does not change the book.')}
+      action={<Button variant="secondary" onClick={() => requestCloseTab(tab.id)}>{text('关闭标签', 'Close tab')}</Button>}
+    />
+  )
+}
+
+const TABBABLE = 'a[href], button, input, select, textarea, [contenteditable="true"], [tabindex]'
+const tabbables = (root: Element) => [...root.querySelectorAll<HTMLElement>(TABBABLE)]
+  .filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0)
+
+const isEditable = (target: EventTarget | null) => target instanceof HTMLElement
+  && (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)
+
+/** 侧页浮起（stage-panel.css 的容器查询）时才盖住内容区右侧；以样式为准，不在这里重复浮起的宽度阈值。 */
+const floatingSheet = (slot: HTMLElement | null) => slot && getComputedStyle(slot).position === 'absolute' ? slot : null
+
+/**
+ * 浮起时焦点不停在被侧页整个盖住的控件上（内容区与设置页都算；Tab、方向键、程序化 focus、窗口变窄都算）：
+ * 顺着焦点移动的方向跳到下一个看得见的，后面没有了就进侧页，前面没有了就停在所在区域本身（可聚焦时）或进侧页。
+ */
+function moveFocusOffSheet(body: Element, target: Element, sheetSlot: HTMLElement, backward: boolean) {
+  if (sheetSlot.contains(target)) return
+  const sheet = sheetSlot.getBoundingClientRect()
+  const covered = (element: Element) => element.getBoundingClientRect().left >= sheet.left
+  if (!covered(target)) return
+  const region = [...body.children].find(child => child.contains(target)) as HTMLElement | undefined
+  if (!region) return
+  // 方向键换选的分段按钮在换选前还是 tabIndex -1，不在 Tab 序列里，所以按文档位置而不是序列下标找下一个
+  const follows = (element: Element) => (target.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  const order = tabbables(region).filter(element => element !== target && follows(element) !== backward)
+  const next = (backward ? order.reverse() : order).find(element => !covered(element))
+  ;(next ?? (backward && region.hasAttribute('tabindex') ? region : tabbables(sheetSlot)[0]))?.focus()
+}
+
+function skipCoveredFocus(event: FocusEvent<HTMLElement>, slot: HTMLElement | null) {
+  const sheetSlot = floatingSheet(slot)
+  if (!sheetSlot) return
+  const target = event.target
+  const backward = event.relatedTarget instanceof Node && (target.compareDocumentPosition(event.relatedTarget) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  moveFocusOffSheet(event.currentTarget, target, sheetSlot, backward)
 }
 
 export default function StageWorkspace({ library, focus }: { library: boolean; focus: boolean }) {
+  const settingsOpen = useLayoutStore(s => s.settingsOpen)
   const text = useLocaleStore(s => s.text)
   const project = useProjectStore(s => s.currentProject)
   const tabs = useEditorStore(s => s.tabs)
@@ -42,38 +110,70 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
   const closingTabId = useStageStore(s => s.closingTabId)
   const pending = tabs.find(tab => tab.id === closingTabId) ?? null
   const pendingName = pending ? stageTabName(pending, text) : ''
+  const [closingMany, setClosingMany] = useState<readonly string[] | null>(null)
+  const sheetSlotRef = useRef<HTMLDivElement>(null)
+  // 浮起的侧页盖着内容区，焦点在内容区时 Esc 也收起它；并排时 Esc 只在侧页里有效，与原来一样。
+  // 打字处（输入框、正文编辑器）与输入法组字时的 Esc 属于输入，设置页与对话框的 Esc 归它们自己。
+  const closeFloatingSheet = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape' || event.defaultPrevented || !event.currentTarget.contains(event.target as Node)) return
+    if (isComposing(event.nativeEvent) || isModalOpen() || settingsOpen || isEditable(event.target)) return
+    if (floatingSheet(sheetSlotRef.current)) useStageStore.setState({ sheet: null })
+  }
+  const closeMany = (tabIds: readonly string[]) => {
+    const dirty = closeCleanTabs(tabIds)
+    if (dirty.length > 0) setClosingMany(dirty)
+  }
 
   const activeTab = tabs.find(tab => tab.id === activeTabId)
+  useEffect(() => installChapterTabRouting(), [])
+  // 窗口变窄让侧页浮起时没有焦点事件，焦点可能还停在刚被盖住的控件上：主区域尺寸变化时查一次。
+  const sheetMounted = sheet?.kind === 'run' && !focus && !library && project !== null
+  useEffect(() => {
+    const slot = sheetSlotRef.current
+    const body = slot?.parentElement
+    if (!sheetMounted || !slot || !body) return
+    const observer = new ResizeObserver(() => {
+      const sheetSlot = floatingSheet(slot)
+      const active = document.activeElement
+      if (sheetSlot && active && body.contains(active)) moveFocusOffSheet(body, active, sheetSlot, false)
+    })
+    observer.observe(body)
+    return () => observer.disconnect()
+  }, [sheetMounted])
   useEffect(() => {
     if (tabs.length > 0 && !activeTab) useEditorStore.getState().setActiveTab(tabs[0].id)
   }, [tabs, activeTab])
 
   if (library || !project) {
     return (
-      <main className="stage-panel" data-page="library">
-        <div className="stage-library">
-          <WriterWelcomePage onNewProject={() => useLayoutStore.getState().openNewProject()} />
-        </div>
+      <main className="stage-panel" data-page={settingsOpen ? 'settings' : 'library'}>
+        {settingsOpen ? <SettingsPage library /> : <div className="stage-library"><StageLibrary /></div>}
       </main>
     )
   }
 
-  const showTabs = !focus && tabs.length > 1
+  // 设置页盖在内容区上，标签内容保持挂载（编辑器的撤销历史、滚动位置不丢），运行侧页照常在右侧。
+  const showTabs = !focus && !settingsOpen && tabs.length > 1
   return (
     <main className="stage-panel">
       {showTabs && (
-        <StageTabs
-          tabs={tabs}
-          activeTabId={activeTab?.id ?? null}
-          onSelect={tabId => useEditorStore.getState().setActiveTab(tabId)}
-          onClose={requestCloseTab}
-          tabDomId={tabDomId}
-          panelId={STAGE_CONTENT_ID}
-        />
+        <div className="stage-tabbar">
+          <StageTabs
+            tabs={tabs}
+            activeTabId={activeTab?.id ?? null}
+            onSelect={tabId => useEditorStore.getState().setActiveTab(tabId)}
+            onClose={requestCloseTab}
+            tabDomId={tabDomId}
+            panelId={STAGE_CONTENT_ID}
+          />
+          <StageTabMenu tabs={tabs} activeTabId={activeTab?.id ?? null} onSelect={tabId => useEditorStore.getState().setActiveTab(tabId)} onCloseMany={closeMany} />
+        </div>
       )}
-      <div className="stage-body">
+      <div className="stage-body" onKeyDown={closeFloatingSheet} onFocus={event => skipCoveredFocus(event, sheetSlotRef.current)}>
+        {settingsOpen && <SettingsPage library={false} />}
         <div
           className="stage-content"
+          hidden={settingsOpen}
           id={STAGE_CONTENT_ID}
           tabIndex={-1}
           role={showTabs ? 'tabpanel' : undefined}
@@ -93,8 +193,8 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
               />
             )}
         </div>
-        {sheet && !focus && (
-          <div className="stage-sheet-slot" data-wide={sheet.tab === 'diagnostics' || undefined}>
+        {sheet?.kind === 'run' && !focus && (
+          <div ref={sheetSlotRef} className="stage-sheet-slot" data-wide={sheet.tab === 'diagnostics' || undefined}>
             <ErrorBoundary fallbackLabel={text('运行侧页渲染失败', 'Run sheet failed to render')}>
               <RunSheet sheet={sheet} />
             </ErrorBoundary>
@@ -111,6 +211,7 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
         cancelLabel={text('继续编辑', 'Keep editing')}
         onConfirm={confirmCloseTab}
       />
+      <CloseTabsConfirm pending={closingMany} onSettled={() => setClosingMany(null)} />
     </main>
   )
 }

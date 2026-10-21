@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -8,6 +9,7 @@ import type { DraftMeta } from '../../../services/draft-index'
 import {
   deriveChapters, deriveStages, focusChapter, landingStage, type WorkFacts,
 } from '../../../stores/navigation/stage-progress'
+import { useLocaleStore } from '../../../stores/locale-store'
 import StageSpine from '../StageSpine'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -36,15 +38,16 @@ function facts(overrides: Partial<WorkFacts> = {}): WorkFacts {
   return { config: READY_CONFIG, architecture: ALL_ARCHITECTURE, blueprints: blueprints(12), drafts: {}, runningChapters: new Set(), ...overrides }
 }
 
-/** 写作中的作品：1、2 章定稿，3 章已审稿（还有一份旧草稿归档），4 章已修稿，5 章草稿，6 章正在生成。 */
+/** 写作中的作品：1、2 章定稿，3 章已审稿（草稿上有一份审稿，还有一份旧草稿归档），4 章已修稿，5 章草稿，6 章正在生成。 */
 const WRITING = facts({
   drafts: {
     1: [draft(1, 1, 'finalized')],
     2: [draft(2, 2, 'finalized'), draft(2, 1, 'archived')],
-    3: [draft(3, 2, 'reviewed'), draft(3, 1, 'archived')],
+    3: [draft(3, 2, 'draft'), draft(3, 1, 'archived')],
     4: [draft(4, 1, 'revised')],
     5: [draft(5, 1, 'draft')],
   },
+  chapterFacts: { 32: { mergeable: [], stale: [], latestReview: { createdAt: '2026-10-12 03:00:00', cycleStatus: 'not-generated' }, lastMergedAt: null } },
   runningChapters: new Set([6]),
 })
 
@@ -71,7 +74,13 @@ describe('四个阶段的状态由项目数据派生', () => {
     expect(stages[1]).toMatchObject({ filled: 2, total: 4, progress: { state: 'active', ratio: 0.5 } })
     expect(stages[2]).toMatchObject({ planned: 3, total: 12, progress: { state: 'done' } })
     expect(stages[3].progress).toEqual({ state: 'todo' })
-    expect(landingStage(stages)).toBe('architecture')
+    // 用户决定 B（#394 §6）：已有蓝图时架构没写完不拉回架构，落点跳到下一个未完成的阶段。
+    expect(landingStage(stages)).toBe('manuscript')
+    expect(landingStage(deriveStages(facts({ architecture: { premise: true, characters: true }, blueprints: [] })))).toBe('architecture')
+    // 已有正文就落在写作位置：没有蓝图（大纲没写完或已写完）也不落到空的蓝图页。
+    const written = { blueprints: [], drafts: { 1: [draft(1, 1, 'finalized')] } }
+    expect(landingStage(deriveStages(facts({ ...written, architecture: { premise: true, characters: true } })))).toBe('manuscript')
+    expect(landingStage(deriveStages(facts(written)))).toBe('manuscript')
     expect(deriveStages(facts({ blueprints: [] }))[2].progress).toEqual({ state: 'todo' })
   })
 
@@ -123,7 +132,8 @@ describe('四个阶段的状态由项目数据派生', () => {
     ])
     expect(rows[2].draft?.version).toBe(2)
     expect(rows[1].draft?.status).toBe('finalized')
-    expect(focusChapter(rows)?.number).toBe(3)
+    // 用户决定（#407 第 2 轮）：几章都在写时落在最后一章在写的。
+    expect(focusChapter(rows)?.number).toBe(5)
   })
 })
 
@@ -205,6 +215,56 @@ describe('流程脊', () => {
     const container = await mount({ kind: 'stage', stage: 'blueprint' })
     expect(container.querySelector('[aria-label="章节"]')).toBeNull()
     expect(stageRows(container).map(row => row.getAttribute('aria-current'))).toEqual([null, null, 'page', null])
+  })
+
+  it('Tab 到当前阶段行时焦点环叠在当前行的浮起阴影上', async () => {
+    const container = await mount({ kind: 'stage', stage: 'blueprint' })
+    await userEvent.tab()
+    await userEvent.tab()
+    await userEvent.tab()
+    const current = stageRows(container)[2]
+    expect(document.activeElement).toBe(current)
+    expect(getComputedStyle(current).boxShadow).toMatch(/^rgb\(255, 254, 251\) 0px 0px 0px 2px, rgb\(44, 74, 140\) 0px 0px 0px 4px, /)
+  })
+
+  it('章节列表晚于当前章渲染时，当前章也滚进列表可视区', async () => {
+    const many = facts({ config: { ...READY_CONFIG, totalChapters: 80 }, blueprints: blueprints(80) })
+    const props = { stages: deriveStages(many), location: { kind: 'stage', stage: 'manuscript', chapter: 70 } as const,
+      onStage: () => undefined, onChapter: () => undefined, onResource: () => undefined, onSettings: () => undefined }
+    host = document.createElement('div')
+    host.className = 'paper-ink stage-shell'
+    host.style.cssText = 'height: 640px; width: 1280px;'
+    document.body.append(host)
+    root = createRoot(host)
+    await act(async () => root!.render(<div className="stage-frame"><StageSpine {...props} chapters={[]} /></div>))
+    await act(async () => root!.render(<div className="stage-frame"><StageSpine {...props} chapters={deriveChapters(many)} /></div>))
+    const list = host.querySelector<HTMLElement>('[aria-label="章节"]')!
+    const current = list.querySelector<HTMLElement>('[aria-current="page"]')!
+    expect(current.textContent).toContain('第70章标题')
+    const box = list.getBoundingClientRect()
+    const rect = current.getBoundingClientRect()
+    expect(list.scrollTop).toBeGreaterThan(0)
+    expect(rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1).toBe(true)
+  })
+
+  it('英文界面里只规划了一章时写 1 chapter，不写 1 chapters', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    try {
+      host = document.createElement('div')
+      host.className = 'paper-ink stage-shell'
+      document.body.append(host)
+      root = createRoot(host)
+      const meta = async (total: number) => {
+        const one = facts({ config: { ...READY_CONFIG, totalChapters: total }, blueprints: blueprints(1) })
+        await act(async () => root!.render(<StageSpine stages={deriveStages(one)} chapters={deriveChapters(one)} location={null}
+          onStage={() => undefined} onChapter={() => undefined} onResource={() => undefined} onSettings={() => undefined} />))
+        return host!.querySelector('[data-stage="blueprint"] .stage-row-meta')?.textContent
+      }
+      expect(await meta(1)).toBe('1 chapter')
+      expect(await meta(0)).toBe('1 chapter')
+    } finally {
+      useLocaleStore.setState({ locale: 'zh-CN' })
+    }
   })
 
   it('点击阶段、章节、作品资料与设置时，回调收到对应的去处', async () => {

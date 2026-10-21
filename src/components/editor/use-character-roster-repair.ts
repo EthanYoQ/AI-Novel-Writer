@@ -1,6 +1,7 @@
 import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { useCharacterStore } from '../../stores/character-store'
 import { useProjectStore } from '../../stores/project-store'
 import { ipc } from '../../services/ipc-client'
 import { migrateLegacyCharacterRoster } from '../../services/workflows/architecture-workflow'
@@ -15,14 +16,17 @@ import {
   type CharacterRosterRepairState,
 } from './character-roster-repair-controller'
 
-const EMPTY_STATE: CharacterRosterRepairState = {
+const EMPTY_STATE: CharacterRosterRepairState & { settled: boolean } = {
   snapshot: null,
   repairError: null,
   isRepairing: false,
+  settled: false,
 }
 
 interface SessionBoundRosterRepairState extends CharacterRosterRepairState {
   sessionKey: string
+  /** 本会话至少读完过一次名单（成功或失败），之前的 snapshot 为空不代表没有名单。 */
+  settled: boolean
 }
 
 export interface UseCharacterRosterRepairOptions {
@@ -61,7 +65,7 @@ export function useCharacterRosterRepair({
   })
 
   const setControllerState = useCallback((next: Partial<CharacterRosterRepairState>) => {
-    setState(previous => ({ ...previous, ...next, sessionKey }))
+    setState(previous => ({ ...previous, ...next, sessionKey, settled: (previous.sessionKey === sessionKey && previous.settled) || 'snapshot' in next }))
   }, [sessionKey])
 
   const port = useMemo<CharacterRosterRepairPort>(() => ({
@@ -96,6 +100,17 @@ export function useCharacterRosterRepair({
     }
   }, [controller])
 
+  // 角色名单保存后修订号前进，名单全文投影与名单状态随之重读。修订号从无到有是角色卡首次载入，
+  // 首次读取已由上面的 effect 负责，不再多读一次。
+  const rosterRevision = useCharacterStore(state => state.dataProjectKey === projectKey ? state.rosterRevision : null)
+  const seenRevision = useRef(rosterRevision)
+  useEffect(() => {
+    if (rosterRevision === seenRevision.current) return
+    const first = seenRevision.current === null
+    seenRevision.current = rosterRevision
+    if (!first && rosterRevision !== null) void controller.load()
+  }, [controller, rosterRevision])
+
   // The previous session's state is never rendered during a switch, even in
   // the small interval before the next read resolves. The old controller is
   // invalidated by the effect cleanup above.
@@ -104,6 +119,7 @@ export function useCharacterRosterRepair({
     snapshot: visibleState.snapshot,
     repairError: visibleState.repairError,
     isRepairing: visibleState.isRepairing,
+    settled: visibleState.settled,
     refresh,
     migrate,
   }

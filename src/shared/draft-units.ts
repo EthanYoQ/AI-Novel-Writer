@@ -33,6 +33,9 @@ export function countLegacyDraftUnitsV1(text: string): number {
   return chineseCharacters + englishWords + otherCharacters
 }
 
+// 单章视图首屏与编辑器挂载各数一次同一份正文，动作条每次渲染也数一次；1 万字一次约 1 ms，同一份文本只数一次。
+let lastCounted: { text: string; units: number } | null = null
+
 /**
  * Count the visible prose unit used by chapter targets, storage, and UI.
  *
@@ -44,6 +47,13 @@ export function countLegacyDraftUnitsV1(text: string): number {
  * - Whitespace, punctuation, and symbols (including emoji) do not count.
  */
 export function countDraftUnits(text: string): number {
+  if (lastCounted?.text === text) return lastCounted.units
+  const units = countUncached(text)
+  lastCounted = { text, units }
+  return units
+}
+
+function countUncached(text: string): number {
   const normalized = text.normalize('NFC')
   const hanCharacters = normalized.match(HAN_CHARACTER_PATTERN)?.length ?? 0
   const withoutHan = normalized.replace(HAN_CHARACTER_PATTERN, ' ')

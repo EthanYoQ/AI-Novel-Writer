@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react'
+import { useId, useRef, useState, type ReactNode } from 'react'
 import { countDraftUnits } from '../../../shared/draft-units'
 import { useLocaleStore } from '../../../stores/locale-store'
 import GenerationBudgetDiagnostics from '../../panels/GenerationBudgetDiagnostics'
@@ -9,6 +9,7 @@ import type { RunRecovery } from '../../run/use-run-recovery'
 import { Button } from '../../ui/Button'
 import { Check } from '../../ui/Check'
 import { InlineConfirm } from '../../ui/InlineConfirm'
+import { pluralEn } from '../../../shared/plural-en'
 
 type Text = (zh: string, en: string) => string
 
@@ -132,23 +133,25 @@ function DraftCard({ entry, recovery, text }: { entry: DraftEntry; recovery: Run
 /** 旧恢复候选：放弃前就地确认，写明放弃的字数无法找回。 */
 function CandidateCard({ entry, recovery, text }: { entry: CandidateEntry; recovery: RunRecovery; text: Text }) {
   const [confirming, setConfirming] = useState(false)
+  const discardButton = useRef<HTMLButtonElement>(null)
   const units = countDraftUnits(entry.text)
   return (
     <RecoveryShell title={entry.title} text={text} notes={[entry.staleNote]}
       actions={confirming
         ? (
           <InlineConfirm
-            message={text(`放弃后这 ${units} 字无法找回。`, `Discarding loses these ${units} characters for good.`)}
+            message={text(`放弃后这 ${units} 字无法找回。`, `Discarding loses the ${units} ${pluralEn(units, 'word')} for good.`)}
             confirmLabel={text('放弃', 'Discard')}
             cancelLabel={text('保留', 'Keep')}
             onConfirm={() => { setConfirming(false); recovery.discardCandidate(entry) }}
             onCancel={() => setConfirming(false)}
+            returnFocusRef={discardButton}
           />
         )
         : <>
           <Button variant="secondary" size="sm" disabled={!entry.canContinue} onClick={() => recovery.continueCandidate(entry)}>{text('继续编辑', 'Continue editing')}</Button>
           <Button variant="text" size="sm" onClick={() => recovery.copyCandidate(entry)}>{text('复制', 'Copy')}</Button>
-          <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>{text('放弃…', 'Discard…')}</Button>
+          <Button ref={discardButton} variant="danger" size="sm" onClick={() => setConfirming(true)}>{text('放弃…', 'Discard…')}</Button>
         </>}>
       <Excerpt text={entry.text} />
     </RecoveryShell>

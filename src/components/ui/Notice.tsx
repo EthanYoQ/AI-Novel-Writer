@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CircleCheck, Info, TriangleAlert, type LucideIcon } from 'lucide-react'
+import { CircleCheck, Info, OctagonAlert, TriangleAlert, type LucideIcon } from 'lucide-react'
 
 export type NoticeTone = 'info' | 'ok' | 'warn' | 'danger'
 
@@ -7,14 +7,14 @@ const toneIcons: Record<NoticeTone, LucideIcon> = {
   info: Info,
   ok: CircleCheck,
   warn: TriangleAlert,
-  danger: TriangleAlert,
+  danger: OctagonAlert,
 }
 
 interface NoticeProps {
   tone?: NoticeTone
   title: string
   children?: ReactNode
-  /** 提示条右侧的动作，通常是一个次按钮或文字按钮。 */
+  /** 提示条文字下方的动作，通常是一个次按钮或文字按钮。 */
   actions?: ReactNode
 }
 

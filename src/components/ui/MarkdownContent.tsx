@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react'
 import { Brain, ChevronRight } from 'lucide-react'
+import { useLocaleStore } from '../../stores/locale-store'
 
 interface MarkdownContentProps {
   content: string
@@ -8,7 +9,7 @@ interface MarkdownContentProps {
 
 /** 
  * Markdown 渲染组件（含 <think> 思考过程折叠支持）
- * 用于 Agent 对话、AI 输出面板的正文格式化显示
+ * 用于助手对话与运行卡片的模型输出
  */
 export default function MarkdownContent({ content, streaming }: MarkdownContentProps) {
   // 解析 <think> 标签：将内容拆分为 [thinking?, ...markdownSegments]
@@ -204,6 +205,7 @@ function renderInline(text: string): React.ReactNode {
 // ===== 代码块组件 =====
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  const text = useLocaleStore(s => s.text)
   const codeRef = useRef<HTMLElement>(null)
 
   const handleCopy = () => {
@@ -233,7 +235,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-border)')}
           onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
-          复制
+          {text('复制', 'Copy')}
         </button>
       </div>
       {/* 代码内容 */}
@@ -269,6 +271,7 @@ export function StreamingCursor() {
 // ===== ThinkingBlock — 可折叠的思考过程区块 =====
 
 function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
+  const text = useLocaleStore(s => s.text)
   const [expanded, setExpanded] = useState(false)
   const trimmed = content.trim()
   if (!trimmed && !streaming) return null
@@ -278,7 +281,7 @@ function ThinkingBlock({ content, streaming }: { content: string; streaming?: bo
       className="my-2 rounded-lg overflow-hidden transition-all duration-200"
       style={{
         border: '1px solid var(--color-border)',
-        backgroundColor: 'rgba(var(--accent-rgb, 99, 102, 241), 0.03)',
+        backgroundColor: 'color-mix(in srgb, var(--color-accent) 3%, transparent)',
       }}
     >
       {/* 头部：点击可展开/折叠 */}
@@ -291,7 +294,7 @@ function ThinkingBlock({ content, streaming }: { content: string; streaming?: bo
       >
         <Brain size={13} style={{ color: 'var(--color-accent)', opacity: 0.7 }} />
         <span className="font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-          {streaming ? '正在思考…' : '思考过程'}
+          {streaming ? text('正在思考…', 'Thinking…') : text('思考过程', 'Thinking process')}
         </span>
         {streaming && (
           <span

@@ -8,6 +8,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import * as lancedb from '@lancedb/lancedb'
+import * as stage from './redesign/pages/stage.mjs'
+import { resolveMacExecutable, resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const arg = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -115,7 +117,7 @@ function unpackedPackageProvenance() {
 
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const hashText = value => createHash('sha256').update(value).digest('hex')
-const exe = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'MacOS', 'AI小说作家') : path.join(packageDir ?? '', 'AI小说作家.exe')
+const exe = macMode && !macFixtureOnly ? resolveMacExecutable(macMountedApp) : resolveWindowsExecutable(packageDir ?? '')
 const asar = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'Resources', 'app.asar') : path.join(packageDir ?? '', 'resources', 'app.asar')
 if (macMode && !macFixtureOnly) assert(fs.statSync(exe).isFile() && fs.statSync(asar).isFile(), 'Mounted app executable or ASAR missing')
 if (winMode) {
@@ -217,7 +219,7 @@ async function captureNativeImportFailure(session) {
                   displayName: call.result?.displayName } })) })).catch(() => ({ unavailable: true })),
         session.page.evaluate(() => ({ alerts: [...document.querySelectorAll('[role="alert"], [role="alertdialog"], [role="status"]')]
           .filter(node => node.getClientRects().length).slice(0, 10).map(node => node.textContent?.slice(0, 500)),
-        projectTree: document.querySelector('.writer-project-tree')?.textContent?.slice(0, 2000) ?? null }))
+        shell: document.querySelector('[data-shell-presentation="stage"]')?.textContent?.slice(0, 2000) ?? null }))
           .catch(() => ({ unavailable: true })),
       ]).then(([main, renderer]) => ({ main, renderer })),
       new Promise(resolve => { timer = setTimeout(() => resolve({ unavailable: true, reason: 'diagnostic-timeout' }), 3_000) }),
@@ -447,30 +449,26 @@ async function launch(roots) {
   const app = await electron.launch({ executablePath: exe, cwd: macMode ? path.dirname(exe) : packageDir,
     args: [`--user-data-dir=${roots.userData}`], env, timeout: 30_000 })
   let page
-  let stage = 'electron-created'
+  let launchStage = 'electron-created'
   try {
     macStage('electron-created')
     page = await app.firstWindow({ timeout: 30_000 })
-    stage = 'first-window-ready'
+    launchStage = 'first-window-ready'
     macStage('first-window-ready')
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
-    stage = 'skin-ready'
-    macStage('skin-ready')
-    if (macMode || officialWindows) await page.evaluate(async () => {
-      const saved = await window.aiNovelAPI.invoke('config:set', { locale: 'zh-CN' })
-      if (!saved.success) throw new Error(saved.error || 'Mac A11 locale configuration failed')
-      const config = await window.aiNovelAPI.invoke('config:get')
-      if (config.locale !== 'zh-CN') throw new Error('Mac A11 locale configuration was not persisted')
-    })
-    await page.evaluate(() => {
-      const key = 'ai-novel-writer-appearance'
-      const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-      localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer',
-        revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
-    })
-    macStage('shell-configured')
-    await page.reload()
-    if (macMode || officialWindows) await page.locator('html[lang="zh-CN"]').waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForStage(page)
+    launchStage = 'shell-ready'
+    macStage('shell-ready')
+    if (macMode || officialWindows) {
+      await page.evaluate(async () => {
+        const saved = await window.aiNovelAPI.invoke('config:set', { locale: 'zh-CN' })
+        if (!saved.success) throw new Error(saved.error || 'Mac A11 locale configuration failed')
+        const config = await window.aiNovelAPI.invoke('config:get')
+        if (config.locale !== 'zh-CN') throw new Error('Mac A11 locale configuration was not persisted')
+      })
+      macStage('locale-configured')
+      await page.reload()
+      await page.locator('html[lang="zh-CN"]').waitFor({ state: 'visible', timeout: 30_000 })
+    }
     macStage('launch-ready')
     return { app, page }
   } catch (error) {
@@ -482,7 +480,7 @@ async function launch(roots) {
       try {
         const generationsRoot = path.join(roots.canonical, 'generations')
         const generations = fs.existsSync(generationsRoot) ? fs.readdirSync(generationsRoot) : []
-        const diagnostic = { stage, startupState: null, visibleAlert: null,
+        const diagnostic = { stage: launchStage, startupState: null, visibleAlert: null,
           legacyConfigHasBom: configHasBom(path.join(roots.legacy, 'config.json')),
           canonicalConfigHasBom: generations.length === 1
             ? configHasBom(path.join(generationsRoot, generations[0], 'config.json')) : null }
@@ -504,20 +502,18 @@ async function launch(roots) {
         }
         receipt.startupDiagnostic = diagnostic
       } catch {
-        receipt.startupDiagnostic = { stage, unavailable: true }
+        receipt.startupDiagnostic = { stage: launchStage, unavailable: true }
       } finally { await closeWindowsApplication(app) }
     }
     throw error
   }
 }
 
+/** 启动后停在书房：纸墨外壳就绪、收起迁移通知；打开着作品时回到书房。 */
 async function home(page) {
-  await page.locator('.writer-shell[data-shell-presentation="writer"][data-shell-variant="v3"]')
-    .waitFor({ state: 'visible', timeout: 30_000 })
-  const migrationNotice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await migrationNotice.isVisible()) await migrationNotice.getByRole('button', { name: '知道了', exact: true }).click()
-  if (!await page.locator('.writer-welcome').isVisible()) await page.locator('.writer-left-rail button[title="欢迎页"]').click()
-  await page.locator('.writer-welcome').waitFor({ state: 'visible' })
+  await stage.waitForStage(page)
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
 }
 
 async function observeRequests(session) {
@@ -647,7 +643,7 @@ async function verify(source) {
       }
     }, { sourceCopy, targetParent })
     v025Stage('import-start')
-    await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
+    await stage.importLegacyCopy(session.page)
     const target = path.join(targetParent, 's-新版副本')
     if (legacyV025) {
       const code = 'LEGACY_IMPORT_ROSTER_UNAVAILABLE'
@@ -661,7 +657,7 @@ async function verify(source) {
       const recent = await session.page.evaluate(() => window.aiNovelAPI.invoke('project:recent-list'))
       assert(!recent.some(entry => path.resolve(entry.path).toLowerCase() === path.resolve(target).toLowerCase()),
         'Rejected target entered recent projects')
-      assert.equal(await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《升级保留验证小说》' }).count(),
+      assert.equal(await stage.shelf(session.page).getByRole('button', { name: '预览《升级保留验证小说》' }).count(),
         recent.filter(entry => path.resolve(entry.path).toLowerCase() === path.resolve(source.path).toLowerCase()).length,
         'Rejected target entered shelf')
       assert.deepEqual(inventory(sourceCopy), copiedBefore, 'Scratch source changed on rejection')
@@ -685,12 +681,11 @@ async function verify(source) {
       return
     }
     try {
-      await session.page.locator('.writer-project-tree').getByText('升级保留验证小说', { exact: true })
-        .waitFor({ state: 'visible', timeout: 30_000 })
+      await stage.waitForWork(session.page, '升级保留验证小说')
     } catch (error) {
       receipt.diagnostic = { dialogs: await session.app.evaluate(() => globalThis.__a11Dialogs),
         notices: await session.page.locator('[role="status"]').allInnerTexts(),
-        welcome: await session.page.locator('.writer-welcome').innerText().catch(() => null),
+        library: await session.page.locator('.stage-library').innerText().catch(() => null),
         targetExists: fs.existsSync(target), targetParentEntries: fs.readdirSync(targetParent) }
       throw error
     }
@@ -747,9 +742,7 @@ async function verify(source) {
     v025Stage('import-verified')
     if (editSaveProof) {
       v025Stage('save-start')
-      await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
-      const editor = session.page.locator('.cm-content[contenteditable="true"]')
-      await editor.waitFor({ state: 'visible' })
+      const editor = await stage.openChapterVersion(session.page, 1, 1)
       const originalBody = await editorBody(editor)
       assert(draftBodies(target).includes(originalBody), 'Opened draft differs from imported author body')
       assert(!originalBody.includes(' A11 目标补写'))
@@ -758,9 +751,8 @@ async function verify(source) {
       await session.page.keyboard.press('Control+End')
       await session.page.keyboard.type(' A11 目标补写')
       assert.equal(await editorBody(editor), savedBody)
-      await session.page.locator('[role="status"]').filter({ hasText: /^未保存$/ }).last().waitFor({ state: 'visible' })
-      await session.page.locator('button[title="保存（⌘S）"]').click()
-      await session.page.locator('[role="status"]').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
+      await stage.saveStatus(session.page).filter({ hasText: /^未保存$/ }).waitFor({ state: 'visible' })
+      await stage.saveProse(session.page)
       assert(draftBodies(target).includes(savedBody), 'Target draft save did not persist')
       assert.deepEqual(inventory(sourceCopy), copiedBefore)
       assert.deepEqual(inventory(source.path), originalBefore)
@@ -799,18 +791,16 @@ async function verify(source) {
       const recent = await session.page.evaluate(() => window.aiNovelAPI.invoke('project:recent-list'))
       const index = recent.findIndex(entry => path.resolve(entry.path).toLowerCase() === path.resolve(target).toLowerCase())
       assert(index >= 0, 'Imported target missing from recent projects')
-      await session.page.locator('.writer-shelf li').nth(index).getByRole('button', { name: '打开《升级保留验证小说》' }).click()
-    } else await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《升级保留验证小说》' }).click()
-    await session.page.locator('.writer-project-tree').getByText('升级保留验证小说', { exact: true })
-      .waitFor({ state: 'visible', timeout: 30_000 })
+      await stage.openFromLibraryAt(session.page, '升级保留验证小说', index)
+    } else await stage.openFromLibrary(session.page, '升级保留验证小说')
+    await stage.waitForWork(session.page, '升级保留验证小说')
     if (editSaveProof) {
       if (legacyV025) {
         const runtime = await session.page.evaluate(() => window.aiNovelAPI.invoke('project:get-runtime-context'))
         assert.equal(path.resolve(runtime.activeProjectPath).toLowerCase(), path.resolve(target).toLowerCase(), 'Reopened another recent project')
         assert.equal(runtime.dbReady, true)
       }
-      await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
-      const editor = session.page.locator('.cm-content[contenteditable="true"]')
+      const editor = await stage.openChapterVersion(session.page, 1, 1)
       assert.equal(await editorBody(editor), savedBody)
       assert(draftBodies(target).includes(savedBody))
       receipt.steps.push({ stepId: `${source.version}-target-edit-reopen`, outcome: 'PASS',
@@ -892,10 +882,9 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
           return { response: 1, checkboxChecked: false }
         }
       }, { sourceCopy, targetParent })
-      await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
+      await stage.importLegacyCopy(session.page)
       const secondTarget = `${target}-2`
-      await session.page.locator('.writer-project-tree').getByText('A11 旧源后续独立修改', { exact: true })
-        .waitFor({ state: 'visible', timeout: 30_000 })
+      await stage.waitForWork(session.page, 'A11 旧源后续独立修改')
       const secondProjectId = JSON.parse(fs.readFileSync(path.join(secondTarget, '.ai-novel', 'project.json'), 'utf8')).projectId
       assert.notEqual(secondProjectId, firstProjectId, 'Repeated import reused an existing identity')
       assert.deepEqual(inventory(target), firstTargetBefore, 'Existing target was overwritten')
@@ -1055,13 +1044,12 @@ async function verifyMac() {
     macStage('import-start')
     if (nativePicker) receipt.nativePickerProcess = { playwrightProcessPid: session.app.process().pid,
       electronMainPid: await session.app.evaluate(() => process.pid) }
-    await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
+    await stage.importLegacyCopy(session.page)
     if (nativePicker) {
       chooseNativeDirectory('选择旧版小说项目文件夹', source, receipt.nativePickerProcess.electronMainPid)
       chooseNativeDirectory('选择恢复副本所在文件夹', targetParent, receipt.nativePickerProcess.electronMainPid)
     }
-    await session.page.locator('.writer-project-tree').getByText('p', { exact: true })
-      .waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForWork(session.page, 'p')
     assert(fs.existsSync(path.join(target, '.ai-novel', 'project.db')), 'No published target database')
     assert.deepEqual((await session.app.evaluate(() => globalThis.__a11Dialogs)).map(item => item.type), ['open', 'open', 'confirm'])
     assert.deepEqual(inventory(source), seeded.files, 'Official old-app source changed during import')
@@ -1092,7 +1080,7 @@ async function verifyMac() {
     macStage('import-verified')
 
     macStage('editor-open')
-    const draftItem = session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first()
+    const draftItem = stage.chapterButton(session.page, 1)
     try {
       await draftItem.click()
     } catch (error) {
@@ -1120,8 +1108,8 @@ async function verifyMac() {
       }
       throw error
     }
-    const editor = session.page.locator('.cm-content[contenteditable="true"]')
-    await editor.waitFor({ state: 'visible' })
+    // 导入的作品第 1 章有第一版草稿与作者修稿，打开时落在最新一稿；旅程编辑的是第一版。
+    const editor = await stage.openChapterVersion(session.page, 1, 1)
     const openedBody = await editorBody(editor)
     assert.equal(openedBody.replaceAll('\r\n', '\n'), macBody.replaceAll('\r\n', '\n'))
     macStage('editor-edit')
@@ -1129,11 +1117,9 @@ async function verifyMac() {
     await session.page.keyboard.press('ControlOrMeta+A')
     await session.page.keyboard.insertText(macSavedBody)
     assert.equal(await editorBody(editor), macSavedBody)
-    await session.page.locator('[role="status"]').filter({ hasText: /^未保存$/ }).last().waitFor({ state: 'visible' })
+    await stage.saveStatus(session.page).filter({ hasText: /^未保存$/ }).waitFor({ state: 'visible' })
     macStage('save-start')
-    if (officialWindows) await session.page.keyboard.press('Control+s')
-    else await session.page.locator('button[title="保存（⌘S）"]').click()
-    await session.page.locator('[role="status"]').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
+    await stage.saveProse(session.page)
     assert(draftBodies(target).includes(macSavedBody), 'Edited target body was not saved')
     assert.equal(macLlmCalls(target), 0)
     assert.deepEqual(inventory(source), seeded.files)
@@ -1150,12 +1136,10 @@ async function verifyMac() {
     macStage('home-ready')
     requestCounts = await observeRequests(session)
     macStage('reopen-start')
-    await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《p》' }).click()
-    await session.page.locator('.writer-project-tree').getByText('p', { exact: true })
-      .waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.openFromLibrary(session.page, 'p')
+    await stage.waitForWork(session.page, 'p')
     macStage('editor-open')
-    await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
-    const reopenedBody = await editorBody(session.page.locator('.cm-content[contenteditable="true"]'))
+    const reopenedBody = await editorBody(await stage.openChapterVersion(session.page, 1, 1))
     assert.equal(reopenedBody, macSavedBody)
     assert(draftBodies(target).includes(macSavedBody))
     const reopenRequests = await requestCounts()

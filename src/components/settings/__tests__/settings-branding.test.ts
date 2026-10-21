@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const brandingSources = [
-  'src/components/settings/SettingsModal.tsx',
+  'src/components/stage/settings/AboutSection.tsx',
   'electron/main.ts',
   'package.json',
   'pnpm-lock.yaml',
@@ -12,7 +12,9 @@ const brandingSources = [
 ]
 
 const visibleSettingsSources = [
-  'src/components/settings/SettingsModal.tsx',
+  'src/components/stage/settings/StageSettings.tsx',
+  'src/components/stage/settings/AboutSection.tsx',
+  'src/components/settings/ModelForm.tsx',
   'src/components/settings/PromptSettings.tsx',
 ]
 

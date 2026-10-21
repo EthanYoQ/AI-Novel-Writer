@@ -25,11 +25,6 @@ import {
   releaseOfficialHomepageSmokeWasRequested,
   runReleaseOfficialHomepageSmoke,
 } from './services/release-official-homepage-smoke'
-import {
-  claimReleaseSkinSmokeInvocation,
-  releaseSkinSmokeWasRequested,
-  runReleaseSkinSmoke,
-} from './services/release-skin-smoke'
 import { registerOfficialHomepageController } from './controllers/official-homepage-controller'
 import type { UpdateState } from './services/update-service'
 import {
@@ -39,11 +34,11 @@ import {
 import { configureSingleInstanceRuntime } from './services/single-instance-runtime'
 import { installWindowCloseGuard } from './controllers/window-controller'
 import { registerStartupController } from './controllers/startup-controller'
-import { resolveGlobalDataRoots } from './services/app-data-locator'
+import { resolveDefaultUserData, resolveGlobalDataRoots } from './services/app-data-locator'
 import { runGlobalDataMigration, activateGlobalData } from './services/global-data-migration'
-import { skinService } from './services/skin-service'
 import { ensureVelaHome } from './utils/config-utils'
 import type { StartupBlockedCode, StartupMigrationNotice } from '../src/shared/startup-contract'
+import { APP_BRAND } from '../src/shared/brand'
 
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
@@ -80,6 +75,9 @@ const explicitUserData = app.commandLine.getSwitchValue('user-data-dir')
 if (explicitUserData) {
   if (!path.isAbsolute(explicitUserData)) throw new Error('USER_DATA_PATH_MUST_BE_ABSOLUTE')
   app.setPath('userData', explicitUserData)
+} else {
+  // 必须早于下面的单实例锁：锁按 userData 路径区分，新旧版本要锁同一处才会互斥。
+  app.setPath('userData', resolveDefaultUserData(app.getPath('appData')))
 }
 
 // The installed-package vector qualification is deliberately opt-in and
@@ -87,16 +85,12 @@ if (explicitUserData) {
 // must never turn into a normal interactive application launch.
 const releaseVectorSmokeRequested = releaseVectorSmokeWasRequested(process.argv)
 const releaseHomepageSmokeRequested = releaseOfficialHomepageSmokeWasRequested(process.argv)
-const releaseSkinSmokeRequested = releaseSkinSmokeWasRequested(process.argv)
-const releaseSmokeRequested = releaseVectorSmokeRequested || releaseHomepageSmokeRequested || releaseSkinSmokeRequested
+const releaseSmokeRequested = releaseVectorSmokeRequested || releaseHomepageSmokeRequested
 const releaseVectorSmokeInvocation = releaseVectorSmokeRequested
   ? claimReleaseVectorSmokeInvocation(process.argv, process.env)
   : undefined
 const releaseHomepageSmokeInvocation = releaseHomepageSmokeRequested
   ? claimReleaseOfficialHomepageSmokeInvocation(process.argv, process.env)
-  : undefined
-const releaseSkinSmokeInvocation = releaseSkinSmokeRequested
-  ? claimReleaseSkinSmokeInvocation(process.argv, process.env)
   : undefined
 const applicationInstanceAccepted = configureSingleInstanceRuntime({
   releaseSmokeRequested,
@@ -124,9 +118,7 @@ if (releaseSmokeRequested) {
   reportReleaseSmokeStage('bootstrap')
   const timeoutDescription = releaseVectorSmokeRequested
     ? 'Packaged vector smoke timed out after 90 seconds'
-    : releaseHomepageSmokeRequested
-      ? 'Packaged official homepage smoke timed out after 90 seconds'
-      : 'Packaged skin smoke timed out after 90 seconds'
+    : 'Packaged official homepage smoke timed out after 90 seconds'
   releaseSmokeTimeout = setTimeout(() => {
     console.error(`[AI Novel release smoke] ${timeoutDescription}; last stage=${releaseSmokeStage}`)
     app.exit(1)
@@ -146,7 +138,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 640,
-    title: startupBlockedCode ? 'AI Novel Writer' : mainT(app.getLocale(), 'app.windowTitle'),
+    title: startupBlockedCode ? APP_BRAND.enName : mainT(app.getLocale(), 'app.windowTitle'),
     icon: path.join(process.env.APP_ROOT!, 'build', 'icon.png'),
     // 使用应用内自绘标题栏，避免 Windows 原生标题栏与棕色标题栏重复显示。
     frame: Boolean(startupBlockedCode),
@@ -161,7 +153,8 @@ function createWindow() {
   // A diagnostic-only window has no editor and no business close responder.
   if (!startupBlockedCode) installWindowCloseGuard(win)
 
-  if (process.platform === 'darwin') {
+  // 打包后的 Dock 图标来自 icon.icns（按 macOS 网格留了边）；icon.png 是满版的，只在开发时顶上。
+  if (process.platform === 'darwin' && !app.isPackaged) {
     app.dock?.setIcon(path.join(process.env.APP_ROOT!, 'build', 'icon.png'))
   }
 
@@ -228,10 +221,8 @@ app.whenReady().then(async () => {
   if (releaseSmokeRequested) {
     const requestedSmokeModeCount = Number(releaseVectorSmokeRequested)
       + Number(releaseHomepageSmokeRequested)
-      + Number(releaseSkinSmokeRequested)
     const invocationCount = Number(releaseVectorSmokeInvocation !== undefined)
       + Number(releaseHomepageSmokeInvocation !== undefined)
-      + Number(releaseSkinSmokeInvocation !== undefined)
     if (requestedSmokeModeCount !== 1 || invocationCount !== 1) {
       throw new Error('Invalid packaged smoke invocation: exactly one environment and one-time CLI token pair must match')
     }
@@ -242,18 +233,10 @@ app.whenReady().then(async () => {
     // The profile is isolated, but competing writers to that profile still require exclusion.
     ownsInstanceLock = app.requestSingleInstanceLock()
     if (!prepareGlobalRuntime()) throw new Error('GLOBAL_SMOKE_STARTUP_BLOCKED')
-    reportReleaseSmokeStage(
-      releaseVectorSmokeInvocation
-        ? 'vector-invocation-valid'
-        : releaseHomepageSmokeInvocation
-          ? 'official-homepage-invocation-valid'
-          : 'skin-invocation-valid',
-    )
+    reportReleaseSmokeStage(releaseVectorSmokeInvocation ? 'vector-invocation-valid' : 'official-homepage-invocation-valid')
     const evidence = releaseVectorSmokeInvocation
       ? await runReleaseVectorSmoke(releaseVectorSmokeInvocation.token)
-      : releaseHomepageSmokeInvocation
-        ? await runPackagedOfficialHomepageSmoke(releaseHomepageSmokeInvocation.token)
-        : runReleaseSkinSmoke(releaseSkinSmokeInvocation!.token)
+      : await runPackagedOfficialHomepageSmoke(releaseHomepageSmokeInvocation!.token)
     reportReleaseSmokeStage('evidence-ready')
     process.stdout.write(`${JSON.stringify(evidence)}\n`)
     clearReleaseSmokeTimeout()
@@ -265,7 +248,7 @@ app.whenReady().then(async () => {
     ipc: ipcMain,
     getTrustedSender: () => win?.webContents ?? null,
     rendererUrl: VITE_DEV_SERVER_URL || pathToFileURL(path.join(RENDERER_DIST, 'index.html')).href,
-    getSnapshot: () => startupGeneration ? skinService.getStartupSnapshot(startupGeneration) : null,
+    getGlobalGeneration: () => startupGeneration,
     getBlockedCode: () => startupBlockedCode,
     getMigrationNotice: () => startupMigrationNotice,
   })
@@ -328,13 +311,6 @@ function prepareGlobalRuntime(): boolean {
   }
   activateGlobalData(migrated)
   ensureVelaHome()
-  try {
-    skinService.initialize()
-    skinService.getStartupSnapshot(migrated.globalGeneration)
-  } catch {
-    startupBlockedCode = 'SKIN_NOT_READY'
-    return false
-  }
   startupGeneration = migrated.globalGeneration
   startupMigrationNotice = { legacySourceIgnored: migrated.legacySourceIgnored, preservedUnknownCount: migrated.preservedUnknownCount }
   startupBlockedCode = undefined

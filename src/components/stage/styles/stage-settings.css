@@ -1,0 +1,536 @@
+/* ================= 设置页 ================= */
+/* 结构见 prototype/settings*.html：左侧按常用、高级、其他分组，右侧一页；视觉用纸墨令牌。 */
+.stage-settings {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+
+.stage-set-nav {
+  width: 232px;
+  flex: none;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-4) var(--s-3);
+  border-right: 1px solid var(--rule);
+  overflow: auto;
+}
+
+.stage-shell .stage-set-back {
+  align-self: flex-start;
+  margin: 0 0 var(--s-4) -2px;
+}
+
+.stage-set-nav-title {
+  margin: 0 10px var(--s-4);
+  font: 600 22px/1.3 var(--font-display);
+  color: var(--ink);
+}
+
+.stage-set-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--s-5);
+}
+
+.stage-set-group-label {
+  margin: 0;
+  padding: 0 10px 6px;
+  font-size: var(--fs-11);
+  letter-spacing: .16em;
+  color: var(--ink-3);
+}
+
+.stage-set-link {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-2);
+  font: 400 var(--fs-14)/1 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.stage-set-link-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 必需页的小签：平时是一枚淡墨签，没配好时换成提醒色，导航里一眼看出还差哪一步 */
+.stage-set-required {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  box-shadow: inset 0 0 0 1px var(--rule-strong);
+  color: var(--ink-2);
+  font: 500 var(--fs-11)/1 var(--font-ui);
+  letter-spacing: .04em;
+  vertical-align: middle;
+}
+
+.stage-set-required[data-missing] {
+  background: var(--warn-soft);
+  box-shadow: none;
+  /* 11px 小字压在提醒底色上，纯提醒色只有 4.4:1；掺一点墨色把对比拉过 4.5 */
+  color: color-mix(in srgb, var(--warn) 80%, var(--ink));
+}
+
+.stage-set-titleline {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.stage-set-link:hover {
+  background: var(--sunken);
+  color: var(--ink);
+}
+
+.stage-set-link:active {
+  background: var(--wash-strong);
+  color: var(--ink);
+}
+
+.stage-set-link[aria-current='page'] {
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 500;
+  box-shadow: 0 1px 2px var(--rule), 0 0 0 1px var(--rule);
+}
+
+.stage-set-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.stage-set-body {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.stage-set-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--s-12) var(--s-12) var(--s-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-6);
+}
+
+.stage-set-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4) var(--s-6);
+}
+
+/* 中文的最小内容宽度只有一个字：不给底线时，窄窗口下标题会被右侧按钮挤成一字一行；放不下就让按钮换到下一行 */
+.stage-set-head-text {
+  flex: 1 1 16em;
+  min-width: 0;
+}
+
+.stage-set-title {
+  margin: 0;
+  font: 600 28px/1.3 var(--font-display);
+  color: var(--ink);
+}
+
+.stage-set-lede {
+  margin: 6px 0 0;
+  max-width: 38em;
+  font-size: var(--fs-14);
+  color: var(--ink-2);
+}
+
+/* ---------- 设置行 ---------- */
+.stage-set-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.stage-set-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px var(--s-6);
+  padding: var(--s-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+.stage-set-rows > .stage-set-row:first-child {
+  border-top: 0;
+  padding-top: var(--s-1);
+}
+
+.stage-set-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.stage-set-row-title {
+  display: block;
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.stage-set-row-desc {
+  margin: 3px 0 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+  text-wrap: balance;
+}
+
+.stage-set-row-extra {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+.stage-set-row-ctl {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+}
+
+.stage-set-row-ctl .stage-select {
+  width: 240px;
+}
+
+.stage-set-error {
+  margin: 6px 0 0;
+  font-size: var(--fs-12);
+  color: var(--danger);
+}
+
+.stage-set-themes {
+  display: flex;
+  gap: 10px;
+}
+
+.stage-set-theme {
+  width: 136px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+  padding: var(--s-3) var(--s-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.stage-set-theme > svg {
+  grid-row: span 2;
+  color: var(--ink-2);
+}
+
+.stage-set-theme:active {
+  background: var(--paper-press);
+}
+
+.stage-set-theme[aria-checked='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.stage-set-theme[aria-checked='true'] > svg {
+  color: var(--accent);
+}
+
+.stage-set-theme:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.stage-set-theme-name {
+  font-weight: 600;
+}
+
+.stage-set-theme-desc {
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-set-font-sample {
+  margin: var(--s-3) 0 0;
+  padding: 10px var(--s-3);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--rule);
+  font-size: var(--fs-16);
+  line-height: 1.9;
+  color: var(--ink);
+}
+
+.stage-set-zoom {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.stage-set-zoom-value {
+  min-width: 56px;
+  text-align: center;
+  font: italic 400 var(--fs-20)/1 var(--font-num);
+  color: var(--ink);
+}
+
+/* ---------- 模型列表 ---------- */
+.stage-set-models {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stage-set-model {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+
+.stage-set-model[data-default] {
+  box-shadow: 0 0 0 1px var(--accent-line);
+}
+
+.stage-set-model-mark {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+.stage-set-model[data-default] .stage-set-model-mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.stage-set-model-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.stage-set-model-name {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-weight: 600;
+}
+
+.stage-set-model-name > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stage-set-model-meta {
+  margin: 2px 0 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stage-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--s-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 500 var(--fs-11)/1 var(--font-ui);
+}
+
+.stage-set-card {
+  padding: var(--s-5) var(--s-6);
+  border-radius: var(--radius-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+
+.stage-set-legacy {
+  min-width: 0;
+  color: var(--ink);
+}
+
+/*
+ * 沿用旧组件的几页（提示词模板、写作 Skills、项目备份、模型编辑）向新页的骨架靠：卡片是纸面加细边、14px 圆角，
+ * 输入框与下拉 40px 高、大圆角，聚焦用 --focus-ring。按钮外观由 RD-V 的统一视觉层处理，这里不动。
+ */
+.stage-shell .stage-set-legacy {
+  --color-panel: var(--paper);
+  --color-border: var(--rule);
+}
+
+.stage-shell .stage-set-legacy .rounded-xl {
+  border-radius: var(--radius-panel);
+}
+
+.stage-shell .stage-set-legacy :is(input:not([type='checkbox'], [type='radio'], [type='range']), select, textarea) {
+  border-color: var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background-color: var(--paper);
+  font-size: var(--fs-14);
+}
+
+.stage-shell .stage-set-legacy :is(input:not([type='checkbox'], [type='radio'], [type='range']), select) {
+  height: 40px;
+}
+
+.stage-shell .stage-set-legacy :is(input, select, textarea):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ---------- 网络代理 ---------- */
+.stage-set-form {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr) 120px;
+  gap: var(--s-3);
+  padding: var(--s-4) 0;
+  border-top: 1px solid var(--rule);
+}
+
+.stage-set-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.stage-set-field > label {
+  font-size: var(--fs-12);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.stage-set-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-3);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule);
+}
+
+.stage-set-actions .stage-set-error {
+  margin: 0 auto 0 0;
+}
+
+.stage-set-saved {
+  font-size: var(--fs-12);
+  color: var(--ok);
+}
+
+/* ---------- 关于与更新 ---------- */
+.stage-set-about {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-1) 0 var(--s-4);
+}
+
+.stage-set-about-mark {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-panel);
+  background: var(--ink);
+}
+
+.stage-set-about-mark::before {
+  content: "";
+  width: 34px;
+  height: 38px;
+  background: var(--frame);
+  mask: url("../../../assets/brand/pagekin-mark.svg") center / contain no-repeat;
+}
+
+.stage-set-about-name {
+  margin: 0;
+  font: 600 22px/1.3 var(--font-display);
+}
+
+.stage-set-about-former {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-set-about-version {
+  margin: 2px 0 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-set-about-version > .pi-num {
+  font-size: var(--fs-16);
+  color: var(--ink-2);
+}
+
+.stage-set-about-text {
+  margin: 0 0 6px;
+  max-width: 36em;
+  font-size: var(--fs-14);
+  line-height: 1.8;
+  color: var(--ink-2);
+}
+
+.stage-update-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.stage-update-settings > .stage-set-row {
+  padding-bottom: 0;
+}
+
+.stage-shell .stage-set-legacy .relative:has(> input) > svg.absolute {
+  top: 50%;
+  transform: translateY(-50%);
+}

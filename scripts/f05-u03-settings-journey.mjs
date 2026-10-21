@@ -9,7 +9,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as arch from './redesign/pages/architecture.mjs'
+import * as stage from './redesign/pages/stage.mjs'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
@@ -21,7 +24,7 @@ assert((fixedPackage && !priorPath) || (!fixedPackage && priorPath),
   'pass --reuse-package=<prior build receipt> or --package-dir=<win-unpacked> with hashes')
 const version = JSON.parse(fs.readFileSync(path.join(repository, 'package.json'), 'utf8')).version
 const packageDir = path.resolve(fixedPackage ?? path.join(repository, 'release', version, 'win-unpacked'))
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 const fileHash = file => sha256(fs.readFileSync(file))
@@ -96,18 +99,16 @@ const root = () => {
   assert.equal(generations.length, 1)
   return path.join(profile.canonical, 'generations', generations[0])
 }
-const settings = page => page.getByRole('button', { name: '关闭设置' }).locator('xpath=ancestor::div[contains(@class,"relative flex")]')
-const writer = page => page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]')
-async function dismissStartupNotice(page) {
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) {
-    await notice.getByRole('button', { name: '知道了', exact: true }).click()
-    await notice.waitFor({ state: 'detached' })
-  }
-}
+// 纸墨外壳的设置是外壳里的一页：作品打开着时从流程脊底部进入，左侧「设置分组」切页，「返回作品」收起。
+const settings = page => stage.root(page)
+const dismissStartupNotice = page => stage.dismissMigrationNotice(page)
 async function openSection(page, name) {
-  await settings(page).getByRole('button', { name, exact: true }).click()
-  await settings(page).getByRole('heading', { name, exact: true }).waitFor()
+  await stage.showSettingsPage(page, name)
+}
+async function openWork(page, name) {
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, name)
+  await stage.waitForWork(page, name)
 }
 
 function readGeneration(projectPath) {
@@ -211,31 +212,23 @@ async function main() {
       }
     }, server.address().port)
     const page = await app.firstWindow({ timeout: 30_000 })
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForStage(page)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-    await page.evaluate(() => {
-      const key = 'ai-novel-writer-appearance'
-      const appearance = JSON.parse(localStorage.getItem(key))
-      appearance.shellPreference = 'writer'
-      appearance.revision += 1
-      appearance.origin = 'author'
-      localStorage.setItem(key, JSON.stringify(appearance))
-    })
-    await page.reload()
-    await writer(page).waitFor({ state: 'visible' })
     await dismissStartupNotice(page)
     const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: 'U03-settings',
       genre: 'fixture', targetAudience: 'fixture', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     await page.reload()
-    await page.getByRole('button', { name: '打开《U03-settings》' }).click()
-    assert.equal(path.resolve((await invoke(page, 'project:get-runtime-context')).activeProjectPath), path.resolve(created.projectPath))
+    await stage.waitForStage(page)
     await dismissStartupNotice(page)
-    pass('writer-project-entry', null, 'isolated packaged V3 Writer opened fixture project')
+    await openWork(page, 'U03-settings')
+    assert.equal(path.resolve((await invoke(page, 'project:get-runtime-context')).activeProjectPath), path.resolve(created.projectPath))
+    pass('stage-project-entry', null, 'isolated packaged stage shell opened the fixture project from the library')
 
     currentStep = 'U03.A05-model-discovery'
-    await writer(page).locator('.writer-left-rail button[title="设置"]').click()
-    await settings(page).getByRole('button', { name: '添加生成模型' }).click()
+    await stage.openSettings(page)
+    await stage.root(page).getByRole('heading', { level: 1, name: 'AI 模型' }).waitFor()
+    await settings(page).getByRole('button', { name: '添加模型' }).first().click()
     const form = settings(page).getByPlaceholder('如：DeepSeek 主力 / GPT-4o 备用').locator('xpath=ancestor::div[contains(@class,"rounded-xl p-5")]')
     await form.locator('select').first().selectOption('custom')
     await form.getByPlaceholder('https://api.openai.com').fill(endpoint)
@@ -244,7 +237,7 @@ async function main() {
     await form.getByRole('combobox', { name: '端点模型列表' }).waitFor({ timeout: 5000 })
     assert.deepEqual(fixture.requests, [{ method: 'GET', path: '/v1/models', authorized: true }])
     assert.equal(await form.getByRole('combobox', { name: '端点模型列表' }).locator(`option[value="${discoveredModelName}"]`).count(), 1)
-    pass('U03.A05-model-discovery', 'U03.A05', 'V3 unsaved model form fetched and displayed the controlled endpoint model list')
+    pass('U03.A05-model-discovery', 'U03.A05', 'stage unsaved model form fetched and displayed the controlled endpoint model list')
 
     currentStep = 'U03.A06-model-parameters'
     await form.getByRole('combobox', { name: '端点模型列表' }).selectOption(discoveredModelName)
@@ -253,6 +246,8 @@ async function main() {
     await form.getByRole('button', { name: '高级设置' }).click()
     await form.getByLabel('温度').fill('0.35')
     await form.getByLabel('最大输出 Token').fill('1536')
+    // 模型输出容量是单独的一栏（自定义端点默认 32768），与本次最大输出一起设成 1536。
+    await form.getByLabel('模型输出容量').fill('1536')
     await form.getByLabel('模型推理覆盖').selectOption('low')
     const modelFile = path.join(root(), 'models.json')
     await form.getByRole('button', { name: '保存配置' }).click()
@@ -263,8 +258,8 @@ async function main() {
     assert.equal(savedModel.baseUrl, endpoint)
     assert.equal(savedModel.apiKey, 'f05-u03-offline-only')
     await settings(page).getByText('U03 隔离模型', { exact: true }).waitFor()
-    pass('U03.A06-model-parameters', 'U03.A06', 'V3 saved the selected model, temperature, context/output limits, and reasoning preference to isolated canonical models.json')
-    await settings(page).getByRole('button', { name: '关闭设置' }).click()
+    pass('U03.A06-model-parameters', 'U03.A06', 'stage saved the selected model, temperature, context/output limits, and reasoning preference to isolated canonical models.json')
+    await stage.closeSettings(page)
 
     currentStep = 'U03.A07-request-parameters'
     const generated = await invoke(page, 'llm:generate', {
@@ -279,13 +274,12 @@ async function main() {
     pass('U03.A07-request-parameters', 'U03.A07', 'The saved V3 model drove a main-process request whose controlled endpoint observed exact temperature/output cap and no unsupported reasoning field')
 
     currentStep = 'U03.A03-default-valid-section'
-    await writer(page).locator('.writer-left-rail button[title="设置"]').click()
-    await settings(page).getByRole('heading', { name: 'AI 生成模型' }).waitFor()
-    await settings(page).getByRole('button', { name: '关闭设置' }).click()
-    await dismissStartupNotice(page)
-    await writer(page).locator('button[title="备份"]').click()
-    await settings(page).getByRole('heading', { name: '项目备份' }).waitFor()
-    pass('U03.A03-default-valid', 'U03.A03', 'Writer settings default and backup section request rendered expected tab')
+    await stage.openSettings(page)
+    await settings(page).getByRole('heading', { level: 1, name: 'AI 模型' }).waitFor()
+    await stage.closeSettings(page)
+    await stage.openWorkMenuItem(page, 'U03-settings', '项目备份')
+    await settings(page).getByRole('heading', { level: 1, name: '项目备份' }).waitFor()
+    pass('U03.A03-default-valid', 'U03.A03', 'stage settings default page and the work-menu backup entry rendered the expected pages')
 
     currentStep = 'U03.A08-prompt-save'
     await openSection(page, '提示词模板')
@@ -294,11 +288,11 @@ async function main() {
     await settings(page).getByRole('button', { name: '保存到全局', exact: true }).click()
     const promptFile = path.join(root(), 'prompts', 'assistant_writing_identity.zh-CN.json')
     await persisted(promptFile, value => value.taskGuidance === promptMarker)
-    pass('U03.A08', 'U03.A08', 'Writer saved prompt guidance to isolated canonical global prompt file')
+    pass('U03.A08', 'U03.A08', 'stage saved prompt guidance to isolated canonical global prompt file')
 
     currentStep = 'U03.A04-close-reopen-persisted'
-    await settings(page).getByRole('button', { name: '关闭设置' }).click()
-    await writer(page).locator('.writer-left-rail button[title="设置"]').click()
+    await stage.closeSettings(page)
+    await stage.openSettings(page)
     await openSection(page, '提示词模板')
     await settings(page).getByRole('button', { name: /AI 写作助手身份/u }).first().click()
     const guidance = settings(page).getByRole('textbox', { name: '补充创作指导' })
@@ -309,7 +303,7 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 100))
     }
     assert.equal(reopenedValue, promptMarker)
-    pass('U03.A04', 'U03.A04', 'Writer closed and reopened settings with persisted prompt state')
+    pass('U03.A04', 'U03.A04', 'stage closed and reopened settings with persisted prompt state')
 
     currentStep = 'U03.A09-skill-inspection'
     await openSection(page, '写作 Skills')
@@ -325,7 +319,7 @@ async function main() {
     await settings(page).getByText('safe-prose', { exact: true }).first().waitFor()
     assert.equal(await settings(page).getByRole('button', { name: '确认安装' }).isEnabled(), true)
     assert.deepEqual(fixture.skillRequests, ['/skill/unsafe/SKILL.md', '/skill/SKILL.md'])
-    pass('U03.A09-skill-inspection', 'U03.A09', 'V3 read-only inspection rejected a script-dependent Skill and showed a compatible prompt-only Skill without installation')
+    pass('U03.A09-skill-inspection', 'U03.A09', 'stage read-only inspection rejected a script-dependent Skill and showed a compatible prompt-only Skill without installation')
 
     currentStep = 'U03.A10-skill-install'
     const installedRoot = path.join(root(), 'skills', skillName)
@@ -337,36 +331,35 @@ async function main() {
     assert.equal(fs.readFileSync(path.join(installedRoot, 'SKILL.md'), 'utf8'), skillFixture)
     await settings(page).getByRole('button', { name: '卸载 safe-prose' }).waitFor()
     assert.deepEqual(fixture.skillRequests, ['/skill/unsafe/SKILL.md', '/skill/SKILL.md', '/skill/SKILL.md'])
-    pass('U03.A10-skill-install', 'U03.A10', 'V3 confirmation caused a second controlled source fetch and installed exactly inspected bytes in isolated global Skill storage')
+    pass('U03.A10-skill-install', 'U03.A10', 'stage confirmation caused a second controlled source fetch and installed exactly inspected bytes in isolated global Skill storage')
 
     currentStep = 'U03.A11-skill-freeze'
     await settings(page).getByRole('combobox', { name: '设定与规划 Skill' }).selectOption('user:safe-prose')
     const bindingFile = path.join(created.projectPath, '.ai-novel', 'writing-skills.json')
     await persisted(bindingFile, value => value.bindings?.planning === 'user:safe-prose')
-    await settings(page).getByRole('button', { name: '关闭设置' }).click()
+    await stage.closeSettings(page)
     const workflowModelSaved = await invoke(page, 'llm:save-model', workflowModel)
     assert.equal(workflowModelSaved.success, true, workflowModelSaved.error)
     const defaultModel = await invoke(page, 'llm:set-default-model', workflowModel.id)
     assert.equal(defaultModel.success, true, defaultModel.error)
     await page.reload()
-    await page.getByRole('button', { name: '打开《U03-settings》' }).click()
+    await stage.waitForStage(page)
     await dismissStartupNotice(page)
+    await openWork(page, 'U03-settings')
     assert.equal(await invoke(page, 'llm:get-default-model'), workflowModel.id)
-    await page.locator('.writer-project-tree').getByText('小说配置', { exact: true }).click()
-    await page.getByPlaceholder('在此输入你的创作想法，或让 AI 根据这段话一键生成全部配置...')
-      .fill('潮汐城的记录员林岚要寻找失落地图，旧港的钟声与城门决定她的调查期限。')
-    await page.getByRole('heading', { name: '小说配置' }).locator('xpath=../..')
-      .getByRole('button', { name: '保存', exact: true }).click()
-    await page.getByRole('status').filter({ hasText: /^已保存$/ }).last().waitFor()
-    await page.locator('.writer-project-tree').getByText('故事架构', { exact: true }).click()
+    // 旧外壳的「小说配置」是纸墨外壳的设定页：核心大纲与类型、目标读者齐了再生成架构，Ctrl S 保存。
+    await stage.stageButton(page, '设定').click()
+    await stage.setupOutline(page).fill('潮汐城的记录员林岚要寻找失落地图，旧港的钟声与城门决定她的调查期限。')
+    await stage.setupField(page, '类型').selectOption('悬疑')
+    await stage.setupField(page, '目标读者').selectOption('全龄')
+    await page.keyboard.press('ControlOrMeta+s')
+    await stage.saveStatus(page).filter({ hasText: /^已保存$/ }).waitFor()
+    await arch.open(page)
     fixture.holdGeneration = true
-    await page.getByRole('button', { name: 'AI 生成架构' }).click()
-    const generationDialog = page.getByRole('dialog')
-    await generationDialog.getByRole('button', { name: '全选' }).click()
-    for (const label of ['角色图谱', '情节大纲']) {
-      await generationDialog.locator('label').filter({ hasText: label }).click()
-    }
-    await generationDialog.getByRole('button', { name: '确认生成（2/4）' }).click()
+    await arch.primary(page).click()
+    await arch.dialog(page).waitFor({ state: 'visible' })
+    await arch.selectOnly(page, ['premise', 'worldbuilding'])
+    await arch.startGenerate(page)
     let selectedRun
     for (let attempt = 0; attempt < 100 && !selectedRun; attempt++) {
       selectedRun = readGeneration(created.projectPath).find(run => run.binding.sourceManifest?.operation === 'generate-core-seed')
@@ -421,20 +414,27 @@ async function main() {
     assert.equal(worldRun?.binding.fingerprint.skillSnapshotHash, runBefore.binding.fingerprint.skillSnapshotHash)
     assert.deepEqual(worldRun?.binding.sourceManifest.skillStages, ['planning'])
     assert.equal(fs.readFileSync(path.join(installedRoot, 'SKILL.md'), 'utf8'), skillFixture)
-    pass('U03.A11-skill-freeze', 'U03.A11', 'V3 stage binding launched two real architecture steps; both requests used the same start-frozen Skill text and their durable source bindings matched')
+    pass('U03.A11-skill-freeze', 'U03.A11', 'stage Skill binding launched two real architecture steps; both requests used the same start-frozen Skill text and their durable source bindings matched')
 
     currentStep = 'U03.A12-uninstall'
-    await writer(page).locator('.writer-left-rail button[title="设置"]').click()
+    await stage.openSettings(page)
     await openSection(page, '写作 Skills')
     await settings(page).getByRole('combobox', { name: '修稿与定稿前润色 Skill' }).selectOption('user:safe-prose')
     await persisted(bindingFile, value => value.bindings?.refinement === 'user:safe-prose')
     await settings(page).getByRole('button', { name: '卸载 safe-prose' }).click()
-    await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click()
+    // 确认框有进场动画；按名字等它出现再点「确认」，等它收起后再看卸载结果。
+    const uninstallDialog = page.getByRole('dialog', { name: '卸载写作 Skill' })
+    await uninstallDialog.getByRole('button', { name: '确认', exact: true }).click()
+    await uninstallDialog.waitFor({ state: 'hidden' })
     await settings(page).getByRole('button', { name: '卸载 safe-prose' }).waitFor({ state: 'detached' })
+    for (let attempt = 0; attempt < 100 && fs.existsSync(installedRoot); attempt++) await new Promise(resolve => setTimeout(resolve, 100))
     assert.equal(fs.existsSync(installedRoot), false)
     await persisted(bindingFile, value => value.bindings?.refinement === undefined && value.bindings?.planning === undefined)
-    pass('U03.A12', 'U03.A12', 'Writer confirmed uninstall removed isolated Skill and current project binding')
-  } catch (error) { failure = error }
+    pass('U03.A12', 'U03.A12', 'stage confirmed uninstall removed isolated Skill and current project binding')
+  } catch (error) {
+    failure = error
+    await app?.windows()[0]?.screenshot({ path: path.join(receiptDir, 'failure.png') }).catch(() => {})
+  }
   finally {
     if (fixture.pendingResponse && !fixture.pendingResponse.writableEnded) fixture.pendingResponse.end()
     try { await app?.close() }

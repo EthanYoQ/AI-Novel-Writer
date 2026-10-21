@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   readJsonFile: vi.fn(),
   resolveReferenceImportAuthority: vi.fn(),
   commitReferenceImportReceipt: vi.fn(),
+  knowledgeDocumentChapters: vi.fn(() => new Map<string, number>()),
 }))
 
 vi.mock('electron', () => ({
@@ -55,6 +56,10 @@ vi.mock('../../repositories/import-run-repository', () => ({
     resolveReferenceImportAuthority: mocks.resolveReferenceImportAuthority,
     commitReferenceImportReceipt: mocks.commitReferenceImportReceipt,
   },
+}))
+
+vi.mock('../../repositories/finalization-repository', () => ({
+  FinalizationRepository: { knowledgeDocumentChapters: mocks.knowledgeDocumentChapters },
 }))
 
 vi.mock('../../i18n', () => ({
@@ -117,6 +122,20 @@ beforeEach(() => {
 })
 
 describe('knowledge-base controller project context guard', () => {
+  it('marks documents that a finalization linked as finalized chapters, leaving imported copies unmarked', async () => {
+    const listDocuments = vi.fn(async () => [
+      { id: 'chapter-doc', fileName: '第2章 旧照片.txt', importedAt: '', chunkCount: 4, filePath: 'knowledge-copy:chapter-doc' },
+      { id: 'notes-doc', fileName: '人物小传.txt', importedAt: '', chunkCount: 2, filePath: 'knowledge-copy:notes-doc' },
+    ])
+    mocks.run.mockImplementation(async (operation: (kb: { listDocuments: typeof listDocuments }) => unknown) => operation({ listDocuments }))
+    mocks.knowledgeDocumentChapters.mockReturnValue(new Map([['chapter-doc', 2]]))
+
+    await expect(handler('kb:list-documents')({}, 'C:/projects/A')).resolves.toEqual([
+      { id: 'chapter-doc', fileName: '第2章 旧照片.txt', importedAt: '', chunkCount: 4, filePath: 'knowledge-copy:chapter-doc', finalizedChapter: 2 },
+      { id: 'notes-doc', fileName: '人物小传.txt', importedAt: '', chunkCount: 2, filePath: 'knowledge-copy:notes-doc' },
+    ])
+  })
+
   it('requires active import-run authority before reference text reaches the knowledge base', async () => {
     const importReferenceText = vi.fn<(
       text: string, fileName: string, ...args: unknown[]

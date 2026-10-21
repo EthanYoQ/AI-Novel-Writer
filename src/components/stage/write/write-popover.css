@@ -1,0 +1,144 @@
+/*
+ * 写作此章的拆分主按钮与小弹层。视觉基准是 claude-design/Blueprint.dc.html 的「写第 N 章」按钮组，
+ * 弹层内容按 prototype/chapter-todo.html：本次模型、作者微操指导、折叠的更多，以及一致性预检。只引用纸墨令牌。
+ */
+.stage-write-pop {
+  width: 360px;
+  gap: var(--s-4);
+}
+
+.stage-write-pop .pi-field em {
+  font-style: normal;
+  color: var(--ink-3);
+}
+
+.stage-write-textarea {
+  height: auto;
+  padding: var(--s-2) var(--s-3);
+  font: var(--fs-13)/1.7 var(--font-ui);
+  resize: vertical;
+}
+
+.stage-write-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.stage-write-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.stage-write-more > summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.stage-write-more > summary svg {
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.stage-write-more[open] > summary svg {
+  transform: rotate(90deg);
+}
+
+.stage-write-more > summary small {
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-write-more > .pi-field {
+  margin-top: var(--s-3);
+}
+
+.stage-write-error {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--danger);
+  white-space: pre-line;
+}
+
+.stage-write-foot {
+  margin: 0;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--rule);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+/* ================= 一致性预检 ================= */
+.stage-preflight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border-radius: var(--radius-lg);
+  background: var(--warn-soft);
+  font-size: var(--fs-12);
+}
+
+.stage-preflight p {
+  margin: 0;
+}
+
+.stage-preflight-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stage-preflight-head svg {
+  color: var(--warn);
+}
+
+.stage-preflight-note,
+.stage-preflight-source {
+  color: var(--ink-2);
+}
+
+.stage-preflight-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s-2);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+
+.stage-preflight-save {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.stage-preflight-save .pi-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  font-size: var(--fs-12);
+}
+
+.stage-preflight-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-1);
+}
+
+.stage-preflight-saved > summary {
+  cursor: pointer;
+  color: var(--ink-2);
+}
+
+.stage-preflight-exemption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}

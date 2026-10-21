@@ -89,10 +89,9 @@ export function windowsAcceptanceReceipt(releaseRoot: string, version: string, n
     uninstall: { ...base(name), kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
     'upgrade-data': { ...base(name), kind: 'windows-upgrade-data', direct: { previousVersion: '0.2.5', legacyTableCount: 11, preservedAssetCount: 1, vectorDimension: 768, queryResultCount: 1, ...windowsV025CopyProof() } },
     'native-abi': { ...base(name), kind: 'windows-native-abi', direct: { restoreMode: 'monitored', nodeModuleAbi: '127', verificationTest: 'electron/repositories/__tests__/character-repository.test.ts' } },
-    'packaged-smoke': { ...base(name), kind: 'windows-packaged-smoke-summary', direct: { evidenceCount: 3, evidenceKinds: ['packaged-vector-smoke', 'packaged-official-homepage-smoke', 'packaged-skin-smoke'] }, evidence: [
+    'packaged-smoke': { ...base(name), kind: 'windows-packaged-smoke-summary', direct: { evidenceCount: 2, evidenceKinds: ['packaged-vector-smoke', 'packaged-official-homepage-smoke'] }, evidence: [
       reference(releaseRoot, 'packaged-vector-smoke', 'packaged-vector-smoke.json'),
       reference(releaseRoot, 'packaged-official-homepage-smoke', 'packaged-official-homepage-smoke.json'),
-      reference(releaseRoot, 'packaged-skin-smoke', 'packaged-skin-smoke.json'),
     ] },
     signing: { ...base(name), kind: 'windows-signing', direct: { authenticodeStatus: 'NotSigned', installerSha256: sha256 }, status: 'unsigned', validationResult: 'NotSigned', unsignedDistributionImpact: 'Windows may display an unknown-publisher warning.' },
   }
@@ -116,11 +115,10 @@ export function macosAcceptanceReceipt(releaseRoot: string, version: string, nam
     },
     'packaged-smoke': {
       ...base(name), kind: 'packaged-smoke', platform: 'darwin', arch: 'arm64',
-      direct: { mountedApplication: 'AI小说作家.app', secureFileSystemHelper: 'security/darwin-safe-file-system', secureFileSystemSmoke: true, dmgSha256, vectorSmoke: true, officialHomepageSmoke: true, skinSmoke: true },
+      direct: { mountedApplication: 'AI小说作家.app', secureFileSystemHelper: 'security/darwin-safe-file-system', secureFileSystemSmoke: true, dmgSha256, vectorSmoke: true, officialHomepageSmoke: true },
       references: {
         vector: reference(releaseRoot, 'packaged-vector-smoke', 'packaged-vector-smoke.json'),
         officialHomepage: reference(releaseRoot, 'packaged-official-homepage-smoke', 'packaged-official-homepage-smoke.json'),
-        skin: reference(releaseRoot, 'packaged-skin-smoke', 'packaged-skin-smoke.json'),
         macosDmgSmoke: reference(releaseRoot, 'macos-dmg-smoke', 'macos-dmg-smoke.json'),
       },
     },

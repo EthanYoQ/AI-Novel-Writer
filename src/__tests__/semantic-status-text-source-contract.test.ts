@@ -24,17 +24,8 @@ describe('semantic status text source contract', () => {
     expect(violations).toEqual([])
   })
 
-  it('keeps shared draft status labels on semantic theme text tokens', () => {
-    const source = readFileSync(resolve(srcRoot, 'shared/draft-status.ts'), 'utf8')
-    const colorMap = source.match(/export const DRAFT_STATUS_COLOR[^=]*=\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
-
-    expect(colorMap).not.toMatch(/#[0-9A-Fa-f]{3,8}\b/)
-    expect(colorMap).not.toMatch(/\brgb(?:a)?\(/)
-  })
-
   it('limits decoration-only status colors to an explicit reviewed allowlist', () => {
     const allowed = new Set([
-      'src/index.css:.ai-task-capsule--complete',
       'src/styles/agent-tools.css:.tool-call-status.completed',
       'src/styles/agent-tools.css:.tool-call-status.failed',
       'src/styles/agent-tools.css:.tool-call-status.waiting_confirm',

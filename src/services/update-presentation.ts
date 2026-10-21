@@ -55,7 +55,7 @@ function visiblePresentation(
 }
 
 /**
- * 将更新服务的状态转换成欢迎页可观察的展示状态。
+ * 将更新服务的状态转换成书房更新卡与设置「关于与更新」可观察的展示状态。
  * 自动检查始终保持静默；只有用户主动检查时才展示“无更新”或错误反馈。
  */
 export function getUpdatePresentation(input: UpdatePresentationInput): UpdatePresentation {

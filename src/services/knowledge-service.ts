@@ -44,6 +44,8 @@ export interface KBDocument {
   importedAt: string
   chunkCount: number
   filePath: string
+  /** 由定稿收入时的章号（来自定稿登记）；作者导入的资料没有。 */
+  finalizedChapter?: number
 }
 
 /** 检索结果 */

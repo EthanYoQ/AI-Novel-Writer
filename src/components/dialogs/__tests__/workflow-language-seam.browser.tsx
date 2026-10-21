@@ -15,8 +15,9 @@ import { useWorkflowStore } from '../../../stores/workflow-store'
 import {
   isUsableSynopsisCheckpoint,
   synopsisFactsFingerprint,
-} from '../../../services/workflows/commands/architecture.command'
-import WorldBuildingEditor from '../../editor/WorldBuildingEditor'
+} from '../../../shared/plot-outline-checkpoint'
+import { renderPlotOutlineSynopsis } from '../../../shared/plot-outline-contract'
+import StageArchitecture from '../../stage/architecture/StageArchitecture'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -133,10 +134,11 @@ describe('workflow launch language seams', () => {
     container = document.createElement('div')
     document.body.append(container)
     root = createRoot(container)
-    await act(async () => root?.render(<WorldBuildingEditor projectKey={currentProject.path} />))
+    await act(async () => root?.render(<StageArchitecture projectKey={currentProject.path} />))
 
-    await expect.element(page.getByText('不完整 · 检查点不可恢复', { exact: true })).toBeVisible()
-    await expect.element(page.getByText('3/4 已生成', { exact: true })).toBeVisible()
+    const outlineBadge = () => container?.querySelector('[data-section="synopsis"] .arch-badge')?.textContent
+    await vi.waitFor(() => expect(outlineBadge()).toBe('不完整'))
+    expect(container.querySelector('.arch-progress')?.textContent).toBe(' · 3 / 4 已确认')
     expect(container.textContent).not.toContain('断点续写大纲')
 
     const confirmedBody = `Chapters 1-20: ${'The crew follows each clue and preserves cause and effect. '.repeat(4)}`.trim()
@@ -150,22 +152,60 @@ describe('workflow launch language seams', () => {
       synopsis_db_hash: synopsisFactsFingerprint([dbSynopsis]),
     }
     expect(isUsableSynopsisCheckpoint(checkpointState.current, dbSynopsis, 'en-US', 100)).toBe(true)
-    await act(async () => page.getByRole('button', { name: '刷新状态' }).click())
-    await expect.element(page.getByText('已覆盖至第 20 章 · 待续批', { exact: true })).toBeVisible()
-    await act(async () => page.getByRole('button', { name: '续批（第 21 章起）' }).click())
+    await act(async () => page.getByRole('button', { name: '架构的更多操作' }).click())
+    await act(async () => page.getByRole('menuitem', { name: '刷新状态' }).click())
+    await vi.waitFor(() => expect(outlineBadge()).toBe('部分完成 · 20 / 100 章'))
+    await act(async () => page.getByRole('button', { name: '续写第 21 章起' }).click())
 
     await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的起始章' })).toHaveValue(21)
     await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(25)
   })
 
   it.each([
-    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', heading: '故事架构', status: '3/4 已生成', refresh: '刷新状态', generate: 'AI 生成架构', generateTitle: 'AI 生成故事架构（选择要生成的步骤）', title: 'AI 生成故事架构', button: /确认生成/, expectedLog: '生成故事前提...', expectedPrompt: '你是一位经验丰富的故事架构师', unexpectedPrompt: 'Build a compact story premise' },
-    { uiLocale: 'zh-CN', writingLanguage: 'en-US', heading: '故事架构', status: '3/4 已生成', refresh: '刷新状态', generate: 'AI 生成架构', generateTitle: 'AI 生成故事架构（选择要生成的步骤）', title: 'AI 生成故事架构', button: /确认生成/, expectedLog: '生成故事前提...', expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位经验丰富的故事架构师' },
-    { uiLocale: 'en-US', writingLanguage: 'zh-CN', heading: 'Story architecture', status: '3/4 generated', refresh: 'Refresh status', generate: 'Generate story architecture', generateTitle: 'Generate story architecture (choose steps to generate)', title: 'Generate story architecture with AI', button: /Generate \(/, expectedLog: 'Generating story premise...', expectedPrompt: '你是一位经验丰富的故事架构师', unexpectedPrompt: 'Build a compact story premise' },
-    { uiLocale: 'en-US', writingLanguage: 'en-US', heading: 'Story architecture', status: '3/4 generated', refresh: 'Refresh status', generate: 'Generate story architecture', generateTitle: 'Generate story architecture (choose steps to generate)', title: 'Generate story architecture with AI', button: /Generate \(/, expectedLog: 'Generating story premise...', expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位经验丰富的故事架构师' },
+    { read: '返回读取失败', checkpoint: async () => ({ success: false, error: 'not found' }) },
+    { read: '读取时抛出异常', checkpoint: async () => { throw new Error('磁盘忙') } },
+  ])('大纲停在第 16 章、分批检查点$read：都按数据库正文判为部分完成，可从第 17 章续写', async ({ checkpoint }) => {
+    const currentProject = project('zh-CN')
+    const projectSession = { projectId: currentProject.id, leaseId: currentProject.sessionLease!, projectPath: currentProject.path }
+    const body = Array.from({ length: 16 }, (_, index) => `## 第${index + 1}章：第${index + 1}盏灯\n林舟在第${index + 1}站认出一位失踪者的座位。`).join('\n\n')
+    useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
+    useProjectStore.setState({ currentProject })
+    useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [], waitingRuns: {}, currentRun: null, waitingForConfirm: false, waitingAfterStepIndex: -1 })
+    setActiveProjectSessionContext(projectSession)
+    Object.defineProperty(window, 'aiNovelAPI', {
+      configurable: true,
+      value: {
+        invoke: vi.fn(async (channel: string) => {
+          if (channel === 'db:project-core-get') return {
+            premise: '旧前提。'.repeat(20), worldbuilding: '旧世界观。'.repeat(20),
+            synopsis: renderPlotOutlineSynopsis(body, 16, { totalChapters: 24, writingLanguage: 'zh-CN' }), totalChapters: 24, writingLanguage: 'zh-CN',
+          }
+          if (channel === 'db:character-roster-read') return { schemaVersion: 1, revision: 1, migrationState: 'ready', status: 'ready', entries: [], renderedMarkdown: '# 角色\n\n林舟', projectionHash: 'p', factHash: 'f' }
+          if (channel === 'fs:read-json') return checkpoint()
+          throw new Error(`Unexpected IPC channel: ${channel}`)
+        }),
+        on: vi.fn(() => () => {}),
+        once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn(),
+      },
+    })
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => root?.render(<StageArchitecture projectKey={currentProject.path} />))
+
+    await vi.waitFor(() => expect(container?.querySelector('[data-section="synopsis"] .arch-badge')?.textContent).toBe('部分完成 · 16 / 24 章'))
+    await expect.element(page.getByRole('button', { name: '续写第 17 章起' })).toBeVisible()
+    expect(container.textContent).not.toContain('大纲末尾还留着分批生成的说明')
+  })
+
+  it.each([
+    { uiLocale: 'zh-CN', writingLanguage: 'zh-CN', heading: '故事的骨架', generate: /生成架构/, title: '生成架构', button: /开始生成/, expectedLog: '生成故事前提...', expectedPrompt: '你是一位经验丰富的故事架构师', unexpectedPrompt: 'Build a compact story premise' },
+    { uiLocale: 'zh-CN', writingLanguage: 'en-US', heading: '故事的骨架', generate: /生成架构/, title: '生成架构', button: /开始生成/, expectedLog: '生成故事前提...', expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位经验丰富的故事架构师' },
+    { uiLocale: 'en-US', writingLanguage: 'zh-CN', heading: 'The bones of the story', generate: /(Generate|Continue) architecture/, title: 'Generate architecture', button: /^Generate \d/, expectedLog: 'Generating story premise...', expectedPrompt: '你是一位经验丰富的故事架构师', unexpectedPrompt: 'Build a compact story premise' },
+    { uiLocale: 'en-US', writingLanguage: 'en-US', heading: 'The bones of the story', generate: /(Generate|Continue) architecture/, title: 'Generate architecture', button: /^Generate \d/, expectedLog: 'Generating story premise...', expectedPrompt: 'Build a compact story premise', unexpectedPrompt: '你是一位经验丰富的故事架构师' },
   ] as const)(
     'launches the production architecture workflow with UI $uiLocale and writing $writingLanguage independent',
-    async ({ uiLocale, writingLanguage, heading, status, refresh, generate, generateTitle, title, button, expectedLog, expectedPrompt, unexpectedPrompt }) => {
+    async ({ uiLocale, writingLanguage, heading, generate, title, button, expectedLog, expectedPrompt, unexpectedPrompt }) => {
       const currentProject = project(writingLanguage)
       const projectSession = {
         projectId: currentProject.id,
@@ -285,26 +325,18 @@ describe('workflow launch language seams', () => {
         },
       })
       container = document.createElement('div')
+      container.className = 'paper-ink'
+      container.style.cssText = 'width: 1280px; height: 900px'
       document.body.append(container)
       root = createRoot(container)
-      await act(async () => root?.render(<WorldBuildingEditor projectKey={currentProject.path} />))
+      await act(async () => root?.render(<StageArchitecture projectKey={currentProject.path} />))
 
       await expect.element(page.getByText(heading, { exact: true })).toBeVisible()
-      await expect.element(page.getByText(status, { exact: true })).toBeVisible()
-      await expect.element(page.getByRole('button', { name: refresh })).toHaveAttribute('title', refresh)
-      const generateButton = page.getByRole('button', { name: generate })
-      await expect.element(generateButton).toHaveAttribute('title', generateTitle)
-      if (uiLocale === 'en-US') {
-        expect(container?.textContent).not.toMatch(/[\u3400-\u9fff]/u)
-      }
-      await act(async () => generateButton.click())
-      await expect.element(page.getByText(title, { exact: true })).toBeVisible()
+      await act(async () => page.getByRole('button', { name: generate }).click())
+      await expect.element(page.getByRole('dialog', { name: title })).toBeVisible()
       const dialog = document.querySelector('[role="dialog"]')
       if (!(dialog instanceof HTMLElement)) throw new Error('Architecture dialog did not mount')
-      await expect.element(page.getByText(textForLocale(uiLocale, '科幻 · time-loop mystery', 'Science fiction · time-loop mystery'), { exact: true })).toBeVisible()
-      await expect.element(page.getByText(textForLocale(uiLocale, '全龄', 'All ages'), { exact: true })).toBeVisible()
-      const stepLabels = Array.from(dialog.querySelectorAll('label'))
-      expect(stepLabels).toHaveLength(4)
+      if (uiLocale === 'en-US') expect(dialog.textContent).not.toMatch(/[\u3400-\u9fff]/u)
       await act(async () => page.getByRole('button', { name: button }).click())
       await act(async () => {
         await vi.waitFor(() => expect(useWorkflowStore.getState().history).toHaveLength(1))
@@ -334,7 +366,3 @@ describe('workflow launch language seams', () => {
     },
   )
 })
-
-function textForLocale(locale: 'zh-CN' | 'en-US', zh: string, en: string): string {
-  return locale === 'zh-CN' ? zh : en
-}

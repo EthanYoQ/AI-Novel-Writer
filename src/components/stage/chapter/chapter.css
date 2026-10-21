@@ -1,0 +1,837 @@
+/*
+ * 正文单章视图。视觉基准为 claude-design/Main.dc.html 的纸面与审稿侧页、Focus.dc.html 的沉浸写作与选区工具条；
+ * 待写、合并、定稿确认与定稿视图的结构按 prototype/chapter-*.html。只引用纸墨令牌。
+ * 审稿侧页与运行侧页同一时间只开一个，审稿侧页总是与纸面并排、从不覆盖正文（运行侧页在面板放不下时浮起，见 stage-panel.css）；
+ * page 容器查询按纸面可用宽度收紧版心。
+ */
+.stage-ch {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  container: chapter / inline-size;
+}
+
+.stage-ch-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 28px 32px 64px;
+  container: page / inline-size;
+}
+
+/* 纸面宽度取版心加左右留白，1280 宽时正文一行正好 34 字 */
+.stage-ch-page {
+  max-width: calc(34 * var(--prose-size) + 144px);
+  margin: 0 auto;
+  padding: 52px 72px 88px;
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  box-shadow: var(--shadow-panel);
+}
+
+.stage-ch-page[aria-busy="true"] .stage-ch-prose {
+  opacity: .6;
+}
+
+/* ================= 章节头 ================= */
+.stage-ch-kicker {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.stage-ch-numeral {
+  font: italic 400 64px/0.8 var(--font-num);
+  color: var(--ink);
+}
+
+.stage-ch-eyebrow {
+  font: 400 var(--fs-12) var(--font-display);
+  letter-spacing: .2em;
+  color: var(--ink-3);
+}
+
+.stage-ch-titlerow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-4);
+  margin-top: 18px;
+}
+
+.stage-ch-title {
+  min-width: 0;
+  margin: 0;
+  font: 600 38px/1.2 var(--font-display);
+  letter-spacing: .02em;
+  overflow-wrap: anywhere;
+}
+
+.stage-ch-version {
+  flex: none;
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+.stage-ch-version-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  font-size: var(--fs-12);
+}
+
+.stage-ch-head .pi-life {
+  margin-top: var(--s-6);
+}
+
+.stage-ch-versions {
+  min-width: 260px;
+}
+
+.stage-ch-version-item {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.stage-ch-version-item small {
+  font-size: var(--fs-11);
+  color: var(--ink-3);
+}
+
+.stage-ch-version-item[aria-checked="true"] {
+  background: var(--accent-soft);
+}
+
+/* ================= 章节动作条 ================= */
+.stage-ch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 26px 0 34px;
+  padding-bottom: 26px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.stage-ch-hint {
+  margin-left: auto;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-ch-hint[data-tone="ok"] {
+  color: var(--ok);
+}
+
+.stage-ch-options {
+  width: 300px;
+  gap: 10px;
+}
+
+.stage-ch-options .pi-field em {
+  font-style: normal;
+  color: var(--ink-3);
+}
+
+.stage-ch-dim small {
+  display: block;
+  font-size: var(--fs-11);
+  color: var(--ink-3);
+}
+
+.stage-ch-options-foot {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-ch-textarea {
+  height: auto;
+  padding: var(--s-2) 10px;
+  font: var(--fs-13)/1.7 var(--font-ui);
+  resize: vertical;
+}
+
+.stage-ch-commit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  line-height: 1.65;
+}
+
+.stage-ch-commit b {
+  margin-right: 4px;
+  color: var(--ink);
+}
+
+.stage-ch-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin-bottom: var(--s-6);
+}
+
+.stage-ch-notices:empty {
+  display: none;
+}
+
+/* ================= 纸面正文：编辑器随内容长高，由纸面滚动 ================= */
+.stage-ch .stage-ch-prose .cm-editor {
+  font-size: var(--prose-size);
+  background: transparent;
+}
+
+.stage-ch .stage-ch-prose .cm-scroller {
+  padding-bottom: 0;
+}
+
+.stage-ch .stage-ch-prose .cm-content {
+  max-width: var(--prose-measure);
+  margin: 0;
+  padding: 0;
+  line-height: var(--prose-lh);
+  color: var(--ink);
+}
+
+/* 段落首行缩进两字（design-system「字体」）；只缩以文字开头的行，见 paragraph-indent */
+.stage-ch .stage-ch-prose .cm-indent {
+  text-indent: 2em;
+}
+
+.stage-ch-prose[data-readonly] .cm-content {
+  cursor: default;
+}
+
+/* 画板的纸面正文没有首字下沉，首字与正文同样大小同色 */
+.stage-ch .stage-ch-prose .cm-lp-dropcap-char {
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+
+/* ================= 待写：本章蓝图 ================= */
+.stage-ch-plan {
+  padding: var(--s-4) 18px;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+
+.stage-ch-plan-head,
+.stage-ch-post-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.stage-ch-plan-title,
+.stage-ch-post-title {
+  margin: 0;
+  font: 600 var(--fs-14)/1.4 var(--font-display);
+}
+
+.stage-ch-plan-title small,
+.stage-ch-post-title small {
+  margin-left: var(--s-2);
+  font: 400 var(--fs-12) var(--font-ui);
+  color: var(--ink-3);
+}
+
+.stage-ch-plan-grid {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px var(--s-4);
+  margin: var(--s-3) 0 0;
+}
+
+.stage-ch-plan-grid dt {
+  color: var(--ink-3);
+}
+
+.stage-ch-plan-grid dd {
+  margin: 0;
+  line-height: 1.7;
+}
+
+.stage-ch-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stage-ch-chip {
+  padding: 1px var(--s-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-12);
+}
+
+.stage-ch-blank {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 28px;
+  padding: 28px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: 12px;
+  text-align: center;
+  color: var(--ink-3);
+}
+
+.stage-ch-blank b {
+  font-size: var(--fs-14);
+  color: var(--ink);
+}
+
+/* ================= 定稿后处理 ================= */
+.stage-ch-post {
+  margin-bottom: 28px;
+  padding: 14px var(--s-4);
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px var(--rule);
+}
+
+.stage-ch-post-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stage-ch-post-step {
+  display: grid;
+  grid-template-columns: 10px 96px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.stage-ch-post-step::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-4);
+}
+
+.stage-ch-post-step[data-state="success"]::before {
+  background: var(--ok);
+}
+
+.stage-ch-post-step[data-state="failed"]::before {
+  background: var(--danger);
+}
+
+.stage-ch-post-step[data-state="failed"] .stage-ch-post-detail {
+  color: var(--danger);
+}
+
+.stage-ch-post-step b {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.stage-ch-post-detail {
+  overflow-wrap: anywhere;
+}
+
+/* ================= 修稿合并 ================= */
+.stage-ch-merge-legend {
+  display: flex;
+  gap: var(--s-4);
+  margin: 0 0 var(--s-3);
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-ch-merge-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stage-ch-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--sunken);
+}
+
+.stage-ch-swatch[data-kind="revised"] {
+  background: var(--accent-soft);
+}
+
+.stage-ch-hunks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.stage-ch-same {
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--rule);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-ch-hunk {
+  padding: var(--s-3);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+
+.stage-ch-hunk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-bottom: 10px;
+}
+
+.stage-ch-hunk-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stage-ch-hunk-col {
+  padding: 10px var(--s-3);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+  font: var(--fs-16)/1.9 var(--font-prose);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.stage-ch-hunk-col[data-kind="revised"] {
+  background: var(--accent-soft);
+}
+
+.stage-ch-hunk-col[data-chosen="true"] {
+  color: var(--ink);
+  box-shadow: 0 0 0 1.5px var(--accent-line);
+}
+
+.stage-ch-hunk-edit {
+  width: 100%;
+  margin-top: 10px;
+  font: var(--fs-16)/1.9 var(--font-prose);
+}
+
+.stage-ch-merge-note {
+  margin: var(--s-6) 0 0;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+
+/* ================= 审稿侧页 ================= */
+.stage-ch-sheet-slot {
+  flex: none;
+  display: flex;
+  min-height: 0;
+}
+
+.stage-ch-sheet-slot .pi-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.stage-ch-sheet-foot {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-ch-sheet-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.stage-ch-sheet-summary {
+  margin: 0;
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+
+.stage-ch-sheet-note,
+.stage-ch-sheet-message {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-ch-sheet-message[data-tone="error"] {
+  color: var(--danger);
+}
+
+.stage-ch-sheet-message[data-tone="success"] {
+  color: var(--ok);
+}
+
+.stage-ch-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stage-ch-issue {
+  padding: var(--s-3) 14px;
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+
+.stage-ch-issue[data-on="false"] {
+  background: transparent;
+}
+
+.stage-ch-issue .pi-check {
+  align-items: flex-start;
+}
+
+.stage-ch-issue .pi-check-box {
+  margin-top: 2px;
+}
+
+.stage-ch-issue-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.stage-ch-issue-tag {
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.stage-ch-issue-tag[data-severity="error"],
+.stage-ch-legend [data-severity="error"] b {
+  color: var(--danger);
+}
+
+.stage-ch-issue-tag[data-severity="warning"],
+.stage-ch-legend [data-severity="warning"] b {
+  color: var(--warn);
+}
+
+.stage-ch-issue-tag[data-severity="pass"],
+.stage-ch-legend [data-severity="pass"] b {
+  color: var(--ok);
+}
+
+.stage-ch-issue-text {
+  color: var(--ink-2);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.stage-ch-issue-quote {
+  padding-left: 10px;
+  border-left: 2px solid var(--rule-strong);
+  font-family: var(--font-prose);
+  line-height: 1.7;
+  color: var(--ink-3);
+  quotes: none;
+}
+
+.stage-ch-issue-meta {
+  font-size: var(--fs-11);
+  color: var(--ink-3);
+}
+
+.stage-ch-issue-status {
+  align-self: flex-start;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-size: var(--fs-11);
+  color: var(--ink-2);
+}
+
+.stage-ch-issue-status[data-status="resolved"] {
+  color: var(--ok);
+}
+
+.stage-ch-issue-status[data-status="unresolved"] {
+  color: var(--danger);
+}
+
+.stage-ch-issue-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: var(--s-2);
+  padding-left: 24px;
+}
+
+.stage-ch-issue-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 6px;
+}
+
+.stage-ch-issue-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  margin-top: 6px;
+  padding-left: 24px;
+}
+
+.stage-ch-issue-hint {
+  margin-right: auto;
+  font-size: var(--fs-11);
+  color: var(--ink-3);
+}
+
+.stage-ch-issue-pass {
+  padding-left: 24px;
+}
+
+.stage-ch-add {
+  align-self: flex-start;
+  color: var(--accent);
+}
+
+.stage-ch-guidance .stage-ch-textarea {
+  width: 100%;
+  margin-top: var(--s-2);
+}
+
+.stage-ch-passed > summary {
+  cursor: pointer;
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-ch-passed[open] > summary {
+  margin-bottom: var(--s-2);
+}
+
+.stage-ch-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-ch-legend b {
+  margin-right: var(--s-2);
+}
+
+.stage-ch-raw {
+  max-height: 240px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+  font: var(--fs-11)/1.6 var(--font-mono);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+
+/* ================= 沉浸写作：只留正文与章节动作条，纸面全出血（Focus.dc.html） ================= */
+.stage-shell[data-focus] .stage-panel:has(.stage-ch) {
+  --focus-paper: var(--paper);
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: radial-gradient(1100px 520px at 50% -160px, var(--accent-soft), transparent 70%), var(--focus-paper);
+}
+
+/* 深色下全出血的纸面就是应用底色，与画板一致 */
+.stage-shell[data-focus][data-theme="dark"] .stage-panel:has(.stage-ch) {
+  --focus-paper: var(--frame);
+}
+
+.stage-ch[data-focus] .stage-ch-scroll {
+  padding-bottom: 96px;
+}
+
+.stage-ch[data-focus] .stage-ch-page {
+  max-width: calc(34 * var(--prose-size) + 48px);
+  padding: 72px 24px 120px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.stage-ch[data-focus] .stage-ch-title {
+  font-size: 40px;
+  letter-spacing: .03em;
+}
+
+.stage-ch[data-focus] .stage-ch-titlerow .stage-ch-version {
+  display: none;
+}
+
+.stage-ch-focusbar {
+  position: absolute;
+  inset: auto 0 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  background: var(--focus-paper, var(--surface));
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.stage-ch-focus-progress {
+  width: 120px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--track);
+  overflow: hidden;
+}
+
+.stage-ch-focus-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* ================= 窄宽度 ================= */
+@container page (max-width: 760px) {
+  .stage-ch-page {
+    padding: 36px 32px 64px;
+  }
+
+  .stage-ch-numeral {
+    font-size: 48px;
+  }
+
+  .stage-ch-title {
+    font-size: var(--fs-30);
+  }
+}
+
+@container page (max-width: 620px) {
+  .stage-ch-hunk-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stage-ch-titlerow {
+    flex-wrap: wrap;
+  }
+}
+
+/* ================= 选区工具条（架构文档页的编辑器也用它，自带纸墨作用域） ================= */
+.paper-ink.cm-selbar {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--s-1);
+  border-radius: 11px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  transform: translate(-50%, -100%);
+  user-select: none;
+}
+
+.paper-ink.cm-selbar[data-preview] {
+  padding: var(--s-3);
+}
+
+.cm-selbar .cm-selbar-tool {
+  height: 32px;
+  font-size: var(--fs-13);
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.cm-selbar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 var(--s-1);
+  background: var(--rule-strong);
+}
+
+.cm-selbar-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  width: 360px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.cm-selbar-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.cm-selbar-title svg {
+  color: var(--accent);
+}
+
+.cm-selbar-text {
+  margin: 0;
+  font: var(--fs-14)/1.8 var(--font-prose);
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.cm-selbar-error {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--danger);
+}
+
+.cm-selbar-status {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.cm-selbar-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* ================= 恢复候选与只读修稿 ================= */
+.stage-doc-title {
+  font-size: 28px;
+}
+
+.stage-doc-meta {
+  margin: var(--s-2) 0 var(--s-6);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}

@@ -1,0 +1,358 @@
+/* ================= 知识库：资料 / 原文 / 查找 ================= */
+.stage-kb-frame {
+  container-type: inline-size;
+  min-height: 0;
+}
+
+.stage-kb {
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr) 340px;
+  height: 100%;
+  min-height: 0;
+}
+
+.stage-kb-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-height: 0;
+}
+
+.stage-kb-docs {
+  border-right: 1px solid var(--rule);
+  padding: var(--s-5) var(--s-4) var(--s-4);
+}
+
+.stage-kb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stage-kb-title {
+  margin: 0;
+  font: 600 var(--fs-20)/1.3 var(--font-display);
+  color: var(--ink);
+}
+
+.stage-kb-help {
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+
+/* 文字居中、两边留白收窄，240px 的资料栏里英文文案还能排一行；窄到 200px 放不下时折成两行，不伸出按钮 */
+.stage-kb-docs .stage-kb-import {
+  width: 100%;
+  height: auto;
+  min-height: 36px;
+  padding: 6px var(--s-2);
+  justify-content: center;
+  line-height: 1.3;
+  text-align: center;
+  white-space: normal;
+}
+
+/* 窄资料栏放不下两项时（英文文案、上千章的计数）各占一行，文案和计数都不截断 */
+.stage-kb-docs .pi-seg {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.stage-kb-docs .pi-seg-item {
+  flex: 1;
+  padding: 0 var(--s-2);
+  white-space: nowrap;
+}
+
+.stage-kb-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  list-style: none;
+  margin: 0 calc(-1 * var(--s-2));
+  padding: 0 var(--s-2);
+}
+
+.stage-kb-doc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stage-kb-doc > svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.stage-kb-doc > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stage-kb-doc:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.stage-kb-doc[aria-current='true'] {
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.stage-kb-doc:focus-visible,
+.stage-kb-search-input:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 1px;
+}
+
+.stage-kb-danger {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: 10px 12px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-kb-danger p {
+  margin: 0;
+}
+
+/* 同上：清空按钮的英文文案在窄资料栏里折行，不伸出危险区的框 */
+.stage-kb-danger .pi-btn {
+  height: auto;
+  min-height: 28px;
+  padding-block: 4px;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.stage-kb-reader {
+  overflow: auto;
+  padding: var(--s-6) var(--s-10) var(--s-12);
+}
+
+.stage-kb-reader > * {
+  flex: none;
+}
+
+.stage-kb-hint {
+  margin: auto;
+  font-size: var(--fs-13);
+}
+
+.stage-kb-reader-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  min-height: 34px;
+}
+
+.stage-kb-eyebrow {
+  font: 400 var(--fs-12)/1.4 var(--font-display);
+  letter-spacing: 0.16em;
+  color: var(--ink-3);
+}
+
+.stage-kb-save {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.stage-kb-dirty {
+  font-size: var(--fs-12);
+  color: var(--warn);
+}
+
+.stage-kb-doc-title {
+  margin: 0;
+  font: 600 var(--fs-24)/1.35 var(--font-display);
+  color: var(--ink);
+}
+
+.stage-kb-meta {
+  margin: calc(-1 * var(--s-2)) 0 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-kb-editor {
+  flex: none;
+  min-height: 360px;
+  padding: var(--s-5) var(--s-6);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/2 var(--font-prose);
+  resize: vertical;
+}
+
+.stage-kb-original {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  resize: none;
+}
+
+.stage-kb-editor:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.stage-kb-search {
+  border-left: 1px solid var(--rule);
+  padding: var(--s-5) var(--s-4) var(--s-4);
+  background: var(--surface);
+}
+
+.stage-kb-search-title {
+  margin: 0;
+  font: 600 var(--fs-14)/1.4 var(--font-ui);
+  color: var(--ink);
+}
+
+.stage-kb-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink-3);
+}
+
+.stage-kb-search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.stage-kb-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+}
+
+.stage-kb-search-input:focus-visible {
+  outline: none;
+}
+
+.stage-kb-results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-kb-results-head label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stage-kb-topk {
+  height: 26px;
+  padding: 0 var(--s-1);
+  font-size: var(--fs-12);
+}
+
+.stage-kb-results {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stage-kb-result {
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+
+.stage-kb-result-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-11);
+  color: var(--ink-3);
+}
+
+.stage-kb-result p {
+  margin: 4px 0 0;
+  font: 13px/1.75 var(--font-prose);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+
+.stage-kb-result mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+}
+
+/* 运行侧页展开后内容区变窄：查找挪到原文下方，原文保持可读的宽度 */
+@container (max-width: 1040px) {
+  .stage-kb {
+    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .stage-kb-docs {
+    grid-row: 1 / span 2;
+  }
+
+  .stage-kb-search {
+    max-height: 45cqh;
+    overflow: auto;
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+  }
+}
+
+/* 1280 宽且运行侧页开着时内容区约 610px：资料列与原文的边距都收一些，原文仍有可读的宽度 */
+@container (max-width: 680px) {
+  .stage-kb {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+
+  .stage-kb-reader {
+    padding: var(--s-5) var(--s-5) var(--s-8);
+  }
+}

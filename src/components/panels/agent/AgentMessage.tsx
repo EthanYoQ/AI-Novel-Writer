@@ -57,8 +57,8 @@ export default function AgentMessage({ message }: Props) {
         <div
           className="max-w-[88%] px-3 py-2 rounded-2xl text-xs leading-relaxed break-words whitespace-pre-wrap"
           style={{
-            backgroundColor: 'rgba(var(--color-accent-rgb), 0.12)',
-            border: '1px solid rgba(var(--color-accent-rgb), 0.2)',
+            backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--color-accent) 20%, transparent)',
             color: 'var(--color-text)',
           }}
         >

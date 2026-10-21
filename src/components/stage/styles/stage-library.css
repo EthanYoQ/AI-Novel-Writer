@@ -1,0 +1,654 @@
+/* ================= 书房 ================= */
+/* 视觉基准 claude-design/Library.dc.html：左侧开始与书架，右侧作品概览与更新提示。 */
+.stage-shell {
+  --stage-card-drop: 0 0 0 1px var(--rule), 0 18px 40px -28px color-mix(in srgb, var(--ink) 35%, transparent);
+  --stage-cover-drop: 0 18px 30px -22px color-mix(in srgb, var(--ink) 45%, transparent);
+}
+
+.stage-shell[data-theme='dark'] {
+  --stage-card-drop: 0 0 0 1px var(--rule), 0 18px 40px -24px color-mix(in srgb, var(--frame) 92%, transparent);
+  --stage-cover-drop: 0 18px 30px -18px color-mix(in srgb, var(--frame) 95%, transparent);
+}
+
+.stage-eyebrow {
+  margin: 0;
+  font: 400 var(--fs-12)/1.4 var(--font-display);
+  letter-spacing: .24em;
+  color: var(--ink-3);
+}
+
+.stage-library-title {
+  margin: 10px 0 0;
+  font: 600 40px/1.2 var(--font-display);
+  letter-spacing: .02em;
+  color: var(--ink);
+}
+
+.stage-lib {
+  width: 100%;
+  max-width: 1180px;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: var(--s-12) var(--s-12) 56px;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: var(--s-10);
+}
+
+.stage-lib-main {
+  flex: 999 1 560px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-8);
+}
+
+.stage-lib-aside {
+  flex: 1 1 340px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+/* ---------- 开始 ---------- */
+.stage-starts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: var(--s-3);
+}
+
+.stage-starts > .pi-anchor {
+  display: flex;
+}
+
+.stage-library .stage-start {
+  width: 100%;
+  height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: none;
+  font: 400 var(--fs-13)/1.55 var(--font-ui);
+  letter-spacing: normal;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease),
+    background-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+/* 导入卡是菜单触发的纸墨文字按钮，悬停、按下、展开都要在这里写全，才与另两张原生按钮的卡一个样子 */
+.stage-library .stage-start:hover:not(:active, [aria-expanded='true'], :focus-visible) {
+  background: var(--paper);
+  border-color: color-mix(in srgb, var(--ink) 22%, transparent);
+  box-shadow: var(--shadow-button);
+}
+
+/* 按下：纸片压进桌面，与次按钮同一个按下色 */
+.stage-library .stage-start:active,
+.stage-library .stage-start[aria-expanded='true'] {
+  background: var(--paper-press);
+  border-color: color-mix(in srgb, var(--ink) 22%, transparent);
+  box-shadow: inset 0 1px 2px var(--sink);
+  transform: translateY(1px);
+}
+
+.stage-library .stage-start:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  /* 键盘焦点环要立即出现，与纸墨按钮一样：聚焦期间 box-shadow 不参与过渡 */
+  transition-property: border-color, background-color, transform;
+}
+
+/* 悬停规则排除了聚焦，导入卡这时会落到纸墨文字按钮的灰色悬停底上；聚焦未按下时三张卡一样是纸色 */
+.stage-library .stage-start:focus-visible:not(:active, [aria-expanded='true']) {
+  background: var(--paper);
+}
+
+.stage-start-icon {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.stage-start-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.stage-start-text > b {
+  font-weight: 600;
+}
+
+.stage-start-text > span {
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+/* ---------- 书架 ---------- */
+.stage-shelf-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  margin-bottom: var(--s-4);
+}
+
+.stage-shelf-title {
+  margin: 0;
+  font: 600 var(--fs-16)/1.4 var(--font-display);
+}
+
+.stage-shelf-hint {
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-shelf-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
+  gap: 28px var(--s-5);
+}
+
+.stage-book {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+/* 封面色从令牌调出：深蓝、沙、灰绿、赭石与素纸，深色主题下随令牌一起翻转。 */
+.stage-book[data-tone='navy'] { --cover: color-mix(in srgb, var(--accent) 45%, var(--ink)); --cover-ink: var(--frame); }
+.stage-book[data-tone='sand'] { --cover: color-mix(in srgb, var(--warn) 8%, var(--surface-2)); --cover-ink: color-mix(in srgb, var(--warn) 18%, var(--ink)); }
+.stage-book[data-tone='sage'] { --cover: color-mix(in srgb, var(--ok) 13%, var(--frame)); --cover-ink: color-mix(in srgb, var(--ok) 30%, var(--ink)); }
+.stage-book[data-tone='umber'] { --cover: color-mix(in srgb, var(--warn) 11%, var(--ink)); --cover-ink: var(--frame); }
+.stage-book[data-tone='paper'] { --cover: var(--paper); --cover-ink: var(--ink); }
+
+/* 深色主题下封面仍是深色的布面，只带一点色相，文字用墨色。 */
+.stage-shell[data-theme='dark'] .stage-book { --cover-ink: var(--ink); }
+.stage-shell[data-theme='dark'] .stage-book[data-tone='navy'] { --cover: color-mix(in srgb, var(--accent) 20%, var(--paper)); }
+.stage-shell[data-theme='dark'] .stage-book[data-tone='sand'] { --cover: color-mix(in srgb, var(--warn) 13%, var(--paper)); }
+.stage-shell[data-theme='dark'] .stage-book[data-tone='sage'] { --cover: color-mix(in srgb, var(--ok) 14%, var(--paper)); }
+.stage-shell[data-theme='dark'] .stage-book[data-tone='umber'] { --cover: color-mix(in srgb, var(--warn) 8%, var(--frame)); }
+.stage-shell[data-theme='dark'] .stage-book[data-tone='paper'] { --cover: var(--surface-2); }
+
+.stage-book-cover {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: stretch;
+  gap: var(--s-2);
+  padding: var(--s-4) var(--s-4);
+  border: 0;
+  border-radius: var(--radius) var(--radius-lg) var(--radius-lg) var(--radius);
+  background: var(--cover);
+  color: var(--cover-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow:
+    inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent),
+    0 0 0 1px var(--rule),
+    var(--stage-cover-drop);
+  transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.stage-book-cover:hover {
+  transform: translateY(-3px);
+}
+
+/* 按下：从悬停的抬起落回大半，像把书按回书架 */
+.stage-book-cover:active {
+  transform: translateY(-1px);
+  transition-duration: var(--dur-fast);
+}
+
+.stage-book[data-selected] .stage-book-cover {
+  box-shadow:
+    inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent),
+    0 0 0 2px var(--surface),
+    0 0 0 4px var(--accent),
+    var(--stage-cover-drop);
+}
+
+/* 选中的书本身就是一圈强调色，聚焦时在外面再套一圈，键盘停在哪本书上看得出来 */
+.stage-book[data-selected] .stage-book-cover:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent),
+    0 0 0 2px var(--surface),
+    0 0 0 4px var(--accent),
+    0 0 0 6px var(--surface),
+    0 0 0 8px var(--accent),
+    var(--stage-cover-drop);
+}
+
+.stage-book-cover:focus-visible {
+  outline: none;
+  box-shadow: inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent), var(--focus-ring);
+}
+
+.stage-book-kicker {
+  min-height: 1em;
+  font-size: var(--fs-11);
+  letter-spacing: .2em;
+  opacity: .72;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stage-book-title {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  font: 600 var(--fs-24)/1.25 var(--font-display);
+  letter-spacing: .12em;
+}
+
+.stage-book-title[data-script='cjk'] {
+  align-self: flex-end;
+  writing-mode: vertical-rl;
+}
+
+.stage-book-title[data-script='latin'] {
+  display: flex;
+  align-items: flex-end;
+  font-size: var(--fs-20);
+  letter-spacing: .02em;
+  overflow-wrap: anywhere;
+}
+
+.stage-book-figure {
+  min-height: 1em;
+  font-size: var(--fs-16);
+  opacity: .78;
+}
+
+.stage-book-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.stage-book-caption {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stage-book-name {
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stage-book-meta {
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stage-book-foot .pi-btn--icon {
+  width: 28px;
+  height: 28px;
+  margin-top: -3px;
+  color: var(--ink-3);
+}
+
+/* ---------- 概览 ---------- */
+.stage-ov {
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-6);
+  border-radius: var(--radius-panel);
+  background: var(--paper);
+  box-shadow: var(--stage-card-drop);
+}
+
+.stage-ov .stage-eyebrow {
+  font: 400 var(--fs-11)/1.4 var(--font-ui);
+  letter-spacing: .2em;
+}
+
+.stage-ov-title {
+  margin: var(--s-2) 0 2px;
+  font: 600 var(--fs-24)/1.3 var(--font-display);
+  overflow-wrap: anywhere;
+}
+
+.stage-ov-meta,
+.stage-ov-status {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-ov-status {
+  margin-top: var(--s-4);
+}
+
+.stage-ov-bars {
+  list-style: none;
+  margin: var(--s-5) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.stage-ov-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.stage-ov-bar-track {
+  height: 3px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.stage-ov-bar-track > span {
+  display: block;
+  height: 100%;
+  width: calc(var(--ratio) * 100%);
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur) var(--ease);
+}
+
+.stage-ov-bar[data-state='done'] .stage-ov-bar-track > span {
+  background: var(--ok);
+}
+
+.stage-ov-bar-label {
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  color: var(--ink-2);
+  word-break: keep-all;
+  text-wrap: balance;
+}
+
+.stage-ov-bar[data-state='active'] .stage-ov-bar-label {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.stage-ov .pi-stats {
+  margin-top: var(--s-5);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.stage-ov .pi-stat {
+  padding: 10px var(--s-3);
+}
+
+.stage-ov .pi-stat-value {
+  font-size: var(--fs-24);
+}
+
+.stage-ov-excerpt {
+  margin: var(--s-5) 0 0;
+}
+
+.stage-ov-excerpt > blockquote {
+  margin: 0;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  font: var(--fs-16)/1.9 var(--font-prose);
+  color: color-mix(in srgb, var(--ink) 80%, var(--ink-2));
+}
+
+.stage-ov-excerpt > blockquote > p {
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.stage-ov-excerpt > figcaption {
+  margin-top: var(--s-2);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.stage-library .stage-ov-primary {
+  margin-top: var(--s-5);
+  width: 100%;
+}
+
+.stage-library .stage-ov-back {
+  align-self: center;
+  margin-top: var(--s-2);
+}
+
+.stage-ov--hint .stage-ov-title {
+  font-size: var(--fs-20);
+}
+
+/* ---------- 空书房 ---------- */
+.stage-library-empty {
+  width: 100%;
+  max-width: 560px;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 14vh var(--s-8) var(--s-12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.stage-library-empty .stage-library-title {
+  margin-top: var(--s-3);
+}
+
+.stage-library-lede {
+  margin: var(--s-3) 0 28px;
+  max-width: 30em;
+  font-size: var(--fs-14);
+  color: var(--ink-2);
+}
+
+.stage-library-alt {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-1);
+  margin-top: var(--s-4);
+}
+
+.stage-library-empty-notes {
+  width: 100%;
+  margin-top: var(--s-10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  text-align: left;
+}
+
+/* ================= 应用更新 ================= */
+.stage-update {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--paper) 60%, transparent);
+}
+
+.stage-update-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.stage-update-icon > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.stage-update[data-kind='manual-error'] .stage-update-icon {
+  color: var(--danger);
+}
+
+.stage-update[data-kind='downloaded'] .stage-update-icon,
+.stage-update[data-kind='not-available'] .stage-update-icon {
+  color: var(--ok);
+}
+
+.stage-update-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stage-update-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.stage-update-text {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.stage-update-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: var(--s-2);
+}
+
+.stage-update-progress > span {
+  flex: 1;
+  height: 3px;
+  border-radius: 3px;
+  background: linear-gradient(var(--accent), var(--accent)) left / var(--w, 0%) 100% no-repeat, var(--track);
+}
+
+.stage-update-progress > b {
+  font-size: var(--fs-14);
+  font-weight: 400;
+  color: var(--ink-2);
+}
+
+.stage-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.stage-update-spin {
+  animation: stage-spin 1s linear infinite;
+}
+
+@keyframes stage-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ================= 对话框里的字段 ================= */
+.stage-field-row {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.stage-field-row > .pi-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.stage-dialog-hint {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+/*
+ * 减少动态效果：书封不抬起不落下，悬停改成投影加深、按下改成内凹，仍看得出指着哪本、按下了没有。
+ * 选中的书保留强调色圈，键盘按下保留焦点环，内凹叠在它们里面。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .stage-library .stage-start:is(:active, [aria-expanded='true']) { transform: none; }
+  .stage-book-cover:hover, .stage-book-cover:active { transform: none; }
+  .stage-book:not([data-selected]) .stage-book-cover:hover:not(:active, :focus-visible) {
+    box-shadow:
+      inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent),
+      0 0 0 1px var(--rule-strong),
+      var(--stage-cover-drop),
+      0 10px 18px -10px var(--lift);
+  }
+  .stage-book:not([data-selected]) .stage-book-cover:active:not(:focus-visible) {
+    box-shadow:
+      inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent),
+      inset 0 2px 6px var(--sink),
+      0 0 0 1px var(--rule-strong);
+  }
+  .stage-book:not([data-selected]) .stage-book-cover:active:focus-visible {
+    box-shadow:
+      inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent),
+      inset 0 2px 6px var(--sink),
+      var(--focus-ring);
+  }
+  .stage-book[data-selected] .stage-book-cover:hover:not(:active, :focus-visible) {
+    box-shadow:
+      inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent),
+      0 0 0 2px var(--surface),
+      0 0 0 4px var(--accent),
+      var(--stage-cover-drop),
+      0 10px 18px -10px var(--lift);
+  }
+  .stage-book[data-selected] .stage-book-cover:active:not(:focus-visible) {
+    box-shadow:
+      inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent),
+      inset 0 2px 6px var(--sink),
+      0 0 0 2px var(--surface),
+      0 0 0 4px var(--accent);
+  }
+  .stage-book[data-selected] .stage-book-cover:active:focus-visible {
+    box-shadow:
+      inset 6px 0 0 color-mix(in srgb, var(--cover-ink) 10%, transparent),
+      inset 0 2px 6px var(--sink),
+      0 0 0 2px var(--surface),
+      0 0 0 4px var(--accent),
+      0 0 0 6px var(--surface),
+      0 0 0 8px var(--accent);
+  }
+}

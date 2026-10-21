@@ -9,6 +9,9 @@ import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as refs from './redesign/pages/refs.mjs'
+import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const driverPath = fileURLToPath(import.meta.url)
@@ -31,7 +34,7 @@ const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'publ
   'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5')
   .split('\n').filter(Boolean)
 assert.deepEqual(dirtyProduct, [], 'Dirty product inputs since packaged build')
-const executablePath = path.join(packageDir, 'AI小说作家.exe')
+const executablePath = resolveWindowsExecutable(packageDir)
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
 assert.equal(sha256(executablePath), expectedExe)
 assert.equal(sha256(asarPath), expectedAsar)
@@ -112,10 +115,37 @@ let phase = 'setup'
 let app
 
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
-const writer = page => page.locator('.writer-shell[data-shell-presentation="writer"][data-shell-variant="v3"]')
 async function assertWriter(page) {
-  await writer(page).waitFor({ state: 'visible', timeout: 30_000 })
-  assert.equal(await writer(page).getAttribute('data-shell-presentation'), 'writer', `${phase}: not Writer`)
+  await stage.waitForStage(page)
+  assert.equal(await stage.root(page).getAttribute('data-shell-presentation'), 'stage', `${phase}: not the paper-ink stage`)
+}
+const plotView = (page, name) => refs.plotView(page, name)
+async function openPlot(page) {
+  await refs.open(page, 'plot')
+  await page.getByRole('heading', { level: 1, name: '剧情与伏笔' }).waitFor({ state: 'visible' })
+}
+async function showThreads(page) {
+  await plotView(page, '伏笔线索').click()
+  await page.getByRole('region', { name: '线索计划' }).waitFor({ state: 'visible' })
+}
+const threadItem = (page, title) => page.locator('li.stage-thread').filter({ has: page.getByText(title, { exact: true }) })
+async function threadMenu(page, title, item) {
+  await refs.threadMore(page, title).click()
+  await page.getByRole('menuitem', { name: item }).click()
+}
+async function fillThreadForm(page, dialogTitle, values) {
+  const dialog = page.getByRole('dialog', { name: dialogTitle })
+  await dialog.waitFor({ state: 'visible' })
+  if (values.title !== undefined) await dialog.getByLabel('名称', { exact: true }).fill(values.title)
+  if (values.type !== undefined) await dialog.getByLabel('类型', { exact: true }).fill(values.type)
+  // label 包着 textarea，已有内容会进 label 的文字（「你的打算」后面跟着原来的打算），按开头匹配。
+  if (values.intent !== undefined) await dialog.getByLabel(/^你的打算/).fill(values.intent)
+  await dialog.getByRole('button', { name: '保存线索' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+}
+const plotEvent = (page, summary) => refs.plotTable(page).getByRole('button', { name: summary })
+async function openEventSource(page, label) {
+  await page.getByRole('region', { name: '事件详情' }).getByRole('button', { name: `打开来源：${label}` }).click()
 }
 async function launch() {
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: profile.canonical,
@@ -135,28 +165,17 @@ async function launch() {
     }, provider.address().port)
     const page = await opened.firstWindow({ timeout: 30_000 })
     page.setDefaultTimeout(12_000)
-    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    await stage.waitForStage(page)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
     return { opened, page }
   } catch (error) { await opened.close(); throw error }
 }
-async function selectWriter(page) {
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const previous = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...previous, shellPreference: 'writer',
-      revision: Number(previous.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await assertWriter(page)
-}
 async function openProject(page) {
   await assertWriter(page)
-  const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-  if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  await page.locator('.writer-left-rail button[title="欢迎页"]').click()
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-  await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, projectName)
+  await stage.waitForWork(page, projectName)
 }
 async function quit() {
   const child = app.process()
@@ -177,7 +196,6 @@ async function main() {
     phase = 'fixture-project'
     let session = await launch()
     app = session.opened
-    await selectWriter(session.page)
     const created = await invoke(session.page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(session.opened, session.page, profile.projects)).grantId, name: projectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
@@ -205,26 +223,21 @@ async function main() {
     await session.page.reload()
     await openProject(session.page)
 
+    // 纸墨外壳：「剧情与伏笔」是作品资料里的一页，「剧情树」与「伏笔线索」两种视图；线索在「新建线索」对话框里建，
+    // 编辑、记录定稿里的变化、删除都在线索的「更多」菜单里；剧情树事件的来源在「事件详情」里打开。
     phase = 'writer-plot-tree'
     await assertWriter(session.page)
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
-    const views = session.page.getByRole('tablist', { name: '剧情编辑器视图' })
-    await views.getByRole('tab', { name: '剧情树' }).waitFor({ state: 'visible' })
-    assert.equal(await views.getByRole('tab', { name: '剧情树' }).getAttribute('aria-selected'), 'true')
-    await session.page.getByText('尚未生成剧情树', { exact: true }).waitFor({ state: 'visible' })
+    await openPlot(session.page)
+    assert.equal(await plotView(session.page, '剧情树').getAttribute('aria-pressed'), 'true')
+    await session.page.getByText('还没有剧情树', { exact: true }).waitFor({ state: 'visible' })
     steps.push({ stepId: 'writer-plot-tree-entry', relatedActionId: 'U15.A06', coverage: 'empty-tree-entry-only',
-      assertion: 'Writer rail opened the real plot tree view and rendered its empty state' })
+      assertion: 'The plot & threads page opened on the plot tree view and rendered its empty state' })
 
     phase = 'writer-narrative-plan'
-    await assertWriter(session.page)
-    await views.getByRole('tab', { name: '计划清单' }).click()
-    assert.equal(await views.getByRole('tab', { name: '计划清单' }).getAttribute('aria-selected'), 'true')
-    const form = session.page.getByText('新建计划', { exact: true }).locator('xpath=..').locator('xpath=..')
-    await form.getByText('标题', { exact: true }).locator('xpath=..').locator('input').fill(planTitle)
-    await form.getByText('类型', { exact: true }).locator('xpath=..').locator('input').fill('伏笔')
-    await form.getByText('作者意图 / 理由', { exact: true }).locator('xpath=..').locator('textarea').fill('在第三章回收旧站来信的来源。')
-    await form.getByRole('button', { name: '保存计划' }).click()
-    await session.page.getByRole('heading', { name: planTitle }).waitFor({ state: 'visible' })
+    await showThreads(session.page)
+    await session.page.getByRole('button', { name: '新建线索' }).first().click()
+    await fillThreadForm(session.page, '新建线索', { title: planTitle, type: '伏笔', intent: '在第三章回收旧站来信的来源。' })
+    await threadItem(session.page, planTitle).waitFor({ state: 'visible' })
     const reopened = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
     assert.equal(reopened.success, true, reopened.error)
     const projectSession = { projectId: created.projectId, projectPath: created.projectPath,
@@ -235,11 +248,11 @@ async function main() {
     assert(savedPlan)
     sourcePlanId = savedPlan.id
     steps.push({ stepId: 'writer-narrative-plan-create', relatedActionId: 'U15.A07', coverage: 'plan-create-and-list-ipc',
-      assertion: 'Writer plan form saved through production UI; a fresh main project session listed its durable plan fields' })
+      assertion: 'The new-thread dialog saved through production UI; a fresh main project session listed its durable plan fields' })
 
     phase = 'v3-plot-generate'
     await openProject(session.page)
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await openPlot(session.page)
     await session.page.getByRole('button', { name: '生成剧情树', exact: true }).click()
     await session.page.getByText('旧站主线-1', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
     const readOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
@@ -250,60 +263,55 @@ async function main() {
     assert.equal(firstTree.snapshot?.tracks[0]?.title, '旧站主线-1')
     assert.equal(providerRequests.length, 1)
     steps.push({ stepId: 'v3-plot-generate', relatedActionId: 'U15.A06', coverage: 'ui-model-generate-and-db-read',
-      assertion: 'V3 generated a source-backed tree through controlled model request and persisted its selected result' })
+      assertion: 'The stage generated a source-backed tree through a controlled model request and persisted its selected result' })
     await openProject(session.page)
 
     phase = 'v3-plot-source-navigation'
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await openPlot(session.page)
     await session.page.getByText('旧站主线-1', { exact: true }).waitFor({ state: 'visible' })
-    await session.page.getByRole('button', { name: /旧站线索-1/u }).click()
-    await session.page.getByRole('button', { name: `叙事计划 #${sourcePlanId}` }).click()
-    assert.equal(await views.getByRole('tab', { name: '计划清单' }).getAttribute('aria-selected'), 'true')
+    await plotEvent(session.page, '旧站线索-1').click()
+    await openEventSource(session.page, '伏笔线索计划')
+    assert.equal(await plotView(session.page, '伏笔线索').getAttribute('aria-pressed'), 'true')
     const planSection = session.page.locator(`#narrative-plan-${sourcePlanId}`)
-    await planSection.getByRole('heading', { name: planTitle }).waitFor({ state: 'visible' })
+    await planSection.getByText(planTitle, { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await planSection.getAttribute('data-source'), 'true', 'the opened source thread is not highlighted')
     steps.push({ stepId: 'v3-plot-open-source', relatedActionId: 'U15.A06', coverage: 'event-source-navigation',
-      assertion: 'V3 tree event opened its persisted narrative-plan source in the plan view' })
+      assertion: 'A plot tree event opened its persisted thread-plan source in the threads view' })
 
     phase = 'v3-plot-blueprint-source-navigation'
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
-    await session.page.getByRole('button', { name: '蓝图线索-1' }).click()
-    await session.page.getByRole('button', { name: '第 1 章蓝图' }).click()
-    await session.page.getByRole('heading', { name: '第 1 章：旧站来信' }).waitFor({ state: 'visible' })
-    assert.equal(await session.page.getByPlaceholder('本章主角最迫切要解决的一件事...').inputValue(), '调查来信来源')
+    await openPlot(session.page)
+    await plotEvent(session.page, '蓝图线索-1').click()
+    await openEventSource(session.page, '第 1 章蓝图')
+    const blueprintCard = session.page.getByRole('region', { name: '第 1 章蓝图' })
+    await blueprintCard.waitFor({ state: 'visible' })
+    assert.equal(await blueprintCard.getByRole('textbox', { name: '章节标题' }).inputValue(), '旧站来信')
+    assert.equal(await blueprintCard.getByLabel(/^主角小目标/).inputValue(), '调查来信来源')
     steps.push({ stepId: 'v3-plot-open-blueprint-source', relatedActionId: 'U15.A06',
       coverage: 'existing-blueprint-event-source-navigation',
-      assertion: 'V3 tree event opened the existing chapter 1 blueprint and displayed its persisted purpose' })
+      assertion: 'A plot tree event opened the existing chapter 1 blueprint card and displayed its persisted purpose' })
 
     phase = 'v3-plot-finalized-source-navigation'
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
-    await session.page.getByRole('button', { name: '定稿线索-1' }).click()
-    await session.page.getByRole('button', { name: '第 1 章定稿' }).click()
-    await session.page.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible' })
-    const finalizedEditor = session.page.locator('.writer-editor-content .cm-content[contenteditable="false"]')
+    await openPlot(session.page)
+    await plotEvent(session.page, '定稿线索-1').click()
+    await openEventSource(session.page, '第 1 章定稿')
+    await session.page.getByText('已定稿，只读', { exact: true }).waitFor({ state: 'visible' })
+    const finalizedEditor = stage.prose(session.page)
     await finalizedEditor.waitFor({ state: 'visible' })
-    const visibleFinalizedText = await finalizedEditor.evaluate(element => Array.from(element.querySelectorAll('.cm-line'), line => {
-      const copy = line.cloneNode(true)
-      copy.querySelector('.cm-lp-paperhead')?.remove()
-      return copy.textContent
-    }).join('\n'))
-    assert.equal(visibleFinalizedText, persistedFinalized.content)
+    assert.equal(await finalizedEditor.getAttribute('contenteditable'), 'false')
+    assert.equal(await stage.proseBody(finalizedEditor), persistedFinalized.content)
     steps.push({ stepId: 'v3-plot-open-finalized-source', relatedActionId: 'U15.A06',
       coverage: 'existing-finalized-event-source-navigation',
-      assertion: 'V3 tree event opened the existing finalized chapter 1 as read-only with its persisted body' })
+      assertion: 'A plot tree event opened the existing finalized chapter 1 as read-only with its persisted body' })
 
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
-    await views.getByRole('tab', { name: '计划清单' }).click()
+    await openPlot(session.page)
+    await showThreads(session.page)
 
     phase = 'v3-narrative-plan-update'
-    await planSection.getByRole('button', { name: '编辑', exact: true }).click()
-    const editForm = session.page.getByText('编辑计划', { exact: true }).locator('xpath=..').locator('xpath=..')
-    await editForm.getByText('标题', { exact: true }).locator('xpath=..').locator('input').fill(updatedTitle)
-    await editForm.getByText('作者意图 / 理由', { exact: true }).locator('xpath=..').locator('textarea')
-      .fill('在第一章确认旧站来信并延伸铜钥匙线索。')
-    await editForm.getByRole('button', { name: '保存计划' }).click()
-    await planSection.getByRole('heading', { name: updatedTitle }).waitFor({ state: 'visible' })
+    await threadMenu(session.page, planTitle, '编辑线索')
+    await fillThreadForm(session.page, '编辑线索', { title: updatedTitle, intent: '在第一章确认旧站来信并延伸铜钥匙线索。' })
+    await threadItem(session.page, updatedTitle).waitFor({ state: 'visible' })
     steps.push({ stepId: 'v3-narrative-plan-update', relatedActionId: 'U15.A07', coverage: 'ui-plan-update',
-      assertion: 'V3 plan edit updated the persisted source identity shown in the plan list' })
+      assertion: 'Editing the thread updated the persisted source identity shown in the thread list' })
 
     phase = 'v3-narrative-event-evidence-reject'
     const beforeInvalidOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
@@ -316,21 +324,20 @@ async function main() {
     assert.equal(beforeInvalidPlans[0].id, sourcePlanId)
     assert.equal(beforeInvalidPlans[0].events.length, 0)
     await openProject(session.page)
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
-    await views.getByRole('tab', { name: '计划清单' }).click()
-    const eventPlanSection = session.page.locator(`#narrative-plan-${sourcePlanId}`)
-    await eventPlanSection.getByRole('heading', { name: updatedTitle }).waitFor({ state: 'visible' })
-    await eventPlanSection.getByRole('button', { name: '确认定稿事件' }).click()
-    const eventDraftSelect = eventPlanSection.locator('select').first()
+    await openPlot(session.page)
+    await showThreads(session.page)
+    await threadMenu(session.page, updatedTitle, '记录定稿里的变化')
+    const eventForm = session.page.getByRole('region', { name: '定稿里的线索变化' })
+    const eventDraftSelect = eventForm.getByLabel('定稿章节')
     const selectedFinalizedDraft = await eventDraftSelect.inputValue()
     assert(selectedFinalizedDraft, 'event form did not select a finalized chapter')
     await eventDraftSelect.selectOption(selectedFinalizedDraft)
     const invalidEvidence = `不存在的合成证据-${runId.slice(0, 8)}`
     const invalidReason = '用于验证定稿证据拒绝'
-    await eventPlanSection.getByPlaceholder('粘贴该定稿章节中的短原文').fill(invalidEvidence)
-    await eventPlanSection.getByPlaceholder('确认理由').fill(invalidReason)
-    await eventPlanSection.getByRole('button', { name: '保存事件' }).click()
-    const evidenceError = eventPlanSection.getByText('请粘贴所选定稿章节中实际出现的短原文。', { exact: true })
+    await eventForm.getByLabel('定稿里的原文').fill(invalidEvidence)
+    await eventForm.getByLabel('理由').fill(invalidReason)
+    await eventForm.getByRole('button', { name: '记入线索' }).click()
+    const evidenceError = eventForm.getByRole('alert')
     await evidenceError.waitFor({ state: 'visible' })
     const evidenceErrorText = (await evidenceError.textContent())?.trim()
     assert.equal(evidenceErrorText, '请粘贴所选定稿章节中实际出现的短原文。')
@@ -348,47 +355,43 @@ async function main() {
       beforePlanReadSha256: beforeInvalidPlanReadSha256, afterPlanReadSha256: afterInvalidPlanReadSha256,
       beforeEventCount: beforeInvalidPlans[0].events.length, afterEventCount: afterInvalidPlans[0].events.length }
     steps.push({ stepId: 'v3-narrative-event-evidence-reject', relatedActionId: 'U15.A07', coverage: 'ui-finalized-evidence-reject-and-db-read',
-      assertion: 'V3 rejected synthetic evidence absent from the selected finalized chapter, showed the required error, and left the plan/event read view unchanged' })
+      assertion: 'The stage rejected synthetic evidence absent from the selected finalized chapter, showed the required error, and left the plan/event read view unchanged' })
 
     phase = 'v3-narrative-event-confirm'
     await openProject(session.page)
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
-    await views.getByRole('tab', { name: '计划清单' }).click()
-    const confirmationSection = session.page.locator(`#narrative-plan-${sourcePlanId}`)
-    await confirmationSection.getByRole('heading', { name: updatedTitle }).waitFor({ state: 'visible' })
-    await confirmationSection.getByRole('button', { name: '确认定稿事件' }).click()
-    await confirmationSection.locator('select').first().selectOption(selectedFinalizedDraft)
-    await confirmationSection.getByPlaceholder('粘贴该定稿章节中的短原文').fill('旧站来信')
-    await confirmationSection.getByPlaceholder('确认理由').fill('定稿原文明确出现来信')
-    await confirmationSection.getByRole('button', { name: '保存事件' }).click()
-    await confirmationSection.getByText('第1章 · 已埋设 · 旧站来信', { exact: true }).waitFor({ state: 'visible' })
+    await openPlot(session.page)
+    await showThreads(session.page)
+    await threadMenu(session.page, updatedTitle, '记录定稿里的变化')
+    const confirmForm = session.page.getByRole('region', { name: '定稿里的线索变化' })
+    await confirmForm.getByLabel('定稿章节').selectOption(selectedFinalizedDraft)
+    await confirmForm.getByLabel('定稿里的原文').fill('旧站来信')
+    await confirmForm.getByLabel('理由').fill('定稿原文明确出现来信')
+    await confirmForm.getByRole('button', { name: '记入线索' }).click()
+    await threadItem(session.page, updatedTitle).getByText('第 1 章 · 已埋设 · 旧站来信', { exact: true }).waitFor({ state: 'visible' })
     steps.push({ stepId: 'v3-narrative-event-confirm', relatedActionId: 'U15.A07', coverage: 'ui-finalized-evidence-confirm',
-      assertion: 'V3 confirmed a short quote from the synthetic finalized chapter as a plan event' })
+      assertion: 'The stage recorded a short quote from the synthetic finalized chapter as a planted event of the thread' })
 
     phase = 'v3-narrative-plan-delete'
-    const newForm = session.page.getByText('新建计划', { exact: true }).locator('xpath=..').locator('xpath=..')
-    await newForm.getByText('标题', { exact: true }).locator('xpath=..').locator('input').fill(deletedTitle)
-    await newForm.getByText('类型', { exact: true }).locator('xpath=..').locator('input').fill('支线')
-    await newForm.getByText('作者意图 / 理由', { exact: true }).locator('xpath=..').locator('textarea').fill('只用于验证删除')
-    await newForm.getByRole('button', { name: '保存计划' }).click()
-    const deletedSection = session.page.locator('section[id^="narrative-plan-"]')
-      .filter({ has: session.page.getByRole('heading', { name: deletedTitle }) })
-    await deletedSection.getByRole('heading', { name: deletedTitle }).waitFor({ state: 'visible' })
-    await deletedSection.getByRole('button', { name: '删除', exact: true }).click()
-    await session.page.getByRole('heading', { name: deletedTitle }).waitFor({ state: 'hidden' })
+    await session.page.getByRole('button', { name: '新建线索' }).first().click()
+    await fillThreadForm(session.page, '新建线索', { title: deletedTitle, type: '支线', intent: '只用于验证删除' })
+    await threadItem(session.page, deletedTitle).waitFor({ state: 'visible' })
+    await threadMenu(session.page, deletedTitle, '删除线索…')
+    await session.page.getByRole('dialog', { name: '删除这条线索？' }).getByRole('button', { name: '删除线索', exact: true }).click()
+    await threadItem(session.page, deletedTitle).waitFor({ state: 'detached' })
+    await threadItem(session.page, updatedTitle).waitFor({ state: 'visible' })
     steps.push({ stepId: 'v3-narrative-plan-delete', relatedActionId: 'U15.A07', coverage: 'ui-plan-delete',
-      assertion: 'V3 deleted only the transient synthetic plan and kept the edited plan visible' })
+      assertion: 'The stage deleted only the transient synthetic thread after the danger confirmation and kept the edited thread visible' })
 
     phase = 'v3-plot-refresh'
-    await views.getByRole('tab', { name: '剧情树' }).click()
-    await session.page.getByRole('status').filter({ hasText: '剧情资料已有更新' }).waitFor({ state: 'visible' })
+    await plotView(session.page, '剧情树').click()
+    await session.page.getByText('之后资料有更新', { exact: false }).waitFor({ state: 'visible' })
     await session.page.getByRole('button', { name: '刷新剧情树', exact: true }).click()
     await session.page.getByText('旧站主线-2', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
     assert.equal(providerRequests.length, 2)
     assert.equal(providerRequests[1].sourceTitle, updatedTitle)
     assert.equal(providerRequests[1].sourceEvents, 1)
     steps.push({ stepId: 'v3-plot-refresh', relatedActionId: 'U15.A06', coverage: 'ui-refresh-after-source-update',
-      assertion: 'V3 refreshed the stale tree using the updated plan and confirmed finalized event' })
+      assertion: 'The stage marked the tree stale and refreshed it using the updated plan and confirmed finalized event' })
 
     phase = 'v3-plot-generation-failure'
     const beforeFailureOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
@@ -398,11 +401,12 @@ async function main() {
     const beforeFailureTree = await invoke(session.page, 'db:plot-tree-read', created.projectPath, beforeFailureSession)
     assert.equal(beforeFailureTree.snapshot?.tracks[0]?.title, '旧站主线-2')
     await openProject(session.page)
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await openPlot(session.page)
     await session.page.getByText('旧站主线-2', { exact: true }).waitFor({ state: 'visible' })
     failNextRequest = true
     await session.page.getByRole('button', { name: '刷新剧情树', exact: true }).click()
-    const generationAlert = session.page.getByRole('alert').filter({ hasText: /剧情树.*失败/u })
+    // 失败写在剧情树上方的危险提示里（这次是「本次生成未完成保存……」，引导去整理记录恢复），不出现新的剧情树。
+    const generationAlert = stage.root(session.page).locator('.pi-notice[data-tone="danger"]')
     await generationAlert.waitFor({ state: 'visible', timeout: 60_000 })
     const errorText = (await generationAlert.textContent())?.trim()
     assert(errorText)
@@ -423,14 +427,16 @@ async function main() {
       afterPlotTreeReadSha256: createHash('sha256').update(JSON.stringify(afterFailureTree)).digest('hex') }
     steps.push({ stepId: 'v3-plot-generation-failure', relatedActionId: 'U15.A06',
       coverage: 'ui-controlled-provider-failure-and-db-read',
-      assertion: 'V3 surfaced the failed provider request, showed no false success and kept the SQLite-backed plot-tree read view unchanged' })
+      assertion: 'The stage surfaced the failed provider request, showed no false success and kept the SQLite-backed plot-tree read view unchanged' })
 
     phase = 'v3-plot-clear'
     await openProject(session.page)
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await openPlot(session.page)
     await session.page.getByText('旧站主线-2', { exact: true }).waitFor({ state: 'visible' })
-    await session.page.getByRole('button', { name: '清除剧情树', exact: true }).click()
-    await session.page.getByText('尚未生成剧情树', { exact: true }).waitFor({ state: 'visible' })
+    await refs.plotMore(session.page).click()
+    await refs.menuItem(session.page, '清除剧情树…').click()
+    await session.page.getByRole('dialog', { name: '清除剧情树？' }).getByRole('button', { name: '清除剧情树', exact: true }).click()
+    await session.page.getByText('还没有剧情树', { exact: true }).waitFor({ state: 'visible' })
     const afterOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
     assert.equal(afterOpen.success, true, afterOpen.error)
     const afterSession = { projectId: created.projectId, projectPath: created.projectPath,
@@ -444,23 +450,21 @@ async function main() {
     assert.equal(afterPlans[0].events.length, 1)
     assert.equal(afterPlans[0].events[0].evidence, '旧站来信')
     steps.push({ stepId: 'v3-plot-clear', relatedActionId: 'U15.A06', coverage: 'ui-clear-and-db-read',
-      assertion: 'V3 cleared the stored tree while retaining the edited plan and its finalized event' })
+      assertion: 'The stage cleared the stored tree after the danger confirmation while retaining the edited thread and its finalized event' })
 
     phase = 'v3-narrative-candidate-reject'
     await openProject(session.page)
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
-    await views.getByRole('tab', { name: '计划清单' }).click()
-    await session.page.getByRole('button', { name: 'AI 建议伏笔与线索' }).click()
-    const candidateDialog = session.page.getByRole('dialog', { name: '蓝图计划候选' })
-    await candidateDialog.getByRole('button', { name: '生成候选', exact: true }).click()
-    const candidateSection = candidateDialog.locator('section').filter({ hasText: candidateTitle })
+    await openPlot(session.page)
+    await showThreads(session.page)
+    const suggestions = session.page.getByRole('region', { name: 'AI 建议的伏笔' })
+    await suggestions.getByRole('button', { name: '根据蓝图建议伏笔' }).click()
+    const candidateSection = suggestions.getByRole('article', { name: '伏笔建议' }).filter({ hasText: candidateTitle })
     await candidateSection.getByText(candidateTitle, { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
     assert.equal(providerRequests.length, 4)
     assert.equal(providerRequests[3].kind, 'plan-candidate')
     assert.equal(providerRequests[3].responseStatus, 200)
-    await candidateSection.getByRole('button', { name: '拒绝候选' }).click()
-    await candidateSection.waitFor({ state: 'hidden' })
-    await candidateDialog.locator('div.border-t').getByRole('button', { name: '关闭', exact: true }).click()
+    await candidateSection.getByRole('button', { name: '不采纳' }).click()
+    await candidateSection.waitFor({ state: 'detached' })
     const afterRejectOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
     assert.equal(afterRejectOpen.success, true, afterRejectOpen.error)
     const afterRejectSession = { projectId: created.projectId, projectPath: created.projectPath,
@@ -472,7 +476,7 @@ async function main() {
       afterPlanReadSha256: createHash('sha256').update(JSON.stringify(afterRejectPlans)).digest('hex') }
     steps.push({ stepId: 'v3-narrative-candidate-reject', relatedActionId: 'U15.A07',
       coverage: 'ui-controlled-ai-candidate-reject-and-db-read',
-      assertion: 'V3 rejected a generated blueprint plan candidate without changing the existing author plan or confirmed event' })
+      assertion: 'The stage dismissed a generated blueprint thread suggestion without changing the existing author plan or confirmed event' })
 
     phase = 'restart-persistence'
     await quit()
@@ -480,15 +484,18 @@ async function main() {
     app = session.opened
     await openProject(session.page)
     await assertWriter(session.page)
-    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
-    await session.page.getByText('尚未生成剧情树', { exact: true }).waitFor({ state: 'visible' })
-    await session.page.getByRole('tablist', { name: '剧情编辑器视图' }).getByRole('tab', { name: '计划清单' }).click()
-    await session.page.getByRole('heading', { name: updatedTitle }).waitFor({ state: 'visible' })
-    await session.page.getByText('第1章 · 已埋设 · 旧站来信', { exact: true }).waitFor({ state: 'visible' })
-    assert.equal(await session.page.getByRole('heading', { name: deletedTitle }).count(), 0)
+    await openPlot(session.page)
+    await session.page.getByText('还没有剧情树', { exact: true }).waitFor({ state: 'visible' })
+    await showThreads(session.page)
+    await threadItem(session.page, updatedTitle).getByText('第 1 章 · 已埋设 · 旧站来信', { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await threadItem(session.page, deletedTitle).count(), 0)
     steps.push({ stepId: 'writer-narrative-plan-restart', relatedActionId: 'U15.A07', coverage: 'persisted-plan-reopen',
-      assertion: 'Fresh packaged Electron session reopened the author plan through Writer UI' })
-  } catch (error) { failure = error }
+      assertion: 'A fresh packaged Electron session reopened the author thread and its event through the stage UI' })
+  } catch (error) {
+    failure = error
+    fs.mkdirSync(receiptDir, { recursive: true })
+    await app?.windows()[0]?.screenshot({ path: path.join(receiptDir, 'failure.png') }).catch(() => {})
+  }
   failure = providerFailure ?? failure
   const cleanupErrors = []
   if (app) try { await quit() } catch (error) { cleanupErrors.push(error) }
@@ -510,7 +517,7 @@ async function main() {
     packageReuseReason: 'Fixed package hashes match and product inputs are unchanged since the build SHA.',
     packageDir,
     artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
-    evidenceLevel: 'packaged-electron+controlled-provider', shell: 'writer-v3',
+    evidenceLevel: 'packaged-electron+controlled-provider', shell: 'stage',
     fixtureProviderRequests: providerRequests, generationFailureEvidence, candidateRejectionEvidence, eventEvidenceFailure,
     networkInterception: 'main-process fetch for https://api.openai.com only',
     steps: steps.map(step => ({ ...step, outcome: 'PASS' })),

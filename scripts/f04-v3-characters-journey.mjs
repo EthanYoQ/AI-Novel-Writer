@@ -10,6 +10,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as arch from './redesign/pages/architecture.mjs'
+import * as chapterView from './redesign/pages/chapter-view.mjs'
+import * as runSheet from './redesign/pages/run-sheet.mjs'
+import * as stage from './redesign/pages/stage.mjs'
+import { resolveWindowsExecutable } from './product-identity.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
@@ -27,7 +32,7 @@ const expectedExe = option('exe-sha256')
 const expectedAsar = option('asar-sha256')
 assert(packageDir && packageSourceSha && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
   'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
-const exe = path.join(packageDir, 'AI小说作家.exe')
+const exe = resolveWindowsExecutable(packageDir)
 const asar = path.join(packageDir, 'resources', 'app.asar')
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -42,7 +47,7 @@ const ignoredTestOnlyPaths = changedProductPaths.filter(file => [
   'electron/services/__tests__/release-vector-smoke.test.ts',
 ].includes(file))
 const dirtyProductPaths = git('status', '--porcelain', '--untracked-files=all', '--', ...productInputs).split('\n').filter(Boolean)
-const ignoredScreenshotPaths = dirtyProductPaths.filter(line => /^\?\? src\/components\/(?:characters|dialogs|editor|layout\/v2|panels|pages\/v2)\/__tests__\/__screenshots__\/.*\.png$/.test(line))
+const ignoredScreenshotPaths = dirtyProductPaths.filter(line => /^\?\? src\/.*\/__tests__\/__screenshots__\/.*\.png$/.test(line))
 assert.deepEqual(changedProductPaths.filter(file => !ignoredTestOnlyPaths.includes(file)), [], 'product source changed since fixed package build')
 assert.deepEqual(dirtyProductPaths.filter(line => !ignoredScreenshotPaths.includes(line)), [], 'product build inputs are dirty')
 assert.equal(sha256(exe), expectedExe, 'executable hash changed')
@@ -133,15 +138,8 @@ async function launch() {
   }, fixturePort)
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+  await stage.waitForStage(page)
   assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer', revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
   return { app, page }
 }
 
@@ -158,19 +156,90 @@ async function closeAppBounded(app) {
   catch (error) { throw new Error(`ELECTRON_CLOSE_FAILED pid=${pid}: ${error?.message}`) }
 }
 
+/* 纸墨外壳的角色名单：从书房打开作品，架构阶段「角色名单」一节进入；左边名单、右边档案。 */
+async function openProject(page) {
+  await stage.dismissMigrationNotice(page)
+  await stage.showLibrary(page)
+  await stage.openFromLibrary(page, projectName)
+  await stage.waitForWork(page, projectName)
+}
+async function openCast(page) {
+  await arch.open(page)
+  await arch.openCast(page)
+}
+async function openRolePage(page) {
+  await openProject(page)
+  await openCast(page)
+}
+const castRow = (page, characterId) => arch.castRoster(page).locator(`[data-character-id="${characterId}"]`)
+const rosterIds = page => arch.castRoster(page).locator('[data-character-id]')
+  .evaluateAll(rows => rows.map(row => row.getAttribute('data-character-id')))
+const profileField = (page, label) => stage.root(page).getByLabel(label, { exact: true })
+/** 当前状态各字段标签旁的来源：定稿派生、作者输入等。 */
+const fieldSource = (page, label) => stage.root(page).locator('.cast-field')
+  .filter({ has: page.getByText(label, { exact: true }) }).locator('.cast-field-hint')
+const profileAvatar = page => stage.root(page).locator('img.cast-profile-avatar')
+const saveState = (page, label) => stage.root(page).locator('.cast-save-state').filter({ hasText: new RegExp(`^${label}$`) })
+async function showProfileView(page, name) {
+  const button = stage.root(page).getByRole('group', { name: '档案视图' }).getByRole('button', { name, exact: true })
+  if (await button.getAttribute('aria-pressed') !== 'true') await button.click()
+}
+/** 档案有改动时写「未保存」；从它等到「已保存」，不会读到上一次保存留下的状态。 */
+async function saveCharacter(page) {
+  await saveState(page, '未保存').waitFor({ state: 'visible' })
+  await stage.root(page).getByRole('button', { name: '保存角色', exact: true }).click()
+  await saveState(page, '已保存').waitFor({ state: 'visible', timeout: 20_000 })
+}
+/** 名单里新建一位：新草稿自动选中，填姓名后保存，等名单里出现它的稳定 ID。 */
 async function addCharacter(page, name) {
-  const before = new Set(await page.locator('[data-character-id]').evaluateAll(rows => rows.map(row => row.getAttribute('data-character-id'))))
-  await page.getByTitle('新建角色').click()
-  await page.getByText('姓名', { exact: true }).locator('xpath=..').locator('input').fill(name)
-  await page.getByRole('button', { name: '保存', exact: true }).last().click()
-  await page.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
-  await page.waitForFunction(previous => [...document.querySelectorAll('[data-character-id]')]
-    .some(row => !previous.includes(row.getAttribute('data-character-id'))), [...before])
-  const id = (await page.locator('[data-character-id]').evaluateAll(rows => rows.map(row => row.getAttribute('data-character-id'))))
-    .find(candidate => candidate && !before.has(candidate))
+  const before = new Set(await rosterIds(page))
+  await arch.castRoster(page).getByRole('button', { name: '新建角色', exact: true }).click()
+  await showProfileView(page, '基础设定')
+  await profileField(page, '姓名').fill(name)
+  await saveCharacter(page)
+  const stableNew = ids => ids.find(id => id && !id.startsWith('draft:') && !before.has(id))
+  await page.waitForFunction(previous => [...document.querySelectorAll('.cast-roster [data-character-id]')]
+    .some(row => { const id = row.getAttribute('data-character-id'); return id && !id.startsWith('draft:') && !previous.includes(id) }), [...before])
+  const id = stableNew(await rosterIds(page))
   assert(id, `stable ID missing for ${name}`)
   return id
 }
+/** 运行侧页：这次定稿进了「历史」（成功或失败都算结束），「进行中」里没有别的运行。 */
+async function waitRunsQuiet(page, title) {
+  await runSheet.openFromPalette(page)
+  await runSheet.tab(page, '历史').click()
+  const history = page.getByRole('list', { name: '运行历史' })
+  await history.locator('.run-history-title').filter({ hasText: new RegExp(`^${title}$`) }).first().waitFor({ state: 'visible', timeout: 90_000 })
+  // 运行历史只在「历史」页挂载，切到「进行中」之前读。
+  const historyTitles = await history.locator('.run-history-title').allTextContents()
+  await runSheet.tab(page, '进行中').click()
+  let active = []
+  for (let attempt = 0; attempt < 360; attempt++) {
+    active = await runSheet.activeTitles(page)
+    if (active.length === 0) return { active, historyTitles }
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  throw new Error(`RUNS_NOT_QUIESCENT ${JSON.stringify({ active, title, historyTitles })}`)
+}
+async function waitRunCompleted(page, title) {
+  await runSheet.openFromPalette(page)
+  await runSheet.tab(page, '历史').click()
+  await page.getByRole('list', { name: '运行历史' }).getByRole('listitem')
+    .filter({ has: page.locator('.run-history-title', { hasText: new RegExp(`^${title}$`) }) }).first()
+    .locator('.run-history-row').filter({ hasText: '已完成，' }).waitFor({ state: 'visible', timeout: 90_000 })
+}
+/** 打开第 number 章，核对正文是夹具写进去的那一份，然后定稿。 */
+async function finalizeChapter(page, number, prose) {
+  await stage.openChapter(page, number)
+  assert((await chapterView.prose(page).innerText()).includes(prose), `chapter ${number} draft differs from fixture source`)
+  await chapterView.finalize(page, number)
+}
+const suggestions = page => stage.root(page).getByRole('region', { name: '待处理的角色建议' })
+const imageHash = locator => locator.evaluate(async image => {
+  const bytes = new Uint8Array(await (await fetch(image.src)).arrayBuffer())
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+})
 
 async function main() {
   if (controlledModel) {
@@ -180,7 +249,7 @@ async function main() {
   fs.mkdirSync(receiptDir, { recursive: true })
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
   fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F04 V3 characters synthetic journey', sourceProject: repository,
-    createdAt: new Date().toISOString(), ttlHours: 48, retainedReason: 'isolated V3 packaged role evidence',
+    createdAt: new Date().toISOString(), ttlHours: 48, retainedReason: 'isolated stage packaged role evidence',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
   let app
   let importDb
@@ -188,8 +257,9 @@ async function main() {
   let failure = null
   let projectPath
   try {
-    app = (await launch()).app
-    const page = await app.firstWindow()
+    let launched = await launch()
+    app = launched.app
+    const page = launched.page
     currentStep = 'fixture-project'
     const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
@@ -202,16 +272,12 @@ async function main() {
     await closeAppBounded(app)
     app = null
 
-    app = (await launch()).app
-    const rolePage = await app.firstWindow()
-    const notice = rolePage.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-    await rolePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-    await rolePage.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
-    currentStep = 'v3-role-entry'
-    await rolePage.locator('.writer-left-rail button[title="角色"]').click()
-    await rolePage.getByTitle('新建角色').waitFor({ state: 'visible' })
-    assert.equal(await rolePage.locator('[data-shell-variant="v3"]').count(), 1)
+    launched = await launch()
+    app = launched.app
+    const rolePage = launched.page
+    currentStep = 'stage-role-entry'
+    await openRolePage(rolePage)
+    assert.equal(await rolePage.locator(stage.STAGE_SHELL).count(), 1)
     if (u09StaleOnly) {
       currentStep = 'u09-a09-stale-source-setup'
       lateId = await addCharacter(rolePage, lateName)
@@ -227,18 +293,12 @@ async function main() {
       assert.equal(draft.success, true, draft.error)
       await closeAppBounded(app); app = null
 
-      app = (await launch()).app
-      const stalePage = await app.firstWindow()
-      const notice = stalePage.locator('[role="status"].fixed.inset-x-0.top-10')
-      if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-      await stalePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-      await stalePage.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-      assert((await stalePage.locator('.cm-content').innerText()).includes(lateProse))
+      launched = await launch()
+      app = launched.app
+      const stalePage = launched.page
+      await openProject(stalePage)
       currentStep = 'u09-a09-stale-source'
-      await stalePage.getByRole('button', { name: '定稿', exact: true }).click()
-      await stalePage.getByRole('dialog').filter({ hasText: '确定要将第 1 章定稿吗？' })
-        .getByRole('button', { name: '确认定稿', exact: true }).click()
-      await stalePage.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
+      await finalizeChapter(stalePage, 1, lateProse)
       await waitBounded(lateModelRequested, 90_000, 'old source model request missing')
       assert.equal(modelRequests.length, 2)
       assert(JSON.stringify(modelRequests[1].messages).includes(lateId), 'old request lacks frozen character ID')
@@ -247,7 +307,7 @@ async function main() {
       assert.equal(binding.sourceManifest.operation, 'finalized-character-state')
       const currentSession = { projectId: created.projectId, projectPath, leaseId: binding.epoch }
       const older = importDb.prepare('SELECT finalization_id AS finalizationId FROM finalization_outbox WHERE draft_id=?').get(draft.id)
-      assert(older?.finalizationId, 'old Writer finalization missing')
+      assert(older?.finalizationId, 'old stage finalization missing')
       const newerText = `${lateProse}新版定稿。`
       const newer = await invoke(stalePage, 'db:draft-create', { chapterNumber: 1, version: 2, source: 'write',
         content: newerText, wordCount: newerText.length }, projectPath, currentSession)
@@ -273,43 +333,32 @@ async function main() {
       const row = importDb.prepare('SELECT cs_location AS location,cs_provenance AS provenance FROM characters WHERE character_id=?').get(lateId)
       assert.equal(row.location, '', 'old source overwrote the character after newer finalization')
       assert.equal(modelRequests.length, 2, 'old source failure retried the model')
-      const taskPanel = stalePage.locator('.writer-task-table')
-      if (!(await taskPanel.isVisible())) await stalePage.locator('.bottom-tool-btn[title="任务"]').click()
-      await taskPanel.waitFor({ state: 'visible' })
-      const activeCount = taskPanel.locator(':scope > div:first-child > div:first-child > span.font-mono')
-      const history = taskPanel.getByText('历史任务', { exact: true }).locator('..')
-      const finalizedHistory = history.getByText('第 1 章 · 定稿', { exact: true })
-      let quiet = false
-      for (let attempt = 0; attempt < 360; attempt++) {
-        quiet = await activeCount.count() === 0 && await finalizedHistory.isVisible()
-        if (quiet) break
-        await new Promise(resolve => setTimeout(resolve, 250))
-      }
-      assert(quiet, 'stale source workflow did not settle before restart')
+      const quiet = await waitRunsQuiet(stalePage, '第 1 章 · 定稿')
       await closeAppBounded(app); app = null
-      app = (await launch()).app
-      const reopened = await app.firstWindow()
+      launched = await launch()
+      app = launched.app
+      const reopened = launched.page
       const persisted = importDb.prepare('SELECT cs_location AS location FROM characters WHERE character_id=?').get(lateId)
       assert.equal(persisted.location, '', 'old source write survived restart')
       assert.deepEqual(failureRow.get(`finalization:${older.finalizationId}`), rejected)
       steps.push({ stepId: currentStep, actionId: 'U09.A09', outcome: 'PASS',
-        assertion: 'A held Writer finalized-character response from chapter version 1 was rejected after version 2 became authoritative; no stale character write or retry survived restart.',
-        observed: { oldFinalizationId: older.finalizationId, newerDraftId: newer.id, rejection: rejected,
-          characterId: lateId, modelRequestCount: modelRequests.length, writerShell: await reopened.locator('[data-shell-variant="v3"]').count() } })
+        assertion: 'A held finalized-character response from a chapter finalized in the stage shell was rejected after version 2 became authoritative; no stale character write or retry survived restart.',
+        observed: { oldFinalizationId: older.finalizationId, newerDraftId: newer.id, rejection: rejected, runSheet: quiet,
+          characterId: lateId, modelRequestCount: modelRequests.length, stageShell: await reopened.locator(stage.STAGE_SHELL).count() } })
       return
     }
     if (u09FinalizedOnly) {
       finalizedIds = [await addCharacter(rolePage, finalizedNames[0]), await addCharacter(rolePage, finalizedNames[1]),
         await addCharacter(rolePage, finalizedNames[2]), await addCharacter(rolePage, finalizedNames[2])]
-      await rolePage.locator(`[data-character-id="${finalizedIds[1]}"]`).click()
-      await rolePage.getByTitle('查看当前进展/状态').click()
-      await rolePage.getByText('当前位置/阵营', { exact: false }).locator('xpath=..').locator('textarea').fill('作者旧港')
-      await rolePage.getByRole('button', { name: '保存', exact: true }).last().click()
-      await rolePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+      await castRow(rolePage, finalizedIds[1]).click()
+      await showProfileView(rolePage, '当前状态')
+      await profileField(rolePage, '当前位置/阵营').fill('作者旧港')
+      await saveCharacter(rolePage)
       await closeAppBounded(app); app = null
 
-      app = (await launch()).app
-      const sourcePage = await app.firstWindow()
+      launched = await launch()
+      app = launched.app
+      const sourcePage = launched.page
       const opened = await invoke(sourcePage, 'project:open', projectPath, randomUUID(), null)
       assert.equal(opened.success, true, opened.error)
       const session = { projectId: created.projectId, projectPath, leaseId: opened.project?.sessionLease }
@@ -324,21 +373,13 @@ async function main() {
       assert(Number.isSafeInteger(draftId) && draftId > 0)
       await closeAppBounded(app); app = null
 
-      currentStep = 'u09-a05-writer-finalize'
-      app = (await launch()).app
-      const finalPage = await app.firstWindow()
-      const finalNotice = finalPage.locator('[role="status"].fixed.inset-x-0.top-10')
-      if (await finalNotice.isVisible()) await finalNotice.getByRole('button', { name: '知道了', exact: true }).click()
-      await finalPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-      await finalPage.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
-      await finalPage.locator('.cm-content').waitFor({ state: 'visible' })
-      assert((await finalPage.locator('.cm-content').innerText()).includes(finalizedProse), 'Writer draft differs from fixture source')
-      await finalPage.getByRole('button', { name: '定稿', exact: true }).click()
-      const finalConfirm = finalPage.getByRole('dialog').filter({ hasText: '确定要将第 1 章定稿吗？' })
-      await finalConfirm.getByRole('button', { name: '确认定稿', exact: true }).click()
-      await finalPage.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
-      await finalPage.locator('.writer-ai-panel').getByText('整个工作流已全部完成', { exact: true })
-        .waitFor({ state: 'visible', timeout: 90_000 })
+      currentStep = 'u09-a05-stage-finalize'
+      launched = await launch()
+      app = launched.app
+      const finalPage = launched.page
+      await openProject(finalPage)
+      await finalizeChapter(finalPage, 1, finalizedProse)
+      await waitRunCompleted(finalPage, '第 1 章 · 定稿')
 
       assert.equal(modelRequests.length, 2)
       assert(JSON.stringify(modelRequests[1].messages).includes(finalizedIds[0]), 'model did not receive frozen character ID')
@@ -350,8 +391,9 @@ async function main() {
       assert.deepEqual(postSteps.map(step => [step.stepKey, step.ok]).sort(), [['chapter_notes', 1], ['character_cards', 1]])
       await closeAppBounded(app); app = null
 
-      app = (await launch()).app
-      const verificationPage = await app.firstWindow()
+      launched = await launch()
+      app = launched.app
+      const verificationPage = launched.page
       const verifyOpened = await invoke(verificationPage, 'project:open', projectPath, randomUUID(), null)
       assert.equal(verifyOpened.success, true, verifyOpened.error)
       const verifySession = { projectId: created.projectId, projectPath, leaseId: verifyOpened.project?.sessionLease }
@@ -392,27 +434,25 @@ async function main() {
       assert.equal(proposal.source.finalizationId, source.finalizationId)
       await closeAppBounded(app); app = null
 
-      app = (await launch()).app
-      const proposalPage = await app.firstWindow()
-      const notice = proposalPage.locator('[role="status"].fixed.inset-x-0.top-10')
-      if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-      await proposalPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-      await proposalPage.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
-      await proposalPage.locator('.writer-left-rail button[title="角色"]').click()
-      await proposalPage.getByRole('region', { name: '待处理角色状态建议' }).waitFor({ state: 'visible' })
-      await proposalPage.getByRole('region', { name: '待处理定稿角色决策' }).waitFor({ state: 'visible' })
+      launched = await launch()
+      app = launched.app
+      const proposalPage = launched.page
+      await openRolePage(proposalPage)
+      // 纸墨外壳把状态建议与定稿角色决策合成角色名单页顶上的一条提示条，各占一行。
+      await suggestions(proposalPage).locator('li[data-kind="state"]').waitFor({ state: 'visible' })
+      await suggestions(proposalPage).locator('li[data-kind="decision"]').waitFor({ state: 'visible' })
       steps.push({ stepId: currentStep, actionId: 'U09.A06', outcome: 'PASS',
-        assertion: 'Writer showed both author-field conflict and ambiguous identity as source-bound pending decisions; author value remained intact.',
+        assertion: 'The cast page showed both the author-field conflict and the ambiguous identity as source-bound pending suggestions; the author value remained intact.',
         observed: { stateCandidateKey: proposal.candidateKey, identityBatchId: pendingIdentity.proposalBatchId,
           authorValue: state(finalizedIds[1]).location, ambiguousCandidateIds: finalizedIds.slice(2) } })
 
       currentStep = 'u09-a07-decline-reopen'
-      await proposalPage.getByRole('button', { name: '检查定稿状态建议' }).click()
-      await proposalPage.getByRole('button', { name: '拒绝状态建议' }).click()
-      await proposalPage.getByRole('region', { name: '待处理角色状态建议' }).waitFor({ state: 'hidden' })
-      await proposalPage.getByRole('button', { name: '检查定稿角色决策' }).click()
-      await proposalPage.getByRole('button', { name: '拒绝这些决策' }).click()
-      await proposalPage.getByRole('region', { name: '待处理定稿角色决策' }).waitFor({ state: 'hidden' })
+      await suggestions(proposalPage).getByRole('button', { name: '检查定稿状态建议' }).click()
+      await suggestions(proposalPage).getByRole('button', { name: '拒绝状态建议' }).click()
+      await suggestions(proposalPage).locator('li[data-kind="state"]').waitFor({ state: 'detached' })
+      await suggestions(proposalPage).getByRole('button', { name: '检查定稿角色决策' }).click()
+      await suggestions(proposalPage).getByRole('button', { name: '拒绝这些决策' }).click()
+      await suggestions(proposalPage).waitFor({ state: 'hidden' })
       const stored = JSON.parse(importDb.prepare('SELECT character_state_candidates FROM summary_snapshots WHERE draft_id=?').pluck().get(draftId))
       assert.equal(stored.pending.length, 0)
       assert(stored.receipts.some(receipt => receipt.candidateKey === proposal.candidateKey && receipt.decision === 'decline'))
@@ -422,16 +462,11 @@ async function main() {
       assert.equal(state(finalizedIds[1]).location, '作者旧港')
       await closeAppBounded(app); app = null
 
-      app = (await launch()).app
-      const reopenedPage = await app.firstWindow()
-      const reopenedNotice = reopenedPage.locator('[role="status"].fixed.inset-x-0.top-10')
-      if (await reopenedNotice.isVisible()) await reopenedNotice.getByRole('button', { name: '知道了', exact: true }).click()
-      await reopenedPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-      await reopenedPage.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
-      await reopenedPage.locator('.writer-left-rail button[title="角色"]').click()
-      await reopenedPage.getByTitle('新建角色').waitFor({ state: 'visible' })
-      assert.equal(await reopenedPage.getByRole('region', { name: '待处理角色状态建议' }).count(), 0)
-      assert.equal(await reopenedPage.getByRole('region', { name: '待处理定稿角色决策' }).count(), 0)
+      launched = await launch()
+      app = launched.app
+      const reopenedPage = launched.page
+      await openRolePage(reopenedPage)
+      assert.equal(await suggestions(reopenedPage).count(), 0)
       const readOpened = await invoke(reopenedPage, 'project:open', projectPath, randomUUID(), projectPath)
       assert.equal(readOpened.success, true, readOpened.error)
       const readSession = { projectId: created.projectId, projectPath, leaseId: readOpened.project?.sessionLease }
@@ -448,34 +483,28 @@ async function main() {
 
       currentStep = 'u09-a08-rename-source-reopen'
       await closeAppBounded(app); app = null
-      app = (await launch()).app
-      const renamePage = await app.firstWindow()
-      const renameNotice = renamePage.locator('[role="status"].fixed.inset-x-0.top-10')
-      if (await renameNotice.isVisible()) await renameNotice.getByRole('button', { name: '知道了', exact: true }).click()
-      await renamePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-      await renamePage.locator('.writer-left-rail button[title="角色"]').click()
-      await renamePage.locator(`[data-character-id="${finalizedIds[0]}"]`).click()
-      await renamePage.getByTitle('查看当前进展/状态').click()
-      const locationField = page => page.getByText('当前位置/阵营', { exact: false }).locator('xpath=..')
-      assert.equal(await locationField(renamePage).locator('textarea').inputValue(), '北塔')
-      assert((await locationField(renamePage).locator('label').innerText()).includes('定稿派生'))
-      await renamePage.getByTitle('返回基础设定').click()
-      await renamePage.getByText('姓名', { exact: true }).locator('xpath=..').locator('input').fill(finalizedNames[1])
-      await renamePage.getByRole('button', { name: '保存', exact: true }).last().click()
-      await renamePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+      launched = await launch()
+      app = launched.app
+      const renamePage = launched.page
+      await openRolePage(renamePage)
+      await castRow(renamePage, finalizedIds[0]).click()
+      await showProfileView(renamePage, '当前状态')
+      assert.equal(await profileField(renamePage, '当前位置/阵营').inputValue(), '北塔')
+      assert.equal(await fieldSource(renamePage, '当前位置/阵营').innerText(), '定稿派生')
+      await showProfileView(renamePage, '基础设定')
+      await profileField(renamePage, '姓名').fill(finalizedNames[1])
+      await saveCharacter(renamePage)
       await closeAppBounded(app); app = null
 
-      app = (await launch()).app
-      const sameNamePage = await app.firstWindow()
-      const sameNameNotice = sameNamePage.locator('[role="status"].fixed.inset-x-0.top-10')
-      if (await sameNameNotice.isVisible()) await sameNameNotice.getByRole('button', { name: '知道了', exact: true }).click()
-      await sameNamePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-      await sameNamePage.locator('.writer-left-rail button[title="角色"]').click()
+      launched = await launch()
+      app = launched.app
+      const sameNamePage = launched.page
+      await openRolePage(sameNamePage)
       for (const [id, value, origin] of [[finalizedIds[0], '北塔', '定稿派生'], [finalizedIds[1], '作者旧港', '作者输入']]) {
-        await sameNamePage.locator(`[data-character-id="${id}"]`).click()
-        if (await sameNamePage.getByTitle('查看当前进展/状态').isVisible()) await sameNamePage.getByTitle('查看当前进展/状态').click()
-        assert.equal(await locationField(sameNamePage).locator('textarea').inputValue(), value)
-        assert((await locationField(sameNamePage).locator('label').innerText()).includes(origin), `${id} Writer source label changed`)
+        await castRow(sameNamePage, id).click()
+        await showProfileView(sameNamePage, '当前状态')
+        assert.equal(await profileField(sameNamePage, '当前位置/阵营').inputValue(), value)
+        assert.equal(await fieldSource(sameNamePage, '当前位置/阵营').innerText(), origin, `${id} source label changed`)
       }
       const sameNameRows = importDb.prepare('SELECT character_id AS id,name FROM characters WHERE character_id IN (?,?) ORDER BY character_id')
         .all(finalizedIds[0], finalizedIds[1])
@@ -488,16 +517,16 @@ async function main() {
       assert.equal(JSON.parse(state(finalizedIds[0]).provenance).location.kind, 'derived')
       assert.equal(JSON.parse(state(finalizedIds[1]).provenance).location.kind, 'author')
       steps.push({ stepId: currentStep, actionId: 'U09.A08', outcome: 'PASS',
-        assertion: 'Writer rename to an existing display name kept two stable IDs, each field value and source label, and ID-scoped alias history after restart.',
+        assertion: 'Renaming to an existing display name on the cast page kept two stable IDs, each field value and source label, and ID-scoped alias history after restart.',
         observed: { ids: finalizedIds.slice(0, 2), displayName: finalizedNames[1], locations: ['北塔', '作者旧港'],
           sourceKinds: ['derived', 'author'], aliasCount: aliases.length } })
 
       currentStep = 'u09-a09-late-author-save'
-      await sameNamePage.getByTitle('返回基础设定').click()
       lateId = await addCharacter(sameNamePage, lateName)
       await closeAppBounded(app); app = null
-      app = (await launch()).app
-      const secondSourcePage = await app.firstWindow()
+      launched = await launch()
+      app = launched.app
+      const secondSourcePage = launched.page
       const secondOpened = await invoke(secondSourcePage, 'project:open', projectPath, randomUUID(), null)
       assert.equal(secondOpened.success, true, secondOpened.error)
       const secondSession = { projectId: created.projectId, projectPath, leaseId: secondOpened.project?.sessionLease }
@@ -510,36 +539,29 @@ async function main() {
       assert.equal(secondDraft.success, true, secondDraft.error)
       await closeAppBounded(app); app = null
 
-      app = (await launch()).app
-      const latePage = await app.firstWindow()
-      const lateNotice = latePage.locator('[role="status"].fixed.inset-x-0.top-10')
-      if (await lateNotice.isVisible()) await lateNotice.getByRole('button', { name: '知道了', exact: true }).click()
-      await latePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-      await latePage.locator('.writer-project-tree').locator('[title*="第2章 南站 v1"]').click()
-      assert((await latePage.locator('.cm-content').innerText()).includes(lateProse), 'second Writer draft differs from fixture source')
-      await latePage.getByRole('button', { name: '定稿', exact: true }).click()
-      const secondConfirm = latePage.getByRole('dialog').filter({ hasText: '确定要将第 2 章定稿吗？' })
-      await secondConfirm.getByRole('button', { name: '确认定稿', exact: true }).click()
-      await latePage.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
+      launched = await launch()
+      app = launched.app
+      const latePage = launched.page
+      await openProject(latePage)
+      await finalizeChapter(latePage, 2, lateProse)
       let lateTimeout
       await Promise.race([lateModelRequested, new Promise((_, reject) => {
         lateTimeout = setTimeout(() => reject(new Error('late model request missing')), 90_000)
       })]).finally(() => clearTimeout(lateTimeout))
       assert.equal(modelRequests.length, 4, 'unexpected finalized model call order')
       assert(JSON.stringify(modelRequests[3].messages).includes(lateId), 'late model request lacks frozen character ID')
-      await latePage.locator('.writer-left-rail button[title="角色"]').click()
-      await latePage.locator(`[data-character-id="${lateId}"]`).click()
-      await latePage.getByTitle('查看当前进展/状态').click()
-      await locationField(latePage).locator('textarea').fill('作者并发值')
-      await latePage.getByRole('button', { name: '保存', exact: true }).last().click()
-      await latePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
-      assert.equal(state(lateId).location, '作者并发值', 'Writer save did not persist before late response')
+      await openCast(latePage)
+      await castRow(latePage, lateId).click()
+      await showProfileView(latePage, '当前状态')
+      await profileField(latePage, '当前位置/阵营').fill('作者并发值')
+      await saveCharacter(latePage)
+      assert.equal(state(lateId).location, '作者并发值', 'cast page save did not persist before late response')
       assert.equal(JSON.parse(state(lateId).provenance).location.kind, 'author')
       const beforeRelease = { characterId: lateId, location: state(lateId).location,
         provenance: JSON.parse(state(lateId).provenance).location, requestCount: modelRequests.length }
       const secondOutbox = importDb.prepare('SELECT finalization_id AS finalizationId,content_hash AS contentHash FROM finalization_outbox WHERE draft_id=?')
         .get(secondDraft.id)
-      assert(secondOutbox?.finalizationId, 'second Writer finalization outbox missing')
+      assert(secondOutbox?.finalizationId, 'second stage finalization outbox missing')
       const secondSlot = { source: { draftId: secondDraft.id, chapterNumber: 2, ...secondOutbox }, stepKey: 'character_cards' }
       releaseLateModel(); releaseLateModel = undefined
       const failureRow = importDb.prepare(`SELECT s.ok,s.error_msg AS errorMsg,s.attempt_count AS attemptCount FROM post_process_steps s
@@ -558,39 +580,19 @@ async function main() {
         'a retry escaped the frozen character ID')
       assert.equal(state(lateId).location, '作者并发值')
       assert.equal(state(finalizedIds[0]).location, '北塔')
-      const taskPanel = latePage.locator('.writer-task-table')
-      if (!(await taskPanel.isVisible())) await latePage.locator('.bottom-tool-btn[title="任务"]').click()
-      await taskPanel.waitFor({ state: 'visible' })
-      const activeCount = taskPanel.locator(':scope > div:first-child > div:first-child > span.font-mono')
-      const history = taskPanel.getByText('历史任务', { exact: true }).locator('..')
-      const finalizedHistory = history.getByText('第 2 章 · 定稿', { exact: true })
-      let taskState
-      for (let attempt = 0; attempt < 360; attempt++) {
-        taskState = { activeCount: await activeCount.count() ? (await activeCount.textContent())?.trim() : null,
-          finalizedInHistory: await finalizedHistory.isVisible() }
-        if (taskState.activeCount === null && taskState.finalizedInHistory) break
-        await new Promise(resolve => setTimeout(resolve, 250))
-      }
-      if (taskState.activeCount !== null || !taskState.finalizedInHistory) {
-        throw new Error(`A09_TASK_PANEL_NOT_QUIESCENT ${JSON.stringify({ ...taskState,
-          historyTitles: await history.locator('span.flex-1').allTextContents(),
-          completedTextVisible: await latePage.locator('.writer-ai-panel')
-            .getByText('整个工作流已全部完成', { exact: true }).isVisible() })}`)
-      }
+      const quiet = await waitRunsQuiet(latePage, '第 2 章 · 定稿')
       const staleApp = app; app = null
       await closeAppBounded(staleApp)
 
-      app = (await launch()).app
-      const lateReopenPage = await app.firstWindow()
-      const lateReopenNotice = lateReopenPage.locator('[role="status"].fixed.inset-x-0.top-10')
-      if (await lateReopenNotice.isVisible()) await lateReopenNotice.getByRole('button', { name: '知道了', exact: true }).click()
-      await lateReopenPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-      await lateReopenPage.locator('.writer-left-rail button[title="角色"]').click()
+      launched = await launch()
+      app = launched.app
+      const lateReopenPage = launched.page
+      await openRolePage(lateReopenPage)
       for (const [id, value, origin] of [[lateId, '作者并发值', '作者输入'], [finalizedIds[0], '北塔', '定稿派生']]) {
-        await lateReopenPage.locator(`[data-character-id="${id}"]`).click()
-        if (await lateReopenPage.getByTitle('查看当前进展/状态').isVisible()) await lateReopenPage.getByTitle('查看当前进展/状态').click()
-        assert.equal(await locationField(lateReopenPage).locator('textarea').inputValue(), value)
-        assert((await locationField(lateReopenPage).locator('label').innerText()).includes(origin))
+        await castRow(lateReopenPage, id).click()
+        await showProfileView(lateReopenPage, '当前状态')
+        assert.equal(await profileField(lateReopenPage, '当前位置/阵营').inputValue(), value)
+        assert.equal(await fieldSource(lateReopenPage, '当前位置/阵营').innerText(), origin)
       }
       const lateOpened = await invoke(lateReopenPage, 'project:open', projectPath, randomUUID(), projectPath)
       assert.equal(lateOpened.success, true, lateOpened.error)
@@ -609,8 +611,8 @@ async function main() {
       const verifiedApp = app; app = null
       await closeAppBounded(verifiedApp)
       steps.push({ stepId: currentStep, actionId: 'U09.A09', outcome: 'PASS',
-        assertion: 'Writer saved an author edit while a model response was held; the late result left a persisted field-conflict failure and artifact, and neither source or value regressed after restart.',
-        observed: { beforeRelease, finalizationId: secondOutbox.finalizationId, failure: lateFailure,
+        assertion: 'The cast page saved an author edit while a model response was held; the late result left a persisted field-conflict failure and artifact, and neither source or value regressed after restart.',
+        observed: { beforeRelease, finalizationId: secondOutbox.finalizationId, failure: lateFailure, runSheet: quiet,
           artifactIds: recovered.view.artifacts.map(artifact => artifact.artifactId), modelRequestCount: modelRequests.length } })
       return
     }
@@ -623,22 +625,24 @@ async function main() {
         `【大纲】${importNames[0]}负责调查失踪案。`,
         `【世界观】旧港有严格的夜航禁令。`,
       ].join('\n')
-      const panel = rolePage.locator('.writer-ai-panel').getByTestId('workflow-confirmation-panel')
+      // 提取的候选停在运行侧页「需要你确认」里，同一张运行卡片上有「取消」。
+      const panel = runSheet.sheet(rolePage).getByRole('region', { name: '需要你确认' })
+      const importButton = arch.castRoster(rolePage).getByRole('button', { name: '粘贴 / 导入角色卡', exact: true })
+      const importSource = rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' })
       const openImport = async text => {
-        const source = rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' })
-        if (!await source.isVisible()) await rolePage.getByTitle('粘贴 / 导入角色卡').click()
-        await source.fill(text)
+        if (!await importSource.isVisible()) await importButton.click()
+        await importSource.fill(text)
         await rolePage.getByRole('dialog').getByRole('button', { name: 'AI 提取并预览' }).click()
         await rolePage.getByRole('dialog').getByRole('button', { name: '发送并提取' }).click()
-        const taskPanel = rolePage.locator('.writer-task-table')
-        if (!(await taskPanel.isVisible())) await rolePage.locator('.bottom-tool-btn[title="任务"]').click()
-        const openConfirmation = taskPanel.getByTestId('workflow-confirmation-open')
-        await openConfirmation.waitFor({ state: 'visible', timeout: 30_000 })
-        await openConfirmation.click()
+        await runSheet.waitUntilOpen(rolePage)
+        await runSheet.tab(rolePage, '进行中').click()
         await panel.waitFor({ state: 'visible', timeout: 30_000 })
-        await panel.locator(':scope > details > summary').click()
-        assert.equal(await rolePage.locator('[data-shell-variant="v3"]').count(), 1)
+        assert.equal(await rolePage.locator(stage.STAGE_SHELL).count(), 1)
       }
+      const waitImportSettled = () => rolePage.waitForFunction(() => {
+        const button = [...document.querySelectorAll('.cast-roster button')].find(candidate => candidate.textContent?.includes('粘贴 / 导入角色卡'))
+        return button && !button.disabled
+      }, null, { timeout: 30_000 })
       currentStep = 'u09-a01-extract'
       await openImport(sourceText)
       assert.equal(modelRequests.length, 1)
@@ -647,7 +651,7 @@ async function main() {
       await panel.getByText(importNames[0], { exact: false }).first().waitFor({ state: 'visible' })
       assert.deepEqual(roster(), original, 'extraction changed canonical characters before approval')
       steps.push({ stepId: currentStep, actionId: 'U09.A01', outcome: 'PASS',
-        assertion: 'V3 paste entry sent text, outline, and worldbuilding to the controlled endpoint and showed a candidate without writing characters.',
+        assertion: 'The cast page paste entry sent text, outline, and worldbuilding to the controlled endpoint and the run sheet showed a candidate without writing characters.',
         observed: { modelRequestCount: 1, sourceKinds: ['text', 'outline', 'worldbuilding'], candidateName: importNames[0] } })
 
       currentStep = 'u09-a02-edit'
@@ -659,15 +663,12 @@ async function main() {
       await panel.getByRole('textbox', { name: `编辑候选背景：1:1:character:1` }).fill(editedBackground)
       assert.deepEqual(roster(), original, 'editing candidate changed canonical characters before approval')
       steps.push({ stepId: currentStep, actionId: 'U09.A02', outcome: 'PASS',
-        assertion: 'V3 candidate name and background were editable before approval without changing the canonical roster.',
+        assertion: 'The run-sheet candidate name and background were editable before approval without changing the canonical roster.',
         observed: { editedName, editedBackground } })
 
       currentStep = 'u09-a03-accept'
-      await panel.locator('[data-testid="workflow-confirmation-confirm"]').click()
-      await rolePage.waitForFunction(() => {
-        const button = document.querySelector('button[title="粘贴 / 导入角色卡"]')
-        return button && !button.disabled
-      }, null, { timeout: 30_000 })
+      await panel.getByRole('button', { name: '按当前选择确认', exact: true }).click()
+      await waitImportSettled()
       const accepted = roster()
       assert.equal(accepted.length, original.length + 1)
       const saved = accepted.find(row => row.name === editedName)
@@ -678,38 +679,36 @@ async function main() {
       assert.equal(provenance.fields.background.kind, 'author')
       assert.equal(provenance.fields.notes, undefined)
       steps.push({ stepId: currentStep, actionId: 'U09.A03', outcome: 'PASS',
-        assertion: 'One V3 confirmation atomically adopted the candidate with author provenance only on edited fields.',
+        assertion: 'One run-sheet confirmation atomically adopted the candidate with author provenance only on edited fields.',
         observed: { id: saved.id, editedName, editedBackground, uneditedNotes: saved.notes } })
 
       currentStep = 'u09-a04-reject-cancel'
       const rejectedSource = `${importNames[1]}是旧港配角；拒绝此人物。`
       await openImport(rejectedSource)
       await panel.locator('select[aria-label^="采用方式："]').first().selectOption('keep-unresolved')
-      await panel.locator('[data-testid="workflow-confirmation-confirm"]').click()
-      await rolePage.waitForFunction(() => {
-        const button = document.querySelector('button[title="粘贴 / 导入角色卡"]')
-        return button && !button.disabled
-      }, null, { timeout: 30_000 })
+      await panel.getByRole('button', { name: '按当前选择确认', exact: true }).click()
+      await waitImportSettled()
       assert.deepEqual(roster(), accepted, 'rejected candidate changed original roster')
-      await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).waitFor({ state: 'visible' })
-      assert.equal(await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).inputValue(), rejectedSource,
+      await importSource.waitFor({ state: 'visible' })
+      assert.equal(await importSource.inputValue(), rejectedSource,
         'rejecting every candidate discarded the original pasted text')
       const cancelledSource = `${importNames[2]}来自作者未采用的世界观草稿。`
       await openImport(cancelledSource)
-      await panel.locator('..').getByRole('button', { name: '中止生成', exact: true }).click()
-      await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).waitFor({ state: 'visible', timeout: 30_000 })
-      assert.equal(await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).inputValue(), cancelledSource)
+      await runSheet.sheet(rolePage).getByRole('article').filter({ has: rolePage.getByRole('region', { name: '需要你确认' }) })
+        .getByRole('button', { name: /^取消「/ }).click()
+      await importSource.waitFor({ state: 'visible', timeout: 30_000 })
+      assert.equal(await importSource.inputValue(), cancelledSource)
       assert.deepEqual(roster(), accepted, 'cancelled candidate changed original roster')
       assert.equal(modelRequests.length, 3)
       steps.push({ stepId: currentStep, actionId: 'U09.A04', outcome: 'PASS',
-        assertion: 'Explicit keep-unresolved and workflow cancellation preserved the accepted roster; cancellation retained pasted source text.',
+        assertion: 'Explicit keep-unresolved and cancelling the run in the run sheet preserved the accepted roster; both retained the pasted source text.',
         observed: { modelRequestCount: modelRequests.length, retainedRejectedSource: rejectedSource,
           retainedCancelledSource: cancelledSource } })
       return
     }
     const [firstId, secondId] = [await addCharacter(rolePage, names[0]), await addCharacter(rolePage, names[1])]
     assert.notEqual(firstId, secondId)
-    pass('v3-role-entry', { names, ids: [firstId, secondId] })
+    pass('stage-role-entry', { names, ids: [firstId, secondId] })
 
     currentStep = 'fixture-avatar'
     const avatarBase64 = await rolePage.evaluate(() => {
@@ -733,34 +732,28 @@ async function main() {
     let persistedAvatarPath = persistedAvatarFiles[0]
     let persistedAvatarBytes = fs.readFileSync(persistedAvatarPath)
     assert(persistedAvatarBytes.equals(Buffer.from(avatar.avatar.base64, 'base64')), 'persisted avatar bytes differ from commit response')
-    await app.close()
+    await closeAppBounded(app)
     app = null
 
-    app = (await launch()).app
+    launched = await launch()
+    app = launched.app
     const editProcessPid = app.process().pid
-    const profilePage = await app.firstWindow()
-    const reopenedNotice = profilePage.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await reopenedNotice.isVisible()) await reopenedNotice.getByRole('button', { name: '知道了', exact: true }).click()
-    await profilePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-    await profilePage.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
-    await profilePage.locator('.writer-left-rail button[title="角色"]').click()
-    const characterCard = profilePage.locator(`[data-character-id="${firstId}"]`)
+    const profilePage = launched.page
+    await openRolePage(profilePage)
+    const characterCard = castRow(profilePage, firstId)
     await characterCard.waitFor({ state: 'visible' })
-    currentStep = 'u10-a07-writer-card-avatar-reopen'
-    await characterCard.locator(`img[alt="${names[0]}头像"]`).waitFor({ state: 'visible' })
-    await characterCard.evaluate((card, characterId) => {
-      const image = card.querySelector('img')
-      if (!(image instanceof HTMLImageElement) || !image.complete || image.naturalWidth !== 32
-        || card.getAttribute('data-character-id') !== characterId) throw new Error('WRITER_CARD_AVATAR_NOT_RENDERED')
+    currentStep = 'u10-a07-cast-row-avatar-reopen'
+    await profilePage.waitForFunction(characterId => {
+      const image = document.querySelector(`.cast-roster [data-character-id="${characterId}"] img`)
+      return image instanceof HTMLImageElement && image.complete && image.naturalWidth === 32
     }, firstId)
     await characterCard.click()
-    await profilePage.waitForFunction(name => {
-      const image = document.querySelector(`img[alt="${name}头像预览"]`)
+    await profilePage.waitForFunction(() => {
+      const image = document.querySelector('img.cast-profile-avatar')
       return image instanceof HTMLImageElement && image.complete && image.naturalWidth === 32
-    }, names[0])
-    assert.equal(await profilePage.locator('.writer-editor-content .skin-workspace-page:not([hidden]) .max-w-2xl')
-      .evaluate(node => getComputedStyle(node).borderTopWidth), '3px')
-    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-character-profile.png') })
+    })
+    assert.equal(await profileAvatar(profilePage).getAttribute('alt'), `${names[0]}头像`)
+    await profilePage.screenshot({ path: path.join(receiptDir, 'stage-character-profile.png') })
 
     const sourceImage = path.join(scratch, 'avatar-blue.png')
     const blueBase64 = await profilePage.evaluate(() => {
@@ -781,46 +774,39 @@ async function main() {
       } finally { db.close() }
     }
     const assetPath = row => path.join(projectPath, '.ai-novel', ...row.relativePath.split('/'))
-    const imageHash = locator => locator.evaluate(async image => {
-      const bytes = new Uint8Array(await (await fetch(image.src)).arrayBuffer())
-      const digest = await crypto.subtle.digest('SHA-256', bytes)
-      return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
-    })
     const originalAvatar = avatarState()
-    const preview = profilePage.locator(`img[alt="${names[0]}头像预览"]`)
-    const previewHash = async () => createHash('sha256').update(Buffer.from(await preview.evaluate(async image =>
-      [...new Uint8Array(await (await fetch(image.src)).arrayBuffer())]))).digest('hex')
+    const previewHash = () => imageHash(profileAvatar(profilePage))
     assert.equal(await previewHash(), sha256(persistedAvatarPath))
+    const avatarButton = (page, name) => stage.root(page).getByRole('button', { name, exact: true })
 
     currentStep = 'u10-a01-stage-preview'
-    await profilePage.getByRole('button', { name: '替换头像', exact: true }).click()
+    await avatarButton(profilePage, '更换头像').click()
     chooseNativeAvatar(sourceImage)
-    await profilePage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
+    await avatarButton(profilePage, '取消头像更改').waitFor({ state: 'visible' })
     const stagedHash = await previewHash()
     assert.equal(stagedHash, sha256(sourceImage), 'UI preview bytes differ from native-selected file')
     assert.notEqual(stagedHash, sha256(persistedAvatarPath), 'chosen image did not replace UI preview')
     assert.deepEqual(avatarState(), originalAvatar, 'preview changed SQLite or persisted avatar bytes')
-    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-avatar-staged.png') })
+    await profilePage.screenshot({ path: path.join(receiptDir, 'stage-avatar-staged.png') })
     steps.push({ stepId: currentStep, actionId: 'U10.A01', outcome: 'PASS',
-      assertion: 'Writer V3 native-selected avatar is visible only in staged preview; SQLite row and asset bytes are unchanged.',
+      assertion: 'The cast profile shows the native-selected avatar only as a staged preview; SQLite row and asset bytes are unchanged.',
       observed: { characterId: firstId, picker: pickerEvidence.at(-1), stagedSha256: stagedHash, originalAvatar } })
 
     currentStep = 'u10-a02-discard-stage'
-    await profilePage.getByRole('button', { name: '取消头像更改', exact: true }).click()
-    await profilePage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'hidden' })
+    await avatarButton(profilePage, '取消头像更改').click()
+    await avatarButton(profilePage, '取消头像更改').waitFor({ state: 'hidden' })
     assert.equal(await previewHash(), sha256(persistedAvatarPath), 'discard did not restore original UI preview')
     assert.deepEqual(avatarState(), originalAvatar, 'discard changed SQLite or persisted avatar bytes')
-    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-avatar-discarded.png') })
+    await profilePage.screenshot({ path: path.join(receiptDir, 'stage-avatar-discarded.png') })
     steps.push({ stepId: currentStep, actionId: 'U10.A02', outcome: 'PASS',
       assertion: 'Discarding the selected avatar restores the original UI preview, SQLite row and asset bytes.',
       observed: { characterId: firstId, originalRevision: originalAvatar.row.revision, originalSha256: sha256(persistedAvatarPath) } })
 
     currentStep = 'u10-a03-save-avatar'
-    await profilePage.getByRole('button', { name: '替换头像', exact: true }).click()
+    await avatarButton(profilePage, '更换头像').click()
     chooseNativeAvatar(sourceImage)
-    await profilePage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
-    await profilePage.getByRole('button', { name: '保存', exact: true }).last().click()
-    await profilePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    await avatarButton(profilePage, '取消头像更改').waitFor({ state: 'visible' })
+    await saveCharacter(profilePage)
     const committedAvatar = avatarState()
     assert.equal(committedAvatar.row.revision, originalAvatar.row.revision + 1)
     persistedAvatarPath = path.join(projectPath, '.ai-novel', ...committedAvatar.row.relativePath.split('/'))
@@ -828,39 +814,35 @@ async function main() {
     assert.equal(sha256(persistedAvatarPath), committedAvatar.row.contentHash)
     assert.notEqual(committedAvatar.row.contentHash, originalAvatar.row.contentHash)
     assert.equal(await previewHash(), committedAvatar.row.contentHash)
-    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-avatar-saved.png') })
+    await profilePage.screenshot({ path: path.join(receiptDir, 'stage-avatar-saved.png') })
 
-    currentStep = 'v3-graph-stable-id'
-    await profilePage.getByText('背景故事', { exact: true }).locator('xpath=..').locator('textarea').fill(backgrounds[0])
-    const relationship = profilePage.getByText('关系网', { exact: true }).locator('xpath=..').locator('textarea')
-    await relationship.fill(`${names[1]}：同盟`)
-    await profilePage.getByRole('button', { name: '保存', exact: true }).last().click()
-    await profilePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
-    await profilePage.getByRole('button', { name: '关系图谱', exact: true }).click()
+    currentStep = 'cast-graph-stable-id'
+    await profileField(profilePage, '背景').fill(backgrounds[0])
+    await profileField(profilePage, '关系网').fill(`${names[1]}：同盟`)
+    await saveCharacter(profilePage)
+    await showProfileView(profilePage, '关系图谱')
     const graph = profilePage.locator('canvas[aria-label^="角色关系图谱"]')
     await graph.waitFor({ state: 'visible' })
     assert((await graph.getAttribute('aria-label'))?.includes('同盟'), 'relationship missing from graph projection')
-    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-character-graph.png') })
+    await profilePage.screenshot({ path: path.join(receiptDir, 'stage-character-graph.png') })
     await profilePage.locator(`button[data-graph-character-id="${secondId}"]`).click()
-    await profilePage.getByText(`${names[1]} — 编辑档案`, { exact: true }).waitFor({ state: 'visible' })
-    assert.equal(await profilePage.locator(`[data-character-id="${secondId}"]`).getAttribute('aria-pressed'), 'true')
-    pass('v3-graph-stable-id', { sourceId: firstId, targetId: secondId, relation: '同盟' })
-    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-character-graph-open.png') })
+    await arch.profileName(profilePage).filter({ hasText: new RegExp(`^${names[1]}$`) }).waitFor({ state: 'visible' })
+    assert.equal(await castRow(profilePage, secondId).getAttribute('aria-pressed'), 'true')
+    pass('cast-graph-stable-id', { sourceId: firstId, targetId: secondId, relation: '同盟' })
+    await profilePage.screenshot({ path: path.join(receiptDir, 'stage-character-graph-open.png') })
 
     currentStep = 'fixture-second-avatar-before-rename'
     const secondSourceImage = path.join(scratch, 'avatar-gold.png')
     fs.writeFileSync(secondSourceImage, Buffer.from(avatarBase64, 'base64'))
-    await profilePage.getByRole('button', { name: '选择头像', exact: true }).click()
+    await avatarButton(profilePage, '选择头像').click()
     chooseNativeAvatar(secondSourceImage)
-    await profilePage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
-    await profilePage.getByRole('button', { name: '保存', exact: true }).last().click()
-    await profilePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    await avatarButton(profilePage, '取消头像更改').waitFor({ state: 'visible' })
+    await saveCharacter(profilePage)
 
     currentStep = 'u09-a08-same-name-rename'
-    await profilePage.getByText('背景故事', { exact: true }).locator('xpath=..').locator('textarea').fill(backgrounds[1])
-    await profilePage.getByText('姓名', { exact: true }).locator('xpath=..').locator('input').fill(names[0])
-    await profilePage.getByRole('button', { name: '保存', exact: true }).last().click()
-    await profilePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    await profileField(profilePage, '背景').fill(backgrounds[1])
+    await profileField(profilePage, '姓名').fill(names[0])
+    await saveCharacter(profilePage)
 
     currentStep = 'u10-a09-rename-same-name-avatar-identity'
     const firstRenamedAvatar = avatarState(firstId).row
@@ -874,18 +856,18 @@ async function main() {
       assert.deepEqual(new Map(renamedNames.map(row => [row.id, row.name])), new Map([[firstId, names[0]], [secondId, names[0]]]))
     } finally { renamedDb.close() }
     for (const [id, row] of [[firstId, firstRenamedAvatar], [secondId, secondRenamedAvatar]]) {
-      const card = profilePage.locator(`[data-character-id="${id}"]`)
-      await card.locator('img').waitFor({ state: 'visible' })
-      assert.equal(await imageHash(card.locator('img')), row.contentHash, `${id} card has another person's avatar after rename`)
+      const image = castRow(profilePage, id).locator('img')
+      await image.waitFor({ state: 'visible' })
+      assert.equal(await imageHash(image), row.contentHash, `${id} row has another person's avatar after rename`)
       assert.equal(sha256(assetPath(row)), row.contentHash)
     }
-    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-avatar-same-name-identity.png') })
+    await profilePage.screenshot({ path: path.join(receiptDir, 'stage-avatar-same-name-identity.png') })
     steps.push({ stepId: currentStep, actionId: 'U10.A09', outcome: 'PASS',
-      assertion: 'After V3 rename to an existing display name, two distinct avatar byte sentinels remain bound to their original stable IDs in UI cards, SQLite and assets.',
+      assertion: 'After renaming to an existing display name on the cast page, two distinct avatar byte sentinels remain bound to their original stable IDs in roster rows, SQLite and assets.',
       observed: { displayName: names[0], firstId, secondId, firstSha256: firstRenamedAvatar.contentHash,
         secondSha256: secondRenamedAvatar.contentHash, firstRevision: firstRenamedAvatar.revision, secondRevision: secondRenamedAvatar.revision } })
 
-    currentStep = 'u10-a07-writer-card-avatar-reopen'
+    currentStep = 'u10-a07-cast-row-avatar-reopen'
     const reopened = await invoke(profilePage, 'project:open', projectPath, randomUUID(), projectPath)
     assert.equal(reopened.success, true, reopened.error)
     const reopenedContext = { projectId: created.projectId, projectPath, leaseId: reopened.project?.sessionLease }
@@ -896,149 +878,145 @@ async function main() {
     assert.equal(batch.avatars[0].characterId, firstId)
     assert(Buffer.from(batch.avatars[0].base64, 'base64').equals(persistedAvatarBytes), 'read-batch bytes differ from persisted asset')
     steps.push({ stepId: currentStep, actionId: 'U10.A07', outcome: 'PASS',
-      assertion: 'Writer V3 character card renders the stable-ID avatar after process restart; main read-batch returns the persisted file bytes.',
+      assertion: 'The cast roster row renders the stable-ID avatar after process restart; main read-batch returns the persisted file bytes.',
       observed: { characterId: firstId, avatarWidth: 32, assetRevision: batch.avatars[0].assetRevision,
         persistedAsset: path.relative(projectPath, persistedAvatarPath).split(path.sep).join('/'),
         persistedByteSize: persistedAvatarBytes.length, persistedSha256: sha256(persistedAvatarPath) } })
 
-    await app.close()
+    await closeAppBounded(app)
     app = null
-    app = (await launch()).app
+    launched = await launch()
+    app = launched.app
     const reopenedProcessPid = app.process().pid
     assert.notEqual(reopenedProcessPid, editProcessPid, 'avatar reopen reused Electron process')
-    let identityPage = await app.firstWindow()
-    const identityNotice = identityPage.locator('[role="status"].fixed.inset-x-0.top-10')
-    if (await identityNotice.isVisible()) await identityNotice.getByRole('button', { name: '知道了', exact: true }).click()
-    await identityPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-    await identityPage.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
-    await identityPage.locator('.writer-left-rail button[title="角色"]').click()
+    let identityPage = launched.page
+    await openRolePage(identityPage)
     currentStep = 'u09-a08-same-name-reopen'
-    const firstSameName = identityPage.locator(`[data-character-id="${firstId}"]`)
-    const secondSameName = identityPage.locator(`[data-character-id="${secondId}"]`)
+    const firstSameName = castRow(identityPage, firstId)
+    const secondSameName = castRow(identityPage, secondId)
     await firstSameName.waitFor({ state: 'visible' })
     await secondSameName.waitFor({ state: 'visible' })
-    assert((await firstSameName.innerText()).includes(backgrounds[0]), 'first same-name card lost its source note')
-    assert((await secondSameName.innerText()).includes(backgrounds[1]), 'second same-name card lost its source note')
-    assert.equal(await identityPage.locator('[data-character-id]').filter({ hasText: names[0] }).count(), 2,
-      'same-name cards were merged in Writer list')
-    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-character-same-name.png') })
+    assert((await firstSameName.innerText()).includes(backgrounds[0]), 'first same-name row lost its source note')
+    assert((await secondSameName.innerText()).includes(backgrounds[1]), 'second same-name row lost its source note')
+    assert.equal(await arch.castRoster(identityPage).locator('[data-character-id]').filter({ hasText: names[0] }).count(), 2,
+      'same-name rows were merged in the cast roster')
+    await identityPage.screenshot({ path: path.join(receiptDir, 'stage-character-same-name.png') })
 
     await firstSameName.click()
-    await identityPage.getByRole('button', { name: '关系图谱', exact: true }).click()
+    await showProfileView(identityPage, '关系图谱')
     const sameNameGraph = identityPage.locator('canvas[aria-label^="角色关系图谱"]')
     await sameNameGraph.waitFor({ state: 'visible' })
     const graphLabel = await sameNameGraph.getAttribute('aria-label')
     assert(graphLabel?.includes(firstId.slice(-8)) && graphLabel.includes(secondId.slice(-8)) && graphLabel.includes('同盟'),
       'same-name graph did not expose stable-ID endpoints')
-    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-character-same-name-graph.png') })
+    await identityPage.screenshot({ path: path.join(receiptDir, 'stage-character-same-name-graph.png') })
 
     const inspectSameNameRoster = async () => {
       const identityOpened = await invoke(identityPage, 'project:open', projectPath, randomUUID(), projectPath)
-    assert.equal(identityOpened.success, true, identityOpened.error)
-    const identityContext = { projectId: identityOpened.project?.id, projectPath, leaseId: identityOpened.project?.sessionLease }
-    assert(identityContext.projectId && identityContext.leaseId, 'reopened identity project session missing')
-    const roster = await invoke(identityPage, 'db:character-roster-read', projectPath, identityContext)
-    const byId = new Map(roster.entries.map(entry => [entry.characterId, entry]))
-    assert.equal(byId.get(firstId)?.name, names[0])
-    assert.equal(byId.get(secondId)?.name, names[0])
-    assert.equal(byId.get(firstId)?.background, backgrounds[0])
-    assert.equal(byId.get(secondId)?.background, backgrounds[1])
-    assert(byId.get(firstId)?.relationships.some(item => item.targetCharacterId === secondId && item.relation === '同盟'),
-      'main roster snapshot lost stable-ID relationship after same-name rename')
+      assert.equal(identityOpened.success, true, identityOpened.error)
+      const identityContext = { projectId: identityOpened.project?.id, projectPath, leaseId: identityOpened.project?.sessionLease }
+      assert(identityContext.projectId && identityContext.leaseId, 'reopened identity project session missing')
+      const roster = await invoke(identityPage, 'db:character-roster-read', projectPath, identityContext)
+      const byId = new Map(roster.entries.map(entry => [entry.characterId, entry]))
+      assert.equal(byId.get(firstId)?.name, names[0])
+      assert.equal(byId.get(secondId)?.name, names[0])
+      assert.equal(byId.get(firstId)?.background, backgrounds[0])
+      assert.equal(byId.get(secondId)?.background, backgrounds[1])
+      assert(byId.get(firstId)?.relationships.some(item => item.targetCharacterId === secondId && item.relation === '同盟'),
+        'main roster snapshot lost stable-ID relationship after same-name rename')
 
-    const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
-    let persistedCharacters
-    let persistedAliases
-    let persistedRelationship
-    try {
-      persistedCharacters = db.prepare(`SELECT character_id AS characterId,name,background,retired FROM characters
-        WHERE character_id IN (?,?) ORDER BY character_id`).all(firstId, secondId)
-      persistedAliases = db.prepare(`SELECT character_id AS characterId,name,source_key AS sourceKey,valid_from AS validFrom,
-        valid_through AS validThrough FROM character_aliases WHERE character_id IN (?,?)
-        ORDER BY character_id,valid_from`).all(firstId, secondId)
-      persistedRelationship = db.prepare(`SELECT source_character_id AS sourceCharacterId,target_character_id AS targetCharacterId,
-        relation FROM character_relationships WHERE source_character_id=? AND target_character_id=?`).get(firstId, secondId)
-    } finally { db.close() }
-    assert.equal(persistedCharacters.length, 2, 'same-name rename merged SQLite identities')
-    assert.deepEqual(new Map(persistedCharacters.map(row => [row.characterId, row.background])),
-      new Map([[firstId, backgrounds[0]], [secondId, backgrounds[1]]]))
-    assert(persistedCharacters.every(row => row.name === names[0] && row.retired === 0), 'same-name SQLite rows were overwritten or retired')
-    assert(persistedAliases.some(row => row.characterId === secondId && row.name === names[1] && row.validThrough !== null),
-      'renamed identity lost its closed historical alias')
-    assert(persistedAliases.some(row => row.characterId === firstId && row.name === names[0] && row.validThrough === null)
-      && persistedAliases.some(row => row.characterId === secondId && row.name === names[0] && row.validThrough === null),
-    'same display name did not retain two active ID-scoped aliases')
-    assert.deepEqual(persistedRelationship,
-      { sourceCharacterId: firstId, targetCharacterId: secondId, relation: '同盟' })
-    steps.push({ stepId: currentStep, actionId: 'U09.A08', outcome: 'PASS',
-      assertion: 'Writer V3 keeps two renamed same-name cards separate by stable ID/source note after restart; main IPC and SQLite retain both backgrounds, alias history and the ID-bound relationship without merge or overwrite.',
-      observed: { displayName: names[0], ids: [firstId, secondId], sourceDisplay: backgrounds,
-        derivedSourceRequired: false, sourceDisplayContract: 'background note or stable-ID suffix',
-        mainRosterIdentityRevision: roster.identityRevision, relationship: persistedRelationship,
-        activeSameNameAliases: persistedAliases.filter(row => row.name === names[0] && row.validThrough === null).length } })
+      const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+      let persistedCharacters
+      let persistedAliases
+      let persistedRelationship
+      try {
+        persistedCharacters = db.prepare(`SELECT character_id AS characterId,name,background,retired FROM characters
+          WHERE character_id IN (?,?) ORDER BY character_id`).all(firstId, secondId)
+        persistedAliases = db.prepare(`SELECT character_id AS characterId,name,source_key AS sourceKey,valid_from AS validFrom,
+          valid_through AS validThrough FROM character_aliases WHERE character_id IN (?,?)
+          ORDER BY character_id,valid_from`).all(firstId, secondId)
+        persistedRelationship = db.prepare(`SELECT source_character_id AS sourceCharacterId,target_character_id AS targetCharacterId,
+          relation FROM character_relationships WHERE source_character_id=? AND target_character_id=?`).get(firstId, secondId)
+      } finally { db.close() }
+      assert.equal(persistedCharacters.length, 2, 'same-name rename merged SQLite identities')
+      assert.deepEqual(new Map(persistedCharacters.map(row => [row.characterId, row.background])),
+        new Map([[firstId, backgrounds[0]], [secondId, backgrounds[1]]]))
+      assert(persistedCharacters.every(row => row.name === names[0] && row.retired === 0), 'same-name SQLite rows were overwritten or retired')
+      assert(persistedAliases.some(row => row.characterId === secondId && row.name === names[1] && row.validThrough !== null),
+        'renamed identity lost its closed historical alias')
+      assert(persistedAliases.some(row => row.characterId === firstId && row.name === names[0] && row.validThrough === null)
+        && persistedAliases.some(row => row.characterId === secondId && row.name === names[0] && row.validThrough === null),
+      'same display name did not retain two active ID-scoped aliases')
+      assert.deepEqual(persistedRelationship,
+        { sourceCharacterId: firstId, targetCharacterId: secondId, relation: '同盟' })
+      steps.push({ stepId: currentStep, actionId: 'U09.A08', outcome: 'PASS',
+        assertion: 'The cast roster keeps two renamed same-name rows separate by stable ID/source note after restart; main IPC and SQLite retain both backgrounds, alias history and the ID-bound relationship without merge or overwrite.',
+        observed: { displayName: names[0], ids: [firstId, secondId], sourceDisplay: backgrounds,
+          derivedSourceRequired: false, sourceDisplayContract: 'background note or stable-ID suffix',
+          mainRosterIdentityRevision: roster.identityRevision, relationship: persistedRelationship,
+          activeSameNameAliases: persistedAliases.filter(row => row.name === names[0] && row.validThrough === null).length } })
     }
 
     currentStep = 'u10-a10-reopen-same-name-avatars'
-    await identityPage.getByRole('button', { name: '编辑模式', exact: true }).click()
+    await showProfileView(identityPage, '基础设定')
     for (const [id, row] of [[firstId, firstRenamedAvatar], [secondId, secondRenamedAvatar]]) {
-      const card = identityPage.locator(`[data-character-id="${id}"]`)
-      await card.locator('img').waitFor({ state: 'visible' })
-      assert.equal(await imageHash(card.locator('img')), row.contentHash, `${id} card avatar changed after process restart`)
-      await card.click()
-      const preview = identityPage.locator(`img[alt="${names[0]}头像预览"]`)
-      await preview.waitFor({ state: 'visible' })
-      assert.equal(await imageHash(preview), row.contentHash, `${id} preview avatar changed after process restart`)
+      const image = castRow(identityPage, id).locator('img')
+      await image.waitFor({ state: 'visible' })
+      assert.equal(await imageHash(image), row.contentHash, `${id} row avatar changed after process restart`)
+      await castRow(identityPage, id).click()
+      await profileAvatar(identityPage).waitFor({ state: 'visible' })
+      await identityPage.waitForFunction(characterId => document.querySelector(`.cast-roster [data-character-id="${characterId}"]`)
+        ?.getAttribute('aria-pressed') === 'true', id)
+      assert.equal(await imageHash(profileAvatar(identityPage)), row.contentHash, `${id} profile avatar changed after process restart`)
       assert.deepEqual(avatarState(id).row, row, `${id} SQLite avatar row changed after process restart`)
       assert.equal(sha256(assetPath(row)), row.contentHash)
     }
     assert.notEqual(reopenedProcessPid, editProcessPid)
-    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-same-name-reopened.png') })
+    await identityPage.screenshot({ path: path.join(receiptDir, 'stage-avatar-same-name-reopened.png') })
     steps.push({ stepId: currentStep, actionId: 'U10.A10', outcome: 'PASS',
-      assertion: 'A new Electron process reopens both same-name V3 cards and editor previews with distinct stable-ID avatar bytes and unchanged SQLite asset revisions.',
+      assertion: 'A new Electron process reopens both same-name roster rows and profile avatars with distinct stable-ID avatar bytes and unchanged SQLite asset revisions.',
       observed: { firstId, secondId, editProcessPid, reopenedProcessPid, firstSha256: firstRenamedAvatar.contentHash,
         secondSha256: secondRenamedAvatar.contentHash, firstRevision: firstRenamedAvatar.revision, secondRevision: secondRenamedAvatar.revision } })
 
     currentStep = 'u10-a03-reopen-avatar'
     await firstSameName.click()
-    await identityPage.locator(`img[alt="${names[0]}头像预览"]`).waitFor({ state: 'visible' })
-    assert.equal(await identityPage.locator(`[data-character-id="${firstId}"]`).getAttribute('data-character-id'), firstId)
-    assert.equal(await identityPage.locator(`img[alt="${names[0]}头像预览"]`).evaluate(async image => {
-      const bytes = new Uint8Array(await (await fetch(image.src)).arrayBuffer())
-      const digest = await crypto.subtle.digest('SHA-256', bytes)
-      return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
-    }), committedAvatar.row.contentHash)
+    await identityPage.waitForFunction(characterId => document.querySelector(`.cast-roster [data-character-id="${characterId}"]`)
+      ?.getAttribute('aria-pressed') === 'true', firstId)
+    await profileAvatar(identityPage).waitFor({ state: 'visible' })
+    assert.equal(await imageHash(profileAvatar(identityPage)), committedAvatar.row.contentHash)
     const reopenedAvatars = avatarState()
     assert.deepEqual(reopenedAvatars.row, committedAvatar.row, 'fresh process changed committed avatar')
     assert.deepEqual(avatarState(secondId).row, secondRenamedAvatar, 'fresh process changed second avatar')
     assert.deepEqual(reopenedAvatars.files, [...committedAvatar.files,
       { path: assetPath(secondRenamedAvatar), sha256: secondRenamedAvatar.contentHash }].sort((a, b) => a.path.localeCompare(b.path)),
     'fresh process changed committed avatar assets')
-    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-reopened.png') })
+    await identityPage.screenshot({ path: path.join(receiptDir, 'stage-avatar-reopened.png') })
     steps.push({ stepId: currentStep, actionId: 'U10.A03', outcome: 'PASS',
-      assertion: 'Writer V3 Save committed the native-selected avatar to a new SQLite revision and asset bytes; a fresh Electron process reopens the same stable-ID avatar.',
+      assertion: '保存角色 committed the native-selected avatar to a new SQLite revision and asset bytes; a fresh Electron process reopens the same stable-ID avatar.',
       observed: { characterId: firstId, picker: pickerEvidence.at(-1), editProcessPid, reopenedProcessPid, revision: committedAvatar.row.revision,
         relativePath: committedAvatar.row.relativePath, persistedSha256: committedAvatar.row.contentHash } })
 
     currentStep = 'u09-a08-same-name-roster'
     await inspectSameNameRoster()
 
-    const previewInfo = page => page.locator(`img[alt="${names[0]}头像预览"]`).evaluate(async image => {
+    const previewInfo = page => profileAvatar(page).evaluate(async image => {
       const bytes = new Uint8Array(await (await fetch(image.src)).arrayBuffer())
       const digest = await crypto.subtle.digest('SHA-256', bytes)
       return { sha256: [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join(''),
         width: image.naturalWidth, height: image.naturalHeight }
     })
     const reopenRolePage = async () => {
-      await app.close()
+      await closeAppBounded(app)
       app = null
-      app = (await launch()).app
-      const page = await app.firstWindow()
-      const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
-      if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-      await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
-      await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
-      await page.locator('.writer-left-rail button[title="角色"]').click()
-      return page
+      const relaunched = await launch()
+      app = relaunched.app
+      await openRolePage(relaunched.page)
+      return relaunched.page
+    }
+    const selectRow = async (page, characterId) => {
+      await castRow(page, characterId).click()
+      await page.waitForFunction(id => document.querySelector(`.cast-roster [data-character-id="${id}"]`)
+        ?.getAttribute('aria-pressed') === 'true', characterId)
     }
 
     currentStep = 'u10-a04-large-compress-invalid-preserve'
@@ -1047,7 +1025,8 @@ async function main() {
     assert.equal(otherAvatar.revision, 1)
     const otherAssetPath = assetPath(otherAvatar)
     assert.equal(sha256(otherAssetPath), otherAvatar.contentHash)
-    await identityPage.locator(`[data-character-id="${firstId}"]`).click()
+    await selectRow(identityPage, firstId)
+    await profileAvatar(identityPage).waitFor({ state: 'visible' })
     assert.equal((await previewInfo(identityPage)).sha256, committedAvatar.row.contentHash)
 
     const largeSource = path.join(scratch, 'avatar-large.png')
@@ -1070,43 +1049,45 @@ async function main() {
     fs.writeFileSync(largeSource, Buffer.from(largeBase64, 'base64'))
     const largeSourceBytes = fs.statSync(largeSource).size
     assert(largeSourceBytes > 100_000 && largeSourceBytes < 4 * 1024 * 1024, 'large synthetic PNG is outside avatar input contract')
-    await identityPage.getByRole('button', { name: '替换头像', exact: true }).click()
+    await avatarButton(identityPage, '更换头像').click()
     chooseNativeAvatar(largeSource)
-    await identityPage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
+    await avatarButton(identityPage, '取消头像更改').waitFor({ state: 'visible' })
     assert.equal((await previewInfo(identityPage)).sha256, sha256(largeSource))
-    await identityPage.getByRole('button', { name: '保存', exact: true }).last().click()
-    await identityPage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    await saveCharacter(identityPage)
     const compressedAvatar = avatarState()
     assert.equal(compressedAvatar.row.revision, committedAvatar.row.revision + 1)
     assert.equal(sha256(assetPath(compressedAvatar.row)), compressedAvatar.row.contentHash)
     assert.equal(fs.statSync(assetPath(compressedAvatar.row)).size, compressedAvatar.row.byteSize)
     assert(compressedAvatar.row.byteSize < largeSourceBytes, 'large PNG was not compressed')
+    await identityPage.waitForFunction(() => {
+      const image = document.querySelector('img.cast-profile-avatar')
+      return image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0 && image.naturalWidth <= 256
+    })
     const compressedPreview = await previewInfo(identityPage)
     assert.equal(compressedPreview.sha256, compressedAvatar.row.contentHash)
     assert(compressedPreview.width <= 256 && compressedPreview.height <= 256 && compressedPreview.width > 0 && compressedPreview.height > 0,
       'stored avatar exceeds the 256-pixel edge contract')
-    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-compressed.png') })
+    await identityPage.screenshot({ path: path.join(receiptDir, 'stage-avatar-compressed.png') })
 
     const badSource = path.join(scratch, 'avatar-bad.png')
     fs.writeFileSync(badSource, 'not an image')
-    await identityPage.getByRole('button', { name: '替换头像', exact: true }).click()
+    await avatarButton(identityPage, '更换头像').click()
     chooseNativeAvatar(badSource)
-    await identityPage.getByRole('alert').getByText('请选择有效的 PNG、JPEG 或 WebP 图片。', { exact: true }).waitFor({ state: 'visible' })
+    await stage.root(identityPage).getByRole('alert').filter({ hasText: '请选择有效的 PNG、JPEG 或 WebP 图片。' }).waitFor({ state: 'visible' })
     assert.deepEqual(avatarState(), compressedAvatar, 'invalid image changed SQLite or asset bytes')
     assert.equal((await previewInfo(identityPage)).sha256, compressedAvatar.row.contentHash)
-    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-invalid-preserved.png') })
+    await identityPage.screenshot({ path: path.join(receiptDir, 'stage-avatar-invalid-preserved.png') })
     steps.push({ stepId: currentStep, actionId: 'U10.A04', outcome: 'PASS',
-      assertion: 'V3 native selection and Save compress a valid large image within the 256-pixel bound; an invalid selected PNG shows an error and preserves the saved SQLite row and asset.',
+      assertion: 'Native selection and 保存角色 compress a valid large image within the 256-pixel bound; an invalid selected PNG shows an error and preserves the saved SQLite row and asset.',
       observed: { characterId: firstId, validPicker: pickerEvidence.at(-2), invalidPicker: pickerEvidence.at(-1),
         sourceBytes: largeSourceBytes, storedBytes: compressedAvatar.row.byteSize, dimensions: compressedPreview,
         revision: compressedAvatar.row.revision, persistedSha256: compressedAvatar.row.contentHash } })
 
     currentStep = 'u10-a05-replace-avatar'
-    await identityPage.getByRole('button', { name: '替换头像', exact: true }).click()
+    await avatarButton(identityPage, '更换头像').click()
     chooseNativeAvatar(sourceImage)
-    await identityPage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
-    await identityPage.getByRole('button', { name: '保存', exact: true }).last().click()
-    await identityPage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    await avatarButton(identityPage, '取消头像更改').waitFor({ state: 'visible' })
+    await saveCharacter(identityPage)
     const replacedAvatar = avatarState()
     assert.equal(replacedAvatar.row.revision, compressedAvatar.row.revision + 1)
     assert.equal(sha256(assetPath(replacedAvatar.row)), replacedAvatar.row.contentHash)
@@ -1117,51 +1098,54 @@ async function main() {
     const replacementPage = await reopenRolePage()
     const replacementReopenPid = app.process().pid
     assert.notEqual(replacementReopenPid, replaceProcessPid, 'replacement reused Electron process')
-    const reopenedFirst = replacementPage.locator(`[data-character-id="${firstId}"]`)
-    await reopenedFirst.locator('img').waitFor({ state: 'visible' })
-    await reopenedFirst.click()
+    await castRow(replacementPage, firstId).locator('img').waitFor({ state: 'visible' })
+    await selectRow(replacementPage, firstId)
+    await profileAvatar(replacementPage).waitFor({ state: 'visible' })
     assert.equal((await previewInfo(replacementPage)).sha256, replacedAvatar.row.contentHash)
     assert.deepEqual(avatarState(), replacedAvatar, 'replacement changed after process restart')
-    await replacementPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-replaced-reopened.png') })
+    await replacementPage.screenshot({ path: path.join(receiptDir, 'stage-avatar-replaced-reopened.png') })
     steps.push({ stepId: currentStep, actionId: 'U10.A05', outcome: 'PASS',
-      assertion: 'A second V3 native selection and Save increments the stable-ID revision, reclaims the old file, and reopens the new avatar in a fresh Electron process.',
+      assertion: 'A second native selection and 保存角色 increments the stable-ID revision, reclaims the old file, and reopens the new avatar in a fresh Electron process.',
       observed: { characterId: firstId, picker: pickerEvidence.at(-1), revision: replacedAvatar.row.revision,
         oldRelativePath: compressedAvatar.row.relativePath, newRelativePath: replacedAvatar.row.relativePath,
         persistedSha256: replacedAvatar.row.contentHash, replaceProcessPid, replacementReopenPid } })
 
     currentStep = 'u10-a06-remove-avatar'
-    await replacementPage.getByRole('button', { name: '移除头像', exact: true }).click()
-    await replacementPage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
+    await avatarButton(replacementPage, '移除头像').click()
+    await avatarButton(replacementPage, '取消头像更改').waitFor({ state: 'visible' })
     assert.deepEqual(avatarState(), replacedAvatar, 'staged removal changed SQLite or asset bytes')
-    await replacementPage.getByRole('button', { name: '保存', exact: true }).last().click()
-    await replacementPage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    await saveCharacter(replacementPage)
     assert.equal(avatarState().row, undefined, 'removed avatar kept a SQLite binding')
     assert.equal(fs.existsSync(assetPath(replacedAvatar.row)), false, 'removed avatar file was not reclaimed')
     assert.deepEqual(avatarState(secondId).row, otherAvatar, 'other character avatar binding changed')
     assert.equal(sha256(otherAssetPath), otherAvatar.contentHash, 'other character avatar bytes changed')
-    await replacementPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-removed.png') })
+    await replacementPage.screenshot({ path: path.join(receiptDir, 'stage-avatar-removed.png') })
     const removeProcessPid = app.process().pid
     const removalPage = await reopenRolePage()
     const removalReopenPid = app.process().pid
     assert.notEqual(removalReopenPid, removeProcessPid, 'removal reused Electron process')
-    const removedFirst = removalPage.locator(`[data-character-id="${firstId}"]`)
-    const preservedSecond = removalPage.locator(`[data-character-id="${secondId}"]`)
+    const removedFirst = castRow(removalPage, firstId)
+    const preservedSecond = castRow(removalPage, secondId)
     await removedFirst.waitFor({ state: 'visible' })
     await preservedSecond.locator('img').waitFor({ state: 'visible' })
     assert.equal(await removedFirst.locator('img').count(), 0)
-    await removedFirst.click()
-    await removalPage.getByRole('button', { name: '选择头像', exact: true }).waitFor({ state: 'visible' })
-    assert.equal(await removalPage.locator(`img[alt="${names[0]}头像预览"]`).count(), 0)
+    await selectRow(removalPage, firstId)
+    await avatarButton(removalPage, '选择头像').waitFor({ state: 'visible' })
+    assert.equal(await profileAvatar(removalPage).count(), 0)
     assert.equal(avatarState().row, undefined)
     assert.deepEqual(avatarState(secondId).row, otherAvatar)
     assert.equal(sha256(otherAssetPath), otherAvatar.contentHash)
-    await removalPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-removed-reopened.png') })
+    await removalPage.screenshot({ path: path.join(receiptDir, 'stage-avatar-removed-reopened.png') })
     steps.push({ stepId: currentStep, actionId: 'U10.A06', outcome: 'PASS',
-      assertion: 'V3 Remove and Save clear the stable-ID binding, reclaim its asset, and persist the empty state across restart while the other character keeps its own avatar.',
+      assertion: '移除头像 and 保存角色 clear the stable-ID binding, reclaim its asset, and persist the empty state across restart while the other character keeps its own avatar.',
       observed: { removedCharacterId: firstId, preservedCharacterId: secondId, removedRelativePath: replacedAvatar.row.relativePath,
         preservedRelativePath: otherAvatar.relativePath, preservedSha256: otherAvatar.contentHash, removeProcessPid, removalReopenPid } })
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
+    if (app) {
+      const windows = app.windows()
+      if (windows.length) await windows[0].screenshot({ path: path.join(receiptDir, 'failure.png') }).catch(() => {})
+    }
   } finally {
     const cleanupFailures = []
     releaseLateModel?.()
@@ -1176,21 +1160,22 @@ async function main() {
       if (a09) { a09.outcome = 'FAIL'; a09.cleanupFailure = cleanupFailures[0] }
     }
     const verifiedActions = [...new Set(steps.filter(step => step.outcome === 'PASS' && step.actionId).map(step => step.actionId))]
-    const receipt = { schemaVersion: 1, qualification: u09ImportOnly ? 'F05_U09_A01_A02_A03_A04_PACKAGED_V3_IMPORT'
-      : u09StaleOnly ? 'F05_U09_A09_STALE_SOURCE_PACKAGED_V3_FINALIZED'
-        : u09FinalizedOnly ? 'F05_U09_A05_A06_A07_A08_A09_PACKAGED_V3_FINALIZED' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
+    const receipt = { schemaVersion: 1, qualification: u09ImportOnly ? 'F05_U09_A01_A02_A03_A04_PACKAGED_STAGE_IMPORT'
+      : u09StaleOnly ? 'F05_U09_A09_STALE_SOURCE_PACKAGED_STAGE_FINALIZED'
+        : u09FinalizedOnly ? 'F05_U09_A05_A06_A07_A08_A09_PACKAGED_STAGE_FINALIZED' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_STAGE_CHARACTERS',
       outcome: failure ? 'FAIL' : 'PARTIAL', sliceOutcome: failure ? 'FAIL' : 'PASS', fullU10Qualification: false,
-      fullU09Qualification: false, fullF05Qualification: false, evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead, changedPaths,
+      fullU09Qualification: false, fullF05Qualification: false, evidenceLevel: 'electron', shell: 'stage', testedSha, executionHead, changedPaths,
       dirtyProductPaths, ignoredScreenshotPaths, ignoredTestOnlyPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
       ...(controlledModel ? { providerEvidence: { kind: 'controlled-loopback', realModelQualification: false,
         requestCount: modelRequests.length } } : {}),
       driver: { path: fileURLToPath(import.meta.url), sha256: sha256(fileURLToPath(import.meta.url)) },
       nativePickerHelper: { path: nativePickerHelper, sha256: sha256(nativePickerHelper) }, pickerEvidence,
-      evidence: { receipt: path.relative(repository, receiptPath), screenshots: ['v3-character-profile.png', 'v3-avatar-staged.png', 'v3-avatar-discarded.png', 'v3-avatar-saved.png',
-        'v3-avatar-reopened.png', 'v3-character-same-name.png', 'v3-character-same-name-graph.png',
-        'v3-avatar-compressed.png', 'v3-avatar-invalid-preserved.png', 'v3-avatar-replaced-reopened.png',
-        'v3-avatar-removed.png', 'v3-avatar-removed-reopened.png',
-        'v3-avatar-same-name-identity.png', 'v3-avatar-same-name-reopened.png'].filter(name => fs.existsSync(path.join(receiptDir, name))) },
+      evidence: { receipt: path.relative(repository, receiptPath), screenshots: ['stage-character-profile.png', 'stage-avatar-staged.png', 'stage-avatar-discarded.png', 'stage-avatar-saved.png',
+        'stage-character-graph.png', 'stage-character-graph-open.png',
+        'stage-avatar-reopened.png', 'stage-character-same-name.png', 'stage-character-same-name-graph.png',
+        'stage-avatar-compressed.png', 'stage-avatar-invalid-preserved.png', 'stage-avatar-replaced-reopened.png',
+        'stage-avatar-removed.png', 'stage-avatar-removed-reopened.png',
+        'stage-avatar-same-name-identity.png', 'stage-avatar-same-name-reopened.png', 'failure.png'].filter(name => fs.existsSync(path.join(receiptDir, name))) },
       verifiedActions, unverifiedActions: [u09ImportOnly ? 'U09.A05-U09.A09' : u09FinalizedOnly ? 'U09.A01-U09.A04' : 'U09.A01-U09.A07',
         ...(u09FinalizedOnly ? ['U09.A05', 'U09.A06', 'U09.A07', 'U09.A08', 'U09.A09'].filter(id => !verifiedActions.includes(id)) : []),
         ...(controlledModel ? [] : ['U09.A09']),

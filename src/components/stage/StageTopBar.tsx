@@ -1,8 +1,10 @@
-import { Check, ChevronDown, CircleDashed, Maximize2, Minimize2, Minus, Search, Square, X } from 'lucide-react'
+import { Check, ChevronDown, CircleDashed, Maximize2, Minimize2, Minus, Search, Settings, Square, X } from 'lucide-react'
 import { ipc } from '../../services/ipc-client'
+import { APP_BRAND } from '../../shared/brand'
 import { useEditorStore } from '../../stores/editor-store'
 import { countUnsavedEditorItemsForProject } from '../../stores/editor-unsaved'
 import { useLocaleStore } from '../../stores/locale-store'
+import { navigate } from '../../stores/navigation/navigation-intents'
 import { useStageStore } from '../../stores/navigation/stage-store'
 import { useProjectStore } from '../../stores/project-store'
 import { Button } from '../ui/Button'
@@ -10,8 +12,6 @@ import { Menu, type MenuGroupSpec } from '../ui/Menu'
 import RunCapsule from './RunCapsule'
 import { commandLabel } from './shortcut-keys'
 
-/** 纸墨的字标，与画板一致；是标识，不随界面语言变化。 */
-const BRAND_MARK = '墨'
 
 interface StageTopBarProps {
   /** 位置面包屑，最后一项为当前页。 */
@@ -65,13 +65,13 @@ export default function StageTopBar({ crumbs, library, focus, focusTitle, workMe
 
   return (
     <header className="stage-topbar">
-      <span className="stage-brand" aria-hidden="true">{BRAND_MARK}</span>
+      <span className="stage-brand" aria-hidden="true" />
       {library || !projectName
-        ? <span className="stage-work-title">{text('书房', 'Library')}</span>
+        ? <span className="stage-work-title">{text(APP_BRAND.zhName, APP_BRAND.enName)}</span>
         : (
           <Menu
             label={text(`《${projectName}》作品菜单`, `“${projectName}” menu`)}
-            trigger={{ className: 'stage-work-title', content: <>{projectName}<ChevronDown size={14} aria-hidden="true" /></> }}
+            trigger={{ className: 'stage-work-title', content: <><span className="stage-work-name" title={projectName}>{projectName}</span><ChevronDown size={14} aria-hidden="true" /></> }}
             groups={workMenu}
           />
         )}
@@ -86,12 +86,17 @@ export default function StageTopBar({ crumbs, library, focus, focusTitle, workMe
         <button type="button" className="stage-search" onClick={() => useStageStore.setState({ palette: 'commands' })}>
           <Search size={14} aria-hidden="true" />
           <span className="stage-search-hint">{library
-            ? text('新建、打开作品，或打开设置', 'New or open a book, or open settings')
+            ? text('搜索作品，或打开文件夹', 'Search books, or open a folder')
             : text('搜索章节、角色，或跳转到任意阶段', 'Search chapters and characters, or jump to any stage')}</span>
           <kbd>{commandLabel('k')}</kbd>
         </button>
       </div>
       <RunCapsule />
+      {library && (
+        <Button variant="icon" size="sm" aria-label={text('设置', 'Settings')} onClick={() => navigate({ kind: 'settings', section: 'llm' })}>
+          <Settings size={16} aria-hidden="true" />
+        </Button>
+      )}
       {!library && (
         <span className="stage-saved" data-dirty={dirty || undefined} role="status">
           {dirty ? <CircleDashed size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}

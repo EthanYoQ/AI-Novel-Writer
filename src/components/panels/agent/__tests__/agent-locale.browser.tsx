@@ -83,9 +83,15 @@ describe('Agent reachable UI locale', () => {
     expect(container.textContent).toContain('Coming soon')
     expect(container.textContent).toContain('AI Writing Assistant')
 
-    const moreButton = container.querySelector<HTMLButtonElement>('[title="More options"]')
+    // 图标按钮悬停时仍有提示：空对话时「新建」为什么不能点，只写在提示里。
+    expect(['The current conversation is empty', 'Conversation history', 'More options'].map(label =>
+      container.querySelector(`[aria-label="${label}"]`)?.getAttribute('title'))).toEqual(['The current conversation is empty', 'Conversation history', 'More options'])
+    const moreButton = container.querySelector<HTMLButtonElement>('[aria-label="More options"]')
     expect(moreButton).not.toBeNull()
+    // 「更多选项」展开一块下拉，是展开按钮，不是开关。
+    expect([moreButton?.getAttribute('aria-expanded'), moreButton?.hasAttribute('aria-pressed')]).toEqual(['false', false])
     await act(async () => moreButton?.click())
+    expect(moreButton?.getAttribute('aria-expanded')).toBe('true')
     const skillsButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
       .find(button => button.textContent?.includes('Skills'))
     expect(skillsButton).toBeDefined()

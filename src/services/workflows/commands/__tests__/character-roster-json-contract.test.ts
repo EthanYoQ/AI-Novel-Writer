@@ -8,6 +8,7 @@ import {
 
 function createPort(overrides: Partial<CharacterRosterJsonRepairPort> = {}): CharacterRosterJsonRepairPort {
   return {
+    text: zhCN => zhCN,
     parseJson: JSON.parse,
     assertNotCancelled: vi.fn(),
     log: vi.fn(),
@@ -60,5 +61,16 @@ describe('character roster JSON contract public seam', () => {
       { repairSystemPrompt: 'normal repair system', repairPurpose: 'normal-json-repair' },
     )).rejects.toThrow('AI 返回的角色名单 JSON 格式仍无效，未保存任何角色数据')
     expect(port.repair).toHaveBeenCalledOnce()
+  })
+
+  it('英文界面下修复记录与失败说明都是英文（#466）', async () => {
+    const port = createPort({ text: (_zhCN, enUS) => enUS, repair: vi.fn().mockResolvedValue('[]') })
+
+    await expect(parseCharacterRosterJsonResponse(
+      '{"schemaVersion":1,"entries":[',
+      port,
+      { repairSystemPrompt: 'normal repair system', repairPurpose: 'normal-json-repair' },
+    )).rejects.toThrow(/^The AI cast is not a JSON object\. No character data was saved\.$/u)
+    expect(port.log).toHaveBeenCalledWith('The cast JSON is malformed; running one format repair...')
   })
 })

@@ -5,7 +5,8 @@ import { countDraftUnits } from '../../src/shared/draft-units.ts'
 export const STAGE_SAMPLE = Object.freeze({
   name: '灯塔',
   totalChapters: 12,
-  wordsPerChapter: 3000,
+  // 新外壳写作此章按设定里的每章字数写（RD-7 起不再在写作时填字数）；夹具模型每次只回一段，目标定在它一次写得完的范围。
+  wordsPerChapter: 100,
   titles: ['旧港', '北堤', '雾钟', '守塔人', '潮汐表', '第二盏灯', '盐霜', '沉船名录', '风暴前夜', '灯室', '回声', '归航'],
   core: {
     coreOutline: '测绘师林岚追查父亲留下的一张失踪地图，来到一座本该停用的灯塔。雾钟每晚提前一刻响起，她要在下一次大潮之前弄清钟声与那条沉船的关系。',
@@ -25,7 +26,12 @@ export const STAGE_SAMPLE = Object.freeze({
       '灯室的门没有锁。钟摆停在一个不自然的角度，钟绳末端系着一张折得很小的纸条，纸已经被雾气泡软，字迹还认得出：别在涨潮时敲钟。',
       '林岚把纸条夹进父亲的地图里。窗外，第一盏航标灯亮了，接着是第二盏、第三盏，一路亮到她从没去过的那片海湾。',
       '楼下传来守塔人的咳嗽声。她忽然意识到，从她进门到现在，他一次也没有问过她为什么来。',
-    ].join('\n\n') },
+    ].join('\n\n'),
+    // 已审稿看的是审稿记录而不是稿状态。当前版本不再把稿设为 reviewed，第 3 章保留它来代表旧版本升级上来的数据，并带一份审稿。
+    review: JSON.stringify({ summary: '线索推进清楚，有一处时间对不上。', items: [
+      { category: '连续性', severity: 'warning', description: '第 1 章写钟声早了一刻，这里又写潮水没有变化，两处要对上。', quote: '潮水却没有任何变化' },
+      { category: '措辞', severity: 'pass', description: '语言自然。' },
+    ] }) },
     4: { status: 'draft', text: [
       '守塔人的屋子在灯塔背风的一侧，窗玻璃上积着经年的盐。他给林岚倒了一杯很淡的茶，自己却只是捧着杯子，看着炉火。',
       '「你父亲也问过钟的事。」他说完这句话，就再也没有开口。',

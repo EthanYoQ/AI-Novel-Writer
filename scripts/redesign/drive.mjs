@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,10 +10,28 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 
+import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
 import { startFakeModel } from './fake-model.mjs'
-import { RUN_SCENARIOS } from './run-scenarios.mjs'
-import { BASELINE_SESSIONS, EXTRA_SCENARIOS, SCENARIOS as BASELINE_SCENARIOS, STAGE_SCENARIOS } from './scenarios.mjs'
+import { assertNodeRunsTypeScript } from './node-version.mjs'
 import { dismissCompletionToasts, dismissStartupNotice, firstInteractiveControl, waitForShell } from './pages/shell.mjs'
+
+const asEntryPoint = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+// 场景模块会 import 应用里的 .ts：静态 import 会在任何代码运行前报 ERR_UNKNOWN_FILE_EXTENSION，所以先查再动态加载。
+// 只在作为入口运行时查：vitest 导入驱动时 .ts 由 vite 转译，用不到 Node 的类型剥离
+if (asEntryPoint) try { assertNodeRunsTypeScript(process.version, process.features.typescript) } catch (error) {
+  process.stderr.write(`${error.message}
+`)
+  process.exit(2)
+}
+const [
+  { ARCH_SCENARIOS }, { RUN_SCENARIOS }, { BLUEPRINT_SCENARIOS }, { CHAPTER_SCENARIOS }, { REFS_SCENARIOS },
+  { VISUAL_SCENARIOS }, { X1_SCENARIOS }, { X2_SCENARIOS }, { RDX3_SCENARIOS }, { RD10_SCENARIOS }, { README_SCENARIOS }, { CONTRAST_SCENARIOS },
+  { BASELINE_SESSIONS, EXTRA_SCENARIOS, SCENARIOS: BASELINE_SCENARIOS, STAGE_SCENARIOS },
+] = await Promise.all([
+  import('./arch-scenarios.mjs'), import('./run-scenarios.mjs'), import('./blueprint-scenarios.mjs'), import('./chapter-scenarios.mjs'),
+  import('./refs-scenarios.mjs'), import('./visual-scenarios.mjs'), import('./x1-scenarios.mjs'), import('./x2-scenarios.mjs'),
+  import('./rdx3-scenarios.mjs'), import('./rd10-scenarios.mjs'), import('./readme-scenarios.mjs'), import('./contrast-scenarios.mjs'), import('./scenarios.mjs'),
+])
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const OFFSCREEN_WINDOW = fileURLToPath(new URL('./offscreen-window.cjs', import.meta.url))
@@ -21,8 +40,17 @@ const VIEWPORT = { width: 1440, height: 900 }
 const THEMES = ['light', 'dark']
 const SHELLS = ['writer', 'stage']
 const ROOT_NAMES = ['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'temp', 'projects']
-const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS }
-const ALL_SCENARIOS = [...Object.keys(SCENARIOS), 'baseline-all', 'startup-timing']
+const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS }
+/** 计时会话：先在同一隔离目录预启动一次写好外观（书房计时另建 20 部作品），再计之后那次冷启动。 */
+const TIMED_SESSIONS = new Set(['startup-timing', 'library-timing'])
+/** 空闲内存：与启动计时同样先预启动一次，第二次冷启动到可交互后静置，再按间隔采样全部进程的内存。 */
+const IDLE_SESSIONS = new Set(['idle-memory'])
+const PREPARED_SESSIONS = new Set([...TIMED_SESSIONS, ...IDLE_SESSIONS])
+const IDLE_SETTLE_MS = 10_000
+const IDLE_SAMPLES = 5
+const IDLE_SAMPLE_INTERVAL_MS = 1_000
+export const SHELF_BOOKS = 20
+const ALL_SCENARIOS = [...Object.keys(SCENARIOS), 'baseline-all', ...PREPARED_SESSIONS]
 const USAGE = `用法: node scripts/redesign/drive.mjs --scenario <名称> [--theme light|dark] [--shell writer|stage] [--out <目录>] [--dump-dom] [--console] [--video] [--app-root <目录>]
 场景: ${ALL_SCENARIOS.join(', ')}`
 
@@ -150,10 +178,31 @@ export async function quit(app, graceMs = 10_000) {
   return { forced: true }
 }
 
-async function launch({ roots, appRoot, fakeModelPort, diagnostics }) {
+/**
+ * 隔离目录是新建的，应用没有存过界面语言，会按 navigator.language 取；非中文宿主上会落到英文，而场景全程按中文找控件。
+ * --lang 固定 Chromium 的界面语言，宿主语言不再影响结果。
+ */
+export function launchArgs(roots) {
+  return ['-r', OFFSCREEN_WINDOW, '.', `--user-data-dir=${roots.userData}`, '--lang=zh-CN']
+}
+
+/** 失败现场：截图、DOM 与无障碍树。取证本身失败不能盖掉原来的错误。 */
+export async function captureFailure(page, base) {
+  if (!page || page.isClosed()) return
+  await page.screenshot({ path: `${base}.failure.png` }).catch(() => {})
+  await dumpDom(page, base).catch(() => {})
+}
+
+/** 外部写入与残留进程都要留着隔离目录取证；只有全部检查通过才删。 */
+export function sessionIsClean({ failedAt, sessionErrors, residualProcesses, externalWrites }) {
+  return failedAt === null && sessionErrors.length === 0 && residualProcesses?.length === 0 && externalWrites?.length === 0
+}
+
+async function launch({ roots, appRoot, fakeModelPort, diagnostics, failureBase, shelfBooks = 0, renderTiming = false }) {
   const launchedAt = Date.now()
-  const app = await electron.launch({ cwd: appRoot, args: ['-r', OFFSCREEN_WINDOW, '.', `--user-data-dir=${roots.userData}`],
-    env: isolatedEnvironment(roots), timeout: TIMEOUT })
+  const env = { ...isolatedEnvironment(roots), ...(renderTiming ? { DRIVE_RENDER_TIMING: String(shelfBooks || 1) } : {}) }
+  const app = await electron.launch({ cwd: appRoot, args: launchArgs(roots), env, timeout: TIMEOUT })
+  let page
   try {
     await app.evaluate((_, port) => {
       const originalFetch = globalThis.fetch
@@ -169,7 +218,7 @@ async function launch({ roots, appRoot, fakeModelPort, diagnostics }) {
     }, fakeModelPort ?? null)
     app.process().stdout?.on('data', chunk => diagnostics.push(`[main:stdout] ${String(chunk).trimEnd()}`))
     app.process().stderr?.on('data', chunk => diagnostics.push(`[main:stderr] ${String(chunk).trimEnd()}`))
-    const page = await app.firstWindow({ timeout: TIMEOUT })
+    page = await app.firstWindow({ timeout: TIMEOUT })
     page.on('console', message => diagnostics.push(`[renderer:${message.type()}] ${message.text()}`))
     page.on('pageerror', error => diagnostics.push(`[renderer:pageerror] ${error.stack ?? error.message}`))
     await firstInteractiveControl(page).waitFor({ state: 'visible', timeout: TIMEOUT })
@@ -179,6 +228,16 @@ async function launch({ roots, appRoot, fakeModelPort, diagnostics }) {
     const timing = { launchToInteractiveMs: interactiveAt - launchedAt,
       readyToShowToInteractiveMs: readyToShow === null ? null : interactiveAt - readyToShow,
       navigationToInteractiveMs: Math.round(interactiveAt - timeOrigin) }
+    // 页面里记下的时刻（导航开始为 0）：书房「新建作品」进入 DOM，书架上的书（旧欢迎页与新书房都是「预览《书名》」按钮）到齐。
+    if (renderTiming) {
+      const read = name => page.waitForFunction(attribute => document.documentElement.getAttribute(attribute), `data-drive-${name}`, { timeout: TIMEOUT })
+        .then(handle => handle.jsonValue()).then(Number)
+      timing.renderInteractiveMs = await read('interactive')
+      if (shelfBooks > 0) {
+        timing.renderShelfMs = await read('shelf')
+        timing.renderIdleMs = await read('idle')
+      }
+    }
     page.setDefaultTimeout(20_000)
     assert.equal(path.resolve(await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))), roots.userData)
     await page.setViewportSize(VIEWPORT)
@@ -187,25 +246,78 @@ async function launch({ roots, appRoot, fakeModelPort, diagnostics }) {
     await dismissStartupNotice(page)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
     return { app, page, timing }
-  } catch (error) { await quit(app); throw error }
+  } catch (error) {
+    // 启动失败时调用方拿不到 page，只能在退出前就地取证
+    await captureFailure(page, failureBase)
+    await quit(app)
+    throw error
+  }
 }
 
 const invoke = (page, channel, ...args) =>
   page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 
+const APPEARANCE_V3_KEY = 'ai-novel-writer-appearance-v3'
+const APPEARANCE_PREVIOUS_KEY = 'ai-novel-writer-appearance'
+
 /**
- * 主题与外壳在同一次写入里改，只重载一次。shell 为 null 时不碰外壳偏好，旧外壳场景写入的内容与改动前相同。
- * 版本号与应用的 serializeAppearanceProfile 一致：只有新外壳写 v2，其余写 v1，trunk 也能读。
+ * 外观写到被测构建在读的那个键。RD-10 起只有 v3 键（只有浅色与深色，没有外壳偏好）；
+ * trunk 只有旧键，主题与外壳在同一次写入里改，shell 为 null 时不碰外壳偏好，版本号与它的 serializeAppearanceProfile 一致：
+ * 只有新外壳写 v2，其余写 v1。两个键都还没有时返回 null。
  */
-async function applyAppearance(page, { theme, shell }) {
-  await page.waitForFunction(() => localStorage.getItem('ai-novel-writer-appearance') !== null, null, { timeout: TIMEOUT })
-  await page.evaluate(({ colorTheme, shellPreference }) => {
-    const key = 'ai-novel-writer-appearance'
-    const current = JSON.parse(localStorage.getItem(key))
-    const next = { ...current, colorTheme, ...(shellPreference ? { shellPreference } : {}), revision: current.revision + 1, origin: 'author' }
-    next.schemaVersion = next.shellPreference === 'stage' ? 2 : 1
-    localStorage.setItem(key, JSON.stringify(next))
-  }, { colorTheme: theme, shellPreference: shell })
+export function appearanceWrite(stored, { theme, shell }) {
+  if (stored.v3 !== null) {
+    if (shell === 'writer') throw new Error('被测构建只有纸墨外壳，不能选 --shell writer')
+    const current = JSON.parse(stored.v3)
+    return { key: APPEARANCE_V3_KEY, value: { ...current, colorTheme: theme, revision: current.revision + 1, origin: 'author' } }
+  }
+  if (stored.previous === null) return null
+  const current = JSON.parse(stored.previous)
+  const value = { ...current, colorTheme: theme, ...(shell ? { shellPreference: shell } : {}), revision: current.revision + 1, origin: 'author' }
+  value.schemaVersion = value.shellPreference === 'stage' ? 2 : 1
+  return { key: APPEARANCE_PREVIOUS_KEY, value }
+}
+
+const median = values => {
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)
+}
+
+/**
+ * 空闲内存：每次采样是 app.getAppMetrics() 的全部进程，合计工作集与私有字节（KB，Windows 才有私有字节），
+ * 取各次合计的中位数；按进程类型的工作集也各取中位数。
+ */
+export function idleMemory(samples) {
+  if (samples.length === 0) throw new Error('空闲内存没有采样')
+  const total = (metrics, field) => metrics.reduce((sum, metric) => sum + (metric.memory[field] ?? 0), 0)
+  const types = [...new Set(samples.flatMap(metrics => metrics.map(metric => metric.type)))]
+  return {
+    samples: samples.length,
+    workingSetKB: median(samples.map(metrics => total(metrics, 'workingSetSize'))),
+    privateKB: median(samples.map(metrics => total(metrics, 'privateBytes'))),
+    byType: Object.fromEntries(types.map(type => [type,
+      median(samples.map(metrics => total(metrics.filter(metric => metric.type === type), 'workingSetSize')))])),
+  }
+}
+
+async function sampleIdleMemory(app) {
+  await delay(IDLE_SETTLE_MS)
+  const samples = []
+  for (let index = 0; index < IDLE_SAMPLES; index++) {
+    if (index > 0) await delay(IDLE_SAMPLE_INTERVAL_MS)
+    samples.push(await app.evaluate(({ app: electronApp }) => electronApp.getAppMetrics().map(({ type, memory }) => ({ type, memory }))))
+  }
+  return idleMemory(samples)
+}
+
+/** 改主题（trunk 上连同外壳偏好）后重载一次。 */
+async function applyAppearance(page, appearance) {
+  const keys = { v3: APPEARANCE_V3_KEY, previous: APPEARANCE_PREVIOUS_KEY }
+  await page.waitForFunction(({ v3, previous }) => localStorage.getItem(v3) !== null || localStorage.getItem(previous) !== null, keys, { timeout: TIMEOUT })
+  const stored = await page.evaluate(({ v3, previous }) => ({ v3: localStorage.getItem(v3), previous: localStorage.getItem(previous) }), keys)
+  const write = appearanceWrite(stored, appearance)
+  await page.evaluate(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), write)
   await page.reload()
   await waitForShell(page, TIMEOUT)
 }
@@ -214,9 +326,23 @@ async function applyAppearance(page, { theme, shell }) {
  * 启动计时量的是同一配置目录里的第二次冷启动：先启动一次写好主题（与外壳偏好）再退出，两侧都这样做。
  * 首次启动还要迁移旧配置、建库，与之后的启动不可比。
  */
-async function prepareProfile({ roots, appRoot, diagnostics }, appearance) {
-  const prepared = await launch({ roots, appRoot, fakeModelPort: null, diagnostics })
-  try { await applyAppearance(prepared.page, appearance) } finally { await quit(prepared.app) }
+async function prepareProfile({ roots, appRoot, diagnostics, failureBase }, appearance, shelfBooks = 0) {
+  const prepared = await launch({ roots, appRoot, fakeModelPort: null, diagnostics, failureBase })
+  try {
+    await applyAppearance(prepared.page, appearance)
+    if (shelfBooks > 0) await seedShelf(prepared, roots, shelfBooks)
+  } finally { await quit(prepared.app) }
+}
+
+/** 用公开 IPC 新建 count 部作品；新建即进入最近项目，书房的书架上就有 count 本书。 */
+async function seedShelf({ app, page }, roots, count) {
+  for (let index = 1; index <= count; index++) {
+    const grant = await chooseProjectDirectoryGrant(app, page, roots.projects)
+    const created = await invoke(page, 'project:create', { parentGrantId: grant.grantId, name: `书架${String(index).padStart(2, '0')}`,
+      genre: '悬疑', targetAudience: '全龄', writingLanguage: 'zh-CN' }, randomUUID(), null)
+    assert.equal(created.success, true, created.error)
+  }
+  assert.equal((await invoke(page, 'project:recent-list')).length, count, `最近项目应有 ${count} 部`)
 }
 
 /**
@@ -224,17 +350,28 @@ async function prepareProfile({ roots, appRoot, diagnostics }, appearance) {
  * Playwright 的 recordVideo 需要另外下载它自带的 ffmpeg，这里不依赖它。
  */
 async function startScreencast(page) {
-  const session = await page.context().newCDPSession(page)
   const frames = []
-  session.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
-    frames.push({ data, time: metadata.timestamp })
-    session.send('Page.screencastFrameAck', { sessionId }).catch(() => {})
-  })
-  await session.send('Page.startScreencast', { format: 'jpeg', quality: 92, maxWidth: VIEWPORT.width, maxHeight: VIEWPORT.height })
+  let session
+  const attach = async target => {
+    session = await target.context().newCDPSession(target)
+    const own = session
+    own.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
+      frames.push({ data, time: metadata.timestamp })
+      own.send('Page.screencastFrameAck', { sessionId }).catch(() => {})
+    })
+    await own.send('Page.startScreencast', { format: 'jpeg', quality: 92, maxWidth: VIEWPORT.width, maxHeight: VIEWPORT.height })
+  }
+  const detach = async () => {
+    await session.send('Page.stopScreencast')
+    await session.detach().catch(() => {})
+  }
+  await attach(page)
   return {
+    /** context.restart() 退出应用前停在旧页面上，冷启动后接到新页面接着录，帧都进同一段视频。 */
+    pause: detach,
+    resume: attach,
     async stop(file, scratch) {
-      await session.send('Page.stopScreencast')
-      await session.detach().catch(() => {})
+      await detach()
       assert.ok(frames.length > 1, '录屏没有收到画面')
       const directory = fs.mkdtempSync(path.join(scratch, 'frames-'))
       const lines = ['ffconcat version 1.0']
@@ -281,34 +418,55 @@ async function runSession(sessionName, names, options) {
   let failedAt = null
   let current = null
   let launched
+  let recording = null
+  const restartRequests = []
   const shell = names.map(name => SCENARIOS[name]?.shell).find(Boolean) ?? options.shell
   try {
-    if (sessionName === 'startup-timing') await prepareProfile({ roots, appRoot: options.appRoot, diagnostics }, { theme: options.theme, shell })
-    launched = await launch({ roots, appRoot: options.appRoot, fakeModelPort: fake?.port, diagnostics })
+    const shelfBooks = sessionName === 'library-timing' ? SHELF_BOOKS : 0
+    const failureBase = base(sessionName)
+    if (PREPARED_SESSIONS.has(sessionName)) await prepareProfile({ roots, appRoot: options.appRoot, diagnostics, failureBase }, { theme: options.theme, shell }, shelfBooks)
+    launched = await launch({ roots, appRoot: options.appRoot, fakeModelPort: fake?.port, diagnostics, failureBase, shelfBooks, renderTiming: TIMED_SESSIONS.has(sessionName) })
     shared.timing = launched.timing
     const shellShown = page => page.locator('[data-shell-presentation]').first().getAttribute('data-shell-presentation')
-    if (sessionName === 'startup-timing') shared.shell = await shellShown(launched.page)
-    else {
-      const { page } = launched
-      await applyAppearance(page, { theme: options.theme, shell })
-      shared.shell = await shellShown(page)
-      const context = { ...launched, roots, invoke, fake, reload: () => page.reload().then(() => waitForShell(page, TIMEOUT)) }
+    if (PREPARED_SESSIONS.has(sessionName)) {
+      shared.shell = await shellShown(launched.page)
+      if (IDLE_SESSIONS.has(sessionName)) shared.memory = await sampleIdleMemory(launched.app)
+    } else {
+      await applyAppearance(launched.page, { theme: options.theme, shell })
+      shared.shell = await shellShown(launched.page)
+      const context = {
+        ...launched, roots, invoke, fake,
+        /** 场景中途多拍一张图，与收尾截图放在同一目录。 */
+        shoot: name => shoot(context.page, `${base(name)}.png`),
+        reload: () => context.page.reload().then(() => waitForShell(context.page, TIMEOUT)),
+        /** 退出应用再用同一隔离目录冷启动（真正的重启，不重写外观），context 换成新的 app 与 page。 */
+        restart: async () => {
+          restartRequests.push(...await launched.app.evaluate(() => globalThis.__driveExternalRequests))
+          await recording?.pause()
+          const exited = await quit(launched.app)
+          assert.equal(exited.forced, false, '重启前应用没有正常退出')
+          launched = await launch({ roots, appRoot: options.appRoot, fakeModelPort: fake?.port, diagnostics, failureBase })
+          Object.assign(context, launched)
+          await recording?.resume(context.page)
+        },
+      }
       current = 0
       await SCENARIOS[names[0]].setup?.(context)
       for (const [index, name] of names.entries()) {
         current = index
         results[index].screenshot = `${base(name)}.png`
-        const recording = options.video ? await startScreencast(page) : null
+        recording = options.video ? await startScreencast(context.page) : null
         const measured = await SCENARIOS[name].run(context)
         if (recording) results[index].video = await recording.stop(`${base(name)}.mp4`, roots.temp)
+        recording = null
         if (measured) results[index].measured = measured
-        await shoot(page, results[index].screenshot)
-        if (options.dumpDom) await dumpDom(page, base(name))
+        await shoot(context.page, results[index].screenshot)
+        if (options.dumpDom) await dumpDom(context.page, base(name))
         await SCENARIOS[name].after?.(context)
       }
       current = null
     }
-    shared.externalRequests = await launched.app.evaluate(() => globalThis.__driveExternalRequests)
+    shared.externalRequests = [...restartRequests, ...await launched.app.evaluate(() => globalThis.__driveExternalRequests)]
     assert.deepEqual(shared.externalRequests, [], fake ? 'fetch 越过夹具访问外部网络' : '无夹具场景发出了 fetch')
   } catch (error) {
     if (current === null) sessionErrors.push(messageOf(error))
@@ -316,14 +474,11 @@ async function runSession(sessionName, names, options) {
       failedAt = current
       results[current].error = messageOf(error)
     }
-    const page = launched?.page
-    if (page && !page.isClosed()) {
-      const failureBase = base(current === null ? sessionName : names[current])
-      await page.screenshot({ path: `${failureBase}.failure.png` }).catch(() => {})
-      await dumpDom(page, failureBase).catch(() => {})
-    }
+    await captureFailure(launched?.page, base(current === null ? sessionName : names[current]))
     options = { ...options, console: true }
   } finally {
+    // 场景在 hold 与 release 之间抛错时门还关着：卡住的请求让运行一直进行，应用拒绝关闭，quit 要等满 10 秒再强杀
+    fake?.gate.release()
     if (options.console) fs.writeFileSync(`${base(sessionName)}.console.log`, `${diagnostics.join('\n')}\n`)
     if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(messageOf(error)); return null })
     await fake?.close()
@@ -333,7 +488,7 @@ async function runSession(sessionName, names, options) {
     shared.residualProcesses = await residualProcesses(roots.userData)
     shared.externalWrites = externalWrites(before)
   } catch (error) { sessionErrors.push(messageOf(error)) }
-  const clean = failedAt === null && sessionErrors.length === 0 && shared.residualProcesses?.length === 0
+  const clean = sessionIsClean({ failedAt, sessionErrors, residualProcesses: shared.residualProcesses, externalWrites: shared.externalWrites })
   if (clean) fs.rmSync(roots.root, { recursive: true, force: true })
   return results.map((result, index) => {
     const errors = [result.error, failedAt !== null && index > failedAt ? `未运行：本会话的 ${names[failedAt]} 先失败` : null, ...sessionErrors]
@@ -364,4 +519,4 @@ async function main() {
   process.exitCode = failed.length ? 1 : 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main()
+if (asEntryPoint) await main()

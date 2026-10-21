@@ -21,10 +21,8 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../services/app-data-locator', () => ({
   assertGlobalDataReady: vi.fn(),
-  getGlobalDataGeneration: () => 'generation',
   getGlobalDataRoot: () => mocks.storageRoot,
 }))
-vi.mock('../services/skin-service', () => ({ skinService: { getStartupSnapshot: vi.fn() } }))
 vi.mock('../services/project-access', () => ({
   projectAccess: { assertCurrentProjectContext: mocks.assertCurrentProjectContext },
 }))
@@ -57,7 +55,6 @@ vi.mock('../controllers/finalization-controller', () => ({ registerFinalizationC
 vi.mock('../controllers/chapter-lifecycle-controller', () => ({ registerChapterLifecycleController: vi.fn() }))
 vi.mock('../controllers/external-file-grant-controller', () => ({ registerExternalFileGrantController: vi.fn() }))
 vi.mock('../controllers/app-data-controller', () => ({ registerAppDataController: vi.fn() }))
-vi.mock('../controllers/skin-controller', () => ({ registerSkinController: vi.fn() }))
 
 import { registerIPCHandlers } from '../ipc-handlers'
 import { M05_CHARACTER_ASSET_SQL } from '../migrations/m05-character-assets'

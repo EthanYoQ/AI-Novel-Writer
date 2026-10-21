@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Copy, Lock, Trash2 } from 'lucide-react'
-import { llmCallTime, type LLMCallRecord } from '../../../services/stats-service'
+import type { LLMCallRecord } from '../../../services/stats-service'
+import { sqliteTime } from '../../../shared/sqlite-time'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { copySafeDiagnostic, useModelCalls } from '../../run/use-model-calls'
@@ -9,6 +10,7 @@ import { Check } from '../../ui/Check'
 import { InlineConfirm } from '../../ui/InlineConfirm'
 import { StatGrid } from '../../ui/StatGrid'
 import { callPurpose, clockTime, compactNumber } from './run-format'
+import { pluralEn } from '../../../shared/plural-en'
 
 type Text = (zh: string, en: string) => string
 
@@ -34,29 +36,31 @@ function RunLog({ text }: { text: Text }) {
   const logs = useWorkflowStore(s => s.globalLogs)
   const [follow, setFollow] = useState(true)
   const [confirming, setConfirming] = useState(false)
+  const clearButton = useRef<HTMLButtonElement>(null)
   const box = useRef<HTMLOListElement>(null)
   const titleId = useId()
 
   useEffect(() => {
     if (follow && box.current) box.current.scrollTop = box.current.scrollHeight
-  }, [logs.length, follow])
+  }, [logs, follow])
 
   return (
     <section className="run-section" aria-labelledby={titleId}>
       <header className="run-section-head">
         <h3 id={titleId} className="run-section-title">{text('日志', 'Log')}</h3>
         <Check kind="switch" checked={follow} onChange={setFollow} label={text('自动滚动', 'Auto-scroll')} />
-        <Button variant="text" size="sm" disabled={logs.length === 0 || confirming} onClick={() => setConfirming(true)}>
+        <Button ref={clearButton} variant="text" size="sm" disabled={logs.length === 0 || confirming} onClick={() => setConfirming(true)}>
           <Trash2 size={14} aria-hidden />{text('清空日志…', 'Clear log…')}
         </Button>
       </header>
       {confirming && (
         <InlineConfirm
-          message={text(`清空后这 ${logs.length} 行日志无法找回。`, `Clearing removes these ${logs.length} log lines for good.`)}
+          message={text(`清空后这 ${logs.length} 行日志无法找回。`, `Clearing removes the ${logs.length} log ${pluralEn(logs.length, 'line')} for good.`)}
           confirmLabel={text('清空', 'Clear')}
           cancelLabel={text('保留', 'Keep')}
           onConfirm={() => { setConfirming(false); useWorkflowStore.getState().clearLogs() }}
           onCancel={() => setConfirming(false)}
+          returnFocusRef={clearButton}
         />
       )}
       {logs.length === 0
@@ -92,7 +96,7 @@ function ModelCallLog({ text }: { text: Text }) {
           { id: 'calls', label: text('调用次数', 'Calls'), value: count(stats.totalCalls) },
           { id: 'input', label: text('输入用量', 'Input usage'), value: count(stats.totalPromptTokens) },
           { id: 'output', label: text('输出用量', 'Output usage'), value: count(stats.totalCompletionTokens),
-            hint: stats.knownUsageCalls < stats.totalCalls ? text(`${stats.totalCalls - stats.knownUsageCalls} 次未上报用量`, `${stats.totalCalls - stats.knownUsageCalls} calls without usage`) : undefined },
+            hint: stats.knownUsageCalls < stats.totalCalls ? text(`${stats.totalCalls - stats.knownUsageCalls} 次未上报用量`, `${stats.totalCalls - stats.knownUsageCalls} ${pluralEn(stats.totalCalls - stats.knownUsageCalls, 'call')} without usage`) : undefined },
           { id: 'failed', label: text('失败', 'Failed'), value: count(stats.failedCalls) },
         ]} />
       )}
@@ -128,7 +132,7 @@ function CallRow({ call, text, onCopy }: { call: LLMCallRecord; text: Text; onCo
   const usage = (value: number | null) => value === null ? '—' : value.toLocaleString(locale)
   return (
     <tr>
-      <td className="run-table-num">{clockTime(llmCallTime(call.createdAt), locale)}</td>
+      <td className="run-table-num">{clockTime(sqliteTime(call.createdAt), locale)}</td>
       <td>{callPurpose(call.purpose, text)}</td>
       <td>{call.modelName || '—'}</td>
       <td className="run-table-num" data-align="end">{usage(call.promptTokens)}</td>

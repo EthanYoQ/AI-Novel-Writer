@@ -821,7 +821,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
     const commands = [
       [new GenerateCoreSeedCommand(snapshot, workflowRuntimeDependencies), 'Generating story premise...'],
-      [new GenerateCharactersCommand(snapshot), 'Generating character graph...'],
+      [new GenerateCharactersCommand(snapshot), 'Generating the cast...'],
       [new GenerateWorldBuildingCommand(snapshot, workflowRuntimeDependencies), 'Generating worldbuilding...'],
       [new GeneratePlotArchitectureCommand(['synopsis'], snapshot, workflowRuntimeDependencies), 'Generating plot outline...'],
     ] as const
@@ -1164,7 +1164,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(proposals.items.map(item => item.fields)).toEqual(fullEntries.map(({ relationships, currentState, ...fields }) => { void relationships; void currentState; return fields }))
     expect(proposals.items[0].relationships).toEqual(expect.arrayContaining([expect.objectContaining({ targetSelectionKey: expect.any(String) })]))
     const visibleLogs = vi.mocked(stepCallbacks.log).mock.calls.map(([message]) => message).join('\n')
-    expect(visibleLogs).toContain('Generating character graph...')
+    expect(visibleLogs).toContain('Generating the cast...')
     expect(visibleLogs).toContain('Initial bounded response: finishReason=stop')
     expect(visibleLogs).toContain('Character proposals saved for explicit adoption; no formal characters were written.')
     expect(visibleLogs).not.toMatch(/[\u3400-\u9fff]/u)

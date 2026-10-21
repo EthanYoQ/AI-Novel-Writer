@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { FAKE_MODEL, FIXTURE_PROSE, streamingProse } from './fake-model.mjs'
+import * as blueprint from './pages/blueprint.mjs'
 import * as chapter from './pages/chapter.mjs'
 import * as materials from './pages/materials.mjs'
 import * as project from './pages/project.mjs'
@@ -25,8 +26,8 @@ function everyName(page) {
 }
 
 async function writeNextFromBlueprint(page) {
-  await stage.stageButton(page, '蓝图').click()
-  await chapter.writeNextChapter(page, 100)
+  await blueprint.open(page)
+  await blueprint.writeNext(page)
   await runSheet.waitUntilOpen(page)
 }
 
@@ -71,13 +72,51 @@ async function countMainInvokes(app) {
   assert.ok(wrapped > 0, '能在主进程里记下 invoke 通道')
 }
 
+/** 运行侧页的恢复列表读这几样：中断的生成任务、批量进度、每个任务的上下文、旧恢复候选。 */
+const RECOVERY_READS = ['generation:list', 'generation:list-batches', 'generation:read-context', 'db:recovery-candidate-list']
+
+/**
+ * 从现在起数主进程答完的恢复读取。包装每个进程只装一次，之后的调用只清零：重复包装会丢掉中间别的包装（如 countMainInvokes）。
+ */
+async function countRecoveryReads(app) {
+  await app.evaluate(({ ipcMain }, channels) => {
+    globalThis.__driveRecoveryReads = { ...Object.fromEntries(channels.map(channel => [channel, 0])), views: null }
+    if (globalThis.__driveRecoveryWrapped) return
+    globalThis.__driveRecoveryWrapped = true
+    const handlers = ipcMain._invokeHandlers
+    for (const channel of channels) {
+      const original = handlers.get(channel)
+      handlers.set(channel, async (...args) => {
+        // 记在请求到达时的窗口里：清零前发出、清零后才答完的请求不算进新窗口
+        const reads = globalThis.__driveRecoveryReads
+        const result = await original(...args)
+        reads[channel] += 1
+        if (channel === 'generation:list') reads.views = result.length
+        return result
+      })
+    }
+  }, RECOVERY_READS)
+}
+
+/** 列表读完：各样都答过，且最近一次列出的每个生成任务都读过上下文（页面全部拿到才写进列表）。 */
+async function recoveryReadsDone(app, page) {
+  for (const deadline = Date.now() + 10_000; ; await page.waitForTimeout(50)) {
+    const reads = await app.evaluate(() => globalThis.__driveRecoveryReads)
+    if (RECOVERY_READS.every(channel => channel === 'generation:read-context' || reads[channel] > 0)
+      && reads.views !== null && reads['generation:read-context'] >= reads.views) break
+    assert.ok(Date.now() < deadline, `10 秒内恢复列表没有重新读完：${JSON.stringify(reads)}`)
+  }
+  // 最后一次回复到页面、交给 React 渲染，等两帧
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+}
+
 /** 助手任务里作者能看到的对话：输入、每一轮的可见回复与动作。运行状态与租约期限由主进程在重开作品时登记，不算对话内容。 */
 function conversation(recovery) {
   return JSON.stringify({ input: recovery.context.input, rounds: recovery.rounds.map(round => ({ visibleText: round.visibleText, actions: round.actions })) })
 }
 
 /** 示例作品加一条第 5 章的旧恢复候选（写作中断时留下的正文）。 */
-const seedWithCandidate = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path: projectPath, session }) => {
+export const seedWithCandidate = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path: projectPath, session }) => {
   const recorded = await invoke(page, 'db:recovery-candidate-record', { runId: randomUUID(), stepId: '写稿', chapterNumber: 5, chapterTitle: '潮汐表',
     source: { chapterNumber: 5, title: '潮汐表', role: '发展', purpose: '推进灯塔与沉船的线索', keyEvents: '林岚在灯塔里找到新的线索', characters: [] },
     sourceDraft: null, visibleText: '潮水退去，钟声早了一刻。林岚把潮汐表翻到三十年前那一页。', failureCode: 'timeout', failureReason: '模型长时间没有响应' },
@@ -155,8 +194,8 @@ export const RUN_SCENARIOS = {
     }
   } }), run: async ({ page, fake }) => {
     fake.gate.hold()
-    await stage.stageButton(page, '蓝图').click()
-    await chapter.startBatch(page, FAKE_MODEL.id, 100, 2)
+    await blueprint.open(page)
+    await blueprint.startBatch(page, 2)
     await runSheet.waitUntilOpen(page)
     await untilGateHolds(fake.gate)
     assert.deepEqual(await writingChapters(page), ['第 3 章'], '批量创作只把正在写的那一章标为生成中，排队的第 4 章不算')
@@ -212,14 +251,15 @@ export const RUN_SCENARIOS = {
     await card.getByRole('button', { name: '放弃…' }).click()
     await card.getByRole('group').getByText(/^放弃后这 \d+ 字无法找回。$/).waitFor({ state: 'visible' })
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), '保留', '就地确认出现时焦点在「保留」')
-  }, after: async ({ page }) => {
+  }, after: async ({ app, page }) => {
     const card = runSheet.recovery(page).getByRole('article', { name: '原始候选 · 第5章 潮汐表' })
     await card.getByRole('group').getByRole('button', { name: '放弃', exact: true }).click()
     await card.waitFor({ state: 'detached' })
     await runSheet.sheet(page).getByRole('button', { name: '收起运行侧页' }).first().click()
+    await countRecoveryReads(app)
     await runSheet.openFromPalette(page)
     await runSheet.tab(page, '进行中').waitFor({ state: 'visible' })
-    await page.waitForTimeout(800)
+    await recoveryReadsDone(app, page)
     assert.equal(await card.count(), 0, '重新读取后候选不再列出')
   } },
 
@@ -249,7 +289,7 @@ export const RUN_SCENARIOS = {
   'run-en': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, invoke, reload, fake }) => {
     assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
     await reload()
-    await stage.shelfButton(page, 'Open 灯塔').click()
+    await stage.openFromLibraryEn(page, '灯塔')
     const spine = page.getByRole('navigation', { name: 'Writing flow' })
     await spine.waitFor({ state: 'visible' })
     await page.keyboard.press('Control+K')
@@ -261,10 +301,7 @@ export const RUN_SCENARIOS = {
     await page.keyboard.press('Escape')
     fake.gate.hold()
     await spine.getByRole('button', { name: /^Blueprint/ }).click()
-    await page.getByRole('button', { name: /^Write Chapter \d+$/ }).click()
-    const dialog = page.getByRole('dialog').filter({ has: page.getByRole('button', { name: 'Start writing' }) })
-    await dialog.getByPlaceholder('3000').fill('100')
-    await dialog.getByRole('button', { name: 'Start writing' }).click()
+    await page.getByRole('button', { name: /^Write chapter \d+$/ }).click()
     await runSheet.waitUntilOpen(page)
     await untilGateHolds(fake.gate)
     assert.deepEqual(await runSheet.sheet(page).getByRole('tab').allInnerTexts(), ['In progress', 'History', 'Diagnostics'])
@@ -285,7 +322,7 @@ export const RUN_SCENARIOS = {
       assert.equal(await stage.palette(page).isVisible(), true, `Ctrl K 输入「${query}」后搜索仍开着，打开作品后的落点没有关掉它`)
       assert.equal(await stage.palette(page).getByRole('option').count(), 0, `Ctrl K「${query}」没有结果`)
     }
-    await page.waitForFunction(() => [...document.querySelectorAll('nav[aria-label="位置"] span')].map(node => node.textContent).join('/') === '正文/第 3 章')
+    await page.waitForFunction(() => [...document.querySelectorAll('nav[aria-label="位置"] span')].map(node => node.textContent).join('/') === '正文/第 4 章')
     assert.equal(await stage.palette(page).isVisible(), true, '落点在搜索后面照常打开，搜索仍开着')
   }, after: async ({ page }) => {
     await page.keyboard.press('Escape')
@@ -328,9 +365,12 @@ export const RUN_SCENARIOS = {
     for (const deadline = Date.now() + 20_000; !context.projectLoaded; await page.waitForTimeout(100)) {
       assert.ok(Date.now() < deadline, '20 秒内作品数据没有加载完')
     }
+    await countRecoveryReads(context.app)
     await runSheet.openFromPalette(page)
     await runSheet.tab(page, '进行中').waitFor({ state: 'visible' })
-    await page.waitForTimeout(1500)
+    await recoveryReadsDone(context.app, page)
+    const reads = await context.app.evaluate(() => globalThis.__driveRecoveryReads)
+    assert.equal(reads.views, 1, '主进程列出了这条助手任务，页面也读完了它的上下文：下面的否定断言针对的是读完后的列表')
     assert.doesNotMatch(await runSheet.visibleWords(page), /助手任务|恢复此助手任务|复制回复/, '运行侧页不列出助手任务')
     assert.doesNotMatch(await everyName(page), CHAT_WORDS)
   }, after: async context => {
@@ -351,9 +391,9 @@ export const RUN_SCENARIOS = {
     const pause = ms => page.waitForTimeout(ms)
     fake.streamProse({ chunks: streamingProse(36, 50), intervalMs: 180 })
     await pause(1500)
-    await stage.stageButton(page, '蓝图').click()
+    await blueprint.open(page)
     await pause(1200)
-    await chapter.writeNextChapter(page, 100)
+    await blueprint.writeNext(page)
     await runSheet.waitUntilOpen(page)
     await runSheet.output(page).waitFor({ state: 'visible', timeout: 20_000 })
     await runSheet.waitForRunDone(page)
@@ -397,9 +437,13 @@ export const RUN_SCENARIOS = {
       requestAnimationFrame(tick)
       new MutationObserver(sample).observe(document.body, { subtree: true, childList: true, characterData: true })
     }, { selector: OUTPUT_TEXT, total: chunks.length })
-    if (await stage.root(page).count() > 0) await stage.stageButton(page, '蓝图').click()
-    else await project.openNode(page, '章节蓝图')
-    await chapter.writeNextChapter(page, 100)
+    if (await stage.root(page).count() > 0) {
+      await blueprint.open(page)
+      await blueprint.writeNext(page)
+    } else {
+      await project.openNode(page, '章节蓝图')
+      await chapter.writeNextChapter(page, 100)
+    }
     await page.waitForFunction(() => window.__driveStream, null, { timeout: 60_000 })
     const { shownAt, frames } = await page.evaluate(() => window.__driveStream)
     const latencies = fake.streamLog.map((sent, index) => shownAt[index] - sent.at).sort((a, b) => a - b)
@@ -413,4 +457,57 @@ export const RUN_SCENARIOS = {
       chunks: chunks.length,
     }
   }, after: ({ page }) => waitForRunDone(page) },
+
+  /** #409：第 3 章单章写作在本次打开里失败后，接着跑含第 3 章的批量（卡在假模型门上）：第 3 章的恢复卡照样列在运行侧页。 */
+  'rst-batch-draft-card': { model: true, shell: 'stage', setup: context => seedStageSample(context, { landOnChapter3: false, beforeReload: async ({ page, invoke, path: projectPath, session }) => {
+    for (const chapterNumber of [3, 4]) {
+      for (const draft of await invoke(page, 'db:draft-list', chapterNumber, projectPath, session)) {
+        assert.equal((await invoke(page, 'db:draft-delete', draft.id, projectPath, session)).success, true)
+      }
+    }
+  } }), run: async ({ page, fake }) => {
+    fake.failProse()
+    await writeNextFromBlueprint(page)
+    await runSheet.anyCard(page).filter({ hasText: /^上一次运行/ }).getByText(/失败|出错|未完成/).first().waitFor({ state: 'visible', timeout: 60_000 })
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: /第3章候选/ })
+    await card.waitFor({ state: 'visible', timeout: 10_000 })
+    fake.failProse(false)
+    fake.gate.hold()
+    await blueprint.open(page)
+    await blueprint.startBatch(page, 2)
+    await runSheet.waitUntilOpen(page)
+    await untilGateHolds(fake.gate)
+    const active = await runSheet.activeTitles(page)
+    assert.ok(active.some(title => /^批量草稿待审 · 第 3 至 4 章/.test(title)), `批量运行含第 3 章：${active}`)
+    await card.waitFor({ state: 'visible', timeout: 5000 })
+    return { active, card: (await card.innerText()).replace(/\s+/g, ' ').slice(0, 160) }
+  }, after: async ({ page, fake }) => {
+    fake.gate.release()
+    await runSheet.waitForRunDone(page, 120_000)
+  } },
+
+  /** #441 后续：第 3 章正在用夹具模型写（卡在假模型门上），在设置里改这个模型后保存：先提示，等生成结束再保存则不保存、表单留着。 */
+  'rst-model-save-prompt': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake }) => {
+    fake.gate.hold()
+    await writeNextFromBlueprint(page)
+    await untilGateHolds(fake.gate)
+    await stage.openSettings(page)
+    const models = page.getByRole('list', { name: 'AI 模型' })
+    await models.getByRole('button', { name: `编辑「${FAKE_MODEL.name}」` }).click()
+    await page.getByRole('button', { name: '保存配置' }).click()
+    const prompt = page.getByRole('dialog', { name: '这个模型正在生成' })
+    await prompt.waitFor({ state: 'visible' })
+    const message = await prompt.innerText()
+    assert.match(message, /当前有生成在用这个模型（「.+」），保存后这次生成会在下一章停下/)
+    return { message: message.replace(/\s+/g, ' ') }
+  }, after: async ({ page, fake }) => {
+    const before = fake.requests.length
+    await page.getByRole('dialog', { name: '这个模型正在生成' }).getByRole('button', { name: '等生成结束再保存' }).click()
+    await page.getByRole('dialog', { name: '这个模型正在生成' }).waitFor({ state: 'detached' })
+    await page.getByRole('button', { name: '保存配置' }).waitFor({ state: 'visible' })
+    fake.gate.release()
+    await runSheet.waitForRunDone(page, 120_000)
+    assert.ok(fake.requests.length > before, '没保存模型，这次生成照常写完')
+    assert.doesNotMatch(await runSheet.anyCard(page).filter({ hasText: /^上一次运行/ }).innerText(), /失败|GENERATION_SOURCE_CHANGED/)
+  } },
 }
