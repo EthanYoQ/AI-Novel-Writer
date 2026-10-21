@@ -82,4 +82,11 @@ export const zhCN = {
   'error.finalizationCommitNotFound': '这一章的定稿记录已经不在了（可能已被删除），请刷新后再看。',
   'error.manuscriptTargetConflict': '正文文件夹里这一章的文件已存在且内容不同（可能在应用外改过），已拒绝覆盖。请移走或改名这个文件后重试发布。',
   'error.manuscriptTargetCollisions': '正文文件夹里这一章的同名文件太多，已拒绝覆盖。请清理正文文件夹里这一章的旧文件后重试。',
+  'error.revisionNotFound': '这份修订稿已经不在了（可能已被丢弃或删除），没有合并。',
+  'error.revisionAlreadyHandled': '这份修订稿已经处理过（已合并或已丢弃），请刷新后再看。',
+  'error.revisionAlreadyMerged': '这份修订稿已经合并过，之后这一稿又有改动，已拒绝再次覆盖。',
+  'error.revisionTargetNotEditable': '这一稿已定稿或不能再修改，没有合并修订稿。',
+  'error.revisionTargetChanged': '这一稿的正文或状态已经变化。请重新打开修订对比后再合并。',
+  'error.revisionSourceMissing': '这份旧修订稿缺少生成时依据的原稿，仍可查看但不能合并。请重新生成修订稿。',
+  'error.revisionSourceMismatch': '这一稿与修订稿生成时依据的原稿不一致，已拒绝合并。请重新生成修订稿。',
 } satisfies Record<MessageKey, string>

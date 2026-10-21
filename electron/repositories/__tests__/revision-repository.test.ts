@@ -293,7 +293,7 @@ describe('RevisionRepository.mergeIntoDraft', () => {
     })
 
     db.prepare('UPDATE contents SET body = ? WHERE id = 1').run('合并成功后的用户新编辑')
-    expect(() => RevisionRepository.mergeIntoDraft(request)).toThrow('随后发生变化')
+    expect(() => RevisionRepository.mergeIntoDraft(request)).toThrow('REVISION_ALREADY_MERGED')
     expect(db.prepare('SELECT body FROM contents WHERE id = 1').get())
       .toEqual({ body: '合并成功后的用户新编辑' })
   })
@@ -309,7 +309,7 @@ describe('RevisionRepository.mergeIntoDraft', () => {
     expect(() => RevisionRepository.mergeIntoDraft({
       ...mergeRequest(revision.id),
       expectedDraftContent: '过期原稿',
-    })).toThrow('正文已变化')
+    })).toThrow('REVISION_TARGET_CHANGED')
 
     const secondContentId = ContentRepository.create('另一个草稿')
     db.prepare('INSERT INTO drafts (content_id) VALUES (?)').run(secondContentId)
@@ -317,17 +317,32 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       ...mergeRequest(revision.id),
       targetDraftId: 2,
       expectedDraftContent: '另一个草稿',
-    })).toThrow('不属于目标草稿')
+    })).toThrow('REVISION_TARGET_MISMATCH')
 
     db.prepare("UPDATE drafts SET status = 'finalized' WHERE id = 1").run()
     expect(() => RevisionRepository.mergeIntoDraft(mergeRequest(revision.id)))
-      .toThrow('不是可修改状态')
+      .toThrow('REVISION_TARGET_NOT_EDITABLE')
     expect(db.prepare(`
       SELECT drafts.status, drafts.word_count, contents.body
       FROM drafts JOIN contents ON contents.id = drafts.content_id
       WHERE drafts.id = 1
     `).get()).toEqual({ status: 'finalized', word_count: 0, body: '原稿' })
     expect(RevisionRepository.getFull(revision.id)?.status).toBe('pending')
+  })
+
+  it('reports missing and already-handled revisions with stable codes (#474)', () => {
+    const revision = RevisionRepository.create({
+      baseDraftId: 1,
+      revisionType: 'refine',
+      content: 'AI 修订候选',
+      wordCount: 7,
+      expectedSource,
+    })
+    expect(() => RevisionRepository.mergeIntoDraft(mergeRequest(revision.id + 99))).toThrow(/^REVISION_NOT_FOUND$/u)
+    expect(() => RevisionRepository.mergeIntoDraft({ ...mergeRequest(revision.id), targetDraftId: 99 })).toThrow(/^DRAFT_NOT_FOUND$/u)
+    RevisionRepository.markDiscarded(revision.id)
+    expect(() => RevisionRepository.markDiscarded(revision.id)).toThrow(/^REVISION_NOT_PENDING$/u)
+    expect(() => RevisionRepository.mergeIntoDraft(mergeRequest(revision.id))).toThrow(/^REVISION_NOT_PENDING$/u)
   })
 
   it('rejects rebasing an old revision onto a newly saved draft even when the renderer calls that body expected', () => {
@@ -343,7 +358,7 @@ describe('RevisionRepository.mergeIntoDraft', () => {
     expect(() => RevisionRepository.mergeIntoDraft({
       ...mergeRequest(revision.id),
       expectedDraftContent: '原稿+B',
-    })).toThrow('生成时源稿')
+    })).toThrow('REVISION_SOURCE_MISMATCH')
 
     expect(db.prepare('SELECT body FROM contents WHERE id = 1').get()).toEqual({ body: '原稿+B' })
     expect(RevisionRepository.getFull(revision.id)?.status).toBe('pending')

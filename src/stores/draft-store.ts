@@ -390,7 +390,8 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
       return { success: true, receipt: committedReceipt }
     } catch (e) {
       if (committedReceipt) return { success: true, receipt: committedReceipt, postCommitError: String(e) }
-      return { success: false, error: String(e) }
+      // 交出 message 而不是 String(e)：再套一层「Error: 」会盖住 Electron 的通道前缀，显示处就认不出主进程的错误码。
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
   },
 }))

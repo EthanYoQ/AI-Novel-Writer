@@ -950,7 +950,7 @@ describe('ReviewCycleRepository merge state', () => {
       expect(verifyM03ReviewCycle(db)).toBe(true)
       expect(RevisionRepository.mergeIntoDraft(request, db)).toMatchObject({ idempotent: true })
       expect(() => RevisionRepository.markMerged(item.revision.revisionId, item.seeded.draftId, db))
-        .toThrow('必须通过原子正文合并入口')
+        .toThrow('REVISION_MERGE_REQUIRED')
     } finally { db.close() }
   })
 

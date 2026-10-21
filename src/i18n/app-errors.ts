@@ -209,6 +209,14 @@ const ERROR_KEYS = {
   FINALIZATION_COMMIT_NOT_FOUND: 'error.finalizationCommitNotFound',
   MANUSCRIPT_TARGET_CONFLICT: 'error.manuscriptTargetConflict',
   MANUSCRIPT_TARGET_COLLISIONS: 'error.manuscriptTargetCollisions',
+  // 合并、丢弃审稿修订稿（#474 B5）。
+  REVISION_NOT_FOUND: 'error.revisionNotFound',
+  REVISION_NOT_PENDING: 'error.revisionAlreadyHandled',
+  REVISION_ALREADY_MERGED: 'error.revisionAlreadyMerged',
+  REVISION_TARGET_NOT_EDITABLE: 'error.revisionTargetNotEditable',
+  REVISION_TARGET_CHANGED: 'error.revisionTargetChanged',
+  REVISION_SOURCE_MISSING: 'error.revisionSourceMissing',
+  REVISION_SOURCE_MISMATCH: 'error.revisionSourceMismatch',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

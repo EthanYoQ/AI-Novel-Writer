@@ -80,6 +80,13 @@ export const enUS = {
   'error.finalizationCommitNotFound': 'The finalization record for this chapter no longer exists (it may have been deleted). Refresh to see the current state.',
   'error.manuscriptTargetConflict': "The chapter's file in the manuscript folder already exists with different content (it may have been edited outside the app), so it was not overwritten. Move or rename that file, then retry publishing.",
   'error.manuscriptTargetCollisions': "The manuscript folder already has too many files named after this chapter, so nothing was overwritten. Remove old copies of this chapter from the manuscript folder, then try again.",
+  'error.revisionNotFound': 'This revision no longer exists (it may have been discarded or deleted), so nothing was merged.',
+  'error.revisionAlreadyHandled': 'This revision was already handled (merged or discarded). Refresh to see the current state.',
+  'error.revisionAlreadyMerged': 'This revision was already merged and the draft changed afterwards, so it was not applied again.',
+  'error.revisionTargetNotEditable': 'This draft is finalized or can no longer be edited, so the revision was not merged.',
+  'error.revisionTargetChanged': 'The text or status of this draft changed. Reopen the revision comparison, then merge again.',
+  'error.revisionSourceMissing': 'This older revision is missing the draft it was generated from. You can still read it, but it cannot be merged. Generate the revision again.',
+  'error.revisionSourceMismatch': 'This draft no longer matches the text the revision was generated from, so it was not merged. Generate the revision again.',
 } as const
 
 export type MessageKey = keyof typeof enUS

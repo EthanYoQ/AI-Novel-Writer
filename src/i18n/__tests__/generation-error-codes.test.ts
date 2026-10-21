@@ -78,6 +78,7 @@ const COVERED_PREFIXES = [
   'FINALIZATION_EXPORT_',
   'FINALIZATION_SNAPSHOT_',
   'MANUSCRIPT_',
+  'REVISION_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
@@ -527,6 +528,9 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'MANUSCRIPT_CHAPTER_NUMBER_INVALID',
     'MANUSCRIPT_STORED_TARGET_INVALID',
     'MANUSCRIPT_TARGET_OUTSIDE_PROJECT',
+    // #474 B5：修订稿与目标草稿的从属关系、审稿修订只能走原子合并入口。界面只合并这一稿自己的修订稿。
+    'REVISION_MERGE_REQUIRED',
+    'REVISION_TARGET_MISMATCH',
   ],
   // 模型输出不合角色提议或定稿角色状态的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住；
   // 定稿后处理把码记在步骤上并原样显示，供反馈定位。没有现成文案能告诉作者除重试以外还能做什么。
