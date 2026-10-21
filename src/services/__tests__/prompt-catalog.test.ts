@@ -275,3 +275,24 @@ it('项目提示词读取、保存和删除始终使用规范目录', async () =
     expect(calls.filter(([channel]) => channel === 'fs:check-exists')).toHaveLength(5)
   } finally { adapter.mockRestore() }
 })
+
+it('explains a cached damaged project prompt in the interface language current at failure time (#474)', async () => {
+  const { useLocaleStore } = await import('../../stores/locale-store')
+  const original = useLocaleStore.getState()
+  const spy = vi.spyOn(ipc, 'invokeWithProjectSession').mockImplementation((async (_session: unknown, channel: string) => {
+    if (channel === 'fs:check-exists') return true
+    if (channel === 'fs:list-dir') return [{ name: `${builtin.key}.json`, path: `${builtin.key}.json`, isDir: false }]
+    if (channel === 'fs:read-file') return { success: true, content: JSON.stringify({ key: builtin.key }) }
+    throw new Error(`unexpected ${channel}`)
+  }) as never)
+  try {
+    const catalog = new PromptCatalog([builtin], persistence({ loadProject: ipcPromptPersistence.loadProject }), () => session)
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    await expect(catalog.resolve(builtin.key, session)).rejects.toThrow('提示词内容结构无效')
+    useLocaleStore.setState({ locale: 'en-US' })
+    await expect(catalog.resolve(builtin.key, session)).rejects.toThrow('The prompt file has an invalid structure.')
+  } finally {
+    spy.mockRestore()
+    useLocaleStore.setState(original, true)
+  }
+})
