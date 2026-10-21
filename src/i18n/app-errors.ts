@@ -214,6 +214,8 @@ const ERROR_KEYS = {
   LLM_DEFAULT_MODEL_ROLLBACK_FAILED: 'error.defaultModelRollbackFailed',
   MODEL_ENDPOINT_INVALID: 'error.modelEndpointInvalid',
   MODEL_OUTPUT_LIMIT_INVALID: 'error.modelOutputLimitInvalid',
+  // 生成与连接测试都会按模型设置组请求参数，Kimi 官方接口的温度超出范围时在发请求前拒绝。
+  GENERATION_KIMI_TEMPERATURE_INVALID: 'error.kimiTemperatureInvalid',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

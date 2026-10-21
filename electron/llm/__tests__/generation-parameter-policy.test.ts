@@ -169,7 +169,7 @@ describe('generation parameter policy', () => {
       temperature: 0.6,
     })
     expect(() => resolveGenerationParameters({ ...unknownKimiModel, temperature: 1.1 }, { maxTokens: 512 }))
-      .toThrow('0 到 1')
+      .toThrow('GENERATION_KIMI_TEMPERATURE_INVALID')
   })
 
   it('does not apply official Kimi rules or reasoning fields to a proxy endpoint', () => {

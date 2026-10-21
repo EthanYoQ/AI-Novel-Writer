@@ -7,11 +7,12 @@ import {
   GLOBAL_CONFIG_PATH,
   DEFAULT_GLOBAL_CONFIG,
 } from '../utils/config-utils'
-import type { GlobalConfig, LLMFinishReason, LLMRequest, ModelDiscoveryRequest, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
+import type { GlobalConfig, LLMFinishReason, LLMRequest, LLMResponse, ModelDiscoveryRequest, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
+import { knownAppErrorMessage } from '../../src/i18n/app-errors'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { isReasoningMapping } from '../../src/shared/reasoning-types'
 import { LLMFactory } from '../llm/llm-factory'
-import { mainText } from '../i18n'
+import { getMainLocale, mainText } from '../i18n'
 import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
 import { getCurrentProjectPath } from '../database'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
@@ -114,25 +115,45 @@ function recordProviderOutcome(
 }
 
 /**
- * 检索模型只交错误码（#474）；连接测试的结果由模型表单原样显示，这里按系统语言换成可读说明，
- * 带上 HTTP 状态或建议的 Base URL。
+ * 连接测试的结果由模型表单原样显示，主进程在这里按界面语言写成说明（#474）：要带上 HTTP 状态、
+ * 供应商返回或建议地址的单独写，其余登记过的码复用 app-errors 的文案，认不出的（多是网络库的英文报错）原样保留。
  */
-function embeddingConnectionFailure(error: unknown): string | undefined {
-  const failure = error as { code?: unknown; status?: unknown; suggestedBaseUrl?: unknown } | null
-  const text = (zhCNText: string, enUSText: string) => mainText(app.getLocale(), zhCNText, enUSText)
-  if (failure?.code === 'EMBEDDING_REQUEST_FAILED') {
-    return text(
-      `检索模型请求失败（HTTP ${String(failure.status)}）。请检查 Base URL、网关与 API Key。`,
-      `Retrieval model request failed (HTTP ${String(failure.status)}). Check the Base URL, gateway, and API key.`,
+function connectionTestFailure(failure: unknown): string {
+  const detail = failure as { code?: unknown; status?: unknown; suggestedBaseUrl?: unknown } | null
+  if (detail?.code === 'EMBEDDING_REQUEST_FAILED') {
+    return mainText(
+      app.getLocale(),
+      `检索模型请求失败（HTTP ${String(detail.status)}）。请检查 Base URL、网关与 API Key。`,
+      `Retrieval model request failed (HTTP ${String(detail.status)}). Check the Base URL, gateway, and API key.`,
     )
   }
-  if (failure?.code === 'EMBEDDING_OLLAMA_NATIVE_URL') {
-    return text(
-      `这是 Ollama 原生的 /api 地址，本应用使用 OpenAI 兼容接口。请把 Base URL 改为 ${String(failure.suggestedBaseUrl)}。`,
-      `This is Ollama’s native /api address, but the app uses the OpenAI-compatible API. Change the Base URL to ${String(failure.suggestedBaseUrl)}.`,
+  if (detail?.code === 'EMBEDDING_OLLAMA_NATIVE_URL') {
+    return mainText(
+      app.getLocale(),
+      `这是 Ollama 原生的 /api 地址，本应用使用 OpenAI 兼容接口。请把 Base URL 改为 ${String(detail.suggestedBaseUrl)}。`,
+      `This is Ollama’s native /api address, but the app uses the OpenAI-compatible API. Change the Base URL to ${String(detail.suggestedBaseUrl)}.`,
     )
   }
-  return undefined
+  return knownAppErrorMessage(getMainLocale(app.getLocale()), failure) ?? String(failure)
+}
+
+function providerConnectionFailure(response: Extract<LLMResponse, { success: false }>): string | undefined {
+  if (response.error === 'LLM_REQUEST_FAILED' && response.httpFailure) {
+    const { status, body } = response.httpFailure
+    return mainText(
+      app.getLocale(),
+      `模型请求失败（HTTP ${status}）。请检查 Base URL、API Key 与模型名。服务返回：${body}`,
+      `Model request failed (HTTP ${status}). Check the Base URL, API key, and model name. The service returned: ${body}`,
+    )
+  }
+  if (response.error === 'LLM_RESPONSE_INCOMPLETE') {
+    return mainText(
+      app.getLocale(),
+      `模型没有正常完成回复（结束原因：${response.finishReason}）。`,
+      `The model did not finish its reply (finish reason: ${response.finishReason}).`,
+    )
+  }
+  return response.error
 }
 
 export function registerLLMController() {
@@ -404,13 +425,7 @@ export function registerLLMController() {
       let result = { success: true, error: undefined as undefined | string }
       if (model.purposes?.includes('embedding')) {
         const { generateEmbeddings } = await import('../embedding')
-        try {
-          await generateEmbeddings(['hello'], model.protocol, model)
-        } catch (error) {
-          const explained = embeddingConnectionFailure(error)
-          if (!explained) throw error
-          result = { success: false, error: explained }
-        }
+        await generateEmbeddings(['hello'], model.protocol, model)
       } else {
         const res = await provider.generate(
           model,
@@ -422,12 +437,12 @@ export function registerLLMController() {
             creativeStrategy,
           }),
         )
-        result = { success: res.success, error: res.error }
+        result = res.success ? { success: true, error: undefined } : { success: false, error: providerConnectionFailure(res) }
       }
       
       return { success: result.success, error: result.error }
     } catch (error) {
-      return { success: false, error: String(error) }
+      return { success: false, error: connectionTestFailure(error) }
     }
   })
 
