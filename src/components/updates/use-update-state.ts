@@ -91,6 +91,7 @@ export function scheduleReminderRefresh(
 }
 
 /** 将 IPC 订阅和更新操作集中在一个可替换的状态边界内。 */
+// i18n-exempt: response.error 是主进程分好类的 UpdateError 对象，由 getUpdatePresentation 按界面语言说明，不是原文。
 export function useUpdateState() {
   const [state, setState] = useState<UpdateState>(disabledState)
   const [manualCheckRequested, setManualCheckRequested] = useState(false)

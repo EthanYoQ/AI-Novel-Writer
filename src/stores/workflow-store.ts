@@ -1,3 +1,4 @@
+import { displayedErrorMessage } from '../i18n/app-errors'
 import type { GenerationTransportDiagnostics } from '../shared/generation-contract'
 import type { CharacterProposalBatch } from '../shared/character-proposal'
 import { createCharacterProposalChoices, type CharacterProposalChoices } from '../services/character-proposal-choices'
@@ -575,10 +576,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     try {
       writingSkills = await freezeWritingSkillsSnapshot(projectSession, writingLanguage)
     } catch (error) {
+      const reason = displayedErrorMessage(uiLocale, error)
       const failure = uiText(
         uiLocale,
-        `写作 Skill 快照加载失败，工作流未启动：${error instanceof Error ? error.message : String(error)}`,
-        `Writing skill snapshot could not be loaded, so the workflow was not started: ${error instanceof Error ? error.message : String(error)}`,
+        `写作 Skill 快照加载失败，工作流未启动：${reason}`,
+        `Writing skill snapshot could not be loaded, so the workflow was not started: ${reason}`,
       )
       updateRunById(set, run.id, {
         status: 'failed',
@@ -836,10 +838,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           ...(failureCode ? { failureCode } : {}),
           ...(promptBudgetFailure ? { promptBudgetReport: promptBudgetFailure.report } : {}),
         })
+        const reason = displayedErrorMessage(context.uiLocale, errorMsg)
         get().addLog('error', uiText(
           context.uiLocale,
-          `[失败] [${definition.title}] 步骤: ${stepDef.name} — ${errorMsg}`,
-          `[Failed] [${definition.title}] Step: ${stepDef.name} — ${errorMsg}`,
+          `[失败] [${definition.title}] 步骤: ${stepDef.name} — ${reason}`,
+          `[Failed] [${definition.title}] Step: ${stepDef.name} — ${reason}`,
         ), context.uiLocale)
         break
       }
@@ -855,8 +858,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         } catch (error) {
           get().addLog('error', uiText(
             context.uiLocale,
-            `[取消失败] 工作流「${definition.title}」未能持久化安全边界：${String(error)}`,
-            `[Cancellation failed] Workflow "${definition.title}" could not persist its safe boundary: ${String(error)}`,
+            `[取消失败] 工作流「${definition.title}」未能持久化安全边界：${displayedErrorMessage(context.uiLocale, error)}`,
+            `[Cancellation failed] Workflow "${definition.title}" could not persist its safe boundary: ${displayedErrorMessage(context.uiLocale, error)}`,
           ), context.uiLocale)
         }
       }
@@ -912,8 +915,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         } catch (e) {
           get().addLog('warn', uiText(
             context.uiLocale,
-            `[警告] onComplete 执行失败: ${e}`,
-            `[Warning] onComplete failed: ${e}`,
+            `[警告] onComplete 执行失败: ${displayedErrorMessage(context.uiLocale, e)}`,
+            `[Warning] onComplete failed: ${displayedErrorMessage(context.uiLocale, e)}`,
           ), context.uiLocale)
         }
       }
@@ -961,8 +964,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           void ctx.cancellationRequest.catch(error => {
             get().addLog('error', uiText(
               targetRun.uiLocale,
-              `[取消失败] 未能立即保存取消请求：${String(error)}`,
-              `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
+              `[取消失败] 未能立即保存取消请求：${displayedErrorMessage(targetRun.uiLocale, error)}`,
+              `[Cancellation failed] Could not persist the cancellation request immediately: ${displayedErrorMessage(targetRun.uiLocale, error)}`,
             ), targetRun.uiLocale)
           })
         }
@@ -1018,8 +1021,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           void ctx.cancellationRequest.catch(error => {
             get().addLog('error', uiText(
               run.uiLocale,
-              `[取消失败] 未能立即保存取消请求：${String(error)}`,
-              `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
+              `[取消失败] 未能立即保存取消请求：${displayedErrorMessage(run.uiLocale, error)}`,
+              `[Cancellation failed] Could not persist the cancellation request immediately: ${displayedErrorMessage(run.uiLocale, error)}`,
             ), run.uiLocale)
           })
         }

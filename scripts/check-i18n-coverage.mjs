@@ -60,6 +60,18 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
   rendererThrowErrorBoundaries: [
     'src',
   ],
+  // 渲染层把报错交给作者的显示处（#474）：主进程的 result.error、IPC 抛出的错误与 catch 到的原因
+  // 不能原样交给 toast、提示框、报错状态或拼进 text() 的说明，要先经 displayedErrorMessage（或同类翻译函数）：
+  // 否则主进程的错误码会以裸码出现在界面上。作者看不到或值本身不是字符串的，写 `// i18n-exempt: <理由>`。
+  rendererErrorDisplayBoundaries: [
+    'src',
+  ],
+  // 还开着的 PR #475 改动这些文件；它合入后把这里清空，再按上面的规则修。
+  pendingRendererErrorDisplayFiles: [
+    'src/components/dialogs/ImportNovelDialog.tsx',
+    'src/components/settings/ModelForm.tsx',
+    'src/services/workflows/commands/generate-draft.command.ts',
+  ],
   // 这些命令连错误码也不能直接抛（#408）：每条失败都要给作者能读的说明。
   strictWorkflowCommandErrorBoundaries: [
     'src/services/workflows/commands/legacy-character-roster-repair.command.ts',
@@ -108,6 +120,9 @@ const enhancedCoverageFiles = new Set([
 
 const localizationCallees = new Set([
   'text',
+  'knownAppErrorMessage',
+  // Agent 工具的失败原因按作品写作语言说明。
+  'agentToolErrorDetail',
   'localize',
   'translate',
   'stepDesc',
@@ -513,6 +528,88 @@ function exemption(sourceFile, node) {
   return undefined
 }
 
+/** 显示处：通知与提示框、报错状态的 setter、store 的 set({ error })。 */
+const errorDisplayCalls = new Set(['alertError', 'confirm', 'addLog', 'toast.error', 'toast.warning', 'toast.success', 'toast.info'])
+const errorStateSetter = /^set\w*(?:Error|Message|Warning|Notice|Failure|Reason)$/u
+const errorStateKey = /error|message|warning|reason|notice/iu
+/** 第一个实参是界面语言、其余实参里拼着原因的翻译函数。 */
+const textCallees = new Set(['text', 'localize', 'translate', 'workflowUiText', 'uiText', 'localeText', 'textForLocale', 'agentToolText'])
+
+function isCatchVariable(node, sourceFile) {
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isCatchClause(current) && current.variableDeclaration?.name.getText(sourceFile) === node.text) return true
+  }
+  return false
+}
+
+/** 原样转出的报错：String(x)、.error/.warning/.message、catch 到的原因，以及经 const、??、||、三元或模板转一手的。 */
+function forwardsRawError(node, sourceFile, bindings, seen = new Set()) {
+  if (isLocalizedCall(node, sourceFile)) return false
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) {
+    return forwardsRawError(node.expression, sourceFile, bindings, seen)
+  }
+  if (ts.isCallExpression(node)) return callName(node, sourceFile) === 'String'
+  if (ts.isPropertyAccessExpression(node)) return ['error', 'warning', 'message'].includes(node.name.text)
+  if (ts.isIdentifier(node)) {
+    if (isCatchVariable(node, sourceFile)) return true
+    if (seen.has(node.text)) return false
+    const initializer = bindings.get(node.text)
+    if (!initializer) return false
+    seen.add(node.text)
+    return forwardsRawError(initializer, sourceFile, bindings, seen)
+  }
+  if (ts.isBinaryExpression(node) && ['??', '||'].includes(node.operatorToken.getText(sourceFile))) {
+    return forwardsRawError(node.left, sourceFile, bindings, seen) || forwardsRawError(node.right, sourceFile, bindings, seen)
+  }
+  if (ts.isConditionalExpression(node)) {
+    return forwardsRawError(node.whenTrue, sourceFile, bindings, seen) || forwardsRawError(node.whenFalse, sourceFile, bindings, seen)
+  }
+  if (ts.isTemplateExpression(node)) return node.templateSpans.some(span => forwardsRawError(span.expression, sourceFile, bindings, seen))
+  return false
+}
+
+function inspectRawErrorDisplays(violations, root, file, sourceFile) {
+  const bindings = collectBindings(sourceFile)
+  const report = (node, value, kind) => {
+    const exempt = exemption(sourceFile, node)
+    if (exempt === 'missing-reason') add(violations, root, file, sourceFile, node, value.getText(sourceFile), 'exempt-without-reason')
+    else if (!exempt) add(violations, root, file, sourceFile, node, value.getText(sourceFile), kind)
+  }
+  const visit = (node) => {
+    if (ts.isCallExpression(node)) {
+      const name = callName(node, sourceFile)
+      const [first] = node.arguments
+      if (errorDisplayCalls.has(name) || (ts.isIdentifier(node.expression) && errorStateSetter.test(name))) {
+        const values = name === 'addLog' ? node.arguments.slice(1, 2) : first ? [first] : []
+        for (const value of values) {
+          const forwarded = ts.isObjectLiteralExpression(value)
+            ? value.properties.find(property => ts.isPropertyAssignment(property) && errorStateKey.test(property.name.getText(sourceFile))
+              && forwardsRawError(property.initializer, sourceFile, bindings))
+            : forwardsRawError(value, sourceFile, bindings) && value
+          if (forwarded) report(node, forwarded, `raw-error-display:${name}`)
+        }
+      }
+      if ((name === 'set' || name.endsWith('.setState')) && first && ts.isObjectLiteralExpression(first)) {
+        for (const property of first.properties) {
+          if (ts.isPropertyAssignment(property) && errorStateKey.test(property.name.getText(sourceFile))
+            && forwardsRawError(property.initializer, sourceFile, bindings)) report(property, property.initializer, 'raw-error-display:state')
+        }
+      }
+      if (textCallees.has(name) || name.endsWith('.text')) {
+        const spans = node.arguments.flatMap(argument => ts.isTemplateExpression(argument)
+          ? argument.templateSpans.map(span => span.expression)
+          : ts.isObjectLiteralExpression(argument)
+            ? argument.properties.filter(ts.isPropertyAssignment).map(property => property.initializer)
+            : [])
+        const forwarded = spans.find(span => forwardsRawError(span, sourceFile, bindings))
+        if (forwarded) report(node, forwarded, `raw-error-display:${name}`)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+}
+
 /** mode：'command' 拦一切未翻译的文字与转出的原文；'chinese' 只拦翻译函数以外的汉字。 */
 function inspectThrownErrors(violations, root, file, sourceFile, mode, allowErrorCodes) {
   const bindings = collectBindings(sourceFile)
@@ -724,6 +821,14 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
     const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true,
       file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
     inspectThrownErrors(violations, root, file, sourceFile, 'chinese', true)
+  }
+  const pendingDisplayFiles = new Set(I18N_COVERAGE_BOUNDARIES.pendingRendererErrorDisplayFiles)
+  for (const file of new Set(I18N_COVERAGE_BOUNDARIES.rendererErrorDisplayBoundaries.flatMap(relative => filesAt(path.join(root, relative))))) {
+    const relativeFile = relativePath(root, file)
+    if (!/\.tsx?$/u.test(file) || testOrDeclarationFile.test(file) || relativeFile.split('/').includes('__tests__') || pendingDisplayFiles.has(relativeFile)) continue
+    const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true,
+      file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+    inspectRawErrorDisplays(violations, root, file, sourceFile)
   }
   compareMainErrorBaseline(collectMainErrorSites(root, violations), readMainErrorBaseline(root), violations)
   return violations

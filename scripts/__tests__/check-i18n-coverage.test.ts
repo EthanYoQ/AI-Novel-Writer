@@ -506,6 +506,64 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
+  it('rejects main-process errors handed to a display unchanged, and accepts them after displayedErrorMessage (#474)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-raw-error-display-'))
+    try {
+      writeFixture(root, 'src/components/stage/use-delete.ts', `
+        declare const toast: { error(message: string): void }
+        declare function alertError(message: string, options?: { title?: string }): void
+        declare function text(zh: string, en: string): string
+        declare function displayedErrorMessage(locale: string, error: unknown, fallback?: string): string
+        declare function setDeleteError(message: string): void
+        declare function setNotice(notice: { kind: string; message: string }): void
+        declare function set(state: { error: string | null }): void
+        export async function remove(result: { success: boolean; error?: string }) {
+          toast.error(result.error || text('删除失败', 'Delete failed'))
+          toast.error(text(\`删除失败：\${result.error ?? '未知错误'}\`, 'Delete failed'))
+          setDeleteError(result.error ?? '')
+          set({ error: result.error ?? null })
+          const reason = result.error
+          setNotice({ kind: 'error', message: reason ?? '' })
+          try { await Promise.resolve() } catch (error) {
+            alertError(String(error), { title: text('删除失败', 'Delete failed') })
+            setDeleteError(error instanceof Error ? error.message : text('删除失败', 'Delete failed'))
+            toast.error(text(\`删除失败：\${error}\`, \`Delete failed: \${error}\`))
+          }
+          toast.error(displayedErrorMessage('zh-CN', result.error, text('删除失败', 'Delete failed')))
+          const shown = displayedErrorMessage('zh-CN', result.error)
+          toast.error(text(\`删除失败：\${shown}\`, \`Delete failed: \${shown}\`))
+          // i18n-exempt: 值是分好类的对象，由展示函数按界面语言说明
+          setDeleteError(result.error ?? '')
+        }
+      `)
+      writeFixture(root, 'src/components/dialogs/ImportNovelDialog.tsx', `
+        declare function setSplitError(message: string): void
+        export const fail = (error: Error) => setSplitError(error.message)
+      `)
+      writeFixture(root, 'src/components/stage/__tests__/use-delete.test.ts', `
+        declare const toast: { error(message: string): void }
+        toast.error(String(new Error('x')))
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      const lines = result.output.split(/\r?\n/).filter(line => line.includes('[raw-error-display:'))
+      expect(lines).toEqual([
+        "src/components/stage/use-delete.ts:10 [raw-error-display:toast.error] result.error || text('删除失败', 'Delete failed')",
+        "src/components/stage/use-delete.ts:11 [raw-error-display:text] result.error ?? '未知错误'",
+        "src/components/stage/use-delete.ts:12 [raw-error-display:setDeleteError] result.error ?? ''",
+        'src/components/stage/use-delete.ts:13 [raw-error-display:state] result.error ?? null',
+        "src/components/stage/use-delete.ts:15 [raw-error-display:setNotice] message: reason ?? ''",
+        'src/components/stage/use-delete.ts:17 [raw-error-display:alertError] String(error)',
+        "src/components/stage/use-delete.ts:18 [raw-error-display:setDeleteError] error instanceof Error ? error.message : text('删除失败', 'Delete failed')",
+        'src/components/stage/use-delete.ts:19 [raw-error-display:text] error',
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('permits localized boundary copy while ignoring prompts, parsers, and internal logs', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-policy-'))
     try {
