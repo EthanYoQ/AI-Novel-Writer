@@ -292,6 +292,54 @@ export const VISUAL_SCENARIOS = {
     await page.getByRole('alertdialog').waitFor({ state: 'hidden' })
   } },
 
+  // #474 B4：主进程只交错误码（PROJECT_DIRECTORY_EXISTS、PROJECT_DIRECTORY_MISSING），英文界面的报错弹框按码写成英文。
+  'project-errors-en': { model: false, shell: 'stage', run: async ({ app, page, roots, invoke, reload, shoot }) => {
+    await app.evaluate(({ dialog }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
+    }, roots.projects)
+    await bookshelf.createProject(page, '雾岛')
+    await stage.spine(page).waitFor({ state: 'visible' })
+    await stage.backToLibrary(page, '雾岛')
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await reload()
+    await page.getByRole('list', { name: 'Recent books' }).waitFor({ state: 'visible' })
+    const alert = page.getByRole('alertdialog')
+    const observed = {}
+
+    await page.getByRole('button', { name: 'New book', exact: true }).click()
+    const form = page.getByRole('dialog', { name: 'New book' })
+    await form.getByRole('textbox').first().fill('雾岛')
+    await form.getByRole('button', { name: 'Choose', exact: true }).click()
+    await form.getByRole('button', { name: 'Create book' }).click()
+    await alert.waitFor({ state: 'visible' })
+    observed.exists = await alert.innerText()
+    await settle(page)
+    await shoot('project-exists-en')
+    await alert.getByRole('button', { name: 'OK', exact: true }).click()
+    await alert.waitFor({ state: 'hidden' })
+    await page.keyboard.press('Escape')
+    await form.waitFor({ state: 'hidden' })
+
+    // 最近作品的文件夹在应用外被移走，再从书房打开
+    fs.rmSync(path.join(roots.projects, '雾岛'), { recursive: true, force: true })
+    await stage.openFromLibraryEn(page, '雾岛')
+    await alert.waitFor({ state: 'visible' })
+    observed.missing = await alert.innerText()
+    await settle(page)
+    await shoot('project-missing-en')
+
+    for (const text of Object.values(observed)) {
+      assert.doesNotMatch(text, /\p{Script=Han}/u, '英文界面的报错不带中文')
+      assert.doesNotMatch(text, /[A-Z]{3,}_[A-Z]/u, '英文界面的报错不露错误码')
+    }
+    assert.match(observed.exists, /A folder with this name already exists there, so it was not overwritten\./u)
+    assert.match(observed.missing, /The project folder could not be found\./u)
+    return observed
+  }, after: async ({ page }) => {
+    await page.getByRole('alertdialog').getByRole('button', { name: 'OK', exact: true }).click()
+    await page.getByRole('alertdialog').waitFor({ state: 'hidden' })
+  } },
+
   'rdv-toasts': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: seedCalls }), run: async ({ page }) => {
     const copy = await diagnosticsCopyButton(page)
     await stubClipboard(page, true)

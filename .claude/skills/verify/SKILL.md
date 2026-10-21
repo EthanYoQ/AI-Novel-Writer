@@ -376,6 +376,7 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 |---|---|---|---|
 | `rdv-clear` | 作品菜单「清除生成内容…」：标准危险确认，焦点在「取消」，三类内容是勾选行，取消一项后后果句改成「将清除 2 类内容」；`after` 按 Esc 关闭 | 危险确认 | 否 |
 | `rdv-alert` | 书房里在同一目录再建一部同名作品，主进程拒绝，命令式 `alertError` 渲染进纸墨宿主，焦点在「确定」，旧「新建小说项目」对话框也在宿主里；`after` 点「确定」 | 叠在新建作品对话框上的错误弹框 | 否 |
+| `project-errors-en` | 建好「雾岛」后把界面语言切成英文重载：同一目录再建同名作品（主进程交 `PROJECT_DIRECTORY_EXISTS`），再把作品文件夹删掉后从书房打开（`PROJECT_DIRECTORY_MISSING`），两次报错弹框都是英文、不带汉字与错误码；中途拍 `project-exists-en`、`project-missing-en`；`after` 点「OK」 | 打开已删除作品的英文报错弹框 | 否 |
 | `rdv-toasts` | 预置两条调用记录后写一章，在诊断分页连点三次「复制安全诊断」再让剪贴板失败点一次：三次成功合并成一条，出错的另起一条，只有一个提示栈，通知互不重叠，`measured.toasts` 是栈里的条数 | 右下角提示栈 | 是 |
 | `rdv-toast-error` | 同上写一章，先复制成功一次让提示栈出现，再打开 Ctrl K 面板（Radix 模态）后让复制失败：出错通知是八角符号，卡片自身不带 `role`，不在 `aria-hidden` 子树里，经挂载点 `#ai-novel-ink-toasts` 的 `aria-live="polite"` 播报（挂载点内没有任何 `role="alert"`），面板仍开着；`after` 按 Esc | 面板上方的出错通知 | 是 |
 | `rdv-toast-flood` | 打开样例作品，按 `app.getAppPath()` 找到构建产物 `dist/assets/ToastStack-*.js`，在页面里 import 同一模块（与应用共享栈状态），推入 24 条常驻出错通知：栈在顶栏以下（`top >= 48`）、视口以内，标 `data-overflow` 可滚动，最新一条露在栈底；滚到顶关掉最早那条剩 23 条，中途拍 `rdv-toast-flood-top`。推入函数是按压缩产物里的 `exiting:!1` 找到的，换压缩器或改了条目字段就要改这里 | 滚回底部的满栈 | 否 |
