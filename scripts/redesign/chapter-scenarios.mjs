@@ -209,6 +209,27 @@ async function openTiming(page, target, text) {
   return page.evaluate(() => window.__driveOpen)
 }
 
+/** 第 3 章点「重新审稿」，等写回审稿报告后打开运行侧页，返回请求数与侧页上看得到的东西。 */
+async function rereviewChapter3({ page, fake }) {
+  await chapterView.open(page, 3)
+  const reviewsBefore = fake.chats.filter(chat => chat.kind === 'review').length
+  const started = await runsStarted(page)
+  await chapterView.view(page).getByRole('button', { name: '重新审稿', exact: true }).click()
+  await waitRunDone(page, started)
+  const reportShown = await chapterView.reviewSheet(page).getByRole('button', { name: '添加我的意见' })
+    .waitFor({ state: 'visible', timeout: 30_000 }).then(() => true, () => false)
+  await runSheet.openFromPalette(page)
+  const card = runSheet.recovery(page).getByRole('article').filter({ hasText: '第3章审稿候选' })
+  await card.waitFor({ state: 'visible' })
+  return {
+    reviewRequests: fake.chats.filter(chat => chat.kind === 'review').length - reviewsBefore,
+    reportShown,
+    rawIpcError: await runSheet.sheet(page).getByText(/Error invoking remote method|GENERATION_/).count(),
+    rawJson: await card.getByText('"summary"').count(),
+    digestShown: await card.getByText(/1 条意见/).count(),
+  }
+}
+
 const percentile = (values, p) => {
   const sorted = [...values].sort((a, b) => a - b)
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * p) - 1)]
@@ -413,22 +434,33 @@ export const CHAPTER_SCENARIOS = {
     return after
   } },
 
-  /** #411：第 3 章是旧版本留下的 reviewed 稿，重新审稿要真的请求模型并写回审稿，运行侧页不露原始 IPC 错误。 */
-  'chapter-rereview-legacy': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake }) => {
-    await chapterView.open(page, 3)
-    const reviewsBefore = fake.chats.filter(chat => chat.kind === 'review').length
-    const started = await runsStarted(page)
-    await chapterView.view(page).getByRole('button', { name: '重新审稿', exact: true }).click()
-    await waitRunDone(page, started)
-    const reportShown = await chapterView.reviewSheet(page).getByRole('button', { name: '添加我的意见' })
-      .waitFor({ state: 'visible', timeout: 30_000 }).then(() => true, () => false)
-    await runSheet.openFromPalette(page)
-    const after = {
-      reviewRequests: fake.chats.filter(chat => chat.kind === 'review').length - reviewsBefore,
-      reportShown,
-      rawIpcError: await runSheet.sheet(page).getByText(/Error invoking remote method|GENERATION_/).count(),
-    }
-    assert.deepEqual(after, { reviewRequests: 1, reportShown: true, rawIpcError: 0 }, '重新审稿请求了模型并写回审稿报告，运行侧页没有原始 IPC 错误')
+  /**
+   * #411：第 3 章是旧版本留下的 reviewed 稿，重新审稿要真的请求模型并写回审稿，运行侧页不露原始 IPC 错误。
+   * #455：恢复卡里这次审稿的候选显示审稿结论，不显示模型返回的原始 JSON。
+   */
+  'chapter-rereview-legacy': { model: true, shell: 'stage', setup: seed(), run: async context => {
+    const after = await rereviewChapter3(context)
+    assert.deepEqual(after, { reviewRequests: 1, reportShown: true, rawIpcError: 0, rawJson: 0, digestShown: 1 },
+      '重新审稿请求了模型并写回审稿报告，运行侧页没有原始 IPC 错误，恢复卡显示审稿结论而不是原始 JSON')
+    return after
+  } },
+
+  /** #455 的英文界面：同一条审稿候选重开作品后在英文运行侧页里显示英文摘要。 */
+  'chapter-rereview-legacy-en': { model: true, shell: 'stage', setup: seed(), run: async context => {
+    const { page, invoke, reload } = context
+    await rereviewChapter3(context)
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await reload()
+    await stage.openFromLibraryEn(page, STAGE_SAMPLE.name)
+    await page.getByRole('navigation', { name: 'Writing flow' }).waitFor({ state: 'visible' })
+    await page.keyboard.press('Control+K')
+    await page.getByRole('dialog', { name: 'Search and jump' }).getByRole('combobox').fill('Run sheet')
+    await page.keyboard.press('Enter')
+    await runSheet.waitUntilOpen(page)
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: 'Chapter 3 review candidate' })
+    await card.waitFor({ state: 'visible' })
+    const after = { rawJson: await card.getByText('"summary"').count(), digestShown: await card.getByText(/1 item\b/).count() }
+    assert.deepEqual(after, { rawJson: 0, digestShown: 1 }, '英文运行侧页的恢复卡显示英文审稿摘要而不是原始 JSON')
     return after
   } },
 
