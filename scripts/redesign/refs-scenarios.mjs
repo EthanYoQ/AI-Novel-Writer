@@ -293,6 +293,49 @@ export const REFS_SCENARIOS = {
     assert.equal(await page.getByLabel('Quote from the final').inputValue(), '这句话不在定稿里', '表单留着作者的输入，改完能直接重试')
     return observed
   } },
+  // #474 B3：主进程只交知识库错误码。英文界面下项目副本在别处被改后保存、检索索引登记文件损坏时读状态，
+  // 提示都是英文、不带汉字与错误码。
+  'refs-kb-errors-en': { model: true, shell: 'stage', setup: seedRefs, run: async context => {
+    const { page, shoot } = context
+    const englishOnly = (observed, key) => assert.doesNotMatch(observed[key], /[A-Z]{3,}_|\p{Script=Han}/u, JSON.stringify(observed))
+    await importMaterials(context)
+    await refs.materialButton(page, '守塔人小传').click()
+    await refs.copyEditor(page).waitFor({ state: 'visible' })
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    await page.keyboard.press('Escape')
+    await page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ state: 'detached' })
+
+    const editor = page.getByRole('textbox', { name: 'Project copy content' })
+    await editor.waitFor({ state: 'visible' })
+    const copies = path.join(context.samplePath, '.ai-novel', 'knowledge-copies')
+    const copyFile = fs.readdirSync(copies).filter(name => name.endsWith('.json')).map(name => path.join(copies, name))
+      .find(file => JSON.parse(fs.readFileSync(file, 'utf8')).content === MATERIALS['守塔人小传.txt'])
+    assert.ok(copyFile, '找到守塔人小传的项目副本')
+    const stored = JSON.parse(fs.readFileSync(copyFile, 'utf8'))
+    fs.writeFileSync(copyFile, JSON.stringify({ ...stored, content: `${stored.content}（另一处改动）`, edited: true, indexDirty: true }))
+    await editor.fill(`${MATERIALS['守塔人小传.txt']}He never let anyone into the lamp room.`)
+    await page.getByRole('button', { name: 'Save copy', exact: true }).click()
+    const toast = page.locator('.pi-toast[data-tone="danger"]:not([data-exiting]) .pi-toast-body').first()
+    await toast.waitFor({ state: 'visible', timeout: 30_000 })
+    const saved = { toast: await toast.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await shoot('refs-kb-copy-changed-en')
+    assert.equal(saved.lang, 'en-US')
+    assert.match(saved.toast, /The project copy was changed elsewhere/)
+    englishOnly(saved, 'toast')
+
+    fs.writeFileSync(path.join(context.samplePath, '.ai-novel', 'embedding-spaces.json'), '{ "damaged": ')
+    await stage.root(page).getByRole('button', { name: 'Settings', exact: true }).first().click()
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Retrieval model', exact: true }).click()
+    const alert = stage.root(page).getByRole('region', { name: 'Search index of the current book' }).getByRole('alert')
+    await alert.waitFor({ state: 'visible', timeout: 15_000 })
+    const index = { alert: await alert.innerText() }
+    await shoot('refs-kb-index-damaged-en')
+    assert.match(index.alert, /search index records of this book are damaged/)
+    englishOnly(index, 'alert')
+    return { saved, index }
+  } },
   'refs-delete': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
     await refs.open(page, 'plot')
     await refs.plotView(page, '伏笔线索').click()

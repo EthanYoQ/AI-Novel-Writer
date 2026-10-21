@@ -55,17 +55,19 @@ export { LEGACY_VECTOR_MIGRATION_BLOCKED, LegacyVectorMigrationBlockedError }
 async function ensureMigration(projectPath: string): Promise<void> {
   const root = getProjectDataRoot(projectPath)
   if (['vectors.json', 'vectors.json.migration-journal.json'].some(name => fs.existsSync(path.join(root, name)))) {
-    throw new LegacyVectorMigrationBlockedError('项目包含未完成的旧向量迁移，需要先完成项目恢复；普通检索和导入不会自动迁移旧数据。')
+    throw new LegacyVectorMigrationBlockedError(LEGACY_VECTOR_MIGRATION_BLOCKED)
   }
 }
 
-function migrationFailureDetails(error: unknown): { error: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED } {
+function knowledgeFailureDetails(error: unknown): { error: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED } {
   if (error instanceof LegacyVectorMigrationBlockedError) {
-    return { error: error.message, errorCode: error.code }
+    return { error: error.code, errorCode: error.code }
   }
-  // IPC callers display this value directly. Preserve an Error's user-facing
-  // message rather than leaking the JavaScript-only "Error:" wrapper; unknown
-  // throwables still have a deterministic fallback.
+  if (error instanceof EmbeddingResponseValidationError) {
+    console.warn('[AI Novel KB] 检索模型响应无效:', error.message)
+    return { error: error.code }
+  }
+  // 界面按登记的码说明；其余异常保留消息（不带 "Error:" 外壳），供反馈定位。
   return { error: error instanceof Error ? error.message : String(error) }
 }
 
@@ -114,79 +116,6 @@ export async function captureWritingKnowledgeSnapshot(query: string, projectPath
       return captureGenerationKnowledge({ projectStorageRoot, query, topK: 5 })
     }
   })
-}
-
-/**
- * 导入文档到知识库（单文件，从磁盘读取）
- * 始终建立 FTS 索引；空库或已有 active 空间时可增量生成向量
- */
-export async function importDocument(
-  filePath: string,
-  projectPath: string,
-  protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
-  onProgress?: (progress: number, message: string) => void,
-): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
-  try {
-    await ensureMigration(projectPath)
-
-    // 1. 读取文件
-    const fileName = path.basename(filePath)
-    const ext = path.extname(filePath).toLowerCase()
-    if (!['.txt', '.md', '.markdown'].includes(ext)) {
-      return { success: false, error: `不支持的文件类型: ${ext}，仅支持 .txt / .md` }
-    }
-
-    onProgress?.(5, `正在读取 ${fileName}...`)
-    const content = fs.readFileSync(filePath, 'utf-8')
-    if (!content.trim()) {
-      return { success: false, error: '文件内容为空' }
-    }
-
-    // 2. 分块
-    onProgress?.(10, '正在分块...')
-    const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
-    const chunks = chunkText(content, embeddingOptions.chunkSize, embeddingOptions.chunkOverlap)
-    const docId = randomUUID()
-
-    // 3. 可选：生成向量（如果有 Embedding 配置）
-    let vectors: number[][] | undefined
-    if (model.apiKey && await canWriteIncrementalVectors(projectPath)) {
-      try {
-        onProgress?.(20, `正在向量化 ${chunks.length} 个块...`)
-        vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
-      } catch (e) {
-        if (e instanceof EmbeddingResponseValidationError) throw e
-        console.warn('[AI Novel KB] Embedding 调用失败，降级为 FTS-only:', e)
-        // 不影响导入，仅 FTS
-      }
-    }
-
-    // 4. 写入 LanceDB（text + 元数据 + 可选向量）
-    onProgress?.(80, '正在保存...')
-    writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, {
-      content, indexedHash: createHash('sha256').update(content).digest('hex'), edited: false, indexDirty: false,
-    })
-    const result = await addChunks(
-      projectPath,
-      docId,
-      fileName,
-      chunks,
-      vectors,
-      `${KNOWLEDGE_COPY_MARKER}${docId}`,
-      undefined,
-      embeddingSpaceFor(protocol, model),
-    )
-
-    if (!result.success) {
-      return { success: false, error: result.error }
-    }
-
-    onProgress?.(100, `✅ 已导入 ${fileName}（${chunks.length} 个块）`)
-    return { success: true, docId, chunkCount: chunks.length }
-  } catch (error) {
-    return { success: false, ...migrationFailureDetails(error) }
-  }
 }
 
 /**
@@ -256,14 +185,14 @@ export async function readDocumentCopy(docId: string, projectPath: string): Prom
 }
 
 export async function saveDocumentCopy(docId: string, content: string, expectedContentHash: string, projectPath: string): Promise<{ success: boolean; error?: string }> {
-  if (typeof content !== 'string' || typeof expectedContentHash !== 'string') return { success: false, error: '文档内容无效' }
+  if (typeof content !== 'string' || typeof expectedContentHash !== 'string') return { success: false, error: 'KNOWLEDGE_BASE_COPY_REQUEST_INVALID' }
   await ensureMigration(projectPath)
   return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
     const doc = (await storeListDocuments(projectPath)).find(item => item.id === docId)
-    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { success: false, error: '完整原文不可用，请重新导入' }
+    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { success: false, error: 'KNOWLEDGE_BASE_COPY_UNAVAILABLE' }
     const copy = readKnowledgeCopy(getProjectDataRoot(projectPath), docId)
-    if (!copy) return { success: false, error: '完整原文不可用，请重新导入' }
-    if (copyHash(copy.content) !== expectedContentHash) return { success: false, error: '项目副本已变化，请重新打开后编辑' }
+    if (!copy) return { success: false, error: 'KNOWLEDGE_BASE_COPY_UNAVAILABLE' }
+    if (copyHash(copy.content) !== expectedContentHash) return { success: false, error: 'KNOWLEDGE_BASE_COPY_CHANGED' }
     writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, { ...copy, content, edited: true, indexDirty: true })
     return { success: true }
   })
@@ -274,9 +203,9 @@ export async function reindexDocumentCopy(docId: string, projectPath: string): P
   await ensureMigration(projectPath)
   return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
     const doc = (await storeListDocuments(projectPath)).find(item => item.id === docId)
-    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { success: false, error: '完整原文不可用，请重新导入' }
+    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { success: false, error: 'KNOWLEDGE_BASE_COPY_UNAVAILABLE' }
     const copy = readKnowledgeCopy(getProjectDataRoot(projectPath), docId)
-    if (!copy?.content.trim()) return { success: false, error: '项目副本为空，无法重建索引' }
+    if (!copy?.content.trim()) return { success: false, error: 'KNOWLEDGE_BASE_COPY_EMPTY' }
     const chunks = chunkText(copy.content, normalizeEmbeddingOptions(undefined).chunkSize, normalizeEmbeddingOptions(undefined).chunkOverlap)
     const result = await replaceDocumentChunks(projectPath, docId, chunks, copy)
     if (!result.success) return { success: false, error: result.error }
@@ -318,75 +247,6 @@ export async function getKnowledgeStats(projectPath: string): Promise<{
 }
 
 /**
- * 批量导入文件夹到知识库（递归扫描所有 .txt / .md 文件）
- */
-export async function importFolder(
-  folderPath: string,
-  projectPath: string,
-  protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
-  onProgress?: (current: number, total: number, fileName: string) => void,
-): Promise<{
-  success: boolean
-  importedCount: number
-  failedFiles: string[]
-  error?: string
-  errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED
-}> {
-  try {
-    await ensureMigration(projectPath)
-    // 递归收集所有 .txt / .md 文件。文件夹授权在入口处已完成一次
-    // canonical 校验；这里仍要跳过 symlink/junction，避免递归期间逃逸。
-    const rootPath = fs.realpathSync.native(folderPath)
-    const isContainedInRoot = (candidate: string): boolean => {
-      const relative = path.relative(rootPath, candidate)
-      return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
-    }
-    const collectFiles = (dir: string): string[] => {
-      const result: string[] = []
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const fullPath = path.join(dir, entry.name)
-        if (entry.isSymbolicLink()) continue
-        if (entry.isDirectory()) {
-          const canonicalChild = fs.realpathSync.native(fullPath)
-          if (!isContainedInRoot(canonicalChild)) continue
-          result.push(...collectFiles(canonicalChild))
-        } else if (/\.(txt|md|markdown)$/i.test(entry.name)) {
-          const canonicalFile = fs.realpathSync.native(fullPath)
-          if (isContainedInRoot(canonicalFile) && fs.statSync(canonicalFile).isFile()) {
-            result.push(canonicalFile)
-          }
-        }
-      }
-      return result
-    }
-
-    const files = collectFiles(folderPath)
-    if (files.length === 0) return { success: true, importedCount: 0, failedFiles: [] }
-
-    const failedFiles: string[] = []
-    let importedCount = 0
-
-    for (let i = 0; i < files.length; i++) {
-      const filePath = files[i]
-      const fileName = path.basename(filePath)
-      onProgress?.(i + 1, files.length, fileName)
-
-      const result = await importDocument(filePath, projectPath, protocol, model)
-      if (result.success) {
-        importedCount++
-      } else {
-        failedFiles.push(fileName)
-      }
-    }
-
-    return { success: true, importedCount, failedFiles }
-  } catch (error) {
-    return { success: false, importedCount: 0, failedFiles: [], ...migrationFailureDetails(error) }
-  }
-}
-
-/**
  * 直接将文本字符串内容导入知识库
  * 用于定稿后自动导入、按章推演等无文件场景
  */
@@ -414,7 +274,7 @@ async function importTextInternal(
   options?: { mode: 'fts-only' },
 ): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
   try {
-    if (!text.trim()) return { success: false, error: '文本内容为空' }
+    if (!text.trim()) return { success: false, error: 'KNOWLEDGE_BASE_TEXT_EMPTY' }
 
     await ensureMigration(projectPath)
 
@@ -460,7 +320,7 @@ async function importTextInternal(
     }
     return { success: true, docId, chunkCount: chunks.length }
   } catch (error) {
-    return { success: false, ...migrationFailureDetails(error) }
+    return { success: false, ...knowledgeFailureDetails(error) }
   }
 }
 
@@ -519,7 +379,7 @@ function assertReferenceImportAuthority(request: ReferenceImportAuthorityRequest
     request.chapterNumber,
   )
   if (binding.stableKey !== request.stableKey || binding.content !== request.content) {
-    throw new Error('参照知识写入未绑定当前导入的冻结章节')
+    throw new Error('KNOWLEDGE_BASE_REFERENCE_AUTHORITY_MISMATCH')
   }
 }
 
@@ -533,7 +393,7 @@ function currentFlightAuthority(flight: ReferenceImportFlight): void {
       lastError = error
     }
   }
-  throw lastError ?? new Error('导入执行租约已失效，已拒绝参照知识写入')
+  throw lastError ?? new Error('KNOWLEDGE_BASE_REFERENCE_AUTHORITY_MISMATCH')
 }
 
 async function runReferenceImportSingleFlight(
@@ -546,7 +406,7 @@ async function runReferenceImportSingleFlight(
   for (;;) {
     const active = referenceImportFlights.get(flightKey)
     if (active) {
-      if (!active.promise) throw new Error('参照知识 single-flight 状态无效')
+      if (!active.promise) throw new Error('KNOWLEDGE_BASE_REFERENCE_FLIGHT_INVALID')
       if (active.bindingHash !== bindingHash) {
         await active.promise.catch(() => undefined)
         assertReferenceImportAuthority(authority)
@@ -585,12 +445,12 @@ async function performReferenceTextImport(
   assertAuthority: () => void,
 ): Promise<ReferenceImportResult> {
   try {
-    if (!text.trim()) return { success: false, error: '文本内容为空' }
+    if (!text.trim()) return { success: false, error: 'KNOWLEDGE_BASE_TEXT_EMPTY' }
     assertAuthority()
     await ensureMigration(projectPath)
     assertAuthority()
     const projectDb = getProjectDb()
-    if (!projectDb) return { success: false, error: '项目数据库未打开' }
+    if (!projectDb) return { success: false, error: 'PROJECT_NOT_OPEN' }
     const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
     const chunks = chunkText(text, embeddingOptions.chunkSize, embeddingOptions.chunkOverlap)
     const contentHash = createHash('sha256').update(text, 'utf8').digest('hex')
@@ -618,7 +478,7 @@ async function performReferenceTextImport(
       || receipt.chunk_set_hash !== chunkSetHash
       || receipt.expected_chunk_count !== chunks.length
       || receipt.corpus_kind !== 'reference'
-    )) return { success: false, error: '参照导入幂等键已绑定不同内容' }
+    )) return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_RECEIPT_CONFLICT' }
     if (!receipt) {
       assertAuthority()
       projectDb.prepare(`
@@ -646,7 +506,7 @@ async function performReferenceTextImport(
       return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: true }
     }
     if (existingIntegrity && !await removeDocFromStore(projectPath, documentId)) {
-      return { success: false, error: '残缺参照文档无法安全清理' }
+      return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_CLEANUP_FAILED' }
     }
     assertAuthority()
     projectDb.prepare(`
@@ -707,7 +567,7 @@ async function performReferenceTextImport(
       || committedIntegrity.chunkSetHash !== chunkSetHash
     ) {
       await removeDocFromStore(projectPath, documentId)
-      return { success: false, error: '参照文档完整性校验失败' }
+      return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_VERIFY_FAILED' }
     }
     assertAuthority()
     projectDb.prepare(`
@@ -717,7 +577,7 @@ async function performReferenceTextImport(
     `).run(documentId)
     return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: false }
   } catch (error) {
-    return { success: false, ...migrationFailureDetails(error) }
+    return { success: false, ...knowledgeFailureDetails(error) }
   }
 }
 
@@ -735,7 +595,7 @@ export async function importReferenceText(
 ): Promise<ReferenceImportResult> {
   const stableKey = stableImportKey.trim()
   if (!stableKey || stableKey.length > 512 || !/^[\w:.-]+$/u.test(stableKey)) {
-    return { success: false, error: '参照导入幂等键无效' }
+    return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_KEY_INVALID' }
   }
   const documentId = createHash('sha256').update(`reference-import:${stableKey}`, 'utf8').digest('hex')
   const authority = { runId, executionAuthority, chapterNumber, stableKey, content: text }
@@ -771,7 +631,7 @@ export async function importReferenceText(
       },
     )
   } catch (error) {
-    return { success: false, ...migrationFailureDetails(error) }
+    return { success: false, ...knowledgeFailureDetails(error) }
   }
 }
 
@@ -803,7 +663,7 @@ export async function backfillVectors(
   try {
     await ensureMigration(projectPath)
     if (!model.apiKey.trim() || !model.baseUrl.trim()) {
-      return { success: false, processed: 0, failed: 0, error: '未配置 Embedding 模型' }
+      return { success: false, processed: 0, failed: 0, error: 'EMBEDDING_MODEL_NOT_CONFIGURED' }
     }
     const space = embeddingSpaceFor(protocol, model)
     const canonical = await getCanonicalChunksForEmbeddingRebuild(projectPath)
@@ -825,7 +685,7 @@ export async function backfillVectors(
         success: false,
         processed: 0,
         failed: canonical.length,
-        error: `Embedding 探测返回数量不匹配：期望 1，实际 ${probeVectors.length}`,
+        error: 'EMBEDDING_RESPONSE_INVALID',
       }
     }
     const planned = await planEmbeddingRebuild(projectPath, space, probeVectors[0])
@@ -860,7 +720,7 @@ export async function backfillVectors(
           success: false,
           processed: 0,
           failed: plan.chunks.length,
-          error: `Embedding 返回数量不匹配：期望 ${remaining.length}，实际 ${vectors.length}`,
+          error: 'EMBEDDING_RESPONSE_INVALID',
         }
       }
       for (const [index, vector] of vectors.entries()) vectorsById.set(remaining[index].id, vector)
@@ -885,7 +745,7 @@ export async function backfillVectors(
       success: false,
       processed: 0,
       failed: 0,
-      ...migrationFailureDetails(error),
+      ...knowledgeFailureDetails(error),
     }
   }
 }

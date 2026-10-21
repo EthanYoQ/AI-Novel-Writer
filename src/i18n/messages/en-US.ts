@@ -69,6 +69,17 @@ export const enUS = {
   'error.narrativeThreadEvidenceNotInSource': 'Paste a short excerpt that appears in the selected finalized chapter.',
   'error.draftNotFound': 'This draft no longer exists (it may have been deleted), so the change was not saved.',
   'error.draftFinalizedReadOnly': 'This chapter is finalized and its text is read-only, so the change was not saved.',
+  'error.embeddingRequestFailed': 'The retrieval model request failed. Check the retrieval model’s Base URL, gateway, and API key.',
+  'error.embeddingOllamaNativeUrl': 'This is Ollama’s native /api address, but the app uses the OpenAI-compatible API. Change the end of the retrieval model’s Base URL from /api to /v1.',
+  'error.embeddingResponseInvalid': 'The retrieval model returned an unusable result (wrong count, size, or values), so nothing was written. Check the retrieval model’s Base URL or choose another retrieval model.',
+  'error.knowledgeIndexDamaged': 'The search index records of this book are damaged. Your material was not changed. Restore the book from a backup, or clear the knowledge base and import the material again.',
+  'error.knowledgeIndexBusy': 'The search index is being built. Try again in a moment.',
+  'error.knowledgeIndexChanged': 'The knowledge base or search index changed during the check, and the existing index was not touched. Check and rebuild again.',
+  'error.knowledgeIndexReindexRequired': 'The current retrieval model does not match the search index already built. Check and rebuild the index on the Retrieval model page in Settings, then import again.',
+  'error.knowledgeCopyUnavailable': 'This material has no full text. It can be searched but not edited here.',
+  'error.knowledgeCopyChanged': 'The project copy was changed elsewhere, so this save was skipped. Reopen the material, then edit again.',
+  'error.knowledgeCopyEmpty': 'The project copy is empty, so search cannot be updated. Add text and save first.',
+  'error.knowledgeTextEmpty': 'The material is empty; there is no text to import.',
 } as const
 
 export type MessageKey = keyof typeof enUS

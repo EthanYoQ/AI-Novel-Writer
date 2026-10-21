@@ -16,7 +16,6 @@ vi.mock('../embedding', () => ({
 
 import {
   backfillVectors,
-  importDocument,
   importText,
   searchKnowledge,
   searchKnowledgeFTS,
@@ -398,7 +397,7 @@ describe('知识库嵌入空间回填', () => {
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'model-1536',
-    })).resolves.toMatchObject({ success: false, processed: 0, failed: 1, error: expect.stringMatching(/非有限/) })
+    })).resolves.toMatchObject({ success: false, processed: 0, failed: 1, error: 'EMBEDDING_RESPONSE_INVALID' })
 
     expect(await db.tableNames()).toEqual(tablesBefore)
     await expect(search(projectPath, '仍需保留', undefined, 5)).resolves.toEqual([
@@ -421,30 +420,7 @@ describe('知识库嵌入空间回填', () => {
       modelName: 'qwen3-embedding',
     })).resolves.toEqual({
       success: false,
-      error: 'OpenAI Embedding 响应无效：第 1 个向量的第 2 个值不是有限数字（收到 null）',
-    })
-
-    expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'lancedb'))).toBe(false)
-  })
-
-  it('文件导入遇到无效 Embedding 响应时不打开 LanceDB', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-file-invalid-response-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-    const filePath = path.join(projectPath, 'invalid.txt')
-    fs.writeFileSync(filePath, '不应写入数据库的文件正文', 'utf8')
-    generateEmbeddingsMock.mockRejectedValue(new EmbeddingResponseValidationError(
-      'OpenAI',
-      '第 1 个向量的第 2 个值不是有限数字（收到 null）',
-    ))
-
-    await expect(importDocument(filePath, projectPath, 'openai', {
-      baseUrl: 'http://127.0.0.1:8080/v1',
-      apiKey: 'test-key',
-      modelName: 'qwen3-embedding',
-    })).resolves.toMatchObject({
-      success: false,
-      error: expect.stringMatching(/OpenAI Embedding 响应无效.*第 2 个值.*null/),
+      error: 'EMBEDDING_RESPONSE_INVALID',
     })
 
     expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'lancedb'))).toBe(false)
@@ -477,7 +453,7 @@ describe('知识库嵌入空间回填', () => {
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'model-b',
-    })).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reindex_required/i) })
+    })).resolves.toMatchObject({ success: false, error: 'EMBEDDING_SPACE_REINDEX_REQUIRED' })
 
     await expect(search(projectPath, '同名旧文档', oldVector, 5, oldSpace)).resolves.toEqual([
       expect.objectContaining({ fileName: 'same-name.txt', text: '同名旧文档必须保留' }),
@@ -493,8 +469,8 @@ describe('知识库嵌入空间回填', () => {
     fs.writeFileSync(path.join(projectPath, '.ai-novel', 'embedding-spaces.json'), '{invalid json', 'utf8')
     const space = { modelFingerprint: 'openai|https://embedding.example/v1|model-1536', distanceMetric: 'l2' }
 
-    await expect(getChunksForBackfill(projectPath, 10, space)).rejects.toThrow(/嵌入空间元数据/)
-    await expect(getChunksWithoutVectors(projectPath, space)).rejects.toThrow(/嵌入空间元数据/)
+    await expect(getChunksForBackfill(projectPath, 10, space)).rejects.toThrow('EMBEDDING_SPACE_REGISTRY_INVALID')
+    await expect(getChunksWithoutVectors(projectPath, space)).rejects.toThrow('EMBEDDING_SPACE_REGISTRY_INVALID')
     await expect(backfillVectors(projectPath, 'openai', {
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
@@ -502,7 +478,7 @@ describe('知识库嵌入空间回填', () => {
     })).resolves.toMatchObject({
       success: false,
       processed: 0,
-      error: expect.stringMatching(/^嵌入空间元数据/),
+      error: 'EMBEDDING_SPACE_REGISTRY_INVALID',
     })
     expect(generateEmbeddingsMock).not.toHaveBeenCalled()
   })
@@ -514,7 +490,7 @@ describe('知识库嵌入空间回填', () => {
     const source = path.join(projectPath, '.ai-novel', 'vectors.json')
     const bytes = Buffer.from(JSON.stringify({ documents: [], entries: [] }) + '\n')
     fs.writeFileSync(source, bytes)
-    await expect(searchKnowledgeFTS('铜钥匙', projectPath)).rejects.toThrow(/旧向量.*迁移|迁移.*未完成/)
+    await expect(searchKnowledgeFTS('铜钥匙', projectPath)).rejects.toThrow('LEGACY_VECTOR_MIGRATION_BLOCKED')
     expect(fs.readFileSync(source)).toEqual(bytes)
     expect(fs.existsSync(`${source}.migrated`)).toBe(false)
     expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'lancedb'))).toBe(false)
@@ -547,11 +523,11 @@ describe('知识库嵌入空间回填', () => {
     generateEmbeddingsMock.mockResolvedValue([vector])
 
     await expect(importText('新的正文不应导入', 'new.txt', projectPath, 'openai', model))
-      .resolves.toMatchObject({ success: false, error: expect.stringMatching(/旧向量.*迁移|迁移.*未完成/) })
+      .resolves.toMatchObject({ success: false, error: 'LEGACY_VECTOR_MIGRATION_BLOCKED', errorCode: 'LEGACY_VECTOR_MIGRATION_BLOCKED' })
     await expect(backfillVectors(projectPath, 'openai', model))
-      .resolves.toMatchObject({ success: false, processed: 0, error: expect.stringMatching(/旧向量.*迁移|迁移.*未完成/) })
-    await expect(searchKnowledge('查询', projectPath, 'openai', model)).rejects.toThrow(/旧向量.*迁移|迁移.*未完成/)
-    await expect(searchKnowledgeFTS('查询', projectPath)).rejects.toThrow(/旧向量.*迁移|迁移.*未完成/)
+      .resolves.toMatchObject({ success: false, processed: 0, error: 'LEGACY_VECTOR_MIGRATION_BLOCKED', errorCode: 'LEGACY_VECTOR_MIGRATION_BLOCKED' })
+    await expect(searchKnowledge('查询', projectPath, 'openai', model)).rejects.toThrow('LEGACY_VECTOR_MIGRATION_BLOCKED')
+    await expect(searchKnowledgeFTS('查询', projectPath)).rejects.toThrow('LEGACY_VECTOR_MIGRATION_BLOCKED')
     expect(generateEmbeddingsMock).not.toHaveBeenCalled()
 
     const db = await getConnection(projectPath)

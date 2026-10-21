@@ -124,7 +124,6 @@ const TABLE_NAME = 'chunks'
 const DOCS_TABLE_NAME = 'documents'
 const EMBEDDING_TABLE_PREFIX = 'chunks__space_'
 const EMBEDDING_REGISTRY_FILE = 'embedding-spaces.json'
-const LEGACY_MIGRATION_JOURNAL_FILE = 'vectors.json.migration-journal.json'
 const LEGACY_MODEL_FINGERPRINT = 'legacy:unknown'
 const LEGACY_COMPAT_MODEL_PREFIX = 'legacy:dimension:'
 const DEFAULT_DISTANCE_METRIC = 'l2'
@@ -189,13 +188,11 @@ function migrationProjectKey(projectPath: string): string {
 export function closeVectorStoreForMigration(projectPath: string): { closed: true; release: () => void } {
   assertKnowledgeSourceIdle(path.join(path.resolve(projectPath), CANONICAL_PROJECT_DIRECTORY))
   const key = migrationProjectKey(projectPath)
-  if (connectionExposure.has(key) || [...legacyMigrationInFlight.keys()].some(root => migrationProjectKey(root) === key)
-    || migrationFences.has(key)) throw new Error('VECTOR_MIGRATION_BUSY_OR_HANDLES_UNPROVEN')
+  if (connectionExposure.has(key) || migrationFences.has(key)) throw new Error('VECTOR_MIGRATION_BUSY_OR_HANDLES_UNPROVEN')
   migrationFences.add(key)
   let released = false
   return { closed: true, release: () => { if (!released) { released = true; migrationFences.delete(key) } } }
 }
-const legacyMigrationInFlight = new Map<string, Promise<{ success: boolean; migrated: number; error?: string }>>()
 const embeddingTableCreationOwners = new Set<string>()
 
 function databasePath(projectPath: string): string {
@@ -204,10 +201,6 @@ function databasePath(projectPath: string): string {
 
 function registryPath(projectPath: string): string {
   return path.join(getProjectDataRoot(projectPath), EMBEDDING_REGISTRY_FILE)
-}
-
-function legacyMigrationJournalPath(projectPath: string): string {
-  return path.join(getProjectDataRoot(projectPath), LEGACY_MIGRATION_JOURNAL_FILE)
 }
 
 /** 获取 LanceDB 连接（惰性创建） */
@@ -282,13 +275,13 @@ function normalizedIdentity(identity?: EmbeddingSpaceIdentity, dimension?: numbe
 function validateVectorsForChunks(chunks: readonly unknown[], vectors?: unknown): { vectors?: number[][]; dimension?: number; error?: string } {
   if (vectors === undefined) return {}
   if (!Array.isArray(vectors)) {
-    return { error: '向量批次无效：必须是与文本块一一对应的数组' }
+    return { error: 'EMBEDDING_RESPONSE_INVALID' }
   }
   if (vectors.length !== chunks.length) {
-    return { error: `向量批次数量不匹配：期望 ${chunks.length}，实际 ${vectors.length}` }
+    return { error: 'EMBEDDING_RESPONSE_INVALID' }
   }
   if (vectors.length === 0) {
-    return { error: '向量批次为空，无法建立嵌入空间' }
+    return { error: 'EMBEDDING_RESPONSE_INVALID' }
   }
 
   let dimension: number | undefined
@@ -296,17 +289,17 @@ function validateVectorsForChunks(chunks: readonly unknown[], vectors?: unknown)
   for (let index = 0; index < vectors.length; index += 1) {
     const vector = vectors[index]
     if (!Array.isArray(vector) || vector.length === 0) {
-      return { error: `第 ${index + 1} 个向量为空或无效` }
+      return { error: 'EMBEDDING_RESPONSE_INVALID' }
     }
     if (dimension === undefined) {
       dimension = vector.length
     } else if (vector.length !== dimension) {
-      return { error: `向量维度不一致：第 1 个为 ${dimension} 维，第 ${index + 1} 个为 ${vector.length} 维` }
+      return { error: 'EMBEDDING_RESPONSE_INVALID' }
     }
     const values: number[] = []
     for (const value of vector) {
       if (typeof value !== 'number' || !Number.isFinite(value)) {
-        return { error: `第 ${index + 1} 个向量包含非有限数值` }
+        return { error: 'EMBEDDING_RESPONSE_INVALID' }
       }
       values.push(value)
     }
@@ -363,11 +356,11 @@ function emptyRegistry(): EmbeddingSpaceRegistry {
 
 export function validateRegistry(value: unknown): EmbeddingSpaceRegistry {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('嵌入空间元数据损坏，未修改现有向量表')
+    throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID')
   }
   const candidate = value as Partial<EmbeddingSpaceRegistry>
   if (candidate.version !== 1 || !Array.isArray(candidate.spaces)) {
-    throw new Error('嵌入空间元数据版本无效，未修改现有向量表')
+    throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID')
   }
   const spaces = candidate.spaces.map((space) => {
     if (
@@ -387,13 +380,13 @@ export function validateRegistry(value: unknown): EmbeddingSpaceRegistry {
       || !['active', 'building', 'inactive'].includes(space.status)
       || typeof space.createdAt !== 'string'
     ) {
-      throw new Error('嵌入空间元数据字段无效，未修改现有向量表')
+      throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID')
     }
     return { ...space }
   })
   const activeGeneration = candidate.activeGeneration ?? null
   if (activeGeneration !== null && (!Number.isInteger(activeGeneration) || !spaces.some(space => space.generation === activeGeneration))) {
-    throw new Error('嵌入空间 active 指针无效，未修改现有向量表')
+    throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID')
   }
   return { version: 1, activeGeneration, spaces }
 }
@@ -404,8 +397,7 @@ function readRegistry(projectPath: string): EmbeddingSpaceRegistry | undefined {
   try {
     return validateRegistry(JSON.parse(fs.readFileSync(filePath, 'utf8')))
   } catch (error) {
-    if (error instanceof Error && error.message.includes('嵌入空间')) throw error
-    throw new Error('嵌入空间元数据无法读取，未修改现有向量表')
+    throw new Error('EMBEDDING_SPACE_REGISTRY_INVALID', { cause: error })
   }
 }
 
@@ -511,7 +503,7 @@ function removeEmptyUnregisteredTableDirectory(projectPath: string, tableName: s
   if (!fs.existsSync(tableDirectory)) return
   const stat = fs.statSync(tableDirectory)
   if (!stat.isDirectory() || fs.readdirSync(tableDirectory).length > 0) {
-    throw new Error(`嵌入空间 ${tableName} 存在未登记数据，已拒绝覆盖；请修复知识库后重试`)
+    throw new Error('EMBEDDING_SPACE_UNREGISTERED_DATA')
   }
   fs.rmdirSync(tableDirectory)
 }
@@ -543,7 +535,7 @@ async function createOwnedEmbeddingTable(
 ): Promise<void> {
   const ownershipKey = `${databasePath(projectPath)}\0${space.tableName}`
   if (embeddingTableCreationOwners.has(ownershipKey)) {
-    throw new Error(`嵌入空间 ${space.tableName} 正在创建，请稍后重试`)
+    throw new Error('EMBEDDING_SPACE_BUSY')
   }
 
   embeddingTableCreationOwners.add(ownershipKey)
@@ -801,7 +793,7 @@ export async function planEmbeddingRebuild(
 ): Promise<EmbeddingRebuildPlanResult> {
   const validation = validateVectorsForChunks(['canonical probe'], [probeVector])
   if (validation.error || validation.dimension === undefined) {
-    return { success: false, error: validation.error ?? '嵌入探测响应为空，无法确定向量维度' }
+    return { success: false, error: validation.error ?? 'EMBEDDING_RESPONSE_INVALID' }
   }
 
   const identity = normalizedIdentity(embeddingSpace, validation.dimension)
@@ -874,7 +866,7 @@ async function activatePlannedEmbeddingSpaceInternal(
   plan: EmbeddingRebuildPlan,
 ): Promise<{ success: boolean; error?: string }> {
   if (plan.mode !== 'activate') {
-    return { success: false, error: '当前嵌入空间不允许直接激活' }
+    return { success: false, error: 'EMBEDDING_SPACE_PLAN_MODE_INVALID' }
   }
   try {
     const db = await getConnection(projectPath)
@@ -882,10 +874,10 @@ async function activatePlannedEmbeddingSpaceInternal(
     const registry = readRegistry(projectPath) ?? await inferLegacyRegistry(db, tableNames)
     const matching = matchingSpace(registry, plan.identity, plan.vectorDimension)
     if (!matching || !tableNames.includes(matching.tableName)) {
-      return { success: false, error: '目标嵌入空间不存在，未修改当前索引' }
+      return { success: false, error: 'EMBEDDING_SPACE_CHANGED' }
     }
     if (!(await completeForCanonicalTable(db, matching)) || !(await verifyQueryableEmbeddingSpace(db, matching))) {
-      return { success: false, error: '目标嵌入空间未完整验证，旧索引保持不变' }
+      return { success: false, error: 'EMBEDDING_SPACE_CHANGED' }
     }
     writeRegistry(projectPath, registryWithActiveGeneration(registry, matching.generation))
     return { success: true }
@@ -914,17 +906,17 @@ async function rebuildPlannedEmbeddingSpaceInternal(
   updates: Array<{ id: string; vector: number[] }>,
 ): Promise<{ success: boolean; count: number; error?: string }> {
   if (plan.mode !== 'rebuild') {
-    return { success: false, count: 0, error: '当前嵌入空间不需要新建代际' }
+    return { success: false, count: 0, error: 'EMBEDDING_SPACE_PLAN_MODE_INVALID' }
   }
   if (updates.length !== plan.chunks.length || new Set(updates.map(update => update.id)).size !== updates.length) {
-    return { success: false, count: 0, error: '重建向量与冻结文本块不一致，未修改当前索引' }
+    return { success: false, count: 0, error: 'EMBEDDING_SPACE_REBUILD_VECTORS_MISMATCH' }
   }
   const validation = validateVectorsForChunks(plan.chunks.map(chunk => chunk.id), updates.map(update => update.vector))
   if (validation.error || !validation.vectors || validation.dimension === undefined) {
-    return { success: false, count: 0, error: validation.error ?? '重建向量无效' }
+    return { success: false, count: 0, error: validation.error ?? 'EMBEDDING_RESPONSE_INVALID' }
   }
   if (validation.dimension !== plan.vectorDimension) {
-    return { success: false, count: 0, error: '重建期间向量维度发生变化，旧索引保持不变' }
+    return { success: false, count: 0, error: 'EMBEDDING_RESPONSE_INVALID' }
   }
 
   let db: lancedb.Connection | undefined
@@ -934,7 +926,7 @@ async function rebuildPlannedEmbeddingSpaceInternal(
     db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
     if (!tableNames.includes(TABLE_NAME)) {
-      return { success: false, count: 0, error: '知识库文本块不存在，未修改当前索引' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_CHANGED' }
     }
     const registry = readRegistry(projectPath) ?? await inferLegacyRegistry(db, tableNames)
     const canonical = await canonicalRecordsForEmbeddingRebuild(db)
@@ -944,7 +936,7 @@ async function rebuildPlannedEmbeddingSpaceInternal(
       || plannedById.size !== plan.chunks.length
       || canonical.some(record => plannedById.get(record.id) !== record.text)
     ) {
-      return { success: false, count: 0, error: '知识库文本已变化，请重新检查并重建向量索引' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_CHANGED' }
     }
     // A concurrent completed rebuild should be observed and replanned rather
     // than appended to. An incomplete generation is intentionally left alone;
@@ -956,12 +948,12 @@ async function rebuildPlannedEmbeddingSpaceInternal(
       && await completeForCanonicalTable(db, existing)
       && await verifyQueryableEmbeddingSpace(db, existing)
     ) {
-      return { success: false, count: 0, error: '嵌入空间状态已变化，请重新检查并重建向量索引' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_CHANGED' }
     }
 
     const vectorsById = new Map(updates.map((update, index) => [update.id, validation.vectors![index]]))
     if (vectorsById.size !== canonical.length || canonical.some(record => !vectorsById.has(record.id))) {
-      return { success: false, count: 0, error: '重建向量缺少文本块，旧索引保持不变' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_REBUILD_VECTORS_MISMATCH' }
     }
     newSpace = nextSpace(registry, plan.identity, plan.vectorDimension)
     const records = canonical.map(record => ({ ...record, vector: vectorsById.get(record.id)! }))
@@ -975,7 +967,7 @@ async function rebuildPlannedEmbeddingSpaceInternal(
     tableCreated = true
 
     if (!(await completeForCanonicalTable(db, newSpace)) || !(await verifyQueryableEmbeddingSpace(db, newSpace))) {
-      throw new Error('新嵌入空间未通过完整性验证')
+      throw new Error('EMBEDDING_SPACE_VERIFY_FAILED')
     }
     const nextRegistry = registryWithActiveGeneration({
       version: 1,
@@ -1119,7 +1111,7 @@ async function addChunksInternal(
   embeddingSpace?: EmbeddingSpaceIdentity,
 ): Promise<{ success: boolean; chunkCount: number; error?: string }> {
   if (!validateChunks(chunks)) {
-    return { success: false, chunkCount: 0, error: '文本块为空或格式无效' }
+    return { success: false, chunkCount: 0, error: 'KNOWLEDGE_BASE_CHUNKS_INVALID' }
   }
   const validation = validateVectorsForChunks(chunks, vectors)
   if (validation.error) {
@@ -1159,13 +1151,14 @@ async function addChunksInternal(
       // 文本但尚未显式回填时，调用方必须进入明确的 rebuild/backfill 流程。
       if (!existingSpace && (registry.spaces.length > 0 || canonicalHasRows)) {
         const active = activeSpace(registry)
-        const current = active
-          ? `${active.modelFingerprint} / ${active.vectorDimension} 维`
-          : '当前全文知识库'
+        console.warn('[AI Novel VectorStore] 导入的嵌入空间与现有索引不兼容，需要先显式重建', {
+          incoming: { ...identity, vectorDimension: validation.dimension },
+          active: active ? { modelFingerprint: active.modelFingerprint, vectorDimension: active.vectorDimension } : 'fts-only',
+        })
         return {
           success: false,
           chunkCount: 0,
-          error: `reindex_required: 嵌入空间与${current}不兼容；请先执行显式向量回填/重建，旧代际未被修改`,
+          error: 'EMBEDDING_SPACE_REINDEX_REQUIRED',
         }
       }
       const vectorRecords = canonicalRecords.map((record, index) => ({
@@ -1225,7 +1218,7 @@ async function addChunksInternal(
       await compensateEmbeddingWrite(db, embeddingWrite, chunkIds)
     }
     console.error('[AI Novel VectorStore] 写入失败:', error)
-    return { success: false, chunkCount: 0, error: String(error) }
+    return { success: false, chunkCount: 0, error: error instanceof Error ? error.message : String(error) }
   }
 }
 
@@ -2028,10 +2021,10 @@ async function updateChunkVectorsInternal(
 ): Promise<{ success: boolean; count: number; error?: string }> {
   const validation = validateVectorsForChunks(updates.map(update => update.id), updates.map(update => update.vector))
   if (validation.error || !validation.vectors || validation.dimension === undefined) {
-    return { success: false, count: 0, error: validation.error ?? '向量批次为空，无法回填' }
+    return { success: false, count: 0, error: validation.error ?? 'EMBEDDING_RESPONSE_INVALID' }
   }
   if (new Set(updates.map(update => update.id)).size !== updates.length) {
-    return { success: false, count: 0, error: '回填向量包含重复块标识' }
+    return { success: false, count: 0, error: 'EMBEDDING_SPACE_BACKFILL_DUPLICATE_ID' }
   }
 
   let db: lancedb.Connection | undefined
@@ -2039,7 +2032,7 @@ async function updateChunkVectorsInternal(
   try {
     db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
-    if (!tableNames.includes(TABLE_NAME)) return { success: false, count: 0, error: 'chunks 表不存在' }
+    if (!tableNames.includes(TABLE_NAME)) return { success: false, count: 0, error: 'EMBEDDING_SPACE_BACKFILL_TARGET_MISSING' }
     const canonicalRows = await (await db.openTable(TABLE_NAME)).query().toArray()
     const updateById = new Map(updates.map(update => [update.id, update.vector]))
     const records = canonicalRows
@@ -2049,7 +2042,7 @@ async function updateChunkVectorsInternal(
         vector: updateById.get((row as { id: string }).id)!,
       })) as ChunkRecord[]
     if (records.length !== updates.length) {
-      return { success: false, count: 0, error: '回填目标块不存在，未修改任何嵌入空间' }
+      return { success: false, count: 0, error: 'EMBEDDING_SPACE_BACKFILL_TARGET_MISSING' }
     }
 
     const registry = await loadOrRegisterLegacyRegistry(projectPath, db, tableNames)
@@ -2068,430 +2061,6 @@ async function updateChunkVectorsInternal(
       await compensateEmbeddingWrite(db, write, updates.map(update => update.id))
     }
     console.error('[AI Novel VectorStore] 批量更新向量失败:', error)
-    return { success: false, count: 0, error: String(error) }
-  }
-}
-
-interface LegacyVectorJsonDocument {
-  id?: unknown
-  fileName?: unknown
-  filePath?: unknown
-}
-
-interface LegacyVectorJsonEntry {
-  docId?: unknown
-  text?: unknown
-  vector?: unknown
-  meta?: {
-    fileName?: unknown
-  }
-}
-
-interface LegacyMigrationDocument {
-  docId: string
-  fileName: string
-  filePath?: string
-  chunks: string[]
-  vectors?: number[][]
-}
-
-interface LegacyMigrationPlan {
-  documents: LegacyMigrationDocument[]
-  migratedChunks: number
-  vectorDimension?: number
-}
-
-interface LegacyMigrationJournal {
-  version: 1
-  sourceDigest: string
-  docIds: string[]
-  tableNamesBefore: string[]
-  registryBefore?: string
-}
-
-function legacyMigrationError(detail: string): string {
-  return `旧向量数据迁移未完成：${detail}。为防止知识库重复或损坏，导入、检索和向量回填已暂停；请修正 .vela/vectors.json 后重试。`
-}
-
-function legacySourceDigest(source: string): string {
-  return createHash('sha256').update(source).digest('hex')
-}
-
-function readLegacyMigrationJournal(projectPath: string): LegacyMigrationJournal | undefined {
-  const filePath = legacyMigrationJournalPath(projectPath)
-  if (!fs.existsSync(filePath)) return undefined
-  try {
-    const value = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Partial<LegacyMigrationJournal>
-    if (
-      value.version !== 1
-      || typeof value.sourceDigest !== 'string'
-      || !/^[a-f0-9]{64}$/i.test(value.sourceDigest)
-      || !Array.isArray(value.docIds)
-      || value.docIds.some(docId => typeof docId !== 'string' || !docId)
-      || !Array.isArray(value.tableNamesBefore)
-      || value.tableNamesBefore.some(tableName => typeof tableName !== 'string' || !tableName)
-      || (value.registryBefore !== undefined && typeof value.registryBefore !== 'string')
-    ) {
-      throw new Error('格式无效')
-    }
-    return {
-      version: 1,
-      sourceDigest: value.sourceDigest,
-      docIds: [...value.docIds],
-      tableNamesBefore: [...value.tableNamesBefore],
-      registryBefore: value.registryBefore,
-    }
-  } catch {
-    throw new Error(legacyMigrationError('检测到损坏的迁移恢复记录，未修改任何知识库数据'))
-  }
-}
-
-function writeLegacyMigrationJournal(projectPath: string, journal: LegacyMigrationJournal): void {
-  const filePath = legacyMigrationJournalPath(projectPath)
-  fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  const temporaryPath = `${filePath}.${randomUUID()}.tmp`
-  try {
-    fs.writeFileSync(temporaryPath, `${JSON.stringify(journal, null, 2)}\n`, 'utf8')
-    fs.renameSync(temporaryPath, filePath)
-  } finally {
-    if (fs.existsSync(temporaryPath)) fs.rmSync(temporaryPath, { force: true })
-  }
-}
-
-function removeLegacyMigrationJournal(projectPath: string): void {
-  fs.rmSync(legacyMigrationJournalPath(projectPath), { force: true })
-}
-
-function createLegacyMigrationPlan(raw: string): LegacyMigrationPlan | { error: string } {
-  let source: { documents?: unknown; entries?: unknown }
-  try {
-    source = JSON.parse(raw) as { documents?: unknown; entries?: unknown }
-  } catch {
-    return { error: legacyMigrationError('vectors.json 不是有效 JSON') }
-  }
-  if (source.entries !== undefined && !Array.isArray(source.entries)) {
-    return { error: legacyMigrationError('vectors.json 的 entries 格式无效') }
-  }
-  if (source.documents !== undefined && !Array.isArray(source.documents)) {
-    return { error: legacyMigrationError('vectors.json 的 documents 格式无效') }
-  }
-
-  const documentInfo = new Map<string, LegacyVectorJsonDocument>()
-  for (const value of (source.documents ?? []) as LegacyVectorJsonDocument[]) {
-    if (!value || typeof value !== 'object' || typeof value.id !== 'string' || !value.id) {
-      return { error: legacyMigrationError('vectors.json 含有无效文档标识') }
-    }
-    if (documentInfo.has(value.id)) {
-      return { error: legacyMigrationError(`vectors.json 含有重复文档标识：${value.id}`) }
-    }
-    documentInfo.set(value.id, value)
-  }
-
-  const byDocument = new Map<string, LegacyVectorJsonEntry[]>()
-  for (const value of (source.entries ?? []) as LegacyVectorJsonEntry[]) {
-    if (!value || typeof value !== 'object' || typeof value.docId !== 'string' || !value.docId) {
-      return { error: legacyMigrationError('vectors.json 含有无效块的文档标识') }
-    }
-    if (typeof value.text !== 'string') {
-      return { error: legacyMigrationError(`文档 ${value.docId} 含有无效文本块`) }
-    }
-    const entries = byDocument.get(value.docId) ?? []
-    entries.push(value)
-    byDocument.set(value.docId, entries)
-  }
-
-  const documents: LegacyMigrationDocument[] = []
-  let vectorDimension: number | undefined
-  let includesVectors = false
-  let includesVectorlessDocuments = false
-  const fileNames = new Set<string>()
-  for (const [docId, entries] of byDocument) {
-    const info = documentInfo.get(docId)
-    const metaFileName = entries[0]?.meta && typeof entries[0].meta.fileName === 'string'
-      ? entries[0].meta.fileName
-      : undefined
-    const fileName = typeof info?.fileName === 'string' && info.fileName
-      ? info.fileName
-      : metaFileName || 'unknown'
-    if (fileNames.has(fileName)) {
-      return { error: legacyMigrationError(`vectors.json 含有重复文件名：${fileName}`) }
-    }
-    fileNames.add(fileName)
-
-    const chunks = entries.map(entry => entry.text as string)
-    if (!validateChunks(chunks)) {
-      return { error: legacyMigrationError(`文档 ${docId} 没有可迁移文本块`) }
-    }
-    const rawVectors = entries.map(entry => entry.vector)
-    const allMissing = rawVectors.every(vector => vector === undefined)
-    if (allMissing) {
-      includesVectorlessDocuments = true
-      documents.push({
-        docId,
-        fileName,
-        filePath: typeof info?.filePath === 'string' ? info.filePath : undefined,
-        chunks,
-      })
-      continue
-    }
-
-    includesVectors = true
-    const validation = validateVectorsForChunks(chunks, rawVectors)
-    if (validation.error || !validation.vectors || validation.dimension === undefined) {
-      return { error: legacyMigrationError(`文档 ${docId} 的向量无效：${validation.error ?? '无法建立嵌入空间'}`) }
-    }
-    if (vectorDimension !== undefined && vectorDimension !== validation.dimension) {
-      return { error: legacyMigrationError(`旧数据混用了 ${vectorDimension} 与 ${validation.dimension} 维向量`) }
-    }
-    vectorDimension = validation.dimension
-    documents.push({
-      docId,
-      fileName,
-      filePath: typeof info?.filePath === 'string' ? info.filePath : undefined,
-      chunks,
-      vectors: validation.vectors,
-    })
-  }
-
-  if (includesVectors && includesVectorlessDocuments) {
-    return { error: legacyMigrationError('旧数据混合了有向量和无向量文档，无法安全建立单一嵌入空间') }
-  }
-  return {
-    documents,
-    migratedChunks: documents.reduce((count, document) => count + document.chunks.length, 0),
-    vectorDimension,
-  }
-}
-
-interface LegacyMigrationPreflight {
-  tableNamesBefore: string[]
-  registryBefore?: string
-}
-
-async function preflightLegacyMigrationTarget(
-  projectPath: string,
-  plan: LegacyMigrationPlan,
-): Promise<LegacyMigrationPreflight | { error: string }> {
-  if (plan.documents.length === 0) return { tableNamesBefore: [] }
-  const db = await getConnection(projectPath)
-  const tableNames = await db.tableNames()
-  const registryFile = registryPath(projectPath)
-  const registryBefore = fs.existsSync(registryFile) ? fs.readFileSync(registryFile, 'utf8') : undefined
-  const preflight = { tableNamesBefore: [...tableNames], registryBefore }
-  const sourceDocIds = new Set(plan.documents.map(document => document.docId))
-  const sourceFileNames = new Set(plan.documents.map(document => document.fileName))
-  if (tableNames.includes(TABLE_NAME)) {
-    const existingRows = await (await db.openTable(TABLE_NAME)).query().select(['docId']).toArray()
-    if (existingRows.some(row => sourceDocIds.has(String((row as { docId?: unknown }).docId ?? '')))) {
-      return { error: legacyMigrationError('发现与旧数据相同的已迁移块，未写入重复数据') }
-    }
-  }
-  if (tableNames.includes(DOCS_TABLE_NAME)) {
-    const existingDocuments = await (await db.openTable(DOCS_TABLE_NAME)).query().select(['id', 'fileName']).toArray()
-    if (existingDocuments.some(row => sourceDocIds.has(String((row as { id?: unknown }).id ?? '')))) {
-      return { error: legacyMigrationError('发现与旧数据相同的已迁移文档，未写入重复数据') }
-    }
-    if (existingDocuments.some(row => sourceFileNames.has(String((row as { fileName?: unknown }).fileName ?? '')))) {
-      return { error: legacyMigrationError('现有知识库已使用同名文档，未修改任何数据') }
-    }
-  }
-  if (plan.vectorDimension === undefined) return preflight
-
-  // Migration preflight must not create an embedding registry. If validation
-  // rejects this legacy source, the project needs to remain byte-for-byte as
-  // it was before the attempt.
-  const registry = readRegistry(projectPath) ?? await inferLegacyRegistry(db, tableNames)
-  const identity = normalizedIdentity({ modelFingerprint: 'legacy-json', distanceMetric: DEFAULT_DISTANCE_METRIC }, plan.vectorDimension)
-  const existingSpace = matchingSpace(registry, identity, plan.vectorDimension)
-  const canonicalHasRows = tableNames.includes(TABLE_NAME)
-    && await (await db.openTable(TABLE_NAME)).countRows() > 0
-  if (!existingSpace && (registry.spaces.length > 0 || canonicalHasRows)) {
-    const active = activeSpace(registry)
-    const current = active
-      ? `${active.modelFingerprint} / ${active.vectorDimension} 维`
-      : '当前全文知识库'
-    return { error: legacyMigrationError(`reindex_required: 嵌入空间与${current}不兼容，旧代际未被修改`) }
-  }
-  return preflight
-}
-
-function restoreLegacyRegistrySnapshot(projectPath: string, registryBefore: string | undefined): void {
-  const filePath = registryPath(projectPath)
-  if (registryBefore === undefined) {
-    fs.rmSync(filePath, { force: true })
-    return
-  }
-  const temporaryPath = `${filePath}.${randomUUID()}.tmp`
-  try {
-    fs.writeFileSync(temporaryPath, registryBefore, 'utf8')
-    fs.renameSync(temporaryPath, filePath)
-  } finally {
-    if (fs.existsSync(temporaryPath)) fs.rmSync(temporaryPath, { force: true })
-  }
-}
-
-async function rollbackLegacyMigrationDocuments(projectPath: string, journal: LegacyMigrationJournal): Promise<boolean> {
-  try {
-    for (const docId of journal.docIds) {
-      if (!await removeDocument(projectPath, docId)) return false
-    }
-    const db = await getConnection(projectPath)
-    const tableNamesBefore = new Set(journal.tableNamesBefore)
-    for (const tableName of await db.tableNames()) {
-      const isKnowledgeTable = tableName === TABLE_NAME
-        || tableName === DOCS_TABLE_NAME
-        || tableName.startsWith(EMBEDDING_TABLE_PREFIX)
-      if (isKnowledgeTable && !tableNamesBefore.has(tableName)) {
-        await db.dropTable(tableName)
-      }
-    }
-    restoreLegacyRegistrySnapshot(projectPath, journal.registryBefore)
-    return true
-  } catch (error) {
-    console.warn('[AI Novel VectorStore] 回滚旧 vectors.json 迁移失败:', error)
-    return false
-  }
-}
-
-async function migrateFromJSONOnce(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
-  const jsonPath = path.join(getProjectDataRoot(projectPath), 'vectors.json')
-  const journalPath = legacyMigrationJournalPath(projectPath)
-  if (!fs.existsSync(jsonPath)) {
-    if (fs.existsSync(journalPath)) {
-      const migratedPath = `${jsonPath}.migrated`
-      try {
-        const journal = readLegacyMigrationJournal(projectPath)
-        if (
-          journal
-          && fs.existsSync(migratedPath)
-          && legacySourceDigest(fs.readFileSync(migratedPath, 'utf8')) === journal.sourceDigest
-        ) {
-          // The source was renamed only after every document write completed.
-          // A matching renamed file therefore proves commit; deleting this
-          // leftover journal makes the operation idempotent after a crash.
-          removeLegacyMigrationJournal(projectPath)
-          return { success: true, migrated: 0 }
-        }
-      } catch (error) {
-        return {
-          success: false,
-          migrated: 0,
-          error: error instanceof Error ? error.message : legacyMigrationError(String(error)),
-        }
-      }
-      return {
-        success: false,
-        migrated: 0,
-        error: legacyMigrationError('检测到未完成迁移记录但原 vectors.json 不存在，未自动删除任何数据'),
-      }
-    }
-    return { success: true, migrated: 0 }
-  }
-
-  try {
-    const raw = fs.readFileSync(jsonPath, 'utf8')
-    const plan = createLegacyMigrationPlan(raw)
-    if ('error' in plan) return { success: false, migrated: 0, error: plan.error }
-
-    const journal = readLegacyMigrationJournal(projectPath)
-    if (journal) {
-      const sourceDocIds = new Set(plan.documents.map(document => document.docId))
-      if (journal.docIds.some(docId => !sourceDocIds.has(docId))) {
-        return {
-          success: false,
-          migrated: 0,
-          error: legacyMigrationError('检测到与当前源数据不匹配的中断迁移记录，未自动删除任何数据'),
-        }
-      }
-      if (!await rollbackLegacyMigrationDocuments(projectPath, journal)) {
-        return {
-          success: false,
-          migrated: 0,
-          error: legacyMigrationError('无法清理上次中断迁移的临时数据，未写入新数据'),
-        }
-      }
-      removeLegacyMigrationJournal(projectPath)
-    }
-
-    const preflight = await preflightLegacyMigrationTarget(projectPath, plan)
-    if ('error' in preflight) return { success: false, migrated: 0, error: preflight.error }
-
-    if (plan.documents.length === 0) {
-      fs.renameSync(jsonPath, `${jsonPath}.migrated`)
-      return { success: true, migrated: 0 }
-    }
-
-    const sourceDigest = legacySourceDigest(raw)
-    const docIds = plan.documents.map(document => document.docId)
-    const journalForAttempt: LegacyMigrationJournal = {
-      version: 1,
-      sourceDigest,
-      docIds,
-      tableNamesBefore: preflight.tableNamesBefore,
-      registryBefore: preflight.registryBefore,
-    }
-    writeLegacyMigrationJournal(projectPath, journalForAttempt)
-    for (const document of plan.documents) {
-      const result = await addChunks(
-        projectPath,
-        document.docId,
-        document.fileName,
-        document.chunks,
-        document.vectors,
-        document.filePath,
-        undefined,
-        { modelFingerprint: 'legacy-json', distanceMetric: DEFAULT_DISTANCE_METRIC },
-      )
-      if (!result.success) {
-        const rolledBack = await rollbackLegacyMigrationDocuments(projectPath, journalForAttempt)
-        if (rolledBack) removeLegacyMigrationJournal(projectPath)
-        return {
-          success: false,
-          migrated: 0,
-          error: legacyMigrationError(result.error ?? '写入 LanceDB 失败'),
-        }
-      }
-    }
-
-    try {
-      fs.renameSync(jsonPath, `${jsonPath}.migrated`)
-    } catch (error) {
-      const rolledBack = await rollbackLegacyMigrationDocuments(projectPath, journalForAttempt)
-      if (rolledBack) removeLegacyMigrationJournal(projectPath)
-      return {
-        success: false,
-        migrated: 0,
-        error: legacyMigrationError(`未能标记原 vectors.json：${String(error)}`),
-      }
-    }
-    removeLegacyMigrationJournal(projectPath)
-    console.log(`[AI Novel VectorStore] 迁移完成：${plan.migratedChunks} 个块已写入 LanceDB`)
-    return { success: true, migrated: plan.migratedChunks }
-  } catch (error) {
-    console.error('[AI Novel VectorStore] 迁移失败:', error)
-    return { success: false, migrated: 0, error: legacyMigrationError(String(error)) }
-  }
-}
-
-/**
- * 从旧 vectors.json 迁移数据到 LanceDB。
- * 在任意写入前验证完整源文件，并以持久 journal 回滚中断批次，避免重试重复写入。
- */
-export async function migrateFromJSON(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
-  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
-  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => migrateFromJSONInternal(projectPath))
-}
-
-async function migrateFromJSONInternal(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
-  const key = path.resolve(projectPath)
-  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
-  const running = legacyMigrationInFlight.get(key)
-  if (running) return running
-  const migration = migrateFromJSONOnce(projectPath)
-  legacyMigrationInFlight.set(key, migration)
-  try {
-    return await migration
-  } finally {
-    if (legacyMigrationInFlight.get(key) === migration) legacyMigrationInFlight.delete(key)
+    return { success: false, count: 0, error: error instanceof Error ? error.message : String(error) }
   }
 }

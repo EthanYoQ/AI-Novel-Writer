@@ -123,7 +123,7 @@ describe('embedding batch response contract', () => {
   it.each([
     ['OpenAI', embedOpenAI],
     ['Gemini', embedGemini],
-  ] as const)('%s keeps non-2xx response errors bounded and actionable', async (_provider, embed) => {
+  ] as const)('%s keeps non-2xx response errors bounded and actionable', async (provider, embed) => {
     const bodyMarker = 'DO-NOT-EXPOSE-THIS-NON-2XX-UPSTREAM-BODY'
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(bodyMarker.repeat(100), {
       status: 401,
@@ -133,10 +133,7 @@ describe('embedding batch response contract', () => {
     const error = await embed(['第一段'], model).catch((reason: unknown) => reason)
 
     expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toContain('HTTP 401')
-    expect((error as Error).message).toContain('检查 Base URL')
-    expect((error as Error).message).toContain('网关')
-    expect((error as Error).message).toContain('鉴权')
+    expect(error).toMatchObject({ message: 'EMBEDDING_REQUEST_FAILED', code: 'EMBEDDING_REQUEST_FAILED', provider, status: 401 })
     expect((error as Error).message).not.toContain(bodyMarker)
   })
 
@@ -275,10 +272,10 @@ describe('OpenAI embedding endpoint construction', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(embedOpenAI(['第一段'], { ...model, baseUrl })).rejects.toThrow(
-      `本应用使用 OpenAI-compatible Embedding API，请将 Base URL 改为 ${recommendedBaseUrl}。 `
-      + `This app uses the OpenAI-compatible Embedding API; change the Base URL to ${recommendedBaseUrl}.`,
-    )
+    await expect(embedOpenAI(['第一段'], { ...model, baseUrl })).rejects.toMatchObject({
+      message: 'EMBEDDING_OLLAMA_NATIVE_URL',
+      suggestedBaseUrl: recommendedBaseUrl,
+    })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

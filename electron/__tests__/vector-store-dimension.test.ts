@@ -1,7 +1,6 @@
 import { prepareCanonicalStorageFixture } from '../../test/helpers/canonical-project-fixture'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
 import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Schema as ArrowSchema, Utf8 } from 'apache-arrow'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
@@ -13,7 +12,6 @@ import {
   getEmbeddingSpaces,
   listDocuments,
   getStats,
-  migrateFromJSON,
   removeDocument,
   search,
   searchWithScope,
@@ -539,299 +537,6 @@ describe('知识库向量维度', () => {
     expect((await db.tableNames()).sort()).toEqual(['chunks', 'documents'])
   })
 
-  it('旧 vectors.json 按真实 1536 维迁移，而不是回退到固定 2048', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-    const vector = Array.from({ length: 1536 }, (_, index) => index / 1536)
-    const velaPath = path.join(projectPath, '.ai-novel')
-    fs.mkdirSync(velaPath, { recursive: true })
-    const sourcePath = path.join(velaPath, 'vectors.json')
-    fs.writeFileSync(sourcePath, JSON.stringify({
-      documents: [{
-        id: 'legacy-json-document',
-        fileName: 'legacy-json.txt',
-        importedAt: '2026-01-01T00:00:00.000Z',
-        chunkCount: 1,
-        filePath: '',
-      }],
-      entries: [{
-        id: 'legacy-json-chunk',
-        docId: 'legacy-json-document',
-        text: '迁移后的正文',
-        vector,
-        meta: { fileName: 'legacy-json.txt', chunkIndex: 0, totalChunks: 1 },
-      }],
-    }), 'utf8')
-
-    expect(await migrateFromJSON(projectPath)).toEqual({ success: true, migrated: 1 })
-    expect(fs.existsSync(sourcePath)).toBe(false)
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true)
-    await expect(getEmbeddingSpaces(projectPath)).resolves.toMatchObject({
-      spaces: [expect.objectContaining({
-        modelFingerprint: 'legacy-json',
-        vectorDimension: 1536,
-        status: 'active',
-      })],
-    })
-    await expect(getStats(projectPath)).resolves.toMatchObject({
-      vectorDimension: 1536,
-      hasVectors: true,
-    })
-    await expect(search(projectPath, '迁移后', vector, 5, {
-      modelFingerprint: 'legacy-json',
-      distanceMetric: 'l2',
-    })).resolves.toEqual([
-      expect.objectContaining({ fileName: 'legacy-json.txt', text: '迁移后的正文' }),
-    ])
-  })
-
-  it('迁移遇到不兼容空间时保留原 JSON、旧 active 和旧表', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-failure-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-    const oldSpace = { modelFingerprint: 'test/migration-old', distanceMetric: 'l2' }
-    const oldVector = Array.from({ length: 768 }, (_, index) => index / 768)
-    expect(await addChunks(
-      projectPath,
-      'old-document',
-      'old.txt',
-      ['仍可读取的旧正文'],
-      [oldVector],
-      undefined,
-      undefined,
-      oldSpace,
-    )).toEqual({ success: true, chunkCount: 1 })
-    const beforeRegistry = await getEmbeddingSpaces(projectPath)
-    const db = await getConnection(projectPath)
-    const beforeTables = await db.tableNames()
-    const sourcePath = path.join(projectPath, '.ai-novel', 'vectors.json')
-    fs.writeFileSync(sourcePath, JSON.stringify({
-      documents: [],
-      entries: [{
-        id: 'new-chunk',
-        docId: 'new-document',
-        text: '不应写入的新正文',
-        vector: Array.from({ length: 1024 }, (_, index) => index / 1024),
-        meta: { fileName: 'new.txt', chunkIndex: 0, totalChunks: 1 },
-      }],
-    }), 'utf8')
-
-    await expect(migrateFromJSON(projectPath)).resolves.toMatchObject({
-      success: false,
-      migrated: 0,
-      error: expect.stringMatching(/reindex_required/i),
-    })
-    expect(fs.existsSync(sourcePath)).toBe(true)
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false)
-    expect(await getEmbeddingSpaces(projectPath)).toEqual(beforeRegistry)
-    expect(await db.tableNames()).toEqual(beforeTables)
-    await expect(search(projectPath, '仍可读取', oldVector, 5, oldSpace)).resolves.toEqual([
-      expect.objectContaining({ fileName: 'old.txt', text: '仍可读取的旧正文' }),
-    ])
-  })
-
-  it('迁移预检发现不兼容的旧 chunks 表时不创建新的嵌入空间注册表', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-preflight-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-    const db = await getConnection(projectPath)
-    const legacyVector = Array.from({ length: 768 }, (_, index) => index / 768)
-    const legacySchema = new ArrowSchema([
-      new Field('id', new Utf8()),
-      new Field('docId', new Utf8()),
-      new Field('fileName', new Utf8()),
-      new Field('chapterNumber', new Int32(), true),
-      new Field('chapterTitle', new Utf8(), true),
-      new Field('text', new Utf8()),
-      new Field('vector', new ArrowFixedSizeList(768, new Field('item', new Float32())), true),
-      new Field('chunkIndex', new Int32()),
-      new Field('totalChunks', new Int32()),
-      new Field('importedAt', new Utf8()),
-    ])
-    await db.createTable('chunks', [{
-      id: 'old-chunk',
-      docId: 'old-document',
-      fileName: 'old.txt',
-      chapterNumber: null,
-      chapterTitle: null,
-      text: '不应在预检失败时被改动的旧正文',
-      vector: legacyVector,
-      chunkIndex: 0,
-      totalChunks: 1,
-      importedAt: '2026-01-01T00:00:00.000Z',
-    }], { schema: legacySchema })
-    const velaPath = path.join(projectPath, '.ai-novel')
-    const registryPath = path.join(velaPath, 'embedding-spaces.json')
-    const sourcePath = path.join(velaPath, 'vectors.json')
-    fs.writeFileSync(sourcePath, JSON.stringify({
-      documents: [{ id: 'new-document', fileName: 'new.txt' }],
-      entries: [{
-        id: 'new-chunk',
-        docId: 'new-document',
-        text: '不应写入的新正文',
-        vector: Array.from({ length: 1024 }, (_, index) => index / 1024),
-        meta: { fileName: 'new.txt' },
-      }],
-    }), 'utf8')
-
-    expect(fs.existsSync(registryPath)).toBe(false)
-    await expect(migrateFromJSON(projectPath)).resolves.toMatchObject({
-      success: false,
-      migrated: 0,
-      error: expect.stringMatching(/reindex_required/i),
-    })
-    expect(fs.existsSync(registryPath)).toBe(false)
-    expect(fs.existsSync(sourcePath)).toBe(true)
-    expect(await db.tableNames()).toEqual(['chunks'])
-  })
-
-  it('两份旧 JSON 中后一份非法时不写入前一份，重试与修正后都不会重复迁移', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-atomic-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-    const velaPath = path.join(projectPath, '.ai-novel')
-    fs.mkdirSync(velaPath, { recursive: true })
-    const sourcePath = path.join(velaPath, 'vectors.json')
-    const vector = Array.from({ length: 768 }, (_, index) => index / 768)
-    const source = {
-      documents: [
-        { id: 'legacy-valid', fileName: 'valid.txt', importedAt: '2026-01-01T00:00:00.000Z', chunkCount: 1, filePath: '' },
-        { id: 'legacy-invalid', fileName: 'invalid.txt', importedAt: '2026-01-01T00:00:00.000Z', chunkCount: 1, filePath: '' },
-      ],
-      entries: [
-        {
-          id: 'legacy-valid-chunk',
-          docId: 'legacy-valid',
-          text: '第一份旧正文不能被半迁移',
-          vector,
-          meta: { fileName: 'valid.txt', chunkIndex: 0, totalChunks: 1 },
-        },
-        {
-          id: 'legacy-invalid-chunk',
-          docId: 'legacy-invalid',
-          text: '第二份旧正文含有非法向量',
-          vector: [...vector.slice(0, 20), null, ...vector.slice(21)],
-          meta: { fileName: 'invalid.txt', chunkIndex: 0, totalChunks: 1 },
-        },
-      ],
-    }
-    fs.writeFileSync(sourcePath, JSON.stringify(source), 'utf8')
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await expect(migrateFromJSON(projectPath)).resolves.toMatchObject({
-        success: false,
-        migrated: 0,
-        error: expect.stringMatching(/向量|迁移/),
-      })
-      await expect(listDocuments(projectPath)).resolves.toEqual([])
-      const db = await getConnection(projectPath)
-      expect(await db.tableNames()).toEqual([])
-      expect(fs.existsSync(sourcePath)).toBe(true)
-      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false)
-    }
-
-    const repaired = structuredClone(source)
-    repaired.entries[1].vector = vector
-    fs.writeFileSync(sourcePath, JSON.stringify(repaired), 'utf8')
-
-    await expect(migrateFromJSON(projectPath)).resolves.toEqual({ success: true, migrated: 2 })
-    await expect(listDocuments(projectPath)).resolves.toHaveLength(2)
-    const db = await getConnection(projectPath)
-    expect(await (await db.openTable('chunks')).countRows()).toBe(2)
-    const registry = await getEmbeddingSpaces(projectPath)
-    const active = registry.spaces.find(space => space.generation === registry.activeGeneration)
-    expect(active).toMatchObject({ vectorDimension: 768, status: 'active' })
-    expect(await (await db.openTable(active!.tableName)).countRows()).toBe(2)
-
-    await expect(migrateFromJSON(projectPath)).resolves.toEqual({ success: true, migrated: 0 })
-    await expect(listDocuments(projectPath)).resolves.toHaveLength(2)
-    expect(await (await db.openTable('chunks')).countRows()).toBe(2)
-    expect(await (await db.openTable(active!.tableName)).countRows()).toBe(2)
-  })
-
-  it('迁移写入后若无法标记原 JSON，会回滚全部文档且修正环境后只迁移一次', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-marker-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-    const velaPath = path.join(projectPath, '.ai-novel')
-    fs.mkdirSync(velaPath, { recursive: true })
-    const sourcePath = path.join(velaPath, 'vectors.json')
-    const vector = Array.from({ length: 768 }, (_, index) => index / 768)
-    fs.writeFileSync(sourcePath, JSON.stringify({
-      documents: [
-        { id: 'marker-one', fileName: 'marker-one.txt' },
-        { id: 'marker-two', fileName: 'marker-two.txt' },
-      ],
-      entries: [
-        { id: 'marker-one-chunk', docId: 'marker-one', text: '第一份必须被回滚', vector, meta: { fileName: 'marker-one.txt' } },
-        { id: 'marker-two-chunk', docId: 'marker-two', text: '第二份也必须被回滚', vector, meta: { fileName: 'marker-two.txt' } },
-      ],
-    }), 'utf8')
-
-    const originalRenameSync = fs.renameSync
-    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-      if (String(to) === `${sourcePath}.migrated`) {
-        throw new Error('simulated source marker failure')
-      }
-      return originalRenameSync(from, to)
-    })
-    await expect(migrateFromJSON(projectPath)).resolves.toMatchObject({
-      success: false,
-      migrated: 0,
-      error: expect.stringMatching(/未能标记原 vectors\.json/),
-    })
-    renameSpy.mockRestore()
-
-    const db = await getConnection(projectPath)
-    expect(await listDocuments(projectPath)).toEqual([])
-    expect(await db.tableNames()).toEqual([])
-    expect(fs.existsSync(sourcePath)).toBe(true)
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false)
-    expect(fs.existsSync(path.join(velaPath, 'vectors.json.migration-journal.json'))).toBe(false)
-
-    await expect(migrateFromJSON(projectPath)).resolves.toEqual({ success: true, migrated: 2 })
-    expect(await listDocuments(projectPath)).toHaveLength(2)
-    expect(await (await db.openTable('chunks')).countRows()).toBe(2)
-    const registry = await getEmbeddingSpaces(projectPath)
-    const active = registry.spaces.find(space => space.generation === registry.activeGeneration)
-    expect(await (await db.openTable(active!.tableName)).countRows()).toBe(2)
-  })
-
-  it('迁移已提交但进程在删除 journal 前退出时，会用已标记源文件安全完成恢复', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-commit-recovery-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-    const velaPath = path.join(projectPath, '.ai-novel')
-    fs.mkdirSync(velaPath, { recursive: true })
-    const sourcePath = path.join(velaPath, 'vectors.json')
-    const source = {
-      documents: [{ id: 'committed-document', fileName: 'committed.txt' }],
-      entries: [{
-        id: 'committed-chunk',
-        docId: 'committed-document',
-        text: '已经写入但尚未清理 journal 的正文',
-        vector: Array.from({ length: 768 }, (_, index) => index / 768),
-        meta: { fileName: 'committed.txt' },
-      }],
-    }
-    const raw = JSON.stringify(source)
-    fs.writeFileSync(sourcePath, raw, 'utf8')
-    await expect(migrateFromJSON(projectPath)).resolves.toEqual({ success: true, migrated: 1 })
-
-    const journalPath = path.join(velaPath, 'vectors.json.migration-journal.json')
-    fs.writeFileSync(journalPath, JSON.stringify({
-      version: 1,
-      sourceDigest: createHash('sha256').update(raw).digest('hex'),
-      docIds: ['committed-document'],
-      tableNamesBefore: [],
-    }), 'utf8')
-
-    await expect(migrateFromJSON(projectPath)).resolves.toEqual({ success: true, migrated: 0 })
-    expect(fs.existsSync(journalPath)).toBe(false)
-    expect(await listDocuments(projectPath)).toHaveLength(1)
-  })
-
   it.each([
     ['空向量', [[], Array.from({ length: 768 }, () => 0)]],
     ['缺少一个批次结果', [Array.from({ length: 768 }, () => 0)]],
@@ -854,8 +559,7 @@ describe('知识库向量维度', () => {
     )
 
     expect(invalid.success).toBe(false)
-    expect(invalid.error).toMatch(/向量|批次|有限/)
-    expect(invalid.error).not.toContain('Arrow')
+    expect(invalid.error).toBe('EMBEDDING_RESPONSE_INVALID')
 
     const valid = await addChunks(
       projectPath,
@@ -904,7 +608,7 @@ describe('知识库向量维度', () => {
       newSpace,
     )
 
-    expect(mismatch).toMatchObject({ success: false, chunkCount: 0, error: expect.stringMatching(/reindex_required/i) })
+    expect(mismatch).toMatchObject({ success: false, chunkCount: 0, error: 'EMBEDDING_SPACE_REINDEX_REQUIRED' })
     const registry = await getEmbeddingSpaces(projectPath)
     const [first] = registry.spaces
     expect(registry).toEqual(beforeRegistry)
@@ -945,7 +649,7 @@ describe('知识库向量维度', () => {
       undefined,
       undefined,
       newSpace,
-    )).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reindex_required/i) })
+    )).resolves.toMatchObject({ success: false, error: 'EMBEDDING_SPACE_REINDEX_REQUIRED' })
     expect(await getEmbeddingSpaces(projectPath)).toEqual(before)
     await expect(search(projectPath, '模型 A', vector, 5, oldSpace)).resolves.toEqual([
       expect.objectContaining({ fileName: 'model-a.txt' }),
@@ -1263,7 +967,7 @@ describe('知识库向量维度', () => {
       )).resolves.toMatchObject({
         success: false,
         chunkCount: 0,
-        error: expect.stringContaining('存在未登记数据，已拒绝覆盖'),
+        error: 'EMBEDDING_SPACE_UNREGISTERED_DATA',
       })
     }
 
