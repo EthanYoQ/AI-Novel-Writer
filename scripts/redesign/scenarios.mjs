@@ -938,17 +938,18 @@ export const STAGE_SCENARIOS = {
     fs.mkdirSync(parent)
     const created = await invoke(page, 'project:create', { parentGrantId: grant.grantId, name: '雾岛', genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     measured.createAfterParentReplaced = created.success ? 'created' : created.error
+    assert.equal(measured.createAfterParentReplaced, 'Error: EXTERNAL_FILE_GRANT_TARGET_CHANGED', '主进程按授权目标已变化拒绝新建')
+    // 只记录真实触发能否成立；改得动也立刻改回，下面一律用替换的返回，画面每次相同。
     try {
       fs.renameSync(context.samplePath, `${context.samplePath}-moved`)
+      fs.renameSync(`${context.samplePath}-moved`, context.samplePath)
       measured.rename = 'moved'
     } catch (error) {
       measured.rename = error.code ?? String(error)
     }
-    if (measured.rename !== 'moved') {
-      await app.evaluate(({ ipcMain }) => {
-        ipcMain._invokeHandlers.set('kb:clear-all', async () => ({ success: false, error: 'PROJECT_SESSION_STALE' }))
-      })
-    }
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain._invokeHandlers.set('kb:clear-all', async () => ({ success: false, error: 'PROJECT_SESSION_STALE' }))
+    })
     const openKnowledge = async name => {
       await page.keyboard.press('Control+K')
       const input = page.getByRole('dialog').getByRole('combobox')
