@@ -109,7 +109,7 @@ export const startWorkflowTool = buildAgentTool({
         success: false,
         content: '',
         error: !detail || (writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
-          ? `Could not start the ${displayName}${chapterInfo} workflow.`
+          ? text(`启动「${displayName}${chapterInfo}」工作流失败。`, `Could not start the ${displayName}${chapterInfo} workflow.`)
           : detail,
       }
     }
