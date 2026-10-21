@@ -140,11 +140,14 @@ function connectionTestFailure(failure: unknown): string {
 function providerConnectionFailure(response: Extract<LLMResponse, { success: false }>): string | undefined {
   if (response.error === 'LLM_REQUEST_FAILED' && response.httpFailure) {
     const { status, body } = response.httpFailure
-    return mainText(
+    const advice = mainText(
       app.getLocale(),
-      `模型请求失败（HTTP ${status}）。请检查 Base URL、API Key 与模型名。服务返回：${body}`,
-      `Model request failed (HTTP ${status}). Check the Base URL, API key, and model name. The service returned: ${body}`,
+      `模型请求失败（HTTP ${status}）。请检查 Base URL、API Key 与模型名。`,
+      `Model request failed (HTTP ${status}). Check the Base URL, API key, and model name.`,
     )
+    return body.trim()
+      ? `${advice}${mainText(app.getLocale(), `服务返回：${body.trim()}`, ` The service returned: ${body.trim()}`)}`
+      : advice
   }
   if (response.error === 'LLM_RESPONSE_INCOMPLETE') {
     return mainText(

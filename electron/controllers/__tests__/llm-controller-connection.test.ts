@@ -789,3 +789,16 @@ describe('generation model connection test failures', () => {
     expect(mocks.generate).not.toHaveBeenCalled()
   })
 })
+
+describe('generation model connection test with an empty error body', () => {
+  it('ends the explanation without a dangling service response', async () => {
+    mocks.locale = 'en-US'
+    mocks.generate.mockResolvedValueOnce({
+      success: false, content: '', finishReason: 'error', error: 'LLM_REQUEST_FAILED', httpFailure: { status: 403, body: '' },
+    })
+    await expect(connectionHandler()({}, deepSeekModel)).resolves.toEqual({
+      success: false,
+      error: 'Model request failed (HTTP 403). Check the Base URL, API key, and model name.',
+    })
+  })
+})
