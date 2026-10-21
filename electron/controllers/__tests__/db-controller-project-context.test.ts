@@ -49,6 +49,11 @@ const mocks = vi.hoisted(() => ({
   importSourceIdentityResolve: vi.fn(),
   importRunPrepare: vi.fn(),
   importRunFinalizeParsing: vi.fn(),
+  importRunGet: vi.fn((): { locale: 'zh-CN' | 'en-US' } | undefined => undefined),
+  importRunRestart: vi.fn(),
+  importRunGetEffectReceipt: vi.fn(),
+  importRunFail: vi.fn(),
+  importRunBeginParsing: vi.fn(),
   draftGetFull: vi.fn(() => ({
     id: 1,
     content: mocks.currentProjectPath.endsWith('/A') ? 'A content' : 'B content',
@@ -70,6 +75,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
+  app: { getLocale: () => 'zh-CN' },
   ipcMain: {
     handle: vi.fn((channel: string, handler: IpcHandler) => {
       mocks.handlers.set(channel, handler)
@@ -194,6 +200,11 @@ vi.mock('../../repositories/import-run-repository', () => ({
   ImportRunRepository: {
     prepare: mocks.importRunPrepare,
     finalizeParsing: mocks.importRunFinalizeParsing,
+    get: mocks.importRunGet,
+    restart: mocks.importRunRestart,
+    getEffectReceipt: mocks.importRunGetEffectReceipt,
+    fail: mocks.importRunFail,
+    beginParsing: mocks.importRunBeginParsing,
   },
 }))
 
@@ -283,6 +294,9 @@ beforeEach(() => {
   mocks.hasCharacterIdentitySchema.mockReturnValue(false)
   mocks.assertCurrentSession.mockReset()
   mocks.authorRosterCommit.mockReset()
+  mocks.importRunGet.mockReset()
+  mocks.importRunRestart.mockReset()
+  mocks.importRunGetEffectReceipt.mockReset()
   mocks.assertCurrentProjectContext.mockImplementation((context: {
     projectPath?: string
   } | undefined, currentProjectPath: string) => {
@@ -517,16 +531,91 @@ describe('database controller project context guard', () => {
 
   it('rejects parsing finalization after the project session switches', async () => {
     mocks.currentProjectPath = 'C:/projects/B'
+    mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
 
     await expect(handler('db:import-run-finalize-parsing')(
       {},
       'parse-run',
       'C:/projects/A',
-    )).resolves.toMatchObject({
+    )).resolves.toEqual({
       success: false,
-      error: 'Error: PROJECT_CONTEXT_CHANGED',
+      errorCode: 'PROJECT_CONTEXT_CHANGED',
+      error: 'The project was switched or reopened, and this action belonged to the earlier session, so it was rejected. Repeat it in the project that is open now.',
     })
     expect(mocks.importRunFinalizeParsing).not.toHaveBeenCalled()
+  })
+
+  describe('import run failures shown in the import dialog and run card (#474)', () => {
+    const han = /\p{Script=Han}/u
+
+    it('explains an author-actionable code in the run language and keeps the code', async () => {
+      mocks.importRunRestart.mockImplementation(() => { throw new Error('IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN') })
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      const english = await handler('db:import-run-restart')({}, 'author-run', 'next-run', 'C:/projects/A')
+      expect(english).toEqual({
+        success: false,
+        errorCode: 'IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN',
+        error: 'An author-manuscript import cannot be restarted. Resume the original import to finish publishing and post-processing.',
+      })
+
+      mocks.importRunGet.mockReturnValue({ locale: 'zh-CN' })
+      await expect(handler('db:import-run-restart')({}, 'author-run', 'next-run', 'C:/projects/A')).resolves.toEqual({
+        success: false,
+        errorCode: 'IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN',
+        error: '作者原稿导入不能重新开始。请继续原来的这次导入，完成发布和后处理。',
+      })
+    })
+
+    it('gives integrity failures a readable sentence that carries the code for feedback', async () => {
+      mocks.importRunRestart.mockImplementation(() => { throw new Error('IMPORT_RUN_ID_CONFLICT') })
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      const result = await handler('db:import-run-restart')({}, 'run', 'next-run', 'C:/projects/A') as { error: string; errorCode: string }
+      expect(result.errorCode).toBe('IMPORT_RUN_ID_CONFLICT')
+      expect(result.error).toBe('The import could not continue because a check failed (IMPORT_RUN_ID_CONFLICT). Try again; if it keeps happening, send us this message.')
+      expect(result.error).not.toMatch(han)
+    })
+
+    it('puts the explanation into the thrown message of read channels', async () => {
+      mocks.importRunGetEffectReceipt.mockImplementation(() => { throw new Error('IMPORT_RUN_RECEIPT_CORRUPT') })
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      await expect(handler('db:import-run-effect-receipt-get')({}, 'run', 'style', 'done', 'C:/projects/A'))
+        .rejects.toThrow('The import could not continue because a check failed (IMPORT_RUN_RECEIPT_CORRUPT).')
+    })
+
+    it('uses the requested import language before any run exists', async () => {
+      mocks.importInspectionPeek.mockReturnValueOnce({ chapters: [] })
+      mocks.importInspectionConsume.mockImplementationOnce(() => { throw new Error('IMPORT_INSPECTION_EXPIRED') })
+      await expect(handler('db:import-run-prepare-inspection')(
+        { sender: { id: 8 } },
+        { inspectionId: 'gone', runId: 'new-run', purpose: 'reference', locale: 'en-US' },
+        'C:/projects/A',
+      )).resolves.toEqual({
+        success: false,
+        errorCode: 'IMPORT_INSPECTION_EXPIRED',
+        error: 'The file check has expired. Choose the files again.',
+      })
+      expect(mocks.importRunGet).not.toHaveBeenCalled()
+    })
+
+    it('stores a readable failure reason instead of the IPC wrapper or a bare code', async () => {
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      const execution = { owner: 'renderer', epoch: 1, expiresAt: 1 }
+      await handler('db:import-run-fail')(
+        {}, 'run', 'knowledge',
+        "Error invoking remote method 'db:import-run-effect-receipt-get': Error: IMPORT_RUN_EXECUTION_STALE",
+        execution, 'C:/projects/A',
+      )
+      expect(mocks.importRunFail).toHaveBeenLastCalledWith('run', 'knowledge', expect.not.stringMatching(/IPC|remote method|IMPORT_RUN_/), execution)
+      const reason = mocks.importRunFail.mock.lastCall?.[2] as string
+      expect(reason).toMatch(/^This import was taken over by another window/)
+
+      await handler('db:import-run-fail')(
+        {}, 'run', 'knowledge',
+        "Error invoking remote method 'kb:import-reference-text': Error: Chapter 3 could not be written.",
+        execution, 'C:/projects/A',
+      )
+      expect(mocks.importRunFail).toHaveBeenLastCalledWith('run', 'knowledge', 'Chapter 3 could not be written.', execution)
+    })
   })
 
   it('returns the repository finalization conflict without flattening its reason', async () => {

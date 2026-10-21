@@ -112,6 +112,22 @@ export const enUS = {
   'error.mcpServerNotConnected': 'The MCP server is not connected. Reconnect it, then try again.',
   'error.kimiTemperatureInvalid': 'The Kimi API only accepts a temperature from 0 to 1. Adjust it in the model settings, then try again.',
   'error.modelOutputLimitInvalid': 'The model’s max output tokens setting is invalid. Enter a positive whole number for this model in Settings, then try again.',
+  'error.importRunCheckFailed': 'The import could not continue because a check failed ({code}). Try again; if it keeps happening, send us this message.',
+  'error.importRunExecutionStale': 'This import was taken over by another window, or it paused after going unresponsive, so this window can no longer write to it. Resume the import from the import dialog.',
+  'error.importRunExecutorBusy': 'This import is running in another window. Wait for it to finish, or check that window.',
+  'error.importRunAnotherRunning': 'Another import is running in this book. Wait for it to finish, then continue this import.',
+  'error.importRunNotStartable': 'This import has ended and cannot continue. Choose the files again to start a new import.',
+  'error.importRunNotRestartable': 'This import cannot be restarted right now; it may still be running or already finished. Reopen the import dialog to check.',
+  'error.importRunAuthorRestartForbidden': 'An author-manuscript import cannot be restarted. Resume the original import to finish publishing and post-processing.',
+  'error.importRunNotCancellable': 'This import has already ended, so there is nothing to cancel.',
+  'error.importRunParsingIncomplete': 'Some files have not been read yet. Choose the unfinished files again in the import dialog.',
+  'error.importRunReauthorizeUnavailable': 'Unfinished files can no longer be added to this import. Choose all the files again to start a new import.',
+  'error.importRunReauthorizeSourcesMismatch': 'The files you chose do not match the unfinished files of this import. Choose the same unfinished files again.',
+  'error.importRunReauthorizeContentChanged': 'A file that was already read has changed since, so this import cannot continue. Choose all the files again to start a new import.',
+  'error.importRunEffectHistoryUnknown': 'This import was left by an older version, and it cannot be confirmed whether one of its steps was already written. To avoid writing it twice, the import stopped. Restart this import from the import dialog.',
+  'error.importInspectionExpired': 'The file check has expired. Choose the files again.',
+  'error.importInspectionLimit': 'Too many imports are waiting to be confirmed. Finish or cancel the open imports, then choose files again.',
+  'error.finalizedImportPreviewStale': 'The finalized chapters of this book changed after the manuscript preview was confirmed, so the preview is out of date. Choose the manuscript again and confirm the new preview.',
 } as const
 
 export type MessageKey = keyof typeof enUS

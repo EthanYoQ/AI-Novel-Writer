@@ -33,6 +33,8 @@ import type { FinalizedDraftImportRequest } from '../../src/shared/finalized-dra
 import { ImportGlobalFactsRepository } from '../repositories/import-global-facts-repository'
 import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
 import { ImportRunRepository } from '../repositories/import-run-repository'
+import { explainImportRunFailure, importRunLocale, persistedImportRunFailure } from './import-run-failure'
+import type { Locale } from '../../src/i18n/types'
 import type {
   ImportRunExecutionLease,
   ImportRunPrepareEffectReceiptRequest,
@@ -125,6 +127,18 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:plot-tree-clear',
 ])
 
+/** 导入对话框与导入运行卡片原样显示这些通道的报错（#474 B1），失败时按导入运行的语言写成说明。 */
+const IMPORT_CHANNEL = /^db:import-(?:run|global-facts)-/u
+
+function importChannelLocale(args: unknown[]): Locale {
+  const [first] = args
+  if (typeof first === 'object' && first !== null) {
+    const request = first as { runId?: unknown; locale?: unknown }
+    return importRunLocale(request.runId, request.locale)
+  }
+  return importRunLocale(first)
+}
+
 function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabaseHandler): void {
   ipcMain.handle(channel, async (event, ...args: unknown[]) => {
     const candidate = args.at(-1)
@@ -134,9 +148,14 @@ function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabas
       projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
       return await (handler as (event: unknown, ...handlerArgs: unknown[]) => unknown)(event, ...args)
     } catch (error) {
+      const importFailure = IMPORT_CHANNEL.test(channel)
+        ? explainImportRunFailure(error, () => importChannelLocale(args))
+        : undefined
       if (MUTATING_DATABASE_CHANNELS.has(channel)) {
-        return { success: false, error: String(error) }
+        return importFailure ? { success: false, ...importFailure } : { success: false, error: String(error) }
       }
+      // 读通道的异常经 Electron 只带过去 message，说明直接写进 message。
+      if (importFailure) throw new Error(importFailure.error)
       throw error
     }
   })
@@ -327,7 +346,7 @@ export function registerDatabaseController() {
         ImportRunRepository.failParsedSource(
           parsingRun.id,
           sourceId,
-          error instanceof Error ? error.message : String(error),
+          persistedImportRunFailure(error instanceof Error ? error.message : String(error), request.locale),
         )
         throw error
       }
@@ -501,7 +520,10 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, run: ImportRunRepository.fail(runId, stage, errorMessage, execution) }
+    const reason = typeof errorMessage === 'string'
+      ? persistedImportRunFailure(errorMessage, () => importRunLocale(runId))
+      : errorMessage
+    return { success: true, run: ImportRunRepository.fail(runId, stage, reason, execution) }
   })
 
   ipcMain.handle('db:import-run-complete', async (
