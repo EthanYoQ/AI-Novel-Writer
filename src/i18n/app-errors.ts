@@ -236,6 +236,19 @@ const ERROR_KEYS = {
   KNOWLEDGE_BASE_COPY_CHANGED: 'error.knowledgeCopyChanged',
   KNOWLEDGE_BASE_COPY_EMPTY: 'error.knowledgeCopyEmpty',
   KNOWLEDGE_BASE_TEXT_EMPTY: 'error.knowledgeTextEmpty',
+  // 模型调用与设置（#474 B6）：保存或删除模型、设默认模型，以及按模型设置建执行租约时作者能照着改的原因。
+  LLM_MODEL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
+  LLM_GLOBAL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
+  LLM_DEFAULT_MODEL_ROLLBACK_FAILED: 'error.defaultModelRollbackFailed',
+  MODEL_ENDPOINT_INVALID: 'error.modelEndpointInvalid',
+  MODEL_OUTPUT_LIMIT_INVALID: 'error.modelOutputLimitInvalid',
+  // 生成与连接测试都会按模型设置组请求参数，Kimi 官方接口的温度超出范围时在发请求前拒绝。
+  GENERATION_KIMI_TEMPERATURE_INVALID: 'error.kimiTemperatureInvalid',
+  // MCP 服务器（#474 B6）：读取配置、连接服务器与调用工具时的失败。
+  MCP_CONFIG_INVALID: 'error.mcpConfigInvalid',
+  MCP_CONNECT_FAILED: 'error.mcpConnectFailed',
+  MCP_REQUEST_TIMEOUT: 'error.mcpRequestTimeout',
+  MCP_SERVER_NOT_CONNECTED: 'error.mcpServerNotConnected',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

@@ -103,6 +103,15 @@ export const enUS = {
   'error.knowledgeCopyChanged': 'The project copy was changed elsewhere, so this save was skipped. Reopen the material, then edit again.',
   'error.knowledgeCopyEmpty': 'The project copy is empty, so search cannot be updated. Add text and save first.',
   'error.knowledgeTextEmpty': 'The material is empty; there is no text to import.',
+  'error.modelSettingsFileDamaged': 'The model settings file is damaged, so nothing was saved to avoid overwriting it. Repair or move the damaged settings file in your user configuration directory, then try again.',
+  'error.defaultModelRollbackFailed': 'The model was not deleted, and the default model settings could not be restored. Check that your user configuration directory is writable, then choose the default models again in Settings.',
+  'error.modelEndpointInvalid': 'The model’s Base URL is invalid. Correct it in Settings, then try again.',
+  'error.mcpConfigInvalid': 'The MCP configuration file is damaged or unreadable, so no servers were loaded. Check the MCP configuration in your user configuration directory.',
+  'error.mcpConnectFailed': 'Could not connect to the MCP server. Check the start command and arguments in the configuration, and make sure the server runs on this computer.',
+  'error.mcpRequestTimeout': 'The MCP server did not respond in time. Try again later, or check that the server is still running.',
+  'error.mcpServerNotConnected': 'The MCP server is not connected. Reconnect it, then try again.',
+  'error.kimiTemperatureInvalid': 'The Kimi API only accepts a temperature from 0 to 1. Adjust it in the model settings, then try again.',
+  'error.modelOutputLimitInvalid': 'The model’s max output tokens setting is invalid. Enter a positive whole number for this model in Settings, then try again.',
 } as const
 
 export type MessageKey = keyof typeof enUS
