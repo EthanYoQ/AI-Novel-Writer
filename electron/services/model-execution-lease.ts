@@ -20,12 +20,17 @@ export interface ModelExecutionLeaseRegistryOptions {
   ttlMs?: number
 }
 
+export type ModelExecutionLeaseErrorCode =
+  | 'MODEL_NOT_FOUND'
+  | 'MODEL_ENDPOINT_INVALID'
+  | 'MODEL_OUTPUT_LIMIT_INVALID'
+  | 'MODEL_EXECUTION_LEASE_INVALID'
+  | 'MODEL_EXECUTION_LEASE_EXPIRED'
+
+/** 消息就是错误码（#474）：经 IPC 的 String(error) 后渲染层仍能按码说明。 */
 export class ModelExecutionLeaseError extends Error {
-  constructor(
-    readonly code: 'MODEL_NOT_FOUND' | 'INVALID_OUTPUT_CAPABILITY',
-    message: string,
-  ) {
-    super(message)
+  constructor(readonly code: ModelExecutionLeaseErrorCode) {
+    super(code)
     this.name = 'ModelExecutionLeaseError'
   }
 }
@@ -49,7 +54,7 @@ function normalizeEndpoint(baseUrl: string): string {
     endpoint.pathname = endpoint.pathname.replace(/\/+$/u, '') || '/'
     return endpoint.toString().replace(/\/$/u, '')
   } catch {
-    throw new Error('模型端点地址无效')
+    throw new ModelExecutionLeaseError('MODEL_ENDPOINT_INVALID')
   }
 }
 
@@ -89,7 +94,7 @@ export function resolveModelExecutionCapabilityEvidence(
     ? Math.min(unconstrainedOutputTokens, contextWindowTokens)
     : unconstrainedOutputTokens
   if (!maxOutputTokens) {
-    throw new ModelExecutionLeaseError('INVALID_OUTPUT_CAPABILITY', '模型输出上限无效')
+    throw new ModelExecutionLeaseError('MODEL_OUTPUT_LIMIT_INVALID')
   }
 
   const maxOutputSource = verifiedOutputLimit === maxOutputTokens
@@ -178,7 +183,7 @@ export class ModelExecutionLeaseRegistry {
 
   begin(modelId: string): ModelExecutionLeaseReceipt {
     const model = this.loadModel(modelId)
-    if (!model) throw new ModelExecutionLeaseError('MODEL_NOT_FOUND', '未找到模型配置')
+    if (!model) throw new ModelExecutionLeaseError('MODEL_NOT_FOUND')
 
     const createdAt = this.now()
     const receipt = createModelExecutionLeaseReceipt(model, {
@@ -195,10 +200,10 @@ export class ModelExecutionLeaseRegistry {
 
   resolve(leaseId: string): ModelProfile {
     const record = this.records.get(leaseId)
-    if (!record) throw new Error('模型执行租约无效')
+    if (!record) throw new ModelExecutionLeaseError('MODEL_EXECUTION_LEASE_INVALID')
     if (this.now() >= record.receipt.expiresAt) {
       this.records.delete(leaseId)
-      throw new Error('模型执行租约已过期')
+      throw new ModelExecutionLeaseError('MODEL_EXECUTION_LEASE_EXPIRED')
     }
     return cloneModelProfile(record.snapshot)
   }

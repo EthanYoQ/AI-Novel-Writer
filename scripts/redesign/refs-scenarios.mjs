@@ -10,6 +10,7 @@ import * as shell from './pages/shell.mjs'
 import * as stage from './pages/stage.mjs'
 import { chromeContrastFailures, msFromClickToProse, seedStageSample } from './scenarios.mjs'
 import { countUnits, STAGE_SAMPLE } from './stage-sample.mjs'
+import { FAKE_MODEL } from './fake-model.mjs'
 
 const THREAD = Object.freeze({ title: '雾钟为何提前', type: '主线', targetStartChapter: 1, targetEndChapter: 6, authorIntent: '钟声提前一刻与三十年前的沉船有关。' })
 const SECOND_DRAFT = `${STAGE_SAMPLE.drafts[3].text}\n\n林岚把纸条又读了一遍，决定等到下一次大潮再上灯室。`
@@ -335,6 +336,28 @@ export const REFS_SCENARIOS = {
     assert.match(index.alert, /search index records of this book are damaged/)
     englishOnly(index, 'alert')
     return { saved, index }
+  } },
+  // #474 B6：provider 只交 LLM_REQUEST_FAILED 与 HTTP 状态，连接测试由主进程按界面语言写成说明。
+  // 英文界面把夹具模型的 API Key 改错后测试连接，假服务回 403，模型表单的结果是英文、不带汉字与错误码。
+  'models-test-connection-en': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    const nav = page.getByRole('navigation', { name: 'Settings sections' })
+    await nav.getByRole('button', { name: 'AI models', exact: true }).click()
+    await page.getByRole('button', { name: `Edit “${FAKE_MODEL.name}”`, exact: true }).click()
+    await page.getByPlaceholder('sk-...').fill('wrong-key-for-connection-test')
+    const before = fake.requests.length
+    await page.getByRole('button', { name: 'Test connection', exact: true }).click()
+    const result = page.getByText(/^Connection failed: /u)
+    await result.waitFor({ state: 'visible', timeout: 15_000 })
+    const observed = { result: await result.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await shoot('models-test-connection-en')
+    assert.equal(observed.lang, 'en-US')
+    assert.equal(observed.result, 'Connection failed: Model request failed (HTTP 403). Check the Base URL, API key, and model name.')
+    assert.doesNotMatch(observed.result, /[A-Z]{3,}_|\p{Script=Han}/u)
+    assert.equal(fake.requests.length, before, '假服务在鉴权前就回 403，不算一次模型请求')
+    return observed
   } },
   'refs-delete': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
     await refs.open(page, 'plot')

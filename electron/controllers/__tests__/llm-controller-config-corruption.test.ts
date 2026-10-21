@@ -83,7 +83,7 @@ describe('model configuration corruption boundary', () => {
     await expect(handler('llm:save-model')({}, {
       id: 'model-1',
       name: 'Model 1',
-    })).resolves.toMatchObject({ success: false, error: expect.any(String) })
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('LLM_MODEL_CONFIG_CORRUPT') })
     expect(fs.readFileSync(modelsPath)).toEqual(originalBytes)
   })
 
@@ -97,7 +97,7 @@ describe('model configuration corruption boundary', () => {
 
     await expect(handler(channel)({}, modelId)).resolves.toMatchObject({
       success: false,
-      error: expect.any(String),
+      error: expect.stringContaining('LLM_GLOBAL_CONFIG_CORRUPT'),
     })
     expect(fs.readFileSync(configPath)).toEqual(originalBytes)
   })
