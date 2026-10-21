@@ -82,6 +82,7 @@ const COVERED_PREFIXES = [
   'RECOVERY_CANDIDATE_',
   'CONSISTENCY_EXEMPTION_',
   'POST_PROCESS_',
+  'CONTINUITY_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
@@ -546,6 +547,12 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'RECOVERY_CANDIDATE_REPLACEMENT_INVALID',
     'RECOVERY_CANDIDATE_SOURCE_DRAFT_INVALID',
     'RECOVERY_CANDIDATE_SOURCE_MISMATCH',
+    // #474 B5：连续性事实与读取请求的形状、失效章节号、定稿来源草稿号。蓝图与导入提交、读前文时由界面或主进程自己构造。
+    'CONTINUITY_CHARACTER_REF_INVALID',
+    'CONTINUITY_FACTS_INVALID',
+    'CONTINUITY_INVALIDATION_CHAPTER_INVALID',
+    'CONTINUITY_SOURCE_DRAFT_INVALID',
+    'CONTINUITY_TARGET_CHAPTER_INVALID',
   ],
   // 模型输出不合角色提议或定稿角色状态的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住；
   // 定稿后处理把码记在步骤上并原样显示，供反馈定位。没有现成文案能告诉作者除重试以外还能做什么。
@@ -615,6 +622,15 @@ const UNREGISTERED: Record<string, readonly string[]> = {
   ],
   // 不经工作流失败面板：界面自己识别并给出专门提示、主进程内部捕获，或只在启动装配与关闭收尾时抛出。
   handledElsewhere: [
+    // 定稿连续性摘要与角色状态候选只经定稿生成 IPC 提交（#474 B5）：generation-controller 不放行 CONTINUITY_ 前缀，
+    // 记下诊断日志后统一成 GENERATION_REQUEST_FAILED；原码只进日志。
+    'CONTINUITY_CHARACTER_STATE_CANDIDATES_INVALID',
+    'CONTINUITY_EVIDENCE_NOT_IN_SOURCE',
+    'CONTINUITY_GENERATION_STALE',
+    'CONTINUITY_PROJECTION_INVALID',
+    'CONTINUITY_PROJECTION_MISSING',
+    'CONTINUITY_ROSTER_NAME_CONFLICT',
+    'CONTINUITY_SOURCE_STALE',
     'GENERATION_BLUEPRINTS_CLEARED',
     'GENERATION_INPUT_CAPACITY_EXCEEDED',
     'GENERATION_KNOWLEDGE_SPACE_NOT_MATCHED',

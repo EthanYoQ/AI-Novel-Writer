@@ -87,9 +87,9 @@ function stateSnapshot(row: Record<string, unknown>, field: CharacterStateTextFi
 }
 
 function normalizedFacts(value: unknown, chapterNumber: number): FinalizedContinuityFact[] {
-  if (!Array.isArray(value) || value.length > 12) throw new Error('连续性事实参数无效')
+  if (!Array.isArray(value) || value.length > 12) throw new Error('CONTINUITY_FACTS_INVALID')
   return value.map((input) => {
-    if (!input || typeof input !== 'object') throw new Error('连续性事实参数无效')
+    if (!input || typeof input !== 'object') throw new Error('CONTINUITY_FACTS_INVALID')
     const fact = input as Record<string, unknown>
     const entities = Array.isArray(fact.entities)
       ? fact.entities.map(entity => typeof entity === 'string' ? entity.trim() : '')
@@ -103,7 +103,7 @@ function normalizedFacts(value: unknown, chapterNumber: number): FinalizedContin
       || entities.some(entity => !entity || entity.length > 80)
       || !statement
       || !evidence
-    ) throw new Error('连续性事实参数无效')
+    ) throw new Error('CONTINUITY_FACTS_INVALID')
     return {
       category: fact.category as FinalizedContinuityFact['category'],
       entities: [...new Set(entities)],
@@ -113,7 +113,7 @@ function normalizedFacts(value: unknown, chapterNumber: number): FinalizedContin
       ...(Array.isArray(fact.characterRefs) ? { characterRefs: fact.characterRefs.map(value => {
         const ref = value as FinalizedCharacterReference
         if (!ref || typeof ref.characterId !== 'string' || !ref.characterId.trim() || typeof ref.displayNameSnapshot !== 'string'
-          || !entities.includes(ref.displayNameSnapshot)) throw new Error('连续性角色身份参数无效')
+          || !entities.includes(ref.displayNameSnapshot)) throw new Error('CONTINUITY_CHARACTER_REF_INVALID')
         return { characterId: ref.characterId, displayNameSnapshot: ref.displayNameSnapshot }
       }) } : {}),
     }
@@ -215,7 +215,7 @@ function normalizeCharacterStateCandidates(
   value: unknown,
   source?: FinalizedSourceIdentity,
 ): FinalizedCharacterStateCandidate[] {
-  if (!Array.isArray(value) || value.length > 1_000) throw new Error('角色状态候选参数无效')
+  if (!Array.isArray(value) || value.length > 1_000) throw new Error('CONTINUITY_CHARACTER_STATE_CANDIDATES_INVALID')
   if (hasCharacterIdentitySchema(db)) {
     const frozen = source && readFrozenCharacterSnapshot(db, source)
     if (!frozen) throw new Error('FINALIZED_CHARACTER_SNAPSHOT_REQUIRED')
@@ -236,16 +236,16 @@ function normalizeCharacterStateCandidates(
   const byIdentity = new Map<string, string>()
   for (const { name } of db.prepare('SELECT name FROM characters').all() as Array<{ name: string }>) {
     const identity = characterRosterIdentityKey(name)
-    if (!identity || byIdentity.has(identity)) throw new Error('角色名单存在同名冲突')
+    if (!identity || byIdentity.has(identity)) throw new Error('CONTINUITY_ROSTER_NAME_CONFLICT')
     byIdentity.set(identity, name)
   }
   const normalized = new Map<string, FinalizedCharacterStateCandidate>()
   for (const input of value as FinalizedCharacterStateCandidate[]) {
-    if (!input || typeof input !== 'object') throw new Error('角色状态候选参数无效')
+    if (!input || typeof input !== 'object') throw new Error('CONTINUITY_CHARACTER_STATE_CANDIDATES_INVALID')
     const characterName = typeof input.characterName === 'string' ? input.characterName.trim() : ''
     const storedName = byIdentity.get(characterRosterIdentityKey(characterName))
     if (!storedName || !CHARACTER_STATE_FIELDS.has(String(input.field)) || typeof input.value !== 'string') {
-      throw new Error('角色状态候选参数无效')
+      throw new Error('CONTINUITY_CHARACTER_STATE_CANDIDATES_INVALID')
     }
     const candidate = {
       characterName: storedName,
@@ -383,7 +383,7 @@ export function invalidateContinuityProjectionFrom(
   chapterNumber: number,
 ): void {
   if (!Number.isSafeInteger(chapterNumber) || chapterNumber < 1) {
-    throw new Error('连续性投影失效章节无效')
+    throw new Error('CONTINUITY_INVALIDATION_CHAPTER_INVALID')
   }
   db.prepare(`
     UPDATE continuity_projection_meta
@@ -422,7 +422,7 @@ export class SummaryRepository {
   /** originProjectId must come from readPortableCurrentAuthority for this project; it only lets origin-epoch derived fields advance. */
   static commitFinalizedCharacterStates(context: FinalizedCharacterContext, response: FinalizedCharacterStateResponse, database = getProjectDb(),
     originProjectId?: string): FinalizedCharacterStateCommitReceipt {
-    if (!database) throw new Error('项目数据库未打开')
+    if (!database) throw new Error('PROJECT_NOT_OPEN')
     const db = database
     return db.transaction(() => {
       const current = SummaryRepository.readFinalizedCharacterContext(context.source.draftId, context, db)
@@ -566,7 +566,7 @@ export class SummaryRepository {
   }
 
   static saveFinalizedContinuity(input: SaveFinalizedContinuityRequest, db = getProjectDb()): void {
-    if (!db) throw new Error('项目数据库未打开')
+    if (!db) throw new Error('PROJECT_NOT_OPEN')
     const chapterNotes = input.chapterNotes.trim()
     const normalized = normalizedFacts(input.facts ?? [], input.chapterNumber)
     const facts = JSON.stringify(normalized)
@@ -578,15 +578,15 @@ export class SummaryRepository {
       || !Number.isSafeInteger(input.projectionGeneration)
       || input.projectionGeneration < 0
       || !chapterNotes
-    ) throw new Error('连续性投影参数无效')
+    ) throw new Error('CONTINUITY_PROJECTION_INVALID')
 
     db.transaction(() => {
       const snapshot = readFinalizedSourceFromDb(db, input.draftId)
       if (!snapshot || !sameSource(snapshot.source, input.source) || input.chapterNumber !== snapshot.source.chapterNumber) {
-        throw new Error('连续性投影来源已失效，已拒绝过期结果')
+        throw new Error('CONTINUITY_SOURCE_STALE')
       }
       if (normalized.some(fact => !snapshot.content.includes(fact.evidence))) {
-        throw new Error('连续性事实引文无法在绑定定稿正文中精确定位')
+        throw new Error('CONTINUITY_EVIDENCE_NOT_IN_SOURCE')
       }
       if (hasCharacterIdentitySchema(db)) {
         const identities = readFrozenCharacterSnapshot(db, snapshot.source)
@@ -608,7 +608,7 @@ export class SummaryRepository {
         SELECT generation FROM continuity_projection_meta WHERE id = 'main'
       `).get() as { generation: number }).generation
       if (input.projectionGeneration !== generation) {
-        throw new Error('连续性投影失效水位已推进，已拒绝过期结果')
+        throw new Error('CONTINUITY_GENERATION_STALE')
       }
       const updated = db.prepare(`
         UPDATE summary_snapshots
@@ -645,7 +645,7 @@ export class SummaryRepository {
   }
 
   static saveFinalizedCharacterStateCandidates(input: SaveFinalizedCharacterStateCandidatesRequest, db = getProjectDb()): void {
-    if (!db) throw new Error('项目数据库未打开')
+    if (!db) throw new Error('PROJECT_NOT_OPEN')
     if (
       !Number.isSafeInteger(input.draftId)
       || input.draftId < 1
@@ -653,15 +653,15 @@ export class SummaryRepository {
       || input.chapterNumber < 1
       || !Number.isSafeInteger(input.projectionGeneration)
       || input.projectionGeneration < 0
-    ) throw new Error('角色状态候选参数无效')
+    ) throw new Error('CONTINUITY_CHARACTER_STATE_CANDIDATES_INVALID')
 
     db.transaction(() => {
       const snapshot = readFinalizedSourceFromDb(db, input.draftId)
       if (!snapshot || !sameSource(snapshot.source, input.source) || input.chapterNumber !== snapshot.source.chapterNumber) {
-        throw new Error('角色状态候选来源已失效，已拒绝过期结果')
+        throw new Error('CONTINUITY_SOURCE_STALE')
       }
       if (input.projectionGeneration !== snapshot.projectionGeneration) {
-        throw new Error('连续性投影失效水位已推进，已拒绝过期结果')
+        throw new Error('CONTINUITY_GENERATION_STALE')
       }
       const row = db.prepare(`
         SELECT character_state_candidates AS candidates,
@@ -681,7 +681,7 @@ export class SummaryRepository {
         || row.finalizationId !== input.source.finalizationId
         || row.contentHash !== input.source.contentHash
         || row.projectionGeneration !== input.projectionGeneration
-      ) throw new Error('角色状态候选缺少同代定稿连续性投影')
+      ) throw new Error('CONTINUITY_PROJECTION_MISSING')
 
       const store = parseCharacterStateCandidateStore(row.candidates)
       const merged = new Map<string, FinalizedCharacterStateCandidate>()
@@ -704,7 +704,7 @@ export class SummaryRepository {
   static listFinalizedContinuityBefore(chapterNumber: number, db = getProjectDb()): FinalizedContinuityProjection[] {
     if (!db) return []
     if (!Number.isSafeInteger(chapterNumber) || chapterNumber < 1) {
-      throw new Error('连续性投影目标章节无效')
+      throw new Error('CONTINUITY_TARGET_CHAPTER_INVALID')
     }
     const rows = db.prepare(`
       SELECT summary_snapshots.draft_id AS draftId,
@@ -825,7 +825,7 @@ export class SummaryRepository {
   static readFinalizedSource(draftId: number): FinalizedSourceReadResult {
     const db = getProjectDb()
     if (!db) return { status: 'invalid' }
-    if (!Number.isSafeInteger(draftId) || draftId < 1) throw new Error('定稿来源身份无效')
+    if (!Number.isSafeInteger(draftId) || draftId < 1) throw new Error('CONTINUITY_SOURCE_DRAFT_INVALID')
     const row = db.prepare(`
       SELECT drafts.id AS draftId, drafts.chapter_number AS chapterNumber, drafts.status,
              contents.body AS content,

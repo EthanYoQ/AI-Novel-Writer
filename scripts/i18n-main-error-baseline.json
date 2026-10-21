@@ -1,6 +1,6 @@
 {
   "description": "electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。",
-  "total": 321,
+  "total": 299,
   "files": {
     "electron/controllers/import-controller.ts": {
       "registerImportController": 2
@@ -116,16 +116,6 @@
       "normalizedFileIdentity": 1,
       "normalizedLocation": 1,
       "requireSecret": 1
-    },
-    "electron/repositories/summary-repository.ts": {
-      "invalidateContinuityProjectionFrom": 1,
-      "normalizeCharacterStateCandidates": 4,
-      "normalizedFacts": 4,
-      "SummaryRepository.commitFinalizedCharacterStates": 1,
-      "SummaryRepository.listFinalizedContinuityBefore": 1,
-      "SummaryRepository.readFinalizedSource": 1,
-      "SummaryRepository.saveFinalizedCharacterStateCandidates": 5,
-      "SummaryRepository.saveFinalizedContinuity": 5
     },
     "electron/services/import-inspection-store.ts": {
       "ImportInspectionStore.consume": 1,
