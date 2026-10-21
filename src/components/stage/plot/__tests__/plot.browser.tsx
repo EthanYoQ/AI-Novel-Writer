@@ -68,6 +68,10 @@ beforeEach(() => {
     if (channel === 'db:narrative-thread-plan-delete') { threads = threads.filter(item => item.id !== args[0]); return { success: true } }
     if (channel === 'db:narrative-thread-event-confirm') {
       const input = args[0] as { planId: number; draftId: number; type: 'planted'; evidence: string; reason: string }
+      if (input.evidence === '定稿里没有这句') {
+        // 可写的 db 通道由主进程包装层把异常折成 { success: false, error: String(error) }。
+        return { success: false, error: 'Error: NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE' }
+      }
       threads = threads.map(item => item.id === input.planId
         ? { ...item, status: 'planted', events: [...item.events, { id: 1, planId: input.planId, draftId: input.draftId, type: input.type, evidence: input.evidence, reason: input.reason, chapterNumber: 1, chapterTitle: '灰色的信', createdAt: '' }] }
         : item)
@@ -287,5 +291,28 @@ describe('剧情与伏笔', () => {
     await click('记入线索')
     await vi.waitFor(() => expect(route()).toEqual(['done', 'none', 'todo']))
     expect(called('db:narrative-thread-event-confirm')[0][1]).toMatchObject({ planId: 5, draftId: 7, type: 'planted', evidence: '信封上没有邮戳' })
+  })
+
+  it.each([
+    ['zh-CN', '「灰色的信是谁寄的」的更多操作', '记录定稿里的变化', '定稿里的原文', '理由', '记入线索', '请粘贴所选定稿章节中实际出现的短原文。'],
+    ['en-US', 'More actions for “灰色的信是谁寄的”', 'Record a change from a final', 'Quote from the final', 'Why', 'Record', 'Paste a short excerpt that appears in the selected finalized chapter.'],
+  ] as const)('%s：主进程拒绝不在定稿正文里的短证据时，在表单里按界面语言说明', async (locale, more, open, quoteLabel, reasonLabel, record, hint) => {
+    useLocaleStore.setState({ locale })
+    await render('plans')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('灰色的信是谁寄的'))
+    await click(more)
+    await click(open)
+    const setValue = async (label: string, value: string) => {
+      const input = [...document.querySelectorAll('label')].find(node => node.textContent?.startsWith(label))!.querySelector('input')!
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      await act(async () => { setter.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })) })
+    }
+    await setValue(quoteLabel, '定稿里没有这句')
+    await setValue(reasonLabel, '寄信人就在附近')
+    await click(record)
+    await vi.waitFor(() => expect(document.querySelector('.stage-plot-error[role="alert"]')?.textContent).toBe(hint))
+    expect(document.body.textContent).not.toContain('NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE')
+    const quote = [...document.querySelectorAll('label')].find(node => node.textContent?.startsWith(quoteLabel))!.querySelector('input')!
+    expect(quote.value).toBe('定稿里没有这句')
   })
 })
