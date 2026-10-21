@@ -10,6 +10,7 @@ import { useDialogFocusReturn } from '../ui/focus-return'
 import { keepToastStackClickable } from '../ui/ToastStack'
 import { usePaperInkRoot } from '../ui/use-paper-ink-root'
 import { useLocaleStore } from '../../stores/locale-store'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import { useProjectStore } from '../../stores/project-store'
 import {
   captureProjectSession,
@@ -111,7 +112,7 @@ function ClearProjectDataDialogContents({
       onClose()
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
-      await alertError(String(error), { title: text('清除失败', 'Clear failed') })
+      await alertError(displayedErrorMessage(useLocaleStore.getState().locale, error), { title: text('清除失败', 'Clear failed') })
       if (!isProjectSessionCurrent(projectSession)) return
       setClearingSession(null)
     }
