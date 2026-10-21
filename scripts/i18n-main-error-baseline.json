@@ -1,0 +1,344 @@
+{
+  "description": "electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。",
+  "total": 630,
+  "files": {
+    "electron/controllers/config-controller.ts": {
+      "registerConfigController": 1
+    },
+    "electron/controllers/db-controller.ts": {
+      "registerDatabaseController": 7
+    },
+    "electron/controllers/finalization-controller.ts": {
+      "registerFinalizationController": 4
+    },
+    "electron/controllers/fs-controller.ts": {
+      "registerFilesystemHandler": 1
+    },
+    "electron/controllers/import-controller.ts": {
+      "registerImportController": 2
+    },
+    "electron/controllers/llm-controller.ts": {
+      "loadGlobalConfigForUpdate": 1,
+      "loadModelConfigsForUpdate": 1,
+      "registerLLMController": 5
+    },
+    "electron/controllers/project-archive-controller.ts": {
+      "registerProjectArchiveController": 2
+    },
+    "electron/controllers/project-controller.ts": {
+      "assertRequiredProjectSession": 3,
+      "projectRootSelectionFailure": 6,
+      "registerProjectController": 13,
+      "restoreProjectRollbackBoundary": 2,
+      "restoreTrustedProjectDatabase": 2
+    },
+    "electron/embedding.ts": {
+      "embeddingHttpError": 1,
+      "embedOpenAI": 1
+    },
+    "electron/knowledge-base.ts": {
+      "assertReferenceImportAuthority": 1,
+      "backfillVectors": 3,
+      "currentFlightAuthority": 2,
+      "ensureMigration": 1,
+      "importDocument": 2,
+      "importReferenceText": 1,
+      "importTextInternal": 1,
+      "performReferenceTextImport": 5,
+      "reindexDocumentCopy": 2,
+      "runReferenceImportSingleFlight": 1,
+      "saveDocumentCopy": 4
+    },
+    "electron/llm/gemini-provider.ts": {
+      "assertVisibleStreamPayload": 2,
+      "GeminiProvider.generate": 2
+    },
+    "electron/llm/generation-parameter-policy.ts": {
+      "validateKimiTemperature": 1
+    },
+    "electron/llm/openai-provider.ts": {
+      "OpenAIProvider.generate": 2,
+      "OpenAIProvider.generateStream": 1
+    },
+    "electron/mcp/mcp-ipc-bridge.ts": {
+      "registerMCPHandlers": 2
+    },
+    "electron/mcp/mcp-manager.ts": {
+      "MCPManagerImpl.callTool": 1,
+      "MCPManagerImpl.connect": 3,
+      "MCPManagerImpl.connectStdio": 2,
+      "MCPManagerImpl.disconnect": 1,
+      "MCPManagerImpl.loadConfig": 5,
+      "MCPManagerImpl.sendRequest": 1
+    },
+    "electron/migrations/baseline-schema.ts": {
+      "initializeLegacyBaselineSchema": 3
+    },
+    "electron/repositories/blueprint-repository.ts": {
+      "assertAuthoritativeCharacterSyncCompletion": 1,
+      "assertExactRange": 5,
+      "authoritativeCharacterSyncCompletionReceipt": 3,
+      "BlueprintRepository.commitRange": 4,
+      "BlueprintRepository.completeCharacterSyncOperation": 4,
+      "BlueprintRepository.getCharacterSyncOperation": 1,
+      "BlueprintRepository.getCommittedRangeOperation": 2,
+      "parseCharacterSyncInput": 2,
+      "parseCompletionReceipt": 2,
+      "readCharacterSyncInput": 2,
+      "requireProjectDb": 1,
+      "rowToCharacterSyncOperation": 2
+    },
+    "electron/repositories/chapter-deletion-repository.ts": {
+      "ChapterDeletionRepository.begin": 2,
+      "ChapterDeletionRepository.confirmLegacyKnowledgeAbsent": 7,
+      "ChapterDeletionRepository.markProjection": 1,
+      "ChapterDeletionRepository.startAttempt": 1,
+      "refreshAggregateStatus": 1,
+      "requireDatabase": 1,
+      "requireFinalizedTarget": 3
+    },
+    "electron/repositories/character-repository.ts": {
+      "CharacterRepository.saveAll": 10
+    },
+    "electron/repositories/character-roster-repository.ts": {
+      "assertCurrentFinalizedSource": 1,
+      "assertReadBack": 2,
+      "assertRelationshipClosure": 3,
+      "CharacterRosterRepository.commit": 12,
+      "mergeDerivedCurrentState": 1,
+      "mergeIncrementalEntriesWithExisting": 4,
+      "normalizeEntry": 4,
+      "normalizeFieldProvenance": 3,
+      "normalizeFinalizedSource": 2,
+      "normalizeRelationships": 6,
+      "normalizeRenames": 6,
+      "normalizeRequest": 11,
+      "normalizeState": 3,
+      "readMeta": 1,
+      "requiredDb": 1,
+      "requiredText": 1,
+      "resolveManualEntries": 2,
+      "updateBlueprintReferencesForManualEdit": 2,
+      "validateLegacyRosterCandidate": 1
+    },
+    "electron/repositories/consistency-exemption-repository.ts": {
+      "ConsistencyExemptionRepository.revoke": 1,
+      "ConsistencyExemptionRepository.save": 1,
+      "requireText": 1
+    },
+    "electron/repositories/content-repository.ts": {
+      "ContentRepository.create": 1
+    },
+    "electron/repositories/draft-repository.ts": {
+      "DraftRepository.clearAll": 1,
+      "DraftRepository.create": 1,
+      "DraftRepository.delete": 2,
+      "DraftRepository.updateContent": 1,
+      "DraftRepository.updateStatus": 2
+    },
+    "electron/repositories/finalization-repository.ts": {
+      "FinalizationRepository.commit": 4,
+      "FinalizationRepository.linkKnowledgeDocument": 4,
+      "FinalizationRepository.markPublicationPending": 2,
+      "FinalizationRepository.markPublished": 2,
+      "requireDatabase": 1,
+      "selectAuthoritativeExportRows": 7
+    },
+    "electron/repositories/finalized-draft-import-repository.ts": {
+      "authorityRows": 1,
+      "FinalizedDraftImportRepository.commit": 5,
+      "FinalizedDraftImportRepository.getCommittedOperation": 1,
+      "normalizeChapters": 6,
+      "parseStoredReceipt": 3,
+      "requireNonEmptyOperationId": 1,
+      "verifyStoredFacts": 4
+    },
+    "electron/repositories/import-global-facts-repository.ts": {
+      "assertCurrentReceipt": 3,
+      "coreSnapshot": 1,
+      "ensureLedger": 1,
+      "ImportGlobalFactsRepository.commit": 6,
+      "ImportGlobalFactsRepository.getCommittedOperation": 2,
+      "ImportGlobalFactsRepository.readHistoricalCommittedOperation": 2,
+      "normalizedRequest": 10,
+      "parseReceipt": 1
+    },
+    "electron/repositories/import-run-repository.ts": {
+      "applyBatchCheckpoint": 2,
+      "assertAuthorEffectRunBinding": 1,
+      "assertCheckpointCanApply": 7,
+      "assertExecutionAuthority": 1,
+      "assertFrozenChapterSnapshot": 1,
+      "assertKnownEffectHistory": 1,
+      "assertStageCheckpointComplete": 5,
+      "authorCheckpointChapterNumber": 2,
+      "canonicalPayload": 2,
+      "checkpointChapterNumbers": 5,
+      "checkpointRange": 1,
+      "completedBatches": 3,
+      "corruptedReceipt": 1,
+      "db": 1,
+      "discardProvisionalParsingRun": 1,
+      "ImportRunRepository.advanceStage": 3,
+      "ImportRunRepository.beginParsing": 12,
+      "ImportRunRepository.cancelAtBoundary": 1,
+      "ImportRunRepository.commitEffectReceipt": 5,
+      "ImportRunRepository.commitParsedSource": 6,
+      "ImportRunRepository.commitReferenceImportReceipt": 3,
+      "ImportRunRepository.complete": 2,
+      "ImportRunRepository.completeBatch": 1,
+      "ImportRunRepository.fail": 3,
+      "ImportRunRepository.failParsedSource": 3,
+      "ImportRunRepository.finalizeParsing": 3,
+      "ImportRunRepository.prepare": 11,
+      "ImportRunRepository.prepareEffectReceipt": 2,
+      "ImportRunRepository.requestCancel": 1,
+      "ImportRunRepository.resolveReferenceImportAuthority": 2,
+      "ImportRunRepository.restart": 5,
+      "ImportRunRepository.startOrResume": 5,
+      "normalizeChapters": 5,
+      "normalizeDisplay": 3,
+      "normalizeSourceFingerprints": 1,
+      "normalizeSourceIds": 2,
+      "recordPreparedEffect": 1,
+      "validateEffectStage": 1
+    },
+    "electron/repositories/import-source-identity-repository.ts": {
+      "database": 1,
+      "ImportSourceIdentityRepository.encodeSources": 2,
+      "ImportSourceIdentityRepository.resolveEncodedSources": 3,
+      "legacySalt": 1,
+      "normalizedFileIdentity": 1,
+      "normalizedLocation": 1,
+      "requireSecret": 1
+    },
+    "electron/repositories/narrative-thread-repository.ts": {
+      "NarrativeThreadRepository.confirmEvent": 4,
+      "NarrativeThreadRepository.deletePlan": 1,
+      "NarrativeThreadRepository.updatePlan": 1,
+      "requireDb": 1,
+      "validatePlan": 2
+    },
+    "electron/repositories/plot-tree-repository.ts": {
+      "PlotTreeRepository.clear": 1,
+      "PlotTreeRepository.read": 1,
+      "PlotTreeRepository.save": 2,
+      "requireDb": 1
+    },
+    "electron/repositories/post-process-repository.ts": {
+      "PostProcessRepository.createRun": 1,
+      "PostProcessRepository.markStepFailed": 1,
+      "PostProcessRepository.markStepOk": 1
+    },
+    "electron/repositories/project-clear-repository.ts": {
+      "ProjectClearRepository.clearGeneratedData": 2
+    },
+    "electron/repositories/project-core-repository.ts": {
+      "ProjectCoreRepository.commitSynopsis": 1,
+      "ProjectCoreRepository.update": 2
+    },
+    "electron/repositories/recovery-candidate-repository.ts": {
+      "assertText": 1,
+      "RecoveryCandidateRepository.record": 5,
+      "RecoveryCandidateRepository.resolve": 3,
+      "RecoveryCandidateRepository.updatePending": 3,
+      "requireDb": 1,
+      "toCandidate": 1
+    },
+    "electron/repositories/review-repository.ts": {
+      "ReviewRepository.create": 1
+    },
+    "electron/repositories/revision-repository.ts": {
+      "RevisionRepository.create": 1,
+      "RevisionRepository.markDiscarded": 2,
+      "RevisionRepository.markMerged": 3,
+      "RevisionRepository.mergeIntoDraft": 12,
+      "RevisionRepository.replacePending": 1
+    },
+    "electron/repositories/summary-repository.ts": {
+      "invalidateContinuityProjectionFrom": 1,
+      "normalizeCharacterStateCandidates": 4,
+      "normalizedFacts": 4,
+      "SummaryRepository.commitFinalizedCharacterStates": 1,
+      "SummaryRepository.listFinalizedContinuityBefore": 1,
+      "SummaryRepository.readFinalizedSource": 1,
+      "SummaryRepository.saveFinalizedCharacterStateCandidates": 5,
+      "SummaryRepository.saveFinalizedContinuity": 5
+    },
+    "electron/services/chapter-deletion-service.ts": {
+      "ChapterDeletionService.delete": 1,
+      "ChapterDeletionService.resume": 1,
+      "ChapterDeletionService.retry": 1,
+      "frozenLegacyOperation": 1,
+      "legacyKnowledgeAuthorizationRequired": 1,
+      "removeKnowledgeDocument": 2
+    },
+    "electron/services/external-file-grant-service.ts": {
+      "assertSafeRelativePath": 3,
+      "ExternalFileGrantService.issue": 2,
+      "ExternalFileGrantService.issueDirectory": 1,
+      "ExternalFileGrantService.issueFile": 1,
+      "ExternalFileGrantService.issueNewChild": 2,
+      "ExternalFileGrantService.resolveDirectoryPath": 2,
+      "ExternalFileGrantService.resolveExactPath": 2,
+      "ExternalFileGrantService.resolveRequest": 7,
+      "normalizedRelativePath": 1
+    },
+    "electron/services/finalization-service.ts": {
+      "FinalizationService.finalize": 1,
+      "FinalizationService.retry": 1
+    },
+    "electron/services/import-inspection-store.ts": {
+      "ImportInspectionStore.consume": 1,
+      "ImportInspectionStore.create": 7,
+      "ImportInspectionStore.peek": 1
+    },
+    "electron/services/import-source-identity-secret.ts": {
+      "readValidSecret": 1
+    },
+    "electron/services/manuscript-publisher.ts": {
+      "containedDirectChild": 1,
+      "publishManuscript": 1,
+      "resolveManuscriptTarget": 2,
+      "resolveStoredManuscriptTarget": 1
+    },
+    "electron/services/model-execution-lease.ts": {
+      "ModelExecutionLeaseRegistry.begin": 1,
+      "ModelExecutionLeaseRegistry.resolve": 2,
+      "normalizeEndpoint": 1,
+      "resolveModelExecutionCapabilityEvidence": 1
+    },
+    "electron/services/project-access.ts": {
+      "ProjectAccessService.assertCurrentProjectContext": 3,
+      "ProjectAccessService.assertCurrentSession": 1,
+      "ProjectAccessService.assertProjectChildPath": 1,
+      "ProjectAccessService.authorizeDeletion": 2,
+      "ProjectAccessService.canonicalExistingDirectory": 3,
+      "ProjectAccessService.canonicalProjectRoot": 2,
+      "ProjectAccessService.createProject": 2,
+      "ProjectAccessService.probeExistingProject": 4
+    },
+    "electron/utils/project-context.ts": {
+      "assertContainedPath": 1,
+      "assertExpectedProjectPath": 1,
+      "assertRequiredExpectedProjectPath": 1,
+      "canonicalWritableTarget": 1
+    },
+    "electron/vector-store.ts": {
+      "activatePlannedEmbeddingSpaceInternal": 3,
+      "addChunksInternal": 2,
+      "createLegacyMigrationPlan": 12,
+      "createOwnedEmbeddingTable": 1,
+      "migrateFromJSONOnce": 5,
+      "planEmbeddingRebuild": 1,
+      "preflightLegacyMigrationTarget": 4,
+      "readLegacyMigrationJournal": 2,
+      "readRegistry": 1,
+      "rebuildPlannedEmbeddingSpaceInternal": 9,
+      "removeEmptyUnregisteredTableDirectory": 1,
+      "updateChunkVectorsInternal": 4,
+      "validateRegistry": 4,
+      "validateVectorsForChunks": 6
+    }
+  }
+}

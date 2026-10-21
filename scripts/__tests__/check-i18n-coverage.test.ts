@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -12,9 +12,9 @@ function writeFixture(root: string, relativePath: string, content: string) {
   writeFileSync(target, content, 'utf8')
 }
 
-function runChecker(root: string): { status: number; output: string } {
+function runChecker(root: string, args: string[] = []): { status: number; output: string } {
   try {
-    const output = execFileSync(process.execPath, [checker], {
+    const output = execFileSync(process.execPath, [checker, ...args], {
       cwd: root,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -545,5 +545,120 @@ describe('i18n coverage boundary scanner', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('main-process Chinese-only error ratchet (#474)', () => {
+  const baselinePath = 'scripts/i18n-main-error-baseline.json'
+  const service = 'electron/services/session.ts'
+  const twoSites = `
+    export class SessionService {
+      open(id: string) {
+        if (!id) throw new Error('缺少会话')
+        if (id === 'stale') throw new Error('会话已失效')
+        return id
+      }
+    }
+  `
+  const readBaseline = (root: string) =>
+    JSON.parse(readFileSync(join(root, baselinePath), 'utf8')).files as Record<string, Record<string, number>>
+
+  function withRoot(run: (root: string) => void) {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-main-'))
+    try {
+      run(root)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  it('records existing sites by file and function, then blocks a new one', () => {
+    withRoot((root) => {
+      writeFixture(root, service, twoSites)
+      expect(runChecker(root).status).toBe(1)
+      expect(runChecker(root, ['--update-baseline']).status).toBe(0)
+      expect(readBaseline(root)).toEqual({ [service]: { 'SessionService.open': 2 } })
+      expect(runChecker(root).status).toBe(0)
+
+      writeFixture(root, service, twoSites.replace('return id', "if (id === 'gone') throw new Error('会话不存在')\n        return id"))
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain("[main-error] new Error('会话不存在')")
+      expect(result.output).toContain('SessionService.open: 3 Chinese-only main-process error(s), baseline allows 2')
+    })
+  })
+
+  it('fails when a site is fixed but the baseline was not tightened, and refuses to raise it', () => {
+    withRoot((root) => {
+      writeFixture(root, service, twoSites)
+      runChecker(root, ['--update-baseline'])
+      writeFixture(root, service, twoSites.replace("throw new Error('会话已失效')", "throw new Error('PROJECT_SESSION_STALE')"))
+
+      const stale = runChecker(root)
+
+      expect(stale.status).toBe(1)
+      expect(stale.output).toContain('[main-error-baseline-stale]')
+      expect(stale.output).toContain('node scripts/check-i18n-coverage.mjs --update-baseline')
+      expect(runChecker(root, ['--update-baseline']).status).toBe(0)
+      expect(readBaseline(root)).toEqual({ [service]: { 'SessionService.open': 1 } })
+      expect(runChecker(root).status).toBe(0)
+
+      writeFixture(root, service, twoSites)
+      const raised = runChecker(root, ['--update-baseline'])
+      expect(raised.status).toBe(1)
+      expect(raised.output).toContain('Refusing to raise the main-process error baseline')
+      expect(readBaseline(root)).toEqual({ [service]: { 'SessionService.open': 1 } })
+    })
+  })
+
+  it('does not report sites that only moved to other lines', () => {
+    withRoot((root) => {
+      writeFixture(root, service, twoSites)
+      runChecker(root, ['--update-baseline'])
+      writeFixture(root, service, `
+        import path from 'node:path'
+
+        export const sessionRoot = (value: string) => path.resolve(value)
+        ${twoSites}
+      `)
+
+      expect(runChecker(root).status).toBe(0)
+    })
+  })
+
+  it('counts every kind the inventory counts and skips localized, exempt and test code', () => {
+    withRoot((root) => {
+      writeFixture(root, 'electron/controllers/demo-controller.ts', `
+        import { dialog, ipcMain } from 'electron'
+        const mainText = (_locale: unknown, zh: string, en: string) => zh || en
+        export function registerDemoController(locale: string) {
+          ipcMain.handle('demo:run', async () => {
+            await dialog.showMessageBox({ buttons: ['取消', '开始'] })
+            const failure = new TypeError('构造后交出')
+            return { success: false, error: '保存失败', warning: mainText(undefined, '已保存', 'Saved'), failure }
+          })
+          ipcMain.handle('demo:locale', async () => ({
+            error: locale === 'en-US' ? 'Save failed' : '保存失败',
+          }))
+          return new Promise((_resolve, reject) => reject(new Error('超时')))
+        }
+        // i18n-exempt: 只在启动装配时抛出，进程直接退出，不进界面
+        export function assertDemoRegistered(ok: boolean) {
+          if (!ok) throw new Error('演示控制器未注册')
+        }
+        export function logOnly() {
+          console.error(new Error('只进日志'))
+        }
+      `)
+      writeFixture(root, 'electron/controllers/__tests__/demo-controller.test.ts', "throw new Error('测试')")
+      writeFixture(root, 'electron/controllers/demo-controller.spec.ts', "throw new Error('测试')")
+
+      runChecker(root, ['--update-baseline'])
+
+      expect(readBaseline(root)).toEqual({
+        'electron/controllers/demo-controller.ts': { registerDemoController: 4 },
+      })
+    })
   })
 })

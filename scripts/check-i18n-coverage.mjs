@@ -535,6 +535,147 @@ function inspectThrownErrors(violations, root, file, sourceFile, mode, allowErro
   visit(sourceFile)
 }
 
+/**
+ * 主进程（electron/）只有中文的报错（#474）。现存的按「文件 → 所在函数 → 处数」记在基线里，不记行号：
+ * 处数超过基线（新增）失败；低于基线（已修）也失败，要求运行 --update-baseline 把基线收紧，基线只减不增。
+ * 作者看不到的写 `// i18n-exempt: <理由>`，规则与渲染层相同。
+ */
+export const MAIN_ERROR_BASELINE_PATH = 'scripts/i18n-main-error-baseline.json'
+const MAIN_ERROR_ROOT = 'electron'
+const mainErrorProperties = new Set(['error', 'warning', 'reason', 'errorMessage'])
+const mainLocalizationCallees = new Set([...localizationCallees, 'mainT', 'importText'])
+
+function isMainLocalized(node, sourceFile) {
+  if (ts.isCallExpression(node)) {
+    const callee = callName(node, sourceFile)
+    if (mainLocalizationCallees.has(callee) || callee.endsWith('.text')) return true
+  }
+  // locale === 'en-US' ? 英文 : 中文 这类按语言的三元。
+  return ts.isConditionalExpression(node) && /locale|en-US|zh-CN/iu.test(node.condition.getText(sourceFile))
+}
+
+function mainContainsHan(node, sourceFile) {
+  if (isMainLocalized(node, sourceFile)) return false
+  if (literalContainsHan(node)) return true
+  let found = false
+  ts.forEachChild(node, child => {
+    if (!found && mainContainsHan(child, sourceFile)) found = true
+  })
+  return found
+}
+
+const isFunctionWithBody = node => ts.isFunctionLike(node) && Boolean(node.body)
+
+function ownFunctionName(fn) {
+  if (fn.name) return fn.name.getText()
+  const parent = fn.parent
+  if (parent && (ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent) || ts.isPropertyDeclaration(parent)) && parent.name) {
+    return parent.name.getText()
+  }
+  return '<anonymous>'
+}
+
+/** 报错所在的最外层具名函数（类方法带类名）；IPC handler 这类回调归到注册它的函数里，模块顶层记为 <module>。 */
+function mainErrorOwner(node) {
+  let owner
+  for (let current = node.parent; current; current = current.parent) {
+    if (isFunctionWithBody(current) && (!owner || ts.isSourceFile(current.parent) || ts.isClassDeclaration(current.parent) || ts.isVariableDeclaration(current.parent))) {
+      owner = ownFunctionName(current)
+    }
+    if (ts.isClassDeclaration(current) && current.name && owner) return `${current.name.text}.${owner}`
+  }
+  return owner ?? '<module>'
+}
+
+function insideConsoleCall(node, sourceFile) {
+  for (let current = node.parent; current && !isFunctionWithBody(current); current = current.parent) {
+    if (ts.isCallExpression(current) && callName(current, sourceFile).startsWith('console.')) return true
+  }
+  return false
+}
+
+/** 与 #474 盘点脚本同一口径：throw、reject(...)、dialog.show*、单独构造的 new XxxError(...) 与 error/warning/reason/errorMessage 属性。 */
+function collectMainErrorSites(root, violations) {
+  const sites = []
+  for (const file of filesAt(path.join(root, MAIN_ERROR_ROOT))) {
+    const relativeFile = relativePath(root, file)
+    if (!/\.tsx?$/u.test(file) || testOrDeclarationFile.test(file) || relativeFile.split('/').includes('__tests__')) continue
+    const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const counted = new Set()
+    const record = (node, reported = node) => {
+      const exempt = exemption(sourceFile, node)
+      if (exempt === 'missing-reason') {
+        add(violations, root, file, sourceFile, node, reported.getText(sourceFile), 'exempt-without-reason')
+      } else if (!exempt) {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1
+        sites.push({ file: relativeFile, owner: mainErrorOwner(node), line, text: reported.getText(sourceFile).trim().replace(/\s+/g, ' ') })
+      }
+    }
+    const visit = (node) => {
+      if (ts.isThrowStatement(node) && node.expression && mainContainsHan(node.expression, sourceFile)) {
+        record(node, node.expression)
+        counted.add(node.expression)
+      } else if (ts.isCallExpression(node) && /(?:^|\.)reject$/u.test(callName(node, sourceFile)) && node.arguments.some(argument => mainContainsHan(argument, sourceFile))) {
+        record(node)
+        node.arguments.forEach(argument => counted.add(argument))
+      } else if (ts.isCallExpression(node) && /dialog\.show(?:ErrorBox|MessageBox|MessageBoxSync)$/u.test(callName(node, sourceFile)) && node.arguments.some(argument => mainContainsHan(argument, sourceFile))) {
+        record(node)
+      } else if (ts.isNewExpression(node) && /Error$/u.test(node.expression.getText(sourceFile)) && !counted.has(node)
+        && node.arguments?.some(argument => mainContainsHan(argument, sourceFile)) && !insideConsoleCall(node, sourceFile)) {
+        let parent = node.parent
+        while (parent && (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent))) parent = parent.parent
+        if (!(parent && ts.isThrowStatement(parent))) record(node)
+      } else if (ts.isPropertyAssignment(node) && mainErrorProperties.has(node.name.getText(sourceFile))
+        && mainContainsHan(node.initializer, sourceFile) && !insideConsoleCall(node, sourceFile)) {
+        record(node, node.initializer)
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sourceFile)
+  }
+  return sites
+}
+
+function countMainErrorSites(sites) {
+  const counts = {}
+  for (const site of [...sites].sort((left, right) => left.file.localeCompare(right.file) || left.owner.localeCompare(right.owner))) {
+    counts[site.file] ??= {}
+    counts[site.file][site.owner] = (counts[site.file][site.owner] ?? 0) + 1
+  }
+  return counts
+}
+
+function readMainErrorBaseline(root) {
+  const file = path.join(root, MAIN_ERROR_BASELINE_PATH)
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).files ?? {} : {}
+}
+
+const updateBaselineCommand = `node scripts/check-i18n-coverage.mjs --update-baseline`
+
+/** 对照基线：新增的逐处列出；减少或已清零的要求收紧基线。 */
+function compareMainErrorBaseline(sites, baseline, violations) {
+  const counts = countMainErrorSites(sites)
+  for (const [file, owners] of Object.entries(counts)) {
+    for (const [owner, count] of Object.entries(owners)) {
+      const allowed = baseline[file]?.[owner] ?? 0
+      if (count <= allowed) continue
+      for (const site of sites.filter(candidate => candidate.file === file && candidate.owner === owner)) {
+        violations.push(`${site.file}:${site.line} [main-error] ${site.text}`)
+      }
+      violations.push(`${file} ${owner}: ${count} Chinese-only main-process error(s), baseline allows ${allowed}. Throw a registered error code, localize with mainText, or add \`// i18n-exempt: <reason>\`.`)
+    }
+  }
+  for (const [file, owners] of Object.entries(baseline)) {
+    for (const [owner, allowed] of Object.entries(owners)) {
+      const count = counts[file]?.[owner] ?? 0
+      if (count < allowed) {
+        violations.push(`${file} ${owner}: baseline allows ${allowed} Chinese-only main-process error(s) but ${count} remain [main-error-baseline-stale]. Tighten the baseline: ${updateBaselineCommand}`)
+      }
+    }
+  }
+  return counts
+}
+
 export function collectI18nCoverageViolations(root = process.cwd()) {
   const violations = []
   const rendererRoots = [
@@ -583,7 +724,32 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
       file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
     inspectThrownErrors(violations, root, file, sourceFile, 'chinese', true)
   }
+  compareMainErrorBaseline(collectMainErrorSites(root, violations), readMainErrorBaseline(root), violations)
   return violations
+}
+
+/** 把基线收紧到当前处数。只减不增：有函数处数超过基线时拒绝写入。 */
+export function updateMainErrorBaseline(root = process.cwd()) {
+  const violations = []
+  const sites = collectMainErrorSites(root, violations)
+  const counts = compareMainErrorBaseline(sites, readMainErrorBaseline(root), violations)
+  const blocking = violations.filter(violation => !violation.includes('[main-error-baseline-stale]'))
+  // 没有基线文件时是首次建立：现存的全部记入。
+  if (blocking.length > 0 && fs.existsSync(path.join(root, MAIN_ERROR_BASELINE_PATH))) {
+    console.error(`Refusing to raise the main-process error baseline:\n${blocking.join('\n')}`)
+    return 1
+  }
+  const total = Object.values(counts).flatMap(owners => Object.values(owners)).reduce((sum, count) => sum + count, 0)
+  const baseline = {
+    description: 'electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。',
+    total,
+    files: counts,
+  }
+  const baselineFile = path.join(root, MAIN_ERROR_BASELINE_PATH)
+  fs.mkdirSync(path.dirname(baselineFile), { recursive: true })
+  fs.writeFileSync(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`, 'utf8')
+  console.log(`Main-process error baseline written: ${total} site(s) in ${Object.keys(counts).length} file(s)`)
+  return 0
 }
 
 export function runI18nCoverageCheck(root = process.cwd()) {
@@ -598,5 +764,5 @@ export function runI18nCoverageCheck(root = process.cwd()) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exitCode = runI18nCoverageCheck()
+  process.exitCode = process.argv.includes('--update-baseline') ? updateMainErrorBaseline() : runI18nCoverageCheck()
 }
