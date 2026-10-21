@@ -65,7 +65,7 @@ describe('PostProcessRepository retry receipts', () => {
     const runId = createCriticalRun()
 
     expect(() => PostProcessRepository.markStepOk(runId, 'missing_step'))
-      .toThrow('后处理步骤不存在')
+      .toThrow('POST_PROCESS_STEP_NOT_FOUND')
 
     expect(PostProcessRepository.getLatestRun('chapter_finalize', 'chapter-1')?.allCriticalPassed).toBe(false)
     expect(PostProcessRepository.getSteps(runId)).toEqual([
@@ -78,7 +78,7 @@ describe('PostProcessRepository retry receipts', () => {
     PostProcessRepository.markStepOk(runId, 'kb_import')
 
     expect(() => PostProcessRepository.markStepFailed(runId, 'missing_step', '安全错误'))
-      .toThrow('后处理步骤不存在')
+      .toThrow('POST_PROCESS_STEP_NOT_FOUND')
 
     expect(PostProcessRepository.getLatestRun('chapter_finalize', 'chapter-1')?.allCriticalPassed).toBe(true)
     expect(PostProcessRepository.getSteps(runId)).toEqual([
@@ -90,7 +90,7 @@ describe('PostProcessRepository retry receipts', () => {
     ['success receipt', () => PostProcessRepository.markStepOk('missing-run', 'kb_import')],
     ['failure receipt', () => PostProcessRepository.markStepFailed('missing-run', 'kb_import', '安全错误')],
   ])('rejects an unknown run for a %s with one redacted error', (_label, action) => {
-    expect(action).toThrowError(new Error('后处理步骤不存在或已失效'))
+    expect(action).toThrowError(new Error('POST_PROCESS_STEP_NOT_FOUND'))
     expect(PostProcessRepository.getLatestRun('chapter_finalize', 'chapter-1')).toBeNull()
   })
 

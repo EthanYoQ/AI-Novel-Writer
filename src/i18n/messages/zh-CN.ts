@@ -89,4 +89,9 @@ export const zhCN = {
   'error.revisionTargetChanged': '这一稿的正文或状态已经变化。请重新打开修订对比后再合并。',
   'error.revisionSourceMissing': '这份旧修订稿缺少生成时依据的原稿，仍可查看但不能合并。请重新生成修订稿。',
   'error.revisionSourceMismatch': '这一稿与修订稿生成时依据的原稿不一致，已拒绝合并。请重新生成修订稿。',
+  'error.recoveryCandidateAlreadyHandled': '这份恢复稿已经处理过（已采用或已丢弃），请刷新后再看。',
+  'error.recoveryCandidateSourceChanged': '这一章的蓝图或草稿在恢复稿生成后有了变化，已拒绝使用这份恢复稿。请重新生成这一章。',
+  'error.recoveryCandidateTextEmpty': '恢复稿没有可见正文，没有保存。请写入正文后再保存。',
+  'error.consistencyExemptionReasonInvalid': '请填写豁免原因（不超过 500 字）。',
+  'error.postProcessSourceChanged': '这一章的定稿在后处理开始前有了变化（可能被删除或重新定稿），后处理没有开始。请刷新后再看。',
 } satisfies Record<MessageKey, string>

@@ -47,7 +47,7 @@ export class PostProcessRepository {
         finalizedSource?: FinalizedSourceIdentity
     }): string {
         const db = getProjectDb()
-        if (!db) throw new Error('[PostProcessRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         const runId = randomUUID()
 
@@ -151,7 +151,7 @@ export class PostProcessRepository {
         WHERE run_id = ? AND step_key = ?
       `).run(runId, stepKey)
             if (result.changes !== 1) {
-                throw new Error('后处理步骤不存在或已失效')
+                throw new Error('POST_PROCESS_STEP_NOT_FOUND')
             }
 
             // 步骤收据和跑批汇总必须在同一事务里切换为成功。
@@ -172,7 +172,7 @@ export class PostProcessRepository {
         WHERE run_id = ? AND step_key = ?
       `).run(errorMsg, runId, stepKey)
             if (result.changes !== 1) {
-                throw new Error('后处理步骤不存在或已失效')
+                throw new Error('POST_PROCESS_STEP_NOT_FOUND')
             }
 
             // 全量重跑可能把已成功步骤重新置为失败，汇总不能保留旧 true。

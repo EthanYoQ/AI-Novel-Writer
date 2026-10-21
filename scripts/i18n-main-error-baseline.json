@@ -1,6 +1,6 @@
 {
   "description": "electron/ 里只有中文、尚未改成错误码或按语言文案的报错（#474）。按文件与所在函数计数，只减不增；由 node scripts/check-i18n-coverage.mjs --update-baseline 生成。",
-  "total": 348,
+  "total": 321,
   "files": {
     "electron/controllers/import-controller.ts": {
       "registerImportController": 2
@@ -48,18 +48,6 @@
       "MCPManagerImpl.disconnect": 1,
       "MCPManagerImpl.loadConfig": 5,
       "MCPManagerImpl.sendRequest": 1
-    },
-    "electron/repositories/consistency-exemption-repository.ts": {
-      "ConsistencyExemptionRepository.revoke": 1,
-      "ConsistencyExemptionRepository.save": 1,
-      "requireText": 1
-    },
-    "electron/repositories/draft-repository.ts": {
-      "DraftRepository.clearAll": 1,
-      "DraftRepository.create": 1,
-      "DraftRepository.delete": 2,
-      "DraftRepository.updateContent": 1,
-      "DraftRepository.updateStatus": 2
     },
     "electron/repositories/finalized-draft-import-repository.ts": {
       "authorityRows": 1,
@@ -128,19 +116,6 @@
       "normalizedFileIdentity": 1,
       "normalizedLocation": 1,
       "requireSecret": 1
-    },
-    "electron/repositories/post-process-repository.ts": {
-      "PostProcessRepository.createRun": 1,
-      "PostProcessRepository.markStepFailed": 1,
-      "PostProcessRepository.markStepOk": 1
-    },
-    "electron/repositories/recovery-candidate-repository.ts": {
-      "assertText": 1,
-      "RecoveryCandidateRepository.record": 5,
-      "RecoveryCandidateRepository.resolve": 3,
-      "RecoveryCandidateRepository.updatePending": 3,
-      "requireDb": 1,
-      "toCandidate": 1
     },
     "electron/repositories/summary-repository.ts": {
       "invalidateContinuityProjectionFrom": 1,

@@ -217,6 +217,12 @@ const ERROR_KEYS = {
   REVISION_TARGET_CHANGED: 'error.revisionTargetChanged',
   REVISION_SOURCE_MISSING: 'error.revisionSourceMissing',
   REVISION_SOURCE_MISMATCH: 'error.revisionSourceMismatch',
+  // 运行恢复稿、一致性豁免与定稿后处理（#474 B5）。
+  RECOVERY_CANDIDATE_NOT_PENDING: 'error.recoveryCandidateAlreadyHandled',
+  RECOVERY_CANDIDATE_SOURCE_CHANGED: 'error.recoveryCandidateSourceChanged',
+  RECOVERY_CANDIDATE_TEXT_EMPTY: 'error.recoveryCandidateTextEmpty',
+  CONSISTENCY_EXEMPTION_REASON_INVALID: 'error.consistencyExemptionReasonInvalid',
+  POST_PROCESS_FINALIZATION_SOURCE_CHANGED: 'error.postProcessSourceChanged',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

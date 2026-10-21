@@ -79,6 +79,9 @@ const COVERED_PREFIXES = [
   'FINALIZATION_SNAPSHOT_',
   'MANUSCRIPT_',
   'REVISION_',
+  'RECOVERY_CANDIDATE_',
+  'CONSISTENCY_EXEMPTION_',
+  'POST_PROCESS_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
@@ -531,6 +534,18 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     // #474 B5：修订稿与目标草稿的从属关系、审稿修订只能走原子合并入口。界面只合并这一稿自己的修订稿。
     'REVISION_MERGE_REQUIRED',
     'REVISION_TARGET_MISMATCH',
+    // #474 B5：恢复稿的请求身份、库内哈希与替代关系，一致性豁免的事实键，草稿定稿只能走原子定稿提交，
+    // 后处理运行必须绑定定稿收据。界面从运行记录与库内事实构造这些请求。
+    'CONSISTENCY_EXEMPTION_KEY_INVALID',
+    'DRAFT_FINALIZATION_REQUIRES_COMMIT',
+    'POST_PROCESS_FINALIZATION_SOURCE_REQUIRED',
+    'RECOVERY_CANDIDATE_ACTION_INVALID',
+    'RECOVERY_CANDIDATE_CHAPTER_INVALID',
+    'RECOVERY_CANDIDATE_IDENTITY_INVALID',
+    'RECOVERY_CANDIDATE_INTEGRITY_FAILED',
+    'RECOVERY_CANDIDATE_REPLACEMENT_INVALID',
+    'RECOVERY_CANDIDATE_SOURCE_DRAFT_INVALID',
+    'RECOVERY_CANDIDATE_SOURCE_MISMATCH',
   ],
   // 模型输出不合角色提议或定稿角色状态的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住；
   // 定稿后处理把码记在步骤上并原样显示，供反馈定位。没有现成文案能告诉作者除重试以外还能做什么。
@@ -554,6 +569,8 @@ const UNREGISTERED: Record<string, readonly string[]> = {
   // 恢复与续跑的顺序约束：界面只从恢复列表或当前运行发起这些请求，按记录状态给出可用操作；
   // 只有绕过界面直接调用才会撞上。
   recoverySequencing: [
+    // 后处理步骤收据只由这次定稿后处理自己的运行写入；步骤已被新的后处理运行替换时才会撞上（#474 B5）。
+    'POST_PROCESS_STEP_NOT_FOUND',
     'GENERATION_AGENT_WORKFLOW_RECOVERY_REQUIRED',
     'GENERATION_BATCH_ALREADY_COMPLETED',
     'GENERATION_BATCH_FINALIZATION_REQUIRED',

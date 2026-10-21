@@ -87,6 +87,11 @@ export const enUS = {
   'error.revisionTargetChanged': 'The text or status of this draft changed. Reopen the revision comparison, then merge again.',
   'error.revisionSourceMissing': 'This older revision is missing the draft it was generated from. You can still read it, but it cannot be merged. Generate the revision again.',
   'error.revisionSourceMismatch': 'This draft no longer matches the text the revision was generated from, so it was not merged. Generate the revision again.',
+  'error.recoveryCandidateAlreadyHandled': 'This recovered draft was already handled (used or discarded). Refresh to see the current state.',
+  'error.recoveryCandidateSourceChanged': "This chapter's blueprint or draft changed after the recovered draft was made, so it cannot be used. Generate the chapter again.",
+  'error.recoveryCandidateTextEmpty': 'The recovered draft has no visible text, so it was not saved. Add text, then save.',
+  'error.consistencyExemptionReasonInvalid': 'Enter a reason for the exemption (500 characters or fewer).',
+  'error.postProcessSourceChanged': "This chapter's finalized text changed before post-processing started (it may have been deleted or finalized again), so post-processing did not start. Refresh to see the current state.",
 } as const
 
 export type MessageKey = keyof typeof enUS
