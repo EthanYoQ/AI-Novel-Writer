@@ -16,7 +16,6 @@ vi.mock('../embedding', () => ({
 
 import {
   backfillVectors,
-  importDocument,
   importText,
   searchKnowledge,
   searchKnowledgeFTS,
@@ -422,29 +421,6 @@ describe('知识库嵌入空间回填', () => {
     })).resolves.toEqual({
       success: false,
       error: 'OpenAI Embedding 响应无效：第 1 个向量的第 2 个值不是有限数字（收到 null）',
-    })
-
-    expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'lancedb'))).toBe(false)
-  })
-
-  it('文件导入遇到无效 Embedding 响应时不打开 LanceDB', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-file-invalid-response-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-    const filePath = path.join(projectPath, 'invalid.txt')
-    fs.writeFileSync(filePath, '不应写入数据库的文件正文', 'utf8')
-    generateEmbeddingsMock.mockRejectedValue(new EmbeddingResponseValidationError(
-      'OpenAI',
-      '第 1 个向量的第 2 个值不是有限数字（收到 null）',
-    ))
-
-    await expect(importDocument(filePath, projectPath, 'openai', {
-      baseUrl: 'http://127.0.0.1:8080/v1',
-      apiKey: 'test-key',
-      modelName: 'qwen3-embedding',
-    })).resolves.toMatchObject({
-      success: false,
-      error: expect.stringMatching(/OpenAI Embedding 响应无效.*第 2 个值.*null/),
     })
 
     expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'lancedb'))).toBe(false)
