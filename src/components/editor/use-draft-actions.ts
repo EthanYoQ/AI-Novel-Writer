@@ -5,6 +5,7 @@ import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/edit
 import { useWorkflowStore, workflowResourceKey } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { toast } from '../ui/Toast'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import {
   parseDraftMeta,
   type DraftMeta,
@@ -27,7 +28,6 @@ import {
   isProjectSessionCurrent,
   isProjectSessionPath,
 } from '../project-session-gate'
-import { displayedErrorMessage } from '../../i18n/app-errors'
 
 type Text = (zh: string, en: string) => string
 

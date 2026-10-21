@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   readJsonFile: vi.fn(),
   resolveReferenceImportAuthority: vi.fn(),
   commitReferenceImportReceipt: vi.fn(),
+  getRun: vi.fn(),
   knowledgeDocumentChapters: vi.fn(() => new Map<string, number>()),
 }))
 
@@ -55,6 +56,7 @@ vi.mock('../../repositories/import-run-repository', () => ({
   ImportRunRepository: {
     resolveReferenceImportAuthority: mocks.resolveReferenceImportAuthority,
     commitReferenceImportReceipt: mocks.commitReferenceImportReceipt,
+    get: mocks.getRun,
   },
 }))
 
@@ -376,5 +378,42 @@ describe('knowledge-base controller project context guard', () => {
       success: false,
       error: '删除知识库文档失败',
     })
+  })
+})
+
+// 参照导入失败时运行卡片原样显示 result.error：主进程按导入运行的界面语言说明知识库错误码，码另放在 errorCode（#474 B3）。
+describe('reference import failures', () => {
+  it.each([
+    ['en-US', 'EMBEDDING_RESPONSE_INVALID', 'returned an unusable result'],
+    ['zh-CN', 'EMBEDDING_RESPONSE_INVALID', '返回的结果不合格'],
+    ['en-US', 'KNOWLEDGE_BASE_TEXT_EMPTY', 'The material is empty'],
+    ['zh-CN', 'EMBEDDING_SPACE_REINDEX_REQUIRED', '检查并重建索引'],
+  ])('explains %s %s in the run language', async (locale, code, expected) => {
+    mocks.getRun.mockReturnValue({ locale })
+    mocks.run.mockImplementation(async (operation: (kb: { importReferenceText: () => Promise<unknown> }) => unknown) =>
+      operation({ importReferenceText: async () => ({ success: false, error: code }) }))
+    const result = await rawHandler('kb:import-reference-text')({}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+      projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+    }) as { success: boolean; error: string; errorCode: string }
+    expect(result).toMatchObject({ success: false, errorCode: code })
+    expect(result.error).toContain(expected)
+    expect(result.error).not.toMatch(locale === 'en-US' ? /[A-Z]{3,}_|\p{Script=Han}/u : /[A-Z]{3,}_/u)
+    expect(mocks.commitReferenceImportReceipt).not.toHaveBeenCalled()
+  })
+  // 参照导入的幂等收据与完整性校验码没有作者能照做的建议：给按运行语言的说明，码附在后面供反馈定位。
+  it.each([
+    ['en-US', 'KNOWLEDGE_BASE_REFERENCE_RECEIPT_CONFLICT', 'could not be written to the knowledge base'],
+    ['zh-CN', 'KNOWLEDGE_BASE_REFERENCE_VERIFY_FAILED', '未能写入知识库'],
+  ])('summarizes %s %s in the run language and keeps the code', async (locale, code, expected) => {
+    mocks.getRun.mockReturnValue({ locale })
+    mocks.run.mockImplementation(async (operation: (kb: { importReferenceText: () => Promise<unknown> }) => unknown) =>
+      operation({ importReferenceText: async () => ({ success: false, error: code }) }))
+    const result = await rawHandler('kb:import-reference-text')({}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+      projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+    }) as { success: boolean; error: string; errorCode: string }
+    expect(result).toMatchObject({ success: false, errorCode: code })
+    expect(result.error).toContain(expected)
+    expect(result.error).toContain(code)
+    if (locale === 'en-US') expect(result.error).not.toMatch(/\p{Script=Han}/u)
   })
 })

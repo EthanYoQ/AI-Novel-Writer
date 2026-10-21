@@ -12,9 +12,11 @@ const mocks = vi.hoisted(() => ({
   logCall: vi.fn(),
   assertCurrentProjectContext: vi.fn(),
   models: [] as ModelProfile[],
+  locale: 'en-US',
 }))
 
 vi.mock('electron', () => ({
+  app: { getLocale: () => mocks.locale },
   BrowserWindow: { fromWebContents: vi.fn(() => ({ webContents: { send: mocks.send } })) },
   ipcMain: {
     handle: vi.fn((channel: string, handler: IpcHandler) => {
@@ -700,5 +702,34 @@ describe('llm conversation scoping for gateway session affinity', () => {
 
     const options = mocks.generate.mock.calls[0]?.[2] as { conversationId?: string }
     expect(options.conversationId).toBeUndefined()
+  })
+})
+
+// 检索模型的连接测试：embedding 只交错误码（#474 B3），这里按系统语言换回可读说明，HTTP 状态与建议地址留着。
+describe('retrieval model connection test', () => {
+  const retrievalModel: ModelProfile = { ...deepSeekModel, id: 'bge', modelName: 'bge-m3', baseUrl: 'https://embedding.example/v1', purposes: ['embedding'] }
+
+  it.each([
+    ['en-US', 'Retrieval model request failed (HTTP 401)'],
+    ['zh-CN', '检索模型请求失败（HTTP 401）'],
+  ])('explains an HTTP failure in %s', async (locale, expected) => {
+    mocks.locale = locale
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('denied', { status: 401 })))
+    try {
+      const result = await mocks.handlers.get('llm:test-connection')!({}, retrievalModel) as { success: boolean; error: string }
+      expect(result.success).toBe(false)
+      expect(result.error).toContain(expected)
+      expect(result.error).not.toMatch(/EMBEDDING_|Error:/u)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps the suggested OpenAI-compatible Ollama address', async () => {
+    mocks.locale = 'en-US'
+    const result = await mocks.handlers.get('llm:test-connection')!({}, { ...retrievalModel, baseUrl: 'http://localhost:11434/api' }) as { success: boolean; error: string }
+    expect(result).toMatchObject({ success: false })
+    expect(result.error).toContain('http://localhost:11434/v1')
+    expect(result.error).not.toMatch(/EMBEDDING_|\p{Script=Han}/u)
   })
 })

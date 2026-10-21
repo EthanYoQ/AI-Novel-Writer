@@ -7,6 +7,7 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
 import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workflow-store'
 import { importPlanningMaterial, type PlanningMaterial } from '../knowledge-service'
+import { workflowMainProcessError } from './workflow-project-session'
 
 export interface PlanningMaterialWorkflowParams {
   projectSession: ProjectSessionContext
@@ -45,10 +46,13 @@ export function createPlanningMaterialWorkflow(
         executor: async (_step, context, callbacks) => {
           for (const [index, material] of materials.entries()) {
             const result = await importPlanningMaterial(projectSession, material)
-            if (!result.success) throw new Error(result.error || text(
+            // errorCode 优先：旧向量迁移阻断时 error 是按系统语言写好的说明。
+            if (!result.success) throw workflowMainProcessError(
+              { uiLocale },
+              result.errorCode ?? result.error,
               `无法导入 ${material.fileName}`,
               `Could not import ${material.fileName}`,
-            ))
+            )
             callbacks.log(text(
               `已导入 ${material.fileName}`,
               `Imported ${material.fileName}`,

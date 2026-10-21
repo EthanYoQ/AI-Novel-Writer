@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { prepareCanonicalStorageFixture } from '../../test/helpers/canonical-project-fixture'
 import { getProjectDataRoot } from '../services/project-data-locator'
 import { addChunks, closeConnection, getConnection, getDocumentIntegrity, listDocuments, readPortableKnowledgeSnapshot, removeDocument, restorePortableKnowledgeSnapshot } from '../vector-store'
-import { clearKnowledgeBase, importDocument, importText, readDocumentCopy, reindexDocumentCopy, saveDocumentCopy, searchKnowledge, searchKnowledgeFTS } from '../knowledge-base'
+import { clearKnowledgeBase, importText, readDocumentCopy, reindexDocumentCopy, saveDocumentCopy, searchKnowledge, searchKnowledgeFTS } from '../knowledge-base'
 import { captureGenerationKnowledge, verifyGenerationKnowledge } from '../services/generation-knowledge-source'
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
 
@@ -167,7 +167,7 @@ it('edits only the project copy and excludes stale text from search and generati
   generateEmbeddings.mockResolvedValue([[1, 0]])
   fs.writeFileSync(external, original)
   try {
-    const imported = await importDocument(external, projectPath, 'openai', model)
+    const imported = await importText(original, path.basename(external), projectPath, 'openai', model)
     expect(imported.success).toBe(true)
     const docId = imported.docId!
     const opened = await readDocumentCopy(docId, projectPath)

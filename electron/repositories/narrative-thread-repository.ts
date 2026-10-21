@@ -11,7 +11,7 @@ import type {
 
 function requireDb() {
   const db = getProjectDb()
-  if (!db) throw new Error('项目数据库未打开')
+  if (!db) throw new Error('PROJECT_NOT_OPEN')
   return db
 }
 
@@ -21,11 +21,11 @@ function validatePlan(input: NarrativeThreadPlanInput): NarrativeThreadPlanInput
   const authorIntent = input.authorIntent.trim()
   if (!title || title.length > 120 || !type || type.length > 60
     || !authorIntent || authorIntent.length > 1000) {
-    throw new Error('叙事线索计划参数无效')
+    throw new Error('NARRATIVE_THREAD_PLAN_INVALID')
   }
   if (!Number.isSafeInteger(input.targetStartChapter) || input.targetStartChapter < 1
     || !Number.isSafeInteger(input.targetEndChapter) || input.targetEndChapter < input.targetStartChapter) {
-    throw new Error('叙事线索目标章节范围无效')
+    throw new Error('NARRATIVE_THREAD_RANGE_INVALID')
   }
   return { ...input, title, type, authorIntent }
 }
@@ -62,13 +62,13 @@ export class NarrativeThreadRepository {
           author_intent = ?, updated_at = datetime('now')
       WHERE id = ?
     `).run(value.title, value.type, value.targetStartChapter, value.targetEndChapter, value.authorIntent, id)
-    if (result.changes !== 1) throw new Error('叙事线索计划不存在')
+    if (result.changes !== 1) throw new Error('NARRATIVE_THREAD_PLAN_NOT_FOUND')
     return this.getPlan(id, db)!
   }
 
   static deletePlan(id: number, db = requireDb()): void {
     const result = db.prepare('DELETE FROM narrative_thread_plans WHERE id = ?').run(id)
-    if (result.changes !== 1) throw new Error('叙事线索计划不存在')
+    if (result.changes !== 1) throw new Error('NARRATIVE_THREAD_PLAN_NOT_FOUND')
   }
 
   static getPlan(id: number, db = requireDb()): NarrativeThreadPlanRecord | null {
@@ -82,7 +82,7 @@ export class NarrativeThreadRepository {
     const reason = input.reason.trim()
     if (!['planted', 'progressing', 'resolved', 'abandoned'].includes(input.type)
       || !evidence || evidence.length > 240 || !reason || reason.length > 500) {
-      throw new Error('叙事线索事件参数无效')
+      throw new Error('NARRATIVE_THREAD_EVENT_INVALID')
     }
     const source = db.prepare(`
       SELECT drafts.id AS draft_id, drafts.chapter_number,
@@ -92,13 +92,13 @@ export class NarrativeThreadRepository {
       JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
       WHERE drafts.id = ? AND drafts.status = 'finalized'
     `).get(input.draftId) as { draft_id: number; chapter_number: number; chapter_title: string; content_snapshot: string } | undefined
-    if (!source) throw new Error('线索事件只能绑定已定稿章节')
+    if (!source) throw new Error('NARRATIVE_THREAD_EVENT_SOURCE_NOT_FINALIZED')
     const normalizedEvidence = evidence.replace(/\s+/gu, '')
     const normalizedContent = source.content_snapshot.replace(/\s+/gu, '')
     if (!normalizedContent.includes(normalizedEvidence)) {
-      throw new Error('短证据必须来自绑定的定稿正文')
+      throw new Error('NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE')
     }
-    if (!this.getPlan(input.planId, db)) throw new Error('叙事线索计划不存在')
+    if (!this.getPlan(input.planId, db)) throw new Error('NARRATIVE_THREAD_PLAN_NOT_FOUND')
     const result = db.prepare(`
       INSERT INTO narrative_thread_confirmations (
         plan_id, draft_id, event_type, evidence, reason

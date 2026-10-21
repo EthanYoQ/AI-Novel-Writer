@@ -365,7 +365,14 @@ describe('database controller project context guard', () => {
       'C:/projects/A',
     )).resolves.toEqual({
       success: false,
-      error: expect.stringContaining('项目数据已变化'),
+      error: 'PROJECT_CORE_SYNOPSIS_CHANGED',
+    })
+  })
+
+  it('refuses the retired renderer plot-tree save with the admission code and no sources-changed shortcut', async () => {
+    await expect(handler('db:plot-tree-save')({}, { version: 1 }, 'a'.repeat(64), 'C:/projects/A')).resolves.toEqual({
+      success: false,
+      error: 'Error: GENERATION_GRAPH_ADMISSION_REQUIRED',
     })
   })
 
@@ -979,7 +986,7 @@ describe('database controller project context guard', () => {
       'C:/projects/A',
     )).resolves.toMatchObject({
       success: false,
-      error: expect.stringContaining('已定稿正文为只读内容'),
+      error: 'Error: DRAFT_FINALIZED_READ_ONLY',
     })
     expect(mocks.draftUpdateContent).not.toHaveBeenCalled()
   })

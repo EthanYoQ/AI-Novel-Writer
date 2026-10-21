@@ -9,7 +9,7 @@ import { getProjectDb } from '../database'
 export class ContentRepository {
     /** 创建一条内容记录，返回自增 ID */
     static create(body: string, db = getProjectDb()): number {
-        if (!db) throw new Error('[ContentRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         const result = db.prepare(`
       INSERT INTO contents (body) VALUES (?)

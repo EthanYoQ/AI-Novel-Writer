@@ -53,7 +53,7 @@ const ROLE_ORDER: Record<CharacterRosterRole, number> = {
 
 function requiredDb(): BetterSqlite3.Database {
   const db = getProjectDb()
-  if (!db) throw new Error('项目数据库未打开')
+  if (!db) throw new Error('PROJECT_NOT_OPEN')
   return db
 }
 
@@ -61,15 +61,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function requiredText(value: unknown, label: string): string {
-  if (typeof value !== 'string') throw new Error(`${label}必须是文本`)
+function requiredText(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('CHARACTER_ROSTER_TEXT_INVALID')
   return value.trim()
 }
 
 /** Only fields whose domain explicitly permits numeric scalar expression use this normalizer. */
-function requiredTextOrFiniteNumber(value: unknown, label: string): string {
+function requiredTextOrFiniteNumber(value: unknown): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value)
-  return requiredText(value, label)
+  return requiredText(value)
 }
 
 function compareText(left: string, right: string): number {
@@ -82,15 +82,15 @@ function isRosterRole(value: unknown): value is CharacterRosterRole {
 }
 
 function normalizeFinalizedSource(value: unknown): FinalizedSourceIdentity {
-  if (!isObject(value)) throw new Error('定稿来源收据格式无效')
-  const finalizationId = requiredText(value.finalizationId, '定稿来源 ID')
-  const contentHash = requiredText(value.contentHash, '定稿正文哈希')
+  if (!isObject(value)) throw new Error('CHARACTER_ROSTER_FINALIZED_SOURCE_INVALID')
+  const finalizationId = requiredText(value.finalizationId)
+  const contentHash = requiredText(value.contentHash)
   if (
     !Number.isSafeInteger(value.draftId) || (value.draftId as number) < 1
     || !Number.isSafeInteger(value.chapterNumber) || (value.chapterNumber as number) < 1
     || !finalizationId
     || !/^[a-f0-9]{64}$/u.test(contentHash)
-  ) throw new Error('定稿来源收据格式无效')
+  ) throw new Error('CHARACTER_ROSTER_FINALIZED_SOURCE_INVALID')
   return {
     draftId: value.draftId as number,
     finalizationId,
@@ -100,32 +100,32 @@ function normalizeFinalizedSource(value: unknown): FinalizedSourceIdentity {
 }
 
 function normalizeFieldProvenance(value: unknown): CharacterStateFieldProvenance {
-  if (!isObject(value)) throw new Error('角色状态来源格式无效')
+  if (!isObject(value)) throw new Error('CHARACTER_ROSTER_STATE_PROVENANCE_INVALID')
   if (value.kind === 'legacy') return { kind: 'legacy' }
   if (value.kind === 'author') {
     if (!Number.isSafeInteger(value.chapterNumber) || (value.chapterNumber as number) < 0) {
-      throw new Error('作者角色状态章节无效')
+      throw new Error('CHARACTER_ROSTER_STATE_CHAPTER_INVALID')
     }
     return { kind: 'author', chapterNumber: value.chapterNumber as number }
   }
   if (value.kind === 'derived') {
     return { kind: 'derived', source: normalizeFinalizedSource(value.source) }
   }
-  throw new Error('角色状态来源类型无效')
+  throw new Error('CHARACTER_ROSTER_STATE_PROVENANCE_INVALID')
 }
 
 function normalizeState(value: unknown): CharacterRosterCharacterState | undefined {
   if (value === undefined) return undefined
-  if (!isObject(value)) throw new Error('角色动态状态格式无效')
+  if (!isObject(value)) throw new Error('CHARACTER_ROSTER_STATE_INVALID')
   const updatedAtChapter = value.updatedAtChapter
   if (!Number.isSafeInteger(updatedAtChapter) || (updatedAtChapter as number) < 0) {
-    throw new Error('角色动态状态章节号无效')
+    throw new Error('CHARACTER_ROSTER_STATE_CHAPTER_INVALID')
   }
   const rawProvenance = value.provenance === undefined ? {} : value.provenance
-  if (!isObject(rawProvenance)) throw new Error('角色状态来源格式无效')
+  if (!isObject(rawProvenance)) throw new Error('CHARACTER_ROSTER_STATE_PROVENANCE_INVALID')
   const provenance: NonNullable<CharacterRosterCharacterState['provenance']> = {}
   for (const field of CHARACTER_STATE_TEXT_FIELDS) {
-    const normalizedValue = requiredText(value[field], `角色状态 ${field}`)
+    const normalizedValue = requiredText(value[field])
     if (Object.hasOwn(rawProvenance, field)) {
       provenance[field] = normalizeFieldProvenance(rawProvenance[field])
     } else if (normalizedValue) {
@@ -134,12 +134,12 @@ function normalizeState(value: unknown): CharacterRosterCharacterState | undefin
     }
   }
   return {
-    location: requiredText(value.location, '角色当前位置'),
-    powerLevel: requiredText(value.powerLevel, '角色修为境界'),
-    physicalState: requiredText(value.physicalState, '角色身体状态'),
-    mentalState: requiredText(value.mentalState, '角色心理状态'),
-    keyItems: requiredText(value.keyItems, '角色关键道具'),
-    recentEvents: requiredText(value.recentEvents, '角色最近事件'),
+    location: requiredText(value.location),
+    powerLevel: requiredText(value.powerLevel),
+    physicalState: requiredText(value.physicalState),
+    mentalState: requiredText(value.mentalState),
+    keyItems: requiredText(value.keyItems),
+    recentEvents: requiredText(value.recentEvents),
     updatedAtChapter: updatedAtChapter as number,
     ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
   }
@@ -171,19 +171,19 @@ function isLegacyEvidenceIntent(intent: CharacterRosterCommitIntent): boolean {
 }
 
 function normalizeRelationships(value: unknown, ownerName: string): CharacterRosterRelationship[] {
-  if (!Array.isArray(value)) throw new Error(`角色「${ownerName}」的关系必须是列表`)
+  if (!Array.isArray(value)) throw new Error('CHARACTER_ROSTER_RELATIONSHIPS_INVALID')
   const seen = new Set<string>()
-  return value.map((relationship, index) => {
+  return value.map(relationship => {
     if (!isObject(relationship)) {
-      throw new Error(`角色「${ownerName}」的第 ${index + 1} 条关系格式无效`)
+      throw new Error('CHARACTER_ROSTER_RELATIONSHIPS_INVALID')
     }
-    const target = requiredText(relationship.target, `角色「${ownerName}」的关系目标`)
-    const relation = requiredText(relationship.relation, `角色「${ownerName}」的关系说明`)
-    if (!target) throw new Error(`角色「${ownerName}」的关系目标不能为空`)
-    if (!relation) throw new Error(`角色「${ownerName}」的关系说明不能为空`)
-    if (target === ownerName) throw new Error(`角色「${ownerName}」不能建立自指关系`)
+    const target = requiredText(relationship.target)
+    const relation = requiredText(relationship.relation)
+    if (!target) throw new Error('CHARACTER_ROSTER_RELATIONSHIP_TARGET_REQUIRED')
+    if (!relation) throw new Error('CHARACTER_ROSTER_RELATIONSHIP_DESCRIPTION_REQUIRED')
+    if (target === ownerName) throw new Error('CHARACTER_ROSTER_RELATIONSHIP_SELF')
     const key = `${target}\u0000${relation}`
-    if (seen.has(key)) throw new Error(`角色「${ownerName}」存在重复关系`)
+    if (seen.has(key)) throw new Error('CHARACTER_ROSTER_RELATIONSHIP_DUPLICATE')
     seen.add(key)
     return { target, relation }
   }).sort((left, right) => (
@@ -195,13 +195,13 @@ function normalizeEntry(
   value: unknown,
   allowLegacyRelationshipNotes: boolean,
 ): CharacterRosterEntry {
-  if (!isObject(value)) throw new Error('角色名单条目格式无效')
-  const name = requiredText(value.name, '角色名')
-  if (!name) throw new Error('角色名不能为空')
-  if (!isRosterRole(value.role)) throw new Error(`角色「${name}」的定位无效`)
+  if (!isObject(value)) throw new Error('CHARACTER_ROSTER_ENTRY_INVALID')
+  const name = requiredText(value.name)
+  if (!name) throw new Error('CHARACTER_ROSTER_NAME_REQUIRED')
+  if (!isRosterRole(value.role)) throw new Error('CHARACTER_ROSTER_ROLE_INVALID')
 
   if (Object.hasOwn(value, 'legacyRelationshipNotes') && !allowLegacyRelationshipNotes) {
-    throw new Error('只有手工角色管理可以提交自由文本关系')
+    throw new Error('CHARACTER_ROSTER_FREE_RELATIONSHIPS_FORBIDDEN')
   }
   const legacyRelationshipNotes = allowLegacyRelationshipNotes && typeof value.legacyRelationshipNotes === 'string'
     ? value.legacyRelationshipNotes.trim()
@@ -209,16 +209,16 @@ function normalizeEntry(
   return {
     name,
     role: value.role,
-    gender: requiredText(value.gender, `角色「${name}」的性别`),
-    age: requiredTextOrFiniteNumber(value.age, `角色「${name}」的年龄`),
-    appearance: requiredText(value.appearance, `角色「${name}」的外貌`),
-    personality: requiredText(value.personality, `角色「${name}」的性格`),
-    background: requiredText(value.background, `角色「${name}」的背景`),
-    abilities: requiredText(value.abilities, `角色「${name}」的能力`),
-    motivation: requiredText(value.motivation, `角色「${name}」的动机`),
+    gender: requiredText(value.gender),
+    age: requiredTextOrFiniteNumber(value.age),
+    appearance: requiredText(value.appearance),
+    personality: requiredText(value.personality),
+    background: requiredText(value.background),
+    abilities: requiredText(value.abilities),
+    motivation: requiredText(value.motivation),
     relationships: normalizeRelationships(value.relationships, name),
-    arc: requiredText(value.arc, `角色「${name}」的弧光`),
-    notes: requiredText(value.notes, `角色「${name}」的备注`),
+    arc: requiredText(value.arc),
+    notes: requiredText(value.notes),
     currentState: normalizeState(value.currentState),
     ...(legacyRelationshipNotes ? { legacyRelationshipNotes } : {}),
   }
@@ -227,46 +227,46 @@ function normalizeEntry(
 function normalizeRenames(value: unknown, intent: CharacterRosterCommitIntent): CharacterRosterRename[] | undefined {
   if (value === undefined) return undefined
   if (!isManualEditIntent(intent)) {
-    throw new Error('只有手工角色管理可以提交角色改名映射')
+    throw new Error('CHARACTER_ROSTER_RENAMES_FORBIDDEN')
   }
-  if (!Array.isArray(value)) throw new Error('角色改名映射必须是列表')
+  if (!Array.isArray(value)) throw new Error('CHARACTER_ROSTER_RENAMES_INVALID')
   const renames = value.map((raw) => {
-    if (!isObject(raw)) throw new Error('角色改名映射格式无效')
-    const originalName = requiredText(raw.originalName, '角色改名原名')
-    const newName = requiredText(raw.newName, '角色改名新名')
-    if (!originalName || !newName) throw new Error('角色改名原名和新名不能为空')
-    if (originalName === newName) throw new Error('角色改名必须产生新的身份')
+    if (!isObject(raw)) throw new Error('CHARACTER_ROSTER_RENAMES_INVALID')
+    const originalName = requiredText(raw.originalName)
+    const newName = requiredText(raw.newName)
+    if (!originalName || !newName) throw new Error('CHARACTER_ROSTER_RENAMES_INVALID')
+    if (originalName === newName) throw new Error('CHARACTER_ROSTER_RENAMES_INVALID')
     return { originalName, newName }
   })
   if (
     new Set(renames.map(rename => rename.originalName)).size !== renames.length
     || new Set(renames.map(rename => rename.newName)).size !== renames.length
-  ) throw new Error('角色改名原名和目标名必须唯一')
+  ) throw new Error('CHARACTER_ROSTER_RENAMES_INVALID')
   return renames
 }
 
 function normalizeRequest(value: unknown): CharacterRosterCommitRequest {
-  if (!isObject(value)) throw new Error('角色名单提交请求格式无效')
-  const operationId = requiredText(value.operationId, '操作 ID')
-  if (!operationId) throw new Error('操作 ID 不能为空')
+  if (!isObject(value)) throw new Error('CHARACTER_ROSTER_REQUEST_INVALID')
+  const operationId = requiredText(value.operationId)
+  if (!operationId) throw new Error('CHARACTER_ROSTER_OPERATION_ID_REQUIRED')
   if (value.schemaVersion !== CHARACTER_ROSTER_SCHEMA_VERSION) {
-    throw new Error('角色名单 schema 版本不受支持')
+    throw new Error('CHARACTER_ROSTER_SCHEMA_UNSUPPORTED')
   }
   if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
-    throw new Error('角色名单 revision 无效')
+    throw new Error('CHARACTER_ROSTER_REVISION_INVALID')
   }
   const intent = value.intent === undefined ? 'initialize' : value.intent
-  if (!isCommitIntent(intent)) throw new Error('角色名单提交意图无效')
+  if (!isCommitIntent(intent)) throw new Error('CHARACTER_ROSTER_INTENT_INVALID')
   if (!Array.isArray(value.entries) || (value.entries.length === 0 && !isManualEditIntent(intent))) {
-    throw new Error('角色名单不能为空')
+    throw new Error('CHARACTER_ROSTER_ENTRIES_REQUIRED')
   }
 
   const source = value.source === undefined ? undefined : normalizeFinalizedSource(value.source)
-  if (intent === 'chapter_progress' && !source) throw new Error('章节状态更新缺少定稿来源收据')
-  if (intent !== 'chapter_progress' && source) throw new Error('只有章节状态更新可携带定稿来源收据')
+  if (intent === 'chapter_progress' && !source) throw new Error('CHARACTER_ROSTER_FINALIZED_SOURCE_REQUIRED')
+  if (intent !== 'chapter_progress' && source) throw new Error('CHARACTER_ROSTER_FINALIZED_SOURCE_UNEXPECTED')
   const entries = value.entries.map(entry => normalizeEntry(entry, isManualEditIntent(intent)))
   const names = new Set(entries.map(entry => characterRosterIdentityKey(entry.name)))
-  if (names.size !== entries.length) throw new Error('角色名必须唯一')
+  if (names.size !== entries.length) throw new Error('CHARACTER_ROSTER_NAME_DUPLICATE')
   // 批量生成/导入/蓝图/定稿的增量候选可以引用“本次没有变化”的既有角色；
   // 手工候选还可能带着改名前或刚删除的目标。它们都必须先由深 module 与
   // 当前事实合并/转换，再用完整名单校验闭包。只有空项目初始化和旧图谱
@@ -275,7 +275,7 @@ function normalizeRequest(value: unknown): CharacterRosterCommitRequest {
     for (const entry of entries) {
       for (const relationship of entry.relationships) {
         if (!names.has(characterRosterIdentityKey(relationship.target))) {
-          throw new Error(`角色「${entry.name}」引用了不存在的关系目标「${relationship.target}」`)
+          throw new Error('CHARACTER_ROSTER_RELATIONSHIP_TARGET_UNKNOWN')
         }
       }
     }
@@ -284,7 +284,7 @@ function normalizeRequest(value: unknown): CharacterRosterCommitRequest {
   let expectedLegacyMarkdown: string | undefined
   if (isLegacyEvidenceIntent(intent)) {
     if (typeof value.expectedLegacyMarkdown !== 'string') {
-      throw new Error('旧角色图谱证据缺失，已拒绝修复')
+      throw new Error('CHARACTER_ROSTER_LEGACY_EVIDENCE_REQUIRED')
     }
     expectedLegacyMarkdown = value.expectedLegacyMarkdown
   }
@@ -305,7 +305,7 @@ function normalizeRequest(value: unknown): CharacterRosterCommitRequest {
 
 /** Validate migration candidates without re-enabling the retired name-based write path. */
 export function validateLegacyRosterCandidate(value: unknown): CharacterRosterEntry[] {
-  if (!isObject(value)) throw new Error('角色名单提交请求格式无效')
+  if (!isObject(value)) throw new Error('CHARACTER_ROSTER_REQUEST_INVALID')
   return normalizeRequest({ operationId: 'legacy-roster-candidate-validation', expectedRevision: 0,
     schemaVersion: value.schemaVersion, entries: value.entries, intent: 'legacy_repair', expectedLegacyMarkdown: '' }).entries
 }
@@ -473,7 +473,7 @@ function mergeExistingEntryManualWins(
 function assertRelationshipClosure(entries: readonly CharacterRosterEntry[]): void {
   const names = new Set(entries.map(entry => characterRosterIdentityKey(entry.name)))
   if (names.size !== entries.length || entries.some(entry => !entry.name.trim())) {
-    throw new Error('已有角色身份不安全，已拒绝合并')
+    throw new Error('CHARACTER_ROSTER_EXISTING_IDENTITY_UNSAFE')
   }
   for (const entry of entries) {
     const relationshipKeys = new Set<string>()
@@ -484,10 +484,10 @@ function assertRelationshipClosure(entries: readonly CharacterRosterEntry[]): vo
         || characterRosterIdentityKey(relationship.target) === characterRosterIdentityKey(entry.name)
         || !names.has(characterRosterIdentityKey(relationship.target))
       ) {
-        throw new Error('已有角色关系不完整，已拒绝合并')
+        throw new Error('CHARACTER_ROSTER_EXISTING_RELATIONSHIPS_INVALID')
       }
       const key = `${relationship.target}\u0000${relationship.relation}`
-      if (relationshipKeys.has(key)) throw new Error('已有角色关系存在重复，已拒绝合并')
+      if (relationshipKeys.has(key)) throw new Error('CHARACTER_ROSTER_EXISTING_RELATIONSHIPS_INVALID')
       relationshipKeys.add(key)
     }
   }
@@ -545,7 +545,7 @@ function assertCurrentFinalizedSource(
     || row.chapterNumber !== source.chapterNumber
     || row.finalizationId !== source.finalizationId
     || row.contentHash !== source.contentHash
-  ) throw new Error('角色状态来源已失效，已拒绝过期后处理写入')
+  ) throw new Error('CHARACTER_ROSTER_FINALIZED_SOURCE_STALE')
 }
 
 function mergeDerivedCurrentState(
@@ -568,7 +568,7 @@ function mergeDerivedCurrentState(
       || provenance.source.finalizationId !== source.finalizationId
       || provenance.source.chapterNumber !== source.chapterNumber
       || provenance.source.contentHash !== source.contentHash
-    ) throw new Error('角色状态字段与定稿来源不一致')
+    ) throw new Error('CHARACTER_ROSTER_STATE_SOURCE_MISMATCH')
 
     const previousSource = existing?.provenance?.[field]
     const previousValue = existing?.[field] ?? ''
@@ -593,14 +593,14 @@ function mergeIncrementalEntriesWithExisting(
   source?: FinalizedSourceIdentity,
 ): CharacterRosterEntry[] {
   if (intent === 'chapter_progress') {
-    if (!source) throw new Error('章节状态更新缺少定稿来源收据')
+    if (!source) throw new Error('CHARACTER_ROSTER_FINALIZED_SOURCE_REQUIRED')
     assertCurrentFinalizedSource(db, source)
     for (const candidate of candidates) {
       if (
         !candidate.currentState
         || candidate.currentState.updatedAtChapter !== source.chapterNumber
       ) {
-        throw new Error(`角色「${candidate.name}」的章节状态尚未定稿，已拒绝后处理写入`)
+        throw new Error('CHARACTER_ROSTER_STATE_NOT_FINALIZED')
       }
     }
   }
@@ -615,7 +615,7 @@ function mergeIncrementalEntriesWithExisting(
       && candidate.currentState.updatedAtChapter < existing.currentState.updatedAtChapter
       && hasFinalizedDraft(db, existing.currentState.updatedAtChapter)
     ) {
-      throw new Error(`角色「${existing.name}」已由较新章节更新，已拒绝旧章节后处理覆盖`)
+      throw new Error('CHARACTER_ROSTER_STATE_NEWER_CHAPTER')
     }
 
     // 蓝图同步只附加结构化关系；章节定稿则以本轮已验证的状态补丁推进
@@ -634,7 +634,7 @@ function mergeIncrementalEntriesWithExisting(
   const existingNames = new Set(existingEntries.map(entry => characterRosterIdentityKey(entry.name)))
   const additions = candidates.filter(candidate => !existingNames.has(characterRosterIdentityKey(candidate.name)))
   if (intent === 'chapter_progress' && additions.length > 0) {
-    throw new Error(`章节定稿后处理不能创建未知角色「${additions[0].name}」`)
+    throw new Error('CHARACTER_ROSTER_UNKNOWN_CHARACTER')
   }
   const merged = [...mergedExisting, ...additions]
   assertRelationshipClosure(merged)
@@ -678,10 +678,10 @@ function resolveManualEntries(
 
   for (const rename of renames) {
     if (!existingByName.has(rename.originalName)) {
-      throw new Error(`角色「${rename.originalName}」不存在，无法改名`)
+      throw new Error('CHARACTER_ROSTER_RENAME_SOURCE_MISSING')
     }
     if (!finalNames.has(rename.newName)) {
-      throw new Error(`角色改名「${rename.originalName} → ${rename.newName}」与保存内容不一致`)
+      throw new Error('CHARACTER_ROSTER_RENAME_MISMATCH')
     }
   }
 
@@ -732,10 +732,10 @@ function updateBlueprintReferencesForManualEdit(
     try {
       rawNames = JSON.parse(blueprint.characters)
     } catch {
-      throw new Error(`第 ${blueprint.chapter_number} 章蓝图角色列表损坏`)
+      throw new Error('CHARACTER_ROSTER_BLUEPRINT_CHARACTERS_INVALID')
     }
     if (!Array.isArray(rawNames) || !rawNames.every(name => typeof name === 'string')) {
-      throw new Error(`第 ${blueprint.chapter_number} 章蓝图角色列表格式错误`)
+      throw new Error('CHARACTER_ROSTER_BLUEPRINT_CHARACTERS_INVALID')
     }
     const nextNames = rawNames
       .map(name => renameByOriginal.get(name) ?? name)
@@ -816,7 +816,7 @@ function readMeta(db: BetterSqlite3.Database): CharacterRosterMetaRow {
     FROM character_roster_meta
     WHERE id = 'main'
   `).get() as CharacterRosterMetaRow | undefined
-  if (!row) throw new Error('角色名单元数据未初始化')
+  if (!row) throw new Error('CHARACTER_ROSTER_META_MISSING')
   return row
 }
 
@@ -955,13 +955,13 @@ function assertReadBack(
     || snapshot.renderedMarkdown !== expectedProjection
     || JSON.stringify(canonicalEntries(snapshot.entries)) !== JSON.stringify(canonicalEntries(expectedEntries))
   ) {
-    throw new Error('角色名单提交回读校验失败')
+    throw new Error('CHARACTER_ROSTER_READ_BACK_FAILED')
   }
   const core = db.prepare(
     "SELECT characters_arch FROM project_core WHERE id = 'main'",
   ).get() as { characters_arch?: string } | undefined
   if (core?.characters_arch !== expectedProjection) {
-    throw new Error('角色图谱投影回读校验失败')
+    throw new Error('CHARACTER_ROSTER_READ_BACK_FAILED')
   }
   return snapshot
 }
@@ -993,7 +993,7 @@ export class CharacterRosterRepository {
       `).get(request.operationId) as CharacterRosterOperationRow | undefined
       if (existingOperation) {
         if (existingOperation.payload_hash !== requestPayloadHash) {
-          throw new Error('操作 ID 已被用于不同的角色名单，已拒绝覆盖')
+          throw new Error('CHARACTER_ROSTER_OPERATION_CONFLICT')
         }
         // 幂等 replay 只是“该操作已被观察到”的无写入查询，不能把历史
         // committed_revision 冒充为当前事实。返回读取时的完整当前快照，保证
@@ -1012,7 +1012,7 @@ export class CharacterRosterRepository {
       assertGenerationSources?.()
       const meta = readMeta(db)
       if (request.expectedRevision !== meta.revision) {
-        throw new Error('角色名单 revision 已过期，已拒绝覆盖')
+        throw new Error('CHARACTER_ROSTER_REVISION_STALE')
       }
       const existingEntries = CharacterRepository.getAll().map(entryFromCharacter)
       const currentSnapshot = readSnapshot(db)
@@ -1024,27 +1024,27 @@ export class CharacterRosterRepository {
       const isIncremental = intent === 'blueprint_sync' || intent === 'chapter_progress'
       const isNovelImport = intent === 'novel_import'
       if (currentSnapshot.status === 'legacy_repair_required' && !isLegacyRepair) {
-        throw new Error('检测到旧角色图谱且没有角色卡；只能通过显式旧角色图谱修复写入')
+        throw new Error('CHARACTER_ROSTER_LEGACY_REPAIR_REQUIRED')
       }
       if (currentSnapshot.status === 'inconsistent' && !isLegacyCardsAdoption) {
         if (meta.migration_state === 'legacy_cards_preserved') {
-          throw new Error('已有角色数据受到保护；请使用后续的显式迁移或编辑流程')
+          throw new Error('CHARACTER_ROSTER_EXISTING_PROTECTED')
         }
-        throw new Error('角色名单状态不一致，已拒绝覆盖；请保留原数据并联系支持')
+        throw new Error('CHARACTER_ROSTER_STATE_INCONSISTENT')
       }
       if (isLegacyRepair) {
         if (currentSnapshot.status !== 'legacy_repair_required' || existingEntries.length > 0) {
-          throw new Error('当前项目不需要旧角色图谱修复，已拒绝覆盖')
+          throw new Error('CHARACTER_ROSTER_LEGACY_REPAIR_NOT_NEEDED')
         }
         if (request.expectedLegacyMarkdown !== meta.legacy_markdown) {
-          throw new Error('旧角色图谱已变更，已拒绝将过期修复结果写入项目')
+          throw new Error('CHARACTER_ROSTER_LEGACY_SOURCE_CHANGED')
         }
       } else if (isLegacyCardsAdoption) {
         if (meta.migration_state !== 'legacy_cards_preserved' || existingEntries.length === 0) {
-          throw new Error('当前项目没有可安全采用的既有角色卡，已拒绝重建图谱')
+          throw new Error('CHARACTER_ROSTER_LEGACY_ADOPTION_UNAVAILABLE')
         }
         if (request.expectedLegacyMarkdown !== meta.legacy_markdown) {
-          throw new Error('旧角色图谱已变更，已拒绝使用过期快照重建图谱')
+          throw new Error('CHARACTER_ROSTER_LEGACY_SOURCE_CHANGED')
         }
         const candidateNames = new Set(request.entries.map(entry => entry.name))
         const existingNames = new Set(existingEntries.map(entry => entry.name))
@@ -1052,7 +1052,7 @@ export class CharacterRosterRepository {
           candidateNames.size !== existingNames.size
           || [...candidateNames].some(name => !existingNames.has(name))
         ) {
-          throw new Error('既有角色卡已变更，已拒绝使用过期快照重建图谱')
+          throw new Error('CHARACTER_ROSTER_LEGACY_SOURCE_CHANGED')
         }
       } else if (
         !maySafelyRegenerate
@@ -1061,7 +1061,7 @@ export class CharacterRosterRepository {
         && !isNovelImport
         && (meta.migration_state !== 'empty' || existingEntries.length > 0)
       ) {
-        throw new Error('已有角色数据受到保护；请使用后续的显式迁移或编辑流程')
+        throw new Error('CHARACTER_ROSTER_EXISTING_PROTECTED')
       }
 
       let renameByOriginal = new Map<string, string>()
@@ -1112,7 +1112,7 @@ export class CharacterRosterRepository {
         SET characters_arch = ?
         WHERE id = 'main'
       `).run(projection)
-      if (coreUpdate.changes !== 1) throw new Error('项目主台账未初始化，已拒绝提交角色名单')
+      if (coreUpdate.changes !== 1) throw new Error('CHARACTER_ROSTER_PROJECT_CORE_MISSING')
 
       db.prepare(`
         UPDATE character_roster_meta

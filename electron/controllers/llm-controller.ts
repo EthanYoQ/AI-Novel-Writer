@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { app, ipcMain, BrowserWindow } from 'electron'
 import {
   readJsonFile,
   tryReadJsonFile,
@@ -11,6 +11,7 @@ import type { GlobalConfig, LLMFinishReason, LLMRequest, ModelDiscoveryRequest, 
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { isReasoningMapping } from '../../src/shared/reasoning-types'
 import { LLMFactory } from '../llm/llm-factory'
+import { mainText } from '../i18n'
 import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
 import { getCurrentProjectPath } from '../database'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
@@ -110,6 +111,28 @@ function recordProviderOutcome(
     // Statistics are diagnostic only and must never change generation outcome.
     console.warn('[AI Novel Writer] LLM call statistics were not recorded.', error)
   }
+}
+
+/**
+ * 检索模型只交错误码（#474）；连接测试的结果由模型表单原样显示，这里按系统语言换成可读说明，
+ * 带上 HTTP 状态或建议的 Base URL。
+ */
+function embeddingConnectionFailure(error: unknown): string | undefined {
+  const failure = error as { code?: unknown; status?: unknown; suggestedBaseUrl?: unknown } | null
+  const text = (zhCNText: string, enUSText: string) => mainText(app.getLocale(), zhCNText, enUSText)
+  if (failure?.code === 'EMBEDDING_REQUEST_FAILED') {
+    return text(
+      `检索模型请求失败（HTTP ${String(failure.status)}）。请检查 Base URL、网关与 API Key。`,
+      `Retrieval model request failed (HTTP ${String(failure.status)}). Check the Base URL, gateway, and API key.`,
+    )
+  }
+  if (failure?.code === 'EMBEDDING_OLLAMA_NATIVE_URL') {
+    return text(
+      `这是 Ollama 原生的 /api 地址，本应用使用 OpenAI 兼容接口。请把 Base URL 改为 ${String(failure.suggestedBaseUrl)}。`,
+      `This is Ollama’s native /api address, but the app uses the OpenAI-compatible API. Change the Base URL to ${String(failure.suggestedBaseUrl)}.`,
+    )
+  }
+  return undefined
 }
 
 export function registerLLMController() {
@@ -388,7 +411,13 @@ export function registerLLMController() {
       let result = { success: true, error: undefined as undefined | string }
       if (model.purposes?.includes('embedding')) {
         const { generateEmbeddings } = await import('../embedding')
-        await generateEmbeddings(['hello'], model.protocol, model)
+        try {
+          await generateEmbeddings(['hello'], model.protocol, model)
+        } catch (error) {
+          const explained = embeddingConnectionFailure(error)
+          if (!explained) throw error
+          result = { success: false, error: explained }
+        }
       } else {
         const res = await provider.generate(
           model,

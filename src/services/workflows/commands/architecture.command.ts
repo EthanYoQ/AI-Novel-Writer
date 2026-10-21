@@ -2299,7 +2299,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       expectedProjectPath,
     )
     if (!result.success) {
-      const commitError = result.error === '项目数据已变化，已拒绝覆盖情节大纲'
+      const commitError = result.error === 'PROJECT_CORE_SYNOPSIS_CHANGED'
         ? text(
             '项目数据已变化，已拒绝覆盖情节大纲。',
             'Project data changed while the outline was being generated, so overwriting it was refused.',
