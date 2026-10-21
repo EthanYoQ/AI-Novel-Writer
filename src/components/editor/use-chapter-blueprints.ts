@@ -48,6 +48,7 @@ import {
   AuthoritativeChapterSequenceError,
   readAuthoritativeNextChapter,
 } from '../../services/authoritative-chapter-sequence'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 function readDraftLedgerFromFixedTab() {
   return parseChapterCardDraftLedger(
@@ -285,7 +286,7 @@ export function useChapterBlueprints({
         setNextWriteChapter(nextChapter)
       } catch (error) {
         if (!isLatestProjectRequest()) return
-        const message = error instanceof Error ? error.message : String(error)
+        const message = displayedErrorMessage(useLocaleStore.getState().locale, error)
         const recoveryChapter = error instanceof AuthoritativeChapterSequenceError
           && error.sequence.firstGapChapterNumber !== undefined
           && error.sequence.lastChapterNumber > error.sequence.firstGapChapterNumber
@@ -297,7 +298,7 @@ export function useChapterBlueprints({
       }
     } catch (error) {
       if (isLatestProjectRequest()) {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = displayedErrorMessage(useLocaleStore.getState().locale, error)
         setAuthorityError(message)
         addLog('error', text('读取章节蓝图失败', 'Could not load chapter blueprints'))
       }
@@ -414,7 +415,7 @@ export function useChapterBlueprints({
       addLog('info', text(`第 ${selected.chapterNumber} 章蓝图已保存`, `Saved blueprint for Chapter ${selected.chapterNumber}`))
     } catch (err) {
       if (!isCurrentProjectSession(projectSession)) return
-      const message = err instanceof Error ? err.message : String(err)
+      const message = displayedErrorMessage(useLocaleStore.getState().locale, err)
       addLog('error', text(`保存第 ${selected.chapterNumber} 章蓝图失败：${message}`, `Could not save the blueprint for Chapter ${selected.chapterNumber}.`))
       toast.error(text(`保存失败\n\n${message}`, 'Could not save the blueprint.'))
       setSaveOutcome('failed')
@@ -451,7 +452,7 @@ export function useChapterBlueprints({
       addLog('info', text(`已保存全部 ${saveInput.length} 章蓝图`, `Saved ${saveInput.length} chapter ${pluralEn(saveInput.length, 'blueprint')}`))
     } catch (err) {
       if (!isCurrentProjectSession(projectSession)) return
-      const message = err instanceof Error ? err.message : String(err)
+      const message = displayedErrorMessage(useLocaleStore.getState().locale, err)
       addLog('error', text(`保存全部蓝图失败：${message}`, 'Could not save all chapter blueprints.'))
       toast.error(text(`保存失败\n\n${message}`, 'Could not save the blueprints.'))
       setSaveOutcome('failed')
@@ -536,7 +537,7 @@ export function useChapterBlueprints({
     )
     if (!isCurrentProjectSession(projectSession)) return
     if (!result.success) {
-      toast.error(text(`删除失败\n\n${result.error ?? '未知错误'}`, 'Could not delete the chapter blueprint.'))
+      toast.error(text(`删除失败\n\n${displayedErrorMessage(useLocaleStore.getState().locale, result.error)}`, 'Could not delete the chapter blueprint.'))
       return
     }
     const current = currentWorkingState(projectKey, projectSession)
@@ -576,7 +577,7 @@ export function useChapterBlueprints({
     )
     if (!isCurrentProjectSession(projectSession)) return
     if (!result.success) {
-      toast.error(text(`清空失败\n\n${result.error ?? '未知错误'}`, 'Could not clear the chapter blueprints.'))
+      toast.error(text(`清空失败\n\n${displayedErrorMessage(useLocaleStore.getState().locale, result.error)}`, 'Could not clear the chapter blueprints.'))
       return
     }
     const current = currentWorkingState(projectKey, projectSession)
@@ -602,12 +603,13 @@ export function useChapterBlueprints({
     if (!isCurrentProjectSession(projectSession)) return false
     if (!guard.ok) {
       // 校验失败：阻断并提示
-      addLog('error', text(`前置条件未满足：${guard.message}`, 'A required precondition is not met.'))
-      throw new Error(guard.message || text('章节蓝图生成前置条件未满足', 'Blueprint prerequisites are not met.'))
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, guard.message, text('章节蓝图生成前置条件未满足', 'Blueprint prerequisites are not met.'))
+      addLog('error', text(`前置条件未满足：${reason}`, 'A required precondition is not met.'))
+      throw new Error(reason)
     }
     if (guard.message) {
       // 有警告但允许继续：由界面确认
-      if (!await confirmWarning(guard.message)) return false
+      if (!await confirmWarning(displayedErrorMessage(useLocaleStore.getState().locale, guard.message))) return false
     }
 
     if (!isCurrentProjectSession(projectSession)) {
@@ -656,7 +658,7 @@ export function useChapterBlueprints({
       ))
     } catch (error) {
       if (!isCurrentProjectSession(projectSession)) return
-      const message = error instanceof Error ? error.message : String(error)
+      const message = displayedErrorMessage(useLocaleStore.getState().locale, error)
       toast.error(text(
         `清除误导入正文失败\n\n${message}`,
         `Could not clear incorrectly imported text.\n\n${message}`,

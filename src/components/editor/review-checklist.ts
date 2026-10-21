@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../project-session-gate'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import { useLLMStore } from '../../stores/llm-store'
 import { ipc } from '../../services/ipc-client'
 import { requireIpcSuccess } from '../../services/ipc-result'
@@ -559,9 +560,11 @@ export function useReviewChecklist({
       return saved
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return null
-      setChecklistError(error instanceof Error
-        ? error.message
-        : text('确认审稿清单时发生错误。', 'An error occurred while confirming the review checklist.'))
+      setChecklistError(displayedErrorMessage(
+        useLocaleStore.getState().locale,
+        error,
+        text('确认审稿清单时发生错误。', 'An error occurred while confirming the review checklist.'),
+      ))
     } finally {
       if (isProjectSessionCurrent(projectSession)) setConfirming(false)
     }

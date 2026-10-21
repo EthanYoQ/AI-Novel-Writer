@@ -27,6 +27,7 @@ import {
   isProjectSessionCurrent,
   isProjectSessionPath,
 } from '../project-session-gate'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 type Text = (zh: string, en: string) => string
 
@@ -195,7 +196,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
         setSaveOutcome('failed')
-        toast.error(error instanceof Error ? error.message : text('草稿保存失败', 'Could not save the draft'))
+        toast.error(displayedErrorMessage(locale, error, text('草稿保存失败', 'Could not save the draft')))
       }
       if (propagateFailure) throw error
     } finally {
@@ -288,7 +289,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       }, projectSession), false)
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
-      toast.error(text(`修稿启动失败：${e}`, 'Could not start AI revision.'))
+      toast.error(text(`修稿启动失败：${displayedErrorMessage(useLocaleStore.getState().locale, e)}`, 'Could not start AI revision.'))
     }
   }
 
@@ -314,7 +315,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       }, projectSession), false)
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
-      toast.error(text(`审稿启动失败：${e}`, 'Could not start AI review.'))
+      toast.error(text(`审稿启动失败：${displayedErrorMessage(useLocaleStore.getState().locale, e)}`, 'Could not start AI review.'))
     }
   }
 
@@ -373,7 +374,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       }, projectSession), false)
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
-      toast.error(text(`定稿启动失败：${e}`, 'Could not start finalization.'))
+      toast.error(text(`定稿启动失败：${displayedErrorMessage(useLocaleStore.getState().locale, e)}`, 'Could not start finalization.'))
     }
   }
 
@@ -401,7 +402,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       toast.success(text('实体稿已发布', 'Manuscript published'))
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
-      toast.error(text(`实体稿发布失败：${error}`, 'Could not publish the manuscript.'))
+      toast.error(text(`实体稿发布失败：${displayedErrorMessage(useLocaleStore.getState().locale, error)}`, 'Could not publish the manuscript.'))
     }
   }, [currentProject, projectKey, tabId, text])
 
@@ -414,7 +415,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       if (!isProjectSessionCurrent(projectSession)) return
       if (!guard.ok) {
         toast.error(locale === 'zh-CN'
-          ? (guard.message || text('无法执行修复', 'Could not run the repair.'))
+          ? displayedErrorMessage(locale, guard.message, text('无法执行修复', 'Could not run the repair.'))
           : text('无法执行修复', 'Could not run the repair.'))
         return
       }
@@ -426,7 +427,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       )
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
-      toast.error(text(`修复启动失败：${e}`, 'Could not start the repair.'))
+      toast.error(text(`修复启动失败：${displayedErrorMessage(useLocaleStore.getState().locale, e)}`, 'Could not start the repair.'))
     }
   }, [currentProject, isChapterBusy, locale, meta, projectKey, projectMatches, text])
 
@@ -552,10 +553,10 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         reload()
         return true
       }
-      toast.error(text(`合并失败：${result.error}`, 'Could not merge the revision.'))
+      toast.error(text(`合并失败：${displayedErrorMessage(locale, result.error)}`, 'Could not merge the revision.'))
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return false
-      toast.error(text(`合并出错：${e}`, 'An error occurred while merging the revision.'))
+      toast.error(text(`合并出错：${displayedErrorMessage(useLocaleStore.getState().locale, e)}`, 'An error occurred while merging the revision.'))
     }
     return false
   }
@@ -570,7 +571,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         if (!result.success) throw new Error(result.error)
       }
     } catch (error) {
-      if (isProjectSessionCurrent(projectSession)) toast.error(text(`丢弃修稿失败：${error}`, 'Could not discard the revision.'))
+      if (isProjectSessionCurrent(projectSession)) toast.error(text(`丢弃修稿失败：${displayedErrorMessage(useLocaleStore.getState().locale, error)}`, 'Could not discard the revision.'))
     }
     if (isProjectSessionCurrent(projectSession)) reload()
   }

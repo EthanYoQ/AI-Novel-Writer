@@ -34,6 +34,7 @@ import { openPlanningRecoveryDraft } from '../../stores/editor-store'
 import { outlineSourceChangedBlocked, planningTitle } from '../run/run-recovery'
 import { outlineProgress, type OutlineProgress } from '../../shared/plot-outline-checkpoint'
 import type { PlotOutlineRangeSource } from '../../shared/plot-outline-contract'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 /** 架构四节的文档、图标与说明；名字取 ARCH_STEP_NAMES。 */
 export const ARCH_FILES: Array<{
@@ -356,7 +357,7 @@ export function useArchitectureOverview(projectKey: string) {
         expectedRecoveryHandle: synopsisHandle,
       }, projectSession)
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = displayedErrorMessage(useLocaleStore.getState().locale, error)
       const { toast } = await import('../ui/Toast')
       toast.error(text(`续写启动失败：${detail}`, `Failed to start the continuation: ${detail}`))
     } finally {
@@ -378,7 +379,7 @@ export function useArchitectureOverview(projectKey: string) {
         expectedRecoveryHandle: worldHandle,
       }, projectSession)
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = displayedErrorMessage(useLocaleStore.getState().locale, error)
       const { toast } = await import('../ui/Toast')
       toast.error(text(`续写启动失败：${detail}`, `Failed to start the continuation: ${detail}`))
     } finally {
@@ -399,7 +400,7 @@ export function useArchitectureOverview(projectKey: string) {
       const { toast } = await import('../ui/Toast')
       toast.success(text('未完成候选已复制', 'Incomplete candidate copied.'))
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = displayedErrorMessage(useLocaleStore.getState().locale, error)
       const { toast } = await import('../ui/Toast')
       toast.error(text(`复制失败：${detail}`, `Copy failed: ${detail}`))
     }

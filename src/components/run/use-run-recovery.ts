@@ -13,6 +13,7 @@ import {
   buildRecoveryEntries, EMPTY_RECOVERY_SOURCES, hasText, planningTitle,
   type BatchEntry, type CandidateEntry, type DraftEntry, type EditorEntry, type PlanningEntry, type RecoveryEntry, type RecoverySources, type ReviewEntry,
 } from './run-recovery'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 const REVIEW_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review']
 
@@ -111,7 +112,7 @@ export function useRunRecovery(): RunRecovery {
     }).catch(error => {
       if (!active) return
       setCandidates({ session, value: [] })
-      setCandidateError(error instanceof Error ? error.message : String(error))
+      setCandidateError(displayedErrorMessage(useLocaleStore.getState().locale, error))
     })
     return () => { active = false }
   }, [session])
@@ -134,7 +135,7 @@ export function useRunRecovery(): RunRecovery {
       if (!active) return
       setGeneration({ session, value: sources })
       setGenerationError(partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : '')
-    }).catch(reason => { if (active) setGenerationError(reason instanceof Error ? reason.message : String(reason)) })
+    }).catch(reason => { if (active) setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
     return () => { active = false }
   }, [session, endedRuns, locale, snapshotTick])
 
@@ -149,12 +150,12 @@ export function useRunRecovery(): RunRecovery {
   const act = useCallback(async (operation: (session: ProjectSessionContext) => Promise<void>) => {
     if (busy || !session || !stillCurrent()) return
     setBusy(true)
-    try { await operation(session); setGenerationError('') } catch (reason) { setGenerationError(reason instanceof Error ? reason.message : String(reason)) }
+    try { await operation(session); setGenerationError('') } catch (reason) { setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) }
     finally { setBusy(false) }
   }, [busy, session, stillCurrent])
 
   const showGenerationFailure = useCallback((reason: unknown) => {
-    if (stillCurrent()) setGenerationError(reason instanceof Error ? reason.message : String(reason))
+    if (stillCurrent()) setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason))
   }, [stillCurrent])
 
   /** startWorkflow 要等整个工作流结束才返回；只等定义建好，不让恢复区在运行期间一直忙。 */
@@ -171,8 +172,7 @@ export function useRunRecovery(): RunRecovery {
 
   const failCandidate = useCallback((error: unknown) => {
     if (!stillCurrent()) return
-    const message = error instanceof Error ? error.message : error ? String(error) : ''
-    setCandidateError(message || (locale === 'en-US' ? 'Recovery candidate action failed' : '恢复候选操作失败'))
+    setCandidateError(displayedErrorMessage(locale, error, locale === 'en-US' ? 'Recovery candidate action failed' : '恢复候选操作失败'))
   }, [locale, stillCurrent])
 
   return {
@@ -191,7 +191,7 @@ export function useRunRecovery(): RunRecovery {
     copyCandidate: entry => {
       if (!stillCurrent()) return
       navigator.clipboard.writeText(entry.text).then(() => setCandidateError(''),
-        error => setCandidateError(error instanceof Error ? error.message : String(error)))
+        error => setCandidateError(displayedErrorMessage(useLocaleStore.getState().locale, error)))
     },
     continueCandidate: entry => {
       if (!session || !stillCurrent() || !entry.canContinue) return
