@@ -310,7 +310,7 @@ export const REFS_SCENARIOS = {
     const editor = page.getByRole('textbox', { name: 'Project copy content' })
     await editor.waitFor({ state: 'visible' })
     const copies = path.join(context.samplePath, '.ai-novel', 'knowledge-copies')
-    const copyFile = fs.readdirSync(copies).map(name => path.join(copies, name))
+    const copyFile = fs.readdirSync(copies).filter(name => name.endsWith('.json')).map(name => path.join(copies, name))
       .find(file => JSON.parse(fs.readFileSync(file, 'utf8')).content === MATERIALS['守塔人小传.txt'])
     assert.ok(copyFile, '找到守塔人小传的项目副本')
     const stored = JSON.parse(fs.readFileSync(copyFile, 'utf8'))
