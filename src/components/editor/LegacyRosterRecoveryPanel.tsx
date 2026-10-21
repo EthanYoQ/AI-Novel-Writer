@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '../ui/Button'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { appErrorMessage } from '../../i18n/app-errors'
 import { ipc } from '../../services/ipc-client'
 import { createLegacyRosterGeneration, canContinueLegacyRoster } from '../../services/legacy-roster-generation'
 import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
@@ -29,7 +30,7 @@ export function LegacyRosterRecoveryPanel({ onRecover, busy }: {
       const run = runs.find(item => item.operation === 'legacy-character-roster-repair')
       const value = run ? await client.open({ handle: run.handle }) : undefined
       if (!disposed && isProjectSessionCurrent(session)) { setShown(value); setSessionKey(key); setError('') }
-    })().catch(reason => { if (!disposed && isProjectSessionCurrent(session)) { setShown(undefined); setError(String(reason)); setSessionKey(key) } })
+    })().catch(reason => { if (!disposed && isProjectSessionCurrent(session)) { setShown(undefined); setError(appErrorMessage(useLocaleStore.getState().locale, reason)); setSessionKey(key) } })
     return () => { disposed = true; client.detach() }
   }, [key, busy, project])
   if (key !== sessionKey || !shown && !error) return null
@@ -54,7 +55,7 @@ export function LegacyRosterRecoveryPanel({ onRecover, busy }: {
       const client = createLegacyRosterGeneration(session)
       void client.open({ handle: shown.view.handle }).then(() => client.cancel()).then(() => client.read()).then(value => {
         if (isProjectSessionCurrent(session)) setShown(value)
-      }).catch(reason => { if (isProjectSessionCurrent(session)) setError(String(reason)) }).finally(() => client.detach())
+      }).catch(reason => { if (isProjectSessionCurrent(session)) setError(appErrorMessage(useLocaleStore.getState().locale, reason)) }).finally(() => client.detach())
     }}>{text('取消原运行', 'Cancel original run')}</Button>
   </section>
 }

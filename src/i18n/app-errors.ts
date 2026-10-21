@@ -127,6 +127,16 @@ const ERROR_KEYS = {
   MODEL_NOT_FOUND: 'error.generationModelMissing',
   NO_DEFAULT_MODEL: 'error.generationModelMissing',
   LEASE_BEGIN_FAILED: 'error.generationRequestFailed',
+  // 角色建议页（待批准的角色提议、定稿角色状态建议）的决策请求被主进程拒绝（#474）。
+  CHARACTER_PROPOSAL_ALREADY_APPROVED: 'error.characterProposalAlreadyDecided',
+  CHARACTER_PROPOSAL_NOT_PENDING_FINALIZED: 'error.characterProposalAlreadyDecided',
+  CHARACTER_APPROVAL_NONCE_CONFLICT: 'error.characterProposalAlreadyDecided',
+  CHARACTER_ID_REVISION_CONFLICT: 'error.characterRosterChanged',
+  CHARACTER_ID_UNKNOWN: 'error.characterRosterChanged',
+  CHARACTER_AUTHOR_ROSTER_NOT_READY: 'error.characterRosterNotReady',
+  FINALIZED_CHARACTER_STATE_CANDIDATE_NOT_FOUND: 'error.characterSuggestionGone',
+  FINALIZED_CHARACTER_STATE_FIELD_CONFLICT: 'error.characterStateChanged',
+  FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT: 'error.characterStateChanged',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS
@@ -153,9 +163,11 @@ function readCode(error: unknown): KnownErrorCode | undefined {
   return isKnownCode(code) ? code : undefined
 }
 
+/** Electron 在主进程报错前加的调用通道前缀对作者没有意义，兜底说明里去掉。 */
+const IPC_PREFIX = /^Error invoking remote method '[^']+': (?:Error: )?/u
+
 function readMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
+  return (error instanceof Error ? error.message : String(error)).replace(IPC_PREFIX, '')
 }
 
 /** 已登记错误码的可读文案；未登记时返回 undefined，由调用方保留原有说明。 */

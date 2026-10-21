@@ -39,4 +39,9 @@ export const zhCN = {
   'error.generationSkillUnavailable': '选用的写作 Skill 已被删除，或与这本书不兼容（例如语言不同）。请在设置里重新选择后再生成。',
   'error.generationSkillBundleDamaged': '选用的写作 Skill 附带的文件被改动或缺失，结果没有生成。请在设置里重新导入这个 Skill 后再生成。',
   'error.generationFinalizationRecoveryUnavailable': '这一步的生成记录已变化，本次没有重新生成。',
+  'error.characterProposalAlreadyDecided': '这批角色提议已经处理过了，本次操作没有生效。刷新列表查看当前状态。',
+  'error.characterRosterChanged': '打开这批提议后角色名单变了（新增、改名或删除了角色），本次没有采用。重新打开提议再确认。',
+  'error.characterRosterNotReady': '角色名单还没有整理好，暂时不能采用提议。先处理角色页上关于名单的提示。',
+  'error.characterSuggestionGone': '这条建议已经不在了（可能已处理，或来源章节已改动）。刷新列表查看当前建议。',
+  'error.characterStateChanged': '这个角色的这项状态在建议生成后被改过，本次没有采用。刷新后重新判断。',
 } satisfies Record<MessageKey, string>
