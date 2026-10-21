@@ -223,12 +223,12 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       expect(() => CharacterRosterRepository.commit({
         ...commitRequest({ operationId: `invalid-age-${String(invalidAge)}` }),
         entries: [{ ...base.entries[0], age: invalidAge }, base.entries[1]],
-      } as unknown as CharacterRosterCommitRequest)).toThrow(/年龄必须是文本/)
+      } as unknown as CharacterRosterCommitRequest)).toThrow('CHARACTER_ROSTER_TEXT_INVALID')
     }
     expect(() => CharacterRosterRepository.commit({
       ...commitRequest({ operationId: 'invalid-name-number' }),
       entries: [{ ...base.entries[0], name: 7 }, base.entries[1]],
-    } as unknown as CharacterRosterCommitRequest)).toThrow(/角色名必须是文本/)
+    } as unknown as CharacterRosterCommitRequest)).toThrow('CHARACTER_ROSTER_TEXT_INVALID')
   })
 
   it('renders the canonical shared minor-role label in the deterministic roster projection', () => {
@@ -418,7 +418,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       operationId: 'architecture-must-not-bypass-inconsistent-roster',
       expectedRevision: first.revision,
       intent: 'architecture_generation',
-    }))).toThrow(/状态不一致/)
+    }))).toThrow('CHARACTER_ROSTER_STATE_INCONSISTENT')
     expect(CharacterRepository.getByName('林舟')?.notes).toBe('旧旁路直接改写了角色事实')
   })
 
@@ -429,7 +429,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
         ...entry,
         legacyRelationshipNotes: '导入候选不得携带旧自由文本关系',
       })),
-    }))).toThrow(/只有手工角色管理可以提交自由文本关系/)
+    }))).toThrow('CHARACTER_ROSTER_FREE_RELATIONSHIPS_FORBIDDEN')
   })
 
   it('commits a validated roster and its deterministic projection as one ready snapshot', () => {
@@ -544,11 +544,11 @@ describe('CharacterRosterRepository public read/commit seam', () => {
     })
 
     expect(() => CharacterRosterRepository.commit(differentPayload))
-      .toThrow(/操作 ID 已被用于不同的角色名单/)
+      .toThrow('CHARACTER_ROSTER_OPERATION_CONFLICT')
     expect(() => CharacterRosterRepository.commit(commitRequest({
       operationId: 'architecture-run-002',
       expectedRevision: 0,
-    }))).toThrow(/revision 已过期/)
+    }))).toThrow('CHARACTER_ROSTER_REVISION_STALE')
     expect(CharacterRosterRepository.read()).toEqual(first.snapshot)
   })
 
@@ -561,7 +561,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
     })
 
     expect(() => CharacterRosterRepository.commit(invalid))
-      .toThrow(/不存在的关系目标/)
+      .toThrow('CHARACTER_ROSTER_RELATIONSHIP_TARGET_UNKNOWN')
     expect(CharacterRosterRepository.read()).toMatchObject({
       revision: 0,
       migrationState: 'empty',
@@ -572,10 +572,10 @@ describe('CharacterRosterRepository public read/commit seam', () => {
 
   it('fails closed for an unsupported schema, duplicate identity, invalid role and self relation', () => {
     const base = commitRequest()
-    const invalidCandidates: Array<{ candidate: CharacterRosterCommitRequest; error: RegExp }> = [
+    const invalidCandidates: Array<{ candidate: CharacterRosterCommitRequest; error: string }> = [
       {
         candidate: { ...base, schemaVersion: 2 as 1 },
-        error: /schema 版本不受支持/,
+        error: 'CHARACTER_ROSTER_SCHEMA_UNSUPPORTED',
       },
       {
         candidate: {
@@ -586,14 +586,14 @@ describe('CharacterRosterRepository public read/commit seam', () => {
             relationships: [],
           }],
         },
-        error: /角色名必须唯一/,
+        error: 'CHARACTER_ROSTER_NAME_DUPLICATE',
       },
       {
         candidate: {
           ...base,
           entries: [{ ...base.entries[0], role: 'villain' as never }],
         },
-        error: /定位无效/,
+        error: 'CHARACTER_ROSTER_ROLE_INVALID',
       },
       {
         candidate: {
@@ -603,7 +603,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
             relationships: [{ target: '林舟', relation: '镜像' }],
           }],
         },
-        error: /不能建立自指关系/,
+        error: 'CHARACTER_ROSTER_RELATIONSHIP_SELF',
       },
     ]
 
@@ -682,7 +682,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       })],
     })
     expect(() => CharacterRosterRepository.commit(commitRequest()))
-      .toThrow(/已有角色数据受到保护/)
+      .toThrow('CHARACTER_ROSTER_EXISTING_PROTECTED')
     expect(CharacterRosterRepository.read().entries).toEqual([
       expect.objectContaining({ name: '手工角色', notes: '用户手工填写' }),
     ])
@@ -864,7 +864,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
     expect(() => CharacterRosterRepository.commit(commitRequest({
       operationId: 'normal-generation-must-not-migrate-legacy-markdown',
       intent: 'architecture_generation',
-    }))).toThrow(/只能通过显式旧角色图谱修复/)
+    }))).toThrow('CHARACTER_ROSTER_LEGACY_REPAIR_REQUIRED')
 
     expect(rawRosterStorage()).toEqual(before)
     expect(CharacterRosterRepository.read()).toMatchObject({
@@ -927,7 +927,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       ...commitRequest({ operationId: 'legacy-repair-stale-source' }),
       intent: 'legacy_repair',
       expectedLegacyMarkdown: '旧图谱原文 B：模型候选不可以写回 A。',
-    })).toThrow(/旧角色图谱已变更/)
+    })).toThrow('CHARACTER_ROSTER_LEGACY_SOURCE_CHANGED')
 
     expect(CharacterRosterRepository.read()).toEqual(before)
     expect(ProjectCoreRepository.get()?.charactersArch).toBe(legacyMarkdown)
@@ -1042,7 +1042,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
       intent: 'chapter_progress',
       source: finalizedSource(2, 2),
       entries: [unknown],
-    })).toThrow(/不能创建未知角色/)
+    })).toThrow('CHARACTER_ROSTER_UNKNOWN_CHARACTER')
     expect(CharacterRosterRepository.read()).toEqual(initial.snapshot)
 
     expect(() => CharacterRosterRepository.commit({
@@ -1055,7 +1055,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
         { ...existing, relationships: [] },
         { ...existing, name: ` ${existing.name.toLocaleUpperCase('en-US')} `, relationships: [] },
       ],
-    })).toThrow(/角色名必须唯一/)
+    })).toThrow('CHARACTER_ROSTER_NAME_DUPLICATE')
     expect(CharacterRosterRepository.read()).toEqual(initial.snapshot)
   })
 
@@ -1091,7 +1091,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
         relationships: [],
         currentState: { ...existing.currentState!, location: '第二章现场', updatedAtChapter: 2 },
       }],
-    })).toThrow(/较新章节更新/)
+    })).toThrow('CHARACTER_ROSTER_STATE_NEWER_CHAPTER')
   })
 
   it('preserves a non-empty legacy state instead of reclassifying it as derived', () => {
@@ -1170,7 +1170,7 @@ describe('CharacterRosterRepository public read/commit seam', () => {
         relationships: [],
         currentState: { ...existing.currentState!, location: '第二章现场', updatedAtChapter: 2 },
       }],
-    })).toThrow(/来源已失效/)
+    })).toThrow('CHARACTER_ROSTER_FINALIZED_SOURCE_STALE')
   })
 
   it('preserves an author field while accepting a derived patch for a different empty field', () => {

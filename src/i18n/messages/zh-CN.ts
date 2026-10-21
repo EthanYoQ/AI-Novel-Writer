@@ -63,4 +63,12 @@ export const zhCN = {
   'error.characterRosterNotReady': '角色名单还没有整理好，暂时不能采用提议。先处理角色页上关于名单的提示。',
   'error.characterSuggestionGone': '这条建议已经不在了（可能已处理，或来源章节已改动）。刷新列表查看当前建议。',
   'error.characterStateChanged': '这个角色的这项状态在建议生成后被改过，本次没有采用。刷新后重新判断。',
+  'error.characterRosterNeedsRepair': '角色名单需要先修复：这部作品还留着旧版角色数据。先按角色页上的提示完成修复，再保存或生成角色。',
+  'error.characterRosterNameRequired': '有角色没有填名字。给每个角色填上名字后再保存。',
+  'error.characterRosterNameDuplicate': '有两个角色用了同一个名字。角色名不能重复，改名后再保存。',
+  'error.characterRosterRelationshipInvalid': '有一条角色关系填得不完整：关系要写明对象和说明，不能指向自己、不能重复，对象也必须是名单里已有的角色。改好后再保存。',
+  'error.characterRosterNewerChapter': '这个角色已经由后面章节的定稿更新过，较早章节的定稿没有覆盖它的当前状态。',
+  'error.narrativeThreadEvidenceNotInSource': '请粘贴所选定稿章节中实际出现的短原文。',
+  'error.draftNotFound': '这份草稿已经不在了（可能已被删除），本次修改没有保存。',
+  'error.draftFinalizedReadOnly': '这一章已经定稿，定稿正文是只读的，本次修改没有保存。',
 } satisfies Record<MessageKey, string>

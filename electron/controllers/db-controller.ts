@@ -209,7 +209,7 @@ export function registerDatabaseController() {
     const database = getProjectDb()
     if (request.generationRunHandle && !database) throw new Error('GENERATION_DATABASE_NOT_READY')
     if (!(request.generationRunHandle ? database!.transaction(() => withGenerationAgentChildEffect(request.generationRunHandle!, commit)).immediate() : commit())) {
-      return { success: false, error: '项目数据已变化，已拒绝覆盖情节大纲' }
+      return { success: false, error: 'PROJECT_CORE_SYNOPSIS_CHANGED' }
     }
     return { success: true }
   })
@@ -476,7 +476,7 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    if (!isImportRunDirectCheckpointStage(stage)) throw new Error('该导入阶段不接受直接 checkpoint')
+    if (!isImportRunDirectCheckpointStage(stage)) throw new Error('IMPORT_RUN_CHECKPOINT_STAGE_INVALID')
     return { success: true, ...ImportRunRepository.completeBatch(runId, stage, batchId, execution) }
   })
 
@@ -697,7 +697,7 @@ export function registerDatabaseController() {
   ) => {
     const currentProjectPath = getCurrentProjectPath()
     assertRequiredExpectedProjectPath(currentProjectPath, expectedProjectPath)
-    if (!currentProjectPath) throw new Error('项目数据库未打开')
+    if (!currentProjectPath) throw new Error('PROJECT_NOT_OPEN')
     return {
       success: true,
       receipt: FinalizedDraftImportRepository.commit(currentProjectPath, request),
@@ -870,14 +870,7 @@ export function registerDatabaseController() {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
     } catch (error) {
-      const message = String(error)
-      return {
-        success: false,
-        ...(message.includes('剧情资料在生成期间已更新')
-          ? { errorCode: 'sources-changed' as const }
-          : {}),
-        error: message,
-      }
+      return { success: false, error: String(error) }
     }
   })
 
@@ -906,9 +899,9 @@ export function registerDatabaseController() {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const draft = DraftRepository.getMeta(id)
-      if (!draft) throw new Error(`草稿不存在：${id}`)
+      if (!draft) throw new Error('DRAFT_NOT_FOUND')
       if (draft.status === 'finalized') {
-        throw new Error('已定稿正文为只读内容，不能再修改')
+        throw new Error('DRAFT_FINALIZED_READ_ONLY')
       }
       DraftRepository.updateContent(id, content, wordCount)
       return { success: true }
@@ -943,7 +936,7 @@ export function registerDatabaseController() {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const active = projectAccess.captureCurrentSession()
-      if (!active) throw new Error('缺少当前项目会话，已拒绝保存恢复候选')
+      if (!active) throw new Error('PROJECT_SESSION_REQUIRED')
       const candidate = RecoveryCandidateRepository.record({ ...request, projectId: active.projectId })
       return { success: true, candidate }
     } catch (error) {
@@ -1112,7 +1105,7 @@ export function registerDatabaseController() {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const db = getProjectDb()
-      if (!db) throw new Error('[ReviewRepository] 数据库未连接')
+      if (!db) throw new Error('PROJECT_NOT_OPEN')
       const created = db.transaction(() => {
         const saved = ReviewRepository.create({ baseDraftId: params.baseDraftId, reviewIndex: params.reviewIndex,
           content: params.content, expectedSource: params.expectedSource }, db)

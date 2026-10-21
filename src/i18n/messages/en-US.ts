@@ -61,6 +61,14 @@ export const enUS = {
   'error.characterRosterNotReady': 'The cast is not ready yet, so proposals cannot be adopted. Resolve the cast notice on the Characters page first.',
   'error.characterSuggestionGone': 'This suggestion no longer exists (it was handled, or its source chapter changed). Refresh the list to see current suggestions.',
   'error.characterStateChanged': "This character's state field changed after this suggestion was made, so it was not applied. Refresh and decide again.",
+  'error.characterRosterNeedsRepair': 'The cast needs repair first because this book still has older character data. Follow the notice on the Characters page to repair it, then save or generate characters again.',
+  'error.characterRosterNameRequired': 'A character has no name. Give every character a name, then save.',
+  'error.characterRosterNameDuplicate': 'Two characters have the same name. Character names must be unique. Rename one, then save.',
+  'error.characterRosterRelationshipInvalid': 'A character relationship is incomplete. Each relationship needs a target and a description, cannot point to the same character, cannot repeat, and must point to a character in the cast. Fix it, then save.',
+  'error.characterRosterNewerChapter': 'A later finalized chapter already updated this character, so the earlier chapter did not overwrite its current state.',
+  'error.narrativeThreadEvidenceNotInSource': 'Paste a short excerpt that appears in the selected finalized chapter.',
+  'error.draftNotFound': 'This draft no longer exists (it may have been deleted), so the change was not saved.',
+  'error.draftFinalizedReadOnly': 'This chapter is finalized and its text is read-only, so the change was not saved.',
 } as const
 
 export type MessageKey = keyof typeof enUS

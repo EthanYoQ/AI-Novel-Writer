@@ -171,6 +171,30 @@ const ERROR_KEYS = {
   FINALIZED_CHARACTER_STATE_CANDIDATE_NOT_FOUND: 'error.characterSuggestionGone',
   FINALIZED_CHARACTER_STATE_FIELD_CONFLICT: 'error.characterStateChanged',
   FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT: 'error.characterStateChanged',
+  // 角色名单、蓝图与剧情资料（#474 B2）：作者在角色页手工编辑、生成或修复名单时能照着处理的拒绝原因。
+  CHARACTER_ROSTER_NAME_REQUIRED: 'error.characterRosterNameRequired',
+  CHARACTER_ROSTER_NAME_DUPLICATE: 'error.characterRosterNameDuplicate',
+  CHARACTER_ROSTER_RELATIONSHIP_TARGET_REQUIRED: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_RELATIONSHIP_DESCRIPTION_REQUIRED: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_RELATIONSHIP_SELF: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_RELATIONSHIP_DUPLICATE: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_RELATIONSHIP_TARGET_UNKNOWN: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_REVISION_STALE: 'error.characterRosterChanged',
+  CHARACTER_ROSTER_RENAME_SOURCE_MISSING: 'error.characterRosterChanged',
+  CHARACTER_ROSTER_LEGACY_REPAIR_NOT_NEEDED: 'error.characterRosterChanged',
+  CHARACTER_ROSTER_LEGACY_ADOPTION_UNAVAILABLE: 'error.characterRosterChanged',
+  BLUEPRINT_CHARACTER_SYNC_FACTS_CHANGED: 'error.characterRosterChanged',
+  CHARACTER_ROSTER_LEGACY_REPAIR_REQUIRED: 'error.characterRosterNeedsRepair',
+  CHARACTER_ROSTER_EXISTING_PROTECTED: 'error.characterRosterNeedsRepair',
+  BLUEPRINT_CHARACTER_SYNC_ROSTER_NOT_READY: 'error.characterRosterNeedsRepair',
+  CHARACTER_ROSTER_FINALIZED_SOURCE_STALE: 'error.generationSourceChanged',
+  CHARACTER_ROSTER_LEGACY_SOURCE_CHANGED: 'error.generationSourceChanged',
+  CHARACTER_ROSTER_STATE_NEWER_CHAPTER: 'error.characterRosterNewerChapter',
+  // 生成情节大纲途中项目数据被改动，主进程拒绝覆盖。
+  PROJECT_CORE_SYNOPSIS_CHANGED: 'error.generationSourceChanged',
+  NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE: 'error.narrativeThreadEvidenceNotInSource',
+  DRAFT_NOT_FOUND: 'error.draftNotFound',
+  DRAFT_FINALIZED_READ_ONLY: 'error.draftFinalizedReadOnly',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

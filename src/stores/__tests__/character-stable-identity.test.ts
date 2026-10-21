@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { EMPTY_CARD, useCharacterStore, type CharacterCard } from '../character-store'
 import { useProjectStore } from '../project-store'
 import { useEditorStore } from '../editor-store'
+import { useLocaleStore } from '../locale-store'
 import { characterRosterEntryFromCard } from '../../services/character-roster-client'
 import { mergeCharacterDraftWithRemote } from '../character-rename-ledger'
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
@@ -85,4 +86,16 @@ it('ACK丢失同payload双revision重试operation不变，后续作者编辑必�
   return { success: true, receipt: { revision: 3, snapshot: snapshot([card('甲id', '甲名', '后来作者第二稿')], 3) } }
  })
  await useCharacterStore.getState().saveAll(path)
+})
+it.each([
+ ['en-US', 'Could not save the character cards. Two characters have the same name.'],
+ ['zh-CN', '角色卡保存失败：有两个角色用了同一个名字。'],
+] as const)('%s：主进程按码拒绝同名角色时按界面语言说明，不显示错误码', async (locale, expected) => {
+ useLocaleStore.setState({ locale })
+ invoke.mockResolvedValue(snapshot([card('甲id', '甲'), card('乙id', '乙')])); await useCharacterStore.getState().load(path)
+ useCharacterStore.getState().updateField('乙id', 'notes', '作者修改')
+ invoke.mockResolvedValueOnce({ success: false, error: 'Error: CHARACTER_ROSTER_NAME_DUPLICATE' })
+ const failure = useCharacterStore.getState().saveAll(path)
+ await expect(failure).rejects.toThrow(expected)
+ await expect(failure).rejects.not.toThrow('CHARACTER_ROSTER_')
 })

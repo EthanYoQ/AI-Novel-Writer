@@ -169,7 +169,7 @@ describe('real SQLite schema probe and WAL staging backup', () => {
     await backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target })
     const target = new Database(f.target, { fileMustExist: true }); handles.push(target)
     target.exec('DELETE FROM character_roster_meta')
-    expect(() => CharacterRosterRepository.read(target)).toThrow('角色名单元数据未初始化')
+    expect(() => CharacterRosterRepository.read(target)).toThrow('CHARACTER_ROSTER_META_MISSING')
     expect(target.prepare('SELECT COUNT(*) FROM character_roster_meta').pluck().get()).toBe(0)
   })
 
