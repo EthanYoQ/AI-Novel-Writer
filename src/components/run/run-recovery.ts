@@ -6,7 +6,9 @@ import { withoutDraftReconciliationArtifacts } from '../../shared/draft-reconcil
 import type { EditorInlineRecovery } from '../../shared/editor-inline-generation'
 import type { GenerationBatchHistory, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import { plotOutlineSourceInvalidText } from '../../shared/plot-outline-contract'
+import { pluralEn } from '../../shared/plural-en'
 import type { RecoveryCandidate } from '../../shared/recovery-candidate'
+import { parseReviewGenerationResult } from '../../shared/review-generation-report'
 import type { ReviewRevisionRecovery } from '../../shared/review-revision-generation'
 import { workflowResourceKey, type WorkflowRun } from '../../stores/workflow-store'
 
@@ -63,6 +65,11 @@ export interface EditorEntry extends Usage {
   recovery: EditorInlineRecovery
 }
 
+/** 审修候选的一段输出：卡片显示 display，复制拿 text（原文）。审稿是结构化报告，display 是可读摘要；修稿是正文，两者相同。 */
+export interface ReviewText extends RecoveryText {
+  display: string
+}
+
 /** 审稿或修稿中断。 */
 export interface ReviewEntry extends Usage {
   kind: 'review'
@@ -70,8 +77,8 @@ export interface ReviewEntry extends Usage {
   chapterNumber: number
   title: string
   notes: string[]
-  artifacts: RecoveryText[]
-  tails: RecoveryText[]
+  artifacts: ReviewText[]
+  tails: ReviewText[]
   actionLabel: string
   canAct: boolean
   labels: { copy: string; copyTail: string }
@@ -245,9 +252,31 @@ function editorEntry(recovery: EditorInlineRecovery, locale: Locale): EditorEntr
   }
 }
 
+const SEVERITY_ORDER = { error: 0, warning: 1, pass: 2 } as const
+
+/**
+ * 审稿输出是结构化报告：按保存时同一份审稿契约解析，写成结论与条数一行、再列最多两条意见（问题在前）。
+ * 解析不了（半截输出、不合契约，或复核这类另一种结构）时只说明它是结构化结果，原文留给复制。
+ */
+function reviewDigest(text: string, locale: Locale): string {
+  const t = lang(locale)
+  let report: ReturnType<typeof parseReviewGenerationResult>
+  try {
+    report = parseReviewGenerationResult(text)
+  } catch {
+    return t('这是审稿的结构化结果，未能整理成摘要；复制可得到原文。', 'This is a structured review result that could not be summarized. Copy it to get the original text.')
+  }
+  const count = report.items.length
+  const label = { error: t('问题', 'Issue'), warning: t('建议', 'Suggestion'), pass: t('通过', 'Pass') }
+  const points = [...report.items].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]).slice(0, 2)
+    .map(item => t(`${label[item.severity]} · ${item.category}：${item.description}`, `${label[item.severity]} · ${item.category}: ${item.description}`))
+  return [t(`${report.summary}（${count} 条意见）`, `${report.summary} (${count} ${pluralEn(count, 'item')})`), ...points].join('\n')
+}
+
 function reviewEntry({ view, recovery }: RecoverySources['reviews'][number], locale: Locale): ReviewEntry {
   const t = lang(locale)
   const review = recovery.context.operation === 'review-chapter'
+  const shown = (item: RecoveryText): ReviewText => ({ ...item, display: review ? reviewDigest(item.text, locale) : item.text })
   const requestsReview = review && !recovery.saved && !canCommitRecoveredReview(recovery)
   const current = recovery.sourceStatus === 'current'
   const live = view.status !== 'cancelled'
@@ -269,8 +298,8 @@ function reviewEntry({ view, recovery }: RecoverySources['reviews'][number], loc
       `Chapter ${recovery.context.source.chapterNumber} ${review ? 'review' : 'revision'} candidate`),
     ...usageOf(view, locale),
     notes,
-    artifacts: (view.candidates ?? view.artifacts).filter(hasText).map(artifact => ({ id: artifact.artifactId, text: artifact.text })),
-    tails: texts(view.unsavedTails),
+    artifacts: (view.candidates ?? view.artifacts).filter(hasText).map(artifact => shown({ id: artifact.artifactId, text: artifact.text })),
+    tails: texts(view.unsavedTails).map(shown),
     actionLabel: recovery.saved ? t('打开已保存结果', 'Open saved result')
       : requestsReview ? t('重新审稿', 'Review again') : t('恢复此审修任务', 'Recover this review or revision'),
     canAct: Boolean(recovery.saved) || (recovery.canResume && current && live),
