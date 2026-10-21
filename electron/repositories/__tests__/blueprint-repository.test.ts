@@ -101,23 +101,23 @@ beforeEach(() => {
 
 describe('BlueprintRepository without an opened project DB', () => {
   it('throws for getAll', () => {
-    expect(() => BlueprintRepository.getAll()).toThrow(/项目数据库未打开/)
+    expect(() => BlueprintRepository.getAll()).toThrow('PROJECT_NOT_OPEN')
   })
 
   it('throws for getByChapter', () => {
-    expect(() => BlueprintRepository.getByChapter(1)).toThrow(/项目数据库未打开/)
+    expect(() => BlueprintRepository.getByChapter(1)).toThrow('PROJECT_NOT_OPEN')
   })
 
   it('throws for count', () => {
-    expect(() => BlueprintRepository.count()).toThrow(/项目数据库未打开/)
+    expect(() => BlueprintRepository.count()).toThrow('PROJECT_NOT_OPEN')
   })
 
   it('throws for upsert', () => {
-    expect(() => BlueprintRepository.upsert(blueprint)).toThrow(/项目数据库未打开/)
+    expect(() => BlueprintRepository.upsert(blueprint)).toThrow('PROJECT_NOT_OPEN')
   })
 
   it('throws for upsertMany', () => {
-    expect(() => BlueprintRepository.upsertMany([blueprint])).toThrow(/项目数据库未打开/)
+    expect(() => BlueprintRepository.upsertMany([blueprint])).toThrow('PROJECT_NOT_OPEN')
   })
 })
 
@@ -234,7 +234,7 @@ describe('BlueprintRepository range commit', () => {
         startChapter: 1,
         endChapter: 3,
         blueprints: [blueprintFor(1), blueprintFor(2), blueprintFor(3)],
-      })).toThrow(/回读不一致/u)
+      })).toThrow('BLUEPRINT_COMMIT_READ_BACK_FAILED')
       expect(BlueprintRepository.getAll()).toEqual([])
     } finally {
       db.close()
@@ -257,7 +257,7 @@ describe('BlueprintRepository range commit', () => {
           startChapter: 1,
           endChapter: 3,
           blueprints,
-        })).toThrow(/完整且唯一/u)
+        })).toThrow('BLUEPRINT_COMMIT_RANGE_INCOMPLETE')
       }
       expect(BlueprintRepository.getAll()).toEqual([])
     } finally {
@@ -276,7 +276,7 @@ describe('BlueprintRepository range commit', () => {
         startChapter: 0,
         endChapter: 1,
         blueprints: [blueprintFor(0), blueprintFor(1)],
-      })).toThrow(/范围无效/u)
+      })).toThrow('BLUEPRINT_COMMIT_RANGE_INVALID')
       expect(BlueprintRepository.getAll()).toEqual([])
     } finally {
       db.close()
@@ -328,7 +328,7 @@ describe('BlueprintRepository range commit', () => {
         startChapter: 1,
         endChapter: 3,
         blueprints: [blueprintFor(1), blueprintFor(2), blueprintFor(3)],
-      })).toThrow(/回读不一致/u)
+      })).toThrow('BLUEPRINT_COMMIT_READ_BACK_FAILED')
       expect(BlueprintRepository.getAll()).toEqual(original)
     } finally {
       db.close()
@@ -392,7 +392,7 @@ describe('BlueprintRepository range commit', () => {
       expect(() => BlueprintRepository.commitRange({
         ...request,
         blueprints: [blueprintFor(1), { ...blueprintFor(2), title: '冲突载荷' }],
-      })).toThrow(/操作 ID.*不同/u)
+      })).toThrow('BLUEPRINT_OPERATION_CONFLICT')
     } finally {
       db.close()
     }
@@ -532,7 +532,7 @@ describe('BlueprintRepository range commit', () => {
       `).run(committed.characterSyncOperation.operationId)
       expect(() => BlueprintRepository.completeCharacterSyncOperation(
         committed.characterSyncOperation.operationId,
-      )).toThrow(/操作证据/u)
+      )).toThrow('BLUEPRINT_CHARACTER_SYNC_EVIDENCE_MISMATCH')
       restoreEvidence()
       db.prepare(`
         UPDATE character_roster_operations SET committed_revision = 999
@@ -540,7 +540,7 @@ describe('BlueprintRepository range commit', () => {
       `).run(committed.characterSyncOperation.operationId)
       expect(() => BlueprintRepository.completeCharacterSyncOperation(
         committed.characterSyncOperation.operationId,
-      )).toThrow(/操作证据/u)
+      )).toThrow('BLUEPRINT_CHARACTER_SYNC_EVIDENCE_MISMATCH')
       restoreEvidence()
       db.prepare(`
         UPDATE character_roster_operations SET projection_hash = 'forged'
@@ -548,7 +548,7 @@ describe('BlueprintRepository range commit', () => {
       `).run(committed.characterSyncOperation.operationId)
       expect(() => BlueprintRepository.completeCharacterSyncOperation(
         committed.characterSyncOperation.operationId,
-      )).toThrow(/操作证据/u)
+      )).toThrow('BLUEPRINT_CHARACTER_SYNC_EVIDENCE_MISMATCH')
       restoreEvidence()
 
       const completed = BlueprintRepository.completeCharacterSyncOperation(
@@ -579,7 +579,7 @@ describe('BlueprintRepository range commit', () => {
     vi.mocked(getProjectDb).mockReturnValue(db)
     try {
       expect(() => BlueprintRepository.completeCharacterSyncOperation('blueprint-sync-forged'))
-        .toThrow(/不存在/u)
+        .toThrow('BLUEPRINT_CHARACTER_SYNC_OPERATION_MISSING')
     } finally {
       db.close()
     }

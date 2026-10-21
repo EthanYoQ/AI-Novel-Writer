@@ -5,6 +5,7 @@ import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/edit
 import { useWorkflowStore, workflowResourceKey } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { toast } from '../ui/Toast'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 import {
   parseDraftMeta,
   type DraftMeta,
@@ -195,7 +196,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
         setSaveOutcome('failed')
-        toast.error(error instanceof Error ? error.message : text('草稿保存失败', 'Could not save the draft'))
+        toast.error(error instanceof Error ? displayedErrorMessage(locale, error) : text('草稿保存失败', 'Could not save the draft'))
       }
       if (propagateFailure) throw error
     } finally {

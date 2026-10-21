@@ -12,7 +12,7 @@ import { resolveWritingLanguage } from '../../src/shared/writing-language'
 
 function requireDb(): NonNullable<ReturnType<typeof getProjectDb>> {
   const db = getProjectDb()
-  if (!db) throw new Error('项目数据库未打开')
+  if (!db) throw new Error('PROJECT_NOT_OPEN')
   return db
 }
 
@@ -32,7 +32,7 @@ export class PlotTreeRepository {
       synopsis: string
       plot_tree_snapshot: string
     } | undefined
-    if (!core) throw new Error('项目配置不存在')
+    if (!core) throw new Error('PLOT_TREE_PROJECT_CORE_MISSING')
 
     const blueprintRows = db.prepare(`
       SELECT chapter_number, title, purpose, key_events
@@ -127,13 +127,13 @@ export class PlotTreeRepository {
   static save(snapshot: PlotTreeSnapshot, expectedSourceRevision: string, db = requireDb()): PlotTreeSnapshot {
     const sources = this.read(db)
     if (sources.sourceRevision !== expectedSourceRevision) {
-      throw new Error('剧情资料在生成期间已更新')
+      throw new Error('PLOT_TREE_SOURCES_CHANGED')
     }
     const validated = assertPlotTreeSnapshot(snapshot, sources)
     const result = db.prepare(`
       UPDATE project_core SET plot_tree_snapshot = ? WHERE id = 'main'
     `).run(JSON.stringify(validated))
-    if (result.changes !== 1) throw new Error('剧情树快照保存失败')
+    if (result.changes !== 1) throw new Error('PLOT_TREE_SAVE_FAILED')
     return validated
   }
 
@@ -141,6 +141,6 @@ export class PlotTreeRepository {
     const result = db.prepare(`
       UPDATE project_core SET plot_tree_snapshot = '' WHERE id = 'main'
     `).run()
-    if (result.changes !== 1) throw new Error('剧情树快照清除失败')
+    if (result.changes !== 1) throw new Error('PLOT_TREE_CLEAR_FAILED')
   }
 }

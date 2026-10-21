@@ -164,7 +164,7 @@ function rowToData(row: BlueprintRow): BlueprintData {
 
 function requireProjectDb(): NonNullable<ReturnType<typeof getProjectDb>> {
     const db = getProjectDb()
-    if (!db) throw new Error('项目数据库未打开')
+    if (!db) throw new Error('PROJECT_NOT_OPEN')
     return db
 }
 
@@ -230,9 +230,9 @@ function commitPayloadHash(request: BlueprintRangeCommitRequest): string {
 
 function assertExactRange(request: BlueprintRangeCommitRequest): void {
     const { operationId, startChapter, endChapter, blueprints } = request
-    if (!operationId.trim()) throw new Error('蓝图提交缺少操作 ID')
+    if (!operationId.trim()) throw new Error('BLUEPRINT_OPERATION_ID_REQUIRED')
     if (request.mode !== 'full' && request.mode !== 'replace-range') {
-        throw new Error('蓝图提交模式无效')
+        throw new Error('BLUEPRINT_COMMIT_MODE_INVALID')
     }
     if (
         !Number.isInteger(startChapter)
@@ -240,10 +240,10 @@ function assertExactRange(request: BlueprintRangeCommitRequest): void {
         || startChapter < 1
         || endChapter < startChapter
     ) {
-        throw new Error('蓝图提交范围无效')
+        throw new Error('BLUEPRINT_COMMIT_RANGE_INVALID')
     }
     if (request.mode === 'full' && startChapter !== 1) {
-        throw new Error('全量蓝图提交必须从第 1 章开始')
+        throw new Error('BLUEPRINT_COMMIT_RANGE_INVALID')
     }
 
     const expectedNumbers = Array.from(
@@ -256,7 +256,7 @@ function assertExactRange(request: BlueprintRangeCommitRequest): void {
         || new Set(actualNumbers).size !== actualNumbers.length
         || expectedNumbers.some(chapterNumber => !actualNumbers.includes(chapterNumber))
     ) {
-        throw new Error(`蓝图提交必须完整且唯一地覆盖第 ${startChapter}–${endChapter} 章`)
+        throw new Error('BLUEPRINT_COMMIT_RANGE_INCOMPLETE')
     }
 }
 
@@ -279,9 +279,9 @@ function readCharacterSyncInput(row: BlueprintCommitOperationRow): BlueprintData
     try {
         parsed = JSON.parse(row.character_sync_input)
     } catch {
-        throw new Error('蓝图提交幂等回执损坏')
+        throw new Error('BLUEPRINT_COMMIT_RECEIPT_INVALID')
     }
-    if (!Array.isArray(parsed)) throw new Error('蓝图提交幂等回执格式无效')
+    if (!Array.isArray(parsed)) throw new Error('BLUEPRINT_COMMIT_RECEIPT_INVALID')
     return parsed as BlueprintData[]
 }
 
@@ -290,9 +290,9 @@ function parseCharacterSyncInput(serialized: string): BlueprintData[] {
     try {
         parsed = JSON.parse(serialized)
     } catch {
-        throw new Error('蓝图角色同步操作的冻结输入已损坏')
+        throw new Error('BLUEPRINT_CHARACTER_SYNC_INPUT_INVALID')
     }
-    if (!Array.isArray(parsed)) throw new Error('蓝图角色同步操作的冻结输入格式无效')
+    if (!Array.isArray(parsed)) throw new Error('BLUEPRINT_CHARACTER_SYNC_INPUT_INVALID')
     return parsed as BlueprintData[]
 }
 
@@ -304,10 +304,10 @@ function parseCompletionReceipt(
     try {
         parsed = JSON.parse(serialized)
     } catch {
-        throw new Error('蓝图角色同步完成回执已损坏')
+        throw new Error('BLUEPRINT_CHARACTER_SYNC_RECEIPT_INVALID')
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('蓝图角色同步完成回执格式无效')
+        throw new Error('BLUEPRINT_CHARACTER_SYNC_RECEIPT_INVALID')
     }
     return parsed as BlueprintCharacterSyncCompletionReceipt
 }
@@ -317,10 +317,10 @@ function rowToCharacterSyncOperation(
 ): BlueprintCharacterSyncOperation {
     const completionReceipt = parseCompletionReceipt(row.completion_receipt)
     if (row.status === 'pending' && completionReceipt) {
-        throw new Error('待处理蓝图角色同步操作不应包含完成回执')
+        throw new Error('BLUEPRINT_CHARACTER_SYNC_STATE_INVALID')
     }
     if (row.status === 'completed' && !completionReceipt) {
-        throw new Error('已完成蓝图角色同步操作缺少完成回执')
+        throw new Error('BLUEPRINT_CHARACTER_SYNC_STATE_INVALID')
     }
     return {
         operationId: row.operation_id,
@@ -371,10 +371,10 @@ function authoritativeCharacterSyncCompletionReceipt(
     }
     const roster = CharacterRosterRepository.read()
     if (roster.status !== 'ready' && roster.status !== 'empty') {
-        throw new Error('角色名单当前不可验证，已拒绝完成蓝图角色同步')
+        throw new Error('BLUEPRINT_CHARACTER_SYNC_ROSTER_NOT_READY')
     }
     const factError = blueprintCharacterSyncFactError(operation.characterSyncInput, roster.entries)
-    if (factError) throw new Error(`${factError}，已拒绝完成蓝图角色同步`)
+    if (factError) throw new Error('BLUEPRINT_CHARACTER_SYNC_FACTS_CHANGED')
 
     const rosterOperation = db.prepare(`
       SELECT operation_id, payload_hash, committed_revision, projection_hash
@@ -399,7 +399,7 @@ function authoritativeCharacterSyncCompletionReceipt(
             && rosterOperation.projection_hash !== roster.projectionHash
         )
     ) {
-        throw new Error('角色名单操作证据与当前事实不匹配，已拒绝完成蓝图角色同步')
+        throw new Error('BLUEPRINT_CHARACTER_SYNC_EVIDENCE_MISMATCH')
     }
     return {
         blueprintCommitOperationId: operation.blueprintCommitOperationId,
@@ -424,7 +424,7 @@ function assertAuthoritativeCharacterSyncCompletion(
         JSON.stringify(canonicalize(operation.completionReceipt))
         !== JSON.stringify(canonicalize(authoritative))
     ) {
-        throw new Error('蓝图角色同步完成回执与角色名单事实不匹配')
+        throw new Error('BLUEPRINT_CHARACTER_SYNC_RECEIPT_MISMATCH')
     }
 }
 
@@ -541,7 +541,7 @@ export class BlueprintRepository {
 
     /** Pure read-back of the operation ledger and its currently bound range/sync evidence. */
     static getCommittedRangeOperation(operationId: string, db = requireProjectDb()): BlueprintRangeCommitReceipt | null {
-        if (!operationId.trim()) throw new Error('蓝图提交缺少操作 ID')
+        if (!operationId.trim()) throw new Error('BLUEPRINT_OPERATION_ID_REQUIRED')
         ensureBlueprintCommitSchema(db)
         const operation = db.prepare(`
           SELECT operation_id, payload_hash, mode, start_chapter, end_chapter, character_sync_input
@@ -561,7 +561,7 @@ export class BlueprintRepository {
             db,
             characterSyncOperationId(operation.operation_id),
         )
-        if (!characterSyncOperation) throw new Error('蓝图提交缺少可恢复的角色同步操作')
+        if (!characterSyncOperation) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_MISSING')
         assertAuthoritativeCharacterSyncCompletion(db, characterSyncOperation)
         return {
             mode: operation.mode,
@@ -590,7 +590,7 @@ export class BlueprintRepository {
             `).get(request.operationId) as BlueprintCommitOperationRow | undefined
             if (existingOperation) {
                 if (existingOperation.payload_hash !== payloadHash) {
-                    throw new Error('操作 ID 已被用于不同的蓝图提交，已拒绝覆盖')
+                    throw new Error('BLUEPRINT_OPERATION_CONFLICT')
                 }
                 const characterSyncInput = readCharacterSyncInput(existingOperation)
                 const persisted = readExactRange(db, {
@@ -604,7 +604,7 @@ export class BlueprintRepository {
                     db,
                     characterSyncOperationId(existingOperation.operation_id),
                 )
-                if (!characterSyncOperation) throw new Error('蓝图提交缺少可恢复的角色同步操作')
+                if (!characterSyncOperation) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_MISSING')
                 assertAuthoritativeCharacterSyncCompletion(db, characterSyncOperation)
                 return {
                     mode: existingOperation.mode,
@@ -640,7 +640,7 @@ export class BlueprintRepository {
             for (const saved of persisted) {
                 const expected = expectedByChapter.get(saved.chapterNumber)
                 if (!expected || !samePersistedBlueprint(saved, expected)) {
-                    throw new Error(`蓝图提交回读不一致：第 ${saved.chapterNumber} 章`)
+                    throw new Error('BLUEPRINT_COMMIT_READ_BACK_FAILED')
                 }
             }
 
@@ -677,7 +677,7 @@ export class BlueprintRepository {
             )
             const snapshot = snapshotWithCharacterSyncFacts(persisted, characterSyncInput)
             const characterSyncOperation = readCharacterSyncOperation(db, syncOperationId)
-            if (!characterSyncOperation) throw new Error('蓝图提交未创建可恢复的角色同步操作')
+            if (!characterSyncOperation) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_MISSING')
 
             return {
                 mode: request.mode,
@@ -720,7 +720,7 @@ export class BlueprintRepository {
     }
 
     static getCharacterSyncOperation(operationId: string): BlueprintCharacterSyncOperation | null {
-        if (!operationId.trim()) throw new Error('蓝图角色同步操作 ID 不能为空')
+        if (!operationId.trim()) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_ID_REQUIRED')
         const db = requireProjectDb()
         ensureBlueprintCommitSchema(db)
         const operation = readCharacterSyncOperation(db, operationId)
@@ -731,12 +731,12 @@ export class BlueprintRepository {
     static completeCharacterSyncOperation(
         operationId: string,
     ): BlueprintCharacterSyncOperation {
-        if (!operationId.trim()) throw new Error('蓝图角色同步操作 ID 不能为空')
+        if (!operationId.trim()) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_ID_REQUIRED')
         const db = requireProjectDb()
         ensureBlueprintCommitSchema(db)
         const tx = db.transaction(() => {
             const operation = readCharacterSyncOperation(db, operationId)
-            if (!operation) throw new Error('待处理蓝图角色同步操作不存在')
+            if (!operation) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_MISSING')
             if (operation.status === 'completed') {
                 assertAuthoritativeCharacterSyncCompletion(db, operation)
                 return operation
@@ -751,10 +751,10 @@ export class BlueprintRepository {
                 updated_at = datetime('now')
               WHERE operation_id = ? AND status = 'pending'
             `).run(JSON.stringify(canonicalize(completionReceipt)), operationId)
-            if (result.changes !== 1) throw new Error('蓝图角色同步完成状态更新失败')
+            if (result.changes !== 1) throw new Error('BLUEPRINT_CHARACTER_SYNC_READ_BACK_FAILED')
             const completed = readCharacterSyncOperation(db, operationId)
             if (!completed || completed.status !== 'completed' || !completed.completionReceipt) {
-                throw new Error('蓝图角色同步完成回执回读失败')
+                throw new Error('BLUEPRINT_CHARACTER_SYNC_READ_BACK_FAILED')
             }
             assertAuthoritativeCharacterSyncCompletion(db, completed)
             return completed

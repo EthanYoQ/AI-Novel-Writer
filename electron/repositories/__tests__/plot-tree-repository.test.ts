@@ -368,7 +368,7 @@ describe('PlotTreeRepository', () => {
     expect(changedSources.sourceRevision).not.toBe(sources.sourceRevision)
 
     expect(() => PlotTreeRepository.save(snapshot, sources.sourceRevision))
-      .toThrow(/生成期间已更新/u)
+      .toThrow('PLOT_TREE_SOURCES_CHANGED')
   })
 
   it('rejects a hallucinated source without replacing the last valid snapshot', () => {
@@ -426,7 +426,7 @@ describe('PlotTreeRepository', () => {
       "UPDATE project_core SET updated_at = '2031-01-01 00:00:00' WHERE id = 'main'",
     ).run()
 
-    expect(() => PlotTreeRepository.save(snapshot, sources.sourceRevision)).toThrow(/生成期间已更新/u)
+    expect(() => PlotTreeRepository.save(snapshot, sources.sourceRevision)).toThrow('PLOT_TREE_SOURCES_CHANGED')
     expect(PlotTreeRepository.read().snapshot).toBeNull()
   })
 
