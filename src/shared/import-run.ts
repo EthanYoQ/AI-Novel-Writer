@@ -96,6 +96,7 @@ const IMPORT_RUN_CONTENT_FINGERPRINT = /^[a-f0-9]{64}$/u
 const IMPORT_RUN_CHAPTER_BATCH_CHECKPOINT = /^([1-9]\d*)-([1-9]\d*)-([a-f0-9]{8}(?:\.[a-f0-9]{8})*)$/u
 
 /** Canonical identity shared by blueprint batching, durable receipts, and repository checkpoints. */
+// i18n-exempt: 内部不变量与收据完整性校验：只有代码缺陷或作品库被外部改坏才会触发
 export function createImportRunChapterBatchCheckpointId(
   chapters: readonly Pick<ImportRunChapterInput, 'number' | 'contentFingerprint'>[],
 ): string {
@@ -150,6 +151,7 @@ export function expectedImportRunEffectKey(
 }
 
 /** Common binding checks used before storage commit and renderer replay. */
+// i18n-exempt: 内部不变量与收据完整性校验：只有代码缺陷或作品库被外部改坏才会触发
 export function assertImportRunEffectReceiptMetadata(
   receipt: ImportRunEffectReceipt,
   run: ImportRunSnapshot,

@@ -473,6 +473,17 @@ describe('i18n coverage boundary scanner', () => {
           throw new Error('Only English')
         }
       `)
+      writeFixture(root, 'src/shared/plot-tree.ts', `
+        /** 校验快照。 */
+        // i18n-exempt: 只在主进程校验，失败在 IPC 边界换成错误码
+        export function assertSnapshot(value: unknown) {
+          if (!value) throw new Error('剧情树快照无效')
+          return () => { throw new Error('剧情树轨道无效') }
+        }
+        export const assertTrack = (value: unknown) => {
+          if (!value) throw new Error('剧情树事件无效')
+        }
+      `)
       writeFixture(root, 'src/components/stage/__tests__/use-thing.test.ts', `
         throw new Error('测试里的中文不进界面')
       `)
@@ -485,6 +496,7 @@ describe('i18n coverage boundary scanner', () => {
         "src/components/stage/use-thing.ts:4 [thrown-error] '剧情树快照保存失败'",
         "src/components/stage/use-thing.ts:9 [exempt-without-reason] '资源只读'",
         "src/components/stage/use-thing.ts:10 [thrown-error] '角色数据仍在切换项目'",
+        "src/shared/plot-tree.ts:9 [thrown-error] '剧情树事件无效'",
       ])
     } finally {
       rmSync(root, { recursive: true, force: true })

@@ -55,12 +55,10 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
     'src/services/workflows',
   ],
   // 工作流目录以外的渲染层文件（含与主进程共用的 src/shared）抛出的说明会经各处 catch 显示给作者（#474）：
-  // 同样不能写只有中文的原文。纯内部断言或只进日志的，在 throw 所在行或上一行写 `// i18n-exempt: <理由>`。
+  // 同样不能写只有中文的原文。纯内部断言或只进日志的，在 throw 所在行或上一行写 `// i18n-exempt: <理由>`；
+  // 同一个解析或校验函数里的多处可以写在函数声明正上一行。Promise.reject(new Error(...)) 按 throw 算。
   rendererThrowErrorBoundaries: [
-    'src/App.tsx',
-    'src/components',
-    'src/stores',
-    'src/services',
+    'src',
   ],
   // 这些命令连错误码也不能直接抛（#408）：每条失败都要给作者能读的说明。
   strictWorkflowCommandErrorBoundaries: [
@@ -497,8 +495,15 @@ const exemptDirective = /\/\/\s*i18n-exempt:(.*)$/u
 function exemption(sourceFile, node) {
   const lines = sourceFile.getFullText().split(/\r?\n/u)
   const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line
-  const above = lines[line - 1]?.trimStart().startsWith('//') ? lines[line - 1] : undefined
-  for (const text of [lines[line], above]) {
+  const commentLineAbove = (index) => lines[index - 1]?.trimStart().startsWith('//') ? lines[index - 1] : undefined
+  const candidates = [lines[line], commentLineAbove(line)]
+  // 写在函数声明正上一行的指令覆盖整个函数体：同一个解析或校验函数里的多处 throw 共用一条理由。
+  for (let current = node.parent; current; current = current.parent) {
+    if (!ts.isFunctionLike(current)) continue
+    const declaration = ts.isVariableDeclaration(current.parent) ? current.parent.parent.parent : current
+    candidates.push(commentLineAbove(sourceFile.getLineAndCharacterOfPosition(declaration.getStart(sourceFile)).line))
+  }
+  for (const text of candidates) {
     const match = text && exemptDirective.exec(text)
     if (match) return match[1].trim() ? 'exempt' : 'missing-reason'
   }
