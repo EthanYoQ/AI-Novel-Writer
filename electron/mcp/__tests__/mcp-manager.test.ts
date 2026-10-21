@@ -96,14 +96,14 @@ describe('MCP trusted configuration boundary', () => {
     fs.unlinkSync(path.join(velaHome, 'mcp_config.json'))
 
     await expect(mcpManager.loadConfig()).resolves.toEqual({ status: 'missing', servers: [] })
-    await expect(mcpManager.connect('old_server')).rejects.toThrow(/未配置/u)
+    await expect(mcpManager.connect('old_server')).rejects.toThrow('MCP_SERVER_NOT_CONFIGURED')
 
     writeConfig({ mcpServers: { old_server: { command: 'node' } } })
     await expect(mcpManager.loadConfig()).resolves.toMatchObject({ status: 'loaded' })
     writeConfig('{BROKEN_MCP_CONFIG')
 
     await expect(mcpManager.loadConfig()).resolves.toMatchObject({ status: 'error', servers: [] })
-    await expect(mcpManager.connect('old_server')).rejects.toThrow(/未配置/u)
+    await expect(mcpManager.connect('old_server')).rejects.toThrow('MCP_SERVER_NOT_CONFIGURED')
   })
 
   it('disconnects an active server when its configuration becomes missing', async () => {
@@ -179,9 +179,9 @@ describe('MCP trusted configuration boundary', () => {
     await expect(mcpManager.loadConfig()).resolves.toEqual({
       status: 'error',
       servers: [],
-      error: expect.stringMatching(/MCP.*配置.*损坏/u),
+      error: 'MCP_CONFIG_INVALID',
     })
-    await expect(mcpManager.connect('appears_before_damage')).rejects.toThrow(/未配置/u)
+    await expect(mcpManager.connect('appears_before_damage')).rejects.toThrow('MCP_SERVER_NOT_CONFIGURED')
   })
 
   it('reports invalid JSON as corrupt configuration', async () => {
@@ -189,7 +189,7 @@ describe('MCP trusted configuration boundary', () => {
     await expect(mcpManager.loadConfig()).resolves.toEqual({
       status: 'error',
       servers: [],
-      error: expect.stringMatching(/MCP.*配置.*损坏/u),
+      error: 'MCP_CONFIG_INVALID',
     })
   })
 
@@ -201,7 +201,7 @@ describe('MCP trusted configuration boundary', () => {
   ])('rejects $caseName instead of loading an unusable server', async ({ serverConfig }) => {
     writeConfig({ mcpServers: { invalid: serverConfig } })
     await expect(mcpManager.loadConfig()).resolves.toMatchObject({ status: 'error', servers: [] })
-    await expect(mcpManager.connect('invalid')).rejects.toThrow(/未配置/u)
+    await expect(mcpManager.connect('invalid')).rejects.toThrow('MCP_SERVER_NOT_CONFIGURED')
   })
 
   it('keeps command arguments, environment, and credential URLs in the main process', async () => {
@@ -231,7 +231,7 @@ describe('MCP trusted configuration boundary', () => {
   })
 
   it('rejects an id that was not loaded from the trusted config', async () => {
-    await expect(mcpManager.connect('unconfigured')).rejects.toThrow(/未配置/u)
+    await expect(mcpManager.connect('unconfigured')).rejects.toThrow('MCP_SERVER_NOT_CONFIGURED')
     expect(spawnMock).not.toHaveBeenCalled()
   })
 
@@ -262,9 +262,9 @@ describe('MCP trusted configuration boundary', () => {
     spawnMock.mockReturnValue(createMcpProcess({ initializeError: 'SECRET_INITIALIZE_ERROR_MARKER' }))
     await mcpManager.loadConfig()
 
-    await expect(mcpManager.connect('broken')).rejects.toThrow(/MCP.*连接失败/u)
+    await expect(mcpManager.connect('broken')).rejects.toThrow('MCP_CONNECT_FAILED')
     expect(mcpManager.getServersStatus()).toEqual([
-      expect.objectContaining({ id: 'broken', status: 'error', error: expect.stringMatching(/MCP.*连接失败/u) }),
+      expect.objectContaining({ id: 'broken', status: 'error', error: 'MCP_CONNECT_FAILED' }),
     ])
     expect(JSON.stringify(mcpManager.getServersStatus())).not.toContain('SECRET_INITIALIZE_ERROR_MARKER')
   })
@@ -274,11 +274,19 @@ describe('MCP trusted configuration boundary', () => {
     spawnMock.mockReturnValue(createMcpProcess({ failToStart: true }))
     await mcpManager.loadConfig()
 
-    await expect(mcpManager.connect('broken')).rejects.toThrow(/MCP.*连接失败/u)
+    await expect(mcpManager.connect('broken')).rejects.toThrow('MCP_CONNECT_FAILED')
     expect(mcpManager.getServersStatus()).toEqual([
-      expect.objectContaining({ id: 'broken', status: 'error', error: 'MCP 服务器连接失败' }),
+      expect.objectContaining({ id: 'broken', status: 'error', error: 'MCP_CONNECT_FAILED' }),
     ])
     expect(JSON.stringify(mcpManager.getServersStatus())).not.toContain('SECRET_CHILD_ERROR_MARKER')
+  })
+
+  it('reports a stable code when a tool is called on a server that is not connected', async () => {
+    await expect(mcpManager.callTool('absent', 'search', {})).resolves.toEqual({
+      success: false,
+      content: '',
+      error: 'MCP_SERVER_NOT_CONNECTED',
+    })
   })
 
   it('times out initialization without leaving the connection pending', async () => {
@@ -287,7 +295,7 @@ describe('MCP trusted configuration boundary', () => {
     spawnMock.mockReturnValue(createMcpProcess({ neverRespond: true }))
     await mcpManager.loadConfig()
 
-    const rejection = expect(mcpManager.connect('silent')).rejects.toThrow(/MCP.*连接失败/u)
+    const rejection = expect(mcpManager.connect('silent')).rejects.toThrow('MCP_CONNECT_FAILED')
     await vi.advanceTimersByTimeAsync(10_000)
     await rejection
     expect(mcpManager.getServersStatus()).toEqual([

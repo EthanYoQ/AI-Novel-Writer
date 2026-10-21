@@ -170,3 +170,23 @@ describe('knowledge base and search index errors from the main process (#474 B3)
     expect(knownAppErrorMessage('en-US', blocked)).toContain('Legacy knowledge-base data must be repaired')
   })
 })
+
+describe('model, model settings and MCP errors from the main process (#474 B6)', () => {
+  it.each([
+    // llm-controller 的 catch 用 String(error) 交出 "Error: 码"。
+    ['Error: LLM_GLOBAL_CONFIG_CORRUPT', 'model settings file is damaged', '模型设置文件已损坏'],
+    ['Error: LLM_DEFAULT_MODEL_ROLLBACK_FAILED', 'model was not deleted', '模型没有删除'],
+    // 执行租约的码由 ModelExecutionLeaseError 抛出，带自己的类名。
+    ['ModelExecutionLeaseError: MODEL_ENDPOINT_INVALID', 'Base URL is invalid', 'Base URL 无效'],
+    ['GENERATION_KIMI_TEMPERATURE_INVALID', 'temperature from 0 to 1', '温度必须在 0 到 1 之间'],
+    // mcp 通道的结果值与工具调用的 String(error)。
+    ['MCP_CONFIG_INVALID', 'MCP configuration file is damaged', 'MCP 配置文件损坏'],
+    ['MCP_CONNECT_FAILED', 'Could not connect to the MCP server', 'MCP 服务器连接失败'],
+    ['Error: MCP_REQUEST_TIMEOUT', 'did not respond in time', '没有及时响应'],
+  ])('explains %s in the interface language without the code', (raw, english, chinese) => {
+    expect(appErrorMessage('en-US', raw)).toContain(english)
+    expect(appErrorMessage('en-US', raw)).not.toMatch(/[A-Z]{3,}_|\p{Script=Han}/u)
+    expect(appErrorMessage('zh-CN', raw)).toContain(chinese)
+    expect(appErrorMessage('zh-CN', raw)).not.toMatch(/[A-Z]{3,}_/u)
+  })
+})

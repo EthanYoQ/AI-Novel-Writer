@@ -5,9 +5,9 @@ import { VisibleStreamFilter } from './visible-stream'
 function assertVisibleStreamPayload(value: unknown): void {
   const record = (input: unknown): input is Record<string, unknown> =>
     typeof input === 'object' && input !== null && !Array.isArray(input)
-  const invalid = () => { throw new Error('Gemini 响应流格式无效') }
+  const invalid = () => { throw new Error('LLM_STREAM_INVALID') }
   if (!record(value)) return invalid()
-  if ('error' in value) throw new Error('Gemini 响应流报告错误')
+  if ('error' in value) throw new Error('LLM_STREAM_PROVIDER_ERROR')
   if (value.candidates === undefined) return
   if (!Array.isArray(value.candidates)) return invalid()
   for (const candidate of value.candidates) {
@@ -97,7 +97,7 @@ export class GeminiProvider implements ILLMProvider {
 
       if (!res.ok) {
         const text = await res.text()
-        return { success: false, content: '', finishReason: 'error', error: `Gemini API 调用失败 (${res.status}): ${text}` }
+        return { success: false, content: '', finishReason: 'error', error: 'LLM_REQUEST_FAILED', httpFailure: { status: res.status, body: text } }
       }
 
       const data = await res.json() as {
@@ -130,7 +130,7 @@ export class GeminiProvider implements ILLMProvider {
         content: text,
         usage,
         finishReason,
-        error: 'Gemini API 返回的文本未正常完成',
+        error: 'LLM_RESPONSE_INCOMPLETE',
       }
     } catch (error) {
       return { success: false, content: '', finishReason: 'error', error: String(error) }
@@ -177,14 +177,14 @@ export class GeminiProvider implements ILLMProvider {
       })
 
       if (!res.ok) {
-        const text = await res.text()
-        opts.onError(`Gemini API 调用失败 (${res.status}): ${text}`)
+        void res.body?.cancel().catch(() => {})
+        opts.onError('LLM_REQUEST_FAILED')
         return
       }
 
       const reader = res.body?.getReader()
       if (!reader) {
-        opts.onError('无法读取 Gemini 响应流')
+        opts.onError('LLM_STREAM_UNREADABLE')
         return
       }
 
@@ -259,7 +259,7 @@ export class GeminiProvider implements ILLMProvider {
       opts.onDone(opts.visibleOnly ? visible.text : fullText, usage, finishReason)
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
-        opts.onError('已取消生成', opts.visibleOnly ? visible.text : undefined, visibleUsage)
+        opts.onError('LLM_CANCELLED', opts.visibleOnly ? visible.text : undefined, visibleUsage)
       } else {
         opts.onError(String(error), opts.visibleOnly ? visible.text : undefined, visibleUsage)
       }

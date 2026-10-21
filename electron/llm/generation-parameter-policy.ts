@@ -46,7 +46,7 @@ function isOfficialKimiHost(baseUrl: string): boolean {
 
 function validateKimiTemperature(temperature: number): void {
   if (Number.isFinite(temperature) && temperature >= 0 && temperature <= 1) return
-  throw new Error('Kimi API 的 temperature 必须在 0 到 1 之间。请在模型设置中调整后重试。')
+  throw new Error('GENERATION_KIMI_TEMPERATURE_INVALID')
 }
 
 function positiveInteger(value: unknown): number | null {

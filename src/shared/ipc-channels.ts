@@ -762,6 +762,8 @@ interface LLMResponseBase {
   content: string
   usage?: TokenUsage
   error?: string
+  /** 供应商返回非 2xx 时的状态码与响应正文；error 为 LLM_REQUEST_FAILED，由连接测试按界面语言写进说明（#474）。 */
+  httpFailure?: { status: number; body: string }
 }
 
 /** Every non-stream response carries explicit terminal evidence. */

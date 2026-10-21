@@ -132,7 +132,7 @@ describe('ModelExecutionLeaseRegistry', () => {
     expect(mappingChange.modelRevision).not.toBe(base.modelRevision)
     expect(mappingChange.capabilityEvidence.maxOutputTokens).toBe(1024)
     expect(() => createModelExecutionLeaseReceipt({ ...modelProfile(), baseUrl: 'synthetic-invalid-secret' }, options))
-      .toThrow('模型端点地址无效')
+      .toThrow('MODEL_ENDPOINT_INVALID')
   })
   it('reports a missing model with a stable machine-readable error code', () => {
     const registry = new ModelExecutionLeaseRegistry({ loadModel: () => null })
@@ -332,7 +332,7 @@ describe('ModelExecutionLeaseRegistry', () => {
         },
       }),
     })
-    expect(() => invalidRegistry.begin('generation-model')).toThrow('模型输出上限无效')
+    expect(() => invalidRegistry.begin('generation-model')).toThrow('MODEL_OUTPUT_LIMIT_INVALID')
   })
 
   it('uses the same exported pure evidence and receipt factory as non-registry adapters', () => {
@@ -392,7 +392,7 @@ describe('ModelExecutionLeaseRegistry', () => {
     registry.begin('generation-model')
 
     expect(registry.close('lease-a')).toBe(true)
-    expect(() => registry.resolve('lease-a')).toThrow('模型执行租约无效')
+    expect(() => registry.resolve('lease-a')).toThrow('MODEL_EXECUTION_LEASE_INVALID')
     expect(registry.resolve('lease-b').id).toBe('generation-model')
     expect(registry.close('lease-a')).toBe(false)
   })
@@ -410,7 +410,7 @@ describe('ModelExecutionLeaseRegistry', () => {
     now = 10_499
     expect(registry.resolve('expiring-lease').id).toBe('generation-model')
     now = 10_500
-    expect(() => registry.resolve('expiring-lease')).toThrow('模型执行租约已过期')
+    expect(() => registry.resolve('expiring-lease')).toThrow('MODEL_EXECUTION_LEASE_EXPIRED')
     expect(registry.close('expiring-lease')).toBe(false)
   })
 })

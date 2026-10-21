@@ -107,4 +107,31 @@ describe('llm model deletion consistency', () => {
       defaultEmbeddingModelId: 'generation',
     })
   })
+
+  it('reports a registered code when neither the deletion nor the default rollback can be written', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let configWrites = 0
+    mocks.writeJsonFile.mockImplementation((path: string) => {
+      if (path === 'models.json') throw new Error('models file locked')
+      if (++configWrites === 2) throw new Error('config file locked')
+    })
+
+    await expect(deleteHandler()({}, 'generation')).resolves.toEqual({
+      success: false,
+      error: 'Error: LLM_DEFAULT_MODEL_ROLLBACK_FAILED',
+    })
+    expect(consoleError).toHaveBeenCalledOnce()
+    consoleError.mockRestore()
+  })
+
+  it('refuses to delete from a damaged models file with a registered code', async () => {
+    const { tryReadJsonFile } = await import('../../utils/config-utils')
+    vi.mocked(tryReadJsonFile).mockReturnValueOnce({ status: 'error', error: new SyntaxError('Unexpected token') })
+
+    await expect(deleteHandler()({}, 'generation')).resolves.toEqual({
+      success: false,
+      error: 'Error: LLM_MODEL_CONFIG_CORRUPT',
+    })
+    expect(mocks.writeJsonFile).not.toHaveBeenCalled()
+  })
 })
