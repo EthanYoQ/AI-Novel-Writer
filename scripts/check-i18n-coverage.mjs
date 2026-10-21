@@ -871,6 +871,16 @@ export function runI18nCoverageCheck(root = process.cwd()) {
   return 0
 }
 
+/** 逐处列出基线里还剩的主进程中文报错（文件:行、所在函数、原文），供逐批清理时复核。 */
+export function listMainErrorSites(root = process.cwd()) {
+  const sites = collectMainErrorSites(root, [])
+  for (const site of sites) console.log(`${site.file}:${site.line}	${site.owner}	${site.text}`)
+  console.log(`${sites.length} Chinese-only main-process error site(s)`)
+  return 0
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exitCode = process.argv.includes('--update-baseline') ? updateMainErrorBaseline() : runI18nCoverageCheck()
+  process.exitCode = process.argv.includes('--update-baseline')
+    ? updateMainErrorBaseline()
+    : process.argv.includes('--list-main-errors') ? listMainErrorSites() : runI18nCoverageCheck()
 }
