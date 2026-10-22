@@ -164,7 +164,7 @@ function productionDependencies(
         projectPath,
       ),
       '无法保存 AI 生成的导入结果。',
-        'Could not freeze generated import output.',
+      'Could not freeze generated import output.',
     ).receipt!,
     commitEffectReceipt: async (runId, stage, checkpoint, execution) => required(
       await ipc.invokeWithProjectSession(
@@ -177,7 +177,7 @@ function productionDependencies(
         projectPath,
       ),
       '无法提交 AI 生成的导入结果。',
-        'Could not commit the generated import output.',
+      'Could not commit the generated import output.',
     ).result!,
     replayCommittedEffect: async (receipt, run) => {
       // Re-read through the main-process repository so replay receives the
@@ -432,26 +432,26 @@ function productionDependencies(
         session, 'db:import-run-advance-stage', runId, completedStage, nextStage, execution, projectPath,
       ),
       '无法推进导入进度。',
-        'Could not advance the import checkpoint.',
+      'Could not advance the import checkpoint.',
     ).run!,
     fail: async (runId, stage, error, execution) => required(
       await ipc.invokeWithProjectSession(
         session, 'db:import-run-fail', runId, stage, error, execution, projectPath,
       ),
       '无法保存导入失败记录。',
-        'Could not save the import failure.',
+      'Could not save the import failure.',
     ).run!,
     cancelAtBoundary: async (runId, execution) => required(
       await ipc.invokeWithProjectSession(
         session, 'db:import-run-cancel-at-boundary', runId, execution, projectPath,
       ),
       '无法保存导入取消状态。',
-        'Could not save import cancellation.',
+      'Could not save import cancellation.',
     ).run!,
     complete: async (runId, execution) => required(
       await ipc.invokeWithProjectSession(session, 'db:import-run-complete', runId, execution, projectPath),
       '无法完成这次导入。',
-        'Could not complete the import run.',
+      'Could not complete the import run.',
     ).run!,
   }
 }
