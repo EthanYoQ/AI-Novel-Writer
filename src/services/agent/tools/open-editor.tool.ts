@@ -5,7 +5,7 @@ import { buildAgentTool, createToolArtifact } from '../tool-registry'
 import { useEditorStore } from '../../../stores/editor-store'
 import { ipc } from '../../ipc-client'
 import { validatePath } from './safe-path'
-import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 import { APP_BRAND } from '../../../shared/brand'
 
 export const openEditorTool = buildAgentTool({
@@ -57,7 +57,7 @@ export const openEditorTool = buildAgentTool({
     const result = await ipc.invokeWithProjectSession(projectSession, 'fs:read-file', fullPath, project.path)
     assertAgentProjectCurrent(context)
     if (!result.success) {
-      const detail = result.error
+      const detail = agentToolErrorDetail(context, result.error)
       return {
         success: false,
         content: '',

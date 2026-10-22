@@ -109,7 +109,7 @@ export class RevisionRepository {
         expectedSource?: ExpectedDraftSource
     }): { id: number; revisionIndex: number } {
         const db = getProjectDb()
-        if (!db) throw new Error('[RevisionRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         const tx = db.transaction(() => {
             if (!params.expectedSource) throw new SourceDraftChangedError()
@@ -159,7 +159,7 @@ export class RevisionRepository {
         wordCount: number
         expectedSource?: ExpectedDraftSource
     }, db = getProjectDb()): { id: number; revisionIndex: number; discardedRevisionIds: number[] } {
-        if (!db) throw new Error('[RevisionRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         return db.transaction(() => {
             if (!params.expectedSource) throw new SourceDraftChangedError()
@@ -266,7 +266,7 @@ export class RevisionRepository {
      * 不会再次覆盖之后产生的正文。
      */
     static mergeIntoDraft(request: MergeRevisionRequest, db = getProjectDb()): MergeRevisionReceipt {
-        if (!db) throw new Error('[RevisionRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         return db.transaction((): MergeRevisionReceipt => {
             const target = db.prepare(`
@@ -283,7 +283,7 @@ export class RevisionRepository {
                 content_id: number
                 body: string
             } | undefined
-            if (!target) throw new Error(`草稿不存在：${request.targetDraftId}`)
+            if (!target) throw new Error('DRAFT_NOT_FOUND')
 
             const revision = db.prepare(`
               SELECT base_draft_id, status, merged_to_draft_id,
@@ -299,9 +299,9 @@ export class RevisionRepository {
                 source_draft_status: string | null
                 source_content: string | null
             } | undefined
-            if (!revision) throw new Error(`修订稿不存在：${request.revisionId}`)
+            if (!revision) throw new Error('REVISION_NOT_FOUND')
             if (revision.base_draft_id !== request.targetDraftId) {
-                throw new Error('修订稿不属于目标草稿，已拒绝合并')
+                throw new Error('REVISION_TARGET_MISMATCH')
             }
 
             if (revision.status === 'merged') {
@@ -311,7 +311,7 @@ export class RevisionRepository {
                     || target.status !== 'revised'
                     || target.word_count !== request.wordCount
                 ) {
-                    throw new Error('修订稿已经合并，但目标草稿随后发生变化；已拒绝再次覆盖')
+                    throw new Error('REVISION_ALREADY_MERGED')
                 }
                 let reviewCycle: MergeRevisionReceipt['reviewCycle']
                 if (hasReviewCycleSchema(db)) {
@@ -337,13 +337,13 @@ export class RevisionRepository {
                 }
             }
             if (revision.status !== 'pending') {
-                throw new Error('修订稿已失效，不能继续合并')
+                throw new Error('REVISION_NOT_PENDING')
             }
             if (!['draft', 'revised', 'reviewed'].includes(target.status)) {
-                throw new Error('目标草稿不是可修改状态，已拒绝合并')
+                throw new Error('REVISION_TARGET_NOT_EDITABLE')
             }
             if (target.body !== request.expectedDraftContent) {
-                throw new Error('目标草稿正文已变化，请重新打开修订对比')
+                throw new Error('REVISION_TARGET_CHANGED')
             }
             if (
                 revision.source_draft_chapter_number === null
@@ -351,7 +351,7 @@ export class RevisionRepository {
                 || revision.source_draft_status === null
                 || revision.source_content === null
             ) {
-                throw new Error('旧修订稿缺少生成时源稿，仍可查看但不能合并；请重新生成修订稿')
+                throw new Error('REVISION_SOURCE_MISSING')
             }
             if (
                 target.chapter_number !== revision.source_draft_chapter_number
@@ -359,7 +359,7 @@ export class RevisionRepository {
                 || target.status !== revision.source_draft_status
                 || target.body !== revision.source_content
             ) {
-                throw new Error('当前草稿与修订稿的生成时源稿不一致，已拒绝合并；请重新生成修订稿')
+                throw new Error('REVISION_SOURCE_MISMATCH')
             }
             db.prepare('UPDATE contents SET body = ? WHERE id = ?')
                 .run(request.mergedContent, target.content_id)
@@ -369,7 +369,7 @@ export class RevisionRepository {
               WHERE id = ? AND status IN ('draft', 'revised', 'reviewed')
             `).run(request.wordCount, request.targetDraftId)
             if (draftUpdate.changes !== 1) {
-                throw new Error('目标草稿状态已变化，已拒绝合并')
+                throw new Error('REVISION_TARGET_CHANGED')
             }
             const revisionUpdate = db.prepare(`
               UPDATE revisions
@@ -377,7 +377,7 @@ export class RevisionRepository {
               WHERE id = ? AND base_draft_id = ? AND status = 'pending'
             `).run(request.targetDraftId, request.revisionId, request.targetDraftId)
             if (revisionUpdate.changes !== 1) {
-                throw new Error('修订稿状态已变化，已拒绝合并')
+                throw new Error('REVISION_NOT_PENDING')
             }
             let reviewCycle: MergeRevisionReceipt['reviewCycle']
             if (hasReviewCycleSchema(db)) {
@@ -407,11 +407,11 @@ export class RevisionRepository {
 
     /** 标记为已合并（仅 pending → merged） */
     static markMerged(id: number, mergedToDraftId: number, db = getProjectDb()): void {
-        if (!db) throw new Error('[RevisionRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         db.transaction(() => {
             if (hasReviewCycleSchema(db) && db.prepare('SELECT 1 FROM review_cycles WHERE revision_id=?').get(id)) {
-                throw new Error(`[RevisionRepository] 审稿修订 #${id} 必须通过原子正文合并入口提交`)
+                throw new Error('REVISION_MERGE_REQUIRED')
             }
             const result = db.prepare(`
       UPDATE revisions
@@ -420,14 +420,14 @@ export class RevisionRepository {
     `).run(mergedToDraftId, id)
 
             if (result.changes === 0) {
-                throw new Error(`[RevisionRepository] 无法合并修稿 #${id}：不存在或非 pending 状态`)
+                throw new Error('REVISION_NOT_PENDING')
             }
         })()
     }
 
     /** 标记为已弃用（仅 pending → discarded） */
     static markDiscarded(id: number, db = getProjectDb()): void {
-        if (!db) throw new Error('[RevisionRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         db.transaction(() => {
             const result = db.prepare(`
@@ -436,7 +436,7 @@ export class RevisionRepository {
     `).run(id)
 
             if (result.changes === 0) {
-                throw new Error(`[RevisionRepository] 无法弃用修稿 #${id}：不存在或非 pending 状态`)
+                throw new Error('REVISION_NOT_PENDING')
             }
             if (hasReviewCycleSchema(db)) {
                 ReviewCycleRepository.reconcileDiscardedRevisions([id], db)

@@ -122,6 +122,8 @@ describe('FinalizationService publication failure seam', () => {
       finalizationId: 'finalization-1',
       publicationStatus: 'pending',
       contentRevision: 8,
+      // 只带原因：「定稿已提交、实体稿待发布」由各显示处按界面语言写（#474）。
+      error: 'Error: disk unavailable',
     })
     expect(db.prepare('SELECT body FROM contents WHERE id = 11').get())
       .toEqual({ body: '用户看到的定稿快照' })
@@ -180,7 +182,7 @@ describe('FinalizationService publication failure seam', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM finalization_outbox').get())
       .toEqual({ count: 1 })
     expect(different).toMatchObject({ success: false, committed: false })
-    expect(different.error).toContain('内容不同')
+    expect(different.error).toBe('FINALIZATION_COMMIT_CONFLICT')
     expect(db.prepare('SELECT content_snapshot FROM finalization_outbox').get())
       .toEqual({ content_snapshot: '同一冻结快照' })
   })
@@ -207,7 +209,7 @@ describe('FinalizationService publication failure seam', () => {
     })
 
     expect(result).toMatchObject({ success: false, committed: true })
-    expect(result.error).toContain('哈希不一致')
+    expect(result.error).toBe('FINALIZATION_SNAPSHOT_HASH_MISMATCH')
     expect(publish).not.toHaveBeenCalled()
   })
 })

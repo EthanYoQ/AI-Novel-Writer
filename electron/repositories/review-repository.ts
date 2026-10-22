@@ -57,7 +57,7 @@ export class ReviewRepository {
         content: string
         expectedSource?: ExpectedDraftSource
     }, db = getProjectDb()): { id: number; reviewIndex: number } {
-        if (!db) throw new Error('[ReviewRepository] 数据库未连接')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         // 事务内原子分配 review_index，避免 getNextIndex + create 竞态
         const tx = db.transaction(() => {

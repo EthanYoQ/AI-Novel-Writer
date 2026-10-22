@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -17,6 +17,9 @@ vi.mock('../../components/ui/AlertDialog', () => ({
 }))
 
 import { useLLMStore } from '../llm-store'
+import { useLocaleStore } from '../locale-store'
+
+const originalLocale = useLocaleStore.getState().locale
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -69,5 +72,35 @@ describe('LLM settings mutation boundaries', () => {
     })
     expect(mocks.invoke).not.toHaveBeenCalledWith('llm:set-default-model', null)
     expect(mocks.invoke).not.toHaveBeenCalledWith('llm:set-default-embedding-model', null)
+  })
+})
+
+describe('模型设置失败时给作者看的说明', () => {
+  afterEach(() => { useLocaleStore.setState({ locale: originalLocale }) })
+
+  it.each([
+    ['zh-CN', '项目已切换或重新打开', '模型删除失败', '删除模型失败'],
+    ['en-US', 'The project was switched or reopened', 'Could not delete the model', 'Could not delete the model.'],
+  ] as const)('%s 界面：删除模型被会话守卫拒绝时显示登记的说明，未登记的原文保留，没有原因时用兜底', async (locale, stale, title, fallback) => {
+    useLocaleStore.setState({ locale })
+    for (const [error, shown] of [
+      ['PROJECT_SESSION_STALE', expect.stringContaining(stale)],
+      ['SOMETHING_NEW_FROM_MAIN', 'SOMETHING_NEW_FROM_MAIN'],
+      [undefined, fallback],
+    ] as const) {
+      mocks.alertError.mockClear()
+      mocks.invoke.mockResolvedValue({ success: false, error })
+      await expect(useLLMStore.getState().deleteModel('old-model')).resolves.toBe(false)
+      expect(mocks.alertError).toHaveBeenCalledWith(shown, { title })
+    }
+  })
+
+  it('默认模型保存失败时不把错误码或 "Error: " 前缀交给作者', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    mocks.invoke.mockResolvedValue({ success: false, error: 'PROJECT_SESSION_STALE' })
+    await expect(useLLMStore.getState().setDefaultModel('new-model')).resolves.toBe(false)
+    const [message, options] = mocks.alertError.mock.calls[0]
+    expect(message).toMatch(/^The project was switched or reopened/u)
+    expect(options).toEqual({ title: 'Model settings could not be saved' })
   })
 })

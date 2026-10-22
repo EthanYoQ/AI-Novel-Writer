@@ -37,7 +37,8 @@ describe('ConsistencyExemptionRepository', () => {
   })
 
   it('rejects an empty reason and can reactivate an existing stable key', () => {
-    expect(() => ConsistencyExemptionRepository.save('open-thread:1:key', '  ')).toThrow()
+    expect(() => ConsistencyExemptionRepository.save('open-thread:1:key', '  ')).toThrow(/^CONSISTENCY_EXEMPTION_REASON_INVALID$/u)
+    expect(() => ConsistencyExemptionRepository.save('  ', '原因')).toThrow(/^CONSISTENCY_EXEMPTION_KEY_INVALID$/u)
     ConsistencyExemptionRepository.save('open-thread:1:key', '第一次原因')
     ConsistencyExemptionRepository.revoke('open-thread:1:key')
     ConsistencyExemptionRepository.save('open-thread:1:key', '新的原因')

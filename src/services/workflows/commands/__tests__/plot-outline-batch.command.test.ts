@@ -937,7 +937,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
       synopsis_facts_fingerprint: 'old-fingerprint',
       world_building_result: 'old world phase',
     }, '', {
-      commitResult: { success: false, error: '项目数据已变化，已拒绝覆盖情节大纲' },
+      commitResult: { success: false, error: 'PROJECT_CORE_SYNOPSIS_CHANGED' },
       concurrentPartialUpdate: { world_building_result: 'concurrent world phase' },
     })
     const body = `第1–100章：完整终局\n${'主角遵循明确条件行动，结果逐章承接至终局。'.repeat(5)}`
@@ -956,6 +956,28 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
       world_building_result: 'concurrent world phase',
     }))
     expect(harness.coreUpdates).toHaveLength(0)
+  })
+
+  it('中文界面下主进程拒绝覆盖大纲时说明中文原因，不显示错误码', async () => {
+    context.uiLocale = 'zh-CN'
+    harnessWith({
+      synopsis_result: '旧的大纲检查点正文',
+      synopsis_incomplete: false,
+      synopsis_covered_to: 100,
+      synopsis_range: { from: 1, to: 100 },
+      synopsis_facts_fingerprint: 'old-fingerprint',
+    }, '', {
+      commitResult: { success: false, error: 'PROJECT_CORE_SYNOPSIS_CHANGED' },
+    })
+    const body = `第1–100章：完整终局\n${'主角遵循明确条件行动，结果逐章承接至终局。'.repeat(5)}`
+    useLLMStore.setState({
+      defaultModelId: 'model-1',
+      generateStream: responseStream([`${body}\n\n${progressLine(1, 100, 100)}`]),
+    })
+
+    const failure = makeCommand().execute({ step: {}, context, callbacks })
+    await expect(failure).rejects.toThrow('项目数据已变化，已拒绝覆盖情节大纲。')
+    await expect(failure).rejects.not.toThrow('PROJECT_CORE_SYNOPSIS_CHANGED')
   })
 
   it.each([

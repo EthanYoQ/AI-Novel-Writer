@@ -87,7 +87,7 @@ it.each(['UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'private-provider-secret'])('
     lastOutputMs: 3000, httpStatus: 200, phase: 'stream', endReason: 'failed', errorName: 'TypeError', visibleEvents: 1, reasoningEvents: 1 })
   expect(snapshots.at(-1)?.causeCode).toBe(causeCode.startsWith('UND_ERR_') ? causeCode : undefined)
   expect(JSON.stringify(snapshots)).not.toContain('private')
-  expect(onError).toHaveBeenCalledExactlyOnceWith('响应流未正常完成', '正文', undefined)
+  expect(onError).toHaveBeenCalledExactlyOnceWith('LLM_STREAM_FAILED', '正文', undefined)
   expect(onDone).not.toHaveBeenCalled()
   expect(reader.cancel).toHaveBeenCalledOnce()
   expect(reader.releaseLock).toHaveBeenCalledOnce()
@@ -106,7 +106,7 @@ it.each([false, true])('classifies AbortError from the actual caller signal (abo
     signal: controller.signal, visibleOnly: true, onChunk: vi.fn(), onDone, onError,
     onDiagnostics: value => snapshots.push(value) })
   expect(snapshots.at(-1)).toMatchObject({ phase: 'stream', errorName: 'AbortError', endReason: aborted ? 'cancelled' : 'failed' })
-  expect(onError).toHaveBeenCalledExactlyOnceWith(aborted ? '已取消生成' : '响应流未正常完成', undefined, undefined)
+  expect(onError).toHaveBeenCalledExactlyOnceWith(aborted ? 'LLM_CANCELLED' : 'LLM_STREAM_FAILED', undefined, undefined)
   expect(onDone).not.toHaveBeenCalled()
   expect(JSON.stringify(snapshots)).not.toContain('private abort origin')
 })
@@ -767,7 +767,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onDone).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('完成标记前结束'), '半句', undefined)
+    expect(onError).toHaveBeenCalledWith('LLM_STREAM_INCOMPLETE', '半句', undefined)
   })
 
   it('decodes split UTF-8 and accepts LF, CRLF, CR, and data without a space', async () => {
@@ -842,7 +842,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onDone).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('JSON'), 'HEAD', undefined)
+    expect(onError).toHaveBeenCalledWith('LLM_STREAM_INVALID', 'HEAD', undefined)
   })
 
   it('rejects non-string content instead of stringifying it', async () => {
@@ -867,7 +867,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onChunk.mock.calls.flat()).toEqual(['HEAD'])
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('content'), 'HEAD', undefined)
+    expect(onError).toHaveBeenCalledWith('LLM_STREAM_INVALID', 'HEAD', undefined)
   })
 
   it('treats a provider error object as fatal even when stop and DONE follow', async () => {
@@ -893,7 +893,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onDone).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith('供应商返回流式错误', 'HEAD', undefined)
+    expect(onError).toHaveBeenCalledWith('LLM_STREAM_PROVIDER_ERROR', 'HEAD', undefined)
   })
 
   it('does not swallow an onChunk consumer exception as malformed provider data', async () => {
@@ -921,7 +921,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onDone).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith('响应流未正常完成', 'HEADMIDDLE', undefined)
+    expect(onError).toHaveBeenCalledWith('LLM_STREAM_FAILED', 'HEADMIDDLE', undefined)
   })
 
   it('accepts comments, usage-only events, and empty deltas as legal control traffic', async () => {

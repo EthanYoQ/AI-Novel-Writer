@@ -272,7 +272,7 @@ describe('FinalizationRepository transaction seam', () => {
     `).run()
 
     expect(() => FinalizationRepository.listAuthoritativeForExport())
-      .toThrow('定稿导出快照身份不一致')
+      .toThrow('FINALIZATION_EXPORT_IDENTITY_MISMATCH')
 
     db.prepare(`
       UPDATE finalization_outbox
@@ -280,7 +280,7 @@ describe('FinalizationRepository transaction seam', () => {
       WHERE draft_id = 17
     `).run()
     expect(() => FinalizationRepository.listAuthoritativeForExport())
-      .toThrow('定稿导出快照正文不一致')
+      .toThrow('FINALIZATION_EXPORT_CONTENT_MISMATCH')
   })
 
   it('rejects an authoritative finalized draft with no body instead of silently omitting it', () => {
@@ -289,6 +289,6 @@ describe('FinalizationRepository transaction seam', () => {
     db.prepare('UPDATE finalization_outbox SET content_snapshot = ? WHERE draft_id = 17').run('')
 
     expect(() => FinalizationRepository.listAuthoritativeForExport())
-      .toThrow('第 1 章定稿正文为空')
+      .toThrow('FINALIZATION_EXPORT_CONTENT_EMPTY')
   })
 })

@@ -33,6 +33,8 @@ import type { FinalizedDraftImportRequest } from '../../src/shared/finalized-dra
 import { ImportGlobalFactsRepository } from '../repositories/import-global-facts-repository'
 import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
 import { ImportRunRepository } from '../repositories/import-run-repository'
+import { explainImportRunFailure, importRunLocale, persistedImportRunFailure } from './import-run-failure'
+import type { Locale } from '../../src/i18n/types'
 import type {
   ImportRunExecutionLease,
   ImportRunPrepareEffectReceiptRequest,
@@ -125,6 +127,18 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:plot-tree-clear',
 ])
 
+/** 导入对话框与导入运行卡片原样显示这些通道的报错（#474 B1），失败时按导入运行的语言写成说明。 */
+const IMPORT_CHANNEL = /^db:import-(?:run|global-facts)-/u
+
+function importChannelLocale(args: unknown[]): Locale {
+  const [first] = args
+  if (typeof first === 'object' && first !== null) {
+    const request = first as { runId?: unknown; locale?: unknown }
+    return importRunLocale(request.runId, request.locale)
+  }
+  return importRunLocale(first)
+}
+
 function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabaseHandler): void {
   ipcMain.handle(channel, async (event, ...args: unknown[]) => {
     const candidate = args.at(-1)
@@ -134,9 +148,14 @@ function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabas
       projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
       return await (handler as (event: unknown, ...handlerArgs: unknown[]) => unknown)(event, ...args)
     } catch (error) {
+      const importFailure = IMPORT_CHANNEL.test(channel)
+        ? explainImportRunFailure(error, () => importChannelLocale(args))
+        : undefined
       if (MUTATING_DATABASE_CHANNELS.has(channel)) {
-        return { success: false, error: String(error) }
+        return importFailure ? { success: false, ...importFailure } : { success: false, error: String(error) }
       }
+      // 读通道的异常经 Electron 只带过去 message，说明直接写进 message。
+      if (importFailure) throw new Error(importFailure.error)
       throw error
     }
   })
@@ -209,7 +228,7 @@ export function registerDatabaseController() {
     const database = getProjectDb()
     if (request.generationRunHandle && !database) throw new Error('GENERATION_DATABASE_NOT_READY')
     if (!(request.generationRunHandle ? database!.transaction(() => withGenerationAgentChildEffect(request.generationRunHandle!, commit)).immediate() : commit())) {
-      return { success: false, error: '项目数据已变化，已拒绝覆盖情节大纲' }
+      return { success: false, error: 'PROJECT_CORE_SYNOPSIS_CHANGED' }
     }
     return { success: true }
   })
@@ -327,7 +346,7 @@ export function registerDatabaseController() {
         ImportRunRepository.failParsedSource(
           parsingRun.id,
           sourceId,
-          error instanceof Error ? error.message : String(error),
+          persistedImportRunFailure(error instanceof Error ? error.message : String(error), request.locale),
         )
         throw error
       }
@@ -476,7 +495,7 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    if (!isImportRunDirectCheckpointStage(stage)) throw new Error('该导入阶段不接受直接 checkpoint')
+    if (!isImportRunDirectCheckpointStage(stage)) throw new Error('IMPORT_RUN_CHECKPOINT_STAGE_INVALID')
     return { success: true, ...ImportRunRepository.completeBatch(runId, stage, batchId, execution) }
   })
 
@@ -501,7 +520,10 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, run: ImportRunRepository.fail(runId, stage, errorMessage, execution) }
+    const reason = typeof errorMessage === 'string'
+      ? persistedImportRunFailure(errorMessage, () => importRunLocale(runId))
+      : errorMessage
+    return { success: true, run: ImportRunRepository.fail(runId, stage, reason, execution) }
   })
 
   ipcMain.handle('db:import-run-complete', async (
@@ -697,7 +719,7 @@ export function registerDatabaseController() {
   ) => {
     const currentProjectPath = getCurrentProjectPath()
     assertRequiredExpectedProjectPath(currentProjectPath, expectedProjectPath)
-    if (!currentProjectPath) throw new Error('项目数据库未打开')
+    if (!currentProjectPath) throw new Error('PROJECT_NOT_OPEN')
     return {
       success: true,
       receipt: FinalizedDraftImportRepository.commit(currentProjectPath, request),
@@ -870,14 +892,7 @@ export function registerDatabaseController() {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
     } catch (error) {
-      const message = String(error)
-      return {
-        success: false,
-        ...(message.includes('剧情资料在生成期间已更新')
-          ? { errorCode: 'sources-changed' as const }
-          : {}),
-        error: message,
-      }
+      return { success: false, error: String(error) }
     }
   })
 
@@ -906,9 +921,9 @@ export function registerDatabaseController() {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const draft = DraftRepository.getMeta(id)
-      if (!draft) throw new Error(`草稿不存在：${id}`)
+      if (!draft) throw new Error('DRAFT_NOT_FOUND')
       if (draft.status === 'finalized') {
-        throw new Error('已定稿正文为只读内容，不能再修改')
+        throw new Error('DRAFT_FINALIZED_READ_ONLY')
       }
       DraftRepository.updateContent(id, content, wordCount)
       return { success: true }
@@ -943,7 +958,7 @@ export function registerDatabaseController() {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const active = projectAccess.captureCurrentSession()
-      if (!active) throw new Error('缺少当前项目会话，已拒绝保存恢复候选')
+      if (!active) throw new Error('PROJECT_SESSION_REQUIRED')
       const candidate = RecoveryCandidateRepository.record({ ...request, projectId: active.projectId })
       return { success: true, candidate }
     } catch (error) {
@@ -1112,7 +1127,7 @@ export function registerDatabaseController() {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const db = getProjectDb()
-      if (!db) throw new Error('[ReviewRepository] 数据库未连接')
+      if (!db) throw new Error('PROJECT_NOT_OPEN')
       const created = db.transaction(() => {
         const saved = ReviewRepository.create({ baseDraftId: params.baseDraftId, reviewIndex: params.reviewIndex,
           content: params.content, expectedSource: params.expectedSource }, db)

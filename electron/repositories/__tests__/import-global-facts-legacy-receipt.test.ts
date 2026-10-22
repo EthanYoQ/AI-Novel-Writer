@@ -83,6 +83,6 @@ describe('legacy import receipt survives gaining the identity schema', () => {
   it('still refuses a receipt whose recorded facts really changed', () => {
     seedLegacyReceipt('legacy-import-2', 'd'.repeat(64))
     expect(() => ImportGlobalFactsRepository.getCommittedOperation('legacy-import-2'))
-      .toThrow('导入角色事实已被后续修改')
+      .toThrow('IMPORT_GLOBAL_FACTS_SUPERSEDED')
   })
 })

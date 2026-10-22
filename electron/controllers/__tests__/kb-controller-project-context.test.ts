@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   readJsonFile: vi.fn(),
   resolveReferenceImportAuthority: vi.fn(),
   commitReferenceImportReceipt: vi.fn(),
+  getRun: vi.fn(),
   knowledgeDocumentChapters: vi.fn(() => new Map<string, number>()),
 }))
 
@@ -55,6 +56,7 @@ vi.mock('../../repositories/import-run-repository', () => ({
   ImportRunRepository: {
     resolveReferenceImportAuthority: mocks.resolveReferenceImportAuthority,
     commitReferenceImportReceipt: mocks.commitReferenceImportReceipt,
+    get: mocks.getRun,
   },
 }))
 
@@ -105,9 +107,9 @@ beforeEach(() => {
     stableKey: 'reference:key:1:fingerprint',
   })
   mocks.assertCurrentProjectContext.mockImplementation((context: { projectPath?: string } | undefined, currentProjectPath: string) => {
-    if (!context?.projectPath) throw new Error('缺少项目会话上下文，已拒绝操作')
+    if (!context?.projectPath) throw new Error('PROJECT_SESSION_REQUIRED')
     if (context.projectPath !== currentProjectPath) {
-      throw new Error('项目会话与当前数据库不匹配，已拒绝操作')
+      throw new Error('PROJECT_SESSION_DATABASE_MISMATCH')
     }
     return { rootPath: currentProjectPath }
   })
@@ -205,7 +207,7 @@ describe('knowledge-base controller project context guard', () => {
 
   it('rejects a matching project path that omits its session context', async () => {
     await expect(rawHandler('kb:clear-all')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目会话/)
+      .rejects.toThrow('PROJECT_SESSION_REQUIRED')
     expect(mocks.run).not.toHaveBeenCalled()
   })
 
@@ -227,9 +229,9 @@ describe('knowledge-base controller project context guard', () => {
     mocks.currentProjectPath = 'C:/projects/B'
 
     await expect(handler(channel)({}, ...args, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     await expect(rawHandler(channel)({}, ...args))
-      .rejects.toThrow(/缺少项目(?:上下文|会话)/)
+      .rejects.toThrow(/PROJECT_(?:CONTEXT|SESSION)_REQUIRED/)
     expect(mocks.run).not.toHaveBeenCalled()
   })
 
@@ -316,7 +318,7 @@ describe('knowledge-base controller project context guard', () => {
     mocks.currentProjectPath = 'C:/projects/B'
 
     await expect(handler('kb:clear-all')({}, confirmedProjectPath))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     expect(mocks.run).not.toHaveBeenCalled()
   })
 
@@ -375,6 +377,71 @@ describe('knowledge-base controller project context guard', () => {
     expect(result).toEqual({
       success: false,
       error: '删除知识库文档失败',
+    })
+  })
+})
+
+// 参照导入失败时运行卡片原样显示 result.error：主进程按导入运行的界面语言说明知识库错误码，码另放在 errorCode（#474 B3）。
+describe('reference import failures', () => {
+  it.each([
+    ['en-US', 'EMBEDDING_RESPONSE_INVALID', 'returned an unusable result'],
+    ['zh-CN', 'EMBEDDING_RESPONSE_INVALID', '返回的结果不合格'],
+    ['en-US', 'KNOWLEDGE_BASE_TEXT_EMPTY', 'The material is empty'],
+    ['zh-CN', 'EMBEDDING_SPACE_REINDEX_REQUIRED', '检查并重建索引'],
+  ])('explains %s %s in the run language', async (locale, code, expected) => {
+    mocks.getRun.mockReturnValue({ locale })
+    mocks.run.mockImplementation(async (operation: (kb: { importReferenceText: () => Promise<unknown> }) => unknown) =>
+      operation({ importReferenceText: async () => ({ success: false, error: code }) }))
+    const result = await rawHandler('kb:import-reference-text')({}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+      projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+    }) as { success: boolean; error: string; errorCode: string }
+    expect(result).toMatchObject({ success: false, errorCode: code })
+    expect(result.error).toContain(expected)
+    expect(result.error).not.toMatch(locale === 'en-US' ? /[A-Z]{3,}_|\p{Script=Han}/u : /[A-Z]{3,}_/u)
+    expect(mocks.commitReferenceImportReceipt).not.toHaveBeenCalled()
+  })
+  // 参照导入的幂等收据与完整性校验码没有作者能照做的建议：给按运行语言的说明，码附在后面供反馈定位。
+  it.each([
+    ['en-US', 'KNOWLEDGE_BASE_REFERENCE_RECEIPT_CONFLICT', 'could not be written to the knowledge base'],
+    ['zh-CN', 'KNOWLEDGE_BASE_REFERENCE_VERIFY_FAILED', '未能写入知识库'],
+  ])('summarizes %s %s in the run language and keeps the code', async (locale, code, expected) => {
+    mocks.getRun.mockReturnValue({ locale })
+    mocks.run.mockImplementation(async (operation: (kb: { importReferenceText: () => Promise<unknown> }) => unknown) =>
+      operation({ importReferenceText: async () => ({ success: false, error: code }) }))
+    const result = await rawHandler('kb:import-reference-text')({}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+      projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+    }) as { success: boolean; error: string; errorCode: string }
+    expect(result).toMatchObject({ success: false, errorCode: code })
+    expect(result.error).toContain(expected)
+    expect(result.error).toContain(code)
+    if (locale === 'en-US') expect(result.error).not.toMatch(/\p{Script=Han}/u)
+  })
+  // 导入运行的授权与收据校验（#474 B1）：先于写入抛出的与知识库交回的码都按导入运行的语言说明。
+  it('explains an expired import execution in the run language before anything is written', async () => {
+    mocks.getRun.mockReturnValue({ locale: 'en-US' })
+    mocks.resolveReferenceImportAuthority.mockImplementationOnce(() => { throw new Error('IMPORT_RUN_EXECUTION_STALE') })
+    const result = await rawHandler('kb:import-reference-text')({}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+      projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+    })
+    expect(result).toEqual({
+      success: false,
+      errorCode: 'IMPORT_RUN_EXECUTION_STALE',
+      error: 'This import was taken over by another window, or it paused after going unresponsive, so this window can no longer write to it. Resume the import from the import dialog.',
+    })
+    expect(mocks.run).not.toHaveBeenCalled()
+  })
+
+  it('explains an import-run code returned by the knowledge base in the run language', async () => {
+    mocks.getRun.mockReturnValue({ locale: 'zh-CN' })
+    mocks.run.mockImplementation(async (operation: (kb: { importReferenceText: () => Promise<unknown> }) => unknown) =>
+      operation({ importReferenceText: async () => ({ success: false, error: 'IMPORT_RUN_REFERENCE_UNBOUND' }) }))
+    const result = await rawHandler('kb:import-reference-text')({}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+      projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+    })
+    expect(result).toEqual({
+      success: false,
+      errorCode: 'IMPORT_RUN_REFERENCE_UNBOUND',
+      error: '导入没能继续：校验没有通过（IMPORT_RUN_REFERENCE_UNBOUND）。请重试；如果仍然出现，请把这段说明反馈给我们。',
     })
   })
 })

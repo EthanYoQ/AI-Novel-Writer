@@ -4,7 +4,7 @@
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 
 export const searchKnowledgeTool = buildAgentTool({
   name: 'search_knowledge',
@@ -50,11 +50,11 @@ export const searchKnowledgeTool = buildAgentTool({
         projectPath,
       ))
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = agentToolErrorDetail(context, error)
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail)
+        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
           ? text('知识库搜索失败', 'Could not search the knowledge base')
           : detail,
       }

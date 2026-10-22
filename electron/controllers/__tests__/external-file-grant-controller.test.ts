@@ -316,6 +316,61 @@ describe('external file grant IPC contract', () => {
   )
 })
 
+describe('external file grant refusals are explained by error code (#474)', () => {
+  let clock = 1_000
+  let grants: ExternalFileGrantService
+  let directory = ''
+  const expired = '外部文件授权已失效，请重新选择。'
+  const otherWindow = '当前窗口无权使用该外部文件授权。'
+  const invalidPath = '外部文件授权路径无效，已拒绝操作。'
+
+  function issue(operations: Array<'read' | 'write'>, maxUses = 8) {
+    return grants.issueDirectory({ webContentsId: 17, directoryPath: directory, operations, ttlMs: 1_000, maxUses }).grantId
+  }
+
+  const read = (grantId: string, relativePath = 'grant-code.txt', sender = event()) =>
+    handler('fs:grant-read-file')(sender, grantId, relativePath)
+
+  beforeAll(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-grant-codes-'))
+    fs.writeFileSync(path.join(directory, 'grant-code.txt'), 'text', 'utf8')
+  })
+
+  afterAll(() => {
+    fs.rmSync(directory, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    clock = 1_000
+    let sequence = 0
+    grants = new ExternalFileGrantService({ now: () => clock, newGrantId: () => `code-grant-${sequence += 1}` })
+    mocks.handlers.clear()
+    registerExternalFileGrantController(grants, nodeTestSecureFileSystem)
+  })
+
+  it('asks the author to choose again when the grant is unknown, expired, or used up', async () => {
+    await expect(read('never-issued')).resolves.toMatchObject({ success: false, error: expired })
+
+    const shortLived = issue(['read'])
+    clock = 5_000
+    await expect(read(shortLived)).resolves.toMatchObject({ success: false, error: expired })
+
+    clock = 1_000
+    const singleUse = issue(['read'], 1)
+    await expect(read(singleUse)).resolves.toMatchObject({ success: true, content: 'text' })
+    await expect(read(singleUse)).resolves.toMatchObject({ success: false, error: expired })
+  }, SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS)
+
+  it('refuses another window or an operation the grant does not cover', async () => {
+    await expect(read(issue(['read']), 'grant-code.txt', event(18))).resolves.toMatchObject({ success: false, error: otherWindow })
+    await expect(read(issue(['write']))).resolves.toMatchObject({ success: false, error: otherWindow })
+  }, SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS)
+
+  it('rejects paths that leave the granted directory', async () => {
+    await expect(read(issue(['read']), '../outside.txt')).resolves.toMatchObject({ success: false, error: invalidPath })
+    await expect(read(issue(['read']), path.resolve(directory, 'grant-code.txt'))).resolves.toMatchObject({ success: false, error: invalidPath })
+  }, SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS)
+})
 
 // Main error localization reads admitted global data even for rejected project IO.
 const globalEnvironmentKeys = ['AI_NOVEL_APP_DATA_HOME', 'AI_NOVEL_LEGACY_SOURCE_HOME', 'AI_NOVEL_VELA_HOME'] as const

@@ -154,9 +154,9 @@ export class ProjectCoreRepository {
 
     /** 更新项目配置（传入部分字段即可） */
     static update(data: Partial<ProjectCoreData>, db = getProjectDb()): void {
-        if (!db) throw new Error('项目数据库未打开')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
         if (Object.hasOwn(data, 'charactersArch')) {
-            throw new Error('角色图谱由角色名单自动生成；请通过角色管理修改角色资料')
+            throw new Error('PROJECT_CORE_CHARACTERS_ARCH_READ_ONLY')
         }
 
         // 构建动态 SET 子句，只更新传入的字段
@@ -210,7 +210,7 @@ export class ProjectCoreRepository {
     }
 
     static commitSynopsis(request: ProjectCoreSynopsisCommitRequest, db = getProjectDb()): boolean {
-        if (!db) throw new Error('项目数据库未打开')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
         const { expected } = request
         const result = db.prepare(`
           UPDATE project_core

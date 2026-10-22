@@ -23,6 +23,7 @@ import { useProjectStore } from './project-store'
 import { requireIpcSuccess } from '../services/ipc-result'
 import { countDraftUnits } from '../shared/draft-units'
 import { useEditorStore } from './editor-store'
+import { useLocaleStore } from './locale-store'
 
 let loadAllDraftsRequestSequence = 0
 
@@ -389,7 +390,8 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
       return { success: true, receipt: committedReceipt }
     } catch (e) {
       if (committedReceipt) return { success: true, receipt: committedReceipt, postCommitError: String(e) }
-      return { success: false, error: String(e) }
+      // 交出 message 而不是 String(e)：再套一层「Error: 」会盖住 Electron 的通道前缀，显示处就认不出主进程的错误码。
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
   },
 }))
@@ -406,7 +408,7 @@ export async function readDraftBody(
   expectedProjectSession?: ProjectSessionContext,
 ): Promise<string> {
   const projectSession = currentDraftProjectSession(expectedProjectPath, expectedProjectSession)
-  if (!projectSession) throw new Error('读取草稿时缺少匹配的冻结项目会话')
+  if (!projectSession) throw new Error(useLocaleStore.getState().text('读取草稿时缺少匹配的冻结项目会话', 'The draft was not read because the book session changed.'))
 
   const content = await readResourceContent(filePath, projectSession)
   return isDraftProjectSessionCurrent(projectSession) ? content : ''

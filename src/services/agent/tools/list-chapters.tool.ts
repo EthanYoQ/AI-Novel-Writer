@@ -3,7 +3,7 @@
  */
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
-import { agentToolText, assertAgentProjectCurrent, requireAgentProject } from './project-context'
+import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 
 
 export const listChaptersTool = buildAgentTool({
@@ -68,11 +68,11 @@ export const listChaptersTool = buildAgentTool({
         ),
       }
     } catch (e: unknown) {
-      const detail = e instanceof Error ? e.message : String(e)
+      const detail = agentToolErrorDetail(context, e)
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail)
+        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
           ? text('获取章节进度失败', 'Could not load chapter progress')
           : text(`获取失败: ${detail}`, `Could not load chapter progress: ${detail}`),
       }

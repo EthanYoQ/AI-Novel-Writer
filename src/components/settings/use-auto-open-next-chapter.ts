@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ipc } from '../../services/ipc-client'
 import { useLocaleStore } from '../../stores/locale-store'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 /** 「定稿后打开下一章」开关：读取、乐观写入、失败回滚并给出原因。 */
 export function useAutoOpenNextChapter() {
@@ -25,10 +26,8 @@ export function useAutoOpenNextChapter() {
       if (!result.success) throw new Error(result.error || text('未知错误', 'Unknown error'))
     } catch (cause) {
       setEnabled(previous)
-      setError(text(
-        `自动打开下一章设置保存失败：${cause instanceof Error ? cause.message : String(cause)}`,
-        `Could not save the open-next-chapter setting: ${cause instanceof Error ? cause.message : String(cause)}`,
-      ))
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, cause)
+      setError(text(`自动打开下一章设置保存失败：${reason}`, `Could not save the open-next-chapter setting: ${reason}`))
     } finally {
       setSaving(false)
     }

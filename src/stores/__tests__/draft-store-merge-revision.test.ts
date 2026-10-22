@@ -66,6 +66,7 @@ vi.mock('../locale-store', () => ({
 }))
 
 import { useDraftStore } from '../draft-store'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 const projectPath = 'C:\\novels\\project-a'
 const projectSession = {
@@ -158,6 +159,19 @@ describe('draft-store merged revision persistence', () => {
       projectPath,
     )
     expect(refreshFileTree).not.toHaveBeenCalled()
+  })
+
+  it('keeps the main-process code readable when the merge is rejected (#474)', async () => {
+    invokeWithProjectSession.mockRejectedValueOnce(
+      new Error("Error invoking remote method 'db:revision-merge': Error: REVISION_TARGET_CHANGED"),
+    )
+    const result = await useDraftStore.getState().applyMergedRevision(
+      'ai-novel://draft/ch1', 1, 'ai-novel://draft/11', 'ai-novel://revision/1', '合并稿', '原稿', projectPath, projectSession,
+    )
+
+    expect(result.success).toBe(false)
+    expect(displayedErrorMessage('en-US', result.error)).toBe('The text or status of this draft changed. Reopen the revision comparison, then merge again.')
+    expect(displayedErrorMessage('zh-CN', result.error)).toBe('这一稿的正文或状态已经变化。请重新打开修订对比后再合并。')
   })
 
   it('freezes the editor snapshot before awaiting the merge receipt', async () => {

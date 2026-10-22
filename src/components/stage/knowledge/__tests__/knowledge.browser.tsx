@@ -208,6 +208,65 @@ describe('知识库', () => {
       expect(words.toasts.join('\n')).not.toMatch(IMPLEMENTATION_TERMS)
       expect(words.all()).not.toMatch(IMPLEMENTATION_TERMS)
     })
+
+    // 主进程只交错误码（#474 B3）：更新检索、保存副本与检查重建被拒时，提示按界面语言说明，不露码。
+    const expectExplained = (message: string | undefined, zh: string, en: string) => {
+      expect(message).toContain(say(zh, en))
+      expect(message).not.toMatch(locale === 'en-US' ? /[A-Z]{3,}_|\p{Script=Han}/u : /[A-Z]{3,}_/u)
+    }
+
+    it(`${locale} 下更新检索与保存副本被拒时按界面语言说明原因`, async () => {
+      useLocaleStore.setState({ locale })
+      const plain = invoke.getMockImplementation()!
+      invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+        if (channel === 'kb:read-document-copy' && args[0] === 'station') return { available: true, content: copies.station, contentHash: 'h-station', edited: false, indexStatus: 'stale' }
+        if (channel === 'kb:reindex-document-copy') return { success: false, error: 'KNOWLEDGE_BASE_COPY_EMPTY' }
+        if (channel === 'kb:save-document-copy') return { success: false, error: 'KNOWLEDGE_BASE_COPY_CHANGED' }
+        return plain(channel, ...args)
+      })
+      const words = wordCollector()
+      await renderPage()
+      await click(/车站档案/)
+      await vi.waitFor(() => expect((document.querySelector('textarea') as HTMLTextAreaElement | null)?.value).toBe(copies.station))
+      await click(say('更新检索', 'Update search'))
+      await vi.waitFor(() => expect(words.toasts).toHaveLength(1))
+      expectExplained(words.toasts[0], '项目副本是空的', 'The project copy is empty')
+
+      await type(await editorArea(), `${copies.station}站台已封闭。`)
+      await click(say('保存副本', 'Save copy'))
+      await vi.waitFor(() => expect(words.toasts).toHaveLength(2))
+      expectExplained(words.toasts[1], '请重新打开这份资料', 'Reopen the material')
+    })
+
+    it.each([
+      [{ success: false, processed: 0, failed: 0, error: 'EMBEDDING_SPACE_REGISTRY_INVALID' }, '检索索引记录已损坏', 'search index records of this book are damaged'],
+      // 旧向量迁移阻断时主进程按系统语言写 error、码放在 errorCode：以界面语言为准。
+      [{ success: false, errorCode: 'LEGACY_VECTOR_MIGRATION_BLOCKED', error: '旧版知识库数据需要先修复后才能继续。请修正项目中的 vectors.json，然后重试。' }, '旧版知识库数据需要先修复', 'Legacy knowledge-base data must be repaired'],
+    ])(`${locale} 下检查并重建被拒时按界面语言说明原因 %#`, async (result, zh, en) => {
+      useLocaleStore.setState({ locale })
+      const plain = invoke.getMockImplementation()!
+      invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'kb:backfill-vectors' ? result : plain(channel, ...args))
+      const words = wordCollector()
+      await act(async () => root!.render(<KnowledgeIndexSection />))
+      await vi.waitFor(() => expect(document.querySelector('section button')).toBeTruthy())
+      await act(async () => document.querySelector<HTMLButtonElement>('section button')!.click())
+      await vi.waitFor(() => expect(words.toasts).toHaveLength(1))
+      expectExplained(words.toasts[0], zh, en)
+    })
+
+    it(`${locale} 下没登记的码接在按界面语言写的说明后面，供反馈定位`, async () => {
+      useLocaleStore.setState({ locale })
+      const plain = invoke.getMockImplementation()!
+      invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'kb:backfill-vectors'
+        ? { success: false, processed: 0, failed: 1, error: 'EMBEDDING_SPACE_VERIFY_FAILED' }
+        : plain(channel, ...args))
+      const words = wordCollector()
+      await act(async () => root!.render(<KnowledgeIndexSection />))
+      await vi.waitFor(() => expect(document.querySelector('section button')).toBeTruthy())
+      await act(async () => document.querySelector<HTMLButtonElement>('section button')!.click())
+      await vi.waitFor(() => expect(words.toasts).toHaveLength(1))
+      expect(words.toasts[0]).toBe(say('重建检索失败：EMBEDDING_SPACE_VERIFY_FAILED', 'Could not rebuild search. EMBEDDING_SPACE_VERIFY_FAILED'))
+    })
   }
 
   it('查找结果里标出查找词，定稿章节分开列出', async () => {
@@ -691,6 +750,30 @@ describe('知识库', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('kb:clear-all')
     await click('清空知识库')
     await vi.waitFor(() => expect(invoke.mock.calls.map(([channel]) => channel)).toContain('kb:clear-all'))
+  })
+
+  it.each([
+    ['zh-CN', '清空知识库…', '清空知识库', '项目已切换或重新打开', '清空知识库失败'],
+    ['en-US', 'Clear knowledge base…', 'Clear knowledge base', 'The project was switched or reopened', 'Could not clear the knowledge base.'],
+  ] as const)('%s 界面：清空被主进程拒绝时，登记的码显示说明，未登记的原文保留，没有原因时用兜底', async (locale, open, confirmLabel, stale, fallback) => {
+    useLocaleStore.setState({ locale })
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => undefined)
+    const base = invoke.getMockImplementation()!
+    let reason: string | undefined
+    invoke.mockImplementation(async (channel, ...args) => channel === 'kb:clear-all' ? { success: false, error: reason } : base(channel, ...args))
+    await act(async () => root!.render(<StageKnowledge tabId={KB_TAB} />))
+    await vi.waitFor(() => expect(button(/车站档案/)).toBeTruthy())
+    for (const [raw, shown] of [
+      ['PROJECT_SESSION_STALE', expect.stringContaining(stale)],
+      ['SOMETHING_NEW_FROM_MAIN', expect.stringContaining('SOMETHING_NEW_FROM_MAIN')],
+      [undefined, fallback],
+    ] as const) {
+      reason = raw
+      error.mockClear()
+      await click(open)
+      await click(confirmLabel)
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith(shown))
+    }
   })
 
   it('查找之后清空知识库，或查找出错：不说「没有找到相关的资料」', async () => {

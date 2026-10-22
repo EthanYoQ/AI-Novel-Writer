@@ -85,29 +85,29 @@ describe('ImportRunRepository state machine', () => {
   it('rejects wrong-stage and malformed direct batch checkpoints without changing the database', () => {
     expectRejectedWithoutMutation(
       () => ImportRunRepository.completeBatch('state-run', 'global', 'done', execution),
-      /当前阶段|阶段.*不匹配/,
+      /STAGE_MISMATCH/,
     )
     expectRejectedWithoutMutation(
       () => ImportRunRepository.completeBatch('state-run', 'knowledge', '1', execution),
-      /批次.*无效/,
+      /IMPORT_RUN_BATCH_ID_INVALID/,
     )
     expectRejectedWithoutMutation(
       () => ImportRunRepository.completeBatch('state-run', 'knowledge', '1-3', execution),
-      /批次.*无效/,
+      /IMPORT_RUN_BATCH_ID_INVALID/,
     )
   })
 
   it('advances only to the next stage after every current-stage checkpoint is complete', () => {
     expectRejectedWithoutMutation(
       () => ImportRunRepository.advanceStage('state-run', 'knowledge', 'global', execution),
-      /checkpoint.*未完成|检查点.*未完成/i,
+      /IMPORT_RUN_STAGE_INCOMPLETE/,
     )
 
     const checkpoint = commitKnowledge([chapter(1), chapter(2)])
     ImportRunRepository.completeBatch('state-run', 'knowledge', checkpoint, execution)
     expectRejectedWithoutMutation(
       () => ImportRunRepository.advanceStage('state-run', 'knowledge', 'style', execution),
-      /下一阶段|转换.*无效/,
+      /IMPORT_RUN_STAGE_MISMATCH/,
     )
 
     expect(ImportRunRepository.advanceStage('state-run', 'knowledge', 'global', execution))
@@ -118,20 +118,20 @@ describe('ImportRunRepository state machine', () => {
     )
     expectRejectedWithoutMutation(
       () => ImportRunRepository.advanceStage('state-run', 'global', 'style', execution),
-      /checkpoint.*未完成|检查点.*未完成/i,
+      /IMPORT_RUN_STAGE_INCOMPLETE/,
     )
   })
 
   it('fails only the active stage and fences all later writes from that execution', () => {
     expectRejectedWithoutMutation(
       () => ImportRunRepository.fail('state-run', 'global', 'wrong stage', execution),
-      /当前阶段|阶段.*不匹配/,
+      /STAGE_MISMATCH/,
     )
 
     expect(ImportRunRepository.fail('state-run', 'knowledge', 'provider unavailable', execution))
       .toMatchObject({ stage: 'knowledge', status: 'failed', lastError: 'provider unavailable' })
     expect(() => ImportRunRepository.completeBatch('state-run', 'knowledge', '1-2', execution))
-      .toThrow(/执行租约/)
+      .toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 
   it('rejects malformed or mismatched blueprint receipt keys before writing receipt state', () => {
@@ -155,7 +155,7 @@ describe('ImportRunRepository state machine', () => {
       effectKey: 'blueprints:1-2',
       kind: 'chapter-blueprint-range',
       payload,
-    }, execution), /批次.*无效/)
+    }, execution), /IMPORT_RUN_BATCH_ID_INVALID/)
 
     const checkpoint = createImportRunChapterBatchCheckpointId(
       ImportRunRepository.listChapterBatch('state-run', { afterChapterNumber: 0, limit: 10 }),
@@ -167,7 +167,7 @@ describe('ImportRunRepository state machine', () => {
       effectKey: 'blueprints:mismatched',
       kind: 'chapter-blueprint-range',
       payload,
-    }, execution), /receipt.*损坏|收据.*损坏/i)
+    }, execution), /IMPORT_RUN_RECEIPT_CORRUPT/)
 
     expectRejectedWithoutMutation(() => ImportRunRepository.prepareEffectReceipt({
       runId: 'state-run',
@@ -176,13 +176,13 @@ describe('ImportRunRepository state machine', () => {
       effectKey: `blueprints:${checkpoint}`,
       kind: 'chapter-blueprint-range',
       payload: { ...payload, startChapter: 2, endChapter: 3 },
-    }, execution), /receipt.*损坏|收据.*损坏/i)
+    }, execution), /IMPORT_RUN_RECEIPT_CORRUPT/)
   })
 
   it('completes only a running refresh stage with its durable refresh checkpoint', () => {
     expectRejectedWithoutMutation(
       () => ImportRunRepository.complete('state-run', execution),
-      /refresh|刷新/i,
+      /IMPORT_RUN_STAGE_MISMATCH/,
     )
 
     getProjectDb()!.prepare(`
@@ -191,7 +191,7 @@ describe('ImportRunRepository state machine', () => {
     `).run()
     expectRejectedWithoutMutation(
       () => ImportRunRepository.complete('state-run', execution),
-      /checkpoint.*未完成|检查点.*未完成/i,
+      /IMPORT_RUN_STAGE_INCOMPLETE/,
     )
 
     ImportRunRepository.completeBatch('state-run', 'refresh', 'done', execution)
@@ -201,6 +201,6 @@ describe('ImportRunRepository state machine', () => {
       resumable: false,
     })
     expect(() => ImportRunRepository.fail('state-run', 'refresh', 'late failure', execution))
-      .toThrow(/执行租约/)
+      .toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 })

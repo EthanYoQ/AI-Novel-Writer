@@ -68,11 +68,10 @@ export class ImportInspectionStore {
     chapters: InspectedImportChapter[]
   }): ImportInspectionSummary {
     this.removeExpired()
-    if (input.chapters.length === 0 || input.chapters.length > MAX_IMPORT_CHAPTERS) {
-      throw new Error(`导入章节数必须在 1–${MAX_IMPORT_CHAPTERS} 之间`)
-    }
+    if (input.chapters.length === 0) throw new Error('IMPORT_INSPECTION_INVALID')
+    if (input.chapters.length > MAX_IMPORT_CHAPTERS) throw new Error('IMPORT_CHAPTER_COUNT_EXCEEDED')
     if (input.sources.length === 0 || input.sources.length > MAX_IMPORT_SOURCE_FILES) {
-      throw new Error('导入来源数量无效')
+      throw new Error('IMPORT_INSPECTION_INVALID')
     }
     for (const source of input.sources) {
       if (
@@ -88,7 +87,7 @@ export class ImportInspectionStore {
         || !Number.isSafeInteger(source.size)
         || source.size < 0
         || source.size > MAX_IMPORT_TOTAL_BYTES
-      ) throw new Error('导入来源检查数据无效')
+      ) throw new Error('IMPORT_INSPECTION_INVALID')
     }
     const chapterNumbers = new Set<number>()
     const sourceChapters = new Set<string>()
@@ -109,18 +108,18 @@ export class ImportInspectionStore {
         || !SHA256.test(chapter.contentFingerprint)
         || chapter.contentSize !== bytes
         || bytes > MAX_IMPORT_CHAPTER_BYTES
-      ) throw new Error('导入章节检查数据无效')
+      ) throw new Error('IMPORT_INSPECTION_INVALID')
       chapterNumbers.add(chapter.number)
       sourceChapters.add(`${chapter.sourceIndex}:${chapter.sourceChapterNumber}`)
       totalBytes += bytes
-      if (totalBytes > MAX_IMPORT_TOTAL_BYTES) throw new Error('导入正文总字节数超过安全上限')
+      if (totalBytes > MAX_IMPORT_TOTAL_BYTES) throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
     }
     const retained = [...this.inspections.values()].filter(item => item.webContentsId !== input.webContentsId)
     const retainedBytes = retained.reduce((sum, item) => sum + item.totalBytes, 0)
     if (totalBytes > MAX_IMPORT_TOTAL_BYTES || retainedBytes + totalBytes > this.maxAggregateBytes) {
-      throw new Error('导入正文总字节数超过安全上限')
+      throw new Error('IMPORT_SOURCE_BYTES_EXCEEDED')
     }
-    if (retained.length >= this.maxActive) throw new Error('待处理导入检查过多，请先完成或取消现有检查')
+    if (retained.length >= this.maxActive) throw new Error('IMPORT_INSPECTION_LIMIT')
     // One renderer session owns at most one pending inspection; reselection replaces it.
     this.revokeForWebContents(input.webContentsId)
     const inspectionId = randomUUID()
@@ -154,7 +153,7 @@ export class ImportInspectionStore {
   consume(inspectionId: string, webContentsId: number): ImportInspection {
     this.removeExpired()
     const inspection = this.inspections.get(inspectionId)
-    if (!inspection || inspection.webContentsId !== webContentsId) throw new Error('导入检查已失效，请重新选择文件')
+    if (!inspection || inspection.webContentsId !== webContentsId) throw new Error('IMPORT_INSPECTION_EXPIRED')
     this.inspections.delete(inspectionId)
     return inspection
   }
@@ -166,7 +165,7 @@ export class ImportInspectionStore {
       !inspection
       || inspection.webContentsId !== webContentsId
       || (purpose !== undefined && inspection.purpose !== purpose)
-    ) throw new Error('导入检查已失效，请重新选择文件')
+    ) throw new Error('IMPORT_INSPECTION_EXPIRED')
     return inspection
   }
 

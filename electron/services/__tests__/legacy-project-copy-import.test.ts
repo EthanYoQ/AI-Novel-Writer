@@ -116,7 +116,7 @@ async function verifyFrozenLegacyConsumersAfterRestart(target: string, entry: st
             ])
             assert.equal(RecoveryCandidateRepository.updatePending(fresh.candidateId, '可编辑正文').visibleText, '可编辑正文')
             db.prepare('UPDATE recovery_candidates SET source_hash=? WHERE candidate_id=?').run('bad', fresh.candidateId)
-            assert.throws(() => RecoveryCandidateRepository.listPending(), /恢复候选完整性校验失败/)
+            assert.throws(() => RecoveryCandidateRepository.listPending(), /RECOVERY_CANDIDATE_INTEGRITY_FAILED/)
           } finally { db.exec('ROLLBACK TO mixed_candidates; RELEASE mixed_candidates') }
           assert.equal(ImportRunRepository.get('old-import')?.id, 'old-import')
           assert.equal(ImportRunRepository.listResumable().some(item => item.id === 'old-import'), false)
@@ -853,7 +853,7 @@ it.each(['v100', 'v110'] as const)('%s 无 manifest 的旧历史启用新 lineag
     .toBe(oldCandidateProjectId)
   expect(targetDb.prepare('SELECT status FROM chapter_deletion_operations WHERE operation_id=?').pluck().get('old-deletion'))
     .toBe('pending')
-  const frozenRefusal = { success: false, committed: false, error: expect.stringContaining('仅保留为历史') }
+  const frozenRefusal = { success: false, committed: false, error: 'CHAPTER_DELETE_LEGACY_OPERATION_FROZEN' }
   const calls: string[] = []
   const service = new ChapterDeletionService({ cleaner: {
     async removeManuscript() { calls.push('manuscript') },

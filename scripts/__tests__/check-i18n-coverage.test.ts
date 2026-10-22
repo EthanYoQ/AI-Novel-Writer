@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -12,9 +12,9 @@ function writeFixture(root: string, relativePath: string, content: string) {
   writeFileSync(target, content, 'utf8')
 }
 
-function runChecker(root: string): { status: number; output: string } {
+function runChecker(root: string, args: string[] = []): { status: number; output: string } {
   try {
-    const output = execFileSync(process.execPath, [checker], {
+    const output = execFileSync(process.execPath, [checker, ...args], {
       cwd: root,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -457,6 +457,160 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
+  it('rejects English-only errors thrown under the workflows directory, except codes, exemptions and files still pending in #475 (#474)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-workflow-english-'))
+    try {
+      writeFixture(root, 'src/services/workflows/import-run-orchestrator.ts', `
+        declare function localize(locale: string, zh: string, en: string): string
+        export function run(result: { error?: string }, locale: string, chapter: number, step: number) {
+          if (step === 1) throw new Error('Import cancelled at a safe boundary.')
+          if (step === 2) throw new Error(\`The receipt is missing Chapter \${chapter}.\`)
+          if (step === 3) throw new Error(result.error || 'Could not save the import checkpoint.')
+          if (step === 4) throw new Error(locale === 'en-US' ? 'Not ready.' : 'Still not ready.')
+          if (step === 5) throw new Error(localize(locale, '导入已取消', 'Import cancelled.'))
+          if (step === 6) throw new Error(result.error || localize(locale, '保存失败', 'Could not save.'))
+          if (step === 7) throw new Error(\`\${chapter}\`)
+          if (step === 9) throw new Error((result as Record<string, string>)['message'])
+          if (step === 10) throw new Error(({ copy: 'Inline fallback.' } as Record<string, string>)['copy'])
+          // i18n-exempt: 接线错误，作者到不了
+          if (step === 8) throw new Error('Dependency is unavailable.')
+          throw new Error('IMPORT_RUN_RECEIPT_CORRUPT')
+        }
+      `)
+      writeFixture(root, 'src/services/workflows/import-workflow.ts', `
+        export function run() {
+          throw new Error('Committed import effect receipt does not match durable storage.')
+        }
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      const lines = result.output.split(/\r?\n/).filter(line => line.includes('[thrown-error]'))
+      expect(lines.map(line => line.replace(/^.*?:(\d+) \[thrown-error\] /u, '$1 '))).toEqual([
+        "4 'Import cancelled at a safe boundary.'",
+        '5 `The receipt is missing Chapter ${chapter}.`',
+        "6 result.error || 'Could not save the import checkpoint.'",
+        "7 locale === 'en-US' ? 'Not ready.' : 'Still not ready.'",
+        "12 ({ copy: 'Inline fallback.' } as Record<string, string>)['copy']",
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects Chinese-only errors thrown in renderer files outside the workflows directory unless a reasoned exemption sits beside them (#474)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-renderer-errors-'))
+    try {
+      writeFixture(root, 'src/components/stage/use-thing.ts', `
+        declare function text(zh: string, en: string): string
+        export function run(step: number) {
+          if (step === 1) throw new Error('剧情树快照保存失败')
+          if (step === 2) throw new Error(text('剧情树快照保存失败', 'Could not save the plot tree.'))
+          if (step === 3) throw new Error('PLOT_TREE_SNAPSHOT_FAILED')
+          // i18n-exempt: 只在开发构建的懒加载装配里抛出，作者看不到
+          if (step === 4) throw new Error('页面代码块没有默认导出')
+          if (step === 5) throw new Error('资源只读') // i18n-exempt:
+          if (step === 6) return Promise.reject(new Error('角色数据仍在切换项目'))
+          throw new Error('Only English')
+        }
+      `)
+      writeFixture(root, 'src/shared/plot-tree.ts', `
+        /** 校验快照。 */
+        // i18n-exempt: 只在主进程校验，失败在 IPC 边界换成错误码
+        export function assertSnapshot(value: unknown) {
+          if (!value) throw new Error('剧情树快照无效')
+          return () => { throw new Error('剧情树轨道无效') }
+        }
+        export const assertTrack = (value: unknown) => {
+          if (!value) throw new Error('剧情树事件无效')
+        }
+      `)
+      for (const name of ['use-thing.test.ts', 'use-thing.spec.tsx', 'use-thing.browser.tsx', 'Thing.stories.tsx']) {
+        writeFixture(root, `src/components/stage/${name}`, "throw new Error('测试文件名的中文不进界面')")
+      }
+      writeFixture(root, 'src/components/stage/__tests__/use-thing.test.ts', `
+        throw new Error('测试里的中文不进界面')
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      const lines = result.output.split(/\r?\n/).filter(line => /\[(?:thrown-error|exempt-without-reason)\]/u.test(line))
+      expect(lines).toEqual([
+        "src/components/stage/use-thing.ts:4 [thrown-error] '剧情树快照保存失败'",
+        "src/components/stage/use-thing.ts:9 [exempt-without-reason] '资源只读'",
+        "src/components/stage/use-thing.ts:10 [thrown-error] '角色数据仍在切换项目'",
+        "src/shared/plot-tree.ts:9 [thrown-error] '剧情树事件无效'",
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects main-process errors handed to a display unchanged, and accepts them after displayedErrorMessage (#474)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-raw-error-display-'))
+    try {
+      writeFixture(root, 'src/components/stage/use-delete.ts', `
+        declare const toast: { error(message: string): void }
+        declare function alertError(message: string, options?: { title?: string }): void
+        declare function text(zh: string, en: string): string
+        declare function displayedErrorMessage(locale: string, error: unknown, fallback?: string): string
+        declare function setDeleteError(message: string): void
+        declare function setNotice(notice: { kind: string; message: string }): void
+        declare function set(state: { error: string | null }): void
+        export async function remove(result: { success: boolean; error?: string }) {
+          toast.error(result.error || text('删除失败', 'Delete failed'))
+          toast.error(text(\`删除失败：\${result.error ?? '未知错误'}\`, 'Delete failed'))
+          setDeleteError(result.error ?? '')
+          set({ error: result.error ?? null })
+          const reason = result.error
+          setNotice({ kind: 'error', message: reason ?? '' })
+          try { await Promise.resolve() } catch (error) {
+            alertError(String(error), { title: text('删除失败', 'Delete failed') })
+            setDeleteError(error instanceof Error ? error.message : text('删除失败', 'Delete failed'))
+            toast.error(text(\`删除失败：\${error}\`, \`Delete failed: \${error}\`))
+          }
+          toast.error(displayedErrorMessage('zh-CN', result.error, text('删除失败', 'Delete failed')))
+          const shown = displayedErrorMessage('zh-CN', result.error)
+          toast.error(text(\`删除失败：\${shown}\`, \`Delete failed: \${shown}\`))
+          // i18n-exempt: 值是分好类的对象，由展示函数按界面语言说明
+          setDeleteError(result.error ?? '')
+        }
+      `)
+      writeFixture(root, 'src/stores/run-log.ts', `
+        declare function get(): { addLog(level: string, message: string, locale: string): void }
+        export const cancel = (request: Promise<void>) => request.catch(error => get().addLog('error', String(error), 'zh-CN'))
+      `)
+      writeFixture(root, 'src/components/dialogs/ImportNovelDialog.tsx', `
+        declare function setSplitError(message: string): void
+        export const fail = (error: Error) => setSplitError(error.message)
+      `)
+      writeFixture(root, 'src/components/stage/__tests__/use-delete.test.ts', `
+        declare const toast: { error(message: string): void }
+        toast.error(String(new Error('x')))
+      `)
+
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      const lines = result.output.split(/\r?\n/).filter(line => line.includes('[raw-error-display:'))
+      expect(lines).toEqual([
+        "src/components/stage/use-delete.ts:10 [raw-error-display:toast.error] result.error || text('删除失败', 'Delete failed')",
+        "src/components/stage/use-delete.ts:11 [raw-error-display:text] result.error ?? '未知错误'",
+        "src/components/stage/use-delete.ts:12 [raw-error-display:setDeleteError] result.error ?? ''",
+        'src/components/stage/use-delete.ts:13 [raw-error-display:state] result.error ?? null',
+        "src/components/stage/use-delete.ts:15 [raw-error-display:setNotice] message: reason ?? ''",
+        'src/components/stage/use-delete.ts:17 [raw-error-display:alertError] String(error)',
+        "src/components/stage/use-delete.ts:18 [raw-error-display:setDeleteError] error instanceof Error ? error.message : text('删除失败', 'Delete failed')",
+        'src/components/stage/use-delete.ts:19 [raw-error-display:text] error',
+        'src/stores/run-log.ts:3 [raw-error-display:get().addLog] String(error)',
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('permits localized boundary copy while ignoring prompts, parsers, and internal logs', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-policy-'))
     try {
@@ -496,5 +650,120 @@ describe('i18n coverage boundary scanner', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('main-process Chinese-only error ratchet (#474)', () => {
+  const baselinePath = 'scripts/i18n-main-error-baseline.json'
+  const service = 'electron/services/session.ts'
+  const twoSites = `
+    export class SessionService {
+      open(id: string) {
+        if (!id) throw new Error('缺少会话')
+        if (id === 'stale') throw new Error('会话已失效')
+        return id
+      }
+    }
+  `
+  const readBaseline = (root: string) =>
+    JSON.parse(readFileSync(join(root, baselinePath), 'utf8')).files as Record<string, Record<string, number>>
+
+  function withRoot(run: (root: string) => void) {
+    const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-main-'))
+    try {
+      run(root)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  it('records existing sites by file and function, then blocks a new one', () => {
+    withRoot((root) => {
+      writeFixture(root, service, twoSites)
+      expect(runChecker(root).status).toBe(1)
+      expect(runChecker(root, ['--update-baseline']).status).toBe(0)
+      expect(readBaseline(root)).toEqual({ [service]: { 'SessionService.open': 2 } })
+      expect(runChecker(root).status).toBe(0)
+
+      writeFixture(root, service, twoSites.replace('return id', "if (id === 'gone') throw new Error('会话不存在')\n        return id"))
+      const result = runChecker(root)
+
+      expect(result.status).toBe(1)
+      expect(result.output).toContain("[main-error] new Error('会话不存在')")
+      expect(result.output).toContain('SessionService.open: 3 Chinese-only main-process error(s), baseline allows 2')
+    })
+  })
+
+  it('fails when a site is fixed but the baseline was not tightened, and refuses to raise it', () => {
+    withRoot((root) => {
+      writeFixture(root, service, twoSites)
+      runChecker(root, ['--update-baseline'])
+      writeFixture(root, service, twoSites.replace("throw new Error('会话已失效')", "throw new Error('PROJECT_SESSION_STALE')"))
+
+      const stale = runChecker(root)
+
+      expect(stale.status).toBe(1)
+      expect(stale.output).toContain('[main-error-baseline-stale]')
+      expect(stale.output).toContain('node scripts/check-i18n-coverage.mjs --update-baseline')
+      expect(runChecker(root, ['--update-baseline']).status).toBe(0)
+      expect(readBaseline(root)).toEqual({ [service]: { 'SessionService.open': 1 } })
+      expect(runChecker(root).status).toBe(0)
+
+      writeFixture(root, service, twoSites)
+      const raised = runChecker(root, ['--update-baseline'])
+      expect(raised.status).toBe(1)
+      expect(raised.output).toContain('Refusing to raise the main-process error baseline')
+      expect(readBaseline(root)).toEqual({ [service]: { 'SessionService.open': 1 } })
+    })
+  })
+
+  it('does not report sites that only moved to other lines', () => {
+    withRoot((root) => {
+      writeFixture(root, service, twoSites)
+      runChecker(root, ['--update-baseline'])
+      writeFixture(root, service, `
+        import path from 'node:path'
+
+        export const sessionRoot = (value: string) => path.resolve(value)
+        ${twoSites}
+      `)
+
+      expect(runChecker(root).status).toBe(0)
+    })
+  })
+
+  it('counts every kind the inventory counts and skips localized, exempt and test code', () => {
+    withRoot((root) => {
+      writeFixture(root, 'electron/controllers/demo-controller.ts', `
+        import { dialog, ipcMain } from 'electron'
+        const mainText = (_locale: unknown, zh: string, en: string) => zh || en
+        export function registerDemoController(locale: string) {
+          ipcMain.handle('demo:run', async () => {
+            await dialog.showMessageBox({ buttons: ['取消', '开始'] })
+            const failure = new TypeError('构造后交出')
+            return { success: false, error: '保存失败', warning: mainText(undefined, '已保存', 'Saved'), failure }
+          })
+          ipcMain.handle('demo:locale', async () => ({
+            error: locale === 'en-US' ? 'Save failed' : '保存失败',
+          }))
+          return new Promise((_resolve, reject) => reject(new Error('超时')))
+        }
+        // i18n-exempt: 只在启动装配时抛出，进程直接退出，不进界面
+        export function assertDemoRegistered(ok: boolean) {
+          if (!ok) throw new Error('演示控制器未注册')
+        }
+        export function logOnly() {
+          console.error(new Error('只进日志'))
+        }
+      `)
+      writeFixture(root, 'electron/controllers/__tests__/demo-controller.test.ts', "throw new Error('测试')")
+      writeFixture(root, 'electron/controllers/demo-controller.spec.ts', "throw new Error('测试')")
+
+      runChecker(root, ['--update-baseline'])
+
+      expect(readBaseline(root)).toEqual({
+        'electron/controllers/demo-controller.ts': { registerDemoController: 4 },
+      })
+    })
   })
 })

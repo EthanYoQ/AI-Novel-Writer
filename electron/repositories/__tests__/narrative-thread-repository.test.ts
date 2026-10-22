@@ -77,7 +77,7 @@ describe('NarrativeThreadRepository', () => {
       type: 'planted',
       evidence: '草稿中的钥匙。',
       reason: '尚未定稿。',
-    })).toThrow('只能绑定已定稿章节')
+    })).toThrow('NARRATIVE_THREAD_EVENT_SOURCE_NOT_FINALIZED')
 
     const finalized = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'thread-finalized-source',
@@ -150,7 +150,7 @@ describe('NarrativeThreadRepository', () => {
   it('requires author rationale and evidence that exists in the finalized content', () => {
     expect(() => NarrativeThreadRepository.createPlan({
       title: '无理由计划', type: '伏笔', targetStartChapter: 1, targetEndChapter: 2, authorIntent: '',
-    })).toThrow('叙事线索计划参数无效')
+    })).toThrow('NARRATIVE_THREAD_PLAN_INVALID')
 
     const plan = NarrativeThreadRepository.createPlan({
       title: '墙上的刻痕', type: '伏笔', targetStartChapter: 1, targetEndChapter: 2,
@@ -165,10 +165,10 @@ describe('NarrativeThreadRepository', () => {
 
     expect(() => NarrativeThreadRepository.confirmEvent({
       planId: plan.id, draftId, type: 'planted', evidence: '正文里不存在的银色钥匙。', reason: '埋设。',
-    })).toThrow('短证据必须来自绑定的定稿正文')
+    })).toThrow('NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE')
     expect(() => NarrativeThreadRepository.confirmEvent({
       planId: plan.id, draftId, type: 'planted', evidence: '三道平行刻痕', reason: '',
-    })).toThrow('叙事线索事件参数无效')
+    })).toThrow('NARRATIVE_THREAD_EVENT_INVALID')
   })
 
   it('returns only active threads relevant to the current chapter plan', () => {

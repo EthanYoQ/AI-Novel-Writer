@@ -33,11 +33,11 @@ describe('project-scoped database access', () => {
     expect(() => assertExpectedProjectPath(
       'C:\\novels\\Project-B',
       'C:\\novels\\Project-A',
-    )).toThrow(/跨项目读写/)
+    )).toThrow('PROJECT_CONTEXT_CHANGED')
     expect(() => assertExpectedProjectPath(
       null,
       'C:\\novels\\Project-A',
-    )).toThrow(/跨项目读写/)
+    )).toThrow('PROJECT_CONTEXT_CHANGED')
   })
 
   it('keeps existing unscoped repository calls backward compatible', () => {
@@ -57,12 +57,12 @@ describe('project-scoped database access', () => {
       path.join(projectRoot, '..', 'outside', 'secret.md'),
       projectRoot,
       'writable',
-    )).toThrow(/超出当前项目/)
+    )).toThrow('PROJECT_FILE_OUTSIDE_PROJECT')
     expect(() => assertProjectFilePath(
       path.join(outsideRoot, 'secret.md'),
       projectRoot,
       'writable',
-    )).toThrow(/超出当前项目/)
+    )).toThrow('PROJECT_FILE_OUTSIDE_PROJECT')
   })
 
   it('rejects existing and not-yet-created targets behind a junction', () => {
@@ -74,11 +74,11 @@ describe('project-scoped database access', () => {
     expect(() => assertProjectFilePath(
       path.join(junctionPath, 'secret.md'),
       projectRoot,
-    )).toThrow(/超出当前项目/)
+    )).toThrow('PROJECT_FILE_OUTSIDE_PROJECT')
     expect(() => assertProjectFilePath(
       path.join(junctionPath, 'new.md'),
       projectRoot,
       'writable',
-    )).toThrow(/超出当前项目/)
+    )).toThrow('PROJECT_FILE_OUTSIDE_PROJECT')
   })
 })

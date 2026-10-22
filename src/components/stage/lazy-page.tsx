@@ -39,6 +39,7 @@ export function lazyPage<P extends object>(load: () => Promise<{ default: Compon
   // 载入失败时清掉 pending，重试或下次打开页面会重新载入，而不是一直拿着失败的结果。
   const preload = () => (pending ??= attemptLoad().then(
     module => {
+      // i18n-exempt: 下面的 catch 只记日志，作者看到的是按语言写好的「页面没有载入」
       if (!isComponent(module.default)) throw new Error(`页面代码块 ${entry} 没有默认导出的组件`)
       loaded = module.default as ComponentType<P>
       return true

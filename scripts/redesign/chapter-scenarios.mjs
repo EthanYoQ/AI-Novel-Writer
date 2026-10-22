@@ -738,6 +738,50 @@ export const CHAPTER_SCENARIOS = {
     await pause(3000)
   } },
 
+  /**
+   * #474 B5：英文界面定稿第 3 章，主进程收到提交时先卡住，期间把这一稿删掉再放行。定稿仓储交出 DRAFT_NOT_FOUND，
+   * 运行卡片的失败说明是英文、不带汉字与错误码。
+   */
+  'chapter-finalize-gone-en': { model: true, shell: 'stage', setup: seed(), run: async ({ app, page, invoke, shoot }) => {
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    await page.keyboard.press('Escape')
+    await page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ state: 'detached' })
+    assert.ok(await app.evaluate(({ ipcMain }) => {
+      const handlers = ipcMain._invokeHandlers
+      const original = handlers.get('finalization:commit')
+      if (!original) return false
+      const gate = Promise.withResolvers()
+      globalThis.__driveFinalizeGate = { release: gate.resolve, held: null }
+      handlers.set('finalization:commit', async (event, snapshot, context) => {
+        globalThis.__driveFinalizeGate.held = { draftId: snapshot.draftId, session: context }
+        await gate.promise
+        return original(event, snapshot, context)
+      })
+      return true
+    }), '能在主进程里卡住定稿提交')
+    await chapterView.view(page).getByRole('button', { name: 'More actions' }).click()
+    await page.getByRole('menuitem', { name: 'Finalize…' }).click()
+    await page.getByRole('dialog', { name: 'Finalize chapter 3?' }).getByRole('button', { name: 'Finalize', exact: true }).click()
+    let held = null
+    for (const deadline = Date.now() + 15_000; !held; await new Promise(resolve => setTimeout(resolve, 50))) {
+      assert.ok(Date.now() < deadline, '15 秒内定稿提交没有卡在门上')
+      held = await app.evaluate(() => globalThis.__driveFinalizeGate.held)
+    }
+    const deleted = await invoke(page, 'db:draft-delete', held.draftId, held.session.projectPath, held.session)
+    assert.equal(deleted.success, true, deleted.error)
+    await app.evaluate(() => globalThis.__driveFinalizeGate.release())
+    const failure = page.getByText('The finalization transaction was not committed.', { exact: false }).first()
+    await failure.waitFor({ state: 'visible', timeout: 30_000 })
+    const observed = { failure: await failure.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await shoot('chapter-finalize-gone-en')
+    assert.equal(observed.lang, 'en-US')
+    assert.match(observed.failure, /The finalization transaction was not committed\. This draft no longer exists \(it may have been deleted\), so the change was not saved\./u)
+    assert.doesNotMatch(observed.failure, /\p{Script=Han}|DRAFT_NOT_FOUND/u, '失败说明不带汉字与错误码')
+    return observed
+  } },
+
   /** perf：从点击第 5 章（1 万字）到正文出现且纸面可以滚动。两种外壳都能跑。 */
   'chapter-open': { model: false, setup: seed({ extra: args => createDraft(args, LONG_CHAPTER, 1, LONG_TEXT) }), run: async ({ page }) => {
     return { ...await openLongChapter(page), shell: await isStage(page) ? 'stage' : 'writer' }

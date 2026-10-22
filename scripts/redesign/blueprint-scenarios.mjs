@@ -279,6 +279,35 @@ export const BLUEPRINT_SCENARIOS = {
     }
   } },
 
+  'blueprint-recover-error-en': { model: true, shell: 'stage', setup: context => seedStageSample(context, { totalChapters: 16 }), run: async ({ page, shoot }) => {
+    await blueprint.open(page)
+    await blueprint.generateRange(page, 13, 16)
+    await runSheet.waitUntilOpen(page)
+    const notice = page.getByRole('status').filter({ hasText: '有一份蓝图恢复稿' })
+    await notice.waitFor({ state: 'visible', timeout: 60_000 })
+    await notice.getByRole('button', { name: '编辑恢复稿' }).click()
+    await stage.tab(page, '蓝图恢复稿').waitFor({ state: 'visible' })
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    await page.keyboard.press('Escape')
+    await page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ state: 'detached' })
+    const recovery = page.getByRole('region', { name: 'Blueprint recovery' })
+    await recovery.waitFor({ state: 'visible' })
+    await recovery.locator('.cm-content').click()
+    await page.keyboard.press('Control+A')
+    await page.keyboard.insertText('[{"chapterNumber":13,"title":"Fog"}]')
+    await recovery.getByRole('button', { name: 'Save recovered blueprints' }).click()
+    const alert = recovery.getByRole('alert')
+    await alert.waitFor({ state: 'visible' })
+    const observed = { alert: await alert.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await shoot('blueprint-recover-error-en')
+    assert.equal(observed.lang, 'en-US')
+    assert.doesNotMatch(observed.alert, /\p{Script=Han}/u, '英文界面的恢复稿报错不带中文')
+    assert.match(observed.alert, /^The content does not match the expected format: /u)
+    return observed
+  } },
+
   'blueprint-tour': { model: true, shell: 'stage', setup: withKeeperInChapter3, run: async ({ app, page }) => {
     const pause = ms => page.waitForTimeout(ms)
     await pause(1200)

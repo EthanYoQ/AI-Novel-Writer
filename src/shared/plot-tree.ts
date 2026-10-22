@@ -93,11 +93,13 @@ function record(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+// i18n-exempt: 剧情树只在主进程生成与保存，失败经生成 IPC 边界换成错误码，读快照失败被 catch 吞掉；作者看不到这条说明
 function text(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`剧情树${label}无效`)
   return value.trim()
 }
 
+// i18n-exempt: 剧情树只在主进程生成与保存，失败经生成 IPC 边界换成错误码，读快照失败被 catch 吞掉；作者看不到这条说明
 function positiveInteger(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error(`剧情树${label}无效`)
   return value as number
@@ -109,6 +111,7 @@ function validChapterNumber(value: unknown): value is number {
     && (value as number) <= MAX_PLOT_TREE_CHAPTER_NUMBER
 }
 
+// i18n-exempt: 剧情树只在主进程生成与保存，失败经生成 IPC 边界换成错误码，读快照失败被 catch 吞掉；作者看不到这条说明
 function chapterInteger(value: unknown, label: string): number {
   if (!validChapterNumber(value)) throw new Error(`剧情树${label}无效`)
   return value
@@ -172,6 +175,7 @@ export function hasUsablePlotTreeEventSource(sources: PlotTreeSourceBundle): boo
 }
 
 /** Rejects model-controlled track ranges that exceed the current authoritative source domain. */
+// i18n-exempt: 剧情树只在主进程生成与保存，失败经生成 IPC 边界换成错误码，读快照失败被 catch 吞掉；作者看不到这条说明
 export function assertPlotTreeSnapshotChapterBounds(
   snapshot: PlotTreeSnapshot,
   sources: PlotTreeSourceBundle,
@@ -184,6 +188,7 @@ export function assertPlotTreeSnapshotChapterBounds(
   return snapshot
 }
 
+// i18n-exempt: 剧情树只在主进程生成与保存，失败经生成 IPC 边界换成错误码，读快照失败被 catch 吞掉；作者看不到这条说明
 function sourceReference(value: unknown): PlotTreeSourceReference {
   const input = record(value)
   if (!input) throw new Error('剧情树来源引用无效')
@@ -240,6 +245,7 @@ function sourceSupportsEvent(
     && chapterNumber <= plan.targetEndChapter)
 }
 
+// i18n-exempt: 剧情树只在主进程生成与保存，失败经生成 IPC 边界换成错误码，读快照失败被 catch 吞掉；作者看不到这条说明
 function assertSourceExists(
   source: PlotTreeSourceReference,
   sources: PlotTreeSourceBundle,
@@ -264,6 +270,7 @@ function assertSourceExists(
 }
 
 /** Validates a persisted snapshot without requiring its historical sources to still exist. */
+// i18n-exempt: 剧情树只在主进程生成与保存，失败经生成 IPC 边界换成错误码，读快照失败被 catch 吞掉；作者看不到这条说明
 export function assertStoredPlotTreeSnapshot(
   value: unknown,
 ): PlotTreeSnapshot {
@@ -363,6 +370,7 @@ export function assertStoredPlotTreeSnapshot(
 }
 
 /** Validates a newly generated snapshot against the project's current sources. */
+// i18n-exempt: 剧情树只在主进程生成与保存，失败经生成 IPC 边界换成错误码，读快照失败被 catch 吞掉；作者看不到这条说明
 export function assertPlotTreeSnapshot(
   value: unknown,
   sources: PlotTreeSourceBundle,

@@ -49,6 +49,12 @@ const mocks = vi.hoisted(() => ({
   importSourceIdentityResolve: vi.fn(),
   importRunPrepare: vi.fn(),
   importRunFinalizeParsing: vi.fn(),
+  importRunGet: vi.fn((): { locale: 'zh-CN' | 'en-US' } | undefined => undefined),
+  importRunRestart: vi.fn(),
+  importRunGetEffectReceipt: vi.fn(),
+  importRunFail: vi.fn(),
+  importRunBeginParsing: vi.fn(),
+  importRunPrepareEffectReceipt: vi.fn(),
   draftGetFull: vi.fn(() => ({
     id: 1,
     content: mocks.currentProjectPath.endsWith('/A') ? 'A content' : 'B content',
@@ -70,6 +76,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
+  app: { getLocale: () => 'zh-CN' },
   ipcMain: {
     handle: vi.fn((channel: string, handler: IpcHandler) => {
       mocks.handlers.set(channel, handler)
@@ -194,6 +201,12 @@ vi.mock('../../repositories/import-run-repository', () => ({
   ImportRunRepository: {
     prepare: mocks.importRunPrepare,
     finalizeParsing: mocks.importRunFinalizeParsing,
+    get: mocks.importRunGet,
+    restart: mocks.importRunRestart,
+    getEffectReceipt: mocks.importRunGetEffectReceipt,
+    fail: mocks.importRunFail,
+    beginParsing: mocks.importRunBeginParsing,
+    prepareEffectReceipt: mocks.importRunPrepareEffectReceipt,
   },
 }))
 
@@ -283,12 +296,15 @@ beforeEach(() => {
   mocks.hasCharacterIdentitySchema.mockReturnValue(false)
   mocks.assertCurrentSession.mockReset()
   mocks.authorRosterCommit.mockReset()
+  mocks.importRunGet.mockReset()
+  mocks.importRunRestart.mockReset()
+  mocks.importRunGetEffectReceipt.mockReset()
   mocks.assertCurrentProjectContext.mockImplementation((context: {
     projectPath?: string
   } | undefined, currentProjectPath: string) => {
-    if (!context?.projectPath) throw new Error('缺少项目会话上下文，已拒绝操作')
+    if (!context?.projectPath) throw new Error('PROJECT_SESSION_REQUIRED')
     if (context.projectPath !== currentProjectPath) {
-      throw new Error('项目会话与当前数据库不匹配，已拒绝操作')
+      throw new Error('PROJECT_SESSION_DATABASE_MISMATCH')
     }
     return { rootPath: currentProjectPath }
   })
@@ -365,7 +381,14 @@ describe('database controller project context guard', () => {
       'C:/projects/A',
     )).resolves.toEqual({
       success: false,
-      error: expect.stringContaining('项目数据已变化'),
+      error: 'PROJECT_CORE_SYNOPSIS_CHANGED',
+    })
+  })
+
+  it('refuses the retired renderer plot-tree save with the admission code and no sources-changed shortcut', async () => {
+    await expect(handler('db:plot-tree-save')({}, { version: 1 }, 'a'.repeat(64), 'C:/projects/A')).resolves.toEqual({
+      success: false,
+      error: 'Error: GENERATION_GRAPH_ADMISSION_REQUIRED',
     })
   })
 
@@ -510,16 +533,103 @@ describe('database controller project context guard', () => {
 
   it('rejects parsing finalization after the project session switches', async () => {
     mocks.currentProjectPath = 'C:/projects/B'
+    mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
 
     await expect(handler('db:import-run-finalize-parsing')(
       {},
       'parse-run',
       'C:/projects/A',
-    )).resolves.toMatchObject({
+    )).resolves.toEqual({
       success: false,
-      error: expect.stringContaining('项目上下文已切换'),
+      errorCode: 'PROJECT_CONTEXT_CHANGED',
+      error: 'The project was switched or reopened, and this action belonged to the earlier session, so it was rejected. Repeat it in the project that is open now.',
     })
     expect(mocks.importRunFinalizeParsing).not.toHaveBeenCalled()
+  })
+
+  describe('import run failures shown in the import dialog and run card (#474)', () => {
+    const han = /\p{Script=Han}/u
+
+    it('explains an author-actionable code in the run language and keeps the code', async () => {
+      mocks.importRunRestart.mockImplementation(() => { throw new Error('IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN') })
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      const english = await handler('db:import-run-restart')({}, 'author-run', 'next-run', 'C:/projects/A')
+      expect(english).toEqual({
+        success: false,
+        errorCode: 'IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN',
+        error: 'An author-manuscript import cannot be restarted. Resume the original import to finish publishing and post-processing.',
+      })
+
+      mocks.importRunGet.mockReturnValue({ locale: 'zh-CN' })
+      await expect(handler('db:import-run-restart')({}, 'author-run', 'next-run', 'C:/projects/A')).resolves.toEqual({
+        success: false,
+        errorCode: 'IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN',
+        error: '作者原稿导入不能重新开始。请继续原来的这次导入，完成发布和后处理。',
+      })
+    })
+
+    it('gives integrity failures a readable sentence that carries the code for feedback', async () => {
+      mocks.importRunRestart.mockImplementation(() => { throw new Error('IMPORT_RUN_ID_CONFLICT') })
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      const result = await handler('db:import-run-restart')({}, 'run', 'next-run', 'C:/projects/A') as { error: string; errorCode: string }
+      expect(result.errorCode).toBe('IMPORT_RUN_ID_CONFLICT')
+      expect(result.error).toBe('The import could not continue because a check failed (IMPORT_RUN_ID_CONFLICT). Try again; if it keeps happening, send us this message.')
+      expect(result.error).not.toMatch(han)
+    })
+
+    it('does not hand a bare generation-source code to the run card', async () => {
+      mocks.importRunPrepareEffectReceipt.mockImplementationOnce(() => { throw new Error('GENERATION_IMPORT_SLOT_AMBIGUOUS') })
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      await expect(handler('db:import-run-effect-receipt-prepare')(
+        {}, { runId: 'run', stage: 'style', batchId: 'done' }, { owner: 'renderer', epoch: 1, expiresAt: 1 }, 'C:/projects/A',
+      )).resolves.toEqual({
+        success: false,
+        errorCode: 'GENERATION_IMPORT_SLOT_AMBIGUOUS',
+        error: 'The import could not continue because a check failed (GENERATION_IMPORT_SLOT_AMBIGUOUS). Try again; if it keeps happening, send us this message.',
+      })
+    })
+
+    it('puts the explanation into the thrown message of read channels', async () => {
+      mocks.importRunGetEffectReceipt.mockImplementation(() => { throw new Error('IMPORT_RUN_RECEIPT_CORRUPT') })
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      await expect(handler('db:import-run-effect-receipt-get')({}, 'run', 'style', 'done', 'C:/projects/A'))
+        .rejects.toThrow('The import could not continue because a check failed (IMPORT_RUN_RECEIPT_CORRUPT).')
+    })
+
+    it('uses the requested import language before any run exists', async () => {
+      mocks.importInspectionPeek.mockReturnValueOnce({ chapters: [] })
+      mocks.importInspectionConsume.mockImplementationOnce(() => { throw new Error('IMPORT_INSPECTION_EXPIRED') })
+      await expect(handler('db:import-run-prepare-inspection')(
+        { sender: { id: 8 } },
+        { inspectionId: 'gone', runId: 'new-run', purpose: 'reference', locale: 'en-US' },
+        'C:/projects/A',
+      )).resolves.toEqual({
+        success: false,
+        errorCode: 'IMPORT_INSPECTION_EXPIRED',
+        error: 'The file check has expired. Choose the files again.',
+      })
+      expect(mocks.importRunGet).not.toHaveBeenCalled()
+    })
+
+    it('stores a readable failure reason instead of the IPC wrapper or a bare code', async () => {
+      mocks.importRunGet.mockReturnValue({ locale: 'en-US' })
+      const execution = { owner: 'renderer', epoch: 1, expiresAt: 1 }
+      await handler('db:import-run-fail')(
+        {}, 'run', 'knowledge',
+        "Error invoking remote method 'db:import-run-effect-receipt-get': Error: IMPORT_RUN_EXECUTION_STALE",
+        execution, 'C:/projects/A',
+      )
+      expect(mocks.importRunFail).toHaveBeenLastCalledWith('run', 'knowledge', expect.not.stringMatching(/IPC|remote method|IMPORT_RUN_/), execution)
+      const reason = mocks.importRunFail.mock.lastCall?.[2] as string
+      expect(reason).toMatch(/^This import was taken over by another window/)
+
+      await handler('db:import-run-fail')(
+        {}, 'run', 'knowledge',
+        "Error invoking remote method 'kb:import-reference-text': Error: Chapter 3 could not be written.",
+        execution, 'C:/projects/A',
+      )
+      expect(mocks.importRunFail).toHaveBeenLastCalledWith('run', 'knowledge', 'Chapter 3 could not be written.', execution)
+    })
   })
 
   it('returns the repository finalization conflict without flattening its reason', async () => {
@@ -690,7 +800,7 @@ describe('database controller project context guard', () => {
 
     expect(result).toMatchObject({
       success: false,
-      error: expect.stringContaining('项目会话'),
+      error: 'Error: PROJECT_SESSION_REQUIRED',
     })
     expect(mocks.characterRosterCommit).not.toHaveBeenCalled()
   })
@@ -824,14 +934,14 @@ describe('database controller project context guard', () => {
     mocks.currentProjectPath = 'C:/projects/B'
 
     await expect(handler('db:character-get-all')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     const characterCommit = await handler('db:character-roster-commit')(
       {},
       { operationId: 'stale-A', expectedRevision: 0, schemaVersion: 1, entries: [] },
       'C:/projects/A',
     )
     await expect(handler('db:blueprint-get-all')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     const blueprintUpsert = await handler('db:blueprint-upsert')(
       {},
       blueprint(),
@@ -928,7 +1038,7 @@ describe('database controller project context guard', () => {
     await expect(handler('db:draft-get-full')({}, 1, 'C:/projects/B'))
       .resolves.toMatchObject({ id: 1, content: 'B content' })
     await expect(handler('db:draft-get-full')({}, 1, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     const staleWrite = await handler('db:draft-update-content')(
       {},
       1,
@@ -959,7 +1069,7 @@ describe('database controller project context guard', () => {
 
     mocks.currentProjectPath = 'C:/projects/B'
     await expect(handler('db:draft-list-all')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     expect(mocks.draftListAll).toHaveBeenCalledOnce()
   })
 
@@ -979,7 +1089,7 @@ describe('database controller project context guard', () => {
       'C:/projects/A',
     )).resolves.toMatchObject({
       success: false,
-      error: expect.stringContaining('已定稿正文为只读内容'),
+      error: 'Error: DRAFT_FINALIZED_READ_ONLY',
     })
     expect(mocks.draftUpdateContent).not.toHaveBeenCalled()
   })
@@ -1004,7 +1114,7 @@ describe('database controller project context guard', () => {
 
   it('rejects draft access that omits the required project identity', async () => {
     await expect(rawHandler('db:draft-get-full')({}, 1))
-      .rejects.toThrow(/缺少项目会话上下文/)
+      .rejects.toThrow('PROJECT_SESSION_REQUIRED')
     expect(mocks.draftGetFull).not.toHaveBeenCalled()
   })
 
@@ -1048,7 +1158,7 @@ describe('database controller project context guard', () => {
     await expect(handler('db:recovery-candidate-record')({}, request, 'C:/projects/A'))
       .resolves.toMatchObject({ success: false })
     await expect(handler('db:recovery-candidate-list')({}, 'C:/projects/A'))
-      .rejects.toThrow(/项目上下文已切换/)
+      .rejects.toThrow('PROJECT_CONTEXT_CHANGED')
     await expect(handler('db:recovery-candidate-update')({}, 'candidate-1', '候选正文', 'C:/projects/A'))
       .resolves.toMatchObject({ success: false })
     await expect(handler('db:recovery-candidate-resolve')({}, 'candidate-1', 'discarded', 'C:/projects/A'))
@@ -1071,9 +1181,9 @@ describe('database controller project context guard', () => {
     mocks.closeProjectDatabase.mockClear()
     mocks.currentProjectPath = 'C:/projects/B'
     await expect(handler('db:close')({}, 'C:/projects/A'))
-      .resolves.toMatchObject({ success: false, error: expect.stringContaining('项目上下文已切换') })
+      .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_CONTEXT_CHANGED' })
     await expect(rawHandler('db:close')({}))
-      .resolves.toMatchObject({ success: false, error: expect.stringContaining('项目会话上下文') })
+      .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_SESSION_REQUIRED' })
     expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
     expect(mocks.invalidateCurrentSession).toHaveBeenCalledOnce()
   })

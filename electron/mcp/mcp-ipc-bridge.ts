@@ -24,7 +24,7 @@ export function registerMCPHandlers(): void {
         success: false,
         status: 'error' as const,
         servers: [],
-        error: 'MCP 配置加载失败',
+        error: 'MCP_CONFIG_INVALID',
       }
     }
   })
@@ -35,7 +35,7 @@ export function registerMCPHandlers(): void {
       await mcpManager.connect(serverId)
       return { success: true }
     } catch {
-      return { success: false, error: 'MCP 服务器连接失败' }
+      return { success: false, error: 'MCP_CONNECT_FAILED' }
     }
   })
 

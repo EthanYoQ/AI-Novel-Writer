@@ -157,7 +157,7 @@ describe('chapter lifecycle deletion IPC', () => {
       const service=new ChapterDeletionService()
       expect(service.listIncomplete(projectRoot)).toEqual([])
       const result=await service.retry(projectRoot,stored.operationId)
-      expect(result).toMatchObject({success:false,committed:false})
+      expect(result).toMatchObject({success:false,committed:false,error:'CHAPTER_DELETE_LEGACY_OPERATION_FROZEN'})
       expect(result.operation).toBeUndefined()
       expect(ChapterDeletionRepository.get(stored.operationId)).toEqual(stored)
     } finally { guard.mockRestore() }
@@ -194,7 +194,7 @@ describe('chapter lifecycle deletion IPC', () => {
         knowledgeStatus: 'failed',
         knowledgeError: 'simulated knowledge cleanup outage',
       },
-      error: expect.stringContaining('知识库清理失败'),
+      error: 'CHAPTER_DELETE_CLEANUP_INCOMPLETE',
     })
     expect(DraftRepository.getFull(draftId)).toBeNull()
     expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(false)
@@ -208,7 +208,7 @@ describe('chapter lifecycle deletion IPC', () => {
     )).resolves.toMatchObject({
       success: false,
       committed: false,
-      error: expect.stringContaining('一次性'),
+      error: 'CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED',
     })
 
     closeProjectDatabase()
@@ -332,7 +332,7 @@ describe('chapter lifecycle deletion IPC', () => {
     )).resolves.toMatchObject({
       success: false,
       committed: false,
-      error: expect.stringContaining('会话'),
+      error: 'PROJECT_SESSION_STALE',
     })
     await expect(handler(
       {},
@@ -342,7 +342,7 @@ describe('chapter lifecycle deletion IPC', () => {
     )).resolves.toMatchObject({
       success: false,
       committed: false,
-      error: expect.stringContaining('身份不匹配'),
+      error: 'CHAPTER_DELETE_TARGET_MISMATCH',
     })
     expect(DraftRepository.getFull(draftId)).not.toBeNull()
     expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(true)
@@ -395,7 +395,7 @@ describe('chapter lifecycle deletion IPC', () => {
     )).resolves.toMatchObject({
       success: false,
       committed: false,
-      error: expect.stringContaining('身份不匹配'),
+      error: 'CHAPTER_DELETE_REQUEST_MISMATCH',
     })
   })
 
@@ -431,7 +431,7 @@ describe('chapter lifecycle deletion IPC', () => {
         status: 'authorization_required',
         legacyKnowledgeAuthorization: 'required',
       },
-      error: expect.stringContaining('缺少可靠'),
+      error: 'CHAPTER_DELETE_LEGACY_KNOWLEDGE_CHECK_REQUIRED',
     })
     const listed = await handlers.get('chapter:list-incomplete-deletions')!(
       {},
@@ -519,7 +519,7 @@ describe('chapter lifecycle deletion IPC', () => {
     )).resolves.toMatchObject({
       success: false,
       committed: false,
-      error: expect.stringContaining('一次性'),
+      error: 'CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED',
     })
   })
 
@@ -542,7 +542,7 @@ describe('chapter lifecycle deletion IPC', () => {
     )).resolves.toMatchObject({
       success: false,
       committed: false,
-      error: expect.stringContaining('缺少可靠'),
+      error: 'CHAPTER_DELETE_LEGACY_KNOWLEDGE_CHECK_REQUIRED',
     })
     expect(DraftRepository.getFull(draftId)).not.toBeNull()
     expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(true)

@@ -10,6 +10,7 @@ import * as shell from './pages/shell.mjs'
 import * as stage from './pages/stage.mjs'
 import { chromeContrastFailures, msFromClickToProse, seedStageSample } from './scenarios.mjs'
 import { countUnits, STAGE_SAMPLE } from './stage-sample.mjs'
+import { FAKE_MODEL } from './fake-model.mjs'
 
 const THREAD = Object.freeze({ title: '雾钟为何提前', type: '主线', targetStartChapter: 1, targetEndChapter: 6, authorIntent: '钟声提前一刻与三十年前的沉船有关。' })
 const SECOND_DRAFT = `${STAGE_SAMPLE.drafts[3].text}\n\n林岚把纸条又读了一遍，决定等到下一次大潮再上灯室。`
@@ -268,6 +269,95 @@ export const REFS_SCENARIOS = {
     await refs.versionButton(page, '草稿 v1').waitFor({ state: 'detached' })
     await refs.versionButton(page, '草稿 v2').waitFor({ state: 'visible' })
     await refs.historyChapters(page).getByRole('button', { name: /雾钟/ }).getByText('1 稿').waitFor({ state: 'visible' })
+  } },
+  // #474 B2：主进程只交 NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE，英文界面在记录表单里按码说明，不带汉字与错误码。
+  'refs-thread-evidence-en': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page, shoot }) => {
+    await refs.open(page, 'plot')
+    await refs.plotView(page, '伏笔线索').click()
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    await page.keyboard.press('Escape')
+    await page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ state: 'detached' })
+    await page.getByRole('button', { name: `More actions for “${THREAD.title}”` }).click()
+    await refs.menuItem(page, 'Record a change from a final').click()
+    await page.getByLabel('Final chapter').selectOption({ label: 'Chapter 1 · final v1' })
+    await page.getByLabel('Quote from the final').fill('这句话不在定稿里')
+    await page.getByLabel('Why').fill('Testing a quote that is not in the final.')
+    await page.getByRole('button', { name: 'Record', exact: true }).click()
+    const alert = page.locator('.stage-plot-error[role="alert"]')
+    await alert.waitFor({ state: 'visible' })
+    const observed = { alert: await alert.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await shoot('refs-thread-evidence-en')
+    assert.equal(observed.lang, 'en-US')
+    assert.equal(observed.alert, 'Paste a short excerpt that appears in the selected finalized chapter.')
+    assert.equal(await page.getByLabel('Quote from the final').inputValue(), '这句话不在定稿里', '表单留着作者的输入，改完能直接重试')
+    return observed
+  } },
+  // #474 B3：主进程只交知识库错误码。英文界面下项目副本在别处被改后保存、检索索引登记文件损坏时读状态，
+  // 提示都是英文、不带汉字与错误码。
+  'refs-kb-errors-en': { model: true, shell: 'stage', setup: seedRefs, run: async context => {
+    const { page, shoot } = context
+    const englishOnly = (observed, key) => assert.doesNotMatch(observed[key], /[A-Z]{3,}_|\p{Script=Han}/u, JSON.stringify(observed))
+    await importMaterials(context)
+    await refs.materialButton(page, '守塔人小传').click()
+    await refs.copyEditor(page).waitFor({ state: 'visible' })
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    await page.keyboard.press('Escape')
+    await page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ state: 'detached' })
+
+    const editor = page.getByRole('textbox', { name: 'Project copy content' })
+    await editor.waitFor({ state: 'visible' })
+    const copies = path.join(context.samplePath, '.ai-novel', 'knowledge-copies')
+    const copyFile = fs.readdirSync(copies).filter(name => name.endsWith('.json')).map(name => path.join(copies, name))
+      .find(file => JSON.parse(fs.readFileSync(file, 'utf8')).content === MATERIALS['守塔人小传.txt'])
+    assert.ok(copyFile, '找到守塔人小传的项目副本')
+    const stored = JSON.parse(fs.readFileSync(copyFile, 'utf8'))
+    fs.writeFileSync(copyFile, JSON.stringify({ ...stored, content: `${stored.content}（另一处改动）`, edited: true, indexDirty: true }))
+    await editor.fill(`${MATERIALS['守塔人小传.txt']}He never let anyone into the lamp room.`)
+    await page.getByRole('button', { name: 'Save copy', exact: true }).click()
+    const toast = page.locator('.pi-toast[data-tone="danger"]:not([data-exiting]) .pi-toast-body').first()
+    await toast.waitFor({ state: 'visible', timeout: 30_000 })
+    const saved = { toast: await toast.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await shoot('refs-kb-copy-changed-en')
+    assert.equal(saved.lang, 'en-US')
+    assert.match(saved.toast, /The project copy was changed elsewhere/)
+    englishOnly(saved, 'toast')
+
+    fs.writeFileSync(path.join(context.samplePath, '.ai-novel', 'embedding-spaces.json'), '{ "damaged": ')
+    await stage.root(page).getByRole('button', { name: 'Settings', exact: true }).first().click()
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Retrieval model', exact: true }).click()
+    const alert = stage.root(page).getByRole('region', { name: 'Search index of the current book' }).getByRole('alert')
+    await alert.waitFor({ state: 'visible', timeout: 15_000 })
+    const index = { alert: await alert.innerText() }
+    await shoot('refs-kb-index-damaged-en')
+    assert.match(index.alert, /search index records of this book are damaged/)
+    englishOnly(index, 'alert')
+    return { saved, index }
+  } },
+  // #474 B6：provider 只交 LLM_REQUEST_FAILED 与 HTTP 状态，连接测试由主进程按界面语言写成说明。
+  // 英文界面把夹具模型的 API Key 改错后测试连接，假服务回 403，模型表单的结果是英文、不带汉字与错误码。
+  'models-test-connection-en': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    const nav = page.getByRole('navigation', { name: 'Settings sections' })
+    await nav.getByRole('button', { name: 'AI models', exact: true }).click()
+    await page.getByRole('button', { name: `Edit “${FAKE_MODEL.name}”`, exact: true }).click()
+    await page.getByPlaceholder('sk-...').fill('wrong-key-for-connection-test')
+    const before = fake.requests.length
+    await page.getByRole('button', { name: 'Test connection', exact: true }).click()
+    const result = page.getByText(/^Connection failed: /u)
+    await result.waitFor({ state: 'visible', timeout: 15_000 })
+    const observed = { result: await result.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await shoot('models-test-connection-en')
+    assert.equal(observed.lang, 'en-US')
+    assert.equal(observed.result, 'Connection failed: Model request failed (HTTP 403). Check the Base URL, API key, and model name.')
+    assert.doesNotMatch(observed.result, /[A-Z]{3,}_|\p{Script=Han}/u)
+    assert.equal(fake.requests.length, before, '假服务在鉴权前就回 403，不算一次模型请求')
+    return observed
   } },
   'refs-delete': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
     await refs.open(page, 'plot')

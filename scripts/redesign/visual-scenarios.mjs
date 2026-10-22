@@ -292,6 +292,175 @@ export const VISUAL_SCENARIOS = {
     await page.getByRole('alertdialog').waitFor({ state: 'hidden' })
   } },
 
+  // #474 B4：主进程只交错误码（PROJECT_DIRECTORY_EXISTS、PROJECT_DIRECTORY_MISSING），英文界面的报错弹框按码写成英文。
+  'project-errors-en': { model: false, shell: 'stage', run: async context => {
+    const { app, roots, invoke, shoot } = context
+    let { page } = context
+    await app.evaluate(({ dialog }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
+    }, roots.projects)
+    await bookshelf.createProject(page, '雾岛')
+    await stage.spine(page).waitFor({ state: 'visible' })
+    await stage.backToLibrary(page, '雾岛')
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await context.reload()
+    await page.getByRole('list', { name: 'Recent books' }).waitFor({ state: 'visible' })
+    const alert = page.getByRole('alertdialog')
+    const observed = {}
+
+    await page.getByRole('button', { name: 'New book', exact: true }).click()
+    const form = page.getByRole('dialog', { name: 'New book' })
+    await form.getByRole('textbox').first().fill('雾岛')
+    await form.getByRole('button', { name: 'Choose', exact: true }).click()
+    await form.getByRole('button', { name: 'Create book' }).click()
+    await alert.waitFor({ state: 'visible' })
+    observed.exists = await alert.innerText()
+    await settle(page)
+    await shoot('project-exists-en')
+    await alert.getByRole('button', { name: 'OK', exact: true }).click()
+    await alert.waitFor({ state: 'hidden' })
+    await page.keyboard.press('Escape')
+    await form.waitFor({ state: 'hidden' })
+
+    // 最近作品的文件夹在应用外被移走，再从书房打开。冷重启后作品文件不再被占用；驱动的重启按中文书房判断就绪，先切回中文。
+    assert.equal((await invoke(page, 'config:set', { locale: 'zh-CN' })).success, true)
+    await context.restart()
+    page = context.page
+    fs.rmSync(path.join(roots.projects, '雾岛'), { recursive: true, force: true })
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await context.reload()
+    await page.getByRole('list', { name: 'Recent books' }).waitFor({ state: 'visible' })
+    await stage.openFromLibraryEn(page, '雾岛')
+    const missingAlert = page.getByRole('alertdialog')
+    await missingAlert.waitFor({ state: 'visible' })
+    observed.missing = await missingAlert.innerText()
+    await settle(page)
+    await shoot('project-missing-en')
+
+    for (const text of Object.values(observed)) {
+      assert.doesNotMatch(text, /\p{Script=Han}/u, '英文界面的报错不带中文')
+      assert.doesNotMatch(text, /[A-Z]{3,}_[A-Z]/u, '英文界面的报错不露错误码')
+    }
+    assert.match(observed.exists, /A folder with this name already exists there, so it was not overwritten\./u)
+    assert.match(observed.missing, /The project folder could not be found\./u)
+    return observed
+  }, after: async ({ page }) => {
+    await page.getByRole('alertdialog').getByRole('button', { name: 'OK', exact: true }).click()
+    await page.getByRole('alertdialog').waitFor({ state: 'hidden' })
+  } },
+
+  // #474 B1：英文界面导入参考小说，参照章节写入知识库前这次导入的执行租约被别处收回（用公开的 db:import-run-cancel-at-boundary
+  // 按卡住的请求里的执行身份收回）。主进程的导入运行仓储只交 IMPORT_RUN_EXECUTION_STALE，运行卡片的失败说明是英文、不带汉字与错误码。
+  'import-run-error-en': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ app, page, roots, invoke, shoot }) => {
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    await page.keyboard.press('Escape')
+    await page.getByRole('navigation', { name: 'Settings sections' }).waitFor({ state: 'detached' })
+    const file = path.join(roots.temp, 'reference-novel.txt')
+    fs.writeFileSync(file, `第1章 旧港\n旧港的潮水刚退，青石上还留着一层薄薄的盐霜。\n\n第2章 北堤\n北堤上的风很大。\n`)
+    assert.ok(await app.evaluate(({ dialog, ipcMain }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
+      const handlers = ipcMain._invokeHandlers
+      const original = handlers.get('kb:import-reference-text')
+      if (!original) return false
+      const gate = Promise.withResolvers()
+      globalThis.__driveReferenceGate = { release: gate.resolve, held: null }
+      handlers.set('kb:import-reference-text', async (event, chapterNumber, runId, authority, session) => {
+        globalThis.__driveReferenceGate.held ??= { runId, authority, session }
+        await gate.promise
+        return original(event, chapterNumber, runId, authority, session)
+      })
+      return true
+    }, file), '能在主进程里卡住参照章节入库')
+
+    await stage.root(page).getByRole('banner').getByRole('button', { name: `“${STAGE_SAMPLE.name}” menu` }).click()
+    await page.getByRole('menuitem', { name: 'Novel breakdown & imitation…', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Novel analysis and style study' })
+    await dialog.getByTestId('import-target-current').click()
+    await dialog.getByRole('button', { name: 'Choose', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Import into current project (2 chapters)', disabled: false }).click()
+    await dialog.waitFor({ state: 'hidden' })
+
+    let held = null
+    for (const deadline = Date.now() + 20_000; !held; await new Promise(resolve => setTimeout(resolve, 50))) {
+      assert.ok(Date.now() < deadline, '20 秒内参照章节入库没有卡在门上')
+      held = await app.evaluate(() => globalThis.__driveReferenceGate.held)
+    }
+    const lease = { ...held.authority, expiresAt: Date.now() + 60_000 }
+    const fenced = await invoke(page, 'db:import-run-cancel-at-boundary', held.runId, lease, held.session.projectPath, held.session)
+    assert.equal(fenced.success, true, fenced.error)
+    await app.evaluate(() => globalThis.__driveReferenceGate.release())
+
+    const failure = page.getByText('This import was taken over by another window', { exact: false }).first()
+    await failure.waitFor({ state: 'visible', timeout: 30_000 })
+    const observed = { failure: await failure.innerText(), lang: await page.evaluate(() => document.documentElement.lang) }
+    await settle(page)
+    await shoot('import-run-error-en')
+    assert.equal(observed.lang, 'en-US')
+    assert.doesNotMatch(observed.failure, /\p{Script=Han}|IMPORT_RUN_/u, '失败说明不带汉字与错误码')
+    return observed
+  } },
+
+  // #474 收尾：中文界面导入参考小说，参照章节已入库、批次检查点还没记下时在运行卡片上取消。放行后编排器在安全边界停下，
+  // 运行卡片里失败步骤的说明是中文，不再是编排器原先只有英文的那句。卡在章节入库途中取消会走另一条路
+  // （主进程拒绝绑定参照章节，交 IMPORT_RUN_REFERENCE_UNBOUND），所以卡在检查点。
+  'import-run-cancel-zh': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ app, page, roots, shoot }) => {
+    const file = path.join(roots.temp, 'reference-novel.txt')
+    fs.writeFileSync(file, `第1章 旧港\n旧港的潮水刚退，青石上还留着一层薄薄的盐霜。\n\n第2章 北堤\n北堤上的风很大。\n`)
+    assert.ok(await app.evaluate(({ dialog, ipcMain }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
+      const handlers = ipcMain._invokeHandlers
+      const original = handlers.get('db:import-run-complete-batch')
+      if (!original) return false
+      const gate = Promise.withResolvers()
+      globalThis.__driveCheckpointGate = { release: gate.resolve, held: false }
+      handlers.set('db:import-run-complete-batch', async (event, ...args) => {
+        globalThis.__driveCheckpointGate.held = true
+        await gate.promise
+        return original(event, ...args)
+      })
+      return true
+    }, file), '能在主进程里卡住导入批次检查点')
+
+    await stage.root(page).getByRole('banner').getByRole('button', { name: `《${STAGE_SAMPLE.name}》作品菜单` }).click()
+    await page.getByRole('menuitem', { name: '小说拆解与仿写…', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '小说拆解与仿写' })
+    await dialog.getByTestId('import-target-current').click()
+    await dialog.getByRole('button', { name: '选择', exact: true }).click()
+    await dialog.getByRole('button', { name: '导入当前项目（2 章）', disabled: false }).click()
+    await dialog.waitFor({ state: 'hidden' })
+
+    // 中途任何一步失败都要放开检查点，否则导入一直卡着，应用只能等驱动强制结束。
+    try {
+      for (const deadline = Date.now() + 20_000; !(await app.evaluate(() => globalThis.__driveCheckpointGate.held)); await new Promise(resolve => setTimeout(resolve, 50))) {
+        assert.ok(Date.now() < deadline, '20 秒内导入没有走到批次检查点')
+      }
+      await runSheet.waitUntilOpen(page)
+      await runSheet.sheet(page).getByRole('button', { name: /^取消「小说拆解与仿写/u }).click()
+      await runSheet.sheet(page).getByText('正在取消，等当前操作退出').first().waitFor({ state: 'visible' })
+    } finally {
+      await app.evaluate(() => globalThis.__driveCheckpointGate.release())
+    }
+
+    const failedStep = runSheet.sheet(page).locator('.run-step[data-status="failed"] .run-step-row').first()
+    await failedStep.waitFor({ state: 'visible', timeout: 30_000 })
+    if (await failedStep.getAttribute('aria-expanded') !== 'true') await failedStep.click()
+    const stepError = runSheet.sheet(page).locator('.run-step[data-status="failed"] .run-step-error').first()
+    await stepError.waitFor({ state: 'visible' })
+    const observed = {
+      stepError: await stepError.innerText(),
+      sheet: await runSheet.sheet(page).innerText(),
+      lang: await page.evaluate(() => document.documentElement.lang),
+    }
+    await settle(page)
+    await shoot('import-run-cancel-zh')
+    assert.equal(observed.lang, 'zh-CN')
+    assert.equal(observed.stepError, '导入已取消，停在了已保存的进度处。')
+    assert.doesNotMatch(observed.sheet, /safe boundary|Import cancelled/u, '中文界面的运行侧页不出现编排器的英文说明')
+    return observed
+  } },
+
   'rdv-toasts': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: seedCalls }), run: async ({ page }) => {
     const copy = await diagnosticsCopyButton(page)
     await stubClipboard(page, true)

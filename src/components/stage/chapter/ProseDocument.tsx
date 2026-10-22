@@ -4,6 +4,7 @@ import type { ProjectData } from '../../../shared/ipc-channels'
 import { pluralEn } from '../../../shared/plural-en'
 import { registerEditorExitSaveHandler, useEditorStore, type EditorTab } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import CodeMirrorEditor from '../../editor/CodeMirrorEditor'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../../project-session-gate'
 import { Button } from '../../ui/Button'
@@ -43,7 +44,7 @@ export default function ProseDocument({ tab, project }: { tab: EditorTab; projec
     try {
       await persist(content)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : text('保存失败', 'Save failed'))
+      toast.error(displayedErrorMessage(useLocaleStore.getState().locale, error, text('保存失败', 'Save failed')))
       if (propagate) throw error
     } finally {
       setSaving(false)

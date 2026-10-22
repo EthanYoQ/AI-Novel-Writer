@@ -30,33 +30,33 @@ const NARRATIVE_POVS = new Set(['third_limited', 'first_person', 'third_omniscie
 
 function normalizedRequest(candidate: ImportGlobalFactsRequest): ImportGlobalFactsRequest {
   const operationId = candidate.operationId?.trim()
-  if (!operationId || operationId.length > 160) throw new Error('导入全局事实 operationId 无效')
+  if (!operationId || operationId.length > 160) throw new Error('IMPORT_GLOBAL_FACTS_OPERATION_INVALID')
   if (!Number.isSafeInteger(candidate.expectedRosterRevision) || candidate.expectedRosterRevision < 0) {
-    throw new Error('导入全局事实角色 revision 无效')
+    throw new Error('IMPORT_GLOBAL_FACTS_REQUEST_INVALID')
   }
-  if (!candidate.core || typeof candidate.core !== 'object') throw new Error('导入全局事实配置无效')
+  if (!candidate.core || typeof candidate.core !== 'object') throw new Error('IMPORT_GLOBAL_FACTS_REQUEST_INVALID')
   const core = { ...candidate.core }
   const mutableCore = core as unknown as Record<string, unknown>
   for (const field of CORE_TEXT_FIELDS) {
     const value = core[field]
-    if (typeof value !== 'string' || !value.trim()) throw new Error(`导入全局事实字段 ${field} 无效`)
+    if (typeof value !== 'string' || !value.trim()) throw new Error('IMPORT_GLOBAL_FACTS_REQUEST_INVALID')
     mutableCore[field] = value.trim()
   }
-  if (!PLOT_STRUCTURES.has(core.plotStructure)) throw new Error('导入全局事实字段 plotStructure 无效')
-  if (!NARRATIVE_POVS.has(core.narrativePov)) throw new Error('导入全局事实字段 narrativePov 无效')
+  if (!PLOT_STRUCTURES.has(core.plotStructure)) throw new Error('IMPORT_GLOBAL_FACTS_REQUEST_INVALID')
+  if (!NARRATIVE_POVS.has(core.narrativePov)) throw new Error('IMPORT_GLOBAL_FACTS_REQUEST_INVALID')
   if (!Number.isSafeInteger(core.totalChapters) || core.totalChapters < 1) {
-    throw new Error('导入全局事实总章数无效')
+    throw new Error('IMPORT_GLOBAL_FACTS_REQUEST_INVALID')
   }
   if (!Number.isSafeInteger(core.wordsPerChapter) || core.wordsPerChapter < 1) {
-    throw new Error('导入全局事实章节字数无效')
+    throw new Error('IMPORT_GLOBAL_FACTS_REQUEST_INVALID')
   }
   if (!Array.isArray(candidate.characterEntries) || candidate.characterEntries.length === 0) {
-    throw new Error('导入全局事实角色名单不能为空')
+    throw new Error('IMPORT_GLOBAL_FACTS_CHARACTERS_INVALID')
   }
   for (const entry of candidate.characterEntries) {
     if (!entry || typeof entry.name !== 'string' || !entry.name.trim() || !['protagonist', 'antagonist', 'supporting', 'minor'].includes(entry.role)
       || !Array.isArray(entry.relationships) || entry.relationships.some(relation => !relation || typeof relation.target !== 'string' || !relation.target.trim()
-        || typeof relation.relation !== 'string' || !relation.relation.trim())) throw new Error('导入角色提议格式无效')
+        || typeof relation.relation !== 'string' || !relation.relation.trim())) throw new Error('IMPORT_GLOBAL_FACTS_CHARACTERS_INVALID')
   }
   return {
     operationId,
@@ -72,7 +72,7 @@ function hashRequest(request: ImportGlobalFactsRequest): string {
 
 function coreSnapshot(): ImportGlobalFactsCore {
   const core = ProjectCoreRepository.get()
-  if (!core) throw new Error('项目主台账未初始化')
+  if (!core) throw new Error('IMPORT_GLOBAL_FACTS_PROJECT_CORE_MISSING')
   return {
     genre: core.genre,
     subGenre: core.subGenre,
@@ -99,22 +99,22 @@ function parseReceipt(row: OperationRow): ImportGlobalFactsReceipt {
     if (parsed.proposalSource && hashRequest(parsed.proposalSource) !== row.payload_hash) throw new Error()
     return parsed
   } catch {
-    throw new Error('导入全局事实收据损坏，已拒绝重放')
+    throw new Error('IMPORT_GLOBAL_FACTS_RECEIPT_CORRUPT')
   }
 }
 function assertCurrentReceipt(stored: ImportGlobalFactsReceipt): void {
   const db = getProjectDb()!
-  if (JSON.stringify(coreSnapshot()) !== JSON.stringify(stored.core)) throw new Error('导入全局事实已被后续修改，不能将历史操作冒充为当前事实')
+  if (JSON.stringify(coreSnapshot()) !== JSON.stringify(stored.core)) throw new Error('IMPORT_GLOBAL_FACTS_SUPERSEDED')
   if (stored.characterProposal) {
     const evidence = findCharacterProposalEvidence(db, { kind: 'import', operationId: stored.operationId },
       (projectId, source) => proveCharacterProposal(db, new GenerationRunRepository(() => db), projectId, source, false, () => {}))
-    if (JSON.stringify(evidence) !== JSON.stringify(stored.characterProposal)) throw new Error('导入角色提议回执已失效')
-  } else if (CharacterRosterRepository.read().nameOnlyFactHash !== stored.roster.snapshot.factHash) throw new Error('导入角色事实已被后续修改')
+    if (JSON.stringify(evidence) !== JSON.stringify(stored.characterProposal)) throw new Error('IMPORT_GLOBAL_FACTS_SUPERSEDED')
+  } else if (CharacterRosterRepository.read().nameOnlyFactHash !== stored.roster.snapshot.factHash) throw new Error('IMPORT_GLOBAL_FACTS_SUPERSEDED')
 }
 
 function ensureLedger(): void {
   const db = getProjectDb()
-  if (!db) throw new Error('项目数据库未打开')
+  if (!db) throw new Error('PROJECT_NOT_OPEN')
   db.exec(`
     CREATE TABLE IF NOT EXISTS import_global_fact_operations (
       operation_id TEXT PRIMARY KEY,
@@ -129,9 +129,9 @@ function ensureLedger(): void {
 export class ImportGlobalFactsRepository {
   /** Historical ACK only: proves the saved operation, not the current project facts. */
   static readHistoricalCommittedOperation(operationId: string): ImportGlobalFactsReceipt | null {
-    if (!operationId.trim()) throw new Error('导入全局事实 operationId 无效')
+    if (!operationId.trim()) throw new Error('IMPORT_GLOBAL_FACTS_OPERATION_INVALID')
     const db = getProjectDb()
-    if (!db) throw new Error('项目数据库未打开')
+    if (!db) throw new Error('PROJECT_NOT_OPEN')
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_global_fact_operations'").get()) return null
     const row = db.prepare(`
       SELECT operation_id, payload_hash, receipt_json
@@ -142,9 +142,9 @@ export class ImportGlobalFactsRepository {
 
   /** Read-only authoritative evidence for a previously committed import operation. */
   static getCommittedOperation(operationId: string): ImportGlobalFactsReceipt | null {
-    if (!operationId.trim()) throw new Error('导入全局事实 operationId 无效')
+    if (!operationId.trim()) throw new Error('IMPORT_GLOBAL_FACTS_OPERATION_INVALID')
     const db = getProjectDb()
-    if (!db) throw new Error('项目数据库未打开')
+    if (!db) throw new Error('PROJECT_NOT_OPEN')
     ensureLedger()
     const row = db.prepare(`
       SELECT operation_id, payload_hash, receipt_json
@@ -158,7 +158,7 @@ export class ImportGlobalFactsRepository {
 
   static commit(candidate: ImportGlobalFactsRequest): ImportGlobalFactsReceipt {
     const db = getProjectDb()
-    if (!db) throw new Error('项目数据库未打开')
+    if (!db) throw new Error('PROJECT_NOT_OPEN')
     ensureLedger()
     const request = normalizedRequest(candidate)
     const payloadHash = hashRequest(request)
@@ -169,7 +169,7 @@ export class ImportGlobalFactsRepository {
         FROM import_global_fact_operations WHERE operation_id = ?
       `).get(request.operationId) as OperationRow | undefined
       if (existing) {
-        if (existing.payload_hash !== payloadHash) throw new Error('导入全局事实 operationId 已绑定不同载荷')
+        if (existing.payload_hash !== payloadHash) throw new Error('IMPORT_GLOBAL_FACTS_OPERATION_CONFLICT')
         const stored = parseReceipt(existing)
         assertCurrentReceipt(stored)
         if (stored.characterProposal) return { ...stored, idempotent: true }
@@ -183,11 +183,11 @@ export class ImportGlobalFactsRepository {
 
       if (hasCharacterIdentitySchema(db)) {
         const revision = db.prepare("SELECT revision FROM character_roster_meta WHERE id='main'").pluck().get()
-        if (revision !== request.expectedRosterRevision) throw new Error('角色名单 revision 已过期，已拒绝导入')
+        if (revision !== request.expectedRosterRevision) throw new Error('CHARACTER_ROSTER_REVISION_STALE')
         const projectPath = getCurrentProjectPath()
-        if (!projectPath) throw new Error('导入项目身份缺失')
+        if (!projectPath) throw new Error('IMPORT_GLOBAL_FACTS_PROJECT_IDENTITY_MISSING')
         const project = projectAccess.probeExistingProject(projectPath)
-        if (project.kind !== 'manifest') throw new Error('导入项目身份未迁移')
+        if (project.kind !== 'manifest') throw new Error('IMPORT_GLOBAL_FACTS_PROJECT_IDENTITY_MISSING')
         const source = { kind: 'import' as const, operationId: request.operationId }
         const characterProposal = { proposalBatchId: `cpb:${textHash(JSON.stringify([project.projectId, source]))}`,
           sourceHash: textHash(JSON.stringify([payloadHash, request.characterEntries])) }
@@ -197,7 +197,7 @@ export class ImportGlobalFactsRepository {
         db.prepare('INSERT INTO import_global_fact_operations(operation_id,payload_hash,receipt_json) VALUES(?,?,?)').run(request.operationId, payloadHash, JSON.stringify(receipt))
         const service = new CharacterProposalService(db, project.projectId, candidate => proveCharacterProposal(db, new GenerationRunRepository(() => db), project.projectId, candidate, false, () => {}))
         service.stage(source)
-        if (JSON.stringify(service.evidence(characterProposal.proposalBatchId)) !== JSON.stringify(characterProposal)) throw new Error('导入角色提议回读失败')
+        if (JSON.stringify(service.evidence(characterProposal.proposalBatchId)) !== JSON.stringify(characterProposal)) throw new Error('IMPORT_GLOBAL_FACTS_READ_BACK_FAILED')
         return receipt
       }
       ProjectCoreRepository.update(request.core)

@@ -65,7 +65,7 @@ describe('import execution lease', () => {
 
     ImportRunRepository.startOrResume('leased-run', 'renderer-b', 1_151, 100)
     expect(() => ImportRunRepository.assertExecutionAuthority('leased-run', authority, 1_151))
-      .toThrow(/执行租约/)
+      .toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 
   it('authorizes only the frozen chapter bound to the active reference-import epoch', () => {
@@ -76,7 +76,7 @@ describe('import execution lease', () => {
     )).toMatchObject({ chapterNumber: 1, content: 'x', contentFingerprint: CONTENT_FINGERPRINT })
     expect(() => ImportRunRepository.resolveReferenceImportAuthority(
       'leased-run', authority, 2, 1_050,
-    )).toThrow(/冻结章节/)
+    )).toThrow('IMPORT_RUN_REFERENCE_UNBOUND')
   })
 
   it('revokes knowledge and embedding authority as soon as cancellation is requested', () => {
@@ -90,22 +90,22 @@ describe('import execution lease', () => {
 
     expect(() => ImportRunRepository.resolveReferenceImportAuthority(
       'leased-run', authority, 1,
-    )).toThrow(/冻结章节/)
+    )).toThrow('IMPORT_RUN_REFERENCE_UNBOUND')
   })
 
   it('rejects a concurrent owner, allows expiry takeover, and rejects every stale mutation', () => {
     const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
     expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-b', 1_050, 100))
-      .toThrow(/正在由另一执行器运行/)
+      .toThrow('IMPORT_RUN_EXECUTOR_BUSY')
 
     const takeover = ImportRunRepository.startOrResume('leased-run', 'renderer-b', 1_101, 100)
     expect(takeover.execution.epoch).toBe(first.execution.epoch + 1)
 
-    expect(() => ImportRunRepository.completeBatch('leased-run', 'knowledge', '1', first.execution)).toThrow(/执行租约/)
-    expect(() => ImportRunRepository.advanceStage('leased-run', 'knowledge', 'global', first.execution)).toThrow(/执行租约/)
-    expect(() => ImportRunRepository.fail('leased-run', 'knowledge', 'late', first.execution)).toThrow(/执行租约/)
-    expect(() => ImportRunRepository.cancelAtBoundary('leased-run', first.execution)).toThrow(/执行租约/)
-    expect(() => ImportRunRepository.complete('leased-run', first.execution)).toThrow(/执行租约/)
+    expect(() => ImportRunRepository.completeBatch('leased-run', 'knowledge', '1', first.execution)).toThrow('IMPORT_RUN_EXECUTION_STALE')
+    expect(() => ImportRunRepository.advanceStage('leased-run', 'knowledge', 'global', first.execution)).toThrow('IMPORT_RUN_EXECUTION_STALE')
+    expect(() => ImportRunRepository.fail('leased-run', 'knowledge', 'late', first.execution)).toThrow('IMPORT_RUN_EXECUTION_STALE')
+    expect(() => ImportRunRepository.cancelAtBoundary('leased-run', first.execution)).toThrow('IMPORT_RUN_EXECUTION_STALE')
+    expect(() => ImportRunRepository.complete('leased-run', first.execution)).toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 
   it('releases and fences the execution lease on failure so another owner can resume immediately', () => {
@@ -120,7 +120,7 @@ describe('import execution lease', () => {
     expect(resumed.execution.epoch).toBeGreaterThan(first.execution.epoch)
     expect(() => ImportRunRepository.completeBatch(
       'leased-run', 'knowledge', 'late-old-runner', first.execution,
-    )).toThrow(/执行租约/)
+    )).toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 
   it('releases and fences cancellation and completion terminal boundaries', () => {
@@ -150,7 +150,7 @@ describe('import execution lease', () => {
 
     const resumed = ImportRunRepository.startOrResume('leased-run', 'renderer-b', base + 1, 60_000)
     expect(resumed.execution.epoch).toBeGreaterThan(first.execution.epoch)
-    expect(() => ImportRunRepository.cancelAtBoundary('leased-run', first.execution)).toThrow(/执行租约/)
+    expect(() => ImportRunRepository.cancelAtBoundary('leased-run', first.execution)).toThrow('IMPORT_RUN_EXECUTION_STALE')
 
     getProjectDb()!.prepare(`
       UPDATE import_runs
@@ -161,10 +161,10 @@ describe('import execution lease', () => {
     expect(ImportRunRepository.complete('leased-run', resumed.execution))
       .toMatchObject({ status: 'completed', resumable: false })
     expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-c', base + 2, 60_000))
-      .toThrow(/不可启动/)
+      .toThrow('IMPORT_RUN_NOT_STARTABLE')
     expect(() => ImportRunRepository.fail(
       'leased-run', 'knowledge', 'late-after-complete', resumed.execution,
-    )).toThrow(/执行租约/)
+    )).toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 
   it('fences a running lease when the project database reopens and allows immediate takeover', () => {
@@ -178,22 +178,22 @@ describe('import execution lease', () => {
     expect(resumed.execution.epoch).toBeGreaterThan(first.execution.epoch)
     expect(() => ImportRunRepository.fail(
       'leased-run', 'knowledge', 'stale process', first.execution,
-    )).toThrow(/执行租约/)
+    )).toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 
   it('restarts only terminal or expired-running runs and fences the old execution epoch', () => {
     expect(() => ImportRunRepository.restart('leased-run', 'ready-restart', 1_000))
-      .toThrow(/不可重新开始/)
+      .toThrow('IMPORT_RUN_NOT_RESTARTABLE')
 
     const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
     expect(() => ImportRunRepository.restart('leased-run', 'active-restart', 1_050))
-      .toThrow(/不可重新开始/)
+      .toThrow('IMPORT_RUN_NOT_RESTARTABLE')
 
     expect(ImportRunRepository.restart('leased-run', 'expired-restart', 1_101))
       .toMatchObject({ id: 'expired-restart', status: 'ready' })
     expect(() => ImportRunRepository.completeBatch(
       'leased-run', 'knowledge', 'late-after-restart', first.execution,
-    )).toThrow(/执行租约/)
+    )).toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 
   it('serializes execution across different import runs in the same project and allows expiry takeover', () => {
@@ -205,14 +205,14 @@ describe('import execution lease', () => {
     const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
 
     expect(() => ImportRunRepository.startOrResume('second-run', 'renderer-b', 1_050, 100))
-      .toThrow(/项目.*导入|另一.*导入|正在运行/)
+      .toThrow('IMPORT_RUN_ANOTHER_RUNNING')
 
     expect(ImportRunRepository.startOrResume('second-run', 'renderer-b', 1_101, 100))
       .toMatchObject({ run: { id: 'second-run', status: 'running' } })
     expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-c', 1_102, 100))
-      .toThrow(/项目.*导入|另一.*导入|正在运行/)
+      .toThrow('IMPORT_RUN_ANOTHER_RUNNING')
     expect(() => ImportRunRepository.renewExecution('leased-run', first.execution, 1_102, 100))
-      .toThrow(/执行租约/)
+      .toThrow('IMPORT_RUN_EXECUTION_STALE')
   })
 
   it('rejects a tampered frozen snapshot at both paged-read and knowledge-authority seams after reopen', () => {
@@ -227,10 +227,10 @@ describe('import execution lease', () => {
 
     expect(() => ImportRunRepository.listChapterBatch(
       'leased-run', { afterChapterNumber: 0, limit: 10 },
-    )).toThrow(/冻结.*快照|快照.*损坏/)
+    )).toThrow('IMPORT_RUN_SNAPSHOT_CORRUPT')
     expect(() => ImportRunRepository.resolveReferenceImportAuthority(
       'leased-run', resumed.execution, 1, 1_051,
-    )).toThrow(/冻结.*快照|快照.*损坏/)
+    )).toThrow('IMPORT_RUN_SNAPSHOT_CORRUPT')
   })
 
   it('checks UTF-8 byte size independently of a matching snapshot fingerprint', () => {
@@ -243,6 +243,6 @@ describe('import execution lease', () => {
 
     expect(() => ImportRunRepository.listChapterBatch(
       'leased-run', { afterChapterNumber: 0, limit: 10 },
-    )).toThrow(/冻结.*快照|快照.*损坏/)
+    )).toThrow('IMPORT_RUN_SNAPSHOT_CORRUPT')
   })
 })

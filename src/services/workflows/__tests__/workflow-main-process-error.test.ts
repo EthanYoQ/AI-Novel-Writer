@@ -32,6 +32,18 @@ describe('workflow failures carrying a main-process error (#466)', () => {
     expect(fail('zh-CN', 'PROJECT_NOT_OPEN').message).toBe('定稿事务未提交：请先打开项目。')
   })
 
+  it('带名字的错误类转来的会话失效码同样按界面语言解释（#474）', () => {
+    const stale = 'ProjectSessionStaleError: PROJECT_SESSION_STALE'
+    expect(fail('en-US', stale).message).toBe('The finalization transaction was not committed. The project was switched or reopened, and this action belonged to the earlier session, so it was rejected. Repeat it in the project that is open now.')
+    expect(fail('zh-CN', stale).message).toBe('定稿事务未提交：项目已切换或重新打开，这次操作属于之前打开的项目，已拒绝执行。请在当前打开的项目里重新操作。')
+  })
+
+  it('带名字的错误类转来的未登记码同样附上并保留在 code 上', () => {
+    const failure = fail('en-US', 'PortableProjectArchiveError: PORTABLE_SOURCE_CHANGED')
+    expect(failure.message).toBe('The finalization transaction was not committed. PORTABLE_SOURCE_CHANGED')
+    expect(failure).toHaveProperty('code', 'PORTABLE_SOURCE_CHANGED')
+  })
+
   it('未登记的错误码原样附上供反馈定位，并保留在 code 上', () => {
     const failure = fail('en-US', 'GENERATION_FINALIZATION_EFFECT_CONFLICT')
     expect(failure.message).toBe('The finalization transaction was not committed. GENERATION_FINALIZATION_EFFECT_CONFLICT')

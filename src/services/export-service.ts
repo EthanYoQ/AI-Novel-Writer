@@ -10,6 +10,7 @@ import { ipc } from './ipc-client'
 import { requireIpcSuccess } from './ipc-result'
 import { useWorkflowStore } from '../stores/workflow-store'
 import { useLocaleStore } from '../stores/locale-store'
+import { displayedErrorMessage } from '../i18n/app-errors'
 import type { Locale } from '../i18n/types'
 import type { FileWriteCommitState, ProjectSessionContext } from '../shared/ipc-channels'
 import type {
@@ -163,11 +164,14 @@ function changedFinalizationResult(
   }
 }
 
-function requireFinalizedExportSnapshot(value: unknown): FinalizedDraftExportSnapshot[] {
-  if (!Array.isArray(value)) throw new Error('定稿导出快照无效')
+function requireFinalizedExportSnapshot(
+  value: unknown,
+  text: (zhCNText: string, enUSText: string) => string,
+): FinalizedDraftExportSnapshot[] {
+  if (!Array.isArray(value)) throw new Error(text('定稿导出快照无效', 'The finalized export snapshot is invalid.'))
   const seenChapters = new Set<number>()
   const rows = value.map((candidate) => {
-    if (!candidate || typeof candidate !== 'object') throw new Error('定稿导出快照无效')
+    if (!candidate || typeof candidate !== 'object') throw new Error(text('定稿导出快照无效', 'The finalized export snapshot is invalid.'))
     const row = candidate as Partial<FinalizedDraftExportSnapshot>
     const { draftId, chapterNumber, version, title, content, finalizationId, contentHash } = row
     if (
@@ -180,8 +184,8 @@ function requireFinalizedExportSnapshot(value: unknown): FinalizedDraftExportSna
       || !(finalizationId === null
         || (typeof finalizationId === 'string' && finalizationId.trim().length > 0))
       || typeof contentHash !== 'string' || !/^[a-f0-9]{64}$/u.test(contentHash)
-    ) throw new Error('定稿导出快照身份或正文无效')
-    if (seenChapters.has(chapterNumber)) throw new Error(`第 ${chapterNumber} 章存在重复定稿`)
+    ) throw new Error(text('定稿导出快照身份或正文无效', 'A chapter in the finalized export snapshot has an invalid identity or text.'))
+    if (seenChapters.has(chapterNumber)) throw new Error(text(`第 ${chapterNumber} 章存在重复定稿`, `Chapter ${chapterNumber} has more than one finalized version.`))
     seenChapters.add(chapterNumber)
     return Object.freeze({
       draftId,
@@ -255,7 +259,7 @@ export async function exportNovel(
       projectSession,
       'db:draft-export-snapshot',
       projectSession.projectPath,
-    ))
+    ), text)
     const authorityReceipt = exportAuthorityReceipt(frozenDrafts)
     if (!isProjectSessionCurrent(projectSession)) return staleExportResult(uiLocale)
     const chapterContents = frozenDrafts.map(draft => ({
@@ -455,7 +459,7 @@ export async function exportNovel(
       : activeWritePath && commitState === 'unknown'
         ? unknownSingleWriteDetail(uiLocale, activeWritePath)
         : ''
-    const errorMessage = `${String(error)}${partialWriteDetail}`
+    const errorMessage = `${displayedErrorMessage(uiLocale, error)}${partialWriteDetail}`
     addLog('error', text(`导出失败: ${errorMessage}`, `Export failed: ${errorMessage}`), uiLocale)
     return { success: false, error: errorMessage }
   }

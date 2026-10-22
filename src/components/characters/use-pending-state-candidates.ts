@@ -4,7 +4,12 @@ import type { PendingFinalizedCharacterStateCandidate, PendingFinalizedCharacter
 import type { CharacterStateTextField } from '../../shared/character-roster'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { useCharacterStore } from '../../stores/character-store'
+import { useLocaleStore } from '../../stores/locale-store'
+import { appErrorMessage } from '../../i18n/app-errors'
 import { isProjectSessionCurrent } from '../project-session-gate'
+
+/** 主进程只回错误码（经 Electron 加上通道前缀）：按界面语言说明，不把原码给作者看。 */
+const failureText = (cause: unknown) => appErrorMessage(useLocaleStore.getState().locale, cause)
 
 export const STATE_FIELD_LABELS: Record<CharacterStateTextField, [string, string]> = {
   location: ['位置', 'Location'], powerLevel: ['能力等级', 'Power level'], physicalState: ['身体状态', 'Physical state'],
@@ -27,7 +32,7 @@ export function usePendingStateCandidates(session: ProjectSessionContext) {
       if (!isProjectSessionCurrent(session)) return
       setSummaries(pending); setError(failure)
     } catch (cause) {
-      if (isProjectSessionCurrent(session)) setError(cause instanceof Error ? cause.message : String(cause))
+      if (isProjectSessionCurrent(session)) setError(failureText(cause))
     }
   }, [session])
 
@@ -44,7 +49,7 @@ export function usePendingStateCandidates(session: ProjectSessionContext) {
       })
       if (isProjectSessionCurrent(session)) setCandidate(next)
     } catch (cause) {
-      if (isProjectSessionCurrent(session)) setError(cause instanceof Error ? cause.message : String(cause))
+      if (isProjectSessionCurrent(session)) setError(failureText(cause))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }
@@ -67,7 +72,7 @@ export function usePendingStateCandidates(session: ProjectSessionContext) {
     } catch (cause) {
       if (!isProjectSessionCurrent(session)) return
       setCandidate(null)
-      await loadSummaries(cause instanceof Error ? cause.message : String(cause))
+      await loadSummaries(failureText(cause))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }

@@ -29,6 +29,7 @@ import type {
 } from '../../../electron/repositories/blueprint-repository'
 import { stripThinkingTags } from './workflow-utils'
 import { requireWorkflowProjectSession, workflowMainProcessError } from './workflow-project-session'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 // ==========================================
 // 1. 结构与类型导出 (保留对外的向后兼容)
@@ -174,7 +175,7 @@ export function parseTextBlueprintsStrict(
     ).map(persistedBlueprint)
   } catch (error) {
     if (structuredContractDiagnostic(error)) throw error
-    const detail = error instanceof Error ? error.message : String(error)
+    const detail = displayedErrorMessage(uiLocale, error)
     throw new Error(localize(uiLocale, `蓝图 JSON 解析失败：${detail}`, `Could not parse the blueprint JSON: ${detail}`))
   }
 }

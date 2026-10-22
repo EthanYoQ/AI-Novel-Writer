@@ -86,10 +86,10 @@ export class ProjectClearRepository {
     /** session 是清空角色卡所需的作者身份；角色走与作者删除相同的退休路径，历史身份记录保留。 */
     static clearGeneratedData(options: ProjectClearOptions, session?: { projectId: string; epoch: string }): ProjectClearResult {
         const db = getProjectDb()
-        if (!db) throw new Error('项目数据库未打开')
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         const projectPath = getCurrentProjectPath()
-        if (options.generatedText && !projectPath) throw new Error('项目路径未初始化')
+        if (options.generatedText && !projectPath) throw new Error('PROJECT_NOT_OPEN')
 
         const movedFiles = options.generatedText && projectPath
             ? moveGeneratedFilesToTrash(projectPath)

@@ -241,6 +241,20 @@ describe('novel import external-file capability', () => {
     expect(grants.activeCount()).toBe(0)
   })
 
+  it('tells the author to finish open imports when too many inspections are pending (#474)', async () => {
+    const selected = path.join(temporaryRoot, 'pending.txt')
+    fs.writeFileSync(selected, '第1章 开始\n正文', 'utf8')
+    inspections = new ImportInspectionStore({ maxActive: 0 })
+    mocks.handlers.clear()
+    register()
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [selected] })
+
+    await expect(handler('dialog:select-novel-files')(event(), 'author-manuscript')).resolves.toEqual({
+      success: false,
+      error: '等待确认的导入太多。请先完成或取消已打开的导入，再选择文件。',
+    })
+  })
+
   it('does not import outside content when the selected file parent becomes a junction after grant issuance', async () => {
     const selectedRoot = path.join(temporaryRoot, 'selected')
     const guardedDirectory = path.join(selectedRoot, 'guarded')

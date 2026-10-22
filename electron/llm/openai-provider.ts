@@ -128,7 +128,7 @@ export class OpenAIProvider implements ILLMProvider {
 
       if (!res.ok) {
         const text = await res.text()
-        return { success: false, content: '', finishReason: 'error', error: `API 调用失败 (${res.status}): ${text}` }
+        return { success: false, content: '', finishReason: 'error', error: 'LLM_REQUEST_FAILED', httpFailure: { status: res.status, body: text } }
       }
 
       const data = await res.json() as {
@@ -160,7 +160,7 @@ export class OpenAIProvider implements ILLMProvider {
         success: false,
         content: finalContent,
         finishReason,
-        error: 'API 返回的文本未正常完成',
+        error: 'LLM_RESPONSE_INCOMPLETE',
         usage,
       }
     } catch (error) {
@@ -217,7 +217,7 @@ export class OpenAIProvider implements ILLMProvider {
         diagnostics.errorCode = 'HTTP_ERROR'
         notify()
         void res.body?.cancel().catch(() => {})
-        fail(`API 调用失败 (${res.status})`)
+        fail('LLM_REQUEST_FAILED')
         return
       }
 
@@ -226,7 +226,7 @@ export class OpenAIProvider implements ILLMProvider {
         diagnostics.endReason = 'failed'
         diagnostics.errorCode = 'RESPONSE_BODY_MISSING'
         notify()
-        fail('无法读取响应流')
+        fail('LLM_STREAM_UNREADABLE')
         return
       }
       diagnostics.phase = 'stream'
@@ -252,17 +252,17 @@ export class OpenAIProvider implements ILLMProvider {
         try {
           parsed = JSON.parse(json)
         } catch {
-          fatalError = '响应流包含损坏的 JSON 数据'
+          fatalError = 'LLM_STREAM_INVALID'
           return
         }
 
         if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          fatalError = '响应流包含无效的 OpenAI 数据对象'
+          fatalError = 'LLM_STREAM_INVALID'
           return
         }
         const payload = parsed as Record<string, unknown>
         if (Object.hasOwn(payload, 'error')) {
-          fatalError = '供应商返回流式错误'
+          fatalError = 'LLM_STREAM_PROVIDER_ERROR'
           diagnostics.errorCode = 'PROVIDER_STREAM_ERROR'
           return
         }
@@ -297,19 +297,19 @@ export class OpenAIProvider implements ILLMProvider {
 
         if (payload.choices === undefined) return
         if (!Array.isArray(payload.choices)) {
-          fatalError = '响应流的 choices 类型无效'
+          fatalError = 'LLM_STREAM_INVALID'
           return
         }
         const rawChoice = payload.choices[0]
         if (rawChoice === undefined) return
         if (rawChoice === null || typeof rawChoice !== 'object' || Array.isArray(rawChoice)) {
-          fatalError = '响应流的 choice 类型无效'
+          fatalError = 'LLM_STREAM_INVALID'
           return
         }
         const choice = rawChoice as Record<string, unknown>
         if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
           if (typeof choice.finish_reason !== 'string') {
-            fatalError = '响应流的 finish_reason 类型无效'
+            fatalError = 'LLM_STREAM_INVALID'
             return
           }
           finishReason = this.normalizeFinishReason(choice.finish_reason)
@@ -317,17 +317,17 @@ export class OpenAIProvider implements ILLMProvider {
 
         if (choice.delta === undefined) return
         if (choice.delta === null || typeof choice.delta !== 'object' || Array.isArray(choice.delta)) {
-          fatalError = '响应流的 delta 类型无效'
+          fatalError = 'LLM_STREAM_INVALID'
           return
         }
         const delta = choice.delta as Record<string, unknown>
         if (delta.reasoning_content !== undefined && delta.reasoning_content !== null
           && typeof delta.reasoning_content !== 'string') {
-          fatalError = '响应流的 reasoning_content 类型无效'
+          fatalError = 'LLM_STREAM_INVALID'
           return
         }
         if (delta.content !== undefined && delta.content !== null && typeof delta.content !== 'string') {
-          fatalError = '响应流的 content 类型无效'
+          fatalError = 'LLM_STREAM_INVALID'
           return
         }
 
@@ -427,8 +427,8 @@ export class OpenAIProvider implements ILLMProvider {
 
       if (!sawDone) {
         diagnostics.errorCode = 'STREAM_INCOMPLETE'
-        protocolError = '响应流在完成标记前结束，生成结果不完整'
-        throw new Error('响应流在完成标记前结束，生成结果不完整')
+        protocolError = 'LLM_STREAM_INCOMPLETE'
+        throw new Error(protocolError)
       }
 
       if (isThinking) {
@@ -446,9 +446,9 @@ export class OpenAIProvider implements ILLMProvider {
       diagnostics.endReason = opts.signal.aborted ? 'cancelled' : 'failed'
       notify()
       if (diagnostics.endReason === 'cancelled') {
-        fail('已取消生成')
+        fail('LLM_CANCELLED')
       } else {
-        fail(protocolError ?? '响应流未正常完成')
+        fail(protocolError ?? 'LLM_STREAM_FAILED')
       }
     } finally {
       // Do not wait for a remote stream to settle before releasing the local task.

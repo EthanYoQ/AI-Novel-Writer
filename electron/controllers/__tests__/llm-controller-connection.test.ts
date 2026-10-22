@@ -12,9 +12,11 @@ const mocks = vi.hoisted(() => ({
   logCall: vi.fn(),
   assertCurrentProjectContext: vi.fn(),
   models: [] as ModelProfile[],
+  locale: 'en-US',
 }))
 
 vi.mock('electron', () => ({
+  app: { getLocale: () => mocks.locale },
   BrowserWindow: { fromWebContents: vi.fn(() => ({ webContents: { send: mocks.send } })) },
   ipcMain: {
     handle: vi.fn((channel: string, handler: IpcHandler) => {
@@ -367,7 +369,7 @@ describe('llm generation parameter policy controller integration', () => {
     await expect(handler('llm:generate-stream')({ sender: {} }, requestId, {
       modelId: invalidKimiModel.id,
       messages: [{ role: 'user', content: 'write' }],
-    })).rejects.toThrow('0 到 1')
+    })).rejects.toThrow('GENERATION_KIMI_TEMPERATURE_INVALID')
 
     expect(mocks.generateStream).not.toHaveBeenCalled()
     await expect(handler('llm:cancel')({}, requestId)).resolves.toEqual({ success: false })
@@ -485,14 +487,14 @@ describe('llm model execution lease controller integration', () => {
     })).resolves.toMatchObject({
       success: false,
       content: '',
-      error: expect.stringContaining('模型执行租约无效'),
+      error: expect.stringContaining('MODEL_EXECUTION_LEASE_INVALID'),
     })
     expect(mocks.generate).not.toHaveBeenCalled()
     await expect(handler('llm:close-execution-lease')({}, leaseId)).resolves.toEqual({ success: true })
 
     await expect(handler('llm:close-execution-lease')({}, 'never-issued-lease')).resolves.toEqual({
       success: false,
-      error: '模型执行租约无效或已关闭',
+      error: 'MODEL_EXECUTION_LEASE_INVALID',
     })
   })
 
@@ -507,7 +509,7 @@ describe('llm model execution lease controller integration', () => {
     })).resolves.toEqual({
       requestId: 'unknown-lease-stream',
       started: false,
-      error: expect.stringContaining('模型执行租约无效'),
+      error: expect.stringContaining('MODEL_EXECUTION_LEASE_INVALID'),
     })
     expect(mocks.generateStream).not.toHaveBeenCalled()
   })
@@ -625,7 +627,7 @@ describe('llm project statistics', () => {
         onError: (error: string, content?: string, usage?: unknown) => void
       },
     ) => {
-      options.onError('响应流包含损坏的 JSON 数据', 'HEAD', {
+      options.onError('LLM_STREAM_INVALID', 'HEAD', {
         promptTokens: 1,
         completionTokens: 2,
         totalTokens: 3,
@@ -648,7 +650,7 @@ describe('llm project statistics', () => {
     expect(mocks.send).not.toHaveBeenCalledWith('llm:stream-error', expect.anything())
     expect(mocks.logCall).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      errorMessage: '响应流包含损坏的 JSON 数据',
+      errorMessage: 'LLM_STREAM_INVALID',
     }))
   })
 })
@@ -700,5 +702,103 @@ describe('llm conversation scoping for gateway session affinity', () => {
 
     const options = mocks.generate.mock.calls[0]?.[2] as { conversationId?: string }
     expect(options.conversationId).toBeUndefined()
+  })
+})
+
+// 检索模型的连接测试：embedding 只交错误码（#474 B3），这里按系统语言换回可读说明，HTTP 状态与建议地址留着。
+describe('retrieval model connection test', () => {
+  const retrievalModel: ModelProfile = { ...deepSeekModel, id: 'bge', modelName: 'bge-m3', baseUrl: 'https://embedding.example/v1', purposes: ['embedding'] }
+
+  it.each([
+    ['en-US', 'Retrieval model request failed (HTTP 401)'],
+    ['zh-CN', '检索模型请求失败（HTTP 401）'],
+  ])('explains an HTTP failure in %s', async (locale, expected) => {
+    mocks.locale = locale
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('denied', { status: 401 })))
+    try {
+      const result = await mocks.handlers.get('llm:test-connection')!({}, retrievalModel) as { success: boolean; error: string }
+      expect(result.success).toBe(false)
+      expect(result.error).toContain(expected)
+      expect(result.error).not.toMatch(/EMBEDDING_|Error:/u)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it.each([
+    ['en-US', 'returned an unusable result', /\p{Script=Han}|EMBEDDING_|Error:/u],
+    ['zh-CN', '检索模型返回的结果不合格', /EMBEDDING_|Error:/u],
+  ])('explains an unusable embedding response in %s', async (locale, expected, forbidden) => {
+    mocks.locale = locale
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 })))
+    try {
+      const result = await mocks.handlers.get('llm:test-connection')!({}, retrievalModel) as { success: boolean; error: string }
+      expect(result.success).toBe(false)
+      expect(result.error).toContain(expected)
+      expect(result.error).not.toMatch(forbidden)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps the suggested OpenAI-compatible Ollama address', async () => {
+    mocks.locale = 'en-US'
+    const result = await mocks.handlers.get('llm:test-connection')!({}, { ...retrievalModel, baseUrl: 'http://localhost:11434/api' }) as { success: boolean; error: string }
+    expect(result).toMatchObject({ success: false })
+    expect(result.error).toContain('http://localhost:11434/v1')
+    expect(result.error).not.toMatch(/EMBEDDING_|\p{Script=Han}/u)
+  })
+})
+
+// 模型表单原样显示连接测试的 error（#474 B6）：provider 只交码，主进程按界面语言写成说明，HTTP 状态与服务返回留着。
+describe('generation model connection test failures', () => {
+  it.each([
+    ['en-US', 'Model request failed (HTTP 401)', /\p{Script=Han}|LLM_/u],
+    ['zh-CN', '模型请求失败（HTTP 401）', /LLM_/u],
+  ])('explains an HTTP failure in %s with the service response', async (locale, expected, forbidden) => {
+    mocks.locale = locale
+    mocks.generate.mockResolvedValueOnce({
+      success: false, content: '', finishReason: 'error', error: 'LLM_REQUEST_FAILED',
+      httpFailure: { status: 401, body: '{"error":"invalid api key"}' },
+    })
+    const result = await connectionHandler()({}, deepSeekModel) as { success: boolean; error: string }
+    expect(result.success).toBe(false)
+    expect(result.error).toContain(expected)
+    expect(result.error).toContain('invalid api key')
+    expect(result.error.replace('{"error":"invalid api key"}', '')).not.toMatch(forbidden)
+  })
+
+  it('names the finish reason when the probe reply was cut short', async () => {
+    mocks.locale = 'en-US'
+    mocks.generate.mockResolvedValueOnce({ success: false, content: '', finishReason: 'length', error: 'LLM_RESPONSE_INCOMPLETE' })
+    await expect(connectionHandler()({}, deepSeekModel)).resolves.toEqual({
+      success: false,
+      error: 'The model did not finish its reply (finish reason: length).',
+    })
+  })
+
+  it.each([
+    ['en-US', 'only accepts a temperature from 0 to 1'],
+    ['zh-CN', '温度必须在 0 到 1 之间'],
+  ])('explains an out-of-range Kimi temperature in %s before any request', async (locale, expected) => {
+    mocks.locale = locale
+    const result = await connectionHandler()({}, { ...fixedTemperatureKimiModel, modelName: 'kimi-future-preview', temperature: 1.1 }) as { success: boolean; error: string }
+    expect(result.success).toBe(false)
+    expect(result.error).toContain(expected)
+    expect(result.error).not.toContain('GENERATION_')
+    expect(mocks.generate).not.toHaveBeenCalled()
+  })
+})
+
+describe('generation model connection test with an empty error body', () => {
+  it('ends the explanation without a dangling service response', async () => {
+    mocks.locale = 'en-US'
+    mocks.generate.mockResolvedValueOnce({
+      success: false, content: '', finishReason: 'error', error: 'LLM_REQUEST_FAILED', httpFailure: { status: 403, body: '' },
+    })
+    await expect(connectionHandler()({}, deepSeekModel)).resolves.toEqual({
+      success: false,
+      error: 'Model request failed (HTTP 403). Check the Base URL, API key, and model name.',
+    })
   })
 })

@@ -91,7 +91,7 @@ describe('DraftRepository finalized immutability guard', () => {
 
   it('does not allow a generic content update to silently mutate finalized database fact', () => {
     expect(() => DraftRepository.updateContent(1, '后续编辑正文', 6))
-      .toThrow('不可变事实')
+      .toThrow('DRAFT_FINALIZED_READ_ONLY')
     expect(db.prepare('SELECT body FROM contents WHERE id = 1').get())
       .toEqual({ body: '定稿快照正文' })
     expect(db.prepare('SELECT word_count FROM drafts WHERE id = 1').get())
@@ -100,7 +100,7 @@ describe('DraftRepository finalized immutability guard', () => {
 
   it('does not allow a generic status update to reopen finalized fact', () => {
     expect(() => DraftRepository.updateStatus(1, 'draft'))
-      .toThrow('不可变事实')
+      .toThrow('DRAFT_FINALIZED_READ_ONLY')
     expect(db.prepare('SELECT status FROM drafts WHERE id = 1').get())
       .toEqual({ status: 'finalized' })
   })
@@ -111,7 +111,7 @@ describe('DraftRepository finalized immutability guard', () => {
       VALUES (?, ?, ?, ?)
     `).run('finalization-1', 1, 1, '蓝镜初亮')
 
-    expect(() => DraftRepository.delete(1)).toThrow('定稿删除入口')
+    expect(() => DraftRepository.delete(1)).toThrow('FINALIZED_DRAFT_DELETE_REQUIRED')
     expect(DraftRepository.getFull(1)).toMatchObject({
       id: 1,
       status: 'finalized',

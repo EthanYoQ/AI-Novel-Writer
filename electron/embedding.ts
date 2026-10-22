@@ -35,10 +35,9 @@ async function parseEmbeddingJsonResponse(
   }
 }
 
+/** 界面按码说明；服务商与 HTTP 状态留在异常上，供日志定位。 */
 function embeddingHttpError(provider: 'OpenAI' | 'Gemini', status: number): never {
-  throw new Error(
-    `${provider} Embedding 调用失败（HTTP ${status}）。请检查 Base URL、网关或鉴权。`,
-  )
+  throw Object.assign(new Error('EMBEDDING_REQUEST_FAILED'), { code: 'EMBEDDING_REQUEST_FAILED', provider, status })
 }
 
 function validateEmbeddingVectors(
@@ -247,11 +246,7 @@ export async function embedOpenAI(
 ): Promise<number[][]> {
   const ollamaCompatibleBaseUrl = ollamaOpenAIEmbeddingBaseUrl(model.baseUrl)
   if (ollamaCompatibleBaseUrl) {
-    throw new Error(
-      'Ollama 原生 /api 地址不兼容：'
-      + `本应用使用 OpenAI-compatible Embedding API，请将 Base URL 改为 ${ollamaCompatibleBaseUrl}。 `
-      + `This app uses the OpenAI-compatible Embedding API; change the Base URL to ${ollamaCompatibleBaseUrl}.`,
-    )
+    throw Object.assign(new Error('EMBEDDING_OLLAMA_NATIVE_URL'), { code: 'EMBEDDING_OLLAMA_NATIVE_URL', suggestedBaseUrl: ollamaCompatibleBaseUrl })
   }
   const embeddingModel = model.modelName || 'text-embedding-3-small'
   const url = buildOpenAIEmbeddingUrl(model.baseUrl)

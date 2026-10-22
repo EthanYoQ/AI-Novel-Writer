@@ -38,6 +38,7 @@ import { openChapterFile } from '../../panels/sidebar/sidebar-file-openers'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../../project-session-gate'
 import { toast } from '../../ui/Toast'
 import { pluralEn } from '../../../shared/plural-en'
+import { knownAppErrorMessage } from '../../../i18n/app-errors'
 
 const EMPTY_PLAN: NarrativeThreadPlanInput = {
   title: '', type: '', targetStartChapter: 1, targetEndChapter: 1, authorIntent: '',
@@ -138,18 +139,12 @@ function plotTreeErrorMessage(
   if (message === '剧情树快照保存失败') {
     return text('无法保存剧情树。', 'Could not save the plot tree.')
   }
-  if (message === '剧情树快照清除失败') {
-    return text('无法清除剧情树。', 'Could not clear the plot tree.')
-  }
   if (message === '剧情资料在生成期间已更新，本次结果未保存，请重新生成。'
     || message === 'Plot sources changed during generation. This result was not saved; generate it again.') {
     return text(
       '剧情资料在生成期间已更新，本次结果未保存，请重新生成。',
       'Plot sources changed during generation. This result was not saved; generate it again.',
     )
-  }
-  if (message === '项目数据库未打开' || message === '项目配置不存在') {
-    return text(...fallback)
   }
   if (error instanceof PlotTreeIncompleteError) {
     if (error.finishReason === 'length') {
@@ -482,7 +477,10 @@ export function usePlotThreads(projectKey: string, {
       if (!plotTreeGenerator) {
         const { value } = await startGraph({ kind: 'plot' }, frozenModelId)
         if (value.result?.kind !== 'plot') throw new Error('GRAPH_GENERATION_KIND_MISMATCH')
-        if (value.sourceStatus !== 'current') throw new Error('剧情资料在生成期间已更新，本次结果未保存，请重新生成。')
+        if (value.sourceStatus !== 'current') throw new Error(uiText(
+          '剧情资料在生成期间已更新，本次结果未保存，请重新生成。',
+          'Plot sources changed during generation. This result was not saved; generate it again.',
+        ))
         const effect = await confirmGraph(0, value.view.handle)
         if (effect.kind === 'plot' && isProjectSessionCurrent(session)) setPlotSources(previous => previous ? { ...previous, snapshot: effect.snapshot } : previous)
         return
@@ -505,7 +503,7 @@ export function usePlotThreads(projectKey: string, {
         )
       } catch {
         failureCode = 'save_failed'
-        throw new Error('剧情树快照保存失败')
+        throw new Error(uiText('剧情树快照保存失败', 'Could not save the plot-tree snapshot.'))
       }
       if (!isProjectSessionCurrent(session) || controller.signal.aborted) return
       const savedSnapshot = saved.snapshot
@@ -521,7 +519,7 @@ export function usePlotThreads(projectKey: string, {
               '剧情资料在生成期间已更新，本次结果未保存，请重新生成。',
               'Plot sources changed during generation. This result was not saved; generate it again.',
             )
-          : '剧情树快照保存失败')
+          : uiText('剧情树快照保存失败', 'Could not save the plot-tree snapshot.'))
       }
       setPlotSources(previous => previous ? { ...previous, snapshot: savedSnapshot } : previous)
     } catch (error) {
@@ -790,23 +788,18 @@ export function usePlotThreads(projectKey: string, {
         planId: eventPlanId, draftId: eventDraftId, type: eventType,
         evidence: eventEvidence, reason: eventReason,
       }, projectKey)
-      if (!result.success) {
-        if (result.error?.includes('短证据必须来自绑定的定稿正文')) {
-          setEventError(text(
-            '请粘贴所选定稿章节中实际出现的短原文。',
-            'Paste a short excerpt that appears in the selected finalized chapter.',
-          ))
-          return
-        }
-        throw new Error('event confirmation failed')
-      }
+      if (!result.success) throw new Error(result.error ?? 'event confirmation failed')
       if (!isProjectSessionCurrent(session)) return
       setEventPlanId(null)
       setEventEvidence('')
       setEventReason('')
       await reload()
-    } catch {
-      if (isProjectSessionCurrent(session)) toast.error(text('保存定稿事件失败', 'Could not save finalized event'))
+    } catch (error) {
+      if (!isProjectSessionCurrent(session)) return
+      // 主进程用登记过的码拒绝（如短证据不在定稿正文里）时在表单里说明原因，作者改完能直接重试；其余仍是笼统提示。
+      const reason = knownAppErrorMessage(useLocaleStore.getState().locale, error)
+      if (reason) setEventError(reason)
+      else toast.error(text('保存定稿事件失败', 'Could not save finalized event'))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }

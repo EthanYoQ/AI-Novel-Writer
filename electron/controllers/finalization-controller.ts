@@ -47,10 +47,10 @@ export function registerFinalizationController(): void {
   ) => {
     try {
       if (!isFinalizationSnapshot(candidate)) {
-        throw new Error('定稿快照无效')
+        throw new Error('FINALIZATION_SNAPSHOT_INVALID')
       }
       if (!isProjectSessionContext(context) || !snapshotMatchesContext(candidate, context)) {
-        throw new Error('定稿快照与项目会话不匹配')
+        throw new Error('FINALIZATION_SNAPSHOT_SESSION_MISMATCH')
       }
       const active = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
       return await finalizationService.finalize({
@@ -73,10 +73,10 @@ export function registerFinalizationController(): void {
   ) => {
     try {
       if (typeof finalizationId !== 'string' || !finalizationId) {
-        throw new Error('缺少可重试的定稿提交身份')
+        throw new Error('FINALIZATION_COMMIT_ID_REQUIRED')
       }
       if (!isProjectSessionContext(context)) {
-        throw new Error('缺少项目会话，已拒绝实体稿重试')
+        throw new Error('PROJECT_SESSION_REQUIRED')
       }
       const active = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
       return await finalizationService.retry({

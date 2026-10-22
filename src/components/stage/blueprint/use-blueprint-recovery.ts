@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ipc } from '../../../services/ipc-client'
 import { launchCreativeWorkflow } from '../../../services/workflows/creative-workflow-launcher'
 import { parseTextBlueprintsStrict } from '../../../services/workflows/directory-workflow'
+import { workflowMainProcessError } from '../../../services/workflows/workflow-project-session'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
+import { structuredContractDiagnostic, structuredContractDiagnosticText } from '../../../shared/structured-contract-diagnostic'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { registerEditorExitSaveHandler, useEditorStore, type EditorTab, type PlanningRecoverySaveSnapshot } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -25,6 +28,11 @@ export function useBlueprintRecovery(tab: EditorTab, projectKey: string) {
   const busyRef = useRef(false)
   const [error, setError] = useState('')
   const currentTab = useEditorStore(state => state.tabs.find(item => item.id === tab.id)) ?? tab
+  /** 作者稿不合蓝图契约时说明哪个字段出了什么问题；主进程经 IPC 拒绝时按登记的码说明。 */
+  const failureText = useCallback((reason: unknown) => {
+    const diagnostic = structuredContractDiagnostic(reason)
+    return diagnostic ? structuredContractDiagnosticText(locale, diagnostic) : displayedErrorMessage(locale, reason)
+  }, [locale])
 
   const refresh = useCallback(async () => {
     const expectedSession = session
@@ -35,7 +43,7 @@ export function useBlueprintRecovery(tab: EditorTab, projectKey: string) {
     setContext(next)
     return next
   }, [session, tab.planningRecovery, text])
-  useEffect(() => { void Promise.resolve().then(refresh).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))) }, [refresh])
+  useEffect(() => { void Promise.resolve().then(refresh).catch(reason => setError(failureText(reason))) }, [failureText, refresh])
 
   const save = useCallback(async (propagate = false) => {
     if (busyRef.current) { if (propagate) throw new Error(text('保存仍在进行', 'Saving is still in progress.')); return }
@@ -71,15 +79,15 @@ export function useBlueprintRecovery(tab: EditorTab, projectKey: string) {
         ...submission.request, authorRecovery: { ...submission.request.authorRecovery, leaseEpoch: candidate.leaseEpoch },
       }, projectKey)
       if (!result.success && !pending && isCurrentProjectSession(session)) useEditorStore.getState().setPlanningSaveSnapshot(tab.id, undefined)
-      if (!result.success) throw new Error(result.error || text('保存恢复蓝图失败', 'Could not save the recovered blueprints.'))
+      if (!result.success) throw workflowMainProcessError({ uiLocale: locale }, result.error, '保存恢复蓝图失败', 'Could not save the recovered blueprints.')
       if (!isCurrentProjectSession(session)) return
       useEditorStore.getState().setPlanningSaveSnapshot(tab.id, { ...submission, status: 'saved' })
       useEditorStore.getState().settleTabSave(tab.id, submission)
       setError('')
       await refresh()
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); if (propagate) throw reason }
+    } catch (reason) { setError(failureText(reason)); if (propagate) throw reason }
     finally { busyRef.current = false; setBusy(false) }
-  }, [locale, projectKey, refresh, session, tab.id, tab.planningRecovery, text])
+  }, [failureText, locale, projectKey, refresh, session, tab.id, tab.planningRecovery, text])
   useEffect(() => {
     registerEditorExitSaveHandler({ tabId: tab.id, type: 'chapter-card', save: () => save(true) })
   }, [save, tab.id])
@@ -98,7 +106,7 @@ export function useBlueprintRecovery(tab: EditorTab, projectKey: string) {
       } }, session)
       await refresh()
       setError('')
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    } catch (reason) { setError(failureText(reason)) }
     finally { busyRef.current = false; setBusy(false) }
   }
 

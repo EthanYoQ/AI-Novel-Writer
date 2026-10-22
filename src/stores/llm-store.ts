@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { ipc } from '../services/ipc-client'
 import { requireIpcSuccess } from '../services/ipc-result'
 import { alertError } from '../components/ui/AlertDialog'
+import { displayedErrorMessage } from '../i18n/app-errors'
+import { useLocaleStore } from './locale-store'
 import type {
   LLMFinishReason,
   ModelDiscoveryResult,
@@ -114,7 +116,10 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     if (result.success) {
       await get().loadModels()
     } else {
-      alertError('保存模型失败', { title: '模型设置保存失败' })
+      const { text } = useLocaleStore.getState()
+      alertError(text('保存模型失败', 'Could not save the model.'), {
+        title: text('模型设置保存失败', 'Model settings could not be saved'),
+      })
     }
     return result.success
   },
@@ -122,7 +127,10 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
   deleteModel: async (modelId) => {
     const result = await ipc.invoke('llm:delete-model', modelId)
     if (!result.success) {
-      alertError(result.error || '删除模型失败', { title: '模型删除失败' })
+      const { locale, text } = useLocaleStore.getState()
+      alertError(displayedErrorMessage(locale, result.error, text('删除模型失败', 'Could not delete the model.')), {
+        title: text('模型删除失败', 'Could not delete the model'),
+      })
       return false
     }
     await get().loadModels()
@@ -139,7 +147,8 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
       set({ defaultModelId: modelId })
       return true
     } catch (error) {
-      alertError(String(error), { title: '模型设置保存失败' })
+      const { locale, text } = useLocaleStore.getState()
+      alertError(displayedErrorMessage(locale, error), { title: text('模型设置保存失败', 'Model settings could not be saved') })
       return false
     }
   },
@@ -153,7 +162,8 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
       set({ defaultEmbeddingModelId: modelId })
       return true
     } catch (error) {
-      alertError(String(error), { title: '模型设置保存失败' })
+      const { locale, text } = useLocaleStore.getState()
+      alertError(displayedErrorMessage(locale, error), { title: text('模型设置保存失败', 'Model settings could not be saved') })
       return false
     }
   },

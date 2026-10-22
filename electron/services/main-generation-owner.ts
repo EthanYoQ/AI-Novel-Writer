@@ -83,6 +83,13 @@ export interface MainGenerationOwnerDependencies {
 }
 
 interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
+
+/** Provider 流式失败的分类：拿不到响应流、流在完成标记前断开与原生网络错误都算网络失败，其余算供应商失败。 */
+export function providerStreamFailureCode(error: string): 'NETWORK_ERROR' | 'GENERATION_PROVIDER_FAILED' {
+  return error === 'LLM_STREAM_UNREADABLE' || error === 'LLM_STREAM_INCOMPLETE'
+    || /fetch failed|failed to fetch|network|ECONNRESET|ETIMEDOUT/iu.test(error)
+    ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED'
+}
 async function dispatchProvider(value: unknown, options: Parameters<GenerationRunServiceDependencies['dispatch']>[1]) {
   const { model, task, plan, conversationId } = value as ProviderRequest
   let evidence: ProviderUsageEvidence | null = null
@@ -95,10 +102,7 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
     onDiagnostics: options.onDiagnostics,
     onUsageEvidence: value => { evidence = value },
     onDone: (text, _usage, reason) => { options.onVisible({ kind: 'cumulative', text }); finishReason = reason },
-    onError: error => {
-      failureCode = /fetch failed|failed to fetch|network|ECONNRESET|ETIMEDOUT|无法读取响应流|完成标记前结束/iu.test(error)
-        ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED'
-    },
+    onError: error => { failureCode = providerStreamFailureCode(error) },
   })
   if (failureCode || finishReason === null) throw new Error(failureCode ?? 'GENERATION_PROVIDER_FAILED')
   const usageEvidence = evidence as ProviderUsageEvidence | null

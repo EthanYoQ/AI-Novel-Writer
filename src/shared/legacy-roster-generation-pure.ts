@@ -83,6 +83,7 @@ export function buildLegacyRosterReplacementTask(baseTask: GenerationTask, visib
 }
 
 /** Same accepted syntax and error boundary as the existing workflow Base parser. */
+// i18n-exempt: 只在主进程用：调用处 catch 后改走 JSON 修复，或在 IPC 边界换成错误码
 export function parseLegacyRosterJson(text: string): unknown {
   try {
     let cleanText = text.replace(/```json?\n?/gi, '').replace(/```\n?/gi, '').trim()

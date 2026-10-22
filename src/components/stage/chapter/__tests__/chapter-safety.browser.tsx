@@ -112,6 +112,25 @@ describe('版本切换器', () => {
     await expect.element(page.getByText('已归档，只读')).toBeVisible()
   })
 
+  it('保存时主进程按码拒绝（这一稿已在别处定稿）：提示写明原因，不显示错误码', async () => {
+    backend.addDraft({ status: 'archived', version: 1 })
+    const v2 = backend.addDraft({ status: 'draft', version: 2 })
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => undefined)
+    const answer = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation(async (channel, ...args) => channel === 'db:draft-update-content'
+      ? { success: false, error: 'Error: DRAFT_FINALIZED_READ_ONLY' }
+      : answer(channel, ...args))
+    await mount()
+    await openDraft(v2.id)
+    await type('作者打的字')
+    await versions()
+    await act(async () => page.getByRole('menuitemcheckbox', { name: /显示已归档/ }).click())
+    await act(async () => page.getByRole('menuitemradio', { name: /已归档 v1/ }).click())
+    await click('保存并切换')
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('这一章已经定稿，定稿正文是只读的，本次修改没有保存。'))
+    expect(error.mock.calls.flat().join('')).not.toContain('DRAFT_')
+  })
+
   it('放弃修改并切换：不写入，换上那一稿', async () => {
     backend.addDraft({ status: 'archived', version: 1 })
     const v2 = backend.addDraft({ status: 'draft', version: 2 })
@@ -375,6 +394,26 @@ describe('标签与外壳', () => {
     await click('重试清理')
     await vi.waitFor(() => expect(backend.writes('chapter:retry-deletion').map(args => args[0])).toEqual(['deletion-1']))
     await expect.element(page.getByText('删除正文后的清理没有完成')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['zh-CN', '删除正文后的清理没有完成', '知识库没有确认这一章的资料已删除。请稍后在这一章的页面里重试清理。', '知识库不可用：Windows 原生组件加载失败。'],
+    ['en-US', 'Cleanup after deleting the manuscript is unfinished', "The knowledge base did not confirm that this chapter's entry was removed.", 'The knowledge base is unavailable because'],
+  ] as const)('删除清理提示把主进程记下的错误码按界面语言说明（%s，#474）', async (locale, title, knowledgeReason, nativeReason) => {
+    useLocaleStore.setState({ locale })
+    backend.state.incompleteDeletions = [
+      { operationId: 'deletion-1', chapterNumber: 3, draftId: 9, chapterTitle: '雨夜车站', status: 'failed',
+        manuscriptStatus: 'failed', manuscriptError: 'EBUSY: resource busy or locked', knowledgeStatus: 'failed', knowledgeError: 'CHAPTER_DELETE_KNOWLEDGE_NOT_REMOVED', legacyKnowledgeAuthorization: 'not-required' },
+      { operationId: 'deletion-2', chapterNumber: 3, draftId: 8, chapterTitle: '雨夜车站', status: 'failed',
+        manuscriptStatus: 'completed', manuscriptError: '', knowledgeStatus: 'failed', knowledgeError: 'KNOWLEDGE_BASE_NATIVE_UNAVAILABLE', legacyKnowledgeAuthorization: 'not-required' },
+    ]
+    await mount()
+    await act(async () => openChapterPlan(3, BLUEPRINT.title, SESSION))
+    await expect.element(page.getByText(title).first()).toBeVisible()
+    await expect.element(page.getByText(knowledgeReason, { exact: false })).toBeVisible()
+    await expect.element(page.getByText('EBUSY: resource busy or locked', { exact: false })).toBeVisible()
+    await expect.element(page.getByText(nativeReason, { exact: false })).toBeVisible()
+    expect(document.body.textContent).not.toMatch(/CHAPTER_DELETE_|KNOWLEDGE_BASE_NATIVE_UNAVAILABLE/u)
   })
 
   it('删除正文后清理没做完、这一章另有未定稿的稿：那一稿的单章视图也提示并可以重试清理', async () => {

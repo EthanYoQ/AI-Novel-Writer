@@ -226,6 +226,7 @@ node scripts/redesign/drive.mjs --scenario chapter-switch --shell stage --out <�
 | `library-timing` | 计时会话（与 `startup-timing` 同样先预启动一次，另用公开 IPC 新建 20 部作品）：`readyToShowToInteractiveMs`（书房「新建作品」可见），以及页面里记下的 `renderInteractiveMs`（「新建作品」进入 DOM）与 `renderShelfMs`（20 个「预览《书名》」按钮都进入 DOM），都以导航开始为 0。旧欢迎页与新书房的书本按钮同名，所以对 trunk 也能跑 | 不截图 | 否 | perf |
 | `stage-lazy-retry` | 主进程 `webRequest` 拦下设定页代码块（`blockChunks`），重载后打开示例作品点「设定」，出现「页面没有载入」与「重试」；`after` 放行后点重试，设定页出现，且请求日志里有带 `?retry=` 的设定页代码块 | 载入失败 | 否 | RD-5 修复第 1 轮 |
 | `stage-setup-save-fail` | 设定页改一句后让 `project:save` 返回失败（`failProjectSaves` 换掉主进程处理函数）：Ctrl S 与「下一步」都在页脚出现 role=alert 的失败说明，仍停在设定、仍是未保存；`after` 换回处理函数再点保存，变为已保存、失败说明消失 | 保存失败 | 否 | RD-5 修复第 1 轮 |
+| `stage-error-code-display` | 主进程的错误码在显示处按界面语言说明（#474）：选好上级文件夹后换成同名新文件夹再新建作品，断言 `measured.createAfterParentReplaced` 是主进程原样返回的 `Error: EXTERNAL_FILE_GRANT_TARGET_CHANGED`；试改名打开着的作品文件夹（Windows 上被作品库占用，`measured.rename` 为 `EPERM`；改得动也立刻改回），再让 `kb:clear-all` 返回 `PROJECT_SESSION_STALE`；中文、英文各从知识库清空一次，提示是登记的说明、没有裸错误码 | 中文、英文的报错提示（`stage-error-code-display-zh`、`-en`） | 否 | #474 渲染层消费处 |
 | `stage-setup-short` | 新建「雾岛」：必填项先不标红；1440×900、1280×800、1280×720 下「类型」「目标读者」都在底栏之上；`after` 点开「全局写作要求」，面板不在底栏后面、焦点在它的输入框里 | 1280×720 设定页 | 否 | RD-5 修复第 1 轮 |
 | `stage-settings-legacy` | 模型编辑表单的输入框 40px 高；`context.shoot` 中途拍下模型编辑、提示词模板、写作 Skills；项目备份页只有「导出本地存档」一个实心主按钮 | 项目备份 | 否 | RD-5 修复第 1 轮 |
 | `stage-settings-leave` | 编辑夹具模型改名，输入框里按 Esc 设置页不关；焦点移出后 Esc 弹「放弃未保存的修改？」；`after` 继续编辑修改还在，「返回作品」再确认放弃才关；再开设置页从 Ctrl K 选「角色」，设置页收起、「角色」标签选中 | 放弃确认 | 否 | RD-5 修复第 1 轮 |
@@ -289,6 +290,7 @@ node scripts/redesign/drive.mjs --scenario arch-timing --out <目录>
 | `blueprint-batch` | 删掉 3、4 章草稿后批量创作 4 章：运行侧页出现批量卡（第 3 至 6 章）；`after` 取消 | 批量卡 | 是 | lane 6 |
 | `blueprint-clear` | 更多蓝图操作的危险分组里清空全部蓝图，危险确认后列表为空，出现空状态与 AI 生成蓝图 | 空状态 | 否 | lane 7 |
 | `blueprint-recover` | 规划 16 章，生成第 13～16 章蓝图（假模型回正文，生成失败留下恢复稿）：蓝图页出现恢复稿提示条，「编辑恢复稿」打开恢复稿标签，「继续生成缺少的章节」可用；`after` 点它，模型再次收到请求 | 恢复稿标签 | 是 | lane 8 |
+| `blueprint-recover-error-en` | 同 `blueprint-recover` 留下恢复稿并打开恢复稿标签，再在外观页把界面语言切成英文；恢复稿改成缺字段的 JSON 后保存：报错是英文、写明哪个位置缺了什么，不带「结构化合同诊断」中文前缀 | 恢复稿的英文报错 | 是 | #474 |
 | `blueprint-save` | 改第 6 章标题：整页只有顶栏一处「未保存」，Ctrl S 后变「已保存」，重新加载后标题仍在 | 已保存 | 否 | lane 9 |
 | `blueprint-finalize-next` | 第 3 章草稿定稿，设置里开着「定稿后打开下一章」（F-056）：落到第 4 章的单章视图，写作弹层由这一章「写作此章」旁的「本次写作选项」打开（`aria-controls` 指向弹层）并贴着它展开，只弹出写作弹层，没有旧的创作对话框 | 写作弹层 | 是 | F-056 |
 | `blueprint-tour` | 30–60 秒导览：选章改标题保存、清空的危险确认、生成蓝图覆盖、批量创作、写作弹层、一致性预检、仅本次忽略后写完。配 `--video` 录评审视频 | 写完一章 | 是 | Review gate |
@@ -316,6 +318,7 @@ node scripts/redesign/drive.mjs --scenario blueprint-timing --shell stage --out 
 | `chapter-write-after-edited-chain` | 预置第 4 章 v2 以第 3 章候选稿为前驱，再改第 3 章正文；3、4 章逐章定稿后写第 5 章：假模型收到 1 次正文请求，正文保存，运行侧页没有原始 IPC 错误 | 第 5 章与运行侧页 | 是 | #438 |
 | `chapter-rereview-legacy` | 第 3 章（旧版本留下的 reviewed 稿）点「重新审稿」：假模型收到 1 次审稿请求，运行侧页没有原始 IPC 错误；恢复卡里的审稿候选显示「1 条意见」摘要，不显示原始 JSON | 第 3 章与运行侧页 | 是 | #411、#455 |
 | `chapter-rereview-legacy-en` | 同上重新审稿后切到英文界面重开作品，从 Ctrl K「Run sheet」打开运行侧页：审稿候选显示「1 item」摘要，不显示原始 JSON | 英文运行侧页 | 是 | #455 |
+| `chapter-finalize-gone-en` | 切到英文界面后定稿第 3 章，主进程的 `finalization:commit` 先卡住，期间按卡住的请求里的稿 id 与会话删掉这一稿再放行：定稿仓储只交 `DRAFT_NOT_FOUND`，运行卡片的失败说明是英文、不带汉字 | 英文运行卡片的失败说明 | 是 | #474 |
 | `chapter-retry` | 角色状态更新失败后点「重试失败步骤」：之后假模型只收到角色状态请求，后处理回到 4 / 4 | 重试后的定稿视图 | 是 | lane 7 |
 | `chapter-retry-stream` | 角色状态请求两次断流（`fake.dropCharacterState(2)`）：自动后处理只请求一次，失败说明不含错误码；重开应用后点「重试失败步骤」恰好再请求一次，说明换成「没有返回完整结果」（中途截图 `chapter-retry-stream-failed`）；再点这一步的「重试」第三次请求成功，回到 3 / 3（重开后不列正文文件） | 重试成功后的定稿视图 | 是 | #420 |
 | `chapter-selection` | 选中一段：工具条四个纸墨按钮（润色、扩写、续写、改成对话）；润色预览后替换，再选一段润色后取消，原文不变 | 选区工具条 | 是 | lane 8 |
@@ -350,6 +353,9 @@ node scripts/redesign/drive.mjs --scenario typing-latency --shell stage --out <�
 | `refs-clear` | 「更多」里的「清除剧情树…」弹出危险确认；`after` 取消，剧情树仍在 | 危险确认 | 是 | lane 3 |
 | `refs-threads` | 线索路线起初是埋设未到、推进不显示、解决未到；记录第 1 章定稿里的变化后，埋设一站变成已发生 | 推进后的线索 | 否 | lane 4 |
 | `refs-delete` | 线索行「更多」里的「删除线索…」弹出危险确认；`after` 取消，线索仍在 | 危险确认 | 否 | lane 5 |
+| `refs-thread-evidence-en` | 切到英文界面后记录第 1 章定稿里的变化，原文填一句定稿里没有的话：主进程只交 `NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE`，表单里的提示是英文、不带汉字与错误码，作者的输入留着 | 表单里的英文提示 | 否 | #474 |
+| `refs-kb-errors-en` | 导入两份资料并打开「守塔人小传」，在外观里切到英文；把这份资料的项目副本文件在磁盘上改掉后编辑并点「Save copy」：主进程只交 `KNOWLEDGE_BASE_COPY_CHANGED`，失败提示是英文；中途拍 `refs-kb-copy-changed-en`。再写坏检索索引登记文件（`.ai-novel/embedding-spaces.json`），到设置「Retrieval model」页：读状态时主进程只交 `EMBEDDING_SPACE_REGISTRY_INVALID`，索引区的提示是英文；两处都不带汉字与错误码 | 检索模型页的英文索引提示 | 是 | #474 |
+| `models-test-connection-en` | 在外观里切到英文，到「AI models」编辑夹具模型、把 API Key 改错后点「Test connection」：假服务回 403，provider 只交 `LLM_REQUEST_FAILED` 与状态码，模型表单的结果是英文说明、不带汉字与错误码，假服务没有记到模型请求 | 模型表单的英文连接失败 | 是 | #474 |
 | `refs-kb` | 导入两份资料后查「雾钟」，结果片段里标出查找词；整窗文字、可访问名称、提示与占位里没有 LanceDB、FTS、BM25、Embedding、向量、query、MCP、token | 查找结果 | 是 | lane 6 |
 | `refs-kb-dirty` | 改了项目副本不保存就点另一份资料，弹出放弃修改的确认；`after` 选「继续编辑」，修改还在，再按 Ctrl S 保存后「有未保存的修改」消失 | 未保存确认 | 是 | lane 7 |
 | `refs-diff` | 第 3 章选草稿 v1：对比是 `aria-readonly` 的差异页，标出新增，区域里没有输入框、可编辑元素或编辑器，没有「完成合并」 | 只读对比 | 否 | lane 8 |
@@ -375,6 +381,8 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 |---|---|---|---|
 | `rdv-clear` | 作品菜单「清除生成内容…」：标准危险确认，焦点在「取消」，三类内容是勾选行，取消一项后后果句改成「将清除 2 类内容」；`after` 按 Esc 关闭 | 危险确认 | 否 |
 | `rdv-alert` | 书房里在同一目录再建一部同名作品，主进程拒绝，命令式 `alertError` 渲染进纸墨宿主，焦点在「确定」，旧「新建小说项目」对话框也在宿主里；`after` 点「确定」 | 叠在新建作品对话框上的错误弹框 | 否 |
+| `project-errors-en` | 建好「雾岛」后把界面语言切成英文重载：同一目录再建同名作品（主进程交 `PROJECT_DIRECTORY_EXISTS`），再把作品文件夹删掉后从书房打开（`PROJECT_DIRECTORY_MISSING`），两次报错弹框都是英文、不带汉字与错误码；中途拍 `project-exists-en`、`project-missing-en`；`after` 点「OK」 | 打开已删除作品的英文报错弹框 | 否 |
+| `import-run-error-en` | 在外观里切到英文，从作品菜单「Novel breakdown & imitation…」把两章参考小说导入当前作品；主进程的 `kb:import-reference-text` 先卡住，期间按卡住的请求里的执行身份调公开的 `db:import-run-cancel-at-boundary` 收回这次导入的执行租约再放行：导入运行仓储只交 `IMPORT_RUN_EXECUTION_STALE`，运行卡片的失败说明是英文、不带汉字与错误码（#474 B1） | 英文运行卡片的导入失败说明 | 是 |
 | `rdv-toasts` | 预置两条调用记录后写一章，在诊断分页连点三次「复制安全诊断」再让剪贴板失败点一次：三次成功合并成一条，出错的另起一条，只有一个提示栈，通知互不重叠，`measured.toasts` 是栈里的条数 | 右下角提示栈 | 是 |
 | `rdv-toast-error` | 同上写一章，先复制成功一次让提示栈出现，再打开 Ctrl K 面板（Radix 模态）后让复制失败：出错通知是八角符号，卡片自身不带 `role`，不在 `aria-hidden` 子树里，经挂载点 `#ai-novel-ink-toasts` 的 `aria-live="polite"` 播报（挂载点内没有任何 `role="alert"`），面板仍开着；`after` 按 Esc | 面板上方的出错通知 | 是 |
 | `rdv-toast-flood` | 打开样例作品，按 `app.getAppPath()` 找到构建产物 `dist/assets/ToastStack-*.js`，在页面里 import 同一模块（与应用共享栈状态），推入 24 条常驻出错通知：栈在顶栏以下（`top >= 48`）、视口以内，标 `data-overflow` 可滚动，最新一条露在栈底；滚到顶关掉最早那条剩 23 条，中途拍 `rdv-toast-flood-top`。推入函数是按压缩产物里的 `exiting:!1` 找到的，换压缩器或改了条目字段就要改这里 | 滚回底部的满栈 | 否 |

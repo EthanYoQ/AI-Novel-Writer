@@ -1,4 +1,4 @@
-import { translate } from './core'
+import { localize, translate } from './core'
 import type { Locale } from './types'
 
 /**
@@ -14,6 +14,42 @@ const ERROR_KEYS = {
   PROJECT_STORAGE_PATH_UNSUPPORTED: 'error.projectStoragePathUnsupported',
   PROJECT_ROOT_REQUIRED: 'error.projectRootRequired',
   PROJECT_LEGACY_IMPORT_REQUIRED: 'error.projectLegacyImportRequired',
+  // 项目会话与外部文件授权（#474 B4）：主进程的会话守卫、项目路径守卫与打开、创建、删除项目时的拒绝原因。
+  PROJECT_SESSION_REQUIRED: 'error.projectSessionRequired',
+  PROJECT_CONTEXT_REQUIRED: 'error.projectSessionRequired',
+  PROJECT_SESSION_STALE: 'error.projectSessionStale',
+  PROJECT_SESSION_ROOT_MISMATCH: 'error.projectSessionStale',
+  PROJECT_SESSION_DATABASE_MISMATCH: 'error.projectSessionStale',
+  PROJECT_SESSION_IDENTITY_MISMATCH: 'error.projectSessionStale',
+  PROJECT_CONTEXT_CHANGED: 'error.projectSessionStale',
+  PROJECT_FILE_OUTSIDE_PROJECT: 'error.projectFileOutsideProject',
+  PROJECT_DIRECTORY_EXISTS: 'error.projectDirectoryExists',
+  PROJECT_DIRECTORY_MISSING: 'error.projectDirectoryMissing',
+  PROJECT_DIRECTORY_NOT_FOLDER: 'error.projectDirectoryMissing',
+  PROJECT_DIRECTORY_DRIVE_ROOT: 'error.projectDirectoryReserved',
+  PROJECT_DIRECTORY_HOME: 'error.projectDirectoryReserved',
+  PROJECT_DIRECTORY_UNSAFE: 'error.projectDirectoryUnsafe',
+  PROJECT_DIRECTORY_MANIFEST_UNREADABLE: 'error.projectManifestInvalid',
+  PROJECT_DIRECTORY_MANIFEST_INVALID: 'error.projectManifestInvalid',
+  PROJECT_MANIFEST_INVALID: 'error.projectManifestInvalid',
+  PROJECT_OPEN_GRANT_REQUIRED: 'error.projectOpenGrantRequired',
+  PROJECT_OPEN_RECENT_IDENTITY_CHANGED: 'error.projectRecentIdentityChanged',
+  PROJECT_MIGRATION_NOT_QUALIFIED: 'error.projectMigrationNotQualified',
+  PROJECT_MIGRATION_DUAL_ROOT: 'error.projectMigrationNotQualified',
+  PROJECT_MIGRATION_RECOVERY_REQUIRED: 'error.projectMigrationNotQualified',
+  UNRECOGNIZED_SCHEMA: 'error.projectSchemaUnrecognized',
+  CORRUPT_SCHEMA: 'error.projectSchemaCorrupt',
+  NEWER_SCHEMA_READ_ONLY: 'error.projectSchemaNewer',
+  LEGACY_IMPORT_UNSUPPORTED_SOURCE: 'error.legacyImportUnsupportedSource',
+  PROJECT_DELETE_FAILED: 'error.projectDeleteFailed',
+  PROJECT_RECENT_LIST_UPDATE_FAILED: 'error.projectRecentListUpdateFailed',
+  PROJECT_ARCHIVE_TARGET_EXISTS: 'error.projectArchiveTargetExists',
+  // 选择文件或文件夹后授权已过期、用尽或被撤销（例如选完很久才确认）。
+  EXTERNAL_FILE_GRANT_NOT_FOUND: 'error.externalFileGrantExpired',
+  EXTERNAL_FILE_GRANT_EXPIRED: 'error.externalFileGrantExpired',
+  EXTERNAL_FILE_GRANT_EXHAUSTED: 'error.externalFileGrantExpired',
+  // 新建、打开项目时，所选文件夹在选择之后被移动、改名或替换：project-controller 经 String(error) 原样转给界面。
+  EXTERNAL_FILE_GRANT_TARGET_CHANGED: 'error.externalFileGrantExpired',
   GENERATION_REQUEST_FAILED: 'error.generationRequestFailed',
   GENERATION_PROJECT_SESSION_STALE: 'error.generationProjectSessionStale',
   GENERATION_PROJECT_SESSION_REQUIRED: 'error.generationProjectSessionRequired',
@@ -127,6 +163,111 @@ const ERROR_KEYS = {
   MODEL_NOT_FOUND: 'error.generationModelMissing',
   NO_DEFAULT_MODEL: 'error.generationModelMissing',
   LEASE_BEGIN_FAILED: 'error.generationRequestFailed',
+  // 角色建议页（待批准的角色提议、定稿角色状态建议）的决策请求被主进程拒绝（#474）。
+  CHARACTER_PROPOSAL_ALREADY_APPROVED: 'error.characterProposalAlreadyDecided',
+  CHARACTER_PROPOSAL_NOT_PENDING_FINALIZED: 'error.characterProposalAlreadyDecided',
+  CHARACTER_APPROVAL_NONCE_CONFLICT: 'error.characterProposalAlreadyDecided',
+  CHARACTER_ID_REVISION_CONFLICT: 'error.characterRosterChanged',
+  CHARACTER_ID_UNKNOWN: 'error.characterRosterChanged',
+  CHARACTER_AUTHOR_ROSTER_NOT_READY: 'error.characterRosterNotReady',
+  FINALIZED_CHARACTER_STATE_CANDIDATE_NOT_FOUND: 'error.characterSuggestionGone',
+  FINALIZED_CHARACTER_STATE_FIELD_CONFLICT: 'error.characterStateChanged',
+  FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT: 'error.characterStateChanged',
+  // 角色名单、蓝图与剧情资料（#474 B2）：作者在角色页手工编辑、生成或修复名单时能照着处理的拒绝原因。
+  CHARACTER_ROSTER_NAME_REQUIRED: 'error.characterRosterNameRequired',
+  CHARACTER_ROSTER_NAME_DUPLICATE: 'error.characterRosterNameDuplicate',
+  CHARACTER_ROSTER_RELATIONSHIP_TARGET_REQUIRED: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_RELATIONSHIP_DESCRIPTION_REQUIRED: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_RELATIONSHIP_SELF: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_RELATIONSHIP_DUPLICATE: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_RELATIONSHIP_TARGET_UNKNOWN: 'error.characterRosterRelationshipInvalid',
+  CHARACTER_ROSTER_REVISION_STALE: 'error.characterRosterChanged',
+  CHARACTER_ROSTER_RENAME_SOURCE_MISSING: 'error.characterRosterChanged',
+  CHARACTER_ROSTER_LEGACY_REPAIR_NOT_NEEDED: 'error.characterRosterChanged',
+  CHARACTER_ROSTER_LEGACY_ADOPTION_UNAVAILABLE: 'error.characterRosterChanged',
+  BLUEPRINT_CHARACTER_SYNC_FACTS_CHANGED: 'error.characterRosterChanged',
+  CHARACTER_ROSTER_LEGACY_REPAIR_REQUIRED: 'error.characterRosterNeedsRepair',
+  CHARACTER_ROSTER_EXISTING_PROTECTED: 'error.characterRosterNeedsRepair',
+  BLUEPRINT_CHARACTER_SYNC_ROSTER_NOT_READY: 'error.characterRosterNeedsRepair',
+  CHARACTER_ROSTER_FINALIZED_SOURCE_STALE: 'error.generationSourceChanged',
+  CHARACTER_ROSTER_LEGACY_SOURCE_CHANGED: 'error.generationSourceChanged',
+  CHARACTER_ROSTER_STATE_NEWER_CHAPTER: 'error.characterRosterNewerChapter',
+  // 生成情节大纲途中项目数据被改动，主进程拒绝覆盖。
+  PROJECT_CORE_SYNOPSIS_CHANGED: 'error.generationSourceChanged',
+  NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE: 'error.narrativeThreadEvidenceNotInSource',
+  DRAFT_NOT_FOUND: 'error.draftNotFound',
+  DRAFT_FINALIZED_READ_ONLY: 'error.draftFinalizedReadOnly',
+  // 删除已定稿的这一章（#474 B5）：删除与清理重试时作者能照着处理的拒绝原因。
+  CHAPTER_DELETE_OPERATION_NOT_FOUND: 'error.chapterDeleteOperationNotFound',
+  CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED: 'error.chapterDeleteLegacyConfirmationConsumed',
+  CHAPTER_DELETE_SOURCE_CHANGED: 'error.chapterDeleteSourceChanged',
+  CHAPTER_DELETE_KNOWLEDGE_NOT_REMOVED: 'error.chapterDeleteKnowledgeNotRemoved',
+  CHAPTER_DELETE_LEGACY_KNOWLEDGE_CHECK_REQUIRED: 'error.chapterDeleteLegacyKnowledgeCheckRequired',
+  CHAPTER_DELETE_LEGACY_OPERATION_FROZEN: 'error.chapterDeleteLegacyOperationFrozen',
+  // 拼进「正文已删除，但派生投影仍待清理：……」与「重试清理失败」，所以文案不带句末标点；逐项原因在删除清理提示里。
+  CHAPTER_DELETE_CLEANUP_INCOMPLETE: 'error.chapterDeleteCleanupIncomplete',
+  // 定稿提交与实体稿发布（#474 B5）。
+  FINALIZATION_COMMIT_CONFLICT: 'error.finalizationCommitConflict',
+  FINALIZATION_COMMIT_NOT_FOUND: 'error.finalizationCommitNotFound',
+  MANUSCRIPT_TARGET_CONFLICT: 'error.manuscriptTargetConflict',
+  MANUSCRIPT_TARGET_COLLISIONS: 'error.manuscriptTargetCollisions',
+  // 合并、丢弃审稿修订稿（#474 B5）。
+  REVISION_NOT_FOUND: 'error.revisionNotFound',
+  REVISION_NOT_PENDING: 'error.revisionAlreadyHandled',
+  REVISION_ALREADY_MERGED: 'error.revisionAlreadyMerged',
+  REVISION_TARGET_NOT_EDITABLE: 'error.revisionTargetNotEditable',
+  REVISION_TARGET_CHANGED: 'error.revisionTargetChanged',
+  REVISION_SOURCE_MISSING: 'error.revisionSourceMissing',
+  REVISION_SOURCE_MISMATCH: 'error.revisionSourceMismatch',
+  // 运行恢复稿、一致性豁免与定稿后处理（#474 B5）。
+  RECOVERY_CANDIDATE_NOT_PENDING: 'error.recoveryCandidateAlreadyHandled',
+  RECOVERY_CANDIDATE_SOURCE_CHANGED: 'error.recoveryCandidateSourceChanged',
+  RECOVERY_CANDIDATE_TEXT_EMPTY: 'error.recoveryCandidateTextEmpty',
+  CONSISTENCY_EXEMPTION_REASON_INVALID: 'error.consistencyExemptionReasonInvalid',
+  POST_PROCESS_FINALIZATION_SOURCE_CHANGED: 'error.postProcessSourceChanged',
+  // 知识库与检索索引（#474 B3）：知识库页、设置里的检索索引检查、导入创作资料与定稿收入知识库按码说明。
+  EMBEDDING_REQUEST_FAILED: 'error.embeddingRequestFailed',
+  EMBEDDING_OLLAMA_NATIVE_URL: 'error.embeddingOllamaNativeUrl',
+  EMBEDDING_RESPONSE_INVALID: 'error.embeddingResponseInvalid',
+  EMBEDDING_SPACE_REGISTRY_INVALID: 'error.knowledgeIndexDamaged',
+  EMBEDDING_SPACE_UNREGISTERED_DATA: 'error.knowledgeIndexDamaged',
+  EMBEDDING_SPACE_BUSY: 'error.knowledgeIndexBusy',
+  EMBEDDING_SPACE_CHANGED: 'error.knowledgeIndexChanged',
+  EMBEDDING_SPACE_REINDEX_REQUIRED: 'error.knowledgeIndexReindexRequired',
+  KNOWLEDGE_BASE_COPY_UNAVAILABLE: 'error.knowledgeCopyUnavailable',
+  KNOWLEDGE_BASE_COPY_CHANGED: 'error.knowledgeCopyChanged',
+  KNOWLEDGE_BASE_COPY_EMPTY: 'error.knowledgeCopyEmpty',
+  KNOWLEDGE_BASE_TEXT_EMPTY: 'error.knowledgeTextEmpty',
+  // 模型调用与设置（#474 B6）：保存或删除模型、设默认模型，以及按模型设置建执行租约时作者能照着改的原因。
+  LLM_MODEL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
+  LLM_GLOBAL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
+  LLM_DEFAULT_MODEL_ROLLBACK_FAILED: 'error.defaultModelRollbackFailed',
+  MODEL_ENDPOINT_INVALID: 'error.modelEndpointInvalid',
+  MODEL_OUTPUT_LIMIT_INVALID: 'error.modelOutputLimitInvalid',
+  // 生成与连接测试都会按模型设置组请求参数，Kimi 官方接口的温度超出范围时在发请求前拒绝。
+  GENERATION_KIMI_TEMPERATURE_INVALID: 'error.kimiTemperatureInvalid',
+  // MCP 服务器（#474 B6）：读取配置、连接服务器与调用工具时的失败。
+  MCP_CONFIG_INVALID: 'error.mcpConfigInvalid',
+  MCP_CONNECT_FAILED: 'error.mcpConnectFailed',
+  MCP_REQUEST_TIMEOUT: 'error.mcpRequestTimeout',
+  MCP_SERVER_NOT_CONNECTED: 'error.mcpServerNotConnected',
+  // 导入运行与导入回执（#474 B1）：导入对话框、导入运行卡片与可继续的导入列表里作者能照着处理的原因。
+  // 主进程在导入通道的 IPC 边界按导入运行的语言把这些码写成说明，原码放在 errorCode。
+  IMPORT_RUN_EXECUTION_STALE: 'error.importRunExecutionStale',
+  IMPORT_RUN_EXECUTOR_BUSY: 'error.importRunExecutorBusy',
+  IMPORT_RUN_ANOTHER_RUNNING: 'error.importRunAnotherRunning',
+  IMPORT_RUN_NOT_STARTABLE: 'error.importRunNotStartable',
+  IMPORT_RUN_NOT_RESTARTABLE: 'error.importRunNotRestartable',
+  IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN: 'error.importRunAuthorRestartForbidden',
+  IMPORT_RUN_NOT_CANCELLABLE: 'error.importRunNotCancellable',
+  IMPORT_RUN_PARSING_INCOMPLETE: 'error.importRunParsingIncomplete',
+  IMPORT_RUN_REAUTHORIZE_UNAVAILABLE: 'error.importRunReauthorizeUnavailable',
+  IMPORT_RUN_REAUTHORIZE_SOURCES_MISMATCH: 'error.importRunReauthorizeSourcesMismatch',
+  IMPORT_RUN_REAUTHORIZE_CONTENT_CHANGED: 'error.importRunReauthorizeContentChanged',
+  IMPORT_RUN_EFFECT_HISTORY_UNKNOWN: 'error.importRunEffectHistoryUnknown',
+  IMPORT_INSPECTION_EXPIRED: 'error.importInspectionExpired',
+  IMPORT_INSPECTION_LIMIT: 'error.importInspectionLimit',
+  FINALIZED_IMPORT_PREVIEW_STALE: 'error.finalizedImportPreviewStale',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS
@@ -135,8 +276,11 @@ function isKnownCode(code: unknown): code is KnownErrorCode {
   return typeof code === 'string' && Object.hasOwn(ERROR_KEYS, code)
 }
 
-/** 主进程只返回错误码；Electron 会在前面加上调用通道，`String(error)` 还会加 "Error: "。 */
-const WRAPPED_CODE = /^(?:Error invoking remote method '[^']+': )?(?:Error: )?([A-Z][A-Z0-9_]*)$/u
+/**
+ * 主进程只返回错误码；Electron 会在前面加上调用通道，`String(error)` 还会加 "Error: "。
+ * 带名字的错误类（ProjectSessionStaleError）加的是自己的类名。
+ */
+const WRAPPED_CODE = /^(?:Error invoking remote method '[^']+': )?(?:[A-Za-z]*Error: )?([A-Z][A-Z0-9_]*)$/u
 
 function readCode(error: unknown): KnownErrorCode | undefined {
   const message = typeof error === 'string' ? error : error instanceof Error ? error.message : undefined
@@ -153,9 +297,11 @@ function readCode(error: unknown): KnownErrorCode | undefined {
   return isKnownCode(code) ? code : undefined
 }
 
+/** Electron 在主进程报错前加的调用通道前缀对作者没有意义，兜底说明里去掉。 */
+const IPC_PREFIX = /^Error invoking remote method '[^']+': (?:[A-Za-z]*Error: )?/u
+
 function readMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
+  return (error instanceof Error ? error.message : String(error)).replace(IPC_PREFIX, '')
 }
 
 /** 已登记错误码的可读文案；未登记时返回 undefined，由调用方保留原有说明。 */
@@ -167,4 +313,33 @@ export function knownAppErrorMessage(locale: Locale, error: unknown): string | u
 export function appErrorMessage(locale: Locale, error: unknown): string {
   return knownAppErrorMessage(locale, error)
     ?? translate(locale, 'error.unknown', { message: readMessage(error) })
+}
+
+/** 显示处去掉的前缀：Electron 的调用通道，以及 "Error: "、"TypeError: " 这类类名。 */
+const DISPLAY_PREFIX = /^(?:Error invoking remote method '[^']+': )?(?:[A-Za-z]*Error: )?/u
+
+/**
+ * 把报错交给作者看的统一入口（toast、提示框、内联提示）：主进程的 result.error、IPC 抛出的错误
+ * 与渲染端按界面语言写好的说明都可以直接传进来。登记过的码按界面语言说明；认不出的去掉通道与类名前缀后
+ * 保留原文，不吞掉信息；完全没有内容时用该处的兜底说明（调用方用 text(zh, en) 写好）。
+ */
+export function displayedErrorMessage(locale: Locale, error: unknown, fallback?: string): string {
+  const known = knownAppErrorMessage(locale, error)
+  if (known) return known
+  return displayedRaw(error).trim().replace(DISPLAY_PREFIX, '') || fallback || localize(locale, '未知错误', 'Unknown error')
+}
+
+/** 报错里能给作者看的原文：字符串本身、Error 或普通对象的字符串 message；别的对象没有可读内容，交给兜底。 */
+function displayedRaw(error: unknown): string {
+  if (typeof error === 'string') return error
+  if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message
+    return typeof message === 'string' ? message : ''
+  }
+  return error == null ? '' : String(error)
+}
+
+/** 英文句子后附上原因；原因里仍有汉字（主进程未登记的中文原文）时只给英文概述，不把中文拼进英文句子。 */
+export function englishWithReason(summary: string, reason: string, separator = ' '): string {
+  return !reason.trim() || /\p{Script=Han}/u.test(reason) ? summary : `${summary}${separator}${reason}`
 }

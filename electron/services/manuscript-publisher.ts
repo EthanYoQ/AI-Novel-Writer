@@ -53,7 +53,7 @@ function containedDirectChild(projectRoot: string, fileName: string): Manuscript
   const root = path.resolve(projectRoot)
   const absolutePath = path.resolve(root, fileName)
   if (path.dirname(absolutePath) !== root || path.basename(absolutePath) !== fileName) {
-    throw new Error('实体稿目标越出受信项目 manuscript 边界')
+    throw new Error('MANUSCRIPT_TARGET_OUTSIDE_PROJECT')
   }
   return { fileName, absolutePath }
 }
@@ -64,7 +64,7 @@ function containedDirectChild(projectRoot: string, fileName: string): Manuscript
  */
 export function resolveManuscriptTarget(input: ManuscriptTargetInput): ManuscriptTarget {
   if (!Number.isInteger(input.chapterNumber) || input.chapterNumber < 1) {
-    throw new Error('章节号无效，无法生成实体稿目标')
+    throw new Error('MANUSCRIPT_CHAPTER_NUMBER_INVALID')
   }
   const preferred = manuscriptFileName(input.chapterNumber, input.chapterTitle)
   const first = containedDirectChild(input.projectRoot, preferred)
@@ -77,12 +77,12 @@ export function resolveManuscriptTarget(input: ManuscriptTargetInput): Manuscrip
     const candidate = containedDirectChild(input.projectRoot, `${parsed.name}${suffix}${parsed.ext}`)
     if (!fs.existsSync(candidate.absolutePath)) return candidate
   }
-  throw new Error('实体稿文件名碰撞过多，拒绝覆盖现有文件')
+  throw new Error('MANUSCRIPT_TARGET_COLLISIONS')
 }
 
 function resolveStoredManuscriptTarget(projectRoot: string, targetFileName: string): ManuscriptTarget {
   if (!targetFileName || targetFileName !== path.basename(targetFileName)) {
-    throw new Error('已提交的实体稿目标无效')
+    throw new Error('MANUSCRIPT_STORED_TARGET_INVALID')
   }
   return containedDirectChild(projectRoot, targetFileName)
 }
@@ -105,7 +105,7 @@ export async function publishManuscript(input: PublishManuscriptInput): Promise<
   if (fs.existsSync(target.absolutePath)) {
     const current = fs.readFileSync(target.absolutePath, 'utf8')
     if (current === serialized) return
-    throw new Error(`实体稿目标已存在且内容不匹配：${target.fileName}`)
+    throw new Error('MANUSCRIPT_TARGET_CONFLICT')
   }
 
   const temporary = containedDirectChild(

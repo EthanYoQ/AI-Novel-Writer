@@ -1,4 +1,4 @@
-import { ipcMain, dialog } from 'electron'
+import { app, ipcMain, dialog } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readJsonFile, writeJsonFile, RECENT_PROJECTS_PATH } from '../utils/config-utils'
@@ -28,31 +28,36 @@ import {
   ProjectCoreRepository,
   type ProjectCoreData,
 } from '../repositories/project-core-repository'
-import { projectAccess, type ProjectSessionLease } from '../services/project-access'
+import { projectAccess, ProjectSessionStaleError, type ProjectSessionLease } from '../services/project-access'
 import { assertExpectedProjectPath, assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { sanitizeProjectName } from './project-path'
 import { projectStoragePreflightFailure } from '../services/project-storage-preflight'
 import { projectPeekService } from '../services/project-peek'
 import { probeProjectSqlite } from '../services/sqlite-project-migration'
+import { mainText } from '../i18n'
 
+/** 按作者保存的界面语言选文案；没保存过时按系统语言，与渲染层一致。 */
+function text(zhCNText: string, enUSText: string): string {
+  return mainText(app.getLocale(), zhCNText, enUSText)
+}
+
+/**
+ * 失败后又没能恢复原项目数据库（极少见）：把恢复失败的原因接在首个错误后面一并交出，供反馈定位；
+ * 只有一个错误时报错就是它的码，渲染层能按码说明。
+ */
+function withRollbackFailure(primary: string, rollbackError: unknown): string {
+  return rollbackError === undefined
+    ? primary
+    : `${primary}${text('；回滚失败：', '; rollback failed: ')}${String(rollbackError)}`
+}
+
+/**
+ * 打开项目时被拒的原因都是错误码，渲染层按 app-errors.ts 登记的文案解释。
+ * 旧版项目与「选了上级目录」两种还带 errorCode：渲染层据此分流到导入旧项目，或提示改选项目根。
+ */
 function projectRootSelectionFailure(error: unknown) {
   if (error instanceof Error && error.message === 'PROJECT_LEGACY_IMPORT_REQUIRED') {
-    return { errorCode: 'PROJECT_LEGACY_IMPORT_REQUIRED' as const, error: '这是旧版项目，请创建新版副本后继续。旧项目会保留。' }
-  }
-  if (error instanceof Error && ['PROJECT_MIGRATION_NOT_QUALIFIED', 'PROJECT_MIGRATION_DUAL_ROOT', 'PROJECT_MIGRATION_RECOVERY_REQUIRED'].includes(error.message)) {
-    return { error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请通过“导入旧项目”创建完整副本。' }
-  }
-  if (error instanceof Error && error.message === 'UNRECOGNIZED_SCHEMA') {
-    return { error: '无法识别项目格式，已拒绝打开。请核查创建该项目的软件和版本。' }
-  }
-  if (error instanceof Error && error.message === 'CORRUPT_SCHEMA') {
-    return { error: '项目数据结构已损坏，已拒绝打开。请保留原件并从备份恢复。' }
-  }
-  if (error instanceof Error && error.message === 'NEWER_SCHEMA_READ_ONLY') {
-    return { error: '该项目由更新版本创建，已拒绝打开。请升级软件后再打开。' }
-  }
-  if (error instanceof Error && error.message === 'LEGACY_IMPORT_UNSUPPORTED_SOURCE') {
-    return { error: '此项目版本不支持旧项目导入。请用原版本软件打开或导出。' }
+    return { errorCode: 'PROJECT_LEGACY_IMPORT_REQUIRED' as const, error: error.message }
   }
   if (
     typeof error === 'object'
@@ -60,10 +65,7 @@ function projectRootSelectionFailure(error: unknown) {
     && 'code' in error
     && error.code === 'PROJECT_ROOT_REQUIRED'
   ) {
-    return {
-      errorCode: 'PROJECT_ROOT_REQUIRED' as const,
-      error: error instanceof Error ? error.message : String(error),
-    }
+    return { errorCode: 'PROJECT_ROOT_REQUIRED' as const, error: 'PROJECT_ROOT_REQUIRED' }
   }
   return null
 }
@@ -157,7 +159,7 @@ function assertRequiredProjectSession(
   context: ProjectSessionContext | undefined,
 ): void {
   if (!context) {
-    throw new Error('缺少项目会话上下文，已拒绝操作')
+    throw new Error('PROJECT_SESSION_REQUIRED')
   }
   if (
     !projectId
@@ -165,14 +167,14 @@ function assertRequiredProjectSession(
     || (data.id && data.id !== projectId)
     || (data.sessionLease !== undefined && data.sessionLease !== context.leaseId)
   ) {
-    throw new Error('项目身份不匹配，已拒绝操作')
+    throw new Error('PROJECT_SESSION_IDENTITY_MISMATCH')
   }
   const active = projectAccess.assertCurrentProjectContext(context, currentProjectPath)
   if (
     !sameProjectPath(active.rootPath, currentProjectPath)
     || (data.path !== undefined && !sameProjectPath(active.rootPath, data.path))
   ) {
-    throw new Error('项目会话根目录不匹配，已拒绝操作')
+    throw new ProjectSessionStaleError('PROJECT_SESSION_ROOT_MISMATCH')
   }
 }
 
@@ -218,10 +220,10 @@ function neutralDatabaseState(): ProjectDatabaseState {
 
 function requireReadyDatabase(
   databaseState: ProjectDatabaseState,
-  message: string,
+  code: 'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE' | 'PROJECT_OPEN_DATABASE_UNAVAILABLE',
 ): ProjectDatabaseState {
   if (!databaseState.databaseRestored || !databaseState.dbReady) {
-    throw new Error(message)
+    throw new Error(code)
   }
   return databaseState
 }
@@ -265,7 +267,7 @@ function restoreTrustedProjectDatabase(
     !sameProjectPath(activeSession.rootPath, snapshot.rootPath)
     || !sameProjectPath(snapshot.databaseRoot, snapshot.rootPath)
   ) {
-    throw new Error('项目回滚快照已失效，已拒绝恢复数据库')
+    throw new Error('PROJECT_ROLLBACK_SNAPSHOT_STALE')
   }
 
   initProjectDatabase(snapshot.rootPath)
@@ -275,7 +277,7 @@ function restoreTrustedProjectDatabase(
     projectPath: snapshot.rootPath,
   }, getCurrentProjectPath())
   if (!sameProjectPath(restoredSession.rootPath, snapshot.rootPath)) {
-    throw new Error('项目回滚会话根目录不匹配，已拒绝恢复数据库')
+    throw new Error('PROJECT_ROLLBACK_ROOT_MISMATCH')
   }
   return databaseStateFor(snapshot.rootPath)
 }
@@ -295,7 +297,7 @@ function restoreProjectRollbackBoundary(
     return restoreTrustedProjectDatabase(boundary.snapshot)
   }
   if (boundary.kind === 'untrusted') {
-    throw new Error('缺少可信项目回滚快照，已拒绝恢复数据库')
+    throw new Error('PROJECT_ROLLBACK_UNTRUSTED')
   }
 
   // 首次启动没有旧项目可恢复。创建只负责落盘，因此显式关闭刚创建的
@@ -304,7 +306,7 @@ function restoreProjectRollbackBoundary(
   projectAccess.invalidateCurrentSession()
   const databaseState = neutralDatabaseState()
   if (!databaseState.databaseRestored || !databaseState.dbReady) {
-    throw new Error('未能恢复无项目数据库与无租约的中立态')
+    throw new Error('PROJECT_ROLLBACK_NEUTRAL_FAILED')
   }
   return databaseState
 }
@@ -343,7 +345,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
   }
   ipcMain.handle('dialog:select-legacy-project', async (event) => {
     const result = await dialog.showOpenDialog({
-      title: '选择旧版小说项目文件夹',
+      title: text('选择旧版小说项目文件夹', 'Choose the legacy novel project folder'),
       properties: ['openDirectory'],
     })
     return result.canceled || !result.filePaths[0] ? null
@@ -360,11 +362,17 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     }
     const confirmation = await dialog.showMessageBox({
       type: 'warning',
-      buttons: ['取消', '开始导入'],
+      buttons: [text('取消', 'Cancel'), text('开始导入', 'Start import')],
       defaultId: 0,
       cancelId: 0,
-      message: '请先保存并关闭旧版程序，以及正在同步或编辑这个项目的程序。',
-      detail: '导入期间不要重新打开或修改旧项目。应用将创建独立的新项目副本；旧项目保留，此后两份项目的修改不会自动同步。',
+      message: text(
+        '请先保存并关闭旧版程序，以及正在同步或编辑这个项目的程序。',
+        'First save and close the legacy app and any program that is syncing or editing this project.',
+      ),
+      detail: text(
+        '导入期间不要重新打开或修改旧项目。应用将创建独立的新项目副本；旧项目保留，此后两份项目的修改不会自动同步。',
+        'Do not reopen or change the legacy project during the import. The app creates an independent new copy; the legacy project is kept, and later changes to either copy do not sync.',
+      ),
     })
     if (confirmation.response !== 1) return { state: 'cancelled' as const }
     // 副本位置只来自 dialog:select-project-restore-target 签发、绑定本窗口的一次性授权。
@@ -426,6 +434,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         || path.resolve(projectPath) !== path.resolve(requestedProjectPath)
         || path.resolve(currentProjectPath) !== path.resolve(requestedProjectPath)
       ) {
+        // i18n-exempt: 只供打包烟测脚本确认项目已打开，不进界面
         return { success: false, error: '烟测项目未在应用中成功打开' }
       }
       fs.writeFileSync(markerPath, JSON.stringify({
@@ -484,7 +493,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           try {
             databaseState = requireReadyDatabase(
               restoreProjectRollbackBoundary(rollbackBoundary),
-              '过期创建请求未能恢复可信项目数据库',
+              'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
             )
           } catch (restoreError) {
             databaseState = failedDatabaseState()
@@ -516,7 +525,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         // 在此之前恢复旧项目，避免主进程与仍显示旧项目的界面身份分裂。
         const databaseState = requireReadyDatabase(
           restoreProjectRollbackBoundary(rollbackBoundary),
-          '创建项目后未能恢复可信项目数据库',
+          'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
         )
         return {
           success: true,
@@ -531,7 +540,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         try {
           databaseState = requireReadyDatabase(
             restoreProjectRollbackBoundary(rollbackBoundary),
-            '创建失败后未能恢复可信项目数据库',
+            'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
           )
         } catch (restoreError) {
           rollbackError = restoreError
@@ -543,9 +552,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           requestToken,
           ...databaseState,
           ...(projectStoragePreflightFailure(error) ?? {}),
-          error: rollbackError
-            ? `${String(error)}；回滚失败：${String(rollbackError)}`
-            : String(error),
+          error: withRollbackFailure(String(error), rollbackError),
         }
       }
     })
@@ -585,11 +592,11 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           : externalFileGrants.resolveDirectoryPath({
             grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
           })
-        if (!projectPath) throw new Error('项目未获授权，请重新选择项目目录。')
+        if (!projectPath) throw new Error('PROJECT_OPEN_GRANT_REQUIRED')
         const probedProject = projectAccess.probeExistingProject(projectPath)
         if (probedProject.kind === 'legacy' || probedProject.storageFormat === 'legacy') {
           if (recent?.projectId && (probedProject.kind !== 'manifest' || recent.projectId !== probedProject.projectId)) {
-            throw new Error('历史项目身份已变化，请重新选择项目目录。')
+            throw new Error('PROJECT_OPEN_RECENT_IDENTITY_CHANGED')
           }
           if (fs.existsSync(path.join(probedProject.rootPath, '.ai-novel-migration'))) {
             throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
@@ -602,7 +609,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         const trustedProject = projectAccess.adoptLegacyProject(probedProject)
         const resolvedProjectPath = trustedProject.rootPath
         if (recent?.projectId && recent.projectId !== trustedProject.projectId) {
-          throw new Error('历史项目身份已变化，请重新选择项目目录。')
+          throw new Error('PROJECT_OPEN_RECENT_IDENTITY_CHANGED')
         }
         initProjectDatabase(resolvedProjectPath)
 
@@ -651,7 +658,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           try {
             databaseState = requireReadyDatabase(
               restoreProjectRollbackBoundary(rollbackBoundary),
-              '过期打开请求未能恢复可信项目数据库',
+              'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
             )
           } catch (restoreError) {
             databaseState = failedDatabaseState()
@@ -682,7 +689,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
 
         const databaseState = requireReadyDatabase(
           databaseStateFor(resolvedProjectPath),
-          '项目数据库初始化后未处于可用状态',
+          'PROJECT_OPEN_DATABASE_UNAVAILABLE',
         )
         const session = projectAccess.beginSession(trustedProject)
         projectData.sessionLease = session.leaseId
@@ -699,17 +706,14 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         try {
           databaseState = requireReadyDatabase(
             restoreProjectRollbackBoundary(rollbackBoundary),
-            '打开失败后未能恢复可信项目数据库',
+            'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
           )
         } catch (restoreError) {
           rollbackError = restoreError
           databaseState = failedDatabaseState()
         }
         const selectionFailure = projectStoragePreflightFailure(error) ?? projectRootSelectionFailure(error)
-        const primaryMessage = selectionFailure?.error ?? String(error)
-        const errorMessage = rollbackError
-          ? `${primaryMessage}；回滚失败：${String(rollbackError)}`
-          : primaryMessage
+        const errorMessage = withRollbackFailure(selectionFailure?.error ?? String(error), rollbackError)
         return {
           success: false,
           project: null,
@@ -733,7 +737,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     context?: ProjectSessionContext,
   ) => {
     try {
-      if (!data.path) return { success: false, error: '缺少项目路径' }
+      if (!data.path) return { success: false, error: 'PROJECT_CONTEXT_REQUIRED' }
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       assertExpectedProjectPath(data.path, expectedProjectPath)
       assertRequiredProjectSession(_projectId, data, getCurrentProjectPath(), context)
@@ -772,7 +776,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       }
 
       const db = getProjectDb()
-      if (!db) throw new Error('项目数据库未打开')
+      if (!db) throw new Error('PROJECT_NOT_OPEN')
       db.transaction(() => {
         ProjectCoreRepository.update(coreUpdate)
       })()
@@ -792,7 +796,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         return {
           success: true,
           recentProjectUpdated: false,
-          warning: '项目已保存，但最近项目列表暂未更新',
+          warning: 'PROJECT_RECENT_LIST_UPDATE_FAILED',
         }
       }
     } catch (error) {
@@ -902,7 +906,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       }, projectPath)
       const currentProjectPath = getCurrentProjectPath()
       if (!sameProjectPath(currentProjectPath, resolvedPath)) {
-        throw new Error('项目会话与当前数据库不匹配，已拒绝删除')
+        throw new ProjectSessionStaleError('PROJECT_SESSION_DATABASE_MISMATCH')
       }
       deletingCurrentProject = true
 
@@ -942,9 +946,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           databaseRestored = false
         }
       }
-      const error = restoreError
-        ? `${String(deletionError ?? '项目目录删除失败')}；恢复项目数据库失败：${String(restoreError)}`
-        : String(deletionError ?? '项目目录删除失败')
+      const error = withRollbackFailure(deletionError ? String(deletionError) : 'PROJECT_DELETE_FAILED', restoreError)
       return { success: false, directoryDeleted: false, databaseRestored, error }
     }
 
@@ -952,7 +954,10 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     try {
       options.removeDeletedProjectBinding?.(deletedProjectId)
     } catch {
-      bindingCleanupWarning = '项目目录已删除，但本机云备份绑定暂未清理'
+      bindingCleanupWarning = text(
+        '项目目录已删除，但本机云备份绑定暂未清理',
+        'The project folder was deleted, but its local cloud backup binding was not cleaned up yet',
+      )
     }
     projectAccess.invalidateCurrentSession()
     try {
@@ -963,9 +968,11 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         databaseRestored: false,
         ...((deletionError || bindingCleanupWarning) ? {
           warning: [
-            deletionError ? `项目目录已删除：${String(deletionError)}` : undefined,
+            deletionError
+              ? text(`项目目录已删除：${String(deletionError)}`, `The project folder was deleted: ${String(deletionError)}`)
+              : undefined,
             bindingCleanupWarning,
-          ].filter(Boolean).join('；'),
+          ].filter(Boolean).join(text('；', '; ')),
         } : {}),
       }
     } catch (recentProjectError) {
@@ -975,18 +982,23 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         databaseRestored: false,
         warning: [
           bindingCleanupWarning,
-          `项目目录已删除，但最近项目列表更新失败：${String(recentProjectError)}`,
-        ].filter(Boolean).join('；'),
+          text(
+            `项目目录已删除，但最近项目列表更新失败：${String(recentProjectError)}`,
+            `The project folder was deleted, but the recent project list could not be updated: ${String(recentProjectError)}`,
+          ),
+        ].filter(Boolean).join(text('；', '; ')),
       }
     }
     },
   )
 
   ipcMain.handle('dialog:select-folder', async (event, purpose: 'project-create' | 'project-open') => {
-    if (purpose !== 'project-create' && purpose !== 'project-open') throw new Error('项目目录授权用途无效')
+    if (purpose !== 'project-create' && purpose !== 'project-open') throw new Error('PROJECT_DIRECTORY_GRANT_PURPOSE_INVALID')
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
-      title: purpose === 'project-create' ? '选择项目保存位置' : '选择项目目录',
+      title: purpose === 'project-create'
+        ? text('选择项目保存位置', 'Choose where to save the project')
+        : text('选择项目目录', 'Choose the project folder'),
     })
     if (result.canceled || result.filePaths.length === 0) return null
     return issueDirectoryGrant(event, result.filePaths[0], purpose)

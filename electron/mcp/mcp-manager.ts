@@ -145,14 +145,14 @@ class MCPManagerImpl {
         || typeof parsed.mcpServers !== 'object'
         || Array.isArray(parsed.mcpServers)
       ) {
-        return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏，未加载任何服务器' })
+        return revoke({ status: 'error', servers: [], error: 'MCP_CONFIG_INVALID' })
       }
 
       const servers: MCPServerSummary[] = []
       const trustedConfigs = new Map<string, MCPServerConfig>()
       for (const [id, value] of Object.entries(parsed.mcpServers)) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
-          return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏，未加载任何服务器' })
+          return revoke({ status: 'error', servers: [], error: 'MCP_CONFIG_INVALID' })
         }
         const cfg = value as MCPConfig['mcpServers'][string]
         if (
@@ -166,12 +166,12 @@ class MCPManagerImpl {
           ))
           || (cfg.url !== undefined && typeof cfg.url !== 'string')
         ) {
-          return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏，未加载任何服务器' })
+          return revoke({ status: 'error', servers: [], error: 'MCP_CONFIG_INVALID' })
         }
         const hasCommand = typeof cfg.command === 'string' && cfg.command.trim().length > 0
         const hasUrl = typeof cfg.url === 'string' && cfg.url.trim().length > 0
         if (hasCommand === hasUrl) {
-          return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏，未加载任何服务器' })
+          return revoke({ status: 'error', servers: [], error: 'MCP_CONFIG_INVALID' })
         }
         const trustedConfig: MCPServerConfig = {
           id,
@@ -197,7 +197,7 @@ class MCPManagerImpl {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return revoke({ status: 'missing', servers: [] })
       }
-      return revoke({ status: 'error', servers: [], error: 'MCP 配置损坏或无法读取，未加载任何服务器' })
+      return revoke({ status: 'error', servers: [], error: 'MCP_CONFIG_INVALID' })
     }
   }
 
@@ -206,7 +206,7 @@ class MCPManagerImpl {
    */
   async connect(serverId: string): Promise<void> {
     const config = this.loadedConfigs.get(serverId)
-    if (!config) throw new Error('MCP 服务器未配置或配置尚未加载')
+    if (!config) throw new Error('MCP_SERVER_NOT_CONFIGURED')
     if (this.servers.has(config.id)) {
       await this.disconnect(config.id)
     }
@@ -227,7 +227,7 @@ class MCPManagerImpl {
       if (config.transport === 'stdio') {
         await this.connectStdio(runtime)
       } else {
-        throw new Error('SSE 传输暂未实现')
+        throw new Error('MCP_SSE_UNSUPPORTED')
       }
 
       // 初始化 MCP 会话
@@ -244,10 +244,10 @@ class MCPManagerImpl {
       this.notifyToolsChange()
     } catch {
       runtime.process?.kill()
-      runtime.pendingRequests.forEach(p => p.reject(new Error('MCP 服务器连接失败')))
+      runtime.pendingRequests.forEach(p => p.reject(new Error('MCP_CONNECT_FAILED')))
       runtime.pendingRequests.clear()
       runtime.status = 'error'
-      runtime.error = 'MCP 服务器连接失败'
+      runtime.error = 'MCP_CONNECT_FAILED'
       this.notifyStatusChange(config.id, 'error', runtime.error)
       throw new Error(runtime.error)
     }
@@ -257,7 +257,7 @@ class MCPManagerImpl {
   private async connectStdio(runtime: MCPServerRuntime): Promise<void> {
     const { command, args = [], env } = runtime.config
     if (!command) {
-      throw new Error('stdio 模式需要 command 参数')
+      throw new Error('MCP_STDIO_COMMAND_REQUIRED')
     }
 
     const proc = spawn(command, args, {
@@ -289,12 +289,12 @@ class MCPManagerImpl {
 
     proc.on('error', () => {
       if (runtime.status === 'connecting') {
-        runtime.pendingRequests.forEach(p => p.reject(new Error('MCP 服务器连接失败')))
+        runtime.pendingRequests.forEach(p => p.reject(new Error('MCP_CONNECT_FAILED')))
         runtime.pendingRequests.clear()
         return
       }
       runtime.status = 'error'
-      runtime.error = 'MCP 服务器连接失败'
+      runtime.error = 'MCP_CONNECT_FAILED'
       this.notifyStatusChange(runtime.config.id, 'error', runtime.error)
     })
   }
@@ -355,7 +355,8 @@ class MCPManagerImpl {
       setTimeout(() => {
         if (runtime.pendingRequests.has(id)) {
           runtime.pendingRequests.delete(id)
-          reject(new Error(`MCP 请求超时: ${method}`))
+          console.warn(`[MCP:${runtime.config.id}] request timed out`, { method })
+          reject(new Error('MCP_REQUEST_TIMEOUT'))
         }
       }, 10000)
     })
@@ -416,7 +417,7 @@ class MCPManagerImpl {
   }> {
     const runtime = this.servers.get(serverId)
     if (!runtime || runtime.status !== 'connected') {
-      return { success: false, content: '', error: `服务器 ${serverId} 未连接` }
+      return { success: false, content: '', error: 'MCP_SERVER_NOT_CONNECTED' }
     }
 
     try {
@@ -442,7 +443,7 @@ class MCPManagerImpl {
     if (!runtime) return
 
     runtime.process?.kill()
-    runtime.pendingRequests.forEach(p => p.reject(new Error('连接已断开')))
+    runtime.pendingRequests.forEach(p => p.reject(new Error('MCP_SERVER_NOT_CONNECTED')))
     runtime.pendingRequests.clear()
     this.servers.delete(serverId)
     this.notifyStatusChange(serverId, 'disconnected')

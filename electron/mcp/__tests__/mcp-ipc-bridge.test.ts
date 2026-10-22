@@ -62,7 +62,7 @@ describe('MCP IPC trust boundary', () => {
     const result = await handler('mcp:connect')({}, 'safe-id')
     expect(result).toEqual({
       success: false,
-      error: 'MCP 服务器连接失败',
+      error: 'MCP_CONNECT_FAILED',
     })
     expect(JSON.stringify(result)).not.toContain('SECRET_INITIALIZE_ERROR_MARKER')
     expect(mocks.connect).toHaveBeenCalledWith('safe-id')
@@ -72,13 +72,13 @@ describe('MCP IPC trust boundary', () => {
     mocks.loadConfig.mockResolvedValueOnce({
       status: 'error',
       servers: [],
-      error: 'MCP 配置损坏，未加载任何服务器',
+      error: 'MCP_CONFIG_INVALID',
     })
     await expect(handler('mcp:load-config')({})).resolves.toEqual({
       success: false,
       status: 'error',
       servers: [],
-      error: 'MCP 配置损坏，未加载任何服务器',
+      error: 'MCP_CONFIG_INVALID',
     })
 
     mocks.loadConfig.mockResolvedValueOnce({ status: 'missing', servers: [] })
