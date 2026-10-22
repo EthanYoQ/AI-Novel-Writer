@@ -335,6 +335,47 @@ describe('current-project reference import', () => {
     expect(container.textContent).not.toContain('C:\\Users\\Private')
   })
 
+  it.each([
+    ['zh-CN', '选择', '等待确认的导入太多。请先完成或取消已打开的导入，再选择文件。'],
+    ['en-US', 'Choose', 'Too many imports are waiting to be confirmed. Finish or cancel the open imports, then choose files again.'],
+  ] as const)('explains a registered code thrown by file selection in %s instead of the raw IPC error (#484)', async (locale, choose, expected) => {
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return []
+      if (channel === 'dialog:select-novel-files') {
+        throw new Error("Error invoking remote method 'dialog:select-novel-files': Error: IMPORT_INSPECTION_LIMIT")
+      }
+      return { success: true }
+    })
+    await act(async () => useLocaleStore.setState({ locale }))
+    await act(async () => page.getByTestId('import-target-current').click())
+    await act(async () => page.getByRole('button', { name: choose, exact: true }).first().click())
+
+    await expect.element(page.getByText(expected, { exact: true })).toBeVisible()
+    expect(container.textContent).not.toContain('IMPORT_INSPECTION_LIMIT')
+  })
+
+  it.each([
+    ['zh-CN', 'IMPORT_RUN_EXECUTION_STALE', '上次失败：这次导入已由别的窗口接手'],
+    ['en-US', '导入已取消，停在了已保存的进度处。', 'Stage: global; progress: 0/1'],
+  ] as const)('shows the resumable run failure in the %s UI language (#484)', async (locale, lastError, expected) => {
+    const failed = importRun({ id: 'failed-run', stage: 'global', status: 'failed', lastError })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [failed]
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useLocaleStore.setState({ locale }))
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+
+    const resumable = page.getByTestId('import-resumable-run')
+    await expect.element(resumable).toHaveTextContent(expected)
+    const shown = resumable.element().textContent ?? ''
+    expect(shown).not.toContain('IMPORT_RUN_EXECUTION_STALE')
+    if (locale === 'en-US') expect(shown).not.toMatch(/\p{Script=Han}/u)
+  })
+
   it('does not reuse an ordinary selection run after the dialog closes and reopens', async () => {
     await act(async () => page.getByTestId('import-target-current').click())
     await act(async () => page.getByRole('button', { name: '选择' }).click())
@@ -418,6 +459,8 @@ describe('current-project reference import', () => {
 
     await expect.element(page.getByText('1 file selected', { exact: true })).toBeVisible()
     await expect.element(page.getByText('1 chapter', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('Chapter blueprints: ~4K', { exact: true })).toBeVisible()
+    await expect.element(page.getByText('Total: ~19K', { exact: true })).toBeVisible()
     expect(invoke.mock.calls.some(([channel]) => channel === 'import:inspect-source')).toBe(false)
   })
 

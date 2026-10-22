@@ -26,6 +26,7 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
 import { useLocaleStore } from '../../stores/locale-store'
+import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
 import { randomUUID } from '../../utils/id'
 import { pluralEn } from '../../shared/plural-en'
@@ -34,6 +35,8 @@ interface ImportNovelDialogProps {
   open: boolean
   onClose: () => void
 }
+
+const kTokens = (tokens: number) => `${(tokens / 1_000).toFixed(0)}K`
 
 /** 小说拆解与仿写向导对话框 */
 export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogProps) {
@@ -80,6 +83,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const resumableRun = resumableRuns.find(run => run.id === selectedResumableRunId)
     ?? resumableRuns[0]
     ?? null
+  // 存下的失败原因按导入运行的语言写好，也可能是旧版本留下的错误码：登记过的码按界面语言说明。
+  const resumableFailure = resumableRun?.lastError ? displayedErrorMessage(locale, resumableRun.lastError) : ''
   const resumableRunIsActive = resumableRun
     ? activeWorkflows.some(workflow => workflow.id === resumableRun.id)
     : false
@@ -148,13 +153,13 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     }).catch(error => {
       if (active && isProjectSessionCurrent(session)) {
         setAuthorPreview(null)
-        setSplitError(error instanceof Error ? error.message : String(error))
+        setSplitError(displayedErrorMessage(locale, error))
       }
     }).finally(() => {
       if (active && isProjectSessionCurrent(session)) setAuthorPreviewLoading(false)
     })
     return () => { active = false }
-  }, [currentProject, inspection, purpose, targetMode, text])
+  }, [currentProject, inspection, locale, purpose, targetMode, text])
 
   const changePurpose = useCallback((nextPurpose: ImportPurpose) => {
     setPurpose(nextPurpose)
@@ -245,11 +250,11 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         })
         setSplitDone(true)
       } else {
-        setSplitError(result.error || text('拆章失败', 'Could not split chapters'))
+        setSplitError(displayedErrorMessage(locale, result.error, text('拆章失败', 'Could not split chapters')))
       }
     } catch (e) {
       if (operationSession && !isProjectSessionCurrent(operationSession)) return
-      setSplitError(String(e))
+      setSplitError(displayedErrorMessage(locale, e))
     } finally {
       setSplitting(false)
     }
@@ -427,7 +432,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         setAuthorPreview(null)
         setSplitDone(false)
       }
-      setSplitError(e instanceof Error ? e.message : String(e))
+      setSplitError(displayedErrorMessage(locale, e))
     } finally {
       setImporting(false)
     }
@@ -466,7 +471,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         await applyPreparation(result.preparation, projectSession, resumableRun.id)
       } catch (error) {
         if (!isProjectSessionCurrent(projectSession)) return
-        setSplitError(error instanceof Error ? error.message : String(error))
+        setSplitError(displayedErrorMessage(locale, error))
       } finally {
         setImporting(false)
       }
@@ -513,7 +518,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       await launchRun(result.run)
     } catch (error) {
       if (!isProjectSessionCurrent(session)) return
-      setSplitError(error instanceof Error ? error.message : String(error))
+      setSplitError(displayedErrorMessage(locale, error))
     } finally {
       setImporting(false)
     }
@@ -664,10 +669,13 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
               </div>
               <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
                 {text(
-                  `阶段：${resumableRun.stage}；进度：${runProgress(resumableRun).completed}/${runProgress(resumableRun).total}`,
-                  `Stage: ${resumableRun.stage}; progress: ${runProgress(resumableRun).completed}/${runProgress(resumableRun).total}`,
+                  `阶段：${resumableRun.stage}；进度：${runProgress(resumableRun).completed}/${runProgress(resumableRun).total}${resumableFailure ? `；上次失败：${resumableFailure}` : ''}`,
+                  englishWithReason(
+                    `Stage: ${resumableRun.stage}; progress: ${runProgress(resumableRun).completed}/${runProgress(resumableRun).total}`,
+                    resumableFailure,
+                    ' — ',
+                  ),
                 )}
-                {resumableRun.lastError ? ` — ${resumableRun.lastError}` : ''}
               </div>
               {resumableRun.stage === 'parsing' && (resumableRun.unfinishedSourceDisplay?.length ?? 0) > 0 && (
                 <div
@@ -897,13 +905,11 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 </span>
               </div>
               <div className="text-xs space-y-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                {(locale === 'zh-CN'
-                  ? costEstimate.breakdown.split('\n')
-                  : [
-                      `Global analysis: ~15K`,
-                      `Chapter blueprints: ~${Math.max(0, costEstimate.estimatedTokens - 15000) / 1000}K`,
-                      `Total: ~${costEstimate.estimatedTokens / 1000}K`,
-                    ]).map((line, i) => <div key={i}>{line}</div>)}
+                {[
+                  text(`· 全局推演：~${kTokens(costEstimate.globalTokens)}`, `Global analysis: ~${kTokens(costEstimate.globalTokens)}`),
+                  text(`· 蓝图推演：~${kTokens(costEstimate.blueprintTokens)}`, `Chapter blueprints: ~${kTokens(costEstimate.blueprintTokens)}`),
+                  text(`· 总计：~${kTokens(costEstimate.estimatedTokens)}`, `Total: ~${kTokens(costEstimate.estimatedTokens)}`),
+                ].map((line, i) => <div key={i}>{line}</div>)}
               </div>
               <div className="flex items-center gap-1 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
                 <Clock size={11} />
