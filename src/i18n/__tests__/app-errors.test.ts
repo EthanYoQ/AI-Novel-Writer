@@ -217,3 +217,8 @@ describe('model, model settings and MCP errors from the main process (#474 B6)',
     expect(appErrorMessage('zh-CN', raw)).not.toMatch(/[A-Z]{3,}_/u)
   })
 })
+
+it('names the output limit setting by its field label when that setting is invalid', () => {
+  expect(appErrorMessage('zh-CN', { errorCode: 'MODEL_OUTPUT_LIMIT_INVALID' })).toContain('最大输出 Tokens')
+  expect(appErrorMessage('en-US', { errorCode: 'MODEL_OUTPUT_LIMIT_INVALID' })).toContain('max output tokens')
+})

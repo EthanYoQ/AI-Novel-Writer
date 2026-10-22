@@ -65,9 +65,10 @@ describe('generation budget diagnostics', () => {
     ], 'zh-CN')
 
     expect(container?.textContent).toContain('预算诊断')
-    expect(container?.textContent).toContain('需求输出 7,712 tokens')
-    expect(container?.textContent).toContain('总预留 9,224 tokens')
-    expect(container?.textContent).toContain('实际总量 4,160 tokens')
+    expect(container?.textContent).toContain('需求输出 7,712')
+    expect(container?.textContent).toContain('总预留额度 9,224')
+    expect(container?.textContent).toContain('实际总用量 4,160')
+    expect(container?.textContent).not.toMatch(/token/iu)
     expect(container?.textContent).toContain('实际用量未知')
     expect(container?.textContent).toContain('请求未发送，预留已释放')
     expect(container?.querySelectorAll('[data-actual-state="settled"]')).toHaveLength(1)

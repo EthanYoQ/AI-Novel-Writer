@@ -337,11 +337,11 @@ function logDraftAttempt(
 ): void {
   callbacks.log(workflowUiText(
     context,
-    `  ${phase.zhCN}：租约请求上限 ${receipt.budget.requestedOutputTokens} Tokens` +
-      `（单次上限 ${receipt.budget.maxRequestedOutputTokensPerAttempt}，` +
+    `  ${phase.zhCN}：本次请求输出额度 ${receipt.budget.requestedOutputTokens}` +
+      `（单次额度 ${receipt.budget.maxRequestedOutputTokensPerAttempt}，` +
       `累计 ${receipt.budget.cumulativeRequestedOutputTokens}/${receipt.budget.maxRequestedOutputTokens}）`,
-    `  ${phase.enUS}: lease request limit ${receipt.budget.requestedOutputTokens} tokens ` +
-      `(per-attempt limit ${receipt.budget.maxRequestedOutputTokensPerAttempt}, ` +
+    `  ${phase.enUS}: request output allowance ${receipt.budget.requestedOutputTokens} ` +
+      `(per-attempt allowance ${receipt.budget.maxRequestedOutputTokensPerAttempt}, ` +
       `cumulative ${receipt.budget.cumulativeRequestedOutputTokens}/${receipt.budget.maxRequestedOutputTokens})`,
   ))
 }

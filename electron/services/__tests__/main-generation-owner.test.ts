@@ -1820,7 +1820,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     const stored = new GenerationRunRepository(() => f.db).receipt(diagnostic.attemptId)
     expect(stored.budgetDecision).toMatchObject({ requestedOutputTokens: 1712, reservedOutputTokens: 16384 })
     expect(stored.attempt).toMatchObject({ requestedOutputTokens: 16384, reservedTokens: 50410 })
-    expect(formatGenerationBudgetDiagnostic(diagnostic, 'zh-CN')).toContain('语义输出估算 1,712 tokens，物理输出上限 16,384 tokens，总预留 50,410 tokens')
+    expect(formatGenerationBudgetDiagnostic(diagnostic, 'zh-CN')).toContain('语义输出估算 1,712，物理输出额度 16,384，总预留额度 50,410')
     expect(f.reopen().read(run.handle).budgetDiagnostics).toEqual(receipt.run.budgetDiagnostics)
   })
   it.each([16384, 32768, 65536])('honors the finite user output limit %i on a new planning root at the provider boundary', async maxTokens => {

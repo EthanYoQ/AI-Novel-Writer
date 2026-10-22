@@ -900,9 +900,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 {(locale === 'zh-CN'
                   ? costEstimate.breakdown.split('\n')
                   : [
-                      `Global analysis: ~15K tokens`,
-                      `Chapter blueprints: ~${Math.max(0, costEstimate.estimatedTokens - 15000) / 1000}K tokens`,
-                      `Total: ~${costEstimate.estimatedTokens / 1000}K tokens`,
+                      `Global analysis: ~15K`,
+                      `Chapter blueprints: ~${Math.max(0, costEstimate.estimatedTokens - 15000) / 1000}K`,
+                      `Total: ~${costEstimate.estimatedTokens / 1000}K`,
                     ]).map((line, i) => <div key={i}>{line}</div>)}
               </div>
               <div className="flex items-center gap-1 text-xs" style={{ color: 'var(--color-text-secondary)' }}>

@@ -163,9 +163,9 @@ export function formatTaskBudgetDecisionFailure(
 ): string {
   const decisive = decision.reasons.filter(reason => reason.selected).map(reason => reasonLabel(reason.code, locale))
   if (locale === 'zh-CN') {
-    return `任务需要 ${formatInteger(decision.requestedOutputTokens, locale)} 个输出 tokens；本次未发送。裁决依据：${decisive.join('、')}。`
+    return `任务需要输出额度 ${formatInteger(decision.requestedOutputTokens, locale)}；本次未发送。裁决依据：${decisive.join('、')}。`
   }
-  return `The task needs ${formatInteger(decision.requestedOutputTokens, locale)} output tokens; no request was sent. Decision factors: ${decisive.join(', ')}.`
+  return `The task needs an output allowance of ${formatInteger(decision.requestedOutputTokens, locale)}; no request was sent. Decision factors: ${decisive.join(', ')}.`
 }
 
 /** Formats only safe accounting fields. Prompt text, endpoint details and keys are absent by type. */
@@ -187,9 +187,9 @@ export function formatGenerationBudgetDiagnostic(
   const semanticTokens = diagnostic.reasons.find(reason => reason.code === 'task-demand')?.valueTokens
   const output = semanticTokens !== undefined && semanticTokens !== diagnostic.requestedOutputTokens
     ? locale === 'zh-CN'
-      ? `语义输出估算 ${formatInteger(semanticTokens, locale)} tokens，物理输出上限 ${requested} tokens`
-      : `semantic output estimate ${formatInteger(semanticTokens, locale)} tokens, physical output limit ${requested} tokens`
-    : locale === 'zh-CN' ? `需求输出 ${requested} tokens` : `requested output ${requested} tokens`
+      ? `语义输出估算 ${formatInteger(semanticTokens, locale)}，物理输出额度 ${requested}`
+      : `semantic output estimate ${formatInteger(semanticTokens, locale)}, physical output allowance ${requested}`
+    : locale === 'zh-CN' ? `需求输出 ${requested}` : `requested output ${requested}`
   const reserved = formatInteger(diagnostic.reservedTokens, locale)
   const selectedReasons = diagnostic.reasons
     .filter(reason => reason.selected)
@@ -201,23 +201,23 @@ export function formatGenerationBudgetDiagnostic(
       : `Decision factors: ${selectedReasons.join(', ')}.`
   if (diagnostic.actualState === 'not-dispatched') {
     return locale === 'zh-CN'
-      ? `${categoryText}；${output}，原总预留 ${reserved} tokens；请求未发送，预留已释放。${reasonSuffix}`
-      : `${categoryText}; ${output}, original total reservation ${reserved} tokens; no request was sent and the reservation was released. ${reasonSuffix}`.trim()
+      ? `${categoryText}；${output}，原总预留额度 ${reserved}；请求未发送，预留已释放。${reasonSuffix}`
+      : `${categoryText}; ${output}, original total reserved allowance ${reserved}; no request was sent and the reservation was released. ${reasonSuffix}`.trim()
   }
   if (diagnostic.actualState === 'unknown') {
     return locale === 'zh-CN'
-      ? `${categoryText}；${output}，总预留 ${reserved} tokens；实际用量未知，父任务仍按预留额度保守记账。${reasonSuffix}`
-      : `${categoryText}; ${output}, total reserved ${reserved} tokens; actual usage is unknown, so the parent task conservatively keeps the reservation. ${reasonSuffix}`.trim()
+      ? `${categoryText}；${output}，总预留额度 ${reserved}；实际用量未知，父任务仍按预留额度保守记账。${reasonSuffix}`
+      : `${categoryText}; ${output}, total reserved allowance ${reserved}; actual usage is unknown, so the parent task conservatively keeps the reservation. ${reasonSuffix}`.trim()
   }
   if (diagnostic.actualState === 'reserved') {
     return locale === 'zh-CN'
-      ? `${categoryText}；${output}，总预留 ${reserved} tokens；请求尚未结算。${reasonSuffix}`
-      : `${categoryText}; ${output}, total reserved ${reserved} tokens; the request has not settled yet. ${reasonSuffix}`.trim()
+      ? `${categoryText}；${output}，总预留额度 ${reserved}；请求尚未结算。${reasonSuffix}`
+      : `${categoryText}; ${output}, total reserved allowance ${reserved}; the request has not settled yet. ${reasonSuffix}`.trim()
   }
   const actual = diagnostic.actual
   const total = actual?.total === null || actual?.total === undefined
     ? (locale === 'zh-CN' ? '未知' : 'unknown')
-    : `${formatInteger(actual.total, locale)} tokens`
+    : formatInteger(actual.total, locale)
   const parts = actual
     ? [
         [locale === 'zh-CN' ? '输入' : 'input', actual.input],
@@ -227,8 +227,8 @@ export function formatGenerationBudgetDiagnostic(
         .join(locale === 'zh-CN' ? '、' : ', ')
     : (locale === 'zh-CN' ? '分项未知' : 'breakdown unknown')
   return locale === 'zh-CN'
-    ? `${categoryText}；${output}，总预留 ${reserved} tokens；实际总量 ${total}（${parts}）。${reasonSuffix}`
-    : `${categoryText}; ${output}, total reserved ${reserved} tokens; actual total ${total} (${parts}). ${reasonSuffix}`.trim()
+    ? `${categoryText}；${output}，总预留额度 ${reserved}；实际总用量 ${total}（${parts}）。${reasonSuffix}`
+    : `${categoryText}; ${output}, total reserved allowance ${reserved}; actual total usage ${total} (${parts}). ${reasonSuffix}`.trim()
 }
 
 /** Formats only the safe byte report; prompt fragments never cross this boundary. */
@@ -242,12 +242,12 @@ export function formatPromptBudgetFailure(report: PromptBudgetReport, locale: Lo
   if (locale === 'zh-CN') {
     const contextWindow = report.contextWindowTokens == null
       ? '未知'
-      : `${formatInteger(report.contextWindowTokens, locale)} tokens`
+      : formatInteger(report.contextWindowTokens, locale)
     const estimatedInput = report.estimatedInputTokens === undefined
       ? '未知'
-      : `${formatInteger(report.estimatedInputTokens, locale)} tokens`
+      : formatInteger(report.estimatedInputTokens, locale)
     return [
-      `提示词共 ${formatInteger(report.totalUtf8Bytes, locale)} UTF-8 字节，超过上限 ${formatInteger(report.limitUtf8Bytes, locale)} 字节；输出保留空间为 ${formatInteger(report.reservedOutputTokens, locale)} tokens。`,
+      `提示词共 ${formatInteger(report.totalUtf8Bytes, locale)} UTF-8 字节，超过上限 ${formatInteger(report.limitUtf8Bytes, locale)} 字节；输出预留额度为 ${formatInteger(report.reservedOutputTokens, locale)}。`,
       `模型上下文：${contextWindow}；估算输入：${estimatedInput}。`,
       `主要占用：${contributors}。`,
       `模型：${report.modelId}；结果码：${report.errorCode}。`,
@@ -256,12 +256,12 @@ export function formatPromptBudgetFailure(report: PromptBudgetReport, locale: Lo
 
   const contextWindow = report.contextWindowTokens == null
     ? 'unknown'
-    : `${formatInteger(report.contextWindowTokens, locale)} tokens`
+    : formatInteger(report.contextWindowTokens, locale)
   const estimatedInput = report.estimatedInputTokens === undefined
     ? 'unknown'
-    : `${formatInteger(report.estimatedInputTokens, locale)} tokens`
+    : formatInteger(report.estimatedInputTokens, locale)
   return [
-    `The prompt uses ${formatInteger(report.totalUtf8Bytes, locale)} UTF-8 bytes, exceeding the ${formatInteger(report.limitUtf8Bytes, locale)}-byte limit; ${formatInteger(report.reservedOutputTokens, locale)} tokens are reserved for output. `,
+    `The prompt uses ${formatInteger(report.totalUtf8Bytes, locale)} UTF-8 bytes, exceeding the ${formatInteger(report.limitUtf8Bytes, locale)}-byte limit; the reserved output allowance is ${formatInteger(report.reservedOutputTokens, locale)}. `,
     `Model context: ${contextWindow}; estimated input: ${estimatedInput}. `,
     `Top contributors: ${contributors}. `,
     `Model: ${report.modelId}; result code: ${report.errorCode}.`,
