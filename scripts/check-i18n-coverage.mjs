@@ -55,10 +55,6 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
   workflowErrorBoundaries: [
     'src/services/workflows',
   ],
-  // 还开着的 PR #475 改动这些工作流文件：先只拦只有中文的说明，它合入后清空这里，再改掉只有英文的说明。
-  pendingWorkflowEnglishErrorFiles: [
-    'src/services/workflows/import-workflow.ts',
-  ],
   // 工作流目录以外的渲染层文件（含与主进程共用的 src/shared）抛出的说明会经各处 catch 显示给作者（#474）：
   // 同样不能写只有中文的原文。纯内部断言或只进日志的，在 throw 所在行或上一行写 `// i18n-exempt: <理由>`；
   // 同一个解析或校验函数里的多处可以写在函数声明正上一行。Promise.reject(new Error(...)) 按 throw 算。
@@ -70,12 +66,6 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
   // 否则主进程的错误码会以裸码出现在界面上。作者看不到或值本身不是字符串的，写 `// i18n-exempt: <理由>`。
   rendererErrorDisplayBoundaries: [
     'src',
-  ],
-  // 还开着的 PR #475 改动这些文件；它合入后把这里清空，再按上面的规则修。
-  pendingRendererErrorDisplayFiles: [
-    'src/components/dialogs/ImportNovelDialog.tsx',
-    'src/components/settings/ModelForm.tsx',
-    'src/services/workflows/commands/generate-draft.command.ts',
   ],
   // 这些命令连错误码也不能直接抛（#408）：每条失败都要给作者能读的说明。
   strictWorkflowCommandErrorBoundaries: [
@@ -843,16 +833,12 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
   }
   const commandFiles = new Set(I18N_COVERAGE_BOUNDARIES.workflowCommandErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative))))
   const workflowFiles = new Set([...commandFiles, ...I18N_COVERAGE_BOUNDARIES.workflowErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative)))])
-  const pendingWorkflowEnglishFiles = new Set(I18N_COVERAGE_BOUNDARIES.pendingWorkflowEnglishErrorFiles)
   for (const file of workflowFiles) {
     const relativeFile = relativePath(root, file)
     if (!file.endsWith('.ts') || relativeFile.split('/').includes('__tests__')) continue
     const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
     const allowErrorCodes = !I18N_COVERAGE_BOUNDARIES.strictWorkflowCommandErrorBoundaries.includes(relativeFile)
-    let mode = 'untranslated'
-    if (commandFiles.has(file)) mode = 'command'
-    else if (pendingWorkflowEnglishFiles.has(relativeFile)) mode = 'chinese'
-    inspectThrownErrors(violations, root, file, sourceFile, mode, allowErrorCodes)
+    inspectThrownErrors(violations, root, file, sourceFile, commandFiles.has(file) ? 'command' : 'untranslated', allowErrorCodes)
   }
   const rendererThrowFiles = new Set(I18N_COVERAGE_BOUNDARIES.rendererThrowErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative))))
   for (const file of rendererThrowFiles) {
@@ -862,10 +848,9 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
       file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
     inspectThrownErrors(violations, root, file, sourceFile, 'chinese', true)
   }
-  const pendingDisplayFiles = new Set(I18N_COVERAGE_BOUNDARIES.pendingRendererErrorDisplayFiles)
   for (const file of new Set(I18N_COVERAGE_BOUNDARIES.rendererErrorDisplayBoundaries.flatMap(relative => filesAt(path.join(root, relative))))) {
     const relativeFile = relativePath(root, file)
-    if (!/\.tsx?$/u.test(file) || testOrDeclarationFile.test(file) || relativeFile.split('/').includes('__tests__') || pendingDisplayFiles.has(relativeFile)) continue
+    if (!/\.tsx?$/u.test(file) || testOrDeclarationFile.test(file) || relativeFile.split('/').includes('__tests__')) continue
     const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true,
       file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
     inspectRawErrorDisplays(violations, root, file, sourceFile)

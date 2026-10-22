@@ -17,6 +17,7 @@ import { workflowResourceKey, type StepCallbacks, type WorkflowContext, type Wor
 import {
   IMPORT_CHAPTER_PAGE_SIZE,
   ImportRunOrchestrator,
+  importRecordError,
   type ImportRunOrchestratorDependencies,
 } from './import-run-orchestrator'
 import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh'
@@ -38,11 +39,6 @@ export interface ImportWorkflowParams {
 
 function textForLocale(locale: ImportRunSnapshot['locale'], zhCNText: string, enUSText: string): string {
   return locale === 'en-US' ? enUSText : zhCNText
-}
-
-function required<T>(result: { success: boolean; error?: string } & T, fallback: string): T {
-  if (!result.success) throw new Error(result.error || fallback)
-  return result
 }
 
 function incompleteAuthorManifestError(run: ImportRunSnapshot): Error {
@@ -124,11 +120,17 @@ function productionDependencies(
 ): ImportRunOrchestratorDependencies {
   const session = context.projectSession
   const projectPath = context.projectPath
+  // 主进程没给原因时的兜底说明进运行卡片的步骤详情，按导入运行的语言写（工作流的 uiLocale 就是 run.locale）。
+  const required = <T,>(result: { success: boolean; error?: string } & T, zhCNText: string, enUSText: string): T => {
+    if (!result.success) throw new Error(result.error || textForLocale(context.uiLocale, zhCNText, enUSText))
+    return result
+  }
   return {
     getRun: runId => ipc.invokeWithProjectSession(session, 'db:import-run-get', runId, projectPath),
     startOrResume: async (runId, owner) => {
       const start = required(
         await ipc.invokeWithProjectSession(session, 'db:import-run-start-resume', runId, owner, projectPath),
+        '无法开始或继续这次导入。',
         'Could not start or resume the import run.',
       ).start!
       context.data.importRunExecution = start.execution
@@ -139,6 +141,7 @@ function productionDependencies(
         await ipc.invokeWithProjectSession(
           session, 'db:import-run-renew-execution', runId, execution, projectPath,
         ),
+        '无法延长这次导入的写入时限。',
         'Could not renew the import execution lease.',
       ).execution!
       context.data.importRunExecution = renewed
@@ -160,6 +163,7 @@ function productionDependencies(
         execution,
         projectPath,
       ),
+      '无法保存 AI 生成的导入结果。',
       'Could not freeze generated import output.',
     ).receipt!,
     commitEffectReceipt: async (runId, stage, checkpoint, execution) => required(
@@ -172,6 +176,7 @@ function productionDependencies(
         execution,
         projectPath,
       ),
+      '无法提交 AI 生成的导入结果。',
       'Could not commit the generated import output.',
     ).result!,
     replayCommittedEffect: async (receipt, run) => {
@@ -187,14 +192,20 @@ function productionDependencies(
         projectPath,
       )
       if (!durableReceipt || JSON.stringify(durableReceipt) !== JSON.stringify(receipt)) {
-        throw new Error('Committed import effect receipt does not match durable storage.')
+        throw importRecordError(
+          run.locale,
+          '已提交的导入结果与保存的记录不一致。',
+          'Committed import effect receipt does not match durable storage.',
+        )
       }
       assertImportRunEffectReceiptMetadata(durableReceipt, run)
-      if (durableReceipt.state !== 'committed') throw new Error('Prepared import effects cannot be replayed.')
+      if (durableReceipt.state !== 'committed') {
+        throw importRecordError(run.locale, '导入结果还没有提交，不能直接恢复。', 'Prepared import effects cannot be replayed.')
+      }
       if (durableReceipt.kind === 'chapter-blueprint-range') {
         const committed = durableReceipt.effectReceipt as BlueprintRangeCommitReceipt | undefined
         if (!committed?.characterSyncOperation?.operationId) {
-          throw new Error('Committed blueprint import receipt is incomplete.')
+          throw importRecordError(run.locale, '已保存的章节蓝图导入记录不完整。', 'Committed blueprint import receipt is incomplete.')
         }
         await retryDirectoryCharacterSync(
           committed.characterSyncOperation.operationId,
@@ -210,7 +221,7 @@ function productionDependencies(
           !authorReceipt
           || authorReceipt.operationId !== `author-import:${run.id}`
           || authorReceipt.drafts.length !== run.totalChapters
-        ) throw new Error('Committed author-manuscript receipt is incomplete.')
+        ) throw importRecordError(run.locale, '已保存的作者原稿导入记录不完整。', 'Committed author-manuscript receipt is incomplete.')
         return
       }
       const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
@@ -218,7 +229,13 @@ function productionDependencies(
       if (!core || !current || !sameProjectSessionContext(
         session,
         projectSessionContextFromProject(current),
-      )) throw new Error('The project changed before the committed import effect could be restored.')
+      )) {
+        throw new Error(textForLocale(
+          run.locale,
+          '当前项目已切换，无法恢复已保存的导入结果。',
+          'The project changed before the committed import effect could be restored.',
+        ))
+      }
       useProjectStore.setState({
         currentProject: {
           ...current,
@@ -324,7 +341,11 @@ function productionDependencies(
       )
       if (!receipt) return null
       if (receipt.state !== 'committed' || receipt.kind !== 'author-finalized-batch') {
-        throw new Error('Author-manuscript finalization has not been durably committed.')
+        throw importRecordError(
+          context.uiLocale,
+          '作者原稿定稿还没有保存完成。',
+          'Author-manuscript finalization has not been durably committed.',
+        )
       }
       return receipt.effectReceipt as FinalizedDraftImportReceipt
     },
@@ -401,6 +422,7 @@ function productionDependencies(
         await ipc.invokeWithProjectSession(
           session, 'db:import-run-complete-batch', runId, stage, checkpoint, execution, projectPath,
         ),
+        '无法保存导入进度。',
         'Could not save the import checkpoint.',
       )
       return { cancelApplied: result.cancelApplied ?? false, run: result.run! }
@@ -409,22 +431,26 @@ function productionDependencies(
       await ipc.invokeWithProjectSession(
         session, 'db:import-run-advance-stage', runId, completedStage, nextStage, execution, projectPath,
       ),
+      '无法推进导入进度。',
       'Could not advance the import checkpoint.',
     ).run!,
     fail: async (runId, stage, error, execution) => required(
       await ipc.invokeWithProjectSession(
         session, 'db:import-run-fail', runId, stage, error, execution, projectPath,
       ),
+      '无法保存导入失败记录。',
       'Could not save the import failure.',
     ).run!,
     cancelAtBoundary: async (runId, execution) => required(
       await ipc.invokeWithProjectSession(
         session, 'db:import-run-cancel-at-boundary', runId, execution, projectPath,
       ),
+      '无法保存导入取消状态。',
       'Could not save import cancellation.',
     ).run!,
     complete: async (runId, execution) => required(
       await ipc.invokeWithProjectSession(session, 'db:import-run-complete', runId, execution, projectPath),
+      '无法完成这次导入。',
       'Could not complete the import run.',
     ).run!,
   }
@@ -575,22 +601,17 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
 }
 
 export function estimateImportCost(_totalWords: number, chapterCount: number): {
+  globalTokens: number
+  blueprintTokens: number
   estimatedTokens: number
   estimatedMinutes: number
-  breakdown: string
 } {
-  const globalInferTokens = 15_000
-  const blueprintTokensPerChapter = 4_000
-  const totalBlueprintTokens = blueprintTokensPerChapter * chapterCount
-  const estimatedTokens = globalInferTokens + totalBlueprintTokens
-  const estimatedMinutes = Math.ceil((1 + Math.ceil(chapterCount / 5)) * 12 / 60)
+  const globalTokens = 15_000
+  const blueprintTokens = 4_000 * chapterCount
   return {
-    estimatedTokens,
-    estimatedMinutes,
-    breakdown: [
-      `· 全局推演：~${(globalInferTokens / 1_000).toFixed(0)}K`,
-      `· 蓝图推演：~${(totalBlueprintTokens / 1_000).toFixed(0)}K`,
-      `· 总计：~${(estimatedTokens / 1_000).toFixed(0)}K`,
-    ].join('\n'),
+    globalTokens,
+    blueprintTokens,
+    estimatedTokens: globalTokens + blueprintTokens,
+    estimatedMinutes: Math.ceil((1 + Math.ceil(chapterCount / 5)) * 12 / 60),
   }
 }

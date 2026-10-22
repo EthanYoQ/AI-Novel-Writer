@@ -457,7 +457,7 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
-  it('rejects English-only errors thrown under the workflows directory, except codes, exemptions and files still pending in #475 (#474)', () => {
+  it('rejects English-only errors thrown under the workflows directory, except codes and exemptions, including import-workflow.ts (#474, #484)', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-workflow-english-'))
     try {
       writeFixture(root, 'src/services/workflows/import-run-orchestrator.ts', `
@@ -486,7 +486,7 @@ describe('i18n coverage boundary scanner', () => {
       const result = runChecker(root)
 
       expect(result.status).toBe(1)
-      const lines = result.output.split(/\r?\n/).filter(line => line.includes('[thrown-error]'))
+      const lines = result.output.split(/\r?\n/).filter(line => line.includes('import-run-orchestrator.ts') && line.includes('[thrown-error]'))
       expect(lines.map(line => line.replace(/^.*?:(\d+) \[thrown-error\] /u, '$1 '))).toEqual([
         "4 'Import cancelled at a safe boundary.'",
         '5 `The receipt is missing Chapter ${chapter}.`',
@@ -494,6 +494,7 @@ describe('i18n coverage boundary scanner', () => {
         "7 locale === 'en-US' ? 'Not ready.' : 'Still not ready.'",
         "12 ({ copy: 'Inline fallback.' } as Record<string, string>)['copy']",
       ])
+      expect(result.output).toContain("src/services/workflows/import-workflow.ts:3 [thrown-error] 'Committed import effect receipt does not match durable storage.'")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -548,7 +549,7 @@ describe('i18n coverage boundary scanner', () => {
     }
   })
 
-  it('rejects main-process errors handed to a display unchanged, and accepts them after displayedErrorMessage (#474)', () => {
+  it('rejects main-process errors handed to a display unchanged, and accepts them after displayedErrorMessage, with no pending files (#474, #484)', () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-i18n-raw-error-display-'))
     try {
       writeFixture(root, 'src/components/stage/use-delete.ts', `
@@ -596,6 +597,7 @@ describe('i18n coverage boundary scanner', () => {
       expect(result.status).toBe(1)
       const lines = result.output.split(/\r?\n/).filter(line => line.includes('[raw-error-display:'))
       expect(lines).toEqual([
+        'src/components/dialogs/ImportNovelDialog.tsx:3 [raw-error-display:setSplitError] error.message',
         "src/components/stage/use-delete.ts:10 [raw-error-display:toast.error] result.error || text('删除失败', 'Delete failed')",
         "src/components/stage/use-delete.ts:11 [raw-error-display:text] result.error ?? '未知错误'",
         "src/components/stage/use-delete.ts:12 [raw-error-display:setDeleteError] result.error ?? ''",

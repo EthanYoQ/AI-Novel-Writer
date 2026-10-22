@@ -1237,6 +1237,31 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(callbacks.replaceText).toHaveBeenLastCalledWith(expect.stringContaining('正文太短。'))
   })
 
+  it.each([
+    ['zh-CN', '恢复稿没有可见正文，没有保存。请写入正文后再保存。'],
+    ['en-US', 'The recovered draft has no visible text, so it was not saved. Add text, then save.'],
+  ] as const)('explains a registered code thrown while saving the recovery candidate in %s (#484)', async (uiLocale, expected) => {
+    const runtime = fakeRuntime(() => outcome('正文太短。', 'stop'))
+    const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500, uiLocale })
+    const baseInvoke = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:recovery-candidate-record') {
+        throw new Error("Error invoking remote method 'db:recovery-candidate-record': Error: RECOVERY_CANDIDATE_TEXT_EMPTY")
+      }
+      return baseInvoke(channel, ...args)
+    })
+
+    const failure = await command.execute({ step: { id: 'draft-step' }, context, callbacks })
+      .then(() => new Error('generation did not fail'), (error: Error) => error)
+
+    expect(failure.message).toContain(expected)
+    expect(failure.message).not.toContain('RECOVERY_CANDIDATE_TEXT_EMPTY')
+    const logged = vi.mocked(callbacks.log).mock.calls.map(([line]) => line).join('\n')
+    expect(logged).toContain(expected)
+    expect(logged).not.toContain('Error invoking remote method')
+    if (uiLocale === 'en-US') expect(failure.message).not.toMatch(/\p{Script=Han}/u)
+  })
+
   it('does not create a recovery candidate for a successful generation', async () => {
     const runtime = fakeOutcomes(outcome('正'.repeat(450), 'stop'))
     const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500 })

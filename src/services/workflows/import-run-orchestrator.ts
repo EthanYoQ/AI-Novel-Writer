@@ -157,7 +157,7 @@ function stopIfCancelled(context: ImportRunExecutionContext, locale: ImportRunLo
 }
 
 /** 收据或检查点与持久化记录对不上：作者照做不了什么，只能从导入对话框继续或重新导入，说明里留下是哪一项。 */
-function importRecordError(locale: ImportRunLocale, zhCNText: string, enUSText: string): Error {
+export function importRecordError(locale: ImportRunLocale, zhCNText: string, enUSText: string): Error {
   return new Error(localize(
     locale,
     `${zhCNText}请在导入对话框里继续这次导入；如果仍然出现，请重新导入并把这段说明反馈给我们。`,

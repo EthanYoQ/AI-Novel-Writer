@@ -45,6 +45,9 @@ function run(overrides: Partial<ImportRunSnapshot> = {}): ImportRunSnapshot {
   }
 }
 
+const latinWord = /[A-Za-z]{3,}/u
+const han = /\p{Script=Han}/u
+
 const callbacks: StepCallbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
 
 function context(): WorkflowContext {
@@ -312,8 +315,9 @@ describe('createImportWorkflow', () => {
       executionOwner,
     })
 
-    await expect(workflow.steps[1].executor({} as never, context(), callbacks))
-      .rejects.toThrow(/does not match durable storage/)
+    const failure = await workflow.steps[1].executor({} as never, context(), callbacks).catch((error: Error) => error)
+    expect((failure as Error).message).toMatch(/^已提交的导入结果与保存的记录不一致/u)
+    expect((failure as Error).message).not.toMatch(latinWord)
     expect(receiptReads).toBe(2)
   })
 
@@ -456,10 +460,95 @@ describe('createImportWorkflow', () => {
 })
 
 describe('estimateImportCost', () => {
-  it('shows the usage breakdown without implementation units', () => {
-    const estimate = estimateImportCost(0, 10)
-    expect(estimate.estimatedTokens).toBe(55_000)
-    expect(estimate.breakdown.split('\n')).toEqual(['· 全局推演：~15K', '· 蓝图推演：~40K', '· 总计：~55K'])
-    expect(estimate.breakdown).not.toMatch(/token/iu)
+  it('returns the global and blueprint parts so the dialog can word them in either language', () => {
+    expect(estimateImportCost(0, 10)).toEqual({
+      globalTokens: 15_000,
+      blueprintTokens: 40_000,
+      estimatedTokens: 55_000,
+      estimatedMinutes: 1,
+    })
+  })
+})
+
+describe('import workflow failure copy follows the import run locale (#484)', () => {
+  const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+
+  function stepFailure(
+    snapshot: ImportRunSnapshot,
+    step: number,
+    channels: Record<string, (...args: unknown[]) => unknown>,
+  ): Promise<Error> {
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channels[channel]) return channels[channel](...args)
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-start-resume') return { success: true, start: { run: snapshot, execution } }
+      if (channel === 'db:import-run-renew-execution') return { success: true, execution }
+      if (channel === 'db:import-run-list-chapters') return []
+      if (channel === 'db:import-run-fail') return { success: true, run: { ...snapshot, status: 'failed' } }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({
+      projectPath: session.projectPath,
+      projectSession: session,
+      run: snapshot,
+      executionOwner,
+      ...(snapshot.purpose === 'author-manuscript' ? { authorChapterNumbers: [1] } : {}),
+    })
+    return workflow.steps[step].executor({} as never, { ...context(), uiLocale: snapshot.locale }, callbacks)
+      .then(() => new Error('step did not fail'), (error: Error) => error)
+  }
+
+  const authorRun = (locale: ImportRunSnapshot['locale']) => run({
+    locale,
+    purpose: 'author-manuscript',
+    effectNamespace: 'import:author-manuscript:import-run-1',
+    stage: 'author-publish',
+    authorityFingerprint: 'c'.repeat(64),
+  })
+  const preparedAuthorReceipt = (snapshot: ImportRunSnapshot): ImportRunEffectReceipt => ({
+    schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+    runId: snapshot.id,
+    effectNamespace: snapshot.effectNamespace,
+    effectKey: 'author-commit',
+    stage: 'author-commit',
+    batchId: 'done',
+    kind: 'author-finalized-batch',
+    payloadHash: 'c'.repeat(64),
+    state: 'prepared',
+    payload: {},
+    createdAt: '2026-01-01',
+    updatedAt: '2026-01-01',
+  })
+
+  it('explains an author receipt that was never durably committed in Chinese for a Chinese run', async () => {
+    const snapshot = authorRun('zh-CN')
+    const failure = await stepFailure(snapshot, 1, {
+      'db:import-run-effect-receipt-get': () => preparedAuthorReceipt(snapshot),
+    })
+
+    expect(failure.message).toMatch(han)
+    expect(failure.message).not.toMatch(latinWord)
+  })
+
+  it('keeps the English explanation for an English run', async () => {
+    const snapshot = authorRun('en-US')
+    const failure = await stepFailure(snapshot, 1, {
+      'db:import-run-effect-receipt-get': () => preparedAuthorReceipt(snapshot),
+    })
+
+    expect(failure.message).toMatch(/has not been durably committed/u)
+    expect(failure.message).not.toMatch(han)
+  })
+
+  it.each([
+    ['zh-CN', /^无法开始或继续这次导入/u],
+    ['en-US', /^Could not start or resume the import run\.$/u],
+  ] as const)('falls back to %s copy when the main process refuses without a reason', async (locale, expected) => {
+    const snapshot = run({ locale, stage: 'global' })
+    const failure = await stepFailure(snapshot, 1, {
+      'db:import-run-start-resume': () => ({ success: false }),
+    })
+
+    expect(failure.message).toMatch(expected)
   })
 })

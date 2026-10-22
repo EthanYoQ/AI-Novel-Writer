@@ -461,6 +461,46 @@ export const VISUAL_SCENARIOS = {
     return observed
   } },
 
+  // #484：中文界面导入参考小说，主进程拒绝开始导入却没给原因时，运行卡片里失败步骤的兜底说明是中文，
+  // 不再是导入工作流原先只有英文的那句。主进程正常时总会给原因，所以在主进程里换掉这个通道的处理函数。
+  'import-run-start-refused-zh': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ app, page, roots, shoot }) => {
+    const file = path.join(roots.temp, 'reference-novel.txt')
+    fs.writeFileSync(file, `第1章 旧港\n旧港的潮水刚退，青石上还留着一层薄薄的盐霜。\n\n第2章 北堤\n北堤上的风很大。\n`)
+    assert.ok(await app.evaluate(({ dialog, ipcMain }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
+      const handlers = ipcMain._invokeHandlers
+      if (!handlers.has('db:import-run-start-resume')) return false
+      handlers.set('db:import-run-start-resume', async () => ({ success: false }))
+      return true
+    }, file), '能在主进程里换掉开始导入的处理函数')
+
+    await stage.root(page).getByRole('banner').getByRole('button', { name: `《${STAGE_SAMPLE.name}》作品菜单` }).click()
+    await page.getByRole('menuitem', { name: '小说拆解与仿写…', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '小说拆解与仿写' })
+    await dialog.getByTestId('import-target-current').click()
+    await dialog.getByRole('button', { name: '选择', exact: true }).click()
+    await dialog.getByRole('button', { name: '导入当前项目（2 章）', disabled: false }).click()
+    await dialog.waitFor({ state: 'hidden' })
+
+    await runSheet.waitUntilOpen(page)
+    const failedStep = runSheet.sheet(page).locator('.run-step[data-status="failed"] .run-step-row').first()
+    await failedStep.waitFor({ state: 'visible', timeout: 30_000 })
+    if (await failedStep.getAttribute('aria-expanded') !== 'true') await failedStep.click()
+    const stepError = runSheet.sheet(page).locator('.run-step[data-status="failed"] .run-step-error').first()
+    await stepError.waitFor({ state: 'visible' })
+    const observed = {
+      stepError: await stepError.innerText(),
+      sheet: await runSheet.sheet(page).innerText(),
+      lang: await page.evaluate(() => document.documentElement.lang),
+    }
+    await settle(page)
+    await shoot('import-run-start-refused-zh')
+    assert.equal(observed.lang, 'zh-CN')
+    assert.equal(observed.stepError, '无法开始或继续这次导入。')
+    assert.doesNotMatch(observed.sheet, /Could not start/u, '中文界面的运行侧页不出现导入工作流的英文兜底')
+    return observed
+  } },
+
   'rdv-toasts': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: seedCalls }), run: async ({ page }) => {
     const copy = await diagnosticsCopyButton(page)
     await stubClipboard(page, true)
