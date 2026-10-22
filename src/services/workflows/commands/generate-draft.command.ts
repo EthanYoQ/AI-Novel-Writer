@@ -1,5 +1,5 @@
 import { chapterTimeContinuity } from '../../../shared/chapter-time-continuity'
-import { appErrorMessage } from '../../../i18n/app-errors'
+import { appErrorMessage, displayedErrorMessage, englishWithReason } from '../../../i18n/app-errors'
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
@@ -504,6 +504,14 @@ async function sha256Hex(value: string): Promise<string> {
 export function appendVisibleDraftContinuation(draft: string, continuation: string,
   version: DraftVisibleTextVersion = DRAFT_VISIBLE_TEXT_VERSION): string {
   return composeDraftVisibleContinuation(draft, continuation, version)
+}
+
+/**
+ * 拼进日志与失败说明的原因：只看 message，裸码（含 IPC 前缀）按界面语言说明。不看 error.code，
+ * 因为带码的错误（workflowMainProcessError）message 里已经写好了概述，按码替换会丢掉它。
+ */
+function shownReason(context: Pick<CommandExecuteParams['context'], 'uiLocale'>, error: unknown): string {
+  return displayedErrorMessage(context.uiLocale, error instanceof Error ? error.message : error)
 }
 
 export class GenerateDraftCommand extends BaseWorkflowCommand {
@@ -1263,16 +1271,16 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             'Generation could not complete safely. The visible prose was saved as a project recovery candidate and was not added to the draft library.',
           ))
         } catch (persistenceError) {
-          const persistenceReason = persistenceError instanceof Error
-            ? persistenceError.message
-            : String(persistenceError)
+          // failureReason 原样进恢复记录供定位；给作者看的说明按界面语言解释登记过的码。
+          const failureDetail = shownReason(context, error)
+          const persistenceDetail = shownReason(context, persistenceError)
           callbacks.log(uiText(
-            `恢复候选保存失败；可见正文仍保留在当前步骤中：${persistenceReason}`,
-            `Saving the recovery candidate failed. The visible prose remains in the current step: ${persistenceReason}`,
+            `恢复候选保存失败；可见正文仍保留在当前步骤中：${persistenceDetail}`,
+            englishWithReason('Saving the recovery candidate failed. The visible prose remains in the current step', persistenceDetail, ': '),
           ))
           throw new Error(uiText(
-            `${failureReason}；恢复候选保存失败：${persistenceReason}`,
-            `${failureReason}; saving the recovery candidate failed: ${persistenceReason}`,
+            `${failureDetail}；恢复候选保存失败：${persistenceDetail}`,
+            englishWithReason(`${failureDetail}; saving the recovery candidate failed`, persistenceDetail, ': '),
           ))
         }
       } else if (!mainOwned && !draftPersisted) {
@@ -1693,9 +1701,10 @@ ${params.candidate.text}`,
       if (params.context.cancelled || params.signal.aborted) throw error
       const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
       if (code !== 'GENERATION_PROVIDER_FAILED' && code !== 'NETWORK_ERROR') throw error
+      const detail = shownReason(params.context, error)
       params.callbacks.log(uiText(
-        `  压缩修订未完成，保留原稿：${error instanceof Error ? error.message : String(error)}`,
-        `  Condense revision did not complete; keeping the original draft: ${error instanceof Error ? error.message : String(error)}`,
+        `  压缩修订未完成，保留原稿：${detail}`,
+        englishWithReason('  Condense revision did not complete; keeping the original draft', detail, ': '),
       ))
       return original()
     }
