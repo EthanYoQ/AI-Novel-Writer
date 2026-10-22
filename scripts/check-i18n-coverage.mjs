@@ -48,11 +48,16 @@ export const I18N_COVERAGE_BOUNDARIES = Object.freeze({
   workflowCommandErrorBoundaries: [
     'src/services/workflows/commands',
   ],
-  // 命令目录以外的工作流文件抛出的说明同样进运行卡片的失败说明、启动报错或恢复对话框（#471）：不能写只有中文的原文。
+  // 命令目录以外的工作流文件抛出的说明同样进运行卡片的失败说明、启动报错或恢复对话框（#471）：不能写只有中文的原文，
+  // 也不能写只有英文的原文（#474，中文界面会出现英文）。整串的稳定错误码照旧放行。
   // 这里不拦转出的 .error/.message：这些文件还转出渲染端已按界面语言写好的说明（前置条件守卫的 message、运行记录的 error），
   // 语法上分不开；主进程原文转出由各处改用 workflowMainProcessError 处理。
   workflowErrorBoundaries: [
     'src/services/workflows',
+  ],
+  // 还开着的 PR #475 改动这些工作流文件：先只拦只有中文的说明，它合入后清空这里，再改掉只有英文的说明。
+  pendingWorkflowEnglishErrorFiles: [
+    'src/services/workflows/import-workflow.ts',
   ],
   // 工作流目录以外的渲染层文件（含与主进程共用的 src/shared）抛出的说明会经各处 catch 显示给作者（#474）：
   // 同样不能写只有中文的原文。纯内部断言或只进日志的，在 throw 所在行或上一行写 `// i18n-exempt: <理由>`；
@@ -210,6 +215,28 @@ function nodeContainsHan(node, sourceFile) {
   let found = false
   ts.forEachChild(node, child => {
     if (!found && nodeContainsHan(child, sourceFile)) found = true
+  })
+  return found
+}
+
+/** 翻译函数以外的拉丁词字面量，即只有英文的说明。整串的错误码与三元的条件不是给作者看的文字。 */
+function nodeContainsEnglishCopy(node, sourceFile) {
+  if (isLocalizedCall(node, sourceFile)) return false
+  if (ts.isConditionalExpression(node)) {
+    return nodeContainsEnglishCopy(node.whenTrue, sourceFile) || nodeContainsEnglishCopy(node.whenFalse, sourceFile)
+  }
+  // result['message'] 的键是属性名，不是文案；只查被访问的值。
+  if (ts.isElementAccessExpression(node)) return nodeContainsEnglishCopy(node.expression, sourceFile)
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return !errorCode.test(node.text) && latinWord.test(node.text)
+  }
+  if (ts.isTemplateExpression(node)) {
+    return [node.head, ...node.templateSpans.map(span => span.literal)].some(part => latinWord.test(part.text))
+      || node.templateSpans.some(span => nodeContainsEnglishCopy(span.expression, sourceFile))
+  }
+  let found = false
+  ts.forEachChild(node, child => {
+    if (!found && nodeContainsEnglishCopy(child, sourceFile)) found = true
   })
   return found
 }
@@ -612,7 +639,10 @@ function inspectRawErrorDisplays(violations, root, file, sourceFile) {
   visit(sourceFile)
 }
 
-/** mode：'command' 拦一切未翻译的文字与转出的原文；'chinese' 只拦翻译函数以外的汉字。 */
+/**
+ * mode：'command' 拦一切未翻译的文字与转出的原文；'untranslated' 拦翻译函数以外的汉字与拉丁词，不拦转出的原文；
+ * 'chinese' 只拦翻译函数以外的汉字。
+ */
 function inspectThrownErrors(violations, root, file, sourceFile, mode, allowErrorCodes) {
   const bindings = collectBindings(sourceFile)
   const visit = (node) => {
@@ -627,6 +657,10 @@ function inspectThrownErrors(violations, root, file, sourceFile, mode, allowErro
       // 写明理由的豁免：作者看不到这条说明。
     } else if (message && mode === 'chinese') {
       inspectVisibleExpression(violations, root, file, sourceFile, message, 'thrown-error')
+    } else if (message && mode === 'untranslated') {
+      if (nodeContainsHan(message, sourceFile) || nodeContainsEnglishCopy(message, sourceFile)) {
+        add(violations, root, file, sourceFile, message, message.getText(sourceFile), 'thrown-error')
+      }
     } else if (message && !(allowErrorCodes && ts.isStringLiteralLike(message) && errorCode.test(message.text))) {
       inspectBoundaryExpression(violations, root, file, sourceFile, message, 'thrown-error', bindings)
     }
@@ -809,12 +843,16 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
   }
   const commandFiles = new Set(I18N_COVERAGE_BOUNDARIES.workflowCommandErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative))))
   const workflowFiles = new Set([...commandFiles, ...I18N_COVERAGE_BOUNDARIES.workflowErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative)))])
+  const pendingWorkflowEnglishFiles = new Set(I18N_COVERAGE_BOUNDARIES.pendingWorkflowEnglishErrorFiles)
   for (const file of workflowFiles) {
     const relativeFile = relativePath(root, file)
     if (!file.endsWith('.ts') || relativeFile.split('/').includes('__tests__')) continue
     const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
     const allowErrorCodes = !I18N_COVERAGE_BOUNDARIES.strictWorkflowCommandErrorBoundaries.includes(relativeFile)
-    inspectThrownErrors(violations, root, file, sourceFile, commandFiles.has(file) ? 'command' : 'chinese', allowErrorCodes)
+    let mode = 'untranslated'
+    if (commandFiles.has(file)) mode = 'command'
+    else if (pendingWorkflowEnglishFiles.has(relativeFile)) mode = 'chinese'
+    inspectThrownErrors(violations, root, file, sourceFile, mode, allowErrorCodes)
   }
   const rendererThrowFiles = new Set(I18N_COVERAGE_BOUNDARIES.rendererThrowErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative))))
   for (const file of rendererThrowFiles) {

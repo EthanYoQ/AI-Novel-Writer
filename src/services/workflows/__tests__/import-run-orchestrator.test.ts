@@ -770,3 +770,84 @@ describe('ImportRunOrchestrator', () => {
     expect(getRun().stage).toBe(nextStage)
   })
 })
+
+describe('ImportRunOrchestrator failure copy follows the import run locale', () => {
+  const han = /\p{Script=Han}/u
+
+  function authorPostprocessHarness(locale: ImportRunSnapshot['locale']) {
+    const fixture = harness(2, {
+      locale,
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:run-1',
+      authorityFingerprint: 'c'.repeat(64),
+      stage: 'author-postprocess',
+    })
+    const receipt: FinalizedDraftImportReceipt = {
+      operationId: 'author-import:run-1',
+      payloadHash: 'e'.repeat(64),
+      chapterNumbers: [1],
+      drafts: [{
+        chapterNumber: 1, draftId: 1, finalizationId: 'final-1', contentHash: 'f'.repeat(64),
+        targetFileName: 'Chapter 1.txt', status: 'finalized', publicationStatus: 'pending',
+      }],
+      idempotent: false,
+    }
+    fixture.deps.getAuthorCommitReceipt = vi.fn(async () => receipt)
+    fixture.deps.publishAuthorChapter = vi.fn(async () => undefined)
+    fixture.deps.postprocessAuthorChapter = vi.fn(async () => undefined)
+    return fixture
+  }
+
+  it.each([
+    ['zh-CN', /^导入已取消/u],
+    ['en-US', /^Import cancelled at a safe boundary\.$/u],
+  ] as const)('explains a cancellation at a safe boundary in %s', async (locale, expected) => {
+    const { deps } = harness(1, { locale })
+    const context = { cancelled: false, cancelRequested: true, cancellationRequest: Promise.resolve() }
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'knowledge', 'test-runner', context, callbacks)
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toMatch(expected)
+    expect(deps.cancelAtBoundary).toHaveBeenCalledOnce()
+  })
+
+  it('stores and throws a Chinese explanation, with the chapter number, when the author receipt misses a chapter', async () => {
+    const { deps, getRun } = authorPostprocessHarness('zh-CN')
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'author-postprocess', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toContain('第 2 章')
+    expect((failure as Error).message).not.toMatch(/[A-Za-z]{3,}/u)
+    expect(getRun()).toMatchObject({ status: 'failed', lastError: (failure as Error).message })
+  })
+
+  it('keeps the English explanation free of Chinese for an English import run', async () => {
+    const { deps, getRun } = authorPostprocessHarness('en-US')
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'author-postprocess', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toContain('missing Chapter 2')
+    expect((failure as Error).message).not.toMatch(han)
+    expect(getRun().lastError).toBe((failure as Error).message)
+  })
+
+  it('uses the registered takeover explanation when lease renewal returns another execution identity', async () => {
+    const { deps } = harness(1, { locale: 'zh-CN', stage: 'global' })
+    let renewals = 0
+    deps.renewExecution = vi.fn(async (_runId, current) => (
+      ++renewals > 1 ? { ...current, epoch: current.epoch + 1 } : current
+    ))
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'global', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe('这次导入已由别的窗口接手，或长时间没有响应后已暂停，这个窗口不能再写入。请在导入对话框里继续这次导入。')
+  })
+})

@@ -402,6 +402,65 @@ export const VISUAL_SCENARIOS = {
     return observed
   } },
 
+  // #474 收尾：中文界面导入参考小说，参照章节已入库、批次检查点还没记下时在运行卡片上取消。放行后编排器在安全边界停下，
+  // 运行卡片里失败步骤的说明是中文，不再是编排器原先只有英文的那句。卡在章节入库途中取消会走另一条路
+  // （主进程拒绝绑定参照章节，交 IMPORT_RUN_REFERENCE_UNBOUND），所以卡在检查点。
+  'import-run-cancel-zh': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ app, page, roots, shoot }) => {
+    const file = path.join(roots.temp, 'reference-novel.txt')
+    fs.writeFileSync(file, `第1章 旧港\n旧港的潮水刚退，青石上还留着一层薄薄的盐霜。\n\n第2章 北堤\n北堤上的风很大。\n`)
+    assert.ok(await app.evaluate(({ dialog, ipcMain }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
+      const handlers = ipcMain._invokeHandlers
+      const original = handlers.get('db:import-run-complete-batch')
+      if (!original) return false
+      const gate = Promise.withResolvers()
+      globalThis.__driveCheckpointGate = { release: gate.resolve, held: false }
+      handlers.set('db:import-run-complete-batch', async (event, ...args) => {
+        globalThis.__driveCheckpointGate.held = true
+        await gate.promise
+        return original(event, ...args)
+      })
+      return true
+    }, file), '能在主进程里卡住导入批次检查点')
+
+    await stage.root(page).getByRole('banner').getByRole('button', { name: `《${STAGE_SAMPLE.name}》作品菜单` }).click()
+    await page.getByRole('menuitem', { name: '小说拆解与仿写…', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '小说拆解与仿写' })
+    await dialog.getByTestId('import-target-current').click()
+    await dialog.getByRole('button', { name: '选择', exact: true }).click()
+    await dialog.getByRole('button', { name: '导入当前项目（2 章）', disabled: false }).click()
+    await dialog.waitFor({ state: 'hidden' })
+
+    // 中途任何一步失败都要放开检查点，否则导入一直卡着，应用只能等驱动强制结束。
+    try {
+      for (const deadline = Date.now() + 20_000; !(await app.evaluate(() => globalThis.__driveCheckpointGate.held)); await new Promise(resolve => setTimeout(resolve, 50))) {
+        assert.ok(Date.now() < deadline, '20 秒内导入没有走到批次检查点')
+      }
+      await runSheet.waitUntilOpen(page)
+      await runSheet.sheet(page).getByRole('button', { name: /^取消「小说拆解与仿写/u }).click()
+      await runSheet.sheet(page).getByText('正在取消，等当前操作退出').first().waitFor({ state: 'visible' })
+    } finally {
+      await app.evaluate(() => globalThis.__driveCheckpointGate.release())
+    }
+
+    const failedStep = runSheet.sheet(page).locator('.run-step[data-status="failed"] .run-step-row').first()
+    await failedStep.waitFor({ state: 'visible', timeout: 30_000 })
+    if (await failedStep.getAttribute('aria-expanded') !== 'true') await failedStep.click()
+    const stepError = runSheet.sheet(page).locator('.run-step[data-status="failed"] .run-step-error').first()
+    await stepError.waitFor({ state: 'visible' })
+    const observed = {
+      stepError: await stepError.innerText(),
+      sheet: await runSheet.sheet(page).innerText(),
+      lang: await page.evaluate(() => document.documentElement.lang),
+    }
+    await settle(page)
+    await shoot('import-run-cancel-zh')
+    assert.equal(observed.lang, 'zh-CN')
+    assert.equal(observed.stepError, '导入已取消，停在了已保存的进度处。')
+    assert.doesNotMatch(observed.sheet, /safe boundary|Import cancelled/u, '中文界面的运行侧页不出现编排器的英文说明')
+    return observed
+  } },
+
   'rdv-toasts': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: seedCalls }), run: async ({ page }) => {
     const copy = await diagnosticsCopyButton(page)
     await stubClipboard(page, true)
