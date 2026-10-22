@@ -20,7 +20,7 @@ vi.mock('../commands/import-novel.command', () => ({
   },
 }))
 
-import { createImportWorkflow, loadAuthorImportChapterNumbers } from '../import-workflow'
+import { createImportWorkflow, estimateImportCost, loadAuthorImportChapterNumbers } from '../import-workflow'
 import {
   IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
   type ImportRunEffectReceipt,
@@ -452,5 +452,14 @@ describe('createImportWorkflow', () => {
     expect(source).not.toMatch(/[\u2600-\u27BF]/u)
     expect(source).not.toMatch(/\uFE0F/u)
     expect(source).not.toMatch(/[\p{Extended_Pictographic}]/u)
+  })
+})
+
+describe('estimateImportCost', () => {
+  it('shows the usage breakdown without implementation units', () => {
+    const estimate = estimateImportCost(0, 10)
+    expect(estimate.estimatedTokens).toBe(55_000)
+    expect(estimate.breakdown.split('\n')).toEqual(['· 全局推演：~15K', '· 蓝图推演：~40K', '· 总计：~55K'])
+    expect(estimate.breakdown).not.toMatch(/token/iu)
   })
 })

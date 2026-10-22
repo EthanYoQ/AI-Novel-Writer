@@ -494,7 +494,7 @@ describe('GenerationHarness', () => {
       },
     })).rejects.toMatchObject({
       code: 'CONTEXT_BUDGET_EXHAUSTED',
-      message: expect.stringMatching(/model-a.*600 tokens.*100 tokens.*512 tokens.*0 tokens.*global-guidance=100/u),
+      message: expect.stringMatching(/^(?!.*token).*model-a.*上下文=600；估算输入=100；安全预留额度=512；输出预留额度=0；.*global-guidance=100/isu),
     })
     expect(complete).not.toHaveBeenCalled()
 

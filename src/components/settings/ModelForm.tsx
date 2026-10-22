@@ -515,9 +515,9 @@ export function ModelForm({
                   </p>
                 </div>
                 <div>
-                  <Label>{text('最大输出 Token', 'Max output tokens')}</Label>
+                  <Label>{text('最大输出 Tokens', 'Max output tokens')}</Label>
                   <Input
-                    aria-label={text('最大输出 Token', 'Max output tokens')}
+                    aria-label={text('最大输出 Tokens', 'Max output tokens')}
                     type="number"
                     min={0}
                     value={model.maxTokens}
@@ -535,7 +535,7 @@ export function ModelForm({
                 </div>
               </div>
               <p className="text-xs text-[var(--color-text-secondary)]" data-effective-output-limit={effectiveOutputLimit}>
-                {text(`当前有效输出额度为 ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')} Token。取作者设置、模型输出容量与已知服务商上限中的较小值；完整输入和本次剩余额度仍会影响请求。`, `Effective output allowance: ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')} tokens. This uses the lowest configured or verified output limit. Prompt size and the remaining action allowance still affect each request.`)}
+                {text(`当前有效输出额度为 ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')}。取作者设置、模型输出容量与已知服务商上限中的较小值；完整输入和本次剩余额度仍会影响请求。`, `Effective output allowance: ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')}. This uses the lowest configured or verified output limit. Prompt size and the remaining action allowance still affect each request.`)}
               </p>
               {contextOutputConflict && (
                 <p
@@ -548,7 +548,7 @@ export function ModelForm({
                   }}
                 >
                   {text(
-                    '最大输出 Token 没有给提示词留下安全空间。生成前预算检查会阻止请求；请降低最大输出或增大上下文窗口。此提示不会阻止保存。',
+                    '最大输出 Tokens 没有给提示词留下安全空间。生成前预算检查会阻止请求；请降低最大输出或增大上下文窗口。此提示不会阻止保存。',
                     'Max output tokens leave no safe room for the prompt. The preflight budget check will block generation; lower the output limit or increase the context window. This warning does not block saving.',
                   )}
                 </p>
