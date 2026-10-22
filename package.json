@@ -111,7 +111,7 @@
     "storybook": "^10.5.10",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
-    "vite": "^8.0.16",
+    "vite": "^8.2.4",
     "vite-plugin-electron": "^0.29.1",
     "vite-plugin-electron-renderer": "^0.14.5",
     "vitest": "^4.1.10"
