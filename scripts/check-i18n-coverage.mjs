@@ -849,7 +849,9 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
     if (!file.endsWith('.ts') || relativeFile.split('/').includes('__tests__')) continue
     const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
     const allowErrorCodes = !I18N_COVERAGE_BOUNDARIES.strictWorkflowCommandErrorBoundaries.includes(relativeFile)
-    const mode = commandFiles.has(file) ? 'command' : pendingWorkflowEnglishFiles.has(relativeFile) ? 'chinese' : 'untranslated'
+    let mode = 'untranslated'
+    if (commandFiles.has(file)) mode = 'command'
+    else if (pendingWorkflowEnglishFiles.has(relativeFile)) mode = 'chinese'
     inspectThrownErrors(violations, root, file, sourceFile, mode, allowErrorCodes)
   }
   const rendererThrowFiles = new Set(I18N_COVERAGE_BOUNDARIES.rendererThrowErrorBoundaries.flatMap(relative => filesAt(path.join(root, relative))))

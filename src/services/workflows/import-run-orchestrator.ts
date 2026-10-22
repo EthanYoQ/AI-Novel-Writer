@@ -6,6 +6,7 @@ import type {
   ImportRunEffectReceipt,
   ImportRunExecutionAuthority,
   ImportRunExecutionLease,
+  ImportRunLocale,
   ImportRunSnapshot,
   ImportRunStartResult,
   ImportRunStage,
@@ -137,8 +138,6 @@ function stagesFor(run: Pick<ImportRunSnapshot, 'purpose'>): ImportRunStage[] {
 function stageIndex(run: Pick<ImportRunSnapshot, 'purpose'>, stage: ImportRunStage): number {
   return stagesFor(run).indexOf(stage)
 }
-
-type ImportRunLocale = ImportRunSnapshot['locale']
 
 function requiredAuthorDependency<T>(value: T | undefined, name: string): T {
   // i18n-exempt: 生产依赖（import-workflow.ts 的 productionDependencies）总会提供作者原稿的四个依赖，缺了是接线错误

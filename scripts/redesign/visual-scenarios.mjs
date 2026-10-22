@@ -431,13 +431,17 @@ export const VISUAL_SCENARIOS = {
     await dialog.getByRole('button', { name: '导入当前项目（2 章）', disabled: false }).click()
     await dialog.waitFor({ state: 'hidden' })
 
-    for (const deadline = Date.now() + 20_000; !(await app.evaluate(() => globalThis.__driveCheckpointGate.held)); await new Promise(resolve => setTimeout(resolve, 50))) {
-      assert.ok(Date.now() < deadline, '20 秒内导入没有走到批次检查点')
+    // 中途任何一步失败都要放开检查点，否则导入一直卡着，应用只能等驱动强制结束。
+    try {
+      for (const deadline = Date.now() + 20_000; !(await app.evaluate(() => globalThis.__driveCheckpointGate.held)); await new Promise(resolve => setTimeout(resolve, 50))) {
+        assert.ok(Date.now() < deadline, '20 秒内导入没有走到批次检查点')
+      }
+      await runSheet.waitUntilOpen(page)
+      await runSheet.sheet(page).getByRole('button', { name: /^取消「小说拆解与仿写/u }).click()
+      await runSheet.sheet(page).getByText('正在取消，等当前操作退出').first().waitFor({ state: 'visible' })
+    } finally {
+      await app.evaluate(() => globalThis.__driveCheckpointGate.release())
     }
-    await runSheet.waitUntilOpen(page)
-    await runSheet.sheet(page).getByRole('button', { name: /^取消「小说拆解与仿写/u }).click()
-    await runSheet.sheet(page).getByText('正在取消，等当前操作退出').first().waitFor({ state: 'visible' })
-    await app.evaluate(() => globalThis.__driveCheckpointGate.release())
 
     const failedStep = runSheet.sheet(page).locator('.run-step[data-status="failed"] .run-step-row').first()
     await failedStep.waitFor({ state: 'visible', timeout: 30_000 })
