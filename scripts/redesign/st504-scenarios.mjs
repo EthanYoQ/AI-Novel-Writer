@@ -58,8 +58,9 @@ async function finalizeChapter(page, chapterNumber) {
 }
 
 const pick = (fields, label) => {
-  const { hint, value } = fields.find(field => field.label.startsWith(label))
-  return { hint, value }
+  const field = fields.find(item => item.label?.startsWith(label))
+  assert.ok(field, `没有找到「${label}」一行`)
+  return { hint: field.hint, value: field.value }
 }
 
 async function showEnglish(page) {
@@ -82,7 +83,7 @@ const watchNewLocation = page => page.evaluate(location => {
   return performance.now()
 }, UPDATE.currentState.location)
 
-async function finalizeAndReadCast(context, { authorDraft }) {
+async function finalizeAndReadCast(context, { authorDraft, prefix }) {
   const { page, fake } = context
   fake.replyCharacterState(characterStateReply)
   await openCharacterState(page)
@@ -96,7 +97,7 @@ async function finalizeAndReadCast(context, { authorDraft }) {
   await openCharacterState(page)
   const castOpenedAt = await watchNewLocation(page)
   const after = await stateFields(page)
-  await context.shoot(`${context.scenario}-zh`)
+  await context.shoot(`${prefix}-zh`)
   const shownAt = await page.waitForFunction(() => window.__st504NewLocationShownAt, null, { timeout: 15_000 })
     .then(handle => handle.jsonValue(), () => null)
   const stepSucceededAt = await page.evaluate(() => window.__st504CastStepSucceededAt ?? null)
@@ -106,7 +107,7 @@ async function finalizeAndReadCast(context, { authorDraft }) {
   await showEnglish(page)
   await page.getByRole('group', { name: 'Profile view' }).waitFor({ state: 'visible' })
   const english = await stateFields(page)
-  await context.shoot(`${context.scenario}-en`)
+  await context.shoot(`${prefix}-en`)
   return { before, steps, after, english, timing }
 }
 
@@ -130,9 +131,9 @@ ${JSON.stringify(measured)}`
 
 export const ST504_SCENARIOS = {
   'st504-finalize-refreshes-cast': { model: true, shell: 'stage', setup: seedStageSample, run: async context => (
-    expectRefreshed(await finalizeAndReadCast({ ...context, scenario: 'st504-draft' }, { authorDraft: true }), { authorDraft: true })
+    expectRefreshed(await finalizeAndReadCast(context, { authorDraft: true, prefix: 'st504-draft' }), { authorDraft: true })
   ) },
   'st504-finalize-refreshes-cast-nodraft': { model: true, shell: 'stage', setup: seedStageSample, run: async context => (
-    expectRefreshed(await finalizeAndReadCast({ ...context, scenario: 'st504-nodraft' }, { authorDraft: false }), { authorDraft: false })
+    expectRefreshed(await finalizeAndReadCast(context, { authorDraft: false, prefix: 'st504-nodraft' }), { authorDraft: false })
   ) },
 }
