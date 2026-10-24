@@ -1197,6 +1197,17 @@ describe('S07 durable task budget diagnostics', () => {
     expect(f.db.prepare('SELECT prompt_tokens AS input, completion_tokens AS output, total_tokens AS total FROM llm_calls').all())
       .toEqual([{ input: 20, output: 890, total: 910 }])
   })
+  // 预算证据是供应商原样报的字段；不是整数时「输出」记为未知，不能拼成 60830（PR #493 复验）。
+  it('records an unknown output when the reported reasoning tokens are not a number', async () => {
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '正文' })
+      return { finishReason: 'stop', usage: { promptTokens: 20, completionTokens: 60, totalTokens: 910, reasoningTokens: '830' as unknown as number,
+        accounting: 'separately-billed', totalIncludesReasoning: true, trusted: true } }
+    })
+    const run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'reasoning-call-invalid', task })
+    expect(f.db.prepare('SELECT completion_tokens AS output FROM llm_calls').all()).toEqual([{ output: null }])
+  })
   it('keeps a network failure category after reopening without storing provider text', async () => {
     const f = fixture(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: '已收到的正文' })
