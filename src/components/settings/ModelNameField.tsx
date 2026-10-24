@@ -38,6 +38,22 @@ export function ModelNameField({
   const visible = query === null ? candidates : candidates.filter(candidate => matches(candidate, query))
   const optionId = (index: number) => `${listId}-option-${index}`
 
+  const pointerPressed = useRef(false)
+  useEffect(() => {
+    if (!open) return
+    const press = () => { pointerPressed.current = true }
+    const release = () => { pointerPressed.current = false }
+    document.addEventListener('pointerdown', press, true)
+    document.addEventListener('pointerup', release, true)
+    document.addEventListener('pointercancel', release, true)
+    return () => {
+      document.removeEventListener('pointerdown', press, true)
+      document.removeEventListener('pointerup', release, true)
+      document.removeEventListener('pointercancel', release, true)
+      pointerPressed.current = false
+    }
+  }, [open])
+
   useEffect(() => {
     if (open && activeIndex >= 0) {
       listRef.current?.querySelector(`[data-index="${activeIndex}"]`)?.scrollIntoView({ block: 'nearest' })
@@ -85,7 +101,11 @@ export function ModelNameField({
   return (
     <div
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) hide()
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+        // 列表随文档流展开，收起会让下面的控件上移。鼠标按下引起的失焦要等这次点击完成再收起，
+        // 否则按下与松开落在不同位置，点击会丢。
+        if (pointerPressed.current) document.addEventListener('pointerup', () => window.setTimeout(hide, 0), { once: true, capture: true })
+        else hide()
       }}
     >
       <Label htmlFor={inputId}>{text('model（模型名称）', 'model')}</Label>

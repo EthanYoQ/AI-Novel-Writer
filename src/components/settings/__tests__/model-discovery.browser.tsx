@@ -671,6 +671,44 @@ describe('model discovery settings flow', () => {
       capabilities: expect.objectContaining({ contextWindowTokens: 16_000, maxOutputTokens: 8_000 }) }))
   })
 
+  it('keeps the list in place while a press on a control below it completes, so the click is not lost', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
+    await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    const input = modelNameInput()
+    await act(async () => { input.focus() })
+    const cancel = Array.from(document.querySelectorAll('button')).find(button => button.textContent === '取消')
+    if (!cancel) throw new Error('Missing cancel button')
+    const pressedAt = cancel.getBoundingClientRect().top
+
+    // 浏览器的顺序：pointerdown，按下的默认动作让输入框失焦，pointerup，再 click。
+    await act(async () => {
+      cancel.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+      cancel.focus({ preventScroll: true })
+    })
+    expect(input.getAttribute('aria-expanded')).toBe('true')
+    expect(cancel.getBoundingClientRect().top).toBe(pressedAt)
+    await act(async () => {
+      cancel.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    expect(input.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('collapses the list when focus leaves it with the keyboard', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
+    await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    await act(async () => { modelNameInput().focus() })
+    // 第一下 Tab 落在同一控件里的刷新按钮上，列表仍开着；第二下离开控件。
+    await act(async () => { await userEvent.keyboard('{Tab}') })
+    expect(modelNameInput().getAttribute('aria-expanded')).toBe('true')
+    await act(async () => { await userEvent.keyboard('{Tab}') })
+    expect(modelNameInput().getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('filters suggestions while typing and keeps any typed model name', async () => {
     const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
     const { saveModel } = await renderSettings(model, vi.fn())
