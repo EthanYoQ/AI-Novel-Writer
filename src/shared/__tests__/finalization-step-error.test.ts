@@ -29,7 +29,7 @@ describe('定稿后处理步骤错误', () => {
     expect(describeFinalizationStepError('GENERATION_STORAGE_FAILED', en)).not.toMatch(/GENERATION_STORAGE_FAILED|Select Retry/)
   })
 
-  it('#491 角色状态来源冲突：中英文都说明正文已保存、为何没更新角色卡、作者该做什么，不提示重试', () => {
+  it('#491 角色状态来源冲突：中英文都说明正文已保存、为何没更新角色卡、作者该做什么，不带错误码', () => {
     const raw = "Error invoking remote method 'finalization-generation:commit': Error: FINALIZED_CHARACTER_SOURCE_CONFLICT"
     expect(finalizationStepErrorCode(raw)).toBe('FINALIZED_CHARACTER_SOURCE_CONFLICT')
     const zhText = describeFinalizationStepError(raw, zh), enText = describeFinalizationStepError(raw, en)
