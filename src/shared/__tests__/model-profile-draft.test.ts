@@ -3,11 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { applyModelProfileSelection, createModelProfileDraft, DEFAULT_GENERATION_OUTPUT_TOKENS } from '../model-profile-draft'
 
 describe('model profile drafts', () => {
-  it('uses the new generation default narrowed only by the initial provider capacity', () => {
+  it('starts a generation draft on the OpenAI endpoint with no model name and the default output limit', () => {
     expect(DEFAULT_GENERATION_OUTPUT_TOKENS).toBe(65536)
-    expect(createModelProfileDraft({id:'new-generation',purposes:['generation']})).toMatchObject({
-      modelName:'gpt-4.1',maxTokens:32768,capabilities:{maxOutputTokens:32768},
-    })
+    const draft = createModelProfileDraft({id:'new-generation',purposes:['generation']})
+    expect(draft).toMatchObject({ provider:'openai', baseUrl:'https://api.openai.com', modelName:'', maxTokens:65536 })
+    expect(draft.capabilities).toBeUndefined()
   })
   it.each([16384,32768,65536])('leaves an existing explicit %i output limit unchanged', maxTokens => {
     const profile={...createModelProfileDraft({id:'old-generation',purposes:['generation']}),maxTokens,

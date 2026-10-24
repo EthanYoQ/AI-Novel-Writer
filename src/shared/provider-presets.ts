@@ -471,6 +471,21 @@ export function createProviderCatalog(): ProviderPreset[] {
 /** 内置默认预设（首次启动时写入持久化文件） */
 export const BUILTIN_PRESETS: ProviderPreset[] = createProviderCatalog()
 
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/** base_url 是可解析的 http(s) 地址时返回解析结果，否则返回 null。 */
+export function parseHttpEndpoint(baseUrl: string): URL | null {
+  const trimmed = baseUrl.trim()
+  if (!URL.canParse(trimmed)) return null
+  const endpoint = new URL(trimmed)
+  return endpoint.protocol === 'http:' || endpoint.protocol === 'https:' ? endpoint : null
+}
+
+/** Ollama 和本机地址上的模型服务：不需要 API Key，连接测试也按本机放宽超时。 */
+export function isLocalModelEndpoint({ provider, baseUrl }: { provider: string, baseUrl: string }): boolean {
+  return provider === 'ollama' || LOCAL_HOSTNAMES.has(parseHttpEndpoint(baseUrl)?.hostname ?? '')
+}
+
 function normalizedOfficialBaseUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null
   try {

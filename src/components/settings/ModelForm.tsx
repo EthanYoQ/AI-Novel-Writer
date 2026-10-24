@@ -1,10 +1,10 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react'
+import { useState, useEffect, useId, useLayoutEffect, useRef } from 'react'
 import { Save, Settings2, Zap, Eye, EyeOff, ChevronDown, RotateCcw } from 'lucide-react'
 import { useLLMStore } from '../../stores/llm-store'
 import type { DiscoveredModel, ModelDiscoveryErrorCode, ModelProfile } from '../../shared/ipc-channels'
 import { LOW_VRAM_EMBEDDING_OPTIONS, normalizeEmbeddingOptions } from '../../shared/embedding-options'
 import type { ModelCapabilities, ProviderPreset } from '../../shared/provider-presets'
-import { resolveModelProfileBudgetCapabilities } from '../../shared/provider-presets'
+import { isLocalModelEndpoint, parseHttpEndpoint, resolveModelProfileBudgetCapabilities } from '../../shared/provider-presets'
 import { applyModelProfileSelection, DEFAULT_GENERATION_OUTPUT_TOKENS, modelCapabilitySource } from '../../shared/model-profile-draft'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -16,7 +16,9 @@ import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 import { ModelReasoningOverrideSettings, ModelCapabilitySources, ProjectCreativeStrategySettings } from './ReasoningPolicySettings'
 import { openModelProviderResource } from './model-provider-resource'
 import { ModelNameField } from './ModelNameField'
-import { modelNameCandidates, type ModelNameCandidate } from './model-name-candidates'
+
+/** 停止输入 base_url 或 API Key 这么久之后自动获取模型列表。 */
+const AUTO_DISCOVERY_DELAY_MS = 500
 
 const DISCOVERY_NOTICES: Record<ModelDiscoveryErrorCode, readonly [string, string]> = {
   auth: ['鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.'],
@@ -29,9 +31,17 @@ const DISCOVERY_NOTICES: Record<ModelDiscoveryErrorCode, readonly [string, strin
 
 type ModelDiscoveryState =
   | { status: 'idle' }
-  | { status: 'loading' }
+  /** 手动刷新时旧列表留在原处（暂不可点），拿到结果再替换。 */
+  | { status: 'loading', previous: DiscoveredModel[] }
   | { status: 'loaded', models: DiscoveredModel[] }
   | { status: 'failed', errorCode: ModelDiscoveryErrorCode }
+
+/** 候选列表里显示的模型：刷新期间沿用旧列表，还没拉到时为空。 */
+function shownModels(state: ModelDiscoveryState): DiscoveredModel[] {
+  if (state.status === 'loaded') return state.models
+  if (state.status === 'loading') return state.previous
+  return []
+}
 
 /** 模型编辑表单 */
 export function ModelForm({
@@ -50,6 +60,7 @@ export function ModelForm({
   const locale = useLocaleStore(s => s.locale)
   const [showKey, setShowKey] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const saveHintId = useId()
 
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean, error?: string } | null>(null)
@@ -76,13 +87,23 @@ export function ModelForm({
     }
   }, [model.apiKey, model.baseUrl, model.id, model.protocol, model.provider])
 
+  const autoDiscoveryTimer = useRef<number | undefined>(undefined)
   useEffect(() => () => {
     discoveryRevision.current += 1
+    window.clearTimeout(autoDiscoveryTimer.current)
   }, [])
 
+  const canDiscover = (config: Pick<ModelProfile, 'provider' | 'baseUrl' | 'apiKey'>) =>
+    parseHttpEndpoint(config.baseUrl) !== null && (Boolean(config.apiKey.trim()) || isLocalModelEndpoint(config))
+
+  /** 端点配置一改，旧列表作废；停止输入后用新配置自动再取一次。 */
   const invalidateDiscovery = () => {
     discoveryRevision.current += 1
     setDiscovery({ status: 'idle' })
+    window.clearTimeout(autoDiscoveryTimer.current)
+    autoDiscoveryTimer.current = window.setTimeout(() => {
+      if (canDiscover(currentDiscoveryConfig.current)) void handleDiscoverModels()
+    }, AUTO_DISCOVERY_DELAY_MS)
   }
 
   const isEmbedding = model.purposes?.includes('embedding')
@@ -90,22 +111,24 @@ export function ModelForm({
   // 将预设数组转换为以 provider 为键的 Map 方便查找
   const presetMap = new Map(presets.map((p) => [p.provider, p]))
   const preset = presetMap.get(model.provider)
-  const capabilitiesForPresetModel = (modelName: string) => isEmbedding
-    ? preset?.embeddingModelCapabilities?.[modelName]
-    : preset?.models.find((candidate) => candidate.name === modelName)?.capabilities
-  // 生成模型列表为 ModelPreset[]，embedding 模型为 string列表转换过来的 ModelPreset
-  const presetModels: import('../../shared/provider-presets').ModelPreset[] = isEmbedding
-    ? (preset?.embeddingModels ?? []).map((name) => ({
-        name,
-        maxTokens: 0,
-        capabilities: capabilitiesForPresetModel(name),
-      }))
-    : (preset?.models ?? [])
+
+  /** 向量模型名换了就换掉能力数据：与预设同名时用预设的，否则清空。生成模型由 applyModelProfileSelection 按端点和名字匹配。 */
+  const setEmbeddingModelName = (modelName: string) => {
+    if (modelName === model.modelName) return
+    const capabilities = preset?.embeddingModelCapabilities?.[modelName]
+    onChange(capabilities
+      ? { ...model, modelName, maxTokens: capabilities.maxOutputTokens, capabilities: { ...capabilities }, capabilitySources: undefined }
+      : { ...model, modelName, capabilities: undefined, capabilitySources: undefined })
+  }
 
   /** 更新单个字段 */
   const up = <K extends keyof ModelProfile>(key: K, val: ModelProfile[K]) => {
     if (key === 'provider' || key === 'protocol' || key === 'baseUrl' || key === 'apiKey') {
       invalidateDiscovery()
+    }
+    if (isEmbedding && key === 'modelName') {
+      setEmbeddingModelName(val as string)
+      return
     }
     onChange(!isEmbedding && ['modelName', 'baseUrl', 'protocol', 'provider'].includes(key)
       ? applyModelProfileSelection(model, { [key]: val }) : { ...model, [key]: val })
@@ -154,57 +177,24 @@ export function ModelForm({
     })
   }
 
-  /**
-   * 切换服务商：从持久化预设中自动填充 baseUrl / protocol
-   * 并将模型名重置为该服务商的第一个预设模型
-   */
+  /** 切换服务商：从预设填 baseUrl 与协议；模型名与 Key 清空，旧服务商的 Key 不会被自动拉取发给新端点。 */
   const handleProviderChange = (provider: ModelProfile['provider']) => {
     const p = presetMap.get(provider)
-    const firstModel = isEmbedding ? null : (p?.models[0] ?? null)
-    const defaultModelName = isEmbedding
-      ? (p?.embeddingModels[0] ?? '')
-      : (firstModel?.name ?? '')
-    const capabilities = isEmbedding
-      ? p?.embeddingModelCapabilities?.[defaultModelName]
-      : firstModel?.capabilities
     invalidateDiscovery()
     const selection = {
-      ...model,
       provider,
       protocol: (p?.protocol ?? 'openai') as 'openai' | 'gemini',
       baseUrl: p?.baseUrl ?? '',
-      modelName: defaultModelName,
-      maxTokens: capabilities?.maxOutputTokens ?? firstModel?.maxTokens ?? 4096,
-      capabilities: capabilities ? { ...capabilities } : undefined,
+      apiKey: '',
+      modelName: '',
     }
-    onChange(isEmbedding ? selection : applyModelProfileSelection(model, {
-      provider, protocol: selection.protocol, baseUrl: selection.baseUrl, modelName: selection.modelName,
-    }))
+    onChange(isEmbedding ? { ...model, ...selection, capabilities: undefined, capabilitySources: undefined } : applyModelProfileSelection(model, selection))
   }
 
-  const handleModelSelect = ({ value, fromPreset, endpointCapabilities }: ModelNameCandidate) => {
-    if (!isEmbedding) {
-      onChange(applyModelProfileSelection(model, { modelName: value }, endpointCapabilities))
-      return
-    }
-    if (!fromPreset) {
-      up('modelName', value)
-      return
-    }
-    const matched = presetModels.find((m) => m.name === value)
-    const capabilities = matched?.capabilities
-    onChange({
-      ...model,
-      modelName: value,
-      maxTokens: capabilities?.maxOutputTokens ?? matched?.maxTokens ?? model.maxTokens,
-      capabilities: capabilities ? { ...capabilities } : undefined,
-    })
+  const handleModelSelect = ({ value, capabilities }: DiscoveredModel) => {
+    if (isEmbedding) setEmbeddingModelName(value)
+    else onChange(applyModelProfileSelection(model, { modelName: value }, capabilities))
   }
-
-  const modelCandidates = modelNameCandidates(
-    presetModels.map((m) => m.name),
-    discovery.status === 'loaded' ? discovery.models : null,
-  )
 
   const handleTest = async () => {
     setTesting(true)
@@ -216,8 +206,10 @@ export function ModelForm({
   }
 
   const handleDiscoverModels = async () => {
+    window.clearTimeout(autoDiscoveryTimer.current)
     const requestRevision = discoveryRevision.current + 1
     discoveryRevision.current = requestRevision
+    // 自动获取从定时器里调用，这次渲染的 model 可能已经落后于表单，请求参数只读 ref。
     const requestConfig = { ...currentDiscoveryConfig.current }
     const isCurrentRequest = () => {
       const current = currentDiscoveryConfig.current
@@ -228,13 +220,13 @@ export function ModelForm({
         && current.baseUrl === requestConfig.baseUrl
         && current.apiKey === requestConfig.apiKey
     }
-    setDiscovery({ status: 'loading' })
+    setDiscovery(current => ({ status: 'loading', previous: shownModels(current) }))
     try {
       const result = await discoverModels({
-        provider: model.provider,
-        protocol: model.protocol,
-        baseUrl: model.baseUrl,
-        apiKey: model.apiKey,
+        provider: requestConfig.provider,
+        protocol: requestConfig.protocol,
+        baseUrl: requestConfig.baseUrl,
+        apiKey: requestConfig.apiKey,
         purposes: model.purposes,
       })
       if (!isCurrentRequest()) return
@@ -247,7 +239,7 @@ export function ModelForm({
   }
 
   const handleModelListOpen = () => {
-    if (discovery.status === 'idle' && model.baseUrl.trim() && model.apiKey.trim()) void handleDiscoverModels()
+    if (discovery.status === 'idle' && canDiscover(model)) void handleDiscoverModels()
   }
 
   const modelNameStatus = (): { tone: 'muted' | 'error', text: string } | null => {
@@ -256,11 +248,19 @@ export function ModelForm({
     if (discovery.status === 'loaded') {
       return { tone: 'muted', text: text(`已从端点获取 ${discovery.models.length} 个模型。`, `Fetched ${discovery.models.length} models from the endpoint.`) }
     }
-    if (model.apiKey.trim()) return null
-    return model.provider === 'ollama'
-      ? { tone: 'muted', text: text('候选为推荐模型。点刷新按钮可获取本机已安装的模型。', 'Showing recommended models. Use the refresh button to list the models installed locally.') }
-      : { tone: 'muted', text: text('候选为推荐模型。填写 API Key 后展开会自动获取端点模型列表。', 'Showing recommended models. After you enter an API key, opening the list fetches the endpoint models.') }
+    if (canDiscover(model)) return null
+    return isLocalModelEndpoint(model)
+      ? { tone: 'muted', text: text('填写 base_url 后获取模型列表。', 'Enter the base_url to fetch the model list.') }
+      : { tone: 'muted', text: text('填写 base_url 和 API Key 后获取模型列表。', 'Enter the base_url and API key to fetch the model list.') }
   }
+
+  // 生成模型与拉取列表用同一条本机规则；检索模型维持原样只豁免 Ollama，知识库主进程对它要求非空 Key。
+  const keyMissing = !model.apiKey.trim() && (isEmbedding ? model.provider !== 'ollama' : !isLocalModelEndpoint(model))
+  const missingForSave = [
+    !model.baseUrl.trim() && 'base_url',
+    keyMissing && 'API Key',
+    !model.modelName.trim() && text('模型名称', 'model name'),
+  ].filter((field): field is string => Boolean(field))
 
   return (
     <div
@@ -350,14 +350,14 @@ export function ModelForm({
 
       <ModelNameField
         value={model.modelName}
-        placeholder={isEmbedding ? 'text-embedding-3-small' : 'gpt-4o'}
-        candidates={modelCandidates}
+        placeholder={text('从列表选择，或直接输入模型名称', 'Pick from the list or type a model name')}
+        candidates={shownModels(discovery)}
         refreshing={discovery.status === 'loading'}
         status={modelNameStatus()}
         onInput={(value) => up('modelName', value)}
         onSelect={handleModelSelect}
         onOpen={handleModelListOpen}
-        onRefresh={() => void handleDiscoverModels()}
+        onRefresh={() => { if (canDiscover(model)) void handleDiscoverModels() }}
       />
 
       {isEmbedding && model.provider === 'siliconflow' && model.modelName === 'BAAI/bge-m3' && (
@@ -523,11 +523,16 @@ export function ModelForm({
         </div>
       )}
 
+      {missingForSave.length > 0 && (
+        <p id={saveHintId} className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+          {text(`保存前还需填写：${missingForSave.join('、')}。`, `Fill in before saving: ${missingForSave.join(', ')}.`)}
+        </p>
+      )}
       <div className="flex items-center gap-2 pt-1">
         <Button
           variant="outline"
           onClick={handleTest}
-          disabled={testing || !model.baseUrl || (!model.apiKey && model.provider !== 'ollama')}
+          disabled={testing || missingForSave.length > 0}
         >
           <Zap size={13} />
           {testing ? text('测试中...', 'Testing...') : text('测试连接', 'Test connection')}
@@ -535,7 +540,8 @@ export function ModelForm({
         <Button
           className="flex-1"
           onClick={onSave}
-          disabled={saving || !model.baseUrl.trim() || !model.modelName.trim() || (!model.apiKey.trim() && model.provider !== 'ollama')}
+          disabled={saving || missingForSave.length > 0}
+          aria-describedby={missingForSave.length > 0 ? saveHintId : undefined}
         >
           <Save size={13} />
           {saving ? text('保存中...', 'Saving...') : text('保存配置', 'Save configuration')}

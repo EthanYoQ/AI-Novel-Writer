@@ -231,14 +231,16 @@ async function main() {
     await settings(page).getByRole('button', { name: '添加模型' }).first().click()
     const form = settings(page).getByPlaceholder('如：DeepSeek 主力 / GPT-4o 备用').locator('xpath=ancestor::div[contains(@class,"rounded-xl p-5")]')
     await form.locator('select').first().selectOption('custom')
-    await form.getByPlaceholder('https://api.openai.com').fill(endpoint)
+    // 先填 Key 再填端点：端点一填好就自动获取，请求只有一次且带着 Key。
     await form.locator('input[type="password"]').fill('f05-u03-offline-only')
-    await form.getByRole('button', { name: '获取模型列表' }).click()
+    await form.getByPlaceholder('https://api.openai.com').fill(endpoint)
+    await form.getByText('已从端点获取 1 个模型。', { exact: true }).waitFor({ timeout: 5000 })
+    await form.getByRole('button', { name: '展开候选模型' }).click()
     const discoveredOption = form.getByRole('listbox', { name: '候选模型' }).getByRole('option').filter({ hasText: discoveredModelName })
     await discoveredOption.waitFor({ timeout: 5000 })
     assert.deepEqual(fixture.requests, [{ method: 'GET', path: '/v1/models', authorized: true }])
     assert.equal(await form.getByRole('listbox', { name: '候选模型' }).getByRole('option').count(), 1)
-    pass('U03.A05-model-discovery', 'U03.A05', 'stage unsaved model form fetched and displayed the controlled endpoint model list')
+    pass('U03.A05-model-discovery', 'U03.A05', 'stage unsaved model form fetched the controlled endpoint model list once the endpoint and key were filled')
 
     currentStep = 'U03.A06-model-parameters'
     await discoveredOption.click()
