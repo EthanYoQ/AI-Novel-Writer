@@ -103,34 +103,43 @@ function scratchParent() {
   return path.join(base, 'VibeCodingScratch', 'an', 'drive')
 }
 
-/** 用户真实配置目录。运行前后比较最新修改时间，证明隔离目录之外没有写入。 */
+/** 用户真实配置目录。运行前后逐个比较其中的条目，证明隔离目录之外没有写入。 */
 function realProfileDirectories() {
   const appData = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming')
   return [path.join(os.homedir(), '.vela'), path.join(appData, 'ai-novel-writer'), path.join(appData, 'AI小说作家')]
 }
 
-function newestWrite(directory, budget = { entries: 50_000 }) {
-  let newest = 0
+/** 本机开着的书童约每 5 分钟刷新一次这几个 Chromium 缓存里文件的修改时间，所以它们的变化不能说明隔离失效，只列进 externalWritesIgnored。 */
+const RUNNING_INSTANCE_CACHES = new Set(['GPUCache', 'DawnWebGPUCache', 'DawnGraphiteCache'])
+
+/** 路径到「大小:修改时间」，目录只记存在，不存在的路径不记。 */
+function profileEntries(target, entries = new Map(), budget = { entries: 50_000 }) {
   let stat
-  try { stat = fs.lstatSync(directory) } catch { return null }
-  newest = stat.mtimeMs
-  if (!stat.isDirectory()) return newest
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+  try { stat = fs.lstatSync(target) } catch { return entries }
+  if (!stat.isDirectory()) return entries.set(target, `${stat.size}:${stat.mtimeMs}`)
+  entries.set(target, 'dir')
+  for (const name of fs.readdirSync(target)) {
     if (--budget.entries < 0) break
-    const child = path.join(directory, entry.name)
-    const value = entry.isDirectory() ? newestWrite(child, budget) : fs.lstatSync(child).mtimeMs
-    if (value !== null && value > newest) newest = value
+    profileEntries(path.join(target, name), entries, budget)
   }
-  return newest
+  return entries
 }
 
 export function snapshotRealProfiles(directories = realProfileDirectories()) {
-  return Object.fromEntries(directories.map(directory => [directory, newestWrite(directory)]))
+  return Object.fromEntries(directories.map(directory => [directory, profileEntries(directory)]))
 }
 
 export function profileWrites(before) {
   const after = snapshotRealProfiles(Object.keys(before))
-  return { externalWrites: Object.keys(before).filter(directory => before[directory] !== after[directory]) }
+  const changed = Object.keys(before).flatMap(directory => {
+    const previous = before[directory]
+    const current = after[directory]
+    return [...new Set([...previous.keys(), ...current.keys()])]
+      .filter(entry => previous.get(entry) !== current.get(entry))
+      .map(entry => ({ entry, ignored: RUNNING_INSTANCE_CACHES.has(path.relative(directory, entry).split(path.sep)[0]) }))
+  })
+  const entries = ignored => changed.filter(change => change.ignored === ignored).map(change => change.entry).sort()
+  return { externalWrites: entries(false), externalWritesIgnored: entries(true) }
 }
 
 /** 以 --user-data-dir 匹配仍存活的 Electron 主进程与子进程。 */

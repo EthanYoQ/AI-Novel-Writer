@@ -74,14 +74,16 @@ RD-10 删除旧外壳之后，场景分三类：
 
 - `<场景>-<主题>.png`：场景截图，1440×900（`stage-1280` 为 1280×900）。
 - `--video` 时另有 `<场景>-<主题>.mp4`，结果项的 `video` 字段指向它。
-- `<场景>-<主题>.json`：本次运行的结果数组，每个截图点一项。`scenario`、`screenshot` 属于这个截图点；`session`（会话名，单跑时等于场景名）、`timing`、`shell`（外壳的 `data-shell-presentation`，`writer` 或 `stage`：`startup-timing` 取计时那次启动显示的外壳，其余场景取写好外观、重载之后的外壳，用来确认测的就是要测的外壳）、`externalRequests`、`residualProcesses`、`externalWrites`、`quit`、`isolationRoot` 属于整个会话，会话里每一项都抄一份；会话用了夹具模型时另含 `modelRequests`（整个会话里假服务收到的全部请求数，嵌入请求也计入，与 `--console` 里的 `[fake-model]` 行一一对应）。失败时含 `error`：截图点自己的失败写在该项；同一会话里排在失败点之后的截图点不再运行，`error` 写明是被哪个场景拖住；会话级失败（启动、外部请求、退出、进程枚举）写进该会话的每一项。
+- `<场景>-<主题>.json`：本次运行的结果数组，每个截图点一项。`scenario`、`screenshot` 属于这个截图点；`session`（会话名，单跑时等于场景名）、`timing`、`shell`（外壳的 `data-shell-presentation`，`writer` 或 `stage`：`startup-timing` 取计时那次启动显示的外壳，其余场景取写好外观、重载之后的外壳，用来确认测的就是要测的外壳）、`externalRequests`、`residualProcesses`、`externalWrites`、`externalWritesIgnored`、`quit`、`isolationRoot` 属于整个会话，会话里每一项都抄一份；会话用了夹具模型时另含 `modelRequests`（整个会话里假服务收到的全部请求数，嵌入请求也计入，与 `--console` 里的 `[fake-model]` 行一一对应）。失败时含 `error`：截图点自己的失败写在该项；同一会话里排在失败点之后的截图点不再运行，`error` 写明是被哪个场景拖住；会话级失败（启动、外部请求、退出、进程枚举）写进该会话的每一项。
 - 失败时额外写 `<失败场景>-<主题>.failure.png`、`.dom.html`、`.aria.yml` 和 `<会话>-<主题>.console.log`，隔离目录保留以便排查。
 
 每个会话结束后，驱动检查三件事，任一不满足即退出码 1：
 
 - `externalRequests` 为空。每个会话都在 Electron 启动后替换主进程的 `globalThis.fetch`：用夹具模型的会话只放行 `https://api.openai.com/v1/*` 并改道到本机假服务，其余会话一律不放行。被拒的请求记下来源并抛错。检查范围只有主进程 `fetch`，且从 `electron.launch` 返回后才生效；更早的请求、渲染进程的请求和 Electron `net` 模块的请求都不在内。
 - `residualProcesses` 为空：应用关闭后，以 `--user-data-dir` 匹配不到存活进程。子进程退出需要时间，驱动最多查 10 次、间隔 300 ms。
-- `externalWrites` 为空：`~/.vela`、`%APPDATA%\ai-novel-writer`、`%APPDATA%\AI小说作家` 的最新修改时间不变。
+- `externalWrites` 为空：`~/.vela`、`%APPDATA%\ai-novel-writer`、`%APPDATA%\AI小说作家` 里没有新增或删除的条目，文件的大小与修改时间也不变。列出的是变了的具体路径。
+  - 这几个目录第一层的 `GPUCache`、`DawnWebGPUCache`、`DawnGraphiteCache` 不算：本机开着的书童会自己刷新里面文件的修改时间。它们的变化列进 `externalWritesIgnored`，不影响退出码。
+  - 驱动真的写进真实配置目录时，Chromium 还会写 `Preferences`、`Local State`、`Local Storage` 等条目，这些照样报出来。
 
 枚举或结束进程本身失败时，原因写进该会话每一项的 `error`，结果 JSON 照常写出。
 
