@@ -112,21 +112,19 @@ function realProfileDirectories() {
 /** 本机开着的书童约每 5 分钟刷新一次这几个 Chromium 缓存里文件的修改时间，所以它们的变化不能说明隔离失效，只列进 externalWritesIgnored。 */
 const RUNNING_INSTANCE_CACHES = new Set(['GPUCache', 'DawnWebGPUCache', 'DawnGraphiteCache'])
 
-/** 路径到「大小:修改时间」，目录只记存在，不存在的路径不记。 */
-function profileEntries(target, entries = new Map(), budget = { entries: 50_000 }) {
+/** 路径到「大小:修改时间」，目录只记存在，不存在的路径不记。超过 limit 个条目时报错：截断的快照会漏掉写入。 */
+function profileEntries(target, entries, limit) {
   let stat
   try { stat = fs.lstatSync(target) } catch { return entries }
+  if (entries.size >= limit) throw new Error(`真实配置目录的条目超过 ${limit} 个，外部写入没法完整比较（停在 ${target}）`)
   if (!stat.isDirectory()) return entries.set(target, `${stat.size}:${stat.mtimeMs}`)
   entries.set(target, 'dir')
-  for (const name of fs.readdirSync(target)) {
-    if (--budget.entries < 0) break
-    profileEntries(path.join(target, name), entries, budget)
-  }
+  for (const name of fs.readdirSync(target)) profileEntries(path.join(target, name), entries, limit)
   return entries
 }
 
-export function snapshotRealProfiles(directories = realProfileDirectories()) {
-  return Object.fromEntries(directories.map(directory => [directory, profileEntries(directory)]))
+export function snapshotRealProfiles(directories = realProfileDirectories(), limit = 50_000) {
+  return Object.fromEntries(directories.map(directory => [directory, profileEntries(directory, new Map(), limit)]))
 }
 
 export function profileWrites(before) {
@@ -418,8 +416,8 @@ const messageOf = error => error instanceof Error ? error.message : String(error
 
 /** 一个会话一次冷启动：先跑首个截图点的 setup，再依次 run、截图、after。隔离与进程检查按会话做，结果抄进每一项。 */
 async function runSession(sessionName, names, options) {
-  const roots = createIsolatedRoots(scratchParent())
   const before = snapshotRealProfiles()
+  const roots = createIsolatedRoots(scratchParent())
   const diagnostics = []
   const fake = names.some(name => SCENARIOS[name]?.model) ? await startFakeModel(diagnostics) : null
   const base = name => path.join(options.out, `${name}-${options.theme}`)
