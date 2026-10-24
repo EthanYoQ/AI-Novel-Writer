@@ -604,14 +604,24 @@ describe('model discovery settings flow', () => {
       expected: 'The endpoint returned an invalid model list. Continue with a manual model ID.',
     },
     {
-      errorCode: 'empty' as const,
+      errorCode: 'no_models' as const,
       locale: 'zh-CN' as const,
-      expected: '端点没有返回适合当前用途的模型。请继续手工填写模型 ID。',
+      expected: '端点没有返回任何模型。请继续手工填写模型 ID。',
     },
     {
-      errorCode: 'empty' as const,
+      errorCode: 'no_models' as const,
       locale: 'en-US' as const,
-      expected: 'The endpoint returned no models for this purpose. Continue with a manual model ID.',
+      expected: 'The endpoint returned no models. Continue with a manual model ID.',
+    },
+    {
+      errorCode: 'no_suitable_models' as const,
+      locale: 'zh-CN' as const,
+      expected: '端点返回的模型都不适合当前用途。请继续手工填写模型 ID。',
+    },
+    {
+      errorCode: 'no_suitable_models' as const,
+      locale: 'en-US' as const,
+      expected: 'None of the endpoint models fit this purpose. Continue with a manual model ID.',
     },
   ])('renders $locale $errorCode guidance', async ({ errorCode, locale, expected }) => {
     const model = savedProfile()

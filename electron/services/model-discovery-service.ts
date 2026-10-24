@@ -139,7 +139,8 @@ function geminiModelServesPurpose(item: object, value: string, purpose: Discover
   return purpose === 'embedding' || !GEMINI_NON_WRITING_MODEL.test(value)
 }
 
-function parseGeminiModels(payload: unknown, credential: string, purpose: DiscoveryPurpose): DiscoveredModel[] | null {
+/** listed 是端点列出的模型数，用来区分「端点没有模型」和「没有适合当前用途的模型」。 */
+function parseGeminiModels(payload: unknown, credential: string, purpose: DiscoveryPurpose): { models: DiscoveredModel[], listed: number } | null {
   if (!payload || typeof payload !== 'object' || !Array.isArray((payload as { models?: unknown }).models)) {
     return null
   }
@@ -161,7 +162,7 @@ function parseGeminiModels(payload: unknown, credential: string, purpose: Discov
     seenValues.add(value)
     if (geminiModelServesPurpose(item, value, purpose)) models.push({ id, name, value })
   }
-  return models
+  return { models, listed: seenValues.size }
 }
 
 /**
@@ -208,10 +209,11 @@ export class ModelDiscoveryService {
             ? { success: false, errorCode: 'network' }
             : { success: false, errorCode: 'invalid_response' }
         }
-        const models = parseGeminiModels(payload, model.apiKey, purpose)
-        if (!models) return { success: false, errorCode: 'invalid_response' }
-        if (models.length === 0) return { success: false, errorCode: 'empty' }
-        return { success: true, models }
+        const parsed = parseGeminiModels(payload, model.apiKey, purpose)
+        if (!parsed) return { success: false, errorCode: 'invalid_response' }
+        if (parsed.listed === 0) return { success: false, errorCode: 'no_models' }
+        if (parsed.models.length === 0) return { success: false, errorCode: 'no_suitable_models' }
+        return { success: true, models: parsed.models }
       }
 
       const requestUrl = resolveOpenAIModelsUrl(model.baseUrl)
@@ -242,7 +244,7 @@ export class ModelDiscoveryService {
       }
       const models = parseOpenAIModels(payload, model.apiKey)
       if (!models) return { success: false, errorCode: 'invalid_response' }
-      if (models.length === 0) return { success: false, errorCode: 'empty' }
+      if (models.length === 0) return { success: false, errorCode: 'no_models' }
       // OpenAI 兼容接口不说明模型用途，只能按名字认出向量模型。
       if (purpose === 'embedding') {
         const isEmbedding = (candidate: DiscoveredModel) => OPENAI_COMPATIBLE_EMBEDDING_MODEL.test(candidate.value)

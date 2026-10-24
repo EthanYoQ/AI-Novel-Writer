@@ -339,7 +339,21 @@ describe('ModelDiscoveryService', () => {
     const saved = profile({ id: `empty-${protocol}`, provider, protocol, baseUrl })
 
     await expect(new ModelDiscoveryService().discoverModels(saved))
-      .resolves.toEqual({ success: false, errorCode: 'empty' })
+      .resolves.toEqual({ success: false, errorCode: 'no_models' })
+  })
+
+  it('tells a list with no model for this purpose apart from an empty list', async () => {
+    const baseUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ models: [
+        { name: 'models/gemini-embedding-001', supportedGenerationMethods: ['embedContent'] },
+        { name: 'models/gemini-3.8-flash-tts', supportedGenerationMethods: ['generateContent'] },
+      ] }))
+    }))
+    const saved = profile({ id: 'unsuitable-gemini', provider: 'gemini', protocol: 'gemini', baseUrl, purposes: ['generation'] })
+
+    await expect(new ModelDiscoveryService().discoverModels(saved))
+      .resolves.toEqual({ success: false, errorCode: 'no_suitable_models' })
   })
 
   it.each([

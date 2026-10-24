@@ -505,7 +505,8 @@ export type ModelDiscoveryErrorCode =
   | 'unsupported'
   | 'network'
   | 'invalid_response'
-  | 'empty'
+  | 'no_models'
+  | 'no_suitable_models'
 
 export type ModelDiscoveryResult =
   | { success: true; models: DiscoveredModel[] }
