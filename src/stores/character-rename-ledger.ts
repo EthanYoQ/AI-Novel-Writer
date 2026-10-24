@@ -86,15 +86,17 @@ export function mergeCharacterDraftWithRemote<T extends { name: string; characte
 }
 
 /**
- * 定稿后处理按字段写入当前状态，作者也按字段改。只有作者改了值的字段保留草稿值，
- * 其余字段、来源标记与 updatedAtChapter 都取数据库最新值。
+ * 定稿后处理按字段写入当前状态，作者也按字段改。作者改过的字段保留草稿值，
+ * 其余字段、来源标记与 updatedAtChapter 都取数据库最新值。刷新会把数据库快照当成新基线，
+ * 作者输入可能与基线文本相同，所以来源标记不同也算改过。
  */
 function mergeCurrentStateDraftWithRemote(
   base: CharacterRosterCharacterState | undefined,
   draft: CharacterRosterCharacterState,
   remote: CharacterRosterCharacterState | undefined,
 ): CharacterRosterCharacterState | undefined {
-  const edited = CHARACTER_STATE_TEXT_FIELDS.filter(field => draft[field] !== (base?.[field] ?? ''))
+  const edited = CHARACTER_STATE_TEXT_FIELDS.filter(field => draft[field] !== (base?.[field] ?? '')
+    || JSON.stringify(draft.provenance?.[field]) !== JSON.stringify(base?.provenance?.[field]))
   if (edited.length === 0) return remote
   const merged: CharacterRosterCharacterState = {
     location: '', powerLevel: '', physicalState: '', mentalState: '', keyItems: '', recentEvents: '',
