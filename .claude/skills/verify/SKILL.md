@@ -504,4 +504,13 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
 | `f484-field-conflict` | 第 3 章定稿后，角色状态更新这一步失败：中文说明以「正文定稿已保存，但角色卡没有自动更新：生成期间」开头（`f484-field-conflict-zh`）；切到英文后说明是英文、不带汉字（`f484-field-conflict-en`）；两种语言都不显示 `Error invoking` 与错误码 | 英文的定稿后处理 | 是 | #484 |
-| `f484-deleted-source-roundtrip` | 定稿第 3 章写入林岚的地点、道具、近况，从章节「更多操作」删除第 3 章正文，再用界面同一组 IPC 导出恢复两轮、按 Ctrl O 打开第二个副本，定稿第 4 章：定稿后处理 4 / 4 完成（`f484-deleted-source-finalize`）；重新打开作品后「当前位置」是「定稿派生」的「守塔人的屋子」（`f484-deleted-source-character-state`）。已打开的角色页不会随定稿后处理刷新，所以先重开再读 | 角色名单的当前状态 | 是 | #484 |
+| `f484-deleted-source-roundtrip` | 定稿第 3 章写入林岚的地点、道具、近况，重开作品确认「当前位置」是「定稿派生」的「灯塔顶层灯室」，再从章节「更多操作」删除第 3 章正文，再用界面同一组 IPC 导出恢复两轮、按 Ctrl O 打开第二个副本，定稿第 4 章：定稿后处理正好 4 步且都完成（`f484-deleted-source-finalize`）；重新打开作品后「当前位置」是「定稿派生」的「守塔人的屋子」（`f484-deleted-source-character-state`）。两次都先重开作品再读，读到的是库里存下的值 | 角色名单的当前状态 | 是 | #484 |
+
+## 定稿后角色页刷新与草稿合并（#504）
+
+场景在 `scripts/redesign/st504-scenarios.mjs`。假模型的 `fake.replyCharacterState(build)` 让第 3 章定稿后处理给林岚写入新的地点、道具、近况。场景先打开角色页的「当前状态」，再去定稿，定稿完成后回到角色页立即读一次。`measured.timing` 用页面时钟记下「角色状态更新」一行变成成功、整个定稿结束、回到角色页、新地点出现的时刻，`stepToNewValueShownMs` 为 `null` 表示 15 秒内没出现。数字包含切回角色页的导航，是上界。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `st504-finalize-refreshes-cast` | 定稿前在「心理状态」填一句不保存。定稿完成后立即读：地点、道具是新值且标「定稿派生」，心理状态仍是作者那句、标「作者输入」（`st504-draft-zh`）；切到英文后地点同样是新值（`st504-draft-en`） | 英文的角色名单当前状态 | 是 | #504 |
+| `st504-finalize-refreshes-cast-nodraft` | 不改任何字段。定稿完成后立即读：地点、道具是新值，心理状态与定稿前相同（`st504-nodraft-zh`、`st504-nodraft-en`） | 英文的角色名单当前状态 | 是 | #504 |

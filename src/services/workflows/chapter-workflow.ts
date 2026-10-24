@@ -557,7 +557,7 @@ export function createRepairFinalizeWorkflow(
           // 后处理修复不会产生新定稿快照，只请求项目资源刷新。
           const { globalEventBus } = await import('../../shared/event-bus')
           globalEventBus.emit('REFRESH_RESOURCE', {
-            resources: ['fileTree', 'characterCards', 'drafts'],
+            resources: ['fileTree', 'drafts'],
             projectPath,
             projectSession,
           })

@@ -129,7 +129,7 @@ export const F484_SCENARIOS = {
     measured.detail = await postDetail(context.page).count() ? await postDetail(context.page).innerText() : null
     await context.shoot('f484-deleted-source-finalize')
 
-    // 定稿后处理写入角色状态后，已打开的角色页不会自动刷新（原项目同样如此），重新打开作品再读。
+    // 重新打开作品再读，读到的是库里存下的值，不是页面里的缓存。
     await context.reload()
     await openInUi(context, second)
     await openCharacterState(context.page)

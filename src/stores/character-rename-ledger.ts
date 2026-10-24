@@ -1,4 +1,5 @@
 import type { CharacterRenameData } from '../../electron/repositories/character-repository'
+import { CHARACTER_STATE_TEXT_FIELDS, type CharacterRosterCharacterState } from '../shared/character-roster'
 import {
   getProjectEditorDraft,
   mergeObjectDraftWithRemote,
@@ -55,7 +56,7 @@ export function updateCharacterRename(
  * 角色改名尚未落盘时，base/remote 仍使用旧主键，draft 已使用新主键。
  * 先按改名账本统一身份，再对同一角色执行字段级三方合并。
  */
-export function mergeCharacterDraftWithRemote<T extends { name: string; characterId?: string }>(
+export function mergeCharacterDraftWithRemote<T extends { name: string; characterId?: string; currentState?: CharacterRosterCharacterState }>(
   baseCharacters: readonly T[], draftCharacters: readonly T[], remoteCharacters: readonly T[],
   _renames: readonly CharacterRenameData[],
 ): T[] {
@@ -74,9 +75,41 @@ export function mergeCharacterDraftWithRemote<T extends { name: string; characte
     if (!remote.characterId) return remote
     included.add(remote.characterId)
     const draft = draftById.get(remote.characterId), base = baseById.get(remote.characterId)
-    return draft ? base ? mergeObjectDraftWithRemote(base, draft, remote) : draft : remote
+    if (!draft) return remote
+    if (!base) return draft
+    const card = mergeObjectDraftWithRemote(base, draft, remote)
+    return draft.currentState
+      ? { ...card, currentState: mergeCurrentStateDraftWithRemote(base.currentState, draft.currentState, remote.currentState) }
+      : card
   })
   return [...merged, ...draftCharacters.filter(c => !c.characterId || !included.has(c.characterId))]
+}
+
+/**
+ * 定稿后处理按字段写入当前状态，作者也按字段改。作者改过的字段保留草稿值，
+ * 其余字段、来源标记与 updatedAtChapter 都取数据库最新值。刷新会把数据库快照当成新基线，
+ * 作者输入可能与基线文本相同，所以来源标记不同也算改过。
+ */
+function mergeCurrentStateDraftWithRemote(
+  base: CharacterRosterCharacterState | undefined,
+  draft: CharacterRosterCharacterState,
+  remote: CharacterRosterCharacterState | undefined,
+): CharacterRosterCharacterState | undefined {
+  const edited = CHARACTER_STATE_TEXT_FIELDS.filter(field => draft[field] !== (base?.[field] ?? '')
+    || JSON.stringify(draft.provenance?.[field]) !== JSON.stringify(base?.provenance?.[field]))
+  if (edited.length === 0) return remote
+  const merged: CharacterRosterCharacterState = {
+    location: '', powerLevel: '', physicalState: '', mentalState: '', keyItems: '', recentEvents: '',
+    updatedAtChapter: remote?.updatedAtChapter ?? 0,
+  }
+  const provenance: NonNullable<CharacterRosterCharacterState['provenance']> = {}
+  for (const field of CHARACTER_STATE_TEXT_FIELDS) {
+    const source = edited.includes(field) ? draft : remote
+    merged[field] = source?.[field] ?? ''
+    const mark = source?.provenance?.[field]
+    if (mark) provenance[field] = mark
+  }
+  return Object.keys(provenance).length > 0 ? { ...merged, provenance } : merged
 }
 
 export function rebaseCharacterRenamesAfterSave(
