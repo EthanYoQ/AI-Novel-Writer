@@ -222,6 +222,17 @@ describe('审稿候选的片段', () => {
     }
   })
 
+  it('已保存的复核按保存下来的报告写摘要：升级前按第 1 版保存为已解决的，仍写已解决', () => {
+    const saved = (items: unknown[]) => ({ ...recheck(1), latestArtifact: { artifactId: '报告' },
+      saved: { content: JSON.stringify({ summary: '复核：一处已改，一处仍在。', items }, null, 2) } })
+    const pass = { category: '连续性', severity: 'pass', findingId: '甲', targetId: '目标甲', description: '钟声已改到正点。', quote: '钟声在正点响起', resolved: true }
+    const open = { category: '节奏', severity: 'warning', findingId: '乙', targetId: '目标乙', description: '铺垫仍偏长。', quote: '她顺着螺旋楼梯往上走', resolved: false }
+    const [mixed] = review(saved([pass, open]), output(RECHECK)).artifacts
+    expect(mixed.display.split('\n')).toEqual(['复核未能确认全部意见已解决（2 条意见）', '未解决 · 节奏：铺垫仍偏长。', '已解决 · 连续性：钟声已改到正点。'])
+    const [all] = review(saved([pass]), output(RECHECK)).artifacts
+    expect(all.display.split('\n')).toEqual(['复核确认全部意见已解决（1 条意见）', '已解决 · 连续性：钟声已改到正点。'])
+  })
+
   it('解析不了的复核输出退回说明，不显示原始 JSON', () => {
     const [item] = review(recheck(2), output('{"summary": 没写完')).artifacts
     expect(item.display).toContain('结构化')
