@@ -1053,6 +1053,7 @@ finally {
 
     expect(result.state).toBe('failed')
     expect(result.failure).toContain('nonzero exit code 37')
+    expect(result.failureKind).toBe('process-failure')
     expect(result.monitorStartedAt).toEqual(expect.any(String))
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -1086,6 +1087,9 @@ finally {
           exitClassification: 'ignored-result-owned-descendant-nonzero',
         }),
       ]))
+      const summary = events.find(event => event.kind === 'process-capture-summary' && event.step === step)
+      expect(summary?.ignoredResultOwnedNonzero).toMatchObject({ count: expect.any(Number), images: expect.arrayContaining(['powershell.exe']) })
+      expect((summary?.ignoredResultOwnedNonzero as { count: number }).count).toBeGreaterThanOrEqual(1)
     },
     60_000,
   )
