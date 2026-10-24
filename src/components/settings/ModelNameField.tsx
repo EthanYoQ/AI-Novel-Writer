@@ -6,11 +6,15 @@ import { Label } from '../ui/Label'
 import { cn } from '../../lib/utils'
 import { useLocaleStore } from '../../stores/locale-store'
 import { isComposing } from '../stage/shortcut-keys'
-import type { ModelNameCandidate } from './model-name-candidates'
+import type { DiscoveredModel } from '../../shared/ipc-channels'
 
-function matches(candidate: ModelNameCandidate, query: string): boolean {
+function displayName(model: DiscoveredModel): string | undefined {
+  return model.name !== model.value && model.name !== model.id ? model.name : undefined
+}
+
+function matches(model: DiscoveredModel, query: string): boolean {
   const needle = query.trim().toLowerCase()
-  return !needle || candidate.value.toLowerCase().includes(needle) || Boolean(candidate.label?.toLowerCase().includes(needle))
+  return !needle || model.value.toLowerCase().includes(needle) || Boolean(displayName(model)?.toLowerCase().includes(needle))
 }
 
 export function ModelNameField({
@@ -18,11 +22,11 @@ export function ModelNameField({
 }: {
   value: string
   placeholder: string
-  candidates: readonly ModelNameCandidate[]
+  candidates: readonly DiscoveredModel[]
   refreshing: boolean
   status: { text: string, tone: 'muted' | 'error' } | null
   onInput: (value: string) => void
-  onSelect: (candidate: ModelNameCandidate) => void
+  onSelect: (candidate: DiscoveredModel) => void
   onOpen: () => void
   onRefresh: () => void
 }) {
@@ -37,13 +41,11 @@ export function ModelNameField({
   const visible = query === null ? candidates : candidates.filter(candidate => matches(candidate, query))
   const activeIndex = activeValue === null ? -1 : visible.findIndex(candidate => candidate.value === activeValue)
   const optionId = (index: number) => `${listId}-option-${index}`
-  // 只有端点模型与预设混排时「推荐」才有区分作用；全是预设时状态行已经说明了来源。
-  const mixed = candidates.some(candidate => !candidate.fromPreset)
   const listShown = open && visible.length > 0
-  const noSuggestionsHint = candidates.length === 0
-    ? text('暂无候选模型，可直接输入模型名称。', 'No suggestions. Type a model name.')
-    : text('没有匹配的候选，将使用输入的名称。', 'No matching suggestions. The typed name will be used.')
-  const emptyHint = open && !refreshing && !listShown ? noSuggestionsHint : null
+  // 列表还没拉到时由状态行说明原因；这里只说明输入的名称没有匹配的候选。
+  const emptyHint = open && !refreshing && !listShown && candidates.length > 0
+    ? text('没有匹配的候选，将使用输入的名称。', 'No matching suggestions. The typed name will be used.')
+    : null
 
   const pointerPressed = useRef(false)
   useEffect(() => {
@@ -77,7 +79,7 @@ export function ModelNameField({
     setQuery(null)
     setActiveValue(null)
   }
-  const choose = (candidate: ModelNameCandidate) => {
+  const choose = (candidate: DiscoveredModel) => {
     if (refreshing) return
     onSelect(candidate)
     hide()
@@ -209,10 +211,7 @@ export function ModelNameField({
               )}
             >
               <span className="min-w-0 flex-1 break-words">{candidate.value}</span>
-              {candidate.label && <span className="min-w-0 shrink truncate text-[var(--ink-3)]">{candidate.label}</span>}
-              {mixed && candidate.fromPreset && (
-                <span className="shrink-0 text-[var(--ink-3)]">{text('推荐', 'Recommended')}</span>
-              )}
+              {displayName(candidate) && <span className="min-w-0 shrink truncate text-[var(--ink-3)]">{displayName(candidate)}</span>}
               {candidate.value === value && <Check size={14} className="shrink-0" aria-hidden />}
             </li>
           ))}

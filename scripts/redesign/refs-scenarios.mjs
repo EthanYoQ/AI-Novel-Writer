@@ -378,7 +378,7 @@ export const REFS_SCENARIOS = {
     assert.equal(fake.requests.length, before, '假服务在鉴权前就回 403，不算一次模型请求')
     return observed
   } },
-  'models-name-fallback': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
+  'models-name-empty': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
     await stage.openSettings(page)
     await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
     const combobox = page.locator('input[role="combobox"]')
@@ -388,24 +388,65 @@ export const REFS_SCENARIOS = {
         .filter(label => ['服务商', '调用协议', 'base_url', 'API Key', 'model（模型名称）'].includes(label))
     })
     await combobox.evaluate(element => element.closest('.rounded-xl')?.scrollIntoView({ block: 'start' }))
-    await shoot('models-name-order')
+    const draft = { modelName: await combobox.inputValue(), saveHint: await page.getByText(/^保存前还需填写：/u).innerText() }
+    await shoot('models-name-new')
     assert.deepEqual(fieldOrder, ['服务商', '调用协议', 'base_url', 'API Key', 'model（模型名称）'])
+    assert.equal(draft.modelName, '', '新建配置的模型名留空')
+    assert.equal(draft.saveHint, '保存前还需填写：API Key、模型名称。')
     await page.getByRole('button', { name: '展开候选模型', exact: true }).click()
-    const options = page.getByRole('listbox', { name: '候选模型' }).getByRole('option')
-    await options.first().waitFor({ state: 'visible' })
-    await page.getByRole('listbox', { name: '候选模型' }).evaluate(element => element.scrollIntoView({ block: 'center' }))
+    await page.waitForTimeout(800)
+    await combobox.evaluate(element => element.closest('.rounded-xl')?.scrollIntoView({ block: 'start' }))
     await page.mouse.move(0, 0)
-    const observed = { fieldOrder, options: await options.allInnerTexts(), requests: fake.requests.filter(kind => kind === 'models').length }
-    await shoot('models-name-fallback')
+    const observed = { fieldOrder, ...draft, options: await page.getByRole('listbox', { name: '候选模型' }).getByRole('option').count(),
+      status: await page.getByRole('status').filter({ hasText: '获取模型列表' }).innerText(),
+      requests: fake.requests.filter(kind => kind === 'models').length }
+    await shoot('models-name-empty')
     assert.equal(observed.requests, 0, '没填 API Key 不请求端点模型列表')
-    assert.ok(observed.options.length >= 4 && observed.options.every(text => !text.includes('推荐')), '全是预设时不标「推荐」')
+    assert.equal(observed.options, 0, '没拉取前没有任何候选')
+    assert.equal(observed.status, '填写 base_url 和 API Key 后获取模型列表。')
+    return observed
+  } },
+  'models-name-auto': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
+    await stage.openSettings(page)
+    await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
+    await page.getByPlaceholder('sk-...').fill(FAKE_MODEL.apiKey)
+    const status = page.getByText(/^已从端点获取 \d+ 个模型。$/u)
+    await status.waitFor({ state: 'visible', timeout: 15_000 })
+    const combobox = page.locator('input[role="combobox"]')
+    const beforeOpen = { expanded: await combobox.getAttribute('aria-expanded'), requests: fake.requests.filter(kind => kind === 'models').length }
+    await page.getByRole('button', { name: '展开候选模型', exact: true }).click()
+    const listbox = page.getByRole('listbox', { name: '候选模型' })
+    await listbox.evaluate(element => element.scrollIntoView({ block: 'center' }))
+    await page.mouse.move(0, 0)
+    const observed = { beforeOpen, status: await status.innerText(), options: await listbox.getByRole('option').allInnerTexts(),
+      requests: fake.requests.filter(kind => kind === 'models').length }
+    await shoot('models-name-auto')
+    assert.deepEqual(beforeOpen, { expanded: 'false', requests: 1 }, '填好 Key 就自动获取一次，不需要展开')
+    assert.equal(observed.requests, 1, '展开不重复获取')
+    assert.deepEqual(observed.options.map(text => text.trim()), [...FIXTURE_ENDPOINT_MODELS], '候选只来自端点，按端点顺序')
+    assert.equal(observed.status, `已从端点获取 ${FIXTURE_ENDPOINT_MODELS.length} 个模型。`)
+    return observed
+  } },
+  'models-name-failed': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
+    await stage.openSettings(page)
+    await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
+    await page.getByPlaceholder('sk-...').fill('wrong-key-for-model-list')
+    const status = page.getByText('鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', { exact: true })
+    await status.waitFor({ state: 'visible', timeout: 15_000 })
+    await page.getByRole('button', { name: '展开候选模型', exact: true }).click()
+    await page.locator('input[role="combobox"]').evaluate(element => element.closest('.rounded-xl')?.scrollIntoView({ block: 'start' }))
+    await page.mouse.move(0, 0)
+    const observed = { status: await status.innerText(), color: await status.evaluate(element => getComputedStyle(element).color),
+      options: await page.getByRole('listbox', { name: '候选模型' }).getByRole('option').count() }
+    await shoot('models-name-failed')
+    assert.equal(observed.options, 0, '获取失败时没有候选')
     return observed
   } },
   'models-name-endpoint': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const observed = await openFixtureModelSuggestions(context, 'zh-CN')
     await context.shoot('models-name-endpoint')
     assert.equal(observed.requests, 1, '展开时自动获取一次')
-    assert.match(observed.options[0], /^gpt-4\.1\s*推荐$/u, JSON.stringify(observed))
+    assert.equal(observed.options[0].trim(), FIXTURE_ENDPOINT_MODELS[0], JSON.stringify(observed))
     assert.ok(observed.options.some(text => text.startsWith('gateway/novel-writer-pro')), JSON.stringify(observed))
     assert.equal(observed.status, `已从端点获取 ${FIXTURE_ENDPOINT_MODELS.length} 个模型。`)
     await context.page.getByRole('button', { name: '收起候选模型', exact: true }).click()
@@ -417,7 +458,8 @@ export const REFS_SCENARIOS = {
   'models-name-en': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const observed = await openFixtureModelSuggestions(context, 'en-US')
     await context.shoot('models-name-en')
-    assert.match(observed.options[0], /^gpt-4\.1\s*Recommended$/u, JSON.stringify(observed))
+    assert.equal(observed.options[0].trim(), FIXTURE_ENDPOINT_MODELS[0], JSON.stringify(observed))
+    assert.ok(observed.options.every(text => !/Recommended/u.test(text)), JSON.stringify(observed))
     assert.equal(observed.status, `Fetched ${FIXTURE_ENDPOINT_MODELS.length} models from the endpoint.`)
     return observed
   } },
@@ -457,10 +499,13 @@ export const REFS_SCENARIOS = {
     assert.ok(Number.parseFloat(layout.optionFontSize) >= 13, '列表行字号不小于 13px')
     return { ...observed, layout, afterDrag }
   } },
+  // 没填 Key 的新配置切到 Gemini，不会去请求 Google；手填与预设同名的模型，仍带上 Gemini 3 的思考映射。
   'models-gemini-thinking-off': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
     await stage.openSettings(page)
-    await page.getByRole('button', { name: `编辑「${FAKE_MODEL.name}」`, exact: true }).click()
+    await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
     await page.locator('select').filter({ has: page.locator('option[value="gemini"]') }).first().selectOption('gemini')
+    assert.equal(await page.locator('input[role="combobox"]').inputValue(), '', '切换服务商后模型名留空')
+    await page.locator('input[role="combobox"]').fill('gemini-3.8-flash')
     await page.getByRole('button', { name: '高级设置', exact: true }).click()
     await page.getByLabel('模型推理覆盖', { exact: true }).selectOption('off')
     const settings = page.locator('[data-model-reasoning-override-settings]')

@@ -11,6 +11,7 @@ import type { GlobalConfig, LLMFinishReason, LLMRequest, LLMResponse, ModelDisco
 import { knownAppErrorMessage } from '../../src/i18n/app-errors'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { isReasoningMapping, reasoningAdapterFitsProtocol } from '../../src/shared/reasoning-types'
+import { isLocalModelEndpoint } from '../../src/shared/provider-presets'
 import { LLMFactory } from '../llm/llm-factory'
 import { getMainLocale, mainT, mainText } from '../i18n'
 import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
@@ -30,14 +31,12 @@ interface ActiveStream {
 
 const activeStreams = new Map<string, ActiveStream>()
 const CONNECTION_TEST_MAX_TOKENS = 1024
-const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
 const LOCAL_CONNECTION_TEST_TIMEOUT_MS = 120_000
 const CLOUD_CONNECTION_TEST_TIMEOUT_MS = 30_000
 
 /** 本机模型冷启动要先把权重载入显存，常常超过 30 秒；云端卡住多是网络或代理问题，早点报出来。 */
 function connectionTestTimeoutMs(model: ModelProfile): number {
-  const hostname = URL.canParse(model.baseUrl) ? new URL(model.baseUrl).hostname : ''
-  return model.provider === 'ollama' || LOCAL_HOSTNAMES.has(hostname) ? LOCAL_CONNECTION_TEST_TIMEOUT_MS : CLOUD_CONNECTION_TEST_TIMEOUT_MS
+  return isLocalModelEndpoint(model) ? LOCAL_CONNECTION_TEST_TIMEOUT_MS : CLOUD_CONNECTION_TEST_TIMEOUT_MS
 }
 
 const CLOSED_EXECUTION_LEASE_TOMBSTONE_TTL_MS = 5 * 60_000

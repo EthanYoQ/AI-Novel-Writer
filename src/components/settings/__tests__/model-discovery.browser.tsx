@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { page, userEvent } from 'vitest/browser'
 
-import type { ModelDiscoveryResult, ModelProfile } from '../../../shared/ipc-channels'
+import type { ModelDiscoveryRequest, ModelDiscoveryResult, ModelProfile } from '../../../shared/ipc-channels'
 import type { Locale } from '../../../i18n/types'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -54,14 +54,28 @@ function discoveryRequest(model: ModelProfile) {
 
 const suggestionOptions = () => Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
 const suggestionValues = () => suggestionOptions().map(option => option.querySelector('span')?.textContent ?? '')
-const recommendedValues = () => suggestionOptions()
-  .filter(option => /推荐|Recommended/u.test(option.textContent ?? ''))
-  .map(option => option.querySelector('span')?.textContent ?? '')
 const modelNameInput = () => {
   const input = document.querySelector('input[role="combobox"]')
   if (!(input instanceof HTMLInputElement)) throw new Error('Missing model name combobox')
   return input
 }
+const apiKeyInput = () => {
+  const input = modelNameInput().closest('.rounded-xl')?.querySelector('input[type="password"]')
+  if (!(input instanceof HTMLInputElement)) throw new Error('Missing API key input')
+  return input
+}
+const baseUrlInput = (value: string) => {
+  const input = Array.from(document.querySelectorAll('input')).find(candidate => candidate.value === value)
+  if (!input) throw new Error(`Missing base URL input with ${value}`)
+  return input
+}
+const statusText = () => document.getElementById(modelNameInput().getAttribute('aria-describedby') ?? '')?.textContent ?? undefined
+const endpointModels = (...values: string[]) => values.map(value => ({ id: value, name: value, value }))
+const listed = (...values: string[]) => vi.fn<(request: ModelDiscoveryRequest) => Promise<ModelDiscoveryResult>>(async () => ({ success: true, models: endpointModels(...values) }))
+/** 比自动获取的防抖多等一点，确认这段时间里确实没有发请求。 */
+const AUTO_DISCOVERY_WAIT_MS = 800
+const DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro']
+const OLLAMA_MODELS = ['qwen2.5', 'llama3.3', 'llama3.2']
 
 async function openSuggestions(locale: Locale = 'zh-CN') {
   if (modelNameInput().getAttribute('aria-expanded') === 'true') {
@@ -127,6 +141,16 @@ async function renderSettings(
     root?.render(<StageSettings library={false} />)
   })
   return { saveModel, setDefaultModel }
+}
+
+/** 打开一份已保存、条件齐全的配置，展开列表，等端点模型列出来。 */
+async function renderFetched(values: readonly string[], overrides: Partial<ModelProfile> = {}) {
+  const discoverModels = vi.fn<(request: ModelDiscoveryRequest) => Promise<ModelDiscoveryResult>>(async () => ({ success: true, models: endpointModels(...values) }))
+  const rendered = await renderSettings(savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', ...overrides }), discoverModels)
+  await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+  await openSuggestions()
+  await vi.waitFor(() => expect(suggestionValues()).toEqual([...values]))
+  return { ...rendered, discoverModels }
 }
 
 afterEach(async () => {
@@ -652,24 +676,38 @@ describe('model discovery settings flow', () => {
   })
 
   it.each([
-    { locale: 'zh-CN' as const, add: '添加模型', badge: '推荐' },
-    { locale: 'en-US' as const, add: 'Add model', badge: 'Recommended' },
-  ])('shows the provider presets as $locale recommendations without requesting the endpoint when no key is filled', async ({ locale, add, badge }) => {
-    const discoverModels = vi.fn()
+    { locale: 'zh-CN' as const, add: '添加模型', hint: '填写 base_url 和 API Key 后获取模型列表。' },
+    { locale: 'en-US' as const, add: 'Add model', hint: 'Enter the base_url and API key to fetch the model list.' },
+  ])('offers no suggestions and asks for the base_url and key in $locale before they are filled', async ({ locale, add, hint }) => {
+    const discoverModels = listed('gpt-5.5-mini')
     await renderSettings(savedProfile(), discoverModels, locale, [], false)
     await act(async () => { await page.getByRole('button', { name: add, exact: true }).click() })
+    expect(statusText()).toBe(hint)
     await openSuggestions(locale)
-
-    const openaiPresets = ['gpt-4.1', 'gpt-4.1-2025-04-14', 'o3', 'gpt-4o']
-    expect(suggestionValues().slice(0, openaiPresets.length)).toEqual(openaiPresets)
-    expect(recommendedValues()).toEqual([])
-    expect(suggestionOptions()[0].textContent).not.toContain(badge)
-    expect(document.querySelector('[role="status"]')?.textContent).toMatch(locale === 'zh-CN' ? /^候选为推荐模型。/u : /^Showing recommended models\./u)
+    expect(suggestionOptions()).toHaveLength(0)
+    expect(statusText()).toBe(hint)
+    expect(document.body.textContent).not.toMatch(/推荐|Recommended/u)
+    await typeInto(baseUrlInput('https://api.openai.com'), 'https://gateway.invalid/v1')
+    await new Promise(resolve => setTimeout(resolve, AUTO_DISCOVERY_WAIT_MS))
     expect(discoverModels).not.toHaveBeenCalled()
+    expect(statusText()).toBe(hint)
   })
 
-  it('asks for the endpoint and key before the model name, so a new configuration fetches on the first open', async () => {
-    const discoverModels = vi.fn(async () => ({ success: true as const, models: [{ id: 'gpt-5.5-mini', name: 'gpt-5.5-mini', value: 'gpt-5.5-mini' }] }))
+  it('starts a new configuration with an empty model name and says what is missing before saving', async () => {
+    await renderSettings(savedProfile(), vi.fn(), 'zh-CN', [], false)
+    await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
+    expect(modelNameInput().value).toBe('')
+    const save = page.getByRole('button', { name: '保存配置', exact: true })
+    await expect.element(save).toBeDisabled()
+    await expect.element(save).toHaveAccessibleDescription('保存前还需填写：API Key、模型名称。')
+    await typeInto(apiKeyInput(), 'sk-new-key')
+    await expect.element(save).toHaveAccessibleDescription('保存前还需填写：模型名称。')
+    await typeInto(modelNameInput(), 'my-model')
+    await expect.element(save).toBeEnabled()
+  })
+
+  it('asks for the endpoint and key before the model name, and fetches once the key is filled without opening the list', async () => {
+    const discoverModels = listed('gpt-5.5-mini')
     await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
     await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
     const form = modelNameInput().closest('.rounded-xl')
@@ -678,26 +716,116 @@ describe('model discovery settings flow', () => {
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
 
-    await typeInto(form!.querySelector<HTMLInputElement>('input[type="password"]')!, 'sk-new-key')
+    for (const partial of ['s', 'sk-', 'sk-new-key']) await typeInto(apiKeyInput(), partial)
+    await vi.waitFor(() => expect(statusText()).toBe('已从端点获取 1 个模型。'))
+    expect(discoverModels).toHaveBeenCalledTimes(1)
+    expect(discoverModels).toHaveBeenCalledWith({ provider: 'openai', protocol: 'openai', baseUrl: 'https://api.openai.com',
+      apiKey: 'sk-new-key', purposes: ['generation', 'refinement', 'summary'] })
+    expect(modelNameInput().getAttribute('aria-expanded')).toBe('false')
     await openSuggestions()
-    await vi.waitFor(() => expect(suggestionValues()).toContain('gpt-5.5-mini'))
+    expect(suggestionValues()).toEqual(['gpt-5.5-mini'])
     expect(discoverModels).toHaveBeenCalledTimes(1)
   })
 
-  it('fetches once when the list is first opened and replaces the presets with the endpoint list', async () => {
-    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
+  it('drops the fetched list and fetches again with the new key after the key changes', async () => {
+    const discoverModels = vi.fn(async ({ apiKey }: { apiKey: string }) => ({ success: true as const,
+      models: endpointModels(apiKey === 'sk-second' ? 'second-key-model' : 'first-key-model') }))
+    await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
+    await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
+    await typeInto(apiKeyInput(), 'sk-first')
+    await vi.waitFor(() => expect(statusText()).toBe('已从端点获取 1 个模型。'))
+    await typeInto(apiKeyInput(), 'sk-second')
+    expect(statusText()).toBeUndefined()
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(2))
+    expect(discoverModels.mock.calls[1][0]).toMatchObject({ apiKey: 'sk-second' })
+    await vi.waitFor(() => expect(statusText()).toBe('已从端点获取 1 个模型。'))
+    await openSuggestions()
+    expect(suggestionValues()).toEqual(['second-key-model'])
+  })
+
+  it('fetches without a key for a local address, while saving a non-Ollama provider still asks for one', async () => {
+    const discoverModels = listed('local-model')
+    await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
+    await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
+    await typeInto(baseUrlInput('https://api.openai.com'), 'http://127.0.0.1:1234/v1')
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '' })))
+    await typeInto(modelNameInput(), 'local-model')
+    const save = page.getByRole('button', { name: '保存配置', exact: true })
+    await expect.element(save).toBeDisabled()
+    await expect.element(save).toHaveAccessibleDescription('保存前还需填写：API Key。')
+  })
+
+  it('keeps the connection test off until a model name is filled', async () => {
+    await renderSettings(savedProfile(), vi.fn(), 'zh-CN', [], false)
+    await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
+    await typeInto(apiKeyInput(), 'sk-new-key')
+    const test = page.getByRole('button', { name: '测试连接', exact: true })
+    await expect.element(test).toBeDisabled()
+    await typeInto(modelNameInput(), 'gpt-5.5-mini')
+    await expect.element(test).toBeEnabled()
+  })
+
+  it('saves a typed model name on a new configuration whose endpoint has no model list', async () => {
+    const discoverModels = vi.fn(async () => ({ success: false as const, errorCode: 'unsupported' as const }))
+    const { saveModel } = await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
+    await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
+    await typeInto(baseUrlInput('https://api.openai.com'), 'https://gateway.invalid/v1')
+    await typeInto(apiKeyInput(), 'sk-gateway')
+    await expect.element(page.getByText('该端点不支持标准模型列表接口。请继续手工填写模型 ID。', { exact: true })).toBeVisible()
+    await typeInto(modelNameInput(), 'gateway/private-model')
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'https://gateway.invalid/v1', modelName: 'gateway/private-model' }))
+  })
+
+  it.each(['selected', 'typed'] as const)('keeps the Gemini 3 thinking evidence for a %s model named like a preset', async (how) => {
+    const model = savedProfile({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', modelName: '' })
     const discoverModels = vi.fn(async () => ({ success: true as const, models: [
-      { id: 'deepseek-chat-next', name: 'deepseek-chat-next', value: 'deepseek-chat-next' },
-      { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
+      { id: 'models/gemini-3.8-flash', name: 'Gemini 3.8 Flash', value: 'gemini-3.8-flash', capabilities: { contextWindowTokens: 1_048_576, maxOutputTokens: 65_536 } },
     ] }))
+    const { saveModel } = await renderSettings(model, discoverModels)
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    if (how === 'selected') {
+      await openSuggestions()
+      await vi.waitFor(() => expect(suggestionValues()).toEqual(['gemini-3.8-flash']))
+      await chooseSuggestion('gemini-3.8-flash')
+    } else {
+      await typeInto(modelNameInput(), 'gemini-3.8-flash')
+    }
+    await act(async () => {
+      await page.getByRole('button', { name: '高级设置', exact: true }).click()
+      await page.getByLabelText('模型推理覆盖').selectOptions('off')
+    })
+    const settings = container?.querySelector('[data-model-reasoning-override-settings]')?.textContent ?? ''
+    expect(settings).toContain('关闭 → 低')
+    expect(settings).toContain('Gemini 3 无法完全关闭思考')
+    expect(container?.querySelector('[data-reasoning-wire]')?.textContent).toBe('thinking_level=low')
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ modelName: 'gemini-3.8-flash',
+      capabilities: expect.objectContaining({ reasoning: true, structuredOutput: true }) }))
+  })
+
+  it('applies the preset capabilities of a typed embedding model', async () => {
+    const model = savedProfile({ provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', modelName: '', purposes: ['embedding'] })
+    const { saveModel } = await renderSettings(model, vi.fn())
+    await act(async () => { useLayoutStore.setState({ settingsSection: 'embedding' }) })
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await typeInto(modelNameInput(), 'BAAI/bge-m3')
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ modelName: 'BAAI/bge-m3',
+      capabilities: expect.objectContaining({ contextWindowTokens: 8192 }) }))
+  })
+
+  it('fetches once when a saved configuration first opens its list and shows the endpoint order', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
+    const discoverModels = listed('deepseek-chat-next', 'deepseek-v4-flash')
     await renderSettings(model, discoverModels)
     await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await new Promise(resolve => setTimeout(resolve, AUTO_DISCOVERY_WAIT_MS))
     expect(discoverModels).not.toHaveBeenCalled()
 
     await openSuggestions()
-    await vi.waitFor(() => expect(suggestionValues()).toEqual(['deepseek-v4-flash', 'deepseek-chat-next']))
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['deepseek-chat-next', 'deepseek-v4-flash']))
     expect(discoverModels).toHaveBeenCalledWith(discoveryRequest(model))
-    expect(recommendedValues()).toEqual(['deepseek-v4-flash'])
     await expect.element(page.getByText('已从端点获取 2 个模型。', { exact: true })).toBeVisible()
 
     await openSuggestions()
@@ -705,7 +833,7 @@ describe('model discovery settings flow', () => {
     expect(discoverModels).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps the endpoint capability declaration of a recommended model served by a gateway', async () => {
+  it('keeps the endpoint capability declaration of a catalog model served by a gateway', async () => {
     const model = savedProfile({ provider: 'openai', baseUrl: 'https://gateway.example/v1', modelName: 'manual-model', maxTokens: 65_536 })
     const discoverModels = vi.fn(async () => ({ success: true as const, models: [
       { id: 'gpt-4.1', name: 'gpt-4.1', value: 'gpt-4.1', capabilities: { contextWindowTokens: 16_000, maxOutputTokens: 8_000 } },
@@ -722,10 +850,7 @@ describe('model discovery settings flow', () => {
   })
 
   it('keeps the list in place while a press on a control below it completes, so the click is not lost', async () => {
-    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
-    await renderSettings(model, vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
-    await openSuggestions()
+    await renderFetched(DEEPSEEK_MODELS)
     const input = modelNameInput()
     await act(async () => { input.focus() })
     const cancel = Array.from(document.querySelectorAll('button')).find(button => button.textContent === '取消')
@@ -747,9 +872,7 @@ describe('model discovery settings flow', () => {
   })
 
   it('starts ArrowUp at the last suggestion after typing, and leaves Enter to the IME while composing', async () => {
-    const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
-    await renderSettings(model, vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await renderFetched(OLLAMA_MODELS, { provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
     const input = modelNameInput()
     await act(async () => { input.focus() })
     await typeInto(input, 'LLAMA')
@@ -765,39 +888,32 @@ describe('model discovery settings flow', () => {
   })
 
   it('drops a stale highlight when a refresh replaces the suggestions', async () => {
-    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
+    const { discoverModels } = await renderFetched(DEEPSEEK_MODELS)
     let settle!: (result: ModelDiscoveryResult) => void
-    const discoverModels = vi.fn(() => new Promise<ModelDiscoveryResult>(resolve => { settle = resolve }))
-    await renderSettings(model, discoverModels)
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    discoverModels.mockImplementationOnce(() => new Promise<ModelDiscoveryResult>(resolve => { settle = resolve }))
+    await act(async () => { await page.getByRole('button', { name: '获取模型列表', exact: true }).click() })
     const input = modelNameInput()
-    await act(async () => { input.focus() })
     await act(async () => { await userEvent.keyboard('{ArrowDown}') })
     await act(async () => { await userEvent.keyboard('{ArrowDown}') })
+    expect(document.activeElement).toBe(input)
     expect(document.getElementById(input.getAttribute('aria-activedescendant') ?? '')?.querySelector('span')?.textContent).toBe('deepseek-v4-pro')
 
-    await act(async () => settle({ success: true, models: [
-      { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
-      { id: 'endpoint-only', name: 'endpoint-only', value: 'endpoint-only' },
-    ] }))
+    await act(async () => settle({ success: true, models: endpointModels('deepseek-v4-flash', 'endpoint-only') }))
     await vi.waitFor(() => expect(suggestionValues()).toEqual(['deepseek-v4-flash', 'endpoint-only']))
     expect(input.hasAttribute('aria-activedescendant')).toBe(false)
     await act(async () => { await userEvent.keyboard('{Enter}') })
     expect(input.value).toBe('deepseek-v4-flash')
   })
 
-  it('tells Ollama users to refresh instead of asking for an API key', async () => {
-    const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
+  it('asks Ollama users only for the base_url', async () => {
+    const model = savedProfile({ provider: 'ollama', baseUrl: '', modelName: 'qwen2.5', apiKey: '' })
     await renderSettings(model, vi.fn())
     await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
-    expect(document.querySelector('[role="status"]')?.textContent).toBe('候选为推荐模型。点刷新按钮可获取本机已安装的模型。')
+    expect(statusText()).toBe('填写 base_url 后获取模型列表。')
   })
 
   it('collapses the list when focus leaves it with the keyboard', async () => {
-    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
-    await renderSettings(model, vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
-    await openSuggestions()
+    await renderFetched(DEEPSEEK_MODELS)
     await act(async () => { modelNameInput().focus() })
     await act(async () => { await userEvent.keyboard('{Tab}') })
     expect(modelNameInput().getAttribute('aria-expanded')).toBe('true')
@@ -806,9 +922,7 @@ describe('model discovery settings flow', () => {
   })
 
   it('filters suggestions while typing and keeps any typed model name', async () => {
-    const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
-    const { saveModel } = await renderSettings(model, vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    const { saveModel } = await renderFetched(OLLAMA_MODELS, { provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
 
     await typeInto(modelNameInput(), 'LLAMA3')
     expect(suggestionValues()).toEqual(['llama3.3', 'llama3.2'])
@@ -820,10 +934,9 @@ describe('model discovery settings flow', () => {
   })
 
   it('chooses a suggestion with the arrow keys and Enter, and Escape only closes the list', async () => {
-    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
-    await renderSettings(model, vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await renderFetched(DEEPSEEK_MODELS)
     const input = modelNameInput()
+    await act(async () => { await page.getByRole('button', { name: '收起候选模型', exact: true }).click() })
     await act(async () => { input.focus() })
 
     await act(async () => { await userEvent.keyboard('{ArrowDown}') })
@@ -844,14 +957,11 @@ describe('model discovery settings flow', () => {
   })
 
   it('links the model name to a status line between the input and the list that also reads out empty results', async () => {
-    const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
-    await renderSettings(model, vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await renderFetched(OLLAMA_MODELS, { provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
     const status = () => document.getElementById(modelNameInput().getAttribute('aria-describedby') ?? '')
     expect(status()?.getAttribute('role')).toBe('status')
-    expect(status()?.textContent).toBe('候选为推荐模型。点刷新按钮可获取本机已安装的模型。')
+    expect(status()?.textContent).toBe(`已从端点获取 ${OLLAMA_MODELS.length} 个模型。`)
 
-    await openSuggestions()
     const listbox = document.querySelector('[role="listbox"]')!
     expect(status()!.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await typeInto(modelNameInput(), 'my-private-model')
@@ -864,10 +974,7 @@ describe('model discovery settings flow', () => {
   })
 
   it('keeps the list open and the input focused when the list padding is pressed', async () => {
-    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
-    await renderSettings(model, vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
-    await openSuggestions()
+    await renderFetched(DEEPSEEK_MODELS)
     await act(async () => { modelNameInput().focus() })
     await act(async () => { await userEvent.click(page.getByRole('listbox'), { position: { x: 2, y: 2 } }) })
     expect(document.activeElement).toBe(modelNameInput())
@@ -879,77 +986,57 @@ describe('model discovery settings flow', () => {
     await renderSettings(savedProfile(), discoverModels)
     await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
     await openSuggestions()
-    const status = document.getElementById(modelNameInput().getAttribute('aria-describedby') ?? '')?.textContent
-    expect(status).toBe('正在获取端点模型列表…')
-  })
-
-  it('reads out that a provider without presets has no suggestions yet', async () => {
-    await renderSettings(savedProfile({ apiKey: '' }), vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
-    await openSuggestions()
-    expect(suggestionOptions()).toHaveLength(0)
-    expect(document.getElementById(modelNameInput().getAttribute('aria-describedby') ?? '')?.textContent)
-      .toContain('暂无候选模型，可直接输入模型名称。')
+    expect(statusText()).toBe('正在获取端点模型列表…')
   })
 
   it('marks only the current model with a check', async () => {
-    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-pro', apiKey: '' })
-    await renderSettings(model, vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
-    await openSuggestions()
+    await renderFetched(DEEPSEEK_MODELS, { modelName: 'deepseek-v4-pro' })
     const checked = suggestionOptions().filter(option => option.querySelector('svg[aria-hidden="true"]'))
     expect(checked.map(option => option.querySelector('span')?.textContent)).toEqual(['deepseek-v4-pro'])
     expect(checked[0].getAttribute('aria-selected')).toBe('true')
   })
 
-  it('does not tell a user without a key to press refresh', async () => {
-    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
-    await renderSettings(model, vi.fn())
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
-    expect(document.querySelector('[role="status"]')?.textContent).toBe('候选为推荐模型。填写 API Key 后展开会自动获取端点模型列表。')
-  })
-
   it('ignores clicks on suggestions while a refresh is about to replace them', async () => {
-    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
+    const { discoverModels } = await renderFetched(DEEPSEEK_MODELS)
     let settle!: (result: ModelDiscoveryResult) => void
-    const discoverModels = vi.fn(() => new Promise<ModelDiscoveryResult>(resolve => { settle = resolve }))
-    await renderSettings(model, discoverModels)
-    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
-    await openSuggestions()
+    discoverModels.mockImplementationOnce(() => new Promise<ModelDiscoveryResult>(resolve => { settle = resolve }))
+    await act(async () => { await page.getByRole('button', { name: '获取模型列表', exact: true }).click() })
     expect(suggestionOptions().every(option => option.getAttribute('aria-disabled') === 'true')).toBe(true)
     await chooseSuggestion('deepseek-v4-pro')
     expect(modelNameInput().value).toBe('deepseek-v4-flash')
 
-    await act(async () => settle({ success: true, models: [
-      { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
-      { id: 'endpoint-only', name: 'endpoint-only', value: 'endpoint-only' },
-    ] }))
+    await act(async () => settle({ success: true, models: endpointModels('deepseek-v4-flash', 'endpoint-only') }))
     await chooseSuggestion('endpoint-only')
     expect(modelNameInput().value).toBe('endpoint-only')
   })
 
-  it('drops the fetched list after switching provider and fetches again for the new provider', async () => {
+  it('clears the model name, the key and the fetched list after switching provider, so the old key never reaches the new endpoint', async () => {
     const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
     const discoverModels = vi.fn<(request: { provider: string }) => Promise<ModelDiscoveryResult>>(async () => ({
-      success: true, models: [{ id: 'deepseek-only', name: 'deepseek-only', value: 'deepseek-only' }],
+      success: true, models: endpointModels('deepseek-only'),
     }))
     await renderSettings(model, discoverModels)
     await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
     await openSuggestions()
     await vi.waitFor(() => expect(suggestionValues()).toEqual(['deepseek-only']))
+    await act(async () => { await page.getByRole('button', { name: '收起候选模型', exact: true }).click() })
 
     const providerSelect = Array.from(document.querySelectorAll('select')).find(select => select.value === 'deepseek')
     if (!providerSelect) throw new Error('Missing provider select')
-    let settle!: () => void
-    discoverModels.mockImplementationOnce(() => new Promise(resolve => {
-      settle = () => resolve({ success: true, models: [{ id: 'models/gemini-3.8-flash', name: 'Gemini 3.8 Flash', value: 'gemini-3.8-flash' }] })
-    }))
+    discoverModels.mockImplementationOnce(async () => ({ success: true,
+      models: [{ id: 'models/gemini-3.8-flash', name: 'Gemini 3.8 Flash', value: 'gemini-3.8-flash' }] }))
     await typeInto(providerSelect, 'gemini')
-    await openSuggestions()
-    expect(suggestionValues()).not.toContain('deepseek-only')
+    expect(modelNameInput().value).toBe('')
+    expect(apiKeyInput().value).toBe('')
+    expect(statusText()).toBe('填写 base_url 和 API Key 后获取模型列表。')
+    await new Promise(resolve => setTimeout(resolve, AUTO_DISCOVERY_WAIT_MS))
+    expect(discoverModels).toHaveBeenCalledTimes(1)
+    await typeInto(apiKeyInput(), 'gemini-key')
     await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(2))
-    expect(discoverModels.mock.calls[1][0]).toMatchObject({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com' })
-    await act(async () => settle())
-    await vi.waitFor(() => expect(suggestionValues()).toEqual(['gemini-3.8-flash']))
+    expect(discoverModels.mock.calls[1][0]).toMatchObject({ provider: 'gemini', protocol: 'gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com', apiKey: 'gemini-key' })
+    await vi.waitFor(() => expect(statusText()).toBe('已从端点获取 1 个模型。'))
+    await openSuggestions()
+    expect(suggestionValues()).toEqual(['gemini-3.8-flash'])
   })
 })

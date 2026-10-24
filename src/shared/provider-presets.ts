@@ -471,6 +471,13 @@ export function createProviderCatalog(): ProviderPreset[] {
 /** 内置默认预设（首次启动时写入持久化文件） */
 export const BUILTIN_PRESETS: ProviderPreset[] = createProviderCatalog()
 
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/** Ollama 和本机地址上的模型服务：不需要 API Key，连接测试也按本机放宽超时。 */
+export function isLocalModelEndpoint({ provider, baseUrl }: { provider: string, baseUrl: string }): boolean {
+  return provider === 'ollama' || (URL.canParse(baseUrl.trim()) && LOCAL_HOSTNAMES.has(new URL(baseUrl.trim()).hostname))
+}
+
 function normalizedOfficialBaseUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null
   try {
