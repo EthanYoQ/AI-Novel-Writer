@@ -61,11 +61,15 @@ it('keeps a field the author cleared even when the database wrote a new value', 
   })
 })
 
-it('takes the database value for a field the author typed in and then restored', () => {
+it('keeps a field the author typed in and then restored, since the input is still the author input', () => {
   const base = linLan(chapterOneState)
   const draft = authorEdit(authorEdit(base, 'location', '半路'), 'location', '旧港')
 
-  expect(mergedState(base, draft, linLan(chapterThreeState))).toEqual(chapterThreeState)
+  expect(mergedState(base, draft, linLan(chapterThreeState))).toEqual({
+    ...chapterThreeState,
+    location: '旧港',
+    provenance: { ...chapterThreeState.provenance, location: author(1) },
+  })
 })
 
 it('merges by field when the author started the state on a card that had none', () => {
@@ -121,4 +125,20 @@ it('saves the refreshed state with the new revision after finalization wrote it 
 
   expect(commit?.expectedRevision).toBe(2)
   expect(commit?.entries[0].currentState).toEqual(expected)
+})
+
+it('keeps an unsaved author value across later refreshes after the database once wrote the same text', async () => {
+  invoke.mockResolvedValue(roster([linLan(chapterOneState)], 1))
+  await useCharacterStore.getState().load(path)
+  const loaded = useCharacterStore.getState().characters[0]
+  useCharacterStore.getState().updateField('林岚id', 'currentState', authorStateEdit(loaded, 'location', '灯塔顶层灯室'))
+
+  invoke.mockResolvedValue(roster([linLan(chapterThreeState)], 2))
+  await useCharacterStore.getState().load(path)
+  invoke.mockResolvedValue(roster([linLan({ ...chapterThreeState, location: '图书馆', updatedAtChapter: 4, provenance: { ...chapterThreeState.provenance, location: derived(4) } })], 3))
+  await useCharacterStore.getState().load(path)
+
+  const state = useCharacterStore.getState().characters[0].currentState
+  expect({ location: state?.location, provenance: state?.provenance?.location, updatedAtChapter: state?.updatedAtChapter })
+    .toEqual({ location: '灯塔顶层灯室', provenance: author(1), updatedAtChapter: 4 })
 })
