@@ -127,6 +127,25 @@ describe('directory workflow guard', () => {
     expect(result).toMatchObject({ ok: false, message: expect.stringContaining(expected) })
     expect(result.message).not.toMatch(/[\u4e00-\u9fff]/u)
   })
+
+  it('lists missing sections in the language active after the character check returns', async () => {
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    let finish!: (value: unknown) => void
+    vi.mocked(ipc.invokeWithProjectSession).mockImplementation(((_session: ProjectSessionContext, channel: string) => {
+      if (channel === 'db:project-core-get') return Promise.resolve({ premise: 'p'.repeat(60), charactersArch: '', worldbuilding: '', synopsis: 's'.repeat(60) })
+      if (channel === 'db:character-get-all') return new Promise(resolve => { finish = resolve })
+      throw new Error(`Unexpected channel: ${channel}`)
+    }) as never)
+
+    const pending = guardDirectoryGeneration(projectPath, projectSession)
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    useLocaleStore.setState({ locale: 'en-US' })
+    finish([{ id: 1 }])
+    const result = await pending
+
+    expect(result).toMatchObject({ ok: true, message: expect.stringContaining('Worldbuilding') })
+    expect(result.message).not.toMatch(/\p{Script=Han}/u)
+  })
 })
 
 describe('chapter workflow guard locale', () => {

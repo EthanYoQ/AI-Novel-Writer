@@ -114,24 +114,18 @@ export async function guardDirectoryGeneration(
 
   const { projectPath, projectSession } = captured
   const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath)
-  const missing: string[] = []
+  // 只记下缺了哪几块，等最后一次查询回来再按当时的语言写出名字。
+  const missing: (readonly [string, string])[] = []
 
   const checkHasContent = (text: string | null | undefined) => text && text.length > 50 && !text.includes('> 待生成')
 
-  const premiseLabel = localize(shown(), '故事前提', 'Story premise')
-  if (!core || !checkHasContent(core.premise)) missing.push(premiseLabel)
-  if (!core || !checkHasContent(core.charactersArch)) {
-    missing.push(localize(shown(), ...ARCH_STEP_NAMES.characters))
-  }
-  if (!core || !checkHasContent(core.worldbuilding)) {
-    missing.push(localize(shown(), '世界观', 'Worldbuilding'))
-  }
-  if (!core || !checkHasContent(core.synopsis)) {
-    missing.push(localize(shown(), '情节大纲', 'Plot outline'))
-  }
+  const premiseMissing = !core || !checkHasContent(core.premise)
+  if (!core || !checkHasContent(core.charactersArch)) missing.push(ARCH_STEP_NAMES.characters)
+  if (!core || !checkHasContent(core.worldbuilding)) missing.push(['世界观', 'Worldbuilding'])
+  if (!core || !checkHasContent(core.synopsis)) missing.push(['情节大纲', 'Plot outline'])
 
   // 故事前提是必须的（第一个大块）
-  if (missing.includes(premiseLabel)) {
+  if (premiseMissing) {
     return {
       ok: false,
       message: localize(
@@ -158,12 +152,13 @@ export async function guardDirectoryGeneration(
 
   // 其他部分缺失：警告但允许继续
   if (missing.length > 0) {
+    const labels = missing.map(label => localize(shown(), ...label))
     return {
       ok: true, // 允许继续，但携带警告信息
       message: localize(
         shown(),
-        `注意：以下架构信息尚未生成，蓝图质量可能受影响：\n${missing.map(m => `• ${m}`).join('\n')}\n\n建议先生成完整架构，或继续使用现有内容。`,
-        `The following architecture sections have not been generated, which may affect blueprint quality:\n${missing.map(m => `• ${m}`).join('\n')}\n\nGenerate the complete architecture first, or continue with the available content.`,
+        `注意：以下架构信息尚未生成，蓝图质量可能受影响：\n${labels.map(m => `• ${m}`).join('\n')}\n\n建议先生成完整架构，或继续使用现有内容。`,
+        `The following architecture sections have not been generated, which may affect blueprint quality:\n${labels.map(m => `• ${m}`).join('\n')}\n\nGenerate the complete architecture first, or continue with the available content.`,
       ),
     }
   }
