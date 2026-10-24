@@ -16,6 +16,7 @@ import { openChapterPlan } from '../../../../stores/navigation/stage-navigation'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore } from '../../../../stores/workflow-store'
 import { openDraftTab } from '../../../../stores/open-draft-tab'
+import { toast } from '../../../ui/Toast'
 import { commandLabel } from '../../shortcut-keys'
 import StageSpine from '../../StageSpine'
 import StageWorkspace from '../../StageWorkspace'
@@ -315,6 +316,31 @@ describe('单章视图的主按钮随五种状态变化', () => {
     await click('重试')
     await vi.waitFor(() => expect(workflows.createRepairFinalizeWorkflow).toHaveBeenCalledTimes(2))
     expect(workflows.createRepairFinalizeWorkflow.mock.calls.map(call => [call[0], call[3]])).toEqual([[3, undefined], [3, 'character_cards']])
+  })
+
+  it('定稿：修复前的检查还没回来时切到英文，拦下修复的提示用英文', async () => {
+    const draft = backend.addDraft({ status: 'finalized' })
+    backend.state.postProcess = { steps: [
+      { stepKey: 'character_cards', label: '角色状态更新', ok: false, errorMsg: '模型长时间没有响应', attemptCount: 1 },
+    ] }
+    let finish!: (value: number) => void
+    const fallback = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation((channel: string, ...args: unknown[]) => channel === 'db:draft-get-max-finalized-chapter'
+      ? new Promise<number>(resolve => { finish = resolve })
+      : fallback(channel, ...args))
+    const shown = vi.spyOn(toast, 'error')
+    try {
+      await mount()
+      await openDraft(draft.id)
+      await click('重试失败步骤')
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+      await act(async () => finish(0))
+      await vi.waitFor(() => expect(shown).toHaveBeenCalledWith('Could not run the repair.'))
+      expect(workflows.createRepairFinalizeWorkflow).not.toHaveBeenCalled()
+    } finally {
+      shown.mockRestore()
+    }
   })
 })
 

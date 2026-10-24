@@ -160,4 +160,19 @@ describe('character regeneration guard locale', () => {
     })
     expect(blocked.message).not.toMatch(/[\u4e00-\u9fff]/u)
   })
+
+  it('reads the interface language when the blueprint check returns, not when it started', async () => {
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    currentProject = project
+    let finish!: (value: unknown) => void
+    vi.mocked(ipc.invokeWithProjectSession).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }) as never)
+    const pending = guardCharacterRegeneration(projectSession)
+    useLocaleStore.setState({ locale: 'en-US' })
+    finish([{ chapterNumber: 1 }])
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('Character cards cannot be regenerated while chapter blueprints exist'),
+    })
+  })
 })

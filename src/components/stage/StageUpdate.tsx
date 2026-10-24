@@ -148,7 +148,6 @@ export function LibraryUpdateCard() {
 /** 设置「关于与更新」里的应用更新：官方主页、检查更新与完整状态。 */
 export function UpdateSettings() {
   const text = useLocaleStore(s => s.text)
-  const locale = useLocaleStore(s => s.locale)
   const model = useUpdateState()
   const guard = useUpdateInstallGuard(model.requestInstall)
   const [homepageError, setHomepageError] = useState<string | null>(null)
@@ -160,7 +159,7 @@ export function UpdateSettings() {
       const result = await ipc.invoke('official-homepage:open')
       if (!result.success) throw new Error(result.error)
     } catch {
-      setHomepageError(getOfficialHomepageOpenError(locale))
+      setHomepageError(getOfficialHomepageOpenError(useLocaleStore.getState().locale))
     }
   }
 
