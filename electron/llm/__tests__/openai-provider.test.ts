@@ -263,6 +263,16 @@ describe('SiliconFlow explicit reasoning requests', () => {
   })
 })
 
+describe('OpenAIProvider non-streaming cancellation', () => {
+  it('lets the caller cancel the request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    await new OpenAIProvider().generate(novelAIModel, [{ role: 'user', content: 'hi' }], { temperature: 0.7, maxTokens: 16, signal: controller.signal })
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal)
+  })
+})
+
 describe('resolveOpenAIChatCompletionsUrl', () => {
   it.each([
     ['domain root', 'https://api.openai.com', 'https://api.openai.com/v1/chat/completions'],

@@ -17,6 +17,21 @@ export type ReasoningOverride = 'auto' | ReasoningEffort
 
 export type ReasoningResolutionStatus = 'mapped' | 'capped' | 'forced' | 'unsupported'
 
+/**
+ * generateContent 的 thinkingConfig.thinkingLevel 取值。minimal 是官方给的「不思考」档，但不保证完全不思考，
+ * 所以只用来承接产品里的「关闭」。https://ai.google.dev/gemini-api/docs/generate-content/thinking
+ */
+export const GEMINI_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high'] as const
+export type GeminiThinkingLevel = typeof GEMINI_THINKING_LEVELS[number]
+
+export function isGeminiThinkingLevel(value: unknown): value is GeminiThinkingLevel {
+  return GEMINI_THINKING_LEVELS.includes(value as GeminiThinkingLevel)
+}
+
+export function reasoningAdapterFitsProtocol(protocol: unknown, adapter: ProviderReasoningDirective['adapter']): boolean {
+  return (protocol === 'gemini') === (adapter === 'gemini-thinking-budget' || adapter === 'gemini-thinking-level')
+}
+
 export type ProviderReasoningDirective =
   | {
       adapter: 'siliconflow-v4-thinking'
@@ -29,6 +44,11 @@ export type ProviderReasoningDirective =
   | {
       adapter: 'gemini-thinking-budget'
       thinkingBudget: number
+    }
+  | {
+      /** Gemini 3 起用 thinkingLevel 代替 thinkingBudget。 */
+      adapter: 'gemini-thinking-level'
+      thinkingLevel: GeminiThinkingLevel
     }
   | {
       adapter: 'openai-thinking-budget'
@@ -57,7 +77,7 @@ export interface VerifiedReasoningMapping {
 export function isReasoningMapping(value: unknown): value is VerifiedReasoningMapping {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const mapping = value as VerifiedReasoningMapping
-  if (!['openai-reasoning-effort', 'openai-thinking-budget', 'deepseek-v4-thinking', 'siliconflow-v4-thinking', 'gemini-thinking-budget'].includes(mapping.adapter)
+  if (!['openai-reasoning-effort', 'openai-thinking-budget', 'deepseek-v4-thinking', 'siliconflow-v4-thinking', 'gemini-thinking-budget', 'gemini-thinking-level'].includes(mapping.adapter)
     || !Array.isArray(mapping.supportedEfforts) || !mapping.supportedEfforts.length
     || mapping.supportedEfforts.length > REASONING_EFFORTS.length
     || new Set(mapping.supportedEfforts).size !== mapping.supportedEfforts.length
@@ -73,6 +93,8 @@ export function isReasoningMapping(value: unknown): value is VerifiedReasoningMa
     } else if (mapping.adapter === 'gemini-thinking-budget' || mapping.adapter === 'openai-thinking-budget') {
       if (typeof wire !== 'number' || !Number.isSafeInteger(wire) || wire < 0 || effort === 'off' && wire !== 0) return false
       if (mapping.adapter === 'openai-thinking-budget' && effort !== 'off' && wire === 0) return false
+    } else if (mapping.adapter === 'gemini-thinking-level') {
+      if (!isGeminiThinkingLevel(wire) || (effort === 'off') !== (wire === 'minimal')) return false
     } else if (mapping.adapter === 'deepseek-v4-thinking') {
       if (typeof wire !== 'string' || (effort === 'off' ? wire !== 'disabled' : !['enabled', 'low', 'high', 'max'].includes(wire))) return false
     } else if (!['high', 'max'].includes(effort) || wire !== effort) return false

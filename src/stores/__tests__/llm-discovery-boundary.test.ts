@@ -44,6 +44,7 @@ describe('llm discovery renderer boundary', () => {
       protocol: draft.protocol,
       baseUrl: draft.baseUrl,
       apiKey: draft.apiKey,
+      purposes: draft.purposes,
     }
     const result = await useLLMStore.getState().discoverModels(request)
 

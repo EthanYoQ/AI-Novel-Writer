@@ -24,6 +24,7 @@ const reasoningModel: ModelProfile = {
   modelName: 'gemini-2.5-flash-lite',
   maxTokens: 65_536,
   reasoningOverride: 'high',
+  reasoningMapping: { adapter: 'gemini-thinking-budget', supportedEfforts: ['off', 'high'], providerValues: { off: 0, high: 24_576 } },
 }
 
 function sseReader(...messages: string[]) {
@@ -74,6 +75,36 @@ describe('GeminiProvider', () => {
       })
     }
   })
+  it.each([
+    { modelName: 'gemini-3.5-flash-lite', strategy: 'fluent-drafting' as const, stage: 'drafting' as const, thinkingLevel: 'minimal' },
+    { modelName: 'gemini-3.8-flash', strategy: 'deep-planning' as const, stage: 'review' as const, thinkingLevel: 'high' },
+  ])('sends Gemini 3 thinkingLevel $thinkingLevel for $modelName in normal and streaming requests', async ({ modelName, strategy, stage, thinkingLevel }) => {
+    const gemini3: ModelProfile = { ...model, provider: 'gemini', modelName, baseUrl: 'https://generativelanguage.googleapis.com', maxTokens: 65_536 }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: '正文' }] }, finishReason: 'STOP' }] }) })
+      .mockResolvedValueOnce({ ok: true, body: { getReader: () => ({ read: vi.fn().mockResolvedValue({ done: true }) }) } })
+    vi.stubGlobal('fetch', fetchMock)
+    const resolved = resolveGenerationParameters(gemini3, { maxTokens: 512, creativeStrategy: strategy, reasoningStage: stage })
+
+    await new GeminiProvider().generate(gemini3, [{ role: 'user', content: '写正文' }], resolved)
+    await new GeminiProvider().generateStream(gemini3, [{ role: 'user', content: '写正文' }], {
+      ...resolved, signal: new AbortController().signal, onChunk: vi.fn(), onDone: vi.fn(), onError: vi.fn(),
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [, request] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      expect(JSON.parse(String(request.body)).generationConfig.thinkingConfig).toEqual({ thinkingLevel })
+    }
+  })
+
+  it('lets the caller cancel a non-streaming request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ candidates: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    await new GeminiProvider().generate(model, [{ role: 'user', content: 'hi' }], { temperature: 0.7, maxTokens: 16, signal: controller.signal })
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal)
+  })
+
   it('sends the resolved generic profile temperature in both payload forms', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({

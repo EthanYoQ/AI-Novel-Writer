@@ -66,26 +66,27 @@ export const QUALIFICATION_PRICE_SNAPSHOTS = Object.freeze([
     provider: 'deepseek',
     modelName: 'deepseek-v4-flash',
     sourceUrl: 'https://api-docs.deepseek.com/quick_start/pricing/',
-    asOf: '2026-08-12',
-    inputUsdPerMillionTokens: 0.14,
-    outputUsdPerMillionTokens: 0.28,
+    asOf: '2026-10-24',
+    // 官方分高峰与非高峰两档，估算取高峰价（缓存未命中），只会高估。
+    inputUsdPerMillionTokens: 0.3,
+    outputUsdPerMillionTokens: 1.2,
   }),
   Object.freeze({
     provider: 'xai',
     modelName: 'grok-4.5',
     sourceUrl: 'https://docs.x.ai/developers/models/grok-4.5',
-    asOf: '2026-08-12',
+    asOf: '2026-10-24',
     inputUsdPerMillionTokens: 2,
     outputUsdPerMillionTokens: 6,
     maximumEstimatedInputTokens: 200_000,
   }),
   Object.freeze({
     provider: 'gemini',
-    modelName: 'gemini-2.5-flash-lite',
+    modelName: 'gemini-3.8-flash',
     sourceUrl: 'https://ai.google.dev/gemini-api/docs/pricing',
-    asOf: '2026-08-12',
-    inputUsdPerMillionTokens: 0.1,
-    outputUsdPerMillionTokens: 0.4,
+    asOf: '2026-10-24',
+    inputUsdPerMillionTokens: 0.75,
+    outputUsdPerMillionTokens: 3.75,
   }),
 ])
 const QUALIFICATION_PRICE_SNAPSHOT_MAX_AGE_DAYS = 7
@@ -105,7 +106,7 @@ const QUALIFICATION_TARGETS = Object.freeze([
   Object.freeze({
     provider: 'gemini',
     protocol: 'gemini',
-    modelName: 'gemini-2.5-flash-lite',
+    modelName: 'gemini-3.8-flash',
     baseUrl: 'https://generativelanguage.googleapis.com',
   }),
 ])

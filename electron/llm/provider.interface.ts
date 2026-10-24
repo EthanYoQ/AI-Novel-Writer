@@ -25,6 +25,7 @@ export interface LLMGenerateOptions {
    * process default.
    */
   conversationId?: string
+  signal?: AbortSignal
 }
 
 export interface LLMStreamOptions extends LLMGenerateOptions {

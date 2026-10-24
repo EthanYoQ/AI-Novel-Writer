@@ -75,6 +75,22 @@ describe('model configuration corruption boundary', () => {
     } })).resolves.toMatchObject({ success: false, error: expect.stringContaining('INVALID_REASONING_MAPPING') })
     expect(fs.readFileSync(file)).toEqual(before)
   })
+  it('saves a Gemini thinking-level mapping only on the Gemini protocol and only with documented levels', async () => {
+    const mapping = { adapter: 'gemini-thinking-level', supportedEfforts: ['off', 'high'], providerValues: { off: 'minimal', high: 'high' } }
+    await expect(handler('llm:save-model')({}, { id: 'gemini-3', protocol: 'gemini', reasoningMapping: mapping }))
+      .resolves.toEqual({ success: true })
+    const file = path.join(velaHome, 'models.json')
+    const before = fs.readFileSync(file)
+    for (const rejected of [
+      { id: 'gemini-3', protocol: 'openai', reasoningMapping: mapping },
+      { id: 'gemini-3', protocol: 'gemini', reasoningMapping: { ...mapping, providerValues: { off: 'low', high: 'high' } } },
+      { id: 'gemini-3', protocol: 'gemini', reasoningMapping: { ...mapping, providerValues: { off: 'minimal', high: 'ultra' } } },
+    ]) {
+      await expect(handler('llm:save-model')({}, rejected))
+        .resolves.toMatchObject({ success: false, error: expect.stringContaining('INVALID_REASONING_MAPPING') })
+    }
+    expect(fs.readFileSync(file)).toEqual(before)
+  })
   it('refuses to overwrite an existing malformed models file when saving a model', async () => {
     const modelsPath = path.join(velaHome, 'models.json')
     const originalBytes = Buffer.from('{BROKEN_MODELS_SECRET_MARKER', 'utf8')

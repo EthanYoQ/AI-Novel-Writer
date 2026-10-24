@@ -19,7 +19,7 @@ function plan(profile = model(), input = task, budget = ledger()) {
   const receipt = createModelExecutionLeaseReceipt(profile, { leaseId: '合成租约', createdAt: 1, expiresAt: 1000 })
   return buildMainGenerationPlan(profile, receipt, input, budget)
 }
-const gemini = () => model({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', modelName: 'gemini-2.5-flash-lite', reasoningOverride: 'medium' })
+const gemini = () => model({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', modelName: 'gemini-3.5-flash-lite', reasoningOverride: 'medium' })
 const silicon = () => model({ baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash', capabilities: { contextWindowTokens: 65536, maxOutputTokens: 8192, reasoning: false, structuredOutput: false, usage: false } })
 
 describe('new physical root liability', () => {
@@ -191,14 +191,22 @@ describe('main generation physical liability planning without provider calls', (
     expect(result.options.maxTokens).toBe(result.requestedOutputTokens)
     expect(result.reasoningUpperBoundTokens).toBe(0)
   })
-  it('counts Gemini explicit thinking exactly once in remaining and total', () => {
+  it('counts the thinking budget of a saved Gemini 2.5 Flash-Lite profile exactly once in remaining and total', () => {
     const budget = ledger(); budget.policy.maxTokenLiability = 10000
-    const result = plan(gemini(), task, budget)
+    const result = plan({ ...gemini(), modelName: 'gemini-2.5-flash-lite' }, task, budget)
     expect(result.options.reasoning).toEqual({ adapter: 'gemini-thinking-budget', thinkingBudget: 8192 })
     expect(result.reasoningUpperBoundTokens).toBe(8192)
     expect(result.requestedOutputTokens).toBe(10000 - result.inputUpperBoundTokens - 8192 - 512)
     expect(result.reservedTokens).toBe(10000)
     expect(result.usagePolicy.reasoning).toBe('separately-billed')
+  })
+  it('sends a Gemini 3 thinking level without claiming a numeric thinking bound', () => {
+    const budget = ledger(); budget.policy.maxTokenLiability = 10000
+    const result = plan(gemini(), task, budget)
+    expect(result.options.reasoning).toEqual({ adapter: 'gemini-thinking-level', thinkingLevel: 'medium' })
+    expect(result.reasoningUpperBoundTokens).toBe(0)
+    expect(result.usagePolicy).toMatchObject({ reasoning: 'unknown', canBoundTotalLiability: false })
+    expect(result.reservedTokens).toBeLessThanOrEqual(10000)
   })
   it('distinguishes known Gemini zero from an unknown thinking estimate', () => {
     expect(plan({ ...gemini(), reasoningOverride: 'off' }).reasoningUpperBoundTokens).toBe(0)

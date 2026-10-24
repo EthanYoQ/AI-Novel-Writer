@@ -8,7 +8,7 @@ function source(file: string): string {
 
 describe('model settings contract', () => {
   it('keeps the user-facing field vocabulary and provider options in the model form', () => {
-    const settingsModal = source('src/components/settings/ModelForm.tsx')
+    const settingsModal = source('src/components/settings/ModelForm.tsx') + source('src/components/settings/ModelNameField.tsx')
 
     for (const field of [
       ['model（模型名称）', 'model'],

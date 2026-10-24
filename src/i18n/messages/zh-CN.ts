@@ -95,6 +95,7 @@ export const zhCN = {
   'error.recoveryCandidateTextEmpty': '恢复稿没有可见正文，没有保存。请写入正文后再保存。',
   'error.consistencyExemptionReasonInvalid': '请填写豁免原因（不超过 500 字）。',
   'error.postProcessSourceChanged': '这一章的定稿在后处理开始前有了变化（可能被删除或重新定稿），后处理没有开始。请刷新后再看。',
+  'error.connectionTestTimeout': '连接测试 {seconds} 秒内没有完成，已停止等待。请检查网络或代理设置后重试。',
   'error.embeddingRequestFailed': '检索模型请求失败。请检查检索模型的 Base URL、网关与 API Key。',
   'error.embeddingOllamaNativeUrl': '这是 Ollama 原生的 /api 地址，本应用使用 OpenAI 兼容接口。请把检索模型 Base URL 末尾的 /api 改成 /v1。',
   'error.embeddingResponseInvalid': '检索模型返回的结果不合格（条数、维度或数值不对），本次没有写入。请检查检索模型的 Base URL，或换一个检索模型。',

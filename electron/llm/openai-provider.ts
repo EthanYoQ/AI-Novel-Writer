@@ -124,6 +124,7 @@ export class OpenAIProvider implements ILLMProvider {
         method: 'POST',
         headers: this.buildRequestHeaders(model, opts.conversationId),
         body: JSON.stringify(body),
+        signal: opts.signal,
       })
 
       if (!res.ok) {

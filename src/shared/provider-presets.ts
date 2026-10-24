@@ -4,7 +4,7 @@
  */
 
 import type { VerifiedReasoningMapping } from './reasoning-types'
-import { isReasoningMapping } from './reasoning-types'
+import { isReasoningMapping, reasoningAdapterFitsProtocol } from './reasoning-types'
 
 /** 单个模型的预设 — name + 该模型的输出 token 上限 */
 export interface ModelPreset {
@@ -74,10 +74,30 @@ export interface ProviderPreset {
   protocol: string
   /** 支持的生成模型列表（含各自的 maxTokens） */
   models: ModelPreset[]
+  retiredModels?: ModelPreset[]
   /** 支持的向量模型列表（embedding 模型不需要 maxTokens） */
   embeddingModels: string[]
   /** 向量模型的能力元数据，按模型 ID 索引以保持旧的 string[] 配置兼容。 */
   embeddingModelCapabilities?: Record<string, ModelCapabilities>
+}
+
+function geminiThinkingLevelPreset(name: string, supportsMinimal: boolean): ModelPreset {
+  return {
+    name,
+    maxTokens: 65_536,
+    capabilities: {
+      contextWindowTokens: 1_048_576,
+      maxOutputTokens: 65_536,
+      reasoning: true,
+      structuredOutput: true,
+      usage: true,
+    },
+    reasoningMapping: {
+      adapter: 'gemini-thinking-level',
+      supportedEfforts: supportsMinimal ? ['off', 'low', 'medium', 'high'] : ['low', 'medium', 'high'],
+      providerValues: { ...(supportsMinimal ? { off: 'minimal' } : {}), low: 'low', medium: 'medium', high: 'high' },
+    },
+  }
 }
 
 /**
@@ -389,7 +409,16 @@ export function createProviderCatalog(): ProviderPreset[] {
     displayName: 'Google Gemini',
     baseUrl: 'https://generativelanguage.googleapis.com',
     protocol: 'gemini',
+    // 容量见各模型页 https://ai.google.dev/gemini-api/docs/models/<模型 ID>（输入 1,048,576、输出 65,536，
+    // 均支持 Thinking 与 Structured outputs）；思考等级见 https://ai.google.dev/gemini-api/docs/generate-content/thinking 。
     models: [
+      geminiThinkingLevelPreset('gemini-3.8-flash', false),
+      geminiThinkingLevelPreset('gemini-3.5-flash-lite', true),
+      geminiThinkingLevelPreset('gemini-3.1-pro-preview', false),
+      geminiThinkingLevelPreset('gemini-3-flash-preview', true),
+    ],
+    // 2.5 Flash-Lite 已不对新用户开放（调用返回 404），老用户已保存的配置仍按原映射调用。
+    retiredModels: [
       {
         name: 'gemini-2.5-flash-lite',
         maxTokens: 65536,
@@ -407,10 +436,9 @@ export function createProviderCatalog(): ProviderPreset[] {
           providerValues: { off: 0, low: 1_024, medium: 8_192, high: 24_576 },
         },
       },
-      { name: 'gemini-3.1-pro-preview', maxTokens: 65536 },
-      { name: 'gemini-3-flash-preview', maxTokens: 65536 },
     ],
-    embeddingModels: ['text-embedding-004'],
+    // text-embedding-004 已不在 models 列表里；gemini-embedding-001 默认返回 3072 维。
+    embeddingModels: ['gemini-embedding-001'],
   },
   {
     provider: 'ollama',
@@ -507,6 +535,11 @@ function validatedBudgetCapabilities(value: unknown): ModelBudgetCapabilities | 
   }
 }
 
+function catalogModel(preset: ProviderPreset, modelName: string): ModelPreset | undefined {
+  return preset.models.find(candidate => candidate.name === modelName)
+    ?? preset.retiredModels?.find(candidate => candidate.name === modelName)
+}
+
 function matchesBudgetCapabilityEndpoint(preset: ProviderPreset, baseUrl: unknown): boolean {
   const endpoint = normalizedOfficialBaseUrl(baseUrl)
   if (!endpoint) return false
@@ -533,7 +566,7 @@ export function resolveModelProfileBudgetCapabilities(
     !preset
   ) return undefined
 
-  const model = preset.models.find(candidate => candidate.name === modelName)
+  const model = catalogModel(preset, modelName)
   // Qwen evidence is scoped to the published CN endpoint, not the V4 alias.
   if (modelName === 'Qwen/Qwen3.8-27B'
     && normalizedOfficialBaseUrl(profile.baseUrl) !== 'https://api.siliconflow.cn/v1') return undefined
@@ -573,7 +606,7 @@ export function resolveModelProfileCapabilities(
     return undefined
   }
 
-  const model = preset.models.find(candidate => candidate.name === modelName)
+  const model = catalogModel(preset, modelName)
   return validatedCapabilities(model?.capabilities)
 }
 
@@ -583,7 +616,7 @@ export function resolveModelProfileStructuredOutput(profile: ModelCapabilityProf
   const modelName = profile.modelName.trim()
   const preset = BUILTIN_PRESETS.find(candidate => candidate.protocol === profile.protocol
     && normalizedOfficialBaseUrl(profile.baseUrl) === normalizedOfficialBaseUrl(candidate.baseUrl))
-  return preset?.models.find(candidate => candidate.name === modelName)?.structuredOutput
+  return preset ? catalogModel(preset, modelName)?.structuredOutput : undefined
 }
 
 /**
@@ -597,7 +630,7 @@ export function resolveModelProfileReasoningMapping(
   if (profile.reasoningMapping !== undefined) {
     const mapping = profile.reasoningMapping
     return isReasoningMapping(mapping)
-      && (profile.protocol === 'gemini') === (mapping.adapter === 'gemini-thinking-budget')
+      && reasoningAdapterFitsProtocol(profile.protocol, mapping.adapter)
       ? mapping : undefined
   }
   if (
@@ -613,7 +646,7 @@ export function resolveModelProfileReasoningMapping(
     && normalizedOfficialBaseUrl(profile.baseUrl) === normalizedOfficialBaseUrl(candidate.baseUrl))
   if (!preset) return undefined
 
-  const mapping = preset.models.find(candidate => candidate.name === modelName)
+  const mapping = catalogModel(preset, modelName)
     ?.reasoningMapping
   if (!mapping) return undefined
   return {

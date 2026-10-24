@@ -339,7 +339,21 @@ describe('ModelDiscoveryService', () => {
     const saved = profile({ id: `empty-${protocol}`, provider, protocol, baseUrl })
 
     await expect(new ModelDiscoveryService().discoverModels(saved))
-      .resolves.toEqual({ success: false, errorCode: 'empty' })
+      .resolves.toEqual({ success: false, errorCode: 'no_models' })
+  })
+
+  it('tells a list with no model for this purpose apart from an empty list', async () => {
+    const baseUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ models: [
+        { name: 'models/gemini-embedding-001', supportedGenerationMethods: ['embedContent'] },
+        { name: 'models/gemini-3.8-flash-tts', supportedGenerationMethods: ['generateContent'] },
+      ] }))
+    }))
+    const saved = profile({ id: 'unsuitable-gemini', provider: 'gemini', protocol: 'gemini', baseUrl, purposes: ['generation'] })
+
+    await expect(new ModelDiscoveryService().discoverModels(saved))
+      .resolves.toEqual({ success: false, errorCode: 'no_suitable_models' })
   })
 
   it.each([
@@ -471,6 +485,59 @@ describe('ModelDiscoveryService', () => {
     expect(observableOutput).not.toContain(baseUrl)
     expect(observableOutput).not.toContain(credential)
     expect(observableOutput).not.toContain(providerError)
+  })
+
+  describe('按用途筛选端点返回的模型', () => {
+    // 节选自 2026-10-24 真实 Gemini models 接口：TTS、图像、转写、音乐与实时模型同样声明 generateContent。
+    const geminiCatalog = {
+      models: [
+        { name: 'models/gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+        { name: 'models/gemini-3.8-flash-tts', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+        { name: 'models/gemini-3.1-flash-image', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+        { name: 'models/nano-banana-pro-preview', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/gemini-3.5-transcribe', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+        { name: 'models/lyria-3.5', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+        { name: 'models/gemini-2.5-computer-use-preview-10-2025', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/deep-research-preview-04-2026', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/antigravity-preview-latest', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/gemini-robotics-er-2-preview', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/gemini-3.1-pro-preview-customtools', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/gemini-2.5-flash-native-audio-latest', supportedGenerationMethods: ['countTokens', 'bidiGenerateContent'] },
+        { name: 'models/gemini-3.8-live', supportedGenerationMethods: ['bidiGenerateContent'] },
+        { name: 'models/aqa', supportedGenerationMethods: ['generateAnswer'] },
+        { name: 'models/gemini-embedding-001', supportedGenerationMethods: ['embedContent', 'countTokens'] },
+        { name: 'models/gemini-embedding-2', supportedGenerationMethods: ['embedContent', 'countTokens'] },
+        { name: 'models/gateway-without-methods' },
+      ],
+    }
+    const geminiFetch = () => vi.fn().mockResolvedValue({ ok: true, json: async () => geminiCatalog })
+    const values = (result: Awaited<ReturnType<ModelDiscoveryService['discoverModels']>>) =>
+      result.success ? result.models.map(model => model.value) : result
+
+    it('生成用途只留下能写作的 generateContent 模型', async () => {
+      const result = await new ModelDiscoveryService({ fetchImpl: geminiFetch() }).discoverModels(profile({
+        provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', purposes: ['generation'],
+      }))
+      expect(values(result)).toEqual(['gemini-3.8-flash', 'gemini-3.1-pro-preview-customtools', 'gateway-without-methods'])
+    })
+
+    it('向量用途只留下 embedContent 模型', async () => {
+      const result = await new ModelDiscoveryService({ fetchImpl: geminiFetch() }).discoverModels(profile({
+        provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', purposes: ['embedding'],
+      }))
+      expect(values(result)).toEqual(['gemini-embedding-001', 'gemini-embedding-2', 'gateway-without-methods'])
+    })
+
+    it('OpenAI 兼容端点的向量用途把向量模型排在对话模型前面', async () => {
+      const fetchImpl = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [
+        { id: 'Qwen/Qwen3.8-27B' }, { id: 'BAAI/bge-m3' }, { id: 'deepseek-v4-flash' }, { id: 'Qwen/Qwen3-Embedding-8B' },
+      ] }) })
+      const service = new ModelDiscoveryService({ fetchImpl })
+      const embedding = await service.discoverModels(profile({ baseUrl: 'https://example.test/v1', purposes: ['embedding'] }))
+      expect(values(embedding)).toEqual(['BAAI/bge-m3', 'Qwen/Qwen3-Embedding-8B', 'Qwen/Qwen3.8-27B', 'deepseek-v4-flash'])
+      const generation = await service.discoverModels(profile({ baseUrl: 'https://example.test/v1', purposes: ['generation'] }))
+      expect(values(generation)).toEqual(['Qwen/Qwen3.8-27B', 'BAAI/bge-m3', 'deepseek-v4-flash', 'Qwen/Qwen3-Embedding-8B'])
+    })
   })
 
   it('refuses an endpoint that would place the saved credential in the request URL', async () => {

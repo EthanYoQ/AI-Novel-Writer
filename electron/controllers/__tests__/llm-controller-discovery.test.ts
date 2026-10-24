@@ -73,6 +73,7 @@ const unsavedRequest: ModelDiscoveryRequest = {
   protocol: savedProfile.protocol,
   apiKey: savedProfile.apiKey,
   baseUrl: savedProfile.baseUrl,
+  purposes: ['embedding'],
 }
 
 beforeAll(() => {

@@ -9,7 +9,7 @@ import type {
   ReasoningPolicyResolution,
   VerifiedReasoningMapping,
 } from './reasoning-types'
-import { CREATIVE_STRATEGIES, REASONING_EFFORTS } from './reasoning-types'
+import { CREATIVE_STRATEGIES, isGeminiThinkingLevel, REASONING_EFFORTS } from './reasoning-types'
 
 const STAGE_REQUESTS: Readonly<Record<CreativeStrategy, Readonly<Record<GenerationReasoningStage, ReasoningEffort>>>> = {
   auto: { drafting: 'low', planning: 'medium', review: 'high', general: 'low' },
@@ -55,6 +55,9 @@ function providerDirective(
         }
       : undefined
   }
+  if (mapping.adapter === 'gemini-thinking-level') {
+    return isGeminiThinkingLevel(value) ? { adapter: mapping.adapter, thinkingLevel: value } : undefined
+  }
   return typeof value === 'number'
     ? { adapter: mapping.adapter, thinkingBudget: value }
     : undefined
@@ -74,7 +77,8 @@ function closestEffectiveEffort(
   const supported = [...mapping.supportedEfforts]
     .sort((left, right) => EFFORT_RANK[left] - EFFORT_RANK[right])
   if (supported.length === 0) return null
-  if (requested === 'off') return null
+  // Gemini 3 关不掉思考，也有型号拒收 minimal；不发参数会落到服务商的默认档（常是 medium 或 high），所以取最低档。
+  if (requested === 'off') return mapping.adapter === 'gemini-thinking-level' ? { effective: supported[0], status: 'forced' } : null
 
   const lowerOrEqual = supported.filter(effort => EFFORT_RANK[effort] <= EFFORT_RANK[requested])
   return {
