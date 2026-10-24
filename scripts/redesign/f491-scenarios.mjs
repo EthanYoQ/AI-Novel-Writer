@@ -96,7 +96,7 @@ const settled = page => page.waitForFunction(() => {
     && !document.querySelector('.stage-capsule:not([data-tone="ok"])')
 }, null, { timeout: 90_000 })
 
-async function openChapter(page, chapterNumber) {
+export async function openChapter(page, chapterNumber) {
   if (!await stage.chapterButton(page, chapterNumber).isVisible()) await stage.stageButton(page, '正文').click()
   await chapterView.open(page, chapterNumber)
 }

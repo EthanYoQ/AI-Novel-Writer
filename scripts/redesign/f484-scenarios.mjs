@@ -6,7 +6,7 @@ import * as architecture from './pages/architecture.mjs'
 import * as chapterView from './pages/chapter-view.mjs'
 import * as stage from './pages/stage.mjs'
 import { seedStageSample } from './scenarios.mjs'
-import { characterStateReply as roundtripReply, exportAndRestore, finalizeChapter, openCharacterState, openInUi, postDetail, stateFields } from './f491-scenarios.mjs'
+import { characterStateReply as roundtripReply, exportAndRestore, finalizeChapter, openChapter, openCharacterState, openInUi, postDetail, stateFields } from './f491-scenarios.mjs'
 
 const EVIDENCE = '林岚把纸条夹进父亲的地图里。'
 
@@ -108,6 +108,14 @@ export const F484_SCENARIOS = {
     context.fake.replyCharacterState(roundtripReply)
     const measured = {}
     await finalizeChapter(context.page, 3)
+    const chapter3Steps = await chapterView.postProcessSteps(context.page)
+    assert.equal(chapter3Steps.find(step => step.label === '角色状态更新')?.state, 'success', JSON.stringify(chapter3Steps))
+    await context.reload()
+    await openInUi(context, context.samplePath)
+    await openCharacterState(context.page)
+    const chapter3Location = (await stateFields(context.page)).find(field => field.label?.startsWith('当前位置'))
+    assert.deepEqual({ hint: chapter3Location?.hint, value: chapter3Location?.value }, { hint: '定稿派生', value: '灯塔顶层灯室' }, '删章前地点由第 3 章定稿写入')
+    await openChapter(context.page, 3)
     await chapterView.more(context.page, '删除正文…')
     await context.page.getByRole('button', { name: '删除', exact: true }).click()
     await chapterView.view(context.page).getByText('已定稿，只读', { exact: true }).waitFor({ state: 'detached', timeout: 60_000 })
@@ -130,8 +138,9 @@ export const F484_SCENARIOS = {
 
     const location = measured.fields.find(field => field.label?.startsWith('当前位置'))
     assert.equal(measured.detail, null, JSON.stringify(measured))
+    assert.equal(measured.steps.length, 4, JSON.stringify(measured))
     assert.ok(measured.steps.every(step => step.state === 'success'), JSON.stringify(measured))
-    assert.deepEqual({ hint: location.hint, value: location.value }, { hint: '定稿派生', value: '守塔人的屋子' }, '第 4 章按原项目一样更新了地点')
+    assert.deepEqual({ hint: location?.hint, value: location?.value }, { hint: '定稿派生', value: '守塔人的屋子' }, '第 4 章按原项目一样更新了地点')
     return measured
   } },
 }
