@@ -19,7 +19,7 @@ import {
 
 let projectPath = ''
 let authorizedRunIndex = 0
-const model = { baseUrl: 'https://unused.example/v1', apiKey: '', modelName: 'fts-only' }
+const model = { provider: 'openai', baseUrl: 'https://unused.example/v1', apiKey: '', modelName: 'fts-only' }
 
 function authorizedReference(content: string, sourceIdentity: string) {
   authorizedRunIndex += 1
@@ -126,7 +126,7 @@ describe('stable reference knowledge receipt', () => {
       { owner: started.execution.owner, epoch: started.execution.epoch },
       projectPath,
       'openai',
-      { baseUrl: 'https://embedding.example/v1', apiKey: 'configured', modelName: 'embedding-model' },
+      { provider: 'openai', baseUrl: 'https://embedding.example/v1', apiKey: 'configured', modelName: 'embedding-model' },
     )
     await fetchObserved
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -176,6 +176,7 @@ describe('stable reference knowledge receipt', () => {
       .mockImplementation(async () => embeddingResponse())
     vi.stubGlobal('fetch', fetchMock)
     const embeddingModel = {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1', apiKey: 'configured', modelName: 'embedding-model',
     }
 
@@ -268,6 +269,7 @@ describe('stable reference knowledge receipt', () => {
       projectPath,
       'openai',
       {
+        provider: 'openai',
         baseUrl: 'https://embedding.example/v1',
         apiKey: 'configured',
         modelName: 'embedding-model',
