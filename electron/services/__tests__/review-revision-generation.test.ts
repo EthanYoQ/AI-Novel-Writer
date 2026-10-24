@@ -28,6 +28,8 @@ import { useProjectStore } from '../../../src/stores/project-store'
 import { useEditorStore } from '../../../src/stores/editor-store'
 import type { WorkflowContext } from '../../../src/stores/workflow-store'
 import * as reviewRevisionMaterials from '../../../src/shared/review-revision-generation'
+import { buildRecoveryEntries, EMPTY_RECOVERY_SOURCES, type ReviewEntry } from '../../../src/components/run/run-recovery'
+import { buildReviewCycleRecheckReport } from '../../../src/shared/review-cycle'
 
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -669,8 +671,20 @@ describe('review and revision generation through the actual owner and SQLite', (
         context: { recheck: { version: 1, cycleId: cycle.cycle_id } } })
       const commit = { contextId: recovery.contextId!, handle: resumed.handle,
         artifact: { artifactId: recheckArtifact.artifactId, revision: recheckArtifact.revision, textHash: recheckArtifact.textHash } }
+      const digest = (owner: typeof reopened, current = owner.readReviewRevisionRecovery(resumed.handle)) => (buildRecoveryEntries({
+        ...EMPTY_RECOVERY_SOURCES, reviews: [{ view: owner.read(resumed.handle), recovery: current }] }, 'zh-CN')[0] as ReviewEntry)
+        .artifacts.find(item => item.id === recheckArtifact.artifactId)!.display
+      const expectDigestOf = (shown: string, savedContent: string) => {
+        const severities = (JSON.parse(savedContent).items as { severity: string }[]).map(item => item.severity)
+        const label = { warning: '未解决', unknown: '待核实', pass: '已解决' } as Record<string, string>
+        expect(shown.split('\n')[0]).toBe(severities.every(severity => severity === 'pass')
+          ? `复核确认全部意见已解决（${severities.length} 条意见）` : `复核未能确认全部意见已解决（${severities.length} 条意见）`)
+        expect(shown.split('\n').slice(1).map(line => line.split(' · ')[0])).toEqual(severities.map(severity => label[severity]))
+      }
+      const beforeCommit = digest(reopened, recovery)
       const savedRecheck = reopened.commitReview(commit)
       expect(savedRecheck.reviewCycle).toMatchObject({ cycleId: cycle.cycle_id, recheckCount: 1, disposition: 'completed' })
+      expectDigestOf(beforeCommit, savedRecheck.content)
       const parsed = JSON.parse(savedRecheck.content)
       expect(parsed.summary).toBe('模型认为已经修复。')
       expect(parsed.items[0]).toMatchObject({ severity: 'unknown', resolved: false,
@@ -721,6 +735,22 @@ describe('review and revision generation through the actual owner and SQLite', (
           expect(() => again.commitReview(commit)).toThrow('GENERATION_REVIEW_RECEIPT_INVALID')
           f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?')
             .run(JSON.stringify(usage), recheckArtifact.attemptId)
+        }
+        expectDigestOf(digest(again), expectedSaved.content)
+        if (reportVersion === 2) {
+          // 升级前的版本按第 1 版语义保存：同一份复核输出存成已解决。
+          const frozen = recovery.context.recheck!
+          const legacyReport = buildReviewCycleRecheckReport(recheckOutput, recovery.context.source.content, frozen, 'zh-CN')
+          const legacyContent = JSON.stringify({ summary: legacyReport.summary, items: legacyReport.items }, null, 2)
+          expect(legacyReport.items.map(item => item.severity)).toEqual(['pass'])
+          const legacy = structuredClone(usage)
+          legacy.reviewCycleRecheck.version = 1
+          legacy.reviewRevisionEffect.contentHash = textHash(legacyContent)
+          f.db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM reviews WHERE id=?)').run(legacyContent, savedRecheck.id)
+          f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?')
+            .run(JSON.stringify(legacy), recheckArtifact.attemptId)
+          expect(again.readReviewRevisionRecovery(resumed.handle).saved?.content).toBe(legacyContent)
+          expectDigestOf(digest(again), legacyContent)
         }
         expect(f.spy).toHaveBeenCalledTimes(3)
       } finally { again.suspendForProjectClose() }

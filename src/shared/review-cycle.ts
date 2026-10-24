@@ -171,6 +171,14 @@ function parseRecheckItems(content: string, reportVersion: ReviewReportVersion):
   } catch { return null }
 }
 
+/**
+ * 新提交的复核一律按第 2 版语义判定，冻结在旧任务里的第 1 版也不例外：模型判为已解决的仍待作者核实。
+ * 保存路径与恢复卡摘要共用这一口径，摘要才不会比保存结果更乐观。
+ */
+export function recheckCommitPolicy(context: ReviewCycleRecheckContext): ReviewCycleRecheckContext {
+  return { ...context, version: 2 }
+}
+
 /** Preserves saved parsing by reportVersion; context.version independently governs semantic resolution. */
 export function buildReviewCycleRecheckReport(content: string, merged: string,
   context: ReviewCycleRecheckContext, uiLocale: 'zh-CN' | 'en-US', reportVersion: ReviewReportVersion = 2): ReviewCycleRecheckReport {

@@ -12,7 +12,7 @@ import { redactVisibleCompletionText } from '../../bounded-completion'
 import { useProjectStore } from '../../../../stores/project-store'
 import type { ExpectedDraftSource } from '../../../../shared/ipc-channels'
 import type { MaterialDecisionReceipt } from '../../../../shared/generation-owner-contract'
-import { buildReviewCycleRecheckReport } from '../../../../shared/review-cycle'
+import { buildReviewCycleRecheckReport, recheckCommitPolicy } from '../../../../shared/review-cycle'
 
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 type Backend = (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -138,7 +138,7 @@ export class ReviewRevisionRuntimeFixture {
       if (recovery.saved) return structuredClone(recovery.saved)
       const content = channel === 'review-revision:commit-review'
         ? JSON.stringify(frozen.recheck ? (() => { const report = buildReviewCycleRecheckReport(recovery.latestArtifact!.text,
-          frozen.source.content, frozen.recheck!, frozen.uiLocale); return { summary: report.summary, items: report.items } })()
+          frozen.source.content, recheckCommitPolicy(frozen.recheck!), frozen.uiLocale); return { summary: report.summary, items: report.items } })()
           : buildReviewGenerationReport({ content: recovery.latestArtifact!.text, sourceContent: frozen.source.content,
             frozenGoals: frozen.frozenGoals, writingLanguage: frozen.writingLanguage, uiLocale: frozen.uiLocale,
             preflightFindings: frozen.preflightFindings }), null, 2)

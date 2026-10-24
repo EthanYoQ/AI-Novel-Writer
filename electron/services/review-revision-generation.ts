@@ -6,7 +6,7 @@ import type { BeginGenerationRequest } from '../../src/shared/generation-owner-c
 import type { PrepareReviewRevisionRequest, PreparedReviewRevisionContext, ReviewGenerationCommitRequest,
   RevisionGenerationCommitRequest, ReviewRevisionCommitReceipt, ReviewRevisionContext, ReviewRevisionRecovery } from '../../src/shared/review-revision-generation'
 import { buildReviewGenerationReport, type ReviewReportVersion } from '../../src/shared/review-generation-report'
-import { buildReviewCycleRecheckReport, isNoopRevision } from '../../src/shared/review-cycle'
+import { buildReviewCycleRecheckReport, isNoopRevision, recheckCommitPolicy } from '../../src/shared/review-cycle'
 import { countDraftUnits } from '../../src/shared/draft-units'
 import { assertMateriallyCompleteRevision } from '../../src/services/workflows/commands/refinement-completeness'
 import { GenerationRunRepository, textHash, type DurableGenerationRun } from '../repositories/generation-run-repository'
@@ -82,7 +82,7 @@ export class ReviewRevisionGeneration {
         const receipt = attempt && JSON.parse(attempt.usage_receipt_json).reviewCycleRecheck
         if (receipt?.version === 1 || receipt?.version === 2) persistedVersion = receipt.version
       } catch { /* Invalid persisted receipts fail later proof checks; do not downgrade current policy. */ }
-      const policy = { ...context.recheck, version: persistedVersion ?? 2 } as const
+      const policy = persistedVersion ? { ...context.recheck, version: persistedVersion } : recheckCommitPolicy(context.recheck)
       const built = buildReviewCycleRecheckReport(artifact.text, context.source.content, policy, context.uiLocale, reportVersion)
       return JSON.stringify({ summary: built.summary, items: built.items }, null, 2)
     }
@@ -206,7 +206,7 @@ export class ReviewRevisionGeneration {
       const receipt = this.record(run, request.artifact, { kind: 'review', id: result.id, index: result.reviewIndex, contentHash,
         reportVersion: 2 })
       if (context.recheck) {
-        const policy = { ...context.recheck, version: 2 } as const
+        const policy = recheckCommitPolicy(context.recheck)
         const built = buildReviewCycleRecheckReport(proof.artifact.text, context.source.content, policy, context.uiLocale)
         const findings = built.decisions.filter(decision => decision.status !== 'unknown').map(decision => {
           const item = built.items[decision.reviewItemIndex]!
