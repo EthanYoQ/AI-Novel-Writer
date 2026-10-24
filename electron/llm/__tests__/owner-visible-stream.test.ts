@@ -85,7 +85,8 @@ describe('durable owner visible-only provider boundary', () => {
     await new GeminiProvider().generateStream({ ...model, protocol: 'gemini' }, [], { ...options, visibleOnly })
     expect(options.onError).not.toHaveBeenCalled()
     expect(options.onChunk.mock.calls.flat().join('')).toBe(' 甲乙 ')
-    expect(options.onDone).toHaveBeenCalledExactlyOnceWith(' 甲乙 ', { promptTokens: 10, completionTokens: 20, totalTokens: 37 }, 'stop')
+    // 交给调用记录的输出含思考 7；预算证据仍按正文 20、思考 7 分开报（#484）。
+    expect(options.onDone).toHaveBeenCalledExactlyOnceWith(' 甲乙 ', { promptTokens: 10, completionTokens: 27, totalTokens: 37 }, 'stop')
     expect(options.onUsageEvidence).toHaveBeenCalledExactlyOnceWith({ usage: { promptTokens: 10, completionTokens: 20, totalTokens: 37 }, reasoningTokens: 7,
       accounting: 'separately-billed', totalIncludesReasoning: true, protocol: 'gemini' })
     expect(options.onReasoning.mock.calls.flat().join('')).toBe('hidden')

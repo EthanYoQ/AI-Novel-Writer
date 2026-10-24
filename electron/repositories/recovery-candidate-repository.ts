@@ -242,7 +242,8 @@ export class RecoveryCandidateRepository {
         SELECT * FROM recovery_candidates
         WHERE candidate_id = ? AND status = 'pending'
       `).get(candidateId) as RecoveryCandidateRow | undefined
-      if (!row || !sourceIsCurrent(row)) throw new Error('RECOVERY_CANDIDATE_SOURCE_CHANGED')
+      if (!row) throw new Error('RECOVERY_CANDIDATE_NOT_PENDING')
+      if (!sourceIsCurrent(row)) throw new Error('RECOVERY_CANDIDATE_SOURCE_CHANGED')
     }
     const result = db.prepare(`
       UPDATE recovery_candidates
