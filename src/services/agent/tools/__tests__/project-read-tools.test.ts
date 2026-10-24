@@ -213,6 +213,22 @@ describe('agent project read tools', () => {
     })
   })
 
+  it('英文 Agent：原因里只有扩展区汉字时也不原样拼进英文报错', async () => {
+    useProjectStore.setState({
+      currentProject: { ...project(projectAPath), novelConfig: { writingLanguage: 'en-US' } } as never,
+    })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'fs:read-file') return { success: false, content: '', error: '𠀀𠀁' }
+      if (channel === 'db:project-core-get') throw new Error('𠀀𠀁')
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() } })
+    const context = createAgentExecutionContext()
+
+    await expect(readFileTool.execute({ file_path: 'notes.md' }, context)).resolves.toMatchObject({ error: 'Could not read the file' })
+    await expect(readArchitectureTool.execute({}, context)).resolves.toMatchObject({ error: 'Could not read the architecture' })
+  })
+
   it.each(['zh-CN', 'en-US'] as const)('%s：没有失败原因时用工具自己的说明，不拼出以冒号结尾的半句或空说明', async writingLanguage => {
     useProjectStore.setState({
       currentProject: { ...project(projectAPath), novelConfig: { writingLanguage } } as never,

@@ -6,6 +6,8 @@ import { ipc } from '../../ipc-client'
 import { validatePath } from './safe-path'
 import { agentToolText, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 import { projectFactWorkflowForFilePath } from '../../project-fact-targets'
+import { containsHan } from '../../../i18n/app-errors'
+import { pluralEn } from '../../../shared/plural-en'
 
 export const writeFileTool = buildAgentTool({
   name: 'write_file',
@@ -97,7 +99,7 @@ export const writeFileTool = buildAgentTool({
         success: false,
         commitState,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail ?? '')
+        error: context?.writingLanguage === 'en-US' && containsHan(detail ?? '')
           ? text('写入失败', 'Could not write the file')
           : detail ?? text('写入失败', 'Could not write the file'),
       }
@@ -106,7 +108,7 @@ export const writeFileTool = buildAgentTool({
     return {
       success: true,
       commitState: 'committed',
-      content: text(`✅ 文件已写入：${filePath}（${content.length} 字符）`, `✅ File written: ${filePath} (${content.length} characters)`),
+      content: text(`✅ 文件已写入：${filePath}（${content.length} 字符）`, `✅ File written: ${filePath} (${content.length} ${pluralEn(content.length, 'character')})`),
       artifacts: [artifact],
     }
   },

@@ -1,10 +1,9 @@
 import { MoreHorizontal } from 'lucide-react'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { Menu, type MenuGroupSpec } from '../../ui/Menu'
+import { containsHan } from '../../../i18n/app-errors'
 import { coverTone } from './shelf-format'
 import type { ShelfBook as Book } from './use-shelf-overview'
-
-const CJK = /[㐀-鿿豈-﫿]/
 
 interface ShelfBookProps {
   book: Book
@@ -33,7 +32,7 @@ export default function ShelfBook({ book, selected, kicker, figure, caption, men
         onDoubleClick={onOpen}
       >
         {kicker && <span className="stage-book-kicker">{kicker}</span>}
-        <span className="stage-book-title" data-script={CJK.test(book.name) ? 'cjk' : 'latin'}>{book.name}</span>
+        <span className="stage-book-title" data-script={containsHan(book.name) ? 'cjk' : 'latin'}>{book.name}</span>
         {figure && <span className="stage-book-figure pi-num">{figure}</span>}
       </button>
       <div className="stage-book-foot">

@@ -3,6 +3,8 @@ import { useProjectStore } from '../../../stores/project-store'
 import { ipc } from '../../ipc-client'
 import { buildAgentTool, type AgentExecutionContext } from '../tool-registry'
 import { agentToolText, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
+import { containsHan } from '../../../i18n/app-errors'
+import { pluralEn } from '../../../shared/plural-en'
 
 const STRING_FIELDS = new Set<keyof NovelConfig>([
   'genre', 'subGenre', 'targetAudience', 'coreOutline', 'worldSetting', 'goldenFinger',
@@ -105,7 +107,7 @@ export const proposeNovelConfigTool = buildAgentTool({
       const receipt = await ipc.invokeWithProjectSession(projectSession, 'agent-generation:commit-domain-tool', { ref: context.agentToolAction })
       if (receipt.kind !== 'config') throw new Error('GENERATION_AGENT_DOMAIN_RECEIPT_MISMATCH')
       if (receipt.current !== false) useProjectStore.getState().updateNovelConfig(receipt.changes as Partial<NovelConfig>, projectSession)
-      return { success: true, content: text(`小说配置已更新（${Object.keys(receipt.changes).length} 个字段）`, `Novel configuration updated (${Object.keys(receipt.changes).length} fields)`) }
+      return { success: true, content: text(`小说配置已更新（${Object.keys(receipt.changes).length} 个字段）`, `Novel configuration updated (${Object.keys(receipt.changes).length} ${pluralEn(Object.keys(receipt.changes).length, 'field')})`) }
     }
     const result = await ipc.invokeWithProjectSession(
       projectSession, 'project:update-config', project.id, { novelConfig: nextConfig }, project.path,
@@ -115,12 +117,12 @@ export const proposeNovelConfigTool = buildAgentTool({
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail ?? '')
+        error: context?.writingLanguage === 'en-US' && containsHan(detail ?? '')
           ? text('小说配置写入失败', 'Could not update the novel configuration')
           : detail ?? text('小说配置写入失败', 'Could not update the novel configuration'),
       }
     }
     useProjectStore.getState().updateNovelConfig(proposal.changes, projectSession)
-    return { success: true, content: text(`小说配置已更新（${proposal.diffs.length} 个字段）`, `Novel configuration updated (${proposal.diffs.length} fields)`) }
+    return { success: true, content: text(`小说配置已更新（${proposal.diffs.length} 个字段）`, `Novel configuration updated (${proposal.diffs.length} ${pluralEn(proposal.diffs.length, 'field')})`) }
   },
 })
