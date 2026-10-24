@@ -495,3 +495,11 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
 | `f491-backup-roundtrip` | 旧版本里定稿第 3 章写入林岚的地点、道具、近况，用界面同一组 IPC 导出 .ainovel 再恢复、两轮后按 Ctrl O 打开第二个副本：「当前状态」三项是「历史派生（非当前）」、输入框为空（`f491-1-damaged-historical`）；定稿第 4 章，角色状态更新报 `FINALIZED_CHARACTER_SOURCE_CONFLICT` 原始错误（`f491-2-damaged-finalize-error`）。换新构建重启打开同一副本：失败说明是可读中文（`f491-3-fixed-readable-error`），点「重试失败步骤」后 3 / 3 完成（`f491-4-fixed-finalize-done`）；三项回到「定稿派生」并带第 4 章的新值，改「关键道具」后保存成功、该项变为「作者输入」 | 角色名单的当前状态 | 是 | #491 |
+
+## 定稿后处理的角色状态字段冲突（#484）
+
+场景在 `scripts/redesign/f484-scenarios.mjs`。主进程里卡住本流程第 2 次 `finalization-generation:commit`（第 1 次是章节要点，第 2 次是角色状态），卡住期间驱动在角色页改林岚的「当前位置」并保存，再放行，提交按 `FINALIZED_CHARACTER_FIELD_CONFLICT` 拒写。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `f484-field-conflict` | 第 3 章定稿后，角色状态更新这一步失败：中文说明以「正文定稿已保存，但角色卡没有自动更新：生成期间」开头（`f484-field-conflict-zh`）；切到英文后说明是英文、不带汉字（`f484-field-conflict-en`）；两种语言都不显示 `Error invoking` 与错误码 | 英文的定稿后处理 | 是 | #484 |
