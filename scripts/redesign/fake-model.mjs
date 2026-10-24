@@ -63,8 +63,11 @@ function responseFor(prompt, { extraction, plotTree, review }) {
   if (prompt.includes('不可变小说配置 JSON 合同') || prompt.includes('Immutable novel-configuration JSON contract')) {
     return { kind: 'config', content: JSON.stringify(FIXTURE_CONFIG) }
   }
-  const custom = typeof review === 'function' ? review(prompt) : null
-  if (custom) return { kind: 'review', content: custom }
+  if (typeof review === 'function') {
+    const custom = review(prompt)
+    if (custom !== null && custom !== undefined && typeof custom !== 'string') throw new Error('replyReview 的函数只能返回文本或空值')
+    if (custom) return { kind: 'review', content: custom }
+  }
   const outline = prompt.match(/本次只写第 (\d+) 章/)
   if (outline) return { kind: 'outline-chapter', content: outlineChapter(Number(outline[1])) }
   if (prompt.includes('【已确认纳入本次修稿的审稿项】')) return { kind: 'revision', content: FIXTURE_REVISED }
@@ -127,7 +130,7 @@ export async function startFakeModel(diagnostics) {
   const replyPlotTree = () => { plotTree = true }
   /** 之后的正文回复以 content_filter 结束：写稿在这次打开里失败，留下可恢复的候选。传 false 恢复。 */
   const failProse = (failed = true) => { failedProse = failed }
-  /** 之后的审稿（含合并后的复验）回这份 JSON；不调用时回默认审稿。也可传函数：它对任意提示词返回非空文本时就回这段文本（含修稿请求），返回空值时照常作答。 */
+  /** 之后的审稿（含合并后的复验）回这份 JSON；不调用时回默认审稿。也可传函数：它对任意提示词返回非空文本时就回这段文本（含修稿请求），返回空值时照常作答；它给出的回复一律记作 review。 */
   const replyReview = content => { review = content }
   const record = (kind, detail) => {
     requests.push(kind)

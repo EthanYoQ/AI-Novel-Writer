@@ -215,12 +215,12 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
       })
       context.data.refined = receipt.content
       context.data.refinedPath = sourcePath
-      callbacks.log(this.operation === 'refine-from-review'
-        ? text(`审稿修复完成（${countDraftUnits(receipt.content)} 字），修订稿版本 r${receipt.index}`,
-          `Review-based revision complete (${countDraftUnits(receipt.content)} ${pluralEn(countDraftUnits(receipt.content), 'word')}); revision r${receipt.index} is ready.`)
-        : text(`修稿完成（${countDraftUnits(receipt.content)} 字），修订稿版本 r${receipt.index}`,
-          `Revision complete (${countDraftUnits(receipt.content)} ${pluralEn(countDraftUnits(receipt.content), 'word')}); revision r${receipt.index} is ready.`))
       const units = countDraftUnits(receipt.content), target = frozen.config.wordsPerChapter
+      callbacks.log(this.operation === 'refine-from-review'
+        ? text(`审稿修复完成（${units} 字），修订稿版本 r${receipt.index}`,
+          `Review-based revision complete (${units} ${pluralEn(units, 'word')}); revision r${receipt.index} is ready.`)
+        : text(`修稿完成（${units} 字），修订稿版本 r${receipt.index}`,
+          `Revision complete (${units} ${pluralEn(units, 'word')}); revision r${receipt.index} is ready.`))
       const sourceUnits = countDraftUnits(frozen.source.content)
       const targetMaximum = draftTargetUnitRange(target).maximum
       const sourceMaximum = draftTargetUnitRange(sourceUnits).maximum

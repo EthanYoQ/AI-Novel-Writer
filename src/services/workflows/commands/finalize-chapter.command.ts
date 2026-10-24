@@ -155,7 +155,7 @@ export function buildFinalizePostProcessSteps(
       callbacks.log(workflowUiText(
         context,
         `正文章节已导入知识库（${result.chunkCount} 块）`,
-        `Manuscript chapter imported into the knowledge base (${result.chunkCount} ${pluralEn(result.chunkCount ?? 0, 'chunk')})`,
+        `Manuscript chapter imported into the knowledge base (${result.chunkCount ?? 0} ${pluralEn(result.chunkCount ?? 0, 'chunk')})`,
       ))
     },
   })
