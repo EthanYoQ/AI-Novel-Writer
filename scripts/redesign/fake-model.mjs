@@ -59,7 +59,7 @@ export function fixturePlotTree(facts) {
   ] }
 }
 
-function responseFor(prompt, { extraction, plotTree, review }) {
+function responseFor(prompt, { extraction, plotTree, review, characterState }) {
   if (prompt.includes('不可变小说配置 JSON 合同') || prompt.includes('Immutable novel-configuration JSON contract')) {
     return { kind: 'config', content: JSON.stringify(FIXTURE_CONFIG) }
   }
@@ -67,7 +67,7 @@ function responseFor(prompt, { extraction, plotTree, review }) {
   if (outline) return { kind: 'outline-chapter', content: outlineChapter(Number(outline[1])) }
   if (prompt.includes('【已确认纳入本次修稿的审稿项】')) return { kind: 'revision', content: FIXTURE_REVISED }
   if (prompt.includes('goalReviews')) return { kind: 'review', content: review ?? REVIEW }
-  if (prompt.includes('{"updates"')) return { kind: 'character-state', content: '{"updates":[]}' }
+  if (prompt.includes('{"updates"')) return { kind: 'character-state', content: characterState?.(prompt) ?? '{"updates":[]}' }
   if (extraction && prompt.includes('【资料 ')) return { kind: 'character-extraction', content: characterExtraction(prompt, extraction) }
   if (plotTree && prompt.includes('小说剧情结构编辑')) return { kind: 'plot-tree', content: JSON.stringify(fixturePlotTree(JSON.parse(prompt.split('\n').find(line => line.startsWith('{"synopsis"'))))) }
   if (prompt.includes('只写短细纲')) return { kind: 'outline', content: FIXTURE_PROSE }
@@ -97,6 +97,7 @@ export async function startFakeModel(diagnostics) {
   let plotTree = false
   let failedProse = false
   let review = null
+  let characterState = null
   const streamLog = []
   const gate = {
     /** 卡住之后的模型调用；embeddings 为 true 时连嵌入也卡住（参考文本入库这类只走嵌入的步骤）。 */
@@ -127,6 +128,8 @@ export async function startFakeModel(diagnostics) {
   const failProse = (failed = true) => { failedProse = failed }
   /** 之后的审稿（含合并后的复验）回这份 JSON；不调用时回默认审稿。 */
   const replyReview = content => { review = content }
+  /** 之后的定稿后处理角色状态更新回 build(提示词) 给出的 JSON 文本；不调用时回空的 updates。 */
+  const replyCharacterState = build => { characterState = build }
   const record = (kind, detail) => {
     requests.push(kind)
     diagnostics.push(`[fake-model] ${kind} <- ${detail}`)
@@ -147,7 +150,7 @@ export async function startFakeModel(diagnostics) {
     if (request.url !== '/v1/chat/completions') { response.writeHead(404).end(); return }
     await pass()
     const prompt = (body.messages ?? []).map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n')
-    const reply = responseFor(prompt, { extraction, plotTree, review })
+    const reply = responseFor(prompt, { extraction, plotTree, review, characterState })
     const { kind } = reply
     const content = kind === 'character-state' && brokenCharacterState ? '角色状态暂时无法整理。' : reply.content
     chats.push({ kind, model: body.model, messages: body.messages })
@@ -175,6 +178,6 @@ export async function startFakeModel(diagnostics) {
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   server.unref()
-  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview,
+  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState,
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(() => resolve()) }) }
 }
