@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import * as architecture from './pages/architecture.mjs'
 import * as chapterView from './pages/chapter-view.mjs'
@@ -11,7 +12,7 @@ import * as stage from './pages/stage.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
 import { seedStageSample } from './scenarios.mjs'
 
-const HEAD_ROOT = path.resolve(import.meta.dirname, '../..')
+const HEAD_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 /** 第 3 章写进地点、道具与近况；第 4 章再改地点与近况，道具留着第 3 章的值。证据都是该章里只出现一次的原句。 */
 const CHAPTER_UPDATES = [
@@ -137,6 +138,8 @@ export const F491_SCENARIOS = {
     await openChapter(page, 4)
     await postDetail(page).waitFor({ state: 'visible', timeout: 30_000 })
     measured.repairedError = await postDetail(page).innerText()
+    assert.match(measured.repairedError, /^正文定稿已保存，但角色卡没有自动更新/u, '新构建显示可读说明')
+    assert.doesNotMatch(measured.repairedError, /Error invoking|FINALIZED_CHARACTER/u, '新构建不显示原始错误码')
     await context.shoot('f491-3-fixed-readable-error')
     await chapterView.postProcess(page).getByRole('button', { name: '重试失败步骤' }).click()
     await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="定稿后处理"] li')].every(row => row.dataset.state === 'success'), null, { timeout: 90_000 })
@@ -150,8 +153,24 @@ export const F491_SCENARIOS = {
     await stage.root(page).getByRole('button', { name: '保存角色' }).click()
     await stage.root(page).locator('.cast-save-state').getByText('已保存', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 })
     measured.edited = await stateFields(page)
-    assert.ok(measured.damaged.some(field => field.hint === '历史派生（非当前）'), JSON.stringify(measured))
-    assert.ok(!measured.repaired.some(field => field.hint === '历史派生（非当前）'), JSON.stringify(measured))
+    const pick = (fields, label) => fields.find(field => field.label.startsWith(label))
+    const view = fields => ['当前位置', '关键道具', '最近重要事件'].map(label => {
+      const { hint, value, history } = pick(fields, label)
+      return { label, hint, value, history }
+    })
+    const historical = '历史派生（非当前）', note = '历史记录（来源已失效或未核验）：'
+    assert.deepEqual(view(measured.damaged), [
+      { label: '当前位置', hint: historical, value: '', history: `${note}灯塔顶层灯室` },
+      { label: '关键道具', hint: historical, value: '', history: `${note}父亲的地图、钟绳上的纸条` },
+      { label: '最近重要事件', hint: historical, value: '', history: `${note}在灯室找到「别在涨潮时敲钟」的纸条` },
+    ], '旧版本两轮往返后三项都是历史派生、输入框为空')
+    assert.deepEqual(view(measured.repaired), [
+      { label: '当前位置', hint: '定稿派生', value: '守塔人的屋子', history: null },
+      { label: '关键道具', hint: '定稿派生', value: '父亲的地图、钟绳上的纸条', history: null },
+      { label: '最近重要事件', hint: '定稿派生', value: '守塔人说父亲也问过钟的事', history: null },
+    ], '新构建打开后三项为定稿派生：第 4 章更新地点与近况，道具保留第 3 章的值')
+    assert.deepEqual(view(measured.edited)[1], { label: '关键道具', hint: '作者输入', value: '父亲的地图、钟绳上的纸条、守塔人的茶杯', history: null },
+      '手改后保存为作者输入')
     assert.ok(measured.repairedFinalize.every(step => step.state === 'success'), JSON.stringify(measured))
     return measured
   } },
