@@ -487,3 +487,11 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
 | `caption-contrast` | 依次停在第 3 章外壳、写下一章时的运行侧页（进行中、完成、历史）、架构、角色名单、设置的 AI 模型与外观、书房与预览，每处收集颜色等于 `--ink-3` 的全部文字，按类名留最低的对比度写进 `measured`（底色沿祖先叠加求出）；普通字号不低于 4.5:1，24px 起或 18.66px 起粗体不低于 3:1，禁用控件豁免。量完再断言，失败信息里带全部数值；每处截一张 `caption-<位置>` | 书房预览 | 是 | #382 |
+
+## 备份往返后的角色派生状态（#491）
+
+场景在 `scripts/redesign/f491-scenarios.mjs`。必须用 `--app-root` 指向已构建好的 1.3.2（master 305ee755）工作树：旧版本负责造出损坏，场景中途用 `context.restart({ appRoot })` 换成本工作树的构建打开同一份数据。直接对本工作树跑会失败，因为新构建打开项目时就修好了，旧版本那一步的来源冲突断言不成立。假模型的 `fake.replyCharacterState(build)` 让定稿后处理的角色状态更新回 `build(提示词)` 给出的 JSON。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `f491-backup-roundtrip` | 旧版本里定稿第 3 章写入林岚的地点、道具、近况，用界面同一组 IPC 导出 .ainovel 再恢复、两轮后按 Ctrl O 打开第二个副本：「当前状态」三项是「历史派生（非当前）」、输入框为空（`f491-1-damaged-historical`）；定稿第 4 章，角色状态更新报 `FINALIZED_CHARACTER_SOURCE_CONFLICT` 原始错误（`f491-2-damaged-finalize-error`）。换新构建重启打开同一副本：失败说明是可读中文（`f491-3-fixed-readable-error`），点「重试失败步骤」后 3 / 3 完成（`f491-4-fixed-finalize-done`）；三项回到「定稿派生」并带第 4 章的新值，改「关键道具」后保存成功、该项变为「作者输入」 | 角色名单的当前状态 | 是 | #491 |

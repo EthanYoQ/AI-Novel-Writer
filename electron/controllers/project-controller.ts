@@ -35,6 +35,7 @@ import { projectStoragePreflightFailure } from '../services/project-storage-pref
 import { projectPeekService } from '../services/project-peek'
 import { probeProjectSqlite } from '../services/sqlite-project-migration'
 import { mainText } from '../i18n'
+import { adoptTransferredCharacterContinuityOnOpen } from '../services/transferred-character-continuity'
 
 /** 按作者保存的界面语言选文案；没保存过时按系统语言，与渲染层一致。 */
 function text(zhCNText: string, enUSText: string): string {
@@ -612,6 +613,9 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           throw new Error('PROJECT_OPEN_RECENT_IDENTITY_CHANGED')
         }
         initProjectDatabase(resolvedProjectPath)
+        const openedDatabase = getProjectDb()
+        if (openedDatabase) adoptTransferredCharacterContinuityOnOpen({ database: openedDatabase,
+          projectRoot: resolvedProjectPath, projectId: trustedProject.projectId })
 
         // 从数据库读取配置
         const coreData = ProjectCoreRepository.get()

@@ -25,6 +25,10 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: b
   // 生成记录缺了没写进去的尾部、已被丢弃或校验不符，不能拿来提交或修正。
   { code: /^GENERATION_FINALIZATION_ARTIFACT_INVALID$/, retry: false,
     zh: '这一步的生成记录不完整或已失效，不能沿用。请重新定稿本章后再处理。', en: "This step's generation record is incomplete or no longer valid, so it cannot be reused. Finalize this chapter again, then retry." },
+  // 角色状态字段已由更晚章节写过或来源对不上（#491），提交拒写；正文定稿不受影响。
+  { code: /^FINALIZED_CHARACTER_SOURCE_CONFLICT$/, retry: false,
+    zh: '正文定稿已保存，但角色卡没有自动更新：这个角色的当前状态里有字段已由后面章节的定稿更新过，或它记录的来源与现在的定稿对不上，为免旧内容覆盖较新的状态，本次没有写入。如果这个项目是从备份恢复的、失败发生在升级前，新版本打开项目时已修复来源记录，可以点「重试」；重试仍失败，或不属于这种情况时，请到角色页的「当前状态」查看这些字段，需要时直接手动修改。',
+    en: "The finalized chapter text is saved, but the character card was not updated: some of this character's current state was already updated by a later finalized chapter, or its recorded source no longer matches the current finalized text, so nothing was written to avoid overwriting newer state. If this project was restored from a backup and the failure happened before you updated the app, opening the project in this version already repaired its source records, so you can select Retry. If Retry still fails, or this is not your case, open the character's Current state view, check those fields, and edit them by hand if needed." },
   { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: false,
     zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
 ]

@@ -25,12 +25,12 @@ if (asEntryPoint) try { assertNodeRunsTypeScript(process.version, process.featur
 }
 const [
   { ARCH_SCENARIOS }, { RUN_SCENARIOS }, { BLUEPRINT_SCENARIOS }, { CHAPTER_SCENARIOS }, { REFS_SCENARIOS },
-  { VISUAL_SCENARIOS }, { X1_SCENARIOS }, { X2_SCENARIOS }, { RDX3_SCENARIOS }, { RD10_SCENARIOS }, { README_SCENARIOS }, { CONTRAST_SCENARIOS },
+  { VISUAL_SCENARIOS }, { X1_SCENARIOS }, { X2_SCENARIOS }, { RDX3_SCENARIOS }, { RD10_SCENARIOS }, { README_SCENARIOS }, { CONTRAST_SCENARIOS }, { F491_SCENARIOS },
   { BASELINE_SESSIONS, EXTRA_SCENARIOS, SCENARIOS: BASELINE_SCENARIOS, STAGE_SCENARIOS },
 ] = await Promise.all([
   import('./arch-scenarios.mjs'), import('./run-scenarios.mjs'), import('./blueprint-scenarios.mjs'), import('./chapter-scenarios.mjs'),
   import('./refs-scenarios.mjs'), import('./visual-scenarios.mjs'), import('./x1-scenarios.mjs'), import('./x2-scenarios.mjs'),
-  import('./rdx3-scenarios.mjs'), import('./rd10-scenarios.mjs'), import('./readme-scenarios.mjs'), import('./contrast-scenarios.mjs'), import('./scenarios.mjs'),
+  import('./rdx3-scenarios.mjs'), import('./rd10-scenarios.mjs'), import('./readme-scenarios.mjs'), import('./contrast-scenarios.mjs'), import('./f491-scenarios.mjs'), import('./scenarios.mjs'),
 ])
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -40,7 +40,7 @@ const VIEWPORT = { width: 1440, height: 900 }
 const THEMES = ['light', 'dark']
 const SHELLS = ['writer', 'stage']
 const ROOT_NAMES = ['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'temp', 'projects']
-const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS }
+const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS }
 /** 计时会话：先在同一隔离目录预启动一次写好外观（书房计时另建 20 部作品），再计之后那次冷启动。 */
 const TIMED_SESSIONS = new Set(['startup-timing', 'library-timing'])
 /** 空闲内存：与启动计时同样先预启动一次，第二次冷启动到可交互后静置，再按间隔采样全部进程的内存。 */
@@ -420,6 +420,7 @@ async function runSession(sessionName, names, options) {
   let launched
   let recording = null
   const restartRequests = []
+  let currentAppRoot = options.appRoot
   const shell = names.map(name => SCENARIOS[name]?.shell).find(Boolean) ?? options.shell
   try {
     const shelfBooks = sessionName === 'library-timing' ? SHELF_BOOKS : 0
@@ -439,13 +440,14 @@ async function runSession(sessionName, names, options) {
         /** 场景中途多拍一张图，与收尾截图放在同一目录。 */
         shoot: name => shoot(context.page, `${base(name)}.png`),
         reload: () => context.page.reload().then(() => waitForShell(context.page, TIMEOUT)),
-        /** 退出应用再用同一隔离目录冷启动（真正的重启，不重写外观），context 换成新的 app 与 page。 */
-        restart: async () => {
+        /** 退出应用再用同一隔离目录冷启动（真正的重启，不重写外观），context 换成新的 app 与 page。appRoot 换成另一份构建（旧版本造数据、新版本接着打开），之后不传时沿用上次启动的构建。 */
+        restart: async ({ appRoot = currentAppRoot } = {}) => {
           restartRequests.push(...await launched.app.evaluate(() => globalThis.__driveExternalRequests))
           await recording?.pause()
           const exited = await quit(launched.app)
           assert.equal(exited.forced, false, '重启前应用没有正常退出')
-          launched = await launch({ roots, appRoot: options.appRoot, fakeModelPort: fake?.port, diagnostics, failureBase })
+          launched = await launch({ roots, appRoot, fakeModelPort: fake?.port, diagnostics, failureBase })
+          currentAppRoot = appRoot
           Object.assign(context, launched)
           await recording?.resume(context.page)
         },
