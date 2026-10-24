@@ -134,7 +134,7 @@ function usageOf(view: Pick<MainGenerationRunView, 'budgetDiagnostics' | 'ledger
   const t = lang(locale)
   return {
     budget: view.budgetDiagnostics,
-    usage: view.ledger ? t(`已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`) : undefined,
+    usage: view.ledger ? t(`已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} ${pluralEn(view.ledger.physicalRequests, 'request')} used`) : undefined,
   }
 }
 

@@ -5,6 +5,7 @@ import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
 import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 import { containsHan } from '../../../i18n/app-errors'
+import { pluralEn } from '../../../shared/plural-en'
 
 
 export const readArchitectureTool = buildAgentTool({
@@ -64,7 +65,7 @@ export const readArchitectureTool = buildAgentTool({
         return { success: true, content: text('⚠️ 架构为空，暂无架构文件。建议通过工作流生成故事架构。', '⚠️ The architecture is empty. Generate the story architecture with the workflow first.') }
       }
 
-      return { success: true, content: text(`📐 故事架构（${contents.length} 个文件）\n\n${contents.join('\n\n---\n\n')}`, `📐 Story architecture (${contents.length} files)\n\n${contents.join('\n\n---\n\n')}`) }
+      return { success: true, content: text(`📐 故事架构（${contents.length} 个文件）\n\n${contents.join('\n\n---\n\n')}`, `📐 Story architecture (${contents.length} ${pluralEn(contents.length, 'file')})\n\n${contents.join('\n\n---\n\n')}`) }
     } catch (error) {
       const detail = agentToolErrorDetail(context, error)
       return {

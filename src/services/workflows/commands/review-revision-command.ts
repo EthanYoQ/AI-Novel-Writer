@@ -14,6 +14,7 @@ import { requireWorkflowProjectSession, workflowUiLocale, workflowUiText } from 
 import { assertMateriallyCompleteRevision } from './refinement-completeness'
 import { countDraftUnits, draftTargetUnitRange } from '../../../shared/draft-units'
 import { throwIfSourceDraftChanged } from '../source-draft-changed'
+import { pluralEn } from '../../../shared/plural-en'
 
 export interface ReviewRevisionCommandSource {
   draftPath: string
@@ -216,9 +217,9 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
       context.data.refinedPath = sourcePath
       callbacks.log(this.operation === 'refine-from-review'
         ? text(`审稿修复完成（${countDraftUnits(receipt.content)} 字），修订稿版本 r${receipt.index}`,
-          `Review-based revision complete (${countDraftUnits(receipt.content)} words); revision r${receipt.index} is ready.`)
+          `Review-based revision complete (${countDraftUnits(receipt.content)} ${pluralEn(countDraftUnits(receipt.content), 'word')}); revision r${receipt.index} is ready.`)
         : text(`修稿完成（${countDraftUnits(receipt.content)} 字），修订稿版本 r${receipt.index}`,
-          `Revision complete (${countDraftUnits(receipt.content)} words); revision r${receipt.index} is ready.`))
+          `Revision complete (${countDraftUnits(receipt.content)} ${pluralEn(countDraftUnits(receipt.content), 'word')}); revision r${receipt.index} is ready.`))
       const units = countDraftUnits(receipt.content), target = frozen.config.wordsPerChapter
       const sourceUnits = countDraftUnits(frozen.source.content)
       const targetMaximum = draftTargetUnitRange(target).maximum

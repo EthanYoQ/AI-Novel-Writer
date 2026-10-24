@@ -5,6 +5,7 @@ import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
 import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
 import { containsHan } from '../../../i18n/app-errors'
+import { pluralEn } from '../../../shared/plural-en'
 
 
 export const listChaptersTool = buildAgentTool({
@@ -65,7 +66,7 @@ export const listChaptersTool = buildAgentTool({
         success: true,
         content: text(
           `📊 章节进度概览\n\n${table}\n\n总计：${sortedNums.length} 个章节，${bpNums.size} 个蓝图，${draftNums.size} 个草稿，${msNums.size} 个定稿`,
-          `📊 Chapter progress\n\n${table}\n\nTotal: ${sortedNums.length} chapters, ${bpNums.size} blueprints, ${draftNums.size} drafts, ${msNums.size} finalized`,
+          `📊 Chapter progress\n\n${table}\n\nTotal: ${sortedNums.length} ${pluralEn(sortedNums.length, 'chapter')}, ${bpNums.size} ${pluralEn(bpNums.size, 'blueprint')}, ${draftNums.size} ${pluralEn(draftNums.size, 'draft')}, ${msNums.size} finalized`,
         ),
       }
     } catch (e: unknown) {

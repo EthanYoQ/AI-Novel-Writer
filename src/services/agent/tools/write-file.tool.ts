@@ -7,6 +7,7 @@ import { validatePath } from './safe-path'
 import { agentToolText, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 import { projectFactWorkflowForFilePath } from '../../project-fact-targets'
 import { containsHan } from '../../../i18n/app-errors'
+import { pluralEn } from '../../../shared/plural-en'
 
 export const writeFileTool = buildAgentTool({
   name: 'write_file',
@@ -107,7 +108,7 @@ export const writeFileTool = buildAgentTool({
     return {
       success: true,
       commitState: 'committed',
-      content: text(`✅ 文件已写入：${filePath}（${content.length} 字符）`, `✅ File written: ${filePath} (${content.length} characters)`),
+      content: text(`✅ 文件已写入：${filePath}（${content.length} 字符）`, `✅ File written: ${filePath} (${content.length} ${pluralEn(content.length, 'character')})`),
       artifacts: [artifact],
     }
   },

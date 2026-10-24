@@ -36,6 +36,15 @@ describe('单章写作中断', () => {
     expect(canResumeDraft(entry, ['甲'])).toBe(true)
   })
 
+  it('英文界面的请求次数按单复数写', () => {
+    const entry = (physicalRequests: number) => buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, drafts: [{
+      view: view('正文', { artifacts: [artifact('甲', true)], ledger: { physicalRequests } }) as never,
+      recovery: { handle, operation: 'chapter-draft', chapterNumber: 4, attemptedPurposes: ['chapter-draft'], draftSave: { kind: 'absent' } } as never,
+    }] }, 'en-US')[0] as DraftEntry
+    expect(entry(1).usage).toBe('1 request used')
+    expect(entry(3).usage).toBe('3 requests used')
+  })
+
   it('没写出字的片段不列出', () => {
     const entry = draft({ composition: null }, [artifact('甲', true), { ...artifact('空', true), text: '  ' }])
     expect(entry.artifacts.map(item => item.id)).toEqual(['甲'])
