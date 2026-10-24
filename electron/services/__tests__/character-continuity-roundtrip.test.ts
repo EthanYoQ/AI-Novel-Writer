@@ -16,14 +16,15 @@ import { restorePortableProject } from '../project-restore-service'
 import { readPortableCurrentAuthority } from '../portable-current-authority'
 import { currentDerivedCharacterFields } from '../current-character-projection'
 import { adoptTransferredCharacterContinuityOnOpen } from '../transferred-character-continuity'
+import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 
 const roots: string[] = []
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
 const CHARACTER_ID = '55555555-5555-4555-8555-555555555555'
 
-afterEach(() => {
+afterEach(async () => {
   closeProjectDatabase()
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
+  for (const root of roots.splice(0)) await removeDirectoryWithWindowsRetry(root)
 })
 
 interface OpenProject { root: string; projectId: string; originProjectId?: string }
