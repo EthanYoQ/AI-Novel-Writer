@@ -32,11 +32,12 @@ describe('generation error codes from the main process', () => {
     ["Error invoking remote method 'review-revision:prepare': Error: GENERATION_REVIEW_LINEAGE_UNPROVEN", '重新审稿'],
     ["Error invoking remote method 'character-proposal:list-pending-finalized': Error: GENERATION_PROJECT_SESSION_STALE", '重新打开'],
     ['Error: GENERATION_REQUEST_FAILED', '重试'],
+    ["Error invoking remote method 'finalization-generation:commit': Error: FINALIZED_CHARACTER_SOURCE_CONFLICT", '当前状态'],
   ])('turns %s into a full sentence without the IPC wrapper', (raw, hint) => {
     for (const error of [raw, new Error(raw)]) {
       const zh = knownAppErrorMessage('zh-CN', error)
       expect(zh).toContain(hint)
-      expect(zh).not.toMatch(/Error invoking|GENERATION_/u)
+      expect(zh).not.toMatch(/Error invoking|GENERATION_|FINALIZED_/u)
       expect(knownAppErrorMessage('en-US', error)).toMatch(/^[A-Z][^_]+\.$/u)
     }
   })
