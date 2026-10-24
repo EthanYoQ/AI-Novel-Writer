@@ -170,11 +170,12 @@ describe('审稿候选的片段', () => {
     }
   })
 
+  const MERGED = '钟声在正点响起。她顺着螺旋楼梯往上走，铺垫照旧。'
   const RECHECK = JSON.stringify({ summary: '复核：一处已改，一处仍在。', items: [
     { findingId: '甲', targetId: '目标甲', resolved: true, evidenceQuote: '钟声在正点响起', reason: '钟声已改到正点。' },
     { findingId: '乙', targetId: '目标乙', resolved: false, evidenceQuote: '她顺着螺旋楼梯往上走', reason: '铺垫仍偏长。' },
   ] })
-  const recheck = (version: 1 | 2) => ({ context: { operation: 'review-chapter', source: { chapterNumber: 3 }, recheck: { version, cycleId: '周期',
+  const recheck = (version: 1 | 2) => ({ context: { operation: 'review-chapter', source: { chapterNumber: 3, content: MERGED }, recheck: { version, cycleId: '周期',
     comparisonVersion: 2, mergedHash: 'm', findingSetHash: 'f', findings: [
       { findingId: '甲', targetId: '目标甲', category: '连续性', kind: 'objective', problem: '钟声提前一刻' },
       { findingId: '乙', targetId: '目标乙', category: '节奏', kind: 'literary', problem: '铺垫偏长' },
@@ -183,20 +184,29 @@ describe('审稿候选的片段', () => {
   it('复核报告显示结论、条数与先列未解决的要点；模型判为已解决的仍写待核实，复制拿到原文', () => {
     const [item] = review(recheck(2), output(RECHECK)).artifacts
     expect(item.text).toBe(RECHECK)
-    expect(item.display.split('\n')).toEqual([
-      '复核：一处已改，一处仍在。（2 条意见）',
-      '未解决 · 节奏：铺垫仍偏长。',
-      '待核实 · 连续性：钟声已改到正点。',
-    ])
+    const lines = item.display.split('\n')
+    expect(lines.slice(0, 2)).toEqual(['复核：一处已改，一处仍在。（2 条意见）', '未解决 · 节奏：铺垫仍偏长。'])
+    expect(lines[2]).toMatch(/^待核实 · 连续性：.*钟声已改到正点。$/)
+    expect(item.display).not.toContain('已解决 ·')
   })
 
-  it('英文界面的复核摘要用英文写条数与状态；旧版复核的已解决照写', () => {
+  it('英文界面的复核摘要用英文写条数与状态；旧版复核里证据可定位的已解决照写', () => {
     const [item] = review(recheck(1), { ...output(RECHECK), locale: 'en-US' }).artifacts
     expect(item.display.split('\n')).toEqual([
       '复核：一处已改，一处仍在。 (2 items)',
       'Unresolved · 节奏: 铺垫仍偏长。',
       'Resolved · 连续性: 钟声已改到正点。',
     ])
+  })
+
+  it('证据在合并后正文里找不到或模型漏了意见时，按保存时的口径写待核实，条数仍是全部意见', () => {
+    const partial = JSON.stringify({ summary: '复核：已改。', items: [
+      { findingId: '甲', targetId: '目标甲', resolved: true, evidenceQuote: '正文里没有这句', reason: '钟声已改到正点。' },
+    ] })
+    const [item] = review(recheck(1), { ...output(partial), locale: 'en-US' }).artifacts
+    expect(item.display.split('\n')[0]).toBe('复核：已改。 (2 items)')
+    expect(item.display).not.toContain('Resolved')
+    expect(item.display).toContain('Needs verification')
   })
 
   it('解析不了的复核输出退回说明，不显示原始 JSON', () => {

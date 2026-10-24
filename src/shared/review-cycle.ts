@@ -147,7 +147,7 @@ export function classifyFindingEvidenceChange(source: string, merged: string,
   return merged.includes(excerpt) ? 'unchanged' : 'changed'
 }
 
-export function parseRecheckItems(content: string, reportVersion: ReviewReportVersion): { summary: string; items: ReviewCycleRecheckModelItem[] } | null {
+function parseRecheckItems(content: string, reportVersion: ReviewReportVersion): { summary: string; items: ReviewCycleRecheckModelItem[] } | null {
   try {
     const trimmed = content.trim()
     const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)

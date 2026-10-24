@@ -8,7 +8,7 @@ import type { GenerationBatchHistory, GenerationRecoveryContext } from '../../sh
 import { plotOutlineSourceInvalidText } from '../../shared/plot-outline-contract'
 import { pluralEn } from '../../shared/plural-en'
 import type { RecoveryCandidate } from '../../shared/recovery-candidate'
-import { parseRecheckItems, type ReviewCycleRecheckContext } from '../../shared/review-cycle'
+import { buildReviewCycleRecheckReport, type ReviewCycleRecheckContext } from '../../shared/review-cycle'
 import { parseReviewGenerationResult } from '../../shared/review-generation-report'
 import type { ReviewRevisionRecovery } from '../../shared/review-revision-generation'
 import { workflowResourceKey, type WorkflowRun } from '../../stores/workflow-store'
@@ -275,21 +275,20 @@ function reviewDigest(text: string, locale: Locale): string {
 }
 
 /**
- * 复核输出是另一种结构：结论与条数一行，再列最多两条（未解决在前）。第 2 版复核里模型判为已解决的，
- * 保存时仍记为待作者核实，这里也写待核实，不说已解决。解析不了时同审稿一样只给说明。
+ * 复核输出是另一种结构：按保存时同一套证据校验（buildReviewCycleRecheckReport）整理，结论与条数一行，
+ * 再列最多两条，未解决在前、已解决在后。证据定位不到、模型漏报，或第 2 版复核里模型判为已解决的，
+ * 保存时都是待核实，这里也写待核实。解析不了时同审稿一样只给说明。
  */
-function recheckDigest(text: string, recheck: ReviewCycleRecheckContext, locale: Locale): string {
+function recheckDigest(text: string, source: string, recheck: ReviewCycleRecheckContext, locale: Locale): string {
   const t = lang(locale)
-  const report = parseRecheckItems(text, 2)
-  if (!report) return t('这是复核的结构化结果，未能整理成摘要；复制可得到原文。', 'This is a structured recheck result that could not be summarized. Copy it to get the original text.')
+  const report = buildReviewCycleRecheckReport(text, source, recheck, locale, 2)
+  if (!report.validModelOutput) return t('这是复核的结构化结果，未能整理成摘要；复制可得到原文。', 'This is a structured recheck result that could not be summarized. Copy it to get the original text.')
   const count = report.items.length
-  const category = new Map(recheck.findings.map(finding => [finding.findingId, finding.category]))
-  const resolvedLabel = recheck.version === 2 ? t('待核实', 'Needs verification') : t('已解决', 'Resolved')
-  const points = [...report.items].sort((a, b) => Number(a.resolved) - Number(b.resolved)).slice(0, 2).map(item => {
-    const label = item.resolved ? resolvedLabel : t('未解决', 'Unresolved')
-    const head = category.has(item.findingId) ? `${label} · ${category.get(item.findingId)}` : label
-    return t(`${head}：${item.reason}`, `${head}: ${item.reason}`)
-  })
+  const order = { warning: 0, unknown: 1, pass: 2 } as const
+  const label = { warning: t('未解决', 'Unresolved'), unknown: t('待核实', 'Needs verification'), pass: t('已解决', 'Resolved') }
+  const points = report.items.map(item => ({ severity: item.severity as keyof typeof order, category: String(item.category), description: String(item.description) }))
+    .sort((a, b) => order[a.severity] - order[b.severity]).slice(0, 2)
+    .map(item => t(`${label[item.severity]} · ${item.category}：${item.description}`, `${label[item.severity]} · ${item.category}: ${item.description}`))
   return [t(`${report.summary}（${count} 条意见）`, `${report.summary} (${count} ${pluralEn(count, 'item')})`), ...points].join('\n')
 }
 
@@ -297,7 +296,7 @@ function reviewEntry({ view, recovery }: RecoverySources['reviews'][number], loc
   const t = lang(locale)
   const review = recovery.context.operation === 'review-chapter'
   const recheck = recovery.context.recheck
-  const digest = (text: string) => recheck ? recheckDigest(text, recheck, locale) : reviewDigest(text, locale)
+  const digest = (text: string) => recheck ? recheckDigest(text, recovery.context.source.content, recheck, locale) : reviewDigest(text, locale)
   const shown = (item: RecoveryText): ReviewText => ({ ...item, display: review ? digest(item.text) : item.text })
   const requestsReview = review && !recovery.saved && !canCommitRecoveredReview(recovery)
   const current = recovery.sourceStatus === 'current'
