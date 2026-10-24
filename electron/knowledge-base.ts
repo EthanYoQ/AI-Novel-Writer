@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { chunkText, generateEmbeddings } from './embedding'
-import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
+import { normalizeEmbeddingOptions, type EmbeddingModel } from '../src/shared/embedding-options'
 import type { ImportRunExecutionAuthority } from '../src/shared/import-run'
 import { EmbeddingResponseValidationError } from './services/embedding-response-error'
 import { hasRequiredApiKey } from '../src/shared/provider-presets'
@@ -46,9 +46,6 @@ import { ImportRunRepository } from './repositories/import-run-repository'
 import { assertRequiredExpectedProjectPath } from './utils/project-context'
 import { getProjectDataRoot } from './services/project-data-locator'
 import { withKnowledgeSourceGate } from './services/knowledge-source-gate'
-
-/** provider 和 baseUrl 一起决定这个模型是否需要 Key，见 hasRequiredApiKey。 */
-export type EmbeddingModel = { provider: string; baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions }
 
 // ===== 迁移状态跟踪 =====
 

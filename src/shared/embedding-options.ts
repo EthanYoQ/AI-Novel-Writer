@@ -7,6 +7,9 @@ export interface EmbeddingOptions {
   batchSize: number
 }
 
+/** 知识库调用检索模型所需的字段。provider 和 baseUrl 一起决定是否需要 Key，见 hasRequiredApiKey。 */
+export type EmbeddingModel = { provider: string; baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions }
+
 export const DEFAULT_EMBEDDING_OPTIONS: EmbeddingOptions = {
   chunkSize: 500,
   chunkOverlap: 50,

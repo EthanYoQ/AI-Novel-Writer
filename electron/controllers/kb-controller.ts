@@ -5,7 +5,7 @@ import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_
 import { GlobalConfig, ModelProfile } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { hasRequiredApiKey } from '../../src/shared/provider-presets'
-import type { EmbeddingModel } from '../knowledge-base'
+import type { EmbeddingModel } from '../../src/shared/embedding-options'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { mainText } from '../i18n'
