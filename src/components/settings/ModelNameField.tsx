@@ -143,18 +143,18 @@ export function ModelNameField({
           <button
             type="button"
             tabIndex={-1}
-            aria-label={open ? text('收起候选模型', 'Hide model suggestions') : text('展开候选模型', 'Show model suggestions')}
+            aria-label={listShown ? text('收起候选模型', 'Hide model suggestions') : text('展开候选模型', 'Show model suggestions')}
             aria-expanded={listShown}
             aria-controls={listShown ? listId : undefined}
             onMouseDown={event => event.preventDefault()}
             onClick={() => {
-              if (open) hide()
+              if (listShown) hide()
               else show(null)
               document.getElementById(inputId)?.focus()
             }}
             className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-[var(--ink-3)] hover:text-[var(--ink)]"
           >
-            <ChevronDown size={14} className={cn(open && 'rotate-180')} />
+            <ChevronDown size={14} className={cn(listShown && 'rotate-180')} />
           </button>
         </div>
         <Button

@@ -859,6 +859,8 @@ describe('model discovery settings flow', () => {
     expect(document.querySelector('[role="listbox"]')).toBeNull()
     expect(modelNameInput().getAttribute('aria-expanded')).toBe('false')
     expect(modelNameInput().hasAttribute('aria-controls')).toBe(false)
+    await act(async () => { await page.getByRole('button', { name: '展开候选模型', exact: true }).click() })
+    expect(suggestionValues()).toContain('llama3.2')
   })
 
   it('does not claim there are no suggestions while the endpoint list is still loading', async () => {
