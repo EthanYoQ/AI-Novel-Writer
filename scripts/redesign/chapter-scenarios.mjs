@@ -464,6 +464,84 @@ export const CHAPTER_SCENARIOS = {
     return after
   } },
 
+  /**
+   * #484：合并后自动复验的结果在运行侧页的恢复卡里显示结论、条数与要点，不显示原始 JSON；
+   * 中文截 chapter-recheck-digest-zh，再切到英文重开作品，英文卡片写「1 item」与待核实。
+   */
+  'chapter-recheck-digest': { model: true, shell: 'stage', setup: seed(), run: async context => {
+    const { page, fake, invoke, reload, shoot } = context
+    const summary = '复验：铺垫已压缩，仍需作者核对。'
+    // 审稿同 x2-recheck：带正文证据的本章目标意见才进复验。
+    const firstReview = JSON.stringify({ summary: '本章目标还没落地。', items: [
+      { category: '连续性', severity: 'warning', description: '核对钟声提前一刻与潮位的关系。', quote: '他给林岚倒了一杯很淡的茶' },
+    ], goalReviews: [{ id: 'ch4:keyEvents:1', status: 'unmet', description: '林岚还没有在灯塔里找到新的线索。',
+      evidence: [{ quote: '守塔人的屋子在灯塔背风的一侧' }] }] })
+    fake.replyReview(prompt => {
+      // 复验提示里也带着确认的修稿清单，要先按复核锚点认出它。
+      const anchors = prompt.split('【需复核的原始证据锚点】')[1]
+      if (!anchors) return prompt.includes('goalReviews') && !prompt.includes('【已确认纳入本次修稿的审稿项】') ? firstReview : null
+      const ids = [...anchors.matchAll(/"findingId": "([^"]+)",\s*"targetId": "([^"]+)"/g)]
+      return JSON.stringify({ summary, items: ids.map(([, findingId, targetId], index) => ({
+        findingId, targetId, resolved: index === 0, evidenceQuote: '潮水退去', reason: index === 0 ? '第二段铺垫已压缩到两句。' : '证据不足，仍按原样。',
+      })) })
+    })
+    await chapterView.open(page, 4)
+    await reviewAndRevise(page)
+    await chapterView.merge(page).getByRole('button', { name: '全部用修稿' }).click()
+    await chapterView.merge(page).getByRole('button', { name: '完成合并' }).click()
+    await chapterView.view(page).getByRole('button', { name: '定稿', exact: true }).waitFor({ state: 'visible', timeout: 30_000 })
+    const deadline = Date.now() + 60_000
+    while (!fake.chats.some(chat => JSON.stringify(chat.messages).includes('需复核的原始证据锚点'))) {
+      assert.ok(Date.now() < deadline, `60 秒内没有发出合并后的复验（对话请求 ${fake.chats.map(chat => chat.kind).join('、')}）`)
+      await page.waitForTimeout(250)
+    }
+    await stage.root(page).locator('.stage-capsule:not([data-tone="ok"])').waitFor({ state: 'detached', timeout: 90_000 })
+    await runSheet.openFromPalette(page)
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: summary })
+    await card.waitFor({ state: 'visible' })
+    const zh = { rawJson: await card.getByText('"summary"').count(), count: await card.getByText(/条意见/).count(),
+      pending: await card.getByText(/待核实/).count() }
+    assert.deepEqual(zh, { rawJson: 0, count: 1, pending: 1 }, '中文恢复卡显示复验摘要，模型判为已解决的写待核实')
+    await card.scrollIntoViewIfNeeded()
+    await shoot('chapter-recheck-digest-zh')
+
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await reload()
+    await stage.openFromLibraryEn(page, STAGE_SAMPLE.name)
+    await page.getByRole('navigation', { name: 'Writing flow' }).waitFor({ state: 'visible' })
+    await page.keyboard.press('Control+K')
+    await page.getByRole('dialog', { name: 'Search and jump' }).getByRole('combobox').fill('Run sheet')
+    await page.keyboard.press('Enter')
+    await runSheet.waitUntilOpen(page)
+    const cardEn = runSheet.recovery(page).getByRole('article').filter({ hasText: summary })
+    await cardEn.waitFor({ state: 'visible' })
+    await cardEn.scrollIntoViewIfNeeded()
+    const en = { rawJson: await cardEn.getByText('"summary"').count(), item: await cardEn.getByText(/\(1 item\)/).count(),
+      pending: await cardEn.getByText(/Needs verification/).count() }
+    assert.deepEqual(en, { rawJson: 0, item: 1, pending: 1 }, '英文恢复卡显示英文复验摘要')
+    return { zh, en }
+  } },
+
+  /** #484：只请求了一次的审稿候选，英文运行侧页写「1 request used」，不写成复数。 */
+  'run-usage-en': { model: true, shell: 'stage', setup: seed(), run: async context => {
+    const { page, invoke, reload } = context
+    await rereviewChapter3(context)
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await reload()
+    await stage.openFromLibraryEn(page, STAGE_SAMPLE.name)
+    await page.getByRole('navigation', { name: 'Writing flow' }).waitFor({ state: 'visible' })
+    await page.keyboard.press('Control+K')
+    await page.getByRole('dialog', { name: 'Search and jump' }).getByRole('combobox').fill('Run sheet')
+    await page.keyboard.press('Enter')
+    await runSheet.waitUntilOpen(page)
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: 'Chapter 3 review candidate' })
+    await card.waitFor({ state: 'visible' })
+    await card.scrollIntoViewIfNeeded()
+    const after = { single: await card.getByText('1 request used', { exact: true }).count(), plural: await card.getByText(/1 requests/).count() }
+    assert.deepEqual(after, { single: 1, plural: 0 }, '英文运行侧页的请求次数按单数写')
+    return after
+  } },
+
   /** lane 4：添加作者意见后修稿，修稿请求里带着这条意见。 */
   'chapter-manual': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake }) => {
     await chapterView.open(page, 4)
