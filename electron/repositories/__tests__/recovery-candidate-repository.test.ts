@@ -109,7 +109,7 @@ describe('RecoveryCandidateRepository project-local seam', () => {
       '驾驶室',
       projectRoot,
       'openai',
-      { baseUrl: '', apiKey: '' },
+      { provider: 'openai', baseUrl: '', apiKey: '' },
     )).resolves.toEqual([])
   })
 
@@ -163,7 +163,7 @@ describe('RecoveryCandidateRepository project-local seam', () => {
       '作者编辑后的恢复正文',
       projectRoot,
       'openai',
-      { baseUrl: '', apiKey: '' },
+      { provider: 'openai', baseUrl: '', apiKey: '' },
     )).resolves.toEqual([])
   })
 

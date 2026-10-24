@@ -15,6 +15,7 @@ import { chunkText, generateEmbeddings } from './embedding'
 import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
 import type { ImportRunExecutionAuthority } from '../src/shared/import-run'
 import { EmbeddingResponseValidationError } from './services/embedding-response-error'
+import { hasRequiredApiKey } from '../src/shared/provider-presets'
 import {
   LEGACY_VECTOR_MIGRATION_BLOCKED,
   LegacyVectorMigrationBlockedError,
@@ -45,6 +46,9 @@ import { ImportRunRepository } from './repositories/import-run-repository'
 import { assertRequiredExpectedProjectPath } from './utils/project-context'
 import { getProjectDataRoot } from './services/project-data-locator'
 import { withKnowledgeSourceGate } from './services/knowledge-source-gate'
+
+/** provider 和 baseUrl 一起决定这个模型是否需要 Key，见 hasRequiredApiKey。 */
+export type EmbeddingModel = { provider: string; baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions }
 
 // ===== 迁移状态跟踪 =====
 
@@ -95,10 +99,10 @@ async function canWriteIncrementalVectors(projectPath: string): Promise<boolean>
 
 /** One initial retrieval; later generation guards re-read identities without another embedding request. */
 export async function captureWritingKnowledgeSnapshot(query: string, projectPath: string,
-  configuration: { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions } } | null) {
+  configuration: { protocol: 'openai' | 'gemini'; model: EmbeddingModel } | null) {
   await ensureMigration(projectPath)
   let queryVector: number[] | undefined
-  if (configuration?.model.apiKey && query.trim()) {
+  if (configuration && hasRequiredApiKey(configuration.model) && query.trim()) {
     try {
       const [vector] = await generateEmbeddings([query], configuration.protocol, configuration.model, configuration.model.embeddingOptions?.batchSize)
       if (vector?.length) queryVector = vector
@@ -127,7 +131,7 @@ export async function searchKnowledge(
   query: string,
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+  model: EmbeddingModel,
   topK: number = 5,
   chapterScope?: [number, number],
   excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
@@ -136,7 +140,7 @@ export async function searchKnowledge(
 
   // 可选：生成查询向量
   let queryVector: number[] | undefined
-  if (model.apiKey && query.trim()) {
+  if (hasRequiredApiKey(model) && query.trim()) {
     try {
       const [vec] = await generateEmbeddings([query], protocol, model, model.embeddingOptions?.batchSize)
       if (vec && vec.length > 0) {
@@ -270,7 +274,7 @@ async function importTextInternal(
   fileName: string,
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+  model: EmbeddingModel,
   options?: { mode: 'fts-only' },
 ): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
   try {
@@ -289,7 +293,7 @@ async function importTextInternal(
     // 可选：生成向量
     let vectors: number[][] | undefined
     if (
-      model.apiKey
+      hasRequiredApiKey(model)
       && options?.mode !== 'fts-only'
       && await canWriteIncrementalVectors(projectPath)
     ) {
@@ -329,7 +333,7 @@ export async function importText(
   fileName: string,
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+  model: EmbeddingModel,
   options?: { mode: 'fts-only' },
 ): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
   return importTextInternal(
@@ -441,7 +445,7 @@ async function performReferenceTextImport(
   documentId: string,
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+  model: EmbeddingModel,
   assertAuthority: () => void,
 ): Promise<ReferenceImportResult> {
   try {
@@ -516,7 +520,7 @@ async function performReferenceTextImport(
     `).run(documentId)
 
     let vectors: number[][] | undefined
-    if (model.apiKey) {
+    if (hasRequiredApiKey(model)) {
       try {
         vectors = await generateEmbeddings(
           chunks,
@@ -591,7 +595,7 @@ export async function importReferenceText(
   executionAuthority: ImportRunExecutionAuthority,
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+  model: EmbeddingModel,
 ): Promise<ReferenceImportResult> {
   const stableKey = stableImportKey.trim()
   if (!stableKey || stableKey.length > 512 || !/^[\w:.-]+$/u.test(stableKey)) {
@@ -652,7 +656,7 @@ export async function getVectorlessCount(projectPath: string): Promise<{ count: 
 export async function backfillVectors(
   projectPath: string,
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions },
+  model: EmbeddingModel,
 ): Promise<{
   success: boolean
   processed: number
@@ -662,7 +666,7 @@ export async function backfillVectors(
 }> {
   try {
     await ensureMigration(projectPath)
-    if (!model.apiKey.trim() || !model.baseUrl.trim()) {
+    if (!hasRequiredApiKey(model) || !model.baseUrl.trim()) {
       return { success: false, processed: 0, failed: 0, error: 'EMBEDDING_MODEL_NOT_CONFIGURED' }
     }
     const space = embeddingSpaceFor(protocol, model)
