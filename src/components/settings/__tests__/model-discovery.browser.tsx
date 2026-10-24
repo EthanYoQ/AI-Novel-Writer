@@ -582,12 +582,12 @@ describe('model discovery settings flow', () => {
     {
       errorCode: 'empty' as const,
       locale: 'zh-CN' as const,
-      expected: '端点返回了空模型列表。请继续手工填写模型 ID。',
+      expected: '端点没有返回适合当前用途的模型。请继续手工填写模型 ID。',
     },
     {
       errorCode: 'empty' as const,
       locale: 'en-US' as const,
-      expected: 'The endpoint returned an empty model list. Continue with a manual model ID.',
+      expected: 'The endpoint returned no models for this purpose. Continue with a manual model ID.',
     },
   ])('renders $locale $errorCode guidance', async ({ errorCode, locale, expected }) => {
     const model = savedProfile()
@@ -694,6 +694,53 @@ describe('model discovery settings flow', () => {
       await new Promise(resolve => setTimeout(resolve, 0))
     })
     expect(input.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('starts ArrowUp at the last suggestion after typing, and leaves Enter to the IME while composing', async () => {
+    const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
+    await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    const input = modelNameInput()
+    await act(async () => { input.focus() })
+    await typeInto(input, 'LLAMA')
+    await act(async () => { await userEvent.keyboard('{ArrowUp}') })
+    const active = () => document.getElementById(input.getAttribute('aria-activedescendant') ?? '')?.querySelector('span')?.textContent
+    expect(active()).toBe('llama3.2')
+
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: true }))
+    })
+    expect(input.value).toBe('LLAMA')
+    expect(input.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('drops a stale highlight when a refresh replaces the suggestions', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
+    let settle!: (result: ModelDiscoveryResult) => void
+    const discoverModels = vi.fn(() => new Promise<ModelDiscoveryResult>(resolve => { settle = resolve }))
+    await renderSettings(model, discoverModels)
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    const input = modelNameInput()
+    await act(async () => { input.focus() })
+    await act(async () => { await userEvent.keyboard('{ArrowDown}') })
+    await act(async () => { await userEvent.keyboard('{ArrowDown}') })
+    expect(document.getElementById(input.getAttribute('aria-activedescendant') ?? '')?.querySelector('span')?.textContent).toBe('deepseek-v4-pro')
+
+    await act(async () => settle({ success: true, models: [
+      { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
+      { id: 'endpoint-only', name: 'endpoint-only', value: 'endpoint-only' },
+    ] }))
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['deepseek-v4-flash', 'endpoint-only']))
+    expect(input.hasAttribute('aria-activedescendant')).toBe(false)
+    await act(async () => { await userEvent.keyboard('{Enter}') })
+    expect(input.value).toBe('deepseek-v4-flash')
+  })
+
+  it('tells Ollama users to refresh instead of asking for an API key', async () => {
+    const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
+    await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    expect(document.querySelector('[role="status"]')?.textContent).toBe('候选为推荐模型。点刷新按钮可获取本机已安装的模型。')
   })
 
   it('collapses the list when focus leaves it with the keyboard', async () => {

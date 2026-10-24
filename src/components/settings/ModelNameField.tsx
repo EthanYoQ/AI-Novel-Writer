@@ -5,6 +5,7 @@ import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
 import { cn } from '../../lib/utils'
 import { useLocaleStore } from '../../stores/locale-store'
+import { isComposing } from '../stage/shortcut-keys'
 import type { ModelNameCandidate } from './model-name-candidates'
 
 function matches(candidate: ModelNameCandidate, query: string): boolean {
@@ -33,9 +34,11 @@ export function ModelNameField({
   const [open, setOpen] = useState(false)
   // 展开时显示全部候选；作者开始输入后才按输入过滤，避免已填的完整模型名把列表筛到只剩一项。
   const [query, setQuery] = useState<string | null>(null)
-  const [activeIndex, setActiveIndex] = useState(-1)
+  // 按模型 ID 记住高亮项：候选被替换（获取完成、刷新）后不在新列表里的高亮自然失效，不会让 Enter 选中别的模型。
+  const [activeValue, setActiveValue] = useState<string | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const visible = query === null ? candidates : candidates.filter(candidate => matches(candidate, query))
+  const activeIndex = activeValue === null ? -1 : visible.findIndex(candidate => candidate.value === activeValue)
   const optionId = (index: number) => `${listId}-option-${index}`
 
   const pointerPressed = useRef(false)
@@ -68,7 +71,7 @@ export function ModelNameField({
   const hide = () => {
     setOpen(false)
     setQuery(null)
-    setActiveIndex(-1)
+    setActiveValue(null)
   }
   const choose = (candidate: ModelNameCandidate) => {
     onSelect(candidate)
@@ -76,15 +79,18 @@ export function ModelNameField({
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    // 输入法组合中的方向键与回车属于候选窗，不能拿来选模型或收起列表。
+    if (isComposing({ isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode })) return
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       const step = event.key === 'ArrowDown' ? 1 : -1
-      if (!open) {
-        show(null)
-        setActiveIndex(step === 1 ? 0 : candidates.length - 1)
-        return
-      }
-      if (visible.length) setActiveIndex(index => (index + step + visible.length) % visible.length)
+      const list = open ? visible : candidates
+      if (!open) show(null)
+      if (!list.length) return
+      const next = activeIndex < 0 || !open
+        ? (step === 1 ? 0 : list.length - 1)
+        : (activeIndex + step + list.length) % list.length
+      setActiveValue(list[next].value)
     } else if (event.key === 'Enter' && open) {
       event.preventDefault()
       const candidate = visible[activeIndex]
@@ -126,7 +132,7 @@ export function ModelNameField({
             onChange={(event) => {
               onInput(event.target.value)
               show(event.target.value)
-              setActiveIndex(-1)
+              setActiveValue(null)
             }}
             onKeyDown={handleKeyDown}
           />
@@ -159,6 +165,7 @@ export function ModelNameField({
             onRefresh()
             setOpen(true)
             setQuery(null)
+            setActiveValue(null)
             // 获取期间按钮会禁用，焦点留在上面会丢；交回输入框，方向键可以直接选。
             document.getElementById(inputId)?.focus()
           }}
@@ -184,7 +191,7 @@ export function ModelNameField({
               role="option"
               aria-selected={candidate.value === value}
               onMouseDown={event => event.preventDefault()}
-              onMouseEnter={() => setActiveIndex(index)}
+              onMouseEnter={() => setActiveValue(candidate.value)}
               onClick={() => choose(candidate)}
               className={cn(
                 'flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-xs text-[var(--ink)]',

@@ -24,6 +24,10 @@ export type ReasoningResolutionStatus = 'mapped' | 'capped' | 'forced' | 'unsupp
 export const GEMINI_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high'] as const
 export type GeminiThinkingLevel = typeof GEMINI_THINKING_LEVELS[number]
 
+export function isGeminiThinkingLevel(value: unknown): value is GeminiThinkingLevel {
+  return GEMINI_THINKING_LEVELS.includes(value as GeminiThinkingLevel)
+}
+
 /** Gemini 协议只接受 Gemini 的推理适配器，其他协议都不接受；保存、解析与高级映射共用这一条。 */
 export function reasoningAdapterFitsProtocol(protocol: unknown, adapter: ProviderReasoningDirective['adapter']): boolean {
   return (protocol === 'gemini') === (adapter === 'gemini-thinking-budget' || adapter === 'gemini-thinking-level')
@@ -91,7 +95,7 @@ export function isReasoningMapping(value: unknown): value is VerifiedReasoningMa
       if (typeof wire !== 'number' || !Number.isSafeInteger(wire) || wire < 0 || effort === 'off' && wire !== 0) return false
       if (mapping.adapter === 'openai-thinking-budget' && effort !== 'off' && wire === 0) return false
     } else if (mapping.adapter === 'gemini-thinking-level') {
-      if (!GEMINI_THINKING_LEVELS.includes(wire as GeminiThinkingLevel) || (effort === 'off') !== (wire === 'minimal')) return false
+      if (!isGeminiThinkingLevel(wire) || (effort === 'off') !== (wire === 'minimal')) return false
     } else if (mapping.adapter === 'deepseek-v4-thinking') {
       if (typeof wire !== 'string' || (effort === 'off' ? wire !== 'disabled' : !['enabled', 'low', 'high', 'max'].includes(wire))) return false
     } else if (!['high', 'max'].includes(effort) || wire !== effort) return false

@@ -10,7 +10,7 @@ import * as shell from './pages/shell.mjs'
 import * as stage from './pages/stage.mjs'
 import { chromeContrastFailures, msFromClickToProse, seedStageSample } from './scenarios.mjs'
 import { countUnits, STAGE_SAMPLE } from './stage-sample.mjs'
-import { FAKE_MODEL } from './fake-model.mjs'
+import { FAKE_MODEL, FIXTURE_ENDPOINT_MODELS } from './fake-model.mjs'
 
 /** 编辑夹具模型并展开模型名候选；英文时先在外观里切语言。 */
 async function openFixtureModelSuggestions({ page, fake }, locale) {
@@ -396,14 +396,18 @@ export const REFS_SCENARIOS = {
     assert.equal(observed.requests, 1, '展开时自动获取一次')
     assert.match(observed.options[0], /^gpt-4\.1\s*推荐$/u, JSON.stringify(observed))
     assert.ok(observed.options.some(text => text.startsWith('gateway/novel-writer-pro')), JSON.stringify(observed))
-    assert.equal(observed.status, '已从端点获取 17 个模型。')
+    assert.equal(observed.status, `已从端点获取 ${FIXTURE_ENDPOINT_MODELS.length} 个模型。`)
+    await context.page.getByRole('button', { name: '收起候选模型', exact: true }).click()
+    await context.page.getByRole('button', { name: '展开候选模型', exact: true }).click()
+    await context.page.getByRole('listbox', { name: '候选模型' }).getByRole('option').first().waitFor({ state: 'visible' })
+    assert.equal(context.fake.requests.filter(kind => kind === 'models').length, 1, '再次展开不重复获取')
     return observed
   } },
   'models-name-en': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const observed = await openFixtureModelSuggestions(context, 'en-US')
     await context.shoot('models-name-en')
     assert.match(observed.options[0], /^gpt-4\.1\s*Recommended$/u, JSON.stringify(observed))
-    assert.equal(observed.status, 'Fetched 17 models from the endpoint.')
+    assert.equal(observed.status, `Fetched ${FIXTURE_ENDPOINT_MODELS.length} models from the endpoint.`)
     return observed
   } },
   'models-name-narrow': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
@@ -411,13 +415,14 @@ export const REFS_SCENARIOS = {
     const observed = await openFixtureModelSuggestions(context, 'zh-CN')
     const layout = await context.page.evaluate(() => {
       const list = document.querySelector('[role="listbox"]')?.getBoundingClientRect()
-      const input = document.querySelector('input[role="combobox"]')?.getBoundingClientRect()
-      return { listRight: list?.right, listHeight: list?.height, inputRight: input?.right, pageScrollWidth: document.documentElement.scrollWidth,
+      const form = document.querySelector('input[role="combobox"]')?.closest('.rounded-xl')?.getBoundingClientRect()
+      return { listRight: list?.right, listHeight: list?.height, formRight: form?.right, pageScrollWidth: document.documentElement.scrollWidth,
         viewport: window.innerWidth }
     })
     await context.shoot('models-name-narrow')
     assert.ok(layout.pageScrollWidth <= layout.viewport, JSON.stringify(layout))
     assert.ok(layout.listHeight <= 240.5, JSON.stringify(layout))
+    assert.ok(layout.listRight <= layout.formRight, '超长模型 ID 不把列表撑出表单')
     return { ...observed, layout }
   } },
   // 连接测试的截止时间（#454）：卡住假模型后点「测试连接」，30 秒后停止等待并给出网络类说明，不再等满 300 秒。
@@ -431,7 +436,7 @@ export const REFS_SCENARIOS = {
     await result.waitFor({ state: 'visible', timeout: 60_000 })
     const observed = { result: await result.innerText(), elapsedMs: Date.now() - started, waiting: fake.gate.waiting }
     await shoot('models-test-connection-timeout')
-    assert.equal(observed.result, '连接失败：连接测试 30 秒内没有响应，已停止等待。请检查网络或代理设置后重试。')
+    assert.equal(observed.result, '连接失败：连接测试 30 秒内没有完成，已停止等待。请检查网络或代理设置后重试。')
     assert.ok(observed.elapsedMs >= 29_000 && observed.elapsedMs < 45_000, JSON.stringify(observed))
     return observed
   }, after: async ({ fake }) => { fake.gate.release() } },

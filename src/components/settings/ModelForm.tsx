@@ -18,6 +18,15 @@ import { openModelProviderResource } from './model-provider-resource'
 import { ModelNameField } from './ModelNameField'
 import { modelNameCandidates, type ModelNameCandidate } from './model-name-candidates'
 
+/** 获取失败时的说明，按错误码查表。empty 也包括端点有模型、但没有适合当前用途（生成或向量）的模型。 */
+const DISCOVERY_NOTICES: Record<ModelDiscoveryErrorCode, readonly [string, string]> = {
+  auth: ['鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.'],
+  unsupported: ['该端点不支持标准模型列表接口。请继续手工填写模型 ID。', 'This endpoint does not support the standard model-list API. Continue with a manual model ID.'],
+  network: ['网络请求失败，请检查端点或网络后重试。手工模型 ID 仍可使用。', 'The network request failed. Check the endpoint or network and retry. Manual model IDs remain available.'],
+  invalid_response: ['端点返回了无法识别的模型列表。请继续手工填写模型 ID。', 'The endpoint returned an invalid model list. Continue with a manual model ID.'],
+  empty: ['端点没有返回适合当前用途的模型。请继续手工填写模型 ID。', 'The endpoint returned no models for this purpose. Continue with a manual model ID.'],
+}
+
 /** 本次表单配置下的端点模型列表获取；idle 表示还没获取过，改动服务商、地址或 Key 后回到 idle。 */
 type ModelDiscoveryState =
   | { status: 'idle' }
@@ -244,18 +253,18 @@ export function ModelForm({
     if (discovery.status === 'idle' && model.baseUrl.trim() && model.apiKey.trim()) void handleDiscoverModels()
   }
 
-  const discoveryNotice = discovery.status === 'failed' ? discovery.errorCode : null
-  const discoveryNoticeText = discoveryNotice === 'auth'
-      ? text('鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.')
-      : discoveryNotice === 'unsupported'
-        ? text('该端点不支持标准模型列表接口。请继续手工填写模型 ID。', 'This endpoint does not support the standard model-list API. Continue with a manual model ID.')
-        : discoveryNotice === 'network'
-          ? text('网络请求失败，请检查端点或网络后重试。手工模型 ID 仍可使用。', 'The network request failed. Check the endpoint or network and retry. Manual model IDs remain available.')
-          : discoveryNotice === 'invalid_response'
-            ? text('端点返回了无法识别的模型列表。请继续手工填写模型 ID。', 'The endpoint returned an invalid model list. Continue with a manual model ID.')
-            : discoveryNotice === 'empty'
-              ? text('端点返回了空模型列表。请继续手工填写模型 ID。', 'The endpoint returned an empty model list. Continue with a manual model ID.')
-              : null
+  /** 模型名控件下方的一行状态：获取中、失败原因、获取结果，或没填 Key 时怎样拿到端点列表。 */
+  const modelNameStatus = (): { tone: 'muted' | 'error', text: string } | null => {
+    if (discovery.status === 'loading') return { tone: 'muted', text: text('正在获取端点模型列表…', 'Fetching the endpoint model list…') }
+    if (discovery.status === 'failed') return { tone: 'error', text: text(...DISCOVERY_NOTICES[discovery.errorCode]) }
+    if (discovery.status === 'loaded') {
+      return { tone: 'muted', text: text(`已从端点获取 ${discovery.models.length} 个模型。`, `Fetched ${discovery.models.length} models from the endpoint.`) }
+    }
+    if (model.apiKey.trim()) return null
+    return model.provider === 'ollama'
+      ? { tone: 'muted', text: text('候选为推荐模型。点刷新按钮可获取本机已安装的模型。', 'Showing recommended models. Use the refresh button to list the models installed locally.') }
+      : { tone: 'muted', text: text('候选为推荐模型。填写 API Key 后展开会自动获取端点模型列表，也可以点刷新按钮获取。', 'Showing recommended models. After you enter an API key, opening the list fetches the endpoint models; you can also use the refresh button.') }
+  }
 
   return (
     <div
@@ -312,15 +321,7 @@ export function ModelForm({
         placeholder={isEmbedding ? 'text-embedding-3-small' : 'gpt-4o'}
         candidates={modelCandidates}
         refreshing={discovery.status === 'loading'}
-        status={discovery.status === 'loading'
-          ? { tone: 'muted', text: text('正在获取端点模型列表…', 'Fetching the endpoint model list…') }
-          : discoveryNoticeText
-            ? { tone: 'error', text: discoveryNoticeText }
-            : discovery.status === 'loaded'
-              ? { tone: 'muted', text: text(`已从端点获取 ${discovery.models.length} 个模型。`, `Fetched ${discovery.models.length} models from the endpoint.`) }
-              : !model.apiKey.trim()
-                ? { tone: 'muted', text: text('候选为推荐模型。填写 API Key 后展开会自动获取端点模型列表，也可以点刷新按钮获取。', 'Showing recommended models. After you enter an API key, opening the list fetches the endpoint models; you can also use the refresh button.') }
-                : null}
+        status={modelNameStatus()}
         onInput={(value) => up('modelName', value)}
         onSelect={handleModelSelect}
         onOpen={handleModelListOpen}

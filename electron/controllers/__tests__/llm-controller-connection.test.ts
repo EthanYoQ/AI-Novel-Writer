@@ -803,8 +803,8 @@ describe('connection test timeout', () => {
   })
 
   it.each([
-    ['en-US', 'timed out after 30 seconds', /\p{Script=Han}|LLM_|AbortError/u],
-    ['zh-CN', '连接测试 30 秒内没有响应', /LLM_|AbortError/u],
+    ['en-US', 'did not finish within 30 seconds', /\p{Script=Han}|LLM_|AbortError/u],
+    ['zh-CN', '连接测试 30 秒内没有完成', /LLM_|AbortError/u],
   ])('cancels a hanging generation probe after 30 seconds and explains it in %s', async (locale, expected, forbidden) => {
     mocks.locale = locale
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -843,7 +843,7 @@ describe('connection test timeout', () => {
     const result = await pending
     expect(requestSignal?.aborted).toBe(true)
     expect(result).toMatchObject({ success: false })
-    expect(result.error).toContain('timed out after 30 seconds')
+    expect(result.error).toContain('did not finish within 30 seconds')
   })
 
   it('keeps regular generation free of the connection-test deadline', async () => {

@@ -237,7 +237,7 @@ async function main() {
     const discoveredOption = form.getByRole('listbox', { name: '候选模型' }).getByRole('option').filter({ hasText: discoveredModelName })
     await discoveredOption.waitFor({ timeout: 5000 })
     assert.deepEqual(fixture.requests, [{ method: 'GET', path: '/v1/models', authorized: true }])
-    assert.equal(await discoveredOption.count(), 1)
+    assert.equal(await form.getByRole('listbox', { name: '候选模型' }).getByRole('option').count(), 1)
     pass('U03.A05-model-discovery', 'U03.A05', 'stage unsaved model form fetched and displayed the controlled endpoint model list')
 
     currentStep = 'U03.A06-model-parameters'
