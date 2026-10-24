@@ -339,6 +339,23 @@ describe('knowledge-base controller project context guard', () => {
     expect(backfillVectors).toHaveBeenCalledWith('C:/projects/A', 'openai', expect.objectContaining({ baseUrl, apiKey: '' }))
   })
 
+  it.each([
+    ['ollama', true],
+    ['openai', false],
+  ] as const)('reads a legacy %s embedding profile saved without an apiKey field', async (provider, configured) => {
+    mocks.readJsonFile.mockImplementation((filePath: string, fallback: unknown) => {
+      if (filePath === 'global.json') return { defaultEmbeddingModelId: 'embedding-model' }
+      if (filePath === 'models.json') return [{ id: 'embedding-model', provider, protocol: 'openai', baseUrl: 'http://192.168.1.20:11434/v1', modelName: 'nomic-embed-text' }]
+      return fallback
+    })
+    mocks.run.mockImplementation(async (operation: (kb: unknown) => unknown) => operation({
+      getKnowledgeStats: async () => ({ totalChunks: 3, vectorDimension: 0 }),
+      getVectorlessCount: async () => ({ count: 3 }),
+    }))
+
+    await expect(handler('kb:get-vector-rebuild-status')({}, 'C:/projects/A')).resolves.toMatchObject({ embeddingConfigured: configured })
+  })
+
   it('still refuses a keyless cloud embedding model without contacting the provider', async () => {
     const backfillVectors = useEmbeddingModel('openai', 'https://api.openai.com/v1')
 

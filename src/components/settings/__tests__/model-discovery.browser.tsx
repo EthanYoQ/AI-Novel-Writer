@@ -762,6 +762,7 @@ describe('model discovery settings flow', () => {
     await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
     const save = page.getByRole('button', { name: '保存配置', exact: true })
     await expect.element(save).toBeEnabled()
+    expect(apiKeyInput().placeholder).toBe('本地部署可留空')
     await act(async () => { await save.click() })
     expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', modelName: 'local-embed' }))
   })

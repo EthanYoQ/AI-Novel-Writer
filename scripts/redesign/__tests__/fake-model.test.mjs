@@ -34,3 +34,22 @@ it('failProse(false) 恢复后流式正文照常以 stop 结束', async () => {
   fake.failProse(false)
   assert.deepEqual((await writeProse()).finish, [null, null, 'stop'])
 })
+
+async function embedWithoutKey() {
+  const response = await fetch(`http://127.0.0.1:${fake.port}/v1/embeddings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'text-embedding-3-small', input: ['潮位'] }),
+  })
+  return response.status
+}
+
+it('acceptKeylessEmbeddings 只在打开期间接受不带 Key 的嵌入请求', async () => {
+  fake = await startFakeModel([])
+  const refusedBefore = await embedWithoutKey()
+  fake.acceptKeylessEmbeddings()
+  const accepted = await embedWithoutKey()
+  fake.acceptKeylessEmbeddings(false)
+  assert.deepEqual({ refusedBefore, accepted, refusedAfter: await embedWithoutKey(), authorizations: fake.embeddingAuthorizations },
+    { refusedBefore: 403, accepted: 200, refusedAfter: 403, authorizations: [null] })
+})
