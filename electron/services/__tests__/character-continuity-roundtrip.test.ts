@@ -181,6 +181,23 @@ describe('#491 角色状态来源经过多次备份往返', { timeout: 30_000 },
       .toMatchObject({ applied: 3 })
   })
 
+  it('别的角色有一条格式损坏的来源记录时，跳过它，其余角色照常修复', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f491-'))
+    roots.push(base)
+    const a = createSourceProject(base)
+    finalizeChapter(a, 1, 1, CHAPTER_1)
+    deriveCharacterState(a, 1, { location: '北塔顶层', keyItems: '铜钥匙' }, '林岚在北塔顶层找到铜钥匙')
+    const damaged = await exportAndRestore(base, await exportAndRestore(base, a, 'malformed-1', '1.3.2'), 'malformed-2', '1.3.2')
+    const good = JSON.parse(String(characterRow().cs_provenance)) as Record<string, { source: Record<string, unknown> }>
+    const broken = { location: { ...good.location, source: { ...good.location.source, finalizationId: 42 } } }
+    getProjectDb()!.prepare(`INSERT INTO characters(character_id,static_provenance,identity_revision,retired,name,role,cs_location,cs_provenance)
+      VALUES(?,'{"kind":"author"}',0,0,'周研','supporting','旧站',?)`).run(randomUUID(), JSON.stringify(broken))
+    closeProjectDatabase()
+
+    const repaired = openProject(damaged.root, damaged.projectId)
+    expect(derivedFields(repaired)).toEqual(['location', 'keyItems'])
+  })
+
   it('来源章节已重新定稿的旧派生字段经两次往返后仍显示为历史，但后续章节能照常更新它', async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f491-'))
     roots.push(base)

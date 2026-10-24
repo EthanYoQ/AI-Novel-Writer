@@ -37,6 +37,10 @@ describe('定稿后处理步骤错误', () => {
     expect(zhText).toContain('后面章节')
     expect(zhText).toContain('「当前状态」')
     expect(enText).toContain('Current state')
+    expect(zhText).toContain('从备份恢复')
+    expect(enText).toContain('restored from a backup')
+    expect(zhText).not.toContain('可以先点「重试」')
+    expect(enText).not.toContain('Try Retry first')
     for (const text of [zhText, enText]) expect(text).not.toMatch(/Error invoking|FINALIZED_CHARACTER|请点「重试」|Select Retry/u)
   })
 
