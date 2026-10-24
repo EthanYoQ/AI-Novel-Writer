@@ -22,7 +22,8 @@ function record(value: unknown): value is Record<string, unknown> {
 export function adoptTransferredCharacterContinuity(db: Database.Database, projectId: string): number {
   if (!projectId) throw new Error('CHARACTER_CONTINUITY_PROJECT_REQUIRED')
   return db.transaction(() => {
-    const watermark = db.prepare("SELECT generation FROM continuity_projection_meta WHERE id='main'").pluck().get() as number
+    const watermark = db.prepare("SELECT generation FROM continuity_projection_meta WHERE id='main'").pluck().get()
+    if (!Number.isSafeInteger(watermark)) return 0
     const receipt = db.prepare(`SELECT 1 FROM finalization_outbox o JOIN drafts d ON d.id=o.draft_id
       WHERE o.finalization_id=? AND o.draft_id=? AND o.chapter_number=? AND d.chapter_number=? AND o.content_hash=?`)
     let adopted = 0
@@ -39,7 +40,7 @@ export function adoptTransferredCharacterContinuity(db: Database.Database, proje
         if (!isFinalizedSourceIdentity(source) || typeof source.finalizationId !== 'string' || typeof epoch !== 'string'
           || order.chapterNumber !== source.chapterNumber) continue
         const separator = epoch.lastIndexOf(':'), prefix = epoch.slice(0, separator), generation = epoch.slice(separator + 1)
-        if (separator < 1 || prefix === projectId || !GENERATION.test(generation) || Number(generation) > watermark
+        if (separator < 1 || prefix === projectId || !GENERATION.test(generation) || Number(generation) > (watermark as number)
           || !receipt.get(source.finalizationId, source.draftId, source.chapterNumber, source.chapterNumber, source.contentHash)) continue
         provenance[field] = { ...entry, sourceOrder: { ...order, continuityEpoch: `${projectId}:${generation}` } }
         changed = true
