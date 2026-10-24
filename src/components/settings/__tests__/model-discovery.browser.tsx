@@ -224,6 +224,32 @@ describe('model discovery settings flow', () => {
     expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ reasoningMapping: mapping }))
   })
 
+  it.each([
+    ['zh-CN', '关闭 → 低', 'Gemini 3 无法完全关闭思考'],
+    ['en-US', 'Off → Low', 'Gemini 3 cannot turn thinking fully off'],
+  ] as const)('explains in %s that turning thinking off on Gemini 3 sends its lowest level', async (locale, outcome, note) => {
+    const model = savedProfile({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com',
+      modelName: 'gemini-3.1-pro-preview', reasoningOverride: 'off' })
+    await renderSettings(model, vi.fn(), locale)
+    await act(async () => {
+      await page.getByRole('button', { name: locale === 'zh-CN' ? /^编辑「/ : /^Edit “/ }).click()
+      await page.getByRole('button', { name: locale === 'zh-CN' ? '高级设置' : 'Advanced settings', exact: true }).click()
+    })
+    const settings = container?.querySelector('[data-model-reasoning-override-settings]')?.textContent ?? ''
+    expect(settings).toContain(outcome)
+    expect(container?.querySelector('[data-reasoning-wire]')?.textContent).toBe('thinking_level=low')
+    expect(settings).toContain(note)
+  })
+
+  it('does not show the Gemini 3 thinking note for other models', async () => {
+    await renderSettings(savedProfile({ reasoningOverride: 'off' }), vi.fn())
+    await act(async () => {
+      await page.getByRole('button', { name: /^编辑「/ }).click()
+      await page.getByRole('button', { name: '高级设置', exact: true }).click()
+    })
+    expect(container?.querySelector('[data-model-reasoning-override-settings]')?.textContent).not.toContain('Gemini 3')
+  })
+
   it('applies, rejects and clears an advanced mapping before saving', async () => {
     const { saveModel } = await renderSettings(savedProfile(), vi.fn())
     await act(async () => {

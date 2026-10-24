@@ -73,12 +73,19 @@ describe('reasoning policy', () => {
     })
   })
 
-  it('leaves Gemini 3.8 Flash on its provider default when thinking off is requested, since minimal is rejected there', () => {
-    const gemini38Flash = { ...geminiModel, modelName: 'gemini-3.8-flash' }
-    expect(resolveReasoningPolicy({ model: gemini38Flash, creativeStrategy: 'fluent-drafting', stage: 'drafting' }))
-      .toEqual({ requested: 'off', effective: null, status: 'unsupported', source: 'project-strategy' })
-    expect(resolveReasoningPolicy({ model: gemini38Flash, stage: 'general' }).providerDirective)
-      .toEqual({ adapter: 'gemini-thinking-level', thinkingLevel: 'low' })
+  it.each(['gemini-3.8-flash', 'gemini-3.1-pro-preview'])('sends the lowest thinking level %s accepts when thinking off is requested', (modelName) => {
+    const model = { ...geminiModel, modelName }
+    const forced = { requested: 'off', effective: 'low', status: 'forced', providerDirective: { adapter: 'gemini-thinking-level', thinkingLevel: 'low' } }
+    expect(resolveReasoningPolicy({ model, creativeStrategy: 'fluent-drafting', stage: 'drafting' }))
+      .toEqual({ ...forced, source: 'project-strategy' })
+    expect(resolveReasoningPolicy({ model: { ...model, reasoningOverride: 'off' } }))
+      .toEqual({ ...forced, source: 'model-override' })
+  })
+
+  it('still leaves thinking off unsent when a non-Gemini mapping has no off level', () => {
+    const model: ModelProfile = { ...geminiModel, provider: 'custom', protocol: 'openai', baseUrl: 'https://example.test/v1',
+      reasoningOverride: 'off', reasoningMapping: { adapter: 'openai-reasoning-effort', supportedEfforts: ['low', 'high'], providerValues: { low: 'low', high: 'high' } } }
+    expect(resolveReasoningPolicy({ model })).toEqual({ requested: 'off', effective: null, status: 'unsupported', source: 'model-override' })
   })
 
   it('keeps the thinking budget of a saved Gemini 2.5 Flash-Lite profile that never stored a mapping', () => {

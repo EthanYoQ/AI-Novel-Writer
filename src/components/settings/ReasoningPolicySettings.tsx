@@ -181,6 +181,14 @@ export function ModelReasoningOverrideSettings({
             'This is a request preference, not a universal quality scale; the effective value depends on a verified model mapping.',
           )}
         </p>
+        {mapping?.adapter === 'gemini-thinking-level' && (
+          <p className="mt-1 text-[0.7rem] text-[var(--color-text-muted)]">
+            {text(
+              'Gemini 3 无法完全关闭思考。选「关闭」时发送该模型支持的最低一档。',
+              'Gemini 3 cannot turn thinking fully off. Off sends the lowest level this model supports.',
+            )}
+          </p>
+        )}
       </div>
       <details>
         <summary className="text-xs cursor-pointer">{text('高级参数映射', 'Advanced parameter mapping')}</summary>
