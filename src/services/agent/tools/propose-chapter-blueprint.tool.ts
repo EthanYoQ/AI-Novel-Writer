@@ -3,6 +3,8 @@ import { ipc } from '../../ipc-client'
 import { buildAgentTool, type AgentExecutionContext } from '../tool-registry'
 import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 import type { ProposalFieldDiff } from './propose-novel-config.tool'
+import { containsHan } from '../../../i18n/app-errors'
+import { pluralEn } from '../../../shared/plural-en'
 
 const STRING_FIELDS = new Set<keyof BlueprintData>([
   'title', 'role', 'purpose', 'keyEvents', 'suspenseHook', 'userGuidance', 'notes',
@@ -105,7 +107,7 @@ export const proposeChapterBlueprintTool = buildAgentTool({
     if (context?.agentToolAction) {
       const receipt = await ipc.invokeWithProjectSession(projectSession, 'agent-generation:commit-domain-tool', { ref: context.agentToolAction })
       if (receipt.kind !== 'blueprint' || receipt.chapterNumber !== chapterNumber) throw new Error('GENERATION_AGENT_DOMAIN_RECEIPT_MISMATCH')
-      return { success: true, content: text(`第 ${chapterNumber} 章蓝图已更新（${Object.keys(receipt.changes).length} 个字段）`, `Chapter ${chapterNumber} blueprint updated (${Object.keys(receipt.changes).length} fields)`) }
+      return { success: true, content: text(`第 ${chapterNumber} 章蓝图已更新（${Object.keys(receipt.changes).length} 个字段）`, `Chapter ${chapterNumber} blueprint updated (${Object.keys(receipt.changes).length} ${pluralEn(Object.keys(receipt.changes).length, 'field')})`) }
     }
     const result = await ipc.invokeWithProjectSession(
       projectSession, 'db:blueprint-upsert', { ...current, ...proposal.changes }, project.path,
@@ -115,11 +117,11 @@ export const proposeChapterBlueprintTool = buildAgentTool({
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail ?? '')
+        error: context?.writingLanguage === 'en-US' && containsHan(detail ?? '')
           ? text('章节蓝图写入失败', 'Could not update the chapter blueprint')
           : detail ?? text('章节蓝图写入失败', 'Could not update the chapter blueprint'),
       }
     }
-    return { success: true, content: text(`第 ${chapterNumber} 章蓝图已更新（${proposal.diffs.length} 个字段）`, `Chapter ${chapterNumber} blueprint updated (${proposal.diffs.length} fields)`) }
+    return { success: true, content: text(`第 ${chapterNumber} 章蓝图已更新（${proposal.diffs.length} 个字段）`, `Chapter ${chapterNumber} blueprint updated (${proposal.diffs.length} ${pluralEn(proposal.diffs.length, 'field')})`) }
   },
 })

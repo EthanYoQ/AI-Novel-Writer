@@ -217,9 +217,9 @@ export function useArchitectureConfirmForm({
 
       // 前置校验 2：如果勾选了角色名单（意味着将重新生成角色卡），则必须确保蓝图为空
       if (selectedSteps.includes('characters') && archStatus.characters) {
-        const charGuard = await guardCharacterRegeneration(undefined, locale)
+        const charGuard = await guardCharacterRegeneration()
         if (!charGuard.ok) {
-          setGuardError(displayedErrorMessage(locale, charGuard.message, text('角色卡不可重新生成', 'Character cards cannot be regenerated.')))
+          setGuardError(displayedErrorMessage(useLocaleStore.getState().locale, charGuard.message, text('角色卡不可重新生成', 'Character cards cannot be regenerated.')))
           return
         }
       }

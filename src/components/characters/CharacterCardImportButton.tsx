@@ -92,7 +92,7 @@ function SessionImportButton({ session, disabled }: Props & { session: ProjectSe
         writeImportDraft(sessionKey, { source: draftWhenSelected.source, files: selected })
       }
     } catch (error) {
-      if (isProjectSessionCurrent(session)) toast.error(appErrorMessage(locale, error))
+      if (isProjectSessionCurrent(session)) toast.error(appErrorMessage(useLocaleStore.getState().locale, error))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }
@@ -159,7 +159,7 @@ function SessionImportButton({ session, disabled }: Props & { session: ProjectSe
     } catch (error) {
       if (isProjectSessionCurrent(session)) {
         setOpen(true)
-        toast.error(appErrorMessage(locale, error))
+        toast.error(appErrorMessage(useLocaleStore.getState().locale, error))
       }
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)

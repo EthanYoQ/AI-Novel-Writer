@@ -170,10 +170,12 @@ export function useRunRecovery(): RunRecovery {
     setCandidateError('')
   }
 
+  /** 结果晚到时界面语言可能已切换，按显示这一刻的语言写。 */
   const failCandidate = useCallback((error: unknown) => {
     if (!stillCurrent()) return
-    setCandidateError(displayedErrorMessage(locale, error, locale === 'en-US' ? 'Recovery candidate action failed' : '恢复候选操作失败'))
-  }, [locale, stillCurrent])
+    const { locale: shown, text } = useLocaleStore.getState()
+    setCandidateError(displayedErrorMessage(shown, error, text('恢复候选操作失败', 'Recovery candidate action failed')))
+  }, [stillCurrent])
 
   return {
     entries,
@@ -202,9 +204,10 @@ export function useRunRecovery(): RunRecovery {
           const candidate = result.candidate
           useEditorStore.getState().openFile({
             id: `recovery:${candidate.candidateId}`,
-            name: locale === 'en-US'
-              ? `Recovery candidate · Chapter ${candidate.chapterNumber} ${candidate.chapterTitle}`
-              : `恢复候选 · 第${candidate.chapterNumber}章 ${candidate.chapterTitle}`,
+            name: useLocaleStore.getState().text(
+              `恢复候选 · 第${candidate.chapterNumber}章 ${candidate.chapterTitle}`,
+              `Recovery candidate · Chapter ${candidate.chapterNumber} ${candidate.chapterTitle}`,
+            ),
             type: 'chapter',
             filePath: `ai-novel://recovery/${candidate.candidateId}`,
             content: candidate.visibleText,
@@ -228,7 +231,7 @@ export function useRunRecovery(): RunRecovery {
     openPlanning: entry => void act(async current => {
       const fresh = await ipc.invokeWithProjectSession(current, 'generation:read-context', { handle: entry.recovery.handle })
       if (!stillCurrent()) return
-      openPlanningRecoveryDraft(fresh, current.projectPath, planningTitle(fresh, locale))
+      openPlanningRecoveryDraft(fresh, current.projectPath, planningTitle(fresh, useLocaleStore.getState().locale))
     }),
     continueEditor: entry => void act(async current => {
       await ipc.invokeWithProjectSession(current, 'editor-inline:execute', { handle: entry.recovery.view.handle })

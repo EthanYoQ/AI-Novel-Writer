@@ -70,7 +70,6 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
   )
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
-  const locale = useLocaleStore(s => s.locale)
   const projectMatches = currentProject?.path === projectKey
   const tabDraftStatus = editorTab?.draftStatus
   const [pendingRevisions, setPendingRevisions] = useState<RevisionEntry[]>([])
@@ -196,7 +195,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
         setSaveOutcome('failed')
-        toast.error(displayedErrorMessage(locale, error, text('草稿保存失败', 'Could not save the draft')))
+        toast.error(displayedErrorMessage(useLocaleStore.getState().locale, error, text('草稿保存失败', 'Could not save the draft')))
       }
       if (propagateFailure) throw error
     } finally {
@@ -418,8 +417,9 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       const guard = await guardRepairPostProcess(meta.chapterNumber, projectKey, projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
       if (!guard.ok) {
-        toast.error(locale === 'zh-CN'
-          ? displayedErrorMessage(locale, guard.message, text('无法执行修复', 'Could not run the repair.'))
+        const shown = useLocaleStore.getState().locale
+        toast.error(shown === 'zh-CN'
+          ? displayedErrorMessage(shown, guard.message, text('无法执行修复', 'Could not run the repair.'))
           : text('无法执行修复', 'Could not run the repair.'))
         return
       }
@@ -434,7 +434,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, e)
       toast.error(text(`修复启动失败：${reason}`, englishWithReason('Could not start the repair.', reason)))
     }
-  }, [currentProject, isChapterBusy, locale, meta, projectKey, projectMatches, text])
+  }, [currentProject, isChapterBusy, meta, projectKey, projectMatches, text])
 
   /** 读出待合并修稿与它的真实冻结源，交给合并视图；正文有未保存修改或读取期间变了就不打开。 */
   const openPendingRevision = async (rev: RevisionEntry) => {
@@ -558,7 +558,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         reload()
         return true
       }
-      const reason = displayedErrorMessage(locale, result.error)
+      const reason = displayedErrorMessage(useLocaleStore.getState().locale, result.error)
       toast.error(text(`合并失败：${reason}`, englishWithReason('Could not merge the revision.', reason)))
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return false
