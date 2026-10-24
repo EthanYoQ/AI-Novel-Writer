@@ -415,7 +415,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         `Unknown post-processing step: ${this.params.stepKey}`,
       ))
     }
-    return runPostProcessPipeline(
+    const status = await runPostProcessPipeline(
       this.params.project.path,
       getChapterFinalizeScope(this.params.chapterNumber),
       this.params.sourceLabel,
@@ -429,6 +429,8 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         projectSession,
       },
     )
+    if (status.steps.character_cards?.ok) this.notifyRefresh(['characterCards'], this.params.project.path, projectSession)
+    return status
   }
 }
 
