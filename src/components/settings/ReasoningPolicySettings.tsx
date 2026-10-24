@@ -5,7 +5,7 @@ import { projectSessionContextFromProject } from '../../shared/project-session-c
 import { resolveReasoningPolicy } from '../../shared/reasoning-policy'
 import { modelCapabilitySource } from '../../shared/model-profile-draft'
 import { resolveModelProfileReasoningMapping } from '../../shared/provider-presets'
-import { isReasoningMapping } from '../../shared/reasoning-types'
+import { isReasoningMapping, reasoningAdapterFitsProtocol } from '../../shared/reasoning-types'
 import type {
   CreativeStrategy,
   EffectiveReasoningEffort,
@@ -95,7 +95,7 @@ export function ModelReasoningOverrideSettings({
       const raw = mappingDraft ?? JSON.stringify(model.reasoningMapping ?? null, null, 2)
       const value: unknown = raw.trim() ? JSON.parse(raw) : undefined
       if (value !== undefined && value !== null && (!isReasoningMapping(value)
-        || (model.protocol === 'gemini') !== (value.adapter === 'gemini-thinking-budget'))) throw new Error('mapping')
+        || !reasoningAdapterFitsProtocol(model.protocol, value.adapter))) throw new Error('mapping')
       onModelChange({ ...model, reasoningMapping: value == null ? undefined : value as ModelProfile['reasoningMapping'] })
       setMappingDraft(null)
       setMappingError(false)
@@ -145,6 +145,8 @@ export function ModelReasoningOverrideSettings({
             ? `enable_thinking=${resolution.providerDirective.thinkingBudget > 0}${resolution.providerDirective.thinkingBudget > 0 ? `; thinking_budget=${resolution.providerDirective.thinkingBudget}` : ''}`
             : resolution.providerDirective.adapter === 'gemini-thinking-budget'
             ? `thinking_budget=${resolution.providerDirective.thinkingBudget}`
+            : resolution.providerDirective.adapter === 'gemini-thinking-level'
+            ? `thinking_level=${resolution.providerDirective.thinkingLevel}`
             : resolution.providerDirective.adapter === 'deepseek-v4-thinking'
               ? `thinking=${resolution.providerDirective.thinking}${resolution.providerDirective.thinking === 'enabled' && resolution.providerDirective.reasoningEffort ? `; reasoning_effort=${resolution.providerDirective.reasoningEffort}` : ''}`
               : `${resolution.providerDirective.adapter === 'siliconflow-v4-thinking' ? 'enable_thinking=true; ' : ''}reasoning_effort=${resolution.providerDirective.reasoningEffort}`}

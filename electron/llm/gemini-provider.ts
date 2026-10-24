@@ -31,8 +31,11 @@ export class GeminiProvider implements ILLMProvider {
     generationConfig: Record<string, unknown>,
     opts: LLMGenerateOptions,
   ): void {
-    if (opts.reasoning?.adapter !== 'gemini-thinking-budget') return
-    generationConfig.thinkingConfig = { thinkingBudget: opts.reasoning.thinkingBudget }
+    if (opts.reasoning?.adapter === 'gemini-thinking-budget') {
+      generationConfig.thinkingConfig = { thinkingBudget: opts.reasoning.thinkingBudget }
+    } else if (opts.reasoning?.adapter === 'gemini-thinking-level') {
+      generationConfig.thinkingConfig = { thinkingLevel: opts.reasoning.thinkingLevel }
+    }
   }
 
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {

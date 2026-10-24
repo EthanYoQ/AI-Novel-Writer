@@ -10,7 +10,7 @@ import {
 import type { GlobalConfig, LLMFinishReason, LLMRequest, LLMResponse, ModelDiscoveryRequest, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { knownAppErrorMessage } from '../../src/i18n/app-errors'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
-import { isReasoningMapping } from '../../src/shared/reasoning-types'
+import { isReasoningMapping, reasoningAdapterFitsProtocol } from '../../src/shared/reasoning-types'
 import { LLMFactory } from '../llm/llm-factory'
 import { getMainLocale, mainText } from '../i18n'
 import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
@@ -319,7 +319,7 @@ export function registerLLMController() {
   ipcMain.handle('llm:save-model', async (_event, model: ModelProfile) => {
     try {
       if (model.reasoningMapping !== undefined && (!isReasoningMapping(model.reasoningMapping)
-        || (model.protocol === 'gemini') !== (model.reasoningMapping.adapter === 'gemini-thinking-budget'))) {
+        || !reasoningAdapterFitsProtocol(model.protocol, model.reasoningMapping.adapter))) {
         throw new Error('INVALID_REASONING_MAPPING')
       }
       const models = loadModelConfigsForUpdate()

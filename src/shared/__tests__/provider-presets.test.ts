@@ -139,35 +139,31 @@ describe('provider catalog', () => {
     }
   })
 
-  it('publishes Gemini 2.5 Flash-Lite as one exact official capability fact', () => {
+  it('publishes the Gemini 3 presets with documented capacity and thinking levels, defaulting to Gemini 3.8 Flash', () => {
     const gemini = createProviderCatalog().find((preset) => preset.provider === 'gemini')
+    expect(gemini).toMatchObject({ baseUrl: 'https://generativelanguage.googleapis.com', protocol: 'gemini' })
+    expect(gemini?.models.map(model => model.name))
+      .toEqual(['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview'])
+    expect(gemini?.embeddingModels).toEqual(['gemini-embedding-001'])
 
-    expect(gemini).toMatchObject({
-      baseUrl: 'https://generativelanguage.googleapis.com',
-      protocol: 'gemini',
-    })
-    expect(gemini?.models).toContainEqual({
-      name: 'gemini-2.5-flash-lite',
-      maxTokens: 65_536,
-      capabilities: {
-        contextWindowTokens: 1_048_576,
-        maxOutputTokens: 65_536,
-        reasoning: true,
-        structuredOutput: true,
-        usage: true,
-      },
-      reasoningMapping: {
-        adapter: 'gemini-thinking-budget',
-        supportedEfforts: ['off', 'low', 'medium', 'high'],
-        providerValues: { off: 0, low: 1_024, medium: 8_192, high: 24_576 },
-      },
-    })
-    expect(resolveModelProfileCapabilities({
-      provider: 'gemini',
-      protocol: 'gemini',
-      baseUrl: 'https://generativelanguage.googleapis.com',
-      modelName: 'gemini-2.5-flash-lite',
-    })).toEqual(gemini?.models.find(model => model.name === 'gemini-2.5-flash-lite')?.capabilities)
+    // 思考等级取自 https://ai.google.dev/gemini-api/docs/generate-content/thinking ；
+    // 3.8 Flash 与 3.1 Pro 不支持 minimal，所以没有「关闭」档。
+    const levels = { low: 'low', medium: 'medium', high: 'high' }
+    const expected = {
+      'gemini-3.8-flash': { supportedEfforts: ['low', 'medium', 'high'], providerValues: levels },
+      'gemini-3.5-flash-lite': { supportedEfforts: ['off', 'low', 'medium', 'high'], providerValues: { off: 'minimal', ...levels } },
+      'gemini-3.1-pro-preview': { supportedEfforts: ['low', 'medium', 'high'], providerValues: levels },
+      'gemini-3-flash-preview': { supportedEfforts: ['off', 'low', 'medium', 'high'], providerValues: { off: 'minimal', ...levels } },
+    }
+    for (const [modelName, mapping] of Object.entries(expected)) {
+      const profile = { provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', modelName }
+      expect(resolveModelProfileCapabilities(profile)).toEqual({
+        contextWindowTokens: 1_048_576, maxOutputTokens: 65_536, reasoning: true, structuredOutput: true, usage: true,
+      })
+      expect(resolveModelProfileReasoningMapping(profile)).toEqual({ adapter: 'gemini-thinking-level', ...mapping })
+    }
+    expect(resolveModelProfileCapabilities({ provider: 'gemini', protocol: 'gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com', modelName: 'gemini-2.5-flash-lite' })).toBeUndefined()
   })
 
   it.each([

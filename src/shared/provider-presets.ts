@@ -4,7 +4,7 @@
  */
 
 import type { VerifiedReasoningMapping } from './reasoning-types'
-import { isReasoningMapping } from './reasoning-types'
+import { isReasoningMapping, reasoningAdapterFitsProtocol } from './reasoning-types'
 
 /** 单个模型的预设 — name + 该模型的输出 token 上限 */
 export interface ModelPreset {
@@ -78,6 +78,25 @@ export interface ProviderPreset {
   embeddingModels: string[]
   /** 向量模型的能力元数据，按模型 ID 索引以保持旧的 string[] 配置兼容。 */
   embeddingModelCapabilities?: Record<string, ModelCapabilities>
+}
+
+function geminiThinkingLevelPreset(name: string, supportsMinimal: boolean): ModelPreset {
+  return {
+    name,
+    maxTokens: 65_536,
+    capabilities: {
+      contextWindowTokens: 1_048_576,
+      maxOutputTokens: 65_536,
+      reasoning: true,
+      structuredOutput: true,
+      usage: true,
+    },
+    reasoningMapping: {
+      adapter: 'gemini-thinking-level',
+      supportedEfforts: supportsMinimal ? ['off', 'low', 'medium', 'high'] : ['low', 'medium', 'high'],
+      providerValues: { ...(supportsMinimal ? { off: 'minimal' } : {}), low: 'low', medium: 'medium', high: 'high' },
+    },
+  }
 }
 
 /**
@@ -389,28 +408,17 @@ export function createProviderCatalog(): ProviderPreset[] {
     displayName: 'Google Gemini',
     baseUrl: 'https://generativelanguage.googleapis.com',
     protocol: 'gemini',
+    // 容量见各模型页 https://ai.google.dev/gemini-api/docs/models/<模型 ID>（输入 1,048,576、输出 65,536，
+    // 均支持 Thinking 与 Structured outputs）；思考等级见 https://ai.google.dev/gemini-api/docs/generate-content/thinking 。
+    // 3.8 Flash 与 3.1 Pro 不支持 minimal，没有「关闭」档；产品的 xhigh、max 落到 high。
     models: [
-      {
-        name: 'gemini-2.5-flash-lite',
-        maxTokens: 65536,
-        capabilities: {
-          contextWindowTokens: 1_048_576,
-          maxOutputTokens: 65_536,
-          reasoning: true,
-          structuredOutput: true,
-          usage: true,
-        },
-        // https://ai.google.dev/gemini-api/docs/generate-content/thinking
-        reasoningMapping: {
-          adapter: 'gemini-thinking-budget',
-          supportedEfforts: ['off', 'low', 'medium', 'high'],
-          providerValues: { off: 0, low: 1_024, medium: 8_192, high: 24_576 },
-        },
-      },
-      { name: 'gemini-3.1-pro-preview', maxTokens: 65536 },
-      { name: 'gemini-3-flash-preview', maxTokens: 65536 },
+      geminiThinkingLevelPreset('gemini-3.8-flash', false),
+      geminiThinkingLevelPreset('gemini-3.5-flash-lite', true),
+      geminiThinkingLevelPreset('gemini-3.1-pro-preview', false),
+      geminiThinkingLevelPreset('gemini-3-flash-preview', true),
     ],
-    embeddingModels: ['text-embedding-004'],
+    // text-embedding-004 已不在 models 列表里；gemini-embedding-001 默认返回 3072 维。
+    embeddingModels: ['gemini-embedding-001'],
   },
   {
     provider: 'ollama',
@@ -597,7 +605,7 @@ export function resolveModelProfileReasoningMapping(
   if (profile.reasoningMapping !== undefined) {
     const mapping = profile.reasoningMapping
     return isReasoningMapping(mapping)
-      && (profile.protocol === 'gemini') === (mapping.adapter === 'gemini-thinking-budget')
+      && reasoningAdapterFitsProtocol(profile.protocol, mapping.adapter)
       ? mapping : undefined
   }
   if (

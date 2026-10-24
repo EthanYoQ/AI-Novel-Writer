@@ -275,7 +275,7 @@ export async function embedGemini(
   texts: string[],
   model: { baseUrl: string; apiKey: string; modelName?: string },
 ): Promise<number[][]> {
-  const embeddingModel = model.modelName || 'text-embedding-004'
+  const embeddingModel = model.modelName || 'gemini-embedding-001'
   const baseUrl = model.baseUrl.replace(/\/$/, '')
 
   // Gemini batchEmbedContents 支持批量

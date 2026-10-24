@@ -207,6 +207,25 @@ describe('model discovery settings flow', () => {
     expect(container?.querySelector('[data-capability-sources]')?.textContent).toContain(declared ? '模型输出容量：接口取得' : '模型输出容量：资料匹配')
   })
 
+  it('previews the Gemini 3 thinking level and accepts a thinking-level mapping on the Gemini protocol', async () => {
+    const model = savedProfile({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com',
+      modelName: 'gemini-3.8-flash', reasoningOverride: 'high' })
+    const { saveModel } = await renderSettings(model, vi.fn())
+    await act(async () => {
+      await page.getByRole('button', { name: /^编辑「/ }).click()
+      await page.getByRole('button', { name: '高级设置', exact: true }).click()
+    })
+    expect(container?.querySelector('[data-reasoning-wire]')?.textContent).toBe('thinking_level=high')
+    const mapping = { adapter: 'gemini-thinking-level', supportedEfforts: ['high'], providerValues: { high: 'medium' } }
+    await act(async () => {
+      await page.getByText('高级参数映射', { exact: true }).click()
+      await page.getByLabelText('推理参数映射 JSON').fill(JSON.stringify(mapping))
+      await page.getByRole('button', { name: '应用映射', exact: true }).click()
+      await page.getByRole('button', { name: '保存配置', exact: true }).click()
+    })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ reasoningMapping: mapping }))
+  })
+
   it('applies, rejects and clears an advanced mapping before saving', async () => {
     const { saveModel } = await renderSettings(savedProfile(), vi.fn())
     await act(async () => {

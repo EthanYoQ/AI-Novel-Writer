@@ -3,12 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { resolveReasoningPolicy } from '../reasoning-policy'
 import type { ModelProfile } from '../ipc-channels'
 
-const geminiFlashLite: ModelProfile = {
-  id: 'gemini-flash-lite',
-  name: 'Gemini 2.5 Flash Lite',
+const geminiModel: ModelProfile = {
+  id: 'gemini-3.5-flash-lite',
+  name: 'Gemini 3.5 Flash Lite',
   provider: 'gemini',
   protocol: 'gemini',
-  modelName: 'gemini-2.5-flash-lite',
+  modelName: 'gemini-3.5-flash-lite',
   apiKey: 'test-key',
   baseUrl: 'https://generativelanguage.googleapis.com',
   temperature: 0.7,
@@ -18,7 +18,7 @@ const geminiFlashLite: ModelProfile = {
 
 describe('reasoning policy', () => {
   it('maps explicit Qwen medium to an application budget and keeps off disabled', () => {
-    const model: ModelProfile = { ...geminiFlashLite, provider: 'siliconflow', protocol: 'openai',
+    const model: ModelProfile = { ...geminiModel, provider: 'siliconflow', protocol: 'openai',
       baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B' }
     expect(resolveReasoningPolicy({ model: { ...model, reasoningOverride: 'medium' }, stage: 'review' }))
       .toEqual({ requested: 'medium', effective: 'medium', status: 'mapped', source: 'model-override',
@@ -31,7 +31,7 @@ describe('reasoning policy', () => {
     }
   })
 
-  const silicon: ModelProfile = { ...geminiFlashLite, provider: 'openai', protocol: 'openai',
+  const silicon: ModelProfile = { ...geminiModel, provider: 'openai', protocol: 'openai',
     baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash' }
 
   it.each(['openai', 'siliconflow'] as const)('maps explicit SiliconFlow choices with the %s label', provider => {
@@ -49,34 +49,49 @@ describe('reasoning policy', () => {
   })
 
   it('uses the project strategy and generation purpose to request stage-specific effort', () => {
+    const gemini35FlashLite = { ...geminiModel, modelName: 'gemini-3.5-flash-lite' }
     expect(resolveReasoningPolicy({
-      model: geminiFlashLite,
+      model: gemini35FlashLite,
       creativeStrategy: 'fluent-drafting',
       stage: 'drafting',
     })).toMatchObject({
       requested: 'off',
       effective: 'off',
       status: 'mapped',
-      providerDirective: { adapter: 'gemini-thinking-budget', thinkingBudget: 0 },
+      providerDirective: { adapter: 'gemini-thinking-level', thinkingLevel: 'minimal' },
     })
 
     expect(resolveReasoningPolicy({
-      model: geminiFlashLite,
+      model: gemini35FlashLite,
       creativeStrategy: 'deep-planning',
       stage: 'planning',
     })).toMatchObject({
       requested: 'max',
       effective: 'high',
       status: 'capped',
-      providerDirective: { adapter: 'gemini-thinking-budget', thinkingBudget: 24_576 },
+      providerDirective: { adapter: 'gemini-thinking-level', thinkingLevel: 'high' },
     })
+  })
+
+  it('leaves Gemini 3.8 Flash on its provider default when thinking off is requested, since minimal is rejected there', () => {
+    const gemini38Flash = { ...geminiModel, modelName: 'gemini-3.8-flash' }
+    expect(resolveReasoningPolicy({ model: gemini38Flash, creativeStrategy: 'fluent-drafting', stage: 'drafting' }))
+      .toEqual({ requested: 'off', effective: null, status: 'unsupported', source: 'project-strategy' })
+    expect(resolveReasoningPolicy({ model: gemini38Flash, stage: 'general' }).providerDirective)
+      .toEqual({ adapter: 'gemini-thinking-level', thinkingLevel: 'low' })
+  })
+
+  it('still honours a saved Gemini 2.5 thinking-budget mapping', () => {
+    const saved: ModelProfile = { ...geminiModel, reasoningOverride: 'high', reasoningMapping: {
+      adapter: 'gemini-thinking-budget', supportedEfforts: ['off', 'high'], providerValues: { off: 0, high: 24_576 } } }
+    expect(resolveReasoningPolicy({ model: saved }).providerDirective).toEqual({ adapter: 'gemini-thinking-budget', thinkingBudget: 24_576 })
   })
 
   it('defines four distinct strategy profiles without making deep-planning drafts maximal', () => {
     const requestedProfile = (creativeStrategy: 'auto' | 'fluent-drafting' | 'consistency-first' | 'deep-planning') => (
       ['drafting', 'planning', 'review', 'general'] as const
     ).map(stage => resolveReasoningPolicy({
-      model: { ...geminiFlashLite, provider: 'custom', baseUrl: 'https://example.test' },
+      model: { ...geminiModel, provider: 'custom', baseUrl: 'https://example.test' },
       creativeStrategy,
       stage,
     }).requested)
@@ -95,7 +110,7 @@ describe('reasoning policy', () => {
   })
 
   it('lets the model-profile override take precedence without changing the project strategy', () => {
-    const model = { ...geminiFlashLite, reasoningOverride: 'high' as const }
+    const model = { ...geminiModel, reasoningOverride: 'high' as const }
     const projectStrategy = 'fluent-drafting' as const
 
     expect(resolveReasoningPolicy({
@@ -113,7 +128,7 @@ describe('reasoning policy', () => {
 
   it('caps unavailable maximum effort and reports models whose reasoning cannot be disabled', () => {
     const grok: ModelProfile = {
-      ...geminiFlashLite,
+      ...geminiModel,
       id: 'grok-4.5',
       provider: 'xai',
       protocol: 'openai',
@@ -137,7 +152,7 @@ describe('reasoning policy', () => {
 
   it('suppresses reasoning fields for unknown custom endpoints and unverified built-in models', () => {
     const custom = {
-      ...geminiFlashLite,
+      ...geminiModel,
       provider: 'custom' as const,
       protocol: 'openai' as const,
       baseUrl: 'https://gemini-proxy.example.test/v1',
@@ -152,7 +167,7 @@ describe('reasoning policy', () => {
     })
 
     const unverifiedDeepSeek = {
-      ...geminiFlashLite,
+      ...geminiModel,
       provider: 'deepseek' as const,
       protocol: 'openai' as const,
       baseUrl: 'https://api.deepseek.com',
@@ -165,7 +180,7 @@ describe('reasoning policy', () => {
 
   it('maps the exact official DeepSeek V4 profile without trusting persisted capability flags', () => {
     const legacyDeepSeek: ModelProfile = {
-      ...geminiFlashLite,
+      ...geminiModel,
       provider: 'deepseek',
       protocol: 'openai',
       baseUrl: 'https://api.deepseek.com',
@@ -245,7 +260,7 @@ describe('reasoning policy', () => {
   ) => {
     expect(resolveReasoningPolicy({
       model: {
-        ...geminiFlashLite,
+        ...geminiModel,
         provider,
         protocol: 'openai',
         baseUrl,
@@ -258,7 +273,7 @@ describe('reasoning policy', () => {
 
   it('normalizes stale persisted policy values instead of sending an unverified parameter', () => {
     const staleModel = {
-      ...geminiFlashLite,
+      ...geminiModel,
       reasoningOverride: 'ultra-from-old-build',
     } as unknown as ModelProfile
 

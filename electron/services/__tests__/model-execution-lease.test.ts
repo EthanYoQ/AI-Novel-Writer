@@ -357,10 +357,10 @@ describe('ModelExecutionLeaseRegistry', () => {
   it('resolves exact official Gemini capabilities for structured planning', () => {
     const profile: ModelProfile = {
       ...modelProfile(),
-      id: 'gemini-lite',
+      id: 'gemini-default',
       provider: 'gemini',
       protocol: 'gemini',
-      modelName: 'gemini-2.5-flash-lite',
+      modelName: 'gemini-3.8-flash',
       baseUrl: 'https://generativelanguage.googleapis.com',
       maxTokens: 65_536,
       capabilities: undefined,

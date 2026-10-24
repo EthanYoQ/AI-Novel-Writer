@@ -24,7 +24,7 @@ import {
 } from '../real-provider-generation-qualification.mjs'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-const CURRENT_PRICE_SNAPSHOT_TEST_TIME = Date.parse('2026-08-18T00:00:00.000Z')
+const CURRENT_PRICE_SNAPSHOT_TEST_TIME = Date.parse('2026-10-30T00:00:00.000Z')
 
 async function withCurrentPriceSnapshotClock<T>(run: () => Promise<T>): Promise<T> {
   const clock = vi.spyOn(Date, 'now').mockReturnValue(CURRENT_PRICE_SNAPSHOT_TEST_TIME)
@@ -203,7 +203,7 @@ describe('real provider generation qualification contract', () => {
         },
         {
           provider: 'gemini',
-          modelName: 'gemini-2.5-flash-lite',
+          modelName: 'gemini-3.8-flash',
           blueprintCount: 3,
           draftCharacters: 5000,
           blueprintResponseFormat: 'json_object',
@@ -248,7 +248,7 @@ describe('real provider generation qualification contract', () => {
       .toEqual([
         ['deepseek', 'openai', 'deepseek-v4-flash', 'https://api.deepseek.com'],
         ['xai', 'openai', 'grok-4.5', 'https://api.x.ai/v1'],
-        ['gemini', 'gemini', 'gemini-2.5-flash-lite', 'https://generativelanguage.googleapis.com'],
+        ['gemini', 'gemini', 'gemini-3.8-flash', 'https://generativelanguage.googleapis.com'],
       ])
     expect(profiles[0]?.id).toBe('configured-deepseek')
     expect(profiles.every(profile => Object.isFrozen(profile))).toBe(true)
@@ -299,26 +299,26 @@ describe('real provider generation qualification contract', () => {
         provider: 'deepseek',
         modelName: 'deepseek-v4-flash',
         sourceUrl: 'https://api-docs.deepseek.com/quick_start/pricing/',
-        asOf: '2026-08-12',
-        inputUsdPerMillionTokens: 0.14,
-        outputUsdPerMillionTokens: 0.28,
+        asOf: '2026-10-24',
+        inputUsdPerMillionTokens: 0.3,
+        outputUsdPerMillionTokens: 1.2,
       },
       {
         provider: 'xai',
         modelName: 'grok-4.5',
         sourceUrl: 'https://docs.x.ai/developers/models/grok-4.5',
-        asOf: '2026-08-12',
+        asOf: '2026-10-24',
         inputUsdPerMillionTokens: 2,
         outputUsdPerMillionTokens: 6,
         maximumEstimatedInputTokens: 200_000,
       },
       {
         provider: 'gemini',
-        modelName: 'gemini-2.5-flash-lite',
+        modelName: 'gemini-3.8-flash',
         sourceUrl: 'https://ai.google.dev/gemini-api/docs/pricing',
-        asOf: '2026-08-12',
-        inputUsdPerMillionTokens: 0.1,
-        outputUsdPerMillionTokens: 0.4,
+        asOf: '2026-10-24',
+        inputUsdPerMillionTokens: 0.75,
+        outputUsdPerMillionTokens: 3.75,
       },
     ])
 
@@ -356,7 +356,7 @@ describe('real provider generation qualification contract', () => {
   })
 
   it('expires every price estimate when its official snapshot is older than policy allows', async () => {
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-20T00:00:01.000Z'))
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-31T00:00:01.000Z'))
     try {
       const receipt = await runRealProviderGenerationQualification({
         mode: 'dry-run',

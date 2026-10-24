@@ -3,13 +3,14 @@ import { resolveModelProfileReasoningMapping } from './provider-presets'
 import type {
   CreativeStrategy,
   EffectiveReasoningEffort,
+  GeminiThinkingLevel,
   GenerationReasoningStage,
   ProviderReasoningDirective,
   ReasoningEffort,
   ReasoningPolicyResolution,
   VerifiedReasoningMapping,
 } from './reasoning-types'
-import { CREATIVE_STRATEGIES, REASONING_EFFORTS } from './reasoning-types'
+import { CREATIVE_STRATEGIES, GEMINI_THINKING_LEVELS, REASONING_EFFORTS } from './reasoning-types'
 
 const STAGE_REQUESTS: Readonly<Record<CreativeStrategy, Readonly<Record<GenerationReasoningStage, ReasoningEffort>>>> = {
   auto: { drafting: 'low', planning: 'medium', review: 'high', general: 'low' },
@@ -53,6 +54,11 @@ function providerDirective(
           thinking: 'enabled',
           reasoningEffort: value,
         }
+      : undefined
+  }
+  if (mapping.adapter === 'gemini-thinking-level') {
+    return GEMINI_THINKING_LEVELS.includes(value as GeminiThinkingLevel)
+      ? { adapter: mapping.adapter, thinkingLevel: value as GeminiThinkingLevel }
       : undefined
   }
   return typeof value === 'number'
