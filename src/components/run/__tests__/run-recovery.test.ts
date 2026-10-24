@@ -190,13 +190,15 @@ describe('审稿候选的片段', () => {
     expect(item.display).not.toContain('已解决 ·')
   })
 
-  it('英文界面的复核摘要用英文写条数与状态；旧版复核里证据可定位的已解决照写', () => {
+  it('英文界面的复核摘要用英文写条数与状态；第 1 版旧复核在新版本里也按待核实保存，摘要同样写待核实', () => {
     const [item] = review(recheck(1), { ...output(RECHECK), locale: 'en-US' }).artifacts
-    expect(item.display.split('\n')).toEqual([
+    const lines = item.display.split('\n')
+    expect(lines.slice(0, 2)).toEqual([
       'The recheck could not confirm that every note is resolved (2 items)',
       'Unresolved · 节奏: 铺垫仍偏长。',
-      'Resolved · 连续性: 钟声已改到正点。',
     ])
+    expect(lines[2]).toMatch(/^Needs verification · 连续性: .*钟声已改到正点。$/)
+    expect(item.display).not.toContain('Resolved ·')
   })
 
   it('证据在合并后正文里找不到或模型漏了意见时，按保存时的口径写待核实，条数仍是全部意见', () => {
@@ -209,14 +211,15 @@ describe('审稿候选的片段', () => {
     expect(item.display).toContain('Needs verification')
   })
 
-  it('结论按校验后的全部意见写：模型自称全部解决但仍有待核实时不照抄，全部可定位且已解决时才写全部解决', () => {
+  it('模型自称全部解决、证据也都能定位时，结论不照抄：新提交一律待作者核实，不写全部已解决', () => {
     const claim = (items: unknown[]) => JSON.stringify({ summary: '全部已解决。', items })
     const fixed = { findingId: '甲', targetId: '目标甲', resolved: true, evidenceQuote: '钟声在正点响起', reason: '钟声已改到正点。' }
-    const [mixed] = review(recheck(1), output(claim([fixed, { ...fixed, findingId: '乙', targetId: '目标乙', evidenceQuote: '正文里没有这句' }]))).artifacts
-    expect(mixed.display).not.toContain('全部已解决。')
-    expect(mixed.display.split('\n')[0]).toBe('复核未能确认全部意见已解决（2 条意见）')
-    const [all] = review(recheck(1), output(claim([fixed, { ...fixed, findingId: '乙', targetId: '目标乙', evidenceQuote: '她顺着螺旋楼梯往上走' }]))).artifacts
-    expect(all.display.split('\n')[0]).toBe('复核确认全部意见已解决（2 条意见）')
+    for (const version of [1, 2] as const) {
+      const [all] = review(recheck(version), output(claim([fixed, { ...fixed, findingId: '乙', targetId: '目标乙', evidenceQuote: '她顺着螺旋楼梯往上走' }]))).artifacts
+      expect(all.display).not.toContain('全部已解决。')
+      expect(all.display.split('\n')[0]).toBe('复核未能确认全部意见已解决（2 条意见）')
+      expect(all.display).not.toContain('已解决 ·')
+    }
   })
 
   it('解析不了的复核输出退回说明，不显示原始 JSON', () => {

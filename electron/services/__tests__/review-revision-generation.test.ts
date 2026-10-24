@@ -28,6 +28,7 @@ import { useProjectStore } from '../../../src/stores/project-store'
 import { useEditorStore } from '../../../src/stores/editor-store'
 import type { WorkflowContext } from '../../../src/stores/workflow-store'
 import * as reviewRevisionMaterials from '../../../src/shared/review-revision-generation'
+import { buildRecoveryEntries, EMPTY_RECOVERY_SOURCES, type ReviewEntry } from '../../../src/components/run/run-recovery'
 
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -669,9 +670,17 @@ describe('review and revision generation through the actual owner and SQLite', (
         context: { recheck: { version: 1, cycleId: cycle.cycle_id } } })
       const commit = { contextId: recovery.contextId!, handle: resumed.handle,
         artifact: { artifactId: recheckArtifact.artifactId, revision: recheckArtifact.revision, textHash: recheckArtifact.textHash } }
+      const [card] = buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES,
+        reviews: [{ view: reopened.read(resumed.handle), recovery }] }, 'zh-CN') as ReviewEntry[]
+      const digest = card!.artifacts.find(item => item.id === recheckArtifact.artifactId)!.display
       const savedRecheck = reopened.commitReview(commit)
       expect(savedRecheck.reviewCycle).toMatchObject({ cycleId: cycle.cycle_id, recheckCount: 1, disposition: 'completed' })
       const parsed = JSON.parse(savedRecheck.content)
+      const label = { warning: '未解决', unknown: '待核实', pass: '已解决' } as Record<string, string>
+      const savedSeverities = (parsed.items as { severity: string }[]).map(item => item.severity)
+      expect(digest.split('\n')[0]).toBe(savedSeverities.every(severity => severity === 'pass')
+        ? `复核确认全部意见已解决（${savedSeverities.length} 条意见）` : `复核未能确认全部意见已解决（${savedSeverities.length} 条意见）`)
+      expect(digest.split('\n').slice(1).map(line => line.split(' · ')[0])).toEqual(savedSeverities.map(severity => label[severity]))
       expect(parsed.summary).toBe('模型认为已经修复。')
       expect(parsed.items[0]).toMatchObject({ severity: 'unknown', resolved: false,
         quote: '门闩上的裂纹已用石蜡封住', description: expect.stringContaining('正文出现新证据。') })
