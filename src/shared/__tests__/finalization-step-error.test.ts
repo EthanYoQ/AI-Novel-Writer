@@ -41,6 +41,9 @@ describe('定稿后处理步骤错误', () => {
     expect(enText).toContain('restored from a backup')
     expect(zhText).not.toContain('可以先点「重试」')
     expect(enText).not.toContain('Try Retry first')
+    expect(zhText).toContain('重试仍失败')
+    expect(enText).toContain('If Retry still fails')
+    for (const text of [zhText, enText]) expect(text).not.toMatch(/即可完成|will finish this step/u)
     for (const text of [zhText, enText]) expect(text).not.toMatch(/Error invoking|FINALIZED_CHARACTER|请点「重试」|Select Retry/u)
   })
 
