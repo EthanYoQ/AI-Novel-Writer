@@ -50,9 +50,9 @@ function Stop-AiNovelTestWaitingProcess {
 }
 `
 
-describe('Windows release gate process capture', () => {
-  windowsIt('reads the same image path through NT class 27 as QueryFullProcessImageName on live processes', () => {
-    const result = runMonitorLibrary(String.raw`
+function compareImagePaths(shortPathOnly: boolean): Record<string, unknown> {
+  return runMonitorLibrary(String.raw`
+$shortPathOnly = ${shortPathOnly ? '$true' : '$false'}
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -86,17 +86,20 @@ New-Item -ItemType Directory -Path $shortDirectory | Out-Null
 $copiedFind = Join-Path $shortDirectory 'find.exe'
 Copy-Item -LiteralPath (Join-Path $system32 'find.exe') -Destination $copiedFind
 $shortFind = [AiNovelTestWin32Image]::Short($copiedFind)
-if ([string]::IsNullOrEmpty($shortFind) -or $shortFind -notmatch '~' -or $shortFind -eq $copiedFind) {
-  throw "The TEMP volume did not expose an 8.3 alias for $copiedFind"
+$shortPathUnavailable = if ([string]::IsNullOrEmpty($shortFind) -or $shortFind -notmatch '~' -or $shortFind -eq $copiedFind) {
+  "The TEMP volume did not expose an 8.3 alias for $copiedFind (GetShortPathName returned '$shortFind')."
+} else { '' }
+$cases = if ($shortPathOnly) {
+  if ($shortPathUnavailable) { @() } else { @(@{ Name = 'short-path-find'; Path = $shortFind; Arguments = '"zzz"' }) }
+} else {
+  @(
+    @{ Name = 'system32-cmd'; Path = (Join-Path $system32 'cmd.exe'); Arguments = '/d /q /k' },
+    @{ Name = 'system32-find'; Path = (Join-Path $system32 'find.exe'); Arguments = '"zzz"' },
+    @{ Name = 'system32-findstr'; Path = (Join-Path $system32 'findstr.exe'); Arguments = 'zzz' },
+    @{ Name = 'syswow64-find'; Path = (Join-Path $sysWow64 'find.exe'); Arguments = '"zzz"' },
+    @{ Name = 'repository-electron'; Path = ${quotePowerShell(electronExecutable)}; Arguments = '-e "process.stdin.resume()"'; Environment = @{ ELECTRON_RUN_AS_NODE = '1' } }
+  )
 }
-$cases = @(
-  @{ Name = 'system32-cmd'; Path = (Join-Path $system32 'cmd.exe'); Arguments = '/d /q /k' },
-  @{ Name = 'system32-find'; Path = (Join-Path $system32 'find.exe'); Arguments = '"zzz"' },
-  @{ Name = 'system32-findstr'; Path = (Join-Path $system32 'findstr.exe'); Arguments = 'zzz' },
-  @{ Name = 'syswow64-find'; Path = (Join-Path $sysWow64 'find.exe'); Arguments = '"zzz"' },
-  @{ Name = 'short-path-find'; Path = $shortFind; Arguments = '"zzz"' },
-  @{ Name = 'repository-electron'; Path = ${quotePowerShell(electronExecutable)}; Arguments = '-e "process.stdin.resume()"'; Environment = @{ ELECTRON_RUN_AS_NODE = '1' } }
-)
 $results = [System.Collections.Generic.List[object]]::new()
 try {
   foreach ($case in $cases) {
@@ -123,23 +126,39 @@ try {
 finally {
   Remove-Item -LiteralPath $shortDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
-[pscustomobject]@{ results = @($results) } | ConvertTo-Json -Compress -Depth 4
+[pscustomobject]@{ shortPathUnavailable = $shortPathUnavailable; results = @($results) } | ConvertTo-Json -Compress -Depth 4
 `, 45_000)
-    const rows = result.results as Array<Record<string, unknown>>
-    console.info('Release gate image path comparison:', JSON.stringify(rows))
+}
 
-    expect(rows.map(row => row.name)).toEqual([
+function expectSameImagePaths(rows: Array<Record<string, unknown>>, names: string[]): void {
+  console.info('Release gate image path comparison:', JSON.stringify(rows))
+  expect(rows.map(row => row.name)).toEqual(names)
+  for (const row of rows) {
+    expect(row).toMatchObject({ alive: true, sameAbsolutePath: true })
+    expect(row.win32).toEqual(expect.stringMatching(/^[A-Za-z]:\\/))
+  }
+}
+
+describe('Windows release gate process capture', () => {
+  windowsIt('reads the same image path through NT class 27 as QueryFullProcessImageName on live processes', () => {
+    const result = compareImagePaths(false)
+    expectSameImagePaths(result.results as Array<Record<string, unknown>>, [
       'system32-cmd',
       'system32-find',
       'system32-findstr',
       'syswow64-find',
-      'short-path-find',
       'repository-electron',
     ])
-    for (const row of rows) {
-      expect(row).toMatchObject({ alive: true, sameAbsolutePath: true })
-      expect(row.win32).toEqual(expect.stringMatching(/^[A-Za-z]:\\/))
+  }, 60_000)
+
+  windowsIt('reads the same 8.3 short image path through NT class 27 as QueryFullProcessImageName', (context) => {
+    const result = compareImagePaths(true)
+    if (result.shortPathUnavailable) {
+      console.info('Release gate 8.3 image path comparison skipped:', result.shortPathUnavailable)
+      context.skip(String(result.shortPathUnavailable))
+      return
     }
+    expectSameImagePaths(result.results as Array<Record<string, unknown>>, ['short-path-find'])
   }, 60_000)
 
   windowsIt('keeps the kernel identity of an exited process readable through its retained handle', () => {
