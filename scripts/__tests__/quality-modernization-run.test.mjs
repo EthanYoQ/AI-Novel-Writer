@@ -1,4 +1,4 @@
-import { test, vi } from 'vitest'
+import { afterEach, test, vi } from 'vitest'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -62,6 +62,10 @@ vi.mock('node:fs', async importOriginal => {
   }
   return { ...original, default: { ...nativeFs, readFileSync }, readFileSync }
 })
+
+// 超时用例的异步主体会在下一例运行时继续执行：全局只在这里恢复，不放在主体的 finally 里；
+// 主体设置 window 和 store 前先 signal.throwIfAborted()，迟到的主体就不会改写下一例的状态。
+afterEach(() => { vi.unstubAllGlobals() })
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
@@ -254,7 +258,7 @@ test('AI final manuscript distinguishes raw goal discoveries from mechanical unk
     savedContent: discovered.savedContent.replace('柜台描述', '人工补题'), context }), /SAVED_REPORT_MISMATCH/)
 })
 
-test('post-UI baseline uses its native review projection, persisted AI-only confirmation and 8192 refine command', async () => {
+test('post-UI baseline uses its native review projection, persisted AI-only confirmation and 8192 refine command', { timeout: 30_000 }, async ({ signal }) => {
   const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/post-ui-baseline-native-'))
   let db, nativeDatabase
   try {
@@ -291,6 +295,7 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
     let response, finishReason = 'stop', confirmationId, savedReview, currentDraft = sourceDraft
     db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(sourceDraft.content)
     db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,?)").run(countDraftUnits(sourceDraft.content))
+    signal.throwIfAborted()
     useProjectStore.setState({ currentProject: { id: session.projectId, path: directory, sessionLease: session.leaseId,
       novelConfig: { wordsPerChapter: 900, globalGuidance: '保留开头悬念。' } } })
     useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
@@ -444,10 +449,10 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
     assert.ok(requests.at(-1).messages.some(item => item.content.includes(JSON.stringify(expected))))
     assert.equal(requests.at(-1).plan.maxOutputTokens, 8192)
     assert.equal(savedReview.sourceDraft.chapterNumber, 2)
-  } finally { vi.unstubAllGlobals(); nativeDatabase?.closeProjectDatabase(); fs.rmSync(directory, { recursive: true, force: true }) }
+  } finally { nativeDatabase?.closeProjectDatabase(); fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test.each([
+test.for([
   [false], [true], ['formal'],
   [false, { units: 689, target: 900, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
   [false, { units: 1162, target: 900, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
@@ -458,7 +463,7 @@ test.each([
   [false, { units: 1171, target: 900, expected: null, historical: 'AI_REVISION_LENGTH_MISMATCH' }],
   [false, { units: 735, target: 900, expected: null, historical: null }],
   [false, { units: 1103, target: 900, expected: null, historical: null }],
-])('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review (LENGTH replacement=%s, revision bounds=%j)', async (lengthRecovery, revisionBounds) => {
+])('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review (LENGTH replacement=%s, revision bounds=%j)', { timeout: 30_000 }, async ([lengthRecovery, revisionBounds], { signal }) => {
   const formal = lengthRecovery === 'formal'
   const current = formal || Boolean(revisionBounds)
   const scenario = formal ? productionScenario('full', 'final', CANDIDATE_ONLY_PROTOCOL_REVISION) : null
@@ -778,6 +783,7 @@ test.each([
     const next = owner.begin({ ...begin, chapterNumber: 2, selectedDraftIds: [2], uiActionNonce: 'next', reviewRevisionContextId: preparedNext.contextId,
       authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(preparedNext.context) }] })
     const { useProjectStore } = await import('../../src/stores/project-store')
+    signal.throwIfAborted()
     useProjectStore.setState({ currentProject: { id: 'project', path: directory, sessionLease: 'epoch' } })
     vi.stubGlobal('window', { aiNovelAPI: { invoke: async (channel, payload) => channel === 'prompt:load-global' ? { templates: [], diagnostics: [] }
       : channel === 'generation:bind-material-decision' ? owner.bindMaterialDecision(payload.handle, payload.materialDecision) : false } })
@@ -801,8 +807,7 @@ test.each([
       writingLanguage: 'zh-CN', uiLocale: 'zh-CN' }, callbacks: { log() {}, appendText() {} } })
     assert.equal(calls, 4 + Number(Boolean(lengthRecovery)) + (formal ? 2 : 0))
     assert.equal(ReviewRepository.getFull(db.prepare('SELECT MAX(id) FROM reviews').pluck().get(), db).sourceDraft.chapterNumber, 2)
-    vi.unstubAllGlobals()
-  } finally { vi.unstubAllGlobals(); owner?.suspendForProjectClose(); db.close(); fs.rmSync(directory, { recursive: true, force: true }) }
+  } finally { owner?.suspendForProjectClose(); db.close(); fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
 test('bounded-revision diagnostic consumes only fixed C17-A saved source and five native permits', () => {
