@@ -863,6 +863,17 @@ describe('model discovery settings flow', () => {
     expect(suggestionValues()).toContain('llama3.2')
   })
 
+  it('keeps the list open and the input focused when the list padding is pressed', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
+    await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    await act(async () => { modelNameInput().focus() })
+    await act(async () => { await userEvent.click(page.getByRole('listbox'), { position: { x: 2, y: 2 } }) })
+    expect(document.activeElement).toBe(modelNameInput())
+    expect(modelNameInput().getAttribute('aria-expanded')).toBe('true')
+  })
+
   it('does not claim there are no suggestions while the endpoint list is still loading', async () => {
     const discoverModels = vi.fn(() => new Promise<ModelDiscoveryResult>(() => {}))
     await renderSettings(savedProfile(), discoverModels)

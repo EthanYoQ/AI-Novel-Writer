@@ -437,6 +437,17 @@ export const REFS_SCENARIOS = {
         optionFontSize: option && getComputedStyle(option).fontSize }
     })
     await context.shoot('models-name-narrow')
+    const listbox = context.page.getByRole('listbox', { name: '候选模型' })
+    const box = await listbox.boundingBox()
+    const scrollbarX = box.x + box.width - 1 - await listbox.evaluate(element => (element.offsetWidth - element.clientWidth) / 2)
+    await context.page.mouse.move(scrollbarX, box.y + 12)
+    await context.page.mouse.down()
+    await context.page.mouse.move(scrollbarX, box.y + 120, { steps: 6 })
+    await context.page.mouse.up()
+    const afterDrag = await listbox.evaluate(element => ({ scrollTop: element.scrollTop,
+      expanded: document.querySelector('input[role="combobox"]')?.getAttribute('aria-expanded') }))
+    assert.ok(afterDrag.scrollTop > 0, `拖动滚动条能滚动列表：${JSON.stringify(afterDrag)}`)
+    assert.equal(afterDrag.expanded, 'true', '拖动滚动条后列表仍展开')
     assert.ok(layout.pageScrollWidth <= layout.viewport, JSON.stringify(layout))
     assert.ok(layout.listHeight <= 240.5, JSON.stringify(layout))
     assert.ok(layout.listRight <= layout.formRight, '超长模型 ID 不把列表撑出表单')
@@ -444,7 +455,7 @@ export const REFS_SCENARIOS = {
     assert.equal(layout.refreshRadius, layout.inputRadius, '刷新按钮与输入框同圆角')
     assert.equal(layout.listRadius, layout.inputRadius, '列表与输入框同圆角')
     assert.ok(Number.parseFloat(layout.optionFontSize) >= 13, '列表行字号不小于 13px')
-    return { ...observed, layout }
+    return { ...observed, layout, afterDrag }
   } },
   'models-gemini-thinking-off': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
     await stage.openSettings(page)

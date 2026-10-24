@@ -189,6 +189,7 @@ export function ModelNameField({
           role="listbox"
           aria-label={text('候选模型', 'Model suggestions')}
           aria-busy={refreshing}
+          onMouseDown={event => event.preventDefault()}
           className="mt-1 max-h-60 overflow-y-auto overscroll-contain rounded-[var(--radius-lg)] border border-[var(--rule-strong)] bg-[var(--layer)] p-1"
         >
           {visible.map((candidate, index) => (
@@ -199,7 +200,6 @@ export function ModelNameField({
               role="option"
               aria-selected={candidate.value === value}
               aria-disabled={refreshing || undefined}
-              onMouseDown={event => event.preventDefault()}
               onClick={() => choose(candidate)}
               className={cn(
                 'flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[length:var(--fs-14)] text-[var(--ink)]',
