@@ -274,7 +274,7 @@ export const X2_SCENARIOS = {
     const after = { text: await index.innerText(), alerts: await index.getByRole('alert').allInnerTexts() }
     const authorizations = [...new Set(fake.embeddingAuthorizations)]
     const measured = { before, after, importEmbeddings, rebuildEmbeddings: fake.embeddingAuthorizations.length - importEmbeddings, authorizations }
-    assert.deepEqual({ offered, alerts: after.alerts, importEmbeddings, rebuilt: measured.rebuildEmbeddings > 0, keyless: authorizations.every(value => value === null || value === 'Bearer') },
+    assert.deepEqual({ offered, alerts: after.alerts, importEmbeddings, rebuilt: measured.rebuildEmbeddings > 0, keyless: authorizations.every(value => !(value ?? '').replace(/^Bearer\s*/u, '')) },
       { offered: true, alerts: [], importEmbeddings: 0, rebuilt: true, keyless: true }, JSON.stringify(measured))
     return measured
   } },

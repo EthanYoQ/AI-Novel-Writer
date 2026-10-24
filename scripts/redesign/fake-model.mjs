@@ -141,8 +141,8 @@ export async function startFakeModel(diagnostics) {
   const replyReview = content => { review = content }
   /** 之后的定稿后处理角色状态更新回 build(提示词) 给出的 JSON 文本；不调用时回空的 updates。 */
   const replyCharacterState = build => { characterState = build }
-  /** 之后不带 Key 的嵌入请求也照常回向量，模拟不需要 Key 的本机检索服务。 */
-  const acceptKeylessEmbeddings = () => { keylessEmbeddings = true }
+  /** 之后不带 Key 的嵌入请求也照常回向量，模拟不需要 Key 的本机检索服务；传 false 恢复拒绝。 */
+  const acceptKeylessEmbeddings = (accepted = true) => { keylessEmbeddings = accepted }
   const record = (kind, detail) => {
     requests.push(kind)
     diagnostics.push(`[fake-model] ${kind} <- ${detail}`)

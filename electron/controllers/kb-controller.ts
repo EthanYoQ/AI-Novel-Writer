@@ -168,6 +168,8 @@ function isLegacyMigrationBlockedResult(value: unknown): boolean {
     && (value as { errorCode?: unknown }).errorCode === LEGACY_VECTOR_MIGRATION_BLOCKED
 }
 
+const UNCONFIGURED_EMBEDDING_MODEL: EmbeddingModel = { provider: '', baseUrl: '', apiKey: '' }
+
 export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: EmbeddingModel & { modelName: string } } | null {
   const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
   const targetModelId = config.defaultEmbeddingModelId || config.defaultModelId
@@ -178,7 +180,8 @@ export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: Em
   if (!model) return null
   return {
     protocol: model.protocol as 'openai' | 'gemini',
-    model: { provider: model.provider, baseUrl: model.baseUrl, apiKey: model.apiKey, modelName: model.modelName, embeddingOptions: model.embeddingOptions },
+    // models.json 只经过宽松的迁移校验，旧档案可能缺这几个字段。
+    model: { provider: model.provider ?? '', baseUrl: model.baseUrl ?? '', apiKey: model.apiKey ?? '', modelName: model.modelName, embeddingOptions: model.embeddingOptions },
   }
 }
 
@@ -246,7 +249,7 @@ export function registerKBController(
     }
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
-    const model = embConfig?.model ?? { provider: '', baseUrl: '', apiKey: '' }
+    const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
     return knowledgeBaseLoader.run((kb) => kb.importText(
       importedFile.content,
       importedFile.fileName,
@@ -279,7 +282,7 @@ export function registerKBController(
     }
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
-    const model = embConfig?.model ?? { provider: '', baseUrl: '', apiKey: '' }
+    const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
     return knowledgeBaseLoader.run(async (kb) => {
       const failedFiles: string[] = []
       let importedCount = 0
@@ -305,7 +308,7 @@ export function registerKBController(
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
-    const model = embConfig?.model ?? { provider: '', baseUrl: '', apiKey: '' }
+    const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
     return knowledgeBaseLoader.run((kb) => kb.importText(text, fileName, projectPath, protocol, model))
   })
 
@@ -313,7 +316,7 @@ export function registerKBController(
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
-    const model = embConfig?.model ?? { provider: '', baseUrl: '', apiKey: '' }
+    const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
     return knowledgeBaseLoader.run((kb) => kb.importText(
       text,
       fileName,
@@ -337,7 +340,7 @@ export function registerKBController(
       const fileName = referenceImportDisplayName(binding)
       const embConfig = getEmbeddingConfig()
       const protocol = embConfig?.protocol ?? 'openai'
-      const model = embConfig?.model ?? { provider: '', baseUrl: '', apiKey: '' }
+      const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
       return await knowledgeBaseLoader.run(async (kb) => {
         const result = await kb.importReferenceText(
           binding.content,
