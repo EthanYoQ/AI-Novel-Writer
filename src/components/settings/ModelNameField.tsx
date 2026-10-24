@@ -174,7 +174,6 @@ export function ModelNameField({
           <RefreshCw size={13} className={refreshing ? 'animate-spin' : undefined} aria-hidden />
         </Button>
       </div>
-      {/* 列表随文档流展开在输入行下面：不被设置页的滚动区裁切，也不盖住下方的获取状态。 */}
       {open && (
         <ul
           ref={listRef}
@@ -191,20 +190,17 @@ export function ModelNameField({
               role="option"
               aria-selected={candidate.value === value}
               onMouseDown={event => event.preventDefault()}
-              onMouseEnter={() => setActiveValue(candidate.value)}
               onClick={() => choose(candidate)}
               className={cn(
-                'flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-xs text-[var(--ink)]',
-                index === activeIndex && 'bg-[var(--wash)]',
+                'flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-xs text-[var(--ink)] hover:bg-[var(--wash)]',
+                index === activeIndex && 'bg-[var(--wash)] shadow-[inset_0_0_0_2px_var(--accent)]',
                 candidate.value === value && 'font-medium',
               )}
             >
               <span className="min-w-0 flex-1 break-all">{candidate.value}</span>
               {candidate.label && <span className="min-w-0 shrink truncate text-[var(--ink-3)]">{candidate.label}</span>}
               {candidate.recommended && (
-                <span className="shrink-0 rounded-[var(--radius-pill)] bg-[var(--accent-soft)] px-1.5 py-0.5 text-[0.65rem] leading-none text-[var(--accent)]">
-                  {text('推荐', 'Recommended')}
-                </span>
+                <span className="shrink-0 text-[var(--ink-3)]">{text('推荐', 'Recommended')}</span>
               )}
             </li>
           ))}

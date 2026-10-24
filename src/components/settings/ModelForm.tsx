@@ -248,12 +248,10 @@ export function ModelForm({
     }
   }
 
-  /** 第一次展开候选时自动获取一次；没填地址或 Key 时不发请求，直接用预设兜底。 */
   const handleModelListOpen = () => {
     if (discovery.status === 'idle' && model.baseUrl.trim() && model.apiKey.trim()) void handleDiscoverModels()
   }
 
-  /** 模型名控件下方的一行状态：获取中、失败原因、获取结果，或没填 Key 时怎样拿到端点列表。 */
   const modelNameStatus = (): { tone: 'muted' | 'error', text: string } | null => {
     if (discovery.status === 'loading') return { tone: 'muted', text: text('正在获取端点模型列表…', 'Fetching the endpoint model list…') }
     if (discovery.status === 'failed') return { tone: 'error', text: text(...DISCOVERY_NOTICES[discovery.errorCode]) }
