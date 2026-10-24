@@ -3,6 +3,7 @@ import { ipc } from '../../ipc-client'
 import { buildAgentTool, type AgentExecutionContext } from '../tool-registry'
 import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 import type { ProposalFieldDiff } from './propose-novel-config.tool'
+import { containsHan } from '../../../i18n/app-errors'
 
 const STRING_FIELDS = new Set<keyof BlueprintData>([
   'title', 'role', 'purpose', 'keyEvents', 'suspenseHook', 'userGuidance', 'notes',
@@ -115,7 +116,7 @@ export const proposeChapterBlueprintTool = buildAgentTool({
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail ?? '')
+        error: context?.writingLanguage === 'en-US' && containsHan(detail ?? '')
           ? text('章节蓝图写入失败', 'Could not update the chapter blueprint')
           : detail ?? text('章节蓝图写入失败', 'Could not update the chapter blueprint'),
       }

@@ -3,6 +3,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { ipc } from '../../ipc-client'
 import { buildAgentTool, type AgentExecutionContext } from '../tool-registry'
 import { agentToolText, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
+import { containsHan } from '../../../i18n/app-errors'
 
 const STRING_FIELDS = new Set<keyof NovelConfig>([
   'genre', 'subGenre', 'targetAudience', 'coreOutline', 'worldSetting', 'goldenFinger',
@@ -115,7 +116,7 @@ export const proposeNovelConfigTool = buildAgentTool({
       return {
         success: false,
         content: '',
-        error: context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail ?? '')
+        error: context?.writingLanguage === 'en-US' && containsHan(detail ?? '')
           ? text('小说配置写入失败', 'Could not update the novel configuration')
           : detail ?? text('小说配置写入失败', 'Could not update the novel configuration'),
       }
