@@ -499,7 +499,7 @@ export const CHAPTER_SCENARIOS = {
     await runSheet.openFromPalette(page)
     const card = runSheet.recovery(page).getByRole('article').filter({ hasText: summary })
     await card.waitFor({ state: 'visible' })
-    const zh = { rawJson: await card.getByText('"summary"').count(), count: await card.getByText(/条意见/).count(),
+    const zh = { rawJson: await card.getByText('"summary"').count(), count: await card.getByText(/（1 条意见）/).count(),
       pending: await card.getByText(/待核实/).count() }
     assert.deepEqual(zh, { rawJson: 0, count: 1, pending: 1 }, '中文恢复卡显示复验摘要，模型判为已解决的写待核实')
     await card.scrollIntoViewIfNeeded()
