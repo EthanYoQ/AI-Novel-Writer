@@ -37,8 +37,8 @@ export function adoptTransferredCharacterContinuity(db: Database.Database, proje
         if (!record(entry) || entry.kind !== 'derived' || !record(entry.source) || !record(entry.sourceOrder)) continue
         const source = entry.source as unknown as FinalizedSourceIdentity, order = entry.sourceOrder
         const epoch = order.continuityEpoch
-        if (!isFinalizedSourceIdentity(source) || typeof source.finalizationId !== 'string' || typeof epoch !== 'string'
-          || order.chapterNumber !== source.chapterNumber) continue
+        if (typeof source.finalizationId !== 'string' || typeof epoch !== 'string'
+          || !isFinalizedSourceIdentity(source) || order.chapterNumber !== source.chapterNumber) continue
         const separator = epoch.lastIndexOf(':'), prefix = epoch.slice(0, separator), generation = epoch.slice(separator + 1)
         if (separator < 1 || prefix === projectId || !GENERATION.test(generation) || Number(generation) > (watermark as number)
           || !receipt.get(source.finalizationId, source.draftId, source.chapterNumber, source.chapterNumber, source.contentHash)) continue
@@ -63,5 +63,8 @@ export function adoptTransferredCharacterContinuityOnOpen(input: {
     const { database, projectId } = input
     if (!readPortableCurrentAuthority({ database, projectId, projectStorageRoot: getProjectDataRoot(input.projectRoot) })) return 0
     return adoptTransferredCharacterContinuity(database, projectId)
-  } catch { return 0 }
+  } catch (error) {
+    console.warn('[character-continuity] 打开项目时未能改记角色派生状态', error)
+    return 0
+  }
 }
