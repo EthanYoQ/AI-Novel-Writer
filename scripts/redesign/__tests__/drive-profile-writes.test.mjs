@@ -72,3 +72,8 @@ it('缓存同时在刷新时，改动、新建、删除真实配置文件和新�
   ].sort())
   assert.deepEqual(externalWritesIgnored, [...cacheFiles, added].sort())
 })
+
+it('条目多到快照装不下时直接报错，不拿不完整的快照判干净', () => {
+  const { directory } = usedProfile()
+  assert.throws(() => snapshotRealProfiles([directory], 3), /超过 3 个/)
+})
