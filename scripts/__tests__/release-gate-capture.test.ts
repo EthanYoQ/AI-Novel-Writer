@@ -290,6 +290,10 @@ $laterCmd = New-Cmd -Ticks '639284519689800000'
   FindInstallerEdgeUnboundE2e = Get-Verdict $e2e (New-Find) -Members @($node, $setup, (New-Cmd -ParentTicks $null))
   FindExitKeyMismatchE2e = Get-Verdict $e2e (New-Find) -ExitKey '6184|639284519689708262|C:\temp\other.exe'
   CmdWithoutCommandLineE2e = Get-Verdict $e2e (New-Cmd -CommandLine $null) -Members @($node, $setup)
+  CmdWithoutCommandLineSmoke = Get-Verdict $smoke (New-Cmd -CommandLine $null) -Members @($node, $setup)
+  CmdWithoutCommandLineUpgrade = Get-Verdict 'smoke:win-v025-upgrade' (New-Cmd -CommandLine $null) -Members @($node, $setup)
+  FindUnderUnobservedCmdSmoke = Get-Verdict $smoke (New-Find -CommandLine $null) -Members @($node, $setup, (New-Cmd -CommandLine $null))
+  CmdOtherCommandSmoke = Get-Verdict $smoke (New-Cmd -CommandLine ('"' + $cmdPath + '" /C exit 1')) -Members @($node, $setup)
   CmdAwaitingVerifiedFilterE2e = Get-Verdict $e2e $cmd -Members @($node, $setup)
   CmdAfterVerifiedFilterE2e = Get-Verdict $e2e $cmd -Members @($node, $setup) -VerifiedParents @($cmd)
   UnlistedNonzeroBuild = Get-Verdict $build $descendantPowerShell -ExitCode 37
@@ -313,6 +317,10 @@ $laterCmd = New-Cmd -Ticks '639284519689800000'
       FindInstallerEdgeUnboundE2e: 'failure|failure|||True',
       FindExitKeyMismatchE2e: 'failure|failure||exit-key-mismatch|True',
       CmdWithoutCommandLineE2e: 'unobservable|unobservable||nsis-cmd-command-line-unobserved|True',
+      CmdWithoutCommandLineSmoke: 'unobservable|unobservable||nsis-cmd-command-line-unobserved|True',
+      CmdWithoutCommandLineUpgrade: 'unobservable|unobservable||nsis-cmd-command-line-unobserved|True',
+      FindUnderUnobservedCmdSmoke: 'unobservable|unobservable||nsis-filter-parent-command-line-unobserved|True',
+      CmdOtherCommandSmoke: 'result-owned|ignored-result-owned-descendant-nonzero|||False',
       CmdAwaitingVerifiedFilterE2e: 'pending|pending-nsis-cmd-process-check|||False',
       CmdAfterVerifiedFilterE2e: 'expected|expected-nsis-cmd-process-check|||False',
       UnlistedNonzeroBuild: 'result-owned|ignored-result-owned-descendant-nonzero|||False',

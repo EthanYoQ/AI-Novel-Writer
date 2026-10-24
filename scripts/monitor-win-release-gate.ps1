@@ -2556,12 +2556,8 @@ function Get-AiNovelGateExitVerdict {
     # The caller defers the decision until a matching, validated filter exit.
     return New-AiNovelGateExitVerdict -Kind pending -Classification 'pending-nsis-cmd-process-check' -Failure $exitFailure
   }
-  if (
-    $Step -in @('build:win:artifacts', 'smoke:win-installer', 'smoke:win-v025-upgrade') -and
-    $isCapturedNonzeroDescendantExit
-  ) {
-    return New-AiNovelGateExitVerdict -Kind result-owned -Classification 'ignored-result-owned-descendant-nonzero'
-  }
+  # An unproven NSIS process-check member must not fall into the result-owned
+  # exemption below: its exit 1 has no identity the root's result can own.
   $unobservableReason = Get-AiNovelGateUnobservableNsisProcessCheckReason `
     -Step $Step `
     -Event $Event `
@@ -2577,6 +2573,12 @@ function Get-AiNovelGateExitVerdict {
       -Kind unobservable `
       -Reason $unobservableReason `
       -Failure "Release gate step '$Step' could not prove the NSIS process-check exit code $($Event.ExitCode) for job-contained PID $($Event.ProcessId): its command line was not observed."
+  }
+  if (
+    $Step -in @('build:win:artifacts', 'smoke:win-installer', 'smoke:win-v025-upgrade') -and
+    $isCapturedNonzeroDescendantExit
+  ) {
+    return New-AiNovelGateExitVerdict -Kind result-owned -Classification 'ignored-result-owned-descendant-nonzero'
   }
   return New-AiNovelGateExitVerdict -Kind failure -Failure $exitFailure
 }
