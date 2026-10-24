@@ -29,7 +29,7 @@ afterEach(async () => {
 
 it('keeps chapter identity and scoped metadata across reindex and exact deletion, preserving a same-name reference', async () => {
   const projectPath = workspace()
-  const first = await importText('chapter before', '第1章.txt', projectPath, 'openai', { baseUrl: '', apiKey: '' })
+  const first = await importText('chapter before', '第1章.txt', projectPath, 'openai', { provider: 'openai', baseUrl: '', apiKey: '' })
   await addChunks(projectPath, 'reference', '第1章.txt', ['reference survives'], undefined, undefined, { corpusKind: 'reference' })
   const before = await readDocumentCopy(first.docId!, projectPath)
   await saveDocumentCopy(first.docId!, 'chapter after', before.contentHash!, projectPath)
@@ -46,7 +46,7 @@ it('keeps chapter identity and scoped metadata across reindex and exact deletion
 it('restores native tables on reindex failure while a concurrent import waits for the same gate', async () => {
   const projectPath = workspace()
   generateEmbeddings.mockResolvedValue([[1, 0]])
-  const first = await importText('chapter before', 'chapter.txt', projectPath, 'openai', { baseUrl: 'fixture', apiKey: 'fixture' })
+  const first = await importText('chapter before', 'chapter.txt', projectPath, 'openai', { provider: 'openai', baseUrl: 'fixture', apiKey: 'fixture' })
   const before = await readDocumentCopy(first.docId!, projectPath)
   const integrity = await getDocumentIntegrity(projectPath, first.docId!)
   await saveDocumentCopy(first.docId!, 'chapter after', before.contentHash!, projectPath)
@@ -87,10 +87,10 @@ it('restores native tables on reindex failure while a concurrent import waits fo
 
 it('reports the committed import as successful when superseded copy cleanup fails', async () => {
   const projectPath = workspace()
-  await importText('old text', 'same.txt', projectPath, 'openai', { baseUrl: '', apiKey: '' })
+  await importText('old text', 'same.txt', projectPath, 'openai', { provider: 'openai', baseUrl: '', apiKey: '' })
   const remove = vi.spyOn(fs, 'rmSync').mockImplementation(() => { throw new Error('EBUSY') })
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
-  const current = await importText('new text', 'same.txt', projectPath, 'openai', { baseUrl: '', apiKey: '' })
+  const current = await importText('new text', 'same.txt', projectPath, 'openai', { provider: 'openai', baseUrl: '', apiKey: '' })
   expect(current).toMatchObject({ success: true, chunkCount: 1 })
   expect(warning).toHaveBeenCalledWith(expect.stringContaining('旧文档清理未完成'), expect.any(Error))
   remove.mockRestore()
@@ -133,7 +133,7 @@ it('removes stale canonical and vector rows on same-name reimport before search 
   const projectPath = fs.mkdtempSync(path.join(parent, 'knowledge-reimport-'))
   roots.push(projectPath)
   prepareCanonicalStorageFixture(projectPath)
-  const model = { baseUrl: 'https://embedding.example/v1', apiKey: 'test-only', modelName: 'fixture' }
+  const model = { provider: 'openai', baseUrl: 'https://embedding.example/v1', apiKey: 'test-only', modelName: 'fixture' }
   generateEmbeddings.mockResolvedValue([[1, 0]])
   const first = await importText('旧梦镇源句', '同名资料.txt', projectPath, 'openai', model)
   expect(first.success).toBe(true)
@@ -163,7 +163,7 @@ it('edits only the project copy and excludes stale text from search and generati
   const external = path.join(projectPath, '..', `${path.basename(projectPath)}-original.txt`)
   const original = '原稿中的星图'
   const edited = '项目副本中的新星图'
-  const model = { baseUrl: 'https://embedding.example/v1', apiKey: 'test-only', modelName: 'fixture' }
+  const model = { provider: 'openai', baseUrl: 'https://embedding.example/v1', apiKey: 'test-only', modelName: 'fixture' }
   generateEmbeddings.mockResolvedValue([[1, 0]])
   fs.writeFileSync(external, original)
   try {

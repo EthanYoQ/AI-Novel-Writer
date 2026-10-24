@@ -311,6 +311,59 @@ describe('knowledge-base controller project context guard', () => {
     })
   })
 
+  function useEmbeddingModel(provider: string, baseUrl: string) {
+    mocks.readJsonFile.mockImplementation((filePath: string, fallback: unknown) => {
+      if (filePath === 'global.json') return { defaultEmbeddingModelId: 'embedding-model' }
+      if (filePath === 'models.json') return [{ id: 'embedding-model', provider, protocol: 'openai', baseUrl, apiKey: '', modelName: 'nomic-embed-text' }]
+      return fallback
+    })
+    const backfillVectors = vi.fn(async () => ({ success: true, processed: 3, failed: 0 }))
+    mocks.run.mockImplementation(async (operation: (kb: unknown) => unknown) => operation({
+      getKnowledgeStats: async () => ({ totalChunks: 3, vectorDimension: 0 }),
+      getVectorlessCount: async () => ({ count: 3 }),
+      backfillVectors,
+    }))
+    return backfillVectors
+  }
+
+  it.each([
+    ['ollama', 'http://192.168.1.20:11434/v1'],
+    ['custom', 'http://localhost:1234/v1'],
+    ['custom', 'http://127.0.0.1:1234/v1'],
+    ['custom', 'http://[::1]:1234/v1'],
+  ])('accepts a keyless %s embedding model at %s for the index', async (provider, baseUrl) => {
+    const backfillVectors = useEmbeddingModel(provider, baseUrl)
+
+    await expect(handler('kb:get-vector-rebuild-status')({}, 'C:/projects/A')).resolves.toMatchObject({ embeddingConfigured: true, canRebuild: true })
+    await expect(handler('kb:backfill-vectors')({}, 'C:/projects/A')).resolves.toEqual({ success: true, processed: 3, failed: 0 })
+    expect(backfillVectors).toHaveBeenCalledWith('C:/projects/A', 'openai', expect.objectContaining({ baseUrl, apiKey: '' }))
+  })
+
+  it.each([
+    ['ollama', true],
+    ['openai', false],
+  ] as const)('reads a legacy %s embedding profile saved without an apiKey field', async (provider, configured) => {
+    mocks.readJsonFile.mockImplementation((filePath: string, fallback: unknown) => {
+      if (filePath === 'global.json') return { defaultEmbeddingModelId: 'embedding-model' }
+      if (filePath === 'models.json') return [{ id: 'embedding-model', provider, protocol: 'openai', baseUrl: 'http://192.168.1.20:11434/v1', modelName: 'nomic-embed-text' }]
+      return fallback
+    })
+    mocks.run.mockImplementation(async (operation: (kb: unknown) => unknown) => operation({
+      getKnowledgeStats: async () => ({ totalChunks: 3, vectorDimension: 0 }),
+      getVectorlessCount: async () => ({ count: 3 }),
+    }))
+
+    await expect(handler('kb:get-vector-rebuild-status')({}, 'C:/projects/A')).resolves.toMatchObject({ embeddingConfigured: configured })
+  })
+
+  it('still refuses a keyless cloud embedding model without contacting the provider', async () => {
+    const backfillVectors = useEmbeddingModel('openai', 'https://api.openai.com/v1')
+
+    await expect(handler('kb:get-vector-rebuild-status')({}, 'C:/projects/A')).resolves.toMatchObject({ embeddingConfigured: false, canRebuild: false })
+    await expect(handler('kb:backfill-vectors')({}, 'C:/projects/A')).resolves.toMatchObject({ success: false, errorCode: 'EMBEDDING_MODEL_NOT_CONFIGURED' })
+    expect(backfillVectors).not.toHaveBeenCalled()
+  })
+
   it('does not clear project B when a confirmation opened for project A resolves later', async () => {
     // The renderer freezes A before showing the confirmation. By the time the
     // user accepts, the main-process database is already bound to B.
