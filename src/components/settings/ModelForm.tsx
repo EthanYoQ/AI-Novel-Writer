@@ -114,6 +114,7 @@ export function ModelForm({
 
   /** 向量模型名换了就换掉能力数据：与预设同名时用预设的，否则清空。生成模型由 applyModelProfileSelection 按端点和名字匹配。 */
   const setEmbeddingModelName = (modelName: string) => {
+    if (modelName === model.modelName) return
     const capabilities = preset?.embeddingModelCapabilities?.[modelName]
     onChange(capabilities
       ? { ...model, modelName, maxTokens: capabilities.maxOutputTokens, capabilities: { ...capabilities }, capabilitySources: undefined }

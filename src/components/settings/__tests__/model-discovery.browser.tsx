@@ -873,6 +873,20 @@ describe('model discovery settings flow', () => {
       capabilitySources: expect.objectContaining({ contextWindowTokens: 'manual', usage: 'unknown' }) }))
   })
 
+  it('keeps the author settings when the current embedding model is chosen again', async () => {
+    const capabilities = { contextWindowTokens: 4096, maxOutputTokens: 1, reasoning: false, structuredOutput: false, usage: false }
+    const model = savedProfile({ provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3-Embedding-8B',
+      purposes: ['embedding'], capabilities, capabilitySources: { contextWindowTokens: 'manual' } })
+    const { saveModel } = await renderSettings(model, listed('Qwen/Qwen3-Embedding-8B'))
+    await act(async () => { useLayoutStore.setState({ settingsSection: 'embedding' }) })
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['Qwen/Qwen3-Embedding-8B']))
+    await chooseSuggestion('Qwen/Qwen3-Embedding-8B')
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ capabilities, capabilitySources: { contextWindowTokens: 'manual' } }))
+  })
+
   it('keeps the base_url and key hint instead of requesting when refresh is pressed too early', async () => {
     const discoverModels = listed('gpt-5.5-mini')
     await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
