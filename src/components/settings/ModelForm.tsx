@@ -181,12 +181,12 @@ export function ModelForm({
     }))
   }
 
-  const handleModelSelect = ({ value, recommended, declared }: ModelNameCandidate) => {
+  const handleModelSelect = ({ value, fromPreset, endpointCapabilities }: ModelNameCandidate) => {
     if (!isEmbedding) {
-      onChange(applyModelProfileSelection(model, { modelName: value }, declared))
+      onChange(applyModelProfileSelection(model, { modelName: value }, endpointCapabilities))
       return
     }
-    if (!recommended) {
+    if (!fromPreset) {
       up('modelName', value)
       return
     }

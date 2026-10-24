@@ -59,8 +59,8 @@ export function ModelNameField({
     }
   }, [open, activeIndex])
 
-  const show = (nextQuery: string | null) => {
-    if (!open) onOpen()
+  const show = (nextQuery: string | null, { autoFetch = true } = {}) => {
+    if (!open && autoFetch) onOpen()
     setOpen(true)
     setQuery(nextQuery)
   }
@@ -156,8 +156,7 @@ export function ModelNameField({
           title={text('获取模型列表', 'Refresh model list')}
           onClick={() => {
             onRefresh()
-            setOpen(true)
-            setQuery(null)
+            show(null, { autoFetch: false })
             setActiveValue(null)
             // 获取期间按钮会禁用，焦点留在上面会丢。
             document.getElementById(inputId)?.focus()
@@ -192,7 +191,7 @@ export function ModelNameField({
             >
               <span className="min-w-0 flex-1 break-all">{candidate.value}</span>
               {candidate.label && <span className="min-w-0 shrink truncate text-[var(--ink-3)]">{candidate.label}</span>}
-              {candidate.recommended && (
+              {candidate.fromPreset && (
                 <span className="shrink-0 text-[var(--ink-3)]">{text('推荐', 'Recommended')}</span>
               )}
             </li>
