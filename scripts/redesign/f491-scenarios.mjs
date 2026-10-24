@@ -107,12 +107,12 @@ async function finalizeChapter(page, chapterNumber) {
   await settled(page)
 }
 
-const postDetail = page => chapterView.postProcess(page).locator('li[data-state="failed"] .stage-ch-post-detail').first()
+/** 角色状态更新这一行的说明；正文文件一行在发布未完成时也标失败，不能取「第一条失败」。 */
+const postDetail = page => chapterView.postProcess(page).locator('li[data-state="failed"]').filter({ has: page.locator('b', { hasText: /^角色状态更新$/u }) })
+  .locator('.stage-ch-post-detail')
 
 export const F491_SCENARIOS = {
-  'f491-backup-roundtrip': { model: true, shell: 'stage', setup: context => seedStageSample(context, {
-    beforeReload: async ({ path: projectPath }) => { context.samplePath = projectPath },
-  }), run: async context => {
+  'f491-backup-roundtrip': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     context.fake.replyCharacterState(characterStateReply)
     const measured = {}
     await finalizeChapter(context.page, 3)
@@ -142,7 +142,10 @@ export const F491_SCENARIOS = {
     assert.doesNotMatch(measured.repairedError, /Error invoking|FINALIZED_CHARACTER/u, '新构建不显示原始错误码')
     await context.shoot('f491-3-fixed-readable-error')
     await chapterView.postProcess(page).getByRole('button', { name: '重试失败步骤' }).click()
-    await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="定稿后处理"] li')].every(row => row.dataset.state === 'success'), null, { timeout: 90_000 })
+    await page.waitForFunction(() => {
+      const rows = [...document.querySelectorAll('[aria-label="定稿后处理"] li')]
+      return rows.some(row => row.querySelector('b')?.textContent === '角色状态更新') && rows.every(row => row.dataset.state === 'success')
+    }, null, { timeout: 90_000 })
     measured.repairedFinalize = await chapterView.postProcessSteps(page)
     await context.shoot('f491-4-fixed-finalize-done')
 
