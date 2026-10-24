@@ -12,6 +12,23 @@ import { chromeContrastFailures, msFromClickToProse, seedStageSample } from './s
 import { countUnits, STAGE_SAMPLE } from './stage-sample.mjs'
 import { FAKE_MODEL } from './fake-model.mjs'
 
+/** 编辑夹具模型并展开模型名候选；英文时先在外观里切语言。 */
+async function openFixtureModelSuggestions({ page, fake }, locale) {
+  await stage.openSettings(page)
+  const english = locale === 'en-US'
+  if (english) {
+    await stage.showSettingsPage(page, '外观')
+    await page.getByLabel('界面语言').selectOption('en-US')
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'AI models', exact: true }).click()
+  }
+  await page.getByRole('button', { name: english ? `Edit “${FAKE_MODEL.name}”` : `编辑「${FAKE_MODEL.name}」`, exact: true }).click()
+  await page.getByRole('button', { name: english ? 'Show model suggestions' : '展开候选模型', exact: true }).click()
+  const status = page.getByText(english ? /^Fetched \d+ models from the endpoint\.$/u : /^已从端点获取 \d+ 个模型。$/u)
+  await status.waitFor({ state: 'visible', timeout: 15_000 })
+  const options = page.getByRole('listbox', { name: english ? 'Model suggestions' : '候选模型' }).getByRole('option')
+  return { options: await options.allInnerTexts(), status: await status.innerText(), requests: fake.requests.filter(kind => kind === 'models').length }
+}
+
 const THREAD = Object.freeze({ title: '雾钟为何提前', type: '主线', targetStartChapter: 1, targetEndChapter: 6, authorIntent: '钟声提前一刻与三十年前的沉船有关。' })
 const SECOND_DRAFT = `${STAGE_SAMPLE.drafts[3].text}\n\n林岚把纸条又读了一遍，决定等到下一次大潮再上灯室。`
 const IMPLEMENTATION_TERMS = /LanceDB|FTS|BM25|Embedding|向量|query|MCP|token/i
@@ -358,6 +375,50 @@ export const REFS_SCENARIOS = {
     assert.doesNotMatch(observed.result, /[A-Z]{3,}_|\p{Script=Han}/u)
     assert.equal(fake.requests.length, before, '假服务在鉴权前就回 403，不算一次模型请求')
     return observed
+  } },
+  // 模型名控件（#454）：没填 Key 时展开就是服务商预设兜底，不发请求。
+  'models-name-fallback': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
+    await stage.openSettings(page)
+    await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
+    await page.getByRole('button', { name: '展开候选模型', exact: true }).click()
+    const options = page.getByRole('listbox', { name: '候选模型' }).getByRole('option')
+    await options.first().waitFor({ state: 'visible' })
+    const observed = { options: await options.allInnerTexts(), requests: fake.requests.filter(kind => kind === 'models').length }
+    await shoot('models-name-fallback')
+    assert.equal(observed.requests, 0, '没填 API Key 不请求端点模型列表')
+    assert.ok(observed.options.length >= 4 && observed.options.every(text => text.includes('推荐')), JSON.stringify(observed))
+    return observed
+  } },
+  // 已填地址与 Key 的配置第一次展开时自动获取一次，端点列表替换预设，与预设同名的标推荐排前面。
+  'models-name-endpoint': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
+    const observed = await openFixtureModelSuggestions(context, 'zh-CN')
+    await context.shoot('models-name-endpoint')
+    assert.equal(observed.requests, 1, '展开时自动获取一次')
+    assert.match(observed.options[0], /^gpt-4\.1\s*推荐$/u, JSON.stringify(observed))
+    assert.ok(observed.options.some(text => text.startsWith('gateway/novel-writer-pro')), JSON.stringify(observed))
+    assert.equal(observed.status, '已从端点获取 17 个模型。')
+    return observed
+  } },
+  'models-name-en': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
+    const observed = await openFixtureModelSuggestions(context, 'en-US')
+    await context.shoot('models-name-en')
+    assert.match(observed.options[0], /^gpt-4\.1\s*Recommended$/u, JSON.stringify(observed))
+    assert.equal(observed.status, 'Fetched 17 models from the endpoint.')
+    return observed
+  } },
+  'models-name-narrow': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
+    await context.page.setViewportSize({ width: 1024, height: 700 })
+    const observed = await openFixtureModelSuggestions(context, 'zh-CN')
+    const layout = await context.page.evaluate(() => {
+      const list = document.querySelector('[role="listbox"]')?.getBoundingClientRect()
+      const input = document.querySelector('input[role="combobox"]')?.getBoundingClientRect()
+      return { listRight: list?.right, listHeight: list?.height, inputRight: input?.right, pageScrollWidth: document.documentElement.scrollWidth,
+        viewport: window.innerWidth }
+    })
+    await context.shoot('models-name-narrow')
+    assert.ok(layout.pageScrollWidth <= layout.viewport, JSON.stringify(layout))
+    assert.ok(layout.listHeight <= 240.5, JSON.stringify(layout))
+    return { ...observed, layout }
   } },
   'refs-delete': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
     await refs.open(page, 'plot')

@@ -1,7 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { page } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 
 import type { ModelDiscoveryResult, ModelProfile } from '../../../shared/ipc-channels'
 import type { Locale } from '../../../i18n/types'
@@ -48,7 +48,46 @@ function discoveryRequest(model: ModelProfile) {
     protocol: model.protocol,
     baseUrl: model.baseUrl,
     apiKey: model.apiKey,
+    purposes: model.purposes,
   }
+}
+
+const suggestionOptions = () => Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+/** 候选列表里每一项显示的模型 ID，按显示顺序。 */
+const suggestionValues = () => suggestionOptions().map(option => option.querySelector('span')?.textContent ?? '')
+const recommendedValues = () => suggestionOptions()
+  .filter(option => /推荐|Recommended/u.test(option.textContent ?? ''))
+  .map(option => option.querySelector('span')?.textContent ?? '')
+const modelNameInput = () => {
+  const input = document.querySelector('input[role="combobox"]')
+  if (!(input instanceof HTMLInputElement)) throw new Error('Missing model name combobox')
+  return input
+}
+
+/** 展开候选列表；已展开时先收起再展开，每次调用都算一次“展开”。 */
+async function openSuggestions(locale: Locale = 'zh-CN') {
+  if (modelNameInput().getAttribute('aria-expanded') === 'true') {
+    await act(async () => {
+      await page.getByRole('button', { name: locale === 'zh-CN' ? '收起候选模型' : 'Hide model suggestions', exact: true }).click()
+    })
+  }
+  await act(async () => {
+    await page.getByRole('button', { name: locale === 'zh-CN' ? '展开候选模型' : 'Show model suggestions', exact: true }).click()
+  })
+}
+
+async function chooseSuggestion(value: string) {
+  const option = suggestionOptions().find(candidate => candidate.querySelector('span')?.textContent === value)
+  if (!option) throw new Error(`Missing suggestion ${value}`)
+  await act(async () => option.click())
+}
+
+async function typeInto(input: HTMLInputElement | HTMLSelectElement, value: string) {
+  await act(async () => {
+    const prototype = input instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(prototype, 'value')?.set?.call(input, value)
+    input.dispatchEvent(new Event(input instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+  })
 }
 
 let root: Root | undefined
@@ -145,7 +184,10 @@ describe('model discovery settings flow', () => {
     await act(async () => {
       await page.getByRole('button', { name: /^编辑「/ }).click()
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
-      await page.getByLabelText('端点模型列表').selectOptions(value)
+    })
+    await vi.waitFor(() => expect(suggestionValues()).toContain(value))
+    await chooseSuggestion(value)
+    await act(async () => {
       await expect.element(page.getByLabelText('上下文窗口', { exact: true })).toHaveValue(context)
       await page.getByLabelText('上下文窗口', { exact: true }).fill('32000')
       await page.getByRole('button', { name: '高级设置', exact: true }).click()
@@ -219,7 +261,7 @@ describe('model discovery settings flow', () => {
 
     await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith(discoveryRequest(model)))
     expect(discoverModels.mock.calls[0]).toEqual([discoveryRequest(model)])
-    await expect.element(page.getByLabelText('端点模型列表')).toBeVisible()
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['provider/model-a']))
   })
 
   it('refreshes models from a new unsaved endpoint and credentials', async () => {
@@ -260,8 +302,9 @@ describe('model discovery settings flow', () => {
       protocol: 'openai',
       baseUrl: editedBaseUrl,
       apiKey: editedApiKey,
+      purposes: ['generation', 'refinement', 'summary'],
     }))
-    await expect.element(page.getByLabelText('端点模型列表')).toBeVisible()
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['fresh-model']))
   })
 
   it('allows saving a complete manual configuration without a display name', async () => {
@@ -303,19 +346,14 @@ describe('model discovery settings flow', () => {
       await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
     })
 
-    const discoveredSelect = document.querySelector('select[aria-label="端点模型列表"]')
-    if (!(discoveredSelect instanceof HTMLSelectElement)) throw new Error('Missing discovered model selector')
-    await act(async () => {
-      discoveredSelect.value = 'provider/model-b'
-      discoveredSelect.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['provider/model-a', 'provider/model-b']))
+    await chooseSuggestion('provider/model-b')
 
     expect(saveModel).not.toHaveBeenCalled()
     expect(setDefaultModel).not.toHaveBeenCalled()
     expect(useLLMStore.getState().defaultModelId).toBe(model.id)
-    const manualModelInput = Array.from(document.querySelectorAll('input'))
-      .find(input => input.value === 'provider/model-b')
-    expect(manualModelInput).toBeInstanceOf(HTMLInputElement)
+    expect(modelNameInput().value).toBe('provider/model-b')
+    expect(suggestionOptions()).toHaveLength(0)
 
     await act(async () => {
       await page.getByRole('button', { name: '保存配置', exact: true }).click()
@@ -401,7 +439,7 @@ describe('model discovery settings flow', () => {
       await pendingDiscovery
     })
 
-    expect(document.querySelector('select[aria-label="端点模型列表"]')).toBeNull()
+    expect(suggestionValues()).not.toContain('stale-model')
   })
 
   it('ignores a pending discovery after switching to another saved profile', async () => {
@@ -439,8 +477,10 @@ describe('model discovery settings flow', () => {
       await pendingDiscovery
     })
 
-    expect(document.querySelector('select[aria-label="端点模型列表"]')).toBeNull()
-    expect(Array.from(document.querySelectorAll('input')).some(input => input.value === second.modelName)).toBe(true)
+    discoverModels.mockImplementation(async () => ({ success: true as const, models: [{ id: 'fresh', name: 'fresh', value: 'fresh' }] }))
+    await openSuggestions()
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['fresh']))
+    expect(modelNameInput().value).toBe(second.modelName)
     await expect.element(page.getByRole('button', { name: '获取模型列表', exact: true })).toBeEnabled()
   })
 
@@ -473,7 +513,9 @@ describe('model discovery settings flow', () => {
       await pendingDiscovery
     })
 
-    expect(document.querySelector('select[aria-label="端点模型列表"]')).toBeNull()
+    discoverModels.mockImplementation(async () => ({ success: true as const, models: [{ id: 'fresh', name: 'fresh', value: 'fresh' }] }))
+    await openSuggestions()
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['fresh']))
     await expect.element(page.getByRole('button', { name: '获取模型列表', exact: true })).toBeEnabled()
   })
 
@@ -554,5 +596,106 @@ describe('model discovery settings flow', () => {
     await expect.element(page.getByText('网络请求失败，请检查端点或网络后重试。手工模型 ID 仍可使用。', { exact: true })).toBeVisible()
     expect(document.body.textContent).not.toContain(sensitiveDetail)
     await expect.element(page.getByRole('button', { name: '获取模型列表', exact: true })).toBeEnabled()
+  })
+
+  it.each([
+    { locale: 'zh-CN' as const, add: '添加模型', badge: '推荐' },
+    { locale: 'en-US' as const, add: 'Add model', badge: 'Recommended' },
+  ])('shows the provider presets as $locale recommendations without requesting the endpoint when no key is filled', async ({ locale, add, badge }) => {
+    const discoverModels = vi.fn()
+    await renderSettings(savedProfile(), discoverModels, locale, [], false)
+    await act(async () => { await page.getByRole('button', { name: add, exact: true }).click() })
+    await openSuggestions(locale)
+
+    const openaiPresets = ['gpt-4.1', 'gpt-4.1-2025-04-14', 'o3', 'gpt-4o']
+    expect(suggestionValues().slice(0, openaiPresets.length)).toEqual(openaiPresets)
+    expect(recommendedValues()).toEqual(suggestionValues())
+    expect(suggestionOptions()[0].textContent).toContain(badge)
+    expect(document.querySelector('[role="status"]')?.textContent).toMatch(locale === 'zh-CN' ? /^候选为推荐模型。/u : /^Showing recommended models\./u)
+    expect(discoverModels).not.toHaveBeenCalled()
+  })
+
+  it('fetches once when the list is first opened and replaces the presets with the endpoint list', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
+    const discoverModels = vi.fn(async () => ({ success: true as const, models: [
+      { id: 'deepseek-chat-next', name: 'deepseek-chat-next', value: 'deepseek-chat-next' },
+      { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
+    ] }))
+    await renderSettings(model, discoverModels)
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    expect(discoverModels).not.toHaveBeenCalled()
+
+    await openSuggestions()
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['deepseek-v4-flash', 'deepseek-chat-next']))
+    expect(discoverModels).toHaveBeenCalledWith(discoveryRequest(model))
+    expect(recommendedValues()).toEqual(['deepseek-v4-flash'])
+    await expect.element(page.getByText('已从端点获取 2 个模型。', { exact: true })).toBeVisible()
+
+    await openSuggestions()
+    await openSuggestions()
+    expect(discoverModels).toHaveBeenCalledTimes(1)
+  })
+
+  it('filters suggestions while typing and keeps any typed model name', async () => {
+    const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
+    const { saveModel } = await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+
+    await typeInto(modelNameInput(), 'LLAMA3')
+    expect(suggestionValues()).toEqual(['llama3.3', 'llama3.2'])
+    await typeInto(modelNameInput(), 'my-private-model')
+    expect(suggestionOptions()).toHaveLength(0)
+    await expect.element(page.getByText('没有匹配的候选，将使用输入的名称。', { exact: true })).toBeVisible()
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ modelName: 'my-private-model' }))
+  })
+
+  it('chooses a suggestion with the arrow keys and Enter, and Escape only closes the list', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
+    await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    const input = modelNameInput()
+    await act(async () => { input.focus() })
+
+    await act(async () => { await userEvent.keyboard('{ArrowDown}') })
+    expect(input.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => { await userEvent.keyboard('{ArrowDown}') })
+    const active = document.getElementById(input.getAttribute('aria-activedescendant') ?? '')
+    expect(active?.querySelector('span')?.textContent).toBe('deepseek-v4-pro')
+    await act(async () => { await userEvent.keyboard('{Enter}') })
+    expect(input.value).toBe('deepseek-v4-pro')
+    expect(input.getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => { await userEvent.keyboard('{ArrowDown}') })
+    await act(async () => { await userEvent.keyboard('{Escape}') })
+    expect(input.getAttribute('aria-expanded')).toBe('false')
+    expect(input.value).toBe('deepseek-v4-pro')
+    expect(document.activeElement).toBe(input)
+    await expect.element(page.getByRole('button', { name: '保存配置', exact: true })).toBeVisible()
+  })
+
+  it('drops the fetched list after switching provider and fetches again for the new provider', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
+    const discoverModels = vi.fn<(request: { provider: string }) => Promise<ModelDiscoveryResult>>(async () => ({
+      success: true, models: [{ id: 'deepseek-only', name: 'deepseek-only', value: 'deepseek-only' }],
+    }))
+    await renderSettings(model, discoverModels)
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['deepseek-only']))
+
+    const providerSelect = Array.from(document.querySelectorAll('select')).find(select => select.value === 'deepseek')
+    if (!providerSelect) throw new Error('Missing provider select')
+    let settle!: () => void
+    discoverModels.mockImplementationOnce(() => new Promise(resolve => {
+      settle = () => resolve({ success: true, models: [{ id: 'models/gemini-3.8-flash', name: 'Gemini 3.8 Flash', value: 'gemini-3.8-flash' }] })
+    }))
+    await typeInto(providerSelect, 'gemini')
+    await openSuggestions()
+    expect(suggestionValues()).not.toContain('deepseek-only')
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(2))
+    expect(discoverModels.mock.calls[1][0]).toMatchObject({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com' })
+    await act(async () => settle())
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['gemini-3.8-flash']))
   })
 })

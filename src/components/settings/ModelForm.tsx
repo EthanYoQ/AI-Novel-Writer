@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react'
-import { Save, Settings2, Zap, Eye, EyeOff, ChevronDown, RefreshCw, RotateCcw } from 'lucide-react'
+import { Save, Settings2, Zap, Eye, EyeOff, ChevronDown, RotateCcw } from 'lucide-react'
 import { useLLMStore } from '../../stores/llm-store'
 import type { DiscoveredModel, ModelDiscoveryErrorCode, ModelProfile } from '../../shared/ipc-channels'
 import { LOW_VRAM_EMBEDDING_OPTIONS, normalizeEmbeddingOptions } from '../../shared/embedding-options'
@@ -15,6 +15,15 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 import { ModelReasoningOverrideSettings, ModelCapabilitySources, ProjectCreativeStrategySettings } from './ReasoningPolicySettings'
 import { openModelProviderResource } from './model-provider-resource'
+import { ModelNameField } from './ModelNameField'
+import { modelNameCandidates, type ModelNameCandidate } from './model-name-candidates'
+
+/** 本次表单配置下的端点模型列表获取；idle 表示还没获取过，改动服务商、地址或 Key 后回到 idle。 */
+type ModelDiscoveryState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'loaded', models: DiscoveredModel[] }
+  | { status: 'failed', errorCode: ModelDiscoveryErrorCode }
 
 /** 模型编辑表单 */
 export function ModelForm({
@@ -33,17 +42,13 @@ export function ModelForm({
   const locale = useLocaleStore(s => s.locale)
   const [showKey, setShowKey] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  // 标记"模型标识"是否使用自定义输入模式
-  const [customModelName, setCustomModelName] = useState(false)
 
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean, error?: string } | null>(null)
   const testFailure = testResult && !testResult.success ? displayedErrorMessage(locale, testResult.error) : ''
   const testConnection = useLLMStore(s => s.testConnection)
   const discoverModels = useLLMStore(s => s.discoverModels)
-  const [discovering, setDiscovering] = useState(false)
-  const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([])
-  const [discoveryNotice, setDiscoveryNotice] = useState<ModelDiscoveryErrorCode | null>(null)
+  const [discovery, setDiscovery] = useState<ModelDiscoveryState>({ status: 'idle' })
   const discoveryRevision = useRef(0)
   const currentDiscoveryConfig = useRef({
     id: model.id,
@@ -69,9 +74,7 @@ export function ModelForm({
 
   const invalidateDiscovery = () => {
     discoveryRevision.current += 1
-    setDiscovering(false)
-    setDiscoveredModels([])
-    setDiscoveryNotice(null)
+    setDiscovery({ status: 'idle' })
   }
 
   const isEmbedding = model.purposes?.includes('embedding')
@@ -156,7 +159,6 @@ export function ModelForm({
     const capabilities = isEmbedding
       ? p?.embeddingModelCapabilities?.[defaultModelName]
       : firstModel?.capabilities
-    setCustomModelName(false)
     invalidateDiscovery()
     const selection = {
       ...model,
@@ -172,30 +174,30 @@ export function ModelForm({
     }))
   }
 
-  /** 选择预设模型或切换到自定义输入 */
-  const handleModelSelect = (val: string) => {
-    if (val === '__custom__') {
-      setCustomModelName(true)
-      up('modelName', '')
-    } else {
-      setCustomModelName(false)
-      const matched = presetModels.find((m) => m.name === val)
-      const capabilities = matched?.capabilities
-      onChange(isEmbedding ? {
-        ...model,
-        modelName: val,
-        maxTokens: capabilities?.maxOutputTokens ?? matched?.maxTokens ?? model.maxTokens,
-        capabilities: capabilities ? { ...capabilities } : undefined,
-      } : applyModelProfileSelection(model, { modelName: val }))
+  /** 选中候选：预设模型的能力由预设目录解析，端点模型只带端点明确声明的能力。 */
+  const handleModelSelect = ({ value, recommended, declared }: ModelNameCandidate) => {
+    if (!isEmbedding) {
+      onChange(applyModelProfileSelection(model, { modelName: value }, declared))
+      return
     }
+    if (!recommended) {
+      up('modelName', value)
+      return
+    }
+    const matched = presetModels.find((m) => m.name === value)
+    const capabilities = matched?.capabilities
+    onChange({
+      ...model,
+      modelName: value,
+      maxTokens: capabilities?.maxOutputTokens ?? matched?.maxTokens ?? model.maxTokens,
+      capabilities: capabilities ? { ...capabilities } : undefined,
+    })
   }
 
-
-  // 当前模型名是否在预设列表里（决定下拉框显示）
-  const isPresetValue = presetModels.some((m) => m.name === model.modelName)
-  const selectValue = customModelName || (!isPresetValue && presetModels.length > 0)
-    ? '__custom__'
-    : model.modelName
+  const modelCandidates = modelNameCandidates(
+    presetModels.map((m) => m.name),
+    discovery.status === 'loaded' ? discovery.models : null,
+  )
 
   const handleTest = async () => {
     setTesting(true)
@@ -219,29 +221,30 @@ export function ModelForm({
         && current.baseUrl === requestConfig.baseUrl
         && current.apiKey === requestConfig.apiKey
     }
-    setDiscovering(true)
-    setDiscoveredModels([])
-    setDiscoveryNotice(null)
+    setDiscovery({ status: 'loading' })
     try {
       const result = await discoverModels({
         provider: model.provider,
         protocol: model.protocol,
         baseUrl: model.baseUrl,
         apiKey: model.apiKey,
+        purposes: model.purposes,
       })
       if (!isCurrentRequest()) return
-      if (result.success) {
-        setDiscoveredModels(result.models)
-      } else {
-        setDiscoveryNotice(result.errorCode)
-      }
+      setDiscovery(result.success
+        ? { status: 'loaded', models: result.models }
+        : { status: 'failed', errorCode: result.errorCode })
     } catch {
-      if (isCurrentRequest()) setDiscoveryNotice('network')
-    } finally {
-      if (isCurrentRequest()) setDiscovering(false)
+      if (isCurrentRequest()) setDiscovery({ status: 'failed', errorCode: 'network' })
     }
   }
 
+  /** 第一次展开候选时自动获取一次；没填地址或 Key 时不发请求，直接用预设兜底。 */
+  const handleModelListOpen = () => {
+    if (discovery.status === 'idle' && model.baseUrl.trim() && model.apiKey.trim()) void handleDiscoverModels()
+  }
+
+  const discoveryNotice = discovery.status === 'failed' ? discovery.errorCode : null
   const discoveryNoticeText = discoveryNotice === 'auth'
       ? text('鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.')
       : discoveryNotice === 'unsupported'
@@ -304,54 +307,25 @@ export function ModelForm({
         </div>
       </div>
 
-      {/* 模型标识：有预设时显示下拉，否则纯输入 */}
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <Label className="mb-0">{text('model（模型名称）', 'model')}</Label>
-          {presetModels.length > 0 && (
-            <button
-              type="button"
-              onClick={() => {
-                if (customModelName) {
-                  // 切回预设列表
-                  const first = presetModels[0]
-                  handleModelSelect(first.name)
-                } else {
-                  // 切换到自定义输入
-                  setCustomModelName(true)
-                  up('modelName', '')
-                }
-              }}
-              className="text-xs transition-colors"
-              style={{ color: 'var(--color-accent)' }}
-            >
-              {customModelName ? text('从列表选择', 'Choose from list') : text('手动输入', 'Enter manually')}
-            </button>
-          )}
-        </div>
-
-        {/* 有预设模型 且 未切到手动输入 → 显示下拉 */}
-        {presetModels.length > 0 && !customModelName ? (
-          <NativeSelect
-            value={selectValue}
-            onChange={(e) => handleModelSelect(e.target.value)}
-          >
-            {presetModels.map((m) => (
-              <option key={m.name} value={m.name}>{m.name}</option>
-            ))}
-            <option value="__custom__">{text('手动输入', 'Enter manually')}</option>
-          </NativeSelect>
-        ) : (
-          <div>
-            <Input
-              value={model.modelName}
-              onChange={(e) => up('modelName', e.target.value)}
-              placeholder={isEmbedding ? 'text-embedding-3-small' : 'gpt-4o'}
-              autoFocus={customModelName}
-            />
-          </div>
-        )}
-      </div>
+      <ModelNameField
+        value={model.modelName}
+        placeholder={isEmbedding ? 'text-embedding-3-small' : 'gpt-4o'}
+        candidates={modelCandidates}
+        refreshing={discovery.status === 'loading'}
+        status={discovery.status === 'loading'
+          ? { tone: 'muted', text: text('正在获取端点模型列表…', 'Fetching the endpoint model list…') }
+          : discoveryNoticeText
+            ? { tone: 'error', text: discoveryNoticeText }
+            : discovery.status === 'loaded'
+              ? { tone: 'muted', text: text(`已从端点获取 ${discovery.models.length} 个模型。`, `Fetched ${discovery.models.length} models from the endpoint.`) }
+              : !model.apiKey.trim()
+                ? { tone: 'muted', text: text('候选为推荐模型。填写 API Key 后展开会自动获取端点模型列表，也可以点刷新按钮获取。', 'Showing recommended models. After you enter an API key, opening the list fetches the endpoint models; you can also use the refresh button.') }
+                : null}
+        onInput={(value) => up('modelName', value)}
+        onSelect={handleModelSelect}
+        onOpen={handleModelListOpen}
+        onRefresh={() => void handleDiscoverModels()}
+      />
 
       {/* Base URL */}
       <div>
@@ -387,49 +361,6 @@ export function ModelForm({
             {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
         </div>
-      </div>
-
-      <div className="space-y-2 rounded-lg p-3" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-hover)' }}>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <Label className="mb-0">{text('端点模型列表', 'Endpoint model list')}</Label>
-            <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
-              {text('填写端点与 API Key 后即可获取；选择模型后再保存配置。', 'Enter the endpoint and API key to refresh, then save after choosing a model.')}
-            </p>
-          </div>
-          <Button type="button" size="sm" variant="outline" onClick={handleDiscoverModels} disabled={discovering}>
-            <RefreshCw size={13} className={discovering ? 'animate-spin' : undefined} />
-            {discovering ? text('获取中...', 'Refreshing...') : text('获取模型列表', 'Refresh model list')}
-          </Button>
-        </div>
-
-        {discoveredModels.length > 0 && (
-          <NativeSelect
-            aria-label={text('端点模型列表', 'Endpoint model list')}
-            value={discoveredModels.some(candidate => candidate.value === model.modelName) ? model.modelName : ''}
-            onChange={(event) => {
-              const value = event.target.value
-              if (!value) return
-              setCustomModelName(true)
-              if (isEmbedding) up('modelName', value)
-              else onChange(applyModelProfileSelection(model, { modelName: value },
-                discoveredModels.find(candidate => candidate.value === value)?.capabilities))
-            }}
-          >
-            <option value="">{text('选择端点返回的模型', 'Choose a model returned by the endpoint')}</option>
-            {discoveredModels.map(candidate => (
-              <option key={`${candidate.id}:${candidate.value}`} value={candidate.value}>
-                {candidate.name === candidate.id ? candidate.id : `${candidate.name} (${candidate.id})`}
-              </option>
-            ))}
-          </NativeSelect>
-        )}
-
-        {discoveryNoticeText && (
-          <p role="status" className="text-xs" style={{ color: 'var(--color-error-text)' }}>
-            {discoveryNoticeText}
-          </p>
-        )}
       </div>
 
       {isEmbedding && model.provider === 'siliconflow' && model.modelName === 'BAAI/bge-m3' && (

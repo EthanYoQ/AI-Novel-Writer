@@ -234,13 +234,14 @@ async function main() {
     await form.getByPlaceholder('https://api.openai.com').fill(endpoint)
     await form.locator('input[type="password"]').fill('f05-u03-offline-only')
     await form.getByRole('button', { name: '获取模型列表' }).click()
-    await form.getByRole('combobox', { name: '端点模型列表' }).waitFor({ timeout: 5000 })
+    const discoveredOption = form.getByRole('listbox', { name: '候选模型' }).getByRole('option').filter({ hasText: discoveredModelName })
+    await discoveredOption.waitFor({ timeout: 5000 })
     assert.deepEqual(fixture.requests, [{ method: 'GET', path: '/v1/models', authorized: true }])
-    assert.equal(await form.getByRole('combobox', { name: '端点模型列表' }).locator(`option[value="${discoveredModelName}"]`).count(), 1)
+    assert.equal(await discoveredOption.count(), 1)
     pass('U03.A05-model-discovery', 'U03.A05', 'stage unsaved model form fetched and displayed the controlled endpoint model list')
 
     currentStep = 'U03.A06-model-parameters'
-    await form.getByRole('combobox', { name: '端点模型列表' }).selectOption(discoveredModelName)
+    await discoveredOption.click()
     await form.getByPlaceholder('如：DeepSeek 主力 / GPT-4o 备用').fill('U03 隔离模型')
     await form.getByLabel('上下文窗口').fill('8192')
     await form.getByRole('button', { name: '高级设置' }).click()

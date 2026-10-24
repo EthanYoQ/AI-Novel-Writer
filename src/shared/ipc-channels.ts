@@ -511,10 +511,10 @@ export type ModelDiscoveryResult =
   | { success: true; models: DiscoveredModel[] }
   | { success: false; errorCode: ModelDiscoveryErrorCode }
 
-/** Unsaved endpoint fields required to request a provider's model list. */
+/** Unsaved endpoint fields required to request a provider's model list; purposes decide which models fit. */
 export type ModelDiscoveryRequest = Pick<
   ModelProfile,
-  'provider' | 'protocol' | 'baseUrl' | 'apiKey'
+  'provider' | 'protocol' | 'baseUrl' | 'apiKey' | 'purposes'
 >
 
 export interface LLMChannels {

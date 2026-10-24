@@ -9,6 +9,8 @@ interface ModelDiscoveryServiceDependencies {
   timeoutMs?: number
 }
 
+type DiscoveryPurpose = 'generation' | 'embedding'
+
 const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 15_000
 const MAX_DISCOVERED_MODEL_ENTRIES = 500
 const MAX_DISCOVERED_MODEL_TEXT_BYTES = 512
@@ -123,7 +125,22 @@ function parseOpenAIModels(payload: unknown, credential: string): DiscoveredMode
   return models
 }
 
-function parseGeminiModels(payload: unknown, credential: string): DiscoveredModel[] | null {
+/**
+ * TTS、图像（Nano Banana）、转写、音乐（Lyria）、音频模型，以及电脑操作、深度研究、Antigravity 与机器人这类代理模型，
+ * 在 models 接口里同样声明 generateContent，只能按 Google 的命名区分；它们不是用来写正文的。
+ * 按连字符分段匹配，不误伤名字里碰巧含这些字母的模型。
+ */
+const GEMINI_NON_WRITING_MODEL = /(?:^|[-_.])(?:tts|image|live|transcribe|audio|lyria|nano-banana|computer-use|deep-research|antigravity|robotics)(?:$|[-_.])/iu
+const OPENAI_COMPATIBLE_EMBEDDING_MODEL = /embed|bge/iu
+
+function geminiModelServesPurpose(item: object, value: string, purpose: DiscoveryPurpose): boolean {
+  const methods = (item as { supportedGenerationMethods?: unknown }).supportedGenerationMethods
+  // 自建网关可能不返回方法字段，这时无法判断用途，保留给作者自己选。
+  if (Array.isArray(methods) && !methods.includes(purpose === 'embedding' ? 'embedContent' : 'generateContent')) return false
+  return purpose === 'embedding' || !GEMINI_NON_WRITING_MODEL.test(value)
+}
+
+function parseGeminiModels(payload: unknown, credential: string, purpose: DiscoveryPurpose): DiscoveredModel[] | null {
   if (!payload || typeof payload !== 'object' || !Array.isArray((payload as { models?: unknown }).models)) {
     return null
   }
@@ -143,7 +160,7 @@ function parseGeminiModels(payload: unknown, credential: string): DiscoveredMode
     if (!value) return null
     if (seenValues.has(value)) continue
     seenValues.add(value)
-    models.push({ id, name, value })
+    if (geminiModelServesPurpose(item, value, purpose)) models.push({ id, name, value })
   }
   return models
 }
@@ -156,6 +173,7 @@ export class ModelDiscoveryService {
   constructor(private readonly dependencies: ModelDiscoveryServiceDependencies = {}) {}
 
   async discoverModels(model: ModelDiscoveryRequest): Promise<ModelDiscoveryResult> {
+    const purpose: DiscoveryPurpose = Array.isArray(model.purposes) && model.purposes.includes('embedding') ? 'embedding' : 'generation'
     const configuredTimeoutMs = this.dependencies.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS
     const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
       ? configuredTimeoutMs
@@ -191,7 +209,7 @@ export class ModelDiscoveryService {
             ? { success: false, errorCode: 'network' }
             : { success: false, errorCode: 'invalid_response' }
         }
-        const models = parseGeminiModels(payload, model.apiKey)
+        const models = parseGeminiModels(payload, model.apiKey, purpose)
         if (!models) return { success: false, errorCode: 'invalid_response' }
         if (models.length === 0) return { success: false, errorCode: 'empty' }
         return { success: true, models }
@@ -226,6 +244,11 @@ export class ModelDiscoveryService {
       const models = parseOpenAIModels(payload, model.apiKey)
       if (!models) return { success: false, errorCode: 'invalid_response' }
       if (models.length === 0) return { success: false, errorCode: 'empty' }
+      // OpenAI 兼容接口不说明模型用途；向量用途只按名字把明显的向量模型提前，其余保持端点顺序。
+      if (purpose === 'embedding') {
+        const isEmbedding = (candidate: DiscoveredModel) => OPENAI_COMPATIBLE_EMBEDDING_MODEL.test(candidate.value)
+        return { success: true, models: [...models.filter(isEmbedding), ...models.filter(candidate => !isEmbedding(candidate))] }
+      }
       return { success: true, models }
     } catch {
       return { success: false, errorCode: 'network' }
