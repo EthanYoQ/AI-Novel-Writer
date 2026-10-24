@@ -247,8 +247,8 @@ export function ModelForm({
       : { tone: 'muted', text: text('填写 base_url 和 API Key 后获取模型列表。', 'Enter the base_url and API key to fetch the model list.') }
   }
 
-  // 保存与测试只豁免 Ollama：知识库主进程对检索模型仍要求非空 Key。
-  const keyMissing = model.provider !== 'ollama' && !model.apiKey.trim()
+  // 生成模型与拉取列表用同一条本机规则；检索模型维持原样只豁免 Ollama，知识库主进程对它要求非空 Key。
+  const keyMissing = !model.apiKey.trim() && (isEmbedding ? model.provider !== 'ollama' : !isLocalModelEndpoint(model))
   const missingForSave = [
     !model.baseUrl.trim() && 'base_url',
     keyMissing && 'API Key',

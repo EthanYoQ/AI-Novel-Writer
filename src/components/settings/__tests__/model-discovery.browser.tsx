@@ -743,13 +743,23 @@ describe('model discovery settings flow', () => {
     expect(suggestionValues()).toEqual(['second-key-model'])
   })
 
-  it('fetches without a key for a local address, while saving a non-Ollama provider still asks for one', async () => {
+  it('fetches, tests and saves a generation model on a local address without a key', async () => {
     const discoverModels = listed('local-model')
-    await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
+    const { saveModel } = await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
     await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
     await typeInto(baseUrlInput('https://api.openai.com'), 'http://127.0.0.1:1234/v1')
     await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '' })))
     await typeInto(modelNameInput(), 'local-model')
+    await expect.element(page.getByRole('button', { name: '测试连接', exact: true })).toBeEnabled()
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', modelName: 'local-model' }))
+  })
+
+  it('still asks for a key before saving an embedding model on a local address that is not Ollama', async () => {
+    const model = savedProfile({ baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', modelName: 'local-embed', purposes: ['embedding'] })
+    await renderSettings(model, listed('local-embed'))
+    await act(async () => { useLayoutStore.setState({ settingsSection: 'embedding' }) })
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
     const save = page.getByRole('button', { name: '保存配置', exact: true })
     await expect.element(save).toBeDisabled()
     await expect.element(save).toHaveAccessibleDescription('保存前还需填写：API Key。')
