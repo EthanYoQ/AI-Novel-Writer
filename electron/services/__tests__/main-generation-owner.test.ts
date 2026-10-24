@@ -1182,6 +1182,21 @@ describe('S07 durable task budget diagnostics', () => {
     expect(saved.outcome.receipt).toMatchObject({ failureCode: 'NETWORK_ERROR' })
     expect(saved.run.budgetDiagnostics![0]).toMatchObject({ failureCode: 'NETWORK_ERROR' })
   })
+  // 实测 gemini-3.8-flash：输入 20、正文 60、思考 830、总量 910。调用记录的「输出」要和 OpenAI 一样含思考（#484）。
+  it.each([
+    ['separately-billed', 60],
+    ['included-in-completion', 890],
+  ] as const)('records the output of a %s reasoning call including its reasoning tokens', async (accounting, completionTokens) => {
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '正文' })
+      return { finishReason: 'stop', usage: { promptTokens: 20, completionTokens, totalTokens: 910, reasoningTokens: 830,
+        accounting, totalIncludesReasoning: true, trusted: true } }
+    })
+    const run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: `reasoning-call-${accounting}`, task })
+    expect(f.db.prepare('SELECT prompt_tokens AS input, completion_tokens AS output, total_tokens AS total FROM llm_calls').all())
+      .toEqual([{ input: 20, output: 890, total: 910 }])
+  })
   it('keeps a network failure category after reopening without storing provider text', async () => {
     const f = fixture(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: '已收到的正文' })

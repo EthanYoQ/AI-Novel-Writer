@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { GeminiProvider } from '../gemini-provider'
 import { resolveGenerationParameters } from '../generation-parameter-policy'
+import { settleProviderUsage } from '../../services/generation-run-service'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationTransportDiagnostics } from '../../../src/shared/generation-contract'
 
@@ -359,5 +360,45 @@ describe('Gemini stream transport diagnostics', () => {
     const { snapshots, onError } = await stream({ ok: true, status: 200, body: { getReader: () => reader } }, controller.signal)
     expect(onError).toHaveBeenCalledWith('LLM_CANCELLED', '', undefined)
     expect(snapshots.at(-1)).toMatchObject({ endReason: 'cancelled', errorName: 'AbortError' })
+  })
+})
+
+// 实测 gemini-3.8-flash 流式：总量 910 = 输入 20 + 正文 60 + 思考 830（#484）。
+describe('Gemini thinking token usage', () => {
+  const usageMetadata = { promptTokenCount: 20, candidatesTokenCount: 60, thoughtsTokenCount: 830, totalTokenCount: 910 }
+
+  it('counts thinking tokens in the output of a normal request', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      candidates: [{ content: { parts: [{ text: '正文' }] }, finishReason: 'STOP' }], usageMetadata }) }))
+    const response = await new GeminiProvider().generate(model, [{ role: 'user', content: '写正文' }], { temperature: 0.2, maxTokens: 512 })
+    expect(response.usage).toEqual({ promptTokens: 20, completionTokens: 890, totalTokens: 910 })
+  })
+
+  it('counts thinking tokens in the streamed output and keeps the separately billed evidence', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: { getReader: () => sseReader(
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: '正文' }] }, finishReason: 'STOP' }], usageMetadata })}
+`,
+    ) } }))
+    const onDone = vi.fn(), onUsageEvidence = vi.fn()
+    await new GeminiProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2, maxTokens: 512, signal: new AbortController().signal, onChunk: vi.fn(), onDone, onError: vi.fn(), onUsageEvidence,
+    })
+    expect(onDone).toHaveBeenCalledWith('正文', { promptTokens: 20, completionTokens: 890, totalTokens: 910 }, 'stop')
+    const evidence = onUsageEvidence.mock.calls.at(-1)![0]
+    expect(evidence).toEqual({ usage: { promptTokens: 20, completionTokens: 60, totalTokens: 910 }, reasoningTokens: 830,
+      accounting: 'separately-billed', totalIncludesReasoning: true, protocol: 'gemini' })
+    // 预算按这份证据结算：思考单独计费，实际用量就是 Google 报的总量。
+    expect(settleProviderUsage({ ...evidence.usage, reasoningTokens: evidence.reasoningTokens, accounting: evidence.accounting,
+      totalIncludesReasoning: evidence.totalIncludesReasoning, trusted: true },
+    { estimatorVersion: 'test', safetyMarginTokens: 0, reasoning: 'separately-billed', canBoundTotalLiability: true }))
+      .toMatchObject({ trusted: true, inputTokens: 20, completionTokens: 60, reasoningTokens: 830, actualTokens: 910 })
+  })
+
+  it('keeps output usage when a model reports no thinking tokens', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      candidates: [{ content: { parts: [{ text: '正文' }] }, finishReason: 'STOP' }],
+      usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 60, totalTokenCount: 80 } }) }))
+    const response = await new GeminiProvider().generate(model, [{ role: 'user', content: '写正文' }], { temperature: 0.2, maxTokens: 512 })
+    expect(response.usage).toEqual({ promptTokens: 20, completionTokens: 60, totalTokens: 80 })
   })
 })

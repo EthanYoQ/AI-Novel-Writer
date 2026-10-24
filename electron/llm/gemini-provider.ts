@@ -27,6 +27,26 @@ function assertVisibleStreamPayload(value: unknown): void {
   }
 }
 
+interface GeminiUsageMetadata {
+  promptTokenCount?: number
+  candidatesTokenCount?: number
+  thoughtsTokenCount?: number
+  totalTokenCount?: number
+}
+
+/**
+ * 交给调用记录的用量与 OpenAI 一致：输出含思考消耗（OpenAI 的 completion_tokens 本就含 reasoning_tokens）。
+ * Gemini 的 candidatesTokenCount 只算正文，思考在 thoughtsTokenCount 里另报。
+ */
+function geminiTokenUsage(metadata: GeminiUsageMetadata): TokenUsage {
+  const { candidatesTokenCount: candidates, thoughtsTokenCount: thoughts } = metadata
+  return {
+    promptTokens: metadata.promptTokenCount ?? null,
+    completionTokens: candidates === undefined && thoughts === undefined ? null : (candidates ?? 0) + (thoughts ?? 0),
+    totalTokens: metadata.totalTokenCount ?? null,
+  }
+}
+
 export class GeminiProvider implements ILLMProvider {
   private applyReasoning(
     generationConfig: Record<string, unknown>,
@@ -106,16 +126,12 @@ export class GeminiProvider implements ILLMProvider {
           content?: { parts?: Array<{ text?: string }> }
           finishReason?: string | null
         }>
-        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
+        usageMetadata?: GeminiUsageMetadata
       }
 
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
       const finishReason = this.normalizeFinishReason(data.candidates?.[0]?.finishReason)
-      const usage = data.usageMetadata ? {
-        promptTokens: data.usageMetadata.promptTokenCount ?? null,
-        completionTokens: data.usageMetadata.candidatesTokenCount ?? null,
-        totalTokens: data.usageMetadata.totalTokenCount ?? null,
-      } : undefined
+      const usage = data.usageMetadata ? geminiTokenUsage(data.usageMetadata) : undefined
 
       if (finishReason === 'stop') {
         return {
@@ -209,7 +225,7 @@ export class GeminiProvider implements ILLMProvider {
             content?: { parts?: Array<{ text?: string; thought?: boolean }> }
             finishReason?: string | null
           }>
-          usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number; thoughtsTokenCount?: number }
+          usageMetadata?: GeminiUsageMetadata
         }
         try {
           parsed = JSON.parse(json)
@@ -241,14 +257,14 @@ export class GeminiProvider implements ILLMProvider {
             opts.onChunk(chunk)
           }
           if (parsed.usageMetadata) {
-            usage = {
-              promptTokens: parsed.usageMetadata.promptTokenCount ?? null,
-              completionTokens: parsed.usageMetadata.candidatesTokenCount ?? null,
-              totalTokens: parsed.usageMetadata.totalTokenCount ?? null,
-            }
+            const metadata = parsed.usageMetadata
+            usage = geminiTokenUsage(metadata)
             visibleUsage = usage
-            opts.onUsageEvidence?.({ usage, reasoningTokens: parsed.usageMetadata.thoughtsTokenCount ?? null,
-              accounting: 'separately-billed', totalIncludesReasoning: true, protocol: 'gemini' })
+            // 预算结算按 Gemini 的计费方式：正文与思考分开报，总量含思考。
+            opts.onUsageEvidence?.({ usage: { promptTokens: metadata.promptTokenCount ?? null,
+              completionTokens: metadata.candidatesTokenCount ?? null, totalTokens: metadata.totalTokenCount ?? null },
+            reasoningTokens: metadata.thoughtsTokenCount ?? null,
+            accounting: 'separately-billed', totalIncludesReasoning: true, protocol: 'gemini' })
           }
         } catch (error) {
           if (opts.visibleOnly) throw error
