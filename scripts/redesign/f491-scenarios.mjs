@@ -22,7 +22,7 @@ const CHAPTER_UPDATES = [
     currentState: { location: '守塔人的屋子', recentEvents: '守塔人说父亲也问过钟的事' } },
 ]
 
-function characterStateReply(prompt) {
+export function characterStateReply(prompt) {
   const id = /"characterId": "([^"]+)",\s*"name": "林岚"/u.exec(prompt)?.[1]
   const update = CHAPTER_UPDATES.find(item => prompt.includes(item.marker))
   if (!id || !update) return '{"updates":[]}'
@@ -45,7 +45,7 @@ async function stubDialogs(app, { save, open }) {
 }
 
 /** 用界面同一组 IPC 导出 .ainovel 再恢复成新副本，返回副本所在目录。 */
-async function exportAndRestore(context, projectPath, label) {
+export async function exportAndRestore(context, projectPath, label) {
   const { app, page, invoke, roots } = context
   const session = await openForDriver(context, projectPath)
   const archive = path.join(roots.projects, `${label}.ainovel`)
@@ -65,21 +65,21 @@ async function exportAndRestore(context, projectPath, label) {
 }
 
 /** 界面按 Ctrl O 打开指定文件夹里的作品。 */
-async function openInUi({ app, page }, projectPath) {
+export async function openInUi({ app, page }, projectPath) {
   await stubDialogs(app, { open: projectPath })
   await page.keyboard.press('Control+O')
   await stage.spine(page).waitFor({ state: 'visible', timeout: 60_000 })
   await page.waitForTimeout(2000)
 }
 
-async function openCharacterState(page) {
+export async function openCharacterState(page) {
   await architecture.open(page)
   await architecture.openCast(page)
   await architecture.castRow(page, '林岚').click()
   await stage.root(page).getByRole('group', { name: '档案视图' }).getByRole('button', { name: '当前状态', exact: true }).click()
 }
 
-async function stateFields(page) {
+export async function stateFields(page) {
   return stage.root(page).locator('.cast-grid .cast-field').evaluateAll(fields => fields.map(field => ({
     label: field.querySelector('label')?.textContent?.trim(),
     hint: field.querySelector('.cast-field-hint')?.textContent?.trim() ?? null,
@@ -101,14 +101,14 @@ async function openChapter(page, chapterNumber) {
   await chapterView.open(page, chapterNumber)
 }
 
-async function finalizeChapter(page, chapterNumber) {
+export async function finalizeChapter(page, chapterNumber) {
   await openChapter(page, chapterNumber)
   await chapterView.finalize(page, chapterNumber)
   await settled(page)
 }
 
 /** 角色状态更新这一行的说明；正文文件一行在发布未完成时也标失败，不能取「第一条失败」。 */
-const postDetail = page => chapterView.postProcess(page).locator('li[data-state="failed"]').filter({ has: page.locator('b', { hasText: /^角色状态更新$/u }) })
+export const postDetail = page => chapterView.postProcess(page).locator('li[data-state="failed"]').filter({ has: page.locator('b', { hasText: /^角色状态更新$/u }) })
   .locator('.stage-ch-post-detail')
 
 export const F491_SCENARIOS = {

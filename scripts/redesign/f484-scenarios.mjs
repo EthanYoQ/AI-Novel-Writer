@@ -6,6 +6,7 @@ import * as architecture from './pages/architecture.mjs'
 import * as chapterView from './pages/chapter-view.mjs'
 import * as stage from './pages/stage.mjs'
 import { seedStageSample } from './scenarios.mjs'
+import { characterStateReply as roundtripReply, exportAndRestore, finalizeChapter, openCharacterState, openInUi, postDetail, stateFields } from './f491-scenarios.mjs'
 
 const EVIDENCE = '林岚把纸条夹进父亲的地图里。'
 
@@ -102,5 +103,35 @@ export const F484_SCENARIOS = {
     // 提交失败后后处理还会按重试间隔再提交两次；等运行结束再退出，会话才干净。
     await page.waitForFunction(() => document.querySelectorAll('.stage-capsule').length === 0, null, { timeout: 90_000 })
     return { zh, en, requests: fake.requests }
+  } },
+  'f484-deleted-source-roundtrip': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
+    context.fake.replyCharacterState(roundtripReply)
+    const measured = {}
+    await finalizeChapter(context.page, 3)
+    await chapterView.more(context.page, '删除正文…')
+    await context.page.getByRole('button', { name: '删除', exact: true }).click()
+    await chapterView.view(context.page).getByText('已定稿，只读', { exact: true }).waitFor({ state: 'detached', timeout: 60_000 })
+
+    const first = await exportAndRestore(context, context.samplePath, 'deleted-1')
+    const second = await exportAndRestore(context, first, 'deleted-2')
+    await context.reload()
+    await openInUi(context, second)
+    await finalizeChapter(context.page, 4)
+    measured.steps = await chapterView.postProcessSteps(context.page)
+    measured.detail = await postDetail(context.page).count() ? await postDetail(context.page).innerText() : null
+    await context.shoot('f484-deleted-source-finalize')
+
+    // 定稿后处理写入角色状态后，已打开的角色页不会自动刷新（原项目同样如此），重新打开作品再读。
+    await context.reload()
+    await openInUi(context, second)
+    await openCharacterState(context.page)
+    measured.fields = await stateFields(context.page)
+    await context.shoot('f484-deleted-source-character-state')
+
+    const location = measured.fields.find(field => field.label?.startsWith('当前位置'))
+    assert.equal(measured.detail, null, JSON.stringify(measured))
+    assert.ok(measured.steps.every(step => step.state === 'success'), JSON.stringify(measured))
+    assert.deepEqual({ hint: location.hint, value: location.value }, { hint: '定稿派生', value: '守塔人的屋子' }, '第 4 章按原项目一样更新了地点')
+    return measured
   } },
 }
