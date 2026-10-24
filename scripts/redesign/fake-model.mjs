@@ -106,6 +106,9 @@ export async function startFakeModel(diagnostics) {
   let failedProse = false
   let review = null
   let characterState = null
+  let keylessEmbeddings = false
+  /** 每次被接受的嵌入请求带的 Authorization 头（没有时为 null），场景据此确认本机检索模型真的没带 Key。 */
+  const embeddingAuthorizations = []
   const streamLog = []
   const gate = {
     /** 卡住之后的模型调用；embeddings 为 true 时连嵌入也卡住（参考文本入库这类只走嵌入的步骤）。 */
@@ -138,6 +141,8 @@ export async function startFakeModel(diagnostics) {
   const replyReview = content => { review = content }
   /** 之后的定稿后处理角色状态更新回 build(提示词) 给出的 JSON 文本；不调用时回空的 updates。 */
   const replyCharacterState = build => { characterState = build }
+  /** 之后不带 Key 的嵌入请求也照常回向量，模拟不需要 Key 的本机检索服务。 */
+  const acceptKeylessEmbeddings = () => { keylessEmbeddings = true }
   const record = (kind, detail) => {
     requests.push(kind)
     diagnostics.push(`[fake-model] ${kind} <- ${detail}`)
@@ -148,14 +153,16 @@ export async function startFakeModel(diagnostics) {
       response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ data: FIXTURE_ENDPOINT_MODELS.map(id => ({ id })) }))
       return
     }
-    if (request.method !== 'POST' || request.headers.authorization !== `Bearer ${FAKE_MODEL.apiKey}`) {
+    const keyless = keylessEmbeddings && request.url === '/v1/embeddings' && !(request.headers.authorization ?? '').replace(/^Bearer\s*/u, '')
+    if (request.method !== 'POST' || (request.headers.authorization !== `Bearer ${FAKE_MODEL.apiKey}` && !keyless)) {
       response.writeHead(403).end(); return
     }
     const body = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
     if (request.url === '/v1/embeddings') {
       if (holdEmbeddings) await pass()
       const input = Array.isArray(body.input) ? body.input : [body.input]
-      record('embedding', `${input.length} 条`)
+      embeddingAuthorizations.push(request.headers.authorization ?? null)
+      record('embedding', `${input.length} 条${keyless ? '（无 Key）' : ''}`)
       response.writeHead(200, { 'Content-Type': 'application/json' })
         .end(JSON.stringify({ data: input.map((_, index) => ({ index, embedding: [0.1, 0.2, 0.3] })) }))
       return
@@ -191,6 +198,6 @@ export async function startFakeModel(diagnostics) {
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   server.unref()
-  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState,
+  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState, acceptKeylessEmbeddings, embeddingAuthorizations,
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(() => resolve()) }) }
 }
