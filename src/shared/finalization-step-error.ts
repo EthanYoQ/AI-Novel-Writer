@@ -29,6 +29,10 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: b
   { code: /^FINALIZED_CHARACTER_SOURCE_CONFLICT$/, retry: false,
     zh: '正文定稿已保存，但角色卡没有自动更新：这个角色的当前状态里有字段已由后面章节的定稿更新过，或它记录的来源与现在的定稿对不上，为免旧内容覆盖较新的状态，本次没有写入。如果这个项目是从备份恢复的、失败发生在升级前，新版本打开项目时已修复来源记录，可以点「重试」；重试仍失败，或不属于这种情况时，请到角色页的「当前状态」查看这些字段，需要时直接手动修改。',
     en: "The finalized chapter text is saved, but the character card was not updated: some of this character's current state was already updated by a later finalized chapter, or its recorded source no longer matches the current finalized text, so nothing was written to avoid overwriting newer state. If this project was restored from a backup and the failure happened before you updated the app, opening the project in this version already repaired its source records, so you can select Retry. If Retry still fails, or this is not your case, open the character's Current state view, check those fields, and edit them by hand if needed." },
+  // 生成期间字段被作者或其他提交改过（#484）。重试沿用生成开始时冻结的角色状态，仍会拒写。
+  { code: /^FINALIZED_CHARACTER_FIELD_CONFLICT$/, retry: false,
+    zh: '正文定稿已保存，但角色卡没有自动更新：生成期间这个角色的当前状态被改动过（例如在角色页手动修改，或采纳了角色状态建议），为免覆盖这次改动，本次没有写入，再点「重试」结果也一样。这次改动已保留，请到角色页的「当前状态」查看这个角色，需要本章带来的变化时直接手动修改。',
+    en: "The finalized chapter text is saved, but the character card was not updated: this character's current state changed while this step was running (for example, it was edited on the Characters page or a character state suggestion was accepted), so nothing was written to avoid overwriting that change. Retrying gives the same result. The change is kept. Open the character's Current state view, check it, and edit it by hand if this chapter should change it." },
   { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: false,
     zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
 ]
