@@ -36,6 +36,15 @@ describe('单章写作中断', () => {
     expect(canResumeDraft(entry, ['甲'])).toBe(true)
   })
 
+  it('英文界面的请求次数按单复数写', () => {
+    const entry = (physicalRequests: number) => buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, drafts: [{
+      view: view('正文', { artifacts: [artifact('甲', true)], ledger: { physicalRequests } }) as never,
+      recovery: { handle, operation: 'chapter-draft', chapterNumber: 4, attemptedPurposes: ['chapter-draft'], draftSave: { kind: 'absent' } } as never,
+    }] }, 'en-US')[0] as DraftEntry
+    expect(entry(1).usage).toBe('1 request used')
+    expect(entry(3).usage).toBe('3 requests used')
+  })
+
   it('没写出字的片段不列出', () => {
     const entry = draft({ composition: null }, [artifact('甲', true), { ...artifact('空', true), text: '  ' }])
     expect(entry.artifacts.map(item => item.id)).toEqual(['甲'])
@@ -159,6 +168,61 @@ describe('审稿候选的片段', () => {
       expect(item.display).toContain('结构化')
       expect(item.display).not.toContain('summary')
     }
+  })
+
+  const MERGED = '钟声在正点响起。她顺着螺旋楼梯往上走，铺垫照旧。'
+  const RECHECK = JSON.stringify({ summary: '复核：一处已改，一处仍在。', items: [
+    { findingId: '甲', targetId: '目标甲', resolved: true, evidenceQuote: '钟声在正点响起', reason: '钟声已改到正点。' },
+    { findingId: '乙', targetId: '目标乙', resolved: false, evidenceQuote: '她顺着螺旋楼梯往上走', reason: '铺垫仍偏长。' },
+  ] })
+  const recheck = (version: 1 | 2) => ({ context: { operation: 'review-chapter', source: { chapterNumber: 3, content: MERGED }, recheck: { version, cycleId: '周期',
+    comparisonVersion: 2, mergedHash: 'm', findingSetHash: 'f', findings: [
+      { findingId: '甲', targetId: '目标甲', category: '连续性', kind: 'objective', problem: '钟声提前一刻' },
+      { findingId: '乙', targetId: '目标乙', category: '节奏', kind: 'literary', problem: '铺垫偏长' },
+    ] } } })
+
+  it('复核报告显示结论、条数与先列未解决的要点；模型判为已解决的仍写待核实，复制拿到原文', () => {
+    const [item] = review(recheck(2), output(RECHECK)).artifacts
+    expect(item.text).toBe(RECHECK)
+    const lines = item.display.split('\n')
+    expect(lines.slice(0, 2)).toEqual(['复核未能确认全部意见已解决（2 条意见）', '未解决 · 节奏：铺垫仍偏长。'])
+    expect(lines[2]).toMatch(/^待核实 · 连续性：.*钟声已改到正点。$/)
+    expect(item.display).not.toContain('已解决 ·')
+  })
+
+  it('英文界面的复核摘要用英文写条数与状态；旧版复核里证据可定位的已解决照写', () => {
+    const [item] = review(recheck(1), { ...output(RECHECK), locale: 'en-US' }).artifacts
+    expect(item.display.split('\n')).toEqual([
+      'The recheck could not confirm that every note is resolved (2 items)',
+      'Unresolved · 节奏: 铺垫仍偏长。',
+      'Resolved · 连续性: 钟声已改到正点。',
+    ])
+  })
+
+  it('证据在合并后正文里找不到或模型漏了意见时，按保存时的口径写待核实，条数仍是全部意见', () => {
+    const partial = JSON.stringify({ summary: '复核：已改。', items: [
+      { findingId: '甲', targetId: '目标甲', resolved: true, evidenceQuote: '正文里没有这句', reason: '钟声已改到正点。' },
+    ] })
+    const [item] = review(recheck(1), { ...output(partial), locale: 'en-US' }).artifacts
+    expect(item.display.split('\n')[0]).toBe('The recheck could not confirm that every note is resolved (2 items)')
+    expect(item.display).not.toContain('Resolved')
+    expect(item.display).toContain('Needs verification')
+  })
+
+  it('结论按校验后的全部意见写：模型自称全部解决但仍有待核实时不照抄，全部可定位且已解决时才写全部解决', () => {
+    const claim = (items: unknown[]) => JSON.stringify({ summary: '全部已解决。', items })
+    const fixed = { findingId: '甲', targetId: '目标甲', resolved: true, evidenceQuote: '钟声在正点响起', reason: '钟声已改到正点。' }
+    const [mixed] = review(recheck(1), output(claim([fixed, { ...fixed, findingId: '乙', targetId: '目标乙', evidenceQuote: '正文里没有这句' }]))).artifacts
+    expect(mixed.display).not.toContain('全部已解决。')
+    expect(mixed.display.split('\n')[0]).toBe('复核未能确认全部意见已解决（2 条意见）')
+    const [all] = review(recheck(1), output(claim([fixed, { ...fixed, findingId: '乙', targetId: '目标乙', evidenceQuote: '她顺着螺旋楼梯往上走' }]))).artifacts
+    expect(all.display.split('\n')[0]).toBe('复核确认全部意见已解决（2 条意见）')
+  })
+
+  it('解析不了的复核输出退回说明，不显示原始 JSON', () => {
+    const [item] = review(recheck(2), output('{"summary": 没写完')).artifacts
+    expect(item.display).toContain('结构化')
+    expect(item.display).not.toContain('summary')
   })
 
   it('修稿候选是正文，按原文显示', () => {

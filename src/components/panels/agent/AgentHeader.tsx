@@ -8,6 +8,7 @@ import { Button } from '../../ui/Button'
 import { MenuItem } from '../../ui/MenuItem'
 import { useOutsideClick } from '../../../hooks/useOutsideClick'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { pluralEn } from '../../../shared/plural-en'
 
 /**
  * Agent 面板顶部工具栏
@@ -292,7 +293,7 @@ function SkillSubView({
         <ChevronRight size={12} style={{ transform: 'rotate(180deg)' }} />
         <span className="font-medium">{text('技能列表', 'Skills')}</span>
         <span className="ml-auto text-[0.68rem] opacity-50">
-          {text(`${skills.length} 个技能`, `${skills.length} skills`)}
+          {text(`${skills.length} 个技能`, `${skills.length} ${pluralEn(skills.length, 'skill')}`)}
         </span>
       </button>
 

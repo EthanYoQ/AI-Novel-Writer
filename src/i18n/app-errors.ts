@@ -339,7 +339,12 @@ function displayedRaw(error: unknown): string {
   return error == null ? '' : String(error)
 }
 
+/** 文字里有没有汉字，含扩展区与兼容区；判断原因能否拼进英文句子都用它。 */
+export function containsHan(value: string): boolean {
+  return /\p{Script=Han}/u.test(value)
+}
+
 /** 英文句子后附上原因；原因里仍有汉字（主进程未登记的中文原文）时只给英文概述，不把中文拼进英文句子。 */
 export function englishWithReason(summary: string, reason: string, separator = ' '): string {
-  return !reason.trim() || /\p{Script=Han}/u.test(reason) ? summary : `${summary}${separator}${reason}`
+  return !reason.trim() || containsHan(reason) ? summary : `${summary}${separator}${reason}`
 }
