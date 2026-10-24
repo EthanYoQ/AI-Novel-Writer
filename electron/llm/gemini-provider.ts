@@ -96,6 +96,7 @@ export class GeminiProvider implements ILLMProvider {
           'x-goog-api-key': model.apiKey,
         },
         body: JSON.stringify(body),
+        signal: opts.signal,
       })
 
       if (!res.ok) {

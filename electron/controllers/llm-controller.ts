@@ -30,6 +30,7 @@ interface ActiveStream {
 
 const activeStreams = new Map<string, ActiveStream>()
 const CONNECTION_TEST_MAX_TOKENS = 1024
+const CONNECTION_TEST_TIMEOUT_MS = 30_000
 const CLOSED_EXECUTION_LEASE_TOMBSTONE_TTL_MS = 5 * 60_000
 
 function loadModelConfigs(): ModelProfile[] {
@@ -419,33 +420,43 @@ export function registerLLMController() {
     model: ModelProfile,
     creativeStrategy: LLMRequest['creativeStrategy'] = 'auto',
   ) => {
+    // 网络卡住时 undici 默认要等 300 秒才报 fetch failed；连接测试自己的截止时间会真正取消请求。
+    const deadline = new AbortController()
+    const timer = setTimeout(() => deadline.abort(), CONNECTION_TEST_TIMEOUT_MS)
+    const timedOut = () => ({ success: false, error: connectionTestFailure(new Error('LLM_CONNECTION_TEST_TIMEOUT')) })
     try {
       applyProxyConfig()
-      
+
       const messages = [{ role: 'user', content: 'Say "hello" and nothing else.' }]
       const provider = LLMFactory.getProvider(model)
-      
+
       let result = { success: true, error: undefined as undefined | string }
       if (model.purposes?.includes('embedding')) {
         const { generateEmbeddings } = await import('../embedding')
-        await generateEmbeddings(['hello'], model.protocol, model)
+        await generateEmbeddings(['hello'], model.protocol, model, undefined, undefined, deadline.signal)
       } else {
         const res = await provider.generate(
           model,
           messages,
-          resolveGenerationParameters(model, {
-            // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
-            maxTokens: CONNECTION_TEST_MAX_TOKENS,
-            reasoningStage: 'general',
-            creativeStrategy,
-          }),
+          {
+            ...resolveGenerationParameters(model, {
+              // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
+              maxTokens: CONNECTION_TEST_MAX_TOKENS,
+              reasoningStage: 'general',
+              creativeStrategy,
+            }),
+            signal: deadline.signal,
+          },
         )
+        if (deadline.signal.aborted) return timedOut()
         result = res.success ? { success: true, error: undefined } : { success: false, error: providerConnectionFailure(res) }
       }
-      
+
       return { success: result.success, error: result.error }
     } catch (error) {
-      return { success: false, error: connectionTestFailure(error) }
+      return deadline.signal.aborted ? timedOut() : { success: false, error: connectionTestFailure(error) }
+    } finally {
+      clearTimeout(timer)
     }
   })
 

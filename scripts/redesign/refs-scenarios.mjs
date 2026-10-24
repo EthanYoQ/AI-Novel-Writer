@@ -420,6 +420,21 @@ export const REFS_SCENARIOS = {
     assert.ok(layout.listHeight <= 240.5, JSON.stringify(layout))
     return { ...observed, layout }
   } },
+  // 连接测试的截止时间（#454）：卡住假模型后点「测试连接」，30 秒后停止等待并给出网络类说明，不再等满 300 秒。
+  'models-test-connection-timeout': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
+    fake.gate.hold()
+    await stage.openSettings(page)
+    await page.getByRole('button', { name: `编辑「${FAKE_MODEL.name}」`, exact: true }).click()
+    const started = Date.now()
+    await page.getByRole('button', { name: '测试连接', exact: true }).click()
+    const result = page.getByText(/^连接失败：/u)
+    await result.waitFor({ state: 'visible', timeout: 60_000 })
+    const observed = { result: await result.innerText(), elapsedMs: Date.now() - started, waiting: fake.gate.waiting }
+    await shoot('models-test-connection-timeout')
+    assert.equal(observed.result, '连接失败：连接测试 30 秒内没有响应，已停止等待。请检查网络或代理设置后重试。')
+    assert.ok(observed.elapsedMs >= 29_000 && observed.elapsedMs < 45_000, JSON.stringify(observed))
+    return observed
+  }, after: async ({ fake }) => { fake.gate.release() } },
   'refs-delete': { model: false, shell: 'stage', setup: seedRefs, run: async ({ page }) => {
     await refs.open(page, 'plot')
     await refs.plotView(page, '伏笔线索').click()

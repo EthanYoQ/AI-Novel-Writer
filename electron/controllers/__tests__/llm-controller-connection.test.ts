@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 
@@ -787,6 +787,69 @@ describe('generation model connection test failures', () => {
     expect(result.error).toContain(expected)
     expect(result.error).not.toContain('GENERATION_')
     expect(mocks.generate).not.toHaveBeenCalled()
+  })
+})
+
+// 网络卡住时连接测试不能等满 undici 默认的 300 秒；超时要真正取消请求，并给出网络类的可读说明。
+describe('connection test timeout', () => {
+  const retrievalModel: ModelProfile = { ...deepSeekModel, id: 'bge', modelName: 'bge-m3', baseUrl: 'https://embedding.example/v1', purposes: ['embedding'] }
+  const hangUntilAborted = (signal: AbortSignal | undefined) => new Promise<never>((_resolve, reject) => {
+    signal?.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError')))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    ['en-US', 'timed out after 30 seconds', /\p{Script=Han}|LLM_|AbortError/u],
+    ['zh-CN', '连接测试 30 秒内没有响应', /LLM_|AbortError/u],
+  ])('cancels a hanging generation probe after 30 seconds and explains it in %s', async (locale, expected, forbidden) => {
+    mocks.locale = locale
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let signal: AbortSignal | undefined
+    mocks.generate.mockImplementationOnce(async (_model: ModelProfile, _messages: unknown, options: { signal?: AbortSignal }) => {
+      signal = options.signal
+      try {
+        return await hangUntilAborted(options.signal)
+      } catch (error) {
+        return { success: false, content: '', finishReason: 'error', error: String(error) }
+      }
+    })
+    const pending = connectionHandler()({}, deepSeekModel) as Promise<{ success: boolean; error: string }>
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(signal?.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+
+    const result = await pending
+    expect(signal?.aborted).toBe(true)
+    expect(result.success).toBe(false)
+    expect(result.error).toContain(expected)
+    expect(result.error).not.toMatch(forbidden)
+  })
+
+  it('cancels a hanging retrieval probe request after 30 seconds', async () => {
+    mocks.locale = 'en-US'
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined
+      return hangUntilAborted(requestSignal)
+    }))
+    const pending = connectionHandler()({}, retrievalModel) as Promise<{ success: boolean; error: string }>
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    const result = await pending
+    expect(requestSignal?.aborted).toBe(true)
+    expect(result).toMatchObject({ success: false })
+    expect(result.error).toContain('timed out after 30 seconds')
+  })
+
+  it('keeps regular generation free of the connection-test deadline', async () => {
+    mocks.generate.mockResolvedValueOnce({ success: true, content: 'ok', finishReason: 'stop' })
+    await mocks.handlers.get('llm:generate')!({}, { modelId: deepSeekModel.id, messages: [{ role: 'user', content: 'hi' }] })
+    expect(mocks.generate.mock.calls[0]?.[2]).not.toHaveProperty('signal')
   })
 })
 

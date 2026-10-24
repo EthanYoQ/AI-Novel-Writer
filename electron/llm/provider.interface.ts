@@ -25,6 +25,8 @@ export interface LLMGenerateOptions {
    * process default.
    */
   conversationId?: string
+  /** 只有调用方需要自己的截止时间时才传，例如连接测试；正常生成不带。 */
+  signal?: AbortSignal
 }
 
 export interface LLMStreamOptions extends LLMGenerateOptions {

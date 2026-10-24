@@ -94,6 +94,14 @@ describe('GeminiProvider', () => {
     }
   })
 
+  it('lets the caller cancel a non-streaming request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ candidates: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    await new GeminiProvider().generate(model, [{ role: 'user', content: 'hi' }], { temperature: 0.7, maxTokens: 16, signal: controller.signal })
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal)
+  })
+
   it('sends the resolved generic profile temperature in both payload forms', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
