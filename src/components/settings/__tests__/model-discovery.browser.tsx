@@ -658,6 +658,22 @@ describe('model discovery settings flow', () => {
     expect(discoverModels).not.toHaveBeenCalled()
   })
 
+  it('asks for the endpoint and key before the model name, so a new configuration fetches on the first open', async () => {
+    const discoverModels = vi.fn(async () => ({ success: true as const, models: [{ id: 'gpt-5.5-mini', name: 'gpt-5.5-mini', value: 'gpt-5.5-mini' }] }))
+    await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
+    await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
+    const form = modelNameInput().closest('.rounded-xl')
+    const labels = Array.from(form?.querySelectorAll('label') ?? []).map(label => label.textContent?.trim())
+    const order = ['服务商', '调用协议', 'base_url', 'API Key', 'model（模型名称）'].map(label => labels.indexOf(label))
+    expect(order.every(index => index >= 0)).toBe(true)
+    expect(order).toEqual([...order].sort((left, right) => left - right))
+
+    await typeInto(form!.querySelector<HTMLInputElement>('input[type="password"]')!, 'sk-new-key')
+    await openSuggestions()
+    await vi.waitFor(() => expect(suggestionValues()).toContain('gpt-5.5-mini'))
+    expect(discoverModels).toHaveBeenCalledTimes(1)
+  })
+
   it('fetches once when the list is first opened and replaces the presets with the endpoint list', async () => {
     const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
     const discoverModels = vi.fn(async () => ({ success: true as const, models: [

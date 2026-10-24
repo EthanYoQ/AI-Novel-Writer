@@ -311,18 +311,6 @@ export function ModelForm({
         </div>
       </div>
 
-      <ModelNameField
-        value={model.modelName}
-        placeholder={isEmbedding ? 'text-embedding-3-small' : 'gpt-4o'}
-        candidates={modelCandidates}
-        refreshing={discovery.status === 'loading'}
-        status={modelNameStatus()}
-        onInput={(value) => up('modelName', value)}
-        onSelect={handleModelSelect}
-        onOpen={handleModelListOpen}
-        onRefresh={() => void handleDiscoverModels()}
-      />
-
       {/* Base URL */}
       <div>
         <Label>{text('base_url', 'base_url')}</Label>
@@ -358,6 +346,18 @@ export function ModelForm({
           </button>
         </div>
       </div>
+
+      <ModelNameField
+        value={model.modelName}
+        placeholder={isEmbedding ? 'text-embedding-3-small' : 'gpt-4o'}
+        candidates={modelCandidates}
+        refreshing={discovery.status === 'loading'}
+        status={modelNameStatus()}
+        onInput={(value) => up('modelName', value)}
+        onSelect={handleModelSelect}
+        onOpen={handleModelListOpen}
+        onRefresh={() => void handleDiscoverModels()}
+      />
 
       {isEmbedding && model.provider === 'siliconflow' && model.modelName === 'BAAI/bge-m3' && (
         <div className="rounded-lg p-3 space-y-2" style={{ border: '1px solid var(--color-border)', backgroundColor: 'var(--color-hover)' }}>
