@@ -18,6 +18,7 @@ import { currentDerivedCharacterFields } from '../current-character-projection'
 import { adoptTransferredCharacterContinuityOnOpen } from '../transferred-character-continuity'
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 import { ChapterDeletionService } from '../chapter-deletion-service'
+import { ProjectClearRepository } from '../../repositories/project-clear-repository'
 
 const roots: string[] = []
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -293,8 +294,7 @@ describe('#484 写入派生字段的章节已删除后再定稿后面的章节',
     expect(characterRow().cs_location).toBe('南港旅店')
   })
 
-  // 现状：两次恢复后报 FINALIZED_CHARACTER_SOURCE_CONFLICT，与原项目不一致。修复后去掉 .fails。
-  it.fails('删掉第 1 章后恢复两次：定稿第 2 章应与原项目一样按第 2 章更新地点', async () => {
+  it('删掉第 1 章后恢复两次：定稿第 2 章应与原项目一样按第 2 章更新地点', async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
     roots.push(base)
     const a = createSourceProject(base)
@@ -318,5 +318,159 @@ describe('#484 写入派生字段的章节已删除后再定稿后面的章节',
     finalizeChapter(c, 2, 2, CHAPTER_2)
     expect(deriveCharacterState(c, 2, { location: '南港旅店' }, '住进南港旅店')).toMatchObject({ applied: 1 })
     expect(characterRow().cs_location).toBe('南港旅店')
+  })
+})
+
+type Attempt = number | string
+
+/** 定稿一章并提交地点；成功返回改写的字段数，被拒返回错误码。 */
+function finalizeLocation(project: OpenProject, chapterNumber: number, body: string, location: string): Attempt {
+  finalizeChapter(project, chapterNumber, chapterNumber, body)
+  try {
+    return deriveCharacterState(project, chapterNumber, { location }, body).applied
+  } catch (error) {
+    return (error as Error).message
+  }
+}
+
+function authorEditsLocation(value: string): void {
+  getProjectDb()!.prepare('UPDATE characters SET cs_location=?, cs_provenance=? WHERE character_id=?')
+    .run(value, JSON.stringify({ location: { kind: 'author', chapterNumber: 0, revision: 5 } }), CHARACTER_ID)
+}
+
+interface ParityScenario {
+  name: string
+  removeChapter1: (project: OpenProject) => Promise<void>
+  continueWriting: (project: OpenProject) => Attempt[]
+  knownGap?: string
+}
+
+const PARITY_SCENARIOS: ParityScenario[] = [
+  {
+    name: '删掉第 1 章后定稿第 2 章',
+    removeChapter1: project => deleteFinalizedChapter(project, 1, 1),
+    continueWriting: project => [finalizeLocation(project, 2, CHAPTER_2, '南港旅店')],
+  },
+  {
+    name: '删掉第 1 章后先定稿第 3 章，再回头定稿第 2 章',
+    removeChapter1: project => deleteFinalizedChapter(project, 1, 1),
+    continueWriting: project => [finalizeLocation(project, 3, CHAPTER_3, '南港码头'), finalizeLocation(project, 2, CHAPTER_2, '南港旅店')],
+  },
+  {
+    name: '删掉第 1 章后作者手改地点，再定稿第 2 章',
+    removeChapter1: project => deleteFinalizedChapter(project, 1, 1),
+    continueWriting: project => {
+      authorEditsLocation('作者写的地点')
+      return [finalizeLocation(project, 2, CHAPTER_2, '南港旅店')]
+    },
+  },
+  {
+    name: '清空生成正文后定稿第 2 章',
+    removeChapter1: async () => { ProjectClearRepository.clearGeneratedData({ generatedText: true }) },
+    continueWriting: project => [finalizeLocation(project, 2, CHAPTER_2, '南港旅店')],
+    knownGap: '清空生成正文不留删章记录，来源已删的派生字段在本库没有可用的来源证明，恢复两次以上仍报来源冲突，作者手改一次该字段可绕过',
+  },
+]
+
+const RESTORE_PATHS: Array<[string, (base: string, project: OpenProject) => Promise<OpenProject>]> = [
+  ['新版本恢复一次', (base, a) => exportAndRestore(base, a, 'fixed-1')],
+  ['新版本恢复两次', async (base, a) => exportAndRestore(base, await exportAndRestore(base, a, 'fixed-1'), 'fixed-2')],
+  ['新版本恢复三次', async (base, a) => exportAndRestore(base,
+    await exportAndRestore(base, await exportAndRestore(base, a, 'fixed-1'), 'fixed-2'), 'fixed-3')],
+  ['1.3.2 恢复两次后用新版本打开', async (base, a) => {
+    const c = await exportAndRestore(base, await exportAndRestore(base, a, 'old-1', '1.3.2'), 'old-2', '1.3.2')
+    closeProjectDatabase()
+    return openProject(c.root, c.projectId)
+  }],
+  ['新版本恢复一次后再用 1.3.2 恢复一次', async (base, a) => exportAndRestore(base, await exportAndRestore(base, a, 'fixed-1'), 'old-2', '1.3.2')],
+]
+
+async function outcomeOn(scenario: ParityScenario, restore?: (base: string, project: OpenProject) => Promise<OpenProject>) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-parity-'))
+  roots.push(base)
+  const a = createSourceProject(base)
+  finalizeChapter(a, 1, 1, CHAPTER_1)
+  deriveCharacterState(a, 1, { location: '北塔顶层' }, '林岚在北塔顶层找到铜钥匙')
+  await scenario.removeChapter1(a)
+  const project = restore ? await restore(base, a) : a
+  const currentBeforeWriting = derivedFields(project)
+  const attempts = scenario.continueWriting(project)
+  const outcome = { currentBeforeWriting, attempts, location: characterRow().cs_location, currentAfterWriting: derivedFields(project) }
+  closeProjectDatabase()
+  return outcome
+}
+
+describe.each(PARITY_SCENARIOS)('#484 对照：$name，恢复过的项目与原项目结果一致', scenario => {
+  (scenario.knownGap ? it.todo : it).each(RESTORE_PATHS)('%s', { timeout: 60_000 }, async (_label, restore) => {
+    const original = await outcomeOn(scenario)
+    expect(await outcomeOn(scenario, restore)).toEqual(original)
+  })
+})
+
+describe('#484 删章记录作为来源证明的边界', { timeout: 60_000 }, () => {
+  it('1.3.2 方式恢复两次后用新版本打开：前缀一步改记为当前项目，再打开返回 0，第 2 章可定稿', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
+    roots.push(base)
+    const a = createSourceProject(base)
+    finalizeChapter(a, 1, 1, CHAPTER_1)
+    deriveCharacterState(a, 1, { location: '北塔顶层' }, '林岚在北塔顶层找到铜钥匙')
+    await deleteFinalizedChapter(a, 1, 1)
+    const c = await exportAndRestore(base, await exportAndRestore(base, a, 'legacy-1', '1.3.2'), 'legacy-2', '1.3.2')
+    expect(String(characterRow().cs_provenance)).toContain(a.projectId)
+    closeProjectDatabase()
+
+    const opened = openProject(c.root, c.projectId)
+    const adopted = String(characterRow().cs_provenance)
+    expect(adopted).toContain(`${c.projectId}:`)
+    expect(adopted).not.toContain(a.projectId)
+    expect(adoptTransferredCharacterContinuityOnOpen({ database: getProjectDb()!, projectRoot: c.root, projectId: c.projectId })).toBe(0)
+    expect(characterRow().cs_provenance).toBe(adopted)
+    finalizeChapter(opened, 2, 2, CHAPTER_2)
+    expect(deriveCharacterState(opened, 2, { location: '南港旅店' }, '住进南港旅店')).toMatchObject({ applied: 1 })
+  })
+
+  it('删章后恢复两次，章节顺序仍然生效：先定稿第 3 章，再回头定稿第 2 章报来源冲突', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
+    roots.push(base)
+    const a = createSourceProject(base)
+    finalizeChapter(a, 1, 1, CHAPTER_1)
+    deriveCharacterState(a, 1, { location: '北塔顶层' }, '林岚在北塔顶层找到铜钥匙')
+    await deleteFinalizedChapter(a, 1, 1)
+    const c = await exportAndRestore(base, await exportAndRestore(base, a, 'order-1'), 'order-2')
+    finalizeChapter(c, 3, 3, CHAPTER_3)
+    expect(deriveCharacterState(c, 3, { location: '南港码头' }, '收到师父的来信')).toMatchObject({ applied: 1 })
+    finalizeChapter(c, 2, 2, CHAPTER_2)
+    expect(() => deriveCharacterState(c, 2, { location: '南港旅店' }, '住进南港旅店')).toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+    expect(characterRow().cs_location).toBe('南港码头')
+  })
+
+  it('删章后恢复两次，作者手改过的地点不被定稿覆盖', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
+    roots.push(base)
+    const a = createSourceProject(base)
+    finalizeChapter(a, 1, 1, CHAPTER_1)
+    deriveCharacterState(a, 1, { location: '北塔顶层' }, '林岚在北塔顶层找到铜钥匙')
+    await deleteFinalizedChapter(a, 1, 1)
+    const c = await exportAndRestore(base, await exportAndRestore(base, a, 'author-1'), 'author-2')
+    authorEditsLocation('作者写的地点')
+    finalizeChapter(c, 2, 2, CHAPTER_2)
+    expect(deriveCharacterState(c, 2, { location: '南港旅店' }, '住进南港旅店')).toMatchObject({ applied: 0 })
+    expect(characterRow().cs_location).toBe('作者写的地点')
+  })
+
+  it('来源定稿 ID 既没有收据也没有删章记录：恢复两次后前缀不改记，定稿仍报来源冲突', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
+    roots.push(base)
+    const a = createSourceProject(base)
+    finalizeChapter(a, 1, 1, CHAPTER_1)
+    deriveCharacterState(a, 1, { location: '北塔顶层' }, '林岚在北塔顶层找到铜钥匙')
+    await deleteFinalizedChapter(a, 1, 1)
+    const forged = JSON.parse(String(characterRow().cs_provenance)) as Record<string, { source: Record<string, unknown> }>
+    forged.location.source.finalizationId = 'finalization-forged'
+    getProjectDb()!.prepare('UPDATE characters SET cs_provenance=? WHERE character_id=?').run(JSON.stringify(forged), CHARACTER_ID)
+    const c = await exportAndRestore(base, await exportAndRestore(base, a, 'forged-1'), 'forged-2')
+    expect(String(characterRow().cs_provenance)).toContain(a.projectId)
+    finalizeChapter(c, 2, 2, CHAPTER_2)
+    expect(() => deriveCharacterState(c, 2, { location: '南港旅店' }, '住进南港旅店')).toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
   })
 })
