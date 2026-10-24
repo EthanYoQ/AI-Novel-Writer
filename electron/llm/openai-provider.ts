@@ -413,7 +413,7 @@ export class OpenAIProvider implements ILLMProvider {
       if (opts.signal.aborted) {
         fail('LLM_CANCELLED')
       } else {
-        fail(protocolError ?? 'LLM_STREAM_FAILED')
+        fail(protocolError ?? (transport.networkFailure ? 'LLM_STREAM_NETWORK_FAILED' : 'LLM_STREAM_FAILED'))
       }
     } finally {
       // Do not wait for a remote stream to settle before releasing the local task.

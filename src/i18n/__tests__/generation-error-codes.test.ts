@@ -791,6 +791,7 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'LLM_STREAM_FAILED',
     'LLM_STREAM_INCOMPLETE',
     'LLM_STREAM_INVALID',
+    'LLM_STREAM_NETWORK_FAILED',
     'LLM_STREAM_PROVIDER_ERROR',
     'LLM_STREAM_UNREADABLE',
     // MCP 连接前的配置与传输检查（#474 B6）：connect 与 mcp:connect 通道把它们统一成 MCP_CONNECT_FAILED。

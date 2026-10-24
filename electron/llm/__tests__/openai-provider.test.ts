@@ -87,7 +87,8 @@ it.each(['UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'private-provider-secret'])('
     lastOutputMs: 3000, httpStatus: 200, phase: 'stream', endReason: 'failed', errorName: 'TypeError', visibleEvents: 1, reasoningEvents: 1 })
   expect(snapshots.at(-1)?.causeCode).toBe(causeCode.startsWith('UND_ERR_') ? causeCode : undefined)
   expect(JSON.stringify(snapshots)).not.toContain('private')
-  expect(onError).toHaveBeenCalledExactlyOnceWith('LLM_STREAM_FAILED', '正文', undefined)
+  // 读流被传输层拒绝交出网络失败码，主进程据此按网络失败重试与提示（#484）。
+  expect(onError).toHaveBeenCalledExactlyOnceWith('LLM_STREAM_NETWORK_FAILED', '正文', undefined)
   expect(onDone).not.toHaveBeenCalled()
   expect(reader.cancel).toHaveBeenCalledOnce()
   expect(reader.releaseLock).toHaveBeenCalledOnce()

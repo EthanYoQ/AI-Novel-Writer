@@ -7,6 +7,8 @@ import { safeTransportError, type GenerationTransportDiagnostics } from '../../s
 export class StreamTransportDiagnostics {
   private readonly started = performance.now()
   private notifiedAt = -Infinity
+  /** 请求或读流被传输层拒绝；provider 据此交出 LLM_STREAM_NETWORK_FAILED，而不是笼统的失败。 */
+  networkFailure = false
   private readonly value: GenerationTransportDiagnostics = { startedAt: Date.now(), elapsedMs: 0,
     firstResponseMs: null, lastResponseMs: null, lastOutputMs: null, phase: 'request', visibleEvents: 0, reasoningEvents: 0 }
 
@@ -26,7 +28,14 @@ export class StreamTransportDiagnostics {
   }
 
   async response(request: Promise<Response>): Promise<Response> {
-    const res = await request
+    let res: Response
+    try {
+      res = await request
+    } catch (error) {
+      // undici 把连接、DNS、TLS 失败统一报成「fetch failed」；请求头或地址不合法另有报错，那是请求本身的问题。
+      this.networkFailure = error instanceof TypeError && error.message === 'fetch failed'
+      throw error
+    }
     this.value.phase = 'response'
     if (Number.isInteger(res.status)) this.value.httpStatus = res.status
     this.notify(true)
@@ -38,7 +47,13 @@ export class StreamTransportDiagnostics {
   }
 
   async read(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<ReadableStreamReadResult<Uint8Array>> {
-    const result = await reader.read()
+    let result: ReadableStreamReadResult<Uint8Array>
+    try {
+      result = await reader.read()
+    } catch (error) {
+      this.networkFailure = (error as { name?: unknown } | null)?.name !== 'AbortError'
+      throw error
+    }
     if (!result.done && result.value.byteLength) {
       const elapsed = this.elapsed()
       const firstResponse = this.value.firstResponseMs === null

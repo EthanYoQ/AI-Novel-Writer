@@ -1172,6 +1172,16 @@ describe('S07 durable task budget diagnostics', () => {
     expect(saved.outcome.receipt).toMatchObject({ failureCode: 'GENERATION_PROVIDER_FAILED' })
     expect(JSON.stringify(saved.outcome)).not.toContain('synthetic-private-key')
   })
+  // 断网时真实 OpenAI provider 也要让回执记成网络失败；ENETUNREACH 不在诊断的安全码表里，不能靠诊断兜底（#484）。
+  it('records an OpenAI request rejected by the network as a network failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed',
+      { cause: Object.assign(new Error('connect ENETUNREACH 203.0.113.1:443'), { code: 'ENETUNREACH' }) })))
+    const f = fixture()
+    const run = f.owner.begin(f.begin)
+    const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'openai-offline', task })
+    expect(saved.outcome.receipt).toMatchObject({ failureCode: 'NETWORK_ERROR' })
+    expect(saved.run.budgetDiagnostics![0]).toMatchObject({ failureCode: 'NETWORK_ERROR' })
+  })
   it('keeps a network failure category after reopening without storing provider text', async () => {
     const f = fixture(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: '已收到的正文' })

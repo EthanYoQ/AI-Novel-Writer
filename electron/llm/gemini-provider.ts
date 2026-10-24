@@ -277,7 +277,7 @@ export class GeminiProvider implements ILLMProvider {
       if ((error as Error).name === 'AbortError') {
         opts.onError('LLM_CANCELLED', opts.visibleOnly ? visible.text : undefined, visibleUsage)
       } else {
-        opts.onError(String(error), opts.visibleOnly ? visible.text : undefined, visibleUsage)
+        opts.onError(transport.networkFailure ? 'LLM_STREAM_NETWORK_FAILED' : String(error), opts.visibleOnly ? visible.text : undefined, visibleUsage)
       }
     }
   }
