@@ -169,7 +169,7 @@ export function ModelForm({
     })
   }
 
-  /** 切换服务商：从预设填 baseUrl 与协议，模型名清空，等作者从新端点的列表里选。 */
+  /** 切换服务商：从预设填 baseUrl 与协议；模型名与 Key 清空，旧服务商的 Key 不会被自动拉取发给新端点。 */
   const handleProviderChange = (provider: ModelProfile['provider']) => {
     const p = presetMap.get(provider)
     invalidateDiscovery()
@@ -177,6 +177,7 @@ export function ModelForm({
       provider,
       protocol: (p?.protocol ?? 'openai') as 'openai' | 'gemini',
       baseUrl: p?.baseUrl ?? '',
+      apiKey: '',
       modelName: '',
     }
     onChange(isEmbedding ? { ...model, ...selection, capabilities: undefined } : applyModelProfileSelection(model, selection))
@@ -246,10 +247,11 @@ export function ModelForm({
       : { tone: 'muted', text: text('填写 base_url 和 API Key 后获取模型列表。', 'Enter the base_url and API key to fetch the model list.') }
   }
 
-  const keyRequired = !isLocalModelEndpoint(model)
+  // 保存与测试只豁免 Ollama：知识库主进程对检索模型仍要求非空 Key。
+  const keyMissing = model.provider !== 'ollama' && !model.apiKey.trim()
   const missingForSave = [
     !model.baseUrl.trim() && 'base_url',
-    keyRequired && !model.apiKey.trim() && 'API Key',
+    keyMissing && 'API Key',
     !model.modelName.trim() && text('模型名称', 'model name'),
   ].filter((field): field is string => Boolean(field))
 
@@ -523,7 +525,7 @@ export function ModelForm({
         <Button
           variant="outline"
           onClick={handleTest}
-          disabled={testing || !model.baseUrl.trim() || (keyRequired && !model.apiKey.trim())}
+          disabled={testing || missingForSave.length > 0}
         >
           <Zap size={13} />
           {testing ? text('测试中...', 'Testing...') : text('测试连接', 'Test connection')}

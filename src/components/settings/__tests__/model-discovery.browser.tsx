@@ -743,14 +743,26 @@ describe('model discovery settings flow', () => {
     expect(suggestionValues()).toEqual(['second-key-model'])
   })
 
-  it('fetches without a key for a local address', async () => {
+  it('fetches without a key for a local address, while saving a non-Ollama provider still asks for one', async () => {
     const discoverModels = listed('local-model')
     await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
     await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
     await typeInto(baseUrlInput('https://api.openai.com'), 'http://127.0.0.1:1234/v1')
     await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '' })))
     await typeInto(modelNameInput(), 'local-model')
-    await expect.element(page.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled()
+    const save = page.getByRole('button', { name: '保存配置', exact: true })
+    await expect.element(save).toBeDisabled()
+    await expect.element(save).toHaveAccessibleDescription('保存前还需填写：API Key。')
+  })
+
+  it('keeps the connection test off until a model name is filled', async () => {
+    await renderSettings(savedProfile(), vi.fn(), 'zh-CN', [], false)
+    await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
+    await typeInto(apiKeyInput(), 'sk-new-key')
+    const test = page.getByRole('button', { name: '测试连接', exact: true })
+    await expect.element(test).toBeDisabled()
+    await typeInto(modelNameInput(), 'gpt-5.5-mini')
+    await expect.element(test).toBeEnabled()
   })
 
   it('saves a typed model name on a new configuration whose endpoint has no model list', async () => {
@@ -998,7 +1010,7 @@ describe('model discovery settings flow', () => {
     expect(modelNameInput().value).toBe('endpoint-only')
   })
 
-  it('clears the model name and the fetched list after switching provider, then fetches for the new provider without opening', async () => {
+  it('clears the model name, the key and the fetched list after switching provider, so the old key never reaches the new endpoint', async () => {
     const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
     const discoverModels = vi.fn<(request: { provider: string }) => Promise<ModelDiscoveryResult>>(async () => ({
       success: true, models: endpointModels('deepseek-only'),
@@ -1015,8 +1027,14 @@ describe('model discovery settings flow', () => {
       models: [{ id: 'models/gemini-3.8-flash', name: 'Gemini 3.8 Flash', value: 'gemini-3.8-flash' }] }))
     await typeInto(providerSelect, 'gemini')
     expect(modelNameInput().value).toBe('')
+    expect(apiKeyInput().value).toBe('')
+    expect(statusText()).toBe('填写 base_url 和 API Key 后获取模型列表。')
+    await new Promise(resolve => setTimeout(resolve, AUTO_DISCOVERY_WAIT_MS))
+    expect(discoverModels).toHaveBeenCalledTimes(1)
+    await typeInto(apiKeyInput(), 'gemini-key')
     await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(2))
-    expect(discoverModels.mock.calls[1][0]).toMatchObject({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com' })
+    expect(discoverModels.mock.calls[1][0]).toMatchObject({ provider: 'gemini', protocol: 'gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com', apiKey: 'gemini-key' })
     await vi.waitFor(() => expect(statusText()).toBe('已从端点获取 1 个模型。'))
     await openSuggestions()
     expect(suggestionValues()).toEqual(['gemini-3.8-flash'])
