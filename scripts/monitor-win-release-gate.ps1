@@ -532,6 +532,8 @@ namespace AiNovelReleaseGate {
     }
 
     private void RetainNewProcess(int processId, uint message) {
+      bool ignored;
+      bool assignedRoot = assignedRoots.TryRemove(processId, out ignored);
       long attemptedAt = ProcessReader.PreciseFileTimeUtc();
       IntPtr process = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, unchecked((uint)processId));
       if (process == IntPtr.Zero) {
@@ -546,8 +548,6 @@ namespace AiNovelReleaseGate {
         events.Enqueue(JobProcessEvent.Unretained(processId, message, "KernelIdentity", null, attemptedAt));
         return;
       }
-      bool ignored;
-      bool assignedRoot = assignedRoots.TryRemove(processId, out ignored);
       string parentProcessStartTimeTicks = null;
       string parentImagePath = null;
       Member parent;
@@ -563,6 +563,8 @@ namespace AiNovelReleaseGate {
       else if (assignedRoot) {
         ReadOutsideJobParent(snapshot.ParentProcessId.Value, snapshot.StartTicks, out parentProcessStartTimeTicks, out parentImagePath);
       }
+      Member stale;
+      if (members.TryGetValue(processId, out stale)) CloseHandle(stale.Handle);
       members[processId] = new Member(process, key, snapshot.StartTicks, snapshot.ImagePath);
       // An assigned root was created before the job existed, so its creation
       // time says nothing about how fast the pump retains new members.
@@ -612,14 +614,21 @@ namespace AiNovelReleaseGate {
           }
           if (stopping && message == 0) return;
           int processId = unchecked((int)overlapped.ToInt64());
-          if (message == JobObjectMsgNewProcess) {
-            RetainNewProcess(processId, message);
+          try {
+            if (message == JobObjectMsgNewProcess) {
+              RetainNewProcess(processId, message);
+            }
+            else if (message == JobObjectMsgExitProcess || message == JobObjectMsgAbnormalExitProcess) {
+              ReleaseExitedProcess(processId, message);
+            }
+            else if (message == JobObjectMsgActiveProcessZero) {
+              events.Enqueue(JobProcessEvent.JobEmpty(message));
+            }
           }
-          else if (message == JobObjectMsgExitProcess || message == JobObjectMsgAbnormalExitProcess) {
-            ReleaseExitedProcess(processId, message);
-          }
-          else if (message == JobObjectMsgActiveProcessZero) {
-            events.Enqueue(JobProcessEvent.JobEmpty(message));
+          catch (Exception exception) {
+            // An exception on this background thread would end the PowerShell
+            // host without a failed status; report it as a lost stream instead.
+            events.Enqueue(JobProcessEvent.MonitorError(exception.HResult));
           }
         }
       }
