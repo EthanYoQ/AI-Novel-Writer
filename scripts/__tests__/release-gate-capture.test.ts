@@ -10,7 +10,9 @@ function quotePowerShell(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-function runMonitorLibrary(script: string): Record<string, unknown> {
+// execFileSync blocks the event loop, so its own timeout must end a stuck
+// probe before the Vitest case timeout would.
+function runMonitorLibrary(script: string, timeoutMilliseconds: number): Record<string, unknown> {
   const output = execFileSync(
     'powershell.exe',
     [
@@ -20,7 +22,7 @@ function runMonitorLibrary(script: string): Record<string, unknown> {
       '-Command',
       `$ErrorActionPreference = 'Stop'\n. ${quotePowerShell(releaseMonitorScript)} -LoadMonitorLibrary\n${script}`,
     ],
-    { encoding: 'utf8', windowsHide: true },
+    { encoding: 'utf8', windowsHide: true, timeout: timeoutMilliseconds, killSignal: 'SIGKILL' },
   )
   const line = output.trim().split(/\r?\n/).at(-1)
   if (!line) throw new Error('PowerShell probe did not return JSON')
@@ -122,7 +124,7 @@ finally {
   Remove-Item -LiteralPath $shortDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 [pscustomobject]@{ results = @($results) } | ConvertTo-Json -Compress -Depth 4
-`)
+`, 45_000)
     const rows = result.results as Array<Record<string, unknown>>
     console.info('Release gate image path comparison:', JSON.stringify(rows))
 
@@ -177,7 +179,7 @@ function ConvertTo-Snapshot {
   whileAlive = ConvertTo-Snapshot $whileAlive
   expectedLiveCommandLine = '"' + $findPath + '" "zzz"'
 } | ConvertTo-Json -Compress -Depth 4
-`)
+`, 20_000)
     const afterExit = result.afterExit as Record<string, unknown>
     const whileAlive = result.whileAlive as Record<string, unknown>
 
@@ -278,7 +280,7 @@ $laterCmd = New-Cmd -Ticks '639284519689800000'
   ArmedRootNonzeroBuild = Get-Verdict $build $node -Members @() -ExitCode 1
   SucceededE2e = Get-Verdict $e2e (New-Find) -ExitCode 0
 } | ConvertTo-Json -Compress
-`)
+`, 20_000)
 
     expect(result).toEqual({
       FindExactE2e: 'expected|expected-nsis-find-no-match|own-command-line||False',

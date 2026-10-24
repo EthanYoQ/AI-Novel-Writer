@@ -97,6 +97,21 @@ async function waitForGateStatus(
   throw new Error(`Timed out waiting for release gate state ${expectedState}: ${JSON.stringify(readJsonWhenAvailable(statusPath))}`)
 }
 
+async function waitForGateTerminal(
+  statusPath: string,
+  observedStates: unknown[],
+  timeoutMilliseconds = 30_000,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMilliseconds
+  while (Date.now() < deadline) {
+    const status = readJsonWhenAvailable(statusPath)
+    observedStates.push(status?.state)
+    if (status?.state === 'step-completed' || status?.state === 'failed') return status
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 20))
+  }
+  throw new Error(`Timed out waiting for a release gate terminal state: ${JSON.stringify(readJsonWhenAvailable(statusPath))}`)
+}
+
 async function waitForFile(path: string, timeoutMilliseconds = 3_000): Promise<void> {
   const deadline = Date.now() + timeoutMilliseconds
   while (Date.now() < deadline) {
@@ -1113,7 +1128,7 @@ $event = [pscustomobject]@{ ProcessId = 42; ExitCodeCaptured = $true; ExitCode =
     )
     const result = JSON.parse(output.trim().split(/\r?\n/).at(-1) ?? '{}')
 
-    expect(monitor.slice(exemptionStart, exemptionEnd)).toContain('[uint32]$processEvent.JobMessage -eq 7')
+    expect(monitor.slice(exemptionStart, exemptionEnd)).toContain('[uint32]$Event.JobMessage -eq 7')
     expect(result.Failure).toContain('abnormal exit')
   }, 15_000)
 
@@ -1243,7 +1258,7 @@ $event = [pscustomobject]@{ ProcessId = 42; ExitCodeCaptured = $true; ExitCode =
     }
   }, 45_000)
 
-  windowsIt.each(['smoke:win-installer', 'windows-in-app-update-e2e'])('accepts the exact electron-builder process-check chain from one captured installer instance during %s', async (step) => {
+  windowsIt.each(['smoke:win-installer', 'windows-in-app-update-e2e'])('observes the exact electron-builder process-check chain from one captured installer instance or strictly rejects an unretained member during %s', async (step) => {
     const root = mkdtempSync(join(tmpdir(), 'ai-novel-release-gate-nsis-probes-'))
     const controlPath = join(root, 'control.jsonl')
     const statusPath = join(root, 'status.json')
@@ -1436,46 +1451,87 @@ internal static class ExactNsisProbeParent {
       )
       await waitForGateStatus(statusPath, 'monitoring')
       writeFileSync(gate.releasePath, 'release', 'utf8')
-      expect(await settleWithin(gate.child, 30_000)).toEqual({ code: 0, signal: null })
-      const probeResults = readFileSync(probeResultPath, 'utf8').split(',').map(Number)
-      expect(probeResults).toHaveLength(5)
-      expect(probeResults.every(exitCode => exitCode === 0 || exitCode === 1)).toBe(true)
-      expect(probeResults.at(2)).toBe(1)
-      expect(probeResults.at(3)).toBe(1)
-      expect(probeResults.at(4)).toBe(1)
+      const rootResult = await settleWithin(gate.child, 30_000)
 
       appendFileSync(
         controlPath,
         `${JSON.stringify({ sequence: 2, state: 'step-complete', step })}\n`,
         'utf8',
       )
-      await waitForGateStatus(statusPath, 'step-completed', 30_000)
+      const observedStates: unknown[] = []
+      const terminalStatus = await waitForGateTerminal(statusPath, observedStates)
       const rawEvidence = readFileSync(join(evidencePath, 'process-events.jsonl'), 'utf8')
       const events = rawEvidence.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
-      for (const event of events.filter(event => event.kind === 'process-start')) {
+      const identity = (event: Record<string, unknown> | undefined) => event?.processIdentity as Record<string, unknown> | undefined
+      const starts = events.filter(event => event.kind === 'process-start')
+      const exits = events.filter(event => event.kind === 'process-exit')
+      const unretainedStarts = starts.filter(event => event.captureEstablished === false)
+      const unretainedIds = new Set(unretainedStarts.map(event => event.processId))
+      const outcome = terminalStatus.state === 'step-completed' ? 'observed' : 'rejected-unobservable'
+      console.info('NSIS process-check chain terminal:', JSON.stringify({
+        step,
+        outcome,
+        unretainedProcessIds: unretainedStarts.length,
+        summary: events.find(event => event.kind === 'process-capture-summary')?.retainLatencyMicroseconds,
+        members: starts.filter(event => event.captureEstablished === true).map(event => ({
+          processName: identity(event)?.processName,
+          retainLatencyMicroseconds: event.retainLatencyMicroseconds,
+          commandLineLoss: event.commandLineLoss,
+          commandLineRetries: event.commandLineRetries,
+        })),
+        filterBasis: exits.filter(event => String(event.exitClassification).match(/^expected-nsis-find/)).map(event => event.exitBasis),
+      }))
+
+      // A misattributed failure, or a chain member waved through by the
+      // result-owned exemption, means the classifier lost the chain.
+      expect(exits.some(event => event.exitClassification === 'failure')).toBe(false)
+      expect(exits.some(event => event.exitClassification === 'ignored-result-owned-descendant-nonzero')).toBe(false)
+      for (const event of exits) {
+        if (event.processIdentity) expect(identity(event)).not.toHaveProperty('commandLine')
+      }
+      expect(rawEvidence).not.toContain('Get-CimInstance')
+      expect(rawEvidence).not.toContain('tasklist /FI')
+
+      if (outcome === 'rejected-unobservable') {
+        expect(terminalStatus).toMatchObject({ state: 'failed', step, failureKind: 'unobservable-member' })
+        expect(observedStates).not.toContain('step-completed')
+        expect(unretainedStarts.length).toBeGreaterThan(0)
+        const failure = /could not (?:retain a process handle for|read the kernel identity of) job-contained PID ([1-9]\d*)/.exec(String(terminalStatus.failure))
+        expect(failure).not.toBeNull()
+        expect(unretainedIds.has(Number(failure?.[1]))).toBe(true)
+        for (const event of unretainedStarts) {
+          expect(event).toMatchObject({ captureEstablished: false, exitClassification: 'unobservable', jobMessage: 6 })
+          expect(['OpenProcess', 'KernelIdentity']).toContain(event.captureFailureStage)
+        }
+        for (const event of exits.filter(exit => exit.exitCode !== 0 && !unretainedIds.has(exit.processId))) {
+          expect(String(event.exitClassification)).toMatch(/^(expected-|pending-nsis-cmd-process-check$)/)
+        }
+        return
+      }
+
+      expect(rootResult).toEqual({ code: 0, signal: null })
+      const probeResults = readFileSync(probeResultPath, 'utf8').split(',').map(Number)
+      expect(probeResults).toHaveLength(5)
+      expect(probeResults.every(exitCode => exitCode === 0 || exitCode === 1)).toBe(true)
+      expect(probeResults.at(2)).toBe(1)
+      expect(probeResults.at(3)).toBe(1)
+      expect(probeResults.at(4)).toBe(1)
+      expect(unretainedStarts).toEqual([])
+      for (const event of starts) {
         expect(event).toMatchObject({
           captureAttemptedAt: expect.any(String),
           captureFailureStage: '',
           captureWin32Error: null,
         })
       }
-      const powerShellExits = events.filter(event => {
-        const identity = event.processIdentity as Record<string, unknown> | undefined
-        return event.kind === 'process-exit' && identity?.processName === 'powershell'
+      const powerShellExits = exits.filter(event => identity(event)?.processName === 'powershell')
+      const cmdExits = exits.filter(event => {
+        const cmd = identity(event)
+        return event.exitCode === 1
+          && cmd?.processName === 'cmd'
+          && cmd?.parentExecutablePath === installerPath
       })
-      const cmdExits = events.filter(event => {
-        const identity = event.processIdentity as Record<string, unknown> | undefined
-        return event.kind === 'process-exit'
-          && event.exitCode === 1
-          && identity?.processName === 'cmd'
-          && identity?.parentExecutablePath === installerPath
-      })
-      const filterExit = (processName: string) => events.find(event => {
-        const identity = event.processIdentity as Record<string, unknown> | undefined
-        return event.kind === 'process-exit'
-          && event.exitCode === 1
-          && identity?.processName === processName
-      })
+      const filterExit = (processName: string) => exits.find(event => event.exitCode === 1 && identity(event)?.processName === processName)
       const findExit = filterExit('find')
       const findstrExit = filterExit('findstr')
 
@@ -1484,14 +1540,13 @@ internal static class ExactNsisProbeParent {
         probeResults.slice(0, 3).map(exitCode => exitCode === 0 ? 'succeeded' : 'expected-nsis-powershell-probe'),
       )
       for (const event of powerShellExits) {
-        const identity = event.processIdentity as Record<string, unknown>
-        expect(identity).toMatchObject({
+        const probe = identity(event) as Record<string, unknown>
+        expect(probe).toMatchObject({
           parentExecutablePath: installerPath,
           commandLineCaptured: true,
           commandLineRedacted: true,
         })
-        expect(identity.parentProcessStartTimeTicks).toEqual(expect.any(String))
-        expect(identity).not.toHaveProperty('commandLine')
+        expect(probe.parentProcessStartTimeTicks).toEqual(expect.any(String))
       }
       expect(cmdExits.map(event => event.exitClassification)).toEqual([
         'expected-nsis-cmd-process-check',
@@ -1499,12 +1554,7 @@ internal static class ExactNsisProbeParent {
       ])
       expect(findExit).toMatchObject({ exitClassification: 'expected-nsis-find-no-match' })
       expect(findstrExit).toMatchObject({ exitClassification: 'expected-nsis-findstr-no-match' })
-      for (const event of [...cmdExits, findExit, findstrExit]) {
-        expect((event?.processIdentity as Record<string, unknown>)).not.toHaveProperty('commandLine')
-      }
-      expect(events.some(event => event.kind === 'process-exit' && event.exitClassification === 'failure')).toBe(false)
-      expect(rawEvidence).not.toContain('Get-CimInstance')
-      expect(rawEvidence).not.toContain('tasklist /FI')
+      expect(exits.some(event => event.exitClassification === 'unobservable')).toBe(false)
     } catch (error) {
       const eventPath = join(evidencePath, 'process-events.jsonl')
       const diagnostics = existsSync(eventPath)
@@ -1787,14 +1837,14 @@ internal static class ExactNsisUninstallerHelper {
       expect(sameWindowsPath(identity(expectedPowerShell).executablePath, proof.systemPowerShell)).toBe(true)
       expect(sameWindowsPath(identity(expectedPowerShell).parentExecutablePath, helperIdentity.executablePath as string)).toBe(true)
       for (const event of events) {
-        expect(['process-start', 'process-exit', 'process-tree', 'job-empty']).toContain(event.kind)
+        expect(['process-start', 'process-exit', 'process-tree', 'job-empty', 'process-capture-summary']).toContain(event.kind)
         expect(event.step).toBe('smoke:win-installer')
         expect(event.monitorStartedAt).toBe(proof.monitorStartedAt)
         if (event.processIdentity) expect(identity(event)).not.toHaveProperty('commandLine')
       }
       expect(JSON.stringify(events)).not.toContain('tasklist /FI')
       expect(JSON.stringify(events)).not.toContain('Get-CimInstance')
-      const failedStarts = starts.filter(event => event.captureEstablished === false || event.exitClassification === 'capture-failure')
+      const failedStarts = starts.filter(event => event.captureEstablished === false || event.exitClassification === 'unobservable')
       const unknownIds = new Set(failedStarts.map(event => event.processId))
       if (status.state === 'step-completed') {
         expect(failedStarts).toEqual([])
@@ -1802,7 +1852,7 @@ internal static class ExactNsisUninstallerHelper {
         expect(expectedFind).toMatchObject({ exitCode: 1, exitCodeCaptured: true, jobMessage: 7 })
         expect(events.some(event => event.kind === 'process-exit' && event.exitClassification === 'failure')).toBe(false)
       } else {
-        expect(status.state).toBe('failed')
+        expect(status).toMatchObject({ state: 'failed', failureKind: 'unobservable-member' })
         expect(proof.observedStates).not.toContain('step-completed')
         expect(events.some(event => event.kind === 'process-tree' && String(event.reason).includes('completed'))).toBe(false)
         const failure = /^Release gate monitor failed during 'smoke:win-installer': Release gate could not retain a process handle for job-contained PID ([1-9]\d*); its eventual exit code would be unobservable\.$/.exec(String(status.failure))
@@ -1815,7 +1865,7 @@ internal static class ExactNsisUninstallerHelper {
           expect(Number.isInteger(event.processId)).toBe(true)
           expect(Number(event.processId)).toBeGreaterThan(0)
           expect(chain.some(member => member?.processId === event.processId)).toBe(false)
-          expect(event).toMatchObject({ captureEstablished: false, exitCode: null, exitCodeCaptured: false, captureFailureStage: 'OpenProcess', captureWin32Error: 87, jobMessage: 6, exitClassification: 'capture-failure' })
+          expect(event).toMatchObject({ captureEstablished: false, exitCode: null, exitCodeCaptured: false, captureFailureStage: 'OpenProcess', captureWin32Error: 87, jobMessage: 6, exitClassification: 'unobservable' })
           expect(identity(event)).toMatchObject({ processId: event.processId, startTimeTicks: null, processName: null, executablePath: null, parentProcessId: null, parentProcessStartTimeTicks: null, parentExecutablePath: null, identityCaptured: false, commandLineCaptured: false, commandLineRedacted: false, identityCaptureError: null })
           expect(events.indexOf(expectedPowerShell!)).toBeLessThan(events.indexOf(event))
           const attemptedAt = Date.parse(String(event.captureAttemptedAt))
@@ -1929,17 +1979,19 @@ internal static class ExactNsisUninstallerHelper {
     }
   }, 60_000)
 
-  it('persists a minimal capture-failure event before failing closed', () => {
+  it('persists a minimal unretained-member event before failing closed', () => {
     const monitor = readFileSync(releaseMonitorScript, 'utf8')
-    const captureGuard = monitor.indexOf('if (-not [bool]$processEvent.CaptureEstablished)')
+    const captureGuard = monitor.indexOf('if (-not [bool]$processEvent.Retained)')
     const evidenceWrite = monitor.indexOf('Write-AiNovelGateProcessEventEvidence', captureGuard)
-    const captureClassification = monitor.indexOf("-ExitClassification 'capture-failure'", captureGuard)
-    const failClosed = monitor.indexOf('throw "Release gate could not retain a process handle', captureGuard)
+    const captureClassification = monitor.indexOf("-ExitClassification 'unobservable'", captureGuard)
+    const failureKind = monitor.indexOf("$monitorFailureKind = 'unobservable-member'", captureGuard)
+    const failClosed = monitor.indexOf('throw $unretainedFailure', captureGuard)
 
     expect(captureGuard).toBeGreaterThanOrEqual(0)
     expect(evidenceWrite).toBeGreaterThan(captureGuard)
     expect(captureClassification).toBeGreaterThan(evidenceWrite)
-    expect(failClosed).toBeGreaterThan(captureClassification)
+    expect(failureKind).toBeGreaterThan(captureClassification)
+    expect(failClosed).toBeGreaterThan(failureKind)
   })
 
   windowsIt('keeps a real command dormant when the monitor acknowledgement fails', async () => {
