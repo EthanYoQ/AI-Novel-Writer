@@ -124,13 +124,13 @@ function newestWrite(directory, budget = { entries: 50_000 }) {
   return newest
 }
 
-function snapshotRealProfiles() {
-  return Object.fromEntries(realProfileDirectories().map(directory => [directory, newestWrite(directory)]))
+export function snapshotRealProfiles(directories = realProfileDirectories()) {
+  return Object.fromEntries(directories.map(directory => [directory, newestWrite(directory)]))
 }
 
-function externalWrites(before) {
-  const after = snapshotRealProfiles()
-  return Object.keys(before).filter(directory => before[directory] !== after[directory])
+export function profileWrites(before) {
+  const after = snapshotRealProfiles(Object.keys(before))
+  return { externalWrites: Object.keys(before).filter(directory => before[directory] !== after[directory]) }
 }
 
 /** 以 --user-data-dir 匹配仍存活的 Electron 主进程与子进程。 */
@@ -490,7 +490,7 @@ async function runSession(sessionName, names, options) {
   }
   try {
     shared.residualProcesses = await residualProcesses(roots.userData)
-    shared.externalWrites = externalWrites(before)
+    Object.assign(shared, profileWrites(before))
   } catch (error) { sessionErrors.push(messageOf(error)) }
   const clean = sessionIsClean({ failedAt, sessionErrors, residualProcesses: shared.residualProcesses, externalWrites: shared.externalWrites })
   if (clean) fs.rmSync(roots.root, { recursive: true, force: true })
