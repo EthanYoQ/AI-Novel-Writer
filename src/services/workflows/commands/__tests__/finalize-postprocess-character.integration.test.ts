@@ -305,7 +305,7 @@ function installModel(): void {
   })
 }
 
-function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKey?: string; retryInvalidResult?: boolean; stopOnFailure?: boolean } = {}) {
+function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKeys?: readonly string[]; retryInvalidResult?: boolean; stopOnFailure?: boolean } = {}) {
   insertFinalizedDraft(7, 2, draftContent)
   const db = getProjectDb()!
   if (!db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get('fcs:finalization-7')) {
@@ -438,7 +438,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     })
     const freshRun = await command(content, {
       onlyFailed: true,
-      stepKey: 'chapter_notes',
+      stepKeys: ['chapter_notes'],
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
     expect(freshRun.steps.chapter_notes).toMatchObject({ ok: false })
     expect(useLLMStore.getState().generateStream).not.toHaveBeenCalled()
@@ -677,7 +677,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
 
     const status = await command('第二章定稿：林岚准备交出黄铜钥匙。', {
       onlyFailed: true,
-      stepKey: 'character_cards',
+      stepKeys: ['character_cards'],
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
     expect(status.steps.character_cards).toMatchObject({
@@ -833,7 +833,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
 
     const repaired = await command('The brass key changes hands.', {
       onlyFailed: true,
-      stepKey: 'character_cards',
+      stepKeys: ['character_cards'],
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
     expect(generateStream).not.toHaveBeenCalled()
@@ -856,7 +856,7 @@ it('一次显式修复固定失败目标，withRetry 不得把第四份坏结果
    evidence: { text: correct ? content : 'Lin Lan says, the inspection is still pending.' } }] }), undefined, 'stop')
   return 'synthetic-request'
  }) })
- const execute = (retryInvalidResult = false) => command(content, { onlyFailed: true, stepKey: 'character_cards', retryInvalidResult })
+ const execute = (retryInvalidResult = false) => command(content, { onlyFailed: true, stepKeys: ['character_cards'], retryInvalidResult })
   .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
  expect((await execute()).steps.character_cards.ok).toBe(false)
  expect(calls).toBe(3)
@@ -1065,7 +1065,7 @@ describe('cast refresh after the character-state step', () => {
     expect(initial.steps.character_cards.ok).toBe(false)
     expect(refreshes).toEqual([])
 
-    const retried = await command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKey: 'character_cards', retryInvalidResult: true })
+    const retried = await command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKeys: ['character_cards'], retryInvalidResult: true })
       .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
     expect(retried.steps.character_cards).toMatchObject({ ok: true })

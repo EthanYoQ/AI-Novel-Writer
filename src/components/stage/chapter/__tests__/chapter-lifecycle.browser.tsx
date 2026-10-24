@@ -344,7 +344,7 @@ describe('单章视图的主按钮随五种状态变化', () => {
     const retryRows = () => [...host!.querySelectorAll('.stage-ch-post-step')]
       .filter(row => row.querySelector('button')).map(row => row.querySelector('b')!.textContent)
     const cardRetry = () => host!.querySelector('.stage-ch-post-head button')?.textContent ?? null
-    async function show(steps: Record<string, unknown>[]) {
+    async function show(steps: NonNullable<typeof backend.state.postProcess>['steps']) {
       const draft = backend.addDraft({ status: 'finalized' })
       backend.state.postProcess = { steps }
       await mount()

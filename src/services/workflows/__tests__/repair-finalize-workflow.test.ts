@@ -173,7 +173,7 @@ describe('createRepairFinalizeWorkflow', () => {
       draftId: 17,
       onlyFailed: true,
       retryInvalidResult: true,
-      stepKey,
+      stepKeys: stepKey ? [stepKey] : undefined,
     })])
     expect(postProcess.execute).toHaveBeenCalledOnce()
   })

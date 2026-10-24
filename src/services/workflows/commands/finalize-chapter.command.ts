@@ -324,7 +324,8 @@ export interface RunFinalizePostProcessParams {
   stopOnFailure?: boolean
   onlyFailed?: boolean
   retryInvalidResult?: boolean
-  stepKey?: string
+  /** 只跑这些步骤；不给时跑全部。 */
+  stepKeys?: readonly string[]
   chapterEntities?: readonly string[]
 }
 
@@ -367,7 +368,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
     const explicit: Partial<Record<FinalizationStepKey, { retryOf: FinalizedCharacterArtifact } | { recoverFrom: string }>> = {}
     if (this.params.retryInvalidResult) {
       for (const stepKey of ['chapter_notes', 'character_cards'] as const) {
-        if (this.params.stepKey && this.params.stepKey !== stepKey) continue
+        if (this.params.stepKeys && !this.params.stepKeys.includes(stepKey)) continue
         const recovery = await ipc.invokeWithProjectSession(projectSession, 'finalization-generation:read', {
           slot: { source: this.params.finalizedSource, stepKey },
         })
@@ -405,16 +406,16 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       frozen.projectionGeneration,
       undefined,
     )
-    const steps = this.params.stepKey
-      ? allSteps.filter(step => step.key === this.params.stepKey)
-      : allSteps
-    if (this.params.stepKey && steps.length === 0) {
+    const { stepKeys } = this.params
+    const unknown = stepKeys?.find(key => !allSteps.some(step => step.key === key))
+    if (unknown) {
       throw new Error(workflowUiText(
         context,
-        `未知的后处理步骤：${this.params.stepKey}`,
-        `Unknown post-processing step: ${this.params.stepKey}`,
+        `未知的后处理步骤：${unknown}`,
+        `Unknown post-processing step: ${unknown}`,
       ))
     }
+    const steps = stepKeys ? allSteps.filter(step => stepKeys.includes(step.key)) : allSteps
     const status = await runPostProcessPipeline(
       this.params.project.path,
       getChapterFinalizeScope(this.params.chapterNumber),
