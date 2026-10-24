@@ -44,8 +44,16 @@ async function holdCommit(app, nth) {
   }, [COMMIT, nth]), '能在主进程里卡住定稿后处理的提交')
 }
 
+/**
+ * 轮询主进程里的门。直接 app.evaluate 取值时，Windows 上的 Electron 41 偶发报「Promise was collected」，Playwright 报成执行上下文销毁；
+ * 先取句柄再读值、读完释放就不会。
+ */
 async function waitHeld(app) {
-  for (const deadline = Date.now() + 60_000; !await app.evaluate(() => globalThis.__f484Commit.held); await new Promise(resolve => setTimeout(resolve, 100))) {
+  const held = async () => {
+    const handle = await app.evaluateHandle(() => globalThis.__f484Commit.held)
+    try { return await handle.jsonValue() } finally { await handle.dispose() }
+  }
+  for (const deadline = Date.now() + 60_000; !await held(); await new Promise(resolve => setTimeout(resolve, 100))) {
     assert.ok(Date.now() < deadline, '60 秒内角色状态的提交没有卡在门上')
   }
 }
