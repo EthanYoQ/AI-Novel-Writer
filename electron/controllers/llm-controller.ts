@@ -12,7 +12,7 @@ import { knownAppErrorMessage } from '../../src/i18n/app-errors'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { isReasoningMapping, reasoningAdapterFitsProtocol } from '../../src/shared/reasoning-types'
 import { LLMFactory } from '../llm/llm-factory'
-import { getMainLocale, mainText } from '../i18n'
+import { getMainLocale, mainT, mainText } from '../i18n'
 import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
 import { getCurrentProjectPath } from '../database'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
@@ -30,7 +30,14 @@ interface ActiveStream {
 
 const activeStreams = new Map<string, ActiveStream>()
 const CONNECTION_TEST_MAX_TOKENS = 1024
-const CONNECTION_TEST_TIMEOUT_MS = 30_000
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/** 本机模型冷启动要先把权重载入显存，常常超过 30 秒；云端卡住多是网络或代理问题，早点报出来。 */
+function connectionTestTimeoutMs(model: ModelProfile): number {
+  let hostname = ''
+  try { hostname = new URL(model.baseUrl).hostname } catch { /* 地址不合法时按云端处理，请求本身会报错 */ }
+  return model.provider === 'ollama' || LOCAL_HOSTNAMES.has(hostname) ? 120_000 : 30_000
+}
 const CLOSED_EXECUTION_LEASE_TOMBSTONE_TTL_MS = 5 * 60_000
 
 function loadModelConfigs(): ModelProfile[] {
@@ -421,9 +428,10 @@ export function registerLLMController() {
     creativeStrategy: LLMRequest['creativeStrategy'] = 'auto',
   ) => {
     // 网络卡住时 undici 默认要等 300 秒才报 fetch failed；连接测试自己的截止时间会真正取消请求。
+    const timeoutMs = connectionTestTimeoutMs(model)
     const deadline = new AbortController()
-    const timer = setTimeout(() => deadline.abort(), CONNECTION_TEST_TIMEOUT_MS)
-    const timedOut = () => ({ success: false, error: connectionTestFailure(new Error('LLM_CONNECTION_TEST_TIMEOUT')) })
+    const timer = setTimeout(() => deadline.abort(), timeoutMs)
+    const timedOut = () => ({ success: false, error: mainT(app.getLocale(), 'error.connectionTestTimeout', { seconds: timeoutMs / 1000 }) })
     try {
       applyProxyConfig()
 

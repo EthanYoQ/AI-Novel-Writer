@@ -828,6 +828,29 @@ describe('connection test timeout', () => {
     expect(result.error).not.toMatch(forbidden)
   })
 
+  it.each([
+    ['localhost', { baseUrl: 'http://localhost:1234/v1' }],
+    ['127.0.0.1', { baseUrl: 'http://127.0.0.1:8080/v1' }],
+    ['[::1]', { baseUrl: 'http://[::1]:11434/v1' }],
+    ['the Ollama provider', { provider: 'ollama', baseUrl: 'http://gpu-box.lan:11434/v1' }],
+  ] as const)('gives %s 120 seconds before cancelling the probe', async (_label, endpoint) => {
+    mocks.locale = 'zh-CN'
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let signal: AbortSignal | undefined
+    mocks.generate.mockImplementationOnce(async (_model: ModelProfile, _messages: unknown, options: { signal?: AbortSignal }) => {
+      signal = options.signal
+      return hangUntilAborted(options.signal).catch(error => ({ success: false, content: '', finishReason: 'error', error: String(error) }))
+    })
+    const pending = connectionHandler()({}, { ...deepSeekModel, ...endpoint }) as Promise<{ success: boolean; error: string }>
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(signal?.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+
+    const result = await pending
+    expect(signal?.aborted).toBe(true)
+    expect(result).toEqual({ success: false, error: '连接测试 120 秒内没有完成，已停止等待。请检查网络或代理设置后重试。' })
+  })
+
   it('cancels a hanging retrieval probe request after 30 seconds', async () => {
     mocks.locale = 'en-US'
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })

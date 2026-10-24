@@ -93,7 +93,7 @@ export const enUS = {
   'error.recoveryCandidateTextEmpty': 'The recovered draft has no visible text, so it was not saved. Add text, then save.',
   'error.consistencyExemptionReasonInvalid': 'Enter a reason for the exemption (500 characters or fewer).',
   'error.postProcessSourceChanged': "This chapter's finalized text changed before post-processing started (it may have been deleted or finalized again), so post-processing did not start. Refresh to see the current state.",
-  'error.connectionTestTimeout': 'The connection test did not finish within 30 seconds and was stopped. Check your network or proxy settings, then try again.',
+  'error.connectionTestTimeout': 'The connection test did not finish within {seconds} seconds and was stopped. Check your network or proxy settings, then try again.',
   'error.embeddingRequestFailed': 'The retrieval model request failed. Check the retrieval model’s Base URL, gateway, and API key.',
   'error.embeddingOllamaNativeUrl': 'This is Ollama’s native /api address, but the app uses the OpenAI-compatible API. Change the end of the retrieval model’s Base URL from /api to /v1.',
   'error.embeddingResponseInvalid': 'The retrieval model returned an unusable result (wrong count, size, or values), so nothing was written. Check the retrieval model’s Base URL or choose another retrieval model.',
