@@ -29,6 +29,24 @@ describe('定稿后处理步骤错误', () => {
     expect(describeFinalizationStepError('GENERATION_STORAGE_FAILED', en)).not.toMatch(/GENERATION_STORAGE_FAILED|Select Retry/)
   })
 
+  it('#491 角色状态来源冲突：中英文都说明正文已保存、为何没更新角色卡、作者该做什么，不带错误码', () => {
+    const raw = "Error invoking remote method 'finalization-generation:commit': Error: FINALIZED_CHARACTER_SOURCE_CONFLICT"
+    expect(finalizationStepErrorCode(raw)).toBe('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+    const zhText = describeFinalizationStepError(raw, zh), enText = describeFinalizationStepError(raw, en)
+    expect(zhText).toContain('正文定稿已保存')
+    expect(zhText).toContain('后面章节')
+    expect(zhText).toContain('「当前状态」')
+    expect(enText).toContain('Current state')
+    expect(zhText).toContain('从备份恢复')
+    expect(enText).toContain('restored from a backup')
+    expect(zhText).not.toContain('可以先点「重试」')
+    expect(enText).not.toContain('Try Retry first')
+    expect(zhText).toContain('重试仍失败')
+    expect(enText).toContain('If Retry still fails')
+    for (const text of [zhText, enText]) expect(text).not.toMatch(/即可完成|will finish this step/u)
+    for (const text of [zhText, enText]) expect(text).not.toMatch(/Error invoking|FINALIZED_CHARACTER|请点「重试」|Select Retry/u)
+  })
+
   it('旧版本存下的带 IPC 包装的步骤错误也换成可读说明', () => {
     expect(describeFinalizationStepError("Error invoking remote method 'project-session:invoke': Error: FINALIZATION_GENERATION_INCOMPLETE", zh))
       .toBe(describeFinalizationStepError('FINALIZATION_GENERATION_INCOMPLETE', zh))

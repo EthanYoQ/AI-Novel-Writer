@@ -172,6 +172,8 @@ const ERROR_KEYS = {
   CHARACTER_AUTHOR_ROSTER_NOT_READY: 'error.characterRosterNotReady',
   FINALIZED_CHARACTER_STATE_CANDIDATE_NOT_FOUND: 'error.characterSuggestionGone',
   FINALIZED_CHARACTER_STATE_FIELD_CONFLICT: 'error.characterStateChanged',
+  // 定稿后处理提交角色状态时，字段已由更晚章节写过或来源对不上（#491）。
+  FINALIZED_CHARACTER_SOURCE_CONFLICT: 'error.characterStateSourceConflict',
   FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT: 'error.characterStateChanged',
   // 角色名单、蓝图与剧情资料（#474 B2）：作者在角色页手工编辑、生成或修复名单时能照着处理的拒绝原因。
   CHARACTER_ROSTER_NAME_REQUIRED: 'error.characterRosterNameRequired',
