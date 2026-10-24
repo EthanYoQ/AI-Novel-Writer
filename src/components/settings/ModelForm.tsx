@@ -4,7 +4,7 @@ import { useLLMStore } from '../../stores/llm-store'
 import type { DiscoveredModel, ModelDiscoveryErrorCode, ModelProfile } from '../../shared/ipc-channels'
 import { LOW_VRAM_EMBEDDING_OPTIONS, normalizeEmbeddingOptions } from '../../shared/embedding-options'
 import type { ModelCapabilities, ProviderPreset } from '../../shared/provider-presets'
-import { isLocalModelEndpoint, resolveModelProfileBudgetCapabilities } from '../../shared/provider-presets'
+import { isLocalModelEndpoint, parseHttpEndpoint, resolveModelProfileBudgetCapabilities } from '../../shared/provider-presets'
 import { applyModelProfileSelection, DEFAULT_GENERATION_OUTPUT_TOKENS, modelCapabilitySource } from '../../shared/model-profile-draft'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -35,6 +35,13 @@ type ModelDiscoveryState =
   | { status: 'loading', previous: DiscoveredModel[] }
   | { status: 'loaded', models: DiscoveredModel[] }
   | { status: 'failed', errorCode: ModelDiscoveryErrorCode }
+
+/** 候选列表里显示的模型：刷新期间沿用旧列表，还没拉到时为空。 */
+function shownModels(state: ModelDiscoveryState): DiscoveredModel[] {
+  if (state.status === 'loaded') return state.models
+  if (state.status === 'loading') return state.previous
+  return []
+}
 
 /** 模型编辑表单 */
 export function ModelForm({
@@ -87,7 +94,7 @@ export function ModelForm({
   }, [])
 
   const canDiscover = (config: Pick<ModelProfile, 'provider' | 'baseUrl' | 'apiKey'>) =>
-    Boolean(config.baseUrl.trim()) && (Boolean(config.apiKey.trim()) || isLocalModelEndpoint(config))
+    parseHttpEndpoint(config.baseUrl) !== null && (Boolean(config.apiKey.trim()) || isLocalModelEndpoint(config))
 
   /** 端点配置一改，旧列表作废；停止输入后用新配置自动再取一次。 */
   const invalidateDiscovery = () => {
@@ -109,8 +116,8 @@ export function ModelForm({
   const setEmbeddingModelName = (modelName: string) => {
     const capabilities = preset?.embeddingModelCapabilities?.[modelName]
     onChange(capabilities
-      ? { ...model, modelName, maxTokens: capabilities.maxOutputTokens, capabilities: { ...capabilities } }
-      : { ...model, modelName, capabilities: undefined })
+      ? { ...model, modelName, maxTokens: capabilities.maxOutputTokens, capabilities: { ...capabilities }, capabilitySources: undefined }
+      : { ...model, modelName, capabilities: undefined, capabilitySources: undefined })
   }
 
   /** 更新单个字段 */
@@ -180,7 +187,7 @@ export function ModelForm({
       apiKey: '',
       modelName: '',
     }
-    onChange(isEmbedding ? { ...model, ...selection, capabilities: undefined } : applyModelProfileSelection(model, selection))
+    onChange(isEmbedding ? { ...model, ...selection, capabilities: undefined, capabilitySources: undefined } : applyModelProfileSelection(model, selection))
   }
 
   const handleModelSelect = ({ value, capabilities }: DiscoveredModel) => {
@@ -212,8 +219,7 @@ export function ModelForm({
         && current.baseUrl === requestConfig.baseUrl
         && current.apiKey === requestConfig.apiKey
     }
-    setDiscovery(current => ({ status: 'loading',
-      previous: current.status === 'loaded' ? current.models : current.status === 'loading' ? current.previous : [] }))
+    setDiscovery(current => ({ status: 'loading', previous: shownModels(current) }))
     try {
       const result = await discoverModels({
         provider: requestConfig.provider,
@@ -344,7 +350,7 @@ export function ModelForm({
       <ModelNameField
         value={model.modelName}
         placeholder={text('从列表选择，或直接输入模型名称', 'Pick from the list or type a model name')}
-        candidates={discovery.status === 'loaded' ? discovery.models : discovery.status === 'loading' ? discovery.previous : []}
+        candidates={shownModels(discovery)}
         refreshing={discovery.status === 'loading'}
         status={modelNameStatus()}
         onInput={(value) => up('modelName', value)}

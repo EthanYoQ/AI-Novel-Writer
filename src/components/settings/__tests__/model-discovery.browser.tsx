@@ -843,6 +843,36 @@ describe('model discovery settings flow', () => {
     expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ modelName: 'Qwen/Qwen3-Embedding-8B', capabilities: undefined }))
   })
 
+  it('does not fetch while the base_url is not yet an http address', async () => {
+    const discoverModels = listed('gpt-5.5-mini')
+    await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
+    await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
+    await typeInto(apiKeyInput(), 'sk-new-key')
+    await typeInto(baseUrlInput('https://api.openai.com'), 'api.example')
+    await new Promise(resolve => setTimeout(resolve, AUTO_DISCOVERY_WAIT_MS))
+    expect(discoverModels).not.toHaveBeenCalled()
+    await typeInto(baseUrlInput('api.example'), 'https://api.example/v1')
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(1))
+  })
+
+  it('forgets the capability sources of the previous embedding model after switching provider', async () => {
+    const model = savedProfile({ provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'BAAI/bge-m3', purposes: ['embedding'],
+      capabilities: { contextWindowTokens: 8192, maxOutputTokens: 1, reasoning: false, structuredOutput: false, usage: true },
+      capabilitySources: { contextWindowTokens: 'preset', maxOutputTokens: 'preset', reasoning: 'preset', structuredOutput: 'preset', usage: 'preset' } })
+    const { saveModel } = await renderSettings(model, vi.fn())
+    await act(async () => { useLayoutStore.setState({ settingsSection: 'embedding' }) })
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    const providerSelect = Array.from(document.querySelectorAll('select')).find(select => select.value === 'siliconflow')
+    if (!providerSelect) throw new Error('Missing provider select')
+    await typeInto(providerSelect, 'openai')
+    await typeInto(apiKeyInput(), 'sk-openai')
+    await typeInto(modelNameInput(), 'text-embedding-3-small')
+    await act(async () => { await page.getByLabelText('上下文窗口', { exact: true }).fill('4096') })
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ modelName: 'text-embedding-3-small',
+      capabilitySources: expect.objectContaining({ contextWindowTokens: 'manual', usage: 'unknown' }) }))
+  })
+
   it('keeps the base_url and key hint instead of requesting when refresh is pressed too early', async () => {
     const discoverModels = listed('gpt-5.5-mini')
     await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)

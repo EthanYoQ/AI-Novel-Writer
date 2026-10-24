@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createProviderCatalog,
+  isLocalModelEndpoint,
   resolveModelProfileBudgetCapabilities,
   resolveModelProfileCapabilities,
   resolveModelProfileReasoningMapping,
@@ -293,5 +294,17 @@ describe('provider catalog', () => {
         usage: true,
       },
     })).toBeUndefined()
+  })
+  it.each([
+    [{ provider: 'ollama', baseUrl: '' }, true],
+    [{ provider: 'custom', baseUrl: 'http://localhost:11434/v1' }, true],
+    [{ provider: 'custom', baseUrl: ' http://127.0.0.1:1234/v1 ' }, true],
+    [{ provider: 'custom', baseUrl: 'http://[::1]:8080' }, true],
+    [{ provider: 'custom', baseUrl: 'https://api.openai.com/v1' }, false],
+    [{ provider: 'custom', baseUrl: 'localhost:1234' }, false],
+    [{ provider: 'custom', baseUrl: 'file://localhost/models' }, false],
+    [{ provider: 'custom', baseUrl: 'ws://localhost:1234' }, false],
+  ])('treats %o as a local model endpoint: %s', (endpoint, local) => {
+    expect(isLocalModelEndpoint(endpoint)).toBe(local)
   })
 })

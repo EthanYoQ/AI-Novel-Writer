@@ -31,6 +31,11 @@ async function openFixtureModelSuggestions({ page, fake }, locale) {
   return { options: await options.allInnerTexts(), status: await status.innerText(), requests: fake.requests.filter(kind => kind === 'models').length }
 }
 
+async function openNewModelForm(page) {
+  await stage.openSettings(page)
+  await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
+}
+
 const THREAD = Object.freeze({ title: '雾钟为何提前', type: '主线', targetStartChapter: 1, targetEndChapter: 6, authorIntent: '钟声提前一刻与三十年前的沉船有关。' })
 const SECOND_DRAFT = `${STAGE_SAMPLE.drafts[3].text}\n\n林岚把纸条又读了一遍，决定等到下一次大潮再上灯室。`
 const IMPLEMENTATION_TERMS = /LanceDB|FTS|BM25|Embedding|向量|query|MCP|token/i
@@ -379,8 +384,7 @@ export const REFS_SCENARIOS = {
     return observed
   } },
   'models-name-empty': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
-    await stage.openSettings(page)
-    await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
+    await openNewModelForm(page)
     const combobox = page.locator('input[role="combobox"]')
     const fieldOrder = await combobox.evaluate(input => {
       const form = input.closest('.rounded-xl')
@@ -394,7 +398,7 @@ export const REFS_SCENARIOS = {
     assert.equal(draft.modelName, '', '新建配置的模型名留空')
     assert.equal(draft.saveHint, '保存前还需填写：API Key、模型名称。')
     await page.getByRole('button', { name: '展开候选模型', exact: true }).click()
-    await page.waitForTimeout(800)
+    await page.getByRole('status').filter({ hasText: '获取模型列表' }).waitFor({ state: 'visible' })
     await combobox.evaluate(element => element.closest('.rounded-xl')?.scrollIntoView({ block: 'start' }))
     await page.mouse.move(0, 0)
     const observed = { fieldOrder, ...draft, options: await page.getByRole('listbox', { name: '候选模型' }).getByRole('option').count(),
@@ -407,8 +411,7 @@ export const REFS_SCENARIOS = {
     return observed
   } },
   'models-name-auto': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
-    await stage.openSettings(page)
-    await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
+    await openNewModelForm(page)
     await page.getByPlaceholder('sk-...').fill(FAKE_MODEL.apiKey)
     const status = page.getByText(/^已从端点获取 \d+ 个模型。$/u)
     await status.waitFor({ state: 'visible', timeout: 15_000 })
@@ -428,15 +431,14 @@ export const REFS_SCENARIOS = {
     return observed
   } },
   'models-name-failed': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
-    await stage.openSettings(page)
-    await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
+    await openNewModelForm(page)
     await page.getByPlaceholder('sk-...').fill('wrong-key-for-model-list')
     const status = page.getByText('鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', { exact: true })
     await status.waitFor({ state: 'visible', timeout: 15_000 })
     await page.getByRole('button', { name: '展开候选模型', exact: true }).click()
     await page.locator('input[role="combobox"]').evaluate(element => element.closest('.rounded-xl')?.scrollIntoView({ block: 'start' }))
     await page.mouse.move(0, 0)
-    const observed = { status: await status.innerText(), color: await status.evaluate(element => getComputedStyle(element).color),
+    const observed = { status: await status.innerText(),
       options: await page.getByRole('listbox', { name: '候选模型' }).getByRole('option').count() }
     await shoot('models-name-failed')
     assert.equal(observed.options, 0, '获取失败时没有候选')
@@ -448,6 +450,7 @@ export const REFS_SCENARIOS = {
     assert.equal(observed.requests, 1, '展开时自动获取一次')
     assert.equal(observed.options[0].trim(), FIXTURE_ENDPOINT_MODELS[0], JSON.stringify(observed))
     assert.ok(observed.options.some(text => text.startsWith('gateway/novel-writer-pro')), JSON.stringify(observed))
+    assert.ok(observed.options.every(text => !/推荐/u.test(text)), JSON.stringify(observed))
     assert.equal(observed.status, `已从端点获取 ${FIXTURE_ENDPOINT_MODELS.length} 个模型。`)
     await context.page.getByRole('button', { name: '收起候选模型', exact: true }).click()
     await context.page.getByRole('button', { name: '展开候选模型', exact: true }).click()
@@ -501,8 +504,7 @@ export const REFS_SCENARIOS = {
   } },
   // 没填 Key 的新配置切到 Gemini，不会去请求 Google；手填与预设同名的模型，仍带上 Gemini 3 的思考映射。
   'models-gemini-thinking-off': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
-    await stage.openSettings(page)
-    await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
+    await openNewModelForm(page)
     await page.locator('select').filter({ has: page.locator('option[value="gemini"]') }).first().selectOption('gemini')
     assert.equal(await page.locator('input[role="combobox"]').inputValue(), '', '切换服务商后模型名留空')
     await page.locator('input[role="combobox"]').fill('gemini-3.8-flash')
