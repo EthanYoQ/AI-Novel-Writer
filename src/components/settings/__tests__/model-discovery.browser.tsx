@@ -856,6 +856,18 @@ describe('model discovery settings flow', () => {
     expect(status()!.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await typeInto(modelNameInput(), 'my-private-model')
     expect(status()?.textContent).toContain('没有匹配的候选，将使用输入的名称。')
+    expect(document.querySelector('[role="listbox"]')).toBeNull()
+    expect(modelNameInput().getAttribute('aria-expanded')).toBe('false')
+    expect(modelNameInput().hasAttribute('aria-controls')).toBe(false)
+  })
+
+  it('does not claim there are no suggestions while the endpoint list is still loading', async () => {
+    const discoverModels = vi.fn(() => new Promise<ModelDiscoveryResult>(() => {}))
+    await renderSettings(savedProfile(), discoverModels)
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    const status = document.getElementById(modelNameInput().getAttribute('aria-describedby') ?? '')?.textContent
+    expect(status).toBe('正在获取端点模型列表…')
   })
 
   it('reads out that a provider without presets has no suggestions yet', async () => {

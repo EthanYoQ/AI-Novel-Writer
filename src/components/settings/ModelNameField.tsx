@@ -39,9 +39,11 @@ export function ModelNameField({
   const optionId = (index: number) => `${listId}-option-${index}`
   // 只有端点模型与预设混排时「推荐」才有区分作用；全是预设时状态行已经说明了来源。
   const mixed = candidates.some(candidate => !candidate.fromPreset)
-  const emptyHint = !open || visible.length > 0 ? null : candidates.length === 0
+  const listShown = open && visible.length > 0
+  const noSuggestionsHint = candidates.length === 0
     ? text('暂无候选模型，可直接输入模型名称。', 'No suggestions. Type a model name.')
     : text('没有匹配的候选，将使用输入的名称。', 'No matching suggestions. The typed name will be used.')
+  const emptyHint = open && !refreshing && !listShown ? noSuggestionsHint : null
 
   const pointerPressed = useRef(false)
   useEffect(() => {
@@ -121,8 +123,8 @@ export function ModelNameField({
           <Input
             id={inputId}
             role="combobox"
-            aria-expanded={open}
-            aria-controls={listId}
+            aria-expanded={listShown}
+            aria-controls={listShown ? listId : undefined}
             aria-autocomplete="list"
             aria-activedescendant={open && activeIndex >= 0 && visible[activeIndex] ? optionId(activeIndex) : undefined}
             aria-describedby={status || emptyHint ? statusId : undefined}
@@ -142,8 +144,8 @@ export function ModelNameField({
             type="button"
             tabIndex={-1}
             aria-label={open ? text('收起候选模型', 'Hide model suggestions') : text('展开候选模型', 'Show model suggestions')}
-            aria-expanded={open}
-            aria-controls={listId}
+            aria-expanded={listShown}
+            aria-controls={listShown ? listId : undefined}
             onMouseDown={event => event.preventDefault()}
             onClick={() => {
               if (open) hide()
@@ -180,7 +182,7 @@ export function ModelNameField({
           {emptyHint && <span className="block">{emptyHint}</span>}
         </p>
       )}
-      {open && visible.length > 0 && (
+      {listShown && (
         <ul
           ref={listRef}
           id={listId}
