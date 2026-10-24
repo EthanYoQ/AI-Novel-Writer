@@ -259,7 +259,7 @@ export function ModelForm({
     if (model.apiKey.trim()) return null
     return model.provider === 'ollama'
       ? { tone: 'muted', text: text('候选为推荐模型。点刷新按钮可获取本机已安装的模型。', 'Showing recommended models. Use the refresh button to list the models installed locally.') }
-      : { tone: 'muted', text: text('候选为推荐模型。填写 API Key 后展开会自动获取端点模型列表，也可以点刷新按钮获取。', 'Showing recommended models. After you enter an API key, opening the list fetches the endpoint models; you can also use the refresh button.') }
+      : { tone: 'muted', text: text('候选为推荐模型。填写 API Key 后展开会自动获取端点模型列表。', 'Showing recommended models. After you enter an API key, opening the list fetches the endpoint models.') }
   }
 
   return (
@@ -414,7 +414,7 @@ export function ModelForm({
                 {text('仅作用于当前模型；未调整时使用产品与服务商默认行为。', 'Applies only to this model. Unchanged values use product and provider defaults.')}
               </span>
             </span>
-            <ChevronDown size={14} className={cn('transition-transform', advancedOpen && 'rotate-180')} />
+            <ChevronDown size={14} className={cn(advancedOpen && 'rotate-180')} />
           </button>
 
           {advancedOpen && (

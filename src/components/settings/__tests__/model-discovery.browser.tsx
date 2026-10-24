@@ -662,8 +662,8 @@ describe('model discovery settings flow', () => {
 
     const openaiPresets = ['gpt-4.1', 'gpt-4.1-2025-04-14', 'o3', 'gpt-4o']
     expect(suggestionValues().slice(0, openaiPresets.length)).toEqual(openaiPresets)
-    expect(recommendedValues()).toEqual(suggestionValues())
-    expect(suggestionOptions()[0].textContent).toContain(badge)
+    expect(recommendedValues()).toEqual([])
+    expect(suggestionOptions()[0].textContent).not.toContain(badge)
     expect(document.querySelector('[role="status"]')?.textContent).toMatch(locale === 'zh-CN' ? /^候选为推荐模型。/u : /^Showing recommended models\./u)
     expect(discoverModels).not.toHaveBeenCalled()
   })
@@ -713,7 +713,7 @@ describe('model discovery settings flow', () => {
     const { saveModel } = await renderSettings(model, discoverModels)
     await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
     await openSuggestions()
-    await vi.waitFor(() => expect(recommendedValues()).toEqual(['gpt-4.1']))
+    await vi.waitFor(() => expect(suggestionValues()).toEqual(['gpt-4.1']))
     await chooseSuggestion('gpt-4.1')
     await expect.element(page.getByLabelText('上下文窗口', { exact: true })).toHaveValue(16_000)
     await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
@@ -841,6 +841,66 @@ describe('model discovery settings flow', () => {
     expect(input.value).toBe('deepseek-v4-pro')
     expect(document.activeElement).toBe(input)
     await expect.element(page.getByRole('button', { name: '保存配置', exact: true })).toBeVisible()
+  })
+
+  it('links the model name to a status line between the input and the list that also reads out empty results', async () => {
+    const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
+    await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    const status = () => document.getElementById(modelNameInput().getAttribute('aria-describedby') ?? '')
+    expect(status()?.getAttribute('role')).toBe('status')
+    expect(status()?.textContent).toBe('候选为推荐模型。点刷新按钮可获取本机已安装的模型。')
+
+    await openSuggestions()
+    const listbox = document.querySelector('[role="listbox"]')!
+    expect(status()!.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await typeInto(modelNameInput(), 'my-private-model')
+    expect(status()?.textContent).toContain('没有匹配的候选，将使用输入的名称。')
+  })
+
+  it('reads out that a provider without presets has no suggestions yet', async () => {
+    await renderSettings(savedProfile({ apiKey: '' }), vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    expect(suggestionOptions()).toHaveLength(0)
+    expect(document.getElementById(modelNameInput().getAttribute('aria-describedby') ?? '')?.textContent)
+      .toContain('暂无候选模型，可直接输入模型名称。')
+  })
+
+  it('marks only the current model with a check', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-pro', apiKey: '' })
+    await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    const checked = suggestionOptions().filter(option => option.querySelector('svg[aria-hidden="true"]'))
+    expect(checked.map(option => option.querySelector('span')?.textContent)).toEqual(['deepseek-v4-pro'])
+    expect(checked[0].getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('does not tell a user without a key to press refresh', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', apiKey: '' })
+    await renderSettings(model, vi.fn())
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    expect(document.querySelector('[role="status"]')?.textContent).toBe('候选为推荐模型。填写 API Key 后展开会自动获取端点模型列表。')
+  })
+
+  it('ignores clicks on suggestions while a refresh is about to replace them', async () => {
+    const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
+    let settle!: (result: ModelDiscoveryResult) => void
+    const discoverModels = vi.fn(() => new Promise<ModelDiscoveryResult>(resolve => { settle = resolve }))
+    await renderSettings(model, discoverModels)
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    expect(suggestionOptions().every(option => option.getAttribute('aria-disabled') === 'true')).toBe(true)
+    await chooseSuggestion('deepseek-v4-pro')
+    expect(modelNameInput().value).toBe('deepseek-v4-flash')
+
+    await act(async () => settle({ success: true, models: [
+      { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
+      { id: 'endpoint-only', name: 'endpoint-only', value: 'endpoint-only' },
+    ] }))
+    await chooseSuggestion('endpoint-only')
+    expect(modelNameInput().value).toBe('endpoint-only')
   })
 
   it('drops the fetched list after switching provider and fetches again for the new provider', async () => {
