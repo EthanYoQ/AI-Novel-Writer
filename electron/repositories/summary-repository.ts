@@ -448,7 +448,8 @@ export class SummaryRepository {
           const decision = decideDerivedPatch(actual, { projectId: context.projectId, epoch: context.epoch, characterId: update.characterId, field, value, valueHash: sha256(value),
             baseFieldRevision: base.revision, baseValueHash: base.valueHash, baseProvenance: base.provenance,
             source: context.source, sourceOrder: context.sourceOrder }, { source: current.source, order: current.sourceOrder, originProjectId })
-          if (decision === 'source-conflict' || decision === 'field-conflict') throw new Error(`FINALIZED_CHARACTER_${decision === 'source-conflict' ? 'SOURCE' : 'FIELD'}_CONFLICT`)
+          if (decision === 'source-conflict') throw new Error('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+          if (decision === 'field-conflict') throw new Error('FINALIZED_CHARACTER_FIELD_CONFLICT')
           if (decision === 'already-applied') { receipt.unchanged++; continue }
           if (decision === 'proposal-required') {
             if (value === actual.value) { receipt.unchanged++; continue }
