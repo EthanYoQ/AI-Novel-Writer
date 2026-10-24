@@ -128,7 +128,6 @@ function parseOpenAIModels(payload: unknown, credential: string): DiscoveredMode
 /**
  * TTS、图像（Nano Banana）、转写、音乐（Lyria）、音频模型，以及电脑操作、深度研究、Antigravity 与机器人这类代理模型，
  * 在 models 接口里同样声明 generateContent，只能按 Google 的命名区分；它们不是用来写正文的。
- * 按连字符分段匹配，不误伤名字里碰巧含这些字母的模型。
  */
 const GEMINI_NON_WRITING_MODEL = /(?:^|[-_.])(?:tts|image|live|transcribe|audio|lyria|nano-banana|computer-use|deep-research|antigravity|robotics)(?:$|[-_.])/iu
 const OPENAI_COMPATIBLE_EMBEDDING_MODEL = /embed|bge/iu
@@ -244,7 +243,7 @@ export class ModelDiscoveryService {
       const models = parseOpenAIModels(payload, model.apiKey)
       if (!models) return { success: false, errorCode: 'invalid_response' }
       if (models.length === 0) return { success: false, errorCode: 'empty' }
-      // OpenAI 兼容接口不说明模型用途；向量用途只按名字把明显的向量模型提前，其余保持端点顺序。
+      // OpenAI 兼容接口不说明模型用途，只能按名字认出向量模型。
       if (purpose === 'embedding') {
         const isEmbedding = (candidate: DiscoveredModel) => OPENAI_COMPATIBLE_EMBEDDING_MODEL.test(candidate.value)
         return { success: true, models: [...models.filter(isEmbedding), ...models.filter(candidate => !isEmbedding(candidate))] }

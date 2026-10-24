@@ -28,7 +28,6 @@ export function isGeminiThinkingLevel(value: unknown): value is GeminiThinkingLe
   return GEMINI_THINKING_LEVELS.includes(value as GeminiThinkingLevel)
 }
 
-/** Gemini 协议只接受 Gemini 的推理适配器，其他协议都不接受；保存、解析与高级映射共用这一条。 */
 export function reasoningAdapterFitsProtocol(protocol: unknown, adapter: ProviderReasoningDirective['adapter']): boolean {
   return (protocol === 'gemini') === (adapter === 'gemini-thinking-budget' || adapter === 'gemini-thinking-level')
 }

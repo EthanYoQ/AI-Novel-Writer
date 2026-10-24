@@ -74,7 +74,6 @@ export interface ProviderPreset {
   protocol: string
   /** 支持的生成模型列表（含各自的 maxTokens） */
   models: ModelPreset[]
-  /** 已下架的生成模型：不再出现在候选里，只让已保存的配置继续解析能力与推理映射。 */
   retiredModels?: ModelPreset[]
   /** 支持的向量模型列表（embedding 模型不需要 maxTokens） */
   embeddingModels: string[]
@@ -412,7 +411,6 @@ export function createProviderCatalog(): ProviderPreset[] {
     protocol: 'gemini',
     // 容量见各模型页 https://ai.google.dev/gemini-api/docs/models/<模型 ID>（输入 1,048,576、输出 65,536，
     // 均支持 Thinking 与 Structured outputs）；思考等级见 https://ai.google.dev/gemini-api/docs/generate-content/thinking 。
-    // 3.8 Flash 与 3.1 Pro 不支持 minimal，没有「关闭」档；产品的 xhigh、max 落到 high。
     models: [
       geminiThinkingLevelPreset('gemini-3.8-flash', false),
       geminiThinkingLevelPreset('gemini-3.5-flash-lite', true),
@@ -537,7 +535,6 @@ function validatedBudgetCapabilities(value: unknown): ModelBudgetCapabilities | 
   }
 }
 
-/** 按模型 ID 查目录：在售模型优先，其次是只为已保存配置保留的下架模型。 */
 function catalogModel(preset: ProviderPreset, modelName: string): ModelPreset | undefined {
   return preset.models.find(candidate => candidate.name === modelName)
     ?? preset.retiredModels?.find(candidate => candidate.name === modelName)

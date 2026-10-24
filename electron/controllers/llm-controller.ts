@@ -30,7 +30,6 @@ interface ActiveStream {
 
 const activeStreams = new Map<string, ActiveStream>()
 const CONNECTION_TEST_MAX_TOKENS = 1024
-/** 改这个值时同步改 error.connectionTestTimeout 的中英文文案，文案写明了秒数。 */
 const CONNECTION_TEST_TIMEOUT_MS = 30_000
 const CLOSED_EXECUTION_LEASE_TOMBSTONE_TTL_MS = 5 * 60_000
 

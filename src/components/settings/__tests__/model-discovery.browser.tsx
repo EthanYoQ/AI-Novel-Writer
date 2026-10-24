@@ -53,7 +53,6 @@ function discoveryRequest(model: ModelProfile) {
 }
 
 const suggestionOptions = () => Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
-/** 候选列表里每一项显示的模型 ID，按显示顺序。 */
 const suggestionValues = () => suggestionOptions().map(option => option.querySelector('span')?.textContent ?? '')
 const recommendedValues = () => suggestionOptions()
   .filter(option => /推荐|Recommended/u.test(option.textContent ?? ''))
@@ -64,7 +63,6 @@ const modelNameInput = () => {
   return input
 }
 
-/** 展开候选列表；已展开时先收起再展开，每次调用都算一次“展开”。 */
 async function openSuggestions(locale: Locale = 'zh-CN') {
   if (modelNameInput().getAttribute('aria-expanded') === 'true') {
     await act(async () => {
@@ -749,7 +747,6 @@ describe('model discovery settings flow', () => {
     await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
     await openSuggestions()
     await act(async () => { modelNameInput().focus() })
-    // 第一下 Tab 落在同一控件里的刷新按钮上，列表仍开着；第二下离开控件。
     await act(async () => { await userEvent.keyboard('{Tab}') })
     expect(modelNameInput().getAttribute('aria-expanded')).toBe('true')
     await act(async () => { await userEvent.keyboard('{Tab}') })

@@ -143,7 +143,6 @@ export async function startFakeModel(diagnostics) {
     diagnostics.push(`[fake-model] ${kind} <- ${detail}`)
   }
   const server = createServer(async (request, response) => {
-    // 模型表单的「获取模型列表」：OpenAI 兼容的 GET /v1/models，混着夹具模型、对话模型与向量模型。
     if (request.method === 'GET' && request.url === '/v1/models' && request.headers.authorization === `Bearer ${FAKE_MODEL.apiKey}`) {
       record('models', 'GET /v1/models')
       response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ data: FIXTURE_ENDPOINT_MODELS.map(id => ({ id })) }))

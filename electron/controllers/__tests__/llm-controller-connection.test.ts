@@ -790,7 +790,6 @@ describe('generation model connection test failures', () => {
   })
 })
 
-// 网络卡住时连接测试不能等满 undici 默认的 300 秒；超时要真正取消请求，并给出网络类的可读说明。
 describe('connection test timeout', () => {
   const retrievalModel: ModelProfile = { ...deepSeekModel, id: 'bge', modelName: 'bge-m3', baseUrl: 'https://embedding.example/v1', purposes: ['embedding'] }
   const hangUntilAborted = (signal: AbortSignal | undefined) => new Promise<never>((_resolve, reject) => {

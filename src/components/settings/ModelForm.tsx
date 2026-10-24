@@ -18,7 +18,6 @@ import { openModelProviderResource } from './model-provider-resource'
 import { ModelNameField } from './ModelNameField'
 import { modelNameCandidates, type ModelNameCandidate } from './model-name-candidates'
 
-/** 获取失败时的说明，按错误码查表。empty 也包括端点有模型、但没有适合当前用途（生成或向量）的模型。 */
 const DISCOVERY_NOTICES: Record<ModelDiscoveryErrorCode, readonly [string, string]> = {
   auth: ['鉴权失败：请检查 API Key。手工模型 ID 仍可使用。', 'Authentication failed. Check the API key. Manual model IDs remain available.'],
   unsupported: ['该端点不支持标准模型列表接口。请继续手工填写模型 ID。', 'This endpoint does not support the standard model-list API. Continue with a manual model ID.'],
@@ -27,7 +26,6 @@ const DISCOVERY_NOTICES: Record<ModelDiscoveryErrorCode, readonly [string, strin
   empty: ['端点没有返回适合当前用途的模型。请继续手工填写模型 ID。', 'The endpoint returned no models for this purpose. Continue with a manual model ID.'],
 }
 
-/** 本次表单配置下的端点模型列表获取；idle 表示还没获取过，改动服务商、地址或 Key 后回到 idle。 */
 type ModelDiscoveryState =
   | { status: 'idle' }
   | { status: 'loading' }
@@ -183,7 +181,6 @@ export function ModelForm({
     }))
   }
 
-  /** 选中候选：预设模型的能力由预设目录解析，端点模型只带端点明确声明的能力。 */
   const handleModelSelect = ({ value, recommended, declared }: ModelNameCandidate) => {
     if (!isEmbedding) {
       onChange(applyModelProfileSelection(model, { modelName: value }, declared))

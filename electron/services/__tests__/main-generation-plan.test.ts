@@ -204,7 +204,6 @@ describe('main generation physical liability planning without provider calls', (
     const budget = ledger(); budget.policy.maxTokenLiability = 10000
     const result = plan(gemini(), task, budget)
     expect(result.options.reasoning).toEqual({ adapter: 'gemini-thinking-level', thinkingLevel: 'medium' })
-    // 等级没有对应的 token 数，不能像 2.5 的 thinkingBudget 那样单独预留并声称总量有界。
     expect(result.reasoningUpperBoundTokens).toBe(0)
     expect(result.usagePolicy).toMatchObject({ reasoning: 'unknown', canBoundTotalLiability: false })
     expect(result.reservedTokens).toBeLessThanOrEqual(10000)

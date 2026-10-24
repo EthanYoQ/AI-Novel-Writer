@@ -13,7 +13,6 @@ function matches(candidate: ModelNameCandidate, query: string): boolean {
   return !needle || candidate.value.toLowerCase().includes(needle) || Boolean(candidate.label?.toLowerCase().includes(needle))
 }
 
-/** 模型名：始终可直接输入，候选列表按输入过滤，刷新按钮向端点重新获取。 */
 export function ModelNameField({
   value, placeholder, candidates, refreshing, status, onInput, onSelect, onOpen, onRefresh,
 }: {
@@ -24,7 +23,6 @@ export function ModelNameField({
   status: { text: string, tone: 'muted' | 'error' } | null
   onInput: (value: string) => void
   onSelect: (candidate: ModelNameCandidate) => void
-  /** 每次展开时调用，由表单决定是否自动获取端点列表。 */
   onOpen: () => void
   onRefresh: () => void
 }) {
@@ -32,9 +30,7 @@ export function ModelNameField({
   const inputId = useId()
   const listId = useId()
   const [open, setOpen] = useState(false)
-  // 展开时显示全部候选；作者开始输入后才按输入过滤，避免已填的完整模型名把列表筛到只剩一项。
   const [query, setQuery] = useState<string | null>(null)
-  // 按模型 ID 记住高亮项：候选被替换（获取完成、刷新）后不在新列表里的高亮自然失效，不会让 Enter 选中别的模型。
   const [activeValue, setActiveValue] = useState<string | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const visible = query === null ? candidates : candidates.filter(candidate => matches(candidate, query))
@@ -79,7 +75,6 @@ export function ModelNameField({
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    // 输入法组合中的方向键与回车属于候选窗，不能拿来选模型或收起列表。
     if (isComposing({ isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode })) return
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
@@ -97,7 +92,6 @@ export function ModelNameField({
       if (candidate) choose(candidate)
       else hide()
     } else if (event.key === 'Escape' && open) {
-      // 只收起候选列表，不让外层的设置侧页一起关闭。
       event.preventDefault()
       event.stopPropagation()
       hide()
@@ -161,12 +155,11 @@ export function ModelNameField({
           aria-label={text('获取模型列表', 'Refresh model list')}
           title={text('获取模型列表', 'Refresh model list')}
           onClick={() => {
-            // 手动刷新本身就是一次获取，展开列表时不再经 onOpen 触发自动获取。
             onRefresh()
             setOpen(true)
             setQuery(null)
             setActiveValue(null)
-            // 获取期间按钮会禁用，焦点留在上面会丢；交回输入框，方向键可以直接选。
+            // 获取期间按钮会禁用，焦点留在上面会丢。
             document.getElementById(inputId)?.focus()
           }}
           disabled={refreshing}

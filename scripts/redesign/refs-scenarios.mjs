@@ -12,7 +12,6 @@ import { chromeContrastFailures, msFromClickToProse, seedStageSample } from './s
 import { countUnits, STAGE_SAMPLE } from './stage-sample.mjs'
 import { FAKE_MODEL, FIXTURE_ENDPOINT_MODELS } from './fake-model.mjs'
 
-/** 编辑夹具模型并展开模型名候选；英文时先在外观里切语言。 */
 async function openFixtureModelSuggestions({ page, fake }, locale) {
   await stage.openSettings(page)
   const english = locale === 'en-US'
@@ -376,7 +375,6 @@ export const REFS_SCENARIOS = {
     assert.equal(fake.requests.length, before, '假服务在鉴权前就回 403，不算一次模型请求')
     return observed
   } },
-  // 模型名控件（#454）：没填 Key 时展开就是服务商预设兜底，不发请求。
   'models-name-fallback': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
     await stage.openSettings(page)
     await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
@@ -389,7 +387,6 @@ export const REFS_SCENARIOS = {
     assert.ok(observed.options.length >= 4 && observed.options.every(text => text.includes('推荐')), JSON.stringify(observed))
     return observed
   } },
-  // 已填地址与 Key 的配置第一次展开时自动获取一次，端点列表替换预设，与预设同名的标推荐排前面。
   'models-name-endpoint': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const observed = await openFixtureModelSuggestions(context, 'zh-CN')
     await context.shoot('models-name-endpoint')
@@ -425,7 +422,6 @@ export const REFS_SCENARIOS = {
     assert.ok(layout.listRight <= layout.formRight, '超长模型 ID 不把列表撑出表单')
     return { ...observed, layout }
   } },
-  // 连接测试的截止时间（#454）：卡住假模型后点「测试连接」，30 秒后停止等待并给出网络类说明，不再等满 300 秒。
   'models-test-connection-timeout': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
     fake.gate.hold()
     await stage.openSettings(page)
