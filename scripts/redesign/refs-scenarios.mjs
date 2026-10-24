@@ -24,7 +24,10 @@ async function openFixtureModelSuggestions({ page, fake }, locale) {
   await page.getByRole('button', { name: english ? 'Show model suggestions' : '展开候选模型', exact: true }).click()
   const status = page.getByText(english ? /^Fetched \d+ models from the endpoint\.$/u : /^已从端点获取 \d+ 个模型。$/u)
   await status.waitFor({ state: 'visible', timeout: 15_000 })
-  const options = page.getByRole('listbox', { name: english ? 'Model suggestions' : '候选模型' }).getByRole('option')
+  const listbox = page.getByRole('listbox', { name: english ? 'Model suggestions' : '候选模型' })
+  await listbox.evaluate(element => element.scrollIntoView({ block: 'center' }))
+  await page.mouse.move(0, 0)
+  const options = listbox.getByRole('option')
   return { options: await options.allInnerTexts(), status: await status.innerText(), requests: fake.requests.filter(kind => kind === 'models').length }
 }
 
@@ -378,13 +381,24 @@ export const REFS_SCENARIOS = {
   'models-name-fallback': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
     await stage.openSettings(page)
     await stage.root(page).getByRole('button', { name: '添加模型', exact: true }).first().click()
+    const combobox = page.locator('input[role="combobox"]')
+    const fieldOrder = await combobox.evaluate(input => {
+      const form = input.closest('.rounded-xl')
+      return Array.from(form?.querySelectorAll('label') ?? []).map(label => label.textContent?.trim())
+        .filter(label => ['服务商', '调用协议', 'base_url', 'API Key', 'model（模型名称）'].includes(label))
+    })
+    await combobox.evaluate(element => element.closest('.rounded-xl')?.scrollIntoView({ block: 'start' }))
+    await shoot('models-name-order')
+    assert.deepEqual(fieldOrder, ['服务商', '调用协议', 'base_url', 'API Key', 'model（模型名称）'])
     await page.getByRole('button', { name: '展开候选模型', exact: true }).click()
     const options = page.getByRole('listbox', { name: '候选模型' }).getByRole('option')
     await options.first().waitFor({ state: 'visible' })
-    const observed = { options: await options.allInnerTexts(), requests: fake.requests.filter(kind => kind === 'models').length }
+    await page.getByRole('listbox', { name: '候选模型' }).evaluate(element => element.scrollIntoView({ block: 'center' }))
+    await page.mouse.move(0, 0)
+    const observed = { fieldOrder, options: await options.allInnerTexts(), requests: fake.requests.filter(kind => kind === 'models').length }
     await shoot('models-name-fallback')
     assert.equal(observed.requests, 0, '没填 API Key 不请求端点模型列表')
-    assert.ok(observed.options.length >= 4 && observed.options.every(text => text.includes('推荐')), JSON.stringify(observed))
+    assert.ok(observed.options.length >= 4 && observed.options.every(text => !text.includes('推荐')), '全是预设时不标「推荐」')
     return observed
   } },
   'models-name-endpoint': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
@@ -412,15 +426,42 @@ export const REFS_SCENARIOS = {
     const observed = await openFixtureModelSuggestions(context, 'zh-CN')
     const layout = await context.page.evaluate(() => {
       const list = document.querySelector('[role="listbox"]')?.getBoundingClientRect()
-      const form = document.querySelector('input[role="combobox"]')?.closest('.rounded-xl')?.getBoundingClientRect()
+      const input = document.querySelector('input[role="combobox"]')
+      const form = input?.closest('.rounded-xl')?.getBoundingClientRect()
+      const refresh = document.querySelector('button[aria-label="获取模型列表"]')
+      const option = document.querySelector('[role="option"]')
       return { listRight: list?.right, listHeight: list?.height, formRight: form?.right, pageScrollWidth: document.documentElement.scrollWidth,
-        viewport: window.innerWidth }
+        viewport: window.innerWidth, inputHeight: input?.getBoundingClientRect().height, refreshHeight: refresh?.getBoundingClientRect().height,
+        inputRadius: input && getComputedStyle(input).borderRadius, refreshRadius: refresh && getComputedStyle(refresh).borderRadius,
+        listRadius: document.querySelector('[role="listbox"]') && getComputedStyle(document.querySelector('[role="listbox"]')).borderRadius,
+        optionFontSize: option && getComputedStyle(option).fontSize }
     })
     await context.shoot('models-name-narrow')
     assert.ok(layout.pageScrollWidth <= layout.viewport, JSON.stringify(layout))
     assert.ok(layout.listHeight <= 240.5, JSON.stringify(layout))
     assert.ok(layout.listRight <= layout.formRight, '超长模型 ID 不把列表撑出表单')
+    assert.equal(layout.refreshHeight, layout.inputHeight, '刷新按钮与输入框同高')
+    assert.equal(layout.refreshRadius, layout.inputRadius, '刷新按钮与输入框同圆角')
+    assert.equal(layout.listRadius, layout.inputRadius, '列表与输入框同圆角')
+    assert.ok(Number.parseFloat(layout.optionFontSize) >= 13, '列表行字号不小于 13px')
     return { ...observed, layout }
+  } },
+  'models-gemini-thinking-off': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, shoot }) => {
+    await stage.openSettings(page)
+    await page.getByRole('button', { name: `编辑「${FAKE_MODEL.name}」`, exact: true }).click()
+    await page.locator('select').filter({ has: page.locator('option[value="gemini"]') }).first().selectOption('gemini')
+    await page.getByRole('button', { name: '高级设置', exact: true }).click()
+    await page.getByLabel('模型推理覆盖', { exact: true }).selectOption('off')
+    const settings = page.locator('[data-model-reasoning-override-settings]')
+    await settings.evaluate(element => element.scrollIntoView({ block: 'center' }))
+    const observed = { modelName: await page.locator('input[role="combobox"]').inputValue(), text: await settings.innerText(),
+      wire: await settings.locator('[data-reasoning-wire]').first().innerText() }
+    await shoot('models-gemini-thinking-off')
+    assert.equal(observed.modelName, 'gemini-3.8-flash')
+    assert.match(observed.text, /Gemini 3 无法完全关闭思考/u)
+    assert.match(observed.text, /关闭 → 低/u)
+    assert.equal(observed.wire, 'thinking_level=low')
+    return observed
   } },
   'models-test-connection-timeout': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ page, fake, shoot }) => {
     fake.gate.hold()
