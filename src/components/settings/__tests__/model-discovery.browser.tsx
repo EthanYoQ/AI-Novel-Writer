@@ -755,9 +755,20 @@ describe('model discovery settings flow', () => {
     expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', modelName: 'local-model' }))
   })
 
-  it('still asks for a key before saving an embedding model on a local address that is not Ollama', async () => {
+  it('saves an embedding model on a local address that is not Ollama without a key', async () => {
     const model = savedProfile({ baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', modelName: 'local-embed', purposes: ['embedding'] })
-    await renderSettings(model, listed('local-embed'))
+    const { saveModel } = await renderSettings(model, listed('local-embed'))
+    await act(async () => { useLayoutStore.setState({ settingsSection: 'embedding' }) })
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    const save = page.getByRole('button', { name: '保存配置', exact: true })
+    await expect.element(save).toBeEnabled()
+    await act(async () => { await save.click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', modelName: 'local-embed' }))
+  })
+
+  it('still asks for a key before saving a cloud embedding model', async () => {
+    const model = savedProfile({ baseUrl: 'https://provider.invalid/v1', apiKey: '', modelName: 'cloud-embed', purposes: ['embedding'] })
+    await renderSettings(model, listed('cloud-embed'))
     await act(async () => { useLayoutStore.setState({ settingsSection: 'embedding' }) })
     await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
     const save = page.getByRole('button', { name: '保存配置', exact: true })
