@@ -238,6 +238,11 @@ it('length不得formal commit，重开不重发',async()=>{
  expect(next.readFinalizationGeneration({slot:f.slot})?.effect).toBeUndefined()
  expect(f.dispatch).toHaveBeenCalledTimes(1)
 })
+it('#502 章节要点没有提交时，角色状态开始就记成需要先完成章节要点，不发模型请求',async()=>{
+ const f=await generated('chapter_notes','length')
+ expect(()=>f.owner.beginFinalizationGeneration({slot:{source:f.slot.source,stepKey:'character_cards'},modelId:'synthetic'})).toThrow('GENERATION_FINALIZATION_PREDECESSOR_REQUIRED')
+ expect(f.dispatch).toHaveBeenCalledTimes(1)
+})
 it('unknown保留原attempt，重开不得自动重发或产生effect',async()=>{
  const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:'林岚进入北塔。'});throw new Error('合成发送结果未知')})
  const slot:FinalizationGenerationSlot={source:f.prepared.context.source,stepKey:'chapter_notes'}

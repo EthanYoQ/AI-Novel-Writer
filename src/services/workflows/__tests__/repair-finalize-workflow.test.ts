@@ -237,6 +237,69 @@ describe('createRepairFinalizeWorkflow', () => {
     }
   })
 
+  describe('#502 retry failed steps reruns only the steps a retry can change', () => {
+    type Row = { stepKey: string; ok: boolean; errorMsg?: string }
+    const statusOf = (rows: Row[]): PostProcessStatus => ({
+      scope: 'chapter_3_finalize', sourceLabel: '第3章定稿', createdAt: '', updatedAt: '', allCriticalPassed: true,
+      steps: Object.fromEntries(rows.map(row => [row.stepKey, {
+        label: row.stepKey, critical: false, ok: row.ok, lastAttemptAt: '', attemptCount: 1, ...(row.errorMsg ? { error: row.errorMsg } : {}),
+      }])),
+    })
+
+    function retryCard(persisted: Row[]) {
+      useProjectStore.setState({
+        currentProject: { id: PROJECT_SESSION.projectId, name: 'Repair finalize', path: PROJECT_PATH, sessionLease: PROJECT_SESSION.leaseId } as never,
+      })
+      const invoke = vi.fn(async (channel: string) => {
+        switch (channel) {
+          case 'db:draft-get-finalized': return { id: 17 }
+          case 'db:draft-get-full': return { content: '已定稿正文' }
+          case 'db:continuity-read-source': return finalizedSource('已定稿正文')
+          case 'db:blueprint-get': return { title: '定稿标题', characters: [] }
+          case 'db:post-process-get-latest-run':
+            return { id: 9, triggerSourceType: 'chapter_finalize', triggerSourceId: '3', sourceLabel: '第3章定稿', allCriticalPassed: false, createdAt: '', updatedAt: '' }
+          case 'db:post-process-get-steps':
+            return persisted.map(row => ({ label: row.stepKey, critical: false, lastAttemptAt: '', attemptCount: 1, ...row }))
+          default: throw new Error(`unexpected IPC: ${channel}`)
+        }
+      })
+      vi.stubGlobal('window', { aiNovelAPI: { invoke } })
+      const step = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION).steps[0]!
+      return step.executor({ ...step, id: 'repair-finalize-502', status: 'running', logs: [] }, context(), callbacks())
+    }
+
+    it('leaves a failure that retrying cannot change alone and reports the repair as done', async () => {
+      postProcess.execute.mockResolvedValue(statusOf([
+        { stepKey: 'kb_import', ok: true },
+        { stepKey: 'chapter_notes', ok: true },
+        { stepKey: 'character_cards', ok: false, errorMsg: 'FINALIZED_CHARACTER_FIELD_CONFLICT' },
+      ]))
+      await expect(retryCard([
+        { stepKey: 'kb_import', ok: false, errorMsg: '向量服务没有响应' },
+        { stepKey: 'chapter_notes', ok: true },
+        { stepKey: 'character_cards', ok: false, errorMsg: 'FINALIZED_CHARACTER_FIELD_CONFLICT' },
+      ])).resolves.toBeUndefined()
+      expect(postProcess.params).toEqual([expect.objectContaining({ onlyFailed: true, stepKeys: ['kb_import'] })])
+    })
+
+    it('reruns character state behind chapter notes when chapter notes are retried', async () => {
+      await retryCard([
+        { stepKey: 'kb_import', ok: true },
+        { stepKey: 'chapter_notes', ok: false, errorMsg: 'FINALIZATION_GENERATION_INCOMPLETE' },
+        { stepKey: 'character_cards', ok: false, errorMsg: "Error invoking remote method 'project-session:invoke': Error: GENERATION_FINALIZATION_PREDECESSOR_REQUIRED" },
+      ])
+      expect(postProcess.params).toEqual([expect.objectContaining({ stepKeys: ['chapter_notes', 'character_cards'] })])
+    })
+
+    it('runs nothing when no failed step can be retried', async () => {
+      await expect(retryCard([
+        { stepKey: 'chapter_notes', ok: false, errorMsg: 'GENERATION_FINALIZATION_SOURCE_CHANGED' },
+        { stepKey: 'character_cards', ok: false, errorMsg: 'GENERATION_FINALIZATION_PREDECESSOR_REQUIRED' },
+      ])).rejects.toThrow()
+      expect(postProcess.execute).not.toHaveBeenCalled()
+    })
+  })
+
   it('freezes English repair copy, fallback metadata, and completion text at creation', async () => {
     useLocaleStore.setState({ locale: 'en-US' })
     useProjectStore.setState({
