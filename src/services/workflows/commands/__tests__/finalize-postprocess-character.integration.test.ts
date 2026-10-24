@@ -31,6 +31,7 @@ import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow
 import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { RunFinalizePostProcessCommand } from '../finalize-chapter.command'
+import { globalEventBus } from '../../../../shared/event-bus'
 import { GenerateDraftCommand } from '../generate-draft.command'
 type ModelMessages = Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0]
 
@@ -304,7 +305,7 @@ function installModel(): void {
   })
 }
 
-function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKey?: string; retryInvalidResult?: boolean } = {}) {
+function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKey?: string; retryInvalidResult?: boolean; stopOnFailure?: boolean } = {}) {
   insertFinalizedDraft(7, 2, draftContent)
   const db = getProjectDb()!
   if (!db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get('fcs:finalization-7')) {
@@ -1026,4 +1027,48 @@ it('#420 断流后重试拿到坏 JSON 时，同一次点击里自动修正一�
  expect(repaired.steps.character_cards).toMatchObject({ ok: true })
  expect(characterCalls).toBe(3)
  expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+})
+
+describe('cast refresh after the character-state step', () => {
+  const harbor = JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })
+  let refreshes: Array<{ resources: string[]; projectSession: unknown; storedLocation?: string }> = []
+  let stopListening = () => {}
+  beforeEach(() => {
+    refreshes = []
+    stopListening = globalEventBus.on('REFRESH_RESOURCE', ({ resources, projectSession }) => refreshes.push({
+      resources, projectSession, storedLocation: CharacterRosterRepository.read().entries[0]?.currentState?.location,
+    }))
+  })
+  afterEach(() => stopListening())
+
+  it.each([
+    ['a single-chapter finalization', {}],
+    ['a batch-creation chapter', { stopOnFailure: true }],
+  ])('asks the open cast to reload once %s has written the new state', async (_path, overrides) => {
+    cardResponse = harbor
+    const status = await command('Lin Lan arrives at the harbor.', overrides).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+
+    expect(status.steps.character_cards).toMatchObject({ ok: true })
+    expect(refreshes).toEqual([{ resources: ['characterCards'], projectSession: workflowContext.projectSession, storedLocation: 'harbor' }])
+  })
+
+  it('asks the cast to reload after a retried character step succeeds and never after it fails', async () => {
+    let interrupted = false
+    useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+      const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+      if (!system.includes('character records')) streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop')
+      else if (!interrupted) { interrupted = true; streamCallbacks.onError?.('synthetic stream interrupted') }
+      else streamCallbacks.onDone?.(modelFixtureResponse(harbor), undefined, 'stop')
+      return 'synthetic-request'
+    }) })
+    const initial = await command('Lin Lan arrives at the harbor.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    expect(initial.steps.character_cards.ok).toBe(false)
+    expect(refreshes).toEqual([])
+
+    const retried = await command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKey: 'character_cards', retryInvalidResult: true })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+
+    expect(retried.steps.character_cards).toMatchObject({ ok: true })
+    expect(refreshes).toEqual([{ resources: ['characterCards'], projectSession: workflowContext.projectSession, storedLocation: 'harbor' }])
+  })
 })
