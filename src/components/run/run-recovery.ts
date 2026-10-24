@@ -276,20 +276,24 @@ function reviewDigest(text: string, locale: Locale): string {
 
 /**
  * 复核输出是另一种结构：按保存时同一套证据校验（buildReviewCycleRecheckReport）整理，结论与条数一行，
- * 再列最多两条，未解决在前、已解决在后。证据定位不到、模型漏报，或第 2 版复核里模型判为已解决的，
- * 保存时都是待核实，这里也写待核实。解析不了时同审稿一样只给说明。
+ * 再列最多两条，未解决在前、已解决在后。结论按校验后的全部意见写，不照抄模型的 summary（它可能自称全部解决）。
+ * 证据定位不到、模型漏报，或第 2 版复核里模型判为已解决的，保存时都是待核实，这里也写待核实。
+ * 解析不了时同审稿一样只给说明。
  */
 function recheckDigest(text: string, source: string, recheck: ReviewCycleRecheckContext, locale: Locale): string {
   const t = lang(locale)
   const report = buildReviewCycleRecheckReport(text, source, recheck, locale, 2)
   if (!report.validModelOutput) return t('这是复核的结构化结果，未能整理成摘要；复制可得到原文。', 'This is a structured recheck result that could not be summarized. Copy it to get the original text.')
   const count = report.items.length
+  const conclusion = count > 0 && report.items.every(item => item.severity === 'pass')
+    ? t('复核确认全部意见已解决', 'The recheck confirmed that every note is resolved')
+    : t('复核未能确认全部意见已解决', 'The recheck could not confirm that every note is resolved')
   const order = { warning: 0, unknown: 1, pass: 2 } as const
   const label = { warning: t('未解决', 'Unresolved'), unknown: t('待核实', 'Needs verification'), pass: t('已解决', 'Resolved') }
   const points = report.items.map(item => ({ severity: item.severity as keyof typeof order, category: String(item.category), description: String(item.description) }))
     .sort((a, b) => order[a.severity] - order[b.severity]).slice(0, 2)
     .map(item => t(`${label[item.severity]} · ${item.category}：${item.description}`, `${label[item.severity]} · ${item.category}: ${item.description}`))
-  return [t(`${report.summary}（${count} 条意见）`, `${report.summary} (${count} ${pluralEn(count, 'item')})`), ...points].join('\n')
+  return [t(`${conclusion}（${count} 条意见）`, `${conclusion} (${count} ${pluralEn(count, 'item')})`), ...points].join('\n')
 }
 
 function reviewEntry({ view, recovery }: RecoverySources['reviews'][number], locale: Locale): ReviewEntry {

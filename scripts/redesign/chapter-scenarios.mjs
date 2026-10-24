@@ -480,9 +480,10 @@ export const CHAPTER_SCENARIOS = {
       // 复验提示里也带着确认的修稿清单，要先按复核锚点认出它。
       const anchors = prompt.split('【需复核的原始证据锚点】')[1]
       if (!anchors) return prompt.includes('goalReviews') && !prompt.includes('【已确认纳入本次修稿的审稿项】') ? firstReview : null
-      const ids = [...anchors.matchAll(/"findingId": "([^"]+)",\s*"targetId": "([^"]+)"/g)]
-      return JSON.stringify({ summary, items: ids.map(([, findingId, targetId], index) => ({
-        findingId, targetId, resolved: index === 0, evidenceQuote: '潮水退去', reason: index === 0 ? '第二段铺垫已压缩到两句。' : '证据不足，仍按原样。',
+      const findings = JSON.parse(anchors.slice(anchors.indexOf('['), anchors.indexOf(']\n\n') + 1))
+      // 证据取自修稿新增的那句，在合并后正文里只出现一次，复验按可定位的证据处理。
+      return JSON.stringify({ summary, items: findings.map(({ findingId, targetId }) => ({
+        findingId, targetId, resolved: true, evidenceQuote: '又核对了一遍潮位表', reason: '第二段铺垫已压缩到两句。',
       })) })
     })
     await chapterView.open(page, 4)
@@ -495,13 +496,13 @@ export const CHAPTER_SCENARIOS = {
       assert.ok(Date.now() < deadline, `60 秒内没有发出合并后的复验（对话请求 ${fake.chats.map(chat => chat.kind).join('、')}）`)
       await page.waitForTimeout(250)
     }
-    await stage.root(page).locator('.stage-capsule:not([data-tone="ok"])').waitFor({ state: 'detached', timeout: 90_000 })
+    await waitRunDone(page)
     await runSheet.openFromPalette(page)
-    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: summary })
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: '复核未能确认全部意见已解决' })
     await card.waitFor({ state: 'visible' })
-    const zh = { rawJson: await card.getByText('"summary"').count(), count: await card.getByText(/（1 条意见）/).count(),
+    const zh = { rawJson: await card.getByText('"summary"').count(), modelSummary: await card.getByText(summary).count(), count: await card.getByText(/（1 条意见）/).count(),
       pending: await card.getByText(/待核实/).count() }
-    assert.deepEqual(zh, { rawJson: 0, count: 1, pending: 1 }, '中文恢复卡显示复验摘要，模型判为已解决的写待核实')
+    assert.deepEqual(zh, { rawJson: 0, modelSummary: 0, count: 1, pending: 1 }, '中文恢复卡显示复验摘要，模型判为已解决的写待核实')
     await card.scrollIntoViewIfNeeded()
     await shoot('chapter-recheck-digest-zh')
 
@@ -513,7 +514,7 @@ export const CHAPTER_SCENARIOS = {
     await page.getByRole('dialog', { name: 'Search and jump' }).getByRole('combobox').fill('Run sheet')
     await page.keyboard.press('Enter')
     await runSheet.waitUntilOpen(page)
-    const cardEn = runSheet.recovery(page).getByRole('article').filter({ hasText: summary })
+    const cardEn = runSheet.recovery(page).getByRole('article').filter({ hasText: 'The recheck could not confirm that every note is resolved' })
     await cardEn.waitFor({ state: 'visible' })
     await cardEn.scrollIntoViewIfNeeded()
     const en = { rawJson: await cardEn.getByText('"summary"').count(), item: await cardEn.getByText(/\(1 item\)/).count(),
