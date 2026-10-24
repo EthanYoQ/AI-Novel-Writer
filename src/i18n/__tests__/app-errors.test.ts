@@ -33,6 +33,7 @@ describe('generation error codes from the main process', () => {
     ["Error invoking remote method 'character-proposal:list-pending-finalized': Error: GENERATION_PROJECT_SESSION_STALE", '重新打开'],
     ['Error: GENERATION_REQUEST_FAILED', '重试'],
     ["Error invoking remote method 'finalization-generation:commit': Error: FINALIZED_CHARACTER_SOURCE_CONFLICT", '当前状态'],
+    ["Error invoking remote method 'finalization-generation:commit': Error: FINALIZED_CHARACTER_FIELD_CONFLICT", '生成期间'],
   ])('turns %s into a full sentence without the IPC wrapper', (raw, hint) => {
     for (const error of [raw, new Error(raw)]) {
       const zh = knownAppErrorMessage('zh-CN', error)

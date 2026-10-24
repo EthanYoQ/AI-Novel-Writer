@@ -47,6 +47,19 @@ describe('定稿后处理步骤错误', () => {
     for (const text of [zhText, enText]) expect(text).not.toMatch(/Error invoking|FINALIZED_CHARACTER|请点「重试」|Select Retry/u)
   })
 
+  it('#484 角色状态字段在生成期间被改动：记成码，中英文说明原因、重试无效和作者能做什么', () => {
+    const raw = "Error invoking remote method 'project-session:invoke': Error: FINALIZED_CHARACTER_FIELD_CONFLICT"
+    expect(finalizationStepErrorCode(raw)).toBe('FINALIZED_CHARACTER_FIELD_CONFLICT')
+    const zhText = describeFinalizationStepError(raw, zh), enText = describeFinalizationStepError(raw, en)
+    expect(zhText).toContain('正文定稿已保存')
+    expect(zhText).toContain('「当前状态」')
+    expect(enText).toContain('Current state')
+    expect(zhText).toContain('再点「重试」结果也一样')
+    expect(enText).toContain('Retrying gives the same result')
+    expect(zhText).not.toBe(describeFinalizationStepError('FINALIZED_CHARACTER_SOURCE_CONFLICT', zh))
+    for (const text of [zhText, enText]) expect(text).not.toMatch(/Error invoking|FINALIZED_CHARACTER|请点「重试」|Select Retry/u)
+  })
+
   it('旧版本存下的带 IPC 包装的步骤错误也换成可读说明', () => {
     expect(describeFinalizationStepError("Error invoking remote method 'project-session:invoke': Error: FINALIZATION_GENERATION_INCOMPLETE", zh))
       .toBe(describeFinalizationStepError('FINALIZATION_GENERATION_INCOMPLETE', zh))

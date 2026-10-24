@@ -318,6 +318,26 @@ describe('单章视图的主按钮随五种状态变化', () => {
     expect(workflows.createRepairFinalizeWorkflow.mock.calls.map(call => [call[0], call[3]])).toEqual([[3, undefined], [3, 'character_cards']])
   })
 
+  it.each([
+    ['zh-CN', '生成期间', 'Retry'],
+    ['en-US', 'while this step was running', '重试'],
+  ] as const)('#484 角色状态提交时字段已被改动：步骤详情用 %s 说明原因和作者能做什么，不显示错误码', async (locale, hint, otherLanguage) => {
+    const draft = backend.addDraft({ status: 'finalized' })
+    backend.state.postProcess = { steps: [
+      { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+      { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1,
+        errorMsg: "Error invoking remote method 'project-session:invoke': Error: FINALIZED_CHARACTER_FIELD_CONFLICT" },
+    ] }
+    await act(async () => useLocaleStore.setState({ locale }))
+    await mount()
+    await openDraft(draft.id)
+    await vi.waitFor(() => expect(host!.querySelector('.stage-ch-post-step[data-state="failed"] .stage-ch-post-detail')).not.toBeNull())
+    const detail = host!.querySelector('.stage-ch-post-step[data-state="failed"] .stage-ch-post-detail')!.textContent!
+    expect(detail).not.toMatch(/FINALIZED_CHARACTER|Error invoking/u)
+    expect(detail).toContain(hint)
+    expect(detail).not.toContain(otherLanguage)
+  })
+
   it('定稿：修复前的检查还没回来时切到英文，拦下修复的提示用英文', async () => {
     const draft = backend.addDraft({ status: 'finalized' })
     backend.state.postProcess = { steps: [
