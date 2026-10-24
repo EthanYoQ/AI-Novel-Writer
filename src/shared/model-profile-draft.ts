@@ -56,7 +56,8 @@ export interface CreateModelProfileDraftOptions {
 /**
  * 为设置界面创建完整的新模型草稿。
  *
- * 生成模型保留 OpenAI 起点；向量模型默认使用 SiliconFlow 的免费 BAAI/bge-m3。
+ * 生成模型从 OpenAI 端点起步，模型名留空，等作者从端点拉到的列表里选；
+ * 向量模型默认使用 SiliconFlow 的免费 BAAI/bge-m3，检索模型页的引导文案按「填上密钥就能用」写。
  */
 export function createModelProfileDraft({
   id,
@@ -67,17 +68,10 @@ export function createModelProfileDraft({
   const preset = createProviderCatalog().find((candidate) => candidate.provider === provider)
   if (!preset) throw new Error(`Missing built-in provider preset: ${provider}`)
 
-  const modelPreset = isEmbedding ? undefined : preset.models[0]
-  const modelName = isEmbedding
-    ? (preset.embeddingModels[0] ?? '')
-    : (modelPreset?.name ?? '')
-  const capabilities = isEmbedding
-    ? preset.embeddingModelCapabilities?.[modelName]
-    : modelPreset?.capabilities
-  const maxTokens = isEmbedding ? capabilities?.maxOutputTokens ?? 4096
-    : Math.min(modelPreset?.budgetCapabilities?.maxOutputTokens ?? capabilities?.maxOutputTokens ?? DEFAULT_GENERATION_OUTPUT_TOKENS, DEFAULT_GENERATION_OUTPUT_TOKENS)
+  const modelName = isEmbedding ? (preset.embeddingModels[0] ?? '') : ''
+  const capabilities = isEmbedding ? preset.embeddingModelCapabilities?.[modelName] : undefined
 
-  const draft: ModelProfile = {
+  return {
     id,
     name: isEmbedding ? `${preset.displayName ?? preset.provider} ${modelName}` : '',
     provider,
@@ -86,10 +80,9 @@ export function createModelProfileDraft({
     apiKey: '',
     baseUrl: preset.baseUrl,
     temperature: 0.7,
-    maxTokens,
+    maxTokens: isEmbedding ? capabilities?.maxOutputTokens ?? 4096 : DEFAULT_GENERATION_OUTPUT_TOKENS,
     capabilities: capabilities ? { ...capabilities } : undefined,
     purposes: [...purposes],
     ...(isEmbedding ? { embeddingOptions: { ...DEFAULT_EMBEDDING_OPTIONS } } : {}),
   }
-  return isEmbedding ? draft : applyModelProfileSelection({ ...draft, modelName: '' }, { modelName })
 }
