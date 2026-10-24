@@ -1172,6 +1172,42 @@ describe('S07 durable task budget diagnostics', () => {
     expect(saved.outcome.receipt).toMatchObject({ failureCode: 'GENERATION_PROVIDER_FAILED' })
     expect(JSON.stringify(saved.outcome)).not.toContain('synthetic-private-key')
   })
+  // 断网时真实 OpenAI provider 也要让回执记成网络失败；ENETUNREACH 不在诊断的安全码表里，不能靠诊断兜底（#484）。
+  it('records an OpenAI request rejected by the network as a network failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed',
+      { cause: Object.assign(new Error('connect ENETUNREACH 203.0.113.1:443'), { code: 'ENETUNREACH' }) })))
+    const f = fixture()
+    const run = f.owner.begin(f.begin)
+    const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'openai-offline', task })
+    expect(saved.outcome.receipt).toMatchObject({ failureCode: 'NETWORK_ERROR' })
+    expect(saved.run.budgetDiagnostics![0]).toMatchObject({ failureCode: 'NETWORK_ERROR' })
+  })
+  // 实测 gemini-3.8-flash：输入 20、正文 60、思考 830、总量 910。调用记录的「输出」要和 OpenAI 一样含思考（#484）。
+  it.each([
+    ['separately-billed', 60],
+    ['included-in-completion', 890],
+  ] as const)('records the output of a %s reasoning call including its reasoning tokens', async (accounting, completionTokens) => {
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '正文' })
+      return { finishReason: 'stop', usage: { promptTokens: 20, completionTokens, totalTokens: 910, reasoningTokens: 830,
+        accounting, totalIncludesReasoning: true, trusted: true } }
+    })
+    const run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: `reasoning-call-${accounting}`, task })
+    expect(f.db.prepare('SELECT prompt_tokens AS input, completion_tokens AS output, total_tokens AS total FROM llm_calls').all())
+      .toEqual([{ input: 20, output: 890, total: 910 }])
+  })
+  // 预算证据是供应商原样报的字段；不是整数时「输出」记为未知，不能拼成 60830（PR #493 复验）。
+  it('records an unknown output when the reported reasoning tokens are not a number', async () => {
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '正文' })
+      return { finishReason: 'stop', usage: { promptTokens: 20, completionTokens: 60, totalTokens: 910, reasoningTokens: '830' as unknown as number,
+        accounting: 'separately-billed', totalIncludesReasoning: true, trusted: true } }
+    })
+    const run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'reasoning-call-invalid', task })
+    expect(f.db.prepare('SELECT completion_tokens AS output FROM llm_calls').all()).toEqual([{ output: null }])
+  })
   it('keeps a network failure category after reopening without storing provider text', async () => {
     const f = fixture(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: '已收到的正文' })

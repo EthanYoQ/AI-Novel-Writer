@@ -84,9 +84,9 @@ export interface MainGenerationOwnerDependencies {
 
 interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
 
-/** Provider 流式失败的分类：拿不到响应流、流在完成标记前断开与原生网络错误都算网络失败，其余算供应商失败。 */
+/** Provider 流式失败的分类：请求或读流被传输层拒绝、拿不到响应流、流在完成标记前断开与原生网络错误都算网络失败，其余算供应商失败。 */
 export function providerStreamFailureCode(error: string): 'NETWORK_ERROR' | 'GENERATION_PROVIDER_FAILED' {
-  return error === 'LLM_STREAM_UNREADABLE' || error === 'LLM_STREAM_INCOMPLETE'
+  return error === 'LLM_STREAM_NETWORK_FAILED' || error === 'LLM_STREAM_UNREADABLE' || error === 'LLM_STREAM_INCOMPLETE'
     || /fetch failed|failed to fetch|network|ECONNRESET|ETIMEDOUT/iu.test(error)
     ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED'
 }
@@ -252,9 +252,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const { model, task } = request as ProviderRequest, startedAt = Date.now()
     const record = (success: boolean, usage: Awaited<ReturnType<typeof providerDispatch>>['usage'], errorMessage?: string) => {
       if (!unrecordedCalls.delete(recordCancelled)) return
+      // 调用记录的「输出」与 OpenAI 一致含思考消耗；思考分开计费的协议（Gemini）在这里加回来。
+      // 证据字段是供应商原样报的，不是非负整数就记为未知。
+      const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+      const completion = usage === null ? null : count(usage.completionTokens)
+      const reasoning = usage?.accounting !== 'separately-billed' || usage.reasoningTokens === null ? 0 : count(usage.reasoningTokens)
+      const completionTokens = completion === null || reasoning === null ? null : completion + reasoning
       try {
         LLMHistoryRepository.logCall({ modelId: model.id, modelName: model.name || model.modelName, purpose: task.purpose,
-          promptTokens: usage?.promptTokens ?? null, completionTokens: usage?.completionTokens ?? null, totalTokens: usage?.totalTokens ?? null,
+          promptTokens: usage?.promptTokens ?? null, completionTokens, totalTokens: usage?.totalTokens ?? null,
           durationMs: Math.max(0, Date.now() - startedAt), success, errorMessage }, deps.database)
       } catch (error) { console.warn('[AI Novel Writer] LLM call statistics were not recorded.', error) }
     }

@@ -23,7 +23,11 @@ function streamBody(...chunks: string[]) {
 
 /** 用真实 provider 跑一次流式请求，把它交出的报错按主进程生成的分类判一次。 */
 async function classify(provider: OpenAIProvider | GeminiProvider, model: ModelProfile, response: unknown): Promise<string> {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+  return classifyFetch(provider, model, vi.fn().mockResolvedValue(response))
+}
+
+async function classifyFetch(provider: OpenAIProvider | GeminiProvider, model: ModelProfile, fetch: unknown): Promise<string> {
+  vi.stubGlobal('fetch', fetch)
   const onError = vi.fn()
   await provider.generateStream(model, [{ role: 'user', content: 'write' }], {
     temperature: 0, maxTokens: 64, signal: new AbortController().signal, visibleOnly: true,
@@ -58,6 +62,25 @@ describe('main generation provider failure classification', () => {
     const response = { ok: false, status: 500, body: streamBody() }
     await expect(classify(new OpenAIProvider(), openAIModel, response)).resolves.toBe('GENERATION_PROVIDER_FAILED')
     await expect(classify(new GeminiProvider(), geminiModel, { ...response, text: async () => 'boom' })).resolves.toBe('GENERATION_PROVIDER_FAILED')
+  })
+
+  // undici 的真实报错形状：连接、DNS、TLS 失败是带 cause 的「fetch failed」，读流中途断开是带 cause 的「terminated」（#484）。
+  const connectFailure = () => new TypeError('fetch failed', { cause: Object.assign(new Error('connect ENETUNREACH'), { code: 'ENETUNREACH' }) })
+  const readFailure = () => new TypeError('terminated', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) })
+  const providers = [['OpenAI', new OpenAIProvider(), openAIModel], ['Gemini', new GeminiProvider(), geminiModel]] as const
+
+  it.each(providers)('treats a rejected %s request as a network failure', async (_name, provider, model) => {
+    await expect(classifyFetch(provider, model, vi.fn().mockRejectedValue(connectFailure()))).resolves.toBe('NETWORK_ERROR')
+  })
+
+  it.each(providers)('treats a %s stream that is cut while reading as a network failure', async (_name, provider, model) => {
+    const body = { getReader: () => ({ read: vi.fn().mockRejectedValue(readFailure()), cancel: vi.fn(async () => {}), releaseLock: vi.fn() }) }
+    await expect(classify(provider, model, { ok: true, status: 200, body })).resolves.toBe('NETWORK_ERROR')
+  })
+
+  it.each(providers)('keeps a %s request that could not be built as a provider failure', async (_name, provider, model) => {
+    const invalidHeader = new TypeError('Cannot convert argument to a ByteString because the character at index 7 has a value of 20013 which is greater than 255.')
+    await expect(classifyFetch(provider, model, vi.fn().mockRejectedValue(invalidHeader))).resolves.toBe('GENERATION_PROVIDER_FAILED')
   })
 
   it('keeps raw transport errors from the network stack as network failures', () => {
