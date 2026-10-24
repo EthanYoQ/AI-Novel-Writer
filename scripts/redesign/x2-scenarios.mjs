@@ -257,6 +257,7 @@ export const X2_SCENARIOS = {
     const { page, fake, shoot } = context
     fake.acceptKeylessEmbeddings()
     await importMaterials(context)
+    // 创作资料走 kb:import-planning-text，只建全文索引、不要向量；之后的嵌入请求只能来自重建，导入时带向量由单元测试覆盖。
     const importEmbeddings = fake.embeddingAuthorizations.length
     await stage.openSettings(page)
     await stage.showSettingsPage(page, '检索模型')
@@ -273,8 +274,8 @@ export const X2_SCENARIOS = {
     const after = { text: await index.innerText(), alerts: await index.getByRole('alert').allInnerTexts() }
     const authorizations = [...new Set(fake.embeddingAuthorizations)]
     const measured = { before, after, importEmbeddings, rebuildEmbeddings: fake.embeddingAuthorizations.length - importEmbeddings, authorizations }
-    assert.deepEqual({ offered, alerts: after.alerts, rebuilt: measured.rebuildEmbeddings > 0, keyless: authorizations.every(value => value === null || value === 'Bearer') },
-      { offered: true, alerts: [], rebuilt: true, keyless: true }, JSON.stringify(measured))
+    assert.deepEqual({ offered, alerts: after.alerts, importEmbeddings, rebuilt: measured.rebuildEmbeddings > 0, keyless: authorizations.every(value => value === null || value === 'Bearer') },
+      { offered: true, alerts: [], importEmbeddings: 0, rebuilt: true, keyless: true }, JSON.stringify(measured))
     return measured
   } },
 
