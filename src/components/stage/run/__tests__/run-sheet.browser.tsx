@@ -346,6 +346,39 @@ describe('运行侧页', () => {
     expect(host!.textContent).toContain('原始候选 · 第3章 雾钟')
   })
 
+  it('恢复候选：放弃的结果回来前切到英文，失败提示用英文', async () => {
+    candidates = [candidate()]
+    let finish!: (value: unknown) => void
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:recovery-candidate-resolve'
+      ? new Promise(resolve => { finish = resolve })
+      : fallback(channel, ...args))
+    await render()
+    await vi.waitFor(() => expect(host!.textContent).toContain('原始候选 · 第3章 雾钟'))
+    await click('放弃…')
+    await click('放弃')
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await act(async () => finish({ success: false }))
+    await vi.waitFor(() => expect(host!.querySelector('[role="alert"]')?.textContent).toBe('Recovery candidate action failed'))
+  })
+
+  it('恢复候选：继续编辑的结果回来前切到英文，打开的标签用英文标题', async () => {
+    candidates = [candidate()]
+    let finish!: (value: unknown) => void
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:recovery-candidate-update'
+      ? new Promise(resolve => { finish = resolve })
+      : fallback(channel, ...args))
+    const openFile = vi.fn()
+    useEditorStore.setState({ openFile })
+    await render()
+    await vi.waitFor(() => expect(host!.textContent).toContain('原始候选 · 第3章 雾钟'))
+    await click('继续编辑')
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await act(async () => finish({ success: true, candidate: candidate() }))
+    expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'Recovery candidate · Chapter 3 雾钟' }))
+  })
+
   it('恢复候选：继续编辑的结果回来前换了作品，不在新作品里打开旧候选', async () => {
     candidates = [candidate()]
     let finish!: (value: unknown) => void

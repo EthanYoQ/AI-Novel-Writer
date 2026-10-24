@@ -4,6 +4,8 @@
 import { buildAgentTool } from '../tool-registry'
 import { ipc } from '../../ipc-client'
 import { agentToolText, assertAgentProjectCurrent, requireAgentProject, agentToolErrorDetail } from './project-context'
+import { containsHan } from '../../../i18n/app-errors'
+import { pluralEn } from '../../../shared/plural-en'
 
 
 export const listChaptersTool = buildAgentTool({
@@ -64,7 +66,7 @@ export const listChaptersTool = buildAgentTool({
         success: true,
         content: text(
           `📊 章节进度概览\n\n${table}\n\n总计：${sortedNums.length} 个章节，${bpNums.size} 个蓝图，${draftNums.size} 个草稿，${msNums.size} 个定稿`,
-          `📊 Chapter progress\n\n${table}\n\nTotal: ${sortedNums.length} chapters, ${bpNums.size} blueprints, ${draftNums.size} drafts, ${msNums.size} finalized`,
+          `📊 Chapter progress\n\n${table}\n\nTotal: ${sortedNums.length} ${pluralEn(sortedNums.length, 'chapter')}, ${bpNums.size} ${pluralEn(bpNums.size, 'blueprint')}, ${draftNums.size} ${pluralEn(draftNums.size, 'draft')}, ${msNums.size} finalized`,
         ),
       }
     } catch (e: unknown) {
@@ -72,7 +74,7 @@ export const listChaptersTool = buildAgentTool({
       return {
         success: false,
         content: '',
-        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
+        error: !detail || (context?.writingLanguage === 'en-US' && containsHan(detail))
           ? text('获取章节进度失败', 'Could not load chapter progress')
           : text(`获取失败: ${detail}`, `Could not load chapter progress: ${detail}`),
       }

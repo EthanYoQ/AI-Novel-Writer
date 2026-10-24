@@ -59,6 +59,7 @@ import {
   type SelectedCandidateDraft,
 } from '../chapter-materials'
 import type { DraftSourceDependency } from '../../../shared/draft-source-dependency'
+import { pluralEn } from '../../../shared/plural-en'
 
 export { countDraftUnits } from '../../../shared/draft-units'
 export { previousChapterEnding } from '../chapter-materials'
@@ -735,7 +736,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       finalizedSources = finalized.sources
       callbacks.log(uiText(
         `  已定位定稿连续性原文（${finalized.locatedFactCandidates} 条候选）`,
-        `  Located finalized continuity excerpts (${finalized.locatedFactCandidates} candidates)`,
+        `  Located finalized continuity excerpts (${finalized.locatedFactCandidates} ${pluralEn(finalized.locatedFactCandidates, 'candidate')})`,
       ))
       const activeThreads = await this.readActiveNarrativeThreads(
         expectedProjectPath,
@@ -1342,7 +1343,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
     callbacks.log(uiText(
       `草稿已自动入库保存为版本 v${nextVersion}（${countDraftUnits(cleanDraftText)} 字）`,
-      `Draft saved automatically as version v${nextVersion} (${countDraftUnits(cleanDraftText)} units)`,
+      `Draft saved automatically as version v${nextVersion} (${countDraftUnits(cleanDraftText)} ${pluralEn(countDraftUnits(cleanDraftText), 'unit')})`,
     ))
     const units = countDraftUnits(cleanDraftText), { maximum } = draftTargetUnitRange(targetChars)
     if (units > maximum) callbacks.log(uiText(

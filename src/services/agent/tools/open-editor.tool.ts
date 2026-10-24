@@ -7,6 +7,7 @@ import { ipc } from '../../ipc-client'
 import { validatePath } from './safe-path'
 import { agentToolText, assertAgentProjectCurrent, assertAgentToolActive, requireAgentProject, agentToolErrorDetail } from './project-context'
 import { APP_BRAND } from '../../../shared/brand'
+import { containsHan } from '../../../i18n/app-errors'
 
 export const openEditorTool = buildAgentTool({
   name: 'open_editor',
@@ -61,7 +62,7 @@ export const openEditorTool = buildAgentTool({
       return {
         success: false,
         content: '',
-        error: !detail || (context?.writingLanguage === 'en-US' && /[\u3400-\u9fff]/u.test(detail))
+        error: !detail || (context?.writingLanguage === 'en-US' && containsHan(detail))
           ? text('文件读取失败', 'Could not read the file')
           : text(`文件读取失败：${detail}`, `Could not read the file: ${detail}`),
       }

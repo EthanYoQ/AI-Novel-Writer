@@ -47,6 +47,7 @@ import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
 import type { FinalizedCharacterGenerationReceipt } from '../../../shared/finalized-character-generation'
 import { finalizationStepErrorCode } from '../../../shared/finalization-step-error'
+import { pluralEn } from '../../../shared/plural-en'
 
 export interface FinalizeChapterParams {
   draftPath: string
@@ -154,7 +155,7 @@ export function buildFinalizePostProcessSteps(
       callbacks.log(workflowUiText(
         context,
         `正文章节已导入知识库（${result.chunkCount} 块）`,
-        `Manuscript chapter imported into the knowledge base (${result.chunkCount} chunks)`,
+        `Manuscript chapter imported into the knowledge base (${result.chunkCount ?? 0} ${pluralEn(result.chunkCount ?? 0, 'chunk')})`,
       ))
     },
   })

@@ -318,6 +318,8 @@ node scripts/redesign/drive.mjs --scenario blueprint-timing --shell stage --out 
 | `chapter-write-after-edited-chain` | 预置第 4 章 v2 以第 3 章候选稿为前驱，再改第 3 章正文；3、4 章逐章定稿后写第 5 章：假模型收到 1 次正文请求，正文保存，运行侧页没有原始 IPC 错误 | 第 5 章与运行侧页 | 是 | #438 |
 | `chapter-rereview-legacy` | 第 3 章（旧版本留下的 reviewed 稿）点「重新审稿」：假模型收到 1 次审稿请求，运行侧页没有原始 IPC 错误；恢复卡里的审稿候选显示「1 条意见」摘要，不显示原始 JSON | 第 3 章与运行侧页 | 是 | #411、#455 |
 | `chapter-rereview-legacy-en` | 同上重新审稿后切到英文界面重开作品，从 Ctrl K「Run sheet」打开运行侧页：审稿候选显示「1 item」摘要，不显示原始 JSON | 英文运行侧页 | 是 | #455 |
+| `chapter-recheck-digest` | 第 4 章审稿（带正文证据的本章目标意见）、按意见修稿、全部用修稿合并，`fake.replyReview` 传函数让合并后的复验回一份合法复核 JSON：运行侧页的复验候选显示结论、条数与「待核实」要点，不显示原始 JSON；切到英文重开后显示「1 item」与「Needs verification」；中途拍 `chapter-recheck-digest-zh` | 英文的复验摘要 | 是 | #484 |
+| `run-usage-en` | 同 `chapter-rereview-legacy` 重新审稿后切到英文重开：只请求一次的审稿候选写「1 request used」，不写成复数 | 英文运行侧页 | 是 | #484 |
 | `chapter-finalize-gone-en` | 切到英文界面后定稿第 3 章，主进程的 `finalization:commit` 先卡住，期间按卡住的请求里的稿 id 与会话删掉这一稿再放行：定稿仓储只交 `DRAFT_NOT_FOUND`，运行卡片的失败说明是英文、不带汉字 | 英文运行卡片的失败说明 | 是 | #474 |
 | `chapter-retry` | 角色状态更新失败后点「重试失败步骤」：之后假模型只收到角色状态请求，后处理回到 4 / 4 | 重试后的定稿视图 | 是 | lane 7 |
 | `chapter-retry-stream` | 角色状态请求两次断流（`fake.dropCharacterState(2)`）：自动后处理只请求一次，失败说明不含错误码；重开应用后点「重试失败步骤」恰好再请求一次，说明换成「没有返回完整结果」（中途截图 `chapter-retry-stream-failed`）；再点这一步的「重试」第三次请求成功，回到 3 / 3（重开后不列正文文件） | 重试成功后的定稿视图 | 是 | #420 |
@@ -424,7 +426,7 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 
 ## 外部审查修复（RD-X2）
 
-场景在 `scripts/redesign/x2-scenarios.mjs`，都走新外壳，复用 RD-X1 的 `holdChannel`、`untilHeld`、`releaseChannel` 与 `seedHarbor`。每个场景把作者看到的值收进 `measured` 最后一次断言，对 RD-X1 栈顶的构建（`--app-root`）跑一次应失败，失败消息里能看到每一项的值。假模型另有 `fake.replyReview(json)`：之后的审稿（含合并后的复验）回这份 JSON；复验只覆盖带正文证据区间的本章目标意见，默认审稿只有文学类意见，合并后不会复验。主进程没有默认检索模型时退回默认生成模型，所以要演示「没有检索模型」得先删掉生成模型。
+场景在 `scripts/redesign/x2-scenarios.mjs`，都走新外壳，复用 RD-X1 的 `holdChannel`、`untilHeld`、`releaseChannel` 与 `seedHarbor`。每个场景把作者看到的值收进 `measured` 最后一次断言，对 RD-X1 栈顶的构建（`--app-root`）跑一次应失败，失败消息里能看到每一项的值。假模型另有 `fake.replyReview(json)`：之后的审稿（含合并后的复验）回这份 JSON；也可传函数，它对任意提示词返回非空文本时就回这段文本（复验提示里带着确认的修稿清单，要按「需复核的原始证据锚点」认出复验），返回空值时照常作答；复验只覆盖带正文证据区间的本章目标意见，默认审稿只有文学类意见，合并后不会复验。主进程没有默认检索模型时退回默认生成模型，所以要演示「没有检索模型」得先删掉生成模型。
 
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
