@@ -1123,7 +1123,7 @@ test('separated-review diagnostic freezes six slots without reopening qualificat
   assert.equal(forwardQualificationWindowFor(protocol, selected.phase, 'diagnostic'), null)
 })
 
-test('separated-review diagnostic runs six zero-model owner slots and preserves global one-shot limits', async () => {
+test('separated-review diagnostic runs six zero-model owner slots and preserves global one-shot limits', { timeout: 20_000 }, async () => {
   const { assertSharedInputDiagnostic } = await import('../quality-modernization-driver.mjs')
   const phase = 'separated-review-diagnostic', registered = protocol.phases[phase]
   const sources = registered.caseIds.map(id => ({ id, frozenContext: { sourceId: id },
@@ -2384,7 +2384,7 @@ function reusingContinuityResults(dir) {
   }
 }
 
-test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且首稿超上限须可复核', () => {
+test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且首稿超上限须可复核', { timeout: 30_000 }, () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/condense-result-test-'))
   try {
     const { syntheticDraftText } = syntheticLengthHelpers()
@@ -2443,7 +2443,7 @@ test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且�
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('C17-B 重新定稿后处理：notes/cards 绑定替换后的新 finalizationId，attempt 记账含 cards 原生 repair', () => {
+test('C17-B 重新定稿后处理：notes/cards 绑定替换后的新 finalizationId，attempt 记账含 cards 原生 repair', { timeout: 20_000 }, () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/c17b-post-process-test-'))
   const build = reusingContinuityResults(dir)
   try {
@@ -2739,7 +2739,7 @@ test('c16-c18 v7 场景沿用有界恢复、条件作者保护与 C17-B 重新�
 })
 
 // 26 组夹具串行重建 104 次 SQLite 审稿库；本项验证证据合同，不是性能合同。
-test('C16-B 作者保护按正式产物是否提议改写而条件判定：真实未触发可过，提议无候选、证据缺失或畸形均失败，合成仍强制候选', () => {
+test('C16-B 作者保护按正式产物是否提议改写而条件判定：真实未触发可过，提议无候选、证据缺失或畸形均失败，合成仍强制候选', { timeout: 40_000 }, () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/author-protection-test-'))
   try {
     const check = (results, mode, expected, message) => assert.deepEqual(validateCandidateContinuityResults(results, mode), expected, message)
@@ -2807,7 +2807,7 @@ test('C16-B 作者保护按正式产物是否提议改写而条件判定：真�
   assert.match(fixture, /sha\(formalText\) === formal\.visibleTextHash && sha\(fs\.readFileSync\(formal\.outputPath, 'utf8'\)\) === formal\.visibleTextHash/)
   assert.match(fixture, /parseFinalizedCharacterStateResponse\(formalText, finalizedContext\.identity\)\.updates/)
   assert.match(fixture, /if \(request\.mode === 'synthetic'\) \{\s*assert\.equal\(proposed, true, 'SYNTHETIC_AUTHOR_CONFLICT_NOT_PROPOSED'\)\s*assert\.equal\(receipt\.finalizationEvidence\.authorProtected, true, 'AUTHOR_CONFLICT_CANDIDATE_MISSING'\)/)
-}, 10_000)
+})
 
 test('C16 c9b88510/d8a30c11 段（第508–579行）按 ccc70b31 规则分两段加性登记，链在其后且真实账本只读回放', () => {
   const ccc = protocol.historicalC16Ccc70b31Boundary
@@ -4627,7 +4627,7 @@ test('真实账本仅绑定登记分支的唯一工作树，拒绝重复和待�
   assert.throws(() => registeredCampaignWorktree(`${entry}\nprunable gitdir file points to non-existent location`), /CAMPAIGN_WORKTREE_NOT_UNIQUE/)
   assert.throws(() => registeredCampaignWorktree(`worktree C:/other\nHEAD ${'b'.repeat(40)}\nbranch refs/heads/other`), /CAMPAIGN_WORKTREE_NOT_UNIQUE/)
 })
-test('账本未知不释放、重试新attempt、无硬上限、重复/并发/残记录拒绝', () => {
+test('账本未知不释放、重试新attempt、无硬上限、重复/并发/残记录拒绝', { timeout: 20_000 }, () => {
   const parent = path.join(ROOT, '.runtime/.cache/novel-quality-modernization')
   fs.mkdirSync(parent, { recursive: true })
   const dir = fs.mkdtempSync(path.join(parent, 'ledger-test-'))
