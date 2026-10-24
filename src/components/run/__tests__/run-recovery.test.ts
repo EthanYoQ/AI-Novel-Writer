@@ -170,6 +170,41 @@ describe('审稿候选的片段', () => {
     }
   })
 
+  const RECHECK = JSON.stringify({ summary: '复核：一处已改，一处仍在。', items: [
+    { findingId: '甲', targetId: '目标甲', resolved: true, evidenceQuote: '钟声在正点响起', reason: '钟声已改到正点。' },
+    { findingId: '乙', targetId: '目标乙', resolved: false, evidenceQuote: '她顺着螺旋楼梯往上走', reason: '铺垫仍偏长。' },
+  ] })
+  const recheck = (version: 1 | 2) => ({ context: { operation: 'review-chapter', source: { chapterNumber: 3 }, recheck: { version, cycleId: '周期',
+    comparisonVersion: 2, mergedHash: 'm', findingSetHash: 'f', findings: [
+      { findingId: '甲', targetId: '目标甲', category: '连续性', kind: 'objective', problem: '钟声提前一刻' },
+      { findingId: '乙', targetId: '目标乙', category: '节奏', kind: 'literary', problem: '铺垫偏长' },
+    ] } } })
+
+  it('复核报告显示结论、条数与先列未解决的要点；模型判为已解决的仍写待核实，复制拿到原文', () => {
+    const [item] = review(recheck(2), output(RECHECK)).artifacts
+    expect(item.text).toBe(RECHECK)
+    expect(item.display.split('\n')).toEqual([
+      '复核：一处已改，一处仍在。（2 条意见）',
+      '未解决 · 节奏：铺垫仍偏长。',
+      '待核实 · 连续性：钟声已改到正点。',
+    ])
+  })
+
+  it('英文界面的复核摘要用英文写条数与状态；旧版复核的已解决照写', () => {
+    const [item] = review(recheck(1), { ...output(RECHECK), locale: 'en-US' }).artifacts
+    expect(item.display.split('\n')).toEqual([
+      '复核：一处已改，一处仍在。 (2 items)',
+      'Unresolved · 节奏: 铺垫仍偏长。',
+      'Resolved · 连续性: 钟声已改到正点。',
+    ])
+  })
+
+  it('解析不了的复核输出退回说明，不显示原始 JSON', () => {
+    const [item] = review(recheck(2), output('{"summary": 没写完')).artifacts
+    expect(item.display).toContain('结构化')
+    expect(item.display).not.toContain('summary')
+  })
+
   it('修稿候选是正文，按原文显示', () => {
     const prose = '雾是从海面上一层一层爬上来的。'
     const [item] = review({}, { ...output(prose), operation: 'refine-draft' }).artifacts
