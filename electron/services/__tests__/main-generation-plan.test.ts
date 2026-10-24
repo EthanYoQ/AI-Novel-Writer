@@ -191,6 +191,15 @@ describe('main generation physical liability planning without provider calls', (
     expect(result.options.maxTokens).toBe(result.requestedOutputTokens)
     expect(result.reasoningUpperBoundTokens).toBe(0)
   })
+  it('counts the thinking budget of a saved Gemini 2.5 Flash-Lite profile exactly once in remaining and total', () => {
+    const budget = ledger(); budget.policy.maxTokenLiability = 10000
+    const result = plan({ ...gemini(), modelName: 'gemini-2.5-flash-lite' }, task, budget)
+    expect(result.options.reasoning).toEqual({ adapter: 'gemini-thinking-budget', thinkingBudget: 8192 })
+    expect(result.reasoningUpperBoundTokens).toBe(8192)
+    expect(result.requestedOutputTokens).toBe(10000 - result.inputUpperBoundTokens - 8192 - 512)
+    expect(result.reservedTokens).toBe(10000)
+    expect(result.usagePolicy.reasoning).toBe('separately-billed')
+  })
   it('sends a Gemini 3 thinking level without claiming a numeric thinking bound', () => {
     const budget = ledger(); budget.policy.maxTokenLiability = 10000
     const result = plan(gemini(), task, budget)

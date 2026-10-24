@@ -162,8 +162,20 @@ describe('provider catalog', () => {
       })
       expect(resolveModelProfileReasoningMapping(profile)).toEqual({ adapter: 'gemini-thinking-level', ...mapping })
     }
-    expect(resolveModelProfileCapabilities({ provider: 'gemini', protocol: 'gemini',
-      baseUrl: 'https://generativelanguage.googleapis.com', modelName: 'gemini-2.5-flash-lite' })).toBeUndefined()
+  })
+
+  it('keeps resolving saved Gemini 2.5 Flash-Lite profiles without offering the retired model again', () => {
+    const gemini = createProviderCatalog().find((preset) => preset.provider === 'gemini')
+    expect(gemini?.models.map(model => model.name)).not.toContain('gemini-2.5-flash-lite')
+    const saved = { provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', modelName: 'gemini-2.5-flash-lite' }
+    expect(resolveModelProfileCapabilities(saved)).toEqual({
+      contextWindowTokens: 1_048_576, maxOutputTokens: 65_536, reasoning: true, structuredOutput: true, usage: true,
+    })
+    expect(resolveModelProfileReasoningMapping(saved)).toEqual({
+      adapter: 'gemini-thinking-budget',
+      supportedEfforts: ['off', 'low', 'medium', 'high'],
+      providerValues: { off: 0, low: 1_024, medium: 8_192, high: 24_576 },
+    })
   })
 
   it.each([

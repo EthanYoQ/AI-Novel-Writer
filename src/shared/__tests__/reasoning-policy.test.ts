@@ -81,6 +81,11 @@ describe('reasoning policy', () => {
       .toEqual({ adapter: 'gemini-thinking-level', thinkingLevel: 'low' })
   })
 
+  it('keeps the thinking budget of a saved Gemini 2.5 Flash-Lite profile that never stored a mapping', () => {
+    const legacy: ModelProfile = { ...geminiModel, modelName: 'gemini-2.5-flash-lite', reasoningOverride: 'high' }
+    expect(resolveReasoningPolicy({ model: legacy }).providerDirective).toEqual({ adapter: 'gemini-thinking-budget', thinkingBudget: 24_576 })
+  })
+
   it('still honours a saved Gemini 2.5 thinking-budget mapping', () => {
     const saved: ModelProfile = { ...geminiModel, reasoningOverride: 'high', reasoningMapping: {
       adapter: 'gemini-thinking-budget', supportedEfforts: ['off', 'high'], providerValues: { off: 0, high: 24_576 } } }
