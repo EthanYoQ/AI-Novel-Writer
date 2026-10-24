@@ -105,12 +105,12 @@ export function ModelForm({
   const presetMap = new Map(presets.map((p) => [p.provider, p]))
   const preset = presetMap.get(model.provider)
 
-  /** 向量模型名与预设同名时带上预设的能力数据；生成模型由 applyModelProfileSelection 按端点和名字匹配。 */
+  /** 向量模型名换了就换掉能力数据：与预设同名时用预设的，否则清空。生成模型由 applyModelProfileSelection 按端点和名字匹配。 */
   const setEmbeddingModelName = (modelName: string) => {
     const capabilities = preset?.embeddingModelCapabilities?.[modelName]
     onChange(capabilities
       ? { ...model, modelName, maxTokens: capabilities.maxOutputTokens, capabilities: { ...capabilities } }
-      : { ...model, modelName })
+      : { ...model, modelName, capabilities: undefined })
   }
 
   /** 更新单个字段 */
@@ -350,7 +350,7 @@ export function ModelForm({
         onInput={(value) => up('modelName', value)}
         onSelect={handleModelSelect}
         onOpen={handleModelListOpen}
-        onRefresh={() => void handleDiscoverModels()}
+        onRefresh={() => { if (canDiscover(model)) void handleDiscoverModels() }}
       />
 
       {isEmbedding && model.provider === 'siliconflow' && model.modelName === 'BAAI/bge-m3' && (

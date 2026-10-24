@@ -815,6 +815,33 @@ describe('model discovery settings flow', () => {
       capabilities: expect.objectContaining({ contextWindowTokens: 8192 }) }))
   })
 
+  it.each(['typed', 'selected'] as const)('drops the previous capabilities when an embedding model without preset data is %s', async (how) => {
+    const model = savedProfile({ provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'BAAI/bge-m3', purposes: ['embedding'],
+      capabilities: { contextWindowTokens: 8192, maxOutputTokens: 0, reasoning: false, structuredOutput: false, usage: true } })
+    const { saveModel } = await renderSettings(model, listed('Qwen/Qwen3-Embedding-8B'))
+    await act(async () => { useLayoutStore.setState({ settingsSection: 'embedding' }) })
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    if (how === 'typed') {
+      await typeInto(modelNameInput(), 'Qwen/Qwen3-Embedding-8B')
+    } else {
+      await openSuggestions()
+      await vi.waitFor(() => expect(suggestionValues()).toEqual(['Qwen/Qwen3-Embedding-8B']))
+      await chooseSuggestion('Qwen/Qwen3-Embedding-8B')
+    }
+    await expect.element(page.getByLabelText('上下文窗口', { exact: true })).toHaveValue(null)
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ modelName: 'Qwen/Qwen3-Embedding-8B', capabilities: undefined }))
+  })
+
+  it('keeps the base_url and key hint instead of requesting when refresh is pressed too early', async () => {
+    const discoverModels = listed('gpt-5.5-mini')
+    await renderSettings(savedProfile(), discoverModels, 'zh-CN', [], false)
+    await act(async () => { await page.getByRole('button', { name: '添加模型', exact: true }).click() })
+    await act(async () => { await page.getByRole('button', { name: '获取模型列表', exact: true }).click() })
+    expect(discoverModels).not.toHaveBeenCalled()
+    expect(statusText()).toBe('填写 base_url 和 API Key 后获取模型列表。')
+  })
+
   it('fetches once when a saved configuration first opens its list and shows the endpoint order', async () => {
     const model = savedProfile({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
     const discoverModels = listed('deepseek-chat-next', 'deepseek-v4-flash')
