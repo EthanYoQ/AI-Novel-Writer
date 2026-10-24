@@ -4,7 +4,7 @@ import { useLLMStore } from '../../stores/llm-store'
 import type { DiscoveredModel, ModelDiscoveryErrorCode, ModelProfile } from '../../shared/ipc-channels'
 import { LOW_VRAM_EMBEDDING_OPTIONS, normalizeEmbeddingOptions } from '../../shared/embedding-options'
 import type { ModelCapabilities, ProviderPreset } from '../../shared/provider-presets'
-import { isLocalModelEndpoint, parseHttpEndpoint, resolveModelProfileBudgetCapabilities } from '../../shared/provider-presets'
+import { hasRequiredApiKey, isLocalModelEndpoint, parseHttpEndpoint, resolveModelProfileBudgetCapabilities } from '../../shared/provider-presets'
 import { applyModelProfileSelection, DEFAULT_GENERATION_OUTPUT_TOKENS, modelCapabilitySource } from '../../shared/model-profile-draft'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -94,7 +94,7 @@ export function ModelForm({
   }, [])
 
   const canDiscover = (config: Pick<ModelProfile, 'provider' | 'baseUrl' | 'apiKey'>) =>
-    parseHttpEndpoint(config.baseUrl) !== null && (Boolean(config.apiKey.trim()) || isLocalModelEndpoint(config))
+    parseHttpEndpoint(config.baseUrl) !== null && hasRequiredApiKey(config)
 
   /** 端点配置一改，旧列表作废；停止输入后用新配置自动再取一次。 */
   const invalidateDiscovery = () => {
@@ -254,8 +254,7 @@ export function ModelForm({
       : { tone: 'muted', text: text('填写 base_url 和 API Key 后获取模型列表。', 'Enter the base_url and API key to fetch the model list.') }
   }
 
-  // 生成模型与拉取列表用同一条本机规则；检索模型维持原样只豁免 Ollama，知识库主进程对它要求非空 Key。
-  const keyMissing = !model.apiKey.trim() && (isEmbedding ? model.provider !== 'ollama' : !isLocalModelEndpoint(model))
+  const keyMissing = !hasRequiredApiKey(model)
   const missingForSave = [
     !model.baseUrl.trim() && 'base_url',
     keyMissing && 'API Key',
@@ -335,7 +334,7 @@ export function ModelForm({
             type={showKey ? 'text' : 'password'}
             value={model.apiKey}
             onChange={(e) => up('apiKey', e.target.value)}
-            placeholder={model.provider === 'ollama' ? text('本地部署可留空', 'Optional for local deployment') : 'sk-...'}
+            placeholder={isLocalModelEndpoint(model) ? text('本地部署可留空', 'Optional for local deployment') : 'sk-...'}
             className="pr-9"
           />
           <button

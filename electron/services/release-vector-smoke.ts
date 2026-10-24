@@ -85,6 +85,7 @@ function releaseSmokeModel(
   modelName: string = `release-smoke-${dimension}`,
 ) {
   return {
+    provider: 'custom',
     baseUrl: `vela-release-smoke://${token}`,
     apiKey: token,
     modelName,
