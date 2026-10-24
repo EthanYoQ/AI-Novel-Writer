@@ -17,10 +17,12 @@ export interface ModelNameCandidate {
  */
 export function modelNameCandidates(presetNames: readonly string[], discovered: readonly DiscoveredModel[] | null): ModelNameCandidate[] {
   if (!discovered) return presetNames.map(value => ({ value, recommended: true }))
-  const endpointValues = new Set(discovered.map(model => model.value))
+  // 网关可能以预设同名提供模型，此时预设目录按地址认不出它，端点的明确声明不能丢。
+  const endpointModels = new Map(discovered.map(model => [model.value, model]))
   const presets = new Set(presetNames)
   return [
-    ...presetNames.filter(name => endpointValues.has(name)).map(value => ({ value, recommended: true })),
+    ...presetNames.filter(name => endpointModels.has(name))
+      .map(value => ({ value, recommended: true, declared: endpointModels.get(value)?.capabilities })),
     ...discovered.filter(model => !presets.has(model.value)).map(model => ({
       value: model.value,
       label: model.name !== model.value && model.name !== model.id ? model.name : undefined,

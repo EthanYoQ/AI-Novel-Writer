@@ -655,6 +655,22 @@ describe('model discovery settings flow', () => {
     expect(discoverModels).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps the endpoint capability declaration of a recommended model served by a gateway', async () => {
+    const model = savedProfile({ provider: 'openai', baseUrl: 'https://gateway.example/v1', modelName: 'manual-model', maxTokens: 65_536 })
+    const discoverModels = vi.fn(async () => ({ success: true as const, models: [
+      { id: 'gpt-4.1', name: 'gpt-4.1', value: 'gpt-4.1', capabilities: { contextWindowTokens: 16_000, maxOutputTokens: 8_000 } },
+    ] }))
+    const { saveModel } = await renderSettings(model, discoverModels)
+    await act(async () => { await page.getByRole('button', { name: /^编辑「/ }).click() })
+    await openSuggestions()
+    await vi.waitFor(() => expect(recommendedValues()).toEqual(['gpt-4.1']))
+    await chooseSuggestion('gpt-4.1')
+    await expect.element(page.getByLabelText('上下文窗口', { exact: true })).toHaveValue(16_000)
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ modelName: 'gpt-4.1',
+      capabilities: expect.objectContaining({ contextWindowTokens: 16_000, maxOutputTokens: 8_000 }) }))
+  })
+
   it('filters suggestions while typing and keeps any typed model name', async () => {
     const model = savedProfile({ provider: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen2.5', apiKey: '' })
     const { saveModel } = await renderSettings(model, vi.fn())
