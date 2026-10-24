@@ -504,6 +504,7 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
 | `f484-field-conflict` | 第 3 章定稿后，角色状态更新这一步失败：中文说明以「正文定稿已保存，但角色卡没有自动更新：生成期间」开头（`f484-field-conflict-zh`）；切到英文后说明是英文、不带汉字（`f484-field-conflict-en`）；两种语言都不显示 `Error invoking` 与错误码 | 英文的定稿后处理 | 是 | #484 |
+| `f484-deleted-source-roundtrip` | 定稿第 3 章写入林岚的地点、道具、近况，重开作品确认「当前位置」是「定稿派生」的「灯塔顶层灯室」，再从章节「更多操作」删除第 3 章正文，再用界面同一组 IPC 导出恢复两轮、按 Ctrl O 打开第二个副本，定稿第 4 章：定稿后处理正好 4 步且都完成（`f484-deleted-source-finalize`）；重新打开作品后「当前位置」是「定稿派生」的「守塔人的屋子」（`f484-deleted-source-character-state`）。两次都先重开作品再读，读到的是库里存下的值 | 角色名单的当前状态 | 是 | #484 |
 
 ## 定稿后角色页刷新与草稿合并（#504）
 
