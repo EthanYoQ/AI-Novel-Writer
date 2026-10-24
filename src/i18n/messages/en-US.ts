@@ -65,6 +65,7 @@ export const enUS = {
   'error.characterRosterNameRequired': 'A character has no name. Give every character a name, then save.',
   'error.characterRosterNameDuplicate': 'Two characters have the same name. Character names must be unique. Rename one, then save.',
   'error.characterRosterRelationshipInvalid': 'A character relationship is incomplete. Each relationship needs a target and a description, cannot point to the same character, cannot repeat, and must point to a character in the cast. Fix it, then save.',
+  'error.characterStateSourceConflict': "The finalized chapter text is saved. Some of this character's current state was already updated by a later finalized chapter, or its recorded source no longer matches the current finalized text, so this chapter did not update the character card, to avoid overwriting newer state. Retrying gives the same result. Open the character's Current state view to check those fields and edit them by hand if needed.",
   'error.characterRosterNewerChapter': 'A later finalized chapter already updated this character, so the earlier chapter did not overwrite its current state.',
   'error.narrativeThreadEvidenceNotInSource': 'Paste a short excerpt that appears in the selected finalized chapter.',
   'error.draftNotFound': 'This draft no longer exists (it may have been deleted), so the change was not saved.',
