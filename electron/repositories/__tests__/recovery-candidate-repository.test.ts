@@ -12,6 +12,7 @@ import { DraftRepository } from '../draft-repository'
 import { FinalizationRepository } from '../finalization-repository'
 import { RecoveryCandidateRepository } from '../recovery-candidate-repository'
 import { SummaryRepository } from '../summary-repository'
+import { displayedErrorMessage } from '../../../src/i18n/app-errors'
 
 let projectRoot = ''
 
@@ -270,5 +271,30 @@ describe('RecoveryCandidateRepository project-local seam', () => {
     // 已处理的恢复稿再保存或再处理：稳定码，界面按语言说明（#474）。
     expect(() => RecoveryCandidateRepository.resolve(original.candidateId, 'discarded')).toThrow(/^RECOVERY_CANDIDATE_NOT_PENDING$/u)
     expect(() => RecoveryCandidateRepository.updatePending(replacement.candidateId, '再改一次')).toThrow(/^RECOVERY_CANDIDATE_NOT_PENDING$/u)
+  })
+
+  // 重复点击或两个窗口各采用一次：第二次要说「已处理」，不能说来源变了、让作者重新生成（#484）。
+  it.each(['continued', 'discarded'] as const)('reports an already-%s candidate as handled when it is continued again', first => {
+    const recorded = RecoveryCandidateRepository.record({
+      runId: `run-repeat-${first}`,
+      stepId: 'generate-draft',
+      projectId: 'project-recovery',
+      chapterNumber: 3,
+      chapterTitle: source.title,
+      source,
+      sourceDraft: null,
+      visibleText: '候选正文',
+      failureCode: 'INCOMPLETE_LENGTH',
+      failureReason: 'length',
+    })
+    RecoveryCandidateRepository.resolve(recorded.candidateId, first)
+
+    let failure: unknown
+    try { RecoveryCandidateRepository.resolve(recorded.candidateId, 'continued') } catch (error) { failure = error }
+
+    // db:recovery-candidate-resolve 把报错按 String(error) 交给界面。
+    expect(String(failure)).toBe('Error: RECOVERY_CANDIDATE_NOT_PENDING')
+    expect(displayedErrorMessage('zh-CN', String(failure))).toBe('这份恢复稿已经处理过（已采用或已丢弃），请刷新后再看。')
+    expect(displayedErrorMessage('en-US', String(failure))).toBe('This recovered draft was already handled (used or discarded). Refresh to see the current state.')
   })
 })
