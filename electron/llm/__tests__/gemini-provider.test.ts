@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GeminiProvider } from '../gemini-provider'
 import { resolveGenerationParameters } from '../generation-parameter-policy'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
+import type { GenerationTransportDiagnostics } from '../../../src/shared/generation-contract'
 
 const model: ModelProfile = {
   id: 'gemini-test',
@@ -36,6 +37,7 @@ function sseReader(...messages: string[]) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('GeminiProvider', () => {
@@ -291,5 +293,71 @@ describe('GeminiProvider', () => {
     })
 
     expect(onDone).toHaveBeenCalledWith('完整', undefined, 'unknown')
+  })
+})
+
+// Gemini 流式要和 OpenAI 一样经 onDiagnostics 上报 HTTP 状态、阶段与结束原因（#484）。
+describe('Gemini stream transport diagnostics', () => {
+  async function stream(response: unknown, signal = new AbortController().signal) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+    const snapshots: GenerationTransportDiagnostics[] = [], onDone = vi.fn(), onError = vi.fn()
+    await new GeminiProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.2, maxTokens: 512, signal, visibleOnly: true,
+      onChunk: vi.fn(), onDone, onError, onReasoning: vi.fn(), onDiagnostics: value => snapshots.push(value),
+    })
+    return { snapshots, onDone, onError }
+  }
+
+  it('reports status, timing, output events and completion for a finished stream', async () => {
+    let clock = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => clock)
+    const reader = sseReader(
+      'data: {"candidates":[{"content":{"parts":[{"text":"先想","thought":true}]}}]}\n',
+      'data: {"candidates":[{"content":{"parts":[{"text":"正文"}]},"finishReason":"STOP"}]}\n',
+    )
+    const read = reader.read
+    reader.read = vi.fn(async () => { clock += 1000; return read() })
+    const { snapshots, onDone } = await stream({ ok: true, status: 200, body: { getReader: () => reader } })
+
+    expect(onDone).toHaveBeenCalledWith('正文', undefined, 'stop')
+    expect(snapshots[0]).toMatchObject({ phase: 'request', elapsedMs: 0 })
+    expect(snapshots.at(-1)).toEqual({ startedAt: expect.any(Number), elapsedMs: 3000, firstResponseMs: 1000, lastResponseMs: 2000,
+      lastOutputMs: 2000, httpStatus: 200, phase: 'complete', endReason: 'completed', visibleEvents: 1, reasoningEvents: 1 })
+  })
+
+  it('reports an HTTP failure with its status', async () => {
+    const { snapshots, onError } = await stream({ ok: false, status: 503, body: { cancel: async () => {} } })
+    expect(onError).toHaveBeenCalledWith('LLM_REQUEST_FAILED')
+    expect(snapshots.at(-1)).toMatchObject({ httpStatus: 503, phase: 'response', endReason: 'failed', errorCode: 'HTTP_ERROR' })
+  })
+
+  it('reports a missing response body', async () => {
+    const { snapshots } = await stream({ ok: true, status: 200, body: null })
+    expect(snapshots.at(-1)).toMatchObject({ httpStatus: 200, endReason: 'failed', errorCode: 'RESPONSE_BODY_MISSING' })
+  })
+
+  it('keeps only the safe cause code when reading the stream fails', async () => {
+    const reader = { read: vi.fn(async () => {
+      throw new TypeError('private URL and credentials', { cause: Object.assign(new Error('private raw cause'), { code: 'UND_ERR_SOCKET' }) })
+    }) }
+    const { snapshots } = await stream({ ok: true, status: 200, body: { getReader: () => reader } })
+    expect(snapshots.at(-1)).toMatchObject({ phase: 'stream', endReason: 'failed', errorName: 'TypeError', causeCode: 'UND_ERR_SOCKET' })
+    expect(JSON.stringify(snapshots)).not.toContain('private')
+  })
+
+  it('marks an invalid owner stream', async () => {
+    const { snapshots } = await stream({ ok: true, status: 200, body: { getReader: () => sseReader('data: {not json}\n') } })
+    expect(snapshots.at(-1)).toMatchObject({ phase: 'stream', endReason: 'failed', errorCode: 'STREAM_INVALID' })
+  })
+
+  it('marks a stream stopped by the caller as cancelled', async () => {
+    const controller = new AbortController()
+    const reader = { read: vi.fn(async () => {
+      controller.abort()
+      throw new DOMException('aborted', 'AbortError')
+    }) }
+    const { snapshots, onError } = await stream({ ok: true, status: 200, body: { getReader: () => reader } }, controller.signal)
+    expect(onError).toHaveBeenCalledWith('LLM_CANCELLED', '', undefined)
+    expect(snapshots.at(-1)).toMatchObject({ endReason: 'cancelled', errorName: 'AbortError' })
   })
 })

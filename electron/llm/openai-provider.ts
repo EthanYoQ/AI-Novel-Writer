@@ -4,7 +4,7 @@ import { resolveOpenAIChatCompletionsUrl } from './openai-compatible-endpoint'
 import { VisibleStreamFilter } from './visible-stream'
 import { resolveModelProfileReasoningMapping } from '../../src/shared/provider-presets'
 import { version as appVersion } from '../../package.json'
-import { safeTransportError, type GenerationTransportDiagnostics } from '../../src/shared/generation-contract'
+import { StreamTransportDiagnostics } from './transport-diagnostics'
 
 const OPENCODE_GO_USER_AGENT = `ai-novel-writer/${appVersion}`
 
@@ -169,25 +169,10 @@ export class OpenAIProvider implements ILLMProvider {
   }
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
-    const started = performance.now()
-    const diagnostics: GenerationTransportDiagnostics = { startedAt: Date.now(), elapsedMs: 0,
-      firstResponseMs: null, lastResponseMs: null, lastOutputMs: null, phase: 'request', visibleEvents: 0, reasoningEvents: 0 }
-    let notifiedAt = -Infinity
-    const notify = (force = false) => {
-      diagnostics.elapsedMs = Math.max(0, Math.round(performance.now() - started))
-      if (!force && !diagnostics.endReason && diagnostics.elapsedMs - notifiedAt < 250) return
-      notifiedAt = diagnostics.elapsedMs
-      try { opts.onDiagnostics?.({ ...diagnostics }) } catch { /* Display metadata cannot change generation. */ }
-    }
-    const output = (kind: 'visibleEvents' | 'reasoningEvents') => {
-      const firstOutput = diagnostics.lastOutputMs === null
-      diagnostics[kind]++
-      diagnostics.lastOutputMs = Math.max(0, Math.round(performance.now() - started))
-      notify(firstOutput)
-    }
+    const transport = new StreamTransportDiagnostics(opts.onDiagnostics)
     let fullText = ''
     const visible = new VisibleStreamFilter()
-    const reasoning = (chunk: string) => { output('reasoningEvents'); opts.onReasoning?.(chunk) }
+    const reasoning = (chunk: string) => { transport.output('reasoningEvents'); opts.onReasoning?.(chunk) }
     const inBandReasoning = new InBandReasoningStream(reasoning)
     let usage: TokenUsage | undefined
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
@@ -197,25 +182,19 @@ export class OpenAIProvider implements ILLMProvider {
       opts.onError(error, visibleCandidate || undefined, usage)
     }
 
-    notify()
     try {
       const url = resolveOpenAIChatCompletionsUrl(model.baseUrl, model.provider)
       const body = this.buildRequestBody(model, messages, opts, true)
 
-      const res = await fetch(url, {
+      const res = await transport.response(fetch(url, {
         method: 'POST',
         headers: this.buildRequestHeaders(model, opts.conversationId),
         body: JSON.stringify(body),
         signal: opts.signal,
-      })
-      diagnostics.phase = 'response'
-      if (Number.isInteger(res.status)) diagnostics.httpStatus = res.status
-      notify(true)
+      }))
 
       if (!res.ok) {
-        diagnostics.endReason = 'failed'
-        diagnostics.errorCode = 'HTTP_ERROR'
-        notify()
+        transport.fail('HTTP_ERROR')
         void res.body?.cancel().catch(() => {})
         fail('LLM_REQUEST_FAILED')
         return
@@ -223,13 +202,11 @@ export class OpenAIProvider implements ILLMProvider {
 
       reader = res.body?.getReader()
       if (!reader) {
-        diagnostics.endReason = 'failed'
-        diagnostics.errorCode = 'RESPONSE_BODY_MISSING'
-        notify()
+        transport.fail('RESPONSE_BODY_MISSING')
         fail('LLM_STREAM_UNREADABLE')
         return
       }
-      diagnostics.phase = 'stream'
+      transport.streaming()
 
       const decoder = new TextDecoder()
       let isThinking = false
@@ -263,7 +240,6 @@ export class OpenAIProvider implements ILLMProvider {
         const payload = parsed as Record<string, unknown>
         if (Object.hasOwn(payload, 'error')) {
           fatalError = 'LLM_STREAM_PROVIDER_ERROR'
-          diagnostics.errorCode = 'PROVIDER_STREAM_ERROR'
           return
         }
 
@@ -337,7 +313,7 @@ export class OpenAIProvider implements ILLMProvider {
         if (opts.visibleOnly) {
           if (typeof delta.content === 'string') {
             const chunk = visible.push(delta.content)
-            if (chunk) { output('visibleEvents'); opts.onChunk(chunk) }
+            if (chunk) { transport.output('visibleEvents'); opts.onChunk(chunk) }
           }
           return
         }
@@ -358,7 +334,7 @@ export class OpenAIProvider implements ILLMProvider {
           emitChunk += delta.content
         }
         if (emitChunk) {
-          if (delta.content) output('visibleEvents')
+          if (delta.content) transport.output('visibleEvents')
           fullText += emitChunk
           opts.onChunk(emitChunk)
         }
@@ -403,15 +379,8 @@ export class OpenAIProvider implements ILLMProvider {
       }
 
       while (!fatalError && !sawDone) {
-        const { done, value } = await reader.read()
+        const { done, value } = await transport.read(reader)
         if (done) break
-        if (value.byteLength) {
-          const elapsed = Math.max(0, Math.round(performance.now() - started))
-          const firstResponse = diagnostics.firstResponseMs === null
-          diagnostics.firstResponseMs ??= elapsed
-          diagnostics.lastResponseMs = elapsed
-          notify(firstResponse)
-        }
         processText(decoder.decode(value, { stream: true }))
       }
 
@@ -420,13 +389,13 @@ export class OpenAIProvider implements ILLMProvider {
       }
 
       if (fatalError) {
-        diagnostics.errorCode ??= 'STREAM_INVALID'
+        transport.errorCode(fatalError === 'LLM_STREAM_PROVIDER_ERROR' ? 'PROVIDER_STREAM_ERROR' : 'STREAM_INVALID')
         protocolError = fatalError
         throw new Error(fatalError)
       }
 
       if (!sawDone) {
-        diagnostics.errorCode = 'STREAM_INCOMPLETE'
+        transport.errorCode('STREAM_INCOMPLETE')
         protocolError = 'LLM_STREAM_INCOMPLETE'
         throw new Error(protocolError)
       }
@@ -437,15 +406,11 @@ export class OpenAIProvider implements ILLMProvider {
         fullText += closeTag
       }
 
-      diagnostics.phase = 'complete'
-      diagnostics.endReason = 'completed'
-      notify()
+      transport.completed()
       opts.onDone(opts.visibleOnly ? visible.text : this.stripThinking(fullText), usage, finishReason)
     } catch (error) {
-      Object.assign(diagnostics, safeTransportError(error))
-      diagnostics.endReason = opts.signal.aborted ? 'cancelled' : 'failed'
-      notify()
-      if (diagnostics.endReason === 'cancelled') {
+      transport.interrupted(error, opts.signal.aborted)
+      if (opts.signal.aborted) {
         fail('LLM_CANCELLED')
       } else {
         fail(protocolError ?? 'LLM_STREAM_FAILED')

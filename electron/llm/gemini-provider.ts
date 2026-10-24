@@ -1,6 +1,7 @@
 import { InBandReasoningStream, ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { VisibleStreamFilter } from './visible-stream'
+import { StreamTransportDiagnostics } from './transport-diagnostics'
 
 function assertVisibleStreamPayload(value: unknown): void {
   const record = (input: unknown): input is Record<string, unknown> =>
@@ -138,8 +139,10 @@ export class GeminiProvider implements ILLMProvider {
   }
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
+    const transport = new StreamTransportDiagnostics(opts.onDiagnostics)
     const visible = new VisibleStreamFilter()
-    const inBandReasoning = new InBandReasoningStream(opts.onReasoning)
+    const reasoning = (chunk: string) => { transport.output('reasoningEvents'); opts.onReasoning?.(chunk) }
+    const inBandReasoning = new InBandReasoningStream(reasoning)
     let visibleUsage: TokenUsage | undefined
     try {
       const baseUrl = model.baseUrl.replace(/\/$/, '')
@@ -166,7 +169,7 @@ export class GeminiProvider implements ILLMProvider {
         body.systemInstruction = { parts: [{ text: systemInstruction }] }
       }
 
-      const res = await fetch(url, {
+      const res = await transport.response(fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -174,9 +177,10 @@ export class GeminiProvider implements ILLMProvider {
         },
         body: JSON.stringify(body),
         signal: opts.signal,
-      })
+      }))
 
       if (!res.ok) {
+        transport.fail('HTTP_ERROR')
         void res.body?.cancel().catch(() => {})
         opts.onError('LLM_REQUEST_FAILED')
         return
@@ -184,9 +188,11 @@ export class GeminiProvider implements ILLMProvider {
 
       const reader = res.body?.getReader()
       if (!reader) {
+        transport.fail('RESPONSE_BODY_MISSING')
         opts.onError('LLM_STREAM_UNREADABLE')
         return
       }
+      transport.streaming()
 
       const decoder = new TextDecoder()
       let fullText = ''
@@ -198,22 +204,30 @@ export class GeminiProvider implements ILLMProvider {
         if (!line.startsWith('data: ')) return
         const json = line.slice(6).trim()
         if (!json) return
+        let parsed: {
+          candidates?: Array<{
+            content?: { parts?: Array<{ text?: string; thought?: boolean }> }
+            finishReason?: string | null
+          }>
+          usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number; thoughtsTokenCount?: number }
+        }
         try {
-          const parsed = JSON.parse(json) as {
-            candidates?: Array<{
-              content?: { parts?: Array<{ text?: string; thought?: boolean }> }
-                finishReason?: string | null
-            }>
-            usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number; thoughtsTokenCount?: number }
-          }
+          parsed = JSON.parse(json)
           if (opts.visibleOnly) assertVisibleStreamPayload(parsed)
+        } catch (error) {
+          // Ignore non-data SSE lines and malformed keepalives unless the owner needs a valid stream.
+          if (!opts.visibleOnly) return
+          transport.errorCode(error instanceof Error && error.message === 'LLM_STREAM_PROVIDER_ERROR' ? 'PROVIDER_STREAM_ERROR' : 'STREAM_INVALID')
+          throw error
+        }
+        try {
           const candidate = parsed.candidates?.[0]
           if (candidate?.finishReason !== undefined) {
             finishReason = this.normalizeFinishReason(candidate.finishReason)
           }
           for (const part of candidate?.content?.parts ?? []) {
             if (part.thought === true) {
-              if (part.text) opts.onReasoning?.(part.text)
+              if (part.text) reasoning(part.text)
             } else if (typeof part.text === 'string') {
               inBandReasoning.push(part.text)
             }
@@ -222,6 +236,7 @@ export class GeminiProvider implements ILLMProvider {
             .map(part => typeof part.text === 'string' ? part.text : '').join('')
           const chunk = opts.visibleOnly ? visible.push(content ?? '') : content
           if (chunk) {
+            transport.output('visibleEvents')
             fullText += chunk
             opts.onChunk(chunk)
           }
@@ -237,13 +252,12 @@ export class GeminiProvider implements ILLMProvider {
           }
         } catch (error) {
           if (opts.visibleOnly) throw error
-          // Ignore non-data SSE lines and malformed keepalives.
         }
       }
 
       let streamEnded = false
       while (!streamEnded) {
-        const { done, value } = await reader.read()
+        const { done, value } = await transport.read(reader)
         streamEnded = done
         if (done) continue
 
@@ -256,8 +270,10 @@ export class GeminiProvider implements ILLMProvider {
       buffer += decoder.decode()
       if (buffer.trim()) processLine(buffer)
 
+      transport.completed()
       opts.onDone(opts.visibleOnly ? visible.text : fullText, usage, finishReason)
     } catch (error) {
+      transport.interrupted(error, opts.signal.aborted)
       if ((error as Error).name === 'AbortError') {
         opts.onError('LLM_CANCELLED', opts.visibleOnly ? visible.text : undefined, visibleUsage)
       } else {
