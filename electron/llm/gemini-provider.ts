@@ -39,11 +39,15 @@ interface GeminiUsageMetadata {
  * Gemini 的 candidatesTokenCount 只算正文，思考在 thoughtsTokenCount 里另报。
  */
 function geminiTokenUsage(metadata: GeminiUsageMetadata): TokenUsage {
-  const { candidatesTokenCount: candidates, thoughtsTokenCount: thoughts } = metadata
+  // usageMetadata 是未校验的 JSON，只认非负整数；没报的分项按 0 计，报了却不是数字就整项不记。
+  const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+  const part = (value: unknown) => value === undefined ? 0 : count(value)
+  const candidates = part(metadata.candidatesTokenCount), thoughts = part(metadata.thoughtsTokenCount)
+  const reported = metadata.candidatesTokenCount !== undefined || metadata.thoughtsTokenCount !== undefined
   return {
-    promptTokens: metadata.promptTokenCount ?? null,
-    completionTokens: candidates === undefined && thoughts === undefined ? null : (candidates ?? 0) + (thoughts ?? 0),
-    totalTokens: metadata.totalTokenCount ?? null,
+    promptTokens: count(metadata.promptTokenCount),
+    completionTokens: reported && candidates !== null && thoughts !== null ? candidates + thoughts : null,
+    totalTokens: count(metadata.totalTokenCount),
   }
 }
 
@@ -290,7 +294,7 @@ export class GeminiProvider implements ILLMProvider {
       opts.onDone(opts.visibleOnly ? visible.text : fullText, usage, finishReason)
     } catch (error) {
       transport.interrupted(error, opts.signal.aborted)
-      if ((error as Error).name === 'AbortError') {
+      if (opts.signal.aborted) {
         opts.onError('LLM_CANCELLED', opts.visibleOnly ? visible.text : undefined, visibleUsage)
       } else {
         opts.onError(transport.networkFailure ? 'LLM_STREAM_NETWORK_FAILED' : String(error), opts.visibleOnly ? visible.text : undefined, visibleUsage)

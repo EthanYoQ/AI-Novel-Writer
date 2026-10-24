@@ -253,7 +253,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const record = (success: boolean, usage: Awaited<ReturnType<typeof providerDispatch>>['usage'], errorMessage?: string) => {
       if (!unrecordedCalls.delete(recordCancelled)) return
       // 调用记录的「输出」与 OpenAI 一致含思考消耗；思考分开计费的协议（Gemini）在这里加回来。
-      const completionTokens = usage?.completionTokens == null ? null
+      const completionTokens = usage === null || usage.completionTokens === null ? null
         : usage.completionTokens + (usage.accounting === 'separately-billed' ? usage.reasoningTokens ?? 0 : 0)
       try {
         LLMHistoryRepository.logCall({ modelId: model.id, modelName: model.name || model.modelName, purpose: task.purpose,
