@@ -209,6 +209,8 @@ async function launch({ roots, appRoot, fakeModelPort, diagnostics, failureBase,
       globalThis.__driveExternalRequests = []
       globalThis.fetch = async (input, options) => {
         const url = new URL(String(input instanceof Request ? input.url : input))
+        // 本机检索模型直接把 base_url 配成假服务的本机地址，这类请求原样放行。
+        if (port !== null && url.origin === `http://127.0.0.1:${port}`) return originalFetch(input, options)
         if (port === null || url.origin !== 'https://api.openai.com' || !url.pathname.startsWith('/v1/')) {
           globalThis.__driveExternalRequests.push(url.origin)
           throw new Error('DRIVE_EXTERNAL_FETCH_REFUSED')

@@ -247,6 +247,38 @@ export const X2_SCENARIOS = {
     return measured
   } },
 
+  // #484：检索模型配在本机地址、不填 Key，知识库照样认它，导入资料与补全索引都向它要向量，请求里不带 Key。
+  'kb-local-keyless': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: async ({ page, invoke }) => {
+    const model = { ...EMBEDDING_MODEL, id: 'kb-local-embedding', name: '本机检索模型', provider: 'custom',
+      baseUrl: `http://127.0.0.1:${context.fake.port}/v1`, apiKey: '' }
+    assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
+    assert.equal((await invoke(page, 'llm:set-default-embedding-model', model.id)).success, true)
+  } }), run: async context => {
+    const { page, fake, shoot } = context
+    fake.acceptKeylessEmbeddings()
+    await importMaterials(context)
+    // 创作资料走 kb:import-planning-text，只建全文索引、不要向量；之后的嵌入请求只能来自重建，导入时带向量由单元测试覆盖。
+    const importEmbeddings = fake.embeddingAuthorizations.length
+    await stage.openSettings(page)
+    await stage.showSettingsPage(page, '检索模型')
+    const index = stage.root(page).getByRole('region', { name: '当前作品的检索索引' })
+    const rebuild = index.getByRole('button', { name: '检查并重建向量索引' })
+    const offered = await rebuild.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
+    const before = { offered, text: await index.innerText() }
+    if (offered) {
+      await shoot('kb-local-keyless-before-rebuild')
+      await rebuild.click()
+      await index.getByRole('button', { name: '检查与重建中…' }).waitFor({ state: 'detached', timeout: 30_000 })
+      await index.getByRole('heading', { name: '检查当前模型的向量索引' }).waitFor({ state: 'visible', timeout: 30_000 })
+    }
+    const after = { text: await index.innerText(), alerts: await index.getByRole('alert').allInnerTexts() }
+    const authorizations = [...new Set(fake.embeddingAuthorizations)]
+    const measured = { before, after, importEmbeddings, rebuildEmbeddings: fake.embeddingAuthorizations.length - importEmbeddings, authorizations }
+    assert.deepEqual({ offered, alerts: after.alerts, importEmbeddings, rebuilt: measured.rebuildEmbeddings > 0, keyless: authorizations.every(value => !(value ?? '').replace(/^Bearer\s*/u, '')) },
+      { offered: true, alerts: [], importEmbeddings: 0, rebuilt: true, keyless: true }, JSON.stringify(measured))
+    return measured
+  } },
+
   // #388 T3：设置的「检索模型」页里删掉检索模型，同一页的索引区随之回到未配置，不再留着重建按钮。
   'x2-index-model': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: async ({ page, invoke }) => {
     assert.equal((await invoke(page, 'llm:save-model', EMBEDDING_MODEL)).success, true)

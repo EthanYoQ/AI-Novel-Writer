@@ -53,6 +53,7 @@ describe('知识库嵌入空间回填', () => {
     generateEmbeddingsMock.mockResolvedValue([[0.1, 0.2, 0.3]])
 
     await expect(importText(content, fileName, projectPath, 'openai', {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'fake-embedding',
@@ -74,7 +75,7 @@ describe('知识库嵌入空间回填', () => {
     const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-late-barrier-'))
     projects.push(projectPath)
     prepareCanonicalStorageFixture(projectPath)
-    const model = { baseUrl: 'https://example.invalid', apiKey: '', modelName: 'unused' }
+    const model = { provider: 'openai', baseUrl: 'https://example.invalid', apiKey: '', modelName: 'unused' }
     await expect(importText('合成原文', 'before.txt', projectPath, 'openai', model, { mode: 'fts-only' })).resolves.toMatchObject({ success: true })
     const before = await listDocuments(projectPath)
     const pending = path.join(projectPath, '.ai-novel', name)
@@ -92,6 +93,7 @@ describe('知识库嵌入空间回填', () => {
     const content = '林晓是一名数据调查员。'
 
     await expect(importText(content, '人物设定.md', projectPath, 'openai', {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'configured-key',
       modelName: 'embedding-model',
@@ -108,6 +110,7 @@ describe('知识库嵌入空间回填', () => {
     projects.push(projectPath)
     prepareCanonicalStorageFixture(projectPath)
     const model = {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'configured-key',
       modelName: 'embedding-model',
@@ -148,6 +151,7 @@ describe('知识库嵌入空间回填', () => {
     prepareCanonicalStorageFixture(projectPath)
     const vector = [0.1, 0.2, 0.3]
     const model = {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'fake-embedding',
@@ -220,6 +224,7 @@ describe('知识库嵌入空间回填', () => {
     projects.push(projectPath)
     prepareCanonicalStorageFixture(projectPath)
     const model = {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'fake-embedding',
@@ -276,6 +281,7 @@ describe('知识库嵌入空间回填', () => {
     generateEmbeddingsMock.mockResolvedValue([vector])
 
     await expect(backfillVectors(projectPath, 'openai', {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1/',
       apiKey: 'test-key-not-persisted',
       modelName: 'model-1536',
@@ -323,6 +329,7 @@ describe('知识库嵌入空间回填', () => {
     generateEmbeddingsMock.mockImplementation(async (texts: string[]) => texts.map(() => vector1536))
 
     await expect(backfillVectors(projectPath, 'openai', {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'same-model',
@@ -369,6 +376,7 @@ describe('知识库嵌入空间回填', () => {
       .mockRejectedValueOnce(new Error('embedding provider unavailable'))
 
     await expect(backfillVectors(projectPath, 'openai', {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'same-model',
@@ -394,6 +402,7 @@ describe('知识库嵌入空间回填', () => {
     ])
 
     await expect(backfillVectors(projectPath, 'openai', {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'model-1536',
@@ -415,6 +424,7 @@ describe('知识库嵌入空间回填', () => {
     ))
 
     await expect(importText('不应写入数据库的正文', 'invalid.txt', projectPath, 'openai', {
+      provider: 'openai',
       baseUrl: 'http://127.0.0.1:8080/v1',
       apiKey: 'test-key',
       modelName: 'qwen3-embedding',
@@ -450,6 +460,7 @@ describe('知识库嵌入空间回填', () => {
       Array.from({ length: 1024 }, (_, index) => index / 1024),
     ])
     await expect(importText('不应覆盖的新内容', 'same-name.txt', projectPath, 'openai', {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'model-b',
@@ -472,6 +483,7 @@ describe('知识库嵌入空间回填', () => {
     await expect(getChunksForBackfill(projectPath, 10, space)).rejects.toThrow('EMBEDDING_SPACE_REGISTRY_INVALID')
     await expect(getChunksWithoutVectors(projectPath, space)).rejects.toThrow('EMBEDDING_SPACE_REGISTRY_INVALID')
     await expect(backfillVectors(projectPath, 'openai', {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'model-1536',
@@ -516,6 +528,7 @@ describe('知识库嵌入空间回填', () => {
       ],
     }), 'utf8')
     const model = {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'model-768',
@@ -543,6 +556,7 @@ describe('知识库嵌入空间回填', () => {
       distanceMetric: 'l2',
     }
     const model = {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'model-768',
@@ -600,6 +614,7 @@ describe('知识库嵌入空间回填', () => {
       distanceMetric: 'l2',
     }
     const model = {
+      provider: 'openai',
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
       modelName: 'model-768',
