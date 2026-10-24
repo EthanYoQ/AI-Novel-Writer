@@ -17,6 +17,7 @@ import { readPortableCurrentAuthority } from '../portable-current-authority'
 import { currentDerivedCharacterFields } from '../current-character-projection'
 import { adoptTransferredCharacterContinuityOnOpen } from '../transferred-character-continuity'
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
+import { ChapterDeletionService } from '../chapter-deletion-service'
 
 const roots: string[] = []
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -254,5 +255,68 @@ describe('#491 角色状态来源经过多次备份往返', { timeout: 30_000 },
     const provenance = JSON.parse(String(characterRow().cs_provenance)) as Record<string, { sourceOrder: { continuityEpoch: string } }>
     expect(provenance.location.sourceOrder.continuityEpoch).toBe(`${restored.projectId}:0`)
     expect(provenance.keyItems.sourceOrder.continuityEpoch).toBe(forged.keyItems.sourceOrder.continuityEpoch)
+  })
+})
+
+/** 走界面删除定稿章节的同一服务；正文文件与知识库投影换成空操作。 */
+async function deleteFinalizedChapter(project: OpenProject, draftId: number, chapterNumber: number): Promise<void> {
+  const service = new ChapterDeletionService({ cleaner: { removeManuscript: async () => undefined, removeKnowledgeDocument: async () => undefined } })
+  let result = await service.delete(project.root, { draftId, chapterNumber })
+  if (result.error === 'CHAPTER_DELETE_LEGACY_KNOWLEDGE_CHECK_REQUIRED') result = await service.confirmLegacyKnowledgeAbsent(project.root, result.operation!.operationId)
+  expect(result).toMatchObject({ success: true, committed: true })
+  expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM finalization_outbox WHERE draft_id=?').pluck().get(draftId)).toBe(0)
+}
+
+describe('#484 写入派生字段的章节已删除后再定稿后面的章节', { timeout: 30_000 }, () => {
+  it('原项目：删掉第 1 章后定稿第 2 章，地点按第 2 章更新', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
+    roots.push(base)
+    const a = createSourceProject(base)
+    finalizeChapter(a, 1, 1, CHAPTER_1)
+    deriveCharacterState(a, 1, { location: '北塔顶层' }, '林岚在北塔顶层找到铜钥匙')
+    await deleteFinalizedChapter(a, 1, 1)
+    finalizeChapter(a, 2, 2, CHAPTER_2)
+    expect(deriveCharacterState(a, 2, { location: '南港旅店' }, '住进南港旅店')).toMatchObject({ applied: 1 })
+    expect(characterRow().cs_location).toBe('南港旅店')
+  })
+
+  it('删掉第 1 章后恢复一次：定稿第 2 章，地点按第 2 章更新', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
+    roots.push(base)
+    const a = createSourceProject(base)
+    finalizeChapter(a, 1, 1, CHAPTER_1)
+    deriveCharacterState(a, 1, { location: '北塔顶层' }, '林岚在北塔顶层找到铜钥匙')
+    await deleteFinalizedChapter(a, 1, 1)
+    const b = await exportAndRestore(base, a, 'deleted-1')
+    finalizeChapter(b, 2, 2, CHAPTER_2)
+    expect(deriveCharacterState(b, 2, { location: '南港旅店' }, '住进南港旅店')).toMatchObject({ applied: 1 })
+    expect(characterRow().cs_location).toBe('南港旅店')
+  })
+
+  // 现状：两次恢复后报 FINALIZED_CHARACTER_SOURCE_CONFLICT，与原项目不一致。修复后去掉 .fails。
+  it.fails('删掉第 1 章后恢复两次：定稿第 2 章应与原项目一样按第 2 章更新地点', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
+    roots.push(base)
+    const a = createSourceProject(base)
+    finalizeChapter(a, 1, 1, CHAPTER_1)
+    deriveCharacterState(a, 1, { location: '北塔顶层' }, '林岚在北塔顶层找到铜钥匙')
+    await deleteFinalizedChapter(a, 1, 1)
+    const c = await exportAndRestore(base, await exportAndRestore(base, a, 'deleted-2a'), 'deleted-2b')
+    finalizeChapter(c, 2, 2, CHAPTER_2)
+    expect(deriveCharacterState(c, 2, { location: '南港旅店' }, '住进南港旅店')).toMatchObject({ applied: 1 })
+    expect(characterRow().cs_location).toBe('南港旅店')
+  })
+
+  it('恢复两次后才删掉第 1 章：定稿第 2 章，地点按第 2 章更新', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
+    roots.push(base)
+    const a = createSourceProject(base)
+    finalizeChapter(a, 1, 1, CHAPTER_1)
+    deriveCharacterState(a, 1, { location: '北塔顶层' }, '林岚在北塔顶层找到铜钥匙')
+    const c = await exportAndRestore(base, await exportAndRestore(base, a, 'later-a'), 'later-b')
+    await deleteFinalizedChapter(c, 1, 1)
+    finalizeChapter(c, 2, 2, CHAPTER_2)
+    expect(deriveCharacterState(c, 2, { location: '南港旅店' }, '住进南港旅店')).toMatchObject({ applied: 1 })
+    expect(characterRow().cs_location).toBe('南港旅店')
   })
 })
