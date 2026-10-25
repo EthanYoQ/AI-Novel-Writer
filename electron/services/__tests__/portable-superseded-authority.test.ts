@@ -108,6 +108,24 @@ describe('备份恢复的项目替换一章定稿', { timeout: 60_000 }, () => {
     await expect(exportAndRestore(base, restored, 'after-delete')).resolves.toBeTruthy()
   })
 
+  it('改定较低版本的旧稿替换了较高版本的定稿，转移授权仍可读', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'superseded-portable-'))
+    roots.push(base)
+    const source = createSourceProject(base)
+    const olderBody = '第一章初稿：雾从海面升起。'
+    getProjectDb()!.prepare('INSERT INTO contents(id,body) VALUES(3,?)').run(olderBody)
+    getProjectDb()!.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(3,1,1,'draft',3,0)").run()
+    finalizeChapter(4, 1, '第一章改稿：雾从海面一层一层爬上来。', 2)
+    const restored = await exportAndRestore(base, source, 'older-version')
+
+    FinalizationRepository.commit({ finalizationId: `finalization-${randomUUID()}`, draftId: 3, chapterNumber: 1,
+      chapterTitle: '第1章', content: olderBody, contentHash: sha256(olderBody), contentRevision: 1, targetFileName: '1-3.md' })
+
+    expect(getProjectDb()!.prepare('SELECT id, status FROM drafts WHERE chapter_number = 1 ORDER BY id').all())
+      .toEqual([{ id: 3, status: 'finalized' }, { id: 4, status: 'superseded' }])
+    expect(currentAuthority(restored)).not.toBeNull()
+  })
+
   it('被替换的旧定稿正文被改过时，转移授权校验仍然拒绝', async () => {
     const { restored } = await restoredProject('tamper')
     finalizeChapter(10, 1, '第一章新稿：钟声提前了一刻。', 2)
