@@ -385,16 +385,15 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
     const generation: FinalizePostProcessGeneration = {
       finalizedStage: (stepKey, generationContext) => runFinalizationGeneration({
         session: projectSession, slot: { source: this.params.finalizedSource, stepKey },
-        modelId: () => {
-          const modelId = generationContext.generationModelId ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes')
-          if (modelId) pinWorkflowModel(generationContext, modelId)
-          return modelId ?? ''
-        },
+        modelId: () => generationContext.generationModelId ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes') ?? '',
         ...(generationContext.data.generationBatchId && generationContext.mainGenerationRootHandle
           ? { parentRootActionId: generationContext.mainGenerationRootHandle.rootActionId } : {}),
         ...explicit[stepKey],
         cancelled: () => generationContext.cancelled,
-        onHandle: handle => { generationContext.mainGenerationRunHandle = Object.freeze({ ...handle }) },
+        onHandle: (handle, modelId) => {
+          generationContext.mainGenerationRunHandle = Object.freeze({ ...handle })
+          pinWorkflowModel(generationContext, modelId)
+        },
       }).catch(error => { throw finalizationGenerationError(error) }),
       complete: async () => { throw new Error('FINALIZATION_GENERATION_MAIN_REQUIRED') },
     }

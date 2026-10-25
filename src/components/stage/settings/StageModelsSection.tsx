@@ -106,8 +106,10 @@ export default function StageModelsSection() {
               </div>
               {route.staleAssignmentId && !saving && (
                 <div className="stage-set-row-extra">
-                  <p className="stage-set-stale" role="status">
-                    {text('所选模型已删除或不能用于文本生成，现按默认模型运行。', 'The selected model was deleted or can no longer generate text, so the default is used.')}
+                  <p className="stage-set-stale">
+                    <span role="status">{route.source === 'none'
+                      ? text('所选模型已删除或不能用于文本生成，默认模型也不可用，这个环节现在无法运行。', 'The selected model was deleted or can no longer generate text, and there is no usable default, so this stage cannot run.')
+                      : text('所选模型已删除或不能用于文本生成，现按默认模型运行。', 'The selected model was deleted or can no longer generate text, so the default is used.')}</span>
                     <Button variant="text" size="sm" onClick={() => void choose(stage, null)}>{text('改回跟随默认', 'Use the default')}</Button>
                   </p>
                 </div>
