@@ -136,9 +136,13 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   },
 }
 
+export function isGlobalConfigRecord(value: unknown): value is GlobalConfig {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 /**
  * 读出全局配置、改写、整份写回。文件不存在时从默认值开始；
- * 文件存在却读不出一个配置对象时不覆盖，返回 false。
+ * 文件存在却读不出一个配置对象时不覆盖，记下原因并返回 false。
  */
 export function updateGlobalConfig(update: (config: GlobalConfig) => GlobalConfig): boolean {
   const current = tryReadJsonFile<unknown>(GLOBAL_CONFIG_PATH)
@@ -146,9 +150,10 @@ export function updateGlobalConfig(update: (config: GlobalConfig) => GlobalConfi
     writeJsonFile(GLOBAL_CONFIG_PATH, update({ ...DEFAULT_GLOBAL_CONFIG }))
     return true
   }
-  if (current.status === 'error' || current.value == null || typeof current.value !== 'object' || Array.isArray(current.value)) {
+  if (current.status === 'error' || !isGlobalConfigRecord(current.value)) {
+    console.error('[App Data] 全局配置无法解析，已拒绝覆盖:', current.status === 'error' ? current.error : 'root is not an object')
     return false
   }
-  writeJsonFile(GLOBAL_CONFIG_PATH, update(current.value as GlobalConfig))
+  writeJsonFile(GLOBAL_CONFIG_PATH, update(current.value))
   return true
 }

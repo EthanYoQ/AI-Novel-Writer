@@ -1,16 +1,11 @@
-import type { GlobalConfig } from '../../src/shared/ipc-channels'
-import { GLOBAL_CONFIG_PATH, tryReadJsonFile, updateGlobalConfig } from '../utils/config-utils'
+import { GLOBAL_CONFIG_PATH, isGlobalConfigRecord, tryReadJsonFile, updateGlobalConfig } from '../utils/config-utils'
 import type { UpdatePreferences, UpdatePreferencesStore } from './update-service'
-
-function isConfigRecord(value: unknown): value is GlobalConfig {
-  return value != null && typeof value === 'object' && !Array.isArray(value)
-}
 
 /** Updates only the configuration in the admitted canonical global generation. */
 export class GlobalConfigUpdatePreferencesStore implements UpdatePreferencesStore {
   read(): UpdatePreferences {
     const result = tryReadJsonFile<unknown>(GLOBAL_CONFIG_PATH)
-    return result.status === 'ok' && isConfigRecord(result.value)
+    return result.status === 'ok' && isGlobalConfigRecord(result.value)
       ? result.value.updatePreferences ?? {}
       : {}
   }

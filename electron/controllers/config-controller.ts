@@ -19,7 +19,6 @@ export function registerConfigController() {
     try {
       if (updateGlobalConfig(existing => ({ ...existing, ...config }))) return { success: true }
       // 设置页把这句原样拼进「保存失败」说明，所以在这里按界面语言写好。
-      console.error('[config:set] 全局配置无法解析，已拒绝覆盖')
       return {
         success: false,
         error: mainText(
