@@ -16,7 +16,7 @@ import { GenerationRunRepository } from './generation-run-repository'
 import { blueprintCharacterSyncFactError } from '../../src/shared/blueprint-character-sync-evidence'
 import type { BlueprintNewCharacterCandidate } from '../../src/shared/blueprint-semantic-contract'
 
-/** 蓝图行类型（DB 蛇形命名）。除章号和标题外各列都允许 NULL，旧数据与省略字段的写入会留下 NULL。 */
+/** 蓝图行类型（DB 蛇形命名） */
 export interface BlueprintRow {
     chapter_number: number
     title: string
@@ -145,16 +145,19 @@ interface CharacterRosterOperationEvidenceRow {
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u
 
+function parseCharacters(raw: string | null): string[] {
+    if (raw === null) return []
+    try { return JSON.parse(raw) } catch { return [] }
+}
+
 function rowToData(row: BlueprintRow): BlueprintData {
-    let chars: string[] = []
-    try { chars = JSON.parse(row.characters ?? '[]') } catch { /* 容错 */ }
     return {
         chapterNumber: row.chapter_number,
         title: row.title,
         role: row.role ?? '',
         purpose: row.purpose ?? '',
         keyEvents: row.key_events ?? '',
-        characters: chars,
+        characters: parseCharacters(row.characters),
         suspenseHook: row.suspense_hook ?? '',
         userGuidance: row.user_guidance ?? '',
         notes: row.notes ?? '',
