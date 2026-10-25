@@ -131,11 +131,23 @@ describe('分工模型设置页', () => {
     await mount()
     expect(host!.textContent).toContain('只有一个生成模型时，各环节都用它')
     expect([...host!.querySelectorAll<HTMLSelectElement>('[data-stage] select')].every(element => element.disabled)).toBe(true)
+    expect(getComputedStyle(select('review')).cursor).toBe('not-allowed')
+  })
+
+  it('唯一的生成模型不是默认模型时下拉仍可选，作者能把它指定给环节', async () => {
+    useLLMStore.setState({ models: [FLASH, BGE], defaultModelId: null })
+    await mount()
+    expect(host!.textContent).not.toContain('只有一个生成模型时，各环节都用它')
+    expect([...host!.querySelectorAll<HTMLSelectElement>('[data-stage] select')].some(element => element.disabled)).toBe(false)
+    await choose('review', 'flash')
+    expect(invoke).toHaveBeenCalledWith('llm:set-stage-model', { stage: 'review', modelId: 'flash' })
   })
 
   it('「AI 模型」页在有环节另有指定时显示一行提示，点击去分工模型', async () => {
     useLayoutStore.setState({ settingsSection: 'llm' })
     await mount()
+    expect(host!.textContent).not.toContain('部分环节在「分工模型」里另有指定')
+    await act(async () => useLLMStore.setState({ stageModelIds: { review: 'gone', planning: 'bge' } }))
     expect(host!.textContent).not.toContain('部分环节在「分工模型」里另有指定')
     await act(async () => useLLMStore.setState({ stageModelIds: { review: 'glm' } }))
     expect(host!.textContent).toContain('部分环节在「分工模型」里另有指定')

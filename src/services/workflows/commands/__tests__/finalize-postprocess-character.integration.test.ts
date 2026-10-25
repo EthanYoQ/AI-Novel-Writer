@@ -27,7 +27,7 @@ import type {
   SaveFinalizedContinuityRequest,
 } from '../../../../shared/finalized-continuity'
 import type { CharacterRosterCommitRequest } from '../../../../shared/character-roster'
-import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
+import { useWorkflowStore, type StepCallbacks, type WorkflowContext } from '../../../../stores/workflow-store'
 import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { RunFinalizePostProcessCommand } from '../finalize-chapter.command'
@@ -495,6 +495,16 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       step: {}, context: { ...workflowContext, ...(frozenModelId ? { generationModelId: frozenModelId } : {}) }, callbacks: callbacks(),
     })
     expect(selections.map(selection => (selection as { modelId: string }).modelId)).toEqual([expected, expected])
+  })
+
+  it('records the finalization stage model on the run so editing that model warns about it', async () => {
+    insertFinalizedDraft(7, 2)
+    useLLMStore.setState({ models: [{ id: 'test-model', purposes: ['generation'] }, { id: 'post-model', purposes: ['generation'] }] as never,
+      defaultModelId: 'test-model', stageModelIds: { finalization: 'post-model' } })
+    useWorkflowStore.setState({ activeRuns: [{ id: workflowContext.runId, status: 'running' }] as never })
+    await command('Chapter 2 finalized content').execute({ step: {}, context: { ...workflowContext }, callbacks: callbacks() })
+    expect(useWorkflowStore.getState().activeRuns[0]?.generationModelId).toBe('post-model')
+    useWorkflowStore.setState({ activeRuns: [] })
   })
 
   it('covers the full finalized source and atomically persists one valid state change', async () => {
