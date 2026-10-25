@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
-import path from 'node:path'
+import { join } from 'node:path'
 
 import { FAKE_MODEL, FIXTURE_PROSE } from './fake-model.mjs'
 import * as blueprint from './pages/blueprint.mjs'
@@ -123,7 +123,7 @@ const withManyBlueprints = context => seedStageSample(context, { totalChapters: 
 /** 有作者字段的一章与库里作者字段是 NULL 的下一章（示例作品的蓝图行不写悬念钩子与作者微操指导）。 */
 const FILLED = 5
 const NULL_FIELDS = 6
-const FILLED_FIELDS = { userGuidance: '第 5 章只写雾，不写人脸。', suspenseHook: '第 5 章结尾钟声停了。' }
+const FILLED_FIELDS = { userGuidance: '第 5 章只写雾，不写人脸。', suspenseHook: '第 5 章结尾钟声停了。', notes: '第 5 章要点：钟绳上的纸条。' }
 
 const withFilledChapter = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path: projectPath, session }) => {
   const current = await invoke(page, 'db:blueprint-get', FILLED, projectPath, session)
@@ -136,7 +136,7 @@ const withFilledChapter = context => seedStageSample(context, { beforeReload: as
 /** 绕过主进程的行映射直接读库，才分得清库里是 NULL、空串还是别章的文字。 */
 async function rawBlueprintRow(projectPath, chapterNumber) {
   const { DatabaseSync } = await import('node:sqlite')
-  const file = path.join(projectPath, '.ai-novel', 'project.db')
+  const file = join(projectPath, '.ai-novel', 'project.db')
   assert.ok(fs.existsSync(file), `有项目库 ${file}`)
   const db = new DatabaseSync(file, { readOnly: true })
   try {
@@ -146,15 +146,17 @@ async function rawBlueprintRow(projectPath, chapterNumber) {
   } finally { db.close() }
 }
 
-const nullFieldsCard = page => page.getByRole('region', { name: `第 ${NULL_FIELDS} 章蓝图` })
+const chapterCard = (page, chapterNumber) => page.getByRole('region', { name: `第 ${chapterNumber} 章蓝图` })
+const nullFieldsCard = page => chapterCard(page, NULL_FIELDS)
 
 async function authorFields(page, chapterNumber) {
   await blueprint.planItem(page, chapterNumber).click()
-  const card = page.getByRole('region', { name: `第 ${chapterNumber} 章蓝图` })
+  const card = chapterCard(page, chapterNumber)
   await card.waitFor({ state: 'visible' })
   return {
     userGuidance: await card.getByRole('textbox', { name: /^作者微操指导/ }).inputValue(),
     suspenseHook: await card.getByRole('textbox', { name: /^悬念钩子/ }).inputValue(),
+    notes: await card.getByRole('textbox', { name: /^章节要点/ }).inputValue(),
   }
 }
 
@@ -205,7 +207,7 @@ async function saveOnExit(app, page) {
 export const BLUEPRINT_SCENARIOS = {
   'blueprint-null-field': { model: false, shell: 'stage', setup: withFilledChapter, run: async context => {
     const { app, page, samplePath, shoot } = context
-    const empty = { userGuidance: '', suspenseHook: '' }
+    const empty = { userGuidance: '', suspenseHook: '', notes: '' }
     const raw = () => rawBlueprintRow(samplePath, NULL_FIELDS)
     const measured = {}
     await blueprint.open(page)
@@ -254,11 +256,10 @@ export const BLUEPRINT_SCENARIOS = {
       dbAfterOtherFieldSave: { user_guidance: '', suspense_hook: '', title: '第二盏灯亮起' },
       dbAfterExitSave: { user_guidance: '', suspense_hook: '', title: '第二盏灯又亮起' },
       dbAfterTyping: { user_guidance: '补一句', suspense_hook: '', title: '第二盏灯又亮起' },
-      afterRestart: { userGuidance: '补一句', suspenseHook: '' },
+      afterRestart: { ...empty, userGuidance: '补一句' },
     }, `作者字段为 NULL 的章节既不显示也不写入上一章的作者字段：${JSON.stringify(measured)}`)
     return measured
   } },
-
 
   'blueprint-finalize-next': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: async ({ page, invoke, path, session }) => {
     for (const draft of await invoke(page, 'db:draft-list', 4, path, session)) {
