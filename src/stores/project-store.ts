@@ -11,6 +11,7 @@ import type {
   FileNode,
 } from '../shared/ipc-channels'
 import { alertError } from '../components/ui/AlertDialog'
+import { showFinalizationRepairNotice } from '../components/finalization-repair-notice'
 import { confirm } from '../components/ui/Confirm'
 import { appErrorMessage, displayedErrorMessage } from '../i18n/app-errors'
 import { saveDirtyEditorChangesForExit, useEditorStore } from './editor-store'
@@ -788,6 +789,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
             title: projectText('项目已打开，部分数据加载失败', 'Project opened with some data unavailable'),
           })
         }
+        if (result.finalizationRepair) showFinalizationRepairNotice(result.finalizationRepair)
         return true
       }
       if (!isLatestRequest()) return false

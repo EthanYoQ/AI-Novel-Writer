@@ -62,6 +62,7 @@ import type {
   ChapterDeletionResult,
   DeleteFinalizedChapterRequest,
 } from './chapter-deletion'
+import type { DuplicateFinalizationRepair } from './finalization-repair'
 import type {
   ImportRunChapterSnapshot,
   ImportRunEffectCommitResult,
@@ -354,6 +355,8 @@ export interface ProjectChannels {
       error?: string
       legacyImportSource?: ProjectDirectoryGrant
       errorCode?: AppErrorCode
+      /** 本次打开修复了遗留的同章重复定稿；只在真改了数据的那次打开出现。 */
+      finalizationRepair?: DuplicateFinalizationRepair
     }
   }
   'project:save': {

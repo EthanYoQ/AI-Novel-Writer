@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { countDraftUnits } from '../../src/shared/draft-units'
+import type { DuplicateFinalizationRepair, RepairedDuplicateChapter } from '../../src/shared/finalization-repair'
 import { freezeFinalizedCharacterSnapshot, invalidateContinuityProjectionFrom } from './summary-repository'
 
 export type PublicationStatus = 'pending' | 'published'
@@ -316,6 +317,54 @@ export class FinalizationRepository {
       }
     })
     return transaction()
+  }
+
+  /**
+   * 旧版本再定稿不降级旧行，留下同章多行 finalized，权威序列判 invalid、后续章节写不了。
+   * 打开项目时调用：每章保留与权威读取同序（version、id 降序）的第一行，其余降为 superseded。
+   * 只改状态，收据、正文、知识库文档与实体稿都不动；再执行一次找不到可修的章。
+   */
+  static repairDuplicateFinalizations(): DuplicateFinalizationRepair {
+    const db = requireDatabase()
+    return db.transaction(() => {
+      const rows = db.prepare(`
+        SELECT drafts.id, drafts.chapter_number, drafts.version,
+               finalization_outbox.knowledge_document_id, finalization_outbox.target_file_name
+        FROM drafts
+        LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+        WHERE drafts.status = 'finalized' AND drafts.chapter_number IN (
+          SELECT chapter_number FROM drafts WHERE status = 'finalized'
+          GROUP BY chapter_number HAVING COUNT(*) > 1
+        )
+        ORDER BY drafts.chapter_number ASC, drafts.version DESC, drafts.id DESC
+      `).all() as Array<{
+        id: number
+        chapter_number: number
+        version: number
+        knowledge_document_id: string | null
+        target_file_name: string | null
+      }>
+      const chapters: RepairedDuplicateChapter[] = []
+      const supersede = db.prepare(`
+        UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
+        WHERE id = ? AND status = 'finalized'
+      `)
+      for (const row of rows) {
+        const current = chapters.at(-1)
+        if (current?.chapterNumber !== row.chapter_number) {
+          chapters.push({ chapterNumber: row.chapter_number, keptDraftId: row.id, keptVersion: row.version, superseded: [] })
+          continue
+        }
+        supersede.run(row.id)
+        current.superseded.push({
+          draftId: row.id,
+          version: row.version,
+          knowledgeDocumentId: row.knowledge_document_id ?? '',
+          targetFileName: row.target_file_name ?? '',
+        })
+      }
+      return { chapters }
+    }).immediate()
   }
 
   /** 这份定稿仍是本章的权威定稿；被替换（superseded）或已删除时为 false，发布出口据此拒绝。 */
