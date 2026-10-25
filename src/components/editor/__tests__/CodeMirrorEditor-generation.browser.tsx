@@ -8,6 +8,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import CodeMirrorEditor from '../CodeMirrorEditor'
+import { commandKeyLabel, IS_MAC } from '../../stage/shortcut-keys'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -23,9 +24,10 @@ let deferFirstLease: boolean
 let rejectFirstLease: ((error: Error) => void) | null
 let leaseRequestCount: number
 
+const APP_MIN_WINDOW_WIDTH = 1024
+
 beforeEach(async () => {
-  // 应用窗口最小宽 1024（electron/main.ts）；默认 414 宽的测试视口放不下整条选区工具条。
-  await page.viewport(1024, 768)
+  await page.viewport(APP_MIN_WINDOW_WIDTH, 768)
   window.getSelection()?.removeAllRanges()
   container = document.createElement('div')
   document.body.append(container)
@@ -221,6 +223,29 @@ describe('CodeMirror editor AI generation boundary', () => {
     expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ input: expect.objectContaining({ action: 'instruct', instruction: '语气更冷' }) }), expect.any(Object))
   })
 
+  it('shows the submit shortcut with the platform command key', async () => {
+    expect(commandKeyLabel('Enter', true)).toBe('⌘ + Enter')
+    expect(commandKeyLabel('Enter', false)).toBe('Ctrl + Enter')
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+
+    await expect.element(page.getByText(`${IS_MAC ? '⌘' : 'Ctrl'} + Enter 提交`, { exact: true })).toBeVisible()
+  })
+
+  it('accepts a 2000 code point note outside the BMP in full', async () => {
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    const longNote = '𠀋'.repeat(2000)
+
+    await act(async () => note.fill(longNote + '𠀋'))
+
+    expect((note.element() as HTMLTextAreaElement).value).toBe(longNote)
+  })
+
   it('shows no selection actions in a read-only editor', async () => {
     await act(async () => root.render(
       <CodeMirrorEditor content="定稿正文" mode="prose" editable={false} />,
@@ -344,6 +369,16 @@ it.each([false, true])('明确 handle 恢复原候选；文件改变=%s 时只�
   expect(invoke).toHaveBeenCalledTimes(2)
 })
 
+it('明确 handle 恢复按意见改的候选时显示当时的意见', async () => {
+  const handle = { projectId: 'editor-project', epoch: 'editor-epoch', rootActionId: '原预算', runId: '意见运行' }
+  const documentText = '林岚走进北塔'
+  const documentHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(documentText))), byte => byte.toString(16).padStart(2, '0')).join('')
+  invoke.mockImplementation(async () => ({ view: { handle, status: 'completed', artifacts: [{ ...handle, artifactId: 'proof', textHash: 'proof-hash', text: '我走进北塔', status: 'completed', compositionEligible: true }] }, modelId: '原模型', sourceStatus: 'current', context: { action: 'instruct', instruction: '改成第一人称', kind: 'author-draft', documentText, documentHash, from: 0, to: 6, selectedText: documentText } }))
+  await act(async () => root.render(<CodeMirrorEditor content={documentText} recoveryHandle={handle} />))
+  await expect.element(page.getByText('我走进北塔')).toBeVisible()
+  await expect.element(page.getByText('按意见改预览')).toBeVisible()
+  await expect.element(page.getByText('改成第一人称')).toBeVisible()
+})
 it('取消调用 main；卸载仅脱离且已交付明确恢复 handle', async () => {
   deferStream = true
   const navigation = vi.fn()

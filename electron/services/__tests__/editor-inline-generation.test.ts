@@ -101,6 +101,16 @@ it.each([
  expect(()=>f.owner.beginEditorInline({...request,input:bad as never})).toThrow('GENERATION_EDITOR_INPUT_INVALID')
  expect(f.spy).not.toHaveBeenCalled()
 })
+it('意见里的 $$、$& 与模板占位按字面进入模型请求',async()=>{
+ const f=fixture(async()=>({finishReason:'stop',usage:null}))
+ const instruction='价格写成 $$5，保留 $& 与 {{selected_text}} 原样'
+ const handle=f.owner.beginEditorInline({...noted,input:{...noted.input,instruction}}).view.handle
+ await f.owner.executeEditorInline(handle)
+ const {task}=f.spy.mock.calls[0]![0] as {task:{messages:{role:string;content:string}[]}}
+ const user=task.messages.find(m=>m.role==='user')!.content
+ expect(user).toContain(instruction)
+ expect(user.split(input.selectedText)).toHaveLength(2)
+})
 it('意见恰好2000字可以开始运行',()=>{
  const f=fixture(),instruction='冷'.repeat(2000)
  expect(f.owner.beginEditorInline({...noted,input:{...noted.input,instruction}}).context).toMatchObject({action:'instruct',instruction})
