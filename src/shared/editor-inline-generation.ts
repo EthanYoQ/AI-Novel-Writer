@@ -2,14 +2,18 @@ import type { MainGenerationRunHandle, MainGenerationRunView, MainGenerationExec
 import type { PromptTemplate } from '../services/builtin-prompt-templates'
 import type { WritingLanguage } from './writing-language'
 
-export interface EditorInlineInput {
-  action: 'refine' | 'expand' | 'continue' | 'dialogue'
+/** 作者意见的长度上限，按字符（码点）计。 */
+export const EDITOR_INLINE_INSTRUCTION_MAX_LENGTH = 2000
+export type EditorInlineFixedAction = 'refine' | 'expand' | 'continue' | 'dialogue'
+/** 固定动作自带指令；instruct 由作者写意见，原样冻结进运行。 */
+export type EditorInlineRequest = { action: EditorInlineFixedAction } | { action: 'instruct'; instruction: string }
+export type EditorInlineInput = EditorInlineRequest & {
   documentText: string
   from: number
   to: number
   selectedText: string
 }
-export interface EditorInlineContext extends EditorInlineInput {
+export type EditorInlineContext = EditorInlineInput & {
   kind: 'author-draft'
   documentHash: string
   writingLanguage: WritingLanguage

@@ -669,7 +669,7 @@ export const CHAPTER_SCENARIOS = {
     await line.click({ clickCount: 3 })
     const toolbar = page.getByRole('toolbar', { name: '选中文字的操作' })
     await toolbar.waitFor({ state: 'visible' })
-    assert.deepEqual(await toolbar.getByRole('button').allInnerTexts(), ['润色', '扩写', '续写', '改成对话'])
+    assert.deepEqual(await toolbar.getByRole('button').allInnerTexts(), ['润色', '扩写', '续写', '改成对话', '按意见改'])
     await toolbar.getByRole('button', { name: '润色' }).click()
     await toolbar.getByText(firstLine(FIXTURE_PROSE)).waitFor({ state: 'visible', timeout: 30_000 })
     assert.equal(await toolbar.getByRole('button', { name: '替换' }).isEnabled(), true, '预览后可以替换')
@@ -684,6 +684,32 @@ export const CHAPTER_SCENARIOS = {
     assert.ok((await prose.innerText()).includes('你父亲也问过钟的事'), '取消后原文不变')
     await prose.getByText(firstLine(FIXTURE_PROSE)).first().click({ clickCount: 3 })
     await toolbar.waitFor({ state: 'visible' })
+  } },
+
+  /** #516：选中一段正文写意见改写，意见进入发给模型的请求，预览后替换。 */
+  'chapter-selection-note': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake, shoot }) => {
+    const note = '改成林岚的第一人称，语气更冷'
+    const revised = '我沿着旧港的石阶往下走。潮水退了，盐霜冷得像没人说出口的话。'
+    fake.replyReview(prompt => prompt.includes(note) ? revised : null)
+    await chapterView.open(page, 4)
+    const prose = chapterView.prose(page)
+    await prose.getByText(firstLine(STAGE_SAMPLE.drafts[4].text)).first().click({ clickCount: 3 })
+    const toolbar = page.getByRole('toolbar', { name: '选中文字的操作' })
+    await toolbar.getByRole('button', { name: '按意见改' }).waitFor({ state: 'visible' })
+    await page.waitForTimeout(200)
+    await shoot('chapter-selection-note-toolbar')
+    await toolbar.getByRole('button', { name: '按意见改' }).click()
+    const input = toolbar.getByRole('textbox', { name: '修改意见' })
+    await input.fill(note)
+    await shoot('chapter-selection-note-input')
+    await input.press('Control+Enter')
+    await toolbar.getByText(revised).waitFor({ state: 'visible', timeout: 30_000 })
+    assert.equal(await toolbar.getByText(note).isVisible(), true, '预览里显示作者意见')
+    await shoot('chapter-selection-note-preview')
+    await toolbar.getByRole('button', { name: '替换' }).click()
+    await prose.getByText(revised).first().waitFor({ state: 'visible' })
+    assert.ok(fake.chats.some(chat => JSON.stringify(chat.messages).includes(note)), '作者意见进入发给模型的请求')
+    return { note, revised }
   } },
 
   /** lane 9：第 4 章有两稿，删除当前这一稿要危险确认，之后版本切换器只剩另一稿。 */

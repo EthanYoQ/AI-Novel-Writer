@@ -41,7 +41,7 @@ function RecoveryCard({ entry, recovery, text }: { entry: RecoveryEntry; recover
       )
     case 'editor':
       return (
-        <RecoveryShell title={entry.title} text={text} notes={[entry.usage, entry.conflictNote]}
+        <RecoveryShell title={entry.title} text={text} notes={[entry.instructionNote, entry.usage, entry.conflictNote]}
           budget={<GenerationBudgetDiagnostics diagnostics={entry.budget} locale={locale} />}
           actions={<>
             <Button variant="secondary" size="sm" disabled={busy || !entry.canContinue} onClick={() => recovery.continueEditor(entry)}>{entry.labels.continue}</Button>
