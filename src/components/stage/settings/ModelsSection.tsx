@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Cpu, ExternalLink, MoreHorizontal, Plus } from 'lucide-react'
 import type { ModelProfile } from '../../../shared/ipc-channels'
+import { MODEL_STAGES, routeStageModel } from '../../../shared/model-stage-routing'
 import { BUILTIN_PRESETS } from '../../../shared/provider-presets'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -29,7 +30,7 @@ export default function ModelsSection({ purposes, header }: { purposes: ModelPro
   const retrieval = section.isEmbeddingSection
   const kind = retrieval ? text('检索模型', 'retrieval model') : text('模型', 'model')
   const embeddingMissing = useLLMStore(s => retrieval && s.loaded && !s.defaultEmbeddingModelId)
-  const stagesAssigned = useLLMStore(s => !retrieval && Object.keys(s.stageModelIds).length > 0)
+  const stagesAssigned = useLLMStore(s => !retrieval && MODEL_STAGES.some(stage => routeStageModel(stage, s).source === 'stage'))
   const signUp = () => void openModelProviderResource('siliconflow-invite', text)
   const add = <Button variant="secondary" onClick={section.add}><Plus size={14} aria-hidden="true" />{text(`添加${kind}`, `Add ${kind}`)}</Button>
 

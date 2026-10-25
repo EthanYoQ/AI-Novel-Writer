@@ -35,7 +35,7 @@ export interface WorkflowMainGenerationRuntime extends GenerationRuntime {
   advance(selection: WorkflowMainGenerationSelection): Promise<void>
 }
 
-function pinWorkflowModel(context: WorkflowContext, modelId: string): void {
+export function pinWorkflowModel(context: WorkflowContext, modelId: string): void {
   context.generationModelId ||= modelId
   useWorkflowStore.getState().pinRunGenerationModel(context.runId, context.generationModelId)
 }

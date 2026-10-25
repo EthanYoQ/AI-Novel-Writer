@@ -66,8 +66,8 @@ export default function StageModelsSection() {
     )
   }
 
-  const single = generationModels.length === 1
   const defaultLabel = label(defaultModelId)
+  const single = generationModels.length === 1 && defaultLabel !== null
   const choose = async (stage: ModelStage, modelId: string | null) => {
     setPending(current => ({ ...current, [stage]: modelId ?? '' }))
     await setStageModel(stage, modelId)

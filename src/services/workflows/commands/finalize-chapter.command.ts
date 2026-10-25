@@ -1,6 +1,7 @@
 import type { FinalizedCharacterArtifact } from '../../../shared/finalized-character-generation'
 import { runFinalizationGeneration } from '../../finalization-generation'
 import { routeModelId } from '../../model-routing'
+import { pinWorkflowModel } from '../workflow-main-generation'
 import type { FinalizationGenerationEffect } from '../../../shared/finalization-generation'
 import { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
 export { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
@@ -384,7 +385,11 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
     const generation: FinalizePostProcessGeneration = {
       finalizedStage: (stepKey, generationContext) => runFinalizationGeneration({
         session: projectSession, slot: { source: this.params.finalizedSource, stepKey },
-        modelId: () => generationContext.generationModelId ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes') ?? '',
+        modelId: () => {
+          const modelId = generationContext.generationModelId ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes')
+          if (modelId) pinWorkflowModel(generationContext, modelId)
+          return modelId ?? ''
+        },
         ...(generationContext.data.generationBatchId && generationContext.mainGenerationRootHandle
           ? { parentRootActionId: generationContext.mainGenerationRootHandle.rootActionId } : {}),
         ...explicit[stepKey],

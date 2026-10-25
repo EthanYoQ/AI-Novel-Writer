@@ -86,7 +86,9 @@ export const SM517_SCENARIOS = {
     await invokeOk(context, 'llm:save-model', { ...MINI, purposes: ['embedding'] })
     await reloadAndOpen(context)
     await openStagePage(page)
-    assert.match(await stage.root(page).locator('[data-stage="review"]').innerText(), /现按默认模型运行/u)
+    for (const assigned of ['review', 'planning']) {
+      assert.match(await stage.root(page).locator(`[data-stage="${assigned}"]`).innerText(), /现按默认模型运行/u, `${assigned} 行提示按默认运行`)
+    }
     await context.shoot('sm517-stale')
     await stage.closeSettings(page)
 
