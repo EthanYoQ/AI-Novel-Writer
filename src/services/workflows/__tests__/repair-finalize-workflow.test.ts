@@ -305,6 +305,30 @@ describe('createRepairFinalizeWorkflow', () => {
       expect(postProcess.params).toEqual([expect.objectContaining({ stepKeys: ['chapter_notes', 'character_cards'] })])
     })
 
+    it('#512 leaves a step from an earlier version out of the retry and does not report the repair as failed because of it', async () => {
+      postProcess.execute.mockResolvedValue(statusOf([
+        { stepKey: 'kb_import', ok: true },
+        { stepKey: 'chapter_notes', ok: true },
+        { stepKey: 'character_cards', ok: true },
+        { stepKey: 'style_analysis', ok: false, errorMsg: '模型长时间没有响应' },
+      ]))
+      await expect(retryCard([
+        { stepKey: 'kb_import', ok: false, errorMsg: '向量服务没有响应' },
+        { stepKey: 'chapter_notes', ok: true },
+        { stepKey: 'character_cards', ok: true },
+        { stepKey: 'style_analysis', ok: false, errorMsg: '模型长时间没有响应' },
+      ])).resolves.toBeUndefined()
+      expect(postProcess.params).toEqual([expect.objectContaining({ onlyFailed: true, stepKeys: ['kb_import'] })])
+    })
+
+    it('#512 refuses a row retry of a step from an earlier version', async () => {
+      await expect(retryCard([
+        { stepKey: 'chapter_notes', ok: true },
+        { stepKey: 'style_analysis', ok: false, errorMsg: '模型长时间没有响应' },
+      ], 'style_analysis')).rejects.toThrow('没有可以重试的失败步骤')
+      expect(postProcess.execute).not.toHaveBeenCalled()
+    })
+
     it('runs nothing when the post-processing status cannot be read', async () => {
       await expect(retryCard(null)).rejects.toThrow('没有可以重试的失败步骤')
       expect(postProcess.execute).not.toHaveBeenCalled()

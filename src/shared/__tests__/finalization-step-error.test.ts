@@ -130,4 +130,23 @@ describe('定稿后处理步骤错误', () => {
       expect({ rows: [...plan.rows], card: plan.card }).toEqual({ rows: ['kb_import'], card: ['kb_import'] })
     })
   })
+
+  describe('#512 旧版本跑批里留下、现在流程已没有的步骤', () => {
+    it('没登记的错误也不排进按行重试与整卡重试，单独列出', () => {
+      const plan = planFinalizationRetry({
+        kb_import: { ok: false, error: '向量服务没有响应' },
+        chapter_notes: { ok: true },
+        character_cards: { ok: true },
+        style_analysis: { ok: false, error: '模型长时间没有响应' },
+      })
+      expect({ rows: [...plan.rows], card: plan.card, retired: [...plan.retired] })
+        .toEqual({ rows: ['kb_import'], card: ['kb_import'], retired: ['style_analysis'] })
+    })
+
+    it('只有旧步骤失败时，整张卡没有可以重试的步骤', () => {
+      const plan = planFinalizationRetry({ kb_import: { ok: true }, chapter_notes: { ok: true }, character_cards: { ok: true }, style_analysis: { ok: false } })
+      expect({ rows: [...plan.rows], card: plan.card }).toEqual({ rows: [], card: [] })
+    })
+  })
 })
+
