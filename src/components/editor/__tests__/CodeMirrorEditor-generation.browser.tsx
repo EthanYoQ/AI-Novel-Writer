@@ -267,6 +267,47 @@ describe('CodeMirror editor AI generation boundary', () => {
     await vi.waitFor(() => expect(container.querySelector('.cm-selbar')!.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth))
   })
 
+  const LONG_CHAPTER = Array.from({ length: 60 }, (_, i) => `第${i + 1}段原文`).join('\n\n')
+  const scrollChapterTo = async (scrollTop: number) => {
+    const scroller = container.querySelector<HTMLElement>('[data-testid="chapter-scroller"]')!
+    await act(async () => {
+      scroller.scrollTop = scrollTop
+      scroller.dispatchEvent(new Event('scroll'))
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    })
+  }
+
+  it('lets the toolbar leave with a blurred selection scrolled out of a growing chapter', async () => {
+    await act(async () => root.render(<>
+      <input aria-label="外部输入" />
+      <div data-testid="chapter-scroller" style={{ height: 300, overflow: 'auto' }}><CodeMirrorEditor content={LONG_CHAPTER} mode="prose" fitContent /></div>
+    </>))
+    await act(async () => page.getByText('第1段原文', { exact: true }).click({ clickCount: 3 }))
+    await expect.element(page.getByRole('toolbar')).toBeVisible()
+    await act(async () => page.getByRole('textbox', { name: '外部输入' }).fill('输入'))
+
+    await scrollChapterTo(1200)
+
+    expect(container.querySelector('.cm-selbar')?.getBoundingClientRect().bottom ?? -1).toBeLessThanOrEqual(0)
+  })
+
+  it('lets the note form leave with its selection and keeps the typed note on return', async () => {
+    await act(async () => root.render(
+      <div data-testid="chapter-scroller" style={{ height: 300, overflow: 'auto' }}><CodeMirrorEditor content={LONG_CHAPTER} mode="prose" fitContent /></div>,
+    ))
+    await act(async () => page.getByText('第1段原文', { exact: true }).click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await act(async () => note.fill('我的未提交意见'))
+
+    await scrollChapterTo(1200)
+    expect(container.querySelector('.cm-selbar')?.getBoundingClientRect().bottom ?? -1).toBeLessThanOrEqual(0)
+
+    await scrollChapterTo(0)
+    await expect.element(note).toHaveValue('我的未提交意见')
+    expect(container.querySelector('.cm-selbar')!.getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
+  })
+
   it('leaves Escape to the input method while it reports composition by keyCode 229', async () => {
     await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
     await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
