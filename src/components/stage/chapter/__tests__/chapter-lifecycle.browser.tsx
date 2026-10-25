@@ -399,6 +399,37 @@ describe('单章视图的主按钮随五种状态变化', () => {
       expect(retryRows()).toEqual(['角色状态更新'])
     })
 
+    it.each([
+      ['zh-CN', '重新定稿本章', /Retry|Finalize/u],
+      ['en-US', 'Finalize this chapter again', /\p{Script=Han}/u],
+    ] as const)('#512 %s：定稿时在场的角色后来被删除，说明作者能做什么，不显示错误码，也不摆重试', async (locale, hint, otherLanguage) => {
+      await act(async () => useLocaleStore.setState({ locale }))
+      await show([
+        { stepKey: 'kb_import', label: '导入知识库', ok: true },
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 3, errorMsg: `${IPC}FINALIZED_CHARACTER_ID_RETIRED` },
+      ])
+      const detail = host!.querySelector('.stage-ch-post-step[data-state="failed"] .stage-ch-post-detail')!.textContent!
+      expect(detail).not.toMatch(/FINALIZED_CHARACTER|Error invoking/u)
+      expect(detail).toContain(hint)
+      expect(detail).not.toMatch(otherLanguage)
+      expect(retryRows()).toEqual([])
+      expect(cardRetry()).toBeNull()
+    })
+
+    it('#512 章节要点在生成期间被作者改过：这一行能重试，说明写明重试会替换作者改的要点', async () => {
+      await show([
+        { stepKey: 'kb_import', label: '导入知识库', ok: true },
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: false, attemptCount: 3, errorMsg: `${IPC}GENERATION_FINALIZATION_NOTES_CHANGED` },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: 'GENERATION_FINALIZATION_PREDECESSOR_REQUIRED' },
+      ])
+      expect(retryRows()).toEqual(['章节剧情要点'])
+      expect(cardRetry()).toBe('重试失败步骤')
+      const detail = host!.querySelector('.stage-ch-post-step[data-state="failed"] .stage-ch-post-detail')!.textContent!
+      expect(detail).not.toMatch(/GENERATION_|Error invoking/u)
+      expect(detail).toContain('替换')
+    })
+
     it('没登记的错误照常显示重试', async () => {
       await show([
         { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
