@@ -453,6 +453,24 @@ describe('单章视图的主按钮随五种状态变化', () => {
       expect(host!.querySelector('.stage-ch-post-title small')!.textContent).toBe(count)
     })
 
+    it('#512 旧版本留下的步骤当时成功了也一样说明它已不再运行，不算进完成数', async () => {
+      const draft = backend.addDraft({ status: 'finalized' })
+      backend.state.postProcess = { steps: [
+        { stepKey: 'kb_import', label: '导入知识库', ok: true },
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: '模型长时间没有响应' },
+        { stepKey: 'style_analysis', label: '文风自动学习', ok: true },
+      ] }
+      await mount()
+      await openDraft(draft.id)
+      await vi.waitFor(() => expect(host!.querySelectorAll('.stage-ch-post-step')).toHaveLength(4))
+      const legacy = [...host!.querySelectorAll('.stage-ch-post-step')].find(row => row.querySelector('b')!.textContent === '文风自动学习')!
+      expect(legacy.getAttribute('data-state')).not.toBe('success')
+      expect(legacy.querySelector('.stage-ch-post-detail')!.textContent).toContain('这一步来自旧版本')
+      expect(host!.querySelector('.stage-ch-post-title small')!.textContent).toBe('2 / 3 完成')
+      expect(retryRows()).toEqual(['角色状态更新'])
+    })
+
     it('没登记的错误照常显示重试', async () => {
       await show([
         { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
