@@ -40,7 +40,7 @@ export function showFinalizationRepairNotice(repair: DuplicateFinalizationRepair
   if (repair.chapters.length === 0) return
   const text = useLocaleStore.getState().text
   void openInkPrompt({
-    kind: 'alert',
+    kind: 'notice',
     title: text('已修复重复的定稿', 'Duplicate final versions repaired'),
     message: finalizationRepairMessage(repair, text),
     confirmText: text('知道了', 'Got it'),

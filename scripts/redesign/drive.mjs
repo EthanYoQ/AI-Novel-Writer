@@ -458,12 +458,16 @@ async function runSession(sessionName, names, options) {
         /** 场景中途多拍一张图，与收尾截图放在同一目录。 */
         shoot: name => shoot(context.page, `${base(name)}.png`),
         reload: () => context.page.reload().then(() => waitForShell(context.page, TIMEOUT)),
-        /** 退出应用再用同一隔离目录冷启动（真正的重启，不重写外观），context 换成新的 app 与 page。appRoot 换成另一份构建（旧版本造数据、新版本接着打开），之后不传时沿用上次启动的构建。 */
-        restart: async ({ appRoot = currentAppRoot } = {}) => {
+        /**
+         * 退出应用再用同一隔离目录冷启动（真正的重启，不重写外观），context 换成新的 app 与 page。appRoot 换成另一份构建（旧版本造数据、新版本接着打开），之后不传时沿用上次启动的构建。
+         * beforeLaunch 在应用已退出、还没重新启动时执行，用来直接改项目库造旧版本留下的数据。
+         */
+        restart: async ({ appRoot = currentAppRoot, beforeLaunch } = {}) => {
           restartRequests.push(...await launched.app.evaluate(() => globalThis.__driveExternalRequests))
           await recording?.pause()
           const exited = await quit(launched.app)
           assert.equal(exited.forced, false, '重启前应用没有正常退出')
+          await beforeLaunch?.()
           launched = await launch({ roots, appRoot, fakeModelPort: fake?.port, diagnostics, failureBase })
           currentAppRoot = appRoot
           Object.assign(context, launched)
