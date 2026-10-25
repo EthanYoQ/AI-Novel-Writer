@@ -115,7 +115,10 @@ const RUNNING_INSTANCE_CACHES = new Set(['GPUCache', 'DawnWebGPUCache', 'DawnGra
 /** 路径到「大小:修改时间」，目录只记存在，不存在的路径不记。超过 limit 个条目时报错：截断的快照会漏掉写入。 */
 function profileEntries(target, entries, limit) {
   let stat
-  try { stat = fs.lstatSync(target) } catch { return entries }
+  try { stat = fs.lstatSync(target) } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return entries
+    throw error
+  }
   if (entries.size >= limit) throw new Error(`真实配置目录的条目超过 ${limit} 个，外部写入没法完整比较（停在 ${target}）`)
   if (!stat.isDirectory()) return entries.set(target, `${stat.size}:${stat.mtimeMs}`)
   entries.set(target, 'dir')
