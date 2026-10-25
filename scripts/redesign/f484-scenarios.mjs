@@ -61,6 +61,10 @@ async function waitHeld(app) {
 
 const releaseCommit = app => app.evaluate(() => globalThis.__f484Commit.release())
 
+/** #502：重试结果也一样，这一张卡上（行与右上角）都不该有重试。正文文件一行的「重新写入正文」不算。 */
+const postButtons = (page, region) => page.getByRole('region', { name: region })
+  .getByRole('button', { name: /^(重试|重试失败步骤|Retry|Retry failed steps)$/u }).count()
+
 /** 角色状态更新这一行的说明。步骤名按定稿时的界面语言存下，切到英文后仍是中文；正文文件一行在发布未完成时也标失败。 */
 const failedDetail = (page, region) => page.getByRole('region', { name: region }).locator('li[data-state="failed"]')
   .filter({ has: page.locator('b', { hasText: /^角色状态更新$/u }) }).locator('.stage-ch-post-detail')
@@ -86,6 +90,7 @@ export const F484_SCENARIOS = {
     await failedDetail(page, '定稿后处理').waitFor({ state: 'visible', timeout: 60_000 })
     const zh = await failedDetail(page, '定稿后处理').innerText()
     await context.shoot('f484-field-conflict-zh')
+    const zhButtons = await postButtons(page, '定稿后处理')
 
     await stage.openSettings(page)
     await stage.showSettingsPage(page, '外观')
@@ -95,11 +100,13 @@ export const F484_SCENARIOS = {
     await failedDetail(page, 'Post-finalization steps').waitFor({ state: 'visible', timeout: 30_000 })
     const en = await failedDetail(page, 'Post-finalization steps').innerText()
     await context.shoot('f484-field-conflict-en')
+    const enButtons = await postButtons(page, 'Post-finalization steps')
 
     assert.match(zh, /^正文定稿已保存，但角色卡没有自动更新：生成期间/u, '中文说明字段在生成期间被改动')
     assert.match(en, /^The finalized chapter text is saved, but the character card was not updated: this character's current state changed while this step was running/u, '英文说明')
     for (const text of [zh, en]) assert.doesNotMatch(text, /Error invoking|FINALIZED_CHARACTER/u, '不显示原始错误码')
     assert.doesNotMatch(en, /\p{Script=Han}/u, '英文说明不带汉字')
+    assert.deepEqual({ zhButtons, enButtons }, { zhButtons: 0, enButtons: 0 }, '两种语言下都不摆「重试」和「重试失败步骤」')
     // 提交失败后后处理还会按重试间隔再提交两次；等运行结束再退出，会话才干净。
     await page.waitForFunction(() => document.querySelectorAll('.stage-capsule').length === 0, null, { timeout: 90_000 })
     return { zh, en, requests: fake.requests }

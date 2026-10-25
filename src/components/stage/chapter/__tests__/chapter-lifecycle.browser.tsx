@@ -338,6 +338,77 @@ describe('单章视图的主按钮随五种状态变化', () => {
     expect(detail).not.toContain(otherLanguage)
   })
 
+  describe('#502 只给重试有用的失败步骤摆重试', () => {
+    const IPC = "Error invoking remote method 'project-session:invoke': Error: "
+    /** 带重试按钮的行（按步骤名），以及卡片右上角的整卡重试按钮。 */
+    const retryRows = () => [...host!.querySelectorAll('.stage-ch-post-step')]
+      .filter(row => row.querySelector('button')).map(row => row.querySelector('b')!.textContent)
+    const cardRetry = () => host!.querySelector('.stage-ch-post-head button')?.textContent ?? null
+    async function show(steps: NonNullable<typeof backend.state.postProcess>['steps']) {
+      const draft = backend.addDraft({ status: 'finalized' })
+      backend.state.postProcess = { steps }
+      await mount()
+      await openDraft(draft.id)
+      await vi.waitFor(() => expect(host!.querySelector('.stage-ch-post-step[data-state="failed"]')).not.toBeNull())
+    }
+
+    it.each(['zh-CN', 'en-US'] as const)('%s：重试结果也一样的失败，这一行和卡片上都没有重试', async locale => {
+      await act(async () => useLocaleStore.setState({ locale }))
+      await show([
+        { stepKey: 'kb_import', label: '导入知识库', ok: true },
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: `${IPC}FINALIZED_CHARACTER_FIELD_CONFLICT` },
+      ])
+      expect(retryRows()).toEqual([])
+      expect(cardRetry()).toBeNull()
+    })
+
+    it('可以重试与不能重试的失败混在一起：只有能重试的行有重试，卡片上照常有「重试失败步骤」', async () => {
+      await show([
+        { stepKey: 'kb_import', label: '导入知识库', ok: false, attemptCount: 1, errorMsg: '向量服务没有响应' },
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: 'FINALIZED_CHARACTER_FIELD_CONFLICT' },
+      ])
+      expect(retryRows()).toEqual(['导入知识库'])
+      expect(cardRetry()).toBe('重试失败步骤')
+    })
+
+    it('来源冲突的说明写了什么时候可以重试：行上照常有重试', async () => {
+      await show([
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: 'FINALIZED_CHARACTER_SOURCE_CONFLICT' },
+      ])
+      expect(retryRows()).toEqual(['角色状态更新'])
+      expect(cardRetry()).toBe('重试失败步骤')
+    })
+
+    it('角色状态在等章节剧情要点：要点还失败着时只有要点一行能重试，整卡重试照常显示', async () => {
+      await show([
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: false, attemptCount: 1, errorMsg: 'FINALIZATION_GENERATION_INCOMPLETE' },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: 'GENERATION_FINALIZATION_PREDECESSOR_REQUIRED' },
+      ])
+      expect(retryRows()).toEqual(['章节剧情要点'])
+      expect(cardRetry()).toBe('重试失败步骤')
+    })
+
+    it('章节剧情要点已经成功后，等它的角色状态一行可以重试', async () => {
+      await show([
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: 'GENERATION_FINALIZATION_PREDECESSOR_REQUIRED' },
+      ])
+      expect(retryRows()).toEqual(['角色状态更新'])
+    })
+
+    it('没登记的错误照常显示重试', async () => {
+      await show([
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: '模型长时间没有响应' },
+      ])
+      expect(retryRows()).toEqual(['角色状态更新'])
+      expect(cardRetry()).toBe('重试失败步骤')
+    })
+  })
+
   it('定稿：修复前的检查还没回来时切到英文，拦下修复的提示用英文', async () => {
     const draft = backend.addDraft({ status: 'finalized' })
     backend.state.postProcess = { steps: [

@@ -74,14 +74,17 @@ RD-10 删除旧外壳之后，场景分三类：
 
 - `<场景>-<主题>.png`：场景截图，1440×900（`stage-1280` 为 1280×900）。
 - `--video` 时另有 `<场景>-<主题>.mp4`，结果项的 `video` 字段指向它。
-- `<场景>-<主题>.json`：本次运行的结果数组，每个截图点一项。`scenario`、`screenshot` 属于这个截图点；`session`（会话名，单跑时等于场景名）、`timing`、`shell`（外壳的 `data-shell-presentation`，`writer` 或 `stage`：`startup-timing` 取计时那次启动显示的外壳，其余场景取写好外观、重载之后的外壳，用来确认测的就是要测的外壳）、`externalRequests`、`residualProcesses`、`externalWrites`、`quit`、`isolationRoot` 属于整个会话，会话里每一项都抄一份；会话用了夹具模型时另含 `modelRequests`（整个会话里假服务收到的全部请求数，嵌入请求也计入，与 `--console` 里的 `[fake-model]` 行一一对应）。失败时含 `error`：截图点自己的失败写在该项；同一会话里排在失败点之后的截图点不再运行，`error` 写明是被哪个场景拖住；会话级失败（启动、外部请求、退出、进程枚举）写进该会话的每一项。
+- `<场景>-<主题>.json`：本次运行的结果数组，每个截图点一项。`scenario`、`screenshot` 属于这个截图点；`session`（会话名，单跑时等于场景名）、`timing`、`shell`（外壳的 `data-shell-presentation`，`writer` 或 `stage`：`startup-timing` 取计时那次启动显示的外壳，其余场景取写好外观、重载之后的外壳，用来确认测的就是要测的外壳）、`externalRequests`、`residualProcesses`、`externalWrites`、`externalWritesIgnored`、`quit`、`isolationRoot` 属于整个会话，会话里每一项都抄一份；会话用了夹具模型时另含 `modelRequests`（整个会话里假服务收到的全部请求数，嵌入请求也计入，与 `--console` 里的 `[fake-model]` 行一一对应）。失败时含 `error`：截图点自己的失败写在该项；同一会话里排在失败点之后的截图点不再运行，`error` 写明是被哪个场景拖住；会话级失败（启动、外部请求、退出、进程枚举）写进该会话的每一项。
 - 失败时额外写 `<失败场景>-<主题>.failure.png`、`.dom.html`、`.aria.yml` 和 `<会话>-<主题>.console.log`，隔离目录保留以便排查。
 
 每个会话结束后，驱动检查三件事，任一不满足即退出码 1：
 
 - `externalRequests` 为空。每个会话都在 Electron 启动后替换主进程的 `globalThis.fetch`：用夹具模型的会话只放行 `https://api.openai.com/v1/*` 并改道到本机假服务，其余会话一律不放行。被拒的请求记下来源并抛错。检查范围只有主进程 `fetch`，且从 `electron.launch` 返回后才生效；更早的请求、渲染进程的请求和 Electron `net` 模块的请求都不在内。
 - `residualProcesses` 为空：应用关闭后，以 `--user-data-dir` 匹配不到存活进程。子进程退出需要时间，驱动最多查 10 次、间隔 300 ms。
-- `externalWrites` 为空：`~/.vela`、`%APPDATA%\ai-novel-writer`、`%APPDATA%\AI小说作家` 的最新修改时间不变。
+- `externalWrites` 为空：`~/.vela`、`%APPDATA%\ai-novel-writer`、`%APPDATA%\AI小说作家` 里没有新增或删除的条目，文件的大小与修改时间也不变。列出的是变了的具体路径。
+  - 这几个目录第一层的 `GPUCache`、`DawnWebGPUCache`、`DawnGraphiteCache` 不算：本机开着的书童会自己刷新里面文件的修改时间。它们的变化列进 `externalWritesIgnored`，不影响退出码。
+  - 驱动真的写进真实配置目录时，Chromium 还会写 `Preferences`、`Local State`、`Local Storage` 等条目，这些照样报出来。
+  - 一个目录超过 5 万个条目，或者有条目读不了（`ENOENT`、`ENOTDIR` 两种「不存在」除外）时，快照直接报错，不拿截断的快照判通过：运行前的快照出错时驱动在启动应用前退出，退出码 1；运行后的快照出错时原因写进 `error`。
 
 枚举或结束进程本身失败时，原因写进该会话每一项的 `error`，结果 JSON 照常写出。
 
@@ -503,7 +506,7 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
-| `f484-field-conflict` | 第 3 章定稿后，角色状态更新这一步失败：中文说明以「正文定稿已保存，但角色卡没有自动更新：生成期间」开头（`f484-field-conflict-zh`）；切到英文后说明是英文、不带汉字（`f484-field-conflict-en`）；两种语言都不显示 `Error invoking` 与错误码 | 英文的定稿后处理 | 是 | #484 |
+| `f484-field-conflict` | 第 3 章定稿后，角色状态更新这一步失败：中文说明以「正文定稿已保存，但角色卡没有自动更新：生成期间」开头（`f484-field-conflict-zh`）；切到英文后说明是英文、不带汉字（`f484-field-conflict-en`）；两种语言都不显示 `Error invoking` 与错误码，定稿后处理卡上也没有「重试」与「重试失败步骤」（#502） | 英文的定稿后处理 | 是 | #484 |
 | `f484-deleted-source-roundtrip` | 定稿第 3 章写入林岚的地点、道具、近况，重开作品确认「当前位置」是「定稿派生」的「灯塔顶层灯室」，再从章节「更多操作」删除第 3 章正文，再用界面同一组 IPC 导出恢复两轮、按 Ctrl O 打开第二个副本，定稿第 4 章：定稿后处理正好 4 步且都完成（`f484-deleted-source-finalize`）；重新打开作品后「当前位置」是「定稿派生」的「守塔人的屋子」（`f484-deleted-source-character-state`）。两次都先重开作品再读，读到的是库里存下的值 | 角色名单的当前状态 | 是 | #484 |
 
 ## 定稿后角色页刷新与草稿合并（#504）

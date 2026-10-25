@@ -103,34 +103,50 @@ function scratchParent() {
   return path.join(base, 'VibeCodingScratch', 'an', 'drive')
 }
 
-/** 用户真实配置目录。运行前后比较最新修改时间，证明隔离目录之外没有写入。 */
+/** 用户真实配置目录。运行前后逐个比较其中的条目，证明隔离目录之外没有写入。 */
 function realProfileDirectories() {
   const appData = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming')
   return [path.join(os.homedir(), '.vela'), path.join(appData, 'ai-novel-writer'), path.join(appData, 'AI小说作家')]
 }
 
-function newestWrite(directory, budget = { entries: 50_000 }) {
-  let newest = 0
+/** 本机开着的书童约每 5 分钟刷新一次这几个 Chromium 缓存里文件的修改时间，所以它们的变化不能说明隔离失效，只列进 externalWritesIgnored。 */
+const RUNNING_INSTANCE_CACHES = new Set(['GPUCache', 'DawnWebGPUCache', 'DawnGraphiteCache'])
+
+/** 路径到「大小:修改时间」，目录只记存在，不存在的路径不记。超过 limit 个条目时报错：截断的快照会漏掉写入。 */
+function profileEntries(target, entries, limit) {
   let stat
-  try { stat = fs.lstatSync(directory) } catch { return null }
-  newest = stat.mtimeMs
-  if (!stat.isDirectory()) return newest
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    if (--budget.entries < 0) break
-    const child = path.join(directory, entry.name)
-    const value = entry.isDirectory() ? newestWrite(child, budget) : fs.lstatSync(child).mtimeMs
-    if (value !== null && value > newest) newest = value
+  try { stat = fs.lstatSync(target) } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return entries
+    throw error
   }
-  return newest
+  if (entries.size >= limit) throw new Error(`真实配置目录的条目超过 ${limit} 个，外部写入没法完整比较（停在 ${target}）`)
+  if (!stat.isDirectory()) return entries.set(target, `${stat.size}:${stat.mtimeMs}`)
+  let names
+  try { names = fs.readdirSync(target) } catch (error) {
+    // 运行中的书童可能在 lstat 与 readdir 之间删掉缓存目录
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return entries
+    throw error
+  }
+  entries.set(target, 'dir')
+  for (const name of names) profileEntries(path.join(target, name), entries, limit)
+  return entries
 }
 
-function snapshotRealProfiles() {
-  return Object.fromEntries(realProfileDirectories().map(directory => [directory, newestWrite(directory)]))
+export function snapshotRealProfiles(directories = realProfileDirectories(), limit = 50_000) {
+  return Object.fromEntries(directories.map(directory => [directory, profileEntries(directory, new Map(), limit)]))
 }
 
-function externalWrites(before) {
-  const after = snapshotRealProfiles()
-  return Object.keys(before).filter(directory => before[directory] !== after[directory])
+export function profileWrites(before) {
+  const after = snapshotRealProfiles(Object.keys(before))
+  const changed = Object.keys(before).flatMap(directory => {
+    const previous = before[directory]
+    const current = after[directory]
+    return [...new Set([...previous.keys(), ...current.keys()])]
+      .filter(entry => previous.get(entry) !== current.get(entry))
+      .map(entry => ({ entry, ignored: RUNNING_INSTANCE_CACHES.has(path.relative(directory, entry).split(path.sep)[0]) }))
+  })
+  const entries = ignored => changed.filter(change => change.ignored === ignored).map(change => change.entry).sort()
+  return { externalWrites: entries(false), externalWritesIgnored: entries(true) }
 }
 
 /** 以 --user-data-dir 匹配仍存活的 Electron 主进程与子进程。 */
@@ -409,8 +425,8 @@ const messageOf = error => error instanceof Error ? error.message : String(error
 
 /** 一个会话一次冷启动：先跑首个截图点的 setup，再依次 run、截图、after。隔离与进程检查按会话做，结果抄进每一项。 */
 async function runSession(sessionName, names, options) {
-  const roots = createIsolatedRoots(scratchParent())
   const before = snapshotRealProfiles()
+  const roots = createIsolatedRoots(scratchParent())
   const diagnostics = []
   const fake = names.some(name => SCENARIOS[name]?.model) ? await startFakeModel(diagnostics) : null
   const base = name => path.join(options.out, `${name}-${options.theme}`)
@@ -490,7 +506,7 @@ async function runSession(sessionName, names, options) {
   }
   try {
     shared.residualProcesses = await residualProcesses(roots.userData)
-    shared.externalWrites = externalWrites(before)
+    Object.assign(shared, profileWrites(before))
   } catch (error) { sessionErrors.push(messageOf(error)) }
   const clean = sessionIsClean({ failedAt, sessionErrors, residualProcesses: shared.residualProcesses, externalWrites: shared.externalWrites })
   if (clean) fs.rmSync(roots.root, { recursive: true, force: true })

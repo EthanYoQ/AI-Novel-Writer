@@ -324,7 +324,8 @@ export interface RunFinalizePostProcessParams {
   stopOnFailure?: boolean
   onlyFailed?: boolean
   retryInvalidResult?: boolean
-  stepKey?: string
+  /** 只跑这些步骤；不给时跑全部。 */
+  stepKeys?: readonly string[]
   chapterEntities?: readonly string[]
 }
 
@@ -367,7 +368,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
     const explicit: Partial<Record<FinalizationStepKey, { retryOf: FinalizedCharacterArtifact } | { recoverFrom: string }>> = {}
     if (this.params.retryInvalidResult) {
       for (const stepKey of ['chapter_notes', 'character_cards'] as const) {
-        if (this.params.stepKey && this.params.stepKey !== stepKey) continue
+        if (this.params.stepKeys && !this.params.stepKeys.includes(stepKey)) continue
         const recovery = await ipc.invokeWithProjectSession(projectSession, 'finalization-generation:read', {
           slot: { source: this.params.finalizedSource, stepKey },
         })
@@ -405,14 +406,14 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       frozen.projectionGeneration,
       undefined,
     )
-    const steps = this.params.stepKey
-      ? allSteps.filter(step => step.key === this.params.stepKey)
-      : allSteps
-    if (this.params.stepKey && steps.length === 0) {
+    // 旧版本的跑批里可能留着现在已没有的步骤（如 style_analysis），跳过它们，只有一步都跑不了时才报错。
+    const { stepKeys } = this.params
+    const steps = stepKeys ? allSteps.filter(step => stepKeys.includes(step.key)) : allSteps
+    if (steps.length === 0) {
       throw new Error(workflowUiText(
         context,
-        `未知的后处理步骤：${this.params.stepKey}`,
-        `Unknown post-processing step: ${this.params.stepKey}`,
+        `未知的后处理步骤：${stepKeys?.join('、')}`,
+        `Unknown post-processing step: ${stepKeys?.join(', ')}`,
       ))
     }
     const status = await runPostProcessPipeline(
