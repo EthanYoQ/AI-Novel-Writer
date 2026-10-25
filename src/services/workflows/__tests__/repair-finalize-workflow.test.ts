@@ -246,7 +246,7 @@ describe('createRepairFinalizeWorkflow', () => {
       }])),
     })
 
-    function retryCard(persisted: Row[]) {
+    function retryCard(persisted: Row[] | null) {
       useProjectStore.setState({
         currentProject: { id: PROJECT_SESSION.projectId, name: 'Repair finalize', path: PROJECT_PATH, sessionLease: PROJECT_SESSION.leaseId } as never,
       })
@@ -257,9 +257,9 @@ describe('createRepairFinalizeWorkflow', () => {
           case 'db:continuity-read-source': return finalizedSource('已定稿正文')
           case 'db:blueprint-get': return { title: '定稿标题', characters: [] }
           case 'db:post-process-get-latest-run':
-            return { id: 9, triggerSourceType: 'chapter_finalize', triggerSourceId: '3', sourceLabel: '第3章定稿', allCriticalPassed: false, createdAt: '', updatedAt: '' }
+            return persisted && { id: 9, triggerSourceType: 'chapter_finalize', triggerSourceId: '3', sourceLabel: '第3章定稿', allCriticalPassed: false, createdAt: '', updatedAt: '' }
           case 'db:post-process-get-steps':
-            return persisted.map(row => ({ label: row.stepKey, critical: false, lastAttemptAt: '', attemptCount: 1, ...row }))
+            return persisted!.map(row => ({ label: row.stepKey, critical: false, lastAttemptAt: '', attemptCount: 1, ...row }))
           default: throw new Error(`unexpected IPC: ${channel}`)
         }
       })
@@ -289,6 +289,11 @@ describe('createRepairFinalizeWorkflow', () => {
         { stepKey: 'character_cards', ok: false, errorMsg: "Error invoking remote method 'project-session:invoke': Error: GENERATION_FINALIZATION_PREDECESSOR_REQUIRED" },
       ])
       expect(postProcess.params).toEqual([expect.objectContaining({ stepKeys: ['chapter_notes', 'character_cards'] })])
+    })
+
+    it('runs nothing when the post-processing status cannot be read', async () => {
+      await expect(retryCard(null)).rejects.toThrow('没有可以重试的失败步骤')
+      expect(postProcess.execute).not.toHaveBeenCalled()
     })
 
     it('runs nothing when no failed step can be retried', async () => {
