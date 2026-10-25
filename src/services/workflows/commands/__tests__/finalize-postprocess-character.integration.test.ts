@@ -46,6 +46,9 @@ const commitRequests: unknown[] = []
 let commitFailures = 0
 let characterExecuteFailures = 0
 let changeFieldBeforeCommit = false
+/** 每次提交前按步骤与第几次提交调用，用来制造提交失败或生成期间的数据变化。 */
+let onCommit: ((stepKey: string | undefined, nth: number) => void) | undefined
+const commitsByStep = new Map<string | undefined, number>()
 let actualOwner: ReturnType<typeof createMainGenerationOwner> | undefined
 const stageByRun = new Map<string, string>()
 function owner() {
@@ -197,7 +200,10 @@ function installRealRepositoryIpc(): void {
           case 'finalization-generation:cancel': return owner().cancelFinalizationGeneration(args[0] as Parameters<ReturnType<typeof owner>['cancelFinalizationGeneration']>[0])
           case 'finalization-generation:commit': {
             const request = args[0] as Parameters<ReturnType<typeof owner>['commitFinalizationGeneration']>[0]
-            if (stageByRun.get(request.handle.runId) === 'character_cards') {
+            const stage = stageByRun.get(request.handle.runId), nth = (commitsByStep.get(stage) ?? 0) + 1
+            commitsByStep.set(stage, nth)
+            onCommit?.(stage, nth)
+            if (stage === 'character_cards') {
               commitRequests.push(structuredClone(request))
               if (commitFailures-- > 0) throw new Error('network error: synthetic temporary commit failure')
               if (changeFieldBeforeCommit) { changeFieldBeforeCommit = false; getProjectDb()!.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者后来设置', characterId) }
@@ -333,7 +339,7 @@ beforeEach(() => {
   const cache = path.resolve('.runtime/.cache/novel-quality-modernization/s09b-finalize-consumer')
   fs.mkdirSync(cache, { recursive: true })
   projectPath = fs.mkdtempSync(path.join(cache, 'case-'))
-  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; characterExecuteFailures = 0; changeFieldBeforeCommit = false
+  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; characterExecuteFailures = 0; changeFieldBeforeCommit = false; onCommit = undefined; commitsByStep.clear()
   initProjectDatabase(projectPath)
   const db = CharacterRosterRepository.read()
   expect(db.status).toBe('empty')
@@ -1097,5 +1103,62 @@ describe('cast refresh after the character-state step', () => {
     await expect(command('Lin Lan arrives at the harbor.', { stepKeys: [] })
       .execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow()
     expect(generateStream).not.toHaveBeenCalled()
+  })
+})
+
+describe('#512 自动重试的最后一次提交时项目状态已变：作者再点重试会怎样', () => {
+  const content = 'Lin Lan arrives at the harbor.'
+  /** 前两次提交断线，第三次（自动重试的最后一次）提交前发生 change。 */
+  const lastAutomaticCommit = (stepKey: string, change: () => void) => {
+    onCommit = (stage, nth) => {
+      if (stage !== stepKey) return
+      if (nth <= 2) throw new Error('network error: synthetic temporary commit failure')
+      if (nth === 3) change()
+    }
+  }
+  const finalize = () => command(content).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+  /** 与卡片上的重试同一套参数。 */
+  const retry = (stepKeys: readonly string[]) => command(content, { onlyFailed: true, retryInvalidResult: true, stepKeys })
+    .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+
+  beforeEach(() => { cardResponse = JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] }) })
+
+  it('章节要点生成期间作者改了本章要点：重试在新运行里重新生成并写入，替换作者改的要点', async () => {
+    getProjectDb()!.prepare("INSERT INTO blueprints (chapter_number, title, notes) VALUES (2, 'The Handoff', '')").run()
+    lastAutomaticCommit('chapter_notes', () => getProjectDb()!.prepare('UPDATE blueprints SET notes=? WHERE chapter_number=2').run('Author-edited notes'))
+    const initial = await finalize()
+    expect(initial.steps.chapter_notes).toMatchObject({ ok: false, error: 'GENERATION_FINALIZATION_NOTES_CHANGED' })
+    expect(initial.steps.character_cards).toMatchObject({ ok: false, error: 'GENERATION_FINALIZATION_PREDECESSOR_REQUIRED' })
+
+    const retried = await retry(['chapter_notes', 'character_cards'])
+    expect(retried.steps.chapter_notes).toMatchObject({ ok: true })
+    expect(retried.steps.character_cards).toMatchObject({ ok: true })
+    expect(getProjectDb()!.prepare('SELECT notes FROM blueprints WHERE chapter_number=2').pluck().get()).toBe('Lin Lan hands the brass key to Zhou Yan.')
+  })
+
+  // FINALIZED_CHARACTER_CONTEXT_CHANGED 比对的字段，提交前的来源校验已经整组比过，同一条件在这里先以 IDENTITY_CHANGED 拒写。
+  it.each(['chapter_notes', 'character_cards'])('%s 生成期间别的章节重新定稿或被删除：重试过不去，角色卡保持原样', async stepKey => {
+    lastAutomaticCommit(stepKey, () => invalidateContinuityProjectionFrom(getProjectDb()!, 1))
+    const initial = await finalize()
+    expect(initial.steps[stepKey]).toMatchObject({ ok: false, error: 'GENERATION_FINALIZATION_IDENTITY_CHANGED' })
+
+    const retried = await retry(stepKey === 'chapter_notes' ? ['chapter_notes', 'character_cards'] : ['character_cards'])
+    expect(retried.steps[stepKey]).toMatchObject({ ok: false, error: 'FINALIZATION_GENERATION_SOURCE_CHANGED' })
+    expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('old station')
+  })
+
+  it.each(['chapter_notes', 'character_cards'])('%s 生成期间作者删掉了本章定稿时在场的角色：重试过不去', async stepKey => {
+    const db = getProjectDb()!
+    lastAutomaticCommit(stepKey, () => {
+      const revision = db.prepare("SELECT revision FROM character_identity_meta WHERE id='main'").pluck().get() as number
+      commitCharacterIdentities(db, { approval: { operationId: 'retire-lin-lan', expectedRevision: revision, action: 'author-edit',
+        source: { kind: 'author', source: { projectId: 'test', epoch: 'lease-test', sourceId: 'retire-fixture', revision, contentHash: 'b'.repeat(64) } } },
+      creations: [], changes: [], retireIds: [characterId], relationships: [], resolutions: [] }, () => true)
+    })
+    const initial = await finalize()
+    expect(initial.steps[stepKey]).toMatchObject({ ok: false, error: 'FINALIZED_CHARACTER_ID_RETIRED' })
+
+    const retried = await retry(stepKey === 'chapter_notes' ? ['chapter_notes', 'character_cards'] : ['character_cards'])
+    expect(retried.steps[stepKey]).toMatchObject({ ok: false, error: 'FINALIZATION_GENERATION_SOURCE_CHANGED' })
   })
 })
