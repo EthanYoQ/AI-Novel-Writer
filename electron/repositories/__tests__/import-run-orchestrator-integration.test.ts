@@ -383,6 +383,24 @@ describe('ImportRunOrchestrator with the real import repository', () => {
     expect(commitSpy).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps author guidance and chapter notes on existing blueprints across import inference and its replay', async () => {
+    const authored = { userGuidance: 'Keep Mara silent in this chapter.', notes: 'Finalized: Mara found the signal.', notesUpdatedAt: '2026-10-20 08:00:00' }
+    BlueprintRepository.upsert({ ...blueprint(1), title: 'Hand-tuned 1', ...authored })
+    const callbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
+
+    await expect(new ImportRunOrchestrator(realDependencies([], { current: true })).executeStage(
+      'integration-run', 'blueprints', 'renderer-before-crash', { cancelled: false }, callbacks,
+    )).rejects.toThrow('injected crash after durable blueprint commit')
+    closeProjectDatabase()
+    initProjectDatabase(root)
+    await new ImportRunOrchestrator(realDependencies([], { current: false })).executeStage(
+      'integration-run', 'blueprints', 'renderer-after-reopen', { cancelled: false }, callbacks,
+    )
+
+    expect(ImportRunRepository.get('integration-run')).toMatchObject({ stage: 'refresh' })
+    expect(BlueprintRepository.getAll()).toEqual([{ ...blueprint(1), ...authored }, blueprint(2)])
+  })
+
   it('continues the same failed run after reopen without repeating committed knowledge or blueprint work', async () => {
     const runId = 'full-recovery-run'
     const chapters = Array.from({ length: 6 }, (_, index) => chapter(index + 1))

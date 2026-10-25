@@ -178,6 +178,41 @@ describe('BlueprintRepository range commit', () => {
     }
   })
 
+  it('keeps existing author guidance and chapter notes when a range is regenerated', () => {
+    const db = createBlueprintDb()
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    const authored = { userGuidance: '第一章务必压住主角的情绪', notes: '定稿要点：主角收到了信', notesUpdatedAt: '2026-10-20 08:00:00' }
+    const regenerated = (chapterNumber: number) => ({ ...blueprintFor(chapterNumber), title: `新第${chapterNumber}章`, keyEvents: `重写后的第${chapterNumber}章事件` })
+
+    try {
+      BlueprintRepository.upsert({ ...blueprintFor(1), ...authored })
+      BlueprintRepository.upsert({ ...blueprintFor(2), userGuidance: '旧的作者指导' })
+      const request = {
+        mode: 'full' as const,
+        operationId: 'directory-regenerate-front',
+        startChapter: 1,
+        endChapter: 3,
+        blueprints: [regenerated(1), { ...regenerated(2), userGuidance: '恢复稿里作者新填的指导' }, regenerated(3)],
+      }
+      const expected = [
+        { ...regenerated(1), ...authored },
+        { ...regenerated(2), userGuidance: '恢复稿里作者新填的指导' },
+        regenerated(3),
+      ]
+
+      const receipt = BlueprintRepository.commitRange(request)
+
+      expect(BlueprintRepository.getAll()).toEqual(expected)
+      expect(receipt.snapshot).toEqual(expected)
+      expect(receipt.characterSyncInput).toEqual(expected)
+      expect(BlueprintRepository.getCommittedRangeOperation(request.operationId)?.characterSyncInput).toEqual(expected)
+      const replay = BlueprintRepository.commitRange(request)
+      expect(replay).toMatchObject({ idempotent: true, payloadHash: receipt.payloadHash, snapshot: expected, characterSyncInput: expected })
+    } finally {
+      db.close()
+    }
+  })
+
   it('preserves parsed full names, candidates, and relationship text across SQLite restart', () => {
     let db = createBlueprintDb()
     vi.mocked(getProjectDb).mockReturnValue(db)
