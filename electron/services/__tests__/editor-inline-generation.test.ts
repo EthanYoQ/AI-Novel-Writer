@@ -87,3 +87,32 @@ it('取消后晚回调不回写，未发送取消拒绝dispatch',async()=>{
  f.owner.cancel(second);await expect(f.owner.executeEditorInline(second)).rejects.toThrow()
  expect(f.spy).toHaveBeenCalledTimes(1)
 })
+
+const note='把林岚改成第一人称，语气更冷'
+const noted={...request,uiActionNonce:'作者按意见改',input:{...input,action:'instruct' as const,instruction:note}}
+it.each([
+ ['缺少意见',{...input,action:'instruct'}],
+ ['意见为空白',{...input,action:'instruct',instruction:' \n '}],
+ ['意见不是字符串',{...input,action:'instruct',instruction:42}],
+ ['意见超过2000字',{...input,action:'instruct',instruction:'冷'.repeat(2001)}],
+ ['其他动作带意见',{...input,action:'refine',instruction:note}],
+])('%s时拒绝开始运行',(_name,bad)=>{
+ const f=fixture()
+ expect(()=>f.owner.beginEditorInline({...request,input:bad as never})).toThrow('GENERATION_EDITOR_INPUT_INVALID')
+ expect(f.spy).not.toHaveBeenCalled()
+})
+it('意见恰好2000字可以开始运行',()=>{
+ const f=fixture(),instruction='冷'.repeat(2000)
+ expect(f.owner.beginEditorInline({...noted,input:{...noted.input,instruction}}).context).toMatchObject({action:'instruct',instruction})
+})
+it('作者意见进入模型请求，并随运行冻结到重开之后',async()=>{
+ const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:'我停下脚步。'});return {finishReason:'stop',usage:null}})
+ const handle=f.owner.beginEditorInline(noted).view.handle
+ await f.owner.executeEditorInline(handle)
+ const sent=JSON.stringify(f.spy.mock.calls[0]![0])
+ expect(sent).toContain(note)
+ expect(sent).toContain(input.selectedText)
+ const next=f.reopenStorage()
+ expect(next.readEditorInlineRecovery(handle).context).toMatchObject({action:'instruct',instruction:note,selectedText:input.selectedText})
+ expect(()=>next.beginEditorInline({...noted,input:{...noted.input,instruction:'改成对话'}})).toThrow()
+})

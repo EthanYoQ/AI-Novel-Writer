@@ -23,7 +23,9 @@ let deferFirstLease: boolean
 let rejectFirstLease: ((error: Error) => void) | null
 let leaseRequestCount: number
 
-beforeEach(() => {
+beforeEach(async () => {
+  // 应用窗口最小宽 1024（electron/main.ts）；默认 414 宽的测试视口放不下整条选区工具条。
+  await page.viewport(1024, 768)
   window.getSelection()?.removeAllRanges()
   container = document.createElement('div')
   document.body.append(container)
@@ -163,6 +165,69 @@ describe('CodeMirror editor AI generation boundary', () => {
     await act(async () => page.getByRole('button', { name: '替换' }).click())
 
     expect(view.state.doc.toString()).toBe('替换甲')
+  })
+
+  it('revises the selection with an author note and replaces it after acceptance', async () => {
+    deferStream = true
+    await act(async () => root.render(
+      <CodeMirrorEditor content="林岚走进北塔" mode="prose" />,
+    ))
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '按意见改' })).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await expect.element(note).toHaveFocus()
+    const submit = page.getByRole('button', { name: '改写' })
+    await expect.element(submit).toBeDisabled()
+    await act(async () => note.fill('  \n '))
+    await expect.element(submit).toBeDisabled()
+    await act(async () => note.fill('改成第一人称'))
+    await act(async () => submit.click())
+
+    await expect.element(page.getByText('按意见改预览')).toBeVisible()
+    await expect.element(page.getByText('改成第一人称')).toBeVisible()
+    expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ input: expect.objectContaining({ action: 'instruct', instruction: '改成第一人称', selectedText: '林岚走进北塔' }) }), expect.any(Object))
+    await act(async () => {
+      listeners.get('llm:stream-done')?.({ requestId: pendingRequestId!, fullText: '我走进北塔', finishReason: 'stop' } as never)
+    })
+    await expect.element(page.getByText('我走进北塔')).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '替换' }).click())
+
+    expect(view.state.doc.toString()).toBe('我走进北塔')
+  })
+
+  it('submits the note with Ctrl+Enter and returns to the actions with Escape', async () => {
+    deferStream = true
+    await act(async () => root.render(
+      <CodeMirrorEditor content="林岚走进北塔" mode="prose" />,
+    ))
+
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await act(async () => note.fill('语气更冷'))
+    await act(async () => { note.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    await expect.element(note).not.toBeInTheDocument()
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
+    expect(invoke.mock.calls.some(([channel]) => channel === 'editor-inline:begin')).toBe(false)
+
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    await act(async () => note.fill('语气更冷'))
+    await act(async () => { note.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true })) })
+    await expect.element(page.getByText('按意见改预览')).toBeVisible()
+    expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ input: expect.objectContaining({ action: 'instruct', instruction: '语气更冷' }) }), expect.any(Object))
+  })
+
+  it('shows no selection actions in a read-only editor', async () => {
+    await act(async () => root.render(
+      <CodeMirrorEditor content="定稿正文" mode="prose" editable={false} />,
+    ))
+    await act(async () => page.getByText('定稿正文').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('toolbar')).not.toBeInTheDocument()
+    await expect.element(page.getByRole('button', { name: '按意见改' })).not.toBeInTheDocument()
   })
 
   it('keeps a delayed result copyable but refuses stale offsets after the document changes', async () => {
