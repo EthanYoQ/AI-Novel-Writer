@@ -15,7 +15,7 @@ const handle = { projectId: session.projectId, epoch: '会话1', rootActionId: '
 const source = { snapshot: { revision: 1, migrationState: 'legacy_markdown_pending', status: 'legacy_repair_required', entries: [], legacyMarkdown: '旧原文', renderedMarkdown: '' }, rawLegacy: '旧原文' }
 let stored: LegacyRosterGenerationRecovery
 let root: Root, container: HTMLDivElement, invoke: ReturnType<typeof vi.fn>, copy: ReturnType<typeof vi.fn>
-const originalModel = useLLMStore.getState().defaultModelId
+const { defaultModelId: originalModel, models: originalModels } = useLLMStore.getState()
 beforeEach(() => {
  useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
  useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, sessionLease: session.leaseId, novelConfig: { genre: '', targetAudience: '', coreOutline: '' } } as never, fileTree: [], loading: false })
@@ -36,7 +36,7 @@ beforeEach(() => {
  copy = vi.fn().mockResolvedValue(undefined); Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } })
  container = document.createElement('div'); document.body.append(container); root = createRoot(container)
 })
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); setActiveProjectSessionContext(null); useProjectStore.setState({ currentProject: null }); useLLMStore.setState({ defaultModelId: originalModel }); vi.restoreAllMocks() })
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); setActiveProjectSessionContext(null); useProjectStore.setState({ currentProject: null }); useLLMStore.setState({ defaultModelId: originalModel, models: originalModels }); vi.restoreAllMocks() })
 function button(label: string) { const el = [...container.querySelectorAll('button')].find(node => node.textContent?.includes(label)); if (!el) throw new Error(label); return el }
 it.each(['arch', 'world'])('%s真实入口恢复旧候选无需模型，冲突只读可复制，取消原run', async entry => {
  await act(async () => root.render(entry === 'arch' ? <ArchFileViewer tabId="角色" filePath="ai-novel://core/characters" projectKey={session.projectPath} content="" savedContent="" /> : <StageArchitecture projectKey={session.projectPath} />))
@@ -86,7 +86,7 @@ it.each(['arch', 'world'])('%s只有明确重新开始才新begin，原read无�
  await act(async () => root.render(entry === 'arch' ? <ArchFileViewer tabId="角色" filePath="ai-novel://core/characters" projectKey={session.projectPath} content="" savedContent="" /> : <StageArchitecture projectKey={session.projectPath} />))
  await vi.waitFor(() => expect(container.textContent).toContain('已移除的原模型'))
  expect(invoke.mock.calls.some(([channel]) => channel === 'legacy-roster:begin')).toBe(false)
- useLLMStore.setState({ defaultModelId: '作者新选模型' })
+ useLLMStore.setState({ models: [{ id: '作者新选模型', purposes: ['generation'] }] as never, defaultModelId: '作者新选模型' })
  await act(async () => button('明确重新开始').click())
  await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('waiting'))
  expect(invoke.mock.calls.find(([channel]) => channel === 'legacy-roster:begin')?.[1]).toMatchObject({ modelId: '作者新选模型' })
