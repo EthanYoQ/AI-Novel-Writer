@@ -346,3 +346,16 @@ it('点击接受前原候选已丢弃，保留预览但不写入正文', async (
   expect(EditorView.findFromDOM(container.querySelector('.cm-editor')!)!.state.doc.toString()).toBe(documentText)
   await expect.element(page.getByText('候选')).toBeVisible()
 })
+it('继续原运行时服务商以上下文超长拒绝，显示对应说明', async () => {
+  const handle = { projectId: 'editor-project', epoch: 'editor-epoch', rootActionId: '原预算', runId: '续跑运行' }
+  const documentText = '原文'
+  const documentHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(documentText))), byte => byte.toString(16).padStart(2, '0')).join('')
+  const view = { handle, status: 'running', artifacts: [], candidates: [], ledger: { physicalRequests: 0 } }
+  const stored = { view, modelId: '原模型', sourceStatus: 'current', context: { action: 'refine', kind: 'author-draft', documentText, documentHash, from: 0, to: 2, selectedText: documentText } }
+  invoke.mockImplementation(async (channel: string) => channel === 'editor-inline:execute'
+    ? { run: view, outcome: { status: 'incomplete', content: '', finishReason: 'error', receipt: { finishReason: 'error', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } } }
+    : stored)
+  await act(async () => root.render(<CodeMirrorEditor content={documentText} recoveryHandle={handle} />))
+  await act(async () => page.getByRole('button', { name: '继续原运行' }).click())
+  await expect.element(page.getByText(/提示词超出了模型能接受的长度/)).toBeVisible()
+})
