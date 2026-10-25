@@ -105,13 +105,13 @@ export function buildFinalizePostProcessSteps(
   projectionGeneration?: number,
   identityContext?: FinalizedCharacterContext,
 ): PostProcessStep[] {
-  const steps: PostProcessStep[] = []
+  const steps: (PostProcessStep & { key: FinalizePostProcessStepKey })[] = []
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   let generatedChapterNotes: string | undefined
 
   // ─── 步骤 1: 导入知识库 ───────────────────────────────────────────
   steps.push({
-    key: 'kb_import' satisfies FinalizePostProcessStepKey,
+    key: 'kb_import',
     label: text('导入知识库', 'Import into knowledge base'),
     critical: true,
     executor: async (callbacks, context) => {
@@ -162,7 +162,7 @@ export function buildFinalizePostProcessSteps(
 
   // ─── 步骤 2: 本章剧情要点提取 ─────────────────────────────────────
   steps.push({
-      key: 'chapter_notes' satisfies FinalizePostProcessStepKey,
+      key: 'chapter_notes',
       label: text('章节剧情要点', 'Chapter plot notes'),
       critical: true,
       executor: async (callbacks, context) => {
@@ -266,7 +266,7 @@ export function buildFinalizePostProcessSteps(
 
   // Model IDs refer only to the identity snapshot frozen by the original finalization.
   steps.push({
-    key: 'character_cards' satisfies FinalizePostProcessStepKey,
+    key: 'character_cards',
     label: text('角色状态更新', 'Update character state'),
     critical: false,
     executor: async (callbacks, context) => {
