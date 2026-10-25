@@ -53,10 +53,17 @@ function editInstruction(context: EditorInlineContext, english: boolean): string
     ? `Revise this passage as the author's note asks. The note outranks every other preference.\n${context.instruction}`
     : `按作者意见修改这部分。作者意见优先于其他任何偏好。\n${context.instruction}`
 }
+function systemRole(context: EditorInlineContext): Pick<PromptTemplate, 'systemRole'> {
+  if (context.action !== 'instruct') return context.template
+  const rule = context.writingLanguage === 'en-US'
+    ? "Where the author's note conflicts with the preservation requirements above, follow the note; keep everything the note does not mention."
+    : '作者意见与上述保留要求冲突时，以作者意见为准；意见没提到的部分照常保留。'
+  return { systemRole: [context.template.systemRole?.trim(), rule].filter(Boolean).join('\n') }
+}
 export function editorInlineTask(context: EditorInlineContext): GenerationTask {
   const { template, writingLanguage } = context
   return { purpose: `editor-ai-${context.action}`, reasoningStage: context.action === 'refine' ? 'review' : 'drafting', output: 'visible-text', messages: [
-    { role: 'system', content: composePromptSystemRole(template, writingLanguage) },
+    { role: 'system', content: composePromptSystemRole(systemRole(context), writingLanguage) },
     { role: 'user', content: renderPrompt(template, { edit_instruction: editInstruction(context, writingLanguage === 'en-US'), selected_text: context.selectedText }, writingLanguage) },
   ] }
 }
