@@ -130,7 +130,7 @@ export default function CodeMirrorEditor({
 
   // ===== Bubble Menu 逻辑 =====
   const [bubbleOpen, setBubbleOpen] = useState(false)
-  const [bubblePos, setBubblePos] = useState({ top: 0, left: 0 })
+  const [bubblePos, setBubblePos] = useState({ top: 0, left: 0, inView: true })
   const [aiResult, setAiResult] = useState<string | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
   const [activeAIAction, setActiveAIAction] = useState<string | null>(null)
@@ -141,7 +141,7 @@ export default function CodeMirrorEditor({
   const bubbleShape = `${bubbleOpen}:${bubblePos.top !== 0}:${aiResult === null}:${noteDraft === null}:${uiLocale}:${mode}`
   useLayoutEffect(() => { setBubbleSize({ width: bubbleRef.current?.offsetWidth ?? 0, height: bubbleRef.current?.offsetHeight ?? 0 }) }, [bubbleShape])
   const bubbleLeft = clampBubbleLeft(bubblePos.left, bubbleSize.width / 2)
-  const bubbleTop = clampBubbleTop(bubblePos.top, bubbleSize.height)
+  const bubbleTop = bubblePos.inView ? clampBubbleTop(bubblePos.top, bubbleSize.height) : bubblePos.top
   const [loadingDots, setLoadingDots] = useState('.')
   const [selectionRange, setSelectionRange] = useState<{ from: number, to: number } | null>(null)
   const aiRequestSequenceRef = useRef(0)
@@ -188,7 +188,7 @@ export default function CodeMirrorEditor({
       const from = Math.min(target.from, view?.state.doc.length ?? 0)
       setSelectionRange({ from, to: Math.min(target.to, view?.state.doc.length ?? 0) })
       const coords = view?.coordsAtPos(from)
-      setBubblePos({ top: coords?.top ?? 150, left: coords?.left ?? 200 })
+      setBubblePos({ top: coords?.top ?? 150, left: coords?.left ?? 200, inView: true })
       setBubbleOpen(true)
     }).catch(() => { if (sequence === aiRequestSequenceRef.current) { setAiResult(''); setAiError(uiText('无法恢复原运行', 'The original run could not be restored.')); setBubbleOpen(true) } })
     return () => { client.detach(); aiRequestSequenceRef.current += 1 }
@@ -248,7 +248,8 @@ export default function CodeMirrorEditor({
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
         const coords = view.coordsAtPos(selectionRange.from)
         if (coords) {
-          setBubblePos({ top: coords.top, left: coords.left })
+          const viewRect = scrollDOM.getBoundingClientRect()
+          setBubblePos({ top: coords.top, left: coords.left, inView: coords.bottom >= viewRect.top && coords.top <= viewRect.bottom })
         } else {
           setBubbleOpen(false)
         }
@@ -274,7 +275,7 @@ export default function CodeMirrorEditor({
         top = Math.min(viewRect.top + 45, rect.bottom - 10)
       }
 
-      setBubblePos({ top, left })
+      setBubblePos({ top, left, inView: true })
     }
 
     const onScrollOrResize = () => {
