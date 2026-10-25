@@ -22,6 +22,7 @@ let pendingRequestId: string | null
 let deferFirstLease: boolean
 let rejectFirstLease: ((error: Error) => void) | null
 let leaseRequestCount: number
+let failureCode: string | undefined
 
 beforeEach(() => {
   window.getSelection()?.removeAllRanges()
@@ -34,6 +35,7 @@ beforeEach(() => {
   deferFirstLease = false
   rejectFirstLease = null
   leaseRequestCount = 0
+  failureCode = undefined
   useProjectStore.setState({ currentProject: { id: 'editor-project', sessionLease: 'editor-epoch', path: 'C:/合成编辑器', novelConfig: {} } as never })
   useLLMStore.setState({
     defaultModelId: 'editor-model',
@@ -63,7 +65,7 @@ beforeEach(() => {
           const run = { handle, status: snapshot.status, artifacts: [snapshot] }
           const stored = recoveries.get((handle as { runId: string }).runId) as { view: unknown }
           stored.view = run
-          resolve({ run, outcome: { status: snapshot.status, content: data.fullText, finishReason: data.finishReason, receipt: { finishReason: data.finishReason } } })
+          resolve({ run, outcome: { status: snapshot.status, content: data.fullText, finishReason: data.finishReason, receipt: { finishReason: data.finishReason, ...(failureCode ? { failureCode } : {}) } } })
         }
         listeners.set('llm:stream-done', finish as EventListener)
         if (!deferStream) queueMicrotask(() => finish({ fullText: '残缺片段', finishReason: 'length' }))
@@ -136,6 +138,18 @@ describe('CodeMirror editor AI generation boundary', () => {
     expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ input: expect.objectContaining({ action: 'refine', documentText: '原文段落' }) }), expect.any(Object))
     expect(invoke.mock.calls.some(([channel]) => String(channel).startsWith('llm:'))).toBe(false)
 
+  })
+
+  it('explains a provider context-length rejection instead of a generic incomplete result', async () => {
+    failureCode = 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
+    await act(async () => root.render(
+      <CodeMirrorEditor content="原文段落" mode="prose" />,
+    ))
+    await act(async () => page.getByText('原文段落').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await expect.element(page.getByText(/提示词超出了模型能接受的长度/)).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '替换' })).toBeDisabled()
   })
 
   it('applies a delayed AI result to the frozen original selection instead of a later selection', async () => {

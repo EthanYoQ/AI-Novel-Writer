@@ -8,6 +8,8 @@ import samples from './provider-context-length-samples.json'
 // Gemini 没有 key，未实测；取自 Gemini API 对超长输入的公开报错形状。
 const DEEPSEEK_400 = JSON.stringify(samples.deepseek)
 const SILICONFLOW_400 = JSON.stringify(samples.siliconflow)
+// 同一个 32K 模型、短提示词、max_tokens 65,536（2026-10-26 实测）。
+const SILICONFLOW_MAX_TOKENS_400 = JSON.stringify(samples.siliconflowMaxTokens)
 const GEMINI_400 = JSON.stringify(samples.gemini)
 const UNRELATED_400 = '{"error":{"message":"Invalid model name","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}'
 
@@ -31,6 +33,7 @@ describe('服务商返回上下文超长时，流式请求报 LLM_CONTEXT_LENGTH
   it.each([
     ['DeepSeek 官方', openai, DEEPSEEK_400],
     ['硅基流动', { ...openai, provider: 'siliconflow' as const, baseUrl: 'https://api.siliconflow.cn/v1' }, SILICONFLOW_400],
+    ['硅基流动（最大输出超过上下文）', { ...openai, provider: 'siliconflow' as const, baseUrl: 'https://api.siliconflow.cn/v1' }, SILICONFLOW_MAX_TOKENS_400],
     ['Gemini', gemini, GEMINI_400],
   ])('%s 的 400 错误体', async (_name, model, body) => {
     expect(await streamError(model, 400, body)).toBe('LLM_CONTEXT_LENGTH_EXCEEDED')
@@ -42,5 +45,16 @@ describe('服务商返回上下文超长时，流式请求报 LLM_CONTEXT_LENGTH
   ])('%s 仍报 LLM_REQUEST_FAILED', async (_name, status, body) => {
     expect(await streamError(openai, status, body)).toBe('LLM_REQUEST_FAILED')
     expect(await streamError(gemini, status, body)).toBe('LLM_REQUEST_FAILED')
+  })
+
+  it('不是 400 时不读错误体，直接取消', async () => {
+    const text = vi.fn(async () => 'never read'), cancel = vi.fn(async () => {})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503, text, body: { cancel } }))
+    const onError = vi.fn()
+    await new OpenAIProvider().generateStream(openai, [{ role: 'user', content: '写正文' }], { temperature: 0.7, maxTokens: 512,
+      signal: new AbortController().signal, visibleOnly: true, onChunk: vi.fn(), onDone: vi.fn(), onError })
+    expect(onError.mock.calls[0]?.[0]).toBe('LLM_REQUEST_FAILED')
+    expect(text).not.toHaveBeenCalled()
+    expect(cancel).toHaveBeenCalled()
   })
 })
