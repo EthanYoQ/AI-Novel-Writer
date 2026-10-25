@@ -213,6 +213,29 @@ describe('BlueprintRepository range commit', () => {
     }
   })
 
+  it('normalizes NULL author fields to empty strings while keeping non-empty ones on regeneration', () => {
+    const db = createBlueprintDb()
+    vi.mocked(getProjectDb).mockReturnValue(db)
+
+    try {
+      db.prepare(`
+        INSERT INTO blueprints (chapter_number, title, user_guidance, notes, notes_updated_at)
+        VALUES (1, '旧标题', NULL, '定稿要点', NULL)
+      `).run()
+      const regenerated = { ...blueprintFor(1), title: '新标题' }
+
+      const receipt = BlueprintRepository.commitRange({
+        mode: 'replace-range', operationId: 'directory-regenerate-null-fields', startChapter: 1, endChapter: 1, blueprints: [regenerated],
+      })
+
+      const expected = { ...regenerated, userGuidance: '', notes: '定稿要点', notesUpdatedAt: '' }
+      expect(BlueprintRepository.getAll()).toEqual([expected])
+      expect(receipt.characterSyncInput).toEqual([expected])
+    } finally {
+      db.close()
+    }
+  })
+
   it('preserves parsed full names, candidates, and relationship text across SQLite restart', () => {
     let db = createBlueprintDb()
     vi.mocked(getProjectDb).mockReturnValue(db)
