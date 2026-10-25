@@ -86,6 +86,14 @@ export function reconcileFinalizationCompletion(
     && completion.draftId === snapshot.draftId
     && completion.contentRevision === snapshot.contentRevision
   )
+  // 主进程在同一事务里把同章旧定稿降为 superseded；还开着的旧定稿标签跟着改，不再显示为当前定稿。
+  const replacedFinal = !sameTarget
+    && tab.draftStatus === 'finalized'
+    && tab.draftId !== snapshot.draftId
+    && tab.chapterNumber === snapshot.chapterNumber
+    && tab.projectSessionLease === snapshot.projectSession.leaseId
+    && sameProjectPathKey(tab.projectKey, snapshot.projectPath)
+  if (replacedFinal) return { ...tab, draftStatus: 'superseded' }
   if (!sameTarget) return tab
 
   const snapshotStillCurrent = (
