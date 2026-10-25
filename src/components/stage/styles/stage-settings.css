@@ -224,7 +224,6 @@
   color: var(--danger);
 }
 
-/* 分工模型：环节的指定已失效时的一行说明，与它的补救动作并排。 */
 .stage-set-stale {
   display: flex;
   flex-wrap: wrap;

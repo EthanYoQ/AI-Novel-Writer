@@ -72,11 +72,11 @@ describe('stage model settings', () => {
     } })
   })
 
-  it('returns a stage to the default and drops the empty field', async () => {
+  it('returns a stage to the default', async () => {
     mocks.files.set('config.json', { defaultModelId: 'writer', stageModelIds: { review: 'reviewer' } })
     await expect(handler('llm:set-stage-model')({}, { stage: 'review', modelId: null }))
       .resolves.toEqual({ success: true, stageModelIds: {} })
-    expect(writes[0]?.value).toEqual({ defaultModelId: 'writer' })
+    expect(writes[0]?.value).toEqual({ defaultModelId: 'writer', stageModelIds: {} })
   })
 
   it.each([
@@ -115,7 +115,7 @@ describe('deleting a model that a stage uses', () => {
     })
     await expect(handler('llm:delete-model')({}, 'reviewer')).resolves.toEqual({ success: false, error: expect.stringContaining('models file locked') })
     expect(writes.map(write => write.path)).toEqual(['config.json', 'models.json', 'config.json'])
-    expect(writes[0]?.value).toEqual({ defaultModelId: 'writer' })
+    expect(writes[0]?.value).toEqual({ defaultModelId: 'writer', stageModelIds: {} })
     expect(writes.at(-1)?.value).toEqual({ defaultModelId: 'writer', stageModelIds: { review: 'reviewer' } })
   })
 

@@ -35,7 +35,6 @@ export type GeneratableField =
 
 type FieldGenerationInput = Pick<ProjectData, 'name' | 'novelConfig'>
 
-/** 每个字段一个固定的 operation，覆盖扫描和分工模型表都能直接看到。 */
 const FIELD_OPERATIONS = {
   coreOutline: 'generate-field:core-outline',
   worldSetting: 'generate-field:world-setting',

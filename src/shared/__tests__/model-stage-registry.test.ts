@@ -16,14 +16,26 @@ function sourceFiles(dir: string): string[] {
 
 const read = (file: string) => readFileSync(resolve(root, file), 'utf8')
 const families = Object.keys(MODEL_STAGE_BY_OPERATION)
+const OPERATION_LITERAL = /:\s*(['"`])([a-z][a-z0-9:-]*)\1/g
+const sentOperations = (text: string) => [
+  ...[...text.matchAll(/\boperation:\s*(['"`])([a-z][a-z0-9:-]*)\1/g)].map(match => match[2]),
+  ...[...text.matchAll(/=\s*\{([^}]*)\}\s*as const satisfies Record<\w+, GenerationOperation>/g)]
+    .flatMap(table => [...table[1].matchAll(OPERATION_LITERAL)].map(match => match[2])),
+]
 
 describe('operation stage registry coverage', () => {
+  it('sees operations that commands pick from a typed operation table', () => {
+    expect(sentOperations(read('src/services/workflows/commands/generate-field.command.ts'))).toEqual(expect.arrayContaining([
+      'generate-field:core-outline', 'generate-field:world-setting', 'generate-field:golden-finger',
+      'generate-field:protagonist-profile', 'generate-field:global-guidance', 'generate-field:writing-style',
+    ]))
+  })
+
   it('registers every operation that generation code sends', () => {
     // 不是生成 operation：source-draft-changed.ts 用它们区分提示文案。
     const notGeneration = new Set(['refine', 'review'])
     const unregistered = [...sourceFiles('src/services'), ...sourceFiles('electron/services')].flatMap(file =>
-      [...read(file).matchAll(/\boperation:\s*(['"`])([a-z][a-z0-9:-]*)\1/g)]
-        .map(match => match[2])
+      sentOperations(read(file))
         .filter(operation => !notGeneration.has(operation) && !families.includes(operation.split(':')[0]))
         .map(operation => `${file}: ${operation}`))
     expect(unregistered, '新的生成 operation 要先登记到 src/shared/model-stage-routing.ts').toEqual([])
@@ -64,8 +76,7 @@ describe('one stage per workflow definition', () => {
     return new Set([...operationStages(body), ...nested.flatMap(other => [...commandStages(other, seen)])])
   }
 
-  /** 顶层函数与它在同一文件里调用的辅助函数（传递闭包）。 */
-  function definitionSources(file: string): Map<string, string> {
+  function workflowDefinitionClosures(file: string): Map<string, string> {
     const text = read(file)
     const starts = [...text.matchAll(/^(?:export )?(?:async )?function (\w+)|^(?:export )?const (\w+) =/gm)]
     const segments = new Map(starts.map((match, index) => [match[1] ?? match[2], text.slice(match.index, starts[index + 1]?.index ?? text.length)]))
@@ -78,7 +89,6 @@ describe('one stage per workflow definition', () => {
     return new Map([...segments.keys()].filter(name => /^create\w+Workflow$|^migrateLegacyCharacterRoster$/.test(name)).map(name => [name, closure(name, new Set())]))
   }
 
-  // 这几个定义跨环节是有意的：后面的环节不按表取模型，而是沿用前面已经冻结的模型。
   const MIXED_BY_DESIGN: Record<string, string> = {
     createBatchChapterWorkflow: '批量写作强制显式模型，自动定稿由主进程按写稿运行的模型继承',
     createImportWorkflow: '导入首跑冻结模型，导入里的定稿后处理沿用导入模型',
@@ -87,7 +97,7 @@ describe('one stage per workflow definition', () => {
 
   const workflowFiles = readdirSync(resolve(root, 'src/services/workflows'))
     .filter(name => /-workflow\.ts$/.test(name)).map(name => `src/services/workflows/${name}`)
-  const definitions = workflowFiles.flatMap(file => [...definitionSources(file)].map(([name, text]) => ({ file, name, text })))
+  const definitions = workflowFiles.flatMap(file => [...workflowDefinitionClosures(file)].map(([name, text]) => ({ file, name, text })))
   const stagesOf = (text: string) => new Set([...text.matchAll(/\b(\w+Command)\b/g)].flatMap(match => [...commandStages(match[1])]))
 
   it('finds the workflow definitions it checks', () => {

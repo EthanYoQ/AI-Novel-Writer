@@ -88,7 +88,6 @@ export interface ConfigChannels {
     return: GlobalConfig
   }
   'config:set': {
-    /** 分工模型只经 llm:set-stage-model 写入；这里即使传了也会被主进程剥掉。 */
     args: [config: Partial<Omit<GlobalConfig, 'stageModelIds'>>]
     return: { success: boolean; error?: string }
   }
@@ -174,7 +173,6 @@ export interface GlobalConfig {
   locale?: Locale
   defaultModelId: string | null
   defaultEmbeddingModelId?: string | null
-  /** 分工模型（#517）：环节到模型 id，缺键即跟随默认。只存 id；由 llm 控制器独占写入。 */
   stageModelIds?: StageModelIds
   /** 定稿与后处理成功后，打开下一章的创作窗口（默认关闭）。 */
   autoOpenNextChapterAfterFinalize?: boolean
@@ -576,7 +574,6 @@ export interface LLMChannels {
     return: StageModelIds
   }
   'llm:set-stage-model': {
-    /** modelId 为 null 表示这个环节改回跟随默认。 */
     args: [request: { stage: ModelStage; modelId: string | null }]
     return: { success: true; stageModelIds: StageModelIds } | { success: false; error: string }
   }

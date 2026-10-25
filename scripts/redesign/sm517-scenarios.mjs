@@ -1,4 +1,3 @@
-// #517 实机场景：分工模型。两个档案同一个端点、modelName 不同，假服务按 chats[].model 断言每次请求实际用了哪个档案。
 import assert from 'node:assert/strict'
 
 import * as blueprint from './pages/blueprint.mjs'
@@ -16,7 +15,6 @@ async function invokeOk(context, channel, ...args) {
   assert.equal(result.success, true, `${channel}: ${result.error}`)
 }
 
-/** 重载后 llm-store 重新读模型与分工设置；作品要重新打开。 */
 async function reloadAndOpen(context) {
   await context.reload()
   await openInUi(context, context.samplePath)

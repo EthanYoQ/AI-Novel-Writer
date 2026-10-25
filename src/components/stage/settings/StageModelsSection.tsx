@@ -11,7 +11,6 @@ import { Notice } from '../../ui/Notice'
 
 type Pair = readonly [string, string]
 
-/** 每个环节的名字与范围说明；范围照实写本步的限制，作者看截图时可以改。 */
 const STAGE_COPY: Record<ModelStage, { name: Pair; scope: Pair }> = {
   planning: {
     name: ['规划', 'Planning'],
@@ -40,7 +39,6 @@ const STAGE_COPY: Record<ModelStage, { name: Pair; scope: Pair }> = {
 
 const openModels = () => leaveSettings(() => useLayoutStore.setState({ settingsSection: 'llm' }))
 
-/** 分工模型：每个环节跟随默认模型，或指定一个已保存的生成模型。选中即保存，失败时提示并回到原值。 */
 export default function StageModelsSection() {
   const text = useLocaleStore(s => s.text)
   const models = useLLMStore(s => s.models)
@@ -92,7 +90,7 @@ export default function StageModelsSection() {
           const route = routeStageModel(stage, { models, defaultModelId, stageModelIds })
           const selectId = `${idPrefix}-${stage}`
           const saving = pending[stage] !== undefined
-          const value = pending[stage] ?? (route.source === 'stage' ? route.modelId ?? '' : '')
+          const value = pending[stage] ?? (route.source === 'stage' ? route.modelId : '')
           return (
             <div key={stage} className="stage-set-row" data-stage={stage}>
               <div>

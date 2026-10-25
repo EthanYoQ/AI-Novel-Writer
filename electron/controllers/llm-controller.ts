@@ -367,8 +367,7 @@ export function registerLLMController() {
       }
       const stages = removeModelFromStages(parseStageModelIds(nextConfig.stageModelIds), modelId)
       if (stages.changed) {
-        if (stages.next) nextConfig.stageModelIds = stages.next
-        else delete nextConfig.stageModelIds
+        nextConfig.stageModelIds = stages.next
         configChanged = true
       }
 
@@ -408,14 +407,11 @@ export function registerLLMController() {
     try {
       const { stage, modelId } = (request && typeof request === 'object' ? request : {}) as Record<string, unknown>
       if (!isModelStage(stage) || (modelId !== null && typeof modelId !== 'string')) throw new Error('LLM_STAGE_MODEL_REQUEST_INVALID')
-      // 只接受作者已保存且标为生成用途的模型，路由才不会把正文发到别的端点。
       if (modelId !== null && !availableGenerationModelId(loadModelConfigsForUpdate(), modelId)) throw new Error('LLM_STAGE_MODEL_UNAVAILABLE')
       const config = loadGlobalConfigForUpdate()
-      const next = assignStageModel(parseStageModelIds(config.stageModelIds), stage, modelId)
-      if (next) config.stageModelIds = next
-      else delete config.stageModelIds
+      config.stageModelIds = assignStageModel(parseStageModelIds(config.stageModelIds), stage, modelId)
       writeJsonFile(GLOBAL_CONFIG_PATH, config)
-      return { success: true as const, stageModelIds: next ?? {} }
+      return { success: true as const, stageModelIds: config.stageModelIds }
     } catch (error) {
       return { success: false as const, error: String(error) }
     }

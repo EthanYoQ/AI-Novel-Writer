@@ -31,7 +31,6 @@ interface LLMState {
   defaultModelId: string | null
   /** 当前默认向量模型 ID */
   defaultEmbeddingModelId: string | null
-  /** 分工模型：环节另指定的模型，缺键即跟随默认（主进程已解析过形状）。 */
   stageModelIds: StageModelIds
   /** 正在进行的活跃请求 */
   activeRequests: Map<string, { status: 'running' | 'done' | 'error'; text: string }>
@@ -51,7 +50,6 @@ interface LLMState {
   setDefaultModel: (modelId: string) => Promise<boolean>
   /** 设置默认向量模型（持久化到 ~/.vela/config.json） */
   setDefaultEmbeddingModel: (modelId: string) => Promise<boolean>
-  /** 给环节指定模型，null 改回跟随默认；失败时提示并保留原值 */
   setStageModel: (stage: ModelStage, modelId: string | null) => Promise<boolean>
   /** 非流式生成 */
   generate: (

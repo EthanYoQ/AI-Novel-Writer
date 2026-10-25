@@ -34,9 +34,7 @@ export function registerConfigController() {
       const existing = existingRead.status === 'ok'
         ? existingRead.value
         : { ...DEFAULT_GLOBAL_CONFIG }
-      // 分工模型只由 llm:set-stage-model 校验后写入；渲染端旧快照里的映射不能借这里整个覆盖掉。
       const updated = { ...existing, ...config, stageModelIds: existing.stageModelIds }
-      if (updated.stageModelIds === undefined) delete updated.stageModelIds
       writeJsonFile(GLOBAL_CONFIG_PATH, updated)
       return { success: true }
     } catch (error) {

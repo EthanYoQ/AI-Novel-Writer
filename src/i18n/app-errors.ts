@@ -246,7 +246,6 @@ const ERROR_KEYS = {
   LLM_MODEL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
   LLM_GLOBAL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
   LLM_DEFAULT_MODEL_ROLLBACK_FAILED: 'error.defaultModelRollbackFailed',
-  // 分工模型（#517）：设置页给某个环节指定模型时被拒绝的原因。
   LLM_STAGE_MODEL_UNAVAILABLE: 'error.stageModelUnavailable',
   LLM_STAGE_MODEL_REQUEST_INVALID: 'error.stageModelRequestInvalid',
   MODEL_ENDPOINT_INVALID: 'error.modelEndpointInvalid',

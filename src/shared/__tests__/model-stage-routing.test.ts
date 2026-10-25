@@ -69,16 +69,16 @@ describe('stage mapping persistence helpers', () => {
       .toEqual({ review: 'reviewer', refinement: 'writer' })
   })
 
-  it('removes a stage on null and drops the field once empty', () => {
+  it('removes a stage on null', () => {
     expect(assignStageModel({}, 'review', 'reviewer')).toEqual({ review: 'reviewer' })
     expect(assignStageModel({ review: 'reviewer', planning: 'writer' }, 'review', null)).toEqual({ planning: 'writer' })
-    expect(assignStageModel({ review: 'reviewer' }, 'review', null)).toBeUndefined()
+    expect(assignStageModel({ review: 'reviewer' }, 'review', null)).toEqual({})
   })
 
   it('clears every stage that points at a deleted model', () => {
     expect(removeModelFromStages({ review: 'reviewer', refinement: 'reviewer', planning: 'writer' }, 'reviewer'))
       .toEqual({ next: { planning: 'writer' }, changed: true })
-    expect(removeModelFromStages({ review: 'reviewer' }, 'reviewer')).toEqual({ next: undefined, changed: true })
+    expect(removeModelFromStages({ review: 'reviewer' }, 'reviewer')).toEqual({ next: {}, changed: true })
     expect(removeModelFromStages({ planning: 'writer' }, 'reviewer')).toEqual({ next: { planning: 'writer' }, changed: false })
   })
 })

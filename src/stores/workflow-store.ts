@@ -84,7 +84,6 @@ export interface WorkflowRun {
   projectPath: string
   /** 启动时从当前项目冻结；缺失时该 run 只能失败，不能执行项目级副作用。 */
   projectSession: ProjectSessionContext | null
-  /** 启动时显式选定的模型，或首次开出运行时按分工模型钉住的模型；缺失表示还没开跑，届时按环节取模型。 */
   generationModelId?: string
   /** 本次写作冻结的每章目标可见单位；不得在执行中重新读取全局配置。 */
   chapterWordsTarget?: number
@@ -154,7 +153,6 @@ export interface WorkflowContext {
   projectPath: string
   /** 工作流启动时冻结的 IPC 会话，禁止在执行器内重新读取 currentProject。 */
   projectSession: ProjectSessionContext
-  /** 启动时显式选定的模型，或首次开出运行时按分工模型钉住的模型；缺失表示还没开跑，届时按环节取模型。 */
   generationModelId?: string
   /** 本次写作冻结的每章目标可见单位。 */
   chapterWordsTarget?: number
@@ -342,7 +340,6 @@ interface WorkflowState {
   pauseWorkflow: (runId: string) => void
   /** 继续已暂停或正在等待安全暂停的工作流 */
   resumeWorkflow: (runId: string) => void
-  /** 记下工作流首次开跑时实际钉住的生成模型；已记过不同的值时保留先记的，只警告 */
   pinRunGenerationModel: (runId: string, modelId: string) => void
   /** 添加全局日志 */
   addLog: (level: 'info' | 'warn' | 'error', message: string, locale?: Locale) => void

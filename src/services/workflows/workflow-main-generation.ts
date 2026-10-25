@@ -13,7 +13,6 @@ import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store
 import { PLOT_OUTLINE_PROTOCOL, plotOutlineSourceInvalidText } from '../../shared/plot-outline-contract'
 
 export interface WorkflowMainGenerationSelection extends Omit<BeginGenerationRequest, 'operation' | 'uiActionNonce' | 'modelId' | 'parentRootActionId' | 'selectedDraftIds' | 'selectedFinalizedDraftIds'> {
-  /** 必须是分工模型表里登记过的 operation：接缝按它所属的环节选模型。 */
   operation: GenerationOperation
   selectedDraftIds?: number[]
   selectedFinalizedDraftIds?: number[]
@@ -36,10 +35,12 @@ export interface WorkflowMainGenerationRuntime extends GenerationRuntime {
   advance(selection: WorkflowMainGenerationSelection): Promise<void>
 }
 
-/**
- * Each stage freezes its sources; all stages of the author action share main's root.
- * 没有显式模型时按 operation 所属环节取模型，首次开出运行后钉进 context 与运行记录，同一工作流后续步骤都沿用它。
- */
+function pinWorkflowModel(context: WorkflowContext, modelId: string): void {
+  context.generationModelId ||= modelId
+  useWorkflowStore.getState().pinRunGenerationModel(context.runId, context.generationModelId)
+}
+
+/** Each stage freezes its sources; all stages of the author action share main's root. */
 export async function createWorkflowMainGenerationRuntime(request: WorkflowMainGenerationRequest,
   transport = createMainGenerationTransport(() => request.context.projectSession)): Promise<WorkflowMainGenerationRuntime> {
   const { context, callbacks } = request
@@ -86,7 +87,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
     const previousRoot = context.mainGenerationRootHandle, previousRun = context.mainGenerationRunHandle
     const previousModelId = context.generationModelId, previousImportContext = context.data.importGenerationContext
     let openedView: MainGenerationRunView | undefined
-    let pinsModel = false
+    let begunModelId: string | null = null
     try {
       const importRecovery = intent.importSlot ? await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot }) : null
       if (importRecovery) {
@@ -107,8 +108,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
         }) : stored
       } else {
         if (!modelId) throw new Error('GENERATION_MODEL_REQUIRED')
-        context.generationModelId ||= modelId
-        pinsModel = true
+        begunModelId = modelId
         const parent = intent.continueDirectoryOperationId || restartHandle ? undefined : context.mainGenerationRootHandle
         if (intent.parentRootActionId && parent && intent.parentRootActionId !== parent.rootActionId)
           throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
@@ -141,7 +141,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
         useWorkflowReasoningStore.getState().append(context.runId, event.attemptId, event.text)
       })
       inner = await createMainOwnedGenerationRuntime({ runHandle: view.handle, onSnapshot }, transport)
-      if (pinsModel && context.generationModelId) useWorkflowStore.getState().pinRunGenerationModel(context.runId, context.generationModelId)
+      if (begunModelId) pinWorkflowModel(context, begunModelId)
     } catch (error) {
       unsubscribeReasoning?.(); unsubscribeReasoning = undefined; clearReasoning()
       if (openedView?.handle.epoch === projectSession.leaseId && openedView.status === 'running') {
