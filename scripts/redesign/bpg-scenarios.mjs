@@ -9,13 +9,14 @@ import { seedStageSample } from './scenarios.mjs'
 const GUIDANCE = '这一章只写雨夜，不要提前揭底。'
 const NOTES = '作者先手写的要点：林岚已经拿到父亲的信。'
 const REGENERATED = 3
+const regeneratedTitle = chapterNumber => `重生成第${chapterNumber}章`
 
 /** 目录生成请求回一份覆盖本批全部章节的合法蓝图 JSON；其余请求照常作答。 */
 function blueprintReply(prompt) {
   const batch = /本次必须且只能完整返回以下 chapterNumber：([\d、]+)。|必须且只能返回 chapterNumber=(\d+) 的一项/u.exec(prompt)
   if (!batch) return null
   return JSON.stringify({ blueprints: (batch[1] ?? batch[2]).split('、').map(Number).map(chapterNumber => ({
-    chapterNumber, title: `重生成第${chapterNumber}章`, role: '发展', purpose: '林岚确认钟声提前的原因',
+    chapterNumber, title: regeneratedTitle(chapterNumber), role: '发展', purpose: '林岚确认钟声提前的原因',
     keyEvents: `第${chapterNumber}章：林岚在灯塔里找到新的线索`, characters: ['林岚'], relationships: [],
     suspenseHook: '钟声又一次提前响起',
   })) })
@@ -23,10 +24,10 @@ function blueprintReply(prompt) {
 
 /**
  * 示例作品的蓝图行没写作者字段，库里是 NULL，卡片的文本框遇到 NULL 不受控、换章后会留着上一章的字。
- * 前 3 章先按界面保存时的形状写成空串，读到的才是这一章自己的值。
+ * 要重新生成的章先按界面保存时的形状写成空串，读到的才是这一章自己的值。
  */
 const withEmptyAuthorFields = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path, session }) => {
-  for (const chapterNumber of [1, 2, 3]) {
+  for (let chapterNumber = 1; chapterNumber <= REGENERATED; chapterNumber++) {
     const current = await invoke(page, 'db:blueprint-get', chapterNumber, path, session)
     assert.equal((await invoke(page, 'db:blueprint-upsert', { ...current, userGuidance: '', notes: '', notesUpdatedAt: '' }, path, session)).success, true)
   }
@@ -77,8 +78,8 @@ export const BPG_SCENARIOS = {
     await blueprint.pageMenu(page, '重新加载蓝图')
     const after = { 1: await readChapter(page, 1), 2: await readChapter(page, 2) }
     assert.deepEqual(after, {
-      1: { ...before[1], title: '重生成第1章' },
-      2: { ...before[2], title: '重生成第2章' },
+      1: { ...before[1], title: regeneratedTitle(1) },
+      2: { ...before[2], title: regeneratedTitle(2) },
     }, '重新生成只换 AI 字段，作者微操指导与章节要点保留')
     await chapterCard(page, 2).getByRole('textbox', { name: /^作者微操指导/ }).scrollIntoViewIfNeeded()
     return { before, after }
