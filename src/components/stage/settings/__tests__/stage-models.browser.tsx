@@ -117,6 +117,14 @@ describe('分工模型设置页', () => {
     expect(invoke).toHaveBeenCalledWith('llm:set-stage-model', { stage: 'review', modelId: null })
   })
 
+  it('指定失效且默认模型也不可用时，不说按默认运行', async () => {
+    useLLMStore.setState({ defaultModelId: 'bge', stageModelIds: { review: 'gone' } })
+    await mount()
+    expect(row('review').textContent).not.toContain('现按默认模型运行')
+    expect(row('review').textContent).toContain('默认模型也不可用')
+    expect(row('review').querySelector('[role="status"] button')).toBeNull()
+  })
+
   it('没有生成模型时是空状态，按钮去「AI 模型」', async () => {
     useLLMStore.setState({ models: [BGE], defaultModelId: null })
     await mount()
