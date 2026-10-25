@@ -16,6 +16,7 @@ import {
   assertGenerationHarnessPolicy,
   createGenerationHarness,
   GenerationHarnessError,
+  isTerminalProviderFailure,
   type GenerationHarnessPolicy,
   type GenerationMessage,
   type GenerationOutcome,
@@ -238,8 +239,8 @@ export async function createMainOwnedGenerationRuntime(options: MainOwnedGenerat
       for (const snapshot of receipt.run.artifacts) accept(snapshot)
       await queue
       if (projectionError) throw projectionError
-      // 服务商判定提示词超长：重发同一请求必然再被拒，按登记码结束这次运行。
-      if (receipt.outcome.receipt.failureCode === 'GENERATION_CONTEXT_LENGTH_EXCEEDED') throw new Error(receipt.outcome.receipt.failureCode)
+      const failureCode = receipt.outcome.receipt.failureCode
+      if (isTerminalProviderFailure(failureCode)) throw new Error(failureCode)
       if (receipt.outcome.status === 'completed' && receipt.outcome.finishReason !== 'stop'
         || receipt.outcome.receipt.finishReason !== receipt.outcome.finishReason) throw new Error('INVALID_MAIN_OUTCOME')
       return receipt.outcome

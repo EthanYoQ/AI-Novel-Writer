@@ -130,7 +130,6 @@ describe('S07 budget admission through the actually registered generation IPC', 
     expect(await ledger(handle)).toBe(0)
   })
 
-  // ADR-0023：旧根上的正文同样不按语义估算拒绝或切分，以输出上限整段发出。
   it.each([true, false])('dispatches a 20,000-unit draft on a legacy root at the output limit with segmentable=%s', async segmentable => {
     const fetch = syntheticProvider()
     const handle = await begin('known', {}, true)

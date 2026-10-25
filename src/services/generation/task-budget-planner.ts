@@ -78,26 +78,28 @@ export interface TaskBudgetPlannerInput {
   safetyMarginTokens: number
 }
 
-/** Context, remainder and conflict codes are retired (ADR-0023) and stay readable in older receipts. */
 export type TaskBudgetReasonCode =
   | 'task-demand'
   | 'output-allocation-ceiling'
   | 'input-upper-bound'
   | 'safety-margin'
-  | 'model-context-cap'
   | 'model-output-cap'
-  | 'user-context-cap'
   | 'user-output-cap'
   | 'root-output-cap'
-  | 'root-remaining-cap'
   | 'protocol-reasoning-reserve'
   | 'protocol-total-bound'
   | 'model-capability-unknown'
   | 'liability-bound-unknown'
+  | 'scope-split'
+
+/** Written only by receipts persisted before ADR-0023; diagnostics still read them back. */
+export type LegacyTaskBudgetReasonCode =
+  | 'model-context-cap'
+  | 'user-context-cap'
+  | 'root-remaining-cap'
   | 'required-input-capacity-conflict'
   | 'single-item-capacity-conflict'
   | 'draft-segmentation-disabled'
-  | 'scope-split'
 
 export interface TaskBudgetReason {
   code: TaskBudgetReasonCode
@@ -105,6 +107,8 @@ export interface TaskBudgetReason {
   valueTokens?: number
   selected: boolean
 }
+
+export type StoredTaskBudgetReason = Omit<TaskBudgetReason, 'code'> & { code: TaskBudgetReasonCode | LegacyTaskBudgetReasonCode }
 
 export interface TaskBudgetDecision {
   policyVersion: typeof S07_TASK_BUDGET_POLICY.version
@@ -122,7 +126,6 @@ export interface TaskBudgetDecision {
   /** Provider max output for this selected physical request. */
   reservedOutputTokens: number
   reasoningUpperBoundTokens: number
-  /** Total root-ledger liability recorded before dispatch. */
   reservationLiabilityTokens: number
   inputUpperBoundTokens: number
   reasons: readonly TaskBudgetReason[]
@@ -143,7 +146,7 @@ export interface GenerationBudgetDiagnostic {
   actualState: 'settled' | 'unknown' | 'reserved' | 'not-dispatched'
   finishReason?: string | null
   failureCode?: string | null
-  reasons: readonly TaskBudgetReason[]
+  reasons: readonly StoredTaskBudgetReason[]
 }
 
 function fail(): never {
@@ -243,8 +246,7 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
     reasons.push({ code: 'liability-bound-unknown', selected: true })
   }
 
-  // The provider owns context capacity: the input estimate is recorded for
-  // accounting only and never narrows the output or blocks dispatch.
+  // 上下文容量由服务商判定（ADR-0023）。
   const fixedReasoningTokens = input.liability.mode === 'separate-bounded' || input.liability.mode === 'unknown'
     ? input.liability.reasoningUpperBoundTokens ?? 0
     : 0
@@ -265,8 +267,6 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
     reasons.push({ code: limit.code, valueTokens: limit.value, selected: limit.value === availableOutputTokens })
   }
 
-  // Drafts keep one request and a soft length target. Structured scopes split
-  // only when the provider or author output limit cannot hold every item.
   const selectedQuantity = input.demand.kind === 'draft-units' ? requestedQuantity
     : Math.min(requestedQuantity, Math.max(1, maximumQuantityFor(input.stage, input.demand, availableOutputTokens)))
   const decision = selectedQuantity < requestedQuantity ? 'split-required' : 'ready'
@@ -277,7 +277,6 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
     ? fixedReasoningTokens
     : Math.max(0, totalEnvelopeTokens
       - input.inputEstimate.upperBoundTokens - reservedOutputTokens - input.safetyMarginTokens)
-  // Equals the total envelope whenever the estimated input fits inside it.
   const reservationLiabilityTokens = input.inputEstimate.upperBoundTokens
     + reservedOutputTokens + reasoningUpperBoundTokens + input.safetyMarginTokens
   if (decision === 'split-required') reasons.push({ code: 'scope-split', valueTokens: reservedOutputTokens, selected: true })

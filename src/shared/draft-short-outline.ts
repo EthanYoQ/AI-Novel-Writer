@@ -10,6 +10,13 @@ export function draftShortOutlinePrompt(language: WritingLanguage, sourcePrompt:
   return `${instruction}\n\n${sourcePrompt}`
 }
 
+/** The first request of a chapter draft; `outlinePrompt` comes from `draftShortOutlinePrompt`. */
+export function draftShortOutlineTask(language: WritingLanguage, outlinePrompt: string) {
+  return { purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text' as const, reasoningStage: 'planning' as const,
+    budgetDemand: { kind: 'draft-units' as const, writingLanguage: language, requestedUnits: 500, segmentable: false },
+    messages: [{ role: 'user' as const, content: outlinePrompt }] }
+}
+
 export function draftShortOutlineBlock(language: WritingLanguage, text: string): string {
   if (!text.trim()) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
   return language === 'en-US'

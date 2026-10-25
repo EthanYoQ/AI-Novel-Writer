@@ -82,8 +82,7 @@ export function assertReservation(root: RootAction, policy: RootBudget, attempts
   if (new Set(attempts.map(item => item.attemptId)).size !== attempts.length
     || new Set(attempts.map(item => item.reservationId)).size !== attempts.length
     || attempts.some(item => !['reserved', 'dispatch-marked', 'settled', 'unknown', 'cancelled-before-dispatch'].includes(item.status))) throw new Error('INVALID_LEDGER')
-  // Token liability is recorded, never a stop (ADR-0023): only the request
-  // count and the active-time brakes end a root.
+  // token 只记账不刹车（ADR-0023）。
   if (attempts.filter(item => item.status !== 'cancelled-before-dispatch').length >= policy.maxPhysicalRequests
     || elapsedMs >= policy.maxActiveElapsedMs) throw new Error('ROOT_BUDGET_EXHAUSTED')
 }

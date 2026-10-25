@@ -8,9 +8,7 @@ import { buildMainGenerationPlan, newMainGenerationPolicy } from '../main-genera
 import { applyModelProfileSelection, createModelProfileDraft, modelCapabilitySource } from '../../../src/shared/model-profile-draft'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 import { ChapterPromptBuilder } from '../../../src/services/prompts/prompt-builder'
-import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt } from '../../../src/shared/draft-short-outline'
-
-// 讨论区 #77：DeepSeek 官方端点 + 作者在设置里手填较小的上下文窗口时，写稿的首个请求（短细纲）在预检阶段被拒。
+import { draftShortOutlinePrompt, draftShortOutlineTask } from '../../../src/shared/draft-short-outline'
 
 const SENTENCES = [
   '雨从傍晚一直下到深夜，码头上的灯一盏接一盏熄灭。',
@@ -29,7 +27,6 @@ function chineseProse(units: number): string {
   return text.slice(0, units)
 }
 
-// 第 9 章写稿时实际拼进提示词的各块，按一部中等篇幅作品取字数。必需材料不受 8,000 字可选额度限制。
 function chapterNineOutlinePrompt(): string {
   const architecture = [chineseProse(1_200), chineseProse(3_500), chineseProse(2_500)].join('\n\n---\n\n')
   const chapterInfo = { chapterNumber: 9, title: '空舱', keyEvents: chineseProse(300), characters: ['林岚', '周砚', '老韩'],
@@ -62,12 +59,8 @@ function chapterNineOutlinePrompt(): string {
 
 const OUTLINE_PROMPT = chapterNineOutlinePrompt()
 
-// 与 generate-draft.command.ts 的短细纲请求同形：500 单位、规划阶段、单条 user 消息。
-const outlineTask = (content = OUTLINE_PROMPT): GenerationTask => ({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text',
-  reasoningStage: 'planning', messages: [{ role: 'user', content }],
-  budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 500, segmentable: false } })
+const outlineTask = (content = OUTLINE_PROMPT): GenerationTask => draftShortOutlineTask('zh-CN', content)
 
-// 设置页的两步：从 DeepSeek 预设选 deepseek-v4-flash，再在「上下文窗口」框里手填。
 function deepseekProfile(userContextWindowTokens?: number | null): ModelProfile {
   const draft = { ...createModelProfileDraft({ id: 'deepseek-作者', purposes: ['generation'] }), name: 'DeepSeek', apiKey: 'sk-synthetic' }
   const selected = applyModelProfileSelection(draft, { provider: 'deepseek', protocol: 'openai',
@@ -94,7 +87,6 @@ const bytes = (text: string) => Buffer.byteLength(text, 'utf8')
 const cjkUnits = (text: string) => [...text].filter(char => /\p{Script=Han}/u.test(char)).length
 
 describe('讨论区 #77：第 9 章短细纲在 DeepSeek 64K 用户上下文下的容量预检', () => {
-  // 2026-10-25 把这段提示词原样发给 DeepSeek 官方 deepseek-v4-flash，usage.prompt_tokens 为 17,384。
   it('第 9 章短细纲实测 17,384 个输入 token，加上 1,712 的输出需求远小于 64K，应能发出', () => {
     expect([OUTLINE_PROMPT.length, cjkUnits(OUTLINE_PROMPT), bytes(OUTLINE_PROMPT)]).toEqual([24_080, 21_610, 71_540])
     expect(plan(deepseekProfile(65_536), outlineTask()).budgetDecision?.decision).toBe('ready')

@@ -6,12 +6,9 @@ import type { GenerationBudgetReceipt } from '../../repositories/generation-run-
 import { createModelExecutionLeaseReceipt } from '../model-execution-lease'
 import { buildMainGenerationPlan, newMainGenerationPolicy } from '../main-generation-plan'
 import { applyModelProfileSelection, createModelProfileDraft, modelCapabilitySource } from '../../../src/shared/model-profile-draft'
-import { DRAFT_SHORT_OUTLINE_PURPOSE } from '../../../src/shared/draft-short-outline'
+import { draftShortOutlineTask } from '../../../src/shared/draft-short-outline'
 import { DRAFT_CONDENSE_PURPOSE } from '../../../src/shared/draft-visible-text'
 import { assertReservation, type PhysicalAttempt } from '../../../src/shared/generation-contract'
-
-// 讨论区 #77 第二阶段：维护者确认「不用 token 卡生成」。发送前不按自估 token 拒绝，
-// 发给服务商的输出上限只取模型最大输出或作者设置，账本照记，只保留次数与时长刹车。
 
 function deepseek(context: 'preset' | number | null, maxOutput?: number): ModelProfile {
   const draft = { ...createModelProfileDraft({ id: 'deepseek', purposes: ['generation'] }), name: 'DeepSeek', apiKey: 'sk-synthetic' }
@@ -33,14 +30,12 @@ const PROFILES = [
   ['作者不填', deepseek(null)],
 ] as const
 
-// 约 120 万 UTF-8 字节：按字节估算，三种档案在 master 上都放不下；真实分词约 30 万 token。
 const HUGE = '雨夜里铜钥匙落在门前，守夜人把灯又调亮了一点。'.repeat(17_000)
 const SMALL = '雨夜，铜钥匙落在门前。'
 const user = (content: string) => [{ role: 'user' as const, content }]
 
 const TASKS: ReadonlyArray<[string, (content: string) => GenerationTask]> = [
-  ['写稿首请求（短细纲）', content => ({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text', reasoningStage: 'planning', messages: user(content),
-    budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 500, segmentable: false } })],
+  ['写稿首请求（短细纲）', content => draftShortOutlineTask('zh-CN', content)],
   ['写稿正文', content => ({ purpose: 'chapter-draft', output: 'visible-text', reasoningStage: 'drafting', messages: user(content),
     budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 4000, segmentable: false } })],
   ['续写', content => ({ purpose: 'chapter-draft-continuation', output: 'visible-text', reasoningStage: 'drafting', messages: user(content),
@@ -96,7 +91,6 @@ describe('讨论区 #77：发给服务商的输出上限只来自模型或作者
       }
     })
 
-  // 蓝图按条目切分只由输出上限决定：同样 10 条，输入长短不改变切出的条数。
   it.each([[deepseek(32_768, 8_000), '2'], [custom(), '3']] as const)('输出上限放不下 10 条蓝图时按输出上限切分，与输入长短无关', (profile, selected) => {
     const blueprint = TASKS.find(([name]) => name === '蓝图')![1]
     for (const content of [SMALL, HUGE]) expect(() => plan(profile, blueprint(content))).toThrow(`TASK_BUDGET_SCOPE_SPLIT_REQUIRED:${selected}`)

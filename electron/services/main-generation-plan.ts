@@ -252,8 +252,6 @@ function resolvePhysicalLiability(model: ModelProfile, creativeStrategy: Creativ
 export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<ModelExecutionLeaseReceipt, 'capabilityEvidence'>,
   task: GenerationTask, budget: GenerationBudgetReceipt, creativeStrategy: CreativeStrategy = 'auto'): MainGenerationPlan {
   assertSemanticGenerationTask(task)
-  // A ledger record, never a dispatch gate: the provider decides whether the
-  // prompt fits and reports an overlong one itself (ADR-0023).
   const inputUpperBoundTokens = task.messages.reduce((sum, message) =>
     sum + Buffer.byteLength(message.content, 'utf8') + Buffer.byteLength(message.role) + 32, 32)
   const { capability, parameters, usagePolicy, modelOutput, openai, gemini, totalBounded, canBound, separateReasoning }
@@ -285,8 +283,6 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
       reasoningUpperBoundTokens: decision.reasoningUpperBoundTokens, requestedOutputTokens: decision.reservedOutputTokens,
     }
   }
-  // The root per-request ceiling is min(author, model) for new roots; it stays
-  // in the min only so the reservation matches the ledger's output check.
   const requestedOutputTokens = Math.min(modelOutput ?? Infinity, capability.userMaxOutputTokens ?? Infinity,
     budget.policy.maxOutputPerRequest)
   // SiliconFlow max_tokens excludes reasoning, and thinking_budget is not a hard

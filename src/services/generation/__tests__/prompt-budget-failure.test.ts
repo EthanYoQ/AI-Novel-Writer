@@ -131,4 +131,11 @@ describe('writing skill prompt budget diagnostics', () => {
     expect(message).not.toContain('实际用量')
     expect(message).not.toContain('实际总用量 0')
   })
+
+  it('still labels reasons persisted by receipts written before ADR-0023', () => {
+    const message = formatGenerationBudgetDiagnostic({ attemptId: 'old', requestedOutputTokens: 1_712, reservedTokens: 70_000,
+      actual: null, actualState: 'unknown', failureCode: null,
+      reasons: [{ code: 'user-context-cap', valueTokens: 65_536, selected: true }, { code: 'root-remaining-cap', valueTokens: 0, selected: true }] }, 'zh-CN')
+    expect(message).toContain('裁决依据：用户上下文设置、父任务剩余额度。')
+  })
 })

@@ -1,5 +1,8 @@
 import { Buffer } from 'node:buffer'
+import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
+
+const CONTEXT_LENGTH_SAMPLES = JSON.parse(readFileSync(new URL('../../electron/llm/__tests__/provider-context-length-samples.json', import.meta.url), 'utf8'))
 
 // 与 f05-u05、f05-u12 旅程相同的做法：主进程 fetch 改道到本机假 OpenAI 兼容服务，零真实模型调用。
 export const FAKE_MODEL = Object.freeze({ id: 'redesign-drive-fixture', name: '驱动夹具模型', provider: 'openai', protocol: 'openai',
@@ -144,7 +147,6 @@ export async function startFakeModel(diagnostics) {
   const replyCharacterState = build => { characterState = build }
   /** 之后不带 Key 的嵌入请求也照常回向量，模拟不需要 Key 的本机检索服务；传 false 恢复拒绝。 */
   const acceptKeylessEmbeddings = (accepted = true) => { keylessEmbeddings = accepted }
-  /** 之后的对话请求回 400，错误体与 DeepSeek 官方实测的上下文超长相同（讨论区 #77）；传 false 恢复。 */
   const rejectContextLength = (rejected = true) => { contextLengthRejected = rejected }
   const record = (kind, detail) => {
     requests.push(kind)
@@ -174,9 +176,7 @@ export async function startFakeModel(diagnostics) {
     await pass()
     if (contextLengthRejected) {
       record('context-length', `${Buffer.byteLength(JSON.stringify(body.messages ?? []))} 字节`)
-      response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: {
-        message: "This model's maximum context length is 1048576 tokens. However, you requested 1200051 tokens (1200035 in the messages, 16 in the completion). Please reduce the length of the messages or completion.",
-        type: 'invalid_request_error', param: null, code: 'invalid_request_error' } }))
+      response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify(CONTEXT_LENGTH_SAMPLES.deepseek))
       return
     }
     const prompt = (body.messages ?? []).map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n')

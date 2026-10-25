@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OpenAIProvider } from '../openai-provider'
 import { GeminiProvider } from '../gemini-provider'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
+import samples from './provider-context-length-samples.json'
 
-// 2026-10-25 实测的错误体，只删掉了 request_id。DeepSeek 官方 deepseek-v4-flash 发约 120 万 token；
-// 硅基流动 Qwen/Qwen2.5-7B-Instruct（32K 上下文）发约 15.5 万 token。流式与非流式返回相同。
-const DEEPSEEK_400 = '{"error":{"message":"This model\'s maximum context length is 1048576 tokens. However, you requested 1200051 tokens (1200035 in the messages, 16 in the completion). Please reduce the length of the messages or completion. (request_id: <redacted>)","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}'
-const SILICONFLOW_400 = '{"code":20015,"message":"number of input tokens (155525) has exceeded max_seq_len (32768) limit.","data":null}'
-// 没有 Gemini key，未实测；文本取自 Gemini API 对超长输入的公开报错形状。
-const GEMINI_400 = '{"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}'
+// DeepSeek 与硅基流动 2026-10-25 实测返回的错误体（删去 request_id）；流式与非流式相同。
+// Gemini 没有 key，未实测；取自 Gemini API 对超长输入的公开报错形状。
+const DEEPSEEK_400 = JSON.stringify(samples.deepseek)
+const SILICONFLOW_400 = JSON.stringify(samples.siliconflow)
+const GEMINI_400 = JSON.stringify(samples.gemini)
 const UNRELATED_400 = '{"error":{"message":"Invalid model name","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}'
 
 const openai: ModelProfile = { id: 'deepseek', name: 'DeepSeek', provider: 'deepseek', protocol: 'openai', modelName: 'deepseek-v4-flash',

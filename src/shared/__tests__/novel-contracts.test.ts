@@ -80,7 +80,6 @@ describe('S01共享契约（纯合成，不是生产持久化资格）', () => {
     expect(() => assertAttemptTransition('unknown', 'reserved')).toThrow()
     expect(() => assertAttemptTransition('dispatch-marked', 'cancelled-before-dispatch')).toThrow()
   })
-  // ADR-0023：token 责任照记，不再因超过根账上限而拒绝预留。
   it('未知usage保守占用，超估实记，不受根 token 额度限制', () => {
     expect(tokenLiability({ ...attempt('一'), status: 'unknown' })).toBe(100)
     expect(tokenLiability({ ...attempt('一'), status: 'settled', actualTokens: 150 })).toBe(150)

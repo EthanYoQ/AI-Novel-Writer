@@ -188,6 +188,11 @@ export interface GenerationAttemptReceipt {
   promptBudget?: PromptBudgetReport
 }
 
+/** Provider failures that resending the same request cannot fix: the run ends with the code. */
+export function isTerminalProviderFailure(code: GenerationAttemptReceipt['failureCode']): code is 'GENERATION_CONTEXT_LENGTH_EXCEEDED' {
+  return code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
+}
+
 export type GenerationOutcome =
   | {
       status: 'completed'

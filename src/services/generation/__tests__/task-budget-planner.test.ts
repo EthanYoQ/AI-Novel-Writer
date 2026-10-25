@@ -43,7 +43,6 @@ const chineseItems = (requestedItems: number): TaskBudgetDemand => ({
 })
 
 describe('S07 task budget planner', () => {
-  // ADR-0023：输入估计只进账本，不收窄输出、不拒绝；输出只取模型、作者与根账单次上限。
   it.each([1_000, 900_000, 5_000_000])('sends a draft at the output ceiling whatever its %i-token input estimate', upperBoundTokens => {
     const decision = planTaskBudget(fixture(chineseDraft(500, false), {
       inputEstimate: { upperBoundTokens, estimatorVersion: 'fixture-input-v1' },

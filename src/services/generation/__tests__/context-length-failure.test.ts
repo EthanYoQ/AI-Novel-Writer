@@ -5,9 +5,6 @@ import { knownAppErrorMessage } from '../../../i18n/app-errors'
 import { runFailure } from '../../../components/run/run-failure'
 import type { WorkflowRun } from '../../../stores/workflow-store'
 
-// 讨论区 #77：服务商以上下文超长拒绝时，运行以登记过的码失败，界面建议换用上下文更长的模型或精简本章材料。
-// 「上下文窗口」设置不再影响发送，所以文案不再指向它（维护者 2026-10-26 确认）。
-
 const handle: MainGenerationRunHandle = { projectId: '项目', epoch: '会话', rootActionId: '动作', runId: '运行' }
 const task: GenerationTask = { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '写第 9 章' }] }
 

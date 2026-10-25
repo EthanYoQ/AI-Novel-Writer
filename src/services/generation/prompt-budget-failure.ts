@@ -5,6 +5,7 @@ import {
 } from './generation-harness'
 import type {
   GenerationBudgetDiagnostic,
+  LegacyTaskBudgetReasonCode,
   TaskBudgetReasonCode,
 } from './task-budget-planner'
 
@@ -114,7 +115,7 @@ export function classifyGenerationFailure(
   return 'unknown'
 }
 
-const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode, readonly [string, string]>> = Object.freeze({
+const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode | LegacyTaskBudgetReasonCode, readonly [string, string]>> = Object.freeze({
   'task-demand': ['任务完整范围', 'Complete task scope'],
   'output-allocation-ceiling': ['物理输出使用可用上限', 'Physical output uses the available ceiling'],
   'input-upper-bound': ['输入估计上界', 'Input estimate upper bound'],
@@ -135,7 +136,7 @@ const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode, readonly [string, str
   'scope-split': ['已缩小本次范围', 'This request uses a smaller scope'],
 })
 
-function reasonLabel(code: TaskBudgetReasonCode, locale: Locale): string {
+function reasonLabel(code: TaskBudgetReasonCode | LegacyTaskBudgetReasonCode, locale: Locale): string {
   const labels = REASON_LABELS[code]
   return locale === 'zh-CN' ? labels[0] : labels[1]
 }

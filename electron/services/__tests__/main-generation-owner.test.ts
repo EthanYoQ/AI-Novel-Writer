@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import contextLengthSamples from '../../llm/__tests__/provider-context-length-samples.json'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
@@ -1181,10 +1182,8 @@ describe('S07 durable task budget diagnostics', () => {
     expect(saved.outcome.receipt).toMatchObject({ failureCode: 'NETWORK_ERROR' })
     expect(saved.run.budgetDiagnostics![0]).toMatchObject({ failureCode: 'NETWORK_ERROR' })
   })
-  // 讨论区 #77：发送前不再自估拒绝，提示词真超长时由服务商报错；回执要带上可登记的码，不压平成通用失败。
   it('records a provider context-length rejection under its own failure code', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: "This model's maximum context length is 1048576 tokens. However, you requested 1200051 tokens (1200035 in the messages, 16 in the completion). Please reduce the length of the messages or completion.",
-      type: 'invalid_request_error', param: null, code: 'invalid_request_error' } }), { status: 400, headers: { 'Content-Type': 'application/json' } })))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(contextLengthSamples.deepseek), { status: 400, headers: { 'Content-Type': 'application/json' } })))
     const f = fixture()
     const run = f.owner.begin(f.begin)
     const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'context-length', task })

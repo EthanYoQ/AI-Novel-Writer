@@ -2,7 +2,7 @@ import { chapterTimeContinuity } from '../../../shared/chapter-time-continuity'
 import { appErrorMessage, displayedErrorMessage, englishWithReason } from '../../../i18n/app-errors'
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
-import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
+import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock, draftShortOutlineTask } from '../../../shared/draft-short-outline'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
@@ -979,9 +979,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           let outlined: GenerationOutcome | undefined
           if (!recovery) {
             callbacks.log(uiText('生成短细纲...', 'Generating a short chapter outline...'))
-            outlined = await draftingSession.complete({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text',
-              reasoningStage: 'planning', budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: 500, segmentable: false },
-              messages: [{ role: 'user', content: outlinePrompt }] }, { signal: cancellation.signal })
+            outlined = await draftingSession.complete(draftShortOutlineTask(writingLanguage, outlinePrompt), { signal: cancellation.signal })
             logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, outlined.receipt)
             if (outlined.status === 'completed' && outlined.finishReason === 'stop' && outlined.content.trim()) {
               shortOutline = outlined.content

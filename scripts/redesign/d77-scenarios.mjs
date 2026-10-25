@@ -1,5 +1,3 @@
-// 讨论区 #77：作者手填 64K 上下文窗口、世界观较长的作品。修复前写稿在发出首个请求前被容量预检拒绝；
-// 修复后照常发出，提示词真超长时由服务商拒绝，卡片建议换用上下文更长的模型或精简本章材料。
 import assert from 'node:assert/strict'
 
 import * as chapterView from './pages/chapter-view.mjs'
@@ -8,7 +6,6 @@ import { FAKE_MODEL, FIXTURE_PROSE } from './fake-model.mjs'
 import { seedStageSample } from './scenarios.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
 
-// 驱动只把 api.openai.com 改道到本机假模型，所以用 OpenAI 档案承载作者手填的 64K 上下文窗口。
 const AUTHOR_64K = Object.freeze({ ...FAKE_MODEL, id: 'd77-author-64k', name: '作者 64K 上下文',
   capabilities: { contextWindowTokens: 65_536, maxOutputTokens: FAKE_MODEL.maxTokens, reasoning: false, structuredOutput: true, usage: true },
   capabilitySources: { contextWindowTokens: 'manual', maxOutputTokens: 'manual', reasoning: 'preset', structuredOutput: 'preset', usage: 'preset' } })

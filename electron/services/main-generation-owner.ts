@@ -84,11 +84,9 @@ export interface MainGenerationOwnerDependencies {
 
 interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
 
-/** 渲染端回执里可以出现的供应商失败码；其余失败码只留在主进程诊断里。 */
-const PROVIDER_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR', 'GENERATION_CONTEXT_LENGTH_EXCEEDED'] as const
+const RENDERER_SAFE_PROVIDER_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR', 'GENERATION_CONTEXT_LENGTH_EXCEEDED'] as const
 
-/** Provider 流式失败的分类：请求或读流被传输层拒绝、拿不到响应流、流在完成标记前断开与原生网络错误都算网络失败；服务商明确说提示词超长的单列；其余算供应商失败。 */
-export function providerStreamFailureCode(error: string): typeof PROVIDER_FAILURE_CODES[number] {
+export function providerStreamFailureCode(error: string): typeof RENDERER_SAFE_PROVIDER_FAILURE_CODES[number] {
   if (error === 'LLM_CONTEXT_LENGTH_EXCEEDED') return 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
   return error === 'LLM_STREAM_NETWORK_FAILED' || error === 'LLM_STREAM_UNREADABLE' || error === 'LLM_STREAM_INCOMPLETE'
     || /fetch failed|failed to fetch|network|ECONNRESET|ETIMEDOUT/iu.test(error)
@@ -524,7 +522,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const finishReason: LLMFinishReason = receipt.failureCode ? 'error'
       : ['stop', 'length', 'content_filter', 'error', 'unknown'].includes(stored ?? '') ? stored as LLMFinishReason : 'unknown'
     const evidence = frozenModel.capabilityEvidence
-    const safeFailureCode = PROVIDER_FAILURE_CODES.find(code => code === receipt.failureCode)
+    const safeFailureCode = RENDERER_SAFE_PROVIDER_FAILURE_CODES.find(code => code === receipt.failureCode)
     const details: GenerationAttemptReceipt = { purpose: task.purpose,
       ...(receipt.diagnostics ? { diagnostics: receipt.diagnostics } : {}),
       ...(safeFailureCode ? { failureCode: safeFailureCode } : {}),
