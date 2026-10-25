@@ -409,7 +409,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     }
   }, [currentProject, projectKey, tabId, text])
 
-  /** 修复定稿后处理 — 不传 stepKey 时只重跑失败的步骤 */
+  /** 修复定稿后处理 — 不传 stepKey 时只重跑重试有用的失败步骤 */
   const repairFinalize = useCallback(async (stepKey?: string) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || isChapterBusy || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return

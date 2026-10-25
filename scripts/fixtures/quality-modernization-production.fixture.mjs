@@ -1847,7 +1847,7 @@ test('isolated production commands persist the selected phase operations', async
           project: projectStore.getState().currentProject, chapterNumber: predecessor.chapterNumber, chapterTitle: scene.title,
           draftContent: readback.snapshot.content, draftId: predecessor.draftId,
           sourceLabel: receipt.restoration?.sourceReplacement ? 'quality-c17b-refinalize' : 'quality-c16-existing',
-          finalizedSource: readback.snapshot.source, stopOnFailure: true, stepKey: operationKind })
+          finalizedSource: readback.snapshot.source, stopOnFailure: true, stepKeys: [operationKind] })
       }
       else if (operationKind === 'outline') command = new (await load('src/services/workflows/commands/architecture.command.ts')).GeneratePlotArchitectureCommand(
           ['synopsis'], { expectedProjectPath: project.rootPath, novelConfig: config, targetUnits: operation.targetUnits }, undefined,

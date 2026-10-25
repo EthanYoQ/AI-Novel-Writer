@@ -535,6 +535,17 @@ export function createRepairFinalizeWorkflow(
             if (Array.isArray(bp?.characters)) chapterEntities = bp.characters
           } catch { /* 蓝图读取失败时使用默认标题 */ }
 
+          // 按行与整卡重试都按当前状态重算卡上的安排：界面可能还拿着旧状态，重试结果也一样的失败不重跑。
+          const { getChapterFinalizeScope, readPostProcessStatus } = await import('./workflow-utils')
+          const { planFinalizationRetry } = await import('../../shared/finalization-step-error')
+          const current = await readPostProcessStatus(projectPath, getChapterFinalizeScope(chapterNumber), projectSession)
+          const plan = current && planFinalizationRetry(current.steps)
+          const stepKeys = !plan ? [] : stepKey ? [stepKey].filter(key => plan.rows.has(key)) : plan.card
+          if (stepKeys.length === 0) throw new Error(text(
+            '没有可以重试的失败步骤，请按各步骤的说明处理。',
+            'No failed step can be retried. Follow the note on each step.',
+          ))
+
           // 修复运行也冻结一次模型租约，全部 LLM 后处理共享一个预算。
           const { RunFinalizePostProcessCommand } = await import('./commands/finalize-chapter.command')
           const status = await new RunFinalizePostProcessCommand({
@@ -550,7 +561,7 @@ export function createRepairFinalizeWorkflow(
             ),
             onlyFailed: true,
             retryInvalidResult: true,
-            stepKey,
+            stepKeys,
             chapterEntities,
           }).execute({ step: {}, context, callbacks })
 
@@ -562,7 +573,7 @@ export function createRepairFinalizeWorkflow(
             projectSession,
           })
           const failedSteps = Object.entries(status.steps)
-            .filter(([key, result]) => (!stepKey || key === stepKey) && !result.ok)
+            .filter(([key, result]) => stepKeys.includes(key) && !result.ok)
             .map(([, result]) => result.label)
           if (failedSteps.length > 0) {
             throw new Error(text(

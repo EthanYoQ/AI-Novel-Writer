@@ -305,7 +305,7 @@ function installModel(): void {
   })
 }
 
-function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKey?: string; retryInvalidResult?: boolean; stopOnFailure?: boolean } = {}) {
+function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKeys?: readonly string[]; retryInvalidResult?: boolean; stopOnFailure?: boolean } = {}) {
   insertFinalizedDraft(7, 2, draftContent)
   const db = getProjectDb()!
   if (!db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get('fcs:finalization-7')) {
@@ -438,7 +438,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     })
     const freshRun = await command(content, {
       onlyFailed: true,
-      stepKey: 'chapter_notes',
+      stepKeys: ['chapter_notes'],
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
     expect(freshRun.steps.chapter_notes).toMatchObject({ ok: false })
     expect(useLLMStore.getState().generateStream).not.toHaveBeenCalled()
@@ -677,7 +677,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
 
     const status = await command('第二章定稿：林岚准备交出黄铜钥匙。', {
       onlyFailed: true,
-      stepKey: 'character_cards',
+      stepKeys: ['character_cards'],
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
     expect(status.steps.character_cards).toMatchObject({
@@ -833,7 +833,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
 
     const repaired = await command('The brass key changes hands.', {
       onlyFailed: true,
-      stepKey: 'character_cards',
+      stepKeys: ['character_cards'],
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
     expect(generateStream).not.toHaveBeenCalled()
@@ -856,7 +856,7 @@ it('一次显式修复固定失败目标，withRetry 不得把第四份坏结果
    evidence: { text: correct ? content : 'Lin Lan says, the inspection is still pending.' } }] }), undefined, 'stop')
   return 'synthetic-request'
  }) })
- const execute = (retryInvalidResult = false) => command(content, { onlyFailed: true, stepKey: 'character_cards', retryInvalidResult })
+ const execute = (retryInvalidResult = false) => command(content, { onlyFailed: true, stepKeys: ['character_cards'], retryInvalidResult })
   .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
  expect((await execute()).steps.character_cards.ok).toBe(false)
  expect(calls).toBe(3)
@@ -1065,10 +1065,37 @@ describe('cast refresh after the character-state step', () => {
     expect(initial.steps.character_cards.ok).toBe(false)
     expect(refreshes).toEqual([])
 
-    const retried = await command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKey: 'character_cards', retryInvalidResult: true })
+    const retried = await command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKeys: ['character_cards'], retryInvalidResult: true })
       .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
     expect(retried.steps.character_cards).toMatchObject({ ok: true })
     expect(refreshes).toEqual([{ resources: ['characterCards'], projectSession: workflowContext.projectSession, storedLocation: 'harbor' }])
+  })
+
+  it('#502 a step key the current version no longer has does not block retrying the steps that still exist', async () => {
+    let interrupted = false
+    useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+      const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+      if (!system.includes('character records')) streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop')
+      else if (!interrupted) { interrupted = true; streamCallbacks.onError?.('synthetic stream interrupted') }
+      else streamCallbacks.onDone?.(modelFixtureResponse(harbor), undefined, 'stop')
+      return 'synthetic-request'
+    }) })
+    expect((await command('Lin Lan arrives at the harbor.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })).steps.character_cards.ok).toBe(false)
+
+    const retried = await command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKeys: ['style_analysis', 'character_cards'], retryInvalidResult: true })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+
+    expect(retried.steps.character_cards).toMatchObject({ ok: true })
+    await expect(command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKeys: ['style_analysis'] })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow('style_analysis')
+  })
+
+  it('#502 an empty step selection runs nothing instead of reporting success', async () => {
+    const generateStream = vi.fn()
+    useLLMStore.setState({ defaultModelId: 'test-model', generateStream })
+    await expect(command('Lin Lan arrives at the harbor.', { stepKeys: [] })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow()
+    expect(generateStream).not.toHaveBeenCalled()
   })
 })

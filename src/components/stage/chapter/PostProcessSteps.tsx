@@ -1,6 +1,6 @@
 import { RefreshCw } from 'lucide-react'
 import { getChapterFinalizeScope } from '../../../services/workflows/workflow-utils'
-import { describeFinalizationStepError } from '../../../shared/finalization-step-error'
+import { describeFinalizationStepError, planFinalizationRetry } from '../../../shared/finalization-step-error'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { Button } from '../../ui/Button'
 import { usePostProcessStatus } from '../../ui/use-post-process-status'
@@ -15,7 +15,8 @@ function stepDetail(presentation: 'success' | 'pending' | 'failed', error: strin
 
 /**
  * 定稿视图里的后处理（F-090、F-091）：正文文件与后处理流水线逐步列出完成、处理中或失败。
- * 失败的步骤各自可以重试；「重试失败步骤」只重跑失败的那些。正文文件写入失败时重试的是已提交的发布（F-089），不重新定稿。
+ * 重试有用的失败步骤各自可以重试，「重试失败步骤」只在至少有一步能重试时出现，重跑哪些由修复工作流按同一份安排选。
+ * 正文文件写入失败时重试的是已提交的发布（F-089），不重新定稿。
  * 正文文件这一步只有本次打开期间定稿过才知道结果，否则不列出。
  */
 export default function PostProcessSteps({ chapterNumber, publication, busy, onRetryStep, onRetryFailed, onRetryPublication }: {
@@ -27,9 +28,10 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
   onRetryPublication: () => void
 }) {
   const text = useLocaleStore(s => s.text)
-  const { loading, steps } = usePostProcessStatus(getChapterFinalizeScope(chapterNumber), busy)
+  const { status, loading, steps } = usePostProcessStatus(getChapterFinalizeScope(chapterNumber), busy)
   if (loading && !publication) return null
 
+  const plan = planFinalizationRetry(status?.steps ?? {})
   const rows = [
     ...(publication ? [{
       key: 'publication',
@@ -39,6 +41,7 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
         ? text('已写入项目目录', 'Written to the project folder')
         : text('定稿已提交，正文文件还没写入', 'Finalization is committed; the manuscript file is not written yet'),
       retry: onRetryPublication,
+      retryable: true,
       retryLabel: text('重新写入正文', 'Write again'),
     }] : []),
     ...steps.map(({ key, step, presentation }) => ({
@@ -47,12 +50,13 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
       presentation,
       detail: stepDetail(presentation, step.error, text),
       retry: () => onRetryStep(key),
+      retryable: plan.rows.has(key),
       retryLabel: text('重试', 'Retry'),
     })),
   ]
   if (rows.length === 0) return null
   const done = rows.filter(row => row.presentation === 'success').length
-  const stepFailed = steps.some(row => row.presentation === 'failed')
+  const cardRetry = steps.some(row => row.presentation === 'failed' && plan.card.includes(row.key))
 
   return (
     <section className="stage-ch-post" aria-label={text('定稿后处理', 'Post-finalization steps')}>
@@ -61,7 +65,7 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
           {text('定稿后处理', 'After finalization')}
           <small>{text(`${done} / ${rows.length} 完成`, `${done} / ${rows.length} done`)}</small>
         </h2>
-        {stepFailed && (
+        {cardRetry && (
           <Button variant="secondary" size="sm" disabled={busy} onClick={onRetryFailed}>
             <RefreshCw size={13} aria-hidden />{text('重试失败步骤', 'Retry failed steps')}
           </Button>
@@ -72,7 +76,7 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
           <li key={row.key} className="stage-ch-post-step" data-state={row.presentation}>
             <b>{row.label}</b>
             <span className="stage-ch-post-detail">{row.detail}</span>
-            {row.presentation === 'failed' && (
+            {row.presentation === 'failed' && row.retryable && (
               <Button variant="text" size="sm" disabled={busy} onClick={row.retry}>{row.retryLabel}</Button>
             )}
           </li>
