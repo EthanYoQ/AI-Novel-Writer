@@ -9,7 +9,8 @@ import { createWorkflowMainGenerationRuntime } from '../../workflows/workflow-ma
 import type { createMainGenerationTransport } from '../main-generation-transport'
 import { runFinalizationGeneration } from '../../finalization-generation'
 import { describeFinalizationStepError, planFinalizationRetry } from '../../../shared/finalization-step-error'
-import { classifyGenerationFailure } from '../prompt-budget-failure'
+import { classifyGenerationFailure, formatGenerationBudgetDiagnostic } from '../prompt-budget-failure'
+import { presentWorkflowFailure } from '../../../components/panels/ai-output-failure-presentation'
 
 const handle: MainGenerationRunHandle = { projectId: '项目', epoch: '会话', rootActionId: '动作', runId: '运行' }
 const task: GenerationTask = { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '写第 9 章' }] }
@@ -130,5 +131,22 @@ describe('讨论区 #77：服务商上下文超长', () => {
 
   it('写稿步骤已有主进程保存的正文时，卡片不说未保存', () => {
     expect(runFailure(failedDraft('GENERATION_CONTEXT_LENGTH_EXCEEDED', '雨夜，铜钥匙落在门前。')).presentation.persistence).toBeUndefined()
+  })
+})
+
+describe('讨论区 #77：上下文超长说明不被其他展示覆盖', () => {
+  it('审稿卡片优先显示登记说明，不被 HTTP 400 诊断覆盖', () => {
+    const presentation = presentWorkflowFailure(undefined, `Error invoking remote method 'generation:execute': Error: ${CODE}`, 'zh-CN', false, undefined,
+      { operation: 'review-chapter', diagnostics: { startedAt: 1, elapsedMs: 20, httpStatus: 400, phase: 'response', endReason: 'failed', errorCode: 'HTTP_ERROR', visibleEvents: 0, reasoningEvents: 0, firstResponseMs: 20, lastResponseMs: 20, lastOutputMs: null } })
+    expect(presentation.reason).toContain('换用上下文更长的模型')
+  })
+
+  it('预算诊断认得经 IPC 包装的码', () => {
+    expect(classifyGenerationFailure(`Error invoking remote method 'generation:execute': Error: ${CODE}`, 'error')).toBe('provider-context')
+  })
+
+  it('旧回执里不认识的理由码不会让诊断渲染出错', () => {
+    expect(() => formatGenerationBudgetDiagnostic({ attemptId: 'old', requestedOutputTokens: 1, reservedTokens: 2, actual: null, actualState: 'unknown',
+      reasons: [{ code: 'retired-by-a-future-build', selected: true } as never] }, 'zh-CN')).not.toThrow()
   })
 })

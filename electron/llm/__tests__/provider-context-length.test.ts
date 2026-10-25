@@ -58,3 +58,13 @@ describe('服务商返回上下文超长时，流式请求报 LLM_CONTEXT_LENGTH
     expect(cancel).toHaveBeenCalled()
   })
 })
+
+it('读错误体时被取消，按取消报告', async () => {
+  const controller = new AbortController()
+  const text = vi.fn(async () => { controller.abort(); throw new DOMException('aborted', 'AbortError') })
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 400, text, body: { cancel: vi.fn(async () => {}) } }))
+  const onError = vi.fn()
+  await new OpenAIProvider().generateStream(openai, [{ role: 'user', content: '写正文' }], { temperature: 0.7, maxTokens: 512,
+    signal: controller.signal, visibleOnly: true, onChunk: vi.fn(), onDone: vi.fn(), onError })
+  expect(onError.mock.calls[0]?.[0]).toBe('LLM_CANCELLED')
+})
