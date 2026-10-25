@@ -37,6 +37,19 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: S
   { code: /^FINALIZED_CHARACTER_FIELD_CONFLICT$/, retry: 'never',
     zh: '正文定稿已保存，但角色卡没有自动更新：生成期间这个角色的当前状态被改动过（例如在角色页手动修改，或采纳了角色状态建议），为免覆盖这次改动，本次没有写入，再点「重试」结果也一样。这次改动已保留，请到角色页的「当前状态」查看这个角色，需要本章带来的变化时直接手动修改。',
     en: "The finalized chapter text is saved, but the character card was not updated: this character's current state changed while this step was running (for example, it was edited on the Characters page or a character state suggestion was accepted), so nothing was written to avoid overwriting that change. Retrying gives the same result. The change is kept. Open the character's Current state view, check it, and edit it by hand if this chapter should change it." },
+  // 生成开始后正文依据的连续性记录变了（#512）：运行冻结的上下文不会变，重试先按来源已变拒绝。
+  // CONTEXT_CHANGED 比对的字段提交前的来源校验已整组比过，按同一情形说明。
+  { code: /^(GENERATION_FINALIZATION_IDENTITY_CHANGED|FINALIZED_CHARACTER_CONTEXT_CHANGED)$/, retry: 'never',
+    zh: '正文定稿已保存，但这一步没有写入：生成期间有其他章节重新定稿或被删除，本章依据的前文记录变了，再点「重试」结果也一样。请重新定稿本章后再处理。',
+    en: 'The finalized chapter text is saved, but this step was not saved: another chapter was finalized again or deleted while it was running, so the earlier-chapter records this chapter relies on changed. Retrying gives the same result. Finalize this chapter again to run this step.' },
+  // 定稿时在场的角色后来被删除（#512），重试同样先按来源已变拒绝。
+  { code: /^FINALIZED_CHARACTER_ID_RETIRED$/, retry: 'never',
+    zh: '正文定稿已保存，但这一步没有写入：本章定稿时角色名单里的角色，有的后来被删除了，再点「重试」结果也一样。请重新定稿本章后再处理。',
+    en: 'The finalized chapter text is saved, but this step was not saved: a character who was in the cast when this chapter was finalized has since been deleted. Retrying gives the same result. Finalize this chapter again to run this step.' },
+  // 作者在生成期间改了本章「章节要点」（#512）。重试另开一次运行按现在的要点重新生成，写入时会替换作者的改动。
+  { code: /^GENERATION_FINALIZATION_NOTES_CHANGED$/, retry: 'described',
+    zh: '生成期间本章的「章节要点」被改动过（例如在章节蓝图里手动修改），为免覆盖这次改动，本次没有写入，角色状态更新也还没有进行。点「重试」会重新生成，并用新结果替换现在的章节要点；想保留这次改动就不要重试。',
+    en: "This chapter's Chapter notes changed while this step was running (for example, they were edited on the chapter blueprint), so nothing was written to avoid overwriting that change, and the character state update has not run yet. Retry generates the notes again and replaces the current Chapter notes. To keep your change, don't retry." },
   { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: { after: 'chapter_notes' },
     zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
 ]
