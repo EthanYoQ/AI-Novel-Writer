@@ -448,6 +448,16 @@ function snapshotWithCharacterSyncFacts(
     })
 }
 
+/** 作者维护的字段。区间重写只替换生成的字段；请求里这些字段为空时沿用已有行的值。 */
+const AUTHOR_FIELDS = ['userGuidance', 'notes', 'notesUpdatedAt'] as const
+
+function withExistingAuthorFields(blueprint: BlueprintData, existing: BlueprintData | undefined): BlueprintData {
+    const kept = existing
+        ? Object.fromEntries(AUTHOR_FIELDS.filter(key => blueprint[key] === '').map(key => [key, existing[key]]))
+        : {}
+    return { ...blueprint, ...kept }
+}
+
 function samePersistedBlueprint(left: BlueprintData, right: BlueprintData): boolean {
     return left.chapterNumber === right.chapterNumber
         && left.title === right.title
@@ -628,14 +638,20 @@ export class BlueprintRepository {
                     'DELETE FROM blueprints WHERE chapter_number < ? OR chapter_number > ?',
                 ).run(request.startChapter, request.endChapter)
             }
-            for (const blueprint of request.blueprints) {
+            const existingByChapter = new Map((db.prepare(
+                'SELECT * FROM blueprints WHERE chapter_number BETWEEN ? AND ?',
+            ).all(request.startChapter, request.endChapter) as BlueprintRow[]).map(row => [row.chapter_number, rowToData(row)] as const))
+            const blueprints = request.blueprints.map(blueprint => (
+                withExistingAuthorFields(blueprint, existingByChapter.get(blueprint.chapterNumber))
+            ))
+            for (const blueprint of blueprints) {
                 BlueprintRepository.upsert(blueprint, db)
             }
 
             const persisted = readExactRange(db, request)
 
             const expectedByChapter = new Map(
-                request.blueprints.map(blueprint => [blueprint.chapterNumber, blueprint] as const),
+                blueprints.map(blueprint => [blueprint.chapterNumber, blueprint] as const),
             )
             for (const saved of persisted) {
                 const expected = expectedByChapter.get(saved.chapterNumber)
@@ -644,7 +660,7 @@ export class BlueprintRepository {
                 }
             }
 
-            const characterSyncInput = request.blueprints.map(blueprint => ({ ...blueprint }))
+            const characterSyncInput = blueprints
             db.prepare(`
               INSERT INTO blueprint_commit_operations (
                 operation_id, payload_hash, mode, start_chapter, end_chapter, character_sync_input
