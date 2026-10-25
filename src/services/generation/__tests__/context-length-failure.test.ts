@@ -5,7 +5,8 @@ import { knownAppErrorMessage } from '../../../i18n/app-errors'
 import { runFailure } from '../../../components/run/run-failure'
 import type { WorkflowRun } from '../../../stores/workflow-store'
 
-// 讨论区 #77：服务商以上下文超长拒绝时，运行以登记过的码失败，界面指向模型设置的上下文窗口。
+// 讨论区 #77：服务商以上下文超长拒绝时，运行以登记过的码失败，界面建议换用上下文更长的模型或精简本章材料。
+// 「上下文窗口」设置不再影响发送，所以文案不再指向它（维护者 2026-10-26 确认）。
 
 const handle: MainGenerationRunHandle = { projectId: '项目', epoch: '会话', rootActionId: '动作', runId: '运行' }
 const task: GenerationTask = { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '写第 9 章' }] }
@@ -40,13 +41,19 @@ describe('讨论区 #77：服务商上下文超长', () => {
     await expect(complete('GENERATION_PROVIDER_FAILED')).resolves.toMatchObject({ status: 'incomplete', finishReason: 'error' })
   })
 
-  it.each([['zh-CN', '模型设置 → 上下文窗口'], ['en-US', 'Model settings → Context Window']] as const)('%s 文案指向模型设置的上下文窗口', (locale, pointer) => {
-    expect(knownAppErrorMessage(locale, new Error('GENERATION_CONTEXT_LENGTH_EXCEEDED'))).toContain(pointer)
+  it.each([
+    ['zh-CN', ['换用上下文更长的模型', '精简本章要求、参考材料'], '上下文窗口'],
+    ['en-US', ['model with a longer context', 'shorten the chapter request and reference material'], 'Context Window'],
+  ] as const)('%s 文案建议换模型或精简材料，不指向上下文窗口设置', (locale, advice, stale) => {
+    const message = knownAppErrorMessage(locale, new Error('GENERATION_CONTEXT_LENGTH_EXCEEDED'))
+    for (const phrase of advice) expect(message).toContain(phrase)
+    expect(message).not.toContain(stale)
   })
 
   it('写稿卡片说明超长原因，不再让作者调整章节要求', () => {
     const { presentation } = runFailure(failedDraft("Error invoking remote method 'generation:execute': Error: GENERATION_CONTEXT_LENGTH_EXCEEDED"))
-    expect(presentation.reason).toContain('模型设置 → 上下文窗口')
+    expect(presentation.reason).toContain('换用上下文更长的模型')
+    expect(presentation.reason).not.toContain('上下文窗口')
     expect(presentation.persistence).toBe('本次未保存草稿或正文章节。')
   })
 
