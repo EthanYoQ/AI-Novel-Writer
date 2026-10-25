@@ -246,6 +246,9 @@ const ERROR_KEYS = {
   LLM_MODEL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
   LLM_GLOBAL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
   LLM_DEFAULT_MODEL_ROLLBACK_FAILED: 'error.defaultModelRollbackFailed',
+  // 分工模型（#517）：设置页给某个环节指定模型时被拒绝的原因。
+  LLM_STAGE_MODEL_UNAVAILABLE: 'error.stageModelUnavailable',
+  LLM_STAGE_MODEL_REQUEST_INVALID: 'error.stageModelRequestInvalid',
   MODEL_ENDPOINT_INVALID: 'error.modelEndpointInvalid',
   MODEL_OUTPUT_LIMIT_INVALID: 'error.modelOutputLimitInvalid',
   // 生成与连接测试都会按模型设置组请求参数，Kimi 官方接口的温度超出范围时在发请求前拒绝。
