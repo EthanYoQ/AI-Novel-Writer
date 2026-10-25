@@ -25,6 +25,7 @@ let rejectFirstLease: ((error: Error) => void) | null
 let leaseRequestCount: number
 
 const APP_MIN_WINDOW_WIDTH = 1024
+const nextFrames = () => act(async () => { await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
 
 beforeEach(async () => {
   await page.viewport(APP_MIN_WINDOW_WIDTH, 768)
@@ -256,19 +257,28 @@ describe('CodeMirror editor AI generation boundary', () => {
     expect(note.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
   })
 
-  it('keeps a finished preview inside the viewport after it grows past the loading height', async () => {
+  it('keeps a finished preview inside the viewport from the first frame after it grows past the loading height', async () => {
     deferStream = true
     await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
     await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
     await act(async () => page.getByRole('button', { name: '润色' }).click())
     await vi.waitFor(() => expect(listeners.has('llm:stream-done')).toBe(true))
 
+    const bar = container.querySelector('.cm-selbar')!
+    const topsBeforePaint: number[] = []
+    const observer = new ResizeObserver(() => topsBeforePaint.push(bar.getBoundingClientRect().top))
+    observer.observe(bar)
+    await nextFrames()
+
     await act(async () => {
       listeners.get('llm:stream-done')?.({ requestId: pendingRequestId!, fullText: '新段落。'.repeat(150), finishReason: 'stop' } as never)
     })
+    await nextFrames()
+    observer.disconnect()
 
     await expect.element(page.getByRole('button', { name: '替换' })).toBeEnabled()
-    expect(container.querySelector('.cm-selbar')!.getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
+    expect(topsBeforePaint.length).toBeGreaterThan(1)
+    expect(Math.min(...topsBeforePaint, bar.getBoundingClientRect().top)).toBeGreaterThanOrEqual(0)
   })
 
   it('keeps the toolbar inside the viewport on the first selection near the right edge', async () => {
