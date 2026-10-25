@@ -389,7 +389,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   useProjectStore.setState({ currentProject: null })
-  useLLMStore.setState({ defaultModelId: null })
+  useLLMStore.setState({ models: [], stageModelIds: {}, defaultModelId: null })
 })
 
 describe('RunFinalizePostProcessCommand character-state persistence', () => {
@@ -482,6 +482,19 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
         currentState: expect.objectContaining({ keyItems: 'brass key' }),
       })],
     })
+  })
+
+  it.each([
+    ['a single-chapter finalize asks for the finalization stage model', undefined, 'post-model'],
+    ['a batch or import context keeps the model it already froze', 'batch-model', 'batch-model'],
+  ])('%s', async (_label, frozenModelId, expected) => {
+    insertFinalizedDraft(7, 2)
+    useLLMStore.setState({ models: [{ id: 'test-model', purposes: ['generation'] }, { id: 'post-model', purposes: ['generation'] }] as never,
+      stageModelIds: { finalization: 'post-model', drafting: 'test-model' } })
+    await command('Chapter 2 finalized content').execute({
+      step: {}, context: { ...workflowContext, ...(frozenModelId ? { generationModelId: frozenModelId } : {}) }, callbacks: callbacks(),
+    })
+    expect(selections.map(selection => (selection as { modelId: string }).modelId)).toEqual([expected, expected])
   })
 
   it('covers the full finalized source and atomically persists one valid state change', async () => {

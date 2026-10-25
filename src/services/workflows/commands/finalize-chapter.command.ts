@@ -1,6 +1,6 @@
 import type { FinalizedCharacterArtifact } from '../../../shared/finalized-character-generation'
 import { runFinalizationGeneration } from '../../finalization-generation'
-import { useLLMStore } from '../../../stores/llm-store'
+import { routeModelId } from '../../model-routing'
 import type { FinalizationGenerationEffect } from '../../../shared/finalization-generation'
 import { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
 export { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
@@ -384,7 +384,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
     const generation: FinalizePostProcessGeneration = {
       finalizedStage: (stepKey, generationContext) => runFinalizationGeneration({
         session: projectSession, slot: { source: this.params.finalizedSource, stepKey },
-        modelId: () => generationContext.generationModelId ?? useLLMStore.getState().defaultModelId ?? '',
+        modelId: () => generationContext.generationModelId ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes') ?? '',
         ...(generationContext.data.generationBatchId && generationContext.mainGenerationRootHandle
           ? { parentRootActionId: generationContext.mainGenerationRootHandle.rootActionId } : {}),
         ...explicit[stepKey],

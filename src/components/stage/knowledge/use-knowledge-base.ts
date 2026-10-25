@@ -16,6 +16,7 @@ import type { ModelProfile, ProjectSessionContext } from '../../../shared/ipc-ch
 import { sameProjectSessionContext } from '../../../shared/project-session-context'
 import { knowledgeDraftDirty, type KnowledgeDraft } from '../../../stores/editor-store'
 import { useLLMStore } from '../../../stores/llm-store'
+import { routeModelId } from '../../../services/model-routing'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { navigate } from '../../../stores/navigation/navigation-intents'
 import { useProjectStore } from '../../../stores/project-store'
@@ -389,8 +390,8 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
       const localRun = useWorkflowStore.getState().history.find(run => run.id === localRunId)
       if (localRun?.status !== 'completed' || !isProjectSessionCurrent(projectSession)) return
 
-      const llmState = useLLMStore.getState()
-      const model = llmState.models.find(candidate => candidate.id === llmState.defaultModelId)
+      const modelId = routeModelId('planning-material-character-extraction')
+      const model = useLLMStore.getState().models.find(candidate => candidate.id === modelId)
       if (!model) {
         toast.success(text(
           '创作资料已仅导入本地知识库；配置生成模型后可提取角色卡',
