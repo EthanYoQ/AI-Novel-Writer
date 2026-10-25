@@ -299,6 +299,22 @@ describe('单章视图的主按钮随五种状态变化', () => {
       .toEqual({ content: `${ORIGINAL}\n\n他回头了。`, snapshot: `${ORIGINAL}\n\n他回头了。`, draftId: draft.id })
   })
 
+  it('被替换的旧定稿：标「已被替换的定稿」、正文只读，没有编辑与删除入口，可回到当前稿', async () => {
+    const replaced = backend.addDraft({ status: 'superseded' })
+    backend.addDraft({ status: 'finalized', version: 2 })
+    await mount()
+    await openDraft(replaced.id)
+
+    await expect.element(page.getByText('已被替换的定稿，只读')).toBeVisible()
+    await expect.element(page.getByRole('button', { name: /本章版本：已被替换的定稿 v1/ })).toBeVisible()
+    expect(document.querySelector('.stage-ch-prose')?.getAttribute('data-readonly')).toBe('true')
+    await click('更多操作')
+    const items = [...document.querySelectorAll('[role="menuitem"]')].map(item => item.textContent?.trim())
+    expect(items).toEqual(expect.arrayContaining(['版本历史', '复制本章正文']))
+    expect(items.some(item => /删除|定稿…|修稿…/u.test(item ?? ''))).toBe(false)
+    expect(page.getByRole('button', { name: '回到当前稿' }).element()).toBeTruthy()
+  })
+
   it('定稿：正文只读，列出后处理各步；重试失败步骤只重跑失败的，单步重试只跑那一步', async () => {
     const draft = backend.addDraft({ status: 'finalized' })
     backend.state.postProcess = { steps: [
