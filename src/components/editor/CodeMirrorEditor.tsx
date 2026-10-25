@@ -49,6 +49,12 @@ function clampBubbleTop(bottom: number, height: number): number {
   return Math.max(bottom, height + 8)
 }
 
+// 圈选一大段并向下滚动、选区顶部滚出视区时，气泡悬浮在视区顶部边缘，直到选区底部也滚出视区。
+function selectionBubbleTop(top: number, bottom: number, viewRect: DOMRect): number {
+  const anchor = top - 5
+  return anchor < viewRect.top + 45 ? Math.min(viewRect.top + 45, bottom - 10) : anchor
+}
+
 const AI_ACTIONS: readonly { key: EditorInlineFixedAction; label: Label }[] = [
   { key: 'refine', label: ['润色', 'Refine'] },
   { key: 'expand', label: ['扩写', 'Expand'] },
@@ -136,10 +142,15 @@ export default function CodeMirrorEditor({
   const [activeAIAction, setActiveAIAction] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState<string | null>(null)
   const [activeNote, setActiveNote] = useState<string | null>(null)
-  const bubbleRef = useRef<HTMLDivElement>(null)
   const [bubbleSize, setBubbleSize] = useState({ width: 0, height: 0 })
-  const bubbleShape = `${bubbleOpen}:${bubblePos.top !== 0}:${aiResult === null}:${noteDraft === null}:${uiLocale}:${mode}`
-  useLayoutEffect(() => { setBubbleSize({ width: bubbleRef.current?.offsetWidth ?? 0, height: bubbleRef.current?.offsetHeight ?? 0 }) }, [bubbleShape])
+  const bubbleRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return
+    const measure = () => setBubbleSize(size => size.width === node.offsetWidth && size.height === node.offsetHeight ? size : { width: node.offsetWidth, height: node.offsetHeight })
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
   const bubbleLeft = clampBubbleLeft(bubblePos.left, bubbleSize.width / 2)
   const bubbleTop = bubblePos.inView ? clampBubbleTop(bubblePos.top, bubbleSize.height) : bubblePos.top
   const [loadingDots, setLoadingDots] = useState('.')
@@ -246,13 +257,16 @@ export default function CodeMirrorEditor({
     const updatePosition = () => {
       const sel = window.getSelection()
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-        const coords = view.coordsAtPos(selectionRange.from)
-        if (coords) {
-          const viewRect = scrollDOM.getBoundingClientRect()
-          setBubblePos({ top: coords.top, left: coords.left, inView: coords.bottom >= viewRect.top && coords.top <= viewRect.bottom })
-        } else {
+        const start = view.coordsAtPos(selectionRange.from)
+        if (!start) {
           setBubbleOpen(false)
+          return
         }
+        const viewRect = scrollDOM.getBoundingClientRect()
+        // 选区末尾不在渲染范围内时一定在起点之下，按延伸到无穷远处理。
+        const bottom = view.coordsAtPos(selectionRange.to, -1)?.bottom ?? Infinity
+        const inView = bottom >= viewRect.top && start.top <= viewRect.bottom
+        setBubblePos({ top: inView ? selectionBubbleTop(start.top, bottom, viewRect) : start.top, left: start.left, inView })
         return
       }
 
@@ -266,16 +280,7 @@ export default function CodeMirrorEditor({
         return
       }
 
-      let top = rect.top - 5 // 与选区顶部有些许间距
-      const left = rect.left + rect.width / 2
-
-      // 当用户圈选了一大段并向下滚动时，如果选区顶部滚出了视区，
-      // 我们让气泡悬浮在视区顶部边缘，直到选区底部也完全滚出视区。
-      if (top < viewRect.top + 45) {
-        top = Math.min(viewRect.top + 45, rect.bottom - 10)
-      }
-
-      setBubblePos({ top, left, inView: true })
+      setBubblePos({ top: selectionBubbleTop(rect.top, rect.bottom, viewRect), left: rect.left + rect.width / 2, inView: true })
     }
 
     const onScrollOrResize = () => {
