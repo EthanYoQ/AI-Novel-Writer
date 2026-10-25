@@ -17,7 +17,7 @@ import { countDraftUnits } from '../../shared/draft-units'
 import { useLocaleStore } from '../../stores/locale-store'
 import { getActiveProjectSessionContext } from '../../shared/project-session-context'
 import { livePreview, paperHeadFacet, type PaperHead } from './live-preview'
-import { commandKeyLabel } from '../stage/shortcut-keys'
+import { commandKeyLabel, isComposing } from '../stage/shortcut-keys'
 
 export type CodeMirrorEditorProps = {
   content: string
@@ -43,6 +43,10 @@ type Label = readonly [string, string]
 function clampBubbleLeft(centerLeft: number, halfWidth: number): number {
   if (!halfWidth) return centerLeft
   return Math.min(Math.max(centerLeft, halfWidth + 8), window.innerWidth - halfWidth - 8)
+}
+
+function clampBubbleTop(bottom: number, height: number): number {
+  return Math.max(bottom, height + 8)
 }
 
 const AI_ACTIONS: readonly { key: EditorInlineFixedAction; label: Label }[] = [
@@ -133,10 +137,11 @@ export default function CodeMirrorEditor({
   const [noteDraft, setNoteDraft] = useState<string | null>(null)
   const [activeNote, setActiveNote] = useState<string | null>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
-  const [bubbleHalfWidth, setBubbleHalfWidth] = useState(0)
-  const bubbleShape = `${bubbleOpen}:${aiResult === null}:${noteDraft === null}:${uiLocale}:${mode}`
-  useLayoutEffect(() => { setBubbleHalfWidth((bubbleRef.current?.offsetWidth ?? 0) / 2) }, [bubbleShape])
-  const bubbleLeft = clampBubbleLeft(bubblePos.left, bubbleHalfWidth)
+  const [bubbleSize, setBubbleSize] = useState({ width: 0, height: 0 })
+  const bubbleShape = `${bubbleOpen}:${bubblePos.top !== 0}:${aiResult === null}:${noteDraft === null}:${uiLocale}:${mode}`
+  useLayoutEffect(() => { setBubbleSize({ width: bubbleRef.current?.offsetWidth ?? 0, height: bubbleRef.current?.offsetHeight ?? 0 }) }, [bubbleShape])
+  const bubbleLeft = clampBubbleLeft(bubblePos.left, bubbleSize.width / 2)
+  const bubbleTop = clampBubbleTop(bubblePos.top, bubbleSize.height)
   const [loadingDots, setLoadingDots] = useState('.')
   const [selectionRange, setSelectionRange] = useState<{ from: number, to: number } | null>(null)
   const aiRequestSequenceRef = useRef(0)
@@ -588,7 +593,7 @@ export default function CodeMirrorEditor({
           className="paper-ink cm-selbar"
           data-theme={inkThemeName}
           data-preview={aiResult !== null || undefined}
-          style={{ top: bubblePos.top, left: bubbleLeft }}
+          style={{ top: bubbleTop, left: bubbleLeft }}
           onMouseDown={(e) => { if (!(e.target instanceof HTMLTextAreaElement)) e.preventDefault() }}
         >
           {aiResult !== null ? (
@@ -637,7 +642,7 @@ export default function CodeMirrorEditor({
                 value={noteDraft}
                 onChange={(e) => setNoteDraft(Array.from(e.target.value).slice(0, EDITOR_INLINE_INSTRUCTION_MAX_LENGTH).join(''))}
                 onKeyDown={(e) => {
-                  if (e.nativeEvent.isComposing) return
+                  if (isComposing(e.nativeEvent)) return
                   if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelNote() }
                   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); submitNote() }
                 }}

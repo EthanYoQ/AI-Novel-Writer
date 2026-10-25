@@ -15,7 +15,7 @@ const instructions = {
 
 const validInstruction = (input: EditorInlineInput) => input.action === 'instruct'
   ? typeof input.instruction === 'string' && input.instruction.trim().length > 0 && [...input.instruction].length <= EDITOR_INLINE_INSTRUCTION_MAX_LENGTH
-  : Object.hasOwn(instructions, input.action) && !Object.hasOwn(input, 'instruction')
+  : typeof input.action === 'string' && Object.hasOwn(instructions, input.action) && !Object.hasOwn(input, 'instruction')
 
 export function validateEditorInlineInput(input: EditorInlineInput): EditorInlineInput {
   if (!input || typeof input !== 'object' || Array.isArray(input)
