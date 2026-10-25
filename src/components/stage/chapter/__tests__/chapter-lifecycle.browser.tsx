@@ -399,6 +399,78 @@ describe('单章视图的主按钮随五种状态变化', () => {
       expect(retryRows()).toEqual(['角色状态更新'])
     })
 
+    it.each([
+      ['zh-CN', '重新定稿本章', /Retry|Finalize/u],
+      ['en-US', 'Finalize this chapter again', /\p{Script=Han}/u],
+    ] as const)('#512 %s：定稿时在场的角色后来被删除，说明作者能做什么，不显示错误码，也不摆重试', async (locale, hint, otherLanguage) => {
+      await act(async () => useLocaleStore.setState({ locale }))
+      await show([
+        { stepKey: 'kb_import', label: '导入知识库', ok: true },
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 3, errorMsg: `${IPC}FINALIZED_CHARACTER_ID_RETIRED` },
+      ])
+      const detail = host!.querySelector('.stage-ch-post-step[data-state="failed"] .stage-ch-post-detail')!.textContent!
+      expect(detail).not.toMatch(/FINALIZED_CHARACTER|Error invoking/u)
+      expect(detail).toContain(hint)
+      expect(detail).not.toMatch(otherLanguage)
+      expect(retryRows()).toEqual([])
+      expect(cardRetry()).toBeNull()
+    })
+
+    it('#512 章节要点在生成期间被作者改过：这一行能重试，说明写明重试会替换作者改的要点', async () => {
+      await show([
+        { stepKey: 'kb_import', label: '导入知识库', ok: true },
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: false, attemptCount: 3, errorMsg: `${IPC}GENERATION_FINALIZATION_NOTES_CHANGED` },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: 'GENERATION_FINALIZATION_PREDECESSOR_REQUIRED' },
+      ])
+      expect(retryRows()).toEqual(['章节剧情要点'])
+      expect(cardRetry()).toBe('重试失败步骤')
+      const detail = host!.querySelector('.stage-ch-post-step[data-state="failed"] .stage-ch-post-detail')!.textContent!
+      expect(detail).not.toMatch(/GENERATION_|Error invoking/u)
+      expect(detail).toContain('替换')
+    })
+
+    it.each([
+      ['zh-CN', '这一步来自旧版本', '3 / 3 完成'],
+      ['en-US', 'earlier version', '3 / 3 done'],
+    ] as const)('#512 %s：旧版本留下的步骤仍列出并说明，不摆重试，也不算进完成数', async (locale, note, count) => {
+      await act(async () => useLocaleStore.setState({ locale }))
+      const draft = backend.addDraft({ status: 'finalized' })
+      backend.state.postProcess = { steps: [
+        { stepKey: 'kb_import', label: '导入知识库', ok: true },
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: true },
+        { stepKey: 'style_analysis', label: '文风自动学习', ok: false, attemptCount: 1, errorMsg: '模型长时间没有响应' },
+      ] }
+      await mount()
+      await openDraft(draft.id)
+      await vi.waitFor(() => expect(host!.querySelectorAll('.stage-ch-post-step')).toHaveLength(4))
+      const legacy = [...host!.querySelectorAll('.stage-ch-post-step')].find(row => row.querySelector('b')!.textContent === '文风自动学习')!
+      expect(legacy.getAttribute('data-state')).not.toBe('failed')
+      expect(legacy.querySelector('.stage-ch-post-detail')!.textContent).toContain(note)
+      expect(retryRows()).toEqual([])
+      expect(cardRetry()).toBeNull()
+      expect(host!.querySelector('.stage-ch-post-title small')!.textContent).toBe(count)
+    })
+
+    it('#512 旧版本留下的步骤当时成功了也一样说明它已不再运行，不算进完成数', async () => {
+      const draft = backend.addDraft({ status: 'finalized' })
+      backend.state.postProcess = { steps: [
+        { stepKey: 'kb_import', label: '导入知识库', ok: true },
+        { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },
+        { stepKey: 'character_cards', label: '角色状态更新', ok: false, attemptCount: 1, errorMsg: '模型长时间没有响应' },
+        { stepKey: 'style_analysis', label: '文风自动学习', ok: true },
+      ] }
+      await mount()
+      await openDraft(draft.id)
+      await vi.waitFor(() => expect(host!.querySelectorAll('.stage-ch-post-step')).toHaveLength(4))
+      const legacy = [...host!.querySelectorAll('.stage-ch-post-step')].find(row => row.querySelector('b')!.textContent === '文风自动学习')!
+      expect(legacy.getAttribute('data-state')).not.toBe('success')
+      expect(legacy.querySelector('.stage-ch-post-detail')!.textContent).toContain('这一步来自旧版本')
+      expect(host!.querySelector('.stage-ch-post-title small')!.textContent).toBe('2 / 3 完成')
+      expect(retryRows()).toEqual(['角色状态更新'])
+    })
+
     it('没登记的错误照常显示重试', async () => {
       await show([
         { stepKey: 'chapter_notes', label: '章节剧情要点', ok: true },

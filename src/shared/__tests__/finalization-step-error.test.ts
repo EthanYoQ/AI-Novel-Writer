@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeFinalizationStepError, finalizationStepErrorCode } from '../finalization-step-error'
+import { describeFinalizationStepError, finalizationStepErrorCode, planFinalizationRetry } from '../finalization-step-error'
 
 const zh = (zhCNText: string) => zhCNText
 const en = (_zhCNText: string, enUSText: string) => enUSText
@@ -77,4 +77,76 @@ describe('定稿后处理步骤错误', () => {
     expect(describeFinalizationStepError('FINALIZATION_GENERATION_RESULT_UNUSABLE', en)).not.toMatch(/no new model request/)
     expect(describeFinalizationStepError('FINALIZATION_GENERATION_ARTIFACT_REQUIRED', zh)).toContain('本次没有发出新的模型请求')
   })
+
+  describe('#512 提交时项目数据已变', () => {
+    const IPC = "Error invoking remote method 'project-session:invoke': Error: "
+    const failed = (error: string) => ({ ok: false, error })
+
+    it.each([
+      'GENERATION_FINALIZATION_NOTES_CHANGED',
+      'GENERATION_FINALIZATION_IDENTITY_CHANGED',
+      'FINALIZED_CHARACTER_CONTEXT_CHANGED',
+      'FINALIZED_CHARACTER_ID_RETIRED',
+    ])('%s：中英文都给作者能照着做的说明，不带错误码', code => {
+      expect(finalizationStepErrorCode(`${IPC}${code}`)).toBe(code)
+      for (const text of [describeFinalizationStepError(`${IPC}${code}`, zh), describeFinalizationStepError(code, en)]) {
+        expect(text).not.toMatch(/Error invoking|GENERATION_|FINALIZED_/u)
+      }
+      expect(describeFinalizationStepError(code, en)).not.toMatch(/\p{Script=Han}/u)
+    })
+
+    it('章节要点在生成期间被作者改过：重试有用，说明写明重试会替换作者改的要点，不机械地补「请点重试」', () => {
+      const plan = planFinalizationRetry({
+        kb_import: { ok: true },
+        chapter_notes: failed('GENERATION_FINALIZATION_NOTES_CHANGED'),
+        character_cards: failed('GENERATION_FINALIZATION_PREDECESSOR_REQUIRED'),
+      })
+      expect([...plan.rows]).toEqual(['chapter_notes'])
+      expect(plan.card).toEqual(['chapter_notes', 'character_cards'])
+      const zhText = describeFinalizationStepError('GENERATION_FINALIZATION_NOTES_CHANGED', zh)
+      const enText = describeFinalizationStepError('GENERATION_FINALIZATION_NOTES_CHANGED', en)
+      expect(zhText).toContain('替换')
+      expect(enText).toContain('replaces')
+      expect(zhText).not.toContain('请点「重试」重新生成这一步')
+      expect(enText).not.toContain('Select Retry to generate this step again')
+    })
+
+    it.each([
+      'GENERATION_FINALIZATION_IDENTITY_CHANGED',
+      'FINALIZED_CHARACTER_CONTEXT_CHANGED',
+      'FINALIZED_CHARACTER_ID_RETIRED',
+    ])('%s：重试也过不去，这一行和整卡都不重试，说明告诉作者重新定稿', code => {
+      for (const stepKey of ['chapter_notes', 'character_cards']) {
+        const plan = planFinalizationRetry({ kb_import: { ok: true }, chapter_notes: { ok: true }, [stepKey]: failed(`${IPC}${code}`) })
+        expect({ rows: [...plan.rows], card: plan.card }).toEqual({ rows: [], card: [] })
+      }
+      expect(describeFinalizationStepError(code, zh)).toContain('重新定稿本章')
+      expect(describeFinalizationStepError(code, en)).toContain('Finalize this chapter again')
+      expect(describeFinalizationStepError(code, zh)).toContain('再点「重试」结果也一样')
+    })
+
+    it('没登记的错误在现有步骤上照常可以重试', () => {
+      const plan = planFinalizationRetry({ kb_import: failed('向量服务没有响应'), chapter_notes: { ok: true }, character_cards: { ok: true } })
+      expect({ rows: [...plan.rows], card: plan.card }).toEqual({ rows: ['kb_import'], card: ['kb_import'] })
+    })
+  })
+
+  describe('#512 旧版本跑批里留下、现在流程已没有的步骤', () => {
+    it('没登记的错误也不排进按行重试与整卡重试，单独列出', () => {
+      const plan = planFinalizationRetry({
+        kb_import: { ok: false, error: '向量服务没有响应' },
+        chapter_notes: { ok: true },
+        character_cards: { ok: true },
+        style_analysis: { ok: false, error: '模型长时间没有响应' },
+      })
+      expect({ rows: [...plan.rows], card: plan.card, retired: [...plan.retired] })
+        .toEqual({ rows: ['kb_import'], card: ['kb_import'], retired: ['style_analysis'] })
+    })
+
+    it('只有旧步骤失败时，整张卡没有可以重试的步骤', () => {
+      const plan = planFinalizationRetry({ kb_import: { ok: true }, chapter_notes: { ok: true }, character_cards: { ok: true }, style_analysis: { ok: false } })
+      expect({ rows: [...plan.rows], card: plan.card }).toEqual({ rows: [], card: [] })
+    })
+  })
 })
+

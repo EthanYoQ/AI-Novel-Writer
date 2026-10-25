@@ -37,6 +37,19 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: S
   { code: /^FINALIZED_CHARACTER_FIELD_CONFLICT$/, retry: 'never',
     zh: '正文定稿已保存，但角色卡没有自动更新：生成期间这个角色的当前状态被改动过（例如在角色页手动修改，或采纳了角色状态建议），为免覆盖这次改动，本次没有写入，再点「重试」结果也一样。这次改动已保留，请到角色页的「当前状态」查看这个角色，需要本章带来的变化时直接手动修改。',
     en: "The finalized chapter text is saved, but the character card was not updated: this character's current state changed while this step was running (for example, it was edited on the Characters page or a character state suggestion was accepted), so nothing was written to avoid overwriting that change. Retrying gives the same result. The change is kept. Open the character's Current state view, check it, and edit it by hand if this chapter should change it." },
+  // 生成开始后正文依据的连续性记录变了（#512）：运行冻结的上下文不会变，重试先按来源已变拒绝。
+  // CONTEXT_CHANGED 比对的字段提交前的来源校验已整组比过，按同一情形说明。
+  { code: /^(GENERATION_FINALIZATION_IDENTITY_CHANGED|FINALIZED_CHARACTER_CONTEXT_CHANGED)$/, retry: 'never',
+    zh: '正文定稿已保存，但这一步没有写入：生成期间有其他章节重新定稿或被删除，本章依据的前文记录变了，再点「重试」结果也一样。请重新定稿本章后再处理。',
+    en: 'The finalized chapter text is saved, but this step was not saved: another chapter was finalized again or deleted while it was running, so the earlier-chapter records this chapter relies on changed. Retrying gives the same result. Finalize this chapter again to run this step.' },
+  // 定稿时在场的角色后来被删除（#512），重试同样先按来源已变拒绝。
+  { code: /^FINALIZED_CHARACTER_ID_RETIRED$/, retry: 'never',
+    zh: '正文定稿已保存，但这一步没有写入：本章定稿时角色名单里的角色，有的后来被删除了，再点「重试」结果也一样。请重新定稿本章后再处理。',
+    en: 'The finalized chapter text is saved, but this step was not saved: a character who was in the cast when this chapter was finalized has since been deleted. Retrying gives the same result. Finalize this chapter again to run this step.' },
+  // 作者在生成期间改了本章「章节要点」（#512）。重试另开一次运行按现在的要点重新生成，写入时会替换作者的改动。
+  { code: /^GENERATION_FINALIZATION_NOTES_CHANGED$/, retry: 'described',
+    zh: '生成期间本章的「章节要点」被改动过（例如在章节蓝图里手动修改），为免覆盖这次改动，本次没有写入，角色状态更新也还没有进行。点「重试」会重新生成，并用新结果替换现在的章节要点；想保留这次改动就不要重试。',
+    en: "This chapter's Chapter notes changed while this step was running (for example, they were edited on the chapter blueprint), so nothing was written to avoid overwriting that change, and the character state update has not run yet. Retry generates the notes again and replaces the current Chapter notes. To keep your change, don't retry." },
   { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: { after: 'chapter_notes' },
     zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
 ]
@@ -63,17 +76,24 @@ export function describeFinalizationStepError(error: string, text: (zhCNText: st
   )
 }
 
+/** 定稿后处理现在会跑的步骤，按运行顺序。旧版本的跑批里可能还留着别的步骤（如 style_analysis）。 */
+const FINALIZE_POST_PROCESS_STEP_KEYS = ['kb_import', 'chapter_notes', 'character_cards'] as const
+export type FinalizePostProcessStepKey = typeof FINALIZE_POST_PROCESS_STEP_KEYS[number]
+const CURRENT_STEPS: ReadonlySet<string> = new Set(FINALIZE_POST_PROCESS_STEP_KEYS)
+
 /**
- * 一张定稿后处理卡（步骤名到结果）的重试安排。rows：可以单独重试的未成功步骤；card：「重试失败步骤」要重跑的步骤，按卡上顺序。
- * 没有错误或错误没登记的照常可以重试。
+ * 一张定稿后处理卡（步骤名到结果）的重试安排。rows：可以单独重试的未成功步骤；card：「重试失败步骤」要重跑的步骤，按卡上顺序；
+ * retired：现在流程已没有的步骤，不重试。
+ * 现有步骤没有错误或错误没登记的照常可以重试。
  */
-export function planFinalizationRetry(steps: Readonly<Record<string, { ok: boolean; error?: string }>>): { rows: ReadonlySet<string>; card: readonly string[] } {
+export function planFinalizationRetry(steps: Readonly<Record<string, { ok: boolean; error?: string }>>): { rows: ReadonlySet<string>; card: readonly string[]; retired: ReadonlySet<string> } {
   const entries = Object.entries(steps)
+  const retired = new Set(entries.map(([key]) => key).filter(key => !CURRENT_STEPS.has(key)))
   const succeeded = new Set(entries.filter(([, step]) => step.ok).map(([key]) => key))
-  const unfinished = entries.filter(([, step]) => !step.ok).map(([key, step]) => ({ key, retry: retryOf(step.error) }))
+  const unfinished = entries.filter(([key, step]) => !step.ok && !retired.has(key)).map(([key, step]) => ({ key, retry: retryOf(step.error) }))
   const direct = new Set(unfinished.filter(step => step.retry === 'prompt' || step.retry === 'described').map(step => step.key))
   const pick = (ready: (key: string) => boolean) => unfinished
     .filter(step => direct.has(step.key) || typeof step.retry === 'object' && ready(step.retry.after))
     .map(step => step.key)
-  return { rows: new Set(pick(key => succeeded.has(key))), card: pick(key => succeeded.has(key) || direct.has(key)) }
+  return { rows: new Set(pick(key => succeeded.has(key))), card: pick(key => succeeded.has(key) || direct.has(key)), retired }
 }

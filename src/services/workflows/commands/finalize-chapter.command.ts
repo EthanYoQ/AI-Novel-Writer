@@ -46,7 +46,7 @@ import { writingLanguageText } from '../../../shared/writing-language'
 import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
 import type { FinalizedCharacterGenerationReceipt } from '../../../shared/finalized-character-generation'
-import { finalizationStepErrorCode } from '../../../shared/finalization-step-error'
+import { finalizationStepErrorCode, type FinalizePostProcessStepKey } from '../../../shared/finalization-step-error'
 import { pluralEn } from '../../../shared/plural-en'
 
 export interface FinalizeChapterParams {
@@ -105,7 +105,7 @@ export function buildFinalizePostProcessSteps(
   projectionGeneration?: number,
   identityContext?: FinalizedCharacterContext,
 ): PostProcessStep[] {
-  const steps: PostProcessStep[] = []
+  const steps: (PostProcessStep & { key: FinalizePostProcessStepKey })[] = []
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   let generatedChapterNotes: string | undefined
 

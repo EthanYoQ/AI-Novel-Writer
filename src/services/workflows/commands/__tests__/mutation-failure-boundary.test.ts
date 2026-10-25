@@ -15,6 +15,7 @@ import { RefineFromReviewCommand as RuntimeRefineFromReviewCommand } from '../re
 import { ReviewChapterCommand as RuntimeReviewChapterCommand } from '../review-chapter.command'
 import { savePartialData } from '../architecture.command'
 import { runPostProcessPipeline } from '../../workflow-utils'
+import { planFinalizationRetry } from '../../../../shared/finalization-step-error'
 import { createBoundedCompletionError } from '../../bounded-completion'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 import type { CommandExecuteParams } from '../base-command'
@@ -733,6 +734,12 @@ describe('workflow mutation failure boundaries', () => {
 
   // Domain field/CAS/identity and same-artifact persistence retry coverage now
   // runs against actual SQLite in finalized-character-state and consumer suites.
+  it('#512 every step finalization runs today can be retried after an ordinary failure, and no other step name can', () => {
+    const keys = buildFinalizePostProcessSteps({ path: PROJECT_PATH }, 1, '第一章', '正文', { complete: vi.fn() }).map(step => step.key)
+    const plan = planFinalizationRetry(Object.fromEntries([...keys, 'style_analysis'].map(key => [key, { ok: false, error: '模型长时间没有响应' }])))
+    expect({ card: plan.card, retired: [...plan.retired] }).toEqual({ card: keys, retired: ['style_analysis'] })
+  })
+
   it('requires the main character-state seam and refuses the legacy name writer', async () => {
     const invoke = vi.fn(async () => { throw new Error('unexpected legacy IPC') })
     stubVelaIpc(invoke)
