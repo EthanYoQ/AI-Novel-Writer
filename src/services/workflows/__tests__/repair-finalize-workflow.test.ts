@@ -85,6 +85,20 @@ function postProcessStatus(characterOk = true, notesOk = true): PostProcessStatu
   }
 }
 
+/** 上次后处理留下一个失败的角色状态步骤：整卡重试会选中它。其他通道不该被调用。 */
+function failedCharacterRun(channel: string) {
+  if (channel === 'db:post-process-get-latest-run') {
+    return { id: 9, triggerSourceType: 'chapter_finalize', triggerSourceId: '3', sourceLabel: '第3章定稿', allCriticalPassed: true, createdAt: '', updatedAt: '' }
+  }
+  if (channel === 'db:post-process-get-steps') {
+    return [
+      { stepKey: 'chapter_notes', label: '章节要点', critical: true, ok: true, lastAttemptAt: '', attemptCount: 1 },
+      { stepKey: 'character_cards', label: '角色状态', critical: false, ok: false, errorMsg: '角色状态提取失败', lastAttemptAt: '', attemptCount: 1 },
+    ]
+  }
+  throw new Error(`unexpected IPC: ${channel}`)
+}
+
 beforeEach(() => {
   postProcess.execute.mockResolvedValue(postProcessStatus())
 })
@@ -154,7 +168,7 @@ describe('createRepairFinalizeWorkflow', () => {
         case 'db:blueprint-get':
           return { title: '定稿标题', characters: ['林舟'] }
         default:
-          throw new Error(`unexpected IPC: ${channel}`)
+          return failedCharacterRun(channel)
       }
     })
     vi.stubGlobal('window', { aiNovelAPI: { invoke } })
@@ -173,7 +187,7 @@ describe('createRepairFinalizeWorkflow', () => {
       draftId: 17,
       onlyFailed: true,
       retryInvalidResult: true,
-      stepKeys: stepKey ? [stepKey] : undefined,
+      stepKeys: [stepKey ?? 'character_cards'],
     })])
     expect(postProcess.execute).toHaveBeenCalledOnce()
   })
@@ -207,7 +221,7 @@ describe('createRepairFinalizeWorkflow', () => {
         case 'db:draft-get-full': return { content: '已定稿正文' }
         case 'db:continuity-read-source': return finalizedSource('已定稿正文')
         case 'db:blueprint-get': return { title: '定稿标题', characters: ['林舟'] }
-        default: throw new Error(`unexpected IPC: ${channel}`)
+        default: return failedCharacterRun(channel)
       }
     })
     vi.stubGlobal('window', { aiNovelAPI: { invoke } })
@@ -326,7 +340,7 @@ describe('createRepairFinalizeWorkflow', () => {
         case 'db:blueprint-get':
           return null
         default:
-          throw new Error(`unexpected IPC: ${channel}`)
+          return failedCharacterRun(channel)
       }
     })
     vi.stubGlobal('window', { aiNovelAPI: { invoke } })
