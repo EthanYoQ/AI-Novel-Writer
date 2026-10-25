@@ -60,7 +60,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@uiw/react-codemirror": "^4.25.9",
     "apache-arrow": "^18.1.0",
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "^12.10.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "diff-match-patch": "^1.0.5",
