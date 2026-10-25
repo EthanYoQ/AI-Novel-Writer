@@ -448,12 +448,15 @@ function snapshotWithCharacterSyncFacts(
     })
 }
 
-const AUTHOR_FIELD_GROUPS = [['userGuidance'], ['notes', 'notesUpdatedAt']] as const
+const AUTHOR_FIELD_GROUPS = [
+    { content: 'userGuidance', companions: [] },
+    { content: 'notes', companions: ['notesUpdatedAt'] },
+] as const
 
 function withExistingAuthorFields(blueprint: BlueprintData, existing: BlueprintData | undefined): BlueprintData {
-    const authorFields = AUTHOR_FIELD_GROUPS.flatMap((group) => {
-        const source = blueprint[group[0]] ? blueprint : existing
-        return group.map(key => [key, source?.[key] || ''] as const)
+    const authorFields = AUTHOR_FIELD_GROUPS.flatMap(({ content, companions }) => {
+        const source = blueprint[content] ? blueprint : existing
+        return [content, ...companions].map(key => [key, source?.[key] || ''] as const)
     })
     return { ...blueprint, ...Object.fromEntries(authorFields) }
 }
