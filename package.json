@@ -11,6 +11,7 @@
   },
   "main": "dist-electron/main.js",
   "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
     "predev": "node scripts/prepare-native-for-electron.mjs",
     "dev": "vite",
     "clean:build": "node scripts/clean-build-output.mjs",
