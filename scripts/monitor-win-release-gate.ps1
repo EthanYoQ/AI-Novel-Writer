@@ -17,82 +17,328 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
 namespace AiNovelReleaseGate {
+  public enum CommandLineState { Captured, ExitedBeforeRead, UnreadableWhileAlive }
+
+  // A process-start event is either Retained, with the kernel identity
+  // (key, start time, image, parent PID) complete, or Unretained with the
+  // stage that failed. There is no partially identified member.
   public sealed class JobProcessEvent {
     public string Kind { get; private set; }
     public int ProcessId { get; private set; }
-    public int? ExitCode { get; private set; }
-    public bool CaptureEstablished { get; private set; }
-    public bool ExitCodeCaptured { get; private set; }
     public uint JobMessage { get; private set; }
+    public bool Retained { get; private set; }
+    public string FailureStage { get; private set; }
+    public int? Win32Error { get; private set; }
+    public string CaptureAttemptedAt { get; private set; }
+    public long? RetainLatencyMicroseconds { get; private set; }
+    public string Key { get; private set; }
     public string ProcessStartTimeTicks { get; private set; }
     public string ProcessName { get; private set; }
     public string ImagePath { get; private set; }
-    public string CommandLine { get; private set; }
     public int? ParentProcessId { get; private set; }
     public string ParentProcessStartTimeTicks { get; private set; }
     public string ParentImagePath { get; private set; }
-    public bool IdentityCaptured { get; private set; }
-    public bool CommandLineCaptured { get; private set; }
-    public string IdentityCaptureError { get; private set; }
-    public string CaptureAttemptedAt { get; private set; }
-    public string CaptureFailureStage { get; private set; }
-    public int? CaptureWin32Error { get; private set; }
+    public CommandLineState? CommandLineState { get; private set; }
+    public string CommandLine { get; private set; }
+    public int? CommandLineRetries { get; private set; }
+    public string CommandLineStatus { get; private set; }
+    public long? CommandLineReadMicroseconds { get; private set; }
+    public string ExitKey { get; private set; }
+    public int? ExitCode { get; private set; }
+    public bool ExitCodeCaptured { get; private set; }
     public string RecordedAt { get; private set; }
 
-    internal JobProcessEvent(
-      string kind,
-      int processId,
-      int? exitCode,
-      bool captureEstablished,
-      bool exitCodeCaptured,
-      uint jobMessage,
-      string processStartTimeTicks = null,
-      string processName = null,
-      string imagePath = null,
-      string commandLine = null,
-      int? parentProcessId = null,
-      string parentProcessStartTimeTicks = null,
-      string parentImagePath = null,
-      bool identityCaptured = false,
-      bool commandLineCaptured = false,
-      string identityCaptureError = null,
-      string captureAttemptedAt = null,
-      string captureFailureStage = null,
-      int? captureWin32Error = null
-    ) {
+    public string CommandLineLoss {
+      get {
+        if (!CommandLineState.HasValue) return null;
+        if (CommandLineState.Value == AiNovelReleaseGate.CommandLineState.ExitedBeforeRead) return "exited-before-read";
+        if (CommandLineState.Value == AiNovelReleaseGate.CommandLineState.UnreadableWhileAlive) return "unreadable-while-alive";
+        return String.Empty;
+      }
+    }
+
+    private JobProcessEvent(string kind, int processId, uint jobMessage) {
       Kind = kind;
       ProcessId = processId;
-      ExitCode = exitCode;
-      CaptureEstablished = captureEstablished;
-      ExitCodeCaptured = exitCodeCaptured;
       JobMessage = jobMessage;
-      ProcessStartTimeTicks = processStartTimeTicks;
-      ProcessName = processName;
-      ImagePath = imagePath;
-      CommandLine = commandLine;
-      ParentProcessId = parentProcessId;
-      ParentProcessStartTimeTicks = parentProcessStartTimeTicks;
-      ParentImagePath = parentImagePath;
-      IdentityCaptured = identityCaptured;
-      CommandLineCaptured = commandLineCaptured;
-      IdentityCaptureError = identityCaptureError;
-      CaptureAttemptedAt = captureAttemptedAt;
-      CaptureFailureStage = captureFailureStage;
-      CaptureWin32Error = captureWin32Error;
       RecordedAt = DateTime.UtcNow.ToString("o");
+    }
+
+    internal static JobProcessEvent Started(
+      int processId,
+      uint jobMessage,
+      long attemptedAtFileTime,
+      long? openedAtFileTime,
+      string key,
+      ProcessSnapshot snapshot,
+      string parentProcessStartTimeTicks,
+      string parentImagePath
+    ) {
+      JobProcessEvent started = new JobProcessEvent("process-start", processId, jobMessage);
+      started.Retained = true;
+      started.CaptureAttemptedAt = DateTime.FromFileTimeUtc(attemptedAtFileTime).ToString("o");
+      if (openedAtFileTime.HasValue) {
+        started.RetainLatencyMicroseconds = (DateTime.FromFileTimeUtc(openedAtFileTime.Value).Ticks - snapshot.StartTicks) / 10;
+      }
+      started.Key = key;
+      started.ProcessStartTimeTicks = snapshot.StartTicks.ToString(CultureInfo.InvariantCulture);
+      started.ImagePath = snapshot.ImagePath;
+      started.ProcessName = Path.GetFileNameWithoutExtension(snapshot.ImagePath);
+      started.ParentProcessId = snapshot.ParentProcessId;
+      started.ParentProcessStartTimeTicks = parentProcessStartTimeTicks;
+      started.ParentImagePath = parentImagePath;
+      started.CommandLineState = snapshot.CommandLineState;
+      started.CommandLine = snapshot.CommandLine;
+      started.CommandLineRetries = snapshot.CommandLineRetries;
+      started.CommandLineStatus = "0x" + snapshot.CommandLineStatus.ToString("X8", CultureInfo.InvariantCulture);
+      started.CommandLineReadMicroseconds = snapshot.CommandLineReadMicroseconds;
+      return started;
+    }
+
+    internal static JobProcessEvent Unretained(int processId, uint jobMessage, string stage, int? win32Error, long attemptedAtFileTime) {
+      JobProcessEvent unretained = new JobProcessEvent("process-start", processId, jobMessage);
+      unretained.FailureStage = stage;
+      unretained.Win32Error = win32Error;
+      unretained.CaptureAttemptedAt = DateTime.FromFileTimeUtc(attemptedAtFileTime).ToString("o");
+      return unretained;
+    }
+
+    internal static JobProcessEvent Exited(int processId, uint jobMessage, string exitKey, int? exitCode) {
+      JobProcessEvent exited = new JobProcessEvent("process-exit", processId, jobMessage);
+      exited.Retained = exitKey != null;
+      exited.ExitKey = exitKey;
+      exited.ExitCode = exitCode;
+      exited.ExitCodeCaptured = exitCode.HasValue;
+      return exited;
+    }
+
+    internal static JobProcessEvent JobEmpty(uint jobMessage) {
+      JobProcessEvent empty = new JobProcessEvent("job-empty", 0, jobMessage);
+      empty.Retained = true;
+      return empty;
+    }
+
+    internal static JobProcessEvent MonitorError(int win32Error) {
+      return new JobProcessEvent("monitor-error", 0, unchecked((uint)win32Error));
     }
   }
 
-  // QueryFullProcessImageName can preserve an 8.3 alias such as
-  // C:\\Users\\RUNNER~1 even though the monitor's TEMP root uses the long
-  // profile name. Keep that translation narrowly available to the PowerShell
-  // classifier; a failed lookup deliberately leaves the classifier fail-closed.
+  public sealed class ProcessSnapshot {
+    public long StartTicks { get; internal set; }
+    public string ImagePath { get; internal set; }
+    public int? ParentProcessId { get; internal set; }
+    public CommandLineState CommandLineState { get; internal set; }
+    public string CommandLine { get; internal set; }
+    public int CommandLineRetries { get; internal set; }
+    public int CommandLineStatus { get; internal set; }
+    public long CommandLineReadMicroseconds { get; internal set; }
+
+    public bool KernelIdentityComplete {
+      get { return StartTicks > 0 && !String.IsNullOrEmpty(ImagePath) && ParentProcessId.HasValue; }
+    }
+  }
+
+  // Reads a process through a handle the caller already holds. Start time,
+  // parent PID, and the NT image name (class 27) stay readable after the
+  // process exits; the command line does not, so it is read first.
+  public static class ProcessReader {
+    private const int ProcessBasicInformationClass = 0;
+    private const int ProcessImageFileNameClass = 27;
+    private const int ProcessCommandLineInformationClass = 60;
+    private const int StatusProcessIsTerminating = unchecked((int)0xC000010A);
+    private const int MaxCommandLineRetries = 5;
+    private const uint WaitObject0 = 0;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeFileTime {
+      public uint LowDateTime;
+      public uint HighDateTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeUnicodeString {
+      public ushort Length;
+      public ushort MaximumLength;
+      public IntPtr Buffer;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessBasicInformation {
+      public IntPtr Reserved1;
+      public IntPtr PebBaseAddress;
+      public IntPtr Reserved2_0;
+      public IntPtr Reserved2_1;
+      public UIntPtr UniqueProcessId;
+      public UIntPtr InheritedFromUniqueProcessId;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(
+      IntPtr process,
+      out NativeFileTime creationTime,
+      out NativeFileTime exitTime,
+      out NativeFileTime kernelTime,
+      out NativeFileTime userTime
+    );
+
+    [DllImport("kernel32.dll")]
+    private static extern void GetSystemTimePreciseAsFileTime(out long fileTime);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint QueryDosDevice(string deviceName, StringBuilder targetPath, uint maxLength);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+      IntPtr process,
+      int processInformationClass,
+      IntPtr processInformation,
+      int processInformationLength,
+      out int returnLength
+    );
+
+    private static readonly KeyValuePair<string, string>[] DeviceDrives = ReadDeviceDrives();
+
+    public static long PreciseFileTimeUtc() {
+      long fileTime;
+      GetSystemTimePreciseAsFileTime(out fileTime);
+      return fileTime;
+    }
+
+    public static ProcessSnapshot Read(IntPtr process) {
+      ProcessSnapshot snapshot = new ProcessSnapshot();
+      long readStartedAt = PreciseFileTimeUtc();
+      string commandLine;
+      int status = ReadCommandLine(process, out commandLine);
+      int retries = 0;
+      // Thread.Yield hands the core to a ready Normal-priority process that is
+      // still filling its PEB; Sleep(1) would stall the Highest pump a timer tick.
+      while (String.IsNullOrEmpty(commandLine) && status != StatusProcessIsTerminating && retries < MaxCommandLineRetries) {
+        Thread.Yield();
+        retries++;
+        status = ReadCommandLine(process, out commandLine);
+      }
+      snapshot.CommandLineReadMicroseconds = (PreciseFileTimeUtc() - readStartedAt) / 10;
+      snapshot.CommandLineRetries = retries;
+      snapshot.CommandLineStatus = status;
+      if (!String.IsNullOrEmpty(commandLine)) {
+        snapshot.CommandLineState = CommandLineState.Captured;
+        snapshot.CommandLine = commandLine;
+      }
+      else if (status == StatusProcessIsTerminating || WaitForSingleObject(process, 0) == WaitObject0) {
+        snapshot.CommandLineState = CommandLineState.ExitedBeforeRead;
+      }
+      else {
+        snapshot.CommandLineState = CommandLineState.UnreadableWhileAlive;
+      }
+      snapshot.StartTicks = ReadStartTicks(process);
+      snapshot.ImagePath = ReadImagePath(process);
+      snapshot.ParentProcessId = ReadParentProcessId(process);
+      return snapshot;
+    }
+
+    public static string ReadImagePath(IntPtr process) {
+      int size = Marshal.SizeOf(typeof(NativeUnicodeString)) + UInt16.MaxValue + 1;
+      IntPtr buffer = Marshal.AllocHGlobal(size);
+      try {
+        int returnedLength;
+        if (NtQueryInformationProcess(process, ProcessImageFileNameClass, buffer, size, out returnedLength) != 0) return null;
+        NativeUnicodeString value = (NativeUnicodeString)Marshal.PtrToStructure(buffer, typeof(NativeUnicodeString));
+        if (value.Buffer == IntPtr.Zero || value.Length == 0) return null;
+        return ToDrivePath(Marshal.PtrToStringUni(value.Buffer, value.Length / 2));
+      }
+      finally {
+        Marshal.FreeHGlobal(buffer);
+      }
+    }
+
+    internal static long ReadStartTicks(IntPtr process) {
+      NativeFileTime creationTime;
+      NativeFileTime exitTime;
+      NativeFileTime kernelTime;
+      NativeFileTime userTime;
+      if (!GetProcessTimes(process, out creationTime, out exitTime, out kernelTime, out userTime)) return 0;
+      long fileTime = ((long)creationTime.HighDateTime << 32) | creationTime.LowDateTime;
+      return DateTime.FromFileTimeUtc(fileTime).Ticks;
+    }
+
+    private static int ReadCommandLine(IntPtr process, out string commandLine) {
+      commandLine = null;
+      int requiredLength;
+      int status = NtQueryInformationProcess(process, ProcessCommandLineInformationClass, IntPtr.Zero, 0, out requiredLength);
+      if (requiredLength <= 0) return status;
+      IntPtr buffer = Marshal.AllocHGlobal(requiredLength);
+      try {
+        status = NtQueryInformationProcess(process, ProcessCommandLineInformationClass, buffer, requiredLength, out requiredLength);
+        if (status != 0) return status;
+        NativeUnicodeString value = (NativeUnicodeString)Marshal.PtrToStructure(buffer, typeof(NativeUnicodeString));
+        if (value.Buffer != IntPtr.Zero && value.Length > 0) {
+          commandLine = Marshal.PtrToStringUni(value.Buffer, value.Length / 2);
+        }
+        return status;
+      }
+      finally {
+        Marshal.FreeHGlobal(buffer);
+      }
+    }
+
+    private static int? ReadParentProcessId(IntPtr process) {
+      int size = Marshal.SizeOf(typeof(ProcessBasicInformation));
+      IntPtr buffer = Marshal.AllocHGlobal(size);
+      try {
+        int returnedLength;
+        if (NtQueryInformationProcess(process, ProcessBasicInformationClass, buffer, size, out returnedLength) != 0) return null;
+        ProcessBasicInformation info = (ProcessBasicInformation)Marshal.PtrToStructure(buffer, typeof(ProcessBasicInformation));
+        ulong parentProcessId = info.InheritedFromUniqueProcessId.ToUInt64();
+        if (parentProcessId == 0 || parentProcessId > Int32.MaxValue) return null;
+        return unchecked((int)parentProcessId);
+      }
+      finally {
+        Marshal.FreeHGlobal(buffer);
+      }
+    }
+
+    private static string ToDrivePath(string devicePath) {
+      foreach (KeyValuePair<string, string> drive in DeviceDrives) {
+        if (
+          devicePath.Length > drive.Key.Length &&
+          devicePath[drive.Key.Length] == '\\' &&
+          devicePath.StartsWith(drive.Key, StringComparison.OrdinalIgnoreCase)
+        ) {
+          return drive.Value + devicePath.Substring(drive.Key.Length);
+        }
+      }
+      return null;
+    }
+
+    private static KeyValuePair<string, string>[] ReadDeviceDrives() {
+      List<KeyValuePair<string, string>> drives = new List<KeyValuePair<string, string>>();
+      StringBuilder target = new StringBuilder(1024);
+      for (char letter = 'A'; letter <= 'Z'; letter++) {
+        string drive = letter + ":";
+        if (QueryDosDevice(drive, target, unchecked((uint)target.Capacity)) == 0) continue;
+        string device = target.ToString();
+        if (device.StartsWith("\\Device\\", StringComparison.OrdinalIgnoreCase)) {
+          drives.Add(new KeyValuePair<string, string>(device, drive));
+        }
+      }
+      return drives.ToArray();
+    }
+  }
+
+  // The monitor's TEMP root uses the long profile name, while a captured image
+  // path can preserve an 8.3 alias such as C:\\Users\\RUNNER~1. Keep that
+  // translation narrowly available to the PowerShell classifier; a failed
+  // lookup deliberately leaves the classifier fail-closed.
   public static class WindowsPath {
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetLongPathName(
@@ -123,7 +369,6 @@ namespace AiNovelReleaseGate {
     private const uint ProcessSetQuota = 0x0100;
     private const uint ProcessQueryLimitedInformation = 0x1000;
     private const uint Synchronize = 0x00100000;
-    private const int ProcessCommandLineInformation = 60;
     private const int WaitTimeout = 258;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -132,27 +377,18 @@ namespace AiNovelReleaseGate {
       public IntPtr CompletionPort;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativeFileTime {
-      public uint LowDateTime;
-      public uint HighDateTime;
-    }
+    private sealed class Member {
+      public readonly IntPtr Handle;
+      public readonly string Key;
+      public readonly long StartTicks;
+      public readonly string ImagePath;
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativeUnicodeString {
-      public ushort Length;
-      public ushort MaximumLength;
-      public IntPtr Buffer;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProcessBasicInformation {
-      public IntPtr Reserved1;
-      public IntPtr PebBaseAddress;
-      public IntPtr Reserved2_0;
-      public IntPtr Reserved2_1;
-      public UIntPtr UniqueProcessId;
-      public UIntPtr InheritedFromUniqueProcessId;
+      public Member(IntPtr handle, string key, long startTicks, string imagePath) {
+        Handle = handle;
+        Key = key;
+        StartTicks = startTicks;
+        ImagePath = imagePath;
+      }
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -180,39 +416,16 @@ namespace AiNovelReleaseGate {
     private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetProcessTimes(
-      IntPtr process,
-      out NativeFileTime creationTime,
-      out NativeFileTime exitTime,
-      out NativeFileTime kernelTime,
-      out NativeFileTime userTime
-    );
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool QueryFullProcessImageName(
-      IntPtr process,
-      uint flags,
-      StringBuilder executablePath,
-      ref int size
-    );
-
-    [DllImport("ntdll.dll")]
-    private static extern int NtQueryInformationProcess(
-      IntPtr process,
-      int processInformationClass,
-      IntPtr processInformation,
-      int processInformationLength,
-      out int returnLength
-    );
-
-    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
 
     private readonly ConcurrentQueue<JobProcessEvent> events = new ConcurrentQueue<JobProcessEvent>();
-    private readonly ConcurrentDictionary<int, IntPtr> processHandles = new ConcurrentDictionary<int, IntPtr>();
+    // Only the pump thread reads or writes the member table, and it closes
+    // every retained handle when it stops.
+    private readonly Dictionary<int, Member> members = new Dictionary<int, Member>();
+    private readonly ConcurrentDictionary<int, bool> assignedRoots = new ConcurrentDictionary<int, bool>();
     private readonly Thread worker;
     private IntPtr job;
     private IntPtr completionPort;
@@ -244,6 +457,9 @@ namespace AiNovelReleaseGate {
       }
       worker = new Thread(new ThreadStart(Pump));
       worker.IsBackground = true;
+      // A starved pump opens short-lived NSIS probe members only after they
+      // have exited; Highest keeps it ahead of the processes it observes.
+      worker.Priority = ThreadPriority.Highest;
       worker.Name = "AI Novel release-gate process monitor";
       worker.Start();
     }
@@ -254,9 +470,13 @@ namespace AiNovelReleaseGate {
       if (process == IntPtr.Zero) {
         throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open release-gate root process " + processId + " for job assignment.");
       }
+      assignedRoots[processId] = true;
       try {
         if (!AssignProcessToJobObject(job, process)) {
-          throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not atomically assign release-gate root process " + processId + " to the job object.");
+          int error = Marshal.GetLastWin32Error();
+          bool ignored;
+          assignedRoots.TryRemove(processId, out ignored);
+          throw new Win32Exception(error, "Could not atomically assign release-gate root process " + processId + " to the job object.");
         }
       }
       finally {
@@ -278,245 +498,143 @@ namespace AiNovelReleaseGate {
       }
     }
 
-    private static string TryReadProcessStartTimeTicks(IntPtr process) {
-      NativeFileTime creationTime;
-      NativeFileTime exitTime;
-      NativeFileTime kernelTime;
-      NativeFileTime userTime;
-      if (!GetProcessTimes(process, out creationTime, out exitTime, out kernelTime, out userTime)) return null;
-      long fileTime = ((long)creationTime.HighDateTime << 32) | creationTime.LowDateTime;
-      return DateTime.FromFileTimeUtc(fileTime).Ticks.ToString();
-    }
-
-    private static string TryReadProcessImagePath(IntPtr process) {
-      int size = 32768;
-      StringBuilder buffer = new StringBuilder(size);
-      if (!QueryFullProcessImageName(process, 0, buffer, ref size)) return null;
-      return buffer.ToString();
-    }
-
-    private static string TryReadProcessCommandLine(IntPtr process) {
-      int requiredLength;
-      NtQueryInformationProcess(
-        process,
-        ProcessCommandLineInformation,
-        IntPtr.Zero,
-        0,
-        out requiredLength
-      );
-      if (requiredLength <= 0) return null;
-      IntPtr buffer = Marshal.AllocHGlobal(requiredLength);
+    private static string IdentityKey(int processId, ProcessSnapshot snapshot) {
+      if (!snapshot.KernelIdentityComplete) return null;
       try {
-        int status = NtQueryInformationProcess(
-          process,
-          ProcessCommandLineInformation,
-          buffer,
-          requiredLength,
-          out requiredLength
-        );
-        if (status != 0) return null;
-        NativeUnicodeString value = (NativeUnicodeString)Marshal.PtrToStructure(buffer, typeof(NativeUnicodeString));
-        if (value.Buffer == IntPtr.Zero || value.Length == 0) return String.Empty;
-        return Marshal.PtrToStringUni(value.Buffer, value.Length / 2);
+        return processId.ToString(CultureInfo.InvariantCulture) + "|" +
+          snapshot.StartTicks.ToString(CultureInfo.InvariantCulture) + "|" +
+          Path.GetFullPath(snapshot.ImagePath);
       }
-      finally {
-        Marshal.FreeHGlobal(buffer);
+      catch (Exception) {
+        return null;
       }
     }
 
-    private static int? TryReadParentProcessId(IntPtr process) {
-      int size = Marshal.SizeOf(typeof(ProcessBasicInformation));
-      IntPtr buffer = Marshal.AllocHGlobal(size);
-      try {
-        int returnedLength;
-        int status = NtQueryInformationProcess(
-          process,
-          0,
-          buffer,
-          size,
-          out returnedLength
-        );
-        if (status != 0) return null;
-        ProcessBasicInformation info = (ProcessBasicInformation)Marshal.PtrToStructure(buffer, typeof(ProcessBasicInformation));
-        ulong parentProcessId = info.InheritedFromUniqueProcessId.ToUInt64();
-        if (parentProcessId == 0 || parentProcessId > Int32.MaxValue) return null;
-        return unchecked((int)parentProcessId);
-      }
-      finally {
-        Marshal.FreeHGlobal(buffer);
-      }
-    }
-
-    private static void CaptureParentProcessIdentity(
-      int? parentProcessId,
+    private static void ReadOutsideJobParent(
+      int parentProcessId,
+      long childStartTicks,
       out string parentProcessStartTimeTicks,
       out string parentImagePath
     ) {
       parentProcessStartTimeTicks = null;
       parentImagePath = null;
-      if (!parentProcessId.HasValue || parentProcessId.Value <= 0) return;
-      IntPtr parent = OpenProcess(
-        ProcessQueryLimitedInformation | Synchronize,
-        false,
-        unchecked((uint)parentProcessId.Value)
-      );
+      IntPtr parent = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, unchecked((uint)parentProcessId));
       if (parent == IntPtr.Zero) return;
       try {
-        parentProcessStartTimeTicks = TryReadProcessStartTimeTicks(parent);
-        parentImagePath = TryReadProcessImagePath(parent);
+        long parentStartTicks = ProcessReader.ReadStartTicks(parent);
+        if (parentStartTicks <= 0 || parentStartTicks > childStartTicks) return;
+        parentProcessStartTimeTicks = parentStartTicks.ToString(CultureInfo.InvariantCulture);
+        parentImagePath = ProcessReader.ReadImagePath(parent);
       }
       finally {
         CloseHandle(parent);
       }
     }
 
-    private static void CaptureProcessIdentity(
-      IntPtr process,
-      int processId,
-      out string processStartTimeTicks,
-      out string processName,
-      out string imagePath,
-      out string commandLine,
-      out int? parentProcessId,
-      out string parentProcessStartTimeTicks,
-      out string parentImagePath,
-      out bool identityCaptured,
-      out bool commandLineCaptured,
-      out string captureError
-    ) {
-      processStartTimeTicks = null;
-      processName = null;
-      imagePath = null;
-      commandLine = null;
-      parentProcessId = null;
-      parentProcessStartTimeTicks = null;
-      parentImagePath = null;
-      identityCaptured = false;
-      commandLineCaptured = false;
-      captureError = null;
-      try {
-        processStartTimeTicks = TryReadProcessStartTimeTicks(process);
-        imagePath = TryReadProcessImagePath(process);
-        if (!String.IsNullOrEmpty(imagePath)) processName = Path.GetFileNameWithoutExtension(imagePath);
-        if (String.IsNullOrEmpty(processName)) {
-          try {
-            using (Process managedProcess = Process.GetProcessById(processId)) {
-              processName = managedProcess.ProcessName;
-            }
-          }
-          catch { }
+    private void RetainNewProcess(int processId, uint message) {
+      bool ignored;
+      bool assignedRoot = assignedRoots.TryRemove(processId, out ignored);
+      long attemptedAt = ProcessReader.PreciseFileTimeUtc();
+      IntPtr process = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, unchecked((uint)processId));
+      if (process == IntPtr.Zero) {
+        events.Enqueue(JobProcessEvent.Unretained(processId, message, "OpenProcess", Marshal.GetLastWin32Error(), attemptedAt));
+        return;
+      }
+      long openedAt = ProcessReader.PreciseFileTimeUtc();
+      ProcessSnapshot snapshot = ProcessReader.Read(process);
+      string key = IdentityKey(processId, snapshot);
+      if (key == null) {
+        CloseHandle(process);
+        events.Enqueue(JobProcessEvent.Unretained(processId, message, "KernelIdentity", null, attemptedAt));
+        return;
+      }
+      string parentProcessStartTimeTicks = null;
+      string parentImagePath = null;
+      Member parent;
+      // A retained parent's PID cannot be reused while its handle is held, and
+      // its NEW_PROCESS was dequeued before any child it created. A parent that
+      // started after this child is a reused PID and stays unbound.
+      if (members.TryGetValue(snapshot.ParentProcessId.Value, out parent)) {
+        if (parent.StartTicks <= snapshot.StartTicks) {
+          parentProcessStartTimeTicks = parent.StartTicks.ToString(CultureInfo.InvariantCulture);
+          parentImagePath = parent.ImagePath;
         }
-        identityCaptured = !String.IsNullOrEmpty(processStartTimeTicks);
-        commandLine = TryReadProcessCommandLine(process);
-        commandLineCaptured = !String.IsNullOrEmpty(commandLine);
-        parentProcessId = TryReadParentProcessId(process);
-        CaptureParentProcessIdentity(
-          parentProcessId,
-          out parentProcessStartTimeTicks,
-          out parentImagePath
-        );
       }
-      catch (Exception exception) {
-        captureError = exception.Message;
+      else if (assignedRoot) {
+        ReadOutsideJobParent(snapshot.ParentProcessId.Value, snapshot.StartTicks, out parentProcessStartTimeTicks, out parentImagePath);
       }
+      Member stale;
+      if (members.TryGetValue(processId, out stale)) CloseHandle(stale.Handle);
+      members[processId] = new Member(process, key, snapshot.StartTicks, snapshot.ImagePath);
+      // An assigned root was created before the job existed, so its creation
+      // time says nothing about how fast the pump retains new members.
+      events.Enqueue(JobProcessEvent.Started(
+        processId,
+        message,
+        attemptedAt,
+        assignedRoot ? (long?)null : openedAt,
+        key,
+        snapshot,
+        parentProcessStartTimeTicks,
+        parentImagePath
+      ));
+    }
+
+    private void ReleaseExitedProcess(int processId, uint message) {
+      Member member;
+      if (!members.TryGetValue(processId, out member)) {
+        events.Enqueue(JobProcessEvent.Exited(processId, message, null, null));
+        return;
+      }
+      members.Remove(processId);
+      int? exitCode = null;
+      try {
+        uint rawExitCode;
+        if (GetExitCodeProcess(member.Handle, out rawExitCode)) exitCode = unchecked((int)rawExitCode);
+      }
+      finally {
+        CloseHandle(member.Handle);
+      }
+      events.Enqueue(JobProcessEvent.Exited(processId, message, member.Key, exitCode));
     }
 
     private void Pump() {
-      while (!stopping) {
-        uint message;
-        UIntPtr completionKey;
-        IntPtr overlapped;
-        bool received = GetQueuedCompletionStatus(completionPort, out message, out completionKey, out overlapped, 250);
-        if (!received) {
-          int error = Marshal.GetLastWin32Error();
-          if (error == WaitTimeout) continue;
-          if (stopping) return;
-          events.Enqueue(new JobProcessEvent("monitor-error", 0, null, false, false, unchecked((uint)error)));
-          continue;
-        }
-        if (stopping && message == 0) return;
-        int processId = unchecked((int)overlapped.ToInt64());
-        if (message == JobObjectMsgNewProcess) {
-          string captureAttemptedAt = DateTime.UtcNow.ToString("o");
-          IntPtr process = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, unchecked((uint)processId));
-          int? captureWin32Error = process == IntPtr.Zero ? (int?)Marshal.GetLastWin32Error() : null;
-          string captureFailureStage = process == IntPtr.Zero ? "OpenProcess" : null;
-          bool captured = process != IntPtr.Zero;
-          string processStartTimeTicks = null;
-          string processName = null;
-          string imagePath = null;
-          string commandLine = null;
-          int? parentProcessId = null;
-          string parentProcessStartTimeTicks = null;
-          string parentImagePath = null;
-          bool identityCaptured = false;
-          bool commandLineCaptured = false;
-          string identityCaptureError = null;
-          if (captured) {
-            CaptureProcessIdentity(
-              process,
-              processId,
-              out processStartTimeTicks,
-              out processName,
-              out imagePath,
-              out commandLine,
-              out parentProcessId,
-              out parentProcessStartTimeTicks,
-              out parentImagePath,
-              out identityCaptured,
-              out commandLineCaptured,
-              out identityCaptureError
-            );
-            IntPtr stale;
-            if (processHandles.TryRemove(processId, out stale)) CloseHandle(stale);
-            if (!processHandles.TryAdd(processId, process)) {
-              CloseHandle(process);
-              captured = false;
-              captureFailureStage = "TryAdd";
+      try {
+        while (!stopping) {
+          uint message;
+          UIntPtr completionKey;
+          IntPtr overlapped;
+          bool received = GetQueuedCompletionStatus(completionPort, out message, out completionKey, out overlapped, 250);
+          if (!received) {
+            int error = Marshal.GetLastWin32Error();
+            if (error == WaitTimeout) continue;
+            if (stopping) return;
+            events.Enqueue(JobProcessEvent.MonitorError(error));
+            continue;
+          }
+          if (stopping && message == 0) return;
+          int processId = unchecked((int)overlapped.ToInt64());
+          try {
+            if (message == JobObjectMsgNewProcess) {
+              RetainNewProcess(processId, message);
+            }
+            else if (message == JobObjectMsgExitProcess || message == JobObjectMsgAbnormalExitProcess) {
+              ReleaseExitedProcess(processId, message);
+            }
+            else if (message == JobObjectMsgActiveProcessZero) {
+              events.Enqueue(JobProcessEvent.JobEmpty(message));
             }
           }
-          events.Enqueue(new JobProcessEvent(
-            "process-start",
-            processId,
-            null,
-            captured,
-            false,
-            message,
-            processStartTimeTicks,
-            processName,
-            imagePath,
-            commandLine,
-            parentProcessId,
-            parentProcessStartTimeTicks,
-            parentImagePath,
-            identityCaptured,
-            commandLineCaptured,
-            identityCaptureError,
-            captureAttemptedAt,
-            captureFailureStage,
-            captureWin32Error
-          ));
-          continue;
-        }
-        if (message == JobObjectMsgExitProcess || message == JobObjectMsgAbnormalExitProcess) {
-          IntPtr process;
-          int? exitCode = null;
-          bool captured = processHandles.TryRemove(processId, out process);
-          if (captured) {
-            try {
-              uint rawExitCode;
-              if (GetExitCodeProcess(process, out rawExitCode)) exitCode = unchecked((int)rawExitCode);
-            }
-            finally {
-              CloseHandle(process);
-            }
+          catch (Exception exception) {
+            // An exception on this background thread would end the PowerShell
+            // host without a failed status; report it as a lost stream instead.
+            events.Enqueue(JobProcessEvent.MonitorError(exception.HResult));
           }
-          events.Enqueue(new JobProcessEvent("process-exit", processId, exitCode, captured, exitCode.HasValue, message));
-          continue;
         }
-        if (message == JobObjectMsgActiveProcessZero) {
-          events.Enqueue(new JobProcessEvent("job-empty", 0, null, true, false, message));
-        }
+      }
+      finally {
+        foreach (Member member in members.Values) CloseHandle(member.Handle);
+        members.Clear();
       }
     }
 
@@ -526,10 +644,6 @@ namespace AiNovelReleaseGate {
       stopping = true;
       if (completionPort != IntPtr.Zero) PostQueuedCompletionStatus(completionPort, 0, UIntPtr.Zero, IntPtr.Zero);
       if (worker != null) worker.Join(2000);
-      foreach (KeyValuePair<int, IntPtr> pair in processHandles) {
-        IntPtr handle;
-        if (processHandles.TryRemove(pair.Key, out handle)) CloseHandle(handle);
-      }
       if (job != IntPtr.Zero) {
         CloseHandle(job);
         job = IntPtr.Zero;
@@ -754,6 +868,8 @@ function Write-AiNovelGateStatus {
     [Parameter(Mandatory = $true)][string]$State,
     [string]$Step = '',
     [string]$Failure = '',
+    [ValidateSet('', 'process-failure', 'unobservable-member', 'unobservable-identity', 'error-window', 'process-timeout', 'monitor-failure')]
+    [string]$FailureKind = '',
     [AllowNull()]$LegacyBridge = $null
   )
 
@@ -764,6 +880,9 @@ function Write-AiNovelGateStatus {
     updatedAt = [DateTime]::UtcNow.ToString('o')
     monitorStartedAt = $script:AiNovelGateMonitorStartedAt
     monitorStoppedAt = $script:AiNovelGateMonitorStoppedAt
+  }
+  if (-not [string]::IsNullOrEmpty($FailureKind)) {
+    $statusRecord.failureKind = $FailureKind
   }
   if ($null -ne $LegacyBridge) {
     $statusRecord.legacyBridge = $LegacyBridge
@@ -1090,16 +1209,13 @@ function Complete-AiNovelGateAtomicMonitor {
 }
 
 function Get-AiNovelGateProcessIdentity {
-  param(
-    [Parameter(Mandatory = $true)]$Event,
-    [long]$ExpectedStartTimeTicks = 0
-  )
+  param([Parameter(Mandatory = $true)]$Event)
 
   # The C# completion-port worker captures these fields while it still owns a
   # native process handle. Do not make a slow CIM call in this PowerShell loop:
   # that would delay draining the next short-lived child event and lose the
   # very command-line evidence this record is meant to preserve.
-  $identity = [ordered]@{
+  return [pscustomobject][ordered]@{
     processId = [int]$Event.ProcessId
     startTimeTicks = if ($null -ne $Event.ProcessStartTimeTicks) { [string]$Event.ProcessStartTimeTicks } else { $null }
     processName = if ($null -ne $Event.ProcessName) { [string]$Event.ProcessName } else { $null }
@@ -1108,19 +1224,10 @@ function Get-AiNovelGateProcessIdentity {
     parentProcessId = if ($null -ne $Event.ParentProcessId) { [int]$Event.ParentProcessId } else { $null }
     parentProcessStartTimeTicks = if ($null -ne $Event.ParentProcessStartTimeTicks) { [string]$Event.ParentProcessStartTimeTicks } else { $null }
     parentExecutablePath = if ($null -ne $Event.ParentImagePath) { [string]$Event.ParentImagePath } else { $null }
-    identityCaptured = [bool]$Event.IdentityCaptured
-    commandLineCaptured = [bool]$Event.CommandLineCaptured
-    identityCaptureError = if ($null -ne $Event.IdentityCaptureError) { [string]$Event.IdentityCaptureError } else { $null }
+    identityCaptured = [bool]$Event.Retained
+    commandLineCaptured = [string]$Event.CommandLineState -eq 'Captured'
+    identityCaptureError = $null
   }
-  if (
-    $ExpectedStartTimeTicks -gt 0 -and
-    $identity.identityCaptured -and
-    [long]$identity.startTimeTicks -ne $ExpectedStartTimeTicks
-  ) {
-    $identity['identityCaptured'] = $false
-    $identity['identityCaptureError'] = 'process start identity did not match the tracked Job Object member'
-  }
-  return [pscustomobject]$identity
 }
 
 function Test-AiNovelGateSystemPowerShellImage {
@@ -1130,7 +1237,7 @@ function Test-AiNovelGateSystemPowerShellImage {
     return $false
   }
   try {
-    # QueryFullProcessImageName returns an absolute image path. Reject a
+    # The monitor captures an absolute image path. Reject a
     # relative lookalike before normalization so the exception remains limited
     # to the two Windows PowerShell binaries the NSIS stub can invoke.
     if ($ImagePath -notmatch '^[A-Za-z]:\\') {
@@ -1377,8 +1484,8 @@ function Test-AiNovelGateSameBoundSystemExecutablePath {
 
   # The command line must normally bind argv[0] to the exact image path
   # captured from the process. A 32-bit NSIS stub is the narrow exception:
-  # $SYSDIR can be recorded as System32 while QueryFullProcessImageName sees
-  # the redirected SysWOW64 image. Do not turn this into a basename match.
+  # $SYSDIR can be recorded as System32 while the captured image is the
+  # redirected SysWOW64 one. Do not turn this into a basename match.
   if (Test-AiNovelGateSameAbsolutePath -Left $Left -Right $Right) {
     return $true
   }
@@ -1542,7 +1649,13 @@ function Get-AiNovelGateNsisCmdProcessCheckVariant {
       if (Test-AiNovelGateSameBoundSystemExecutablePath `
         -Left $filterPath `
         -Right (Join-Path $cmdDirectory $variant.FilterFileName)) {
-        return $variant
+        # A new object: the variant table is shared by every caller.
+        return [pscustomobject]@{
+          FilterFileName = $variant.FilterFileName
+          FilterArguments = $variant.FilterArguments
+          FilterPath = $filterPath
+          Classification = $variant.Classification
+        }
       }
     }
     return $null
@@ -2107,7 +2220,7 @@ function Test-AiNovelGateDeferredNsisCmdExitFailureReady {
   )
 }
 
-function Get-AiNovelGateExpectedNsisFilterNoMatchClassification {
+function Get-AiNovelGateNsisFilterNoMatchVerdict {
   param(
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
     [Parameter(Mandatory = $true)]$Event,
@@ -2126,29 +2239,25 @@ function Get-AiNovelGateExpectedNsisFilterNoMatchClassification {
   if (
     $null -eq $ProcessIdentity -or
     -not [bool]$ProcessIdentity.identityCaptured -or
-    -not [bool]$ProcessIdentity.commandLineCaptured -or
     $null -eq $ParentIdentity -or
     -not [bool]$ParentIdentity.commandLineCaptured
   ) {
     return $null
   }
-  $filterVariant = Get-AiNovelGateNsisFilterNoMatchVariant `
-    -CommandLine ([string]$ProcessIdentity.commandLine) `
-    -FilterImagePath ([string]$ProcessIdentity.executablePath)
   $cmdVariant = Get-AiNovelGateNsisCmdProcessCheckVariant `
     -CommandLine ([string]$ParentIdentity.commandLine) `
     -CmdImagePath ([string]$ParentIdentity.executablePath)
-  # The filter child must be the one its own cmd.exe parent named, so a
+  # The filter child must be the executable its own cmd.exe parent named, so a
   # find.exe child never borrows a findstr.exe template or the reverse, nor
   # another product executable name.
   if (
-    $null -eq $filterVariant -or
     $null -eq $cmdVariant -or
-    -not [string]::Equals($filterVariant.FilterFileName, $cmdVariant.FilterFileName, [System.StringComparison]::Ordinal) -or
-    -not [string]::Equals($filterVariant.FilterArguments, $cmdVariant.FilterArguments, [System.StringComparison]::Ordinal) -or
     -not (Test-AiNovelGateSystemUtilityImage `
       -ImagePath ([string]$ProcessIdentity.executablePath) `
-      -FileName $filterVariant.FilterFileName) -or
+      -FileName $cmdVariant.FilterFileName) -or
+    -not (Test-AiNovelGateSameBoundSystemExecutablePath `
+      -Left $cmdVariant.FilterPath `
+      -Right ([string]$ProcessIdentity.executablePath)) -or
     -not (Test-AiNovelGateCapturedParentIdentity `
       -ChildIdentity $ProcessIdentity `
       -ParentIdentity $ParentIdentity) -or
@@ -2166,7 +2275,45 @@ function Get-AiNovelGateExpectedNsisFilterNoMatchClassification {
   ) {
     return $null
   }
-  return [string]$filterVariant.Classification
+  if (-not [bool]$ProcessIdentity.commandLineCaptured) {
+    # cmd.exe rebuilds the filter command line from its own verified one; only
+    # a filter that exits within milliseconds loses its own copy first.
+    return New-AiNovelGateExitVerdict -Kind expected -Classification $cmdVariant.Classification -Basis 'parent-command-line'
+  }
+  $filterVariant = Get-AiNovelGateNsisFilterNoMatchVariant `
+    -CommandLine ([string]$ProcessIdentity.commandLine) `
+    -FilterImagePath ([string]$ProcessIdentity.executablePath)
+  if (
+    $null -eq $filterVariant -or
+    -not [string]::Equals($filterVariant.FilterFileName, $cmdVariant.FilterFileName, [System.StringComparison]::Ordinal) -or
+    -not [string]::Equals($filterVariant.FilterArguments, $cmdVariant.FilterArguments, [System.StringComparison]::Ordinal)
+  ) {
+    return New-AiNovelGateExitVerdict `
+      -Kind failure `
+      -Reason 'filter-command-line-contradicts-parent' `
+      -Failure (Get-AiNovelGateProcessExitFailure -Step $Step -Event $Event)
+  }
+  return New-AiNovelGateExitVerdict -Kind expected -Classification $cmdVariant.Classification -Basis 'own-command-line'
+}
+
+function Get-AiNovelGateExpectedNsisFilterNoMatchClassification {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [Parameter(Mandatory = $true)]$Event,
+    [AllowNull()]$ProcessIdentity,
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$GreatGrandParentIdentity,
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities
+  )
+
+  $verdict = Get-AiNovelGateNsisFilterNoMatchVerdict @PSBoundParameters
+  if ($null -eq $verdict -or $verdict.Kind -ne 'expected') {
+    return $null
+  }
+  return [string]$verdict.Classification
 }
 
 function Test-AiNovelGateExpectedNsisFindNoMatchExit {
@@ -2183,6 +2330,266 @@ function Test-AiNovelGateExpectedNsisFindNoMatchExit {
   )
 
   return $null -ne (Get-AiNovelGateExpectedNsisFilterNoMatchClassification @PSBoundParameters)
+}
+
+function New-AiNovelGateExitVerdict {
+  param(
+    [Parameter(Mandatory = $true)][ValidateSet('succeeded', 'expected', 'pending', 'result-owned', 'failure', 'unobservable')][string]$Kind,
+    [string]$Classification = $Kind,
+    [string]$Basis = '',
+    [string]$Reason = '',
+    [string]$Failure = ''
+  )
+
+  # Contradicting evidence is a failure; missing evidence is unobservable.
+  # Both block the step, and the label tells the next investigator which.
+  $blocks = $Kind -in @('failure', 'unobservable')
+  return [pscustomobject][ordered]@{
+    Kind = $Kind
+    Classification = $Classification
+    Basis = $Basis
+    Reason = $Reason
+    Failure = $Failure
+    FailureKind = if ($Kind -eq 'unobservable') { 'unobservable-identity' } elseif ($blocks) { 'process-failure' } else { '' }
+    ParentKey = ''
+    Blocks = $blocks
+  }
+}
+
+function Get-AiNovelGateTrackedParentIdentity {
+  param(
+    [AllowNull()]$Identity,
+    [AllowNull()]$TrackedProcessIdentities
+  )
+
+  if (
+    $null -eq $Identity -or
+    $null -eq $Identity.parentProcessId -or
+    $null -eq $TrackedProcessIdentities -or
+    -not $TrackedProcessIdentities.ContainsKey([int]$Identity.parentProcessId)
+  ) {
+    return $null
+  }
+  return $TrackedProcessIdentities[[int]$Identity.parentProcessId]
+}
+
+function Get-AiNovelGateUnobservableNsisProcessCheckReason {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [Parameter(Mandatory = $true)]$Event,
+    [AllowNull()]$ProcessIdentity,
+    [AllowNull()]$ParentIdentity,
+    [AllowNull()]$GrandParentIdentity,
+    [AllowNull()]$GreatGrandParentIdentity,
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$TrackedProcessIdentities
+  )
+
+  # An exit 1 from a cmd.exe that a verified NSIS probe parent started, whose
+  # own command line was never read, is indistinguishable from the expected
+  # process-check pipeline. So is its find or findstr child.
+  if (
+    -not [bool]$Event.ExitCodeCaptured -or
+    [uint32]$Event.JobMessage -ne 7 -or
+    $null -eq $Event.ExitCode -or
+    [int]$Event.ExitCode -ne 1 -or
+    $null -eq $ProcessIdentity -or
+    -not [bool]$ProcessIdentity.identityCaptured
+  ) {
+    return ''
+  }
+  $imagePath = [string]$ProcessIdentity.executablePath
+  if (
+    (Test-AiNovelGateSystemUtilityImage -ImagePath $imagePath -FileName 'cmd.exe') -and
+    -not [bool]$ProcessIdentity.commandLineCaptured -and
+    (Test-AiNovelGateCapturedNsisProbeParent `
+      -Step $Step `
+      -ChildIdentity $ProcessIdentity `
+      -ParentIdentity $ParentIdentity `
+      -GrandParentIdentity $GrandParentIdentity `
+      -LegacyBridge $LegacyBridge `
+      -ArmedRootIdentity $ArmedRootIdentity `
+      -TrackedProcessIdentities $TrackedProcessIdentities)
+  ) {
+    return 'nsis-cmd-command-line-unobserved'
+  }
+  if (
+    ((Test-AiNovelGateSystemUtilityImage -ImagePath $imagePath -FileName 'find.exe') -or
+      (Test-AiNovelGateSystemUtilityImage -ImagePath $imagePath -FileName 'findstr.exe')) -and
+    $null -ne $ParentIdentity -and
+    -not [bool]$ParentIdentity.commandLineCaptured -and
+    (Test-AiNovelGateSystemUtilityImage -ImagePath ([string]$ParentIdentity.executablePath) -FileName 'cmd.exe') -and
+    (Test-AiNovelGateCapturedParentIdentity -ChildIdentity $ProcessIdentity -ParentIdentity $ParentIdentity) -and
+    (Test-AiNovelGateCapturedNsisProbeParent `
+      -Step $Step `
+      -ChildIdentity $ParentIdentity `
+      -ParentIdentity $GrandParentIdentity `
+      -GrandParentIdentity $GreatGrandParentIdentity `
+      -LegacyBridge $LegacyBridge `
+      -ArmedRootIdentity $ArmedRootIdentity `
+      -TrackedProcessIdentities $TrackedProcessIdentities)
+  ) {
+    return 'nsis-filter-parent-command-line-unobserved'
+  }
+  return ''
+}
+
+function Get-AiNovelGateExitVerdict {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
+    [Parameter(Mandatory = $true)]$Event,
+    [AllowNull()]$ProcessIdentity,
+    [AllowNull()]$TrackedProcessIdentities,
+    [AllowNull()]$LegacyBridge,
+    [AllowNull()]$ArmedRootIdentity,
+    [AllowNull()]$VerifiedFindParentKeys
+  )
+
+  $parentIdentity = Get-AiNovelGateTrackedParentIdentity -Identity $ProcessIdentity -TrackedProcessIdentities $TrackedProcessIdentities
+  $grandParentIdentity = Get-AiNovelGateTrackedParentIdentity -Identity $parentIdentity -TrackedProcessIdentities $TrackedProcessIdentities
+  $greatGrandParentIdentity = Get-AiNovelGateTrackedParentIdentity -Identity $grandParentIdentity -TrackedProcessIdentities $TrackedProcessIdentities
+  $exitFailure = Get-AiNovelGateProcessExitFailure -Step $Step -Event $Event
+  $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $ProcessIdentity
+  $armedRootIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $ArmedRootIdentity
+  # The armed root and its durable result own final success for selected
+  # build/installer/upgrade steps. Their identified descendants remain evidence;
+  # other steps still fail closed on every abnormal descendant exit.
+  $isCapturedNonzeroDescendantExit = (
+    $null -ne $processIdentityKey -and
+    $null -ne $armedRootIdentityKey -and
+    [bool]$Event.ExitCodeCaptured -and
+    [uint32]$Event.JobMessage -eq 7 -and
+    $null -ne $Event.ExitCode -and
+    [int]$Event.ExitCode -ne 0 -and
+    -not [string]::Equals(
+      $processIdentityKey,
+      $armedRootIdentityKey,
+      [System.StringComparison]::OrdinalIgnoreCase
+    )
+  )
+  if (
+    $null -ne $ProcessIdentity -and
+    -not [string]::IsNullOrEmpty([string]$Event.ExitKey) -and
+    -not [string]::Equals([string]$processIdentityKey, [string]$Event.ExitKey, [System.StringComparison]::OrdinalIgnoreCase)
+  ) {
+    return New-AiNovelGateExitVerdict `
+      -Kind failure `
+      -Reason 'exit-key-mismatch' `
+      -Failure "Release gate step '$Step' could not match the exit of job-contained PID $($Event.ProcessId) to its recorded process identity."
+  }
+  if (Test-AiNovelGateLegacyBridgeTermination `
+    -Step $Step `
+    -LegacyBridge $LegacyBridge `
+    -InstallerIdentity $ProcessIdentity) {
+    return New-AiNovelGateExitVerdict -Kind expected -Classification 'legacy-bridge-terminated'
+  }
+  if (Test-AiNovelGateLegacyBridgeOldApplicationExit `
+    -Step $Step `
+    -LegacyBridge $LegacyBridge `
+    -Event $Event `
+    -ProcessIdentity $ProcessIdentity) {
+    return New-AiNovelGateExitVerdict -Kind expected -Classification 'legacy-bridge-old-application-breakpoint'
+  }
+  if (Test-AiNovelGateNativeUpdaterOldApplicationExit `
+    -Step $Step `
+    -LegacyBridge $LegacyBridge `
+    -Event $Event `
+    -ProcessIdentity $ProcessIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities) {
+    return New-AiNovelGateExitVerdict -Kind expected -Classification 'native-updater-old-application-breakpoint'
+  }
+  if ($null -eq $exitFailure) {
+    return New-AiNovelGateExitVerdict -Kind succeeded
+  }
+  if (Test-AiNovelGateExpectedLegacyBridgeOldUninstallerPowerShellProbeExit `
+    -Step $Step `
+    -LegacyBridge $LegacyBridge `
+    -Event $Event `
+    -ProcessIdentity $ProcessIdentity `
+    -ParentIdentity $parentIdentity `
+    -GrandParentIdentity $grandParentIdentity `
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities) {
+    return New-AiNovelGateExitVerdict -Kind expected -Classification 'expected-legacy-bridge-old-uninstaller-powershell-probe'
+  }
+  if (Test-AiNovelGateExpectedNsisPowerShellProbeExit `
+    -Step $Step `
+    -Event $Event `
+    -ProcessIdentity $ProcessIdentity `
+    -ParentIdentity $parentIdentity `
+    -GrandParentIdentity $grandParentIdentity `
+    -LegacyBridge $LegacyBridge `
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities) {
+    return New-AiNovelGateExitVerdict -Kind expected -Classification 'expected-nsis-powershell-probe'
+  }
+  $filterVerdict = Get-AiNovelGateNsisFilterNoMatchVerdict `
+    -Step $Step `
+    -Event $Event `
+    -ProcessIdentity $ProcessIdentity `
+    -ParentIdentity $parentIdentity `
+    -GrandParentIdentity $grandParentIdentity `
+    -GreatGrandParentIdentity $greatGrandParentIdentity `
+    -LegacyBridge $LegacyBridge `
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities
+  if ($null -ne $filterVerdict) {
+    if ($filterVerdict.Kind -eq 'expected') {
+      $filterVerdict.ParentKey = [string](Get-AiNovelGateProcessIdentityKey -ProcessIdentity $parentIdentity)
+    }
+    return $filterVerdict
+  }
+  if (Test-AiNovelGateExpectedNsisCmdProcessCheckExit `
+    -Step $Step `
+    -Event $Event `
+    -ProcessIdentity $ProcessIdentity `
+    -ParentIdentity $parentIdentity `
+    -GrandParentIdentity $grandParentIdentity `
+    -LegacyBridge $LegacyBridge `
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities `
+    -VerifiedFindParentKeys $VerifiedFindParentKeys) {
+    return New-AiNovelGateExitVerdict -Kind expected -Classification 'expected-nsis-cmd-process-check'
+  }
+  if (Test-AiNovelGateNsisCmdProcessCheckCandidate `
+    -Step $Step `
+    -Event $Event `
+    -ProcessIdentity $ProcessIdentity `
+    -ParentIdentity $parentIdentity `
+    -GrandParentIdentity $grandParentIdentity `
+    -LegacyBridge $LegacyBridge `
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities) {
+    # A cmd.exe exit can reach the completion port before its find.exe child.
+    # The caller defers the decision until a matching, validated filter exit.
+    return New-AiNovelGateExitVerdict -Kind pending -Classification 'pending-nsis-cmd-process-check' -Failure $exitFailure
+  }
+  # An unproven NSIS process-check member must not fall into the result-owned
+  # exemption below: its exit 1 has no identity the root's result can own.
+  $unobservableReason = Get-AiNovelGateUnobservableNsisProcessCheckReason `
+    -Step $Step `
+    -Event $Event `
+    -ProcessIdentity $ProcessIdentity `
+    -ParentIdentity $parentIdentity `
+    -GrandParentIdentity $grandParentIdentity `
+    -GreatGrandParentIdentity $greatGrandParentIdentity `
+    -LegacyBridge $LegacyBridge `
+    -ArmedRootIdentity $ArmedRootIdentity `
+    -TrackedProcessIdentities $TrackedProcessIdentities
+  if (-not [string]::IsNullOrEmpty($unobservableReason)) {
+    return New-AiNovelGateExitVerdict `
+      -Kind unobservable `
+      -Reason $unobservableReason `
+      -Failure "Release gate step '$Step' could not prove the NSIS process-check exit code $($Event.ExitCode) for job-contained PID $($Event.ProcessId): its command line was not observed."
+  }
+  if (
+    $Step -in @('build:win:artifacts', 'smoke:win-installer', 'smoke:win-v025-upgrade') -and
+    $isCapturedNonzeroDescendantExit
+  ) {
+    return New-AiNovelGateExitVerdict -Kind result-owned -Classification 'ignored-result-owned-descendant-nonzero'
+  }
+  return New-AiNovelGateExitVerdict -Kind failure -Failure $exitFailure
 }
 
 function ConvertTo-AiNovelGateProcessEvidenceIdentity {
@@ -2215,7 +2622,9 @@ function Write-AiNovelGateProcessEventEvidence {
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Step,
     [Parameter(Mandatory = $true)]$Event,
     [AllowNull()]$ProcessIdentity = $null,
-    [AllowEmptyString()][string]$ExitClassification = ''
+    [AllowEmptyString()][string]$ExitClassification = '',
+    [AllowEmptyString()][string]$ExitBasis = '',
+    [AllowEmptyString()][string]$ExitReason = ''
   )
 
   [ordered]@{
@@ -2223,17 +2632,123 @@ function Write-AiNovelGateProcessEventEvidence {
     step = $Step
     processId = [int]$Event.ProcessId
     exitCode = $Event.ExitCode
-    captureEstablished = [bool]$Event.CaptureEstablished
+    captureEstablished = [bool]$Event.Retained
     captureAttemptedAt = [string]$Event.CaptureAttemptedAt
-    captureFailureStage = [string]$Event.CaptureFailureStage
-    captureWin32Error = $Event.CaptureWin32Error
+    captureFailureStage = [string]$Event.FailureStage
+    captureWin32Error = $Event.Win32Error
+    retainLatencyMicroseconds = $Event.RetainLatencyMicroseconds
+    commandLineLoss = $Event.CommandLineLoss
+    commandLineRetries = $Event.CommandLineRetries
+    commandLineStatus = $Event.CommandLineStatus
+    commandLineReadMicroseconds = $Event.CommandLineReadMicroseconds
     exitCodeCaptured = [bool]$Event.ExitCodeCaptured
     jobMessage = [uint32]$Event.JobMessage
     processIdentity = ConvertTo-AiNovelGateProcessEvidenceIdentity -ProcessIdentity $ProcessIdentity
     exitClassification = $ExitClassification
+    exitBasis = $ExitBasis
+    exitReason = $ExitReason
     recordedAt = [string]$Event.RecordedAt
     monitorStartedAt = $script:AiNovelGateMonitorStartedAt
   } | ConvertTo-Json -Compress | Add-Content -LiteralPath (Join-Path $Path 'process-events.jsonl') -Encoding utf8
+}
+
+function New-AiNovelGateCaptureSummary {
+  param([AllowEmptyString()][string]$Step = '')
+
+  return @{
+    Step = $Step
+    Written = $false
+    Starts = 0
+    Retained = 0
+    Unretained = @{ OpenProcess = 0; KernelIdentity = 0 }
+    CommandLineLoss = @{ 'exited-before-read' = 0; 'unreadable-while-alive' = 0 }
+    RetainLatencies = [System.Collections.Generic.List[long]]::new()
+    IgnoredResultOwnedNonzero = 0
+    IgnoredResultOwnedImages = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  }
+}
+
+function Add-AiNovelGateCaptureSummaryStart {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$Summary,
+    [Parameter(Mandatory = $true)]$Event
+  )
+
+  $Summary.Starts += 1
+  if (-not [bool]$Event.Retained) {
+    $Summary.Unretained[[string]$Event.FailureStage] += 1
+    return
+  }
+  $Summary.Retained += 1
+  $loss = [string]$Event.CommandLineLoss
+  if ($Summary.CommandLineLoss.ContainsKey($loss)) {
+    $Summary.CommandLineLoss[$loss] += 1
+  }
+  if ($null -ne $Event.RetainLatencyMicroseconds) {
+    $Summary.RetainLatencies.Add([long]$Event.RetainLatencyMicroseconds)
+  }
+}
+
+function Add-AiNovelGateCaptureSummaryIgnoredExit {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$Summary,
+    [AllowNull()]$ProcessIdentity
+  )
+
+  $Summary.IgnoredResultOwnedNonzero += 1
+  $imageName = [System.IO.Path]::GetFileName([string]$ProcessIdentity.executablePath)
+  if (-not [string]::IsNullOrWhiteSpace($imageName)) {
+    [void]$Summary.IgnoredResultOwnedImages.Add($imageName)
+  }
+}
+
+function Get-AiNovelGateNearestRank {
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][long[]]$Sorted,
+    [Parameter(Mandatory = $true)][double]$Fraction
+  )
+
+  if ($Sorted.Count -eq 0) {
+    return $null
+  }
+  return $Sorted[[Math]::Max(1, [int][Math]::Ceiling($Fraction * $Sorted.Count)) - 1]
+}
+
+function Write-AiNovelGateCaptureSummaryEvidence {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [AllowNull()][hashtable]$Summary
+  )
+
+  # One summary per step, whichever terminal path or step transition comes first.
+  if ($null -eq $Summary -or $Summary.Written -or [string]::IsNullOrWhiteSpace([string]$Summary.Step)) {
+    return
+  }
+  $Summary.Written = $true
+  $sorted = [long[]]@($Summary.RetainLatencies | Sort-Object)
+  [ordered]@{
+    kind = 'process-capture-summary'
+    step = [string]$Summary.Step
+    starts = $Summary.Starts
+    retained = $Summary.Retained
+    unretainedOpenProcess = $Summary.Unretained.OpenProcess
+    unretainedKernelIdentity = $Summary.Unretained.KernelIdentity
+    commandLineLoss = [ordered]@{
+      exitedBeforeRead = $Summary.CommandLineLoss['exited-before-read']
+      unreadableWhileAlive = $Summary.CommandLineLoss['unreadable-while-alive']
+    }
+    retainLatencyMicroseconds = [ordered]@{
+      p50 = Get-AiNovelGateNearestRank -Sorted $sorted -Fraction 0.5
+      p99 = Get-AiNovelGateNearestRank -Sorted $sorted -Fraction 0.99
+      max = Get-AiNovelGateNearestRank -Sorted $sorted -Fraction 1
+    }
+    ignoredResultOwnedNonzero = [ordered]@{
+      count = $Summary.IgnoredResultOwnedNonzero
+      images = @($Summary.IgnoredResultOwnedImages)
+    }
+    recordedAt = [DateTime]::UtcNow.ToString('o')
+    monitorStartedAt = $script:AiNovelGateMonitorStartedAt
+  } | ConvertTo-Json -Compress -Depth 4 | Add-Content -LiteralPath (Join-Path $Path 'process-events.jsonl') -Encoding utf8
 }
 
 function Write-AiNovelGateWindowEventEvidence {
@@ -3182,8 +3697,11 @@ $quietDeadline = $null
 $lastWindowSnapshot = @()
 $atomicMonitor = $null
 $deferredProcessFailure = $null
+$deferredProcessFailureKind = ''
 $deferredProcessFailureDeadline = $null
 $deferredNsisCmdExitFailure = New-AiNovelGateDeferredNsisCmdExitFailureState
+$monitorFailureKind = 'monitor-failure'
+$captureSummary = New-AiNovelGateCaptureSummary
 $armedRootIdentity = $null
 $verifiedNsisFindParentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $pendingNsisCmdExitFailures = @{}
@@ -3207,7 +3725,7 @@ catch {
     -Failure $failure `
     -Windows @() `
     -ObservedProcessIds @()
-  Write-AiNovelGateStatus -State 'failed' -Failure $failure
+  Write-AiNovelGateStatus -State 'failed' -Failure $failure -FailureKind 'monitor-failure'
   throw
 }
 
@@ -3228,7 +3746,7 @@ if ($startupBlockingWindows.Count -gt 0) {
     -Windows $baselineWindows `
     -ObservedProcessIds @()
   $script:AiNovelGateMonitorStoppedAt = [DateTime]::UtcNow.ToString('o')
-  Write-AiNovelGateStatus -State 'failed' -Failure $failure
+  Write-AiNovelGateStatus -State 'failed' -Failure $failure -FailureKind 'error-window'
   exit 1
 }
 Write-AiNovelGateStatus -State 'ready'
@@ -3250,17 +3768,21 @@ try {
         Stop-AiNovelGateProcesses `
           -ProcessIds $trackedProcessIds `
           -ProcessStartTimeTicks $trackedProcessStartTimeTicks
+        Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
         Write-AiNovelGateStatus -State 'stopped' -Step $activeStep
         break
       }
 
       if ([string]$control.state -eq 'running') {
+        Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
         $activeStep = [string]$control.step
+        $captureSummary = New-AiNovelGateCaptureSummary -Step $activeStep
         $script:AiNovelNativeUpdaterOldApplication = $null
         $trackedProcessIds.Clear()
         $trackedProcessStartTimeTicks.Clear()
         $trackedProcessIdentities.Clear()
         $deferredProcessFailure = $null
+        $deferredProcessFailureKind = ''
         $deferredProcessFailureDeadline = $null
         Clear-AiNovelGateDeferredNsisCmdExitFailureState -State $deferredNsisCmdExitFailure
         $armedRootIdentity = $null
@@ -3375,12 +3897,15 @@ try {
         $completionQuietDeadline = $null
       }
       elseif ([string]$control.state -eq 'quiet') {
+        Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
         $activeStep = [string]$control.step
+        $captureSummary = New-AiNovelGateCaptureSummary -Step $activeStep
         $script:AiNovelNativeUpdaterOldApplication = $null
         $trackedProcessIds.Clear()
         $trackedProcessStartTimeTicks.Clear()
         $trackedProcessIdentities.Clear()
         $deferredProcessFailure = $null
+        $deferredProcessFailureKind = ''
         $deferredProcessFailureDeadline = $null
         Clear-AiNovelGateDeferredNsisCmdExitFailureState -State $deferredNsisCmdExitFailure
         $armedRootIdentity = $null
@@ -3401,42 +3926,29 @@ try {
     $drainSequence += 1
     foreach ($processEvent in @($atomicMonitor.Job.Drain())) {
       $processIdentity = $null
+      $exitVerdict = $null
       $exitClassification = ''
       $processEventEvidenceWritten = $false
       if ([string]$processEvent.Kind -eq 'process-start') {
+        Add-AiNovelGateCaptureSummaryStart -Summary $captureSummary -Event $processEvent
         $processIdentity = Get-AiNovelGateProcessIdentity -Event $processEvent
-        if (-not [bool]$processEvent.CaptureEstablished) {
+        if (-not [bool]$processEvent.Retained) {
           Write-AiNovelGateProcessEventEvidence `
             -Path $EvidencePath `
             -Step $activeStep `
             -Event $processEvent `
             -ProcessIdentity $processIdentity `
-            -ExitClassification 'capture-failure'
-          throw "Release gate could not retain a process handle for job-contained PID $($processEvent.ProcessId); its eventual exit code would be unobservable."
+            -ExitClassification 'unobservable'
+          $monitorFailureKind = 'unobservable-member'
+          $unretainedFailure = if ([string]$processEvent.FailureStage -eq 'KernelIdentity') {
+            "Release gate could not read the kernel identity of job-contained PID $($processEvent.ProcessId); its eventual exit could not be attributed."
+          } else {
+            "Release gate could not retain a process handle for job-contained PID $($processEvent.ProcessId); its eventual exit code would be unobservable."
+          }
+          throw $unretainedFailure
         }
-        $eventStartTimeTicks = 0
-        try {
-          $eventStartTimeTicks = [long]$processEvent.ProcessStartTimeTicks
-        }
-        catch {
-          # Fall back to a direct identity read only for a legacy or degraded
-          # event that did not retain the creation time in the native worker.
-        }
-        if ($eventStartTimeTicks -gt 0) {
-          [void]$trackedProcessIds.Add([int]$processEvent.ProcessId)
-          $trackedProcessStartTimeTicks[[int]$processEvent.ProcessId] = $eventStartTimeTicks
-        } else {
-          [void](Add-AiNovelTrackedProcess `
-            -ProcessId ([int]$processEvent.ProcessId) `
-            -ProcessIds $trackedProcessIds `
-            -ProcessStartTimeTicks $trackedProcessStartTimeTicks)
-        }
-        $expectedStartTimeTicks = if ($trackedProcessStartTimeTicks.ContainsKey([int]$processEvent.ProcessId)) {
-          [long]$trackedProcessStartTimeTicks[[int]$processEvent.ProcessId]
-        } else { 0 }
-        $processIdentity = Get-AiNovelGateProcessIdentity `
-          -Event $processEvent `
-          -ExpectedStartTimeTicks $expectedStartTimeTicks
+        [void]$trackedProcessIds.Add([int]$processEvent.ProcessId)
+        $trackedProcessStartTimeTicks[[int]$processEvent.ProcessId] = [long]$processEvent.ProcessStartTimeTicks
         $trackedProcessIdentities[[int]$processEvent.ProcessId] = $processIdentity
         try {
           if ($null -ne $processIdentity.processName) {
@@ -3454,13 +3966,9 @@ try {
           -ExitClassification 'identity-captured'
         $processEventEvidenceWritten = $true
         if ($null -ne $legacyBridge) {
-          $legacyParentIdentity = $null
-          if (
-            $null -ne $processIdentity.parentProcessId -and
-            $trackedProcessIdentities.ContainsKey([int]$processIdentity.parentProcessId)
-          ) {
-            $legacyParentIdentity = $trackedProcessIdentities[[int]$processIdentity.parentProcessId]
-          }
+          $legacyParentIdentity = Get-AiNovelGateTrackedParentIdentity `
+            -Identity $processIdentity `
+            -TrackedProcessIdentities $trackedProcessIdentities
           if (Test-AiNovelGateLegacyBridgeInstaller `
             -Step $activeStep `
             -LegacyBridge $legacyBridge `
@@ -3490,164 +3998,37 @@ try {
         if ($trackedProcessIdentities.ContainsKey([int]$processEvent.ProcessId)) {
           $processIdentity = $trackedProcessIdentities[[int]$processEvent.ProcessId]
         }
-        $parentIdentity = $null
-        $grandParentIdentity = $null
-        $greatGrandParentIdentity = $null
-        try {
-          if (
-            $null -ne $processIdentity -and
-            $null -ne $processIdentity.parentProcessId -and
-            $trackedProcessIdentities.ContainsKey([int]$processIdentity.parentProcessId)
-          ) {
-            $parentIdentity = $trackedProcessIdentities[[int]$processIdentity.parentProcessId]
-            if (
-              $null -ne $parentIdentity.parentProcessId -and
-              $trackedProcessIdentities.ContainsKey([int]$parentIdentity.parentProcessId)
-            ) {
-              $grandParentIdentity = $trackedProcessIdentities[[int]$parentIdentity.parentProcessId]
-              if (
-                $null -ne $grandParentIdentity.parentProcessId -and
-                $trackedProcessIdentities.ContainsKey([int]$grandParentIdentity.parentProcessId)
-              ) {
-                $greatGrandParentIdentity = $trackedProcessIdentities[[int]$grandParentIdentity.parentProcessId]
-              }
-            }
-          }
-        }
-        catch {
-          # Missing parent metadata remains fail-closed in the classifier.
-        }
-        $exitFailure = Get-AiNovelGateProcessExitFailure -Step $activeStep -Event $processEvent
-        $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $processIdentity
-        $armedRootIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $armedRootIdentity
-        $isCapturedNonzeroDescendantExit = (
-          $null -ne $processIdentityKey -and
-          $null -ne $armedRootIdentityKey -and
-          [bool]$processEvent.ExitCodeCaptured -and
-          [uint32]$processEvent.JobMessage -eq 7 -and
-          $null -ne $processEvent.ExitCode -and
-          [int]$processEvent.ExitCode -ne 0 -and
-          -not [string]::Equals(
-            $processIdentityKey,
-            $armedRootIdentityKey,
-            [System.StringComparison]::OrdinalIgnoreCase
-          )
-        )
-        if (Test-AiNovelGateLegacyBridgeTermination `
+        $exitVerdict = Get-AiNovelGateExitVerdict `
           -Step $activeStep `
+          -Event $processEvent `
+          -ProcessIdentity $processIdentity `
+          -TrackedProcessIdentities $trackedProcessIdentities `
           -LegacyBridge $legacyBridge `
-          -InstallerIdentity $processIdentity) {
+          -ArmedRootIdentity $armedRootIdentity `
+          -VerifiedFindParentKeys $verifiedNsisFindParentKeys
+        $exitClassification = [string]$exitVerdict.Classification
+        if ($exitClassification -eq 'legacy-bridge-terminated') {
           $legacyBridge.State = 'terminated'
           $legacyBridge.TerminatedAtUtc = [DateTime]::UtcNow
-          $exitClassification = 'legacy-bridge-terminated'
           Write-AiNovelGateStatus -State 'legacy-bridge-terminated' -Step $activeStep -LegacyBridge (Get-AiNovelGateLegacyBridgeStatus -LegacyBridge $legacyBridge)
         }
-        elseif (Test-AiNovelGateLegacyBridgeOldApplicationExit `
-          -Step $activeStep `
-          -LegacyBridge $legacyBridge `
-          -Event $processEvent `
-          -ProcessIdentity $processIdentity) {
-          $exitClassification = 'legacy-bridge-old-application-breakpoint'
-        }
-        elseif (Test-AiNovelGateNativeUpdaterOldApplicationExit `
-          -Step $activeStep `
-          -LegacyBridge $legacyBridge `
-          -Event $processEvent `
-          -ProcessIdentity $processIdentity `
-          -TrackedProcessIdentities $trackedProcessIdentities) {
-          $exitClassification = 'native-updater-old-application-breakpoint'
-        }
-        elseif ($null -eq $exitFailure) {
-          $exitClassification = 'succeeded'
-        }
-        elseif (Test-AiNovelGateExpectedLegacyBridgeOldUninstallerPowerShellProbeExit `
-          -Step $activeStep `
-          -LegacyBridge $legacyBridge `
-          -Event $processEvent `
-          -ProcessIdentity $processIdentity `
-          -ParentIdentity $parentIdentity `
-          -GrandParentIdentity $grandParentIdentity `
-          -ArmedRootIdentity $armedRootIdentity `
-          -TrackedProcessIdentities $trackedProcessIdentities) {
-          $exitClassification = 'expected-legacy-bridge-old-uninstaller-powershell-probe'
-        }
-        elseif (Test-AiNovelGateExpectedNsisPowerShellProbeExit `
-          -Step $activeStep `
-          -Event $processEvent `
-          -ProcessIdentity $processIdentity `
-          -ParentIdentity $parentIdentity `
-          -GrandParentIdentity $grandParentIdentity `
-          -LegacyBridge $legacyBridge `
-          -ArmedRootIdentity $armedRootIdentity `
-          -TrackedProcessIdentities $trackedProcessIdentities) {
-          $exitClassification = 'expected-nsis-powershell-probe'
-        }
-        elseif ($null -ne ($filterNoMatchClassification = Get-AiNovelGateExpectedNsisFilterNoMatchClassification `
-          -Step $activeStep `
-          -Event $processEvent `
-          -ProcessIdentity $processIdentity `
-          -ParentIdentity $parentIdentity `
-          -GrandParentIdentity $grandParentIdentity `
-          -GreatGrandParentIdentity $greatGrandParentIdentity `
-          -LegacyBridge $legacyBridge `
-          -ArmedRootIdentity $armedRootIdentity `
-          -TrackedProcessIdentities $trackedProcessIdentities)) {
-          $parentProcessIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $parentIdentity
-          if ($null -eq $parentProcessIdentityKey) {
-            $exitClassification = 'failure'
-          } else {
-            [void](Register-AiNovelGateVerifiedNsisFindParent `
-              -VerifiedFindParentKeys $verifiedNsisFindParentKeys `
-              -PendingNsisCmdExitFailures $pendingNsisCmdExitFailures `
-              -ParentProcessIdentityKey $parentProcessIdentityKey)
-            [void](Resolve-AiNovelGateDeferredNsisCmdExitFailure `
-              -State $deferredNsisCmdExitFailure `
-              -ProcessIdentityKey $parentProcessIdentityKey)
-            $exitClassification = $filterNoMatchClassification
-          }
-        }
-        elseif (Test-AiNovelGateExpectedNsisCmdProcessCheckExit `
-          -Step $activeStep `
-          -Event $processEvent `
-          -ProcessIdentity $processIdentity `
-          -ParentIdentity $parentIdentity `
-          -GrandParentIdentity $grandParentIdentity `
-          -LegacyBridge $legacyBridge `
-          -ArmedRootIdentity $armedRootIdentity `
-          -TrackedProcessIdentities $trackedProcessIdentities `
-          -VerifiedFindParentKeys $verifiedNsisFindParentKeys) {
-          $exitClassification = 'expected-nsis-cmd-process-check'
-        }
-        elseif (Test-AiNovelGateNsisCmdProcessCheckCandidate `
-          -Step $activeStep `
-          -Event $processEvent `
-          -ProcessIdentity $processIdentity `
-          -ParentIdentity $parentIdentity `
-          -GrandParentIdentity $grandParentIdentity `
-          -LegacyBridge $legacyBridge `
-          -ArmedRootIdentity $armedRootIdentity `
-          -TrackedProcessIdentities $trackedProcessIdentities) {
-          $processIdentityKey = Get-AiNovelGateProcessIdentityKey -ProcessIdentity $processIdentity
-          if (Add-AiNovelGatePendingNsisCmdExitFailure `
+        elseif (-not [string]::IsNullOrEmpty([string]$exitVerdict.ParentKey)) {
+          [void](Register-AiNovelGateVerifiedNsisFindParent `
+            -VerifiedFindParentKeys $verifiedNsisFindParentKeys `
             -PendingNsisCmdExitFailures $pendingNsisCmdExitFailures `
-            -ProcessIdentityKey $processIdentityKey `
-            -Failure $exitFailure) {
-            # A cmd.exe exit can reach the completion port before its find.exe
-            # child. Delay the exception decision until a matching, validated
-            # find.exe no-match event is observed.
-            $exitClassification = 'pending-nsis-cmd-process-check'
-          } else {
-            $exitClassification = 'failure'
-          }
+            -ParentProcessIdentityKey $exitVerdict.ParentKey)
+          [void](Resolve-AiNovelGateDeferredNsisCmdExitFailure `
+            -State $deferredNsisCmdExitFailure `
+            -ProcessIdentityKey $exitVerdict.ParentKey)
         }
-        elseif (
-          $activeStep -in @('build:win:artifacts', 'smoke:win-installer', 'smoke:win-v025-upgrade') -and
-          $isCapturedNonzeroDescendantExit
-        ) {
-          $exitClassification = 'ignored-result-owned-descendant-nonzero'
+        elseif ($exitVerdict.Kind -eq 'pending') {
+          [void](Add-AiNovelGatePendingNsisCmdExitFailure `
+            -PendingNsisCmdExitFailures $pendingNsisCmdExitFailures `
+            -ProcessIdentityKey (Get-AiNovelGateProcessIdentityKey -ProcessIdentity $processIdentity) `
+            -Failure $exitVerdict.Failure)
         }
-        else {
-          $exitClassification = 'failure'
+        elseif ($exitVerdict.Kind -eq 'result-owned') {
+          Add-AiNovelGateCaptureSummaryIgnoredExit -Summary $captureSummary -ProcessIdentity $processIdentity
         }
       }
       elseif ([string]$processEvent.Kind -eq 'job-empty') {
@@ -3662,7 +4043,9 @@ try {
           -Step $activeStep `
           -Event $processEvent `
           -ProcessIdentity $processIdentity `
-          -ExitClassification $exitClassification
+          -ExitClassification $exitClassification `
+          -ExitBasis ([string]$exitVerdict.Basis) `
+          -ExitReason ([string]$exitVerdict.Reason)
       }
       if ([string]::IsNullOrWhiteSpace($activeStep)) {
         continue
@@ -3670,38 +4053,16 @@ try {
       if ([string]$processEvent.Kind -eq 'monitor-error') {
         throw "Release gate lost its Job Object completion-port stream (Win32 error $($processEvent.JobMessage))."
       }
-      if ([string]$processEvent.Kind -eq 'process-start') {
-        continue
-      }
-      elseif ([string]$processEvent.Kind -eq 'process-exit') {
-        # The armed root and its durable result own final success for selected
-        # build/installer/upgrade steps. Their identified descendants remain evidence;
-        # other steps still fail closed on every abnormal descendant exit.
-        if ($exitClassification -in @(
-          'expected-legacy-bridge-old-uninstaller-powershell-probe',
-          'expected-nsis-powershell-probe',
-          'expected-nsis-cmd-process-check',
-          'expected-nsis-find-no-match',
-          'expected-nsis-findstr-no-match',
-          'pending-nsis-cmd-process-check',
-          'legacy-bridge-terminated',
-          'legacy-bridge-old-application-breakpoint',
-          'native-updater-old-application-breakpoint',
-          'ignored-result-owned-descendant-nonzero'
-        )) {
-          continue
-        }
-        $exitFailure = Get-AiNovelGateProcessExitFailure -Step $activeStep -Event $processEvent
-        if ($null -ne $exitFailure -and $null -eq $deferredProcessFailure) {
-          $deferredProcessFailure = $exitFailure
-          $deferredProcessFailureDeadline = [DateTime]::UtcNow.AddSeconds(15)
-          Write-AiNovelGateProcessTreeEvidence `
-            -Path $EvidencePath `
-            -Step $activeStep `
-            -ProcessIds $trackedProcessIds `
-            -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
-            -Reason 'process-failure-awaiting-launch-result'
-        }
+      if ([string]$processEvent.Kind -eq 'process-exit' -and $exitVerdict.Blocks -and $null -eq $deferredProcessFailure) {
+        $deferredProcessFailure = [string]$exitVerdict.Failure
+        $deferredProcessFailureKind = [string]$exitVerdict.FailureKind
+        $deferredProcessFailureDeadline = [DateTime]::UtcNow.AddSeconds(15)
+        Write-AiNovelGateProcessTreeEvidence `
+          -Path $EvidencePath `
+          -Step $activeStep `
+          -ProcessIds $trackedProcessIds `
+          -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
+          -Reason 'process-failure-awaiting-launch-result'
       }
     }
 
@@ -3854,7 +4215,8 @@ try {
           -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
           -Reason 'error-window'
         $script:AiNovelGateMonitorStoppedAt = [DateTime]::UtcNow.ToString('o')
-        Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure
+        Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
+        Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure -FailureKind 'error-window'
         Stop-AiNovelGateAtomicJob -AtomicMonitor $atomicMonitor
         Stop-AiNovelGateProcesses `
           -ProcessIds $trackedProcessIds `
@@ -3903,6 +4265,7 @@ try {
           -ProcessIds $trackedProcessIds `
           -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
           -Reason 'step-completed-after-quiet-period'
+        Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
         Write-AiNovelGateStatus -State 'step-completed' -Step $activeStep
         $completionDeadline = $null
         $completionQuietDeadline = $null
@@ -3922,7 +4285,8 @@ try {
           -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
           -Reason 'process-timeout'
         $script:AiNovelGateMonitorStoppedAt = [DateTime]::UtcNow.ToString('o')
-        Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure
+        Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
+        Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure -FailureKind 'process-timeout'
         Stop-AiNovelGateAtomicJob -AtomicMonitor $atomicMonitor
         Stop-AiNovelGateProcesses `
           -ProcessIds $trackedProcessIds `
@@ -3954,7 +4318,8 @@ try {
         -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
         -Reason 'deferred-process-failure'
       $script:AiNovelGateMonitorStoppedAt = [DateTime]::UtcNow.ToString('o')
-      Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure
+      Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
+      Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure -FailureKind $deferredProcessFailureKind
       Stop-AiNovelGateAtomicJob -AtomicMonitor $atomicMonitor
       Stop-AiNovelGateProcesses `
         -ProcessIds $trackedProcessIds `
@@ -3985,7 +4350,8 @@ try {
         -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
         -Reason 'nsis-cmd-missing-verified-find'
       $script:AiNovelGateMonitorStoppedAt = [DateTime]::UtcNow.ToString('o')
-      Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure
+      Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
+      Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure -FailureKind 'process-failure'
       Stop-AiNovelGateAtomicJob -AtomicMonitor $atomicMonitor
       Stop-AiNovelGateProcesses `
         -ProcessIds $trackedProcessIds `
@@ -4007,6 +4373,7 @@ try {
         -ProcessIds $trackedProcessIds `
         -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
         -Reason 'final-quiet-period-completed'
+      Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
       Write-AiNovelGateStatus -State 'step-completed' -Step $activeStep
       $quietDeadline = $null
     }
@@ -4028,7 +4395,8 @@ catch {
     -ProcessIds $trackedProcessIds `
     -ProcessStartTimeTicks $trackedProcessStartTimeTicks `
     -Reason 'monitor-failure'
-  Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure
+  Write-AiNovelGateCaptureSummaryEvidence -Path $EvidencePath -Summary $captureSummary
+  Write-AiNovelGateStatus -State 'failed' -Step $activeStep -Failure $failure -FailureKind $monitorFailureKind
   Stop-AiNovelGateAtomicJob -AtomicMonitor $atomicMonitor
   Stop-AiNovelGateProcesses `
     -ProcessIds $trackedProcessIds `
