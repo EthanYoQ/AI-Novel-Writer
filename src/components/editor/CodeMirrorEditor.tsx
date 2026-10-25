@@ -17,6 +17,7 @@ import { countDraftUnits } from '../../shared/draft-units'
 import { useLocaleStore } from '../../stores/locale-store'
 import { getActiveProjectSessionContext } from '../../shared/project-session-context'
 import { livePreview, paperHeadFacet, type PaperHead } from './live-preview'
+import { commandKeyLabel } from '../stage/shortcut-keys'
 
 export type CodeMirrorEditorProps = {
   content: string
@@ -39,7 +40,11 @@ export type CodeMirrorEditorProps = {
 
 type Label = readonly [string, string]
 
-/** 指令文字由主进程持有，这里只有按钮文案。 */
+function clampBubbleLeft(centerLeft: number, halfWidth: number): number {
+  if (!halfWidth) return centerLeft
+  return Math.min(Math.max(centerLeft, halfWidth + 8), window.innerWidth - halfWidth - 8)
+}
+
 const AI_ACTIONS: readonly { key: EditorInlineFixedAction; label: Label }[] = [
   { key: 'refine', label: ['润色', 'Refine'] },
   { key: 'expand', label: ['扩写', 'Expand'] },
@@ -125,17 +130,13 @@ export default function CodeMirrorEditor({
   const [aiResult, setAiResult] = useState<string | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
   const [activeAIAction, setActiveAIAction] = useState<string | null>(null)
-  /** 正在写的意见；null 表示没在写。预览打开时以预览为准。 */
   const [noteDraft, setNoteDraft] = useState<string | null>(null)
   const [activeNote, setActiveNote] = useState<string | null>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
   const [bubbleHalfWidth, setBubbleHalfWidth] = useState(0)
   const bubbleShape = `${bubbleOpen}:${aiResult === null}:${noteDraft === null}:${uiLocale}:${mode}`
-  // 工具条以选区中点居中；选区贴着窗口边时把它推回窗口内，不让按钮被裁掉。
   useLayoutEffect(() => { setBubbleHalfWidth((bubbleRef.current?.offsetWidth ?? 0) / 2) }, [bubbleShape])
-  const bubbleLeft = bubbleHalfWidth
-    ? Math.min(Math.max(bubblePos.left, bubbleHalfWidth + 8), window.innerWidth - bubbleHalfWidth - 8)
-    : bubblePos.left
+  const bubbleLeft = clampBubbleLeft(bubblePos.left, bubbleHalfWidth)
   const [loadingDots, setLoadingDots] = useState('.')
   const [selectionRange, setSelectionRange] = useState<{ from: number, to: number } | null>(null)
   const aiRequestSequenceRef = useRef(0)
@@ -588,7 +589,6 @@ export default function CodeMirrorEditor({
           data-theme={inkThemeName}
           data-preview={aiResult !== null || undefined}
           style={{ top: bubblePos.top, left: bubbleLeft }}
-          // 防止编辑器失焦；意见输入框要能拿到焦点
           onMouseDown={(e) => { if (!(e.target instanceof HTMLTextAreaElement)) e.preventDefault() }}
         >
           {aiResult !== null ? (
@@ -633,10 +633,9 @@ export default function CodeMirrorEditor({
                 aria-keyshortcuts="Control+Enter Meta+Enter Escape"
                 placeholder={uiText('想怎么改？例如：改成第一人称，语气更冷', 'How should it change? For example: first person, colder tone')}
                 rows={3}
-                maxLength={EDITOR_INLINE_INSTRUCTION_MAX_LENGTH}
                 autoFocus
                 value={noteDraft}
-                onChange={(e) => setNoteDraft(e.target.value)}
+                onChange={(e) => setNoteDraft(Array.from(e.target.value).slice(0, EDITOR_INLINE_INSTRUCTION_MAX_LENGTH).join(''))}
                 onKeyDown={(e) => {
                   if (e.nativeEvent.isComposing) return
                   if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelNote() }
@@ -644,7 +643,7 @@ export default function CodeMirrorEditor({
                 }}
               />
               <div className="cm-selbar-actions">
-                <span className="cm-selbar-hint">{uiText('Ctrl/⌘ + Enter 提交', 'Ctrl/⌘ + Enter to submit')}</span>
+                <span className="cm-selbar-hint">{uiText(`${commandKeyLabel('Enter')} 提交`, `${commandKeyLabel('Enter')} to submit`)}</span>
                 <Button variant="secondary" size="sm" type="button" onClick={cancelNote}>{uiText('取消', 'Cancel')}</Button>
                 <Button variant="primary" size="sm" type="submit" disabled={!noteDraft.trim()}>{uiText('改写', 'Revise')}</Button>
               </div>

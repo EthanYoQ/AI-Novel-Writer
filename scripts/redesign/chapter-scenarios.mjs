@@ -686,7 +686,6 @@ export const CHAPTER_SCENARIOS = {
     await toolbar.waitFor({ state: 'visible' })
   } },
 
-  /** #516：选中一段正文写意见改写，意见进入发给模型的请求，预览后替换。 */
   'chapter-selection-note': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake, shoot }) => {
     const note = '改成林岚的第一人称，语气更冷'
     const revised = '我沿着旧港的石阶往下走。潮水退了，盐霜冷得像没人说出口的话。'

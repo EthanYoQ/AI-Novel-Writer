@@ -2,10 +2,9 @@ import type { MainGenerationRunHandle, MainGenerationRunView, MainGenerationExec
 import type { PromptTemplate } from '../services/builtin-prompt-templates'
 import type { WritingLanguage } from './writing-language'
 
-/** 作者意见的长度上限，按字符（码点）计。 */
+/** 上限按码点计，不是 UTF-16 单元。 */
 export const EDITOR_INLINE_INSTRUCTION_MAX_LENGTH = 2000
 export type EditorInlineFixedAction = 'refine' | 'expand' | 'continue' | 'dialogue'
-/** 固定动作自带指令；instruct 由作者写意见，原样冻结进运行。 */
 export type EditorInlineRequest = { action: EditorInlineFixedAction } | { action: 'instruct'; instruction: string }
 export type EditorInlineInput = EditorInlineRequest & {
   documentText: string

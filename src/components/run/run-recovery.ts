@@ -57,7 +57,6 @@ export interface EditorEntry extends Usage {
   key: string
   title: string
   selectedText: string
-  /** 按意见改时作者当时写的意见，随运行冻结。 */
   instructionNote?: string
   conflictNote?: string
   suggestions: (RecoveryText & { incompleteNote?: string })[]
