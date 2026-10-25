@@ -1071,4 +1071,23 @@ describe('cast refresh after the character-state step', () => {
     expect(retried.steps.character_cards).toMatchObject({ ok: true })
     expect(refreshes).toEqual([{ resources: ['characterCards'], projectSession: workflowContext.projectSession, storedLocation: 'harbor' }])
   })
+
+  it('#502 a step key the current version no longer has does not block retrying the steps that still exist', async () => {
+    let interrupted = false
+    useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+      const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+      if (!system.includes('character records')) streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop')
+      else if (!interrupted) { interrupted = true; streamCallbacks.onError?.('synthetic stream interrupted') }
+      else streamCallbacks.onDone?.(modelFixtureResponse(harbor), undefined, 'stop')
+      return 'synthetic-request'
+    }) })
+    expect((await command('Lin Lan arrives at the harbor.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })).steps.character_cards.ok).toBe(false)
+
+    const retried = await command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKeys: ['style_analysis', 'character_cards'], retryInvalidResult: true })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+
+    expect(retried.steps.character_cards).toMatchObject({ ok: true })
+    await expect(command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKeys: ['style_analysis'] })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow('style_analysis')
+  })
 })
