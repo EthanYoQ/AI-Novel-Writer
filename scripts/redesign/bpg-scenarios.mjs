@@ -10,12 +10,16 @@ const NOTES = '作者先手写的要点：林岚已经拿到父亲的信。'
 const REGENERATED = 3
 const regeneratedTitle = chapterNumber => `重生成第${chapterNumber}章`
 
+const SYNTAX_REPAIR_CHAPTER_LIST = /本次必须且只能完整返回以下 chapterNumber：([\d、]+)。/u
+const COMPACT_SINGLE_CHAPTER = /必须且只能返回 chapterNumber=(\d+) 的一项/u
+const BATCH_CHAPTER_RANGE = /为接下来的 第(\d+)章到第(\d+)章/u
+
 function requestedChapters(prompt) {
-  const listed = /本次必须且只能完整返回以下 chapterNumber：([\d、]+)。/u.exec(prompt)
+  const listed = SYNTAX_REPAIR_CHAPTER_LIST.exec(prompt)
   if (listed) return listed[1].split('、').map(Number)
-  const single = /必须且只能返回 chapterNumber=(\d+) 的一项/u.exec(prompt)
+  const single = COMPACT_SINGLE_CHAPTER.exec(prompt)
   if (single) return [Number(single[1])]
-  const range = /为接下来的 第(\d+)章到第(\d+)章/u.exec(prompt)
+  const range = BATCH_CHAPTER_RANGE.exec(prompt)
   if (!range) return null
   return Array.from({ length: Number(range[2]) - Number(range[1]) + 1 }, (_, index) => Number(range[1]) + index)
 }
