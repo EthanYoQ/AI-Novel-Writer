@@ -436,6 +436,8 @@ export default function CodeMirrorEditor({
     try {
       const receipt = await inlineRef.current?.execute()
       if (sequence !== aiRequestSequenceRef.current) return
+      const failureCode = receipt?.outcome.receipt.failureCode
+      if (isTerminalProviderFailure(failureCode)) { setAiError(displayedErrorMessage(uiLocale, failureCode)); return }
       if (!receipt || receipt.outcome.status !== 'completed' || receipt.outcome.finishReason !== 'stop') throw new Error('EDITOR_INLINE_INCOMPLETE')
       const proof = (receipt.run.candidates ?? receipt.run.artifacts).find(candidate => candidate.text === receipt.outcome.content && candidate.status === 'completed' && candidate.compositionEligible === true)
       aiCandidateRef.current = proof ? { artifactId: proof.artifactId, textHash: proof.textHash } : null
