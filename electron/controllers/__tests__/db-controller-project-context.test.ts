@@ -1073,13 +1073,14 @@ describe('database controller project context guard', () => {
     expect(mocks.draftListAll).toHaveBeenCalledOnce()
   })
 
-  it('rejects content updates for finalized database drafts', async () => {
+  it('returns the repository read-only refusal for finalized database drafts', async () => {
     mocks.draftGetMeta.mockReturnValueOnce({
       id: 1,
       chapterNumber: 1,
       version: 2,
       status: 'finalized',
     })
+    mocks.draftUpdateContent.mockImplementationOnce(() => { throw new Error('DRAFT_FINALIZED_READ_ONLY') })
 
     await expect(handler('db:draft-update-content')(
       {},
@@ -1091,7 +1092,6 @@ describe('database controller project context guard', () => {
       success: false,
       error: 'Error: DRAFT_FINALIZED_READ_ONLY',
     })
-    expect(mocks.draftUpdateContent).not.toHaveBeenCalled()
   })
 
   it('returns a stable redirect code when generic deletion races with finalization', async () => {
