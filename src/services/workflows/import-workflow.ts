@@ -349,6 +349,10 @@ function productionDependencies(
       }
       return receipt.effectReceipt as FinalizedDraftImportReceipt
     },
+    isAuthorDraftReplaced: async draft => {
+      const meta = await ipc.invokeWithProjectSession(session, 'db:draft-get-meta', draft.draftId, projectPath)
+      return meta?.status === 'superseded'
+    },
     publishAuthorChapter: async (chapter, draft, run) => {
       const { retryFinalizationPublication } = await import('../finalization-client')
       const result = await retryFinalizationPublication(draft.finalizationId, session)

@@ -73,6 +73,8 @@ export const zhCN = {
   'error.narrativeThreadEvidenceNotInSource': '请粘贴所选定稿章节中实际出现的短原文。',
   'error.draftNotFound': '这份草稿已经不在了（可能已被删除），本次修改没有保存。',
   'error.draftFinalizedReadOnly': '这一章已经定稿，定稿正文是只读的，本次修改没有保存。',
+  'error.supersededDraftDeleteForbidden': '这一稿是已被替换的旧定稿，不能单独删除；删除这一章的正文时会一起删掉。',
+  'error.finalizationSuperseded': '这份定稿已被这一章更新的定稿替换，不再发布或重新定稿。',
   'error.chapterDeleteOperationNotFound': '这次删除的记录已经不在了（可能已经完成或被清理），请刷新后再看。',
   'error.chapterDeleteLegacyConfirmationConsumed': '这次删除的人工核对已经确认过，不能再确认一次。请刷新后查看删除进度。',
   'error.chapterDeleteSourceChanged': '这一章的正文、定稿记录或后处理记录在你确认前有了变化，已停止删除。请刷新后重新删除。',
@@ -133,4 +135,5 @@ export const zhCN = {
   'error.importInspectionExpired': '文件检查已经过期。请重新选择文件。',
   'error.importInspectionLimit': '等待确认的导入太多。请先完成或取消已打开的导入，再选择文件。',
   'error.finalizedImportPreviewStale': '确认原稿预览后，作品里的定稿章节有了变化，这份预览已经过期。请重新选择原稿并确认新的预览。',
+  'error.finalizedImportChapterAlreadyFinalized': '要导入的章号里已经有定稿，没有导入。请重新选择原稿并确认预览。',
 } satisfies Record<MessageKey, string>
