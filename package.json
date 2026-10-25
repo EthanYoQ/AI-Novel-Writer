@@ -98,7 +98,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/browser-playwright": "^4.1.10",
     "@vitest/coverage-v8": "^4.1.10",
-    "electron": "^41.10.3",
+    "electron": "^44.9.3",
     "electron-builder": "^26.15.0",
     "esbuild": "^0.28.1",
     "eslint": "^8.57.1",
