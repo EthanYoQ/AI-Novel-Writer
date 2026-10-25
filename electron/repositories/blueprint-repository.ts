@@ -448,12 +448,12 @@ function snapshotWithCharacterSyncFacts(
     })
 }
 
-/** 作者维护的字段。区间重写只替换生成的字段；请求里这些字段为空时沿用已有行的值。 */
+/** 作者维护的字段。区间重写只替换生成的字段；请求里这些字段为空时沿用已有行的非空值。 */
 const AUTHOR_FIELDS = ['userGuidance', 'notes', 'notesUpdatedAt'] as const
 
 function withExistingAuthorFields(blueprint: BlueprintData, existing: BlueprintData | undefined): BlueprintData {
     const kept = existing
-        ? Object.fromEntries(AUTHOR_FIELDS.filter(key => blueprint[key] === '').map(key => [key, existing[key]]))
+        ? Object.fromEntries(AUTHOR_FIELDS.filter(key => blueprint[key] === '' && existing[key]).map(key => [key, existing[key]]))
         : {}
     return { ...blueprint, ...kept }
 }
