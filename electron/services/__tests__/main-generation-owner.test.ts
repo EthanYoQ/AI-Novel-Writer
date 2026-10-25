@@ -1182,6 +1182,16 @@ describe('S07 durable task budget diagnostics', () => {
     expect(saved.outcome.receipt).toMatchObject({ failureCode: 'NETWORK_ERROR' })
     expect(saved.run.budgetDiagnostics![0]).toMatchObject({ failureCode: 'NETWORK_ERROR' })
   })
+  // 讨论区 #77：发送前不再自估拒绝，提示词真超长时由服务商报错；回执要带上可登记的码，不压平成通用失败。
+  it('records a provider context-length rejection under its own failure code', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: "This model's maximum context length is 1048576 tokens. However, you requested 1200051 tokens (1200035 in the messages, 16 in the completion). Please reduce the length of the messages or completion.",
+      type: 'invalid_request_error', param: null, code: 'invalid_request_error' } }), { status: 400, headers: { 'Content-Type': 'application/json' } })))
+    const f = fixture()
+    const run = f.owner.begin(f.begin)
+    const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'context-length', task })
+    expect(saved.outcome).toMatchObject({ status: 'incomplete', finishReason: 'error', receipt: { failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } })
+    expect(saved.run.budgetDiagnostics![0]).toMatchObject({ failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED', actualState: 'unknown' })
+  })
   // 实测 gemini-3.8-flash：输入 20、正文 60、思考 830、总量 910。调用记录的「输出」要和 OpenAI 一样含思考（#484）。
   it.each([
     ['separately-billed', 60],
