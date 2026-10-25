@@ -1,4 +1,3 @@
-// #516 讨论中发现的问题：覆盖重新生成前 N 章时，已填的作者微操指导和章节要点不能被清空。
 import assert from 'node:assert/strict'
 
 import * as blueprint from './pages/blueprint.mjs'
@@ -11,7 +10,6 @@ const NOTES = '作者先手写的要点：林岚已经拿到父亲的信。'
 const REGENERATED = 3
 const regeneratedTitle = chapterNumber => `重生成第${chapterNumber}章`
 
-/** 目录生成请求对应的章号：批量提示写范围，语法修复写清单，单章压缩写一章；都不是时为 null。 */
 function requestedChapters(prompt) {
   const listed = /本次必须且只能完整返回以下 chapterNumber：([\d、]+)。/u.exec(prompt)
   if (listed) return listed[1].split('、').map(Number)
@@ -22,7 +20,6 @@ function requestedChapters(prompt) {
   return Array.from({ length: Number(range[2]) - Number(range[1]) + 1 }, (_, index) => Number(range[1]) + index)
 }
 
-/** 目录生成请求回一份覆盖本批全部章节的合法蓝图 JSON；其余请求照常作答。 */
 function blueprintReply(prompt) {
   const chapters = requestedChapters(prompt)
   if (!chapters) return null
@@ -33,10 +30,6 @@ function blueprintReply(prompt) {
   })) })
 }
 
-/**
- * 示例作品的蓝图行没写作者字段，库里是 NULL，卡片的文本框遇到 NULL 不受控、换章后会留着上一章的字。
- * 要重新生成的章先按界面保存时的形状写成空串，读到的才是这一章自己的值。
- */
 const withEmptyAuthorFields = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path, session }) => {
   for (let chapterNumber = 1; chapterNumber <= REGENERATED; chapterNumber++) {
     const current = await invoke(page, 'db:blueprint-get', chapterNumber, path, session)
