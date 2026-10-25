@@ -122,14 +122,15 @@ describe('BlueprintRepository without an opened project DB', () => {
 })
 
 describe('BlueprintRepository reads rows with NULL columns', () => {
-  it('returns empty text and no characters for NULL columns, and keeps stored values', () => {
+  it('returns empty text and no characters for NULL columns or unparsable characters, and keeps stored values', () => {
     const db = createBlueprintDb()
     vi.mocked(getProjectDb).mockReturnValue(db)
     db.prepare(`
       INSERT INTO blueprints (chapter_number, title, role, purpose, key_events, characters,
         suspense_hook, user_guidance, notes, notes_updated_at)
       VALUES (1, '旧港', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-             (2, '北堤', '发展', '推进', '事件', '["林岚"]', '钩子', '只写雨夜', '要点', '2026-10-01 08:00:00')
+             (2, '北堤', '发展', '推进', '事件', '["林岚"]', '钩子', '只写雨夜', '要点', '2026-10-01 08:00:00'),
+             (3, '灯塔', '', '', '', '林岚', '', '', '', '')
     `).run()
     const nullRow = {
       chapterNumber: 1, title: '旧港', role: '', purpose: '', keyEvents: '', characters: [],
@@ -140,7 +141,12 @@ describe('BlueprintRepository reads rows with NULL columns', () => {
       suspenseHook: '钩子', userGuidance: '只写雨夜', notes: '要点', notesUpdatedAt: '2026-10-01 08:00:00',
     }
 
-    expect(BlueprintRepository.getAll()).toEqual([nullRow, filledRow])
+    const unparsedCharactersRow = {
+      chapterNumber: 3, title: '灯塔', role: '', purpose: '', keyEvents: '', characters: [],
+      suspenseHook: '', userGuidance: '', notes: '', notesUpdatedAt: '',
+    }
+
+    expect(BlueprintRepository.getAll()).toEqual([nullRow, filledRow, unparsedCharactersRow])
     expect(BlueprintRepository.getByChapter(1)).toEqual(nullRow)
   })
 })

@@ -129,7 +129,7 @@ const withFilledChapter = context => seedStageSample(context, { beforeReload: as
   const current = await invoke(page, 'db:blueprint-get', FILLED, projectPath, session)
   assert.equal(current?.chapterNumber, FILLED, `示例作品有第 ${FILLED} 章蓝图`)
   assert.equal((await invoke(page, 'db:blueprint-upsert', { ...current, ...FILLED_FIELDS }, projectPath, session)).success, true)
-  assert.deepEqual(await rawBlueprintRow(projectPath, NULL_FIELDS), { user_guidance: null, suspense_hook: null, title: stageChapterTitle(NULL_FIELDS) },
+  assert.deepEqual(await rawBlueprintRow(projectPath, NULL_FIELDS), { user_guidance: null, suspense_hook: null, notes: null, title: stageChapterTitle(NULL_FIELDS) },
     `第 ${NULL_FIELDS} 章的作者字段在库里是 NULL`)
 } })
 
@@ -140,7 +140,7 @@ async function rawBlueprintRow(projectPath, chapterNumber) {
   assert.ok(fs.existsSync(file), `有项目库 ${file}`)
   const db = new DatabaseSync(file, { readOnly: true })
   try {
-    const row = db.prepare('SELECT user_guidance, suspense_hook, title FROM blueprints WHERE chapter_number = ?').get(chapterNumber)
+    const row = db.prepare('SELECT user_guidance, suspense_hook, notes, title FROM blueprints WHERE chapter_number = ?').get(chapterNumber)
     assert.ok(row, `库里有第 ${chapterNumber} 章蓝图行`)
     return { ...row }
   } finally { db.close() }
@@ -237,6 +237,8 @@ export const BLUEPRINT_SCENARIOS = {
     await shownAfterSwitch(page)
     await nullFieldsCard(page).getByRole('textbox', { name: /^作者微操指导/ }).press('End')
     await page.keyboard.type('补一句')
+    await nullFieldsCard(page).getByRole('textbox', { name: /^章节要点/ }).press('End')
+    await page.keyboard.type('补一条')
     await saveWithCtrlS(page)
     measured.dbAfterTyping = await raw()
 
@@ -252,11 +254,11 @@ export const BLUEPRINT_SCENARIOS = {
       afterSwitch: empty,
       afterSwitchBack: empty,
       afterReload: empty,
-      dbAfterLeaving: { user_guidance: null, suspense_hook: null, title: stageChapterTitle(NULL_FIELDS) },
-      dbAfterOtherFieldSave: { user_guidance: '', suspense_hook: '', title: '第二盏灯亮起' },
-      dbAfterExitSave: { user_guidance: '', suspense_hook: '', title: '第二盏灯又亮起' },
-      dbAfterTyping: { user_guidance: '补一句', suspense_hook: '', title: '第二盏灯又亮起' },
-      afterRestart: { ...empty, userGuidance: '补一句' },
+      dbAfterLeaving: { user_guidance: null, suspense_hook: null, notes: null, title: stageChapterTitle(NULL_FIELDS) },
+      dbAfterOtherFieldSave: { user_guidance: '', suspense_hook: '', notes: '', title: '第二盏灯亮起' },
+      dbAfterExitSave: { user_guidance: '', suspense_hook: '', notes: '', title: '第二盏灯又亮起' },
+      dbAfterTyping: { user_guidance: '补一句', suspense_hook: '', notes: '补一条', title: '第二盏灯又亮起' },
+      afterRestart: { ...empty, userGuidance: '补一句', notes: '补一条' },
     }, `作者字段为 NULL 的章节既不显示也不写入上一章的作者字段：${JSON.stringify(measured)}`)
     return measured
   } },
