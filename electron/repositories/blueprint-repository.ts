@@ -16,18 +16,18 @@ import { GenerationRunRepository } from './generation-run-repository'
 import { blueprintCharacterSyncFactError } from '../../src/shared/blueprint-character-sync-evidence'
 import type { BlueprintNewCharacterCandidate } from '../../src/shared/blueprint-semantic-contract'
 
-/** 蓝图行类型（DB 蛇形命名） */
+/** 蓝图行类型（DB 蛇形命名）。除章号和标题外各列都允许 NULL，旧数据与省略字段的写入会留下 NULL。 */
 export interface BlueprintRow {
     chapter_number: number
     title: string
-    role: string
-    purpose: string
-    key_events: string
-    characters: string
-    suspense_hook: string
-    user_guidance: string
-    notes: string
-    notes_updated_at: string
+    role: string | null
+    purpose: string | null
+    key_events: string | null
+    characters: string | null
+    suspense_hook: string | null
+    user_guidance: string | null
+    notes: string | null
+    notes_updated_at: string | null
     created_at: string
     updated_at: string
 }
@@ -147,18 +147,18 @@ const SHA256_HEX = /^[a-f0-9]{64}$/u
 
 function rowToData(row: BlueprintRow): BlueprintData {
     let chars: string[] = []
-    try { chars = JSON.parse(row.characters) } catch { /* 容错 */ }
+    try { chars = JSON.parse(row.characters ?? '[]') } catch { /* 容错 */ }
     return {
         chapterNumber: row.chapter_number,
         title: row.title,
-        role: row.role,
-        purpose: row.purpose,
-        keyEvents: row.key_events,
+        role: row.role ?? '',
+        purpose: row.purpose ?? '',
+        keyEvents: row.key_events ?? '',
         characters: chars,
-        suspenseHook: row.suspense_hook,
-        userGuidance: row.user_guidance,
-        notes: row.notes,
-        notesUpdatedAt: row.notes_updated_at,
+        suspenseHook: row.suspense_hook ?? '',
+        userGuidance: row.user_guidance ?? '',
+        notes: row.notes ?? '',
+        notesUpdatedAt: row.notes_updated_at ?? '',
     }
 }
 
