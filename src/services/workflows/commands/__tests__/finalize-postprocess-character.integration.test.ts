@@ -1090,4 +1090,12 @@ describe('cast refresh after the character-state step', () => {
     await expect(command('Lin Lan arrives at the harbor.', { onlyFailed: true, stepKeys: ['style_analysis'] })
       .execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow('style_analysis')
   })
+
+  it('#502 an empty step selection runs nothing instead of reporting success', async () => {
+    const generateStream = vi.fn()
+    useLLMStore.setState({ defaultModelId: 'test-model', generateStream })
+    await expect(command('Lin Lan arrives at the harbor.', { stepKeys: [] })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow()
+    expect(generateStream).not.toHaveBeenCalled()
+  })
 })
