@@ -207,6 +207,38 @@ describe('ImportRunOrchestrator', () => {
     expect(getRun().stage).toBe('author-postprocess')
   })
 
+  it('resumes an author run after a chapter was refinalized, skipping projection of the replaced draft', async () => {
+    const { deps, getRun } = harness(2, {
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:run-1',
+      authorityFingerprint: 'c'.repeat(64),
+      stage: 'author-publish',
+    })
+    deps.getAuthorCommitReceipt = vi.fn(async () => ({
+      operationId: 'author-import:run-1', payloadHash: 'e'.repeat(64), chapterNumbers: [1, 2],
+      drafts: [1, 2].map(chapterNumber => ({
+        chapterNumber, draftId: chapterNumber, finalizationId: `final-${chapterNumber}`,
+        contentHash: 'f'.repeat(64), targetFileName: `Chapter ${chapterNumber}.txt`,
+        status: 'finalized' as const, publicationStatus: 'pending' as const,
+      })),
+      idempotent: false,
+    }))
+    deps.isAuthorDraftReplaced = vi.fn(async draft => draft.draftId === 1)
+    const projected: string[] = []
+    deps.publishAuthorChapter = vi.fn(async chapter => { projected.push(`publish:${chapter.number}`) })
+    deps.postprocessAuthorChapter = vi.fn(async chapter => { projected.push(`postprocess:${chapter.number}`) })
+    const orchestrator = new ImportRunOrchestrator(deps)
+
+    await orchestrator.executeStage('run-1', 'author-publish', 'test-runner', { cancelled: false }, callbacks)
+    await orchestrator.executeStage('run-1', 'author-postprocess', 'test-runner', { cancelled: false }, callbacks)
+
+    expect({ projected, completed: getRun().completedBatches, stage: getRun().stage }).toEqual({
+      projected: ['publish:2', 'postprocess:2'],
+      completed: { 'author-publish': ['chapter:1', 'chapter:2'], 'author-postprocess': ['chapter:1', 'chapter:2'] },
+      stage: 'refresh',
+    })
+  })
+
   it('resumes failed author postprocess from its durable chapter checkpoint without repeating completed work', async () => {
     const { deps, getRun } = harness(3, {
       purpose: 'author-manuscript',
