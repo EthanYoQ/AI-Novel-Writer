@@ -1,7 +1,7 @@
 /**
  * DraftRepository — 草稿 (drafts 表 + contents 联动)
  *
- * 草稿是创作栈的主线。status='finalized' 代表定稿。
+ * 草稿是创作栈的主线。status='finalized' 代表本章当前定稿，'superseded' 是被替换的旧定稿。
  * 正文统一存储在 contents 表中，drafts 只持有 content_id 外键。
  */
 import { createHash } from 'node:crypto'
@@ -9,12 +9,13 @@ import type BetterSqlite3 from 'better-sqlite3'
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
+import { RECEIPTED_DRAFT_STATUS_SQL, isReceiptedDraftStatus } from '../../src/shared/draft-status'
 
 const DRAFT_META_SELECT = `
   SELECT drafts.*, finalization_outbox.chapter_title
   FROM drafts
   LEFT JOIN finalization_outbox
-    ON drafts.status = 'finalized' AND finalization_outbox.draft_id = drafts.id
+    ON drafts.status IN (${RECEIPTED_DRAFT_STATUS_SQL}) AND finalization_outbox.draft_id = drafts.id
 `
 
 /** 草稿元数据（不含正文，适合列表查询） */
@@ -465,10 +466,10 @@ export class DraftRepository {
         if (!db) return
         const meta = DraftRepository.getMeta(id)
         if (!meta) return
-        if (meta.status === 'finalized' && status !== 'finalized') {
+        if (isReceiptedDraftStatus(meta.status) && status !== meta.status) {
             throw new Error('DRAFT_FINALIZED_READ_ONLY')
         }
-        if (meta.status !== 'finalized' && status === 'finalized') {
+        if (!isReceiptedDraftStatus(meta.status) && isReceiptedDraftStatus(status)) {
             throw new Error('DRAFT_FINALIZATION_REQUIRES_COMMIT')
         }
 
@@ -489,7 +490,7 @@ export class DraftRepository {
     static updateContent(id: number, content: string, wordCount: number): void {
         const meta = DraftRepository.getMeta(id)
         if (!meta) return
-        if (meta.status === 'finalized') {
+        if (isReceiptedDraftStatus(meta.status)) {
             throw new Error('DRAFT_FINALIZED_READ_ONLY')
         }
 
@@ -520,6 +521,13 @@ export class DraftRepository {
                 throw Object.assign(
                     new Error('FINALIZED_DRAFT_DELETE_REQUIRED'),
                     { code: 'FINALIZED_DRAFT_DELETE_REQUIRED' as const },
+                )
+            }
+            // 被替换的旧定稿只随删除整章一起删除，单独删掉会丢掉删除收据。
+            if (target.status === 'superseded') {
+                throw Object.assign(
+                    new Error('SUPERSEDED_DRAFT_DELETE_FORBIDDEN'),
+                    { code: 'SUPERSEDED_DRAFT_DELETE_FORBIDDEN' as const },
                 )
             }
 

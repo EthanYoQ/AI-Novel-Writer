@@ -263,13 +263,16 @@ export class FinalizationRepository {
       if (draft.status === 'finalized') {
         throw new Error('FINALIZATION_COMMIT_OUTBOX_MISSING')
       }
+      if (draft.status === 'superseded') {
+        throw new Error('FINALIZATION_COMMIT_SUPERSEDED')
+      }
 
-      const replacesFinalized = db.prepare(`
-        SELECT 1 FROM drafts
+      // 每章至多一行 finalized：同章旧定稿在同一事务里降为 superseded，收据与正文不动。
+      const replaced = db.prepare(`
+        UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
         WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
-        LIMIT 1
-      `).get(input.chapterNumber, input.draftId)
-      if (replacesFinalized) invalidateContinuityProjectionFrom(db, input.chapterNumber)
+      `).run(input.chapterNumber, input.draftId)
+      if (replaced.changes > 0) invalidateContinuityProjectionFrom(db, input.chapterNumber)
 
       db.prepare('UPDATE contents SET body = ? WHERE id = ?')
         .run(input.content, draft.content_id)
@@ -313,6 +316,13 @@ export class FinalizationRepository {
       }
     })
     return transaction()
+  }
+
+  /** 这份定稿仍是本章的权威定稿；被替换（superseded）或已删除时为 false，发布出口据此拒绝。 */
+  static isAuthoritative(draftId: number): boolean {
+    return requireDatabase().prepare(`
+      SELECT 1 FROM drafts WHERE id = ? AND status = 'finalized'
+    `).get(draftId) !== undefined
   }
 
   static get(finalizationId: string): FinalizationRecord | null {
