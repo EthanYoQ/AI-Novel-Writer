@@ -92,6 +92,30 @@ it('读不了的条目直接报错，不当成不存在', () => {
   assert.throws(() => snapshotRealProfiles([directory]), { code: 'EPERM' })
 })
 
+/** 运行中的书童在快照遍历途中删掉一个缓存目录：lstat 时还在，readdir 时已经没了。 */
+function readdirFailsFor(target, code) {
+  const readdir = fs.readdirSync
+  vi.spyOn(fs, 'readdirSync').mockImplementation((current, ...rest) => {
+    if (current === target) throw Object.assign(new Error(`${code}: readdir '${current}'`), { code })
+    return readdir(current, ...rest)
+  })
+}
+
+it('遍历途中目录被删掉时不报错，也不把它记进快照', () => {
+  const { directory } = usedProfile()
+  const vanished = path.join(directory, 'GPUCache')
+  readdirFailsFor(vanished, 'ENOENT')
+  const entries = snapshotRealProfiles([directory])[directory]
+  assert.equal(entries.has(vanished), false)
+  assert.equal(entries.has(path.join(directory, 'Preferences')), true)
+})
+
+it('读不了的目录直接报错，不当成不存在', () => {
+  const { directory } = usedProfile()
+  readdirFailsFor(path.join(directory, 'GPUCache'), 'EPERM')
+  assert.throws(() => snapshotRealProfiles([directory]), { code: 'EPERM' })
+})
+
 it('配置目录不存在时快照为空，不报错', () => {
   const { parent } = usedProfile()
   const missing = path.join(parent, 'AI小说作家')
