@@ -240,8 +240,7 @@ export const BLUEPRINT_SCENARIOS = {
 
     await context.restart()
     const reopened = context.page
-    await stage.spine(reopened).or(stage.cover(reopened, STAGE_SAMPLE.name)).first().waitFor({ state: 'visible', timeout: 60_000 })
-    if (!await stage.spine(reopened).isVisible()) await stage.openFromLibrary(reopened, STAGE_SAMPLE.name)
+    await stage.openAfterRestart(reopened, STAGE_SAMPLE.name)
     await blueprint.open(reopened)
     measured.afterRestart = await nullChapterFieldsAfterFilled(reopened)
     await nullChapterCard(reopened).getByRole('textbox', { name: /^作者微操指导/ }).scrollIntoViewIfNeeded()
