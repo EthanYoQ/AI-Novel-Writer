@@ -236,6 +236,37 @@ describe('BlueprintRepository range commit', () => {
     }
   })
 
+  it('treats omitted author fields as empty and keeps chapter notes paired with their timestamp', () => {
+    const db = createBlueprintDb()
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    const stored = { userGuidance: '保留的指导', notes: '定稿后生成的要点', notesUpdatedAt: '2026-10-20 08:00:00' }
+
+    try {
+      BlueprintRepository.upsert({ ...blueprintFor(1), ...stored })
+      BlueprintRepository.upsert({ ...blueprintFor(2), ...stored })
+      const omitted: Partial<BlueprintData> = blueprintFor(1)
+      delete omitted.userGuidance
+      delete omitted.notes
+      delete omitted.notesUpdatedAt
+      const handWritten = { ...blueprintFor(2), notes: '作者在恢复稿里手写的要点' }
+      const fresh: Partial<BlueprintData> = blueprintFor(3)
+      delete fresh.userGuidance
+
+      BlueprintRepository.commitRange({
+        mode: 'replace-range', operationId: 'directory-regenerate-omitted-fields', startChapter: 1, endChapter: 3,
+        blueprints: [omitted as BlueprintData, handWritten, fresh as BlueprintData],
+      })
+
+      expect(BlueprintRepository.getAll()).toEqual([
+        { ...blueprintFor(1), ...stored },
+        { ...handWritten, userGuidance: stored.userGuidance, notesUpdatedAt: '' },
+        blueprintFor(3),
+      ])
+    } finally {
+      db.close()
+    }
+  })
+
   it('preserves parsed full names, candidates, and relationship text across SQLite restart', () => {
     let db = createBlueprintDb()
     vi.mocked(getProjectDb).mockReturnValue(db)
