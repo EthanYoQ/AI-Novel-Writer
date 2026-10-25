@@ -260,7 +260,7 @@ describe('createRepairFinalizeWorkflow', () => {
       }])),
     })
 
-    function retryCard(persisted: Row[] | null) {
+    function retryCard(persisted: Row[] | null, stepKey?: string) {
       useProjectStore.setState({
         currentProject: { id: PROJECT_SESSION.projectId, name: 'Repair finalize', path: PROJECT_PATH, sessionLease: PROJECT_SESSION.leaseId } as never,
       })
@@ -278,7 +278,7 @@ describe('createRepairFinalizeWorkflow', () => {
         }
       })
       vi.stubGlobal('window', { aiNovelAPI: { invoke } })
-      const step = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION).steps[0]!
+      const step = createRepairFinalizeWorkflow(3, PROJECT_PATH, PROJECT_SESSION, stepKey).steps[0]!
       return step.executor({ ...step, id: 'repair-finalize-502', status: 'running', logs: [] }, context(), callbacks())
     }
 
@@ -307,6 +307,14 @@ describe('createRepairFinalizeWorkflow', () => {
 
     it('runs nothing when the post-processing status cannot be read', async () => {
       await expect(retryCard(null)).rejects.toThrow('没有可以重试的失败步骤')
+      expect(postProcess.execute).not.toHaveBeenCalled()
+    })
+
+    it('refuses a row retry the screen offered before the step became one that retrying cannot change', async () => {
+      await expect(retryCard([
+        { stepKey: 'chapter_notes', ok: true },
+        { stepKey: 'character_cards', ok: false, errorMsg: 'FINALIZED_CHARACTER_FIELD_CONFLICT' },
+      ], 'character_cards')).rejects.toThrow('没有可以重试的失败步骤')
       expect(postProcess.execute).not.toHaveBeenCalled()
     })
 
