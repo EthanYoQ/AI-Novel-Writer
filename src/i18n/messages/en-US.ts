@@ -45,6 +45,7 @@ export const enUS = {
   'error.generationPlotOutlineAuthorSaved': 'You saved this plot outline by hand, so the earlier generation cannot continue it. Generate a new outline if you need one.',
   'error.generationCancelled': 'Generation was cancelled.',
   'error.generationProviderFailed': 'The model service did not return a complete result. Check your network and model settings, then try again.',
+  'error.generationContextLengthExceeded': 'The prompt is longer than the model accepts, so the provider rejected this request and nothing was generated. Check the context length for this model in Model settings → Context Window, or switch to a model with a longer context, then try again.',
   'error.generationStorageFailed': 'The generated text could not be written to local storage. Check free disk space and write access to the book folder, then try again.',
   'error.generationModelMissing': 'The model for this generation could not be found. Select or add a model in Settings, then try again.',
   'error.generationStopped': 'This generation was stopped, paused, or used up its allowance, so it cannot send more requests to the model. Generate again if you need to.',

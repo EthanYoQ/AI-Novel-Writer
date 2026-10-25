@@ -107,6 +107,7 @@ export async function startFakeModel(diagnostics) {
   let review = null
   let characterState = null
   let keylessEmbeddings = false
+  let contextLengthRejected = false
   /** 每次被接受的嵌入请求带的 Authorization 头（没有时为 null），场景据此确认本机检索模型真的没带 Key。 */
   const embeddingAuthorizations = []
   const streamLog = []
@@ -143,6 +144,8 @@ export async function startFakeModel(diagnostics) {
   const replyCharacterState = build => { characterState = build }
   /** 之后不带 Key 的嵌入请求也照常回向量，模拟不需要 Key 的本机检索服务；传 false 恢复拒绝。 */
   const acceptKeylessEmbeddings = (accepted = true) => { keylessEmbeddings = accepted }
+  /** 之后的对话请求回 400，错误体与 DeepSeek 官方实测的上下文超长相同（讨论区 #77）；传 false 恢复。 */
+  const rejectContextLength = (rejected = true) => { contextLengthRejected = rejected }
   const record = (kind, detail) => {
     requests.push(kind)
     diagnostics.push(`[fake-model] ${kind} <- ${detail}`)
@@ -169,6 +172,13 @@ export async function startFakeModel(diagnostics) {
     }
     if (request.url !== '/v1/chat/completions') { response.writeHead(404).end(); return }
     await pass()
+    if (contextLengthRejected) {
+      record('context-length', `${Buffer.byteLength(JSON.stringify(body.messages ?? []))} 字节`)
+      response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: {
+        message: "This model's maximum context length is 1048576 tokens. However, you requested 1200051 tokens (1200035 in the messages, 16 in the completion). Please reduce the length of the messages or completion.",
+        type: 'invalid_request_error', param: null, code: 'invalid_request_error' } }))
+      return
+    }
     const prompt = (body.messages ?? []).map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n')
     const reply = responseFor(prompt, { extraction, plotTree, review, characterState })
     const { kind } = reply
@@ -198,6 +208,6 @@ export async function startFakeModel(diagnostics) {
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   server.unref()
-  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState, acceptKeylessEmbeddings, embeddingAuthorizations,
+  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState, acceptKeylessEmbeddings, rejectContextLength, embeddingAuthorizations,
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(() => resolve()) }) }
 }

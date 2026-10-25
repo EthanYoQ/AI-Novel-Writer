@@ -82,10 +82,9 @@ export function assertReservation(root: RootAction, policy: RootBudget, attempts
   if (new Set(attempts.map(item => item.attemptId)).size !== attempts.length
     || new Set(attempts.map(item => item.reservationId)).size !== attempts.length
     || attempts.some(item => !['reserved', 'dispatch-marked', 'settled', 'unknown', 'cancelled-before-dispatch'].includes(item.status))) throw new Error('INVALID_LEDGER')
-  // Hard-bound violations are durably blocked at settlement using the stored
-  // usage policy. An estimate overrun only consumes its full actual root usage.
+  // Token liability is recorded, never a stop (ADR-0023): only the request
+  // count and the active-time brakes end a root.
   if (attempts.filter(item => item.status !== 'cancelled-before-dispatch').length >= policy.maxPhysicalRequests
-    || attempts.reduce((sum, item) => sum + tokenLiability(item), 0) + next.reservedTokens > policy.maxTokenLiability
     || elapsedMs >= policy.maxActiveElapsedMs) throw new Error('ROOT_BUDGET_EXHAUSTED')
 }
 export function assertAttemptTransition(before: PhysicalAttempt['status'], after: PhysicalAttempt['status']): void {

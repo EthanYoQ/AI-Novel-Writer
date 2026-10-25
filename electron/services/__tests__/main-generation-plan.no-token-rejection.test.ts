@@ -64,7 +64,7 @@ function ledger(profile: ModelProfile, attempts: PhysicalAttempt[] = []): Genera
 
 function plan(profile: ModelProfile, task: GenerationTask, budget = ledger(profile)) {
   const receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'd77', createdAt: 1, expiresAt: 1000 })
-  return buildMainGenerationPlan(profile, receipt, task, budget, 'auto', newMainGenerationPolicy(selection, profile))
+  return buildMainGenerationPlan(profile, receipt, task, budget)
 }
 
 describe('讨论区 #77：发送前不按自估 token 拒绝', () => {
@@ -84,20 +84,22 @@ describe('讨论区 #77：发给服务商的输出上限只来自模型或作者
     }
   })
 
-  it('作者把最大输出 Tokens 填成 8,000 时，所有请求都传 8,000', () => {
-    const profile = deepseek(32_768, 8_000)
-    for (const [, build] of TASKS) for (const content of [SMALL, HUGE]) {
-      expect(plan(profile, build(content)).options.maxTokens).toBe(8_000)
-    }
-  })
+  const custom = (): ModelProfile => ({ ...createModelProfileDraft({ id: 'custom', purposes: ['generation'] }), apiKey: 'sk-synthetic',
+    provider: 'custom', protocol: 'openai', baseUrl: 'https://compatible.example/v1', modelName: 'hand-entered', maxTokens: 12_000,
+    capabilities: { contextWindowTokens: 16_384, maxOutputTokens: 12_000, reasoning: false, structuredOutput: false, usage: false } })
+  const unsplit = TASKS.filter(([name]) => name !== '蓝图')
 
-  it('没有已验证预设的兼容端点，只按作者设置的输出上限传', () => {
-    const draft = { ...createModelProfileDraft({ id: 'custom', purposes: ['generation'] }), apiKey: 'sk-synthetic' }
-    const profile: ModelProfile = { ...draft, provider: 'custom', protocol: 'openai', baseUrl: 'https://compatible.example/v1',
-      modelName: 'hand-entered', maxTokens: 12_000, capabilities: { contextWindowTokens: 16_384, maxOutputTokens: 12_000, reasoning: false, structuredOutput: false, usage: false } }
-    for (const [, build] of TASKS) for (const content of [SMALL, HUGE]) {
-      expect(plan(profile, build(content)).options.maxTokens).toBe(12_000)
-    }
+  it.each([['作者把最大输出 Tokens 填成 8,000', deepseek(32_768, 8_000), 8_000], ['没有已验证预设的兼容端点，作者填 12,000', custom(), 12_000]] as const)(
+    '%s 时，每个请求都传这个值', (_name, profile, limit) => {
+      for (const [, build] of unsplit) for (const content of [SMALL, HUGE]) {
+        expect(plan(profile, build(content)).options.maxTokens).toBe(limit)
+      }
+    })
+
+  // 蓝图按条目切分只由输出上限决定：同样 10 条，输入长短不改变切出的条数。
+  it.each([[deepseek(32_768, 8_000), '2'], [custom(), '3']] as const)('输出上限放不下 10 条蓝图时按输出上限切分，与输入长短无关', (profile, selected) => {
+    const blueprint = TASKS.find(([name]) => name === '蓝图')![1]
+    for (const content of [SMALL, HUGE]) expect(() => plan(profile, blueprint(content))).toThrow(`TASK_BUDGET_SCOPE_SPLIT_REQUIRED:${selected}`)
   })
 })
 

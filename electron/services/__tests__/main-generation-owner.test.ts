@@ -167,9 +167,8 @@ describe('chapter outline main authority', () => {
     const repository = new GenerationRunRepository(() => f.db), binding = structuredClone(repository.get(run.handle.runId).binding)
     const originalTask = outlineTask(f.owner.read(run.handle).plotOutline!)
     if (mode === 'zero-attempt') {
-      await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'capacity-refused',
-        task: { ...originalTask, messages: [{ role: 'user', content: `${'A'.repeat(40000)}\n${originalTask.messages[0].content}` }] } }))
-        .rejects.toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+      await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'refused-before-reservation',
+        task: { ...originalTask, maxTokens: 1 } as unknown as GenerationTask })).rejects.toThrow('GENERATION_SEMANTIC_TASK_INVALID')
     } else await f.owner.execute({ handle: run.handle, invocationNonce: 'unknown', task: originalTask })
     const context = f.owner.readContext(run.handle), originalRoot = f.db.prepare('SELECT * FROM generation_roots').all()
     const originalAttempts = f.db.prepare('SELECT * FROM generation_attempts').all()
@@ -829,7 +828,7 @@ describe('frozen planning roots', () => {
     { name: '64K user', changes: {}, expected: 65536 },
     { name: 'user', changes: { maxTokens: 16384 }, expected: 16384 },
     { name: 'provider', changes: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', modelName: 'gpt-4.1' }, expected: 32768 },
-    { name: 'context', changes: { capabilities: { contextWindowTokens: 4096, maxOutputTokens: 65536, reasoning: true, structuredOutput: true, usage: true } }, expected: 3515 },
+    { name: 'context', changes: { capabilities: { contextWindowTokens: 4096, maxOutputTokens: 65536, reasoning: true, structuredOutput: true, usage: true } }, expected: 65536 },
   ] satisfies { name: string; changes: Partial<ModelProfile>; expected: number }[])('honors the $name bound on a standalone plot wire', async ({ changes, expected }) => {
     const fetch = syntheticStream(), f = planningFixture()
     Object.assign(f.model, changes)
@@ -841,13 +840,13 @@ describe('frozen planning roots', () => {
     expect(wire.max_completion_tokens ?? wire.max_tokens).toBe(expected)
   })
 
-  it('retains unknown usage liability and narrows the last request before the shared root is exhausted', async () => {
+  it('retains unknown usage liability without narrowing any request and stops at the request count', async () => {
     const fetch = syntheticStream(false), f = planningFixture()
     Object.assign(f.model, { provider: 'openai', baseUrl: 'https://compatible.example/v1', modelName: 'custom-model', reasoningOverride: 'auto' })
     const run = await legacyPlanningRun(f, { version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 1, to: 1 } })
     for (let request = 0; request < 32; request++) await f.owner.execute({ handle: run.handle, invocationNonce: `unknown-${request}`, task: plotTask })
     expect(JSON.parse(String(fetch.mock.calls[0]![1].body)).max_tokens).toBe(65536)
-    expect(JSON.parse(String(fetch.mock.calls[31]![1].body)).max_tokens).toBe(46944)
+    expect(JSON.parse(String(fetch.mock.calls[31]![1].body)).max_tokens).toBe(65536)
     const budget = new GenerationRunRepository(() => f.db).budget(run.handle.rootActionId)
     expect(budget.attempts.every(attempt => attempt.status === 'unknown')).toBe(true)
     await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'exhausted', task: plotTask })).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
@@ -1801,7 +1800,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
       .toThrow('GENERATION_PLANNING_TARGET_INVALID')
     expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(2)
   })
-  it.each([65536, 32768])('uses actual context %i to admit or reject 43,699 bytes before reserving', async contextWindowTokens => {
+  it.each([65536, 32768])('sends 43,699 bytes beside an author context of %i and records the full reservation', async contextWindowTokens => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({kind:'delta',text:'{"blueprints":[]}'}); return {finishReason:'stop',usage:null} })
     const f = fixture(dispatch)
     Object.assign(f.model, { baseUrl:'https://compatible.example/v1', modelName:'custom', maxTokens:65536,
@@ -1812,20 +1811,15 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     const request = {handle:run.handle,invocationNonce:'full-input',task:{purpose:'chapter-blueprint-directory',output:'structured-data' as const,
       reasoningStage:'planning' as const,messages:[{role:'user' as const,content:'x'.repeat(43699)}],
       budgetDemand:{kind:'structured-items' as const,requestedItems:1,writingLanguage:'zh-CN' as const}}}
-    if(contextWindowTokens===65536) {
-      await f.owner.execute(request)
-      expect(dispatch).toHaveBeenCalledTimes(1)
-      const sent=dispatch.mock.calls[0][0] as {task:GenerationTask;plan:{requestedOutputTokens:number;reservedTokens:number}}
-      expect(sent.task.messages.find(message=>message.role==='user')!.content).toBe(request.task.messages[0].content)
-      expect(sent.plan.requestedOutputTokens).toBeGreaterThan(0)
-      expect(sent.plan.reservedTokens).toBeLessThanOrEqual(contextWindowTokens)
-    } else {
-      await expect(f.owner.execute(request)).rejects.toThrow()
-      expect(dispatch).not.toHaveBeenCalled()
-      expect(new GenerationRunRepository(()=>f.db).budget(run.handle.rootActionId).attempts).toHaveLength(0)
-    }
+    await f.owner.execute(request)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    const sent=dispatch.mock.calls[0][0] as {task:GenerationTask;plan:{requestedOutputTokens:number;reservedTokens:number;inputUpperBoundTokens:number}}
+    expect(sent.task.messages.find(message=>message.role==='user')!.content).toBe(request.task.messages[0].content)
+    expect(sent.plan.requestedOutputTokens).toBe(65536)
+    expect(sent.plan.reservedTokens).toBe(sent.plan.inputUpperBoundTokens+65536+512)
+    expect(new GenerationRunRepository(()=>f.db).budget(run.handle.rootActionId).attempts.map(attempt=>attempt.reservedTokens)).toEqual([sent.plan.reservedTokens])
   })
-  it('compares old and new UNKNOWN roots with the same input, retaining all costs and all 32 new request slots', async () => {
+  it('runs old and new UNKNOWN roots to their 32-request brake with the same input, retaining all costs', async () => {
     const dispatch=vi.fn<GenerationRunServiceDependencies['dispatch']>(async()=>({finishReason:'stop',usage:null})), f=fixture(dispatch)
     Object.assign(f.model,{baseUrl:'https://compatible.example/v1',modelName:'unknown-custom',maxTokens:65536,capabilities:undefined})
     const sourceDeps={db:f.db,projectStorageRoot:path.join(f.root,'project'),globalDataRoot:path.join(f.root,'global'),
@@ -1837,8 +1831,8 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     repository.pause(old.rootActionId)
     const oldRun=await f.owner.resume({projectId:'project',epoch:'epoch-1',rootActionId:old.rootActionId,runId:old.runId})
     const input={...task,messages:[{role:'user' as const,content:'x'.repeat(43699)}]}
-    for(let index=0;index<27;index++) await f.owner.execute({handle:oldRun.handle,invocationNonce:`old-${index}`,task:input})
-    await expect(f.owner.execute({handle:oldRun.handle,invocationNonce:'old-28',task:input})).rejects.toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+    for(let index=0;index<32;index++) await f.owner.execute({handle:oldRun.handle,invocationNonce:`old-${index}`,task:input})
+    await expect(f.owner.execute({handle:oldRun.handle,invocationNonce:'old-33',task:input})).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
     expect(repository.budget(old.rootActionId).policy).toEqual(MAIN_GENERATION_POLICY.budget)
     const next=f.owner.begin({...f.begin,uiActionNonce:'new-root'})
     for(let index=0;index<32;index++) await f.owner.execute({handle:next.handle,invocationNonce:`new-${index}`,task:input})
@@ -1848,7 +1842,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(budget.attempts.every(attempt=>attempt.status==='unknown'&&attempt.requestedOutputTokens===65536)).toBe(true)
     expect(budget.attempts.reduce((sum,attempt)=>sum+attempt.reservedTokens,0)).toBeGreaterThan(MAIN_GENERATION_POLICY.budget.maxTokenLiability)
     await expect(f.owner.execute({handle:next.handle,invocationNonce:'new-33',task:input})).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
-    expect(dispatch).toHaveBeenCalledTimes(59)
+    expect(dispatch).toHaveBeenCalledTimes(64)
   })
   it('shows semantic 1712 and physical 16384 from the durable owner diagnostic with reservation 50410', async () => {
     const f = fixture(async () => ({ finishReason: 'length', usage: null }))

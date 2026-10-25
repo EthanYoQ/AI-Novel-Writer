@@ -176,14 +176,14 @@ export function presentWorkflowFailure(
         heading: '工作流未完成',
         reason: knownAppErrorMessage(locale, error) ?? (error?.trim() || '生成在完成前停止。'),
         persistence: isUnpersistedChapterDraft
-          ? '本次未保存草稿或正文章节。请调整章节要求后重试。'
+          ? '本次未保存草稿或正文章节。'
           : undefined,
       }
     : {
         heading: 'Workflow did not finish',
         reason: knownAppErrorMessage(locale, error) ?? (error?.trim() || 'Generation stopped before it completed.'),
         persistence: isUnpersistedChapterDraft
-          ? 'This attempt did not save a draft or manuscript chapter. Adjust the chapter request and try again.'
+          ? 'This attempt did not save a draft or manuscript chapter.'
           : undefined,
       }
 }

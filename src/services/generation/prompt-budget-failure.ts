@@ -5,7 +5,6 @@ import {
 } from './generation-harness'
 import type {
   GenerationBudgetDiagnostic,
-  TaskBudgetDecision,
   TaskBudgetReasonCode,
 } from './task-budget-planner'
 
@@ -65,8 +64,6 @@ export type GenerationFailureCategory =
   | 'unknown'
 
 const CAPACITY_FAILURES = new Set([
-  'GENERATION_INPUT_CAPACITY_EXCEEDED',
-  'TASK_BUDGET_CAPACITY_CONFLICT',
   'PROMPT_BUDGET_EXHAUSTED',
 ])
 const BUDGET_FAILURES = new Set([
@@ -107,8 +104,7 @@ export function classifyGenerationFailure(
   // The main preflight emits `TASK_BUDGET_SCOPE_SPLIT_REQUIRED`; the batch
   // executor consumes that exact spelling, so accept both here.
   if (
-    code.includes('TASK_BUDGET_CAPACITY_CONFLICT')
-    || code.includes('TASK_BUDGET_SPLIT_REQUIRED')
+    code.includes('TASK_BUDGET_SPLIT_REQUIRED')
     || code.includes('TASK_BUDGET_SCOPE_SPLIT_REQUIRED')
   ) return 'capacity-preflight'
   if (CAPACITY_FAILURES.has(code)) return 'capacity-preflight'
@@ -155,17 +151,6 @@ function failureCategoryLabel(category: GenerationFailureCategory, locale: Local
     unknown: ['其他', 'Other'],
   }
   return locale === 'zh-CN' ? labels[category][0] : labels[category][1]
-}
-
-export function formatTaskBudgetDecisionFailure(
-  decision: TaskBudgetDecision,
-  locale: Locale,
-): string {
-  const decisive = decision.reasons.filter(reason => reason.selected).map(reason => reasonLabel(reason.code, locale))
-  if (locale === 'zh-CN') {
-    return `任务需要输出额度 ${formatInteger(decision.requestedOutputTokens, locale)}；本次未发送。裁决依据：${decisive.join('、')}。`
-  }
-  return `The task needs an output allowance of ${formatInteger(decision.requestedOutputTokens, locale)}; no request was sent. Decision factors: ${decisive.join(', ')}.`
 }
 
 /** Formats only safe accounting fields. Prompt text, endpoint details and keys are absent by type. */

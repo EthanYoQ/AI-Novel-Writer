@@ -320,18 +320,12 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
               )
             } catch (error) {
               const split = error instanceof Error ? /TASK_BUDGET_SCOPE_SPLIT_REQUIRED:(\d+)(?:\b|$)/u.exec(error.message) : null
-              const capacityConflict = error instanceof Error && error.message.includes('TASK_BUDGET_CAPACITY_CONFLICT')
-              const selected = split ? Number(split[1]) : capacityConflict ? Math.floor(items.length / 2) : 0
+              const selected = split ? Number(split[1]) : 0
               if (Number.isSafeInteger(selected) && selected > 0 && selected < items.length) {
                 repairUsed = false
                 receipt.splitCount += 1
                 await executeBatch(items.slice(0, selected))
                 await executeBatch(items.slice(selected))
-                return
-              }
-              if (canUseCompactFallback && capacityConflict) {
-                repairUsed = false
-                await runCompactFallback()
                 return
               }
               throw error
@@ -532,12 +526,11 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         return { ok: true, items: validated, receipt }
       } catch (error) {
         if (error instanceof PromptBudgetExceededError) throw error
-        if (error instanceof Error && /TASK_BUDGET_|ROOT_BUDGET_EXHAUSTED/u.test(error.message)) {
-          const exhausted = error.message.includes('ROOT_BUDGET_EXHAUSTED')
+        if (error instanceof Error && error.message.includes('ROOT_BUDGET_EXHAUSTED')) {
           const message = writingLanguage === 'zh-CN'
-            ? exhausted ? '本任务预算已用完；已完成的完整项目保留，剩余范围尚未发送。' : '完整单项与必要输入无法在当前模型或用户容量限制内生成；本次未发送，请调整容量或缩小任务。'
-            : exhausted ? 'The task budget is exhausted. Completed items are preserved; the remaining scope was not sent.' : 'A complete item and its required inputs do not fit the current model or user capacity. No request was sent; adjust capacity or reduce the task.'
-          return { ok: false, validatedItems: validated, failure: { code: 'limit_exceeded', reason: exhausted ? 'max_requested_tokens' : 'output_limit', message: `${message} (${exhausted ? 'ROOT_BUDGET_EXHAUSTED' : 'TASK_BUDGET_CAPACITY_CONFLICT'})` }, receipt }
+            ? '本任务预算已用完；已完成的完整项目保留，剩余范围尚未发送。'
+            : 'The task budget is exhausted. Completed items are preserved; the remaining scope was not sent.'
+          return { ok: false, validatedItems: validated, failure: { code: 'limit_exceeded', reason: 'max_requested_tokens', message: `${message} (ROOT_BUDGET_EXHAUSTED)` }, receipt }
         }
         let failure: StructuredBatchFailure
         if (error instanceof ExecutionFailure) {
