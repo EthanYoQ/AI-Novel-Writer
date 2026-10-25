@@ -84,7 +84,7 @@ RD-10 删除旧外壳之后，场景分三类：
 - `externalWrites` 为空：`~/.vela`、`%APPDATA%\ai-novel-writer`、`%APPDATA%\AI小说作家` 里没有新增或删除的条目，文件的大小与修改时间也不变。列出的是变了的具体路径。
   - 这几个目录第一层的 `GPUCache`、`DawnWebGPUCache`、`DawnGraphiteCache` 不算：本机开着的书童会自己刷新里面文件的修改时间。它们的变化列进 `externalWritesIgnored`，不影响退出码。
   - 驱动真的写进真实配置目录时，Chromium 还会写 `Preferences`、`Local State`、`Local Storage` 等条目，这些照样报出来。
-  - 一个目录超过 5 万个条目，或者有条目读不了（不存在除外）时，快照直接报错，不拿截断的快照判通过：运行前的快照出错时驱动在启动应用前退出，退出码 1；运行后的快照出错时原因写进 `error`。
+  - 一个目录超过 5 万个条目，或者有条目读不了（`ENOENT`、`ENOTDIR` 两种「不存在」除外）时，快照直接报错，不拿截断的快照判通过：运行前的快照出错时驱动在启动应用前退出，退出码 1；运行后的快照出错时原因写进 `error`。
 
 枚举或结束进程本身失败时，原因写进该会话每一项的 `error`，结果 JSON 照常写出。
 
