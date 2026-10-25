@@ -136,9 +136,9 @@ const withFilledChapter = context => seedStageSample(context, { beforeReload: as
 /** 绕过主进程的行映射直接读库，才分得清库里是 NULL、空串还是别章的文字。 */
 async function rawBlueprintRow(projectPath, chapterNumber) {
   const { DatabaseSync } = await import('node:sqlite')
-  const file = fs.readdirSync(projectPath, { recursive: true }).find(name => path.basename(name) === 'project.db')
-  assert.ok(file, `${projectPath} 下有项目库 project.db`)
-  const db = new DatabaseSync(path.join(projectPath, file), { readOnly: true })
+  const file = path.join(projectPath, '.ai-novel', 'project.db')
+  assert.ok(fs.existsSync(file), `有项目库 ${file}`)
+  const db = new DatabaseSync(file, { readOnly: true })
   try {
     const row = db.prepare('SELECT user_guidance, suspense_hook, title FROM blueprints WHERE chapter_number = ?').get(chapterNumber)
     assert.ok(row, `库里有第 ${chapterNumber} 章蓝图行`)
@@ -158,15 +158,15 @@ async function authorFields(page, chapterNumber) {
   }
 }
 
-/** 先看有值的一章再切到 NULL 的一章，返回后者文本框里显示的内容。 */
+/** 先看有值的一章（确认显示它自己的值）再切到 NULL 的一章，返回后者文本框里显示的内容。 */
 async function shownAfterSwitch(page) {
-  await authorFields(page, FILLED)
+  assert.deepEqual(await authorFields(page, FILLED), FILLED_FIELDS, `第 ${FILLED} 章显示自己的作者字段`)
   return authorFields(page, NULL_FIELDS)
 }
 
 async function saveWithCtrlS(page) {
   await stage.saveStatus(page).getByText('未保存').waitFor({ state: 'visible' })
-  await page.keyboard.press('Control+S')
+  await page.keyboard.press('ControlOrMeta+S')
   await stage.saveStatus(page).getByText('已保存').waitFor({ state: 'visible' })
 }
 
@@ -217,6 +217,8 @@ export const BLUEPRINT_SCENARIOS = {
 
     await shownAfterSwitch(page)
     await stage.stageButton(page, '设定').click()
+    await stage.tabList(page).getByRole('tab', { name: /^设定/, selected: true }).waitFor({ state: 'visible' })
+    await blueprint.plan(page).waitFor({ state: 'hidden' })
     measured.dbAfterLeaving = await raw()
 
     await blueprint.open(page)
