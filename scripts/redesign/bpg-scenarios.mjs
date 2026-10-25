@@ -82,7 +82,6 @@ export const BPG_SCENARIOS = {
     await runSheet.waitUntilOpen(page)
     await runSheet.waitForRunDone(page)
     assert.ok(fake.chats.some(chat => chat.kind === 'review'), '目录生成请求拿到了夹具蓝图')
-    const generationRequests = fake.chats.filter(chat => chat.kind === 'review').length
 
     await blueprint.pageMenu(page, '重新加载蓝图')
     await blueprint.planItem(page, REGENERATED).getByText(regeneratedTitle(REGENERATED)).waitFor({ state: 'visible' })
@@ -92,6 +91,6 @@ export const BPG_SCENARIOS = {
       2: { ...before[2], title: regeneratedTitle(2) },
     }, '重新生成只换 AI 字段，作者微操指导与章节要点保留')
     await chapterCard(page, 2).getByRole('textbox', { name: /^作者微操指导/ }).scrollIntoViewIfNeeded()
-    return { before, after, generationRequests }
+    return { before, after }
   } },
 }
