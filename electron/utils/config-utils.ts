@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { GlobalConfig } from '../../src/shared/ipc-channels'
-import { VELA_HOME, assertGlobalDataReady, assertGlobalPathAccess } from '../services/app-data-locator'
+import { GLOBAL_CONFIG_PATH, VELA_HOME, assertGlobalDataReady, assertGlobalPathAccess } from '../services/app-data-locator'
 export { VELA_HOME, GLOBAL_CONFIG_PATH, MODELS_CONFIG_PATH, RECENT_PROJECTS_PATH } from '../services/app-data-locator'
 
 /** Compatibility function name; only the admitted canonical generation may be created. */
@@ -134,4 +134,21 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
     host: '',
     port: 7890,
   },
+}
+
+/**
+ * 读出全局配置、改写、整份写回。文件不存在时从默认值开始；
+ * 文件存在却读不出一个配置对象时不覆盖，返回 false。
+ */
+export function updateGlobalConfig(update: (config: GlobalConfig) => GlobalConfig): boolean {
+  const current = tryReadJsonFile<unknown>(GLOBAL_CONFIG_PATH)
+  if (current.status === 'missing') {
+    writeJsonFile(GLOBAL_CONFIG_PATH, update({ ...DEFAULT_GLOBAL_CONFIG }))
+    return true
+  }
+  if (current.status === 'error' || current.value == null || typeof current.value !== 'object' || Array.isArray(current.value)) {
+    return false
+  }
+  writeJsonFile(GLOBAL_CONFIG_PATH, update(current.value as GlobalConfig))
+  return true
 }
