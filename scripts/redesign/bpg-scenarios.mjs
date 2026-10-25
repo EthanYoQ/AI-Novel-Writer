@@ -85,6 +85,7 @@ export const BPG_SCENARIOS = {
     const generationRequests = fake.chats.filter(chat => chat.kind === 'review').length
 
     await blueprint.pageMenu(page, '重新加载蓝图')
+    await blueprint.planItem(page, REGENERATED).getByText(regeneratedTitle(REGENERATED)).waitFor({ state: 'visible' })
     const after = { 1: await readChapter(page, 1), 2: await readChapter(page, 2) }
     assert.deepEqual(after, {
       1: { ...before[1], title: regeneratedTitle(1) },
