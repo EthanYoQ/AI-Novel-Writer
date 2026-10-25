@@ -9,7 +9,10 @@ vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNI
 import { profileWrites, snapshotRealProfiles } from '../drive.mjs'
 
 const parents = []
-afterEach(() => { for (const parent of parents.splice(0)) fs.rmSync(parent, { recursive: true, force: true }) })
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const parent of parents.splice(0)) fs.rmSync(parent, { recursive: true, force: true })
+})
 
 const GPU_CACHES = ['GPUCache', 'DawnWebGPUCache', 'DawnGraphiteCache']
 
@@ -76,4 +79,21 @@ it('缓存同时在刷新时，改动、新建、删除真实配置文件和新�
 it('条目多到快照装不下时直接报错，不拿不完整的快照判干净', () => {
   const { directory } = usedProfile()
   assert.throws(() => snapshotRealProfiles([directory], 3), /超过 3 个/)
+})
+
+it('读不了的条目直接报错，不当成不存在', () => {
+  const { directory } = usedProfile()
+  const unreadable = path.join(directory, 'Preferences')
+  const lstat = fs.lstatSync
+  vi.spyOn(fs, 'lstatSync').mockImplementation((target, ...rest) => {
+    if (target === unreadable) throw Object.assign(new Error(`EPERM: operation not permitted, lstat '${target}'`), { code: 'EPERM' })
+    return lstat(target, ...rest)
+  })
+  assert.throws(() => snapshotRealProfiles([directory]), { code: 'EPERM' })
+})
+
+it('配置目录不存在时快照为空，不报错', () => {
+  const { parent } = usedProfile()
+  const missing = path.join(parent, 'AI小说作家')
+  assert.deepEqual(snapshotRealProfiles([missing]), { [missing]: new Map() })
 })
