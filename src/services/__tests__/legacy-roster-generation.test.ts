@@ -116,3 +116,9 @@ it('stage前置read期间取消不提交提议', async () => {
  await expect(client.stage()).rejects.toThrow('已取消')
  expect(invoke.mock.calls.filter(([channel]) => channel === 'legacy-roster:stage')).toHaveLength(0)
 })
+it('上次请求被服务商以上下文超长拒绝时，按登记码失败而不是说不可暂存', async () => {
+ const failed = { ...stored, artifact: undefined, view: { ...stored.view, status: 'failed', budgetDiagnostics: [{ failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } }
+ const client = install(vi.fn(async (channel: string) => { if (channel === 'legacy-roster:read') return failed; throw new Error(channel) }))
+ await client.open({ handle })
+ await expect(client.stage()).rejects.toThrow(/^GENERATION_CONTEXT_LENGTH_EXCEEDED$/u)
+})
