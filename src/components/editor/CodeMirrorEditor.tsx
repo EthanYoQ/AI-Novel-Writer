@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react'
+import { flushSync } from 'react-dom'
 import CodeMirror, { ReactCodeMirrorRef, EditorView, ViewUpdate } from '@uiw/react-codemirror'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
@@ -147,7 +148,8 @@ export default function CodeMirrorEditor({
     if (!node) return
     const measure = () => setBubbleSize(size => size.width === node.offsetWidth && size.height === node.offsetHeight ? size : { width: node.offsetWidth, height: node.offsetHeight })
     measure()
-    const observer = new ResizeObserver(measure)
+    // 同步重排，内容长高的这一帧绘制前就夹紧到位，不先画在视口外。
+    const observer = new ResizeObserver(() => flushSync(measure))
     observer.observe(node)
     return () => observer.disconnect()
   }, [])
