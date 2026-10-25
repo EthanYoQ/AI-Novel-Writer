@@ -3,6 +3,7 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { FinalizationGenerationSlot, FinalizationGenerationRecovery } from '../shared/finalization-generation'
 import type { FinalizedCharacterArtifact } from '../shared/finalized-character-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
+import { throwIfTerminalProviderFailure } from './generation/generation-harness'
 
 /** Reuses one durable main slot. Saved effects never rebuild prompts or execute. */
 export async function runFinalizationGeneration(options: {
@@ -58,6 +59,7 @@ export async function runFinalizationGeneration(options: {
       if (receipt.run.handle.projectId !== previous.projectId || receipt.run.handle.rootActionId !== previous.rootActionId || receipt.run.handle.runId !== previous.runId) throw new Error('FINALIZATION_GENERATION_IDENTITY_MISMATCH')
       recovery.view = receipt.run
       if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
+      throwIfTerminalProviderFailure(receipt.outcome.receipt)
       if (receipt.outcome.status !== 'completed' || receipt.outcome.finishReason !== 'stop') throw new Error('FINALIZATION_GENERATION_INCOMPLETE')
       candidates = receipt.run.candidates ?? receipt.run.artifacts
       const reference = receipt.outcome.receipt.visibleArtifact

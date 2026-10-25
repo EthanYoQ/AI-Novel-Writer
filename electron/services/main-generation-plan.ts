@@ -209,6 +209,8 @@ export function assertSemanticGenerationTask(task: GenerationTask): void {
   }
 }
 
+const TOTAL_LIABILITY_UPPER_BOUND_TOKENS = 1_048_576
+
 function resolvePhysicalLiability(model: ModelProfile, creativeStrategy: CreativeStrategy, stage: GenerationReasoningStage) {
   const endpoint = new URL(model.baseUrl)
   const official = endpoint.protocol === 'https:' && !endpoint.username && !endpoint.password && !endpoint.port
@@ -244,7 +246,7 @@ function resolvePhysicalLiability(model: ModelProfile, creativeStrategy: Creativ
     safetyMarginTokens: safety, reasoning: !canBound ? 'unknown' : model.protocol === 'gemini' ? 'separately-billed' : 'included-in-completion',
     canBoundTotalLiability: canBound }
   const effectiveContext = Math.min(modelContext ?? Infinity, capability.userContextWindowTokens ?? Infinity)
-  const reservationCeiling = totalBounded ? 1_048_576 : Number.isFinite(effectiveContext)
+  const reservationCeiling = totalBounded ? TOTAL_LIABILITY_UPPER_BOUND_TOKENS : Number.isFinite(effectiveContext)
     ? effectiveContext : MAIN_GENERATION_POLICY.budget.maxTokenLiability
   return { capability, parameters, usagePolicy, reservationCeiling, modelOutput, openai, gemini, totalBounded, canBound, separateReasoning }
 }
@@ -267,7 +269,7 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
       inputEstimate: { upperBoundTokens: inputUpperBoundTokens, estimatorVersion: MAIN_GENERATION_POLICY.estimatorVersion },
       capability,
       root: { maxOutputPerRequest: budget.policy.maxOutputPerRequest },
-      liability: totalBounded ? { mode: 'total-bounded', totalLiabilityUpperBoundTokens: 1_048_576 }
+      liability: totalBounded ? { mode: 'total-bounded', totalLiabilityUpperBoundTokens: TOTAL_LIABILITY_UPPER_BOUND_TOKENS }
         : !canBound ? { mode: 'unknown', reasoningUpperBoundTokens: separateReasoning }
           : gemini ? { mode: 'separate-bounded', reasoningUpperBoundTokens: separateReasoning } : { mode: 'included-in-output' },
       safetyMarginTokens: safety,
@@ -289,7 +291,7 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
   // stop for every model. Reserve the separately selected envelope instead.
   // This is a reservation, never a claim that the model consumed that many tokens.
   const reasoningUpperBoundTokens = totalBounded
-    ? Math.max(0, 1_048_576 - inputUpperBoundTokens - requestedOutputTokens - safety) : separateReasoning
+    ? Math.max(0, TOTAL_LIABILITY_UPPER_BOUND_TOKENS - inputUpperBoundTokens - requestedOutputTokens - safety) : separateReasoning
   const reservedTokens = inputUpperBoundTokens + requestedOutputTokens + reasoningUpperBoundTokens + safety
   return {
     options: options(requestedOutputTokens),

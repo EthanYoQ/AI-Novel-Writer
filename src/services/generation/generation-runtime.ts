@@ -16,7 +16,7 @@ import {
   assertGenerationHarnessPolicy,
   createGenerationHarness,
   GenerationHarnessError,
-  isTerminalProviderFailure,
+  throwIfTerminalProviderFailure,
   type GenerationHarnessPolicy,
   type GenerationMessage,
   type GenerationOutcome,
@@ -239,8 +239,7 @@ export async function createMainOwnedGenerationRuntime(options: MainOwnedGenerat
       for (const snapshot of receipt.run.artifacts) accept(snapshot)
       await queue
       if (projectionError) throw projectionError
-      const failureCode = receipt.outcome.receipt.failureCode
-      if (isTerminalProviderFailure(failureCode)) throw new Error(failureCode)
+      throwIfTerminalProviderFailure(receipt.outcome.receipt)
       if (receipt.outcome.status === 'completed' && receipt.outcome.finishReason !== 'stop'
         || receipt.outcome.receipt.finishReason !== receipt.outcome.finishReason) throw new Error('INVALID_MAIN_OUTCOME')
       return receipt.outcome

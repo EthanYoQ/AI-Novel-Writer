@@ -3,7 +3,7 @@ import { useLLMStore } from '../../stores/llm-store'
 import type { BeginGenerationRequest } from '../../shared/generation-owner-contract'
 import { createMainGenerationTransport } from '../generation/main-generation-transport'
 import { createMainOwnedGenerationRuntime, type GenerationRuntime, type MainGenerationRunHandle, type MainGenerationRunView, type MainGenerationSnapshot } from '../generation/generation-runtime'
-import { GenerationAttemptError, type GenerationSession } from '../generation/generation-harness'
+import { GenerationAttemptError, throwIfTerminalProviderFailure, type GenerationSession } from '../generation/generation-harness'
 import { requireWorkflowProjectSession, workflowUiLocale } from './workflow-project-session'
 import { ipc } from '../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
@@ -179,6 +179,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
           context.mainGenerationRootHandle = Object.freeze({ ...view.handle })
           const artifactId = receipt.outcome.receipt.visibleArtifact?.artifactId
           for (const snapshot of (view.candidates ?? view.artifacts).filter(snapshot => snapshot.artifactId === artifactId)) onSnapshot(snapshot)
+          throwIfTerminalProviderFailure(receipt.outcome.receipt)
           return receipt.outcome
         }
         // Keep this nonce for the entire request; transport failures never mint a retry.

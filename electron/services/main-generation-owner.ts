@@ -84,7 +84,8 @@ export interface MainGenerationOwnerDependencies {
 
 interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
 
-const RENDERER_SAFE_PROVIDER_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR', 'GENERATION_CONTEXT_LENGTH_EXCEEDED'] as const
+const RENDERER_SAFE_PROVIDER_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR',
+  'GENERATION_CONTEXT_LENGTH_EXCEEDED'] as const satisfies readonly NonNullable<GenerationAttemptReceipt['failureCode']>[]
 
 export function providerStreamFailureCode(error: string): typeof RENDERER_SAFE_PROVIDER_FAILURE_CODES[number] {
   if (error === 'LLM_CONTEXT_LENGTH_EXCEEDED') return 'GENERATION_CONTEXT_LENGTH_EXCEEDED'

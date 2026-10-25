@@ -59,6 +59,7 @@ export type GenerationFailureCategory =
   | 'capacity-preflight'
   | 'budget-exhausted'
   | 'provider-length'
+  | 'provider-context'
   | 'network'
   | 'storage'
   | 'cancelled'
@@ -108,6 +109,7 @@ export function classifyGenerationFailure(
     code.includes('TASK_BUDGET_SPLIT_REQUIRED')
     || code.includes('TASK_BUDGET_SCOPE_SPLIT_REQUIRED')
   ) return 'capacity-preflight'
+  if (code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED') return 'provider-context'
   if (CAPACITY_FAILURES.has(code)) return 'capacity-preflight'
   if (BUDGET_FAILURES.has(code)) return 'budget-exhausted'
   if (NETWORK_FAILURES.has(code)) return 'network'
@@ -146,6 +148,7 @@ function failureCategoryLabel(category: GenerationFailureCategory, locale: Local
     'capacity-preflight': ['容量预检', 'Capacity preflight'],
     'budget-exhausted': ['父任务预算', 'Parent task budget'],
     'provider-length': ['服务商长度终止', 'Provider length stop'],
+    'provider-context': ['服务商上下文超长', 'Provider context limit'],
     network: ['网络', 'Network'],
     storage: ['保存', 'Storage'],
     cancelled: ['已取消', 'Cancelled'],

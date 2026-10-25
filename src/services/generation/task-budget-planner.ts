@@ -184,17 +184,11 @@ function outputTokensFor(
     + quantity * S07_TASK_BUDGET_POLICY.structuredItems.tokensPerItem[demand.writingLanguage][stage]
 }
 
-function maximumQuantityFor(
+function maximumItemsFor(
   stage: GenerationReasoningStage,
-  demand: TaskBudgetDemand,
+  demand: Extract<TaskBudgetDemand, { kind: 'structured-items' }>,
   availableOutputTokens: number,
 ): number {
-  if (demand.kind === 'draft-units') {
-    const usable = availableOutputTokens - S07_TASK_BUDGET_POLICY.draftUnits.baseTokens
-    if (usable <= 0) return 0
-    const rate = S07_TASK_BUDGET_POLICY.draftUnits.tokensPerUnit[demand.writingLanguage]
-    return Math.floor(usable * rate.denominator / rate.numerator)
-  }
   const usable = availableOutputTokens - S07_TASK_BUDGET_POLICY.structuredItems.baseTokens
   if (usable <= 0) return 0
   return Math.floor(usable / S07_TASK_BUDGET_POLICY.structuredItems.tokensPerItem[demand.writingLanguage][stage])
@@ -268,7 +262,7 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
   }
 
   const selectedQuantity = input.demand.kind === 'draft-units' ? requestedQuantity
-    : Math.min(requestedQuantity, Math.max(1, maximumQuantityFor(input.stage, input.demand, availableOutputTokens)))
+    : Math.min(requestedQuantity, Math.max(1, maximumItemsFor(input.stage, input.demand, availableOutputTokens)))
   const decision = selectedQuantity < requestedQuantity ? 'split-required' : 'ready'
   const reservedOutputTokens = decision === 'ready'
     ? availableOutputTokens : outputTokensFor(input.stage, input.demand, selectedQuantity)

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 
 import * as chapterView from './pages/chapter-view.mjs'
 import * as runSheet from './pages/run-sheet.mjs'
@@ -12,10 +13,11 @@ const AUTHOR_64K = Object.freeze({ ...FAKE_MODEL, id: 'd77-author-64k', name: '�
 
 const SENTENCES = ['港务局的档案按潮期装订，任何不在潮期里的事都会被当作没有发生过。', '北堤外的航道每逢大潮便改一次形状，老船工靠钟声而不是海图认路。',
   '灯塔由三代守塔人轮流看管，每一代都在值班簿的最后一页留下一句没人看懂的话。', '旧港的商会与港务局互不往来，账目却总在同一天对上。']
-const WORLDBUILDING_UNITS = 22_000
+// 只看世界观就超过作者填的 64K：主进程的输入上界按 UTF-8 字节计。
+const WORLDBUILDING_BYTES = 96 * 1024
 const longWorldbuilding = () => {
   let text = STAGE_SAMPLE.core.worldbuilding
-  for (let index = 0; text.length < WORLDBUILDING_UNITS; index++) text += SENTENCES[index % SENTENCES.length]
+  for (let index = 0; Buffer.byteLength(text, 'utf8') < WORLDBUILDING_BYTES; index++) text += SENTENCES[index % SENTENCES.length]
   return text
 }
 
@@ -46,7 +48,7 @@ export const D77_SCENARIOS = {
     const chats = fake.requests.slice(before).filter(kind => kind !== 'embedding')
     assert.deepEqual(chats.slice(0, 2), ['outline', 'prose'], `64K 设置下短细纲与正文都发给了模型：${chats.join('、')}`)
     await chapterView.view(page).getByText(FIXTURE_PROSE.slice(0, 20)).first().waitFor({ state: 'visible', timeout: 30_000 })
-    return { context: AUTHOR_64K.capabilities.contextWindowTokens, worldbuildingUnits: WORLDBUILDING_UNITS, chats }
+    return { context: AUTHOR_64K.capabilities.contextWindowTokens, worldbuildingBytes: WORLDBUILDING_BYTES, chats }
   } },
   'd77-context-length': { model: true, shell: 'stage', setup, run: async ({ page, fake }) => {
     fake.rejectContextLength()

@@ -1,5 +1,6 @@
 import {
   GenerationAttemptError,
+  TerminalProviderFailureError,
   GenerationHarnessError,
   PromptBudgetExceededError,
   type GenerationAttemptReceipt,
@@ -535,6 +536,9 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         let failure: StructuredBatchFailure
         if (error instanceof ExecutionFailure) {
           failure = error.failure
+        } else if (error instanceof TerminalProviderFailureError) {
+          recordAttempt(error.receipt)
+          failure = { code: 'generation_failed', reason: 'server_error', message: error.code }
         } else if (error instanceof GenerationAttemptError) {
           recordAttempt(error.receipt)
           if (error.code === 'CANCELLED') {

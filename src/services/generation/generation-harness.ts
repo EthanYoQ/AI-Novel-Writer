@@ -193,6 +193,18 @@ export function isTerminalProviderFailure(code: GenerationAttemptReceipt['failur
   return code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
 }
 
+/** Its message is the registered code, so every failure view can explain it; the receipt keeps the dispatched call on record. */
+export class TerminalProviderFailureError extends Error {
+  constructor(readonly code: 'GENERATION_CONTEXT_LENGTH_EXCEEDED', readonly receipt: GenerationAttemptReceipt) {
+    super(code)
+    this.name = 'TerminalProviderFailureError'
+  }
+}
+
+export function throwIfTerminalProviderFailure(receipt: GenerationAttemptReceipt): void {
+  if (isTerminalProviderFailure(receipt.failureCode)) throw new TerminalProviderFailureError(receipt.failureCode, receipt)
+}
+
 export type GenerationOutcome =
   | {
       status: 'completed'
