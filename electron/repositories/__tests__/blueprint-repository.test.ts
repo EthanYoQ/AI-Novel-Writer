@@ -267,6 +267,25 @@ describe('BlueprintRepository range commit', () => {
     }
   })
 
+  it('keeps existing chapter notes when a payload carries only a notes timestamp', () => {
+    const db = createBlueprintDb()
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    const stored = { notes: '作者手写的要点', notesUpdatedAt: '2026-10-20 08:00:00' }
+
+    try {
+      BlueprintRepository.upsert({ ...blueprintFor(1), ...stored })
+
+      BlueprintRepository.commitRange({
+        mode: 'replace-range', operationId: 'directory-regenerate-timestamp-only', startChapter: 1, endChapter: 1,
+        blueprints: [{ ...blueprintFor(1), notesUpdatedAt: '2026-10-25 09:00:00' }],
+      })
+
+      expect(BlueprintRepository.getAll()).toEqual([{ ...blueprintFor(1), ...stored }])
+    } finally {
+      db.close()
+    }
+  })
+
   it('preserves parsed full names, candidates, and relationship text across SQLite restart', () => {
     let db = createBlueprintDb()
     vi.mocked(getProjectDb).mockReturnValue(db)
