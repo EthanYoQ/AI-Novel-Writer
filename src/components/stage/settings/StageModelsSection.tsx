@@ -21,7 +21,7 @@ const STAGE_COPY: Record<ModelStage, { name: Pair; scope: Pair }> = {
   drafting: {
     name: ['写稿', 'Drafting'],
     scope: ['单章与批量写作、编辑器行内改写、写作助手。助手发起的任务沿用助手对话的模型。',
-      'Chapter and batch drafting, inline edits in the editor, and the writing assistant. Tasks the assistant starts keep the assistant’s model.'],
+      'Chapter and batch drafting, inline edits in the editor, and the writing assistant. Tasks started by the assistant keep its model.'],
   },
   review: {
     name: ['审稿', 'Review'],
