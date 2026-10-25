@@ -1,3 +1,6 @@
+import { buildEditorInlineContext, editorInlineTask } from '../editor-inline-generation'
+import { composePromptSystemRole, getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
+import type { EditorInlineContext } from '../../../src/shared/editor-inline-generation'
 import { prepareCanonicalStorageFixture } from '../../../test/helpers/canonical-project-fixture'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -126,4 +129,19 @@ it('作者意见进入模型请求，并随运行冻结到重开之后',async()=
  const next=f.reopenStorage()
  expect(next.readEditorInlineRecovery(handle).context).toMatchObject({action:'instruct',instruction:note,selectedText:input.selectedText})
  expect(()=>next.beginEditorInline({...noted,input:{...noted.input,instruction:'改成对话'}})).toThrow()
+})
+
+const systemOf=(context:EditorInlineContext)=>editorInlineTask(context).messages.find(m=>m.role==='system')!.content
+it.each([
+ ['zh-CN','改成第一人称',['保留要求冲突','以作者意见为准','没提到','照常保留']],
+ ['en-US','Rewrite it in first person',['conflicts with the preservation','follow the note','does not mention','keep']],
+] as const)('%s 按意见改时，系统规则让作者意见压过内置模板的保留视角要求',(language,instruction,rule)=>{
+ const template=getBuiltinPromptTemplate('edit_selected_text',language)!
+ const system=systemOf(buildEditorInlineContext({...input,action:'instruct',instruction},language,template))
+ expect(system).toContain(template.systemRole!)
+ for(const phrase of rule) expect(system).toContain(phrase)
+ for(const action of ['refine','expand','continue','dialogue'] as const){
+  const fixed=systemOf(buildEditorInlineContext({...input,action},language,template))
+  expect(fixed).toBe(composePromptSystemRole(template,language))
+ }
 })
