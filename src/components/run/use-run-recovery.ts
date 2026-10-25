@@ -14,6 +14,7 @@ import {
   type BatchEntry, type CandidateEntry, type DraftEntry, type EditorEntry, type PlanningEntry, type RecoveryEntry, type RecoverySources, type ReviewEntry,
 } from './run-recovery'
 import { displayedErrorMessage } from '../../i18n/app-errors'
+import { throwIfTerminalProviderFailure } from '../../services/generation/generation-harness'
 
 const REVIEW_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review']
 
@@ -234,8 +235,9 @@ export function useRunRecovery(): RunRecovery {
       openPlanningRecoveryDraft(fresh, current.projectPath, planningTitle(fresh, useLocaleStore.getState().locale))
     }),
     continueEditor: entry => void act(async current => {
-      await ipc.invokeWithProjectSession(current, 'editor-inline:execute', { handle: entry.recovery.view.handle })
+      const receipt = await ipc.invokeWithProjectSession(current, 'editor-inline:execute', { handle: entry.recovery.view.handle })
       if (stillCurrent()) setSnapshotTick(value => value + 1)
+      throwIfTerminalProviderFailure(receipt.outcome.receipt)
     }),
     resumeReview: entry => startRecovery(current => createReviewRevisionRecoveryWorkflow(current, entry.view.handle)),
     resumeBatch: entry => startRecovery(current => createBatchRecoveryWorkflow(current, entry.batchId)),

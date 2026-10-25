@@ -39,7 +39,7 @@ import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } 
 import { toast } from '../../ui/Toast'
 import { pluralEn } from '../../../shared/plural-en'
 import { knownAppErrorMessage } from '../../../i18n/app-errors'
-import { isTerminalProviderFailure } from '../../../services/generation/generation-harness'
+import { classifyGenerationFailure } from '../../../services/generation/prompt-budget-failure'
 
 const EMPTY_PLAN: NarrativeThreadPlanInput = {
   title: '', type: '', targetStartChapter: 1, targetEndChapter: 1, authorIntent: '',
@@ -69,9 +69,9 @@ const SNAPSHOT_VALIDATION_ERROR_ENDINGS = [
 ] as const
 
 function terminalProviderMessage(error: unknown, text: LocaleText): string | undefined {
-  const code = (error instanceof Error ? error.message : '').replace(/^Error:\s*/, '')
-  const zh = isTerminalProviderFailure(code) ? knownAppErrorMessage('zh-CN', code) : undefined
-  const en = isTerminalProviderFailure(code) ? knownAppErrorMessage('en-US', code) : undefined
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  if (classifyGenerationFailure(message, null) !== 'provider-context') return undefined
+  const zh = knownAppErrorMessage('zh-CN', message), en = knownAppErrorMessage('en-US', message)
   return zh && en ? text(zh, en) : undefined
 }
 
@@ -344,8 +344,9 @@ export function usePlotThreads(projectKey: string, {
     try {
       const value = await client.execute()
       if (graphClient.current === client) showGraphRecovery(value)
-    } catch {
-      if (graphClient.current === client) setGraphError(text('原运行未完成，结果已保留。', 'The original run did not complete; its output is preserved.'))
+      assertGraphResult(value)
+    } catch (error) {
+      if (graphClient.current === client) setGraphError(terminalProviderMessage(error, text) ?? text('原运行未完成，结果已保留。', 'The original run did not complete; its output is preserved.'))
     } finally {
       if (graphClient.current === client) setGenerationBusy(false)
     }
@@ -693,9 +694,9 @@ export function usePlotThreads(projectKey: string, {
         draftId: draftSnapshot.id,
         chapterNumber: draftSnapshot.chapterNumber,
       })))
-    } catch {
+    } catch (error) {
       if (isProjectSessionCurrent(session) && !controller.signal.aborted) {
-        setAiError(text(
+        setAiError(terminalProviderMessage(error, text) ?? text(
           '未生成带有效定稿证据的事件候选，请重试。',
           'No event candidate with valid finalized evidence was generated. Try again.',
         ))

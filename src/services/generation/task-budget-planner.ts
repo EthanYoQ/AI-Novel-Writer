@@ -265,7 +265,7 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
     : Math.min(requestedQuantity, Math.max(1, maximumItemsFor(input.stage, input.demand, availableOutputTokens)))
   const decision = selectedQuantity < requestedQuantity ? 'split-required' : 'ready'
   const reservedOutputTokens = decision === 'ready'
-    ? availableOutputTokens : outputTokensFor(input.stage, input.demand, selectedQuantity)
+    ? availableOutputTokens : Math.min(availableOutputTokens, outputTokensFor(input.stage, input.demand, selectedQuantity))
   if (decision === 'ready') reasons.push({ code: 'output-allocation-ceiling', valueTokens: reservedOutputTokens, selected: true })
   const reasoningUpperBoundTokens = totalEnvelopeTokens === null
     ? fixedReasoningTokens

@@ -205,6 +205,12 @@ export function throwIfTerminalProviderFailure(receipt: GenerationAttemptReceipt
   if (isTerminalProviderFailure(receipt.failureCode)) throw new TerminalProviderFailureError(receipt.failureCode, receipt)
 }
 
+/** For clients that read a run back instead of its receipt: the last attempt decides. */
+export function throwIfLastAttemptTerminal(view: { budgetDiagnostics?: readonly { failureCode?: string | null }[] }): void {
+  const failureCode = view.budgetDiagnostics?.at(-1)?.failureCode
+  if (isTerminalProviderFailure(failureCode)) throw new Error(failureCode)
+}
+
 export type GenerationOutcome =
   | {
       status: 'completed'

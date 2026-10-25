@@ -3,7 +3,7 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { FinalizationGenerationSlot, FinalizationGenerationRecovery } from '../shared/finalization-generation'
 import type { FinalizedCharacterArtifact } from '../shared/finalized-character-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
-import { throwIfTerminalProviderFailure } from './generation/generation-harness'
+import { throwIfLastAttemptTerminal, throwIfTerminalProviderFailure } from './generation/generation-harness'
 
 /** Reuses one durable main slot. Saved effects never rebuild prompts or execute. */
 export async function runFinalizationGeneration(options: {
@@ -52,7 +52,10 @@ export async function runFinalizationGeneration(options: {
     const recoverFrom = options.recoverFrom
     let executed = false
     if (retryOf || recoverFrom || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
-      if (!candidate && recovery.attemptCount > 0 && !recoverFrom) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
+      if (!candidate && recovery.attemptCount > 0 && !recoverFrom) {
+        throwIfLastAttemptTerminal(recovery.view)
+        throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
+      }
       const previous = recovery.view.handle
       executed = true
       const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(retryOf ? { retryOf } : {}), ...(recoverFrom ? { recoverFrom } : {}) })

@@ -2,6 +2,7 @@ import { ipc } from './ipc-client'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { LegacyRosterGenerationRecovery } from '../shared/legacy-roster-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
+import { throwIfLastAttemptTerminal } from './generation/generation-harness'
 
 const sameRun = (a: MainGenerationRunHandle, b: MainGenerationRunHandle) => a.projectId === b.projectId && a.rootActionId === b.rootActionId && a.runId === b.runId
 export function canContinueLegacyRoster(current: LegacyRosterGenerationRecovery) {
@@ -70,6 +71,7 @@ export function createLegacyRosterGeneration(sessionInput: ProjectSessionContext
       const current = await read()
       assertActive()
       if (current.proposal) return current.proposal
+      if (!current.artifact) throwIfLastAttemptTerminal(current.view)
       if (detached || cancelled || current.sourceStatus !== 'current' || current.view.status === 'cancelled' || !current.artifact) throw new Error('LEGACY_ROSTER_GENERATION_NOT_STAGEABLE')
       return ipc.invokeWithProjectSession(session, 'legacy-roster:stage', { handle: current.view.handle, artifact: current.artifact })
     },

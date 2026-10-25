@@ -7,7 +7,7 @@ import { FAKE_MODEL, FIXTURE_PROSE } from './fake-model.mjs'
 import { seedStageSample } from './scenarios.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
 
-const AUTHOR_64K = Object.freeze({ ...FAKE_MODEL, id: 'd77-author-64k', name: '作者 64K 上下文',
+const AUTHOR_64K = Object.freeze({ ...FAKE_MODEL, id: 'd77-author-64k', name: '作者 64K 上下文', modelName: 'gpt-4.1-mini',
   capabilities: { contextWindowTokens: 65_536, maxOutputTokens: FAKE_MODEL.maxTokens, reasoning: false, structuredOutput: true, usage: true },
   capabilitySources: { contextWindowTokens: 'manual', maxOutputTokens: 'manual', reasoning: 'preset', structuredOutput: 'preset', usage: 'preset' } })
 
@@ -16,8 +16,12 @@ const SENTENCES = ['港务局的档案按潮期装订，任何不在潮期里的
 // 只看世界观就超过作者填的 64K：主进程的输入上界按 UTF-8 字节计。
 const WORLDBUILDING_BYTES = 96 * 1024
 const longWorldbuilding = () => {
-  let text = STAGE_SAMPLE.core.worldbuilding
-  for (let index = 0; Buffer.byteLength(text, 'utf8') < WORLDBUILDING_BYTES; index++) text += SENTENCES[index % SENTENCES.length]
+  let text = STAGE_SAMPLE.core.worldbuilding, bytes = Buffer.byteLength(text, 'utf8')
+  for (let index = 0; bytes < WORLDBUILDING_BYTES; index++) {
+    const sentence = SENTENCES[index % SENTENCES.length]
+    text += sentence
+    bytes += Buffer.byteLength(sentence, 'utf8')
+  }
   return text
 }
 
@@ -51,9 +55,11 @@ export const D77_SCENARIOS = {
     const chats = modelCallKindsSince(fake, before)
     assert.deepEqual(chats, ['outline', 'prose'], `64K 设置下短细纲与正文各发一次：${chats.join('、')}`)
     const prose = fake.chats.filter(chat => chat.kind === 'prose').at(-1)
-    assert.ok(Buffer.byteLength(JSON.stringify(prose.messages), 'utf8') > 65_536, '发出的正文提示词超过作者填的 64K')
+    assert.equal(prose.model, AUTHOR_64K.modelName, '正文请求用的是作者 64K 的模型档案')
+    const promptBytes = Buffer.byteLength(JSON.stringify(prose.messages), 'utf8')
+    assert.ok(promptBytes > AUTHOR_64K.capabilities.contextWindowTokens, `发出的正文提示词 ${promptBytes} 字节，超过作者填的上下文窗口`)
     await chapterView.view(page).getByText(FIXTURE_PROSE.slice(0, 20)).first().waitFor({ state: 'visible', timeout: 30_000 })
-    return { context: AUTHOR_64K.capabilities.contextWindowTokens, worldbuildingBytes: WORLDBUILDING_BYTES, chats }
+    return { context: AUTHOR_64K.capabilities.contextWindowTokens, promptBytes, chats }
   } },
   'd77-context-length': { model: true, shell: 'stage', setup, run: async ({ page, fake }) => {
     fake.rejectContextLength()

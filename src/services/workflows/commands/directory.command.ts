@@ -1,4 +1,4 @@
-import { displayedErrorMessage, knownAppErrorMessage } from '../../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason, knownAppErrorMessage } from '../../../i18n/app-errors'
 import { parsePlanningTargetUnits, planningTargetInstruction, assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS } from '../../../shared/plot-outline-contract'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import {
@@ -438,9 +438,10 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           try {
             await retryDirectoryCharacterSync(receipt.characterSyncOperation.operationId, expectedProjectPath, context.projectSession, workflowUiLocale(context))
           } catch { throw new DirectoryPostCommitSyncError(receipt) }
+          const knownReason = knownAppErrorMessage(context.uiLocale, batchResult.failure.message)
           throw new DirectoryPartialCommitError(receipt, { startChapter: prefixEnd + 1, endChapter }, batchResult.failure, workflowUiText(context,
-            `已保存第 ${startChapter}–${prefixEnd} 章完整蓝图；第 ${prefixEnd + 1}–${endChapter} 章未完成。原运行的候选与失败原因已保留。`,
-            `Saved complete blueprints for chapters ${startChapter}–${prefixEnd}; chapters ${prefixEnd + 1}–${endChapter} remain incomplete. The original run retains its candidates and failure reason.`,
+            `已保存第 ${startChapter}–${prefixEnd} 章完整蓝图；第 ${prefixEnd + 1}–${endChapter} 章未完成。${knownReason ?? ''}原运行的候选与失败原因已保留。`,
+            `Saved complete blueprints for chapters ${startChapter}–${prefixEnd}; chapters ${prefixEnd + 1}–${endChapter} remain incomplete. ${knownReason ? `${knownReason} ` : ''}The original run retains its candidates and failure reason.`,
           ))
         }
         const generationSummary = directoryGenerationFailureSummary(batchResult.receipt.attempts)
@@ -459,7 +460,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         throw new Error(workflowUiText(
           context,
           `${displayedErrorMessage(context.uiLocale, batchResult.failure.message)}；${generationSummary}`,
-          `Blueprint generation failed: ${knownAppErrorMessage(context.uiLocale, batchResult.failure.message) ?? ''} code=${batchResult.failure.code} reason=${batchResult.failure.reason ?? 'unknown'}; ${generationSummary}`,
+          `${englishWithReason('Blueprint generation failed', knownAppErrorMessage(context.uiLocale, batchResult.failure.message) ?? '', ': ')} code=${batchResult.failure.code} reason=${batchResult.failure.reason ?? 'unknown'}; ${generationSummary}`,
         ))
       }
 
