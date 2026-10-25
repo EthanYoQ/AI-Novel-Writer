@@ -5,7 +5,7 @@ import { page } from 'vitest/browser'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import SkillSettings from '../SkillSettings'
-import { leaveSettings } from '../unsaved-settings'
+import { leaveSettings, settleSettingsLeave } from '../unsaved-settings'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -137,9 +137,13 @@ describe('writing skill settings', () => {
 
     await expect.element(page.getByRole('alert')).toHaveTextContent(/Choose the skill again to retry/u)
     expect(page.getByRole('group', { name: 'Skill to install' }).query()).toBeNull()
+    // 候选清空后，登记未保存输入的 effect 在慢机器上可能晚于告警出现才撤销；等到离开不再要求确认。
     const leave = vi.fn()
-    leaveSettings(leave)
-    expect(leave).toHaveBeenCalledOnce()
+    await vi.waitFor(() => {
+      leaveSettings(leave)
+      settleSettingsLeave(false)
+      expect(leave).toHaveBeenCalledOnce()
+    })
   })
 
   it('keeps the page unchanged when the picker is cancelled and shows main-process errors', async () => {
