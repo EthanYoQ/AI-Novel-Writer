@@ -1,6 +1,7 @@
 import type { WritingLanguage } from './writing-language'
 
 export const DRAFT_SHORT_OUTLINE_PURPOSE = 'chapter-draft-short-outline' as const
+export const DRAFT_SHORT_OUTLINE_UNITS = 500
 
 /** A generated plan is never author evidence or manuscript prose. */
 export function draftShortOutlinePrompt(language: WritingLanguage, sourcePrompt: string): string {
@@ -13,7 +14,7 @@ export function draftShortOutlinePrompt(language: WritingLanguage, sourcePrompt:
 /** The first request of a chapter draft; `outlinePrompt` comes from `draftShortOutlinePrompt`. */
 export function draftShortOutlineTask(language: WritingLanguage, outlinePrompt: string) {
   return { purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text' as const, reasoningStage: 'planning' as const,
-    budgetDemand: { kind: 'draft-units' as const, writingLanguage: language, requestedUnits: 500, segmentable: false },
+    budgetDemand: { kind: 'draft-units' as const, writingLanguage: language, requestedUnits: DRAFT_SHORT_OUTLINE_UNITS, segmentable: false },
     messages: [{ role: 'user' as const, content: outlinePrompt }] }
 }
 

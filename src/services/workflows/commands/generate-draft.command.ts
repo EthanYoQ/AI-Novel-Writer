@@ -1699,7 +1699,7 @@ ${params.candidate.text}`,
     } catch (error) {
       if (params.context.cancelled || params.signal.aborted) throw error
       const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
-      if (code !== 'GENERATION_PROVIDER_FAILED' && code !== 'NETWORK_ERROR') throw error
+      if (code !== 'GENERATION_PROVIDER_FAILED' && code !== 'NETWORK_ERROR' && code !== 'GENERATION_CONTEXT_LENGTH_EXCEEDED') throw error
       const detail = shownReason(params.context, error)
       params.callbacks.log(uiText(
         `  压缩修订未完成，保留原稿：${detail}`,

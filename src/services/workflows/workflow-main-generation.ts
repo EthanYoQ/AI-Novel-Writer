@@ -3,7 +3,7 @@ import { useLLMStore } from '../../stores/llm-store'
 import type { BeginGenerationRequest } from '../../shared/generation-owner-contract'
 import { createMainGenerationTransport } from '../generation/main-generation-transport'
 import { createMainOwnedGenerationRuntime, type GenerationRuntime, type MainGenerationRunHandle, type MainGenerationRunView, type MainGenerationSnapshot } from '../generation/generation-runtime'
-import { GenerationAttemptError, throwIfTerminalProviderFailure, type GenerationSession } from '../generation/generation-harness'
+import { GenerationAttemptError, TerminalProviderFailureError, throwIfTerminalProviderFailure, type GenerationSession } from '../generation/generation-harness'
 import { requireWorkflowProjectSession, workflowUiLocale } from './workflow-project-session'
 import { ipc } from '../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
@@ -187,7 +187,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
         if (outcome.receipt.diagnostics) callbacks.setGenerationActivity?.({ operation, diagnostics: outcome.receipt.diagnostics })
         return outcome
       } catch (error) {
-        if (error instanceof GenerationAttemptError && error.receipt.diagnostics) {
+        if ((error instanceof GenerationAttemptError || error instanceof TerminalProviderFailureError) && error.receipt.diagnostics) {
           callbacks.setGenerationActivity?.({ operation, diagnostics: error.receipt.diagnostics })
         }
         throw error

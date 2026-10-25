@@ -149,6 +149,7 @@ export async function startFakeModel(diagnostics) {
     contextLengthRejection = rejected
       ? JSON.parse(readFileSync(new URL('../../electron/llm/__tests__/provider-context-length-samples.json', import.meta.url), 'utf8')).deepseek
       : null
+    if (rejected && !contextLengthRejection?.error?.message) throw new Error('rejectContextLength: 样本缺少 deepseek 错误体')
   }
   const record = (kind, detail) => {
     requests.push(kind)

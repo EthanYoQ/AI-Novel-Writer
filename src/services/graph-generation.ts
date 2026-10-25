@@ -2,6 +2,7 @@ import { ipc } from './ipc-client'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { GraphGenerationInput, GraphGenerationRecovery } from '../shared/graph-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
+import { throwIfTerminalProviderFailure } from './generation/generation-harness'
 
 const sameRun = (a: MainGenerationRunHandle, b: MainGenerationRunHandle) => a.projectId === b.projectId && a.rootActionId === b.rootActionId && a.runId === b.runId
 export function canExecuteGraph(recovery: GraphGenerationRecovery) {
@@ -62,6 +63,7 @@ export function createGraphGeneration(sessionInput: ProjectSessionContext) {
       if (!sameRun(handle, receipt.run.handle)) throw new Error('GRAPH_GENERATION_IDENTITY_MISMATCH')
       recovery.view = receipt.run
       if (cancelled || detached) throw new Error('GRAPH_GENERATION_CANCELLED')
+      throwIfTerminalProviderFailure(receipt.outcome.receipt)
       return read()
     },
     async confirm(index: number, expectedHandle?: MainGenerationRunHandle) {

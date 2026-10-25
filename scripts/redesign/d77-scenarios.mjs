@@ -34,6 +34,9 @@ const setup = context => seedStageSample(context, { landOnChapter3: false, befor
   assert.equal((await invoke(page, 'llm:set-default-model', AUTHOR_64K.id)).success, true)
 } })
 
+const NOT_CHAT = new Set(['embedding', 'models'])
+const chatsSince = (fake, before) => fake.requests.slice(before).filter(kind => !NOT_CHAT.has(kind))
+
 const startDraft = async page => {
   await chapterView.open(page, 3)
   await chapterView.view(page).getByRole('button', { name: '写作此章', exact: true }).click()
@@ -45,8 +48,8 @@ export const D77_SCENARIOS = {
     const before = fake.requests.length
     await startDraft(page)
     await runSheet.waitForRunDone(page)
-    const chats = fake.requests.slice(before).filter(kind => kind !== 'embedding')
-    assert.deepEqual(chats.slice(0, 2), ['outline', 'prose'], `64K 设置下短细纲与正文都发给了模型：${chats.join('、')}`)
+    const chats = chatsSince(fake, before)
+    assert.deepEqual(chats, ['outline', 'prose'], `64K 设置下短细纲与正文各发一次：${chats.join('、')}`)
     await chapterView.view(page).getByText(FIXTURE_PROSE.slice(0, 20)).first().waitFor({ state: 'visible', timeout: 30_000 })
     return { context: AUTHOR_64K.capabilities.contextWindowTokens, worldbuildingBytes: WORLDBUILDING_BYTES, chats }
   } },
@@ -60,7 +63,7 @@ export const D77_SCENARIOS = {
     assert.doesNotMatch(text, /上下文窗口/)
     assert.doesNotMatch(text, /请调整章节要求/)
     assert.match(text, /本次未保存草稿或正文章节。/)
-    const chats = fake.requests.slice(before).filter(kind => kind !== 'embedding')
+    const chats = chatsSince(fake, before)
     assert.deepEqual(chats, ['context-length'], `服务商拒绝后不自动重发：${chats.join('、')}`)
     return { card: text, chats }
   } },

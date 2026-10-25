@@ -126,6 +126,9 @@ function plotTreeErrorMessage(
       'This generation was not saved. Recover the generation record to check its result and cancellation status.',
     )
   }
+  if (message === 'GENERATION_CONTEXT_LENGTH_EXCEEDED') {
+    return text(knownAppErrorMessage('zh-CN', message)!, knownAppErrorMessage('en-US', message)!)
+  }
   if (message === 'GRAPH_GENERATION_NOT_CONFIRMABLE') {
     return text(
       '本次结果未保存。请恢复生成记录，检查来源是否变化或生成是否已取消。',

@@ -46,6 +46,7 @@ export type StructuredGenerationFailureReason =
   | 'safety'
   | 'cancelled'
   | 'deadline'
+  | 'context_length'
   | 'unknown'
 
 export interface StructuredBatchLimits {
@@ -538,7 +539,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           failure = error.failure
         } else if (error instanceof TerminalProviderFailureError) {
           recordAttempt(error.receipt)
-          failure = { code: 'generation_failed', reason: 'server_error', message: error.code }
+          failure = { code: 'generation_failed', reason: 'context_length', message: error.code }
         } else if (error instanceof GenerationAttemptError) {
           recordAttempt(error.receipt)
           if (error.code === 'CANCELLED') {
