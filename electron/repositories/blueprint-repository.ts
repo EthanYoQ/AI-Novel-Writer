@@ -449,14 +449,14 @@ function snapshotWithCharacterSyncFacts(
 }
 
 /**
- * 作者维护的字段组。区间重写只替换生成的字段；请求里一组字段都为空时沿用已有行的值。
- * 章节要点和它的时间成组继承，手写要点不会挂上旧的生成时间。
+ * 作者维护的字段组，每组第一项是它的内容。区间重写只替换生成的字段；请求里内容为空时整组沿用已有行的值。
+ * 章节要点和它的时间成组继承，手写要点不会挂上旧的生成时间，只带时间的请求也不会清掉要点。
  */
 const AUTHOR_FIELD_GROUPS = [['userGuidance'], ['notes', 'notesUpdatedAt']] as const
 
 function withExistingAuthorFields(blueprint: BlueprintData, existing: BlueprintData | undefined): BlueprintData {
     const authorFields = AUTHOR_FIELD_GROUPS.flatMap((group) => {
-        const source = group.every(key => !blueprint[key]) ? existing : blueprint
+        const source = blueprint[group[0]] ? blueprint : existing
         return group.map(key => [key, source?.[key] || ''] as const)
     })
     return { ...blueprint, ...Object.fromEntries(authorFields) }
