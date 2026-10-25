@@ -535,11 +535,12 @@ export function createRepairFinalizeWorkflow(
             if (Array.isArray(bp?.characters)) chapterEntities = bp.characters
           } catch { /* 蓝图读取失败时使用默认标题 */ }
 
-          // 整卡重试与卡上的按钮按同一份安排选步骤：重试结果也一样的失败不重跑。
+          // 按行与整卡重试都按当前状态重算卡上的安排：界面可能还拿着旧状态，重试结果也一样的失败不重跑。
           const { getChapterFinalizeScope, readPostProcessStatus } = await import('./workflow-utils')
           const { planFinalizationRetry } = await import('../../shared/finalization-step-error')
-          const current = stepKey ? null : await readPostProcessStatus(projectPath, getChapterFinalizeScope(chapterNumber), projectSession)
-          const stepKeys = stepKey ? [stepKey] : current ? planFinalizationRetry(current.steps).card : []
+          const current = await readPostProcessStatus(projectPath, getChapterFinalizeScope(chapterNumber), projectSession)
+          const plan = current && planFinalizationRetry(current.steps)
+          const stepKeys = !plan ? [] : stepKey ? [stepKey].filter(key => plan.rows.has(key)) : plan.card
           if (stepKeys.length === 0) throw new Error(text(
             '没有可以重试的失败步骤，请按各步骤的说明处理。',
             'No failed step can be retried. Follow the note on each step.',
