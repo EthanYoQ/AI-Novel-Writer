@@ -121,8 +121,14 @@ function profileEntries(target, entries, limit) {
   }
   if (entries.size >= limit) throw new Error(`真实配置目录的条目超过 ${limit} 个，外部写入没法完整比较（停在 ${target}）`)
   if (!stat.isDirectory()) return entries.set(target, `${stat.size}:${stat.mtimeMs}`)
+  let names
+  try { names = fs.readdirSync(target) } catch (error) {
+    // 运行中的书童可能在 lstat 与 readdir 之间删掉缓存目录
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return entries
+    throw error
+  }
   entries.set(target, 'dir')
-  for (const name of fs.readdirSync(target)) profileEntries(path.join(target, name), entries, limit)
+  for (const name of names) profileEntries(path.join(target, name), entries, limit)
   return entries
 }
 
