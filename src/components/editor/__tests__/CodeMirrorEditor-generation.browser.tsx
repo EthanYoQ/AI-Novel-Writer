@@ -256,6 +256,21 @@ describe('CodeMirror editor AI generation boundary', () => {
     expect(note.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
   })
 
+  it('keeps a finished preview inside the viewport after it grows past the loading height', async () => {
+    deferStream = true
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await vi.waitFor(() => expect(listeners.has('llm:stream-done')).toBe(true))
+
+    await act(async () => {
+      listeners.get('llm:stream-done')?.({ requestId: pendingRequestId!, fullText: '新段落。'.repeat(150), finishReason: 'stop' } as never)
+    })
+
+    await expect.element(page.getByRole('button', { name: '替换' })).toBeEnabled()
+    expect(container.querySelector('.cm-selbar')!.getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
+  })
+
   it('keeps the toolbar inside the viewport on the first selection near the right edge', async () => {
     container.style.paddingLeft = `${APP_MIN_WINDOW_WIDTH - 120}px`
     container.style.paddingTop = '200px'
@@ -306,6 +321,28 @@ describe('CodeMirror editor AI generation boundary', () => {
     await scrollChapterTo(0)
     await expect.element(note).toHaveValue('我的未提交意见')
     expect(container.querySelector('.cm-selbar')!.getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
+  })
+
+  it('keeps the note form on screen while a long selection whose start scrolled away is still visible', async () => {
+    await act(async () => root.render(
+      <div data-testid="chapter-scroller" style={{ height: 300, overflow: 'auto' }}><CodeMirrorEditor content={LONG_CHAPTER} mode="prose" fitContent /></div>,
+    ))
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+    await act(async () => {
+      view.focus()
+      view.dispatch({ selection: { anchor: view.state.doc.line(5).from, head: view.state.doc.line(39).to } })
+    })
+    await scrollChapterTo(200)
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await expect.element(note).toHaveFocus()
+
+    await scrollChapterTo(210)
+
+    expect(note.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
+    const submit = page.getByRole('button', { name: '改写' }).element().getBoundingClientRect()
+    expect(submit.top).toBeGreaterThanOrEqual(0)
+    expect(submit.bottom).toBeLessThanOrEqual(window.innerHeight)
   })
 
   it('leaves Escape to the input method while it reports composition by keyCode 229', async () => {
