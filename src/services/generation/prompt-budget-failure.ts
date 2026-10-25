@@ -109,7 +109,7 @@ export function classifyGenerationFailure(
     code.includes('TASK_BUDGET_SPLIT_REQUIRED')
     || code.includes('TASK_BUDGET_SCOPE_SPLIT_REQUIRED')
   ) return 'capacity-preflight'
-  if (code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED') return 'provider-context'
+  if (code.includes('GENERATION_CONTEXT_LENGTH_EXCEEDED')) return 'provider-context'
   if (CAPACITY_FAILURES.has(code)) return 'capacity-preflight'
   if (BUDGET_FAILURES.has(code)) return 'budget-exhausted'
   if (NETWORK_FAILURES.has(code)) return 'network'
@@ -139,7 +139,7 @@ const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode | LegacyTaskBudgetReas
 })
 
 function reasonLabel(code: TaskBudgetReasonCode | LegacyTaskBudgetReasonCode, locale: Locale): string {
-  const labels = REASON_LABELS[code]
+  const labels = REASON_LABELS[code] ?? ['其他依据', 'Other factor']
   return locale === 'zh-CN' ? labels[0] : labels[1]
 }
 

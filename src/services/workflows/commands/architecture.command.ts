@@ -49,7 +49,7 @@ import {
   isGeneratedGlobalGuidanceValid,
   mergeExpandedNovelConfig,
 } from '../novel-config-expansion'
-import { displayedErrorMessage, englishWithReason } from '../../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason, knownAppErrorMessage } from '../../../i18n/app-errors'
 import { pluralEn } from '../../../shared/plural-en'
 
 // --- 基础工具库 ---
@@ -1219,7 +1219,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       ].join(' ')
       throw new Error(text(
         `${displayedErrorMessage(context.uiLocale, detailExecution.failure.message)}；角色详情失败收据：${failureReceipt}`,
-        `Character details failed structural validation and were not saved. Receipt: ${failureReceipt}`,
+        `${knownAppErrorMessage(context.uiLocale, detailExecution.failure.message) ?? 'Character details failed structural validation and were not saved.'} Receipt: ${failureReceipt}`,
       ))
     }
     if (detailExecution.items.length !== manifest.length) {

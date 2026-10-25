@@ -2,12 +2,18 @@ import { ipc } from './ipc-client'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { GraphGenerationInput, GraphGenerationRecovery } from '../shared/graph-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
-import { throwIfTerminalProviderFailure } from './generation/generation-harness'
+import { isTerminalProviderFailure } from './generation/generation-harness'
 
 const sameRun = (a: MainGenerationRunHandle, b: MainGenerationRunHandle) => a.projectId === b.projectId && a.rootActionId === b.rootActionId && a.runId === b.runId
 export function canExecuteGraph(recovery: GraphGenerationRecovery) {
   return recovery.sourceStatus === 'current' && recovery.view.status !== 'cancelled' && recovery.attemptCount === 0 && !recovery.result
     && !recovery.artifact && (recovery.view.candidates ?? recovery.view.artifacts).length === 0
+}
+/** A run without a result failed; a provider failure that resending cannot fix keeps its registered code. */
+export function assertGraphResult(recovery: GraphGenerationRecovery): void {
+  if (recovery.result) return
+  const failureCode = recovery.view.budgetDiagnostics?.at(-1)?.failureCode
+  throw new Error(isTerminalProviderFailure(failureCode) ? failureCode : 'GRAPH_GENERATION_INCOMPLETE')
 }
 /** Navigation only: main owns sources, tasks, candidate identity and durable effects. */
 export function createGraphGeneration(sessionInput: ProjectSessionContext) {
@@ -63,7 +69,6 @@ export function createGraphGeneration(sessionInput: ProjectSessionContext) {
       if (!sameRun(handle, receipt.run.handle)) throw new Error('GRAPH_GENERATION_IDENTITY_MISMATCH')
       recovery.view = receipt.run
       if (cancelled || detached) throw new Error('GRAPH_GENERATION_CANCELLED')
-      throwIfTerminalProviderFailure(receipt.outcome.receipt)
       return read()
     },
     async confirm(index: number, expectedHandle?: MainGenerationRunHandle) {
@@ -89,8 +94,8 @@ export async function generateGraphResult(session: ProjectSessionContext, input:
     if (signal.aborted) throw new Error('GRAPH_GENERATION_CANCELLED')
     await client.open({ input, modelId, uiActionNonce: crypto.randomUUID() })
     const recovery = await client.execute()
-    if (!recovery.result) throw new Error('GRAPH_GENERATION_INCOMPLETE')
+    assertGraphResult(recovery)
     if (input.kind === 'plot') await client.confirm(0)
-    return recovery.result
+    return recovery.result!
   } finally { signal.removeEventListener('abort', cancel); client.detach() }
 }

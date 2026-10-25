@@ -146,10 +146,11 @@ export async function startFakeModel(diagnostics) {
   /** 之后不带 Key 的嵌入请求也照常回向量，模拟不需要 Key 的本机检索服务；传 false 恢复拒绝。 */
   const acceptKeylessEmbeddings = (accepted = true) => { keylessEmbeddings = accepted }
   const rejectContextLength = (rejected = true) => {
-    contextLengthRejection = rejected
-      ? JSON.parse(readFileSync(new URL('../../electron/llm/__tests__/provider-context-length-samples.json', import.meta.url), 'utf8')).deepseek
-      : null
-    if (rejected && !contextLengthRejection?.error?.message) throw new Error('rejectContextLength: 样本缺少 deepseek 错误体')
+    if (!rejected) { contextLengthRejection = null; return }
+    const sample = new URL('../../electron/llm/__tests__/provider-context-length-samples.json', import.meta.url)
+    try { contextLengthRejection = JSON.parse(readFileSync(sample, 'utf8')).deepseek }
+    catch (error) { throw new Error(`rejectContextLength: 读不出错误体样本 ${sample.pathname}`, { cause: error }) }
+    if (!contextLengthRejection?.error?.message) throw new Error('rejectContextLength: 样本缺少 deepseek 错误体')
   }
   const record = (kind, detail) => {
     requests.push(kind)

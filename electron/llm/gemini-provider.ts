@@ -206,7 +206,7 @@ export class GeminiProvider implements ILLMProvider {
 
       if (!res.ok) {
         transport.fail('HTTP_ERROR')
-        opts.onError(await providerFailureCode(res))
+        opts.onError(await providerFailureCode(res, opts.signal))
         return
       }
 

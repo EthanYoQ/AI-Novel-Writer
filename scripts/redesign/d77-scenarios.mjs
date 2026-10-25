@@ -35,7 +35,7 @@ const setup = context => seedStageSample(context, { landOnChapter3: false, befor
 } })
 
 const NOT_CHAT = new Set(['embedding', 'models'])
-const chatsSince = (fake, before) => fake.requests.slice(before).filter(kind => !NOT_CHAT.has(kind))
+const modelCallKindsSince = (fake, before) => fake.requests.slice(before).filter(kind => !NOT_CHAT.has(kind))
 
 const startDraft = async page => {
   await chapterView.open(page, 3)
@@ -48,8 +48,10 @@ export const D77_SCENARIOS = {
     const before = fake.requests.length
     await startDraft(page)
     await runSheet.waitForRunDone(page)
-    const chats = chatsSince(fake, before)
+    const chats = modelCallKindsSince(fake, before)
     assert.deepEqual(chats, ['outline', 'prose'], `64K 设置下短细纲与正文各发一次：${chats.join('、')}`)
+    const prose = fake.chats.filter(chat => chat.kind === 'prose').at(-1)
+    assert.ok(Buffer.byteLength(JSON.stringify(prose.messages), 'utf8') > 65_536, '发出的正文提示词超过作者填的 64K')
     await chapterView.view(page).getByText(FIXTURE_PROSE.slice(0, 20)).first().waitFor({ state: 'visible', timeout: 30_000 })
     return { context: AUTHOR_64K.capabilities.contextWindowTokens, worldbuildingBytes: WORLDBUILDING_BYTES, chats }
   } },
@@ -63,7 +65,8 @@ export const D77_SCENARIOS = {
     assert.doesNotMatch(text, /上下文窗口/)
     assert.doesNotMatch(text, /请调整章节要求/)
     assert.match(text, /本次未保存草稿或正文章节。/)
-    const chats = chatsSince(fake, before)
+    assert.doesNotMatch(text, /maximum context length|request_id/u)
+    const chats = modelCallKindsSince(fake, before)
     assert.deepEqual(chats, ['context-length'], `服务商拒绝后不自动重发：${chats.join('、')}`)
     return { card: text, chats }
   } },

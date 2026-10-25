@@ -189,7 +189,7 @@ export interface GenerationAttemptReceipt {
 }
 
 /** Provider failures that resending the same request cannot fix: the run ends with the code. */
-export function isTerminalProviderFailure(code: GenerationAttemptReceipt['failureCode']): code is 'GENERATION_CONTEXT_LENGTH_EXCEEDED' {
+export function isTerminalProviderFailure(code: unknown): code is 'GENERATION_CONTEXT_LENGTH_EXCEEDED' {
   return code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
 }
 

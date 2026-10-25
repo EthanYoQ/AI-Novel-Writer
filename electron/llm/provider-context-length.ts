@@ -8,13 +8,16 @@ const CONTEXT_LENGTH_MESSAGES = [
   /input token count \(\d+\) exceeds the maximum number of tokens/iu,
 ]
 
-export async function providerFailureCode(response: Response): Promise<'LLM_CONTEXT_LENGTH_EXCEEDED' | 'LLM_REQUEST_FAILED'> {
+export async function providerFailureCode(response: Response, signal?: AbortSignal): Promise<'LLM_CONTEXT_LENGTH_EXCEEDED' | 'LLM_REQUEST_FAILED'> {
   if (response.status !== 400) {
     void response.body?.cancel().catch(() => {})
     return 'LLM_REQUEST_FAILED'
   }
   let body = ''
   try { body = await response.text() }
-  catch { void response.body?.cancel().catch(() => {}) }
+  catch (error) {
+    if (signal?.aborted) throw error
+    void response.body?.cancel().catch(() => {})
+  }
   return CONTEXT_LENGTH_MESSAGES.some(pattern => pattern.test(body)) ? 'LLM_CONTEXT_LENGTH_EXCEEDED' : 'LLM_REQUEST_FAILED'
 }

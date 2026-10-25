@@ -1,4 +1,5 @@
 import { knownAppErrorMessage } from '../../i18n/app-errors'
+import { classifyGenerationFailure } from '../../services/generation/prompt-budget-failure'
 import type { Locale } from '../../i18n/types'
 import type { PromptBudgetReport } from '../../services/generation/generation-harness'
 import type { WorkflowFailureCode, WorkflowStep } from '../../stores/workflow-store'
@@ -131,7 +132,7 @@ export function presentWorkflowFailure(
     const diagnostic = activity.diagnostics
     const code = diagnostic?.causeCode ?? diagnostic?.errorCode
     let reason = knownAppErrorMessage(locale, error) ?? (error?.trim() || (locale === 'zh-CN' ? '审稿未完成，原因未知。' : 'The review did not finish; the cause is unknown.'))
-    if (diagnostic?.endReason === 'failed') {
+    if (diagnostic?.endReason === 'failed' && classifyGenerationFailure(error, null) !== 'provider-context') {
       const zh = locale === 'zh-CN'
       reason = code === 'UND_ERR_BODY_TIMEOUT'
         ? (zh ? '读取响应流超时。上游为何停止响应尚未确认。' : 'Reading the response stream timed out. Why the upstream stopped responding is not confirmed.')

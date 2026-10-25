@@ -1,4 +1,4 @@
-import { displayedErrorMessage } from '../../../i18n/app-errors'
+import { displayedErrorMessage, knownAppErrorMessage } from '../../../i18n/app-errors'
 import type { NovelConfig } from '../../../shared/ipc-channels'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../../shared/import-generation'
 import type { BeginGenerationRequest } from '../../../shared/generation-owner-contract'
@@ -743,7 +743,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     })
     if (!batch.ok) throw new Error(text(
       `蓝图推演失败：${displayedErrorMessage(context.uiLocale, batch.failure.message)}`,
-      `Blueprint inference failed (${batch.failure.reason}).`,
+      `Blueprint inference failed (${batch.failure.reason}). ${knownAppErrorMessage(context.uiLocale, batch.failure.message) ?? ''}`.trim(),
     ))
 
     this.assertNotCancelled(context)
