@@ -10,6 +10,7 @@ import { workflowUiText, workflowWritingLanguage } from '../workflow-project-ses
 import { composePromptSystemRole, resolvePromptTemplate, renderPrompt } from '../../prompt-templates'
 import { promptLanguageText } from '../../prompt-language'
 import type { WritingLanguage } from '../../../shared/writing-language'
+import type { GenerationOperation } from '../../../shared/model-stage-routing'
 import { GenerationAttemptError, PromptBudgetExceededError } from '../../generation/generation-harness'
 import { BoundedCompletionFailure } from '../bounded-completion'
 import {
@@ -33,6 +34,16 @@ export type GeneratableField =
   | 'writingStyle'
 
 type FieldGenerationInput = Pick<ProjectData, 'name' | 'novelConfig'>
+
+/** 每个字段一个固定的 operation，覆盖扫描和分工模型表都能直接看到。 */
+const FIELD_OPERATIONS = {
+  coreOutline: 'generate-field:core-outline',
+  worldSetting: 'generate-field:world-setting',
+  goldenFinger: 'generate-field:golden-finger',
+  protagonistProfile: 'generate-field:protagonist-profile',
+  globalGuidance: 'generate-field:global-guidance',
+  writingStyle: 'generate-field:writing-style',
+} as const satisfies Record<GeneratableField, GenerationOperation>
 
 const FIELD_LABELS: Record<GeneratableField, readonly [string, string]> = {
   coreOutline: ['核心大纲', 'Core outline'],
@@ -64,7 +75,7 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
     })
     return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params, expectedInput), {
       authorInputs: [{ id: 'field:author-config', text: JSON.stringify(expectedInput.novelConfig) }],
-      operation: `generate-field:${this.fieldKey.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}`, promptKeys: ['generate_novel_config_field'], skillStages: ['planning'], output: 'visible-text',
+      operation: FIELD_OPERATIONS[this.fieldKey], promptKeys: ['generate_novel_config_field'], skillStages: ['planning'], output: 'visible-text',
     })
   }
 
