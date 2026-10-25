@@ -298,6 +298,7 @@ node scripts/redesign/drive.mjs --scenario arch-timing --out <目录>
 | `blueprint-finalize-next` | 第 3 章草稿定稿，设置里开着「定稿后打开下一章」（F-056）：落到第 4 章的单章视图，写作弹层由这一章「写作此章」旁的「本次写作选项」打开（`aria-controls` 指向弹层）并贴着它展开，只弹出写作弹层，没有旧的创作对话框 | 写作弹层 | 是 | F-056 |
 | `blueprint-tour` | 30–60 秒导览：选章改标题保存、清空的危险确认、生成蓝图覆盖、批量创作、写作弹层、一致性预检、仅本次忽略后写完。配 `--video` 录评审视频 | 写完一章 | 是 | Review gate |
 | `blueprint-timing` | 300 章蓝图：从点蓝图到第 300 章出现在列表里（`openMs`），从点第 150 章到它的标题出现（`switchMs`），渲染进程内按帧计时。旧外壳点项目树「章节蓝图」与列表项，两种外壳都能跑 | 第 150 章 | 否 | perf |
+| `blueprint-null-field` | 示例作品的蓝图行不写悬念钩子与作者微操指导（库里是 NULL），只给第 5 章填上。先看第 5 章再切到第 6 章：两个文本框为空，切回再切、重新加载、重启后都一样。依次直接离开、改标题按 Ctrl S、退出确认里「保存并退出」（主进程收到放行时不关窗，之后取消退出），每次用 `node:sqlite` 只读打开项目库读第 6 章原始行，都没有第 5 章的文字；再在第 6 章作者微操指导里打字保存，库里只有打的字。`measured` 是每一步看到的值与读到的行 | 第 6 章蓝图的作者微操指导 | 否 | 蓝图作者字段 NULL |
 
 ```bash
 node scripts/redesign/drive.mjs --scenario blueprint-regression --app-root <trunk 工作树> --out <目录>/trunk
