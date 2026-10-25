@@ -246,6 +246,38 @@ describe('CodeMirror editor AI generation boundary', () => {
     expect((note.element() as HTMLTextAreaElement).value).toBe(longNote)
   })
 
+  it('keeps the note form inside the viewport for a selection at the top edge', async () => {
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await expect.element(note).toBeVisible()
+    expect(note.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
+  })
+
+  it('keeps the toolbar inside the viewport on the first selection near the right edge', async () => {
+    container.style.paddingLeft = `${APP_MIN_WINDOW_WIDTH - 120}px`
+    container.style.paddingTop = '200px'
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+
+    const toolbar = page.getByRole('button', { name: '按意见改' })
+    await expect.element(toolbar).toBeVisible()
+    await vi.waitFor(() => expect(container.querySelector('.cm-selbar')!.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth))
+  })
+
+  it('leaves Escape to the input method while it reports composition by keyCode 229', async () => {
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+
+    await act(async () => { note.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 229, bubbles: true })) })
+
+    await expect.element(note).toBeInTheDocument()
+  })
+
   it('shows no selection actions in a read-only editor', async () => {
     await act(async () => root.render(
       <CodeMirrorEditor content="定稿正文" mode="prose" editable={false} />,

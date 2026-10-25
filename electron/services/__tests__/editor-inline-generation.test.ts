@@ -96,6 +96,7 @@ it.each([
  ['意见不是字符串',{...input,action:'instruct',instruction:42}],
  ['意见超过2000字',{...input,action:'instruct',instruction:'冷'.repeat(2001)}],
  ['其他动作带意见',{...input,action:'refine',instruction:note}],
+ ['动作不是字符串',{...input,action:['refine']}],
 ])('%s时拒绝开始运行',(_name,bad)=>{
  const f=fixture()
  expect(()=>f.owner.beginEditorInline({...request,input:bad as never})).toThrow('GENERATION_EDITOR_INPUT_INVALID')
