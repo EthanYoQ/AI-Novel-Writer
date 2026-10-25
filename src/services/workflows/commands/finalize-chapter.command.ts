@@ -406,16 +406,16 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       frozen.projectionGeneration,
       undefined,
     )
+    // 旧版本的跑批里可能留着现在已没有的步骤（如 style_analysis），跳过它们，只有一步都跑不了时才报错。
     const { stepKeys } = this.params
-    const unknown = stepKeys?.find(key => !allSteps.some(step => step.key === key))
-    if (unknown) {
+    const steps = stepKeys ? allSteps.filter(step => stepKeys.includes(step.key)) : allSteps
+    if (steps.length === 0) {
       throw new Error(workflowUiText(
         context,
-        `未知的后处理步骤：${unknown}`,
-        `Unknown post-processing step: ${unknown}`,
+        `未知的后处理步骤：${stepKeys?.join('、')}`,
+        `Unknown post-processing step: ${stepKeys?.join(', ')}`,
       ))
     }
-    const steps = stepKeys ? allSteps.filter(step => stepKeys.includes(step.key)) : allSteps
     const status = await runPostProcessPipeline(
       this.params.project.path,
       getChapterFinalizeScope(this.params.chapterNumber),

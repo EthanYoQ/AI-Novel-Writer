@@ -61,8 +61,9 @@ async function waitHeld(app) {
 
 const releaseCommit = app => app.evaluate(() => globalThis.__f484Commit.release())
 
-/** #502：重试结果也一样，这一张卡上（行与右上角）都不该有按钮。 */
-const postButtons = (page, region) => page.getByRole('region', { name: region }).getByRole('button').count()
+/** #502：重试结果也一样，这一张卡上（行与右上角）都不该有重试。正文文件一行的「重新写入正文」不算。 */
+const postButtons = (page, region) => page.getByRole('region', { name: region })
+  .getByRole('button', { name: /^(重试|重试失败步骤|Retry|Retry failed steps)$/u }).count()
 
 /** 角色状态更新这一行的说明。步骤名按定稿时的界面语言存下，切到英文后仍是中文；正文文件一行在发布未完成时也标失败。 */
 const failedDetail = (page, region) => page.getByRole('region', { name: region }).locator('li[data-state="failed"]')
