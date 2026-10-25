@@ -87,3 +87,15 @@ it('显式取消等待晚begin，取消确切原run而不execute', async () => {
   await cancelled
   expect(invoke.mock.calls.every(([channel]) => channel !== 'graph-generation:execute')).toBe(true)
 })
+it('服务商以上下文超长拒绝时以登记码失败，界面能说明原因', async () => {
+  const fresh = { ...stored, view: { ...stored.view, status: 'running', artifacts: [] }, attemptCount: 0, artifact: undefined, result: undefined }
+  const failed = { status: 'incomplete', content: '', finishReason: 'error', receipt: { finishReason: 'error', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } }
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'graph-generation:read') return fresh
+    if (channel === 'graph-generation:execute') return { run: fresh.view, outcome: failed }
+    throw new Error(channel)
+  })
+  const client = setup(invoke)
+  await client.open({ handle })
+  await expect(client.execute()).rejects.toThrow('GENERATION_CONTEXT_LENGTH_EXCEEDED')
+})

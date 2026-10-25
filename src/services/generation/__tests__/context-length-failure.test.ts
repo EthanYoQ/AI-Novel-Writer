@@ -53,25 +53,29 @@ describe('讨论区 #77：上下文超长码在每条消费路径上都保留', 
         inputKey: item => item, outputKey: item => item.chapterNumber, decode: content => JSON.parse(content), validateItem: () => undefined },
     }).execute({ items: [1], limits: { maxBatchItems: 10 } }))
     await runtime.close()
-    expect(result).toMatchObject({ ok: false, failure: { message: CODE }, receipt: { calls: 1 } })
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'context_length', message: CODE }, receipt: { calls: 1 } })
   })
 
-  it('导入阶段直接取回执的路径同样以登记码失败', async () => {
+  it('导入阶段直接取回执的路径同样以登记码失败，并上报这次请求的传输诊断', async () => {
+    const failed = failedOutcome(CODE)
+    const diagnostics = { startedAt: 1, elapsedMs: 20, httpStatus: 400, phase: 'response', endReason: 'failed', errorCode: 'HTTP_ERROR', visibleEvents: 0, reasoningEvents: 0 }
+    const setGenerationActivity = vi.fn()
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'import-generation:read') return { view, modelId: 'model', frozenContext: {} }
-      if (channel === 'import-generation:execute') return { run: view, outcome: failedOutcome(CODE) }
+      if (channel === 'import-generation:execute') return { run: view, outcome: { ...failed, receipt: { ...failed.receipt, diagnostics } } }
       throw new Error(channel)
     })
     vi.stubGlobal('window', { aiNovelAPI: { invoke } })
     const context: WorkflowContext = { runId: 'workflow', projectPath: project.projectPath, projectSession: project,
       generationModelId: 'model', writingLanguage: 'zh-CN', uiLocale: 'zh-CN', data: {}, cancelled: false }
-    const runtime = await createWorkflowMainGenerationRuntime({ context, callbacks: { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() },
+    const runtime = await createWorkflowMainGenerationRuntime({ context, callbacks: { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn(), setGenerationActivity },
       selection: { operation: 'import-global-facts', promptKeys: [], skillStages: [], output: 'structured-data',
         importSlot: { runId: 'import-run', stage: 'global', batchId: 'done' } } },
     { read: vi.fn(async () => view), subscribe: vi.fn(() => () => {}) } as unknown as ReturnType<typeof createMainGenerationTransport>)
     await runtime.execute(async ({ session }) => {
       await expect(session.complete({ purpose: 'import-global-facts', output: 'structured-data', messages: [] })).rejects.toMatchObject({ code: CODE })
     })
+    expect(setGenerationActivity).toHaveBeenLastCalledWith({ operation: 'import-global-facts', diagnostics })
     vi.unstubAllGlobals()
   })
 
