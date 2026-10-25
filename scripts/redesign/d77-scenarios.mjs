@@ -1,5 +1,5 @@
 // 讨论区 #77：作者手填 64K 上下文窗口、世界观较长的作品。修复前写稿在发出首个请求前被容量预检拒绝；
-// 修复后照常发出，提示词真超长时由服务商拒绝，卡片指向模型设置的上下文窗口。
+// 修复后照常发出，提示词真超长时由服务商拒绝，卡片建议换用上下文更长的模型或精简本章材料。
 import assert from 'node:assert/strict'
 
 import * as chapterView from './pages/chapter-view.mjs'
@@ -56,8 +56,9 @@ export const D77_SCENARIOS = {
     const before = fake.requests.length
     await startDraft(page)
     const failure = runSheet.anyCard(page).filter({ hasText: /^上一次运行/ })
-    await failure.getByText(/模型设置 → 上下文窗口/).waitFor({ state: 'visible', timeout: 90_000 })
+    await failure.getByText(/换用上下文更长的模型/).waitFor({ state: 'visible', timeout: 90_000 })
     const text = await failure.innerText()
+    assert.doesNotMatch(text, /上下文窗口/)
     assert.doesNotMatch(text, /请调整章节要求/)
     assert.match(text, /本次未保存草稿或正文章节。/)
     const chats = fake.requests.slice(before).filter(kind => kind !== 'embedding')
