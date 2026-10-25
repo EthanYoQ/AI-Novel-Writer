@@ -61,6 +61,7 @@ async function readChapter(page, chapterNumber) {
 async function fillAndSave(page, chapterNumber, field, value) {
   await blueprint.planItem(page, chapterNumber).click()
   await chapterCard(page, chapterNumber).getByRole('textbox', { name: field }).fill(value)
+  await stage.saveStatus(page).getByText('未保存').waitFor({ state: 'visible' })
   await page.keyboard.press('Control+S')
   await stage.saveStatus(page).getByText('已保存').waitFor({ state: 'visible' })
 }
