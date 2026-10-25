@@ -390,7 +390,7 @@ export function freezeProductionEnvironment(target) {
   if (actual.sqlite !== 1) fail('TARGET_NATIVE_SQLITE_PROBE_FAILED')
   const dependencies = freezeEnvironment(target.repositoryRoot).dependencies
   const sqliteManifest = dependencies.find(entry => entry.name === 'better-sqlite3').manifest
-  const binary = real(path.join(path.dirname(sqliteManifest), 'build/Release/better_sqlite3.node'))
+  const binary = real(path.join(path.dirname(sqliteManifest), 'prebuilds', `${process.platform}-${process.arch}.node`))
   return { executionMode: 'production-commands-registered-ipc-physical-sqlite', node: {
     executable: real(runtime.executable), sha256: hash(fs.readFileSync(runtime.executable)), version: actual.version,
     modulesAbi: actual.modulesAbi, electronRunAsNode: runtime.electronRunAsNode }, dependencies,

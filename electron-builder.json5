@@ -3,6 +3,8 @@
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "com.ai-novel-writer.app",
   "asar": true,
+  // better-sqlite3 13 与 LanceDB 都是 Node-API 预编译包，同一份二进制直接给 Electron 用；打包时再跑 @electron/rebuild 只会多一次 node-gyp/MSBuild。
+  "npmRebuild": false,
   "asarUnpack": [
     "node_modules/apache-arrow/**/*",
     "node_modules/better-sqlite3/**/*",

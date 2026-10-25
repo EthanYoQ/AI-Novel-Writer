@@ -101,10 +101,6 @@ jobs:
           }
           "AI_NOVEL_PREVIOUS_PORTABLE_ZIP=$portableZip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Prepare and verify Node native modules
-        shell: pwsh
-        run: pnpm run prepare:native-node
-
       - name: Resolve Windows test temp directory
         shell: pwsh
         run: |
