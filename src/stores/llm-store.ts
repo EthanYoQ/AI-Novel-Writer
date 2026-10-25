@@ -13,6 +13,7 @@ import type {
   TokenUsage,
 } from '../shared/ipc-channels'
 import type { CreativeStrategy, GenerationReasoningStage } from '../shared/reasoning-types'
+import type { ModelStage, StageModelIds } from '../shared/model-stage-routing'
 import { projectSessionContextFromProject } from '../shared/project-session-context'
 import { useProjectStore } from './project-store'
 
@@ -30,6 +31,8 @@ interface LLMState {
   defaultModelId: string | null
   /** 当前默认向量模型 ID */
   defaultEmbeddingModelId: string | null
+  /** 分工模型：环节另指定的模型，缺键即跟随默认（主进程已解析过形状）。 */
+  stageModelIds: StageModelIds
   /** 正在进行的活跃请求 */
   activeRequests: Map<string, { status: 'running' | 'done' | 'error'; text: string }>
   /** 是否已加载模型配置 */
@@ -48,6 +51,8 @@ interface LLMState {
   setDefaultModel: (modelId: string) => Promise<boolean>
   /** 设置默认向量模型（持久化到 ~/.vela/config.json） */
   setDefaultEmbeddingModel: (modelId: string) => Promise<boolean>
+  /** 给环节指定模型，null 改回跟随默认；失败时提示并保留原值 */
+  setStageModel: (stage: ModelStage, modelId: string | null) => Promise<boolean>
   /** 非流式生成 */
   generate: (
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
@@ -75,6 +80,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
   models: [],
   defaultModelId: null,
   defaultEmbeddingModelId: null,
+  stageModelIds: {},
   activeRequests: new Map(),
   loaded: false,
 
@@ -87,15 +93,17 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
         set({ loaded: true })
         return
       }
-      const [models, defaultModelId, defaultEmbeddingModelId] = await Promise.all([
+      const [models, defaultModelId, defaultEmbeddingModelId, stageModelIds] = await Promise.all([
         ipc.invoke('llm:list-models'),
         ipc.invoke('llm:get-default-model'),
         ipc.invoke('llm:get-default-embedding-model'),
+        ipc.invoke('llm:get-stage-models'),
       ])
       set({
         models,
         defaultModelId,
         defaultEmbeddingModelId,
+        stageModelIds,
         loaded: true,
       })
     })().finally(() => {
@@ -137,6 +145,7 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     set({
       defaultModelId: result.defaultModelId ?? null,
       defaultEmbeddingModelId: result.defaultEmbeddingModelId ?? null,
+      stageModelIds: result.stageModelIds ?? {},
     })
     return true
   },
@@ -164,6 +173,19 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
     } catch (error) {
       const { locale, text } = useLocaleStore.getState()
       alertError(displayedErrorMessage(locale, error), { title: text('模型设置保存失败', 'Model settings could not be saved') })
+      return false
+    }
+  },
+
+  setStageModel: async (stage, modelId) => {
+    try {
+      const result = await ipc.invoke('llm:set-stage-model', { stage, modelId })
+      if (!result.success) throw new Error(result.error)
+      set({ stageModelIds: result.stageModelIds })
+      return true
+    } catch (error) {
+      const { locale, text } = useLocaleStore.getState()
+      alertError(displayedErrorMessage(locale, error), { title: text('分工设置没有保存', 'The stage setting was not saved') })
       return false
     }
   },
