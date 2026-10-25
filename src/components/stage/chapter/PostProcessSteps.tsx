@@ -19,7 +19,7 @@ function stepDetail(presentation: 'success' | 'pending' | 'failed' | 'retired', 
  * 重试有用的失败步骤各自可以重试，「重试失败步骤」只在至少有一步能重试时出现，重跑哪些由修复工作流按同一份安排选。
  * 正文文件写入失败时重试的是已提交的发布（F-089），不重新定稿。
  * 正文文件这一步只有本次打开期间定稿过才知道结果，否则不列出。
- * 旧版本跑批里留下、现在流程已没有的步骤没完成时照常列出，说明它已不再运行，不摆重试，也不算进完成数。
+ * 旧版本跑批里留下、现在流程已没有的步骤照常列出，不论当时成败都说明它已不再运行，不摆重试，也不算进完成数。
  */
 export default function PostProcessSteps({ chapterNumber, publication, busy, onRetryStep, onRetryFailed, onRetryPublication }: {
   chapterNumber: number
@@ -47,7 +47,7 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
       retryLabel: text('重新写入正文', 'Write again'),
     }] : []),
     ...steps.map(({ key, step, presentation: shown }) => {
-      const presentation = shown !== 'success' && plan.retired.has(key) ? 'retired' as const : shown
+      const presentation = plan.retired.has(key) ? 'retired' as const : shown
       return {
         key,
         label: step.label,
