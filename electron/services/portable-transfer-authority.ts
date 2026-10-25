@@ -281,7 +281,7 @@ export function verifyPortableTransferAuthorityHistory(
       SELECT d.status AS status,d.chapter_number AS chapterNumber,c.body AS body,
         o.finalization_id AS finalizationId,o.content_hash AS contentHash,o.content_snapshot AS contentSnapshot,
         EXISTS (SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number
-          AND newer.status='finalized' AND newer.version>d.version) AS replaced
+          AND newer.status='finalized' AND newer.id<>d.id) AS replaced
       FROM drafts d JOIN contents c ON c.id=d.content_id
       LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.id=?
     `).get(item.draftId) as { status: string; chapterNumber: number; body: string; finalizationId: string | null; contentHash: string | null; contentSnapshot: string | null; replaced: number } | undefined
