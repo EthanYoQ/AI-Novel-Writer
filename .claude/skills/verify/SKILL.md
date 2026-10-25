@@ -517,3 +517,17 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 |---|---|---|---|---|
 | `st504-finalize-refreshes-cast` | 定稿前在「心理状态」填一句不保存。定稿完成后立即读：地点、道具是新值且标「定稿派生」，心理状态仍是作者那句、标「作者输入」（`st504-draft-zh`）；切到英文后地点同样是新值（`st504-draft-en`） | 英文的角色名单当前状态 | 是 | #504 |
 | `st504-finalize-refreshes-cast-nodraft` | 不改任何字段。定稿完成后立即读：地点、道具是新值，心理状态与定稿前相同（`st504-nodraft-zh`、`st504-nodraft-en`） | 英文的角色名单当前状态 | 是 | #504 |
+
+## 定稿后处理提交期数据变化与旧版本步骤（#512）
+
+场景在 `scripts/redesign/f512-scenarios.mjs`。
+
+`f512-retired-character` 在主进程里替换 `finalization-generation:commit`：本流程第 2、3 次提交（角色状态这一步的前两次自动尝试）按断线失败，第 4 次（最后一次自动尝试）卡住，期间驱动在角色页删掉林岚，再放行。前两次断线是为了让变化落在最后一次自动尝试上：更早发生的变化，之后的自动尝试会先按来源已变拒绝，卡上记下的是 `FINALIZATION_GENERATION_SOURCE_CHANGED`。
+
+`f512-legacy-step` 先正常定稿第 3 章，再由驱动自己打开作品拿会话，用应用同一组 IPC（`db:post-process-create-run`、`db:post-process-mark-step-ok`、`db:post-process-mark-step-failed`）写一份旧版本的跑批：多一步「文风自动学习」（`style_analysis`），`f512-legacy-step` 里它失败，`f512-legacy-step-done` 里它成功。之后重载并按 Ctrl O 重新打开作品。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `f512-retired-character` | 角色状态更新失败：中英文说明（`f512-retired-character-zh`、`f512-retired-character-en`）不带 `Error invoking` 与错误码，提到重新定稿本章；这一行与卡片上都没有「重试」「重试失败步骤」 | 英文的定稿后处理 | 是 | #512 |
+| `f512-legacy-step` | 「文风自动学习」当时失败：一行仍列出，状态是 `retired`（灰点），说明「来自旧版本」（`f512-legacy-step-zh`、`f512-legacy-step-en`）；没有任何重试按钮；完成数是「3 / 3 完成」 | 英文的定稿后处理 | 是 | #512 |
+| `f512-legacy-step-done` | 「文风自动学习」当时成功：同上，不显示「完成」也不算进完成数（`f512-legacy-step-done-zh`、`f512-legacy-step-done-en`） | 英文的定稿后处理 | 是 | #512 |

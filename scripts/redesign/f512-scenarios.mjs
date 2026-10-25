@@ -39,6 +39,7 @@ async function failTwiceThenHold(app) {
   }, COMMIT), '能在主进程里替换定稿后处理的提交')
 }
 
+/** 直接 app.evaluate 取值时，Windows 上的 Electron 41 偶发报「Promise was collected」；先取句柄再读值、读完释放就不会（同 f484）。 */
 async function waitHeld(app) {
   const held = async () => {
     const handle = await app.evaluateHandle(() => globalThis.__f512Commit.held)
@@ -83,12 +84,13 @@ async function readCard(page, locale, label) {
   }
 }
 
-/** 驱动自己打开作品拿会话，用应用同一组 IPC 往第 3 章最新的跑批旁写一份旧版本的跑批：四步，文风自动学习失败。 */
-async function writeLegacyRun({ page, invoke }, projectPath) {
+/** 驱动自己打开作品拿会话，用应用同一组 IPC 往第 3 章最新的跑批旁写一份旧版本的跑批：四步，文风自动学习按 legacyOk 成败。 */
+async function writeLegacyRun({ page, invoke }, projectPath, legacyOk) {
   const opened = await invoke(page, 'project:open', projectPath, randomUUID(), null)
   assert.equal(opened.success, true, opened.error)
   const session = { projectId: opened.project.id, projectPath, leaseId: opened.project.sessionLease }
   const draft = await invoke(page, 'db:draft-get-finalized', 3, projectPath, session)
+  assert.ok(draft, '第 3 章没有定稿记录')
   const source = await invoke(page, 'db:continuity-read-source', draft.id, projectPath, session)
   assert.equal(source.status, 'valid', JSON.stringify(source))
   const created = await invoke(page, 'db:post-process-create-run', {
@@ -104,7 +106,35 @@ async function writeLegacyRun({ page, invoke }, projectPath) {
   for (const key of ['kb_import', 'chapter_notes', 'character_cards']) {
     assert.equal((await invoke(page, 'db:post-process-mark-step-ok', created.id, key, projectPath, session)).success, true)
   }
-  assert.equal((await invoke(page, 'db:post-process-mark-step-failed', created.id, 'style_analysis', '模型长时间没有响应', projectPath, session)).success, true)
+  const legacy = legacyOk
+    ? await invoke(page, 'db:post-process-mark-step-ok', created.id, 'style_analysis', projectPath, session)
+    : await invoke(page, 'db:post-process-mark-step-failed', created.id, 'style_analysis', '模型长时间没有响应', projectPath, session)
+  assert.equal(legacy.success, true)
+}
+
+/** 旧版本的跑批不论文风自动学习当时成败，卡上都说明它已不再运行，不摆重试，完成数只算现在的三步。 */
+const legacyStep = (legacyOk, name) => async context => {
+  const { page } = context
+  await finalizeChapter(page, 3)
+  await writeLegacyRun(context, context.samplePath, legacyOk)
+  await context.reload()
+  await openInUi(context, context.samplePath)
+  await openChapter(page, 3)
+  const zh = await readCard(page, 'zh-CN', '文风自动学习')
+  await context.shoot(`${name}-zh`)
+  await switchToEnglish(page)
+  const en = await readCard(page, 'en-US', '文风自动学习')
+  await context.shoot(`${name}-en`)
+
+  for (const card of [zh, en]) {
+    assert.deepEqual({ rowRetry: card.rowRetry, cardRetry: card.cardRetry }, { rowRetry: 0, cardRetry: 0 }, '旧步骤不摆重试，整卡也没有可重试的步骤')
+    assert.equal(card.state, 'retired', '旧步骤既不按失败标红，也不按完成计数')
+  }
+  assert.match(zh.detail, /旧版本/u, JSON.stringify(zh))
+  assert.match(en.detail, /earlier version/u, JSON.stringify(en))
+  assert.doesNotMatch(en.detail, /\p{Script=Han}/u, '英文说明不带汉字')
+  assert.equal(zh.count, '3 / 3 完成', '完成数只算现在流程里的步骤')
+  return { zh, en }
 }
 
 export const F512_SCENARIOS = {
@@ -116,6 +146,7 @@ export const F512_SCENARIOS = {
       await openChapter(page, 3)
       await chapterView.finalize(page, 3)
       await waitHeld(app)
+      assert.ok(fake.requests.includes('character-state'), '卡住的是角色状态生成之后的提交')
       await deleteCharacter(page, '林岚')
     } finally {
       await app.evaluate(() => globalThis.__f512Commit.release())
@@ -134,32 +165,11 @@ export const F512_SCENARIOS = {
       assert.doesNotMatch(card.detail, /Error invoking|FINALIZED_CHARACTER|GENERATION_/u, '不显示原始错误码')
       assert.deepEqual({ rowRetry: card.rowRetry, cardRetry: card.cardRetry }, { rowRetry: 0, cardRetry: 0 }, '重试也过不去，不摆重试')
     }
-    assert.match(zh.detail, /重新定稿本章/u, JSON.stringify(zh))
-    assert.match(en.detail, /Finalize this chapter again/u, JSON.stringify(en))
+    assert.match(zh.detail, /有的后来被删除了.*重新定稿本章/u, JSON.stringify(zh))
+    assert.match(en.detail, /has since been deleted.*Finalize this chapter again/u, JSON.stringify(en))
     assert.doesNotMatch(en.detail, /\p{Script=Han}/u, '英文说明不带汉字')
     return { zh, en, requests: fake.requests }
   } },
-  'f512-legacy-step': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
-    const { page } = context
-    await finalizeChapter(page, 3)
-    await writeLegacyRun(context, context.samplePath)
-    await context.reload()
-    await openInUi(context, context.samplePath)
-    await openChapter(page, 3)
-    const zh = await readCard(page, 'zh-CN', '文风自动学习')
-    await context.shoot('f512-legacy-step-zh')
-    await switchToEnglish(page)
-    const en = await readCard(page, 'en-US', '文风自动学习')
-    await context.shoot('f512-legacy-step-en')
-
-    for (const card of [zh, en]) {
-      assert.deepEqual({ rowRetry: card.rowRetry, cardRetry: card.cardRetry }, { rowRetry: 0, cardRetry: 0 }, '旧步骤不摆重试，整卡也没有可重试的步骤')
-      assert.notEqual(card.state, 'failed', '旧步骤不按失败标红')
-    }
-    assert.match(zh.detail, /旧版本/u, JSON.stringify(zh))
-    assert.match(en.detail, /earlier version/u, JSON.stringify(en))
-    assert.doesNotMatch(en.detail, /\p{Script=Han}/u, '英文说明不带汉字')
-    assert.equal(zh.count, '3 / 3 完成', '完成数只算现在流程里的步骤')
-    return { zh, en }
-  } },
+  'f512-legacy-step': { model: true, shell: 'stage', setup: seedStageSample, run: legacyStep(false, 'f512-legacy-step') },
+  'f512-legacy-step-done': { model: true, shell: 'stage', setup: seedStageSample, run: legacyStep(true, 'f512-legacy-step-done') },
 }
