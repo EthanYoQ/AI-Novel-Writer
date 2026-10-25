@@ -76,17 +76,24 @@ export function describeFinalizationStepError(error: string, text: (zhCNText: st
   )
 }
 
+/** 定稿后处理现在会跑的步骤，按运行顺序。旧版本的跑批里可能还留着别的步骤（如 style_analysis）。 */
+const FINALIZE_POST_PROCESS_STEP_KEYS = ['kb_import', 'chapter_notes', 'character_cards'] as const
+export type FinalizePostProcessStepKey = typeof FINALIZE_POST_PROCESS_STEP_KEYS[number]
+const CURRENT_STEPS: ReadonlySet<string> = new Set(FINALIZE_POST_PROCESS_STEP_KEYS)
+
 /**
- * 一张定稿后处理卡（步骤名到结果）的重试安排。rows：可以单独重试的未成功步骤；card：「重试失败步骤」要重跑的步骤，按卡上顺序。
- * 没有错误或错误没登记的照常可以重试。
+ * 一张定稿后处理卡（步骤名到结果）的重试安排。rows：可以单独重试的未成功步骤；card：「重试失败步骤」要重跑的步骤，按卡上顺序；
+ * retired：现在流程已没有的步骤，不重试。
+ * 现有步骤没有错误或错误没登记的照常可以重试。
  */
-export function planFinalizationRetry(steps: Readonly<Record<string, { ok: boolean; error?: string }>>): { rows: ReadonlySet<string>; card: readonly string[] } {
+export function planFinalizationRetry(steps: Readonly<Record<string, { ok: boolean; error?: string }>>): { rows: ReadonlySet<string>; card: readonly string[]; retired: ReadonlySet<string> } {
   const entries = Object.entries(steps)
+  const retired = new Set(entries.map(([key]) => key).filter(key => !CURRENT_STEPS.has(key)))
   const succeeded = new Set(entries.filter(([, step]) => step.ok).map(([key]) => key))
-  const unfinished = entries.filter(([, step]) => !step.ok).map(([key, step]) => ({ key, retry: retryOf(step.error) }))
+  const unfinished = entries.filter(([key, step]) => !step.ok && !retired.has(key)).map(([key, step]) => ({ key, retry: retryOf(step.error) }))
   const direct = new Set(unfinished.filter(step => step.retry === 'prompt' || step.retry === 'described').map(step => step.key))
   const pick = (ready: (key: string) => boolean) => unfinished
     .filter(step => direct.has(step.key) || typeof step.retry === 'object' && ready(step.retry.after))
     .map(step => step.key)
-  return { rows: new Set(pick(key => succeeded.has(key))), card: pick(key => succeeded.has(key) || direct.has(key)) }
+  return { rows: new Set(pick(key => succeeded.has(key))), card: pick(key => succeeded.has(key) || direct.has(key)), retired }
 }

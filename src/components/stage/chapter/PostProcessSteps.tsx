@@ -7,8 +7,9 @@ import { usePostProcessStatus } from '../../ui/use-post-process-status'
 
 type Text = (zhCNText: string, enUSText: string) => string
 
-function stepDetail(presentation: 'success' | 'pending' | 'failed', error: string | undefined, text: Text): string {
+function stepDetail(presentation: 'success' | 'pending' | 'failed' | 'retired', error: string | undefined, text: Text): string {
   if (presentation === 'success') return text('完成', 'Done')
+  if (presentation === 'retired') return text('这一步来自旧版本，现在的定稿流程已不再运行它，无需处理。', 'This step is from an earlier version and is no longer part of finalization. Nothing to do here.')
   if (presentation === 'pending') return text('处理中', 'In progress')
   return error ? describeFinalizationStepError(error, text) : text('失败', 'Failed')
 }
@@ -18,6 +19,7 @@ function stepDetail(presentation: 'success' | 'pending' | 'failed', error: strin
  * 重试有用的失败步骤各自可以重试，「重试失败步骤」只在至少有一步能重试时出现，重跑哪些由修复工作流按同一份安排选。
  * 正文文件写入失败时重试的是已提交的发布（F-089），不重新定稿。
  * 正文文件这一步只有本次打开期间定稿过才知道结果，否则不列出。
+ * 旧版本跑批里留下、现在流程已没有的步骤没完成时照常列出，说明它已不再运行，不摆重试，也不算进完成数。
  */
 export default function PostProcessSteps({ chapterNumber, publication, busy, onRetryStep, onRetryFailed, onRetryPublication }: {
   chapterNumber: number
@@ -44,18 +46,22 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
       retryable: true,
       retryLabel: text('重新写入正文', 'Write again'),
     }] : []),
-    ...steps.map(({ key, step, presentation }) => ({
-      key,
-      label: step.label,
-      presentation,
-      detail: stepDetail(presentation, step.error, text),
-      retry: () => onRetryStep(key),
-      retryable: plan.rows.has(key),
-      retryLabel: text('重试', 'Retry'),
-    })),
+    ...steps.map(({ key, step, presentation: shown }) => {
+      const presentation = shown !== 'success' && plan.retired.has(key) ? 'retired' as const : shown
+      return {
+        key,
+        label: step.label,
+        presentation,
+        detail: stepDetail(presentation, step.error, text),
+        retry: () => onRetryStep(key),
+        retryable: plan.rows.has(key),
+        retryLabel: text('重试', 'Retry'),
+      }
+    }),
   ]
   if (rows.length === 0) return null
   const done = rows.filter(row => row.presentation === 'success').length
+  const total = rows.filter(row => row.presentation !== 'retired').length
   const cardRetry = steps.some(row => row.presentation === 'failed' && plan.card.includes(row.key))
 
   return (
@@ -63,7 +69,7 @@ export default function PostProcessSteps({ chapterNumber, publication, busy, onR
       <div className="stage-ch-post-head">
         <h2 className="stage-ch-post-title">
           {text('定稿后处理', 'After finalization')}
-          <small>{text(`${done} / ${rows.length} 完成`, `${done} / ${rows.length} done`)}</small>
+          <small>{text(`${done} / ${total} 完成`, `${done} / ${total} done`)}</small>
         </h2>
         {cardRetry && (
           <Button variant="secondary" size="sm" disabled={busy} onClick={onRetryFailed}>

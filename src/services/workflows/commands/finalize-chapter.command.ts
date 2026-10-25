@@ -46,7 +46,7 @@ import { writingLanguageText } from '../../../shared/writing-language'
 import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
 import type { FinalizedCharacterGenerationReceipt } from '../../../shared/finalized-character-generation'
-import { finalizationStepErrorCode } from '../../../shared/finalization-step-error'
+import { finalizationStepErrorCode, type FinalizePostProcessStepKey } from '../../../shared/finalization-step-error'
 import { pluralEn } from '../../../shared/plural-en'
 
 export interface FinalizeChapterParams {
@@ -111,7 +111,7 @@ export function buildFinalizePostProcessSteps(
 
   // ─── 步骤 1: 导入知识库 ───────────────────────────────────────────
   steps.push({
-    key: 'kb_import',
+    key: 'kb_import' satisfies FinalizePostProcessStepKey,
     label: text('导入知识库', 'Import into knowledge base'),
     critical: true,
     executor: async (callbacks, context) => {
@@ -162,7 +162,7 @@ export function buildFinalizePostProcessSteps(
 
   // ─── 步骤 2: 本章剧情要点提取 ─────────────────────────────────────
   steps.push({
-      key: 'chapter_notes',
+      key: 'chapter_notes' satisfies FinalizePostProcessStepKey,
       label: text('章节剧情要点', 'Chapter plot notes'),
       critical: true,
       executor: async (callbacks, context) => {
@@ -266,7 +266,7 @@ export function buildFinalizePostProcessSteps(
 
   // Model IDs refer only to the identity snapshot frozen by the original finalization.
   steps.push({
-    key: 'character_cards',
+    key: 'character_cards' satisfies FinalizePostProcessStepKey,
     label: text('角色状态更新', 'Update character state'),
     critical: false,
     executor: async (callbacks, context) => {

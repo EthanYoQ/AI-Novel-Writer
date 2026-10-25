@@ -14,7 +14,7 @@ const RETRY_BUTTONS = /^(重试|重试失败步骤|Retry|Retry failed steps)$/u
 function characterStateReply(prompt) {
   const id = /"characterId": "([^"]+)",\s*"name": "林岚"/u.exec(prompt)?.[1]
   if (!id) return '{"updates":[]}'
-  return JSON.stringify({ updates: [{ characterId: id, currentState: { location: '灯塔顶层灯室' }, evidence: { text: '林岚' } }] })
+  return JSON.stringify({ updates: [{ characterId: id, currentState: { location: '灯塔顶层灯室' }, evidence: { text: '林岚把潮汐表压在值班室的窗台上' } }] })
 }
 
 /**
