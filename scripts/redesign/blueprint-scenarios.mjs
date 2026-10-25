@@ -127,6 +127,7 @@ const FILLED_FIELDS = { userGuidance: '第 5 章只写雾，不写人脸。', su
 
 const withFilledChapter = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path: projectPath, session }) => {
   const current = await invoke(page, 'db:blueprint-get', FILLED, projectPath, session)
+  assert.equal(current?.chapterNumber, FILLED, `示例作品有第 ${FILLED} 章蓝图`)
   assert.equal((await invoke(page, 'db:blueprint-upsert', { ...current, ...FILLED_FIELDS }, projectPath, session)).success, true)
   assert.deepEqual(await rawBlueprintRow(projectPath, NULL_FIELDS), { user_guidance: null, suspense_hook: null, title: stageChapterTitle(NULL_FIELDS) },
     `第 ${NULL_FIELDS} 章的作者字段在库里是 NULL`)
@@ -136,9 +137,12 @@ const withFilledChapter = context => seedStageSample(context, { beforeReload: as
 async function rawBlueprintRow(projectPath, chapterNumber) {
   const { DatabaseSync } = await import('node:sqlite')
   const file = fs.readdirSync(projectPath, { recursive: true }).find(name => path.basename(name) === 'project.db')
+  assert.ok(file, `${projectPath} 下有项目库 project.db`)
   const db = new DatabaseSync(path.join(projectPath, file), { readOnly: true })
   try {
-    return { ...db.prepare('SELECT user_guidance, suspense_hook, title FROM blueprints WHERE chapter_number = ?').get(chapterNumber) }
+    const row = db.prepare('SELECT user_guidance, suspense_hook, title FROM blueprints WHERE chapter_number = ?').get(chapterNumber)
+    assert.ok(row, `库里有第 ${chapterNumber} 章蓝图行`)
+    return { ...row }
   } finally { db.close() }
 }
 
@@ -168,8 +172,9 @@ async function saveWithCtrlS(page) {
 
 /** 退出确认里点「保存并退出」：保存照常走，主进程收到放行时不真的关窗，之后取消这次退出。 */
 async function saveOnExit(app, page) {
-  await app.evaluate(({ ipcMain }) => {
+  const wrapped = await app.evaluate(({ ipcMain }) => {
     const handlers = ipcMain._invokeHandlers
+    if (!(handlers instanceof Map) || typeof handlers.get('window:resolve-close') !== 'function') return false
     const original = handlers.get('window:resolve-close')
     globalThis.__driveResolveClose = original
     globalThis.__driveProceeded = false
@@ -178,15 +183,20 @@ async function saveOnExit(app, page) {
       globalThis.__driveProceeded = true
       return { success: true }
     })
+    return true
   })
-  await shell.requestWindowClose(app)
+  assert.ok(wrapped, '能在主进程里替换退出放行的处理函数')
   const exit = stage.exitDialog(page)
-  await exit.waitFor({ state: 'visible' })
-  await exit.getByRole('button', { name: '保存并退出' }).click()
-  for (const deadline = Date.now() + 20_000; !(await app.evaluate(() => globalThis.__driveProceeded)); await page.waitForTimeout(50)) {
-    assert.ok(Date.now() < deadline, '20 秒内保存并退出没有走到放行退出')
+  try {
+    await shell.requestWindowClose(app)
+    await exit.waitFor({ state: 'visible' })
+    await exit.getByRole('button', { name: '保存并退出' }).click()
+    for (const deadline = Date.now() + 20_000; !(await app.evaluate(() => globalThis.__driveProceeded)); await page.waitForTimeout(50)) {
+      assert.ok(Date.now() < deadline, '20 秒内保存并退出没有走到放行退出')
+    }
+  } finally {
+    await app.evaluate(({ ipcMain }) => ipcMain._invokeHandlers.set('window:resolve-close', globalThis.__driveResolveClose))
   }
-  await app.evaluate(({ ipcMain }) => ipcMain._invokeHandlers.set('window:resolve-close', globalThis.__driveResolveClose))
   await exit.getByText('取消', { exact: true }).click()
   await exit.waitFor({ state: 'hidden' })
   await stage.saveStatus(page).getByText('已保存').waitFor({ state: 'visible' })
