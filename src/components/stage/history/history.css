@@ -193,6 +193,12 @@
   background: var(--ok);
 }
 
+/* 被替换的旧定稿：保留定稿色的空心节点，与当前定稿区分。 */
+[data-kind='superseded'] > .stage-hist-version .stage-hist-node {
+  border-color: var(--ok);
+  background: var(--paper);
+}
+
 .stage-hist-version[aria-pressed='true'] .stage-hist-meta {
   color: var(--ink-2);
 }
