@@ -145,3 +145,14 @@ it.each([
   expect(fixed).toBe(composePromptSystemRole(template,language))
  }
 })
+
+it.each([
+ ['zh-CN','【不可变系统合同】',['下文合同','最新的作者明确事实']],
+ ['en-US','[Immutable system contract]',['the contract below','newest explicit author fact']],
+] as const)('%s 按意见删掉选区里的事实时，规则明确压过下文合同的明确事实条，合同本身逐字不变',(language,heading,rule)=>{
+ const template=getBuiltinPromptTemplate('edit_selected_text',language)!
+ const system=systemOf(buildEditorInlineContext({...input,action:'instruct',instruction:'删掉银镯这个细节'},language,template))
+ const [role,contract]=system.split(heading)
+ for(const phrase of rule) expect(role).toContain(phrase)
+ expect(contract).toBe(composePromptSystemRole(template,language).split(heading)[1])
+})
