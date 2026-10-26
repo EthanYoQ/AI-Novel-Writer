@@ -452,13 +452,9 @@ async function waitForStep(step, child) {
   })
 }
 
-async function waitForChildToSettle(child, timeoutMilliseconds = 120_000) {
+async function waitForChildToSettle(child, killAfterMilliseconds = 120_000) {
   observeChild(child)
-  const timer = setTimeout(() => {
-    // Do not return until the observed process actually settles: starting the
-    // final quiet period while a packaging step still runs would hide its residue.
-    child.kill()
-  }, timeoutMilliseconds)
+  const timer = setTimeout(() => child.kill(), killAfterMilliseconds)
   const result = await childSettlements.get(child)
   clearTimeout(timer)
   if (result.error) throw result.error
@@ -582,8 +578,6 @@ async function main() {
       await releaseArmedNodeProcess(step, launch)
       result = await waitForStep(step, child)
     } catch (error) {
-      // A monitor or handshake failure must not let the step keep running into
-      // the final quiet period in finally.
       stopArmedNodeProcess(launch)
       await waitForChildToSettle(child)
       throw error
