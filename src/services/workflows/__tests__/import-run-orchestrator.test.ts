@@ -85,6 +85,7 @@ function harness(total = 25, overrides: Partial<ImportRunSnapshot> = {}) {
     inferGlobal: vi.fn(async (_chapters, _stats, _run, commit) => { await commit({ global: true }) }),
     analyzeStyle: vi.fn(async (_chapters, _run, commit) => { await commit({ writingStyle: 'style' }) }),
     inferBlueprints: vi.fn(async (_chapters, _batchId, _run, commit) => { await commit({ blueprints: true }) }),
+    isAuthorDraftReplaced: vi.fn(async () => false),
     refresh: vi.fn(),
     completeBatch: vi.fn(async (_runId: string, stage: ImportRunStage, batchId: string) => {
       const values = run.completedBatches[stage] ?? []

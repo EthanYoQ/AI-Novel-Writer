@@ -20,9 +20,9 @@ import { pluralEn } from '../../../shared/plural-en'
 type Text = (zh: string, en: string) => string
 
 const TYPE_NAMES: Record<VersionKind, readonly [string, string]> = {
-  draft: ['草稿', 'Draft'],
-  refined: ['修稿', 'Revision'],
-  final: ['定稿', 'Final'],
+  draft: DRAFT_STATUS_INFO.draft.label,
+  refined: DRAFT_STATUS_INFO.revised.label,
+  final: DRAFT_STATUS_INFO.finalized.label,
   superseded: DRAFT_STATUS_INFO.superseded.label,
 }
 

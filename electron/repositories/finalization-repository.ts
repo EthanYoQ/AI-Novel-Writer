@@ -177,6 +177,8 @@ function selectAuthoritativeExportRows(
   return selected
 }
 
+const AUTHORITATIVE_FINALIZED_ORDER = 'drafts.chapter_number ASC, drafts.version DESC, drafts.id DESC'
+
 function readAuthoritativeExportRows(): AuthoritativeFinalizedDraftExport[] {
   const db = requireDatabase()
   return db.transaction(() => selectAuthoritativeExportRows(db.prepare(`
@@ -189,7 +191,7 @@ function readAuthoritativeExportRows(): AuthoritativeFinalizedDraftExport[] {
     JOIN contents ON contents.id = drafts.content_id
     LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
     WHERE drafts.status = 'finalized'
-    ORDER BY drafts.chapter_number ASC, drafts.version DESC, drafts.id DESC
+    ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
   `).all() as FinalizedDraftExportRow[]))()
 }
 
@@ -330,7 +332,7 @@ export class FinalizationRepository {
           SELECT chapter_number FROM drafts WHERE status = 'finalized'
           GROUP BY chapter_number HAVING COUNT(*) > 1
         )
-        ORDER BY drafts.chapter_number ASC, drafts.version DESC, drafts.id DESC
+        ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
       `).all() as Array<{
         id: number
         chapter_number: number

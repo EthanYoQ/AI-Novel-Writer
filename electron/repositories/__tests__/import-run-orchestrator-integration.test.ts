@@ -186,6 +186,7 @@ function fullRecoveryDependencies(trace: RecoveryTrace): ImportRunOrchestratorDe
       }) as BlueprintRangeCommitReceipt
       completeBlueprintCharacterSync(receipt)
     },
+    isAuthorDraftReplaced: async () => false,
     refresh: async () => undefined,
     completeBatch: async (runId, stage, batchId, execution) => (
       ImportRunRepository.completeBatch(runId, stage, batchId, execution)
@@ -238,6 +239,7 @@ function realDependencies(
         blueprints: chapters.map(item => blueprint(item.number)),
       })
     },
+    isAuthorDraftReplaced: async () => false,
     refresh: async () => { throw new Error('unexpected refresh stage') },
     completeBatch: async (runId, stage, batchId, execution) => (
       ImportRunRepository.completeBatch(runId, stage, batchId, execution)
