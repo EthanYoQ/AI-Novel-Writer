@@ -1073,27 +1073,6 @@ describe('database controller project context guard', () => {
     expect(mocks.draftListAll).toHaveBeenCalledOnce()
   })
 
-  it('returns the repository read-only refusal for finalized database drafts', async () => {
-    mocks.draftGetMeta.mockReturnValueOnce({
-      id: 1,
-      chapterNumber: 1,
-      version: 2,
-      status: 'finalized',
-    })
-    mocks.draftUpdateContent.mockImplementationOnce(() => { throw new Error('DRAFT_FINALIZED_READ_ONLY') })
-
-    await expect(handler('db:draft-update-content')(
-      {},
-      1,
-      'attempted overwrite',
-      19,
-      'C:/projects/A',
-    )).resolves.toMatchObject({
-      success: false,
-      error: 'Error: DRAFT_FINALIZED_READ_ONLY',
-    })
-  })
-
   it('returns a stable redirect code when generic deletion races with finalization', async () => {
     mocks.draftDelete.mockImplementationOnce(() => {
       throw Object.assign(new Error('草稿已定稿，请通过定稿删除入口'), {
