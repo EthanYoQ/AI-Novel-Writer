@@ -55,8 +55,12 @@ export async function generateRange(page, from, to) {
   await dialog.getByLabel('蓝图起始章').fill(String(from))
   await dialog.getByLabel('蓝图结束章').fill(String(to))
   await dialog.getByRole('button', { name: '开始生成' }).click()
+  return continuePastArchitectureWarning(page)
+}
+
+export async function continuePastArchitectureWarning(page) {
   // 生成对话框收起后警告才出现；先等它收起，否则「对话框或警告」会先命中还在卸载的对话框。
-  await dialog.waitFor({ state: 'hidden' })
+  await generateDialog(page).waitFor({ state: 'hidden' })
   const warning = page.getByRole('dialog', { name: '架构还不完整' })
   await warning.or(runSheet.sheet(page)).first().waitFor({ state: 'visible', timeout: 60_000 })
   if (!await warning.isVisible()) return false
