@@ -11,11 +11,6 @@ export class GlobalConfigUpdatePreferencesStore implements UpdatePreferencesStor
   }
 
   write(preferences: UpdatePreferences): boolean {
-    const written = updateGlobalConfig(config => ({ ...config, updatePreferences: preferences }))
-    if (!written) {
-      // 自动更新不能因为配置损坏而用默认值覆盖用户的模型、语言或代理设置。
-      console.warn('[AI Novel Update] 全局配置不可安全读取，跳过更新偏好写入。')
-    }
-    return written
+    return updateGlobalConfig(config => ({ ...config, updatePreferences: preferences }))
   }
 }
