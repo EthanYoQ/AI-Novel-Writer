@@ -5,7 +5,7 @@ import { page } from 'vitest/browser'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import SkillSettings from '../SkillSettings'
-import { leaveSettings, settleSettingsLeave } from '../unsaved-settings'
+import { leaveSettings } from '../unsaved-settings'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -128,22 +128,26 @@ describe('writing skill settings', () => {
   })
 
   it('drops the candidate the main process discarded when installation fails', async () => {
-    invoke.mockImplementation(async (channel: string) => channel === 'skills:install-local'
-      ? { success: false, error: 'The skill files could not be written, so nothing was installed. Choose the skill again to retry.' }
-      : ipcResult(channel))
+    let answerInstall: (result: { success: false; error: string }) => void = () => {}
+    const installRequested = new Promise<void>(requested => {
+      invoke.mockImplementation(async (channel: string) => channel === 'skills:install-local'
+        ? new Promise(answer => { answerInstall = answer; requested() })
+        : ipcResult(channel))
+    })
     await act(async () => page.getByRole('button', { name: 'Choose folder' }).click())
     await act(async () => page.getByRole('button', { name: 'Confirm install' }).click())
     await act(async () => page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click())
+    await installRequested
+    await act(async () => answerInstall({
+      success: false,
+      error: 'The skill files could not be written, so nothing was installed. Choose the skill again to retry.',
+    }))
 
-    await expect.element(page.getByRole('alert')).toHaveTextContent(/Choose the skill again to retry/u)
+    expect(page.getByRole('alert').element()).toHaveTextContent(/Choose the skill again to retry/u)
     expect(page.getByRole('group', { name: 'Skill to install' }).query()).toBeNull()
-    // 候选清空后，登记未保存输入的 effect 在慢机器上可能晚于告警出现才撤销；等到离开不再要求确认。
     const leave = vi.fn()
-    await vi.waitFor(() => {
-      leaveSettings(leave)
-      settleSettingsLeave(false)
-      expect(leave).toHaveBeenCalledOnce()
-    })
+    leaveSettings(leave)
+    expect(leave).toHaveBeenCalledOnce()
   })
 
   it('keeps the page unchanged when the picker is cancelled and shows main-process errors', async () => {
