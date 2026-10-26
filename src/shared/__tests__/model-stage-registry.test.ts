@@ -1,20 +1,23 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { readFileSync, readdirSync } from 'node:fs'
+import { relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { MODEL_STAGE_BY_OPERATION, stageOfOperation, type GenerationOperation, type ModelStage } from '../model-stage-routing'
 
 const root = process.cwd()
 const TABLE_FILE = 'src/shared/model-stage-routing.ts'
 
-function sourceFiles(dir: string): string[] {
-  return readdirSync(resolve(root, dir)).flatMap(name => {
-    const path = join(dir, name)
-    if (statSync(resolve(root, path)).isDirectory()) return name === '__tests__' ? [] : sourceFiles(path)
-    return /\.tsx?$/.test(name) && !/\.(test|spec|browser)\.tsx?$/.test(name) ? [path.replaceAll('\\', '/')] : []
+function sourcePaths(dir: string): string[] {
+  return readdirSync(resolve(root, dir), { withFileTypes: true }).flatMap(entry => {
+    const path = `${dir}/${entry.name}`
+    if (entry.isDirectory()) return entry.name === '__tests__' ? [] : sourcePaths(path)
+    return /\.tsx?$/.test(entry.name) && !/\.(test|spec|browser)\.tsx?$/.test(entry.name) ? [path] : []
   })
 }
 
-const read = (file: string) => readFileSync(resolve(root, file), 'utf8')
+// 源码在模块加载时只读一遍，各条用例只做内存匹配：并行套件里同一批读取会从约 200ms 拉长到 9 秒，放在用例里会撞 5 秒超时。
+const SOURCES = new Map([...sourcePaths('src'), ...sourcePaths('electron')].map(file => [file, readFileSync(resolve(root, file), 'utf8')]))
+const sourceFiles = (dir: string) => [...SOURCES.keys()].filter(file => file.startsWith(`${dir}/`))
+const read = (file: string) => SOURCES.get(file)!
 const families = Object.keys(MODEL_STAGE_BY_OPERATION)
 const OPERATION_LITERAL = /:\s*(['"`])([a-z][a-z0-9:-]*)\1/g
 const sentOperations = (text: string) => [
@@ -42,7 +45,7 @@ describe('operation stage registry coverage', () => {
   })
 
   it('keeps no table entry that no source file uses any more', () => {
-    const corpus = [...sourceFiles('src'), ...sourceFiles('electron')].filter(file => file !== TABLE_FILE).map(read).join('\n')
+    const corpus = [...SOURCES].filter(([file]) => file !== TABLE_FILE).map(([, text]) => text).join('\n')
     const unused = families.filter(family => family === 'generate-field'
       ? !/['"`]generate-field:/.test(corpus)
       : !corpus.includes(`'${family}'`) && !corpus.includes(`"${family}"`))
@@ -95,8 +98,7 @@ describe('one stage per workflow definition', () => {
     createReviewRevisionRecoveryWorkflow: '恢复只运行其中一个命令，模型取自冻结的恢复记录',
   }
 
-  const workflowFiles = readdirSync(resolve(root, 'src/services/workflows'))
-    .filter(name => /-workflow\.ts$/.test(name)).map(name => `src/services/workflows/${name}`)
+  const workflowFiles = sourceFiles('src/services/workflows').filter(file => /^src\/services\/workflows\/[^/]+-workflow\.ts$/.test(file))
   const definitions = workflowFiles.flatMap(file => [...workflowDefinitionClosures(file)].map(([name, text]) => ({ file, name, text })))
   const stagesOf = (text: string) => new Set([...text.matchAll(/\b(\w+Command)\b/g)].flatMap(match => [...commandStages(match[1])]))
 
