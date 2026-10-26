@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { safeTransportError, type GenerationTransportDiagnostics } from '../../src/shared/generation-contract';
+import { isTerminalProviderFailure, safeTransportError, type GenerationTransportDiagnostics } from '../../src/shared/generation-contract';
 import { GenerationRunRepository, type OpenGenerationRunRequest, type RunBinding, type GenerationExecutionReceipt, type GenerationUsageReceipt } from '../repositories/generation-run-repository';
 import type { ProviderUsagePolicy } from '../../src/shared/generation-contract';
 import { parseAgentResponseProtocol, projectInterruptedAgentVisibleText } from '../../src/shared/agent-response-protocol';
@@ -284,7 +284,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                         const network = Boolean(networkCode && /^(UND_ERR_|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ERR_STREAM_PREMATURE_CLOSE)/.test(networkCode))
                             || error instanceof Error && /^(NETWORK_ERROR|ECONNRESET|ETIMEDOUT|FETCH_FAILED)$/.test(error.message);
                         let known = 'GENERATION_PROVIDER_FAILED';
-                        if (error instanceof Error && error.message === 'GENERATION_CONTEXT_LENGTH_EXCEEDED') known = error.message;
+                        if (error instanceof Error && isTerminalProviderFailure(error.message)) known = error.message;
                         else if (network) known = 'NETWORK_ERROR';
                         const failureCode = storageFailed ? 'GENERATION_STORAGE_FAILED' : timedOut ? 'ROOT_BUDGET_EXHAUSTED'
                             : streamFailed ? 'GENERATION_STREAM_INVALID' : controller.signal.aborted ? 'GENERATION_CANCELLED' : known;

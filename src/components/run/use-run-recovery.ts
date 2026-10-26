@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ipc } from '../../services/ipc-client'
 import { createBatchRecoveryWorkflow, createDraftRecoveryWorkflow } from '../../services/workflows/draft-recovery-workflow'
 import { createReviewRevisionRecoveryWorkflow } from '../../services/workflows/review-revision-recovery-workflow'
@@ -14,7 +14,7 @@ import {
   type BatchEntry, type CandidateEntry, type DraftEntry, type EditorEntry, type PlanningEntry, type RecoveryEntry, type RecoverySources, type ReviewEntry,
 } from './run-recovery'
 import { displayedErrorMessage } from '../../i18n/app-errors'
-import { throwIfTerminalProviderFailure } from '../../services/generation/generation-harness'
+import { isTerminalProviderFailure } from '../../services/generation/generation-harness'
 
 const REVIEW_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review']
 
@@ -96,6 +96,7 @@ export function useRunRecovery(): RunRecovery {
   const [candidateError, setCandidateError] = useState('')
   const [generationList, setGeneration] = useState<Loaded<Omit<RecoverySources, 'candidates'>>>({ session: null, value: EMPTY_RECOVERY_SOURCES })
   const [generationError, setGenerationError] = useState('')
+  const carriedError = useRef('')
   const [snapshotTick, setSnapshotTick] = useState(0)
   const [selection, setSelection] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
@@ -135,7 +136,9 @@ export function useRunRecovery(): RunRecovery {
     void loadGenerationSources(session).then(({ sources, partial }) => {
       if (!active) return
       setGeneration({ session, value: sources })
-      setGenerationError(partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : '')
+      const carried = carriedError.current
+      carriedError.current = ''
+      setGenerationError(carried || (partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : ''))
     }).catch(reason => { if (active) setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
     return () => { active = false }
   }, [session, endedRuns, locale, snapshotTick])
@@ -236,8 +239,11 @@ export function useRunRecovery(): RunRecovery {
     }),
     continueEditor: entry => void act(async current => {
       const receipt = await ipc.invokeWithProjectSession(current, 'editor-inline:execute', { handle: entry.recovery.view.handle })
-      if (stillCurrent()) setSnapshotTick(value => value + 1)
-      throwIfTerminalProviderFailure(receipt.outcome.receipt)
+      if (!stillCurrent()) return
+      const failureCode = receipt.outcome.receipt.failureCode
+      // 刷新会清掉面板错误；把服务商拒绝的说明带过这次刷新。
+      if (isTerminalProviderFailure(failureCode)) carriedError.current = displayedErrorMessage(useLocaleStore.getState().locale, failureCode)
+      setSnapshotTick(value => value + 1)
     }),
     resumeReview: entry => startRecovery(current => createReviewRevisionRecoveryWorkflow(current, entry.view.handle)),
     resumeBatch: entry => startRecovery(current => createBatchRecoveryWorkflow(current, entry.batchId)),

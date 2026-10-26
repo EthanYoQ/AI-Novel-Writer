@@ -151,19 +151,6 @@ describe('讨论区 #77：上下文超长说明不被其他展示覆盖', () => 
   })
 })
 
-it('定稿后处理自动重入同一失败运行时，仍以登记码失败', async () => {
-  const source = { finalizationId: '定稿', draftId: 1, chapterNumber: 1, contentHash: 'a'.repeat(64) }
-  const slot = { source, stepKey: 'chapter_notes' as const }
-  const failedRun = { view: { handle, artifacts: [], status: 'failed', ledger: { physicalRequests: 1 }, budgetDiagnostics: [{ failureCode: CODE }] },
-    attemptCount: 1, modelId: '模型', context: { slot }, sourceStatus: 'current' }
-  vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string) => {
-    if (channel === 'finalization-generation:read' || channel === 'finalization-generation:begin') return failedRun
-    throw new Error(channel)
-  }), on: () => () => {} } })
-  await expect(runFinalizationGeneration({ session: project, slot, modelId: () => '模型', cancelled: () => false })).rejects.toThrow(CODE)
-  vi.unstubAllGlobals()
-})
-
 it('定稿后处理重入时保留的失败候选不掩盖本步骤的上下文超长，且不看同根另一步骤的诊断', async () => {
   const source = { finalizationId: '定稿', draftId: 1, chapterNumber: 1, contentHash: 'a'.repeat(64) }
   const slot = { source, stepKey: 'chapter_notes' as const }

@@ -101,3 +101,8 @@ export async function assertVisibleSnapshot(previous: VisibleArtifact, next: Vis
     || await hashAuthorText(previous.text) !== previous.textHash || await hashAuthorText(next.text) !== next.textHash
     || JSON.stringify(previous.fingerprint) !== JSON.stringify(next.fingerprint)) throw new Error('ARTIFACT_SNAPSHOT_CONFLICT')
 }
+
+/** Provider failures that resending the same request cannot fix: the run ends with the code. */
+export function isTerminalProviderFailure(code: unknown): code is 'GENERATION_CONTEXT_LENGTH_EXCEEDED' {
+  return code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
+}

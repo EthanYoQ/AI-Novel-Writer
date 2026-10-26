@@ -57,7 +57,10 @@ export function createLegacyRosterGeneration(sessionInput: ProjectSessionContext
       assertActive()
       if (detached || cancelled) throw new Error('LEGACY_ROSTER_GENERATION_DETACHED')
       if (current.proposal || current.artifact) return current
-      if (!canContinueLegacyRoster(current)) throw new Error('LEGACY_ROSTER_GENERATION_OUTCOME_UNKNOWN')
+      if (!canContinueLegacyRoster(current)) {
+        throwIfLastAttemptTerminal(current.view)
+        throw new Error('LEGACY_ROSTER_GENERATION_OUTCOME_UNKNOWN')
+      }
       if (current.sourceStatus !== 'current' || current.view.status === 'cancelled') throw new Error('LEGACY_ROSTER_GENERATION_SOURCE_CONFLICT')
       // Main replays cached ordinals and alone decides whether a known malformed
       // stop can use one of the original finite repair attempts.

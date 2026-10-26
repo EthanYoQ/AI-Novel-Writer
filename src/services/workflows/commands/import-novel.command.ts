@@ -743,7 +743,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     })
     if (!batch.ok) throw new Error(text(
       `蓝图推演失败：${displayedErrorMessage(context.uiLocale, batch.failure.message)}`,
-      `${englishWithReason(`Blueprint inference failed (${batch.failure.reason})`, displayedErrorMessage(context.uiLocale, batch.failure.message), ': ')}.`,
+      englishWithReason(`Blueprint inference failed (${batch.failure.reason}).`, displayedErrorMessage(context.uiLocale, batch.failure.message)),
     ))
 
     this.assertNotCancelled(context)

@@ -3,7 +3,7 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { FinalizationGenerationSlot, FinalizationGenerationRecovery } from '../shared/finalization-generation'
 import type { FinalizedCharacterArtifact } from '../shared/finalized-character-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
-import { throwIfLastAttemptTerminal, throwIfTerminalProviderFailure } from './generation/generation-harness'
+import { isTerminalProviderFailure, throwIfTerminalProviderFailure } from './generation/generation-harness'
 
 /** Reuses one durable main slot. Saved effects never rebuild prompts or execute. */
 export async function runFinalizationGeneration(options: {
@@ -44,6 +44,9 @@ export async function runFinalizationGeneration(options: {
     if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
     if (recovery.effect) return recovery.effect
     if (recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled') throw new Error('FINALIZATION_GENERATION_SOURCE_CHANGED')
+    // 同一根下的另一步骤也有诊断，只看本步骤最近一次请求。
+    const latestFailure = recovery.latestAttempt?.failureCode
+    if (isTerminalProviderFailure(latestFailure)) throw new Error(latestFailure)
     let candidates = recovery.view.candidates ?? recovery.view.artifacts
     let candidate = candidates.at(-1)
     // 显式引用只对冻结它的那次运行有效；begin 换了新运行时按普通路径重新请求。recoverFrom 是否属于本运行由主进程判断。
@@ -52,10 +55,7 @@ export async function runFinalizationGeneration(options: {
     const recoverFrom = options.recoverFrom
     let executed = false
     if (retryOf || recoverFrom || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
-      if (!candidate && recovery.attemptCount > 0 && !recoverFrom) {
-        throwIfLastAttemptTerminal(recovery.view)
-        throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
-      }
+      if (!candidate && recovery.attemptCount > 0 && !recoverFrom) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
       const previous = recovery.view.handle
       executed = true
       const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(retryOf ? { retryOf } : {}), ...(recoverFrom ? { recoverFrom } : {}) })

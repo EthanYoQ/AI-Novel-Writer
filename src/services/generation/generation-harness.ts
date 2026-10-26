@@ -5,6 +5,7 @@ import type {
   TokenUsage,
 } from '../../shared/ipc-channels'
 import type { CreativeStrategy, GenerationReasoningStage } from '../../shared/reasoning-types'
+import { isTerminalProviderFailure } from '../../shared/generation-contract'
 
 export type GenerationOutput = 'visible-text' | 'structured-data'
 
@@ -188,10 +189,7 @@ export interface GenerationAttemptReceipt {
   promptBudget?: PromptBudgetReport
 }
 
-/** Provider failures that resending the same request cannot fix: the run ends with the code. */
-export function isTerminalProviderFailure(code: unknown): code is 'GENERATION_CONTEXT_LENGTH_EXCEEDED' {
-  return code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
-}
+export { isTerminalProviderFailure }
 
 /** Its message is the registered code, so every failure view can explain it; the receipt keeps the dispatched call on record. */
 export class TerminalProviderFailureError extends Error {
