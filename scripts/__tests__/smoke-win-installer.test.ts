@@ -15,8 +15,8 @@ const releaseMonitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const upgradeFixtureScript = resolve('scripts/upgrade-data-fixture.mjs')
 const electronNodeRunner = resolve('node_modules/electron/dist/electron.exe')
 const WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS = 30_000
-// The first WinForms child in a CI job pays a cold start that has run past 5 s;
-// this bound plus the 5 s close timeout still fits the integration budget.
+// A job's first WinForms child has needed about 4.8 s on CI, where a 5 s bound failed.
+// 20 s is about 4x that, and with the 5 s close timeout still fits the integration budget.
 const WINFORMS_WINDOW_READY_SECONDS = 20
 const oldWriterIt = process.platform === 'win32' && process.env.AI_NOVEL_A11_OLD_EXE && process.env.AI_NOVEL_A11_FIXTURE_PROJECT
   ? it : it.skip
