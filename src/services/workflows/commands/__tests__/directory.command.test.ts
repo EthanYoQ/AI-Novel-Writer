@@ -987,7 +987,7 @@ describe('GenerateDirectoryCommand', () => {
     }).then(() => null, error => error as Error)
 
     expect(failure?.message).not.toMatch(/[\u3400-\u9fff]/u)
-    expect(failure?.message).toContain('code=limit_exceeded reason=output_limit')
+    expect(failure?.message).toContain('Blueprint generation failed: code=limit_exceeded reason=output_limit')
     expect(failure?.message).toContain(
       'purpose=chapter-blueprint-directory:compact-single:chapter-1 finishReason=length requestedTokens=4096',
     )

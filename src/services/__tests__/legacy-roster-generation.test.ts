@@ -122,3 +122,9 @@ it('上次请求被服务商以上下文超长拒绝时，按登记码失败而�
  await client.open({ handle })
  await expect(client.stage()).rejects.toThrow(/^GENERATION_CONTEXT_LENGTH_EXCEEDED$/u)
 })
+it('恢复后继续时上次请求被以上下文超长拒绝，按登记码失败而不是说结果未知', async () => {
+ const failed = { ...stored, artifact: undefined, view: { ...stored.view, status: 'failed', artifacts: [], budgetDiagnostics: [{ failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } }
+ const client = install(vi.fn(async (channel: string) => { if (channel === 'legacy-roster:read') return failed; throw new Error(channel) }))
+ await client.open({ handle })
+ await expect(client.execute()).rejects.toThrow(/^GENERATION_CONTEXT_LENGTH_EXCEEDED$/u)
+})

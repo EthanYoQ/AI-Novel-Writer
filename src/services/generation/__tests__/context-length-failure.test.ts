@@ -163,3 +163,22 @@ it('定稿后处理自动重入同一失败运行时，仍以登记码失败', a
   await expect(runFinalizationGeneration({ session: project, slot, modelId: () => '模型', cancelled: () => false })).rejects.toThrow(CODE)
   vi.unstubAllGlobals()
 })
+
+it('定稿后处理重入时保留的失败候选不掩盖本步骤的上下文超长，且不看同根另一步骤的诊断', async () => {
+  const source = { finalizationId: '定稿', draftId: 1, chapterNumber: 1, contentHash: 'a'.repeat(64) }
+  const slot = { source, stepKey: 'chapter_notes' as const }
+  const failedCandidate = { ...handle, artifactId: '空候选', revision: 0, textHash: 'c'.repeat(64), text: '', status: 'failed', compositionEligible: false }
+  const run = (latest: string | null, sibling: string | null) => ({
+    view: { handle, artifacts: [failedCandidate], status: 'failed', ledger: { physicalRequests: 2 }, budgetDiagnostics: [{ failureCode: latest }, { failureCode: sibling }] },
+    attemptCount: 1, modelId: '模型', context: { slot }, sourceStatus: 'current', latestAttempt: { attemptId: '本步骤', inFlight: false, finishReason: null, failureCode: latest } })
+  const start = (stored: unknown) => {
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string) => {
+      if (channel === 'finalization-generation:read' || channel === 'finalization-generation:begin') return stored
+      throw new Error(channel)
+    }), on: () => () => {} } })
+    return runFinalizationGeneration({ session: project, slot, modelId: () => '模型', cancelled: () => false })
+  }
+  await expect(start(run(CODE, null))).rejects.toThrow(CODE)
+  await expect(start(run('GENERATION_PROVIDER_FAILED', CODE))).rejects.not.toThrow(CODE)
+  vi.unstubAllGlobals()
+})
