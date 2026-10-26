@@ -4,8 +4,8 @@ import { dialog, type OpenDialogOptions, type OpenDialogReturnValue, type SaveDi
 import type { DialogDirectoryKind, GlobalConfig } from '../../src/shared/ipc-channels'
 import { GLOBAL_CONFIG_PATH, tryReadJsonFile, updateGlobalConfig } from './config-utils'
 
-// Electron 43 起不给 defaultPath 时对话框固定打开「下载」，不再由系统记住上次目录，
-// 所以每类对话框自己记，存在全局配置里，跨重启保留。
+// Electron 43 起不给 defaultPath 时对话框固定打开「下载」，系统不再记住上次目录：
+// https://github.com/electron/electron/blob/main/docs/breaking-changes.md#behavior-changed-dialog-methods-default-to-downloads-directory
 
 function lastDirectory(kind: DialogDirectoryKind): string | undefined {
   try {

@@ -192,7 +192,6 @@ export interface GlobalConfig {
   autoSaveInterval: number
   /** 更新检查和提醒延后的本机偏好，持久化到 ~/.vela/config.json。 */
   updatePreferences?: UpdatePreferences
-  /** 每类文件对话框上次用过的目录，下次打开时从这里开始。 */
   dialogDirectories?: Partial<Record<DialogDirectoryKind, string>>
   proxy?: {
     enabled: boolean

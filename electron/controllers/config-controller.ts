@@ -18,7 +18,6 @@ export function registerConfigController() {
   ipcMain.handle('config:set', async (_event, config: Partial<GlobalConfig>) => {
     try {
       if (updateGlobalConfig(existing => ({ ...existing, ...config }))) return { success: true }
-      // 设置页把这句原样拼进「保存失败」说明，所以在这里按界面语言写好。
       return {
         success: false,
         error: mainText(
