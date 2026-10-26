@@ -23,7 +23,10 @@ const seedChapter3WithOlderDraft = context => seedStageSample(context, { beforeR
   assert.equal(draft.success, true, draft.error)
 } })
 
-async function factsFromDriverOpen({ page, invoke }, projectPath) {
+/** 驱动打开作品会让界面的会话失效，界面不先回到书房就退不干净。 */
+async function factsFromDriverOpen(context, projectPath) {
+  await context.reload()
+  const { page, invoke } = context
   const opened = await invoke(page, 'project:open', projectPath, randomUUID(), null)
   assert.equal(opened.success, true, opened.error)
   const session = { projectId: opened.project.id, projectPath, leaseId: opened.project.sessionLease }
