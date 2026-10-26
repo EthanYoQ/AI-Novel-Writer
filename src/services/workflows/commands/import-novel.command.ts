@@ -140,7 +140,9 @@ function requireImportGlobalFactsReceipt(
         || typeof candidate.characterProposal.sourceHash !== 'string'
         || !SHA256_HEX.test(candidate.characterProposal.sourceHash)
         || !deepJsonEqual(candidate.proposalSource, expected)
-        || !deepJsonEqual(candidate.core, expected.core)
+        || (candidate.mode === 'fill-empty'
+          ? !Array.isArray(candidate.suggestions)
+          : !deepJsonEqual(candidate.core, expected.core))
       : candidate.proposalSource !== undefined
         || !candidate.roster?.snapshot
         || candidate.roster.snapshot.status !== 'ready'
@@ -177,6 +179,8 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
   constructor(
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
     private readonly commitGlobalFacts?: (request: ImportGlobalFactsRequest) => Promise<ImportGlobalFactsReceipt>,
+    /** 作者原稿只从作者自己的正文取材，不混入项目里的参考小说。 */
+    private readonly excludeReferenceCorpus = false,
   ) {
     super(generationDependencies)
   }
@@ -318,7 +322,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       try {
         const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
           projectSession,
-          'kb:search',
+          this.excludeReferenceCorpus ? 'kb:search-writing-context' : 'kb:search',
           topic.query,
           5,
           context.projectPath,
@@ -568,7 +572,13 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         + `Central advantage: ${authoritativeNovelConfig.goldenFinger || none}\n`
         + `Protagonist: ${authoritativeNovelConfig.protagonistProfile || none}`,
     )
-    if (commitReceipt.characterProposal) {
+    if (commitReceipt.mode === 'fill-empty') {
+      const suggestionCount = commitReceipt.suggestions?.length ?? 0
+      callbacks.log(text(
+        `空白的设定与架构已补齐，已有内容没有改动；${suggestionCount} 条与现有内容不同的反推结果放进了建议，导入完成后可以在这张运行卡片里采用。角色以提议形式保存，等你采用。`,
+        `Empty settings and architecture were filled; existing content was left unchanged. ${suggestionCount} inferred ${suggestionCount === 1 ? 'value differs' : 'values differ'} from what you wrote and ${suggestionCount === 1 ? 'is' : 'are'} kept as suggestions you can adopt on this run card once the import finishes. Characters are saved as proposals for you to adopt.`,
+      ))
+    } else if (commitReceipt.characterProposal) {
       const proposalCount = commitReceipt.proposalSource.characterEntries.length
       callbacks.log(text(
         `小说配置、非角色架构与 ${proposalCount} 条角色提议已原子保存；提议保留待采用，尚未创建角色。`,
