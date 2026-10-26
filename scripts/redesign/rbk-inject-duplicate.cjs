@@ -1,5 +1,3 @@
-// 用 Electron 自带的 Node（ELECTRON_RUN_AS_NODE=1，与应用同一个 better-sqlite3 ABI）直接改项目库，
-// 造出旧版本「回退到此版本」再定稿留下的数据：第 chapter 章再多一行带收据的 finalized。
 const { createHash, randomUUID } = require('node:crypto')
 const Database = require('better-sqlite3')
 

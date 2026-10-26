@@ -38,7 +38,6 @@ function createSourceProject(base: string): OpenProject {
   return { root, projectId }
 }
 
-/** 写一稿并定稿；同章已有定稿时就是「回退再定稿」替换它。 */
 function finalizeChapter(draftId: number, chapterNumber: number, body: string, version: number): void {
   const db = getProjectDb()!
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(draftId, '尚未定稿')
@@ -49,7 +48,6 @@ function finalizeChapter(draftId: number, chapterNumber: number, body: string, v
     targetFileName: `${chapterNumber}-${draftId}.md` })
 }
 
-/** 生成绑定来源与导出备份都先读这份转移授权，读不过就全部失败。 */
 function currentAuthority(project: OpenProject) {
   return readPortableCurrentAuthority({ database: getProjectDb()!, projectStorageRoot: path.join(project.root, '.ai-novel'), projectId: project.projectId })
 }

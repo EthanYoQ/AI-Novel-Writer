@@ -93,10 +93,6 @@ function listPostProcessRunIds(
   return rows.map(row => row.id)
 }
 
-/**
- * 被替换的旧定稿随本章一起删除，各自登记一条删除记录（表结构每条记录只容一份定稿的投影），
- * 记录号挂在主记录下，重试与未完成列表按主记录整组处理。
- */
 const SUPERSEDED_SUFFIX = ':superseded:'
 
 function companionOperationId(operationId: string, draftId: number): string {
@@ -242,7 +238,6 @@ function aggregateStatus(rows: readonly ChapterDeletionRow[]): ChapterDeletionOp
   return projections.includes('failed') ? 'failed' : 'pending'
 }
 
-/** 主记录的状态覆盖整组：被替换旧定稿的清理没做完时，这次删除也没做完。 */
 function refreshAggregateStatus(operationId: string): void {
   const db = requireDatabase()
   const primaryId = primaryOperationId(operationId)
@@ -382,7 +377,6 @@ export class ChapterDeletionRepository {
     return row ? rowToOperation(row) : null
   }
 
-  /** 未完成的删除，只列主记录；被替换旧定稿的清理状态已并进主记录。 */
   static listIncomplete(): ChapterDeletionOperation[] {
     const rows = requireDatabase().prepare(`
       SELECT * FROM chapter_deletion_operations
@@ -392,7 +386,6 @@ export class ChapterDeletionRepository {
     return rows.map(rowToOperation)
   }
 
-  /** 一轮清理之后按整组投影重算主记录状态。 */
   static settle(operationId: string): ChapterDeletionOperation {
     refreshAggregateStatus(operationId)
     const operation = ChapterDeletionRepository.get(operationId)
@@ -400,7 +393,6 @@ export class ChapterDeletionRepository {
     return operation
   }
 
-  /** 随这次删除一起删掉的被替换旧定稿的记录。 */
   static listCompanions(operationId: string): ChapterDeletionOperation[] {
     return companionRows(requireDatabase(), operationId).map(rowToOperation)
   }

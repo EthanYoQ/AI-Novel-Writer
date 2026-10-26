@@ -265,11 +265,6 @@ export function verifyPortableTransferAuthority(
     || JSON.stringify(facts.summarySources) !== JSON.stringify(authority.summarySources)) invalid()
 }
 
-/**
- * Original exported tuples are immutable history. A tuple may since have been replaced by a newer
- * finalization of the same chapter (status superseded) or deleted with its chapter; its receipt and
- * prose must still be unchanged.
- */
 export function verifyPortableTransferAuthorityHistory(
   database: Database.Database,
   authority: PortableTransferAuthority,

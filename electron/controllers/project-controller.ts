@@ -39,7 +39,6 @@ import { adoptTransferredCharacterContinuityOnOpen } from '../services/transferr
 import { FinalizationRepository } from '../repositories/finalization-repository'
 import type { DuplicateFinalizationRepair } from '../../src/shared/finalization-repair'
 
-/** 修复失败不挡打开项目：事务回滚、状态不变，下次打开再修。 */
 function repairDuplicateFinalizationsOnOpen(): DuplicateFinalizationRepair {
   try {
     return FinalizationRepository.repairDuplicateFinalizations()

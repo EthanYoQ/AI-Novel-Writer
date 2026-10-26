@@ -43,7 +43,6 @@ function finalize(draftId: number): void {
   })
 }
 
-/** 版本历史「回退到此版本」的主进程调用：db:draft-next-version 与 db:draft-create（use-version-history.ts createRollbackDraft）。 */
 function rollback(chapterNumber: number, fromDraftId: number): number {
   const content = DraftRepository.getFull(fromDraftId)!.content
   return DraftRepository.create({
@@ -55,7 +54,6 @@ function rollback(chapterNumber: number, fromDraftId: number): number {
   })
 }
 
-/** 第 1 章写了初稿 v1 与改稿 v2，定稿 v2；第 2 章定稿 v1。下一章是第 3 章。 */
 function twoFinalizedChapters() {
   const chapter1Draft = write(1, '第一章初稿：雾从海面上升起来。')
   const chapter1Final = write(1, '第一章改稿：雾从海面上一层一层爬上来，钟声提前了一刻。')

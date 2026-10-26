@@ -31,7 +31,6 @@ function importChapter(chapterNumber: number, content: string) {
   return { chapterNumber, title: `第${chapterNumber}章`, content, wordCount: countDraftUnits(content) }
 }
 
-/** 版本历史「回退到此版本」后再定稿。 */
 function replaceChapter(chapterNumber: number, content: string): number {
   const draftId = DraftRepository.create({ chapterNumber, source: 'rewrite', content, wordCount: countDraftUnits(content) })
   FinalizationRepository.commit({

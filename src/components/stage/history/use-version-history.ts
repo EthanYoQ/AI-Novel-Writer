@@ -8,7 +8,6 @@ import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../../project-session-gate'
 
-/** 版本历史里一稿的类别：时间线节点样式与名字按它取。 */
 export type VersionKind = 'draft' | 'refined' | 'final' | 'superseded'
 
 const VERSION_KIND: Record<DraftStatus, VersionKind> = {
@@ -20,7 +19,6 @@ const VERSION_KIND: Record<DraftStatus, VersionKind> = {
   superseded: 'superseded',
 }
 
-/** 版本历史里的一行：这一章的一稿。 */
 export interface VersionRecord {
   id: number
   version: number
@@ -100,7 +98,7 @@ export function useVersionHistory(projectKey: string) {
       const loaded: VersionRecord[] = drafts.map(draft => ({
         id: draft.id,
         version: draft.version,
-        type: VERSION_KIND[draft.status as DraftStatus] ?? 'draft',
+        type: VERSION_KIND[draft.status],
         word_count: draft.wordCount || 0,
         created_at: draft.createdAt,
         dependencies_stale: draft.dependenciesStale,

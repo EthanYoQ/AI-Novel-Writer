@@ -30,7 +30,6 @@ function write(chapterNumber: number, content: string): number {
   return DraftRepository.create({ chapterNumber, source: 'write', content, wordCount: countDraftUnits(content) })
 }
 
-/** 定稿并登记知识库文档与定稿后处理，模拟一次完整定稿留下的投影。 */
 function finalize(draftId: number, knowledgeDocumentId: string) {
   const draft = DraftRepository.getFull(draftId)!
   const record = FinalizationRepository.commit({
@@ -61,7 +60,6 @@ function recordingCleaner(failKnowledge: ReadonlySet<string> = new Set()) {
   return { removed, cleaner }
 }
 
-/** 第 1 章定稿；第 2 章定稿后回退再定稿，另有一份定稿后新建的工作稿。 */
 function replacedLastChapter() {
   finalize(write(1, '第一章定稿：雾钟。'), 'kb-1')
   const old = write(2, '第二章旧定稿：北堤外的沉船。')

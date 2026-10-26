@@ -4,10 +4,6 @@ import { openInkPrompt } from './ui/InkPrompt'
 
 type Text = (zh: string, en: string) => string
 
-/**
- * 打开项目时修好的遗留重复定稿：每章说明保留了哪一版，旧定稿留下的知识库文档与实体稿逐个列出。
- * 这些文件应用不会自动删除，作者可以自己在知识库和正文目录里清理。
- */
 export function finalizationRepairMessage(repair: DuplicateFinalizationRepair, text: Text): string {
   const chapters = repair.chapters.map(chapter => {
     const versions = chapter.superseded.map(item => `v${item.version}`).join(text('、', ', '))

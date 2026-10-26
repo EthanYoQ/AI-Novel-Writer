@@ -201,7 +201,6 @@ const ERROR_KEYS = {
   NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE: 'error.narrativeThreadEvidenceNotInSource',
   DRAFT_NOT_FOUND: 'error.draftNotFound',
   DRAFT_FINALIZED_READ_ONLY: 'error.draftFinalizedReadOnly',
-  // 本章重新定稿后被替换的旧定稿（#516）：只读、不再发布、只随整章一起删除。
   SUPERSEDED_DRAFT_DELETE_FORBIDDEN: 'error.supersededDraftDeleteForbidden',
   FINALIZATION_SUPERSEDED: 'error.finalizationSuperseded',
   FINALIZATION_COMMIT_SUPERSEDED: 'error.finalizationSuperseded',

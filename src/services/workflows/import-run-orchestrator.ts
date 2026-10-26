@@ -108,7 +108,6 @@ export interface ImportRunOrchestratorDependencies {
     draft: FinalizedDraftImportDraftReceipt,
     run: ImportRunSnapshot,
   ) => Promise<void>
-  /** 导入的这份定稿已被同章更新的定稿替换（superseded）。 */
   isAuthorDraftReplaced?: (draft: FinalizedDraftImportDraftReceipt) => Promise<boolean>
   refresh: (run: ImportRunSnapshot) => Promise<void>
   completeBatch: (
@@ -642,7 +641,6 @@ export class ImportRunOrchestrator {
             )
           }
           execution.current = await this.dependencies.renewExecution(run.id, execution.current)
-          // 作者已重新定稿这一章：新定稿自己发布并做后处理，导入的旧定稿不再投影。
           if (await this.dependencies.isAuthorDraftReplaced?.(draft)) {
             callbacks.log(localize(
               run.locale,

@@ -430,7 +430,6 @@ export class FinalizedDraftImportRepository {
         }
       }
 
-      // 每章至多一行 finalized：不带预览指纹的提交也不能给已有定稿的章号再写一份定稿。
       const finalizedChapter = db.prepare(`
         SELECT 1 FROM drafts WHERE chapter_number = ? AND status = 'finalized' LIMIT 1
       `)

@@ -144,7 +144,6 @@ export class ChapterDeletionService {
     }
 
     ChapterDeletionRepository.startAttempt(operationId)
-    // 同章被替换的旧定稿各有一条删除记录，与主记录一起清理。
     for (const member of [...ChapterDeletionRepository.listCompanions(operationId), operation]) {
       await this.cleanProjections(projectRoot, member)
     }

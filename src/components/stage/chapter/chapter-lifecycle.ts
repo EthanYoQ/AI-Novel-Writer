@@ -2,7 +2,7 @@ import type { ChapterPhase } from '../../../stores/navigation/stage-progress'
 
 /**
  * 单章视图所处的一步，决定主按钮：待写写作此章，草稿 AI 审稿，已审稿按意见修稿，有待合并修稿完成合并，已修稿定稿。
- * 与流程脊同一个 chapterPhase；另有已归档的旧稿与被替换的旧定稿，都只读。
+ * 与流程脊同一个 chapterPhase；另有已归档的旧稿，只读。
  */
 export type ChapterStage = ChapterPhase | 'archived' | 'superseded'
 

@@ -43,7 +43,6 @@ function finalize(draftId: number, title = '雾钟') {
   })
 }
 
-/** 每章至多一行 finalized：定稿唯一写入口在事务里保证。 */
 function finalizedCountsByChapter(): Record<number, number> {
   const rows = getProjectDb()!.prepare(`
     SELECT chapter_number, COUNT(*) AS count FROM drafts WHERE status = 'finalized' GROUP BY chapter_number

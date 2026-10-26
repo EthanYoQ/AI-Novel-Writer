@@ -1,5 +1,3 @@
-// 版本历史「回退到此版本」在已定稿章上建稿、再定稿之后，后续章节还能不能写（rollback-refinalize 第一阶段复现）。
-// 示例作品第 1、2 章已定稿；本场景在界面上定稿第 3、4 章，回退第 3 章并再定稿，再试写第 5 章。
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -17,15 +15,13 @@ import { countUnits, STAGE_SAMPLE } from './stage-sample.mjs'
 
 const SECOND_DRAFT = `${STAGE_SAMPLE.drafts[3].text}\n\n林岚把纸条又读了一遍，决定等到下一次大潮再上灯室。`
 
-/** 第 3 章再有一份草稿 v2，定稿 v2 之后 v1 还在，版本历史里才有可回退的旧稿。 */
-const seed = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path, session }) => {
+const seedChapter3WithOlderDraft = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path, session }) => {
   context.projectPath = path
   const draft = await invoke(page, 'db:draft-create', { chapterNumber: 3, version: 2, source: 'write', content: SECOND_DRAFT,
     wordCount: countUnits(SECOND_DRAFT) }, path, session)
   assert.equal(draft.success, true, draft.error)
 } })
 
-/** 记下界面最近一次带项目会话的调用参数，驱动用同一会话读库，不重开作品。 */
 async function watchSession(app) {
   await app.evaluate(({ ipcMain }) => {
     for (const [channel, handler] of ipcMain._invokeHandlers) {
@@ -49,7 +45,7 @@ async function facts({ app, page, invoke, projectPath }) {
 }
 
 export const RBK_SCENARIOS = {
-  'rbk-rollback-refinalize': { model: true, shell: 'stage', setup: seed, run: async context => {
+  'rbk-rollback-refinalize': { model: true, shell: 'stage', setup: seedChapter3WithOlderDraft, run: async context => {
     const { app, page, shoot } = context
     await watchSession(app)
     const observed = {}
@@ -148,11 +144,11 @@ export const RBK_SCENARIOS = {
   } },
 }
 
-/** 应用退出后用 Electron 自带的 Node 改项目库：与应用同一个 better-sqlite3 ABI。 */
 function injectDuplicateFinalization(projectPath, chapter) {
   const electron = createRequire(import.meta.url)('electron')
   const script = fileURLToPath(new URL('./rbk-inject-duplicate.cjs', import.meta.url))
   return execFileSync(electron, [script, findProjectDatabase(projectPath), String(chapter)],
+    // better-sqlite3 是原生模块，必须用 Electron 自带的 Node 加载，ABI 才和应用一致。
     { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8' })
 }
 

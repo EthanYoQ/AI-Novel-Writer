@@ -21,8 +21,7 @@ afterEach(() => {
   fs.rmSync(projectRoot, { recursive: true, force: true })
 })
 
-/** 旧版本「回退到此版本」再定稿留下的库：同章两行 finalized，各带收据。 */
-function insertFinalized(id: number, chapterNumber: number, version: number, body: string, receipt = true): void {
+function insertLegacyFinalized(id: number, chapterNumber: number, version: number, body: string, receipt = true): void {
   const db = getProjectDb()!
   db.prepare('INSERT INTO contents(id, body) VALUES(?, ?)').run(id, body)
   db.prepare("INSERT INTO drafts(id, chapter_number, version, status, content_id, word_count) VALUES(?, ?, ?, 'finalized', ?, 1)")
@@ -40,10 +39,10 @@ const statuses = () => getProjectDb()!.prepare('SELECT id, status FROM drafts OR
 
 describe('遗留的同章重复定稿', () => {
   it('打开项目时保留最高版本，其余降为 superseded，列出旧定稿留下的知识库文档与实体稿', () => {
-    insertFinalized(1, 1, 1, '第一章定稿')
-    insertFinalized(2, 2, 1, '第二章旧定稿')
-    insertFinalized(3, 2, 2, '第二章新定稿')
-    insertFinalized(4, 2, 3, '第二章更早写下却版本更高的定稿', false)
+    insertLegacyFinalized(1, 1, 1, '第一章定稿')
+    insertLegacyFinalized(2, 2, 1, '第二章旧定稿')
+    insertLegacyFinalized(3, 2, 2, '第二章新定稿')
+    insertLegacyFinalized(4, 2, 3, '第二章更早写下却版本更高的定稿', false)
     expect(FinalizedDraftImportRepository.authoritySequence()).toMatchObject({ status: 'invalid', duplicateChapterNumbers: [2] })
 
     const repair = FinalizationRepository.repairDuplicateFinalizations()
@@ -69,8 +68,8 @@ describe('遗留的同章重复定稿', () => {
   })
 
   it('再打开一次什么也不改', () => {
-    insertFinalized(1, 1, 1, '第一章旧定稿')
-    insertFinalized(2, 1, 2, '第一章新定稿')
+    insertLegacyFinalized(1, 1, 1, '第一章旧定稿')
+    insertLegacyFinalized(2, 1, 2, '第一章新定稿')
     FinalizationRepository.repairDuplicateFinalizations()
     const before = statuses()
 

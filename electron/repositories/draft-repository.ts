@@ -1,7 +1,7 @@
 /**
  * DraftRepository — 草稿 (drafts 表 + contents 联动)
  *
- * 草稿是创作栈的主线。status='finalized' 代表本章当前定稿，'superseded' 是被替换的旧定稿。
+ * 草稿是创作栈的主线。status='finalized' 代表定稿。
  * 正文统一存储在 contents 表中，drafts 只持有 content_id 外键。
  */
 import { createHash } from 'node:crypto'
@@ -9,7 +9,7 @@ import type BetterSqlite3 from 'better-sqlite3'
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
-import { RECEIPTED_DRAFT_STATUS_SQL, isReceiptedDraftStatus } from '../../src/shared/draft-status'
+import { RECEIPTED_DRAFT_STATUS_SQL, isReceiptedDraftStatus, type DraftStatus } from '../../src/shared/draft-status'
 
 const DRAFT_META_SELECT = `
   SELECT drafts.*, finalization_outbox.chapter_title
@@ -24,7 +24,7 @@ export interface DraftMeta {
     chapterNumber: number
     chapterTitle?: string
     version: number
-    status: string
+    status: DraftStatus
     source: string
     contentId: number
     wordCount: number
@@ -295,7 +295,7 @@ function rowToMeta(
         chapterNumber: row.chapter_number as number,
         ...(chapterTitle ? { chapterTitle } : {}),
         version: row.version as number,
-        status: row.status as string,
+        status: row.status as DraftStatus,
         source: row.source as string,
         contentId: row.content_id as number,
         wordCount: row.word_count as number,
@@ -523,7 +523,6 @@ export class DraftRepository {
                     { code: 'FINALIZED_DRAFT_DELETE_REQUIRED' as const },
                 )
             }
-            // 被替换的旧定稿只随删除整章一起删除，单独删掉会丢掉删除收据。
             if (target.status === 'superseded') {
                 throw Object.assign(
                     new Error('SUPERSEDED_DRAFT_DELETE_FORBIDDEN'),

@@ -220,7 +220,6 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
       { id: 'history', label: text('版本历史', 'Version history'), onSelect: () => navigate({ kind: 'resource', page: 'history' }) },
       { id: 'copy', label: text('复制本章正文', 'Copy chapter text'), onSelect: copyBody },
     ] },
-    // 被替换的旧定稿只随删除整章正文一起删除，这里不给删除入口。
     ...(stage === 'superseded' ? [] : [{ id: 'danger', tone: 'danger' as const, items: stage === 'final'
       ? [{ id: 'delete', label: text('删除正文…', 'Delete manuscript…'), disabled: busy, onSelect: () => void deleteManuscript() }]
       : [{ id: 'delete', label: text('删除这一稿…', 'Delete this draft…'), disabled: busy, onSelect: () => setAsk('delete') }] }]),

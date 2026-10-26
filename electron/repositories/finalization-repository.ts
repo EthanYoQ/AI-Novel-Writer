@@ -268,7 +268,6 @@ export class FinalizationRepository {
         throw new Error('FINALIZATION_COMMIT_SUPERSEDED')
       }
 
-      // 每章至多一行 finalized：同章旧定稿在同一事务里降为 superseded，收据与正文不动。
       const replaced = db.prepare(`
         UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
         WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
@@ -319,11 +318,6 @@ export class FinalizationRepository {
     return transaction()
   }
 
-  /**
-   * 旧版本再定稿不降级旧行，留下同章多行 finalized，权威序列判 invalid、后续章节写不了。
-   * 打开项目时调用：每章保留与权威读取同序（version、id 降序）的第一行，其余降为 superseded。
-   * 只改状态，收据、正文、知识库文档与实体稿都不动；再执行一次找不到可修的章。
-   */
   static repairDuplicateFinalizations(): DuplicateFinalizationRepair {
     const db = requireDatabase()
     return db.transaction(() => {
@@ -367,7 +361,6 @@ export class FinalizationRepository {
     }).immediate()
   }
 
-  /** 这份定稿仍是本章的权威定稿；被替换（superseded）或已删除时为 false，发布出口据此拒绝。 */
   static isAuthoritative(draftId: number): boolean {
     return requireDatabase().prepare(`
       SELECT 1 FROM drafts WHERE id = ? AND status = 'finalized'
