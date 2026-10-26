@@ -37,14 +37,14 @@ import { probeProjectSqlite } from '../services/sqlite-project-migration'
 import { mainText } from '../i18n'
 import { adoptTransferredCharacterContinuityOnOpen } from '../services/transferred-character-continuity'
 import { FinalizationRepository } from '../repositories/finalization-repository'
-import type { DuplicateFinalizationRepair } from '../../src/shared/finalization-repair'
+import type { FinalizationRepairOnOpen } from '../../src/shared/finalization-repair'
 
-function repairDuplicateFinalizationsOnOpen(): DuplicateFinalizationRepair {
+function repairDuplicateFinalizationsOnOpen(): FinalizationRepairOnOpen {
   try {
-    return FinalizationRepository.repairDuplicateFinalizations()
+    return { status: 'checked', ...FinalizationRepository.repairDuplicateFinalizations() }
   } catch (error) {
     console.error('[project] 遗留重复定稿修复失败:', error)
-    return { chapters: [] }
+    return { status: 'failed', error: error instanceof Error ? error.message : String(error) }
   }
 }
 
@@ -715,7 +715,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           project: projectData,
           requestToken,
           ...databaseState,
-          ...(finalizationRepair.chapters.length > 0 ? { finalizationRepair } : {}),
+          finalizationRepair,
         }
       } catch (error) {
         let rollbackError: unknown
