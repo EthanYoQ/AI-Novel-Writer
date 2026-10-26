@@ -539,3 +539,11 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
 | `sm517-stage-models` | 只有夹具模型时分工模型页说明各环节都用它（`sm517-one-model`）；加小模型后把审稿指定为它（`sm517-settings-zh`），从蓝图写下一章的请求仍是 `gpt-4.1`，AI 审稿的请求是 `gpt-4.1-mini`；再把规划指定为它，生成第 13～16 章蓝图的请求是 `gpt-4.1-mini`。小模型改成只做检索后两行提示按默认运行（`sm517-stale`）；删掉全部模型后是空状态（`sm517-no-model`）；英文界面（`sm517-settings-en`） | 英文的分工模型页 | 是 | #517 |
+
+## 重新生成蓝图保留作者字段（#516 讨论）
+
+场景在 `scripts/redesign/bpg-scenarios.mjs`。示例作品的蓝图行没写作者字段（库里是 NULL），卡片文本框遇到 NULL 不受控，换章后会留着上一章的字；场景先把前 3 章的作者字段写成空串。假模型用 `fake.replyReview(fn)` 对目录生成请求回一份覆盖本批章节的合法蓝图 JSON（批量与单章压缩两种提示都认）。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `bpg-regenerate-keeps-guidance` | 蓝图页给第 1 章手写章节要点、第 2 章填作者微操指导并保存；AI 生成蓝图选「覆盖」接着生成 3 章，跑完后重新加载蓝图：第 1、2 章标题换成生成的新标题，章节要点与作者微操指导不变（`measured.before` 与 `measured.after`） | 第 2 章蓝图的作者微操指导 | 是 | #516 |
