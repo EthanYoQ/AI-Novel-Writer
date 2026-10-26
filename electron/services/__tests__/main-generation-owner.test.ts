@@ -618,6 +618,28 @@ describe('explicit planning recovery with real SQLite', () => {
     expect(f.owner.readContext(replacement.handle).planningContinuation).toMatchObject({ remainingRange: { from: 2, to: 3 }, targetUnits: 700 })
     expect(f.owner.readContext(run.handle).blueprintRecovery!.draft).toBe(raw)
   })
+  it('keeps author guidance and chapter notes when a full directory run regenerates existing chapters', async () => {
+    const regenerated = blueprint(1, '重新生成后的关键事件。')
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()
+      .mockImplementationOnce(async (_request, options) => { options.onVisible({ kind: 'delta', text: JSON.stringify([regenerated]) }); return { finishReason: 'stop', usage: null } })
+      .mockImplementationOnce(async (_request, options) => { options.onVisible({ kind: 'delta', text: '{"blueprints":[{"chapterNumber":2,"title":"未完' }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch)
+    const authored = { userGuidance: '这一章只写雨夜，不要提前揭底。', notes: '定稿要点：林岚拿到了信。', notesUpdatedAt: '2026-10-20 08:00:00' }
+    BlueprintRepository.upsert({ ...blueprint(1, '旧的关键事件。'), ...authored })
+    const run = f.owner.begin(directorySelection(f))
+    const execute = (invocationNonce: string) => f.owner.execute({ handle: run.handle, invocationNonce,
+      task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    await execute('complete-prefix')
+    await execute('incomplete-next')
+    const range = { startChapter: 1, endChapter: 3 }
+    f.db.transaction(() => {
+      const receipt = BlueprintRepository.commitRange({ mode: 'replace-range', operationId: 'regenerate-prefix', startChapter: 1, endChapter: 1,
+        blueprints: parseTextBlueprintsStrict(JSON.stringify([regenerated]), 1, 1, 'zh-CN') }, () => f.owner.assertSourcesCurrent(run.handle, range))
+      f.owner.recordDirectoryCommit(run.handle, range, receipt)
+    }).immediate()
+    expect(BlueprintRepository.getAll().find(item => item.chapterNumber === 1)).toMatchObject({ keyEvents: '重新生成后的关键事件。', ...authored })
+    expect(f.owner.readContext(run.handle).planningContinuation).toMatchObject({ state: 'ready', remainingRange: { from: 2, to: 3 } })
+  })
   it.each(['directory-progress', 'author-saved'] as const)('rejects blueprint recovery writes when rebuilding sources fails after %s', async prefixKind => {
     const raw = '{"blueprints":[{"chapterNumber":2,"title":"未完'
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()
