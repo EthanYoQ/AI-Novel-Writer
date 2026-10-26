@@ -37,7 +37,8 @@ import { getCurrentProjectPath, getProjectDb } from '../database'
 import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from './blueprint-repository'
 import { ImportGlobalFactsRepository } from './import-global-facts-repository'
-import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
+import type { ImportGlobalFactsMode, ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
+import { planImportFill } from '../../src/shared/import-fill-empty'
 import {
   MAX_IMPORT_CHAPTERS,
   MAX_IMPORT_SOURCE_FILES,
@@ -202,6 +203,9 @@ const AUTHOR_NEXT_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>
   'author-commit': 'author-publish',
   'author-publish': 'author-postprocess',
   'author-postprocess': 'refresh',
+  global: 'style',
+  style: 'blueprints',
+  blueprints: 'refresh',
 }
 
 function nextStageForRun(row: ImportRunRow, stage: ImportRunStage): ImportRunStage | undefined {
@@ -354,7 +358,7 @@ function assertAuthorEffectRunBinding(
   if (kind !== 'author-finalized-batch') return
   const stageMatches = run.stage === 'author-commit'
     || (allowCommittedLaterStage && [
-      'author-publish', 'author-postprocess', 'refresh', 'completed',
+      'author-publish', 'author-postprocess', 'global', 'style', 'blueprints', 'refresh', 'completed',
     ].includes(run.stage))
   if (
     run.purpose !== 'author-manuscript'
@@ -379,15 +383,20 @@ function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown
     ) throw new Error()
     return
   }
+  const fillEmpty = effectReceipt.mode === 'fill-empty'
+  if (fillEmpty && !Array.isArray(effectReceipt.suggestions)) throw new Error()
+  const fillKeys = fillEmpty ? ['mode', 'suggestions'] : []
   if (kind === 'project-writing-style') {
-    if (!exactKeys(effectReceipt, ['writingStyle']) || effectReceipt.writingStyle !== payload.writingStyle) throw new Error()
+    if (!exactKeys(effectReceipt, ['writingStyle', ...fillKeys])
+      || typeof effectReceipt.writingStyle !== 'string'
+      || (!fillEmpty && effectReceipt.writingStyle !== payload.writingStyle)) throw new Error()
     return
   }
   if (kind === 'project-global-facts') {
     if (isRecord(effectReceipt.characterProposal)) {
       const { generationRunHandle: _generationRunHandle, ...domainPayload } = payload
       void _generationRunHandle
-      if (!exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'characterProposal', 'proposalSource'])
+      if (!exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'characterProposal', 'proposalSource', ...fillKeys])
         || effectReceipt.operationId !== payload.operationId || typeof effectReceipt.payloadHash !== 'string' || !SHA256.test(effectReceipt.payloadHash)
         || typeof effectReceipt.idempotent !== 'boolean' || !isRecord(effectReceipt.core) || !canonicalEqual(effectReceipt.proposalSource, domainPayload)
         || !exactKeys(effectReceipt.characterProposal, ['proposalBatchId', 'sourceHash'])
@@ -1089,6 +1098,16 @@ function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage)
       covered.size !== allChapters.length
       || allChapters.some(chapter => !covered.has(chapter.chapter_number))
     ) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
+    return
+  }
+  if (stage === 'blueprints' && row.purpose === 'author-manuscript') {
+    // 作者原稿只为还没有蓝图的章反推，已有蓝图的章不归本次运行：判据是每章都有蓝图行。
+    const missing = db().prepare(`
+      SELECT COUNT(*) FROM import_run_chapters AS chapters
+      WHERE chapters.run_id = ?
+        AND NOT EXISTS (SELECT 1 FROM blueprints WHERE blueprints.chapter_number = chapters.chapter_number)
+    `).pluck().get(row.id)
+    if (missing !== 0) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
     return
   }
   if (stage !== 'knowledge' && stage !== 'blueprints') throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
@@ -2340,7 +2359,7 @@ export class ImportRunRepository {
         recordPreparedEffect(run, existing)
         return rowToEffectReceipt(existing, run)
       }
-      if (run.purpose === 'reference') {
+      if (request.stage === 'global' || request.stage === 'style' || request.stage === 'blueprints') {
         const handle = (request.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle
         const hasGenerationTable = db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_runs'").pluck().get()
         const bound = hasGenerationTable && db().prepare("SELECT 1 FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlot.runId')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.stage')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.batchId')=?")
@@ -2402,6 +2421,8 @@ export class ImportRunRepository {
       assertExecution(runId, execution, now)
       assertCheckpointCanApply(run, stage, batchId, 'receipt')
       let effectReceipt: unknown
+      // 作者原稿只补空白；模式由运行用途决定，不随载荷传。
+      const fillMode: ImportGlobalFactsMode = run.purpose === 'author-manuscript' ? 'fill-empty' : 'replace'
       const generationRunHandle = (validatedReceipt.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle
       if (generationRunHandle) {
         if (!assertGenerationSources || !['global', 'style', 'blueprints'].includes(stage)) throw new Error('GENERATION_GUARD_REQUIRED')
@@ -2411,6 +2432,7 @@ export class ImportRunRepository {
         case 'project-global-facts':
           effectReceipt = ImportGlobalFactsRepository.commit(
             parseJson<ImportGlobalFactsRequest>(row.payload_json, {} as ImportGlobalFactsRequest),
+            fillMode,
           )
           break
         case 'project-writing-style': {
@@ -2418,8 +2440,19 @@ export class ImportRunRepository {
           if (typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()) {
             throw new Error('IMPORT_RUN_RECEIPT_PAYLOAD_INVALID')
           }
-          ProjectCoreRepository.update({ writingStyle: payload.writingStyle.trim() })
-          effectReceipt = { writingStyle: payload.writingStyle.trim() }
+          const writingStyle = payload.writingStyle.trim()
+          if (fillMode === 'replace') {
+            ProjectCoreRepository.update({ writingStyle })
+            effectReceipt = { writingStyle }
+            break
+          }
+          const fill = planImportFill(['writingStyle'], { writingStyle: ProjectCoreRepository.get()?.writingStyle }, { writingStyle })
+          ProjectCoreRepository.update(fill.patch)
+          effectReceipt = {
+            mode: 'fill-empty',
+            writingStyle: ProjectCoreRepository.get()?.writingStyle ?? '',
+            suggestions: fill.suggestions,
+          }
           break
         }
         case 'chapter-blueprint-range':

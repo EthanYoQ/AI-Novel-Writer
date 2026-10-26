@@ -22,7 +22,7 @@ export function captureImportGenerationContext(db: Database.Database, slot: Impo
   const run = db.prepare('SELECT purpose,manifest_fingerprint,manifest_chapter_count,manifest_word_count FROM import_runs WHERE id=?').get(slot.runId) as {
     purpose: string; manifest_fingerprint: string; manifest_chapter_count: number; manifest_word_count: number
   } | undefined
-  if (!run || run.purpose !== 'reference' || !/^[a-f0-9]{64}$/.test(run.manifest_fingerprint)) throw new Error('GENERATION_IMPORT_MANIFEST_REQUIRED')
+  if (!run || !/^[a-f0-9]{64}$/.test(run.manifest_fingerprint)) throw new Error('GENERATION_IMPORT_MANIFEST_REQUIRED')
   const range = slot.stage === 'blueprints' ? parseImportRunChapterBatchCheckpointId(slot.batchId) : null
   const rows = db.prepare('SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number').all(slot.runId) as {
     chapter_number: number; title: string; content_snapshot: string; content_fingerprint: string
