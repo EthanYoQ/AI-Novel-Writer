@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
@@ -22,39 +23,24 @@ const seedChapter3WithOlderDraft = context => seedStageSample(context, { beforeR
   assert.equal(draft.success, true, draft.error)
 } })
 
-async function watchSession(app) {
-  await app.evaluate(({ ipcMain }) => {
-    for (const [channel, handler] of ipcMain._invokeHandlers) {
-      ipcMain._invokeHandlers.set(channel, (event, ...args) => {
-        const session = args.at(-1)
-        if (session && typeof session === 'object' && 'leaseId' in session) globalThis.__driveSession = session
-        return handler(event, ...args)
-      })
-    }
-  })
-}
-
-async function facts({ app, page, invoke, projectPath }) {
-  const handle = await app.evaluateHandle(() => globalThis.__driveSession ?? null)
-  const session = await handle.jsonValue()
-  await handle.dispose()
-  assert.ok(session, '界面已带会话调用过主进程')
+async function factsFromDriverOpen({ page, invoke }, projectPath) {
+  const opened = await invoke(page, 'project:open', projectPath, randomUUID(), null)
+  assert.equal(opened.success, true, opened.error)
+  const session = { projectId: opened.project.id, projectPath, leaseId: opened.project.sessionLease }
   const sequence = await invoke(page, 'db:draft-authority-sequence', projectPath, session)
   const chapter3 = (await invoke(page, 'db:draft-list', 3, projectPath, session)).map(draft => `v${draft.version}:${draft.status}`)
-  return { sequence: { status: sequence.status, nextChapterNumber: sequence.nextChapterNumber ?? null, duplicateChapterNumbers: sequence.duplicateChapterNumbers }, chapter3 }
+  return { repair: opened.finalizationRepair, sequence: { status: sequence.status, nextChapterNumber: sequence.nextChapterNumber ?? null, duplicateChapterNumbers: sequence.duplicateChapterNumbers }, chapter3 }
 }
 
 export const RBK_SCENARIOS = {
   'rbk-rollback-refinalize': { model: true, shell: 'stage', setup: seedChapter3WithOlderDraft, run: async context => {
-    const { app, page, shoot } = context
-    await watchSession(app)
+    const { page, shoot } = context
     const observed = {}
 
     await finalizeChapter(page, 3)
     await shoot('rbk-1-ch3-finalized')
     await finalizeChapter(page, 4)
     await shoot('rbk-2-ch4-finalized')
-    observed.afterFirstFinals = await facts(context)
 
     await refs.open(page, 'history')
     await refs.historyChapters(page).getByRole('button', { name: /雾钟/ }).click()
@@ -77,7 +63,6 @@ export const RBK_SCENARIOS = {
     observed.postProcessAfterRefinalize = await chapterView.postProcessSteps(page)
     observed.chapter3RowAfterRefinalize = (await stage.chapterRows(page)).find(row => row.number === 3)
     await shoot('rbk-5-ch3-refinalized')
-    observed.afterRefinalize = await facts(context)
 
     await refs.open(page, 'history')
     await refs.historyChapters(page).getByRole('button', { name: /雾钟/ }).click()
@@ -96,6 +81,8 @@ export const RBK_SCENARIOS = {
     await message.or(started).first().waitFor({ state: 'visible', timeout: 30_000 })
     observed.writeChapter5 = await blueprint.popover(page).isVisible() ? await blueprint.popover(page).innerText() : 'started'
     await shoot('rbk-6-write-ch5')
+    await started.waitFor({ state: 'detached', timeout: 90_000 })
+    observed.afterRefinalize = await factsFromDriverOpen(context, context.projectPath)
 
     console.log(`[rbk] observed ${JSON.stringify(observed)}`)
     assert.deepEqual(observed.afterRefinalize.sequence, { status: 'continuous', nextChapterNumber: 5, duplicateChapterNumbers: [] },
@@ -121,27 +108,34 @@ export const RBK_SCENARIOS = {
     observed.notice = await notice().innerText()
     await context.shoot('rbk-7-repair-notice')
     await notice().getByRole('button', { name: '知道了' }).click()
-    await watchSession(context.app)
-    await openChapter(context.page, 3)
-    observed.afterRepair = await facts({ ...context, projectPath })
+    observed.afterRepair = await factsFromDriverOpen(context, projectPath)
 
+    const logged = context.diagnostics.length
     await context.restart()
     await reopen()
-    await stage.spine(context.page).waitFor({ state: 'visible', timeout: 60_000 })
-    await context.page.waitForTimeout(3000)
-    observed.noticeOnSecondOpen = await notice().count()
-    await watchSession(context.app)
+    await waitForLayer2Loaded(context.diagnostics, logged)
     await openChapter(context.page, 3)
-    observed.afterSecondOpen = await facts({ ...context, projectPath })
+    observed.noticeOnSecondOpen = await notice().count()
+    observed.afterSecondOpen = await factsFromDriverOpen(context, projectPath)
 
     console.log(`[rbk] observed ${JSON.stringify(observed)}`)
     assert.deepEqual(observed.injected, { chapter: 2, finalized: 2 }, '造出第 2 章两行定稿')
     assert.match(observed.notice, /第 2 章：保留 v2 作为定稿，v1 改为「已被替换的定稿」/u)
+    assert.deepEqual(observed.afterRepair.repair, { status: 'checked', chapters: [] }, '修好之后再打开不再修')
     assert.deepEqual(observed.afterRepair.sequence, { status: 'continuous', nextChapterNumber: 3, duplicateChapterNumbers: [] })
     assert.equal(observed.noticeOnSecondOpen, 0, '再打开一次不再提示')
     assert.deepEqual(observed.afterSecondOpen, observed.afterRepair, '修复幂等：再打开一次数据不变')
     return observed
   } },
+}
+
+/** 界面打开作品时第二层数据加载完成会打这条日志，重复定稿提示紧接着在同一条调用链里派发。 */
+async function waitForLayer2Loaded(diagnostics, from) {
+  const deadline = Date.now() + 60_000
+  while (!diagnostics.slice(from).some(line => line.includes('[ProjectService] 项目数据加载完成'))) {
+    assert.ok(Date.now() < deadline, '重启后界面没有打完作品打开流程')
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
 }
 
 function injectDuplicateFinalization(projectPath, chapter) {

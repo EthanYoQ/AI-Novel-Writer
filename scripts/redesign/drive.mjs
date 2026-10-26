@@ -454,7 +454,7 @@ async function runSession(sessionName, names, options) {
       await applyAppearance(launched.page, { theme: options.theme, shell })
       shared.shell = await shellShown(launched.page)
       const context = {
-        ...launched, roots, invoke, fake,
+        ...launched, roots, invoke, fake, diagnostics,
         /** 场景中途多拍一张图，与收尾截图放在同一目录。 */
         shoot: name => shoot(context.page, `${base(name)}.png`),
         reload: () => context.page.reload().then(() => waitForShell(context.page, TIMEOUT)),
