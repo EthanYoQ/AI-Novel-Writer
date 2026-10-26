@@ -19,7 +19,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest"><img src="https://img.shields.io/badge/Download-Windows%20%7C%20macOS-2b4c8c?style=for-the-badge" alt="Download for Windows and macOS" /></a>
+  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest"><img src="https://img.shields.io/badge/Download-Windows%20%7C%20macOS-2b4c8c?style=for-the-badge" alt="Download for Windows and macOS" /></a><br />
+  <a href="https://www.orz.md/en/ai-novel-writer/#demo">English first-use guide with real screenshots</a><br />
+  <sub>Project setup in 1.3.0. Bring your own local or cloud model.</sub>
 </p>
 
 <p align="center">
