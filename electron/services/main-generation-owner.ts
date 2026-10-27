@@ -84,6 +84,10 @@ export interface MainGenerationOwnerDependencies {
 
 interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
 
+/** 回执里交给渲染端的失败码：供应商与网络失败，以及阻断根的活动时长用完、写入失败。 */
+const RENDERER_SAFE_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR',
+  'ROOT_BUDGET_EXHAUSTED', 'GENERATION_STORAGE_FAILED'] as const satisfies readonly NonNullable<GenerationAttemptReceipt['failureCode']>[]
+
 /** Provider 流式失败的分类：请求或读流被传输层拒绝、拿不到响应流、流在完成标记前断开与原生网络错误都算网络失败，其余算供应商失败。 */
 export function providerStreamFailureCode(error: string): 'NETWORK_ERROR' | 'GENERATION_PROVIDER_FAILED' {
   return error === 'LLM_STREAM_NETWORK_FAILED' || error === 'LLM_STREAM_UNREADABLE' || error === 'LLM_STREAM_INCOMPLETE'
@@ -521,8 +525,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const finishReason: LLMFinishReason = receipt.failureCode ? 'error'
       : ['stop', 'length', 'content_filter', 'error', 'unknown'].includes(stored ?? '') ? stored as LLMFinishReason : 'unknown'
     const evidence = frozenModel.capabilityEvidence
-    const safeFailureCode = receipt.failureCode === 'GENERATION_PROVIDER_FAILED' ? 'GENERATION_PROVIDER_FAILED'
-      : receipt.failureCode === 'NETWORK_ERROR' ? 'NETWORK_ERROR' : undefined
+    const safeFailureCode = RENDERER_SAFE_FAILURE_CODES.find(code => code === receipt.failureCode)
     const details: GenerationAttemptReceipt = { purpose: task.purpose,
       ...(receipt.diagnostics ? { diagnostics: receipt.diagnostics } : {}),
       ...(safeFailureCode ? { failureCode: safeFailureCode } : {}),

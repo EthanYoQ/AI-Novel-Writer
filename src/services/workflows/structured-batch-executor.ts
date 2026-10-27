@@ -8,6 +8,7 @@ import {
 } from '../generation/generation-harness'
 import { structuredContractDiagnostic } from '../../shared/structured-contract-diagnostic'
 import type { WritingLanguage } from '../../shared/writing-language'
+import { errorCodeOf } from '../../i18n/app-errors'
 import {
   buildStructuredSyntaxRepairTask,
   isRepairableDirectJsonSyntaxFailure,
@@ -84,6 +85,8 @@ export interface StructuredBatchFailure {
     actualCharacters?: number
     maxCharacters?: number
   }
+  /** 主进程给出的稳定错误码，例如预算用完或生成被阻断。 */
+  errorCode?: string
 }
 
 export type StructuredBatchResult<TOutput> =
@@ -264,6 +267,11 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           return
         }
         if (outcome.status === 'incomplete') {
+          // 活动时长在请求进行中用完：主进程中止请求、阻断根，并在回执里带上码。
+          if (outcome.receipt.failureCode === 'ROOT_BUDGET_EXHAUSTED') {
+            throw new ExecutionFailure({ code: 'deadline', reason: 'deadline',
+              message: `结构化生成未正常完成：${outcome.finishReason} (ROOT_BUDGET_EXHAUSTED)`, errorCode: 'ROOT_BUDGET_EXHAUSTED' })
+          }
           if (outcome.finishReason !== 'length') {
             const reason: StructuredGenerationFailureReason = outcome.finishReason === 'content_filter'
               ? 'safety'
@@ -532,12 +540,13 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         return { ok: true, items: validated, receipt }
       } catch (error) {
         if (error instanceof PromptBudgetExceededError) throw error
-        if (error instanceof Error && /TASK_BUDGET_|ROOT_BUDGET_EXHAUSTED/u.test(error.message)) {
+        if (!(error instanceof ExecutionFailure) && error instanceof Error && /TASK_BUDGET_|ROOT_BUDGET_EXHAUSTED/u.test(error.message)) {
           const exhausted = error.message.includes('ROOT_BUDGET_EXHAUSTED')
           const message = writingLanguage === 'zh-CN'
             ? exhausted ? '本任务预算已用完；已完成的完整项目保留，剩余范围尚未发送。' : '完整单项与必要输入无法在当前模型或用户容量限制内生成；本次未发送，请调整容量或缩小任务。'
             : exhausted ? 'The task budget is exhausted. Completed items are preserved; the remaining scope was not sent.' : 'A complete item and its required inputs do not fit the current model or user capacity. No request was sent; adjust capacity or reduce the task.'
-          return { ok: false, validatedItems: validated, failure: { code: 'limit_exceeded', reason: exhausted ? 'max_requested_tokens' : 'output_limit', message: `${message} (${exhausted ? 'ROOT_BUDGET_EXHAUSTED' : 'TASK_BUDGET_CAPACITY_CONFLICT'})` }, receipt }
+          const errorCode = exhausted ? 'ROOT_BUDGET_EXHAUSTED' : 'TASK_BUDGET_CAPACITY_CONFLICT'
+          return { ok: false, validatedItems: validated, failure: { code: 'limit_exceeded', reason: exhausted ? 'max_requested_tokens' : 'output_limit', message: `${message} (${errorCode})`, errorCode }, receipt }
         }
         let failure: StructuredBatchFailure
         if (error instanceof ExecutionFailure) {
@@ -564,7 +573,9 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
             failure = { code: 'generation_failed', reason: 'unknown', message: error.message }
           }
         } else {
-          failure = { code: 'generation_failed', reason: 'server_error', message: '结构化生成失败' }
+          // 只保留稳定错误码，不转出主进程以外的原文（可能带凭据或提示词）。
+          const errorCode = errorCodeOf(error)
+          failure = { code: 'generation_failed', reason: 'server_error', message: errorCode ?? '结构化生成失败', ...(errorCode ? { errorCode } : {}) }
         }
         return { ok: false, failure, receipt, validatedItems: [...validated] }
       }

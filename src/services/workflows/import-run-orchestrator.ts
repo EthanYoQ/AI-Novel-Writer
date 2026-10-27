@@ -18,7 +18,7 @@ import {
 } from '../../shared/import-run'
 import type { StepCallbacks } from '../../stores/workflow-store'
 import type { FinalizedDraftImportDraftReceipt, FinalizedDraftImportReceipt } from '../../shared/finalized-draft-import'
-import { appErrorMessage } from '../../i18n/app-errors'
+import { appErrorMessage, errorCodeOf, importGenerationStopMessage } from '../../i18n/app-errors'
 import { localize } from '../../i18n/core'
 
 export const IMPORT_CHAPTER_PAGE_SIZE = 100
@@ -332,18 +332,23 @@ export class ImportRunOrchestrator {
           throw error
         }
       } else {
+        // 生成开始或发送前就被预算、阻断拒绝时只有裸码，在这里换成导入的说明，存进运行并抛出同一句。
+        const code = errorCodeOf(error)
+        const stopped = code && importGenerationStopMessage(run.locale, code)
+        const failure = stopped ? Object.assign(new Error(stopped), { code }) : error
         try {
           execution.current = await this.dependencies.renewExecution(runId, execution.current)
           await this.dependencies.fail(
             runId,
             requestedStage,
-            error instanceof Error ? error.message : String(error),
+            failure instanceof Error ? failure.message : String(failure),
             execution.current,
           )
         } catch (leaseError) {
           execution.lost = leaseError
-          throw error
+          throw failure
         }
+        throw failure
       }
       throw error
     }

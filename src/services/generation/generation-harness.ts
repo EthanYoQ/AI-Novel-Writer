@@ -183,7 +183,7 @@ export interface GenerationAttemptReceipt {
   }
   finishReason: LLMFinishReason
   /** Main-normalized failure category; never provider response text. */
-  failureCode?: 'GENERATION_PROVIDER_FAILED' | 'NETWORK_ERROR'
+  failureCode?: 'GENERATION_PROVIDER_FAILED' | 'NETWORK_ERROR' | 'ROOT_BUDGET_EXHAUSTED' | 'GENERATION_STORAGE_FAILED'
   usage?: TokenUsage
   promptBudget?: PromptBudgetReport
 }

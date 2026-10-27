@@ -1,4 +1,4 @@
-import { displayedErrorMessage } from '../../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason, importGenerationStopMessage } from '../../../i18n/app-errors'
 import type { NovelConfig } from '../../../shared/ipc-channels'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../../shared/import-generation'
 import type { BeginGenerationRequest } from '../../../shared/generation-owner-contract'
@@ -741,10 +741,15 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       limits: { maxBatchItems: InferBlueprintsPerChapterCommand.MAX_ITEMS_PER_BATCH },
       signal: execution.signal,
     })
-    if (!batch.ok) throw new Error(text(
-      `蓝图推演失败：${displayedErrorMessage(context.uiLocale, batch.failure.message)}`,
-      `Blueprint inference failed (${batch.failure.reason}).`,
-    ))
+    if (!batch.ok) {
+      const { errorCode } = batch.failure
+      const reason = (errorCode && importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline'))
+        || displayedErrorMessage(context.uiLocale, batch.failure.message)
+      throw Object.assign(new Error(text(
+        `蓝图推演失败：${reason}`,
+        englishWithReason(`Blueprint inference failed (${batch.failure.reason}).`, reason),
+      )), errorCode ? { code: errorCode } : {})
+    }
 
     this.assertNotCancelled(context)
     const commitRequest: BlueprintRangeCommitRequest = {

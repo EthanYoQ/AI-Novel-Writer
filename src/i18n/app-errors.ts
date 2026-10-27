@@ -1,4 +1,4 @@
-import { localize, translate } from './core'
+import { localize, translate, type MessageKey } from './core'
 import type { Locale } from './types'
 
 /**
@@ -119,6 +119,8 @@ const ERROR_KEYS = {
   GENERATION_AGENT_ACTION_BLOCKED: 'error.generationStopped',
   GENERATION_DIRECTORY_CONTINUATION_BLOCKED: 'error.generationStopped',
   GENERATION_IMPORT_EXECUTION_STALE: 'error.generationStopped',
+  GENERATION_PARENT_INVALID: 'error.generationParentInvalid',
+  GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE: 'error.importPreviousAttemptIncomplete',
   GENERATION_WORKFLOW_SESSION_BUSY: 'error.generationBusy',
   GENERATION_PLOT_OUTLINE_AUTHOR_IN_FLIGHT: 'error.generationBusy',
   GENERATION_KNOWLEDGE_BUSY: 'error.generationKnowledgeBusy',
@@ -286,19 +288,21 @@ function isKnownCode(code: unknown): code is KnownErrorCode {
  */
 const WRAPPED_CODE = /^(?:Error invoking remote method '[^']+': )?(?:[A-Za-z]*Error: )?([A-Z][A-Z0-9_]*)$/u
 
-function readCode(error: unknown): KnownErrorCode | undefined {
+/** 整条 message 就是码（可带 IPC 前缀）时取 message 里的码，再取对象上的 code 或 errorCode。 */
+function codeCandidates(error: unknown): unknown[] {
   const message = typeof error === 'string' ? error : error instanceof Error ? error.message : undefined
-  if (message !== undefined) {
-    const code = WRAPPED_CODE.exec(message.trim())?.[1]
-    if (isKnownCode(code)) return code
-  }
-  if (typeof error !== 'object' || error === null) return undefined
-  const code = 'code' in error
-    ? error.code
-    : 'errorCode' in error
-      ? error.errorCode
-      : undefined
-  return isKnownCode(code) ? code : undefined
+  const wrapped = message === undefined ? undefined : WRAPPED_CODE.exec(message.trim())?.[1]
+  if (typeof error !== 'object' || error === null) return [wrapped]
+  return [wrapped, 'code' in error ? error.code : 'errorCode' in error ? error.errorCode : undefined]
+}
+
+function readCode(error: unknown): KnownErrorCode | undefined {
+  return codeCandidates(error).find(isKnownCode)
+}
+
+/** 报错带的稳定错误码，登记与否都读。 */
+export function errorCodeOf(error: unknown): string | undefined {
+  return codeCandidates(error).find((code): code is string => typeof code === 'string' && /^[A-Z][A-Z0-9_]*$/u.test(code))
 }
 
 /** Electron 在主进程报错前加的调用通道前缀对作者没有意义，兜底说明里去掉。 */
@@ -311,7 +315,22 @@ function readMessage(error: unknown): string {
 /** 已登记错误码的可读文案；未登记时返回 undefined，由调用方保留原有说明。 */
 export function knownAppErrorMessage(locale: Locale, error: unknown): string | undefined {
   const code = readCode(error)
-  return code ? translate(locale, ERROR_KEYS[code]) : undefined
+  return code ? translate(locale, ERROR_KEYS[code], { code }) : undefined
+}
+
+const IMPORT_BLOCKED_CODES = new Set(['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'])
+
+/**
+ * 导入里预算用完或生成被阻断时的说明，带上码。请求次数用完在发送前报出；活动时长在请求进行中用完（inFlight），
+ * 之后根被阻断，再发起只会得到阻断码。导入的「重新开始」会从第 1 章重做，所以这些说明不提示重新生成。
+ * 其余码返回 undefined，交给共用说明。
+ */
+export function importGenerationStopMessage(locale: Locale, code: string, inFlight = false): string | undefined {
+  const key: MessageKey | undefined = code === 'ROOT_BUDGET_EXHAUSTED'
+    ? inFlight ? 'error.importActiveTimeExhausted' : 'error.importRequestLimitReached'
+    : IMPORT_BLOCKED_CODES.has(code) ? 'error.importGenerationBlocked'
+      : code === 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE' ? 'error.importPreviousAttemptIncomplete' : undefined
+  return key && translate(locale, key, { code })
 }
 
 export function appErrorMessage(locale: Locale, error: unknown): string {
