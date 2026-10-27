@@ -47,6 +47,7 @@ export function importStagesFor(run: { purpose: ImportPurpose; authorInference?:
   if (run.purpose === 'reference') return IMPORT_STAGE_PLANS.reference
   return run.authorInference ? IMPORT_STAGE_PLANS.authorWithInference : IMPORT_STAGE_PLANS.author
 }
+
 export type ImportRunDirectCheckpointStage =
   | 'knowledge'
   | 'author-publish'
