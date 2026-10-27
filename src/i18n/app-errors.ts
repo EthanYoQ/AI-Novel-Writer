@@ -198,6 +198,7 @@ const ERROR_KEYS = {
   CHARACTER_ROSTER_STATE_NEWER_CHAPTER: 'error.characterRosterNewerChapter',
   // 生成情节大纲途中项目数据被改动，主进程拒绝覆盖。
   PROJECT_CORE_SYNOPSIS_CHANGED: 'error.generationSourceChanged',
+  PROJECT_CORE_UPDATE_FAILED: 'error.projectCoreUpdateFailed',
   NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE: 'error.narrativeThreadEvidenceNotInSource',
   DRAFT_NOT_FOUND: 'error.draftNotFound',
   DRAFT_FINALIZED_READ_ONLY: 'error.draftFinalizedReadOnly',
