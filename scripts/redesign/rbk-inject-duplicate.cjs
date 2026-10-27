@@ -7,7 +7,7 @@ const db = new Database(databasePath, { fileMustExist: true })
 try {
   db.transaction(() => {
     const old = db.prepare(`
-      SELECT drafts.version, finalization_outbox.chapter_title FROM drafts
+      SELECT finalization_outbox.chapter_title FROM drafts
       JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
       WHERE drafts.chapter_number = ? AND drafts.status = 'finalized'
     `).get(chapter)

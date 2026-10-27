@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -73,8 +72,8 @@ export const RBK_SCENARIOS = {
     observed.historyAfterRefinalize = await refs.versionNames(page)
     await shoot('rbk-5b-history-superseded')
     await stage.openChapterVersion(page, 3, 2)
-    observed.supersededSwitcher = await stage.root(page).getByRole('button', { name: /^本章版本：/ }).getAttribute('aria-label')
-    observed.supersededHint = await chapterView.view(page).locator('.stage-ch-hint').innerText()
+    observed.supersededSwitcher = await chapterView.versionButton(page).getAttribute('aria-label')
+    observed.supersededHint = await chapterView.hint(page).innerText()
     await shoot('rbk-5c-chapter-superseded')
 
     await openChapter(page, 5)
@@ -99,14 +98,10 @@ export const RBK_SCENARIOS = {
   'rbk-legacy-duplicate-repair': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const projectPath = context.samplePath
     const observed = {}
-    const reopen = async () => {
-      await stage.spine(context.page).or(stage.cover(context.page, STAGE_SAMPLE.name)).first().waitFor({ state: 'visible', timeout: 60_000 })
-      if (!await stage.spine(context.page).isVisible()) await stage.openFromLibrary(context.page, STAGE_SAMPLE.name)
-    }
     const notice = () => context.page.getByRole('alertdialog').or(context.page.getByRole('dialog')).filter({ hasText: '已修复重复的定稿' })
 
     await context.restart({ beforeLaunch: () => { observed.injected = JSON.parse(injectDuplicateFinalization(projectPath, 2)) } })
-    await reopen()
+    await stage.openAfterRestart(context.page, STAGE_SAMPLE.name)
     await notice().waitFor({ state: 'visible', timeout: 60_000 })
     observed.notice = await notice().innerText()
     await context.shoot('rbk-7-repair-notice')
@@ -115,7 +110,7 @@ export const RBK_SCENARIOS = {
 
     const logged = context.diagnostics.length
     await context.restart()
-    await reopen()
+    await stage.openAfterRestart(context.page, STAGE_SAMPLE.name)
     await waitForLayer2Loaded(context.diagnostics, logged)
     await openChapter(context.page, 3)
     observed.noticeOnSecondOpen = await notice().count()
@@ -144,19 +139,7 @@ async function waitForLayer2Loaded(diagnostics, from) {
 function injectDuplicateFinalization(projectPath, chapter) {
   const electron = createRequire(import.meta.url)('electron')
   const script = fileURLToPath(new URL('./rbk-inject-duplicate.cjs', import.meta.url))
-  return execFileSync(electron, [script, findProjectDatabase(projectPath), String(chapter)],
+  return execFileSync(electron, [script, path.join(projectPath, '.ai-novel', 'project.db'), String(chapter)],
     // better-sqlite3 是原生模块，必须用 Electron 自带的 Node 加载，ABI 才和应用一致。
-    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8' })
-}
-
-function findProjectDatabase(directory) {
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const file = path.join(directory, entry.name)
-    if (entry.isFile() && entry.name === 'project.db') return file
-    if (entry.isDirectory()) {
-      const found = findProjectDatabase(file)
-      if (found) return found
-    }
-  }
-  throw new Error(`${directory} 下找不到 project.db`)
+    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', windowsHide: true })
 }
