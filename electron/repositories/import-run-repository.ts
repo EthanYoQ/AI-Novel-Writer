@@ -2472,6 +2472,9 @@ export class ImportRunRepository {
         case 'chapter-blueprint-range':
           effectReceipt = BlueprintRepository.commitRange(
             parseJson<BlueprintRangeCommitRequest>(row.payload_json, {} as BlueprintRangeCommitRequest),
+            undefined,
+            undefined,
+            fillMode,
           )
           break
         case 'author-finalized-batch': {
