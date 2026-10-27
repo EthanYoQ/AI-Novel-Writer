@@ -5,6 +5,7 @@ import { MAX_BATCH_CHAPTERS, type GenerationBatchIntent, type GenerationBatchPro
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units'
 import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
+import { isReceiptedDraftStatus } from '../../src/shared/draft-status'
 import { GenerationRunRepository, textHash, type DurableGenerationRun } from '../repositories/generation-run-repository'
 import { DraftRepository } from '../repositories/draft-repository'
 
@@ -93,7 +94,7 @@ export class GenerationDraftEffects {
       if (outbox && (outbox.content_hash !== textHash(outbox.content_snapshot) || outbox.chapter_number !== committed.chapterNumber))
         throw new Error('GENERATION_BATCH_FINALIZATION_CONFLICT')
       if (outbox && outbox.content_snapshot !== committed.content) {
-        if (saved.draft?.status !== 'finalized' || saved.draft.body !== outbox.content_snapshot)
+        if (!isReceiptedDraftStatus(saved.draft?.status ?? '') || saved.draft?.body !== outbox.content_snapshot)
           throw new Error('GENERATION_BATCH_FINALIZATION_CONFLICT')
         sourceConflict ??= 'GENERATION_BATCH_FINALIZATION_CONFLICT'
         outbox = undefined
