@@ -571,6 +571,34 @@ describe('作者原稿反推的建议', () => {
     await vi.waitFor(() => expect(list()).toBeNull())
   })
 
+  it('采用一条建议只改那一项；设定页里还没保存的其他改动保留', async () => {
+    const core = { genre: '武侠', coreOutline: '作者自己的大纲' }
+    const updates = arrange(core, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, novelConfig: { genre: '武侠', coreOutline: '作者自己的大纲' } as never } }))
+    useProjectStore.getState().updateNovelConfig({ coreOutline: '还没保存的新大纲' })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeTruthy())
+    await click('采用「类型」的反推结果')
+    expect(updates).toEqual([{ genre: '悬疑' }])
+    await vi.waitFor(() => expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑'))
+    expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('还没保存的新大纲')
+  })
+
+  it('换开别的作品再回来（新的会话）后，同一作品的历史运行仍然列出未采用的建议', async () => {
+    arrange({ genre: '武侠' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    useWorkflowStore.setState({ history: [{ ...importRun(), projectSession: { ...session, leaseId: '上次打开' } }] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"]')?.textContent).toContain('类型'))
+    expect(invoke).toHaveBeenCalledWith('db:import-run-effect-receipt-get', '导入运行', 'global', 'done', session.projectPath, session)
+  })
+
   it('被截断的长值可以展开看全文再收起，没被截断的短值不给展开控件', async () => {
     const outline = ['第一幕：旧港来信', '第二幕：雾钟早鸣', '第三幕：灯塔失火', '第四幕：账册下落', '第五幕：潮退真相', '第六幕：林岚离港'].join('\n')
     arrange({ genre: '武侠', coreOutline: '作者自己的大纲' }, {
