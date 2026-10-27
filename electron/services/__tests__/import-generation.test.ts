@@ -176,6 +176,13 @@ it.each(['inference', 'endpoint'] as const)('导入角色提议从持久%s产物
  expect(f.db.prepare('SELECT name,static_provenance FROM characters WHERE retired=0').get()).toMatchObject({ name: '林岚', static_provenance: expect.stringContaining('generated') })
  expect(f.owner.characterProposals.listPendingFinalized()).toEqual([])
 })
+it('待处理的导入角色提议带上导入用途与角色人数，供界面写成作者看得懂的标题', async () => {
+ const f = await globalEffect('inference')
+ expect(f.owner.characterProposals.listPendingFinalized()).toEqual([expect.objectContaining({
+   importOperationId: 'novel-import-global-导入任务', importPurpose: 'reference', itemCount: 3 })])
+ f.db.prepare("UPDATE import_runs SET purpose='author-manuscript' WHERE id='导入任务'").run()
+ expect(f.owner.characterProposals.listPendingFinalized()).toEqual([expect.objectContaining({ importPurpose: 'author-manuscript', itemCount: 3 })])
+})
 it.each(['unproven', 'forged'] as const)('拒绝把%s导入payload当作生成角色来源', async kind => {
  const f = await globalEffect(kind)
  expect(f.owner.characterProposals.listPendingFinalized()).toEqual([])
