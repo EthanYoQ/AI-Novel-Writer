@@ -205,6 +205,9 @@ async function terminateImportAt(f: ReturnType<typeof fixture>, phase: 'sqlite-c
 }
 // A timed-out case keeps running while afterEach starts. Teardown waits for every
 // case body to stop, so it never deletes a database an abandoned import still holds.
+// The wait covers terminateImportAt's 30 s child wait and ends inside the hook budget,
+// so a late hook never closes or deletes what the next case owns.
+const BODY_SETTLE_MS = 30_000
 const runningBodies = new Set<Promise<void>>()
 function owned<A extends unknown[]>(body: (...args: A) => Promise<void>) {
   return (...args: A) => {
@@ -218,11 +221,18 @@ const it = Object.assign(
   { each: <T>(cases: readonly T[]) => (name: string, body: (value: T) => Promise<void>) => vitestIt.each(cases)(name, owned(body)) },
 )
 afterEach(async () => {
-  await Promise.allSettled(runningBodies)
+  const bodies = [...runningBodies], caseRoots = roots.splice(0)
   runningBodies.clear()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const settled = await Promise.race([
+    Promise.allSettled(bodies).then(() => true),
+    new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), BODY_SETTLE_MS) }),
+  ])
+  clearTimeout(timer)
   closeProjectDatabase()
-  for (const root of roots.splice(0)) await removeDirectoryWithWindowsRetry(root)
-})
+  if (!settled) return
+  for (const root of caseRoots) await removeDirectoryWithWindowsRetry(root)
+}, BODY_SETTLE_MS + 10_000)
 
 it.each(['v100', 'v110'] as const)('%s 有旧角色原文但无角色卡时拒绝发布且保留源', async version => {
   const f = fixture(version), before = sourceState(f)
