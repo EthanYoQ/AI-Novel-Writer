@@ -41,3 +41,29 @@ it.each([
   expect(invoke.mock.calls.filter(([channel]) => channel === 'db:project-core-commit-generated')).toHaveLength(!custom && stage === 'effect' ? 1 : 0)
   if (custom && stage === 'effect') expect(effect).toHaveBeenCalledWith('模型生成文风', handle)
 })
+
+it('导入文风只补空白时，界面显示主进程实际保留的文风，而不是模型生成的', async () => {
+  const session = { projectId: '文风项目', leaseId: '文风会话', projectPath: 'C:/文风合成项目' }
+  const project = { id: session.projectId, sessionLease: session.leaseId, path: session.projectPath, novelConfig: { writingStyle: '作者原始文风' } }
+  const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: '文风根', runId: '文风运行' }
+  const view = { handle, status: 'running', nonReplayable: false, artifacts: [],
+    budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 } }
+  useProjectStore.setState({ currentProject: project as never })
+  useLLMStore.setState({ defaultModelId: '合成模型' })
+  vi.stubGlobal('window', { aiNovelAPI: { on: () => () => {}, invoke: vi.fn(async (channel: string) => {
+    if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+    if (channel === 'fs:check-exists') return false
+    if (channel === 'generation:begin' || channel === 'generation:read') return view
+    if (channel === 'generation:execute') {
+      return { run: view, outcome: { status: 'completed', content: '模型生成文风', finishReason: 'stop', receipt: { finishReason: 'stop' } } }
+    }
+    throw new Error('禁止普通保存或额外调用：' + channel)
+  }) } })
+
+  await new AnalyzeWritingStyleCommand({ sampleText: '作者样本。' }, undefined, async () => '作者原始文风').execute({
+    step: {}, context: { runId: '文风动作', projectPath: session.projectPath, projectSession: session, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', data: {}, cancelled: false },
+    callbacks: { log: vi.fn(), appendText: vi.fn(), setProgress: vi.fn() },
+  })
+
+  expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('作者原始文风')
+})
