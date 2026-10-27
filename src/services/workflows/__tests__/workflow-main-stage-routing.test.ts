@@ -100,6 +100,16 @@ describe('stage routing at the workflow generation seam', () => {
     expect(run()?.generationModelId).toBe('reviewer')
   })
 
+  it('keeps a later step of a resumed runtime on the resumed model instead of the mapping', async () => {
+    useLLMStore.setState({ stageModelIds: { review: 'writer' } })
+    mocks.invoke.mockImplementation(async (_session: unknown, channel: string) => channel === 'generation:read-context' ? { modelId: 'reviewer' } : undefined)
+    const main = transport({ read: vi.fn(async () => ({ ...view, nonReplayable: true })), resume: vi.fn(async () => view) })
+    const runtime = await createWorkflowMainGenerationRuntime({ context: context(), callbacks, selection: { ...review, resumeHandle: handle } }, main.value)
+    await runtime.advance({ ...review, chapterNumber: 2 })
+    await runtime.close()
+    expect(main.begin.mock.calls.map(([, request]) => request.modelId)).toEqual(['reviewer'])
+  })
+
   it.each(['begin', 'navigation'] as const)('leaves nothing pinned when %s fails, so a retry routes again', async failure => {
     const main = transport(failure === 'begin' ? { begin: vi.fn(async () => { throw new Error('main refused') }) } : {})
     const workflowContext = context()

@@ -67,6 +67,7 @@ it.each(['arch', 'world'])('%s恢复原运行经过实际launcher确认门，批
  await act(async () => button('恢复原运行').click())
  await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('waiting'))
  expect(invoke.mock.calls.some(([channel]) => channel === 'character-proposal:approve')).toBe(false)
+ expect(useWorkflowStore.getState().activeRuns[0]?.generationModelId).toBe('已移除的原模型')
  await act(async () => useWorkflowStore.getState().confirmContinue(useWorkflowStore.getState().activeRuns[0].id))
  await vi.waitFor(() => expect(useWorkflowStore.getState().history[0]?.status).toBe('completed'))
  expect(invoke.mock.calls.find(([channel]) => channel === 'character-proposal:approve')?.[1]).toMatchObject({ proposalBatchId: '提议', selections: [{ selectionKey: '1', action: 'create' }] })
