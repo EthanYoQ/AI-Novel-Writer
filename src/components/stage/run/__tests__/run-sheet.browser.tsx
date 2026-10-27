@@ -516,3 +516,66 @@ describe('聊天入口不可见', () => {
     expect(selectedTab()).toBe(locale === 'en-US' ? 'Diagnostics' : '诊断')
   })
 })
+
+describe('作者原稿反推的建议', () => {
+  function importRun(): WorkflowRun {
+    return run('导入运行', 'completed', { type: 'novel_import', title: '导入作者原稿（3 章）' })
+  }
+
+  function arrange(core: Record<string, unknown>, receipts: Record<string, unknown>) {
+    const updates: unknown[] = []
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-effect-receipt-get') {
+        const effectReceipt = receipts[args[1] as string]
+        return effectReceipt ? { state: 'committed', effectReceipt } : null
+      }
+      if (channel === 'db:project-core-get') return { ...core }
+      if (channel === 'db:project-core-update') {
+        updates.push(args[0])
+        Object.assign(core, args[0] as object)
+        return { success: true }
+      }
+      if (channel === 'fs:list-tree' || channel === 'fs:read-dir') return []
+      if (channel === 'db:recovery-candidate-list' || channel === 'generation:list-batches' || channel === 'generation:list') return []
+      return null
+    })
+    return updates
+  }
+
+  it('列出与现有设定不同的反推结果，采用一条就写进设定并从列表消失，全部采用写进其余的', async () => {
+    const core = { genre: '武侠', coreOutline: '作者自己的大纲', writingStyle: '长句', narrativePov: 'first_person' }
+    const updates = arrange(core, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'genre', current: '武侠', inferred: '悬疑' },
+        { field: 'coreOutline', current: '作者自己的大纲', inferred: '侦探追查旧案' },
+        { field: 'narrativePov', current: 'third_limited', inferred: 'first_person' },
+      ] },
+      style: { mode: 'fill-empty', writingStyle: '长句', suggestions: [{ field: 'writingStyle', current: '长句', inferred: '短句，白描' }] },
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    const list = () => host!.querySelector('[aria-label="反推建议"]')
+    await vi.waitFor(() => expect(list()?.textContent).toContain('类型'))
+    expect(list()!.textContent).toContain('核心大纲')
+    expect(list()!.textContent).toContain('文风')
+    expect(list()!.textContent).not.toContain('叙事视角')
+
+    await click('采用「类型」的反推结果')
+    expect(updates).toEqual([{ genre: '悬疑' }])
+    await vi.waitFor(() => expect(list()!.textContent).not.toContain('悬疑'))
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑')
+
+    await click('全部采用')
+    expect(updates.at(-1)).toEqual({ coreOutline: '侦探追查旧案', writingStyle: '短句，白描' })
+    await vi.waitFor(() => expect(list()).toBeNull())
+  })
+
+  it('没有建议时不出现这一块', async () => {
+    arrange({ genre: '悬疑' }, { global: { mode: 'fill-empty', suggestions: [] } })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('db:import-run-effect-receipt-get', '导入运行', 'style', 'done', session.projectPath, session))
+    expect(host!.querySelector('[aria-label="反推建议"]')).toBeNull()
+  })
+})
