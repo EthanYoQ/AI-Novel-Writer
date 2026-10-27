@@ -13,6 +13,7 @@ import type {
 } from '../../shared/import-run'
 import {
   createImportRunChapterBatchCheckpointId,
+  importStagesFor,
   IMPORT_RUN_BLUEPRINT_BATCH_SIZE,
   IMPORT_RUN_KNOWLEDGE_BATCH_SIZE,
   parseImportRunChapterBatchCheckpointId,
@@ -129,21 +130,7 @@ export interface ImportRunOrchestratorDependencies {
   complete: (runId: string, execution: ImportRunExecutionLease) => Promise<ImportRunSnapshot>
 }
 
-/** 阶段顺序由运行用途和冻结的反推选项决定；作者原稿的反推放在后处理之后，知识库里已经有定稿正文。 */
-const IMPORT_STAGE_PLANS = {
-  reference: ['knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed'],
-  author: ['author-commit', 'author-publish', 'author-postprocess', 'refresh', 'completed'],
-  authorWithInference: [
-    'author-commit', 'author-publish', 'author-postprocess', 'global', 'style', 'blueprints', 'refresh', 'completed',
-  ],
-} as const satisfies Record<string, readonly ImportRunStage[]>
-
 type ImportStagePlanRun = Pick<ImportRunSnapshot, 'purpose' | 'authorInference'>
-
-export function importStagesFor(run: ImportStagePlanRun): readonly ImportRunStage[] {
-  if (run.purpose === 'reference') return IMPORT_STAGE_PLANS.reference
-  return run.authorInference ? IMPORT_STAGE_PLANS.authorWithInference : IMPORT_STAGE_PLANS.author
-}
 
 function stageIndex(run: ImportStagePlanRun, stage: ImportRunStage): number {
   return importStagesFor(run).indexOf(stage)

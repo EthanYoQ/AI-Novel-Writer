@@ -249,7 +249,8 @@ describe('authorInference 随运行冻结在导入账本里', () => {
     const { preview } = prepareAuthorRun(true)
     const execution = ImportRunRepository.startOrResume(RUN_ID, 'runner').execution
 
-    expect(ImportRunRepository.get(RUN_ID)).toMatchObject({ authorInference: true, completedBatches: {} })
+    expect(ImportRunRepository.get(RUN_ID)).toMatchObject({ authorInference: true })
+    expect(ImportRunRepository.get(RUN_ID)!.completedBatches).toEqual({})
     ImportRunRepository.prepareEffectReceipt({
       runId: RUN_ID, stage: 'author-commit', batchId: 'done',
       effectKey: 'author-finalized-batch', kind: 'author-finalized-batch',

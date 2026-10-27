@@ -9,6 +9,7 @@ import {
   IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
   IMPORT_RUN_BLUEPRINT_BATCH_SIZE,
   IMPORT_RUN_KNOWLEDGE_BATCH_SIZE,
+  importStagesFor,
   parseImportRunChapterBatchCheckpointId,
 } from '../../src/shared/import-run'
 import type {
@@ -192,24 +193,17 @@ const IMPORT_RUN_STAGE_VALUES = new Set<ImportRunStage>([
   'author-commit', 'author-publish', 'author-postprocess',
   'refresh', 'completed',
 ])
-const REFERENCE_NEXT_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>>> = {
-  prepared: 'knowledge',
-  knowledge: 'global',
-  global: 'style',
-  style: 'blueprints',
-  blueprints: 'refresh',
-}
-const AUTHOR_NEXT_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>>> = {
-  'author-commit': 'author-publish',
-  'author-publish': 'author-postprocess',
-  'author-postprocess': 'refresh',
-  global: 'style',
-  style: 'blueprints',
-  blueprints: 'refresh',
-}
+/**
+ * 「同时反推」在作者原稿运行创建时冻结成导入账本里的一行，有这一行即勾选。
+ * 它不是进度：completedBatches 不读它。
+ */
+const AUTHOR_INFERENCE_LEDGER = { stage: 'prepared', batchId: 'author-inference', effectKey: 'option:author-inference' } as const
 
+/** 完成只能走 complete()，所以 refresh 之后没有可推进的阶段。 */
 function nextStageForRun(row: ImportRunRow, stage: ImportRunStage): ImportRunStage | undefined {
-  return (row.purpose === 'author-manuscript' ? AUTHOR_NEXT_STAGE : REFERENCE_NEXT_STAGE)[stage]
+  const plan = importStagesFor({ purpose: row.purpose, authorInference: readAuthorInference(row.id) })
+  const next = plan[plan.indexOf(stage) + 1]
+  return plan.includes(stage) && next !== 'completed' ? next : undefined
 }
 
 type ImportRunCheckpointSource = 'direct' | 'receipt'
@@ -726,6 +720,7 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
     ...(row.purpose === 'author-manuscript' ? {
       manifestFingerprint: row.manifest_fingerprint,
       ...(row.authority_fingerprint ? { authorityFingerprint: row.authority_fingerprint } : {}),
+      authorInference: readAuthorInference(row.id),
     } : {}),
     sourceDisplay: parseJson<ImportSourceDisplayMetadata[]>(row.source_display_json, []),
     unfinishedSourceDisplay: unfinishedSourceDisplay(row.id),
@@ -893,8 +888,8 @@ function completedBatches(row: ImportRunRow): Partial<Record<ImportRunStage, str
     const completed: Partial<Record<ImportRunStage, string[]>> = {}
     const rows = db().prepare(`
       SELECT stage,batch_id FROM import_effect_ledger
-      WHERE run_id=? AND state='complete' ORDER BY rowid
-    `).all(row.id) as Array<{ stage: ImportRunStage; batch_id: string }>
+      WHERE run_id=? AND state='complete' AND NOT (stage=? AND batch_id=?) ORDER BY rowid
+    `).all(row.id, AUTHOR_INFERENCE_LEDGER.stage, AUTHOR_INFERENCE_LEDGER.batchId) as Array<{ stage: ImportRunStage; batch_id: string }>
     for (const entry of rows) completed[entry.stage] = [...(completed[entry.stage] ?? []), entry.batch_id]
     return completed
   }
@@ -911,6 +906,12 @@ function completedBatches(row: ImportRunRow): Partial<Record<ImportRunStage, str
     }
   }
   return parsed as Partial<Record<ImportRunStage, string[]>>
+}
+
+function readAuthorInference(runId: string): boolean {
+  if (!hasEffectLedger()) return false
+  return Boolean(db().prepare('SELECT 1 FROM import_effect_ledger WHERE run_id=? AND stage=? AND batch_id=?')
+    .get(runId, AUTHOR_INFERENCE_LEDGER.stage, AUTHOR_INFERENCE_LEDGER.batchId))
 }
 
 function hasEffectLedger(): boolean {
@@ -2100,6 +2101,13 @@ export class ImportRunRepository {
           manifestContentSize,
           manifestWordCount,
         )
+        if (candidate.authorInference) {
+          // evidence_kind 只能取 M04 的四个值；legacy-checkpoint 是现有直接检查点（无收据）用的那个，校验也认它。
+          db().prepare(`INSERT INTO import_effect_ledger(
+            run_id,stage,batch_id,effect_namespace,effect_key,state,evidence_kind,diagnostic_code
+          ) VALUES(?,?,?,?,?,'complete','legacy-checkpoint','')`).run(runId, AUTHOR_INFERENCE_LEDGER.stage,
+            AUTHOR_INFERENCE_LEDGER.batchId, `import:${candidate.purpose}:${runId}`, AUTHOR_INFERENCE_LEDGER.effectKey)
+        }
         const insertChapter = db().prepare(`
           INSERT INTO import_run_chapters (
             run_id, chapter_number, source_id, source_chapter_number,
