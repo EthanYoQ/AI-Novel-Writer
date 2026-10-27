@@ -599,6 +599,18 @@ describe('作者原稿反推的建议', () => {
     expect(invoke).toHaveBeenCalledWith('db:import-run-effect-receipt-get', '导入运行', 'global', 'done', session.projectPath, session)
   })
 
+  it('建议读取失败时说出来，不当作没有建议', async () => {
+    arrange({ genre: '武侠' }, {})
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:import-run-effect-receipt-get'
+      ? Promise.reject(new Error('PROJECT_SESSION_STALE')) : base(channel, ...args))
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')?.textContent).toBeTruthy())
+    expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')!.textContent).not.toContain('PROJECT_SESSION_STALE')
+  })
+
   it('被截断的长值可以展开看全文再收起，没被截断的短值不给展开控件', async () => {
     const outline = ['第一幕：旧港来信', '第二幕：雾钟早鸣', '第三幕：灯塔失火', '第四幕：账册下落', '第五幕：潮退真相', '第六幕：林岚离港'].join('\n')
     arrange({ genre: '武侠', coreOutline: '作者自己的大纲' }, {
