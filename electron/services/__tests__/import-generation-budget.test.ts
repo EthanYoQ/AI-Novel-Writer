@@ -63,11 +63,11 @@ function fixture(chapterCount: number, dispatch: GenerationRunServiceDependencie
 }
 type Fixture = ReturnType<typeof fixture>
 
-const stageSelection = {
+const stageSelection: Record<ImportGenerationSlot['stage'], Pick<BeginGenerationRequest, 'operation' | 'promptKeys' | 'skillStages'> & { output: 'structured-data' | 'visible-text' }> = {
   global: { operation: 'import-global-facts', promptKeys: ['infer_novel_config_with_vectors', 'infer_novel_config'], skillStages: ['planning'], output: 'structured-data' },
   style: { operation: 'analyze-writing-style', promptKeys: ['analyze_writing_style'], skillStages: [], output: 'visible-text' },
   blueprints: { operation: 'import-blueprints', promptKeys: ['infer_single_chapter_blueprint'], skillStages: ['planning'], output: 'structured-data' },
-} as const
+}
 
 async function runSlot(f: Fixture, runId: string, slot: ImportGenerationSlot, payload: (handle: unknown) => { effectKey: string; kind: 'project-global-facts' | 'project-writing-style' | 'chapter-blueprint-range'; payload: Record<string, unknown> }) {
   const execution = ImportRunRepository.startOrResume(runId, '合成执行器').execution
