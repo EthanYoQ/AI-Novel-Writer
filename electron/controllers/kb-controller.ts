@@ -1,4 +1,5 @@
-import { app, ipcMain, dialog } from 'electron'
+import { app, ipcMain } from 'electron'
+import { showOpenDialogInLastDirectory } from '../utils/remembered-dialog'
 import type { IpcMainInvokeEvent } from 'electron'
 import path from 'node:path'
 import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_PATH } from '../utils/config-utils'
@@ -513,7 +514,7 @@ export function registerKBController(
   })
 
   ipcMain.handle('dialog:select-knowledge-files', async (event) => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogInLastDirectory('knowledge-files', {
       properties: ['openFile', 'multiSelections'],
       title: text('选择要导入的文档', 'Choose documents to import'),
       filters: [{ name: text('文本文件', 'Text files'), extensions: ['txt', 'md', 'markdown'] }],
@@ -533,7 +534,7 @@ export function registerKBController(
   })
 
   ipcMain.handle('dialog:select-knowledge-folder', async (event) => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogInLastDirectory('knowledge-folder', {
       properties: ['openDirectory'],
       title: text('选择要批量导入的文件夹', 'Choose a folder to import'),
     })

@@ -1,5 +1,6 @@
 import path from 'node:path'
-import { app, dialog, ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
+import { showOpenDialogInLastDirectory } from '../utils/remembered-dialog'
 import {
   ExternalFileGrantService,
   type ResolvedExternalFileGrant,
@@ -88,7 +89,7 @@ export function registerExternalFileGrantController(
   fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
 ): void {
   ipcMain.handle('dialog:select-export-directory', async (event: GrantEvent) => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogInLastDirectory('export-directory', {
       title: text('选择导出目录', 'Choose an export directory'),
       properties: ['openDirectory', 'createDirectory'],
     })

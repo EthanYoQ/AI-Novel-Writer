@@ -15,11 +15,10 @@ description: 在真实 Electron 中驱动 AI 小说作家，按场景截图、�
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm rebuild:electron
 pnpm build
 ```
 
-驱动加载的是 `dist/` 与 `dist-electron/`，改了 `src/` 或 `electron/` 必须重新 `pnpm build`。`better-sqlite3` 刚为 vitest 切到 Node ABI（`pnpm prepare:native-node`）时，先 `pnpm rebuild:electron` 再驱动。
+驱动加载的是 `dist/` 与 `dist-electron/`，改了 `src/` 或 `electron/` 必须重新 `pnpm build`。`better-sqlite3` 是 Node-API 预编译包，vitest 与 Electron 共用同一份二进制，跑测试和驱动之间不用切换。
 
 ## 命令
 
@@ -33,7 +32,7 @@ node scripts/redesign/drive.mjs --scenario <名称> ...
 - `--shell` 只对 RD-10 之前的构建（`--app-root` 指向的 trunk）有意义：不给时不碰外观里的外壳偏好（旧外壳），`stage` 选 RD-3 起的流程脊外壳，与主题在同一次写入里改，只重载一次；RD-2 及更早的 trunk 不认识 `stage`，不要传。RD-10 起的构建只有纸墨外壳，外观写在 v3 键里，没有外壳偏好：`--shell` 不必传，传 `writer` 直接报错。
 - `--video` 在每个截图点的 `run` 期间录屏：CDP `Page.startScreencast` 收帧，按帧时间戳交给本机 `ffmpeg` 编成 H.264 mp4，写到 `<场景>-<主题>.mp4`。不需要 Playwright 自带的 ffmpeg。
 - `--out` 默认 `.runtime/redesign-baseline/`（已被 git 忽略）。
-- `--app-root` 默认当前工作树。性能对照时指向 trunk 的工作树，用同一个驱动测两边；目标工作树也要先跑完上面三条命令，它加载的是自己的 `dist-electron/` 和 `better-sqlite3`。
+- `--app-root` 默认当前工作树。性能对照时指向 trunk 的工作树，用同一个驱动测两边；目标工作树也要先跑完上面两条命令，它加载的是自己的 `dist-electron/` 和 `better-sqlite3`。
 - 退出码：0 全部通过；1 有场景失败、残留进程或隔离目录外写入；2 参数错误。
 
 RD-10 删除旧外壳之后，场景分三类：
