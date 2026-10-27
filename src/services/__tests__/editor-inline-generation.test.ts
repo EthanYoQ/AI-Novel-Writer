@@ -133,3 +133,11 @@ it.each(['projectId', 'rootActionId', 'runId'] as const)('持久 epoch 不放宽
   bridge(vi.fn(async () => ({ ...stored, view: { ...stored.view, handle: { ...handle, epoch: 'session-2', [field]: '伪造' } } })))
   await expect(createEditorInlineGeneration({ ...session, leaseId: 'session-3' }).open({ handle: { ...handle, epoch: 'session-1' } })).rejects.toThrow('EDITOR_INLINE_IDENTITY_MISMATCH')
 })
+it('按意见改：恢复带回原意见，main 回的意见与提交的不同就拒绝', async () => {
+  const noted = { ...input, action: 'instruct' as const, instruction: '改成第一人称' }
+  const stored = { ...await recovery(), context: { ...(await recovery()).context, ...noted } }
+  bridge(vi.fn(async () => stored))
+  expect((await createEditorInlineGeneration(session).open({ handle })).context).toMatchObject({ action: 'instruct', instruction: '改成第一人称' })
+  bridge(vi.fn(async () => stored))
+  await expect(createEditorInlineGeneration(session).open({ input: { ...noted, instruction: '改成对话' }, modelId: '模型', uiActionNonce: '动作' })).rejects.toThrow('EDITOR_INLINE_CONTEXT_MISMATCH')
+})
