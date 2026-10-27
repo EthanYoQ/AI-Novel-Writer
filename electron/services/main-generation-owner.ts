@@ -1040,11 +1040,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     return list
   }
-  /** 蓝图页挂载时要的那份：最新一个还没写完的章节蓝图恢复稿；只读章节蓝图运行。 */
+  /** 蓝图页挂载时要的那份：最新一个还没写完的章节蓝图恢复稿；只读章节蓝图运行，读不出的跳过，不挡更早的恢复稿。 */
   const findBlueprintRecovery = (): GenerationRecoveryContext | null => {
     assertCurrent()
     for (const run of runSummaries().filter(item => item.operation === 'chapter-blueprint-directory')) {
-      const recovery = readContext(run.handle)
+      let recovery: GenerationRecoveryContext
+      try { recovery = readContext(run.handle) } catch { continue }
       if (recovery.blueprintRecovery && recovery.blueprintRecovery.writeState !== 'complete') return recovery
     }
     return null
