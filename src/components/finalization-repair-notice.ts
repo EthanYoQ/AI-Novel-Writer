@@ -6,28 +6,33 @@ type Text = (zh: string, en: string) => string
 
 export function finalizationRepairMessage(repair: DuplicateFinalizationRepair, text: Text): string {
   const chapters = repair.chapters.map(chapter => {
+    const replaced = chapter.superseded.length === 1 ? 'replaced final' : 'replaced finals'
     const versions = chapter.superseded.map(item => `v${item.version}`).join(text('、', ', '))
-    const leftovers = chapter.superseded.flatMap(item => [
-      ...(item.knowledgeDocumentId ? [text(`知识库文档 ${item.knowledgeDocumentId}`, `knowledge document ${item.knowledgeDocumentId}`)] : []),
-      ...(item.targetFileName ? [text(`实体稿 ${item.targetFileName}`, `manuscript file ${item.targetFileName}`)] : []),
-    ])
-    const head = text(
+    const files = chapter.superseded.map(item => item.targetFileName).filter(Boolean)
+    const lines = [text(
       `第 ${chapter.chapterNumber} 章：保留 v${chapter.keptVersion} 作为定稿，${versions} 改为「已被替换的定稿」。`,
-      `Chapter ${chapter.chapterNumber}: kept v${chapter.keptVersion} as the final version; ${versions} became replaced finals.`,
-    )
-    return leftovers.length === 0
-      ? head
-      : `${head}\n${text('旧定稿留下的文件：', 'Files left by the replaced finals: ')}${leftovers.join(text('；', '; '))}`
+      `Chapter ${chapter.chapterNumber}: kept v${chapter.keptVersion} as the final version; ${versions} became ${chapter.superseded.length === 1 ? 'a replaced final' : 'replaced finals'}.`,
+    )]
+    if (chapter.superseded.some(item => item.knowledgeDocumentId)) {
+      lines.push(text(
+        '这一章旧定稿的内容还留在知识库里，目前不能单独删除。',
+        `Text from this chapter's ${replaced} is still in the knowledge base and can't be removed on its own yet.`,
+      ))
+    }
+    if (files.length > 0) {
+      lines.push(text('旧定稿留下的实体稿：', `Manuscript ${files.length === 1 ? 'file' : 'files'} left by the ${replaced}: `) + files.join(text('；', '; ')))
+    }
+    return lines.join('\n')
   })
   return [
     text(
-      '这部作品有章节存着不止一份定稿（旧版本「回退到此版本」后再定稿留下的），后面的章节因此写不了。已经修好：',
-      'Some chapters had more than one final version (left by refinalizing after “Restore this version” in an older release), which blocked writing later chapters. This is now fixed:',
+      '这部作品有章节存着不止一份定稿（旧版本「回退到此版本…」后再定稿留下的），后面的章节因此写不了。已经修好：',
+      'Some chapters had more than one final version (left by refinalizing after “Revert to this version…” in an older release), which blocked writing later chapters. This is now fixed:',
     ),
     ...chapters,
     text(
-      '旧定稿的正文仍在版本历史里。它留下的知识库文档和实体稿没有自动删除，可以在知识库与正文目录里自行清理。',
-      'The replaced text is still in version history. Its knowledge documents and manuscript files were not deleted; you can remove them from the knowledge base and manuscript folder.',
+      '旧定稿的正文仍在版本历史里。它留下的实体稿没有自动删除，可以在正文目录里自行删除。',
+      'The replaced text is still in version history. Its manuscript files were not deleted; you can delete them from the manuscript folder.',
     ),
   ].join('\n\n')
 }
