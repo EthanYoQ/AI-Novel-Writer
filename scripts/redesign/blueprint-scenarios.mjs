@@ -1,6 +1,8 @@
 // RD-7 蓝图阶段与写作此章弹层的实机场景：对应计划 RD-7 的 live lane 1～10、perf 的 blueprint-timing 与评审导览。
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import fs from 'node:fs'
+import { join } from 'node:path'
 
 import { FAKE_MODEL, FIXTURE_PROSE } from './fake-model.mjs'
 import * as blueprint from './pages/blueprint.mjs'
@@ -8,6 +10,7 @@ import * as chapter from './pages/chapter.mjs'
 import * as chapterView from './pages/chapter-view.mjs'
 import * as project from './pages/project.mjs'
 import * as runSheet from './pages/run-sheet.mjs'
+import * as shell from './pages/shell.mjs'
 import * as stage from './pages/stage.mjs'
 import { contrastFailures, firstLine, seedStageSample, untilGateHolds } from './scenarios.mjs'
 import { STAGE_SAMPLE, stageChapterTitle } from './stage-sample.mjs'
@@ -117,7 +120,144 @@ const withManyBlueprints = context => seedStageSample(context, { totalChapters: 
   assert.equal((await invoke(page, 'db:blueprint-upsert-many', blueprints, path, session)).success, true)
 } })
 
+const FILLED_CHAPTER = 5
+const NULL_CHAPTER = 6
+const FILLED_FIELDS = { userGuidance: '第 5 章只写雾，不写人脸。', suspenseHook: '第 5 章结尾钟声停了。', notes: '第 5 章要点：钟绳上的纸条。' }
+
+const withFilledChapter = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path: projectPath, session }) => {
+  const current = await invoke(page, 'db:blueprint-get', FILLED_CHAPTER, projectPath, session)
+  assert.equal(current?.chapterNumber, FILLED_CHAPTER, `示例作品有第 ${FILLED_CHAPTER} 章蓝图`)
+  assert.equal((await invoke(page, 'db:blueprint-upsert', { ...current, ...FILLED_FIELDS }, projectPath, session)).success, true)
+  assert.deepEqual(await rawBlueprintRow(projectPath, NULL_CHAPTER), { user_guidance: null, suspense_hook: null, notes: null, title: stageChapterTitle(NULL_CHAPTER) },
+    `第 ${NULL_CHAPTER} 章的作者字段在库里是 NULL`)
+} })
+
+async function rawBlueprintRow(projectPath, chapterNumber) {
+  const { DatabaseSync } = await import('node:sqlite')
+  const file = join(projectPath, '.ai-novel', 'project.db')
+  assert.ok(fs.existsSync(file), `有项目库 ${file}`)
+  const db = new DatabaseSync(file, { readOnly: true })
+  try {
+    const row = db.prepare('SELECT user_guidance, suspense_hook, notes, title FROM blueprints WHERE chapter_number = ?').get(chapterNumber)
+    assert.ok(row, `库里有第 ${chapterNumber} 章蓝图行`)
+    return { ...row }
+  } finally { db.close() }
+}
+
+const chapterCard = (page, chapterNumber) => page.getByRole('region', { name: `第 ${chapterNumber} 章蓝图` })
+const nullChapterCard = page => chapterCard(page, NULL_CHAPTER)
+
+async function authorFields(page, chapterNumber) {
+  await blueprint.planItem(page, chapterNumber).click()
+  const card = chapterCard(page, chapterNumber)
+  await card.waitFor({ state: 'visible' })
+  return {
+    userGuidance: await card.getByRole('textbox', { name: /^作者微操指导/ }).inputValue(),
+    suspenseHook: await card.getByRole('textbox', { name: /^悬念钩子/ }).inputValue(),
+    notes: await card.getByRole('textbox', { name: /^章节要点/ }).inputValue(),
+  }
+}
+
+async function nullChapterFieldsAfterFilled(page) {
+  assert.deepEqual(await authorFields(page, FILLED_CHAPTER), FILLED_FIELDS, `第 ${FILLED_CHAPTER} 章显示自己的作者字段`)
+  return authorFields(page, NULL_CHAPTER)
+}
+
+async function saveWithCtrlS(page) {
+  await stage.saveStatus(page).getByText('未保存').waitFor({ state: 'visible' })
+  await page.keyboard.press('ControlOrMeta+S')
+  await stage.saveStatus(page).getByText('已保存').waitFor({ state: 'visible' })
+}
+
+async function saveOnExitWithoutClosing(app, page) {
+  const wrapped = await app.evaluate(({ ipcMain }) => {
+    const handlers = ipcMain._invokeHandlers
+    if (!(handlers instanceof Map) || typeof handlers.get('window:resolve-close') !== 'function') return false
+    const original = handlers.get('window:resolve-close')
+    globalThis.__driveResolveClose = original
+    globalThis.__driveProceeded = false
+    handlers.set('window:resolve-close', (event, requestId, decision) => {
+      if (decision !== 'proceed') return original(event, requestId, decision)
+      globalThis.__driveProceeded = true
+      return { success: true }
+    })
+    return true
+  })
+  assert.ok(wrapped, '能在主进程里替换退出放行的处理函数')
+  const exit = stage.exitDialog(page)
+  try {
+    await shell.requestWindowClose(app)
+    await exit.waitFor({ state: 'visible' })
+    await exit.getByRole('button', { name: '保存并退出' }).click()
+    for (const deadline = Date.now() + 20_000; !(await app.evaluate(() => globalThis.__driveProceeded)); await page.waitForTimeout(50)) {
+      assert.ok(Date.now() < deadline, '20 秒内保存并退出没有走到放行退出')
+    }
+  } finally {
+    await app.evaluate(({ ipcMain }) => ipcMain._invokeHandlers.set('window:resolve-close', globalThis.__driveResolveClose))
+  }
+  await exit.getByText('取消', { exact: true }).click()
+  await exit.waitFor({ state: 'hidden' })
+  await stage.saveStatus(page).getByText('已保存').waitFor({ state: 'visible' })
+}
+
 export const BLUEPRINT_SCENARIOS = {
+  'blueprint-null-field': { model: false, shell: 'stage', setup: withFilledChapter, run: async context => {
+    const { app, page, samplePath, shoot } = context
+    const empty = { userGuidance: '', suspenseHook: '', notes: '' }
+    const raw = () => rawBlueprintRow(samplePath, NULL_CHAPTER)
+    const measured = {}
+    await blueprint.open(page)
+    measured.afterSwitch = await nullChapterFieldsAfterFilled(page)
+    await shoot('blueprint-null-field-switched')
+    measured.afterSwitchBack = await nullChapterFieldsAfterFilled(page)
+    await blueprint.pageMenu(page, '重新加载蓝图')
+    measured.afterReload = await authorFields(page, NULL_CHAPTER)
+
+    await nullChapterFieldsAfterFilled(page)
+    await stage.stageButton(page, '设定').click()
+    await stage.tabList(page).getByRole('tab', { name: /^设定/, selected: true }).waitFor({ state: 'visible' })
+    await blueprint.plan(page).waitFor({ state: 'hidden' })
+    measured.dbAfterLeaving = await raw()
+
+    await blueprint.open(page)
+    await nullChapterFieldsAfterFilled(page)
+    await blueprint.titleInput(page).fill('第二盏灯亮起')
+    await saveWithCtrlS(page)
+    measured.dbAfterOtherFieldSave = await raw()
+
+    await nullChapterFieldsAfterFilled(page)
+    await blueprint.titleInput(page).fill('第二盏灯又亮起')
+    await saveOnExitWithoutClosing(app, page)
+    measured.dbAfterExitSave = await raw()
+
+    await nullChapterFieldsAfterFilled(page)
+    await nullChapterCard(page).getByRole('textbox', { name: /^作者微操指导/ }).press('End')
+    await page.keyboard.type('补一句')
+    await nullChapterCard(page).getByRole('textbox', { name: /^章节要点/ }).press('End')
+    await page.keyboard.type('补一条')
+    await saveWithCtrlS(page)
+    measured.dbAfterTyping = await raw()
+
+    await context.restart()
+    const reopened = context.page
+    await stage.openAfterRestart(reopened, STAGE_SAMPLE.name)
+    await blueprint.open(reopened)
+    measured.afterRestart = await nullChapterFieldsAfterFilled(reopened)
+    await nullChapterCard(reopened).getByRole('textbox', { name: /^作者微操指导/ }).scrollIntoViewIfNeeded()
+
+    assert.deepEqual(measured, {
+      afterSwitch: empty,
+      afterSwitchBack: empty,
+      afterReload: empty,
+      dbAfterLeaving: { user_guidance: null, suspense_hook: null, notes: null, title: stageChapterTitle(NULL_CHAPTER) },
+      dbAfterOtherFieldSave: { user_guidance: '', suspense_hook: '', notes: '', title: '第二盏灯亮起' },
+      dbAfterExitSave: { user_guidance: '', suspense_hook: '', notes: '', title: '第二盏灯又亮起' },
+      dbAfterTyping: { user_guidance: '补一句', suspense_hook: '', notes: '补一条', title: '第二盏灯又亮起' },
+      afterRestart: { ...empty, userGuidance: '补一句', notes: '补一条' },
+    }, `作者字段为 NULL 的章节既不显示也不写入上一章的作者字段：${JSON.stringify(measured)}`)
+    return measured
+  } },
+
   'blueprint-finalize-next': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: async ({ page, invoke, path, session }) => {
     for (const draft of await invoke(page, 'db:draft-list', 4, path, session)) {
       assert.equal((await invoke(page, 'db:draft-delete', draft.id, path, session)).success, true)
