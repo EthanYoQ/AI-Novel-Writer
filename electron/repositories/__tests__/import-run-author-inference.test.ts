@@ -14,6 +14,7 @@ import { captureImportGenerationContext } from '../../services/import-generation
 import { createImportRunChapterBatchCheckpointId, type ImportRunExecutionLease } from '../../../src/shared/import-run'
 import type { ImportGlobalFactsRequest } from '../../../src/shared/import-global-facts'
 import { countDraftUnits } from '../../../src/shared/draft-units'
+import { verifyM04ImportEffectLedger } from '../../migrations/m04-import-effect-ledger'
 
 let root = ''
 const RUN_ID = 'author-inference-run'
@@ -56,14 +57,13 @@ function blueprint(number: number): BlueprintData {
   }
 }
 
-/** 作者原稿已定稿后，把运行推到某个反推阶段（阶段表落地前由测试直接设定）。 */
-function authorRunAt(stage: 'global' | 'style' | 'blueprints'): ImportRunExecutionLease {
+function prepareAuthorRun(authorInference: boolean, runId = RUN_ID) {
   const finalized = CHAPTERS.map(item => ({
     chapterNumber: item.number, title: item.title, content: item.content, wordCount: countDraftUnits(item.content),
   }))
   const preview = FinalizedDraftImportRepository.preview(finalized)
-  ImportRunRepository.prepare({
-    runId: RUN_ID,
+  const prepared = ImportRunRepository.prepare({
+    runId,
     purpose: 'author-manuscript',
     sourceFingerprint: 'c'.repeat(64),
     sourceDisplay: [{ displayName: 'manuscript.txt', mediaType: 'text/plain', size: 64 }],
@@ -71,7 +71,14 @@ function authorRunAt(stage: 'global' | 'style' | 'blueprints'): ImportRunExecuti
     authorityFingerprint: preview.authorityFingerprint,
     expectedManifestFingerprint: preview.manifestFingerprint,
     chapters: CHAPTERS,
+    authorInference,
   })
+  return { preview, prepared }
+}
+
+/** 作者原稿已定稿后，把运行推到某个反推阶段。 */
+function authorRunAt(stage: 'global' | 'style' | 'blueprints'): ImportRunExecutionLease {
+  const { preview } = prepareAuthorRun(true)
   const execution = ImportRunRepository.startOrResume(RUN_ID, 'author-inference-runner').execution
   ImportRunRepository.prepareEffectReceipt({
     runId: RUN_ID, stage: 'author-commit', batchId: 'done',
@@ -223,5 +230,82 @@ describe('作者原稿蓝图阶段的进度', () => {
     ImportRunRepository.commitEffectReceipt(RUN_ID, 'blueprints', batchId, execution)
 
     expect(ImportRunRepository.get(RUN_ID)).toMatchObject({ progressCompleted: 1, progressTotal: 2 })
+  })
+})
+
+describe('authorInference 随运行冻结在导入账本里', () => {
+  it.each([true, false])('勾选为 %s 的运行重启后读回不变，重新确认同一份原稿也不改它', authorInference => {
+    expect(prepareAuthorRun(authorInference).prepared.run).toMatchObject({ authorInference })
+
+    closeProjectDatabase()
+    initProjectDatabase(root)
+
+    expect(ImportRunRepository.get(RUN_ID)).toMatchObject({ authorInference })
+    const again = prepareAuthorRun(!authorInference, 'author-inference-run-again').prepared
+    expect(again).toMatchObject({ classification: 'resumable', run: { id: RUN_ID, authorInference } })
+  })
+
+  it('勾选写下的那一行不算进度：只有它时 completedBatches 为空，作者定稿提交后只多出 author-commit', () => {
+    const { preview } = prepareAuthorRun(true)
+    const execution = ImportRunRepository.startOrResume(RUN_ID, 'runner').execution
+
+    expect(ImportRunRepository.get(RUN_ID)).toMatchObject({ authorInference: true, completedBatches: {} })
+    ImportRunRepository.prepareEffectReceipt({
+      runId: RUN_ID, stage: 'author-commit', batchId: 'done',
+      effectKey: 'author-finalized-batch', kind: 'author-finalized-batch',
+      payload: {
+        operationId: `author-import:${RUN_ID}`, runId: RUN_ID,
+        authorityFingerprint: preview.authorityFingerprint, manifestFingerprint: preview.manifestFingerprint,
+      },
+    }, execution)
+    ImportRunRepository.commitEffectReceipt(RUN_ID, 'author-commit', 'done', execution)
+
+    expect(ImportRunRepository.get(RUN_ID)!.completedBatches).toEqual({ 'author-commit': ['done'] })
+  })
+
+  it('账本行通过 M04 的账本校验', () => {
+    prepareAuthorRun(true)
+
+    expect(verifyM04ImportEffectLedger(getProjectDb()!)).toBe(true)
+  })
+
+  it('M04 之前的旧运行没有账本，仍按 completed_batches_json 读进度，反推读作未勾选', () => {
+    prepareAuthorRun(false)
+    const checkpoints = { 'author-commit': ['done'], 'author-publish': ['chapter:1', 'chapter:2'] }
+    getProjectDb()!.exec('DROP TABLE import_effect_ledger')
+    getProjectDb()!.prepare('UPDATE import_runs SET stage = ?, completed_batches_json = ? WHERE id = ?')
+      .run('author-publish', JSON.stringify(checkpoints), RUN_ID)
+
+    expect(ImportRunRepository.get(RUN_ID)).toMatchObject({ authorInference: false, completedBatches: checkpoints })
+  })
+
+  it.each([
+    [true, 'global', 'refresh'],
+    [false, 'refresh', 'global'],
+  ] as const)('勾选为 %s 时后处理之后进 %s，不能进 %s', (authorInference, allowed, refused) => {
+    prepareAuthorRun(authorInference)
+    const execution = ImportRunRepository.startOrResume(RUN_ID, 'runner').execution
+    getProjectDb()!.prepare("UPDATE import_runs SET stage = 'author-postprocess' WHERE id = ?").run(RUN_ID)
+    for (const item of CHAPTERS) ImportRunRepository.completeBatch(RUN_ID, 'author-postprocess', `chapter:${item.number}`, execution)
+
+    expect(() => ImportRunRepository.advanceStage(RUN_ID, 'author-postprocess', refused, execution))
+      .toThrow('IMPORT_RUN_STAGE_MISMATCH')
+    expect(ImportRunRepository.advanceStage(RUN_ID, 'author-postprocess', allowed, execution)).toMatchObject({ stage: allowed })
+  })
+
+  it('便携恢复冻结的旧运行只是历史：不列为可续跑、不能启动，勾选值照样可读', () => {
+    prepareAuthorRun(true)
+    fs.writeFileSync(path.join(root, '.ai-novel', 'portable-runtime-freeze.json'), JSON.stringify({
+      version: 1, originProjectId: '11111111-1111-4111-8111-111111111111', snapshotGeneration: 'snapshot-1',
+      nonReplayable: true, requiresRuntimeFreezeGuard: true, avatarReferenceProjections: [], records: [{
+        projectionId: `history:import_runs:${RUN_ID}`, table: 'import_runs', recordId: RUN_ID,
+        terminalState: 'ready', projection: {}, projectionHash: 'a'.repeat(64), excludedFields: [],
+        nonReplayable: true, originalReceiptVerified: false,
+      }],
+    }), { mode: 0o600 })
+
+    expect(ImportRunRepository.listResumable()).toEqual([])
+    expect(() => ImportRunRepository.startOrResume(RUN_ID, 'runner')).toThrow('PORTABLE_RUNTIME_FROZEN')
+    expect(ImportRunRepository.get(RUN_ID)).toMatchObject({ authorInference: true, status: 'ready' })
   })
 })
