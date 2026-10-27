@@ -21,7 +21,8 @@ afterEach(() => {
   fs.rmSync(projectRoot, { recursive: true, force: true })
 })
 
-function insertLegacyFinalized(id: number, chapterNumber: number, version: number, body: string, receipt = true): void {
+function insertLegacyFinalized(id: number, chapterNumber: number, version: number, body: string, receipt = true,
+  publication: { status: 'published' | 'pending'; targetFileName?: string } = { status: 'published' }): void {
   const db = getProjectDb()!
   db.prepare('INSERT INTO contents(id, body) VALUES(?, ?)').run(id, body)
   db.prepare("INSERT INTO drafts(id, chapter_number, version, status, content_id, word_count) VALUES(?, ?, ?, 'finalized', ?, 1)")
@@ -30,9 +31,9 @@ function insertLegacyFinalized(id: number, chapterNumber: number, version: numbe
   db.prepare(`
     INSERT INTO finalization_outbox(finalization_id, draft_id, chapter_number, chapter_title, content_hash,
       content_revision, content_snapshot, target_file_name, knowledge_document_id, publication_status)
-    VALUES(?, ?, ?, '沉船', ?, 1, ?, ?, ?, 'published')
+    VALUES(?, ?, ?, '沉船', ?, 1, ?, ?, ?, ?)
   `).run(`finalization-${id}`, id, chapterNumber, createHash('sha256').update(body).digest('hex'), body,
-    `第${chapterNumber}章 沉船${id}.txt`, `kb-${id}`)
+    publication.targetFileName ?? `第${chapterNumber}章 沉船${id}.txt`, `kb-${id}`, publication.status)
 }
 
 const statuses = () => getProjectDb()!.prepare('SELECT id, status FROM drafts ORDER BY id').all()
@@ -65,6 +66,16 @@ describe('遗留的同章重复定稿', () => {
       ],
       sequence: { status: 'continuous', nextChapterNumber: 3 },
     })
+  })
+
+  it('没发布成功的旧定稿不列实体稿：它的文件名可能已分给保留的那份定稿', () => {
+    insertLegacyFinalized(1, 1, 1, '第一章旧定稿', true, { status: 'pending', targetFileName: '第1章 沉船.txt' })
+    insertLegacyFinalized(2, 1, 2, '第一章新定稿', true, { status: 'published', targetFileName: '第1章 沉船.txt' })
+
+    expect(FinalizationRepository.repairDuplicateFinalizations().chapters).toMatchObject([{
+      keptDraftId: 2,
+      superseded: [{ draftId: 1, knowledgeDocumentId: 'kb-1', targetFileName: '' }],
+    }])
   })
 
   it('再打开一次什么也不改', () => {

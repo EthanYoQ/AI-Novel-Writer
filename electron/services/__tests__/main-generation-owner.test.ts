@@ -2539,6 +2539,25 @@ describe('main draft persistence and batch lineage', () => {
     expect(DraftRepository.getFull(saved.id)).toMatchObject({ status: 'finalized', content: revised })
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
+  it('refuses to advance a batch whose unedited final was replaced by a lower-version draft', async () => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
+    const older = '作者更早写下的第一章。'
+    f.db.prepare('INSERT INTO contents(id,body) VALUES(9001,?)').run(older)
+    f.db.prepare("INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count) VALUES(9001,1,0,'draft','write',9001,10)").run()
+    FinalizationRepository.commit({ finalizationId: 'older-final', draftId: 9001, chapterNumber: 1,
+      chapterTitle: '第一章', content: older, contentHash: textHash(older), contentRevision: 1, targetFileName: '第一章 旧.txt' })
+
+    const reopened = f.reopen()
+    expect(DraftRepository.getMeta(saved.id)?.status).toBe('superseded')
+    expect(reopened.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false })])
+    expect(() => reopened.readBatch(batch.batchId)).toThrow('GENERATION_BATCH_DRAFT_REPLACED')
+  })
   it('still lists a batch whose revised finalization was later replaced by a newer final', async () => {
     const f = drafting()
     const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
