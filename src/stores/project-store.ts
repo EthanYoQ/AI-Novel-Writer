@@ -425,7 +425,7 @@ interface ProjectState {
   updateNovelConfig: (config: Partial<NovelConfig>, expectedProjectSession?: ProjectSessionContext) => void
   /** Main validates frozen sources and writes before publishing generated fields to the UI. */
   commitGeneratedNovelConfig: (config: Partial<NovelConfig>, expectedConfig: NovelConfig, expectedProjectSession: ProjectSessionContext,
-    generationRunHandle: import('../services/generation/generation-runtime').MainGenerationRunHandle,
+    generationRunHandle: import('../services/generation/generation-runtime').MainGenerationRunHandle | undefined,
     /** Existing guarded main effect, such as an import receipt; replaces the direct core write and may return the fields it actually saved. */
     persistEffect?: () => Promise<Partial<NovelConfig> | void>) => Promise<boolean>
   /** 放弃指定项目的配置草稿并恢复到已保存基准。 */
@@ -936,6 +936,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     let config = generated
     if (persistEffect) config = (await persistEffect()) ?? generated
     else {
+      if (!generationRunHandle) throw new Error('GENERATION_FORMAL_COMMIT_FAILED')
       const result = await ipc.invokeWithProjectSession(expectedProjectSession, 'db:project-core-commit-generated',
         { data, generationRunHandle }, project.path)
       if (!result.success) throw new Error(result.error || 'GENERATION_FORMAL_COMMIT_FAILED')

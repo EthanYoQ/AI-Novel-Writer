@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { ImportFillField, ImportFillSuggestion } from '../../../shared/import-fill-empty'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
@@ -6,7 +6,7 @@ import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import type { WorkflowRun } from '../../../stores/workflow-store'
 import { adoptImportSuggestions, loadPendingImportSuggestions } from '../../../services/workflows/import-suggestions'
-import { isCurrentSessionRun } from '../../run/run-failure'
+import { projectSessionContextFromProject, sameProjectPathKey } from '../../../shared/project-session-context'
 import { POV_OPTIONS, STRUCTURE_OPTIONS } from '../setup/setup-fields'
 import { Button } from '../../ui/Button'
 
@@ -40,8 +40,13 @@ const CHOICE_NAMES = new Map<string, Pair>([...POV_OPTIONS, ...STRUCTURE_OPTIONS
 export function ImportSuggestions({ run }: { run: WorkflowRun }) {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
-  // 只在这次运行所属的作品会话里读写；换了作品就不显示。
-  const session = useProjectStore(() => isCurrentSessionRun(run) ? run.projectSession : null)
+  const project = useProjectStore(s => s.currentProject)
+  // 建议存在这次运行的收据里：同一作品重开后会话换了新的，用当前会话照样能读；换成别的作品就不显示。
+  const session = useMemo(() => {
+    const current = projectSessionContextFromProject(project)
+    return current && sameProjectPathKey(run.projectPath, current.projectPath) && current.projectId === run.projectSession?.projectId
+      ? current : null
+  }, [project, run.projectPath, run.projectSession?.projectId])
   const [items, setItems] = useState<ImportFillSuggestion[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
