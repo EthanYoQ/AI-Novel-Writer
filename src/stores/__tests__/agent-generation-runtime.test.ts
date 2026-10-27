@@ -78,7 +78,7 @@ describe('Agent GenerationRuntime boundary', () => {
 
   it('shows the context-length guidance when the provider rejects the round as too long', async () => {
     fixture.response = async () => {
-      fixture.recovery.run = { ...fixture.recovery.run, budgetDiagnostics: [{ failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } as never
+      fixture.recovery.run = { ...fixture.recovery.run, budgetDiagnostics: [{ runId: 'agent-run-0', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } as never
       return { status: 'incomplete', text: '' }
     }
     await useAgentStore.getState().sendMessage('检查项目')

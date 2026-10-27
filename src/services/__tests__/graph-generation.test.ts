@@ -89,7 +89,7 @@ it('显式取消等待晚begin，取消确切原run而不execute', async () => {
 })
 it('服务商以上下文超长拒绝时，先读回失败的运行，再以登记码失败', async () => {
   const fresh = { ...stored, view: { ...stored.view, status: 'running', artifacts: [] }, attemptCount: 0, artifact: undefined, result: undefined }
-  const settled = { ...fresh, attemptCount: 1, view: { ...fresh.view, status: 'failed', budgetDiagnostics: [{ failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } }
+  const settled = { ...fresh, attemptCount: 1, view: { ...fresh.view, status: 'failed', budgetDiagnostics: [{ runId: fresh.view.handle.runId, failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } }
   const failed = { status: 'incomplete', content: '', finishReason: 'error', receipt: { finishReason: 'error', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } }
   let executed = false
   const invoke = vi.fn(async (channel: string) => {

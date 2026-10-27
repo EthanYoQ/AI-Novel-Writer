@@ -1210,7 +1210,7 @@ describe('S07 durable task budget diagnostics', () => {
     const run = f.owner.begin(f.begin)
     const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'context-length', task })
     expect(saved.outcome).toMatchObject({ status: 'incomplete', finishReason: 'error', receipt: { failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } })
-    expect(saved.run.budgetDiagnostics![0]).toMatchObject({ failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED', actualState: 'unknown' })
+    expect(saved.run.budgetDiagnostics![0]).toMatchObject({ runId: run.handle.runId, failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED', actualState: 'unknown' })
   })
   // 实测 gemini-3.8-flash：输入 20、正文 60、思考 830、总量 910。调用记录的「输出」要和 OpenAI 一样含思考（#484）。
   it.each([
