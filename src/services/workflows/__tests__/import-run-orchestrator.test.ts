@@ -687,6 +687,67 @@ describe('ImportRunOrchestrator', () => {
     expect(getRun().stage).toBe('refresh')
   })
 
+  it.each([
+    [true, 'global'],
+    [false, 'refresh'],
+  ] as const)('作者原稿冻结的反推选项为 %s 时，后处理之后进入 %s', async (authorInference, expectedStage) => {
+    const { deps, getRun } = harness(1, {
+      purpose: 'author-manuscript', authorInference, effectNamespace: 'import:author-manuscript:run-1',
+      stage: 'author-postprocess', completedBatches: { 'author-commit': ['done'], 'author-publish': ['chapter:1'] },
+    })
+    deps.getAuthorCommitReceipt = vi.fn(async () => ({
+      operationId: 'author-import:run-1', payloadHash: 'e'.repeat(64), chapterNumbers: [1], idempotent: false,
+      drafts: [{ chapterNumber: 1, draftId: 1, finalizationId: 'final-1', contentHash: 'f'.repeat(64),
+        targetFileName: 'Chapter 1.txt', status: 'finalized' as const, publicationStatus: 'published' as const }],
+    }))
+    deps.postprocessAuthorChapter = vi.fn(async () => undefined)
+
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'author-postprocess', 'test-runner', { cancelled: false }, callbacks)
+
+    expect(getRun().stage).toBe(expectedStage)
+  })
+
+  it('作者原稿只为没有蓝图的章调模型，按连续段分批，已有蓝图的章一章也不碰', async () => {
+    const { deps, getRun } = harness(9, { purpose: 'author-manuscript', authorInference: true, stage: 'blueprints' })
+    deps.listBlueprintChapterNumbers = vi.fn(async () => new Set([3, 4, 9]))
+    const generated: number[][] = []
+    deps.inferBlueprints = vi.fn(async (chapters: ImportRunChapterSnapshot[], _batchId, _run, commit) => {
+      generated.push(chapters.map(item => item.number))
+      await commit({ blueprints: true })
+    })
+
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)
+
+    expect(generated).toEqual([[1, 2], [5, 6, 7, 8]])
+    expect(getRun().stage).toBe('refresh')
+  })
+
+  it('作者原稿续跑时重放本次运行已提交的蓝图批次，不再调模型，也不把它们当成作者已有的蓝图跳过', async () => {
+    const committedBatch = [1, 2, 3, 4, 5].map(chapter)
+    const checkpoint = createImportRunChapterBatchCheckpointId(committedBatch)
+    const { deps, receipts, getRun } = harness(7, {
+      purpose: 'author-manuscript', authorInference: true, stage: 'blueprints', completedBatches: { blueprints: [checkpoint] },
+    })
+    receipts.set(`blueprints:${checkpoint}`, {
+      schemaVersion: 1, runId: 'run-1', effectNamespace: 'import:reference:run-1', effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints', batchId: checkpoint, kind: 'chapter-blueprint-range', payloadHash: 'f'.repeat(64),
+      state: 'committed', payload: { blueprints: true }, effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    deps.listBlueprintChapterNumbers = vi.fn(async () => new Set([1, 2, 3, 4, 5]))
+    const generated: number[][] = []
+    deps.inferBlueprints = vi.fn(async (chapters: ImportRunChapterSnapshot[], _batchId, _run, commit) => {
+      generated.push(chapters.map(item => item.number))
+      await commit({ blueprints: true })
+    })
+
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)
+
+    expect(deps.replayCommittedEffect).toHaveBeenCalledTimes(1)
+    expect(generated).toEqual([[6, 7]])
+    expect(getRun().stage).toBe('refresh')
+  })
+
   it('replays a checkpointed blueprint effect so pending character sync finishes without another model call', async () => {
     const firstBatch = Array.from({ length: 5 }, (_, index) => chapter(index + 1))
     const checkpoint = createImportRunChapterBatchCheckpointId(firstBatch)
