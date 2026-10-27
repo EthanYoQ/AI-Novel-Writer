@@ -13,7 +13,7 @@ import type {
   TokenUsage,
 } from '../shared/ipc-channels'
 import type { CreativeStrategy, GenerationReasoningStage } from '../shared/reasoning-types'
-import type { ModelStage, StageModelIds } from '../shared/model-stage-routing'
+import { removeModelFromStages, type ModelStage, type StageModelIds } from '../shared/model-stage-routing'
 import { projectSessionContextFromProject } from '../shared/project-session-context'
 import { useProjectStore } from './project-store'
 
@@ -140,11 +140,11 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
       return false
     }
     await get().loadModels()
-    set({
+    set(state => ({
       defaultModelId: result.defaultModelId ?? null,
       defaultEmbeddingModelId: result.defaultEmbeddingModelId ?? null,
-      stageModelIds: result.stageModelIds ?? {},
-    })
+      stageModelIds: removeModelFromStages(state.stageModelIds, modelId).next,
+    }))
     return true
   },
 
