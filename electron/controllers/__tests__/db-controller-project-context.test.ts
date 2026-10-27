@@ -512,6 +512,64 @@ describe('database controller project context guard', () => {
     })
   })
 
+  it.each([true, false])('把作者原稿的反推勾选 %s 原样交给运行创建', async (authorInference) => {
+    const inspection = {
+      inspectionId: 'author-inference-inspection',
+      purpose: 'author-manuscript',
+      webContentsId: 9,
+      sources: [{
+        locationAliasDigest: '1'.repeat(64),
+        fileAliasDigest: '2'.repeat(64),
+        displayName: 'manuscript.txt',
+        mediaType: 'text/plain',
+        size: 21,
+      }],
+      chapters: [{
+        number: 1,
+        sourceIndex: 0,
+        sourceChapterNumber: 1,
+        title: 'Opening',
+        content: 'Confirmed author text',
+        wordCount: 21,
+        contentFingerprint: 'a'.repeat(64),
+        contentSize: 21,
+      }],
+      totalWords: 21,
+      totalBytes: 21,
+      expiresAt: Date.now() + 60_000,
+    }
+    mocks.importInspectionPeek.mockReturnValueOnce(inspection)
+    mocks.importInspectionConsume.mockReturnValueOnce(inspection)
+    mocks.finalizedDraftImportPreview.mockReturnValueOnce({
+      authorityFingerprint: 'b'.repeat(64),
+      manifestFingerprint: 'c'.repeat(64),
+    })
+    mocks.importSourceIdentityResolve.mockReturnValueOnce({
+      sourceFingerprint: 'e'.repeat(64),
+      sourceIds: ['11111111-1111-4111-8111-111111111111'],
+      sourceFingerprints: ['f'.repeat(64)],
+    })
+    mocks.importRunPrepare.mockReturnValueOnce({ classification: 'new' })
+
+    await handler('db:import-run-prepare-inspection')(
+      { sender: { id: 9 } },
+      {
+        inspectionId: inspection.inspectionId,
+        runId: 'author-inference-run',
+        purpose: 'author-manuscript',
+        locale: 'zh-CN',
+        authorityFingerprint: 'b'.repeat(64),
+        manifestFingerprint: 'c'.repeat(64),
+        authorInference,
+      },
+      'C:/projects/A',
+    )
+
+    expect(mocks.importRunPrepare).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'author-inference-run', purpose: 'author-manuscript', authorInference,
+    }))
+  })
+
   it('finalizes an already parsed run from its main-process snapshots', async () => {
     const preparation = {
       classification: 'new',
