@@ -571,6 +571,37 @@ describe('作者原稿反推的建议', () => {
     await vi.waitFor(() => expect(list()).toBeNull())
   })
 
+  it('被截断的长值可以展开看全文再收起，没被截断的短值不给展开控件', async () => {
+    const outline = ['第一幕：旧港来信', '第二幕：雾钟早鸣', '第三幕：灯塔失火', '第四幕：账册下落', '第五幕：潮退真相', '第六幕：林岚离港'].join('\n')
+    arrange({ genre: '武侠', coreOutline: '作者自己的大纲' }, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'genre', current: '武侠', inferred: '悬疑' },
+        { field: 'coreOutline', current: '作者自己的大纲', inferred: outline },
+      ] },
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    const card = (name: string) => [...host!.querySelectorAll('.run-suggestion')]
+      .find(item => item.querySelector('.run-suggestion-name')?.textContent === name) as HTMLElement | undefined
+    await vi.waitFor(() => expect(card('核心大纲')?.querySelector('[aria-expanded]')).toBeTruthy())
+    expect(card('类型')!.querySelector('[aria-expanded]')).toBeNull()
+
+    const inferred = () => [...card('核心大纲')!.querySelectorAll('dd')].at(-1)!
+    const toggle = () => card('核心大纲')!.querySelector<HTMLButtonElement>('[aria-expanded]')!
+    expect(inferred().scrollHeight).toBeGreaterThan(inferred().clientHeight)
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => toggle().click())
+    expect(toggle().getAttribute('aria-expanded')).toBe('true')
+    expect(inferred().scrollHeight).toBe(inferred().clientHeight)
+    expect(inferred().textContent).toBe(outline)
+
+    await act(async () => toggle().click())
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+    expect(inferred().scrollHeight).toBeGreaterThan(inferred().clientHeight)
+  })
+
   it('没有建议时不出现这一块', async () => {
     arrange({ genre: '悬疑' }, { global: { mode: 'fill-empty', suggestions: [] } })
     useWorkflowStore.setState({ history: [importRun()] })
