@@ -7,6 +7,9 @@ import { useWorkflowStore } from '../../../stores/workflow-store'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationSelection } from '../workflow-main-generation'
 import type { createMainGenerationTransport } from '../../generation/main-generation-transport'
 
+const mocks = vi.hoisted(() => ({ invoke: vi.fn() }))
+vi.mock('../../ipc-client', () => ({ ipc: { invokeWithProjectSession: mocks.invoke } }))
+
 const session: ProjectSessionContext = { projectId: 'novel', leaseId: 'lease', projectPath: 'C:/novel' }
 const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: 'root', runId: 'generation' }
 const view: MainGenerationRunView = { handle, budget: { maxAttempts: 1, maxRequestedOutputTokens: 100, maxRequestedOutputTokensPerAttempt: 100, deadlineAt: 1000 }, status: 'running', nonReplayable: false, artifacts: [] }
@@ -85,13 +88,16 @@ describe('stage routing at the workflow generation seam', () => {
     expect(main.begin.mock.calls.map(([, request]) => request.modelId)).toEqual(['reviewer', 'reviewer', 'reviewer'])
   })
 
-  it('resumes a stored run without reading the mapping or pinning a model', async () => {
-    const main = transport()
+  it('resumes a stored run on the model main froze for it and records that model, not the mapping', async () => {
+    useLLMStore.setState({ stageModelIds: { review: 'writer' } })
+    mocks.invoke.mockImplementation(async (_session: unknown, channel: string) => channel === 'generation:read-context' ? { modelId: 'reviewer' } : undefined)
+    const main = transport({ read: vi.fn(async () => ({ ...view, nonReplayable: true })), resume: vi.fn(async () => view) })
     const workflowContext = context()
     await open(workflowContext, { ...review, resumeHandle: handle }, main.value)
     expect(main.begin).not.toHaveBeenCalled()
-    expect(workflowContext.generationModelId).toBeUndefined()
-    expect(run()?.generationModelId).toBeUndefined()
+    expect(mocks.invoke).toHaveBeenCalledWith(session, 'generation:read-context', { handle })
+    expect(workflowContext.generationModelId).toBe('reviewer')
+    expect(run()?.generationModelId).toBe('reviewer')
   })
 
   it.each(['begin', 'navigation'] as const)('leaves nothing pinned when %s fails, so a retry routes again', async failure => {
