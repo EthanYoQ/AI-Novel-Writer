@@ -49,12 +49,14 @@ function fixture(name: string, secondName = name) {
   fs.copyFileSync(templateDb, file)
   let db = new Database(file)
   db.pragma('foreign_keys=ON')
-  db.exec("DELETE FROM project_core WHERE id='main'")
-  db.exec("INSERT INTO project_core(id,project_name,writing_language) VALUES('main','属性哈希','zh-CN')")
-  db.prepare('INSERT INTO characters(character_id,name,role) VALUES(?,?,?)').run('目标甲', name, 'supporting')
-  db.prepare('INSERT INTO characters(character_id,name,role) VALUES(?,?,?)').run('目标乙', secondName, 'supporting')
-  db.prepare('INSERT INTO characters(character_id,name,role) VALUES(?,?,?)').run('观察者', OBSERVER, 'supporting')
-  db.transaction(() => refreshCharacterIdentityProjection(db))()
+  db.transaction(() => {
+    db.exec("DELETE FROM project_core WHERE id='main'")
+    db.exec("INSERT INTO project_core(id,project_name,writing_language) VALUES('main','属性哈希','zh-CN')")
+    db.prepare('INSERT INTO characters(character_id,name,role) VALUES(?,?,?)').run('目标甲', name, 'supporting')
+    db.prepare('INSERT INTO characters(character_id,name,role) VALUES(?,?,?)').run('目标乙', secondName, 'supporting')
+    db.prepare('INSERT INTO characters(character_id,name,role) VALUES(?,?,?)').run('观察者', OBSERVER, 'supporting')
+    refreshCharacterIdentityProjection(db)
+  })()
   const dispose = () => { if (db.open) db.close(); fs.rmSync(root, { recursive: true, force: true }) }
   cleanups.push(dispose)
   const request = (operationId: string): CharacterRosterCommitRequest => {
