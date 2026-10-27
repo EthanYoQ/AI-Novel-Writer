@@ -2892,6 +2892,18 @@ describe('main draft persistence and batch lineage', () => {
       expect(list.batches.map(batch => [batch.batchId, batch.nextChapterNumber])).toEqual([[open.batchId, 2]])
       expect(list).toMatchObject({ planning: [], reviews: [], editors: [], partial: false })
     })
+    it('已保存的单章运行不列为可恢复，无论正文后来改没改过', async () => {
+      const f = drafting()
+      const current = await generate(f, { ...f.begin, uiActionNonce: 'current', authorInputs })
+      f.owner.commitDraft(current.request)
+      const changed = await generate(f, { ...f.begin, uiActionNonce: 'changed', authorInputs })
+      const saved = f.owner.commitDraft(changed.request)
+      DraftRepository.updateContent(saved.id, '作者修改后的当前正文。', 11)
+      const unsaved = await generate(f, { ...f.begin, uiActionNonce: 'unsaved', authorInputs })
+      const reopened = f.reopen()
+      expect([current, changed].map(item => reopened.readContext(item.run.handle).draftSave.kind)).toEqual(['current', 'changed'])
+      expect(runIds(reopened.listRecovery().drafts)).toEqual([unsaved.run.handle.runId])
+    })
     it('列出被取消的单章候选；只发出请求、没写出字的不列', async () => {
       const f = drafting()
       const cancelled = await generate(f, { ...f.begin, uiActionNonce: 'cancelled', authorInputs })

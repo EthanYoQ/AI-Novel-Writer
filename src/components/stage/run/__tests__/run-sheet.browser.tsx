@@ -106,6 +106,7 @@ afterEach(async () => {
   await act(async () => root?.unmount())
   host?.remove()
   setActiveProjectSessionContext(null)
+  localStorage.removeItem(`pagekin:run-recovery-hidden:${session.projectId}`)
   for (const restore of restores) restore()
   vi.restoreAllMocks()
 })
@@ -319,6 +320,32 @@ describe('运行侧页', () => {
     await act(async () => useWorkflowStore.setState({ history: [run('3', 'completed')] }))
     await vi.waitFor(() => expect(reads()).toHaveLength(2))
     expect(reads().map(([channel]) => channel)).toEqual(['generation:list-recovery', 'generation:list-recovery'])
+  })
+
+  it('单章候选点「不再显示」后，重开作品也不再出现；生成记录不动，其他候选照常显示', async () => {
+    const draftRun = (runId: string, text: string) => {
+      const handle = { projectId: session.projectId, epoch: '上次打开', rootActionId: `${runId}根`, runId }
+      return { view: { handle, status: 'cancelled', artifacts: [{ ...handle, artifactId: `${runId}片`, attemptId: `${runId}请求`, text, status: 'cancelled' }] },
+        recovery: { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: Number(runId), modelId: '原模型', authorInputs: [], attemptedPurposes: ['chapter-draft'] } }
+    }
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'generation:list-recovery'
+      ? { planning: [], editors: [], reviews: [], batches: [], partial: false, drafts: [draftRun('7', '雾里的钟声'), draftRun('8', '退潮后的石阶')] }
+      : fallback(channel, ...args))
+    const titles = () => [...host!.querySelectorAll('article h3')].map(title => title.textContent)
+    await render()
+    await vi.waitFor(() => expect(titles()).toEqual(['第7章候选', '第8章候选']))
+    const card = [...host!.querySelectorAll('article')].find(article => article.textContent?.includes('第7章候选'))!
+    await act(async () => [...card.querySelectorAll('button')].find(item => item.textContent === '不再显示')!.click())
+    expect(titles()).toEqual(['第8章候选'])
+
+    await act(async () => root!.unmount())
+    root = createRoot(host!)
+    await act(async () => useStageStore.setState({ sheet: null }))
+    await render()
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')).toHaveLength(2))
+    await vi.waitFor(() => expect(titles()).toEqual(['第8章候选']))
+    expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => !['generation:list-recovery', 'db:recovery-candidate-list'].includes(channel))).toEqual([])
   })
 
   it('恢复候选：继续编辑或放弃的调用失败时显示错误', async () => {

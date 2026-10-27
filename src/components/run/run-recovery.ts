@@ -99,7 +99,7 @@ export interface BatchEntry {
   range: { startChapter: number; endChapter: number }
 }
 
-/** 单章写作中断：勾选保留的片段续写，或沿已存细纲继续。 */
+/** 单章写作中断、没保存：勾选保留的片段续写，或沿已存细纲继续。 */
 export interface DraftEntry extends Usage {
   kind: 'draft'
   key: string
@@ -109,11 +109,9 @@ export interface DraftEntry extends Usage {
   tails: RecoveryText[]
   note: string
   actionLabel: string
-  /** 草稿已保存且正文后来改过：只能复制。 */
-  changed: boolean
   /** 没有已存的续写方案时，至少要勾选一段才能继续。 */
   needsPick: boolean
-  labels: { copy: string; tailLead: string }
+  labels: { copy: string; tailLead: string; hide: string }
   view: MainGenerationRunView
 }
 
@@ -360,31 +358,25 @@ function batchEntry(batch: GenerationBatchHistory, locale: Locale): BatchEntry {
 function draftEntry({ view, recovery }: RecoverySources['drafts'][number], locale: Locale): DraftEntry {
   const t = lang(locale)
   const unique = [...new Map([...view.artifacts, ...(view.candidates ?? [])].map(item => [item.artifactId, item])).values()]
-  const changed = recovery.draftSave.kind === 'changed'
   const outlineOnly = !recovery.composition && recovery.attemptedPurposes.every(purpose => purpose === 'chapter-draft-short-outline')
     && Boolean(recovery.draftShortOutline?.completedOutput || recovery.draftShortOutline?.retry?.kind === 'available')
   return {
     kind: 'draft',
     key: view.handle.runId,
     chapterNumber: recovery.chapterNumber,
-    title: changed ? t(`第${recovery.chapterNumber}章生成记录`, `Chapter ${recovery.chapterNumber} generation history`)
-      : t(`第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`),
+    title: t(`第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`),
     ...usageOf(view, locale),
     artifacts: withoutDraftReconciliationArtifacts(unique, recovery).filter(hasText).map(artifact => ({
-      id: artifact.artifactId, text: artifact.text, selectable: !changed && artifact.compositionEligible === true,
+      id: artifact.artifactId, text: artifact.text, selectable: artifact.compositionEligible === true,
     })),
     tails: texts(view.unsavedTails),
-    note: changed ? t('草稿已保存，正文后来已修改。请从草稿箱打开当前正文；原生成文字仍可复制。',
-      'The draft was saved and later edited. Open the current text from Drafts. The original generated text can still be copied.')
-      : t('勾选顺序决定续接顺序；未完成或来源冲突的片段仍可复制。', 'Selection order determines continuation order. Incomplete or conflicted text can still be copied.'),
-    actionLabel: changed ? t('已保存，正文已修改', 'Saved, then edited')
-      : outlineOnly ? recovery.draftShortOutline?.retry?.kind === 'available'
+    note: t('勾选顺序决定续接顺序；未完成或来源冲突的片段仍可复制。', 'Selection order determines continuation order. Incomplete or conflicted text can still be copied.'),
+    actionLabel: outlineOnly ? recovery.draftShortOutline?.retry?.kind === 'available'
         ? t('重做一次细纲并继续写稿', 'Retry outline once and continue drafting')
         : t('沿原细纲继续写稿', 'Continue drafting with the saved outline')
         : t('确认继续已选正文', 'Confirm selected draft continuation'),
-    changed,
     needsPick: !recovery.composition && !outlineOnly,
-    labels: { copy: t('复制', 'Copy'), tailLead: t('尚未落盘的正文，可先复制保留：', 'Text not yet saved; copy it to preserve it:') },
+    labels: { copy: t('复制', 'Copy'), tailLead: t('尚未落盘的正文，可先复制保留：', 'Text not yet saved; copy it to preserve it:'), hide: t('不再显示', 'Hide') },
     view,
   }
 }
@@ -411,9 +403,9 @@ function sameChapters(keys: readonly string[] | undefined, range: BatchEntry['ra
     && chapters.every((chapter, index) => chapter === range.startChapter + index)
 }
 
-/** 单章候选的续写按钮是否可点：没有改过正文，且勾了片段或有已存方案可沿用。 */
+/** 单章候选的续写按钮是否可点：勾了片段，或有已存方案可沿用。 */
 export function canResumeDraft(entry: DraftEntry, picked: readonly string[]): boolean {
-  return !entry.changed && (picked.length > 0 || !entry.needsPick)
+  return picked.length > 0 || !entry.needsPick
 }
 
 /** 列出顺序与旧 AI 输出一致：恢复稿、选区建议、审修、批量、单章，最后是旧的恢复候选表。 */

@@ -13,6 +13,7 @@ import {
   type BatchEntry, type CandidateEntry, type DraftEntry, type EditorEntry, type PlanningEntry, type RecoveryEntry, type RecoverySources, type ReviewEntry,
 } from './run-recovery'
 import { displayedErrorMessage } from '../../i18n/app-errors'
+import { hideRecovery, readHiddenRecovery } from './hidden-recovery'
 
 function currentSession(): ProjectSessionContext | null {
   return projectSessionContextFromProject(useProjectStore.getState().currentProject)
@@ -43,6 +44,8 @@ export interface RunRecovery {
   resumeReview: (entry: ReviewEntry) => void
   resumeBatch: (entry: BatchEntry) => void
   resumeDraft: (entry: DraftEntry) => void
+  /** 这张候选卡在这部作品里不再显示；生成记录不动。 */
+  hideDraft: (entry: DraftEntry) => void
 }
 
 /**
@@ -62,6 +65,9 @@ export function useRunRecovery(): RunRecovery {
   const [refreshTick, setRefreshTick] = useState(0)
   const [selection, setSelection] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
+  const projectId = session?.projectId
+  const hiddenEarlier = useMemo(() => projectId ? readHiddenRecovery(projectId) : new Set<string>(), [projectId])
+  const [hiddenNow, setHiddenNow] = useState<ReadonlySet<string>>(new Set())
 
   useEffect(() => {
     if (!session) {
@@ -98,7 +104,8 @@ export function useRunRecovery(): RunRecovery {
     if (!session) return []
     const ofSession = <T,>(loaded: Loaded<T>, empty: T) => sameProjectSessionContext(loaded.session, session) ? loaded.value : empty
     return buildRecoveryEntries({ ...ofSession(generationList, EMPTY_RECOVERY_SOURCES), candidates: ofSession(candidateList, []) }, locale)
-  }, [session, generationList, candidateList, locale])
+      .filter(entry => entry.kind !== 'draft' || !hiddenEarlier.has(entry.key) && !hiddenNow.has(entry.key))
+  }, [session, generationList, candidateList, locale, hiddenEarlier, hiddenNow])
 
   const stillCurrent = useCallback(() => session !== null && sameProjectSessionContext(session, currentSession()), [session])
 
@@ -197,6 +204,11 @@ export function useRunRecovery(): RunRecovery {
     resumeDraft: entry => {
       const picked = selection[entry.key] ?? []
       startRecovery(current => createDraftRecoveryWorkflow(current, entry.view.handle, picked.length ? [...picked] : undefined))
+    },
+    hideDraft: entry => {
+      if (!session || !stillCurrent()) return
+      hideRecovery(session.projectId, entry.view.handle.runId)
+      setHiddenNow(previous => new Set(previous).add(entry.view.handle.runId))
     },
   }
 }

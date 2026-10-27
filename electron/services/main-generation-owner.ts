@@ -1002,6 +1002,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }).filter(run => run.handle.projectId === deps.projectId)
   /**
    * 运行侧页「可恢复」区的数据。只读操作类型可能恢复的运行；一个运行读不出不挡其余运行，只标 partial。
+   * 单章写稿保存过就不再需要恢复，正文后来改没改过都一样。
    * 规划恢复稿只列没写进正式内容的：续写已完成的，或来源变了但本批已原样在正式大纲里的，都不算可恢复。
    */
   const listRecovery = (): GenerationRecoveryList => {
@@ -1017,6 +1018,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       review: (handle: MainGenerationRunHandle) => { list.reviews.push({ view: viewOf(requireRun(handle)), recovery: readReviewRevisionRecovery(handle) }) },
       editor: (handle: MainGenerationRunHandle) => { list.editors.push(readEditorInlineRecovery(handle)) },
       draft: (handle: MainGenerationRunHandle) => {
+        if (draftEffects.readRecovery(handle.runId).kind !== 'absent') return
         const view = viewOf(requireRun(handle)), recovery = readContext(handle)
         if (recovery.composition || recovery.draftShortOutline?.completedOutput || recovery.draftShortOutline?.retry?.kind === 'available'
           || withoutDraftReconciliationArtifacts([...view.artifacts, ...(view.candidates ?? [])], recovery).some(hasText)

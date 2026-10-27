@@ -50,13 +50,6 @@ describe('单章写作中断', () => {
     expect(entry.artifacts.map(item => item.id)).toEqual(['甲'])
   })
 
-  it('草稿保存后正文又改过，只能复制，不能续写', () => {
-    const entry = draft({ composition: null, draftSave: { kind: 'changed' } })
-    expect(entry).toMatchObject({ title: '第4章生成记录', actionLabel: '已保存，正文已修改', changed: true })
-    expect(entry.artifacts.every(item => !item.selectable)).toBe(true)
-    expect(canResumeDraft(entry, ['甲'])).toBe(false)
-  })
-
   it('只写完细纲时不用勾选，可重做一次细纲或沿原细纲继续', () => {
     const outline = { composition: null, attemptedPurposes: ['chapter-draft-short-outline'] }
     const retry = draft({ ...outline, draftShortOutline: { retry: { kind: 'available' } } }, [])
