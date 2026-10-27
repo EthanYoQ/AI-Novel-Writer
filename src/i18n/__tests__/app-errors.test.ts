@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appErrorMessage, displayedErrorMessage, knownAppErrorMessage } from '../app-errors'
+import { appErrorMessage, displayedErrorMessage, importGenerationStopMessage, knownAppErrorMessage } from '../app-errors'
 
 describe('localized application errors', () => {
   it('maps stable error codes to localized messages', () => {
@@ -223,4 +223,46 @@ describe('model, model settings and MCP errors from the main process (#474 B6)',
 it('names the output limit setting by its field label when that setting is invalid', () => {
   expect(appErrorMessage('zh-CN', { errorCode: 'MODEL_OUTPUT_LIMIT_INVALID' })).toContain('最大输出 Tokens')
   expect(appErrorMessage('en-US', { errorCode: 'MODEL_OUTPUT_LIMIT_INVALID' })).toContain('max output tokens')
+})
+
+describe('import generation stops (#537)', () => {
+  const restartAdvice = /重新生成|重新开始|重新导入|从头|Generate again|start (?:the import )?(?:again|over)|restart/iu
+  const blocked = ['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'] as const
+
+  it.each(['zh-CN', 'en-US'] as const)('tells a request limit, an active-time stop and a blocked generation apart in %s, with the code and no restart advice', locale => {
+    const requestLimit = importGenerationStopMessage(locale, 'ROOT_BUDGET_EXHAUSTED')
+    const activeTime = importGenerationStopMessage(locale, 'ROOT_BUDGET_EXHAUSTED', true)
+    const blockedMessages = blocked.map(code => importGenerationStopMessage(locale, code))
+    const previousAttempt = importGenerationStopMessage(locale, 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
+    const all = [requestLimit, activeTime, ...blockedMessages, previousAttempt]
+    for (const message of all) {
+      expect(message).toBeTruthy()
+      expect(message).not.toMatch(restartAdvice)
+      expect(message).not.toBe(knownAppErrorMessage(locale, 'GENERATION_DISPATCH_BLOCKED'))
+    }
+    expect(requestLimit).toContain('ROOT_BUDGET_EXHAUSTED')
+    expect(activeTime).toContain('ROOT_BUDGET_EXHAUSTED')
+    blocked.forEach((code, index) => expect(blockedMessages[index]).toContain(code))
+    expect(previousAttempt).toContain('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
+    const withoutCode = (message: string | undefined) => message!.replace(/[A-Z][A-Z0-9_]+/gu, '')
+    expect(new Set([requestLimit, activeTime, blockedMessages[0], previousAttempt].map(withoutCode)).size).toBe(4)
+    expect(new Set(blockedMessages.map(withoutCode)).size).toBe(1)
+    if (locale === 'en-US') for (const message of all) expect(message).not.toMatch(/\p{Script=Han}/u)
+  })
+
+  it.each(['GENERATION_PROVIDER_FAILED', 'GENERATION_STORAGE_FAILED', 'IMPORT_RUN_EXECUTION_STALE', 'DEADLINE_EXHAUSTED'])('leaves %s to the shared explanation', code => {
+    expect(importGenerationStopMessage('zh-CN', code)).toBeUndefined()
+  })
+
+  it.each(['GENERATION_PARENT_INVALID', 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE'])('registers a readable explanation for %s', code => {
+    for (const locale of ['zh-CN', 'en-US'] as const) {
+      const message = knownAppErrorMessage(locale, `Error invoking remote method 'generation:begin': Error: ${code}`)
+      expect(message).toBeTruthy()
+      expect(message).not.toBe(knownAppErrorMessage(locale, 'GENERATION_DISPATCH_BLOCKED'))
+    }
+  })
+
+  it.each(['ROOT_BUDGET_EXHAUSTED', 'GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED'])('keeps the shared explanation of %s for other generation paths', code => {
+    expect(knownAppErrorMessage('zh-CN', code)).toBe('这项生成已停止、暂停或用完了额度，不能再向模型发请求。需要时请重新生成。')
+  })
 })

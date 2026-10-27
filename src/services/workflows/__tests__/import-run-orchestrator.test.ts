@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/import-run'
 import { createImportRunChapterBatchCheckpointId } from '../../../shared/import-run'
 import type { FinalizedDraftImportReceipt } from '../../../shared/finalized-draft-import'
+import { importGenerationStopMessage } from '../../../i18n/app-errors'
 import {
   IMPORT_CHAPTER_PAGE_SIZE,
   IMPORT_KNOWLEDGE_BATCH_SIZE,
@@ -835,6 +836,33 @@ describe('ImportRunOrchestrator failure copy follows the import run locale', () 
     expect((failure as Error).message).toContain('missing Chapter 2')
     expect((failure as Error).message).not.toMatch(han)
     expect(getRun().lastError).toBe((failure as Error).message)
+  })
+
+  it.each([
+    ['zh-CN', 'blueprints', "Error invoking remote method 'generation:begin': Error: GENERATION_DIRECTORY_CONTINUATION_BLOCKED", 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED'],
+    ['en-US', 'global', 'ROOT_BUDGET_EXHAUSTED', 'ROOT_BUDGET_EXHAUSTED'],
+  ] as const)('stores and throws the %s import stop explanation with its code when %s generation stops on %s', async (locale, stage, raw, code) => {
+    const { deps, getRun } = harness(5, { locale, stage })
+    deps.inferGlobal = vi.fn(async () => { throw new Error(raw) })
+    deps.inferBlueprints = vi.fn(async () => { throw new Error(raw) })
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', stage, 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(importGenerationStopMessage(locale, code))
+    expect((failure as Error).message).toContain(code)
+    expect(failure).toMatchObject({ code })
+    expect(getRun()).toMatchObject({ status: 'failed', lastError: (failure as Error).message })
+  })
+
+  it('keeps an unrelated provider failure as it was', async () => {
+    const { deps, getRun } = harness(1, { stage: 'global' })
+    deps.inferGlobal = vi.fn(async () => { throw new Error('provider unavailable') })
+
+    await expect(new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'global', 'test-runner', { cancelled: false }, callbacks)).rejects.toThrow(/^provider unavailable$/u)
+    expect(getRun().lastError).toBe('provider unavailable')
   })
 
   it('uses the registered takeover explanation when lease renewal returns another execution identity', async () => {
