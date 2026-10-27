@@ -289,7 +289,7 @@ function productionDependencies(
       const { InferGlobalSettingsCommand } = await import('./commands/import-novel.command')
       await new InferGlobalSettingsCommand(undefined, async request => (
         await commit(request)
-      ) as ImportGlobalFactsReceipt).execute({ step: {} as never, context, callbacks })
+      ) as ImportGlobalFactsReceipt, run.purpose === 'author-manuscript').execute({ step: {} as never, context, callbacks })
     },
     analyzeStyle: async (chapters, run, commit) => {
       context.data.importGenerationSlot = { runId: run.id, stage: 'style', batchId: 'done' }
@@ -297,7 +297,10 @@ function productionDependencies(
       const style = await new AnalyzeWritingStyleCommand(
         { chapters: chapters.map(importedChapter) },
         undefined,
-        async (writingStyle, generationRunHandle) => { await commit({ writingStyle, ...(generationRunHandle ? { generationRunHandle } : {}) }) },
+        async (writingStyle, generationRunHandle) => {
+          const saved = await commit({ writingStyle, ...(generationRunHandle ? { generationRunHandle } : {}) }) as { writingStyle: string }
+          return saved.writingStyle
+        },
       )
         .execute({ step: {} as never, context, callbacks })
       if (!style.trim()) throw new Error(textForLocale(
@@ -315,6 +318,10 @@ function productionDependencies(
         await commit(request)
       ) as BlueprintRangeCommitReceipt).execute({ step: {} as never, context, callbacks })
     },
+    listBlueprintChapterNumbers: async () => new Set(
+      (await ipc.invokeWithProjectSession(session, 'db:blueprint-get-all', projectPath))
+        .map(blueprint => blueprint.chapterNumber),
+    ),
     commitAuthorManuscript: async (run, commit) => {
       if (!run.authorityFingerprint || !run.manifestFingerprint) {
         throw new Error(textForLocale(
@@ -513,6 +520,18 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
       params.run,
       params.authorChapterNumbers,
     )
+    const inference = params.run.authorInference === true
+    const inferenceSteps = inference ? [
+      importStep(params.run, params.executionOwner, 'global',
+        ['反推设定、架构与角色', 'Infer settings, architecture, and characters'],
+        ['只补空白的设定与架构，已有内容不动；不同的反推结果留作建议，角色以提议保存', 'Fill only empty settings and architecture; differing results become suggestions and characters become proposals.']),
+      importStep(params.run, params.executionOwner, 'style',
+        ['反推文风', 'Infer writing style'],
+        ['文风为空才写入，已有文风留作建议', 'Write the style only when it is empty; otherwise keep it as a suggestion.']),
+      importStep(params.run, params.executionOwner, 'blueprints',
+        ['为没有蓝图的章反推蓝图', 'Infer blueprints for chapters without one'],
+        ['已有蓝图的章不调用模型、不改动', 'Chapters that already have a blueprint are left untouched.']),
+    ] : []
     return {
       runId: params.run.id,
       type: 'novel_import',
@@ -527,8 +546,9 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
       resourceKeys: [
         ...authorChapterNumbers.map(chapterNumber => workflowResourceKey('chapter', chapterNumber)),
         ...FINALIZATION_SHARED_WRITE_RESOURCE_KINDS.map(kind => workflowResourceKey(kind)),
+        ...(inference ? contextReadResourceKeys : []),
       ],
-      readResourceKeys: contextReadResourceKeys,
+      readResourceKeys: inference ? [] : contextReadResourceKeys,
       ...durableCancelHooks,
       steps: [
         importStep(params.run, params.executionOwner, 'author-commit',
@@ -540,6 +560,7 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
         importStep(params.run, params.executionOwner, 'author-postprocess',
           ['更新连续性事实', 'Update continuity facts'],
           ['从权威定稿更新章节事实与角色状态，不导入参照语料', 'Update chapter facts and character state from authoritative text without importing reference prose.']),
+        ...inferenceSteps,
         importStep(params.run, params.executionOwner, 'refresh',
           ['刷新项目状态', 'Refresh project state'],
           ['刷新正文树、角色卡与定稿状态', 'Refresh the manuscript tree, character cards, and finalized status.']),
