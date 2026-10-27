@@ -176,6 +176,9 @@ describe('advanced model settings', () => {
     await expect.element(page.getByRole('status')).toHaveTextContent(
       'Max output tokens leave no safe room for the prompt',
     )
+    // ADR-0023：上下文窗口设置不影响发送，调大它不能解决拒绝。
+    await expect.element(page.getByRole('status')).not.toHaveTextContent('increase the context window')
+    await expect.element(page.getByRole('status')).toHaveTextContent('switch to a model with a longer context')
 
     await act(async () => page.getByRole('button', { name: 'Save configuration', exact: true }).click())
     await vi.waitFor(() => expect(saveModel).toHaveBeenCalledTimes(1))

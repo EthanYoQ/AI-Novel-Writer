@@ -130,6 +130,16 @@ describe('Agent hosted consumer control boundary (synthetic transport)', () => {
     expect(result.ui.onError).toHaveBeenCalledOnce()
   })
 
+  it('explains a provider context-length rejection instead of asking to retry', async () => {
+    fixture.response = async () => {
+      fixture.recovery.run = { ...fixture.recovery.run, budgetDiagnostics: [{ failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } as never
+      return { status: 'incomplete', text: '' }
+    }
+    const result = run(await client()); await result.promise
+    expect(result.ui.onError).toHaveBeenCalledOnce()
+    expect(String(result.ui.onError.mock.calls[0][0])).toMatch(/longer context|上下文更长/u)
+  })
+
   it('retains visible output and navigation after a later source conflict', async () => {
     probe()
     fixture.response = async index => { if (index) throw new Error('GENERATION_SOURCE_CHANGED'); return 'Keep this candidate.' + toolText() }
