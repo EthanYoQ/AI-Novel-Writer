@@ -618,6 +618,17 @@ describe('explicit planning recovery with real SQLite', () => {
     expect(f.owner.readContext(replacement.handle).planningContinuation).toMatchObject({ remainingRange: { from: 2, to: 3 }, targetUnits: 700 })
     expect(f.owner.readContext(run.handle).blueprintRecovery!.draft).toBe(raw)
   })
+  it('蓝图页只向主进程要章节蓝图的恢复稿，其他生成运行不读也不返回（#536）', async () => {
+    const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch)
+    expect(f.owner.findBlueprintRecovery()).toBeNull()
+    const run = f.owner.begin(directorySelection(f))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'failed', task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const draft = f.owner.begin({ ...f.begin, uiActionNonce: 'later-draft' })
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','unknown-policy') WHERE run_id=?").run(draft.handle.runId)
+    expect(f.owner.findBlueprintRecovery()).toMatchObject({ handle: run.handle, operation: 'chapter-blueprint-directory', blueprintRecovery: { draft: raw, writeState: 'ready' } })
+  })
   it('keeps author guidance and chapter notes when a full directory run regenerates existing chapters', async () => {
     const regenerated = blueprint(1, '重新生成后的关键事件。')
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()

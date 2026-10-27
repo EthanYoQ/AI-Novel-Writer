@@ -53,7 +53,7 @@ function installIpc() {
     if (channel === 'db:draft-authority-sequence') return {
       status: 'continuous', lastChapterNumber: nextChapter - 1, nextChapterNumber: nextChapter, duplicateChapterNumbers: [], authorityFingerprint: 'a'.repeat(64),
     }
-    if (channel === 'generation:list') return []
+    if (channel === 'generation:find-blueprint-recovery') return null
     if (channel === 'db:consistency-exemption-list') return []
     if (channel === 'db:blueprint-clear-all') {
       stored = []
@@ -127,6 +127,11 @@ afterEach(async () => {
 })
 
 describe('蓝图阶段', () => {
+  it('打开蓝图页只向主进程要一次章节蓝图恢复稿，不逐个读取生成运行（#536）', async () => {
+    await renderPage()
+    await vi.waitFor(() => expect(calls('generation:find-blueprint-recovery')).toHaveLength(1))
+    expect([...calls('generation:list'), ...calls('generation:read-context')]).toEqual([])
+  })
   it('主按钮是写下一章的拆分按钮，点箭头只出现小弹层', async () => {
     await renderPage()
     await expect.element(page.getByRole('button', { name: '写第 2 章' })).toBeVisible()

@@ -1039,6 +1039,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     return list
   }
+  /** 蓝图页挂载时要的那份：最新一个还没写完的章节蓝图恢复稿；只读章节蓝图运行。 */
+  const findBlueprintRecovery = (): GenerationRecoveryContext | null => {
+    assertCurrent()
+    for (const run of runSummaries().filter(item => item.operation === 'chapter-blueprint-directory')) {
+      const recovery = readContext(run.handle)
+      if (recovery.blueprintRecovery && recovery.blueprintRecovery.writeState !== 'complete') return recovery
+    }
+    return null
+  }
   const finalizationRecovery = (run: DurableGenerationRun): FinalizationGenerationRecovery => {
     assertCurrent()
     const context = readFinalizationGenerationContext(run), effect = finalizations.readEffect(run)
@@ -1485,7 +1494,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     prepareReviewRevision: (request: PrepareReviewRevisionRequest) => reviewRevisions.prepare(request),
     commitReview: (request: ReviewGenerationCommitRequest) => reviewRevisions.commitReview(request, assertSourcesCurrent),
     commitRevision: (request: RevisionGenerationCommitRequest) => reviewRevisions.commitRevision(request, assertSourcesCurrent),
-    readReviewRevisionRecovery, listRecovery,
+    readReviewRevisionRecovery, listRecovery, findBlueprintRecovery,
     readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding, retryDraftShortOutline,
     beginBatch: (request: BeginGenerationBatchRequest) => {
       assertGenerationBatchIntent(request)

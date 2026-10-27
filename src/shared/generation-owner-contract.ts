@@ -308,6 +308,7 @@ export interface GenerationOwnerChannels {
   'generation:read-batch': { args: [{ batchId: string }]; return: GenerationBatchProgress }
   'generation:list-batches': { args: []; return: GenerationBatchHistory[] }
   'generation:list-recovery': { args: []; return: GenerationRecoveryList }
+  'generation:find-blueprint-recovery': { args: []; return: GenerationRecoveryContext | null }
   'generation:confirm-batch-finalization': { args: [{ batchId: string; chapterNumber: number; finalizationId: string }]; return: GenerationBatchProgress }
   'generation:list-directory-progress': { args: []; return: DirectoryGenerationCatalog }
   'generation:compose-visible': { args: [MainGenerationRunHandle, string[], string | undefined, VisibleCompositionAlgorithm?]; return: VisibleCompositionReceipt }
