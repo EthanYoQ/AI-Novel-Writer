@@ -426,8 +426,8 @@ interface ProjectState {
   /** Main validates frozen sources and writes before publishing generated fields to the UI. */
   commitGeneratedNovelConfig: (config: Partial<NovelConfig>, expectedConfig: NovelConfig, expectedProjectSession: ProjectSessionContext,
     generationRunHandle: import('../services/generation/generation-runtime').MainGenerationRunHandle,
-    /** Existing guarded main effect, such as an import receipt; replaces the direct core write. */
-    persistEffect?: () => Promise<void>) => Promise<boolean>
+    /** Existing guarded main effect, such as an import receipt; replaces the direct core write and may return the fields it actually saved. */
+    persistEffect?: () => Promise<Partial<NovelConfig> | void>) => Promise<boolean>
   /** 放弃指定项目的配置草稿并恢复到已保存基准。 */
   discardNovelConfigDraft: (
     projectPath: string,
@@ -927,13 +927,14 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
 
-  commitGeneratedNovelConfig: async (config, expectedConfig, expectedProjectSession, generationRunHandle, persistEffect) => {
+  commitGeneratedNovelConfig: async (generated, expectedConfig, expectedProjectSession, generationRunHandle, persistEffect) => {
     const project = get().currentProject
     if (!project || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(project))
       || JSON.stringify(project.novelConfig) !== JSON.stringify(expectedConfig)) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
-    const { narrativePOV, ...coreFields } = config
+    const { narrativePOV, ...coreFields } = generated
     const data = { ...coreFields, ...(narrativePOV !== undefined ? { narrativePov: narrativePOV } : {}) }
-    if (persistEffect) await persistEffect()
+    let config = generated
+    if (persistEffect) config = (await persistEffect()) ?? generated
     else {
       const result = await ipc.invokeWithProjectSession(expectedProjectSession, 'db:project-core-commit-generated',
         { data, generationRunHandle }, project.path)

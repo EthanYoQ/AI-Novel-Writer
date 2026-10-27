@@ -31,7 +31,8 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
   constructor(
     private options: AnalyzeWritingStyleOptions = {},
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
-    private readonly persistWritingStyle?: (writingStyle: string, generationRunHandle?: MainGenerationRunHandle) => Promise<void>,
+    /** 返回实际保存下来的文风（作者原稿补空时可能保留原值）；不返回就当作照写。 */
+    private readonly persistWritingStyle?: (writingStyle: string, generationRunHandle?: MainGenerationRunHandle) => Promise<string | void>,
   ) {
     super(generationDependencies)
   }
@@ -136,7 +137,10 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
         if (!handle) throw new Error('GENERATION_COMMIT_HANDLE_REQUIRED')
         const saved = await useProjectStore.getState().commitGeneratedNovelConfig(
           { writingStyle: cleanResult }, expectedConfig, projectSession, handle,
-          this.persistWritingStyle ? () => this.persistWritingStyle!(cleanResult, handle) : undefined,
+          this.persistWritingStyle ? async () => {
+            const saved = await this.persistWritingStyle!(cleanResult, handle)
+            return saved === undefined ? undefined : { writingStyle: saved }
+          } : undefined,
         )
         if (!saved) throw new Error(text('文风特征保存失败', 'Failed to save the writing-style profile.'))
       } else if (this.persistWritingStyle) {
