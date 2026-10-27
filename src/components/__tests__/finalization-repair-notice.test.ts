@@ -54,4 +54,12 @@ describe('遗留重复定稿的修复提示', () => {
     expect(message).not.toMatch(/knowledge base/iu)
     expect(message).toContain('第4章 灯室.txt; 第4章 灯室-c3d4.txt')
   })
+
+  it('没有列出实体稿时，结尾不让作者去正文目录删文件', () => {
+    const noFiles = { chapters: [{ ...repair.chapters[0]!, superseded: [{ ...repair.chapters[0]!.superseded[0]!, targetFileName: '' }] }] }
+
+    expect(finalizationRepairMessage(noFiles, zh)).not.toContain('实体稿')
+    expect(finalizationRepairMessage(noFiles, zh)).toContain('旧定稿的正文仍在版本历史里。')
+    expect(finalizationRepairMessage(noFiles, en)).not.toMatch(/manuscript/iu)
+  })
 })
