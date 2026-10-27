@@ -66,4 +66,23 @@ describe('stage model assignments in the model store', () => {
 
     expect(useLLMStore.getState()).toMatchObject({ models: [models[0]], defaultModelId: null, stageModelIds: { planning: 'writer' } })
   })
+
+  it('keeps an assignment saved while the deletion was reloading the model list', async () => {
+    useLLMStore.setState({ models, defaultModelId: 'writer', stageModelIds: { review: 'reviewer' } })
+    let releaseList!: () => void
+    const listHeld = new Promise<void>(resolve => { releaseList = resolve })
+    mocks.invoke.mockImplementation(async (channel: string, request: unknown) => {
+      if (channel === 'llm:delete-model') return { success: true, defaultModelId: 'writer', defaultEmbeddingModelId: null, stageModelIds: {} }
+      if (channel === 'llm:list-models') { await listHeld; return [models[0]] }
+      if (channel === 'llm:set-stage-model') return { success: true, stageModelIds: { planning: (request as { modelId: string }).modelId } }
+    })
+
+    const deletion = useLLMStore.getState().deleteModel('reviewer')
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('llm:list-models'))
+    await expect(useLLMStore.getState().setStageModel('planning', 'writer')).resolves.toBe(true)
+    releaseList()
+    await expect(deletion).resolves.toBe(true)
+
+    expect(useLLMStore.getState().stageModelIds).toEqual({ planning: 'writer' })
+  })
 })
