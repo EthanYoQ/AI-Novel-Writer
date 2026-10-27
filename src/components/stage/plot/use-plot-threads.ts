@@ -39,7 +39,7 @@ import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } 
 import { toast } from '../../ui/Toast'
 import { pluralEn } from '../../../shared/plural-en'
 import { knownAppErrorMessage } from '../../../i18n/app-errors'
-import { classifyGenerationFailure } from '../../../services/generation/prompt-budget-failure'
+import { providerContextFailureText } from '../../../services/generation/prompt-budget-failure'
 
 const EMPTY_PLAN: NarrativeThreadPlanInput = {
   title: '', type: '', targetStartChapter: 1, targetEndChapter: 1, authorIntent: '',
@@ -67,13 +67,6 @@ type LocaleText = (zh: string, en: string) => string
 const SNAPSHOT_VALIDATION_ERROR_ENDINGS = [
   '无效', '不存在', '不匹配', '超出轨道章节范围', '重复', '不能有父轨道', '必须归属一条主线', '必须是现有主线', '缺少来源引用',
 ] as const
-
-function terminalProviderMessage(error: unknown, text: LocaleText): string | undefined {
-  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
-  if (classifyGenerationFailure(message, null) !== 'provider-context') return undefined
-  const zh = knownAppErrorMessage('zh-CN', message), en = knownAppErrorMessage('en-US', message)
-  return zh && en ? text(zh, en) : undefined
-}
 
 function plotTreeErrorMessage(
   error: unknown,
@@ -134,7 +127,7 @@ function plotTreeErrorMessage(
       'This generation was not saved. Recover the generation record to check its result and cancellation status.',
     )
   }
-  const providerRejection = terminalProviderMessage(error, text)
+  const providerRejection = providerContextFailureText(error, text)
   if (providerRejection) return providerRejection
   if (message === 'GRAPH_GENERATION_NOT_CONFIRMABLE') {
     return text(
@@ -346,7 +339,7 @@ export function usePlotThreads(projectKey: string, {
       if (graphClient.current === client) showGraphRecovery(value)
       assertGraphResult(value)
     } catch (error) {
-      if (graphClient.current === client) setGraphError(terminalProviderMessage(error, text) ?? text('原运行未完成，结果已保留。', 'The original run did not complete; its output is preserved.'))
+      if (graphClient.current === client) setGraphError(providerContextFailureText(error, text) ?? text('原运行未完成，结果已保留。', 'The original run did not complete; its output is preserved.'))
     } finally {
       if (graphClient.current === client) setGenerationBusy(false)
     }
@@ -651,7 +644,7 @@ export function usePlotThreads(projectKey: string, {
       setPlanCandidates(candidates)
     } catch (error) {
       if (isProjectSessionCurrent(session) && !controller.signal.aborted) {
-        setAiError(terminalProviderMessage(error, text) ?? text('未生成有效的计划候选，请重试。', 'No valid plan candidates were generated. Try again.'))
+        setAiError(providerContextFailureText(error, text) ?? text('未生成有效的计划候选，请重试。', 'No valid plan candidates were generated. Try again.'))
       }
     } finally {
       if (candidateAbortRef.current === controller) candidateAbortRef.current = null
@@ -696,7 +689,7 @@ export function usePlotThreads(projectKey: string, {
       })))
     } catch (error) {
       if (isProjectSessionCurrent(session) && !controller.signal.aborted) {
-        setAiError(terminalProviderMessage(error, text) ?? text(
+        setAiError(providerContextFailureText(error, text) ?? text(
           '未生成带有效定稿证据的事件候选，请重试。',
           'No event candidate with valid finalized evidence was generated. Try again.',
         ))

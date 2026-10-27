@@ -3,6 +3,7 @@ import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { MainGenerationRunHandle } from '../generation/generation-runtime'
 import type { AgentGenerationChannels, AgentGenerationRecovery, AgentGenerationRound, AgentToolActionRef } from '../../shared/agent-generation'
 import type { AgentTool } from './tool-registry'
+import { throwIfLastAttemptTerminal } from '../generation/generation-harness'
 
 type ClaimRequest = AgentGenerationChannels['agent-generation:claim-tool']['args'][0]
 type FinishRequest = AgentGenerationChannels['agent-generation:finish-tool']['args'][0]
@@ -57,6 +58,7 @@ export class AgentGenerationClient {
     this.assertActive()
     const round = this.recovery.rounds.find(round => round.index === index)
     if (!round) throw new Error('GENERATION_AGENT_ROUND_MISSING')
+    if (round.status !== 'completed') throwIfLastAttemptTerminal(this.recovery.run)
     return round
   }
 

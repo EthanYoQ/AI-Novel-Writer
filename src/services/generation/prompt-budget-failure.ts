@@ -1,4 +1,5 @@
 import type { Locale } from '../../i18n/types'
+import { knownAppErrorMessage } from '../../i18n/app-errors'
 import {
   PromptBudgetExceededError,
   type PromptBudgetReport,
@@ -115,6 +116,14 @@ export function classifyGenerationFailure(
   if (NETWORK_FAILURES.has(code)) return 'network'
   if (STORAGE_FAILURES.has(code)) return 'storage'
   return 'unknown'
+}
+
+/** Registered guidance when the provider rejected the request as too long; undefined for any other failure. */
+export function providerContextFailureText(error: unknown, text: (zhCNText: string, enUSText: string) => string): string | undefined {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  if (classifyGenerationFailure(message, null) !== 'provider-context') return undefined
+  const zh = knownAppErrorMessage('zh-CN', message), en = knownAppErrorMessage('en-US', message)
+  return zh && en ? text(zh, en) : undefined
 }
 
 const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode | LegacyTaskBudgetReasonCode, readonly [string, string]>> = Object.freeze({

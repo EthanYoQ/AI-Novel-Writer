@@ -478,8 +478,8 @@ export function ModelForm({
                   }}
                 >
                   {text(
-                    '最大输出 Tokens 没有给提示词留下安全空间。服务商可能以提示词超长拒绝请求；请降低最大输出或增大上下文窗口。此提示不会阻止保存。',
-                    'Max output tokens leave no safe room for the prompt. The provider may reject requests as too long; lower the output limit or increase the context window. This warning does not block saving.',
+                    '最大输出 Tokens 没有给提示词留下安全空间。服务商可能以提示词超长拒绝请求；请降低最大输出 Tokens，或换用上下文更长的模型。此提示不会阻止保存。',
+                    'Max output tokens leave no safe room for the prompt. The provider may reject requests as too long; lower max output tokens or switch to a model with a longer context. This warning does not block saving.',
                   )}
                 </p>
               )}
