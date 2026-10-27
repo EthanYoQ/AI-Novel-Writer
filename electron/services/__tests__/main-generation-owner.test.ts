@@ -513,7 +513,7 @@ describe('explicit planning recovery with real SQLite', () => {
     const repository = new GenerationRunRepository(() => f.db)
     repository.pause(run.handle.rootActionId)
 
-    expect(f.owner.list().find(view => view.handle.runId === run.handle.runId)?.plotOutline?.cursor).toEqual({ kind: 'stopped', chapterNumber: 4, reason: 'source-invalid' })
+    expect(f.owner.read(run.handle).plotOutline?.cursor).toEqual({ kind: 'stopped', chapterNumber: 4, reason: 'source-invalid' })
     const context = f.owner.readContext(run.handle)
     expect(context.plotOutlineRecovery).toMatchObject({ draft: outlineEntry(3), writeState: { kind: 'blocked', reason: 'source-invalid' } })
     expect(context.planningContinuation?.state).toBe('source-invalid')
@@ -1088,7 +1088,7 @@ describe('automatic short outline binding', () => {
     })
     const run = f.owner.begin({ ...f.begin, materialDecision: decision })
     const transport: MainGenerationTransport = {
-      read: async handle => f.owner.read(handle), list: async () => f.owner.list(),
+      read: async handle => f.owner.read(handle),
       execute: request => f.owner.execute(request), cancel: async handle => f.owner.cancel(handle),
       subscribe: (_handle, callback) => { listener = callback; return () => { listener = undefined } },
     }
@@ -2009,7 +2009,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(JSON.stringify(f.db.prepare('SELECT artifact_json FROM generation_artifacts').all())).not.toContain('隐藏')
     await f.owner.execute({ handle: view.handle, invocationNonce: 'call', task })
     expect(fetch).toHaveBeenCalledTimes(1)
-    expect(f.owner.list()[0].ledger?.physicalRequests).toBe(1)
+    expect(f.owner.read(view.handle).ledger?.physicalRequests).toBe(1)
   })
   it('retains safe stream diagnostics through the owner, SQLite reopen and snapshot IPC without retry', async () => {
     const snapshots: import('../../../src/services/generation/generation-runtime').MainGenerationSnapshot[] = []
@@ -2932,6 +2932,18 @@ describe('main draft persistence and batch lineage', () => {
       const list = f.reopen().listRecovery()
       expect(runIds(list.planning)).toEqual([run.handle.runId])
       expect(list.planning[0]!.plotOutlineRecovery).toBeDefined()
+    })
+    it('generation:list 只给身份、状态与操作类型，新的在前，不带候选全文', async () => {
+      const f = drafting()
+      const first = await generate(f, { ...f.begin, uiActionNonce: 'first', authorInputs })
+      const second = await generate(f, { ...f.begin, uiActionNonce: 'second', authorInputs })
+      f.owner.cancel(second.run.handle)
+      const reopened = f.reopen()
+      expect(reopened.list()).toEqual([
+        { handle: second.run.handle, status: 'cancelled', operation: 'chapter-draft' },
+        { handle: first.run.handle, status: 'paused', operation: 'chapter-draft' },
+      ])
+      expect(JSON.stringify(reopened.list())).not.toContain(draftText)
     })
     it('一个运行读不出时照常列出其余运行，并标出部分读取失败', async () => {
       const f = drafting()

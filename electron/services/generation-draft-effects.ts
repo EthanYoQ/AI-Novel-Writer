@@ -30,9 +30,21 @@ export function assertGenerationBatchIntent(intent: GenerationBatchIntent): void
 /** Existing generation attempt receipts are the only draft/batch ledger. */
 export class GenerationDraftEffects {
   constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository) {}
-  private attempts(runId?: string): AttemptRow[] {
-    return (runId ? this.db.prepare('SELECT attempt_id,run_id,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(runId)
-      : this.db.prepare('SELECT attempt_id,run_id,usage_receipt_json FROM generation_attempts ORDER BY rowid').all()) as AttemptRow[]
+  private attempts(runId: string): AttemptRow[] {
+    return this.db.prepare('SELECT attempt_id,run_id,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(runId) as AttemptRow[]
+  }
+  /** 按批次号分组的草稿提交收据，按提交顺序；只取这一批时传 batchId。批次号由库里的 JSON 取出，不在这里逐行解析整份收据。 */
+  batchCommits(batchId?: string): ReadonlyMap<string, AttemptRow[]> {
+    const rows = this.db.prepare(`SELECT attempt_id,run_id,usage_receipt_json,json_extract(usage_receipt_json,'$.draftCommit.batchId') AS batch_id
+      FROM generation_attempts WHERE batch_id ${batchId === undefined ? 'IS NOT NULL' : '= ?'} ORDER BY rowid`)
+      .all(...batchId === undefined ? [] : [batchId]) as (AttemptRow & { batch_id: string })[]
+    const groups = new Map<string, AttemptRow[]>()
+    for (const { batch_id: id, ...row } of rows) {
+      const group = groups.get(id)
+      if (group) group.push(row)
+      else groups.set(id, [row])
+    }
+    return groups
   }
   private verifiedCommit(row: AttemptRow) {
     const usage = JSON.parse(row.usage_receipt_json), stored = usage.draftCommit as StoredDraftCommit | undefined
@@ -69,18 +81,17 @@ export class GenerationDraftEffects {
     if (snapshot.sourceConflict) throw new Error(snapshot.sourceConflict)
     return snapshot.progress
   }
-  readBatchHistory(batchId: string, projectId: string): GenerationBatchHistory {
-    const snapshot = this.readBatchSnapshot(batchId, projectId)
+  readBatchHistory(batchId: string, projectId: string, commits = this.batchCommits(batchId)): GenerationBatchHistory {
+    const snapshot = this.readBatchSnapshot(batchId, projectId, commits)
     return { ...snapshot.progress, sourceCurrent: snapshot.sourceConflict === null }
   }
-  private readBatchSnapshot(batchId: string, projectId: string): VerifiedBatchSnapshot {
+  private readBatchSnapshot(batchId: string, projectId: string, commits = this.batchCommits(batchId)): VerifiedBatchSnapshot {
     const root = this.runs.get(batchId), intent = root.binding.sourceManifest.batchIntent as GenerationBatchIntent
     assertGenerationBatchIntent(intent)
     if (root.binding.projectId !== projectId || root.binding.sourceManifest.operation !== 'batch-chapters') throw new Error('GENERATION_BATCH_IDENTITY_INVALID')
     const completedChapters: GenerationBatchProgress['completedChapters'] = []
     let sourceConflict: BatchSourceConflict | null = null
-    for (const row of this.attempts()) {
-      if (JSON.parse(row.usage_receipt_json).draftCommit?.batchId !== batchId) continue
+    for (const row of commits.get(batchId) ?? []) {
       const saved = this.verifiedCommit(row)!
       if (!saved.matchesBody) sourceConflict ??= 'GENERATION_DRAFT_RECEIPT_INVALID'
       const committed = saved.receipt

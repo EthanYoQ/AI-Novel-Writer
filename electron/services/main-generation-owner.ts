@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, GenerationRecoveryList, ShortOutlineRetry, PlanningContinuation } from '../../src/shared/generation-owner-contract'
 import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
 import { generationOutputContract, type GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
-import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
+import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunSummary, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
 import { tokenLiability } from '../../src/shared/generation-contract'
@@ -337,10 +337,18 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         activeElapsedMs: budget.activeElapsedMs, blockedCode: budget.blockedCode }, artifacts, candidates,
       unsavedTails: service.readUnsavedTails().filter(tail => budget.attempts.some(attempt => attempt.attemptId === tail.attemptId)) }
   }
-  const list = () => {
+  /** 本作品的全部运行，新的在前；只从库里取身份、状态与操作类型，不解析整份冻结上下文。 */
+  const runSummaries = () => (deps.database.prepare(`SELECT run_id,root_action_id,status,
+      json_extract(binding_json,'$.projectId','$.epoch','$.sourceManifest.operation','$.sourceManifest.batchId','$.sourceManifest.batchIntent') AS identity
+      FROM generation_runs ORDER BY created_at_ms DESC, rowid DESC`).all() as { run_id: string; root_action_id: string; status: MainGenerationRunView['status']; identity: string }[])
+    .map(row => {
+      const [projectId, epoch, operation, batchId, batchIntent] = JSON.parse(row.identity) as [string, string, string | null, string | null, unknown]
+      return { handle: { projectId, epoch, rootActionId: row.root_action_id, runId: row.run_id }, status: row.status, operation: operation ?? undefined,
+        batchId, batchRoot: Boolean(batchIntent) }
+    }).filter(run => run.handle.projectId === deps.projectId)
+  const list = (): MainGenerationRunSummary[] => {
     assertCurrent()
-    const rows = deps.database.prepare('SELECT run_id FROM generation_runs ORDER BY created_at_ms DESC, rowid DESC').all() as { run_id: string }[]
-    return rows.map(row => repository.get(row.run_id)).filter(run => run.binding.projectId === deps.projectId).map(viewOf)
+    return runSummaries().map(({ handle, status, operation }) => ({ handle, status, operation }))
   }
   // S10B：'materialDecision'/'materialDecisionHash' 只在**取得准入之后**才可能出现在真正
   // 运行的 manifest 上（prepare 阶段早于材料装配），因此与 selectedFinalizedDraftIds 同类，
@@ -992,14 +1000,6 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const readReviewRevisionRecovery = (handle: MainGenerationRunHandle) => reviewRevisions.readRecovery(handle,
     run => compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))),
     run => viewOf(run).candidates?.at(-1))
-  /** 本作品的全部运行，新的在前；只从库里取身份与操作类型，不解析整份冻结上下文。 */
-  const runSummaries = () => (deps.database.prepare(`SELECT run_id,root_action_id,
-      json_extract(binding_json,'$.projectId','$.epoch','$.sourceManifest.operation','$.sourceManifest.batchId') AS identity
-      FROM generation_runs ORDER BY created_at_ms DESC, rowid DESC`).all() as { run_id: string; root_action_id: string; identity: string }[])
-    .map(row => {
-      const [projectId, epoch, operation, batchId] = JSON.parse(row.identity) as [string, string, string | null, string | null]
-      return { handle: { projectId, epoch, rootActionId: row.root_action_id, runId: row.run_id }, operation, batchId }
-    }).filter(run => run.handle.projectId === deps.projectId)
   /**
    * 运行侧页「可恢复」区的数据。只读操作类型可能恢复的运行；一个运行读不出不挡其余运行，只标 partial。
    * 单章写稿保存过就不再需要恢复，正文后来改没改过都一样。
@@ -1031,9 +1031,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (!kind || kind === 'draft' && run.batchId) continue
       try { collect[kind](run.handle) } catch { list.partial = true }
     }
-    for (const run of runs.filter(item => item.operation === 'batch-chapters')) {
+    const commits = draftEffects.batchCommits()
+    for (const run of runs.filter(item => item.batchRoot)) {
       try {
-        const batch = draftEffects.readBatchHistory(run.handle.runId, deps.projectId)
+        const batch = draftEffects.readBatchHistory(run.handle.runId, deps.projectId, commits)
         if (batch.nextChapterNumber !== null) list.batches.push(batch)
       } catch { list.partial = true }
     }
@@ -1503,7 +1504,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         output: 'visible-text', batchIntent: { mode, range, targetUnits } }, true)
       return readBatch(run.handle.runId)
     },
-    listBatches: () => { assertCurrent(); return list().filter(item => repository.get(item.handle.runId).binding.sourceManifest.batchIntent).map(item => draftEffects.readBatchHistory(item.handle.runId, deps.projectId)) },
+    listBatches: () => {
+      assertCurrent()
+      const commits = draftEffects.batchCommits()
+      return runSummaries().filter(run => run.batchRoot).map(run => draftEffects.readBatchHistory(run.handle.runId, deps.projectId, commits))
+    },
     confirmBatchFinalization: (request: { batchId: string; chapterNumber: number; finalizationId: string }) => {
       const batch = readBatch(request.batchId)
       if (!batch.completedChapters.some(item => item.chapterNumber === request.chapterNumber && item.finalizationId === request.finalizationId && item.postProcessComplete)) throw new Error('GENERATION_BATCH_FINALIZATION_REQUIRED')

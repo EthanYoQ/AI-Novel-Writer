@@ -1,5 +1,5 @@
 import type { GenerationTask } from '../services/generation/generation-harness'
-import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot, MainGenerationReasoningEvent } from '../services/generation/generation-runtime'
+import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunSummary, MainGenerationRunView, MainGenerationSnapshot, MainGenerationReasoningEvent } from '../services/generation/generation-runtime'
 import type { WritingSkillStage } from './writing-skills'
 import type { GenerationKnowledgeSnapshot } from './generation-knowledge'
 import type { ImportGenerationSlot } from './import-generation'
@@ -317,7 +317,7 @@ export interface GenerationOwnerChannels {
   'generation:bind-material-decision': { args: [{ handle: MainGenerationRunHandle; materialDecision: MaterialDecisionReceipt }]; return: MainGenerationRunView }
   'generation:execute': { args: [ExecuteGenerationRequest]; return: MainGenerationExecuteReceipt }
   'generation:read': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
-  'generation:list': { args: []; return: MainGenerationRunView[] }
+  'generation:list': { args: []; return: MainGenerationRunSummary[] }
   'generation:cancel': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
   'generation:pause': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
   'generation:resume': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
