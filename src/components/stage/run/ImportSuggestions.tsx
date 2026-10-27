@@ -39,25 +39,28 @@ const CHOICE_NAMES = new Map<string, Pair>([...POV_OPTIONS, ...STRUCTURE_OPTIONS
 export function ImportSuggestions({ run }: { run: WorkflowRun }) {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
-  const current = useProjectStore(() => isCurrentSessionRun(run))
+  // 只在这次运行所属的作品会话里读写；换了作品就不显示。
+  const session = useProjectStore(() => isCurrentSessionRun(run) ? run.projectSession : null)
   const [items, setItems] = useState<ImportFillSuggestion[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const reload = useCallback(() => loadPendingImportSuggestions(run.id, run.projectSession, run.projectPath), [run])
+  const reload = useCallback(async () => (
+    session ? loadPendingImportSuggestions(run.id, session, run.projectPath) : []
+  ), [run.id, run.projectPath, session])
 
   useEffect(() => {
-    if (!current) return
     let active = true
     void reload().then(next => { if (active) setItems(next) }).catch(() => undefined)
     return () => { active = false }
-  }, [current, reload])
+  }, [reload])
 
   const adopt = async (chosen: ImportFillSuggestion[]) => {
+    if (!session) return
     setBusy(true)
     setError('')
     try {
-      await adoptImportSuggestions(chosen, run.projectSession, run.projectPath)
+      await adoptImportSuggestions(chosen, session, run.projectPath)
       setItems(await reload())
     } catch (failure) {
       setError(displayedErrorMessage(locale, failure))
@@ -66,7 +69,7 @@ export function ImportSuggestions({ run }: { run: WorkflowRun }) {
     }
   }
 
-  if (!current || items.length === 0) return null
+  if (!session || items.length === 0) return null
   const show = (value: string | number) => {
     const choice = CHOICE_NAMES.get(String(value))
     return choice ? text(...choice) : String(value)

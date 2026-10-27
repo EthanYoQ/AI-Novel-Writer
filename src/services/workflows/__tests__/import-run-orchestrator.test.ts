@@ -698,7 +698,7 @@ describe('ImportRunOrchestrator', () => {
     deps.getAuthorCommitReceipt = vi.fn(async () => ({
       operationId: 'author-import:run-1', payloadHash: 'e'.repeat(64), chapterNumbers: [1], idempotent: false,
       drafts: [{ chapterNumber: 1, draftId: 1, finalizationId: 'final-1', contentHash: 'f'.repeat(64),
-        targetFileName: 'Chapter 1.txt', status: 'finalized' as const, publicationStatus: 'published' as const }],
+        targetFileName: 'Chapter 1.txt', status: 'finalized' as const, publicationStatus: 'pending' as const }],
     }))
     deps.postprocessAuthorChapter = vi.fn(async () => undefined)
 
