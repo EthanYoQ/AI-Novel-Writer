@@ -126,11 +126,7 @@ export class CharacterProposalService {
   private importPurpose(operationId: string): ImportPurpose | undefined {
     const runId = /^novel-import-global-(.+)$/u.exec(operationId)?.[1]
     if (!runId) return undefined
-    try {
-      return this.db.prepare('SELECT purpose FROM import_runs WHERE id=?').pluck().get(runId) as ImportPurpose | undefined
-    } catch {
-      return undefined
-    }
+    return this.db.prepare('SELECT purpose FROM import_runs WHERE id=?').pluck().get(runId) as ImportPurpose | undefined
   }
   listPendingFinalized(): PendingFinalizedCharacterProposalSummary[] {
     const rows = this.db.prepare('SELECT proposal_id FROM character_identity_proposals WHERE source_key=? ORDER BY proposal_id')
