@@ -57,6 +57,7 @@ export interface EditorEntry extends Usage {
   key: string
   title: string
   selectedText: string
+  instructionNote?: string
   conflictNote?: string
   suggestions: (RecoveryText & { incompleteNote?: string })[]
   tails: RecoveryText[]
@@ -232,6 +233,7 @@ function editorEntry(recovery: EditorInlineRecovery, locale: Locale): EditorEntr
     key: view.handle.runId,
     title: t('编辑器选区建议', 'Editor selection suggestion'),
     selectedText: recovery.context.selectedText,
+    instructionNote: recovery.context.action === 'instruct' ? t(`作者意见：${recovery.context.instruction}`, `Author note: ${recovery.context.instruction}`) : undefined,
     ...usageOf(view, locale),
     conflictNote: recovery.sourceStatus === 'conflict' ? t('来源已变化；原建议仍可复制。', 'Sources changed; the original suggestion can still be copied.') : undefined,
     suggestions: (view.candidates ?? view.artifacts).filter(hasText).map(artifact => ({

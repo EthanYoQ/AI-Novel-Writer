@@ -1,24 +1,26 @@
 import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react'
+import { flushSync } from 'react-dom'
 import CodeMirror, { ReactCodeMirrorRef, EditorView, ViewUpdate } from '@uiw/react-codemirror'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
 import { EditorState, type Extension } from '@codemirror/state'
 import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
-import { Sparkles, Bold, Check } from 'lucide-react'
+import { Sparkles, Bold, Check, MessageSquareText } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { paragraphIndent } from './paragraph-indent'
 import { proseTab } from './prose-tab'
 import { useThemeStore } from '../../stores/theme-store'
 import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
 import { createEditorInlineGeneration } from '../../services/editor-inline-generation'
+import { EDITOR_INLINE_INSTRUCTION_MAX_LENGTH, type EditorInlineFixedAction, type EditorInlineRequest } from '../../shared/editor-inline-generation'
 import { useLLMStore } from '../../stores/llm-store'
-import type { GenerationReasoningStage } from '../../shared/reasoning-types'
 import { countDraftUnits } from '../../shared/draft-units'
 import { useLocaleStore } from '../../stores/locale-store'
 import { displayedErrorMessage } from '../../i18n/app-errors'
 import { isTerminalProviderFailure } from '../../services/generation/generation-harness'
 import { getActiveProjectSessionContext } from '../../shared/project-session-context'
 import { livePreview, paperHeadFacet, type PaperHead } from './live-preview'
+import { commandKeyLabel, isComposing } from '../stage/shortcut-keys'
 
 export type CodeMirrorEditorProps = {
   content: string
@@ -39,19 +41,31 @@ export type CodeMirrorEditorProps = {
   paragraphIndent?: boolean
 }
 
-type EditorAIAction = {
-  key: 'refine' | 'expand' | 'continue' | 'dialogue'
-  label: readonly [string, string]
-  prompt: readonly [string, string]
-  reasoningStage: GenerationReasoningStage
+type Label = readonly [string, string]
+
+function clampBubbleLeft(centerLeft: number, halfWidth: number): number {
+  if (!halfWidth) return centerLeft
+  return Math.min(Math.max(centerLeft, halfWidth + 8), window.innerWidth - halfWidth - 8)
 }
 
-const AI_ACTIONS = [
-  { key: 'refine', label: ['润色', 'Refine'], prompt: ['润色这部分，使语言自然、具体并增强场景表现力。', 'Refine this passage for natural, specific language and stronger scene craft.'], reasoningStage: 'review' },
-  { key: 'expand', label: ['扩写', 'Expand'], prompt: ['扩写这部分，补充与情节有关的动作、感官和环境细节。', 'Expand this passage with plot-relevant action, sensory detail, and setting.'], reasoningStage: 'drafting' },
-  { key: 'continue', label: ['续写', 'Continue'], prompt: ['根据现有因果和人物动机，自然续写接下来的情节。', 'Continue naturally from the established causality and character motivation.'], reasoningStage: 'drafting' },
-  { key: 'dialogue', label: ['改成对话', 'To dialogue'], prompt: ['将这部分改写为有区分度、能推动冲突的自然对话。', 'Rewrite this passage as distinct, natural dialogue that advances the conflict.'], reasoningStage: 'drafting' },
-] satisfies readonly EditorAIAction[]
+function clampBubbleTop(bottom: number, height: number): number {
+  return Math.max(bottom, height + 8)
+}
+
+// 圈选一大段并向下滚动、选区顶部滚出视区时，气泡悬浮在视区顶部边缘，直到选区底部也滚出视区。
+function selectionBubbleTop(top: number, bottom: number, viewRect: DOMRect): number {
+  const anchor = top - 5
+  return anchor < viewRect.top + 45 ? Math.min(viewRect.top + 45, bottom - 10) : anchor
+}
+
+const AI_ACTIONS: readonly { key: EditorInlineFixedAction; label: Label }[] = [
+  { key: 'refine', label: ['润色', 'Refine'] },
+  { key: 'expand', label: ['扩写', 'Expand'] },
+  { key: 'continue', label: ['续写', 'Continue'] },
+  { key: 'dialogue', label: ['改成对话', 'To dialogue'] },
+]
+const NOTE_LABEL: Label = ['按意见改', 'Revise with note']
+const actionLabel = (action: EditorInlineRequest['action']): Label => action === 'instruct' ? NOTE_LABEL : AI_ACTIONS.find(item => item.key === action)!.label
 
 export default function CodeMirrorEditor({
   content,
@@ -125,10 +139,24 @@ export default function CodeMirrorEditor({
 
   // ===== Bubble Menu 逻辑 =====
   const [bubbleOpen, setBubbleOpen] = useState(false)
-  const [bubblePos, setBubblePos] = useState({ top: 0, left: 0 })
+  const [bubblePos, setBubblePos] = useState({ top: 0, left: 0, inView: true })
   const [aiResult, setAiResult] = useState<string | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
   const [activeAIAction, setActiveAIAction] = useState<string | null>(null)
+  const [noteDraft, setNoteDraft] = useState<string | null>(null)
+  const [activeNote, setActiveNote] = useState<string | null>(null)
+  const [bubbleSize, setBubbleSize] = useState({ width: 0, height: 0 })
+  const bubbleRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return
+    const measure = () => setBubbleSize(size => size.width === node.offsetWidth && size.height === node.offsetHeight ? size : { width: node.offsetWidth, height: node.offsetHeight })
+    measure()
+    // 同步重排，内容长高的这一帧绘制前就夹紧到位，不先画在视口外。
+    const observer = new ResizeObserver(() => flushSync(measure))
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+  const bubbleLeft = clampBubbleLeft(bubblePos.left, bubbleSize.width / 2)
+  const bubbleTop = bubblePos.inView ? clampBubbleTop(bubblePos.top, bubbleSize.height) : bubblePos.top
   const [loadingDots, setLoadingDots] = useState('.')
   const [selectionRange, setSelectionRange] = useState<{ from: number, to: number } | null>(null)
   const aiRequestSequenceRef = useRef(0)
@@ -169,12 +197,13 @@ export default function CodeMirrorEditor({
       const applicable = latest?.status === 'completed' && latest.compositionEligible === true && recovery.view.status !== 'cancelled' && recovery.sourceStatus === 'current'
       setAiError(applicable ? null : uiText('恢复的候选尚不可应用，可复制或继续原运行', 'The recovered candidate cannot be applied yet; copy it or continue the original run.'))
       setCanResumeAI(recovery.sourceStatus === 'current' && recovery.view.status !== 'cancelled' && recovery.view.ledger?.physicalRequests === 0 && candidates.length === 0)
-      setActiveAIAction(uiText(...AI_ACTIONS.find(action => action.key === target.action)!.label))
+      setActiveAIAction(uiText(...actionLabel(target.action)))
+      setActiveNote(target.action === 'instruct' ? target.instruction : null)
       const view = editorRef.current?.view
       const from = Math.min(target.from, view?.state.doc.length ?? 0)
       setSelectionRange({ from, to: Math.min(target.to, view?.state.doc.length ?? 0) })
       const coords = view?.coordsAtPos(from)
-      setBubblePos({ top: coords?.top ?? 150, left: coords?.left ?? 200 })
+      setBubblePos({ top: coords?.top ?? 150, left: coords?.left ?? 200, inView: true })
       setBubbleOpen(true)
     }).catch(() => { if (sequence === aiRequestSequenceRef.current) { setAiResult(''); setAiError(uiText('无法恢复原运行', 'The original run could not be restored.')); setBubbleOpen(true) } })
     return () => { client.detach(); aiRequestSequenceRef.current += 1 }
@@ -208,7 +237,7 @@ export default function CodeMirrorEditor({
     if (v.selectionSet || v.docChanged || v.geometryChanged) {
       const sel = v.state.selection.main
       if (sel.empty || sel.to - sel.from < 1) {
-        if (aiResult === null) { setBubbleOpen(false); setSelectionRange(null) }
+        if (aiResult === null) { setBubbleOpen(false); setSelectionRange(null); setNoteDraft(null) }
       } else {
         setSelectionRange({ from: sel.from, to: sel.to })
         // 交由下方的 useEffect 进行精准防越界座标计算与位置同步
@@ -232,12 +261,16 @@ export default function CodeMirrorEditor({
     const updatePosition = () => {
       const sel = window.getSelection()
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-        const coords = view.coordsAtPos(selectionRange.from)
-        if (coords) {
-          setBubblePos({ top: coords.top, left: coords.left })
-        } else {
+        const start = view.coordsAtPos(selectionRange.from)
+        if (!start) {
           setBubbleOpen(false)
+          return
         }
+        const viewRect = scrollDOM.getBoundingClientRect()
+        // 选区末尾不在渲染范围内时一定在起点之下，按延伸到无穷远处理。
+        const bottom = view.coordsAtPos(selectionRange.to, -1)?.bottom ?? Infinity
+        const inView = bottom >= viewRect.top && start.top <= viewRect.bottom
+        setBubblePos({ top: inView ? selectionBubbleTop(start.top, bottom, viewRect) : start.top, left: start.left, inView })
         return
       }
 
@@ -251,16 +284,7 @@ export default function CodeMirrorEditor({
         return
       }
 
-      let top = rect.top - 5 // 与选区顶部有些许间距
-      const left = rect.left + rect.width / 2
-
-      // 当用户圈选了一大段并向下滚动时，如果选区顶部滚出了视区，
-      // 我们让气泡悬浮在视区顶部边缘，直到选区底部也完全滚出视区。
-      if (top < viewRect.top + 45) {
-        top = Math.min(viewRect.top + 45, rect.bottom - 10)
-      }
-
-      setBubblePos({ top, left })
+      setBubblePos({ top: selectionBubbleTop(rect.top, rect.bottom, viewRect), left: rect.left + rect.width / 2, inView: true })
     }
 
     const onScrollOrResize = () => {
@@ -392,7 +416,7 @@ export default function CodeMirrorEditor({
   }, [mode, stablePaperHead, uiLocale, indentParagraphs])
 
   // AI 菜单处理（流式调用，实时显示生成内容）
-  const handleAIAction = async (action: EditorAIAction) => {
+  const handleAIAction = async (request: EditorInlineRequest) => {
     let requestSequence: number | null = null
     try {
       if (!selectionRange || !editorRef.current?.view || !editable) return
@@ -400,14 +424,15 @@ export default function CodeMirrorEditor({
       if (!session) throw new Error('EDITOR_INLINE_PROJECT_REQUIRED')
       const view = editorRef.current.view
       requestSequence = ++aiRequestSequenceRef.current
-      const input = { action: action.key, from: selectionRange.from, to: selectionRange.to,
+      const input = { ...request, from: selectionRange.from, to: selectionRange.to,
         selectedText: view.state.sliceDoc(selectionRange.from, selectionRange.to), documentText: view.state.doc.toString() }
       aiTargetRef.current = { ...input, requestSequence, filePath, sessionKey: JSON.stringify(session) }
       inlineRef.current?.detach()
       const client = createEditorInlineGeneration(session)
       inlineRef.current = client
       aiCandidateRef.current = null
-      setActiveAIAction(uiText(...action.label)); setAiResult(''); setAiError(null); setCanResumeAI(false)
+      setActiveAIAction(uiText(...actionLabel(request.action))); setActiveNote(request.action === 'instruct' ? request.instruction : null)
+      setNoteDraft(null); setAiResult(''); setAiError(null); setCanResumeAI(false)
       const recovery = await client.open({ input, modelId: useLLMStore.getState().defaultModelId ?? '', uiActionNonce: crypto.randomUUID() })
       if (requestSequence !== aiRequestSequenceRef.current) return
       onGenerationHandle?.(recovery.view.handle)
@@ -491,6 +516,17 @@ export default function CodeMirrorEditor({
     setBubbleOpen(false)
   }
 
+  const submitNote = () => {
+    const instruction = noteDraft ?? ''
+    if (!instruction.trim()) return
+    void handleAIAction({ action: 'instruct', instruction })
+  }
+
+  const cancelNote = () => {
+    setNoteDraft(null)
+    editorRef.current?.view?.focus()
+  }
+
   const handleRejectAI = () => {
     void inlineRef.current?.cancel().catch(() => {})
     setCanResumeAI(false)
@@ -565,13 +601,14 @@ export default function CodeMirrorEditor({
       {/* 选区工具条：纸墨浮层，自带纸墨令牌与深浅色 */}
       {bubbleOpen && (editable || aiResult !== null) && bubblePos.top !== 0 && (
         <div
+          ref={bubbleRef}
           role="toolbar"
           aria-label={uiText('选中文字的操作', 'Actions for the selected text')}
           className="paper-ink cm-selbar"
           data-theme={inkThemeName}
           data-preview={aiResult !== null || undefined}
-          style={{ top: bubblePos.top, left: bubblePos.left }}
-          onMouseDown={(e) => e.preventDefault()} // 防止编辑器失焦
+          style={{ top: bubbleTop, left: bubbleLeft }}
+          onMouseDown={(e) => { if (!(e.target instanceof HTMLTextAreaElement)) e.preventDefault() }}
         >
           {aiResult !== null ? (
             <div className="cm-selbar-preview">
@@ -581,6 +618,7 @@ export default function CodeMirrorEditor({
                   ? uiText(`${activeAIAction}预览`, `${activeAIAction} preview`)
                   : uiText('AI 预览', 'AI preview')}
               </div>
+              {activeNote && <p className="cm-selbar-note-quote">{activeNote}</p>}
               {aiError ? (
                 <>
                   <p className="cm-selbar-error" role="alert">{aiError}</p>
@@ -602,6 +640,33 @@ export default function CodeMirrorEditor({
                 ><Check size={13} aria-hidden="true" />{uiText('替换', 'Replace')}</Button>
               </div>
             </div>
+          ) : noteDraft !== null ? (
+            <form className="cm-selbar-note" onSubmit={(e) => { e.preventDefault(); submitNote() }}>
+              <div className="cm-selbar-title">
+                <MessageSquareText size={13} aria-hidden="true" />
+                {uiText(...NOTE_LABEL)}
+              </div>
+              <textarea
+                className="pi-input cm-selbar-note-input"
+                aria-label={uiText('修改意见', 'Revision note')}
+                aria-keyshortcuts="Control+Enter Meta+Enter Escape"
+                placeholder={uiText('想怎么改？例如：改成第一人称，语气更冷', 'How should it change? For example: first person, colder tone')}
+                rows={3}
+                autoFocus
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(Array.from(e.target.value).slice(0, EDITOR_INLINE_INSTRUCTION_MAX_LENGTH).join(''))}
+                onKeyDown={(e) => {
+                  if (isComposing(e.nativeEvent)) return
+                  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelNote() }
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); submitNote() }
+                }}
+              />
+              <div className="cm-selbar-actions">
+                <span className="cm-selbar-hint">{uiText(`${commandKeyLabel('Enter')} 提交`, `${commandKeyLabel('Enter')} to submit`)}</span>
+                <Button variant="secondary" size="sm" type="button" onClick={cancelNote}>{uiText('取消', 'Cancel')}</Button>
+                <Button variant="primary" size="sm" type="submit" disabled={!noteDraft.trim()}>{uiText('改写', 'Revise')}</Button>
+              </div>
+            </form>
           ) : (
             <>
               {mode === 'document' && (
@@ -625,11 +690,16 @@ export default function CodeMirrorEditor({
                 </>
               )}
               {AI_ACTIONS.map((action, index) => (
-                <Button key={action.key} variant="text" size="sm" className="cm-selbar-tool" onClick={() => handleAIAction(action)}>
+                <Button key={action.key} variant="text" size="sm" className="cm-selbar-tool" onClick={() => handleAIAction({ action: action.key })}>
                   {index === 0 && <Sparkles size={13} aria-hidden="true" />}
                   {uiText(...action.label)}
                 </Button>
               ))}
+              <span className="cm-selbar-sep" aria-hidden="true" />
+              <Button variant="text" size="sm" className="cm-selbar-tool" onClick={() => setNoteDraft('')}>
+                <MessageSquareText size={13} aria-hidden="true" />
+                {uiText(...NOTE_LABEL)}
+              </Button>
             </>
           )}
         </div>

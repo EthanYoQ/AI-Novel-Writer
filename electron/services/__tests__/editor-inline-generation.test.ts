@@ -1,3 +1,6 @@
+import { buildEditorInlineContext, editorInlineTask } from '../editor-inline-generation'
+import { composePromptSystemRole, getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
+import type { EditorInlineContext } from '../../../src/shared/editor-inline-generation'
 import { prepareCanonicalStorageFixture } from '../../../test/helpers/canonical-project-fixture'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -86,4 +89,70 @@ it('取消后晚回调不回写，未发送取消拒绝dispatch',async()=>{
  const second=f.owner.beginEditorInline({...request,uiActionNonce:'第二作者动作'}).view.handle
  f.owner.cancel(second);await expect(f.owner.executeEditorInline(second)).rejects.toThrow()
  expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+const note='把林岚改成第一人称，语气更冷'
+const noted={...request,uiActionNonce:'作者按意见改',input:{...input,action:'instruct' as const,instruction:note}}
+it.each([
+ ['缺少意见',{...input,action:'instruct'}],
+ ['意见为空白',{...input,action:'instruct',instruction:' \n '}],
+ ['意见不是字符串',{...input,action:'instruct',instruction:42}],
+ ['意见超过2000字',{...input,action:'instruct',instruction:'冷'.repeat(2001)}],
+ ['其他动作带意见',{...input,action:'refine',instruction:note}],
+ ['动作不是字符串',{...input,action:['refine']}],
+])('%s时拒绝开始运行',(_name,bad)=>{
+ const f=fixture()
+ expect(()=>f.owner.beginEditorInline({...request,input:bad as never})).toThrow('GENERATION_EDITOR_INPUT_INVALID')
+ expect(f.spy).not.toHaveBeenCalled()
+})
+it('意见里的 $$、$& 与模板占位按字面进入模型请求',async()=>{
+ const f=fixture(async()=>({finishReason:'stop',usage:null}))
+ const instruction='价格写成 $$5，保留 $& 与 {{selected_text}} 原样'
+ const handle=f.owner.beginEditorInline({...noted,input:{...noted.input,instruction}}).view.handle
+ await f.owner.executeEditorInline(handle)
+ const {task}=f.spy.mock.calls[0]![0] as {task:{messages:{role:string;content:string}[]}}
+ const user=task.messages.find(m=>m.role==='user')!.content
+ expect(user).toContain(instruction)
+ expect(user.split(input.selectedText)).toHaveLength(2)
+})
+it('意见恰好2000字可以开始运行',()=>{
+ const f=fixture(),instruction='冷'.repeat(2000)
+ expect(f.owner.beginEditorInline({...noted,input:{...noted.input,instruction}}).context).toMatchObject({action:'instruct',instruction})
+})
+it('作者意见进入模型请求，并随运行冻结到重开之后',async()=>{
+ const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:'我停下脚步。'});return {finishReason:'stop',usage:null}})
+ const handle=f.owner.beginEditorInline(noted).view.handle
+ await f.owner.executeEditorInline(handle)
+ const sent=JSON.stringify(f.spy.mock.calls[0]![0])
+ expect(sent).toContain(note)
+ expect(sent).toContain(input.selectedText)
+ const next=f.reopenStorage()
+ expect(next.readEditorInlineRecovery(handle).context).toMatchObject({action:'instruct',instruction:note,selectedText:input.selectedText})
+ expect(()=>next.beginEditorInline({...noted,input:{...noted.input,instruction:'改成对话'}})).toThrow()
+})
+
+const systemOf=(context:EditorInlineContext)=>editorInlineTask(context).messages.find(m=>m.role==='system')!.content
+it.each([
+ ['zh-CN','改成第一人称',['保留要求冲突','以作者意见为准','没提到','照常保留']],
+ ['en-US','Rewrite it in first person',['conflicts with the preservation','follow the note','does not mention','keep']],
+] as const)('%s 按意见改时，系统规则让作者意见压过内置模板的保留视角要求',(language,instruction,rule)=>{
+ const template=getBuiltinPromptTemplate('edit_selected_text',language)!
+ const system=systemOf(buildEditorInlineContext({...input,action:'instruct',instruction},language,template))
+ expect(system).toContain(template.systemRole!)
+ for(const phrase of rule) expect(system).toContain(phrase)
+ for(const action of ['refine','expand','continue','dialogue'] as const){
+  const fixed=systemOf(buildEditorInlineContext({...input,action},language,template))
+  expect(fixed).toBe(composePromptSystemRole(template,language))
+ }
+})
+
+it.each([
+ ['zh-CN','【不可变系统合同】',['下文合同','最新的作者明确事实']],
+ ['en-US','[Immutable system contract]',['the contract below','newest explicit author fact']],
+] as const)('%s 按意见删掉选区里的事实时，规则明确压过下文合同的明确事实条，合同本身逐字不变',(language,heading,rule)=>{
+ const template=getBuiltinPromptTemplate('edit_selected_text',language)!
+ const system=systemOf(buildEditorInlineContext({...input,action:'instruct',instruction:'删掉银镯这个细节'},language,template))
+ const [role,contract]=system.split(heading)
+ for(const phrase of rule) expect(role).toContain(phrase)
+ expect(contract).toBe(composePromptSystemRole(template,language).split(heading)[1])
 })

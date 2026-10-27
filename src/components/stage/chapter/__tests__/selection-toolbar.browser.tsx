@@ -39,7 +39,7 @@ async function mount(node: React.ReactNode, style: string) {
 const toolbar = () => document.querySelector<HTMLElement>('[role="toolbar"]')
 
 describe('选区工具条', () => {
-  it('旧外壳里没有纸墨作用域时自带纸墨令牌与深色主题，四个操作是纸墨按钮', async () => {
+  it('旧外壳里没有纸墨作用域时自带纸墨令牌与深色主题，五个操作是纸墨按钮', async () => {
     useThemeStore.setState({ resolvedTheme: 'dark' })
     await mount(<CodeMirrorEditor content="原文段落" mode="prose" />, 'height:400px')
     await act(async () => page.getByText('原文段落').click({ clickCount: 3 }))
@@ -47,7 +47,7 @@ describe('选区工具条', () => {
     const bar = toolbar()!
     expect([bar.classList.contains('paper-ink'), bar.dataset.theme]).toEqual([true, 'dark'])
     expect([...bar.querySelectorAll('button')].map(button => [button.textContent, button.classList.contains('pi-btn')]))
-      .toEqual([['润色', true], ['扩写', true], ['续写', true], ['改成对话', true]])
+      .toEqual([['润色', true], ['扩写', true], ['续写', true], ['改成对话', true], ['按意见改', true]])
     expect(getComputedStyle(bar).backgroundColor).toBe('rgb(24, 24, 28)')
   })
 
