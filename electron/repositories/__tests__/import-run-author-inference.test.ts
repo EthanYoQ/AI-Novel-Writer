@@ -210,3 +210,18 @@ describe('作者原稿运行的反推阶段', () => {
     expect(BlueprintRepository.getByChapter(2)).toMatchObject({ title: '作者写的第2章蓝图', userGuidance: '作者的微操' })
   })
 })
+
+describe('作者原稿蓝图阶段的进度', () => {
+  it('分母只算本次运行要反推的章：3 章里 1 章已有蓝图，提交 1 章后是 1/2', () => {
+    BlueprintRepository.upsert({ ...blueprint(2), title: '作者写的第2章蓝图' })
+    const execution = authorRunAt('blueprints')
+    const batchId = createImportRunChapterBatchCheckpointId([chapter(1)])
+    ImportRunRepository.prepareEffectReceipt({
+      runId: RUN_ID, stage: 'blueprints', batchId, effectKey: `blueprints:${batchId}`, kind: 'chapter-blueprint-range',
+      payload: { mode: 'replace-range', operationId: `import-blueprints-${RUN_ID}-1-1`, startChapter: 1, endChapter: 1, blueprints: [blueprint(1)] },
+    }, execution)
+    ImportRunRepository.commitEffectReceipt(RUN_ID, 'blueprints', batchId, execution)
+
+    expect(ImportRunRepository.get(RUN_ID)).toMatchObject({ progressCompleted: 1, progressTotal: 2 })
+  })
+})
