@@ -15,6 +15,9 @@ const releaseMonitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const upgradeFixtureScript = resolve('scripts/upgrade-data-fixture.mjs')
 const electronNodeRunner = resolve('node_modules/electron/dist/electron.exe')
 const WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS = 30_000
+// A job's first WinForms child has needed about 4.8 s on CI, where a 5 s bound failed.
+// 20 s is about 4x that, and with the 5 s close timeout still fits the integration budget.
+const WINFORMS_WINDOW_READY_SECONDS = 20
 const oldWriterIt = process.platform === 'win32' && process.env.AI_NOVEL_A11_OLD_EXE && process.env.AI_NOVEL_A11_FIXTURE_PROJECT
   ? it : it.skip
 
@@ -279,7 +282,9 @@ function runInstallerLibrary(script: string): string {
 . ${quotePowerShell(installerScript)} -InstallerPath $installer -InstallerTimeoutSeconds 12 -PostExitQuietSeconds 5 -LoadInstallerLibrary
 ${script}`,
     ],
-    { encoding: 'utf8' },
+    // The scratch-reuse case's intended EEXIST would otherwise reach the CI log;
+    // a failing call still carries stderr in its error message.
+    { encoding: 'utf8', stdio: 'pipe' },
   )
 }
 
@@ -381,7 +386,7 @@ $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($c
 $process = $null
 try {
   $process = Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-Sta', '-EncodedCommand', $encoded) -PassThru
-  $deadline = [DateTime]::UtcNow.AddSeconds(5)
+  $deadline = [DateTime]::UtcNow.AddSeconds(${WINFORMS_WINDOW_READY_SECONDS})
   do {
     Start-Sleep -Milliseconds 100
     $process.Refresh()
@@ -1241,7 +1246,7 @@ try {
       Exited: true,
       ExitCode: 0,
     })
-  }, 15_000)
+  }, WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS)
 
   windowsPowerShellIt('fails closed before invoking providers when a tracked start time no longer matches', () => {
     const output = runProbeLibrary(`
@@ -1287,7 +1292,7 @@ try {
 
     expect(result.Failure).toContain('Application process tree did not terminate')
     expect(result.Exited).toBe(false)
-  }, 15_000)
+  }, WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS)
 
   windowsPowerShellIt('accepts only the visible, titled Chromium product main window', () => {
     const output = runProbeLibrary(`
