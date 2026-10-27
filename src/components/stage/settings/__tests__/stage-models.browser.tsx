@@ -164,6 +164,14 @@ describe('分工模型设置页', () => {
     expect(host!.querySelector('h1')?.textContent).toBe('分工模型')
   })
 
+  it('「AI 模型」页在环节指定的就是默认模型时不显示另有指定的提示', async () => {
+    useLayoutStore.setState({ settingsSection: 'llm' })
+    useLLMStore.setState({ stageModelIds: { review: 'flash', drafting: 'flash' } })
+    await mount()
+    expect(host!.textContent).toContain('DeepSeek V4 Flash')
+    expect(host!.textContent).not.toContain('部分环节在「分工模型」里另有指定')
+  })
+
   it('英文界面', async () => {
     useLocaleStore.setState({ locale: 'en-US' })
     await mount()
