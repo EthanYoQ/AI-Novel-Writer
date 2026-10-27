@@ -745,10 +745,10 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       const { errorCode } = batch.failure
       const reason = (errorCode && importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline'))
         || displayedErrorMessage(context.uiLocale, batch.failure.message)
-      throw Object.assign(new Error(text(
+      throw new Error(text(
         `蓝图推演失败：${reason}`,
         englishWithReason(`Blueprint inference failed (${batch.failure.reason}).`, reason),
-      )), errorCode ? { code: errorCode } : {})
+      ))
     }
 
     this.assertNotCancelled(context)
