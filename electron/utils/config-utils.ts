@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { GlobalConfig } from '../../src/shared/ipc-channels'
-import { VELA_HOME, assertGlobalDataReady, assertGlobalPathAccess } from '../services/app-data-locator'
+import { GLOBAL_CONFIG_PATH, VELA_HOME, assertGlobalDataReady, assertGlobalPathAccess } from '../services/app-data-locator'
 export { VELA_HOME, GLOBAL_CONFIG_PATH, MODELS_CONFIG_PATH, RECENT_PROJECTS_PATH } from '../services/app-data-locator'
 
 /** Compatibility function name; only the admitted canonical generation may be created. */
@@ -134,4 +134,22 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
     host: '',
     port: 7890,
   },
+}
+
+export function isGlobalConfigRecord(value: unknown): value is GlobalConfig {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+export function updateGlobalConfig(update: (config: GlobalConfig) => GlobalConfig): boolean {
+  const current = tryReadJsonFile<unknown>(GLOBAL_CONFIG_PATH)
+  if (current.status === 'missing') {
+    writeJsonFile(GLOBAL_CONFIG_PATH, update({ ...DEFAULT_GLOBAL_CONFIG }))
+    return true
+  }
+  if (current.status === 'error' || !isGlobalConfigRecord(current.value)) {
+    console.error('[App Data] 全局配置无法解析，已拒绝覆盖:', current.status === 'error' ? current.error : 'root is not an object')
+    return false
+  }
+  writeJsonFile(GLOBAL_CONFIG_PATH, update(current.value))
+  return true
 }

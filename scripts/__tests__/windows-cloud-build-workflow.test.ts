@@ -160,7 +160,6 @@ describe('Windows cloud build workflow contract', () => {
     expect(v110Upgrade).toContain('installedV110.sourceUnchanged')
     expect(workflow.indexOf('Run complete Windows release gate')).toBeLessThan(workflow.indexOf('Qualify v1.1.0 installed setup upgrade'))
     expect(workflow.indexOf('Qualify v1.1.0 installed setup upgrade')).toBeLessThan(workflow.indexOf('Finalize Windows release evidence'))
-    expect(namedStep(workflow, 'Prepare and verify Node native modules')).toContain('pnpm run prepare:native-node')
     expect(namedStep(workflow, 'Resolve Windows test temp directory')).toContain('fs.realpathSync.native(original)')
     expect(workflow.indexOf('Resolve Windows test temp directory')).toBeLessThan(workflow.indexOf('Run complete Windows release gate'))
 

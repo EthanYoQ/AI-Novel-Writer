@@ -231,13 +231,12 @@ The Windows installer is unsigned, and the Mac installers are only ad-hoc signed
 
 ## Build from source
 
-You need Node.js 20 or later and the pnpm version pinned in the repository.
+You need Node.js 22.14 or later and the pnpm version pinned in the repository.
 
 ```sh
 git clone https://github.com/EthanYoQ/AI-Novel-Writer.git
 cd AI-Novel-Writer
 pnpm install --frozen-lockfile
-pnpm rebuild:electron
 pnpm dev
 ```
 
