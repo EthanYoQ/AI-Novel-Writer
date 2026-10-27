@@ -246,6 +246,16 @@ export interface GenerationBatchProgress extends GenerationBatchIntent {
 export interface GenerationBatchHistory extends GenerationBatchProgress {
   sourceCurrent: boolean
 }
+/** 运行侧页「可恢复」区的数据：主进程按运行的操作类型一次筛好，只读真正可能恢复的运行。 */
+export interface GenerationRecoveryList {
+  planning: GenerationRecoveryContext[]
+  editors: import('./editor-inline-generation').EditorInlineRecovery[]
+  reviews: { view: MainGenerationRunView; recovery: import('./review-revision-generation').ReviewRevisionRecovery }[]
+  batches: GenerationBatchHistory[]
+  drafts: { view: MainGenerationRunView; recovery: GenerationRecoveryContext }[]
+  /** 有运行读取失败；其余照常列出。 */
+  partial: boolean
+}
 
 /** Selection and semantic intent only. Main owns identity, source hashes and budgets. */
 export interface BeginGenerationRequest {
@@ -297,6 +307,7 @@ export interface GenerationOwnerChannels {
   'generation:begin-batch': { args: [BeginGenerationBatchRequest]; return: GenerationBatchProgress }
   'generation:read-batch': { args: [{ batchId: string }]; return: GenerationBatchProgress }
   'generation:list-batches': { args: []; return: GenerationBatchHistory[] }
+  'generation:list-recovery': { args: []; return: GenerationRecoveryList }
   'generation:confirm-batch-finalization': { args: [{ batchId: string; chapterNumber: number; finalizationId: string }]; return: GenerationBatchProgress }
   'generation:list-directory-progress': { args: []; return: DirectoryGenerationCatalog }
   'generation:compose-visible': { args: [MainGenerationRunHandle, string[], string | undefined, VisibleCompositionAlgorithm?]; return: VisibleCompositionReceipt }

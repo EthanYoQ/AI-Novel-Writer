@@ -4,7 +4,7 @@ import type { GenerationBudgetDiagnostic } from '../../services/generation/task-
 import { canCommitRecoveredReview } from '../../services/workflows/commands/review-chapter.command'
 import { withoutDraftReconciliationArtifacts } from '../../shared/draft-reconciliation'
 import type { EditorInlineRecovery } from '../../shared/editor-inline-generation'
-import type { GenerationBatchHistory, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
+import type { GenerationBatchHistory, GenerationRecoveryContext, GenerationRecoveryList } from '../../shared/generation-owner-contract'
 import { plotOutlineSourceInvalidText } from '../../shared/plot-outline-contract'
 import { pluralEn } from '../../shared/plural-en'
 import type { RecoveryCandidate } from '../../shared/recovery-candidate'
@@ -117,13 +117,9 @@ export interface DraftEntry extends Usage {
   view: MainGenerationRunView
 }
 
-export interface RecoverySources {
+/** 主进程算好的可恢复运行，加上旧恢复候选表。 */
+export interface RecoverySources extends Omit<GenerationRecoveryList, 'partial'> {
   candidates: readonly RecoveryCandidate[]
-  planning: readonly GenerationRecoveryContext[]
-  editors: readonly EditorInlineRecovery[]
-  reviews: readonly { view: MainGenerationRunView; recovery: ReviewRevisionRecovery }[]
-  batches: readonly GenerationBatchHistory[]
-  drafts: readonly { view: MainGenerationRunView; recovery: GenerationRecoveryContext }[]
 }
 
 export const EMPTY_RECOVERY_SOURCES: RecoverySources = { candidates: [], planning: [], editors: [], reviews: [], batches: [], drafts: [] }

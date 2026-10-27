@@ -1,14 +1,14 @@
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, ShortOutlineRetry, PlanningContinuation } from '../../src/shared/generation-owner-contract'
+import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, GenerationRecoveryList, ShortOutlineRetry, PlanningContinuation } from '../../src/shared/generation-owner-contract'
 import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
 import { generationOutputContract, type GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
 import { tokenLiability } from '../../src/shared/generation-contract'
-import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock } from '../../src/shared/draft-reconciliation'
+import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftReconciliationArtifacts } from '../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { getCurrentProjectPath } from '../database'
@@ -59,6 +59,12 @@ import { ProjectCoreRepository, type ProjectCoreSynopsisExpected, type ProjectCo
 // 尝试 id 都由 randomUUID 生成；recoverFrom 还拼进 nonce，只收 UUID，免得拼出别的尝试的 nonce。
 const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
 const graphOperations = { plot: 'plot-tree-snapshot', plan: 'narrative-thread-plan-candidate', event: 'narrative-thread-event-candidate' } as const
+/** 可能出现在运行侧页「可恢复」区的运行，按操作类型归类。不在表里的从不列出：定稿后处理、图生成、导入，以及随聊天隐藏的助手任务（磁盘记录保留）。 */
+const RECOVERY_KIND: ReadonlyMap<string, 'planning' | 'review' | 'editor' | 'draft'> = new Map([
+  ['generate-plot-outline', 'planning'], ['chapter-blueprint-directory', 'planning'],
+  ['review-chapter', 'review'], ['refine-draft', 'review'], ['refine-from-review', 'review'],
+  ['editor-inline', 'editor'], ['chapter-draft', 'draft'],
+] as const)
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
 export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt): SafeGenerationModelReceipt {
@@ -983,6 +989,54 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     try { current = repository.budget(run.rootActionId).root.status !== 'cancelled' && compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))) } catch { /* Original text remains readable after source or model changes. */ }
     return { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, context, sourceStatus: current ? 'current' : 'conflict' }
   }
+  const readReviewRevisionRecovery = (handle: MainGenerationRunHandle) => reviewRevisions.readRecovery(handle,
+    run => compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))),
+    run => viewOf(run).candidates?.at(-1))
+  /** 本作品的全部运行，新的在前；只从库里取身份与操作类型，不解析整份冻结上下文。 */
+  const runSummaries = () => (deps.database.prepare(`SELECT run_id,root_action_id,
+      json_extract(binding_json,'$.projectId','$.epoch','$.sourceManifest.operation','$.sourceManifest.batchId') AS identity
+      FROM generation_runs ORDER BY created_at_ms DESC, rowid DESC`).all() as { run_id: string; root_action_id: string; identity: string }[])
+    .map(row => {
+      const [projectId, epoch, operation, batchId] = JSON.parse(row.identity) as [string, string, string | null, string | null]
+      return { handle: { projectId, epoch, rootActionId: row.root_action_id, runId: row.run_id }, operation, batchId }
+    }).filter(run => run.handle.projectId === deps.projectId)
+  /**
+   * 运行侧页「可恢复」区的数据。只读操作类型可能恢复的运行；一个运行读不出不挡其余运行，只标 partial。
+   * 规划恢复稿只列没写进正式内容的：续写已完成的，或来源变了但本批已原样在正式大纲里的，都不算可恢复。
+   */
+  const listRecovery = (): GenerationRecoveryList => {
+    assertCurrent()
+    const list: GenerationRecoveryList = { planning: [], editors: [], reviews: [], batches: [], drafts: [], partial: false }
+    const hasText = (item: { text: string }) => item.text.trim().length > 0
+    const collect = {
+      planning: (handle: MainGenerationRunHandle) => {
+        const recovery = readContext(handle)
+        if ((recovery.plotOutlineRecovery || recovery.blueprintRecovery) && recovery.planningContinuation?.state !== 'complete'
+          && !recovery.plotOutlineRecovery?.inFormalOutline) list.planning.push(recovery)
+      },
+      review: (handle: MainGenerationRunHandle) => { list.reviews.push({ view: viewOf(requireRun(handle)), recovery: readReviewRevisionRecovery(handle) }) },
+      editor: (handle: MainGenerationRunHandle) => { list.editors.push(readEditorInlineRecovery(handle)) },
+      draft: (handle: MainGenerationRunHandle) => {
+        const view = viewOf(requireRun(handle)), recovery = readContext(handle)
+        if (recovery.composition || recovery.draftShortOutline?.completedOutput || recovery.draftShortOutline?.retry?.kind === 'available'
+          || withoutDraftReconciliationArtifacts([...view.artifacts, ...(view.candidates ?? [])], recovery).some(hasText)
+          || view.unsavedTails?.some(hasText)) list.drafts.push({ view, recovery })
+      },
+    }
+    const runs = runSummaries()
+    for (const run of runs) {
+      const kind = RECOVERY_KIND.get(run.operation ?? '')
+      if (!kind || kind === 'draft' && run.batchId) continue
+      try { collect[kind](run.handle) } catch { list.partial = true }
+    }
+    for (const run of runs.filter(item => item.operation === 'batch-chapters')) {
+      try {
+        const batch = draftEffects.readBatchHistory(run.handle.runId, deps.projectId)
+        if (batch.nextChapterNumber !== null) list.batches.push(batch)
+      } catch { list.partial = true }
+    }
+    return list
+  }
   const finalizationRecovery = (run: DurableGenerationRun): FinalizationGenerationRecovery => {
     assertCurrent()
     const context = readFinalizationGenerationContext(run), effect = finalizations.readEffect(run)
@@ -1429,9 +1483,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     prepareReviewRevision: (request: PrepareReviewRevisionRequest) => reviewRevisions.prepare(request),
     commitReview: (request: ReviewGenerationCommitRequest) => reviewRevisions.commitReview(request, assertSourcesCurrent),
     commitRevision: (request: RevisionGenerationCommitRequest) => reviewRevisions.commitRevision(request, assertSourcesCurrent),
-    readReviewRevisionRecovery: (handle: MainGenerationRunHandle) => reviewRevisions.readRecovery(handle,
-      run => compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))),
-      run => viewOf(run).candidates?.at(-1)),
+    readReviewRevisionRecovery, listRecovery,
     readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding, retryDraftShortOutline,
     beginBatch: (request: BeginGenerationBatchRequest) => {
       assertGenerationBatchIntent(request)

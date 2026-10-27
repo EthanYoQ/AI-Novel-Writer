@@ -34,6 +34,7 @@ let root: Root | undefined
 let host: HTMLDivElement | undefined
 let candidates: RecoveryCandidate[]
 let batches: unknown[]
+let listeners: Map<string, (data: unknown) => void>
 let invoke: ReturnType<typeof vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>>
 
 function run(id: string, status: WorkflowRun['status'], extra: Partial<WorkflowRun> = {}): WorkflowRun {
@@ -76,8 +77,8 @@ beforeEach(() => {
   batches = []
   invoke = vi.fn(async (channel: string) => {
     if (channel === 'db:recovery-candidate-list') return candidates
-    if (channel === 'generation:list-batches') return batches
-    if (channel === 'generation:list' || channel === 'skills:list-user') return []
+    if (channel === 'generation:list-recovery') return { planning: [], editors: [], reviews: [], drafts: [], batches, partial: false }
+    if (channel === 'skills:list-user') return []
     if (channel === 'fs:check-exists') return false
     if (channel === 'db:recovery-candidate-resolve') return { success: true }
     if (channel === 'db:get-llm-stats') return { totalCalls: 3, successfulCalls: 2, failedCalls: 1, knownUsageCalls: 3, totalTokens: 21400, totalPromptTokens: 15200, totalCompletionTokens: 6200 }
@@ -85,7 +86,11 @@ beforeEach(() => {
       durationMs: 41000, success: true, createdAt: '2026-10-12T08:31:00.000Z' }]
     throw new Error(`未配置调用：${channel}`)
   })
-  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
+  listeners = new Map()
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: (channel: string, callback: (data: unknown) => void) => {
+    listeners.set(channel, callback)
+    return () => listeners.delete(channel)
+  } } })
   useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, sessionLease: session.leaseId, name: '灯塔', novelConfig: {} } as unknown as ProjectData })
   setActiveProjectSessionContext(session)
   useWorkflowStore.setState({ activeRuns: [], history: [], waitingRuns: {}, globalLogs: [] })
@@ -172,7 +177,7 @@ describe('运行侧页', () => {
     const paused = run('5', 'paused', { type: 'batch_generate', resourceKeys: ['chapter:3', 'chapter:4', 'chapter:5'] })
     useWorkflowStore.setState({ activeRuns: [paused] })
     await render()
-    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'generation:list-batches')).toBe(true))
+    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'generation:list-recovery')).toBe(true))
     await act(async () => {})
     expect(button('继续批量创作')).toBeTruthy()
     expect(button('继续此批次')).toBeUndefined()
@@ -243,20 +248,14 @@ describe('运行侧页', () => {
 
   it('恢复运行进行中：复制尾段仍可用且不清掉部分任务读取失败的提醒，恢复按钮不被锁住', async () => {
     const draft = { projectId: session.projectId, epoch: '旧会话', rootActionId: '单章根', runId: '单章' }
-    const review = { ...draft, rootActionId: '审稿根', runId: '审稿' }
     batches = [{ batchId: '批次', range: { startChapter: 3, endChapter: 5 }, completedChapters: [{ chapterNumber: 3 }], nextChapterNumber: 4,
       sourceCurrent: true, rootHandle: { projectId: session.projectId, epoch: '旧会话', rootActionId: '批量根', runId: '批量' } }]
     const fallback = invoke.getMockImplementation()!
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
-      const handle = (args[0] as { handle?: { runId: string } } | undefined)?.handle
-      if (channel === 'generation:list') return [
-        { handle: draft, status: 'failed', artifacts: [], unsavedTails: [{ attemptId: '尾请求', artifactId: '尾片', durableRevision: 0, text: '尚未保存的潮声', failureCode: 'STORAGE_FAILED' }] },
-        { handle: review, status: 'failed', artifacts: [] },
-      ]
-      if (channel === 'generation:read-context') return handle?.runId === review.runId
-        ? { draftSave: { kind: 'absent' }, handle: review, operation: 'review-chapter' }
-        : { draftSave: { kind: 'absent' }, handle: draft, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型', authorInputs: [], attemptedPurposes: ['chapter-draft'] }
-      if (channel === 'review-revision:read-recovery') throw new Error('审稿记录读取失败')
+      if (channel === 'generation:list-recovery') return { planning: [], editors: [], reviews: [], batches, partial: true, drafts: [{
+        view: { handle: draft, status: 'failed', artifacts: [], unsavedTails: [{ attemptId: '尾请求', artifactId: '尾片', durableRevision: 0, text: '尚未保存的潮声', failureCode: 'STORAGE_FAILED' }] },
+        recovery: { draftSave: { kind: 'absent' }, handle: draft, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型', authorInputs: [], attemptedPurposes: ['chapter-draft'] },
+      }] }
       if (channel === 'generation:read-batch') return { batchId: '批次', nextChapterNumber: 4, modelId: '原模型', mode: 'review', targetUnits: 900, range: { startChapter: 3, endChapter: 5 } }
       return fallback(channel, ...args)
     })
@@ -286,10 +285,11 @@ describe('运行侧页', () => {
     ], goalReviews: [] })
     const fallback = invoke.getMockImplementation()!
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
-      if (channel === 'generation:list') return [{ handle: reviewRun, status: 'completed', artifacts: [{ ...reviewRun, artifactId: '报告', attemptId: '报告-请求', text: report, status: 'completed' }] }]
-      if (channel === 'generation:read-context') return { handle: reviewRun, operation: 'review-chapter' }
-      if (channel === 'review-revision:read-recovery') return { handle: reviewRun, modelId: '原模型', sourceStatus: 'current', canResume: true,
-        saved: { success: true, kind: 'review', id: 1 }, attemptedPurposes: ['review-chapter'], context: { operation: 'review-chapter', source: { chapterNumber: 3 } } }
+      if (channel === 'generation:list-recovery') return { planning: [], editors: [], drafts: [], batches: [], partial: false, reviews: [{
+        view: { handle: reviewRun, status: 'completed', artifacts: [{ ...reviewRun, artifactId: '报告', attemptId: '报告-请求', text: report, status: 'completed' }] },
+        recovery: { handle: reviewRun, modelId: '原模型', sourceStatus: 'current', canResume: true,
+          saved: { success: true, kind: 'review', id: 1 }, attemptedPurposes: ['review-chapter'], context: { operation: 'review-chapter', source: { chapterNumber: 3 } } },
+      }] }
       return fallback(channel, ...args)
     })
     const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
@@ -307,25 +307,18 @@ describe('运行侧页', () => {
     expect(writeText).toHaveBeenCalledWith(report)
   })
 
-  it('来源变了以后，已原样写进正式大纲的一批不列为可恢复，只列没保存的那批', async () => {
-    const outlineRun = (runId: string, from: number, to: number, inFormalOutline: boolean) => {
-      const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: `${runId}根`, runId }
-      return { handle, operation: 'architecture', draftSave: { kind: 'absent' },
-        plotOutline: { range: { from, to }, cursor: { kind: 'complete' } },
-        plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' }, inFormalOutline, completeChapters: [], saved: null },
-        planningContinuation: { state: 'source-changed' } }
-    }
-    const saved = outlineRun('第一批', 1, 5, true)
-    const unsaved = outlineRun('第二批', 6, 6, false)
-    const fallback = invoke.getMockImplementation()!
-    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
-      if (channel === 'generation:list') return [saved, unsaved].map(item => ({ handle: item.handle, status: 'failed', artifacts: [] }))
-      if (channel === 'generation:read-context') return (args[0] as { handle: { runId: string } }).handle.runId === '第一批' ? saved : unsaved
-      return fallback(channel, ...args)
-    })
+  it('打开侧页只向主进程要一次可恢复列表；生成中的尝试快照不触发重读，运行结束才重读', async () => {
+    const reads = () => invoke.mock.calls.filter(([channel]) => channel.startsWith('generation:'))
     await render()
-    await vi.waitFor(() => expect(host!.textContent).toContain('大纲恢复稿 · 第 6 章'))
-    expect([...host!.querySelectorAll('article h3')].map(title => title.textContent)).toEqual(['大纲恢复稿 · 第 6 章'])
+    await vi.waitFor(() => expect(reads()).toEqual([['generation:list-recovery', session]]))
+    await act(async () => {
+      for (const status of ['completed', 'failed', 'cancelled']) listeners.get('generation:snapshot')?.({ projectId: session.projectId, epoch: session.leaseId, status })
+      await new Promise(resolve => setTimeout(resolve, 300))
+    })
+    expect(reads()).toHaveLength(1)
+    await act(async () => useWorkflowStore.setState({ history: [run('3', 'completed')] }))
+    await vi.waitFor(() => expect(reads()).toHaveLength(2))
+    expect(reads().map(([channel]) => channel)).toEqual(['generation:list-recovery', 'generation:list-recovery'])
   })
 
   it('恢复候选：继续编辑或放弃的调用失败时显示错误', async () => {

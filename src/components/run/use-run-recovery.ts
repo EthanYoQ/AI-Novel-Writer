@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ipc } from '../../services/ipc-client'
 import { createBatchRecoveryWorkflow, createDraftRecoveryWorkflow } from '../../services/workflows/draft-recovery-workflow'
 import { createReviewRevisionRecoveryWorkflow } from '../../services/workflows/review-revision-recovery-workflow'
-import { withoutDraftReconciliationArtifacts } from '../../shared/draft-reconciliation'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
 import { openPlanningRecoveryDraft, useEditorStore } from '../../stores/editor-store'
@@ -10,49 +9,13 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore, type WorkflowDefinition } from '../../stores/workflow-store'
 import {
-  buildRecoveryEntries, EMPTY_RECOVERY_SOURCES, hasText, planningTitle,
+  buildRecoveryEntries, EMPTY_RECOVERY_SOURCES, planningTitle,
   type BatchEntry, type CandidateEntry, type DraftEntry, type EditorEntry, type PlanningEntry, type RecoveryEntry, type RecoverySources, type ReviewEntry,
 } from './run-recovery'
 import { displayedErrorMessage } from '../../i18n/app-errors'
 
-const REVIEW_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review']
-
 function currentSession(): ProjectSessionContext | null {
   return projectSessionContextFromProject(useProjectStore.getState().currentProject)
-}
-
-/**
- * 读取这部作品所有可恢复的中断运行。助手任务（agent-round）随聊天隐藏，不读取也不列出，磁盘记录保留。
- * 规划恢复稿只列没写进正式内容的：续写已完成的，或来源变了但本批已原样在正式大纲里的，都不算可恢复。
- */
-async function loadGenerationSources(session: ProjectSessionContext): Promise<{ sources: Omit<RecoverySources, 'candidates'>; partial: boolean }> {
-  const [views, progress] = await Promise.all([
-    ipc.invokeWithProjectSession(session, 'generation:list'),
-    ipc.invokeWithProjectSession(session, 'generation:list-batches'),
-  ])
-  const contexts = await Promise.all(views.map(async view => ({ view,
-    recovery: await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle }),
-  })))
-  const reviews = await Promise.allSettled(contexts.filter(item => REVIEW_OPERATIONS.includes(item.recovery.operation))
-    .map(async ({ view }) => ({ view, recovery: await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: view.handle }) })))
-  const editors = await Promise.allSettled(contexts.filter(item => item.recovery.operation === 'editor-inline')
-    .map(({ view }) => ipc.invokeWithProjectSession(session, 'editor-inline:read-recovery', { handle: view.handle })))
-  const ours = (projectId: string) => projectId === session.projectId
-  return {
-    partial: [...reviews, ...editors].some(result => result.status === 'rejected'),
-    sources: {
-      planning: contexts.flatMap(item => (item.recovery.plotOutlineRecovery || item.recovery.blueprintRecovery)
-        && item.recovery.planningContinuation?.state !== 'complete' && !item.recovery.plotOutlineRecovery?.inFormalOutline
-        && ours(item.recovery.handle.projectId) ? [item.recovery] : []),
-      reviews: reviews.flatMap(result => result.status === 'fulfilled' && ours(result.value.view.handle.projectId) ? [result.value] : []),
-      editors: editors.flatMap(result => result.status === 'fulfilled' && ours(result.value.view.handle.projectId) ? [result.value] : []),
-      drafts: contexts.filter(item => item.recovery.operation === 'chapter-draft' && !item.recovery.batchId && ours(item.view.handle.projectId)
-        && (item.recovery.composition || item.recovery.draftShortOutline?.completedOutput || item.recovery.draftShortOutline?.retry?.kind === 'available'
-          || withoutDraftReconciliationArtifacts([...item.view.artifacts, ...(item.view.candidates ?? [])], item.recovery).some(hasText)
-          || item.view.unsavedTails?.some(hasText))),
-      batches: progress.filter(item => item.nextChapterNumber !== null && ours(item.rootHandle.projectId)),
-    },
-  }
 }
 
 /** 读到的数据连同读取时的会话一起保存；换了会话，旧数据就不再显示也不能被操作。 */
@@ -95,7 +58,8 @@ export function useRunRecovery(): RunRecovery {
   const [candidateError, setCandidateError] = useState('')
   const [generationList, setGeneration] = useState<Loaded<Omit<RecoverySources, 'candidates'>>>({ session: null, value: EMPTY_RECOVERY_SOURCES })
   const [generationError, setGenerationError] = useState('')
-  const [snapshotTick, setSnapshotTick] = useState(0)
+  const [partialLoad, setPartialLoad] = useState(false)
+  const [refreshTick, setRefreshTick] = useState(0)
   const [selection, setSelection] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
 
@@ -117,27 +81,18 @@ export function useRunRecovery(): RunRecovery {
     return () => { active = false }
   }, [session])
 
-  useEffect(() => {
-    if (!session) return
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const detach = ipc.on('generation:snapshot', snapshot => {
-      if (snapshot.projectId !== session.projectId || snapshot.epoch !== session.leaseId || snapshot.status === 'running') return
-      clearTimeout(timer)
-      timer = setTimeout(() => setSnapshotTick(value => value + 1), 100)
-    })
-    return () => { detach(); clearTimeout(timer) }
-  }, [session])
-
+  /** 侧页打开、运行结束或恢复动作之后重读；生成中的每次尝试快照不触发，主进程不必反复整表重算。 */
   useEffect(() => {
     if (!session) return
     let active = true
-    void loadGenerationSources(session).then(({ sources, partial }) => {
+    void ipc.invokeWithProjectSession(session, 'generation:list-recovery').then(({ partial, ...sources }) => {
       if (!active) return
       setGeneration({ session, value: sources })
-      setGenerationError(partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : '')
+      setPartialLoad(partial)
+      setGenerationError('')
     }).catch(reason => { if (active) setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
     return () => { active = false }
-  }, [session, endedRuns, locale, snapshotTick])
+  }, [session, endedRuns, refreshTick])
 
   const entries = useMemo(() => {
     if (!session) return []
@@ -180,7 +135,7 @@ export function useRunRecovery(): RunRecovery {
   return {
     entries,
     candidateError,
-    generationError,
+    generationError: generationError || (partialLoad ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : ''),
     busy,
     picked: entry => selection[entry.key] ?? [],
     togglePick: (entry, artifactId, checked) => setSelection(previous => {
@@ -235,7 +190,7 @@ export function useRunRecovery(): RunRecovery {
     }),
     continueEditor: entry => void act(async current => {
       await ipc.invokeWithProjectSession(current, 'editor-inline:execute', { handle: entry.recovery.view.handle })
-      if (stillCurrent()) setSnapshotTick(value => value + 1)
+      if (stillCurrent()) setRefreshTick(value => value + 1)
     }),
     resumeReview: entry => startRecovery(current => createReviewRevisionRecoveryWorkflow(current, entry.view.handle)),
     resumeBatch: entry => startRecovery(current => createBatchRecoveryWorkflow(current, entry.batchId)),

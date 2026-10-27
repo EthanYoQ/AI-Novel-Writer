@@ -2869,6 +2869,57 @@ describe('main draft persistence and batch lineage', () => {
     PostProcessRepository.markStepOk(post, 'chapter_notes')
     expect(f.owner.confirmBatchFinalization({ batchId: batch.batchId, chapterNumber: 1, finalizationId: 'finalization-one' }).nextChapterNumber).toBeNull()
   })
+
+  describe('运行侧页的可恢复列表由主进程一次算好（#536）', () => {
+    const runIds = (items: readonly { view?: { handle: { runId: string } }; handle?: { runId: string }; batchId?: string }[]) =>
+      items.map(item => item.batchId ?? item.view?.handle.runId ?? item.handle!.runId)
+    it('列出未保存的单章候选和可续写的批次，不列批内单章与已写完的批次', async () => {
+      const f = drafting()
+      f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+      const unsaved = await generate(f, { ...f.begin, uiActionNonce: 'unsaved', authorInputs })
+      const open = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+        uiActionNonce: 'open-batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+      const child = await generate(f, { ...f.begin, uiActionNonce: 'open-child', authorInputs, batchId: open.batchId, parentRootActionId: open.rootHandle.rootActionId })
+      f.owner.commitDraft(child.request)
+      const done = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 2, endChapter: 2 }, targetUnits: 20,
+        uiActionNonce: 'done-batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+      const doneChild = await generate(f, { ...f.begin, chapterNumber: 2, uiActionNonce: 'done-child', authorInputs, batchId: done.batchId, parentRootActionId: done.rootHandle.rootActionId })
+      f.owner.commitDraft(doneChild.request)
+
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([unsaved.run.handle.runId])
+      expect(list.drafts[0]!.recovery).toMatchObject({ operation: 'chapter-draft', chapterNumber: 1, draftSave: { kind: 'absent' } })
+      expect(list.batches.map(batch => [batch.batchId, batch.nextChapterNumber])).toEqual([[open.batchId, 2]])
+      expect(list).toMatchObject({ planning: [], reviews: [], editors: [], partial: false })
+    })
+    it('列出被取消的单章候选；只发出请求、没写出字的不列', async () => {
+      const f = drafting()
+      const cancelled = await generate(f, { ...f.begin, uiActionNonce: 'cancelled', authorInputs })
+      f.owner.cancel(cancelled.run.handle)
+      const empty = f.owner.begin({ ...f.begin, uiActionNonce: 'empty', authorInputs })
+      f.owner.cancel(empty.handle)
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([cancelled.run.handle.runId])
+      expect(list.drafts[0]!.view.status).toBe('cancelled')
+    })
+    it('列出没写完的情节大纲恢复稿', async () => {
+      const f = fixture(vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason: null, usage: null })))
+      const run = f.owner.begin(outlineSelection(f, 3))
+      await f.owner.execute({ handle: run.handle, invocationNonce: 'unknown', task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.planning)).toEqual([run.handle.runId])
+      expect(list.planning[0]!.plotOutlineRecovery).toBeDefined()
+    })
+    it('一个运行读不出时照常列出其余运行，并标出部分读取失败', async () => {
+      const f = drafting()
+      const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken', authorInputs })
+      const intact = await generate(f, { ...f.begin, uiActionNonce: 'intact', authorInputs })
+      f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','unknown-policy') WHERE run_id=?").run(broken.run.handle.runId)
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([intact.run.handle.runId])
+      expect(list.partial).toBe(true)
+    })
+  })
 })
 
 it('rejects an empty begin prompt selection without creating a run or dispatching', () => {
@@ -2974,5 +3025,6 @@ describe('大纲恢复稿是否已写进正式大纲', () => {
     const context = f.owner.readContext(run.handle)
     expect(context.plotOutline!.cursor).toEqual({ kind: 'complete' })
     expect(context.plotOutlineRecovery).toMatchObject({ writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null, inFormalOutline: save })
+    expect(f.owner.listRecovery().planning.map(item => item.handle.runId)).toEqual(save ? [] : [run.handle.runId])
   })
 })
