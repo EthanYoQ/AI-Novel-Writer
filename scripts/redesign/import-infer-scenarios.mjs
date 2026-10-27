@@ -26,7 +26,9 @@ const INFERRED = Object.freeze({
   architectureFiles: {
     premise: '一桩十年前结案的命案在雨夜重新被人提起。',
     worldbuilding: '租界巡捕房与华界警署互不相让，案卷分存两处。',
-    synopsis: '沈默从一封匿名信出发，逐一拆穿证人的说法，最后找到当年真正的凶手。',
+    synopsis: '沈默从一封匿名信出发，先回到当年的茶馆，向掌柜顾三打听那一夜进出的客人；再翻出巡捕房封存的卷宗，' +
+      '逐一对照三位证人的口供，发现他们说的时间彼此错开了一刻钟。周探长出面阻拦，沈默只好绕到华界警署借阅另一半案卷，' +
+      '在雨夜的河边拼出当年的路线，最后找到真正的凶手，也明白了自己当年为什么被调离。',
   },
   characterCards: [['沈默', 'protagonist', '前巡捕'], ['顾三', 'supporting', '茶馆掌柜'], ['周探长', 'antagonist', '租界巡捕房探长']].map(([name, role, background]) => ({
     name, role, gender: '男', age: 40,
@@ -117,6 +119,14 @@ async function readBook({ app, page, invoke }) {
   }
 }
 
+/** 角色名单提示条上，导入留下的角色决策写来源与人数，不露操作号。 */
+async function assertImportedCastTitle(page) {
+  const banner = page.getByRole('region', { name: '待处理的角色建议' })
+  await banner.waitFor({ state: 'visible' })
+  assert.deepEqual(await banner.locator('.cast-suggestion-text').allInnerTexts(), ['从导入原稿反推的角色（3 位）'], '导入角色决策写来源与人数')
+  assert.equal((await banner.innerText()).includes('novel-import-global'), false, '不露操作号')
+}
+
 async function shootStagePage(page, shoot, name, stageName) {
   await stage.stageButton(page, stageName).click()
   await settle(page)
@@ -147,6 +157,7 @@ export const IMPORT_INFER_SCENARIOS = {
     await shootStagePage(page, shoot, 'import-infer-empty-architecture', '架构')
     await page.getByRole('button', { name: '打开角色名单' }).click()
     await settle(page)
+    await assertImportedCastTitle(page)
     await shoot('import-infer-empty-characters')
     await blueprint.open(page)
     await blueprint.planItem(page, 2).click()
@@ -174,6 +185,19 @@ export const IMPORT_INFER_SCENARIOS = {
     await settle(page)
     await shoot('import-infer-existing-suggestions')
 
+    const card = name => suggestions.locator('.run-suggestion').filter({ has: page.locator('.run-suggestion-name', { hasText: new RegExp(`^${name}$`, 'u') }) })
+    assert.equal(await card('类型').getByRole('button', { name: '展开全文' }).count(), 0, '没被截断的短值没有展开控件')
+    const toggle = card('情节大纲').getByRole('button', { name: '展开全文' })
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false', '被截断的长值默认收起')
+    await toggle.click()
+    const collapse = card('情节大纲').getByRole('button', { name: '收起' })
+    assert.equal(await collapse.getAttribute('aria-expanded'), 'true', '展开后按钮变成收起')
+    assert.equal((await card('情节大纲').locator('dd').last().innerText()).trim(), INFERRED.architectureFiles.synopsis, '展开后能读到反推的全文')
+    await card('情节大纲').scrollIntoViewIfNeeded()
+    await settle(page)
+    await shoot('import-infer-existing-suggestions-expanded')
+    await collapse.click()
+
     const { core, blueprints } = await readBook(context)
     for (const field of ['genre', 'coreOutline', 'premise', 'worldbuilding', 'synopsis']) {
       assert.equal(core[field], before.core[field], `已有的 ${field} 一字不变`)
@@ -190,6 +214,11 @@ export const IMPORT_INFER_SCENARIOS = {
     assert.equal((await readBook(context)).core.genre, INFERRED.novelConfig.genre, '采用后写入反推的类型')
 
     await shootStagePage(page, shoot, 'import-infer-existing-setup', '设定')
+    await stage.stageButton(page, '架构').click()
+    await page.getByRole('button', { name: '打开角色名单' }).click()
+    await settle(page)
+    await assertImportedCastTitle(page)
+    await shoot('import-infer-existing-characters')
     await blueprint.open(page)
     await blueprint.planItem(page, 4).click()
     await settle(page)
