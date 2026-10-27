@@ -10,7 +10,7 @@ import {
 import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
 import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
 import { DirectoryPromptBuilder } from '../../prompts/prompt-builder'
-import { type GenerationTask } from '../../generation/generation-harness'
+import { isTerminalProviderFailure, type GenerationTask } from '../../generation/generation-harness'
 import {
   createStructuredBatchExecutor,
   type StructuredBatchContract,
@@ -457,6 +457,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
             context.uiLocale,
           )
         }
+        if (isTerminalProviderFailure(batchResult.failure.message)) throw new Error(batchResult.failure.message)
         throw new Error(workflowUiText(
           context,
           `${displayedErrorMessage(context.uiLocale, batchResult.failure.message)}；${generationSummary}`,

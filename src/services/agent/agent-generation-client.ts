@@ -53,7 +53,10 @@ export class AgentGenerationClient {
   async round(index: number): Promise<AgentGenerationRound> {
     this.assertActive()
     const existing = this.recovery.rounds.find(round => round.index === index)
-    if (existing && existing.status !== 'not-started') return existing
+    if (existing && existing.status !== 'not-started') {
+      if (existing.status !== 'completed') throwIfLastAttemptTerminal(this.recovery.run)
+      return existing
+    }
     this.accept(await ipc.invokeWithProjectSession(this.projectSession, 'agent-generation:round', { handle: this.recovery.handle, index }))
     this.assertActive()
     const round = this.recovery.rounds.find(round => round.index === index)
