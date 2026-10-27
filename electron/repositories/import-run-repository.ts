@@ -644,6 +644,15 @@ function unfinishedSourceDisplay(runId: string): ImportSourceDisplayMetadata[] {
   ))
 }
 
+/** 作者原稿只为还没有蓝图的章反推，已有蓝图的章不归本次运行。 */
+function chaptersMissingBlueprint(runId: string): number {
+  return db().prepare(`
+    SELECT COUNT(*) FROM import_run_chapters AS chapters
+    WHERE chapters.run_id = ?
+      AND NOT EXISTS (SELECT 1 FROM blueprints WHERE blueprints.chapter_number = chapters.chapter_number)
+  `).pluck().get(runId) as number
+}
+
 function completedCheckpointChapters(row: ImportRunRow, stage: 'knowledge' | 'blueprints'): number {
   const covered = new Set<number>()
   for (const batchId of completedBatches(row)[stage] ?? []) {
@@ -681,11 +690,14 @@ function persistedProgress(row: ImportRunRow): {
     }
   }
   if (row.stage === 'blueprints') {
+    const progressCompleted = completedCheckpointChapters(row, 'blueprints')
     return {
       ...sources,
       completedChapters,
-      progressCompleted: completedCheckpointChapters(row, 'blueprints'),
-      progressTotal: row.total_chapters,
+      progressCompleted,
+      progressTotal: row.purpose === 'author-manuscript'
+        ? progressCompleted + chaptersMissingBlueprint(row.id)
+        : row.total_chapters,
     }
   }
   if (row.stage === 'global' || row.stage === 'style' || row.stage === 'refresh') {
@@ -1101,13 +1113,7 @@ function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage)
     return
   }
   if (stage === 'blueprints' && row.purpose === 'author-manuscript') {
-    // 作者原稿只为还没有蓝图的章反推，已有蓝图的章不归本次运行：判据是每章都有蓝图行。
-    const missing = db().prepare(`
-      SELECT COUNT(*) FROM import_run_chapters AS chapters
-      WHERE chapters.run_id = ?
-        AND NOT EXISTS (SELECT 1 FROM blueprints WHERE blueprints.chapter_number = chapters.chapter_number)
-    `).pluck().get(row.id)
-    if (missing !== 0) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
+    if (chaptersMissingBlueprint(row.id) !== 0) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
     return
   }
   if (stage !== 'knowledge' && stage !== 'blueprints') throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
