@@ -43,7 +43,7 @@ function repairDuplicateFinalizationsOnOpen(): FinalizationRepairOnOpen {
   try {
     return { status: 'checked', ...FinalizationRepository.repairDuplicateFinalizations() }
   } catch (error) {
-    console.error('[project] 遗留重复定稿修复失败:', error)
+    console.error('[Project] 遗留重复定稿修复失败:', error)
     return { status: 'failed', error: error instanceof Error ? error.message : String(error) }
   }
 }
@@ -627,7 +627,6 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         const openedDatabase = getProjectDb()
         if (openedDatabase) adoptTransferredCharacterContinuityOnOpen({ database: openedDatabase,
           projectRoot: resolvedProjectPath, projectId: trustedProject.projectId })
-        const finalizationRepair = repairDuplicateFinalizationsOnOpen()
 
         // 从数据库读取配置
         const coreData = ProjectCoreRepository.get()
@@ -710,6 +709,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         const session = projectAccess.beginSession(trustedProject)
         projectData.sessionLease = session.leaseId
         revokeRecentPreviewCapabilities()
+        const finalizationRepair = repairDuplicateFinalizationsOnOpen()
         return {
           success: true,
           project: projectData,
