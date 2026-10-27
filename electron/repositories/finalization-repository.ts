@@ -325,7 +325,9 @@ export class FinalizationRepository {
     return db.transaction(() => {
       const rows = db.prepare(`
         SELECT drafts.id, drafts.chapter_number, drafts.version,
-               finalization_outbox.knowledge_document_id, finalization_outbox.target_file_name
+               finalization_outbox.knowledge_document_id,
+               CASE WHEN finalization_outbox.publication_status = 'published'
+                 THEN finalization_outbox.target_file_name ELSE '' END AS target_file_name
         FROM drafts
         LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
         WHERE drafts.status = 'finalized' AND drafts.chapter_number IN (
