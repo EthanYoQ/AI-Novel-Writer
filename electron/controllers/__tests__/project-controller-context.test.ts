@@ -508,6 +508,14 @@ describe('project controller project identity', () => {
     logged.mockRestore()
   })
 
+  it('does not repair duplicate finalizations in a project whose open then fails', async () => {
+    mocks.projectAccess.beginSession.mockImplementationOnce(() => { throw new Error('PROJECT_SESSION_BEGIN_FAILED') })
+
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'open-fails-B', projectA))
+      .resolves.toMatchObject({ success: false })
+    expect(mocks.repairDuplicateFinalizations).not.toHaveBeenCalled()
+  })
+
   it('opens a complete imported target after its publish ACK is lost and adds it to recent projects', async () => {
     await expect(handler('project:recent-list')({})).resolves.toEqual([])
     await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'recover-imported-B', projectA))
