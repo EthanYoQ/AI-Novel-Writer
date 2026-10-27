@@ -521,7 +521,7 @@ describe('directory workflow project context', () => {
   })
 
   it('passes a provider context-length rejection through instead of asking to retry', async () => {
-    const projectA = project('C:\novels\English-context-length')
+    const projectA = project('C:\\novels\\English-context-length')
     const projectSession = { projectId: projectA.id, leaseId: projectA.sessionLease!, projectPath: projectA.path }
     useProjectStore.setState({ currentProject: projectA })
     const directoryCommand = await import('../commands/directory.command')

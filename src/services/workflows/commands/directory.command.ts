@@ -457,7 +457,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
             context.uiLocale,
           )
         }
-        if (isTerminalProviderFailure(batchResult.failure.message)) throw new Error(batchResult.failure.message)
+        if (isTerminalProviderFailure(batchResult.failure.message)) throw new Error('GENERATION_CONTEXT_LENGTH_EXCEEDED')
         throw new Error(workflowUiText(
           context,
           `${displayedErrorMessage(context.uiLocale, batchResult.failure.message)}；${generationSummary}`,
