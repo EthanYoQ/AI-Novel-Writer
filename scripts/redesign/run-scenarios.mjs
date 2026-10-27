@@ -13,6 +13,7 @@ import * as runPanel from './pages/run-panel.mjs'
 import * as runSheet from './pages/run-sheet.mjs'
 import * as stage from './pages/stage.mjs'
 import { firstLine, seedStageSample, seedWithoutDraft, untilGateHolds } from './scenarios.mjs'
+import { STAGE_SAMPLE } from './stage-sample.mjs'
 
 /** 聊天入口与聊天字样：按钮、区域、可访问名称和可见文字里都不该出现。 */
 const CHAT_WORDS = /AI Agent|Agent 面板|写作助手|切换回 Agent|恢复此助手任务|聊天|assistant|\bchat\b|\bagent\b/i
@@ -482,6 +483,34 @@ export const RUN_SCENARIOS = {
   }, after: async ({ page, fake }) => {
     fake.gate.release()
     await runSheet.waitForRunDone(page, 120_000)
+  } },
+
+  /** #536：第 3 章单章写作失败留下的候选可以「不再显示」；点了之后卡片消失，重开作品也不再列出。 */
+  'run-hide-draft': { model: true, shell: 'stage', setup: context => seedStageSample(context, { landOnChapter3: false, beforeReload: async ({ page, invoke, path: projectPath, session }) => {
+    for (const draft of await invoke(page, 'db:draft-list', 3, projectPath, session)) {
+      assert.equal((await invoke(page, 'db:draft-delete', draft.id, projectPath, session)).success, true)
+    }
+  } }), run: async ({ page, fake }) => {
+    fake.failProse()
+    await writeNextFromBlueprint(page)
+    await runSheet.anyCard(page).filter({ hasText: /^上一次运行/ }).getByText(/失败|出错|未完成/).first().waitFor({ state: 'visible', timeout: 60_000 })
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: /第3章候选/ })
+    await card.waitFor({ state: 'visible', timeout: 10_000 })
+    await card.getByRole('button', { name: '不再显示' }).scrollIntoViewIfNeeded()
+    fake.failProse(false)
+    return { buttons: await card.getByRole('button').allInnerTexts() }
+  }, after: async context => {
+    const hide = runSheet.recovery(context.page).getByRole('article').filter({ hasText: /第3章候选/ })
+    await hide.getByRole('button', { name: '不再显示' }).click()
+    await hide.waitFor({ state: 'detached' })
+    await context.restart()
+    await stage.openAfterRestart(context.page, STAGE_SAMPLE.name)
+    await countRecoveryReads(context.app)
+    await runSheet.openFromPalette(context.page)
+    await runSheet.tab(context.page, '进行中').waitFor({ state: 'visible' })
+    await recoveryReadsDone(context.app, context.page)
+    assert.equal(await runSheet.sheet(context.page).getByText(/第3章候选/).count(), 0, '重开作品后点过「不再显示」的候选仍不列出')
+    await context.shoot('run-hide-draft-after-restart')
   } },
 
   /** #441 后续：第 3 章正在用夹具模型写（卡在假模型门上），在设置里改这个模型后保存：先提示，等生成结束再保存则不保存、表单留着。 */
