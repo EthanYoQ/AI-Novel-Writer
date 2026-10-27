@@ -1,4 +1,4 @@
-// #537 实机场景：长篇参考小说导入一次跑完，导入根按章数定额；活动时长在请求途中用完时，运行卡片说明原因、带码，不提示重新生成。
+// #537 实机场景：长篇参考小说导入一次跑完，导入根按章数定额；活动时长在请求途中用完时，运行卡片说明原因与下一步、不露错误码，码在「诊断」日志里。
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
@@ -10,7 +10,6 @@ import { seedStageSample } from './scenarios.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
-const RESTART_ADVICE = /重新生成|重新开始|重新导入|Generate again|start (?:the import )?(?:again|over)|restart/iu
 
 function referenceNovel(roots, chapters) {
   const file = path.join(roots.temp, `reference-${chapters}.txt`)
@@ -109,12 +108,18 @@ async function stopOnActiveTime(context) {
   try { stepError = await failedStepError(page) } finally { fake.gate.release() }
   const root = readDb(context, importRoot)
   await page.waitForTimeout(400)
-  await shoot('f537-stop-time')
+  await shoot('f537-stop-time-card')
+  await runSheet.tab(page, '诊断').click()
+  const logLine = runSheet.sheet(page).locator('.run-log-line').filter({ hasText: '停止原因：ROOT_BUDGET_EXHAUSTED' }).first()
+  await logLine.scrollIntoViewIfNeeded()
+  await page.waitForTimeout(400)
+  await shoot('f537-stop-time-diagnostics')
   assert.equal(root.blocked_code, 'ROOT_BUDGET_EXHAUSTED')
   assert.match(stepError, /模型请求累计时长已到上限/u, stepError)
-  assert.match(stepError, /ROOT_BUDGET_EXHAUSTED/u)
-  assert.doesNotMatch(stepError, RESTART_ADVICE, '导入的停止说明不提示重新生成')
-  return { stepError, blockedCode: root.blocked_code }
+  assert.match(stepError, /只能在导入对话框里点「重新开始」，它会从第 1 章重新推演蓝图/u, stepError)
+  assert.doesNotMatch(stepError, /[A-Z]{3,}_[A-Z]/u, '运行卡片的说明不露错误码')
+  const diagnostic = await logLine.innerText()
+  return { stepError, diagnostic, blockedCode: root.blocked_code }
 }
 
 export const F537_SCENARIOS = {
