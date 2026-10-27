@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:http'
 
 // 与 f05-u05、f05-u12 旅程相同的做法：主进程 fetch 改道到本机假 OpenAI 兼容服务，零真实模型调用。
@@ -149,7 +150,7 @@ export async function startFakeModel(diagnostics) {
     if (!rejected) { contextLengthRejection = null; return }
     const sample = new URL('../../electron/llm/__tests__/provider-context-length-samples.json', import.meta.url)
     try { contextLengthRejection = JSON.parse(readFileSync(sample, 'utf8')).deepseek }
-    catch (error) { throw new Error(`rejectContextLength: 读不出错误体样本 ${sample.pathname}`, { cause: error }) }
+    catch (error) { throw new Error(`rejectContextLength: 读不出错误体样本 ${fileURLToPath(sample)}`, { cause: error }) }
     if (!contextLengthRejection?.error?.message) throw new Error('rejectContextLength: 样本缺少 deepseek 错误体')
   }
   const record = (kind, detail) => {

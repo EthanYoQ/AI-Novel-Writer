@@ -10,7 +10,7 @@ import {
 import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
 import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
 import { DirectoryPromptBuilder } from '../../prompts/prompt-builder'
-import { isTerminalProviderFailure, type GenerationTask } from '../../generation/generation-harness'
+import { type GenerationTask } from '../../generation/generation-harness'
 import {
   createStructuredBatchExecutor,
   type StructuredBatchContract,
@@ -457,7 +457,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
             context.uiLocale,
           )
         }
-        if (isTerminalProviderFailure(batchResult.failure.message)) throw new Error('GENERATION_CONTEXT_LENGTH_EXCEEDED')
+        if (batchResult.failure.terminal) throw batchResult.failure.terminal
         throw new Error(workflowUiText(
           context,
           `${displayedErrorMessage(context.uiLocale, batchResult.failure.message)}；${generationSummary}`,

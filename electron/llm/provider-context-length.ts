@@ -17,7 +17,6 @@ export async function providerFailureCode(response: Response, signal: AbortSigna
   try { body = await response.text() }
   catch (error) {
     if (signal.aborted) throw error
-    void response.body?.cancel().catch(() => {})
   }
   return CONTEXT_LENGTH_MESSAGES.some(pattern => pattern.test(body)) ? 'LLM_CONTEXT_LENGTH_EXCEEDED' : 'LLM_REQUEST_FAILED'
 }

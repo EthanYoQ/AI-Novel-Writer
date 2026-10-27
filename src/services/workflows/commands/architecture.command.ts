@@ -1203,6 +1203,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     context.data.characterDetailArtifacts = detailExecution.receipt.attempts.flatMap(receipt => receipt.visibleArtifact
       ? [{ ...receipt.visibleArtifact, purpose: receipt.purpose, finishReason: receipt.finishReason }] : [])
     if (!detailExecution.ok) {
+      if (detailExecution.failure.terminal) throw detailExecution.failure.terminal
       const diagnostic = detailExecution.failure.diagnostic
       const attempts = detailExecution.receipt.attempts.length > 0
         ? detailExecution.receipt.attempts

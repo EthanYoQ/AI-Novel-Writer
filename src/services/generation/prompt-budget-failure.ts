@@ -126,7 +126,7 @@ export function providerContextFailureText(error: unknown, text: (zhCNText: stri
   return zh && en ? text(zh, en) : undefined
 }
 
-const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode | LegacyTaskBudgetReasonCode, readonly [string, string]>> = Object.freeze({
+const REASON_LABELS: Readonly<Partial<Record<TaskBudgetReasonCode | LegacyTaskBudgetReasonCode, readonly [string, string]>>> = Object.freeze({
   'task-demand': ['任务完整范围', 'Complete task scope'],
   'output-allocation-ceiling': ['物理输出使用可用上限', 'Physical output uses the available ceiling'],
   'input-upper-bound': ['输入估计上界', 'Input estimate upper bound'],

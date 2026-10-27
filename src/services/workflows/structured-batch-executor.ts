@@ -86,6 +86,8 @@ export interface StructuredBatchFailure {
     actualCharacters?: number
     maxCharacters?: number
   }
+  /** 服务商以上下文超长拒绝：消费方原样抛出，保留登记的错误码。 */
+  terminal?: TerminalProviderFailureError
 }
 
 export type StructuredBatchResult<TOutput> =
@@ -539,7 +541,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           failure = error.failure
         } else if (error instanceof TerminalProviderFailureError) {
           recordAttempt(error.receipt)
-          failure = { code: 'generation_failed', reason: 'context_length', message: error.code }
+          failure = { code: 'generation_failed', reason: 'context_length', message: error.code, terminal: error }
         } else if (error instanceof GenerationAttemptError) {
           recordAttempt(error.receipt)
           if (error.code === 'CANCELLED') {

@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer'
 import * as chapterView from './pages/chapter-view.mjs'
 import * as runSheet from './pages/run-sheet.mjs'
 import { FAKE_MODEL, FIXTURE_PROSE } from './fake-model.mjs'
-import { seedStageSample } from './scenarios.mjs'
+import { firstLine, seedStageSample } from './scenarios.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
 
 const AUTHOR_64K = Object.freeze({ ...FAKE_MODEL, id: 'd77-author-64k', name: '作者 64K 上下文', modelName: 'gpt-4.1-mini',
@@ -58,7 +58,7 @@ export const D77_SCENARIOS = {
     assert.equal(prose.model, AUTHOR_64K.modelName, '正文请求用的是作者 64K 的模型档案')
     const promptBytes = Buffer.byteLength(JSON.stringify(prose.messages), 'utf8')
     assert.ok(promptBytes > AUTHOR_64K.capabilities.contextWindowTokens, `发出的正文提示词 ${promptBytes} 字节，超过作者填的上下文窗口`)
-    await chapterView.view(page).getByText(FIXTURE_PROSE.slice(0, 20)).first().waitFor({ state: 'visible', timeout: 30_000 })
+    await chapterView.prose(page).getByText(firstLine(FIXTURE_PROSE)).first().waitFor({ state: 'visible', timeout: 30_000 })
     return { context: AUTHOR_64K.capabilities.contextWindowTokens, promptBytes, chats }
   } },
   'd77-context-length': { model: true, shell: 'stage', setup, run: async ({ page, fake }) => {
