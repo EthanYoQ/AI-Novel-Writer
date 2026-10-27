@@ -13,7 +13,7 @@ import { useThemeStore } from '../../stores/theme-store'
 import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
 import { createEditorInlineGeneration } from '../../services/editor-inline-generation'
 import { EDITOR_INLINE_INSTRUCTION_MAX_LENGTH, type EditorInlineFixedAction, type EditorInlineRequest } from '../../shared/editor-inline-generation'
-import { useLLMStore } from '../../stores/llm-store'
+import { routeModelId } from '../../services/model-routing'
 import { countDraftUnits } from '../../shared/draft-units'
 import { useLocaleStore } from '../../stores/locale-store'
 import { getActiveProjectSessionContext } from '../../shared/project-session-context'
@@ -431,7 +431,7 @@ export default function CodeMirrorEditor({
       aiCandidateRef.current = null
       setActiveAIAction(uiText(...actionLabel(request.action))); setActiveNote(request.action === 'instruct' ? request.instruction : null)
       setNoteDraft(null); setAiResult(''); setAiError(null); setCanResumeAI(false)
-      const recovery = await client.open({ input, modelId: useLLMStore.getState().defaultModelId ?? '', uiActionNonce: crypto.randomUUID() })
+      const recovery = await client.open({ input, modelId: routeModelId('editor-inline') ?? '', uiActionNonce: crypto.randomUUID() })
       if (requestSequence !== aiRequestSequenceRef.current) return
       onGenerationHandle?.(recovery.view.handle)
       const receipt = await client.execute()
