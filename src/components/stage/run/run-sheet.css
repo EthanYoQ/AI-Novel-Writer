@@ -405,6 +405,16 @@ button.run-step-row:hover {
   overflow-wrap: anywhere;
 }
 
+.run-suggestion-values[data-expanded] dd {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: none;
+}
+
+.run-suggestion-toggle {
+  margin-top: 2px;
+}
+
 /* ================= 可恢复 ================= */
 .run-excerpt {
   display: flex;
