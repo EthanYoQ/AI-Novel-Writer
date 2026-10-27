@@ -25,6 +25,7 @@ import {
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
+import { Check } from '../ui/Check'
 import { useLocaleStore } from '../../stores/locale-store'
 import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 import { captureProjectSession, isProjectSessionCurrent } from '../project-session-gate'
@@ -52,6 +53,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [savePath, setSavePath] = useState<ProjectDirectoryGrant | null>(null)
   const [targetMode, setTargetMode] = useState<'new' | 'current'>('new')
   const [purpose, setPurpose] = useState<ImportPurpose>('reference')
+  const [authorInference, setAuthorInference] = useState(true)
 
   const [previousOpen, setPreviousOpen] = useState(open)
   if (previousOpen !== open) {
@@ -375,6 +377,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         locale,
         authorityFingerprint: authorPreview!.authorityFingerprint,
         manifestFingerprint: authorPreview!.manifestFingerprint,
+        authorInference,
       }
       const prepared = await ipc.invokeWithProjectSession(
         projectSession,
@@ -437,7 +440,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       setImporting(false)
     }
   }, [
-    applyPreparation, authorPreview, currentProject, inspection, launchRun, locale, purpose,
+    applyPreparation, authorInference, authorPreview, currentProject, inspection, launchRun, locale, purpose,
     selectionPreparation, selectionProjectLeaseId, text,
   ])
 
@@ -525,7 +528,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   }
 
   // 成本预估
-  const costEstimate = purpose === 'reference' && splitDone && inspection
+  const runsInference = purpose === 'reference' || authorInference
+  const costEstimate = runsInference && splitDone && inspection
     ? estimateImportCost(inspection.totalWords, inspection.chapterCount)
     : null
 
@@ -582,6 +586,22 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 ? text('用于知识库、结构与文风拆解，不会写入草稿箱或正文章节。', 'Used for knowledge, structure, and style analysis. It never becomes a draft or manuscript chapter.')
                 : text('按章节号导入为不可变权威定稿，用于连续性与后续写作；不会进入参考语料或生成仿写拆解。', 'Imported by chapter number as immutable authoritative finalized text for continuity and future writing. It is not added to reference corpus or imitation analysis.')}
             </div>
+            {purpose === 'author-manuscript' && (
+              <div className="mt-3" data-testid="author-inference-option">
+                <Check
+                  checked={authorInference}
+                  onChange={setAuthorInference}
+                  label={(
+                    <span className="flex flex-col gap-0.5">
+                      <span>{text('同时反推设定、架构、角色和蓝图', 'Also infer settings, architecture, characters, and blueprints')}</span>
+                      <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                        {text('只补空白，不覆盖已有内容', 'Fills only what is empty; existing content is kept')}
+                      </span>
+                    </span>
+                  )}
+                />
+              </div>
+            )}
           </div>
 
           <div>

@@ -288,6 +288,8 @@ export type ImportRunPrepareFromInspectionRequest = {
   locale: ImportRunLocale
   authorityFingerprint: string
   manifestFingerprint: string
+  /** 「同时反推设定、架构、角色和蓝图」，创建运行时冻结。 */
+  authorInference: boolean
 }
 
 /** Current-project selection binds parsing to one frozen project lease before any source is read. */
