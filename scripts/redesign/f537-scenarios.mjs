@@ -118,7 +118,7 @@ async function stopOnActiveTime(context) {
 }
 
 export const F537_SCENARIOS = {
-  // 252 章参考小说导入当前作品：知识库、全局、文风、51 批蓝图一次跑完，导入根按 252 章定额（770 次、86 625 000 毫秒）。
+  // 252 章参考小说导入当前作品：知识库、全局、文风、全部蓝图一次跑完，导入根按 252 章定额（770 次、86 625 000 毫秒）。
   'f537-import-252': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const { app, page, roots, fake, shoot } = context
     fake.replyImport()
@@ -147,7 +147,9 @@ export const F537_SCENARIOS = {
     assert.deepEqual({ maxPhysicalRequests: measured.budget.maxPhysicalRequests, maxActiveElapsedMs: measured.budget.maxActiveElapsedMs },
       { maxPhysicalRequests: 770, maxActiveElapsedMs: 86_625_000 })
     assert.equal(measured.blockedCode, null)
-    assert.equal(measured.blueprintRequests, 51)
+    // 假模型的输出上限只有 4096，每批 5 章先被按单章拆开，所以蓝图实际是每章 1 次，共 252 次；旧的 32 次根在第 30 章左右就会用完。
+    assert.equal(measured.physicalRequests, 2 + measured.blueprintRequests)
+    assert.ok(measured.blueprintRequests >= 51, `蓝图请求 ${measured.blueprintRequests} 次`)
     assert.equal(measured.blueprints, 252)
     return measured
   } },
