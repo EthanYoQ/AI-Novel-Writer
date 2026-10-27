@@ -83,6 +83,18 @@ describe('分工模型设置页', () => {
     expect(row('finalization').textContent).toContain('批量写作的自动定稿')
   })
 
+  it('「写稿」只列实际按分工选模型的入口，不提写作助手', async () => {
+    await mount()
+    expect(row('drafting').textContent).toContain('单章与批量写作、编辑器行内改写。')
+    expect(row('drafting').textContent).not.toContain('助手')
+    await act(async () => root?.unmount())
+    host?.remove()
+    useLocaleStore.setState({ locale: 'en-US' })
+    await mount()
+    expect(row('drafting').textContent).toContain('Chapter and batch drafting, and inline edits in the editor.')
+    expect(row('drafting').textContent).not.toMatch(/assistant/i)
+  })
+
   it('选中即保存，保存后显示新的指定；改回跟随默认时删掉指定', async () => {
     await mount()
     await choose('review', 'glm')
