@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import type BetterSqlite3 from 'better-sqlite3'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
-import { migrateSchema, probeSchema, verifySchema } from '../migrations/runner'
+import { migrateSchema, probeSchema, verifySchema, type SchemaProbe } from '../migrations/runner'
 import type { MigrationRegistry } from '../migrations/registry'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import { M02_ADDED_CHARACTER_COLUMNS, M02_AUXILIARY_TABLES } from '../migrations/m02-character-identity'
@@ -253,6 +253,30 @@ export async function backupProjectSqlite(options: {
   } finally { source?.close(); snapshot.close() }
 }
 
+
+/** Opening verifies one private snapshot. Content fingerprints exist only to
+ * gate a migration, so a current schema skips them and an older one takes the
+ * full upgrade lane.
+ */
+export function openProjectSqlite(options: { databasePath: string }): SchemaProbe {
+  const registry = getDesktopMigrationRegistry()
+  const snapshot = physicalSnapshot(options.databasePath)
+  let verified: SchemaProbe | undefined
+  try {
+    const db = new Database(snapshot.file, { readonly: true, fileMustExist: true })
+    db.pragma('foreign_keys = ON')
+    try {
+      const adapter = new SqliteSchemaAdapter(db)
+      if (adapter.readUserVersion() === CURRENT_DESKTOP_SCHEMA_VERSION) {
+        verified = verifySchema(adapter, registry, CURRENT_DESKTOP_SCHEMA_VERSION)
+        snapshot.unchanged()
+      }
+    } finally { db.close() }
+  } finally { snapshot.close() }
+  if (verified) return verified
+  const upgraded = upgradeProjectSqlite({ databasePath: options.databasePath })
+  return { version: upgraded.schemaVersion, fingerprint: upgraded.fingerprint }
+}
 
 /** Canonical-only upgrade seam. Caller validates its manifest and excludes business
  * writers first. Probe never opens the source; the single lane owns the transaction.

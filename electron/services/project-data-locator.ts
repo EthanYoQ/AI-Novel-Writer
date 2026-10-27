@@ -2,7 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY, parseCanonicalProjectManifest } from '../../src/shared/project-format'
-import { upgradeProjectSqlite, verifyProjectSqlite } from './sqlite-project-migration'
+import type { SchemaProbe } from '../migrations/runner'
+import { openProjectSqlite, verifyProjectSqlite } from './sqlite-project-migration'
 
 const admitted = new Map<string, { root: string; manifestHash: string }>()
 const key = (root: string) => process.platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root)
@@ -60,15 +61,12 @@ export function getProjectDataRoot(projectPath: string): string {
 export function getProjectDatabasePath(projectPath: string): string { return path.join(getProjectDataRoot(projectPath), CANONICAL_PROJECT_DATABASE) }
 export function deactivateProjectData(projectPath: string): void { admitted.delete(key(projectPath)) }
 
-
-/** Explicit lifecycle upgrade before admission, never a normal locator fallback. */
-export function upgradeCanonicalProjectData(projectPath: string): void {
+/** Project open upgrades when needed and admits on that same verified pass. */
+export function openCanonicalProjectData(projectPath: string): SchemaProbe {
   const before = manifestState(projectPath)
-  if (admitted.has(key(projectPath))) {
-    verifyProjectSqlite({ databasePath: path.join(before.root, CANONICAL_PROJECT_DATABASE) })
-    return
-  }
-  upgradeProjectSqlite({ databasePath: path.join(before.root, CANONICAL_PROJECT_DATABASE) })
+  const verified = openProjectSqlite({ databasePath: path.join(before.root, CANONICAL_PROJECT_DATABASE) })
   const after = manifestState(projectPath)
   if (before.manifestHash !== after.manifestHash) throw new Error('PROJECT_MANIFEST_CHANGED')
+  admitted.set(key(projectPath), before)
+  return verified
 }
