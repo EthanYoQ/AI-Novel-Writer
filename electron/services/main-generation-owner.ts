@@ -458,7 +458,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         selection = { ...selection, authorInputs: [...(selection.authorInputs ?? []).filter(input => input.id !== 'planning:target-units'),
           { id: 'planning:target-units', text: String(targetUnits) }] }
       }
-      let policy = parentRootActionId ? rootPolicy(parentRootActionId) : newMainGenerationPolicy(selection, deps.leases.resolve(lease.leaseId))
+      let policy = parentRootActionId ? rootPolicy(parentRootActionId) : newMainGenerationPolicy(selection, deps.leases.resolve(lease.leaseId), importAdmission?.chapterCount)
       if (parentRootActionId && agentWorkflow && scope) policy = { ...policy, planning: scope }
       else if (parentRootActionId && policy.planning) {
         if (continuation && policy.planning.kind === 'directory' && scope?.kind === 'directory') {
