@@ -97,6 +97,7 @@ interface Trace {
   styleCalls: number
   blueprintCalls: number[][]
   failSecondBlueprintBatchOnce: boolean
+  beforeBlueprintCommit?: () => void
 }
 
 function newTrace(): Trace {
@@ -136,6 +137,7 @@ function dependencies(trace: Trace): ImportRunOrchestratorDependencies {
         trace.failSecondBlueprintBatchOnce = false
         throw new Error('第二批蓝图模型调用失败')
       }
+      trace.beforeBlueprintCommit?.()
       const receipt = await commit({
         mode: 'replace-range',
         operationId: `import-blueprints-${run.id}-${chapters[0]!.number}-${chapters.at(-1)!.number}`,
@@ -268,6 +270,25 @@ describe('勾选反推的作者原稿走完八个阶段', () => {
     })
     expect(BlueprintRepository.getByChapter(2)).toMatchObject({ title: '作者写的第2章蓝图', userGuidance: '作者的微操' })
     expect(BlueprintRepository.getAll().map(item => item.title)).toEqual(['反推蓝图1', '作者写的第2章蓝图', '反推蓝图3'])
+  })
+})
+
+describe('反推蓝图途中作者自己保存了蓝图', () => {
+  it('提交时按当时的蓝图只补空：作者在模型调用期间保存的那一章不被反推结果覆盖', async () => {
+    prepareAuthorRun(true)
+    const trace = newTrace()
+    trace.beforeBlueprintCommit = () => {
+      if (trace.blueprintCalls.length === 1) {
+        BlueprintRepository.upsert({ ...inferredBlueprint(1), title: '作者刚存的第1章', purpose: '作者自己的目的', keyEvents: '作者写的事件' })
+      }
+    }
+
+    await runRemainingStages(trace, 'renderer')
+
+    expect(ImportRunRepository.get(RUN_ID)).toMatchObject({ status: 'completed', authorInference: true })
+    expect(trace.blueprintCalls).toEqual([[1, 2, 3]])
+    expect(BlueprintRepository.getByChapter(1)).toMatchObject({ title: '作者刚存的第1章', purpose: '作者自己的目的', keyEvents: '作者写的事件' })
+    expect(BlueprintRepository.getAll().map(item => item.title)).toEqual(['作者刚存的第1章', '反推蓝图2', '反推蓝图3'])
   })
 })
 
