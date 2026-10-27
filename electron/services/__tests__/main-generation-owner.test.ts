@@ -2956,6 +2956,17 @@ describe('main draft persistence and batch lineage', () => {
       ])
       expect(JSON.stringify(reopened.list())).not.toContain(draftText)
     })
+    it('一条生成尝试的收据坏成不是 JSON 时，其余单章候选照常列出，只标部分读取失败', async () => {
+      const f = drafting()
+      const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken-receipt', authorInputs })
+      const intact = await generate(f, { ...f.begin, uiActionNonce: 'intact-receipt', authorInputs })
+      f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+        uiActionNonce: 'batch-beside-bad-receipt', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+      f.db.prepare("UPDATE generation_attempts SET usage_receipt_json='{坏收据' WHERE run_id=?").run(broken.run.handle.runId)
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([intact.run.handle.runId])
+      expect(list.partial).toBe(true)
+    })
     it('一个运行读不出时照常列出其余运行，并标出部分读取失败', async () => {
       const f = drafting()
       const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken', authorInputs })

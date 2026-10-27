@@ -1031,8 +1031,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (!kind || kind === 'draft' && run.batchId) continue
       try { collect[kind](run.handle) } catch { list.partial = true }
     }
-    const commits = draftEffects.batchCommits()
-    for (const run of runs.filter(item => item.batchRoot)) {
+    const batchRoots = runs.filter(item => item.batchRoot)
+    if (!batchRoots.length) return list
+    let commits: ReturnType<typeof draftEffects.batchCommits>
+    try { commits = draftEffects.batchCommits() } catch { return { ...list, partial: true } }
+    for (const run of batchRoots) {
       try {
         const batch = draftEffects.readBatchHistory(run.handle.runId, deps.projectId, commits)
         if (batch.nextChapterNumber !== null) list.batches.push(batch)
