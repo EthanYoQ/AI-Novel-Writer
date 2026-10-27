@@ -30,10 +30,12 @@ export function finalizationRepairMessage(repair: DuplicateFinalizationRepair, t
       'Some chapters had more than one final version (left by refinalizing after “Revert to this version…” in an older release), which blocked writing later chapters. This is now fixed:',
     ),
     ...chapters,
-    text(
-      '旧定稿的正文仍在版本历史里。它留下的实体稿没有自动删除，可以在正文目录里自行删除。',
-      'The replaced text is still in version history. Its manuscript files were not deleted; you can delete them from the manuscript folder.',
-    ),
+    repair.chapters.some(chapter => chapter.superseded.some(item => item.targetFileName))
+      ? text(
+        '旧定稿的正文仍在版本历史里。它留下的实体稿没有自动删除，可以在正文目录里自行删除。',
+        'The replaced text is still in version history. Its manuscript files were not deleted; you can delete them from the manuscript folder.',
+      )
+      : text('旧定稿的正文仍在版本历史里。', 'The replaced text is still in version history.'),
   ].join('\n\n')
 }
 
