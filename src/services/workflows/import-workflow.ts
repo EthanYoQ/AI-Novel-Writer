@@ -21,6 +21,7 @@ import {
   type ImportRunOrchestratorDependencies,
 } from './import-run-orchestrator'
 import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh'
+import { novelConfigFromCore } from './import-suggestions'
 import { promptLanguageText } from '../prompt-language'
 import { retryDirectoryCharacterSync } from './directory-character-sync-recovery'
 import type { WritingLanguage } from '../../shared/writing-language'
@@ -237,25 +238,7 @@ function productionDependencies(
         ))
       }
       useProjectStore.setState({
-        currentProject: {
-          ...current,
-          novelConfig: {
-            ...current.novelConfig,
-            genre: core.genre,
-            subGenre: core.subGenre,
-            targetAudience: core.targetAudience,
-            totalChapters: core.totalChapters,
-            wordsPerChapter: core.wordsPerChapter,
-            plotStructure: core.plotStructure as typeof current.novelConfig.plotStructure,
-            narrativePOV: core.narrativePov as typeof current.novelConfig.narrativePOV,
-            writingStyle: core.writingStyle,
-            globalGuidance: core.globalGuidance,
-            goldenFinger: core.goldenFinger,
-            coreOutline: core.coreOutline,
-            worldSetting: core.worldSetting,
-            protagonistProfile: core.protagonistProfile,
-          },
-        },
+        currentProject: { ...current, novelConfig: novelConfigFromCore(current.novelConfig, core) },
       })
       context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
     },

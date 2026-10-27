@@ -16,6 +16,7 @@ import { Button } from '../../ui/Button'
 import MarkdownContent from '../../ui/MarkdownContent'
 import { Notice } from '../../ui/Notice'
 import { ProgressRing } from '../ProgressRing'
+import { ImportSuggestions } from './ImportSuggestions'
 import { clockTime, stepDuration } from './run-format'
 
 type Text = (zh: string, en: string) => string
@@ -103,6 +104,7 @@ export function RunDetails({ run, primary = true }: { run: WorkflowRun; primary?
   return (
     <>
       <RunSteps run={run} live={ACTIVE_RUN_STATUSES.has(run.status)} text={text} />
+      {run.type === 'novel_import' && run.status === 'completed' && <ImportSuggestions run={run} />}
       {run.status === 'failed' && <RunFailureNotice run={run} primary={primary} />}
     </>
   )
