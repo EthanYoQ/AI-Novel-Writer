@@ -30,7 +30,10 @@ export default function ModelsSection({ purposes, header }: { purposes: ModelPro
   const retrieval = section.isEmbeddingSection
   const kind = retrieval ? text('检索模型', 'retrieval model') : text('模型', 'model')
   const embeddingMissing = useLLMStore(s => retrieval && s.loaded && !s.defaultEmbeddingModelId)
-  const stagesAssigned = useLLMStore(s => !retrieval && MODEL_STAGES.some(stage => routeStageModel(stage, s).source === 'stage'))
+  const stagesAssigned = useLLMStore(s => !retrieval && MODEL_STAGES.some(stage => {
+    const route = routeStageModel(stage, s)
+    return route.source === 'stage' && route.modelId !== s.defaultModelId
+  }))
   const signUp = () => void openModelProviderResource('siliconflow-invite', text)
   const add = <Button variant="secondary" onClick={section.add}><Plus size={14} aria-hidden="true" />{text(`添加${kind}`, `Add ${kind}`)}</Button>
 
