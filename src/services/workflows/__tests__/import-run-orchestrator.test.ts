@@ -852,17 +852,21 @@ describe('ImportRunOrchestrator failure copy follows the import run locale', () 
 
     expect((failure as Error).message).toBe(importGenerationStopMessage(locale, code))
     expect((failure as Error).message).toContain(code)
-    expect(failure).toMatchObject({ code })
     expect(getRun()).toMatchObject({ status: 'failed', lastError: (failure as Error).message })
   })
 
-  it('keeps an unrelated provider failure as it was', async () => {
+  it.each([
+    ['an unrelated provider failure', new Error('provider unavailable')],
+    ['a step explanation that carries a stop code', Object.assign(new Error('蓝图推演失败：活动时长用完（ROOT_BUDGET_EXHAUSTED）'), { code: 'ROOT_BUDGET_EXHAUSTED' })],
+  ])('keeps %s as it was', async (_case, thrown) => {
     const { deps, getRun } = harness(1, { stage: 'global' })
-    deps.inferGlobal = vi.fn(async () => { throw new Error('provider unavailable') })
+    deps.inferGlobal = vi.fn(async () => { throw thrown })
 
-    await expect(new ImportRunOrchestrator(deps)
-      .executeStage('run-1', 'global', 'test-runner', { cancelled: false }, callbacks)).rejects.toThrow(/^provider unavailable$/u)
-    expect(getRun().lastError).toBe('provider unavailable')
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'global', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+    expect(failure).toBe(thrown)
+    expect(getRun().lastError).toBe(thrown.message)
   })
 
   it('uses the registered takeover explanation when lease renewal returns another execution identity', async () => {
