@@ -230,8 +230,9 @@ afterEach(async () => {
   ])
   clearTimeout(timer)
   closeProjectDatabase()
-  if (!settled) return
-  for (const root of caseRoots) await removeDirectoryWithWindowsRetry(root)
+  const removeRoots = async () => { for (const root of caseRoots) await removeDirectoryWithWindowsRetry(root) }
+  if (settled) return removeRoots()
+  void Promise.allSettled(bodies).then(removeRoots).catch(() => undefined)
 }, BODY_SETTLE_MS + 10_000)
 
 it.each(['v100', 'v110'] as const)('%s 有旧角色原文但无角色卡时拒绝发布且保留源', async version => {
