@@ -9,6 +9,7 @@ import {
   InferGlobalSettingsCommand as RuntimeInferGlobalSettingsCommand,
 } from '../import-novel.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+import { importGenerationStopMessage } from '../../../../i18n/app-errors'
 
 class InferBlueprintsPerChapterCommand extends RuntimeInferBlueprintsPerChapterCommand {
   constructor() { super(workflowRuntimeDependencies) }
@@ -302,6 +303,21 @@ describe('InferBlueprintsPerChapterCommand', () => {
 
     await expect(command.execute({ step: {}, context: createContext(), callbacks })).rejects.toThrow(/DB 写入失败/)
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert')
+  })
+
+  it('explains a request-limit stop without the code and records the code in the diagnostics log', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const session = { complete: vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const log = vi.fn()
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED')}`)
+    expect((failure as Error).message).not.toContain('ROOT_BUDGET_EXHAUSTED')
+    expect(log.mock.calls.flat().some(line => String(line).includes('ROOT_BUDGET_EXHAUSTED'))).toBe(true)
   })
 
   it('fails closed with a stable relationship diagnostic when relation is missing', async () => {

@@ -226,10 +226,10 @@ it('names the output limit setting by its field label when that setting is inval
 })
 
 describe('import generation stops (#537)', () => {
-  const restartAdvice = /重新生成|重新开始|重新导入|从头|Generate again|start (?:the import )?(?:again|over)|restart/iu
+  const nextStep = { 'zh-CN': /只能在导入对话框里点「重新开始」，它会从第 1 章重新推演蓝图/u, 'en-US': /choose Start over in the import dialog.*Chapter 1/u } as const
   const blocked = ['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'] as const
 
-  it.each(['zh-CN', 'en-US'] as const)('tells a request limit, an active-time stop and a blocked generation apart in %s, with the code and no restart advice', locale => {
+  it.each(['zh-CN', 'en-US'] as const)('tells a request limit, an active-time stop and a blocked generation apart in %s, without codes, and names the only way to finish', locale => {
     const requestLimit = importGenerationStopMessage(locale, 'ROOT_BUDGET_EXHAUSTED')
     const activeTime = importGenerationStopMessage(locale, 'ROOT_BUDGET_EXHAUSTED', true)
     const blockedMessages = blocked.map(code => importGenerationStopMessage(locale, code))
@@ -237,16 +237,12 @@ describe('import generation stops (#537)', () => {
     const all = [requestLimit, activeTime, ...blockedMessages, previousAttempt]
     for (const message of all) {
       expect(message).toBeTruthy()
-      expect(message).not.toMatch(restartAdvice)
+      expect(message).not.toMatch(/[A-Z]{3,}_[A-Z]/u)
+      expect(message).toMatch(nextStep[locale])
       expect(message).not.toBe(knownAppErrorMessage(locale, 'GENERATION_DISPATCH_BLOCKED'))
     }
-    expect(requestLimit).toContain('ROOT_BUDGET_EXHAUSTED')
-    expect(activeTime).toContain('ROOT_BUDGET_EXHAUSTED')
-    blocked.forEach((code, index) => expect(blockedMessages[index]).toContain(code))
-    expect(previousAttempt).toContain('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
-    const withoutCode = (message: string | undefined) => message!.replace(/[A-Z][A-Z0-9_]+/gu, '')
-    expect(new Set([requestLimit, activeTime, blockedMessages[0], previousAttempt].map(withoutCode)).size).toBe(4)
-    expect(new Set(blockedMessages.map(withoutCode)).size).toBe(1)
+    expect(new Set([requestLimit, activeTime, blockedMessages[0], previousAttempt]).size).toBe(4)
+    expect(new Set(blockedMessages).size).toBe(1)
     if (locale === 'en-US') for (const message of all) expect(message).not.toMatch(/\p{Script=Han}/u)
   })
 

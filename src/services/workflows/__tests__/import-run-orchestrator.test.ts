@@ -841,18 +841,20 @@ describe('ImportRunOrchestrator failure copy follows the import run locale', () 
   it.each([
     ['zh-CN', 'blueprints', "Error invoking remote method 'generation:begin': Error: GENERATION_DIRECTORY_CONTINUATION_BLOCKED", 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED'],
     ['en-US', 'global', 'ROOT_BUDGET_EXHAUSTED', 'ROOT_BUDGET_EXHAUSTED'],
-  ] as const)('stores and throws the %s import stop explanation with its code when %s generation stops on %s', async (locale, stage, raw, code) => {
+  ] as const)('stores and throws the %s import stop explanation and logs the code for diagnostics when %s generation stops on %s', async (locale, stage, raw, code) => {
     const { deps, getRun } = harness(5, { locale, stage })
     deps.inferGlobal = vi.fn(async () => { throw new Error(raw) })
     deps.inferBlueprints = vi.fn(async () => { throw new Error(raw) })
+    const log = vi.fn()
 
     const failure = await new ImportRunOrchestrator(deps)
-      .executeStage('run-1', stage, 'test-runner', { cancelled: false }, callbacks)
+      .executeStage('run-1', stage, 'test-runner', { cancelled: false }, { ...callbacks, log })
       .catch((error: Error) => error)
 
     expect((failure as Error).message).toBe(importGenerationStopMessage(locale, code))
-    expect((failure as Error).message).toContain(code)
+    expect((failure as Error).message).not.toContain(code)
     expect(getRun()).toMatchObject({ status: 'failed', lastError: (failure as Error).message })
+    expect(log.mock.calls.flat().some(line => String(line).includes(code))).toBe(true)
   })
 
   it.each([
