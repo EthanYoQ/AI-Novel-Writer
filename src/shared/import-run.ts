@@ -306,6 +306,8 @@ export interface ImportRunSnapshot {
   /** Author-manuscript snapshots expose only the hashes needed to resume their confirmed commit. */
   manifestFingerprint?: string
   authorityFingerprint?: string
+  /** 作者原稿：创建运行时冻结的「同时反推设定、架构、角色和蓝图」。 */
+  authorInference?: boolean
   sourceDisplay: ImportSourceDisplayMetadata[]
   /** Safe display facts for sources that still need user reauthorization. */
   unfinishedSourceDisplay?: ImportSourceDisplayMetadata[]

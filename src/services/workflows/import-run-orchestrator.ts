@@ -15,6 +15,7 @@ import {
   createImportRunChapterBatchCheckpointId,
   IMPORT_RUN_BLUEPRINT_BATCH_SIZE,
   IMPORT_RUN_KNOWLEDGE_BATCH_SIZE,
+  parseImportRunChapterBatchCheckpointId,
 } from '../../shared/import-run'
 import type { StepCallbacks } from '../../stores/workflow-store'
 import type { FinalizedDraftImportDraftReceipt, FinalizedDraftImportReceipt } from '../../shared/finalized-draft-import'
@@ -108,6 +109,8 @@ export interface ImportRunOrchestratorDependencies {
     draft: FinalizedDraftImportDraftReceipt,
     run: ImportRunSnapshot,
   ) => Promise<void>
+  /** 作者原稿蓝图补空：当前已有蓝图的章号。 */
+  listBlueprintChapterNumbers?: () => Promise<ReadonlySet<number>>
   refresh: (run: ImportRunSnapshot) => Promise<void>
   completeBatch: (
     runId: string,
@@ -126,17 +129,28 @@ export interface ImportRunOrchestratorDependencies {
   complete: (runId: string, execution: ImportRunExecutionLease) => Promise<ImportRunSnapshot>
 }
 
-const REFERENCE_STAGES: ImportRunStage[] = ['knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed']
-const AUTHOR_STAGES: ImportRunStage[] = [
-  'author-commit', 'author-publish', 'author-postprocess', 'refresh', 'completed',
-]
+/** 阶段顺序由运行用途和冻结的反推选项决定；作者原稿的反推放在后处理之后，知识库里已经有定稿正文。 */
+const IMPORT_STAGE_PLANS = {
+  reference: ['knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed'],
+  author: ['author-commit', 'author-publish', 'author-postprocess', 'refresh', 'completed'],
+  authorWithInference: [
+    'author-commit', 'author-publish', 'author-postprocess', 'global', 'style', 'blueprints', 'refresh', 'completed',
+  ],
+} as const satisfies Record<string, readonly ImportRunStage[]>
 
-function stagesFor(run: Pick<ImportRunSnapshot, 'purpose'>): ImportRunStage[] {
-  return run.purpose === 'author-manuscript' ? AUTHOR_STAGES : REFERENCE_STAGES
+type ImportStagePlanRun = Pick<ImportRunSnapshot, 'purpose' | 'authorInference'>
+
+export function importStagesFor(run: ImportStagePlanRun): readonly ImportRunStage[] {
+  if (run.purpose === 'reference') return IMPORT_STAGE_PLANS.reference
+  return run.authorInference ? IMPORT_STAGE_PLANS.authorWithInference : IMPORT_STAGE_PLANS.author
 }
 
-function stageIndex(run: Pick<ImportRunSnapshot, 'purpose'>, stage: ImportRunStage): number {
-  return stagesFor(run).indexOf(stage)
+function stageIndex(run: ImportStagePlanRun, stage: ImportRunStage): number {
+  return importStagesFor(run).indexOf(stage)
+}
+
+function nextStage(run: ImportStagePlanRun, stage: ImportRunStage): ImportRunStage {
+  return importStagesFor(run)[stageIndex(run, stage) + 1]!
 }
 
 function requiredAuthorDependency<T>(value: T | undefined, name: string): T {
@@ -305,14 +319,8 @@ export class ImportRunOrchestrator {
           await this.executeAuthorCommit(run, execution, context, callbacks)
           return
         case 'author-publish':
-          await this.executeAuthorProjection(
-            run, execution, context, callbacks, 'author-publish', 'author-postprocess',
-          )
-          return
         case 'author-postprocess':
-          await this.executeAuthorProjection(
-            run, execution, context, callbacks, 'author-postprocess', 'refresh',
-          )
+          await this.executeAuthorProjection(run, execution, context, callbacks, requestedStage)
           return
         case 'refresh':
           await this.executeRefresh(run, execution, context, callbacks)
@@ -391,7 +399,7 @@ export class ImportRunOrchestrator {
     }
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
     stopIfCancelled(context, run.locale)
-    await this.dependencies.advanceStage(run.id, 'knowledge', 'global', execution.current)
+    await this.dependencies.advanceStage(run.id, 'knowledge', nextStage(run, 'knowledge'), execution.current)
   }
 
   private async representativeChapters(runId: string): Promise<ImportRunChapterSnapshot[]> {
@@ -503,7 +511,7 @@ export class ImportRunOrchestrator {
     stopIfCancelled(context, run.locale)
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
     stopIfCancelled(context, run.locale)
-    await this.dependencies.advanceStage(run.id, 'global', 'style', execution.current)
+    await this.dependencies.advanceStage(run.id, 'global', nextStage(run, 'global'), execution.current)
   }
 
   private async executeStyle(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
@@ -521,15 +529,33 @@ export class ImportRunOrchestrator {
     stopIfCancelled(context, run.locale)
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
     stopIfCancelled(context, run.locale)
-    await this.dependencies.advanceStage(run.id, 'style', 'blueprints', execution.current)
+    await this.dependencies.advanceStage(run.id, 'style', nextStage(run, 'style'), execution.current)
+  }
+
+  /**
+   * 作者原稿只为还没有蓝图的章反推。本次运行已提交过的章此刻也有蓝图，仍要留在批次里，
+   * 续跑时才会按原检查点重放（补完角色同步），而不是被当成作者已有的蓝图跳过。
+   */
+  private async blueprintChapterFilter(run: ImportRunSnapshot): Promise<(chapter: ImportRunChapterSnapshot) => boolean> {
+    if (run.purpose === 'reference') return () => true
+    const existing = await requiredAuthorDependency(
+      this.dependencies.listBlueprintChapterNumbers,
+      'listBlueprintChapterNumbers',
+    )()
+    const committedRanges = (run.completedBatches.blueprints ?? [])
+      .map(parseImportRunChapterBatchCheckpointId)
+      .filter(range => range !== null)
+    return chapter => !existing.has(chapter.number)
+      || committedRanges.some(range => range.startChapter <= chapter.number && chapter.number <= range.endChapter)
   }
 
   private async executeBlueprints(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
+    const needsBlueprint = await this.blueprintChapterFilter(run)
     let after = 0
     let visited = 0
     let page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)
     while (page.length > 0) {
-      for (const batch of splitContiguousBatches(page, IMPORT_BLUEPRINT_BATCH_SIZE)) {
+      for (const batch of splitContiguousBatches(page.filter(needsBlueprint), IMPORT_BLUEPRINT_BATCH_SIZE)) {
         const checkpoint = createImportRunChapterBatchCheckpointId(batch)
         if (run.completedBatches.blueprints?.includes(checkpoint)) {
           const replayed = await this.replayCheckpointedEffect(
@@ -563,7 +589,7 @@ export class ImportRunOrchestrator {
     }
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
     stopIfCancelled(context, run.locale)
-    await this.dependencies.advanceStage(run.id, 'blueprints', 'refresh', execution.current)
+    await this.dependencies.advanceStage(run.id, 'blueprints', nextStage(run, 'blueprints'), execution.current)
   }
 
   private async executeAuthorCommit(
@@ -595,7 +621,7 @@ export class ImportRunOrchestrator {
     stopIfCancelled(context, run.locale)
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
     stopIfCancelled(context, run.locale)
-    await this.dependencies.advanceStage(run.id, 'author-commit', 'author-publish', execution.current)
+    await this.dependencies.advanceStage(run.id, 'author-commit', nextStage(run, 'author-commit'), execution.current)
   }
 
   private async executeAuthorProjection(
@@ -604,7 +630,6 @@ export class ImportRunOrchestrator {
     context: ImportRunExecutionContext,
     callbacks: StepCallbacks,
     stage: 'author-publish' | 'author-postprocess',
-    nextStage: 'author-postprocess' | 'refresh',
   ): Promise<void> {
     let run = initialRun
     const getReceipt = requiredAuthorDependency(
@@ -663,7 +688,7 @@ export class ImportRunOrchestrator {
     }
     execution.current = await this.dependencies.renewExecution(run.id, execution.current)
     stopIfCancelled(context, run.locale)
-    await this.dependencies.advanceStage(run.id, stage, nextStage, execution.current)
+    await this.dependencies.advanceStage(run.id, stage, nextStage(run, stage), execution.current)
   }
 
   private async executeRefresh(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
