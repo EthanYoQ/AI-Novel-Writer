@@ -257,7 +257,7 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
     try {
       const modelId = context.generationModelId || routeModelId('legacy-character-roster-repair') || ''
       const current = await client.open(handle ? { handle } : { modelId, uiActionNonce: `legacy-roster:${context.runId}` })
-      if (!handle) pinWorkflowModel(context, current.modelId)
+      pinWorkflowModel(context, current.modelId)
       context.mainGenerationRunHandle = current.view.handle
       context.data.legacyRosterGenerationHandle = current.view.handle
       const completed = current.proposal ? current : await client.execute()

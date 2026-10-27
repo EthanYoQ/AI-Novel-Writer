@@ -101,7 +101,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
         if (context.mainGenerationRootHandle && context.mainGenerationRootHandle.rootActionId !== resumeHandle.rootActionId)
           throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
         const resuming = stored.nonReplayable && !importStage
-        if (resuming) begunModelId = (await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: resumeHandle })).modelId
+        if (resuming) begunModelId = modelId = (await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: resumeHandle })).modelId
         view = resuming ? await transport.resume(projectSession, resumeHandle).catch((error: unknown) => {
           // 主进程按设计拒绝续写来源无效的大纲任务，只给错误码；换成与恢复稿入口相同的说明。
           if (stored.plotOutline?.protocol === PLOT_OUTLINE_PROTOCOL && String((error as Error)?.message ?? error).includes('GENERATION_PLOT_OUTLINE_PREFIX_INVALID'))
