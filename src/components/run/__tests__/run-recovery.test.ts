@@ -339,3 +339,12 @@ describe('规划恢复稿', () => {
     expect(buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'en-US')[0].title).toBe('Outline recovery draft · ch. 6')
   })
 })
+
+describe('选区建议', () => {
+  it('按意见改的中断条目带上当时的作者意见', () => {
+    const editor = (context: Record<string, unknown>) => buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES,
+      editors: [{ view: view('选区'), modelId: '模型', sourceStatus: 'current', context: { selectedText: '选中', documentText: '全文', ...context } } as never] }, 'zh-CN')[0]
+    expect(editor({ action: 'instruct', instruction: '改成第一人称' })).toMatchObject({ kind: 'editor', instructionNote: '作者意见：改成第一人称' })
+    expect(editor({ action: 'refine' })).toMatchObject({ kind: 'editor', instructionNote: undefined })
+  })
+})
