@@ -156,9 +156,9 @@ async function main() {
     await runSheet.tab(page, '诊断').click()
     await page.getByRole('button', { name: '复制安全诊断' }).waitFor()
     const clipboardSentinel = `pre-click-sentinel-${runId}`
-    const previousClipboard = await app.evaluate(({ clipboard }) => ({
-      formats: clipboard.availableFormats(),
-      text: clipboard.readText(),
+    const previousClipboard = await app.evaluate(async ({ clipboard }) => ({
+      formats: (await clipboard.read()).flatMap(item => item.types),
+      text: await clipboard.readText(),
     }))
     const wasEmpty = previousClipboard.formats.length === 0
     if ((wasEmpty && previousClipboard.text !== '')
@@ -187,18 +187,18 @@ async function main() {
     }
     try {
       await app.evaluate(({ clipboard }, sentinel) => clipboard.writeText(sentinel), clipboardSentinel)
-      const sentinelState = await app.evaluate(({ clipboard }) => ({
-        formats: clipboard.availableFormats(),
-        text: clipboard.readText(),
+      const sentinelState = await app.evaluate(async ({ clipboard }) => ({
+        formats: (await clipboard.read()).flatMap(item => item.types),
+        text: await clipboard.readText(),
       }))
       if (sentinelState.text !== clipboardSentinel || sentinelState.formats.length !== 1 || sentinelState.formats[0] !== 'text/plain') {
         throw new Error('OS clipboard test sentinel was not written as plain text')
       }
       clipboardObservation.sentinelVerified = true
       await page.getByRole('button', { name: '复制安全诊断' }).click()
-      const copiedState = await app.evaluate(({ clipboard }) => ({
-        formats: clipboard.availableFormats(),
-        text: clipboard.readText(),
+      const copiedState = await app.evaluate(async ({ clipboard }) => ({
+        formats: (await clipboard.read()).flatMap(item => item.types),
+        text: await clipboard.readText(),
       }))
       copiedDiagnostic = copiedState.text
       if (copiedState.formats.length !== 1 || copiedState.formats[0] !== 'text/plain'
@@ -211,15 +211,16 @@ async function main() {
       }
       clipboardObservation.diagnosticReadBackVerified = true
     } finally {
-      const restoration = await app.evaluate(({ clipboard }, { previous, sentinel, marker, wasEmpty }) => {
-        const current = clipboard.readText()
+      const restoration = await app.evaluate(async ({ clipboard }, { previous, sentinel, marker, wasEmpty }) => {
+        const formatsOf = async () => (await clipboard.read()).flatMap(item => item.types)
+        const current = await clipboard.readText()
         if (current !== sentinel && !current.includes(marker)) {
-          return { status: 'skipped-external-change', formats: clipboard.availableFormats(), textMatches: false }
+          return { status: 'skipped-external-change', formats: await formatsOf(), textMatches: false }
         }
         if (wasEmpty) clipboard.clear()
-        else clipboard.writeText(previous)
-        const formats = clipboard.availableFormats()
-        const textMatches = clipboard.readText() === previous
+        else await clipboard.writeText(previous)
+        const formats = await formatsOf()
+        const textMatches = await clipboard.readText() === previous
         const formatsMatch = wasEmpty
           ? formats.length === 0
           : formats.length === 1 && formats[0] === 'text/plain'

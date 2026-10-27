@@ -26,7 +26,7 @@ describe('release dependency contract', () => {
 
   it('runs clean, native verification, and executable smoke gates for Windows builds', () => {
     expect(pkg.scripts?.['build:win-dir']).toContain('pnpm run clean:build')
-    expect(pkg.scripts?.['build:win-dir']).toContain('pnpm run rebuild:electron')
+    expect(pkg.scripts?.['build:win-dir']).not.toContain('rebuild')
     expect(pkg.scripts?.['build:win-dir']).toContain('pnpm run verify:win-package')
     expect(pkg.scripts?.['verify:win-package']).toBe('node scripts/verify-win-package.mjs')
     expect(pkg.scripts?.['smoke:win-app']).toContain('scripts/smoke-win-app.ps1')
@@ -43,6 +43,7 @@ describe('release dependency contract', () => {
       .replace('${ext}', 'dmg')
     expect(resolveMacArtifactName('arm64')).toBe('ai-novel-writer-mac-arm64-0.0.0-installer.dmg')
     expect(resolveMacArtifactName('x64')).toBe('ai-novel-writer-mac-x64-0.0.0-installer.dmg')
+    expect(builder).toContain('"npmRebuild": false')
     expect(builder).toContain('node_modules/@lancedb/lancedb/**/*')
     expect(builder).toContain('node_modules/@lancedb/lancedb-darwin-*/**/*')
     expect(builder).toContain('node_modules/@lancedb/lancedb-win32-x64-msvc/**/*')
@@ -65,7 +66,7 @@ describe('release dependency contract', () => {
     expect(pkg.scripts?.['build:win']).toBe('pnpm run release:win:verify')
     expect(pkg.scripts?.['release:win:verify']).toBe('node scripts/release-win-verify.mjs')
     expect(pkg.scripts?.['build:win:artifacts']).toMatch(/^node scripts\/require-release-gate\.mjs && /)
-    expect(pkg.scripts?.['build:win:artifacts']).toContain('pnpm run rebuild:electron')
+    expect(pkg.scripts?.['build:win:artifacts']).not.toContain('rebuild')
     expect(pkg.scripts?.['build:win:artifacts']).toContain('electron-builder --win --x64')
     expect(pkg.scripts?.['build:win:artifacts']).toContain('--publish never')
 
@@ -103,7 +104,6 @@ describe('release dependency contract', () => {
     expect(plan.status, plan.stderr || plan.error?.message).toBe(0)
     expect(JSON.parse(plan.stdout)).toEqual([
       'test',
-      'prepare:native-node',
       'clean:build',
       'build:win:artifacts',
       'verify:win-update-artifacts',
@@ -111,8 +111,6 @@ describe('release dependency contract', () => {
       'smoke:win-app',
       'smoke:win-installer',
       'smoke:win-v025-upgrade',
-      'restore:native-node',
-      'verify:native-node',
       'final:quiet',
     ])
     const releasePlan = JSON.parse(plan.stdout) as string[]
@@ -146,7 +144,7 @@ describe('release dependency contract', () => {
     const canUseMonitorDefinition = releaseGate.indexOf('function canUseMonitor()')
     const canUseMonitorBody = releaseGate.slice(
       canUseMonitorDefinition,
-      releaseGate.indexOf('async function runMonitoredNodeProcess', canUseMonitorDefinition),
+      releaseGate.indexOf('async function waitForFinalQuietPeriod', canUseMonitorDefinition),
     )
     const monitorStartBody = releaseGate.slice(
       monitorStartDefinition,
