@@ -76,6 +76,15 @@ describe('Agent GenerationRuntime boundary', () => {
     expect(lastMessage()?.content).not.toContain('provider-secret-runtime-failure')
   })
 
+  it('shows the context-length guidance when the provider rejects the round as too long', async () => {
+    fixture.response = async () => {
+      fixture.recovery.run = { ...fixture.recovery.run, budgetDiagnostics: [{ failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } as never
+      return { status: 'incomplete', text: '' }
+    }
+    await useAgentStore.getState().sendMessage('检查项目')
+    expect(lastMessage()?.content).toContain('换用上下文更长的模型')
+  })
+
   it('keeps cancellation copy in the locale frozen when the turn started', async () => {
     useLocaleStore.setState({ locale: 'en-US', initialized: true })
     let resolve!: (text: string) => void

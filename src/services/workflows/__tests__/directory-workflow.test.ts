@@ -520,6 +520,18 @@ describe('directory workflow project context', () => {
     expect((failure as Error).message).not.toContain('provider-secret-directory-failure')
   })
 
+  it('passes a provider context-length rejection through instead of asking to retry', async () => {
+    const projectA = project('C:\novels\English-context-length')
+    const projectSession = { projectId: projectA.id, leaseId: projectA.sessionLease!, projectPath: projectA.path }
+    useProjectStore.setState({ currentProject: projectA })
+    const directoryCommand = await import('../commands/directory.command')
+    vi.spyOn(directoryCommand.GenerateDirectoryCommand.prototype, 'execute').mockRejectedValue(new Error('GENERATION_CONTEXT_LENGTH_EXCEEDED'))
+    const workflow = createDirectoryWorkflow({ mode: 'full' }, projectA.path, projectSession, 'en-US')
+    await expect(workflow.steps[1].executor(workflowStep('Generate blueprints'), { runId: 'context-length-run', projectPath: projectA.path, projectSession,
+      writingLanguage: 'zh-CN', uiLocale: 'en-US', data: {}, cancelled: false }, { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }))
+      .rejects.toThrow(/^GENERATION_CONTEXT_LENGTH_EXCEEDED$/u)
+  })
+
   it('freezes English workflow labels and user-visible logs at launch', async () => {
     const projectA = project('C:\\novels\\English')
     const projectSession = {

@@ -999,7 +999,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert-many')
   })
 
-  it('explains a provider context-length rejection in the English failure', async () => {
+  it('fails with the registered code when the provider rejects the request as too long', async () => {
     stubIpcInvoke(successfulCommitHandler())
     const session = generationSession(async task => {
       throw new TerminalProviderFailureError('GENERATION_CONTEXT_LENGTH_EXCEEDED', generationReceipt(1, 'error', task.purpose))
@@ -1008,9 +1008,7 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(session)) })
     const failure = await command.execute({ step: {}, context: { ...workflowContext(), uiLocale: 'en-US' }, callbacks: stepCallbacks() })
       .then(() => null, error => error as Error)
-    expect(failure?.message).toContain('Switch to a model with a longer context')
-    expect(failure?.message).toContain('reason=context_length')
-    expect(failure?.message).not.toMatch(/[\u3400-\u9fff]/u)
+    expect(failure?.message).toBe('GENERATION_CONTEXT_LENGTH_EXCEEDED')
   })
 
   it('replays the frozen historical split sequence and recovers chapter 18 with one compact task', async () => {
