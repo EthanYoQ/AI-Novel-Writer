@@ -322,6 +322,16 @@ describe('运行侧页', () => {
     expect(reads().map(([channel]) => channel)).toEqual(['generation:list-recovery', 'generation:list-recovery'])
   })
 
+  it('历史已满 50 条时，又一个运行结束仍会重读可恢复列表', async () => {
+    const ended = Array.from({ length: 50 }, (_, index) => run(`旧${index}`, 'completed', { completedAt: '2026-10-12T08:00:00.000Z' }))
+    useWorkflowStore.setState({ history: ended })
+    const reads = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')
+    await render()
+    await vi.waitFor(() => expect(reads()).toHaveLength(1))
+    await act(async () => useWorkflowStore.setState({ history: [run('新', 'failed', { completedAt: '2026-10-12T09:00:00.000Z' }), ...ended.slice(0, 49)] }))
+    await vi.waitFor(() => expect(reads()).toHaveLength(2))
+  })
+
   it('单章候选点「不再显示」后，重开作品也不再出现；生成记录不动，其他候选照常显示', async () => {
     const draftRun = (runId: string, text: string) => {
       const handle = { projectId: session.projectId, epoch: '上次打开', rootActionId: `${runId}根`, runId }

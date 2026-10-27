@@ -56,7 +56,8 @@ export function useRunRecovery(): RunRecovery {
   const locale = useLocaleStore(s => s.locale)
   const project = useProjectStore(s => s.currentProject)
   const session = useMemo(() => projectSessionContextFromProject(project), [project])
-  const endedRuns = useWorkflowStore(s => s.history.length)
+  /** 最近结束的那次运行：历史最多留 50 条，满了以后条数不再变，只能看最前面那条。 */
+  const lastEnded = useWorkflowStore(s => s.history[0] ? `${s.history[0].id}:${s.history[0].completedAt ?? ''}` : '')
   const [candidateList, setCandidates] = useState<Loaded<RecoverySources['candidates']>>({ session: null, value: [] })
   const [candidateError, setCandidateError] = useState('')
   const [generationList, setGeneration] = useState<Loaded<Omit<RecoverySources, 'candidates'>>>({ session: null, value: EMPTY_RECOVERY_SOURCES })
@@ -98,7 +99,7 @@ export function useRunRecovery(): RunRecovery {
       setGenerationError('')
     }).catch(reason => { if (active) setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
     return () => { active = false }
-  }, [session, endedRuns, refreshTick])
+  }, [session, lastEnded, refreshTick])
 
   const entries = useMemo(() => {
     if (!session) return []
