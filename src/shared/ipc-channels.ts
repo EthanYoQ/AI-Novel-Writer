@@ -165,6 +165,19 @@ export interface ModelProviderResourceChannels {
   }
 }
 
+export type DialogDirectoryKind =
+  | 'writing-skill'
+  | 'character-avatar'
+  | 'export-directory'
+  | 'import-source'
+  | 'knowledge-files'
+  | 'knowledge-folder'
+  | 'project-archive'
+  | 'project-restore-target'
+  | 'legacy-project'
+  | 'project-create'
+  | 'project-open'
+
 export interface GlobalConfig {
   theme: string
   outlineTargetUnits?: number
@@ -179,6 +192,7 @@ export interface GlobalConfig {
   autoSaveInterval: number
   /** 更新检查和提醒延后的本机偏好，持久化到 ~/.vela/config.json。 */
   updatePreferences?: UpdatePreferences
+  dialogDirectories?: Partial<Record<DialogDirectoryKind, string>>
   proxy?: {
     enabled: boolean
     type: 'http' | 'socks5'

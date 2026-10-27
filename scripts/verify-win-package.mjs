@@ -37,9 +37,8 @@ export function findBetterSqliteBinding(unpackedDir) {
     'app.asar.unpacked',
     'node_modules',
     'better-sqlite3',
-    'build',
-    'Release',
-    'better_sqlite3.node',
+    'prebuilds',
+    'win32-x64.node',
   )
   return existsSync(binding) ? binding : null
 }
