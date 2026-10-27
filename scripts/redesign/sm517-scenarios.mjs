@@ -79,7 +79,7 @@ export const SM517_SCENARIOS = {
     await blueprint.generateRange(page, 13, 16)
     const plan = await nextChat(fake, beforePlan)
 
-    assert.equal(prose.model, FAKE_MODEL.modelName, '写稿入口在本 PR 仍预选默认模型')
+    assert.equal(prose.model, FAKE_MODEL.modelName, '没给写稿环节指定模型时，写稿用默认模型')
     assert.equal(review.model, MINI.modelName, 'AI 审稿用审稿环节指定的模型')
     assert.equal(plan.model, MINI.modelName, '生成蓝图用规划环节指定的模型')
 
