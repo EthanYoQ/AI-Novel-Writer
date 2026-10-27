@@ -22,6 +22,14 @@ const seedChapter3WithOlderDraft = context => seedStageSample(context, { beforeR
   assert.equal(draft.success, true, draft.error)
 } })
 
+const seedChapter3WithRevision = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path, session }) => {
+  const draft = await invoke(page, 'db:draft-create', { chapterNumber: 3, version: 2, source: 'rewrite', content: SECOND_DRAFT,
+    wordCount: countUnits(SECOND_DRAFT) }, path, session)
+  assert.equal(draft.success, true, draft.error)
+  const revised = await invoke(page, 'db:draft-update-status', draft.id, 'revised', undefined, path, session)
+  assert.equal(revised.success, true, revised.error)
+} })
+
 /** 驱动打开作品会让界面的会话失效，界面不先回到书房就退不干净。 */
 async function factsFromDriverOpen(context, projectPath) {
   await context.reload()
@@ -94,6 +102,16 @@ export const RBK_SCENARIOS = {
     assert.match(observed.supersededSwitcher, /^本章版本：已被替换的定稿 v2 · /u)
     assert.equal(observed.supersededHint, '已被替换的定稿，只读')
     return observed
+  } },
+  'rbk-history-revised-name': { model: true, shell: 'stage', setup: seedChapter3WithRevision, run: async context => {
+    const { page } = context
+    await refs.open(page, 'history')
+    await refs.historyChapters(page).getByRole('button', { name: /雾钟/ }).click()
+    await refs.versionButton(page, '修稿已合并 v2').waitFor({ state: 'visible' })
+    const names = await refs.versionNames(page)
+    await context.shoot('rbk-8-history-revised-name')
+    assert.ok(names.some(name => name.startsWith('修稿已合并 v2')), `版本历史的修稿节点名与版本切换器一致。实际：${JSON.stringify(names)}`)
+    return { names }
   } },
   'rbk-legacy-duplicate-repair': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const projectPath = context.samplePath
