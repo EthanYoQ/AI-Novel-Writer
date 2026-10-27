@@ -15,6 +15,7 @@ import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
   type CommandExecuteParams,
+  type LLMCompletion,
   type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
@@ -169,6 +170,22 @@ export class ImportBlueprintPostCommitSyncError extends Error {
   }
 }
 
+/**
+ * 导入的单次调用（global、style）在请求进行中用完活动时长时，回执带 ROOT_BUDGET_EXHAUSTED：
+ * 换成导入的停止说明，码只进诊断日志。
+ */
+export function assertImportCompletionNotStopped(
+  completion: Pick<LLMCompletion, 'receipt'>,
+  callbacks: Pick<CommandExecuteParams['callbacks'], 'log'>,
+  context: CommandExecuteParams['context'],
+): void {
+  const code = completion.receipt.failureCode
+  const stopped = code && importGenerationStopMessage(context.uiLocale, code, true)
+  if (!stopped) return
+  callbacks.log(workflowUiText(context, `导入停止原因：${code}`, `Import stop reason: ${code}`))
+  throw new Error(stopped)
+}
+
 // =================================================================
 // 1. 向量采样 + AI 推演全局配置/架构/角色
 // =================================================================
@@ -260,6 +277,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       },
       context,
     )
+    assertImportCompletionNotStopped(correction, callbacks, context)
     if (correction.finishReason !== 'stop') throw this.createIncompleteCompletionError(correction.finishReason)
     return decodeImportInferenceWithEndpointDelta(rawResult, correction.content, text)
   }
@@ -400,6 +418,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       },
       context,
     )
+    assertImportCompletionNotStopped(initial, callbacks, context)
     if (initial.finishReason !== 'stop') throw this.createIncompleteCompletionError(initial.finishReason)
     let rawResult = initial.content
     if (isRepairableDirectJsonSyntaxFailure(rawResult)) {
@@ -425,6 +444,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         },
         context,
       )
+      assertImportCompletionNotStopped(repair, callbacks, context)
       if (repair.finishReason !== 'stop') throw this.createIncompleteCompletionError(repair.finishReason)
       if (!preservesStructuredJsonEvidence(rawResult, repair.content)) {
         throw new Error(text(

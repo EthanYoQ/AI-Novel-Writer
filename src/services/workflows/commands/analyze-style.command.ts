@@ -1,4 +1,4 @@
-import { frozenImportContext, importGenerationSelection } from './import-novel.command'
+import { assertImportCompletionNotStopped, frozenImportContext, importGenerationSelection } from './import-novel.command'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
@@ -113,13 +113,16 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
 
     callbacks.log(text('调用 AI 分析文风特征...', 'Running AI writing-style analysis...'))
     const generate = async () => {
-      const result = await this.callLLM(
+      const completion = await this.callLLMResult(
         finalPrompt,
         composePromptSystemRole(template, writingLanguage),
         callbacks,
         { purpose: 'analyze-writing-style', reasoningStage: 'review' },
         context,
       )
+      if (importRuntime) assertImportCompletionNotStopped(completion, callbacks, context)
+      if (completion.finishReason !== 'stop') throw this.createIncompleteCompletionError(completion.finishReason)
+      const result = completion.content
       this.assertNotCancelled(context)
 
       const cleanResult = this.stripThinkingTags(result).trim()
