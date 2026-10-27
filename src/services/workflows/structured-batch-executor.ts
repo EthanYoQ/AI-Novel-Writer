@@ -270,7 +270,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           // 活动时长在请求进行中用完：主进程中止请求、阻断根，并在回执里带上码。
           if (outcome.receipt.failureCode === 'ROOT_BUDGET_EXHAUSTED') {
             throw new ExecutionFailure({ code: 'deadline', reason: 'deadline',
-              message: `结构化生成未正常完成：${outcome.finishReason} (ROOT_BUDGET_EXHAUSTED)`, errorCode: 'ROOT_BUDGET_EXHAUSTED' })
+              message: `结构化生成未正常完成：${outcome.finishReason}`, errorCode: 'ROOT_BUDGET_EXHAUSTED' })
           }
           if (outcome.finishReason !== 'length') {
             const reason: StructuredGenerationFailureReason = outcome.finishReason === 'content_filter'

@@ -332,9 +332,10 @@ export class ImportRunOrchestrator {
           throw error
         }
       } else {
-        // 生成开始或发送前就被预算、阻断拒绝时报错只有裸码，在这里换成导入的说明，存进运行并抛出同一句。
+        // 生成开始或发送前就被预算、阻断拒绝时报错只有裸码，在这里换成导入的说明，存进运行并抛出同一句；码只进诊断日志。
         const code = errorCodeOf(error instanceof Error ? error.message : error)
         const stopped = code && importGenerationStopMessage(run.locale, code)
+        if (stopped) callbacks.log(localize(run.locale, `导入停止原因：${code}`, `Import stop reason: ${code}`))
         const failure = stopped ? new Error(stopped) : error
         try {
           execution.current = await this.dependencies.renewExecution(runId, execution.current)

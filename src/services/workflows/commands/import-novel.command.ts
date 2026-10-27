@@ -743,6 +743,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     })
     if (!batch.ok) {
       const { errorCode } = batch.failure
+      if (errorCode) callbacks.log(text(`蓝图推演停止原因：${errorCode}`, `Blueprint inference stop reason: ${errorCode}`))
       const reason = (errorCode && importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline'))
         || displayedErrorMessage(context.uiLocale, batch.failure.message)
       throw new Error(text(

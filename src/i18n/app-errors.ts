@@ -315,22 +315,22 @@ function readMessage(error: unknown): string {
 /** 已登记错误码的可读文案；未登记时返回 undefined，由调用方保留原有说明。 */
 export function knownAppErrorMessage(locale: Locale, error: unknown): string | undefined {
   const code = readCode(error)
-  return code ? translate(locale, ERROR_KEYS[code], { code }) : undefined
+  return code ? translate(locale, ERROR_KEYS[code]) : undefined
 }
 
 const IMPORT_BLOCKED_CODES = new Set(['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'])
 
 /**
- * 导入里预算用完或生成被阻断时的说明，带上码。请求次数用完在发送前报出；活动时长在请求进行中用完（inFlight），
- * 之后根被阻断，再发起只会得到阻断码。导入的「重新开始」会从第 1 章重做，所以这些说明不提示重新生成。
- * 其余码返回 undefined，交给共用说明。
+ * 导入里预算用完或生成被阻断时的说明。请求次数用完在发送前报出；活动时长在请求进行中用完（inFlight），
+ * 之后根被阻断，再发起只会得到阻断码。「继续」复用同一份额度，接着完成只能「重新开始」，所以说明写明它从第 1 章重做。
+ * 码不进说明，由调用方记进诊断日志。其余码返回 undefined，交给共用说明。
  */
 export function importGenerationStopMessage(locale: Locale, code: string, inFlight = false): string | undefined {
   const key: MessageKey | undefined = code === 'ROOT_BUDGET_EXHAUSTED'
     ? inFlight ? 'error.importActiveTimeExhausted' : 'error.importRequestLimitReached'
     : IMPORT_BLOCKED_CODES.has(code) ? 'error.importGenerationBlocked'
       : code === 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE' ? 'error.importPreviousAttemptIncomplete' : undefined
-  return key && translate(locale, key, { code })
+  return key && translate(locale, key)
 }
 
 export function appErrorMessage(locale: Locale, error: unknown): string {
