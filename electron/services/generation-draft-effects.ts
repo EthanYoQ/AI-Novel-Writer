@@ -87,7 +87,7 @@ export class GenerationDraftEffects {
       const committed = saved.receipt
       if (committed.handle.rootActionId !== root.rootActionId) throw new Error('GENERATION_BATCH_LINEAGE_INVALID')
       const latest = this.db.prepare('SELECT id FROM drafts WHERE chapter_number=? ORDER BY version DESC,id DESC LIMIT 1').pluck().get(committed.chapterNumber)
-      if (latest !== committed.id) sourceConflict ??= 'GENERATION_BATCH_DRAFT_REPLACED'
+      if (latest !== committed.id || saved.draft?.status === 'superseded') sourceConflict ??= 'GENERATION_BATCH_DRAFT_REPLACED'
       let outbox = this.db.prepare('SELECT finalization_id,content_hash,content_snapshot,chapter_number,publication_status FROM finalization_outbox WHERE draft_id=?').get(committed.id) as {
         finalization_id: string; content_hash: string; content_snapshot: string; chapter_number: number; publication_status: string
       } | undefined
