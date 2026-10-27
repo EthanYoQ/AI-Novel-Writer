@@ -239,9 +239,9 @@ export async function createMainOwnedGenerationRuntime(options: MainOwnedGenerat
       for (const snapshot of receipt.run.artifacts) accept(snapshot)
       await queue
       if (projectionError) throw projectionError
-      throwIfTerminalProviderFailure(receipt.outcome.receipt)
       if (receipt.outcome.status === 'completed' && receipt.outcome.finishReason !== 'stop'
         || receipt.outcome.receipt.finishReason !== receipt.outcome.finishReason) throw new Error('INVALID_MAIN_OUTCOME')
+      throwIfTerminalProviderFailure(receipt.outcome.receipt)
       return receipt.outcome
     },
   }
