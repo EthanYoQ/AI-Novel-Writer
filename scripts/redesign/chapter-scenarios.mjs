@@ -639,9 +639,7 @@ export const CHAPTER_SCENARIOS = {
     assert.equal(characterRequests(), 1, '自动后处理只发了一次角色状态请求')
     const firstError = await detail().innerText()
     await context.restart()
-    // 重启后可能直接回到作品，也可能停在书房：用一个组合定位等其一出现，不留下没人接的等待。
-    await stage.spine(context.page).or(stage.cover(context.page, STAGE_SAMPLE.name)).first().waitFor({ state: 'visible', timeout: 60_000 })
-    if (!await stage.spine(context.page).isVisible()) await stage.openFromLibrary(context.page, STAGE_SAMPLE.name)
+    await stage.openAfterRestart(context.page, STAGE_SAMPLE.name)
     await afterProjectOpenSettles(context.page)
     await chapterView.open(context.page, 3)
     await detail().waitFor({ state: 'visible', timeout: 60_000 })
