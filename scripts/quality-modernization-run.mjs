@@ -381,16 +381,15 @@ export function validateFrozenExecution(target) {
 }
 export function freezeProductionEnvironment(target) {
   const runtime = productionExecutionRuntime(target)
-  const script = "const D=require('better-sqlite3');const d=new D(':memory:');const result=d.prepare('SELECT 1 AS ok').get();d.close();console.log(JSON.stringify({version:process.version,modulesAbi:process.versions.modules,sqlite:result.ok}))"
+  const script = "const D=require('better-sqlite3');const d=new D(':memory:');const result=d.prepare('SELECT 1 AS ok').get();d.close();console.log(JSON.stringify({version:process.version,modulesAbi:process.versions.modules,sqlite:result.ok,binary:Object.keys(require.cache).find(file=>file.endsWith('.node'))}))"
   const result = spawnSync(runtime.executable, ['-e', script], { cwd: target.repositoryRoot,
     env: { ...process.env, ...(runtime.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : { ELECTRON_RUN_AS_NODE: '' }) },
     encoding: 'utf8', timeout: 15000, windowsHide: true })
   if (result.status !== 0) fail('TARGET_NATIVE_SQLITE_PROBE_FAILED')
   const actual = JSON.parse(result.stdout)
-  if (actual.sqlite !== 1) fail('TARGET_NATIVE_SQLITE_PROBE_FAILED')
+  if (actual.sqlite !== 1 || typeof actual.binary !== 'string') fail('TARGET_NATIVE_SQLITE_PROBE_FAILED')
   const dependencies = freezeEnvironment(target.repositoryRoot).dependencies
-  const sqliteManifest = dependencies.find(entry => entry.name === 'better-sqlite3').manifest
-  const binary = real(path.join(path.dirname(sqliteManifest), 'build/Release/better_sqlite3.node'))
+  const binary = real(actual.binary)
   return { executionMode: 'production-commands-registered-ipc-physical-sqlite', node: {
     executable: real(runtime.executable), sha256: hash(fs.readFileSync(runtime.executable)), version: actual.version,
     modulesAbi: actual.modulesAbi, electronRunAsNode: runtime.electronRunAsNode }, dependencies,

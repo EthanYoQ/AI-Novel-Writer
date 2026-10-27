@@ -3,6 +3,8 @@
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "com.ai-novel-writer.app",
   "asar": true,
+  // better-sqlite3 13 从 prebuilds/ 加载 Node-API 二进制；默认的 @electron/rebuild 仍会按 binding.gyp 再编一遍，编出的 build/Release 不会被加载。
+  "npmRebuild": false,
   "asarUnpack": [
     "node_modules/apache-arrow/**/*",
     "node_modules/better-sqlite3/**/*",

@@ -1,4 +1,5 @@
-import { app, dialog, ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
+import { showOpenDialogInLastDirectory } from '../utils/remembered-dialog'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import type {
@@ -83,8 +84,8 @@ export function registerCharacterAvatarController(deps: CharacterAvatarControlle
     if (!service) return { success: false, error: failure('PROJECT_NOT_OPEN') }
     enterScope(context)
     if (!service.hasCharacter(characterId)) return { success: false, error: failure('CHARACTER_NOT_FOUND') }
-    let selection: Awaited<ReturnType<typeof dialog.showOpenDialog>>
-    try { selection = await dialog.showOpenDialog({ title: text('选择角色头像', 'Choose a character avatar'),
+    let selection: Awaited<ReturnType<typeof showOpenDialogInLastDirectory>>
+    try { selection = await showOpenDialogInLastDirectory('character-avatar', { title: text('选择角色头像', 'Choose a character avatar'),
       properties: ['openFile'], filters: [{ name: 'PNG / JPEG / WebP', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] }) }
     catch { return { success: false, error: failure('IMAGE_READ_FAILED') } }
     if (selection.canceled || selection.filePaths.length === 0) return { success: true, cancelled: true }
