@@ -711,6 +711,21 @@ describe('InferGlobalSettingsCommand', () => {
     ])
   })
 
+  it('explains an in-flight active-time stop of the global inference as an active-time stop and logs the code', async () => {
+    successfulInferenceIpc()
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'ROOT_BUDGET_EXHAUSTED' }
+    const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const log = vi.fn()
+
+    const failure = await new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED', true))
+    expect(log.mock.calls.flat().some(line => String(line).includes('ROOT_BUDGET_EXHAUSTED'))).toBe(true)
+  })
+
   it('accepts a valid response in one call', async () => {
     successfulInferenceIpc()
     const generateStream = vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(
