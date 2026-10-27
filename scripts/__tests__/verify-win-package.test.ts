@@ -45,7 +45,7 @@ describe('Windows package verification', () => {
     write(root, '书童.exe')
     write(root, relative)
     const betterSqliteRelative =
-      'resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node'
+      'resources/app.asar.unpacked/node_modules/better-sqlite3/prebuilds/win32-x64.node'
     write(root, betterSqliteRelative)
     const helperRelative = 'resources/security/windows-safe-file-system.ps1'
     write(root, helperRelative)
@@ -81,7 +81,7 @@ describe('Windows package verification', () => {
       root,
       'resources/app.asar.unpacked/node_modules/@lancedb/lancedb-win32-x64-msvc/lancedb.win32-x64-msvc.node',
     )
-    write(root, 'resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node')
+    write(root, 'resources/app.asar.unpacked/node_modules/better-sqlite3/prebuilds/win32-x64.node')
 
     expect(() => verifyWindowsPackage(root)).toThrow('Missing Windows secure file-system helper')
   })

@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
-import { app, dialog, ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
+import { showOpenDialogInLastDirectory, showSaveDialogInLastDirectory } from '../utils/remembered-dialog'
 
 import type {
   ExternalFileGrant,
@@ -145,7 +146,7 @@ export function registerProjectArchiveController(
   grants: ExternalFileGrantService = externalFileGrants,
 ): void {
   ipcMain.handle('dialog:select-project-archive-export', async (event: ArchiveGrantEvent, suggestedName: string) => {
-    const result = await dialog.showSaveDialog({
+    const result = await showSaveDialogInLastDirectory('project-archive', {
       title: text('导出项目存档', 'Export project archive'),
       defaultPath: `${safeSuggestedName(suggestedName, 'project-backup')}.${ARCHIVE_EXTENSION}`,
       filters: [{ name: 'AI Novel Archive', extensions: [ARCHIVE_EXTENSION] }],
@@ -166,7 +167,7 @@ export function registerProjectArchiveController(
   })
 
   ipcMain.handle('dialog:select-project-archive', async (event: ArchiveGrantEvent) => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogInLastDirectory('project-archive', {
       title: text('选择项目存档', 'Choose a project archive'),
       filters: [{ name: 'AI Novel Archive', extensions: [ARCHIVE_EXTENSION] }],
       properties: ['openFile'],
@@ -184,7 +185,7 @@ export function registerProjectArchiveController(
   })
 
   ipcMain.handle('dialog:select-project-restore-target', async (event: ArchiveGrantEvent, suggestedName: string) => {
-    const result = await dialog.showOpenDialog({ title: text('选择恢复副本所在文件夹', 'Choose the folder for the restored copy'), properties: ['openDirectory', 'createDirectory'] })
+    const result = await showOpenDialogInLastDirectory('project-restore-target', { title: text('选择恢复副本所在文件夹', 'Choose the folder for the restored copy'), properties: ['openDirectory', 'createDirectory'] })
     const parent = result.canceled ? undefined : result.filePaths[0]
     if (!parent) return null
     const targetPath = availableRestoreTarget(parent, suggestedName)

@@ -128,14 +128,22 @@ describe('writing skill settings', () => {
   })
 
   it('drops the candidate the main process discarded when installation fails', async () => {
-    invoke.mockImplementation(async (channel: string) => channel === 'skills:install-local'
-      ? { success: false, error: 'The skill files could not be written, so nothing was installed. Choose the skill again to retry.' }
-      : ipcResult(channel))
+    let answerInstall: (result: { success: false; error: string }) => void = () => {}
+    const installRequested = new Promise<void>(requested => {
+      invoke.mockImplementation(async (channel: string) => channel === 'skills:install-local'
+        ? new Promise(answer => { answerInstall = answer; requested() })
+        : ipcResult(channel))
+    })
     await act(async () => page.getByRole('button', { name: 'Choose folder' }).click())
     await act(async () => page.getByRole('button', { name: 'Confirm install' }).click())
     await act(async () => page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click())
+    await installRequested
+    await act(async () => answerInstall({
+      success: false,
+      error: 'The skill files could not be written, so nothing was installed. Choose the skill again to retry.',
+    }))
 
-    await expect.element(page.getByRole('alert')).toHaveTextContent(/Choose the skill again to retry/u)
+    expect(page.getByRole('alert').element()).toHaveTextContent(/Choose the skill again to retry/u)
     expect(page.getByRole('group', { name: 'Skill to install' }).query()).toBeNull()
     const leave = vi.fn()
     leaveSettings(leave)

@@ -13,7 +13,6 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { restoreNativeWithIndependentFallback } from './release-native-restore.mjs'
 import { WINDOWS_PROCESS_TARGET_NAMES } from './product-identity.mjs'
 
 export const releasePreMonitorSteps = [
@@ -21,7 +20,6 @@ export const releasePreMonitorSteps = [
 ]
 
 export const releaseVerificationSteps = [
-  'prepare:native-node',
   'clean:build',
   'build:win:artifacts',
   'verify:win-update-artifacts',
@@ -32,8 +30,6 @@ export const releaseVerificationSteps = [
 ]
 
 export const releaseFinalizationSteps = [
-  'restore:native-node',
-  'verify:native-node',
   'final:quiet',
 ]
 
@@ -272,7 +268,7 @@ async function runNodeProcess(args) {
   if (result.error) throw result.error
   if (result.code !== 0) {
     throw new Error(
-      `Node restore verification failed with code ${result.code ?? 'null'}${result.signal ? ` (${result.signal})` : ''}`,
+      `Pre-monitor release step failed with code ${result.code ?? 'null'}${result.signal ? ` (${result.signal})` : ''}`,
     )
   }
 }
@@ -341,24 +337,27 @@ function writeFinalAcceptanceReceipts(finalQuietStatus) {
     kind: 'windows-native-abi',
     accepted: true,
     observations: [
-      'The native dependency was restored through the monitored path.',
-      'The repository test loaded better-sqlite3 through the ordinary Node runtime after restoration.',
+      'better-sqlite3 ships one Node-API binary for Node and Electron, so packaging neither rebuilds nor restores it.',
+      'The full repository test suite loaded it through the ordinary Node runtime before packaging.',
+      'verify:win-package loaded the same binary inside the packaged Electron runtime.',
     ],
     direct: {
-      restoreMode: 'monitored',
+      bindingInterface: 'node-api',
+      napiVersion: process.versions.napi,
       nodeModuleAbi: process.versions.modules,
-      verificationTest: 'electron/repositories/__tests__/character-repository.test.ts',
+      packagedLoadStep: 'verify:win-package',
     },
-    restoreMode: 'monitored',
+    bindingInterface: 'node-api',
+    napiVersion: process.versions.napi,
     nodeModuleAbi: process.versions.modules,
-    verificationTest: 'electron/repositories/__tests__/character-repository.test.ts',
+    packagedLoadStep: 'verify:win-package',
   })
   writeAcceptanceReceipt('quiet-window.json', {
     schemaVersion: 2,
     kind: 'windows-final-quiet-window',
     accepted: true,
     observations: [
-      'The Windows release monitor completed a continuous final quiet interval after all release work and native restoration.',
+      'The Windows release monitor completed a continuous final quiet interval after all release work.',
     ],
     direct: {
       monitorState: finalQuietStatus.state,
@@ -453,13 +452,9 @@ async function waitForStep(step, child) {
   })
 }
 
-async function waitForChildToSettle(child, timeoutMilliseconds = 120_000) {
+async function waitForChildToSettle(child, killAfterMilliseconds = 120_000) {
   observeChild(child)
-  const timer = setTimeout(() => {
-    // Do not return until the observed process actually settles: starting ABI
-    // restoration concurrently with a still-running packaging step is unsafe.
-    child.kill()
-  }, timeoutMilliseconds)
+  const timer = setTimeout(() => child.kill(), killAfterMilliseconds)
   const result = await childSettlements.get(child)
   clearTimeout(timer)
   if (result.error) throw result.error
@@ -473,65 +468,6 @@ function canUseMonitor() {
     && monitor.exitCode === null
     && monitor.signalCode === null,
   )
-}
-
-async function runMonitoredNodeProcess(step, args) {
-  if (!canUseMonitor()) {
-    throw new Error(`Windows release monitor is unavailable before "${step}"`)
-  }
-
-  const launch = spawnArmedNodeProcess(step, args)
-  const child = launch.child
-  let result
-  try {
-    await waitForArmedNodeProcess(step, launch)
-    await registerMonitoredChild(step, child, ['node', 'vitest', 'better_sqlite3'])
-    await waitForMonitorState(['monitoring'], 10_000, step)
-    await releaseArmedNodeProcess(step, launch)
-    result = await waitForStep(step, child)
-  } catch (error) {
-    // A monitor can publish "failed" just before its process exit becomes
-    // observable. Do not start the independent idempotent retry while this
-    // first native-file operation may still be running.
-    stopArmedNodeProcess(launch)
-    await waitForChildToSettle(child)
-    throw error
-  }
-  const launchResult = readArmedNodeResult(step, launch)
-  if (launchResult.targetSignal) {
-    throw new Error(`Node finalization step "${step}" ended with signal ${launchResult.targetSignal}`)
-  }
-  if (result.code !== 0) {
-    sendMonitorControl({ state: 'step-complete', step })
-    await waitForMonitorState(['step-completed'], MONITOR_STEP_COMPLETION_TIMEOUT_MS, step)
-    throw new Error(
-      `Node finalization step "${step}" exited with code ${result.code ?? 'null'}${result.signal ? ` (${result.signal})` : ''}`,
-    )
-  }
-  if (launchResult.targetExitCode !== 0) {
-    throw new Error(
-      `Node finalization step "${step}" launch record reported code ${launchResult.targetExitCode ?? 'null'}`,
-    )
-  }
-
-  sendMonitorControl({ state: 'step-complete', step })
-  await waitForMonitorState(['step-completed'], MONITOR_STEP_COMPLETION_TIMEOUT_MS, step)
-}
-
-async function restoreAndVerifyNodeNativeAbi({ monitored }) {
-  const runner = monitored ? runMonitoredNodeProcess : async (_step, args) => {
-    await runNodeProcess(args)
-  }
-  await runner('restore:native-node', [
-    resolve('scripts/prepare-native-for-node.mjs'),
-  ])
-  await runner('verify:native-node', [
-    resolve('node_modules/vitest/vitest.mjs'),
-    'run',
-    '--pool=threads',
-    'electron/repositories/__tests__/character-repository.test.ts',
-  ])
-  console.log('Restored and verified better-sqlite3 for the ordinary Node test runtime.')
 }
 
 async function waitForFinalQuietPeriod() {
@@ -642,8 +578,6 @@ async function main() {
       await releaseArmedNodeProcess(step, launch)
       result = await waitForStep(step, child)
     } catch (error) {
-      // Every ordinary step can touch the shared native module. A monitor or
-      // handshake failure must not race the ABI restoration in finally.
       stopArmedNodeProcess(launch)
       await waitForChildToSettle(child)
       throw error
@@ -681,42 +615,6 @@ try {
   process.exitCode = 1
 } finally {
   if (releaseFinalizationRequired) {
-    let nativeRestoreSucceeded = false
-    try {
-      // Packaging deliberately rebuilds the shared native module for Electron ABI 145.
-      // Once monitored release work may start, always return the worktree to Node ABI 141.
-      const restoreResult = await restoreNativeWithIndependentFallback({
-        restoreMonitored: async () => {
-          await restoreAndVerifyNodeNativeAbi({ monitored: true })
-        },
-        // This fallback is deliberately unconditional. A monitor can publish
-        // "failed" before its process exit becomes observable; process liveness
-        // must never suppress the independent, idempotent ABI restoration.
-        restoreIndependent: async () => {
-          await restoreAndVerifyNodeNativeAbi({ monitored: false })
-        },
-      })
-      if (restoreResult.usedIndependentFallback) {
-        gateSucceeded = false
-        process.exitCode = 1
-        preserveGateFailureEvidence(
-          'native-restore-validation-monitored',
-          restoreResult.monitoredError,
-        )
-        console.error(
-          restoreResult.monitoredError instanceof Error
-            ? restoreResult.monitoredError.message
-            : restoreResult.monitoredError,
-        )
-      }
-      nativeRestoreSucceeded = true
-    } catch (error) {
-      gateSucceeded = false
-      process.exitCode = 1
-      preserveGateFailureEvidence('native-restore-validation-fallback', error)
-      console.error(error instanceof Error ? error.message : error)
-    }
-
     let finalQuietSucceeded = false
     let finalQuietStatus
     if (canUseMonitor()) {
@@ -764,7 +662,7 @@ try {
       )
       console.error(`Windows release-gate diagnostics preserved at: ${evidencePath}`)
     }
-    if (!nativeRestoreSucceeded || !finalQuietSucceeded) {
+    if (!finalQuietSucceeded) {
       gateSucceeded = false
       process.exitCode = 1
     }

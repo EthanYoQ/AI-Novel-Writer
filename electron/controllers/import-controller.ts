@@ -1,4 +1,5 @@
-import { app, ipcMain, dialog } from 'electron'
+import { app, ipcMain } from 'electron'
+import { showOpenDialogInLastDirectory } from '../utils/remembered-dialog'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
@@ -351,7 +352,7 @@ export function registerImportController(
           session: Object.freeze({ ...projectSession }) as ProjectSessionContext,
         }
       }
-      const result = await dialog.showOpenDialog({
+      const result = await showOpenDialogInLastDirectory('import-source', {
         title: purpose === 'author-manuscript'
           ? text('选择作者原稿文件', 'Choose author manuscript files')
           : text('选择参考小说文件', 'Choose reference novel files'),

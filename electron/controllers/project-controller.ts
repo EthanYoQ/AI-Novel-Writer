@@ -1,4 +1,5 @@
 import { app, ipcMain, dialog } from 'electron'
+import { showOpenDialogInLastDirectory } from '../utils/remembered-dialog'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readJsonFile, writeJsonFile, RECENT_PROJECTS_PATH } from '../utils/config-utils'
@@ -356,7 +357,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     return { grantId: grant.grantId, displayName: path.basename(directoryPath) }
   }
   ipcMain.handle('dialog:select-legacy-project', async (event) => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogInLastDirectory('legacy-project', {
       title: text('选择旧版小说项目文件夹', 'Choose the legacy novel project folder'),
       properties: ['openDirectory'],
     })
@@ -1011,7 +1012,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
 
   ipcMain.handle('dialog:select-folder', async (event, purpose: 'project-create' | 'project-open') => {
     if (purpose !== 'project-create' && purpose !== 'project-open') throw new Error('PROJECT_DIRECTORY_GRANT_PURPOSE_INVALID')
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogInLastDirectory(purpose, {
       properties: ['openDirectory', 'createDirectory'],
       title: purpose === 'project-create'
         ? text('选择项目保存位置', 'Choose where to save the project')
