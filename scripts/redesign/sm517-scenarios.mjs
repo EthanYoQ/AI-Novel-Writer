@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import * as blueprint from './pages/blueprint.mjs'
 import * as chapterView from './pages/chapter-view.mjs'
 import * as refs from './pages/refs.mjs'
-import { dismissCompletionToasts } from './pages/shell.mjs'
+import { dismissCompletionToasts, waitForCompletionToast } from './pages/shell.mjs'
 import * as stage from './pages/stage.mjs'
 import { FAKE_MODEL, FIXTURE_PROSE } from './fake-model.mjs'
 import { seedStageSample } from './scenarios.mjs'
@@ -118,10 +118,13 @@ export const SM517_SCENARIOS = {
     return { proseModel: prose.model, reviewModel: review.model, planningModel: plan.model, planningKind: plan.kind }
   } },
   'sm517-stage-dialogs': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: async ({ page, invoke }) => {
-    for (const request of [MINI, { stage: 'refinement', modelId: MINI.id }, { stage: 'planning', modelId: MINI.id }]) {
-      const channel = request === MINI ? 'llm:save-model' : 'llm:set-stage-model'
+    for (const [channel, request] of [
+      ['llm:save-model', MINI],
+      ['llm:set-stage-model', { stage: 'refinement', modelId: MINI.id }],
+      ['llm:set-stage-model', { stage: 'planning', modelId: MINI.id }],
+    ]) {
       const result = await invoke(page, channel, request)
-      assert.equal(result.success, true, `${channel}: ${result.error}`)
+      assert.equal(result.success, true, `${channel} ${JSON.stringify(request.stage ?? request.id)}: ${result.error}`)
     }
   } }), run: async context => {
     const { page, fake } = context
@@ -140,10 +143,10 @@ export const SM517_SCENARIOS = {
     const beforeReview = fake.chats.length
     await chapterView.view(page).getByRole('button', { name: '重新审稿', exact: true }).click()
     const review = await nextChat(fake, beforeReview, 'review')
-    await chapterView.reviewSheet(page).getByRole('button', { name: '添加我的意见' }).waitFor({ state: 'visible', timeout: 30_000 })
-    await page.waitForFunction(() => [...document.querySelectorAll('button')]
-      .some(button => /^按 \d+ 项意见修稿$/u.test(button.textContent ?? '') && !button.disabled), undefined, { timeout: 30_000 })
+    await stage.root(page).locator('.stage-capsule:not([data-tone="ok"])').waitFor({ state: 'detached', timeout: 90_000 })
+    await waitForCompletionToast(page)
     await dismissCompletionToasts(page)
+    assert.equal(await chapterView.reviseButton(page).isEnabled(), true, '重新审稿写回后才能按意见修稿')
     await page.getByRole('button', { name: '修稿选项', exact: true }).click()
     await page.getByRole('dialog', { name: '修稿选项' }).waitFor({ state: 'visible' })
     const reviseModel = page.getByLabel(/本次修稿模型/u)
