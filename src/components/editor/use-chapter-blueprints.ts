@@ -95,15 +95,9 @@ export function useChapterBlueprints({
     const session = currentProjectSessionForPath(projectKey)
     if (!session) return
     let current = true
-    void (async () => {
-      const views = await ipc.invokeWithProjectSession(session, 'generation:list')
-      for (const view of views) {
-        const recovery = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle })
-        if (!current || !isCurrentProjectSession(session)) return
-        if (recovery.blueprintRecovery && recovery.blueprintRecovery.writeState !== 'complete') { setPlanningRecovery(recovery); return }
-      }
-      if (current) setPlanningRecovery(null)
-    })().catch(() => {})
+    void ipc.invokeWithProjectSession(session, 'generation:find-blueprint-recovery').then(recovery => {
+      if (current && isCurrentProjectSession(session)) setPlanningRecovery(recovery)
+    }).catch(() => {})
     return () => { current = false }
   }, [projectKey, currentProject?.sessionLease, latestDirectoryRun])
   // ✅ action 用 getState() 获取，不订阅 workflow store 高频更新

@@ -111,6 +111,8 @@ export interface MainGenerationRunView {
   nonReplayable: boolean
   artifacts: readonly MainGenerationSnapshot[]
 }
+/** 运行列表里的一项：只够认出是哪个运行、什么状态、做什么的；要候选与账本再按 handle 读。 */
+export type MainGenerationRunSummary = Pick<MainGenerationRunView, 'handle' | 'status' | 'operation'>
 export interface MainGenerationExecuteReceipt {
   outcome: GenerationOutcome
   run: MainGenerationRunView
@@ -119,7 +121,6 @@ export interface MainGenerationExecuteReceipt {
 export interface MainGenerationTransport {
   execute(request: { handle: MainGenerationRunHandle; invocationNonce: string; task: GenerationTask }): Promise<MainGenerationExecuteReceipt>
   read(handle: MainGenerationRunHandle): Promise<MainGenerationRunView>
-  list(projectSession: ProjectSessionContext): Promise<readonly MainGenerationRunView[]>
   cancel(handle: MainGenerationRunHandle): Promise<MainGenerationRunView>
   subscribe(handle: MainGenerationRunHandle, listener: (snapshot: MainGenerationSnapshot) => void): () => void
   subscribeReasoning?: (handle: MainGenerationRunHandle, listener: (event: MainGenerationReasoningEvent) => void) => () => void
@@ -136,10 +137,7 @@ export interface MainOwnedGenerationRuntime extends GenerationRuntime {
   read(): Promise<MainGenerationRunView>
   cancel(): Promise<MainGenerationRunView>
 }
-/** Pure read seam for F04; neither operation creates roots nor resumes execution. */
-export function listMainGenerationRuns(transport: MainGenerationTransport, session: ProjectSessionContext): Promise<readonly MainGenerationRunView[]> {
-  return transport.list({ ...session })
-}
+/** Pure read seam for F04; it neither creates roots nor resumes execution. */
 export function readMainGenerationRun(transport: MainGenerationTransport, handle: MainGenerationRunHandle): Promise<MainGenerationRunView> {
   return transport.read({ ...handle })
 }
