@@ -222,9 +222,9 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
       { id: 'history', label: text('版本历史', 'Version history'), onSelect: () => navigate({ kind: 'resource', page: 'history' }) },
       { id: 'copy', label: text('复制本章正文', 'Copy chapter text'), onSelect: copyBody },
     ] },
-    { id: 'danger', tone: 'danger', items: stage === 'final'
+    ...(stage === 'superseded' ? [] : [{ id: 'danger', tone: 'danger' as const, items: stage === 'final'
       ? [{ id: 'delete', label: text('删除正文…', 'Delete manuscript…'), disabled: busy, onSelect: () => void deleteManuscript() }]
-      : [{ id: 'delete', label: text('删除这一稿…', 'Delete this draft…'), disabled: busy, onSelect: () => setAsk('delete') }] },
+      : [{ id: 'delete', label: text('删除这一稿…', 'Delete this draft…'), disabled: busy, onSelect: () => setAsk('delete') }] }]),
   ]
   const more = <Menu label={text('更多操作', 'More actions')} icon={<MoreHorizontal size={16} aria-hidden />} groups={moreGroups} />
   const reviewAgain = <Button variant="secondary" disabled={busy} onClick={startReview}>{text('重新审稿', 'Review again')}</Button>
@@ -329,6 +329,14 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
             <Button variant="secondary" onClick={() => navigate({ kind: 'chapter', chapterNumber })}>{text('回到当前稿', 'Back to the current draft')}</Button>
             {more}
             <span className="stage-ch-hint">{text('已归档，只读', 'Archived; read-only')}</span>
+          </>
+        )
+      case 'superseded':
+        return (
+          <>
+            <Button variant="secondary" onClick={() => navigate({ kind: 'chapter', chapterNumber })}>{text('回到当前稿', 'Back to the current draft')}</Button>
+            {more}
+            <span className="stage-ch-hint">{text('已被替换的定稿，只读', 'Replaced final; read-only')}</span>
           </>
         )
       default:

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { DRAFT_STATUS_INFO } from '../../../shared/draft-status'
 import { countDraftUnits } from '../../../shared/draft-units'
 import { formatResourceUri } from '../../../shared/project-paths'
 import type { EditorTab } from '../../../stores/editor-store'
@@ -98,7 +99,9 @@ function DraftChapter({ tab, filePath, projectKey }: { tab: EditorTab; filePath:
     : undefined)
   // 这一稿的记录与最新审稿都读出来之前不摆动作条：先按不全的数据摆会闪一下别的主按钮，清单状态也会被重置。
   const reviewReady = draft.loaded && (draft.reviews.length === 0 || latest !== null)
-  const stage = draft.loaded && draft.meta ? draft.status === 'archived' ? 'archived' : chapterPhase(draft.status, facts) : null
+  const stage = draft.loaded && draft.meta
+    ? draft.status === 'archived' || draft.status === 'superseded' ? draft.status : chapterPhase(draft.status, facts)
+    : null
 
   // 审稿或修稿刚在别处生成：重读这一稿的数据，并收起跟着工作流打开的运行侧页。新审稿换掉动作条的会话键，
   // 审稿侧页按「已审稿」默认展开；待合并修稿直接摆出合并视图。
@@ -111,11 +114,10 @@ function DraftChapter({ tab, filePath, projectKey }: { tab: EditorTab; filePath:
 
   const title = blueprint?.title || draft.meta?.chapterTitle || ''
   const units = charCount.toLocaleString(locale)
+  const [labelZh, labelEn] = DRAFT_STATUS_INFO[stage === 'archived' || stage === 'superseded' || stage === 'revised' ? stage : 'draft'].label
   const versionLabel = !draft.meta ? text('读取中…', 'Loading…')
     : stage === 'final' ? text(`定稿 · ${units} 字`, `Final · ${units} ${pluralEn(charCount, 'word')}`)
-      : stage === 'archived' ? text(`已归档 v${draft.meta.version} · ${units} 字`, `Archived v${draft.meta.version} · ${units} ${pluralEn(charCount, 'word')}`)
-        : stage === 'revised' ? text(`修稿已合并 v${draft.meta.version} · ${units} 字`, `Revised v${draft.meta.version} · ${units} ${pluralEn(charCount, 'word')}`)
-          : text(`草稿 v${draft.meta.version} · ${units} 字`, `Draft v${draft.meta.version} · ${units} ${pluralEn(charCount, 'word')}`)
+      : text(`${labelZh} v${draft.meta.version} · ${units} 字`, `${labelEn} v${draft.meta.version} · ${units} ${pluralEn(charCount, 'word')}`)
   const editable = !draft.isReadonly && !draft.isChapterBusy
 
   return (
@@ -127,7 +129,7 @@ function DraftChapter({ tab, filePath, projectKey }: { tab: EditorTab; filePath:
               chapterNumber={chapterNumber}
               role={blueprint?.role}
               title={title}
-              step={stage === 'archived' || stage === null ? null : STAGE_STEP[stage]}
+              step={stage === 'archived' || stage === 'superseded' || stage === null ? null : STAGE_STEP[stage]}
               focus={focus}
               version={draft.meta
                 ? <VersionSwitcher tab={tab} current={draft.meta} label={versionLabel} title={title} onSave={() => draft.save(draft.currentBodyRef.current, true)} />
