@@ -44,8 +44,9 @@ export class GenerationDraftEffects {
   }
   /** 按批次号分组的草稿提交收据，按提交顺序；只取这一批时传 batchId。批次号由库里的 JSON 取出，不在这里逐行解析整份收据。 */
   batchCommits(batchId?: string): ReadonlyMap<string, AttemptRow[]> {
-    const rows = this.db.prepare(`SELECT attempt_id,run_id,usage_receipt_json,json_extract(usage_receipt_json,'$.draftCommit.batchId') AS batch_id
-      FROM generation_attempts WHERE batch_id ${batchId === undefined ? 'IS NOT NULL' : '= ?'} ORDER BY rowid`)
+    const batchOf = "json_extract(usage_receipt_json,'$.draftCommit.batchId')"
+    const rows = this.db.prepare(`SELECT attempt_id,run_id,usage_receipt_json,${batchOf} AS batch_id
+      FROM generation_attempts WHERE ${batchOf} ${batchId === undefined ? 'IS NOT NULL' : '= ?'} ORDER BY rowid`)
       .all(...(batchId === undefined ? [] : [batchId])) as (AttemptRow & { batch_id: string })[]
     return groupByBatch(rows)
   }
@@ -55,9 +56,9 @@ export class GenerationDraftEffects {
    */
   listedBatchCommits(): { commits: ReadonlyMap<string, AttemptRow[]>; unreadable: number } {
     const unreadable = this.db.prepare('SELECT COUNT(*) FROM generation_attempts WHERE NOT json_valid(usage_receipt_json)').pluck().get() as number
-    const rows = this.db.prepare(`SELECT attempt_id,run_id,usage_receipt_json,
-      CASE WHEN json_valid(usage_receipt_json) THEN json_extract(usage_receipt_json,'$.draftCommit.batchId') END AS batch_id
-      FROM generation_attempts WHERE batch_id IS NOT NULL ORDER BY rowid`).all() as (AttemptRow & { batch_id: string })[]
+    const batchOf = "CASE WHEN json_valid(usage_receipt_json) THEN json_extract(usage_receipt_json,'$.draftCommit.batchId') END"
+    const rows = this.db.prepare(`SELECT attempt_id,run_id,usage_receipt_json,${batchOf} AS batch_id
+      FROM generation_attempts WHERE ${batchOf} IS NOT NULL ORDER BY rowid`).all() as (AttemptRow & { batch_id: string })[]
     return { commits: groupByBatch(rows), unreadable }
   }
   private verifiedCommit(row: AttemptRow) {

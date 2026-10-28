@@ -514,6 +514,8 @@ export const RUN_SCENARIOS = {
     const session = await reopenForReading(context, context.samplePath)
     const runs = await context.invoke(context.page, 'generation:list', session)
     assert.ok(runs.some(run => run.operation === 'chapter-draft' && run.status !== 'running'), '「不再显示」只改显示，第 3 章的生成运行仍在库里')
+    const recoverable = await context.invoke(context.page, 'generation:list-recovery', session)
+    assert.ok(recoverable.drafts.some(item => item.recovery.chapterNumber === 3), '主进程仍把第 3 章候选列为可恢复：卡片不见是显示偏好，不是数据变了')
   } },
 
   /** #441 后续：第 3 章正在用夹具模型写（卡在假模型门上），在设置里改这个模型后保存：先提示，等生成结束再保存则不保存、表单留着。 */
