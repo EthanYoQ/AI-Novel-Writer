@@ -101,13 +101,30 @@ describe('project open verification', () => {
     expect(getProjectDb()!.prepare('SELECT count(*) FROM contents WHERE body LIKE ?').pluck().get(`%${BODY}`)).toBe(120)
   })
 
+  it('refuses a page damaged after the migration commits and before the writable handle opens', () => {
+    const f = fixture(6)
+    const close = Database.prototype.close
+    let damaged = false
+    vi.spyOn(Database.prototype, 'close').mockImplementation(function (this: import('better-sqlite3').Database) {
+      const result = close.call(this)
+      if (!damaged && !this.readonly && path.resolve(this.name) === path.resolve(f.file)) { damaged = true; damageContentPage(f.file) }
+      return result
+    })
+    expect(() => initProjectDatabase(f.root)).toThrow('CORRUPT_SCHEMA')
+    expect(damaged).toBe(true)
+    expect(getProjectDb()).toBeNull()
+    vi.restoreAllMocks()
+    const db = new Database(f.file, { readonly: true })
+    try { expect(db.prepare('SELECT execution_epoch FROM import_runs').pluck().get()).toBe(5) } finally { db.close() }
+  })
+
   it('refuses the writable handle when the schema changes after the snapshot passed', () => {
     const f = fixture()
     const changed = afterSnapshotPasses(() => {
       const db = new Database(f.file)
       try { db.exec('ALTER TABLE contents ADD COLUMN changed_after_probe TEXT') } finally { db.close() }
     })
-    expect(() => initProjectDatabase(f.root)).toThrow('SCHEMA_CHANGED_SINCE_PROBE')
+    expect(() => initProjectDatabase(f.root)).toThrow('SOURCE_CHANGED_SINCE_PROBE')
     expect(changed()).toBe(true)
     expect(getProjectDb()).toBeNull()
   })
