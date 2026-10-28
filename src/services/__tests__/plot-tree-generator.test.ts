@@ -37,7 +37,7 @@ it('default facade sends only the main selector and confirms its artifact instea
       expect(request).toEqual({ input: { kind: 'plot' }, modelId: 'main-model', uiActionNonce: expect.any(String) })
       return { ...recovery, attemptCount: 0, result: undefined, artifact: undefined }
     }
-    if (channel === 'graph-generation:execute') return { run: view, outcome: { status: 'completed', finishReason: 'stop' } }
+    if (channel === 'graph-generation:execute') return { run: view, outcome: { status: 'completed', finishReason: 'stop', receipt: { finishReason: 'stop' } } }
     if (channel === 'graph-generation:read') return recovery
     expect(channel).toBe('graph-generation:confirm')
     expect(request).toEqual({ handle, artifact, index: 0 })

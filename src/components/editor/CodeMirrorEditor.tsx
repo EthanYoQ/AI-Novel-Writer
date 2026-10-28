@@ -16,6 +16,8 @@ import { EDITOR_INLINE_INSTRUCTION_MAX_LENGTH, type EditorInlineFixedAction, typ
 import { routeModelId } from '../../services/model-routing'
 import { countDraftUnits } from '../../shared/draft-units'
 import { useLocaleStore } from '../../stores/locale-store'
+import { displayedErrorMessage } from '../../i18n/app-errors'
+import { isTerminalProviderFailure } from '../../services/generation/generation-harness'
 import { getActiveProjectSessionContext } from '../../shared/project-session-context'
 import { livePreview, paperHeadFacet, type PaperHead } from './live-preview'
 import { commandKeyLabel, isComposing } from '../stage/shortcut-keys'
@@ -438,7 +440,9 @@ export default function CodeMirrorEditor({
       if (requestSequence !== aiRequestSequenceRef.current) return
       if (receipt.outcome.status !== 'completed' || receipt.outcome.finishReason !== 'stop') {
         setAiResult('')
-        setAiError(uiText('生成未完整完成，结果不可应用', 'Generation did not complete; the result cannot be applied.'))
+        const failureCode = receipt.outcome.receipt.failureCode
+        setAiError(isTerminalProviderFailure(failureCode) ? displayedErrorMessage(uiLocale, failureCode)
+          : uiText('生成未完整完成，结果不可应用', 'Generation did not complete; the result cannot be applied.'))
         return
       }
       const proof = (receipt.run.candidates ?? receipt.run.artifacts).find(candidate => candidate.text === receipt.outcome.content && candidate.status === 'completed' && candidate.compositionEligible === true)
@@ -457,6 +461,8 @@ export default function CodeMirrorEditor({
     try {
       const receipt = await inlineRef.current?.execute()
       if (sequence !== aiRequestSequenceRef.current) return
+      const failureCode = receipt?.outcome.receipt.failureCode
+      if (isTerminalProviderFailure(failureCode)) { setAiError(displayedErrorMessage(uiLocale, failureCode)); return }
       if (!receipt || receipt.outcome.status !== 'completed' || receipt.outcome.finishReason !== 'stop') throw new Error('EDITOR_INLINE_INCOMPLETE')
       const proof = (receipt.run.candidates ?? receipt.run.artifacts).find(candidate => candidate.text === receipt.outcome.content && candidate.status === 'completed' && candidate.compositionEligible === true)
       aiCandidateRef.current = proof ? { artifactId: proof.artifactId, textHash: proof.textHash } : null
