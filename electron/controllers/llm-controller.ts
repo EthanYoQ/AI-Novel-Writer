@@ -407,9 +407,10 @@ export function registerLLMController() {
     try {
       const { stage, modelId } = (request && typeof request === 'object' ? request : {}) as Record<string, unknown>
       if (!isModelStage(stage) || (modelId !== null && typeof modelId !== 'string')) throw new Error('LLM_STAGE_MODEL_REQUEST_INVALID')
-      if (modelId !== null && !availableGenerationModelId(loadModelConfigsForUpdate(), modelId)) throw new Error('LLM_STAGE_MODEL_UNAVAILABLE')
+      const assignedId = modelId === null ? null : availableGenerationModelId(loadModelConfigsForUpdate(), modelId)
+      if (modelId !== null && !assignedId) throw new Error('LLM_STAGE_MODEL_UNAVAILABLE')
       const config = loadGlobalConfigForUpdate()
-      config.stageModelIds = assignStageModel(parseStageModelIds(config.stageModelIds), stage, modelId)
+      config.stageModelIds = assignStageModel(parseStageModelIds(config.stageModelIds), stage, assignedId)
       writeJsonFile(GLOBAL_CONFIG_PATH, config)
       return { success: true as const, stageModelIds: config.stageModelIds }
     } catch (error) {

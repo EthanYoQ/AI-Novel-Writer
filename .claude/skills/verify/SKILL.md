@@ -539,6 +539,7 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
 | `sm517-stage-models` | 只有夹具模型时分工模型页说明各环节都用它（`sm517-one-model`）；加小模型后把审稿指定为它（`sm517-settings-zh`），从蓝图写下一章的请求仍是 `gpt-4.1`，AI 审稿的请求是 `gpt-4.1-mini`；再把规划指定为它，生成第 13～16 章蓝图的请求是 `gpt-4.1-mini`。小模型改成只做检索后两行提示按默认运行（`sm517-stale`）；删掉全部模型后是空状态（`sm517-no-model`）；英文界面（`sm517-settings-en`） | 英文的分工模型页 | 是 | #517 |
+| `sm517-stage-dialogs` | 预置时把修稿与规划都指定为小模型。剧情树的模型下拉预选它（`sm517-plot-tree-planning-model`），生成剧情树的请求是 `gpt-4.1-mini`；第 3 章重新审稿的请求仍是 `gpt-4.1`，「修稿选项」预选小模型（`sm517-revise-refinement-model`），不改选直接按意见修稿的请求是 `gpt-4.1-mini`。夹具的修稿正文太短，修稿会停在保存校验，场景只核对请求用的模型 | 修稿请求发出后的单章视图 | 是 | #517 |
 
 ## 重新生成蓝图保留作者字段（#516 讨论）
 
