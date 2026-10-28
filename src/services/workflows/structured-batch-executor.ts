@@ -79,6 +79,7 @@ export interface StructuredBatchFailure {
     | 'output_limit'
     | 'max_calls'
     | 'max_requested_tokens'
+    | 'root_budget'
     | 'invalid_limit'
   diagnostic?: {
     code: string
@@ -542,7 +543,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           const message = writingLanguage === 'zh-CN'
             ? '本任务预算已用完；已完成的完整项目保留，剩余范围尚未发送。'
             : 'The task budget is exhausted. Completed items are preserved; the remaining scope was not sent.'
-          return { ok: false, validatedItems: validated, failure: { code: 'limit_exceeded', reason: 'max_requested_tokens', message: `${message} (ROOT_BUDGET_EXHAUSTED)`, errorCode: 'ROOT_BUDGET_EXHAUSTED' }, receipt }
+          return { ok: false, validatedItems: validated, failure: { code: 'limit_exceeded', reason: 'root_budget', message: `${message} (ROOT_BUDGET_EXHAUSTED)`, errorCode: 'ROOT_BUDGET_EXHAUSTED' }, receipt }
         }
         let failure: StructuredBatchFailure
         if (error instanceof ExecutionFailure) {
