@@ -2,7 +2,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY, parseCanonicalProjectManifest } from '../../src/shared/project-format'
-import type { SchemaProbe } from '../migrations/runner'
 import { openProjectSqlite, verifyProjectSqlite } from './sqlite-project-migration'
 
 const admitted = new Map<string, { root: string; manifestHash: string }>()
@@ -62,7 +61,7 @@ export function getProjectDatabasePath(projectPath: string): string { return pat
 export function deactivateProjectData(projectPath: string): void { admitted.delete(key(projectPath)) }
 
 /** Project open upgrades when needed and admits on that same verified pass. */
-export function openCanonicalProjectData(projectPath: string): SchemaProbe {
+export function openCanonicalProjectData(projectPath: string): ReturnType<typeof openProjectSqlite> {
   const before = manifestState(projectPath)
   const verified = openProjectSqlite({ databasePath: path.join(before.root, CANONICAL_PROJECT_DATABASE) })
   const after = manifestState(projectPath)

@@ -24,6 +24,7 @@ export const zhCN = {
   'error.projectMigrationNotQualified': '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请通过“导入旧项目”创建完整副本。',
   'error.projectSchemaUnrecognized': '无法识别项目格式，已拒绝打开。请核查创建该项目的软件和版本。',
   'error.projectSchemaCorrupt': '项目数据结构已损坏，已拒绝打开。请保留原件并从备份恢复。',
+  'error.projectChangedDuringOpen': '打开期间作品文件被其他程序改动，已拒绝打开。请关闭可能在使用这个作品的其他程序后再打开。',
   'error.projectSchemaNewer': '该项目由更新版本创建，已拒绝打开。请升级软件后再打开。',
   'error.legacyImportUnsupportedSource': '此项目版本不支持旧项目导入。请用原版本软件打开或导出。',
   'error.projectDeleteFailed': '项目文件夹删除失败。请关闭正在使用其中文件的程序后重试。',

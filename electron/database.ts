@@ -12,6 +12,7 @@ import { SchemaMigrationError } from './migrations/registry'
 import { migrateSchema } from './migrations/runner'
 import { SqliteSchemaAdapter } from './migrations/sqlite-schema-adapter'
 import { openCanonicalProjectData, deactivateProjectData, getNewProjectDatabasePath, getProjectDatabasePath } from './services/project-data-locator'
+import { readSqliteContentIdentity } from './services/sqlite-project-migration'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -38,10 +39,15 @@ export function initProjectDatabase(projectPath: string): void {
   let database: BetterSqlite3.Database | undefined
   try {
     const verified = openCanonicalProjectData(projectPath)
-    database = new Database(getProjectDatabasePath(projectPath), { fileMustExist: true })
+    const databasePath = getProjectDatabasePath(projectPath)
+    database = new Database(databasePath, { fileMustExist: true })
     const adapter = new SqliteSchemaAdapter(database)
     if (adapter.readUserVersion() !== verified.version || adapter.readSchemaFingerprint() !== verified.fingerprint) {
       throw new SchemaMigrationError('SCHEMA_CHANGED_SINCE_PROBE')
+    }
+    const content = readSqliteContentIdentity(databasePath)
+    if (content.database !== verified.content.database || content.wal !== verified.content.wal) {
+      throw new SchemaMigrationError('SOURCE_CHANGED_SINCE_PROBE')
     }
     database.pragma('journal_mode = WAL')
     database.pragma('foreign_keys = ON')

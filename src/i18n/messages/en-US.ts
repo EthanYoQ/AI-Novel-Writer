@@ -22,6 +22,7 @@ export const enUS = {
   'error.projectMigrationNotQualified': 'This project cannot be converted safely yet. The original was kept and nothing was written. Use Import legacy project to create a complete copy.',
   'error.projectSchemaUnrecognized': 'The project format is not recognized, so it was not opened. Check which app and version created it.',
   'error.projectSchemaCorrupt': 'The project data structure is damaged, so it was not opened. Keep the original and restore from a backup.',
+  'error.projectChangedDuringOpen': 'Another program changed the project files while it was opening, so it was not opened. Close any other program that may be using this project, then open it again.',
   'error.projectSchemaNewer': 'This project was created by a newer version, so it was not opened. Update the app, then open it again.',
   'error.legacyImportUnsupportedSource': 'Projects from this version cannot be imported as legacy projects. Open or export it with the app version that created it.',
   'error.projectDeleteFailed': 'Could not delete the project folder. Close any program that is using files in it, then try again.',

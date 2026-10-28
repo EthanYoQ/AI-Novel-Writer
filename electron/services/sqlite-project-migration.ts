@@ -94,7 +94,7 @@ function physicalSnapshot(source: string) {
     for (const suffix of Object.keys(identity)) fs.copyFileSync(source + suffix, file + suffix, fs.constants.COPYFILE_EXCL)
     if (JSON.stringify(sourceIdentity(file)) !== JSON.stringify(identity)) throw new Error('PROJECT_MIGRATION_SOURCE_CHANGED')
     unchanged()
-    return { file, unchanged, close: () => fs.rmSync(root, { recursive: true, force: true }) }
+    return { file, identity, unchanged, close: () => fs.rmSync(root, { recursive: true, force: true }) }
   } catch (error) { fs.rmSync(root, { recursive: true, force: true }); throw error }
 }
 type DomainColumns = { name: string; columns: string[] }[]
@@ -254,11 +254,24 @@ export async function backupProjectSqlite(options: {
 }
 
 
+/** Bytes a reader of the main file and WAL sees. -shm is excluded because opening
+ * a handle rewrites it, and an absent WAL reads the same as an empty one.
+ */
+export interface SqliteContentIdentity { database: string; wal: string }
+const EMPTY_SHA256 = createHash('sha256').digest('hex')
+const contentIdentity = (hashes: Record<string, string>): SqliteContentIdentity =>
+  ({ database: hashes[''], wal: hashes['-wal'] ?? EMPTY_SHA256 })
+export function readSqliteContentIdentity(file: string): SqliteContentIdentity {
+  return contentIdentity(Object.fromEntries(['', '-wal'].filter(suffix => fs.existsSync(file + suffix)).map(suffix =>
+    [suffix, createHash('sha256').update(fs.readFileSync(file + suffix)).digest('hex')])))
+}
+
 /** Opening verifies one private snapshot. Content fingerprints exist only to
  * gate a migration, so a current schema skips them and an older one takes the
- * full upgrade lane.
+ * full upgrade lane. The returned content identity lets the caller prove its
+ * writable handle sees the bytes that were verified.
  */
-export function openProjectSqlite(options: { databasePath: string }): SchemaProbe {
+export function openProjectSqlite(options: { databasePath: string }): SchemaProbe & { content: SqliteContentIdentity } {
   const registry = getDesktopMigrationRegistry()
   const snapshot = physicalSnapshot(options.databasePath)
   let verified: SchemaProbe | undefined
@@ -273,9 +286,9 @@ export function openProjectSqlite(options: { databasePath: string }): SchemaProb
       }
     } finally { db.close() }
   } finally { snapshot.close() }
-  if (verified) return verified
+  if (verified) return { ...verified, content: contentIdentity(snapshot.identity) }
   const upgraded = upgradeProjectSqlite({ databasePath: options.databasePath })
-  return { version: upgraded.schemaVersion, fingerprint: upgraded.fingerprint }
+  return { version: upgraded.schemaVersion, fingerprint: upgraded.fingerprint, content: readSqliteContentIdentity(options.databasePath) }
 }
 
 /** Canonical-only upgrade seam. Caller validates its manifest and excludes business
