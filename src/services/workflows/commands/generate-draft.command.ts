@@ -996,8 +996,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
               handle: context.mainGenerationRunHandle!, failedAttemptId: recovery.draftShortOutline.retry.failedAttemptId,
             })
             outlined = retried.outcome
-            throwIfTerminalProviderFailure(outlined.receipt)
             logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, outlined.receipt)
+            throwIfTerminalProviderFailure(outlined.receipt)
             if (outlined.status === 'completed' && outlined.finishReason === 'stop' && outlined.content.trim()) {
               recovery = await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
               if (recovery.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
