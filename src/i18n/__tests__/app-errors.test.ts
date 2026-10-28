@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appErrorMessage, displayedErrorMessage, importGenerationStopMessage, knownAppErrorMessage } from '../app-errors'
+import { appErrorMessage, displayedErrorMessage, errorCodeOf, importGenerationStopMessage, knownAppErrorMessage } from '../app-errors'
 
 describe('localized application errors', () => {
   it('maps stable error codes to localized messages', () => {
@@ -228,6 +228,11 @@ it('names the output limit setting by its field label when that setting is inval
 })
 
 describe('import generation stops (#537)', () => {
+  it('reads app codes but not platform error codes such as ENOENT', () => {
+    expect(errorCodeOf(new Error('GENERATION_STORAGE_FAILED'))).toBe('GENERATION_STORAGE_FAILED')
+    expect(errorCodeOf(Object.assign(new Error('open failed'), { code: 'ENOENT' }))).toBeUndefined()
+  })
+
   const nextStep = { 'zh-CN': /只能在导入对话框里点「重新开始」，它会从第 1 章重新推演蓝图/u, 'en-US': /choose Start over in the import dialog.*Chapter 1/u } as const
   const blocked = ['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'] as const
 

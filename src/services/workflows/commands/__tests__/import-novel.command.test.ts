@@ -9,7 +9,7 @@ import {
   InferGlobalSettingsCommand as RuntimeInferGlobalSettingsCommand,
 } from '../import-novel.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
-import { importGenerationStopMessage } from '../../../../i18n/app-errors'
+import { importGenerationStopMessage, knownAppErrorMessage } from '../../../../i18n/app-errors'
 import { contextLengthRejectingDependencies } from './context-length-runtime.fixture'
 
 class InferBlueprintsPerChapterCommand extends RuntimeInferBlueprintsPerChapterCommand {
@@ -344,6 +344,19 @@ describe('InferBlueprintsPerChapterCommand', () => {
 
     expect((failure as Error).message).toContain(importGenerationStopMessage('en-US', 'ROOT_BUDGET_EXHAUSTED'))
     expect((failure as Error).message).not.toMatch(/token/iu)
+  })
+
+  it('explains a storage failure during blueprint inference with the shared storage message', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED' }
+    const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(`蓝图推演失败：${knownAppErrorMessage('zh-CN', 'GENERATION_STORAGE_FAILED')}`)
   })
 
   it('fails closed with a stable relationship diagnostic when relation is missing', async () => {

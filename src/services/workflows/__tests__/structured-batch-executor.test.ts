@@ -1846,6 +1846,21 @@ describe('main-process stop codes reach the failure', () => {
     expect(result).toMatchObject({ ok: false, failure: { code: 'limit_exceeded', reason: 'root_budget', errorCode: 'ROOT_BUDGET_EXHAUSTED' } })
   })
 
+  it('reports an active-time stop during the syntax repair as a deadline with its code', async () => {
+    const result = await execute(async task => task.purpose.endsWith(':structured-syntax-repair')
+      ? { status: 'incomplete', finishReason: 'error', content: '',
+        receipt: { ...attemptReceipt(2, 200, 400, 'error'), failureCode: 'ROOT_BUDGET_EXHAUSTED' } } as GenerationOutcome
+      : { status: 'completed', finishReason: 'stop', content: '{"blueprints":[{"chapterNumber":1,"title":"第1章"}',
+        receipt: attemptReceipt(1, 200, 200, 'stop') } as GenerationOutcome)
+    expect(result).toMatchObject({ ok: false, failure: { code: 'deadline', reason: 'deadline', errorCode: 'ROOT_BUDGET_EXHAUSTED' } })
+  })
+
+  it('keeps the storage-failure code of an incomplete request', async () => {
+    const result = await execute(async () => ({ status: 'incomplete', finishReason: 'error', content: '',
+      receipt: { ...attemptReceipt(1, 200, 200, 'error'), failureCode: 'GENERATION_STORAGE_FAILED' } } as GenerationOutcome))
+    expect(result).toMatchObject({ ok: false, failure: { code: 'generation_failed', errorCode: 'GENERATION_STORAGE_FAILED' } })
+  })
+
   it('keeps reporting an incomplete provider error without a stop code as a server error', async () => {
     const result = await execute(async () => ({ status: 'incomplete', finishReason: 'error', content: '',
       receipt: { ...attemptReceipt(1, 200, 200, 'error'), failureCode: 'NETWORK_ERROR' } } as GenerationOutcome))
