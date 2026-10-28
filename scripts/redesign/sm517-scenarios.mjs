@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 
 import * as blueprint from './pages/blueprint.mjs'
 import * as chapterView from './pages/chapter-view.mjs'
+import * as refs from './pages/refs.mjs'
+import { dismissCompletionToasts, waitForCompletionToast } from './pages/shell.mjs'
 import * as stage from './pages/stage.mjs'
 import { FAKE_MODEL, FIXTURE_PROSE } from './fake-model.mjs'
 import { seedStageSample } from './scenarios.mjs'
@@ -114,5 +116,51 @@ export const SM517_SCENARIOS = {
     await context.shoot('sm517-settings-en')
 
     return { proseModel: prose.model, reviewModel: review.model, planningModel: plan.model, planningKind: plan.kind }
+  } },
+  'sm517-stage-dialogs': { model: true, shell: 'stage', setup: context => seedStageSample(context, { beforeReload: async ({ page, invoke }) => {
+    for (const [channel, request] of [
+      ['llm:save-model', MINI],
+      ['llm:set-stage-model', { stage: 'refinement', modelId: MINI.id }],
+      ['llm:set-stage-model', { stage: 'planning', modelId: MINI.id }],
+    ]) {
+      const result = await invoke(page, channel, request)
+      assert.equal(result.success, true, `${channel} ${JSON.stringify(request.stage ?? request.id)}: ${result.error}`)
+    }
+  } }), run: async context => {
+    const { page, fake } = context
+
+    fake.replyPlotTree()
+    await refs.open(page, 'plot')
+    const plotModel = page.getByLabel('本次整理用的模型', { exact: true })
+    await plotModel.waitFor({ state: 'visible' })
+    assert.equal(await plotModel.inputValue(), MINI.id, '剧情树预选规划环节指定的模型')
+    await context.shoot('sm517-plot-tree-planning-model')
+    const beforePlot = fake.chats.length
+    await refs.buildPlotTree(page)
+    const plot = await nextChat(fake, beforePlot, 'plot-tree')
+
+    await openChapter(page, 3)
+    const beforeReview = fake.chats.length
+    await chapterView.view(page).getByRole('button', { name: '重新审稿', exact: true }).click()
+    const review = await nextChat(fake, beforeReview, 'review')
+    await stage.root(page).locator('.stage-capsule:not([data-tone="ok"])').waitFor({ state: 'detached', timeout: 90_000 })
+    await waitForCompletionToast(page)
+    await dismissCompletionToasts(page)
+    assert.equal(await chapterView.reviseButton(page).isEnabled(), true, '重新审稿写回后才能按意见修稿')
+    await page.getByRole('button', { name: '修稿选项', exact: true }).click()
+    await page.getByRole('dialog', { name: '修稿选项' }).waitFor({ state: 'visible' })
+    const reviseModel = page.getByLabel(/本次修稿模型/u)
+    await reviseModel.waitFor({ state: 'visible' })
+    assert.equal(await reviseModel.inputValue(), MINI.id, '修稿选项预选修稿环节指定的模型')
+    await context.shoot('sm517-revise-refinement-model')
+    await page.keyboard.press('Escape')
+    const beforeRevise = fake.chats.length
+    await chapterView.reviseButton(page).click()
+    const revision = await nextChat(fake, beforeRevise, 'revision')
+
+    assert.equal(plot.model, MINI.modelName, '生成剧情树用规划环节指定的模型')
+    assert.equal(review.model, FAKE_MODEL.modelName, '审稿没有另外指定，仍用默认模型')
+    assert.equal(revision.model, MINI.modelName, '按意见修稿用修稿环节指定的模型')
+    return { plotModel: plot.model, reviewModel: review.model, revisionModel: revision.model }
   } },
 }

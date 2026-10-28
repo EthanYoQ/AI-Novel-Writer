@@ -5,6 +5,7 @@ import type { ReviewCycleProjection } from '../../../shared/review-cycle'
 import type { RevisionEntry } from '../../../services/draft-index'
 import type { HumanConfirmedReviewSnapshot } from '../../../shared/human-confirmed-review'
 import { chapterLabel } from '../../../shared/chapter-label'
+import { routeStageModel } from '../../../shared/model-stage-routing'
 import { countDraftUnits } from '../../../shared/draft-units'
 import { isGenerationModel, preferredGenerationModelId } from '../../../services/workflows/chapter-write-launch'
 import { useEditorStore, type EditorTab } from '../../../stores/editor-store'
@@ -72,6 +73,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
   const locale = useLocaleStore(s => s.locale)
   const models = useLLMStore(s => s.models)
   const defaultModelId = useLLMStore(s => s.defaultModelId)
+  const refinementModelId = useLLMStore(s => routeStageModel('refinement', s).modelId)
   const { chapters } = useStageView()
   const filePath = tab.filePath!
   const projectKey = tab.projectKey!
@@ -113,7 +115,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
   const included = includedCount(checklist.items)
   const busy = draft.isChapterBusy
   const generationModels = models.filter(isGenerationModel)
-  const selectedReviseModel = reviseModelId ?? preferredGenerationModelId(models, defaultModelId)
+  const selectedReviseModel = reviseModelId ?? preferredGenerationModelId(models, refinementModelId)
   // 有几份能合并时取最新的一份；过期的修稿不占主流程，只能查看或丢弃。
   const pending = draft.pendingRevisions.find(revision => revision.id === facts?.mergeable.at(-1))
   const stale = draft.pendingRevisions.filter(revision => facts?.stale.some(entry => entry.id === revision.id))
