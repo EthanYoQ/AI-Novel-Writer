@@ -727,6 +727,28 @@ describe('作者原稿反推的建议', () => {
     expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')!.textContent).not.toContain('PROJECT_SESSION_STALE')
   })
 
+  it('读取失败后再次读取成功时，不再留着旧的失败提示', async () => {
+    arrange({ genre: '武侠' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    const base = invoke.getMockImplementation()!
+    let failOnce = true
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-effect-receipt-get' && failOnce) {
+        failOnce = false
+        throw new Error('PROJECT_SESSION_STALE')
+      }
+      return base(channel, ...args)
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')).toBeTruthy())
+
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="Inferred suggestions"]')?.textContent).toContain('Genre'))
+    expect(host!.querySelector('[aria-label="Inferred suggestions"] [role="alert"]')).toBeNull()
+  })
+
   it('被截断的长值可以展开看全文再收起，没被截断的短值不给展开控件', async () => {
     const outline = ['第一幕：旧港来信', '第二幕：雾钟早鸣', '第三幕：灯塔失火', '第四幕：账册下落', '第五幕：潮退真相', '第六幕：林岚离港'].join('\n')
     arrange({ genre: '武侠', coreOutline: '作者自己的大纲' }, {
