@@ -1,6 +1,7 @@
 import { useEffect, useState, type KeyboardEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { DraftMeta } from '../../../services/draft-index'
+import { DRAFT_STATUS_INFO } from '../../../shared/draft-status'
 import { sameProjectSessionContext } from '../../../shared/project-session-context'
 import { sqliteTime } from '../../../shared/sqlite-time'
 import { useDraftStore } from '../../../stores/draft-store'
@@ -17,10 +18,8 @@ import { pluralEn } from '../../../shared/plural-en'
 type Text = (zh: string, en: string) => string
 
 function versionName(draft: DraftMeta, text: Text): string {
-  if (draft.status === 'finalized') return text(`定稿 v${draft.version}`, `Final v${draft.version}`)
-  if (draft.status === 'archived') return text(`已归档 v${draft.version}`, `Archived v${draft.version}`)
-  if (draft.status === 'revised') return text(`修稿已合并 v${draft.version}`, `Revised v${draft.version}`)
-  return text(`草稿 v${draft.version}`, `Draft v${draft.version}`)
+  const [zh, en] = DRAFT_STATUS_INFO[draft.status].label
+  return text(`${zh} v${draft.version}`, `${en} v${draft.version}`)
 }
 
 /**

@@ -25,6 +25,8 @@ import { PostProcessRepository } from '../../repositories/post-process-repositor
 import { closeConnection } from '../../vector-store'
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 import { listDocuments, readDocumentCopy } from '../../knowledge-base'
+import { exportPortableProject } from '../project-archive-service'
+import { FinalizationRepository } from '../../repositories/finalization-repository'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = []
@@ -959,4 +961,44 @@ it('未被角色引用的头像原字节保留为待处理资料', async () => {
   const unresolved = path.join(f.target, '.ai-novel', 'avatars', 'unresolved')
   expect(fs.readFileSync(path.join(unresolved, fs.readdirSync(unresolved)[0]!))).toEqual(fs.readFileSync(path.join(f.legacy, 'avatars', 'unmapped.png')))
   expect(fs.existsSync(path.join(f.legacy, 'avatars', 'unmapped.png'))).toBe(true)
+})
+
+it('有定稿收据的旧项目复制导入后，替换那一章再写稿、导出备份都成功', async () => {
+  const f = fixture('v110', '')
+  const body = '有来源收据的第八章定稿'
+  const source = new Database(path.join(f.legacy, 'vela.db'))
+  try {
+    source.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(12, body)
+    source.prepare("INSERT INTO drafts(id,chapter_number,version,content_id,status) VALUES(22,8,1,12,'finalized')").run()
+    source.prepare(`INSERT INTO finalization_outbox(finalization_id,draft_id,chapter_number,chapter_title,
+      content_hash,content_revision,content_snapshot,target_file_name,publication_status)
+      VALUES(?,?,?,?,?,1,?,?,'published')`).run('bound-finalization', 22, 8, '第八章',
+        createHash('sha256').update(body).digest('hex'), body, '第八章.md')
+  } finally { source.close() }
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })
+  expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready' })
+  if (result.state !== 'ready') return
+  initProjectDatabase(f.target)
+  const db = getProjectDb()!
+  const replacement = '第八章新稿：作者回退后重新定稿。'
+  db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(40, replacement)
+  db.prepare("INSERT INTO drafts(id,chapter_number,version,content_id,status) VALUES(40,8,2,40,'draft')").run()
+  FinalizationRepository.commit({ finalizationId: 'replacement-finalization', draftId: 40, chapterNumber: 8,
+    chapterTitle: '第八章', content: replacement, contentHash: createHash('sha256').update(replacement).digest('hex'),
+    contentRevision: 1, targetFileName: '第八章-新.md' })
+
+  expect(readPortableCurrentAuthority({ database: db, projectStorageRoot: path.join(f.target, '.ai-novel'), projectId: result.projectId }))
+    .not.toBeNull()
+  closeProjectDatabase()
+  const attempts = path.join(path.dirname(f.target), 'export-attempts')
+  fs.mkdirSync(attempts)
+  await expect(exportPortableProject({
+    sourceProjectRoot: f.target,
+    projectSession: { projectId: result.projectId, projectPath: f.target, leaseId: 'lease-legacy-replaced' },
+    targetArchivePath: path.join(path.dirname(f.target), 'replaced.ainovel'),
+    attemptParentPath: attempts,
+    assertCurrentContext: () => undefined,
+    assets: { snapshot: () => ({ files: [], verifyUnchanged: () => undefined }) },
+    snapshotGeneration: 'legacy-replaced',
+  })).resolves.toBeTruthy()
 })

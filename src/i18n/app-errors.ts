@@ -205,6 +205,9 @@ const ERROR_KEYS = {
   NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE: 'error.narrativeThreadEvidenceNotInSource',
   DRAFT_NOT_FOUND: 'error.draftNotFound',
   DRAFT_FINALIZED_READ_ONLY: 'error.draftFinalizedReadOnly',
+  SUPERSEDED_DRAFT_DELETE_FORBIDDEN: 'error.supersededDraftDeleteForbidden',
+  FINALIZATION_SUPERSEDED: 'error.finalizationSuperseded',
+  FINALIZATION_COMMIT_SUPERSEDED: 'error.finalizationSuperseded',
   // 删除已定稿的这一章（#474 B5）：删除与清理重试时作者能照着处理的拒绝原因。
   CHAPTER_DELETE_OPERATION_NOT_FOUND: 'error.chapterDeleteOperationNotFound',
   CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED: 'error.chapterDeleteLegacyConfirmationConsumed',
@@ -278,6 +281,7 @@ const ERROR_KEYS = {
   IMPORT_INSPECTION_EXPIRED: 'error.importInspectionExpired',
   IMPORT_INSPECTION_LIMIT: 'error.importInspectionLimit',
   FINALIZED_IMPORT_PREVIEW_STALE: 'error.finalizedImportPreviewStale',
+  FINALIZED_IMPORT_CHAPTER_ALREADY_FINALIZED: 'error.finalizedImportChapterAlreadyFinalized',
 } as const
 
 type KnownErrorCode = keyof typeof ERROR_KEYS

@@ -108,6 +108,7 @@ export interface ImportRunOrchestratorDependencies {
     draft: FinalizedDraftImportDraftReceipt,
     run: ImportRunSnapshot,
   ) => Promise<void>
+  isAuthorDraftReplaced: (draft: FinalizedDraftImportDraftReceipt) => Promise<boolean>
   refresh: (run: ImportRunSnapshot) => Promise<void>
   completeBatch: (
     runId: string,
@@ -640,11 +641,19 @@ export class ImportRunOrchestrator {
             )
           }
           execution.current = await this.dependencies.renewExecution(run.id, execution.current)
-          await this.withLeaseHeartbeat(
-            run,
-            execution,
-            () => projectChapter(chapter, draft, run),
-          )
+          if (await this.dependencies.isAuthorDraftReplaced(draft)) {
+            callbacks.log(localize(
+              run.locale,
+              `第 ${chapter.number} 章已重新定稿，跳过导入稿`,
+              `Chapter ${chapter.number} was refinalized; skipping the imported draft`,
+            ))
+          } else {
+            await this.withLeaseHeartbeat(
+              run,
+              execution,
+              () => projectChapter(chapter, draft, run),
+            )
+          }
           execution.current = await this.dependencies.renewExecution(run.id, execution.current)
           const completed = await this.dependencies.completeBatch(
             run.id,

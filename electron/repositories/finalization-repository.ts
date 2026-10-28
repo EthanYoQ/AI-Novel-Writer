@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { countDraftUnits } from '../../src/shared/draft-units'
+import type { DuplicateFinalizationRepair, RepairedDuplicateChapter } from '../../src/shared/finalization-repair'
 import { freezeFinalizedCharacterSnapshot, invalidateContinuityProjectionFrom } from './summary-repository'
 
 export type PublicationStatus = 'pending' | 'published'
@@ -176,6 +177,8 @@ function selectAuthoritativeExportRows(
   return selected
 }
 
+const AUTHORITATIVE_FINALIZED_ORDER = 'drafts.chapter_number ASC, drafts.version DESC, drafts.id DESC'
+
 function readAuthoritativeExportRows(): AuthoritativeFinalizedDraftExport[] {
   const db = requireDatabase()
   return db.transaction(() => selectAuthoritativeExportRows(db.prepare(`
@@ -188,7 +191,7 @@ function readAuthoritativeExportRows(): AuthoritativeFinalizedDraftExport[] {
     JOIN contents ON contents.id = drafts.content_id
     LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
     WHERE drafts.status = 'finalized'
-    ORDER BY drafts.chapter_number ASC, drafts.version DESC, drafts.id DESC
+    ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
   `).all() as FinalizedDraftExportRow[]))()
 }
 
@@ -263,13 +266,15 @@ export class FinalizationRepository {
       if (draft.status === 'finalized') {
         throw new Error('FINALIZATION_COMMIT_OUTBOX_MISSING')
       }
+      if (draft.status === 'superseded') {
+        throw new Error('FINALIZATION_COMMIT_SUPERSEDED')
+      }
 
-      const replacesFinalized = db.prepare(`
-        SELECT 1 FROM drafts
+      const replaced = db.prepare(`
+        UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
         WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
-        LIMIT 1
-      `).get(input.chapterNumber, input.draftId)
-      if (replacesFinalized) invalidateContinuityProjectionFrom(db, input.chapterNumber)
+      `).run(input.chapterNumber, input.draftId)
+      if (replaced.changes > 0) invalidateContinuityProjectionFrom(db, input.chapterNumber)
 
       db.prepare('UPDATE contents SET body = ? WHERE id = ?')
         .run(input.content, draft.content_id)
@@ -313,6 +318,65 @@ export class FinalizationRepository {
       }
     })
     return transaction()
+  }
+
+  static repairDuplicateFinalizations(): DuplicateFinalizationRepair {
+    const db = requireDatabase()
+    return db.transaction(() => {
+      const rows = db.prepare(`
+        SELECT drafts.id, drafts.chapter_number, drafts.version,
+               finalization_outbox.knowledge_document_id, finalization_outbox.target_file_name,
+               finalization_outbox.publication_status
+        FROM drafts
+        LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+        WHERE drafts.status = 'finalized' AND drafts.chapter_number IN (
+          SELECT chapter_number FROM drafts WHERE status = 'finalized'
+          GROUP BY chapter_number HAVING COUNT(*) > 1
+        )
+        ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
+      `).all() as Array<{
+        id: number
+        chapter_number: number
+        version: number
+        knowledge_document_id: string | null
+        target_file_name: string | null
+        publication_status: string | null
+      }>
+      const chapters: RepairedDuplicateChapter[] = []
+      let keptFileName = ''
+      const supersede = db.prepare(`
+        UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
+        WHERE id = ? AND status = 'finalized'
+      `)
+      for (const row of rows) {
+        const current = chapters.at(-1)
+        if (current?.chapterNumber !== row.chapter_number) {
+          chapters.push({ chapterNumber: row.chapter_number, keptDraftId: row.id, keptVersion: row.version, superseded: [] })
+          keptFileName = row.target_file_name ?? ''
+          continue
+        }
+        supersede.run(row.id)
+        current.superseded.push({
+          draftId: row.id,
+          version: row.version,
+          knowledgeDocumentId: row.knowledge_document_id ?? '',
+          targetFileName: row.publication_status === 'published' && row.target_file_name !== keptFileName
+            ? row.target_file_name ?? '' : '',
+        })
+      }
+      if (chapters.length > 0) invalidateContinuityProjectionFrom(db, chapters[0]!.chapterNumber)
+      return { chapters }
+    }).immediate()
+  }
+
+  static isAuthoritative(draftId: number): boolean {
+    return requireDatabase().prepare(`
+      SELECT drafts.id FROM drafts
+      WHERE drafts.status = 'finalized'
+        AND drafts.chapter_number = (SELECT chapter_number FROM drafts WHERE id = ?)
+      ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
+      LIMIT 1
+    `).pluck().get(draftId) === draftId
   }
 
   static get(finalizationId: string): FinalizationRecord | null {
