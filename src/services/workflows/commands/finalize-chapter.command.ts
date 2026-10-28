@@ -392,7 +392,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         onHandle: (handle, modelId) => {
           generationContext.mainGenerationRunHandle = Object.freeze({ ...handle })
           // 只记在运行上：写进共享上下文会让同一运行后面的规划阶段（作者原稿反推）沿用定稿模型。
-          useWorkflowStore.getState().pinRunGenerationModel(generationContext.runId, modelId)
+          useWorkflowStore.getState().recordRunGenerationModel(generationContext.runId, modelId)
         },
       }).catch(error => { throw finalizationGenerationError(error) }),
       complete: async () => { throw new Error('FINALIZATION_GENERATION_MAIN_REQUIRED') },

@@ -37,7 +37,7 @@ export interface WorkflowMainGenerationRuntime extends GenerationRuntime {
 
 export function pinWorkflowModel(context: WorkflowContext, modelId: string): void {
   context.generationModelId ||= modelId
-  useWorkflowStore.getState().pinRunGenerationModel(context.runId, context.generationModelId)
+  useWorkflowStore.getState().recordRunGenerationModel(context.runId, context.generationModelId)
 }
 
 /** Each stage freezes its sources; all stages of the author action share main's root. */
