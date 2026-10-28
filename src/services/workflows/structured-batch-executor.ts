@@ -128,6 +128,13 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
       super(failure.message)
     }
   }
+  /** 主进程阻断根时回执带的码（活动时长用完、写入失败），失败沿用这个码。 */
+  const receiptStop = (receipt: GenerationAttemptReceipt, message: string): ExecutionFailure | undefined => {
+    const errorCode = receipt.failureCode
+    if (errorCode === 'ROOT_BUDGET_EXHAUSTED') return new ExecutionFailure({ code: 'deadline', reason: 'deadline', message, errorCode })
+    if (errorCode === 'GENERATION_STORAGE_FAILED') return new ExecutionFailure({ code: 'generation_failed', reason: 'server_error', message, errorCode })
+    return undefined
+  }
 
   return {
     async execute(input) {
@@ -272,11 +279,8 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           return
         }
         if (outcome.status === 'incomplete') {
-          // 活动时长在请求进行中用完：主进程中止请求、阻断根，并在回执里带上码。
-          if (outcome.receipt.failureCode === 'ROOT_BUDGET_EXHAUSTED') {
-            throw new ExecutionFailure({ code: 'deadline', reason: 'deadline',
-              message: `结构化生成未正常完成：${outcome.finishReason}`, errorCode: 'ROOT_BUDGET_EXHAUSTED' })
-          }
+          const stop = receiptStop(outcome.receipt, `结构化生成未正常完成：${outcome.finishReason}`)
+          if (stop) throw stop
           if (outcome.finishReason !== 'length') {
             const reason: StructuredGenerationFailureReason = outcome.finishReason === 'content_filter'
               ? 'safety'
@@ -352,6 +356,8 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
               })
             }
             if (repaired.status === 'incomplete') {
+              const stop = receiptStop(repaired.receipt, `结构化语法修复未正常完成：${repaired.finishReason}`)
+              if (stop) throw stop
               if (repaired.finishReason === 'length') {
                 if (items.length > 1) {
                   const midpoint = Math.floor(items.length / 2)

@@ -304,9 +304,9 @@ function readCode(error: unknown): KnownErrorCode | undefined {
   return codeCandidates(error).find(isKnownCode)
 }
 
-/** 报错带的稳定错误码，登记与否都读。 */
+/** 报错带的稳定错误码，登记与否都读；至少含一个下划线，ENOENT 这类平台码不算。 */
 export function errorCodeOf(error: unknown): string | undefined {
-  return codeCandidates(error).find((code): code is string => typeof code === 'string' && /^[A-Z][A-Z0-9_]*$/u.test(code))
+  return codeCandidates(error).find((code): code is string => typeof code === 'string' && /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/u.test(code))
 }
 
 /** Electron 在主进程报错前加的调用通道前缀对作者没有意义，兜底说明里去掉。 */

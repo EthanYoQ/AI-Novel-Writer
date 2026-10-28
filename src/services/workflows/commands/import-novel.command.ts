@@ -1,4 +1,4 @@
-import { displayedErrorMessage, englishWithReason, importGenerationStopMessage } from '../../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason, importGenerationStopMessage, knownAppErrorMessage } from '../../../i18n/app-errors'
 import type { NovelConfig } from '../../../shared/ipc-channels'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../../shared/import-generation'
 import type { BeginGenerationRequest } from '../../../shared/generation-owner-contract'
@@ -765,7 +765,8 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       if (batch.failure.terminal) throw batch.failure.terminal
       const { errorCode } = batch.failure
       if (errorCode) callbacks.log(text(`蓝图推演停止原因：${errorCode}`, `Blueprint inference stop reason: ${errorCode}`))
-      const reason = (errorCode && importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline'))
+      const reason = (errorCode && (importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline')
+        ?? knownAppErrorMessage(context.uiLocale, errorCode)))
         || displayedErrorMessage(context.uiLocale, batch.failure.message)
       throw new Error(text(
         `蓝图推演失败：${reason}`,
