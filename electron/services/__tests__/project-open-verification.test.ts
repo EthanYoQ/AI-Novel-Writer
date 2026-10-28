@@ -163,6 +163,29 @@ describe('project open verification', () => {
     expect(fs.readFileSync(f.file)).toEqual(mainBytes)
   })
 
+  it('refuses a damaged WAL frame that another open connection still indexes', () => {
+    const f = fixture()
+    const holder = new Database(f.file)
+    try {
+      holder.pragma('journal_mode = WAL')
+      holder.pragma('wal_autocheckpoint = 0')
+      const insert = holder.prepare('INSERT INTO contents(body) VALUES (?)')
+      for (let index = 0; index < 30; index++) insert.run(`wal-${index}:${BODY}`)
+      const pageSize = holder.pragma('page_size', { simple: true }) as number
+      const wal = fs.readFileSync(`${f.file}-wal`)
+      const frames = (wal.length - 32) / (24 + pageSize)
+      let frame = frames - 1
+      while (wal.readUInt32BE(32 + frame * (24 + pageSize)) === 1) frame--
+      const fd = fs.openSync(`${f.file}-wal`, 'r+')
+      try { fs.writeSync(fd, Buffer.alloc(64, 0xff), 0, 64, 32 + frame * (24 + pageSize) + 24) } finally { fs.closeSync(fd) }
+      let thrown: unknown
+      try { initProjectDatabase(f.root) } catch (error) { thrown = error }
+      expect(getProjectDb()).toBeNull()
+      expect({ name: (thrown as Error).name, code: (thrown as { code?: string }).code, message: (thrown as Error).message })
+        .toEqual({ name: 'SchemaMigrationError', code: 'CORRUPT_SCHEMA', message: 'CORRUPT_SCHEMA' })
+    } finally { holder.close() }
+  })
+
   it('refuses the writable handle when a page is damaged after the snapshot passed', () => {
     const f = fixture()
     const damaged = afterSnapshotPasses(() => damageContentPage(f.file))
