@@ -9,6 +9,7 @@ import {
   IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
   IMPORT_RUN_BLUEPRINT_BATCH_SIZE,
   IMPORT_RUN_KNOWLEDGE_BATCH_SIZE,
+  importStagesFor,
   parseImportRunChapterBatchCheckpointId,
 } from '../../src/shared/import-run'
 import type {
@@ -37,7 +38,8 @@ import { getCurrentProjectPath, getProjectDb } from '../database'
 import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from './blueprint-repository'
 import { ImportGlobalFactsRepository } from './import-global-facts-repository'
-import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
+import type { ImportGlobalFactsMode, ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
+import { planImportFill } from '../../src/shared/import-fill-empty'
 import {
   MAX_IMPORT_CHAPTERS,
   MAX_IMPORT_SOURCE_FILES,
@@ -191,21 +193,17 @@ const IMPORT_RUN_STAGE_VALUES = new Set<ImportRunStage>([
   'author-commit', 'author-publish', 'author-postprocess',
   'refresh', 'completed',
 ])
-const REFERENCE_NEXT_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>>> = {
-  prepared: 'knowledge',
-  knowledge: 'global',
-  global: 'style',
-  style: 'blueprints',
-  blueprints: 'refresh',
-}
-const AUTHOR_NEXT_STAGE: Readonly<Partial<Record<ImportRunStage, ImportRunStage>>> = {
-  'author-commit': 'author-publish',
-  'author-publish': 'author-postprocess',
-  'author-postprocess': 'refresh',
-}
+/**
+ * 「同时反推」在作者原稿运行创建时冻结成导入账本里的一行，有这一行即勾选。
+ * 它不是进度：completedBatches 不读它。
+ */
+const AUTHOR_INFERENCE_LEDGER = { stage: 'prepared', batchId: 'author-inference', effectKey: 'option:author-inference' } as const
 
+/** 完成只能走 complete()，所以 refresh 之后没有可推进的阶段。 */
 function nextStageForRun(row: ImportRunRow, stage: ImportRunStage): ImportRunStage | undefined {
-  return (row.purpose === 'author-manuscript' ? AUTHOR_NEXT_STAGE : REFERENCE_NEXT_STAGE)[stage]
+  const plan = importStagesFor({ purpose: row.purpose, authorInference: readAuthorInference(row.id) })
+  const next = plan[plan.indexOf(stage) + 1]
+  return plan.includes(stage) && next !== 'completed' ? next : undefined
 }
 
 type ImportRunCheckpointSource = 'direct' | 'receipt'
@@ -354,7 +352,7 @@ function assertAuthorEffectRunBinding(
   if (kind !== 'author-finalized-batch') return
   const stageMatches = run.stage === 'author-commit'
     || (allowCommittedLaterStage && [
-      'author-publish', 'author-postprocess', 'refresh', 'completed',
+      'author-publish', 'author-postprocess', 'global', 'style', 'blueprints', 'refresh', 'completed',
     ].includes(run.stage))
   if (
     run.purpose !== 'author-manuscript'
@@ -379,15 +377,20 @@ function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown
     ) throw new Error()
     return
   }
+  const fillEmpty = effectReceipt.mode === 'fill-empty'
+  if (fillEmpty && !Array.isArray(effectReceipt.suggestions)) throw new Error()
+  const fillKeys = fillEmpty ? ['mode', 'suggestions'] : []
   if (kind === 'project-writing-style') {
-    if (!exactKeys(effectReceipt, ['writingStyle']) || effectReceipt.writingStyle !== payload.writingStyle) throw new Error()
+    if (!exactKeys(effectReceipt, ['writingStyle', ...fillKeys])
+      || typeof effectReceipt.writingStyle !== 'string'
+      || (!fillEmpty && effectReceipt.writingStyle !== payload.writingStyle)) throw new Error()
     return
   }
   if (kind === 'project-global-facts') {
     if (isRecord(effectReceipt.characterProposal)) {
       const { generationRunHandle: _generationRunHandle, ...domainPayload } = payload
       void _generationRunHandle
-      if (!exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'characterProposal', 'proposalSource'])
+      if (!exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'characterProposal', 'proposalSource', ...fillKeys])
         || effectReceipt.operationId !== payload.operationId || typeof effectReceipt.payloadHash !== 'string' || !SHA256.test(effectReceipt.payloadHash)
         || typeof effectReceipt.idempotent !== 'boolean' || !isRecord(effectReceipt.core) || !canonicalEqual(effectReceipt.proposalSource, domainPayload)
         || !exactKeys(effectReceipt.characterProposal, ['proposalBatchId', 'sourceHash'])
@@ -635,6 +638,15 @@ function unfinishedSourceDisplay(runId: string): ImportSourceDisplayMetadata[] {
   ))
 }
 
+/** 作者原稿只为还没有蓝图的章反推，已有蓝图的章不归本次运行。 */
+function chaptersMissingBlueprint(runId: string): number {
+  return db().prepare(`
+    SELECT COUNT(*) FROM import_run_chapters AS chapters
+    WHERE chapters.run_id = ?
+      AND NOT EXISTS (SELECT 1 FROM blueprints WHERE blueprints.chapter_number = chapters.chapter_number)
+  `).pluck().get(runId) as number
+}
+
 function completedCheckpointChapters(row: ImportRunRow, stage: 'knowledge' | 'blueprints'): number {
   const covered = new Set<number>()
   for (const batchId of completedBatches(row)[stage] ?? []) {
@@ -672,11 +684,14 @@ function persistedProgress(row: ImportRunRow): {
     }
   }
   if (row.stage === 'blueprints') {
+    const progressCompleted = completedCheckpointChapters(row, 'blueprints')
     return {
       ...sources,
       completedChapters,
-      progressCompleted: completedCheckpointChapters(row, 'blueprints'),
-      progressTotal: row.total_chapters,
+      progressCompleted,
+      progressTotal: row.purpose === 'author-manuscript'
+        ? progressCompleted + chaptersMissingBlueprint(row.id)
+        : row.total_chapters,
     }
   }
   if (row.stage === 'global' || row.stage === 'style' || row.stage === 'refresh') {
@@ -705,6 +720,7 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
     ...(row.purpose === 'author-manuscript' ? {
       manifestFingerprint: row.manifest_fingerprint,
       ...(row.authority_fingerprint ? { authorityFingerprint: row.authority_fingerprint } : {}),
+      authorInference: readAuthorInference(row.id),
     } : {}),
     sourceDisplay: parseJson<ImportSourceDisplayMetadata[]>(row.source_display_json, []),
     unfinishedSourceDisplay: unfinishedSourceDisplay(row.id),
@@ -872,8 +888,8 @@ function completedBatches(row: ImportRunRow): Partial<Record<ImportRunStage, str
     const completed: Partial<Record<ImportRunStage, string[]>> = {}
     const rows = db().prepare(`
       SELECT stage,batch_id FROM import_effect_ledger
-      WHERE run_id=? AND state='complete' ORDER BY rowid
-    `).all(row.id) as Array<{ stage: ImportRunStage; batch_id: string }>
+      WHERE run_id=? AND state='complete' AND NOT (stage=? AND batch_id=?) ORDER BY rowid
+    `).all(row.id, AUTHOR_INFERENCE_LEDGER.stage, AUTHOR_INFERENCE_LEDGER.batchId) as Array<{ stage: ImportRunStage; batch_id: string }>
     for (const entry of rows) completed[entry.stage] = [...(completed[entry.stage] ?? []), entry.batch_id]
     return completed
   }
@@ -890,6 +906,12 @@ function completedBatches(row: ImportRunRow): Partial<Record<ImportRunStage, str
     }
   }
   return parsed as Partial<Record<ImportRunStage, string[]>>
+}
+
+function readAuthorInference(runId: string): boolean {
+  if (!hasEffectLedger()) return false
+  return Boolean(db().prepare('SELECT 1 FROM import_effect_ledger WHERE run_id=? AND stage=? AND batch_id=?')
+    .get(runId, AUTHOR_INFERENCE_LEDGER.stage, AUTHOR_INFERENCE_LEDGER.batchId))
 }
 
 function hasEffectLedger(): boolean {
@@ -1089,6 +1111,10 @@ function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage)
       covered.size !== allChapters.length
       || allChapters.some(chapter => !covered.has(chapter.chapter_number))
     ) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
+    return
+  }
+  if (stage === 'blueprints' && row.purpose === 'author-manuscript') {
+    if (chaptersMissingBlueprint(row.id) !== 0) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
     return
   }
   if (stage !== 'knowledge' && stage !== 'blueprints') throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
@@ -2075,6 +2101,13 @@ export class ImportRunRepository {
           manifestContentSize,
           manifestWordCount,
         )
+        if (candidate.authorInference) {
+          // evidence_kind 只能取 M04 的四个值；legacy-checkpoint 是现有直接检查点（无收据）用的那个，校验也认它。
+          db().prepare(`INSERT INTO import_effect_ledger(
+            run_id,stage,batch_id,effect_namespace,effect_key,state,evidence_kind,diagnostic_code
+          ) VALUES(?,?,?,?,?,'complete','legacy-checkpoint','')`).run(runId, AUTHOR_INFERENCE_LEDGER.stage,
+            AUTHOR_INFERENCE_LEDGER.batchId, `import:${candidate.purpose}:${runId}`, AUTHOR_INFERENCE_LEDGER.effectKey)
+        }
         const insertChapter = db().prepare(`
           INSERT INTO import_run_chapters (
             run_id, chapter_number, source_id, source_chapter_number,
@@ -2340,7 +2373,7 @@ export class ImportRunRepository {
         recordPreparedEffect(run, existing)
         return rowToEffectReceipt(existing, run)
       }
-      if (run.purpose === 'reference') {
+      if (request.stage === 'global' || request.stage === 'style' || request.stage === 'blueprints') {
         const handle = (request.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle
         const hasGenerationTable = db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_runs'").pluck().get()
         const bound = hasGenerationTable && db().prepare("SELECT 1 FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlot.runId')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.stage')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.batchId')=?")
@@ -2402,6 +2435,8 @@ export class ImportRunRepository {
       assertExecution(runId, execution, now)
       assertCheckpointCanApply(run, stage, batchId, 'receipt')
       let effectReceipt: unknown
+      // 作者原稿只补空白；模式由运行用途决定，不随载荷传。
+      const fillMode: ImportGlobalFactsMode = run.purpose === 'author-manuscript' ? 'fill-empty' : 'replace'
       const generationRunHandle = (validatedReceipt.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle
       if (generationRunHandle) {
         if (!assertGenerationSources || !['global', 'style', 'blueprints'].includes(stage)) throw new Error('GENERATION_GUARD_REQUIRED')
@@ -2411,6 +2446,7 @@ export class ImportRunRepository {
         case 'project-global-facts':
           effectReceipt = ImportGlobalFactsRepository.commit(
             parseJson<ImportGlobalFactsRequest>(row.payload_json, {} as ImportGlobalFactsRequest),
+            fillMode,
           )
           break
         case 'project-writing-style': {
@@ -2418,13 +2454,27 @@ export class ImportRunRepository {
           if (typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()) {
             throw new Error('IMPORT_RUN_RECEIPT_PAYLOAD_INVALID')
           }
-          ProjectCoreRepository.update({ writingStyle: payload.writingStyle.trim() })
-          effectReceipt = { writingStyle: payload.writingStyle.trim() }
+          const writingStyle = payload.writingStyle.trim()
+          if (fillMode === 'replace') {
+            ProjectCoreRepository.update({ writingStyle })
+            effectReceipt = { writingStyle }
+            break
+          }
+          const fill = planImportFill(['writingStyle'], { writingStyle: ProjectCoreRepository.get()?.writingStyle }, { writingStyle })
+          ProjectCoreRepository.update(fill.patch)
+          effectReceipt = {
+            mode: 'fill-empty',
+            writingStyle: ProjectCoreRepository.get()?.writingStyle ?? '',
+            suggestions: fill.suggestions,
+          }
           break
         }
         case 'chapter-blueprint-range':
           effectReceipt = BlueprintRepository.commitRange(
             parseJson<BlueprintRangeCommitRequest>(row.payload_json, {} as BlueprintRangeCommitRequest),
+            undefined,
+            undefined,
+            fillMode,
           )
           break
         case 'author-finalized-batch': {

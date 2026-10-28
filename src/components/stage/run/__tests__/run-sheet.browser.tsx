@@ -18,6 +18,8 @@ import { useStageStore, type StageSheet } from '../../../../stores/navigation/st
 import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore, type WorkflowRun } from '../../../../stores/workflow-store'
 import RunSheet from '../RunSheet'
+import { createProjectArchTabId } from '../../../editor/arch-file-refresh-policy'
+import { globalEventBus } from '../../../../shared/event-bus'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -632,5 +634,270 @@ describe('聊天入口不可见', () => {
       expect([...host!.querySelectorAll('[aria-label],[title]')].map(node => `${node.getAttribute('aria-label')} ${node.getAttribute('title')}`).join(' ')).not.toMatch(CHAT_WORDS)
     }
     expect(selectedTab()).toBe(locale === 'en-US' ? 'Diagnostics' : '诊断')
+  })
+})
+
+describe('作者原稿反推的建议', () => {
+  function importRun(): WorkflowRun {
+    return run('导入运行', 'completed', { type: 'novel_import', title: '导入作者原稿（3 章）' })
+  }
+
+  function arrange(core: Record<string, unknown>, receipts: Record<string, unknown>) {
+    const updates: unknown[] = []
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-effect-receipt-get') {
+        const effectReceipt = receipts[args[1] as string]
+        return effectReceipt ? { state: 'committed', effectReceipt } : null
+      }
+      if (channel === 'db:project-core-get') return { ...core }
+      if (channel === 'db:project-core-update') {
+        updates.push(args[0])
+        Object.assign(core, args[0] as object)
+        return { success: true }
+      }
+      if (channel === 'fs:list-tree' || channel === 'fs:read-dir') return []
+      if (channel === 'db:recovery-candidate-list') return []
+      if (channel === 'generation:list-recovery') return { planning: [], editors: [], reviews: [], drafts: [], batches: [], partial: false }
+      return null
+    })
+    return updates
+  }
+
+  it('列出与现有设定不同的反推结果，采用一条就写进设定并从列表消失，全部采用写进其余的', async () => {
+    const core = { genre: '武侠', coreOutline: '作者自己的大纲', writingStyle: '长句', narrativePov: 'first_person' }
+    const updates = arrange(core, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'genre', current: '武侠', inferred: '悬疑' },
+        { field: 'coreOutline', current: '作者自己的大纲', inferred: '侦探追查旧案' },
+        { field: 'narrativePov', current: 'third_limited', inferred: 'first_person' },
+      ] },
+      style: { mode: 'fill-empty', writingStyle: '长句', suggestions: [{ field: 'writingStyle', current: '长句', inferred: '短句，白描' }] },
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    const list = () => host!.querySelector('[aria-label="反推建议"]')
+    await vi.waitFor(() => expect(list()?.textContent).toContain('类型'))
+    expect(list()!.textContent).toContain('核心大纲')
+    expect(list()!.textContent).toContain('文风')
+    expect(list()!.textContent).not.toContain('叙事视角')
+
+    await click('采用「类型」的反推结果')
+    expect(updates).toEqual([{ genre: '悬疑' }])
+    await vi.waitFor(() => expect(list()!.textContent).not.toContain('悬疑'))
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑')
+
+    await click('全部采用')
+    expect(updates.at(-1)).toEqual({ coreOutline: '侦探追查旧案', writingStyle: '短句，白描' })
+    await vi.waitFor(() => expect(list()).toBeNull())
+  })
+
+  it('采用一条建议只改那一项；设定页里还没保存的其他改动保留', async () => {
+    const core = { genre: '武侠', coreOutline: '作者自己的大纲' }
+    const updates = arrange(core, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, novelConfig: { genre: '武侠', coreOutline: '作者自己的大纲' } as never } }))
+    useProjectStore.getState().updateNovelConfig({ coreOutline: '还没保存的新大纲' })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeTruthy())
+    await click('采用「类型」的反推结果')
+    expect(updates).toEqual([{ genre: '悬疑' }])
+    await vi.waitFor(() => expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑'))
+    expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('还没保存的新大纲')
+  })
+
+  it('采用写库期间作者又改了同一项：保留作者的新改动且仍未保存，其他采用项按采用值保存', async () => {
+    const core = { genre: '武侠', coreOutline: '作者自己的大纲' }
+    const updates = arrange(core, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'genre', current: '武侠', inferred: '悬疑' },
+        { field: 'coreOutline', current: '作者自己的大纲', inferred: '侦探追查旧案' },
+      ] },
+    })
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:project-core-update') useProjectStore.getState().updateNovelConfig({ genre: '作者等待时改的类型' })
+      return base(channel, ...args)
+    })
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, novelConfig: { genre: '武侠', coreOutline: '作者自己的大纲' } as never } }))
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('全部采用')).toBeTruthy())
+    await click('全部采用')
+    expect(updates).toEqual([{ genre: '悬疑', coreOutline: '侦探追查旧案' }])
+    await vi.waitFor(() => expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('侦探追查旧案'))
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('作者等待时改的类型')
+
+    useProjectStore.getState().discardNovelConfigDraft(session.projectPath, session)
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ genre: '悬疑', coreOutline: '侦探追查旧案' })
+  })
+
+  it('采用写库期间作者把同一项改回原先保存的值：保留作者的值且仍未保存', async () => {
+    const core = { genre: '武侠' }
+    arrange(core, { global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] } })
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:project-core-update') useProjectStore.getState().updateNovelConfig({ genre: '武侠' })
+      return base(channel, ...args)
+    })
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, novelConfig: { genre: '武侠' } as never } }))
+    useProjectStore.getState().updateNovelConfig({ genre: '作者点采用前写的类型' })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeTruthy())
+    await click('采用「类型」的反推结果')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('db:project-core-get', session.projectPath, session))
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeFalsy())
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('武侠')
+    useProjectStore.getState().discardNovelConfigDraft(session.projectPath, session)
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑')
+  })
+
+  it('采用架构建议后通知架构页与流程脊重读', async () => {
+    arrange({ premise: '作者的前提' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'premise', current: '作者的前提', inferred: '反推的前提' }] },
+    })
+    const updated = vi.fn()
+    const off = globalEventBus.on('ARCH_FILE_UPDATED', updated)
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('采用「故事前提」的反推结果')).toBeTruthy())
+    await click('采用「故事前提」的反推结果')
+    await vi.waitFor(() => expect(updated).toHaveBeenCalledWith(expect.objectContaining({ projectSession: session, runId: '导入运行' })))
+    off()
+  })
+
+  it('采用架构建议后，已打开且没改过的文档标签显示新内容；有未保存改动的标签保留作者草稿', async () => {
+    arrange({ premise: '作者的前提', worldbuilding: '作者的世界观' }, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'premise', current: '作者的前提', inferred: '反推的前提' },
+        { field: 'worldbuilding', current: '作者的世界观', inferred: '反推的世界观' },
+      ] },
+    })
+    const tabId = (field: string) => createProjectArchTabId(session.projectPath, `ai-novel://core/${field}`)
+    const open = (field: string, content: string) => useEditorStore.getState().openFile({
+      id: tabId(field), name: field, type: 'arch-file', filePath: `ai-novel://core/${field}`, content, savedContent: content, projectKey: session.projectPath,
+    })
+    open('worldbuilding', '作者的世界观')
+    open('premise', '作者的前提')
+    useEditorStore.getState().updateTabContent(tabId('premise'), '作者没保存的前提')
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('全部采用')).toBeTruthy())
+    await click('全部采用')
+    const tab = (field: string) => useEditorStore.getState().tabs.find(item => item.id === tabId(field))!
+    await vi.waitFor(() => expect(tab('worldbuilding').content).toBe('反推的世界观'))
+    expect(tab('worldbuilding').dirty).toBeFalsy()
+    expect(tab('premise')).toMatchObject({ content: '作者没保存的前提', dirty: true })
+  })
+
+  it('换开别的作品再回来（新的会话）后，同一作品的历史运行仍然列出未采用的建议', async () => {
+    arrange({ genre: '武侠' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    useWorkflowStore.setState({ history: [{ ...importRun(), projectSession: { ...session, leaseId: '上次打开' } }] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"]')?.textContent).toContain('类型'))
+    expect(invoke).toHaveBeenCalledWith('db:import-run-effect-receipt-get', '导入运行', 'global', 'done', session.projectPath, session)
+  })
+
+  it('建议读取失败时说出来，不当作没有建议', async () => {
+    arrange({ genre: '武侠' }, {})
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:import-run-effect-receipt-get'
+      ? Promise.reject(new Error('PROJECT_SESSION_STALE')) : base(channel, ...args))
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')?.textContent).toBeTruthy())
+    expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')!.textContent).not.toContain('PROJECT_SESSION_STALE')
+  })
+
+  it('读取失败后再次读取成功时，不再留着旧的失败提示', async () => {
+    arrange({ genre: '武侠' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    const base = invoke.getMockImplementation()!
+    let failOnce = true
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-effect-receipt-get' && failOnce) {
+        failOnce = false
+        throw new Error('PROJECT_SESSION_STALE')
+      }
+      return base(channel, ...args)
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')).toBeTruthy())
+
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="Inferred suggestions"]')?.textContent).toContain('Genre'))
+    expect(host!.querySelector('[aria-label="Inferred suggestions"] [role="alert"]')).toBeNull()
+  })
+
+  it('会话换了以后，新会话读完之前不再显示旧会话的建议', async () => {
+    arrange({ genre: '武侠' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeTruthy())
+
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:import-run-effect-receipt-get'
+      ? new Promise(() => {}) : base(channel, ...args))
+    const next = { ...session, leaseId: '重新打开' }
+    setActiveProjectSessionContext(next)
+    await act(async () => useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, sessionLease: next.leaseId } })))
+
+    expect(button('采用「类型」的反推结果')).toBeUndefined()
+    expect(host!.querySelector('[aria-label="反推建议"]')).toBeNull()
+  })
+
+  it('被截断的长值可以展开看全文再收起，没被截断的短值不给展开控件', async () => {
+    const outline = ['第一幕：旧港来信', '第二幕：雾钟早鸣', '第三幕：灯塔失火', '第四幕：账册下落', '第五幕：潮退真相', '第六幕：林岚离港'].join('\n')
+    arrange({ genre: '武侠', coreOutline: '作者自己的大纲' }, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'genre', current: '武侠', inferred: '悬疑' },
+        { field: 'coreOutline', current: '作者自己的大纲', inferred: outline },
+      ] },
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    const card = (name: string) => [...host!.querySelectorAll('.run-suggestion')]
+      .find(item => item.querySelector('.run-suggestion-name')?.textContent === name) as HTMLElement | undefined
+    await vi.waitFor(() => expect(card('核心大纲')?.querySelector('[aria-expanded]')).toBeTruthy())
+    expect(card('类型')!.querySelector('[aria-expanded]')).toBeNull()
+
+    const inferred = () => [...card('核心大纲')!.querySelectorAll('dd')].at(-1)!
+    const toggle = () => card('核心大纲')!.querySelector<HTMLButtonElement>('[aria-expanded]')!
+    expect(inferred().scrollHeight).toBeGreaterThan(inferred().clientHeight)
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => toggle().click())
+    expect(toggle().getAttribute('aria-expanded')).toBe('true')
+    expect(inferred().scrollHeight).toBe(inferred().clientHeight)
+    expect(inferred().textContent).toBe(outline)
+
+    await act(async () => toggle().click())
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+    expect(inferred().scrollHeight).toBeGreaterThan(inferred().clientHeight)
+  })
+
+  it('没有建议时不出现这一块', async () => {
+    arrange({ genre: '悬疑' }, { global: { mode: 'fill-empty', suggestions: [] } })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('db:import-run-effect-receipt-get', '导入运行', 'style', 'done', session.projectPath, session))
+    expect(host!.querySelector('[aria-label="反推建议"]')).toBeNull()
   })
 })

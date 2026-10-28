@@ -944,7 +944,7 @@ describe('M02 text-import proposal receipts', () => {
   }
   function arrange(mutate?: (receipt: ReturnType<typeof proposalReceipt>) => void) {
     const invoke = stubIpcInvoke((channel, request) => {
-      if (channel === 'kb:search') return []
+      if (channel === 'kb:search' || channel === 'kb:search-writing-context') return []
       if (channel === 'db:character-roster-read') return { status: 'ready', revision: 7, entries: [] }
       if (channel === 'db:import-global-facts-commit') {
         const receipt = proposalReceipt(request as import('../../../../shared/import-global-facts').ImportGlobalFactsRequest)
@@ -989,6 +989,39 @@ describe('M02 text-import proposal receipts', () => {
       expect(context.data.importGlobalInferenceCandidate).toBe(JSON.stringify(validInference()))
     },
   )
+  it('作者原稿补空收据保留已有设定：命令接受它，界面显示实际保存的值并提示建议数', async () => {
+    arrange(receipt => {
+      Object.assign(receipt, {
+        mode: 'fill-empty',
+        suggestions: [{ field: 'genre', current: '作者的类型', inferred: receipt.core.genre }],
+      })
+      receipt.core.genre = '作者的类型'
+    })
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('作者的类型')
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(expect.stringContaining('1 条与现有内容不同的反推结果放进了建议'))
+  })
+  it('反推等待期间作者在设定页改的、还没保存的内容，提交后仍然保留', async () => {
+    arrange(receipt => {
+      Object.assign(receipt, { mode: 'fill-empty', suggestions: [] })
+      useProjectStore.getState().updateNovelConfig({ globalGuidance: '作者刚写、还没保存的要求' })
+    })
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(useProjectStore.getState().currentProject?.novelConfig.globalGuidance).toBe('作者刚写、还没保存的要求')
+  })
+  it('作者原稿反推只从作者自己的正文检索，不混入参考小说', async () => {
+    const invoke = arrange()
+
+    await new RuntimeInferGlobalSettingsCommand(workflowRuntimeDependencies, undefined, true)
+      .execute({ step: {}, context: createContext(), callbacks })
+
+    const searches = invoke.mock.calls.map(([channel]) => channel).filter(channel => String(channel).startsWith('kb:search'))
+    expect(searches).toEqual(Array(4).fill('kb:search-writing-context'))
+  })
   it('retains same-name candidates separately in the pending proposal receipt without approving character facts', async () => {
     const invoke = arrange(), context = createContext(), ambiguous = validInference()
     ambiguous.characterCards[1].name = ambiguous.characterCards[0].name

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronUp, Eye } from 'lucide-react'
+import type { PendingFinalizedCharacterProposalSummary } from '../../../shared/character-proposal'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { pluralEn } from '../../../shared/plural-en'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -10,6 +11,15 @@ import { STATE_FIELD_LABELS, usePendingStateCandidates } from '../../characters/
 import { captureProjectSession } from '../../project-session-gate'
 import { Button } from '../../ui/Button'
 import { Notice } from '../../ui/Notice'
+
+type ImportSummary = Extract<PendingFinalizedCharacterProposalSummary, { importOperationId: string }>
+
+function importTitle({ importPurpose, itemCount: count }: ImportSummary, text: (zh: string, en: string) => string): string {
+  const characters = `${count} ${pluralEn(count, 'character')}`
+  if (importPurpose === 'author-manuscript') return text(`从导入原稿反推的角色（${count} 位）`, `${characters} inferred from your manuscript`)
+  if (importPurpose === 'reference') return text(`从参考小说反推的角色（${count} 位）`, `${characters} inferred from the reference novel`)
+  return text(`导入时反推的角色（${count} 位）`, `${characters} inferred during import`)
+}
 
 /** 角色决策（定稿或导入产生）与角色状态建议（定稿产生）合成一条提示条；没有待处理项时不显示。 */
 export default function CharacterSuggestions() {
@@ -51,7 +61,7 @@ function SessionSuggestions({ session }: { session: ProjectSessionContext }) {
           {!proposals.batch && proposals.summaries.map(summary => (
             <li key={summary.proposalBatchId} className="cast-suggestion" data-kind="decision">
               <span className="cast-suggestion-kind">{summary.importOperationId ? text('导入角色', 'Imported') : text('定稿角色', 'Finalized')}</span>
-              <span className="cast-suggestion-text">{summary.importOperationId ?? summary.finalizationId}</span>
+              <span className="cast-suggestion-text">{summary.importOperationId ? importTitle(summary, text) : summary.finalizationId}</span>
               <Button variant="text" size="sm" disabled={busy}
                 aria-label={summary.importOperationId ? text('检查导入角色决策', 'Review imported character decision') : text('检查定稿角色决策', 'Review finalized character decision')}
                 onClick={() => { void proposals.read(summary) }}>

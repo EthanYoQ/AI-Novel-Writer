@@ -551,6 +551,33 @@ describe('current-project reference import', () => {
     expect(invoke.mock.calls.some(([channel]) => String(channel).startsWith('kb:'))).toBe(false)
   })
 
+  it('我的原稿默认勾选「同时反推」，勾选时显示费用预估并随创建请求冻结；取消勾选后预估消失', async () => {
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    const option = page.getByRole('checkbox', { name: /同时反推设定、架构、角色和蓝图/ })
+    await expect.element(option).toBeChecked()
+    await expect.element(page.getByText('只补空白，不覆盖已有内容')).toBeInTheDocument()
+    await act(async () => page.getByTestId('import-source-choose').click())
+    await expect.element(page.getByText('预估 AI 消耗')).toBeInTheDocument()
+
+    await act(async () => page.getByText('同时反推设定、架构、角色和蓝图').click())
+    await expect.element(option).not.toBeChecked()
+    expect(document.body.textContent).not.toContain('预估 AI 消耗')
+
+    await act(async () => page.getByText('同时反推设定、架构、角色和蓝图').click())
+    await act(async () => page.getByRole('button', { name: /确认导入（1 章）/ }).click())
+    const prepareCall = invoke.mock.calls.find(([channel]) => channel === 'db:import-run-prepare-inspection')
+    expect(prepareCall?.[1]).toMatchObject({ purpose: 'author-manuscript', authorInference: true })
+  })
+
+  it('不勾选反推时创建请求冻结 false', async () => {
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    await act(async () => page.getByText('同时反推设定、架构、角色和蓝图').click())
+    await act(async () => page.getByTestId('import-source-choose').click())
+    await act(async () => page.getByRole('button', { name: /确认导入（1 章）/ }).click())
+    const prepareCall = invoke.mock.calls.find(([channel]) => channel === 'db:import-run-prepare-inspection')
+    expect(prepareCall?.[1]).toMatchObject({ authorInference: false })
+  })
+
   it('keeps the full incremental author preview visible while launching a new-only commit run', async () => {
     const fullPreview: AuthorManuscriptImportPreview = {
       classification: 'ready',
