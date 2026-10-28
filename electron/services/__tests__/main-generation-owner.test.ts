@@ -513,7 +513,7 @@ describe('explicit planning recovery with real SQLite', () => {
     const repository = new GenerationRunRepository(() => f.db)
     repository.pause(run.handle.rootActionId)
 
-    expect(f.owner.list().find(view => view.handle.runId === run.handle.runId)?.plotOutline?.cursor).toEqual({ kind: 'stopped', chapterNumber: 4, reason: 'source-invalid' })
+    expect(f.owner.read(run.handle).plotOutline?.cursor).toEqual({ kind: 'stopped', chapterNumber: 4, reason: 'source-invalid' })
     const context = f.owner.readContext(run.handle)
     expect(context.plotOutlineRecovery).toMatchObject({ draft: outlineEntry(3), writeState: { kind: 'blocked', reason: 'source-invalid' } })
     expect(context.planningContinuation?.state).toBe('source-invalid')
@@ -617,6 +617,41 @@ describe('explicit planning recovery with real SQLite', () => {
     expect(replacement.handle.rootActionId).not.toBe(run.handle.rootActionId)
     expect(f.owner.readContext(replacement.handle).planningContinuation).toMatchObject({ remainingRange: { from: 2, to: 3 }, targetUnits: 700 })
     expect(f.owner.readContext(run.handle).blueprintRecovery!.draft).toBe(raw)
+  })
+  it('蓝图页只向主进程要章节蓝图的恢复稿，其他生成运行不读也不返回（#536）', async () => {
+    const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch)
+    expect(f.owner.findBlueprintRecovery()).toBeNull()
+    const run = f.owner.begin(directorySelection(f))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'failed', task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const draft = f.owner.begin({ ...f.begin, uiActionNonce: 'later-draft' })
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','unknown-policy') WHERE run_id=?").run(draft.handle.runId)
+    expect(f.owner.findBlueprintRecovery()).toMatchObject({ handle: run.handle, operation: 'chapter-blueprint-directory', blueprintRecovery: { draft: raw, writeState: 'ready' } })
+  })
+  it('作者把恢复稿整段保存完以后，蓝图页与运行侧页都不再给这份恢复稿（#536）', async () => {
+    const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch), run = f.owner.begin(directorySelection(f))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'failed', task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const context = f.owner.readContext(run.handle)
+    f.db.transaction(() => f.owner.commitBlueprintAuthorEdit({ mode: 'replace-range', operationId: 'author-whole-range', startChapter: 1, endChapter: 3,
+      blueprints: parseTextBlueprintsStrict(JSON.stringify([blueprint(1), blueprint(2), blueprint(3)]), 1, 3, 'zh-CN', 'author'),
+      authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } })).immediate()
+    expect(f.owner.readContext(run.handle)).toMatchObject({ planningContinuation: { state: 'complete' }, blueprintRecovery: { writeState: 'author-saved' } })
+    expect(f.owner.listRecovery().planning).toEqual([])
+    expect(f.owner.findBlueprintRecovery()).toBeNull()
+  })
+  it('较新的章节蓝图运行读不出时，跳过它找到较早的恢复稿（#536）', async () => {
+    const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch)
+    const older = f.owner.begin(directorySelection(f))
+    await f.owner.execute({ handle: older.handle, invocationNonce: 'failed', task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const newer = f.owner.begin({ ...directorySelection(f), uiActionNonce: 'newer-blueprint' })
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','unknown-policy') WHERE run_id=?").run(newer.handle.runId)
+    expect(() => f.owner.readContext(newer.handle)).toThrow()
+    expect(f.owner.findBlueprintRecovery()).toMatchObject({ handle: older.handle, blueprintRecovery: { draft: raw, writeState: 'ready' } })
   })
   it('keeps author guidance and chapter notes when a full directory run regenerates existing chapters', async () => {
     const regenerated = blueprint(1, '重新生成后的关键事件。')
@@ -1077,7 +1112,7 @@ describe('automatic short outline binding', () => {
     })
     const run = f.owner.begin({ ...f.begin, materialDecision: decision })
     const transport: MainGenerationTransport = {
-      read: async handle => f.owner.read(handle), list: async () => f.owner.list(),
+      read: async handle => f.owner.read(handle),
       execute: request => f.owner.execute(request), cancel: async handle => f.owner.cancel(handle),
       subscribe: (_handle, callback) => { listener = callback; return () => { listener = undefined } },
     }
@@ -2001,7 +2036,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(JSON.stringify(f.db.prepare('SELECT artifact_json FROM generation_artifacts').all())).not.toContain('隐藏')
     await f.owner.execute({ handle: view.handle, invocationNonce: 'call', task })
     expect(fetch).toHaveBeenCalledTimes(1)
-    expect(f.owner.list()[0].ledger?.physicalRequests).toBe(1)
+    expect(f.owner.read(view.handle).ledger?.physicalRequests).toBe(1)
   })
   it('retains safe stream diagnostics through the owner, SQLite reopen and snapshot IPC without retry', async () => {
     const snapshots: import('../../../src/services/generation/generation-runtime').MainGenerationSnapshot[] = []
@@ -2909,6 +2944,149 @@ describe('main draft persistence and batch lineage', () => {
     PostProcessRepository.markStepOk(post, 'chapter_notes')
     expect(f.owner.confirmBatchFinalization({ batchId: batch.batchId, chapterNumber: 1, finalizationId: 'finalization-one' }).nextChapterNumber).toBeNull()
   })
+
+  describe('运行侧页的可恢复列表由主进程一次算好（#536）', () => {
+    const runIds = (items: readonly { view?: { handle: { runId: string } }; handle?: { runId: string }; batchId?: string }[]) =>
+      items.map(item => item.batchId ?? item.view?.handle.runId ?? item.handle!.runId)
+    it('列出未保存的单章候选和可续写的批次，不列批内单章与已写完的批次', async () => {
+      const f = drafting()
+      f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+      const unsaved = await generate(f, { ...f.begin, uiActionNonce: 'unsaved', authorInputs })
+      const open = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+        uiActionNonce: 'open-batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+      const child = await generate(f, { ...f.begin, uiActionNonce: 'open-child', authorInputs, batchId: open.batchId, parentRootActionId: open.rootHandle.rootActionId })
+      f.owner.commitDraft(child.request)
+      const done = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 2, endChapter: 2 }, targetUnits: 20,
+        uiActionNonce: 'done-batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+      const doneChild = await generate(f, { ...f.begin, chapterNumber: 2, uiActionNonce: 'done-child', authorInputs, batchId: done.batchId, parentRootActionId: done.rootHandle.rootActionId })
+      f.owner.commitDraft(doneChild.request)
+
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([unsaved.run.handle.runId])
+      expect(list.drafts[0]!.recovery).toMatchObject({ operation: 'chapter-draft', chapterNumber: 1, draftSave: { kind: 'absent' } })
+      expect(list.batches.map(batch => [batch.batchId, batch.nextChapterNumber])).toEqual([[open.batchId, 2]])
+      expect(list).toMatchObject({ planning: [], reviews: [], editors: [], partial: false })
+    })
+    it('已保存的单章运行不列为可恢复，无论正文后来改没改过', async () => {
+      const f = drafting()
+      const current = await generate(f, { ...f.begin, uiActionNonce: 'current', authorInputs })
+      f.owner.commitDraft(current.request)
+      const changed = await generate(f, { ...f.begin, uiActionNonce: 'changed', authorInputs })
+      const saved = f.owner.commitDraft(changed.request)
+      DraftRepository.updateContent(saved.id, '作者修改后的当前正文。', 11)
+      const unsaved = await generate(f, { ...f.begin, uiActionNonce: 'unsaved', authorInputs })
+      const reopened = f.reopen()
+      expect([current, changed].map(item => reopened.readContext(item.run.handle).draftSave.kind)).toEqual(['current', 'changed'])
+      expect(runIds(reopened.listRecovery().drafts)).toEqual([unsaved.run.handle.runId])
+    })
+    it('尾段对不回尝试行时跳过它，不当作哪个运行的尾段', async () => {
+      const f = drafting()
+      const saved = await generate(f, { ...f.begin, uiActionNonce: 'saved', authorInputs })
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END")
+      const tail = await f.owner.execute({ handle: saved.run.handle, invocationNonce: 'second', task })
+      f.db.exec('DROP TRIGGER reject_snapshot')
+      f.owner.commitDraft(saved.request)
+      const orphan = tail.run.unsavedTails![0]!.attemptId
+      f.db.pragma('foreign_keys = OFF')
+      f.db.prepare('DELETE FROM generation_artifacts WHERE attempt_id=?').run(orphan)
+      f.db.prepare('DELETE FROM generation_attempts WHERE attempt_id=?').run(orphan)
+      f.db.pragma('foreign_keys = ON')
+      expect(f.owner.listRecovery()).toMatchObject({ drafts: [], partial: false })
+    })
+    it('已保存的单章运行还有没落盘的正文时仍列出，尾段可复制', async () => {
+      const f = drafting()
+      const saved = await generate(f, { ...f.begin, uiActionNonce: 'saved', authorInputs })
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END")
+      const tail = await f.owner.execute({ handle: saved.run.handle, invocationNonce: 'second', task })
+      expect(tail.run.unsavedTails?.[0]?.text.trim()).toBeTruthy()
+      f.db.exec('DROP TRIGGER reject_snapshot')
+      f.owner.commitDraft(saved.request)
+      const list = f.owner.listRecovery()
+      expect(runIds(list.drafts)).toEqual([saved.run.handle.runId])
+      expect(list.drafts[0]!.view.unsavedTails?.[0]?.text).toBe(tail.run.unsavedTails?.[0]?.text)
+    })
+    it('别的运行有尾段时，不读其余已保存运行的视图', async () => {
+      const f = drafting()
+      const other = await generate(f, { ...f.begin, uiActionNonce: 'other', authorInputs })
+      f.owner.commitDraft(other.request)
+      const tailed = await generate(f, { ...f.begin, uiActionNonce: 'tailed', authorInputs })
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END")
+      await f.owner.execute({ handle: tailed.run.handle, invocationNonce: 'second', task })
+      f.db.exec('DROP TRIGGER reject_snapshot')
+      const readRunView = GenerationRunRepository.prototype.readRunView
+      const spy = vi.spyOn(GenerationRunRepository.prototype, 'readRunView').mockImplementation(function (this: GenerationRunRepository, runId: string) {
+        if (runId === other.run.handle.runId) throw new Error('unrelated saved run view read')
+        return readRunView.call(this, runId)
+      })
+      try {
+        const list = f.owner.listRecovery()
+        expect(runIds(list.drafts)).toEqual([tailed.run.handle.runId])
+        expect(list.partial).toBe(false)
+      } finally { spy.mockRestore() }
+    })
+    it('列出被取消的单章候选；只发出请求、没写出字的不列', async () => {
+      const f = drafting()
+      const cancelled = await generate(f, { ...f.begin, uiActionNonce: 'cancelled', authorInputs })
+      f.owner.cancel(cancelled.run.handle)
+      const empty = f.owner.begin({ ...f.begin, uiActionNonce: 'empty', authorInputs })
+      f.owner.cancel(empty.handle)
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([cancelled.run.handle.runId])
+      expect(list.drafts[0]!.view.status).toBe('cancelled')
+    })
+    it('列出没写完的情节大纲恢复稿', async () => {
+      const f = fixture(vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason: null, usage: null })))
+      const run = f.owner.begin(outlineSelection(f, 3))
+      await f.owner.execute({ handle: run.handle, invocationNonce: 'unknown', task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.planning)).toEqual([run.handle.runId])
+      expect(list.planning[0]!.plotOutlineRecovery).toBeDefined()
+    })
+    it('generation:list 只给身份、状态与操作类型，新的在前，不带候选全文', async () => {
+      const f = drafting()
+      const first = await generate(f, { ...f.begin, uiActionNonce: 'first', authorInputs })
+      const second = await generate(f, { ...f.begin, uiActionNonce: 'second', authorInputs })
+      f.owner.cancel(second.run.handle)
+      const reopened = f.reopen()
+      expect(reopened.list()).toEqual([
+        { handle: second.run.handle, status: 'cancelled', operation: 'chapter-draft' },
+        { handle: first.run.handle, status: 'paused', operation: 'chapter-draft' },
+      ])
+      expect(JSON.stringify(reopened.list())).not.toContain(draftText)
+    })
+    it('一条生成尝试的收据坏成不是 JSON 时，其余单章候选照常列出，只标部分读取失败', async () => {
+      const f = drafting()
+      const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken-receipt', authorInputs })
+      const intact = await generate(f, { ...f.begin, uiActionNonce: 'intact-receipt', authorInputs })
+      f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+        uiActionNonce: 'batch-beside-bad-receipt', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+      f.db.prepare("UPDATE generation_attempts SET usage_receipt_json='{坏收据' WHERE run_id=?").run(broken.run.handle.runId)
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([intact.run.handle.runId])
+      expect(list.partial).toBe(true)
+    })
+    it('一条不属于任何批次的坏收据不挡住可续写的批次，只标部分读取失败', async () => {
+      const f = drafting()
+      f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+      const batches = [1, 2].map(chapter => f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: chapter, endChapter: chapter }, targetUnits: 20,
+        uiActionNonce: `batch-${chapter}`, modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] }))
+      const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken-single', authorInputs })
+      f.db.prepare("UPDATE generation_attempts SET usage_receipt_json='{坏收据' WHERE run_id=?").run(broken.run.handle.runId)
+      const reopened = f.reopen(), list = reopened.listRecovery()
+      expect(list.batches.map(batch => batch.batchId).sort()).toEqual(batches.map(batch => batch.batchId).sort())
+      expect(list.partial).toBe(true)
+      expect(() => reopened.readBatch(batches[0]!.batchId)).toThrow()
+    })
+    it('一个运行读不出时照常列出其余运行，并标出部分读取失败', async () => {
+      const f = drafting()
+      const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken', authorInputs })
+      const intact = await generate(f, { ...f.begin, uiActionNonce: 'intact', authorInputs })
+      f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','unknown-policy') WHERE run_id=?").run(broken.run.handle.runId)
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([intact.run.handle.runId])
+      expect(list.partial).toBe(true)
+    })
+  })
 })
 
 it('rejects an empty begin prompt selection without creating a run or dispatching', () => {
@@ -3014,5 +3192,6 @@ describe('大纲恢复稿是否已写进正式大纲', () => {
     const context = f.owner.readContext(run.handle)
     expect(context.plotOutline!.cursor).toEqual({ kind: 'complete' })
     expect(context.plotOutlineRecovery).toMatchObject({ writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null, inFormalOutline: save })
+    expect(f.owner.listRecovery().planning.map(item => item.handle.runId)).toEqual(save ? [] : [run.handle.runId])
   })
 })

@@ -50,10 +50,11 @@ describe('单章写作中断', () => {
     expect(entry.artifacts.map(item => item.id)).toEqual(['甲'])
   })
 
-  it('草稿保存后正文又改过，只能复制，不能续写', () => {
-    const entry = draft({ composition: null, draftSave: { kind: 'changed' } })
-    expect(entry).toMatchObject({ title: '第4章生成记录', actionLabel: '已保存，正文已修改', changed: true })
+  it('草稿保存后正文又改过，只为复制没落盘的尾段而列出时只能复制，不能续写', () => {
+    const entry = draft({ composition: { artifactIds: ['甲'] }, draftSave: { kind: 'changed' } })
+    expect(entry).toMatchObject({ title: '第4章生成记录', actionLabel: '已保存，正文已修改' })
     expect(entry.artifacts.every(item => !item.selectable)).toBe(true)
+    expect(canResumeDraft(entry, [])).toBe(false)
     expect(canResumeDraft(entry, ['甲'])).toBe(false)
   })
 

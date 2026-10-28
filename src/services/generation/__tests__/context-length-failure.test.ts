@@ -25,7 +25,7 @@ const failedOutcome = (failureCode?: string) => ({ status: 'incomplete', content
 } }) as GenerationOutcome
 
 function transport(failureCode?: string): MainGenerationTransport {
-  return { read: vi.fn(async () => structuredClone(view)), list: vi.fn(async () => [structuredClone(view)]),
+  return { read: vi.fn(async () => structuredClone(view)),
     execute: vi.fn(async () => ({ outcome: failedOutcome(failureCode), run: structuredClone(view) })),
     cancel: vi.fn(async () => ({ ...structuredClone(view), status: 'cancelled' as const })), subscribe: vi.fn(() => () => {}) }
 }

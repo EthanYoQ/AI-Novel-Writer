@@ -112,7 +112,10 @@ function DraftCard({ entry, recovery, text }: { entry: DraftEntry; recovery: Run
   return (
     <RecoveryShell title={entry.title} text={text} notes={[entry.usage, entry.note]}
       budget={<GenerationBudgetDiagnostics diagnostics={entry.budget} locale={locale} />}
-      actions={<Button variant="secondary" size="sm" disabled={recovery.busy || !canResumeDraft(entry, picked)} onClick={() => recovery.resumeDraft(entry)}>{entry.actionLabel}</Button>}>
+      actions={<>
+        <Button variant="secondary" size="sm" disabled={recovery.busy || !canResumeDraft(entry, picked)} onClick={() => recovery.resumeDraft(entry)}>{entry.actionLabel}</Button>
+        <Button variant="text" size="sm" onClick={() => recovery.hideDraft(entry)}>{entry.labels.hide}</Button>
+      </>}>
       {entry.artifacts.map(item => (
         <figure key={item.id} className="run-excerpt">
           <Check

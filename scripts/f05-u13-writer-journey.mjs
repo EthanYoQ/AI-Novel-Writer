@@ -63,6 +63,8 @@ function assertRunPath() {
 async function invoke(page, channel, ...args) {
   return page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 }
+/** generation:list 只给身份与状态；要候选、账本时按 handle 逐个读完整视图。 */
+const listRunViews = async (page, context) => Promise.all((await invoke(page, 'generation:list', context)).map(run => invoke(page, 'generation:read', run.handle, context)))
 
 async function launch(fixturePort) {
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: paths.canonical,
@@ -287,7 +289,7 @@ async function main() {
     const reopened = await invoke(page, 'project:open', projectPath, randomUUID(), projectPath)
     assert.equal(reopened.success, true, reopened.error)
     const readContext = { projectId: created.projectId, projectPath, leaseId: reopened.project.sessionLease }
-    const runs = await invoke(page, 'generation:list', readContext)
+    const runs = await listRunViews(page, readContext)
     const durable = JSON.stringify(runs)
     const draftsBeforeFailure = await invoke(page, 'db:draft-list', 1, projectPath, readContext)
     assert.equal(draftsBeforeFailure.length, 1, 'First stage run must save one draft')
@@ -320,7 +322,7 @@ async function main() {
     const failedRead = await invoke(page, 'project:open', projectPath, randomUUID(), projectPath)
     assert.equal(failedRead.success, true, failedRead.error)
     const failedContext = { projectId: created.projectId, projectPath, leaseId: failedRead.project.sessionLease }
-    const failedRuns = await invoke(page, 'generation:list', failedContext)
+    const failedRuns = await listRunViews(page, failedContext)
     assert.equal(failedRuns.length, 2, 'Controlled provider failure must create one durable main run')
     const draftsAfterFailure = await invoke(page, 'db:draft-list', 1, projectPath, failedContext)
     assert.equal(draftsAfterFailure.length, draftsBeforeFailure.length, 'Failed attempt must not save another draft')
@@ -492,7 +494,7 @@ async function main() {
     assert.equal(candidateRead.success, true, candidateRead.error)
     const candidateReadContext = { projectId: candidateCreated.projectId, projectPath: candidateCreated.projectPath,
       leaseId: candidateRead.project.sessionLease }
-    const candidateRuns = await invoke(page, 'generation:list', candidateReadContext)
+    const candidateRuns = await listRunViews(page, candidateReadContext)
     assert.equal(candidateRuns.length, 1, 'Candidate must belong to one durable main run')
     const candidateRun = candidateRuns[0]
     const eligible = [...new Map([...candidateRun.artifacts, ...(candidateRun.candidates ?? [])]
@@ -534,7 +536,7 @@ async function main() {
         assert.equal(debugOpen.success, true, debugOpen.error)
         const debugContext = { projectId: candidateCreated.projectId, projectPath: candidateCreated.projectPath,
           leaseId: debugOpen.project.sessionLease }
-        const debugRuns = await invoke(page, 'generation:list', debugContext)
+        const debugRuns = await listRunViews(page, debugContext)
         const debugDrafts = await invoke(page, 'db:draft-list', 1, candidateCreated.projectPath, debugContext)
         mainState = { runs: debugRuns.map(run => ({ status: run.status, sameHandle: run.handle.runId === candidateHandle.runId,
           physicalRequests: run.ledger?.physicalRequests, artifacts: run.artifacts.length })), draftCount: debugDrafts.length }
@@ -546,7 +548,7 @@ async function main() {
     assert.equal(recoveredRead.success, true, recoveredRead.error)
     const recoveredContext = { projectId: candidateCreated.projectId, projectPath: candidateCreated.projectPath,
       leaseId: recoveredRead.project.sessionLease }
-    const recoveredRuns = await invoke(page, 'generation:list', recoveredContext)
+    const recoveredRuns = await listRunViews(page, recoveredContext)
     assert.equal(recoveredRuns.length, 1, 'Recovery must reuse the existing durable main run')
     assert.equal(recoveredRuns[0].handle.projectId, candidateHandle.projectId)
     assert.equal(recoveredRuns[0].handle.rootActionId, candidateHandle.rootActionId)
@@ -605,7 +607,7 @@ async function main() {
     assert.equal(cancelRead.success, true, cancelRead.error)
     const cancelReadContext = { projectId: cancelCreated.projectId, projectPath: cancelCreated.projectPath,
       leaseId: cancelRead.project.sessionLease }
-    const cancelledRuns = await invoke(page, 'generation:list', cancelReadContext)
+    const cancelledRuns = await listRunViews(page, cancelReadContext)
     assert.equal(cancelledRuns.length, 1, 'Cancelling must retain one durable main run')
     assert.equal(cancelledRuns[0].status, 'cancelled', 'Cancelling must persist main cancellation')
     const partialArtifacts = [...new Map([...cancelledRuns[0].artifacts, ...(cancelledRuns[0].candidates ?? [])]
