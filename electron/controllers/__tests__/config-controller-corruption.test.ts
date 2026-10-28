@@ -65,4 +65,13 @@ describe('global configuration corruption boundary', () => {
       defaultModelId: null,
     })
   })
+
+  it('keeps stage model assignments out of the blind config merge', async () => {
+    const configPath = path.join(velaHome, 'config.json')
+    fs.writeFileSync(configPath, JSON.stringify({ defaultModelId: null, stageModelIds: { review: 'reviewer' } }))
+
+    await expect(handler('config:set')({}, { theme: 'light', stageModelIds: { review: 'stale-snapshot', planning: 'other' } })).resolves.toEqual({ success: true })
+
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual({ defaultModelId: null, theme: 'light', stageModelIds: { review: 'reviewer' } })
+  })
 })

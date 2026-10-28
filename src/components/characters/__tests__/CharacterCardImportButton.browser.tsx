@@ -12,7 +12,8 @@ import { setActiveProjectSessionContext } from '../../../shared/project-session-
 import type { ProjectData } from '../../../shared/ipc-channels'
 
 const project = { id: 'paste', path: 'C:\\novels\\paste', sessionLease: 'lease-1' } as ProjectData
-const model = { id: 'model', name: 'Test model', modelName: 'test', baseUrl: 'https://example.invalid' } as ReturnType<typeof useLLMStore.getState>['models'][number]
+const model = { id: 'model', name: 'Test model', modelName: 'test', baseUrl: 'https://example.invalid', purposes: ['generation'] } as ReturnType<typeof useLLMStore.getState>['models'][number]
+const planner = { id: 'planner', name: 'Planner', modelName: 'planner-1', baseUrl: 'https://planner.example.invalid', purposes: ['generation'] } as ReturnType<typeof useLLMStore.getState>['models'][number]
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const originals = { project: useProjectStore.getState(), locale: useLocaleStore.getState(), llm: useLLMStore.getState(), workflow: useWorkflowStore.getState() }
 let root: Root
@@ -85,6 +86,16 @@ describe('角色卡导入入口', () => {
       steps: [expect.objectContaining({ name: '生成待确认角色卡' }), expect.objectContaining({ name: '确认并导入角色卡' })],
     }), true)
     expect(document.querySelector('textarea')?.value).toBe('姓名：林舟')
+  })
+
+  it('按规划环节指定的模型征求同意并发送', async () => {
+    useLLMStore.setState({ models: [model, planner], defaultModelId: model.id, stageModelIds: { planning: planner.id } })
+    await paste('姓名：林舟')
+    await click('AI 提取并预览')
+    expect(document.body.textContent).toContain(planner.baseUrl)
+    expect(document.body.textContent).not.toContain(model.baseUrl)
+    await click('发送并提取')
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ generationModelId: planner.id }), true)
   })
 
   it('没有模型时给出设置指引并保留输入', async () => {

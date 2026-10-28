@@ -17,7 +17,7 @@ it.each([
   const view = { handle, status: 'running', nonReplayable: false, artifacts: [],
     budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 } }
   useProjectStore.setState({ currentProject: project as never })
-  useLLMStore.setState({ defaultModelId: '合成模型' })
+  useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
   const authorEdit = () => useProjectStore.setState({ currentProject: { ...project, novelConfig: { writingStyle: '作者正在写的新文风' } } as never })
   const effect = vi.fn(async () => { if (stage === 'effect') { await Promise.resolve(); authorEdit() } })
   const invoke = vi.fn(async (channel: string) => {

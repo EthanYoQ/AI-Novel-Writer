@@ -12,6 +12,7 @@ import { guardChapterWriting } from '../../services/workflow-guards'
 import { ipc } from '../../services/ipc-client'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import { routeStageModel } from '../../shared/model-stage-routing'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
@@ -43,7 +44,7 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
   const locale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
   const models = useLLMStore(s => s.models)
-  const defaultModelId = useLLMStore(s => s.defaultModelId)
+  const draftingModelId = useLLMStore(s => routeStageModel('drafting', s).modelId)
   const startWorkflow = useWorkflowStore.getState().startWorkflow
   const addLog = useWorkflowStore.getState().addLog
   // 允许暂时为空：清空后重新输入时不被立刻填回 1；失焦时与开始写时再规整。
@@ -60,14 +61,14 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
   const [authorityLoading, setAuthorityLoading] = useState(false)
   const [consistencyPreflight, setConsistencyPreflight] = useState<ConsistencyPreflightResult | null>(null)
   const [generationModelId, setGenerationModelId] = useState<string | null>(() => (
-    preferredGenerationModelId(models, defaultModelId)
+    preferredGenerationModelId(models, draftingModelId)
   ))
 
   const normalizedCount = normalizeBatchChapterCount(chapterCount)
   const start = authoritativeStart ?? startChapterNumber ?? 1
   const end = start + normalizedCount - 1
   const generationModels = models.filter(isGenerationModel)
-  const fallbackGenerationModelId = preferredGenerationModelId(models, defaultModelId)
+  const fallbackGenerationModelId = preferredGenerationModelId(models, draftingModelId)
   const selectedGenerationModelId = generationModelId ?? fallbackGenerationModelId
   const selectedGenerationModel = generationModels.find(model => model.id === selectedGenerationModelId)
   const modelSelectionError = generationModelError(models, selectedGenerationModelId, text)

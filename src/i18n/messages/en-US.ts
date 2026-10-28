@@ -108,6 +108,8 @@ export const enUS = {
   'error.knowledgeCopyEmpty': 'The project copy is empty, so search cannot be updated. Add text and save first.',
   'error.knowledgeTextEmpty': 'The material is empty; there is no text to import.',
   'error.modelSettingsFileDamaged': 'The model settings file is damaged, so nothing was saved to avoid overwriting it. Repair or move the damaged settings file in your user configuration directory, then try again.',
+  'error.stageModelUnavailable': 'That model was deleted or is no longer available for writing, so the stage keeps its current model. Choose another model in Models by stage.',
+  'error.stageModelRequestInvalid': 'The stage setting was not saved because the request was not valid. Reopen Settings and choose again.',
   'error.defaultModelRollbackFailed': 'The model was not deleted, and the default model settings could not be restored. Check that your user configuration directory is writable, then choose the default models again in Settings.',
   'error.modelEndpointInvalid': 'The model’s Base URL is invalid. Correct it in Settings, then try again.',
   'error.mcpConfigInvalid': 'The MCP configuration file is damaged or unreadable, so no servers were loaded. Check the MCP configuration in your user configuration directory.',
