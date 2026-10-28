@@ -340,6 +340,35 @@ describe('角色名单', () => {
     expect(banner()!.querySelectorAll('[role="alert"]')).toHaveLength(0)
   })
 
+  it('导入留下的角色决策按来源写成作者看得懂的标题，不露操作号', async () => {
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel, ...args) => channel === 'character-proposal:list-pending-finalized' ? [
+      { proposalBatchId: 'cpb-author', revision: 1, importOperationId: 'novel-import-global-作者运行', importPurpose: 'author-manuscript', itemCount: 3 },
+      { proposalBatchId: 'cpb-reference', revision: 1, importOperationId: 'novel-import-global-参考运行', importPurpose: 'reference', itemCount: 1 },
+      { proposalBatchId: 'cpb-legacy', revision: 1, importOperationId: 'novel-import-global-旧运行', itemCount: 2 },
+    ] : base(channel, ...args))
+    await render()
+    await vi.waitFor(() => expect(banner()?.textContent).toContain('3 项待处理的角色建议'))
+    const titles = [...banner()!.querySelectorAll('.cast-suggestion-text')].map(item => item.textContent)
+    expect(titles).toEqual(['从导入原稿反推的角色（3 位）', '从参考小说反推的角色（1 位）', '导入时反推的角色（2 位）'])
+    expect(banner()!.textContent).not.toContain('novel-import-global')
+  })
+
+  it('英文界面的导入角色决策标题按人数用单复数', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel, ...args) => channel === 'character-proposal:list-pending-finalized' ? [
+      { proposalBatchId: 'cpb-author', revision: 1, importOperationId: 'novel-import-global-作者运行', importPurpose: 'author-manuscript', itemCount: 1 },
+      { proposalBatchId: 'cpb-reference', revision: 1, importOperationId: 'novel-import-global-参考运行', importPurpose: 'reference', itemCount: 2 },
+    ] : base(channel, ...args))
+    await render()
+    const english = () => host!.querySelector('[aria-label="Pending character suggestions"]')
+    await vi.waitFor(() => expect(english()?.querySelectorAll('.cast-suggestion-text')).toHaveLength(2))
+    expect([...english()!.querySelectorAll('.cast-suggestion-text')].map(item => item.textContent)).toEqual([
+      '1 character inferred from your manuscript', '2 characters inferred from the reference novel',
+    ])
+  })
+
   it('没有待处理的建议时不显示提示条', async () => {
     await render()
     await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'finalized-character:list-state-candidates')).toBe(true))

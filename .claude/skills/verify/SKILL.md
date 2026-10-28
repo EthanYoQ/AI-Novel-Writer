@@ -549,6 +549,15 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 |---|---|---|---|---|
 | `bpg-regenerate-keeps-guidance` | 蓝图页给第 1 章手写章节要点、第 2 章填作者微操指导并保存；AI 生成蓝图选「覆盖」接着生成 3 章，跑完后重新加载蓝图：第 1、2 章标题换成生成的新标题，章节要点与作者微操指导不变（`measured.before` 与 `measured.after`） | 第 2 章蓝图的作者微操指导 | 是 | #516 |
 
+## 导入作者原稿并反推（#516 第 4 块）
+
+场景在 `scripts/redesign/import-infer-scenarios.mjs`。假模型用 `fake.replyReview(fn)` 认三类反推请求：全局设定（模板里的「逆向推演出这部小说的完整设定体系」）返回一份格式合法的设定、三个架构文件和三张角色卡，文风分析（「【风格档案】与【仿写指南】」）回一段文风，蓝图（「本批必须且只能完整返回以下 chapterNumber」）按本批章号回蓝图。驱动包一层主进程的 `project:open` 记下界面打开作品的会话，用它读库核对。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `import-infer-empty` | 新建空作品「雨城」，作品菜单「小说拆解与仿写…」选「我的原稿」导入 3 章，反推默认勾选、显示费用预估（中途拍 `import-infer-dialog`）；跑完后类型、故事前提、文风是反推值，每章都有蓝图，建议里只剩新建作品默认的每章字数（`import-infer-empty-run`）；再拍设定、架构与角色名单（角色以待处理建议出现） | 第 2 章蓝图 | 是 | #516 |
+| `import-infer-existing` | 示例作品「灯塔」先删第 4、5 章蓝图，从第 3 章接着导入 3 章：已有的类型、大纲、前提、世界观、情节大纲不变，空的文风与金手指补上；第 3、6 章蓝图不变，第 4、5 章补上；运行卡片列出建议（`import-infer-existing-suggestions`），采用「类型」后写入反推值；再拍设定页 | 第 4 章蓝图 | 是 | #516 |
+
 ## 上下文容量交给服务商（#77 讨论，ADR-0023）
 
 场景在 `scripts/redesign/d77-scenarios.mjs`。两个场景都把模型档案设成作者填的 64K 上下文。`fake.rejectContextLength()` 让假模型对之后的每个对话请求回 HTTP 400，错误体取自 `electron/llm/__tests__/provider-context-length-samples.json` 里的 DeepSeek 样本，和单元测试用同一份；传 `false` 恢复正常回复。

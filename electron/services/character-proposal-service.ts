@@ -9,6 +9,7 @@ import { SummaryRepository } from '../repositories/summary-repository'
 import { normalizeFinalizedCharacterProposalSource } from './finalized-character-generation-proof'
 import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
 import type { ArchitectureDerivationVersion } from '../../src/shared/character-proposal-parser'
+import type { ImportPurpose } from '../../src/shared/import-run'
 
 export interface CharacterProposalProof {
   items: Omit<CharacterProposalItem, 'resolution'>[]
@@ -121,6 +122,12 @@ export class CharacterProposalService {
       return structuredClone(envelope.batch)
     }).immediate()
   }
+  /** 导入角色提议的操作号是 novel-import-global-<导入运行号>；找不到这次运行时分不出用途，界面用通用说法。 */
+  private importPurpose(operationId: string): ImportPurpose | undefined {
+    const runId = /^novel-import-global-(.+)$/u.exec(operationId)?.[1]
+    if (!runId) return undefined
+    return this.db.prepare('SELECT purpose FROM import_runs WHERE id=?').pluck().get(runId) as ImportPurpose | undefined
+  }
   listPendingFinalized(): PendingFinalizedCharacterProposalSummary[] {
     const rows = this.db.prepare('SELECT proposal_id FROM character_identity_proposals WHERE source_key=? ORDER BY proposal_id')
       .all(`character-proposal-v1:${this.projectId}`) as { proposal_id: string }[]
@@ -129,7 +136,11 @@ export class CharacterProposalService {
         const envelope = this.readEnvelope(proposal_id), provenance = envelope.proof.provenance
         const source = provenance && 'source' in provenance ? provenance.source : undefined
         if (envelope.batch.status !== 'pending-approval' || !source) return []
-        if (envelope.batch.source.kind === 'import') return [{ proposalBatchId: proposal_id, revision: envelope.batch.revision, importOperationId: envelope.batch.source.operationId }]
+        if (envelope.batch.source.kind === 'import') {
+          const purpose = this.importPurpose(envelope.batch.source.operationId)
+          return [{ proposalBatchId: proposal_id, revision: envelope.batch.revision, importOperationId: envelope.batch.source.operationId,
+            itemCount: envelope.batch.items.length, ...(purpose ? { importPurpose: purpose } : {}) }]
+        }
         return envelope.batch.source.kind === 'finalized-generation'
           ? [{ proposalBatchId: proposal_id, revision: envelope.batch.revision, finalizationId: source.sourceId }] : []
       } catch { return [] }

@@ -307,6 +307,7 @@ export function registerDatabaseController() {
             locale: request.locale,
             authorityFingerprint: request.authorityFingerprint,
             expectedManifestFingerprint: request.manifestFingerprint,
+            authorInference: request.authorInference === true,
             chapters: inspection.chapters,
           }),
         }

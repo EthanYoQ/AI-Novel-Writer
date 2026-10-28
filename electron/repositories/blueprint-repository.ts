@@ -593,8 +593,16 @@ export class BlueprintRepository {
         }
     }
 
-    /** 完整逻辑范围只提交一次，并在同一事务内回读验证后返回收据。 */
-    static commitRange(request: BlueprintRangeCommitRequest, assertGenerationSources?: () => void, db = requireProjectDb()): BlueprintRangeCommitReceipt {
+    /**
+     * 完整逻辑范围只提交一次，并在同一事务内回读验证后返回收据。
+     * fill-empty（作者原稿反推）在提交事务里重读：此刻已有蓝图的章保持原样，只写还没有蓝图的章。
+     */
+    static commitRange(
+        request: BlueprintRangeCommitRequest,
+        assertGenerationSources?: () => void,
+        db = requireProjectDb(),
+        fill: 'replace' | 'fill-empty' = 'replace',
+    ): BlueprintRangeCommitReceipt {
         assertExactRange(request)
         ensureBlueprintCommitSchema(db)
         const payloadHash = commitPayloadHash(request)
@@ -647,11 +655,14 @@ export class BlueprintRepository {
             const existingByChapter = new Map((db.prepare(
                 'SELECT * FROM blueprints WHERE chapter_number BETWEEN ? AND ?',
             ).all(request.startChapter, request.endChapter) as BlueprintRow[]).map(row => [row.chapter_number, rowToData(row)] as const))
+            const kept = (chapterNumber: number) => fill === 'fill-empty' && existingByChapter.has(chapterNumber)
             const blueprints = request.blueprints.map(blueprint => (
-                withExistingAuthorFields(blueprint, existingByChapter.get(blueprint.chapterNumber))
+                kept(blueprint.chapterNumber)
+                    ? existingByChapter.get(blueprint.chapterNumber)!
+                    : withExistingAuthorFields(blueprint, existingByChapter.get(blueprint.chapterNumber))
             ))
             for (const blueprint of blueprints) {
-                BlueprintRepository.upsert(blueprint, db)
+                if (!kept(blueprint.chapterNumber)) BlueprintRepository.upsert(blueprint, db)
             }
 
             const persisted = readExactRange(db, request)

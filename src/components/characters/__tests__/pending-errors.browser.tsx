@@ -63,7 +63,7 @@ afterEach(async () => {
 it('explains a rejected proposal approval in English without the raw main-process code (#474)', async () => {
   await act(async () => root.render(<Pending />))
   await settle()
-  await act(async () => { await latest.proposals.read({ proposalBatchId: 'cpb:1', revision: 3, importOperationId: 'op' }) })
+  await act(async () => { await latest.proposals.read({ proposalBatchId: 'cpb:1', revision: 3, importOperationId: 'op', itemCount: 1 }) })
   await act(async () => { await latest.proposals.decide('approve') })
   await settle()
 
