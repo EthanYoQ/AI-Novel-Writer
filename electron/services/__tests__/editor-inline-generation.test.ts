@@ -54,6 +54,13 @@ it('main实际模板与UTF16原文hash冻结，不把草稿声称为canonical',(
  expect(f.spy).not.toHaveBeenCalled()
  expect(()=>f.owner.beginEditorInline({...request,input:{...input,from:2}})).toThrow()
 })
+it('运行侧页的可恢复列表把选区建议列为选区恢复，不当作单章候选',async()=>{
+ const f=fixture(),recovery=f.owner.beginEditorInline(request)
+ await f.owner.executeEditorInline(recovery.view.handle)
+ const list=f.reopenStorage().listRecovery()
+ expect(list.editors.map(item=>item.view.handle.runId)).toEqual([recovery.view.handle.runId])
+ expect(list).toMatchObject({drafts:[],planning:[],reviews:[],partial:false})
+})
 it('同nonce不同作者输入拒绝，generic begin/execute不能绕过editor owner',async()=>{
  const f=fixture(),recovery=f.owner.beginEditorInline(request)
  expect(()=>f.owner.beginEditorInline({...request,input:{...input,action:'expand'}})).toThrow()

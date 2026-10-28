@@ -393,12 +393,13 @@ export const BLUEPRINT_SCENARIOS = {
     await runSheet.anyCard(page).filter({ hasText: /^上一次运行/ }).waitFor({ state: 'visible', timeout: 60_000 })
   } },
 
-  'blueprint-recover': { model: true, shell: 'stage', setup: context => seedStageSample(context, { totalChapters: 16 }), run: async ({ page }) => {
+  'blueprint-recover': { model: true, shell: 'stage', setup: context => seedStageSample(context, { totalChapters: 16 }), run: async ({ page, shoot }) => {
     await blueprint.open(page)
     await blueprint.generateRange(page, 13, 16)
     await runSheet.waitUntilOpen(page)
     const notice = page.getByRole('status').filter({ hasText: '有一份蓝图恢复稿' })
     await notice.waitFor({ state: 'visible', timeout: 60_000 })
+    await shoot('blueprint-recover-notice')
     await notice.getByRole('button', { name: '编辑恢复稿' }).click()
     await stage.tab(page, '蓝图恢复稿').waitFor({ state: 'visible' })
     const recovery = page.getByLabel('蓝图恢复')

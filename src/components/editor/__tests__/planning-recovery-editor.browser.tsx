@@ -75,7 +75,8 @@ beforeEach(() => {
     }
     if (channel === 'db:project-core-get') return { ...sourceExpected, title: 'Recovery', synopsis: '完整大纲'.repeat(30), premise: '完整故事前提'.repeat(20), worldbuilding: '世界设定'.repeat(20) }
     if (channel === 'generation:list') return showCandidate ? [{ handle, status: 'failed', artifacts: [], candidates: [] }] : []
-    if (channel === 'generation:list-batches') return []
+    if (channel === 'generation:list-recovery') return { planning: showCandidate ? [context] : [], editors: [], reviews: [], batches: [], drafts: [], partial: false }
+    if (channel === 'generation:find-blueprint-recovery') return showCandidate && context.blueprintRecovery ? context : null
     if (channel === 'db:recovery-candidate-list') return []
     if (channel === 'skills:list-user' || channel === 'db:blueprint-get-all') return []
     if (channel === 'fs:check-exists') return false
