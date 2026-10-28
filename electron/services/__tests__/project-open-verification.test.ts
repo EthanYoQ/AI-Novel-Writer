@@ -225,6 +225,18 @@ describe('project open verification', () => {
       try { fs.writeSync(fd, Buffer.alloc(100, 0x41), 0, 100, 0) } finally { fs.closeSync(fd) }
     }, { name: 'SqliteError', code: 'SQLITE_NOTADB', message: 'file is not a database' }],
   ]
+  it('opens a current project when the SQLite build leaves foreign keys off by default', () => {
+    const f = fixture()
+    const pragma = Database.prototype.pragma
+    const started = new WeakSet<object>()
+    vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (this: import('better-sqlite3').Database, source, options) {
+      if (!started.has(this)) { started.add(this); pragma.call(this, 'foreign_keys = OFF') }
+      return pragma.call(this, source, options)
+    })
+    initProjectDatabase(f.root)
+    expect(getProjectDb()!.pragma('foreign_keys', { simple: true })).toBe(1)
+  })
+
   it('does not admit a project locator whose current schema fails verification', () => {
     const f = fixture()
     damageContentPage(f.file)
