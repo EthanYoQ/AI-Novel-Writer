@@ -325,9 +325,8 @@ export class FinalizationRepository {
     return db.transaction(() => {
       const rows = db.prepare(`
         SELECT drafts.id, drafts.chapter_number, drafts.version,
-               finalization_outbox.knowledge_document_id,
-               CASE WHEN finalization_outbox.publication_status = 'published'
-                 THEN finalization_outbox.target_file_name ELSE '' END AS target_file_name
+               finalization_outbox.knowledge_document_id, finalization_outbox.target_file_name,
+               finalization_outbox.publication_status
         FROM drafts
         LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
         WHERE drafts.status = 'finalized' AND drafts.chapter_number IN (
@@ -341,8 +340,10 @@ export class FinalizationRepository {
         version: number
         knowledge_document_id: string | null
         target_file_name: string | null
+        publication_status: string | null
       }>
       const chapters: RepairedDuplicateChapter[] = []
+      let keptFileName = ''
       const supersede = db.prepare(`
         UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
         WHERE id = ? AND status = 'finalized'
@@ -351,6 +352,7 @@ export class FinalizationRepository {
         const current = chapters.at(-1)
         if (current?.chapterNumber !== row.chapter_number) {
           chapters.push({ chapterNumber: row.chapter_number, keptDraftId: row.id, keptVersion: row.version, superseded: [] })
+          keptFileName = row.target_file_name ?? ''
           continue
         }
         supersede.run(row.id)
@@ -358,7 +360,8 @@ export class FinalizationRepository {
           draftId: row.id,
           version: row.version,
           knowledgeDocumentId: row.knowledge_document_id ?? '',
-          targetFileName: row.target_file_name ?? '',
+          targetFileName: row.publication_status === 'published' && row.target_file_name !== keptFileName
+            ? row.target_file_name ?? '' : '',
         })
       }
       return { chapters }
