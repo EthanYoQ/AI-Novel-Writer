@@ -13,6 +13,8 @@ describe('localized application errors', () => {
       .toContain('请选择项目根目录')
     expect(appErrorMessage('en-US', { errorCode: 'PROJECT_ROOT_REQUIRED' }))
       .toContain('Select the project root folder')
+    expect(appErrorMessage('zh-CN', new Error('SOURCE_CHANGED_SINCE_PROBE')))
+      .toContain('打开期间作品文件被其他程序改动')
   })
 
   it('preserves an unknown error as localized diagnostic text', () => {
