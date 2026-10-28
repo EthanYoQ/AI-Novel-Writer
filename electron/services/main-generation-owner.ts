@@ -1009,6 +1009,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     assertCurrent()
     const list: GenerationRecoveryList = { planning: [], editors: [], reviews: [], batches: [], drafts: [], partial: false }
     const hasText = (item: { text: string }) => item.text.trim().length > 0
+    // 只用来跳过保存过的运行；哪个运行有尾段由下面的视图判定。
+    const anyUnsavedTail = service.readUnsavedTails().length > 0
     const collect = {
       planning: (handle: MainGenerationRunHandle) => {
         const recovery = readContext(handle)
@@ -1019,7 +1021,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       editor: (handle: MainGenerationRunHandle) => { list.editors.push(readEditorInlineRecovery(handle)) },
       draft: (handle: MainGenerationRunHandle) => {
         const saved = draftEffects.readRecovery(handle.runId).kind !== 'absent'
-        if (saved && !service.readUnsavedTails().length) return
+        if (saved && !anyUnsavedTail) return
         const view = viewOf(requireRun(handle))
         if (saved) {
           if (view.unsavedTails?.some(hasText)) list.drafts.push({ view, recovery: readContext(handle) })
