@@ -123,7 +123,9 @@ export function classifyGenerationFailure(
 
 /** Registered guidance when the provider rejected the request as too long; undefined for any other failure. */
 export function providerContextFailureText(error: unknown, text: (zhCNText: string, enUSText: string) => string): string | undefined {
-  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  let message = ''
+  if (error instanceof Error) message = error.message
+  else if (typeof error === 'string') message = error
   if (classifyGenerationFailure(message, null) !== 'provider-context') return undefined
   const zh = knownAppErrorMessage('zh-CN', message), en = knownAppErrorMessage('en-US', message)
   return zh && en ? text(zh, en) : undefined
