@@ -278,8 +278,8 @@ function currentSnapshotIdentity(databasePath: string): SqliteContentIdentity | 
 /** Opening reads the schema version from one private snapshot. Content
  * fingerprints exist only to gate a migration, so a current schema skips them
  * and an older one takes the full upgrade lane. The caller verifies the schema
- * on its writable handle, which can read WAL frames through a live -shm index
- * that the snapshot's rebuilt index drops; the identity proves the same bytes.
+ * on the source, which can read WAL frames through a live -shm index that the
+ * snapshot's rebuilt index drops; the identity proves its handle sees these bytes.
  */
 export function openProjectSqlite(options: { databasePath: string }): SqliteContentIdentity {
   const current = currentSnapshotIdentity(options.databasePath)

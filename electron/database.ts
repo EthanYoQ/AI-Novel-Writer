@@ -33,6 +33,14 @@ export function createProjectDatabase(projectPath: string, importSourceSecret?: 
   } finally { database.close() }
 }
 
+/** A read-only handle sees WAL frames through the live -shm index, as the
+ * writable handle will, and closing it never checkpoints a refused WAL.
+ */
+function verifyLiveSchema(databasePath: string): void {
+  const reader = new Database(databasePath, { readonly: true, fileMustExist: true })
+  try { verifySchema(new SqliteSchemaAdapter(reader), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION) } finally { reader.close() }
+}
+
 /** Existing projects are verified before acquiring a writable handle or fencing. */
 export function initProjectDatabase(projectPath: string): void {
   closeProjectDatabase()
@@ -40,12 +48,12 @@ export function initProjectDatabase(projectPath: string): void {
   try {
     const verified = openCanonicalProjectData(projectPath)
     const databasePath = getProjectDatabasePath(projectPath)
+    verifyLiveSchema(databasePath)
     database = new Database(databasePath, { fileMustExist: true })
     const content = readSqliteContentIdentity(databasePath)
     if (content.database !== verified.database || content.wal !== verified.wal) {
       throw new SchemaMigrationError('SOURCE_CHANGED_SINCE_PROBE')
     }
-    verifySchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
     database.pragma('journal_mode = WAL')
     database.pragma('foreign_keys = ON')
     fenceProjectSession(database)

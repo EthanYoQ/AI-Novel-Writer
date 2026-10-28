@@ -80,13 +80,14 @@ function commitToWalOnly(file: string, rows: number, sql = '') {
   for (const suffix of ['', '-wal', '-shm']) fs.renameSync(crashed + suffix, file + suffix)
 }
 
-/** Runs the change once the verified snapshot is cleaned up, before the writable handle opens. */
-function afterSnapshotPasses(change: () => void): () => boolean {
-  const rmSync = fs.rmSync
+/** Runs the change once the read-only verification handle closes, before the writable handle opens. */
+function afterVerification(file: string, change: () => void): () => boolean {
+  const close = Database.prototype.close
   let ran = false
-  vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
-    rmSync(target, options)
-    if (!ran && path.basename(String(target)).startsWith('sqlite-read-')) { ran = true; change() }
+  vi.spyOn(Database.prototype, 'close').mockImplementation(function (this: import('better-sqlite3').Database) {
+    const result = close.call(this)
+    if (!ran && this.readonly && path.resolve(this.name) === path.resolve(file)) { ran = true; change() }
+    return result
   })
   return () => ran
 }
@@ -133,9 +134,9 @@ describe('project open verification', () => {
     try { expect(db.prepare('SELECT execution_epoch FROM import_runs').pluck().get()).toBe(5) } finally { db.close() }
   })
 
-  it('refuses the writable handle when the schema changes after the snapshot passed', () => {
+  it('refuses the writable handle when the schema changes after verification passed', () => {
     const f = fixture()
-    const changed = afterSnapshotPasses(() => {
+    const changed = afterVerification(f.file, () => {
       const db = new Database(f.file)
       try { db.exec('ALTER TABLE contents ADD COLUMN changed_after_probe TEXT') } finally { db.close() }
     })
@@ -153,11 +154,11 @@ describe('project open verification', () => {
     expect(getProjectDb()!.prepare("SELECT count(*) FROM contents WHERE body LIKE 'wal-%'").pluck().get()).toBe(30)
   })
 
-  it('refuses the writable handle when only the WAL changes after the snapshot passed', () => {
+  it('refuses the writable handle when only the WAL changes after verification passed', () => {
     const f = fixture()
     commitToWalOnly(f.file, 5)
     const mainBytes = fs.readFileSync(f.file)
-    const changed = afterSnapshotPasses(() => commitToWalOnly(f.file, 1))
+    const changed = afterVerification(f.file, () => commitToWalOnly(f.file, 1))
     expect(() => initProjectDatabase(f.root)).toThrow('SOURCE_CHANGED_SINCE_PROBE')
     expect(changed()).toBe(true)
     expect(getProjectDb()).toBeNull()
@@ -187,9 +188,9 @@ describe('project open verification', () => {
     } finally { holder.close() }
   })
 
-  it('refuses the writable handle when a page is damaged after the snapshot passed', () => {
+  it('refuses the writable handle when a page is damaged after verification passed', () => {
     const f = fixture()
-    const damaged = afterSnapshotPasses(() => damageContentPage(f.file))
+    const damaged = afterVerification(f.file, () => damageContentPage(f.file))
     expect(() => initProjectDatabase(f.root)).toThrow('SOURCE_CHANGED_SINCE_PROBE')
     expect(damaged()).toBe(true)
     expect(getProjectDb()).toBeNull()
