@@ -331,12 +331,12 @@ export function knownAppErrorMessage(locale: Locale, error: unknown): string | u
 const IMPORT_BLOCKED_CODES = new Set(['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'])
 
 /**
- * 导入里预算用完、生成被阻断或写入失败时的说明。请求次数用完在发送前报出；活动时长在请求进行中用完（inFlight），
+ * 导入里预算用完、生成被阻断或写入失败时的说明。发送前报出时可能是请求次数或活动时长用完（预留时两者用同一个码），说明不区分；活动时长在请求进行中用完（inFlight），
  * 之后根被阻断，再发起只会得到阻断码。「继续」复用同一份额度，接着完成只能「重新开始」，所以说明写明它从第 1 章重做。
  * 码不进说明，由调用方记进诊断日志。其余码返回 undefined，交给共用说明。
  */
 export function importGenerationStopMessage(locale: Locale, code: string, inFlight = false): string | undefined {
-  if (code === 'ROOT_BUDGET_EXHAUSTED') return translate(locale, inFlight ? 'error.importActiveTimeExhausted' : 'error.importRequestLimitReached')
+  if (code === 'ROOT_BUDGET_EXHAUSTED') return translate(locale, inFlight ? 'error.importActiveTimeExhausted' : 'error.importBudgetReached')
   if (IMPORT_BLOCKED_CODES.has(code)) return translate(locale, 'error.importGenerationBlocked')
   if (code === 'GENERATION_STORAGE_FAILED') return translate(locale, 'error.importStorageFailed')
   if (code === 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE') return translate(locale, 'error.importPreviousAttemptIncomplete')
