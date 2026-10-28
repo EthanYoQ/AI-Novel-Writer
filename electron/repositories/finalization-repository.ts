@@ -370,8 +370,12 @@ export class FinalizationRepository {
 
   static isAuthoritative(draftId: number): boolean {
     return requireDatabase().prepare(`
-      SELECT 1 FROM drafts WHERE id = ? AND status = 'finalized'
-    `).get(draftId) !== undefined
+      SELECT drafts.id FROM drafts
+      WHERE drafts.status = 'finalized'
+        AND drafts.chapter_number = (SELECT chapter_number FROM drafts WHERE id = ?)
+      ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
+      LIMIT 1
+    `).pluck().get(draftId) === draftId
   }
 
   static get(finalizationId: string): FinalizationRecord | null {

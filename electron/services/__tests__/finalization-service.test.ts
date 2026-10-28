@@ -32,6 +32,7 @@ function setupSchema(): void {
     CREATE TABLE drafts (
       id INTEGER PRIMARY KEY,
       chapter_number INTEGER NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL,
       content_id INTEGER NOT NULL,
       word_count INTEGER NOT NULL,
