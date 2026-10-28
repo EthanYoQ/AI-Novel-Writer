@@ -180,6 +180,26 @@ describe('分工模型设置页', () => {
     expect(document.activeElement).toBe(select('review'))
   })
 
+  it('同一环节第一次保存还没完成又换了模型：第一次完成后下拉仍显示第二次的选择并保持保存中，第二次完成后以它为准', async () => {
+    const saves: Array<() => void> = []
+    invoke.mockImplementation((channel, request) => channel === 'llm:set-stage-model'
+      ? new Promise(resolve => { saves.push(() => resolve(savedAssignment(request))) })
+      : Promise.resolve(undefined))
+    await mount()
+    await choose('review', 'glm')
+    await choose('review', 'flash')
+    expect(saves).toHaveLength(2)
+
+    await act(async () => saves[0]())
+    expect(select('review').value).toBe('flash')
+    expect(select('review').getAttribute('aria-busy')).toBe('true')
+
+    await act(async () => saves[1]())
+    expect(select('review').value).toBe('flash')
+    expect(select('review').getAttribute('aria-busy')).toBe('false')
+    expect(useLLMStore.getState().stageModelIds).toEqual({ review: 'flash' })
+  })
+
   it('「AI 模型」页在有环节另有指定时显示一行提示，点击去分工模型', async () => {
     useLayoutStore.setState({ settingsSection: 'llm' })
     await mount()
