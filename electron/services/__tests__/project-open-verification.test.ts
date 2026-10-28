@@ -65,6 +65,20 @@ function damageContentPage(file: string) {
   try { fs.writeSync(fd, Buffer.alloc(64, 0xff), 0, 64, (rootPage - 1) * pageSize) } finally { fs.closeSync(fd) }
 }
 
+/** Leaves committed rows only in -wal, as a crash before checkpoint would. */
+function commitToWalOnly(file: string, rows: number) {
+  const crashed = `${file}.crashed`
+  const db = new Database(file)
+  try {
+    db.pragma('journal_mode = WAL')
+    db.pragma('wal_autocheckpoint = 0')
+    const insert = db.prepare('INSERT INTO contents(body) VALUES (?)')
+    for (let index = 0; index < rows; index++) insert.run(`wal-${index}:${BODY}`)
+    for (const suffix of ['', '-wal', '-shm']) fs.copyFileSync(file + suffix, crashed + suffix)
+  } finally { db.close() }
+  for (const suffix of ['', '-wal', '-shm']) fs.renameSync(crashed + suffix, file + suffix)
+}
+
 /** Runs the change once the verified snapshot is cleaned up, before the writable handle opens. */
 function afterSnapshotPasses(change: () => void): () => boolean {
   const rmSync = fs.rmSync
@@ -127,6 +141,26 @@ describe('project open verification', () => {
     expect(() => initProjectDatabase(f.root)).toThrow('SOURCE_CHANGED_SINCE_PROBE')
     expect(changed()).toBe(true)
     expect(getProjectDb()).toBeNull()
+  })
+
+  it.each([['current'], [6]] as const)('opens a %s-schema project whose committed rows are still only in the WAL', version => {
+    const f = fixture(version)
+    commitToWalOnly(f.file, 30)
+    expect(fs.statSync(`${f.file}-wal`).size).toBeGreaterThan(0)
+    initProjectDatabase(f.root)
+    expect(getProjectDb()!.prepare('SELECT count(*) FROM contents WHERE body LIKE ?').pluck().get(`%${BODY}`)).toBe(150)
+    expect(getProjectDb()!.prepare("SELECT count(*) FROM contents WHERE body LIKE 'wal-%'").pluck().get()).toBe(30)
+  })
+
+  it('refuses the writable handle when only the WAL changes after the snapshot passed', () => {
+    const f = fixture()
+    commitToWalOnly(f.file, 5)
+    const mainBytes = fs.readFileSync(f.file)
+    const changed = afterSnapshotPasses(() => commitToWalOnly(f.file, 1))
+    expect(() => initProjectDatabase(f.root)).toThrow('SOURCE_CHANGED_SINCE_PROBE')
+    expect(changed()).toBe(true)
+    expect(getProjectDb()).toBeNull()
+    expect(fs.readFileSync(f.file)).toEqual(mainBytes)
   })
 
   it('refuses the writable handle when a page is damaged after the snapshot passed', () => {
