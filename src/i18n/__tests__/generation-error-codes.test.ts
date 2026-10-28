@@ -738,6 +738,8 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'CONTINUITY_ROSTER_NAME_CONFLICT',
     'CONTINUITY_SOURCE_STALE',
     'GENERATION_BLUEPRINTS_CLEARED',
+    // 新代码不再抛出（ADR-0023），只用来把旧版本留下的记录归到容量预检；旧版本里它也只在主进程内部，不经工作流失败面板。
+    'GENERATION_INPUT_CAPACITY_EXCEEDED',
     'GENERATION_KNOWLEDGE_SPACE_NOT_MATCHED',
     // 主进程中止请求时用的 AbortSignal.reason，只用来给调用记录分类，不会作为报错交给界面。
     'GENERATION_STOPPED',
