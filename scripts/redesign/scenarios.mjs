@@ -805,7 +805,7 @@ export const STAGE_SCENARIOS = {
     await stage.openSettings(page)
     assert.deepEqual(await stage.settingsGroups(page), [
       { group: '常用', pages: ['AI 模型', '检索模型', '外观'] },
-      { group: '高级', pages: ['网络代理', '提示词模板', '写作 Skills'] },
+      { group: '高级', pages: ['分工模型', '网络代理', '提示词模板', '写作 Skills'] },
       { group: '其他', pages: ['项目备份', '关于与更新'] },
     ], '设置按常用、高级、其他三组')
     assert.equal(await stage.currentSettingsPage(page), 'AI 模型', '从流程脊打开时落在 AI 模型')

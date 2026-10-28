@@ -286,6 +286,7 @@ function bodyOf(persisted: string): string {
 beforeEach(() => {
   vi.clearAllMocks()
   context.data = {}
+  delete context.generationModelId
   context.uiLocale = 'zh-CN'
   context.writingLanguage = 'zh-CN'
   context.cancelled = false
@@ -298,6 +299,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   useLLMStore.setState({
+    models: [],
     defaultModelId: originalDefaultModelId,
     generateStream: originalGenerateStream,
   })
@@ -574,7 +576,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
   })
 
   it('主进程续批只生成本批增量，确认前缀作为上下文并保留在正式大纲', async () => {
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
     const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
     const nextSegment = `第21–100章：终局\n${'新一批因果事件逐章推进，最终兑现传承代价。'.repeat(5)}\n\n${progressLine(21, 100, 100)}`
@@ -595,7 +597,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
   })
 
   it('主进程新续批零进展失败时 CAS 恢复旧可用检查点', async () => {
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
     const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
     const prior = { synopsis_result: prefixBody, synopsis_covered_to: 20, synopsis_range: { from: 1, to: 20 }, synopsis_facts_fingerprint: currentFingerprint({ from: 1, to: 20 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }
@@ -610,7 +612,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
   })
 
   it('主进程新续批只回显旧前缀并 stop 时保留旧可用检查点', async () => {
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
     const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
     const prior = { synopsis_result: prefixBody, synopsis_covered_to: 20, synopsis_range: { from: 1, to: 20 }, synopsis_facts_fingerprint: currentFingerprint({ from: 1, to: 20 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }
@@ -624,7 +626,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
   })
 
   it('主进程新续批返回越界标题时恢复旧可用检查点', async () => {
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
     const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
     const prior = { synopsis_result: prefixBody, synopsis_covered_to: 20, synopsis_range: { from: 1, to: 20 }, synopsis_facts_fingerprint: currentFingerprint({ from: 1, to: 20 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }
@@ -638,7 +640,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
   })
 
   it('主进程续批中断后以同 run 短增量恢复并拼回正式前缀', async () => {
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
     const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
     const delta = '第21章：新线索\n林舟在旧仓库发现账册。'
@@ -657,7 +659,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
   })
 
   it('主进程续批仍在请求模型前拒绝旧源指纹', async () => {
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
     const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
     const harness = harnessWith({ synopsis_result: prefixBody, synopsis_covered_to: 20, synopsis_range: { from: 1, to: 20 }, synopsis_facts_fingerprint: '旧源指纹', synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }, dbOutline)
@@ -670,7 +672,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
   })
 
   it('升级前以乱序大纲开跑、来源无效的逐章大纲任务续写时给出与恢复入口一致的说明，不露内部原因码', async () => {
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const harness = harnessWith()
     const synopsis = `# 情节大纲\n\n${[1, 5, 2, 3, 4].map(n => `## 第${n}章：第${n}夜\n这一夜的事。`).join('\n\n')}`
     const generation = mainOwnedResponses(harness, '不会发送', {
@@ -688,7 +690,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
   })
 
   it('暂停的来源无效大纲任务点「断点续写」：主进程拒绝续写时说明与恢复入口一致，不露内部错误码', async () => {
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const harness = harnessWith()
     const synopsis = `# 情节大纲\n\n${[1, 5, 2, 3, 4].map(n => `## 第${n}章：第${n}夜\n这一夜的事。`).join('\n\n')}`
     const plotOutline: PlotOutlineProgress = {
@@ -714,7 +716,7 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
   })
 
   it('主进程恢复仍拒绝同 run 合成正文在读取后变化', async () => {
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
     const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
     const harness = harnessWith({ synopsis_incomplete: true, synopsis_covered_to: 20, synopsis_range: { from: 21, to: 100 }, synopsis_facts_fingerprint: currentFingerprint({ from: 21, to: 100 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }, dbOutline)

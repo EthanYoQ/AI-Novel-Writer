@@ -16,6 +16,7 @@ import AboutSection from './AboutSection'
 import AppearanceSection from './AppearanceSection'
 import ModelsSection from './ModelsSection'
 import ProxySection from './ProxySection'
+import StageModelsSection from './StageModelsSection'
 import { SETTINGS_GROUPS, SETTINGS_PAGES, type SettingsPageSpec } from './settings-pages'
 
 interface RequiredState {
@@ -89,6 +90,8 @@ function PageBody({ page }: { page: SettingsSection }) {
       )
     case 'appearance':
       return <><PageHeader page={page} /><AppearanceSection /></>
+    case 'stage-models':
+      return <><PageHeader page={page} /><StageModelsSection /></>
     case 'proxy':
       return <><PageHeader page={page} /><ProxySection /></>
     case 'prompts':

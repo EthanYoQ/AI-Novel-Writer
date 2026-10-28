@@ -91,7 +91,7 @@ async function write(textarea: HTMLTextAreaElement, value: string) {
 
 beforeEach(() => {
   useWorkflowStore.setState({ startWorkflow: vi.fn(async () => undefined), getResourceConflict: () => null } as never)
-  useLLMStore.setState({ loaded: true, defaultModelId: 'model' })
+  useLLMStore.setState({ loaded: true, models: [{ id: 'model', purposes: ['generation'] }] as never, defaultModelId: 'model' })
   useEditorStore.setState({ tabs: [], activeTabId: null })
   useProjectStore.setState({ saveProject: vi.fn(async () => true) } as never)
 })
@@ -251,10 +251,25 @@ describe('设定页', () => {
     await act(async () => root!.unmount())
     host!.remove()
 
-    useLLMStore.setState({ loaded: true, defaultModelId: 'model' })
+    useLLMStore.setState({ loaded: true, models: [{ id: 'model', purposes: ['generation'] }] as never, defaultModelId: 'model' })
     project({})
     await mount()
     expect(reason(byName('AI 补全其余设定'))).toBe('先写核心大纲，AI 按它补全其余设定')
+    expect(byName('AI 生成「核心大纲」')?.hasAttribute('aria-describedby')).toBe(false)
+  })
+
+  it('AI 按钮按规划环节实际能用的模型判断，和点下去时的门槛一致', async () => {
+    const reason = (button: HTMLButtonElement | undefined) => document.getElementById(button!.getAttribute('aria-describedby') ?? '')?.textContent
+    useLLMStore.setState({ loaded: true, models: [{ id: 'model', purposes: ['refinement'] }] as never, defaultModelId: 'model', stageModelIds: {} })
+    project({ coreOutline: '雾钟提前一刻响起。' })
+    await mount()
+    expect(reason(byName('AI 生成「核心大纲」'))).toBe('先在设置里添加 AI 模型')
+    await act(async () => root!.unmount())
+    host!.remove()
+
+    useLLMStore.setState({ loaded: true, models: [{ id: 'planner', purposes: ['generation'] }] as never, defaultModelId: null, stageModelIds: { planning: 'planner' } })
+    project({ coreOutline: '雾钟提前一刻响起。' })
+    await mount()
     expect(byName('AI 生成「核心大纲」')?.hasAttribute('aria-describedby')).toBe(false)
   })
 
