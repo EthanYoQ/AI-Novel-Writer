@@ -916,6 +916,16 @@ describe('M02 text-import proposal receipts', () => {
     expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('作者的类型')
     expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(expect.stringContaining('1 条与现有内容不同的反推结果放进了建议'))
   })
+  it('反推等待期间作者在设定页改的、还没保存的内容，提交后仍然保留', async () => {
+    arrange(receipt => {
+      Object.assign(receipt, { mode: 'fill-empty', suggestions: [] })
+      useProjectStore.getState().updateNovelConfig({ globalGuidance: '作者刚写、还没保存的要求' })
+    })
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(useProjectStore.getState().currentProject?.novelConfig.globalGuidance).toBe('作者刚写、还没保存的要求')
+  })
   it('作者原稿反推只从作者自己的正文检索，不混入参考小说', async () => {
     const invoke = arrange()
 
