@@ -331,6 +331,21 @@ describe('InferBlueprintsPerChapterCommand', () => {
     expect(log.mock.calls.flat().some(line => String(line).includes('ROOT_BUDGET_EXHAUSTED'))).toBe(true)
   })
 
+  it('does not point an English request-limit stop at the token settings', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const session = { complete: vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const context = createContext()
+    context.uiLocale = 'en-US'
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toContain(importGenerationStopMessage('en-US', 'ROOT_BUDGET_EXHAUSTED'))
+    expect((failure as Error).message).not.toMatch(/token/iu)
+  })
+
   it('fails closed with a stable relationship diagnostic when relation is missing', async () => {
     const invoke = stubIpcInvoke((channel) => {
       throw new Error(`unexpected mutation ${channel}`)

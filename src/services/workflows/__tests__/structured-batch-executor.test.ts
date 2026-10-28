@@ -1843,7 +1843,7 @@ describe('main-process stop codes reach the failure', () => {
 
   it('tags a request-limit stop thrown before dispatch with its code', async () => {
     const result = await execute(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') })
-    expect(result).toMatchObject({ ok: false, failure: { code: 'limit_exceeded', errorCode: 'ROOT_BUDGET_EXHAUSTED' } })
+    expect(result).toMatchObject({ ok: false, failure: { code: 'limit_exceeded', reason: 'root_budget', errorCode: 'ROOT_BUDGET_EXHAUSTED' } })
   })
 
   it('keeps reporting an incomplete provider error without a stop code as a server error', async () => {
