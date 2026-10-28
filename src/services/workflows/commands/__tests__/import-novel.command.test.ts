@@ -9,7 +9,7 @@ import {
   InferGlobalSettingsCommand as RuntimeInferGlobalSettingsCommand,
 } from '../import-novel.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
-import { importGenerationStopMessage, knownAppErrorMessage } from '../../../../i18n/app-errors'
+import { importGenerationStopMessage } from '../../../../i18n/app-errors'
 import { contextLengthRejectingDependencies } from './context-length-runtime.fixture'
 
 class InferBlueprintsPerChapterCommand extends RuntimeInferBlueprintsPerChapterCommand {
@@ -346,7 +346,7 @@ describe('InferBlueprintsPerChapterCommand', () => {
     expect((failure as Error).message).not.toMatch(/token/iu)
   })
 
-  it('explains a storage failure during blueprint inference with the shared storage message', async () => {
+  it('explains a storage failure during blueprint inference with the import storage message', async () => {
     stubIpcInvoke(() => ({ success: true }))
     const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED', budget: { requestedOutputTokens: 1 } }
     const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
@@ -356,7 +356,8 @@ describe('InferBlueprintsPerChapterCommand', () => {
       .execute({ step: {}, context: createContext(), callbacks })
       .catch((error: Error) => error)
 
-    expect((failure as Error).message).toBe(`蓝图推演失败：${knownAppErrorMessage('zh-CN', 'GENERATION_STORAGE_FAILED')}`)
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'GENERATION_STORAGE_FAILED')}`)
+    expect((failure as Error).message).toContain('重新开始')
   })
 
   it('fails closed with a stable relationship diagnostic when relation is missing', async () => {
@@ -750,7 +751,7 @@ describe('InferGlobalSettingsCommand', () => {
     ])
   })
 
-  it('explains a storage failure of the global inference with the shared storage message and logs the code', async () => {
+  it('explains a storage failure of the global inference with the import storage message and logs the code', async () => {
     successfulInferenceIpc()
     const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED' }
     const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
@@ -761,7 +762,8 @@ describe('InferGlobalSettingsCommand', () => {
       .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
       .catch((error: Error) => error)
 
-    expect((failure as Error).message).toBe(knownAppErrorMessage('zh-CN', 'GENERATION_STORAGE_FAILED'))
+    expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'GENERATION_STORAGE_FAILED', true))
+    expect((failure as Error).message).toContain('重新开始')
     expect(log.mock.calls.flat().some(line => String(line).includes('GENERATION_STORAGE_FAILED'))).toBe(true)
   })
 

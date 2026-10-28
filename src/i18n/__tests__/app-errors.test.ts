@@ -241,19 +241,21 @@ describe('import generation stops (#537)', () => {
     const activeTime = importGenerationStopMessage(locale, 'ROOT_BUDGET_EXHAUSTED', true)
     const blockedMessages = blocked.map(code => importGenerationStopMessage(locale, code))
     const previousAttempt = importGenerationStopMessage(locale, 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
-    const all = [requestLimit, activeTime, ...blockedMessages, previousAttempt]
+    const storage = importGenerationStopMessage(locale, 'GENERATION_STORAGE_FAILED', true)
+    const all = [requestLimit, activeTime, ...blockedMessages, previousAttempt, storage]
     for (const message of all) {
       expect(message).toBeTruthy()
       expect(message).not.toMatch(/[A-Z]{3,}_[A-Z]/u)
       expect(message).toMatch(nextStep[locale])
       expect(message).not.toBe(knownAppErrorMessage(locale, 'GENERATION_DISPATCH_BLOCKED'))
     }
-    expect(new Set([requestLimit, activeTime, blockedMessages[0], previousAttempt]).size).toBe(4)
+    expect(new Set([requestLimit, activeTime, blockedMessages[0], previousAttempt, storage]).size).toBe(5)
+    expect(storage).not.toBe(knownAppErrorMessage(locale, 'GENERATION_STORAGE_FAILED'))
     expect(new Set(blockedMessages).size).toBe(1)
     if (locale === 'en-US') for (const message of all) expect(message).not.toMatch(/\p{Script=Han}/u)
   })
 
-  it.each(['GENERATION_PROVIDER_FAILED', 'GENERATION_STORAGE_FAILED', 'IMPORT_RUN_EXECUTION_STALE', 'DEADLINE_EXHAUSTED'])('leaves %s to the shared explanation', code => {
+  it.each(['GENERATION_PROVIDER_FAILED', 'IMPORT_RUN_EXECUTION_STALE', 'DEADLINE_EXHAUSTED'])('leaves %s to the shared explanation', code => {
     expect(importGenerationStopMessage('zh-CN', code)).toBeUndefined()
   })
 
