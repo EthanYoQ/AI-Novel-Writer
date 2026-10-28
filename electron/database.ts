@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import { initializeLegacyBaselineSchema } from './migrations/baseline-schema'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from './migrations/desktop-registry'
 import { SchemaMigrationError } from './migrations/registry'
-import { migrateSchema } from './migrations/runner'
+import { migrateSchema, verifySchema } from './migrations/runner'
 import { SqliteSchemaAdapter } from './migrations/sqlite-schema-adapter'
 import { openCanonicalProjectData, deactivateProjectData, getNewProjectDatabasePath, getProjectDatabasePath } from './services/project-data-locator'
 import { readSqliteContentIdentity } from './services/sqlite-project-migration'
@@ -45,6 +45,7 @@ export function initProjectDatabase(projectPath: string): void {
     if (content.database !== verified.database || content.wal !== verified.wal) {
       throw new SchemaMigrationError('SOURCE_CHANGED_SINCE_PROBE')
     }
+    verifySchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
     database.pragma('journal_mode = WAL')
     database.pragma('foreign_keys = ON')
     fenceProjectSession(database)

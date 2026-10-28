@@ -263,32 +263,29 @@ const contentIdentity = (hashes: Record<string, string>): SqliteContentIdentity 
   ({ database: hashes[''], wal: hashes['-wal'] ?? EMPTY_SHA256 })
 export function readSqliteContentIdentity(file: string): SqliteContentIdentity { return contentIdentity(sourceIdentity(file)) }
 
-function verifyCurrentSnapshot(databasePath: string, registry: MigrationRegistry): SqliteContentIdentity | undefined {
+function currentSnapshotIdentity(databasePath: string): SqliteContentIdentity | undefined {
   const snapshot = physicalSnapshot(databasePath)
   try {
     const db = new Database(snapshot.file, { readonly: true, fileMustExist: true })
-    db.pragma('foreign_keys = ON')
     try {
-      const adapter = new SqliteSchemaAdapter(db)
-      if (adapter.readUserVersion() !== CURRENT_DESKTOP_SCHEMA_VERSION) return undefined
-      verifySchema(adapter, registry, CURRENT_DESKTOP_SCHEMA_VERSION)
+      if (new SqliteSchemaAdapter(db).readUserVersion() !== CURRENT_DESKTOP_SCHEMA_VERSION) return undefined
       snapshot.unchanged()
       return contentIdentity(snapshot.identity)
     } finally { db.close() }
   } finally { snapshot.close() }
 }
 
-/** Opening verifies one private snapshot. Content fingerprints exist only to
- * gate a migration, so a current schema skips them and an older one takes the
- * full upgrade lane, then verifies the upgraded file the same way. The returned
- * identity lets the caller prove its writable handle sees the verified bytes.
+/** Opening reads the schema version from one private snapshot. Content
+ * fingerprints exist only to gate a migration, so a current schema skips them
+ * and an older one takes the full upgrade lane. The caller verifies the schema
+ * on its writable handle, which can read WAL frames through a live -shm index
+ * that the snapshot's rebuilt index drops; the identity proves the same bytes.
  */
 export function openProjectSqlite(options: { databasePath: string }): SqliteContentIdentity {
-  const registry = getDesktopMigrationRegistry()
-  const current = verifyCurrentSnapshot(options.databasePath, registry)
+  const current = currentSnapshotIdentity(options.databasePath)
   if (current) return current
   upgradeProjectSqlite({ databasePath: options.databasePath })
-  const upgraded = verifyCurrentSnapshot(options.databasePath, registry)
+  const upgraded = currentSnapshotIdentity(options.databasePath)
   if (!upgraded) throw new SchemaMigrationError('SCHEMA_VERSION_MISMATCH')
   return upgraded
 }
