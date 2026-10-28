@@ -33,6 +33,8 @@ import { useProjectStore } from '../../../../stores/project-store'
 import { RunFinalizePostProcessCommand } from '../finalize-chapter.command'
 import { globalEventBus } from '../../../../shared/event-bus'
 import { GenerateDraftCommand } from '../generate-draft.command'
+import { createWorkflowMainGenerationRuntime } from '../../workflow-main-generation'
+import type { MainGenerationRunView } from '../../../generation/generation-runtime'
 type ModelMessages = Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0]
 
 let projectPath = ''
@@ -505,6 +507,24 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     await command('Chapter 2 finalized content').execute({ step: {}, context: { ...workflowContext }, callbacks: callbacks() })
     expect(useWorkflowStore.getState().activeRuns[0]?.generationModelId).toBe('post-model')
     useWorkflowStore.setState({ activeRuns: [] })
+  })
+
+  it('keeps the later inference stages of an author import on the planning model after post-processing ran on the finalization model', async () => {
+    useLLMStore.setState({ models: ['test-model', 'post-model', 'plan-model'].map(id => ({ id, purposes: ['generation'] })) as never,
+      defaultModelId: 'test-model', stageModelIds: { finalization: 'post-model', planning: 'plan-model' } })
+    const importContext: WorkflowContext = { ...workflowContext, data: {} }
+    await command('Chapter 2 finalized content').execute({ step: {}, context: importContext, callbacks: callbacks() })
+    const handle = { projectId: 'test', epoch: 'lease-test', rootActionId: 'import-root', runId: 'import-generation' }
+    const view: MainGenerationRunView = { handle, budget: { maxAttempts: 1, maxRequestedOutputTokens: 100, maxRequestedOutputTokensPerAttempt: 100, deadlineAt: 1000 }, status: 'running', nonReplayable: false, artifacts: [] }
+    const begin = vi.fn<(session: unknown, request: { modelId: string }) => Promise<MainGenerationRunView>>(async () => view)
+    const transport = { begin, pause: vi.fn(async () => view), read: vi.fn(async () => view), subscribe: vi.fn(() => () => {}) } as unknown as Parameters<typeof createWorkflowMainGenerationRuntime>[1]
+    for (const operation of ['import-global-facts', 'analyze-writing-style', 'import-blueprints'] as const) {
+      const runtime = await createWorkflowMainGenerationRuntime({ context: importContext, callbacks: callbacks(),
+        selection: { operation, promptKeys: [], skillStages: [], output: 'structured-data' } }, transport)
+      await runtime.close()
+    }
+    expect(selections.map(selection => (selection as { modelId: string }).modelId)).toEqual(['post-model', 'post-model'])
+    expect(begin.mock.calls.map(([, request]) => request.modelId)).toEqual(['plan-model', 'plan-model', 'plan-model'])
   })
 
   it('records the model main actually inherits from a finished sibling step, not the newly assigned one', async () => {
