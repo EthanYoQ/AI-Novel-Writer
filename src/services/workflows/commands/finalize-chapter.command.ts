@@ -1,6 +1,7 @@
 import type { FinalizedCharacterArtifact } from '../../../shared/finalized-character-generation'
 import { runFinalizationGeneration } from '../../finalization-generation'
-import { useLLMStore } from '../../../stores/llm-store'
+import { routeModelId } from '../../model-routing'
+import { pinWorkflowModel } from '../workflow-main-generation'
 import type { FinalizationGenerationEffect } from '../../../shared/finalization-generation'
 import { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
 export { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
@@ -384,12 +385,15 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
     const generation: FinalizePostProcessGeneration = {
       finalizedStage: (stepKey, generationContext) => runFinalizationGeneration({
         session: projectSession, slot: { source: this.params.finalizedSource, stepKey },
-        modelId: () => generationContext.generationModelId ?? useLLMStore.getState().defaultModelId ?? '',
+        modelId: () => generationContext.generationModelId ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes') ?? '',
         ...(generationContext.data.generationBatchId && generationContext.mainGenerationRootHandle
           ? { parentRootActionId: generationContext.mainGenerationRootHandle.rootActionId } : {}),
         ...explicit[stepKey],
         cancelled: () => generationContext.cancelled,
-        onHandle: handle => { generationContext.mainGenerationRunHandle = Object.freeze({ ...handle }) },
+        onHandle: (handle, modelId) => {
+          generationContext.mainGenerationRunHandle = Object.freeze({ ...handle })
+          pinWorkflowModel(generationContext, modelId)
+        },
       }).catch(error => { throw finalizationGenerationError(error) }),
       complete: async () => { throw new Error('FINALIZATION_GENERATION_MAIN_REQUIRED') },
     }

@@ -54,7 +54,7 @@ function arrangeConfigGenerationJourney(responses: Array<{ content: string; fini
   }
   useProjectStore.setState({ currentProject: project as never, saveProject })
   const generateStream = vi.fn(() => { throw new Error('Renderer provider dispatch is forbidden') })
-  useLLMStore.setState({ defaultModelId: 'deepseek-v4-flash', generateStream })
+  useLLMStore.setState({ models: [{ id: 'deepseek-v4-flash', purposes: ['generation'] }] as never, defaultModelId: 'deepseek-v4-flash', generateStream })
   const view: MainGenerationRunView = {
     handle: { projectId: project.id, epoch: project.sessionLease, rootActionId: '合成配置根', runId: '合成配置运行' },
     status: 'running', nonReplayable: false, artifacts: [],
@@ -107,7 +107,7 @@ describe('architecture workflow project context', () => {
     const novelConfig = { totalChapters: 200 } as NovelConfig
     useProjectStore.setState({ currentProject: { id: projectSession.projectId, path: projectSession.projectPath,
       sessionLease: projectSession.leaseId, name: 'A', novelConfig, characterStates: '', createdAt: '', updatedAt: '' } })
-    useLLMStore.setState({ defaultModelId: 'model' })
+    useLLMStore.setState({ models: [{ id: 'model', purposes: ['generation'] }] as never, defaultModelId: 'model' })
     const begins: BeginGenerationRequest[] = []
     const invoke = vi.fn(async (channel: string, request: BeginGenerationRequest) => {
       if (channel === 'generation:begin') { begins.push(request); throw new Error('captured-first-begin') }

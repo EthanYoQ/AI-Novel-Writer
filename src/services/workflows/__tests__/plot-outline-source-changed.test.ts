@@ -20,7 +20,7 @@ function arrangeOutlineRejectedAtChapter7(rejection: string, lastChapterDone = f
   const novelConfig = { totalChapters: 20, wordsPerChapter: 3000, genre: '悬疑' } as NovelConfig
   useProjectStore.setState({ currentProject: { id: projectSession.projectId, path: projectSession.projectPath,
     sessionLease: projectSession.leaseId, name: '失乐园', novelConfig, characterStates: '', createdAt: '', updatedAt: '' } })
-  useLLMStore.setState({ defaultModelId: 'model' })
+  useLLMStore.setState({ models: [{ id: 'model', purposes: ['generation'] }] as never, defaultModelId: 'model' })
   const handle = { projectId: projectSession.projectId, epoch: projectSession.leaseId, rootActionId: '大纲根', runId: '大纲运行' }
   const sourceExpected = { synopsis: renderPlotOutlineSynopsis([1, 2, 3, 4, 5].map(chapter => `## 第${chapter}章：起\n……`).join('\n\n'), 5, { totalChapters: 20, writingLanguage: 'zh-CN' }), premise: '前提', charactersArch: '角色', worldbuilding: '世界',
     genre: '悬疑', totalChapters: 20, wordsPerChapter: 3000, writingLanguage: 'zh-CN' as const, plotStructure: 'three_act',

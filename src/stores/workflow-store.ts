@@ -84,7 +84,6 @@ export interface WorkflowRun {
   projectPath: string
   /** 启动时从当前项目冻结；缺失时该 run 只能失败，不能执行项目级副作用。 */
   projectSession: ProjectSessionContext | null
-  /** Agent 明确选择并随本次写稿工作流冻结的模型；缺失时使用默认模型。 */
   generationModelId?: string
   /** 本次写作冻结的每章目标可见单位；不得在执行中重新读取全局配置。 */
   chapterWordsTarget?: number
@@ -154,7 +153,6 @@ export interface WorkflowContext {
   projectPath: string
   /** 工作流启动时冻结的 IPC 会话，禁止在执行器内重新读取 currentProject。 */
   projectSession: ProjectSessionContext
-  /** Agent 明确选择并随本次写稿工作流冻结的模型；缺失时使用默认模型。 */
   generationModelId?: string
   /** 本次写作冻结的每章目标可见单位。 */
   chapterWordsTarget?: number
@@ -342,6 +340,7 @@ interface WorkflowState {
   pauseWorkflow: (runId: string) => void
   /** 继续已暂停或正在等待安全暂停的工作流 */
   resumeWorkflow: (runId: string) => void
+  pinRunGenerationModel: (runId: string, modelId: string) => void
   /** 添加全局日志 */
   addLog: (level: 'info' | 'warn' | 'error', message: string, locale?: Locale) => void
   /** 清空日志 */
@@ -1117,6 +1116,14 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     } else {
       updateRunById(set, runId, { pauseRequested: false })
     }
+  },
+
+  pinRunGenerationModel: (runId, modelId) => {
+    const run = get().activeRuns.find(candidate => candidate.id === runId)
+    if (!run || run.generationModelId === modelId) return
+    // 主进程的运行已经开着，记账冲突不能把工作流打挂。
+    if (run.generationModelId) console.warn('[workflow] run model already recorded; keeping the first value', { runId })
+    else updateRunById(set, runId, { generationModelId: modelId })
   },
 
   addLog: (level, message, locale = useLocaleStore.getState().locale) => {

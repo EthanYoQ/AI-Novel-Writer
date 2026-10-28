@@ -1,11 +1,13 @@
 import { useState, type ReactNode } from 'react'
 import { Cpu, ExternalLink, MoreHorizontal, Plus } from 'lucide-react'
 import type { ModelProfile } from '../../../shared/ipc-channels'
+import { MODEL_STAGES, routeStageModel } from '../../../shared/model-stage-routing'
 import { BUILTIN_PRESETS } from '../../../shared/provider-presets'
+import { useLayoutStore } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { openModelProviderResource } from '../../settings/model-provider-resource'
-import { useUnsavedSettings } from '../../settings/unsaved-settings'
+import { leaveSettings, useUnsavedSettings } from '../../settings/unsaved-settings'
 import { ModelForm } from '../../settings/ModelForm'
 import { useModelSection } from '../../settings/use-model-section'
 import { Button } from '../../ui/Button'
@@ -28,6 +30,10 @@ export default function ModelsSection({ purposes, header }: { purposes: ModelPro
   const retrieval = section.isEmbeddingSection
   const kind = retrieval ? text('检索模型', 'retrieval model') : text('模型', 'model')
   const embeddingMissing = useLLMStore(s => retrieval && s.loaded && !s.defaultEmbeddingModelId)
+  const stagesAssigned = useLLMStore(s => !retrieval && MODEL_STAGES.some(stage => {
+    const route = routeStageModel(stage, s)
+    return route.source === 'stage' && route.modelId !== s.defaultModelId
+  }))
   const signUp = () => void openModelProviderResource('siliconflow-invite', text)
   const add = <Button variant="secondary" onClick={section.add}><Plus size={14} aria-hidden="true" />{text(`添加${kind}`, `Add ${kind}`)}</Button>
 
@@ -75,6 +81,15 @@ export default function ModelsSection({ purposes, header }: { purposes: ModelPro
             {text('SiliconFlow 提供免费的 BAAI/bge-m3，注册后填上密钥就能用。', 'SiliconFlow offers BAAI/bge-m3 for free. Sign up and add your key.')}
           </Notice>
         ))}
+      {stagesAssigned && (
+        <Notice
+          tone="info"
+          title={text('部分环节在「分工模型」里另有指定', 'Some stages use their own model')}
+          actions={<Button variant="secondary" size="sm" onClick={() => leaveSettings(() => useLayoutStore.setState({ settingsSection: 'stage-models' }))}>{text('去分工模型', 'Go to Models by stage')}</Button>}
+        >
+          {text('这些环节不用这里的默认模型。', 'Those stages do not use the default set here.')}
+        </Notice>
+      )}
       {section.models.length === 0
         ? (
           <div className="stage-set-card">

@@ -116,3 +116,30 @@ it('stage前置read期间取消不提交提议', async () => {
  await expect(client.stage()).rejects.toThrow('已取消')
  expect(invoke.mock.calls.filter(([channel]) => channel === 'legacy-roster:stage')).toHaveLength(0)
 })
+it('没有显式模型时旧名单修复按规划环节的模型开跑', async () => {
+ useLLMStore.setState({ models: [{ id: '默认模型', purposes: ['generation'] }, { id: '规划模型', purposes: ['generation'] }] as never, defaultModelId: '默认模型', stageModelIds: { planning: '规划模型' } })
+ const invoke = vi.fn(async (channel: string) => {
+  if (channel === 'legacy-roster:read-source') return source
+  if (channel === 'generation:list') return []
+  if (channel === 'legacy-roster:begin') throw new Error('STOP_AFTER_BEGIN')
+  throw new Error(`Unexpected ${channel}`)
+ }); install(invoke)
+ await expect(new RepairLegacyCharacterRosterCommand({ expectedProjectPath: session.projectPath, genre: '' }).execute(params())).rejects.toThrow('STOP_AFTER_BEGIN')
+ const begin = invoke.mock.calls.find(([channel]) => channel === 'legacy-roster:begin') as unknown[] | undefined
+ expect(begin?.slice(1).find((arg): arg is { modelId: string } => typeof arg === 'object' && arg !== null && 'modelId' in arg)?.modelId).toBe('规划模型')
+ useLLMStore.setState({ models: [], stageModelIds: {} })
+})
+it('按规划环节开出的修复运行记下实际用的模型，改这个模型时界面能提示它正在用', async () => {
+ useLLMStore.setState({ models: [{ id: '默认模型', purposes: ['generation'] }, { id: '规划模型', purposes: ['generation'] }] as never, defaultModelId: '默认模型', stageModelIds: { planning: '规划模型' } })
+ useWorkflowStore.setState({ activeRuns: [{ id: '界面动作', status: 'running' }] as never })
+ const invoke = vi.fn(async (channel: string) => {
+  if (channel === 'legacy-roster:read-source') return source
+  if (channel === 'generation:list') return []
+  if (channel === 'legacy-roster:begin') return { ...stored, view: { ...stored.view, status: 'running' }, artifact: undefined, modelId: '规划模型' }
+  throw new Error('STOP_AFTER_BEGIN')
+ }); install(invoke)
+ await expect(new RepairLegacyCharacterRosterCommand({ expectedProjectPath: session.projectPath, genre: '' }).execute(params())).rejects.toThrow()
+ expect(invoke.mock.calls.map(([channel]) => channel)).toContain('legacy-roster:begin')
+ expect(useWorkflowStore.getState().activeRuns[0]?.generationModelId).toBe('规划模型')
+ useLLMStore.setState({ models: [], stageModelIds: {} })
+})

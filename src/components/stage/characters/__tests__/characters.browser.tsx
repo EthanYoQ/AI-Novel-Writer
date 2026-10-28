@@ -347,7 +347,7 @@ describe('角色名单', () => {
   })
 
   it('导入角色卡用纸墨对话框，外发确认是同一对话框的第二步，不弹旧确认框', async () => {
-    useLLMStore.setState({ models: [{ id: 'm1', name: '夹具模型', modelName: 'fixture-1', baseUrl: 'https://fixture.example/v1' }], defaultModelId: 'm1' } as never)
+    useLLMStore.setState({ models: [{ id: 'm1', name: '夹具模型', modelName: 'fixture-1', baseUrl: 'https://fixture.example/v1', purposes: ['generation'] }], defaultModelId: 'm1' } as never)
     const legacyConfirm = vi.spyOn(window, 'confirm')
     await render()
     await click('粘贴 / 导入角色卡')
@@ -448,7 +448,7 @@ describe('角色名单', () => {
   })
 
   it('外发确认不能被第一步按钮上的双击或连按回车跳过，只有在第二步单独确认才发送', async () => {
-    useLLMStore.setState({ models: [{ id: 'm1', name: '夹具模型', modelName: 'fixture-1', baseUrl: 'https://fixture.example/v1' }], defaultModelId: 'm1' } as never)
+    useLLMStore.setState({ models: [{ id: 'm1', name: '夹具模型', modelName: 'fixture-1', baseUrl: 'https://fixture.example/v1', purposes: ['generation'] }], defaultModelId: 'm1' } as never)
     const startWorkflow = vi.fn(async () => 'r1')
     useWorkflowStore.setState({ startWorkflow: startWorkflow as never })
     await render()
