@@ -9,6 +9,7 @@ import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../
 import { migrateSchema } from '../../migrations/runner'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
+import { getProjectDatabasePath, openCanonicalProjectData } from '../project-data-locator'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = []
@@ -207,6 +208,13 @@ describe('project open verification', () => {
       try { fs.writeSync(fd, Buffer.alloc(100, 0x41), 0, 100, 0) } finally { fs.closeSync(fd) }
     }, { name: 'SqliteError', code: 'SQLITE_NOTADB', message: 'file is not a database' }],
   ]
+  it('does not admit a project locator whose current schema fails verification', () => {
+    const f = fixture()
+    damageContentPage(f.file)
+    expect(() => openCanonicalProjectData(f.root)).toThrow('CORRUPT_SCHEMA')
+    expect(() => getProjectDatabasePath(f.root)).toThrow('PROJECT_DATA_NOT_READY')
+  })
+
   const walFailures: [string, (file: string) => void, string][] = [
     ['a damaged page', file => { commitToWalOnly(file, 5); damageContentPage(file, 'import_runs') }, 'CORRUPT_SCHEMA'],
     ['an unknown table', file => commitToWalOnly(file, 5, 'CREATE TABLE stray(x)'), 'UNRECOGNIZED_SCHEMA'],
