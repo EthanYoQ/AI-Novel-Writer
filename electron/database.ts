@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import { initializeLegacyBaselineSchema } from './migrations/baseline-schema'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from './migrations/desktop-registry'
 import { SchemaMigrationError } from './migrations/registry'
-import { migrateSchema, verifySchema } from './migrations/runner'
+import { migrateSchema } from './migrations/runner'
 import { SqliteSchemaAdapter } from './migrations/sqlite-schema-adapter'
 import { openCanonicalProjectData, deactivateProjectData, getNewProjectDatabasePath, getProjectDatabasePath } from './services/project-data-locator'
 import { readSqliteContentIdentity } from './services/sqlite-project-migration'
@@ -33,14 +33,6 @@ export function createProjectDatabase(projectPath: string, importSourceSecret?: 
   } finally { database.close() }
 }
 
-/** A read-only handle sees WAL frames through the live -shm index, as the
- * writable handle will, and closing it never checkpoints a refused WAL.
- */
-function verifyLiveSchema(databasePath: string): void {
-  const reader = new Database(databasePath, { readonly: true, fileMustExist: true })
-  try { verifySchema(new SqliteSchemaAdapter(reader), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION) } finally { reader.close() }
-}
-
 /** Existing projects are verified before acquiring a writable handle or fencing. */
 export function initProjectDatabase(projectPath: string): void {
   closeProjectDatabase()
@@ -48,7 +40,6 @@ export function initProjectDatabase(projectPath: string): void {
   try {
     const verified = openCanonicalProjectData(projectPath)
     const databasePath = getProjectDatabasePath(projectPath)
-    verifyLiveSchema(databasePath)
     database = new Database(databasePath, { fileMustExist: true })
     const content = readSqliteContentIdentity(databasePath)
     if (content.database !== verified.database || content.wal !== verified.wal) {

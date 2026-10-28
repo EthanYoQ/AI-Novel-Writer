@@ -275,19 +275,30 @@ function currentSnapshotIdentity(databasePath: string): SqliteContentIdentity | 
   } finally { snapshot.close() }
 }
 
+/** A read-only handle on the source reads WAL frames through the live -shm
+ * index, which a snapshot rebuilds and may drop, and closing it never
+ * checkpoints a WAL that verification refuses.
+ */
+function verifyLiveSchema(databasePath: string): void {
+  const reader = new Database(databasePath, { readonly: true, fileMustExist: true })
+  try { verifySchema(new SqliteSchemaAdapter(reader), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION) } finally { reader.close() }
+}
+
 /** Opening reads the schema version from one private snapshot. Content
  * fingerprints exist only to gate a migration, so a current schema skips them
- * and an older one takes the full upgrade lane. The caller verifies the schema
- * on the source, which can read WAL frames through a live -shm index that the
- * snapshot's rebuilt index drops; the identity proves its handle sees these bytes.
+ * and an older one takes the full upgrade lane. Either way the live source is
+ * verified before returning; the identity lets the caller prove its writable
+ * handle sees the verified bytes.
  */
 export function openProjectSqlite(options: { databasePath: string }): SqliteContentIdentity {
-  const current = currentSnapshotIdentity(options.databasePath)
-  if (current) return current
-  upgradeProjectSqlite({ databasePath: options.databasePath })
-  const upgraded = currentSnapshotIdentity(options.databasePath)
-  if (!upgraded) throw new SchemaMigrationError('SCHEMA_VERSION_MISMATCH')
-  return upgraded
+  let identity = currentSnapshotIdentity(options.databasePath)
+  if (!identity) {
+    upgradeProjectSqlite({ databasePath: options.databasePath })
+    identity = currentSnapshotIdentity(options.databasePath)
+    if (!identity) throw new SchemaMigrationError('SCHEMA_VERSION_MISMATCH')
+  }
+  verifyLiveSchema(options.databasePath)
+  return identity
 }
 
 /** Canonical-only upgrade seam. Caller validates its manifest and excludes business
