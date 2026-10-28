@@ -97,7 +97,7 @@ export default function StageModelsSection() {
                 <p className="stage-set-row-desc">{text(...STAGE_COPY[stage].scope)}</p>
               </div>
               <div className="stage-set-row-ctl">
-                <select id={selectId} className="stage-select" value={value} disabled={single || saving}
+                <select id={selectId} className="stage-select" value={value} disabled={single} aria-busy={saving}
                   onChange={event => void choose(stage, event.target.value || null)}>
                   <option value="">{defaultLabel ? text(`跟随默认（${defaultLabel}）`, `Default (${defaultLabel})`) : text('跟随默认（未设置）', 'Default (not set)')}</option>
                   {generationModels.map(model => <option key={model.id} value={model.id}>{model.name || model.modelName}</option>)}
