@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { DRAFT_STATUS_INFO } from '../../../shared/draft-status'
 import { countDraftUnits } from '../../../shared/draft-units'
 import { formatResourceUri } from '../../../shared/project-paths'
 import type { EditorTab } from '../../../stores/editor-store'
@@ -113,12 +114,10 @@ function DraftChapter({ tab, filePath, projectKey }: { tab: EditorTab; filePath:
 
   const title = blueprint?.title || draft.meta?.chapterTitle || ''
   const units = charCount.toLocaleString(locale)
+  const [labelZh, labelEn] = DRAFT_STATUS_INFO[stage === 'archived' || stage === 'superseded' || stage === 'revised' ? stage : 'draft'].label
   const versionLabel = !draft.meta ? text('读取中…', 'Loading…')
     : stage === 'final' ? text(`定稿 · ${units} 字`, `Final · ${units} ${pluralEn(charCount, 'word')}`)
-      : stage === 'archived' ? text(`已归档 v${draft.meta.version} · ${units} 字`, `Archived v${draft.meta.version} · ${units} ${pluralEn(charCount, 'word')}`)
-      : stage === 'superseded' ? text(`已被替换的定稿 v${draft.meta.version} · ${units} 字`, `Replaced final v${draft.meta.version} · ${units} ${pluralEn(charCount, 'word')}`)
-        : stage === 'revised' ? text(`修稿已合并 v${draft.meta.version} · ${units} 字`, `Revised v${draft.meta.version} · ${units} ${pluralEn(charCount, 'word')}`)
-          : text(`草稿 v${draft.meta.version} · ${units} 字`, `Draft v${draft.meta.version} · ${units} ${pluralEn(charCount, 'word')}`)
+      : text(`${labelZh} v${draft.meta.version} · ${units} 字`, `${labelEn} v${draft.meta.version} · ${units} ${pluralEn(charCount, 'word')}`)
   const editable = !draft.isReadonly && !draft.isChapterBusy
 
   return (
