@@ -100,6 +100,18 @@ describe('遗留的同章重复定稿', () => {
     expect(statuses()).toEqual(before)
   })
 
+  it('修复把旧定稿降级后，从该章起的连续性投影标为过期，和定稿替换同一规则', () => {
+    insertLegacyFinalized(1, 1, 1, '第一章定稿')
+    insertLegacyFinalized(2, 2, 1, '第二章旧定稿')
+    insertLegacyFinalized(3, 2, 2, '第二章新定稿')
+    const meta = () => getProjectDb()!.prepare("SELECT generation, stale_from_chapter FROM continuity_projection_meta WHERE id = 'main'").get() as { generation: number; stale_from_chapter: number | null }
+    const before = meta().generation
+
+    FinalizationRepository.repairDuplicateFinalizations()
+
+    expect(meta()).toEqual({ generation: before + 1, stale_from_chapter: 2 })
+  })
+
   it('修复失败或还没跑时，只有版本最高的那份定稿算权威，低版本的不能发布', () => {
     insertLegacyFinalized(1, 1, 2, '第一章版本更高的定稿', true, { status: 'pending' })
     insertLegacyFinalized(2, 1, 1, '第一章后写入却版本更低的定稿', true, { status: 'pending' })
