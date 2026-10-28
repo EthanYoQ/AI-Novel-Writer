@@ -20,7 +20,7 @@ import {
 } from '../../shared/import-run'
 import type { StepCallbacks } from '../../stores/workflow-store'
 import type { FinalizedDraftImportDraftReceipt, FinalizedDraftImportReceipt } from '../../shared/finalized-draft-import'
-import { appErrorMessage } from '../../i18n/app-errors'
+import { appErrorMessage, errorCodeOf, importGenerationStopMessage } from '../../i18n/app-errors'
 import { localize } from '../../i18n/core'
 
 export const IMPORT_CHAPTER_PAGE_SIZE = 100
@@ -131,6 +131,7 @@ export interface ImportRunOrchestratorDependencies {
   complete: (runId: string, execution: ImportRunExecutionLease) => Promise<ImportRunSnapshot>
 }
 
+const IMPORT_GENERATION_STAGES = new Set<ImportRunStage>(['global', 'style', 'blueprints'])
 type ImportStagePlanRun = Pick<ImportRunSnapshot, 'purpose' | 'authorInference'>
 
 function stageIndex(run: ImportStagePlanRun, stage: ImportRunStage): number {
@@ -328,18 +329,25 @@ export class ImportRunOrchestrator {
           throw error
         }
       } else {
+        // 生成开始或发送前就被预算、阻断拒绝时报错只有裸码，在这里换成导入的说明，存进运行并抛出同一句；码只进诊断日志。
+        // 只改写生成阶段（global、style、blueprints）：非生成阶段抛出的码保留原报错。
+        const code = IMPORT_GENERATION_STAGES.has(requestedStage) ? errorCodeOf(error instanceof Error ? error.message : error) : undefined
+        const stopped = code && importGenerationStopMessage(run.locale, code, false, run.purpose)
+        if (stopped) callbacks.log(localize(run.locale, `导入停止原因：${code}`, `Import stop reason: ${code}`))
+        const failure = stopped ? new Error(stopped) : error
         try {
           execution.current = await this.dependencies.renewExecution(runId, execution.current)
           await this.dependencies.fail(
             runId,
             requestedStage,
-            error instanceof Error ? error.message : String(error),
+            failure instanceof Error ? failure.message : String(failure),
             execution.current,
           )
         } catch (leaseError) {
           execution.lost = leaseError
-          throw error
+          throw failure
         }
+        throw failure
       }
       throw error
     }

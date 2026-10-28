@@ -1,4 +1,4 @@
-import { localize, translate } from './core'
+import { localize, translate, type MessageKey } from './core'
 import type { Locale } from './types'
 
 /**
@@ -122,6 +122,8 @@ const ERROR_KEYS = {
   GENERATION_AGENT_ACTION_BLOCKED: 'error.generationStopped',
   GENERATION_DIRECTORY_CONTINUATION_BLOCKED: 'error.generationStopped',
   GENERATION_IMPORT_EXECUTION_STALE: 'error.generationStopped',
+  GENERATION_PARENT_INVALID: 'error.generationParentInvalid',
+  GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE: 'error.importPreviousAttemptIncomplete',
   GENERATION_WORKFLOW_SESSION_BUSY: 'error.generationBusy',
   GENERATION_PLOT_OUTLINE_AUTHOR_IN_FLIGHT: 'error.generationBusy',
   GENERATION_KNOWLEDGE_BUSY: 'error.generationKnowledgeBusy',
@@ -297,19 +299,21 @@ function isKnownCode(code: unknown): code is KnownErrorCode {
  */
 const WRAPPED_CODE = /^(?:Error invoking remote method '[^']+': )?(?:[A-Za-z]*Error: )?([A-Z][A-Z0-9_]*)$/u
 
-function readCode(error: unknown): KnownErrorCode | undefined {
+/** 整条 message 就是码（可带 IPC 前缀）时取 message 里的码，再取对象上的 code 或 errorCode。 */
+function codeCandidates(error: unknown): unknown[] {
   const message = typeof error === 'string' ? error : error instanceof Error ? error.message : undefined
-  if (message !== undefined) {
-    const code = WRAPPED_CODE.exec(message.trim())?.[1]
-    if (isKnownCode(code)) return code
-  }
-  if (typeof error !== 'object' || error === null) return undefined
-  const code = 'code' in error
-    ? error.code
-    : 'errorCode' in error
-      ? error.errorCode
-      : undefined
-  return isKnownCode(code) ? code : undefined
+  const wrapped = message === undefined ? undefined : WRAPPED_CODE.exec(message.trim())?.[1]
+  if (typeof error !== 'object' || error === null) return [wrapped]
+  return [wrapped, 'code' in error ? error.code : 'errorCode' in error ? error.errorCode : undefined]
+}
+
+function readCode(error: unknown): KnownErrorCode | undefined {
+  return codeCandidates(error).find(isKnownCode)
+}
+
+/** 报错带的稳定错误码，登记与否都读；至少含一个下划线，ENOENT 这类平台码不算。 */
+export function errorCodeOf(error: unknown): string | undefined {
+  return codeCandidates(error).find((code): code is string => typeof code === 'string' && /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/u.test(code))
 }
 
 /** Electron 在主进程报错前加的调用通道前缀对作者没有意义，兜底说明里去掉。 */
@@ -324,6 +328,51 @@ export function knownAppErrorMessage(locale: Locale, error: unknown): string | u
   const code = readCode(error)
   return code ? translate(locale, ERROR_KEYS[code]) : undefined
 }
+
+const IMPORT_BLOCKED_CODES = new Set(['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'])
+
+/**
+ * 导入里预算用完、生成被阻断或写入失败时的说明。发送前报出时可能是请求次数或活动时长用完（预留时两者用同一个码），说明不区分；活动时长在请求进行中用完（inFlight），
+ * 之后根被阻断，再发起只会得到阻断码。「继续」复用同一份额度：参考小说接着完成只能「重新开始」，说明写明它从第 1 章重做；
+ * 作者原稿不能重新开始，说明写明正文已保存、反推的部分可以手动补齐。
+ * 码不进说明，由调用方记进诊断日志。其余码返回 undefined，交给共用说明。
+ */
+export function importGenerationStopMessage(
+  locale: Locale, code: string, inFlight = false, purpose: 'reference' | 'author-manuscript' = 'reference',
+): string | undefined {
+  const stop = importStopKind(code, inFlight)
+  if (!stop) return undefined
+  if (purpose === 'reference') return translate(locale, REFERENCE_STOP_KEYS[stop])
+  return localize(locale, `${translate(locale, AUTHOR_STOP_REASON_KEYS[stop])}${translate(locale, 'error.authorInferenceStopNext')}`,
+    `${translate(locale, AUTHOR_STOP_REASON_KEYS[stop])} ${translate(locale, 'error.authorInferenceStopNext')}`)
+}
+
+type ImportStopKind = 'budget' | 'activeTime' | 'blocked' | 'storage' | 'previousAttempt'
+
+function importStopKind(code: string, inFlight: boolean): ImportStopKind | undefined {
+  if (code === 'ROOT_BUDGET_EXHAUSTED') return inFlight ? 'activeTime' : 'budget'
+  if (IMPORT_BLOCKED_CODES.has(code)) return 'blocked'
+  if (code === 'GENERATION_STORAGE_FAILED') return 'storage'
+  if (code === 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE') return 'previousAttempt'
+  return undefined
+}
+
+const REFERENCE_STOP_KEYS = {
+  budget: 'error.importBudgetReached',
+  activeTime: 'error.importActiveTimeExhausted',
+  blocked: 'error.importGenerationBlocked',
+  storage: 'error.importStorageFailed',
+  previousAttempt: 'error.importPreviousAttemptIncomplete',
+} as const satisfies Record<ImportStopKind, MessageKey>
+
+/** 作者原稿不能重新开始，原稿正文在反推之前已经提交；说明只写原因，再接作者实际能做的下一步。 */
+const AUTHOR_STOP_REASON_KEYS = {
+  budget: 'error.authorInferenceBudgetReached',
+  activeTime: 'error.authorInferenceActiveTimeExhausted',
+  blocked: 'error.authorInferenceBlocked',
+  storage: 'error.authorInferenceStorageFailed',
+  previousAttempt: 'error.authorInferencePreviousAttemptIncomplete',
+} as const satisfies Record<ImportStopKind, MessageKey>
 
 export function appErrorMessage(locale: Locale, error: unknown): string {
   return knownAppErrorMessage(locale, error)

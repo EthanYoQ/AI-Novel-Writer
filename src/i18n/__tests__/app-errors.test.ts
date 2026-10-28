@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appErrorMessage, displayedErrorMessage, knownAppErrorMessage } from '../app-errors'
+import { appErrorMessage, displayedErrorMessage, errorCodeOf, importGenerationStopMessage, knownAppErrorMessage } from '../app-errors'
 
 describe('localized application errors', () => {
   it('maps stable error codes to localized messages', () => {
@@ -227,4 +227,70 @@ describe('model, model settings and MCP errors from the main process (#474 B6)',
 it('names the output limit setting by its field label when that setting is invalid', () => {
   expect(appErrorMessage('zh-CN', { errorCode: 'MODEL_OUTPUT_LIMIT_INVALID' })).toContain('最大输出 Tokens')
   expect(appErrorMessage('en-US', { errorCode: 'MODEL_OUTPUT_LIMIT_INVALID' })).toContain('max output tokens')
+})
+
+describe('import generation stops (#537)', () => {
+  it('reads app codes but not platform error codes such as ENOENT', () => {
+    expect(errorCodeOf(new Error('GENERATION_STORAGE_FAILED'))).toBe('GENERATION_STORAGE_FAILED')
+    expect(errorCodeOf(Object.assign(new Error('open failed'), { code: 'ENOENT' }))).toBeUndefined()
+  })
+
+  const nextStep = { 'zh-CN': /只能在导入对话框里点「重新开始」，它会从第 1 章重新推演蓝图/u, 'en-US': /choose Start over in the import dialog.*Chapter 1/u } as const
+  const blocked = ['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'] as const
+
+  it.each(['zh-CN', 'en-US'] as const)('tells a request limit, an active-time stop and a blocked generation apart in %s, without codes, and names the only way to finish', locale => {
+    const requestLimit = importGenerationStopMessage(locale, 'ROOT_BUDGET_EXHAUSTED')
+    const activeTime = importGenerationStopMessage(locale, 'ROOT_BUDGET_EXHAUSTED', true)
+    const blockedMessages = blocked.map(code => importGenerationStopMessage(locale, code))
+    const previousAttempt = importGenerationStopMessage(locale, 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
+    const storage = importGenerationStopMessage(locale, 'GENERATION_STORAGE_FAILED', true)
+    const all = [requestLimit, activeTime, ...blockedMessages, previousAttempt, storage]
+    for (const message of all) {
+      expect(message).toBeTruthy()
+      expect(message).not.toMatch(/[A-Z]{3,}_[A-Z]/u)
+      expect(message).toMatch(nextStep[locale])
+      expect(message).not.toBe(knownAppErrorMessage(locale, 'GENERATION_DISPATCH_BLOCKED'))
+    }
+    expect(new Set([requestLimit, activeTime, blockedMessages[0], previousAttempt, storage]).size).toBe(5)
+    expect(storage).not.toBe(knownAppErrorMessage(locale, 'GENERATION_STORAGE_FAILED'))
+    expect(new Set(blockedMessages).size).toBe(1)
+    if (locale === 'en-US') for (const message of all) expect(message).not.toMatch(/\p{Script=Han}/u)
+  })
+
+  it('does not claim the request count ran out when a stop before sending may be the running time', () => {
+    expect(importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED')).toMatch(/^这次导入的请求次数或运行时长已到上限/u)
+    expect(importGenerationStopMessage('en-US', 'ROOT_BUDGET_EXHAUSTED')).toMatch(/^This import reached its limit on model requests or running time/u)
+  })
+
+  it.each(['zh-CN', 'en-US'] as const)('tells an author-manuscript inference stop in %s what is saved and what the author can still do, without Start over', locale => {
+    const stops: [string, boolean][] = [['ROOT_BUDGET_EXHAUSTED', false], ['ROOT_BUDGET_EXHAUSTED', true], ['GENERATION_DISPATCH_BLOCKED', false],
+      ['GENERATION_STORAGE_FAILED', true], ['GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE', false]]
+    const saved = { 'zh-CN': /原稿正文已经导入并保存，只是 AI 反推的设定、文风或蓝图没有做完/u, 'en-US': /manuscript text is imported and saved/u }[locale]
+    const startOver = { 'zh-CN': /重新开始/u, 'en-US': /Start over/u }[locale]
+    for (const [code, inFlight] of stops) {
+      const author = importGenerationStopMessage(locale, code, inFlight, 'author-manuscript')
+      const reference = importGenerationStopMessage(locale, code, inFlight)
+      expect(author).toMatch(saved)
+      expect(author).not.toMatch(startOver)
+      expect(author).not.toMatch(/[A-Z]{3,}_[A-Z]/u)
+      expect(reference).toMatch(startOver)
+      expect(importGenerationStopMessage(locale, code, inFlight, 'reference')).toBe(reference)
+    }
+  })
+
+  it.each(['GENERATION_PROVIDER_FAILED', 'IMPORT_RUN_EXECUTION_STALE', 'DEADLINE_EXHAUSTED'])('leaves %s to the shared explanation', code => {
+    expect(importGenerationStopMessage('zh-CN', code)).toBeUndefined()
+  })
+
+  it.each(['GENERATION_PARENT_INVALID', 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE'])('registers a readable explanation for %s', code => {
+    for (const locale of ['zh-CN', 'en-US'] as const) {
+      const message = knownAppErrorMessage(locale, `Error invoking remote method 'generation:begin': Error: ${code}`)
+      expect(message).toBeTruthy()
+      expect(message).not.toBe(knownAppErrorMessage(locale, 'GENERATION_DISPATCH_BLOCKED'))
+    }
+  })
+
+  it.each(['ROOT_BUDGET_EXHAUSTED', 'GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED'])('keeps the shared explanation of %s for other generation paths', code => {
+    expect(knownAppErrorMessage('zh-CN', code)).toBe('这项生成已停止、暂停或用完了额度，不能再向模型发请求。需要时请重新生成。')
+  })
 })

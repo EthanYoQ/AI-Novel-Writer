@@ -12,7 +12,7 @@ import { seedStageSample } from './scenarios.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
 
-const EMPTY_BOOK = '雨城'
+export const EMPTY_BOOK = '雨城'
 const settle = page => page.waitForTimeout(400)
 
 const INFERRED = Object.freeze({
@@ -42,7 +42,7 @@ const INFERRED_STYLE = '短句为主，雨声与灯影反复出现，叙述贴�
 const BLUEPRINT_BATCH = /本批必须且只能完整返回以下 chapterNumber：([\d、]+)。/u
 
 /** 作者原稿反推的三类请求回合法结果，其余请求照常作答。 */
-function inferenceReply(prompt) {
+export function inferenceReply(prompt) {
   if (prompt.includes('逆向推演出这部小说的完整设定体系')) return JSON.stringify(INFERRED)
   if (prompt.includes('【风格档案】与【仿写指南】')) return INFERRED_STYLE
   const batch = BLUEPRINT_BATCH.exec(prompt)
@@ -54,7 +54,7 @@ function inferenceReply(prompt) {
   })) })
 }
 
-function manuscript(roots, chapters) {
+export function manuscript(roots, chapters) {
   const file = path.join(roots.temp, 'my-manuscript.txt')
   fs.writeFileSync(file, chapters.map(([number, title]) => (
     `第${number}章 ${title}\n沈默在雨夜里把旧案卷宗摊在桌上，一页一页对照证人的口供。窗外的电车铃响过三遍，他终于在第${number}份口供里找到一个说不通的时间。\n`
@@ -62,7 +62,7 @@ function manuscript(roots, chapters) {
   return file
 }
 
-async function seedEmptyBook(context) {
+export async function seedEmptyBook(context) {
   const { app, page, roots, invoke, reload } = context
   const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, roots.projects)).grantId,
     name: EMPTY_BOOK, genre: '', targetAudience: '', writingLanguage: 'zh-CN' }, randomUUID(), null)
@@ -75,7 +75,7 @@ async function seedEmptyBook(context) {
 }
 
 /** 从作品菜单打开导入对话框，选「我的原稿」与原稿文件，等预览出来。 */
-async function openAuthorImport(app, page, bookName, file) {
+export async function openAuthorImport(app, page, bookName, file) {
   await app.evaluate(({ dialog }, selected) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
   }, file)

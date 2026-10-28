@@ -9,6 +9,7 @@ import {
   InferGlobalSettingsCommand as RuntimeInferGlobalSettingsCommand,
 } from '../import-novel.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+import { importGenerationStopMessage } from '../../../../i18n/app-errors'
 import { contextLengthRejectingDependencies } from './context-length-runtime.fixture'
 
 class InferBlueprintsPerChapterCommand extends RuntimeInferBlueprintsPerChapterCommand {
@@ -313,6 +314,65 @@ describe('InferBlueprintsPerChapterCommand', () => {
 
     await expect(command.execute({ step: {}, context: createContext(), callbacks })).rejects.toThrow(/DB 写入失败/)
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert')
+  })
+
+  it('explains a request-limit stop without the code and records the code in the diagnostics log', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const session = { complete: vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const log = vi.fn()
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED')}`)
+    expect((failure as Error).message).not.toContain('ROOT_BUDGET_EXHAUSTED')
+    expect(log.mock.calls.flat().some(line => String(line).includes('ROOT_BUDGET_EXHAUSTED'))).toBe(true)
+  })
+
+  it('does not point an English request-limit stop at the token settings', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const session = { complete: vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const context = createContext()
+    context.uiLocale = 'en-US'
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toContain(importGenerationStopMessage('en-US', 'ROOT_BUDGET_EXHAUSTED'))
+    expect((failure as Error).message).not.toMatch(/token/iu)
+  })
+
+  it('explains a storage failure during blueprint inference with the import storage message', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED', budget: { requestedOutputTokens: 1 } }
+    const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'GENERATION_STORAGE_FAILED')}`)
+    expect((failure as Error).message).toContain('重新开始')
+  })
+
+  it('explains a blueprint stop of an author-manuscript inference without Start over', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const session = { complete: vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const context = createContext()
+    context.data.importRunPurpose = 'author-manuscript'
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED', false, 'author-manuscript')}`)
+    expect((failure as Error).message).not.toContain('重新开始')
   })
 
   it('fails closed with a stable relationship diagnostic when relation is missing', async () => {
@@ -704,6 +764,37 @@ describe('InferGlobalSettingsCommand', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
       'kb:search', 'kb:search', 'kb:search', 'kb:search',
     ])
+  })
+
+  it('explains a storage failure of the global inference with the import storage message and logs the code', async () => {
+    successfulInferenceIpc()
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED' }
+    const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const log = vi.fn()
+
+    const failure = await new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'GENERATION_STORAGE_FAILED', true))
+    expect((failure as Error).message).toContain('重新开始')
+    expect(log.mock.calls.flat().some(line => String(line).includes('GENERATION_STORAGE_FAILED'))).toBe(true)
+  })
+
+  it('explains an in-flight active-time stop of the global inference as an active-time stop and logs the code', async () => {
+    successfulInferenceIpc()
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'ROOT_BUDGET_EXHAUSTED' }
+    const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const log = vi.fn()
+
+    const failure = await new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED', true))
+    expect(log.mock.calls.flat().some(line => String(line).includes('ROOT_BUDGET_EXHAUSTED'))).toBe(true)
   })
 
   it('accepts a valid response in one call', async () => {

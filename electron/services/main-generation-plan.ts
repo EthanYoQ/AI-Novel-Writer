@@ -104,7 +104,16 @@ export function planningGenerationScope(selection: Pick<BeginGenerationRequest, 
   return Object.freeze({ kind: 'architecture', intent, outlineProtocol: PLOT_OUTLINE_PROTOCOL, outlineContent: PLOT_OUTLINE_CONTENT })
 }
 
-export function newMainGenerationPolicy(selection: BeginGenerationRequest, model: ModelProfile): MainGenerationPolicy {
+/**
+ * 一个导入运行的所有 slot 共用第一个 slot 建的根，所以根按整个运行的工作量定额：
+ * global 与 style 各按单个导入 slot 的请求序号上限计，蓝图沿用目录路径的 recoveryCallBound。
+ * 这是兜底上限，不是预留；正常用量约为每 5 章 1 次加 global、style 各 1 次。
+ */
+export function importRunRequestBound(chapterCount: number): number {
+  return 2 * MAIN_GENERATION_POLICY.budget.maxPhysicalRequests + planBlueprintGenerationCost(chapterCount).recoveryCallBound
+}
+
+export function newMainGenerationPolicy(selection: BeginGenerationRequest, model: ModelProfile, importChapterCount?: number): MainGenerationPolicy {
   const planning = planningGenerationScope(selection)
   if (planning) {
     const targets = selection.authorInputs?.filter(input => input.id === 'planning:target-units') ?? []
@@ -114,7 +123,8 @@ export function newMainGenerationPolicy(selection: BeginGenerationRequest, model
   const limits = resolveGenerationCapabilityConstraints(model)
   if (limits.userMaxOutputTokens === null) throw new Error('GENERATION_PLANNING_BUDGET_INVALID')
   const cap = Math.min(limits.userMaxOutputTokens, limits.modelMaxOutputTokens ?? limits.userMaxOutputTokens)
-  const requests = selection.batchIntent ? selection.batchIntent.range.endChapter - selection.batchIntent.range.startChapter + 1
+  const requests = importChapterCount !== undefined ? importRunRequestBound(importChapterCount)
+    : selection.batchIntent ? selection.batchIntent.range.endChapter - selection.batchIntent.range.startChapter + 1
     : planning?.kind === 'directory'
     ? planBlueprintGenerationCost(planning.requestedRange.endChapter - planning.requestedRange.startChapter + 1).recoveryCallBound
     : planning?.kind === 'architecture' ? planning.intent.priorSteps.reduce((sum, step) => sum + (step === 'premise' ? 1 : step === 'worldbuilding' ? 2

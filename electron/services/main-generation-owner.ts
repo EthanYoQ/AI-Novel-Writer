@@ -90,10 +90,12 @@ export interface MainGenerationOwnerDependencies {
 
 interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
 
-const RENDERER_SAFE_PROVIDER_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR',
-  ...TERMINAL_PROVIDER_FAILURE_CODES] as const satisfies readonly NonNullable<GenerationAttemptReceipt['failureCode']>[]
+/** 回执里交给渲染端的失败码：供应商与网络失败、上下文超长，以及阻断根的活动时长用完、写入失败。 */
+const RENDERER_SAFE_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR', ...TERMINAL_PROVIDER_FAILURE_CODES,
+  'ROOT_BUDGET_EXHAUSTED', 'GENERATION_STORAGE_FAILED'] as const satisfies readonly NonNullable<GenerationAttemptReceipt['failureCode']>[]
 
-export function providerStreamFailureCode(error: string): typeof RENDERER_SAFE_PROVIDER_FAILURE_CODES[number] {
+/** Provider 流式失败的分类：上下文超长单列；请求或读流被传输层拒绝、拿不到响应流、流在完成标记前断开与原生网络错误都算网络失败，其余算供应商失败。 */
+export function providerStreamFailureCode(error: string): 'NETWORK_ERROR' | 'GENERATION_PROVIDER_FAILED' | typeof TERMINAL_PROVIDER_FAILURE_CODES[number] {
   if (error === 'LLM_CONTEXT_LENGTH_EXCEEDED') return 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
   return error === 'LLM_STREAM_NETWORK_FAILED' || error === 'LLM_STREAM_UNREADABLE' || error === 'LLM_STREAM_INCOMPLETE'
     || /fetch failed|failed to fetch|network|ECONNRESET|ETIMEDOUT/iu.test(error)
@@ -474,7 +476,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         selection = { ...selection, authorInputs: [...(selection.authorInputs ?? []).filter(input => input.id !== 'planning:target-units'),
           { id: 'planning:target-units', text: String(targetUnits) }] }
       }
-      let policy = parentRootActionId ? rootPolicy(parentRootActionId) : newMainGenerationPolicy(selection, deps.leases.resolve(lease.leaseId))
+      let policy = parentRootActionId ? rootPolicy(parentRootActionId) : newMainGenerationPolicy(selection, deps.leases.resolve(lease.leaseId), importAdmission?.chapterCount)
       if (parentRootActionId && agentWorkflow && scope) policy = { ...policy, planning: scope }
       else if (parentRootActionId && policy.planning) {
         if (continuation && policy.planning.kind === 'directory' && scope?.kind === 'directory') {
@@ -537,7 +539,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const finishReason: LLMFinishReason = receipt.failureCode ? 'error'
       : ['stop', 'length', 'content_filter', 'error', 'unknown'].includes(stored ?? '') ? stored as LLMFinishReason : 'unknown'
     const evidence = frozenModel.capabilityEvidence
-    const safeFailureCode = RENDERER_SAFE_PROVIDER_FAILURE_CODES.find(code => code === receipt.failureCode)
+    const safeFailureCode = RENDERER_SAFE_FAILURE_CODES.find(code => code === receipt.failureCode)
     const details: GenerationAttemptReceipt = { purpose: task.purpose,
       ...(receipt.diagnostics ? { diagnostics: receipt.diagnostics } : {}),
       ...(safeFailureCode ? { failureCode: safeFailureCode } : {}),

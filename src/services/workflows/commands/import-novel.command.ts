@@ -1,4 +1,4 @@
-import { displayedErrorMessage, englishWithReason } from '../../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason, importGenerationStopMessage } from '../../../i18n/app-errors'
 import type { NovelConfig } from '../../../shared/ipc-channels'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../../shared/import-generation'
 import type { BeginGenerationRequest } from '../../../shared/generation-owner-contract'
@@ -15,6 +15,7 @@ import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
   type CommandExecuteParams,
+  type LLMCompletion,
   type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
@@ -76,6 +77,11 @@ export function importGenerationSelection(context: WorkflowContext, stage: Impor
   if (!slot) return undefined
   if (slot.stage !== stage || !context.data.importRunExecution) throw new Error('IMPORT_GENERATION_EXECUTION_REQUIRED')
   return { importSlot: slot, importExecution: context.data.importRunExecution as NonNullable<BeginGenerationRequest['importExecution']> }
+}
+
+/** 导入运行的用途：作者原稿反推停下时的说明与参考小说不同。 */
+function importRunPurpose(context: WorkflowContext): 'reference' | 'author-manuscript' {
+  return context.data.importRunPurpose === 'author-manuscript' ? 'author-manuscript' : 'reference'
 }
 
 export function frozenImportContext(context: WorkflowContext): ImportGenerationContext | undefined {
@@ -171,6 +177,22 @@ export class ImportBlueprintPostCommitSyncError extends Error {
   }
 }
 
+/**
+ * 导入的单次调用（global、style）在请求进行中用完活动时长或写入失败时，回执带 ROOT_BUDGET_EXHAUSTED 或 GENERATION_STORAGE_FAILED：
+ * 换成对应说明，码只进诊断日志。
+ */
+export function assertImportCompletionNotStopped(
+  completion: Pick<LLMCompletion, 'receipt'>,
+  callbacks: Pick<CommandExecuteParams['callbacks'], 'log'>,
+  context: CommandExecuteParams['context'],
+): void {
+  const code = completion.receipt.failureCode
+  const stopped = code && importGenerationStopMessage(context.uiLocale, code, true, importRunPurpose(context))
+  if (!stopped) return
+  callbacks.log(workflowUiText(context, `导入停止原因：${code}`, `Import stop reason: ${code}`))
+  throw new Error(stopped)
+}
+
 // =================================================================
 // 1. 向量采样 + AI 推演全局配置/架构/角色
 // =================================================================
@@ -264,6 +286,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       },
       context,
     )
+    assertImportCompletionNotStopped(correction, callbacks, context)
     if (correction.finishReason !== 'stop') throw this.createIncompleteCompletionError(correction.finishReason)
     return decodeImportInferenceWithEndpointDelta(rawResult, correction.content, text)
   }
@@ -404,6 +427,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       },
       context,
     )
+    assertImportCompletionNotStopped(initial, callbacks, context)
     if (initial.finishReason !== 'stop') throw this.createIncompleteCompletionError(initial.finishReason)
     let rawResult = initial.content
     if (isRepairableDirectJsonSyntaxFailure(rawResult)) {
@@ -429,6 +453,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         },
         context,
       )
+      assertImportCompletionNotStopped(repair, callbacks, context)
       if (repair.finishReason !== 'stop') throw this.createIncompleteCompletionError(repair.finishReason)
       if (!preservesStructuredJsonEvidence(rawResult, repair.content)) {
         throw new Error(text(
@@ -754,9 +779,13 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     })
     if (!batch.ok) {
       if (batch.failure.terminal) throw batch.failure.terminal
+      const { errorCode } = batch.failure
+      if (errorCode) callbacks.log(text(`蓝图推演停止原因：${errorCode}`, `Blueprint inference stop reason: ${errorCode}`))
+      const reason = (errorCode && importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline', importRunPurpose(context)))
+        || displayedErrorMessage(context.uiLocale, batch.failure.message)
       throw new Error(text(
-        `蓝图推演失败：${displayedErrorMessage(context.uiLocale, batch.failure.message)}`,
-        englishWithReason(`Blueprint inference failed (${batch.failure.reason}).`, displayedErrorMessage(context.uiLocale, batch.failure.message)),
+        `蓝图推演失败：${reason}`,
+        englishWithReason(`Blueprint inference failed (${batch.failure.reason}).`, reason),
       ))
     }
 

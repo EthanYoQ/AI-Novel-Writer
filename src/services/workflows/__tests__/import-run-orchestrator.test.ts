@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/import-run'
 import { createImportRunChapterBatchCheckpointId } from '../../../shared/import-run'
 import type { FinalizedDraftImportReceipt } from '../../../shared/finalized-draft-import'
+import { importGenerationStopMessage } from '../../../i18n/app-errors'
 import {
   IMPORT_CHAPTER_PAGE_SIZE,
   IMPORT_KNOWLEDGE_BATCH_SIZE,
@@ -953,6 +954,63 @@ describe('ImportRunOrchestrator failure copy follows the import run locale', () 
 
     expect((failure as Error).message).toContain('missing Chapter 2')
     expect((failure as Error).message).not.toMatch(han)
+    expect(getRun().lastError).toBe((failure as Error).message)
+  })
+
+  it.each([
+    ['zh-CN', 'blueprints', "Error invoking remote method 'generation:begin': Error: GENERATION_DIRECTORY_CONTINUATION_BLOCKED", 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED'],
+    ['en-US', 'global', 'ROOT_BUDGET_EXHAUSTED', 'ROOT_BUDGET_EXHAUSTED'],
+  ] as const)('stores and throws the %s import stop explanation and logs the code for diagnostics when %s generation stops on %s', async (locale, stage, raw, code) => {
+    const { deps, getRun } = harness(5, { locale, stage })
+    deps.inferGlobal = vi.fn(async () => { throw new Error(raw) })
+    deps.inferBlueprints = vi.fn(async () => { throw new Error(raw) })
+    const log = vi.fn()
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', stage, 'test-runner', { cancelled: false }, { ...callbacks, log })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(importGenerationStopMessage(locale, code))
+    expect((failure as Error).message).not.toContain(code)
+    expect(getRun()).toMatchObject({ status: 'failed', lastError: (failure as Error).message })
+    expect(log.mock.calls.flat().some(line => String(line).includes(code))).toBe(true)
+  })
+
+  it.each([
+    ['an unrelated provider failure', new Error('provider unavailable')],
+    ['a step explanation that carries a stop code', Object.assign(new Error('蓝图推演失败：活动时长用完（ROOT_BUDGET_EXHAUSTED）'), { code: 'ROOT_BUDGET_EXHAUSTED' })],
+  ])('keeps %s as it was', async (_case, thrown) => {
+    const { deps, getRun } = harness(1, { stage: 'global' })
+    deps.inferGlobal = vi.fn(async () => { throw thrown })
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'global', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+    expect(failure).toBe(thrown)
+    expect(getRun().lastError).toBe(thrown.message)
+  })
+
+  it('keeps a stop code raised outside the generation stages as it was', async () => {
+    const { deps, getRun } = harness(1, { stage: 'refresh' })
+    const thrown = new Error('GENERATION_STORAGE_FAILED')
+    deps.refresh = vi.fn(async () => { throw thrown })
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'refresh', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+    expect(failure).toBe(thrown)
+    expect(getRun().lastError).toBe(thrown.message)
+  })
+
+  it('gives an author-manuscript inference stop the author explanation instead of Start over', async () => {
+    const { deps, getRun } = harness(1, { purpose: 'author-manuscript', authorInference: true, stage: 'global', locale: 'zh-CN' })
+    deps.inferGlobal = vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') })
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'global', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+    expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED', false, 'author-manuscript'))
+    expect((failure as Error).message).not.toContain('重新开始')
     expect(getRun().lastError).toBe((failure as Error).message)
   })
 

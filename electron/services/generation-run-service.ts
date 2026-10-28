@@ -267,7 +267,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 }
                 else retainInterruptedAgentText();
                 flush();
-                receipt = deps.repository.settle(attemptId, usage, storageFailed ? 'error' : result.finishReason, undefined, diagnostics);
+                receipt = deps.repository.settle(attemptId, usage, storageFailed ? 'error' : result.finishReason, storageFailed ? 'GENERATION_STORAGE_FAILED' : undefined, diagnostics);
             }
             catch (error) {
                 if (diagnostics && !diagnostics.endReason) diagnostics = { ...diagnostics, ...safeTransportError(error),

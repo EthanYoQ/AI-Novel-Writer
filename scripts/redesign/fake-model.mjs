@@ -64,7 +64,32 @@ export function fixturePlotTree(facts) {
   ] }
 }
 
-function responseFor(prompt, { extraction, plotTree, review, characterState }) {
+const IMPORT_CARD = { gender: '未知', age: '30', appearance: '风衣', personality: '谨慎', background: '旧港居民', abilities: '观察',
+  motivation: '查明灯塔的秘密', relationships: [], arc: '从旁观到行动', notes: '导入推演',
+  currentState: { location: '旧港', powerLevel: '普通', physicalState: '正常', mentalState: '警觉', keyItems: '地图', recentEvents: '找到旧信', updatedAtChapter: 0 } }
+
+/** 参考小说导入的全局推演与分批蓝图推演；不开时与以前一样回正文。 */
+function importReply(prompt) {
+  if (prompt.includes('【不可变导入推演 JSON 合同】')) {
+    return { kind: 'import-global', content: JSON.stringify({
+      novelConfig: { genre: '悬疑', subGenre: '海港', targetAudience: '成年读者', plotStructure: 'three_act', narrativePOV: 'third_limited',
+        coreOutline: '林岚追查灯塔与沉船的旧事', worldSetting: '雾中的旧港', goldenFinger: '无', protagonistProfile: '旧港测绘师', globalGuidance: '克制叙事' },
+      architectureFiles: { premise: '灯塔里藏着沉船的真相', worldbuilding: '潮汐与雾钟主宰旧港', synopsis: '林岚一章章揭开沉船旧事' },
+      characterCards: [['林岚', 'protagonist'], ['周叔', 'supporting'], ['沈舟', 'antagonist']].map(([name, role]) => ({ name, role, ...IMPORT_CARD })),
+    }) }
+  }
+  const batch = /本批必须且只能完整返回以下 chapterNumber：([\d、]+)。/u.exec(prompt)
+  if (batch) {
+    return { kind: 'import-blueprints', content: JSON.stringify({ blueprints: batch[1].split('、').map(Number).map(chapterNumber => ({
+      chapterNumber, title: `第${chapterNumber}章`, role: '发展', purpose: '推进灯塔线索', keyEvents: '林岚沿着潮汐表继续追查沉船的来历',
+      characters: ['林岚'], relationships: [], suspenseHook: '雾钟又在深夜响起' })) }) }
+  }
+  return null
+}
+
+function responseFor(prompt, { extraction, plotTree, review, characterState, importInference }) {
+  const imported = importInference ? importReply(prompt) : null
+  if (imported) return imported
   if (prompt.includes('不可变小说配置 JSON 合同') || prompt.includes('Immutable novel-configuration JSON contract')) {
     return { kind: 'config', content: JSON.stringify(FIXTURE_CONFIG) }
   }
@@ -109,6 +134,7 @@ export async function startFakeModel(diagnostics) {
   let review = null
   let characterState = null
   let keylessEmbeddings = false
+  let importInference = false
   let contextLengthRejection = null
   /** 每次被接受的嵌入请求带的 Authorization 头（没有时为 null），场景据此确认本机检索模型真的没带 Key。 */
   const embeddingAuthorizations = []
@@ -146,6 +172,8 @@ export async function startFakeModel(diagnostics) {
   const replyCharacterState = build => { characterState = build }
   /** 之后不带 Key 的嵌入请求也照常回向量，模拟不需要 Key 的本机检索服务；传 false 恢复拒绝。 */
   const acceptKeylessEmbeddings = (accepted = true) => { keylessEmbeddings = accepted }
+  /** 之后的参考小说导入：全局推演回一份合法 JSON（三张角色卡），分批蓝图推演按本批章号回齐全的蓝图。 */
+  const replyImport = () => { importInference = true }
   const rejectContextLength = (rejected = true) => {
     if (!rejected) { contextLengthRejection = null; return }
     const sample = new URL('../../electron/llm/__tests__/provider-context-length-samples.json', import.meta.url)
@@ -185,7 +213,7 @@ export async function startFakeModel(diagnostics) {
       return
     }
     const prompt = (body.messages ?? []).map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n')
-    const reply = responseFor(prompt, { extraction, plotTree, review, characterState })
+    const reply = responseFor(prompt, { extraction, plotTree, review, characterState, importInference })
     const { kind } = reply
     const content = kind === 'character-state' && brokenCharacterState ? '角色状态暂时无法整理。' : reply.content
     chats.push({ kind, model: body.model, messages: body.messages })
@@ -213,6 +241,6 @@ export async function startFakeModel(diagnostics) {
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   server.unref()
-  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState, acceptKeylessEmbeddings, rejectContextLength, embeddingAuthorizations,
+  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState, acceptKeylessEmbeddings, replyImport, rejectContextLength, embeddingAuthorizations,
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(() => resolve()) }) }
 }
