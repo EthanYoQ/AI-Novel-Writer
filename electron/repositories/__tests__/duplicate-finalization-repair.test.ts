@@ -99,4 +99,11 @@ describe('遗留的同章重复定稿', () => {
     expect(FinalizationRepository.repairDuplicateFinalizations()).toEqual({ chapters: [] })
     expect(statuses()).toEqual(before)
   })
+
+  it('修复失败或还没跑时，只有版本最高的那份定稿算权威，低版本的不能发布', () => {
+    insertLegacyFinalized(1, 1, 2, '第一章版本更高的定稿', true, { status: 'pending' })
+    insertLegacyFinalized(2, 1, 1, '第一章后写入却版本更低的定稿', true, { status: 'pending' })
+
+    expect([1, 2].map(id => FinalizationRepository.isAuthoritative(id))).toEqual([true, false])
+  })
 })
