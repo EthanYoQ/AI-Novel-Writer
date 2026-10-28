@@ -511,6 +511,9 @@ export const RUN_SCENARIOS = {
     await recoveryReadsDone(context.app, context.page)
     assert.equal(await runSheet.sheet(context.page).getByText(/第3章候选/).count(), 0, '重开作品后点过「不再显示」的候选仍不列出')
     await context.shoot('run-hide-draft-after-restart')
+    const session = await reopenForReading(context, context.samplePath)
+    const runs = await context.invoke(context.page, 'generation:list', session)
+    assert.ok(runs.some(run => run.operation === 'chapter-draft' && run.status !== 'running'), '「不再显示」只改显示，第 3 章的生成运行仍在库里')
   } },
 
   /** #441 后续：第 3 章正在用夹具模型写（卡在假模型门上），在设置里改这个模型后保存：先提示，等生成结束再保存则不保存、表单留着。 */
