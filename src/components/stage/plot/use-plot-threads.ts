@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { canExecuteGraph, createGraphGeneration } from '../../../services/graph-generation'
 import type { MainGenerationRunHandle, MainGenerationRunSummary } from '../../../services/generation/generation-runtime'
 import { ipc } from '../../../services/ipc-client'
+import { isGenerationModel, preferredGenerationModelId } from '../../../services/workflows/chapter-write-launch'
 import type {
   NarrativeThreadCandidateGenerator,
   NarrativeThreadEventCandidate,
@@ -19,7 +20,7 @@ import {
   type PlotTreeResponseErrorCode,
 } from '../../../services/plot-tree-generator'
 import type { GraphGenerationInput, GraphGenerationRecovery } from '../../../shared/graph-generation'
-import type { DatabaseChannels, ModelProfile } from '../../../shared/ipc-channels'
+import type { DatabaseChannels } from '../../../shared/ipc-channels'
 import {
   resolveNarrativeThreadDormantThreshold,
   type NarrativeThreadEventType,
@@ -27,6 +28,7 @@ import {
   type NarrativeThreadView,
 } from '../../../shared/narrative-thread'
 import type { PlotTreeSnapshot, PlotTreeSourceBundle, PlotTreeSourceReference } from '../../../shared/plot-tree'
+import { routeStageModel } from '../../../shared/model-stage-routing'
 import { formatResourceUri } from '../../../shared/project-paths'
 import { resolveWritingLanguage } from '../../../shared/writing-language'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -183,10 +185,6 @@ export interface BoundEventCandidate extends NarrativeThreadEventCandidate {
   chapterNumber: number
 }
 
-function isGenerationModel(model: ModelProfile): boolean {
-  return model.purposes.includes('generation')
-}
-
 /**
  * 剧情树与伏笔线索的数据：线索计划的增删改、定稿事件确认、剧情树生成与清除、AI 候选与生成记录恢复。
  * 「剧情与伏笔」页用它；危险操作的确认由页面呈现。
@@ -200,7 +198,7 @@ export function usePlotThreads(projectKey: string, {
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
   const models = useLLMStore(s => s.models)
-  const defaultModelId = useLLMStore(s => s.defaultModelId)
+  const planningModelId = useLLMStore(s => routeStageModel('planning', s).modelId)
   const loadedModels = useLLMStore(s => s.loaded)
   const loadModels = useLLMStore(s => s.loadModels)
   const [threads, setThreads] = useState<NarrativeThreadView[]>([])
@@ -240,9 +238,7 @@ export function usePlotThreads(projectKey: string, {
     currentProject?.novelConfig.narrativeThreadDormantChapterThreshold,
   )
   const generationModels = models.filter(isGenerationModel)
-  const fallbackModelId = generationModels.some(model => model.id === defaultModelId)
-    ? defaultModelId
-    : generationModels[0]?.id ?? null
+  const fallbackModelId = preferredGenerationModelId(models, planningModelId)
   const selectedModelId = aiModelId ?? fallbackModelId
   const selectedModel = generationModels.find(model => model.id === selectedModelId)
   const selectedPlotModelId = plotModelId ?? fallbackModelId
