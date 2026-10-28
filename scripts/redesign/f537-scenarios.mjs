@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import * as runSheet from './pages/run-sheet.mjs'
 import * as stage from './pages/stage.mjs'
+import { EMPTY_BOOK, inferenceReply, manuscript, openAuthorImport, seedEmptyBook } from './import-infer-scenarios.mjs'
 import { seedStageSample } from './scenarios.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
 
@@ -147,6 +148,37 @@ async function stopBeforeSend(context) {
   return { stepError }
 }
 
+/** 作者原稿反推在蓝图阶段发送前被根预算拒绝：说明写正文已保存、可手动补齐，不指向点不了的「重新开始」。 */
+async function stopAuthorInference(context) {
+  const { app, page, roots, fake, shoot } = context
+  fake.replyReview(inferenceReply)
+  const hold = await holdBlueprintDispatch(app, 1)
+  const dialog = await openAuthorImport(app, page, EMPTY_BOOK, manuscript(roots, [[1, '匿名信'], [2, '茶馆'], [3, '河对岸']]))
+  await dialog.getByRole('button', { name: '确认导入（3 章）', disabled: false }).click()
+  await dialog.waitFor({ state: 'hidden' })
+  try {
+    await hold.waitHeld()
+    const opened = await app.evaluate(() => globalThis.__driveOpened)
+    assert.ok(opened?.projectPath, '记下了界面打开作品的路径')
+    context.samplePath = opened.projectPath
+    writeDb(context, db => {
+      const root = importRoot(db)
+      db.prepare('UPDATE generation_roots SET active_elapsed_ms=? WHERE root_action_id=?').run(JSON.parse(root.budget_json).maxActiveElapsedMs, root.root_action_id)
+    })
+  } finally {
+    await hold.release()
+  }
+  await runSheet.waitUntilOpen(page)
+  const stepError = await failedStepError(page)
+  await page.waitForTimeout(400)
+  await shoot('f537-author-stop-card')
+  assert.match(stepError, /这次导入的请求次数或运行时长已到上限，这一批没有发送/u, stepError)
+  assert.match(stepError, /原稿正文已经导入并保存，只是 AI 反推的设定、文风或蓝图没有做完。已导入的正文不受影响，可以在设定页和蓝图页手动补齐/u, stepError)
+  assert.doesNotMatch(stepError, /重新开始/u, '作者原稿不指向重新开始')
+  assert.doesNotMatch(stepError, /[A-Z]{3,}_[A-Z]/u, '运行卡片的说明不露错误码')
+  return { stepError }
+}
+
 export const F537_SCENARIOS = {
   // 252 章参考小说导入当前作品：知识库、全局、文风、全部蓝图一次跑完，导入根按 252 章定额（770 次、86 625 000 毫秒）。
   'f537-import-252': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
@@ -185,4 +217,5 @@ export const F537_SCENARIOS = {
   } },
   'f537-stop-time': { model: true, shell: 'stage', setup: seedStageSample, run: stopOnActiveTime },
   'f537-stop-before-send': { model: true, shell: 'stage', setup: seedStageSample, run: stopBeforeSend },
+  'f537-author-stop': { model: true, shell: 'stage', setup: seedEmptyBook, run: stopAuthorInference },
 }
