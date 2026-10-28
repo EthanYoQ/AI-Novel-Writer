@@ -843,6 +843,25 @@ describe('作者原稿反推的建议', () => {
     expect(host!.querySelector('[aria-label="Inferred suggestions"] [role="alert"]')).toBeNull()
   })
 
+  it('会话换了以后，新会话读完之前不再显示旧会话的建议', async () => {
+    arrange({ genre: '武侠' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeTruthy())
+
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:import-run-effect-receipt-get'
+      ? new Promise(() => {}) : base(channel, ...args))
+    const next = { ...session, leaseId: '重新打开' }
+    setActiveProjectSessionContext(next)
+    await act(async () => useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, sessionLease: next.leaseId } })))
+
+    expect(button('采用「类型」的反推结果')).toBeUndefined()
+    expect(host!.querySelector('[aria-label="反推建议"]')).toBeNull()
+  })
+
   it('被截断的长值可以展开看全文再收起，没被截断的短值不给展开控件', async () => {
     const outline = ['第一幕：旧港来信', '第二幕：雾钟早鸣', '第三幕：灯塔失火', '第四幕：账册下落', '第五幕：潮退真相', '第六幕：林岚离港'].join('\n')
     arrange({ genre: '武侠', coreOutline: '作者自己的大纲' }, {
