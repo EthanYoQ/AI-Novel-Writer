@@ -245,6 +245,54 @@ describe('剧情与伏笔', () => {
     expect(modelSelect().value).toBe('m2')
   })
 
+  describe('「规划」环节的模型', () => {
+    const TWO_MODELS = [
+      { id: 'm1', name: '夹具模型', modelName: 'fixture', purposes: ['generation'] },
+      { id: 'm2', name: '长文模型', modelName: 'fixture-long', purposes: ['generation'] },
+    ]
+    const select = (label: string) => document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)
+    const begunWith = () => invoke.mock.calls
+      .filter(([channel]) => channel === 'graph-generation:begin')
+      .map(([, request]) => (request as { modelId: string }).modelId)
+
+    async function preselected(view: 'plot-tree' | 'plans', label: string) {
+      await render(view)
+      return vi.waitFor(() => {
+        const found = select(label)
+        expect(found?.value).toBeTruthy()
+        return found!.value
+      })
+    }
+
+    it('另有指定时，剧情树预选它并按它整理', async () => {
+      useLLMStore.setState({ models: TWO_MODELS as never, stageModelIds: { planning: 'm2' } })
+      expect(await preselected('plot-tree', '本次整理用的模型')).toBe('m2')
+      await click('刷新剧情树')
+      await vi.waitFor(() => expect(begunWith()).toEqual(['m2']))
+    })
+
+    it('另有指定时，让 AI 识别定稿事件预选它并按它识别', async () => {
+      useLLMStore.setState({ models: TWO_MODELS as never, stageModelIds: { planning: 'm2' } })
+      expect(await preselected('plans', '本次识别用的模型')).toBe('m2')
+      await click('「灰色的信是谁寄的」的更多操作')
+      await click('记录定稿里的变化')
+      await click('让 AI 识别')
+      await vi.waitFor(() => expect(begunWith()).toEqual(['m2']))
+    })
+
+    it.each([
+      ['用默认模型', 'm1', 'm1'],
+      ['默认模型不可用时用第一个生成模型', null, 'm1'],
+      ['默认模型是第二个时用它', 'm2', 'm2'],
+    ])('没有另外指定时，剧情树与伏笔识别照旧%s', async (_label, defaultModelId, expected) => {
+      useLLMStore.setState({ models: TWO_MODELS as never, defaultModelId })
+      expect(await preselected('plot-tree', '本次整理用的模型')).toBe(expected)
+      await act(async () => root!.unmount())
+      root = createRoot(host!)
+      expect(await preselected('plans', '本次识别用的模型')).toBe(expected)
+    })
+  })
+
   it('作品重新打开后，上一次打开时迟到的线索列表不会显示出来', async () => {
     let releaseOld: () => void = () => {}
     const plain = invoke.getMockImplementation()!
