@@ -1028,7 +1028,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const runs = runSummaries()
     for (const run of runs) {
       const kind = RECOVERY_KIND.get(run.operation ?? '')
-      if (!kind || kind === 'draft' && run.batchId) continue
+      if (!kind || (kind === 'draft' && run.batchId)) continue
       try { collect[kind](run.handle) } catch { list.partial = true }
     }
     const batchRoots = runs.filter(item => item.batchRoot)
