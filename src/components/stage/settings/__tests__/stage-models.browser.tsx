@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { userEvent } from 'vitest/browser'
 import type { StoreApi } from 'zustand'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -164,7 +163,8 @@ describe('分工模型设置页', () => {
     expect(invoke).toHaveBeenCalledWith('llm:set-stage-model', { stage: 'review', modelId: 'flash' })
   })
 
-  it('唯一的生成模型不是默认模型时，用键盘选中后保存期间与保存后焦点都留在下拉上', async () => {
+  // Windows 与 Linux 上方向键在收起的下拉里直接换选项并触发 change；macOS 会弹出选项面板，所以这里直接派发 change。
+  it('唯一的生成模型不是默认模型时，聚焦的下拉换了模型后，保存期间与保存后焦点都留在下拉上', async () => {
     useLLMStore.setState({ models: [FLASH, BGE], defaultModelId: null })
     let finishSave: () => void = () => undefined
     invoke.mockImplementation((channel, request) => channel === 'llm:set-stage-model'
@@ -172,8 +172,8 @@ describe('分工模型设置页', () => {
       : Promise.resolve(undefined))
     await mount()
     select('review').focus()
-    await userEvent.keyboard('{ArrowDown}')
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('llm:set-stage-model', { stage: 'review', modelId: 'flash' }))
+    await choose('review', 'flash')
+    expect(invoke).toHaveBeenCalledWith('llm:set-stage-model', { stage: 'review', modelId: 'flash' })
     expect(document.activeElement).toBe(select('review'))
     await act(async () => finishSave())
     expect(select('review').value).toBe('flash')
