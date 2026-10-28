@@ -9,6 +9,7 @@ import {
   InferGlobalSettingsCommand as RuntimeInferGlobalSettingsCommand,
 } from '../import-novel.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+import { contextLengthRejectingDependencies } from './context-length-runtime.fixture'
 
 class InferBlueprintsPerChapterCommand extends RuntimeInferBlueprintsPerChapterCommand {
   constructor() { super(workflowRuntimeDependencies) }
@@ -273,6 +274,16 @@ describe('InferBlueprintsPerChapterCommand', () => {
     expect(repairBuiltIn).not.toMatch(CJK_TEXT)
     expect(callbacks.log).toHaveBeenCalledWith('开始分批推演蓝图（共 1 章，预计至多 1 次调用）...')
     expect(callbacks.log).toHaveBeenCalledWith('  正在推演第 1–1 章...')
+  })
+
+  it('fails with the registered code when the provider rejects blueprint inference as too long', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const context = createContext()
+    context.data.chapters = [{ number: 1, title: '启程', content: '主角走出家门。', wordCount: 7 }]
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand(contextLengthRejectingDependencies(workflowRuntimeDependencies)).execute({ step: {}, context, callbacks })
+      .then(() => null, error => error as Error & { code?: string })
+    expect(failure?.message).toBe('GENERATION_CONTEXT_LENGTH_EXCEEDED')
+    expect(failure?.code).toBe('GENERATION_CONTEXT_LENGTH_EXCEEDED')
   })
 
   it('performs zero per-chapter writes and throws when the one range commit fails', async () => {

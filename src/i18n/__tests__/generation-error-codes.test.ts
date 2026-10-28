@@ -738,6 +738,7 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'CONTINUITY_ROSTER_NAME_CONFLICT',
     'CONTINUITY_SOURCE_STALE',
     'GENERATION_BLUEPRINTS_CLEARED',
+    // 新代码不再抛出（ADR-0023），只用来把旧版本留下的记录归到容量预检；旧版本里它也只在主进程内部，不经工作流失败面板。
     'GENERATION_INPUT_CAPACITY_EXCEEDED',
     'GENERATION_KNOWLEDGE_SPACE_NOT_MATCHED',
     // 主进程中止请求时用的 AbortSignal.reason，只用来给调用记录分类，不会作为报错交给界面。
@@ -782,10 +783,11 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     // 主进程生成经生成 IPC 统一成 GENERATION_REQUEST_FAILED，这两个码只进日志。
     'MODEL_EXECUTION_LEASE_EXPIRED',
     'MODEL_EXECUTION_LEASE_INVALID',
-    // 模型供应商的请求与响应流失败（#474 B6）：流式失败只进调用记录，主进程生成按码分成网络失败或
-    // GENERATION_PROVIDER_FAILED，渲染端生成运行时统一成租约请求失败；非流式失败只有连接测试显示，
-    // 由 llm-controller 带上 HTTP 状态与供应商返回按界面语言写成说明。
+    // 模型供应商的请求与响应流失败（#474 B6）：流式失败只进调用记录，主进程生成按码分成网络失败、
+    // 上下文超长（GENERATION_CONTEXT_LENGTH_EXCEEDED）或 GENERATION_PROVIDER_FAILED，渲染端生成运行时统一成租约请求失败；
+    // 非流式失败只有连接测试显示，由 llm-controller 带上 HTTP 状态与供应商返回按界面语言写成说明。
     'LLM_CANCELLED',
+    'LLM_CONTEXT_LENGTH_EXCEEDED',
     'LLM_REQUEST_FAILED',
     'LLM_RESPONSE_INCOMPLETE',
     'LLM_STREAM_FAILED',

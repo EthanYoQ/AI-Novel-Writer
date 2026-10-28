@@ -2,7 +2,7 @@ import { chapterTimeContinuity } from '../../../shared/chapter-time-continuity'
 import { appErrorMessage, displayedErrorMessage, englishWithReason } from '../../../i18n/app-errors'
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
-import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
+import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock, draftShortOutlineTask } from '../../../shared/draft-short-outline'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
@@ -38,10 +38,11 @@ import {
   type CreateGenerationRuntimeOptions,
   type GenerationRuntime,
 } from '../../generation/generation-runtime'
-import type {
-  GenerationAttemptReceipt,
-  GenerationOutcome,
-  GenerationSession,
+import {
+  throwIfTerminalProviderFailure,
+  type GenerationAttemptReceipt,
+  type GenerationOutcome,
+  type GenerationSession,
 } from '../../generation/generation-harness'
 import type { WritingLanguage } from '../../../shared/writing-language'
 import type { FinalizedContinuityProjection } from '../../../shared/finalized-continuity'
@@ -979,9 +980,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           let outlined: GenerationOutcome | undefined
           if (!recovery) {
             callbacks.log(uiText('生成短细纲...', 'Generating a short chapter outline...'))
-            outlined = await draftingSession.complete({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text',
-              reasoningStage: 'planning', budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: 500, segmentable: false },
-              messages: [{ role: 'user', content: outlinePrompt }] }, { signal: cancellation.signal })
+            outlined = await draftingSession.complete(draftShortOutlineTask(writingLanguage, outlinePrompt), { signal: cancellation.signal })
             logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, outlined.receipt)
             if (outlined.status === 'completed' && outlined.finishReason === 'stop' && outlined.content.trim()) {
               shortOutline = outlined.content
@@ -998,6 +997,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             })
             outlined = retried.outcome
             logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, outlined.receipt)
+            throwIfTerminalProviderFailure(outlined.receipt)
             if (outlined.status === 'completed' && outlined.finishReason === 'stop' && outlined.content.trim()) {
               recovery = await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
               if (recovery.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
@@ -1701,7 +1701,7 @@ ${params.candidate.text}`,
     } catch (error) {
       if (params.context.cancelled || params.signal.aborted) throw error
       const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
-      if (code !== 'GENERATION_PROVIDER_FAILED' && code !== 'NETWORK_ERROR') throw error
+      if (code !== 'GENERATION_PROVIDER_FAILED' && code !== 'NETWORK_ERROR' && code !== 'GENERATION_CONTEXT_LENGTH_EXCEEDED') throw error
       const detail = shownReason(params.context, error)
       params.callbacks.log(uiText(
         `  压缩修订未完成，保留原稿：${detail}`,

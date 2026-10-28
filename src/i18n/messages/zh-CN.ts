@@ -47,6 +47,7 @@ export const zhCN = {
   'error.generationPlotOutlineAuthorSaved': '你已手动保存过这份情节大纲，之前的生成不能再接着写。需要时请重新生成大纲。',
   'error.generationCancelled': '生成已取消。',
   'error.generationProviderFailed': '模型服务没有返回完整结果。请检查网络和模型设置后重试。',
+  'error.generationContextLengthExceeded': '提示词超出了模型能接受的长度，服务商拒绝了这次请求，没有生成内容。请换用上下文更长的模型、调低最大输出 Tokens，或精简本章要求、参考材料后重试。',
   'error.generationStorageFailed': '生成内容写入本地存储失败。请检查磁盘空间和作品文件夹的写入权限后重试。',
   'error.generationModelMissing': '找不到这次要用的模型。请在设置里选择或添加模型后重试。',
   'error.generationStopped': '这项生成已停止、暂停或用完了额度，不能再向模型发请求。需要时请重新生成。',

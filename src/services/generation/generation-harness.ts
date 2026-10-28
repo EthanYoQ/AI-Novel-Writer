@@ -5,6 +5,7 @@ import type {
   TokenUsage,
 } from '../../shared/ipc-channels'
 import type { CreativeStrategy, GenerationReasoningStage } from '../../shared/reasoning-types'
+import { isTerminalProviderFailure } from '../../shared/generation-contract'
 
 export type GenerationOutput = 'visible-text' | 'structured-data'
 
@@ -183,9 +184,32 @@ export interface GenerationAttemptReceipt {
   }
   finishReason: LLMFinishReason
   /** Main-normalized failure category; never provider response text. */
-  failureCode?: 'GENERATION_PROVIDER_FAILED' | 'NETWORK_ERROR'
+  failureCode?: 'GENERATION_PROVIDER_FAILED' | 'NETWORK_ERROR' | 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
   usage?: TokenUsage
   promptBudget?: PromptBudgetReport
+}
+
+export { isTerminalProviderFailure }
+
+/** Its message is the registered code, so every failure view can explain it; the receipt keeps the dispatched call on record. */
+export class TerminalProviderFailureError extends Error {
+  constructor(readonly code: 'GENERATION_CONTEXT_LENGTH_EXCEEDED', readonly receipt: GenerationAttemptReceipt) {
+    super(code)
+    this.name = 'TerminalProviderFailureError'
+  }
+}
+
+export function throwIfTerminalProviderFailure(receipt: GenerationAttemptReceipt): void {
+  if (isTerminalProviderFailure(receipt.failureCode)) throw new TerminalProviderFailureError(receipt.failureCode, receipt)
+}
+
+/**
+ * For clients that read a run back instead of its receipt: that run's last attempt decides.
+ * The diagnostics list every attempt under the root, including other runs such as child workflows.
+ */
+export function throwIfLastAttemptTerminal(diagnostics: readonly { runId?: string; failureCode?: string | null }[] | undefined, runId: string): void {
+  const failureCode = diagnostics?.filter(diagnostic => diagnostic.runId === runId).at(-1)?.failureCode
+  if (isTerminalProviderFailure(failureCode)) throw new Error(failureCode)
 }
 
 export type GenerationOutcome =

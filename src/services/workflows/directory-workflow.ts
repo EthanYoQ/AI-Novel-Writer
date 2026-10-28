@@ -21,7 +21,7 @@ import {
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
-import { PromptBudgetExceededError } from '../generation/generation-harness'
+import { PromptBudgetExceededError, TerminalProviderFailureError } from '../generation/generation-harness'
 import type {
   BlueprintData,
   BlueprintRangeCommitMode,
@@ -395,6 +395,7 @@ export function createDirectoryWorkflow(
             if (context.cancelled) {
               throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
             }
+            if (error instanceof TerminalProviderFailureError) throw error
             throw new Error(text(
               '章节蓝图生成失败，请重试。',
               'Chapter-blueprint generation failed. Please try again.',
