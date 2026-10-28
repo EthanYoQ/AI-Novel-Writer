@@ -7,6 +7,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import type { WorkflowRun } from '../../../stores/workflow-store'
 import { adoptImportSuggestions, loadPendingImportSuggestions } from '../../../services/workflows/import-suggestions'
 import { projectSessionContextFromProject, sameProjectPathKey } from '../../../shared/project-session-context'
+import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { POV_OPTIONS, STRUCTURE_OPTIONS } from '../setup/setup-fields'
 import { Button } from '../../ui/Button'
 
@@ -51,9 +52,13 @@ export function ImportSuggestions({ run }: { run: WorkflowRun }) {
     return current && sameProjectPathKey(run.projectPath, current.projectPath) && current.projectId === run.projectSession?.projectId
       ? current : null
   }, [projectId, projectPath, sessionLease, run.projectPath, run.projectSession?.projectId])
-  const [items, setItems] = useState<ImportFillSuggestion[]>([])
+  // 读到的建议与错误记着属于哪个会话：会话换了，新会话读完之前不显示旧会话的内容。
+  const [loaded, setLoaded] = useState<{ session: ProjectSessionContext | null; items: ImportFillSuggestion[]; error: string }>(
+    { session: null, items: [], error: '' })
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const current = loaded.session === session
+  const items = current ? loaded.items : []
+  const error = current ? loaded.error : ''
 
   const reload = useCallback(async () => (
     session ? loadPendingImportSuggestions(run.id, session, run.projectPath) : []
@@ -61,24 +66,23 @@ export function ImportSuggestions({ run }: { run: WorkflowRun }) {
 
   useEffect(() => {
     let active = true
-    void reload().then(next => {
-      if (!active) return
-      setItems(next)
-      setError('')
-    })
-      .catch(failure => { if (active) setError(displayedErrorMessage(locale, failure)) })
+    void reload().then(next => { if (active) setLoaded({ session, items: next, error: '' }) })
+      .catch(failure => {
+        if (active) setLoaded(previous => ({ session, items: previous.session === session ? previous.items : [], error: displayedErrorMessage(locale, failure) }))
+      })
     return () => { active = false }
-  }, [locale, reload])
+  }, [locale, reload, session])
 
   const adopt = async (chosen: ImportFillSuggestion[]) => {
     if (!session) return
     setBusy(true)
-    setError('')
+    setLoaded(previous => ({ ...previous, error: '' }))
     try {
       await adoptImportSuggestions(chosen, session, run.projectPath, run.id)
-      setItems(await reload())
+      const next = await reload()
+      setLoaded(previous => previous.session === session ? { session, items: next, error: '' } : previous)
     } catch (failure) {
-      setError(displayedErrorMessage(locale, failure))
+      setLoaded(previous => previous.session === session ? { ...previous, error: displayedErrorMessage(locale, failure) } : previous)
     } finally {
       setBusy(false)
     }
