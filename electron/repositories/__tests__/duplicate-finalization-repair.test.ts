@@ -78,6 +78,18 @@ describe('遗留的同章重复定稿', () => {
     }])
   })
 
+  it('已发布的旧定稿与保留的定稿同名时不列实体稿：那是当前正文文件', () => {
+    insertLegacyFinalized(1, 1, 1, '第一章旧定稿', true, { status: 'published', targetFileName: '第1章 沉船.txt' })
+    insertLegacyFinalized(2, 1, 2, '第一章新定稿', true, { status: 'pending', targetFileName: '第1章 沉船.txt' })
+    insertLegacyFinalized(3, 2, 1, '第二章旧定稿', true, { status: 'published', targetFileName: '第2章 灯室.txt' })
+    insertLegacyFinalized(4, 2, 2, '第二章新定稿', true, { status: 'published', targetFileName: '第2章 灯室.txt' })
+
+    expect(FinalizationRepository.repairDuplicateFinalizations().chapters).toMatchObject([
+      { keptDraftId: 2, superseded: [{ draftId: 1, targetFileName: '' }] },
+      { keptDraftId: 4, superseded: [{ draftId: 3, targetFileName: '' }] },
+    ])
+  })
+
   it('再打开一次什么也不改', () => {
     insertLegacyFinalized(1, 1, 1, '第一章旧定稿')
     insertLegacyFinalized(2, 1, 2, '第一章新定稿')
