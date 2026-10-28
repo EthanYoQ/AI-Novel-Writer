@@ -16,7 +16,6 @@ import { countUnits, STAGE_SAMPLE } from './stage-sample.mjs'
 const SECOND_DRAFT = `${STAGE_SAMPLE.drafts[3].text}\n\n林岚把纸条又读了一遍，决定等到下一次大潮再上灯室。`
 
 const seedChapter3WithOlderDraft = context => seedStageSample(context, { beforeReload: async ({ page, invoke, path, session }) => {
-  context.projectPath = path
   const draft = await invoke(page, 'db:draft-create', { chapterNumber: 3, version: 2, source: 'write', content: SECOND_DRAFT,
     wordCount: countUnits(SECOND_DRAFT) }, path, session)
   assert.equal(draft.success, true, draft.error)
@@ -92,12 +91,16 @@ export const RBK_SCENARIOS = {
     observed.writeChapter5 = await blueprint.popover(page).isVisible() ? await blueprint.popover(page).innerText() : 'started'
     await shoot('rbk-6-write-ch5')
     await started.waitFor({ state: 'detached', timeout: 90_000 })
-    observed.afterRefinalize = await factsFromDriverOpen(context, context.projectPath)
+    observed.afterRefinalize = await factsFromDriverOpen(context, context.samplePath)
 
     console.log(`[rbk] observed ${JSON.stringify(observed)}`)
     assert.deepEqual(observed.afterRefinalize.sequence, { status: 'continuous', nextChapterNumber: 5, duplicateChapterNumbers: [] },
       `再定稿回退稿之后权威序列仍应连续、下一章是第 5 章。实际：${JSON.stringify(observed)}`)
     assert.equal(observed.writeChapter5, 'started', `第 5 章应能开始写。实际：${JSON.stringify(observed)}`)
+    assert.equal(observed.chapter3RowAfterRevert?.phase, 'draft', `回退后第 3 章应回到草稿阶段。实际：${JSON.stringify(observed)}`)
+    assert.equal(observed.chapter3RowAfterRefinalize?.phase, 'final', `再定稿后第 3 章应是定稿。实际：${JSON.stringify(observed)}`)
+    assert.ok(observed.postProcessAfterRefinalize.length > 0 && observed.postProcessAfterRefinalize.every(step => step.state === 'success'),
+      `再定稿后的后处理应全部成功。实际：${JSON.stringify(observed)}`)
     assert.ok(observed.historyAfterRefinalize.some(name => name.startsWith('已被替换的定稿 v2')), `版本历史应把旧定稿标为已被替换。实际：${JSON.stringify(observed)}`)
     assert.match(observed.supersededSwitcher, /^本章版本：已被替换的定稿 v2 · /u)
     assert.equal(observed.supersededHint, '已被替换的定稿，只读')
