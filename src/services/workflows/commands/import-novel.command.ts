@@ -171,8 +171,8 @@ export class ImportBlueprintPostCommitSyncError extends Error {
 }
 
 /**
- * 导入的单次调用（global、style）在请求进行中用完活动时长时，回执带 ROOT_BUDGET_EXHAUSTED：
- * 换成导入的停止说明，码只进诊断日志。
+ * 导入的单次调用（global、style）在请求进行中用完活动时长或写入失败时，回执带 ROOT_BUDGET_EXHAUSTED 或 GENERATION_STORAGE_FAILED：
+ * 换成对应说明，码只进诊断日志。
  */
 export function assertImportCompletionNotStopped(
   completion: Pick<LLMCompletion, 'receipt'>,
@@ -180,7 +180,8 @@ export function assertImportCompletionNotStopped(
   context: CommandExecuteParams['context'],
 ): void {
   const code = completion.receipt.failureCode
-  const stopped = code && importGenerationStopMessage(context.uiLocale, code, true)
+  const stopped = code && (importGenerationStopMessage(context.uiLocale, code, true)
+    ?? (code === 'GENERATION_STORAGE_FAILED' ? knownAppErrorMessage(context.uiLocale, code) : undefined))
   if (!stopped) return
   callbacks.log(workflowUiText(context, `导入停止原因：${code}`, `Import stop reason: ${code}`))
   throw new Error(stopped)

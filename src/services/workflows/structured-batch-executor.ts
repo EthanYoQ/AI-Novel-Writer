@@ -9,7 +9,7 @@ import {
 } from '../generation/generation-harness'
 import { structuredContractDiagnostic } from '../../shared/structured-contract-diagnostic'
 import type { WritingLanguage } from '../../shared/writing-language'
-import { errorCodeOf } from '../../i18n/app-errors'
+import { errorCodeOf, knownAppErrorMessage } from '../../i18n/app-errors'
 import {
   buildStructuredSyntaxRepairTask,
   isRepairableDirectJsonSyntaxFailure,
@@ -579,9 +579,10 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
             failure = { code: 'generation_failed', reason: 'unknown', message: error.message }
           }
         } else {
-          // 只保留稳定错误码，不转出主进程以外的原文（可能带凭据或提示词）。
+          // 只保留稳定错误码，不转出主进程以外的原文（可能带凭据或提示词）；没有登记说明的码只进诊断。
           const errorCode = errorCodeOf(error)
-          failure = { code: 'generation_failed', reason: 'server_error', message: errorCode ?? '结构化生成失败', ...(errorCode ? { errorCode } : {}) }
+          const message = errorCode && knownAppErrorMessage(writingLanguage, errorCode) ? errorCode : '结构化生成失败'
+          failure = { code: 'generation_failed', reason: 'server_error', message, ...(errorCode ? { errorCode } : {}) }
         }
         return { ok: false, failure, receipt, validatedItems: [...validated] }
       }
