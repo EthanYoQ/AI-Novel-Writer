@@ -78,6 +78,15 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   return { get db() { return db }, owner, makeOwner, reopenStorage, prepare, selection, run, spy, deps }
 }
 describe('review and revision generation through the actual owner and SQLite', () => {
+  it.each(['review-chapter', 'refine-draft'] as const)('运行侧页的可恢复列表把中断的 %s 列为审修，不当作单章候选', async operation => {
+    const f = fixture(operation === 'review-chapter' ? undefined : async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: revisedProse }); return { finishReason: 'stop', usage: null }
+    })
+    const request = await f.run(operation)
+    const list = f.owner.listRecovery()
+    expect(list.reviews.map(item => [item.view.handle.runId, item.recovery.context.operation])).toContainEqual([request.handle.runId, operation])
+    expect(list).toMatchObject({ drafts: [], planning: [], editors: [], partial: false })
+  })
   it.each([
     'Here is the truth: I never left the island. Everyone who said otherwise was lying.',
     '以下是我从父亲遗物中找到的最后一份内容。它改变了我们所有人的命运。',

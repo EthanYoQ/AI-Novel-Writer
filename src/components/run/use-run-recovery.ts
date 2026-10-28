@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ipc } from '../../services/ipc-client'
 import { createBatchRecoveryWorkflow, createDraftRecoveryWorkflow } from '../../services/workflows/draft-recovery-workflow'
 import { createReviewRevisionRecoveryWorkflow } from '../../services/workflows/review-revision-recovery-workflow'
-import { withoutDraftReconciliationArtifacts } from '../../shared/draft-reconciliation'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
 import { openPlanningRecoveryDraft, useEditorStore } from '../../stores/editor-store'
@@ -10,50 +9,22 @@ import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore, type WorkflowDefinition } from '../../stores/workflow-store'
 import {
-  buildRecoveryEntries, EMPTY_RECOVERY_SOURCES, hasText, planningTitle,
+  buildRecoveryEntries, EMPTY_RECOVERY_SOURCES, planningTitle,
   type BatchEntry, type CandidateEntry, type DraftEntry, type EditorEntry, type PlanningEntry, type RecoveryEntry, type RecoverySources, type ReviewEntry,
 } from './run-recovery'
 import { displayedErrorMessage } from '../../i18n/app-errors'
+import { hideRecovery, readHiddenRecovery } from './hidden-recovery'
+import { projectRuns } from './run-output'
+import type { GenerationRecoveryList } from '../../shared/generation-owner-contract'
 import { throwIfTerminalProviderFailure } from '../../services/generation/generation-harness'
 
-const REVIEW_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review']
+/** 这部作品有工作流正在发生成请求；暂停与等确认的不算。 */
+function workflowWriting(projectPath: string | undefined, runs = useWorkflowStore.getState().activeRuns): boolean {
+  return projectRuns(runs, projectPath).some(run => run.status === 'running' || run.status === 'cancelling')
+}
 
 function currentSession(): ProjectSessionContext | null {
   return projectSessionContextFromProject(useProjectStore.getState().currentProject)
-}
-
-/**
- * 读取这部作品所有可恢复的中断运行。助手任务（agent-round）随聊天隐藏，不读取也不列出，磁盘记录保留。
- * 规划恢复稿只列没写进正式内容的：续写已完成的，或来源变了但本批已原样在正式大纲里的，都不算可恢复。
- */
-async function loadGenerationSources(session: ProjectSessionContext): Promise<{ sources: Omit<RecoverySources, 'candidates'>; partial: boolean }> {
-  const [views, progress] = await Promise.all([
-    ipc.invokeWithProjectSession(session, 'generation:list'),
-    ipc.invokeWithProjectSession(session, 'generation:list-batches'),
-  ])
-  const contexts = await Promise.all(views.map(async view => ({ view,
-    recovery: await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle }),
-  })))
-  const reviews = await Promise.allSettled(contexts.filter(item => REVIEW_OPERATIONS.includes(item.recovery.operation))
-    .map(async ({ view }) => ({ view, recovery: await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: view.handle }) })))
-  const editors = await Promise.allSettled(contexts.filter(item => item.recovery.operation === 'editor-inline')
-    .map(({ view }) => ipc.invokeWithProjectSession(session, 'editor-inline:read-recovery', { handle: view.handle })))
-  const ours = (projectId: string) => projectId === session.projectId
-  return {
-    partial: [...reviews, ...editors].some(result => result.status === 'rejected'),
-    sources: {
-      planning: contexts.flatMap(item => (item.recovery.plotOutlineRecovery || item.recovery.blueprintRecovery)
-        && item.recovery.planningContinuation?.state !== 'complete' && !item.recovery.plotOutlineRecovery?.inFormalOutline
-        && ours(item.recovery.handle.projectId) ? [item.recovery] : []),
-      reviews: reviews.flatMap(result => result.status === 'fulfilled' && ours(result.value.view.handle.projectId) ? [result.value] : []),
-      editors: editors.flatMap(result => result.status === 'fulfilled' && ours(result.value.view.handle.projectId) ? [result.value] : []),
-      drafts: contexts.filter(item => item.recovery.operation === 'chapter-draft' && !item.recovery.batchId && ours(item.view.handle.projectId)
-        && (item.recovery.composition || item.recovery.draftShortOutline?.completedOutput || item.recovery.draftShortOutline?.retry?.kind === 'available'
-          || withoutDraftReconciliationArtifacts([...item.view.artifacts, ...(item.view.candidates ?? [])], item.recovery).some(hasText)
-          || item.view.unsavedTails?.some(hasText))),
-      batches: progress.filter(item => item.nextChapterNumber !== null && ours(item.rootHandle.projectId)),
-    },
-  }
 }
 
 /** 读到的数据连同读取时的会话一起保存；换了会话，旧数据就不再显示也不能被操作。 */
@@ -81,6 +52,8 @@ export interface RunRecovery {
   resumeReview: (entry: ReviewEntry) => void
   resumeBatch: (entry: BatchEntry) => void
   resumeDraft: (entry: DraftEntry) => void
+  /** 这张候选卡在这部作品里不再显示；生成记录不动。 */
+  hideDraft: (entry: DraftEntry) => void
 }
 
 /**
@@ -91,16 +64,22 @@ export function useRunRecovery(): RunRecovery {
   const locale = useLocaleStore(s => s.locale)
   const project = useProjectStore(s => s.currentProject)
   const session = useMemo(() => projectSessionContextFromProject(project), [project])
-  const endedRuns = useWorkflowStore(s => s.history.length)
+  /** 最近结束的那次运行：历史最多留 50 条，满了以后条数不再变，只能看最前面那条。 */
+  const lastEnded = useWorkflowStore(s => s.history[0] ? `${s.history[0].id}:${s.history[0].completedAt ?? ''}` : '')
   const [candidateList, setCandidates] = useState<Loaded<RecoverySources['candidates']>>({ session: null, value: [] })
   const [candidateError, setCandidateError] = useState('')
-  const [generationList, setGeneration] = useState<Loaded<Omit<RecoverySources, 'candidates'>>>({ session: null, value: EMPTY_RECOVERY_SOURCES })
+  const [generationList, setGeneration] = useState<Loaded<GenerationRecoveryList>>({ session: null, value: { ...EMPTY_RECOVERY_SOURCES, partial: false } })
   // 读取失败随下一次读取更新；操作失败留到下一次操作，刷新不清掉它。
   const [loadError, setLoadError] = useState('')
   const [actionError, setActionError] = useState<{ session: ProjectSessionContext | null; message: string }>({ session: null, message: '' })
-  const [snapshotTick, setSnapshotTick] = useState(0)
+  const [refreshTick, setRefreshTick] = useState(0)
+  const writing = useWorkflowStore(s => workflowWriting(session?.projectPath, s.activeRuns))
+  const missedWhileWriting = useRef(false)
   const [selection, setSelection] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
+  const projectId = session?.projectId
+  const hiddenEarlier = useMemo(() => projectId ? readHiddenRecovery(projectId) : new Set<string>(), [projectId])
+  const [hiddenNow, setHiddenNow] = useState<ReadonlySet<string>>(new Set())
 
   useEffect(() => {
     if (!session) {
@@ -120,33 +99,48 @@ export function useRunRecovery(): RunRecovery {
     return () => { active = false }
   }, [session])
 
+  /**
+   * 工作流之外的生成（选区建议）结束时没有运行历史可看，靠它的最后一次快照触发重读。
+   * 这部作品有工作流正在写时只记下来：批量写作每次尝试都会结束一次，逐次重读又回到整表重算；
+   * 等工作流停下（暂停、等确认或结束）时补读一次。
+   */
   useEffect(() => {
     if (!session) return
     let timer: ReturnType<typeof setTimeout> | undefined
     const detach = ipc.on('generation:snapshot', snapshot => {
       if (snapshot.projectId !== session.projectId || snapshot.epoch !== session.leaseId || snapshot.status === 'running') return
+      if (workflowWriting(session.projectPath)) { missedWhileWriting.current = true; return }
       clearTimeout(timer)
-      timer = setTimeout(() => setSnapshotTick(value => value + 1), 100)
+      timer = setTimeout(() => setRefreshTick(value => value + 1), 100)
     })
     return () => { detach(); clearTimeout(timer) }
   }, [session])
 
+  /** 侧页打开、运行结束或恢复动作之后重读；工作流写作中的每次尝试快照不触发，主进程不必反复整表重算。 */
   useEffect(() => {
     if (!session) return
     let active = true
-    void loadGenerationSources(session).then(({ sources, partial }) => {
+    missedWhileWriting.current = false
+    void ipc.invokeWithProjectSession(session, 'generation:list-recovery').then(list => {
       if (!active) return
-      setGeneration({ session, value: sources })
-      setLoadError(partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : '')
+      setGeneration({ session, value: list })
+      setLoadError('')
     }).catch(reason => { if (active) setLoadError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
     return () => { active = false }
-  }, [session, endedRuns, locale, snapshotTick])
+  }, [session, lastEnded, refreshTick])
+
+  useEffect(() => {
+    if (writing || !missedWhileWriting.current) return
+    missedWhileWriting.current = false
+    setRefreshTick(value => value + 1)
+  }, [writing])
 
   const entries = useMemo(() => {
     if (!session) return []
     const ofSession = <T,>(loaded: Loaded<T>, empty: T) => sameProjectSessionContext(loaded.session, session) ? loaded.value : empty
-    return buildRecoveryEntries({ ...ofSession(generationList, EMPTY_RECOVERY_SOURCES), candidates: ofSession(candidateList, []) }, locale)
-  }, [session, generationList, candidateList, locale])
+    return buildRecoveryEntries({ ...ofSession(generationList, { ...EMPTY_RECOVERY_SOURCES, partial: false }), candidates: ofSession(candidateList, []) }, locale)
+      .filter(entry => entry.kind !== 'draft' || (!hiddenEarlier.has(entry.hideKey) && !hiddenNow.has(entry.hideKey)))
+  }, [session, generationList, candidateList, locale, hiddenEarlier, hiddenNow])
 
   const stillCurrent = useCallback(() => session !== null && sameProjectSessionContext(session, currentSession()), [session])
 
@@ -183,7 +177,8 @@ export function useRunRecovery(): RunRecovery {
   return {
     entries,
     candidateError,
-    generationError: (sameProjectSessionContext(actionError.session, session) && actionError.message) || loadError,
+    generationError: (sameProjectSessionContext(actionError.session, session) && actionError.message) || loadError
+      || (sameProjectSessionContext(generationList.session, session) && generationList.value.partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : ''),
     busy,
     picked: entry => selection[entry.key] ?? [],
     togglePick: (entry, artifactId, checked) => setSelection(previous => {
@@ -239,7 +234,7 @@ export function useRunRecovery(): RunRecovery {
     continueEditor: entry => void act(async current => {
       const receipt = await ipc.invokeWithProjectSession(current, 'editor-inline:execute', { handle: entry.recovery.view.handle })
       if (!stillCurrent()) return
-      setSnapshotTick(value => value + 1)
+      setRefreshTick(value => value + 1)
       throwIfTerminalProviderFailure(receipt.outcome.receipt)
     }),
     resumeReview: entry => startRecovery(current => createReviewRevisionRecoveryWorkflow(current, entry.view.handle)),
@@ -247,6 +242,11 @@ export function useRunRecovery(): RunRecovery {
     resumeDraft: entry => {
       const picked = selection[entry.key] ?? []
       startRecovery(current => createDraftRecoveryWorkflow(current, entry.view.handle, picked.length ? [...picked] : undefined))
+    },
+    hideDraft: entry => {
+      if (!session || !stillCurrent()) return
+      hideRecovery(session.projectId, entry.hideKey)
+      setHiddenNow(previous => new Set(previous).add(entry.hideKey))
     },
   }
 }

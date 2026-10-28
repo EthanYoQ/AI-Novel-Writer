@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { assertGraphResult, canExecuteGraph, createGraphGeneration } from '../../../services/graph-generation'
-import type { MainGenerationRunHandle, MainGenerationRunView } from '../../../services/generation/generation-runtime'
+import type { MainGenerationRunHandle, MainGenerationRunSummary } from '../../../services/generation/generation-runtime'
 import { ipc } from '../../../services/ipc-client'
 import { isGenerationModel, preferredGenerationModelId } from '../../../services/workflows/chapter-write-launch'
 import type {
@@ -234,7 +234,7 @@ export function usePlotThreads(projectKey: string, {
   const plotAbortRef = useRef<AbortController | null>(null)
   const graphClient = useRef<ReturnType<typeof createGraphGeneration> | null>(null)
   const [graphRecovery, setGraphRecovery] = useState<GraphGenerationRecovery | null>(null)
-  const [graphRuns, setGraphRuns] = useState<MainGenerationRunView[]>([])
+  const [graphRuns, setGraphRuns] = useState<MainGenerationRunSummary[]>([])
   const [graphError, setGraphError] = useState('')
   const previousViewRequestRef = useRef(viewRequest)
   const dormantThreshold = resolveNarrativeThreadDormantThreshold(
@@ -312,7 +312,7 @@ export function usePlotThreads(projectKey: string, {
     assertGraphResult(value)
     return { client, value }
   }
-  const restoreGraph = async (run: MainGenerationRunView) => {
+  const restoreGraph = async (run: MainGenerationRunSummary) => {
     if (plotBusy || aiBusy) return
     const session = captureProjectSession(useProjectStore.getState().currentProject)
     if (!session || !isProjectSessionPath(session, projectKey)) return
