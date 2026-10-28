@@ -364,6 +364,7 @@ export class FinalizationRepository {
             ? row.target_file_name ?? '' : '',
         })
       }
+      if (chapters.length > 0) invalidateContinuityProjectionFrom(db, chapters[0]!.chapterNumber)
       return { chapters }
     }).immediate()
   }
