@@ -384,14 +384,16 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
     const generation: FinalizePostProcessGeneration = {
       finalizedStage: (stepKey, generationContext) => runFinalizationGeneration({
         session: projectSession, slot: { source: this.params.finalizedSource, stepKey },
-        modelId: () => generationContext.generationModelId ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes') ?? '',
+        modelId: () => generationContext.generationModelId ?? generationContext.data.finalizationModelId as string | undefined
+          ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes') ?? '',
         ...(generationContext.data.generationBatchId && generationContext.mainGenerationRootHandle
           ? { parentRootActionId: generationContext.mainGenerationRootHandle.rootActionId } : {}),
         ...explicit[stepKey],
         cancelled: () => generationContext.cancelled,
         onHandle: (handle, modelId) => {
           generationContext.mainGenerationRunHandle = Object.freeze({ ...handle })
-          // 只记在运行上：写进共享上下文会让同一运行后面的规划阶段（作者原稿反推）沿用定稿模型。
+          // 冻结在 data 而不是 generationModelId：同一运行后面的规划阶段（作者原稿反推）要按规划环节选模型。
+          generationContext.data.finalizationModelId ??= modelId
           useWorkflowStore.getState().recordRunGenerationModel(generationContext.runId, modelId)
         },
       }).catch(error => { throw finalizationGenerationError(error) }),
