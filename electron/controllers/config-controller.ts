@@ -17,7 +17,7 @@ export function registerConfigController() {
   /** 保存全局配置 */
   ipcMain.handle('config:set', async (_event, config: Partial<GlobalConfig>) => {
     try {
-      if (updateGlobalConfig(existing => ({ ...existing, ...config }))) return { success: true }
+      if (updateGlobalConfig(existing => ({ ...existing, ...config, stageModelIds: existing.stageModelIds }))) return { success: true }
       return {
         success: false,
         error: mainText(
