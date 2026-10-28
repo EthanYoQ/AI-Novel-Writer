@@ -26,7 +26,7 @@ describe('narrative thread AI candidate boundary', () => {
         expect(request).toEqual({ input, modelId: 'model', uiActionNonce: expect.any(String) })
         return { ...recovery, attemptCount: 0, result: undefined }
       }
-      if (channel === 'graph-generation:execute') return { run: view, outcome: { status: 'completed', finishReason: 'stop' } }
+      if (channel === 'graph-generation:execute') return { run: view, outcome: { status: 'completed', finishReason: 'stop', receipt: { finishReason: 'stop' } } }
       expect(channel).toBe('graph-generation:read')
       return recovery
     })

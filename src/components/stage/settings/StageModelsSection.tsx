@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { ArrowRight, Plus } from 'lucide-react'
 import { MODEL_STAGES, isGenerationModel, routeStageModel, type ModelStage } from '../../../shared/model-stage-routing'
 import { useLayoutStore } from '../../../stores/layout-store'
@@ -45,6 +45,7 @@ export default function StageModelsSection() {
   const stageModelIds = useLLMStore(s => s.stageModelIds)
   const setStageModel = useLLMStore(s => s.setStageModel)
   const [pending, setPending] = useState<Partial<Record<ModelStage, string>>>({})
+  const latestRequest = useRef<Partial<Record<ModelStage, number>>>({})
   const idPrefix = useId()
   const generationModels = models.filter(isGenerationModel)
   const label = (modelId: string | null) => {
@@ -68,8 +69,11 @@ export default function StageModelsSection() {
   const defaultLabel = label(defaultModelId)
   const single = generationModels.length === 1 && defaultLabel !== null
   const choose = async (stage: ModelStage, modelId: string | null) => {
+    const request = (latestRequest.current[stage] ?? 0) + 1
+    latestRequest.current[stage] = request
     setPending(current => ({ ...current, [stage]: modelId ?? '' }))
     await setStageModel(stage, modelId)
+    if (latestRequest.current[stage] !== request) return
     setPending(current => {
       const next = { ...current }
       delete next[stage]
@@ -97,7 +101,7 @@ export default function StageModelsSection() {
                 <p className="stage-set-row-desc">{text(...STAGE_COPY[stage].scope)}</p>
               </div>
               <div className="stage-set-row-ctl">
-                <select id={selectId} className="stage-select" value={value} disabled={single || saving}
+                <select id={selectId} className="stage-select" value={value} disabled={single} aria-busy={saving}
                   onChange={event => void choose(stage, event.target.value || null)}>
                   <option value="">{defaultLabel ? text(`跟随默认（${defaultLabel}）`, `Default (${defaultLabel})`) : text('跟随默认（未设置）', 'Default (not set)')}</option>
                   {generationModels.map(model => <option key={model.id} value={model.id}>{model.name || model.modelName}</option>)}

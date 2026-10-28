@@ -1,5 +1,6 @@
 import { decodeCharacterDetails } from '../../../../shared/character-proposal-parser'
 import { proposalRuntimeFixture, proposalBatchFixture } from './character-proposal-runtime.fixture'
+import { contextLengthRejectingDependencies } from './context-length-runtime.fixture'
 import type { CharacterProposalSource, CharacterProposalBatch } from '../../../../shared/character-proposal'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -2267,6 +2268,26 @@ describe('GenerateCharactersCommand structured roster seam', () => {
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('角色详情 slotId=slot-1 字段 currentState 必填')
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
+  })
+
+  it('fails with the registered code when the provider rejects the character details as too long', async () => {
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream: createResponseStream([JSON.stringify(manifestFor(rosterEntries))]) })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:project-core-get') {
+        return { premise: '足够长的故事前提，确保角色架构命令能够开始生成，并在服务商以上下文超长拒绝角色详情时带着登记的错误码停止，不写入任何角色。' }
+      }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    }), on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() } })
+    const command = new RuntimeGenerateCharactersCommand({
+      expectedProjectPath: projectAPath,
+      novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
+    }, contextLengthRejectingDependencies(proposalRuntimeFixture(), task => task.purpose === 'character-architecture-details'))
+    const failure = await command.execute({ step: {}, context, callbacks }).then(() => null, error => error as Error & { code?: string })
+    expect(failure?.message).toBe('GENERATION_CONTEXT_LENGTH_EXCEEDED')
+    expect(failure?.code).toBe('GENERATION_CONTEXT_LENGTH_EXCEEDED')
   })
 
   it('fails closed when a single-item detail remains invalid after the one allowed repair', async () => {

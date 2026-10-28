@@ -106,6 +106,7 @@ const ERROR_KEYS = {
   GENERATION_AGENT_CANCELLED: 'error.generationCancelled',
   GENERATION_PROVIDER_FAILED: 'error.generationProviderFailed',
   GENERATION_STREAM_INVALID: 'error.generationProviderFailed',
+  GENERATION_CONTEXT_LENGTH_EXCEEDED: 'error.generationContextLengthExceeded',
   GENERATION_FAILED: 'error.generationRequestFailed',
   GENERATION_AGENT_ACTION_LIMIT: 'error.generationRequestFailed',
   GENERATION_REVIEW_REPLACEMENT_LIMIT: 'error.generationRequestFailed',
@@ -159,6 +160,7 @@ const ERROR_KEYS = {
   ATTEMPT_BUDGET_EXHAUSTED: 'error.generationStopped',
   DEADLINE_EXHAUSTED: 'error.generationStopped',
   USAGE_EXCEEDED_RESERVATION: 'error.generationStopped',
+  // 只有这一个是旧版本在发送前按估算拒绝时留下的码（ADR-0023 后不再产生），旧运行记录读回时仍给出说明。
   TASK_BUDGET_CAPACITY_CONFLICT: 'error.generationInputTooLarge',
   TASK_BUDGET_SPLIT_REQUIRED: 'error.generationInputTooLarge',
   TASK_BUDGET_SCOPE_SPLIT_REQUIRED: 'error.generationInputTooLarge',

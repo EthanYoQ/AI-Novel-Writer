@@ -11,7 +11,7 @@ import { composePromptSystemRole, resolvePromptTemplate, renderPrompt } from '..
 import { promptLanguageText } from '../../prompt-language'
 import type { WritingLanguage } from '../../../shared/writing-language'
 import type { GenerationOperation } from '../../../shared/model-stage-routing'
-import { GenerationAttemptError, PromptBudgetExceededError } from '../../generation/generation-harness'
+import { GenerationAttemptError, PromptBudgetExceededError, TerminalProviderFailureError } from '../../generation/generation-harness'
 import { BoundedCompletionFailure } from '../bounded-completion'
 import {
   GENERATED_GLOBAL_GUIDANCE_MAX_CHARS,
@@ -130,7 +130,8 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
         )
       } catch (error) {
         if (context.cancelled) this.assertNotCancelled(context)
-        if (error instanceof BoundedCompletionFailure || error instanceof PromptBudgetExceededError) {
+        if (error instanceof BoundedCompletionFailure || error instanceof PromptBudgetExceededError
+          || error instanceof TerminalProviderFailureError) {
           throw error
         }
         const safeMessage = workflowUiText(
