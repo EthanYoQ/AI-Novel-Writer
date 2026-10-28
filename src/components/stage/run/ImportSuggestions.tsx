@@ -40,13 +40,17 @@ const CHOICE_NAMES = new Map<string, Pair>([...POV_OPTIONS, ...STRUCTURE_OPTIONS
 export function ImportSuggestions({ run }: { run: WorkflowRun }) {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
-  const project = useProjectStore(s => s.currentProject)
+  const projectId = useProjectStore(s => s.currentProject?.id)
+  const projectPath = useProjectStore(s => s.currentProject?.path)
+  const sessionLease = useProjectStore(s => s.currentProject?.sessionLease)
   // 建议存在这次运行的收据里：同一作品重开后会话换了新的，用当前会话照样能读；换成别的作品就不显示。
+  // 只随会话本身变化，设定页改字段不触发重读。
   const session = useMemo(() => {
-    const current = projectSessionContextFromProject(project)
+    const current = projectId && projectPath && sessionLease
+      ? projectSessionContextFromProject({ id: projectId, path: projectPath, sessionLease }) : null
     return current && sameProjectPathKey(run.projectPath, current.projectPath) && current.projectId === run.projectSession?.projectId
       ? current : null
-  }, [project, run.projectPath, run.projectSession?.projectId])
+  }, [projectId, projectPath, sessionLease, run.projectPath, run.projectSession?.projectId])
   const [items, setItems] = useState<ImportFillSuggestion[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
