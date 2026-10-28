@@ -629,6 +629,19 @@ describe('explicit planning recovery with real SQLite', () => {
     f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','unknown-policy') WHERE run_id=?").run(draft.handle.runId)
     expect(f.owner.findBlueprintRecovery()).toMatchObject({ handle: run.handle, operation: 'chapter-blueprint-directory', blueprintRecovery: { draft: raw, writeState: 'ready' } })
   })
+  it('作者把恢复稿整段保存完以后，蓝图页与运行侧页都不再给这份恢复稿（#536）', async () => {
+    const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch), run = f.owner.begin(directorySelection(f))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'failed', task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const context = f.owner.readContext(run.handle)
+    f.db.transaction(() => f.owner.commitBlueprintAuthorEdit({ mode: 'replace-range', operationId: 'author-whole-range', startChapter: 1, endChapter: 3,
+      blueprints: parseTextBlueprintsStrict(JSON.stringify([blueprint(1), blueprint(2), blueprint(3)]), 1, 3, 'zh-CN', 'author'),
+      authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } })).immediate()
+    expect(f.owner.readContext(run.handle)).toMatchObject({ planningContinuation: { state: 'complete' }, blueprintRecovery: { writeState: 'author-saved' } })
+    expect(f.owner.listRecovery().planning).toEqual([])
+    expect(f.owner.findBlueprintRecovery()).toBeNull()
+  })
   it('较新的章节蓝图运行读不出时，跳过它找到较早的恢复稿（#536）', async () => {
     const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })

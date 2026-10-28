@@ -37,7 +37,7 @@ export class GenerationDraftEffects {
   batchCommits(batchId?: string): ReadonlyMap<string, AttemptRow[]> {
     const rows = this.db.prepare(`SELECT attempt_id,run_id,usage_receipt_json,json_extract(usage_receipt_json,'$.draftCommit.batchId') AS batch_id
       FROM generation_attempts WHERE batch_id ${batchId === undefined ? 'IS NOT NULL' : '= ?'} ORDER BY rowid`)
-      .all(...batchId === undefined ? [] : [batchId]) as (AttemptRow & { batch_id: string })[]
+      .all(...(batchId === undefined ? [] : [batchId])) as (AttemptRow & { batch_id: string })[]
     const groups = new Map<string, AttemptRow[]>()
     for (const { batch_id: id, ...row } of rows) {
       const group = groups.get(id)
