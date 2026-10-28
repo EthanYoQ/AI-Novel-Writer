@@ -233,16 +233,19 @@ async function main() {
     await openFromShelf(reopenedPage, projectName)
     await app.evaluate(({ ipcMain }) => {
       const handlers = ipcMain._invokeHandlers, original = handlers.get('generation:list-recovery')
-      globalThis.__recoveryListed = 0
-      handlers.set('generation:list-recovery', async (...args) => { const result = await original(...args); globalThis.__recoveryListed += 1; return result })
+      if (typeof original !== 'function') throw new Error('generation:list-recovery is not registered after reopening')
+      globalThis.__recoveryLists = []
+      handlers.set('generation:list-recovery', async (...args) => { const result = await original(...args); globalThis.__recoveryLists.push(result); return result })
     })
     await runSheet.openFromPalette(reopenedPage)
     await runSheet.tab(reopenedPage, '进行中').click()
-    for (const deadline = Date.now() + 10_000; !await app.evaluate(() => globalThis.__recoveryListed > 0); await reopenedPage.waitForTimeout(50)) {
+    for (const deadline = Date.now() + 10_000; !await app.evaluate(() => globalThis.__recoveryLists.length > 0); await reopenedPage.waitForTimeout(50)) {
       assert.ok(Date.now() < deadline, 'run sheet did not read the recoverable list after reopening')
     }
-    await reopenedPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     // 已保存的单章写稿不列为可恢复（#536）；失败的那次没有写出正文，也不列。
+    const listed = await app.evaluate(() => globalThis.__recoveryLists.at(-1))
+    assert.deepEqual(listed.drafts, [], 'main process listed a saved or textless single-chapter run as recoverable')
+    await reopenedPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     assert.equal(await runSheet.recovery(reopenedPage).getByText('合成正文', { exact: false }).count(), 0, 'saved single-chapter run must not be listed as recoverable')
     const reopenedRows = await historyRows(reopenedPage)
     assert.deepEqual(reopenedRows, [], 'renderer run history is expected to be empty after a new process')
