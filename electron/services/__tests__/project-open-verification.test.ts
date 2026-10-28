@@ -159,11 +159,13 @@ describe('project open verification', () => {
     const f = fixture()
     commitToWalOnly(f.file, 5)
     const mainBytes = fs.readFileSync(f.file)
-    const changed = afterVerification(f.file, () => commitToWalOnly(f.file, 1))
+    let walBytes = Buffer.alloc(0)
+    const changed = afterVerification(f.file, () => { commitToWalOnly(f.file, 1); walBytes = fs.readFileSync(`${f.file}-wal`) })
     expect(() => initProjectDatabase(f.root)).toThrow('SOURCE_CHANGED_SINCE_PROBE')
     expect(changed()).toBe(true)
     expect(getProjectDb()).toBeNull()
     expect(fs.readFileSync(f.file)).toEqual(mainBytes)
+    expect(fs.readFileSync(`${f.file}-wal`)).toEqual(walBytes)
   })
 
   it('refuses a damaged WAL frame that another open connection still indexes', () => {
@@ -187,6 +189,21 @@ describe('project open verification', () => {
       expect({ name: (thrown as Error).name, code: (thrown as { code?: string }).code, message: (thrown as Error).message })
         .toEqual({ name: 'SchemaMigrationError', code: 'CORRUPT_SCHEMA', message: 'CORRUPT_SCHEMA' })
     } finally { holder.close() }
+  })
+
+  it('keeps the database and WAL bytes when a change after verification is refused', () => {
+    const f = fixture()
+    commitToWalOnly(f.file, 5)
+    let main = Buffer.alloc(0), wal = Buffer.alloc(0)
+    const changed = afterVerification(f.file, () => {
+      damageContentPage(f.file, 'import_runs')
+      main = fs.readFileSync(f.file); wal = fs.readFileSync(`${f.file}-wal`)
+    })
+    expect(() => initProjectDatabase(f.root)).toThrow('SOURCE_CHANGED_SINCE_PROBE')
+    expect(changed()).toBe(true)
+    expect(wal.length).toBeGreaterThan(0)
+    expect(fs.readFileSync(f.file)).toEqual(main)
+    expect(fs.readFileSync(`${f.file}-wal`)).toEqual(wal)
   })
 
   it('refuses the writable handle when a page is damaged after verification passed', () => {
