@@ -162,5 +162,5 @@ function injectDuplicateFinalization(projectPath, chapter) {
   const script = fileURLToPath(new URL('./rbk-inject-duplicate.cjs', import.meta.url))
   return execFileSync(electron, [script, path.join(projectPath, '.ai-novel', 'project.db'), String(chapter)],
     // better-sqlite3 是原生模块，必须用 Electron 自带的 Node 加载，ABI 才和应用一致。
-    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', windowsHide: true })
+    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', windowsHide: true, timeout: 60_000 })
 }
