@@ -81,6 +81,23 @@ describe('project open verification', () => {
     expect(getProjectDb()!.prepare('SELECT count(*) FROM contents WHERE body LIKE ?').pluck().get(`%${BODY}`)).toBe(120)
   })
 
+  it('refuses the writable handle when the schema changes after the snapshot passed', () => {
+    const f = fixture()
+    const rmSync = fs.rmSync
+    let changed = false
+    vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      rmSync(target, options)
+      if (!changed && path.basename(String(target)).startsWith('sqlite-read-')) {
+        changed = true
+        const db = new Database(f.file)
+        try { db.exec('ALTER TABLE contents ADD COLUMN changed_after_probe TEXT') } finally { db.close() }
+      }
+    })
+    expect(() => initProjectDatabase(f.root)).toThrow('SCHEMA_CHANGED_SINCE_PROBE')
+    expect(changed).toBe(true)
+    expect(getProjectDb()).toBeNull()
+  })
+
   const corruptions: [string, (file: string) => void, { name: string; code: string; message: string }][] = [
     ['a truncated file', file => fs.truncateSync(file, Math.floor(fs.statSync(file).size / 2)),
       { name: 'SqliteError', code: 'SQLITE_CORRUPT', message: 'database disk image is malformed' }],
