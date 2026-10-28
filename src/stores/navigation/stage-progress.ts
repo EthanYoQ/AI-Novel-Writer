@@ -51,7 +51,7 @@ export interface ChapterFacts {
  * 已修稿的稿只有在最近一次合并之后又审过稿、且那份审稿的复验周期还没合并时才算已审稿：合并前的审稿（比如审稿后直接修稿合并）
  * 与合并后的自动复验都不算。合并与审稿落在同一秒时按合并在后处理。
  */
-export function chapterPhase(status: Exclude<DraftMeta['status'], 'archived'>, facts: ChapterFacts | undefined): ChapterPhase {
+export function chapterPhase(status: Exclude<DraftMeta['status'], 'archived' | 'superseded'>, facts: ChapterFacts | undefined): ChapterPhase {
   if (status === 'finalized') return 'final'
   if (!facts) return status === 'revised' ? 'revised' : 'draft'
   const { mergeable, latestReview: review, lastMergedAt } = facts

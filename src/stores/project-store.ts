@@ -11,8 +11,9 @@ import type {
   FileNode,
 } from '../shared/ipc-channels'
 import { alertError } from '../components/ui/AlertDialog'
+import { showFinalizationRepairNotice } from '../components/finalization-repair-notice'
 import { confirm } from '../components/ui/Confirm'
-import { appErrorMessage, displayedErrorMessage } from '../i18n/app-errors'
+import { appErrorMessage, displayedErrorMessage, englishWithReason } from '../i18n/app-errors'
 import { saveDirtyEditorChangesForExit, useEditorStore } from './editor-store'
 import { countUnsavedEditorItemsForProject } from './editor-unsaved'
 import { useLayoutStore } from './layout-store'
@@ -783,11 +784,20 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         if (!isLatestRequest()) return false
         const warnings = [...partialLoadWarnings, ...layer2Warnings]
           .map(warning => projectError(warning))
+        const repair = result.finalizationRepair
+        if (repair?.status === 'failed') {
+          const reason = displayedErrorMessage(useLocaleStore.getState().locale, repair.error)
+          warnings.push(projectText(
+            `重复的定稿没能修复，后面的章节可能写不了；下次打开项目会再试一次。原因：${reason}`,
+            englishWithReason('Duplicate final versions could not be repaired, so later chapters may stay blocked. Opening the project again will retry.', reason),
+          ))
+        }
         if (warnings.length > 0) {
           alertError(warnings.join('\n'), {
             title: projectText('项目已打开，部分数据加载失败', 'Project opened with some data unavailable'),
           })
         }
+        if (repair?.status === 'checked') showFinalizationRepairNotice(repair)
         return true
       }
       if (!isLatestRequest()) return false

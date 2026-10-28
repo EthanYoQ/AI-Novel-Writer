@@ -63,6 +63,7 @@ import type {
   ChapterDeletionResult,
   DeleteFinalizedChapterRequest,
 } from './chapter-deletion'
+import type { FinalizationRepairOnOpen } from './finalization-repair'
 import type {
   ImportRunChapterSnapshot,
   ImportRunEffectCommitResult,
@@ -370,6 +371,7 @@ export interface ProjectChannels {
       error?: string
       legacyImportSource?: ProjectDirectoryGrant
       errorCode?: AppErrorCode
+      finalizationRepair?: FinalizationRepairOnOpen
     }
   }
   'project:save': {

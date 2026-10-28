@@ -265,7 +265,6 @@ export function verifyPortableTransferAuthority(
     || JSON.stringify(facts.summarySources) !== JSON.stringify(authority.summarySources)) invalid()
 }
 
-/** Original exported tuples are immutable history; newer finalized versions are allowed. */
 export function verifyPortableTransferAuthorityHistory(
   database: Database.Database,
   authority: PortableTransferAuthority,
@@ -275,10 +274,12 @@ export function verifyPortableTransferAuthorityHistory(
   for (const item of authority.finalizations) {
     const row = database.prepare(`
       SELECT d.status AS status,d.chapter_number AS chapterNumber,c.body AS body,
-        o.finalization_id AS finalizationId,o.content_hash AS contentHash,o.content_snapshot AS contentSnapshot
+        o.finalization_id AS finalizationId,o.content_hash AS contentHash,o.content_snapshot AS contentSnapshot,
+        EXISTS (SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number
+          AND newer.status='finalized' AND newer.id<>d.id) AS replaced
       FROM drafts d JOIN contents c ON c.id=d.content_id
       LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.id=?
-    `).get(item.draftId) as { status: string; chapterNumber: number; body: string; finalizationId: string | null; contentHash: string | null; contentSnapshot: string | null } | undefined
+    `).get(item.draftId) as { status: string; chapterNumber: number; body: string; finalizationId: string | null; contentHash: string | null; contentSnapshot: string | null; replaced: number } | undefined
     if (!row && freeze?.active && !database.prepare('SELECT 1 FROM drafts WHERE id=?').get(item.draftId)) {
       const deletion = database.prepare(`
         SELECT operation_id AS operationId FROM chapter_deletion_operations
@@ -292,7 +293,8 @@ export function verifyPortableTransferAuthorityHistory(
         continue
       }
     }
-    if (!row || row.status !== 'finalized' || row.chapterNumber !== item.chapterNumber
+    const stillReceipted = row?.status === 'finalized' || (row?.status === 'superseded' && row.replaced === 1)
+    if (!row || !stillReceipted || row.chapterNumber !== item.chapterNumber
       || row.finalizationId !== item.finalizationId || row.contentHash !== item.contentHash
       || row.contentSnapshot !== row.body || sha256(row.body) !== item.contentHash) invalid()
   }

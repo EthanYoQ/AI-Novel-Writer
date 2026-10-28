@@ -1,12 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ipc } from '../../../services/ipc-client'
-import type { VersionRecord } from '../../../services/version-service'
 import { countDraftUnits } from '../../../shared/draft-units'
+import type { DraftStatus } from '../../../shared/draft-status'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../../project-session-gate'
+
+export type VersionKind = 'draft' | 'refined' | 'final' | 'superseded'
+
+const VERSION_KIND: Record<DraftStatus, VersionKind> = {
+  draft: 'draft',
+  reviewed: 'draft',
+  archived: 'draft',
+  revised: 'refined',
+  finalized: 'final',
+  superseded: 'superseded',
+}
+
+export interface VersionRecord {
+  id: number
+  version: number
+  type: VersionKind
+  word_count: number
+  created_at: string
+  dependencies_stale: boolean
+}
 
 export interface VersionChapter {
   number: number
@@ -78,7 +98,7 @@ export function useVersionHistory(projectKey: string) {
       const loaded: VersionRecord[] = drafts.map(draft => ({
         id: draft.id,
         version: draft.version,
-        type: draft.status === 'finalized' ? 'final' : (draft.status === 'revised' ? 'refined' : 'draft'),
+        type: VERSION_KIND[draft.status],
         word_count: draft.wordCount || 0,
         created_at: draft.createdAt,
         dependencies_stale: draft.dependenciesStale,
