@@ -513,7 +513,10 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     useLLMStore.setState({ models: ['test-model', 'post-model', 'plan-model'].map(id => ({ id, purposes: ['generation'] })) as never,
       defaultModelId: 'test-model', stageModelIds: { finalization: 'post-model', planning: 'plan-model' } })
     const importContext: WorkflowContext = { ...workflowContext, data: {} }
+    const recordedModel = () => useWorkflowStore.getState().activeRuns[0]?.generationModelId
+    useWorkflowStore.setState({ activeRuns: [{ id: workflowContext.runId, status: 'running' }] as never })
     await command('Chapter 2 finalized content').execute({ step: {}, context: importContext, callbacks: callbacks() })
+    expect(recordedModel()).toBe('post-model')
     const handle = { projectId: 'test', epoch: 'lease-test', rootActionId: 'import-root', runId: 'import-generation' }
     const view: MainGenerationRunView = { handle, budget: { maxAttempts: 1, maxRequestedOutputTokens: 100, maxRequestedOutputTokensPerAttempt: 100, deadlineAt: 1000 }, status: 'running', nonReplayable: false, artifacts: [] }
     const begin = vi.fn<(session: unknown, request: { modelId: string }) => Promise<MainGenerationRunView>>(async () => view)
@@ -525,6 +528,8 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     }
     expect(selections.map(selection => (selection as { modelId: string }).modelId)).toEqual(['post-model', 'post-model'])
     expect(begin.mock.calls.map(([, request]) => request.modelId)).toEqual(['plan-model', 'plan-model', 'plan-model'])
+    expect(recordedModel()).toBe('plan-model')
+    useWorkflowStore.setState({ activeRuns: [] })
   })
 
   it('records the model main actually inherits from a finished sibling step, not the newly assigned one', async () => {
