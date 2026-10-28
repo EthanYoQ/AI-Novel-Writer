@@ -11,7 +11,7 @@ export function canExecuteGraph(recovery: GraphGenerationRecovery) {
 }
 export function assertGraphResult(recovery: GraphGenerationRecovery): asserts recovery is GraphGenerationRecovery & { result: NonNullable<GraphGenerationRecovery['result']> } {
   if (recovery.result) return
-  throwIfLastAttemptTerminal(recovery.view)
+  throwIfLastAttemptTerminal(recovery.view.budgetDiagnostics, recovery.view.handle.runId)
   throw new Error('GRAPH_GENERATION_INCOMPLETE')
 }
 /** Navigation only: main owns sources, tasks, candidate identity and durable effects. */

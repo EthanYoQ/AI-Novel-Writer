@@ -1,4 +1,4 @@
-import { displayedErrorMessage, englishWithReason, knownAppErrorMessage } from '../../../i18n/app-errors'
+import { displayedErrorMessage, knownAppErrorMessage } from '../../../i18n/app-errors'
 import { parsePlanningTargetUnits, planningTargetInstruction, assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS } from '../../../shared/plot-outline-contract'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import {
@@ -461,7 +461,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         throw new Error(workflowUiText(
           context,
           `${displayedErrorMessage(context.uiLocale, batchResult.failure.message)}；${generationSummary}`,
-          `${englishWithReason('Blueprint generation failed:', knownAppErrorMessage(context.uiLocale, batchResult.failure.message) ?? '')} code=${batchResult.failure.code} reason=${batchResult.failure.reason ?? 'unknown'}; ${generationSummary}`,
+          `Blueprint generation failed: code=${batchResult.failure.code} reason=${batchResult.failure.reason ?? 'unknown'}; ${generationSummary}`,
         ))
       }
 

@@ -203,9 +203,12 @@ export function throwIfTerminalProviderFailure(receipt: GenerationAttemptReceipt
   if (isTerminalProviderFailure(receipt.failureCode)) throw new TerminalProviderFailureError(receipt.failureCode, receipt)
 }
 
-/** For clients that read a run back instead of its receipt: the last attempt decides. */
-export function throwIfLastAttemptTerminal(view: { budgetDiagnostics?: readonly { failureCode?: string | null }[] }): void {
-  const failureCode = view.budgetDiagnostics?.at(-1)?.failureCode
+/**
+ * For clients that read a run back instead of its receipt: that run's last attempt decides.
+ * The diagnostics list every attempt under the root, including other runs such as child workflows.
+ */
+export function throwIfLastAttemptTerminal(diagnostics: readonly { runId?: string; failureCode?: string | null }[] | undefined, runId: string): void {
+  const failureCode = diagnostics?.filter(diagnostic => diagnostic.runId === runId).at(-1)?.failureCode
   if (isTerminalProviderFailure(failureCode)) throw new Error(failureCode)
 }
 

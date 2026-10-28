@@ -58,7 +58,7 @@ export function createLegacyRosterGeneration(sessionInput: ProjectSessionContext
       if (detached || cancelled) throw new Error('LEGACY_ROSTER_GENERATION_DETACHED')
       if (current.proposal || current.artifact) return current
       if (!canContinueLegacyRoster(current)) {
-        throwIfLastAttemptTerminal(current.view)
+        throwIfLastAttemptTerminal(current.view.budgetDiagnostics, current.view.handle.runId)
         throw new Error('LEGACY_ROSTER_GENERATION_OUTCOME_UNKNOWN')
       }
       if (current.sourceStatus !== 'current' || current.view.status === 'cancelled') throw new Error('LEGACY_ROSTER_GENERATION_SOURCE_CONFLICT')
@@ -74,7 +74,7 @@ export function createLegacyRosterGeneration(sessionInput: ProjectSessionContext
       const current = await read()
       assertActive()
       if (current.proposal) return current.proposal
-      if (!current.artifact) throwIfLastAttemptTerminal(current.view)
+      if (!current.artifact) throwIfLastAttemptTerminal(current.view.budgetDiagnostics, current.view.handle.runId)
       if (detached || cancelled || current.sourceStatus !== 'current' || current.view.status === 'cancelled' || !current.artifact) throw new Error('LEGACY_ROSTER_GENERATION_NOT_STAGEABLE')
       return ipc.invokeWithProjectSession(session, 'legacy-roster:stage', { handle: current.view.handle, artifact: current.artifact })
     },

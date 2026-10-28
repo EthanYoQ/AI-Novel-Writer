@@ -19,6 +19,7 @@ import type { ProjectData } from '../../../shared/ipc-channels'
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
 import { globalEventBus } from '../../../shared/event-bus'
+import { TerminalProviderFailureError } from '../../generation/generation-harness'
 
 const blueprint: ChapterBlueprint = {
   chapterNumber: 1,
@@ -525,7 +526,7 @@ describe('directory workflow project context', () => {
     const projectSession = { projectId: projectA.id, leaseId: projectA.sessionLease!, projectPath: projectA.path }
     useProjectStore.setState({ currentProject: projectA })
     const directoryCommand = await import('../commands/directory.command')
-    vi.spyOn(directoryCommand.GenerateDirectoryCommand.prototype, 'execute').mockRejectedValue(new Error('GENERATION_CONTEXT_LENGTH_EXCEEDED'))
+    vi.spyOn(directoryCommand.GenerateDirectoryCommand.prototype, 'execute').mockRejectedValue(new TerminalProviderFailureError('GENERATION_CONTEXT_LENGTH_EXCEEDED', {} as never))
     const workflow = createDirectoryWorkflow({ mode: 'full' }, projectA.path, projectSession, 'en-US')
     await expect(workflow.steps[1].executor(workflowStep('Generate blueprints'), { runId: 'context-length-run', projectPath: projectA.path, projectSession,
       writingLanguage: 'zh-CN', uiLocale: 'en-US', data: {}, cancelled: false }, { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }))

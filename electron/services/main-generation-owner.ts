@@ -7,7 +7,7 @@ import { generationOutputContract, type GenerationAuthorInput } from '../../src/
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
-import { tokenLiability } from '../../src/shared/generation-contract'
+import { TERMINAL_PROVIDER_FAILURE_CODES, tokenLiability } from '../../src/shared/generation-contract'
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock } from '../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
@@ -85,7 +85,7 @@ export interface MainGenerationOwnerDependencies {
 interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
 
 const RENDERER_SAFE_PROVIDER_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR',
-  'GENERATION_CONTEXT_LENGTH_EXCEEDED'] as const satisfies readonly NonNullable<GenerationAttemptReceipt['failureCode']>[]
+  ...TERMINAL_PROVIDER_FAILURE_CODES] as const satisfies readonly NonNullable<GenerationAttemptReceipt['failureCode']>[]
 
 export function providerStreamFailureCode(error: string): typeof RENDERER_SAFE_PROVIDER_FAILURE_CODES[number] {
   if (error === 'LLM_CONTEXT_LENGTH_EXCEEDED') return 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
@@ -309,7 +309,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const attempt = receipt.attempt
       const usage = receipt.result?.usage
       return {
-        attemptId: attempt.attemptId, plannerVersion: receipt.budgetDecision?.policyVersion,
+        attemptId: attempt.attemptId, runId: receipt.run.runId, plannerVersion: receipt.budgetDecision?.policyVersion,
         requestedOutputTokens: attempt.requestedOutputTokens,
         reservedTokens: attempt.reservedTokens,
         actualState: attempt.status === 'cancelled-before-dispatch' ? 'not-dispatched' : attempt.status === 'settled' ? 'settled' : ['reserved', 'dispatch-marked'].includes(attempt.status) ? 'reserved' : 'unknown',

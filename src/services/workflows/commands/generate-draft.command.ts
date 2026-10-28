@@ -38,12 +38,12 @@ import {
   type CreateGenerationRuntimeOptions,
   type GenerationRuntime,
 } from '../../generation/generation-runtime'
-import type {
-  GenerationAttemptReceipt,
-  GenerationOutcome,
-  GenerationSession,
+import {
+  throwIfTerminalProviderFailure,
+  type GenerationAttemptReceipt,
+  type GenerationOutcome,
+  type GenerationSession,
 } from '../../generation/generation-harness'
-import { throwIfTerminalProviderFailure } from '../../generation/generation-harness'
 import type { WritingLanguage } from '../../../shared/writing-language'
 import type { FinalizedContinuityProjection } from '../../../shared/finalized-continuity'
 import type { NarrativeThreadView } from '../../../shared/narrative-thread'

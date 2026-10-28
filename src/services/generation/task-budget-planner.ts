@@ -133,6 +133,8 @@ export interface TaskBudgetDecision {
 
 export interface GenerationBudgetDiagnostic {
   attemptId: string
+  /** 账本按根列出全部请求；读回某次运行的结果时按它筛出本运行的请求。主进程总会填。 */
+  runId?: string
   plannerVersion?: string
   requestedOutputTokens: number
   /** Full root-ledger reservation, including input/output/reasoning/safety. */

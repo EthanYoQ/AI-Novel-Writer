@@ -54,14 +54,14 @@ export class AgentGenerationClient {
     this.assertActive()
     const existing = this.recovery.rounds.find(round => round.index === index)
     if (existing && existing.status !== 'not-started') {
-      if (existing.status !== 'completed') throwIfLastAttemptTerminal(this.recovery.run)
+      if (existing.status !== 'completed') throwIfLastAttemptTerminal(this.recovery.run.budgetDiagnostics, existing.handle.runId)
       return existing
     }
     this.accept(await ipc.invokeWithProjectSession(this.projectSession, 'agent-generation:round', { handle: this.recovery.handle, index }))
     this.assertActive()
     const round = this.recovery.rounds.find(round => round.index === index)
     if (!round) throw new Error('GENERATION_AGENT_ROUND_MISSING')
-    if (round.status !== 'completed') throwIfLastAttemptTerminal(this.recovery.run)
+    if (round.status !== 'completed') throwIfLastAttemptTerminal(this.recovery.run.budgetDiagnostics, round.handle.runId)
     return round
   }
 

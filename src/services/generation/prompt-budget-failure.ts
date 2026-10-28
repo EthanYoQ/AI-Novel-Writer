@@ -68,6 +68,8 @@ export type GenerationFailureCategory =
 
 const CAPACITY_FAILURES = new Set([
   'PROMPT_BUDGET_EXHAUSTED',
+  // ADR-0023 之前的版本写下的失败，读回旧记录时仍归到容量预检。
+  'GENERATION_INPUT_CAPACITY_EXCEEDED',
 ])
 const BUDGET_FAILURES = new Set([
   'ROOT_BUDGET_EXHAUSTED',
@@ -107,7 +109,8 @@ export function classifyGenerationFailure(
   // The main preflight emits `TASK_BUDGET_SCOPE_SPLIT_REQUIRED`; the batch
   // executor consumes that exact spelling, so accept both here.
   if (
-    code.includes('TASK_BUDGET_SPLIT_REQUIRED')
+    code.includes('TASK_BUDGET_CAPACITY_CONFLICT')
+    || code.includes('TASK_BUDGET_SPLIT_REQUIRED')
     || code.includes('TASK_BUDGET_SCOPE_SPLIT_REQUIRED')
   ) return 'capacity-preflight'
   if (code.includes('GENERATION_CONTEXT_LENGTH_EXCEEDED')) return 'provider-context'

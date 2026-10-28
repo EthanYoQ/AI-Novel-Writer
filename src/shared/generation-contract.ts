@@ -103,6 +103,8 @@ export async function assertVisibleSnapshot(previous: VisibleArtifact, next: Vis
 }
 
 /** Provider failures that resending the same request cannot fix: the run ends with the code. */
-export function isTerminalProviderFailure(code: unknown): code is 'GENERATION_CONTEXT_LENGTH_EXCEEDED' {
-  return code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
+export const TERMINAL_PROVIDER_FAILURE_CODES = ['GENERATION_CONTEXT_LENGTH_EXCEEDED'] as const
+
+export function isTerminalProviderFailure(code: unknown): code is typeof TERMINAL_PROVIDER_FAILURE_CODES[number] {
+  return (TERMINAL_PROVIDER_FAILURE_CODES as readonly unknown[]).includes(code)
 }
