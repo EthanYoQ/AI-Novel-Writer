@@ -14,6 +14,8 @@ import {
 } from './run-recovery'
 import { displayedErrorMessage } from '../../i18n/app-errors'
 import { hideRecovery, readHiddenRecovery } from './hidden-recovery'
+import { projectRuns } from './run-output'
+import type { GenerationRecoveryList } from '../../shared/generation-owner-contract'
 
 function currentSession(): ProjectSessionContext | null {
   return projectSessionContextFromProject(useProjectStore.getState().currentProject)
@@ -60,9 +62,8 @@ export function useRunRecovery(): RunRecovery {
   const lastEnded = useWorkflowStore(s => s.history[0] ? `${s.history[0].id}:${s.history[0].completedAt ?? ''}` : '')
   const [candidateList, setCandidates] = useState<Loaded<RecoverySources['candidates']>>({ session: null, value: [] })
   const [candidateError, setCandidateError] = useState('')
-  const [generationList, setGeneration] = useState<Loaded<Omit<RecoverySources, 'candidates'>>>({ session: null, value: EMPTY_RECOVERY_SOURCES })
+  const [generationList, setGeneration] = useState<Loaded<GenerationRecoveryList>>({ session: null, value: { ...EMPTY_RECOVERY_SOURCES, partial: false } })
   const [generationError, setGenerationError] = useState('')
-  const [partialLoad, setPartialLoad] = useState(false)
   const [refreshTick, setRefreshTick] = useState(0)
   const [selection, setSelection] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
@@ -88,14 +89,29 @@ export function useRunRecovery(): RunRecovery {
     return () => { active = false }
   }, [session])
 
-  /** 侧页打开、运行结束或恢复动作之后重读；生成中的每次尝试快照不触发，主进程不必反复整表重算。 */
+  /**
+   * 工作流之外的生成（选区建议）结束时没有运行历史可看，靠它的最后一次快照触发重读。
+   * 这部作品有工作流在跑时不跟：批量写作每次尝试都会结束一次，那样又回到逐次整表重算；工作流结束时由历史触发。
+   */
+  useEffect(() => {
+    if (!session) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const detach = ipc.on('generation:snapshot', snapshot => {
+      if (snapshot.projectId !== session.projectId || snapshot.epoch !== session.leaseId || snapshot.status === 'running') return
+      if (projectRuns(useWorkflowStore.getState().activeRuns, session.projectPath).length) return
+      clearTimeout(timer)
+      timer = setTimeout(() => setRefreshTick(value => value + 1), 100)
+    })
+    return () => { detach(); clearTimeout(timer) }
+  }, [session])
+
+  /** 侧页打开、运行结束或恢复动作之后重读；工作流写作中的每次尝试快照不触发，主进程不必反复整表重算。 */
   useEffect(() => {
     if (!session) return
     let active = true
-    void ipc.invokeWithProjectSession(session, 'generation:list-recovery').then(({ partial, ...sources }) => {
+    void ipc.invokeWithProjectSession(session, 'generation:list-recovery').then(list => {
       if (!active) return
-      setGeneration({ session, value: sources })
-      setPartialLoad(partial)
+      setGeneration({ session, value: list })
       setGenerationError('')
     }).catch(reason => { if (active) setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
     return () => { active = false }
@@ -104,7 +120,7 @@ export function useRunRecovery(): RunRecovery {
   const entries = useMemo(() => {
     if (!session) return []
     const ofSession = <T,>(loaded: Loaded<T>, empty: T) => sameProjectSessionContext(loaded.session, session) ? loaded.value : empty
-    return buildRecoveryEntries({ ...ofSession(generationList, EMPTY_RECOVERY_SOURCES), candidates: ofSession(candidateList, []) }, locale)
+    return buildRecoveryEntries({ ...ofSession(generationList, { ...EMPTY_RECOVERY_SOURCES, partial: false }), candidates: ofSession(candidateList, []) }, locale)
       .filter(entry => entry.kind !== 'draft' || !hiddenEarlier.has(entry.key) && !hiddenNow.has(entry.key))
   }, [session, generationList, candidateList, locale, hiddenEarlier, hiddenNow])
 
@@ -143,7 +159,7 @@ export function useRunRecovery(): RunRecovery {
   return {
     entries,
     candidateError,
-    generationError: generationError || (partialLoad ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : ''),
+    generationError: generationError || (sameProjectSessionContext(generationList.session, session) && generationList.value.partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : ''),
     busy,
     picked: entry => selection[entry.key] ?? [],
     togglePick: (entry, artifactId, checked) => setSelection(previous => {

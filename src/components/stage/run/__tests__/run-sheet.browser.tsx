@@ -308,8 +308,9 @@ describe('运行侧页', () => {
     expect(writeText).toHaveBeenCalledWith(report)
   })
 
-  it('打开侧页只向主进程要一次可恢复列表；生成中的尝试快照不触发重读，运行结束才重读', async () => {
+  it('打开侧页只向主进程要一次可恢复列表；工作流写作中的尝试快照不触发重读，运行结束才重读', async () => {
     const reads = () => invoke.mock.calls.filter(([channel]) => channel.startsWith('generation:'))
+    useWorkflowStore.setState({ activeRuns: [run('5', 'running')] })
     await render()
     await vi.waitFor(() => expect(reads()).toEqual([['generation:list-recovery', session]]))
     await act(async () => {
@@ -317,9 +318,20 @@ describe('运行侧页', () => {
       await new Promise(resolve => setTimeout(resolve, 300))
     })
     expect(reads()).toHaveLength(1)
-    await act(async () => useWorkflowStore.setState({ history: [run('3', 'completed')] }))
+    await act(async () => useWorkflowStore.setState({ activeRuns: [], history: [run('3', 'completed')] }))
     await vi.waitFor(() => expect(reads()).toHaveLength(2))
     expect(reads().map(([channel]) => channel)).toEqual(['generation:list-recovery', 'generation:list-recovery'])
+  })
+
+  it('没有工作流在写时，工作流之外的生成（选区建议）结束也会重读可恢复列表', async () => {
+    const reads = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')
+    await render()
+    await vi.waitFor(() => expect(reads()).toHaveLength(1))
+    await act(async () => listeners.get('generation:snapshot')?.({ projectId: session.projectId, epoch: session.leaseId, status: 'running' }))
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+    expect(reads()).toHaveLength(1)
+    await act(async () => listeners.get('generation:snapshot')?.({ projectId: session.projectId, epoch: session.leaseId, status: 'cancelled' }))
+    await vi.waitFor(() => expect(reads()).toHaveLength(2))
   })
 
   it('历史已满 50 条时，又一个运行结束仍会重读可恢复列表', async () => {
