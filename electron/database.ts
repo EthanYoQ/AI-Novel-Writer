@@ -8,9 +8,11 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import { initializeLegacyBaselineSchema } from './migrations/baseline-schema'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from './migrations/desktop-registry'
-import { migrateSchema, verifySchema } from './migrations/runner'
+import { SchemaMigrationError } from './migrations/registry'
+import { migrateSchema } from './migrations/runner'
 import { SqliteSchemaAdapter } from './migrations/sqlite-schema-adapter'
-import { activateCanonicalProjectData, upgradeCanonicalProjectData, deactivateProjectData, getNewProjectDatabasePath, getProjectDatabasePath } from './services/project-data-locator'
+import { openCanonicalProjectData, deactivateProjectData, getNewProjectDatabasePath, getProjectDatabasePath } from './services/project-data-locator'
+import { readSqliteContentIdentity } from './services/sqlite-project-migration'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -36,11 +38,14 @@ export function initProjectDatabase(projectPath: string): void {
   closeProjectDatabase()
   let database: BetterSqlite3.Database | undefined
   try {
-    upgradeCanonicalProjectData(projectPath)
-    activateCanonicalProjectData(projectPath)
-    database = new Database(getProjectDatabasePath(projectPath), { fileMustExist: true })
-    const adapter = new SqliteSchemaAdapter(database)
-    verifySchema(adapter, getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+    const verified = openCanonicalProjectData(projectPath)
+    const databasePath = getProjectDatabasePath(projectPath)
+    database = new Database(databasePath, { fileMustExist: true })
+    // Compare before any statement: an unused handle has not opened the WAL, so closing it on refusal cannot checkpoint.
+    const content = readSqliteContentIdentity(databasePath)
+    if (content.database !== verified.database || content.wal !== verified.wal) {
+      throw new SchemaMigrationError('SOURCE_CHANGED_SINCE_PROBE')
+    }
     database.pragma('journal_mode = WAL')
     database.pragma('foreign_keys = ON')
     fenceProjectSession(database)

@@ -40,6 +40,8 @@ const ERROR_KEYS = {
   UNRECOGNIZED_SCHEMA: 'error.projectSchemaUnrecognized',
   CORRUPT_SCHEMA: 'error.projectSchemaCorrupt',
   NEWER_SCHEMA_READ_ONLY: 'error.projectSchemaNewer',
+  // 打开作品时，正式连接看到的库与刚校验过的快照字节不一致：校验之后有别的程序改了作品文件。
+  SOURCE_CHANGED_SINCE_PROBE: 'error.projectChangedDuringOpen',
   LEGACY_IMPORT_UNSUPPORTED_SOURCE: 'error.legacyImportUnsupportedSource',
   PROJECT_DELETE_FAILED: 'error.projectDeleteFailed',
   PROJECT_RECENT_LIST_UPDATE_FAILED: 'error.projectRecentListUpdateFailed',
