@@ -161,6 +161,45 @@ describe('单章视图的主按钮随五种状态变化', () => {
       .toEqual({ reviewSourceId: backend.state.reviews.at(-1)!.id, model: 'glm', content: ORIGINAL })
   })
 
+  it('「修稿」在分工模型里另有指定时，不打开修稿选项直接修稿也用它', async () => {
+    useLLMStore.setState({ stageModelIds: { refinement: 'glm' } })
+    const draft = backend.addDraft({ status: 'draft' })
+    backend.addReview(draft)
+    await mount()
+    await openDraft(draft.id)
+    await click('按 2 项意见修稿')
+    await vi.waitFor(() => expect(workflows.createRefineFromReviewWorkflow).toHaveBeenCalledOnce())
+    expect(workflows.createRefineFromReviewWorkflow.mock.calls[0][0].generationModelId).toBe('glm')
+  })
+
+  it('「修稿」另有指定时，修稿选项里预选它；作者换成别的模型就按换的修稿', async () => {
+    useLLMStore.setState({ stageModelIds: { refinement: 'glm' } })
+    const draft = backend.addDraft({ status: 'draft' })
+    backend.addReview(draft)
+    await mount()
+    await openDraft(draft.id)
+    await click('修稿选项')
+    await expect.element(page.getByRole('combobox', { name: /本次修稿模型/ })).toHaveValue('glm')
+    await act(async () => page.getByRole('combobox', { name: /本次修稿模型/ }).selectOptions('grok'))
+    await click('按 2 项意见修稿')
+    await vi.waitFor(() => expect(workflows.createRefineFromReviewWorkflow).toHaveBeenCalledOnce())
+    expect(workflows.createRefineFromReviewWorkflow.mock.calls[0][0].generationModelId).toBe('grok')
+  })
+
+  it.each([
+    ['用默认模型', 'grok', 'grok'],
+    ['默认模型不可用时用第一个生成模型', null, 'glm'],
+  ])('「修稿」没有另外指定时照旧%s', async (_label, defaultModelId, expected) => {
+    useLLMStore.setState({ defaultModelId })
+    const draft = backend.addDraft({ status: 'draft' })
+    backend.addReview(draft)
+    await mount()
+    await openDraft(draft.id)
+    await click('按 2 项意见修稿')
+    await vi.waitFor(() => expect(workflows.createRefineFromReviewWorkflow).toHaveBeenCalledOnce())
+    expect(workflows.createRefineFromReviewWorkflow.mock.calls[0][0].generationModelId).toBe(expected)
+  })
+
   it('重新审稿后按意见修稿：确认的清单只带新审稿复验周期里的意见，不沿用上一份审稿的', async () => {
     const draft = backend.addDraft({ status: 'draft' })
     const first = backend.addReview(draft)
