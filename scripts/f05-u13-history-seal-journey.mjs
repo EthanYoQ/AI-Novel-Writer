@@ -251,7 +251,7 @@ async function main() {
     const reopenedRows = await historyRows(reopenedPage)
     assert.deepEqual(reopenedRows, [], 'renderer run history is expected to be empty after a new process')
     assert.deepEqual(durableRuns(project.projectPath), runs, 'new process changed durable generation run identities')
-    pass('u13-reopen-limitation', null, 'New process keeps both durable runs, lists neither the saved run nor the textless failure as recoverable, and the in-memory run history is empty; no history persistence is claimed',
+    pass('u13-reopen-limitation', null, 'New process keeps both durable runs, does not list the saved single-chapter run as recoverable, and the in-memory run history is empty; no history persistence is claimed',
       { durableRunIds: runs.map(run => run.runId), rendererHistoryCount: reopenedRows.length })
   } catch (error) {
     failure = error
@@ -261,7 +261,7 @@ async function main() {
   finally { if (app) await quit(app); if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) } }
   const receipt = { schemaVersion: 1, qualification: 'F05_U13_PACKAGED_V3_HISTORY_WORKFLOW_STATUS_SUBEVIDENCE', outcome: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'stage', scope: { kind: 'controlled-workflow-status-sub-evidence', workflowStatusSteps: ['u13-workflow-status-pending', 'u13-workflow-status-success', 'u13-workflow-status-failure'], verified: ['U13.A08 same-process stage run history selection', 'durable provider attempt and body assertions', 'new-process run history limitation'], excludes: ['U13.A09 chapter view post-processing finalization pending/success/failure seal'] }, testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) }, driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { projectRoot: profile.projects, scratch }, fixture: { provider: 'loopback synthetic OpenAI SSE', requests: fixtureState.requests, shortOutlines: fixtureState.outlines, externalModelRequests: 0 }, steps,
     unverifiedActions: ['U13.A01 real model streaming', 'U13.A02 provider reasoning qualification', 'U13.A03-U13.A07', 'U13.A09 real chapter view post-processing finalization pending/success/failure seal', 'release default and model quality'],
-    limitation: 'Renderer run history is in-memory and empty in a new process; durable main-generation runs remain in the library, and saved runs are not listed as recoverable',
+    limitation: 'Renderer run history is in-memory and empty in a new process; durable main-generation runs remain in the library, and the saved single-chapter run is not listed as recoverable',
     failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
   const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u13-history-seals', runId, 'receipt.json'); fs.mkdirSync(path.dirname(receiptPath), { recursive: true }); fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2)); process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, receipt: receiptPath, steps: steps.map(step => step.stepId), testedSha })}\n`); if (failure) throw failure
 }
