@@ -5,8 +5,8 @@ import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import type BetterSqlite3 from 'better-sqlite3'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
-import { migrateSchema, probeSchema, verifySchema, type SchemaProbe } from '../migrations/runner'
-import type { MigrationRegistry } from '../migrations/registry'
+import { migrateSchema, probeSchema, verifySchema } from '../migrations/runner'
+import { SchemaMigrationError, type MigrationRegistry } from '../migrations/registry'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import { M02_ADDED_CHARACTER_COLUMNS, M02_AUXILIARY_TABLES } from '../migrations/m02-character-identity'
 import { M03_REVIEW_CYCLE_TABLES } from '../migrations/m03-review-cycle'
@@ -261,34 +261,36 @@ export interface SqliteContentIdentity { database: string; wal: string }
 const EMPTY_SHA256 = createHash('sha256').digest('hex')
 const contentIdentity = (hashes: Record<string, string>): SqliteContentIdentity =>
   ({ database: hashes[''], wal: hashes['-wal'] ?? EMPTY_SHA256 })
-export function readSqliteContentIdentity(file: string): SqliteContentIdentity {
-  return contentIdentity(Object.fromEntries(['', '-wal'].filter(suffix => fs.existsSync(file + suffix)).map(suffix =>
-    [suffix, createHash('sha256').update(fs.readFileSync(file + suffix)).digest('hex')])))
-}
+export function readSqliteContentIdentity(file: string): SqliteContentIdentity { return contentIdentity(sourceIdentity(file)) }
 
-/** Opening verifies one private snapshot. Content fingerprints exist only to
- * gate a migration, so a current schema skips them and an older one takes the
- * full upgrade lane. The returned content identity lets the caller prove its
- * writable handle sees the bytes that were verified.
- */
-export function openProjectSqlite(options: { databasePath: string }): SchemaProbe & { content: SqliteContentIdentity } {
-  const registry = getDesktopMigrationRegistry()
-  const snapshot = physicalSnapshot(options.databasePath)
-  let verified: SchemaProbe | undefined
+function verifyCurrentSnapshot(databasePath: string, registry: MigrationRegistry): SqliteContentIdentity | undefined {
+  const snapshot = physicalSnapshot(databasePath)
   try {
     const db = new Database(snapshot.file, { readonly: true, fileMustExist: true })
     db.pragma('foreign_keys = ON')
     try {
       const adapter = new SqliteSchemaAdapter(db)
-      if (adapter.readUserVersion() === CURRENT_DESKTOP_SCHEMA_VERSION) {
-        verified = verifySchema(adapter, registry, CURRENT_DESKTOP_SCHEMA_VERSION)
-        snapshot.unchanged()
-      }
+      if (adapter.readUserVersion() !== CURRENT_DESKTOP_SCHEMA_VERSION) return undefined
+      verifySchema(adapter, registry, CURRENT_DESKTOP_SCHEMA_VERSION)
+      snapshot.unchanged()
+      return contentIdentity(snapshot.identity)
     } finally { db.close() }
   } finally { snapshot.close() }
-  if (verified) return { ...verified, content: contentIdentity(snapshot.identity) }
-  const upgraded = upgradeProjectSqlite({ databasePath: options.databasePath })
-  return { version: upgraded.schemaVersion, fingerprint: upgraded.fingerprint, content: readSqliteContentIdentity(options.databasePath) }
+}
+
+/** Opening verifies one private snapshot. Content fingerprints exist only to
+ * gate a migration, so a current schema skips them and an older one takes the
+ * full upgrade lane, then verifies the upgraded file the same way. The returned
+ * identity lets the caller prove its writable handle sees the verified bytes.
+ */
+export function openProjectSqlite(options: { databasePath: string }): SqliteContentIdentity {
+  const registry = getDesktopMigrationRegistry()
+  const current = verifyCurrentSnapshot(options.databasePath, registry)
+  if (current) return current
+  upgradeProjectSqlite({ databasePath: options.databasePath })
+  const upgraded = verifyCurrentSnapshot(options.databasePath, registry)
+  if (!upgraded) throw new SchemaMigrationError('SCHEMA_VERSION_MISMATCH')
+  return upgraded
 }
 
 /** Canonical-only upgrade seam. Caller validates its manifest and excludes business

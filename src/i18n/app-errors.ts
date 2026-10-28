@@ -40,8 +40,7 @@ const ERROR_KEYS = {
   UNRECOGNIZED_SCHEMA: 'error.projectSchemaUnrecognized',
   CORRUPT_SCHEMA: 'error.projectSchemaCorrupt',
   NEWER_SCHEMA_READ_ONLY: 'error.projectSchemaNewer',
-  // 打开时校验过的快照与随后打开的正式连接看到的库不一致：校验期间有别的程序改了作品文件。
-  SCHEMA_CHANGED_SINCE_PROBE: 'error.projectChangedDuringOpen',
+  // 打开作品时，正式连接看到的库与刚校验过的快照字节不一致：校验之后有别的程序改了作品文件。
   SOURCE_CHANGED_SINCE_PROBE: 'error.projectChangedDuringOpen',
   LEGACY_IMPORT_UNSUPPORTED_SOURCE: 'error.legacyImportUnsupportedSource',
   PROJECT_DELETE_FAILED: 'error.projectDeleteFailed',

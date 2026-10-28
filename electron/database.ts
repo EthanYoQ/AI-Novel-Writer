@@ -41,12 +41,8 @@ export function initProjectDatabase(projectPath: string): void {
     const verified = openCanonicalProjectData(projectPath)
     const databasePath = getProjectDatabasePath(projectPath)
     database = new Database(databasePath, { fileMustExist: true })
-    const adapter = new SqliteSchemaAdapter(database)
-    if (adapter.readUserVersion() !== verified.version || adapter.readSchemaFingerprint() !== verified.fingerprint) {
-      throw new SchemaMigrationError('SCHEMA_CHANGED_SINCE_PROBE')
-    }
     const content = readSqliteContentIdentity(databasePath)
-    if (content.database !== verified.content.database || content.wal !== verified.content.wal) {
+    if (content.database !== verified.database || content.wal !== verified.wal) {
       throw new SchemaMigrationError('SOURCE_CHANGED_SINCE_PROBE')
     }
     database.pragma('journal_mode = WAL')
