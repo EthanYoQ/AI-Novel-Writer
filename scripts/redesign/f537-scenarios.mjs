@@ -122,6 +122,31 @@ async function stopOnActiveTime(context) {
   return { stepError, diagnostic, blockedCode: root.blocked_code }
 }
 
+/** 发送前根预算已用完：派发前把根的活动时长推到上限，预留时被拒，运行卡片给中性的预算说明。 */
+async function stopBeforeSend(context) {
+  const { app, page, roots, shoot } = context
+  context.fake.replyImport()
+  const hold = await holdBlueprintDispatch(app, 2)
+  await startImport(app, page, referenceNovel(roots, 15), 15)
+  try {
+    await hold.waitHeld()
+    writeDb(context, db => {
+      const root = importRoot(db)
+      db.prepare('UPDATE generation_roots SET active_elapsed_ms=? WHERE root_action_id=?').run(JSON.parse(root.budget_json).maxActiveElapsedMs, root.root_action_id)
+    })
+  } finally {
+    await hold.release()
+  }
+  await runSheet.waitUntilOpen(page)
+  const stepError = await failedStepError(page)
+  await page.waitForTimeout(400)
+  await shoot('f537-stop-before-send-card')
+  assert.match(stepError, /这次导入的请求次数或运行时长已到上限，这一批没有发送/u, stepError)
+  assert.match(stepError, /只能在导入对话框里点「重新开始」，它会从第 1 章重新推演蓝图/u, stepError)
+  assert.doesNotMatch(stepError, /[A-Z]{3,}_[A-Z]/u, '运行卡片的说明不露错误码')
+  return { stepError }
+}
+
 export const F537_SCENARIOS = {
   // 252 章参考小说导入当前作品：知识库、全局、文风、全部蓝图一次跑完，导入根按 252 章定额（770 次、86 625 000 毫秒）。
   'f537-import-252': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
@@ -159,4 +184,5 @@ export const F537_SCENARIOS = {
     return measured
   } },
   'f537-stop-time': { model: true, shell: 'stage', setup: seedStageSample, run: stopOnActiveTime },
+  'f537-stop-before-send': { model: true, shell: 'stage', setup: seedStageSample, run: stopBeforeSend },
 }
