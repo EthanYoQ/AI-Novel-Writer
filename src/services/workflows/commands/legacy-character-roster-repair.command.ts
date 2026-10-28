@@ -1,6 +1,7 @@
 import { createLegacyRosterGeneration } from '../../legacy-roster-generation'
 import { formatCharacterProposalPreview } from '../character-proposal-preview'
-import { useLLMStore } from '../../../stores/llm-store'
+import { routeModelId } from '../../model-routing'
+import { pinWorkflowModel } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import { buildLegacyRosterTask, buildLegacyRosterJsonRepairTask } from '../../../shared/legacy-roster-generation-pure'
 import {
@@ -254,10 +255,9 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
     const client = createLegacyRosterGeneration(session, () => { this.assertNotCancelled(context); assertLegacyRepairSessionCurrent(session, text) })
     const timer = setInterval(() => { if (context.cancelled) void client.cancel().catch(() => {}) }, 50)
     try {
-      const current = await client.open(handle ? { handle } : {
-        modelId: context.generationModelId || useLLMStore.getState().defaultModelId || '',
-        uiActionNonce: `legacy-roster:${context.runId}`,
-      })
+      const modelId = context.generationModelId || routeModelId('legacy-character-roster-repair') || ''
+      const current = await client.open(handle ? { handle } : { modelId, uiActionNonce: `legacy-roster:${context.runId}` })
+      pinWorkflowModel(context, current.modelId)
       context.mainGenerationRunHandle = current.view.handle
       context.data.legacyRosterGenerationHandle = current.view.handle
       const completed = current.proposal ? current : await client.execute()

@@ -26,7 +26,7 @@ it.each([['人物设定.txt'], ['foo.txt'], ['人物设定.txt', '人物设定.t
     db.prepare("INSERT INTO project_core(id,project_name) VALUES('main','合成资料项目')").run()
     const session = { projectId: '资料项目', leaseId: '资料会话', projectPath: root }
     useProjectStore.setState({ currentProject: { id: session.projectId, sessionLease: session.leaseId, path: root, novelConfig: {} } as never })
-    useLLMStore.setState({ defaultModelId: '合成模型' })
+    useLLMStore.setState({ models: [{ id: '合成模型', purposes: ['generation'] }] as never, defaultModelId: '合成模型' })
     const materials = names.map((fileName, index) => ({ fileName, text: '  作者人物资料' + index + '。\r\n' }))
     let binding: GenerationSourceBindingResult | undefined
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
