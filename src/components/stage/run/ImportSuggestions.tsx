@@ -57,9 +57,10 @@ export function ImportSuggestions({ run }: { run: WorkflowRun }) {
 
   useEffect(() => {
     let active = true
-    void reload().then(next => { if (active) setItems(next) }).catch(() => undefined)
+    void reload().then(next => { if (active) setItems(next) })
+      .catch(failure => { if (active) setError(displayedErrorMessage(locale, failure)) })
     return () => { active = false }
-  }, [reload])
+  }, [locale, reload])
 
   const adopt = async (chosen: ImportFillSuggestion[]) => {
     if (!session) return
@@ -75,21 +76,25 @@ export function ImportSuggestions({ run }: { run: WorkflowRun }) {
     }
   }
 
-  if (!session || items.length === 0) return null
+  if (!session || (items.length === 0 && !error)) return null
   const show = (value: string | number) => {
     const choice = CHOICE_NAMES.get(String(value))
     return choice ? text(...choice) : String(value)
   }
   return (
     <section className="run-suggestions" aria-label={text('反推建议', 'Inferred suggestions')}>
-      <p className="run-confirm-summary">{text(`${items.length} 条反推结果与你已有的内容不同`, `${items.length} inferred ${items.length === 1 ? 'value differs' : 'values differ'} from what you wrote`)}</p>
-      <p className="run-note">{text('导入没有改动这些内容。需要的话逐条采用，采用后会替换现有内容。', 'The import left these unchanged. Adopt any you want; adopting replaces what is there now.')}</p>
-      <ul className="run-suggestion-list">
-        {items.map(item => (
-          <SuggestionCard key={item.field} name={text(...FIELD_NAMES[item.field])} current={show(item.current)} inferred={show(item.inferred)}
-            busy={busy} onAdopt={() => void adopt([item])} />
-        ))}
-      </ul>
+      {items.length > 0 && (
+        <>
+          <p className="run-confirm-summary">{text(`${items.length} 条反推结果与你已有的内容不同`, `${items.length} inferred ${items.length === 1 ? 'value differs' : 'values differ'} from what you wrote`)}</p>
+          <p className="run-note">{text('导入没有改动这些内容。需要的话逐条采用，采用后会替换现有内容。', 'The import left these unchanged. Adopt any you want; adopting replaces what is there now.')}</p>
+          <ul className="run-suggestion-list">
+            {items.map(item => (
+              <SuggestionCard key={item.field} name={text(...FIELD_NAMES[item.field])} current={show(item.current)} inferred={show(item.inferred)}
+                busy={busy} onAdopt={() => void adopt([item])} />
+            ))}
+          </ul>
+        </>
+      )}
       {error && <p className="run-note" data-tone="danger" role="alert">{error}</p>}
       {items.length > 1 && (
         <Button variant="secondary" size="sm" disabled={busy} onClick={() => void adopt(items)}>{text('全部采用', 'Adopt all')}</Button>
