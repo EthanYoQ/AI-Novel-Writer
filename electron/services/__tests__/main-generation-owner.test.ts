@@ -2942,6 +2942,20 @@ describe('main draft persistence and batch lineage', () => {
       expect([current, changed].map(item => reopened.readContext(item.run.handle).draftSave.kind)).toEqual(['current', 'changed'])
       expect(runIds(reopened.listRecovery().drafts)).toEqual([unsaved.run.handle.runId])
     })
+    it('尾段对不回尝试行时跳过它，不当作哪个运行的尾段', async () => {
+      const f = drafting()
+      const saved = await generate(f, { ...f.begin, uiActionNonce: 'saved', authorInputs })
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END")
+      const tail = await f.owner.execute({ handle: saved.run.handle, invocationNonce: 'second', task })
+      f.db.exec('DROP TRIGGER reject_snapshot')
+      f.owner.commitDraft(saved.request)
+      const orphan = tail.run.unsavedTails![0]!.attemptId
+      f.db.pragma('foreign_keys = OFF')
+      f.db.prepare('DELETE FROM generation_artifacts WHERE attempt_id=?').run(orphan)
+      f.db.prepare('DELETE FROM generation_attempts WHERE attempt_id=?').run(orphan)
+      f.db.pragma('foreign_keys = ON')
+      expect(f.owner.listRecovery()).toMatchObject({ drafts: [], partial: false })
+    })
     it('已保存的单章运行还有没落盘的正文时仍列出，尾段可复制', async () => {
       const f = drafting()
       const saved = await generate(f, { ...f.begin, uiActionNonce: 'saved', authorInputs })

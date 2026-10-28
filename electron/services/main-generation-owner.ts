@@ -1010,7 +1010,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const list: GenerationRecoveryList = { planning: [], editors: [], reviews: [], batches: [], drafts: [], partial: false }
     const hasText = (item: { text: string }) => item.text.trim().length > 0
     const attemptRun = deps.database.prepare('SELECT run_id FROM generation_attempts WHERE attempt_id=?').pluck()
-    const tailedRuns = new Set(service.readUnsavedTails().filter(hasText).map(tail => attemptRun.get(tail.attemptId) as string))
+    const tailedRuns = new Set(service.readUnsavedTails().filter(hasText)
+      .flatMap(tail => { const runId = attemptRun.get(tail.attemptId); return typeof runId === 'string' ? [runId] : [] }))
     const collect = {
       planning: (handle: MainGenerationRunHandle) => {
         const recovery = readContext(handle)
