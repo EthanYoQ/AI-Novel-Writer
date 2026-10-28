@@ -656,7 +656,8 @@ describe('作者原稿反推的建议', () => {
         return { success: true }
       }
       if (channel === 'fs:list-tree' || channel === 'fs:read-dir') return []
-      if (channel === 'db:recovery-candidate-list' || channel === 'generation:list-batches' || channel === 'generation:list') return []
+      if (channel === 'db:recovery-candidate-list') return []
+      if (channel === 'generation:list-recovery') return { planning: [], editors: [], reviews: [], drafts: [], batches: [], partial: false }
       return null
     })
     return updates
