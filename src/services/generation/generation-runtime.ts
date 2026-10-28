@@ -16,6 +16,7 @@ import {
   assertGenerationHarnessPolicy,
   createGenerationHarness,
   GenerationHarnessError,
+  throwIfTerminalProviderFailure,
   type GenerationHarnessPolicy,
   type GenerationMessage,
   type GenerationOutcome,
@@ -240,6 +241,7 @@ export async function createMainOwnedGenerationRuntime(options: MainOwnedGenerat
       if (projectionError) throw projectionError
       if (receipt.outcome.status === 'completed' && receipt.outcome.finishReason !== 'stop'
         || receipt.outcome.receipt.finishReason !== receipt.outcome.finishReason) throw new Error('INVALID_MAIN_OUTCOME')
+      throwIfTerminalProviderFailure(receipt.outcome.receipt)
       return receipt.outcome
     },
   }

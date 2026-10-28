@@ -23,6 +23,7 @@ import { writingLanguageText, type WritingLanguage } from '../../shared/writing-
 import type { FileWriteCommitState } from '../../shared/ipc-channels'
 import { parseAgentResponseProtocol, cleanAgentProtocolVisibleText } from '../../shared/agent-response-protocol'
 import type { AgentGenerationRound, AgentToolAction } from '../../shared/agent-generation'
+import { providerContextFailureText } from '../generation/prompt-budget-failure'
 
 // ===== 常量 =====
 
@@ -485,10 +486,12 @@ async function runHostedAgentLoop(generate: LLMGenerateFn, callbacks: AgentEngin
     }
     visible += ui('\n\n已达到最大工具调用次数限制，自动停止。', '\n\nThe maximum number of tool calls was reached, so generation stopped.')
     done()
-  } catch {
+  } catch (error) {
+    const providerRejection = providerContextFailureText(error, ui)
     if (signal?.aborted) done()
-    else if (visible) callbacks.onDone(visible + ui('\n\n生成未完成，原候选已保留。', '\n\nGeneration did not finish; the original candidate was retained.'), calls, artifacts)
-    else callbacks.onError(ui('AI 请求失败，请重试。', 'The AI request failed. Please try again.'))
+    else if (visible) callbacks.onDone(visible + ui('\n\n生成未完成，原候选已保留。', '\n\nGeneration did not finish; the original candidate was retained.')
+      + (providerRejection ? `\n\n${providerRejection}` : ''), calls, artifacts)
+    else callbacks.onError(providerRejection ?? ui('AI 请求失败，请重试。', 'The AI request failed. Please try again.'))
   }
 }
 

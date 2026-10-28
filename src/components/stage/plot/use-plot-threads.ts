@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { canExecuteGraph, createGraphGeneration } from '../../../services/graph-generation'
+import { assertGraphResult, canExecuteGraph, createGraphGeneration } from '../../../services/graph-generation'
 import type { MainGenerationRunHandle, MainGenerationRunView } from '../../../services/generation/generation-runtime'
 import { ipc } from '../../../services/ipc-client'
 import { isGenerationModel, preferredGenerationModelId } from '../../../services/workflows/chapter-write-launch'
@@ -41,6 +41,7 @@ import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } 
 import { toast } from '../../ui/Toast'
 import { pluralEn } from '../../../shared/plural-en'
 import { knownAppErrorMessage } from '../../../i18n/app-errors'
+import { providerContextFailureText } from '../../../services/generation/prompt-budget-failure'
 
 const EMPTY_PLAN: NarrativeThreadPlanInput = {
   title: '', type: '', targetStartChapter: 1, targetEndChapter: 1, authorIntent: '',
@@ -128,6 +129,8 @@ function plotTreeErrorMessage(
       'This generation was not saved. Recover the generation record to check its result and cancellation status.',
     )
   }
+  const providerRejection = providerContextFailureText(error, text)
+  if (providerRejection) return providerRejection
   if (message === 'GRAPH_GENERATION_NOT_CONFIRMABLE') {
     return text(
       '本次结果未保存。请恢复生成记录，检查来源是否变化或生成是否已取消。',
@@ -306,7 +309,7 @@ export function usePlotThreads(projectKey: string, {
     const value = await client.execute()
     if (!isProjectSessionCurrent(session) || graphClient.current !== client) throw new Error('GRAPH_GENERATION_DETACHED')
     showGraphRecovery(value)
-    if (!value.result) throw new Error('GRAPH_GENERATION_INCOMPLETE')
+    assertGraphResult(value)
     return { client, value }
   }
   const restoreGraph = async (run: MainGenerationRunView) => {
@@ -330,8 +333,9 @@ export function usePlotThreads(projectKey: string, {
     try {
       const value = await client.execute()
       if (graphClient.current === client) showGraphRecovery(value)
-    } catch {
-      if (graphClient.current === client) setGraphError(text('原运行未完成，结果已保留。', 'The original run did not complete; its output is preserved.'))
+      assertGraphResult(value)
+    } catch (error) {
+      if (graphClient.current === client) setGraphError(providerContextFailureText(error, text) ?? text('原运行未完成，结果已保留。', 'The original run did not complete; its output is preserved.'))
     } finally {
       if (graphClient.current === client) setGenerationBusy(false)
     }
@@ -634,9 +638,9 @@ export function usePlotThreads(projectKey: string, {
       })
       if (!isProjectSessionCurrent(session) || controller.signal.aborted) return
       setPlanCandidates(candidates)
-    } catch {
+    } catch (error) {
       if (isProjectSessionCurrent(session) && !controller.signal.aborted) {
-        setAiError(text('未生成有效的计划候选，请重试。', 'No valid plan candidates were generated. Try again.'))
+        setAiError(providerContextFailureText(error, text) ?? text('未生成有效的计划候选，请重试。', 'No valid plan candidates were generated. Try again.'))
       }
     } finally {
       if (candidateAbortRef.current === controller) candidateAbortRef.current = null
@@ -679,9 +683,9 @@ export function usePlotThreads(projectKey: string, {
         draftId: draftSnapshot.id,
         chapterNumber: draftSnapshot.chapterNumber,
       })))
-    } catch {
+    } catch (error) {
       if (isProjectSessionCurrent(session) && !controller.signal.aborted) {
-        setAiError(text(
+        setAiError(providerContextFailureText(error, text) ?? text(
           '未生成带有效定稿证据的事件候选，请重试。',
           'No event candidate with valid finalized evidence was generated. Try again.',
         ))

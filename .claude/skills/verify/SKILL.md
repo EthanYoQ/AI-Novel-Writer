@@ -557,3 +557,13 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 |---|---|---|---|---|
 | `import-infer-empty` | 新建空作品「雨城」，作品菜单「小说拆解与仿写…」选「我的原稿」导入 3 章，反推默认勾选、显示费用预估（中途拍 `import-infer-dialog`）；跑完后类型、故事前提、文风是反推值，每章都有蓝图，建议里只剩新建作品默认的每章字数（`import-infer-empty-run`）；再拍设定、架构与角色名单（角色以待处理建议出现） | 第 2 章蓝图 | 是 | #516 |
 | `import-infer-existing` | 示例作品「灯塔」先删第 4、5 章蓝图，从第 3 章接着导入 3 章：已有的类型、大纲、前提、世界观、情节大纲不变，空的文风与金手指补上；第 3、6 章蓝图不变，第 4、5 章补上；运行卡片列出建议（`import-infer-existing-suggestions`），采用「类型」后写入反推值；再拍设定页 | 第 4 章蓝图 | 是 | #516 |
+
+## 上下文容量交给服务商（#77 讨论，ADR-0023）
+
+场景在 `scripts/redesign/d77-scenarios.mjs`。两个场景都把模型档案设成作者填的 64K 上下文。`fake.rejectContextLength()` 让假模型对之后的每个对话请求回 HTTP 400，错误体取自 `electron/llm/__tests__/provider-context-length-samples.json` 里的 DeepSeek 样本，和单元测试用同一份；传 `false` 恢复正常回复。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `d77-capacity` | 写第 3 章，正文提示词的字节数超过作者填的上下文窗口。请求不在发出前被拒绝：短细纲与正文各发一次，正文落到编辑器里（`measured.promptBytes`、`measured.chats`） | 第 3 章正文 | 是 | #77 |
+| `d77-context-length` | 写第 3 章，假模型以上下文超长拒绝第一个请求，之后不自动重发（`measured.chats` 只有一次 `context-length`）。运行卡片显示登记的说明（换用上下文更长的模型、调低最大输出 Tokens、精简本章要求与参考材料）和「本次未保存草稿或正文章节。」；不出现「上下文窗口」「请调整章节要求」和服务商原文（`measured.card`） | 失败的运行卡片 | 是 | #77 |
+| `d77-output-allowance` | 设置里编辑作者 64K 模型、展开高级设置：有效输出额度那句说明新开始的生成每次最多发这么多、旧版本开始的运行可能按 32,768 封顶（`d77-output-allowance-set`）；把最大输出 Tokens 和模型输出容量清成 0 后，改说还没有有效输出额度，不出现「未设置」（`d77-output-allowance-unset`）。不保存 | 清空后的高级设置 | 是 | #77 |

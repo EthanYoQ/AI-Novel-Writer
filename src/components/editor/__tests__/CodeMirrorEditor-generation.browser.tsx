@@ -23,6 +23,7 @@ let pendingRequestId: string | null
 let deferFirstLease: boolean
 let rejectFirstLease: ((error: Error) => void) | null
 let leaseRequestCount: number
+let failureCode: string | undefined
 
 const APP_MIN_WINDOW_WIDTH = 1024
 const nextFrames = () => act(async () => { await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
@@ -39,6 +40,7 @@ beforeEach(async () => {
   deferFirstLease = false
   rejectFirstLease = null
   leaseRequestCount = 0
+  failureCode = undefined
   useProjectStore.setState({ currentProject: { id: 'editor-project', sessionLease: 'editor-epoch', path: 'C:/合成编辑器', novelConfig: {} } as never })
   useLLMStore.setState({
     defaultModelId: 'editor-model',
@@ -68,7 +70,7 @@ beforeEach(async () => {
           const run = { handle, status: snapshot.status, artifacts: [snapshot] }
           const stored = recoveries.get((handle as { runId: string }).runId) as { view: unknown }
           stored.view = run
-          resolve({ run, outcome: { status: snapshot.status, content: data.fullText, finishReason: data.finishReason, receipt: { finishReason: data.finishReason } } })
+          resolve({ run, outcome: { status: snapshot.status, content: data.fullText, finishReason: data.finishReason, receipt: { finishReason: data.finishReason, ...(failureCode ? { failureCode } : {}) } } })
         }
         listeners.set('llm:stream-done', finish as EventListener)
         if (!deferStream) queueMicrotask(() => finish({ fullText: '残缺片段', finishReason: 'length' }))
@@ -141,6 +143,18 @@ describe('CodeMirror editor AI generation boundary', () => {
     expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ input: expect.objectContaining({ action: 'refine', documentText: '原文段落' }) }), expect.any(Object))
     expect(invoke.mock.calls.some(([channel]) => String(channel).startsWith('llm:'))).toBe(false)
 
+  })
+
+  it('explains a provider context-length rejection instead of a generic incomplete result', async () => {
+    failureCode = 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
+    await act(async () => root.render(
+      <CodeMirrorEditor content="原文段落" mode="prose" />,
+    ))
+    await act(async () => page.getByText('原文段落').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await expect.element(page.getByText(/提示词超出了模型能接受的长度/)).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '替换' })).toBeDisabled()
   })
 
   it('sends a new inline run to the drafting stage model instead of the default model', async () => {
@@ -564,4 +578,17 @@ it('点击接受前原候选已丢弃，保留预览但不写入正文', async (
   await expect.element(page.getByText('来源已变化，结果仅可复制')).toBeVisible()
   expect(EditorView.findFromDOM(container.querySelector('.cm-editor')!)!.state.doc.toString()).toBe(documentText)
   await expect.element(page.getByText('候选')).toBeVisible()
+})
+it('继续原运行时服务商以上下文超长拒绝，显示对应说明', async () => {
+  const handle = { projectId: 'editor-project', epoch: 'editor-epoch', rootActionId: '原预算', runId: '续跑运行' }
+  const documentText = '原文'
+  const documentHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(documentText))), byte => byte.toString(16).padStart(2, '0')).join('')
+  const view = { handle, status: 'running', artifacts: [], candidates: [], ledger: { physicalRequests: 0 } }
+  const stored = { view, modelId: '原模型', sourceStatus: 'current', context: { action: 'refine', kind: 'author-draft', documentText, documentHash, from: 0, to: 2, selectedText: documentText } }
+  invoke.mockImplementation(async (channel: string) => channel === 'editor-inline:execute'
+    ? { run: view, outcome: { status: 'incomplete', content: '', finishReason: 'error', receipt: { finishReason: 'error', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } } }
+    : stored)
+  await act(async () => root.render(<CodeMirrorEditor content={documentText} recoveryHandle={handle} />))
+  await act(async () => page.getByRole('button', { name: '继续原运行' }).click())
+  await expect.element(page.getByText(/提示词超出了模型能接受的长度/)).toBeVisible()
 })

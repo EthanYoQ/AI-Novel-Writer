@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { createGraphGeneration } from '../graph-generation'
+import { assertGraphResult, canExecuteGraph, createGraphGeneration } from '../graph-generation'
 const session = { projectId: '项目', leaseId: '会话3', projectPath: 'C:/合成剧情' }
 const handle = { projectId: '项目', epoch: '会话1', rootActionId: '根', runId: '运行' }
 const artifact = { artifactId: '候选', revision: 1, textHash: 'a'.repeat(64) }
@@ -86,4 +86,25 @@ it('显式取消等待晚begin，取消确切原run而不execute', async () => {
   await failed
   await cancelled
   expect(invoke.mock.calls.every(([channel]) => channel !== 'graph-generation:execute')).toBe(true)
+})
+it('服务商以上下文超长拒绝时，先读回失败的运行，再以登记码失败', async () => {
+  const fresh = { ...stored, view: { ...stored.view, status: 'running', artifacts: [] }, attemptCount: 0, artifact: undefined, result: undefined }
+  const settled = { ...fresh, attemptCount: 1, view: { ...fresh.view, status: 'failed', budgetDiagnostics: [{ runId: fresh.view.handle.runId, failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } }
+  const failed = { status: 'incomplete', content: '', finishReason: 'error', receipt: { finishReason: 'error', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } }
+  let executed = false
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'graph-generation:begin') return fresh
+    if (channel === 'graph-generation:read') return structuredClone(executed ? settled : fresh)
+    if (channel === 'graph-generation:execute') { executed = true; return { run: settled.view, outcome: failed } }
+    throw new Error(channel)
+  })
+  vi.stubGlobal('window', { aiNovelAPI: { invoke, on: () => () => {} } })
+  const recovery = await createGraphGeneration(session).open({ handle }).then(async () => {
+    const client = createGraphGeneration(session)
+    await client.open({ handle })
+    return client.execute()
+  })
+  expect(canExecuteGraph(recovery)).toBe(false)
+  expect(() => assertGraphResult(recovery)).toThrow('GENERATION_CONTEXT_LENGTH_EXCEEDED')
+  expect(() => assertGraphResult(fresh as never)).toThrow('GRAPH_GENERATION_INCOMPLETE')
 })
