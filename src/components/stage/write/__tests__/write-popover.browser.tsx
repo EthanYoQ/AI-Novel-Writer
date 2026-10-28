@@ -248,6 +248,23 @@ describe('写作此章弹层', () => {
     await expect.element(popover.getByLabelText(/知识库检索关键词/)).toHaveValue('')
   })
 
+  it('「写稿」在分工模型里另有指定时，弹层预选它并用它写', async () => {
+    useLLMStore.setState({ stageModelIds: { drafting: 'glm' } })
+    await render(<WriteChapterPopover chapterNumber={5} blueprint={blueprintWritePrefill(BLUEPRINT)} label="写第 5 章" />)
+    await act(async () => page.getByRole('button', { name: '本次写作选项' }).click())
+    await expect.element(page.getByRole('dialog', { name: '本次写作选项' }).getByLabelText(/本次模型/)).toHaveValue('glm')
+    await act(async () => page.getByRole('button', { name: '写第 5 章' }).click())
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+
+    expect(launched()).toEqual(expectedLaunch({ generationModelId: 'glm', userGuidance: '母亲的声音只出现一次，不要解释来源。' }))
+  })
+
+  it('批量创作在「写稿」另有指定时预选它', async () => {
+    useLLMStore.setState({ stageModelIds: { drafting: 'glm' } })
+    await render(<BatchWriteDialog isOpen startChapterNumber={5} onClose={vi.fn()} />)
+    await expect.element(page.getByRole('dialog', { name: '批量创作' }).getByLabelText(/本次模型/)).toHaveValue('glm')
+  })
+
   it('弹层只有本次模型、作者微操指导与折叠的更多，不重复蓝图字段', async () => {
     await render(<WriteChapterPopover chapterNumber={5} blueprint={blueprintWritePrefill(BLUEPRINT)} label="写第 5 章" />)
     await act(async () => page.getByRole('button', { name: '本次写作选项' }).click())

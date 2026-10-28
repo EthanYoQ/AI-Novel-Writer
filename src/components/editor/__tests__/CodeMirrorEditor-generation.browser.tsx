@@ -99,7 +99,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   useProjectStore.setState({ currentProject: null })
-  useLLMStore.setState({ defaultModelId: null, activeRequests: new Map() })
+  useLLMStore.setState({ defaultModelId: null, models: [], stageModelIds: {}, activeRequests: new Map() })
   useLocaleStore.setState({ locale: 'zh-CN' })
   Reflect.deleteProperty(window, 'aiNovelAPI')
 })
@@ -155,6 +155,19 @@ describe('CodeMirror editor AI generation boundary', () => {
     await act(async () => page.getByRole('button', { name: '润色' }).click())
     await expect.element(page.getByText(/提示词超出了模型能接受的长度/)).toBeVisible()
     await expect.element(page.getByRole('button', { name: '替换' })).toBeDisabled()
+  })
+
+  it('sends a new inline run to the drafting stage model instead of the default model', async () => {
+    useLLMStore.setState({
+      models: [{ id: 'editor-model', name: 'Default', purposes: ['generation'] }, { id: 'stage-model', name: 'Drafting', purposes: ['generation'] }] as never,
+      stageModelIds: { drafting: 'stage-model' },
+    })
+    await act(async () => root.render(<CodeMirrorEditor content="原文段落" mode="prose" />))
+
+    await act(async () => page.getByText('原文段落').click({ clickCount: 3 }))
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ modelId: 'stage-model' }), expect.any(Object)))
   })
 
   it('applies a delayed AI result to the frozen original selection instead of a later selection', async () => {

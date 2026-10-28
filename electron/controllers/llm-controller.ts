@@ -12,6 +12,7 @@ import { knownAppErrorMessage } from '../../src/i18n/app-errors'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { isReasoningMapping, reasoningAdapterFitsProtocol } from '../../src/shared/reasoning-types'
 import { isLocalModelEndpoint } from '../../src/shared/provider-presets'
+import { assignStageModel, availableGenerationModelId, isModelStage, parseStageModelIds, removeModelFromStages } from '../../src/shared/model-stage-routing'
 import { LLMFactory } from '../llm/llm-factory'
 import { getMainLocale, mainT, mainText } from '../i18n'
 import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
@@ -364,6 +365,11 @@ export function registerLLMController() {
         nextConfig.defaultEmbeddingModelId = null
         configChanged = true
       }
+      const stages = removeModelFromStages(parseStageModelIds(nextConfig.stageModelIds), modelId)
+      if (stages.changed) {
+        nextConfig.stageModelIds = stages.next
+        configChanged = true
+      }
 
       // 先清除引用，再删除被引用对象。若第二个文件写入失败，回滚配置；
       // 即使回滚也失败，配置中只会缺少默认值，不会悬空指向已删除模型。
@@ -385,9 +391,29 @@ export function registerLLMController() {
         success: true,
         defaultModelId: nextConfig.defaultModelId,
         defaultEmbeddingModelId: nextConfig.defaultEmbeddingModelId ?? null,
+        stageModelIds: parseStageModelIds(nextConfig.stageModelIds),
       }
     } catch (error) {
       return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('llm:get-stage-models', async () => {
+    const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
+    return parseStageModelIds(config.stageModelIds)
+  })
+
+  ipcMain.handle('llm:set-stage-model', async (_event, request: unknown) => {
+    try {
+      const { stage, modelId } = (request && typeof request === 'object' ? request : {}) as Record<string, unknown>
+      if (!isModelStage(stage) || (modelId !== null && typeof modelId !== 'string')) throw new Error('LLM_STAGE_MODEL_REQUEST_INVALID')
+      if (modelId !== null && !availableGenerationModelId(loadModelConfigsForUpdate(), modelId)) throw new Error('LLM_STAGE_MODEL_UNAVAILABLE')
+      const config = loadGlobalConfigForUpdate()
+      config.stageModelIds = assignStageModel(parseStageModelIds(config.stageModelIds), stage, modelId)
+      writeJsonFile(GLOBAL_CONFIG_PATH, config)
+      return { success: true as const, stageModelIds: config.stageModelIds }
+    } catch (error) {
+      return { success: false as const, error: String(error) }
     }
   })
 

@@ -1,6 +1,7 @@
-import type { StepCallbacks, WorkflowContext } from '../../stores/workflow-store'
-import { useLLMStore } from '../../stores/llm-store'
+import { useWorkflowStore, type StepCallbacks, type WorkflowContext } from '../../stores/workflow-store'
+import { routeModelId } from '../model-routing'
 import type { BeginGenerationRequest } from '../../shared/generation-owner-contract'
+import type { GenerationOperation } from '../../shared/model-stage-routing'
 import { createMainGenerationTransport } from '../generation/main-generation-transport'
 import { createMainOwnedGenerationRuntime, type GenerationRuntime, type MainGenerationRunHandle, type MainGenerationRunView, type MainGenerationSnapshot } from '../generation/generation-runtime'
 import { GenerationAttemptError, TerminalProviderFailureError, throwIfTerminalProviderFailure, type GenerationSession } from '../generation/generation-harness'
@@ -11,7 +12,8 @@ import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
 import { PLOT_OUTLINE_PROTOCOL, plotOutlineSourceInvalidText } from '../../shared/plot-outline-contract'
 
-export interface WorkflowMainGenerationSelection extends Omit<BeginGenerationRequest, 'uiActionNonce' | 'modelId' | 'parentRootActionId' | 'selectedDraftIds' | 'selectedFinalizedDraftIds'> {
+export interface WorkflowMainGenerationSelection extends Omit<BeginGenerationRequest, 'operation' | 'uiActionNonce' | 'modelId' | 'parentRootActionId' | 'selectedDraftIds' | 'selectedFinalizedDraftIds'> {
+  operation: GenerationOperation
   selectedDraftIds?: number[]
   selectedFinalizedDraftIds?: number[]
   /** Exact persisted navigation identity. Never infer a recovery run from recency. */
@@ -33,12 +35,17 @@ export interface WorkflowMainGenerationRuntime extends GenerationRuntime {
   advance(selection: WorkflowMainGenerationSelection): Promise<void>
 }
 
+export function pinWorkflowModel(context: WorkflowContext, modelId: string): void {
+  context.generationModelId ||= modelId
+  useWorkflowStore.getState().pinRunGenerationModel(context.runId, context.generationModelId)
+}
+
 /** Each stage freezes its sources; all stages of the author action share main's root. */
 export async function createWorkflowMainGenerationRuntime(request: WorkflowMainGenerationRequest,
   transport = createMainGenerationTransport(() => request.context.projectSession)): Promise<WorkflowMainGenerationRuntime> {
   const { context, callbacks } = request
   const projectSession = requireWorkflowProjectSession(context)
-  let modelId = context.generationModelId?.trim() || useLLMStore.getState().defaultModelId
+  let modelId = context.generationModelId?.trim() || routeModelId(request.selection.operation)
   if (!modelId && !request.selection.importSlot && !request.selection.resumeHandle) throw new Error('GENERATION_MODEL_REQUIRED')
   let closed = false, busy = false, readOnlyOutline = false
   let inner: Awaited<ReturnType<typeof createMainOwnedGenerationRuntime>> | undefined
@@ -80,6 +87,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
     const previousRoot = context.mainGenerationRootHandle, previousRun = context.mainGenerationRunHandle
     const previousModelId = context.generationModelId, previousImportContext = context.data.importGenerationContext
     let openedView: MainGenerationRunView | undefined
+    let begunModelId: string | null = null
     try {
       const importRecovery = intent.importSlot ? await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot }) : null
       if (importRecovery) {
@@ -92,6 +100,8 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
         const stored = await transport.read(resumeHandle)
         if (context.mainGenerationRootHandle && context.mainGenerationRootHandle.rootActionId !== resumeHandle.rootActionId)
           throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
+        if (!importStage) begunModelId = modelId = context.generationModelId?.trim()
+          || (await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: resumeHandle })).modelId
         view = stored.nonReplayable && !importStage ? await transport.resume(projectSession, resumeHandle).catch((error: unknown) => {
           // 主进程按设计拒绝续写来源无效的大纲任务，只给错误码；换成与恢复稿入口相同的说明。
           if (stored.plotOutline?.protocol === PLOT_OUTLINE_PROTOCOL && String((error as Error)?.message ?? error).includes('GENERATION_PLOT_OUTLINE_PREFIX_INVALID'))
@@ -100,6 +110,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
         }) : stored
       } else {
         if (!modelId) throw new Error('GENERATION_MODEL_REQUIRED')
+        begunModelId = modelId
         const parent = intent.continueDirectoryOperationId || restartHandle ? undefined : context.mainGenerationRootHandle
         if (intent.parentRootActionId && parent && intent.parentRootActionId !== parent.rootActionId)
           throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
@@ -132,6 +143,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
         useWorkflowReasoningStore.getState().append(context.runId, event.attemptId, event.text)
       })
       inner = await createMainOwnedGenerationRuntime({ runHandle: view.handle, onSnapshot }, transport)
+      if (begunModelId) pinWorkflowModel(context, begunModelId)
     } catch (error) {
       unsubscribeReasoning?.(); unsubscribeReasoning = undefined; clearReasoning()
       if (openedView?.handle.epoch === projectSession.leaseId && openedView.status === 'running') {

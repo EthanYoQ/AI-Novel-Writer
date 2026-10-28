@@ -15,7 +15,7 @@ export async function runFinalizationGeneration(options: {
   /** 作者显式重试时冻结的最近一次未成功尝试；主进程按它只重发一次。 */
   recoverFrom?: string
   cancelled: () => boolean
-  onHandle?: (handle: MainGenerationRunHandle) => void
+  onHandle?: (handle: MainGenerationRunHandle, modelId: string) => void
 }) {
   const session = Object.freeze({ ...options.session })
   let recovery: FinalizationGenerationRecovery | null = null
@@ -40,7 +40,7 @@ export async function runFinalizationGeneration(options: {
       slot: options.slot, modelId: recovery?.modelId ?? options.modelId(), ...(options.parentRootActionId ? { parentRootActionId: options.parentRootActionId } : {}),
     })
     validate(recovery)
-    options.onHandle?.(recovery.view.handle)
+    options.onHandle?.(recovery.view.handle, recovery.modelId)
     if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
     if (recovery.effect) return recovery.effect
     if (recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled') throw new Error('FINALIZATION_GENERATION_SOURCE_CHANGED')

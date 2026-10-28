@@ -14,7 +14,7 @@ import {
   type CommandExecuteParams,
   type LLMCompletion,
 } from './base-command'
-import { useLLMStore } from '../../../stores/llm-store'
+import { routeModelId } from '../../model-routing'
 import { useProjectStore } from '../../../stores/project-store'
 import { hashAuthorText } from '../../../shared/source-ref'
 import { resolvePromptTemplate } from '../../prompt-templates'
@@ -573,7 +573,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         cleanDraftText: saved.content, id: saved.id, nextVersion: saved.version, mergedGuidance: '',
         targetChars: Number(earlyRecovery.authorInputs.find(input => input.id === 'draft:target-units')?.text) })
     }
-    if (defaultMain) context.generationModelId = workflowGenerationModelId(context) || useLLMStore.getState().defaultModelId || undefined
+    if (defaultMain) context.generationModelId = workflowGenerationModelId(context) || routeModelId('chapter-draft') || undefined
     const prepared = defaultMain && !this.resumeHandle
       ? await ipc.invokeWithProjectSession(projectSession, 'generation:prepare-draft-context', {
         chapterNumber: this.chapterInfo.chapterNumber, modelId: context.generationModelId!,
