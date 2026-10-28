@@ -128,6 +128,7 @@ export interface ImportRunOrchestratorDependencies {
 }
 
 const REFERENCE_STAGES: ImportRunStage[] = ['knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed']
+const IMPORT_GENERATION_STAGES = new Set<ImportRunStage>(['global', 'style', 'blueprints'])
 const AUTHOR_STAGES: ImportRunStage[] = [
   'author-commit', 'author-publish', 'author-postprocess', 'refresh', 'completed',
 ]
@@ -334,7 +335,8 @@ export class ImportRunOrchestrator {
         }
       } else {
         // 生成开始或发送前就被预算、阻断拒绝时报错只有裸码，在这里换成导入的说明，存进运行并抛出同一句；码只进诊断日志。
-        const code = errorCodeOf(error instanceof Error ? error.message : error)
+        // 只改写参考小说的生成阶段：说明指向「重新开始」，作者原稿与非生成阶段不适用。
+        const code = IMPORT_GENERATION_STAGES.has(requestedStage) ? errorCodeOf(error instanceof Error ? error.message : error) : undefined
         const stopped = code && importGenerationStopMessage(run.locale, code)
         if (stopped) callbacks.log(localize(run.locale, `导入停止原因：${code}`, `Import stop reason: ${code}`))
         const failure = stopped ? new Error(stopped) : error
