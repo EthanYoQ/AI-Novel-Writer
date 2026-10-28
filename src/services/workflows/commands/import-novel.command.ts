@@ -557,7 +557,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     }
     const authoritativeNovelConfig = { ...baseConfig, ...savedFields }
     // 反推等待期间作者在设定页改过、还没保存的字段保持作者的值。
-    useProjectStore.getState().publishSavedNovelConfig(savedFields, projectSession, true)
+    useProjectStore.getState().publishSavedNovelConfig(savedFields, projectSession, 'unsaved-edits')
     const unknown = promptLanguageText(writingLanguage, '未知', 'Unknown')
     const none = promptLanguageText(writingLanguage, '（无）', '(none)')
     context.data.novelConfigSummary = promptLanguageText(

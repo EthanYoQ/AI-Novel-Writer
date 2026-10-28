@@ -237,7 +237,7 @@ function productionDependencies(
           'The project changed before the committed import effect could be restored.',
         ))
       }
-      useProjectStore.getState().publishSavedNovelConfig(configFieldsFromCore(core), session, true)
+      useProjectStore.getState().publishSavedNovelConfig(configFieldsFromCore(core), session, 'unsaved-edits')
       context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
     },
     listChapters: (runId, after, limit) => ipc.invokeWithProjectSession(
@@ -276,7 +276,7 @@ function productionDependencies(
       context.data.importGenerationSlot = { runId: run.id, stage: 'style', batchId: 'done' }
       const { AnalyzeWritingStyleCommand } = await import('./commands/analyze-style.command')
       const style = await new AnalyzeWritingStyleCommand(
-        { chapters: chapters.map(importedChapter) },
+        { chapters: chapters.map(importedChapter), fillEmpty: run.purpose === 'author-manuscript' },
         undefined,
         async (writingStyle, generationRunHandle) => {
           const saved = await commit({ writingStyle, ...(generationRunHandle ? { generationRunHandle } : {}) }) as { writingStyle: string }

@@ -427,7 +427,8 @@ interface ProjectState {
    * 主进程已经写进库的设定字段，发布到界面并记为已保存。
    * keepUnsavedEdits：作者在设定页改过、还没保存的字段保持作者的值（仍算未保存）；否则一律换成库里的值。
    */
-  publishSavedNovelConfig: (saved: Partial<NovelConfig>, expectedProjectSession: ProjectSessionContext, keepUnsavedEdits: boolean) => void
+  /** keep：'none' 全按库里的值；'unsaved-edits' 作者改过还没保存的字段保留作者的值；'current' 这些字段都保留界面上的值，只把它们记为已保存基准。 */
+  publishSavedNovelConfig: (saved: Partial<NovelConfig>, expectedProjectSession: ProjectSessionContext, keep: 'none' | 'unsaved-edits' | 'current') => void
   /** Main validates frozen sources and writes before publishing generated fields to the UI. */
   commitGeneratedNovelConfig: (config: Partial<NovelConfig>, expectedConfig: NovelConfig, expectedProjectSession: ProjectSessionContext,
     generationRunHandle: import('../services/generation/generation-runtime').MainGenerationRunHandle,
@@ -965,7 +966,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     return true
   },
 
-  publishSavedNovelConfig: (saved, expectedProjectSession, keepUnsavedEdits) => {
+  publishSavedNovelConfig: (saved, expectedProjectSession, keep) => {
     const project = get().currentProject
     if (!project || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(project))) return
     const ledger = readConfigDraftLedger()
@@ -973,7 +974,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     const next = { ...project.novelConfig }
     for (const key of Object.keys(saved) as (keyof NovelConfig)[]) {
       const edited = JSON.stringify(project.novelConfig[key]) !== JSON.stringify(base[key])
-      if (!keepUnsavedEdits || !edited) Object.assign(next, { [key]: saved[key] })
+      if (keep === 'none' || (keep === 'unsaved-edits' && !edited)) Object.assign(next, { [key]: saved[key] })
     }
     set({ currentProject: { ...project, novelConfig: next } })
     persistConfigDraftLedger(settleProjectEditorSave(ledger, project.path, { ...base, ...saved }, next))

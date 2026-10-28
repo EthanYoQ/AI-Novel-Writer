@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 
+import * as architecture from './pages/architecture.mjs'
 import * as blueprint from './pages/blueprint.mjs'
 import * as runSheet from './pages/run-sheet.mjs'
 import * as stage from './pages/stage.mjs'
@@ -215,8 +216,8 @@ export const IMPORT_INFER_SCENARIOS = {
     await genre.waitFor({ state: 'detached' })
     assert.equal((await readBook(context)).core.genre, INFERRED.novelConfig.genre, '采用后写入反推的类型')
 
-    await stage.stageButton(page, '架构').click()
-    await page.locator('.arch-section[data-section="worldbuilding"]').getByRole('button', { name: '编辑' }).click()
+    await architecture.open(page)
+    await architecture.section(page, 'worldbuilding').getByRole('button', { name: '编辑' }).click()
     const editor = page.locator('.stage-content .cm-content')
     await editor.filter({ hasText: before.core.worldbuilding.slice(0, 12) }).waitFor({ state: 'visible' })
     await runSheet.openFromPalette(page)

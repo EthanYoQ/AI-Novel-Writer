@@ -71,7 +71,7 @@ export function ImportSuggestions({ run }: { run: WorkflowRun }) {
     setBusy(true)
     setError('')
     try {
-      await adoptImportSuggestions(chosen, session, run.projectPath)
+      await adoptImportSuggestions(chosen, session, run.projectPath, run.id)
       setItems(await reload())
     } catch (failure) {
       setError(displayedErrorMessage(locale, failure))

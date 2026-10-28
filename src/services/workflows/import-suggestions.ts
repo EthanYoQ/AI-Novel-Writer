@@ -7,6 +7,7 @@ import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore } from '../../stores/editor-store'
 import { createProjectArchTabId, shouldSyncProjectArchTab } from '../../components/editor/arch-file-refresh-policy'
 import { isProjectSessionCurrent } from '../../components/project-session-gate'
+import { globalEventBus } from '../../shared/event-bus'
 
 /** 补空导入在 global、style 两个阶段的收据里记下建议。 */
 const SUGGESTION_STAGES = ['global', 'style'] as const
@@ -59,28 +60,34 @@ export function configFieldsFromCore(core: ProjectCoreData): Partial<NovelConfig
 
 const ARCH_FIELDS = ['premise', 'worldbuilding', 'synopsis'] as const
 
-/** 已打开的架构文档标签：没改过的显示库里的新内容并算已保存，有未保存改动的保持作者草稿。 */
-function syncOpenArchTabs(core: ProjectCoreData, fields: ReadonlySet<string>, projectPath: string): void {
+/**
+ * 采用了架构建议：已打开的标签里没改过的显示库里的新内容并算已保存，有未保存改动的保持作者草稿；
+ * 再通知架构页与流程脊重读。
+ */
+function publishAdoptedArchitecture(core: ProjectCoreData, fields: ReadonlySet<string>, session: ProjectSessionContext, runId: string): void {
   const store = useEditorStore.getState()
   for (const field of ARCH_FIELDS) {
     if (!fields.has(field)) continue
-    const tabId = createProjectArchTabId(projectPath, `ai-novel://core/${field}`)
+    const tabId = createProjectArchTabId(session.projectPath, `ai-novel://core/${field}`)
     const tab = store.tabs.find(item => item.id === tabId)
-    if (!tab || !shouldSyncProjectArchTab(tab, projectPath)) continue
-    const content = core[field] ?? ''
-    store.syncTabContent(tabId, content)
-    store.markTabSaved(tabId, content)
+    if (tab && shouldSyncProjectArchTab(tab, session.projectPath)) {
+      const content = core[field] ?? ''
+      store.syncTabContent(tabId, content)
+      store.markTabSaved(tabId, content)
+    }
+    globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: `${field}.md`, projectPath: session.projectPath, projectSession: session, runId })
   }
 }
 
 /**
  * 把选中的建议一次写进项目设定。采用的几项按库里的值显示并算已保存；
- * 点击之后作者又改过的项保留作者的新值并仍算未保存，设定页里其他还没保存的改动也保持原样。
+ * 点击之后作者又改过的项保留界面上的值并仍算未保存，设定页里其他还没保存的改动也保持原样。
  */
 export async function adoptImportSuggestions(
   items: readonly ImportFillSuggestion[],
   session: ProjectSessionContext,
   projectPath: string,
+  runId: string,
 ): Promise<void> {
   const atClick = useProjectStore.getState().currentProject?.novelConfig
   const patch = Object.fromEntries(items.map(item => [item.field, item.inferred])) as Partial<Record<ImportFillField, string | number>>
@@ -92,10 +99,12 @@ export async function adoptImportSuggestions(
     const adopted = Object.entries(configFieldsFromCore(core)).filter(([key]) => keys.has(key)) as [keyof NovelConfig, unknown][]
     const now = useProjectStore.getState().currentProject?.novelConfig
     const editedSinceClick = ([key]: [keyof NovelConfig, unknown]) => JSON.stringify(now?.[key]) !== JSON.stringify(atClick?.[key])
-    const { publishSavedNovelConfig } = useProjectStore.getState()
-    publishSavedNovelConfig(Object.fromEntries(adopted.filter(entry => !editedSinceClick(entry))), session, false)
-    publishSavedNovelConfig(Object.fromEntries(adopted.filter(editedSinceClick)), session, true)
-    if (isProjectSessionCurrent(session)) syncOpenArchTabs(core, new Set(items.map(item => item.field)), session.projectPath)
+    const publish = (entries: [keyof NovelConfig, unknown][], keep: 'none' | 'current') => {
+      if (entries.length > 0) useProjectStore.getState().publishSavedNovelConfig(Object.fromEntries(entries), session, keep)
+    }
+    publish(adopted.filter(entry => !editedSinceClick(entry)), 'none')
+    publish(adopted.filter(editedSinceClick), 'current')
+    if (isProjectSessionCurrent(session)) publishAdoptedArchitecture(core, new Set(items.map(item => item.field)), session, runId)
   }
   // 设定已经写进库；文件树只影响架构文件的显示，刷新失败等下次打开时再读。
   await useProjectStore.getState().refreshFileTree(projectPath, undefined, session).catch(() => undefined)
