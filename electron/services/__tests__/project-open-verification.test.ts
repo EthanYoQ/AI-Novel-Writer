@@ -56,6 +56,26 @@ function countOpenWork(file: string) {
   return counts
 }
 
+function damageContentPage(file: string) {
+  const db = new Database(file, { readonly: true })
+  const pageSize = db.pragma('page_size', { simple: true }) as number
+  const rootPage = db.prepare("SELECT rootpage FROM sqlite_master WHERE name='contents'").pluck().get() as number
+  db.close()
+  const fd = fs.openSync(file, 'r+')
+  try { fs.writeSync(fd, Buffer.alloc(64, 0xff), 0, 64, (rootPage - 1) * pageSize) } finally { fs.closeSync(fd) }
+}
+
+/** Runs the change once the verified snapshot is cleaned up, before the writable handle opens. */
+function afterSnapshotPasses(change: () => void): () => boolean {
+  const rmSync = fs.rmSync
+  let ran = false
+  vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+    rmSync(target, options)
+    if (!ran && path.basename(String(target)).startsWith('sqlite-read-')) { ran = true; change() }
+  })
+  return () => ran
+}
+
 afterEach(() => {
   vi.restoreAllMocks(); closeProjectDatabase()
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
@@ -83,32 +103,29 @@ describe('project open verification', () => {
 
   it('refuses the writable handle when the schema changes after the snapshot passed', () => {
     const f = fixture()
-    const rmSync = fs.rmSync
-    let changed = false
-    vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
-      rmSync(target, options)
-      if (!changed && path.basename(String(target)).startsWith('sqlite-read-')) {
-        changed = true
-        const db = new Database(f.file)
-        try { db.exec('ALTER TABLE contents ADD COLUMN changed_after_probe TEXT') } finally { db.close() }
-      }
+    const changed = afterSnapshotPasses(() => {
+      const db = new Database(f.file)
+      try { db.exec('ALTER TABLE contents ADD COLUMN changed_after_probe TEXT') } finally { db.close() }
     })
     expect(() => initProjectDatabase(f.root)).toThrow('SCHEMA_CHANGED_SINCE_PROBE')
-    expect(changed).toBe(true)
+    expect(changed()).toBe(true)
     expect(getProjectDb()).toBeNull()
+  })
+
+  it('refuses the writable handle when a page is damaged after the snapshot passed', () => {
+    const f = fixture()
+    const damaged = afterSnapshotPasses(() => damageContentPage(f.file))
+    expect(() => initProjectDatabase(f.root)).toThrow('SOURCE_CHANGED_SINCE_PROBE')
+    expect(damaged()).toBe(true)
+    expect(getProjectDb()).toBeNull()
+    const db = new Database(f.file, { readonly: true })
+    try { expect(db.prepare('SELECT execution_epoch FROM import_runs').pluck().get()).toBe(5) } finally { db.close() }
   })
 
   const corruptions: [string, (file: string) => void, { name: string; code: string; message: string }][] = [
     ['a truncated file', file => fs.truncateSync(file, Math.floor(fs.statSync(file).size / 2)),
       { name: 'SqliteError', code: 'SQLITE_CORRUPT', message: 'database disk image is malformed' }],
-    ['a damaged content page', file => {
-      const db = new Database(file, { readonly: true })
-      const pageSize = db.pragma('page_size', { simple: true }) as number
-      const rootPage = db.prepare("SELECT rootpage FROM sqlite_master WHERE name='contents'").pluck().get() as number
-      db.close()
-      const fd = fs.openSync(file, 'r+')
-      try { fs.writeSync(fd, Buffer.alloc(64, 0xff), 0, 64, (rootPage - 1) * pageSize) } finally { fs.closeSync(fd) }
-    }, { name: 'SchemaMigrationError', code: 'CORRUPT_SCHEMA', message: 'CORRUPT_SCHEMA' }],
+    ['a damaged content page', damageContentPage, { name: 'SchemaMigrationError', code: 'CORRUPT_SCHEMA', message: 'CORRUPT_SCHEMA' }],
     ['a damaged header', file => {
       const fd = fs.openSync(file, 'r+')
       try { fs.writeSync(fd, Buffer.alloc(100, 0x41), 0, 100, 0) } finally { fs.closeSync(fd) }
