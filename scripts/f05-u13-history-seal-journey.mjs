@@ -232,10 +232,13 @@ async function main() {
     lastPage = reopenedPage
     await openFromShelf(reopenedPage, projectName)
     await app.evaluate(({ ipcMain }) => {
-      const handlers = ipcMain._invokeHandlers, original = handlers.get('generation:list-recovery')
+      const handlers = ipcMain._invokeHandlers
+      if (!(handlers instanceof Map)) throw new Error('ipcMain._invokeHandlers is not a Map; cannot observe generation:list-recovery')
+      const original = handlers.get('generation:list-recovery')
       if (typeof original !== 'function') throw new Error('generation:list-recovery is not registered after reopening')
       globalThis.__recoveryLists = []
-      handlers.set('generation:list-recovery', async (...args) => { const result = await original(...args); globalThis.__recoveryLists.push(result); return result })
+      globalThis.__restoreRecoveryList = () => { handlers.set('generation:list-recovery', original); delete globalThis.__recoveryLists }
+      handlers.set('generation:list-recovery', async (...args) => { const result = await original(...args); globalThis.__recoveryLists?.push(result); return result })
     })
     await runSheet.openFromPalette(reopenedPage)
     await runSheet.tab(reopenedPage, '进行中').click()
@@ -243,7 +246,7 @@ async function main() {
       assert.ok(Date.now() < deadline, 'run sheet did not read the recoverable list after reopening')
     }
     // 已保存的单章写稿不列为可恢复（#536）。失败的那次可能因细纲已写完而列出，这里不断言它。
-    const listed = await app.evaluate(() => globalThis.__recoveryLists.at(-1))
+    const listed = await app.evaluate(() => { const last = globalThis.__recoveryLists.at(-1); globalThis.__restoreRecoveryList(); return last })
     assert.equal(listed.partial, false, 'recoverable list read was partial after reopening')
     assert.ok(!listed.drafts.some(item => item.view.handle.runId === successfulRuns[0].runId), 'main process listed the saved single-chapter run as recoverable')
     await reopenedPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
