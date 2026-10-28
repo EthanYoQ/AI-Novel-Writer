@@ -1033,8 +1033,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     const batchRoots = runs.filter(item => item.batchRoot)
     if (!batchRoots.length) return list
-    let commits: ReturnType<typeof draftEffects.batchCommits>
-    try { commits = draftEffects.batchCommits() } catch { return { ...list, partial: true } }
+    const { commits, unreadable } = draftEffects.listedBatchCommits()
+    if (unreadable) list.partial = true
     for (const run of batchRoots) {
       try {
         const batch = draftEffects.readBatchHistory(run.handle.runId, deps.projectId, commits)

@@ -2980,6 +2980,18 @@ describe('main draft persistence and batch lineage', () => {
       expect(runIds(list.drafts)).toEqual([intact.run.handle.runId])
       expect(list.partial).toBe(true)
     })
+    it('一条不属于任何批次的坏收据不挡住可续写的批次，只标部分读取失败', async () => {
+      const f = drafting()
+      f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+      const batches = [1, 2].map(chapter => f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: chapter, endChapter: chapter }, targetUnits: 20,
+        uiActionNonce: `batch-${chapter}`, modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] }))
+      const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken-single', authorInputs })
+      f.db.prepare("UPDATE generation_attempts SET usage_receipt_json='{坏收据' WHERE run_id=?").run(broken.run.handle.runId)
+      const reopened = f.reopen(), list = reopened.listRecovery()
+      expect(list.batches.map(batch => batch.batchId).sort()).toEqual(batches.map(batch => batch.batchId).sort())
+      expect(list.partial).toBe(true)
+      expect(() => reopened.readBatch(batches[0]!.batchId)).toThrow()
+    })
     it('一个运行读不出时照常列出其余运行，并标出部分读取失败', async () => {
       const f = drafting()
       const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken', authorInputs })

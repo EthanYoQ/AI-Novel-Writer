@@ -27,6 +27,15 @@ export function assertGenerationBatchIntent(intent: GenerationBatchIntent): void
     throw new Error('GENERATION_BATCH_INTENT_INVALID')
 }
 
+function groupByBatch(rows: (AttemptRow & { batch_id: string })[]): ReadonlyMap<string, AttemptRow[]> {
+  const groups = new Map<string, AttemptRow[]>()
+  for (const { batch_id: id, ...row } of rows) {
+    const group = groups.get(id)
+    if (group) group.push(row)
+    else groups.set(id, [row])
+  }
+  return groups
+}
 /** Existing generation attempt receipts are the only draft/batch ledger. */
 export class GenerationDraftEffects {
   constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository) {}
@@ -38,13 +47,18 @@ export class GenerationDraftEffects {
     const rows = this.db.prepare(`SELECT attempt_id,run_id,usage_receipt_json,json_extract(usage_receipt_json,'$.draftCommit.batchId') AS batch_id
       FROM generation_attempts WHERE batch_id ${batchId === undefined ? 'IS NOT NULL' : '= ?'} ORDER BY rowid`)
       .all(...(batchId === undefined ? [] : [batchId])) as (AttemptRow & { batch_id: string })[]
-    const groups = new Map<string, AttemptRow[]>()
-    for (const { batch_id: id, ...row } of rows) {
-      const group = groups.get(id)
-      if (group) group.push(row)
-      else groups.set(id, [row])
-    }
-    return groups
+    return groupByBatch(rows)
+  }
+  /**
+   * 列表用的分组：收据不是合法 JSON 的行读不出批次号，跳过并计数，其余批次照常分组。
+   * 只用于显示；续跑与提交走 readBatch 的严格查询，遇到坏行仍会报错。
+   */
+  listedBatchCommits(): { commits: ReadonlyMap<string, AttemptRow[]>; unreadable: number } {
+    const unreadable = this.db.prepare('SELECT COUNT(*) FROM generation_attempts WHERE NOT json_valid(usage_receipt_json)').pluck().get() as number
+    const rows = this.db.prepare(`SELECT attempt_id,run_id,usage_receipt_json,
+      CASE WHEN json_valid(usage_receipt_json) THEN json_extract(usage_receipt_json,'$.draftCommit.batchId') END AS batch_id
+      FROM generation_attempts WHERE batch_id IS NOT NULL ORDER BY rowid`).all() as (AttemptRow & { batch_id: string })[]
+    return { commits: groupByBatch(rows), unreadable }
   }
   private verifiedCommit(row: AttemptRow) {
     const usage = JSON.parse(row.usage_receipt_json), stored = usage.draftCommit as StoredDraftCommit | undefined
