@@ -44,6 +44,8 @@ describe('遗留重复定稿的修复提示', () => {
     expect(message).not.toContain('Restore this version')
     expect(message).toContain('Chapter 3: kept v3 as the final version; v2 became a replaced final.')
     expect(message).not.toContain('kb-5')
+    expect(message).toContain('Manuscript file left by the replaced final: ')
+    expect(message).toContain('Text from this chapter\'s replaced final is still in the knowledge base')
     expect(message.replace('第3章 沉船-a1b2.txt', '')).not.toMatch(/\p{Script=Han}/u)
   })
 
@@ -53,6 +55,7 @@ describe('遗留重复定稿的修复提示', () => {
     expect(message).toContain('Chapter 4: kept v3 as the final version; v1, v2 became replaced finals.')
     expect(message).not.toMatch(/knowledge base/iu)
     expect(message).toContain('第4章 灯室.txt; 第4章 灯室-c3d4.txt')
+    expect(message).toContain('Manuscript files left by the replaced finals: ')
   })
 
   it('没有列出实体稿时，结尾不让作者去正文目录删文件', () => {

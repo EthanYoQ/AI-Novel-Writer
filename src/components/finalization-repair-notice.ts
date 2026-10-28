@@ -1,4 +1,5 @@
 import type { DuplicateFinalizationRepair } from '../shared/finalization-repair'
+import { pluralEn } from '../shared/plural-en'
 import { useLocaleStore } from '../stores/locale-store'
 import { openInkPrompt } from './ui/InkPrompt'
 
@@ -6,12 +7,12 @@ type Text = (zh: string, en: string) => string
 
 export function finalizationRepairMessage(repair: DuplicateFinalizationRepair, text: Text): string {
   const chapters = repair.chapters.map(chapter => {
-    const replaced = chapter.superseded.length === 1 ? 'replaced final' : 'replaced finals'
+    const replaced = pluralEn(chapter.superseded.length, 'replaced final')
     const versions = chapter.superseded.map(item => `v${item.version}`).join(text('、', ', '))
     const files = chapter.superseded.map(item => item.targetFileName).filter(Boolean)
     const lines = [text(
       `第 ${chapter.chapterNumber} 章：保留 v${chapter.keptVersion} 作为定稿，${versions} 改为「已被替换的定稿」。`,
-      `Chapter ${chapter.chapterNumber}: kept v${chapter.keptVersion} as the final version; ${versions} became ${chapter.superseded.length === 1 ? 'a replaced final' : 'replaced finals'}.`,
+      `Chapter ${chapter.chapterNumber}: kept v${chapter.keptVersion} as the final version; ${versions} became ${chapter.superseded.length === 1 ? 'a ' : ''}${replaced}.`,
     )]
     if (chapter.superseded.some(item => item.knowledgeDocumentId)) {
       lines.push(text(
@@ -20,7 +21,7 @@ export function finalizationRepairMessage(repair: DuplicateFinalizationRepair, t
       ))
     }
     if (files.length > 0) {
-      lines.push(text('旧定稿留下的实体稿：', `Manuscript ${files.length === 1 ? 'file' : 'files'} left by the ${replaced}: `) + files.join(text('；', '; ')))
+      lines.push(text('旧定稿留下的实体稿：', `Manuscript ${pluralEn(files.length, 'file')} left by the ${replaced}: `) + files.join(text('；', '; ')))
     }
     return lines.join('\n')
   })
