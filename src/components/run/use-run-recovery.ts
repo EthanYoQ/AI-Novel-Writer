@@ -16,6 +16,7 @@ import { displayedErrorMessage } from '../../i18n/app-errors'
 import { hideRecovery, readHiddenRecovery } from './hidden-recovery'
 import { projectRuns } from './run-output'
 import type { GenerationRecoveryList } from '../../shared/generation-owner-contract'
+import { throwIfTerminalProviderFailure } from '../../services/generation/generation-harness'
 
 /** 这部作品有工作流正在发生成请求；暂停与等确认的不算。 */
 function workflowWriting(projectPath: string | undefined, runs = useWorkflowStore.getState().activeRuns): boolean {
@@ -68,7 +69,9 @@ export function useRunRecovery(): RunRecovery {
   const [candidateList, setCandidates] = useState<Loaded<RecoverySources['candidates']>>({ session: null, value: [] })
   const [candidateError, setCandidateError] = useState('')
   const [generationList, setGeneration] = useState<Loaded<GenerationRecoveryList>>({ session: null, value: { ...EMPTY_RECOVERY_SOURCES, partial: false } })
-  const [generationError, setGenerationError] = useState('')
+  // 读取失败随下一次读取更新；操作失败留到下一次操作，刷新不清掉它。
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState<{ session: ProjectSessionContext | null; message: string }>({ session: null, message: '' })
   const [refreshTick, setRefreshTick] = useState(0)
   const writing = useWorkflowStore(s => workflowWriting(session?.projectPath, s.activeRuns))
   const missedWhileWriting = useRef(false)
@@ -121,8 +124,8 @@ export function useRunRecovery(): RunRecovery {
     void ipc.invokeWithProjectSession(session, 'generation:list-recovery').then(list => {
       if (!active) return
       setGeneration({ session, value: list })
-      setGenerationError('')
-    }).catch(reason => { if (active) setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
+      setLoadError('')
+    }).catch(reason => { if (active) setLoadError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
     return () => { active = false }
   }, [session, lastEnded, refreshTick])
 
@@ -144,13 +147,13 @@ export function useRunRecovery(): RunRecovery {
   const act = useCallback(async (operation: (session: ProjectSessionContext) => Promise<void>) => {
     if (busy || !session || !stillCurrent()) return
     setBusy(true)
-    try { await operation(session); setGenerationError('') } catch (reason) { setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) }
+    try { await operation(session); setActionError({ session, message: '' }) } catch (reason) { setActionError({ session, message: displayedErrorMessage(useLocaleStore.getState().locale, reason) }) }
     finally { setBusy(false) }
   }, [busy, session, stillCurrent])
 
   const showGenerationFailure = useCallback((reason: unknown) => {
-    if (stillCurrent()) setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason))
-  }, [stillCurrent])
+    if (stillCurrent()) setActionError({ session, message: displayedErrorMessage(useLocaleStore.getState().locale, reason) })
+  }, [session, stillCurrent])
 
   /** startWorkflow 要等整个工作流结束才返回；只等定义建好，不让恢复区在运行期间一直忙。 */
   const startRecovery = useCallback((create: (session: ProjectSessionContext) => Promise<WorkflowDefinition>) =>
@@ -174,7 +177,8 @@ export function useRunRecovery(): RunRecovery {
   return {
     entries,
     candidateError,
-    generationError: generationError || (sameProjectSessionContext(generationList.session, session) && generationList.value.partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : ''),
+    generationError: (sameProjectSessionContext(actionError.session, session) && actionError.message) || loadError
+      || (sameProjectSessionContext(generationList.session, session) && generationList.value.partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : ''),
     busy,
     picked: entry => selection[entry.key] ?? [],
     togglePick: (entry, artifactId, checked) => setSelection(previous => {
@@ -228,8 +232,10 @@ export function useRunRecovery(): RunRecovery {
       openPlanningRecoveryDraft(fresh, current.projectPath, planningTitle(fresh, useLocaleStore.getState().locale))
     }),
     continueEditor: entry => void act(async current => {
-      await ipc.invokeWithProjectSession(current, 'editor-inline:execute', { handle: entry.recovery.view.handle })
-      if (stillCurrent()) setRefreshTick(value => value + 1)
+      const receipt = await ipc.invokeWithProjectSession(current, 'editor-inline:execute', { handle: entry.recovery.view.handle })
+      if (!stillCurrent()) return
+      setRefreshTick(value => value + 1)
+      throwIfTerminalProviderFailure(receipt.outcome.receipt)
     }),
     resumeReview: entry => startRecovery(current => createReviewRevisionRecoveryWorkflow(current, entry.view.handle)),
     resumeBatch: entry => startRecovery(current => createBatchRecoveryWorkflow(current, entry.batchId)),

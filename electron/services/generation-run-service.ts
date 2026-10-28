@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { safeTransportError, type GenerationTransportDiagnostics } from '../../src/shared/generation-contract';
+import { isTerminalProviderFailure, safeTransportError, type GenerationTransportDiagnostics } from '../../src/shared/generation-contract';
 import { GenerationRunRepository, type OpenGenerationRunRequest, type RunBinding, type GenerationExecutionReceipt, type GenerationUsageReceipt } from '../repositories/generation-run-repository';
 import type { ProviderUsagePolicy } from '../../src/shared/generation-contract';
 import { parseAgentResponseProtocol, projectInterruptedAgentVisibleText } from '../../src/shared/agent-response-protocol';
@@ -281,8 +281,11 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                     if (current.attempt.status === 'dispatch-marked') {
                         // Persist only stable categories, never provider text that may contain credentials or prompts.
                         const networkCode = diagnostics?.causeCode ?? diagnostics?.errorCode;
-                        const known = networkCode && /^(UND_ERR_|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ERR_STREAM_PREMATURE_CLOSE)/.test(networkCode)
-                            || error instanceof Error && /^(NETWORK_ERROR|ECONNRESET|ETIMEDOUT|FETCH_FAILED)$/.test(error.message) ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED';
+                        const network = Boolean(networkCode && /^(UND_ERR_|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ERR_STREAM_PREMATURE_CLOSE)/.test(networkCode))
+                            || error instanceof Error && /^(NETWORK_ERROR|ECONNRESET|ETIMEDOUT|FETCH_FAILED)$/.test(error.message);
+                        let known = 'GENERATION_PROVIDER_FAILED';
+                        if (error instanceof Error && isTerminalProviderFailure(error.message)) known = 'GENERATION_CONTEXT_LENGTH_EXCEEDED';
+                        else if (network) known = 'NETWORK_ERROR';
                         const failureCode = storageFailed ? 'GENERATION_STORAGE_FAILED' : timedOut ? 'ROOT_BUDGET_EXHAUSTED'
                             : streamFailed ? 'GENERATION_STREAM_INVALID' : controller.signal.aborted ? 'GENERATION_CANCELLED' : known;
                         receipt = deps.repository.settle(attemptId, null, null, failureCode, diagnostics);

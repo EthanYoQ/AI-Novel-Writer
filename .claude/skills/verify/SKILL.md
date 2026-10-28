@@ -548,3 +548,13 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
 | `bpg-regenerate-keeps-guidance` | 蓝图页给第 1 章手写章节要点、第 2 章填作者微操指导并保存；AI 生成蓝图选「覆盖」接着生成 3 章，跑完后重新加载蓝图：第 1、2 章标题换成生成的新标题，章节要点与作者微操指导不变（`measured.before` 与 `measured.after`） | 第 2 章蓝图的作者微操指导 | 是 | #516 |
+
+## 上下文容量交给服务商（#77 讨论，ADR-0023）
+
+场景在 `scripts/redesign/d77-scenarios.mjs`。两个场景都把模型档案设成作者填的 64K 上下文。`fake.rejectContextLength()` 让假模型对之后的每个对话请求回 HTTP 400，错误体取自 `electron/llm/__tests__/provider-context-length-samples.json` 里的 DeepSeek 样本，和单元测试用同一份；传 `false` 恢复正常回复。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `d77-capacity` | 写第 3 章，正文提示词的字节数超过作者填的上下文窗口。请求不在发出前被拒绝：短细纲与正文各发一次，正文落到编辑器里（`measured.promptBytes`、`measured.chats`） | 第 3 章正文 | 是 | #77 |
+| `d77-context-length` | 写第 3 章，假模型以上下文超长拒绝第一个请求，之后不自动重发（`measured.chats` 只有一次 `context-length`）。运行卡片显示登记的说明（换用上下文更长的模型、调低最大输出 Tokens、精简本章要求与参考材料）和「本次未保存草稿或正文章节。」；不出现「上下文窗口」「请调整章节要求」和服务商原文（`measured.card`） | 失败的运行卡片 | 是 | #77 |
+| `d77-output-allowance` | 设置里编辑作者 64K 模型、展开高级设置：有效输出额度那句说明新开始的生成每次最多发这么多、旧版本开始的运行可能按 32,768 封顶（`d77-output-allowance-set`）；把最大输出 Tokens 和模型输出容量清成 0 后，改说还没有有效输出额度，不出现「未设置」（`d77-output-allowance-unset`）。不保存 | 清空后的高级设置 | 是 | #77 |

@@ -3638,7 +3638,7 @@ ${headingPrefix}第3章：潮门
     expect(invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
   })
 
-  it.each(['GENERATION_PROVIDER_FAILED', 'GENERATION_SOURCE_CHANGED', 'CANCELLED'] as const)('handles a thrown %s during the single condense without hiding integrity errors', async code => {
+  it.each(['GENERATION_PROVIDER_FAILED', 'GENERATION_CONTEXT_LENGTH_EXCEEDED', 'GENERATION_SOURCE_CHANGED', 'CANCELLED'] as const)('handles a thrown %s during the single condense without hiding integrity errors', async code => {
     const draft = `${'长'.repeat(1400)}。`
     const runtime = fakeRuntime(attempt => {
       if (attempt === 1) return outcome(draft, 'stop', 1)
@@ -3646,7 +3646,7 @@ ${headingPrefix}第3章：潮门
     })
     const { invoke, context, callbacks, command } = setup({ runtime, wordsPerChapter: 1000, wordsTarget: 1000 })
     const result = command.execute({ step: {}, context, callbacks })
-    if (code === 'GENERATION_PROVIDER_FAILED') await expect(result).resolves.toBe(draft)
+    if (code === 'GENERATION_PROVIDER_FAILED' || code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED') await expect(result).resolves.toBe(draft)
     else {
       await expect(result).rejects.toThrow(code)
       expectNoDraftPersistence(invoke)

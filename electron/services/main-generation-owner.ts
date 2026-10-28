@@ -7,7 +7,7 @@ import { generationOutputContract, type GenerationAuthorInput } from '../../src/
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunSummary, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
-import { tokenLiability } from '../../src/shared/generation-contract'
+import { TERMINAL_PROVIDER_FAILURE_CODES, tokenLiability } from '../../src/shared/generation-contract'
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftReconciliationArtifacts } from '../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
@@ -90,8 +90,11 @@ export interface MainGenerationOwnerDependencies {
 
 interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
 
-/** Provider 流式失败的分类：请求或读流被传输层拒绝、拿不到响应流、流在完成标记前断开与原生网络错误都算网络失败，其余算供应商失败。 */
-export function providerStreamFailureCode(error: string): 'NETWORK_ERROR' | 'GENERATION_PROVIDER_FAILED' {
+const RENDERER_SAFE_PROVIDER_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR',
+  ...TERMINAL_PROVIDER_FAILURE_CODES] as const satisfies readonly NonNullable<GenerationAttemptReceipt['failureCode']>[]
+
+export function providerStreamFailureCode(error: string): typeof RENDERER_SAFE_PROVIDER_FAILURE_CODES[number] {
+  if (error === 'LLM_CONTEXT_LENGTH_EXCEEDED') return 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
   return error === 'LLM_STREAM_NETWORK_FAILED' || error === 'LLM_STREAM_UNREADABLE' || error === 'LLM_STREAM_INCOMPLETE'
     || /fetch failed|failed to fetch|network|ECONNRESET|ETIMEDOUT/iu.test(error)
     ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED'
@@ -200,7 +203,6 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       || !['running', 'paused', 'failed'].includes(run.status) || !['active', 'paused'].includes(budget.root.status)
       || budget.blockedCode || budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))
       || budget.attempts.filter(attempt => attempt.status !== 'cancelled-before-dispatch').length >= budget.policy.maxPhysicalRequests
-      || budget.attempts.reduce((sum, attempt) => sum + tokenLiability(attempt), 0) >= budget.policy.maxTokenLiability
       || budget.activeElapsedMs >= budget.policy.maxActiveElapsedMs)
       throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_RETRY_UNAVAILABLE')
     return task
@@ -313,7 +315,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const attempt = receipt.attempt
       const usage = receipt.result?.usage
       return {
-        attemptId: attempt.attemptId, plannerVersion: receipt.budgetDecision?.policyVersion,
+        attemptId: attempt.attemptId, runId: receipt.run.runId, plannerVersion: receipt.budgetDecision?.policyVersion,
         requestedOutputTokens: attempt.requestedOutputTokens,
         reservedTokens: attempt.reservedTokens,
         actualState: attempt.status === 'cancelled-before-dispatch' ? 'not-dispatched' : attempt.status === 'settled' ? 'settled' : ['reserved', 'dispatch-marked'].includes(attempt.status) ? 'reserved' : 'unknown',
@@ -535,8 +537,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const finishReason: LLMFinishReason = receipt.failureCode ? 'error'
       : ['stop', 'length', 'content_filter', 'error', 'unknown'].includes(stored ?? '') ? stored as LLMFinishReason : 'unknown'
     const evidence = frozenModel.capabilityEvidence
-    const safeFailureCode = receipt.failureCode === 'GENERATION_PROVIDER_FAILED' ? 'GENERATION_PROVIDER_FAILED'
-      : receipt.failureCode === 'NETWORK_ERROR' ? 'NETWORK_ERROR' : undefined
+    const safeFailureCode = RENDERER_SAFE_PROVIDER_FAILURE_CODES.find(code => code === receipt.failureCode)
     const details: GenerationAttemptReceipt = { purpose: task.purpose,
       ...(receipt.diagnostics ? { diagnostics: receipt.diagnostics } : {}),
       ...(safeFailureCode ? { failureCode: safeFailureCode } : {}),
@@ -654,8 +655,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (!leaseId) throw new Error('GENERATION_RESUME_REQUIRED')
     const model = deps.leases.resolve(leaseId)
     const creativeStrategy = deps.database.prepare("SELECT creative_strategy FROM project_core WHERE id='main'").pluck().get() as CreativeStrategy | undefined
-    const plan = buildMainGenerationPlan(model, modelReceipt(run.binding), task, repository.budget(run.rootActionId), creativeStrategy,
-      readMainGenerationPolicy(run.binding.sourceManifest.policy))
+    const plan = buildMainGenerationPlan(model, modelReceipt(run.binding), task, repository.budget(run.rootActionId), creativeStrategy)
     deps.beforeDispatch?.()
     assertCurrent()
     const receipt = await service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,

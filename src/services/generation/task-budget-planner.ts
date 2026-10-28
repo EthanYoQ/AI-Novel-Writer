@@ -72,11 +72,9 @@ export interface TaskBudgetPlannerInput {
   }
   capability: TaskBudgetCapabilityConstraints
   root: {
-    remainingTokenLiability: number
     maxOutputPerRequest: number
   }
   liability: TaskBudgetLiabilityBound
-  outputAllocation?: 'semantic-estimate' | 'available-ceiling' | 'physical-capacity'
   safetyMarginTokens: number
 }
 
@@ -85,20 +83,23 @@ export type TaskBudgetReasonCode =
   | 'output-allocation-ceiling'
   | 'input-upper-bound'
   | 'safety-margin'
-  | 'model-context-cap'
   | 'model-output-cap'
-  | 'user-context-cap'
   | 'user-output-cap'
   | 'root-output-cap'
-  | 'root-remaining-cap'
   | 'protocol-reasoning-reserve'
   | 'protocol-total-bound'
   | 'model-capability-unknown'
   | 'liability-bound-unknown'
+  | 'scope-split'
+
+/** Written only by receipts persisted before ADR-0023; diagnostics still read them back. */
+export type LegacyTaskBudgetReasonCode =
+  | 'model-context-cap'
+  | 'user-context-cap'
+  | 'root-remaining-cap'
   | 'required-input-capacity-conflict'
   | 'single-item-capacity-conflict'
   | 'draft-segmentation-disabled'
-  | 'scope-split'
 
 export interface TaskBudgetReason {
   code: TaskBudgetReasonCode
@@ -107,11 +108,13 @@ export interface TaskBudgetReason {
   selected: boolean
 }
 
+export type StoredTaskBudgetReason = Omit<TaskBudgetReason, 'code'> & { code: TaskBudgetReasonCode | LegacyTaskBudgetReasonCode }
+
 export interface TaskBudgetDecision {
   policyVersion: typeof S07_TASK_BUDGET_POLICY.version
   outputEstimatorVersion: typeof S07_TASK_BUDGET_POLICY.outputEstimatorVersion
   inputEstimatorVersion: string
-  decision: 'ready' | 'split-required' | 'capacity-conflict'
+  decision: 'ready' | 'split-required'
   stage: GenerationReasoningStage
   writingLanguage: WritingLanguage
   demandKind: TaskBudgetDemand['kind']
@@ -120,10 +123,9 @@ export interface TaskBudgetDecision {
   remainingQuantity: number
   /** Output need for the complete semantic scope before any capacity decision. */
   requestedOutputTokens: number
-  /** Provider max output for this selected physical request; zero means no dispatch. */
+  /** Provider max output for this selected physical request. */
   reservedOutputTokens: number
   reasoningUpperBoundTokens: number
-  /** Total root-ledger liability to reserve before dispatch; zero means no dispatch. */
   reservationLiabilityTokens: number
   inputUpperBoundTokens: number
   reasons: readonly TaskBudgetReason[]
@@ -131,6 +133,8 @@ export interface TaskBudgetDecision {
 
 export interface GenerationBudgetDiagnostic {
   attemptId: string
+  /** 账本按根列出全部请求；读回某次运行的结果时按它筛出本运行的请求。主进程总会填。 */
+  runId?: string
   plannerVersion?: string
   requestedOutputTokens: number
   /** Full root-ledger reservation, including input/output/reasoning/safety. */
@@ -144,7 +148,7 @@ export interface GenerationBudgetDiagnostic {
   actualState: 'settled' | 'unknown' | 'reserved' | 'not-dispatched'
   finishReason?: string | null
   failureCode?: string | null
-  reasons: readonly TaskBudgetReason[]
+  reasons: readonly StoredTaskBudgetReason[]
 }
 
 function fail(): never {
@@ -182,46 +186,14 @@ function outputTokensFor(
     + quantity * S07_TASK_BUDGET_POLICY.structuredItems.tokensPerItem[demand.writingLanguage][stage]
 }
 
-function maximumQuantityFor(
+function maximumItemsFor(
   stage: GenerationReasoningStage,
-  demand: TaskBudgetDemand,
+  demand: Extract<TaskBudgetDemand, { kind: 'structured-items' }>,
   availableOutputTokens: number,
 ): number {
-  if (demand.kind === 'draft-units') {
-    const usable = availableOutputTokens - S07_TASK_BUDGET_POLICY.draftUnits.baseTokens
-    if (usable <= 0) return 0
-    const rate = S07_TASK_BUDGET_POLICY.draftUnits.tokensPerUnit[demand.writingLanguage]
-    return Math.floor(usable * rate.denominator / rate.numerator)
-  }
   const usable = availableOutputTokens - S07_TASK_BUDGET_POLICY.structuredItems.baseTokens
   if (usable <= 0) return 0
   return Math.floor(usable / S07_TASK_BUDGET_POLICY.structuredItems.tokensPerItem[demand.writingLanguage][stage])
-}
-
-function conflict(
-  input: TaskBudgetPlannerInput,
-  requestedQuantity: number,
-  requestedOutputTokens: number,
-  reasons: TaskBudgetReason[],
-): TaskBudgetDecision {
-  return Object.freeze({
-    policyVersion: S07_TASK_BUDGET_POLICY.version,
-    outputEstimatorVersion: S07_TASK_BUDGET_POLICY.outputEstimatorVersion,
-    inputEstimatorVersion: input.inputEstimate.estimatorVersion,
-    decision: 'capacity-conflict',
-    stage: input.stage,
-    writingLanguage: input.demand.writingLanguage,
-    demandKind: input.demand.kind,
-    requestedQuantity,
-    selectedQuantity: 0,
-    remainingQuantity: requestedQuantity,
-    requestedOutputTokens,
-    reservedOutputTokens: 0,
-    reasoningUpperBoundTokens: 0,
-    reservationLiabilityTokens: 0,
-    inputUpperBoundTokens: input.inputEstimate.upperBoundTokens,
-    reasons: Object.freeze(reasons.map(reason => Object.freeze({ ...reason }))),
-  })
 }
 
 /**
@@ -237,7 +209,6 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
   const requestedQuantity = demandQuantity(input.demand)
   positiveInteger(requestedQuantity)
   nonNegativeInteger(input.inputEstimate.upperBoundTokens)
-  nonNegativeInteger(input.root.remainingTokenLiability)
   positiveInteger(input.root.maxOutputPerRequest)
   nonNegativeInteger(input.safetyMarginTokens)
   optionalPositiveInteger(input.capability.modelContextWindowTokens)
@@ -271,107 +242,39 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
     reasons.push({ code: 'liability-bound-unknown', selected: true })
   }
 
-  const modelContext = input.capability.modelContextWindowTokens
-  const effectiveContext = Math.min(modelContext ?? Infinity, input.capability.userContextWindowTokens ?? Infinity)
+  // 上下文容量由服务商判定（ADR-0023）。
   const fixedReasoningTokens = input.liability.mode === 'separate-bounded' || input.liability.mode === 'unknown'
     ? input.liability.reasoningUpperBoundTokens ?? 0
     : 0
   const outputLimits: Array<{ code: TaskBudgetReasonCode; value: number }> = [
     ...(input.capability.modelMaxOutputTokens === null ? [] : [{ code: 'model-output-cap' as const, value: input.capability.modelMaxOutputTokens }]),
     { code: 'root-output-cap', value: input.root.maxOutputPerRequest },
-    ...(Number.isFinite(effectiveContext) ? [{ code: modelContext === null ? 'user-context-cap' as const : 'model-context-cap' as const,
-      value: effectiveContext - input.inputEstimate.upperBoundTokens - fixedReasoningTokens - input.safetyMarginTokens }] : []),
+    ...(input.capability.userMaxOutputTokens === null ? [] : [{ code: 'user-output-cap' as const, value: input.capability.userMaxOutputTokens }]),
   ]
-  if (input.capability.userMaxOutputTokens !== null) {
-    outputLimits.push({ code: 'user-output-cap', value: input.capability.userMaxOutputTokens })
-  }
-  if (input.capability.userContextWindowTokens !== null) {
-    reasons.push({
-      code: 'user-context-cap',
-      valueTokens: input.capability.userContextWindowTokens,
-      selected: input.capability.userContextWindowTokens <= (modelContext ?? Infinity),
-    })
-  }
-
-  let totalEnvelopeTokens: number | null = null
-  if (input.liability.mode === 'separate-bounded' || input.liability.mode === 'unknown' && fixedReasoningTokens > 0) {
-    outputLimits.push({
-      code: 'root-remaining-cap',
-      value: input.root.remainingTokenLiability
-        - input.inputEstimate.upperBoundTokens - fixedReasoningTokens - input.safetyMarginTokens,
-    })
-    reasons.push({ code: 'protocol-reasoning-reserve', valueTokens: fixedReasoningTokens, selected: true })
-  } else if (input.liability.mode === 'included-in-output' || input.liability.mode === 'unknown') {
-    // An unknown protocol gets an estimate, not a claim of zero reasoning.
-    // The persisted usage policy retains the distinction at settlement.
-    outputLimits.push({
-      code: 'root-remaining-cap',
-      value: input.root.remainingTokenLiability
-        - input.inputEstimate.upperBoundTokens - input.safetyMarginTokens,
-    })
-  } else {
-    // A verified context value is a supported capacity floor, not proof of the
-    // protocol's physical liability ceiling. Preserve the independent bound.
-    totalEnvelopeTokens = input.liability.totalLiabilityUpperBoundTokens
+  const totalEnvelopeTokens = input.liability.mode === 'total-bounded' ? input.liability.totalLiabilityUpperBoundTokens : null
+  if (totalEnvelopeTokens !== null) {
     reasons.push({ code: 'protocol-total-bound', valueTokens: totalEnvelopeTokens, selected: true })
-    if (input.root.remainingTokenLiability < totalEnvelopeTokens) {
-      reasons.push({ code: 'root-remaining-cap', valueTokens: input.root.remainingTokenLiability, selected: true })
-      return conflict(input, requestedQuantity, requestedOutputTokens, reasons)
-    }
-    outputLimits.push({
-      code: 'root-remaining-cap',
-      value: totalEnvelopeTokens - input.inputEstimate.upperBoundTokens - input.safetyMarginTokens,
-    })
+  } else if (fixedReasoningTokens > 0 || input.liability.mode === 'separate-bounded') {
+    reasons.push({ code: 'protocol-reasoning-reserve', valueTokens: fixedReasoningTokens, selected: true })
   }
 
   const availableOutputTokens = Math.min(...outputLimits.map(limit => limit.value))
   for (const limit of outputLimits) {
-    reasons.push({
-      code: limit.code,
-      valueTokens: Math.max(0, limit.value),
-      selected: limit.value === availableOutputTokens,
-    })
-  }
-  const physicalCapacity = input.outputAllocation === 'physical-capacity'
-  const minimumOutputTokens = physicalCapacity ? 1 : outputTokensFor(input.stage, input.demand, 1)
-  if (availableOutputTokens < minimumOutputTokens) {
-    reasons.push({ code: 'required-input-capacity-conflict', valueTokens: Math.max(0, availableOutputTokens), selected: true })
-    if (input.demand.kind === 'structured-items' && requestedQuantity === 1) {
-      reasons.push({ code: 'single-item-capacity-conflict', selected: true })
-    }
-    return conflict(input, requestedQuantity, requestedOutputTokens, reasons)
+    reasons.push({ code: limit.code, valueTokens: limit.value, selected: limit.value === availableOutputTokens })
   }
 
-  const selectedQuantity = physicalCapacity && input.demand.kind === 'draft-units' ? requestedQuantity : Math.min(
-    requestedQuantity,
-    Math.max(physicalCapacity ? 1 : 0, maximumQuantityFor(input.stage, input.demand, availableOutputTokens)),
-  )
-  if (selectedQuantity < requestedQuantity
-    && input.demand.kind === 'draft-units'
-    && !input.demand.segmentable) {
-    reasons.push({ code: 'draft-segmentation-disabled', selected: true })
-    return conflict(input, requestedQuantity, requestedOutputTokens, reasons)
-  }
-  if (selectedQuantity <= 0) {
-    reasons.push({ code: 'required-input-capacity-conflict', valueTokens: Math.max(0, availableOutputTokens), selected: true })
-    return conflict(input, requestedQuantity, requestedOutputTokens, reasons)
-  }
-
+  const selectedQuantity = input.demand.kind === 'draft-units' ? requestedQuantity
+    : Math.min(requestedQuantity, Math.max(1, maximumItemsFor(input.stage, input.demand, availableOutputTokens)))
   const decision = selectedQuantity < requestedQuantity ? 'split-required' : 'ready'
-  const useAvailableCeiling = decision === 'ready' && (physicalCapacity || input.outputAllocation === 'available-ceiling')
-  const reservedOutputTokens = useAvailableCeiling
-    ? availableOutputTokens : outputTokensFor(input.stage, input.demand, selectedQuantity)
-  if (useAvailableCeiling) reasons.push({ code: 'output-allocation-ceiling', valueTokens: reservedOutputTokens, selected: true })
+  const reservedOutputTokens = decision === 'ready'
+    ? availableOutputTokens : Math.min(availableOutputTokens, outputTokensFor(input.stage, input.demand, selectedQuantity))
+  if (decision === 'ready') reasons.push({ code: 'output-allocation-ceiling', valueTokens: reservedOutputTokens, selected: true })
   const reasoningUpperBoundTokens = totalEnvelopeTokens === null
     ? fixedReasoningTokens
     : Math.max(0, totalEnvelopeTokens
       - input.inputEstimate.upperBoundTokens - reservedOutputTokens - input.safetyMarginTokens)
-  const reservationLiabilityTokens = totalEnvelopeTokens ?? (
-    input.inputEstimate.upperBoundTokens
-    + reservedOutputTokens
-    + reasoningUpperBoundTokens
-    + input.safetyMarginTokens
-  )
+  const reservationLiabilityTokens = input.inputEstimate.upperBoundTokens
+    + reservedOutputTokens + reasoningUpperBoundTokens + input.safetyMarginTokens
   if (decision === 'split-required') reasons.push({ code: 'scope-split', valueTokens: reservedOutputTokens, selected: true })
   return Object.freeze({
     policyVersion: S07_TASK_BUDGET_POLICY.version,

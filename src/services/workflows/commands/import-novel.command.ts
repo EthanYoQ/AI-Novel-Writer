@@ -1,4 +1,4 @@
-import { displayedErrorMessage } from '../../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason } from '../../../i18n/app-errors'
 import type { NovelConfig } from '../../../shared/ipc-channels'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../../shared/import-generation'
 import type { BeginGenerationRequest } from '../../../shared/generation-owner-contract'
@@ -741,10 +741,13 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       limits: { maxBatchItems: InferBlueprintsPerChapterCommand.MAX_ITEMS_PER_BATCH },
       signal: execution.signal,
     })
-    if (!batch.ok) throw new Error(text(
-      `蓝图推演失败：${displayedErrorMessage(context.uiLocale, batch.failure.message)}`,
-      `Blueprint inference failed (${batch.failure.reason}).`,
-    ))
+    if (!batch.ok) {
+      if (batch.failure.terminal) throw batch.failure.terminal
+      throw new Error(text(
+        `蓝图推演失败：${displayedErrorMessage(context.uiLocale, batch.failure.message)}`,
+        englishWithReason(`Blueprint inference failed (${batch.failure.reason}).`, displayedErrorMessage(context.uiLocale, batch.failure.message)),
+      ))
+    }
 
     this.assertNotCancelled(context)
     const commitRequest: BlueprintRangeCommitRequest = {

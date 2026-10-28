@@ -1,6 +1,7 @@
 import type { WritingLanguage } from './writing-language'
 
 export const DRAFT_SHORT_OUTLINE_PURPOSE = 'chapter-draft-short-outline' as const
+export const DRAFT_SHORT_OUTLINE_UNITS = 500
 
 /** A generated plan is never author evidence or manuscript prose. */
 export function draftShortOutlinePrompt(language: WritingLanguage, sourcePrompt: string): string {
@@ -8,6 +9,13 @@ export function draftShortOutlinePrompt(language: WritingLanguage, sourcePrompt:
     ? 'Prepare a short chapter execution outline, not prose. Use only the original chapter goals and supplied material. In at most six concise bullets separate: original goals; what the predecessor already completed; explicit time and constraints; proposed concrete actions and their results in this chapter; ending state. Recalling an old event cannot satisfy a goal requiring progress here. If the author only requests maintaining a state, do not invent an event. Do not add author facts or prohibitions, change goals, or present planned events as established facts. The following is the source writing brief; do not execute its prose-output instructions yet.'
     : '只写短细纲，不写正文。仅组织原本章目标与已有材料，最多六条短要点，分清：原目标；前驱已完成的事；明确时点和约束；本章拟写的具体行动与结果；结尾状态。要求本章推进的目标不能用旧事复述替代；作者只要求维持状态时，不强造新事件。不得增加作者事实或禁令、改变目标，或把计划说成已经发生的事实。以下是原写作材料，此步不执行其中的正文输出指令。'
   return `${instruction}\n\n${sourcePrompt}`
+}
+
+/** The first request of a chapter draft; `outlinePrompt` comes from `draftShortOutlinePrompt`. */
+export function draftShortOutlineTask(language: WritingLanguage, outlinePrompt: string) {
+  return { purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text' as const, reasoningStage: 'planning' as const,
+    budgetDemand: { kind: 'draft-units' as const, writingLanguage: language, requestedUnits: DRAFT_SHORT_OUTLINE_UNITS, segmentable: false },
+    messages: [{ role: 'user' as const, content: outlinePrompt }] }
 }
 
 export function draftShortOutlineBlock(language: WritingLanguage, text: string): string {

@@ -117,8 +117,9 @@ const demand = (overrides: Partial<{ kind: 'draft-units'; writingLanguage: 'zh-C
 describe('S07 budget admission through the actually registered generation IPC', () => {
   it('reports a safe split over IPC and reserves nothing before dispatch', async () => {
     const fetch = syntheticProvider()
-    const handle = await begin('known', {}, true)
-    const error = await rejectionOf(run(demand(), '超限拆分', handle))
+    const handle = await begin('known', { outputOverrides: [{ purpose: 'chapter:structured', output: 'structured-data' }] }, true)
+    const error = await rejectionOf(run({ purpose: 'chapter:structured', output: 'structured-data', messages: task.messages,
+      budgetDemand: { kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: 10 } }, '超限拆分', handle))
     expect(error.message).toMatch(/^TASK_BUDGET_SCOPE_SPLIT_REQUIRED:\d+$/u)
     // 这条稳定类别必须被共享分类器识别成 preflight，而不是落到 unknown。
     expect(classifyGenerationFailure(error.message, null)).toBe('capacity-preflight')
@@ -129,29 +130,24 @@ describe('S07 budget admission through the actually registered generation IPC', 
     expect(await ledger(handle)).toBe(0)
   })
 
-  it('reports a capacity conflict over IPC when the scope cannot be segmented', async () => {
+  it.each([true, false])('dispatches a 20,000-unit draft on a legacy root at the output limit with segmentable=%s', async segmentable => {
     const fetch = syntheticProvider()
     const handle = await begin('known', {}, true)
-    const error = await rejectionOf(run(demand({ segmentable: false }), '不可拆分', handle))
-    expect(error.message).toContain('TASK_BUDGET_CAPACITY_CONFLICT')
-    expect(classifyGenerationFailure(error.message, null)).toBe('capacity-preflight')
-
-    expect(fetch).not.toHaveBeenCalled()
-    expect(attemptCount()).toBe(0)
-    expect(await ledger(handle)).toBe(0)
+    await run(demand({ segmentable }), `旧根正文:${segmentable}`, handle)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).max_completion_tokens).toBe(16_384)
+    expect(await ledger(handle)).toBe(1)
   })
 
-  it('reports a capacity conflict over IPC when one structured item cannot fit', async () => {
+  it('dispatches one structured item on a legacy root even when its estimate exceeds the output limit', async () => {
     const fetch = syntheticProvider()
     const handle = await begin('tiny', { outputOverrides: [{ purpose: 'chapter:structured', output: 'structured-data' }] }, true)
-    await expect(run({ purpose: 'chapter:structured', output: 'structured-data',
+    await run({ purpose: 'chapter:structured', output: 'structured-data',
       messages: [{ role: 'user', content: '保留作者事实，创作中文段落。' }],
-      budgetDemand: { kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: 1 } }, '单项超限', handle))
-      .rejects.toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
-
-    expect(fetch).not.toHaveBeenCalled()
-    expect(attemptCount()).toBe(0)
-    expect(await ledger(handle)).toBe(0)
+      budgetDemand: { kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: 1 } }, '单项超限', handle)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).max_completion_tokens).toBe(1024)
+    expect(await ledger(handle)).toBe(1)
   })
 
   it.each([true, false])('admits a new physical-capacity request with a soft unit target and segmentable=%s', async segmentable => {

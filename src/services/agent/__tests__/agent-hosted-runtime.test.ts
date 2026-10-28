@@ -130,6 +130,59 @@ describe('Agent hosted consumer control boundary (synthetic transport)', () => {
     expect(result.ui.onError).toHaveBeenCalledOnce()
   })
 
+  it('explains a provider context-length rejection instead of asking to retry', async () => {
+    fixture.response = async () => {
+      fixture.recovery.run = { ...fixture.recovery.run, budgetDiagnostics: [{ runId: 'agent-run-0', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } as never
+      return { status: 'incomplete', text: '' }
+    }
+    const result = run(await client()); await result.promise
+    expect(result.ui.onError).toHaveBeenCalledOnce()
+    expect(String(result.ui.onError.mock.calls[0][0])).toMatch(/longer context|上下文更长/u)
+  })
+
+  it('keeps the earlier visible reply and adds the context-length guidance when a later round is rejected', async () => {
+    probe()
+    fixture.response = async index => {
+      if (index === 0) return 'Visible.' + toolText()
+      fixture.recovery.run = { ...fixture.recovery.run, budgetDiagnostics: [{ runId: `agent-run-${index}`, failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } as never
+      return { status: 'incomplete', text: '' }
+    }
+    const result = run(await client()); await result.promise
+    expect(result.ui.onDone.mock.calls[0][0]).toContain('Visible.')
+    expect(result.ui.onDone.mock.calls[0][0]).toMatch(/longer context|上下文更长/u)
+  })
+
+  it('keeps the context-length cause when resuming a round that was already rejected', async () => {
+    fixture.response = async () => {
+      fixture.recovery.run = { ...fixture.recovery.run, budgetDiagnostics: [{ runId: 'agent-run-0', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } as never
+      return { status: 'incomplete', text: '' }
+    }
+    const host = await client()
+    await run(host).promise
+    const resumed = run(host); await resumed.promise
+    expect(String(resumed.ui.onError.mock.calls[0]?.[0])).toMatch(/longer context|上下文更长/u)
+  })
+
+  it("keeps the round's own context-length cause when a child workflow under the same root asks later", async () => {
+    fixture.response = async () => {
+      fixture.recovery.run = { ...fixture.recovery.run, budgetDiagnostics: [
+        { runId: 'agent-run-0', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }, { runId: 'child-workflow', failureCode: null }] } as never
+      return { status: 'incomplete', text: '' }
+    }
+    const result = run(await client()); await result.promise
+    expect(String(result.ui.onError.mock.calls[0]?.[0])).toMatch(/longer context|上下文更长/u)
+  })
+
+  it("does not blame the round for a child workflow's context-length rejection under the same root", async () => {
+    fixture.response = async () => {
+      fixture.recovery.run = { ...fixture.recovery.run, budgetDiagnostics: [
+        { runId: 'agent-run-0', failureCode: null }, { runId: 'child-workflow', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' }] } as never
+      return { status: 'incomplete', text: '' }
+    }
+    const result = run(await client()); await result.promise
+    expect(String(result.ui.onError.mock.calls[0]?.[0])).not.toMatch(/longer context|上下文更长/u)
+  })
+
   it('retains visible output and navigation after a later source conflict', async () => {
     probe()
     fixture.response = async index => { if (index) throw new Error('GENERATION_SOURCE_CHANGED'); return 'Keep this candidate.' + toolText() }
