@@ -72,6 +72,12 @@ describe('stage model settings', () => {
     } })
   })
 
+  it('stores and returns the model id without surrounding whitespace', async () => {
+    await expect(handler('llm:set-stage-model')({}, { stage: 'review', modelId: '  reviewer \n' }))
+      .resolves.toEqual({ success: true, stageModelIds: { review: 'reviewer' } })
+    expect(writes[0]?.value.stageModelIds).toEqual({ review: 'reviewer' })
+  })
+
   it('returns a stage to the default', async () => {
     mocks.files.set('config.json', { defaultModelId: 'writer', stageModelIds: { review: 'reviewer' } })
     await expect(handler('llm:set-stage-model')({}, { stage: 'review', modelId: null }))
