@@ -56,17 +56,17 @@ function countOpenWork(file: string) {
   return counts
 }
 
-function damageContentPage(file: string) {
+function damageContentPage(file: string, table = 'contents') {
   const db = new Database(file, { readonly: true })
   const pageSize = db.pragma('page_size', { simple: true }) as number
-  const rootPage = db.prepare("SELECT rootpage FROM sqlite_master WHERE name='contents'").pluck().get() as number
+  const rootPage = db.prepare('SELECT rootpage FROM sqlite_master WHERE name=?').pluck().get(table) as number
   db.close()
   const fd = fs.openSync(file, 'r+')
   try { fs.writeSync(fd, Buffer.alloc(64, 0xff), 0, 64, (rootPage - 1) * pageSize) } finally { fs.closeSync(fd) }
 }
 
 /** Leaves committed rows only in -wal, as a crash before checkpoint would. */
-function commitToWalOnly(file: string, rows: number) {
+function commitToWalOnly(file: string, rows: number, sql = '') {
   const crashed = `${file}.crashed`
   const db = new Database(file)
   try {
@@ -74,6 +74,7 @@ function commitToWalOnly(file: string, rows: number) {
     db.pragma('wal_autocheckpoint = 0')
     const insert = db.prepare('INSERT INTO contents(body) VALUES (?)')
     for (let index = 0; index < rows; index++) insert.run(`wal-${index}:${BODY}`)
+    if (sql) db.exec(sql)
     for (const suffix of ['', '-wal', '-shm']) fs.copyFileSync(file + suffix, crashed + suffix)
   } finally { db.close() }
   for (const suffix of ['', '-wal', '-shm']) fs.renameSync(crashed + suffix, file + suffix)
@@ -205,6 +206,21 @@ describe('project open verification', () => {
       try { fs.writeSync(fd, Buffer.alloc(100, 0x41), 0, 100, 0) } finally { fs.closeSync(fd) }
     }, { name: 'SqliteError', code: 'SQLITE_NOTADB', message: 'file is not a database' }],
   ]
+  const walFailures: [string, (file: string) => void, string][] = [
+    ['a damaged page', file => { commitToWalOnly(file, 5); damageContentPage(file, 'import_runs') }, 'CORRUPT_SCHEMA'],
+    ['an unknown table', file => commitToWalOnly(file, 5, 'CREATE TABLE stray(x)'), 'UNRECOGNIZED_SCHEMA'],
+  ]
+  it.each(walFailures)('keeps the database and WAL bytes when a project with an uncheckpointed WAL and %s is refused', (_name, corrupt, code) => {
+    const f = fixture()
+    corrupt(f.file)
+    const main = fs.readFileSync(f.file), wal = fs.readFileSync(`${f.file}-wal`)
+    expect(wal.length).toBeGreaterThan(0)
+    expect(() => initProjectDatabase(f.root)).toThrow(code)
+    expect(getProjectDb()).toBeNull()
+    expect(fs.readFileSync(f.file)).toEqual(main)
+    expect(fs.readFileSync(`${f.file}-wal`)).toEqual(wal)
+  })
+
   it.each(corruptions)('refuses %s before a writable connection opens', (_name, corrupt, expected) => {
     const f = fixture()
     corrupt(f.file)
