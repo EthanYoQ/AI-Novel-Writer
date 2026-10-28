@@ -15,11 +15,10 @@ export interface ImportFillPlan<Field extends ImportFillField> {
   suggestions: ImportFillSuggestion[]
 }
 
-type FillKind = 'text' | 'count' | 'choice'
+type FillKind = 'text' | 'count'
 
 /**
  * suggest=false：导入章数不是作者计划的总章数，只在项目没有总章数时补上，不当作建议。
- * choice：故事模型与叙事视角新项目自带默认值，只有真为空时才补，否则不同就进建议。
  */
 const FILL_RULES: Record<ImportFillField, { kind: FillKind; suggest: boolean }> = {
   genre: { kind: 'text', suggest: true },
@@ -27,8 +26,8 @@ const FILL_RULES: Record<ImportFillField, { kind: FillKind; suggest: boolean }> 
   targetAudience: { kind: 'text', suggest: true },
   totalChapters: { kind: 'count', suggest: false },
   wordsPerChapter: { kind: 'count', suggest: true },
-  plotStructure: { kind: 'choice', suggest: true },
-  narrativePov: { kind: 'choice', suggest: true },
+  plotStructure: { kind: 'text', suggest: true },
+  narrativePov: { kind: 'text', suggest: true },
   goldenFinger: { kind: 'text', suggest: true },
   globalGuidance: { kind: 'text', suggest: true },
   coreOutline: { kind: 'text', suggest: true },

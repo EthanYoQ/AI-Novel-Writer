@@ -123,7 +123,7 @@ async function readBook({ app, page, invoke }) {
 async function assertImportedCastTitle(page) {
   const banner = page.getByRole('region', { name: '待处理的角色建议' })
   await banner.waitFor({ state: 'visible' })
-  assert.deepEqual(await banner.locator('.cast-suggestion-text').allInnerTexts(), ['从导入原稿反推的角色（3 位）'], '导入角色决策写来源与人数')
+  assert.deepEqual(await banner.locator('[data-kind="decision"] .cast-suggestion-text').allInnerTexts(), ['从导入原稿反推的角色（3 位）'], '导入角色决策写来源与人数')
   assert.equal((await banner.innerText()).includes('novel-import-global'), false, '不露操作号')
 }
 

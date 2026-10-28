@@ -19,8 +19,8 @@ export function importGenerationSlotKey(slot: ImportGenerationSlot): string {
 /** Read immutable import material from the captured database, not renderer samples. */
 export function captureImportGenerationContext(db: Database.Database, slot: ImportGenerationSlot): ImportGenerationContext {
   validateImportGenerationSlot(slot)
-  const run = db.prepare('SELECT purpose,manifest_fingerprint,manifest_chapter_count,manifest_word_count FROM import_runs WHERE id=?').get(slot.runId) as {
-    purpose: string; manifest_fingerprint: string; manifest_chapter_count: number; manifest_word_count: number
+  const run = db.prepare('SELECT manifest_fingerprint,manifest_chapter_count,manifest_word_count FROM import_runs WHERE id=?').get(slot.runId) as {
+    manifest_fingerprint: string; manifest_chapter_count: number; manifest_word_count: number
   } | undefined
   if (!run || !/^[a-f0-9]{64}$/.test(run.manifest_fingerprint)) throw new Error('GENERATION_IMPORT_MANIFEST_REQUIRED')
   const range = slot.stage === 'blueprints' ? parseImportRunChapterBatchCheckpointId(slot.batchId) : null

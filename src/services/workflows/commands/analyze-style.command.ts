@@ -138,8 +138,8 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
         const saved = await useProjectStore.getState().commitGeneratedNovelConfig(
           { writingStyle: cleanResult }, expectedConfig, projectSession, handle,
           this.persistWritingStyle ? async () => {
-            const saved = await this.persistWritingStyle!(cleanResult, handle)
-            return saved === undefined ? undefined : { writingStyle: saved }
+            const savedStyle = await this.persistWritingStyle!(cleanResult, handle)
+            return savedStyle === undefined ? undefined : { writingStyle: savedStyle }
           } : undefined,
         )
         if (!saved) throw new Error(text('文风特征保存失败', 'Failed to save the writing-style profile.'))
