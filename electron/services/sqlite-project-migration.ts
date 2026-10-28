@@ -281,7 +281,10 @@ function currentSnapshotIdentity(databasePath: string): SqliteContentIdentity | 
  */
 function verifyLiveSchema(databasePath: string): void {
   const reader = new Database(databasePath, { readonly: true, fileMustExist: true })
-  try { verifySchema(new SqliteSchemaAdapter(reader), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION) } finally { reader.close() }
+  try {
+    reader.pragma('foreign_keys = ON')
+    verifySchema(new SqliteSchemaAdapter(reader), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+  } finally { reader.close() }
 }
 
 /** Opening reads the schema version from one private snapshot. Content
