@@ -35,59 +35,49 @@ describe('new physical root liability', () => {
     gemini(), silicon(), unknown(), numeric(), numeric(4_000_000)]
   it.each(profiles)('covers every stage and strategy reservation for $modelName at $baseUrl', profile => {
     const policy = newMainGenerationPolicy(selection, profile)
-    const bound = policy.budget.maxTokenLiability / policy.budget.maxPhysicalRequests
     const receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'matrix', createdAt: 1, expiresAt: 1000 })
     for (const stage of ['drafting', 'planning', 'review', 'general'] as const) for (const strategy of CREATIVE_STRATEGIES) {
       for (const budgetDemand of [undefined, { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false } as const]) {
         const result = buildMainGenerationPlan(profile, receipt, { ...task, reasoningStage: stage, budgetDemand,
-          messages: [{ role: 'user', content: 'x'.repeat(43699) }] }, { ...ledger(), policy: policy.budget }, strategy, policy)
-        expect(result.reservedTokens).toBeLessThanOrEqual(bound)
+          messages: [{ role: 'user', content: 'x'.repeat(43699) }] }, { ...ledger(), policy: policy.budget }, strategy)
         expect(result.requestedOutputTokens).toBeGreaterThan(0)
         expect(result.reservedTokens).toBe(result.inputUpperBoundTokens + result.requestedOutputTokens + result.reasoningUpperBoundTokens + 512)
       }
     }
   })
-  it('keeps the unknown first-request compatibility envelope and unknown settlement semantics', () => {
+  it('sends the author output limit for an unknown endpoint whatever the input size', () => {
     const profile = unknown(), policy = newMainGenerationPolicy(selection, profile)
     expect(policy.budget.maxTokenLiability).toBe(32 * 2_097_152)
     const receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'unknown', createdAt: 1, expiresAt: 1000 })
-    for (const bytes of [1, 43_699, 2_000_000]) {
+    for (const bytes of [1, 43_699, 2_000_000, 2_200_000]) {
       const input = { ...task, messages: [{ role: 'user' as const, content: 'x'.repeat(bytes) }] }
-      const old = buildMainGenerationPlan(profile, receipt, input, ledger())
-      const next = buildMainGenerationPlan(profile, receipt, input, { ...ledger(), policy: policy.budget }, 'auto', policy)
-      expect(next.requestedOutputTokens).toBeGreaterThanOrEqual(old.requestedOutputTokens)
+      const next = buildMainGenerationPlan(profile, receipt, input, { ...ledger(), policy: policy.budget })
+      expect(next.requestedOutputTokens).toBe(65536)
       expect(next.usagePolicy).toMatchObject({ reasoning: 'unknown', canBoundTotalLiability: false })
-      expect(next.reservedTokens).toBeLessThanOrEqual(2_097_152)
+      expect(next.reservedTokens).toBe(next.inputUpperBoundTokens + 65536 + 512)
     }
-    const tooLarge = { ...task, messages: [{ role: 'user' as const, content: 'x'.repeat(2_200_000) }] }
-    expect(() => buildMainGenerationPlan(profile, receipt, tooLarge, ledger())).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
-    expect(() => buildMainGenerationPlan(profile, receipt, tooLarge, { ...ledger(), policy: policy.budget }, 'auto', policy)).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
   })
-  it('removes the old cumulative early stop without changing total-bounded reservation or unknown liability', () => {
+  it('records every total-bounded Silicon reservation and never stops on token liability', () => {
     const profile = silicon(), receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'total', createdAt: 1, expiresAt: 1000 })
     const policy = newMainGenerationPolicy(selection, profile), budget = { ...ledger(), policy: policy.budget }
     expect(policy.budget.maxTokenLiability).toBe(32 * 1_048_576)
-    for (let index = 0; index < 32; index++) {
-      const next = buildMainGenerationPlan(profile, receipt, task, budget, 'auto', policy)
+    for (let index = 0; index < 40; index++) {
+      const next = buildMainGenerationPlan(profile, receipt, task, budget)
       expect(next.reservedTokens).toBe(1_048_576)
       budget.attempts.push({ attemptId: String(index), reservationId: String(index), rootActionId: '根', status: 'unknown', reservedTokens: next.reservedTokens, requestedOutputTokens: next.requestedOutputTokens })
-      if (index === 1) expect(() => buildMainGenerationPlan(profile, receipt, task, { ...budget, policy: ledger().policy })).toThrow('ROOT_BUDGET_EXHAUSTED')
     }
-    expect(() => buildMainGenerationPlan(profile, receipt, task, budget, 'auto', policy)).toThrow('ROOT_BUDGET_EXHAUSTED')
-    budget.attempts[0] = { ...budget.attempts[0], status: 'settled', actualTokens: 100 }
-    budget.attempts[1] = { ...budget.attempts[1], status: 'settled', actualTokens: 100 }
-    expect(buildMainGenerationPlan(profile, receipt, task, budget, 'auto', policy).reservedTokens).toBe(1_048_576)
   })
-  it('lets actual physical capacity decide a 43,699-byte input with a soft target', () => {
+  it('keeps the author output limit for a 43,699-byte input whatever the author context setting', () => {
     const profile = model({ baseUrl: 'https://compatible.example/v1', modelName: 'custom', maxTokens: 65536,
       capabilities: { contextWindowTokens: 65536, maxOutputTokens: 65536, reasoning: false, structuredOutput: true, usage: false } })
-    const policy = newMainGenerationPolicy(selection, profile), receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'capacity', createdAt: 1, expiresAt: 1000 })
+    const receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'capacity', createdAt: 1, expiresAt: 1000 })
     const input: GenerationTask = { ...task, messages: [{ role: 'user', content: 'x'.repeat(43699) }],
       budgetDemand: { kind: 'structured-items', requestedItems: 1, writingLanguage: 'zh-CN' } }
-    expect(buildMainGenerationPlan(profile, receipt, input, { ...ledger(), policy: policy.budget }, 'auto', policy).requestedOutputTokens).toBe(21257)
-    const smaller = { ...profile, capabilities: { ...profile.capabilities!, contextWindowTokens: 32768 } }
-    const smallerPolicy = newMainGenerationPolicy(selection, smaller)
-    expect(() => buildMainGenerationPlan(smaller, receipt, input, { ...ledger(), policy: smallerPolicy.budget }, 'auto', smallerPolicy)).toThrow()
+    for (const contextWindowTokens of [65536, 32768]) {
+      const profiled = { ...profile, capabilities: { ...profile.capabilities!, contextWindowTokens } }
+      const policy = newMainGenerationPolicy(selection, profiled)
+      expect(buildMainGenerationPlan(profiled, receipt, input, { ...ledger(), policy: policy.budget }).requestedOutputTokens).toBe(65536)
+    }
   })
 })
 
@@ -118,20 +108,18 @@ describe('fixed Qwen native admission', () => {
     expect(result.reasoningUpperBoundTokens).toBe(16384)
     expect(result.reservedTokens).toBe(result.inputUpperBoundTokens + result.requestedOutputTokens + 16384 + 512)
     expect(result.usagePolicy).toMatchObject({ canBoundTotalLiability: false, reasoning: 'unknown' })
-    expect(result.requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 16384)
+    expect(result.requestedOutputTokens).toBe(16384)
     expect(settleProviderUsage({ promptTokens: 100, completionTokens: 20000, reasoningTokens: 18000,
       totalTokens: 20100, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true }, result.usagePolicy))
       .toMatchObject({ trusted: true, actualTokens: 20100, reasoningTokens: 18000 })
     expect(settleProviderUsage(null, result.usagePolicy).trusted).toBe(false)
-    expect(plan({ ...qwen(), maxTokens: 32768 }, input).requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 16384)
+    expect(plan({ ...qwen(), maxTokens: 32768 }, input).requestedOutputTokens).toBe(16384)
     expect(result.options.reasoning).toEqual({ adapter: 'openai-thinking-budget', thinkingBudget: 16384 })
     expect(plan({ ...qwen(), provider: 'custom' }, input)).toEqual(result)
     if (input.budgetDemand) expect(result.budgetDecision?.reasons).toContainEqual({ code: 'liability-bound-unknown', selected: true })
     budget.policy.maxTokenLiability = result.reservedTokens * 2
     budget.attempts = [1, 2].map(index => ({ attemptId: `q-${index}`, reservationId: `r-${index}`,
       rootActionId: '根', status: 'unknown', reservedTokens: result.reservedTokens, requestedOutputTokens: result.requestedOutputTokens, actualTokens: 100 }))
-    expect(() => plan(qwen(), input, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
-    budget.attempts.forEach(attempt => { attempt.status = 'settled' })
     expect(plan(qwen(), input, budget).reservedTokens).toBe(result.reservedTokens)
     const off = plan({ ...qwen(), reasoningOverride: 'off' }, input)
     expect(off.reasoningUpperBoundTokens).toBe(0)
@@ -139,8 +127,7 @@ describe('fixed Qwen native admission', () => {
     const manual = plan({ ...qwen(), reasoningMapping: { adapter: 'openai-thinking-budget', supportedEfforts: ['medium'], providerValues: { medium: 4096 } } }, input)
     expect(manual.reasoningUpperBoundTokens).toBe(4096)
     expect(manual.reservedTokens).toBe(manual.inputUpperBoundTokens + manual.requestedOutputTokens + 4096 + 512)
-    expect(() => plan(qwen(), { ...input, messages: [{ role: 'user', content: 'x'.repeat(262144) }] }))
-      .toThrow(input.budgetDemand ? 'TASK_BUDGET_CAPACITY_CONFLICT' : 'GENERATION_INPUT_CAPACITY_EXCEEDED')
+    expect(plan(qwen(), { ...input, messages: [{ role: 'user', content: 'x'.repeat(262144) }] }).requestedOutputTokens).toBe(16384)
   })
 
   it.each([
@@ -191,13 +178,13 @@ describe('main generation physical liability planning without provider calls', (
     expect(result.options.maxTokens).toBe(result.requestedOutputTokens)
     expect(result.reasoningUpperBoundTokens).toBe(0)
   })
-  it('counts the thinking budget of a saved Gemini 2.5 Flash-Lite profile exactly once in remaining and total', () => {
+  it('counts the thinking budget of a saved Gemini 2.5 Flash-Lite profile exactly once in the reservation', () => {
     const budget = ledger(); budget.policy.maxTokenLiability = 10000
     const result = plan({ ...gemini(), modelName: 'gemini-2.5-flash-lite' }, task, budget)
     expect(result.options.reasoning).toEqual({ adapter: 'gemini-thinking-budget', thinkingBudget: 8192 })
     expect(result.reasoningUpperBoundTokens).toBe(8192)
-    expect(result.requestedOutputTokens).toBe(10000 - result.inputUpperBoundTokens - 8192 - 512)
-    expect(result.reservedTokens).toBe(10000)
+    expect(result.requestedOutputTokens).toBe(8192)
+    expect(result.reservedTokens).toBe(result.inputUpperBoundTokens + 8192 + 8192 + 512)
     expect(result.usagePolicy.reasoning).toBe('separately-billed')
   })
   it('sends a Gemini 3 thinking level without claiming a numeric thinking bound', () => {
@@ -206,7 +193,6 @@ describe('main generation physical liability planning without provider calls', (
     expect(result.options.reasoning).toEqual({ adapter: 'gemini-thinking-level', thinkingLevel: 'medium' })
     expect(result.reasoningUpperBoundTokens).toBe(0)
     expect(result.usagePolicy).toMatchObject({ reasoning: 'unknown', canBoundTotalLiability: false })
-    expect(result.reservedTokens).toBeLessThanOrEqual(10000)
   })
   it('distinguishes known Gemini zero from an unknown thinking estimate', () => {
     expect(plan({ ...gemini(), reasoningOverride: 'off' }).reasoningUpperBoundTokens).toBe(0)
@@ -218,33 +204,6 @@ describe('main generation physical liability planning without provider calls', (
     expect(result.reservedTokens).toBe(1048576)
     expect(result.reasoningUpperBoundTokens).toBe(1048576 - result.inputUpperBoundTokens - result.requestedOutputTokens - 512)
     expect(result.reasoningUpperBoundTokens).toBeGreaterThan(65536)
-  })
-  it('refuses Silicon V4 when the remaining root cannot cover the full ceiling', () => {
-    const budget = ledger(); budget.policy.maxTokenLiability = 1048575
-    expect(() => plan(silicon(), task, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
-  })
-  it('classifies a third full-context Silicon reservation as exhausted root budget, not input capacity', () => {
-    const budget = ledger()
-    budget.attempts = [1, 2].map(index => ({ attemptId: `attempt-${index}`, reservationId: `reservation-${index}`,
-      rootActionId: '根', status: 'unknown' as const, reservedTokens: 1_048_576, requestedOutputTokens: 8_192 }))
-    expect(() => plan(silicon(), task, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
-  })
-  it('reduces output for high input occupancy and refuses no positive capacity', () => {
-    const budget = ledger(); budget.policy.maxTokenLiability = 4096
-    const input = { ...task, messages: [{ role: 'user' as const, content: '雨'.repeat(1000) }] }
-    const result = plan(model(), input, budget)
-    expect(result.inputUpperBoundTokens).toBe(3068)
-    expect(result.requestedOutputTokens).toBe(516)
-    expect(() => plan(model(), { ...input, messages: [{ role: 'user', content: '雨'.repeat(1200) }] }, budget)).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
-  })
-  it('keeps unknown reservations liable while settled actual and pre-dispatch cancellation differ', () => {
-    const budget = ledger(); budget.policy.maxTokenLiability = 10000
-    budget.attempts = [{ attemptId: '旧请求', reservationId: '旧预留', rootActionId: '根', status: 'unknown', reservedTokens: 8000, requestedOutputTokens: 7000, actualTokens: 1 }]
-    expect(plan(model(), task, budget).reservedTokens).toBe(2000)
-    budget.attempts[0].status = 'settled'
-    expect(plan(model(), task, budget).requestedOutputTokens).toBe(8192)
-    budget.attempts[0].status = 'cancelled-before-dispatch'
-    expect(plan(model(), task, budget).requestedOutputTokens).toBe(8192)
   })
   it.each(['maxTokens', 'maxOutputTokens', 'thinking', 'thinking_budget', 'plan', 'reservedTokens', 'responseFormat'])('rejects renderer physical control %s', key => {
     expect(() => plan(model(), { ...task, [key]: 1 } as GenerationTask)).toThrow('GENERATION_SEMANTIC_TASK_INVALID')
@@ -309,40 +268,27 @@ describe('no-demand tasks merge verified capability, user limits and input occup
     const result = plan(model({ modelName: 'gpt-4-turbo', maxTokens: 2048, reasoningOverride: 'off' }), plot())
     expect(result.requestedOutputTokens).toBe(2048)
   })
-  it('refuses input that exceeds a smaller user context limit instead of trusting the 1M model window', () => {
-    const profile = deepseek({ maxTokens: 2048, capabilities: userCaps(4096, 2048) })
-    expect(() => plan(profile, plot('A'.repeat(10000)))).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+  it('does not narrow the output by the author context setting or the input occupancy', () => {
+    const result = plan(deepseek({ maxTokens: 4000, capabilities: userCaps(4096, 4000) }), plot('A'.repeat(10000)))
+    expect(result.requestedOutputTokens).toBe(4000)
   })
-  it('lets the user context limit reduce the output cap by the input occupancy', () => {
-    const result = plan(deepseek({ maxTokens: 4000, capabilities: userCaps(4096, 4000) }), plot())
-    expect(result.requestedOutputTokens).toBe(4096 - result.inputUpperBoundTokens - 512)
-    expect(result.requestedOutputTokens).toBeLessThan(4000)
-  })
-  it('refuses input that exceeds the verified model context even without a user context limit', () => {
-    // gpt-3.5-turbo 已验证上下文 16385；OpenAI 目录条目没有 lease 级 capabilities，
-    // 所以冻结证据的 contextWindowTokens 为 null，不能因此放行。
+  it('sends input beyond the verified model context and leaves the decision to the provider', () => {
     const profile = model({ modelName: 'gpt-3.5-turbo', maxTokens: 4096, reasoningOverride: 'off' })
-    expect(() => plan(profile, plot('A'.repeat(20000)))).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+    expect(plan(profile, plot('A'.repeat(20000))).requestedOutputTokens).toBe(4096)
   })
-  it('keeps the Silicon V4 full-context reservation while honoring the user context limit', () => {
-    const profile = { ...silicon(), reasoningOverride: 'off' as const,
-      capabilities: userCaps(4096, 3000) }
+  it('keeps the Silicon V4 full-context reservation and the author output limit for any input', () => {
+    const profile = { ...silicon(), reasoningOverride: 'off' as const, capabilities: userCaps(4096, 3000) }
     const result = plan(profile, plot())
     expect(result.requestedOutputTokens).toBe(3000)
     expect(result.reservedTokens).toBe(1_048_576)
-    expect(() => plan(profile, plot('A'.repeat(10000)))).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+    const large = plan(profile, plot('A'.repeat(1_100_000)))
+    expect(large.requestedOutputTokens).toBe(3000)
+    expect(large.reservedTokens).toBe(large.inputUpperBoundTokens + 3000 + 512)
   })
-  it('uses the verified Silicon context (1M), not the documented 1,048,576 reservation, as the input capacity', () => {
-    const profile = model({ baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash',
-      reasoningOverride: 'off', maxTokens: 16384 })
-    expect(plan(profile, plot('A'.repeat(900_000))).requestedOutputTokens).toBe(16384)
-    expect(() => plan(profile, plot('A'.repeat(1_000_000)))).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
-  })
-  it('treats the root output ceiling and remaining liability exactly as before', () => {
+  it('treats the root output ceiling as before and ignores the remaining liability', () => {
     expect(plan(deepseek({ maxTokens: 100000 }), plot()).requestedOutputTokens).toBe(32768)
     const budget = ledger(); budget.policy.maxTokenLiability = 4096
-    expect(plan(deepseek({ maxTokens: 16384 }), plot(), budget).requestedOutputTokens)
-      .toBe(4096 - plan(deepseek(), plot()).inputUpperBoundTokens - 512)
+    expect(plan(deepseek({ maxTokens: 16384 }), plot(), budget).requestedOutputTokens).toBe(16384)
   })
 })
 
@@ -357,8 +303,10 @@ describe('S07 semantic pre-dispatch integration', () => {
     expect(result.budgetDecision).toMatchObject({ decision: 'ready', requestedQuantity: 5000, selectedQuantity: 5000 })
     expect(result.reservedTokens).toBe(result.inputUpperBoundTokens + result.requestedOutputTokens + 512)
   })
-  it('refuses an oversized indivisible draft instead of reducing its output cap', () => {
-    expect(() => plan({ ...known(), maxTokens: 1024 }, draft(5000))).toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
+  it('sends an indivisible draft at the author output limit and keeps its length a soft target', () => {
+    const result = plan({ ...known(), maxTokens: 1024 }, draft(5000))
+    expect(result.options.maxTokens).toBe(1024)
+    expect(result.budgetDecision).toMatchObject({ decision: 'ready', requestedQuantity: 5000, selectedQuantity: 5000 })
   })
   it('returns a pre-dispatch split for 200 structured items without editing author inputs', () => {
     const input: GenerationTask = { ...task, output: 'structured-data', budgetDemand: { kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: 200 } }
@@ -373,15 +321,10 @@ describe('S07 semantic pre-dispatch integration', () => {
     expect(result.usagePolicy.canBoundTotalLiability).toBe(false)
     expect(result.budgetDecision?.reasons).toContainEqual({ code: 'model-capability-unknown', selected: true })
   })
-  it('refuses an indivisible draft when only the user output cap is too small', () => {
-    expect(() => plan(model({
-      capabilities: { contextWindowTokens: 1_047_576, maxOutputTokens: 1024, reasoning: false, usage: true, structuredOutput: true },
-    }), draft(900))).toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
-  })
-  it('keeps dense required evidence intact when it cannot fit', () => {
+  it('keeps dense required evidence intact and sends it beside a small author context setting', () => {
     const input = { ...draft(900), messages: [{ role: 'user' as const, content: '作者明确事实\r\n'.repeat(1000) }] }
     const original = JSON.stringify(input)
-    expect(() => plan({ ...known(), capabilities: { contextWindowTokens: 1024, maxOutputTokens: 16384, reasoning: false, structuredOutput: false, usage: false } }, input)).toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
+    expect(plan({ ...known(), capabilities: { contextWindowTokens: 1024, maxOutputTokens: 16384, reasoning: false, structuredOutput: false, usage: false } }, input).options.maxTokens).toBe(16384)
     expect(JSON.stringify(input)).toBe(original)
   })
   it('rejects physical fields hidden inside semantic demand', () => {
@@ -434,26 +377,29 @@ describe('semantic demand with shared reasoning completion', () => {
     expect(result.budgetDecision).toMatchObject({ requestedOutputTokens: 3584, reservedOutputTokens: 16384 })
   })
 
-  it.each(['user-output', 'user-context', 'root-output', 'root-remaining'] as const)(
-    'honors a lower %s ceiling and rejects semantic demand that no longer fits', limit => {
-      const bounded = profile(), budget = ledger()
-      if (limit === 'user-output') bounded.maxTokens = 2000
-      if (limit === 'user-context') bounded.capabilities = { contextWindowTokens: 36026, maxOutputTokens: 393216,
-        reasoning: true, structuredOutput: true, usage: true }
-      if (limit === 'root-output') budget.policy.maxOutputPerRequest = 2000
-      if (limit === 'root-remaining') budget.policy.maxTokenLiability = 36026
-      expect(plan(bounded, outline, budget).options.maxTokens).toBe(2000)
-      const larger: GenerationTask = { ...outline,
-        budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false } }
-      expect(() => plan(bounded, larger, budget)).toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
-    })
+  it.each(['user-output', 'root-output'] as const)('honors a lower %s ceiling for every draft size', limit => {
+    const bounded = profile(), budget = ledger()
+    if (limit === 'user-output') bounded.maxTokens = 2000
+    if (limit === 'root-output') budget.policy.maxOutputPerRequest = 2000
+    for (const requestedUnits of [500, 1000]) {
+      expect(plan(bounded, { ...outline, budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits, segmentable: false } }, budget)
+        .options.maxTokens).toBe(2000)
+    }
+  })
 
-  it('honors verified model output and context below user limits', () => {
+  it.each(['user-context', 'root-remaining'] as const)('does not narrow the output by the %s', limit => {
+    const bounded = profile(), budget = ledger()
+    if (limit === 'user-context') bounded.capabilities = { contextWindowTokens: 36026, maxOutputTokens: 393216,
+      reasoning: true, structuredOutput: true, usage: true }
+    if (limit === 'root-remaining') budget.policy.maxTokenLiability = 36026
+    expect(plan(bounded, outline, budget).options.maxTokens).toBe(16384)
+  })
+
+  it('honors the verified model output below the user limit for any input', () => {
     const bounded = model({ modelName: 'gpt-3.5-turbo', maxTokens: 100000 })
-    const small: GenerationTask = { ...outline, messages: [{ role: 'user', content: 'outline' }] }
-    expect(plan(bounded, small).options.maxTokens).toBe(4096)
-    expect(plan(bounded, { ...small, messages: [{ role: 'user', content: 'x'.repeat(13805) }] }).options.maxTokens).toBe(2000)
-    expect(() => plan(bounded, outline)).toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
+    for (const content of ['outline', 'x'.repeat(13805), 'x'.repeat(33446)]) {
+      expect(plan(bounded, { ...outline, messages: [{ role: 'user', content }] }).options.maxTokens).toBe(4096)
+    }
   })
 
   it('does not treat an absent directive or an unsupported off request as disabled thinking', () => {
@@ -469,23 +415,23 @@ describe('semantic demand with shared reasoning completion', () => {
   it.each(['off', 'none', 'disabled', 'high'])('uses the actual OpenAI directive %s', reasoningEffort => {
     const result = plan({ ...profile(), reasoningMapping: { adapter: 'openai-reasoning-effort',
       supportedEfforts: ['high'], providerValues: { high: reasoningEffort } } }, outline)
-    expect(result.options.maxTokens).toBe(reasoningEffort === 'high' ? 16384 : 1712)
+    expect(result.options.maxTokens).toBe(16384)
     expect(result.usagePolicy.canBoundTotalLiability).toBe(false)
   })
 
-  it('preserves disabled, numeric and separate-output allocations', () => {
-    for (const bounded of [
-      { ...profile(), reasoningOverride: 'off' as const },
-      { ...profile(), reasoningMapping: { adapter: 'openai-thinking-budget' as const,
-        supportedEfforts: ['high' as const], providerValues: { high: 4096 } } },
-      { ...gemini(), maxTokens: 16384 },
-      { ...gemini(), modelName: 'gemini-unknown', maxTokens: 16384 },
-      { ...silicon(), reasoningOverride: 'high' as const },
-    ]) {
-      expect(plan(bounded, outline).options.maxTokens).toBe(1712)
+  it('sends the output limit, not the semantic estimate, for disabled, numeric and separate-output reasoning', () => {
+    for (const [bounded, limit] of [
+      [{ ...profile(), reasoningOverride: 'off' as const }, 16384],
+      [{ ...profile(), reasoningMapping: { adapter: 'openai-thinking-budget' as const,
+        supportedEfforts: ['high' as const], providerValues: { high: 4096 } } }, 16384],
+      [{ ...gemini(), maxTokens: 16384 }, 16384],
+      [{ ...gemini(), modelName: 'gemini-unknown', maxTokens: 16384 }, 16384],
+      [{ ...silicon(), reasoningOverride: 'high' as const }, 8192],
+    ] as const) {
+      expect(plan(bounded, outline).options.maxTokens).toBe(limit)
     }
     const envelope = plan({ ...silicon(), reasoningOverride: 'high' }, outline)
     expect(envelope.reservedTokens).toBe(1048576)
-    expect(envelope.reasoningUpperBoundTokens).toBe(1048576 - 33514 - 1712 - 512)
+    expect(envelope.reasoningUpperBoundTokens).toBe(1048576 - 33514 - 8192 - 512)
   })
 })

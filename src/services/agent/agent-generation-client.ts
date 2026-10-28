@@ -3,6 +3,7 @@ import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { MainGenerationRunHandle } from '../generation/generation-runtime'
 import type { AgentGenerationChannels, AgentGenerationRecovery, AgentGenerationRound, AgentToolActionRef } from '../../shared/agent-generation'
 import type { AgentTool } from './tool-registry'
+import { throwIfLastAttemptTerminal } from '../generation/generation-harness'
 
 type ClaimRequest = AgentGenerationChannels['agent-generation:claim-tool']['args'][0]
 type FinishRequest = AgentGenerationChannels['agent-generation:finish-tool']['args'][0]
@@ -52,11 +53,15 @@ export class AgentGenerationClient {
   async round(index: number): Promise<AgentGenerationRound> {
     this.assertActive()
     const existing = this.recovery.rounds.find(round => round.index === index)
-    if (existing && existing.status !== 'not-started') return existing
+    if (existing && existing.status !== 'not-started') {
+      if (existing.status !== 'completed') throwIfLastAttemptTerminal(this.recovery.run.budgetDiagnostics, existing.handle.runId)
+      return existing
+    }
     this.accept(await ipc.invokeWithProjectSession(this.projectSession, 'agent-generation:round', { handle: this.recovery.handle, index }))
     this.assertActive()
     const round = this.recovery.rounds.find(round => round.index === index)
     if (!round) throw new Error('GENERATION_AGENT_ROUND_MISSING')
+    if (round.status !== 'completed') throwIfLastAttemptTerminal(this.recovery.run.budgetDiagnostics, round.handle.runId)
     return round
   }
 

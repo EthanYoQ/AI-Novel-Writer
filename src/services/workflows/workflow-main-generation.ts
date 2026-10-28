@@ -4,7 +4,7 @@ import type { BeginGenerationRequest } from '../../shared/generation-owner-contr
 import type { GenerationOperation } from '../../shared/model-stage-routing'
 import { createMainGenerationTransport } from '../generation/main-generation-transport'
 import { createMainOwnedGenerationRuntime, type GenerationRuntime, type MainGenerationRunHandle, type MainGenerationRunView, type MainGenerationSnapshot } from '../generation/generation-runtime'
-import { GenerationAttemptError, type GenerationSession } from '../generation/generation-harness'
+import { GenerationAttemptError, TerminalProviderFailureError, throwIfTerminalProviderFailure, type GenerationSession } from '../generation/generation-harness'
 import { requireWorkflowProjectSession, workflowUiLocale } from './workflow-project-session'
 import { ipc } from '../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
@@ -191,6 +191,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
           context.mainGenerationRootHandle = Object.freeze({ ...view.handle })
           const artifactId = receipt.outcome.receipt.visibleArtifact?.artifactId
           for (const snapshot of (view.candidates ?? view.artifacts).filter(snapshot => snapshot.artifactId === artifactId)) onSnapshot(snapshot)
+          throwIfTerminalProviderFailure(receipt.outcome.receipt)
           return receipt.outcome
         }
         // Keep this nonce for the entire request; transport failures never mint a retry.
@@ -198,7 +199,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
         if (outcome.receipt.diagnostics) callbacks.setGenerationActivity?.({ operation, diagnostics: outcome.receipt.diagnostics })
         return outcome
       } catch (error) {
-        if (error instanceof GenerationAttemptError && error.receipt.diagnostics) {
+        if ((error instanceof GenerationAttemptError || error instanceof TerminalProviderFailureError) && error.receipt.diagnostics) {
           callbacks.setGenerationActivity?.({ operation, diagnostics: error.receipt.diagnostics })
         }
         throw error
