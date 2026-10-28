@@ -21,7 +21,7 @@ import {
   type ImportRunOrchestratorDependencies,
 } from './import-run-orchestrator'
 import { refreshImportDerivedFileTreeBestEffort } from './import-derived-refresh'
-import { novelConfigFromCore } from './import-suggestions'
+import { configFieldsFromCore } from './import-suggestions'
 import { promptLanguageText } from '../prompt-language'
 import { retryDirectoryCharacterSync } from './directory-character-sync-recovery'
 import type { WritingLanguage } from '../../shared/writing-language'
@@ -237,9 +237,7 @@ function productionDependencies(
           'The project changed before the committed import effect could be restored.',
         ))
       }
-      useProjectStore.setState({
-        currentProject: { ...current, novelConfig: novelConfigFromCore(current.novelConfig, core) },
-      })
+      useProjectStore.getState().publishSavedNovelConfig(configFieldsFromCore(core), session, true)
       context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
     },
     listChapters: (runId, after, limit) => ipc.invokeWithProjectSession(

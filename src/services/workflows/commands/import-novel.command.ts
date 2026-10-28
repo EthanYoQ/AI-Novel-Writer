@@ -541,8 +541,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       '当前项目已切换，导入配置结果未应用',
       'The project changed, so the imported configuration was not applied.',
     ))
-    const authoritativeNovelConfig = {
-      ...baseConfig,
+    const savedFields = {
       genre: commitReceipt.core.genre,
       subGenre: commitReceipt.core.subGenre,
       targetAudience: commitReceipt.core.targetAudience,
@@ -556,7 +555,9 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       worldSetting: commitReceipt.core.worldSetting,
       protagonistProfile: commitReceipt.core.protagonistProfile,
     }
-    useProjectStore.setState({ currentProject: { ...projectSnapshot, novelConfig: authoritativeNovelConfig } })
+    const authoritativeNovelConfig = { ...baseConfig, ...savedFields }
+    // 反推等待期间作者在设定页改过、还没保存的字段保持作者的值。
+    useProjectStore.getState().publishSavedNovelConfig(savedFields, projectSession, true)
     const unknown = promptLanguageText(writingLanguage, '未知', 'Unknown')
     const none = promptLanguageText(writingLanguage, '（无）', '(none)')
     context.data.novelConfigSummary = promptLanguageText(
