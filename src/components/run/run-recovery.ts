@@ -109,6 +109,8 @@ export interface DraftEntry extends Usage {
   tails: RecoveryText[]
   note: string
   actionLabel: string
+  /** 「不再显示」记的是这一刻列出的内容：同一运行之后又留下新候选或新尾段时，标记对不上，卡片重新出现。 */
+  hideKey: string
   /** 草稿保存后正文又改过：只能复制。 */
   changed: boolean
   /** 没有已存的续写方案时，至少要勾选一段才能继续。 */
@@ -364,17 +366,20 @@ function draftEntry({ view, recovery }: RecoverySources['drafts'][number], local
   const changed = recovery.draftSave.kind === 'changed'
   const outlineOnly = !recovery.composition && recovery.attemptedPurposes.every(purpose => purpose === 'chapter-draft-short-outline')
     && Boolean(recovery.draftShortOutline?.completedOutput || recovery.draftShortOutline?.retry?.kind === 'available')
+  const artifacts = withoutDraftReconciliationArtifacts(unique, recovery).filter(hasText).map(artifact => ({
+    id: artifact.artifactId, text: artifact.text, selectable: !changed && artifact.compositionEligible === true,
+  }))
+  const tails = texts(view.unsavedTails)
   return {
     kind: 'draft',
     key: view.handle.runId,
+    hideKey: `${view.handle.runId}#${[...artifacts, ...tails].map(item => `${item.id}:${item.text.length}`).join(',')}`,
     chapterNumber: recovery.chapterNumber,
     title: changed ? t(`第${recovery.chapterNumber}章生成记录`, `Chapter ${recovery.chapterNumber} generation history`)
       : t(`第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`),
     ...usageOf(view, locale),
-    artifacts: withoutDraftReconciliationArtifacts(unique, recovery).filter(hasText).map(artifact => ({
-      id: artifact.artifactId, text: artifact.text, selectable: !changed && artifact.compositionEligible === true,
-    })),
-    tails: texts(view.unsavedTails),
+    artifacts,
+    tails,
     note: changed ? t('草稿已保存，正文后来已修改。请从草稿箱打开当前正文；原生成文字仍可复制。',
       'The draft was saved and later edited. Open the current text from Drafts. The original generated text can still be copied.')
       : t('勾选顺序决定续接顺序；未完成或来源冲突的片段仍可复制。', 'Selection order determines continuation order. Incomplete or conflicted text can still be copied.'),

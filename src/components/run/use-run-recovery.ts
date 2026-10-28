@@ -139,7 +139,7 @@ export function useRunRecovery(): RunRecovery {
     if (!session) return []
     const ofSession = <T,>(loaded: Loaded<T>, empty: T) => sameProjectSessionContext(loaded.session, session) ? loaded.value : empty
     return buildRecoveryEntries({ ...ofSession(generationList, { ...EMPTY_RECOVERY_SOURCES, partial: false }), candidates: ofSession(candidateList, []) }, locale)
-      .filter(entry => entry.kind !== 'draft' || (!hiddenEarlier.has(entry.key) && !hiddenNow.has(entry.key)))
+      .filter(entry => entry.kind !== 'draft' || (!hiddenEarlier.has(entry.hideKey) && !hiddenNow.has(entry.hideKey)))
   }, [session, generationList, candidateList, locale, hiddenEarlier, hiddenNow])
 
   const stillCurrent = useCallback(() => session !== null && sameProjectSessionContext(session, currentSession()), [session])
@@ -245,8 +245,8 @@ export function useRunRecovery(): RunRecovery {
     },
     hideDraft: entry => {
       if (!session || !stillCurrent()) return
-      hideRecovery(session.projectId, entry.view.handle.runId)
-      setHiddenNow(previous => new Set(previous).add(entry.view.handle.runId))
+      hideRecovery(session.projectId, entry.hideKey)
+      setHiddenNow(previous => new Set(previous).add(entry.hideKey))
     },
   }
 }

@@ -410,6 +410,42 @@ describe('运行侧页', () => {
     expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => !['generation:list-recovery', 'db:recovery-candidate-list'].includes(channel))).toEqual([])
   })
 
+  it('「不再显示」只隐藏当时的内容：同一运行之后又留下新候选或新尾段时重新出现', async () => {
+    const handle = { projectId: session.projectId, epoch: '上次打开', rootActionId: '续写根', runId: '续写' }
+    const piece = (attemptId: string, text: string) => ({ ...handle, artifactId: `${attemptId}片`, attemptId, text, status: 'cancelled' })
+    let view: Record<string, unknown> = { handle, status: 'cancelled', artifacts: [piece('第一次', '雾里的钟声')] }
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'generation:list-recovery'
+      ? { planning: [], editors: [], reviews: [], batches: [], partial: false, drafts: [{ view: structuredClone(view),
+        recovery: { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: 5, modelId: '原模型', authorInputs: [], attemptedPurposes: ['chapter-draft'] } }] }
+      : fallback(channel, ...args))
+    const titles = () => [...host!.querySelectorAll('article h3')].map(title => title.textContent)
+    const reopen = async (expectedReads: number) => {
+      await act(async () => root!.unmount())
+      root = createRoot(host!)
+      await act(async () => useStageStore.setState({ sheet: null }))
+      await render()
+      await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')).toHaveLength(expectedReads))
+    }
+    await render()
+    await vi.waitFor(() => expect(titles()).toEqual(['第5章候选']))
+    await act(async () => [...host!.querySelectorAll('button')].find(item => item.textContent === '不再显示')!.click())
+    expect(titles()).toEqual([])
+
+    await reopen(2)
+    await act(async () => {})
+    expect(titles()).toEqual([])
+
+    view = { ...view, artifacts: [piece('第一次', '雾里的钟声'), piece('第二次', '退潮后的石阶')] }
+    await reopen(3)
+    await vi.waitFor(() => expect(titles()).toEqual(['第5章候选']))
+    await act(async () => [...host!.querySelectorAll('button')].find(item => item.textContent === '不再显示')!.click())
+
+    view = { ...view, unsavedTails: [{ attemptId: '第三次', artifactId: '第三次片', durableRevision: 0, text: '没落盘的尾段', failureCode: 'GENERATION_STORAGE_FAILED' }] }
+    await reopen(4)
+    await vi.waitFor(() => expect(titles()).toEqual(['第5章候选']))
+  })
+
   it('恢复候选：继续编辑或放弃的调用失败时显示错误', async () => {
     candidates = [candidate()]
     const fallback = invoke.getMockImplementation()!
