@@ -4,6 +4,9 @@ import type { ProjectCoreData } from '../../../electron/repositories/project-cor
 import type { ImportFillField, ImportFillSuggestion } from '../../shared/import-fill-empty'
 import { ipc } from '../ipc-client'
 import { useProjectStore } from '../../stores/project-store'
+import { useEditorStore } from '../../stores/editor-store'
+import { createProjectArchTabId, shouldSyncProjectArchTab } from '../../components/editor/arch-file-refresh-policy'
+import { isProjectSessionCurrent } from '../../components/project-session-gate'
 
 /** 补空导入在 global、style 两个阶段的收据里记下建议。 */
 const SUGGESTION_STAGES = ['global', 'style'] as const
@@ -54,20 +57,45 @@ export function configFieldsFromCore(core: ProjectCoreData): Partial<NovelConfig
   }
 }
 
-/** 把选中的建议一次写进项目设定。采用的几项按库里的值显示并算已保存；设定页里其他还没保存的改动保持原样。 */
+const ARCH_FIELDS = ['premise', 'worldbuilding', 'synopsis'] as const
+
+/** 已打开的架构文档标签：没改过的显示库里的新内容并算已保存，有未保存改动的保持作者草稿。 */
+function syncOpenArchTabs(core: ProjectCoreData, fields: ReadonlySet<string>, projectPath: string): void {
+  const store = useEditorStore.getState()
+  for (const field of ARCH_FIELDS) {
+    if (!fields.has(field)) continue
+    const tabId = createProjectArchTabId(projectPath, `ai-novel://core/${field}`)
+    const tab = store.tabs.find(item => item.id === tabId)
+    if (!tab || !shouldSyncProjectArchTab(tab, projectPath)) continue
+    const content = core[field] ?? ''
+    store.syncTabContent(tabId, content)
+    store.markTabSaved(tabId, content)
+  }
+}
+
+/**
+ * 把选中的建议一次写进项目设定。采用的几项按库里的值显示并算已保存；
+ * 点击之后作者又改过的项保留作者的新值并仍算未保存，设定页里其他还没保存的改动也保持原样。
+ */
 export async function adoptImportSuggestions(
   items: readonly ImportFillSuggestion[],
   session: ProjectSessionContext,
   projectPath: string,
 ): Promise<void> {
+  const atClick = useProjectStore.getState().currentProject?.novelConfig
   const patch = Object.fromEntries(items.map(item => [item.field, item.inferred])) as Partial<Record<ImportFillField, string | number>>
   const result = await ipc.invokeWithProjectSession(session, 'db:project-core-update', patch as Partial<ProjectCoreData>, projectPath)
   if (!result.success) throw new Error(result.error || 'PROJECT_CORE_UPDATE_FAILED')
   const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
   if (core) {
     const keys = new Set<string>(items.map(item => item.field === 'narrativePov' ? 'narrativePOV' : item.field))
-    const adopted = Object.fromEntries(Object.entries(configFieldsFromCore(core)).filter(([key]) => keys.has(key)))
-    useProjectStore.getState().publishSavedNovelConfig(adopted, session, false)
+    const adopted = Object.entries(configFieldsFromCore(core)).filter(([key]) => keys.has(key)) as [keyof NovelConfig, unknown][]
+    const now = useProjectStore.getState().currentProject?.novelConfig
+    const editedSinceClick = ([key]: [keyof NovelConfig, unknown]) => JSON.stringify(now?.[key]) !== JSON.stringify(atClick?.[key])
+    const { publishSavedNovelConfig } = useProjectStore.getState()
+    publishSavedNovelConfig(Object.fromEntries(adopted.filter(entry => !editedSinceClick(entry))), session, false)
+    publishSavedNovelConfig(Object.fromEntries(adopted.filter(editedSinceClick)), session, true)
+    if (isProjectSessionCurrent(session)) syncOpenArchTabs(core, new Set(items.map(item => item.field)), session.projectPath)
   }
   // 设定已经写进库；文件树只影响架构文件的显示，刷新失败等下次打开时再读。
   await useProjectStore.getState().refreshFileTree(projectPath, undefined, session).catch(() => undefined)

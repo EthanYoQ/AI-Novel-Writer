@@ -519,54 +519,54 @@ export class ImportRunOrchestrator {
     await this.dependencies.advanceStage(run.id, 'style', nextStage(run, 'style'), execution.current)
   }
 
-  /**
-   * 作者原稿只为还没有蓝图的章反推。本次运行已提交过的章此刻也有蓝图，仍要留在批次里，
-   * 续跑时才会按原检查点重放（补完角色同步），而不是被当成作者已有的蓝图跳过。
-   */
+  /** 作者原稿只为还没有蓝图的章反推；参考小说每章都反推。 */
   private async blueprintChapterFilter(run: ImportRunSnapshot): Promise<(chapter: ImportRunChapterSnapshot) => boolean> {
     if (run.purpose === 'reference') return () => true
     const existing = await requiredAuthorDependency(
       this.dependencies.listBlueprintChapterNumbers,
       'listBlueprintChapterNumbers',
     )()
-    const committedRanges = (run.completedBatches.blueprints ?? [])
-      .map(parseImportRunChapterBatchCheckpointId)
-      .filter(range => range !== null)
     return chapter => !existing.has(chapter.number)
-      || committedRanges.some(range => range.startChapter <= chapter.number && chapter.number <= range.endChapter)
   }
 
+  /**
+   * 续跑时先按原检查点重放已提交的批次，再对没被它们覆盖的章分批。
+   * 蓝图集合在两次运行之间可能变了，重新分批会和旧检查点重叠。
+   */
   private async executeBlueprints(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
-    const needsBlueprint = await this.blueprintChapterFilter(run)
-    let after = 0
+    const committed = (run.completedBatches.blueprints ?? []).flatMap(checkpoint => {
+      const range = parseImportRunChapterBatchCheckpointId(checkpoint)
+      return range ? [{ checkpoint, range }] : []
+    })
     let visited = 0
+    for (const { checkpoint, range } of committed) {
+      const replayed = await this.replayCheckpointedEffect(run, execution, 'blueprints', checkpoint)
+      run = replayed.run
+      execution.current = replayed.execution
+      visited += range.endChapter - range.startChapter + 1
+      callbacks.setProgress(Math.min(99, Math.round((visited / run.totalChapters) * 100)))
+      stopIfCancelled(context, run.locale)
+    }
+    const needsBlueprint = await this.blueprintChapterFilter(run)
+    const uncommitted = (chapter: ImportRunChapterSnapshot) => !committed
+      .some(({ range }) => range.startChapter <= chapter.number && chapter.number <= range.endChapter)
+    let after = 0
     let page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)
     while (page.length > 0) {
-      for (const batch of splitContiguousBatches(page.filter(needsBlueprint), IMPORT_BLUEPRINT_BATCH_SIZE)) {
+      for (const batch of splitContiguousBatches(page.filter(chapter => uncommitted(chapter) && needsBlueprint(chapter)), IMPORT_BLUEPRINT_BATCH_SIZE)) {
         const checkpoint = createImportRunChapterBatchCheckpointId(batch)
-        if (run.completedBatches.blueprints?.includes(checkpoint)) {
-          const replayed = await this.replayCheckpointedEffect(
-            run,
-            execution,
-            'blueprints',
-            checkpoint,
-          )
-          run = replayed.run
-          execution.current = replayed.execution
-        } else {
-          stopIfCancelled(context, run.locale)
-          const committed = await this.executeDurableEffect(
-            run,
-            execution,
-            'blueprints',
-            checkpoint,
-            `blueprints:${checkpoint}`,
-            'chapter-blueprint-range',
-            commit => this.dependencies.inferBlueprints(batch, checkpoint, run, commit),
-          )
-          run = committed.run
-          execution.current = committed.execution
-        }
+        stopIfCancelled(context, run.locale)
+        const result = await this.executeDurableEffect(
+          run,
+          execution,
+          'blueprints',
+          checkpoint,
+          `blueprints:${checkpoint}`,
+          'chapter-blueprint-range',
+          commit => this.dependencies.inferBlueprints(batch, checkpoint, run, commit),
+        )
+        run = result.run
+        execution.current = result.execution
         visited += batch.length
         callbacks.setProgress(Math.min(99, Math.round((visited / run.totalChapters) * 100)))
         stopIfCancelled(context, run.locale)
