@@ -360,6 +360,21 @@ describe('InferBlueprintsPerChapterCommand', () => {
     expect((failure as Error).message).toContain('重新开始')
   })
 
+  it('explains a blueprint stop of an author-manuscript inference without Start over', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const session = { complete: vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const context = createContext()
+    context.data.importRunPurpose = 'author-manuscript'
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED', false, 'author-manuscript')}`)
+    expect((failure as Error).message).not.toContain('重新开始')
+  })
+
   it('fails closed with a stable relationship diagnostic when relation is missing', async () => {
     const invoke = stubIpcInvoke((channel) => {
       throw new Error(`unexpected mutation ${channel}`)

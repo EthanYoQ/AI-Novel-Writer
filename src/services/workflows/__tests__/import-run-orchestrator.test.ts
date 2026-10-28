@@ -1002,6 +1002,18 @@ describe('ImportRunOrchestrator failure copy follows the import run locale', () 
     expect(getRun().lastError).toBe(thrown.message)
   })
 
+  it('gives an author-manuscript inference stop the author explanation instead of Start over', async () => {
+    const { deps, getRun } = harness(1, { purpose: 'author-manuscript', authorInference: true, stage: 'global', locale: 'zh-CN' })
+    deps.inferGlobal = vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') })
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'global', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+    expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED', false, 'author-manuscript'))
+    expect((failure as Error).message).not.toContain('重新开始')
+    expect(getRun().lastError).toBe((failure as Error).message)
+  })
+
   it('uses the registered takeover explanation when lease renewal returns another execution identity', async () => {
     const { deps } = harness(1, { locale: 'zh-CN', stage: 'global' })
     let renewals = 0

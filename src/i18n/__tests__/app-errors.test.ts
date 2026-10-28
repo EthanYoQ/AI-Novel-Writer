@@ -262,6 +262,22 @@ describe('import generation stops (#537)', () => {
     expect(importGenerationStopMessage('en-US', 'ROOT_BUDGET_EXHAUSTED')).toMatch(/^This import reached its limit on model requests or running time/u)
   })
 
+  it.each(['zh-CN', 'en-US'] as const)('tells an author-manuscript inference stop in %s what is saved and what the author can still do, without Start over', locale => {
+    const stops: [string, boolean][] = [['ROOT_BUDGET_EXHAUSTED', false], ['ROOT_BUDGET_EXHAUSTED', true], ['GENERATION_DISPATCH_BLOCKED', false],
+      ['GENERATION_STORAGE_FAILED', true], ['GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE', false]]
+    const saved = { 'zh-CN': /原稿正文已经导入并保存，只是 AI 反推的设定、文风或蓝图没有做完/u, 'en-US': /manuscript text is imported and saved/u }[locale]
+    const startOver = { 'zh-CN': /重新开始/u, 'en-US': /Start over/u }[locale]
+    for (const [code, inFlight] of stops) {
+      const author = importGenerationStopMessage(locale, code, inFlight, 'author-manuscript')
+      const reference = importGenerationStopMessage(locale, code, inFlight)
+      expect(author).toMatch(saved)
+      expect(author).not.toMatch(startOver)
+      expect(author).not.toMatch(/[A-Z]{3,}_[A-Z]/u)
+      expect(reference).toMatch(startOver)
+      expect(importGenerationStopMessage(locale, code, inFlight, 'reference')).toBe(reference)
+    }
+  })
+
   it.each(['GENERATION_PROVIDER_FAILED', 'IMPORT_RUN_EXECUTION_STALE', 'DEADLINE_EXHAUSTED'])('leaves %s to the shared explanation', code => {
     expect(importGenerationStopMessage('zh-CN', code)).toBeUndefined()
   })
