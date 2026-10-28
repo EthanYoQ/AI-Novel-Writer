@@ -748,6 +748,31 @@ describe('ImportRunOrchestrator', () => {
     expect(getRun().stage).toBe('refresh')
   })
 
+  it('作者原稿续跑前作者删掉了中间一章的蓝图：已提交批次按原检查点重放，新批次只含没被覆盖的章', async () => {
+    const checkpoint = createImportRunChapterBatchCheckpointId([chapter(1)])
+    const { deps, receipts, getRun } = harness(3, {
+      purpose: 'author-manuscript', authorInference: true, stage: 'blueprints', completedBatches: { blueprints: [checkpoint] },
+    })
+    receipts.set(`blueprints:${checkpoint}`, {
+      schemaVersion: 1, runId: 'run-1', effectNamespace: 'import:reference:run-1', effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints', batchId: checkpoint, kind: 'chapter-blueprint-range', payloadHash: 'f'.repeat(64),
+      state: 'committed', payload: { blueprints: true }, effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    deps.listBlueprintChapterNumbers = vi.fn(async () => new Set([1]))
+    const generated: number[][] = []
+    deps.inferBlueprints = vi.fn(async (chapters: ImportRunChapterSnapshot[], _batchId, _run, commit) => {
+      generated.push(chapters.map(item => item.number))
+      await commit({ blueprints: true })
+    })
+
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)
+
+    expect(deps.replayCommittedEffect).toHaveBeenCalledTimes(1)
+    expect(generated).toEqual([[2, 3]])
+    expect(getRun().stage).toBe('refresh')
+  })
+
   it('replays a checkpointed blueprint effect so pending character sync finishes without another model call', async () => {
     const firstBatch = Array.from({ length: 5 }, (_, index) => chapter(index + 1))
     const checkpoint = createImportRunChapterBatchCheckpointId(firstBatch)

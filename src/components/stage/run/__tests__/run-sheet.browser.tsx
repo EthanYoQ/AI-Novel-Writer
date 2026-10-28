@@ -18,6 +18,7 @@ import { useStageStore, type StageSheet } from '../../../../stores/navigation/st
 import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore, type WorkflowRun } from '../../../../stores/workflow-store'
 import RunSheet from '../RunSheet'
+import { createProjectArchTabId } from '../../../editor/arch-file-refresh-policy'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -586,6 +587,58 @@ describe('作者原稿反推的建议', () => {
     expect(updates).toEqual([{ genre: '悬疑' }])
     await vi.waitFor(() => expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑'))
     expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('还没保存的新大纲')
+  })
+
+  it('采用写库期间作者又改了同一项：保留作者的新改动且仍未保存，其他采用项按采用值保存', async () => {
+    const core = { genre: '武侠', coreOutline: '作者自己的大纲' }
+    const updates = arrange(core, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'genre', current: '武侠', inferred: '悬疑' },
+        { field: 'coreOutline', current: '作者自己的大纲', inferred: '侦探追查旧案' },
+      ] },
+    })
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:project-core-update') useProjectStore.getState().updateNovelConfig({ genre: '作者等待时改的类型' })
+      return base(channel, ...args)
+    })
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, novelConfig: { genre: '武侠', coreOutline: '作者自己的大纲' } as never } }))
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('全部采用')).toBeTruthy())
+    await click('全部采用')
+    expect(updates).toEqual([{ genre: '悬疑', coreOutline: '侦探追查旧案' }])
+    await vi.waitFor(() => expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('侦探追查旧案'))
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('作者等待时改的类型')
+
+    useProjectStore.getState().discardNovelConfigDraft(session.projectPath, session)
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ genre: '悬疑', coreOutline: '侦探追查旧案' })
+  })
+
+  it('采用架构建议后，已打开且没改过的文档标签显示新内容；有未保存改动的标签保留作者草稿', async () => {
+    arrange({ premise: '作者的前提', worldbuilding: '作者的世界观' }, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'premise', current: '作者的前提', inferred: '反推的前提' },
+        { field: 'worldbuilding', current: '作者的世界观', inferred: '反推的世界观' },
+      ] },
+    })
+    const tabId = (field: string) => createProjectArchTabId(session.projectPath, `ai-novel://core/${field}`)
+    const open = (field: string, content: string) => useEditorStore.getState().openFile({
+      id: tabId(field), name: field, type: 'arch-file', filePath: `ai-novel://core/${field}`, content, savedContent: content, projectKey: session.projectPath,
+    })
+    open('worldbuilding', '作者的世界观')
+    open('premise', '作者的前提')
+    useEditorStore.getState().updateTabContent(tabId('premise'), '作者没保存的前提')
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('全部采用')).toBeTruthy())
+    await click('全部采用')
+    const tab = (field: string) => useEditorStore.getState().tabs.find(item => item.id === tabId(field))!
+    await vi.waitFor(() => expect(tab('worldbuilding').content).toBe('反推的世界观'))
+    expect(tab('worldbuilding').dirty).toBeFalsy()
+    expect(tab('premise')).toMatchObject({ content: '作者没保存的前提', dirty: true })
   })
 
   it('换开别的作品再回来（新的会话）后，同一作品的历史运行仍然列出未采用的建议', async () => {
