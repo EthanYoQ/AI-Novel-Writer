@@ -1835,6 +1835,11 @@ describe('main-process stop codes reach the failure', () => {
     expect(result.ok ? '' : result.failure.message).toContain('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
   })
 
+  it('keeps an unregistered main-process code for diagnostics but not as the displayed message', async () => {
+    const result = await execute(async () => { throw new Error('GENERATION_IMPORT_ORDINAL_GAP') })
+    expect(result).toMatchObject({ ok: false, failure: { code: 'generation_failed', message: '结构化生成失败', errorCode: 'GENERATION_IMPORT_ORDINAL_GAP' } })
+  })
+
   it('reports an in-flight active-time stop as a deadline with its code', async () => {
     const result = await execute(async () => ({ status: 'incomplete', finishReason: 'error', content: '',
       receipt: { ...attemptReceipt(1, 200, 200, 'error'), failureCode: 'ROOT_BUDGET_EXHAUSTED' } } as GenerationOutcome))

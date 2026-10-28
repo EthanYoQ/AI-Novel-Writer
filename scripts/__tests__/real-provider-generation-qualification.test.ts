@@ -146,6 +146,11 @@ describe('real provider generation qualification contract', () => {
       { code: 'anything', reason: 'anything', message: 'secret model output' },
       'unrecognized',
     )).toBe('UNKNOWN_BLUEPRINT_UNKNOWN_UNKNOWN_UNRECOGNIZED')
+    expect(blueprintQualificationFailureCode(
+      { provider: 'deepseek' },
+      { code: 'limit_exceeded', reason: 'root_budget', message: 'ROOT_BUDGET_EXHAUSTED' },
+      'empty',
+    )).toBe('DEEPSEEK_BLUEPRINT_LIMIT_EXCEEDED_ROOT_BUDGET_EMPTY')
     expect(classifyStructuredResponseEnvelope('')).toBe('empty')
     expect(classifyStructuredResponseEnvelope('{"blueprints":[]}')).toBe('direct-object')
     expect(classifyStructuredResponseEnvelope('[1]')).toBe('direct-array')

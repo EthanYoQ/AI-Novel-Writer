@@ -750,6 +750,21 @@ describe('InferGlobalSettingsCommand', () => {
     ])
   })
 
+  it('explains a storage failure of the global inference with the shared storage message and logs the code', async () => {
+    successfulInferenceIpc()
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED' }
+    const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const log = vi.fn()
+
+    const failure = await new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(knownAppErrorMessage('zh-CN', 'GENERATION_STORAGE_FAILED'))
+    expect(log.mock.calls.flat().some(line => String(line).includes('GENERATION_STORAGE_FAILED'))).toBe(true)
+  })
+
   it('explains an in-flight active-time stop of the global inference as an active-time stop and logs the code', async () => {
     successfulInferenceIpc()
     const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'ROOT_BUDGET_EXHAUSTED' }
