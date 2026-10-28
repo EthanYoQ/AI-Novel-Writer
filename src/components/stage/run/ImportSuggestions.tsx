@@ -61,7 +61,11 @@ export function ImportSuggestions({ run }: { run: WorkflowRun }) {
 
   useEffect(() => {
     let active = true
-    void reload().then(next => { if (active) setItems(next) })
+    void reload().then(next => {
+      if (!active) return
+      setItems(next)
+      setError('')
+    })
       .catch(failure => { if (active) setError(displayedErrorMessage(locale, failure)) })
     return () => { active = false }
   }, [locale, reload])

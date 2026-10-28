@@ -551,7 +551,7 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 
 ## 导入作者原稿并反推（#516 第 4 块）
 
-场景在 `scripts/redesign/import-infer-scenarios.mjs`。假模型用 `fake.replyReview(fn)` 认三类反推请求：全局设定（模板里的「逆向推演出这部小说的完整设定体系」）回一份合法的设定、架构三文件与三张角色卡，文风分析（「【风格档案】与【仿写指南】」）回一段文风，蓝图（「本批必须且只能完整返回以下 chapterNumber」）按本批章号回蓝图。驱动包一层主进程的 `project:open` 记下界面打开作品的会话，用它读库核对。
+场景在 `scripts/redesign/import-infer-scenarios.mjs`。假模型用 `fake.replyReview(fn)` 认三类反推请求：全局设定（模板里的「逆向推演出这部小说的完整设定体系」）返回一份格式合法的设定、三个架构文件和三张角色卡，文风分析（「【风格档案】与【仿写指南】」）回一段文风，蓝图（「本批必须且只能完整返回以下 chapterNumber」）按本批章号回蓝图。驱动包一层主进程的 `project:open` 记下界面打开作品的会话，用它读库核对。
 
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
