@@ -465,7 +465,11 @@ export function ModelForm({
                 </div>
               </div>
               <p className="text-xs text-[var(--color-text-secondary)]" data-effective-output-limit={effectiveOutputLimit}>
-                {text(`当前有效输出额度为 ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')}。取作者设置、模型输出容量与已知服务商上限中的较小值，是每次请求发给服务商的上限；拆分的任务或旧的运行可能发得更少。`, `Effective output allowance: ${effectiveOutputLimit?.toLocaleString() ?? text('未设置', 'not configured')}. This is the lowest configured or verified output limit and the ceiling sent with each request; a split task or an older run may send less.`)}
+                {effectiveOutputLimit === null
+                  ? text('还没有有效输出额度：最大输出 Tokens、模型输出容量和已知服务商上限都没有填。请填写最大输出 Tokens 后再生成。',
+                    'No effective output allowance yet: Max output tokens, model output capacity, and a known provider limit are all empty. Fill in Max output tokens before generating.')
+                  : text(`当前有效输出额度为 ${effectiveOutputLimit.toLocaleString()}。取作者设置、模型输出容量与已知服务商上限中的较小值。新开始的生成每次请求最多发这么多，拆分的任务可能发得更少；旧版本开始的运行可能按 32,768 封顶。`,
+                    `Effective output allowance: ${effectiveOutputLimit.toLocaleString()}. It is the lowest of your setting, the model output capacity, and a known provider limit. A newly started generation sends at most this much per request, and a split task may send less; runs started by an older version may be capped at 32,768.`)}
               </p>
               {contextOutputConflict && (
                 <p

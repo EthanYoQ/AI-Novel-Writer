@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer'
 
 import * as chapterView from './pages/chapter-view.mjs'
 import * as runSheet from './pages/run-sheet.mjs'
+import * as stage from './pages/stage.mjs'
 import { FAKE_MODEL, FIXTURE_PROSE } from './fake-model.mjs'
 import { firstLine, seedStageSample } from './scenarios.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
@@ -75,5 +76,26 @@ export const D77_SCENARIOS = {
     const chats = modelCallKindsSince(fake, before)
     assert.deepEqual(chats, ['context-length'], `服务商拒绝后不自动重发：${chats.join('、')}`)
     return { card: text, chats }
+  } },
+  // 模型设置的「有效输出额度」：有值时说明新开始的生成每次最多发这么多、旧运行可能按 32,768 封顶；
+  // 把作者设置和模型输出容量清成 0 后，这句改说还没有额度，不出现「为 未设置」。不保存。
+  'd77-output-allowance': { model: true, shell: 'stage', setup, run: async ({ page, shoot }) => {
+    await stage.openSettings(page)
+    await page.getByRole('button', { name: `编辑「${AUTHOR_64K.name}」`, exact: true }).click()
+    await page.getByRole('button', { name: '高级设置', exact: true }).click()
+    const allowance = page.locator('p').filter({ hasText: /有效输出额度/u }).first()
+    await allowance.evaluate(element => element.scrollIntoView({ block: 'center' }))
+    const set = await allowance.innerText()
+    await shoot('d77-output-allowance-set')
+    await page.getByLabel('最大输出 Tokens', { exact: true }).fill('0')
+    await page.getByLabel('模型输出容量', { exact: true }).fill('0')
+    await allowance.evaluate(element => element.scrollIntoView({ block: 'center' }))
+    const unset = await allowance.innerText()
+    await shoot('d77-output-allowance-unset')
+    assert.match(set, /新开始的生成每次请求最多发这么多/u)
+    assert.match(set, /32,768/u)
+    assert.match(unset, /还没有有效输出额度/u)
+    assert.doesNotMatch(unset, /未设置/u)
+    return { set, unset }
   } },
 }
