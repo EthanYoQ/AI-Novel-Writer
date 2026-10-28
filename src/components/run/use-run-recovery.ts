@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ipc } from '../../services/ipc-client'
 import { createBatchRecoveryWorkflow, createDraftRecoveryWorkflow } from '../../services/workflows/draft-recovery-workflow'
 import { createReviewRevisionRecoveryWorkflow } from '../../services/workflows/review-revision-recovery-workflow'
@@ -16,6 +16,11 @@ import { displayedErrorMessage } from '../../i18n/app-errors'
 import { hideRecovery, readHiddenRecovery } from './hidden-recovery'
 import { projectRuns } from './run-output'
 import type { GenerationRecoveryList } from '../../shared/generation-owner-contract'
+
+/** 这部作品有工作流正在发生成请求；暂停与等确认的不算。 */
+function workflowWriting(projectPath: string | undefined, runs = useWorkflowStore.getState().activeRuns): boolean {
+  return projectRuns(runs, projectPath).some(run => run.status === 'running' || run.status === 'cancelling')
+}
 
 function currentSession(): ProjectSessionContext | null {
   return projectSessionContextFromProject(useProjectStore.getState().currentProject)
@@ -65,6 +70,8 @@ export function useRunRecovery(): RunRecovery {
   const [generationList, setGeneration] = useState<Loaded<GenerationRecoveryList>>({ session: null, value: { ...EMPTY_RECOVERY_SOURCES, partial: false } })
   const [generationError, setGenerationError] = useState('')
   const [refreshTick, setRefreshTick] = useState(0)
+  const writing = useWorkflowStore(s => workflowWriting(session?.projectPath, s.activeRuns))
+  const missedWhileWriting = useRef(false)
   const [selection, setSelection] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
   const projectId = session?.projectId
@@ -91,15 +98,15 @@ export function useRunRecovery(): RunRecovery {
 
   /**
    * 工作流之外的生成（选区建议）结束时没有运行历史可看，靠它的最后一次快照触发重读。
-   * 这部作品有工作流正在写时不跟：批量写作每次尝试都会结束一次，那样又回到逐次整表重算；工作流结束时由历史触发。
-   * 暂停或等确认的工作流不发请求，这时的快照来自工作流之外。
+   * 这部作品有工作流正在写时只记下来：批量写作每次尝试都会结束一次，逐次重读又回到整表重算；
+   * 等工作流停下（暂停、等确认或结束）时补读一次。
    */
   useEffect(() => {
     if (!session) return
     let timer: ReturnType<typeof setTimeout> | undefined
     const detach = ipc.on('generation:snapshot', snapshot => {
       if (snapshot.projectId !== session.projectId || snapshot.epoch !== session.leaseId || snapshot.status === 'running') return
-      if (projectRuns(useWorkflowStore.getState().activeRuns, session.projectPath).some(run => run.status === 'running' || run.status === 'cancelling')) return
+      if (workflowWriting(session.projectPath)) { missedWhileWriting.current = true; return }
       clearTimeout(timer)
       timer = setTimeout(() => setRefreshTick(value => value + 1), 100)
     })
@@ -110,6 +117,7 @@ export function useRunRecovery(): RunRecovery {
   useEffect(() => {
     if (!session) return
     let active = true
+    missedWhileWriting.current = false
     void ipc.invokeWithProjectSession(session, 'generation:list-recovery').then(list => {
       if (!active) return
       setGeneration({ session, value: list })
@@ -117,6 +125,12 @@ export function useRunRecovery(): RunRecovery {
     }).catch(reason => { if (active) setGenerationError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
     return () => { active = false }
   }, [session, lastEnded, refreshTick])
+
+  useEffect(() => {
+    if (writing || !missedWhileWriting.current) return
+    missedWhileWriting.current = false
+    setRefreshTick(value => value + 1)
+  }, [writing])
 
   const entries = useMemo(() => {
     if (!session) return []

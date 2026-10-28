@@ -345,6 +345,22 @@ describe('运行侧页', () => {
     await vi.waitFor(() => expect(reads()).toHaveLength(2))
   })
 
+  it('工作流正在写时结束的选区建议，等工作流暂停或等确认时补读一次', async () => {
+    const reads = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')
+    useWorkflowStore.setState({ activeRuns: [run('8', 'running')] })
+    await render()
+    await vi.waitFor(() => expect(reads()).toHaveLength(1))
+    await act(async () => listeners.get('generation:snapshot')?.({ projectId: session.projectId, epoch: session.leaseId, status: 'cancelled' }))
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+    expect(reads()).toHaveLength(1)
+    await act(async () => useWorkflowStore.setState({ activeRuns: [run('8', 'paused')] }))
+    await vi.waitFor(() => expect(reads()).toHaveLength(2))
+    await act(async () => useWorkflowStore.setState({ activeRuns: [run('8', 'running')] }))
+    await act(async () => useWorkflowStore.setState({ activeRuns: [run('8', 'waiting')] }))
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+    expect(reads()).toHaveLength(2)
+  })
+
   it('单章候选点「不再显示」后，重开作品也不再出现；生成记录不动，其他候选照常显示', async () => {
     const draftRun = (runId: string, text: string) => {
       const handle = { projectId: session.projectId, epoch: '上次打开', rootActionId: `${runId}根`, runId }
