@@ -91,14 +91,15 @@ export function useRunRecovery(): RunRecovery {
 
   /**
    * 工作流之外的生成（选区建议）结束时没有运行历史可看，靠它的最后一次快照触发重读。
-   * 这部作品有工作流在跑时不跟：批量写作每次尝试都会结束一次，那样又回到逐次整表重算；工作流结束时由历史触发。
+   * 这部作品有工作流正在写时不跟：批量写作每次尝试都会结束一次，那样又回到逐次整表重算；工作流结束时由历史触发。
+   * 暂停或等确认的工作流不发请求，这时的快照来自工作流之外。
    */
   useEffect(() => {
     if (!session) return
     let timer: ReturnType<typeof setTimeout> | undefined
     const detach = ipc.on('generation:snapshot', snapshot => {
       if (snapshot.projectId !== session.projectId || snapshot.epoch !== session.leaseId || snapshot.status === 'running') return
-      if (projectRuns(useWorkflowStore.getState().activeRuns, session.projectPath).length) return
+      if (projectRuns(useWorkflowStore.getState().activeRuns, session.projectPath).some(run => run.status === 'running' || run.status === 'cancelling')) return
       clearTimeout(timer)
       timer = setTimeout(() => setRefreshTick(value => value + 1), 100)
     })

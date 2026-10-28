@@ -323,8 +323,9 @@ describe('运行侧页', () => {
     expect(reads().map(([channel]) => channel)).toEqual(['generation:list-recovery', 'generation:list-recovery'])
   })
 
-  it('没有工作流在写时，工作流之外的生成（选区建议）结束也会重读可恢复列表', async () => {
+  it('没有工作流在写时（含暂停与等确认的），工作流之外的生成（选区建议）结束也会重读可恢复列表', async () => {
     const reads = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')
+    useWorkflowStore.setState({ activeRuns: [run('8', 'paused'), run('9', 'waiting')] })
     await render()
     await vi.waitFor(() => expect(reads()).toHaveLength(1))
     await act(async () => listeners.get('generation:snapshot')?.({ projectId: session.projectId, epoch: session.leaseId, status: 'running' }))
