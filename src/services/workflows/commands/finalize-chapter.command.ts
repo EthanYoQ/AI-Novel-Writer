@@ -1,7 +1,6 @@
 import type { FinalizedCharacterArtifact } from '../../../shared/finalized-character-generation'
 import { runFinalizationGeneration } from '../../finalization-generation'
 import { routeModelId } from '../../model-routing'
-import { pinWorkflowModel } from '../workflow-main-generation'
 import type { FinalizationGenerationEffect } from '../../../shared/finalization-generation'
 import { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
 export { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
@@ -10,7 +9,7 @@ import {
   type CommandExecuteParams,
   type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
-import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
+import { useWorkflowStore, type StepCallbacks, type WorkflowContext } from '../../../stores/workflow-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { PostProcessPromptBuilder } from '../../prompts/prompt-builder'
@@ -392,7 +391,8 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         cancelled: () => generationContext.cancelled,
         onHandle: (handle, modelId) => {
           generationContext.mainGenerationRunHandle = Object.freeze({ ...handle })
-          pinWorkflowModel(generationContext, modelId)
+          // 只记在运行上：写进共享上下文会让同一运行后面的规划阶段（作者原稿反推）沿用定稿模型。
+          useWorkflowStore.getState().pinRunGenerationModel(generationContext.runId, modelId)
         },
       }).catch(error => { throw finalizationGenerationError(error) }),
       complete: async () => { throw new Error('FINALIZATION_GENERATION_MAIN_REQUIRED') },
