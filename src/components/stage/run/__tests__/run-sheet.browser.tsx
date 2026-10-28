@@ -19,6 +19,7 @@ import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore, type WorkflowRun } from '../../../../stores/workflow-store'
 import RunSheet from '../RunSheet'
 import { createProjectArchTabId } from '../../../editor/arch-file-refresh-policy'
+import { globalEventBus } from '../../../../shared/event-bus'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -614,6 +615,43 @@ describe('作者原稿反推的建议', () => {
 
     useProjectStore.getState().discardNovelConfigDraft(session.projectPath, session)
     expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ genre: '悬疑', coreOutline: '侦探追查旧案' })
+  })
+
+  it('采用写库期间作者把同一项改回原先保存的值：保留作者的值且仍未保存', async () => {
+    const core = { genre: '武侠' }
+    arrange(core, { global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] } })
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:project-core-update') useProjectStore.getState().updateNovelConfig({ genre: '武侠' })
+      return base(channel, ...args)
+    })
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, novelConfig: { genre: '武侠' } as never } }))
+    useProjectStore.getState().updateNovelConfig({ genre: '作者点采用前写的类型' })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeTruthy())
+    await click('采用「类型」的反推结果')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('db:project-core-get', session.projectPath, session))
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeFalsy())
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('武侠')
+    useProjectStore.getState().discardNovelConfigDraft(session.projectPath, session)
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑')
+  })
+
+  it('采用架构建议后通知架构页与流程脊重读', async () => {
+    arrange({ premise: '作者的前提' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'premise', current: '作者的前提', inferred: '反推的前提' }] },
+    })
+    const updated = vi.fn()
+    const off = globalEventBus.on('ARCH_FILE_UPDATED', updated)
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('采用「故事前提」的反推结果')).toBeTruthy())
+    await click('采用「故事前提」的反推结果')
+    await vi.waitFor(() => expect(updated).toHaveBeenCalledWith(expect.objectContaining({ projectSession: session, runId: '导入运行' })))
+    off()
   })
 
   it('采用架构建议后，已打开且没改过的文档标签显示新内容；有未保存改动的标签保留作者草稿', async () => {
