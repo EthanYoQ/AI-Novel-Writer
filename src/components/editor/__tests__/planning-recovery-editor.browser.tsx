@@ -63,7 +63,7 @@ beforeEach(() => {
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
   useProjectStore.setState({ currentProject: project })
   useWorkflowStore.setState({ activeRuns: [], history: [], currentRun: null })
-  useLLMStore.setState({ defaultModelId: 'model' })
+  useLLMStore.setState({ models: [{ id: 'model', purposes: ['generation'] }] as never, defaultModelId: 'model' })
   useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
   setActiveProjectSessionContext(session)
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
