@@ -348,7 +348,7 @@ describe('InferBlueprintsPerChapterCommand', () => {
 
   it('explains a storage failure during blueprint inference with the shared storage message', async () => {
     stubIpcInvoke(() => ({ success: true }))
-    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED' }
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED', budget: { requestedOutputTokens: 1 } }
     const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
     const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
 
