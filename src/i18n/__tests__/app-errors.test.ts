@@ -257,6 +257,11 @@ describe('import generation stops (#537)', () => {
     if (locale === 'en-US') for (const message of all) expect(message).not.toMatch(/\p{Script=Han}/u)
   })
 
+  it('does not claim the request count ran out when a stop before sending may be the running time', () => {
+    expect(importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED')).toMatch(/^这次导入的请求次数或运行时长已到上限/u)
+    expect(importGenerationStopMessage('en-US', 'ROOT_BUDGET_EXHAUSTED')).toMatch(/^This import reached its limit on model requests or running time/u)
+  })
+
   it.each(['GENERATION_PROVIDER_FAILED', 'IMPORT_RUN_EXECUTION_STALE', 'DEADLINE_EXHAUSTED'])('leaves %s to the shared explanation', code => {
     expect(importGenerationStopMessage('zh-CN', code)).toBeUndefined()
   })
