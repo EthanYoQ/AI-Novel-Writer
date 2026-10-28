@@ -161,6 +161,7 @@ function dependencies(trace: Trace): ImportRunOrchestratorDependencies {
     ) ?? null,
     publishAuthorChapter: async item => { trace.published.push(item.number) },
     postprocessAuthorChapter: async item => { trace.postprocessed.push(item.number) },
+    isAuthorDraftReplaced: async () => false,
     refresh: async () => undefined,
     completeBatch: async (runId, stage, batchId, execution) => (
       ImportRunRepository.completeBatch(runId, stage, batchId, execution)

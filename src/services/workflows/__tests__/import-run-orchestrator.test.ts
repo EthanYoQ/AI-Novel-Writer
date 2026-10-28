@@ -85,6 +85,7 @@ function harness(total = 25, overrides: Partial<ImportRunSnapshot> = {}) {
     inferGlobal: vi.fn(async (_chapters, _stats, _run, commit) => { await commit({ global: true }) }),
     analyzeStyle: vi.fn(async (_chapters, _run, commit) => { await commit({ writingStyle: 'style' }) }),
     inferBlueprints: vi.fn(async (_chapters, _batchId, _run, commit) => { await commit({ blueprints: true }) }),
+    isAuthorDraftReplaced: vi.fn(async () => false),
     refresh: vi.fn(),
     completeBatch: vi.fn(async (_runId: string, stage: ImportRunStage, batchId: string) => {
       const values = run.completedBatches[stage] ?? []
@@ -205,6 +206,38 @@ describe('ImportRunOrchestrator', () => {
     expect(published.filter(number => number === 2)).toHaveLength(2)
     expect(published.filter(number => number === 3)).toHaveLength(1)
     expect(getRun().stage).toBe('author-postprocess')
+  })
+
+  it('resumes an author run after a chapter was refinalized, skipping projection of the replaced draft', async () => {
+    const { deps, getRun } = harness(2, {
+      purpose: 'author-manuscript',
+      effectNamespace: 'import:author-manuscript:run-1',
+      authorityFingerprint: 'c'.repeat(64),
+      stage: 'author-publish',
+    })
+    deps.getAuthorCommitReceipt = vi.fn(async () => ({
+      operationId: 'author-import:run-1', payloadHash: 'e'.repeat(64), chapterNumbers: [1, 2],
+      drafts: [1, 2].map(chapterNumber => ({
+        chapterNumber, draftId: chapterNumber, finalizationId: `final-${chapterNumber}`,
+        contentHash: 'f'.repeat(64), targetFileName: `Chapter ${chapterNumber}.txt`,
+        status: 'finalized' as const, publicationStatus: 'pending' as const,
+      })),
+      idempotent: false,
+    }))
+    deps.isAuthorDraftReplaced = vi.fn(async draft => draft.draftId === 1)
+    const projected: string[] = []
+    deps.publishAuthorChapter = vi.fn(async chapter => { projected.push(`publish:${chapter.number}`) })
+    deps.postprocessAuthorChapter = vi.fn(async chapter => { projected.push(`postprocess:${chapter.number}`) })
+    const orchestrator = new ImportRunOrchestrator(deps)
+
+    await orchestrator.executeStage('run-1', 'author-publish', 'test-runner', { cancelled: false }, callbacks)
+    await orchestrator.executeStage('run-1', 'author-postprocess', 'test-runner', { cancelled: false }, callbacks)
+
+    expect({ projected, completed: getRun().completedBatches, stage: getRun().stage }).toEqual({
+      projected: ['publish:2', 'postprocess:2'],
+      completed: { 'author-publish': ['chapter:1', 'chapter:2'], 'author-postprocess': ['chapter:1', 'chapter:2'] },
+      stage: 'refresh',
+    })
   })
 
   it('resumes failed author postprocess from its durable chapter checkpoint without repeating completed work', async () => {

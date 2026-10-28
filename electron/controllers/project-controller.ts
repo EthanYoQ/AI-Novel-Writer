@@ -37,6 +37,17 @@ import { projectPeekService } from '../services/project-peek'
 import { probeProjectSqlite } from '../services/sqlite-project-migration'
 import { mainText } from '../i18n'
 import { adoptTransferredCharacterContinuityOnOpen } from '../services/transferred-character-continuity'
+import { FinalizationRepository } from '../repositories/finalization-repository'
+import type { FinalizationRepairOnOpen } from '../../src/shared/finalization-repair'
+
+function repairDuplicateFinalizationsOnOpen(): FinalizationRepairOnOpen {
+  try {
+    return { status: 'checked', ...FinalizationRepository.repairDuplicateFinalizations() }
+  } catch (error) {
+    console.error('[Project] 遗留重复定稿修复失败:', error)
+    return { status: 'failed', error: error instanceof Error ? error.message : String(error) }
+  }
+}
 
 /** 按作者保存的界面语言选文案；没保存过时按系统语言，与渲染层一致。 */
 function text(zhCNText: string, enUSText: string): string {
@@ -699,11 +710,13 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         const session = projectAccess.beginSession(trustedProject)
         projectData.sessionLease = session.leaseId
         revokeRecentPreviewCapabilities()
+        const finalizationRepair = repairDuplicateFinalizationsOnOpen()
         return {
           success: true,
           project: projectData,
           requestToken,
           ...databaseState,
+          finalizationRepair,
         }
       } catch (error) {
         let rollbackError: unknown

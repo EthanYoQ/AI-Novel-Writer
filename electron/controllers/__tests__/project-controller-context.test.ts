@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   removeDirectoryWithWindowsRetry: vi.fn(),
   showMessageBox: vi.fn(),
   importLegacyProjectCopy: vi.fn(),
+  repairDuplicateFinalizations: vi.fn(),
   resolveExactPath: vi.fn(),
   resolveDirectoryPath: vi.fn(),
   issueDirectory: vi.fn(),
@@ -190,6 +191,10 @@ vi.mock('../../services/legacy-project-copy-import', () => ({
   importLegacyProjectCopy: mocks.importLegacyProjectCopy,
 }))
 
+vi.mock('../../repositories/finalization-repository', () => ({
+  FinalizationRepository: { repairDuplicateFinalizations: mocks.repairDuplicateFinalizations },
+}))
+
 import { registerProjectController } from '../project-controller'
 
 function selectedProject(projectPath: string) {
@@ -222,6 +227,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.repairDuplicateFinalizations.mockReturnValue({ chapters: [] })
   mocks.currentProjectPath = projectA
   mocks.existingPaths = new Set([
     projectA,
@@ -474,6 +480,40 @@ describe('project controller project identity', () => {
     expect(mocks.projectAccess.adoptLegacyProject).toHaveBeenCalled()
     expect(mocks.projectAccess.beginSession).toHaveBeenCalled()
     expect(mocks.createCalls).toEqual([])
+  })
+
+  it('opens the project and reports what the duplicate-finalization repair found', async () => {
+    const chapters = [{ chapterNumber: 2, keptDraftId: 3, keptVersion: 2,
+      superseded: [{ draftId: 2, version: 1, knowledgeDocumentId: 'doc-2', targetFileName: '第2章.txt' }] }]
+    mocks.repairDuplicateFinalizations.mockReturnValueOnce({ chapters })
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'repair-B', projectA))
+      .resolves.toMatchObject({ success: true, finalizationRepair: { status: 'checked', chapters } })
+
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'repair-B-again', projectB))
+      .resolves.toMatchObject({ success: true, finalizationRepair: { status: 'checked', chapters: [] } })
+  })
+
+  it('still opens the project when the duplicate-finalization repair fails, and returns the failure', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const failure = new Error('SQLITE_BUSY: database is locked')
+    mocks.repairDuplicateFinalizations.mockImplementationOnce(() => { throw failure })
+
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'repair-fails-B', projectA))
+      .resolves.toMatchObject({
+        success: true,
+        project: { id: 'project-B', sessionLease: 'lease-project-B-1' },
+        finalizationRepair: { status: 'failed', error: 'SQLITE_BUSY: database is locked' },
+      })
+    expect(logged).toHaveBeenCalledWith(expect.any(String), failure)
+    logged.mockRestore()
+  })
+
+  it('does not repair duplicate finalizations in a project whose open then fails', async () => {
+    mocks.projectAccess.beginSession.mockImplementationOnce(() => { throw new Error('PROJECT_SESSION_BEGIN_FAILED') })
+
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'open-fails-B', projectA))
+      .resolves.toMatchObject({ success: false })
+    expect(mocks.repairDuplicateFinalizations).not.toHaveBeenCalled()
   })
 
   it('opens a complete imported target after its publish ACK is lost and adds it to recent projects', async () => {
