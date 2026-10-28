@@ -1,4 +1,4 @@
-import { localize, translate } from './core'
+import { localize, translate, type MessageKey } from './core'
 import type { Locale } from './types'
 
 /**
@@ -333,16 +333,46 @@ const IMPORT_BLOCKED_CODES = new Set(['GENERATION_DISPATCH_BLOCKED', 'GENERATION
 
 /**
  * 导入里预算用完、生成被阻断或写入失败时的说明。发送前报出时可能是请求次数或活动时长用完（预留时两者用同一个码），说明不区分；活动时长在请求进行中用完（inFlight），
- * 之后根被阻断，再发起只会得到阻断码。「继续」复用同一份额度，接着完成只能「重新开始」，所以说明写明它从第 1 章重做。
+ * 之后根被阻断，再发起只会得到阻断码。「继续」复用同一份额度：参考小说接着完成只能「重新开始」，说明写明它从第 1 章重做；
+ * 作者原稿不能重新开始，说明写明正文已保存、反推的部分可以手动补齐。
  * 码不进说明，由调用方记进诊断日志。其余码返回 undefined，交给共用说明。
  */
-export function importGenerationStopMessage(locale: Locale, code: string, inFlight = false): string | undefined {
-  if (code === 'ROOT_BUDGET_EXHAUSTED') return translate(locale, inFlight ? 'error.importActiveTimeExhausted' : 'error.importBudgetReached')
-  if (IMPORT_BLOCKED_CODES.has(code)) return translate(locale, 'error.importGenerationBlocked')
-  if (code === 'GENERATION_STORAGE_FAILED') return translate(locale, 'error.importStorageFailed')
-  if (code === 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE') return translate(locale, 'error.importPreviousAttemptIncomplete')
+export function importGenerationStopMessage(
+  locale: Locale, code: string, inFlight = false, purpose: 'reference' | 'author-manuscript' = 'reference',
+): string | undefined {
+  const stop = importStopKind(code, inFlight)
+  if (!stop) return undefined
+  if (purpose === 'reference') return translate(locale, REFERENCE_STOP_KEYS[stop])
+  return localize(locale, `${translate(locale, AUTHOR_STOP_REASON_KEYS[stop])}${translate(locale, 'error.authorInferenceStopNext')}`,
+    `${translate(locale, AUTHOR_STOP_REASON_KEYS[stop])} ${translate(locale, 'error.authorInferenceStopNext')}`)
+}
+
+type ImportStopKind = 'budget' | 'activeTime' | 'blocked' | 'storage' | 'previousAttempt'
+
+function importStopKind(code: string, inFlight: boolean): ImportStopKind | undefined {
+  if (code === 'ROOT_BUDGET_EXHAUSTED') return inFlight ? 'activeTime' : 'budget'
+  if (IMPORT_BLOCKED_CODES.has(code)) return 'blocked'
+  if (code === 'GENERATION_STORAGE_FAILED') return 'storage'
+  if (code === 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE') return 'previousAttempt'
   return undefined
 }
+
+const REFERENCE_STOP_KEYS = {
+  budget: 'error.importBudgetReached',
+  activeTime: 'error.importActiveTimeExhausted',
+  blocked: 'error.importGenerationBlocked',
+  storage: 'error.importStorageFailed',
+  previousAttempt: 'error.importPreviousAttemptIncomplete',
+} as const satisfies Record<ImportStopKind, MessageKey>
+
+/** 作者原稿不能重新开始，原稿正文在反推之前已经提交；说明只写原因，再接作者实际能做的下一步。 */
+const AUTHOR_STOP_REASON_KEYS = {
+  budget: 'error.authorInferenceBudgetReached',
+  activeTime: 'error.authorInferenceActiveTimeExhausted',
+  blocked: 'error.authorInferenceBlocked',
+  storage: 'error.authorInferenceStorageFailed',
+  previousAttempt: 'error.authorInferencePreviousAttemptIncomplete',
+} as const satisfies Record<ImportStopKind, MessageKey>
 
 export function appErrorMessage(locale: Locale, error: unknown): string {
   return knownAppErrorMessage(locale, error)

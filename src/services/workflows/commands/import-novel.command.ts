@@ -79,6 +79,11 @@ export function importGenerationSelection(context: WorkflowContext, stage: Impor
   return { importSlot: slot, importExecution: context.data.importRunExecution as NonNullable<BeginGenerationRequest['importExecution']> }
 }
 
+/** 导入运行的用途：作者原稿反推停下时的说明与参考小说不同。 */
+function importRunPurpose(context: WorkflowContext): 'reference' | 'author-manuscript' {
+  return context.data.importRunPurpose === 'author-manuscript' ? 'author-manuscript' : 'reference'
+}
+
 export function frozenImportContext(context: WorkflowContext): ImportGenerationContext | undefined {
   if (!context.data.importGenerationSlot) return undefined
   const frozen = context.data.importGenerationContext as ImportGenerationContext | undefined
@@ -182,7 +187,7 @@ export function assertImportCompletionNotStopped(
   context: CommandExecuteParams['context'],
 ): void {
   const code = completion.receipt.failureCode
-  const stopped = code && importGenerationStopMessage(context.uiLocale, code, true)
+  const stopped = code && importGenerationStopMessage(context.uiLocale, code, true, importRunPurpose(context))
   if (!stopped) return
   callbacks.log(workflowUiText(context, `导入停止原因：${code}`, `Import stop reason: ${code}`))
   throw new Error(stopped)
@@ -776,7 +781,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       if (batch.failure.terminal) throw batch.failure.terminal
       const { errorCode } = batch.failure
       if (errorCode) callbacks.log(text(`蓝图推演停止原因：${errorCode}`, `Blueprint inference stop reason: ${errorCode}`))
-      const reason = (errorCode && importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline'))
+      const reason = (errorCode && importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline', importRunPurpose(context)))
         || displayedErrorMessage(context.uiLocale, batch.failure.message)
       throw new Error(text(
         `蓝图推演失败：${reason}`,

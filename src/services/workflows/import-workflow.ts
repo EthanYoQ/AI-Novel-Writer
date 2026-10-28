@@ -264,6 +264,7 @@ function productionDependencies(
     },
     inferGlobal: async (chapters, stats, run, commit) => {
       context.data.importGenerationSlot = { runId: run.id, stage: 'global', batchId: 'done' }
+      context.data.importRunPurpose = run.purpose
       context.data.chapters = chapters.map(importedChapter)
       context.data.importRunTotalChapters = stats.totalChapters
       context.data.importRunTotalWords = stats.totalWords
@@ -274,6 +275,7 @@ function productionDependencies(
     },
     analyzeStyle: async (chapters, run, commit) => {
       context.data.importGenerationSlot = { runId: run.id, stage: 'style', batchId: 'done' }
+      context.data.importRunPurpose = run.purpose
       const { AnalyzeWritingStyleCommand } = await import('./commands/analyze-style.command')
       const style = await new AnalyzeWritingStyleCommand(
         { chapters: chapters.map(importedChapter), fillEmpty: run.purpose === 'author-manuscript' },
@@ -292,6 +294,7 @@ function productionDependencies(
     },
     inferBlueprints: async (chapters, checkpoint, run, commit) => {
       context.data.importGenerationSlot = { runId: run.id, stage: 'blueprints', batchId: checkpoint }
+      context.data.importRunPurpose = run.purpose
       context.data.chapters = chapters.map(importedChapter)
       context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
       const { InferBlueprintsPerChapterCommand } = await import('./commands/import-novel.command')

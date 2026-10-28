@@ -332,7 +332,7 @@ export class ImportRunOrchestrator {
         // 生成开始或发送前就被预算、阻断拒绝时报错只有裸码，在这里换成导入的说明，存进运行并抛出同一句；码只进诊断日志。
         // 只改写生成阶段（global、style、blueprints）：非生成阶段抛出的码保留原报错。
         const code = IMPORT_GENERATION_STAGES.has(requestedStage) ? errorCodeOf(error instanceof Error ? error.message : error) : undefined
-        const stopped = code && importGenerationStopMessage(run.locale, code)
+        const stopped = code && importGenerationStopMessage(run.locale, code, false, run.purpose)
         if (stopped) callbacks.log(localize(run.locale, `导入停止原因：${code}`, `Import stop reason: ${code}`))
         const failure = stopped ? new Error(stopped) : error
         try {
