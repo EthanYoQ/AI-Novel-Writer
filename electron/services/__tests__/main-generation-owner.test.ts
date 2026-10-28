@@ -2939,6 +2939,18 @@ describe('main draft persistence and batch lineage', () => {
       expect([current, changed].map(item => reopened.readContext(item.run.handle).draftSave.kind)).toEqual(['current', 'changed'])
       expect(runIds(reopened.listRecovery().drafts)).toEqual([unsaved.run.handle.runId])
     })
+    it('已保存的单章运行还有没落盘的正文时仍列出，尾段可复制', async () => {
+      const f = drafting()
+      const saved = await generate(f, { ...f.begin, uiActionNonce: 'saved', authorInputs })
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END")
+      const tail = await f.owner.execute({ handle: saved.run.handle, invocationNonce: 'second', task })
+      expect(tail.run.unsavedTails?.[0]?.text.trim()).toBeTruthy()
+      f.db.exec('DROP TRIGGER reject_snapshot')
+      f.owner.commitDraft(saved.request)
+      const list = f.owner.listRecovery()
+      expect(runIds(list.drafts)).toEqual([saved.run.handle.runId])
+      expect(list.drafts[0]!.view.unsavedTails?.[0]?.text).toBe(tail.run.unsavedTails?.[0]?.text)
+    })
     it('列出被取消的单章候选；只发出请求、没写出字的不列', async () => {
       const f = drafting()
       const cancelled = await generate(f, { ...f.begin, uiActionNonce: 'cancelled', authorInputs })
