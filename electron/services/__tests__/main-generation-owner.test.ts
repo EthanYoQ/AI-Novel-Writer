@@ -2951,6 +2951,25 @@ describe('main draft persistence and batch lineage', () => {
       expect(runIds(list.drafts)).toEqual([saved.run.handle.runId])
       expect(list.drafts[0]!.view.unsavedTails?.[0]?.text).toBe(tail.run.unsavedTails?.[0]?.text)
     })
+    it('别的运行有尾段时，不读其余已保存运行的视图', async () => {
+      const f = drafting()
+      const other = await generate(f, { ...f.begin, uiActionNonce: 'other', authorInputs })
+      f.owner.commitDraft(other.request)
+      const tailed = await generate(f, { ...f.begin, uiActionNonce: 'tailed', authorInputs })
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END")
+      await f.owner.execute({ handle: tailed.run.handle, invocationNonce: 'second', task })
+      f.db.exec('DROP TRIGGER reject_snapshot')
+      const readRunView = GenerationRunRepository.prototype.readRunView
+      const spy = vi.spyOn(GenerationRunRepository.prototype, 'readRunView').mockImplementation(function (this: GenerationRunRepository, runId: string) {
+        if (runId === other.run.handle.runId) throw new Error('unrelated saved run view read')
+        return readRunView.call(this, runId)
+      })
+      try {
+        const list = f.owner.listRecovery()
+        expect(runIds(list.drafts)).toEqual([tailed.run.handle.runId])
+        expect(list.partial).toBe(false)
+      } finally { spy.mockRestore() }
+    })
     it('列出被取消的单章候选；只发出请求、没写出字的不列', async () => {
       const f = drafting()
       const cancelled = await generate(f, { ...f.begin, uiActionNonce: 'cancelled', authorInputs })
