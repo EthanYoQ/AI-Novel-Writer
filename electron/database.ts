@@ -41,6 +41,7 @@ export function initProjectDatabase(projectPath: string): void {
     const verified = openCanonicalProjectData(projectPath)
     const databasePath = getProjectDatabasePath(projectPath)
     database = new Database(databasePath, { fileMustExist: true })
+    // Compare before any statement: an unused handle has not opened the WAL, so closing it on refusal cannot checkpoint.
     const content = readSqliteContentIdentity(databasePath)
     if (content.database !== verified.database || content.wal !== verified.wal) {
       throw new SchemaMigrationError('SOURCE_CHANGED_SINCE_PROBE')
