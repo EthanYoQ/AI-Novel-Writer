@@ -1074,6 +1074,26 @@ describe('GenerateDirectoryCommand', () => {
       .toHaveLength(1)
   })
 
+  it.each([
+    ['zh-CN', '已保存第 1–2 章完整蓝图。第 3–5 章的请求超出了模型能接受的长度，服务商拒绝了，这几章没有生成。'],
+    ['en-US', 'Saved complete blueprints for chapters 1–2. The request for chapters 3–5 was longer than the model accepts, so the provider rejected it and those chapters were not generated.'],
+  ] as const)('says which chapters were saved and which were not generated when a later split is rejected as too long (%s)', async (uiLocale, expected) => {
+    stubIpcInvoke(successfulCommitHandler())
+    let attempt = 0
+    const session = generationSession(async task => {
+      attempt += 1
+      if (attempt === 1) return { status: 'incomplete', content: '{"blueprints":[', finishReason: 'length', receipt: generationReceipt(attempt, 'length') }
+      if (attempt === 2) return { status: 'completed', content: blueprintJson([1, 2]), finishReason: 'stop', receipt: generationReceipt(attempt, 'stop') }
+      throw new TerminalProviderFailureError('GENERATION_CONTEXT_LENGTH_EXCEEDED', generationReceipt(attempt, 'error', task.purpose))
+    })
+    const command = new GenerateDirectoryCommand({ mode: 'full', count: 5 }, projectSnapshot,
+      { createRuntime: vi.fn(async () => testRuntime(session)) })
+    const failure = await command.execute({ step: {}, context: { ...workflowContext(), uiLocale }, callbacks: stepCallbacks() })
+      .then(() => null, error => error as Error)
+    expect(failure?.message).toContain(expected)
+    expect(failure?.message).not.toMatch(/没有生成内容|nothing was generated/u)
+  })
+
   it('commits only the validated prefix when the later split fails after the earlier split validated', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     let attempt = 0
