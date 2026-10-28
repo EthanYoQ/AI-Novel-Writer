@@ -904,6 +904,18 @@ describe('ImportRunOrchestrator failure copy follows the import run locale', () 
     expect(getRun().lastError).toBe(thrown.message)
   })
 
+  it('keeps a stop code raised outside the generation stages as it was', async () => {
+    const { deps, getRun } = harness(1, { stage: 'refresh' })
+    const thrown = new Error('GENERATION_STORAGE_FAILED')
+    deps.refresh = vi.fn(async () => { throw thrown })
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'refresh', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+    expect(failure).toBe(thrown)
+    expect(getRun().lastError).toBe(thrown.message)
+  })
+
   it('uses the registered takeover explanation when lease renewal returns another execution identity', async () => {
     const { deps } = harness(1, { locale: 'zh-CN', stage: 'global' })
     let renewals = 0
