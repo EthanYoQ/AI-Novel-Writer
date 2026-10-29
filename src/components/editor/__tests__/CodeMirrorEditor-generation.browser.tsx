@@ -286,6 +286,8 @@ describe('CodeMirror editor AI generation boundary', () => {
 
     const note = page.getByRole('textbox', { name: '修改意见' })
     await expect.element(note).toBeVisible()
+    // 表单长高后在下一帧绘制前夹紧；量用户看到的那一帧，不量还没排版过的 DOM
+    await nextFrames()
     expect(note.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
   })
 
