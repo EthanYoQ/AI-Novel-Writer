@@ -1,7 +1,6 @@
 import type { FinalizedCharacterArtifact } from '../../../shared/finalized-character-generation'
 import { runFinalizationGeneration } from '../../finalization-generation'
 import { routeModelId } from '../../model-routing'
-import { pinWorkflowModel } from '../workflow-main-generation'
 import type { FinalizationGenerationEffect } from '../../../shared/finalization-generation'
 import { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
 export { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
@@ -10,7 +9,7 @@ import {
   type CommandExecuteParams,
   type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
-import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
+import { useWorkflowStore, type StepCallbacks, type WorkflowContext } from '../../../stores/workflow-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { PostProcessPromptBuilder } from '../../prompts/prompt-builder'
@@ -385,14 +384,17 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
     const generation: FinalizePostProcessGeneration = {
       finalizedStage: (stepKey, generationContext) => runFinalizationGeneration({
         session: projectSession, slot: { source: this.params.finalizedSource, stepKey },
-        modelId: () => generationContext.generationModelId ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes') ?? '',
+        modelId: () => generationContext.generationModelId ?? generationContext.data.finalizationModelId as string | undefined
+          ?? routeModelId(stepKey === 'character_cards' ? 'finalized-character-state' : 'finalized-chapter-notes') ?? '',
         ...(generationContext.data.generationBatchId && generationContext.mainGenerationRootHandle
           ? { parentRootActionId: generationContext.mainGenerationRootHandle.rootActionId } : {}),
         ...explicit[stepKey],
         cancelled: () => generationContext.cancelled,
         onHandle: (handle, modelId) => {
           generationContext.mainGenerationRunHandle = Object.freeze({ ...handle })
-          pinWorkflowModel(generationContext, modelId)
+          // 冻结在 data 而不是 generationModelId：同一运行后面的规划阶段（作者原稿反推）要按规划环节选模型。
+          generationContext.data.finalizationModelId ??= modelId
+          useWorkflowStore.getState().recordRunGenerationModel(generationContext.runId, modelId)
         },
       }).catch(error => { throw finalizationGenerationError(error) }),
       complete: async () => { throw new Error('FINALIZATION_GENERATION_MAIN_REQUIRED') },

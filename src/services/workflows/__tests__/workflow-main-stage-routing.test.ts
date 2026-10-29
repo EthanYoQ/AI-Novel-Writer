@@ -152,11 +152,9 @@ describe('stage routing at the workflow generation seam', () => {
 })
 
 describe('recording the pinned model on the run', () => {
-  it('keeps the first recorded model and only warns on a conflicting one', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    useWorkflowStore.getState().pinRunGenerationModel('workflow', 'writer')
-    useWorkflowStore.getState().pinRunGenerationModel('workflow', 'reviewer')
-    expect(run()?.generationModelId).toBe('writer')
-    expect(warn).toHaveBeenCalledOnce()
+  it('shows the model the run is using now when a later stage switches models', () => {
+    useWorkflowStore.getState().recordRunGenerationModel('workflow', 'writer')
+    useWorkflowStore.getState().recordRunGenerationModel('workflow', 'reviewer')
+    expect(run()?.generationModelId).toBe('reviewer')
   })
 })
