@@ -340,7 +340,7 @@ interface WorkflowState {
   pauseWorkflow: (runId: string) => void
   /** 继续已暂停或正在等待安全暂停的工作流 */
   resumeWorkflow: (runId: string) => void
-  pinRunGenerationModel: (runId: string, modelId: string) => void
+  recordRunGenerationModel: (runId: string, modelId: string) => void
   /** 添加全局日志 */
   addLog: (level: 'info' | 'warn' | 'error', message: string, locale?: Locale) => void
   /** 清空日志 */
@@ -1118,12 +1118,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     }
   },
 
-  pinRunGenerationModel: (runId, modelId) => {
+  // 记当前在用的模型：作者原稿导入先用定稿模型做后处理，再用规划模型反推。
+  recordRunGenerationModel: (runId, modelId) => {
     const run = get().activeRuns.find(candidate => candidate.id === runId)
-    if (!run || run.generationModelId === modelId) return
-    // 主进程的运行已经开着，记账冲突不能把工作流打挂。
-    if (run.generationModelId) console.warn('[workflow] run model already recorded; keeping the first value', { runId })
-    else updateRunById(set, runId, { generationModelId: modelId })
+    if (run && run.generationModelId !== modelId) updateRunById(set, runId, { generationModelId: modelId })
   },
 
   addLog: (level, message, locale = useLocaleStore.getState().locale) => {
