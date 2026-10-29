@@ -74,7 +74,7 @@ export function useAnchoredLayer(align: 'start' | 'end'): {
     const onFocusIn = (event: FocusEvent) => {
       if (!inside(event.target)) close(false)
     }
-    // 只看触发按钮动没动：别处的滚动区（跟到最新一行的运行日志）滚动时浮层不必关
+    // 只看外层锚点动没动：别处的滚动区（跟到最新一行的运行日志）滚动时浮层不必关
     const onScroll = () => {
       const now = anchor.getBoundingClientRect()
       if (now.top !== placedAt.current?.top || now.left !== placedAt.current?.left) close(false)
