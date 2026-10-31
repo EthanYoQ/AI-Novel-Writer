@@ -364,6 +364,58 @@ describe('knowledge-base controller project context guard', () => {
     expect(backfillVectors).not.toHaveBeenCalled()
   })
 
+  /**
+   * #520: 没显式配置检索模型时，只有声明了 embedding 用途的模型才允许被回退选中。
+   * 纯生成模型（例如只配了 DeepSeek 官方）没有嵌入接口，回退只会让每次写作前多一次注定失败的请求。
+   */
+  function useDefaultGenerationModel(purposes?: string[]) {
+    mocks.readJsonFile.mockImplementation((filePath: string, fallback: unknown) => {
+      if (filePath === 'global.json') return { defaultModelId: 'generation-model' }
+      if (filePath === 'models.json') {
+        return [{
+          id: 'generation-model',
+          provider: 'openai',
+          protocol: 'openai',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'configured-key',
+          modelName: 'chat-model',
+          ...(purposes ? { purposes } : {}),
+        }]
+      }
+      return fallback
+    })
+    mocks.run.mockImplementation(async (operation: (kb: unknown) => unknown) => operation({
+      getKnowledgeStats: async () => ({ totalChunks: 0, vectorDimension: 0 }),
+      getVectorlessCount: async () => ({ count: 0 }),
+    }))
+  }
+
+  it('does not fall back to a generation-only default model for embeddings (#520)', async () => {
+    useDefaultGenerationModel(['generation'])
+
+    await expect(handler('kb:get-vector-rebuild-status')({}, 'C:/projects/A')).resolves.toMatchObject({
+      embeddingConfigured: false,
+      canRebuild: false,
+    })
+    expect(mocks.run).not.toHaveBeenCalled()
+  })
+
+  it('still falls back to a default model that declares the embedding purpose (#520)', async () => {
+    useDefaultGenerationModel(['generation', 'embedding'])
+
+    await expect(handler('kb:get-vector-rebuild-status')({}, 'C:/projects/A')).resolves.toMatchObject({
+      embeddingConfigured: true,
+    })
+  })
+
+  it('keeps the legacy fallback for profiles saved without a purposes field (#520)', async () => {
+    useDefaultGenerationModel()
+
+    await expect(handler('kb:get-vector-rebuild-status')({}, 'C:/projects/A')).resolves.toMatchObject({
+      embeddingConfigured: true,
+    })
+  })
+
   it('does not clear project B when a confirmation opened for project A resolves later', async () => {
     // The renderer freezes A before showing the confirmation. By the time the
     // user accepts, the main-process database is already bound to B.
