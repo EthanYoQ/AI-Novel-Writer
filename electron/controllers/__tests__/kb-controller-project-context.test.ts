@@ -369,6 +369,7 @@ describe('knowledge-base controller project context guard', () => {
    * 纯生成模型（例如只配了 DeepSeek 官方）没有嵌入接口，回退只会让每次写作前多一次注定失败的请求。
    */
   function useDefaultGenerationModel(purposes?: string[]) {
+    const importText = vi.fn(async () => ({ success: true, docId: 'generation-only-doc' }))
     mocks.readJsonFile.mockImplementation((filePath: string, fallback: unknown) => {
       if (filePath === 'global.json') return { defaultModelId: 'generation-model' }
       if (filePath === 'models.json') {
@@ -387,17 +388,30 @@ describe('knowledge-base controller project context guard', () => {
     mocks.run.mockImplementation(async (operation: (kb: unknown) => unknown) => operation({
       getKnowledgeStats: async () => ({ totalChunks: 0, vectorDimension: 0 }),
       getVectorlessCount: async () => ({ count: 0 }),
+      importText,
     }))
+    return importText
   }
 
   it('does not fall back to a generation-only default model for embeddings (#520)', async () => {
-    useDefaultGenerationModel(['generation'])
+    const importText = useDefaultGenerationModel(['generation'])
 
     await expect(handler('kb:get-vector-rebuild-status')({}, 'C:/projects/A')).resolves.toMatchObject({
       embeddingConfigured: false,
       canRebuild: false,
     })
     expect(mocks.run).not.toHaveBeenCalled()
+
+    // 导入路径同样不能带上生成模型：没有可用检索模型时应当以「未配置」的模型导入（纯 FTS）。
+    await expect(handler('kb:import-text')({}, 'text', 'book.txt', 'C:/projects/A'))
+      .resolves.toEqual({ success: true, docId: 'generation-only-doc' })
+    expect(importText).toHaveBeenCalledWith(
+      'text',
+      'book.txt',
+      'C:/projects/A',
+      'openai',
+      expect.objectContaining({ provider: '', baseUrl: '', apiKey: '' }),
+    )
   })
 
   it('still falls back to a default model that declares the embedding purpose (#520)', async () => {
