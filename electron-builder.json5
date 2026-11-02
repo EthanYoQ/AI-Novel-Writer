@@ -76,7 +76,16 @@
   },
   "linux": {
     "target": ["AppImage"],
-    "artifactName": "${productName}-Linux-${version}.${ext}",
-    "category": "Office"
+    // ASCII 名与 latest-linux.yml 的更新模板对齐；${productName} 会带出中文「书童」，更新器 url 会与真实文件名不符（ADR-0022 已预见）。
+    "artifactName": "ai-novel-writer-linux-${arch}-${version}-installer.${ext}",
+    "category": "Office",
+    // Electron 以 package.json 的 desktopName 作为 app_id / WM_CLASS，.desktop 文件名同步后才能把运行窗口归到条目下。
+    "syncDesktopName": true,
+    "extraResources": [
+      {
+        "from": "electron/security/linux-safe-file-system",
+        "to": "security/linux-safe-file-system"
+      }
+    ]
   }
 }

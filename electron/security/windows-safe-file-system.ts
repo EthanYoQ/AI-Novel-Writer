@@ -257,12 +257,12 @@ function validateCapability(capability: SecureFileCapability): SecureFileCapabil
   }
 }
 
-type SecureFileSystemPlatform = Extract<NodeJS.Platform, 'win32' | 'darwin'>
+type SecureFileSystemPlatform = Extract<NodeJS.Platform, 'win32' | 'darwin' | 'linux'>
 
 function helperFileName(platform: SecureFileSystemPlatform): string {
-  return platform === 'win32'
-    ? 'windows-safe-file-system.ps1'
-    : 'darwin-safe-file-system'
+  if (platform === 'win32') return 'windows-safe-file-system.ps1'
+  if (platform === 'linux') return 'linux-safe-file-system'
+  return 'darwin-safe-file-system'
 }
 
 function defaultHelperPath(options: {
@@ -526,7 +526,7 @@ export function createSecureFileSystem(
   const cwd = options.cwd ?? process.cwd()
   const usingTestInvoke = options.invoke !== undefined
   const securePlatform = (): SecureFileSystemPlatform => {
-    if (platform === 'win32' || platform === 'darwin') return platform
+    if (platform === 'win32' || platform === 'darwin' || platform === 'linux') return platform
     throw secureError('SECURE_FS_UNSUPPORTED_PLATFORM')
   }
   const resolveHelperPath = (): string => {
