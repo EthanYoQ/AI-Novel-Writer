@@ -50,6 +50,7 @@ typedef struct {
   size_t capacity;
 } Buffer;
 
+/** Grows the buffer so at least `extra` more bytes and a NUL terminator fit. */
 static int BufferReserve(Buffer *buffer, size_t extra) {
   if (buffer->length + extra + 1 <= buffer->capacity) return 1;
   size_t capacity = buffer->capacity ? buffer->capacity : 4096;
@@ -64,6 +65,7 @@ static int BufferReserve(Buffer *buffer, size_t extra) {
   return 1;
 }
 
+/** Appends raw bytes and keeps the buffer NUL-terminated. */
 static int BufferAppend(Buffer *buffer, const char *bytes, size_t length) {
   if (!BufferReserve(buffer, length)) return 0;
   memcpy(buffer->bytes + buffer->length, bytes, length);
@@ -72,6 +74,7 @@ static int BufferAppend(Buffer *buffer, const char *bytes, size_t length) {
   return 1;
 }
 
+/** Appends a NUL-terminated literal. */
 static int BufferAppendLiteral(Buffer *buffer, const char *literal) {
   return BufferAppend(buffer, literal, strlen(literal));
 }
@@ -99,6 +102,7 @@ static int BufferAppendJsonString(Buffer *buffer, const char *bytes, size_t leng
   return BufferAppendLiteral(buffer, "\"");
 }
 
+/** Writes one complete response line; an empty buffer falls back to a failure code. */
 static void WriteResponse(Buffer *response) {
   if (!response->bytes) {
     static const char fallback[] = "{\"ok\":false,\"code\":\"SECURE_FS_HELPER_FAILED\"}\n";
@@ -111,6 +115,7 @@ static void WriteResponse(Buffer *response) {
   fflush(stdout);
 }
 
+/** Writes a failure response for the given SECURE_FS_* code. */
 static void WriteFailure(const char *code) {
   Buffer response = { NULL, 0, 0 };
   BufferAppendLiteral(&response, "{\"ok\":false,\"code\":");
@@ -120,21 +125,25 @@ static void WriteFailure(const char *code) {
   free(response.bytes);
 }
 
+/** Writes a fixed, already-serialised response body. */
 static void EmitLiteral(const char *literal, size_t length) {
   fwrite(literal, 1, length, stdout);
   fflush(stdout);
 }
 
+/** Writes the plain success response. */
 static void WriteSuccess(void) {
   static const char payload[] = "{\"ok\":true}\n";
   EmitLiteral(payload, sizeof(payload) - 1);
 }
 
+/** Writes the two-phase handshake signal; the commit command has not arrived yet. */
 static void WriteReady(void) {
   static const char payload[] = "{\"ok\":true,\"phase\":\"ready\"}\n";
   EmitLiteral(payload, sizeof(payload) - 1);
 }
 
+/** Writes the exists response for a boolean answer. */
 static void WriteExists(int exists) {
   static const char present[] = "{\"ok\":true,\"exists\":true}\n";
   static const char absent[] = "{\"ok\":true,\"exists\":false}\n";
@@ -180,6 +189,7 @@ typedef struct {
   const char *error;
 } Parser;
 
+/** Advances past JSON insignificant whitespace. */
 static void SkipWhitespace(Parser *parser) {
   while (parser->cursor < parser->end) {
     char value = *parser->cursor;
@@ -188,7 +198,9 @@ static void SkipWhitespace(Parser *parser) {
   }
 }
 
+/** Encodes one Unicode code point as 1-4 UTF-8 bytes; surrogate halves never reach here. */
 static int AppendUtf8(Buffer *buffer, uint32_t code) {
+  if (code > 0x10FFFF) return 0;
   char bytes[4];
   size_t length = 0;
   if (code < 0x80) {
@@ -196,14 +208,20 @@ static int AppendUtf8(Buffer *buffer, uint32_t code) {
   } else if (code < 0x800) {
     bytes[length++] = (char)(0xC0 | (code >> 6));
     bytes[length++] = (char)(0x80 | (code & 0x3F));
-  } else {
+  } else if (code < 0x10000) {
     bytes[length++] = (char)(0xE0 | (code >> 12));
+    bytes[length++] = (char)(0x80 | ((code >> 6) & 0x3F));
+    bytes[length++] = (char)(0x80 | (code & 0x3F));
+  } else {
+    bytes[length++] = (char)(0xF0 | (code >> 18));
+    bytes[length++] = (char)(0x80 | ((code >> 12) & 0x3F));
     bytes[length++] = (char)(0x80 | ((code >> 6) & 0x3F));
     bytes[length++] = (char)(0x80 | (code & 0x3F));
   }
   return BufferAppend(buffer, bytes, length);
 }
 
+/** Decodes four hex digits, or UINT32_MAX when any digit is invalid. */
 static uint32_t Hex4(const char *digits) {
   uint32_t value = 0;
   for (int index = 0; index < 4; index++) {
@@ -301,8 +319,10 @@ static int ParseJsonString(Parser *parser, Slice *output) {
   return DecodeStringBody(start, limit, output);
 }
 
+/** Parses one JSON value; the protocol only uses objects, strings, booleans, and numbers. */
 static int ParseJsonValue(Parser *parser, JsonValue *output);
 
+/** Parses a JSON object into flat key/value members. */
 static int ParseJsonObject(Parser *parser, JsonValue *output) {
   if (parser->cursor >= parser->end || *parser->cursor != '{') return 0;
   parser->cursor++;
@@ -428,6 +448,7 @@ static int ParseJsonValue(Parser *parser, JsonValue *output) {
   return 1;
 }
 
+/** Looks up an object member by key, or NULL when absent. */
 static JsonValue *ObjectMember(JsonValue *object, const char *key) {
   if (!object || object->type != JsonObject) return NULL;
   for (size_t index = 0; index < object->memberCount; index++) {
@@ -436,6 +457,7 @@ static JsonValue *ObjectMember(JsonValue *object, const char *key) {
   return NULL;
 }
 
+/** Compares a decoded slice with a NUL-terminated literal. */
 static int SliceEquals(Slice slice, const char *literal) {
   size_t length = strlen(literal);
   return slice.length == length && memcmp(slice.pointer, literal, length) == 0;
@@ -445,6 +467,7 @@ static int SliceEquals(Slice slice, const char *literal) {
 // Minimal base64
 // ---------------------------------------------------------------------------
 
+/** Decodes standard base64 within the text byte budget. */
 static int DecodeBase64(Slice encoded, unsigned char **content, size_t *contentLength, const char **errorCode) {
   size_t maximumEncoded = (size_t)(((kMaxTextBytes + 2) / 3) * 4 + 8);
   if (encoded.length > maximumEncoded) {
@@ -518,6 +541,7 @@ static int DecodeBase64(Slice encoded, unsigned char **content, size_t *contentL
   return 1;
 }
 
+/** Appends the standard base64 encoding of a byte range. */
 static int EncodeBase64(Buffer *buffer, const unsigned char *bytes, size_t length) {
   static const char *const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   size_t chunks = (length + 2) / 3;
@@ -553,6 +577,7 @@ static int EncodeBase64(Buffer *buffer, const unsigned char *bytes, size_t lengt
 // Path capability validation
 // ---------------------------------------------------------------------------
 
+/** Reads one stdin line within `limit` bytes and strips its terminator. */
 static int ReadLine(size_t limit, const char **errorCode, Slice *output) {
   char *line = NULL;
   size_t capacity = 0;
@@ -574,6 +599,7 @@ static int ReadLine(size_t limit, const char **errorCode, Slice *output) {
   return 1;
 }
 
+/** Parses a canonical unsigned decimal string without overflow. */
 static int ParseUnsignedDecimal(Slice value, uint64_t maximum, uint64_t *output) {
   if (value.length == 0 || value.length > 20) return 0;
   if (value.length > 1 && value.pointer[0] == '0') return 0;
@@ -589,6 +615,7 @@ static int ParseUnsignedDecimal(Slice value, uint64_t maximum, uint64_t *output)
   return 1;
 }
 
+/** Matches Windows device names the capability format refuses on every platform. */
 static int IsWindowsReservedName(const char *segment) {
   size_t length = strcspn(segment, ".");
   char bare[16];
@@ -605,6 +632,7 @@ static int IsWindowsReservedName(const char *segment) {
   return 0;
 }
 
+/** Rejects empty, dot, colon, trailing-dot/space, and reserved-name segments. */
 static int IsSafeSegment(const char *segment, size_t length) {
   if (length == 0) return 0;
   if ((length == 1 && segment[0] == '.') || (length == 2 && segment[0] == '.' && segment[1] == '.')) return 0;
@@ -625,6 +653,7 @@ typedef struct {
   size_t count;
 } SegmentList;
 
+/** Releases a parsed segment list. */
 static void FreeSegments(SegmentList *segments) {
   if (!segments->names) return;
   for (size_t index = 0; index < segments->count; index++) free(segments->names[index]);
@@ -633,6 +662,7 @@ static void FreeSegments(SegmentList *segments) {
   segments->count = 0;
 }
 
+/** Splits on both separators; an empty relative path addresses the root itself. */
 static int SegmentsForRelativePath(Slice relativePath, SegmentList *output, const char **errorCode) {
   output->names = NULL;
   output->count = 0;
@@ -691,12 +721,14 @@ static const char *CodeForErrno(int value) {
   return kOpenFailed;
 }
 
+/** Reports whether a name resolves to a symlink, without following it. */
 static int HasSymlinkAt(int parent, const char *name) {
   struct stat information;
   if (fstatat(parent, name, &information, AT_SYMLINK_NOFOLLOW) != 0) return 0;
   return S_ISLNK(information.st_mode) ? 1 : 0;
 }
 
+/** Opens the capability root with O_NOFOLLOW and verifies its recorded device identity. */
 static int OpenRoot(Slice rootPath, uint64_t expectedDevice, uint64_t expectedFileIndex, const char **errorCode) {
   if (rootPath.length == 0 || rootPath.length > kMaxPathCharacters
     || memchr(rootPath.pointer, '\0', rootPath.length) || rootPath.pointer[0] != '/') {
@@ -731,6 +763,7 @@ static int OpenRoot(Slice rootPath, uint64_t expectedDevice, uint64_t expectedFi
   return descriptor;
 }
 
+/** Opens one child directory, optionally creating it, without following symlinks. */
 static int OpenDirectoryAt(int parent, const char *name, int createIfMissing, const char **errorCode) {
   if (HasSymlinkAt(parent, name)) {
     *errorCode = kReparsePoint;
@@ -750,6 +783,7 @@ static int OpenDirectoryAt(int parent, const char *name, int createIfMissing, co
   return descriptor;
 }
 
+/** Walks the whole segment chain starting from a verified root descriptor. */
 static int OpenDirectoryChain(
   Slice rootPath,
   uint64_t expectedDevice,
@@ -769,6 +803,7 @@ static int OpenDirectoryChain(
   return current;
 }
 
+/** Opens the parent of the final segment and hands back that leaf name. */
 static int OpenParentDirectory(
   Slice rootPath,
   uint64_t expectedDevice,
@@ -786,6 +821,7 @@ static int OpenParentDirectory(
   return OpenDirectoryChain(rootPath, expectedDevice, expectedFileIndex, &prefix, 0, errorCode);
 }
 
+/** Refuses anything that is not a regular file. */
 static int RequireRegularFile(int descriptor, const char **errorCode) {
   struct stat information;
   if (fstat(descriptor, &information) < 0) {
@@ -803,6 +839,7 @@ static int RequireRegularFile(int descriptor, const char **errorCode) {
 // Operations
 // ---------------------------------------------------------------------------
 
+/** Reads a capability file and returns its bytes as base64. */
 static void ReadText(
   Slice rootPath,
   uint64_t expectedDevice,
@@ -889,6 +926,7 @@ static void ReadText(
   free(response.bytes);
 }
 
+/** Answers existence for a capability without following symlinks. */
 static void Exists(
   Slice rootPath,
   uint64_t expectedDevice,
@@ -935,6 +973,7 @@ static void Exists(
   WriteExists(1);
 }
 
+/** Creates every missing directory in the capability path. */
 static void MakeDirectory(
   Slice rootPath,
   uint64_t expectedDevice,
@@ -951,6 +990,7 @@ static void MakeDirectory(
   WriteSuccess();
 }
 
+/** Lists a capability directory, refusing symlinked entries. */
 static void ListDirectory(
   Slice rootPath,
   uint64_t expectedDevice,
@@ -1027,6 +1067,7 @@ static void ListDirectory(
   free(response.bytes);
 }
 
+/** Creates an exclusive temporary file beside the target for atomic replace. */
 static int OpenTemporaryFile(int parent, char **temporaryName, const char **errorCode) {
   unsigned int random = 0;
   if (getrandom(&random, sizeof(random), 0) != (ssize_t)sizeof(random)) random = 0;
@@ -1060,6 +1101,7 @@ static int OpenTemporaryFile(int parent, char **temporaryName, const char **erro
   return -1;
 }
 
+/** Writes and fsyncs the full content of an atomic write. */
 static int WriteAll(int descriptor, const unsigned char *content, size_t length, const char **errorCode) {
   size_t offset = 0;
   while (offset < length) {
@@ -1078,6 +1120,7 @@ static int WriteAll(int descriptor, const unsigned char *content, size_t length,
   return 1;
 }
 
+/** Performs the ready/commit two-phase atomic replace. */
 static void WriteAtomically(
   JsonValue *request,
   Slice rootPath,
@@ -1204,6 +1247,13 @@ static void WriteAtomically(
     return;
   }
   free(temporaryName);
+  // The rename is only durable once the parent directory entry is on disk.
+  if (fsync(parent) < 0) {
+    if (existing >= 0) close(existing);
+    close(parent);
+    WriteFailure(kWriteFailed);
+    return;
+  }
   if (existing >= 0) close(existing);
   close(parent);
   WriteSuccess();
@@ -1213,6 +1263,7 @@ static void WriteAtomically(
 // Entry point
 // ---------------------------------------------------------------------------
 
+/** Reads one request, dispatches it, and always exits 0 after writing a response. */
 int main(void) {
   const char *errorCode = NULL;
   Slice line = { NULL, 0, NULL };
@@ -1248,7 +1299,7 @@ int main(void) {
   if (identity->memberCount != 2
     || !device || device->type != JsonString
     || !fileIndex || fileIndex->type != JsonString
-    || !ParseUnsignedDecimal(device->string, UINT32_MAX, &expectedDevice)
+    || !ParseUnsignedDecimal(device->string, UINT64_MAX, &expectedDevice)
     || !ParseUnsignedDecimal(fileIndex->string, UINT64_MAX, &expectedFileIndex)) {
     free(line.owned);
     WriteFailure(kInvalidPath);

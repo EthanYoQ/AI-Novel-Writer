@@ -137,13 +137,22 @@ function validatedUnsignedDecimal(value: unknown, maximum: bigint): string | nul
   }
 }
 
-function validateRootIdentity(identity: unknown): SecureRootIdentity {
+/**
+ * Linux encodes st_dev as a 64-bit dev_t; Windows reports a 32-bit volume serial
+ * number. Bounding both at 32 bits would deny capabilities on filesystems whose
+ * device id exceeds it, so only Windows keeps the narrower bound.
+ */
+function maxDeviceIdentity(platform: NodeJS.Platform): bigint {
+  return platform === 'linux' ? MAX_UINT64 : MAX_UINT32
+}
+
+function validateRootIdentity(identity: unknown, platform: NodeJS.Platform): SecureRootIdentity {
   if (!identity || typeof identity !== 'object') {
     throw secureError('SECURE_FS_INVALID_PATH')
   }
   const volumeSerialNumber = validatedUnsignedDecimal(
     (identity as SecureRootIdentity).volumeSerialNumber,
-    MAX_UINT32,
+    maxDeviceIdentity(platform),
   )
   const fileIndex = validatedUnsignedDecimal((identity as SecureRootIdentity).fileIndex, MAX_UINT64)
   if (!volumeSerialNumber || !fileIndex) throw secureError('SECURE_FS_INVALID_PATH')
@@ -155,12 +164,15 @@ function validateRootIdentity(identity: unknown): SecureRootIdentity {
  * boundary. A later junction substitution can resolve the same rootPath to a
  * different directory, but cannot forge this handle identity.
  */
-export function captureSecureRootIdentity(rootPath: string): SecureRootIdentity {
+export function captureSecureRootIdentity(
+  rootPath: string,
+  platform: NodeJS.Platform = process.platform,
+): SecureRootIdentity {
   try {
     const canonicalRoot = realpathSync.native(rootPath)
     const information = statSync(canonicalRoot, { bigint: true })
     if (!information.isDirectory() || information.dev < 0n || information.ino < 0n
-      || information.dev > MAX_UINT32 || information.ino > MAX_UINT64) {
+      || information.dev > maxDeviceIdentity(platform) || information.ino > MAX_UINT64) {
       throw secureError('SECURE_FS_INVALID_PATH')
     }
     return Object.freeze({
@@ -212,6 +224,7 @@ export function normalizeSecureRelativePath(relativePath: string): string {
 export function createSecureFileCapability(
   rootPath: string,
   requestedPath: string,
+  platform: NodeJS.Platform = process.platform,
 ): SecureFileCapability {
   if (
     typeof rootPath !== 'string'
@@ -232,14 +245,23 @@ export function createSecureFileCapability(
   ) {
     throw secureError('SECURE_FS_INVALID_PATH')
   }
+  // The capability wire format joins segments with a backslash, while POSIX
+  // allows a backslash inside a real file name: honouring it would silently
+  // resolve `a\b` to `a/b` and read or overwrite a different file.
+  if (platform !== 'win32' && relativePath.includes('\\')) {
+    throw secureError('SECURE_FS_INVALID_PATH')
+  }
   return Object.freeze({
     rootPath: root,
     relativePath: normalizeSecureRelativePath(relativePath),
-    rootIdentity: captureSecureRootIdentity(root),
+    rootIdentity: captureSecureRootIdentity(root, platform),
   })
 }
 
-function validateCapability(capability: SecureFileCapability): SecureFileCapability {
+function validateCapability(
+  capability: SecureFileCapability,
+  platform: NodeJS.Platform,
+): SecureFileCapability {
   if (
     !capability
     || typeof capability.rootPath !== 'string'
@@ -253,7 +275,7 @@ function validateCapability(capability: SecureFileCapability): SecureFileCapabil
   return {
     rootPath: path.resolve(capability.rootPath),
     relativePath: normalizeSecureRelativePath(capability.relativePath),
-    rootIdentity: validateRootIdentity(capability.rootIdentity),
+    rootIdentity: validateRootIdentity(capability.rootIdentity, platform),
   }
 }
 
@@ -566,7 +588,7 @@ export function createSecureFileSystem(
     contentBase64?: string,
     maxBytes?: number,
   ): Promise<HelperResponse> => {
-    const safeCapability = validateCapability(capability)
+    const safeCapability = validateCapability(capability, platform)
     const response = await invoke({
       operation,
       rootPath: safeCapability.rootPath,
@@ -610,7 +632,7 @@ export function createSecureFileSystem(
       if (typeof content !== 'string') throw secureError('SECURE_FS_INVALID_TEXT')
       const buffer = Buffer.from(content, 'utf8')
       if (buffer.length > MAX_TEXT_BYTES) throw secureError('SECURE_FS_FILE_TOO_LARGE')
-      const safeCapability = validateCapability(capability)
+      const safeCapability = validateCapability(capability, platform)
       const request: HelperRequest = {
         operation: 'write',
         rootPath: safeCapability.rootPath,
