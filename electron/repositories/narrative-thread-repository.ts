@@ -1,14 +1,14 @@
 import { getProjectDb } from '../database'
-import type {
-  NarrativeThreadEvent,
-  NarrativeThreadEventInput,
-  NarrativeThreadChapterContext,
-  NarrativeThreadPlanInput,
-  NarrativeThreadPlanRecord,
-  NarrativeThreadStatus,
-  NarrativeThreadView,
+import {
+  narrativeEvidenceInText,
+  type NarrativeThreadEvent,
+  type NarrativeThreadEventInput,
+  type NarrativeThreadChapterContext,
+  type NarrativeThreadPlanInput,
+  type NarrativeThreadPlanRecord,
+  type NarrativeThreadStatus,
+  type NarrativeThreadView,
 } from '../../src/shared/narrative-thread'
-import { narrativeEvidenceInText } from '../../src/shared/narrative-thread'
 
 function requireDb() {
   const db = getProjectDb()

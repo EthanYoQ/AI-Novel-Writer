@@ -311,12 +311,12 @@ function rowToMeta(
 }
 
 /** 本章打开着的重开稿（ADR-0024）；每章至多一份，由 reopen 与 create 在写事务里保证。 */
-function openReopenDraft(db: BetterSqlite3.Database, chapterNumber: number): { id: number; version: number; contentId: number } | null {
+function openReopenDraft(db: BetterSqlite3.Database, chapterNumber: number): { id: number; version: number } | null {
     const rows = db.prepare(`
-      SELECT id, version, status, content_id, source_dependencies FROM drafts
+      SELECT id, version, status, source_dependencies FROM drafts
       WHERE chapter_number = ? AND status IN (${WORKING_DRAFT_STATUS_SQL})
       ORDER BY version DESC, id DESC
-    `).all(chapterNumber) as Array<{ id: number; version: number; status: DraftStatus; content_id: number; source_dependencies: string }>
+    `).all(chapterNumber) as Array<{ id: number; version: number; status: DraftStatus; source_dependencies: string }>
     const reopened = rows
         .map(row => ({ row, sourceDependencies: parseDependencies(row.source_dependencies).dependencies }))
         .filter(({ sourceDependencies }) => reopenedFinal({ chapterNumber, sourceDependencies }) !== null)
@@ -328,7 +328,7 @@ function openReopenDraft(db: BetterSqlite3.Database, chapterNumber: number): { i
         sourceDependencies,
         dependenciesStale: !dependenciesAreCurrent(sourceDependencies, states, memo),
     }))?.row
-    return open ? { id: open.id, version: open.version, contentId: open.content_id } : null
+    return open ? { id: open.id, version: open.version } : null
 }
 
 /**
@@ -404,7 +404,7 @@ export class DraftRepository {
         return tx()
     }
 
-    static findOpenReopenDraft(chapterNumber: number, capturedDatabase?: BetterSqlite3.Database): { id: number; version: number; contentId: number } | null {
+    static findOpenReopenDraft(chapterNumber: number, capturedDatabase?: BetterSqlite3.Database): { id: number; version: number } | null {
         const db = capturedDatabase ?? getProjectDb()
         if (!db) throw new Error('PROJECT_NOT_OPEN')
         return openReopenDraft(db, chapterNumber)

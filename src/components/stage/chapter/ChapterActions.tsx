@@ -264,6 +264,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
     if (!useEditorStore.getState().tabs.some(candidate => candidate.id === tab.id)) navigate({ kind: 'chapter', chapterNumber })
   }
 
+  const deleteLabel = reopening ? text('放弃修改…', 'Discard changes…') : text('删除这一稿…', 'Delete this draft…')
   const moreGroups: MenuGroupSpec[] = [
     { id: 'chapter', items: [
       ...(editable ? [{ id: 'refine', label: text('直接修稿…', 'Revise directly…'), disabled: busy, onSelect: () => { setRefinePrompt(''); setAsk('refine') } }] : []),
@@ -274,7 +275,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
     ] },
     ...(stage === 'superseded' ? [] : [{ id: 'danger', tone: 'danger' as const, items: stage === 'final'
       ? [{ id: 'delete', label: text('删除正文…', 'Delete manuscript…'), disabled: busy, onSelect: () => void deleteManuscript() }]
-      : [{ id: 'delete', label: reopening ? text('放弃修改…', 'Discard changes…') : text('删除这一稿…', 'Delete this draft…'), disabled: busy, onSelect: () => setAsk('delete') }] }]),
+      : [{ id: 'delete', label: deleteLabel, disabled: busy, onSelect: () => setAsk('delete') }] }]),
   ]
   const more = <Menu label={text('更多操作', 'More actions')} icon={<MoreHorizontal size={16} aria-hidden />} groups={moreGroups} />
   const reviewAgain = <Button variant="secondary" disabled={busy} onClick={startReview}>{text('重新审稿', 'Review again')}</Button>

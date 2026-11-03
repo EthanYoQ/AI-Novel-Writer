@@ -1,10 +1,10 @@
 import type { DatabaseChannels } from './ipc-channels'
-import type {
-  NarrativeThreadEventType,
-  NarrativeThreadPlanInput,
-  NarrativeThreadView,
+import {
+  narrativeEvidenceInText,
+  type NarrativeThreadEventType,
+  type NarrativeThreadPlanInput,
+  type NarrativeThreadView,
 } from './narrative-thread'
-import { narrativeEvidenceInText } from './narrative-thread'
 import type { WritingLanguage } from './writing-language'
 import { writingLanguageText as promptLanguageText } from './writing-language'
 
