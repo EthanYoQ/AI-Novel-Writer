@@ -118,11 +118,22 @@ describe('替换定稿对后续内容的影响', () => {
     }])
   })
 
+  it('leaves out blueprints created after the replacement, but keeps older ones even when a later edit touched them', () => {
+    threeFinalChapters()
+    const db = getProjectDb()!
+    db.prepare("UPDATE blueprints SET created_at = datetime('now', '-1 hour') WHERE chapter_number > 3").run()
+    commitFinal(reopen(2, REVISED_TWO), 2, REVISED_TWO)
+    db.prepare("UPDATE blueprints SET created_at = datetime('now', '+1 hour') WHERE chapter_number = 5").run()
+    db.prepare("UPDATE blueprints SET updated_at = datetime('now', '+1 hour') WHERE chapter_number = 6").run()
+
+    expect(ReplacementImpactRepository.list()).toMatchObject([{ chapterNumber: 2, blueprintOnlyChapters: [4, 6] }])
+  })
+
   it('previews the same impact for an open reopened draft before it is finalized', () => {
     threeFinalChapters()
     const reopened = reopen(2, REVISED_TWO)
 
-    expect(ReplacementImpactRepository.preview(reopened)).toEqual({
+    expect(ReplacementImpactRepository.preview(reopened, REVISED_TWO)).toEqual({
       chapterNumber: 2,
       finalizationId: null,
       laterChapters: [3],
@@ -130,7 +141,15 @@ describe('替换定稿对后续内容的影响', () => {
       characters: ['林岚'],
       unmovedConfirmations: [{ threadTitle: '靴子里的地图', evidence: '她把地图藏进靴子。' }],
     })
-    expect(ReplacementImpactRepository.preview(DraftRepository.getFinalizedByChapter(3)!.id)).toBeNull()
+    expect(ReplacementImpactRepository.preview(DraftRepository.getFinalizedByChapter(3)!.id, ORIGINAL_TWO)).toBeNull()
+  })
+
+  it('previews the confirmations against the text the author is about to finalize, saved or not', () => {
+    threeFinalChapters()
+    const reopened = reopen(2, ORIGINAL_TWO)
+
+    expect(ReplacementImpactRepository.preview(reopened, '她把地图藏进靴子。')?.unmovedConfirmations)
+      .toEqual([{ threadTitle: '旧码头的钥匙', evidence: '林岚捡到钥匙。' }])
   })
 
   it('judges a later chapter by which final of the chapter it was written from, otherwise by time, and always counts a final without a receipt', () => {

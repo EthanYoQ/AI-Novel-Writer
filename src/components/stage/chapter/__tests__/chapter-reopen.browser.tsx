@@ -225,6 +225,10 @@ describe('重开稿定稿', () => {
     backend.state.preview = { ...impactOnThree('unused'), finalizationId: null }
     await mount()
     await openDraft(reopened.id)
+    const unsaved = `${REVISED}
+
+还没保存的一句。`
+    await act(async () => useEditorStore.getState().updateTabContent(activeTab()!.id, unsaved))
     await click('定稿')
 
     const dialog = page.getByRole('dialog', { name: '定稿第 3 章？' })
@@ -234,7 +238,7 @@ describe('重开稿定稿', () => {
     await expect.element(dialog.getByText('林舟、老周的当前状态来自后续章节，没有按新内容重算。')).toBeVisible()
     await expect.element(dialog.getByText('「匿名信」：他想起母亲说过，这座车站在三十年前就该拆了。')).toBeVisible()
     await expect.element(dialog.getByText('要再改，在本章点「重新打开修改」。')).toBeVisible()
-    expect(backend.writes('chapter:replacement-impact-preview').map(([draftId]) => draftId)).toEqual([reopened.id])
+    expect(backend.writes('chapter:replacement-impact-preview').map(([draftId, content]) => [draftId, content])).toEqual([[reopened.id, unsaved]])
   })
 
   it('普通草稿定稿：不预览替换影响，说明要再改就重新打开修改', async () => {
