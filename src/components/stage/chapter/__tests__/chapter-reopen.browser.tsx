@@ -241,6 +241,36 @@ describe('重开稿定稿', () => {
     expect(backend.writes('chapter:replacement-impact-preview').map(([draftId, content]) => [draftId, content])).toEqual([[reopened.id, unsaved]])
   })
 
+  it('关掉确认框改了正文再定稿：新预览回来之前不显示按旧正文算的影响', async () => {
+    const final = backend.addDraft({ status: 'finalized' })
+    const reopened = backend.addDraft({ status: 'revised', version: 2, content: REVISED, createdAt: '2026-10-13 20:30:00', ...reopenOf(final) })
+    backend.state.preview = { ...impactOnThree('unused'), finalizationId: null }
+    await mount()
+    await openDraft(reopened.id)
+    await click('定稿')
+    const dialog = page.getByRole('dialog', { name: '定稿第 3 章？' })
+    const oldLine = '第 4、6–8 章写于这次修改之前，第 9 章只有蓝图，可能和新内容不符，不会自动修改。'
+    await expect.element(dialog.getByText(oldLine)).toBeVisible()
+    await click('再看看')
+    await expect.element(dialog).not.toBeInTheDocument()
+
+    const edited = `${REVISED}
+
+又改了一句。`
+    await act(async () => useEditorStore.getState().updateTabContent(activeTab()!.id, edited))
+    let release!: () => void
+    backend.state.previewGate = new Promise(resolve => { release = resolve })
+    backend.state.preview = { ...impactOnThree('unused'), finalizationId: null, laterChapters: [], characters: [], unmovedConfirmations: [] }
+    await click('定稿')
+    await expect.element(dialog.getByText('替换正文。')).toBeVisible()
+    await vi.waitFor(() => expect(backend.writes('chapter:replacement-impact-preview').map(([, content]) => content)).toEqual([REVISED, edited]))
+    expect(dialog.element().textContent).not.toContain(oldLine)
+
+    await act(async () => release())
+    await expect.element(dialog.getByText('第 9 章只有蓝图，可能和新内容不符，不会自动修改。')).toBeVisible()
+    expect(dialog.element().textContent).not.toContain(oldLine)
+  })
+
   it('普通草稿定稿：不预览替换影响，说明要再改就重新打开修改', async () => {
     const draft = backend.addDraft({ status: 'revised' })
     await mount()

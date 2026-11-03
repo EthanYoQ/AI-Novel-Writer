@@ -74,6 +74,8 @@ export function createChapterBackend() {
     /** 主进程现算的替换影响（chapter:replacement-impacts），与重开稿定稿前的预览。 */
     impacts: [] as ReplacementImpact[],
     preview: null as ReplacementImpact | null,
+    /** 设了就等它完成再答复定稿预览，用来看答复回来之前确认框显示什么。 */
+    previewGate: null as Promise<void> | null,
     calls: [] as { channel: string; args: unknown[] }[],
     clock: 0,
   }
@@ -177,7 +179,11 @@ export function createChapterBackend() {
         return { success: true, created: true, draftId: reopened.id, version: reopened.version }
       }
       case 'chapter:replacement-impacts': return { success: true, impacts: state.impacts }
-      case 'chapter:replacement-impact-preview': return { success: true, impact: state.preview }
+      case 'chapter:replacement-impact-preview': {
+        const impact = state.preview
+        await state.previewGate
+        return { success: true, impact }
+      }
       case 'db:character-get-all': return [{ id: 1 }]
       case 'db:draft-authority-sequence': return { status: 'continuous', lastChapterNumber: 2, nextChapterNumber: 3, duplicateChapterNumbers: [], authorityFingerprint: 'e'.repeat(64) }
       case 'db:draft-get-finalized': return { chapterNumber: Number(args[0]) }
