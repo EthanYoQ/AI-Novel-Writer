@@ -27,7 +27,6 @@ function toolCall(args: Record<string, unknown>) {
   return `<tool_call>${JSON.stringify({ name: 'read_architecture', arguments: args })}</tool_call>`
 }
 
-/** A model that keeps reading while the last observation tells it where the next part starts. */
 function followContinuation(firstArgs: Record<string, unknown>) {
   fixture.response = async index => {
     if (index === 0) return toolCall(firstArgs)

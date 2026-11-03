@@ -574,7 +574,6 @@ function truncateResult(
   }
   const end = resultOffset + shown
   const total = resultOffset + content.length
-  // 续读要占一轮，回答作者还要再占一轮；不够两轮时不再让模型续读。
   if (roundsLeft < 2) {
     return content.slice(0, shown) + writingLanguageText(
       writingLanguage,
