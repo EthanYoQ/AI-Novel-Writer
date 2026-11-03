@@ -1298,9 +1298,9 @@ export interface ChapterLifecycleChannels {
     args: [expectedProjectPath: string]
     return: { success: true; impacts: ReplacementImpact[] } | { success: false; error: string }
   }
-  /** 定稿确认框的预览：这份打开着的重开稿定稿后会造成的影响；不是打开着的重开稿时 impact 为 null。 */
+  /** 定稿确认框的预览：这份打开着的重开稿按 content（作者将要定稿的正文，含未保存的修改）定稿后会造成的影响；不是打开着的重开稿时 impact 为 null。 */
   'chapter:replacement-impact-preview': {
-    args: [draftId: number, expectedProjectPath: string]
+    args: [draftId: number, content: string, expectedProjectPath: string]
     return: { success: true; impact: ReplacementImpact | null } | { success: false; error: string }
   }
 }

@@ -117,11 +117,12 @@ export function registerChapterLifecycleController(
   register('chapter:replacement-impact-preview', async (
     _event,
     draftId: number,
+    content: string,
     expectedProjectPath: string,
     projectRoot: string,
   ) => {
     assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
-    return { success: true, impact: ReplacementImpactRepository.preview(draftId) }
+    return { success: true, impact: ReplacementImpactRepository.preview(draftId, content) }
   })
 
   register('chapter:list-incomplete-deletions', async (

@@ -57,8 +57,10 @@ function impactOf(db: BetterSqlite3.Database, replacement: Replacement): Replace
   // 每章看它当前的正文：有定稿看定稿，没有就看最新的工作稿。
   const current = new Map<number, LaterDraft>()
   for (const draft of later) if (!current.has(draft.chapterNumber)) current.set(draft.chapterNumber, draft)
-  const blueprintChapters = db.prepare('SELECT chapter_number FROM blueprints WHERE chapter_number > ? ORDER BY chapter_number ASC')
-    .pluck().all(replacement.chapterNumber) as number[]
+  // 按 created_at 判断：角色名单同步会刷新所有蓝图的 updated_at，用它会把替换前写的蓝图漏掉。
+  const blueprintChapters = db.prepare(`SELECT chapter_number FROM blueprints WHERE chapter_number > ?
+    AND (? IS NULL OR NOT (julianday(created_at) > julianday(?))) ORDER BY chapter_number ASC`)
+    .pluck().all(replacement.chapterNumber, replacement.replacedAt, replacement.replacedAt) as number[]
   return {
     chapterNumber: replacement.chapterNumber,
     finalizationId: replacement.finalizationId,
@@ -97,13 +99,13 @@ export class ReplacementImpactRepository {
     })
   }
 
-  /** 定稿确认框的预览：这份打开着的重开稿定稿后会造成的影响。不是打开着的重开稿时返回 null。 */
-  static preview(draftId: number): ReplacementImpact | null {
+  /** 定稿确认框的预览：这份打开着的重开稿以 content 定稿后会造成的影响。定稿提交的是编辑器里的正文，未保存的修改也算。不是打开着的重开稿时返回 null。 */
+  static preview(draftId: number, content: string): ReplacementImpact | null {
     const db = requireDb()
     const draft = DraftRepository.getFull(draftId)
     const replaced = draft && isOpenReopenDraft(draft) ? reopenedFinal(draft) : null
     if (!draft || !replaced) return null
-    return impactOf(db, { chapterNumber: draft.chapterNumber, draftId, content: draft.content, finalizationId: null, replacedAt: null,
+    return impactOf(db, { chapterNumber: draft.chapterNumber, draftId, content, finalizationId: null, replacedAt: null,
       replacedDraftId: replaced.draftId })
   }
 }

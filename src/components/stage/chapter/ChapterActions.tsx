@@ -132,7 +132,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
   const editable = stage === 'draft' || stage === 'reviewed' || stage === 'merge' || stage === 'revised'
   // 正在写、改、审的重开稿：定稿时替换本章现在的定稿，删除它就是放弃修改。
   const reopening = editable && isOpenReopenDraft(meta)
-  const preview = useReplacementImpactPreview(meta.id, ask === 'finalize' && reopening)
+  const preview = useReplacementImpactPreview(meta.id, tab.content ?? '', ask === 'finalize' && reopening)
   // 定稿页上：本章已有一份打开的重开稿时，按钮直接去那一份，不再新建。
   const openReopenDraft = useDraftStore(s => stage === 'final' ? s.draftsByChapter[chapterNumber]?.find(isOpenReopenDraft) : undefined)
   // 本章已有定稿，这一稿却不是打开的重开稿（定稿之前留下的旧稿，或重开关系已过期）：不能直接定稿替换，只能以它重新打开本章（ADR-0024）。
