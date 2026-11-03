@@ -15,9 +15,10 @@ export function resolveNarrativeThreadDormantThreshold(value: unknown): number {
   )
 }
 
-/** 证据是否出现在定稿正文里：忽略空白后逐字包含。确认线索事件、筛模型候选、替换定稿时改挂确认都按这一条。 */
+/** 证据是否出现在定稿正文里：忽略空白后逐字包含，空证据不算。确认线索事件、筛模型候选、替换定稿时改挂确认都按这一条。 */
 export function narrativeEvidenceInText(evidence: string, content: string): boolean {
-  return content.replace(/\s+/gu, '').includes(evidence.replace(/\s+/gu, ''))
+  const needle = evidence.replace(/\s+/gu, '')
+  return needle.length > 0 && content.replace(/\s+/gu, '').includes(needle)
 }
 
 export interface NarrativeThreadPlanInput {
