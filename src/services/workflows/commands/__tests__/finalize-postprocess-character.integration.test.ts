@@ -983,7 +983,7 @@ describe('#552 换了「定稿后处理」的分工模型后重试角色状态�
         return 'characters'
       }),
     })
-    const invoke = window.aiNovelAPI.invoke
+    const invoke = window.aiNovelAPI!.invoke
     vi.stubGlobal('window', { aiNovelAPI: { invoke: (channel: string, ...args: unknown[]) => {
       if (channel === 'kb:import-text') kbImports++
       return invoke(channel, ...args)
@@ -1055,7 +1055,8 @@ it('#420 角色状态断流后，用户重试每次只发一次新请求，失�
  expect(initial.steps.character_cards.error).toBe('FINALIZATION_GENERATION_ARTIFACT_REQUIRED')
  const failedAgain = await run(true)
  expect(failedAgain.steps.character_cards.ok).toBe(false)
- expect(failedAgain.steps.character_cards.error).toBe('FINALIZATION_GENERATION_INCOMPLETE')
+ // #552：作者重试另开运行，失败时记下的错误码与首跑相同。
+ expect(failedAgain.steps.character_cards.error).toBe('FINALIZATION_GENERATION_ARTIFACT_REQUIRED')
  expect(characterCalls).toBe(2)
  const repaired = await run(true)
  expect(repaired.steps.character_cards.ok).toBe(true)

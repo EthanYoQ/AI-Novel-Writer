@@ -37,7 +37,11 @@ export interface FinalizationGenerationRecovery {
 }
 export interface FinalizationGenerationChannels {
   'finalization-generation:read': { args: [{ slot: FinalizationGenerationSlot }]; return: FinalizationGenerationRecovery | null }
-  'finalization-generation:begin': { args: [{ slot: FinalizationGenerationSlot; modelId: string; parentRootActionId?: string }]; return: FinalizationGenerationRecovery }
+  /**
+   * retryRunId：作者点重试时看到的那次运行。它没有留下可以提交的结果时，主进程在同一 root 另开运行，
+   * 按 modelId（作者现在的分工模型）重新生成；有可提交的结果时沿用它。
+   */
+  'finalization-generation:begin': { args: [{ slot: FinalizationGenerationSlot; modelId: string; parentRootActionId?: string; retryRunId?: string }]; return: FinalizationGenerationRecovery }
   /** recoverFrom：作者显式重试时，以最近一次未成功尝试的 attemptId 为幂等键重新请求一次。 */
   'finalization-generation:execute': { args: [{ handle: MainGenerationRunHandle; retryOf?: FinalizedCharacterArtifact; recoverFrom?: string }]; return: MainGenerationExecuteReceipt }
   'finalization-generation:commit': { args: [{ handle: MainGenerationRunHandle; artifact: FinalizedCharacterArtifact }]; return: FinalizationGenerationEffect }

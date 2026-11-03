@@ -675,6 +675,43 @@ it('显式重试耗尽原 root 的时间预算后 begin 不得换根绕过', asy
  expect(f.dispatch).toHaveBeenCalledTimes(3)
 })
 
+it('#552 作者重试三次坏结果的运行：同 root 另开运行，给与首跑相同的 3 次请求；重复 begin 不再开第三个运行', async () => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false), joined(false), joined(false), single])
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
+ const retry = f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: f.handle.runId })
+ expect(retry.view.handle.runId).not.toBe(f.handle.runId)
+ expect(retry.view.handle.rootActionId).toBe(f.handle.rootActionId)
+ expect(f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: f.handle.runId }).view.handle).toEqual(retry.view.handle)
+ const fixed = await f.owner.executeFinalizationGeneration({ handle: retry.view.handle })
+ expect(f.dispatch).toHaveBeenCalledTimes(6)
+ expect(f.owner.commitFinalizationGeneration({ handle: retry.view.handle, artifact: f.artifactOf(fixed) })).toMatchObject({ success: true, applied: 1 })
+ expect(f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: retry.view.handle.runId }).effect).toMatchObject({ applied: 1 })
+ expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+})
+
+it('#552 作者重试有可提交结果的运行：沿用原运行，不另发请求', async () => {
+ const f = await generated('character_cards')
+ f.db.exec("CREATE TRIGGER reject_character BEFORE UPDATE OF cs_location ON characters BEGIN SELECT RAISE(ABORT,'synthetic-write-failure'); END")
+ expect(() => f.owner.commitFinalizationGeneration(f.commitRequest)).toThrow('synthetic-write-failure')
+ expect(f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: f.commitRequest.handle.runId }).view.handle).toEqual(f.commitRequest.handle)
+ expect(f.dispatch).toHaveBeenCalledTimes(1)
+})
+
+it.each(['elapsed', 'blocked'] as const)('#552 作者重试时原 root 已不能再发请求（%s）：报出原因，不换根也不另开运行', async mode => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false)])
+ if (mode === 'elapsed') f.db.prepare('UPDATE generation_roots SET active_elapsed_ms=? WHERE root_action_id=?').run(f.result.run.ledger!.policy.maxActiveElapsedMs, f.handle.rootActionId)
+ else f.db.prepare("UPDATE generation_roots SET blocked_code='ROOT_BUDGET_EXHAUSTED' WHERE root_action_id=?").run(f.handle.rootActionId)
+ expect(() => f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: f.handle.runId })).toThrow('ROOT_BUDGET_EXHAUSTED')
+ expect(f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
+})
+
+it('#552 retryRunId 不是当前运行时按普通恢复处理，不另开运行', async () => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false)])
+ expect(f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: 'not-the-current-run' }).view.handle).toEqual(f.handle)
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
+})
+
 it.each(['stale-target', 'forged-hash', 'discarded', 'source-changed', 'root-pending', 'blocked'] as const)('显式修正拒绝 %s 且不发新请求', async mode => {
  const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false)])
  let retryOf = f.artifactOf(f.result)
