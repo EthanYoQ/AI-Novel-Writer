@@ -271,6 +271,37 @@ describe('重开稿定稿', () => {
     expect(dialog.element().textContent).not.toContain(oldLine)
   })
 
+  it('影响预览回来之前不能确认定稿；预览读不出来时照常可以定稿', async () => {
+    const final = backend.addDraft({ status: 'finalized' })
+    const reopened = backend.addDraft({ status: 'revised', version: 2, content: REVISED, createdAt: '2026-10-13 20:30:00', ...reopenOf(final) })
+    backend.state.preview = { ...impactOnThree('unused'), finalizationId: null }
+    let release!: () => void
+    backend.state.previewGate = new Promise(resolve => { release = resolve })
+    await mount()
+    await openDraft(reopened.id)
+    await click('定稿')
+    const dialog = page.getByRole('dialog', { name: '定稿第 3 章？' })
+    const confirm = dialog.getByRole('button', { name: '确认定稿', exact: true })
+    await expect.element(dialog.getByText('替换正文。')).toBeVisible()
+    await vi.waitFor(() => expect(backend.writes('chapter:replacement-impact-preview')).toHaveLength(1))
+    await expect.element(confirm).toBeDisabled()
+
+    await act(async () => release())
+    await expect.element(dialog.getByText('后面的内容不会跟着改')).toBeVisible()
+    await expect.element(confirm).toBeEnabled()
+    await click('再看看')
+
+    let fail!: (error: Error) => void
+    backend.state.previewGate = new Promise((_resolve, reject) => { fail = reject })
+    await act(async () => useEditorStore.getState().updateTabContent(activeTab()!.id, `${REVISED}\n\n又改了一句。`))
+    await click('定稿')
+    await vi.waitFor(() => expect(backend.writes('chapter:replacement-impact-preview')).toHaveLength(2))
+    await expect.element(confirm).toBeDisabled()
+    await act(async () => fail(new Error('IPC_UNAVAILABLE')))
+    await expect.element(confirm).toBeEnabled()
+    expect(dialog.element().textContent).not.toContain('后面的内容不会跟着改')
+  })
+
   it('普通草稿定稿：不预览替换影响，说明要再改就重新打开修改', async () => {
     const draft = backend.addDraft({ status: 'revised' })
     await mount()
