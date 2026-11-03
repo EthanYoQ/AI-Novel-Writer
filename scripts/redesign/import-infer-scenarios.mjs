@@ -53,7 +53,6 @@ const ENDPOINT_RECOVERY = '【导入推演受限补卡校正】'
 
 function danglingInferenceReply(prompt) {
   if (prompt.includes(ENDPOINT_RECOVERY)) {
-    assert.match(prompt, /只新增这些缺失角色 name：\["林探"\]/u, '补卡只请求被引用最多的林探')
     return JSON.stringify({ characterCards: [extraCard('林探', 'supporting', '前巡捕搭档')] })
   }
   if (prompt.includes('逆向推演出这部小说的完整设定体系')) return JSON.stringify(INFERRED_DANGLING)
@@ -196,6 +195,9 @@ export const IMPORT_INFER_SCENARIOS = {
     fake.replyReview(danglingInferenceReply)
     const dialog = await openAuthorImport(app, page, EMPTY_BOOK, manuscript(roots, [[1, '匿名信'], [2, '茶馆'], [3, '河对岸']]))
     await confirmAndWait(page, dialog, 3)
+    const recoveries = fake.chats.map(chat => chat.messages.map(message => message.content).join('\n')).filter(prompt => prompt.includes(ENDPOINT_RECOVERY))
+    assert.equal(recoveries.length, 1, '补卡只请求一次')
+    assert.match(recoveries[0], /只新增这些缺失角色 name：\["林探"\]/u, '补卡只请求被引用最多的林探')
     await runSheet.tab(page, '诊断').click()
     const logLine = runSheet.sheet(page).locator('.run-log-line').filter({ hasText: '已丢弃 1 条关系' })
     await logLine.scrollIntoViewIfNeeded()
