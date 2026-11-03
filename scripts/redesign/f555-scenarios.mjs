@@ -43,14 +43,14 @@ async function finished(context, shotName, before, previous) {
   const run = await untilImportEnds(context, previous)
   const measured = readDb(context, db => ({
     run,
-    blueprints: db.prepare('SELECT COUNT(*) FROM blueprints WHERE chapter_number BETWEEN 1 AND ?').pluck().get(CHAPTERS),
+    blueprints: db.prepare('SELECT purpose FROM blueprints WHERE chapter_number BETWEEN 1 AND ? ORDER BY chapter_number').pluck().all(CHAPTERS),
     runsPerSlot: runsPerSlot(db),
   }))
   assert.equal(run.status, 'completed', JSON.stringify(run))
   await runSheet.lastRun(context.page).filter({ hasText: '小说拆解与仿写' }).getByText(/已完成|Complete/).waitFor({ state: 'visible' })
   await context.page.waitForTimeout(400)
   await context.shoot(shotName)
-  assert.equal(measured.blueprints, CHAPTERS)
+  assert.deepEqual(measured.blueprints, Array(CHAPTERS).fill('推进灯塔线索'), '每一章都是导入写入的蓝图，不是预置样例')
   const retried = measured.runsPerSlot.filter(slot => slot.runs > 1)
   assert.equal(retried.length, 1, `只有中断的 slot 重开：${JSON.stringify(measured.runsPerSlot)}`)
   assert.equal(retried[0].runs, 2)
