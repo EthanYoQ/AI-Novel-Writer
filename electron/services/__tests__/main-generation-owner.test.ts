@@ -26,9 +26,12 @@ import { sanitizeDraftText, DRAFT_VISIBLE_TEXT_VERSION, type DraftVisibleTextVer
 import { DRAFT_RECONCILE_PURPOSE, parseDraftReconciliation, renderDraftReconciliationBlock } from '../../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock } from '../../../src/shared/draft-short-outline'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
 import { RevisionRepository } from '../../repositories/revision-repository'
 import { DraftRepository } from '../../repositories/draft-repository'
+import { reopenFinalizedChapter } from '../chapter-reopen-service'
+import { GenerationDraftEffects } from '../generation-draft-effects'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import { getProjectDb, getCurrentProjectPath } from '../../database'
@@ -2551,6 +2554,60 @@ describe('main draft persistence and batch lineage', () => {
     expect(DraftRepository.getFull(replacement)?.content).toBe('作者创建的新版本。')
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
+  it('refuses to reopen a chapter written by an unfinished batch and keeps the batch resumable', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
+
+    expect(() => reopenFinalizedChapter('project', { chapterNumber: 1 })).toThrow('CHAPTER_REOPEN_BATCH_UNFINISHED')
+    expect(f.owner.readBatch(batch.batchId)).toMatchObject({ nextChapterNumber: 2 })
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+  })
+  it('reopens a chapter from an unfinished batch that can no longer resume because the author edited and finalized it', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request), edited = '作者修改后定稿的正文。'
+    DraftRepository.updateContent(saved.id, edited, edited.length)
+    FinalizationRepository.commit({ finalizationId: 'edited-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: edited, contentHash: textHash(edited), contentRevision: 1, targetFileName: '第一章.txt' })
+    expect(() => f.owner.readBatch(batch.batchId)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+
+    expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
+  })
+  it('refuses to reopen when reading an unfinished batch fails unexpectedly, instead of skipping the batch', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
+    const broken = vi.spyOn(GenerationDraftEffects.prototype, 'readBatchHistory').mockImplementation(() => { throw new TypeError('unexpected') })
+    cleanups.push(() => broken.mockRestore())
+
+    expect(() => reopenFinalizedChapter('project', { chapterNumber: 1 })).toThrow('unexpected')
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+  })
+  it('reopens a chapter written by a finished batch', async () => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
+
+    expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
+  })
   it.each(['draft_review', 'auto_finalize'] as const)('reads revised finalization without crediting the original %s batch', async mode => {
     const f = drafting()
     const batch = f.owner.beginBatch({ mode, range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
@@ -2588,6 +2645,7 @@ describe('main draft persistence and batch lineage', () => {
     const older = '作者更早写下的第一章。'
     f.db.prepare('INSERT INTO contents(id,body) VALUES(9001,?)').run(older)
     f.db.prepare("INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count) VALUES(9001,1,0,'draft','write',9001,10)").run()
+    registerAsReopenDraft(f.db, 9001)
     FinalizationRepository.commit({ finalizationId: 'older-final', draftId: 9001, chapterNumber: 1,
       chapterTitle: '第一章', content: older, contentHash: textHash(older), contentRevision: 1, targetFileName: '第一章 旧.txt' })
 
@@ -2605,7 +2663,10 @@ describe('main draft persistence and batch lineage', () => {
     FinalizationRepository.commit({ finalizationId: 'revised-finalization', draftId: saved.id, chapterNumber: 1,
       chapterTitle: '第一章', content: revised, contentHash: textHash(revised), contentRevision: 1, targetFileName: '第一章.txt' })
     const rewrite = '林岚在城门口停下，回头看了一眼灯塔。'
-    const replacement = DraftRepository.create({ chapterNumber: 1, source: 'write', content: rewrite, wordCount: 18 })
+    const reopenedDraft = FinalizationRepository.reopen({ chapterNumber: 1 })
+    if (!reopenedDraft.success) throw new Error('reopen failed')
+    const replacement = reopenedDraft.draftId
+    DraftRepository.updateContent(replacement, rewrite, 18)
     FinalizationRepository.commit({ finalizationId: 'replacing-finalization', draftId: replacement, chapterNumber: 1,
       chapterTitle: '第一章', content: rewrite, contentHash: textHash(rewrite), contentRevision: 1, targetFileName: '第一章 新.txt' })
 

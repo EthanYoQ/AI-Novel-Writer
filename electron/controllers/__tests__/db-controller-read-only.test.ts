@@ -17,6 +17,7 @@ import { closeProjectDatabase } from '../../database'
 import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { DraftRepository } from '../../repositories/draft-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { reopenWithContent } from '../../../test/helpers/reopened-draft'
 import { projectAccess } from '../../services/project-access'
 import { registerDatabaseController } from '../db-controller'
 
@@ -39,7 +40,9 @@ afterEach(() => {
 })
 
 function finalizedDraft(content: string): number {
-  const draftId = DraftRepository.create({ chapterNumber: 1, source: 'write', content, wordCount: content.length })
+  const draftId = DraftRepository.getFinalizedByChapter(1)
+    ? reopenWithContent(1, content)
+    : DraftRepository.create({ chapterNumber: 1, source: 'write', content, wordCount: content.length })
   FinalizationRepository.commit({
     finalizationId: randomUUID(),
     draftId,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { reopenFinalizedChapter } from '../../../services/chapter-reopen'
 import { ipc } from '../../../services/ipc-client'
 import { countDraftUnits } from '../../../shared/draft-units'
 import type { DraftStatus } from '../../../shared/draft-status'
@@ -147,9 +148,16 @@ export function useVersionHistory(projectKey: string) {
    * 用这一稿的正文新建一稿（回滚草稿），原有各稿都保留；正文为空的旧稿照样回退成一份空稿。没有新建（会话已切换、旧稿不存在）时返回 null；
    * 已新建时返回数据库分配的版本号，重读列表失败、读不到版本号时 version 为 null。
    */
-  const createRollbackDraft = useCallback(async (versionId: number): Promise<{ version: number | null } | null> => {
+  const createRollbackDraft = useCallback(async (versionId: number, finalized: boolean): Promise<{ version: number | null; created: boolean } | null> => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey) || selectedChapter === null) return null
+    if (finalized) {
+      const reopened = await reopenFinalizedChapter(projectSession, { chapterNumber: selectedChapter, initialDraftId: versionId })
+      if (!reopened.success) throw new Error(reopened.error)
+      if (!isProjectSessionCurrent(projectSession)) return null
+      await loadVersions(selectedChapter)
+      return { version: reopened.version, created: reopened.created }
+    }
     const content = (await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', versionId, projectSession.projectPath))?.content
     if (!isProjectSessionCurrent(projectSession) || content === undefined) return null
     const nextVersion = await ipc.invokeWithProjectSession(projectSession, 'db:draft-next-version', selectedChapter, projectSession.projectPath)
@@ -165,7 +173,7 @@ export function useVersionHistory(projectKey: string) {
     if (!isProjectSessionCurrent(projectSession)) return null
     // 版本号在数据库事务里分配，估算值可能被同时写入的稿占掉，以刷新后的列表为准。
     const refreshed = await loadVersions(selectedChapter)
-    return { version: refreshed.find(version => version.id === created.id)?.version ?? null }
+    return { version: refreshed.find(version => version.id === created.id)?.version ?? null, created: true }
   }, [loadVersions, projectKey, selectedChapter, text])
 
   const currentSession = projectSessionContextFromProject(currentProject)

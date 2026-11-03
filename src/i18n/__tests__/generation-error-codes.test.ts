@@ -77,6 +77,8 @@ const COVERED_PREFIXES = [
   'IMPORT_RUN_',
   // 定稿、实体稿、修订、恢复稿、连续性摘要、一致性豁免、后处理与章节删除（#474 B5）。
   'CHAPTER_DELETE_',
+  'CHAPTER_REOPEN_',
+  'CHAPTER_FINALIZED_',
   'FINALIZATION_COMMIT_',
   'FINALIZATION_EXPORT_',
   'FINALIZATION_SNAPSHOT_',
@@ -534,6 +536,7 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'CHAPTER_DELETE_RECEIPT_CORRUPT',
     'CHAPTER_DELETE_REQUEST_MISMATCH',
     'CHAPTER_DELETE_TARGET_MISMATCH',
+    'CHAPTER_REOPEN_REQUEST_INVALID',
     // #474 B5：定稿快照的形状、会话与哈希，定稿收据与发布记录、导出快照的一致性，实体稿目标路径的边界。
     // 界面从冻结的编辑器快照与库内收据构造这些请求；碰到说明代码缺陷或作品库、正文文件夹被外部改坏。
     'FINALIZATION_COMMIT_CHAPTER_MISMATCH',

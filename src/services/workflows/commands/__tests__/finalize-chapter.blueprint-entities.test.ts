@@ -170,6 +170,8 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
           }
         case 'db:blueprint-update-notes':
           return { success: true, updated: true }
+        case 'db:draft-list':
+          return []
         case 'db:character-roster-read':
           return { status: 'empty', revision: 0, entries: [] }
         default:

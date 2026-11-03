@@ -23,6 +23,8 @@ export interface DraftMeta {
   createdAt: string
   updatedAt?: string
   source: 'write' | 'rewrite'
+  sourceDependencies?: DB_DraftMeta['sourceDependencies']
+  dependenciesStale?: boolean
 
   // 为了尽量不改 UI，我们伪造这两个字段
   filePath: string

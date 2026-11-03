@@ -62,6 +62,21 @@ export class GenerationDraftEffects {
       FROM generation_attempts WHERE ${batchOf} IS NOT NULL ORDER BY rowid`).all() as (AttemptRow & { batch_id: string })[]
     return { commits: groupByBatch(rows), unreadable }
   }
+  unfinishedBatchChapters(projectId: string): ReadonlySet<number> {
+    const { commits } = this.listedBatchCommits()
+    const roots = this.db.prepare(`SELECT run_id FROM generation_runs WHERE json_valid(binding_json)
+      AND json_extract(binding_json,'$.sourceManifest.batchIntent') IS NOT NULL`).pluck().all() as string[]
+    const chapters = new Set<number>()
+    for (const batchId of roots) {
+      try {
+        const history = this.readBatchHistory(batchId, projectId, commits)
+        if (history.sourceCurrent && history.nextChapterNumber !== null) for (const chapter of history.completedChapters) chapters.add(chapter.chapterNumber)
+      } catch (error) {
+        if (!(error instanceof Error && error.message.startsWith('GENERATION_'))) throw error
+      }
+    }
+    return chapters
+  }
   private verifiedCommit(row: AttemptRow) {
     const usage = JSON.parse(row.usage_receipt_json), stored = usage.draftCommit as StoredDraftCommit | undefined
     if (!stored) return null

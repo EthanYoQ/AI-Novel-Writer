@@ -11,6 +11,7 @@ import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import { readMainGenerationPolicy } from '../main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
 
 import { getProjectDb } from '../../database'
 import { textHash } from '../../repositories/generation-run-repository'
@@ -167,6 +168,7 @@ describe('finalized proposal immutable evidence and live write authority', () =>
   it('hides an old chapter finalization and rejects direct read, approve, and cancel without returning candidates', async () => {
     const f = await occurrence(), batch = f.characters.stage(f.source())
     f.db.exec("INSERT INTO contents(id,body) VALUES(2,'新定稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,2,'draft',2,3)")
+    registerAsReopenDraft(f.db, 2)
     FinalizationRepository.commit({ finalizationId: 'finalized-2', draftId: 2, chapterNumber: 1, chapterTitle: '新北塔',
       content: '新定稿', contentHash: textHash('新定稿'), contentRevision: 1, targetFileName: '第一章-新版.txt' })
     const decision = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'stale-approve',

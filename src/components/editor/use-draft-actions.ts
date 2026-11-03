@@ -416,10 +416,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       const guard = await guardRepairPostProcess(meta.chapterNumber, projectKey, projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
       if (!guard.ok) {
-        const shown = useLocaleStore.getState().locale
-        toast.error(shown === 'zh-CN'
-          ? displayedErrorMessage(shown, guard.message, text('无法执行修复', 'Could not run the repair.'))
-          : text('无法执行修复', 'Could not run the repair.'))
+        toast.error(displayedErrorMessage(useLocaleStore.getState().locale, guard.message, text('无法执行修复', 'Could not run the repair.')))
         return
       }
       const { createRepairFinalizeWorkflow } = await import('../../services/workflows/chapter-workflow')

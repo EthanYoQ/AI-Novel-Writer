@@ -27,6 +27,7 @@ import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 import { listDocuments, readDocumentCopy } from '../../knowledge-base'
 import { exportPortableProject } from '../project-archive-service'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = []
@@ -983,6 +984,7 @@ it('有定稿收据的旧项目复制导入后，替换那一章再写稿、导�
   const replacement = '第八章新稿：作者回退后重新定稿。'
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(40, replacement)
   db.prepare("INSERT INTO drafts(id,chapter_number,version,content_id,status) VALUES(40,8,2,40,'draft')").run()
+  registerAsReopenDraft(db, 40)
   FinalizationRepository.commit({ finalizationId: 'replacement-finalization', draftId: 40, chapterNumber: 8,
     chapterTitle: '第八章', content: replacement, contentHash: createHash('sha256').update(replacement).digest('hex'),
     contentRevision: 1, targetFileName: '第八章-新.md' })

@@ -44,14 +44,9 @@ function finalize(draftId: number): void {
 }
 
 function rollback(chapterNumber: number, fromDraftId: number): number {
-  const content = DraftRepository.getFull(fromDraftId)!.content
-  return DraftRepository.create({
-    chapterNumber,
-    version: DraftRepository.getNextVersion(chapterNumber),
-    source: 'rewrite',
-    content,
-    wordCount: countDraftUnits(content),
-  })
+  const reopened = FinalizationRepository.reopen({ chapterNumber, initialDraftId: fromDraftId })
+  if (!reopened.success) throw new Error(reopened.error)
+  return reopened.draftId
 }
 
 function twoFinalizedChapters() {

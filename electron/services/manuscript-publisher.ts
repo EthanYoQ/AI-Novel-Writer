@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { retryWhileWindowsFileBusy } from '../utils/windows-file-busy-retry'
+
 const WINDOWS_ILLEGAL_FILE_NAME_CHARS = /[<>:"/\\|?*]/g
 const WINDOWS_RESERVED_FILE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 
@@ -132,6 +134,24 @@ export async function removePublishedManuscript(
   const target = resolveStoredManuscriptTarget(projectRoot, targetFileName)
   if (!fs.existsSync(target.absolutePath)) return
   fs.unlinkSync(target.absolutePath)
+}
+
+export function removeManuscriptIfUnchanged(
+  projectRoot: string,
+  targetFileName: string,
+  published: readonly string[],
+): 'removed' | 'missing' | 'changed' {
+  const target = resolveStoredManuscriptTarget(projectRoot, targetFileName)
+  try {
+    return retryWhileWindowsFileBusy(() => {
+      if (!published.includes(fs.readFileSync(target.absolutePath, 'utf8'))) return 'changed'
+      fs.unlinkSync(target.absolutePath)
+      return 'removed'
+    })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
+    throw error
+  }
 }
 
 export const manuscriptPublisher = {

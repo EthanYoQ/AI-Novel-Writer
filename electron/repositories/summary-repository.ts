@@ -321,6 +321,11 @@ function readFinalizedSourceFromDb(
   }
 }
 
+function isAuthoritativeSource(db: BetterSqlite3.Database, source: FinalizedSourceIdentity): boolean {
+  const current = readFinalizedSourceFromDb(db, source.draftId)
+  return current !== null && sameSource(current.source, source)
+}
+
 interface CharacterStateCandidateRow {
   id: number
   draftId: number
@@ -448,10 +453,11 @@ export class SummaryRepository {
           const value = update.currentState[field]!
           const decision = decideDerivedPatch(actual, { projectId: context.projectId, epoch: context.epoch, characterId: update.characterId, field, value, valueHash: sha256(value),
             baseFieldRevision: base.revision, baseValueHash: base.valueHash, baseProvenance: base.provenance,
-            source: context.source, sourceOrder: context.sourceOrder }, { source: current.source, order: current.sourceOrder, originProjectId })
+            source: context.source, sourceOrder: context.sourceOrder }, { source: current.source, order: current.sourceOrder, originProjectId,
+            laterOwnerAuthoritative: actual.provenance.kind === 'derived' && isAuthoritativeSource(db, actual.provenance.source) })
           if (decision === 'source-conflict') throw new Error('FINALIZED_CHARACTER_SOURCE_CONFLICT')
           if (decision === 'field-conflict') throw new Error('FINALIZED_CHARACTER_FIELD_CONFLICT')
-          if (decision === 'already-applied') { receipt.unchanged++; continue }
+          if (decision === 'already-applied' || decision === 'later-source-owns') { receipt.unchanged++; continue }
           if (decision === 'proposal-required') {
             if (value === actual.value) { receipt.unchanged++; continue }
             receipt.candidates.push({ candidateKey: characterStateCandidateKey(context.source, update.characterId, field, value), source: structuredClone(context.source),

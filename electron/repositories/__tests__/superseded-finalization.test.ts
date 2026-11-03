@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb } from '../../database'
 import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
+import { reopenWithContent } from '../../../test/helpers/reopened-draft'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import { FinalizationService } from '../../services/finalization-service'
 import { DraftRepository } from '../draft-repository'
@@ -53,7 +54,7 @@ function finalizedCountsByChapter(): Record<number, number> {
 function replacedChapter() {
   const first = write(1, '第一章初稿：雾从海面上升起来。')
   finalize(first)
-  const second = write(1, '第一章新稿：钟声提前了一刻。')
+  const second = reopenWithContent(1, '第一章新稿：钟声提前了一刻。')
   finalize(second, '新雾钟')
   return { first, second }
 }
@@ -95,7 +96,7 @@ describe('同章再定稿把旧定稿降为 superseded', () => {
     const service = new FinalizationService({ publisher: { publish: async input => { published.push(input.targetFileName) } } })
     const first = write(1, '第一章初稿：雾从海面上升起来。')
     const stale = finalize(first)
-    finalize(write(1, '第一章新稿：钟声提前了一刻。'), '新雾钟')
+    finalize(reopenWithContent(1, '第一章新稿：钟声提前了一刻。'), '新雾钟')
 
     const result = await service.retry({ projectRoot, finalizationId: stale.finalizationId })
 

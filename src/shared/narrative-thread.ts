@@ -15,6 +15,11 @@ export function resolveNarrativeThreadDormantThreshold(value: unknown): number {
   )
 }
 
+export function narrativeEvidenceInText(evidence: string, content: string): boolean {
+  const needle = evidence.replace(/\s+/gu, '')
+  return needle.length > 0 && content.replace(/\s+/gu, '').includes(needle)
+}
+
 export interface NarrativeThreadPlanInput {
   title: string
   type: string

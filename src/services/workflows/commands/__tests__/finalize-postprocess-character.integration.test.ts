@@ -15,6 +15,7 @@ import { closeProjectDatabase, getProjectDb } from '../../../../../electron/data
 import { openCanonicalProjectFixture as initProjectDatabase } from '../../../../../test/helpers/canonical-project-fixture'
 import { CharacterRepository } from '../../../../../electron/repositories/character-repository'
 import { CharacterRosterRepository, commitCharacterIdentities, refreshCharacterIdentityProjection } from '../../../../../electron/repositories/character-roster-repository'
+import { DraftRepository } from '../../../../../electron/repositories/draft-repository'
 import { PostProcessRepository } from '../../../../../electron/repositories/post-process-repository'
 import { ProjectCoreRepository } from '../../../../../electron/repositories/project-core-repository'
 import {
@@ -53,6 +54,8 @@ let onCommit: ((stepKey: string | undefined, nth: number) => void) | undefined
 const commitsByStep = new Map<string | undefined, number>()
 let actualOwner: ReturnType<typeof createMainGenerationOwner> | undefined
 const stageByRun = new Map<string, string>()
+const cleanupRequests: Array<[string, unknown]> = []
+let replacedManuscriptEdited = false
 function owner() {
   if (actualOwner) return actualOwner
   const db = getProjectDb()!
@@ -218,6 +221,14 @@ function installRealRepositoryIpc(): void {
             return false
           case 'db:draft-get-latest':
             return null
+          case 'db:draft-list':
+            return DraftRepository.listByChapter(Number(args[0]))
+          case 'chapter:remove-replaced-knowledge':
+          case 'chapter:remove-replaced-manuscripts':
+            cleanupRequests.push([channel, args[0]])
+            return channel === 'chapter:remove-replaced-manuscripts' && replacedManuscriptEdited
+              ? { success: false, error: 'FINALIZATION_REPLACED_MANUSCRIPT_KEPT:["第3章.txt"]' }
+              : { success: true }
           case 'kb:import-text':
             return { success: true, chunkCount: 1, docId: 'doc-1' }
           case 'db:finalization-link-knowledge-document':
@@ -343,7 +354,7 @@ beforeEach(() => {
   const cache = path.resolve('.runtime/.cache/novel-quality-modernization/s09b-finalize-consumer')
   fs.mkdirSync(cache, { recursive: true })
   projectPath = fs.mkdtempSync(path.join(cache, 'case-'))
-  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; characterExecuteFailures = 0; changeFieldBeforeCommit = false; onCommit = undefined; commitsByStep.clear()
+  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; cleanupRequests.length = 0; replacedManuscriptEdited = false; characterExecuteFailures = 0; changeFieldBeforeCommit = false; onCommit = undefined; commitsByStep.clear()
   initProjectDatabase(projectPath)
   const db = CharacterRosterRepository.read()
   expect(db.status).toBe('empty')
@@ -723,10 +734,15 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(nextChapterPrompt).not.toContain('finalized#2:evidence-not-locatable')
   })
 
-  it('rejects an older Chinese chapter retry after a newer character state is committed', async () => {
+  it('keeps the newer chapter fields when an older Chinese chapter retries after a newer character state is committed', async () => {
     workflowContext.writingLanguage = 'zh-CN'
-    insertFinalizedDraft(7, 2)
+    const chapterTwo = '第二章定稿：林岚准备交出黄铜钥匙。'
+    insertFinalizedDraft(7, 2, chapterTwo)
     insertFinalizedDraft(8, 3)
+    const sourceTwo = SummaryRepository.readFinalizedSource(7)
+    if (sourceTwo.status !== 'valid') throw new Error('expected valid finalized source')
+    SummaryRepository.saveFinalizedContinuity({ draftId: 7, chapterNumber: 2, chapterNotes: '第二章要点', facts: [],
+      projectionGeneration: sourceTwo.snapshot.projectionGeneration, source: sourceTwo.snapshot.source })
     const chapterThreeDb = getProjectDb()!
     chapterThreeDb.transaction(() => freezeFinalizedCharacterSnapshot(chapterThreeDb, { draftId: 8, finalizationId: 'finalization-8', chapterNumber: 3,
       contentHash: createHash('sha256').update('Chapter 3 finalized content').digest('hex') }))()
@@ -746,15 +762,12 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       }],
     })
 
-    const status = await command('第二章定稿：林岚准备交出黄铜钥匙。', {
+    const status = await command(chapterTwo, {
       onlyFailed: true,
       stepKeys: ['character_cards'],
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
-    expect(status.steps.character_cards).toMatchObject({
-      ok: false,
-      error: expect.stringContaining('SOURCE_CONFLICT'),
-    })
+    expect(status.steps.character_cards).toMatchObject({ ok: true })
     expect(CharacterRosterRepository.read()).toEqual(chapterThree.snapshot)
     expect(CharacterRepository.getById(characterId)?.currentState).toMatchObject({
       location: '新港',
@@ -1225,5 +1238,47 @@ describe('#512 自动重试的最后一次提交时项目状态已变：作者�
 
     const retried = await retry(stepKey === 'chapter_notes' ? ['chapter_notes', 'character_cards'] : ['character_cards'])
     expect(retried.steps[stepKey]).toMatchObject({ ok: false, error: 'FINALIZATION_GENERATION_SOURCE_CHANGED' })
+  })
+})
+
+describe('重开再定稿后的后处理（ADR-0024）', () => {
+  it('本章有被替换的旧定稿：生成章节要点与角色状态之后清理旧版本；没有旧定稿的章不加这两步', async () => {
+    const firstFinal = await command('Chapter 2 finalized content').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    expect(Object.keys(firstFinal.steps)).toEqual(['kb_import', 'chapter_notes', 'character_cards'])
+    expect(cleanupRequests).toEqual([])
+
+    insertFinalizedDraft(8, 3, 'Chapter 3 new final content')
+    getProjectDb()!.prepare('UPDATE drafts SET version = 2 WHERE id = 8').run()
+    insertFinalizedDraft(6, 3, 'Chapter 3 replaced content')
+    getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = 6").run()
+    const replaced = await command('Chapter 3 new final content', {}, { draftId: 8, chapterNumber: 3 })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+
+    expect(Object.entries(replaced.steps).map(([key, step]) => [key, step.critical, step.ok])).toEqual([
+      ['kb_import', true, true],
+      ['chapter_notes', true, true],
+      ['character_cards', false, true],
+      ['remove_replaced_knowledge', false, true],
+      ['remove_replaced_manuscripts', false, true],
+    ])
+    expect(cleanupRequests).toEqual([['chapter:remove-replaced-knowledge', 8], ['chapter:remove-replaced-manuscripts', 8]])
+  })
+
+  it('遇到失败就停的后处理（批量写作、作者原稿导入）：旧正文文件被作者改过、清理失败，章节要点与角色状态照常生成', async () => {
+    await command('Chapter 2 finalized content').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    insertFinalizedDraft(8, 3, 'Chapter 3 new final content')
+    getProjectDb()!.prepare('UPDATE drafts SET version = 2 WHERE id = 8').run()
+    insertFinalizedDraft(6, 3, 'Chapter 3 replaced content')
+    getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = 6").run()
+    replacedManuscriptEdited = true
+
+    await expect(command('Chapter 3 new final content', { stopOnFailure: true }, { draftId: 8, chapterNumber: 3 })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow(/删除旧版本的正文文件|replaced version's manuscript/u)
+
+    const steps = getProjectDb()!.prepare(`SELECT step_key, ok FROM post_process_steps
+      WHERE run_id = (SELECT run_id FROM post_process_steps ORDER BY id DESC LIMIT 1)`).all() as Array<{ step_key: string; ok: number }>
+    expect(Object.fromEntries(steps.map(step => [step.step_key, step.ok]))).toEqual({
+      kb_import: 1, remove_replaced_knowledge: 1, remove_replaced_manuscripts: 0, chapter_notes: 1, character_cards: 1,
+    })
   })
 })

@@ -64,6 +64,7 @@ import type {
   DeleteFinalizedChapterRequest,
 } from './chapter-deletion'
 import type { FinalizationRepairOnOpen } from './finalization-repair'
+import type { ReopenChapterRequest, ReopenChapterResult, ReplacementImpact } from './chapter-reopen'
 import type {
   ImportRunChapterSnapshot,
   ImportRunEffectCommitResult,
@@ -1277,6 +1278,27 @@ export interface ChapterLifecycleChannels {
   'chapter:list-incomplete-deletions': {
     args: [expectedProjectPath: string]
     return: { success: boolean; operations?: ChapterDeletionOperation[]; error?: string }
+  }
+  'chapter:reopen': {
+    args: [request: ReopenChapterRequest, expectedProjectPath: string]
+    return: ReopenChapterResult
+  }
+  'chapter:remove-replaced-knowledge': {
+    args: [draftId: number, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
+  'chapter:remove-replaced-manuscripts': {
+    args: [draftId: number, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
+  'chapter:replacement-impacts': {
+    args: [expectedProjectPath: string]
+    return: { success: true; impacts: ReplacementImpact[] } | { success: false; error: string }
+  }
+  /** 定稿确认框的预览：这份打开着的重开稿按 content（作者将要定稿的正文，含未保存的修改）定稿后会造成的影响；不是打开着的重开稿时 impact 为 null。 */
+  'chapter:replacement-impact-preview': {
+    args: [draftId: number, content: string, expectedProjectPath: string]
+    return: { success: true; impact: ReplacementImpact | null } | { success: false; error: string }
   }
 }
 

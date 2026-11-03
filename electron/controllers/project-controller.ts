@@ -39,10 +39,14 @@ import { mainText } from '../i18n'
 import { adoptTransferredCharacterContinuityOnOpen } from '../services/transferred-character-continuity'
 import { FinalizationRepository } from '../repositories/finalization-repository'
 import type { FinalizationRepairOnOpen } from '../../src/shared/finalization-repair'
+import { REPLACED_FINAL_CLEANUP_STEP_LABELS } from '../../src/shared/finalization-step-error'
 
 function repairDuplicateFinalizationsOnOpen(): FinalizationRepairOnOpen {
   try {
-    return { status: 'checked', ...FinalizationRepository.repairDuplicateFinalizations() }
+    return { status: 'checked', ...FinalizationRepository.repairDuplicateFinalizations({
+      remove_replaced_knowledge: text(...REPLACED_FINAL_CLEANUP_STEP_LABELS.remove_replaced_knowledge),
+      remove_replaced_manuscripts: text(...REPLACED_FINAL_CLEANUP_STEP_LABELS.remove_replaced_manuscripts),
+    }) }
   } catch (error) {
     console.error('[Project] 遗留重复定稿修复失败:', error)
     return { status: 'failed', error: error instanceof Error ? error.message : String(error) }
