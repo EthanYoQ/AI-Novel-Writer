@@ -97,7 +97,11 @@ export function useReplacementImpactPreview(draftId: number, content: string, en
       .then(result => {
         if (!cancelled && isProjectSessionCurrent(projectSession)) setPreview({ draftId, content, impact: result?.success ? result.impact : null })
       })
-    return () => { cancelled = true }
+    // 关掉确认框或正文变了就丢掉这次的结果：再打开时后面的章节可能已经变了，只认新算的一次。
+    return () => {
+      cancelled = true
+      setPreview(null)
+    }
   }, [draftId, content, enabled])
   const settled = preview?.draftId === draftId && preview.content === content
   return { impact: enabled && settled ? preview.impact : null, pending: enabled && hasSession && !settled }

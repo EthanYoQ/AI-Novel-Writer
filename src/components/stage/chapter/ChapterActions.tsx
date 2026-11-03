@@ -235,6 +235,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
       // 保存期间又有输入，或保存被会话守卫跳过：修改还没落盘，不重开。
       if (unsaved()) return
     }
+    const before = useEditorStore.getState().tabs.find(candidate => candidate.id === tab.id)?.content
     try {
       const result = await reopenFinalizedChapter(session, initialDraftId === undefined ? { chapterNumber } : { chapterNumber, initialDraftId })
       if (!result.success) throw new Error(result.error)
@@ -242,7 +243,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
       if (!isProjectSessionCurrent(session) || !reopened) return
       globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts'], projectPath: session.projectPath, projectSession: session })
       if (!result.created) toast.info(text('这一章已有一份重开稿，已打开它。', 'This chapter already has a reopened draft. It is open now.'))
-      await swapChapterTab(tab.id, () => openDraftInChapterView(reopened, title, session))
+      await swapChapterTab(tab.id, () => openDraftInChapterView(reopened, title, session), before)
     } catch (error) {
       if (!isProjectSessionCurrent(session)) return
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, error)
