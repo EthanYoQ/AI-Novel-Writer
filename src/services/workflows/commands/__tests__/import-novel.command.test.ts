@@ -1062,3 +1062,44 @@ describe('M02 text-import proposal receipts', () => {
     expect(invoke.mock.calls.some(([channel]) => channel === 'character-proposal:approve' || channel === 'db:character-roster-commit')).toBe(false)
   })
 })
+
+describe('导入 slot 的输出没通过校验', () => {
+  const handle = { projectId: 'project-1', epoch: 'lease-project-1', rootActionId: 'root-1', runId: 'run-1' }
+  const blueprint = { chapterNumber: 1, title: '启程', role: '建置', purpose: '引出主角目标', keyEvents: '主角发现异常', characters: ['主角'], relationshipHints: [], suspenseHook: '门外有人' }
+
+  /** 主进程所有的导入运行：模型每次都正常结束（stop）并返回 content。 */
+  function mainOwnedImport(content: string, handler: (channel: string, ...args: unknown[]) => unknown = () => ({ success: true })) {
+    const invoke = stubIpcInvoke((channel, ...args) => {
+      if (channel === 'generation:read') return { handle, candidates: [{ ...handle, artifactId: 'artifact-1', status: 'completed' }, { ...handle, artifactId: 'artifact-2', status: 'completed' }] }
+      if (channel === 'generation:discard-candidate') return { handle, candidates: [] }
+      return handler(channel, ...args)
+    })
+    const receipt = { purpose: 'import-inference', finishReason: 'stop', budget: { requestedOutputTokens: 1 } }
+    const session = { complete: vi.fn(async () => ({ status: 'completed', finishReason: 'stop', content, receipt })) }
+    const runtime = { mainOwned: true, execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const discarded = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:discard-candidate').map(([, ...args]) => args.find(arg => typeof arg === 'string'))
+    return { runtime, discarded, context: { ...createContext(), mainGenerationRunHandle: handle } }
+  }
+
+  it('蓝图输出缺章被拒：丢弃这个运行的全部候选，「继续导入」才会重新请求这一批', async () => {
+    const { runtime, discarded, context } = mainOwnedImport(JSON.stringify({ blueprints: [] }))
+    await expect(new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })).rejects.toThrow(/missing_item/)
+    expect(discarded()).toEqual(['artifact-1', 'artifact-2'])
+  })
+
+  it('全局设定输出解析不了：丢弃这个运行的全部候选', async () => {
+    const { runtime, discarded, context } = mainOwnedImport(JSON.stringify({ novelConfig: {} }), channel => channel === 'kb:search' ? [] : { success: true })
+    await expect(new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })).rejects.toThrow()
+    expect(discarded()).toEqual(['artifact-1', 'artifact-2'])
+  })
+
+  it('输出合法、只是提交失败：不丢弃，「继续导入」复用这次结果', async () => {
+    const { runtime, discarded, context } = mainOwnedImport(JSON.stringify({ blueprints: [blueprint] }),
+      channel => channel === 'db:blueprint-commit-range' ? { success: false, error: 'DB 写入失败' } : { success: true })
+    await expect(new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })).rejects.toThrow(/DB 写入失败/)
+    expect(discarded()).toEqual([])
+  })
+})
