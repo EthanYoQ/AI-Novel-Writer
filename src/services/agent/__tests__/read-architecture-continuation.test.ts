@@ -153,6 +153,7 @@ describe('read_architecture 超过工具结果上限时可以续读（#557）', 
     expect(doneText).not.toContain('最大工具调用次数')
     expect(observations.at(-1)).not.toMatch(CONTINUE)
     expect(observations.at(-1)).toMatch(/offset=\d+/u)
+    expect(observations.at(-1)).toContain('尚未读到')
   })
 
   async function runLegacy() {
@@ -190,5 +191,6 @@ describe('read_architecture 超过工具结果上限时可以续读（#557）', 
 
     expect(legacy.doneText).toContain('已读完。')
     expect(legacy.doneText).not.toContain('最大工具调用次数')
+    expect(legacy.segments.at(-1)).toContain('尚未读到')
   })
 })
