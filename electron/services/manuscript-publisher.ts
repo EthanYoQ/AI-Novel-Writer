@@ -147,9 +147,12 @@ export function removeManuscriptIfUnchanged(
 ): 'removed' | 'missing' | 'changed' {
   const target = resolveStoredManuscriptTarget(projectRoot, targetFileName)
   try {
-    if (!published.includes(retryWhileWindowsFileBusy(() => fs.readFileSync(target.absolutePath, 'utf8')))) return 'changed'
-    retryWhileWindowsFileBusy(() => fs.unlinkSync(target.absolutePath))
-    return 'removed'
+    // 比对和删除一起重试：等占用放开的间隙里作者可能保存了修改，每次删除前都重新比对。
+    return retryWhileWindowsFileBusy(() => {
+      if (!published.includes(fs.readFileSync(target.absolutePath, 'utf8'))) return 'changed'
+      fs.unlinkSync(target.absolutePath)
+      return 'removed'
+    })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
     throw error
