@@ -6,7 +6,8 @@
 type StepRetry = 'prompt' | 'described' | 'never' | { after: string }
 
 /** 定稿后处理步骤的错误码。步骤记录里存错误码本身，界面展示时再按当前界面语言换成作者可读说明。 */
-const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: StepRetry }[] = [
+/** enMany：{names} 有多个文件时的英文。 */
+const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; enMany?: string; retry: StepRetry }[] = [
   { code: /^FINALIZATION_GENERATION_INCOMPLETE$/, retry: 'prompt',
     zh: '模型这次没有返回完整结果（连接中断或输出被截断）。', en: 'The model did not return a complete result (the connection dropped or the output was cut off).' },
   { code: /^FINALIZATION_GENERATION_(ARTIFACT_REQUIRED|OUTCOME_UNKNOWN)$/, retry: 'prompt',
@@ -69,10 +70,12 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: S
     en: "The new final version's manuscript file is not written yet, so the replaced version's file stays for now. Write this chapter's manuscript file again first, then select Retry." },
   { code: /^FINALIZATION_REPLACED_MANUSCRIPT_KEPT(?::.*)?$/su, retry: 'described',
     zh: '旧版本的正文文件{names}在定稿后被改过，没有删除。不再需要的话，请自己删除或改名，再点「重试」。',
-    en: "The replaced version's manuscript file {names} was changed after it was finalized, so it was kept. If you no longer need it, delete or rename it yourself, then select Retry." },
+    en: "The replaced version's manuscript file {names} was changed after it was finalized, so it was kept. If you no longer need it, delete or rename it yourself, then select Retry.",
+    enMany: "The replaced versions' manuscript files {names} were changed after they were finalized, so they were kept. If you no longer need them, delete or rename them yourself, then select Retry." },
   { code: /^FINALIZATION_REPLACED_MANUSCRIPT_BUSY(?::.*)?$/su, retry: 'described',
     zh: '旧版本的正文文件{names}被其他程序占用或只读，暂时删不掉。关掉占用它的程序或去掉只读后，点「重试」。',
-    en: "The replaced version's manuscript file {names} is open in another program or read-only, so it could not be deleted yet. Close that program or clear read-only, then select Retry." },
+    en: "The replaced version's manuscript file {names} is open in another program or read-only, so it could not be deleted yet. Close that program or clear read-only, then select Retry.",
+    enMany: "The replaced versions' manuscript files {names} are open in another program or read-only, so they could not be deleted yet. Close those programs or clear read-only, then select Retry." },
   { code: /^FINALIZATION_REPLACED_CLEANUP_PENDING$/, retry: 'described',
     zh: '被替换的旧定稿留下的内容还没清理。点「重试」清理；和旧定稿对不上（可能改过）的会留着。',
     en: 'Content left by a replaced final version has not been cleaned up yet. Select Retry to clean it up; anything that differs from that version (it may have been edited) is kept.' },
@@ -109,7 +112,7 @@ export function describeFinalizationStepError(error: string, text: (zhCNText: st
   return text(
     // 用函数替换：文件名里的 $ 不当替换模式。
     entry.zh.replace('{names}', () => names.map(name => `「${name}」`).join('、')) + (prompt ? '请点「重试」重新生成这一步。' : ''),
-    entry.en.replace('{names}', () => names.map(name => `“${name}”`).join(', ')) + (prompt ? ' Select Retry to generate this step again.' : ''),
+    (names.length > 1 && entry.enMany ? entry.enMany : entry.en).replace('{names}', () => names.map(name => `“${name}”`).join(', ')) + (prompt ? ' Select Retry to generate this step again.' : ''),
   )
 }
 
