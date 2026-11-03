@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { BeginGenerationRequest } from '../../src/shared/generation-owner-contract'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../src/shared/import-generation'
-import { GenerationRunRepository, textHash, type DurableGenerationRun, type GenerationBudgetReceipt } from '../repositories/generation-run-repository'
+import { GenerationRunRepository, type DurableGenerationRun, type GenerationBudgetReceipt } from '../repositories/generation-run-repository'
 import { ImportRunRepository } from '../repositories/import-run-repository'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { captureImportGenerationContext, importGenerationSlotKey } from './import-generation-source'
@@ -45,7 +45,7 @@ export class ImportGeneration {
       let receipt
       try { receipt = this.runs.receipt(attemptId, budget) } catch { return true }
       const artifact = receipt.artifact
-      return receipt.result?.finishReason !== 'stop' || !artifact || !artifact.text.trim() || textHash(artifact.text) !== artifact.textHash
+      return receipt.result?.finishReason !== 'stop' || !artifact || !artifact.text.trim()
         || this.db.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) !== 1
     })
   }
