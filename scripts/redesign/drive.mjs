@@ -180,9 +180,12 @@ function isAlive(pid) {
 /** 模拟崩溃或任务管理器结束进程，不走关窗确认：Windows 按这次启动记下的 PID 结束整棵进程树，其他平台与 quit 的强制路径一样只结束主进程。 */
 async function kill(app) {
   const pid = app.process().pid
-  if (!isAlive(pid)) return
-  if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
-  else process.kill(pid, 'SIGKILL')
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    else process.kill(pid, 'SIGKILL')
+  } catch (error) {
+    if (isAlive(pid)) throw error
+  }
   for (const deadline = Date.now() + 10_000; isAlive(pid); await delay(100)) assert.ok(Date.now() < deadline, `10 秒内进程 ${pid} 没有结束`)
 }
 

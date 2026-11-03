@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { isDeepStrictEqual } from 'node:util'
 
 import * as runSheet from './pages/run-sheet.mjs'
+import { requestWindowClose } from './pages/shell.mjs'
 import * as stage from './pages/stage.mjs'
 import { holdBlueprintDispatch, readDb, referenceNovel, startImport, stopOnActiveTime } from './f537-scenarios.mjs'
 import { seedStageSample, untilGateHolds } from './scenarios.mjs'
@@ -20,8 +21,7 @@ const runsPerSlot = db => db.prepare(`SELECT json_extract(binding_json,'$.source
 /** 点「继续导入」，返回点之前的导入运行行：继续沿用同一个运行，等结束时要和它比，免得把上次的失败当成这次的结果。 */
 async function continueImport(context, shotName) {
   const { page } = context
-  await stage.root(page).getByRole('banner').getByRole('button', { name: `《${STAGE_SAMPLE.name}》作品菜单` }).click()
-  await page.getByRole('menuitem', { name: '小说拆解与仿写…', exact: true }).click()
+  await stage.openWorkMenuItem(page, STAGE_SAMPLE.name, '小说拆解与仿写…')
   const dialog = page.getByRole('dialog', { name: '小说拆解与仿写' })
   await dialog.getByTestId('import-target-current').click()
   const resume = dialog.getByRole('button', { name: '继续导入', disabled: false })
@@ -37,7 +37,7 @@ async function continueImport(context, shotName) {
 async function untilImportEnds(context, previous) {
   for (const deadline = Date.now() + 5 * 60_000; ; await new Promise(resolve => setTimeout(resolve, 1000))) {
     const run = readDb(context, latestRun)
-    if (run?.status === 'completed' || run?.status === 'failed' && !isDeepStrictEqual(run, previous)) return run
+    if (run?.status === 'completed' || (run?.status === 'failed' && !isDeepStrictEqual(run, previous))) return run
     assert.ok(Date.now() < deadline, `5 分钟内继续导入没有结束：${JSON.stringify(run)}`)
   }
 }
@@ -86,7 +86,7 @@ async function closeWindowThenContinue(context) {
   assert.ok(before.some(slot => slot.stage === 'blueprints'), `中断前已有提交的蓝图批次：${JSON.stringify(before)}`)
   const interrupted = readDb(context, latestRun)
   assert.equal(interrupted.status, 'running')
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+  await requestWindowClose(app)
   const exit = page.getByRole('dialog', { name: '创作任务仍在运行' })
   await exit.waitFor({ state: 'visible' })
   await page.waitForTimeout(400)
@@ -100,7 +100,7 @@ async function closeWindowThenContinue(context) {
 
 /** 活动时长在请求途中用完、根被阻断（#541 的停止说明）后，继续导入接着跑完。 */
 async function activeTimeThenContinue(context) {
-  const stop = await stopOnActiveTime(context, 'f555-stop-time-stopped')
+  const stop = await stopOnActiveTime(context, 'f555-stop-time-stopped', CHAPTERS)
   const before = readDb(context, committedSlots)
   const previous = await continueImport(context, 'f555-stop-time-dialog')
   return { stop, stopped: previous, ...await finished(context, 'f555-stop-time-done', before, previous) }

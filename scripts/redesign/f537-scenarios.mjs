@@ -89,11 +89,11 @@ export async function holdBlueprintDispatch(app, nth) {
 }
 
 /** 活动时长在请求进行中用完：派发前把根的活动时长推到只差 300 毫秒，并卡住假模型，让主进程的计时到点中止请求、阻断根。 */
-export async function stopOnActiveTime(context, shots = 'f537-stop-time') {
+export async function stopOnActiveTime(context, shots = 'f537-stop-time', chapters = 15) {
   const { app, page, roots, fake, shoot } = context
   fake.replyImport()
   const hold = await holdBlueprintDispatch(app, 2)
-  await startImport(app, page, referenceNovel(roots, 15), 15)
+  await startImport(app, page, referenceNovel(roots, chapters), chapters)
   try {
     await hold.waitHeld()
     writeDb(context, db => {

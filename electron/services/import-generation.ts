@@ -50,14 +50,15 @@ export class ImportGeneration {
   rejected(run: DurableGenerationRun): boolean {
     const budget = this.runs.budget(run.rootActionId)
     return this.attemptIds(run).some(attemptId => {
-      if (!this.readable(attemptId, budget)) return true
-      const receipt = this.runs.receipt(attemptId, budget), artifact = receipt.artifact
+      let receipt
+      try { receipt = this.runs.receipt(attemptId, budget) } catch { return true }
+      const artifact = receipt.artifact
       return receipt.result?.finishReason !== 'stop' || !artifact || !artifact.text.trim() || textHash(artifact.text) !== artifact.textHash
         || this.db.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) !== 1
     })
   }
   hasAttempts(run: DurableGenerationRun): boolean {
-    return this.attemptIds(run).length > 0
+    return this.runs.attemptCount(run.runId) > 0
   }
   /**
    * 这个运行再也交不出可提交的结果，slot 要换一个新运行重来。前提是还没有收据、根上没有请求在途，然后：
