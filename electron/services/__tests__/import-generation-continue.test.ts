@@ -219,8 +219,8 @@ it('空白回复后拆出的前一半已合法结束、进程退出：「继续�
   f.spy.mockClear()
   f.current.dispatch = stop
   const execution = ImportRunRepository.startOrResume(RUN, '继续导入的执行者').execution
-  const handle = openSlot(f, slot, execution, owner)
-  for (const ordinal of [0, 1, 2]) await owner.executeImportGeneration({ execution, handle, ordinal, task: blueprintTask })
+  let handle = openSlot(f, slot, execution, owner)
+  for (const ordinal of [0, 1, 2]) handle = (await owner.executeImportGeneration({ execution, handle, ordinal, task: blueprintTask })).run.handle
   commitSlot(f, slot, execution, blueprintEffect(RUN, f.chapters.slice(5))(handle), owner)
   expect(f.db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get()).toBe(10)
   expect(f.spy).toHaveBeenCalledTimes(1)
