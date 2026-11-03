@@ -1458,13 +1458,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }
       if (!slot || !isDeepStrictEqual(imports.context(run).slot, slot)) throw new Error('GENERATION_IMPORT_EFFECT_SLOT_CHANGED')
       const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
-      const attempts = repository.budget(run.rootActionId).attempts.filter(attempt => repository.receipt(attempt.attemptId).run.runId === run.runId)
       if (repository.budget(run.rootActionId).root.status === 'cancelled' || !compareGenerationSourceBindings(run.binding, current)
-        || !attempts.length || attempts.some(attempt => {
-          const receipt = repository.receipt(attempt.attemptId), artifact = receipt.artifact
-          return receipt.result?.finishReason !== 'stop' || !artifact || !artifact.text.trim() || textHash(artifact.text) !== artifact.textHash
-            || deps.database.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) !== 1
-        }))
+        || !imports.hasAttempts(run) || imports.rejected(run))
         throw new Error('GENERATION_IMPORT_EFFECT_SOURCE_CHANGED')
     },
     executeImportGeneration: async (request: import('../../src/shared/import-generation').ImportGenerationChannels['import-generation:execute']['args'][0]) => {

@@ -26,6 +26,7 @@ import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
 import type { WritingSkillStage } from '../../../shared/writing-skills'
 import { ipc } from '../../ipc-client'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import type { VisibleCompositionReceipt } from '../../../shared/generation-owner-contract'
 import { composeVisibleContinuation } from '../../../shared/visible-continuation'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationSelection, type WorkflowMainGenerationRequest, type WorkflowMainGenerationRuntime } from '../workflow-main-generation'
@@ -248,6 +249,25 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     const handle = execution.context.mainGenerationRunHandle
     if (!execution.mainOwned || !handle) throw new Error('GENERATION_COMPOSITION_HANDLE_REQUIRED')
     return ipc.invokeWithProjectSession(execution.context.projectSession, 'generation:read-visible-composition', handle)
+  }
+
+  /**
+   * 导入 slot 的模型输出没通过校验：丢弃这个运行的全部候选。主进程据此判定这次运行交不出可提交的结果，
+   * 「继续导入」为这一批开新运行重新请求，而不是回放同一份被拒的输出。丢弃失败只记日志，报出的仍是校验失败。
+   */
+  protected async discardRejectedImportOutput(callbacks: StepCallbacks): Promise<void> {
+    const { context, mainOwned } = this.requireGenerationExecution()
+    const handle = context.mainGenerationRunHandle
+    if (!mainOwned || !handle) return
+    try {
+      const view = await ipc.invokeWithProjectSession(context.projectSession, 'generation:read', handle)
+      for (const candidate of view.candidates ?? []) {
+        if (candidate.status !== 'running') await ipc.invokeWithProjectSession(context.projectSession, 'generation:discard-candidate', handle, candidate.artifactId)
+      }
+    } catch (error) {
+      const reason = displayedErrorMessage(context.uiLocale, error)
+      callbacks.log(workflowUiText(context, `丢弃没通过校验的导入输出失败：${reason}`, `Could not discard the rejected import output: ${reason}`))
+    }
   }
 
   /** 获取 LLM 大模型连接代理（支持取消） */

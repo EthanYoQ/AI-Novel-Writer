@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { BeginGenerationRequest } from '../../src/shared/generation-owner-contract'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../src/shared/import-generation'
-import { GenerationRunRepository, type DurableGenerationRun } from '../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash, type DurableGenerationRun } from '../repositories/generation-run-repository'
 import { ImportRunRepository } from '../repositories/import-run-repository'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { captureImportGenerationContext, importGenerationSlotKey } from './import-generation-source'
@@ -39,18 +39,32 @@ export class ImportGeneration {
   private readable(attemptId: string): boolean {
     try { this.runs.receipt(attemptId); return true } catch { return false }
   }
+  private attemptIds(run: DurableGenerationRun): string[] {
+    return this.db.prepare('SELECT attempt_id FROM generation_attempts WHERE run_id=?').pluck().all(run.runId) as string[]
+  }
+  /**
+   * 这个运行有请求的结果永远提交不了：没有正常结束（中断、取消、超时、进程退出后的 unknown），
+   * 没留下非空结果，或者结果被丢弃了（渲染端校验没通过时丢弃）。提交前的核对用的是同一条规则。
+   */
+  rejected(run: DurableGenerationRun): boolean {
+    return this.attemptIds(run).some(attemptId => {
+      const receipt = this.runs.receipt(attemptId), artifact = receipt.artifact
+      return receipt.result?.finishReason !== 'stop' || !artifact || !artifact.text.trim() || textHash(artifact.text) !== artifact.textHash
+        || this.db.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) !== 1
+    })
+  }
+  hasAttempts(run: DurableGenerationRun): boolean {
+    return this.attemptIds(run).length > 0
+  }
   /**
    * 这个运行再也交不出可提交的结果，slot 要换一个新运行重来：还没有收据，根上没有请求在途，
-   * 并且根已经发不出请求，或者这个运行有请求没有正常结束（中断、取消、超时、进程退出后的 unknown）。
-   * 读不出的请求记录同样交不出结果，只让这个 slot 重来。
+   * 并且根已经发不出请求，或者这个运行的结果提交不了。读不出的请求记录同样交不出结果，只让这个 slot 重来。
    */
   retryable(run: DurableGenerationRun): boolean {
     const slot = this.context(run).slot
     if (ImportRunRepository.getEffectReceipt(slot.runId, slot.stage, slot.batchId)) return false
     if (this.runs.budget(run.rootActionId).attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))) return false
-    if (!this.rootCanDispatch(run.rootActionId)) return true
-    const attemptIds = this.db.prepare('SELECT attempt_id FROM generation_attempts WHERE run_id=?').pluck().all(run.runId) as string[]
-    return attemptIds.some(attemptId => this.runs.receipt(attemptId).result?.finishReason !== 'stop')
+    return !this.rootCanDispatch(run.rootActionId) || this.rejected(run)
   }
   context(run: DurableGenerationRun): ImportGenerationContext {
     const context = run.binding.sourceManifest.importContext as ImportGenerationContext | undefined
