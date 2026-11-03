@@ -16,7 +16,7 @@ export function reopenWithContent(chapterNumber: number, content: string): numbe
 
 /**
  * 给用原始 SQL 插入的工作稿补上指向本章当前定稿的重开关系，和 FinalizationRepository.reopen 写的一样，
- * 这一稿就成了本章的重开稿，可以定稿替换（ADR-0024）。本章还没有定稿时什么也不做。
+ * 这一稿就成了本章的重开稿，可以定稿替换（ADR-0024）。同章遗留多行定稿时和 reopen 一样取版本最高的一行。本章还没有定稿时什么也不做。
  */
 export function registerAsReopenDraft(db: BetterSqlite3.Database, draftId: number): void {
   const final = db.prepare(`
@@ -26,6 +26,8 @@ export function registerAsReopenDraft(db: BetterSqlite3.Database, draftId: numbe
     JOIN contents ON contents.id = finalized.content_id
     LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = finalized.id
     WHERE draft.id = ?
+    ORDER BY finalized.version DESC, finalized.id DESC
+    LIMIT 1
   `).get(draftId) as { id: number; chapter_number: number; body: string; finalization_id: string | null } | undefined
   if (!final) return
   const contentHash = createHash('sha256').update(final.body, 'utf8').digest('hex')

@@ -51,4 +51,14 @@ describe('重开再定稿后的清理步骤（ADR-0024）', () => {
     ])
     expect(stepCallbacks.log).toHaveBeenCalledWith('已删除被替换的旧版本收进知识库的文档')
   })
+
+  it('缺工作流上下文与工作流已取消分开报，已取消按工作流记下的界面语言说明，都不请求主进程', async () => {
+    const invoke = vi.fn()
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
+    const [knowledge] = steps(true).filter(step => step.key.startsWith('remove_replaced_'))
+
+    await expect(knowledge!.executor(callbacks(), undefined)).rejects.toThrow('定稿后处理缺少冻结工作流上下文')
+    await expect(knowledge!.executor(callbacks(), { ...context(), uiLocale: 'en-US', cancelled: true })).rejects.toThrow(/^Workflow was cancelled\.$/u)
+    expect(invoke).not.toHaveBeenCalled()
+  })
 })
