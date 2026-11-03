@@ -56,6 +56,8 @@ let actualOwner: ReturnType<typeof createMainGenerationOwner> | undefined
 const stageByRun = new Map<string, string>()
 /** 重开再定稿后清理旧版本的两步收到的请求：[通道, 当前定稿的 draftId]。 */
 const cleanupRequests: Array<[string, unknown]> = []
+/** 作者改过被替换的旧正文文件：主进程保留它，删除旧正文文件这一步失败。 */
+let replacedManuscriptEdited = false
 function owner() {
   if (actualOwner) return actualOwner
   const db = getProjectDb()!
@@ -226,7 +228,9 @@ function installRealRepositoryIpc(): void {
           case 'chapter:remove-replaced-knowledge':
           case 'chapter:remove-replaced-manuscripts':
             cleanupRequests.push([channel, args[0]])
-            return { success: true }
+            return channel === 'chapter:remove-replaced-manuscripts' && replacedManuscriptEdited
+              ? { success: false, error: 'FINALIZATION_REPLACED_MANUSCRIPT_KEPT:["第3章.txt"]' }
+              : { success: true }
           case 'kb:import-text':
             return { success: true, chunkCount: 1, docId: 'doc-1' }
           case 'db:finalization-link-knowledge-document':
@@ -352,7 +356,7 @@ beforeEach(() => {
   const cache = path.resolve('.runtime/.cache/novel-quality-modernization/s09b-finalize-consumer')
   fs.mkdirSync(cache, { recursive: true })
   projectPath = fs.mkdtempSync(path.join(cache, 'case-'))
-  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; cleanupRequests.length = 0; characterExecuteFailures = 0; changeFieldBeforeCommit = false; onCommit = undefined; commitsByStep.clear()
+  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; cleanupRequests.length = 0; replacedManuscriptEdited = false; characterExecuteFailures = 0; changeFieldBeforeCommit = false; onCommit = undefined; commitsByStep.clear()
   initProjectDatabase(projectPath)
   const db = CharacterRosterRepository.read()
   expect(db.status).toBe('empty')
@@ -1262,5 +1266,23 @@ describe('重开再定稿后的后处理（ADR-0024）', () => {
       ['character_cards', false, true],
     ])
     expect(cleanupRequests).toEqual([['chapter:remove-replaced-knowledge', 8], ['chapter:remove-replaced-manuscripts', 8]])
+  })
+
+  it('遇到失败就停的后处理（批量写作、作者原稿导入）：旧正文文件被作者改过、清理失败，章节要点与角色状态照常生成', async () => {
+    await command('Chapter 2 finalized content').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    insertFinalizedDraft(8, 3, 'Chapter 3 new final content')
+    getProjectDb()!.prepare('UPDATE drafts SET version = 2 WHERE id = 8').run()
+    insertFinalizedDraft(6, 3, 'Chapter 3 replaced content')
+    getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = 6").run()
+    replacedManuscriptEdited = true
+
+    await expect(command('Chapter 3 new final content', { stopOnFailure: true }, { draftId: 8, chapterNumber: 3 })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })).rejects.toThrow(/删除旧版本的正文文件|replaced version's manuscript/u)
+
+    const steps = getProjectDb()!.prepare(`SELECT step_key, ok FROM post_process_steps
+      WHERE run_id = (SELECT run_id FROM post_process_steps ORDER BY id DESC LIMIT 1)`).all() as Array<{ step_key: string; ok: number }>
+    expect(Object.fromEntries(steps.map(step => [step.step_key, step.ok]))).toEqual({
+      kb_import: 1, remove_replaced_knowledge: 1, remove_replaced_manuscripts: 0, chapter_notes: 1, character_cards: 1,
+    })
   })
 })
