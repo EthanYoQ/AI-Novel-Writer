@@ -348,7 +348,6 @@ function assertExactImportEndpointDeltaKeys(
   }
 }
 
-/** 与解码器一致：名字和关系对象按去掉首尾空白后的文本比较。 */
 function decodedLabel(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
@@ -368,7 +367,6 @@ function unresolvedImportRelationshipTargets(root: Record<string, unknown>, text
   return [...references.keys()].sort((a, b) => references.get(b)! - references.get(a)!)
 }
 
-/** 补卡只请求能放进角色卡上限的端点，被引用多的优先；其余端点的关系在解码时丢弃。 */
 export function importEndpointRecoveryTargets(original: string, text: UiText): string[] {
   const root = parseImportInferenceJsonObject(original)
   const room = MAX_IMPORT_INFERENCE_CHARACTER_CARDS - importInferenceCards(root, text).length
@@ -460,7 +458,6 @@ function decodeWithoutDanglingRelationships(
       if (!isRecord(relationship)) return true
       const target = decodedLabel(relationship.target)
       const relation = decodedLabel(relationship.relation)
-      // 字段不合格的关系留给解码器拒绝，不能借丢弃把坏补卡洗成合格。
       if (target === undefined || relation === undefined || names.has(target)) return true
       droppedRelationships.push({
         source: String(card.name).trim(),
@@ -477,10 +474,6 @@ function decodeWithoutDanglingRelationships(
   }
 }
 
-/**
- * 渲染端提交与主进程从产物重算角色卡都走这里，两边结果必须一致，作者审批才拿得到来源。
- * delta 是补卡请求的输出；没发补卡请求时为 null。补卡输出不合格时不采用任何补卡。
- */
 export function decodeRecoveredImportInference(original: string, delta: string | null, text: UiText): RecoveredImportInference {
   try {
     return { result: decodeImportInferenceJson(original), droppedRelationships: [] }

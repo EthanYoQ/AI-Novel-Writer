@@ -39,7 +39,6 @@ const INFERRED = Object.freeze({
   })),
 })
 const extraCard = (name, role, background) => ({ ...INFERRED.characterCards[1], name, role, background })
-/** 7 张卡，关系引用了两个名单外的人：林探被引用两次，白先生一次。只剩 1 个空位，只补林探。 */
 const INFERRED_DANGLING = {
   ...INFERRED,
   characterCards: [
@@ -189,7 +188,6 @@ export const IMPORT_INFER_SCENARIOS = {
     return { core: { genre: core.genre, premise: core.premise, writingStyle: core.writingStyle }, blueprints: blueprints.map(item => item.title) }
   } },
 
-  // #558：首轮 7 张卡加 2 个名单外的关系对象。补卡只补 1 张，另一条关系丢弃并写一行日志，导入照常完成，8 位角色以待处理建议出现。
   'import-infer-dangling': { model: true, shell: 'stage', setup: seedEmptyBook, run: async context => {
     const { app, page, roots, fake, shoot } = context
     fake.replyReview(danglingInferenceReply)
