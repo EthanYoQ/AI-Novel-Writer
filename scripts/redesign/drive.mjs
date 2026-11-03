@@ -471,7 +471,7 @@ async function runSession(sessionName, names, options) {
         reload: () => context.page.reload().then(() => waitForShell(context.page, TIMEOUT)),
         /**
          * 退出应用再用同一隔离目录冷启动（真正的重启，不重写外观），context 换成新的 app 与 page。appRoot 换成另一份构建（旧版本造数据、新版本接着打开），之后不传时沿用上次启动的构建。
-         * killed: true 时按 PID 强制结束整棵进程树、模拟进程被杀，不走正常退出，也就跳过「重启前应用没有正常退出」的断言。
+         * killed: true 时模拟进程被杀：Windows 用 taskkill /T /F 结束整棵进程树，其他平台只向主进程发 SIGKILL。不走正常退出，也就跳过「重启前应用没有正常退出」的断言。
          */
         restart: async ({ appRoot = currentAppRoot, beforeLaunch, killed = false } = {}) => {
           restartRequests.push(...await launched.app.evaluate(() => globalThis.__driveExternalRequests))
