@@ -80,9 +80,12 @@ export function useReplacementImpacts(projectKey: string): {
   return { impacts, acknowledge }
 }
 
-/** 重开稿定稿前的影响预览：enabled 变为 true（定稿确认框打开）时按编辑器里的正文 content 现算一次；读不出来或不是重开稿时为 null。 */
+/**
+ * 重开稿定稿前的影响预览：enabled 变为 true（定稿确认框打开）时按编辑器里的正文 content 现算一次；读不出来或不是重开稿时为 null。
+ * 结果按算它时的稿与正文记，正文改过就不再用：关掉确认框改了正文再打开，新结果回来之前不显示旧正文的影响。
+ */
 export function useReplacementImpactPreview(draftId: number, content: string, enabled: boolean): ReplacementImpact | null {
-  const [preview, setPreview] = useState<{ draftId: number; impact: ReplacementImpact | null } | null>(null)
+  const [preview, setPreview] = useState<{ draftId: number; content: string; impact: ReplacementImpact | null } | null>(null)
   useEffect(() => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!enabled || !projectSession) return
@@ -90,9 +93,9 @@ export function useReplacementImpactPreview(draftId: number, content: string, en
     void ipc.invokeWithProjectSession(projectSession, 'chapter:replacement-impact-preview', draftId, content, projectSession.projectPath)
       .catch(() => null)
       .then(result => {
-        if (!cancelled && isProjectSessionCurrent(projectSession)) setPreview({ draftId, impact: result?.success ? result.impact : null })
+        if (!cancelled && isProjectSessionCurrent(projectSession)) setPreview({ draftId, content, impact: result?.success ? result.impact : null })
       })
     return () => { cancelled = true }
   }, [draftId, content, enabled])
-  return enabled && preview?.draftId === draftId ? preview.impact : null
+  return enabled && preview?.draftId === draftId && preview.content === content ? preview.impact : null
 }
