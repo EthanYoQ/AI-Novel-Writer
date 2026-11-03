@@ -24,6 +24,8 @@ import { registerExternalFileGrantController } from '../external-file-grant-cont
 import { ExternalFileGrantService } from '../../services/external-file-grant-service'
 import type { AtomicWriteConstraints, WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
 import { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'
+import { getGlobalDataRoot } from '../../services/app-data-locator'
+import type { GlobalConfig } from '../../../src/shared/ipc-channels'
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-external-grant-controller-'))
 const SECURE_FILE_SYSTEM_TEST_TIMEOUT_MS = 15_000
@@ -76,6 +78,20 @@ describe('external file grant IPC contract', () => {
       displayName: 'exports',
     })
     expect(result).not.toHaveProperty('directoryPath')
+  })
+
+  it('再次选择导出目录时从上次选的目录打开，并写进全局配置', async () => {
+    const exportDirectory = path.join(temporaryRoot, 'remembered-exports')
+    fs.mkdirSync(exportDirectory)
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [exportDirectory] })
+
+    await handler('dialog:select-export-directory')(event())
+    await handler('dialog:select-export-directory')(event())
+
+    expect(mocks.showOpenDialog.mock.calls[0]?.[0]).not.toMatchObject({ defaultPath: exportDirectory })
+    expect(mocks.showOpenDialog.mock.calls[1]?.[0]).toMatchObject({ defaultPath: exportDirectory })
+    const config = JSON.parse(fs.readFileSync(path.join(getGlobalDataRoot(), 'config.json'), 'utf8')) as GlobalConfig
+    expect(config.dialogDirectories?.['export-directory']).toBe(exportDirectory)
   })
 
   it('通过生产 grant 写入把混合 UTF-8 内容逐字节落盘', async () => {

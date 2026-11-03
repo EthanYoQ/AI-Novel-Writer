@@ -233,13 +233,12 @@ Windows 安装包未签名，Mac 安装包只有 ad-hoc 签名、没有经过 Ap
 
 ## 从源码构建
 
-需要 Node.js 20 以上和仓库指定版本的 pnpm。
+需要 Node.js 22.14 以上和仓库指定版本的 pnpm。
 
 ```sh
 git clone https://github.com/EthanYoQ/AI-Novel-Writer.git
 cd AI-Novel-Writer
 pnpm install --frozen-lockfile
-pnpm rebuild:electron
 pnpm dev
 ```
 

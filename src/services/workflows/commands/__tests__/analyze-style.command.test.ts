@@ -27,6 +27,12 @@ const context: WorkflowContext = {
   cancelled: false,
 }
 
+/** 替换这次命令的模型调用：回一段完整（stop）的文风分析。 */
+function modelReply(command: RuntimeAnalyzeWritingStyleCommand) {
+  const spy = vi.spyOn(command as unknown as { callLLMResult: (prompt: string) => Promise<unknown> }, 'callLLMResult')
+  return { mockResolvedValue: (content: string) => spy.mockResolvedValue({ content, finishReason: 'stop', receipt: {} }) }
+}
+
 function stubIpcInvoke(updateResult: { success: boolean; error?: string } = { success: true }) {
   const invoke = vi.fn((channel: string) => {
     if (channel === 'prompt:load-global') return Promise.resolve({ templates: [], diagnostics: [] })
@@ -89,7 +95,7 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
     const command = new AnalyzeWritingStyleCommand({
       sampleTexts: ['短句密集，动作推进快，对话有压迫感。'],
     })
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+    modelReply(command).mockResolvedValue(
       '节奏偏快，动作描写密集，对话短促有压迫感。',
     )
 
@@ -113,7 +119,7 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
       workflowRuntimeDependencies,
       persistWritingStyle,
     )
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+    modelReply(command).mockResolvedValue(
       '节奏偏快，动作描写密集，对话短促有压迫感。',
     )
 
@@ -137,7 +143,7 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
       uiLocale: 'en-US',
     }
     const command = new AnalyzeWritingStyleCommand({ sampleTexts: ['夜航 Café 的雨声很急。'] })
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+    modelReply(command)
       .mockResolvedValue('Tight pacing with rain-soaked imagery.')
 
     await command.execute({ step: {}, context: englishContext, callbacks })
@@ -161,8 +167,7 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
         },
       ],
     })
-    const callLLM = vi
-      .spyOn(command as unknown as { callLLM: (prompt: string) => Promise<string> }, 'callLLM')
+    const callLLM = modelReply(command)
       .mockResolvedValue('冷峻紧凑，场景切换迅速。')
 
     await command.execute({ step: {}, context, callbacks })
@@ -176,7 +181,7 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
     const command = new AnalyzeWritingStyleCommand({
       sampleTexts: ['短句密集，动作推进快，对话有压迫感。'],
     })
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue(
+    modelReply(command).mockResolvedValue(
       '节奏偏快，动作描写密集，对话短促有压迫感。',
     )
 
@@ -187,7 +192,7 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
   it('英文界面下主进程拒绝保存文风：报英文说明，不转出主进程的中文原文（#466）', async () => {
     stubIpcInvoke({ success: false, error: '项目数据库未打开' })
     const command = new AnalyzeWritingStyleCommand({ sampleTexts: ['短句密集，动作推进快。'] })
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM').mockResolvedValue('Tight pacing.')
+    modelReply(command).mockResolvedValue('Tight pacing.')
 
     await expect(command.execute({ step: {}, context: { ...context, uiLocale: 'en-US' }, callbacks }))
       .rejects.toThrow(/^Failed to save the writing-style profile\.$/u)
@@ -216,7 +221,7 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
     const command = new AnalyzeWritingStyleCommand({
       sampleTexts: ['短句密集，动作推进快。'],
     })
-    vi.spyOn(command as unknown as { callLLM: () => Promise<string> }, 'callLLM')
+    modelReply(command)
       .mockResolvedValue('旧项目分析出的文风')
 
     const execution = command.execute({ step: {}, context, callbacks })

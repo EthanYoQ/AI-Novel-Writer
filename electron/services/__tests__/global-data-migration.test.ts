@@ -191,6 +191,17 @@ describe('single global generation cutover using synthetic roots only', () => {
       expect(fs.existsSync(roots.canonicalTarget)).toBe(false)
     }
   })
+  it('starts with stale or malformed stage model assignments because routing falls back at read time', () => {
+    for (const stageModelIds of [{ review: 'deleted-model', planning: 'model-a' }, 'not-an-object', ['model-a'], { unknown: 7 }]) {
+      const roots = fixture(); populate(roots.legacySource)
+      put(roots.legacySource, 'config.json', { defaultModelId: 'model-a', stageModelIds })
+      const migrated = runGlobalDataMigration(roots)
+      expect(migrated.state).toBe('ready')
+      if (migrated.state !== 'ready') continue
+      put(migrated.dataRoot, 'config.json', { defaultModelId: 'model-a', stageModelIds })
+      expect(runGlobalDataMigration(roots)).toMatchObject({ state: 'ready', globalGeneration: migrated.globalGeneration })
+    }
+  })
   it('blocks same-ID differing credentials with no credential, ID, or digest in result', () => {
     const roots = fixture(); populate(roots.legacySource); populate(roots.canonicalTarget)
     put(roots.canonicalTarget, 'models.json', [{ id: 'model-a', apiKey: 'other-fixture-secret' }])

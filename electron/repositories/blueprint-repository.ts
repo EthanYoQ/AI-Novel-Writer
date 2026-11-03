@@ -20,14 +20,14 @@ import type { BlueprintNewCharacterCandidate } from '../../src/shared/blueprint-
 export interface BlueprintRow {
     chapter_number: number
     title: string
-    role: string
-    purpose: string
-    key_events: string
-    characters: string
-    suspense_hook: string
-    user_guidance: string
-    notes: string
-    notes_updated_at: string
+    role: string | null
+    purpose: string | null
+    key_events: string | null
+    characters: string | null
+    suspense_hook: string | null
+    user_guidance: string | null
+    notes: string | null
+    notes_updated_at: string | null
     created_at: string
     updated_at: string
 }
@@ -145,20 +145,23 @@ interface CharacterRosterOperationEvidenceRow {
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u
 
+function parseCharacters(raw: string | null): string[] {
+    if (raw === null) return []
+    try { return JSON.parse(raw) } catch { return [] }
+}
+
 function rowToData(row: BlueprintRow): BlueprintData {
-    let chars: string[] = []
-    try { chars = JSON.parse(row.characters) } catch { /* 容错 */ }
     return {
         chapterNumber: row.chapter_number,
         title: row.title,
-        role: row.role,
-        purpose: row.purpose,
-        keyEvents: row.key_events,
-        characters: chars,
-        suspenseHook: row.suspense_hook,
-        userGuidance: row.user_guidance,
-        notes: row.notes,
-        notesUpdatedAt: row.notes_updated_at,
+        role: row.role ?? '',
+        purpose: row.purpose ?? '',
+        keyEvents: row.key_events ?? '',
+        characters: parseCharacters(row.characters),
+        suspenseHook: row.suspense_hook ?? '',
+        userGuidance: row.user_guidance ?? '',
+        notes: row.notes ?? '',
+        notesUpdatedAt: row.notes_updated_at ?? '',
     }
 }
 
@@ -590,8 +593,16 @@ export class BlueprintRepository {
         }
     }
 
-    /** 完整逻辑范围只提交一次，并在同一事务内回读验证后返回收据。 */
-    static commitRange(request: BlueprintRangeCommitRequest, assertGenerationSources?: () => void, db = requireProjectDb()): BlueprintRangeCommitReceipt {
+    /**
+     * 完整逻辑范围只提交一次，并在同一事务内回读验证后返回收据。
+     * fill-empty（作者原稿反推）在提交事务里重读：此刻已有蓝图的章保持原样，只写还没有蓝图的章。
+     */
+    static commitRange(
+        request: BlueprintRangeCommitRequest,
+        assertGenerationSources?: () => void,
+        db = requireProjectDb(),
+        fill: 'replace' | 'fill-empty' = 'replace',
+    ): BlueprintRangeCommitReceipt {
         assertExactRange(request)
         ensureBlueprintCommitSchema(db)
         const payloadHash = commitPayloadHash(request)
@@ -644,11 +655,14 @@ export class BlueprintRepository {
             const existingByChapter = new Map((db.prepare(
                 'SELECT * FROM blueprints WHERE chapter_number BETWEEN ? AND ?',
             ).all(request.startChapter, request.endChapter) as BlueprintRow[]).map(row => [row.chapter_number, rowToData(row)] as const))
+            const kept = (chapterNumber: number) => fill === 'fill-empty' && existingByChapter.has(chapterNumber)
             const blueprints = request.blueprints.map(blueprint => (
-                withExistingAuthorFields(blueprint, existingByChapter.get(blueprint.chapterNumber))
+                kept(blueprint.chapterNumber)
+                    ? existingByChapter.get(blueprint.chapterNumber)!
+                    : withExistingAuthorFields(blueprint, existingByChapter.get(blueprint.chapterNumber))
             ))
             for (const blueprint of blueprints) {
-                BlueprintRepository.upsert(blueprint, db)
+                if (!kept(blueprint.chapterNumber)) BlueprintRepository.upsert(blueprint, db)
             }
 
             const persisted = readExactRange(db, request)

@@ -33,6 +33,21 @@ export type ImportRunStage =
   | 'completed'
 
 export type ImportRunStatus = 'ready' | 'running' | 'failed' | 'cancelled' | 'completed'
+
+/** 阶段顺序由运行用途和冻结的反推选项决定；作者原稿的反推放在后处理之后，知识库里已经有定稿正文。 */
+const IMPORT_STAGE_PLANS = {
+  reference: ['knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed'],
+  author: ['author-commit', 'author-publish', 'author-postprocess', 'refresh', 'completed'],
+  authorWithInference: [
+    'author-commit', 'author-publish', 'author-postprocess', 'global', 'style', 'blueprints', 'refresh', 'completed',
+  ],
+} as const satisfies Record<string, readonly ImportRunStage[]>
+
+export function importStagesFor(run: { purpose: ImportPurpose; authorInference?: boolean }): readonly ImportRunStage[] {
+  if (run.purpose === 'reference') return IMPORT_STAGE_PLANS.reference
+  return run.authorInference ? IMPORT_STAGE_PLANS.authorWithInference : IMPORT_STAGE_PLANS.author
+}
+
 export type ImportRunDirectCheckpointStage =
   | 'knowledge'
   | 'author-publish'
@@ -232,6 +247,8 @@ export interface ImportRunPrepareRequest {
   authorityFingerprint?: string
   /** Required for author manuscripts; binds confirmation to the inspected chapter manifest. */
   expectedManifestFingerprint?: string
+  /** 作者原稿：「同时反推设定、架构、角色和蓝图」，创建运行时冻结。 */
+  authorInference?: boolean
   chapters: ImportRunChapterInput[]
 }
 
@@ -288,6 +305,8 @@ export type ImportRunPrepareFromInspectionRequest = {
   locale: ImportRunLocale
   authorityFingerprint: string
   manifestFingerprint: string
+  /** 「同时反推设定、架构、角色和蓝图」，创建运行时冻结。 */
+  authorInference: boolean
 }
 
 /** Current-project selection binds parsing to one frozen project lease before any source is read. */
@@ -306,6 +325,8 @@ export interface ImportRunSnapshot {
   /** Author-manuscript snapshots expose only the hashes needed to resume their confirmed commit. */
   manifestFingerprint?: string
   authorityFingerprint?: string
+  /** 作者原稿：创建运行时冻结的「同时反推设定、架构、角色和蓝图」。 */
+  authorInference?: boolean
   sourceDisplay: ImportSourceDisplayMetadata[]
   /** Safe display facts for sources that still need user reauthorization. */
   unfinishedSourceDisplay?: ImportSourceDisplayMetadata[]

@@ -11,6 +11,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateHistoricalSupersessionBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, forwardReasoningFor, forwardQualificationWindowFor, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
+import { freezeProductionEnvironment } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolatedRealModelConfig, PHASE_SCENARIOS, classifyProductionPair,
   fullExecutionSchedule, classifyFullProduction, validateFullAcceptedPredecessor,
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
@@ -7701,5 +7702,26 @@ test('H5 length overlong primary followed directly by condense passes full/post-
     const wrong = continuityResults(dir, { condensedIndex: 3, primaryText: '甲'.repeat(500) })
     update(wrong[3], '本地恢复后续写')
     assert.equal(validateCandidateContinuityResults(wrong, 'synthetic').candidateFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('freezes the better-sqlite3 binary the target runtime actually loaded, also in a build/Release layout', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime', 'qm-native-layout-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"qm-native-layout","private":true}')
+    const modules = path.join(dir, 'node_modules')
+    fs.mkdirSync(modules)
+    for (const name of ['esbuild', 'vitest', 'electron']) fs.symlinkSync(fs.realpathSync(path.join(ROOT, 'node_modules', name)), path.join(modules, name), 'junction')
+    const installed = fs.realpathSync(path.join(ROOT, 'node_modules', 'better-sqlite3'))
+    const legacyLayout = path.join(modules, 'better-sqlite3')
+    fs.cpSync(installed, legacyLayout, { recursive: true, filter: source => path.basename(source) !== 'prebuilds' })
+    const builtBinary = path.join(legacyLayout, 'build', 'Release', 'better_sqlite3.node')
+    fs.mkdirSync(path.dirname(builtBinary), { recursive: true })
+    fs.copyFileSync(path.join(installed, 'prebuilds', `${process.platform}-${process.arch}.node`), builtBinary)
+
+    const frozen = freezeProductionEnvironment({ arm: 'candidate', repositoryRoot: dir })
+
+    assert.equal(frozen.sqlite.binary, fs.realpathSync(builtBinary))
+    assert.equal(frozen.sqlite.sha256, hash(fs.readFileSync(builtBinary)))
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

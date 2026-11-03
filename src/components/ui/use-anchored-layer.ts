@@ -32,7 +32,7 @@ export function useAnchoredLayer(align: 'start' | 'end'): {
   const anchorRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const layerRef = useRef<HTMLDivElement>(null)
-  /** 定位时量到的触发按钮位置，滚动时与它比：在 layout 阶段记，与定位同一次测量。 */
+  /** 定位时外层锚点的位置，滚动时与它比。量锚点不量按钮：按钮展开后有下沉 1px 的过渡，会被误当成被滚动带走。 */
   const placedAt = useRef<DOMRect | null>(null)
   // 打开时才找 Portal 的根：书架上每本书都有一个菜单，挂载时逐个查找会让每个菜单多渲染一次。
   const [root, setRoot] = useState<Element | null>(null)
@@ -48,7 +48,7 @@ export function useAnchoredLayer(align: 'start' | 'end'): {
     const trigger = triggerRef.current
     if (!open || !layer || !trigger) return
     const rect = trigger.getBoundingClientRect()
-    placedAt.current = rect
+    placedAt.current = anchorRef.current?.getBoundingClientRect() ?? null
     const { clientWidth, clientHeight } = document.documentElement
     const below = clientHeight - rect.bottom - GAP - MARGIN
     const above = rect.top - GAP - MARGIN
@@ -74,10 +74,10 @@ export function useAnchoredLayer(align: 'start' | 'end'): {
     const onFocusIn = (event: FocusEvent) => {
       if (!inside(event.target)) close(false)
     }
-    // 只看触发按钮动没动：别处的滚动区（跟到最新一行的运行日志）滚动时浮层不必关
+    // 只看外层锚点动没动：别处的滚动区（跟到最新一行的运行日志）滚动时浮层不必关
     const onScroll = () => {
-      const now = triggerRef.current?.getBoundingClientRect()
-      if (now && (now.top !== placedAt.current?.top || now.left !== placedAt.current?.left)) close(false)
+      const now = anchor.getBoundingClientRect()
+      if (now.top !== placedAt.current?.top || now.left !== placedAt.current?.left) close(false)
     }
     const onResize = () => close(false)
     const onKeyDown = (event: KeyboardEvent) => {

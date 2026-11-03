@@ -2,11 +2,13 @@ import { ipc } from './ipc-client'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { LegacyRosterGenerationRecovery } from '../shared/legacy-roster-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
+import { throwIfLastAttemptTerminal } from './generation/generation-harness'
 
 const sameRun = (a: MainGenerationRunHandle, b: MainGenerationRunHandle) => a.projectId === b.projectId && a.rootActionId === b.rootActionId && a.runId === b.runId
+const sourceUsable = (current: LegacyRosterGenerationRecovery) => current.sourceStatus === 'current' && current.view.status !== 'cancelled'
 export function canContinueLegacyRoster(current: LegacyRosterGenerationRecovery) {
   const latest = (current.view.candidates ?? current.view.artifacts).at(-1)
-  return current.sourceStatus === 'current' && current.view.status !== 'cancelled'
+  return sourceUsable(current)
     && (!!current.proposal || !!current.artifact || current.attemptCount === 0
       || !!latest && (latest.status === 'completed' || latest.status === 'failed') && latest.compositionEligible === true)
 }
@@ -56,8 +58,11 @@ export function createLegacyRosterGeneration(sessionInput: ProjectSessionContext
       assertActive()
       if (detached || cancelled) throw new Error('LEGACY_ROSTER_GENERATION_DETACHED')
       if (current.proposal || current.artifact) return current
-      if (!canContinueLegacyRoster(current)) throw new Error('LEGACY_ROSTER_GENERATION_OUTCOME_UNKNOWN')
-      if (current.sourceStatus !== 'current' || current.view.status === 'cancelled') throw new Error('LEGACY_ROSTER_GENERATION_SOURCE_CONFLICT')
+      if (!canContinueLegacyRoster(current)) {
+        if (sourceUsable(current)) throwIfLastAttemptTerminal(current.view.budgetDiagnostics, current.view.handle.runId)
+        throw new Error('LEGACY_ROSTER_GENERATION_OUTCOME_UNKNOWN')
+      }
+      if (!sourceUsable(current)) throw new Error('LEGACY_ROSTER_GENERATION_SOURCE_CONFLICT')
       // Main replays cached ordinals and alone decides whether a known malformed
       // stop can use one of the original finite repair attempts.
       const receipt = await ipc.invokeWithProjectSession(session, 'legacy-roster:execute', { handle: current.view.handle })
@@ -70,7 +75,11 @@ export function createLegacyRosterGeneration(sessionInput: ProjectSessionContext
       const current = await read()
       assertActive()
       if (current.proposal) return current.proposal
-      if (detached || cancelled || current.sourceStatus !== 'current' || current.view.status === 'cancelled' || !current.artifact) throw new Error('LEGACY_ROSTER_GENERATION_NOT_STAGEABLE')
+      if (detached || cancelled || !sourceUsable(current)) throw new Error('LEGACY_ROSTER_GENERATION_NOT_STAGEABLE')
+      if (!current.artifact) {
+        throwIfLastAttemptTerminal(current.view.budgetDiagnostics, current.view.handle.runId)
+        throw new Error('LEGACY_ROSTER_GENERATION_NOT_STAGEABLE')
+      }
       return ipc.invokeWithProjectSession(session, 'legacy-roster:stage', { handle: current.view.handle, artifact: current.artifact })
     },
     async cancel() { cancelled = true; cancelPromise ??= (async () => { if (opening) await opening.catch(() => {}); await cancelKnown() })(); await cancelPromise },

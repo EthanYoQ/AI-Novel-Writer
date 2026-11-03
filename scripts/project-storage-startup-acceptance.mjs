@@ -114,7 +114,7 @@ function assertProfilesAreIsolated() {
 }
 
 if (process.argv.includes('--help')) {
-  process.stdout.write('Run: pnpm build; pnpm run rebuild:electron; node scripts/project-storage-startup-acceptance.mjs. Keep rebuild:electron immediately before this real Electron check. Uses only synthetic isolated roots; no provider requests.\n')
+  process.stdout.write('Run: pnpm build; node scripts/project-storage-startup-acceptance.mjs. Uses only synthetic isolated roots; no provider requests.\n')
 } else {
   for (const current of Object.values(profiles)) {
     fs.mkdirSync(current.evidenceRoot, { recursive: true })

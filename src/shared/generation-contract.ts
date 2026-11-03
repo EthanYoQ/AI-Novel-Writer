@@ -82,10 +82,8 @@ export function assertReservation(root: RootAction, policy: RootBudget, attempts
   if (new Set(attempts.map(item => item.attemptId)).size !== attempts.length
     || new Set(attempts.map(item => item.reservationId)).size !== attempts.length
     || attempts.some(item => !['reserved', 'dispatch-marked', 'settled', 'unknown', 'cancelled-before-dispatch'].includes(item.status))) throw new Error('INVALID_LEDGER')
-  // Hard-bound violations are durably blocked at settlement using the stored
-  // usage policy. An estimate overrun only consumes its full actual root usage.
+  // token 只记账不刹车（ADR-0023）。
   if (attempts.filter(item => item.status !== 'cancelled-before-dispatch').length >= policy.maxPhysicalRequests
-    || attempts.reduce((sum, item) => sum + tokenLiability(item), 0) + next.reservedTokens > policy.maxTokenLiability
     || elapsedMs >= policy.maxActiveElapsedMs) throw new Error('ROOT_BUDGET_EXHAUSTED')
 }
 export function assertAttemptTransition(before: PhysicalAttempt['status'], after: PhysicalAttempt['status']): void {
@@ -102,4 +100,11 @@ export async function assertVisibleSnapshot(previous: VisibleArtifact, next: Vis
     || !next.text.startsWith(previous.text) || !isContentHash(next.textHash)
     || await hashAuthorText(previous.text) !== previous.textHash || await hashAuthorText(next.text) !== next.textHash
     || JSON.stringify(previous.fingerprint) !== JSON.stringify(next.fingerprint)) throw new Error('ARTIFACT_SNAPSHOT_CONFLICT')
+}
+
+/** Provider failures that resending the same request cannot fix: the run ends with the code. */
+export const TERMINAL_PROVIDER_FAILURE_CODES = ['GENERATION_CONTEXT_LENGTH_EXCEEDED'] as const
+
+export function isTerminalProviderFailure(code: unknown): code is typeof TERMINAL_PROVIDER_FAILURE_CODES[number] {
+  return (TERMINAL_PROVIDER_FAILURE_CODES as readonly unknown[]).includes(code)
 }

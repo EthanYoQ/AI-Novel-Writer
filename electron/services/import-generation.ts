@@ -34,7 +34,7 @@ export class ImportGeneration {
     const state = this.db.prepare('SELECT stage,status,cancel_requested FROM import_runs WHERE id=?').get(slot.runId) as { stage: string; status: string; cancel_requested: number } | undefined
     if (!state || state.stage !== slot.stage || state.status !== 'running' || state.cancel_requested) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
   }
-  admit(selection: BeginGenerationRequest): { existing?: DurableGenerationRun; parentRootActionId?: string; modelId?: string } | undefined {
+  admit(selection: BeginGenerationRequest): { existing?: DurableGenerationRun; parentRootActionId?: string; modelId?: string; chapterCount?: number } | undefined {
     const slot = selection.importSlot
     if (!slot) {
       if (selection.importExecution || ['import-global-facts', 'import-blueprints'].includes(selection.operation)) throw new Error('GENERATION_IMPORT_SLOT_REQUIRED')
@@ -54,7 +54,7 @@ export class ImportGeneration {
     }
     const state = this.db.prepare('SELECT stage,status,cancel_requested FROM import_runs WHERE id=?').get(slot.runId) as { stage: string; status: string; cancel_requested: number } | undefined
     if (!state || state.stage !== slot.stage || state.status !== 'running' || state.cancel_requested) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
-    captureImportGenerationContext(this.db, slot)
+    const { totalChapters } = captureImportGenerationContext(this.db, slot)
     const records = (this.db.prepare("SELECT run_id FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlot.runId')=? ORDER BY rowid").all(slot.runId) as { run_id: string }[])
       .map(row => this.runs.get(row.run_id)).filter(run => run.binding.projectId === this.projectId)
     const roots = new Set(records.map(run => run.rootActionId))
@@ -66,6 +66,7 @@ export class ImportGeneration {
     }
     const parentRootActionId = records[0]?.rootActionId
     if (selection.parentRootActionId && selection.parentRootActionId !== parentRootActionId) throw new Error('GENERATION_IMPORT_ROOT_CHANGED')
-    return { ...(parentRootActionId ? { parentRootActionId, modelId: (records[0]!.binding.sourceManifest.modelReceipt as { modelId: string }).modelId } : {}) }
+    return parentRootActionId ? { parentRootActionId, modelId: (records[0]!.binding.sourceManifest.modelReceipt as { modelId: string }).modelId }
+      : { chapterCount: totalChapters }
   }
 }

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import contextLengthSamples from '../../llm/__tests__/provider-context-length-samples.json'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
@@ -167,9 +168,8 @@ describe('chapter outline main authority', () => {
     const repository = new GenerationRunRepository(() => f.db), binding = structuredClone(repository.get(run.handle.runId).binding)
     const originalTask = outlineTask(f.owner.read(run.handle).plotOutline!)
     if (mode === 'zero-attempt') {
-      await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'capacity-refused',
-        task: { ...originalTask, messages: [{ role: 'user', content: `${'A'.repeat(40000)}\n${originalTask.messages[0].content}` }] } }))
-        .rejects.toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+      await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'refused-before-reservation',
+        task: { ...originalTask, maxTokens: 1 } as unknown as GenerationTask })).rejects.toThrow('GENERATION_SEMANTIC_TASK_INVALID')
     } else await f.owner.execute({ handle: run.handle, invocationNonce: 'unknown', task: originalTask })
     const context = f.owner.readContext(run.handle), originalRoot = f.db.prepare('SELECT * FROM generation_roots').all()
     const originalAttempts = f.db.prepare('SELECT * FROM generation_attempts').all()
@@ -513,7 +513,7 @@ describe('explicit planning recovery with real SQLite', () => {
     const repository = new GenerationRunRepository(() => f.db)
     repository.pause(run.handle.rootActionId)
 
-    expect(f.owner.list().find(view => view.handle.runId === run.handle.runId)?.plotOutline?.cursor).toEqual({ kind: 'stopped', chapterNumber: 4, reason: 'source-invalid' })
+    expect(f.owner.read(run.handle).plotOutline?.cursor).toEqual({ kind: 'stopped', chapterNumber: 4, reason: 'source-invalid' })
     const context = f.owner.readContext(run.handle)
     expect(context.plotOutlineRecovery).toMatchObject({ draft: outlineEntry(3), writeState: { kind: 'blocked', reason: 'source-invalid' } })
     expect(context.planningContinuation?.state).toBe('source-invalid')
@@ -617,6 +617,41 @@ describe('explicit planning recovery with real SQLite', () => {
     expect(replacement.handle.rootActionId).not.toBe(run.handle.rootActionId)
     expect(f.owner.readContext(replacement.handle).planningContinuation).toMatchObject({ remainingRange: { from: 2, to: 3 }, targetUnits: 700 })
     expect(f.owner.readContext(run.handle).blueprintRecovery!.draft).toBe(raw)
+  })
+  it('蓝图页只向主进程要章节蓝图的恢复稿，其他生成运行不读也不返回（#536）', async () => {
+    const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch)
+    expect(f.owner.findBlueprintRecovery()).toBeNull()
+    const run = f.owner.begin(directorySelection(f))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'failed', task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const draft = f.owner.begin({ ...f.begin, uiActionNonce: 'later-draft' })
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','unknown-policy') WHERE run_id=?").run(draft.handle.runId)
+    expect(f.owner.findBlueprintRecovery()).toMatchObject({ handle: run.handle, operation: 'chapter-blueprint-directory', blueprintRecovery: { draft: raw, writeState: 'ready' } })
+  })
+  it('作者把恢复稿整段保存完以后，蓝图页与运行侧页都不再给这份恢复稿（#536）', async () => {
+    const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch), run = f.owner.begin(directorySelection(f))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'failed', task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const context = f.owner.readContext(run.handle)
+    f.db.transaction(() => f.owner.commitBlueprintAuthorEdit({ mode: 'replace-range', operationId: 'author-whole-range', startChapter: 1, endChapter: 3,
+      blueprints: parseTextBlueprintsStrict(JSON.stringify([blueprint(1), blueprint(2), blueprint(3)]), 1, 3, 'zh-CN', 'author'),
+      authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } })).immediate()
+    expect(f.owner.readContext(run.handle)).toMatchObject({ planningContinuation: { state: 'complete' }, blueprintRecovery: { writeState: 'author-saved' } })
+    expect(f.owner.listRecovery().planning).toEqual([])
+    expect(f.owner.findBlueprintRecovery()).toBeNull()
+  })
+  it('较新的章节蓝图运行读不出时，跳过它找到较早的恢复稿（#536）', async () => {
+    const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch)
+    const older = f.owner.begin(directorySelection(f))
+    await f.owner.execute({ handle: older.handle, invocationNonce: 'failed', task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const newer = f.owner.begin({ ...directorySelection(f), uiActionNonce: 'newer-blueprint' })
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','unknown-policy') WHERE run_id=?").run(newer.handle.runId)
+    expect(() => f.owner.readContext(newer.handle)).toThrow()
+    expect(f.owner.findBlueprintRecovery()).toMatchObject({ handle: older.handle, blueprintRecovery: { draft: raw, writeState: 'ready' } })
   })
   it('keeps author guidance and chapter notes when a full directory run regenerates existing chapters', async () => {
     const regenerated = blueprint(1, '重新生成后的关键事件。')
@@ -851,7 +886,7 @@ describe('frozen planning roots', () => {
     { name: '64K user', changes: {}, expected: 65536 },
     { name: 'user', changes: { maxTokens: 16384 }, expected: 16384 },
     { name: 'provider', changes: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', modelName: 'gpt-4.1' }, expected: 32768 },
-    { name: 'context', changes: { capabilities: { contextWindowTokens: 4096, maxOutputTokens: 65536, reasoning: true, structuredOutput: true, usage: true } }, expected: 3515 },
+    { name: 'context', changes: { capabilities: { contextWindowTokens: 4096, maxOutputTokens: 65536, reasoning: true, structuredOutput: true, usage: true } }, expected: 65536 },
   ] satisfies { name: string; changes: Partial<ModelProfile>; expected: number }[])('honors the $name bound on a standalone plot wire', async ({ changes, expected }) => {
     const fetch = syntheticStream(), f = planningFixture()
     Object.assign(f.model, changes)
@@ -863,13 +898,13 @@ describe('frozen planning roots', () => {
     expect(wire.max_completion_tokens ?? wire.max_tokens).toBe(expected)
   })
 
-  it('retains unknown usage liability and narrows the last request before the shared root is exhausted', async () => {
+  it('retains unknown usage liability without narrowing any request and stops at the request count', async () => {
     const fetch = syntheticStream(false), f = planningFixture()
     Object.assign(f.model, { provider: 'openai', baseUrl: 'https://compatible.example/v1', modelName: 'custom-model', reasoningOverride: 'auto' })
     const run = await legacyPlanningRun(f, { version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 1, to: 1 } })
     for (let request = 0; request < 32; request++) await f.owner.execute({ handle: run.handle, invocationNonce: `unknown-${request}`, task: plotTask })
     expect(JSON.parse(String(fetch.mock.calls[0]![1].body)).max_tokens).toBe(65536)
-    expect(JSON.parse(String(fetch.mock.calls[31]![1].body)).max_tokens).toBe(46944)
+    expect(JSON.parse(String(fetch.mock.calls[31]![1].body)).max_tokens).toBe(65536)
     const budget = new GenerationRunRepository(() => f.db).budget(run.handle.rootActionId)
     expect(budget.attempts.every(attempt => attempt.status === 'unknown')).toBe(true)
     await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'exhausted', task: plotTask })).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
@@ -1077,7 +1112,7 @@ describe('automatic short outline binding', () => {
     })
     const run = f.owner.begin({ ...f.begin, materialDecision: decision })
     const transport: MainGenerationTransport = {
-      read: async handle => f.owner.read(handle), list: async () => f.owner.list(),
+      read: async handle => f.owner.read(handle),
       execute: request => f.owner.execute(request), cancel: async handle => f.owner.cancel(handle),
       subscribe: (_handle, callback) => { listener = callback; return () => { listener = undefined } },
     }
@@ -1203,6 +1238,14 @@ describe('S07 durable task budget diagnostics', () => {
     const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'openai-offline', task })
     expect(saved.outcome.receipt).toMatchObject({ failureCode: 'NETWORK_ERROR' })
     expect(saved.run.budgetDiagnostics![0]).toMatchObject({ failureCode: 'NETWORK_ERROR' })
+  })
+  it('records a provider context-length rejection under its own failure code', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(contextLengthSamples.deepseek), { status: 400, headers: { 'Content-Type': 'application/json' } })))
+    const f = fixture()
+    const run = f.owner.begin(f.begin)
+    const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'context-length', task })
+    expect(saved.outcome).toMatchObject({ status: 'incomplete', finishReason: 'error', receipt: { failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } })
+    expect(saved.run.budgetDiagnostics![0]).toMatchObject({ runId: run.handle.runId, failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED', actualState: 'unknown' })
   })
   // 实测 gemini-3.8-flash：输入 20、正文 60、思考 830、总量 910。调用记录的「输出」要和 OpenAI 一样含思考（#484）。
   it.each([
@@ -1813,7 +1856,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
       .toThrow('GENERATION_PLANNING_TARGET_INVALID')
     expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(2)
   })
-  it.each([65536, 32768])('uses actual context %i to admit or reject 43,699 bytes before reserving', async contextWindowTokens => {
+  it.each([65536, 32768])('sends 43,699 bytes beside an author context of %i and records the full reservation', async contextWindowTokens => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({kind:'delta',text:'{"blueprints":[]}'}); return {finishReason:'stop',usage:null} })
     const f = fixture(dispatch)
     Object.assign(f.model, { baseUrl:'https://compatible.example/v1', modelName:'custom', maxTokens:65536,
@@ -1824,20 +1867,15 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     const request = {handle:run.handle,invocationNonce:'full-input',task:{purpose:'chapter-blueprint-directory',output:'structured-data' as const,
       reasoningStage:'planning' as const,messages:[{role:'user' as const,content:'x'.repeat(43699)}],
       budgetDemand:{kind:'structured-items' as const,requestedItems:1,writingLanguage:'zh-CN' as const}}}
-    if(contextWindowTokens===65536) {
-      await f.owner.execute(request)
-      expect(dispatch).toHaveBeenCalledTimes(1)
-      const sent=dispatch.mock.calls[0][0] as {task:GenerationTask;plan:{requestedOutputTokens:number;reservedTokens:number}}
-      expect(sent.task.messages.find(message=>message.role==='user')!.content).toBe(request.task.messages[0].content)
-      expect(sent.plan.requestedOutputTokens).toBeGreaterThan(0)
-      expect(sent.plan.reservedTokens).toBeLessThanOrEqual(contextWindowTokens)
-    } else {
-      await expect(f.owner.execute(request)).rejects.toThrow()
-      expect(dispatch).not.toHaveBeenCalled()
-      expect(new GenerationRunRepository(()=>f.db).budget(run.handle.rootActionId).attempts).toHaveLength(0)
-    }
+    await f.owner.execute(request)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    const sent=dispatch.mock.calls[0][0] as {task:GenerationTask;plan:{requestedOutputTokens:number;reservedTokens:number;inputUpperBoundTokens:number}}
+    expect(sent.task.messages.find(message=>message.role==='user')!.content).toBe(request.task.messages[0].content)
+    expect(sent.plan.requestedOutputTokens).toBe(65536)
+    expect(sent.plan.reservedTokens).toBe(sent.plan.inputUpperBoundTokens+65536+512)
+    expect(new GenerationRunRepository(()=>f.db).budget(run.handle.rootActionId).attempts.map(attempt=>attempt.reservedTokens)).toEqual([sent.plan.reservedTokens])
   })
-  it('compares old and new UNKNOWN roots with the same input, retaining all costs and all 32 new request slots', async () => {
+  it('runs old and new UNKNOWN roots to their 32-request brake with the same input, retaining all costs', async () => {
     const dispatch=vi.fn<GenerationRunServiceDependencies['dispatch']>(async()=>({finishReason:'stop',usage:null})), f=fixture(dispatch)
     Object.assign(f.model,{baseUrl:'https://compatible.example/v1',modelName:'unknown-custom',maxTokens:65536,capabilities:undefined})
     const sourceDeps={db:f.db,projectStorageRoot:path.join(f.root,'project'),globalDataRoot:path.join(f.root,'global'),
@@ -1849,8 +1887,8 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     repository.pause(old.rootActionId)
     const oldRun=await f.owner.resume({projectId:'project',epoch:'epoch-1',rootActionId:old.rootActionId,runId:old.runId})
     const input={...task,messages:[{role:'user' as const,content:'x'.repeat(43699)}]}
-    for(let index=0;index<27;index++) await f.owner.execute({handle:oldRun.handle,invocationNonce:`old-${index}`,task:input})
-    await expect(f.owner.execute({handle:oldRun.handle,invocationNonce:'old-28',task:input})).rejects.toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+    for(let index=0;index<32;index++) await f.owner.execute({handle:oldRun.handle,invocationNonce:`old-${index}`,task:input})
+    await expect(f.owner.execute({handle:oldRun.handle,invocationNonce:'old-33',task:input})).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
     expect(repository.budget(old.rootActionId).policy).toEqual(MAIN_GENERATION_POLICY.budget)
     const next=f.owner.begin({...f.begin,uiActionNonce:'new-root'})
     for(let index=0;index<32;index++) await f.owner.execute({handle:next.handle,invocationNonce:`new-${index}`,task:input})
@@ -1860,7 +1898,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(budget.attempts.every(attempt=>attempt.status==='unknown'&&attempt.requestedOutputTokens===65536)).toBe(true)
     expect(budget.attempts.reduce((sum,attempt)=>sum+attempt.reservedTokens,0)).toBeGreaterThan(MAIN_GENERATION_POLICY.budget.maxTokenLiability)
     await expect(f.owner.execute({handle:next.handle,invocationNonce:'new-33',task:input})).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
-    expect(dispatch).toHaveBeenCalledTimes(59)
+    expect(dispatch).toHaveBeenCalledTimes(64)
   })
   it('shows semantic 1712 and physical 16384 from the durable owner diagnostic with reservation 50410', async () => {
     const f = fixture(async () => ({ finishReason: 'length', usage: null }))
@@ -1998,7 +2036,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(JSON.stringify(f.db.prepare('SELECT artifact_json FROM generation_artifacts').all())).not.toContain('隐藏')
     await f.owner.execute({ handle: view.handle, invocationNonce: 'call', task })
     expect(fetch).toHaveBeenCalledTimes(1)
-    expect(f.owner.list()[0].ledger?.physicalRequests).toBe(1)
+    expect(f.owner.read(view.handle).ledger?.physicalRequests).toBe(1)
   })
   it('retains safe stream diagnostics through the owner, SQLite reopen and snapshot IPC without retry', async () => {
     const snapshots: import('../../../src/services/generation/generation-runtime').MainGenerationSnapshot[] = []
@@ -2539,6 +2577,43 @@ describe('main draft persistence and batch lineage', () => {
     expect(DraftRepository.getFull(saved.id)).toMatchObject({ status: 'finalized', content: revised })
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
+  it('refuses to advance a batch whose unedited final was replaced by a lower-version draft', async () => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
+    const older = '作者更早写下的第一章。'
+    f.db.prepare('INSERT INTO contents(id,body) VALUES(9001,?)').run(older)
+    f.db.prepare("INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count) VALUES(9001,1,0,'draft','write',9001,10)").run()
+    FinalizationRepository.commit({ finalizationId: 'older-final', draftId: 9001, chapterNumber: 1,
+      chapterTitle: '第一章', content: older, contentHash: textHash(older), contentRevision: 1, targetFileName: '第一章 旧.txt' })
+
+    const reopened = f.reopen()
+    expect(DraftRepository.getMeta(saved.id)?.status).toBe('superseded')
+    expect(reopened.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false })])
+    expect(() => reopened.readBatch(batch.batchId)).toThrow('GENERATION_BATCH_DRAFT_REPLACED')
+  })
+  it('still lists a batch whose revised finalization was later replaced by a newer final', async () => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request), revised = '林岚确认信封中的线索后，走向城门。'
+    FinalizationRepository.commit({ finalizationId: 'revised-finalization', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: revised, contentHash: textHash(revised), contentRevision: 1, targetFileName: '第一章.txt' })
+    const rewrite = '林岚在城门口停下，回头看了一眼灯塔。'
+    const replacement = DraftRepository.create({ chapterNumber: 1, source: 'write', content: rewrite, wordCount: 18 })
+    FinalizationRepository.commit({ finalizationId: 'replacing-finalization', draftId: replacement, chapterNumber: 1,
+      chapterTitle: '第一章', content: rewrite, contentHash: textHash(rewrite), contentRevision: 1, targetFileName: '第一章 新.txt' })
+
+    const reopened = f.reopen()
+    expect(DraftRepository.getMeta(saved.id)?.status).toBe('superseded')
+    expect(reopened.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false,
+      completedChapters: [expect.objectContaining({ draftId: saved.id, contentHash: saved.contentHash })] })])
+  })
   it.each(['hash', 'unrelated snapshot', 'chapter', 'unfinalized draft'])('rejects a corrupt %s outbox despite changed batch prose', async corruption => {
     const f = drafting()
     const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
@@ -2869,6 +2944,149 @@ describe('main draft persistence and batch lineage', () => {
     PostProcessRepository.markStepOk(post, 'chapter_notes')
     expect(f.owner.confirmBatchFinalization({ batchId: batch.batchId, chapterNumber: 1, finalizationId: 'finalization-one' }).nextChapterNumber).toBeNull()
   })
+
+  describe('运行侧页的可恢复列表由主进程一次算好（#536）', () => {
+    const runIds = (items: readonly { view?: { handle: { runId: string } }; handle?: { runId: string }; batchId?: string }[]) =>
+      items.map(item => item.batchId ?? item.view?.handle.runId ?? item.handle!.runId)
+    it('列出未保存的单章候选和可续写的批次，不列批内单章与已写完的批次', async () => {
+      const f = drafting()
+      f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+      const unsaved = await generate(f, { ...f.begin, uiActionNonce: 'unsaved', authorInputs })
+      const open = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+        uiActionNonce: 'open-batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+      const child = await generate(f, { ...f.begin, uiActionNonce: 'open-child', authorInputs, batchId: open.batchId, parentRootActionId: open.rootHandle.rootActionId })
+      f.owner.commitDraft(child.request)
+      const done = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 2, endChapter: 2 }, targetUnits: 20,
+        uiActionNonce: 'done-batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+      const doneChild = await generate(f, { ...f.begin, chapterNumber: 2, uiActionNonce: 'done-child', authorInputs, batchId: done.batchId, parentRootActionId: done.rootHandle.rootActionId })
+      f.owner.commitDraft(doneChild.request)
+
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([unsaved.run.handle.runId])
+      expect(list.drafts[0]!.recovery).toMatchObject({ operation: 'chapter-draft', chapterNumber: 1, draftSave: { kind: 'absent' } })
+      expect(list.batches.map(batch => [batch.batchId, batch.nextChapterNumber])).toEqual([[open.batchId, 2]])
+      expect(list).toMatchObject({ planning: [], reviews: [], editors: [], partial: false })
+    })
+    it('已保存的单章运行不列为可恢复，无论正文后来改没改过', async () => {
+      const f = drafting()
+      const current = await generate(f, { ...f.begin, uiActionNonce: 'current', authorInputs })
+      f.owner.commitDraft(current.request)
+      const changed = await generate(f, { ...f.begin, uiActionNonce: 'changed', authorInputs })
+      const saved = f.owner.commitDraft(changed.request)
+      DraftRepository.updateContent(saved.id, '作者修改后的当前正文。', 11)
+      const unsaved = await generate(f, { ...f.begin, uiActionNonce: 'unsaved', authorInputs })
+      const reopened = f.reopen()
+      expect([current, changed].map(item => reopened.readContext(item.run.handle).draftSave.kind)).toEqual(['current', 'changed'])
+      expect(runIds(reopened.listRecovery().drafts)).toEqual([unsaved.run.handle.runId])
+    })
+    it('尾段对不回尝试行时跳过它，不当作哪个运行的尾段', async () => {
+      const f = drafting()
+      const saved = await generate(f, { ...f.begin, uiActionNonce: 'saved', authorInputs })
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END")
+      const tail = await f.owner.execute({ handle: saved.run.handle, invocationNonce: 'second', task })
+      f.db.exec('DROP TRIGGER reject_snapshot')
+      f.owner.commitDraft(saved.request)
+      const orphan = tail.run.unsavedTails![0]!.attemptId
+      f.db.pragma('foreign_keys = OFF')
+      f.db.prepare('DELETE FROM generation_artifacts WHERE attempt_id=?').run(orphan)
+      f.db.prepare('DELETE FROM generation_attempts WHERE attempt_id=?').run(orphan)
+      f.db.pragma('foreign_keys = ON')
+      expect(f.owner.listRecovery()).toMatchObject({ drafts: [], partial: false })
+    })
+    it('已保存的单章运行还有没落盘的正文时仍列出，尾段可复制', async () => {
+      const f = drafting()
+      const saved = await generate(f, { ...f.begin, uiActionNonce: 'saved', authorInputs })
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END")
+      const tail = await f.owner.execute({ handle: saved.run.handle, invocationNonce: 'second', task })
+      expect(tail.run.unsavedTails?.[0]?.text.trim()).toBeTruthy()
+      f.db.exec('DROP TRIGGER reject_snapshot')
+      f.owner.commitDraft(saved.request)
+      const list = f.owner.listRecovery()
+      expect(runIds(list.drafts)).toEqual([saved.run.handle.runId])
+      expect(list.drafts[0]!.view.unsavedTails?.[0]?.text).toBe(tail.run.unsavedTails?.[0]?.text)
+    })
+    it('别的运行有尾段时，不读其余已保存运行的视图', async () => {
+      const f = drafting()
+      const other = await generate(f, { ...f.begin, uiActionNonce: 'other', authorInputs })
+      f.owner.commitDraft(other.request)
+      const tailed = await generate(f, { ...f.begin, uiActionNonce: 'tailed', authorInputs })
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic disk failure'); END")
+      await f.owner.execute({ handle: tailed.run.handle, invocationNonce: 'second', task })
+      f.db.exec('DROP TRIGGER reject_snapshot')
+      const readRunView = GenerationRunRepository.prototype.readRunView
+      const spy = vi.spyOn(GenerationRunRepository.prototype, 'readRunView').mockImplementation(function (this: GenerationRunRepository, runId: string) {
+        if (runId === other.run.handle.runId) throw new Error('unrelated saved run view read')
+        return readRunView.call(this, runId)
+      })
+      try {
+        const list = f.owner.listRecovery()
+        expect(runIds(list.drafts)).toEqual([tailed.run.handle.runId])
+        expect(list.partial).toBe(false)
+      } finally { spy.mockRestore() }
+    })
+    it('列出被取消的单章候选；只发出请求、没写出字的不列', async () => {
+      const f = drafting()
+      const cancelled = await generate(f, { ...f.begin, uiActionNonce: 'cancelled', authorInputs })
+      f.owner.cancel(cancelled.run.handle)
+      const empty = f.owner.begin({ ...f.begin, uiActionNonce: 'empty', authorInputs })
+      f.owner.cancel(empty.handle)
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([cancelled.run.handle.runId])
+      expect(list.drafts[0]!.view.status).toBe('cancelled')
+    })
+    it('列出没写完的情节大纲恢复稿', async () => {
+      const f = fixture(vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason: null, usage: null })))
+      const run = f.owner.begin(outlineSelection(f, 3))
+      await f.owner.execute({ handle: run.handle, invocationNonce: 'unknown', task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.planning)).toEqual([run.handle.runId])
+      expect(list.planning[0]!.plotOutlineRecovery).toBeDefined()
+    })
+    it('generation:list 只给身份、状态与操作类型，新的在前，不带候选全文', async () => {
+      const f = drafting()
+      const first = await generate(f, { ...f.begin, uiActionNonce: 'first', authorInputs })
+      const second = await generate(f, { ...f.begin, uiActionNonce: 'second', authorInputs })
+      f.owner.cancel(second.run.handle)
+      const reopened = f.reopen()
+      expect(reopened.list()).toEqual([
+        { handle: second.run.handle, status: 'cancelled', operation: 'chapter-draft' },
+        { handle: first.run.handle, status: 'paused', operation: 'chapter-draft' },
+      ])
+      expect(JSON.stringify(reopened.list())).not.toContain(draftText)
+    })
+    it('一条生成尝试的收据坏成不是 JSON 时，其余单章候选照常列出，只标部分读取失败', async () => {
+      const f = drafting()
+      const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken-receipt', authorInputs })
+      const intact = await generate(f, { ...f.begin, uiActionNonce: 'intact-receipt', authorInputs })
+      f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+        uiActionNonce: 'batch-beside-bad-receipt', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+      f.db.prepare("UPDATE generation_attempts SET usage_receipt_json='{坏收据' WHERE run_id=?").run(broken.run.handle.runId)
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([intact.run.handle.runId])
+      expect(list.partial).toBe(true)
+    })
+    it('一条不属于任何批次的坏收据不挡住可续写的批次，只标部分读取失败', async () => {
+      const f = drafting()
+      f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+      const batches = [1, 2].map(chapter => f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: chapter, endChapter: chapter }, targetUnits: 20,
+        uiActionNonce: `batch-${chapter}`, modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] }))
+      const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken-single', authorInputs })
+      f.db.prepare("UPDATE generation_attempts SET usage_receipt_json='{坏收据' WHERE run_id=?").run(broken.run.handle.runId)
+      const reopened = f.reopen(), list = reopened.listRecovery()
+      expect(list.batches.map(batch => batch.batchId).sort()).toEqual(batches.map(batch => batch.batchId).sort())
+      expect(list.partial).toBe(true)
+      expect(() => reopened.readBatch(batches[0]!.batchId)).toThrow()
+    })
+    it('一个运行读不出时照常列出其余运行，并标出部分读取失败', async () => {
+      const f = drafting()
+      const broken = await generate(f, { ...f.begin, uiActionNonce: 'broken', authorInputs })
+      const intact = await generate(f, { ...f.begin, uiActionNonce: 'intact', authorInputs })
+      f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','unknown-policy') WHERE run_id=?").run(broken.run.handle.runId)
+      const list = f.reopen().listRecovery()
+      expect(runIds(list.drafts)).toEqual([intact.run.handle.runId])
+      expect(list.partial).toBe(true)
+    })
+  })
 })
 
 it('rejects an empty begin prompt selection without creating a run or dispatching', () => {
@@ -2974,5 +3192,6 @@ describe('大纲恢复稿是否已写进正式大纲', () => {
     const context = f.owner.readContext(run.handle)
     expect(context.plotOutline!.cursor).toEqual({ kind: 'complete' })
     expect(context.plotOutlineRecovery).toMatchObject({ writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null, inFormalOutline: save })
+    expect(f.owner.listRecovery().planning.map(item => item.handle.runId)).toEqual(save ? [] : [run.handle.runId])
   })
 })

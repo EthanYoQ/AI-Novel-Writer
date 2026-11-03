@@ -53,3 +53,20 @@ it('acceptKeylessEmbeddings 只在打开期间接受不带 Key 的嵌入请求',
   assert.deepEqual({ refusedBefore, accepted, refusedAfter: await embedWithoutKey(), authorizations: fake.embeddingAuthorizations },
     { refusedBefore: 403, accepted: 200, refusedAfter: 403, authorizations: [null] })
 })
+
+it('rejectContextLength 让对话请求回 400 上下文超长错误体，记成 context-length；关掉后照常回正文', async () => {
+  fake = await startFakeModel([])
+  fake.rejectContextLength()
+  const response = await fetch(`http://127.0.0.1:${fake.port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${FAKE_MODEL.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: FAKE_MODEL.modelName, stream: true, messages: [{ role: 'user', content: '写第 3 章正文。' }] }),
+  })
+  assert.equal(response.status, 400)
+  assert.match((await response.json()).error.message, /maximum context length is \d+ tokens/u)
+  assert.deepEqual(fake.requests, ['context-length'])
+  assert.deepEqual(fake.chats, [])
+  fake.rejectContextLength(false)
+  assert.deepEqual((await writeProse()).finish.at(-1), 'stop')
+})
+

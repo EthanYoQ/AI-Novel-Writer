@@ -24,6 +24,7 @@ export const SETTINGS_GROUPS: readonly { id: string; name: Pair; pages: readonly
     { id: 'appearance', name: ['外观', 'Appearance'], lede: ['改动立即生效，不需要保存。', 'Changes apply right away. No need to save.'] },
   ] },
   { id: 'advanced', name: ['高级', 'Advanced'], pages: [
+    { id: 'stage-models', name: ['分工模型', 'Models by stage'], lede: ['给不同环节指定不同的模型。没指定的环节用「AI 模型」里的默认模型；每次运行前仍可临时换。', 'Assign a model to each stage. Stages left on Default use the default from AI models. You can still switch before each run.'] },
     { id: 'proxy', name: ['网络代理', 'Network proxy'], lede: ['连接模型服务需要经过代理时在这里设置，所有 AI 请求都会走它。', 'Set this when model services must be reached through a proxy. Every AI request goes through it.'] },
     { id: 'prompts', name: ['提示词模板', 'Prompt templates'], lede: ['调整 AI 在每个创作环节收到的指导。可以只改这部作品，也可以改成全局默认。', 'Adjust the guidance AI receives at each writing step, for this book or as the global default.'] },
     { id: 'skills', name: ['写作 Skills', 'Writing skills'], lede: ['安装提示词型的写作 Skill，并绑定到创作阶段。安装前会先让你检查内容。', 'Install prompt-only writing skills and bind them to writing stages. You review each one before installing.'] },

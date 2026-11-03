@@ -221,6 +221,10 @@ it('#484 生成期间字段被改：界面重试沿用冻结上下文仍拒写�
  const receipt=await f.owner.executeFinalizationGeneration({handle:again.view.handle})
  expect(f.owner.commitFinalizationGeneration({handle:again.view.handle,artifact:f.artifactOf(receipt)})).toMatchObject({success:true,stepKey:'character_cards'})
 })
+it('运行侧页的可恢复列表不列定稿后处理运行，无论提交与否',async()=>{
+ const f=await generated()
+ expect(f.reopen().listRecovery()).toMatchObject({drafts:[],planning:[],reviews:[],editors:[],batches:[],partial:false})
+})
 it('stop未提交重开保持原context和artifact，伪handle拒绝',async()=>{
  const f=await generated(),next=f.reopen()
  expect(next.readFinalizationGeneration({slot:f.slot})?.context).toEqual(f.recovery.context)

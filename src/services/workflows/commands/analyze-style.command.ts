@@ -1,4 +1,4 @@
-import { frozenImportContext, importGenerationSelection } from './import-novel.command'
+import { assertImportCompletionNotStopped, frozenImportContext, importGenerationSelection } from './import-novel.command'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
@@ -20,6 +20,8 @@ export interface AnalyzeWritingStyleOptions {
   sampleText?: string
   sampleTexts?: string[]
   chapters?: ImportedChapter[]
+  /** 作者原稿导入只补空白：保存结果按库里的值发布，作者还没保存的文风保留。 */
+  fillEmpty?: boolean
 }
 
 /**
@@ -31,7 +33,8 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
   constructor(
     private options: AnalyzeWritingStyleOptions = {},
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
-    private readonly persistWritingStyle?: (writingStyle: string, generationRunHandle?: MainGenerationRunHandle) => Promise<void>,
+    /** 返回实际保存下来的文风（作者原稿补空时可能保留原值）；不返回就当作照写。 */
+    private readonly persistWritingStyle?: (writingStyle: string, generationRunHandle?: MainGenerationRunHandle) => Promise<string | void>,
   ) {
     super(generationDependencies)
   }
@@ -113,13 +116,16 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
 
     callbacks.log(text('调用 AI 分析文风特征...', 'Running AI writing-style analysis...'))
     const generate = async () => {
-      const result = await this.callLLM(
+      const completion = await this.callLLMResult(
         finalPrompt,
         composePromptSystemRole(template, writingLanguage),
         callbacks,
         { purpose: 'analyze-writing-style', reasoningStage: 'review' },
         context,
       )
+      if (importRuntime) assertImportCompletionNotStopped(completion, callbacks, context)
+      if (completion.finishReason !== 'stop') throw this.createIncompleteCompletionError(completion.finishReason)
+      const result = completion.content
       this.assertNotCancelled(context)
 
       const cleanResult = this.stripThinkingTags(result).trim()
@@ -131,16 +137,24 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       // 先持久化，成功后再更新内存态，避免 DB 保存失败时 UI 残留未落库的文风。
       this.assertNotCancelled(context)
       const mainOwned = this.requireGenerationExecution().mainOwned
-      if (mainOwned) {
+      const fillEmpty = this.options.fillEmpty === true && this.persistWritingStyle !== undefined
+      let savedStyle = cleanResult
+      if (fillEmpty || (!mainOwned && this.persistWritingStyle)) {
+        const handle = mainOwned ? context.mainGenerationRunHandle : undefined
+        if (mainOwned && !handle) throw new Error('GENERATION_COMMIT_HANDLE_REQUIRED')
+        const persisted = handle ? await this.persistWritingStyle!(cleanResult, handle) : await this.persistWritingStyle!(cleanResult)
+        savedStyle = persisted ?? cleanResult
+      } else if (mainOwned) {
         const handle = context.mainGenerationRunHandle
         if (!handle) throw new Error('GENERATION_COMMIT_HANDLE_REQUIRED')
         const saved = await useProjectStore.getState().commitGeneratedNovelConfig(
           { writingStyle: cleanResult }, expectedConfig, projectSession, handle,
-          this.persistWritingStyle ? () => this.persistWritingStyle!(cleanResult, handle) : undefined,
+          this.persistWritingStyle ? async () => {
+            const persisted = await this.persistWritingStyle!(cleanResult, handle)
+            return persisted === undefined ? undefined : { writingStyle: persisted }
+          } : undefined,
         )
         if (!saved) throw new Error(text('文风特征保存失败', 'Failed to save the writing-style profile.'))
-      } else if (this.persistWritingStyle) {
-        await this.persistWritingStyle(cleanResult)
       } else {
         const saveResult = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-update',
           { writingStyle: cleanResult }, context.projectPath)
@@ -156,8 +170,10 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
         ))
       }
       this.assertNotCancelled(context)
-      const { updateNovelConfig } = useProjectStore.getState()
-      if (!mainOwned) updateNovelConfig({ writingStyle: cleanResult }, projectSession)
+      const { publishSavedNovelConfig, updateNovelConfig } = useProjectStore.getState()
+      // 只补空白时作者还没保存的文风不动，只把库里的值记为已保存。
+      if (fillEmpty) publishSavedNovelConfig({ writingStyle: savedStyle }, projectSession, 'unsaved-edits')
+      else if (!mainOwned) updateNovelConfig({ writingStyle: savedStyle }, projectSession)
       callbacks.log(text(
         '文风特征已保存到小说配置',
         'Writing-style profile saved to the novel configuration',

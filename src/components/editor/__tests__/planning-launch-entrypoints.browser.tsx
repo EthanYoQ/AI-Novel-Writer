@@ -37,7 +37,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   useProjectStore.setState({ currentProject: project })
   useLocaleStore.setState({ locale: 'zh-CN' })
-  useLLMStore.setState({ defaultModelId: 'boundary-probe-model' })
+  useLLMStore.setState({ models: [{ id: 'boundary-probe-model', purposes: ['generation'] }] as never, defaultModelId: 'boundary-probe-model' })
   useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [], waitingRuns: {}, currentRun: null })
   setActiveProjectSessionContext({ projectId: project.id, projectPath: project.path, leaseId: project.sessionLease! })
   invoke = vi.fn(async (channel: string) => {

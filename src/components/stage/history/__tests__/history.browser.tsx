@@ -203,6 +203,23 @@ describe('版本历史', () => {
     expect(channels()).not.toContain('db:draft-create')
   })
 
+  it('重新定稿过的章：旧定稿标「已被替换的定稿」，仍可回退到它', async () => {
+    drafts = [
+      { id: 11, chapterNumber: 3, version: 1, status: 'superseded', content: '雨从傍晚开始就没有停过。\n林舟攥着那封灰色的信。' },
+      { id: 12, chapterNumber: 3, version: 2, status: 'finalized', content: '雨从傍晚开始就没有停过。\n林舟攥着那封没有署名的信。' },
+    ]
+    await act(async () => root!.render(<StageHistory projectKey={session.projectPath} />))
+    await vi.waitFor(() => expect(button(/雨夜车站/)).toBeTruthy())
+    await click(/雨夜车站/)
+    await vi.waitFor(() => expect(button(/已被替换的定稿 v1/)).toBeTruthy())
+
+    const timeline = host!.querySelector('[aria-label="版本时间线"]')!
+    expect([...timeline.querySelectorAll('li')].map(item => [item.getAttribute('data-kind'), item.querySelector('.stage-hist-version-name')!.firstChild?.textContent]))
+      .toEqual([['final', '定稿 v2'], ['superseded', '已被替换的定稿 v1']])
+    await click(/已被替换的定稿 v1/)
+    await vi.waitFor(() => expect(button('回退到此版本…')).toBeTruthy())
+  })
+
   it('当前稿没有回退按钮', async () => {
     await openChapterThree()
     await click(/草稿 v2/)

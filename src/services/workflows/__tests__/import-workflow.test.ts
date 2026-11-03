@@ -415,6 +415,43 @@ describe('createImportWorkflow', () => {
     expect(workflow.steps.map(step => step.name).join('\n')).not.toMatch(/知识库|文风|蓝图/)
   })
 
+  it('勾选反推的作者原稿：后处理之后接三个反推步骤，设定、架构、蓝图、角色名单都取写锁', () => {
+    const workflow = createImportWorkflow({
+      projectPath: session.projectPath,
+      projectSession: session,
+      run: run({
+        purpose: 'author-manuscript', authorInference: true,
+        effectNamespace: 'import:author-manuscript:import-run-1', stage: 'author-commit', authorityFingerprint: 'c'.repeat(64),
+      }),
+      executionOwner,
+      authorChapterNumbers: [1],
+    })
+
+    expect(workflow.steps.map(step => step.name)).toEqual([
+      '提交权威定稿快照', '发布实体正文', '更新连续性事实',
+      '反推设定、架构与角色', '反推文风', '为没有蓝图的章反推蓝图', '刷新项目状态',
+    ])
+    expect(workflow.resourceKeys).toEqual(expect.arrayContaining(['novel-config', 'architecture', 'blueprints', 'character-roster']))
+    expect(workflow.readResourceKeys ?? []).toEqual([])
+  })
+
+  it('不勾选反推的作者原稿：步骤与锁和以前一样，设定、架构、蓝图只取读锁', () => {
+    const workflow = createImportWorkflow({
+      projectPath: session.projectPath,
+      projectSession: session,
+      run: run({
+        purpose: 'author-manuscript', authorInference: false,
+        effectNamespace: 'import:author-manuscript:import-run-1', stage: 'author-commit', authorityFingerprint: 'c'.repeat(64),
+      }),
+      executionOwner,
+      authorChapterNumbers: [1],
+    })
+
+    expect(workflow.steps).toHaveLength(4)
+    expect(workflow.readResourceKeys).toEqual(['novel-config', 'architecture', 'blueprints'])
+    expect(workflow.resourceKeys).not.toContain('novel-config')
+  })
+
   it('persists author cancellation intent without owning its terminal boundary', async () => {
     const snapshot = run({
       purpose: 'author-manuscript',

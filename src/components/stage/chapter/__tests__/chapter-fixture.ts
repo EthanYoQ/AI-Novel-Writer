@@ -43,7 +43,7 @@ export const AI_REVIEW = JSON.stringify({
   ],
 })
 
-type Status = 'draft' | 'revised' | 'finalized' | 'archived'
+type Status = 'draft' | 'revised' | 'finalized' | 'superseded' | 'archived'
 
 interface Draft { id: number; chapterNumber: number; version: number; status: Status; content: string; createdAt: string; updatedAt: string }
 interface Review { id: number; baseDraftId: number; reviewIndex: number; content: string; source: Draft; createdAt: string }

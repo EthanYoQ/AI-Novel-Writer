@@ -5,6 +5,7 @@ import { useLLMStore } from '../../../../stores/llm-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import { GenerateFieldCommand as RuntimeGenerateFieldCommand } from '../generate-field.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+import { TerminalProviderFailureError } from '../../../generation/generation-harness'
 
 class GenerateFieldCommand extends RuntimeGenerateFieldCommand {
   constructor(...args: ConstructorParameters<typeof RuntimeGenerateFieldCommand>) {
@@ -396,5 +397,12 @@ describe('GenerateFieldCommand project identity', () => {
     expect(failure).toBeInstanceOf(Error)
     expect((failure as Error).message).toBe('Field generation failed. Please try again.')
     expect((failure as Error).message).not.toContain('provider-secret-field-failure')
+  })
+
+  it('passes a provider context-length rejection through with its code and receipt', async () => {
+    const command = new GenerateFieldCommand('writingStyle')
+    const rejection = new TerminalProviderFailureError('GENERATION_CONTEXT_LENGTH_EXCEEDED', { finishReason: 'error', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } as never)
+    vi.spyOn(command as unknown as { callLLM: (...args: unknown[]) => Promise<string> }, 'callLLM').mockRejectedValue(rejection)
+    await expect(command.execute({ step: {}, context, callbacks })).rejects.toBe(rejection)
   })
 })

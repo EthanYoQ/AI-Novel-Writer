@@ -115,6 +115,31 @@ describe('ImportGlobalFactsRepository transaction seam', () => {
     expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM character_relationships').pluck().get()).toBe(0)
   })
 
+  it('补空模式：已有字段一字不变，空字段补上，非空且不同的记成建议，角色仍走提议', () => {
+    ProjectCoreRepository.update({ genre: '武侠', coreOutline: '作者自己的大纲', premise: '', wordsPerChapter: 3000 })
+
+    const receipt = ImportGlobalFactsRepository.commit(request(), 'fill-empty')
+
+    expect(ProjectCoreRepository.get()).toMatchObject({
+      genre: '武侠', coreOutline: '作者自己的大纲', wordsPerChapter: 3000, totalChapters: 100,
+      subGenre: '讽刺', premise: '个人与社会冲突', worldSetting: '辛亥前后的江南乡村', synopsis: '阿Q的命运',
+    })
+    expect(receipt).toMatchObject({
+      mode: 'fill-empty',
+      core: { genre: '武侠', coreOutline: '作者自己的大纲', premise: '个人与社会冲突' },
+      characterProposal: { proposalBatchId: expect.stringMatching(/^cpb:[a-f0-9]{64}$/) },
+      proposalSource: request(),
+    })
+    expect(receipt.suggestions).toEqual(expect.arrayContaining([
+      { field: 'genre', current: '武侠', inferred: '现实' },
+      { field: 'coreOutline', current: '作者自己的大纲', inferred: '阿Q由自尊走向幻灭' },
+      { field: 'wordsPerChapter', current: 3000, inferred: 2500 },
+    ]))
+    expect(receipt.suggestions?.map(item => item.field)).not.toContain('totalChapters')
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+    expect(ImportGlobalFactsRepository.commit(request(), 'fill-empty')).toEqual({ ...receipt, idempotent: true })
+  })
+
   it('retains inferred static and dynamic source material without assigning author provenance', () => {
     const input = request()
     input.characterEntries[0].currentState = {

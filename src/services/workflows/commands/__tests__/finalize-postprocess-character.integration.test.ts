@@ -27,12 +27,14 @@ import type {
   SaveFinalizedContinuityRequest,
 } from '../../../../shared/finalized-continuity'
 import type { CharacterRosterCommitRequest } from '../../../../shared/character-roster'
-import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
+import { useWorkflowStore, type StepCallbacks, type WorkflowContext } from '../../../../stores/workflow-store'
 import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { RunFinalizePostProcessCommand } from '../finalize-chapter.command'
 import { globalEventBus } from '../../../../shared/event-bus'
 import { GenerateDraftCommand } from '../generate-draft.command'
+import { createWorkflowMainGenerationRuntime } from '../../workflow-main-generation'
+import type { MainGenerationRunView } from '../../../generation/generation-runtime'
 type ModelMessages = Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0]
 
 let projectPath = ''
@@ -58,7 +60,7 @@ function owner() {
   const deps = { db, projectStorageRoot: projectPath, globalDataRoot: projectPath,
     readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)) }
   actualOwner = createMainGenerationOwner({ database: db, projectId: 'test', epoch: 'lease-test', assertCurrent: () => {},
-    leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model,
+    leases: new ModelExecutionLeaseRegistry({ loadModel: id => id === 'post-model' ? { ...model, id } : model }), loadModel: id => id === 'post-model' ? { ...model, id } : model,
     dispatch: (request, options) => new Promise((resolve, reject) => {
       void useLLMStore.getState().generateStream((request as { task: { messages: ModelMessages } }).task.messages, {
         onDone: (content, _usage, finishReason) => { options.onVisible({ kind: 'delta', text: content }); resolve({ finishReason, usage: null }) },
@@ -311,26 +313,28 @@ function installModel(): void {
   })
 }
 
-function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKeys?: readonly string[]; retryInvalidResult?: boolean; stopOnFailure?: boolean } = {}) {
-  insertFinalizedDraft(7, 2, draftContent)
+function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKeys?: readonly string[]; retryInvalidResult?: boolean; stopOnFailure?: boolean } = {},
+  { draftId, chapterNumber }: { draftId: number; chapterNumber: number } = { draftId: 7, chapterNumber: 2 }) {
+  insertFinalizedDraft(draftId, chapterNumber, draftContent)
   const db = getProjectDb()!
-  if (!db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get('fcs:finalization-7')) {
-    db.transaction(() => freezeFinalizedCharacterSnapshot(db, { draftId: 7, finalizationId: 'finalization-7', chapterNumber: 2,
+  const finalizationId = `finalization-${draftId}`
+  if (!db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get(`fcs:${finalizationId}`)) {
+    db.transaction(() => freezeFinalizedCharacterSnapshot(db, { draftId, finalizationId, chapterNumber,
       contentHash: createHash('sha256').update(draftContent).digest('hex') }))()
   }
   return new RunFinalizePostProcessCommand({
     project: { path: projectPath },
-    chapterNumber: 2,
+    chapterNumber,
     chapterTitle: 'The Handoff',
     draftContent,
-    draftId: 7,
+    draftId,
     finalizedSource: {
-      draftId: 7,
-      finalizationId: 'finalization-7',
-      chapterNumber: 2,
+      draftId,
+      finalizationId,
+      chapterNumber,
       contentHash: createHash('sha256').update(draftContent, 'utf8').digest('hex'),
     },
-    sourceLabel: 'Chapter 2 finalization',
+    sourceLabel: `Chapter ${chapterNumber} finalization`,
     ...overrides,
   })
 }
@@ -389,7 +393,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   useProjectStore.setState({ currentProject: null })
-  useLLMStore.setState({ defaultModelId: null })
+  useLLMStore.setState({ models: [], stageModelIds: {}, defaultModelId: null })
 })
 
 describe('RunFinalizePostProcessCommand character-state persistence', () => {
@@ -482,6 +486,67 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
         currentState: expect.objectContaining({ keyItems: 'brass key' }),
       })],
     })
+  })
+
+  it.each([
+    ['a single-chapter finalize asks for the finalization stage model', undefined, 'post-model'],
+    ['a batch or import context keeps the model it already froze', 'batch-model', 'batch-model'],
+  ])('%s', async (_label, frozenModelId, expected) => {
+    insertFinalizedDraft(7, 2)
+    useLLMStore.setState({ models: [{ id: 'test-model', purposes: ['generation'] }, { id: 'post-model', purposes: ['generation'] }] as never,
+      stageModelIds: { finalization: 'post-model', drafting: 'test-model' } })
+    await command('Chapter 2 finalized content').execute({
+      step: {}, context: { ...workflowContext, ...(frozenModelId ? { generationModelId: frozenModelId } : {}) }, callbacks: callbacks(),
+    })
+    expect(selections.map(selection => (selection as { modelId: string }).modelId)).toEqual([expected, expected])
+  })
+
+  it('records the finalization stage model on the run so editing that model warns about it', async () => {
+    insertFinalizedDraft(7, 2)
+    useLLMStore.setState({ models: [{ id: 'test-model', purposes: ['generation'] }, { id: 'post-model', purposes: ['generation'] }] as never,
+      defaultModelId: 'test-model', stageModelIds: { finalization: 'post-model' } })
+    useWorkflowStore.setState({ activeRuns: [{ id: workflowContext.runId, status: 'running' }] as never })
+    await command('Chapter 2 finalized content').execute({ step: {}, context: { ...workflowContext }, callbacks: callbacks() })
+    expect(useWorkflowStore.getState().activeRuns[0]?.generationModelId).toBe('post-model')
+    useWorkflowStore.setState({ activeRuns: [] })
+  })
+
+  it('keeps the later inference stages of an author import on the planning model after post-processing ran on the finalization model', async () => {
+    useLLMStore.setState({ models: ['test-model', 'post-model', 'plan-model'].map(id => ({ id, purposes: ['generation'] })) as never,
+      defaultModelId: 'test-model', stageModelIds: { finalization: 'post-model', planning: 'plan-model' } })
+    const importContext: WorkflowContext = { ...workflowContext, data: {} }
+    const recordedModel = () => useWorkflowStore.getState().activeRuns[0]?.generationModelId
+    useWorkflowStore.setState({ activeRuns: [{ id: workflowContext.runId, status: 'running' }] as never })
+    await command('Chapter 2 finalized content').execute({ step: {}, context: importContext, callbacks: callbacks() })
+    expect(recordedModel()).toBe('post-model')
+    useLLMStore.setState({ stageModelIds: { finalization: 'test-model', planning: 'plan-model' } })
+    await command('Chapter 3 finalized content', {}, { draftId: 8, chapterNumber: 3 }).execute({ step: {}, context: importContext, callbacks: callbacks() })
+    const handle = { projectId: 'test', epoch: 'lease-test', rootActionId: 'import-root', runId: 'import-generation' }
+    const view: MainGenerationRunView = { handle, budget: { maxAttempts: 1, maxRequestedOutputTokens: 100, maxRequestedOutputTokensPerAttempt: 100, deadlineAt: 1000 }, status: 'running', nonReplayable: false, artifacts: [] }
+    const begin = vi.fn<(session: unknown, request: { modelId: string }) => Promise<MainGenerationRunView>>(async () => view)
+    const transport = { begin, pause: vi.fn(async () => view), read: vi.fn(async () => view), subscribe: vi.fn(() => () => {}) } as unknown as Parameters<typeof createWorkflowMainGenerationRuntime>[1]
+    for (const operation of ['import-global-facts', 'analyze-writing-style', 'import-blueprints'] as const) {
+      const runtime = await createWorkflowMainGenerationRuntime({ context: importContext, callbacks: callbacks(),
+        selection: { operation, promptKeys: [], skillStages: [], output: 'structured-data' } }, transport)
+      await runtime.close()
+    }
+    expect(selections.map(selection => (selection as { modelId: string }).modelId)).toEqual(['post-model', 'post-model', 'post-model', 'post-model'])
+    expect(begin.mock.calls.map(([, request]) => request.modelId)).toEqual(['plan-model', 'plan-model', 'plan-model'])
+    expect(recordedModel()).toBe('plan-model')
+    useWorkflowStore.setState({ activeRuns: [] })
+  })
+
+  it('records the model main actually inherits from a finished sibling step, not the newly assigned one', async () => {
+    useLLMStore.setState({ models: [{ id: 'test-model', purposes: ['generation'] }, { id: 'post-model', purposes: ['generation'] }] as never,
+      defaultModelId: 'test-model', stageModelIds: { finalization: 'post-model' } })
+    await command('Chapter 2 finalized content', { stepKeys: ['chapter_notes'] }).execute({ step: {}, context: { ...workflowContext }, callbacks: callbacks() })
+    useLLMStore.setState({ stageModelIds: {} })
+    useWorkflowStore.setState({ activeRuns: [{ id: 'continue-run', status: 'running' }] as never })
+    await command('Chapter 2 finalized content', { stepKeys: ['character_cards'] }).execute({
+      step: {}, context: { ...workflowContext, runId: 'continue-run' }, callbacks: callbacks(),
+    })
+    expect(useWorkflowStore.getState().activeRuns[0]?.generationModelId).toBe('post-model')
+    useWorkflowStore.setState({ activeRuns: [] })
   })
 
   it('covers the full finalized source and atomically persists one valid state change', async () => {

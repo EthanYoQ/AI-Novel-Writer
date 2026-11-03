@@ -44,11 +44,6 @@ export function createMainGenerationTransport(captureSession = getActiveProjectS
       if (handleKey(view.handle) !== handleKey(frozen)) throw new Error('GENERATION_RESPONSE_IDENTITY_MISMATCH')
       return bindView(view, session, true)
     },
-    async list(projectSession) {
-      const session = freezeSession(projectSession)
-      const views = await ipc.invokeWithProjectSession(session, 'generation:list')
-      return views.map(view => bindView(view, session, true))
-    },
     async cancel(handle) {
       const frozen = Object.freeze({ ...handle }), session = sessionFor(frozen)
       const view = await ipc.invokeWithProjectSession(session, 'generation:cancel', frozen)

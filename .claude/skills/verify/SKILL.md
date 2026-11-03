@@ -15,11 +15,10 @@ description: 在真实 Electron 中驱动 AI 小说作家，按场景截图、�
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm rebuild:electron
 pnpm build
 ```
 
-驱动加载的是 `dist/` 与 `dist-electron/`，改了 `src/` 或 `electron/` 必须重新 `pnpm build`。`better-sqlite3` 刚为 vitest 切到 Node ABI（`pnpm prepare:native-node`）时，先 `pnpm rebuild:electron` 再驱动。
+驱动加载的是 `dist/` 与 `dist-electron/`，改了 `src/` 或 `electron/` 必须重新 `pnpm build`。`better-sqlite3` 是 Node-API 预编译包，vitest 与 Electron 共用同一份二进制，跑测试和驱动之间不用切换。
 
 ## 命令
 
@@ -33,7 +32,7 @@ node scripts/redesign/drive.mjs --scenario <名称> ...
 - `--shell` 只对 RD-10 之前的构建（`--app-root` 指向的 trunk）有意义：不给时不碰外观里的外壳偏好（旧外壳），`stage` 选 RD-3 起的流程脊外壳，与主题在同一次写入里改，只重载一次；RD-2 及更早的 trunk 不认识 `stage`，不要传。RD-10 起的构建只有纸墨外壳，外观写在 v3 键里，没有外壳偏好：`--shell` 不必传，传 `writer` 直接报错。
 - `--video` 在每个截图点的 `run` 期间录屏：CDP `Page.startScreencast` 收帧，按帧时间戳交给本机 `ffmpeg` 编成 H.264 mp4，写到 `<场景>-<主题>.mp4`。不需要 Playwright 自带的 ffmpeg。
 - `--out` 默认 `.runtime/redesign-baseline/`（已被 git 忽略）。
-- `--app-root` 默认当前工作树。性能对照时指向 trunk 的工作树，用同一个驱动测两边；目标工作树也要先跑完上面三条命令，它加载的是自己的 `dist-electron/` 和 `better-sqlite3`。
+- `--app-root` 默认当前工作树。性能对照时指向 trunk 的工作树，用同一个驱动测两边；目标工作树也要先跑完上面两条命令，它加载的是自己的 `dist-electron/` 和 `better-sqlite3`。
 - 退出码：0 全部通过；1 有场景失败、残留进程或隔离目录外写入；2 参数错误。
 
 RD-10 删除旧外壳之后，场景分三类：
@@ -298,6 +297,7 @@ node scripts/redesign/drive.mjs --scenario arch-timing --out <目录>
 | `blueprint-finalize-next` | 第 3 章草稿定稿，设置里开着「定稿后打开下一章」（F-056）：落到第 4 章的单章视图，写作弹层由这一章「写作此章」旁的「本次写作选项」打开（`aria-controls` 指向弹层）并贴着它展开，只弹出写作弹层，没有旧的创作对话框 | 写作弹层 | 是 | F-056 |
 | `blueprint-tour` | 30–60 秒导览：选章改标题保存、清空的危险确认、生成蓝图覆盖、批量创作、写作弹层、一致性预检、仅本次忽略后写完。配 `--video` 录评审视频 | 写完一章 | 是 | Review gate |
 | `blueprint-timing` | 300 章蓝图：从点蓝图到第 300 章出现在列表里（`openMs`），从点第 150 章到它的标题出现（`switchMs`），渲染进程内按帧计时。旧外壳点项目树「章节蓝图」与列表项，两种外壳都能跑 | 第 150 章 | 否 | perf |
+| `blueprint-null-field` | 示例作品的蓝图行不写悬念钩子、作者微操指导与章节要点（库里是 NULL），只给第 5 章填上。先看第 5 章（确认显示它自己的值）再切到第 6 章：三个文本框为空，切回再切、重新加载、重启后都一样。依次直接离开、改标题按 Ctrl S、退出确认里「保存并退出」（主进程收到放行时不关窗，之后取消退出），每次用 `node:sqlite` 只读打开项目库读第 6 章原始行，都没有第 5 章的文字；再在第 6 章作者微操指导与章节要点里各打几个字保存，库里只有打的字。`measured` 是每一步看到的值与读到的行 | 第 6 章蓝图的作者微操指导 | 否 | 蓝图作者字段 NULL |
 
 ```bash
 node scripts/redesign/drive.mjs --scenario blueprint-regression --app-root <trunk 工作树> --out <目录>/trunk
@@ -532,6 +532,15 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | `f512-legacy-step` | 「文风自动学习」当时失败：一行仍列出，状态是 `retired`（灰点），说明「来自旧版本」（`f512-legacy-step-zh`、`f512-legacy-step-en`）；没有任何重试按钮；完成数是「3 / 3 完成」 | 英文的定稿后处理 | 是 | #512 |
 | `f512-legacy-step-done` | 「文风自动学习」当时成功：同上，不显示「完成」也不算进完成数（`f512-legacy-step-done-zh`、`f512-legacy-step-done-en`） | 英文的定稿后处理 | 是 | #512 |
 
+## 分工模型（#517）
+
+场景在 `scripts/redesign/sm517-scenarios.mjs`。除夹具模型外再存一个同端点、`modelName` 为 `gpt-4.1-mini` 的档案「驱动夹具小模型」，假服务按 `fake.chats[].model` 判断每次请求实际用了哪个档案。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `sm517-stage-models` | 只有夹具模型时分工模型页说明各环节都用它（`sm517-one-model`）；加小模型后把审稿指定为它（`sm517-settings-zh`），从蓝图写下一章的请求仍是 `gpt-4.1`，AI 审稿的请求是 `gpt-4.1-mini`；再把规划指定为它，生成第 13～16 章蓝图的请求是 `gpt-4.1-mini`。小模型改成只做检索后两行提示按默认运行（`sm517-stale`）；删掉全部模型后是空状态（`sm517-no-model`）；英文界面（`sm517-settings-en`） | 英文的分工模型页 | 是 | #517 |
+| `sm517-stage-dialogs` | 预置时把修稿与规划都指定为小模型。剧情树的模型下拉预选它（`sm517-plot-tree-planning-model`），生成剧情树的请求是 `gpt-4.1-mini`；第 3 章重新审稿的请求仍是 `gpt-4.1`，「修稿选项」预选小模型（`sm517-revise-refinement-model`），不改选直接按意见修稿的请求是 `gpt-4.1-mini`。夹具的修稿正文太短，修稿会停在保存校验，场景只核对请求用的模型 | 修稿请求发出后的单章视图 | 是 | #517 |
+
 ## 重新生成蓝图保留作者字段（#516 讨论）
 
 场景在 `scripts/redesign/bpg-scenarios.mjs`。示例作品的蓝图行没写作者字段（库里是 NULL），卡片文本框遇到 NULL 不受控，换章后会留着上一章的字；场景先把前 3 章的作者字段写成空串。假模型用 `fake.replyReview(fn)` 对目录生成请求回一份覆盖本批章节的合法蓝图 JSON（批量与单章压缩两种提示都认）。
@@ -539,3 +548,23 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
 |---|---|---|---|---|
 | `bpg-regenerate-keeps-guidance` | 蓝图页给第 1 章手写章节要点、第 2 章填作者微操指导并保存；AI 生成蓝图选「覆盖」接着生成 3 章，跑完后重新加载蓝图：第 1、2 章标题换成生成的新标题，章节要点与作者微操指导不变（`measured.before` 与 `measured.after`） | 第 2 章蓝图的作者微操指导 | 是 | #516 |
+
+## 导入作者原稿并反推（#516 第 4 块）
+
+场景在 `scripts/redesign/import-infer-scenarios.mjs`。假模型用 `fake.replyReview(fn)` 认三类反推请求：全局设定（模板里的「逆向推演出这部小说的完整设定体系」）返回一份格式合法的设定、三个架构文件和三张角色卡，文风分析（「【风格档案】与【仿写指南】」）回一段文风，蓝图（「本批必须且只能完整返回以下 chapterNumber」）按本批章号回蓝图。驱动包一层主进程的 `project:open` 记下界面打开作品的会话，用它读库核对。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `import-infer-empty` | 新建空作品「雨城」，作品菜单「小说拆解与仿写…」选「我的原稿」导入 3 章，反推默认勾选、显示费用预估（中途拍 `import-infer-dialog`）；跑完后类型、故事前提、文风是反推值，每章都有蓝图，建议里只剩新建作品默认的每章字数（`import-infer-empty-run`）；再拍设定、架构与角色名单（角色以待处理建议出现） | 第 2 章蓝图 | 是 | #516 |
+| `import-infer-existing` | 示例作品「灯塔」先删第 4、5 章蓝图，从第 3 章接着导入 3 章：已有的类型、大纲、前提、世界观、情节大纲不变，空的文风与金手指补上；第 3、6 章蓝图不变，第 4、5 章补上；运行卡片列出建议（`import-infer-existing-suggestions`），采用「类型」后写入反推值；再拍设定页 | 第 4 章蓝图 | 是 | #516 |
+| `import-infer-dangling` | 同 `import-infer-empty` 导入 3 章，但全局设定回 7 张角色卡，关系引用了两个名单外的人（林探两次、白先生一次）：补卡请求只要林探，周探长→白先生这条关系丢弃，诊断日志有一行写明丢了哪条、这是内部限制、可在「角色名单」里手补（`import-infer-dangling-log`）；导入完成，角色名单提示条是「从导入原稿反推的角色（8 位）」 | 角色名单 | 是 | #558 |
+
+## 上下文容量交给服务商（#77 讨论，ADR-0023）
+
+场景在 `scripts/redesign/d77-scenarios.mjs`。两个场景都把模型档案设成作者填的 64K 上下文。`fake.rejectContextLength()` 让假模型对之后的每个对话请求回 HTTP 400，错误体取自 `electron/llm/__tests__/provider-context-length-samples.json` 里的 DeepSeek 样本，和单元测试用同一份；传 `false` 恢复正常回复。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `d77-capacity` | 写第 3 章，正文提示词的字节数超过作者填的上下文窗口。请求不在发出前被拒绝：短细纲与正文各发一次，正文落到编辑器里（`measured.promptBytes`、`measured.chats`） | 第 3 章正文 | 是 | #77 |
+| `d77-context-length` | 写第 3 章，假模型以上下文超长拒绝第一个请求，之后不自动重发（`measured.chats` 只有一次 `context-length`）。运行卡片显示登记的说明（换用上下文更长的模型、调低最大输出 Tokens、精简本章要求与参考材料）和「本次未保存草稿或正文章节。」；不出现「上下文窗口」「请调整章节要求」和服务商原文（`measured.card`） | 失败的运行卡片 | 是 | #77 |
+| `d77-output-allowance` | 设置里编辑作者 64K 模型、展开高级设置：有效输出额度那句说明新开始的生成每次最多发这么多、旧版本开始的运行可能按 32,768 封顶（`d77-output-allowance-set`）；把最大输出 Tokens 和模型输出容量清成 0 后，改说还没有有效输出额度，不出现「未设置」（`d77-output-allowance-unset`）。不保存 | 清空后的高级设置 | 是 | #77 |

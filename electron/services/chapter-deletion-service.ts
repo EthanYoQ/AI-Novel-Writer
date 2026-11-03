@@ -37,9 +37,7 @@ const defaultCleaner: ChapterDeletionProjectionCleaner = {
 
 /** 每项投影各自的失败原因留在 operation 的 manuscriptError、knowledgeError 上，由删除清理提示逐项显示。 */
 function operationError(operation: ChapterDeletionOperation): string | undefined {
-  return operation.manuscriptStatus === 'failed' || operation.knowledgeStatus === 'failed'
-    ? 'CHAPTER_DELETE_CLEANUP_INCOMPLETE'
-    : undefined
+  return operation.status === 'failed' ? 'CHAPTER_DELETE_CLEANUP_INCOMPLETE' : undefined
 }
 
 function legacyKnowledgeAuthorizationRequired(
@@ -145,13 +143,29 @@ export class ChapterDeletionService {
       return { success: true, committed: true, operation }
     }
 
-    operation = ChapterDeletionRepository.startAttempt(operationId)
+    ChapterDeletionRepository.startAttempt(operationId)
+    for (const member of [...ChapterDeletionRepository.listCompanions(operationId), operation]) {
+      await this.cleanProjections(projectRoot, member)
+    }
+
+    operation = ChapterDeletionRepository.settle(operationId)
+    const error = operationError(operation)
+    return {
+      success: operation.status === 'completed',
+      committed: true,
+      operation,
+      ...(error ? { error } : {}),
+    }
+  }
+
+  private async cleanProjections(projectRoot: string, operation: ChapterDeletionOperation): Promise<void> {
+    const { operationId } = operation
     if (operation.manuscriptStatus === 'pending' || operation.manuscriptStatus === 'failed') {
       try {
         await this.cleaner.removeManuscript(projectRoot, operation.targetFileName)
-        operation = ChapterDeletionRepository.markProjection(operationId, 'manuscript', 'completed')
+        ChapterDeletionRepository.markProjection(operationId, 'manuscript', 'completed')
       } catch (error) {
-        operation = ChapterDeletionRepository.markProjection(
+        ChapterDeletionRepository.markProjection(
           operationId,
           'manuscript',
           'failed',
@@ -163,24 +177,15 @@ export class ChapterDeletionService {
     if (operation.knowledgeStatus === 'pending' || operation.knowledgeStatus === 'failed') {
       try {
         await this.cleaner.removeKnowledgeDocument(projectRoot, operation.knowledgeDocumentId)
-        operation = ChapterDeletionRepository.markProjection(operationId, 'knowledge', 'completed')
+        ChapterDeletionRepository.markProjection(operationId, 'knowledge', 'completed')
       } catch (error) {
-        operation = ChapterDeletionRepository.markProjection(
+        ChapterDeletionRepository.markProjection(
           operationId,
           'knowledge',
           'failed',
           error instanceof Error ? error.message : String(error),
         )
       }
-    }
-
-    operation = ChapterDeletionRepository.get(operationId) ?? operation
-    const error = operationError(operation)
-    return {
-      success: operation.status === 'completed',
-      committed: true,
-      operation,
-      ...(error ? { error } : {}),
     }
   }
 }

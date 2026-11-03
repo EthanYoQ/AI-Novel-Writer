@@ -50,7 +50,7 @@ function validWindowsReceipt(name: string, releaseRoot: string) {
     'error-dialogs': { ...base, kind: 'windows-error-dialogs', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', newProductErrorDialogCount: 0, observedThrough: '2026-08-10T14:57:30.3051843Z' } },
     uninstall: { ...base, kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
     'upgrade-data': { ...base, kind: 'windows-upgrade-data', direct: { previousVersion: '0.2.5', legacyTableCount: 11, preservedAssetCount: 1, vectorDimension: 768, queryResultCount: 1, ...windowsV025CopyProof() } },
-    'native-abi': { ...base, kind: 'windows-native-abi', direct: { restoreMode: 'monitored', nodeModuleAbi: '127', verificationTest: 'electron/repositories/__tests__/character-repository.test.ts' } },
+    'native-abi': { ...base, kind: 'windows-native-abi', direct: { bindingInterface: 'node-api', napiVersion: '10', nodeModuleAbi: '127', packagedLoadStep: 'verify:win-package' } },
     'packaged-smoke': { ...base, kind: 'windows-packaged-smoke-summary', direct: { evidenceCount: 2, evidenceKinds: ['packaged-vector-smoke', 'packaged-official-homepage-smoke'] }, evidence: [
       reference('packaged-vector-smoke', 'packaged-vector-smoke.json'),
       reference('packaged-official-homepage-smoke', 'packaged-official-homepage-smoke.json'),
@@ -383,7 +383,7 @@ describe('release evidence v2 CLI', () => {
       expect(recorded.status, recorded.stderr).toBe(0)
     }
     type LaunchReceipt = { expectedVersion?: unknown, direct: Record<string, unknown> }
-    const writeSemanticReceipts = (timestamp?: string, mutateLaunch?: (receipt: LaunchReceipt) => void) => {
+    const writeSemanticReceipts = (timestamp?: string, mutateLaunch?: (receipt: LaunchReceipt) => void, mutateNativeAbi?: (receipt: LaunchReceipt) => void) => {
       for (const receipt of [
         'install', 'launch', 'quiet-window', 'error-dialogs', 'uninstall', 'upgrade-data', 'native-abi', 'packaged-smoke', 'signing',
       ]) {
@@ -391,6 +391,7 @@ describe('release evidence v2 CLI', () => {
         if (timestamp !== undefined && receipt === 'quiet-window') value.direct.completedAt = timestamp
         if (timestamp !== undefined && receipt === 'error-dialogs') value.direct.observedThrough = timestamp
         if (receipt === 'launch') mutateLaunch?.(value)
+        if (receipt === 'native-abi') mutateNativeAbi?.(value)
         writeJson(path.join(evidenceRoot, 'acceptance', `${receipt}.json`), value)
       }
     }
@@ -438,6 +439,23 @@ describe('release evidence v2 CLI', () => {
       ], { cwd: repositoryRoot, encoding: 'utf8' })
       expect(invalidLaunchResult.status).not.toBe(0)
       expect(invalidLaunchResult.stderr).toContain('Windows launch receipt facts are invalid')
+    }
+    for (const mutateNativeAbi of [
+      (receipt: LaunchReceipt) => { receipt.direct = { restoreMode: 'monitored', nodeModuleAbi: '127', verificationTest: 'electron/repositories/__tests__/character-repository.test.ts' } },
+      (receipt: LaunchReceipt) => { receipt.direct.bindingInterface = 'electron-abi' },
+      (receipt: LaunchReceipt) => { delete receipt.direct.napiVersion },
+      (receipt: LaunchReceipt) => { receipt.direct.packagedLoadStep = 'test' },
+    ]) {
+      writeSemanticReceipts(undefined, undefined, mutateNativeAbi)
+      const invalidNativeAbiResult = spawnSync(process.execPath, [
+        evidenceScript,
+        'finalize',
+        '--platform', 'windows',
+        '--evidence-root', evidenceRoot,
+        '--release-root', releaseRoot,
+      ], { cwd: repositoryRoot, encoding: 'utf8' })
+      expect(invalidNativeAbiResult.status).not.toBe(0)
+      expect(invalidNativeAbiResult.stderr).toContain('Windows native-ABI receipt facts are invalid')
     }
     for (const mutateCopy of [
       (direct: ReturnType<typeof windowsV025CopyProof>) => { for (const key of Object.keys(windowsV025CopyProof())) delete (direct as Record<string, unknown>)[key] },

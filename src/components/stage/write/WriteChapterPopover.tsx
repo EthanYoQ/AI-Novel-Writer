@@ -11,6 +11,7 @@ import {
   preferredGenerationModelId,
 } from '../../../services/workflows/chapter-write-launch'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
+import { routeStageModel } from '../../../shared/model-stage-routing'
 import type { ChapterWritePrefill } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -41,6 +42,7 @@ export default function WriteChapterPopover({ chapterNumber, blueprint, label, a
   const locale = useLocaleStore(s => s.locale)
   const models = useLLMStore(s => s.models)
   const defaultModelId = useLLMStore(s => s.defaultModelId)
+  const draftingModelId = useLLMStore(s => routeStageModel('drafting', s).modelId)
   const writeRequest = useStageStore(s => s.writeRequest)
   const layer = useAnchoredLayer(align)
   const { open, show, close } = layer
@@ -56,7 +58,7 @@ export default function WriteChapterPopover({ chapterNumber, blueprint, label, a
   const hintFieldId = useId()
 
   const generationModels = models.filter(isGenerationModel)
-  const selectedModelId = modelId ?? preferredGenerationModelId(models, defaultModelId)
+  const selectedModelId = modelId ?? preferredGenerationModelId(models, draftingModelId)
   const modelError = generationModelError(models, selectedModelId, text)
   const userGuidance = guidance ?? blueprint.userGuidance
 
@@ -100,7 +102,7 @@ export default function WriteChapterPopover({ chapterNumber, blueprint, label, a
         case 'stale':
           return
         case 'started':
-          // 这些选项只用于本次写作；写完后再打开弹层，回到蓝图里的指导与默认模型。
+          // 这些选项只用于本次写作；写完后再打开弹层，回到蓝图里的指导与写稿环节的模型。
           setModelId(null)
           setGuidance(null)
           setKnowledgeHint('')

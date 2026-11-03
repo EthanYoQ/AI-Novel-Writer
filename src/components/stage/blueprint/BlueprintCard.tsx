@@ -151,7 +151,7 @@ export default function BlueprintCard({ blueprint, row, saving, onField, onSave,
               ? text(`定稿后自动生成 · ${sqliteTime(blueprint.notesUpdatedAt).toLocaleDateString(locale)}`, `Generated after finalization · ${sqliteTime(blueprint.notesUpdatedAt).toLocaleDateString(locale)}`)
               : text('定稿后自动生成，也可以先手写给 AI 参考', 'Generated after finalization; you can also write them first for reference')}</em>
           </label>
-          <textarea id={ids.notes} className="stage-bp-ctl" rows={3} value={blueprint.notes || ''} onChange={event => onField('notes', event.target.value)} />
+          <textarea id={ids.notes} className="stage-bp-ctl" rows={3} value={blueprint.notes} onChange={event => onField('notes', event.target.value)} />
         </div>
       </div>
     </section>

@@ -1,6 +1,7 @@
 import type { MainGenerationRunHandle } from '../services/generation/generation-runtime'
 import type { CharacterStaticProvenance, ScopedCharacterResolution } from './character-identity'
 import type { CharacterRole } from './character-role'
+import type { ImportPurpose } from './import-run'
 
 export interface CharacterStaticFields {
   name: string
@@ -61,7 +62,8 @@ export interface CancelCharacterProposalRequest {
 export type PendingFinalizedCharacterProposalSummary = {
   proposalBatchId: string
   revision: number
-} & ({ finalizationId: string; importOperationId?: never } | { importOperationId: string; finalizationId?: never })
+} & ({ finalizationId: string; importOperationId?: never }
+  | { importOperationId: string; importPurpose?: ImportPurpose; itemCount: number; finalizationId?: never })
 export interface CharacterIdentitySnapshot {
   revision: number
   characters: { characterId: string; fields: CharacterStaticFields; retired: boolean; revision: number;

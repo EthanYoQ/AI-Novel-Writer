@@ -21,9 +21,9 @@ let projectRoot: string
 function seedDraft(): void {
   db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(11, '数据库中的旧正文')
   db.prepare(`
-    INSERT INTO drafts (id, chapter_number, status, content_id, word_count)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(17, 1, 'draft', 11, 7)
+    INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(17, 1, 1, 'draft', 11, 7)
 }
 
 function setupSchema(): void {
@@ -32,6 +32,7 @@ function setupSchema(): void {
     CREATE TABLE drafts (
       id INTEGER PRIMARY KEY,
       chapter_number INTEGER NOT NULL,
+      version INTEGER NOT NULL,
       status TEXT NOT NULL,
       content_id INTEGER NOT NULL,
       word_count INTEGER NOT NULL,

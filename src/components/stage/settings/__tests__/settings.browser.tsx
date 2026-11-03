@@ -106,7 +106,7 @@ describe('设置页', () => {
     }))
     expect(groups).toEqual([
       { group: '常用', pages: ['AI 模型', '检索模型', '外观'] },
-      { group: '高级', pages: ['网络代理', '提示词模板', '写作 Skills'] },
+      { group: '高级', pages: ['分工模型', '网络代理', '提示词模板', '写作 Skills'] },
       { group: '其他', pages: ['项目备份', '关于与更新'] },
     ])
     expect(heading()).toBe('项目备份')

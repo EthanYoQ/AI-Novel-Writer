@@ -161,6 +161,45 @@ describe('单章视图的主按钮随五种状态变化', () => {
       .toEqual({ reviewSourceId: backend.state.reviews.at(-1)!.id, model: 'glm', content: ORIGINAL })
   })
 
+  it('「修稿」在分工模型里另有指定时，不打开修稿选项直接修稿也用它', async () => {
+    useLLMStore.setState({ stageModelIds: { refinement: 'glm' } })
+    const draft = backend.addDraft({ status: 'draft' })
+    backend.addReview(draft)
+    await mount()
+    await openDraft(draft.id)
+    await click('按 2 项意见修稿')
+    await vi.waitFor(() => expect(workflows.createRefineFromReviewWorkflow).toHaveBeenCalledOnce())
+    expect(workflows.createRefineFromReviewWorkflow.mock.calls[0][0].generationModelId).toBe('glm')
+  })
+
+  it('「修稿」另有指定时，修稿选项里预选它；作者换成别的模型就按换的修稿', async () => {
+    useLLMStore.setState({ stageModelIds: { refinement: 'glm' } })
+    const draft = backend.addDraft({ status: 'draft' })
+    backend.addReview(draft)
+    await mount()
+    await openDraft(draft.id)
+    await click('修稿选项')
+    await expect.element(page.getByRole('combobox', { name: /本次修稿模型/ })).toHaveValue('glm')
+    await act(async () => page.getByRole('combobox', { name: /本次修稿模型/ }).selectOptions('grok'))
+    await click('按 2 项意见修稿')
+    await vi.waitFor(() => expect(workflows.createRefineFromReviewWorkflow).toHaveBeenCalledOnce())
+    expect(workflows.createRefineFromReviewWorkflow.mock.calls[0][0].generationModelId).toBe('grok')
+  })
+
+  it.each([
+    ['用默认模型', 'grok', 'grok'],
+    ['默认模型不可用时用第一个生成模型', null, 'glm'],
+  ])('「修稿」没有另外指定时照旧%s', async (_label, defaultModelId, expected) => {
+    useLLMStore.setState({ defaultModelId })
+    const draft = backend.addDraft({ status: 'draft' })
+    backend.addReview(draft)
+    await mount()
+    await openDraft(draft.id)
+    await click('按 2 项意见修稿')
+    await vi.waitFor(() => expect(workflows.createRefineFromReviewWorkflow).toHaveBeenCalledOnce())
+    expect(workflows.createRefineFromReviewWorkflow.mock.calls[0][0].generationModelId).toBe(expected)
+  })
+
   it('重新审稿后按意见修稿：确认的清单只带新审稿复验周期里的意见，不沿用上一份审稿的', async () => {
     const draft = backend.addDraft({ status: 'draft' })
     const first = backend.addReview(draft)
@@ -297,6 +336,22 @@ describe('单章视图的主按钮随五种状态变化', () => {
     const [params] = workflows.createFinalizeWorkflow.mock.calls[0]
     expect({ content: params.draftContent, snapshot: params.snapshot.content, draftId: params.snapshot.draftId })
       .toEqual({ content: `${ORIGINAL}\n\n他回头了。`, snapshot: `${ORIGINAL}\n\n他回头了。`, draftId: draft.id })
+  })
+
+  it('被替换的旧定稿：标「已被替换的定稿」、正文只读，没有编辑与删除入口，可回到当前稿', async () => {
+    const replaced = backend.addDraft({ status: 'superseded' })
+    backend.addDraft({ status: 'finalized', version: 2 })
+    await mount()
+    await openDraft(replaced.id)
+
+    await expect.element(page.getByText('已被替换的定稿，只读')).toBeVisible()
+    await expect.element(page.getByRole('button', { name: /本章版本：已被替换的定稿 v1/ })).toBeVisible()
+    expect(document.querySelector('.stage-ch-prose')?.getAttribute('data-readonly')).toBe('true')
+    await click('更多操作')
+    const items = [...document.querySelectorAll('[role="menuitem"]')].map(item => item.textContent?.trim())
+    expect(items).toEqual(expect.arrayContaining(['版本历史', '复制本章正文']))
+    expect(items.some(item => /删除|定稿…|修稿…/u.test(item ?? ''))).toBe(false)
+    expect(page.getByRole('button', { name: '回到当前稿' }).element()).toBeTruthy()
   })
 
   it('定稿：正文只读，列出后处理各步；重试失败步骤只重跑失败的，单步重试只跑那一步', async () => {

@@ -1,5 +1,6 @@
 allowBuilds:
-  better-sqlite3: true
+  # 13.x 自带各平台预编译包；允许构建时 pnpm 不看 gypfile:false，照样跑 node-gyp rebuild。
+  better-sqlite3: false
   electron: true
   electron-winstaller: true
   esbuild: true

@@ -231,13 +231,30 @@ async function main() {
     const reopenedPage = await app.firstWindow()
     lastPage = reopenedPage
     await openFromShelf(reopenedPage, projectName)
+    await app.evaluate(({ ipcMain }) => {
+      const handlers = ipcMain._invokeHandlers
+      if (!(handlers instanceof Map)) throw new Error('ipcMain._invokeHandlers is not a Map; cannot observe generation:list-recovery')
+      const original = handlers.get('generation:list-recovery')
+      if (typeof original !== 'function') throw new Error('generation:list-recovery is not registered after reopening')
+      globalThis.__recoveryLists = []
+      globalThis.__restoreRecoveryList = () => { handlers.set('generation:list-recovery', original); delete globalThis.__recoveryLists }
+      handlers.set('generation:list-recovery', async (...args) => { const result = await original(...args); globalThis.__recoveryLists?.push(result); return result })
+    })
     await runSheet.openFromPalette(reopenedPage)
     await runSheet.tab(reopenedPage, '进行中').click()
-    await runSheet.recovery(reopenedPage).getByText('合成正文', { exact: false }).first().waitFor({ state: 'visible' })
+    for (const deadline = Date.now() + 10_000; !await app.evaluate(() => globalThis.__recoveryLists.length > 0); await reopenedPage.waitForTimeout(50)) {
+      assert.ok(Date.now() < deadline, 'run sheet did not read the recoverable list after reopening')
+    }
+    // 已保存的单章写稿不列为可恢复（#536）。失败的那次可能因细纲已写完而列出，这里不断言它。
+    const listed = await app.evaluate(() => { const last = globalThis.__recoveryLists.at(-1); globalThis.__restoreRecoveryList(); return last })
+    assert.equal(listed.partial, false, 'recoverable list read was partial after reopening')
+    assert.ok(!listed.drafts.some(item => item.view.handle.runId === successfulRuns[0].runId), 'main process listed the saved single-chapter run as recoverable')
+    await reopenedPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(await runSheet.recovery(reopenedPage).getByText('合成正文', { exact: false }).count(), 0, 'saved single-chapter run must not be listed as recoverable')
     const reopenedRows = await historyRows(reopenedPage)
     assert.deepEqual(reopenedRows, [], 'renderer run history is expected to be empty after a new process')
     assert.deepEqual(durableRuns(project.projectPath), runs, 'new process changed durable generation run identities')
-    pass('u13-reopen-limitation', null, 'New process exposes durable candidates in the run sheet while the in-memory run history is empty; no history persistence is claimed',
+    pass('u13-reopen-limitation', null, 'New process keeps both durable runs, does not list the saved single-chapter run as recoverable, and the in-memory run history is empty; no history persistence is claimed',
       { durableRunIds: runs.map(run => run.runId), rendererHistoryCount: reopenedRows.length })
   } catch (error) {
     failure = error
@@ -247,7 +264,7 @@ async function main() {
   finally { if (app) await quit(app); if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) } }
   const receipt = { schemaVersion: 1, qualification: 'F05_U13_PACKAGED_V3_HISTORY_WORKFLOW_STATUS_SUBEVIDENCE', outcome: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'stage', scope: { kind: 'controlled-workflow-status-sub-evidence', workflowStatusSteps: ['u13-workflow-status-pending', 'u13-workflow-status-success', 'u13-workflow-status-failure'], verified: ['U13.A08 same-process stage run history selection', 'durable provider attempt and body assertions', 'new-process run history limitation'], excludes: ['U13.A09 chapter view post-processing finalization pending/success/failure seal'] }, testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) }, driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { projectRoot: profile.projects, scratch }, fixture: { provider: 'loopback synthetic OpenAI SSE', requests: fixtureState.requests, shortOutlines: fixtureState.outlines, externalModelRequests: 0 }, steps,
     unverifiedActions: ['U13.A01 real model streaming', 'U13.A02 provider reasoning qualification', 'U13.A03-U13.A07', 'U13.A09 real chapter view post-processing finalization pending/success/failure seal', 'release default and model quality'],
-    limitation: 'Renderer run history is in-memory and empty in a new process; durable main-generation candidates remain visible without reconstructing that list',
+    limitation: 'Renderer run history is in-memory and empty in a new process; durable main-generation runs remain in the library, and the saved single-chapter run is not listed as recoverable',
     failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
   const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u13-history-seals', runId, 'receipt.json'); fs.mkdirSync(path.dirname(receiptPath), { recursive: true }); fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2)); process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, receipt: receiptPath, steps: steps.map(step => step.stepId), testedSha })}\n`); if (failure) throw failure
 }

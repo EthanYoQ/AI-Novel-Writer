@@ -11,8 +11,9 @@ import type {
   FileNode,
 } from '../shared/ipc-channels'
 import { alertError } from '../components/ui/AlertDialog'
+import { showFinalizationRepairNotice } from '../components/finalization-repair-notice'
 import { confirm } from '../components/ui/Confirm'
-import { appErrorMessage, displayedErrorMessage } from '../i18n/app-errors'
+import { appErrorMessage, displayedErrorMessage, englishWithReason } from '../i18n/app-errors'
 import { saveDirtyEditorChangesForExit, useEditorStore } from './editor-store'
 import { countUnsavedEditorItemsForProject } from './editor-unsaved'
 import { useLayoutStore } from './layout-store'
@@ -423,11 +424,17 @@ interface ProjectState {
   saveProject: (expectedProjectSession?: ProjectSessionContext) => Promise<boolean>
   /** 更新小说配置 */
   updateNovelConfig: (config: Partial<NovelConfig>, expectedProjectSession?: ProjectSessionContext) => void
+  /**
+   * 主进程已经写进库的设定字段，发布到界面并记为已保存。
+   * keepUnsavedEdits：作者在设定页改过、还没保存的字段保持作者的值（仍算未保存）；否则一律换成库里的值。
+   */
+  /** keep：'none' 全按库里的值；'unsaved-edits' 作者改过还没保存的字段保留作者的值；'current' 这些字段都保留界面上的值，只把它们记为已保存基准。 */
+  publishSavedNovelConfig: (saved: Partial<NovelConfig>, expectedProjectSession: ProjectSessionContext, keep: 'none' | 'unsaved-edits' | 'current') => void
   /** Main validates frozen sources and writes before publishing generated fields to the UI. */
   commitGeneratedNovelConfig: (config: Partial<NovelConfig>, expectedConfig: NovelConfig, expectedProjectSession: ProjectSessionContext,
     generationRunHandle: import('../services/generation/generation-runtime').MainGenerationRunHandle,
-    /** Existing guarded main effect, such as an import receipt; replaces the direct core write. */
-    persistEffect?: () => Promise<void>) => Promise<boolean>
+    /** Existing guarded main effect, such as an import receipt; replaces the direct core write and may return the fields it actually saved. */
+    persistEffect?: () => Promise<Partial<NovelConfig> | void>) => Promise<boolean>
   /** 放弃指定项目的配置草稿并恢复到已保存基准。 */
   discardNovelConfigDraft: (
     projectPath: string,
@@ -783,11 +790,20 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         if (!isLatestRequest()) return false
         const warnings = [...partialLoadWarnings, ...layer2Warnings]
           .map(warning => projectError(warning))
+        const repair = result.finalizationRepair
+        if (repair?.status === 'failed') {
+          const reason = displayedErrorMessage(useLocaleStore.getState().locale, repair.error)
+          warnings.push(projectText(
+            `重复的定稿没能修复，后面的章节可能写不了；下次打开项目会再试一次。原因：${reason}`,
+            englishWithReason('Duplicate final versions could not be repaired, so later chapters may stay blocked. Opening the project again will retry.', reason),
+          ))
+        }
         if (warnings.length > 0) {
           alertError(warnings.join('\n'), {
             title: projectText('项目已打开，部分数据加载失败', 'Project opened with some data unavailable'),
           })
         }
+        if (repair?.status === 'checked') showFinalizationRepairNotice(repair)
         return true
       }
       if (!isLatestRequest()) return false
@@ -927,13 +943,14 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
 
-  commitGeneratedNovelConfig: async (config, expectedConfig, expectedProjectSession, generationRunHandle, persistEffect) => {
+  commitGeneratedNovelConfig: async (generated, expectedConfig, expectedProjectSession, generationRunHandle, persistEffect) => {
     const project = get().currentProject
     if (!project || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(project))
       || JSON.stringify(project.novelConfig) !== JSON.stringify(expectedConfig)) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
-    const { narrativePOV, ...coreFields } = config
+    const { narrativePOV, ...coreFields } = generated
     const data = { ...coreFields, ...(narrativePOV !== undefined ? { narrativePov: narrativePOV } : {}) }
-    if (persistEffect) await persistEffect()
+    let config = generated
+    if (persistEffect) config = (await persistEffect()) ?? generated
     else {
       const result = await ipc.invokeWithProjectSession(expectedProjectSession, 'db:project-core-commit-generated',
         { data, generationRunHandle }, project.path)
@@ -957,6 +974,20 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     // and callers must not run callbacks that replace it with an older full config.
     if (!unchanged) throw new Error('GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
     return true
+  },
+
+  publishSavedNovelConfig: (saved, expectedProjectSession, keep) => {
+    const project = get().currentProject
+    if (!project || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(project))) return
+    const ledger = readConfigDraftLedger()
+    const base = getProjectEditorDraft(ledger, project.path)?.baseValue ?? project.novelConfig
+    const next = { ...project.novelConfig }
+    for (const key of Object.keys(saved) as (keyof NovelConfig)[]) {
+      const edited = JSON.stringify(project.novelConfig[key]) !== JSON.stringify(base[key])
+      if (keep === 'none' || (keep === 'unsaved-edits' && !edited)) Object.assign(next, { [key]: saved[key] })
+    }
+    set({ currentProject: { ...project, novelConfig: next } })
+    persistConfigDraftLedger(settleProjectEditorSave(ledger, project.path, { ...base, ...saved }, next))
   },
 
   updateNovelConfig: (config, expectedProjectSession) => {

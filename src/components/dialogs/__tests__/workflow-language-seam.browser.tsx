@@ -221,7 +221,7 @@ describe('workflow launch language seams', () => {
 
       useLocaleStore.setState({ locale: uiLocale, initialized: true })
       useProjectStore.setState({ currentProject })
-      useLLMStore.setState({ defaultModelId: modelId })
+      useLLMStore.setState({ models: [{ id: modelId, purposes: ['generation'] }] as never, defaultModelId: modelId })
       useWorkflowStore.setState({
         activeRuns: [],
         history: [],

@@ -184,6 +184,9 @@ export class FinalizationService {
       if (record.publicationStatus === 'published') {
         return toResult(record, true)
       }
+      if (!FinalizationRepository.isAuthoritative(record.draftId)) {
+        return toResult(record, false, 'FINALIZATION_SUPERSEDED')
+      }
       await this.publisher.publish({
         projectRoot,
         targetFileName: record.targetFileName,

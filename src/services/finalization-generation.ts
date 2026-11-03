@@ -3,6 +3,7 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { FinalizationGenerationSlot, FinalizationGenerationRecovery } from '../shared/finalization-generation'
 import type { FinalizedCharacterArtifact } from '../shared/finalized-character-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
+import { isTerminalProviderFailure, throwIfTerminalProviderFailure } from './generation/generation-harness'
 
 /** Reuses one durable main slot. Saved effects never rebuild prompts or execute. */
 export async function runFinalizationGeneration(options: {
@@ -14,7 +15,7 @@ export async function runFinalizationGeneration(options: {
   /** 作者显式重试时冻结的最近一次未成功尝试；主进程按它只重发一次。 */
   recoverFrom?: string
   cancelled: () => boolean
-  onHandle?: (handle: MainGenerationRunHandle) => void
+  onHandle?: (handle: MainGenerationRunHandle, modelId: string) => void
 }) {
   const session = Object.freeze({ ...options.session })
   let recovery: FinalizationGenerationRecovery | null = null
@@ -39,10 +40,13 @@ export async function runFinalizationGeneration(options: {
       slot: options.slot, modelId: recovery?.modelId ?? options.modelId(), ...(options.parentRootActionId ? { parentRootActionId: options.parentRootActionId } : {}),
     })
     validate(recovery)
-    options.onHandle?.(recovery.view.handle)
+    options.onHandle?.(recovery.view.handle, recovery.modelId)
     if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
     if (recovery.effect) return recovery.effect
     if (recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled') throw new Error('FINALIZATION_GENERATION_SOURCE_CHANGED')
+    // 同一根下的另一步骤也有诊断，只看本步骤最近一次请求。
+    const latestFailure = recovery.latestAttempt?.failureCode
+    if (isTerminalProviderFailure(latestFailure)) throw new Error(latestFailure)
     let candidates = recovery.view.candidates ?? recovery.view.artifacts
     let candidate = candidates.at(-1)
     // 显式引用只对冻结它的那次运行有效；begin 换了新运行时按普通路径重新请求。recoverFrom 是否属于本运行由主进程判断。
@@ -58,6 +62,7 @@ export async function runFinalizationGeneration(options: {
       if (receipt.run.handle.projectId !== previous.projectId || receipt.run.handle.rootActionId !== previous.rootActionId || receipt.run.handle.runId !== previous.runId) throw new Error('FINALIZATION_GENERATION_IDENTITY_MISMATCH')
       recovery.view = receipt.run
       if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
+      throwIfTerminalProviderFailure(receipt.outcome.receipt)
       if (receipt.outcome.status !== 'completed' || receipt.outcome.finishReason !== 'stop') throw new Error('FINALIZATION_GENERATION_INCOMPLETE')
       candidates = receipt.run.candidates ?? receipt.run.artifacts
       const reference = receipt.outcome.receipt.visibleArtifact

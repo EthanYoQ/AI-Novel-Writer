@@ -115,6 +115,7 @@ export class ExtractPlanningMaterialCharactersCommand extends BaseWorkflowComman
       signal: generation.signal,
     })
     if (!extraction.ok) {
+      if (extraction.failure.terminal) throw extraction.failure.terminal
       const reason = extraction.failure.reason ?? 'unknown'
       throw new Error(text(
         `角色卡提取失败（code=${extraction.failure.code}；reason=${reason}）。`,

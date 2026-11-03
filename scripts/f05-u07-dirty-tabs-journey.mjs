@@ -54,6 +54,8 @@ const projectName = 'U07-dirty-tabs'
 const steps = []
 const pass = (stepId, actionId, assertion) => steps.push({ stepId, actionId, outcome: 'PASS', assertion })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
+/** generation:list 只给身份与状态；要候选、账本时按 handle 逐个读完整视图。 */
+const listRunViews = async (page, context) => Promise.all((await invoke(page, 'generation:list', context)).map(run => invoke(page, 'generation:read', run.handle, context)))
 /** 内容区标签：只有两个以上标签时才显示标签条。 */
 const tab = (page, name) => stage.tabList(page).getByRole('tab', { name, exact: true })
 const assertActiveTab = async (page, name, actionId) => {
@@ -240,7 +242,7 @@ async function main() {
       await runSheet.sheet(page).getByText(runningBody).first().waitFor({ state: 'visible', timeout: 30_000 })
       assert.equal(fixture.requests, 2, 'second prose request must remain open')
       const { session, runId: ledgerRunId } = runningSession(project.projectPath, project.projectId)
-      const runs = await invoke(page, 'generation:list', session)
+      const runs = await listRunViews(page, session)
       const candidateRun = runs.find(item => item.candidates?.some(artifact => artifact.text === candidateBody))
       const candidate = candidateRun?.candidates?.find(artifact => artifact.text === candidateBody)
       assert(candidateRun && candidate, 'main-owned durable visible-text candidate missing')
@@ -264,7 +266,7 @@ async function main() {
         const context = await invoke(page, 'project:get-runtime-context')
         assert.equal(path.resolve(context.activeProjectPath), path.resolve(project.projectPath), `${label}: active project changed`)
         assert.equal(context.dbReady, true)
-        const currentRuns = await invoke(page, 'generation:list', session)
+        const currentRuns = await listRunViews(page, session)
         const listed = currentRuns.find(item => item.handle.runId === task.handle.runId)
         assert.deepEqual({ ...listed?.handle, status: listed?.status }, livenessObservation.task, `${label}: running task identity/status changed`)
         const recoveredRun = currentRuns.find(item => item.handle.runId === candidateRun.handle.runId)

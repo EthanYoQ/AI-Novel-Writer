@@ -224,6 +224,26 @@
   color: var(--danger);
 }
 
+.stage-set-stale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--s-2);
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--warn);
+}
+
+.stage-set-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--s-2);
+  margin: var(--s-4) 0 0;
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
 .stage-set-themes {
   display: flex;
   gap: 10px;

@@ -8,6 +8,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import CodeMirrorEditor from '../CodeMirrorEditor'
+import { commandKeyLabel, IS_MAC } from '../../stage/shortcut-keys'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -22,8 +23,18 @@ let pendingRequestId: string | null
 let deferFirstLease: boolean
 let rejectFirstLease: ((error: Error) => void) | null
 let leaseRequestCount: number
+let failureCode: string | undefined
 
-beforeEach(() => {
+const APP_MIN_WINDOW_WIDTH = 1024
+const nextFrames = () => act(async () => { await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
+/** 三击选中一行，等选区工具条出现。工具条在下一帧定位后才渲染，不能在 act 里等它：act 结束前 React 不提交渲染。 */
+const selectLine = async (text: string, options?: { exact: boolean }) => {
+  await act(async () => page.getByText(text, options).click({ clickCount: 3 }))
+  await expect.element(page.getByRole('toolbar', { name: '选中文字的操作' })).toBeVisible()
+}
+
+beforeEach(async () => {
+  await page.viewport(APP_MIN_WINDOW_WIDTH, 768)
   window.getSelection()?.removeAllRanges()
   container = document.createElement('div')
   document.body.append(container)
@@ -34,6 +45,7 @@ beforeEach(() => {
   deferFirstLease = false
   rejectFirstLease = null
   leaseRequestCount = 0
+  failureCode = undefined
   useProjectStore.setState({ currentProject: { id: 'editor-project', sessionLease: 'editor-epoch', path: 'C:/合成编辑器', novelConfig: {} } as never })
   useLLMStore.setState({
     defaultModelId: 'editor-model',
@@ -63,7 +75,7 @@ beforeEach(() => {
           const run = { handle, status: snapshot.status, artifacts: [snapshot] }
           const stored = recoveries.get((handle as { runId: string }).runId) as { view: unknown }
           stored.view = run
-          resolve({ run, outcome: { status: snapshot.status, content: data.fullText, finishReason: data.finishReason, receipt: { finishReason: data.finishReason } } })
+          resolve({ run, outcome: { status: snapshot.status, content: data.fullText, finishReason: data.finishReason, receipt: { finishReason: data.finishReason, ...(failureCode ? { failureCode } : {}) } } })
         }
         listeners.set('llm:stream-done', finish as EventListener)
         if (!deferStream) queueMicrotask(() => finish({ fullText: '残缺片段', finishReason: 'length' }))
@@ -92,7 +104,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   useProjectStore.setState({ currentProject: null })
-  useLLMStore.setState({ defaultModelId: null, activeRequests: new Map() })
+  useLLMStore.setState({ defaultModelId: null, models: [], stageModelIds: {}, activeRequests: new Map() })
   useLocaleStore.setState({ locale: 'zh-CN' })
   Reflect.deleteProperty(window, 'aiNovelAPI')
 })
@@ -138,6 +150,31 @@ describe('CodeMirror editor AI generation boundary', () => {
 
   })
 
+  it('explains a provider context-length rejection instead of a generic incomplete result', async () => {
+    failureCode = 'GENERATION_CONTEXT_LENGTH_EXCEEDED'
+    await act(async () => root.render(
+      <CodeMirrorEditor content="原文段落" mode="prose" />,
+    ))
+    await act(async () => page.getByText('原文段落').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await expect.element(page.getByText(/提示词超出了模型能接受的长度/)).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '替换' })).toBeDisabled()
+  })
+
+  it('sends a new inline run to the drafting stage model instead of the default model', async () => {
+    useLLMStore.setState({
+      models: [{ id: 'editor-model', name: 'Default', purposes: ['generation'] }, { id: 'stage-model', name: 'Drafting', purposes: ['generation'] }] as never,
+      stageModelIds: { drafting: 'stage-model' },
+    })
+    await act(async () => root.render(<CodeMirrorEditor content="原文段落" mode="prose" />))
+
+    await selectLine('原文段落')
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ modelId: 'stage-model' }), expect.any(Object)))
+  })
+
   it('applies a delayed AI result to the frozen original selection instead of a later selection', async () => {
     deferStream = true
     await act(async () => root.render(
@@ -163,6 +200,213 @@ describe('CodeMirror editor AI generation boundary', () => {
     await act(async () => page.getByRole('button', { name: '替换' }).click())
 
     expect(view.state.doc.toString()).toBe('替换甲')
+  })
+
+  it('revises the selection with an author note and replaces it after acceptance', async () => {
+    deferStream = true
+    await act(async () => root.render(
+      <CodeMirrorEditor content="林岚走进北塔" mode="prose" />,
+    ))
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '按意见改' })).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await expect.element(note).toHaveFocus()
+    const submit = page.getByRole('button', { name: '改写' })
+    await expect.element(submit).toBeDisabled()
+    await act(async () => note.fill('  \n '))
+    await expect.element(submit).toBeDisabled()
+    await act(async () => note.fill('改成第一人称'))
+    await act(async () => submit.click())
+
+    await expect.element(page.getByText('按意见改预览')).toBeVisible()
+    await expect.element(page.getByText('改成第一人称')).toBeVisible()
+    expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ input: expect.objectContaining({ action: 'instruct', instruction: '改成第一人称', selectedText: '林岚走进北塔' }) }), expect.any(Object))
+    await act(async () => {
+      listeners.get('llm:stream-done')?.({ requestId: pendingRequestId!, fullText: '我走进北塔', finishReason: 'stop' } as never)
+    })
+    await expect.element(page.getByText('我走进北塔')).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '替换' }).click())
+
+    expect(view.state.doc.toString()).toBe('我走进北塔')
+  })
+
+  it('submits the note with Ctrl+Enter and returns to the actions with Escape', async () => {
+    deferStream = true
+    await act(async () => root.render(
+      <CodeMirrorEditor content="林岚走进北塔" mode="prose" />,
+    ))
+
+    await selectLine('林岚走进北塔')
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await act(async () => note.fill('语气更冷'))
+    await act(async () => { note.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    await expect.element(note).not.toBeInTheDocument()
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
+    expect(invoke.mock.calls.some(([channel]) => channel === 'editor-inline:begin')).toBe(false)
+
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    await act(async () => note.fill('语气更冷'))
+    await act(async () => { note.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true })) })
+    await expect.element(page.getByText('按意见改预览')).toBeVisible()
+    expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ input: expect.objectContaining({ action: 'instruct', instruction: '语气更冷' }) }), expect.any(Object))
+  })
+
+  it('shows the submit shortcut with the platform command key', async () => {
+    expect(commandKeyLabel('Enter', true)).toBe('⌘ + Enter')
+    expect(commandKeyLabel('Enter', false)).toBe('Ctrl + Enter')
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+
+    await selectLine('林岚走进北塔')
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+
+    await expect.element(page.getByText(`${IS_MAC ? '⌘' : 'Ctrl'} + Enter 提交`, { exact: true })).toBeVisible()
+  })
+
+  it('accepts a 2000 code point note outside the BMP in full', async () => {
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await selectLine('林岚走进北塔')
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    const longNote = '𠀋'.repeat(2000)
+
+    await act(async () => note.fill(longNote + '𠀋'))
+
+    expect((note.element() as HTMLTextAreaElement).value).toBe(longNote)
+  })
+
+  it('keeps the note form inside the viewport for a selection at the top edge', async () => {
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await selectLine('林岚走进北塔')
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await expect.element(note).toBeVisible()
+    // 表单长高后在下一帧绘制前夹紧；量用户看到的那一帧，不量还没排版过的 DOM
+    await nextFrames()
+    expect(note.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
+  })
+
+  it('keeps a finished preview inside the viewport from the first frame after it grows past the loading height', async () => {
+    deferStream = true
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await selectLine('林岚走进北塔')
+    await act(async () => page.getByRole('button', { name: '润色' }).click())
+    await vi.waitFor(() => expect(listeners.has('llm:stream-done')).toBe(true))
+
+    const bar = container.querySelector('.cm-selbar')!
+    const topsBeforePaint: number[] = []
+    const observer = new ResizeObserver(() => topsBeforePaint.push(bar.getBoundingClientRect().top))
+    observer.observe(bar)
+    await nextFrames()
+
+    await act(async () => {
+      listeners.get('llm:stream-done')?.({ requestId: pendingRequestId!, fullText: '新段落。'.repeat(150), finishReason: 'stop' } as never)
+    })
+    await nextFrames()
+    observer.disconnect()
+
+    await expect.element(page.getByRole('button', { name: '替换' })).toBeEnabled()
+    expect(topsBeforePaint.length).toBeGreaterThan(1)
+    expect(Math.min(...topsBeforePaint, bar.getBoundingClientRect().top)).toBeGreaterThanOrEqual(0)
+  })
+
+  it('keeps the toolbar inside the viewport on the first selection near the right edge', async () => {
+    container.style.paddingLeft = `${APP_MIN_WINDOW_WIDTH - 120}px`
+    container.style.paddingTop = '200px'
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+
+    const toolbar = page.getByRole('button', { name: '按意见改' })
+    await expect.element(toolbar).toBeVisible()
+    await vi.waitFor(() => expect(container.querySelector('.cm-selbar')!.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth))
+  })
+
+  const LONG_CHAPTER = Array.from({ length: 60 }, (_, i) => `第${i + 1}段原文`).join('\n\n')
+  const scrollChapterTo = async (scrollTop: number) => {
+    const scroller = container.querySelector<HTMLElement>('[data-testid="chapter-scroller"]')!
+    await act(async () => {
+      scroller.scrollTop = scrollTop
+      scroller.dispatchEvent(new Event('scroll'))
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    })
+  }
+
+  it('lets the toolbar leave with a blurred selection scrolled out of a growing chapter', async () => {
+    await act(async () => root.render(<>
+      <input aria-label="外部输入" />
+      <div data-testid="chapter-scroller" style={{ height: 300, overflow: 'auto' }}><CodeMirrorEditor content={LONG_CHAPTER} mode="prose" fitContent /></div>
+    </>))
+    await act(async () => page.getByText('第1段原文', { exact: true }).click({ clickCount: 3 }))
+    await expect.element(page.getByRole('toolbar')).toBeVisible()
+    await act(async () => page.getByRole('textbox', { name: '外部输入' }).fill('输入'))
+
+    await scrollChapterTo(1200)
+
+    expect(container.querySelector('.cm-selbar')?.getBoundingClientRect().bottom ?? -1).toBeLessThanOrEqual(0)
+  })
+
+  it('lets the note form leave with its selection and keeps the typed note on return', async () => {
+    await act(async () => root.render(
+      <div data-testid="chapter-scroller" style={{ height: 300, overflow: 'auto' }}><CodeMirrorEditor content={LONG_CHAPTER} mode="prose" fitContent /></div>,
+    ))
+    await selectLine('第1段原文', { exact: true })
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await act(async () => note.fill('我的未提交意见'))
+
+    await scrollChapterTo(1200)
+    expect(container.querySelector('.cm-selbar')?.getBoundingClientRect().bottom ?? -1).toBeLessThanOrEqual(0)
+
+    await scrollChapterTo(0)
+    await expect.element(note).toHaveValue('我的未提交意见')
+    expect(container.querySelector('.cm-selbar')!.getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
+  })
+
+  it('keeps the note form on screen while a long selection whose start scrolled away is still visible', async () => {
+    await act(async () => root.render(
+      <div data-testid="chapter-scroller" style={{ height: 300, overflow: 'auto' }}><CodeMirrorEditor content={LONG_CHAPTER} mode="prose" fitContent /></div>,
+    ))
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+    await act(async () => {
+      view.focus()
+      view.dispatch({ selection: { anchor: view.state.doc.line(5).from, head: view.state.doc.line(39).to } })
+    })
+    await scrollChapterTo(200)
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+    await expect.element(note).toHaveFocus()
+
+    await scrollChapterTo(210)
+
+    expect(note.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
+    const submit = page.getByRole('button', { name: '改写' }).element().getBoundingClientRect()
+    expect(submit.top).toBeGreaterThanOrEqual(0)
+    expect(submit.bottom).toBeLessThanOrEqual(window.innerHeight)
+  })
+
+  it('leaves Escape to the input method while it reports composition by keyCode 229', async () => {
+    await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
+    await selectLine('林岚走进北塔')
+    await act(async () => page.getByRole('button', { name: '按意见改' }).click())
+    const note = page.getByRole('textbox', { name: '修改意见' })
+
+    await act(async () => { note.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 229, bubbles: true })) })
+
+    await expect.element(note).toBeInTheDocument()
+  })
+
+  it('shows no selection actions in a read-only editor', async () => {
+    await act(async () => root.render(
+      <CodeMirrorEditor content="定稿正文" mode="prose" editable={false} />,
+    ))
+    await act(async () => page.getByText('定稿正文').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('toolbar')).not.toBeInTheDocument()
+    await expect.element(page.getByRole('button', { name: '按意见改' })).not.toBeInTheDocument()
   })
 
   it('keeps a delayed result copyable but refuses stale offsets after the document changes', async () => {
@@ -279,6 +523,16 @@ it.each([false, true])('明确 handle 恢复原候选；文件改变=%s 时只�
   expect(invoke).toHaveBeenCalledTimes(2)
 })
 
+it('明确 handle 恢复按意见改的候选时显示当时的意见', async () => {
+  const handle = { projectId: 'editor-project', epoch: 'editor-epoch', rootActionId: '原预算', runId: '意见运行' }
+  const documentText = '林岚走进北塔'
+  const documentHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(documentText))), byte => byte.toString(16).padStart(2, '0')).join('')
+  invoke.mockImplementation(async () => ({ view: { handle, status: 'completed', artifacts: [{ ...handle, artifactId: 'proof', textHash: 'proof-hash', text: '我走进北塔', status: 'completed', compositionEligible: true }] }, modelId: '原模型', sourceStatus: 'current', context: { action: 'instruct', instruction: '改成第一人称', kind: 'author-draft', documentText, documentHash, from: 0, to: 6, selectedText: documentText } }))
+  await act(async () => root.render(<CodeMirrorEditor content={documentText} recoveryHandle={handle} />))
+  await expect.element(page.getByText('我走进北塔')).toBeVisible()
+  await expect.element(page.getByText('按意见改预览')).toBeVisible()
+  await expect.element(page.getByText('改成第一人称')).toBeVisible()
+})
 it('取消调用 main；卸载仅脱离且已交付明确恢复 handle', async () => {
   deferStream = true
   const navigation = vi.fn()
@@ -331,4 +585,17 @@ it('点击接受前原候选已丢弃，保留预览但不写入正文', async (
   await expect.element(page.getByText('来源已变化，结果仅可复制')).toBeVisible()
   expect(EditorView.findFromDOM(container.querySelector('.cm-editor')!)!.state.doc.toString()).toBe(documentText)
   await expect.element(page.getByText('候选')).toBeVisible()
+})
+it('继续原运行时服务商以上下文超长拒绝，显示对应说明', async () => {
+  const handle = { projectId: 'editor-project', epoch: 'editor-epoch', rootActionId: '原预算', runId: '续跑运行' }
+  const documentText = '原文'
+  const documentHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(documentText))), byte => byte.toString(16).padStart(2, '0')).join('')
+  const view = { handle, status: 'running', artifacts: [], candidates: [], ledger: { physicalRequests: 0 } }
+  const stored = { view, modelId: '原模型', sourceStatus: 'current', context: { action: 'refine', kind: 'author-draft', documentText, documentHash, from: 0, to: 2, selectedText: documentText } }
+  invoke.mockImplementation(async (channel: string) => channel === 'editor-inline:execute'
+    ? { run: view, outcome: { status: 'incomplete', content: '', finishReason: 'error', receipt: { finishReason: 'error', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } } }
+    : stored)
+  await act(async () => root.render(<CodeMirrorEditor content={documentText} recoveryHandle={handle} />))
+  await act(async () => page.getByRole('button', { name: '继续原运行' }).click())
+  await expect.element(page.getByText(/提示词超出了模型能接受的长度/)).toBeVisible()
 })

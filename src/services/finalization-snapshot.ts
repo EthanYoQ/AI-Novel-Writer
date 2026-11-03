@@ -86,6 +86,13 @@ export function reconcileFinalizationCompletion(
     && completion.draftId === snapshot.draftId
     && completion.contentRevision === snapshot.contentRevision
   )
+  const replacedFinal = !sameTarget
+    && tab.draftStatus === 'finalized'
+    && tab.draftId !== snapshot.draftId
+    && tab.chapterNumber === snapshot.chapterNumber
+    && tab.projectSessionLease === snapshot.projectSession.leaseId
+    && sameProjectPathKey(tab.projectKey, snapshot.projectPath)
+  if (replacedFinal) return { ...tab, draftStatus: 'superseded' }
   if (!sameTarget) return tab
 
   const snapshotStillCurrent = (

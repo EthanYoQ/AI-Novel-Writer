@@ -1441,6 +1441,31 @@ describe('project close lifecycle', () => {
     )
   })
 
+  it('opens the project and tells the author once when the duplicate-finalization repair failed', async () => {
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'project:open') {
+        return {
+          success: true,
+          project: project('B'),
+          requestToken: args[1],
+          activeProjectPath: project('B').path,
+          finalizationRepair: { status: 'failed', error: 'SQLITE_BUSY: database is locked' },
+        }
+      }
+      if (channel === 'fs:list-dir') return []
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+
+    await expect(useProjectStore.getState().openProject(project('B').path)).resolves.toBe(true)
+
+    expect(useProjectStore.getState().currentProject?.path).toBe(project('B').path)
+    expect(mocks.alertError).toHaveBeenCalledOnce()
+    expect(mocks.alertError).toHaveBeenCalledWith(
+      expect.stringMatching(/重复的定稿没能修复[\s\S]*SQLITE_BUSY: database is locked/),
+      expect.objectContaining({ title: '项目已打开，部分数据加载失败' }),
+    )
+  })
+
   it('keeps the committed project open and continues Layer 2 when file-tree refresh fails', async () => {
     mocks.onProjectOpened.mockResolvedValueOnce({ warnings: ['角色卡加载失败'] })
     mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {

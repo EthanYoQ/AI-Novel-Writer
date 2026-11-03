@@ -26,6 +26,7 @@ function makeLegacyProject(): string {
   fs.mkdirSync(velaRoot, { recursive: true })
   const legacyDb = new Database(path.join(velaRoot, 'vela.db'))
   const snapshot = '旧版本已提交的正文'
+  legacyDb.exec('BEGIN')
   legacyDb.exec(`
     CREATE TABLE contents (
       id INTEGER PRIMARY KEY,
@@ -101,6 +102,7 @@ function makeLegacyProject(): string {
       operation_id, draft_id, chapter_number, finalization_id, status
     ) VALUES (?, ?, ?, ?, ?)
   `).run('legacy-deletion-1', 99, 9, 'legacy-finalization-9', 'failed')
+  legacyDb.exec('COMMIT')
   legacyDb.close()
   return projectRoot
 }

@@ -23,6 +23,7 @@ import { writingLanguageText, type WritingLanguage } from '../../shared/writing-
 import type { FileWriteCommitState } from '../../shared/ipc-channels'
 import { parseAgentResponseProtocol, cleanAgentProtocolVisibleText } from '../../shared/agent-response-protocol'
 import type { AgentGenerationRound, AgentToolAction } from '../../shared/agent-generation'
+import { providerContextFailureText } from '../generation/prompt-budget-failure'
 
 // ===== 常量 =====
 
@@ -272,9 +273,11 @@ export async function runAgentLoop(
 
         // 截断过长的结果
         const truncatedContent = truncateResult(
-          result.content,
+          tc.name,
+          result,
           TOOL_RESULT_MAX_CHARS,
           executionContext.writingLanguage,
+          MAX_TOOL_ROUNDS - rounds,
         )
 
         toolCallInfo.commitState = result.commitState
@@ -453,7 +456,7 @@ async function runHostedAgentLoop(generate: LLMGenerateFn, callbacks: AgentEngin
               ...context, agentToolAction: action.ref, markSideEffectStarted: () => { sideEffectStarted = true },
             }), TOOL_TIMEOUT_MS, context.writingLanguage, tool.isReadOnly, () => sideEffectStarted, signal)
             const unknown = !tool.isReadOnly && result.commitState === 'unknown'
-            const observation = result.success ? truncateResult(result.content, TOOL_RESULT_MAX_CHARS, context.writingLanguage)
+            const observation = result.success ? truncateResult(action.name, result, TOOL_RESULT_MAX_CHARS, context.writingLanguage, MAX_TOOL_ROUNDS - 1 - roundIndex)
               : model('工具执行失败。', 'Tool execution failed.')
             finishAttempted = true
             action = await host.finishTool({ ref: action.ref, status: unknown ? 'unknown' : result.success ? 'completed' : 'failed', observation })
@@ -485,10 +488,12 @@ async function runHostedAgentLoop(generate: LLMGenerateFn, callbacks: AgentEngin
     }
     visible += ui('\n\n已达到最大工具调用次数限制，自动停止。', '\n\nThe maximum number of tool calls was reached, so generation stopped.')
     done()
-  } catch {
+  } catch (error) {
+    const providerRejection = providerContextFailureText(error, ui)
     if (signal?.aborted) done()
-    else if (visible) callbacks.onDone(visible + ui('\n\n生成未完成，原候选已保留。', '\n\nGeneration did not finish; the original candidate was retained.'), calls, artifacts)
-    else callbacks.onError(ui('AI 请求失败，请重试。', 'The AI request failed. Please try again.'))
+    else if (visible) callbacks.onDone(visible + ui('\n\n生成未完成，原候选已保留。', '\n\nGeneration did not finish; the original candidate was retained.')
+      + (providerRejection ? `\n\n${providerRejection}` : ''), calls, artifacts)
+    else callbacks.onError(providerRejection ?? ui('AI 请求失败，请重试。', 'The AI request failed. Please try again.'))
   }
 }
 
@@ -549,11 +554,36 @@ class ToolExecutionTimeoutError extends Error {}
 /**
  * 截断过长的 Tool 结果
  */
-function truncateResult(content: string, maxChars: number, writingLanguage: WritingLanguage): string {
+function truncateResult(
+  toolName: string,
+  result: ToolResult,
+  maxChars: number,
+  writingLanguage: WritingLanguage,
+  roundsLeft: number,
+): string {
+  const { content, resultOffset } = result
   if (content.length <= maxChars) return content
-  return content.slice(0, maxChars) + writingLanguageText(
+  const lastShown = content.charCodeAt(maxChars - 1)
+  const shown = lastShown >= 0xD800 && lastShown <= 0xDBFF ? maxChars - 1 : maxChars
+  if (resultOffset === undefined) {
+    return content.slice(0, shown) + writingLanguageText(
+      writingLanguage,
+      `\n\n…（内容已截断，完整内容共 ${content.length} 字符。可使用 read_file 工具获取完整文件内容）`,
+      `\n\n... (Result truncated. The complete content is ${content.length} characters; use read_file to retrieve it.)`,
+    )
+  }
+  const end = resultOffset + shown
+  const total = resultOffset + content.length
+  if (roundsLeft < 2) {
+    return content.slice(0, shown) + writingLanguageText(
+      writingLanguage,
+      `\n\n…（内容已截断：本段是第 ${resultOffset} 至 ${end} 字符，完整内容共 ${total} 字符。本轮工具调用次数已用完，请根据已读内容回答，并告诉作者第 ${end} 字符之后尚未读到；之后可调用 ${toolName} 并设 offset=${end} 继续）`,
+      `\n\n... (Result truncated: this part covers characters ${resultOffset} to ${end} of ${total}. No tool rounds are left in this turn. Answer from what you have read and tell the author that the content after character ${end} was not read; it can be continued later by calling ${toolName} with offset=${end}.)`,
+    )
+  }
+  return content.slice(0, shown) + writingLanguageText(
     writingLanguage,
-    `\n\n…（内容已截断，完整内容共 ${content.length} 字符。可使用 read_file 工具获取完整文件内容）`,
-    `\n\n... (Result truncated. The complete content is ${content.length} characters; use read_file to retrieve it.)`,
+    `\n\n…（内容已截断：本段是第 ${resultOffset} 至 ${end} 字符，完整内容共 ${total} 字符。用相同参数再次调用 ${toolName} 并设 offset=${end} 读取下一段）`,
+    `\n\n... (Result truncated: this part covers characters ${resultOffset} to ${end} of ${total}. Call ${toolName} again with the same arguments and offset=${end} to read the next part.)`,
   )
 }

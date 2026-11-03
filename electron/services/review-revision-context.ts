@@ -6,6 +6,7 @@ import { parseHumanConfirmedReviewSnapshot, serializeHumanConfirmedReviewSnapsho
 import { freezeChapterGoals } from '../../src/shared/chapter-goal-review'
 import { findBlueprintContinuityRisks } from '../../src/shared/consistency-preflight'
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../src/shared/character-roster'
+import { CURRENT_DRAFT_STATUS_SQL } from '../../src/shared/draft-status'
 import { ProjectCoreRepository } from '../repositories/project-core-repository'
 import { CharacterRepository } from '../repositories/character-repository'
 import { BlueprintRepository } from '../repositories/blueprint-repository'
@@ -53,7 +54,7 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
   return db.transaction((): ReviewRevisionContext => {
     const source = db.prepare('SELECT d.id,d.chapter_number AS chapterNumber,d.version,d.status,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
       .get(request.draftId) as ExpectedDraftSource | undefined
-    const latest = source && db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status IN ('draft','revised','reviewed','finalized') ORDER BY version DESC,id DESC LIMIT 1").pluck().get(source.chapterNumber)
+    const latest = source && db.prepare(`SELECT id FROM drafts WHERE chapter_number=? AND status IN (${CURRENT_DRAFT_STATUS_SQL}) ORDER BY version DESC,id DESC LIMIT 1`).pluck().get(source.chapterNumber)
     if (!source || latest !== source.id || !isDeepStrictEqual(request.expectedDraft,
       { chapterNumber: source.chapterNumber, version: source.version, status: source.status, contentHash: textHash(source.content) }))
       throw new Error('GENERATION_REVIEW_SOURCE_CHANGED')
@@ -118,9 +119,9 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
       if (dependency?.kind !== undefined && dependency.kind !== 'candidate') continue
       if (!Number.isSafeInteger(dependency?.draftId) || typeof dependency.contentHash !== 'string')
         throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')
-      const row = db.prepare('SELECT d.id,d.chapter_number,d.version,d.status,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
-        .get(dependency.draftId) as { id: number; chapter_number: number; version: number; status: string; body: string } | undefined
-      if (!row || textHash(row.body) !== dependency.contentHash || !['draft', 'revised', 'reviewed', 'finalized', 'archived'].includes(row.status))
+      const row = db.prepare('SELECT d.id,d.chapter_number,d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
+        .get(dependency.draftId) as { id: number; chapter_number: number; version: number; body: string } | undefined
+      if (!row || textHash(row.body) !== dependency.contentHash)
         throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')
       if (row.chapter_number !== source.chapterNumber - 1 || history.some(item => item.draftId === row.id)) continue
       if (predecessor) throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')

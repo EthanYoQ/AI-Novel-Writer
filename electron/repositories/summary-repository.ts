@@ -31,6 +31,7 @@ import { parseFinalizedCharacterStateResponse } from '../../src/shared/finalized
 import { hasCharacterIdentitySchema } from './character-repository'
 import { refreshCharacterStateProjection } from './character-roster-repository'
 import type { ProjectEpoch } from '../../src/shared/source-ref'
+import { RECEIPTED_DRAFT_STATUS_SQL } from '../../src/shared/draft-status'
 
 const FACT_CATEGORIES = new Set(['character-state', 'timeline', 'open-thread', 'plot'])
 const CHARACTER_STATE_FIELDS = new Set<string>(CHARACTER_STATE_TEXT_FIELDS)
@@ -742,7 +743,7 @@ export class SummaryRepository {
       WHERE summary_snapshots.draft_id IS NOT NULL
         AND summary_snapshots.chapter_number < ?
         AND summary_snapshots.chapter_notes <> ''
-        AND drafts.status = 'finalized'
+        AND drafts.status IN (${RECEIPTED_DRAFT_STATUS_SQL})
         AND NOT EXISTS (
           SELECT 1 FROM summary_snapshots newer_summary
           WHERE newer_summary.chapter_number = summary_snapshots.chapter_number

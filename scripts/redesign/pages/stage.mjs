@@ -66,6 +66,12 @@ export async function openFromPalette(page, name) {
   await spine(page).waitFor({ state: 'visible' })
 }
 
+/** 重启后可能直接回到作品，也可能停在书房：用一个组合定位等其一出现，不留下没人接的等待。 */
+export async function openAfterRestart(page, name) {
+  await spine(page).or(cover(page, name)).first().waitFor({ state: 'visible', timeout: 60_000 })
+  if (!await spine(page).isVisible()) await openFromLibrary(page, name)
+}
+
 export async function bookMenu(page, name, item) {
   await shelf(page).getByRole('button', { name: `《${name}》更多操作` }).click()
   await page.getByRole('menuitem', { name: item }).click()

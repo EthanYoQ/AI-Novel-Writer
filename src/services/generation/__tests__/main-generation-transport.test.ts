@@ -51,12 +51,10 @@ it('新会话可读旧epoch历史，但不能借read授权执行；resume沿显�
   await expect(f.transport.resume({ ...current, projectId: '外项目' }, handle)).rejects.toThrow('MISMATCH')
   expect(f.invoke).toHaveBeenCalledTimes(2)
 })
-it('外项目handle在invoke前拒绝，list冻结显式session', async () => {
+it('外项目handle在invoke前拒绝', async () => {
   const f = fixture()
   await expect(f.transport.read({ ...handle, projectId: '外项目' })).rejects.toThrow('MISMATCH')
-  const mutable = { ...session }; const promise = f.transport.list(mutable); mutable.projectId = '后来项目'
-  await promise
-  expect(f.invoke).toHaveBeenCalledExactlyOnceWith('generation:list', session)
+  expect(f.invoke).not.toHaveBeenCalled()
 })
 it('snapshot按完整handle筛选，退订后迟到事件不再投影', () => {
   const f = fixture(); const received = vi.fn(); const stop = f.transport.subscribe(handle, received)

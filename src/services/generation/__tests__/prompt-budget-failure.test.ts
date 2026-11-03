@@ -4,9 +4,8 @@ import {
   classifyGenerationFailure,
   formatGenerationBudgetDiagnostic,
   formatPromptBudgetFailure,
-  formatTaskBudgetDecisionFailure,
 } from '../prompt-budget-failure'
-import { planTaskBudget, type GenerationBudgetDiagnostic } from '../task-budget-planner'
+import type { GenerationBudgetDiagnostic } from '../task-budget-planner'
 
 describe('writing skill prompt budget diagnostics', () => {
   it('shows the safe skill display name without exposing its prompt content', () => {
@@ -98,9 +97,6 @@ describe('writing skill prompt budget diagnostics', () => {
   })
 
   it.each([
-    ['TASK_BUDGET_CAPACITY_CONFLICT', null, 'capacity-preflight'],
-    ['TASK_BUDGET_CAPACITY_CONFLICT:single-item-capacity-conflict', null, 'capacity-preflight'],
-    ["Error invoking remote method 'generation:run': Error: TASK_BUDGET_CAPACITY_CONFLICT:single-item-capacity-conflict", null, 'capacity-preflight'],
     ['GENERATION_RESERVATION_INVALID', null, 'unknown'],
     ['TASK_BUDGET_SPLIT_REQUIRED:scope-split', null, 'capacity-preflight'],
     // 主进程预检实际抛出的是带 SCOPE_ 的拼写，批执行器也按它解析。
@@ -136,30 +132,10 @@ describe('writing skill prompt budget diagnostics', () => {
     expect(message).not.toContain('实际总用量 0')
   })
 
-  it('explains a preflight conflict without exposing prompt content', () => {
-    const decision = planTaskBudget({
-      stage: 'drafting',
-      demand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 3_000, segmentable: false },
-      inputEstimate: { upperBoundTokens: 1_000, estimatorVersion: 'fixture-v1' },
-      capability: {
-        modelContextWindowTokens: 8_192,
-        modelMaxOutputTokens: 4_096,
-        modelContextSource: 'verified-provider-preset',
-        modelOutputSource: 'verified-provider-preset',
-        userContextWindowTokens: null,
-        userMaxOutputTokens: null,
-      },
-      root: { remainingTokenLiability: 100_000, maxOutputPerRequest: 32_768 },
-      liability: { mode: 'included-in-output' },
-      safetyMarginTokens: 512,
-    })
-
-    const message = formatTaskBudgetDecisionFailure(decision, 'zh-CN')
-    expect(message).toContain('本次未发送')
-    expect(message).toContain('此正文任务不能安全分段')
-    expect(message).not.toContain('任何作者正文')
-    expect(message).toContain(`任务需要输出额度 ${decision.requestedOutputTokens.toLocaleString('zh-CN')}`)
-    expect(message).not.toMatch(/token/iu)
-    expect(formatTaskBudgetDecisionFailure(decision, 'en-US')).not.toMatch(/token/iu)
+  it('still labels reasons persisted by receipts written before ADR-0023', () => {
+    const message = formatGenerationBudgetDiagnostic({ attemptId: 'old', requestedOutputTokens: 1_712, reservedTokens: 70_000,
+      actual: null, actualState: 'unknown', failureCode: null,
+      reasons: [{ code: 'user-context-cap', valueTokens: 65_536, selected: true }, { code: 'root-remaining-cap', valueTokens: 0, selected: true }] }, 'zh-CN')
+    expect(message).toContain('裁决依据：用户上下文设置、父任务剩余额度。')
   })
 })

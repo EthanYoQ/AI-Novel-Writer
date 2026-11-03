@@ -1,0 +1,6 @@
+{
+  "deepseek": {"error":{"message":"This model's maximum context length is 1048576 tokens. However, you requested 1200051 tokens (1200035 in the messages, 16 in the completion). Please reduce the length of the messages or completion. (request_id: <redacted>)","type":"invalid_request_error","param":null,"code":"invalid_request_error"}},
+  "siliconflow": {"code":20015,"message":"number of input tokens (155525) has exceeded max_seq_len (32768) limit.","data":null},
+  "gemini": {"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}},
+  "siliconflowMaxTokens": {"code":20015,"message":"max_tokens (65536) have exceeded max_seq_len (32768) limit.","data":null}
+}

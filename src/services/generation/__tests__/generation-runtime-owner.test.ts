@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createGenerationRuntime as createFacade, createMainOwnedGenerationRuntime as createGenerationRuntime, listMainGenerationRuns, readMainGenerationRun, type MainGenerationRunHandle, type MainGenerationRunView, type MainGenerationSnapshot, type MainGenerationTransport } from '../generation-runtime'
+import { createGenerationRuntime as createFacade, createMainOwnedGenerationRuntime as createGenerationRuntime, readMainGenerationRun, type MainGenerationRunHandle, type MainGenerationRunView, type MainGenerationSnapshot, type MainGenerationTransport } from '../generation-runtime'
 import type { GenerationOutcome, GenerationTask } from '../generation-harness'
 import { hashAuthorText } from '../../../shared/source-ref'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -16,7 +16,7 @@ function fixture() {
   } }
   const detach = vi.fn()
   const transport: MainGenerationTransport = {
-    read: vi.fn(async () => structuredClone(view)), list: vi.fn(async () => [structuredClone(view)]),
+    read: vi.fn(async () => structuredClone(view)),
     execute: vi.fn(async () => ({ outcome: structuredClone(outcome), run: structuredClone(view) })),
     cancel: vi.fn(async () => ({ ...structuredClone(view), status: 'cancelled' as const })),
     subscribe: vi.fn((_handle, callback) => { listener = callback; return detach }),
@@ -152,12 +152,11 @@ describe('main owned generation facade', () => {
     await runtime.close()
     await expect(runtime.read()).rejects.toThrow('已关闭')
   })
-  it('便携历史只能读取不自动重放，两个壳消费相同read/list', async () => {
+  it('便携历史只能读取不自动重放', async () => {
     const f = fixture(); f.view.nonReplayable = true
     const runtime = await createGenerationRuntime({ runHandle: handle }, f.transport)
     await expect(runtime.execute(({ session }) => session.complete(task, { invocationNonce: '旧点击' }))).rejects.toThrow('NON_REPLAYABLE')
     expect(await readMainGenerationRun(f.transport, handle)).toEqual(f.view)
-    expect(await listMainGenerationRuns(f.transport, { projectId: handle.projectId, projectPath: '合成项目', leaseId: '会话' })).toEqual([f.view])
     expect(f.transport.execute).not.toHaveBeenCalled(); await runtime.close()
   })
   it('read失败释放订阅，不把主进程错误改成空运行', async () => {

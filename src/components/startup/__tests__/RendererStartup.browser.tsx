@@ -265,6 +265,7 @@ it('已挂载的真实 App 在偏好写入失败后仍保留新外壳', async ()
     if (channel === 'config:get') return { locale: 'zh-CN' }
     if (channel === 'project:recent-list') return []
     if (channel === 'llm:list-models') return []
+    if (channel === 'llm:get-stage-models') return {}
     if (channel === 'update:get-state') return { status: 'disabled', currentVersion: '', isReminderDeferred: false }
     return null
   })

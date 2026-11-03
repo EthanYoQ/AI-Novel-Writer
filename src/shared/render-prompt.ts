@@ -28,6 +28,11 @@ export function appendRequiredPromptContext(
   return `${content}\n\n${heading}\n${requiredContext.join('\n\n')}`
 }
 
+/** 一次扫描代入，变量值按字面写入：值里的 $ 记号与 {{占位}} 都不再被解释。 */
+function fillVariables(text: string, variables: Record<string, string>): string {
+  return text.replace(/\{\{(\w+)\}\}/g, (placeholder, key: string) => Object.hasOwn(variables, key) ? variables[key] : placeholder)
+}
+
 /** Render only the editable creative guidance, without the template body or hidden output suffix. */
 export function renderPromptTaskGuidance(
   template: Pick<PromptTemplate, 'taskGuidance'>,
@@ -35,10 +40,7 @@ export function renderPromptTaskGuidance(
   writingLanguage: WritingLanguage,
 ): string {
   if (!template.taskGuidance?.trim()) return ''
-  let guidance = template.taskGuidance
-  for (const [key, value] of Object.entries(variables)) {
-    guidance = guidance.replaceAll(`{{${key}}}`, value)
-  }
+  const guidance = fillVariables(template.taskGuidance, variables)
   const heading = writingLanguage === 'en-US'
     ? '[User-defined creative guidance]'
     : '【用户自定义创作指导】'
@@ -51,10 +53,7 @@ export function renderPrompt(
   variables: Record<string, string>,
   writingLanguage: WritingLanguage,
 ): string {
-  let content = template.content
-  for (const [key, value] of Object.entries(variables)) {
-    content = content.replaceAll(`{{${key}}}`, value)
-  }
+  let content = fillVariables(template.content, variables)
 
   const taskGuidance = renderPromptTaskGuidance(template, variables, writingLanguage)
   if (taskGuidance) content += `\n\n${taskGuidance}`
@@ -63,11 +62,7 @@ export function renderPrompt(
   const builtinTemplate = getBuiltinPromptTemplate(template.key, writingLanguage)
   const suffix = builtinTemplate?.systemSuffix
   if (suffix) {
-    let renderedSuffix = suffix
-    for (const [key, value] of Object.entries(variables)) {
-      renderedSuffix = renderedSuffix.replaceAll(`{{${key}}}`, value)
-    }
-    content = content + '\n\n' + renderedSuffix
+    content = content + '\n\n' + fillVariables(suffix, variables)
   }
 
   return pruneEmptyOptionalPromptSections(

@@ -272,6 +272,8 @@ export function registerGenerationController(options: {
   register('generation:begin-batch', 1, (owner, request) => owner.beginBatch(request))
   register('generation:read-batch', 1, (owner, request) => owner.readBatch(request.batchId))
   register('generation:list-batches', 0, owner => owner.listBatches())
+  register('generation:list-recovery', 0, owner => owner.listRecovery())
+  register('generation:find-blueprint-recovery', 0, owner => owner.findBlueprintRecovery())
   register('generation:confirm-batch-finalization', 1, (owner, request) => owner.confirmBatchFinalization(request))
   register('generation:read-visible-composition', 1, (owner, handle) => owner.readVisibleComposition(handle))
   register('generation:list', 0, owner => owner.list())

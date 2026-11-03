@@ -148,6 +148,7 @@ describe('advanced model settings', () => {
     await expect.element(page.getByLabelText('Model reasoning override')).toBeVisible()
     await expect.element(page.getByLabelText('Effective reasoning effort')).toBeVisible()
     await expect.element(page.getByText(/Effective output allowance: 6,000\. /)).toBeVisible()
+    await expect.element(page.getByText(/runs started by an older version may be capped at 32,768/)).toBeVisible()
   })
 
   it('resets an unlisted model to the common 65536 allowance without changing it before the explicit reset', async () => {
@@ -176,6 +177,9 @@ describe('advanced model settings', () => {
     await expect.element(page.getByRole('status')).toHaveTextContent(
       'Max output tokens leave no safe room for the prompt',
     )
+    // ADR-0023：上下文窗口设置不影响发送，调大它不能解决拒绝。
+    await expect.element(page.getByRole('status')).not.toHaveTextContent('increase the context window')
+    await expect.element(page.getByRole('status')).toHaveTextContent('switch to a model with a longer context')
 
     await act(async () => page.getByRole('button', { name: 'Save configuration', exact: true }).click())
     await vi.waitFor(() => expect(saveModel).toHaveBeenCalledTimes(1))
@@ -189,6 +193,8 @@ it('ignores zero output limits and preserves unknown capability provenance on re
   await act(async () => page.getByRole('button', { name: '高级设置', exact: true }).click())
   await act(async () => page.getByLabelText('最大输出 Tokens').fill('0'))
   expect(container?.querySelector('[data-effective-output-limit="0"]')).toBeNull()
+  await expect.element(page.getByText(/还没有有效输出额度/)).toBeVisible()
+  expect(container?.textContent).not.toContain('有效输出额度为 未设置')
   await act(async () => page.getByRole('button', { name: '恢复默认值', exact: true }).click())
   await act(async () => page.getByRole('button', { name: '保存配置', exact: true }).click())
   expect(saveModel.mock.calls.at(-1)?.[0].capabilitySources).toMatchObject({ reasoning: 'unknown', structuredOutput: 'unknown', usage: 'unknown' })

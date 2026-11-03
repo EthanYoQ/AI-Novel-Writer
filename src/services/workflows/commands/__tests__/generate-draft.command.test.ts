@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 
 import { useProjectStore } from '../../../../stores/project-store'
+import { useLLMStore } from '../../../../stores/llm-store'
 import { useEditorStore } from '../../../../stores/editor-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
@@ -696,6 +697,24 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(legacy.createRuntime).not.toHaveBeenCalled()
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(2)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:draft-next-version' || channel === 'db:recovery-candidate-record')).toBe(false)
+  })
+
+  it('没有显式模型时按写稿环节的模型准备上下文并开跑', async () => {
+    const f = setup({ runtime: fakeOutcomes(), wordsTarget: 900, mainDefault: true })
+    const originalLLM = useLLMStore.getState()
+    useLLMStore.setState({ models: [{ id: '默认模型', purposes: ['generation'] }, { id: '写稿模型', purposes: ['generation'] }] as never,
+      defaultModelId: '默认模型', stageModelIds: { drafting: '写稿模型', review: '默认模型' } })
+    const original = f.invoke.getMockImplementation()!
+    f.invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'generation:begin') throw new Error('STOP_AFTER_BEGIN')
+      return original(channel, ...args)
+    })
+    try {
+      await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).rejects.toThrow('STOP_AFTER_BEGIN')
+    } finally { useLLMStore.setState(originalLLM, true) }
+    const modelOf = (wanted: string) => f.invoke.mock.calls.filter(([channel]) => channel === wanted).map(([, request]) => (request as { modelId: string }).modelId)
+    expect(modelOf('generation:prepare-draft-context')).toEqual(['写稿模型'])
+    expect(modelOf('generation:begin')).toEqual(['写稿模型'])
   })
 
   it.each([false, true])('composes the overlength replacement through main and propagates ACK errors: %s', async ackFails => {
@@ -3619,7 +3638,7 @@ ${headingPrefix}第3章：潮门
     expect(invoke.mock.calls.some(([channel]) => channel === 'generation:pause')).toBe(false)
   })
 
-  it.each(['GENERATION_PROVIDER_FAILED', 'GENERATION_SOURCE_CHANGED', 'CANCELLED'] as const)('handles a thrown %s during the single condense without hiding integrity errors', async code => {
+  it.each(['GENERATION_PROVIDER_FAILED', 'GENERATION_CONTEXT_LENGTH_EXCEEDED', 'GENERATION_SOURCE_CHANGED', 'CANCELLED'] as const)('handles a thrown %s during the single condense without hiding integrity errors', async code => {
     const draft = `${'长'.repeat(1400)}。`
     const runtime = fakeRuntime(attempt => {
       if (attempt === 1) return outcome(draft, 'stop', 1)
@@ -3627,7 +3646,7 @@ ${headingPrefix}第3章：潮门
     })
     const { invoke, context, callbacks, command } = setup({ runtime, wordsPerChapter: 1000, wordsTarget: 1000 })
     const result = command.execute({ step: {}, context, callbacks })
-    if (code === 'GENERATION_PROVIDER_FAILED') await expect(result).resolves.toBe(draft)
+    if (code === 'GENERATION_PROVIDER_FAILED' || code === 'GENERATION_CONTEXT_LENGTH_EXCEEDED') await expect(result).resolves.toBe(draft)
     else {
       await expect(result).rejects.toThrow(code)
       expectNoDraftPersistence(invoke)

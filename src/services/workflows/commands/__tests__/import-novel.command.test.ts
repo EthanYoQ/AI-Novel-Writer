@@ -9,6 +9,8 @@ import {
   InferGlobalSettingsCommand as RuntimeInferGlobalSettingsCommand,
 } from '../import-novel.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+import { importGenerationStopMessage } from '../../../../i18n/app-errors'
+import { contextLengthRejectingDependencies } from './context-length-runtime.fixture'
 
 class InferBlueprintsPerChapterCommand extends RuntimeInferBlueprintsPerChapterCommand {
   constructor() { super(workflowRuntimeDependencies) }
@@ -275,6 +277,16 @@ describe('InferBlueprintsPerChapterCommand', () => {
     expect(callbacks.log).toHaveBeenCalledWith('  正在推演第 1–1 章...')
   })
 
+  it('fails with the registered code when the provider rejects blueprint inference as too long', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const context = createContext()
+    context.data.chapters = [{ number: 1, title: '启程', content: '主角走出家门。', wordCount: 7 }]
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand(contextLengthRejectingDependencies(workflowRuntimeDependencies)).execute({ step: {}, context, callbacks })
+      .then(() => null, error => error as Error & { code?: string })
+    expect(failure?.message).toBe('GENERATION_CONTEXT_LENGTH_EXCEEDED')
+    expect(failure?.code).toBe('GENERATION_CONTEXT_LENGTH_EXCEEDED')
+  })
+
   it('performs zero per-chapter writes and throws when the one range commit fails', async () => {
     const invoke = stubIpcInvoke((channel) => {
       if (channel === 'db:blueprint-commit-range') return { success: false, error: 'DB 写入失败' }
@@ -302,6 +314,65 @@ describe('InferBlueprintsPerChapterCommand', () => {
 
     await expect(command.execute({ step: {}, context: createContext(), callbacks })).rejects.toThrow(/DB 写入失败/)
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert')
+  })
+
+  it('explains a request-limit stop without the code and records the code in the diagnostics log', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const session = { complete: vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const log = vi.fn()
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED')}`)
+    expect((failure as Error).message).not.toContain('ROOT_BUDGET_EXHAUSTED')
+    expect(log.mock.calls.flat().some(line => String(line).includes('ROOT_BUDGET_EXHAUSTED'))).toBe(true)
+  })
+
+  it('does not point an English request-limit stop at the token settings', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const session = { complete: vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const context = createContext()
+    context.uiLocale = 'en-US'
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toContain(importGenerationStopMessage('en-US', 'ROOT_BUDGET_EXHAUSTED'))
+    expect((failure as Error).message).not.toMatch(/token/iu)
+  })
+
+  it('explains a storage failure during blueprint inference with the import storage message', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED', budget: { requestedOutputTokens: 1 } }
+    const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'GENERATION_STORAGE_FAILED')}`)
+    expect((failure as Error).message).toContain('重新开始')
+  })
+
+  it('explains a blueprint stop of an author-manuscript inference without Start over', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const session = { complete: vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const context = createContext()
+    context.data.importRunPurpose = 'author-manuscript'
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED', false, 'author-manuscript')}`)
+    expect((failure as Error).message).not.toContain('重新开始')
   })
 
   it('fails closed with a stable relationship diagnostic when relation is missing', async () => {
@@ -695,6 +766,37 @@ describe('InferGlobalSettingsCommand', () => {
     ])
   })
 
+  it('explains a storage failure of the global inference with the import storage message and logs the code', async () => {
+    successfulInferenceIpc()
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'GENERATION_STORAGE_FAILED' }
+    const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const log = vi.fn()
+
+    const failure = await new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'GENERATION_STORAGE_FAILED', true))
+    expect((failure as Error).message).toContain('重新开始')
+    expect(log.mock.calls.flat().some(line => String(line).includes('GENERATION_STORAGE_FAILED'))).toBe(true)
+  })
+
+  it('explains an in-flight active-time stop of the global inference as an active-time stop and logs the code', async () => {
+    successfulInferenceIpc()
+    const receipt = { purpose: 'import-inference', finishReason: 'error', failureCode: 'ROOT_BUDGET_EXHAUSTED' }
+    const session = { complete: vi.fn(async () => ({ status: 'incomplete', finishReason: 'error', content: '', receipt })) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+    const log = vi.fn()
+
+    const failure = await new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context: createContext(), callbacks: { ...callbacks, log } })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED', true))
+    expect(log.mock.calls.flat().some(line => String(line).includes('ROOT_BUDGET_EXHAUSTED'))).toBe(true)
+  })
+
   it('accepts a valid response in one call', async () => {
     successfulInferenceIpc()
     const generateStream = vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(
@@ -857,7 +959,7 @@ describe('M02 text-import proposal receipts', () => {
   }
   function arrange(mutate?: (receipt: ReturnType<typeof proposalReceipt>) => void) {
     const invoke = stubIpcInvoke((channel, request) => {
-      if (channel === 'kb:search') return []
+      if (channel === 'kb:search' || channel === 'kb:search-writing-context') return []
       if (channel === 'db:character-roster-read') return { status: 'ready', revision: 7, entries: [] }
       if (channel === 'db:import-global-facts-commit') {
         const receipt = proposalReceipt(request as import('../../../../shared/import-global-facts').ImportGlobalFactsRequest)
@@ -902,6 +1004,39 @@ describe('M02 text-import proposal receipts', () => {
       expect(context.data.importGlobalInferenceCandidate).toBe(JSON.stringify(validInference()))
     },
   )
+  it('作者原稿补空收据保留已有设定：命令接受它，界面显示实际保存的值并提示建议数', async () => {
+    arrange(receipt => {
+      Object.assign(receipt, {
+        mode: 'fill-empty',
+        suggestions: [{ field: 'genre', current: '作者的类型', inferred: receipt.core.genre }],
+      })
+      receipt.core.genre = '作者的类型'
+    })
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('作者的类型')
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(expect.stringContaining('1 条与现有内容不同的反推结果放进了建议'))
+  })
+  it('反推等待期间作者在设定页改的、还没保存的内容，提交后仍然保留', async () => {
+    arrange(receipt => {
+      Object.assign(receipt, { mode: 'fill-empty', suggestions: [] })
+      useProjectStore.getState().updateNovelConfig({ globalGuidance: '作者刚写、还没保存的要求' })
+    })
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(useProjectStore.getState().currentProject?.novelConfig.globalGuidance).toBe('作者刚写、还没保存的要求')
+  })
+  it('作者原稿反推只从作者自己的正文检索，不混入参考小说', async () => {
+    const invoke = arrange()
+
+    await new RuntimeInferGlobalSettingsCommand(workflowRuntimeDependencies, undefined, true)
+      .execute({ step: {}, context: createContext(), callbacks })
+
+    const searches = invoke.mock.calls.map(([channel]) => channel).filter(channel => String(channel).startsWith('kb:search'))
+    expect(searches).toEqual(Array(4).fill('kb:search-writing-context'))
+  })
   it('retains same-name candidates separately in the pending proposal receipt without approving character facts', async () => {
     const invoke = arrange(), context = createContext(), ambiguous = validInference()
     ambiguous.characterCards[1].name = ambiguous.characterCards[0].name

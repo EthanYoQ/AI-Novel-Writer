@@ -1,4 +1,5 @@
 import { proposalRuntimeFixture, proposalBatchFixture } from './character-proposal-runtime.fixture'
+import { contextLengthRejectingDependencies } from './context-length-runtime.fixture'
 import type { CharacterProposalSource, CharacterProposalBatch } from '../../../../shared/character-proposal'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -626,6 +627,13 @@ describe('planning material character extraction', () => {
 
     expect(generateStream).toHaveBeenCalledOnce()
     expect(context.data).not.toHaveProperty('planningMaterialCharacterCandidates')
+  })
+
+  it('fails with the registered code when the provider rejects the extraction as too long', async () => {
+    const failure = await new RuntimeCommand([{ fileName: 'characters.md', text: 'Lin is the protagonist.' }],
+      contextLengthRejectingDependencies(proposalRuntimeFixture())).execute({ step: {}, context, callbacks }).then(() => null, error => error as Error & { code?: string })
+    expect(failure?.message).toBe('GENERATION_CONTEXT_LENGTH_EXCEEDED')
+    expect(failure?.code).toBe('GENERATION_CONTEXT_LENGTH_EXCEEDED')
   })
 
   it('does not carry a cancelled extraction candidate into a reopened run', async () => {

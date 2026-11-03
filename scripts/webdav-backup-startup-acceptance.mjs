@@ -524,7 +524,7 @@ async function main() {
 }
 
 if (process.argv.includes('--help')) {
-  process.stdout.write('Run: pnpm build; pnpm run rebuild:electron; node scripts/webdav-backup-startup-acceptance.mjs. Keep rebuild:electron immediately before this real Electron check. Uses only synthetic isolated roots and a controlled 127.0.0.1 WebDAV; no provider or model requests.\n')
+  process.stdout.write('Run: pnpm build; node scripts/webdav-backup-startup-acceptance.mjs. Uses only synthetic isolated roots and a controlled 127.0.0.1 WebDAV; no provider or model requests.\n')
 } else {
   await main()
 }

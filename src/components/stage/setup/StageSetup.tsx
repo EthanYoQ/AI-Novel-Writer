@@ -251,7 +251,7 @@ function AdvancedPanel({ config, form, onCollapse }: { config: NovelConfig; form
 function SetupSession({ projectKey }: { projectKey: string }) {
   const text = useLocaleStore(s => s.text)
   const form = useNovelConfigForm(projectKey)
-  const modelMissing = useModelMissing()
+  const modelMissing = useModelMissing('planning')
   const filling = useWorkflowStore(s => s.activeRuns.some(run => run.type === 'config_generation' && sameProjectPathKey(run.projectPath, projectKey)))
   const [open, setOpen] = useState<ReadonlySet<PanelId>>(() => new Set())
   const [expandFields, setExpandFields] = useState<string[] | null>(null)

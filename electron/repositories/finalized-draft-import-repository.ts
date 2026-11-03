@@ -16,6 +16,7 @@ import {
   countLegacyDraftUnitsV1,
 } from '../../src/shared/draft-units'
 import { resolveManuscriptTarget } from '../services/manuscript-publisher'
+import { isReceiptedDraftStatus } from '../../src/shared/draft-status'
 
 interface ImportOperationRow {
   operation_id: string
@@ -266,7 +267,7 @@ function verifyStoredFacts(
     if (
       !fact
       || fact.chapter_number !== chapter.chapterNumber
-      || fact.status !== 'finalized'
+      || !isReceiptedDraftStatus(fact.status)
       || fact.word_count !== chapter.wordCount
       || fact.body !== chapter.content
       || fact.content_snapshot !== chapter.content
@@ -427,6 +428,13 @@ export class FinalizedDraftImportRepository {
         if (preview.classification !== 'ready') {
           throw new Error('FINALIZED_IMPORT_AUTHORITY_CONFLICT')
         }
+      }
+
+      const finalizedChapter = db.prepare(`
+        SELECT 1 FROM drafts WHERE chapter_number = ? AND status = 'finalized' LIMIT 1
+      `)
+      if (chapters.some(chapter => finalizedChapter.get(chapter.chapterNumber) !== undefined)) {
+        throw new Error('FINALIZED_IMPORT_CHAPTER_ALREADY_FINALIZED')
       }
 
       const drafts: FinalizedDraftImportDraftReceipt[] = []

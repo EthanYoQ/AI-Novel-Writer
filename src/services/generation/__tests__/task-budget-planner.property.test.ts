@@ -46,7 +46,6 @@ const plannerInput = fc.record({
   stage: fc.constantFrom(...stages),
   demand,
   inputUpperBoundTokens: fc.integer({ min: 0, max: 500_000 }),
-  remainingTokenLiability: fc.integer({ min: 0, max: 2_097_152 }),
   maxOutputPerRequest: fc.integer({ min: 1, max: 32_768 }),
   safetyMarginTokens: fc.integer({ min: 0, max: 4_096 }),
   capability,
@@ -56,85 +55,45 @@ const plannerInput = fc.record({
   demand: entry.demand,
   inputEstimate: { upperBoundTokens: entry.inputUpperBoundTokens, estimatorVersion: 'property-v1' },
   capability: entry.capability,
-  root: { remainingTokenLiability: entry.remainingTokenLiability, maxOutputPerRequest: entry.maxOutputPerRequest },
+  root: { maxOutputPerRequest: entry.maxOutputPerRequest },
   liability: entry.liability,
   safetyMarginTokens: entry.safetyMarginTokens,
 } as TaskBudgetPlannerInput))
 
 const isReady = (decision: ReturnType<typeof planTaskBudget>) => decision.decision === 'ready'
 
-/**
- * 通用生成器里绝大多数样本都会落进失败分支（能力/责任/容量），只对通用输入断言
- * 安全不变量等于只测了很小一部分。这个生成器把需求缩到单请求确实装得下的规模，
- * 并给满根额度，让 ready 分支真正被断言到。
- */
-const generousInput = fc.record({
-  stage: fc.constantFrom(...stages),
-  units: fc.integer({ min: 1, max: 200 }),
-  items: fc.integer({ min: 1, max: 2 }),
-  writingLanguage: fc.constantFrom(...languages),
-  inputUpperBoundTokens: fc.integer({ min: 0, max: 2_048 }),
-  safetyMarginTokens: fc.integer({ min: 0, max: 512 }),
-  segmentable: fc.boolean(),
-}).map(entry => ({
-  stage: entry.stage,
-  demand: entry.stage === 'general' || entry.stage === 'review'
-    ? { kind: 'structured-items' as const, writingLanguage: entry.writingLanguage, requestedItems: entry.items }
-    : { kind: 'draft-units' as const, writingLanguage: entry.writingLanguage,
-        requestedUnits: entry.units, segmentable: entry.segmentable },
-  inputEstimate: { upperBoundTokens: entry.inputUpperBoundTokens, estimatorVersion: 'property-v1' },
-  capability: { modelContextWindowTokens: 1_048_576, modelMaxOutputTokens: 32_768,
-    modelContextSource: 'verified-provider-preset' as const, modelOutputSource: 'verified-provider-preset' as const,
-    userContextWindowTokens: null, userMaxOutputTokens: null },
-  root: { remainingTokenLiability: 2_097_152, maxOutputPerRequest: 32_768 },
-  liability: { mode: 'included-in-output' as const },
-  safetyMarginTokens: entry.safetyMarginTokens,
-} as TaskBudgetPlannerInput))
-
 describe('S07 task budget planner invariants', () => {
-  it('never reserves more than the remaining root liability', () => {
-    fc.assert(fc.property(plannerInput, input => {
-      const decision = planTaskBudget(input)
-      if (!isReady(decision)) return
-      expect(decision.reservationLiabilityTokens).toBeLessThanOrEqual(input.root.remainingTokenLiability)
+  it('never lets the input estimate change the decision or the output', () => {
+    fc.assert(fc.property(plannerInput, fc.integer({ min: 0, max: 5_000_000 }), (input, other) => {
+      const first = planTaskBudget(input)
+      const second = planTaskBudget({ ...input, inputEstimate: { ...input.inputEstimate, upperBoundTokens: other } })
+      expect([second.decision, second.selectedQuantity, second.reservedOutputTokens])
+        .toEqual([first.decision, first.selectedQuantity, first.reservedOutputTokens])
     }), { numRuns: 600 })
   })
 
   it('never exceeds the per-request output ceiling', () => {
+    let ready = 0
     fc.assert(fc.property(plannerInput, input => {
       const decision = planTaskBudget(input)
       if (!isReady(decision)) return
-      expect(decision.reservedOutputTokens).toBeLessThanOrEqual(input.root.maxOutputPerRequest)
-      expect(decision.reservedOutputTokens).toBeGreaterThan(0)
-    }), { numRuns: 600 })
-  })
-
-  it('holds both safety invariants on requests that can actually be dispatched', () => {
-    let ready = 0
-    fc.assert(fc.property(generousInput, input => {
-      const decision = planTaskBudget(input)
-      if (!isReady(decision)) return
       ready += 1
-      expect(decision.reservationLiabilityTokens).toBeLessThanOrEqual(input.root.remainingTokenLiability)
       expect(decision.reservedOutputTokens).toBeLessThanOrEqual(input.root.maxOutputPerRequest)
       expect(decision.reservedOutputTokens).toBeGreaterThan(0)
     }), { numRuns: 600 })
-    // 这个生成器就是为「断言真的被执行」而存在的，跑不到就说明它退化了。
-    expect(ready).toBeGreaterThan(500)
+    expect(ready).toBeGreaterThan(250)
   })
 
   it('keeps quantities and coverage arithmetically consistent', () => {
     fc.assert(fc.property(plannerInput, input => {
       const decision = planTaskBudget(input)
-      expect(decision.selectedQuantity).toBeGreaterThanOrEqual(0)
+      expect(decision.selectedQuantity).toBeGreaterThanOrEqual(1)
       expect(decision.selectedQuantity).toBeLessThanOrEqual(decision.requestedQuantity)
       expect(decision.remainingQuantity).toBe(decision.requestedQuantity - decision.selectedQuantity)
-      expect(['ready', 'split-required', 'capacity-conflict']).toContain(decision.decision)
-      if (decision.decision === 'capacity-conflict') {
-        // 失败的决策绝不允许留下任何预留。
-        expect(decision.reservedOutputTokens).toBe(0)
-        expect(decision.reservationLiabilityTokens).toBe(0)
-      }
+      expect(['ready', 'split-required']).toContain(decision.decision)
+      if (input.demand.kind === 'draft-units') expect(decision.decision).toBe('ready')
+      expect(decision.reservationLiabilityTokens).toBe(decision.inputUpperBoundTokens + decision.reservedOutputTokens
+        + decision.reasoningUpperBoundTokens + input.safetyMarginTokens)
     }), { numRuns: 600 })
   })
 
@@ -144,17 +103,13 @@ describe('S07 task budget planner invariants', () => {
       const decision = planTaskBudget(input)
       expect(decision.reasons.some(reason => reason.code === 'model-capability-unknown')).toBe(true)
       if (input.capability.modelMaxOutputTokens === null) expect(decision.reasons.some(reason => reason.code === 'model-output-cap')).toBe(false)
-      if (input.capability.modelContextWindowTokens === null) expect(decision.reasons.some(reason => reason.code === 'model-context-cap')).toBe(false)
     }), { numRuns: 600 })
   })
 
-  it('keeps unknown liability visible while respecting the root estimate', () => {
+  it('keeps unknown liability visible', () => {
     fc.assert(fc.property(plannerInput, input => {
-      // 能力未知会先命中它自己的冲突，这里要单独隔离协议责任这一条。
-      fc.pre(input.capability.modelContextWindowTokens !== null && input.capability.modelMaxOutputTokens !== null)
       const decision = planTaskBudget({ ...input, liability: { mode: 'unknown' } })
       expect(decision.reasons.some(reason => reason.code === 'liability-bound-unknown')).toBe(true)
-      expect(decision.reservationLiabilityTokens).toBeLessThanOrEqual(input.root.remainingTokenLiability)
     }), { numRuns: 200 })
   })
 

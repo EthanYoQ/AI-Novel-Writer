@@ -2,11 +2,17 @@ import { ipc } from './ipc-client'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { GraphGenerationInput, GraphGenerationRecovery } from '../shared/graph-generation'
 import type { MainGenerationRunHandle } from './generation/generation-runtime'
+import { throwIfLastAttemptTerminal } from './generation/generation-harness'
 
 const sameRun = (a: MainGenerationRunHandle, b: MainGenerationRunHandle) => a.projectId === b.projectId && a.rootActionId === b.rootActionId && a.runId === b.runId
 export function canExecuteGraph(recovery: GraphGenerationRecovery) {
   return recovery.sourceStatus === 'current' && recovery.view.status !== 'cancelled' && recovery.attemptCount === 0 && !recovery.result
     && !recovery.artifact && (recovery.view.candidates ?? recovery.view.artifacts).length === 0
+}
+export function assertGraphResult(recovery: GraphGenerationRecovery): asserts recovery is GraphGenerationRecovery & { result: NonNullable<GraphGenerationRecovery['result']> } {
+  if (recovery.result) return
+  throwIfLastAttemptTerminal(recovery.view.budgetDiagnostics, recovery.view.handle.runId)
+  throw new Error('GRAPH_GENERATION_INCOMPLETE')
 }
 /** Navigation only: main owns sources, tasks, candidate identity and durable effects. */
 export function createGraphGeneration(sessionInput: ProjectSessionContext) {
@@ -87,7 +93,7 @@ export async function generateGraphResult(session: ProjectSessionContext, input:
     if (signal.aborted) throw new Error('GRAPH_GENERATION_CANCELLED')
     await client.open({ input, modelId, uiActionNonce: crypto.randomUUID() })
     const recovery = await client.execute()
-    if (!recovery.result) throw new Error('GRAPH_GENERATION_INCOMPLETE')
+    assertGraphResult(recovery)
     if (input.kind === 'plot') await client.confirm(0)
     return recovery.result
   } finally { signal.removeEventListener('abort', cancel); client.detach() }

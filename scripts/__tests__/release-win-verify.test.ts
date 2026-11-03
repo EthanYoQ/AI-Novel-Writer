@@ -407,42 +407,27 @@ exit ${rootExitCode}`,
 }
 
 describe('Windows release verification orchestration', () => {
-  it('keeps monitoring through native restoration, validation, and the final quiet period', () => {
+  it('keeps monitoring through the final quiet period without a native restore phase', () => {
     const plan = JSON.parse(
       execFileSync(process.execPath, [releaseScript, '--print-plan'], {
         encoding: 'utf8',
       }),
     ) as string[]
-    expect(plan.slice(-3)).toEqual([
-      'restore:native-node',
-      'verify:native-node',
+    expect(plan.slice(-2)).toEqual([
+      'smoke:win-v025-upgrade',
       'final:quiet',
     ])
+    expect(plan.filter(step => step.includes('native'))).toEqual([])
 
     const script = readFileSync(releaseScript, 'utf8')
-    const restoreCall = script.lastIndexOf(
-      'const restoreResult = await restoreNativeWithIndependentFallback',
-    )
     const quietCall = script.lastIndexOf('await waitForFinalQuietPeriod()')
     const stopControl = script.lastIndexOf(
       "sendMonitorControl({ state: 'stop' })",
     )
 
-    expect(restoreCall).toBeGreaterThan(0)
-    expect(quietCall).toBeGreaterThan(restoreCall)
+    expect(quietCall).toBeGreaterThan(0)
     expect(stopControl).toBeGreaterThan(quietCall)
     expect(script).toContain("state: 'quiet', step, quietSeconds: 5")
-    expect(script).toContain(
-      'await restoreAndVerifyNodeNativeAbi({ monitored: false })',
-    )
-
-    const nativeVerifyCall = script.lastIndexOf("await runner('verify:native-node', [")
-    const nativeVerifyCallEnd = script.indexOf('  ])', nativeVerifyCall)
-    const nativeVerifyArguments = script.slice(nativeVerifyCall, nativeVerifyCallEnd)
-    expect(nativeVerifyCall).toBeGreaterThan(0)
-    expect(nativeVerifyCallEnd).toBeGreaterThan(nativeVerifyCall)
-    expect(nativeVerifyArguments).toContain("'--pool=threads'")
-    expect(script.match(/'--pool=threads'/g) ?? []).toHaveLength(1)
   })
 
   it('writes sanitized native ABI, quiet-window, and zero-error-dialog acceptance receipts before deleting monitor evidence', () => {
@@ -455,7 +440,7 @@ describe('Windows release verification orchestration', () => {
     expect(script).toContain("'error-dialogs.json'")
     expect(script).toContain('newProductErrorDialogCount: 0')
     expect(script).toContain('quietWindowSeconds: 5')
-    expect(script).toContain("restoreMode: 'monitored'")
+    expect(script).toContain("bindingInterface: 'node-api'")
     expect(script).not.toContain('commandLine:')
     expect(receiptWrite).toBeGreaterThan(0)
     expect(monitorRemoval).toBeGreaterThan(receiptWrite)
@@ -596,7 +581,6 @@ describe('Windows release verification orchestration', () => {
         'const { appendFileSync } = require("node:fs")',
         'const marker = process.env.AI_NOVEL_RELEASE_ENTRYPOINT_MARKER',
         'if (marker) appendFileSync(marker, `${JSON.stringify(process.argv.slice(1))}\\n`, "utf8")',
-        'if (process.argv.some(argument => argument.includes("prepare-native-for-node.mjs"))) process.exit(97)',
       ].join('\n'),
       'utf8',
     )
@@ -663,12 +647,9 @@ describe('Windows release verification orchestration', () => {
 
       const steps = readFileSync(stepMarker, 'utf8').trim().split(/\r?\n/).filter(Boolean)
       expect(steps).toEqual(['run test'])
-      expect(steps.join('\n')).not.toMatch(
-        /prepare:native-node|build:win:artifacts|restore:native-node|verify:native-node/,
-      )
+      expect(steps.join('\n')).not.toMatch(/build:win:artifacts/)
 
       const entrypoints = readFileSync(entrypointMarker, 'utf8')
-      expect(entrypoints).not.toContain('prepare-native-for-node.mjs')
       expect(entrypoints).not.toContain('node_modules/vitest/vitest.mjs')
       expect(entrypoints).not.toContain('release-win-launch-gate.mjs')
     } finally {
@@ -720,7 +701,6 @@ describe('Windows release verification orchestration', () => {
         'syncBuiltinESMExports()',
         'const entrypointMarker = process.env.AI_NOVEL_RELEASE_ENTRYPOINT_MARKER',
         'if (entrypointMarker) fs.appendFileSync(entrypointMarker, `${JSON.stringify(process.argv.slice(1))}\\n`, "utf8")',
-        'if (process.argv.some(argument => argument.includes("prepare-native-for-node.mjs"))) process.exit(97)',
       ].join('\n'),
       'utf8',
     )
@@ -795,7 +775,7 @@ describe('Windows release verification orchestration', () => {
       expect(steps).toEqual(['run test'])
       const entrypoints = readFileSync(entrypointMarker, 'utf8')
       expect(entrypoints).not.toMatch(
-        /prepare-native-for-node\.mjs|node_modules[\\/]vitest[\\/]vitest\.mjs|release-win-launch-gate\.mjs/,
+        /node_modules[\\/]vitest[\\/]vitest\.mjs|release-win-launch-gate\.mjs/,
       )
     } finally {
       if (monitorProcessId === undefined && existsSync(monitorCapture)) {
@@ -825,12 +805,6 @@ describe('Windows release verification orchestration', () => {
     expect(script).toContain('monitor-status.json')
     expect(script).toContain('monitor-control-log.jsonl')
     expect(script).toContain(
-      "'native-restore-validation-monitored'",
-    )
-    expect(script).toContain(
-      "preserveGateFailureEvidence('native-restore-validation-fallback', error)",
-    )
-    expect(script).toContain(
       "preserveGateFailureEvidence('final-quiet', error)",
     )
     expect(script).toContain(
@@ -840,19 +814,17 @@ describe('Windows release verification orchestration', () => {
     expect(script).toContain('rmSync(monitorRoot, { recursive: true, force: true })')
   })
 
-  it('sends exact launch identities and settles ordinary children before ABI restoration', () => {
+  it('sends exact launch identities and settles ordinary children before the final quiet period', () => {
     const script = readFileSync(releaseScript, 'utf8')
     const ordinaryLoop = script.indexOf('for (const step of releaseVerificationSteps)')
     const ordinaryCatch = script.indexOf('await waitForChildToSettle(child)', ordinaryLoop)
-    const restoreCall = script.lastIndexOf(
-      'const restoreResult = await restoreNativeWithIndependentFallback',
-    )
+    const quietCall = script.lastIndexOf('await waitForFinalQuietPeriod()')
 
     expect(script).toContain('rootProcessStartTimeTicks')
     expect(script).toContain('getWindowsProcessStartTimeTicks(child.pid)')
     expect(script).toContain('await registerMonitoredChild(step, child')
     expect(ordinaryCatch).toBeGreaterThan(ordinaryLoop)
-    expect(ordinaryCatch).toBeLessThan(restoreCall)
+    expect(ordinaryCatch).toBeLessThan(quietCall)
   })
 
   it('holds every formal release command behind the atomic monitor acknowledgement', () => {
@@ -879,7 +851,7 @@ describe('Windows release verification orchestration', () => {
     expect(monitor).toContain('New-AiNovelGateQuietDeadline -NowUtc $NowUtc -QuietSeconds 5')
     expect(timeoutLiteral).toBeDefined()
     expect(Number(timeoutLiteral?.replaceAll('_', ''))).toBeGreaterThan(10_000)
-    expect(script.match(/waitForMonitorState\(\['step-completed'\], MONITOR_STEP_COMPLETION_TIMEOUT_MS/g)).toHaveLength(5)
+    expect(script.match(/waitForMonitorState\(\['step-completed'\], MONITOR_STEP_COMPLETION_TIMEOUT_MS/g)).toHaveLength(3)
     expect(script).not.toContain("waitForMonitorState(['step-completed'], 10_000")
     expect(failureCheck).toBeGreaterThan(waitStart)
     expect(successCheck).toBeGreaterThan(failureCheck)

@@ -11,6 +11,7 @@ import type { LegacyRosterGenerationChannels } from './legacy-roster-generation'
 import type { CharacterAvatarChannels } from './character-avatar'
 import type { CloudBackupChannels } from './cloud-backup'
 import type { ProjectOverview } from './project-overview'
+import type { ModelStage, StageModelIds } from './model-stage-routing'
 /**
  * IPC 频道定义 — 渲染进程与主进程的类型安全通信契约
  * 所有 IPC 调用都通过此文件定义频道名和参数/返回值类型
@@ -62,6 +63,7 @@ import type {
   ChapterDeletionResult,
   DeleteFinalizedChapterRequest,
 } from './chapter-deletion'
+import type { FinalizationRepairOnOpen } from './finalization-repair'
 import type {
   ImportRunChapterSnapshot,
   ImportRunEffectCommitResult,
@@ -87,7 +89,7 @@ export interface ConfigChannels {
     return: GlobalConfig
   }
   'config:set': {
-    args: [config: Partial<GlobalConfig>]
+    args: [config: Partial<Omit<GlobalConfig, 'stageModelIds'>>]
     return: { success: boolean; error?: string }
   }
 }
@@ -165,6 +167,19 @@ export interface ModelProviderResourceChannels {
   }
 }
 
+export type DialogDirectoryKind =
+  | 'writing-skill'
+  | 'character-avatar'
+  | 'export-directory'
+  | 'import-source'
+  | 'knowledge-files'
+  | 'knowledge-folder'
+  | 'project-archive'
+  | 'project-restore-target'
+  | 'legacy-project'
+  | 'project-create'
+  | 'project-open'
+
 export interface GlobalConfig {
   theme: string
   outlineTargetUnits?: number
@@ -172,6 +187,7 @@ export interface GlobalConfig {
   locale?: Locale
   defaultModelId: string | null
   defaultEmbeddingModelId?: string | null
+  stageModelIds?: StageModelIds
   /** 定稿与后处理成功后，打开下一章的创作窗口（默认关闭）。 */
   autoOpenNextChapterAfterFinalize?: boolean
   editorFontSize: number
@@ -179,6 +195,7 @@ export interface GlobalConfig {
   autoSaveInterval: number
   /** 更新检查和提醒延后的本机偏好，持久化到 ~/.vela/config.json。 */
   updatePreferences?: UpdatePreferences
+  dialogDirectories?: Partial<Record<DialogDirectoryKind, string>>
   proxy?: {
     enabled: boolean
     type: 'http' | 'socks5'
@@ -354,6 +371,7 @@ export interface ProjectChannels {
       error?: string
       legacyImportSource?: ProjectDirectoryGrant
       errorCode?: AppErrorCode
+      finalizationRepair?: FinalizationRepairOnOpen
     }
   }
   'project:save': {
@@ -564,7 +582,16 @@ export interface LLMChannels {
       error?: string
       defaultModelId?: string | null
       defaultEmbeddingModelId?: string | null
+      stageModelIds?: StageModelIds
     }
+  }
+  'llm:get-stage-models': {
+    args: []
+    return: StageModelIds
+  }
+  'llm:set-stage-model': {
+    args: [request: { stage: ModelStage; modelId: string | null }]
+    return: { success: true; stageModelIds: StageModelIds } | { success: false; error: string }
   }
   'llm:set-default-model': {
     args: [modelId: string | null]

@@ -103,7 +103,7 @@ export default function StageLibrary() {
   const currentProject = useProjectStore(s => s.currentProject)
   const shelf = useShelfOverview()
   const view = useStageView()
-  const modelMissing = useModelMissing()
+  const modelMissing = useModelMissing('drafting')
   const now = useMemo(() => new Date(), [])
   const [removing, setRemoving] = useState<Book | null>(null)
   const [deleting, setDeleting] = useState<{ name: string; path: string } | null>(null)

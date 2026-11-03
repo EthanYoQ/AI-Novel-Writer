@@ -27,6 +27,12 @@
   cursor: pointer;
 }
 
+.stage-shell .stage-select:disabled {
+  background-color: var(--wash);
+  color: var(--ink-3);
+  cursor: not-allowed;
+}
+
 .stage-shell .stage-select[data-placeholder] {
   color: var(--ink-3);
 }

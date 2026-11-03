@@ -1,10 +1,9 @@
 import type { ModelProfile, ModelExecutionLeaseReceipt } from '../../src/shared/ipc-channels'
 import type { GenerationTask } from '../../src/services/generation/generation-harness'
-import { tokenLiability, type ProviderUsagePolicy, type RootBudget } from '../../src/shared/generation-contract'
+import type { ProviderUsagePolicy, RootBudget } from '../../src/shared/generation-contract'
 import type { GenerationBudgetReceipt } from '../repositories/generation-run-repository'
 import { resolveGenerationParameters, resolveGenerationCapabilityConstraints } from '../llm/generation-parameter-policy'
 import { planTaskBudget, S07_TASK_BUDGET_POLICY, type TaskBudgetDecision } from '../../src/services/generation/task-budget-planner'
-import { formatTaskBudgetDecisionFailure } from '../../src/services/generation/prompt-budget-failure'
 import type { LLMGenerateOptions } from '../llm/provider.interface'
 import type { CreativeStrategy, GenerationReasoningStage } from '../../src/shared/reasoning-types'
 import { CREATIVE_STRATEGIES } from '../../src/shared/reasoning-types'
@@ -105,7 +104,16 @@ export function planningGenerationScope(selection: Pick<BeginGenerationRequest, 
   return Object.freeze({ kind: 'architecture', intent, outlineProtocol: PLOT_OUTLINE_PROTOCOL, outlineContent: PLOT_OUTLINE_CONTENT })
 }
 
-export function newMainGenerationPolicy(selection: BeginGenerationRequest, model: ModelProfile): MainGenerationPolicy {
+/**
+ * 一个导入运行的所有 slot 共用第一个 slot 建的根，所以根按整个运行的工作量定额：
+ * global 与 style 各按单个导入 slot 的请求序号上限计，蓝图沿用目录路径的 recoveryCallBound。
+ * 这是兜底上限，不是预留；正常用量约为每 5 章 1 次加 global、style 各 1 次。
+ */
+export function importRunRequestBound(chapterCount: number): number {
+  return 2 * MAIN_GENERATION_POLICY.budget.maxPhysicalRequests + planBlueprintGenerationCost(chapterCount).recoveryCallBound
+}
+
+export function newMainGenerationPolicy(selection: BeginGenerationRequest, model: ModelProfile, importChapterCount?: number): MainGenerationPolicy {
   const planning = planningGenerationScope(selection)
   if (planning) {
     const targets = selection.authorInputs?.filter(input => input.id === 'planning:target-units') ?? []
@@ -115,7 +123,8 @@ export function newMainGenerationPolicy(selection: BeginGenerationRequest, model
   const limits = resolveGenerationCapabilityConstraints(model)
   if (limits.userMaxOutputTokens === null) throw new Error('GENERATION_PLANNING_BUDGET_INVALID')
   const cap = Math.min(limits.userMaxOutputTokens, limits.modelMaxOutputTokens ?? limits.userMaxOutputTokens)
-  const requests = selection.batchIntent ? selection.batchIntent.range.endChapter - selection.batchIntent.range.startChapter + 1
+  const requests = importChapterCount !== undefined ? importRunRequestBound(importChapterCount)
+    : selection.batchIntent ? selection.batchIntent.range.endChapter - selection.batchIntent.range.startChapter + 1
     : planning?.kind === 'directory'
     ? planBlueprintGenerationCost(planning.requestedRange.endChapter - planning.requestedRange.startChapter + 1).recoveryCallBound
     : planning?.kind === 'architecture' ? planning.intent.priorSteps.reduce((sum, step) => sum + (step === 'premise' ? 1 : step === 'worldbuilding' ? 2
@@ -184,8 +193,7 @@ export interface MainGenerationPlan {
 /** Only main-created semantic decisions may cross the IPC error filter. */
 export class TaskBudgetPreflightError extends Error {
   constructor(readonly decision: TaskBudgetDecision) {
-    super(decision.decision === 'split-required' ? `TASK_BUDGET_SCOPE_SPLIT_REQUIRED:${decision.selectedQuantity}`
-      : `TASK_BUDGET_CAPACITY_CONFLICT: ${formatTaskBudgetDecisionFailure(decision, decision.writingLanguage)}`)
+    super(`TASK_BUDGET_SCOPE_SPLIT_REQUIRED:${decision.selectedQuantity}`)
   }
 }
 
@@ -210,6 +218,8 @@ export function assertSemanticGenerationTask(task: GenerationTask): void {
       || demand.kind === 'structured-items' && (!Number.isSafeInteger(demand.requestedItems) || demand.requestedItems <= 0)) throw new Error('GENERATION_SEMANTIC_TASK_INVALID')
   }
 }
+
+const TOTAL_LIABILITY_UPPER_BOUND_TOKENS = 1_048_576
 
 function resolvePhysicalLiability(model: ModelProfile, creativeStrategy: CreativeStrategy, stage: GenerationReasoningStage) {
   const endpoint = new URL(model.baseUrl)
@@ -246,43 +256,32 @@ function resolvePhysicalLiability(model: ModelProfile, creativeStrategy: Creativ
     safetyMarginTokens: safety, reasoning: !canBound ? 'unknown' : model.protocol === 'gemini' ? 'separately-billed' : 'included-in-completion',
     canBoundTotalLiability: canBound }
   const effectiveContext = Math.min(modelContext ?? Infinity, capability.userContextWindowTokens ?? Infinity)
-  const reservationCeiling = totalBounded ? 1_048_576 : Number.isFinite(effectiveContext)
+  const reservationCeiling = totalBounded ? TOTAL_LIABILITY_UPPER_BOUND_TOKENS : Number.isFinite(effectiveContext)
     ? effectiveContext : MAIN_GENERATION_POLICY.budget.maxTokenLiability
-  return { capability, parameters, usagePolicy, reservationCeiling, effectiveContext, modelOutput,
-    openai, gemini, totalBounded, canBound, separateReasoning, geminiReasoning, compatibleReasoning }
+  return { capability, parameters, usagePolicy, reservationCeiling, modelOutput, openai, gemini, totalBounded, canBound, separateReasoning }
 }
 
 export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<ModelExecutionLeaseReceipt, 'capabilityEvidence'>,
-  task: GenerationTask, budget: GenerationBudgetReceipt, creativeStrategy: CreativeStrategy = 'auto',
-  policy: MainGenerationPolicy = MAIN_GENERATION_POLICY): MainGenerationPlan {
+  task: GenerationTask, budget: GenerationBudgetReceipt, creativeStrategy: CreativeStrategy = 'auto'): MainGenerationPlan {
   assertSemanticGenerationTask(task)
   const inputUpperBoundTokens = task.messages.reduce((sum, message) =>
     sum + Buffer.byteLength(message.content, 'utf8') + Buffer.byteLength(message.role) + 32, 32)
-  const { capability, parameters, usagePolicy, reservationCeiling, effectiveContext, modelOutput,
-    openai, gemini, totalBounded, canBound, separateReasoning, geminiReasoning, compatibleReasoning }
+  const { capability, parameters, usagePolicy, modelOutput, openai, gemini, totalBounded, canBound, separateReasoning }
     = resolvePhysicalLiability(model, creativeStrategy, task.reasoningStage ?? (task.output === 'visible-text' ? 'drafting' : 'planning'))
   const evidence = receipt.capabilityEvidence, safety = MAIN_GENERATION_POLICY.safetyMarginTokens
-  const rootRemaining = budget.policy.maxTokenLiability - budget.attempts.reduce((sum, attempt) => sum + tokenLiability(attempt), 0)
-  const remaining = policy.version === 's07-capacity-v2' ? Math.min(rootRemaining, reservationCeiling) : rootRemaining
+  const options = (maxTokens: number): LLMGenerateOptions => ({ ...parameters, maxTokens,
+    ...(openai ? { outputTokenParameter: 'max_completion_tokens' as const } : {}),
+    ...(task.output === 'structured-data' && evidence.structuredOutput ? { responseFormat: { type: 'json_object' } } : {}) })
   if (task.budgetDemand) {
-    if (remaining <= 0 || totalBounded && remaining < 1_048_576) throw new Error('ROOT_BUDGET_EXHAUSTED')
-    const separateOutput = totalBounded || model.protocol === 'gemini' || geminiReasoning !== null
-      || compatibleReasoning !== null || parameters.reasoning?.adapter === 'siliconflow-v4-thinking'
-    const thinkingDisabled = parameters.reasoning?.adapter === 'deepseek-v4-thinking'
-      ? parameters.reasoning.thinking === 'disabled'
-      : parameters.reasoning?.adapter === 'openai-reasoning-effort'
-        && ['off', 'none', 'disabled'].includes(parameters.reasoning.reasoningEffort)
     const decision = planTaskBudget({
       stage: task.reasoningStage ?? (task.output === 'visible-text' ? 'drafting' : 'planning'),
       demand: task.budgetDemand,
       inputEstimate: { upperBoundTokens: inputUpperBoundTokens, estimatorVersion: MAIN_GENERATION_POLICY.estimatorVersion },
       capability,
-      root: { remainingTokenLiability: remaining, maxOutputPerRequest: budget.policy.maxOutputPerRequest },
-      liability: totalBounded ? { mode: 'total-bounded', totalLiabilityUpperBoundTokens: 1_048_576 }
+      root: { maxOutputPerRequest: budget.policy.maxOutputPerRequest },
+      liability: totalBounded ? { mode: 'total-bounded', totalLiabilityUpperBoundTokens: TOTAL_LIABILITY_UPPER_BOUND_TOKENS }
         : !canBound ? { mode: 'unknown', reasoningUpperBoundTokens: separateReasoning }
           : gemini ? { mode: 'separate-bounded', reasoningUpperBoundTokens: separateReasoning } : { mode: 'included-in-output' },
-      outputAllocation: policy.version === 's07-capacity-v2' ? 'physical-capacity'
-        : policy.version !== 's07-planning-v1' && (separateOutput || thinkingDisabled) ? 'semantic-estimate' : 'available-ceiling',
       safetyMarginTokens: safety,
     })
     // No reservation or dispatch occurs for a larger semantic scope. The caller
@@ -290,38 +289,22 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
     if (decision.decision !== 'ready') throw new TaskBudgetPreflightError(decision)
     return {
       budgetDecision: decision,
-      options: { ...parameters, maxTokens: decision.reservedOutputTokens,
-        ...(openai ? { outputTokenParameter: 'max_completion_tokens' as const } : {}),
-        ...(task.output === 'structured-data' && evidence.structuredOutput ? { responseFormat: { type: 'json_object' } } : {}) },
+      options: options(decision.reservedOutputTokens),
       usagePolicy,
       trustedUsage: true, reservedTokens: decision.reservationLiabilityTokens, inputUpperBoundTokens,
       reasoningUpperBoundTokens: decision.reasoningUpperBoundTokens, requestedOutputTokens: decision.reservedOutputTokens,
     }
   }
-  // A total-bounded attempt requires room for its full reservation envelope.
-  // Report exhausted root accounting before
-  // deriving a misleading non-positive per-request input capacity.
-  if (remaining <= 0 || totalBounded && remaining < 1_048_576) throw new Error('ROOT_BUDGET_EXHAUSTED')
-  // Same capability merge as planTaskBudget: the verified model limits are only
-  // ever narrowed by the user's ModelSettings limits, the root ceiling/remaining
-  // liability and the input occupancy. The lease's frozen evidence numbers are
-  // not a bound here: they take the user's value when the preset has no lease-level
-  // capabilities (OpenAI, Silicon) and let a verified context hide a smaller user one.
   const requestedOutputTokens = Math.min(modelOutput ?? Infinity, capability.userMaxOutputTokens ?? Infinity,
-    budget.policy.maxOutputPerRequest, remaining - inputUpperBoundTokens - separateReasoning - safety,
-    effectiveContext - inputUpperBoundTokens - separateReasoning - safety)
-  if (!Number.isSafeInteger(requestedOutputTokens) || requestedOutputTokens <= 0) throw new Error('GENERATION_INPUT_CAPACITY_EXCEEDED')
+    budget.policy.maxOutputPerRequest)
   // SiliconFlow max_tokens excludes reasoning, and thinking_budget is not a hard
   // stop for every model. Reserve the separately selected envelope instead.
   // This is a reservation, never a claim that the model consumed that many tokens.
   const reasoningUpperBoundTokens = totalBounded
-    ? 1_048_576 - inputUpperBoundTokens - requestedOutputTokens - safety : separateReasoning
+    ? Math.max(0, TOTAL_LIABILITY_UPPER_BOUND_TOKENS - inputUpperBoundTokens - requestedOutputTokens - safety) : separateReasoning
   const reservedTokens = inputUpperBoundTokens + requestedOutputTokens + reasoningUpperBoundTokens + safety
-  if (reservedTokens > remaining) throw new Error('ROOT_BUDGET_EXHAUSTED')
   return {
-    options: { ...parameters, maxTokens: requestedOutputTokens,
-      ...(openai ? { outputTokenParameter: 'max_completion_tokens' as const } : {}),
-      ...(task.output === 'structured-data' && evidence.structuredOutput ? { responseFormat: { type: 'json_object' } } : {}) },
+    options: options(requestedOutputTokens),
     usagePolicy,
     trustedUsage: true, reservedTokens, inputUpperBoundTokens, reasoningUpperBoundTokens, requestedOutputTokens,
   }

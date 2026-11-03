@@ -52,6 +52,7 @@ describe('LLM store initialization seam', () => {
       if (channel === 'llm:list-models') return modelRead.promise
       if (channel === 'llm:get-default-model') return defaultRead.promise
       if (channel === 'llm:get-default-embedding-model') return embeddingRead.promise
+      if (channel === 'llm:get-stage-models') return Promise.resolve({})
       throw new Error(`unexpected IPC ${channel}`)
     })
 
@@ -62,6 +63,7 @@ describe('LLM store initialization seam', () => {
       'llm:list-models',
       'llm:get-default-model',
       'llm:get-default-embedding-model',
+      'llm:get-stage-models',
     ])
 
     modelRead.resolve(models)
@@ -84,6 +86,7 @@ describe('LLM store initialization seam', () => {
       if (channel === 'llm:list-models') return Promise.resolve(models)
       if (channel === 'llm:get-default-model') return defaultRead.promise
       if (channel === 'llm:get-default-embedding-model') return embeddingRead.promise
+      if (channel === 'llm:get-stage-models') return Promise.resolve({})
       throw new Error(`unexpected IPC ${channel}`)
     })
     const observed = Array<ReturnType<typeof useLLMStore.getState>>()
@@ -130,6 +133,7 @@ describe('LLM store initialization seam', () => {
       if (channel === 'llm:list-models') return Promise.resolve(models)
       if (channel === 'llm:get-default-model') return Promise.resolve('generation-model')
       if (channel === 'llm:get-default-embedding-model') return Promise.resolve('embedding-model')
+      if (channel === 'llm:get-stage-models') return Promise.resolve({})
       throw new Error(`unexpected IPC ${channel}`)
     })
 

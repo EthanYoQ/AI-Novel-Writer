@@ -1,11 +1,12 @@
 import type { Locale } from '../../i18n/types'
+import { knownAppErrorMessage } from '../../i18n/app-errors'
 import {
   PromptBudgetExceededError,
   type PromptBudgetReport,
 } from './generation-harness'
 import type {
   GenerationBudgetDiagnostic,
-  TaskBudgetDecision,
+  LegacyTaskBudgetReasonCode,
   TaskBudgetReasonCode,
 } from './task-budget-planner'
 
@@ -59,15 +60,16 @@ export type GenerationFailureCategory =
   | 'capacity-preflight'
   | 'budget-exhausted'
   | 'provider-length'
+  | 'provider-context'
   | 'network'
   | 'storage'
   | 'cancelled'
   | 'unknown'
 
 const CAPACITY_FAILURES = new Set([
-  'GENERATION_INPUT_CAPACITY_EXCEEDED',
-  'TASK_BUDGET_CAPACITY_CONFLICT',
   'PROMPT_BUDGET_EXHAUSTED',
+  // ADR-0023 之前的版本写下的失败，读回旧记录时仍归到容量预检。
+  'GENERATION_INPUT_CAPACITY_EXCEEDED',
 ])
 const BUDGET_FAILURES = new Set([
   'ROOT_BUDGET_EXHAUSTED',
@@ -111,6 +113,7 @@ export function classifyGenerationFailure(
     || code.includes('TASK_BUDGET_SPLIT_REQUIRED')
     || code.includes('TASK_BUDGET_SCOPE_SPLIT_REQUIRED')
   ) return 'capacity-preflight'
+  if (code.includes('GENERATION_CONTEXT_LENGTH_EXCEEDED')) return 'provider-context'
   if (CAPACITY_FAILURES.has(code)) return 'capacity-preflight'
   if (BUDGET_FAILURES.has(code)) return 'budget-exhausted'
   if (NETWORK_FAILURES.has(code)) return 'network'
@@ -118,7 +121,17 @@ export function classifyGenerationFailure(
   return 'unknown'
 }
 
-const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode, readonly [string, string]>> = Object.freeze({
+/** Registered guidance when the provider rejected the request as too long; undefined for any other failure. */
+export function providerContextFailureText(error: unknown, text: (zhCNText: string, enUSText: string) => string): string | undefined {
+  let message = ''
+  if (error instanceof Error) message = error.message
+  else if (typeof error === 'string') message = error
+  if (classifyGenerationFailure(message, null) !== 'provider-context') return undefined
+  const zh = knownAppErrorMessage('zh-CN', message), en = knownAppErrorMessage('en-US', message)
+  return zh && en ? text(zh, en) : undefined
+}
+
+const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode, readonly [string, string]> & Partial<Record<LegacyTaskBudgetReasonCode, readonly [string, string]>>> = Object.freeze({
   'task-demand': ['任务完整范围', 'Complete task scope'],
   'output-allocation-ceiling': ['物理输出使用可用上限', 'Physical output uses the available ceiling'],
   'input-upper-bound': ['输入估计上界', 'Input estimate upper bound'],
@@ -139,8 +152,8 @@ const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode, readonly [string, str
   'scope-split': ['已缩小本次范围', 'This request uses a smaller scope'],
 })
 
-function reasonLabel(code: TaskBudgetReasonCode, locale: Locale): string {
-  const labels = REASON_LABELS[code]
+function reasonLabel(code: TaskBudgetReasonCode | LegacyTaskBudgetReasonCode, locale: Locale): string {
+  const labels = REASON_LABELS[code] ?? ['其他依据', 'Other factor']
   return locale === 'zh-CN' ? labels[0] : labels[1]
 }
 
@@ -149,23 +162,13 @@ function failureCategoryLabel(category: GenerationFailureCategory, locale: Local
     'capacity-preflight': ['容量预检', 'Capacity preflight'],
     'budget-exhausted': ['父任务预算', 'Parent task budget'],
     'provider-length': ['服务商长度终止', 'Provider length stop'],
+    'provider-context': ['服务商上下文超长', 'Provider context limit'],
     network: ['网络', 'Network'],
     storage: ['保存', 'Storage'],
     cancelled: ['已取消', 'Cancelled'],
     unknown: ['其他', 'Other'],
   }
   return locale === 'zh-CN' ? labels[category][0] : labels[category][1]
-}
-
-export function formatTaskBudgetDecisionFailure(
-  decision: TaskBudgetDecision,
-  locale: Locale,
-): string {
-  const decisive = decision.reasons.filter(reason => reason.selected).map(reason => reasonLabel(reason.code, locale))
-  if (locale === 'zh-CN') {
-    return `任务需要输出额度 ${formatInteger(decision.requestedOutputTokens, locale)}；本次未发送。裁决依据：${decisive.join('、')}。`
-  }
-  return `The task needs an output allowance of ${formatInteger(decision.requestedOutputTokens, locale)}; no request was sent. Decision factors: ${decisive.join(', ')}.`
 }
 
 /** Formats only safe accounting fields. Prompt text, endpoint details and keys are absent by type. */

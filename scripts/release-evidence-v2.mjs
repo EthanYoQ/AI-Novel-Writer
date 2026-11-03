@@ -725,7 +725,7 @@ function validateWindowsReceipt(receipt, name, bundleRoot, version) {
       }
     }
   } else if (name === 'native-abi') {
-    assert(direct.restoreMode === 'monitored' && /^\d+$/.test(direct.nodeModuleAbi ?? '') && direct.verificationTest === 'electron/repositories/__tests__/character-repository.test.ts', 'Windows native-ABI receipt facts are invalid')
+    assert(direct.bindingInterface === 'node-api' && /^\d+$/.test(direct.napiVersion ?? '') && /^\d+$/.test(direct.nodeModuleAbi ?? '') && direct.packagedLoadStep === 'verify:win-package', 'Windows native-ABI receipt facts are invalid')
   } else if (name === 'packaged-smoke') {
     const expected = [
       { kind: 'packaged-vector-smoke', path: 'qualification/packaged-vector-smoke.json' },

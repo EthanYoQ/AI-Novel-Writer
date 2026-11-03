@@ -118,4 +118,19 @@ describe('finalization editor snapshot seam', () => {
       },
     })
   })
+
+  it('marks another open tab of the same chapter whose final was replaced as superseded, leaving other chapters alone', () => {
+    const working = draftTab({ id: 'draft-3', draftId: 30, chapterNumber: 3, contentRevision: 0 })
+    const snapshot = captureFinalizationSnapshot({ tab: working, projectSession: SESSION, chapterTitle: '第三章' })
+    const completion = {
+      finalizationId: 'finalization-refinal', contentHash: 'hash', contentRevision: snapshot.contentRevision,
+      draftId: 30, projectPath: PROJECT_PATH, projectSession: SESSION, publicationStatus: 'published' as const,
+    }
+    const oldFinal = draftTab({ id: 'final-3', draftId: 20, chapterNumber: 3, draftStatus: 'finalized', dirty: false })
+    const otherChapter = draftTab({ id: 'final-2', draftId: 12, chapterNumber: 2, draftStatus: 'finalized', dirty: false })
+    const otherProject = draftTab({ id: 'final-3-b', draftId: 20, chapterNumber: 3, draftStatus: 'finalized', projectSessionLease: 'lease-b' })
+
+    expect([oldFinal, otherChapter, otherProject].map(tab => reconcileFinalizationCompletion(tab, snapshot, completion).draftStatus))
+      .toEqual(['superseded', 'finalized', 'finalized'])
+  })
 })

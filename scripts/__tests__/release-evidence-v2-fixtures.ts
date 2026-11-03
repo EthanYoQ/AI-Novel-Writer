@@ -88,7 +88,7 @@ export function windowsAcceptanceReceipt(releaseRoot: string, version: string, n
     'error-dialogs': { ...base(name), kind: 'windows-error-dialogs', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', newProductErrorDialogCount: 0, observedThrough: '2026-08-10T12:00:00.000Z' } },
     uninstall: { ...base(name), kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
     'upgrade-data': { ...base(name), kind: 'windows-upgrade-data', direct: { previousVersion: '0.2.5', legacyTableCount: 11, preservedAssetCount: 1, vectorDimension: 768, queryResultCount: 1, ...windowsV025CopyProof() } },
-    'native-abi': { ...base(name), kind: 'windows-native-abi', direct: { restoreMode: 'monitored', nodeModuleAbi: '127', verificationTest: 'electron/repositories/__tests__/character-repository.test.ts' } },
+    'native-abi': { ...base(name), kind: 'windows-native-abi', direct: { bindingInterface: 'node-api', napiVersion: '10', nodeModuleAbi: '127', packagedLoadStep: 'verify:win-package' } },
     'packaged-smoke': { ...base(name), kind: 'windows-packaged-smoke-summary', direct: { evidenceCount: 2, evidenceKinds: ['packaged-vector-smoke', 'packaged-official-homepage-smoke'] }, evidence: [
       reference(releaseRoot, 'packaged-vector-smoke', 'packaged-vector-smoke.json'),
       reference(releaseRoot, 'packaged-official-homepage-smoke', 'packaged-official-homepage-smoke.json'),

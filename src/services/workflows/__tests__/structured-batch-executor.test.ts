@@ -1822,3 +1822,53 @@ describe('accepted artifact provenance', () => {
     expect(result.receipt.acceptedArtifacts?.map(item => item.artifact.artifactId)).toEqual(['repaired'])
   })
 })
+
+describe('main-process stop codes reach the failure', () => {
+  const execute = (complete: GenerationSession['complete']) => createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+    .execute({ items: [1, 2, 3, 4, 5], limits: { maxBatchItems: 5 } })
+
+  it('keeps a stable code thrown by the main process instead of a generic message', async () => {
+    const result = await execute(async () => {
+      throw new Error("Error invoking remote method 'import-generation:execute': Error: GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE")
+    })
+    expect(result).toMatchObject({ ok: false, failure: { code: 'generation_failed', errorCode: 'GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE' } })
+    expect(result.ok ? '' : result.failure.message).toContain('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
+  })
+
+  it('keeps an unregistered main-process code for diagnostics but not as the displayed message', async () => {
+    const result = await execute(async () => { throw new Error('GENERATION_IMPORT_ORDINAL_GAP') })
+    expect(result).toMatchObject({ ok: false, failure: { code: 'generation_failed', message: '结构化生成失败', errorCode: 'GENERATION_IMPORT_ORDINAL_GAP' } })
+  })
+
+  it('reports an in-flight active-time stop as a deadline with its code', async () => {
+    const result = await execute(async () => ({ status: 'incomplete', finishReason: 'error', content: '',
+      receipt: { ...attemptReceipt(1, 200, 200, 'error'), failureCode: 'ROOT_BUDGET_EXHAUSTED' } } as GenerationOutcome))
+    expect(result).toMatchObject({ ok: false, failure: { code: 'deadline', reason: 'deadline', errorCode: 'ROOT_BUDGET_EXHAUSTED' } })
+  })
+
+  it('tags a request-limit stop thrown before dispatch with its code', async () => {
+    const result = await execute(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') })
+    expect(result).toMatchObject({ ok: false, failure: { code: 'limit_exceeded', reason: 'root_budget', errorCode: 'ROOT_BUDGET_EXHAUSTED' } })
+  })
+
+  it('reports an active-time stop during the syntax repair as a deadline with its code', async () => {
+    const result = await execute(async task => task.purpose.endsWith(':structured-syntax-repair')
+      ? { status: 'incomplete', finishReason: 'error', content: '',
+        receipt: { ...attemptReceipt(2, 200, 400, 'error'), failureCode: 'ROOT_BUDGET_EXHAUSTED' } } as GenerationOutcome
+      : { status: 'completed', finishReason: 'stop', content: '{"blueprints":[{"chapterNumber":1,"title":"第1章"}',
+        receipt: attemptReceipt(1, 200, 200, 'stop') } as GenerationOutcome)
+    expect(result).toMatchObject({ ok: false, failure: { code: 'deadline', reason: 'deadline', errorCode: 'ROOT_BUDGET_EXHAUSTED' } })
+  })
+
+  it('keeps the storage-failure code of an incomplete request', async () => {
+    const result = await execute(async () => ({ status: 'incomplete', finishReason: 'error', content: '',
+      receipt: { ...attemptReceipt(1, 200, 200, 'error'), failureCode: 'GENERATION_STORAGE_FAILED' } } as GenerationOutcome))
+    expect(result).toMatchObject({ ok: false, failure: { code: 'generation_failed', errorCode: 'GENERATION_STORAGE_FAILED' } })
+  })
+
+  it('keeps reporting an incomplete provider error without a stop code as a server error', async () => {
+    const result = await execute(async () => ({ status: 'incomplete', finishReason: 'error', content: '',
+      receipt: { ...attemptReceipt(1, 200, 200, 'error'), failureCode: 'NETWORK_ERROR' } } as GenerationOutcome))
+    expect(result).toMatchObject({ ok: false, failure: { code: 'generation_failed', reason: 'server_error', message: '结构化生成未正常完成：error' } })
+  })
+})

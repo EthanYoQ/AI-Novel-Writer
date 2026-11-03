@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
 import { useProjectStore } from '../../stores/project-store'
 import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
-import { useLLMStore } from '../../stores/llm-store'
+import { routeModelId } from '../../services/model-routing'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { NovelConfig, ProjectData } from '../../shared/ipc-channels'
@@ -38,7 +38,6 @@ export function useNovelConfigForm(projectKey: string) {
   const currentProject = useProjectStore(s => s.currentProject)
   const updateNovelConfig = useProjectStore(s => s.updateNovelConfig)
   const saveProject = useProjectStore(s => s.saveProject)
-  const defaultModelId = useLLMStore(s => s.defaultModelId)
   // addLog 用 getState() 命令式调用，不订阅 workflow store，避免流式生成时高频更新导致表单重渲染。
   const addLog = useWorkflowStore.getState().addLog
   const sessionKey = novelConfigSessionKey(currentProject, projectKey)
@@ -109,7 +108,7 @@ export function useNovelConfigForm(projectKey: string) {
   const openGenerateDialog = () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    if (!defaultModelId) {
+    if (!routeModelId('generate-global-config')) {
       addLog('error', text('请先在设置中配置 AI 模型', 'Configure an AI model in Settings first.'))
       return
     }
@@ -120,7 +119,7 @@ export function useNovelConfigForm(projectKey: string) {
   const generateField = async (fieldKey: GeneratableField) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    if (!defaultModelId) {
+    if (!routeModelId(`generate-field:${fieldKey}`)) {
       addLog('error', text('请先在设置中配置 AI 模型', 'Configure an AI model in Settings first.'))
       return
     }

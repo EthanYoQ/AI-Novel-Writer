@@ -2,6 +2,7 @@ import { InBandReasoningStream, ILLMProvider, LLMGenerateOptions, LLMResponse, L
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { VisibleStreamFilter } from './visible-stream'
 import { StreamTransportDiagnostics } from './transport-diagnostics'
+import { providerFailureCode } from './provider-context-length'
 
 function assertVisibleStreamPayload(value: unknown): void {
   const record = (input: unknown): input is Record<string, unknown> =>
@@ -205,8 +206,7 @@ export class GeminiProvider implements ILLMProvider {
 
       if (!res.ok) {
         transport.fail('HTTP_ERROR')
-        void res.body?.cancel().catch(() => {})
-        opts.onError('LLM_REQUEST_FAILED')
+        opts.onError(await providerFailureCode(res, opts.signal))
         return
       }
 

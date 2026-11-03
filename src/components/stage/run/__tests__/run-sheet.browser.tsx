@@ -18,6 +18,8 @@ import { useStageStore, type StageSheet } from '../../../../stores/navigation/st
 import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore, type WorkflowRun } from '../../../../stores/workflow-store'
 import RunSheet from '../RunSheet'
+import { createProjectArchTabId } from '../../../editor/arch-file-refresh-policy'
+import { globalEventBus } from '../../../../shared/event-bus'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -34,6 +36,7 @@ let root: Root | undefined
 let host: HTMLDivElement | undefined
 let candidates: RecoveryCandidate[]
 let batches: unknown[]
+let listeners: Map<string, (data: unknown) => void>
 let invoke: ReturnType<typeof vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>>
 
 function run(id: string, status: WorkflowRun['status'], extra: Partial<WorkflowRun> = {}): WorkflowRun {
@@ -76,8 +79,8 @@ beforeEach(() => {
   batches = []
   invoke = vi.fn(async (channel: string) => {
     if (channel === 'db:recovery-candidate-list') return candidates
-    if (channel === 'generation:list-batches') return batches
-    if (channel === 'generation:list' || channel === 'skills:list-user') return []
+    if (channel === 'generation:list-recovery') return { planning: [], editors: [], reviews: [], drafts: [], batches, partial: false }
+    if (channel === 'skills:list-user') return []
     if (channel === 'fs:check-exists') return false
     if (channel === 'db:recovery-candidate-resolve') return { success: true }
     if (channel === 'db:get-llm-stats') return { totalCalls: 3, successfulCalls: 2, failedCalls: 1, knownUsageCalls: 3, totalTokens: 21400, totalPromptTokens: 15200, totalCompletionTokens: 6200 }
@@ -85,7 +88,11 @@ beforeEach(() => {
       durationMs: 41000, success: true, createdAt: '2026-10-12T08:31:00.000Z' }]
     throw new Error(`未配置调用：${channel}`)
   })
-  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
+  listeners = new Map()
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: (channel: string, callback: (data: unknown) => void) => {
+    listeners.set(channel, callback)
+    return () => listeners.delete(channel)
+  } } })
   useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, sessionLease: session.leaseId, name: '灯塔', novelConfig: {} } as unknown as ProjectData })
   setActiveProjectSessionContext(session)
   useWorkflowStore.setState({ activeRuns: [], history: [], waitingRuns: {}, globalLogs: [] })
@@ -101,6 +108,7 @@ afterEach(async () => {
   await act(async () => root?.unmount())
   host?.remove()
   setActiveProjectSessionContext(null)
+  localStorage.removeItem(`pagekin:run-recovery-hidden:${session.projectId}`)
   for (const restore of restores) restore()
   vi.restoreAllMocks()
 })
@@ -172,7 +180,7 @@ describe('运行侧页', () => {
     const paused = run('5', 'paused', { type: 'batch_generate', resourceKeys: ['chapter:3', 'chapter:4', 'chapter:5'] })
     useWorkflowStore.setState({ activeRuns: [paused] })
     await render()
-    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'generation:list-batches')).toBe(true))
+    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'generation:list-recovery')).toBe(true))
     await act(async () => {})
     expect(button('继续批量创作')).toBeTruthy()
     expect(button('继续此批次')).toBeUndefined()
@@ -243,20 +251,14 @@ describe('运行侧页', () => {
 
   it('恢复运行进行中：复制尾段仍可用且不清掉部分任务读取失败的提醒，恢复按钮不被锁住', async () => {
     const draft = { projectId: session.projectId, epoch: '旧会话', rootActionId: '单章根', runId: '单章' }
-    const review = { ...draft, rootActionId: '审稿根', runId: '审稿' }
     batches = [{ batchId: '批次', range: { startChapter: 3, endChapter: 5 }, completedChapters: [{ chapterNumber: 3 }], nextChapterNumber: 4,
       sourceCurrent: true, rootHandle: { projectId: session.projectId, epoch: '旧会话', rootActionId: '批量根', runId: '批量' } }]
     const fallback = invoke.getMockImplementation()!
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
-      const handle = (args[0] as { handle?: { runId: string } } | undefined)?.handle
-      if (channel === 'generation:list') return [
-        { handle: draft, status: 'failed', artifacts: [], unsavedTails: [{ attemptId: '尾请求', artifactId: '尾片', durableRevision: 0, text: '尚未保存的潮声', failureCode: 'STORAGE_FAILED' }] },
-        { handle: review, status: 'failed', artifacts: [] },
-      ]
-      if (channel === 'generation:read-context') return handle?.runId === review.runId
-        ? { draftSave: { kind: 'absent' }, handle: review, operation: 'review-chapter' }
-        : { draftSave: { kind: 'absent' }, handle: draft, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型', authorInputs: [], attemptedPurposes: ['chapter-draft'] }
-      if (channel === 'review-revision:read-recovery') throw new Error('审稿记录读取失败')
+      if (channel === 'generation:list-recovery') return { planning: [], editors: [], reviews: [], batches, partial: true, drafts: [{
+        view: { handle: draft, status: 'failed', artifacts: [], unsavedTails: [{ attemptId: '尾请求', artifactId: '尾片', durableRevision: 0, text: '尚未保存的潮声', failureCode: 'STORAGE_FAILED' }] },
+        recovery: { draftSave: { kind: 'absent' }, handle: draft, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型', authorInputs: [], attemptedPurposes: ['chapter-draft'] },
+      }] }
       if (channel === 'generation:read-batch') return { batchId: '批次', nextChapterNumber: 4, modelId: '原模型', mode: 'review', targetUnits: 900, range: { startChapter: 3, endChapter: 5 } }
       return fallback(channel, ...args)
     })
@@ -279,6 +281,29 @@ describe('运行侧页', () => {
     expect(button('继续此批次')?.disabled).toBe(false)
   })
 
+  it('继续选区运行遇上下文超长：说明一直留到下一次操作，不被之后的刷新清掉', async () => {
+    const editor = { projectId: session.projectId, epoch: '旧会话', rootActionId: '选区根', runId: '选区' }
+    const recovery = { view: { handle: editor, status: 'running', artifacts: [], candidates: [], ledger: { physicalRequests: 0 } }, modelId: '原模型', sourceStatus: 'current',
+      context: { action: 'refine', kind: 'author-draft', documentText: '原文', documentHash: 'a'.repeat(64), from: 0, to: 2, selectedText: '原文' } }
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list-recovery') return { planning: [], editors: [recovery], reviews: [], batches: [], drafts: [], partial: false }
+      if (channel === 'editor-inline:execute') return { run: recovery.view, outcome: { status: 'incomplete', content: '', finishReason: 'error',
+        receipt: { finishReason: 'error', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } } }
+      return fallback(channel, ...args)
+    })
+    await render()
+    const continueButton = await vi.waitFor(() => { const found = button('继续原选区任务'); expect(found).toBeTruthy(); return found! })
+    await act(async () => continueButton.click())
+    await vi.waitFor(() => expect(host!.textContent).toContain('提示词超出了模型能接受的长度'))
+    const lists = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery').length
+    const before = lists()
+    await act(async () => useWorkflowStore.setState({ history: [run('9', 'completed', { completedAt: '2026-10-12T09:00:00.000Z' })] }))
+    await vi.waitFor(() => expect(lists()).toBeGreaterThan(before))
+    await act(async () => {})
+    expect(host!.textContent).toContain('提示词超出了模型能接受的长度')
+  })
+
   it('审稿候选：卡片显示审稿结论与要点而不是原始 JSON，复制拿到原文', async () => {
     const reviewRun = { projectId: session.projectId, epoch: '旧会话', rootActionId: '审稿根', runId: '审稿' }
     const report = JSON.stringify({ summary: '时间线需要核对。', items: [
@@ -286,10 +311,11 @@ describe('运行侧页', () => {
     ], goalReviews: [] })
     const fallback = invoke.getMockImplementation()!
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
-      if (channel === 'generation:list') return [{ handle: reviewRun, status: 'completed', artifacts: [{ ...reviewRun, artifactId: '报告', attemptId: '报告-请求', text: report, status: 'completed' }] }]
-      if (channel === 'generation:read-context') return { handle: reviewRun, operation: 'review-chapter' }
-      if (channel === 'review-revision:read-recovery') return { handle: reviewRun, modelId: '原模型', sourceStatus: 'current', canResume: true,
-        saved: { success: true, kind: 'review', id: 1 }, attemptedPurposes: ['review-chapter'], context: { operation: 'review-chapter', source: { chapterNumber: 3 } } }
+      if (channel === 'generation:list-recovery') return { planning: [], editors: [], drafts: [], batches: [], partial: false, reviews: [{
+        view: { handle: reviewRun, status: 'completed', artifacts: [{ ...reviewRun, artifactId: '报告', attemptId: '报告-请求', text: report, status: 'completed' }] },
+        recovery: { handle: reviewRun, modelId: '原模型', sourceStatus: 'current', canResume: true,
+          saved: { success: true, kind: 'review', id: 1 }, attemptedPurposes: ['review-chapter'], context: { operation: 'review-chapter', source: { chapterNumber: 3 } } },
+      }] }
       return fallback(channel, ...args)
     })
     const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
@@ -307,25 +333,119 @@ describe('运行侧页', () => {
     expect(writeText).toHaveBeenCalledWith(report)
   })
 
-  it('来源变了以后，已原样写进正式大纲的一批不列为可恢复，只列没保存的那批', async () => {
-    const outlineRun = (runId: string, from: number, to: number, inFormalOutline: boolean) => {
-      const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: `${runId}根`, runId }
-      return { handle, operation: 'architecture', draftSave: { kind: 'absent' },
-        plotOutline: { range: { from, to }, cursor: { kind: 'complete' } },
-        plotOutlineRecovery: { writeState: { kind: 'blocked', reason: 'source-changed' }, inFormalOutline, completeChapters: [], saved: null },
-        planningContinuation: { state: 'source-changed' } }
-    }
-    const saved = outlineRun('第一批', 1, 5, true)
-    const unsaved = outlineRun('第二批', 6, 6, false)
-    const fallback = invoke.getMockImplementation()!
-    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
-      if (channel === 'generation:list') return [saved, unsaved].map(item => ({ handle: item.handle, status: 'failed', artifacts: [] }))
-      if (channel === 'generation:read-context') return (args[0] as { handle: { runId: string } }).handle.runId === '第一批' ? saved : unsaved
-      return fallback(channel, ...args)
-    })
+  it('打开侧页只向主进程要一次可恢复列表；工作流写作中的尝试快照不触发重读，运行结束才重读', async () => {
+    const reads = () => invoke.mock.calls.filter(([channel]) => channel.startsWith('generation:'))
+    useWorkflowStore.setState({ activeRuns: [run('5', 'running')] })
     await render()
-    await vi.waitFor(() => expect(host!.textContent).toContain('大纲恢复稿 · 第 6 章'))
-    expect([...host!.querySelectorAll('article h3')].map(title => title.textContent)).toEqual(['大纲恢复稿 · 第 6 章'])
+    await vi.waitFor(() => expect(reads()).toEqual([['generation:list-recovery', session]]))
+    await act(async () => {
+      for (const status of ['completed', 'failed', 'cancelled']) listeners.get('generation:snapshot')?.({ projectId: session.projectId, epoch: session.leaseId, status })
+      await new Promise(resolve => setTimeout(resolve, 300))
+    })
+    expect(reads()).toHaveLength(1)
+    await act(async () => useWorkflowStore.setState({ activeRuns: [], history: [run('3', 'completed')] }))
+    await vi.waitFor(() => expect(reads()).toHaveLength(2))
+    expect(reads().map(([channel]) => channel)).toEqual(['generation:list-recovery', 'generation:list-recovery'])
+  })
+
+  it('没有工作流在写时（含暂停与等确认的），工作流之外的生成（选区建议）结束也会重读可恢复列表', async () => {
+    const reads = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')
+    useWorkflowStore.setState({ activeRuns: [run('8', 'paused'), run('9', 'waiting')] })
+    await render()
+    await vi.waitFor(() => expect(reads()).toHaveLength(1))
+    await act(async () => listeners.get('generation:snapshot')?.({ projectId: session.projectId, epoch: session.leaseId, status: 'running' }))
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+    expect(reads()).toHaveLength(1)
+    await act(async () => listeners.get('generation:snapshot')?.({ projectId: session.projectId, epoch: session.leaseId, status: 'cancelled' }))
+    await vi.waitFor(() => expect(reads()).toHaveLength(2))
+  })
+
+  it('历史已满 50 条时，又一个运行结束仍会重读可恢复列表', async () => {
+    const ended = Array.from({ length: 50 }, (_, index) => run(`旧${index}`, 'completed', { completedAt: '2026-10-12T08:00:00.000Z' }))
+    useWorkflowStore.setState({ history: ended })
+    const reads = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')
+    await render()
+    await vi.waitFor(() => expect(reads()).toHaveLength(1))
+    await act(async () => useWorkflowStore.setState({ history: [run('新', 'failed', { completedAt: '2026-10-12T09:00:00.000Z' }), ...ended.slice(0, 49)] }))
+    await vi.waitFor(() => expect(reads()).toHaveLength(2))
+  })
+
+  it('工作流正在写时结束的选区建议，等工作流暂停或等确认时补读一次', async () => {
+    const reads = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')
+    useWorkflowStore.setState({ activeRuns: [run('8', 'running')] })
+    await render()
+    await vi.waitFor(() => expect(reads()).toHaveLength(1))
+    await act(async () => listeners.get('generation:snapshot')?.({ projectId: session.projectId, epoch: session.leaseId, status: 'cancelled' }))
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+    expect(reads()).toHaveLength(1)
+    await act(async () => useWorkflowStore.setState({ activeRuns: [run('8', 'paused')] }))
+    await vi.waitFor(() => expect(reads()).toHaveLength(2))
+    await act(async () => useWorkflowStore.setState({ activeRuns: [run('8', 'running')] }))
+    await act(async () => useWorkflowStore.setState({ activeRuns: [run('8', 'waiting')] }))
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+    expect(reads()).toHaveLength(2)
+  })
+
+  it('单章候选点「不再显示」后，重开作品也不再出现；生成记录不动，其他候选照常显示', async () => {
+    const draftRun = (runId: string, text: string) => {
+      const handle = { projectId: session.projectId, epoch: '上次打开', rootActionId: `${runId}根`, runId }
+      return { view: { handle, status: 'cancelled', artifacts: [{ ...handle, artifactId: `${runId}片`, attemptId: `${runId}请求`, text, status: 'cancelled' }] },
+        recovery: { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: Number(runId), modelId: '原模型', authorInputs: [], attemptedPurposes: ['chapter-draft'] } }
+    }
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'generation:list-recovery'
+      ? { planning: [], editors: [], reviews: [], batches: [], partial: false, drafts: [draftRun('7', '雾里的钟声'), draftRun('8', '退潮后的石阶')] }
+      : fallback(channel, ...args))
+    const titles = () => [...host!.querySelectorAll('article h3')].map(title => title.textContent)
+    await render()
+    await vi.waitFor(() => expect(titles()).toEqual(['第7章候选', '第8章候选']))
+    const card = [...host!.querySelectorAll('article')].find(article => article.textContent?.includes('第7章候选'))!
+    await act(async () => [...card.querySelectorAll('button')].find(item => item.textContent === '不再显示')!.click())
+    expect(titles()).toEqual(['第8章候选'])
+
+    await act(async () => root!.unmount())
+    root = createRoot(host!)
+    await act(async () => useStageStore.setState({ sheet: null }))
+    await render()
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')).toHaveLength(2))
+    await vi.waitFor(() => expect(titles()).toEqual(['第8章候选']))
+    expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => !['generation:list-recovery', 'db:recovery-candidate-list'].includes(channel))).toEqual([])
+  })
+
+  it('「不再显示」只隐藏当时的内容：同一运行之后又留下新候选或新尾段时重新出现', async () => {
+    const handle = { projectId: session.projectId, epoch: '上次打开', rootActionId: '续写根', runId: '续写' }
+    const piece = (attemptId: string, text: string) => ({ ...handle, artifactId: `${attemptId}片`, attemptId, text, status: 'cancelled' })
+    let view: Record<string, unknown> = { handle, status: 'cancelled', artifacts: [piece('第一次', '雾里的钟声')] }
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'generation:list-recovery'
+      ? { planning: [], editors: [], reviews: [], batches: [], partial: false, drafts: [{ view: structuredClone(view),
+        recovery: { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: 5, modelId: '原模型', authorInputs: [], attemptedPurposes: ['chapter-draft'] } }] }
+      : fallback(channel, ...args))
+    const titles = () => [...host!.querySelectorAll('article h3')].map(title => title.textContent)
+    const reopen = async (expectedReads: number) => {
+      await act(async () => root!.unmount())
+      root = createRoot(host!)
+      await act(async () => useStageStore.setState({ sheet: null }))
+      await render()
+      await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === 'generation:list-recovery')).toHaveLength(expectedReads))
+    }
+    await render()
+    await vi.waitFor(() => expect(titles()).toEqual(['第5章候选']))
+    await act(async () => [...host!.querySelectorAll('button')].find(item => item.textContent === '不再显示')!.click())
+    expect(titles()).toEqual([])
+
+    await reopen(2)
+    await act(async () => {})
+    expect(titles()).toEqual([])
+
+    view = { ...view, artifacts: [piece('第一次', '雾里的钟声'), piece('第二次', '退潮后的石阶')] }
+    await reopen(3)
+    await vi.waitFor(() => expect(titles()).toEqual(['第5章候选']))
+    await act(async () => [...host!.querySelectorAll('button')].find(item => item.textContent === '不再显示')!.click())
+
+    view = { ...view, unsavedTails: [{ attemptId: '第三次', artifactId: '第三次片', durableRevision: 0, text: '没落盘的尾段', failureCode: 'GENERATION_STORAGE_FAILED' }] }
+    await reopen(4)
+    await vi.waitFor(() => expect(titles()).toEqual(['第5章候选']))
   })
 
   it('恢复候选：继续编辑或放弃的调用失败时显示错误', async () => {
@@ -514,5 +634,270 @@ describe('聊天入口不可见', () => {
       expect([...host!.querySelectorAll('[aria-label],[title]')].map(node => `${node.getAttribute('aria-label')} ${node.getAttribute('title')}`).join(' ')).not.toMatch(CHAT_WORDS)
     }
     expect(selectedTab()).toBe(locale === 'en-US' ? 'Diagnostics' : '诊断')
+  })
+})
+
+describe('作者原稿反推的建议', () => {
+  function importRun(): WorkflowRun {
+    return run('导入运行', 'completed', { type: 'novel_import', title: '导入作者原稿（3 章）' })
+  }
+
+  function arrange(core: Record<string, unknown>, receipts: Record<string, unknown>) {
+    const updates: unknown[] = []
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-effect-receipt-get') {
+        const effectReceipt = receipts[args[1] as string]
+        return effectReceipt ? { state: 'committed', effectReceipt } : null
+      }
+      if (channel === 'db:project-core-get') return { ...core }
+      if (channel === 'db:project-core-update') {
+        updates.push(args[0])
+        Object.assign(core, args[0] as object)
+        return { success: true }
+      }
+      if (channel === 'fs:list-tree' || channel === 'fs:read-dir') return []
+      if (channel === 'db:recovery-candidate-list') return []
+      if (channel === 'generation:list-recovery') return { planning: [], editors: [], reviews: [], drafts: [], batches: [], partial: false }
+      return null
+    })
+    return updates
+  }
+
+  it('列出与现有设定不同的反推结果，采用一条就写进设定并从列表消失，全部采用写进其余的', async () => {
+    const core = { genre: '武侠', coreOutline: '作者自己的大纲', writingStyle: '长句', narrativePov: 'first_person' }
+    const updates = arrange(core, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'genre', current: '武侠', inferred: '悬疑' },
+        { field: 'coreOutline', current: '作者自己的大纲', inferred: '侦探追查旧案' },
+        { field: 'narrativePov', current: 'third_limited', inferred: 'first_person' },
+      ] },
+      style: { mode: 'fill-empty', writingStyle: '长句', suggestions: [{ field: 'writingStyle', current: '长句', inferred: '短句，白描' }] },
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    const list = () => host!.querySelector('[aria-label="反推建议"]')
+    await vi.waitFor(() => expect(list()?.textContent).toContain('类型'))
+    expect(list()!.textContent).toContain('核心大纲')
+    expect(list()!.textContent).toContain('文风')
+    expect(list()!.textContent).not.toContain('叙事视角')
+
+    await click('采用「类型」的反推结果')
+    expect(updates).toEqual([{ genre: '悬疑' }])
+    await vi.waitFor(() => expect(list()!.textContent).not.toContain('悬疑'))
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑')
+
+    await click('全部采用')
+    expect(updates.at(-1)).toEqual({ coreOutline: '侦探追查旧案', writingStyle: '短句，白描' })
+    await vi.waitFor(() => expect(list()).toBeNull())
+  })
+
+  it('采用一条建议只改那一项；设定页里还没保存的其他改动保留', async () => {
+    const core = { genre: '武侠', coreOutline: '作者自己的大纲' }
+    const updates = arrange(core, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, novelConfig: { genre: '武侠', coreOutline: '作者自己的大纲' } as never } }))
+    useProjectStore.getState().updateNovelConfig({ coreOutline: '还没保存的新大纲' })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeTruthy())
+    await click('采用「类型」的反推结果')
+    expect(updates).toEqual([{ genre: '悬疑' }])
+    await vi.waitFor(() => expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑'))
+    expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('还没保存的新大纲')
+  })
+
+  it('采用写库期间作者又改了同一项：保留作者的新改动且仍未保存，其他采用项按采用值保存', async () => {
+    const core = { genre: '武侠', coreOutline: '作者自己的大纲' }
+    const updates = arrange(core, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'genre', current: '武侠', inferred: '悬疑' },
+        { field: 'coreOutline', current: '作者自己的大纲', inferred: '侦探追查旧案' },
+      ] },
+    })
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:project-core-update') useProjectStore.getState().updateNovelConfig({ genre: '作者等待时改的类型' })
+      return base(channel, ...args)
+    })
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, novelConfig: { genre: '武侠', coreOutline: '作者自己的大纲' } as never } }))
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('全部采用')).toBeTruthy())
+    await click('全部采用')
+    expect(updates).toEqual([{ genre: '悬疑', coreOutline: '侦探追查旧案' }])
+    await vi.waitFor(() => expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('侦探追查旧案'))
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('作者等待时改的类型')
+
+    useProjectStore.getState().discardNovelConfigDraft(session.projectPath, session)
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ genre: '悬疑', coreOutline: '侦探追查旧案' })
+  })
+
+  it('采用写库期间作者把同一项改回原先保存的值：保留作者的值且仍未保存', async () => {
+    const core = { genre: '武侠' }
+    arrange(core, { global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] } })
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:project-core-update') useProjectStore.getState().updateNovelConfig({ genre: '武侠' })
+      return base(channel, ...args)
+    })
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, novelConfig: { genre: '武侠' } as never } }))
+    useProjectStore.getState().updateNovelConfig({ genre: '作者点采用前写的类型' })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeTruthy())
+    await click('采用「类型」的反推结果')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('db:project-core-get', session.projectPath, session))
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeFalsy())
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('武侠')
+    useProjectStore.getState().discardNovelConfigDraft(session.projectPath, session)
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('悬疑')
+  })
+
+  it('采用架构建议后通知架构页与流程脊重读', async () => {
+    arrange({ premise: '作者的前提' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'premise', current: '作者的前提', inferred: '反推的前提' }] },
+    })
+    const updated = vi.fn()
+    const off = globalEventBus.on('ARCH_FILE_UPDATED', updated)
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('采用「故事前提」的反推结果')).toBeTruthy())
+    await click('采用「故事前提」的反推结果')
+    await vi.waitFor(() => expect(updated).toHaveBeenCalledWith(expect.objectContaining({ projectSession: session, runId: '导入运行' })))
+    off()
+  })
+
+  it('采用架构建议后，已打开且没改过的文档标签显示新内容；有未保存改动的标签保留作者草稿', async () => {
+    arrange({ premise: '作者的前提', worldbuilding: '作者的世界观' }, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'premise', current: '作者的前提', inferred: '反推的前提' },
+        { field: 'worldbuilding', current: '作者的世界观', inferred: '反推的世界观' },
+      ] },
+    })
+    const tabId = (field: string) => createProjectArchTabId(session.projectPath, `ai-novel://core/${field}`)
+    const open = (field: string, content: string) => useEditorStore.getState().openFile({
+      id: tabId(field), name: field, type: 'arch-file', filePath: `ai-novel://core/${field}`, content, savedContent: content, projectKey: session.projectPath,
+    })
+    open('worldbuilding', '作者的世界观')
+    open('premise', '作者的前提')
+    useEditorStore.getState().updateTabContent(tabId('premise'), '作者没保存的前提')
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(button('全部采用')).toBeTruthy())
+    await click('全部采用')
+    const tab = (field: string) => useEditorStore.getState().tabs.find(item => item.id === tabId(field))!
+    await vi.waitFor(() => expect(tab('worldbuilding').content).toBe('反推的世界观'))
+    expect(tab('worldbuilding').dirty).toBeFalsy()
+    expect(tab('premise')).toMatchObject({ content: '作者没保存的前提', dirty: true })
+  })
+
+  it('换开别的作品再回来（新的会话）后，同一作品的历史运行仍然列出未采用的建议', async () => {
+    arrange({ genre: '武侠' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    useWorkflowStore.setState({ history: [{ ...importRun(), projectSession: { ...session, leaseId: '上次打开' } }] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"]')?.textContent).toContain('类型'))
+    expect(invoke).toHaveBeenCalledWith('db:import-run-effect-receipt-get', '导入运行', 'global', 'done', session.projectPath, session)
+  })
+
+  it('建议读取失败时说出来，不当作没有建议', async () => {
+    arrange({ genre: '武侠' }, {})
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:import-run-effect-receipt-get'
+      ? Promise.reject(new Error('PROJECT_SESSION_STALE')) : base(channel, ...args))
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')?.textContent).toBeTruthy())
+    expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')!.textContent).not.toContain('PROJECT_SESSION_STALE')
+  })
+
+  it('读取失败后再次读取成功时，不再留着旧的失败提示', async () => {
+    arrange({ genre: '武侠' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    const base = invoke.getMockImplementation()!
+    let failOnce = true
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-effect-receipt-get' && failOnce) {
+        failOnce = false
+        throw new Error('PROJECT_SESSION_STALE')
+      }
+      return base(channel, ...args)
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"] [role="alert"]')).toBeTruthy())
+
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="Inferred suggestions"]')?.textContent).toContain('Genre'))
+    expect(host!.querySelector('[aria-label="Inferred suggestions"] [role="alert"]')).toBeNull()
+  })
+
+  it('会话换了以后，新会话读完之前不再显示旧会话的建议', async () => {
+    arrange({ genre: '武侠' }, {
+      global: { mode: 'fill-empty', suggestions: [{ field: 'genre', current: '武侠', inferred: '悬疑' }] },
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(button('采用「类型」的反推结果')).toBeTruthy())
+
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:import-run-effect-receipt-get'
+      ? new Promise(() => {}) : base(channel, ...args))
+    const next = { ...session, leaseId: '重新打开' }
+    setActiveProjectSessionContext(next)
+    await act(async () => useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!, sessionLease: next.leaseId } })))
+
+    expect(button('采用「类型」的反推结果')).toBeUndefined()
+    expect(host!.querySelector('[aria-label="反推建议"]')).toBeNull()
+  })
+
+  it('被截断的长值可以展开看全文再收起，没被截断的短值不给展开控件', async () => {
+    const outline = ['第一幕：旧港来信', '第二幕：雾钟早鸣', '第三幕：灯塔失火', '第四幕：账册下落', '第五幕：潮退真相', '第六幕：林岚离港'].join('\n')
+    arrange({ genre: '武侠', coreOutline: '作者自己的大纲' }, {
+      global: { mode: 'fill-empty', suggestions: [
+        { field: 'genre', current: '武侠', inferred: '悬疑' },
+        { field: 'coreOutline', current: '作者自己的大纲', inferred: outline },
+      ] },
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+
+    const card = (name: string) => [...host!.querySelectorAll('.run-suggestion')]
+      .find(item => item.querySelector('.run-suggestion-name')?.textContent === name) as HTMLElement | undefined
+    await vi.waitFor(() => expect(card('核心大纲')?.querySelector('[aria-expanded]')).toBeTruthy())
+    expect(card('类型')!.querySelector('[aria-expanded]')).toBeNull()
+
+    const inferred = () => [...card('核心大纲')!.querySelectorAll('dd')].at(-1)!
+    const toggle = () => card('核心大纲')!.querySelector<HTMLButtonElement>('[aria-expanded]')!
+    expect(inferred().scrollHeight).toBeGreaterThan(inferred().clientHeight)
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => toggle().click())
+    expect(toggle().getAttribute('aria-expanded')).toBe('true')
+    expect(inferred().scrollHeight).toBe(inferred().clientHeight)
+    expect(inferred().textContent).toBe(outline)
+
+    await act(async () => toggle().click())
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+    expect(inferred().scrollHeight).toBeGreaterThan(inferred().clientHeight)
+  })
+
+  it('没有建议时不出现这一块', async () => {
+    arrange({ genre: '悬疑' }, { global: { mode: 'fill-empty', suggestions: [] } })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('db:import-run-effect-receipt-get', '导入运行', 'style', 'done', session.projectPath, session))
+    expect(host!.querySelector('[aria-label="反推建议"]')).toBeNull()
   })
 })

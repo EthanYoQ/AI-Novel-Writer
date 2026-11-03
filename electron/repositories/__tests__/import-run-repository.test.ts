@@ -1159,6 +1159,7 @@ describe('ImportRunRepository', () => {
       inferGlobal: vi.fn(async () => undefined),
       analyzeStyle: vi.fn(async () => undefined),
       inferBlueprints: vi.fn(async () => undefined),
+      isAuthorDraftReplaced: async () => false,
       refresh: vi.fn(async () => undefined),
       completeBatch: async (runId, stage, batchId, lease) => (
         ImportRunRepository.completeBatch(runId, stage, batchId, lease)

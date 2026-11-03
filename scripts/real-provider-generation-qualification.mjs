@@ -947,7 +947,7 @@ export function blueprintQualificationFailureCode(profile, failure, responseEnve
   const reason = new Set([
     'server_error', 'authentication', 'safety', 'cancelled', 'deadline', 'unknown',
     'missing_item', 'duplicate_item', 'unexpected_item', 'invalid_item',
-    'malformed_output', 'output_limit', 'max_calls', 'max_requested_tokens',
+    'malformed_output', 'output_limit', 'max_calls', 'max_requested_tokens', 'root_budget',
     'invalid_limit',
   ]).has(failure?.reason)
     ? failure.reason.toUpperCase()

@@ -5,6 +5,7 @@ import { VisibleStreamFilter } from './visible-stream'
 import { resolveModelProfileReasoningMapping } from '../../src/shared/provider-presets'
 import { version as appVersion } from '../../package.json'
 import { StreamTransportDiagnostics } from './transport-diagnostics'
+import { providerFailureCode } from './provider-context-length'
 
 const OPENCODE_GO_USER_AGENT = `ai-novel-writer/${appVersion}`
 
@@ -196,8 +197,7 @@ export class OpenAIProvider implements ILLMProvider {
 
       if (!res.ok) {
         transport.fail('HTTP_ERROR')
-        void res.body?.cancel().catch(() => {})
-        fail('LLM_REQUEST_FAILED')
+        fail(await providerFailureCode(res, opts.signal))
         return
       }
 

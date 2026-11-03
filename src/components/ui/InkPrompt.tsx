@@ -7,8 +7,8 @@ import { Button } from './Button'
 import { createInkOverlayMount } from './ink-overlay'
 import { keepToastStackClickable } from './ToastStack'
 
-/** alert：只有「确定」；confirm：取消加确认；danger：后果用朱批排、确认为实心朱印，进场焦点落在取消上。 */
-export type InkPromptKind = 'alert' | 'confirm' | 'danger'
+/** alert：报错，带警示印、只有「确定」；notice：告知一件已经办完的事，不带警示印、只有「确定」；confirm：取消加确认；danger：后果用朱批排、确认为实心朱印，进场焦点落在取消上。 */
+export type InkPromptKind = 'alert' | 'notice' | 'confirm' | 'danger'
 
 export interface InkPromptOptions {
   kind: InkPromptKind
@@ -24,7 +24,7 @@ function InkPrompt({ kind, title, message, confirmText, cancelText, onResolve }:
   const result = useRef<boolean | null>(null)
   const confirmRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
-  const marked = kind !== 'confirm'
+  const marked = kind === 'alert' || kind === 'danger'
 
   const close = (value: boolean) => {
     if (result.current !== null) return
@@ -58,7 +58,7 @@ function InkPrompt({ kind, title, message, confirmText, cancelText, onResolve }:
           </DialogPrimitive.Description>
         </div>
         <div className="pi-dialog-foot">
-          {kind !== 'alert' && (
+          {(kind === 'confirm' || kind === 'danger') && (
             <Button ref={cancelRef} variant="secondary" onClick={() => close(false)}>{cancelText}</Button>
           )}
           <Button ref={confirmRef} variant={kind === 'danger' ? 'danger-solid' : 'primary'} onClick={() => close(true)}>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Lock, RotateCcw } from 'lucide-react'
-import type { VersionRecord } from '../../../services/version-service'
+import { DRAFT_STATUS_INFO } from '../../../shared/draft-status'
 import { useDraftStore } from '../../../stores/draft-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
@@ -13,20 +13,21 @@ import { EmptyState } from '../../ui/EmptyState'
 import { Notice } from '../../ui/Notice'
 import { toast } from '../../ui/Toast'
 import RevertDialog from './RevertDialog'
-import { useVersionHistory, type VersionComparison } from './use-version-history'
+import { useVersionHistory, type VersionComparison, type VersionKind, type VersionRecord } from './use-version-history'
 import { diffProse } from './version-diff'
 import { pluralEn } from '../../../shared/plural-en'
 
 type Text = (zh: string, en: string) => string
 
-const TYPE_NAMES: Record<string, [string, string]> = {
-  draft: ['草稿', 'Draft'],
-  refined: ['修稿', 'Revision'],
-  final: ['定稿', 'Final'],
+const TYPE_NAMES: Record<VersionKind, readonly [string, string]> = {
+  draft: DRAFT_STATUS_INFO.draft.label,
+  refined: DRAFT_STATUS_INFO.revised.label,
+  final: DRAFT_STATUS_INFO.finalized.label,
+  superseded: DRAFT_STATUS_INFO.superseded.label,
 }
 
 function versionName(version: VersionRecord, text: Text): string {
-  const [zh, en] = TYPE_NAMES[version.type] ?? TYPE_NAMES.draft
+  const [zh, en] = TYPE_NAMES[version.type]
   return text(`${zh} v${version.version}`, `${en} v${version.version}`)
 }
 

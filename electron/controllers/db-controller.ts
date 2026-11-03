@@ -307,6 +307,7 @@ export function registerDatabaseController() {
             locale: request.locale,
             authorityFingerprint: request.authorityFingerprint,
             expectedManifestFingerprint: request.manifestFingerprint,
+            authorInference: request.authorInference === true,
             chapters: inspection.chapters,
           }),
         }
@@ -922,9 +923,6 @@ export function registerDatabaseController() {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const draft = DraftRepository.getMeta(id)
       if (!draft) throw new Error('DRAFT_NOT_FOUND')
-      if (draft.status === 'finalized') {
-        throw new Error('DRAFT_FINALIZED_READ_ONLY')
-      }
       DraftRepository.updateContent(id, content, wordCount)
       return { success: true }
     } catch (err) {

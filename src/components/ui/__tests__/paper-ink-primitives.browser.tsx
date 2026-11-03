@@ -769,9 +769,11 @@ describe('Popover', () => {
       </div>,
     )
     const trigger = container.querySelector<HTMLButtonElement>('button')!
+    // 用户点的是已经画在屏上的按钮：先等它画出来，展开后按下下沉的过渡才会真的播放
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
     await act(async () => trigger.click())
     const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!
-    await finishAnimations(dialog)
+    await Promise.all([finishAnimations(dialog), finishAnimations(trigger)])
     const triggerRect = trigger.getBoundingClientRect()
     const rect = dialog.getBoundingClientRect()
     expect(Math.abs(rect.bottom - (triggerRect.top - 6))).toBeLessThanOrEqual(1)

@@ -6,7 +6,7 @@ import { createRequire } from 'node:module'
 import type BetterSqlite3 from 'better-sqlite3'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
 import { migrateSchema, probeSchema, verifySchema } from '../migrations/runner'
-import type { MigrationRegistry } from '../migrations/registry'
+import { SchemaMigrationError, type MigrationRegistry } from '../migrations/registry'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import { M02_ADDED_CHARACTER_COLUMNS, M02_AUXILIARY_TABLES } from '../migrations/m02-character-identity'
 import { M03_REVIEW_CYCLE_TABLES } from '../migrations/m03-review-cycle'
@@ -94,7 +94,7 @@ function physicalSnapshot(source: string) {
     for (const suffix of Object.keys(identity)) fs.copyFileSync(source + suffix, file + suffix, fs.constants.COPYFILE_EXCL)
     if (JSON.stringify(sourceIdentity(file)) !== JSON.stringify(identity)) throw new Error('PROJECT_MIGRATION_SOURCE_CHANGED')
     unchanged()
-    return { file, unchanged, close: () => fs.rmSync(root, { recursive: true, force: true }) }
+    return { file, identity, unchanged, close: () => fs.rmSync(root, { recursive: true, force: true }) }
   } catch (error) { fs.rmSync(root, { recursive: true, force: true }); throw error }
 }
 type DomainColumns = { name: string; columns: string[] }[]
@@ -253,6 +253,56 @@ export async function backupProjectSqlite(options: {
   } finally { source?.close(); snapshot.close() }
 }
 
+
+/** Bytes a reader of the main file and WAL sees. -shm is excluded because opening
+ * a handle rewrites it, and an absent WAL reads the same as an empty one.
+ */
+export interface SqliteContentIdentity { database: string; wal: string }
+const EMPTY_SHA256 = createHash('sha256').digest('hex')
+const contentIdentity = (hashes: Record<string, string>): SqliteContentIdentity =>
+  ({ database: hashes[''], wal: hashes['-wal'] ?? EMPTY_SHA256 })
+export function readSqliteContentIdentity(file: string): SqliteContentIdentity { return contentIdentity(sourceIdentity(file)) }
+
+function currentSnapshotIdentity(databasePath: string): SqliteContentIdentity | undefined {
+  const snapshot = physicalSnapshot(databasePath)
+  try {
+    const db = new Database(snapshot.file, { readonly: true, fileMustExist: true })
+    try {
+      if (new SqliteSchemaAdapter(db).readUserVersion() !== CURRENT_DESKTOP_SCHEMA_VERSION) return undefined
+      snapshot.unchanged()
+      return contentIdentity(snapshot.identity)
+    } finally { db.close() }
+  } finally { snapshot.close() }
+}
+
+/** A read-only handle on the source reads WAL frames through the live -shm
+ * index, which a snapshot rebuilds and may drop, and closing it never
+ * checkpoints a WAL that verification refuses.
+ */
+function verifyLiveSchema(databasePath: string): void {
+  const reader = new Database(databasePath, { readonly: true, fileMustExist: true })
+  try {
+    reader.pragma('foreign_keys = ON')
+    verifySchema(new SqliteSchemaAdapter(reader), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+  } finally { reader.close() }
+}
+
+/** Opening reads the schema version from one private snapshot. Content
+ * fingerprints exist only to gate a migration, so a current schema skips them
+ * and an older one takes the full upgrade lane. Either way the live source is
+ * verified before returning; the identity lets the caller prove its writable
+ * handle sees the verified bytes.
+ */
+export function openProjectSqlite(options: { databasePath: string }): SqliteContentIdentity {
+  let identity = currentSnapshotIdentity(options.databasePath)
+  if (!identity) {
+    upgradeProjectSqlite({ databasePath: options.databasePath })
+    identity = currentSnapshotIdentity(options.databasePath)
+    if (!identity) throw new SchemaMigrationError('SCHEMA_VERSION_MISMATCH')
+  }
+  verifyLiveSchema(options.databasePath)
+  return identity
+}
 
 /** Canonical-only upgrade seam. Caller validates its manifest and excludes business
  * writers first. Probe never opens the source; the single lane owns the transaction.

@@ -50,10 +50,11 @@ describe('单章写作中断', () => {
     expect(entry.artifacts.map(item => item.id)).toEqual(['甲'])
   })
 
-  it('草稿保存后正文又改过，只能复制，不能续写', () => {
-    const entry = draft({ composition: null, draftSave: { kind: 'changed' } })
-    expect(entry).toMatchObject({ title: '第4章生成记录', actionLabel: '已保存，正文已修改', changed: true })
+  it('草稿保存后正文又改过，只为复制没落盘的尾段而列出时只能复制，不能续写', () => {
+    const entry = draft({ composition: { artifactIds: ['甲'] }, draftSave: { kind: 'changed' } })
+    expect(entry).toMatchObject({ title: '第4章生成记录', actionLabel: '已保存，正文已修改' })
     expect(entry.artifacts.every(item => !item.selectable)).toBe(true)
+    expect(canResumeDraft(entry, [])).toBe(false)
     expect(canResumeDraft(entry, ['甲'])).toBe(false)
   })
 
@@ -337,5 +338,14 @@ describe('规划恢复稿', () => {
     const recovery = { handle, plotOutlineRecovery: {}, plotOutline: { range: { from: 6, to: 6 } } } as never
     expect(buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'zh-CN')[0].title).toBe('大纲恢复稿 · 第 6 章')
     expect(buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES, planning: [recovery] }, 'en-US')[0].title).toBe('Outline recovery draft · ch. 6')
+  })
+})
+
+describe('选区建议', () => {
+  it('按意见改的中断条目带上当时的作者意见', () => {
+    const editor = (context: Record<string, unknown>) => buildRecoveryEntries({ ...EMPTY_RECOVERY_SOURCES,
+      editors: [{ view: view('选区'), modelId: '模型', sourceStatus: 'current', context: { selectedText: '选中', documentText: '全文', ...context } } as never] }, 'zh-CN')[0]
+    expect(editor({ action: 'instruct', instruction: '改成第一人称' })).toMatchObject({ kind: 'editor', instructionNote: '作者意见：改成第一人称' })
+    expect(editor({ action: 'refine' })).toMatchObject({ kind: 'editor', instructionNote: undefined })
   })
 })

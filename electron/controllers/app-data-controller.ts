@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { app, dialog, ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
+import { showOpenDialogInLastDirectory } from '../utils/remembered-dialog'
 import type { AppPromptLoadReceipt, AppPromptTemplate } from '../../src/shared/ipc-channels'
 import type { WritingLanguage } from '../../src/shared/writing-language'
 import {
@@ -487,7 +488,7 @@ export function registerAppDataController(): void {
     try {
       if (!validSender(event)) throw new Error(text('请求来源无效', 'The request sender is invalid'))
       if (kind !== 'file' && kind !== 'folder') throw new Error(text('导入方式无效', 'The import kind is invalid'))
-      const selection = await dialog.showOpenDialog(kind === 'folder'
+      const selection = await showOpenDialogInLastDirectory('writing-skill', kind === 'folder'
         ? { title: text('选择 Skill 文件夹', 'Choose a skill folder'), properties: ['openDirectory'] }
         : {
             title: text('选择 SKILL.md 文件', 'Choose a SKILL.md file'),

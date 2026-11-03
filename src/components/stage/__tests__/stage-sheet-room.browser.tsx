@@ -38,6 +38,7 @@ beforeEach(() => {
     if (channel === 'character-avatar:read-batch') return { success: true, avatars: [] }
     if (channel === 'config:get') return { outlineTargetUnits: 300 }
     if (channel === 'db:get-llm-stats') return { totalCalls: 0, successfulCalls: 0, failedCalls: 0, knownUsageCalls: 0, totalTokens: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }
+    if (channel === 'generation:list-recovery') return { planning: [], editors: [], reviews: [], batches: [], drafts: [], partial: false }
     if (/list|history/i.test(channel)) return []
     if (channel === 'generation:read-context' || channel === 'generation:read-visible-composition') return null
     if (channel === 'fs:check-exists') return false

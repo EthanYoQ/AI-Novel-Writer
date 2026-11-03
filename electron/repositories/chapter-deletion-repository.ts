@@ -93,25 +93,104 @@ function listPostProcessRunIds(
   return rows.map(row => row.id)
 }
 
+const SUPERSEDED_SUFFIX = ':superseded:'
+
+function companionOperationId(operationId: string, draftId: number): string {
+  return `${operationId}${SUPERSEDED_SUFFIX}${draftId}`
+}
+
+function primaryOperationId(operationId: string): string {
+  const index = operationId.indexOf(SUPERSEDED_SUFFIX)
+  return index < 0 ? operationId : operationId.slice(0, index)
+}
+
+function companionRows(db: ReturnType<typeof requireDatabase>, operationId: string): ChapterDeletionRow[] {
+  const prefix = `${operationId}${SUPERSEDED_SUFFIX}`
+  return db.prepare(`
+    SELECT * FROM chapter_deletion_operations
+    WHERE substr(operation_id, 1, length(?)) = ?
+    ORDER BY draft_id
+  `).all(prefix, prefix) as ChapterDeletionRow[]
+}
+
 function deleteChapterFacts(
   db: ReturnType<typeof requireDatabase>,
+  operationId: string,
   target: FinalizedChapterTarget,
   postProcessRunIds: readonly string[],
 ): void {
   invalidateContinuityProjectionFrom(db, target.chapter_number)
-  const contentIds = new Set<number>([target.content_id])
+  const superseded = db.prepare(`
+    SELECT drafts.id, drafts.content_id,
+           finalization_outbox.finalization_id, finalization_outbox.chapter_title,
+           finalization_outbox.target_file_name, finalization_outbox.knowledge_document_id
+    FROM drafts
+    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    WHERE drafts.chapter_number = ? AND drafts.status = 'superseded'
+    ORDER BY drafts.id
+  `).all(target.chapter_number) as Array<{
+    id: number
+    content_id: number
+    finalization_id: string | null
+    chapter_title: string | null
+    target_file_name: string | null
+    knowledge_document_id: string | null
+  }>
+  for (const row of superseded) {
+    const runIds = row.finalization_id
+      ? (db.prepare(`
+          SELECT id FROM post_process_runs
+          WHERE trigger_source_type = 'chapter_finalize' AND trigger_source_id = ?
+          ORDER BY id
+        `).all(`finalization:${row.finalization_id}`) as Array<{ id: string }>).map(run => run.id)
+      : []
+    const manuscriptStatus = row.target_file_name ? 'pending' : 'not_required'
+    const knowledgeStatus = row.knowledge_document_id ? 'pending' : 'not_required'
+    const finished = manuscriptStatus === 'not_required' && knowledgeStatus === 'not_required'
+    db.prepare(`
+      INSERT INTO chapter_deletion_operations (
+        operation_id, draft_id, chapter_number, chapter_title, finalization_id,
+        target_file_name, knowledge_document_id, post_process_run_ids,
+        manuscript_status, knowledge_status, legacy_knowledge_authorization, status, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_required', ?, CASE WHEN ? THEN datetime('now') ELSE '' END)
+    `).run(
+      companionOperationId(operationId, row.id),
+      row.id,
+      target.chapter_number,
+      row.chapter_title ?? '',
+      row.finalization_id ?? '',
+      row.target_file_name ?? '',
+      row.knowledge_document_id ?? '',
+      JSON.stringify(runIds),
+      manuscriptStatus,
+      knowledgeStatus,
+      finished ? 'completed' : 'pending',
+      finished ? 1 : 0,
+    )
+    deleteDraftFacts(db, row.id, row.content_id, runIds)
+  }
+  deleteDraftFacts(db, target.id, target.content_id, postProcessRunIds)
+}
+
+function deleteDraftFacts(
+  db: ReturnType<typeof requireDatabase>,
+  draftId: number,
+  draftContentId: number,
+  postProcessRunIds: readonly string[],
+): void {
+  const contentIds = new Set<number>([draftContentId])
   const revisionContents = db.prepare(`
     SELECT content_id FROM revisions WHERE base_draft_id = ?
-  `).all(target.id) as Array<{ content_id: number }>
+  `).all(draftId) as Array<{ content_id: number }>
   const reviewContents = db.prepare(`
     SELECT content_id FROM reviews WHERE base_draft_id = ?
-  `).all(target.id) as Array<{ content_id: number }>
+  `).all(draftId) as Array<{ content_id: number }>
   for (const row of [...revisionContents, ...reviewContents]) contentIds.add(row.content_id)
 
   for (const runId of postProcessRunIds) {
     db.prepare('DELETE FROM post_process_runs WHERE id = ?').run(runId)
   }
-  db.prepare('DELETE FROM drafts WHERE id = ?').run(target.id)
+  db.prepare('DELETE FROM drafts WHERE id = ?').run(draftId)
   for (const contentId of contentIds) {
     try {
       db.prepare('DELETE FROM contents WHERE id = ?').run(contentId)
@@ -153,24 +232,27 @@ function getRow(operationId: string): ChapterDeletionRow | undefined {
   `).get(operationId) as ChapterDeletionRow | undefined
 }
 
+function aggregateStatus(rows: readonly ChapterDeletionRow[]): ChapterDeletionOperation['status'] {
+  const projections = rows.flatMap(row => [row.manuscript_status, row.knowledge_status])
+  if (projections.every(status => status === 'completed' || status === 'not_required')) return 'completed'
+  return projections.includes('failed') ? 'failed' : 'pending'
+}
+
 function refreshAggregateStatus(operationId: string): void {
   const db = requireDatabase()
-  const row = getRow(operationId)
-  if (!row) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
-  const finished = (status: ChapterDeletionProjectionStatus) => (
-    status === 'completed' || status === 'not_required'
-  )
-  const status: ChapterDeletionOperation['status'] = (
-    finished(row.manuscript_status) && finished(row.knowledge_status)
-  ) ? 'completed' : (
-    row.manuscript_status === 'failed' || row.knowledge_status === 'failed'
-  ) ? 'failed' : 'pending'
-  db.prepare(`
-    UPDATE chapter_deletion_operations
-    SET status = ?, completed_at = CASE WHEN ? = 'completed' THEN datetime('now') ELSE '' END,
-        updated_at = datetime('now')
-    WHERE operation_id = ?
-  `).run(status, status, operationId)
+  const primaryId = primaryOperationId(operationId)
+  const ids = primaryId === operationId ? [operationId] : [operationId, primaryId]
+  for (const id of ids) {
+    const row = getRow(id)
+    if (!row) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
+    const status = aggregateStatus(id === primaryId ? [row, ...companionRows(db, id)] : [row])
+    db.prepare(`
+      UPDATE chapter_deletion_operations
+      SET status = ?, completed_at = CASE WHEN ? = 'completed' THEN datetime('now') ELSE '' END,
+          updated_at = datetime('now')
+      WHERE operation_id = ?
+    `).run(status, status, id)
+  }
 }
 
 export class ChapterDeletionRepository {
@@ -219,7 +301,7 @@ export class ChapterDeletionRepository {
       )
 
       if (input.legacyKnowledgeAuthorizationRequired) return input.operationId
-      deleteChapterFacts(db, target, postProcessRunIds)
+      deleteChapterFacts(db, input.operationId, target, postProcessRunIds)
       return input.operationId
     })
 
@@ -273,7 +355,7 @@ export class ChapterDeletionRepository {
       if (updated.changes !== 1) {
         throw new Error('CHAPTER_DELETE_LEGACY_CONFIRMATION_CONSUMED')
       }
-      deleteChapterFacts(db, target, frozenRunIds)
+      deleteChapterFacts(db, operationId, target, frozenRunIds)
       return operationId
     })
 
@@ -298,10 +380,21 @@ export class ChapterDeletionRepository {
   static listIncomplete(): ChapterDeletionOperation[] {
     const rows = requireDatabase().prepare(`
       SELECT * FROM chapter_deletion_operations
-      WHERE status != 'completed'
+      WHERE status != 'completed' AND instr(operation_id, ?) = 0
       ORDER BY created_at, operation_id
-    `).all() as ChapterDeletionRow[]
+    `).all(SUPERSEDED_SUFFIX) as ChapterDeletionRow[]
     return rows.map(rowToOperation)
+  }
+
+  static settle(operationId: string): ChapterDeletionOperation {
+    refreshAggregateStatus(operationId)
+    const operation = ChapterDeletionRepository.get(operationId)
+    if (!operation) throw new Error('CHAPTER_DELETE_OPERATION_NOT_FOUND')
+    return operation
+  }
+
+  static listCompanions(operationId: string): ChapterDeletionOperation[] {
+    return companionRows(requireDatabase(), operationId).map(rowToOperation)
   }
 
   static startAttempt(operationId: string): ChapterDeletionOperation {
