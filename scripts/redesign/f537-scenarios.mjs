@@ -117,7 +117,7 @@ async function stopOnActiveTime(context) {
   await shoot('f537-stop-time-diagnostics')
   assert.equal(root.blocked_code, 'ROOT_BUDGET_EXHAUSTED')
   assert.match(stepError, /模型请求累计时长已到上限/u, stepError)
-  assert.match(stepError, /只能在导入对话框里点「重新开始」，它会从第 1 章重新推演蓝图/u, stepError)
+  assert.match(stepError, /在导入对话框里点「继续导入」，已提交的批次不会重做/u, stepError)
   assert.doesNotMatch(stepError, /[A-Z]{3,}_[A-Z]/u, '运行卡片的说明不露错误码')
   const diagnostic = await logLine.innerText()
   return { stepError, diagnostic, blockedCode: root.blocked_code }
@@ -143,7 +143,7 @@ async function stopBeforeSend(context) {
   await page.waitForTimeout(400)
   await shoot('f537-stop-before-send-card')
   assert.match(stepError, /这次导入的请求次数或运行时长已到上限，这一批没有发送/u, stepError)
-  assert.match(stepError, /只能在导入对话框里点「重新开始」，它会从第 1 章重新推演蓝图/u, stepError)
+  assert.match(stepError, /在导入对话框里点「继续导入」，已提交的批次不会重做/u, stepError)
   assert.doesNotMatch(stepError, /[A-Z]{3,}_[A-Z]/u, '运行卡片的说明不露错误码')
   return { stepError }
 }

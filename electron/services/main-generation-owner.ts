@@ -32,7 +32,7 @@ import type { FinalizedCharacterGenerationCommit } from '../../src/shared/finali
 import type { ReviewRevisionContext, PrepareReviewRevisionRequest, ReviewGenerationCommitRequest, RevisionGenerationCommitRequest } from '../../src/shared/review-revision-generation'
 import { ReviewRevisionGeneration } from './review-revision-generation'
 import { AgentGeneration, type AgentBeginSelection } from './agent-generation'
-import { ImportGeneration } from './import-generation'
+import { ImportGeneration, importSlotNonce } from './import-generation'
 import type { ImportGenerationSlot } from '../../src/shared/import-generation'
 import { importGenerationSlotKey } from './import-generation-source'
 import type { ApproveCharacterProposalRequest } from '../../src/shared/character-proposal'
@@ -421,8 +421,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (selection.operation === 'legacy-character-roster-repair' && !legacyInitialization) throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
     const importAdmission = imports.admit(selection)
     if (importAdmission?.existing) return viewOf(importAdmission.existing)
-    if (importAdmission) selection = { ...selection, uiActionNonce: `import:${importGenerationSlotKey(selection.importSlot!)}`,
-      ...(importAdmission.parentRootActionId ? { parentRootActionId: importAdmission.parentRootActionId, modelId: importAdmission.modelId! } : {}) }
+    if (importAdmission) selection = { ...selection, uiActionNonce: importSlotNonce(importGenerationSlotKey(selection.importSlot!), importAdmission.retryOf),
+      ...(importAdmission.parentRootActionId ? { parentRootActionId: importAdmission.parentRootActionId } : {}),
+      ...(importAdmission.modelId ? { modelId: importAdmission.modelId } : {}) }
     if (selection.operation === 'agent-round' && !agentInitialization) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
     const agentWorkflow = agentInitialization ? undefined : agents.admitWorkflow(selection)
     if (selection.parentRootActionId && repository.budget(selection.parentRootActionId).root.operation === 'editor-inline') throw new Error('GENERATION_EDITOR_CHILD_FORBIDDEN')
@@ -501,7 +502,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const run = deps.database.transaction(() => {
       if (selection.importSlot) {
         const existing = imports.find(selection.importSlot)
-        if (existing) return existing
+        if (existing && !imports.retryable(existing)) return existing
       }
       if (selection.finalizationGenerationSlot) {
         const existing = finalizations.find(selection.finalizationGenerationSlot)
@@ -1444,7 +1445,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     readImportGeneration: (slot: ImportGenerationSlot) => {
       assertCurrent()
       const run = imports.find(slot)
-      return run ? { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, frozenContext: imports.context(run) } : null
+      return run && !imports.retryable(run) ? { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, frozenContext: imports.context(run) } : null
     },
     assertImportGenerationSources: (handle: MainGenerationRunHandle, slot?: ImportGenerationSlot, allowLegacyStyle = false) => {
       const run = requireRun(handle)

@@ -357,7 +357,7 @@ describe('InferBlueprintsPerChapterCommand', () => {
       .catch((error: Error) => error)
 
     expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'GENERATION_STORAGE_FAILED')}`)
-    expect((failure as Error).message).toContain('重新开始')
+    expect((failure as Error).message).toContain('继续导入')
   })
 
   it('explains a blueprint stop of an author-manuscript inference without Start over', async () => {
@@ -778,7 +778,7 @@ describe('InferGlobalSettingsCommand', () => {
       .catch((error: Error) => error)
 
     expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'GENERATION_STORAGE_FAILED', true))
-    expect((failure as Error).message).toContain('重新开始')
+    expect((failure as Error).message).toContain('继续导入')
     expect(log.mock.calls.flat().some(line => String(line).includes('GENERATION_STORAGE_FAILED'))).toBe(true)
   })
 

@@ -110,7 +110,9 @@ it('ordinal gap拒绝，unknown重开不自动重发且预算保留',async()=>{
  const replay=await next.executeImportGeneration({handle,ordinal:0,task})
  expect(replay.run.artifacts).toEqual(receipt.run.artifacts)
  expect(replay.outcome.status).toBe(receipt.outcome.status)
- expect(next.readImportGeneration(f.slot)?.view.ledger?.physicalRequests).toBe(1)
+ expect(replay.run.ledger?.physicalRequests).toBe(1)
+ // 结果未知的运行交不出可提交的结果：重新读 slot 时不再交出它，留给「继续导入」开新运行，自己不重发。
+ expect(next.readImportGeneration(f.slot)).toBeNull()
  expect(f.spy).toHaveBeenCalledTimes(1)
 })
 
