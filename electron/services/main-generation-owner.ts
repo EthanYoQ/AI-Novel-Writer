@@ -1442,10 +1442,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
       return execute({ handle: current.handle, invocationNonce, task }, false, false, true)
     },
-    readImportGeneration: (slot: ImportGenerationSlot) => {
+    /** runId 是同一工作流刚为这个 slot 开的运行：照样交回它的上下文，停下的原因留给请求时报出。 */
+    readImportGeneration: (slot: ImportGenerationSlot, runId?: string) => {
       assertCurrent()
       const run = imports.find(slot)
-      return run && !imports.retryable(run) ? { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, frozenContext: imports.context(run) } : null
+      return run && (run.runId === runId || !imports.retryable(run)) ? { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, frozenContext: imports.context(run) } : null
     },
     assertImportGenerationSources: (handle: MainGenerationRunHandle, slot?: ImportGenerationSlot, allowLegacyStyle = false) => {
       const run = requireRun(handle)

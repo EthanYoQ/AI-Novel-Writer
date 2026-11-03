@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { BeginGenerationRequest } from '../../src/shared/generation-owner-contract'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../src/shared/import-generation'
-import { GenerationRunRepository, textHash, type DurableGenerationRun } from '../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash, type DurableGenerationRun, type GenerationBudgetReceipt } from '../repositories/generation-run-repository'
 import { ImportRunRepository } from '../repositories/import-run-repository'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { captureImportGenerationContext, importGenerationSlotKey } from './import-generation-source'
@@ -34,10 +34,10 @@ export class ImportGeneration {
     const budget = this.runs.budget(rootActionId)
     return ['active', 'paused'].includes(budget.root.status) && !budget.blockedCode
       && !rootBudgetExhausted(budget.policy, budget.attempts, budget.activeElapsedMs)
-      && budget.attempts.every(attempt => this.readable(attempt.attemptId))
+      && budget.attempts.every(attempt => this.readable(attempt.attemptId, budget))
   }
-  private readable(attemptId: string): boolean {
-    try { this.runs.receipt(attemptId); return true } catch { return false }
+  private readable(attemptId: string, budget: GenerationBudgetReceipt): boolean {
+    try { this.runs.receipt(attemptId, budget); return true } catch { return false }
   }
   private attemptIds(run: DurableGenerationRun): string[] {
     return this.db.prepare('SELECT attempt_id FROM generation_attempts WHERE run_id=?').pluck().all(run.runId) as string[]
@@ -47,8 +47,9 @@ export class ImportGeneration {
    * 没留下非空结果，或者结果被丢弃了（渲染端校验没通过时丢弃）。提交前的核对用的是同一条规则。
    */
   rejected(run: DurableGenerationRun): boolean {
+    const budget = this.runs.budget(run.rootActionId)
     return this.attemptIds(run).some(attemptId => {
-      const receipt = this.runs.receipt(attemptId), artifact = receipt.artifact
+      const receipt = this.runs.receipt(attemptId, budget), artifact = receipt.artifact
       return receipt.result?.finishReason !== 'stop' || !artifact || !artifact.text.trim() || textHash(artifact.text) !== artifact.textHash
         || this.db.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) !== 1
     })

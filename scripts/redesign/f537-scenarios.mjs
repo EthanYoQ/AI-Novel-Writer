@@ -89,7 +89,7 @@ export async function holdBlueprintDispatch(app, nth) {
 }
 
 /** 活动时长在请求进行中用完：派发前把根的活动时长推到只差 300 毫秒，并卡住假模型，让主进程的计时到点中止请求、阻断根。 */
-export async function stopOnActiveTime(context) {
+export async function stopOnActiveTime(context, shots = 'f537-stop-time') {
   const { app, page, roots, fake, shoot } = context
   fake.replyImport()
   const hold = await holdBlueprintDispatch(app, 2)
@@ -109,12 +109,12 @@ export async function stopOnActiveTime(context) {
   try { stepError = await failedStepError(page) } finally { fake.gate.release() }
   const root = readDb(context, importRoot)
   await page.waitForTimeout(400)
-  await shoot('f537-stop-time-card')
+  await shoot(`${shots}-card`)
   await runSheet.tab(page, '诊断').click()
   const logLine = runSheet.sheet(page).locator('.run-log-line').filter({ hasText: '停止原因：ROOT_BUDGET_EXHAUSTED' }).first()
   await logLine.scrollIntoViewIfNeeded()
   await page.waitForTimeout(400)
-  await shoot('f537-stop-time-diagnostics')
+  await shoot(`${shots}-diagnostics`)
   assert.equal(root.blocked_code, 'ROOT_BUDGET_EXHAUSTED')
   assert.match(stepError, /模型请求累计时长已到上限/u, stepError)
   assert.match(stepError, /在导入对话框里点「继续导入」，已提交的批次不会重做/u, stepError)

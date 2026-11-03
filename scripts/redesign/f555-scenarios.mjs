@@ -5,12 +5,12 @@ import { isDeepStrictEqual } from 'node:util'
 import * as runSheet from './pages/run-sheet.mjs'
 import * as stage from './pages/stage.mjs'
 import { holdBlueprintDispatch, readDb, referenceNovel, startImport, stopOnActiveTime } from './f537-scenarios.mjs'
-import { seedStageSample } from './scenarios.mjs'
+import { seedStageSample, untilGateHolds } from './scenarios.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
 
 const CHAPTERS = 15
 
-const latestRun = db => db.prepare('SELECT id, stage, status, last_error FROM import_runs ORDER BY rowid DESC LIMIT 1').get()
+const latestRun = db => db.prepare('SELECT id, stage, status, last_error, updated_at FROM import_runs ORDER BY rowid DESC LIMIT 1').get()
 
 /** 每个导入 slot 有几个生成运行：继续导入只为中断的那个 slot 多开一个，已提交的 slot 仍只有一个。 */
 const runsPerSlot = db => db.prepare(`SELECT json_extract(binding_json,'$.sourceManifest.importSlot.stage') AS stage,
@@ -81,9 +81,7 @@ async function closeWindowThenContinue(context) {
   } finally {
     await hold.release()
   }
-  for (const deadline = Date.now() + 60_000; fake.gate.waiting === 0; await new Promise(resolve => setTimeout(resolve, 100))) {
-    assert.ok(Date.now() < deadline, '60 秒内蓝图请求没有发到假模型')
-  }
+  await untilGateHolds(fake.gate, 60_000)
   const before = readDb(context, committedSlots)
   assert.ok(before.some(slot => slot.stage === 'blueprints'), `中断前已有提交的蓝图批次：${JSON.stringify(before)}`)
   const interrupted = readDb(context, latestRun)
@@ -102,7 +100,7 @@ async function closeWindowThenContinue(context) {
 
 /** 活动时长在请求途中用完、根被阻断（#541 的停止说明）后，继续导入接着跑完。 */
 async function activeTimeThenContinue(context) {
-  const stop = await stopOnActiveTime(context)
+  const stop = await stopOnActiveTime(context, 'f555-stop-time-stopped')
   const before = readDb(context, committedSlots)
   const previous = await continueImport(context, 'f555-stop-time-dialog')
   return { stop, stopped: previous, ...await finished(context, 'f555-stop-time-done', before, previous) }
