@@ -36,7 +36,9 @@ export function ReplacementImpactSummary({ impact }: { impact: ReplacementImpact
   return (
     <>
       {chapterParts.length > 0 && (
-        <p>{text(`${chapterParts.join('，')}，可能和新内容不符，不会自动修改。`, `${chapterParts.join('. ')}. They may not match the new text and are not changed automatically.`)}</p>
+        <p>{text(`${chapterParts.join('，')}，可能和新内容不符，不会自动修改。`, `${chapterParts.join('. ')}. ${later.length + planned.length === 1
+          ? 'It may not match the new text and is not changed automatically.'
+          : 'They may not match the new text and are not changed automatically.'}`)}</p>
       )}
       {characters.length > 0 && (
         <p>{text(`${characters.join('、')}的当前状态来自后续章节，没有按新内容重算。`, `The current state of ${characters.join(', ')} comes from later chapters and was not recalculated from the new text.`)}</p>
