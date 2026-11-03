@@ -16,6 +16,24 @@ export type ReopenChapterResult =
   | { success: false; error: string }
 
 /**
+ * 一章的定稿被重开稿替换后，对后续内容的影响（ADR-0024）。每次读取时从稿件、蓝图、角色字段来源和线索确认现算，不存储。
+ * 定稿确认框的预览用同一套算法，那时还没有 finalizationId。
+ */
+export interface ReplacementImpact {
+  chapterNumber: number
+  /** 替换者，也就是本章当前定稿的 finalizationId。「知道了」按它记，同一章再替换一次就是新的提示。预览时为 null。 */
+  finalizationId: string | null
+  /** 有正文、写于本章修改之前的后续章。 */
+  laterChapters: number[]
+  /** 只有蓝图、还没有正文的后续章。 */
+  blueprintOnlyChapters: number[]
+  /** 当前状态里有字段来自后续章节的角色（显示名）。这些字段替换后保留，没有按新内容重算。 */
+  characters: string[]
+  /** 证据不在新正文里、留在旧定稿上的线索确认，它们不再计入线索进度。 */
+  unmovedConfirmations: Array<{ threadTitle: string; evidence: string }>
+}
+
+/**
  * 稿件记着的重开关系：一条指向同一章定稿的依赖。生成稿只引用前面各章的定稿，
  * 所以同章的定稿依赖只会由重开写入。定稿之后这条依赖仍在，说明它当初替换的是哪一份。
  */

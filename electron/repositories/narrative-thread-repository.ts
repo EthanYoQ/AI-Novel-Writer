@@ -138,6 +138,18 @@ export class NarrativeThreadRepository {
     }
   }
 
+  /** 被替换定稿上、证据不在替换者正文里的确认：替换时它们留在原处，不再计入线索进度，由影响提示列出原文。 */
+  static confirmationsNotCarried(replacedDraftId: number, replacementContent: string, db = requireDb()): Array<{ threadTitle: string; evidence: string }> {
+    return (db.prepare(`
+      SELECT plans.title AS threadTitle, confirmations.evidence
+      FROM narrative_thread_confirmations confirmations
+      JOIN narrative_thread_plans plans ON plans.id = confirmations.plan_id
+      WHERE confirmations.draft_id = ?
+      ORDER BY confirmations.id ASC
+    `).all(replacedDraftId) as Array<{ threadTitle: string; evidence: string }>)
+      .filter(confirmation => !narrativeEvidenceInText(confirmation.evidence, replacementContent))
+  }
+
   static list(db = requireDb()): NarrativeThreadView[] {
     const currentFinalizedChapter = (db.prepare(`
       SELECT COALESCE(MAX(chapter_number), 0) AS chapterNumber

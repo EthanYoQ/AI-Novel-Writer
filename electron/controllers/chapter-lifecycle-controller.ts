@@ -9,6 +9,7 @@ import {
   type ChapterDeletionService,
 } from '../services/chapter-deletion-service'
 import { reopenFinalizedChapter } from '../services/chapter-reopen-service'
+import { ReplacementImpactRepository } from '../repositories/replacement-impact-repository'
 import { removeReplacedKnowledge, removeReplacedManuscripts } from '../services/replaced-final-cleanup'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
@@ -102,6 +103,25 @@ export function registerChapterLifecycleController(
     assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
     await removeReplacedManuscripts(projectRoot, draftId)
     return { success: true }
+  })
+
+  register('chapter:replacement-impacts', async (
+    _event,
+    expectedProjectPath: string,
+    projectRoot: string,
+  ) => {
+    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
+    return { success: true, impacts: ReplacementImpactRepository.list() }
+  })
+
+  register('chapter:replacement-impact-preview', async (
+    _event,
+    draftId: number,
+    expectedProjectPath: string,
+    projectRoot: string,
+  ) => {
+    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
+    return { success: true, impact: ReplacementImpactRepository.preview(draftId) }
   })
 
   register('chapter:list-incomplete-deletions', async (

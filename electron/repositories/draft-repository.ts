@@ -46,7 +46,7 @@ function sha256(value: string): string {
     return createHash('sha256').update(value, 'utf8').digest('hex')
 }
 
-function parseDependencies(value: unknown): { dependencies: DraftSourceDependency[]; valid: boolean } {
+export function parseDependencies(value: unknown): { dependencies: DraftSourceDependency[]; valid: boolean } {
     if (typeof value !== 'string') return { dependencies: [], valid: false }
     try {
         const parsed = JSON.parse(value) as unknown
