@@ -348,19 +348,21 @@ function assertExactImportEndpointDeltaKeys(
   }
 }
 
+/** 与解码器一致：名字和关系对象按去掉首尾空白后的文本比较。 */
+function decodedLabel(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
 function unresolvedImportRelationshipTargets(root: Record<string, unknown>, text: UiText): string[] {
   const cards = importInferenceCards(root, text)
-  const names = new Set(cards.map(card => card.name).filter((name): name is string => typeof name === 'string'))
+  const names = new Set(cards.map(card => decodedLabel(card.name)))
   const references = new Map<string, number>()
   for (const card of cards) {
-    const cardName = typeof card.name === 'string' ? card.name : undefined
     const relationships = card.relationships
     if (!Array.isArray(relationships)) continue
     for (const relationship of relationships) {
-      if (!isRecord(relationship) || typeof relationship.target !== 'string') continue
-      if (relationship.target !== cardName && !names.has(relationship.target)) {
-        references.set(relationship.target, (references.get(relationship.target) ?? 0) + 1)
-      }
+      const target = isRecord(relationship) ? decodedLabel(relationship.target) : undefined
+      if (target !== undefined && !names.has(target)) references.set(target, (references.get(target) ?? 0) + 1)
     }
   }
   return [...references.keys()].sort((a, b) => references.get(b)! - references.get(a)!)
@@ -450,15 +452,17 @@ function decodeWithoutDanglingRelationships(
   root: Record<string, unknown>,
   cards: Array<Record<string, unknown>>,
 ): RecoveredImportInference {
-  const names = new Set(cards.map(card => card.name))
+  const names = new Set(cards.map(card => decodedLabel(card.name)))
   const droppedRelationships: DroppedImportRelationship[] = []
   const characterCards = cards.map((card) => {
     if (!Array.isArray(card.relationships)) return card
     const relationships = card.relationships.filter((relationship) => {
-      if (!isRecord(relationship) || names.has(relationship.target)) return true
+      if (!isRecord(relationship)) return true
+      const target = decodedLabel(relationship.target)
+      if (target === undefined || names.has(target)) return true
       droppedRelationships.push({
-        source: String(card.name),
-        target: String(relationship.target),
+        source: String(card.name).trim(),
+        target,
         relation: String(relationship.relation),
       })
       return false

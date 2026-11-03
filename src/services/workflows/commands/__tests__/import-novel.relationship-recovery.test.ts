@@ -366,4 +366,25 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
     expect(relationshipsOf(entries)).toMatchObject({ 陆舟: [], 苏绾: [] })
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(/已丢弃 2 条关系/))
   })
+
+  it('matches names and relationship targets the way the decoder trims them', async () => {
+    const invoke = stubSuccessfulImportIpc()
+    const initial = validInference()
+    initial.characterCards[1].name = '苏绾 '
+    initial.characterCards[0].relationships.push(
+      { target: '苏绾', relation: '同窗' },
+      { target: '韩烁 ', relation: '旧债牵连' },
+    )
+    const generateStream = respondWith([initial, { characterCards: [card('韩烁', 'supporting')] }])
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(JSON.stringify(generateStream.mock.calls[1][0])).toContain(JSON.stringify(JSON.stringify(['韩烁'])).slice(1, -1))
+    const entries = committedEntries(invoke)
+    expect(entries.map(entry => entry.name)).toEqual(['陆舟', '苏绾', '顾岩', '韩烁'])
+    expect(relationshipsOf(entries).陆舟).toEqual([
+      { target: '苏绾', relation: '同窗' },
+      { target: '韩烁', relation: '旧债牵连' },
+    ])
+  })
 })
