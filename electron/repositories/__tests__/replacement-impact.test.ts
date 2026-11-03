@@ -133,7 +133,7 @@ describe('替换定稿对后续内容的影响', () => {
     expect(ReplacementImpactRepository.preview(DraftRepository.getFinalizedByChapter(3)!.id)).toBeNull()
   })
 
-  it('counts a later chapter written after the replacement only when it was written from the replaced final, and always counts a final without a receipt', () => {
+  it('judges a later chapter by which final of the chapter it was written from, otherwise by time, and always counts a final without a receipt', () => {
     const { two } = threeFinalChapters()
     const db = getProjectDb()!
     const oldFinal = db.prepare('SELECT finalization_id, content_snapshot FROM finalization_outbox WHERE draft_id = ?').get(two) as { finalization_id: string; content_snapshot: string }
@@ -141,9 +141,15 @@ describe('替换定稿对后续内容的影响', () => {
     const fromOldFinal = DraftRepository.create({ chapterNumber: 4, source: 'write', content: '第四章：照着旧地图走。', wordCount: 10, sourceDependencies: [
       { kind: 'finalized', draftId: two, chapterNumber: 2, finalizationId: oldFinal.finalization_id, contentHash: sha256(oldFinal.content_snapshot) },
     ] })
-    commitFinal(reopen(2, REVISED_TWO), 2, REVISED_TWO)
+    const replacement = reopen(2, REVISED_TWO)
+    const replacementId = commitFinal(replacement, 2, REVISED_TWO)
     // 第 5 章在替换之后才写，没有引用第 2 章：不算。
     const afterwards = DraftRepository.create({ chapterNumber: 5, source: 'write', content: '第五章：地图已经烧了。', wordCount: 10 })
+    // 第 7 章引用的就是新的第 2 章：时间记得再早也不算。
+    const fromReplacement = DraftRepository.create({ chapterNumber: 7, source: 'write', content: '第七章：灰烬里还有字。', wordCount: 10, sourceDependencies: [
+      { kind: 'finalized', draftId: replacement, chapterNumber: 2, finalizationId: replacementId, contentHash: sha256(REVISED_TWO) },
+    ] })
+    db.prepare("UPDATE drafts SET created_at = datetime('now', '-1 hour') WHERE id = ?").run(fromReplacement)
     // 第 6 章是旧版本留下的定稿，没有发布收据：不管时间怎么记都算。
     const legacy = DraftRepository.create({ chapterNumber: 6, source: 'write', content: '第六章：旧版本的定稿。', wordCount: 10 })
     db.prepare("UPDATE drafts SET status = 'finalized' WHERE id = ?").run(legacy)
