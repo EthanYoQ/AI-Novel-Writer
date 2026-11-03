@@ -4,6 +4,7 @@ import type {
   NarrativeThreadPlanInput,
   NarrativeThreadView,
 } from './narrative-thread'
+import { narrativeEvidenceInText } from './narrative-thread'
 import type { WritingLanguage } from './writing-language'
 import { writingLanguageText as promptLanguageText } from './writing-language'
 
@@ -106,14 +107,13 @@ export function parseNarrativeThreadEventCandidates(
   /** Only for proving already stored graph effects with their original filtered indices. */
   legacyStoredEffect = false,
 ): NarrativeThreadEventCandidate[] {
-  const normalizedSource = finalizedContent.replace(/\s+/gu, '')
   return candidatesFromJson(content, MAX_EVENT_CANDIDATES, legacyStoredEffect).flatMap((candidate) => {
     const value = record(candidate)
     if (!value || !legacyStoredEffect && typeof value.type !== 'string'
       || !['planted', 'progressing', 'resolved', 'abandoned'].includes(String(value.type))) return invalidCandidates(legacyStoredEffect)
     const evidence = boundedText(value.evidence, 240)
     const reason = boundedText(value.reason, 500)
-    if (!evidence || !reason || !normalizedSource.includes(evidence.replace(/\s+/gu, ''))) return invalidCandidates(legacyStoredEffect)
+    if (!evidence || !reason || !narrativeEvidenceInText(evidence, finalizedContent)) return invalidCandidates(legacyStoredEffect)
     return [{ type: value.type as NarrativeThreadEventType, evidence, reason }]
   })
 }

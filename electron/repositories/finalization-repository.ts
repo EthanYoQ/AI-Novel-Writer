@@ -6,6 +6,7 @@ import type { DuplicateFinalizationRepair, RepairedDuplicateChapter } from '../.
 import type { ReopenChapterRequest, ReopenChapterResult, ReopenedFinal } from '../../src/shared/chapter-reopen'
 import type { ReplacedFinalCleanupStepKey } from '../../src/shared/finalization-step-error'
 import { DraftRepository } from './draft-repository'
+import { NarrativeThreadRepository } from './narrative-thread-repository'
 import { PostProcessRepository } from './post-process-repository'
 import { freezeFinalizedCharacterSnapshot, invalidateContinuityProjectionFrom } from './summary-repository'
 
@@ -279,6 +280,9 @@ export class FinalizationRepository {
       }
 
       // 替换不推进连续性后缀水位（ADR-0017 修订）：本章自己的派生投影随来源绑定失效，后续各章的派生状态保留。
+      const replacedDraftIds = (db.prepare(`
+        SELECT id FROM drafts WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
+      `).all(input.chapterNumber, input.draftId) as { id: number }[]).map(row => row.id)
       db.prepare(`
         UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
         WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
@@ -309,6 +313,8 @@ export class FinalizationRepository {
       )
       freezeFinalizedCharacterSnapshot(db, { draftId: input.draftId, finalizationId: input.finalizationId,
         chapterNumber: input.chapterNumber, contentHash: input.contentHash })
+      NarrativeThreadRepository.carryConfirmationsToReplacement(replacedDraftIds,
+        { draftId: input.draftId, content: input.content }, db)
 
       return {
         finalizationId: input.finalizationId,

@@ -8,6 +8,7 @@ import type {
   NarrativeThreadStatus,
   NarrativeThreadView,
 } from '../../src/shared/narrative-thread'
+import { narrativeEvidenceInText } from '../../src/shared/narrative-thread'
 
 function requireDb() {
   const db = getProjectDb()
@@ -93,9 +94,7 @@ export class NarrativeThreadRepository {
       WHERE drafts.id = ? AND drafts.status = 'finalized'
     `).get(input.draftId) as { draft_id: number; chapter_number: number; chapter_title: string; content_snapshot: string } | undefined
     if (!source) throw new Error('NARRATIVE_THREAD_EVENT_SOURCE_NOT_FINALIZED')
-    const normalizedEvidence = evidence.replace(/\s+/gu, '')
-    const normalizedContent = source.content_snapshot.replace(/\s+/gu, '')
-    if (!normalizedContent.includes(normalizedEvidence)) {
+    if (!narrativeEvidenceInText(evidence, source.content_snapshot)) {
       throw new Error('NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE')
     }
     if (!this.getPlan(input.planId, db)) throw new Error('NARRATIVE_THREAD_PLAN_NOT_FOUND')
@@ -114,6 +113,28 @@ export class NarrativeThreadRepository {
       chapterNumber: source.chapter_number,
       chapterTitle: source.chapter_title,
       createdAt: created.createdAt,
+    }
+  }
+
+  /**
+   * 一章的定稿被重开稿的新定稿替换时，在替换事务里调用（ADR-0024）。被替换定稿上的确认，证据原文仍出现在
+   * 新定稿正文里的改挂到新定稿；其余留在旧定稿上，不再进线索折叠，由影响提示列出原文。
+   * 同一事件在新定稿上已有确认时保留原处（OR IGNORE），不让唯一约束打断定稿。
+   */
+  static carryConfirmationsToReplacement(
+    replacedDraftIds: readonly number[],
+    replacement: { draftId: number; content: string },
+    db = requireDb(),
+  ): void {
+    if (replacedDraftIds.length === 0) return
+    const confirmations = db.prepare(`
+      SELECT id, evidence FROM narrative_thread_confirmations
+      WHERE draft_id IN (${replacedDraftIds.map(() => '?').join(', ')})
+      ORDER BY id ASC
+    `).all(...replacedDraftIds) as { id: number; evidence: string }[]
+    const move = db.prepare('UPDATE OR IGNORE narrative_thread_confirmations SET draft_id = ? WHERE id = ?')
+    for (const confirmation of confirmations) {
+      if (narrativeEvidenceInText(confirmation.evidence, replacement.content)) move.run(replacement.draftId, confirmation.id)
     }
   }
 
