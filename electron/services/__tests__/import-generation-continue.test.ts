@@ -140,3 +140,17 @@ it('模型正常结束、还没提交时进程退出：「继续导入」复用�
   expect(f.db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get()).toBe(10)
   expect(f.spy).toHaveBeenCalledTimes(4)
 }, 60_000)
+
+it('同一工作流里两次请求之间额度用完：刚开的这一批仍读得到上下文，请求时报额度用完', async () => {
+  const f = importGenerationFixture(cleanup, 10)
+  await runGlobal(f)
+  await runStyle(f)
+  await runBlueprints(f, f.chapters.slice(0, 5))
+  const rootActionId = f.db.prepare('SELECT root_action_id FROM generation_roots').pluck().get() as string
+  f.db.prepare('UPDATE generation_roots SET active_elapsed_ms=? WHERE root_action_id=?').run(rootBudget(f, rootActionId).maxActiveElapsedMs, rootActionId)
+  const execution = ImportRunRepository.startOrResume(RUN, '合成执行器').execution
+  const slot = blueprintSlot(RUN, f.chapters.slice(5))
+  const { handle, receipt } = generateSlot(f, slot, execution, f.owner, rootActionId)
+  await expect(receipt).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
+  expect(f.owner.readImportGeneration(slot, handle.runId)?.view.handle.runId).toBe(handle.runId)
+}, 60_000)
