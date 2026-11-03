@@ -167,7 +167,7 @@ node scripts/redesign/drive.mjs --scenario idle-memory --out <目录>
 | `stage-close-key` | 书房里、搜索框里各按一次 Ctrl W，页面都拦下（`defaultPrevented`），应用仍在。应用菜单有 CommandOrControl+W 的「关闭」，但驱动注入的按键到不了菜单快捷键，所以断言的是拦截 | 搜索框 | 否 | 第 4 条 |
 | `stage-reopen` | 从作品菜单回到书房，用 Ctrl K「打开《灯塔》」重新打开同一部作品（新的项目会话），再次落到最后一章在写的第 4 章 | 第 4 章正文 | 否 | 第 8 条 |
 | `stage-partial-blueprint` | 规划 100 章、只有 12 章蓝图：蓝图算完成，落点仍是正文第 4 章 | 第 4 章正文 | 否 | 第 6 条 |
-| `stage-revert-after-final` | 第 1 章定稿后再建一份新草稿（版本历史「回退到此版本」的效果）：第 1 章回到草稿，但最后一章在写的仍是第 4 章，打开作品落在第 4 章；章节列表里第 1 章按草稿显示，点它打开的是新草稿 | 第 1 章新草稿 | 否 | 第 7 条 |
+| `stage-revert-after-final` | 第 1 章定稿后重新打开，重开稿换成回退的内容（定稿章上「回退到此版本」的效果，ADR-0024）：第 1 章回到草稿，但最后一章在写的仍是第 4 章，打开作品落在第 4 章；章节列表里第 1 章按草稿显示，点它打开的是重开稿 | 第 1 章重开稿 | 否 | 第 7 条 |
 | `stage-new-project` | 新外壳里新建作品：设定进行中、其余未开始；外壳文字对比度、进度环半径 8.5、设定说明在名字下一行、作品资料图标跟随行文字色 | 新作品首屏 | 否 | 第 20、23、24 条 |
 | `stage-focus-search` | 沉浸写作里 Ctrl F 打开正文搜索，Esc 只关搜索框、不退出沉浸；`after` 再按 Esc 退出沉浸 | 沉浸写作 | 否 | 第 10 条 |
 | `stage-tour` | 30–60 秒的导览：四个阶段、Ctrl K、Ctrl P、关标签、沉浸写作、写一章看运行胶囊与侧页。配 `--video` 录评审视频 | 写完一章 | 是 | Review gate |
@@ -568,3 +568,12 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | `d77-capacity` | 写第 3 章，正文提示词的字节数超过作者填的上下文窗口。请求不在发出前被拒绝：短细纲与正文各发一次，正文落到编辑器里（`measured.promptBytes`、`measured.chats`） | 第 3 章正文 | 是 | #77 |
 | `d77-context-length` | 写第 3 章，假模型以上下文超长拒绝第一个请求，之后不自动重发（`measured.chats` 只有一次 `context-length`）。运行卡片显示登记的说明（换用上下文更长的模型、调低最大输出 Tokens、精简本章要求与参考材料）和「本次未保存草稿或正文章节。」；不出现「上下文窗口」「请调整章节要求」和服务商原文（`measured.card`） | 失败的运行卡片 | 是 | #77 |
 | `d77-output-allowance` | 设置里编辑作者 64K 模型、展开高级设置：有效输出额度那句说明新开始的生成每次最多发这么多、旧版本开始的运行可能按 32,768 封顶（`d77-output-allowance-set`）；把最大输出 Tokens 和模型输出容量清成 0 后，改说还没有有效输出额度，不出现「未设置」（`d77-output-allowance-unset`）。不保存 | 清空后的高级设置 | 是 | #77 |
+
+## 重新打开已定稿的章（#516 第 2、3 块，ADR-0024）
+
+场景在 `scripts/redesign/reopen-scenarios.mjs`。种子是示例作品去掉第 4 章草稿：第 1、2 章导入定稿，第 3 章在场景里定稿，第 4–12 章只有蓝图。假模型用 `fake.replyCharacterState(characterStateReply)`（来自 `f491-scenarios.mjs`）回角色状态。驱动包一层主进程的 `project:open` 记下界面打开作品的会话，用它读知识库；重启之后的数据在场景最后由驱动自己打开作品读。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `reopen-refinalize` | 第 3 章定稿后重开第 2 章（`reopen-1-final-reopen-button`、`reopen-2-banner`），末尾加一句、直接修稿、全部用修稿合并后定稿。确认框预览「第 3 章写于这次修改之前，第 4–12 章只有蓝图」和状态来自后续章节的林岚（`reopen-3-finalize-preview`），后处理全部成功；本章顶部「第 2 章已修改」（`reopen-4-impact-notice`），第 3 章有「写于第 2 章修改之前」（`reopen-4b-later-chapter`），v1 标为已被替换的定稿（`reopen-5-superseded`）。点「知道了」后两处一起消失，导入时发布的旧正文文件已删；第 4 章照常能写；重启后不再提示。再重开替换一次（`reopen-6-second-replacement`）：预览含刚写的第 4 章，上一份定稿的知识库文档和正文文件在新的导入之后删掉，提示重新出现；库里 v1、v2 已被替换，v3 是权威定稿 | 驱动读库后的页面 | 是 | #516 |
+| `reopen-refinalize-edited-txt` | 第 3 章定稿后重开、改一句再放弃修改：版本、正文文件、知识库都和重开前一样，横幅消失（`reopen-7-discarded`）。手改它的正文文件后重开替换：「删除旧版本的正文文件」失败并写出保留的文件名，其余各步成功，旧知识库文档照常删除，手改的文件原样保留，新定稿另起带后缀的文件，本章仍可再重开（`reopen-8-edited-txt-kept`） | 后处理结果 | 是 | #516 |
