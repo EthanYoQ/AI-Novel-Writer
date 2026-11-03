@@ -220,7 +220,6 @@ const ERROR_KEYS = {
   CHAPTER_DELETE_LEGACY_OPERATION_FROZEN: 'error.chapterDeleteLegacyOperationFrozen',
   // 拼进「正文已删除，但派生投影仍待清理：……」与「重试清理失败」，所以文案不带句末标点；逐项原因在删除清理提示里。
   CHAPTER_DELETE_CLEANUP_INCOMPLETE: 'error.chapterDeleteCleanupIncomplete',
-  // 重新打开已定稿的章（ADR-0024）：重开入口与建稿守卫的拒绝原因。
   CHAPTER_FINALIZED_REOPEN_REQUIRED: 'error.chapterFinalizedReopenRequired',
   CHAPTER_REOPEN_ALREADY_OPEN: 'error.chapterReopenAlreadyOpen',
   CHAPTER_REOPEN_NOT_FINALIZED: 'error.chapterReopenNotFinalized',

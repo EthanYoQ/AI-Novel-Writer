@@ -71,7 +71,6 @@ describe('manuscript publisher target seam', () => {
 })
 
 describe('被替换的旧正文文件', () => {
-  // 占用时的重试只在 Windows 上做，其他平台第一次失败就把错误抛出，没有「等待期间被改」这回事。
   it.skipIf(process.platform !== 'win32')('删除被占用、等待重试期间作者保存了修改：重新比对，改过的保留', () => {
     const projectRoot = makeRoot()
     const published = '第1章 雾钟\n\n当初发布的正文。'

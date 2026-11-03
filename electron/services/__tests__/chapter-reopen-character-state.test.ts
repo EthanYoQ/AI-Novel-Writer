@@ -81,7 +81,6 @@ function replaceFinal(chapterNumber: number, body: string): number {
   return opened.draftId
 }
 
-/** 三章都定稿并派生了角色状态（位置来自第 2 章，近况来自第 3 章），然后重开第 2 章、把旅店改成西城客栈再定稿。 */
 function replaceMiddleChapter() {
   openProject()
   const one = finalizeNew(1, '第一章：林岚在北塔顶层找到铜钥匙。')

@@ -62,11 +62,6 @@ export class GenerationDraftEffects {
       FROM generation_attempts WHERE ${batchOf} IS NOT NULL ORDER BY rowid`).all() as (AttemptRow & { batch_id: string })[]
     return { commits: groupByBatch(rows), unreadable }
   }
-  /**
-   * 还没写完的批量写作（下一章不为空）已经写过的章。这些章再多出一稿，续跑按最高版本核对收据就对不上
-   * （GENERATION_BATCH_DRAFT_REPLACED）。读出来已经续不上（报 GENERATION_ 开头的码）或来源已变的批次跳过：批量写作也没有放弃入口。
-   * 其他错误照抛，重开失败，不当成续不上而放行。
-   */
   unfinishedBatchChapters(projectId: string): ReadonlySet<number> {
     const { commits } = this.listedBatchCommits()
     const roots = this.db.prepare(`SELECT run_id FROM generation_runs WHERE json_valid(binding_json)

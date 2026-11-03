@@ -1279,12 +1279,10 @@ export interface ChapterLifecycleChannels {
     args: [expectedProjectPath: string]
     return: { success: boolean; operations?: ChapterDeletionOperation[]; error?: string }
   }
-  /** 重新打开已定稿的一章（ADR-0024），返回打开着的重开稿。 */
   'chapter:reopen': {
     args: [request: ReopenChapterRequest, expectedProjectPath: string]
     return: ReopenChapterResult
   }
-  /** 定稿后处理的清理步骤：删除本章被替换的旧定稿收进知识库的文档、旧实体稿（ADR-0024）。draftId 是本章当前定稿。 */
   'chapter:remove-replaced-knowledge': {
     args: [draftId: number, expectedProjectPath: string]
     return: { success: boolean; error?: string }
@@ -1293,7 +1291,6 @@ export interface ChapterLifecycleChannels {
     args: [draftId: number, expectedProjectPath: string]
     return: { success: boolean; error?: string }
   }
-  /** 当前定稿由重开稿替换而来的各章，对后续内容的影响（ADR-0024）。「知道了」由渲染端按 finalizationId 记。 */
   'chapter:replacement-impacts': {
     args: [expectedProjectPath: string]
     return: { success: true; impacts: ReplacementImpact[] } | { success: false; error: string }

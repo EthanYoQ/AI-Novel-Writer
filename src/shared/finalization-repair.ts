@@ -10,7 +10,6 @@ export interface RepairedDuplicateChapter {
   keptDraftId: number
   keptVersion: number
   superseded: SupersededFinalizationLeftover[]
-  /** 已在保留那份定稿的后处理里登记清理旧知识库文档或旧实体稿的步骤，作者点「重试」即可清理。 */
   cleanupRegistered: boolean
 }
 

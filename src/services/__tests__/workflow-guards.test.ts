@@ -199,7 +199,6 @@ describe('character regeneration guard locale', () => {
 
 describe('repair post-processing guard', () => {
   type Step = { stepKey: string; ok: boolean }
-  /** 最新定稿是第 3 章；第 2 章当前定稿的最新后处理跑批是 steps，null 表示从没跑过。 */
   function chapterTwoRun(steps: Step[] | null) {
     vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (_session: unknown, channel: unknown) => {
       switch (channel) {

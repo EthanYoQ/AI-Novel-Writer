@@ -147,7 +147,6 @@ export function useVersionHistory(projectKey: string) {
   /**
    * 用这一稿的正文新建一稿（回滚草稿），原有各稿都保留；正文为空的旧稿照样回退成一份空稿。没有新建（会话已切换、旧稿不存在）时返回 null；
    * 已新建时返回数据库分配的版本号，重读列表失败、读不到版本号时 version 为 null。
-   * 已定稿的章不能直接新建草稿，以这一稿的正文重新打开本章（ADR-0024）；本章已有一份内容相同的重开稿时不再新建，created 为 false。
    */
   const createRollbackDraft = useCallback(async (versionId: number, finalized: boolean): Promise<{ version: number | null; created: boolean } | null> => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)

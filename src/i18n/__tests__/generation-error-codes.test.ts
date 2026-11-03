@@ -77,7 +77,6 @@ const COVERED_PREFIXES = [
   'IMPORT_RUN_',
   // 定稿、实体稿、修订、恢复稿、连续性摘要、一致性豁免、后处理与章节删除（#474 B5）。
   'CHAPTER_DELETE_',
-  // 重新打开已定稿的章（ADR-0024）：经 chapter:reopen 与 db:draft-create 的 { error } 到章节页与版本历史。
   'CHAPTER_REOPEN_',
   'CHAPTER_FINALIZED_',
   'FINALIZATION_COMMIT_',
@@ -538,7 +537,6 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'CHAPTER_DELETE_RECEIPT_CORRUPT',
     'CHAPTER_DELETE_REQUEST_MISMATCH',
     'CHAPTER_DELETE_TARGET_MISMATCH',
-    // 重开请求的形状（ADR-0024）：界面只对列表里已定稿的这一章发起，章号与版本号来自库内记录。
     'CHAPTER_REOPEN_REQUEST_INVALID',
     // #474 B5：定稿快照的形状、会话与哈希，定稿收据与发布记录、导出快照的一致性，实体稿目标路径的边界。
     // 界面从冻结的编辑器快照与库内收据构造这些请求；碰到说明代码缺陷或作品库、正文文件夹被外部改坏。

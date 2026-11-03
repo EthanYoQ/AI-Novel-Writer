@@ -43,7 +43,6 @@ function finalize(draftId: number): void {
   })
 }
 
-/** 定稿章的「回退到此版本」经重开：以所选版本的正文为初始内容（ADR-0024）。 */
 function rollback(chapterNumber: number, fromDraftId: number): number {
   const reopened = FinalizationRepository.reopen({ chapterNumber, initialDraftId: fromDraftId })
   if (!reopened.success) throw new Error(reopened.error)

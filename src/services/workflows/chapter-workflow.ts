@@ -538,7 +538,6 @@ export function createRepairFinalizeWorkflow(
           // 按行与整卡重试都按当前状态重算卡上的安排：界面可能还拿着旧状态，重试结果也一样的失败不重跑。
           const { getChapterFinalizeScope, readPostProcessStatus } = await import('./workflow-utils')
           const { planFinalizationRetry } = await import('../../shared/finalization-step-error')
-          // 当前定稿从没跑过后处理（例如替换后还没来得及跑就退出了）时整套跑一遍（ADR-0024）。
           const current = await readPostProcessStatus(projectPath, getChapterFinalizeScope(chapterNumber), projectSession)
           let stepKeys: readonly string[] | undefined
           if (current) {

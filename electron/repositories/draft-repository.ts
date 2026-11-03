@@ -31,7 +31,6 @@ export interface DraftMeta {
     wordCount: number
     sourceDependencies: DraftSourceDependency[]
     dependenciesStale: boolean
-    /** 有发布收据的定稿或已被替换的定稿才有；旧版本留下的定稿与工作稿为 null。 */
     finalizationId: string | null
     createdAt: string
     updatedAt: string
@@ -310,7 +309,6 @@ function rowToMeta(
     }
 }
 
-/** 本章打开着的重开稿（ADR-0024）；每章至多一份，由 reopen 与 create 在写事务里保证。 */
 function openReopenDraft(db: BetterSqlite3.Database, chapterNumber: number): { id: number; version: number } | null {
     const rows = db.prepare(`
       SELECT id, version, status, source_dependencies FROM drafts
@@ -331,10 +329,6 @@ function openReopenDraft(db: BetterSqlite3.Database, chapterNumber: number): { i
     return open ? { id: open.id, version: open.version } : null
 }
 
-/**
- * 已定稿的章只能经重开稿再写：新稿要带一条指向本章当前权威定稿的依赖（是否仍指向权威定稿已由
- * dependenciesAreCurrent 核过），且本章没有另一份打开的重开稿。
- */
 function assertChapterAcceptsNewDraft(
     db: BetterSqlite3.Database,
     chapterNumber: number,

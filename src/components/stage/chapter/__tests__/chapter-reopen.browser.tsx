@@ -58,7 +58,6 @@ const click = (name: string | RegExp) => act(async () => page.getByRole('button'
 const menuItems = () => [...document.querySelectorAll('[role="menuitem"]')].map(item => item.textContent?.trim())
 const refresh = () => act(async () => globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts'], projectPath: SESSION.projectPath, projectSession: SESSION }))
 
-/** 第 3 章被替换：第 4、6–8 章写于替换之前，第 9 章只有蓝图，两个角色的状态来自后续章，一条线索确认没能改挂。 */
 const impactOnThree = (finalizationId: string): ReplacementImpact => ({
   chapterNumber: 3, finalizationId, laterChapters: [4, 6, 7, 8], blueprintOnlyChapters: [9], characters: ['林舟', '老周'],
   unmovedConfirmations: [{ threadTitle: '匿名信', evidence: '他想起母亲说过，这座车站在三十年前就该拆了。' }],

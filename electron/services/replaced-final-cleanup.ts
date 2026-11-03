@@ -5,7 +5,6 @@ import { isWindowsFileBusyError } from '../utils/windows-file-busy-retry'
 import { knowledgeBaseLoader } from './knowledge-base-loader'
 import { removeManuscriptIfUnchanged, serializeManuscript } from './manuscript-publisher'
 
-/** 知识库里的文档副本与删除；测试换成桩。 */
 export interface ReplacedKnowledgeStore {
   readCopy(projectRoot: string, documentId: string): Promise<{ available: boolean; contentHash?: string; edited?: boolean }>
   remove(projectRoot: string, documentId: string): Promise<void>
@@ -31,7 +30,6 @@ interface ReplacedFinal {
   knowledge_document_id: string
 }
 
-/** 这份定稿与本章被它（及更早的替换）换下的各份定稿；数据从 superseded 行派生，不另存（ADR-0024）。 */
 function readReplacement(draftId: number) {
   const db = getProjectDb()
   if (!db) throw new Error('PROJECT_NOT_OPEN')
@@ -61,11 +59,6 @@ function readReplacement(draftId: number) {
 
 const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
 
-/**
- * 删除本章被替换的旧定稿收进知识库的文档。新定稿的文档登记之前不动旧的，免得这一章在知识库里空着。
- * 章名没改时，导入新文档那一步已按同名换掉旧文档（vector-store 的 pruneSupersededDocuments），这里清其余的。
- * 副本和旧定稿正文对不上的（作者以前改过）保留并报错，重试也不删。没有完整副本的无从改起，照常删。
- */
 export async function removeReplacedKnowledge(
   projectRoot: string,
   draftId: number,
@@ -87,11 +80,6 @@ export async function removeReplacedKnowledge(
   if (kept) throw new Error('FINALIZATION_REPLACED_KNOWLEDGE_EDITED')
 }
 
-/**
- * 删除本章被替换的旧定稿的实体稿。新定稿的实体稿写入之前不动旧的；和当前定稿同名的文件属于当前定稿，不碰。
- * 旧文件删掉后原名会被后来的定稿再用，所以同一个文件名按用过它的各份旧定稿的发布内容一起认。
- * 内容仍是当初发布的样子才删，改过的保留；被占用删不掉的单独报。错误码后带 JSON 文件名列表，说明里列出。
- */
 export async function removeReplacedManuscripts(projectRoot: string, draftId: number): Promise<void> {
   const { current, replaced } = readReplacement(draftId)
   if (current.publication_status !== 'published') throw new Error('FINALIZATION_REPLACED_MANUSCRIPT_PUBLICATION_REQUIRED')

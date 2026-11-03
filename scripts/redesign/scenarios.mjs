@@ -1198,7 +1198,6 @@ export const STAGE_SCENARIOS = {
   /** 第 1 章回到了草稿，但最后一章在写的仍是第 4 章，所以打开作品落在第 4 章；从章节列表点第 1 章打开的是这份新草稿。 */
   'stage-revert-after-final': { model: false, shell: 'stage',
     setup: context => seedStageSample(context, { landOnChapter3: false, beforeReload: async ({ page, invoke, path, session }) => {
-      // 已定稿的章不能直接新建草稿，回退走重新打开（ADR-0024）：重开第 1 章，把重开稿的正文换成回退的内容。
       const reopened = await invoke(page, 'chapter:reopen', { chapterNumber: 1 }, path, session)
       assert.equal(reopened.success, true, reopened.error)
       const updated = await invoke(page, 'db:draft-update-content', reopened.draftId, STAGE_SAMPLE.reverted, countUnits(STAGE_SAMPLE.reverted), path, session)

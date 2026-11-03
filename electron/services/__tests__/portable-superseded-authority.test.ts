@@ -117,7 +117,6 @@ describe('备份恢复的项目替换一章定稿', { timeout: 60_000 }, () => {
     getProjectDb()!.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(3,1,1,'draft',3,0)").run()
     finalizeChapter(4, 1, '第一章改稿：雾从海面一层一层爬上来。', 2)
     const restored = await exportAndRestore(base, source, 'older-version')
-    // #516 第一个 PR 时期，定稿之前留下的旧稿可以直接定稿替换，留下「较低版本是定稿」的数据；现在只有重开稿能替换（ADR-0024），给旧稿补上重开关系来造出同样的数据。
     registerAsReopenDraft(getProjectDb()!, 3)
 
     FinalizationRepository.commit({ finalizationId: `finalization-${randomUUID()}`, draftId: 3, chapterNumber: 1,

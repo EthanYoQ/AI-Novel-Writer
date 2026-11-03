@@ -1,4 +1,3 @@
-// #516 第 2、3 块实机场景（ADR-0024）：已定稿的章重新打开修改，新稿定稿后替换原定稿，后续章节只提示、不跟着改。
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -13,14 +12,12 @@ import { STAGE_SAMPLE } from './stage-sample.mjs'
 
 const FIRST_EDIT = '她在堤脚多站了一会儿，直到潮水漫过最低的那道刻痕。'
 const REVISED_LINE = '林岚把那道刻痕的高度记进了测绘本。'
-/** 直接修稿的回复：在作者改过的正文后面加一段。夹具默认回的正文比第 2 章短，会被「修稿结果明显短于原稿」拦下。 */
 const directRevision = prompt => prompt.includes('以具体、克制的修改') && prompt.includes(FIRST_EDIT)
   ? `${STAGE_SAMPLE.finalized[2]}${FIRST_EDIT}\n\n${REVISED_LINE}` : null
 const SECOND_EDIT = '回到旧港时，她在地图背面记下了那道刻痕的高度。'
 const running = page => stage.root(page).locator('.stage-capsule:not([data-tone="ok"])')
 const ownNotice = (page, chapterNumber) => chapterView.view(page).locator('.pi-notice').filter({ hasText: `第 ${chapterNumber} 章已修改` })
 
-/** 记下界面最近一次打开作品拿到的会话（包一层主进程的 project:open），驱动读知识库时不必重开作品打断界面。 */
 async function trackOpenedSession(app) {
   await app.evaluate(({ ipcMain }) => {
     const handlers = ipcMain._invokeHandlers
@@ -34,7 +31,6 @@ async function trackOpenedSession(app) {
   })
 }
 
-/** 记下主进程每次答复的替换影响。重启后是新进程，要重新装。 */
 async function trackImpactLoads(app) {
   await app.evaluate(({ ipcMain }) => {
     const handlers = ipcMain._invokeHandlers
@@ -51,10 +47,6 @@ async function trackImpactLoads(app) {
 
 const impactLoadCount = app => app.evaluate(() => globalThis.__driveImpactLoads.length)
 
-/**
- * 等界面在 since 之后读到一次带着第 chapterNumber 章替换的影响，再等界面画两帧。
- * 之后提示还不显示，才是被「知道了」隐藏的，而不是数据还没到。
- */
 async function impactLoaded(app, page, since, chapterNumber) {
   const deadline = Date.now() + 30_000
   for (;;) {
@@ -72,7 +64,6 @@ async function uiSession(app) {
   return session
 }
 
-/** 示例作品去掉第 4 章的草稿：第 3 章定稿后，第 4 章起都只有蓝图，第 4 章就是下一章要写的。 */
 async function seedWithoutChapter4(context) {
   await trackOpenedSession(context.app)
   await trackImpactLoads(context.app)
@@ -83,7 +74,6 @@ async function seedWithoutChapter4(context) {
   } })
 }
 
-/** 定稿后处理列出了角色状态更新，每一步都已成功或失败，且没有进行中的运行。 */
 const postProcessSettled = page => page.waitForFunction(() => {
   const rows = [...document.querySelectorAll('[aria-label="定稿后处理"] li')]
   return rows.some(row => row.querySelector('b')?.textContent === '角色状态更新')
@@ -91,9 +81,7 @@ const postProcessSettled = page => page.waitForFunction(() => {
     && !document.querySelector('.stage-capsule:not([data-tone="ok"])')
 }, null, { timeout: 90_000 })
 
-/** 作品目录下第 n 章的正文文件（定稿发布在作品根目录，同名时带碰撞后缀）。 */
 const manuscripts = (projectPath, chapterNumber) => fs.readdirSync(projectPath).filter(name => name.startsWith(`第${chapterNumber}章`)).sort()
-/** 知识库里第 n 章定稿导入的文档 id；不传 session 时用界面的会话。 */
 async function knowledgeDocuments(context, chapterNumber, session) {
   const active = session ?? await uiSession(context.app)
   const listed = await context.invoke(context.page, 'kb:list-documents', active.projectPath, active)
@@ -101,14 +89,12 @@ async function knowledgeDocuments(context, chapterNumber, session) {
   return listed.filter(document => document.finalizedChapter === chapterNumber).map(document => document.id).sort()
 }
 
-/** 在定稿页点「重新打开修改」并确认，等重开横幅出现。 */
 async function reopen(page, chapterNumber) {
   await chapterView.view(page).getByRole('button', { name: '重新打开修改', exact: true }).click()
   await page.getByRole('dialog', { name: `重新打开第 ${chapterNumber} 章？` }).getByRole('button', { name: '重新打开', exact: true }).click()
   await chapterView.view(page).getByText(`正在修改已定稿的第 ${chapterNumber} 章`).waitFor({ state: 'visible', timeout: 30_000 })
 }
 
-/** 在正文末尾加一句并保存。 */
 async function appendSentence(page, sentence) {
   await chapterView.prose(page).click()
   await page.keyboard.press('ControlOrMeta+End')
@@ -116,7 +102,6 @@ async function appendSentence(page, sentence) {
   await stage.saveProse(page)
 }
 
-/** 打开定稿确认框（修稿已合并时点主按钮，否则从「更多」里点），交给 inspect 截图、读预览，再确认定稿，等后处理跑完。 */
 async function finalizeReopened(page, chapterNumber, inspect) {
   const button = chapterView.view(page).getByRole('button', { name: '定稿', exact: true })
   if (await button.count() > 0) await button.click()
@@ -130,13 +115,11 @@ async function finalizeReopened(page, chapterNumber, inspect) {
   return observed
 }
 
-/** 等确认框里的影响预览出现，读出整段文字。 */
 async function readPreview(dialog) {
   await dialog.getByText('后面的内容不会跟着改').waitFor({ state: 'visible', timeout: 30_000 })
   return dialog.innerText()
 }
 
-/** 驱动自己打开作品读第 n 章：各稿状态、权威正文、知识库文档。界面的会话随之失效，所以放在场景最后。 */
 async function readChapter(context, projectPath, chapterNumber) {
   await context.reload()
   const { page, invoke } = context
@@ -151,11 +134,6 @@ async function readChapter(context, projectPath, chapterNumber) {
 }
 
 export const REOPEN_SCENARIOS = {
-  /**
-   * 种子：第 1、2 章导入定稿，第 3 章在界面定稿，第 4–12 章只有蓝图。重开第 2 章改一句、直接修稿、合并、定稿：
-   * 新稿成为权威定稿，原定稿成了已被替换的定稿，确认框与定稿后的提示列出第 3 章和只有蓝图的各章，第 4 章照常能写，
-   * 点过「知道了」重启后不再提示。再重开替换一次：上一次导入知识库的文档和正文文件在新的导入之后删掉，提示重新出现。
-   */
   'reopen-refinalize': { model: true, shell: 'stage', setup: seedWithoutChapter4, run: async context => {
     const projectPath = context.samplePath
     context.fake.replyCharacterState(characterStateReply)
@@ -230,7 +208,6 @@ export const REOPEN_SCENARIOS = {
     await impactLoaded(context.app, page, 0, 2)
     observed.noticeAfterRestart = await ownNotice(page, 2).count()
 
-    // 再替换一次：这次被替换的定稿是上面重开出来的，有自己导入的知识库文档和正文文件。
     await reopen(page, 2)
     await appendSentence(page, SECOND_EDIT)
     observed.secondPreview = await finalizeReopened(page, 2, readPreview)
@@ -282,10 +259,6 @@ export const REOPEN_SCENARIOS = {
     return observed
   } },
 
-  /**
-   * 第 3 章在界面定稿后先重开再放弃修改：章节回到原定稿，不留稿件、文件和知识库文档。然后手改它的正文文件，再重开替换：
-   * 旧知识库文档照常删除，手改过的旧文件保留，「删除旧版本的正文文件」一步失败并写明保留了哪个文件，其余各步成功。
-   */
   'reopen-refinalize-edited-txt': { model: true, shell: 'stage', setup: seedWithoutChapter4, run: async context => {
     const { page } = context
     const projectPath = context.samplePath

@@ -122,7 +122,6 @@ export interface FinalizedCharacterContext extends ProjectEpoch {
     fields: CharacterFieldSnapshot[]
   }>
 }
-/** 字段来自这一章更早的一份定稿（已被替换或删掉），并且这次重跑可以把它重新绑定到当前定稿。 */
 function fromReplacedFinal(context: FinalizedCharacterContext, characterId: string, field: CharacterFieldSnapshot, originProjectId?: string): boolean {
   const previous = field.sourceOrder
   // chapterNumber identifies the chapter within the verified project lineage; draft IDs identify versions, not chapters.
@@ -141,7 +140,6 @@ export function finalizedCharacterPromptCards(context: FinalizedCharacterContext
     fields: character.fields.filter(field => !(field.field === 'recentEvents' && fromReplacedFinal(context, character.characterId, field, originProjectId)))
       .map(field => ({ field: field.field, value: field.value, provenance: field.provenance })) }))
 }
-/** 重跑角色状态时要模型按现在的正文逐项重新给出的字段：它们来自本章被替换的旧定稿，不重新给出就一直不进写作提示（ADR-0024）。 */
 export function replacedFinalFields(context: FinalizedCharacterContext, originProjectId?: string) {
   return context.characters.flatMap(character => {
     const fields = character.fields.filter(field => fromReplacedFinal(context, character.characterId, field, originProjectId)).map(field => field.field)

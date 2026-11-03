@@ -282,11 +282,9 @@ export class FinalizationRepository {
       const replacedDraftIds = (db.prepare(`
         SELECT id FROM drafts WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
       `).all(input.chapterNumber, input.draftId) as { id: number }[]).map(row => row.id)
-      // 已定稿的章只能由重开稿的新定稿替换（ADR-0024）：定稿之前留下的工作稿、重开关系已过期的稿都不能直接顶替。
       if (replacedDraftIds.length > 0 && DraftRepository.findOpenReopenDraft(input.chapterNumber, db)?.id !== input.draftId) {
         throw new Error('CHAPTER_FINALIZED_REOPEN_REQUIRED')
       }
-      // 替换不推进连续性后缀水位（ADR-0017 修订）：本章自己的派生投影随来源绑定失效，后续各章的派生状态保留。
       db.prepare(`
         UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
         WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
@@ -338,11 +336,6 @@ export class FinalizationRepository {
     return transaction()
   }
 
-  /**
-   * 重新打开已定稿的一章（ADR-0024）：把当前权威定稿复制成一份新的工作稿，依赖里记下重开的是哪一份定稿
-   * （没有发布收据的旧定稿记 legacy-finalized，正文取 contents.body）。每章至多一份打开的重开稿，已有就原样返回。
-   * initialDraftId 是版本历史「回退到此版本」所选的稿，用它的正文作初始内容。
-   */
   static reopen(request: ReopenChapterRequest): ReopenChapterResult {
     if (!Number.isSafeInteger(request?.chapterNumber) || request.chapterNumber < 1
       || (request.initialDraftId !== undefined && (!Number.isSafeInteger(request.initialDraftId) || request.initialDraftId < 1))) {
@@ -402,11 +395,6 @@ export class FinalizationRepository {
     }).immediate()
   }
 
-  /**
-   * 遗留的同章多行 finalized：保留版本最高的一份，其余降为 superseded。旧定稿留下的知识库文档和实体稿，
-   * 在保留那份定稿最新的后处理跑批里登记清理步骤（与重开再定稿相同，ADR-0024）；没有跑批的不登记。
-   * cleanupLabels 是步骤在界面上的名称，按调用方的界面语言给。
-   */
   static repairDuplicateFinalizations(cleanupLabels: Readonly<Record<ReplacedFinalCleanupStepKey, string>>): DuplicateFinalizationRepair {
     const db = requireDatabase()
     return db.transaction(() => {
@@ -456,7 +444,6 @@ export class FinalizationRepository {
           ...chapter.superseded.some(item => item.knowledgeDocumentId) ? ['remove_replaced_knowledge' as const] : [],
           ...chapter.superseded.some(item => item.targetFileName) ? ['remove_replaced_manuscripts' as const] : [],
         ]
-        // 保留的定稿有收据时，最新跑批按 finalization 记；按章号记的是旧版本的跑批，清理步骤读不到收据，不往那里挂。
         const run = PostProcessRepository.getLatestRun('chapter_finalize', String(chapter.chapterNumber))
         if (cleanup.length === 0 || !run?.triggerSourceId.startsWith('finalization:')) continue
         PostProcessRepository.addUnfinishedSteps(run.id, cleanup.map(key => ({ key, label: cleanupLabels[key], critical: false })),

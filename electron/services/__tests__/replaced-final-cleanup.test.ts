@@ -31,7 +31,6 @@ const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').dig
 const zh = (zhCNText: string) => zhCNText
 const file = (name: string) => path.join(projectRoot, name)
 
-/** 第 1 章的一份定稿：首份照常新建，之后经重开稿替换（ADR-0024）。 */
 async function finalVersion(content: string, targetFileName: string, { publish = true } = {}): Promise<number> {
   const draftId = DraftRepository.getFinalizedByChapter(1)
     ? reopenWithContent(1, content)
@@ -53,7 +52,6 @@ async function finalVersion(content: string, targetFileName: string, { publish =
   return draftId
 }
 
-/** 清理失败时报出的内容；顺带确认界面能把它换成作者可读的说明。 */
 async function failure(run: Promise<void>): Promise<string> {
   const message = await run.then(() => '', (error: Error) => error.message)
   expect(message).not.toBe('')
@@ -101,7 +99,6 @@ describe('替换后删除旧版本的正文文件', () => {
     await finalVersion('第二版。', '第1章 雾钟 (2).txt')
     const third = await finalVersion('第三版。', '第1章 雾钟 (3).txt')
     await removeReplacedManuscripts(projectRoot, third)
-    // 第一版的文件删掉以后，第四版发布时原名空出来了。
     const fourth = await finalVersion('第四版。', '第1章 雾钟.txt')
     await removeReplacedManuscripts(projectRoot, fourth)
     expect(fs.readFileSync(file('第1章 雾钟.txt'), 'utf8')).toBe('第1章 雾钟\n\n第四版。')
@@ -132,7 +129,6 @@ describe('替换后删除旧版本的正文文件', () => {
   })
 })
 
-/** 知识库里的文档副本；null 表示没有完整副本（旧版只有分块，或已经不在）。 */
 function knowledge(copies: Record<string, { content: string; edited?: boolean } | null>) {
   const removed: string[] = []
   const store: ReplacedKnowledgeStore = {

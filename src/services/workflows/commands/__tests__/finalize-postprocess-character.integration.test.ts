@@ -54,9 +54,7 @@ let onCommit: ((stepKey: string | undefined, nth: number) => void) | undefined
 const commitsByStep = new Map<string | undefined, number>()
 let actualOwner: ReturnType<typeof createMainGenerationOwner> | undefined
 const stageByRun = new Map<string, string>()
-/** 重开再定稿后清理旧版本的两步收到的请求：[通道, 当前定稿的 draftId]。 */
 const cleanupRequests: Array<[string, unknown]> = []
-/** 作者改过被替换的旧正文文件：主进程保留它，删除旧正文文件这一步失败。 */
 let replacedManuscriptEdited = false
 function owner() {
   if (actualOwner) return actualOwner
@@ -741,7 +739,6 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     const chapterTwo = '第二章定稿：林岚准备交出黄铜钥匙。'
     insertFinalizedDraft(7, 2, chapterTwo)
     insertFinalizedDraft(8, 3)
-    // 第二章的要点步骤早已完成，这次只重试角色状态。
     const sourceTwo = SummaryRepository.readFinalizedSource(7)
     if (sourceTwo.status !== 'valid') throw new Error('expected valid finalized source')
     SummaryRepository.saveFinalizedContinuity({ draftId: 7, chapterNumber: 2, chapterNotes: '第二章要点', facts: [],
@@ -770,7 +767,6 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       stepKeys: ['character_cards'],
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
-    // 第三章说了算的位置和近况跳过（ADR-0024），不再让整步失败；作者写的物品只留作待确认。
     expect(status.steps.character_cards).toMatchObject({ ok: true })
     expect(CharacterRosterRepository.read()).toEqual(chapterThree.snapshot)
     expect(CharacterRepository.getById(characterId)?.currentState).toMatchObject({

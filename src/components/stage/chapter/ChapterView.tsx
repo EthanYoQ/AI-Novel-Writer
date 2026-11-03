@@ -154,7 +154,6 @@ function DraftChapter({ tab, filePath, projectKey }: { tab: EditorTab; filePath:
           {chapterNumber !== undefined && (
             <div className="stage-ch-notices">
               <DeletionCleanupNotices projectKey={projectKey} chapterNumber={chapterNumber} />
-              {/* 替换影响说的是这一章现在的正文；旧稿、被替换的定稿不挂。 */}
               {stage && stage !== 'archived' && stage !== 'superseded' && (
                 <ReplacementImpactNotices projectKey={projectKey} chapterNumber={chapterNumber} showOwn={stage === 'final'} />
               )}

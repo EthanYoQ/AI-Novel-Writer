@@ -290,17 +290,11 @@ export async function guardCharacterRegeneration(
 
 // ===== Guard 5：修复定稿后处理前 → 检查这一章有没有要修的步骤 =====
 
-/**
- * 修复定稿后处理的前置校验：最新定稿章随时可以修；更早的章在它当前定稿的最新后处理还有没成功的步骤、
- * 或者从没跑过时也可以修（重开替换中间一章之后要能补跑，ADR-0024）。
- * 补跑角色状态不会覆盖后续章节：后续章说了算的字段会跳过（decideDerivedPatch 的 later-source-owns）。
- */
 export async function guardRepairPostProcess(
   chapterNumber: number,
   expectedProjectPath?: string,
   expectedProjectSession?: ProjectSessionContext,
 ): Promise<GuardResult> {
-  // 等主进程回来再读界面语言，和其他守卫一致。
   const text = (zhCNText: string, enUSText: string) => localize(useLocaleStore.getState().locale, zhCNText, enUSText)
   const captured = captureGuardProject(expectedProjectPath, expectedProjectSession)
   if (!captured) {

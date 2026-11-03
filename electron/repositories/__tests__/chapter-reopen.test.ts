@@ -42,7 +42,6 @@ function finalize(draftId: number, title = '雾钟') {
   })
 }
 
-/** 旧版本留下的定稿：只有 status='finalized'，没有发布收据。 */
 function legacyFinal(chapterNumber: number, content: string): number {
   const id = write(chapterNumber, content)
   getProjectDb()!.prepare("UPDATE drafts SET status = 'finalized' WHERE id = ?").run(id)
@@ -195,7 +194,6 @@ describe('已定稿的章只能经重开稿再写', () => {
     finalize(first)
     const stale = FinalizationRepository.reopen({ chapterNumber: 1 })
     if (!stale.success) throw new Error('reopen failed')
-    // 本章的定稿换成了另一份（遗留数据里的同章多行定稿修复后就会这样），这份重开稿记着的已不是本章定稿。
     getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = ?").run(first)
     const other = legacyFinal(1, '第一章另一份旧定稿。')
 

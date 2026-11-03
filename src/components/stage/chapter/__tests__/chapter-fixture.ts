@@ -71,12 +71,9 @@ export function createChapterBackend() {
     nextId: 100,
     mergeDisposition: 'required' as 'required' | 'not-required',
     incompleteDeletions: [] as unknown[],
-    /** 主进程现算的替换影响（chapter:replacement-impacts），与重开稿定稿前的预览。 */
     impacts: [] as ReplacementImpact[],
     preview: null as ReplacementImpact | null,
-    /** 设了就等它完成再答复定稿预览，用来看答复回来之前确认框显示什么。 */
     previewGate: null as Promise<void> | null,
-    /** 设了就等它完成再答复重开请求，用来在请求进行中继续输入。 */
     reopenGate: null as Promise<void> | null,
     calls: [] as { channel: string; args: unknown[] }[],
     clock: 0,
@@ -168,7 +165,6 @@ export function createChapterBackend() {
         return { success: true }
       }
       case 'chapter:reopen': {
-        // 和主进程一样：以本章定稿（带 initialDraftId 时以那一稿）的正文新建一份记着重开关系的草稿；已有一份打开的重开稿就原样返回它。
         const { chapterNumber, initialDraftId } = args[0] as { chapterNumber: number; initialDraftId?: number }
         await state.reopenGate
         const final = state.drafts.find(draft => draft.chapterNumber === chapterNumber && draft.status === 'finalized')
@@ -246,7 +242,6 @@ export function createChapterBackend() {
   return { state, invoke, install, addDraft, addReview, addRecheck, addRevision, writes }
 }
 
-/** 重开稿记着的重开关系：一条指向本章定稿的依赖，重开的那份仍是当前定稿（ADR-0024）。 */
 export function reopenOf(final: { id: number; chapterNumber: number }): { sourceDependencies: DraftSourceDependency[]; dependenciesStale: false } {
   return {
     sourceDependencies: [{ kind: 'finalized', draftId: final.id, chapterNumber: final.chapterNumber, finalizationId: `finalization-${final.id}`, contentHash: 'c'.repeat(64) }],

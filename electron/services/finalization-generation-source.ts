@@ -58,7 +58,6 @@ export function finalizationGenerationTask(context: FinalizationGenerationContex
     messages: [{ role: 'system', content: composePromptSystemRole(context.template, context.writingLanguage) },
       { role: 'user', content: characters ? [prompt, contract, replacedFinalRestatement(context, originProjectId)].filter(Boolean).join('\n\n') : prompt }] }
 }
-/** 本章替换了旧定稿：列出来自旧定稿的字段，要模型按现在的正文逐项重新给出，盖过合同里「只在值不同时列出」（ADR-0024）。 */
 function replacedFinalRestatement(context: FinalizationGenerationContext, originProjectId?: string): string {
   const characters = replacedFinalFields(context.identity, originProjectId)
   if (!characters.length) return ''

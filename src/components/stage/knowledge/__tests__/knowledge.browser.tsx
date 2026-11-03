@@ -445,7 +445,6 @@ describe('知识库', () => {
     await click(/母亲的旧照片/)
     await vi.waitFor(() => expect(document.body.textContent).toContain('这一章由定稿自动收入'))
     expect(document.querySelector('textarea')).toBeNull()
-    // 定稿章不能直接改（ADR-0024）：要改先在正文里重新打开，新的定稿收入后替换这一份。
     expect(document.body.textContent).toContain('要修改，在正文里重新打开这一章，改完再定稿，新的定稿会替换这一份。')
   })
 

@@ -60,9 +60,8 @@ type Ask = 'refine' | 'finalize' | 'delete' | 'discard' | 'reopen' | null
 
 /**
  * 章节动作条与它带出的侧页、对话框。主按钮随这一章所处的一步变化：AI 审稿（拆分按钮含检查维度）、按 N 项意见修稿、
- * 完成合并、定稿；直接修稿、删除这一稿、复制本章正文在「更多」里。定稿章另有「重新打开修改」，重开稿的删除叫「放弃修改」
- * （ADR-0024）。审稿清单的状态也在这里，侧页的勾选数与主按钮的「按 N 项意见修稿」是同一份。
- * 挂载方以审稿报告的会话键作 key，报告变了清单随之重置。
+ * 完成合并、定稿；直接修稿、删除这一稿、复制本章正文在「更多」里。审稿清单的状态也在这里，
+ * 侧页的勾选数与主按钮的「按 N 项意见修稿」是同一份。挂载方以审稿报告的会话键作 key，报告变了清单随之重置。
  */
 export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, title, draft, facts, review, focus }: {
   sheetSlot: HTMLDivElement | null
@@ -130,12 +129,9 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
   const [opened, setOpened] = useState<RevisionEntry | null>(null)
   const versionLabel = text(`草稿 v${meta.version}`, `Draft v${meta.version}`)
   const editable = stage === 'draft' || stage === 'reviewed' || stage === 'merge' || stage === 'revised'
-  // 正在写、改、审的重开稿：定稿时替换本章现在的定稿，删除它就是放弃修改。
   const reopening = editable && isOpenReopenDraft(meta)
   const preview = useReplacementImpactPreview(meta.id, tab.content ?? '', ask === 'finalize' && reopening)
-  // 定稿页上：本章已有一份打开的重开稿时，按钮直接去那一份，不再新建。
   const openReopenDraft = useDraftStore(s => stage === 'final' ? s.draftsByChapter[chapterNumber]?.find(isOpenReopenDraft) : undefined)
-  // 本章已有定稿，这一稿却不是打开的重开稿（定稿之前留下的旧稿，或重开关系已过期）：不能直接定稿替换，只能以它重新打开本章（ADR-0024）。
   const olderDraft = useDraftStore(s => editable && !reopening && (s.draftsByChapter[chapterNumber]?.some(candidate => candidate.status === 'finalized') ?? false))
   const finalizeHint = olderDraft ? text('先以这一稿重新打开本章', 'Reopen the chapter with this draft first') : null
 
@@ -198,7 +194,6 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
       .catch(() => toast.error(text('无法复制正文', 'Could not copy the chapter text')))
   }
 
-  /** 删掉这一稿后，标签留在原位换成这一章现在的那一稿；一稿都不剩就回到待写。放弃修改删的是重开稿，回到原定稿。 */
   const deleteThisDraft = async () => {
     const project = useProjectStore.getState().currentProject
     const displayName = `${chapterLabel(chapterNumber, text)} v${meta.version}`
@@ -217,10 +212,6 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
       : () => { openChapterPlan(chapterNumber, title, session); return true })
   }
 
-  /**
-   * 重开本章定稿，标签留在原位换成重开稿。缺省复制当前定稿；initialDraftId 是定稿之前留下的这一稿，以它的正文重开，
-   * 还没保存的修改先保存。本章已有一份打开的重开稿时主进程原样返回那一份。
-   */
   const reopen = async (initialDraftId?: number) => {
     setAsk(null)
     const session = captureProjectSession(useProjectStore.getState().currentProject)
@@ -230,9 +221,8 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
       try {
         await draft.save(draft.currentBodyRef.current, true)
       } catch {
-        return // 保存失败的原因已由保存提示给出，修改还在这一稿里。
+        return
       }
-      // 保存期间又有输入，或保存被会话守卫跳过：修改还没落盘，不重开。
       if (unsaved()) return
     }
     const before = useEditorStore.getState().tabs.find(candidate => candidate.id === tab.id)?.content

@@ -6,7 +6,6 @@ function waitSynchronously(milliseconds: number) {
   Atomics.wait(signal, 0, 0, milliseconds)
 }
 
-/** 被其他程序占用或只读：Windows 上替换、删除文件时报的这几类错误。 */
 export function isWindowsFileBusyError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null)?.code
   return typeof code === 'string' && BUSY_CODES.has(code)

@@ -13,7 +13,6 @@ interface RevertDialogProps {
   nextVersion: number
   /** 回退前的当前稿，例如「草稿 v2」。 */
   current: string
-  /** 这一章已定稿：回退会重新打开这一章，新稿定稿后才替换现在的定稿（ADR-0024）。 */
   finalized: boolean
   busy: boolean
   onConfirm: () => void

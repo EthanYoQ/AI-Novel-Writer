@@ -248,7 +248,6 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
                         <span className="stage-hist-version-name">
                           {versionName(version, text)}
                           {version === latest && <span className="stage-hist-badge">{text('当前', 'Current')}</span>}
-                          {/* 这条提醒给还没定稿的稿复核用。定稿与被替换的定稿不标：重开稿定稿后，它记着的原定稿已被替换，依赖总是过期。 */}
                           {version.dependencies_stale && version.type !== 'final' && version.type !== 'superseded' && (
                             <span
                               className="stage-hist-badge"

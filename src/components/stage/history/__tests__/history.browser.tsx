@@ -70,7 +70,6 @@ beforeEach(() => {
     }
     if (channel === 'db:draft-list-all') return drafts.map(meta)
     if (channel === 'chapter:reopen') {
-      // 与 FinalizationRepository.reopen 一致：以所选那一稿的正文新建一份重开稿，版本号按现有最大版本加一。
       const request = args[0] as { chapterNumber: number; initialDraftId: number }
       const id = 100 + drafts.length
       const version = Math.max(0, ...drafts.filter(draft => draft.chapterNumber === request.chapterNumber).map(draft => draft.version)) + 1

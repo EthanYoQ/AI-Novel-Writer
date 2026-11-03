@@ -116,11 +116,6 @@ export class NarrativeThreadRepository {
     }
   }
 
-  /**
-   * 一章的定稿被重开稿的新定稿替换时，在替换事务里调用（ADR-0024）。被替换定稿上的确认，证据原文仍出现在
-   * 新定稿正文里的改挂到新定稿；其余留在旧定稿上，不再进线索折叠，由影响提示列出原文。
-   * 同一事件在新定稿上已有确认时保留原处（OR IGNORE），不让唯一约束打断定稿。
-   */
   static carryConfirmationsToReplacement(
     replacedDraftIds: readonly number[],
     replacement: { draftId: number; content: string },
@@ -138,7 +133,6 @@ export class NarrativeThreadRepository {
     }
   }
 
-  /** 被替换定稿上、证据不在替换者正文里的确认：替换时它们留在原处，不再计入线索进度，由影响提示列出原文。 */
   static confirmationsNotCarried(replacedDraftId: number, replacementContent: string, db = requireDb()): Array<{ threadTitle: string; evidence: string }> {
     return (db.prepare(`
       SELECT plans.title AS threadTitle, confirmations.evidence

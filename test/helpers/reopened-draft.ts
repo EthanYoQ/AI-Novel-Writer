@@ -6,7 +6,6 @@ import { FinalizationRepository } from '../../electron/repositories/finalization
 import type { ReopenedFinal } from '../../src/shared/chapter-reopen'
 import { countDraftUnits } from '../../src/shared/draft-units'
 
-/** 已定稿的章只能经重开稿再写（ADR-0024）：重开当前定稿，把正文换成 content，返回重开稿的 id。 */
 export function reopenWithContent(chapterNumber: number, content: string): number {
   const reopened = FinalizationRepository.reopen({ chapterNumber })
   if (!reopened.success) throw new Error(reopened.error)
@@ -14,10 +13,6 @@ export function reopenWithContent(chapterNumber: number, content: string): numbe
   return reopened.draftId
 }
 
-/**
- * 给用原始 SQL 插入的工作稿补上指向本章当前定稿的重开关系，和 FinalizationRepository.reopen 写的一样，
- * 这一稿就成了本章的重开稿，可以定稿替换（ADR-0024）。同章遗留多行定稿时和 reopen 一样取版本最高的一行。本章还没有定稿时什么也不做。
- */
 export function registerAsReopenDraft(db: BetterSqlite3.Database, draftId: number): void {
   const final = db.prepare(`
     SELECT finalized.id, finalized.chapter_number, contents.body, finalization_outbox.finalization_id

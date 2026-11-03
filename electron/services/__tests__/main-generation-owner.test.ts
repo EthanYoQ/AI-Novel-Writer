@@ -2645,7 +2645,6 @@ describe('main draft persistence and batch lineage', () => {
     const older = '作者更早写下的第一章。'
     f.db.prepare('INSERT INTO contents(id,body) VALUES(9001,?)').run(older)
     f.db.prepare("INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count) VALUES(9001,1,0,'draft','write',9001,10)").run()
-    // #516 第一个 PR 时期，定稿之前留下的旧稿可以直接定稿替换，留下「较低版本是定稿」的数据；现在只有重开稿能替换（ADR-0024），给旧稿补上重开关系来造出同样的数据。
     registerAsReopenDraft(f.db, 9001)
     FinalizationRepository.commit({ finalizationId: 'older-final', draftId: 9001, chapterNumber: 1,
       chapterTitle: '第一章', content: older, contentHash: textHash(older), contentRevision: 1, targetFileName: '第一章 旧.txt' })

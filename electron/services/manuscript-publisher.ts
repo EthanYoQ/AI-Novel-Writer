@@ -136,10 +136,6 @@ export async function removePublishedManuscript(
   fs.unlinkSync(target.absolutePath)
 }
 
-/**
- * 被替换的旧定稿的实体稿：内容仍是当初发布的某一版（published 里的任一份）才删，作者改过的保留（ADR-0024）。
- * 缺失表示已经清理。Windows 上被占用时按 retryWhileWindowsFileBusy 的口径重试，仍不行就把原错误抛出。
- */
 export function removeManuscriptIfUnchanged(
   projectRoot: string,
   targetFileName: string,
@@ -147,7 +143,6 @@ export function removeManuscriptIfUnchanged(
 ): 'removed' | 'missing' | 'changed' {
   const target = resolveStoredManuscriptTarget(projectRoot, targetFileName)
   try {
-    // 比对和删除一起重试：等占用放开的间隙里作者可能保存了修改，每次删除前都重新比对。
     return retryWhileWindowsFileBusy(() => {
       if (!published.includes(fs.readFileSync(target.absolutePath, 'utf8'))) return 'changed'
       fs.unlinkSync(target.absolutePath)

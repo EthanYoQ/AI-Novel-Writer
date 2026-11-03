@@ -7,7 +7,6 @@ import { useReplacementImpacts } from './use-replacement-impacts'
 
 type Text = (zh: string, en: string) => string
 
-/** 章号列成区间：3、5、6、7 → 3、5–7。 */
 function ranges(chapters: readonly number[]): string[] {
   const parts: string[] = []
   for (let start = 0; start < chapters.length;) {
@@ -27,7 +26,6 @@ const chaptersText = (chapters: readonly number[], text: Text) => text(
 const hasImpact = (impact: ReplacementImpact) => impact.laterChapters.length > 0 || impact.blueprintOnlyChapters.length > 0
   || impact.characters.length > 0 || impact.unmovedConfirmations.length > 0
 
-/** 替换对后续内容的影响：受影响的章、状态来自后续章的角色、不再计入线索进度的确认。定稿确认框的预览与定稿后的提示共用。 */
 export function ReplacementImpactSummary({ impact }: { impact: ReplacementImpact }) {
   const text = useLocaleStore(s => s.text)
   const { laterChapters: later, blueprintOnlyChapters: planned, characters, unmovedConfirmations: unmoved } = impact
@@ -55,7 +53,6 @@ export function ReplacementImpactSummary({ impact }: { impact: ReplacementImpact
   )
 }
 
-/** 定稿确认框里的影响预览；后面没有受影响的内容时不显示。 */
 export function ReplacementImpactPreview({ impact }: { impact: ReplacementImpact | null }) {
   const text = useLocaleStore(s => s.text)
   if (!impact || !hasImpact(impact)) return null
@@ -66,10 +63,6 @@ export function ReplacementImpactPreview({ impact }: { impact: ReplacementImpact
   )
 }
 
-/**
- * 替换影响提示（ADR-0024）。showOwn 时，这一章的当前定稿是重开稿替换来的，顶部提示「第 N 章已修改」并列出影响；
- * 这一章写于更早一章修改之前时，显示一行「写于第 N 章修改之前」，链回那一章。点了「知道了」两处一起不再显示。
- */
 export default function ReplacementImpactNotices({ projectKey, chapterNumber, showOwn }: { projectKey: string; chapterNumber: number; showOwn: boolean }) {
   const text = useLocaleStore(s => s.text)
   const { impacts, acknowledge } = useReplacementImpacts(projectKey)

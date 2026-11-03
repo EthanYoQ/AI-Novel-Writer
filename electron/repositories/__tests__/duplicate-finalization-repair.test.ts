@@ -116,7 +116,6 @@ describe('遗留的同章重复定稿', () => {
   })
 
   describe('旧定稿留下的知识库文档与实体稿接入清理步骤（ADR-0024）', () => {
-    /** 保留那份定稿的后处理跑批，与定稿时建的一样按 finalization 记。 */
     function keptRun(draftId: number, chapterNumber: number, body: string): string {
       return PostProcessRepository.createRun({
         triggerSourceType: 'chapter_finalize',

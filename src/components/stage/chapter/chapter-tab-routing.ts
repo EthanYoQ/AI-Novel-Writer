@@ -37,7 +37,6 @@ export function isChapterViewTab(tab: EditorTab): boolean {
  * 在 tabId 那个标签的位置换上另一稿或待写章：open 打开（或切到）新标签后，关掉旧标签并把新标签挪到旧位置。
  * open 返回 false（读取失败、会话已变）时什么也不动。旧标签有未保存修改时由调用方先保存或请作者确认（放弃时照常关掉）；
  * 打开新标签期间作者又在旧标签里打了字，那些字没人确认过，旧标签就留着不关，并提示一句。
- * 调用方在换标签之前还要等别的请求时传 before：发请求那一刻旧标签的正文，等待期间打的字同样算没人确认过。
  */
 export async function swapChapterTab(tabId: string, open: () => Promise<boolean> | boolean, before?: string): Promise<void> {
   const tabs = useEditorStore.getState().tabs

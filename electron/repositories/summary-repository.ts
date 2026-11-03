@@ -321,7 +321,6 @@ function readFinalizedSourceFromDb(
   }
 }
 
-/** 这份来源仍是它那一章的权威定稿：没被重开替换，也没被删掉（每章至多一行 finalized，ADR-0003）。 */
 function isAuthoritativeSource(db: BetterSqlite3.Database, source: FinalizedSourceIdentity): boolean {
   const current = readFinalizedSourceFromDb(db, source.draftId)
   return current !== null && sameSource(current.source, source)

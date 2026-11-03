@@ -11,7 +11,6 @@ vi.mock('../ipc-client', () => ({
 
 const session: ProjectSessionContext = { projectId: 'project-a', leaseId: 'lease-a', projectPath: 'C:/novels/project-a' }
 
-/** 一条正在写 resourceKeys 的工作流；只填冲突判断用到的字段。 */
 const runWriting = (projectPath: string, resourceKeys: string[]) => ({ id: `run-${resourceKeys.join(',')}`, projectPath, resourceKeys }) as unknown as WorkflowRun
 
 beforeEach(() => {

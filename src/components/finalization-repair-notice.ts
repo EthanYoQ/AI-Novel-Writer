@@ -16,7 +16,6 @@ export function finalizationRepairMessage(repair: DuplicateFinalizationRepair, t
       `Chapter ${chapter.chapterNumber}: kept v${chapter.keptVersion} as the final version; ${versions} became ${chapter.superseded.length === 1 ? 'a ' : ''}${replaced}.`,
     )]
     if (chapter.cleanupRegistered) {
-      // 两个清理步骤按这两样各自有没有登记（repairDuplicateFinalizations），只提实际留下的。
       const leftovers = [
         inKnowledge ? text('留在知识库里的内容', 'the knowledge base') : '',
         files.length > 0 ? text('的实体稿', 'the manuscript folder') : '',
