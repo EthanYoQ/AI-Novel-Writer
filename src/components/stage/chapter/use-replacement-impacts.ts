@@ -81,11 +81,13 @@ export function useReplacementImpacts(projectKey: string): {
 }
 
 /**
- * 重开稿定稿前的影响预览：enabled 变为 true（定稿确认框打开）时按编辑器里的正文 content 现算一次；读不出来或不是重开稿时为 null。
+ * 重开稿定稿前的影响预览：enabled 变为 true（定稿确认框打开）时按编辑器里的正文 content 现算一次；读不出来或不是重开稿时 impact 为 null。
  * 结果按算它时的稿与正文记，正文改过就不再用：关掉确认框改了正文再打开，新结果回来之前不显示旧正文的影响。
+ * pending 表示这份正文的预览还没回来，确认框据此先不让定稿，作者看过影响再替换；读不出来也算回来了，不挡定稿。
  */
-export function useReplacementImpactPreview(draftId: number, content: string, enabled: boolean): ReplacementImpact | null {
+export function useReplacementImpactPreview(draftId: number, content: string, enabled: boolean): { impact: ReplacementImpact | null; pending: boolean } {
   const [preview, setPreview] = useState<{ draftId: number; content: string; impact: ReplacementImpact | null } | null>(null)
+  const hasSession = captureProjectSession(useProjectStore(s => s.currentProject)) !== null
   useEffect(() => {
     const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
     if (!enabled || !projectSession) return
@@ -97,5 +99,6 @@ export function useReplacementImpactPreview(draftId: number, content: string, en
       })
     return () => { cancelled = true }
   }, [draftId, content, enabled])
-  return enabled && preview?.draftId === draftId && preview.content === content ? preview.impact : null
+  const settled = preview?.draftId === draftId && preview.content === content
+  return { impact: enabled && settled ? preview.impact : null, pending: enabled && hasSession && !settled }
 }

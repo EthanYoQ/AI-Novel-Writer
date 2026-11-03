@@ -505,7 +505,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
         footer={(
           <>
             <Button variant="secondary" onClick={() => setAsk(null)}>{text('再看看', 'Not yet')}</Button>
-            <Button variant="primary" disabled={!draft.canFinalize} onClick={() => { setAsk(null); void draft.finalize() }}>{text('确认定稿', 'Finalize')}</Button>
+            <Button variant="primary" disabled={!draft.canFinalize || preview.pending} onClick={() => { setAsk(null); void draft.finalize() }}>{text('确认定稿', 'Finalize')}</Button>
           </>
         )}
       >
@@ -516,7 +516,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
           <li><b>{text('自动做定稿后处理。', 'Runs post-finalization steps.')}</b>{text('完成后在本章页面显示每一步的结果，失败的步骤可以单独重试。', 'Each step’s result appears on this chapter; a failed step can be retried on its own.')}</li>
           <li><b>{text('之后不能直接修改。', 'No direct edits afterwards.')}</b>{text('要再改，在本章点「重新打开修改」。', 'To change it again, choose Reopen to edit on this chapter.')}</li>
         </ul>
-        {reopening && <ReplacementImpactPreview impact={preview} />}
+        {reopening && <ReplacementImpactPreview impact={preview.impact} />}
         {tab.dirty && <Notice tone="info" title={text('还没保存的修改会一并定稿', 'Unsaved edits are included')}>{text('定稿以你现在看到的正文为准。', 'Finalization uses the text exactly as you see it now.')}</Notice>}
       </InkDialog>
       <DangerConfirm
