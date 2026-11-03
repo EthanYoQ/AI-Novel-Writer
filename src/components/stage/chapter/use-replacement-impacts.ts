@@ -56,10 +56,15 @@ export function useReplacementImpacts(projectKey: string): {
     if (projectSession && isProjectSessionPath(projectSession, projectKey)) void load(projectSession)
   }, [load, projectKey, sessionKey])
 
-  useEffect(() => globalEventBus.on('REFRESH_RESOURCE', payload => {
-    if (!isProjectSessionPath(payload.projectSession, projectKey) || !isProjectSessionCurrent(payload.projectSession)) return
-    void load(payload.projectSession)
-  }), [load, projectKey])
+  useEffect(() => {
+    const reload = ({ projectSession }: { projectSession: ProjectSessionContext }) => {
+      if (!isProjectSessionPath(projectSession, projectKey) || !isProjectSessionCurrent(projectSession)) return
+      void load(projectSession)
+    }
+    const offRefresh = globalEventBus.on('REFRESH_RESOURCE', reload)
+    const offFinalize = globalEventBus.on('FINALIZE_COMPLETE', reload)
+    return () => { offRefresh(); offFinalize() }
+  }, [load, projectKey])
 
   const seen = current ? readSeen(current.projectId) : new Set<string>()
   const impacts = loaded.sessionKey === sessionKey && current
