@@ -58,7 +58,7 @@ const impactLoadCount = app => app.evaluate(() => globalThis.__driveImpactLoads.
 async function impactLoaded(app, page, since, chapterNumber) {
   const deadline = Date.now() + 30_000
   for (;;) {
-    const loads = await app.evaluate((from) => globalThis.__driveImpactLoads.slice(from), since)
+    const loads = await app.evaluate((_electron, from) => globalThis.__driveImpactLoads.slice(from), since)
     if (loads.some(result => result?.success && result.impacts.some(impact => impact.chapterNumber === chapterNumber))) break
     assert.ok(Date.now() < deadline, `30 秒内界面没有读到第 ${chapterNumber} 章的替换影响。实际：${JSON.stringify(loads)}`)
     await new Promise(resolve => setTimeout(resolve, 100))
