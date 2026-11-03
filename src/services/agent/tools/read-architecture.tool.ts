@@ -21,6 +21,11 @@ export const readArchitectureTool = buildAgentTool({
         description: '架构文件名（可选）。不填则列出所有架构文件。例如 "故事前提.md"、"世界观.md"',
         descriptionEn: 'Optional architecture file name. Omit it to list all architecture files, for example "premise.md" or "worldbuilding.md"',
       },
+      offset: {
+        type: 'number',
+        description: '可选。从完整结果的第几个字符开始返回，默认 0。结果过长被截断时，按截断提示给出的 offset 继续读取。',
+        descriptionEn: 'Optional character position in the complete result to start from. Defaults to 0. When a result is truncated, use the offset given in the truncation note to read the next part.',
+      },
     },
   },
   requiresConfirmation: false,
@@ -29,6 +34,16 @@ export const readArchitectureTool = buildAgentTool({
     const text = (zhCN: string, enUS: string) => agentToolText(context, zhCN, enUS)
 
     const fileName = args.file_name as string | undefined
+    const offset = args.offset === undefined ? 0 : args.offset
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) {
+      return { success: false, content: '', error: text('offset 必须是非负整数', 'offset must be a non-negative integer') }
+    }
+    const fromOffset = (full: string) => offset > 0 && offset >= full.length
+      ? { success: true, content: text(
+        `offset=${offset} 已超出内容范围：完整内容共 ${full.length} 字符，已全部读完。`,
+        `offset=${offset} is past the end: the complete content is ${full.length} characters and has been read in full.`,
+      ) }
+      : { success: true, content: full.slice(offset), resultOffset: offset }
 
     try {
       const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', project.path)
@@ -52,7 +67,7 @@ export const readArchitectureTool = buildAgentTool({
         if (!property) {
           return { success: false, content: '', error: text(`架构文件内容为空：${fileName}`, `The architecture content is empty: ${fileName}`) }
         }
-        return { success: true, content: text(`📐 架构文件：${fileName}\n\n${property}`, `📐 Architecture: ${fileName}\n\n${property}`) }
+        return fromOffset(text(`📐 架构文件：${fileName}\n\n${property}`, `📐 Architecture: ${fileName}\n\n${property}`))
       }
 
       const contents: string[] = []
@@ -65,7 +80,7 @@ export const readArchitectureTool = buildAgentTool({
         return { success: true, content: text('⚠️ 架构为空，暂无架构文件。建议通过工作流生成故事架构。', '⚠️ The architecture is empty. Generate the story architecture with the workflow first.') }
       }
 
-      return { success: true, content: text(`📐 故事架构（${contents.length} 个文件）\n\n${contents.join('\n\n---\n\n')}`, `📐 Story architecture (${contents.length} ${pluralEn(contents.length, 'file')})\n\n${contents.join('\n\n---\n\n')}`) }
+      return fromOffset(text(`📐 故事架构（${contents.length} 个文件）\n\n${contents.join('\n\n---\n\n')}`, `📐 Story architecture (${contents.length} ${pluralEn(contents.length, 'file')})\n\n${contents.join('\n\n---\n\n')}`))
     } catch (error) {
       const detail = agentToolErrorDetail(context, error)
       return {

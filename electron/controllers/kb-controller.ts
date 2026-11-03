@@ -171,14 +171,26 @@ function isLegacyMigrationBlockedResult(value: unknown): boolean {
 
 const UNCONFIGURED_EMBEDDING_MODEL: EmbeddingModel = { provider: '', baseUrl: '', apiKey: '' }
 
+/**
+ * 解析知识库要用的检索（embedding）模型配置。
+ *
+ * 优先使用设置里显式配置的检索模型；没有显式配置时，只有 `purposes` 声明了
+ * `embedding` 的默认模型才可以顶替（#520）——纯生成模型没有嵌入接口，顶替只会
+ * 让每次写作前多发一次注定失败的请求。旧档案没有 `purposes` 字段时保持原有回退行为。
+ */
 export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: EmbeddingModel & { modelName: string } } | null {
   const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
-  const targetModelId = config.defaultEmbeddingModelId || config.defaultModelId
+  const configuredEmbeddingModelId = config.defaultEmbeddingModelId
+  const targetModelId = configuredEmbeddingModelId || config.defaultModelId
   if (!targetModelId) return null
 
   const models = readJsonFile<ModelProfile[]>(MODELS_CONFIG_PATH, [])
   const model = models.find((m) => m.id === targetModelId)
   if (!model) return null
+  // #520：没显式配置检索模型时，只有声明了 embedding 用途的模型才可以被回退选中。
+  // 纯生成模型（例如 DeepSeek 官方）没有嵌入接口，回退只会让每次写作前多一次注定失败的请求。
+  // 旧档案可能没有 purposes 字段，此时保持原有回退行为，避免影响既有用户。
+  if (!configuredEmbeddingModelId && Array.isArray(model.purposes) && !model.purposes.includes('embedding')) return null
   return {
     protocol: model.protocol as 'openai' | 'gemini',
     // models.json 只经过宽松的迁移校验，旧档案可能缺这几个字段。
