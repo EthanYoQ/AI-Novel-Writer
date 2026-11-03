@@ -17,6 +17,7 @@ export interface ImportInferenceResult {
   characterCards: CharacterRosterEntry[]
 }
 
+export const MAX_IMPORT_INFERENCE_CHARACTER_CARDS = 8
 const PLOT_STRUCTURES = ['three_act', 'heros_journey', 'save_the_cat', 'kishotenketsu', 'multi_thread', 'freeform'] as const
 const NARRATIVE_POVS = ['third_limited', 'first_person', 'third_omniscient', 'multi_pov'] as const
 const EDGE_INVISIBLE_WRAPPER_RESIDUE = new Set(['\uFEFF', '\u200B', '\u200C', '\u200D', '\u2060'])
@@ -199,7 +200,7 @@ function currentState(value: unknown, path: string): NonNullable<CharacterRoster
 
 function decodeCards(value: unknown): CharacterRosterEntry[] {
   if (!Array.isArray(value)) throw new StructuredContractDiagnostic('invalid_type', 'characterCards')
-  if (value.length < 3 || value.length > 8) throw new StructuredContractDiagnostic('invalid_value', 'characterCards')
+  if (value.length < 3 || value.length > MAX_IMPORT_INFERENCE_CHARACTER_CARDS) throw new StructuredContractDiagnostic('invalid_value', 'characterCards')
   const cards = value.map((raw, index): CharacterRosterEntry => {
     const path = `characterCards[${index}]`
     const card = record(raw, path)
@@ -347,26 +348,29 @@ function assertExactImportEndpointDeltaKeys(
   }
 }
 
-export function unresolvedImportRelationshipTargets(root: Record<string, unknown>, text: UiText): string[] {
+function unresolvedImportRelationshipTargets(root: Record<string, unknown>, text: UiText): string[] {
   const cards = importInferenceCards(root, text)
   const names = new Set(cards.map(card => card.name).filter((name): name is string => typeof name === 'string'))
-  const unresolved = new Set<string>()
+  const references = new Map<string, number>()
   for (const card of cards) {
     const cardName = typeof card.name === 'string' ? card.name : undefined
     const relationships = card.relationships
     if (!Array.isArray(relationships)) continue
     for (const relationship of relationships) {
       if (!isRecord(relationship) || typeof relationship.target !== 'string') continue
-      if (relationship.target !== cardName && !names.has(relationship.target)) unresolved.add(relationship.target)
+      if (relationship.target !== cardName && !names.has(relationship.target)) {
+        references.set(relationship.target, (references.get(relationship.target) ?? 0) + 1)
+      }
     }
   }
-  if (unresolved.size === 0) {
-    throw new Error(text(
-      '导入推演受限补卡校正缺少未闭合的关系端点',
-      'The bounded import correction has no unresolved relationship endpoint.',
-    ))
-  }
-  return [...unresolved]
+  return [...references.keys()].sort((a, b) => references.get(b)! - references.get(a)!)
+}
+
+/** 补卡只请求能放进角色卡上限的端点，被引用多的优先；其余端点的关系在解码时丢弃。 */
+export function importEndpointRecoveryTargets(original: string, text: UiText): string[] {
+  const root = parseImportInferenceJsonObject(original)
+  const room = MAX_IMPORT_INFERENCE_CHARACTER_CARDS - importInferenceCards(root, text).length
+  return unresolvedImportRelationshipTargets(root, text).slice(0, Math.max(0, room))
 }
 
 function parseImportEndpointCorrectionDelta(
@@ -431,14 +435,61 @@ function parseImportEndpointCorrectionDelta(
   return deltaCards
 }
 
-export function decodeImportInferenceWithEndpointDelta(original: string, delta: string, text: UiText): ImportInferenceResult {
-  const root = parseImportInferenceJsonObject(original)
-  const correctedRoot = {
-    ...root,
-    characterCards: [
-      ...importInferenceCards(root, text),
-      ...parseImportEndpointCorrectionDelta(delta, unresolvedImportRelationshipTargets(root, text), text),
-    ],
+export interface DroppedImportRelationship {
+  source: string
+  target: string
+  relation: string
+}
+
+export interface RecoveredImportInference {
+  result: ImportInferenceResult
+  droppedRelationships: DroppedImportRelationship[]
+}
+
+function decodeWithoutDanglingRelationships(
+  root: Record<string, unknown>,
+  cards: Array<Record<string, unknown>>,
+): RecoveredImportInference {
+  const names = new Set(cards.map(card => card.name))
+  const droppedRelationships: DroppedImportRelationship[] = []
+  const characterCards = cards.map((card) => {
+    if (!Array.isArray(card.relationships)) return card
+    const relationships = card.relationships.filter((relationship) => {
+      if (!isRecord(relationship) || names.has(relationship.target)) return true
+      droppedRelationships.push({
+        source: String(card.name),
+        target: String(relationship.target),
+        relation: String(relationship.relation),
+      })
+      return false
+    })
+    return { ...card, relationships }
+  })
+  return {
+    result: decodeImportInferenceJson(JSON.stringify({ ...root, characterCards })),
+    droppedRelationships,
   }
-  return decodeImportInferenceJson(JSON.stringify(correctedRoot))
+}
+
+/**
+ * 渲染端提交与主进程从产物重算角色卡都走这里，两边结果必须一致，作者审批才拿得到来源。
+ * delta 是补卡请求的输出；没发补卡请求时为 null。补卡输出不合格时不采用任何补卡。
+ */
+export function decodeRecoveredImportInference(original: string, delta: string | null, text: UiText): RecoveredImportInference {
+  try {
+    return { result: decodeImportInferenceJson(original), droppedRelationships: [] }
+  } catch (error) {
+    if (!(error instanceof StructuredContractDiagnostic) || error.code !== 'relationship_endpoint_not_in_characters') throw error
+  }
+  const root = parseImportInferenceJsonObject(original)
+  const cards = importInferenceCards(root, text)
+  if (delta !== null) {
+    try {
+      const added = parseImportEndpointCorrectionDelta(delta, importEndpointRecoveryTargets(original, text), text)
+      return decodeWithoutDanglingRelationships(root, [...cards, ...added])
+    } catch {
+      // 不合格的补卡整份不用，下面只丢悬空关系。
+    }
+  }
+  return decodeWithoutDanglingRelationships(root, cards)
 }

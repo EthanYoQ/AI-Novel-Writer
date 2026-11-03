@@ -10,7 +10,7 @@ import type { CharacterProposalProof } from './character-proposal-service'
 import type { ImportGlobalFactsReceipt } from '../../src/shared/import-global-facts'
 import { proveFinalizedCharacterGeneration } from './finalized-character-generation-proof'
 import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
-import { decodeImportInferenceJson, decodeImportInferenceWithEndpointDelta } from '../../src/services/workflows/commands/import-inference-contract'
+import { decodeRecoveredImportInference } from '../../src/services/workflows/commands/import-inference-contract'
 import { preservesStructuredJsonEvidence } from '../../src/services/workflows/structured-syntax-repair'
 
 function importCharacterEntriesFromArtifacts(db: Database.Database, runs: GenerationRunRepository, runId: string) {
@@ -36,7 +36,7 @@ function importCharacterEntriesFromArtifacts(db: Database.Database, runs: Genera
   }
   const delta = endpoint[0] ? output(endpoint[0]) : null
   try {
-    return (delta ? decodeImportInferenceWithEndpointDelta(original, delta, (_zh, en) => en) : decodeImportInferenceJson(original)).characterCards
+    return decodeRecoveredImportInference(original, delta, (_zh, en) => en).result.characterCards
   } catch { return null }
 }
 
