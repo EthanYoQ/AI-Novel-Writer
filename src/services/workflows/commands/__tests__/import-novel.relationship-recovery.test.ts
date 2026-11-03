@@ -351,4 +351,19 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
     expect(relationshipsOf(entries).陆舟).toEqual([{ target: '苏绾', relation: '同窗' }])
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(/陆舟→韩烁.*角色/))
   })
+
+  it('adopts no card from duplicate delta cards that omit another endpoint and drops both dangling relationships', async () => {
+    const invoke = stubSuccessfulImportIpc()
+    const initial = withMissingEndpoint('韩烁')
+    initial.characterCards[1].relationships.push({ target: '叶宁', relation: '暗中相助' })
+    const generateStream = respondWith([initial, { characterCards: [card('韩烁', 'supporting'), card('韩烁', 'minor')] }])
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    const entries = committedEntries(invoke)
+    expect(entries.map(entry => entry.name)).toEqual(['陆舟', '苏绾', '顾岩'])
+    expect(relationshipsOf(entries)).toMatchObject({ 陆舟: [], 苏绾: [] })
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(/已丢弃 2 条关系/))
+  })
 })

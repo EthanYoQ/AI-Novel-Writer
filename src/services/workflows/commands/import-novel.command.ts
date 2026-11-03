@@ -233,7 +233,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       const droppedEn = droppedRelationships.map(item => `${item.source}→${item.target} (${item.relation})`).join(', ')
       callbacks.log(text(
         `已丢弃 ${droppedRelationships.length} 条关系，关系对象没有角色卡：${dropped}。这是导入推演的内部限制（最多 ${MAX_IMPORT_INFERENCE_CHARACTER_CARDS} 张角色卡，只补卡一次），不是你的设置。导入完成后可以在「角色名单」里手动补上这些角色和关系。`,
-        `Dropped ${droppedRelationships.length} relationship(s) whose target has no character card: ${droppedEn}. This is an internal import-inference limit (at most ${MAX_IMPORT_INFERENCE_CHARACTER_CARDS} character cards and one card-recovery request), not one of your settings. After the import, you can add these characters and relationships in the Cast.`,
+        `Dropped ${droppedRelationships.length} relationship(s) whose target has no character card: ${droppedEn}. This is an internal import-inference limit (at most ${MAX_IMPORT_INFERENCE_CHARACTER_CARDS} character cards and one card-recovery request), not one of your settings. After the import, you can add these characters and relationships on the Cast page.`,
       ))
     }
     return result
