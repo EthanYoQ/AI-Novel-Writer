@@ -14,6 +14,8 @@ const TRUNCATION_NOTE = /\n\n…（内容已截断[\s\S]*$/u
 type Core = { premise: string; worldbuilding: string; charactersArch: string; synopsis: string }
 let fixture: AgentHostFixture
 let core: Core
+let doneText = ''
+const CONTINUE = /offset=(\d+) 读取下一段/u
 
 function longText(length: number, seed: string): string {
   let text = ''
@@ -30,7 +32,7 @@ function followContinuation(firstArgs: Record<string, unknown>) {
   fixture.response = async index => {
     if (index === 0) return toolCall(firstArgs)
     const last = fixture.recovery.rounds.find(round => round.index === index - 1)?.actions.at(-1)?.observation ?? ''
-    const next = /offset=(\d+)/u.exec(last)
+    const next = CONTINUE.exec(last)
     return next ? toolCall({ ...firstArgs, offset: Number(next[1]) }) : '已读完。'
   }
 }
@@ -46,6 +48,7 @@ async function runHosted() {
   await runAgentLoop('system', [], '读架构', 'frozen-model', vi.fn(async () => host.round(index++)), ui, undefined,
     { projectSession: session, selectedModelId: 'frozen-model', writingLanguage: 'zh-CN', uiLocale: 'zh-CN', agentGeneration: host })
   expect(ui.onError).not.toHaveBeenCalled()
+  doneText = ui.onDone.mock.calls.at(-1)?.[0] ?? ''
   return fixture.recovery.rounds.flatMap(round => round.actions).map(action => action.observation ?? '')
 }
 
@@ -131,7 +134,7 @@ describe('read_architecture 超过工具结果上限时可以续读（#557）', 
     expect(result.content).toContain(String('📐 架构文件：剧情大纲\n\n'.length + 7000))
   })
 
-  it.each([-1, 1.5, 'abc'])('offset=%s 不是非负整数时报错而不是静默从头读', async offset => {
+  it.each([-1, 1.5, 'abc', '3000', true, null, []])('offset=%s 不是非负整数时报错而不是静默从头读', async offset => {
     core.synopsis = longText(7000, '大纲')
     const result = await readArchitectureTool.execute({ file_name: '剧情大纲', offset },
       { projectSession: session, selectedModelId: null, writingLanguage: 'zh-CN', uiLocale: 'zh-CN' })
@@ -140,13 +143,24 @@ describe('read_architecture 超过工具结果上限时可以续读（#557）', 
     expect(result.error).toMatch(/offset/u)
   })
 
-  it('旧版（非宿主）循环也给出同样有效的续读提示', async () => {
-    core.synopsis = longText(7000, '大纲')
+  it('内容长到工具轮次不够读完时，最后一段提示改为根据已读内容回答，助手仍有一轮回复作者', async () => {
+    core.synopsis = longText(40_000, '超长大纲')
+    followContinuation({ file_name: '剧情大纲' })
+
+    const observations = await runHosted()
+
+    expect(doneText).toContain('已读完。')
+    expect(doneText).not.toContain('最大工具调用次数')
+    expect(observations.at(-1)).not.toMatch(CONTINUE)
+    expect(observations.at(-1)).toMatch(/offset=\d+/u)
+  })
+
+  async function runLegacy() {
     const observations: string[] = []
     const generate = vi.fn(async (messages: { role: string; content: string }[]) => {
       const last = messages.at(-1)!
       if (last.role === 'user' && last.content.includes('<tool_result')) observations.push(last.content)
-      const next = /offset=(\d+)/u.exec(observations.at(-1) ?? '')
+      const next = CONTINUE.exec(observations.at(-1) ?? '')
       if (generate.mock.calls.length === 1) return toolCall({ file_name: '剧情大纲' })
       return next ? toolCall({ file_name: '剧情大纲', offset: Number(next[1]) }) : '已读完。'
     })
@@ -157,7 +171,24 @@ describe('read_architecture 超过工具结果上限时可以续读（#557）', 
       { projectSession: session, selectedModelId: 'model', writingLanguage: 'zh-CN', uiLocale: 'zh-CN' })
 
     const segments = observations.map(observation => /<tool_result name="read_architecture">\n([\s\S]*)\n<\/tool_result>/u.exec(observation)![1])
+    return { segments, doneText: ui.onDone.mock.calls.at(-1)?.[0] ?? '' }
+  }
+
+  it('旧版（非宿主）循环也给出同样有效的续读提示', async () => {
+    core.synopsis = longText(7000, '大纲')
+
+    const { segments } = await runLegacy()
+
     expect(segments).toHaveLength(3)
     expect(joinSegments(segments)).toBe(`📐 架构文件：剧情大纲\n\n${core.synopsis}`)
+  })
+
+  it('旧版循环在轮次不够读完时同样留一轮回复作者', async () => {
+    core.synopsis = longText(40_000, '超长大纲')
+
+    const legacy = await runLegacy()
+
+    expect(legacy.doneText).toContain('已读完。')
+    expect(legacy.doneText).not.toContain('最大工具调用次数')
   })
 })
