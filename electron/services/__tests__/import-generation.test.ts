@@ -130,23 +130,24 @@ it('持久replayTask被篡改时拒绝回读，不新增派发',async()=>{
  expect(f.spy).toHaveBeenCalledTimes(1)
 })
 
-async function globalEffect(kind: 'unproven' | 'inference' | 'endpoint' | 'forged' = 'unproven') {
+async function globalEffect(kind: 'unproven' | 'inference' | 'endpoint' | 'forged' | 'dropped' | 'rejected-delta' = 'unproven') {
  const core={genre:'现实',subGenre:'冒险',targetAudience:'通用',totalChapters:1,wordsPerChapter:900,plotStructure:'three_act',narrativePov:'third_limited',goldenFinger:'无',globalGuidance:'克制',premise:'海港来信',coreOutline:'寻找来信者',worldSetting:'海港',protagonistProfile:'林岚',worldbuilding:'海港街巷',synopsis:'找到信件'}
  const card = {name:'林岚',role:'protagonist',gender:'未知',age:'18',appearance:'朴素',personality:'谨慎',background:'港口居民',abilities:'观察',motivation:'寻信',relationships:[] as { target: string; relation: string }[],arc:'成长',notes:'待确认'}
  const generated = ['林岚','苏绾','顾岩'].map((name, index) => ({ ...card, name, role: index ? 'supporting' : 'protagonist',
    currentState: { location:'海港',powerLevel:'普通',physicalState:'正常',mentalState:'警觉',keyItems:'信件',recentEvents:'寻信',updatedAtChapter:0 } }))
- if (kind === 'endpoint') generated[0].relationships = [{ target:'掌柜', relation:'雇主' }]
+ if (kind !== 'unproven' && kind !== 'inference' && kind !== 'forged') generated[0].relationships = [{ target:'苏绾', relation:'同乡' }, { target:'掌柜', relation:'雇主' }]
  const delta = { ...generated[1], name:'掌柜' }
  const original = JSON.stringify({ novelConfig:{ ...core, narrativePOV:core.narrativePov }, architectureFiles:{ premise:core.premise,worldbuilding:core.worldbuilding,synopsis:core.synopsis }, characterCards:generated })
  let output = kind === 'unproven' ? '{"facts":"合成"}' : original
  const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:output});return {finishReason:'stop',usage:null}})
  const handle=f.owner.begin(f.selection).handle
  await f.owner.executeImportGeneration({execution:f.execution,handle,ordinal:0,task:kind === 'unproven' ? task : { ...task, purpose:'import-inference' }})
- if (kind === 'endpoint') {
-   output = JSON.stringify({ characterCards:[delta] })
+ if (kind === 'endpoint' || kind === 'rejected-delta') {
+   output = JSON.stringify({ characterCards: kind === 'endpoint' ? [delta] : [delta, { ...delta, name:'任意新增' }] })
    await f.owner.executeImportGeneration({execution:f.execution,handle,ordinal:1,task:{ ...task, purpose:'import-inference:endpoint-card-recovery' }})
  }
  const characterEntries = kind === 'unproven' ? [card] : structuredClone(kind === 'endpoint' ? [...generated,delta] : generated)
+ if (kind === 'dropped' || kind === 'rejected-delta') characterEntries[0].relationships = [{ target:'苏绾', relation:'同乡' }]
  if (kind === 'forged') characterEntries[0].notes = 'renderer伪造的字段'
  ImportRunRepository.prepareEffectReceipt({runId:f.slot.runId,stage:'global',batchId:'done',effectKey:'global-facts',kind:'project-global-facts',payload:{operationId:"novel-import-global-导入任务",expectedRosterRevision:0,core,characterEntries,generationRunHandle:handle}},f.execution)
  const committed=ImportRunRepository.commitEffectReceipt(f.slot.runId,'global','done',f.execution,Date.now(),f.owner.assertImportGenerationSources)
@@ -160,7 +161,7 @@ async function globalEffect(kind: 'unproven' | 'inference' | 'endpoint' | 'forge
  await f.owner.executeImportGeneration({execution:f.execution,handle:style.handle,ordinal:0,task:{...task,output:'visible-text'}})
  return Object.assign(f,{style,styleSlot})
 }
-it.each(['inference', 'endpoint'] as const)('导入角色提议从持久%s产物恢复来源并经作者批准采用', async kind => {
+it.each(['inference', 'endpoint', 'dropped', 'rejected-delta'] as const)('导入角色提议从持久%s产物恢复来源并经作者批准采用', async kind => {
  const f = await globalEffect(kind)
  const stored = f.db.prepare("SELECT proposal_id,raw_value FROM character_identity_proposals WHERE source_key LIKE 'character-proposal-v1:%'").get() as { proposal_id: string; raw_value: string }
  const envelope = JSON.parse(stored.raw_value); envelope.proof.provenance = null
