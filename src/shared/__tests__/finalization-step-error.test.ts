@@ -178,6 +178,17 @@ describe('重开再定稿后清理旧版本（ADR-0024）', () => {
     expect(describeFinalizationStepError('FINALIZATION_REPLACED_MANUSCRIPT_BUSY:["Chapter 1.txt"]', en)).toContain('“Chapter 1.txt”')
   })
 
+  it('英文说明随文件数用单数或复数', () => {
+    expect(describeFinalizationStepError('FINALIZATION_REPLACED_MANUSCRIPT_KEPT:["a.txt"]', en)).toBe(
+      "The replaced version's manuscript file “a.txt” was changed after it was finalized, so it was kept. If you no longer need it, delete or rename it yourself, then select Retry.")
+    expect(describeFinalizationStepError('FINALIZATION_REPLACED_MANUSCRIPT_KEPT:["a.txt","b.txt"]', en)).toBe(
+      "The replaced versions' manuscript files “a.txt”, “b.txt” were changed after they were finalized, so they were kept. If you no longer need them, delete or rename them yourself, then select Retry.")
+    expect(describeFinalizationStepError('FINALIZATION_REPLACED_MANUSCRIPT_BUSY:["a.txt"]', en)).toBe(
+      "The replaced version's manuscript file “a.txt” is open in another program or read-only, so it could not be deleted yet. Close that program or clear read-only, then select Retry.")
+    expect(describeFinalizationStepError('FINALIZATION_REPLACED_MANUSCRIPT_BUSY:["a.txt","b.txt"]', en)).toBe(
+      "The replaced versions' manuscript files “a.txt”, “b.txt” are open in another program or read-only, so they could not be deleted yet. Close those programs or clear read-only, then select Retry.")
+  })
+
   it('改过的旧知识库文档重试也不删，不摆重试；其余情形可以重试，新文档没导入时先重试导入', () => {
     const plan = planFinalizationRetry({
       kb_import: failed('向量服务没有响应'),
