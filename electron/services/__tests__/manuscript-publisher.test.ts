@@ -1,9 +1,9 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { publishManuscript, resolveManuscriptTarget } from '../manuscript-publisher'
+import { publishManuscript, removeManuscriptIfUnchanged, resolveManuscriptTarget } from '../manuscript-publisher'
 
 const roots: string[] = []
 
@@ -14,6 +14,7 @@ function makeRoot(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true })
   }
@@ -66,5 +67,29 @@ describe('manuscript publisher target seam', () => {
     await expect(publishManuscript({ projectRoot, targetFileName: '../escape.txt', chapterNumber: 3, chapterTitle: '雨夜', content: '定稿正文' }))
       .rejects.toThrow(/^MANUSCRIPT_STORED_TARGET_INVALID$/u)
     expect(fs.readFileSync(path.join(projectRoot, '第3章 雨夜.txt'), 'utf8')).toBe('作者在应用外改过的正文')
+  })
+})
+
+describe('被替换的旧正文文件', () => {
+  // 占用时的重试只在 Windows 上做，其他平台第一次失败就把错误抛出，没有「等待期间被改」这回事。
+  it.skipIf(process.platform !== 'win32')('删除被占用、等待重试期间作者保存了修改：重新比对，改过的保留', () => {
+    const projectRoot = makeRoot()
+    const published = '第1章 雾钟\n\n当初发布的正文。'
+    const edited = `${published}\n作者在占用期间保存的一行。`
+    const file = path.join(projectRoot, '第1章 雾钟.txt')
+    fs.writeFileSync(file, published, 'utf8')
+    const unlink = fs.unlinkSync.bind(fs)
+    let held = true
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(target => {
+      if (held && String(target) === file) {
+        held = false
+        fs.writeFileSync(file, edited, 'utf8')
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      }
+      unlink(target)
+    })
+
+    expect(removeManuscriptIfUnchanged(projectRoot, '第1章 雾钟.txt', [published])).toBe('changed')
+    expect(fs.readFileSync(file, 'utf8')).toBe(edited)
   })
 })

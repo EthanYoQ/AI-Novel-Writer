@@ -31,6 +31,7 @@ import { PostProcessRepository } from '../../repositories/post-process-repositor
 import { RevisionRepository } from '../../repositories/revision-repository'
 import { DraftRepository } from '../../repositories/draft-repository'
 import { reopenFinalizedChapter } from '../chapter-reopen-service'
+import { GenerationDraftEffects } from '../generation-draft-effects'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import { getProjectDb, getCurrentProjectPath } from '../../database'
@@ -2580,6 +2581,21 @@ describe('main draft persistence and batch lineage', () => {
     expect(() => f.owner.readBatch(batch.batchId)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
 
     expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
+  })
+  it('refuses to reopen when reading an unfinished batch fails unexpectedly, instead of skipping the batch', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
+    const broken = vi.spyOn(GenerationDraftEffects.prototype, 'readBatchHistory').mockImplementation(() => { throw new TypeError('unexpected') })
+    cleanups.push(() => broken.mockRestore())
+
+    expect(() => reopenFinalizedChapter('project', { chapterNumber: 1 })).toThrow('unexpected')
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
   })
   it('reopens a chapter written by a finished batch', async () => {
     const f = drafting()
