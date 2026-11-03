@@ -186,3 +186,53 @@ it('重放的结果还不够、这一批要再发请求而根额度已用完：�
   ImportRunRepository.fail(RUN, 'blueprints', '额度用完', execution)
   await continueAndFinish(f, owner)
 }, 60_000)
+
+const blank: GenerationRunServiceDependencies['dispatch'] = async () => ({ finishReason: 'stop', usage: null })
+const blueprintTask = { purpose: 'import-blueprints', output: 'structured-data' as const, messages: [{ role: 'user' as const, content: '推演参考小说' }] }
+
+async function secondBatchAttempts(f: ImportGenerationFixture, dispatches: GenerationRunServiceDependencies['dispatch'][]) {
+  await runGlobal(f)
+  await runStyle(f)
+  await runBlueprints(f, f.chapters.slice(0, 5))
+  const execution = ImportRunRepository.startOrResume(RUN, '合成执行器').execution
+  const slot = blueprintSlot(RUN, f.chapters.slice(5))
+  const handle = openSlot(f, slot, execution)
+  for (const [ordinal, dispatch] of dispatches.entries()) {
+    f.current.dispatch = dispatch
+    expect((await f.owner.executeImportGeneration({ execution, handle, ordinal, task: blueprintTask })).outcome.status).toBe('completed')
+  }
+  return { execution, slot, handle }
+}
+
+it('一批的首次回复是空白、拆成两半后都合法：这一批照常提交', async () => {
+  const f = importGenerationFixture(cleanup, 10)
+  const { execution, slot, handle } = await secondBatchAttempts(f, [blank, stop, stop])
+  commitSlot(f, slot, execution, blueprintEffect(RUN, f.chapters.slice(5))(handle))
+  expect(f.db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get()).toBe(10)
+}, 60_000)
+
+it('空白回复后拆出的前一半已合法结束、进程退出：「继续导入」重放已有结果，只补发后一半的请求', async () => {
+  const f = importGenerationFixture(cleanup, 10)
+  const { slot } = await secondBatchAttempts(f, [blank, stop])
+  fenceProjectSession(f.db)
+  const owner = f.openOwner('epoch-2')
+  f.spy.mockClear()
+  f.current.dispatch = stop
+  const execution = ImportRunRepository.startOrResume(RUN, '继续导入的执行者').execution
+  const handle = openSlot(f, slot, execution, owner)
+  for (const ordinal of [0, 1, 2]) await owner.executeImportGeneration({ execution, handle, ordinal, task: blueprintTask })
+  commitSlot(f, slot, execution, blueprintEffect(RUN, f.chapters.slice(5))(handle), owner)
+  expect(f.db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get()).toBe(10)
+  expect(f.spy).toHaveBeenCalledTimes(1)
+}, 60_000)
+
+it('这一批只收到空白回复就中断了：「继续导入」不复用这次运行，为这一批重新请求并跑完', async () => {
+  const f = importGenerationFixture(cleanup, 10)
+  await secondBatchAttempts(f, [blank])
+  fenceProjectSession(f.db)
+  f.spy.mockClear()
+  f.current.dispatch = stop
+  await runBlueprints(f, f.chapters.slice(5), RUN, f.openOwner('epoch-2'), '继续导入的执行者')
+  expect(f.db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get()).toBe(10)
+  expect(f.spy).toHaveBeenCalledTimes(1)
+}, 60_000)
