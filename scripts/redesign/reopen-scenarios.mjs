@@ -25,12 +25,45 @@ async function trackOpenedSession(app) {
   await app.evaluate(({ ipcMain }) => {
     const handlers = ipcMain._invokeHandlers
     const original = handlers.get('project:open')
+    if (typeof original !== 'function') throw new Error('project:open 未注册，记不下界面会话')
     handlers.set('project:open', async (event, projectPath, ...rest) => {
       const result = await original(event, projectPath, ...rest)
       if (result?.success) globalThis.__driveOpened = { projectId: result.project.id, projectPath, leaseId: result.project.sessionLease }
       return result
     })
   })
+}
+
+/** 记下主进程每次答复的替换影响。重启后是新进程，要重新装。 */
+async function trackImpactLoads(app) {
+  await app.evaluate(({ ipcMain }) => {
+    const handlers = ipcMain._invokeHandlers
+    const original = handlers.get('chapter:replacement-impacts')
+    if (typeof original !== 'function') throw new Error('chapter:replacement-impacts 未注册，记不下替换影响的答复')
+    globalThis.__driveImpactLoads = []
+    handlers.set('chapter:replacement-impacts', async (...args) => {
+      const result = await original(...args)
+      globalThis.__driveImpactLoads.push(result)
+      return result
+    })
+  })
+}
+
+const impactLoadCount = app => app.evaluate(() => globalThis.__driveImpactLoads.length)
+
+/**
+ * 等界面在 since 之后读到一次带着第 chapterNumber 章替换的影响，再等界面画两帧。
+ * 之后提示还不显示，才是被「知道了」隐藏的，而不是数据还没到。
+ */
+async function impactLoaded(app, page, since, chapterNumber) {
+  const deadline = Date.now() + 30_000
+  for (;;) {
+    const loads = await app.evaluate((from) => globalThis.__driveImpactLoads.slice(from), since)
+    if (loads.some(result => result?.success && result.impacts.some(impact => impact.chapterNumber === chapterNumber))) break
+    assert.ok(Date.now() < deadline, `30 秒内界面没有读到第 ${chapterNumber} 章的替换影响。实际：${JSON.stringify(loads)}`)
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 }
 
 async function uiSession(app) {
@@ -42,6 +75,7 @@ async function uiSession(app) {
 /** 示例作品去掉第 4 章的草稿：第 3 章定稿后，第 4 章起都只有蓝图，第 4 章就是下一章要写的。 */
 async function seedWithoutChapter4(context) {
   await trackOpenedSession(context.app)
+  await trackImpactLoads(context.app)
   await seedStageSample(context, { beforeReload: async ({ page, invoke, path: projectPath, session }) => {
     for (const draft of await invoke(page, 'db:draft-list', 4, projectPath, session)) {
       assert.equal((await invoke(page, 'db:draft-delete', draft.id, projectPath, session)).success, true)
@@ -173,8 +207,9 @@ export const REOPEN_SCENARIOS = {
     await openChapter(page, 2)
     await ownNotice(page, 2).getByRole('button', { name: '知道了' }).click()
     await ownNotice(page, 2).waitFor({ state: 'detached' })
+    const loadsBeforeChapter3 = await impactLoadCount(context.app)
     await openChapter(page, 3)
-    await page.waitForTimeout(1500)
+    await impactLoaded(context.app, page, loadsBeforeChapter3, 2)
     observed.laterLineAfterAcknowledge = await laterLine.count()
     observed.manuscriptsAfterFirst = manuscripts(projectPath, 2)
     observed.knowledgeAfterFirst = await knowledgeDocuments(context, 2)
@@ -189,9 +224,10 @@ export const REOPEN_SCENARIOS = {
 
     await context.restart()
     page = context.page
+    await trackImpactLoads(context.app)
     await stage.openAfterRestart(page, STAGE_SAMPLE.name)
     await openChapter(page, 2)
-    await page.waitForTimeout(3000)
+    await impactLoaded(context.app, page, 0, 2)
     observed.noticeAfterRestart = await ownNotice(page, 2).count()
 
     // 再替换一次：这次被替换的定稿是上面重开出来的，有自己导入的知识库文档和正文文件。
@@ -221,7 +257,9 @@ export const REOPEN_SCENARIOS = {
     assert.match(observed.supersededSwitcher, /^本章版本：已被替换的定稿 v1 · /u)
     assert.equal(observed.laterLineAfterAcknowledge, 0, '点了「知道了」，后续章的那一行一起不再显示')
     assert.equal(observed.knowledgeAfterFirst.length, 1, `第一次替换后知识库里有第 2 章新定稿的文档。实际：${JSON.stringify(observed.knowledgeAfterFirst)}`)
-    assert.equal(observed.manuscriptsAfterFirst.length, 1, `第一次替换后第 2 章只剩一份正文文件。实际：${JSON.stringify(observed.manuscriptsAfterFirst)}`)
+    assert.ok(observed.knowledgeAtStart.every(id => !observed.knowledgeAfterFirst.includes(id)),
+      `替换前的知识库文档已删除。实际：${JSON.stringify({ start: observed.knowledgeAtStart, after: observed.knowledgeAfterFirst })}`)
+    assert.equal(observed.manuscriptsAfterFirst.length, 1,`第一次替换后第 2 章只剩一份正文文件。实际：${JSON.stringify(observed.manuscriptsAfterFirst)}`)
     assert.ok(observed.manuscriptsAtStart.every(name => !observed.manuscriptsAfterFirst.includes(name)),
       `替换前的正文文件不再留着（导入的定稿没有发布正文文件时为空）。实际：${JSON.stringify({ start: observed.manuscriptsAtStart, after: observed.manuscriptsAfterFirst })}`)
     assert.equal(observed.writeChapter4, 'started', `第 4 章能写。实际：${observed.writeChapter4}`)
@@ -281,6 +319,7 @@ export const REOPEN_SCENARIOS = {
     await finalizeReopened(page, 3)
     observed.postProcess = await chapterView.postProcessSteps(page)
     const kept = chapterView.postProcess(page).locator('li[data-state="failed"]')
+      .filter({ has: page.locator('b', { hasText: /^删除旧版本的正文文件$/u }) })
     observed.keptDetail = await kept.count() > 0 ? await kept.first().innerText() : null
     await context.shoot('reopen-8-edited-txt-kept')
 
