@@ -1284,6 +1284,15 @@ export interface ChapterLifecycleChannels {
     args: [request: ReopenChapterRequest, expectedProjectPath: string]
     return: ReopenChapterResult
   }
+  /** 定稿后处理的清理步骤：删除本章被替换的旧定稿收进知识库的文档、旧实体稿（ADR-0024）。draftId 是本章当前定稿。 */
+  'chapter:remove-replaced-knowledge': {
+    args: [draftId: number, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
+  'chapter:remove-replaced-manuscripts': {
+    args: [draftId: number, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
 }
 
 // ===== MCP =====

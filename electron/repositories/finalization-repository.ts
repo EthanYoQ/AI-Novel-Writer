@@ -4,7 +4,9 @@ import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { countDraftUnits } from '../../src/shared/draft-units'
 import type { DuplicateFinalizationRepair, RepairedDuplicateChapter } from '../../src/shared/finalization-repair'
 import type { ReopenChapterRequest, ReopenChapterResult, ReopenedFinal } from '../../src/shared/chapter-reopen'
+import type { ReplacedFinalCleanupStepKey } from '../../src/shared/finalization-step-error'
 import { DraftRepository } from './draft-repository'
+import { PostProcessRepository } from './post-process-repository'
 import { freezeFinalizedCharacterSnapshot, invalidateContinuityProjectionFrom } from './summary-repository'
 
 export type PublicationStatus = 'pending' | 'published'
@@ -390,7 +392,12 @@ export class FinalizationRepository {
     }).immediate()
   }
 
-  static repairDuplicateFinalizations(): DuplicateFinalizationRepair {
+  /**
+   * 遗留的同章多行 finalized：保留版本最高的一份，其余降为 superseded。旧定稿留下的知识库文档和实体稿，
+   * 在保留那份定稿最新的后处理跑批里登记清理步骤（与重开再定稿相同，ADR-0024）；没有跑批的不登记。
+   * cleanupLabels 是步骤在界面上的名称，按调用方的界面语言给。
+   */
+  static repairDuplicateFinalizations(cleanupLabels: Readonly<Record<ReplacedFinalCleanupStepKey, string>>): DuplicateFinalizationRepair {
     const db = requireDatabase()
     return db.transaction(() => {
       const rows = db.prepare(`
@@ -421,7 +428,7 @@ export class FinalizationRepository {
       for (const row of rows) {
         const current = chapters.at(-1)
         if (current?.chapterNumber !== row.chapter_number) {
-          chapters.push({ chapterNumber: row.chapter_number, keptDraftId: row.id, keptVersion: row.version, superseded: [] })
+          chapters.push({ chapterNumber: row.chapter_number, keptDraftId: row.id, keptVersion: row.version, superseded: [], cleanupRegistered: false })
           keptFileName = row.target_file_name ?? ''
           continue
         }
@@ -433,6 +440,18 @@ export class FinalizationRepository {
           targetFileName: row.publication_status === 'published' && row.target_file_name !== keptFileName
             ? row.target_file_name ?? '' : '',
         })
+      }
+      for (const chapter of chapters) {
+        const cleanup: ReplacedFinalCleanupStepKey[] = [
+          ...chapter.superseded.some(item => item.knowledgeDocumentId) ? ['remove_replaced_knowledge' as const] : [],
+          ...chapter.superseded.some(item => item.targetFileName) ? ['remove_replaced_manuscripts' as const] : [],
+        ]
+        // 保留的定稿有收据时，最新跑批按 finalization 记；按章号记的是旧版本的跑批，清理步骤读不到收据，不往那里挂。
+        const run = PostProcessRepository.getLatestRun('chapter_finalize', String(chapter.chapterNumber))
+        if (cleanup.length === 0 || !run?.triggerSourceId.startsWith('finalization:')) continue
+        PostProcessRepository.addUnfinishedSteps(run.id, cleanup.map(key => ({ key, label: cleanupLabels[key], critical: false })),
+          'FINALIZATION_REPLACED_CLEANUP_PENDING')
+        chapter.cleanupRegistered = true
       }
       if (chapters.length > 0) invalidateContinuityProjectionFrom(db, chapters[0]!.chapterNumber)
       return { chapters }

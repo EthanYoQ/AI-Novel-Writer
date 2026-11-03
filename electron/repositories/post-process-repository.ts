@@ -180,6 +180,23 @@ export class PostProcessRepository {
         })()
     }
 
+    /**
+     * 给已有的跑批补上它还没有的步骤，记为未完成并带上说明码；已有的同名步骤不动。
+     * 遗留重复定稿修复用它把清理旧定稿的步骤挂到保留那份定稿的跑批上（ADR-0024），作者在后处理里点「重试」就能清理。
+     */
+    static addUnfinishedSteps(runId: string, steps: ReadonlyArray<{ key: string; label: string; critical: boolean }>, errorMsg: string): void {
+        const db = getProjectDb()
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
+        const insert = db.prepare(`
+      INSERT INTO post_process_steps (run_id, step_key, label, critical, error_msg)
+      SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM post_process_steps WHERE run_id = ? AND step_key = ?)
+    `)
+        db.transaction(() => {
+            for (const step of steps) insert.run(runId, step.key, step.label, step.critical ? 1 : 0, errorMsg, runId, step.key)
+            PostProcessRepository._refreshCriticalStatus(runId)
+        })()
+    }
+
     /** 重新检查并更新 all_critical_passed 状态 */
     private static _refreshCriticalStatus(runId: string): void {
         const db = getProjectDb()

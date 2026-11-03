@@ -150,3 +150,47 @@ describe('定稿后处理步骤错误', () => {
   })
 })
 
+
+describe('重开再定稿后清理旧版本（ADR-0024）', () => {
+  const IPC = "Error invoking remote method 'project-session:invoke': Error: "
+  const failed = (error: string) => ({ ok: false, error })
+  const CODES = [
+    'FINALIZATION_REPLACED_KNOWLEDGE_IMPORT_REQUIRED',
+    'FINALIZATION_REPLACED_KNOWLEDGE_EDITED',
+    'FINALIZATION_REPLACED_KNOWLEDGE_NOT_REMOVED',
+    'FINALIZATION_REPLACED_MANUSCRIPT_PUBLICATION_REQUIRED',
+    'FINALIZATION_REPLACED_MANUSCRIPT_KEPT:["Chapter 1.txt"]',
+    'FINALIZATION_REPLACED_MANUSCRIPT_BUSY:["Chapter 1.txt"]',
+    'FINALIZATION_REPLACED_CLEANUP_PENDING',
+  ]
+
+  it.each(CODES)('%s：中英文都给作者能照着做的说明，不带错误码', code => {
+    expect(finalizationStepErrorCode(`${IPC}${code}`)).toBe(code)
+    for (const text of [describeFinalizationStepError(`${IPC}${code}`, zh), describeFinalizationStepError(code, en)]) {
+      expect(text).not.toMatch(/Error invoking|FINALIZATION_|\{names\}/u)
+    }
+    expect(describeFinalizationStepError(code, en)).not.toMatch(/\p{Script=Han}/u)
+  })
+
+  it('留下的或删不掉的旧文件按名字列出', () => {
+    const names = 'FINALIZATION_REPLACED_MANUSCRIPT_KEPT:["第1章 雾钟.txt","第1章 雾钟 (2).txt"]'
+    expect(describeFinalizationStepError(names, zh)).toContain('「第1章 雾钟.txt」、「第1章 雾钟 (2).txt」')
+    expect(describeFinalizationStepError('FINALIZATION_REPLACED_MANUSCRIPT_BUSY:["Chapter 1.txt"]', en)).toContain('“Chapter 1.txt”')
+  })
+
+  it('改过的旧知识库文档重试也不删，不摆重试；其余情形可以重试，新文档没导入时先重试导入', () => {
+    const plan = planFinalizationRetry({
+      kb_import: failed('向量服务没有响应'),
+      remove_replaced_knowledge: failed('FINALIZATION_REPLACED_KNOWLEDGE_IMPORT_REQUIRED'),
+      remove_replaced_manuscripts: failed('FINALIZATION_REPLACED_MANUSCRIPT_KEPT:["第1章 雾钟.txt"]'),
+      chapter_notes: { ok: true },
+      character_cards: { ok: true },
+    })
+    expect({ rows: [...plan.rows], card: plan.card })
+      .toEqual({ rows: ['kb_import', 'remove_replaced_manuscripts'], card: ['kb_import', 'remove_replaced_knowledge', 'remove_replaced_manuscripts'] })
+
+    const edited = planFinalizationRetry({ kb_import: { ok: true }, remove_replaced_knowledge: failed('FINALIZATION_REPLACED_KNOWLEDGE_EDITED') })
+    expect({ rows: [...edited.rows], card: edited.card }).toEqual({ rows: [], card: [] })
+    expect(describeFinalizationStepError('FINALIZATION_REPLACED_KNOWLEDGE_EDITED', zh)).toContain('再点「重试」结果也一样')
+  })
+})

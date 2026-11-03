@@ -9,6 +9,7 @@ import {
   type ChapterDeletionService,
 } from '../services/chapter-deletion-service'
 import { reopenFinalizedChapter } from '../services/chapter-reopen-service'
+import { removeReplacedKnowledge, removeReplacedManuscripts } from '../services/replaced-final-cleanup'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 
@@ -79,6 +80,28 @@ export function registerChapterLifecycleController(
   ) => {
     assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
     return reopenFinalizedChapter(projectId, request)
+  })
+
+  register('chapter:remove-replaced-knowledge', async (
+    _event,
+    draftId: number,
+    expectedProjectPath: string,
+    projectRoot: string,
+  ) => {
+    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
+    await removeReplacedKnowledge(projectRoot, draftId)
+    return { success: true }
+  })
+
+  register('chapter:remove-replaced-manuscripts', async (
+    _event,
+    draftId: number,
+    expectedProjectPath: string,
+    projectRoot: string,
+  ) => {
+    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
+    await removeReplacedManuscripts(projectRoot, draftId)
+    return { success: true }
   })
 
   register('chapter:list-incomplete-deletions', async (

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { retryWhileWindowsFileBusy } from '../utils/windows-file-busy-retry'
+
 const WINDOWS_ILLEGAL_FILE_NAME_CHARS = /[<>:"/\\|?*]/g
 const WINDOWS_RESERVED_FILE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 
@@ -132,6 +134,26 @@ export async function removePublishedManuscript(
   const target = resolveStoredManuscriptTarget(projectRoot, targetFileName)
   if (!fs.existsSync(target.absolutePath)) return
   fs.unlinkSync(target.absolutePath)
+}
+
+/**
+ * 被替换的旧定稿的实体稿：内容仍是当初发布的某一版（published 里的任一份）才删，作者改过的保留（ADR-0024）。
+ * 缺失表示已经清理。Windows 上被占用时按 retryWhileWindowsFileBusy 的口径重试，仍不行就把原错误抛出。
+ */
+export function removeManuscriptIfUnchanged(
+  projectRoot: string,
+  targetFileName: string,
+  published: readonly string[],
+): 'removed' | 'missing' | 'changed' {
+  const target = resolveStoredManuscriptTarget(projectRoot, targetFileName)
+  try {
+    if (!published.includes(retryWhileWindowsFileBusy(() => fs.readFileSync(target.absolutePath, 'utf8')))) return 'changed'
+    retryWhileWindowsFileBusy(() => fs.unlinkSync(target.absolutePath))
+    return 'removed'
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
+    throw error
+  }
 }
 
 export const manuscriptPublisher = {

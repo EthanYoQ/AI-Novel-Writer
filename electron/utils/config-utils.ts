@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { GlobalConfig } from '../../src/shared/ipc-channels'
 import { GLOBAL_CONFIG_PATH, VELA_HOME, assertGlobalDataReady, assertGlobalPathAccess } from '../services/app-data-locator'
+import { retryWhileWindowsFileBusy } from './windows-file-busy-retry'
 export { VELA_HOME, GLOBAL_CONFIG_PATH, MODELS_CONFIG_PATH, RECENT_PROJECTS_PATH } from '../services/app-data-locator'
 
 /** Compatibility function name; only the admitted canonical generation may be created. */
@@ -49,36 +50,6 @@ export function readJsonFile<T>(filePath: string, fallback: T): T {
   return fallback
 }
 
-const WINDOWS_REPLACE_RETRY_DELAYS_MS = [10, 25, 50, 100, 200] as const
-const WINDOWS_REPLACE_RETRY_CODES = new Set(['EACCES', 'EBUSY', 'EPERM'])
-
-function waitSynchronously(milliseconds: number) {
-  const signal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
-  Atomics.wait(signal, 0, 0, milliseconds)
-}
-
-function replaceFileWithRetry(temporaryPath: string, filePath: string) {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      fs.renameSync(temporaryPath, filePath)
-      return
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      const delay = WINDOWS_REPLACE_RETRY_DELAYS_MS[attempt]
-      if (
-        process.platform !== 'win32'
-        || !code
-        || !WINDOWS_REPLACE_RETRY_CODES.has(code)
-        || delay === undefined
-      ) {
-        throw error
-      }
-      // Windows Defender / 索引服务可能短暂占用刚写完的配置文件。
-      waitSynchronously(delay)
-    }
-  }
-}
-
 export function writeJsonFile(filePath: string, data: unknown) {
   assertGlobalPathAccess(filePath)
   const directory = path.dirname(filePath)
@@ -100,7 +71,7 @@ export function writeJsonFile(filePath: string, data: unknown) {
 
     // Windows Defender / 索引服务可能短暂阻止替换；只重试典型占用错误。
     // 若最终仍失败，原文件保持原样，finally 只清理尚未安装的临时文件。
-    replaceFileWithRetry(temporaryPath, filePath)
+    retryWhileWindowsFileBusy(() => fs.renameSync(temporaryPath, filePath))
   } finally {
     if (temporaryFile !== undefined) {
       try {

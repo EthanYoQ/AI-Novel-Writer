@@ -46,7 +46,12 @@ import { writingLanguageText } from '../../../shared/writing-language'
 import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
 import type { FinalizedCharacterGenerationReceipt } from '../../../shared/finalized-character-generation'
-import { finalizationStepErrorCode, type FinalizePostProcessStepKey } from '../../../shared/finalization-step-error'
+import {
+  finalizationStepErrorCode,
+  REPLACED_FINAL_CLEANUP_STEP_LABELS,
+  type FinalizePostProcessStepKey,
+  type ReplacedFinalCleanupStepKey,
+} from '../../../shared/finalization-step-error'
 import { pluralEn } from '../../../shared/plural-en'
 
 export interface FinalizeChapterParams {
@@ -104,6 +109,8 @@ export function buildFinalizePostProcessSteps(
   finalizedSource?: FinalizedSourceIdentity,
   projectionGeneration?: number,
   identityContext?: FinalizedCharacterContext,
+  /** 本章有被替换的旧定稿：导入知识库之后清理旧版本的知识库文档与实体稿（ADR-0024）。 */
+  replacesEarlierFinal = false,
 ): PostProcessStep[] {
   const steps: (PostProcessStep & { key: FinalizePostProcessStepKey })[] = []
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
@@ -159,6 +166,39 @@ export function buildFinalizePostProcessSteps(
       ))
     },
   })
+
+  // ─── 重开再定稿：清理被替换的旧定稿（两步都不阻断后续流程） ─────────────
+  if (replacesEarlierFinal && finalizedDraftId !== undefined) {
+    const cleanup = (
+      key: ReplacedFinalCleanupStepKey,
+      done: [zhCNText: string, enUSText: string],
+    ): PostProcessStep & { key: FinalizePostProcessStepKey } => {
+      const label = text(...REPLACED_FINAL_CLEANUP_STEP_LABELS[key])
+      return {
+        key,
+        label,
+        critical: false,
+        executor: async (callbacks, context) => {
+          if (!context || context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+          const result = await ipc.invokeWithProjectSession(
+            requireWorkflowProjectSession(context),
+            key === 'remove_replaced_knowledge' ? 'chapter:remove-replaced-knowledge' : 'chapter:remove-replaced-manuscripts',
+            finalizedDraftId,
+            _project.path,
+          )
+          // 本流程登记过的码原样记进步骤，界面按当时的界面语言说明；其余按 IPC 结果的通常办法报。
+          const code = result.error ? finalizationStepErrorCode(result.error) : undefined
+          if (code) throw new Error(code)
+          requireIpcSuccess(result, label)
+          callbacks.log(workflowUiText(context, ...done))
+        },
+      }
+    }
+    steps.push(
+      cleanup('remove_replaced_knowledge', ['已删除被替换的旧版本收进知识库的文档', 'Removed the replaced version from the knowledge base']),
+      cleanup('remove_replaced_manuscripts', ['已删除被替换的旧版本的正文文件', "Deleted the replaced version's manuscript file"]),
+    )
+  }
 
   // ─── 步骤 2: 本章剧情要点提取 ─────────────────────────────────────
   steps.push({
@@ -399,6 +439,12 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       }).catch(error => { throw finalizationGenerationError(error) }),
       complete: async () => { throw new Error('FINALIZATION_GENERATION_MAIN_REQUIRED') },
     }
+    const chapterDrafts = await ipc.invokeWithProjectSession(
+      projectSession,
+      'db:draft-list',
+      this.params.chapterNumber,
+      this.params.project.path,
+    )
     const allSteps = buildFinalizePostProcessSteps(
       this.params.project,
       this.params.chapterNumber,
@@ -411,6 +457,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       this.params.finalizedSource,
       frozen.projectionGeneration,
       undefined,
+      chapterDrafts.some(draft => draft.status === 'superseded'),
     )
     // 旧版本的跑批里可能留着现在已没有的步骤（如 style_analysis），跳过它们，只有一步都跑不了时才报错。
     const { stepKeys } = this.params

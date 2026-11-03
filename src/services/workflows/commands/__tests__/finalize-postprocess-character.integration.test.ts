@@ -15,6 +15,7 @@ import { closeProjectDatabase, getProjectDb } from '../../../../../electron/data
 import { openCanonicalProjectFixture as initProjectDatabase } from '../../../../../test/helpers/canonical-project-fixture'
 import { CharacterRepository } from '../../../../../electron/repositories/character-repository'
 import { CharacterRosterRepository, commitCharacterIdentities, refreshCharacterIdentityProjection } from '../../../../../electron/repositories/character-roster-repository'
+import { DraftRepository } from '../../../../../electron/repositories/draft-repository'
 import { PostProcessRepository } from '../../../../../electron/repositories/post-process-repository'
 import { ProjectCoreRepository } from '../../../../../electron/repositories/project-core-repository'
 import {
@@ -53,6 +54,8 @@ let onCommit: ((stepKey: string | undefined, nth: number) => void) | undefined
 const commitsByStep = new Map<string | undefined, number>()
 let actualOwner: ReturnType<typeof createMainGenerationOwner> | undefined
 const stageByRun = new Map<string, string>()
+/** 重开再定稿后清理旧版本的两步收到的请求：[通道, 当前定稿的 draftId]。 */
+const cleanupRequests: Array<[string, unknown]> = []
 function owner() {
   if (actualOwner) return actualOwner
   const db = getProjectDb()!
@@ -218,6 +221,12 @@ function installRealRepositoryIpc(): void {
             return false
           case 'db:draft-get-latest':
             return null
+          case 'db:draft-list':
+            return DraftRepository.listByChapter(Number(args[0]))
+          case 'chapter:remove-replaced-knowledge':
+          case 'chapter:remove-replaced-manuscripts':
+            cleanupRequests.push([channel, args[0]])
+            return { success: true }
           case 'kb:import-text':
             return { success: true, chunkCount: 1, docId: 'doc-1' }
           case 'db:finalization-link-knowledge-document':
@@ -343,7 +352,7 @@ beforeEach(() => {
   const cache = path.resolve('.runtime/.cache/novel-quality-modernization/s09b-finalize-consumer')
   fs.mkdirSync(cache, { recursive: true })
   projectPath = fs.mkdtempSync(path.join(cache, 'case-'))
-  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; characterExecuteFailures = 0; changeFieldBeforeCommit = false; onCommit = undefined; commitsByStep.clear()
+  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; cleanupRequests.length = 0; characterExecuteFailures = 0; changeFieldBeforeCommit = false; onCommit = undefined; commitsByStep.clear()
   initProjectDatabase(projectPath)
   const db = CharacterRosterRepository.read()
   expect(db.status).toBe('empty')
@@ -1225,5 +1234,29 @@ describe('#512 自动重试的最后一次提交时项目状态已变：作者�
 
     const retried = await retry(stepKey === 'chapter_notes' ? ['chapter_notes', 'character_cards'] : ['character_cards'])
     expect(retried.steps[stepKey]).toMatchObject({ ok: false, error: 'FINALIZATION_GENERATION_SOURCE_CHANGED' })
+  })
+})
+
+describe('重开再定稿后的后处理（ADR-0024）', () => {
+  it('本章有被替换的旧定稿：导入知识库之后清理旧版本，再生成章节要点与角色状态；没有旧定稿的章不加这两步', async () => {
+    const firstFinal = await command('Chapter 2 finalized content').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    expect(Object.keys(firstFinal.steps)).toEqual(['kb_import', 'chapter_notes', 'character_cards'])
+    expect(cleanupRequests).toEqual([])
+
+    insertFinalizedDraft(8, 3, 'Chapter 3 new final content')
+    getProjectDb()!.prepare('UPDATE drafts SET version = 2 WHERE id = 8').run()
+    insertFinalizedDraft(6, 3, 'Chapter 3 replaced content')
+    getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = 6").run()
+    const replaced = await command('Chapter 3 new final content', {}, { draftId: 8, chapterNumber: 3 })
+      .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+
+    expect(Object.entries(replaced.steps).map(([key, step]) => [key, step.critical, step.ok])).toEqual([
+      ['kb_import', true, true],
+      ['remove_replaced_knowledge', false, true],
+      ['remove_replaced_manuscripts', false, true],
+      ['chapter_notes', true, true],
+      ['character_cards', false, true],
+    ])
+    expect(cleanupRequests).toEqual([['chapter:remove-replaced-knowledge', 8], ['chapter:remove-replaced-manuscripts', 8]])
   })
 })

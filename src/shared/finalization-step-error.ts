@@ -55,6 +55,28 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; retry: S
     en: "This chapter's Chapter notes changed while this step was running (for example, they were edited on the chapter blueprint), so nothing was written to avoid overwriting that change, and the character state update has not run yet. Retry generates the notes again and replaces the current Chapter notes. To keep your change, don't retry." },
   { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: { after: 'chapter_notes' },
     zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
+  // 重开再定稿后清理被替换的旧定稿（ADR-0024）。{names} 处列出错误码后带的文件名。
+  { code: /^FINALIZATION_REPLACED_KNOWLEDGE_IMPORT_REQUIRED$/, retry: { after: 'kb_import' },
+    zh: '需要先完成「导入知识库」。新定稿收进知识库之前，旧版本的那一份先留着。',
+    en: 'Import into knowledge base must finish first. The replaced version stays in the knowledge base until the new final version is added.' },
+  { code: /^FINALIZATION_REPLACED_KNOWLEDGE_EDITED$/, retry: 'never',
+    zh: '旧版本收进知识库的那一份和旧定稿正文对不上（可能以前改过），为免丢掉改动，没有删除。写作时仍可能查到它，再点「重试」结果也一样。',
+    en: "The replaced version's knowledge-base copy differs from that version's text (it may have been edited earlier), so it was kept to avoid losing those edits. Writing may still find it. Retrying gives the same result." },
+  { code: /^FINALIZATION_REPLACED_KNOWLEDGE_NOT_REMOVED$/, retry: 'described',
+    zh: '旧版本收进知识库的文档没能删除，知识库可能正忙。稍后点「重试」。',
+    en: "The replaced version's knowledge-base document could not be removed; the knowledge base may be busy. Select Retry later." },
+  { code: /^FINALIZATION_REPLACED_MANUSCRIPT_PUBLICATION_REQUIRED$/, retry: 'described',
+    zh: '新定稿的正文文件还没写入，旧版本的正文文件先留着。请先重新写入本章的正文文件，再点「重试」。',
+    en: "The new final version's manuscript file is not written yet, so the replaced version's file stays for now. Write this chapter's manuscript file again first, then select Retry." },
+  { code: /^FINALIZATION_REPLACED_MANUSCRIPT_KEPT(?::.*)?$/su, retry: 'described',
+    zh: '旧版本的正文文件{names}在定稿后被改过，没有删除。不再需要的话，请自己删除或改名，再点「重试」。',
+    en: "The replaced version's manuscript file {names} was changed after it was finalized, so it was kept. If you no longer need it, delete or rename it yourself, then select Retry." },
+  { code: /^FINALIZATION_REPLACED_MANUSCRIPT_BUSY(?::.*)?$/su, retry: 'described',
+    zh: '旧版本的正文文件{names}被其他程序占用或只读，暂时删不掉。关掉占用它的程序或去掉只读后，点「重试」。',
+    en: "The replaced version's manuscript file {names} is open in another program or read-only, so it could not be deleted yet. Close that program or clear read-only, then select Retry." },
+  { code: /^FINALIZATION_REPLACED_CLEANUP_PENDING$/, retry: 'described',
+    zh: '被替换的旧定稿留下的内容还没清理。点「重试」清理；和旧定稿对不上（可能改过）的会留着。',
+    en: 'Content left by a replaced final version has not been cleaned up yet. Select Retry to clean it up; anything that differs from that version (it may have been edited) is kept.' },
 ]
 
 const IPC_PREFIX = /^Error invoking remote method '[^']+': Error: /u
@@ -68,21 +90,45 @@ export function finalizationStepErrorCode(message: string): string | undefined {
   return entryOf(message) ? message.replace(IPC_PREFIX, '') : undefined
 }
 
+/** 错误码后「:」接的 JSON 字符串数组（如旧文件名）；没有或解析不了时为空。 */
+function detailNames(error: string): string[] {
+  const detail = /^[A-Z][A-Z0-9_]*:(\[.*\])$/su.exec(error.replace(IPC_PREFIX, ''))?.[1]
+  if (!detail) return []
+  try {
+    const parsed: unknown = JSON.parse(detail)
+    return Array.isArray(parsed) ? parsed.filter((name): name is string => typeof name === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 /** 步骤记录里的错误码换成作者可读说明；其他错误原样返回。 */
 export function describeFinalizationStepError(error: string, text: (zhCNText: string, enUSText: string) => string): string {
   const entry = entryOf(error)
   if (!entry) return error
+  const names = detailNames(error)
   const prompt = entry.retry === 'prompt'
   return text(
-    entry.zh + (prompt ? '请点「重试」重新生成这一步。' : ''),
-    entry.en + (prompt ? ' Select Retry to generate this step again.' : ''),
+    entry.zh.replace('{names}', names.map(name => `「${name}」`).join('、')) + (prompt ? '请点「重试」重新生成这一步。' : ''),
+    entry.en.replace('{names}', names.map(name => `“${name}”`).join(', ')) + (prompt ? ' Select Retry to generate this step again.' : ''),
   )
 }
 
-/** 定稿后处理现在会跑的步骤，按运行顺序。旧版本的跑批里可能还留着别的步骤（如 style_analysis）。 */
-const FINALIZE_POST_PROCESS_STEP_KEYS = ['kb_import', 'chapter_notes', 'character_cards'] as const
+/**
+ * 定稿后处理现在会跑的步骤，按运行顺序。旧版本的跑批里可能还留着别的步骤（如 style_analysis）。
+ * 两个 remove_replaced_* 只在本章有被替换的旧定稿时才跑（ADR-0024）。
+ */
+const FINALIZE_POST_PROCESS_STEP_KEYS = ['kb_import', 'remove_replaced_knowledge', 'remove_replaced_manuscripts', 'chapter_notes', 'character_cards'] as const
 export type FinalizePostProcessStepKey = typeof FINALIZE_POST_PROCESS_STEP_KEYS[number]
 const CURRENT_STEPS: ReadonlySet<string> = new Set(FINALIZE_POST_PROCESS_STEP_KEYS)
+
+export type ReplacedFinalCleanupStepKey = Extract<FinalizePostProcessStepKey, `remove_replaced_${string}`>
+
+/** 清理被替换旧定稿的两步的名称：渲染端建步骤、主进程遗留修复补登记都用这一份。 */
+export const REPLACED_FINAL_CLEANUP_STEP_LABELS: Readonly<Record<ReplacedFinalCleanupStepKey, readonly [zhCNText: string, enUSText: string]>> = {
+  remove_replaced_knowledge: ['删除旧版本的知识库文档', 'Remove the replaced version from the knowledge base'],
+  remove_replaced_manuscripts: ['删除旧版本的正文文件', "Delete the replaced version's manuscript file"],
+}
 
 /**
  * 一张定稿后处理卡（步骤名到结果）的重试安排。rows：可以单独重试的未成功步骤；card：「重试失败步骤」要重跑的步骤，按卡上顺序；
