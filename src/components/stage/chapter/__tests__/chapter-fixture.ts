@@ -1,4 +1,6 @@
 import { vi } from 'vitest'
+import type { ReplacementImpact } from '../../../../shared/chapter-reopen'
+import type { DraftSourceDependency } from '../../../../shared/draft-source-dependency'
 import type { ModelProfile, ProjectData } from '../../../../shared/ipc-channels'
 import type { ReviewCycleProjection, ReviewFindingStatus } from '../../../../shared/review-cycle'
 import type { ChapterBlueprint } from '../../../../services/workflows/directory-workflow'
@@ -45,7 +47,10 @@ export const AI_REVIEW = JSON.stringify({
 
 type Status = 'draft' | 'revised' | 'finalized' | 'superseded' | 'archived'
 
-interface Draft { id: number; chapterNumber: number; version: number; status: Status; content: string; createdAt: string; updatedAt: string }
+interface Draft {
+  id: number; chapterNumber: number; version: number; status: Status; content: string; createdAt: string; updatedAt: string
+  sourceDependencies?: DraftSourceDependency[]; dependenciesStale?: boolean
+}
 interface Review { id: number; baseDraftId: number; reviewIndex: number; content: string; source: Draft; createdAt: string }
 interface Revision {
   id: number; baseDraftId: number; revisionIndex: number; revisionType: 'refine' | 'review-fix'; status: 'pending' | 'merged' | 'discarded'
@@ -66,6 +71,9 @@ export function createChapterBackend() {
     nextId: 100,
     mergeDisposition: 'required' as 'required' | 'not-required',
     incompleteDeletions: [] as unknown[],
+    /** 主进程现算的替换影响（chapter:replacement-impacts），与重开稿定稿前的预览。 */
+    impacts: [] as ReplacementImpact[],
+    preview: null as ReplacementImpact | null,
     calls: [] as { channel: string; args: unknown[] }[],
     clock: 0,
   }
@@ -77,6 +85,7 @@ export function createChapterBackend() {
   const meta = (draft: Draft) => ({
     id: draft.id, chapterNumber: draft.chapterNumber, version: draft.version, status: draft.status, source: 'write',
     wordCount: draft.content.length, createdAt: draft.createdAt, updatedAt: draft.updatedAt,
+    sourceDependencies: draft.sourceDependencies ?? [], dependenciesStale: draft.dependenciesStale ?? false,
   })
   const source = (draft: Draft) => ({ id: draft.id, chapterNumber: draft.chapterNumber, version: draft.version, status: draft.status, content: draft.content })
   const revisionMeta = (revision: Revision) => ({ id: revision.id, baseDraftId: revision.baseDraftId, revisionIndex: revision.revisionIndex, revisionType: revision.revisionType,
@@ -154,6 +163,21 @@ export function createChapterBackend() {
         state.incompleteDeletions = []
         return { success: true }
       }
+      case 'chapter:reopen': {
+        // 和主进程一样：复制本章定稿为一份记着重开关系的草稿；已有一份打开的重开稿就原样返回它。
+        const { chapterNumber } = args[0] as { chapterNumber: number }
+        const final = state.drafts.find(draft => draft.chapterNumber === chapterNumber && draft.status === 'finalized')
+        if (!final) return { success: false, error: 'CHAPTER_REOPEN_NOT_FINALIZED' }
+        const open = state.drafts.find(draft => draft.chapterNumber === chapterNumber && draft.sourceDependencies?.some(dependency => 'chapterNumber' in dependency && dependency.chapterNumber === chapterNumber)
+          && !['finalized', 'superseded', 'archived'].includes(draft.status))
+        if (open) return { success: true, created: false, draftId: open.id, version: open.version }
+        const createdAt = now()
+        const reopened = addDraft({ status: 'draft', chapterNumber, version: Math.max(...state.drafts.filter(draft => draft.chapterNumber === chapterNumber).map(draft => draft.version)) + 1,
+          content: final.content, createdAt, updatedAt: createdAt, ...reopenOf(final) })
+        return { success: true, created: true, draftId: reopened.id, version: reopened.version }
+      }
+      case 'chapter:replacement-impacts': return { success: true, impacts: state.impacts }
+      case 'chapter:replacement-impact-preview': return { success: true, impact: state.preview }
       case 'db:character-get-all': return [{ id: 1 }]
       case 'db:draft-authority-sequence': return { status: 'continuous', lastChapterNumber: 2, nextChapterNumber: 3, duplicateChapterNumbers: [], authorityFingerprint: 'e'.repeat(64) }
       case 'db:draft-get-finalized': return { chapterNumber: Number(args[0]) }
@@ -211,6 +235,14 @@ export function createChapterBackend() {
   const writes = (channel: string) => state.calls.filter(call => call.channel === channel).map(call => call.args)
 
   return { state, invoke, install, addDraft, addReview, addRecheck, addRevision, writes }
+}
+
+/** 重开稿记着的重开关系：一条指向本章定稿的依赖，重开的那份仍是当前定稿（ADR-0024）。 */
+export function reopenOf(final: { id: number; chapterNumber: number }): { sourceDependencies: DraftSourceDependency[]; dependenciesStale: false } {
+  return {
+    sourceDependencies: [{ kind: 'finalized', draftId: final.id, chapterNumber: final.chapterNumber, finalizationId: `finalization-${final.id}`, contentHash: 'c'.repeat(64) }],
+    dependenciesStale: false,
+  }
 }
 
 export function chapterProject(): ProjectData {

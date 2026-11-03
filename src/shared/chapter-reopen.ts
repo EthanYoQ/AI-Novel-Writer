@@ -50,15 +50,15 @@ export function reopenedFinal(draft: {
 /**
  * 打开着的重开稿：还在写、改、审的工作稿，带重开关系，且重开的那份仍是本章当前权威定稿。每章至多一份。
  * 重开稿只带这一条依赖，所以 dependenciesStale 就是重开关系是否过期：本章被删除后，
- * 留下的重开稿退回普通工作稿，不再挡住本章以后的重开。
+ * 留下的重开稿退回普通工作稿，不再挡住本章以后的重开。不知道是否过期时不算。
  */
 export function isOpenReopenDraft(draft: {
   chapterNumber: number
   status: DraftStatus
   sourceDependencies?: readonly DraftSourceDependency[]
-  dependenciesStale: boolean
+  dependenciesStale?: boolean
 }): boolean {
   return (WORKING_DRAFT_STATUSES as readonly DraftStatus[]).includes(draft.status)
     && reopenedFinal(draft) !== null
-    && !draft.dependenciesStale
+    && draft.dependenciesStale === false
 }

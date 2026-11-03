@@ -23,6 +23,10 @@ export interface DraftMeta {
   createdAt: string
   updatedAt?: string
   source: 'write' | 'rewrite'
+  /** 写这一稿时依据的来源；重开稿在这里记着重开的是哪一份定稿（ADR-0024）。 */
+  sourceDependencies?: DB_DraftMeta['sourceDependencies']
+  /** 来源是否已不是当前的；旧数据或没读到时缺省。 */
+  dependenciesStale?: boolean
 
   // 为了尽量不改 UI，我们伪造这两个字段
   filePath: string

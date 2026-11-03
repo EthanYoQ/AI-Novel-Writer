@@ -16,13 +16,14 @@ import { deleteFinalizedChapter } from './finalized-chapter-deletion'
 /**
  * 删除未定稿的一稿（连同它的审稿、修稿产物）。调用方先请作者确认，删除成功后自己处理打开的标签。
  * 这一稿其实已定稿时转交定稿删除流程（它有自己的确认与投影清理），此时返回 false。
- * 单章视图的章节操作用它。
+ * 单章视图的章节操作用它；放弃修改删的是重开稿，doneMessage 换掉「已删除」那句。
  */
-export async function deleteDraftVersion({ draft, displayName, projectKey, project }: {
+export async function deleteDraftVersion({ draft, displayName, projectKey, project, doneMessage }: {
   draft: DraftMeta
   displayName: string
   projectKey: string
   project: ProjectData | null
+  doneMessage?: string
 }): Promise<boolean> {
   const text = useLocaleStore.getState().text
   const finalizedDeletion = () => deleteFinalizedChapter({
@@ -69,6 +70,6 @@ export async function deleteDraftVersion({ draft, displayName, projectKey, proje
     projectPath: projectKey,
     projectSession,
   })
-  toast.success(text(`已删除 ${displayName}`, `Deleted ${displayName}`))
+  toast.success(doneMessage ?? text(`已删除 ${displayName}`, `Deleted ${displayName}`))
   return true
 }
