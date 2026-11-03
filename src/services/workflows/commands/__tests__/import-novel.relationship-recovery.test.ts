@@ -19,7 +19,7 @@ const callbacks: StepCallbacks = {
   appendText: vi.fn(),
 }
 
-function createContext(): WorkflowContext {
+function createContext(importRunPurpose: 'reference' | 'author-manuscript' = 'reference'): WorkflowContext {
   return {
     runId: 'test-run',
     projectPath: 'C:\\tmp\\vela-import-test',
@@ -31,6 +31,7 @@ function createContext(): WorkflowContext {
     writingLanguage: 'zh-CN',
     uiLocale: 'zh-CN',
     data: {
+      importRunPurpose,
       novelConfigSummary: '类型: 玄幻',
       chapters: [
         {
@@ -145,6 +146,16 @@ function stubSuccessfulImportIpc() {
   })
 }
 
+function committedEntries(invoke: ReturnType<typeof stubIpcInvoke>): CharacterRosterEntry[] {
+  const commit = invoke.mock.calls.find(([channel]) => channel === 'db:import-global-facts-commit')
+  if (!commit) throw new Error('global facts were not committed')
+  return (commit[1] as { characterEntries: CharacterRosterEntry[] }).characterEntries
+}
+
+function relationshipsOf(entries: CharacterRosterEntry[]) {
+  return Object.fromEntries(entries.map(entry => [entry.name, entry.relationships]))
+}
+
 function stubNoCommitIpc() {
   return stubIpcInvoke((channel) => {
     if (channel === 'kb:search') return []
@@ -152,15 +163,16 @@ function stubNoCommitIpc() {
   })
 }
 
-function respondWith(responses: unknown[]) {
+function respondWith(responses: unknown[], finishReasons: Array<'stop' | 'length'> = []) {
   const serialized = responses.map(response => typeof response === 'string' ? response : JSON.stringify(response))
   let callCount = 0
   const generateStream = vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(
     async (_messages, streamCallbacks) => {
       const output = serialized[callCount]
       if (output === undefined) throw new Error('unexpected import inference request')
+      const finishReason = finishReasons[callCount] ?? 'stop'
       callCount += 1
-      streamCallbacks.onDone?.(output, undefined, 'stop')
+      streamCallbacks.onDone?.(output, undefined, finishReason)
       return `request-${callCount}`
     },
   )
@@ -208,28 +220,74 @@ afterEach(() => {
 })
 
 describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
-  it('fails closed without correction when missing endpoint cards would exceed the eight-card contract', async () => {
-    const invoke = stubNoCommitIpc()
+  it.each(['reference', 'author-manuscript'] as const)('%s import requests only the most-referenced endpoints that fit in eight cards and commits after dropping the rest', async (purpose) => {
+    const invoke = stubSuccessfulImportIpc()
     const initial = validInference()
-    initial.characterCards = [
-      card('陆舟', 'protagonist'),
-      card('苏绾', 'supporting'),
-      card('顾岩', 'antagonist'),
+    initial.characterCards.push(card('林照', 'supporting'), card('白榆', 'supporting'), card('沈珩', 'minor'))
+    initial.characterCards[0].relationships.push(
+      { target: '苏绾', relation: '同窗' },
+      { target: '秦川', relation: '师徒' },
+      { target: '韩烁', relation: '旧债牵连' },
+    )
+    initial.characterCards[1].relationships.push({ target: '韩烁', relation: '旧识' })
+    initial.characterCards[2].relationships.push({ target: '叶宁', relation: '暗中相助' })
+    const delta = { characterCards: [card('韩烁', 'supporting'), card('秦川', 'minor')] }
+    const generateStream = respondWith([initial, delta])
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(purpose), callbacks })
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(generateStream.mock.calls[1][0])).toContain(JSON.stringify(JSON.stringify(['韩烁', '秦川'])).slice(1, -1))
+    const entries = committedEntries(invoke)
+    expect(entries.map(entry => entry.name)).toEqual(['陆舟', '苏绾', '顾岩', '林照', '白榆', '沈珩', '韩烁', '秦川'])
+    expect(relationshipsOf(entries)).toMatchObject({
+      陆舟: [
+        { target: '苏绾', relation: '同窗' },
+        { target: '秦川', relation: '师徒' },
+        { target: '韩烁', relation: '旧债牵连' },
+      ],
+      苏绾: [{ target: '韩烁', relation: '旧识' }],
+      顾岩: [],
+    })
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(/顾岩→叶宁.*角色/))
+  })
+
+  it('drops a dangling relationship without a correction request when the first round already has eight cards', async () => {
+    const invoke = stubSuccessfulImportIpc()
+    const initial = validInference()
+    initial.characterCards.push(
       card('林照', 'supporting'),
       card('白榆', 'supporting'),
       card('沈珩', 'minor'),
       card('周砚', 'minor'),
       card('秦若', 'minor'),
-    ]
-    initial.characterCards[0].relationships.push({ target: '韩烁', relation: '旧债牵连' })
+    )
+    initial.characterCards[0].relationships.push(
+      { target: '苏绾', relation: '同窗' },
+      { target: '韩烁', relation: '旧债牵连' },
+    )
+    const generateStream = respondWith([initial])
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(generateStream).toHaveBeenCalledOnce()
+    const entries = committedEntries(invoke)
+    expect(entries).toHaveLength(8)
+    expect(relationshipsOf(entries).陆舟).toEqual([{ target: '苏绾', relation: '同窗' }])
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(/陆舟→韩烁.*角色/))
+  })
+
+  it('still fails a first round whose relationship violates another contract rule', async () => {
+    const invoke = stubNoCommitIpc()
+    const initial = validInference()
+    initial.characterCards[0].relationships.push({ target: '陆舟', relation: '自我' })
     const generateStream = respondWith([initial])
 
     await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
-      .rejects.toThrow(/角色卡|8|补卡校正/)
+      .rejects.toThrow()
 
     expect(generateStream).toHaveBeenCalledOnce()
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:import-global-facts-commit')
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-roster-read')
   })
 
   it('adds only missing endpoint cards from a strict delta through one bounded correction before the atomic global-facts commit', async () => {
@@ -261,89 +319,105 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
     )
   })
 
-  it('rejects a full-object correction before commit even when it includes the missing endpoint card', async () => {
-    const invoke = stubNoCommitIpc()
-    const initial = withMissingEndpoint()
-    const fullCorrection = {
+  it.each([
+    ['a full-object correction', (initial: ReturnType<typeof validInference>) => ({
       ...initial,
       characterCards: [
-        {
-          ...initial.characterCards[0],
-          relationships: [{ target: '韩烁', relation: '改写关系' }],
-        },
+        { ...initial.characterCards[0], relationships: [{ target: '韩烁', relation: '改写关系' }] },
         initial.characterCards[1],
         initial.characterCards[2],
         card('韩烁', 'supporting'),
       ],
-    }
-    const generateStream = respondWith([initial, fullCorrection])
-
-    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
-      .rejects.toThrow(/受限补卡校正|delta|保留原有/)
-
-    expect(generateStream).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
-      'kb:search', 'kb:search', 'kb:search', 'kb:search',
-    ])
-  })
-
-  it('rejects a delta card with extra keys before commit', async () => {
-    const invoke = stubNoCommitIpc()
+    })],
+    ['a delta card with extra keys', () => ({
+      characterCards: [{ ...card('韩烁', 'supporting'), extraFact: '不允许的字段' }],
+    })],
+    ['a delta with an arbitrary extra card', () => ({
+      characterCards: [card('韩烁', 'supporting'), card('任意新增', 'minor')],
+    })],
+    ['a delta card with an invalid role', () => ({
+      characterCards: [{ ...card('韩烁', 'supporting'), role: '配角' }],
+    })],
+    ['a delta relationship with a non-text target', () => ({
+      characterCards: [{ ...card('韩烁', 'supporting'), relationships: [{ target: null, relation: '旧识' }] }],
+    })],
+    ['a delta relationship with a non-text relation to a missing character', () => ({
+      characterCards: [{ ...card('韩烁', 'supporting'), relationships: [{ target: '无名氏', relation: 5 }] }],
+    })],
+  ])('adopts no card from %s and commits the original cards without the dangling relationship', async (_name, correction) => {
+    const invoke = stubSuccessfulImportIpc()
     const initial = withMissingEndpoint()
-    const delta = {
-      characterCards: [
-        { ...card('韩烁', 'supporting'), extraFact: '不允许的字段' },
-      ],
-    }
-    const generateStream = respondWith([initial, delta])
+    initial.characterCards[0].relationships.unshift({ target: '苏绾', relation: '同窗' })
+    const generateStream = respondWith([initial, correction(initial)])
 
-    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
-      .rejects.toThrow(/受限补卡校正|额外字段/)
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
 
     expect(generateStream).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
-      'kb:search', 'kb:search', 'kb:search', 'kb:search',
-    ])
+    const entries = committedEntries(invoke)
+    expect(entries.map(entry => entry.name)).toEqual(['陆舟', '苏绾', '顾岩'])
+    expect(relationshipsOf(entries).陆舟).toEqual([{ target: '苏绾', relation: '同窗' }])
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(/陆舟→韩烁.*角色/))
   })
 
-  it('rejects a correction that adds arbitrary extra cards before commit', async () => {
-    const invoke = stubNoCommitIpc()
-    const initial = withMissingEndpoint()
-    const delta = {
-      characterCards: [
-        card('韩烁', 'supporting'),
-        card('任意新增', 'minor'),
-      ],
-    }
-    const generateStream = respondWith([initial, delta])
-
-    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
-      .rejects.toThrow(/受限补卡校正|新增角色/)
-
-    expect(generateStream).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
-      'kb:search', 'kb:search', 'kb:search', 'kb:search',
-    ])
-  })
-
-  it('rejects duplicate delta cards that omit another unresolved endpoint before commit', async () => {
-    const invoke = stubNoCommitIpc()
+  it('adopts no card from duplicate delta cards that omit another endpoint and drops both dangling relationships', async () => {
+    const invoke = stubSuccessfulImportIpc()
     const initial = withMissingEndpoint('韩烁')
     initial.characterCards[1].relationships.push({ target: '叶宁', relation: '暗中相助' })
-    const delta = {
-      characterCards: [
-        card('韩烁', 'supporting'),
-        card('韩烁', 'minor'),
-      ],
-    }
-    const generateStream = respondWith([initial, delta])
+    const generateStream = respondWith([initial, { characterCards: [card('韩烁', 'supporting'), card('韩烁', 'minor')] }])
 
-    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
-      .rejects.toThrow(/重复|缺失/)
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
 
     expect(generateStream).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
-      'kb:search', 'kb:search', 'kb:search', 'kb:search',
+    const entries = committedEntries(invoke)
+    expect(entries.map(entry => entry.name)).toEqual(['陆舟', '苏绾', '顾岩'])
+    expect(relationshipsOf(entries)).toMatchObject({ 陆舟: [], 苏绾: [] })
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(/已丢弃 2 条关系/))
+  })
+
+  it('matches names and relationship targets the way the decoder trims them', async () => {
+    const invoke = stubSuccessfulImportIpc()
+    const initial = validInference()
+    initial.characterCards[1].name = '苏绾 '
+    initial.characterCards[0].relationships.push(
+      { target: '苏绾', relation: '同窗' },
+      { target: '韩烁 ', relation: '旧债牵连' },
+    )
+    const generateStream = respondWith([initial, { characterCards: [card('韩烁', 'supporting')] }])
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(JSON.stringify(generateStream.mock.calls[1][0])).toContain(JSON.stringify(JSON.stringify(['韩烁'])).slice(1, -1))
+    const entries = committedEntries(invoke)
+    expect(entries.map(entry => entry.name)).toEqual(['陆舟', '苏绾', '顾岩', '韩烁'])
+    expect(relationshipsOf(entries).陆舟).toEqual([
+      { target: '苏绾', relation: '同窗' },
+      { target: '韩烁', relation: '旧债牵连' },
     ])
+  })
+
+  it('adopts a correction card whose name differs from the endpoint only by surrounding whitespace', async () => {
+    const invoke = stubSuccessfulImportIpc()
+    const generateStream = respondWith([withMissingEndpoint(), { characterCards: [card(' 韩烁 ', 'supporting')] }])
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    const entries = committedEntries(invoke)
+    expect(entries.map(entry => entry.name)).toEqual(['陆舟', '苏绾', '顾岩', '韩烁'])
+    expect(relationshipsOf(entries).陆舟).toEqual([{ target: '韩烁', relation: '旧债牵连' }])
+  })
+
+  it('still fails before commit when the correction reply is truncated', async () => {
+    const invoke = stubNoCommitIpc()
+    const generateStream = respondWith(
+      [withMissingEndpoint(), { characterCards: [card('韩烁', 'supporting')] }],
+      ['stop', 'length'],
+    )
+
+    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
+      .rejects.toThrow()
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:import-global-facts-commit')
   })
 })

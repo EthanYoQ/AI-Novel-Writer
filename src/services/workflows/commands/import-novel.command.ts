@@ -47,9 +47,9 @@ import {
   importInferenceJsonContract,
   type ImportInferenceResult,
   decodeImportInferenceJson,
-  decodeImportInferenceWithEndpointDelta,
-  importInferenceCards,
-  unresolvedImportRelationshipTargets,
+  decodeRecoveredImportInference,
+  importEndpointRecoveryTargets,
+  MAX_IMPORT_INFERENCE_CHARACTER_CARDS,
   parseImportInferenceJsonObject,
 } from './import-inference-contract'
 import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
@@ -93,7 +93,6 @@ export function frozenImportContext(context: WorkflowContext): ImportGenerationC
 }
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u
-const MAX_IMPORT_INFERENCE_CHARACTER_CARDS = 8
 type UiText = (zhCNText: string, enUSText: string) => string
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -216,8 +215,6 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     callbacks: CommandExecuteParams['callbacks'],
     context: CommandExecuteParams['context'],
   ): Promise<ImportInferenceResult> {
-    const frozen = frozenImportContext(context)
-    const writingLanguage = frozen?.core.writingLanguage ?? workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     try {
       return decodeImportInferenceJson(rawResult)
@@ -228,15 +225,30 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       }
     }
 
-    const originalRoot = parseImportInferenceJsonObject(rawResult)
-    const unresolvedTargets = unresolvedImportRelationshipTargets(originalRoot, text)
-    const originalCardCount = importInferenceCards(originalRoot, text).length
-    if (originalCardCount + unresolvedTargets.length > MAX_IMPORT_INFERENCE_CHARACTER_CARDS) {
-      throw new Error(text(
-        '导入推演受限补卡校正会超过 8 张角色卡上限，已拒绝额外模型请求',
-        'The bounded import correction would exceed the eight-card limit, so the extra model request was rejected.',
+    const recoveryTargets = importEndpointRecoveryTargets(rawResult, text)
+    const delta = recoveryTargets.length === 0 ? null : await this.requestImportEndpointCards(rawResult, recoveryTargets, callbacks, context)
+    const { result, droppedRelationships } = decodeRecoveredImportInference(rawResult, delta, text)
+    if (droppedRelationships.length > 0) {
+      const dropped = droppedRelationships.map(item => `${item.source}→${item.target}（${item.relation}）`).join('、')
+      const droppedEn = droppedRelationships.map(item => `${item.source}→${item.target} (${item.relation})`).join(', ')
+      callbacks.log(text(
+        `已丢弃 ${droppedRelationships.length} 条关系，关系对象没有角色卡：${dropped}。这是导入推演的内部限制（最多 ${MAX_IMPORT_INFERENCE_CHARACTER_CARDS} 张角色卡，只补卡一次），不是你的设置。导入完成后可以在「角色名单」里手动补上这些角色和关系。`,
+        `Dropped ${droppedRelationships.length} relationship(s) whose target has no character card: ${droppedEn}. This is an internal import-inference limit (at most ${MAX_IMPORT_INFERENCE_CHARACTER_CARDS} character cards and one card-recovery request), not one of your settings. After the import, you can add these characters and relationships on the Cast page.`,
       ))
     }
+    return result
+  }
+
+  private async requestImportEndpointCards(
+    rawResult: string,
+    unresolvedTargets: string[],
+    callbacks: CommandExecuteParams['callbacks'],
+    context: CommandExecuteParams['context'],
+  ): Promise<string> {
+    const frozen = frozenImportContext(context)
+    const writingLanguage = frozen?.core.writingLanguage ?? workflowWritingLanguage(context)
+    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
+    const originalRoot = parseImportInferenceJsonObject(rawResult)
     callbacks.log(text(
       `导入推演关系端点缺少 ${unresolvedTargets.length} 张角色卡，正在执行一次受限补卡校正`,
       `${unresolvedTargets.length} relationship ${unresolvedTargets.length === 1 ? 'endpoint is' : 'endpoints are'} missing a character card; running one bounded correction`,
@@ -288,7 +300,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     )
     assertImportCompletionNotStopped(correction, callbacks, context)
     if (correction.finishReason !== 'stop') throw this.createIncompleteCompletionError(correction.finishReason)
-    return decodeImportInferenceWithEndpointDelta(rawResult, correction.content, text)
+    return correction.content
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<void> {

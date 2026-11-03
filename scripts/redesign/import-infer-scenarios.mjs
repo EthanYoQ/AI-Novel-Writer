@@ -38,6 +38,26 @@ const INFERRED = Object.freeze({
     currentState: { location: '上海', powerLevel: '普通', physicalState: '正常', mentalState: '警觉', keyItems: '匿名信', recentEvents: '收到匿名信', updatedAtChapter: 1 },
   })),
 })
+const extraCard = (name, role, background) => ({ ...INFERRED.characterCards[1], name, role, background })
+const INFERRED_DANGLING = {
+  ...INFERRED,
+  characterCards: [
+    { ...INFERRED.characterCards[0], relationships: [{ target: '顾三', relation: '旧识' }, { target: '林探', relation: '昔日搭档' }] },
+    { ...INFERRED.characterCards[1], relationships: [{ target: '林探', relation: '常客' }] },
+    { ...INFERRED.characterCards[2], relationships: [{ target: '白先生', relation: '暗中收钱' }] },
+    extraCard('阿秀', 'minor', '茶馆伙计'), extraCard('陈医生', 'minor', '法医'), extraCard('老吴', 'minor', '报馆记者'), extraCard('杜太太', 'minor', '证人'),
+  ],
+}
+const ENDPOINT_RECOVERY = '【导入推演受限补卡校正】'
+
+function danglingInferenceReply(prompt) {
+  if (prompt.includes(ENDPOINT_RECOVERY)) {
+    return JSON.stringify({ characterCards: [extraCard('林探', 'supporting', '前巡捕搭档')] })
+  }
+  if (prompt.includes('逆向推演出这部小说的完整设定体系')) return JSON.stringify(INFERRED_DANGLING)
+  return inferenceReply(prompt)
+}
+
 const INFERRED_STYLE = '短句为主，雨声与灯影反复出现，叙述贴近沈默。'
 const BLUEPRINT_BATCH = /本批必须且只能完整返回以下 chapterNumber：([\d、]+)。/u
 
@@ -121,10 +141,10 @@ async function readBook({ app, page, invoke }) {
 }
 
 /** 角色名单提示条上，导入留下的角色决策写来源与人数，不露操作号。 */
-async function assertImportedCastTitle(page) {
+async function assertImportedCastTitle(page, count = 3) {
   const banner = page.getByRole('region', { name: '待处理的角色建议' })
   await banner.waitFor({ state: 'visible' })
-  assert.deepEqual(await banner.locator('[data-kind="decision"] .cast-suggestion-text').allInnerTexts(), ['从导入原稿反推的角色（3 位）'], '导入角色决策写来源与人数')
+  assert.deepEqual(await banner.locator('[data-kind="decision"] .cast-suggestion-text').allInnerTexts(), [`从导入原稿反推的角色（${count} 位）`], '导入角色决策写来源与人数')
   assert.equal((await banner.innerText()).includes('novel-import-global'), false, '不露操作号')
 }
 
@@ -166,6 +186,34 @@ export const IMPORT_INFER_SCENARIOS = {
     await blueprint.planItem(page, 2).click()
     await settle(page)
     return { core: { genre: core.genre, premise: core.premise, writingStyle: core.writingStyle }, blueprints: blueprints.map(item => item.title) }
+  } },
+
+  'import-infer-dangling': { model: true, shell: 'stage', setup: seedEmptyBook, run: async context => {
+    const { app, page, roots, fake, shoot } = context
+    fake.replyReview(danglingInferenceReply)
+    const dialog = await openAuthorImport(app, page, EMPTY_BOOK, manuscript(roots, [[1, '匿名信'], [2, '茶馆'], [3, '河对岸']]))
+    await confirmAndWait(page, dialog, 3)
+    const recoveries = fake.chats.map(chat => chat.messages.map(message => message.content).join('\n')).filter(prompt => prompt.includes(ENDPOINT_RECOVERY))
+    assert.equal(recoveries.length, 1, '补卡只请求一次')
+    assert.match(recoveries[0], /只新增这些缺失角色 name：\["林探"\]/u, '补卡只请求被引用最多的林探')
+    await runSheet.tab(page, '诊断').click()
+    const logLine = runSheet.sheet(page).locator('.run-log-line').filter({ hasText: '已丢弃 1 条关系' })
+    await logLine.scrollIntoViewIfNeeded()
+    const diagnostic = await logLine.innerText()
+    assert.match(diagnostic, /周探长→白先生（暗中收钱）/u, '日志写明丢了哪条关系')
+    assert.match(diagnostic, /不是你的设置/u, '日志说明这是内部限制')
+    assert.match(diagnostic, /「角色名单」里手动补上/u, '日志给出接下来能做的事')
+    await settle(page)
+    await shoot('import-infer-dangling-log')
+
+    const { blueprints } = await readBook(context)
+    assert.deepEqual(blueprints.map(item => item.title), ['反推第1章', '反推第2章', '反推第3章'], '导入完成，每章都有蓝图')
+    await stage.stageButton(page, '架构').click()
+    await page.getByRole('button', { name: '打开角色名单' }).click()
+    await settle(page)
+    await assertImportedCastTitle(page, 8)
+    await shoot('import-infer-dangling-characters')
+    return { diagnostic }
   } },
 
   // 示例作品 1、2 章已定稿，作者原稿只能从第 3 章接着导入；先删掉第 4、5 章的蓝图，让第 3 章代表「已有蓝图」。
