@@ -203,6 +203,28 @@ describe('重新打开已定稿的章', () => {
     expect(activeTab()?.content).toBe(edited)
   })
 
+  it('以这一稿重新打开的请求还没回来时又输入的内容不丢：原来那一稿的标签留着', async () => {
+    const older = backend.addDraft({ status: 'revised', version: 1, content: REVISED })
+    backend.addDraft({ status: 'finalized', version: 2, createdAt: '2026-10-13 20:30:00' })
+    let release!: () => void
+    backend.state.reopenGate = new Promise(resolve => { release = resolve })
+    await mount()
+    await openDraft(older.id)
+    const olderTabId = activeTab()!.id
+
+    await click('以这一稿重新打开')
+    await vi.waitFor(() => expect(backend.writes('chapter:reopen')).toHaveLength(1))
+    const typed = `${REVISED}
+
+请求进行中又写的一句。`
+    await act(async () => useEditorStore.getState().updateTabContent(olderTabId, typed))
+    await act(async () => release())
+
+    const reopened = backend.state.drafts.at(-1)!
+    await vi.waitFor(() => expect(activeTab()?.draftId).toBe(reopened.id))
+    expect(useEditorStore.getState().tabs.find(tab => tab.id === olderTabId)?.content).toBe(typed)
+  })
+
   it('来源已过期的重开稿（重开的定稿已不是当前定稿）是普通草稿：没有重开横幅，照常是删除这一稿，也不能直接定稿', async () => {
     const final = backend.addDraft({ status: 'finalized' })
     const reopened = backend.addDraft({ status: 'draft', version: 2, content: REVISED, createdAt: '2026-10-13 20:30:00', ...reopenOf(final), dependenciesStale: true })
@@ -269,6 +291,33 @@ describe('重开稿定稿', () => {
     await act(async () => release())
     await expect.element(dialog.getByText('第 9 章只有蓝图，可能和新内容不符，不会自动修改。')).toBeVisible()
     expect(dialog.element().textContent).not.toContain(oldLine)
+  })
+
+  it('正文没改、关掉确认框再打开：这一次的预览回来之前不显示上一次的影响，也不能确认定稿', async () => {
+    const final = backend.addDraft({ status: 'finalized' })
+    const reopened = backend.addDraft({ status: 'revised', version: 2, content: REVISED, createdAt: '2026-10-13 20:30:00', ...reopenOf(final) })
+    backend.state.preview = { ...impactOnThree('unused'), finalizationId: null }
+    await mount()
+    await openDraft(reopened.id)
+    await click('定稿')
+    const dialog = page.getByRole('dialog', { name: '定稿第 3 章？' })
+    const oldLine = '第 4、6–8 章写于这次修改之前，第 9 章只有蓝图，可能和新内容不符，不会自动修改。'
+    await expect.element(dialog.getByText(oldLine)).toBeVisible()
+    await click('再看看')
+    await expect.element(dialog).not.toBeInTheDocument()
+
+    let release!: () => void
+    backend.state.previewGate = new Promise(resolve => { release = resolve })
+    backend.state.preview = { ...impactOnThree('unused'), finalizationId: null, laterChapters: [], characters: [], unmovedConfirmations: [] }
+    await click('定稿')
+    await vi.waitFor(() => expect(backend.writes('chapter:replacement-impact-preview')).toHaveLength(2))
+    const confirm = dialog.getByRole('button', { name: '确认定稿', exact: true })
+    await expect.element(confirm).toBeDisabled()
+    expect(dialog.element().textContent).not.toContain(oldLine)
+
+    await act(async () => release())
+    await expect.element(dialog.getByText('第 9 章只有蓝图，可能和新内容不符，不会自动修改。')).toBeVisible()
+    await expect.element(confirm).toBeEnabled()
   })
 
   it('影响预览回来之前不能确认定稿；预览读不出来时照常可以定稿', async () => {

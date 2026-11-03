@@ -76,6 +76,8 @@ export function createChapterBackend() {
     preview: null as ReplacementImpact | null,
     /** 设了就等它完成再答复定稿预览，用来看答复回来之前确认框显示什么。 */
     previewGate: null as Promise<void> | null,
+    /** 设了就等它完成再答复重开请求，用来在请求进行中继续输入。 */
+    reopenGate: null as Promise<void> | null,
     calls: [] as { channel: string; args: unknown[] }[],
     clock: 0,
   }
@@ -168,6 +170,7 @@ export function createChapterBackend() {
       case 'chapter:reopen': {
         // 和主进程一样：以本章定稿（带 initialDraftId 时以那一稿）的正文新建一份记着重开关系的草稿；已有一份打开的重开稿就原样返回它。
         const { chapterNumber, initialDraftId } = args[0] as { chapterNumber: number; initialDraftId?: number }
+        await state.reopenGate
         const final = state.drafts.find(draft => draft.chapterNumber === chapterNumber && draft.status === 'finalized')
         if (!final) return { success: false, error: 'CHAPTER_REOPEN_NOT_FINALIZED' }
         const open = state.drafts.find(draft => draft.chapterNumber === chapterNumber && draft.sourceDependencies?.some(dependency => 'chapterNumber' in dependency && dependency.chapterNumber === chapterNumber)
