@@ -64,7 +64,7 @@ export class GenerationDraftEffects {
   }
   /**
    * 还没写完的批量写作（下一章不为空）已经写过的章。这些章再多出一稿，续跑按最高版本核对收据就对不上
-   * （GENERATION_BATCH_DRAFT_REPLACED）。读不出的批次跳过：它本来就续不上。
+   * （GENERATION_BATCH_DRAFT_REPLACED）。读不出或来源已变的批次跳过：它本来就续不上，批量写作也没有放弃入口。
    */
   unfinishedBatchChapters(projectId: string): ReadonlySet<number> {
     const { commits } = this.listedBatchCommits()
@@ -74,7 +74,7 @@ export class GenerationDraftEffects {
     for (const batchId of roots) {
       try {
         const history = this.readBatchHistory(batchId, projectId, commits)
-        if (history.nextChapterNumber !== null) for (const chapter of history.completedChapters) chapters.add(chapter.chapterNumber)
+        if (history.sourceCurrent && history.nextChapterNumber !== null) for (const chapter of history.completedChapters) chapters.add(chapter.chapterNumber)
       } catch { /* 读不出的批次续不上，不挡重开 */ }
     }
     return chapters
