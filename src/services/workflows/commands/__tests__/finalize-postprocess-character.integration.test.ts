@@ -732,10 +732,16 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(nextChapterPrompt).not.toContain('finalized#2:evidence-not-locatable')
   })
 
-  it('rejects an older Chinese chapter retry after a newer character state is committed', async () => {
+  it('keeps the newer chapter fields when an older Chinese chapter retries after a newer character state is committed', async () => {
     workflowContext.writingLanguage = 'zh-CN'
-    insertFinalizedDraft(7, 2)
+    const chapterTwo = '第二章定稿：林岚准备交出黄铜钥匙。'
+    insertFinalizedDraft(7, 2, chapterTwo)
     insertFinalizedDraft(8, 3)
+    // 第二章的要点步骤早已完成，这次只重试角色状态。
+    const sourceTwo = SummaryRepository.readFinalizedSource(7)
+    if (sourceTwo.status !== 'valid') throw new Error('expected valid finalized source')
+    SummaryRepository.saveFinalizedContinuity({ draftId: 7, chapterNumber: 2, chapterNotes: '第二章要点', facts: [],
+      projectionGeneration: sourceTwo.snapshot.projectionGeneration, source: sourceTwo.snapshot.source })
     const chapterThreeDb = getProjectDb()!
     chapterThreeDb.transaction(() => freezeFinalizedCharacterSnapshot(chapterThreeDb, { draftId: 8, finalizationId: 'finalization-8', chapterNumber: 3,
       contentHash: createHash('sha256').update('Chapter 3 finalized content').digest('hex') }))()
@@ -755,15 +761,13 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       }],
     })
 
-    const status = await command('第二章定稿：林岚准备交出黄铜钥匙。', {
+    const status = await command(chapterTwo, {
       onlyFailed: true,
       stepKeys: ['character_cards'],
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
-    expect(status.steps.character_cards).toMatchObject({
-      ok: false,
-      error: expect.stringContaining('SOURCE_CONFLICT'),
-    })
+    // 第三章说了算的位置和近况跳过（ADR-0024），不再让整步失败；作者写的物品只留作待确认。
+    expect(status.steps.character_cards).toMatchObject({ ok: true })
     expect(CharacterRosterRepository.read()).toEqual(chapterThree.snapshot)
     expect(CharacterRepository.getById(characterId)?.currentState).toMatchObject({
       location: '新港',

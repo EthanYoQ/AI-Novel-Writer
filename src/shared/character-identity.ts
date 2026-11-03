@@ -62,10 +62,13 @@ function advancesProjectContinuity(projectId: string, previous: string, current:
   const fromOrigin = before === null && originProjectId ? generation(previous, originProjectId) : null
   return after !== null && (before !== null && after > before || fromOrigin !== null && after >= fromOrigin)
 }
-export type DerivedPatchDecision = 'apply-derived' | 'already-applied' | 'proposal-required' | 'source-conflict' | 'field-conflict'
-/** Caller recomputes hashes and reads field/authority in the same synchronous commit transaction. */
+export type DerivedPatchDecision = 'apply-derived' | 'already-applied' | 'proposal-required' | 'later-source-owns' | 'source-conflict' | 'field-conflict'
+/**
+ * Caller recomputes hashes and reads field/authority in the same synchronous commit transaction.
+ * laterOwnerAuthoritative：字段现在的派生来源是否仍是它那一章的权威定稿（没被替换、没被删掉），只在来源章号晚于本章时用到。
+ */
 export function decideDerivedPatch(current: CharacterFieldSnapshot, patch: DerivedCharacterPatch,
-  authority: { source: FinalizedSourceIdentity; order: DerivedSourceOrder; originProjectId?: string }): DerivedPatchDecision {
+  authority: { source: FinalizedSourceIdentity; order: DerivedSourceOrder; originProjectId?: string; laterOwnerAuthoritative: boolean }): DerivedPatchDecision {
   const order = patch.sourceOrder
   if (!sameProjectEpoch(current, patch) || !isFinalizedSourceIdentity(patch.source) || !isFinalizedSourceIdentity(authority.source) || !sameSource(patch.source, authority.source)
     || !isContentHash(patch.source.contentHash) || !order.continuityEpoch
@@ -81,10 +84,15 @@ export function decideDerivedPatch(current: CharacterFieldSnapshot, patch: Deriv
     || previous.chapterNumber !== current.provenance.source.chapterNumber)) return 'source-conflict'
   if (previous && (!previous.continuityEpoch || !Number.isSafeInteger(previous.chapterNumber) || previous.chapterNumber < 1
     || !Number.isSafeInteger(previous.authoritativeFinalizationRevision) || previous.authoritativeFinalizationRevision < 1)) return 'source-conflict'
+  const laterChapter = previous !== undefined && previous.chapterNumber > order.chapterNumber
   if (previous && (previous.continuityEpoch !== order.continuityEpoch
     && !(current.provenance.kind === 'derived' && advancesProjectContinuity(patch.projectId, previous.continuityEpoch, order.continuityEpoch, authority.originProjectId))
-    || previous.chapterNumber > order.chapterNumber
+    || laterChapter && current.provenance.kind !== 'derived'
     || previous.chapterNumber === order.chapterNumber && previous.authoritativeFinalizationRevision > order.authoritativeFinalizationRevision)) return 'source-conflict'
+  // 后面章节说了算的字段（来源仍是那一章权威定稿的派生值，或作者写在后面章节的值）：前面一章重跑时跳过，不把当前状态倒回去（ADR-0024）。
+  // 后面章节的来源已被替换或删掉时，按本章的新值写入。
+  if (laterChapter && authority.laterOwnerAuthoritative
+    || current.provenance.kind === 'author' && current.provenance.chapterNumber > order.chapterNumber) return 'later-source-owns'
   if (current.provenance.kind === 'derived' && sameSource(current.provenance.source, patch.source)
     && current.valueHash === patch.valueHash) return 'already-applied'
   if (current.revision !== patch.baseFieldRevision || current.valueHash !== patch.baseValueHash

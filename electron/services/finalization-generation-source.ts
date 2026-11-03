@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { FinalizationGenerationContext, FinalizationGenerationSlot } from '../../src/shared/finalization-generation'
-import { finalizedCharacterPromptCards, type FinalizedCharacterContext } from '../../src/shared/finalized-continuity'
+import { finalizedCharacterPromptCards, replacedFinalFields, type FinalizedCharacterContext } from '../../src/shared/finalized-continuity'
 import { composePromptSystemRole, type PromptTemplate } from '../../src/services/builtin-prompt-templates'
 import { renderPrompt } from '../../src/shared/render-prompt'
 import type { GenerationTask } from '../../src/services/generation/generation-harness'
@@ -55,5 +55,18 @@ export function finalizationGenerationTask(context: FinalizationGenerationContex
   const prompt = renderPrompt(context.template, { chapter_content: context.identity.content, chapter_number: String(context.slot.source.chapterNumber), chapter_title: context.chapterTitle,
     existing_cards_json: JSON.stringify(cards, null, 2) }, context.writingLanguage)
   return { purpose: characters ? 'finalized-character-state' : 'finalized-chapter-notes', reasoningStage: 'review', output: characters ? 'structured-data' : 'visible-text',
-    messages: [{ role: 'system', content: composePromptSystemRole(context.template, context.writingLanguage) }, { role: 'user', content: characters ? `${prompt}\n\n${contract}` : prompt }] }
+    messages: [{ role: 'system', content: composePromptSystemRole(context.template, context.writingLanguage) },
+      { role: 'user', content: characters ? [prompt, contract, replacedFinalRestatement(context, originProjectId)].filter(Boolean).join('\n\n') : prompt }] }
+}
+/** 本章替换了旧定稿：列出来自旧定稿的字段，要模型按现在的正文逐项重新给出，盖过合同里「只在值不同时列出」（ADR-0024）。 */
+function replacedFinalRestatement(context: FinalizationGenerationContext, originProjectId?: string): string {
+  const characters = replacedFinalFields(context.identity, originProjectId)
+  if (!characters.length) return ''
+  const en = context.writingLanguage === 'en-US'
+  return [en
+    ? '[This chapter replaced an earlier final: restate these fields] The fields below came from the replaced final of this chapter. Based on the current prose, give each one\'s current value in that character\'s update, even when it is the same as the existing card; this overrides "list other fields only when the value differs" above. Leave a field out only when the current prose no longer supports it.'
+    : '【本章替换了旧定稿：逐项重新给出】下面这些字段来自本章被替换的旧定稿。请按现在的正文，在对应角色的 update 里逐项给出当前值，与现有角色卡相同也要列出，这一条优先于上面的「其余字段只在值不同时列出」；只有现在的正文已经不支持的字段才不返回。',
+  ...characters.map(character => en
+    ? `- ${character.name} (characterId: ${character.characterId}): ${character.fields.join(', ')}`
+    : `- ${character.name}（characterId：${character.characterId}）：${character.fields.join('、')}`)].join('\n')
 }

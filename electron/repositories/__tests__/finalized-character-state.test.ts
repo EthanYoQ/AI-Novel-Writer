@@ -341,14 +341,14 @@ describe('finalized character identities and derived state in the M02 database',
     if (kind === 'field') expect(f.row().cs_recent_events).toBe('作者新值')
   })
 
-  it('rejects earlier finalized output after later source order and rolls back any preceding field update', () => {
+  it('applies late earlier-chapter output only to fields that no later chapter owns', () => {
     const f = fixture(), earlier = f.context()
     FinalizationRepository.commit(draft(f.db, 2, 2))
     const later = SummaryRepository.readFinalizedCharacterContext(2, scope, f.db)
     SummaryRepository.commitFinalizedCharacterStates(later, f.response(later, { recentEvents: '第二章事件' }), f.db)
-    expect(() => SummaryRepository.commitFinalizedCharacterStates(earlier, f.response(earlier, { location: '旧站', recentEvents: '第一章事件' }), f.db))
-      .toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
-    expect(f.row()).toMatchObject({ cs_location: '', cs_recent_events: '第二章事件' })
+    expect(SummaryRepository.commitFinalizedCharacterStates(earlier, f.response(earlier, { location: '旧站', recentEvents: '第一章事件' }), f.db))
+      .toMatchObject({ applied: 1, unchanged: 1, candidates: [] })
+    expect(f.row()).toMatchObject({ cs_location: '旧站', cs_recent_events: '第二章事件' })
   })
 
   it('clears an explicit empty derived field while preserving omitted fields and static author facts', () => {
