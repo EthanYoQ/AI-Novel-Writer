@@ -46,10 +46,10 @@ async function finished(context, shotName, before, previous) {
     blueprints: db.prepare('SELECT COUNT(*) FROM blueprints WHERE chapter_number BETWEEN 1 AND ?').pluck().get(CHAPTERS),
     runsPerSlot: runsPerSlot(db),
   }))
-  await runSheet.waitUntilOpen(context.page).catch(() => undefined)
+  assert.equal(run.status, 'completed', JSON.stringify(run))
+  await runSheet.lastRun(context.page).filter({ hasText: '小说拆解与仿写' }).getByText(/已完成|Complete/).waitFor({ state: 'visible' })
   await context.page.waitForTimeout(400)
   await context.shoot(shotName)
-  assert.equal(run.status, 'completed', JSON.stringify(run))
   assert.equal(measured.blueprints, CHAPTERS)
   const retried = measured.runsPerSlot.filter(slot => slot.runs > 1)
   assert.equal(retried.length, 1, `只有中断的 slot 重开：${JSON.stringify(measured.runsPerSlot)}`)

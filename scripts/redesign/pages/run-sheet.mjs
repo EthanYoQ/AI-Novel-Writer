@@ -7,6 +7,7 @@ export const OUTPUT_TEXT = '.run-output .assistant-content, .writer-ai-panel .as
 export const sheet = page => page.getByRole('complementary', { name: /^(运行|Run)$/ })
 export const tab = (page, name) => sheet(page).getByRole('tab', { name, exact: true })
 export const anyCard = page => sheet(page).getByRole('article')
+export const lastRun = page => anyCard(page).filter({ hasText: /^(上一次运行|Last run)/ })
 export const output = page => sheet(page).locator('.run-output')
 export const recovery = page => sheet(page).getByRole('region', { name: /^(可恢复的内容|Recoverable work)$/ })
 
@@ -27,7 +28,7 @@ export async function openFromPalette(page) {
 
 /** 没有进行中的运行、上一次运行已完成。侧页在运行开始时自动展开，作者没关它就一直在。 */
 export async function waitForRunDone(page, timeout = 90_000) {
-  await anyCard(page).filter({ hasText: /^(上一次运行|Last run)/ }).getByText(/已完成|Complete/).waitFor({ state: 'visible', timeout })
+  await lastRun(page).getByText(/已完成|Complete/).waitFor({ state: 'visible', timeout })
   await waitForCompletionToast(page)
 }
 
