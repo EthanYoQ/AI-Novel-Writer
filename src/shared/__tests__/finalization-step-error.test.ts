@@ -193,4 +193,10 @@ describe('重开再定稿后清理旧版本（ADR-0024）', () => {
     expect({ rows: [...edited.rows], card: edited.card }).toEqual({ rows: [], card: [] })
     expect(describeFinalizationStepError('FINALIZATION_REPLACED_KNOWLEDGE_EDITED', zh)).toContain('再点「重试」结果也一样')
   })
+
+  it('文件名里有 $ 也原样写出', () => {
+    const error = 'FINALIZATION_REPLACED_MANUSCRIPT_KEPT:["第1章 $& 与 $`.txt"]'
+    expect(describeFinalizationStepError(error, zh)).toContain('「第1章 $& 与 $`.txt」')
+    expect(describeFinalizationStepError(error, en)).toContain('“第1章 $& 与 $`.txt”')
+  })
 })
