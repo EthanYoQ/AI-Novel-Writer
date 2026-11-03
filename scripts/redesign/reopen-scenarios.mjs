@@ -320,4 +320,28 @@ export const REOPEN_SCENARIOS = {
     assert.equal(observed.reopenAvailable, true, '这一章还能再重开，不被保留的旧文件锁住')
     return observed
   } },
+
+  'reopen-refinalize-cards-failed': { model: true, shell: 'stage', setup: seedWithoutChapter4, run: async context => {
+    const { page } = context
+    context.fake.replyCharacterState(characterStateReply)
+    const observed = {}
+
+    await finalizeChapter(page, 3)
+    await openChapter(page, 2)
+    await reopen(page, 2)
+    await appendSentence(page, FIRST_EDIT)
+    context.fake.breakCharacterState()
+    await finalizeReopened(page, 2)
+    observed.postProcess = await chapterView.postProcessSteps(page)
+    observed.noticeShown = await ownNotice(page, 2).waitFor({ state: 'visible', timeout: 15_000 }).then(() => true, () => false)
+    observed.notice = observed.noticeShown ? await ownNotice(page, 2).innerText() : null
+    await context.shoot('reopen-9-cards-failed-notice')
+    console.log(`[reopen] observed ${JSON.stringify(observed)}`)
+
+    const byLabel = Object.fromEntries(observed.postProcess.map(step => [step.label, step.state]))
+    assert.equal(byLabel['角色状态更新'], 'failed', `角色状态更新这一步失败。实际：${JSON.stringify(observed.postProcess)}`)
+    assert.equal(observed.noticeShown, true, '角色状态更新失败时，定稿后本章顶部照样出现「第 2 章已修改」')
+    assert.match(observed.notice, /第 3 章写于这次修改之前，第 4–12 章只有蓝图，可能和新内容不符，不会自动修改。/u, `提示内容。实际：${observed.notice}`)
+    return observed
+  } },
 }
