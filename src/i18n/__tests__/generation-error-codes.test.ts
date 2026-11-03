@@ -593,8 +593,8 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'KNOWLEDGE_BASE_REFERENCE_RECEIPT_CONFLICT',
     'KNOWLEDGE_BASE_REFERENCE_VERIFY_FAILED',
   ],
-  // 模型输出不合角色提议或定稿角色状态的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住；
-  // 定稿后处理把码记在步骤上并原样显示，供反馈定位。没有现成文案能告诉作者除重试以外还能做什么。
+  // 模型输出不合角色提议的结构契约（#471）。工作流里由结构化重试或调用处的按语言说明接住。
+  // 定稿角色状态的同类码已在 app-errors.ts 登记（#552）。
   modelOutputContract: [
     'CHARACTER_PROPOSAL_COVERAGE_INCOMPLETE',
     'CHARACTER_PROPOSAL_DETAIL_FIELD_INVALID',
@@ -603,14 +603,6 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'CHARACTER_PROPOSAL_KEYS_INVALID',
     'CHARACTER_PROPOSAL_ROLE_INVALID',
     'CHARACTER_PROPOSAL_SLOT_MISMATCH',
-    'FINALIZED_CHARACTER_DUPLICATE_ID',
-    'FINALIZED_CHARACTER_EVIDENCE_INVALID',
-    'FINALIZED_CHARACTER_EVIDENCE_MISSING',
-    'FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE',
-    'FINALIZED_CHARACTER_FIELD_INVALID',
-    'FINALIZED_CHARACTER_IDENTITY_REQUIRED',
-    'FINALIZED_CHARACTER_UPDATES_INVALID',
-    'FINALIZED_CHARACTER_UPDATE_INVALID',
   ],
   // 恢复与续跑的顺序约束：界面只从恢复列表或当前运行发起这些请求，按记录状态给出可用操作；
   // 只有绕过界面直接调用才会撞上。

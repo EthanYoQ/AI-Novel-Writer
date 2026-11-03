@@ -182,6 +182,15 @@ const ERROR_KEYS = {
   FINALIZED_CHARACTER_SOURCE_CONFLICT: 'error.characterStateSourceConflict',
   // 定稿后处理提交角色状态时，字段在生成期间已被改动（#484）。
   FINALIZED_CHARACTER_FIELD_CONFLICT: 'error.characterStateFieldConflict',
+  // 定稿后处理的模型回答连续几次不合角色状态格式（#552）。
+  FINALIZED_CHARACTER_UPDATES_INVALID: 'error.characterStateResultInvalid',
+  FINALIZED_CHARACTER_UPDATE_INVALID: 'error.characterStateResultInvalid',
+  FINALIZED_CHARACTER_EVIDENCE_MISSING: 'error.characterStateResultInvalid',
+  FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE: 'error.characterStateResultInvalid',
+  FINALIZED_CHARACTER_EVIDENCE_INVALID: 'error.characterStateResultInvalid',
+  FINALIZED_CHARACTER_FIELD_INVALID: 'error.characterStateResultInvalid',
+  FINALIZED_CHARACTER_IDENTITY_REQUIRED: 'error.characterStateResultInvalid',
+  FINALIZED_CHARACTER_DUPLICATE_ID: 'error.characterStateResultInvalid',
   FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT: 'error.characterStateChanged',
   // 角色名单、蓝图与剧情资料（#474 B2）：作者在角色页手工编辑、生成或修复名单时能照着处理的拒绝原因。
   CHARACTER_ROSTER_NAME_REQUIRED: 'error.characterRosterNameRequired',
