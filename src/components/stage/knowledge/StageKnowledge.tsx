@@ -176,7 +176,7 @@ export default function StageKnowledge({ tabId }: { tabId: string }) {
               <h2 className="stage-kb-doc-title">{documentName(selected)}</h2>
               {!selectedImported && (
                 <Notice title={text('这一章由定稿自动收入', 'Added automatically when finalized')}>
-                  {text('这里只能查看。要修改，请到正文里改这一章再定稿，新的定稿会另收一份。', 'You can only read it here. To change it, edit the chapter in the manuscript and finalize it again; the new version is added as a separate entry.')}
+                  {text('这里只能查看。要修改，在正文里重新打开这一章，改完再定稿，新的定稿会替换这一份。', 'You can only read it here. To change it, reopen the chapter in the manuscript, edit it and finalize it again. The new final replaces this entry.')}
                 </Notice>
               )}
               {!documentCopy ? <p className="stage-kb-help">{text('正在读取…', 'Loading…')}</p>

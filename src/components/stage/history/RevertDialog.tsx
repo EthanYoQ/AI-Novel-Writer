@@ -13,12 +13,14 @@ interface RevertDialogProps {
   nextVersion: number
   /** 回退前的当前稿，例如「草稿 v2」。 */
   current: string
+  /** 这一章已定稿：回退会重新打开这一章，新稿定稿后才替换现在的定稿（ADR-0024）。 */
+  finalized: boolean
   busy: boolean
   onConfirm: () => void
 }
 
 /** 回退不删除也不覆盖任何一稿，所以用普通对话框而不是危险确认，写明会新建哪一稿。 */
-export default function RevertDialog({ open, onOpenChange, chapterNumber, source, nextVersion, current, busy, onConfirm }: RevertDialogProps) {
+export default function RevertDialog({ open, onOpenChange, chapterNumber, source, nextVersion, current, finalized, busy, onConfirm }: RevertDialogProps) {
   const text = useLocaleStore(s => s.text)
   return (
     <InkDialog
@@ -39,6 +41,12 @@ export default function RevertDialog({ open, onOpenChange, chapterNumber, source
       )}
     >
       <p className="pi-dialog-text">{text(`现在的${current}和所有历史版本都会保留，随时可以再切回去。`, `${current} and every earlier version stay, so you can switch back at any time.`)}</p>
+      {finalized && (
+        <p className="pi-dialog-text">{text(
+          `这一章已定稿：回退会重新打开第 ${chapterNumber} 章，新稿定稿后替换现在的定稿；在那之前，本章仍以现在的定稿为准。`,
+          `This chapter is finalized, so reverting reopens chapter ${chapterNumber}. Finalizing the new draft replaces the current final; until then, the chapter stays as it is.`,
+        )}</p>
+      )}
     </InkDialog>
   )
 }

@@ -98,6 +98,7 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
   const draftCounts = sameProjectSessionContext(draftSession, projectSessionContextFromProject(project)) ? draftsByChapter : null
   const ordered = useMemo(() => [...versions].sort((left, right) => right.version - left.version), [versions])
   const latest = ordered[0]
+  const finalized = versions.some(version => version.type === 'final')
   const selected = ordered.find(version => version.id === selectedVersionId) ?? null
   const chapter = chapters.find(candidate => candidate.number === selectedChapter)
 
@@ -157,10 +158,11 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
     if (!selected || selectedChapter === null) return
     setReverting(true)
     try {
-      const created = await createRollbackDraft(selected.id)
+      const created = await createRollbackDraft(selected.id, finalized)
       if (created === null) return
       setRevertOpen(false)
-      toast.success(created.version === null
+      if (!created.created) toast.info(text(`这一章已有一份内容相同的重开稿（草稿 v${created.version}），没有再新建。`, `This chapter already has a reopened draft with the same text (draft v${created.version}), so nothing new was created.`))
+      else toast.success(created.version === null
         ? text('已新建回滚草稿，原有各稿都保留', 'Rollback draft created. Every earlier version is kept.')
         : text(`已新建草稿 v${created.version}，原有各稿都保留`, `Draft v${created.version} created. Every earlier version is kept.`))
       reloadDraftCounts()
@@ -246,7 +248,8 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
                         <span className="stage-hist-version-name">
                           {versionName(version, text)}
                           {version === latest && <span className="stage-hist-badge">{text('当前', 'Current')}</span>}
-                          {version.dependencies_stale && (
+                          {/* 这条提醒给还没定稿的稿复核用。定稿与被替换的定稿不标：重开稿定稿后，它记着的原定稿已被替换，依赖总是过期。 */}
+                          {version.dependencies_stale && version.type !== 'final' && version.type !== 'superseded' && (
                             <span
                               className="stage-hist-badge"
                               data-tone="warn"
@@ -300,6 +303,7 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
             source={versionName(selected, text)}
             nextVersion={latest.version + 1}
             current={versionName(latest, text)}
+            finalized={finalized}
             busy={reverting}
             onConfirm={() => void revert()}
           />
