@@ -540,8 +540,11 @@ export function createRepairFinalizeWorkflow(
           const { planFinalizationRetry } = await import('../../shared/finalization-step-error')
           // 当前定稿从没跑过后处理（例如替换后还没来得及跑就退出了）时整套跑一遍（ADR-0024）。
           const current = await readPostProcessStatus(projectPath, getChapterFinalizeScope(chapterNumber), projectSession)
-          const plan = current && planFinalizationRetry(current.steps)
-          const stepKeys = !plan ? undefined : stepKey ? [stepKey].filter(key => plan.rows.has(key)) : plan.card
+          let stepKeys: readonly string[] | undefined
+          if (current) {
+            const plan = planFinalizationRetry(current.steps)
+            stepKeys = stepKey ? [stepKey].filter(key => plan.rows.has(key)) : plan.card
+          }
           if (stepKeys?.length === 0) throw new Error(text(
             '没有可以重试的失败步骤，请按各步骤的说明处理。',
             'No failed step can be retried. Follow the note on each step.',

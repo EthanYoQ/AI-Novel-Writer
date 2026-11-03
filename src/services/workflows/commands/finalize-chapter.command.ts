@@ -322,7 +322,8 @@ export function buildFinalizePostProcessSteps(
         label,
         critical: false,
         executor: async (callbacks, context) => {
-          if (!context || context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+          if (!context) throw new Error(text('定稿后处理缺少冻结工作流上下文', 'Post-finalization processing is missing the frozen workflow context.'))
+          if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
           const result = await ipc.invokeWithProjectSession(
             requireWorkflowProjectSession(context),
             key === 'remove_replaced_knowledge' ? 'chapter:remove-replaced-knowledge' : 'chapter:remove-replaced-manuscripts',
