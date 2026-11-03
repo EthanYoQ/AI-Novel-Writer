@@ -177,7 +177,6 @@ function isAlive(pid) {
   } catch (error) { return error.code === 'EPERM' }
 }
 
-/** 模拟崩溃或任务管理器结束进程，不走关窗确认：Windows 按这次启动记下的 PID 结束整棵进程树，其他平台与 quit 的强制路径一样只结束主进程。 */
 async function kill(app) {
   const pid = app.process().pid
   try {
@@ -470,7 +469,6 @@ async function runSession(sessionName, names, options) {
         /** 场景中途多拍一张图，与收尾截图放在同一目录。 */
         shoot: name => shoot(context.page, `${base(name)}.png`),
         reload: () => context.page.reload().then(() => waitForShell(context.page, TIMEOUT)),
-        /** 退出应用再用同一隔离目录冷启动（真正的重启，不重写外观），context 换成新的 app 与 page。appRoot 换成另一份构建（旧版本造数据、新版本接着打开），之后不传时沿用上次启动的构建。killed 为 true 时结束进程树而不是正常退出。 */
         restart: async ({ appRoot = currentAppRoot, beforeLaunch, killed = false } = {}) => {
           restartRequests.push(...await launched.app.evaluate(() => globalThis.__driveExternalRequests))
           await recording?.pause()

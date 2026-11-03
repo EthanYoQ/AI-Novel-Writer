@@ -1067,7 +1067,6 @@ describe('导入 slot 的输出没通过校验', () => {
   const handle = { projectId: 'project-1', epoch: 'lease-project-1', rootActionId: 'root-1', runId: 'run-1' }
   const blueprint = { chapterNumber: 1, title: '启程', role: '建置', purpose: '引出主角目标', keyEvents: '主角发现异常', characters: ['主角'], relationshipHints: [], suspenseHook: '门外有人' }
 
-  /** 主进程所有的导入运行：模型每次都正常结束（stop）并返回 content。 */
   function mainOwnedImport(content: string, handler: (channel: string, ...args: unknown[]) => unknown = () => ({ success: true })) {
     const invoke = stubIpcInvoke((channel, ...args) => {
       if (channel === 'generation:read') return { handle, candidates: [{ ...handle, artifactId: 'artifact-1', status: 'completed' }, { ...handle, artifactId: 'artifact-2', status: 'completed' }] }

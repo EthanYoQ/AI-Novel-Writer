@@ -251,10 +251,6 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     return ipc.invokeWithProjectSession(execution.context.projectSession, 'generation:read-visible-composition', handle)
   }
 
-  /**
-   * 导入 slot 的模型输出没通过校验：丢弃这个运行的全部候选。主进程据此判定这次运行交不出可提交的结果，
-   * 「继续导入」为这一批开新运行重新请求，而不是回放同一份被拒的输出。丢弃失败只记日志，报出的仍是校验失败。
-   */
   protected async discardRejectedImportOutput(callbacks: StepCallbacks): Promise<void> {
     const execution = this.activeGenerationExecution
     const handle = execution?.context.mainGenerationRunHandle
@@ -265,7 +261,6 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       callbacks.log(workflowUiText(context, `丢弃没通过校验的导入输出失败：${reason}`, `Could not discard the rejected import output: ${reason}`))
     }
     const view = await ipc.invokeWithProjectSession(context.projectSession, 'generation:read', handle).catch(logFailure)
-    // 丢掉任意一份候选，主进程就判这个运行交不出结果；逐份尝试，一份失败不挡其余几份。
     for (const candidate of view?.candidates ?? []) {
       if (candidate.status !== 'running') await ipc.invokeWithProjectSession(context.projectSession, 'generation:discard-candidate', handle, candidate.artifactId).catch(logFailure)
     }

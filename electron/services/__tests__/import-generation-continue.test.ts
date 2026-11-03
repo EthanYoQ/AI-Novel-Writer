@@ -13,7 +13,6 @@ const hang: GenerationRunServiceDependencies['dispatch'] = (_request, options) =
   options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
 })
 
-/** 前 5 章蓝图已提交，第 6–10 章这一批的请求正在发出。 */
 async function interruptedAtSecondBatch(f: ImportGenerationFixture, dispatch = hang) {
   await runGlobal(f)
   await runStyle(f)
@@ -26,13 +25,11 @@ async function interruptedAtSecondBatch(f: ImportGenerationFixture, dispatch = h
   return { execution, slot, handle, receipt }
 }
 
-/** 「继续导入」：新执行者接着跑剩下的批次，然后核对结果与请求次数。 */
 async function continueAndFinish(f: ImportGenerationFixture, owner = f.owner) {
   f.current.dispatch = stop
   await runBlueprints(f, f.chapters.slice(5), RUN, owner, '继续导入的执行者')
   expect(f.db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get()).toBe(10)
   expect(f.db.prepare('SELECT title FROM blueprints WHERE chapter_number=10').pluck().get()).toBe('推演10')
-  // global、style、第一批各一次，第二批中断一次、继续后再一次：已提交的批次不重做。
   expect(f.spy).toHaveBeenCalledTimes(5)
 }
 
@@ -111,7 +108,6 @@ it('中断那一批的生成记录读不出时只重做这一批，「继续导�
   await continueAndFinish(f, owner)
 }, 60_000)
 
-/** 第 6–10 章这一批模型正常结束（stop），但结果还没提交。 */
 async function completedSecondBatch(f: ImportGenerationFixture) {
   await runGlobal(f)
   await runStyle(f)

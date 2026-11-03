@@ -30,7 +30,6 @@ function chapter(number: number): ImportRunChapterSnapshot {
   return { number, title: `海港${number}`, content, contentSize: Buffer.byteLength(content), contentFingerprint: hash(content) }
 }
 
-/** 一个真实 owner 与 repository 的导入项目；dispatch 可在测试中途替换，openOwner 模拟关窗口或进程退出后重新打开作品。 */
 export function importGenerationFixture(cleanup: (() => void)[], chapterCount: number, dispatch: Dispatch = stop) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/import-budget-tests')
   fs.mkdirSync(base, { recursive: true })
@@ -69,10 +68,6 @@ export const stageSelection: Record<ImportGenerationSlot['stage'], Pick<BeginGen
 
 type EffectOf = (handle: unknown) => { effectKey: string; kind: 'project-global-facts' | 'project-writing-style' | 'chapter-blueprint-range'; payload: Record<string, unknown> }
 
-/**
- * 渲染端打开一个 slot 的方式：主进程已有这个 slot 的运行就接着用，没有才 begin。
- * 同一个工作流里前一步已经开过根时，begin 带着那个根（parentRootActionId）。
- */
 export function openSlot(f: ImportGenerationFixture, slot: ImportGenerationSlot, execution: ImportRunExecutionLease, owner = f.owner, parentRootActionId?: string) {
   const recovery = owner.readImportGeneration(slot)
   if (recovery) return recovery.view.handle

@@ -216,7 +216,6 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     context: CommandExecuteParams['context'],
   ): Promise<ImportInferenceResult> {
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
-    // 只有输出本身没通过解析才丢弃结果；补卡请求失败（租约过期、额度用完等）不丢，继续导入时重放首轮再补卡。
     const decoded = async <T>(decode: () => T): Promise<T> => {
       try { return decode() } catch (error) { await this.discardRejectedImportOutput(callbacks); throw error }
     }

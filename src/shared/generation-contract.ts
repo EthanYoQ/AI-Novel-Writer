@@ -84,8 +84,8 @@ export function assertReservation(root: RootAction, policy: RootBudget, attempts
     || attempts.some(item => !['reserved', 'dispatch-marked', 'settled', 'unknown', 'cancelled-before-dispatch'].includes(item.status))) throw new Error('INVALID_LEDGER')
   if (rootBudgetExhausted(policy, attempts, elapsedMs)) throw new Error('ROOT_BUDGET_EXHAUSTED')
 }
-/** 请求次数或活动时长已用完；token 只记账不刹车（ADR-0023）。 */
 export function rootBudgetExhausted(policy: RootBudget, attempts: readonly PhysicalAttempt[], elapsedMs: number): boolean {
+  // token 只记账不刹车（ADR-0023）。
   return attempts.filter(item => item.status !== 'cancelled-before-dispatch').length >= policy.maxPhysicalRequests
     || elapsedMs >= policy.maxActiveElapsedMs
 }
