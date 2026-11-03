@@ -76,6 +76,8 @@ export interface ToolResult {
   error?: string
   /** Persistent write outcome; orthogonal to transport/UI success. */
   commitState?: FileWriteCommitState
+  /** content 是该工具完整结果从这个字符位置起的部分；带此字段的工具接受 offset 参数续读。 */
+  resultOffset?: number
 }
 
 /**
