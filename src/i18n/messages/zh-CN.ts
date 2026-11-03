@@ -64,7 +64,7 @@ export const zhCN = {
   'error.authorInferenceStorageFailed': '这次导入的生成内容没能写入本地存储，生成已被阻断，不能再向模型发请求。请先检查磁盘空间和作品文件夹的写入权限。',
   'error.authorInferencePreviousAttemptIncomplete': '这一批导入的上一次模型请求没有正常完成，这一批不能接着发送请求。',
   'error.authorInferenceStopNext': '原稿正文已经导入并保存，只是 AI 反推的设定、文风或蓝图没有做完。已导入的正文不受影响，可以在设定页和蓝图页手动补齐。',
-  'error.importPreviousAttemptIncomplete': '这一批导入的上一次模型请求没有正常完成，这一批还没有结果，这次运行不能再为它发请求。已提交的导入结果都已保存。要接着完成这次导入，在导入对话框里点「继续导入」，这一批会重新请求，已提交的批次不会重做。',
+  'error.importPreviousAttemptIncomplete': '这一批导入的上一次模型请求没有正常完成，这一批还没有结果，眼下不能再为它发请求。已提交的导入结果都已保存。要接着完成这次导入，在导入对话框里点「继续导入」，这一批会重新请求，已提交的批次不会重做。',
   'error.generationBusy': '还有生成正在进行，请等它结束后再试。',
   'error.generationKnowledgeBusy': '知识库正在更新，请稍后再生成。',
   'error.generationInputTooLarge': '这次要交给模型的设定、前文或正文太大，放不进去，没有生成。请精简后重试。',
