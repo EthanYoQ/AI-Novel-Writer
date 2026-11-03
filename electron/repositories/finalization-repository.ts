@@ -279,10 +279,14 @@ export class FinalizationRepository {
         throw new Error('FINALIZATION_COMMIT_SUPERSEDED')
       }
 
-      // 替换不推进连续性后缀水位（ADR-0017 修订）：本章自己的派生投影随来源绑定失效，后续各章的派生状态保留。
       const replacedDraftIds = (db.prepare(`
         SELECT id FROM drafts WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
       `).all(input.chapterNumber, input.draftId) as { id: number }[]).map(row => row.id)
+      // 已定稿的章只能由重开稿的新定稿替换（ADR-0024）：定稿之前留下的工作稿、重开关系已过期的稿都不能直接顶替。
+      if (replacedDraftIds.length > 0 && DraftRepository.findOpenReopenDraft(input.chapterNumber, db)?.id !== input.draftId) {
+        throw new Error('CHAPTER_FINALIZED_REOPEN_REQUIRED')
+      }
+      // 替换不推进连续性后缀水位（ADR-0017 修订）：本章自己的派生投影随来源绑定失效，后续各章的派生状态保留。
       db.prepare(`
         UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
         WHERE chapter_number = ? AND status = 'finalized' AND id <> ?

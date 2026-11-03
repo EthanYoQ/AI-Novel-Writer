@@ -179,6 +179,29 @@ describe('已定稿的章只能经重开稿再写', () => {
     expect(() => write(1, '第一章二稿。')).not.toThrow()
     expect(draftCount(1)).toBe(2)
   })
+
+  it('定稿之前留下的工作稿不能直接定稿替换本章定稿', () => {
+    const older = write(1, FIRST)
+    const final = write(1, '第一章二稿：钟声提前了一刻。')
+    finalize(final)
+
+    expect(() => finalize(older)).toThrow('CHAPTER_FINALIZED_REOPEN_REQUIRED')
+    expect(DraftRepository.getMeta(final)?.status).toBe('finalized')
+    expect(DraftRepository.getMeta(older)?.status).toBe('draft')
+  })
+
+  it('重开关系已过期的重开稿（重开的定稿不再是本章定稿）不能定稿替换', () => {
+    const first = write(1, FIRST)
+    finalize(first)
+    const stale = FinalizationRepository.reopen({ chapterNumber: 1 })
+    if (!stale.success) throw new Error('reopen failed')
+    // 本章的定稿换成了另一份（遗留数据里的同章多行定稿修复后就会这样），这份重开稿记着的已不是本章定稿。
+    getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = ?").run(first)
+    const other = legacyFinal(1, '第一章另一份旧定稿。')
+
+    expect(() => finalize(stale.draftId)).toThrow('CHAPTER_FINALIZED_REOPEN_REQUIRED')
+    expect(DraftRepository.getMeta(other)?.status).toBe('finalized')
+  })
 })
 
 describe('重开稿定稿与放弃', () => {

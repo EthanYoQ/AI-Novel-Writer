@@ -164,8 +164,8 @@ export function createChapterBackend() {
         return { success: true }
       }
       case 'chapter:reopen': {
-        // 和主进程一样：复制本章定稿为一份记着重开关系的草稿；已有一份打开的重开稿就原样返回它。
-        const { chapterNumber } = args[0] as { chapterNumber: number }
+        // 和主进程一样：以本章定稿（带 initialDraftId 时以那一稿）的正文新建一份记着重开关系的草稿；已有一份打开的重开稿就原样返回它。
+        const { chapterNumber, initialDraftId } = args[0] as { chapterNumber: number; initialDraftId?: number }
         const final = state.drafts.find(draft => draft.chapterNumber === chapterNumber && draft.status === 'finalized')
         if (!final) return { success: false, error: 'CHAPTER_REOPEN_NOT_FINALIZED' }
         const open = state.drafts.find(draft => draft.chapterNumber === chapterNumber && draft.sourceDependencies?.some(dependency => 'chapterNumber' in dependency && dependency.chapterNumber === chapterNumber)
@@ -173,7 +173,7 @@ export function createChapterBackend() {
         if (open) return { success: true, created: false, draftId: open.id, version: open.version }
         const createdAt = now()
         const reopened = addDraft({ status: 'draft', chapterNumber, version: Math.max(...state.drafts.filter(draft => draft.chapterNumber === chapterNumber).map(draft => draft.version)) + 1,
-          content: final.content, createdAt, updatedAt: createdAt, ...reopenOf(final) })
+          content: (initialDraftId === undefined ? final : state.drafts.find(draft => draft.id === initialDraftId)!).content, createdAt, updatedAt: createdAt, ...reopenOf(final) })
         return { success: true, created: true, draftId: reopened.id, version: reopened.version }
       }
       case 'chapter:replacement-impacts': return { success: true, impacts: state.impacts }

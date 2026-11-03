@@ -167,7 +167,43 @@ describe('重新打开已定稿的章', () => {
     await expect.element(page.getByText('已定稿，只读')).toBeVisible()
   })
 
-  it('来源已过期的重开稿（重开的定稿已不是当前定稿）是普通草稿：没有重开横幅，照常是删除这一稿', async () => {
+  it('定稿之前留下的旧稿不能直接定稿顶替：说明一句，可以用这一稿重新打开本章', async () => {
+    const older = backend.addDraft({ status: 'revised', version: 1, content: REVISED })
+    backend.addDraft({ status: 'finalized', version: 2, createdAt: '2026-10-13 20:30:00' })
+    await mount()
+    await openDraft(older.id)
+
+    await expect.element(page.getByText('这一稿不能直接定稿')).toBeVisible()
+    expect(page.getByRole('button', { name: '定稿', exact: true }).element()).toHaveProperty('disabled', true)
+
+    await click('以这一稿重新打开')
+    await vi.waitFor(() => expect(backend.writes('chapter:reopen').map(([request]) => request)).toEqual([{ chapterNumber: 3, initialDraftId: older.id }]))
+    const reopened = backend.state.drafts.at(-1)!
+    await vi.waitFor(() => expect(activeTab()?.draftId).toBe(reopened.id))
+    expect(activeTab()?.content).toBe(REVISED)
+    await expect.element(page.getByText('正在修改已定稿的第 3 章')).toBeVisible()
+  })
+
+  it('以这一稿重新打开前先保存还没保存的修改，重开稿带着这些修改', async () => {
+    const older = backend.addDraft({ status: 'revised', version: 1, content: REVISED })
+    backend.addDraft({ status: 'finalized', version: 2, createdAt: '2026-10-13 20:30:00' })
+    await mount()
+    await openDraft(older.id)
+    const edited = `${REVISED}
+
+新加的一段。`
+    await act(async () => useEditorStore.getState().updateTabContent(activeTab()!.id, edited))
+
+    await click('以这一稿重新打开')
+
+    await vi.waitFor(() => expect(backend.writes('chapter:reopen')).toHaveLength(1))
+    expect(backend.writes('db:draft-update-content').map(args => args.slice(0, 2))).toEqual([[older.id, edited]])
+    const reopened = backend.state.drafts.at(-1)!
+    await vi.waitFor(() => expect(activeTab()?.draftId).toBe(reopened.id))
+    expect(activeTab()?.content).toBe(edited)
+  })
+
+  it('来源已过期的重开稿（重开的定稿已不是当前定稿）是普通草稿：没有重开横幅，照常是删除这一稿，也不能直接定稿', async () => {
     const final = backend.addDraft({ status: 'finalized' })
     const reopened = backend.addDraft({ status: 'draft', version: 2, content: REVISED, createdAt: '2026-10-13 20:30:00', ...reopenOf(final), dependenciesStale: true })
     await mount()
@@ -177,6 +213,8 @@ describe('重新打开已定稿的章', () => {
     await click('更多操作')
     expect(menuItems()).toContain('删除这一稿…')
     expect(menuItems()).not.toContain('放弃修改…')
+    expect(page.getByRole('menuitem', { name: '定稿…' }).element()).toHaveProperty('disabled', true)
+    expect(document.body.textContent).toContain('这一稿不能直接定稿')
   })
 })
 

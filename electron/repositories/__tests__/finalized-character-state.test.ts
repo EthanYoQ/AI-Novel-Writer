@@ -9,6 +9,7 @@ import { getProjectDb } from '../../database'
 import { FinalizationRepository } from '../finalization-repository'
 import { SummaryRepository, invalidateContinuityProjectionFrom } from '../summary-repository'
 import { parseFinalizedCharacterStateResponse, type FinalizedCharacterContext } from '../../../src/shared/finalized-continuity'
+import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
 
 vi.mock('../../database', () => ({ getProjectDb: vi.fn() }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -23,6 +24,7 @@ function draft(db: Db, id = 1, chapter = 1, content = prose, version = 1) {
   db.prepare('INSERT OR IGNORE INTO blueprints(chapter_number,title) VALUES(?,?)').run(chapter, '合成章节')
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(id, '尚未定稿')
   db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)").run(id, chapter, version, id)
+  registerAsReopenDraft(db, id)
   return { finalizationId: `finalization-${id}`, draftId: id, chapterNumber: chapter, chapterTitle: '合成章节', content,
     contentHash: hash(content), contentRevision: 1, targetFileName: `${chapter}.txt` }
 }

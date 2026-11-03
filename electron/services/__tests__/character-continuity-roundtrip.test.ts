@@ -19,6 +19,7 @@ import { adoptTransferredCharacterContinuityOnOpen } from '../transferred-charac
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 import { ChapterDeletionService } from '../chapter-deletion-service'
 import { ProjectClearRepository } from '../../repositories/project-clear-repository'
+import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
 
 const roots: string[] = []
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -64,6 +65,7 @@ function finalizeChapter(project: OpenProject, draftId: number, chapterNumber: n
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(draftId, '尚未定稿')
   db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)")
     .run(draftId, chapterNumber, version, draftId)
+  registerAsReopenDraft(db, draftId)
   FinalizationRepository.commit({ finalizationId: `finalization-${randomUUID()}`, draftId, chapterNumber,
     chapterTitle: `第${chapterNumber}章`, content: body, contentHash: sha256(body), contentRevision: 1,
     targetFileName: `${chapterNumber}.md` })
