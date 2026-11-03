@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { fenceProjectSession } from '../../database'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
-import { blueprintEffect, blueprintSlot, commitSlot, generateSlot, importGenerationFixture, rootBudget, runBlueprints, runGlobal, runStyle, stop, type ImportGenerationFixture } from './import-generation-fixture'
+import { blueprintEffect, blueprintSlot, commitSlot, generateSlot, importGenerationFixture, openSlot, rootBudget, runBlueprints, runGlobal, runStyle, stop, type ImportGenerationFixture } from './import-generation-fixture'
 
 vi.mock('../../database', async importOriginal => ({ ...await importOriginal<typeof import('../../database')>(), getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn() }))
 const cleanup: (() => void)[] = []
@@ -153,4 +153,32 @@ it('同一工作流里两次请求之间额度用完：刚开的这一批仍读�
   const { handle, receipt } = generateSlot(f, slot, execution, f.owner, rootActionId)
   await expect(receipt).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
   expect(f.owner.readImportGeneration(slot, handle.runId)?.view.handle.runId).toBe(handle.runId)
+}, 60_000)
+
+it('最后一次允许的请求已合法结束、还没提交时进程退出：根额度已用完，「继续导入」重放这次结果并提交，不再发请求', async () => {
+  const f = importGenerationFixture(cleanup, 10)
+  const { handle } = await completedSecondBatch(f)
+  f.db.prepare('UPDATE generation_roots SET active_elapsed_ms=? WHERE root_action_id=?').run(rootBudget(f, handle.rootActionId).maxActiveElapsedMs, handle.rootActionId)
+  fenceProjectSession(f.db)
+  f.current.dispatch = stop
+  await runBlueprints(f, f.chapters.slice(5), RUN, f.openOwner('epoch-2'), '继续导入的执行者')
+  expect(f.db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get()).toBe(10)
+  expect(f.spy).toHaveBeenCalledTimes(4)
+}, 60_000)
+
+it('重放的结果还不够、这一批要再发请求而根额度已用完：这次报额度用完，再点「继续导入」为这一批重开并跑完', async () => {
+  const f = importGenerationFixture(cleanup, 10)
+  const { handle } = await completedSecondBatch(f)
+  f.db.prepare('UPDATE generation_roots SET active_elapsed_ms=? WHERE root_action_id=?').run(rootBudget(f, handle.rootActionId).maxActiveElapsedMs, handle.rootActionId)
+  fenceProjectSession(f.db)
+  const owner = f.openOwner('epoch-2')
+  const execution = ImportRunRepository.startOrResume(RUN, '继续导入的执行者').execution
+  const slot = blueprintSlot(RUN, f.chapters.slice(5))
+  const task = { purpose: 'import-blueprints', output: 'structured-data' as const, messages: [{ role: 'user' as const, content: '推演参考小说' }] }
+  const replayed = openSlot(f, slot, execution, owner)
+  expect(replayed.runId).toBe(handle.runId)
+  expect((await owner.executeImportGeneration({ execution, handle: replayed, ordinal: 0, task })).outcome.status).toBe('completed')
+  await expect(owner.executeImportGeneration({ execution, handle: replayed, ordinal: 1, task })).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
+  ImportRunRepository.fail(RUN, 'blueprints', '额度用完', execution)
+  await continueAndFinish(f, owner)
 }, 60_000)

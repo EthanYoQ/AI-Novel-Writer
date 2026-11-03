@@ -1075,10 +1075,10 @@ describe('导入 slot 的输出没通过校验', () => {
       return handler(channel, ...args)
     })
     const receipt = { purpose: 'import-inference', finishReason: 'stop', budget: { requestedOutputTokens: 1 } }
-    const session = { complete: vi.fn(async () => ({ status: 'completed', finishReason: 'stop', content, receipt })) }
+    const session = { complete: vi.fn(async (): Promise<unknown> => ({ status: 'completed', finishReason: 'stop', content, receipt })) }
     const runtime = { mainOwned: true, execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
     const discarded = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:discard-candidate').map(([, ...args]) => args.find(arg => typeof arg === 'string'))
-    return { runtime, discarded, context: { ...createContext(), mainGenerationRunHandle: handle } }
+    return { runtime, session, discarded, context: { ...createContext(), mainGenerationRunHandle: handle } }
   }
 
   it('蓝图输出缺章被拒：丢弃这个运行的全部候选，「继续导入」才会重新请求这一批', async () => {
@@ -1093,6 +1093,18 @@ describe('导入 slot 的输出没通过校验', () => {
     await expect(new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
       .execute({ step: {}, context, callbacks })).rejects.toThrow()
     expect(discarded()).toEqual(['artifact-1', 'artifact-2'])
+  })
+
+  it('首轮输出合法、补卡请求在发出前因租约过期失败：不丢弃首轮结果，「继续导入」重放它再补卡', async () => {
+    const inference = validInference()
+    inference.characterCards[0]!.relationships = [{ target: '无名氏', relation: '旧识' }] as never
+    const { runtime, session, discarded, context } = mainOwnedImport(JSON.stringify(inference), channel => channel === 'kb:search' ? [] : { success: true })
+    const first = session.complete.getMockImplementation()!
+    session.complete.mockImplementationOnce(first).mockImplementationOnce(async () => { throw new Error('IMPORT_RUN_LEASE_EXPIRED') })
+    await expect(new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })).rejects.toThrow('IMPORT_RUN_LEASE_EXPIRED')
+    expect(session.complete).toHaveBeenCalledTimes(2)
+    expect(discarded()).toEqual([])
   })
 
   it('输出合法、只是提交失败：不丢弃，「继续导入」复用这次结果', async () => {
