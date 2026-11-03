@@ -137,6 +137,14 @@ it('模型正常结束、还没提交时进程退出：「继续导入」复用�
   expect(f.spy).toHaveBeenCalledTimes(4)
 }, 60_000)
 
+it('模型正常结束、还没提交时进程退出，之后这次输出的正文被改动：「继续导入」不复用它，为这一批重新请求并跑完', async () => {
+  const f = importGenerationFixture(cleanup, 10)
+  const { artifactId } = await completedSecondBatch(f)
+  fenceProjectSession(f.db)
+  f.db.prepare("UPDATE generation_artifacts SET artifact_json=json_set(artifact_json,'$.text','篡改') WHERE artifact_id=?").run(artifactId)
+  await continueAndFinish(f, f.openOwner('epoch-2'))
+}, 60_000)
+
 it('同一工作流里两次请求之间额度用完：刚开的这一批仍读得到上下文，请求时报额度用完', async () => {
   const f = importGenerationFixture(cleanup, 10)
   await runGlobal(f)
