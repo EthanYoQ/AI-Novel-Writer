@@ -68,7 +68,7 @@ function owner() {
       void useLLMStore.getState().generateStream((request as { task: { messages: ModelMessages } }).task.messages, {
         onDone: (content, _usage, finishReason) => { options.onVisible({ kind: 'delta', text: content }); resolve({ finishReason, usage: null }) },
         onError: error => reject(new Error(error)),
-      }, model.id).catch(reject)
+      }, (request as { model: ModelProfile }).model.id).catch(reject)
     }),
     buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'test', epoch: 'lease-test', modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
     rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, 'lease-test', modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
@@ -930,7 +930,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
   })
 })
 
-it('一次显式修复固定失败目标，withRetry 不得把第四份坏结果升级为第五次请求', async () => {
+it('#552 作者重试与首跑给同样的修正次数；同一次点击里 withRetry 不多计费，自动重入不发新请求', async () => {
  const content = 'Lin Lan says: the inspection is still pending.'
  let calls = 0
  let correct = false
@@ -947,15 +947,92 @@ it('一次显式修复固定失败目标，withRetry 不得把第四份坏结果
  expect((await execute()).steps.character_cards.ok).toBe(false)
  expect(calls).toBe(3)
  const failed = await execute(true)
- expect(failed.steps.character_cards.ok).toBe(false)
- expect(calls).toBe(4)
+ expect(failed.steps.character_cards).toMatchObject({ ok: false, error: 'FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE' })
+ expect(calls).toBe(6)
  expect(commitRequests.slice(-3).every(value => JSON.stringify(value) === JSON.stringify(commitRequests.at(-1)))).toBe(true)
  correct = true
  expect((await execute(true)).steps.character_cards.ok).toBe(true)
- expect(calls).toBe(5)
+ expect(calls).toBe(7)
  const db = getProjectDb()!
  expect(db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
- expect(db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
+ expect(db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(3)
+})
+
+describe('#552 换了「定稿后处理」的分工模型后重试角色状态更新', () => {
+  const content = 'Lin Lan says: the inspection is still pending.'
+  const characterModels: string[] = []
+  let notesCalls = 0
+  let kbImports = 0
+  let correct = false
+  /** 修复工作流每次新开一个运行，上下文里没有前一次冻结的模型。 */
+  const repairContext = (): WorkflowContext => ({ ...workflowContext, runId: `repair-${Math.random()}`, data: {} })
+  const assignFinalization = (modelId: string) => useLLMStore.setState({ stageModelIds: { finalization: modelId } })
+
+  beforeEach(() => {
+    characterModels.length = 0; notesCalls = 0; kbImports = 0; correct = false
+    useLLMStore.setState({
+      models: ['test-model', 'post-model'].map(id => ({ id, purposes: ['generation'] })) as never,
+      defaultModelId: 'test-model', stageModelIds: {},
+      generateStream: vi.fn(async (messages, streamCallbacks, modelId) => {
+        const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+        if (!system.includes('character records')) { notesCalls++; streamCallbacks.onDone?.('Lin Lan waits for the inspection.', undefined, 'stop'); return 'notes' }
+        characterModels.push(String(modelId))
+        const good = { characterId, currentState: { recentEvents: 'The inspection is pending.' }, evidence: { text: content } }
+        const paraphrased = { ...good, currentState: { location: 'the archive' }, evidence: { text: 'Lin Lan says, the inspection is still pending.' } }
+        streamCallbacks.onDone?.(JSON.stringify({ updates: correct ? [good] : [good, paraphrased] }), undefined, 'stop')
+        return 'characters'
+      }),
+    })
+    const invoke = window.aiNovelAPI.invoke
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: (channel: string, ...args: unknown[]) => {
+      if (channel === 'kb:import-text') kbImports++
+      return invoke(channel, ...args)
+    } } })
+  })
+
+  const finalize = () => command(content).execute({ step: {}, context: repairContext(), callbacks: callbacks() })
+  const retry = (stepKeys?: readonly string[]) => command(content, { onlyFailed: true, retryInvalidResult: true, ...(stepKeys ? { stepKeys } : {}) })
+    .execute({ step: {}, context: repairContext(), callbacks: callbacks() })
+
+  it.each([
+    ['单步重试', ['character_cards']],
+    ['整卡重试与「修复后处理」', undefined],
+  ] as const)('%s：新请求用新模型、给满三次修正，已成功的步骤不重跑，一条坏 update 不写角色卡', async (_entry, stepKeys) => {
+    const initial = await finalize()
+    expect(initial.steps).toMatchObject({ kb_import: { ok: true }, chapter_notes: { ok: true }, character_cards: { ok: false, error: 'FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE' } })
+    expect(characterModels).toEqual(['test-model', 'test-model', 'test-model'])
+    const notesBefore = getProjectDb()!.prepare('SELECT notes FROM blueprints WHERE chapter_number=2').pluck().get()
+
+    assignFinalization('post-model')
+    const recorded = vi.spyOn(useWorkflowStore.getState(), 'recordRunGenerationModel')
+    const retried = await retry(stepKeys)
+    expect(retried.steps.character_cards).toMatchObject({ ok: false, error: 'FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE' })
+    expect(characterModels.slice(3)).toEqual(['post-model', 'post-model', 'post-model'])
+    expect(recorded).toHaveBeenLastCalledWith(expect.any(String), 'post-model')
+    expect(notesCalls).toBe(1)
+    expect(kbImports).toBe(1)
+    expect(getProjectDb()!.prepare('SELECT notes FROM blueprints WHERE chapter_number=2').pluck().get()).toBe(notesBefore)
+    expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('old station')
+
+    correct = true
+    expect((await retry(stepKeys)).steps.character_cards.ok).toBe(true)
+    expect(characterModels.slice(6)).toEqual(['post-model'])
+    expect(notesCalls).toBe(1)
+  })
+
+  it('重试进行中改分工模型：这次重试沿用开跑时的模型，下一次重试才用新模型', async () => {
+    await finalize()
+    assignFinalization('post-model')
+    const generate = useLLMStore.getState().generateStream
+    useLLMStore.setState({ generateStream: vi.fn(async (...args: Parameters<typeof generate>) => {
+      if (args[2] === 'post-model') assignFinalization('test-model')
+      return generate(...args)
+    }) })
+    await retry(['character_cards'])
+    expect(characterModels.slice(3)).toEqual(['post-model', 'post-model', 'post-model'])
+    await retry(['character_cards'])
+    expect(characterModels.slice(6)).toEqual(['test-model', 'test-model', 'test-model'])
+  })
 })
 it('#420 角色状态断流后，用户重试每次只发一次新请求，失败记下错误码，成功后只写一次', async () => {
  insertFinalizedDraft(7, 2)
