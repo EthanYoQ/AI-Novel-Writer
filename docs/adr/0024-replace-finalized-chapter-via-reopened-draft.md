@@ -22,7 +22,7 @@
 3. **替换在一个事务里提交，旧投影的清理是新定稿的后处理步骤。**
    - commit 把原来的定稿降为只读的 `superseded`，写入新定稿与收据。旧定稿的正文快照和收据不变（ADR-0003 修订）。
    - 新实体稿按现有碰撞后缀发布，不覆盖任何文件。
-   - 新定稿的后处理依次是 `kb_import`、`remove_replaced_knowledge`、`remove_replaced_manuscripts`、`chapter_notes`、`character_cards`。两个删除步骤非关键，失败照常可以重试：
+   - 新定稿的后处理依次是 `kb_import`、`chapter_notes`、`character_cards`、`remove_replaced_knowledge`、`remove_replaced_manuscripts`。两个删除步骤非关键，失败照常可以重试。它们排在最后，因为批量写作和作者原稿导入的后处理遇到失败就停，清理失败不能挡住章节要点与角色状态：
      - 旧知识库文档在新文档导入之后才删。删前比对内容哈希，作者改过的副本只提示不删。
      - 旧实体稿只在内容等于旧定稿快照时删，作者手改过的保留并提示。Windows 上文件被占用时按 `replaceFileWithRetry` 的口径重试。
    - 遗留同章多行定稿的修复（#526）给被降级的行登记同样的两步清理。

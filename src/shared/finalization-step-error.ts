@@ -118,7 +118,7 @@ export function describeFinalizationStepError(error: string, text: (zhCNText: st
  * 定稿后处理现在会跑的步骤，按运行顺序。旧版本的跑批里可能还留着别的步骤（如 style_analysis）。
  * 两个 remove_replaced_* 只在本章有被替换的旧定稿时才跑（ADR-0024）。
  */
-const FINALIZE_POST_PROCESS_STEP_KEYS = ['kb_import', 'remove_replaced_knowledge', 'remove_replaced_manuscripts', 'chapter_notes', 'character_cards'] as const
+const FINALIZE_POST_PROCESS_STEP_KEYS = ['kb_import', 'chapter_notes', 'character_cards', 'remove_replaced_knowledge', 'remove_replaced_manuscripts'] as const
 export type FinalizePostProcessStepKey = typeof FINALIZE_POST_PROCESS_STEP_KEYS[number]
 const CURRENT_STEPS: ReadonlySet<string> = new Set(FINALIZE_POST_PROCESS_STEP_KEYS)
 

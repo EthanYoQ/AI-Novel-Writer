@@ -1246,7 +1246,7 @@ describe('#512 自动重试的最后一次提交时项目状态已变：作者�
 })
 
 describe('重开再定稿后的后处理（ADR-0024）', () => {
-  it('本章有被替换的旧定稿：导入知识库之后清理旧版本，再生成章节要点与角色状态；没有旧定稿的章不加这两步', async () => {
+  it('本章有被替换的旧定稿：生成章节要点与角色状态之后清理旧版本；没有旧定稿的章不加这两步', async () => {
     const firstFinal = await command('Chapter 2 finalized content').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
     expect(Object.keys(firstFinal.steps)).toEqual(['kb_import', 'chapter_notes', 'character_cards'])
     expect(cleanupRequests).toEqual([])
@@ -1260,10 +1260,10 @@ describe('重开再定稿后的后处理（ADR-0024）', () => {
 
     expect(Object.entries(replaced.steps).map(([key, step]) => [key, step.critical, step.ok])).toEqual([
       ['kb_import', true, true],
-      ['remove_replaced_knowledge', false, true],
-      ['remove_replaced_manuscripts', false, true],
       ['chapter_notes', true, true],
       ['character_cards', false, true],
+      ['remove_replaced_knowledge', false, true],
+      ['remove_replaced_manuscripts', false, true],
     ])
     expect(cleanupRequests).toEqual([['chapter:remove-replaced-knowledge', 8], ['chapter:remove-replaced-manuscripts', 8]])
   })
