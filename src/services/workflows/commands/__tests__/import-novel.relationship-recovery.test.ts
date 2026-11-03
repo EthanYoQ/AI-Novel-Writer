@@ -163,15 +163,16 @@ function stubNoCommitIpc() {
   })
 }
 
-function respondWith(responses: unknown[]) {
+function respondWith(responses: unknown[], finishReasons: Array<'stop' | 'length'> = []) {
   const serialized = responses.map(response => typeof response === 'string' ? response : JSON.stringify(response))
   let callCount = 0
   const generateStream = vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(
     async (_messages, streamCallbacks) => {
       const output = serialized[callCount]
       if (output === undefined) throw new Error('unexpected import inference request')
+      const finishReason = finishReasons[callCount] ?? 'stop'
       callCount += 1
-      streamCallbacks.onDone?.(output, undefined, 'stop')
+      streamCallbacks.onDone?.(output, undefined, finishReason)
       return `request-${callCount}`
     },
   )
@@ -404,5 +405,19 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
     const entries = committedEntries(invoke)
     expect(entries.map(entry => entry.name)).toEqual(['陆舟', '苏绾', '顾岩', '韩烁'])
     expect(relationshipsOf(entries).陆舟).toEqual([{ target: '韩烁', relation: '旧债牵连' }])
+  })
+
+  it('still fails before commit when the correction reply is truncated', async () => {
+    const invoke = stubNoCommitIpc()
+    const generateStream = respondWith(
+      [withMissingEndpoint(), { characterCards: [card('韩烁', 'supporting')] }],
+      ['stop', 'length'],
+    )
+
+    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
+      .rejects.toThrow()
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:import-global-facts-commit')
   })
 })
