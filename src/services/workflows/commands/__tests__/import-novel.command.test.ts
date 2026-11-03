@@ -1078,7 +1078,7 @@ describe('导入 slot 的输出没通过校验', () => {
     const session = { complete: vi.fn(async (): Promise<unknown> => ({ status: 'completed', finishReason: 'stop', content, receipt })) }
     const runtime = { mainOwned: true, execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
     const discarded = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:discard-candidate').map(([, ...args]) => args.find(arg => typeof arg === 'string'))
-    return { runtime, session, discarded, context: { ...createContext(), mainGenerationRunHandle: handle } }
+    return { runtime, session, invoke, discarded, context: { ...createContext(), mainGenerationRunHandle: handle } }
   }
 
   it('蓝图输出缺章被拒：丢弃这个运行的全部候选，「继续导入」才会重新请求这一批', async () => {
@@ -1105,6 +1105,30 @@ describe('导入 slot 的输出没通过校验', () => {
       .execute({ step: {}, context, callbacks })).rejects.toThrow('IMPORT_RUN_LEASE_EXPIRED')
     expect(session.complete).toHaveBeenCalledTimes(2)
     expect(discarded()).toEqual([])
+  })
+
+  it('补卡后去掉悬空关系仍解析不了（后面的角色自指）：丢弃这个运行的全部候选', async () => {
+    const inference = validInference()
+    inference.characterCards[0]!.relationships = [{ target: '无名氏', relation: '旧识' }] as never
+    inference.characterCards[1]!.relationships = [{ target: inference.characterCards[1]!.name, relation: '自省' }] as never
+    const { runtime, session, discarded, context } = mainOwnedImport(JSON.stringify(inference), channel => channel === 'kb:search' ? [] : { success: true })
+    await expect(new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })).rejects.toThrow(/relationship_self_reference/)
+    expect(session.complete).toHaveBeenCalledTimes(2)
+    expect(discarded()).toEqual(['artifact-1', 'artifact-2'])
+  })
+
+  it('丢弃一份候选失败：其余候选照样丢弃，报出的仍是校验失败', async () => {
+    const { runtime, invoke, discarded, context } = mainOwnedImport(JSON.stringify({ blueprints: [] }))
+    const answer = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:discard-candidate' && args.includes('artifact-1')) throw new Error('IPC 断开')
+      return answer(channel, ...args)
+    })
+    await expect(new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })).rejects.toThrow(/missing_item/)
+    expect(discarded()).toEqual(['artifact-1', 'artifact-2'])
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(expect.stringContaining('IPC 断开'))
   })
 
   it('输出合法、只是提交失败：不丢弃，「继续导入」复用这次结果', async () => {
