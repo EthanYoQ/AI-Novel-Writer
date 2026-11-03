@@ -1483,6 +1483,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       imports.assertExecution(run, request.execution)
       const previous = repository.budget(run.rootActionId).attempts.map(attempt => repository.receipt(attempt.attemptId)).filter(receipt => receipt.run.runId === run.runId)
       if (previous.some(receipt => receipt.result?.finishReason !== 'stop')) throw new Error('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
+      imports.abandonIfRootStopped(run)
       const current = viewOf(run).nonReplayable ? await resume(request.handle) : viewOf(run)
       return execute({ handle: current.handle, invocationNonce, task: request.task }, false, true)
     },

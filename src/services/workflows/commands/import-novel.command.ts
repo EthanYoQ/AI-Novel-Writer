@@ -216,18 +216,23 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     context: CommandExecuteParams['context'],
   ): Promise<ImportInferenceResult> {
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
+    // 只有输出本身没通过解析才丢弃结果；补卡请求失败（租约过期、额度用完等）不丢，继续导入时重放首轮再补卡。
+    const decoded = async <T>(decode: () => T): Promise<T> => {
+      try { return decode() } catch (error) { await this.discardRejectedImportOutput(callbacks); throw error }
+    }
     try {
       return decodeImportInferenceJson(rawResult)
     } catch (error) {
       if (!(error instanceof StructuredContractDiagnostic)
         || error.code !== 'relationship_endpoint_not_in_characters') {
+        await this.discardRejectedImportOutput(callbacks)
         throw error
       }
     }
 
-    const recoveryTargets = importEndpointRecoveryTargets(rawResult, text)
+    const recoveryTargets = await decoded(() => importEndpointRecoveryTargets(rawResult, text))
     const delta = recoveryTargets.length === 0 ? null : await this.requestImportEndpointCards(rawResult, recoveryTargets, callbacks, context)
-    const { result, droppedRelationships } = decodeRecoveredImportInference(rawResult, delta, text)
+    const { result, droppedRelationships } = await decoded(() => decodeRecoveredImportInference(rawResult, delta, text))
     if (droppedRelationships.length > 0) {
       const dropped = droppedRelationships.map(item => `${item.source}→${item.target}（${item.relation}）`).join('、')
       const droppedEn = droppedRelationships.map(item => `${item.source}→${item.target} (${item.relation})`).join(', ')
@@ -489,7 +494,6 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     // rejects ambiguity. This is not a formal fact or an adoption authorization.
     context.data.importGlobalInferenceCandidate = rawResult
     const inferResult = await this.decodeImportInferenceWithEndpointRecovery(rawResult, callbacks, context)
-      .catch(async (error: unknown) => { await this.discardRejectedImportOutput(callbacks); throw error })
 
     const roster = await ipc.invokeWithProjectSession(
       projectSession,

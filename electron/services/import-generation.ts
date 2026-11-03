@@ -44,11 +44,13 @@ export class ImportGeneration {
   }
   /**
    * 这个运行有请求的结果永远提交不了：没有正常结束（中断、取消、超时、进程退出后的 unknown），
-   * 没留下非空结果，或者结果被丢弃了（渲染端校验没通过时丢弃）。提交前的核对用的是同一条规则。
+   * 没留下非空结果，结果被丢弃了（渲染端校验没通过，或者还要再发请求而根已停），或者请求记录读不出。
+   * 提交前的核对用的是同一条规则。
    */
   rejected(run: DurableGenerationRun): boolean {
     const budget = this.runs.budget(run.rootActionId)
     return this.attemptIds(run).some(attemptId => {
+      if (!this.readable(attemptId, budget)) return true
       const receipt = this.runs.receipt(attemptId, budget), artifact = receipt.artifact
       return receipt.result?.finishReason !== 'stop' || !artifact || !artifact.text.trim() || textHash(artifact.text) !== artifact.textHash
         || this.db.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) !== 1
@@ -58,14 +60,23 @@ export class ImportGeneration {
     return this.attemptIds(run).length > 0
   }
   /**
-   * 这个运行再也交不出可提交的结果，slot 要换一个新运行重来：还没有收据，根上没有请求在途，
-   * 并且根已经发不出请求，或者这个运行的结果提交不了。读不出的请求记录同样交不出结果，只让这个 slot 重来。
+   * 这个运行再也交不出可提交的结果，slot 要换一个新运行重来。前提是还没有收据、根上没有请求在途，然后：
+   * 结果提交不了就重来；已有合法结果就复用（根额度用完也照样重放提交，不再花钱），除非根被取消；
+   * 还没发过请求的运行，只有根已经发不出请求时才重来。
    */
   retryable(run: DurableGenerationRun): boolean {
     const slot = this.context(run).slot
     if (ImportRunRepository.getEffectReceipt(slot.runId, slot.stage, slot.batchId)) return false
-    if (this.runs.budget(run.rootActionId).attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))) return false
-    return !this.rootCanDispatch(run.rootActionId) || this.rejected(run)
+    const budget = this.runs.budget(run.rootActionId)
+    if (budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))) return false
+    if (this.rejected(run)) return true
+    return this.hasAttempts(run) ? budget.root.status === 'cancelled' : !this.rootCanDispatch(run.rootActionId)
+  }
+  /** 这个运行还要再发请求，根却已经发不出：它做不完这一批了，丢弃它的结果，「继续导入」就会为这一批重开。 */
+  abandonIfRootStopped(run: DurableGenerationRun): void {
+    if (this.rootCanDispatch(run.rootActionId)) return
+    const artifactIds = this.db.prepare("SELECT artifact_id FROM generation_artifacts WHERE run_id=? AND status<>'discarded'").pluck().all(run.runId) as string[]
+    for (const artifactId of artifactIds) this.runs.discardCandidate(artifactId)
   }
   context(run: DurableGenerationRun): ImportGenerationContext {
     const context = run.binding.sourceManifest.importContext as ImportGenerationContext | undefined
