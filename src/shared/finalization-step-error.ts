@@ -109,8 +109,9 @@ export function describeFinalizationStepError(error: string, text: (zhCNText: st
   const names = detailNames(error)
   const prompt = entry.retry === 'prompt'
   return text(
-    entry.zh.replace('{names}', names.map(name => `「${name}」`).join('、')) + (prompt ? '请点「重试」重新生成这一步。' : ''),
-    entry.en.replace('{names}', names.map(name => `“${name}”`).join(', ')) + (prompt ? ' Select Retry to generate this step again.' : ''),
+    // 用函数替换：文件名里的 $ 不当替换模式。
+    entry.zh.replace('{names}', () => names.map(name => `「${name}」`).join('、')) + (prompt ? '请点「重试」重新生成这一步。' : ''),
+    entry.en.replace('{names}', () => names.map(name => `“${name}”`).join(', ')) + (prompt ? ' Select Retry to generate this step again.' : ''),
   )
 }
 
