@@ -459,11 +459,13 @@ function decodeWithoutDanglingRelationships(
     const relationships = card.relationships.filter((relationship) => {
       if (!isRecord(relationship)) return true
       const target = decodedLabel(relationship.target)
-      if (target === undefined || names.has(target)) return true
+      const relation = decodedLabel(relationship.relation)
+      // 字段不合格的关系留给解码器拒绝，不能借丢弃把坏补卡洗成合格。
+      if (target === undefined || relation === undefined || names.has(target)) return true
       droppedRelationships.push({
         source: String(card.name).trim(),
         target,
-        relation: String(relationship.relation),
+        relation,
       })
       return false
     })

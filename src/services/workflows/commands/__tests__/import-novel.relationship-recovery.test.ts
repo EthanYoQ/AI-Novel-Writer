@@ -337,6 +337,12 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
     ['a delta card with an invalid role', () => ({
       characterCards: [{ ...card('韩烁', 'supporting'), role: '配角' }],
     })],
+    ['a delta relationship with a non-text target', () => ({
+      characterCards: [{ ...card('韩烁', 'supporting'), relationships: [{ target: null, relation: '旧识' }] }],
+    })],
+    ['a delta relationship with a non-text relation to a missing character', () => ({
+      characterCards: [{ ...card('韩烁', 'supporting'), relationships: [{ target: '无名氏', relation: 5 }] }],
+    })],
   ])('adopts no card from %s and commits the original cards without the dangling relationship', async (_name, correction) => {
     const invoke = stubSuccessfulImportIpc()
     const initial = withMissingEndpoint()
