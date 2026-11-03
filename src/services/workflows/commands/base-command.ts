@@ -256,17 +256,18 @@ export abstract class BaseWorkflowCommand<TResult = string> {
    * 「继续导入」为这一批开新运行重新请求，而不是回放同一份被拒的输出。丢弃失败只记日志，报出的仍是校验失败。
    */
   protected async discardRejectedImportOutput(callbacks: StepCallbacks): Promise<void> {
-    const { context, mainOwned } = this.requireGenerationExecution()
-    const handle = context.mainGenerationRunHandle
-    if (!mainOwned || !handle) return
-    try {
-      const view = await ipc.invokeWithProjectSession(context.projectSession, 'generation:read', handle)
-      for (const candidate of view.candidates ?? []) {
-        if (candidate.status !== 'running') await ipc.invokeWithProjectSession(context.projectSession, 'generation:discard-candidate', handle, candidate.artifactId)
-      }
-    } catch (error) {
+    const execution = this.activeGenerationExecution
+    const handle = execution?.context.mainGenerationRunHandle
+    if (!execution?.mainOwned || !handle) return
+    const { context } = execution
+    const logFailure = (error: unknown) => {
       const reason = displayedErrorMessage(context.uiLocale, error)
       callbacks.log(workflowUiText(context, `丢弃没通过校验的导入输出失败：${reason}`, `Could not discard the rejected import output: ${reason}`))
+    }
+    const view = await ipc.invokeWithProjectSession(context.projectSession, 'generation:read', handle).catch(logFailure)
+    // 丢掉任意一份候选，主进程就判这个运行交不出结果；逐份尝试，一份失败不挡其余几份。
+    for (const candidate of view?.candidates ?? []) {
+      if (candidate.status !== 'running') await ipc.invokeWithProjectSession(context.projectSession, 'generation:discard-candidate', handle, candidate.artifactId).catch(logFailure)
     }
   }
 
