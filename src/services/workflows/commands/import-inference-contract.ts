@@ -415,8 +415,8 @@ function parseImportEndpointCorrectionDelta(
     }
   }
   const expectedAddedNames = new Set(unresolvedTargets)
-  const addedNames = deltaCards.map(card => card.name)
-  if (addedNames.some(name => typeof name !== 'string' || !expectedAddedNames.has(name))) {
+  const addedNames = deltaCards.map(card => decodedLabel(card.name))
+  if (addedNames.some(name => name === undefined || !expectedAddedNames.has(name))) {
     throw new Error(text(
       '导入推演受限补卡校正新增角色必须精确匹配原始未闭合关系端点',
       'Characters added by the bounded import correction must exactly match the original unresolved endpoints.',

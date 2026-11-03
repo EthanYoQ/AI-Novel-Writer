@@ -393,4 +393,16 @@ describe('InferGlobalSettingsCommand relationship endpoint recovery', () => {
       { target: '韩烁', relation: '旧债牵连' },
     ])
   })
+
+  it('adopts a correction card whose name differs from the endpoint only by surrounding whitespace', async () => {
+    const invoke = stubSuccessfulImportIpc()
+    const generateStream = respondWith([withMissingEndpoint(), { characterCards: [card(' 韩烁 ', 'supporting')] }])
+
+    await new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks })
+
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    const entries = committedEntries(invoke)
+    expect(entries.map(entry => entry.name)).toEqual(['陆舟', '苏绾', '顾岩', '韩烁'])
+    expect(relationshipsOf(entries).陆舟).toEqual([{ target: '韩烁', relation: '旧债牵连' }])
+  })
 })
