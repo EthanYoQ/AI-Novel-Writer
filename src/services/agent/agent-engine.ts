@@ -277,6 +277,7 @@ export async function runAgentLoop(
           result,
           TOOL_RESULT_MAX_CHARS,
           executionContext.writingLanguage,
+          MAX_TOOL_ROUNDS - rounds,
         )
 
         toolCallInfo.commitState = result.commitState
@@ -455,7 +456,7 @@ async function runHostedAgentLoop(generate: LLMGenerateFn, callbacks: AgentEngin
               ...context, agentToolAction: action.ref, markSideEffectStarted: () => { sideEffectStarted = true },
             }), TOOL_TIMEOUT_MS, context.writingLanguage, tool.isReadOnly, () => sideEffectStarted, signal)
             const unknown = !tool.isReadOnly && result.commitState === 'unknown'
-            const observation = result.success ? truncateResult(action.name, result, TOOL_RESULT_MAX_CHARS, context.writingLanguage)
+            const observation = result.success ? truncateResult(action.name, result, TOOL_RESULT_MAX_CHARS, context.writingLanguage, MAX_TOOL_ROUNDS - 1 - roundIndex)
               : model('工具执行失败。', 'Tool execution failed.')
             finishAttempted = true
             action = await host.finishTool({ ref: action.ref, status: unknown ? 'unknown' : result.success ? 'completed' : 'failed', observation })
@@ -553,7 +554,13 @@ class ToolExecutionTimeoutError extends Error {}
 /**
  * 截断过长的 Tool 结果
  */
-function truncateResult(toolName: string, result: ToolResult, maxChars: number, writingLanguage: WritingLanguage): string {
+function truncateResult(
+  toolName: string,
+  result: ToolResult,
+  maxChars: number,
+  writingLanguage: WritingLanguage,
+  roundsLeft: number,
+): string {
   const { content, resultOffset } = result
   if (content.length <= maxChars) return content
   const lastShown = content.charCodeAt(maxChars - 1)
@@ -567,6 +574,14 @@ function truncateResult(toolName: string, result: ToolResult, maxChars: number, 
   }
   const end = resultOffset + shown
   const total = resultOffset + content.length
+  // 续读要占一轮，回答作者还要再占一轮；不够两轮时不再让模型续读。
+  if (roundsLeft < 2) {
+    return content.slice(0, shown) + writingLanguageText(
+      writingLanguage,
+      `\n\n…（内容已截断：本段是第 ${resultOffset} 至 ${end} 字符，完整内容共 ${total} 字符。本轮工具调用次数已用完，请根据已读内容回答，并告诉作者第 ${end} 字符之后尚未读到；之后可调用 ${toolName} 并设 offset=${end} 继续）`,
+      `\n\n... (Result truncated: this part covers characters ${resultOffset} to ${end} of ${total}. No tool rounds are left in this turn. Answer from what you have read and tell the author that the content after character ${end} was not read; it can be continued later by calling ${toolName} with offset=${end}.)`,
+    )
+  }
   return content.slice(0, shown) + writingLanguageText(
     writingLanguage,
     `\n\n…（内容已截断：本段是第 ${resultOffset} 至 ${end} 字符，完整内容共 ${total} 字符。用相同参数再次调用 ${toolName} 并设 offset=${end} 读取下一段）`,

@@ -34,8 +34,8 @@ export const readArchitectureTool = buildAgentTool({
     const text = (zhCN: string, enUS: string) => agentToolText(context, zhCN, enUS)
 
     const fileName = args.file_name as string | undefined
-    const offset = Number(args.offset ?? 0)
-    if (!Number.isSafeInteger(offset) || offset < 0) {
+    const offset = args.offset === undefined ? 0 : args.offset
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) {
       return { success: false, content: '', error: text('offset 必须是非负整数', 'offset must be a non-negative integer') }
     }
     const fromOffset = (full: string) => offset > 0 && offset >= full.length
