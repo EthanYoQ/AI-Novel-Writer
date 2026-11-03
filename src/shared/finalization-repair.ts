@@ -10,6 +10,7 @@ export interface RepairedDuplicateChapter {
   keptDraftId: number
   keptVersion: number
   superseded: SupersededFinalizationLeftover[]
+  cleanupRegistered: boolean
 }
 
 export interface DuplicateFinalizationRepair {

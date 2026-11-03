@@ -20,7 +20,7 @@ import StageHistory from '../StageHistory'
 
 const session = { projectId: '雨夜列车', projectPath: 'C:/novels/night-train', leaseId: '本次打开' }
 
-interface Draft { id: number; chapterNumber: number; version: number; status: string; content: string }
+interface Draft { id: number; chapterNumber: number; version: number; status: string; content: string; stale?: boolean }
 
 function snapshot<T>(store: StoreApi<T>): () => void {
   const state = store.getState()
@@ -37,7 +37,7 @@ let beforeCreate: (() => void) | null
 let invoke: ReturnType<typeof vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>>
 
 const meta = (draft: Draft) => ({ id: draft.id, chapterNumber: draft.chapterNumber, version: draft.version, status: draft.status,
-  wordCount: draft.content.length, createdAt: `2026-10-0${draft.version} 21:05:00`, dependenciesStale: false })
+  wordCount: draft.content.length, createdAt: `2026-10-0${draft.version} 21:05:00`, dependenciesStale: draft.stale ?? false })
 
 beforeEach(() => {
   drafts = [
@@ -69,6 +69,13 @@ beforeEach(() => {
       return { success: true, id }
     }
     if (channel === 'db:draft-list-all') return drafts.map(meta)
+    if (channel === 'chapter:reopen') {
+      const request = args[0] as { chapterNumber: number; initialDraftId: number }
+      const id = 100 + drafts.length
+      const version = Math.max(0, ...drafts.filter(draft => draft.chapterNumber === request.chapterNumber).map(draft => draft.version)) + 1
+      drafts.push({ id, chapterNumber: request.chapterNumber, version, status: 'draft', content: drafts.find(draft => draft.id === request.initialDraftId)!.content })
+      return { success: true, created: true, draftId: id, version }
+    }
     throw new Error(`未配置调用：${channel}`)
   })
   Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
@@ -218,6 +225,83 @@ describe('版本历史', () => {
       .toEqual([['final', '定稿 v2'], ['superseded', '已被替换的定稿 v1']])
     await click(/已被替换的定稿 v1/)
     await vi.waitFor(() => expect(button('回退到此版本…')).toBeTruthy())
+  })
+
+  describe('已定稿的章（ADR-0024）', () => {
+    const replacedFinal = () => {
+      drafts = [
+        { id: 11, chapterNumber: 3, version: 1, status: 'superseded', content: '雨从傍晚开始就没有停过。\n林舟攥着那封灰色的信。' },
+        { id: 12, chapterNumber: 3, version: 2, status: 'finalized', content: '雨从傍晚开始就没有停过。\n林舟攥着那封没有署名的信。' },
+      ]
+    }
+    async function revertToFirst() {
+      await act(async () => root!.render(<StageHistory projectKey={session.projectPath} />))
+      await vi.waitFor(() => expect(button(/雨夜车站/)).toBeTruthy())
+      await click(/雨夜车站/)
+      await vi.waitFor(() => expect(button(/已被替换的定稿 v1/)).toBeTruthy())
+      await click(/已被替换的定稿 v1/)
+      await vi.waitFor(() => expect(button('回退到此版本…')).toBeTruthy())
+      await click('回退到此版本…')
+    }
+
+    it('回退以所选那一稿的正文重新打开本章，不直接新建草稿；对话框说明新稿定稿后才替换现在的定稿', async () => {
+      replacedFinal()
+      const success = vi.spyOn(toast, 'success')
+      await revertToFirst()
+      const dialog = document.querySelector('[role="dialog"]')!
+      expect(dialog.textContent).toContain('这一章已定稿')
+      expect(dialog.textContent).toContain('新稿定稿后替换现在的定稿')
+
+      await click('新建回滚草稿')
+      await vi.waitFor(() => expect(button(/草稿 v3/)).toBeTruthy())
+      expect(invoke.mock.calls.filter(([channel]) => channel === 'chapter:reopen').map(([, request]) => request)).toEqual([{ chapterNumber: 3, initialDraftId: 11 }])
+      expect(channels()).not.toContain('db:draft-create')
+      expect(drafts.at(-1)).toMatchObject({ version: 3, status: 'draft', content: drafts[0].content })
+      expect(success).toHaveBeenCalledWith('已新建草稿 v3，原有各稿都保留')
+    })
+
+    it('本章已有一份正在改的重开稿：回退被拒，说明先定稿或放弃它', async () => {
+      replacedFinal()
+      const errors = vi.spyOn(toast, 'error')
+      const base = invoke.getMockImplementation()!
+      invoke.mockImplementation(async (channel, ...args) => channel === 'chapter:reopen'
+        ? { success: false, error: 'CHAPTER_REOPEN_ALREADY_OPEN' }
+        : base(channel, ...args))
+      await revertToFirst()
+      await click('新建回滚草稿')
+      await vi.waitFor(() => expect(errors).toHaveBeenCalledWith(expect.stringContaining('这一章已有一份正在修改的重开稿')))
+      expect(drafts).toHaveLength(2)
+    })
+
+    it('本章已有一份内容相同的重开稿：不再新建，说明已有那一份', async () => {
+      replacedFinal()
+      drafts.push({ id: 13, chapterNumber: 3, version: 3, status: 'draft', content: drafts[0].content })
+      const info = vi.spyOn(toast, 'info')
+      const base = invoke.getMockImplementation()!
+      invoke.mockImplementation(async (channel, ...args) => channel === 'chapter:reopen'
+        ? { success: true, created: false, draftId: 13, version: 3 }
+        : base(channel, ...args))
+      await revertToFirst()
+      await click('新建回滚草稿')
+      await vi.waitFor(() => expect(info).toHaveBeenCalledWith('这一章已有一份内容相同的重开稿（草稿 v3），没有再新建。'))
+      expect(drafts).toHaveLength(3)
+      expect(document.querySelector('[role="dialog"]')).toBeNull()
+    })
+
+    it('定稿和已被替换的定稿不标「来源已过期」，还在写的草稿照常标', async () => {
+      drafts = [
+        { id: 11, chapterNumber: 3, version: 1, status: 'superseded', content: '旧定稿', stale: true },
+        { id: 12, chapterNumber: 3, version: 2, status: 'finalized', content: '新定稿', stale: true },
+        { id: 13, chapterNumber: 3, version: 3, status: 'draft', content: '又一稿', stale: true },
+      ]
+      await act(async () => root!.render(<StageHistory projectKey={session.projectPath} />))
+      await vi.waitFor(() => expect(button(/雨夜车站/)).toBeTruthy())
+      await click(/雨夜车站/)
+      await vi.waitFor(() => expect(button(/已被替换的定稿 v1/)).toBeTruthy())
+      const timeline = host!.querySelector('[aria-label="版本时间线"]')!
+      expect([...timeline.querySelectorAll('li')].map(item => [item.querySelector('.stage-hist-version-name')!.firstChild?.textContent, item.textContent!.includes('来源已过期')]))
+        .toEqual([['草稿 v3', true], ['定稿 v2', false], ['已被替换的定稿 v1', false]])
+    })
   })
 
   it('当前稿没有回退按钮', async () => {

@@ -122,22 +122,29 @@ export interface FinalizedCharacterContext extends ProjectEpoch {
     fields: CharacterFieldSnapshot[]
   }>
 }
+function fromReplacedFinal(context: FinalizedCharacterContext, characterId: string, field: CharacterFieldSnapshot, originProjectId?: string): boolean {
+  const previous = field.sourceOrder
+  // chapterNumber identifies the chapter within the verified project lineage; draft IDs identify versions, not chapters.
+  return field.characterId === characterId && field.provenance.kind === 'derived'
+    && typeof field.provenance.source?.finalizationId === 'string' && isFinalizedSourceIdentity(field.provenance.source)
+    && field.provenance.source.chapterNumber === context.source.chapterNumber
+    && field.provenance.source.finalizationId !== context.source.finalizationId
+    && !!previous && previous.authoritativeFinalizationRevision < context.sourceOrder.authoritativeFinalizationRevision
+    && decideDerivedPatch(field, { ...field, projectId: context.projectId, epoch: context.epoch,
+      baseFieldRevision: field.revision, baseValueHash: field.valueHash, baseProvenance: field.provenance,
+      source: context.source, sourceOrder: context.sourceOrder }, { source: context.source, order: context.sourceOrder, originProjectId, laterOwnerAuthoritative: true }) === 'apply-derived'
+}
 /** Render only: the original fields remain the CAS baseline. originProjectId must be main-verified transfer authority. */
 export function finalizedCharacterPromptCards(context: FinalizedCharacterContext, originProjectId?: string) {
   return context.characters.map(character => ({ characterId: character.characterId, name: character.displayNameSnapshot, aliases: character.aliases,
-    fields: character.fields.filter(field => {
-      const previous = field.sourceOrder
-      // chapterNumber identifies the chapter within the verified project lineage; draft IDs identify versions, not chapters.
-      const superseded = field.field === 'recentEvents' && field.characterId === character.characterId && field.provenance.kind === 'derived'
-        && typeof field.provenance.source?.finalizationId === 'string' && isFinalizedSourceIdentity(field.provenance.source)
-        && field.provenance.source.chapterNumber === context.source.chapterNumber
-        && field.provenance.source.finalizationId !== context.source.finalizationId
-        && previous && previous.authoritativeFinalizationRevision < context.sourceOrder.authoritativeFinalizationRevision
-        && decideDerivedPatch(field, { ...field, projectId: context.projectId, epoch: context.epoch,
-          baseFieldRevision: field.revision, baseValueHash: field.valueHash, baseProvenance: field.provenance,
-          source: context.source, sourceOrder: context.sourceOrder }, { source: context.source, order: context.sourceOrder, originProjectId }) === 'apply-derived'
-      return !superseded
-    }).map(field => ({ field: field.field, value: field.value, provenance: field.provenance })) }))
+    fields: character.fields.filter(field => !(field.field === 'recentEvents' && fromReplacedFinal(context, character.characterId, field, originProjectId)))
+      .map(field => ({ field: field.field, value: field.value, provenance: field.provenance })) }))
+}
+export function replacedFinalFields(context: FinalizedCharacterContext, originProjectId?: string) {
+  return context.characters.flatMap(character => {
+    const fields = character.fields.filter(field => fromReplacedFinal(context, character.characterId, field, originProjectId)).map(field => field.field)
+    return fields.length ? [{ characterId: character.characterId, name: character.displayNameSnapshot, fields }] : []
+  })
 }
 export type FinalizedCharacterStateValues = Partial<Record<CharacterStateTextField, string>>
 export interface FinalizedCharacterStateUpdate {

@@ -62,10 +62,10 @@ function advancesProjectContinuity(projectId: string, previous: string, current:
   const fromOrigin = before === null && originProjectId ? generation(previous, originProjectId) : null
   return after !== null && (before !== null && after > before || fromOrigin !== null && after >= fromOrigin)
 }
-export type DerivedPatchDecision = 'apply-derived' | 'already-applied' | 'proposal-required' | 'source-conflict' | 'field-conflict'
+export type DerivedPatchDecision = 'apply-derived' | 'already-applied' | 'proposal-required' | 'later-source-owns' | 'source-conflict' | 'field-conflict'
 /** Caller recomputes hashes and reads field/authority in the same synchronous commit transaction. */
 export function decideDerivedPatch(current: CharacterFieldSnapshot, patch: DerivedCharacterPatch,
-  authority: { source: FinalizedSourceIdentity; order: DerivedSourceOrder; originProjectId?: string }): DerivedPatchDecision {
+  authority: { source: FinalizedSourceIdentity; order: DerivedSourceOrder; originProjectId?: string; laterOwnerAuthoritative: boolean }): DerivedPatchDecision {
   const order = patch.sourceOrder
   if (!sameProjectEpoch(current, patch) || !isFinalizedSourceIdentity(patch.source) || !isFinalizedSourceIdentity(authority.source) || !sameSource(patch.source, authority.source)
     || !isContentHash(patch.source.contentHash) || !order.continuityEpoch
@@ -81,10 +81,13 @@ export function decideDerivedPatch(current: CharacterFieldSnapshot, patch: Deriv
     || previous.chapterNumber !== current.provenance.source.chapterNumber)) return 'source-conflict'
   if (previous && (!previous.continuityEpoch || !Number.isSafeInteger(previous.chapterNumber) || previous.chapterNumber < 1
     || !Number.isSafeInteger(previous.authoritativeFinalizationRevision) || previous.authoritativeFinalizationRevision < 1)) return 'source-conflict'
+  const laterChapter = previous !== undefined && previous.chapterNumber > order.chapterNumber
   if (previous && (previous.continuityEpoch !== order.continuityEpoch
     && !(current.provenance.kind === 'derived' && advancesProjectContinuity(patch.projectId, previous.continuityEpoch, order.continuityEpoch, authority.originProjectId))
-    || previous.chapterNumber > order.chapterNumber
+    || laterChapter && current.provenance.kind !== 'derived'
     || previous.chapterNumber === order.chapterNumber && previous.authoritativeFinalizationRevision > order.authoritativeFinalizationRevision)) return 'source-conflict'
+  if (laterChapter && authority.laterOwnerAuthoritative
+    || current.provenance.kind === 'author' && current.provenance.chapterNumber > order.chapterNumber) return 'later-source-owns'
   if (current.provenance.kind === 'derived' && sameSource(current.provenance.source, patch.source)
     && current.valueHash === patch.valueHash) return 'already-applied'
   if (current.revision !== patch.baseFieldRevision || current.valueHash !== patch.baseValueHash

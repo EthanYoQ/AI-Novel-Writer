@@ -19,6 +19,7 @@ import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } 
 import ChapterActions from './ChapterActions'
 import ChapterHead from './ChapterHead'
 import DeletionCleanupNotices from './DeletionCleanupNotices'
+import ReplacementImpactNotices from './ReplacementImpactNotices'
 import { useChapterBlueprint } from './use-chapter-blueprint'
 import ChapterPlan from './ChapterPlan'
 import { STAGE_STEP } from './chapter-lifecycle'
@@ -151,7 +152,12 @@ function DraftChapter({ tab, filePath, projectKey }: { tab: EditorTab; filePath:
             />
           )}
           {chapterNumber !== undefined && (
-            <div className="stage-ch-notices"><DeletionCleanupNotices projectKey={projectKey} chapterNumber={chapterNumber} /></div>
+            <div className="stage-ch-notices">
+              <DeletionCleanupNotices projectKey={projectKey} chapterNumber={chapterNumber} />
+              {stage && stage !== 'archived' && stage !== 'superseded' && (
+                <ReplacementImpactNotices projectKey={projectKey} chapterNumber={chapterNumber} showOwn={stage === 'final'} />
+              )}
+            </div>
           )}
           {!draft.mergeData && (
             <div className="stage-ch-prose" data-readonly={!editable || undefined}>

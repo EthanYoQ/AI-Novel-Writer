@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb } from '../../database'
@@ -8,6 +9,7 @@ import { openCanonicalProjectFixture as initProjectDatabase } from '../../../tes
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
 import { DraftRepository } from '../draft-repository'
+import { FinalizationRepository } from '../finalization-repository'
 import { NarrativeThreadRepository } from '../narrative-thread-repository'
 
 let projectRoot = ''
@@ -218,5 +220,35 @@ describe('NarrativeThreadRepository', () => {
       keyEvents: '林岚发现新的刻痕。',
       characters: ['林岚'],
     }).map(thread => thread.id)).not.toContain(unrelated.id)
+  })
+
+  it('moves confirmations to the replacing final when their evidence is still there and leaves the rest on the replaced final', () => {
+    const key = NarrativeThreadRepository.createPlan({
+      title: '旧码头的钥匙', type: '伏笔', targetStartChapter: 1, targetEndChapter: 3, authorIntent: '第三章打开仓库。',
+    })
+    const map = NarrativeThreadRepository.createPlan({
+      title: '靴子里的地图', type: '伏笔', targetStartChapter: 1, targetEndChapter: 3, authorIntent: '第三章用上地图。',
+    })
+    const original = '林岚捡到钥匙。她把地图藏进靴子。'
+    const replaced = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'thread-replaced-final',
+      chapters: [{ chapterNumber: 1, title: '旧码头', content: original, wordCount: countDraftUnits(original) }],
+    }).drafts[0]!.draftId
+    NarrativeThreadRepository.confirmEvent({ planId: key.id, draftId: replaced, type: 'planted', evidence: '林岚捡到钥匙。', reason: '埋设钥匙。' })
+    NarrativeThreadRepository.confirmEvent({ planId: map.id, draftId: replaced, type: 'planted', evidence: '她把地图藏进靴子。', reason: '埋设地图。' })
+
+    const opened = FinalizationRepository.reopen({ chapterNumber: 1 })
+    if (!opened.success) throw new Error('reopen failed')
+    const revised = '林岚捡到钥匙。她把地图烧了。'
+    DraftRepository.updateContent(opened.draftId, revised, countDraftUnits(revised))
+    FinalizationRepository.commit({ finalizationId: 'thread-replacement', draftId: opened.draftId, chapterNumber: 1, chapterTitle: '旧码头',
+      content: revised, contentHash: createHash('sha256').update(revised).digest('hex'), contentRevision: 1, targetFileName: '第1章 旧码头.txt' })
+
+    const threads = NarrativeThreadRepository.list()
+    expect(threads.find(thread => thread.id === key.id)).toMatchObject({
+      status: 'planted', events: [expect.objectContaining({ draftId: opened.draftId, evidence: '林岚捡到钥匙。' })],
+    })
+    expect(threads.find(thread => thread.id === map.id)).toMatchObject({ status: 'planned', events: [] })
+    expect(getProjectDb()!.prepare('SELECT draft_id FROM narrative_thread_confirmations WHERE plan_id = ?').pluck().get(map.id)).toBe(replaced)
   })
 })

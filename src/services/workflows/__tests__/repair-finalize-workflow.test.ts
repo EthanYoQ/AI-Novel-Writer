@@ -329,9 +329,10 @@ describe('createRepairFinalizeWorkflow', () => {
       expect(postProcess.execute).not.toHaveBeenCalled()
     })
 
-    it('runs nothing when the post-processing status cannot be read', async () => {
-      await expect(retryCard(null)).rejects.toThrow('没有可以重试的失败步骤')
-      expect(postProcess.execute).not.toHaveBeenCalled()
+    it('runs every step when the current final was never post-processed, for example after a crash right after replacing it', async () => {
+      await expect(retryCard(null)).resolves.toBeUndefined()
+      expect(postProcess.params).toEqual([expect.objectContaining({ onlyFailed: true })])
+      expect(postProcess.params[0]!.stepKeys).toBeUndefined()
     })
 
     it('refuses a row retry the screen offered before the step became one that retrying cannot change', async () => {

@@ -38,10 +38,10 @@ export function isChapterViewTab(tab: EditorTab): boolean {
  * open 返回 false（读取失败、会话已变）时什么也不动。旧标签有未保存修改时由调用方先保存或请作者确认（放弃时照常关掉）；
  * 打开新标签期间作者又在旧标签里打了字，那些字没人确认过，旧标签就留着不关，并提示一句。
  */
-export async function swapChapterTab(tabId: string, open: () => Promise<boolean> | boolean): Promise<void> {
+export async function swapChapterTab(tabId: string, open: () => Promise<boolean> | boolean, before?: string): Promise<void> {
   const tabs = useEditorStore.getState().tabs
   const index = tabs.findIndex(tab => tab.id === tabId)
-  const before = tabs[index]?.content
+  before ??= tabs[index]?.content
   if (!(await open())) return
   const opened = useEditorStore.getState().activeTabId
   if (!opened || opened === tabId) return

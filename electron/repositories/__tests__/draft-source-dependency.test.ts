@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb } from '../../database'
 import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
+import { reopenWithContent } from '../../../test/helpers/reopened-draft'
 import { DraftRepository } from '../draft-repository'
 import { FinalizationRepository } from '../finalization-repository'
 
@@ -250,9 +251,7 @@ describe('draft source dependencies', () => {
     finalize(sourceId, 1, content, 'finalization-1')
     const dependency = finalizedDependency(sourceId, 1, content, 'finalization-1')
 
-    const replacementId = DraftRepository.create({
-      chapterNumber: 1, source: 'rewrite', content, wordCount: 10,
-    })
+    const replacementId = reopenWithContent(1, content)
     finalize(replacementId, 1, content, 'finalization-2')
 
     expect(() => DraftRepository.create({
@@ -326,9 +325,7 @@ describe('draft source dependencies', () => {
       sourceDependencies: [finalizedDependency(sourceId, 1, content, 'finalization-1')],
     })
 
-    const replacementId = DraftRepository.create({
-      chapterNumber: 1, source: 'rewrite', content, wordCount: 9,
-    })
+    const replacementId = reopenWithContent(1, content)
     finalize(replacementId, 1, content, 'finalization-2')
     expect(DraftRepository.getMeta(downstreamId)?.dependenciesStale).toBe(true)
 

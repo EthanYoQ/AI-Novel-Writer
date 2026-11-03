@@ -1,12 +1,13 @@
 import { getProjectDb } from '../database'
-import type {
-  NarrativeThreadEvent,
-  NarrativeThreadEventInput,
-  NarrativeThreadChapterContext,
-  NarrativeThreadPlanInput,
-  NarrativeThreadPlanRecord,
-  NarrativeThreadStatus,
-  NarrativeThreadView,
+import {
+  narrativeEvidenceInText,
+  type NarrativeThreadEvent,
+  type NarrativeThreadEventInput,
+  type NarrativeThreadChapterContext,
+  type NarrativeThreadPlanInput,
+  type NarrativeThreadPlanRecord,
+  type NarrativeThreadStatus,
+  type NarrativeThreadView,
 } from '../../src/shared/narrative-thread'
 
 function requireDb() {
@@ -93,9 +94,7 @@ export class NarrativeThreadRepository {
       WHERE drafts.id = ? AND drafts.status = 'finalized'
     `).get(input.draftId) as { draft_id: number; chapter_number: number; chapter_title: string; content_snapshot: string } | undefined
     if (!source) throw new Error('NARRATIVE_THREAD_EVENT_SOURCE_NOT_FINALIZED')
-    const normalizedEvidence = evidence.replace(/\s+/gu, '')
-    const normalizedContent = source.content_snapshot.replace(/\s+/gu, '')
-    if (!normalizedContent.includes(normalizedEvidence)) {
+    if (!narrativeEvidenceInText(evidence, source.content_snapshot)) {
       throw new Error('NARRATIVE_THREAD_EVIDENCE_NOT_IN_SOURCE')
     }
     if (!this.getPlan(input.planId, db)) throw new Error('NARRATIVE_THREAD_PLAN_NOT_FOUND')
@@ -115,6 +114,34 @@ export class NarrativeThreadRepository {
       chapterTitle: source.chapter_title,
       createdAt: created.createdAt,
     }
+  }
+
+  static carryConfirmationsToReplacement(
+    replacedDraftIds: readonly number[],
+    replacement: { draftId: number; content: string },
+    db = requireDb(),
+  ): void {
+    if (replacedDraftIds.length === 0) return
+    const confirmations = db.prepare(`
+      SELECT id, evidence FROM narrative_thread_confirmations
+      WHERE draft_id IN (${replacedDraftIds.map(() => '?').join(', ')})
+      ORDER BY id ASC
+    `).all(...replacedDraftIds) as { id: number; evidence: string }[]
+    const move = db.prepare('UPDATE OR IGNORE narrative_thread_confirmations SET draft_id = ? WHERE id = ?')
+    for (const confirmation of confirmations) {
+      if (narrativeEvidenceInText(confirmation.evidence, replacement.content)) move.run(replacement.draftId, confirmation.id)
+    }
+  }
+
+  static confirmationsNotCarried(replacedDraftId: number, replacementContent: string, db = requireDb()): Array<{ threadTitle: string; evidence: string }> {
+    return (db.prepare(`
+      SELECT plans.title AS threadTitle, confirmations.evidence
+      FROM narrative_thread_confirmations confirmations
+      JOIN narrative_thread_plans plans ON plans.id = confirmations.plan_id
+      WHERE confirmations.draft_id = ?
+      ORDER BY confirmations.id ASC
+    `).all(replacedDraftId) as Array<{ threadTitle: string; evidence: string }>)
+      .filter(confirmation => !narrativeEvidenceInText(confirmation.evidence, replacementContent))
   }
 
   static list(db = requireDb()): NarrativeThreadView[] {

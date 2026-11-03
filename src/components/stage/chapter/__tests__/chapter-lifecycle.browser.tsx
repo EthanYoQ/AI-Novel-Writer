@@ -554,7 +554,7 @@ describe('单章视图的主按钮随五种状态变化', () => {
       await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
       await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
       await act(async () => finish(0))
-      await vi.waitFor(() => expect(shown).toHaveBeenCalledWith('Could not run the repair.'))
+      await vi.waitFor(() => expect(shown).toHaveBeenCalledWith('No chapter has been finalized yet, so there is nothing to repair.'))
       expect(workflows.createRepairFinalizeWorkflow).not.toHaveBeenCalled()
     } finally {
       shown.mockRestore()

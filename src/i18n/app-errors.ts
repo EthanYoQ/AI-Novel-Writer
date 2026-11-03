@@ -220,6 +220,12 @@ const ERROR_KEYS = {
   CHAPTER_DELETE_LEGACY_OPERATION_FROZEN: 'error.chapterDeleteLegacyOperationFrozen',
   // 拼进「正文已删除，但派生投影仍待清理：……」与「重试清理失败」，所以文案不带句末标点；逐项原因在删除清理提示里。
   CHAPTER_DELETE_CLEANUP_INCOMPLETE: 'error.chapterDeleteCleanupIncomplete',
+  CHAPTER_FINALIZED_REOPEN_REQUIRED: 'error.chapterFinalizedReopenRequired',
+  CHAPTER_REOPEN_ALREADY_OPEN: 'error.chapterReopenAlreadyOpen',
+  CHAPTER_REOPEN_NOT_FINALIZED: 'error.chapterReopenNotFinalized',
+  CHAPTER_REOPEN_VERSION_INVALID: 'error.chapterReopenVersionInvalid',
+  CHAPTER_REOPEN_BATCH_UNFINISHED: 'error.chapterReopenBatchUnfinished',
+  CHAPTER_REOPEN_BUSY: 'error.chapterReopenBusy',
   // 定稿提交与实体稿发布（#474 B5）。
   FINALIZATION_COMMIT_CONFLICT: 'error.finalizationCommitConflict',
   FINALIZATION_COMMIT_NOT_FOUND: 'error.finalizationCommitNotFound',

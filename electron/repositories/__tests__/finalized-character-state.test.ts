@@ -9,6 +9,7 @@ import { getProjectDb } from '../../database'
 import { FinalizationRepository } from '../finalization-repository'
 import { SummaryRepository, invalidateContinuityProjectionFrom } from '../summary-repository'
 import { parseFinalizedCharacterStateResponse, type FinalizedCharacterContext } from '../../../src/shared/finalized-continuity'
+import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
 
 vi.mock('../../database', () => ({ getProjectDb: vi.fn() }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -23,6 +24,7 @@ function draft(db: Db, id = 1, chapter = 1, content = prose, version = 1) {
   db.prepare('INSERT OR IGNORE INTO blueprints(chapter_number,title) VALUES(?,?)').run(chapter, '合成章节')
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(id, '尚未定稿')
   db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)").run(id, chapter, version, id)
+  registerAsReopenDraft(db, id)
   return { finalizationId: `finalization-${id}`, draftId: id, chapterNumber: chapter, chapterTitle: '合成章节', content,
     contentHash: hash(content), contentRevision: 1, targetFileName: `${chapter}.txt` }
 }
@@ -54,7 +56,7 @@ describe('finalized character identities and derived state in the M02 database',
     SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '旧定稿事件' }), f.db)
     FinalizationRepository.commit(draft(f.db, 2, 1, `${prose}新定稿。`, 2))
     const current = SummaryRepository.readFinalizedCharacterContext(2, { ...scope, epoch: 'reopened-session' }, f.db)
-    expect(current.projectionGeneration).toBe(old.projectionGeneration + 1)
+    expect(current.projectionGeneration).toBe(old.projectionGeneration)
     expect(() => SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '迟到旧事件' }), f.db))
       .toThrow('FINALIZED_CHARACTER_SOURCE_CHANGED')
     expect(SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '新定稿事件' }), f.db)).toMatchObject({ applied: 1 })
@@ -82,7 +84,7 @@ describe('finalized character identities and derived state in the M02 database',
     SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '原项目事件' }), f.db)
     FinalizationRepository.commit(draft(f.db, 2, 1, `${prose}恢复副本新定稿。`, 2))
     const current = SummaryRepository.readFinalizedCharacterContext(2, { projectId: 'restored-project', epoch: 'restored-session' }, f.db)
-    expect(current.sourceOrder.continuityEpoch).toBe(`restored-project:${old.projectionGeneration + 1}`)
+    expect(current.sourceOrder.continuityEpoch).toBe(`restored-project:${old.projectionGeneration}`)
     expect(() => SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '恢复副本事件' }), f.db))
       .toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
     expect(() => SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '恢复副本事件' }), f.db, 'other-project'))
@@ -340,14 +342,14 @@ describe('finalized character identities and derived state in the M02 database',
     if (kind === 'field') expect(f.row().cs_recent_events).toBe('作者新值')
   })
 
-  it('rejects earlier finalized output after later source order and rolls back any preceding field update', () => {
+  it('applies late earlier-chapter output only to fields that no later chapter owns', () => {
     const f = fixture(), earlier = f.context()
     FinalizationRepository.commit(draft(f.db, 2, 2))
     const later = SummaryRepository.readFinalizedCharacterContext(2, scope, f.db)
     SummaryRepository.commitFinalizedCharacterStates(later, f.response(later, { recentEvents: '第二章事件' }), f.db)
-    expect(() => SummaryRepository.commitFinalizedCharacterStates(earlier, f.response(earlier, { location: '旧站', recentEvents: '第一章事件' }), f.db))
-      .toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
-    expect(f.row()).toMatchObject({ cs_location: '', cs_recent_events: '第二章事件' })
+    expect(SummaryRepository.commitFinalizedCharacterStates(earlier, f.response(earlier, { location: '旧站', recentEvents: '第一章事件' }), f.db))
+      .toMatchObject({ applied: 1, unchanged: 1, candidates: [] })
+    expect(f.row()).toMatchObject({ cs_location: '旧站', cs_recent_events: '第二章事件' })
   })
 
   it('clears an explicit empty derived field while preserving omitted fields and static author facts', () => {

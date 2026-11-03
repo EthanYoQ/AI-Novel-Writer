@@ -288,40 +288,36 @@ export async function guardCharacterRegeneration(
   return { ok: true }
 }
 
-// ===== Guard 5：修复定稿后处理前 → 检查是否为最新定稿章节 =====
+// ===== Guard 5：修复定稿后处理前 → 检查这一章有没有要修的步骤 =====
 
-/**
- * 修复定稿后处理的前置校验：
- * 不变量 2：后处理只允许在最新定稿章节上执行，
- * 回溯重跑历史章节会覆盖后续章节的角色状态。
- */
 export async function guardRepairPostProcess(
   chapterNumber: number,
   expectedProjectPath?: string,
   expectedProjectSession?: ProjectSessionContext,
 ): Promise<GuardResult> {
+  const text = (zhCNText: string, enUSText: string) => localize(useLocaleStore.getState().locale, zhCNText, enUSText)
   const captured = captureGuardProject(expectedProjectPath, expectedProjectSession)
   if (!captured) {
-    return { ok: false, message: '请先打开或新建一个项目。' }
+    return { ok: false, message: text('请先打开或新建一个项目。', 'Open or create a project first.') }
   }
 
-  // 从数据库获取最大的定稿章节号
   const maxFinalized = await ipc.invokeWithProjectSession(
     captured.projectSession,
     'db:draft-get-max-finalized-chapter',
     captured.projectPath,
   )
-
   if (maxFinalized === 0) {
-    return { ok: false, message: '尚无已定稿章节，无法执行修复操作。' }
+    return { ok: false, message: text('尚无已定稿章节，无法执行修复操作。', 'No chapter has been finalized yet, so there is nothing to repair.') }
   }
+  if (chapterNumber === maxFinalized) return { ok: true }
 
-  if (chapterNumber !== maxFinalized) {
-    return {
-      ok: false,
-      message: `只允许修复最新定稿章节（第 ${maxFinalized} 章）的后处理。\n\n回溯修复第 ${chapterNumber} 章会破坏角色状态的线性演化链。`,
-    }
+  const status = await readPostProcessStatus(captured.projectPath, getChapterFinalizeScope(chapterNumber), captured.projectSession)
+  if (!status || Object.values(status.steps).some(step => !step.ok)) return { ok: true }
+  return {
+    ok: false,
+    message: text(
+      `第 ${chapterNumber} 章的定稿后处理已经全部完成，没有需要修复的步骤。`,
+      `Post-processing for Chapter ${chapterNumber} has already finished, so there is no step to repair.`,
+    ),
   }
-
-  return { ok: true }
 }

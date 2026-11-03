@@ -18,6 +18,7 @@ import type { MainGenerationExecuteReceipt } from '../../../src/services/generat
 import { parseFinalizedCharacterStateResponse } from '../../../src/shared/finalized-continuity'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 import * as portableAuthority from '../portable-current-authority'
+import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
 
 vi.mock('../../database', async importOriginal => ({ ...await importOriginal<typeof import('../../database')>(), getProjectDb: vi.fn() }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -212,6 +213,7 @@ it('#484 生成期间字段被改：界面重试沿用冻结上下文仍拒写�
  expect(()=>f.owner.commitFinalizationGeneration({handle:retry.view.handle,artifact:f.artifactOf(replay)})).toThrow('FINALIZED_CHARACTER_FIELD_CONFLICT')
  expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('作者新地点')
  f.db.exec("INSERT INTO contents(id,body) VALUES(2,'新稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,2,'draft',2,2)")
+ registerAsReopenDraft(f.db,2)
  FinalizationRepository.commit({finalizationId:'finalized-2',draftId:2,chapterNumber:1,chapterTitle:'北塔',content:prose,contentHash:textHash(prose),contentRevision:2,targetFileName:'第一章.txt'})
  const source=f.owner.readFinalizedCharacterContext(2).context.source
  const notes=f.owner.beginFinalizationGeneration({slot:{source,stepKey:'chapter_notes'},modelId:'synthetic'})

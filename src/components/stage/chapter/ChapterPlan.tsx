@@ -14,6 +14,7 @@ import WriteChapterPopover from '../write/WriteChapterPopover'
 import { openDraftInChapterView, swapChapterTab } from './chapter-tab-routing'
 import ChapterHead from './ChapterHead'
 import DeletionCleanupNotices from './DeletionCleanupNotices'
+import ReplacementImpactNotices from './ReplacementImpactNotices'
 import { useChapterBlueprint } from './use-chapter-blueprint'
 import { pluralEn } from '../../../shared/plural-en'
 
@@ -74,6 +75,7 @@ export default function ChapterPlan({ tab, chapterNumber, projectKey }: { tab: E
           )}
           <div className="stage-ch-notices">
             <DeletionCleanupNotices projectKey={projectKey} chapterNumber={chapterNumber} />
+            <ReplacementImpactNotices projectKey={projectKey} chapterNumber={chapterNumber} showOwn={false} />
             {row?.running && (
               <Notice
                 tone="info"

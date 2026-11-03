@@ -19,6 +19,7 @@ import { adoptTransferredCharacterContinuityOnOpen } from '../transferred-charac
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 import { ChapterDeletionService } from '../chapter-deletion-service'
 import { ProjectClearRepository } from '../../repositories/project-clear-repository'
+import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
 
 const roots: string[] = []
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -64,6 +65,7 @@ function finalizeChapter(project: OpenProject, draftId: number, chapterNumber: n
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(draftId, '尚未定稿')
   db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)")
     .run(draftId, chapterNumber, version, draftId)
+  registerAsReopenDraft(db, draftId)
   FinalizationRepository.commit({ finalizationId: `finalization-${randomUUID()}`, draftId, chapterNumber,
     chapterTitle: `第${chapterNumber}章`, content: body, contentHash: sha256(body), contentRevision: 1,
     targetFileName: `${chapterNumber}.md` })
@@ -217,7 +219,7 @@ describe('#491 角色状态来源经过多次备份往返', { timeout: 30_000 },
     expect(deriveCharacterState(second, 3, { keyItems: '铜钥匙、旅店房卡' }, '住进南港旅店')).toMatchObject({ applied: 1 })
   })
 
-  it('修复后真正的来源冲突仍然拦下：后面章节已更新过的字段，不接受重新定稿的前面章节覆盖', async () => {
+  it('修复后后面章节已更新过的字段仍然不被覆盖：重新定稿的前面章节跳过它', async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f491-'))
     roots.push(base)
     const a = createSourceProject(base)
@@ -231,8 +233,7 @@ describe('#491 角色状态来源经过多次备份往返', { timeout: 30_000 },
     expect(derivedFields(repaired)).toEqual(['location'])
 
     finalizeChapter(repaired, 3, 1, `${CHAPTER_1}她在塔顶等到天亮。`, 2)
-    expect(() => deriveCharacterState(repaired, 3, { location: '北塔塔顶' }, '她在塔顶等到天亮'))
-      .toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+    expect(deriveCharacterState(repaired, 3, { location: '北塔塔顶' }, '她在塔顶等到天亮')).toMatchObject({ applied: 0, unchanged: 1 })
     expect(characterRow().cs_location).toBe('南港旅店')
   })
 
@@ -429,7 +430,7 @@ describe('#484 删章记录作为来源证明的边界', { timeout: 60_000 }, ()
     expect(deriveCharacterState(opened, 2, { location: '南港旅店' }, '住进南港旅店')).toMatchObject({ applied: 1 })
   })
 
-  it('删章后恢复两次，章节顺序仍然生效：先定稿第 3 章，再回头定稿第 2 章报来源冲突', async () => {
+  it('删章后恢复两次，章节顺序仍然生效：先定稿第 3 章，再回头定稿第 2 章不覆盖第 3 章的值', async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'f484-'))
     roots.push(base)
     const a = createSourceProject(base)
@@ -440,7 +441,7 @@ describe('#484 删章记录作为来源证明的边界', { timeout: 60_000 }, ()
     finalizeChapter(c, 3, 3, CHAPTER_3)
     expect(deriveCharacterState(c, 3, { location: '南港码头' }, '收到师父的来信')).toMatchObject({ applied: 1 })
     finalizeChapter(c, 2, 2, CHAPTER_2)
-    expect(() => deriveCharacterState(c, 2, { location: '南港旅店' }, '住进南港旅店')).toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+    expect(deriveCharacterState(c, 2, { location: '南港旅店' }, '住进南港旅店')).toMatchObject({ applied: 0, unchanged: 1 })
     expect(characterRow().cs_location).toBe('南港码头')
   })
 

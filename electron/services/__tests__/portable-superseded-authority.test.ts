@@ -13,6 +13,7 @@ import { restorePortableProject } from '../project-restore-service'
 import { readPortableCurrentAuthority } from '../portable-current-authority'
 import { ChapterDeletionService } from '../chapter-deletion-service'
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
+import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
 
 const roots: string[] = []
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -43,6 +44,7 @@ function finalizeChapter(draftId: number, chapterNumber: number, body: string, v
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(draftId, '尚未定稿')
   db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)")
     .run(draftId, chapterNumber, version, draftId)
+  registerAsReopenDraft(db, draftId)
   FinalizationRepository.commit({ finalizationId: `finalization-${randomUUID()}`, draftId, chapterNumber,
     chapterTitle: `第${chapterNumber}章`, content: body, contentHash: sha256(body), contentRevision: 1,
     targetFileName: `${chapterNumber}-${draftId}.md` })
@@ -115,6 +117,7 @@ describe('备份恢复的项目替换一章定稿', { timeout: 60_000 }, () => {
     getProjectDb()!.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(3,1,1,'draft',3,0)").run()
     finalizeChapter(4, 1, '第一章改稿：雾从海面一层一层爬上来。', 2)
     const restored = await exportAndRestore(base, source, 'older-version')
+    registerAsReopenDraft(getProjectDb()!, 3)
 
     FinalizationRepository.commit({ finalizationId: `finalization-${randomUUID()}`, draftId: 3, chapterNumber: 1,
       chapterTitle: '第1章', content: olderBody, contentHash: sha256(olderBody), contentRevision: 1, targetFileName: '1-3.md' })

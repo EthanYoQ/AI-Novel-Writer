@@ -539,9 +539,12 @@ export function createRepairFinalizeWorkflow(
           const { getChapterFinalizeScope, readPostProcessStatus } = await import('./workflow-utils')
           const { planFinalizationRetry } = await import('../../shared/finalization-step-error')
           const current = await readPostProcessStatus(projectPath, getChapterFinalizeScope(chapterNumber), projectSession)
-          const plan = current && planFinalizationRetry(current.steps)
-          const stepKeys = !plan ? [] : stepKey ? [stepKey].filter(key => plan.rows.has(key)) : plan.card
-          if (stepKeys.length === 0) throw new Error(text(
+          let stepKeys: readonly string[] | undefined
+          if (current) {
+            const plan = planFinalizationRetry(current.steps)
+            stepKeys = stepKey ? [stepKey].filter(key => plan.rows.has(key)) : plan.card
+          }
+          if (stepKeys?.length === 0) throw new Error(text(
             '没有可以重试的失败步骤，请按各步骤的说明处理。',
             'No failed step can be retried. Follow the note on each step.',
           ))
@@ -573,7 +576,7 @@ export function createRepairFinalizeWorkflow(
             projectSession,
           })
           const failedSteps = Object.entries(status.steps)
-            .filter(([key, result]) => stepKeys.includes(key) && !result.ok)
+            .filter(([key, result]) => (!stepKeys || stepKeys.includes(key)) && !result.ok)
             .map(([, result]) => result.label)
           if (failedSteps.length > 0) {
             throw new Error(text(

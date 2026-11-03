@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb } from '../../database'
 import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
+import { reopenWithContent } from '../../../test/helpers/reopened-draft'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import type { ImportRunPrepareRequest } from '../../../src/shared/import-run'
 import { DraftRepository } from '../draft-repository'
@@ -32,7 +33,9 @@ function importChapter(chapterNumber: number, content: string) {
 }
 
 function replaceChapter(chapterNumber: number, content: string): number {
-  const draftId = DraftRepository.create({ chapterNumber, source: 'rewrite', content, wordCount: countDraftUnits(content) })
+  const draftId = DraftRepository.getFinalizedByChapter(chapterNumber)
+    ? reopenWithContent(chapterNumber, content)
+    : DraftRepository.create({ chapterNumber, source: 'rewrite', content, wordCount: countDraftUnits(content) })
   FinalizationRepository.commit({
     finalizationId: randomUUID(), draftId, chapterNumber, chapterTitle: `第${chapterNumber}章`,
     content, contentHash: sha256(content), contentRevision: 1, targetFileName: `第${chapterNumber}章-新.txt`,

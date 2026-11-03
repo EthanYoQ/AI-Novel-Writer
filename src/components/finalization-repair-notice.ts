@@ -10,11 +10,21 @@ export function finalizationRepairMessage(repair: DuplicateFinalizationRepair, t
     const replaced = pluralEn(chapter.superseded.length, 'replaced final')
     const versions = chapter.superseded.map(item => `v${item.version}`).join(text('、', ', '))
     const files = chapter.superseded.map(item => item.targetFileName).filter(Boolean)
+    const inKnowledge = chapter.superseded.some(item => item.knowledgeDocumentId)
     const lines = [text(
       `第 ${chapter.chapterNumber} 章：保留 v${chapter.keptVersion} 作为定稿，${versions} 改为「已被替换的定稿」。`,
       `Chapter ${chapter.chapterNumber}: kept v${chapter.keptVersion} as the final version; ${versions} became ${chapter.superseded.length === 1 ? 'a ' : ''}${replaced}.`,
     )]
-    if (chapter.superseded.some(item => item.knowledgeDocumentId)) {
+    if (chapter.cleanupRegistered) {
+      const leftovers = [
+        inKnowledge ? text('留在知识库里的内容', 'the knowledge base') : '',
+        files.length > 0 ? text('的实体稿', 'the manuscript folder') : '',
+      ].filter(Boolean).join(text('和它', ' and '))
+      lines.push(text(
+        `旧定稿${leftovers}，可以在这一章的「定稿后处理」里点「重试」清理；和旧定稿对不上（可能改过）的会留着。`,
+        `To clean up what the ${replaced} left in ${leftovers}, select Retry under After finalization in this chapter. Anything that no longer matches (it may have been edited) is kept.`,
+      ))
+    } else if (inKnowledge) {
       lines.push(text(
         '这一章旧定稿的内容还留在知识库里，目前不能单独删除。',
         `Text from this chapter's ${replaced} is still in the knowledge base and can't be removed on its own yet.`,
@@ -31,7 +41,7 @@ export function finalizationRepairMessage(repair: DuplicateFinalizationRepair, t
       'Some chapters had more than one final version (left by refinalizing after “Revert to this version…” in an older release), which blocked writing later chapters. This is now fixed:',
     ),
     ...chapters,
-    repair.chapters.some(chapter => chapter.superseded.some(item => item.targetFileName))
+    repair.chapters.some(chapter => !chapter.cleanupRegistered && chapter.superseded.some(item => item.targetFileName))
       ? text(
         '旧定稿的正文仍在版本历史里。它留下的实体稿没有自动删除，可以在正文目录里自行删除。',
         'The replaced text is still in version history. Its manuscript files were not deleted; you can delete them from the manuscript folder.',
