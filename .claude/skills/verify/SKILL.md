@@ -369,9 +369,9 @@ node scripts/redesign/drive.mjs --scenario typing-latency --shell stage --out <�
 | `refs-kb-finalized` | 在第 3 章正文里点「定稿」并确认，等运行侧页写明已完成；知识库「定稿章节 1」里是第 3 章、「我导入的 0」，点开只有「这一章由定稿自动收入」，没有编辑框 | 定稿章节一栏 | 是 | 定稿入库 |
 | `refs-narrow-{plot,kb,history}-{1280,1440}` | 视口 1280 或 1440，导入资料后运行侧页开着：剧情树的模型、生成与「更多」同一行，线索名称不折行、「更多」与路线同一行；知识库原文宽不小于 300px；版本对比头的标签都不折行、对比正文宽不小于 420px。`measured.contentWidth` 是内容区宽 | 侧页开着的资料页 | 是 | 窄宽度 |
 | `refs-tour` | 30–60 秒的导览：生成剧情树、选事件、清除确认后取消、伏笔线索、导入资料并查找、版本对比、回退新建 v3。配 `--video` 录评审视频 | 剧情与伏笔标签 | 是 | Review gate |
-| `refs-timing` | 100 章、每章 5 稿，用夹具模型整理好剧情树并停在剧情树页；计时从点版本历史到第 100 章出现在章节列表（`historyOpenMs`），再从点剧情树到第 1 章事件出现在表格里（`plotOpenMs`），渲染进程内按帧计时 | 剧情树 | 是 | perf |
+| `refs-timing` | 100 章，第 1、2 章是定稿、各 1 稿（定稿章不能新建稿），其余每章 5 稿，用夹具模型整理好剧情树并停在剧情树页；计时从点版本历史到第 100 章出现在章节列表（`historyOpenMs`），再从点剧情树到第 1 章事件出现在表格里（`plotOpenMs`），渲染进程内按帧计时 | 剧情树 | 是 | perf |
 
-perf：trunk 与 head 交替各跑 5 次，取两项各自的中位数。head 加 `--shell stage`，trunk 用旧外壳的左栏「历史」「剧情」进入。
+perf：trunk 与 head 交替各跑 5 次，取两项各自的中位数。trunk 早于 #562（定稿重开）时，它的第 1、2 章也各建 5 稿，夹具比 head 多 8 稿，对照时注明。head 加 `--shell stage`，trunk 用旧外壳的左栏「历史」「剧情」进入。
 
 ```bash
 node scripts/redesign/drive.mjs --scenario refs-timing --app-root <trunk 工作树> --out <目录>

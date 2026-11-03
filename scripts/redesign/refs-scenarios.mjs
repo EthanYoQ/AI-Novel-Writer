@@ -124,7 +124,7 @@ async function assertComparisonReadOnly(page) {
 }
 
 /**
- * perf 的 refs-timing 用：100 章、每章 5 稿，再用夹具模型整理出剧情树（剧情树只能经生成保存）。
+ * perf 的 refs-timing 用：100 章，第 1、2 章是示例作品的定稿、各 1 稿，其余每章 5 稿；再用夹具模型整理出剧情树（剧情树只能经生成保存）。
  * 两种外壳都停在剧情树页上，计时从别的资料页点回来开始。
  */
 async function seedHundred(context) {
@@ -149,6 +149,7 @@ const seedHundredChapters = context => seedStageSample(context, { totalChapters:
   }
   for (let chapterNumber = 1; chapterNumber <= 100; chapterNumber++) {
     const drafts = await invoke(page, 'db:draft-list', chapterNumber, projectPath, session)
+    // 已定稿的章不能再新建稿（db:draft-create 回 CHAPTER_FINALIZED_REOPEN_REQUIRED），只能重开，所以定稿章停在 1 稿。
     if (drafts.some(draft => draft.status === 'finalized')) continue
     const existing = drafts.length
     const content = STAGE_SAMPLE.drafts[chapterNumber]?.text ?? STAGE_SAMPLE.drafts[4].text
