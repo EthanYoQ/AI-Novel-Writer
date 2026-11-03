@@ -388,6 +388,25 @@ describe('替换后的影响提示', () => {
     await expect.element(page.getByText('第 3 章已修改')).toBeVisible()
   })
 
+  it('定稿完成后重读影响，不等角色状态那一步发刷新：本章提示随定稿出现；别的作品会话的定稿不重读', async () => {
+    const final = backend.addDraft({ status: 'finalized', version: 2 })
+    await mount()
+    await openDraft(final.id)
+    await expect.element(page.getByText('已定稿，只读')).toBeVisible()
+    await vi.waitFor(() => expect(backend.writes('chapter:replacement-impacts').length).toBeGreaterThanOrEqual(1))
+    expect(document.body.textContent).not.toContain('第 3 章已修改')
+
+    backend.state.impacts = [impactOnThree('finalization-a')]
+    const completion = { tabId: activeTab()!.id, chapterNumber: 3, chapterTitle: BLUEPRINT.title, draftId: final.id, finalizationId: 'finalization-a',
+      contentHash: 'a'.repeat(64), contentRevision: 1, snapshotContent: ORIGINAL, publicationStatus: 'published' as const, source: 'manual' as const }
+    const loadsBefore = backend.writes('chapter:replacement-impacts').length
+    await act(async () => globalEventBus.emit('FINALIZE_COMPLETE', { ...completion, projectPath: SESSION.projectPath, projectSession: { ...SESSION, leaseId: 'other-lease' } }))
+    expect(backend.writes('chapter:replacement-impacts').length).toBe(loadsBefore)
+
+    await act(async () => globalEventBus.emit('FINALIZE_COMPLETE', { ...completion, projectPath: SESSION.projectPath, projectSession: SESSION }))
+    await expect.element(page.getByText('第 3 章已修改')).toBeVisible()
+  })
+
   it('替换后没有受影响的内容时不出提示', async () => {
     const final = backend.addDraft({ status: 'finalized', version: 2 })
     await mount()
@@ -432,5 +451,15 @@ describe('替换后的影响提示', () => {
     await expect.element(page.getByRole('button', { name: 'Reopen to edit', exact: true })).toBeVisible()
     await click('Reopen to edit')
     await expect.element(page.getByRole('dialog', { name: 'Reopen chapter 3?' })).toBeVisible()
+  })
+
+  it('英文界面：只涉及一章时整句用单数', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    const final = backend.addDraft({ status: 'finalized', version: 2 })
+    backend.state.impacts = [{ chapterNumber: 3, finalizationId: 'finalization-a', laterChapters: [4], blueprintOnlyChapters: [], characters: [], unmovedConfirmations: [] }]
+    await mount()
+    await openDraft(final.id)
+
+    await expect.element(page.getByText('Chapter 4 was written before this change. It may not match the new text and is not changed automatically.')).toBeVisible()
   })
 })
