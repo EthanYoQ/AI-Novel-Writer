@@ -12,7 +12,7 @@ import { buildGenerationSourceBinding, rebuildGenerationSourceBinding, compareGe
 import { currentDerivedCharacterFields } from '../current-character-projection';
 import { readPortableCurrentAuthority } from '../portable-current-authority';
 import { createPortableTransferAuthority, mapPortableTransferAuthority, serializePortableTransferAuthority } from '../portable-transfer-authority';
-import { SummaryRepository } from '../../repositories/summary-repository';
+import { SummaryRepository, invalidateContinuityProjectionFrom } from '../../repositories/summary-repository';
 import { MATERIAL_DECISION_MAX_INPUT_UNITS, MATERIAL_DECISION_RECEIPT_VERSION, type MaterialDecisionReceipt } from '../../../src/shared/generation-owner-contract';
 import { captureReviewRevisionContext } from '../review-revision-context';
 import { textHash } from '../../repositories/generation-run-repository';
@@ -20,6 +20,7 @@ import type { PrepareReviewRevisionRequest } from '../../../src/shared/review-re
 import { selectFrozenReviewRevisionMaterials } from '../../../src/services/workflows/commands/review-revision-materials';
 import { FinalizationRepository } from '../../repositories/finalization-repository';
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture';
+import { reopenWithContent } from '../../../test/helpers/reopened-draft';
 import { LEGACY_INSTALLED_SKILL_CASES, masterInspectWritingSkillMarkdown, plantLegacyInstalledSkill } from '../../../test/helpers/installed-writing-skill-fixture';
 import { WRITING_SKILL_BUNDLE_MANIFEST, writingSkillBundleManifest } from '../writing-skill-package';
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3');
@@ -143,19 +144,34 @@ describe('main rebuilt generation sources', () => {
 
     describe('restored 20-chapter archive roundtrip', { timeout: 20_000 }, () => {
         // Match the shared 20-chapter archive fixture's native I/O budget in project-archive-service.test.ts.
-        it('rejects a downstream derived state whose epoch is spoofed after an earlier chapter replacement', async () => {
+        it('keeps downstream derived states in generation materials after an earlier chapter is replaced', async () => {
             const f = await createProjectArchiveRoundtripFixture();
             cleanups.push(f.dispose);
             await f.exportAndRestore();
             f.reopenRestoredProject();
             const db = f.restoredDatabase();
             const body = '第19章新定稿：上游线索已经改变。';
-            db.prepare('INSERT INTO contents(id,body) VALUES(119,?)').run(body);
-            db.prepare(`INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count,source_dependencies)
-          VALUES(119,19,2,'draft','rewrite',119,?,'[]')`).run(Buffer.from(body).length);
-            FinalizationRepository.commit({ finalizationId: 'finalization-19-replacement', draftId: 119, chapterNumber: 19,
+            const draftId = reopenWithContent(19, body);
+            FinalizationRepository.commit({ finalizationId: 'finalization-19-replacement', draftId, chapterNumber: 19,
                 chapterTitle: '第19章新定稿', content: body, contentHash: hash(body), contentRevision: 1,
                 targetFileName: 'chapter-19-replacement.md' });
+            const result = buildGenerationSourceBinding({ db, projectStorageRoot: f.targetStorage, globalDataRoot: f.globalDataRoot,
+                readBuiltinPrompt: () => JSON.stringify({ key: 'draft', content: 'builtin', systemRole: 'immutable' }) }, {
+                ...f.chapter21GenerationInput, epoch: 'restored-after-replacement', selectedFinalizedDraftIds: [f.chapter20DraftId],
+            });
+            const text = result.materials.find(item => item.ref.sourceId === 'characters:all')?.text;
+            expect(text).toContain(f.chapter20Injury);
+            expect(text).toContain(f.chapter20Clue);
+            expect(text).toContain(f.earlierDerivedState);
+        });
+
+        it('rejects a downstream derived state whose epoch is spoofed after an earlier chapter is deleted', async () => {
+            const f = await createProjectArchiveRoundtripFixture();
+            cleanups.push(f.dispose);
+            await f.exportAndRestore();
+            f.reopenRestoredProject();
+            const db = f.restoredDatabase();
+            invalidateContinuityProjectionFrom(db, 19);
             const generation = db.prepare("SELECT generation FROM continuity_projection_meta WHERE id='main'").pluck().get() as number;
             const provenance = JSON.parse(db.prepare('SELECT cs_provenance FROM characters WHERE character_id=?')
                 .pluck().get(f.characterId) as string) as Record<string, { sourceOrder?: { continuityEpoch: string } }>;

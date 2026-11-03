@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb } from '../../database'
 import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
+import { reopenWithContent } from '../../../test/helpers/reopened-draft'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import { ChapterDeletionService, type ChapterDeletionProjectionCleaner } from '../../services/chapter-deletion-service'
 import { DraftRepository } from '../draft-repository'
@@ -64,9 +65,9 @@ function replacedLastChapter() {
   finalize(write(1, '第一章定稿：雾钟。'), 'kb-1')
   const old = write(2, '第二章旧定稿：北堤外的沉船。')
   const oldRecord = finalize(old, 'kb-2-old')
-  const current = write(2, '第二章新定稿：沉船在北堤下翻了个身。')
+  const current = reopenWithContent(2, '第二章新定稿：沉船在北堤下翻了个身。')
   const currentRecord = finalize(current, 'kb-2-new')
-  const working = write(2, '第二章定稿后另起的工作稿。')
+  const working = reopenWithContent(2, '第二章定稿后另起的工作稿。')
   return { old, oldRecord, current, currentRecord, working }
 }
 
@@ -101,6 +102,23 @@ describe('删除再定稿过的章节', () => {
       sequence: { status: 'continuous', nextChapterNumber: 2 },
       incomplete: [],
     })
+  })
+
+  it('删除后留下的重开稿退回普通工作稿：本章照常再写、定稿，再重开时新建重开稿', async () => {
+    const { current, working } = replacedLastChapter()
+    const { cleaner } = recordingCleaner()
+    await new ChapterDeletionService({ cleaner, createOperationId: () => 'delete-2' })
+      .delete(projectRoot, { draftId: current, chapterNumber: 2 })
+    const rewritten = write(2, '第二章删除后重写的稿。')
+    finalize(rewritten, 'kb-2-rewritten')
+
+    const reopened = FinalizationRepository.reopen({ chapterNumber: 2 })
+
+    expect(reopened).toMatchObject({ success: true, created: true })
+    expect(reopened.success && DraftRepository.getFull(reopened.draftId)).toMatchObject({
+      sourceDependencies: [expect.objectContaining({ draftId: rewritten })],
+    })
+    expect(DraftRepository.getMeta(working)).toMatchObject({ status: 'draft', dependenciesStale: true })
   })
 
   it('旧定稿的清理失败时整次删除记为未完成，重试后补完', async () => {

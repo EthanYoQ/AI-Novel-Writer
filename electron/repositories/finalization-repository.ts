@@ -3,6 +3,8 @@ import { getCurrentProjectPath, getProjectDb } from '../database'
 import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { countDraftUnits } from '../../src/shared/draft-units'
 import type { DuplicateFinalizationRepair, RepairedDuplicateChapter } from '../../src/shared/finalization-repair'
+import type { ReopenChapterRequest, ReopenChapterResult, ReopenedFinal } from '../../src/shared/chapter-reopen'
+import { DraftRepository } from './draft-repository'
 import { freezeFinalizedCharacterSnapshot, invalidateContinuityProjectionFrom } from './summary-repository'
 
 export type PublicationStatus = 'pending' | 'published'
@@ -101,6 +103,10 @@ function rowToRecord(row: FinalizationRow): FinalizationRecord {
   }
 }
 
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
 function requireDatabase() {
   const db = getProjectDb()
   if (!db) throw new Error('PROJECT_NOT_OPEN')
@@ -141,7 +147,7 @@ function selectAuthoritativeExportRows(
       throw new Error('FINALIZATION_EXPORT_CONTENT_EMPTY')
     }
 
-    const contentHash = createHash('sha256').update(row.body, 'utf8').digest('hex')
+    const contentHash = sha256(row.body)
     if (row.finalization_id !== null) {
       if (typeof row.finalization_id !== 'string' || row.finalization_id.trim().length === 0) {
         throw new Error('FINALIZATION_EXPORT_SNAPSHOT_INVALID')
@@ -270,11 +276,11 @@ export class FinalizationRepository {
         throw new Error('FINALIZATION_COMMIT_SUPERSEDED')
       }
 
-      const replaced = db.prepare(`
+      // 替换不推进连续性后缀水位（ADR-0017 修订）：本章自己的派生投影随来源绑定失效，后续各章的派生状态保留。
+      db.prepare(`
         UPDATE drafts SET status = 'superseded', updated_at = datetime('now')
         WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
       `).run(input.chapterNumber, input.draftId)
-      if (replaced.changes > 0) invalidateContinuityProjectionFrom(db, input.chapterNumber)
 
       db.prepare('UPDATE contents SET body = ? WHERE id = ?')
         .run(input.content, draft.content_id)
@@ -318,6 +324,70 @@ export class FinalizationRepository {
       }
     })
     return transaction()
+  }
+
+  /**
+   * 重新打开已定稿的一章（ADR-0024）：把当前权威定稿复制成一份新的工作稿，依赖里记下重开的是哪一份定稿
+   * （没有发布收据的旧定稿记 legacy-finalized，正文取 contents.body）。每章至多一份打开的重开稿，已有就原样返回。
+   * initialDraftId 是版本历史「回退到此版本」所选的稿，用它的正文作初始内容。
+   */
+  static reopen(request: ReopenChapterRequest): ReopenChapterResult {
+    if (!Number.isSafeInteger(request?.chapterNumber) || request.chapterNumber < 1
+      || (request.initialDraftId !== undefined && (!Number.isSafeInteger(request.initialDraftId) || request.initialDraftId < 1))) {
+      throw new Error('CHAPTER_REOPEN_REQUEST_INVALID')
+    }
+    const db = requireDatabase()
+    return db.transaction((): ReopenChapterResult => {
+      const base = db.prepare(`
+        SELECT drafts.id, contents.body, finalization_outbox.finalization_id,
+               finalization_outbox.content_hash, finalization_outbox.content_snapshot
+        FROM drafts
+        JOIN contents ON contents.id = drafts.content_id
+        LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+        WHERE drafts.chapter_number = ? AND drafts.status = 'finalized'
+        ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
+        LIMIT 1
+      `).get(request.chapterNumber) as {
+        id: number
+        body: string
+        finalization_id: string | null
+        content_hash: string | null
+        content_snapshot: string | null
+      } | undefined
+      if (!base) throw new Error('CHAPTER_REOPEN_NOT_FINALIZED')
+      const contentHash = sha256(base.body)
+      if (base.finalization_id !== null && (base.content_snapshot !== base.body || base.content_hash !== contentHash)) {
+        throw new Error('FINALIZATION_SNAPSHOT_HASH_MISMATCH')
+      }
+      const bodyOf = db.prepare(`
+        SELECT contents.body FROM drafts JOIN contents ON contents.id = drafts.content_id
+        WHERE drafts.id = ? AND drafts.chapter_number = ?
+      `).pluck()
+      const initial = request.initialDraftId === undefined
+        ? base.body
+        : bodyOf.get(request.initialDraftId, request.chapterNumber) as string | undefined
+      if (initial === undefined) throw new Error('CHAPTER_REOPEN_VERSION_INVALID')
+
+      const open = DraftRepository.findOpenReopenDraft(request.chapterNumber, db)
+      if (open) {
+        if (request.initialDraftId !== undefined && bodyOf.get(open.id, request.chapterNumber) !== initial) {
+          throw new Error('CHAPTER_REOPEN_ALREADY_OPEN')
+        }
+        return { success: true, created: false, draftId: open.id, version: open.version }
+      }
+      const reopened: ReopenedFinal = base.finalization_id === null
+        ? { kind: 'legacy-finalized', draftId: base.id, chapterNumber: request.chapterNumber, contentHash }
+        : { kind: 'finalized', draftId: base.id, chapterNumber: request.chapterNumber, finalizationId: base.finalization_id, contentHash }
+      const draftId = DraftRepository.create({
+        chapterNumber: request.chapterNumber,
+        source: 'rewrite',
+        content: initial,
+        wordCount: countDraftUnits(initial),
+        sourceDependencies: [reopened],
+      }, db)
+      const version = db.prepare('SELECT version FROM drafts WHERE id = ?').pluck().get(draftId) as number
+      return { success: true, created: true, draftId, version }
+    }).immediate()
   }
 
   static repairDuplicateFinalizations(): DuplicateFinalizationRepair {

@@ -54,7 +54,8 @@ describe('finalized character identities and derived state in the M02 database',
     SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '旧定稿事件' }), f.db)
     FinalizationRepository.commit(draft(f.db, 2, 1, `${prose}新定稿。`, 2))
     const current = SummaryRepository.readFinalizedCharacterContext(2, { ...scope, epoch: 'reopened-session' }, f.db)
-    expect(current.projectionGeneration).toBe(old.projectionGeneration + 1)
+    // 替换不推进连续性后缀水位（ADR-0017 修订）；旧上下文靠来源绑定失效。
+    expect(current.projectionGeneration).toBe(old.projectionGeneration)
     expect(() => SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '迟到旧事件' }), f.db))
       .toThrow('FINALIZED_CHARACTER_SOURCE_CHANGED')
     expect(SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '新定稿事件' }), f.db)).toMatchObject({ applied: 1 })
@@ -82,7 +83,7 @@ describe('finalized character identities and derived state in the M02 database',
     SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '原项目事件' }), f.db)
     FinalizationRepository.commit(draft(f.db, 2, 1, `${prose}恢复副本新定稿。`, 2))
     const current = SummaryRepository.readFinalizedCharacterContext(2, { projectId: 'restored-project', epoch: 'restored-session' }, f.db)
-    expect(current.sourceOrder.continuityEpoch).toBe(`restored-project:${old.projectionGeneration + 1}`)
+    expect(current.sourceOrder.continuityEpoch).toBe(`restored-project:${old.projectionGeneration}`)
     expect(() => SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '恢复副本事件' }), f.db))
       .toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
     expect(() => SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '恢复副本事件' }), f.db, 'other-project'))

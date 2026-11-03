@@ -9,10 +9,11 @@ import type BetterSqlite3 from 'better-sqlite3'
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
-import { RECEIPTED_DRAFT_STATUS_SQL, isReceiptedDraftStatus, type DraftStatus } from '../../src/shared/draft-status'
+import { RECEIPTED_DRAFT_STATUS_SQL, WORKING_DRAFT_STATUS_SQL, isReceiptedDraftStatus, type DraftStatus } from '../../src/shared/draft-status'
+import { isOpenReopenDraft, reopenedFinal } from '../../src/shared/chapter-reopen'
 
 const DRAFT_META_SELECT = `
-  SELECT drafts.*, finalization_outbox.chapter_title
+  SELECT drafts.*, finalization_outbox.chapter_title, finalization_outbox.finalization_id
   FROM drafts
   LEFT JOIN finalization_outbox
     ON drafts.status IN (${RECEIPTED_DRAFT_STATUS_SQL}) AND finalization_outbox.draft_id = drafts.id
@@ -30,6 +31,8 @@ export interface DraftMeta {
     wordCount: number
     sourceDependencies: DraftSourceDependency[]
     dependenciesStale: boolean
+    /** 有发布收据的定稿或已被替换的定稿才有；旧版本留下的定稿与工作稿为 null。 */
+    finalizationId: string | null
     createdAt: string
     updatedAt: string
 }
@@ -301,9 +304,50 @@ function rowToMeta(
         wordCount: row.word_count as number,
         sourceDependencies,
         dependenciesStale: !dependenciesValid || !dependenciesAreCurrent(sourceDependencies, states, memo),
+        finalizationId: typeof row.finalization_id === 'string' ? row.finalization_id : null,
         createdAt: row.created_at as string,
         updatedAt: row.updated_at as string,
     }
+}
+
+/** 本章打开着的重开稿（ADR-0024）；每章至多一份，由 reopen 与 create 在写事务里保证。 */
+function openReopenDraft(db: BetterSqlite3.Database, chapterNumber: number): { id: number; version: number; contentId: number } | null {
+    const rows = db.prepare(`
+      SELECT id, version, status, content_id, source_dependencies FROM drafts
+      WHERE chapter_number = ? AND status IN (${WORKING_DRAFT_STATUS_SQL})
+      ORDER BY version DESC, id DESC
+    `).all(chapterNumber) as Array<{ id: number; version: number; status: DraftStatus; content_id: number; source_dependencies: string }>
+    const reopened = rows
+        .map(row => ({ row, sourceDependencies: parseDependencies(row.source_dependencies).dependencies }))
+        .filter(({ sourceDependencies }) => reopenedFinal({ chapterNumber, sourceDependencies }) !== null)
+    const states = dependencyStates(db, reopened.flatMap(({ sourceDependencies }) => sourceDependencies.map(dependency => dependency.draftId)))
+    const memo = new Map<number, boolean>()
+    const open = reopened.find(({ row, sourceDependencies }) => isOpenReopenDraft({
+        chapterNumber,
+        status: row.status,
+        sourceDependencies,
+        dependenciesStale: !dependenciesAreCurrent(sourceDependencies, states, memo),
+    }))?.row
+    return open ? { id: open.id, version: open.version, contentId: open.content_id } : null
+}
+
+/**
+ * 已定稿的章只能经重开稿再写：新稿要带一条指向本章当前权威定稿的依赖（是否仍指向权威定稿已由
+ * dependenciesAreCurrent 核过），且本章没有另一份打开的重开稿。
+ */
+function assertChapterAcceptsNewDraft(
+    db: BetterSqlite3.Database,
+    chapterNumber: number,
+    dependencies: readonly DraftSourceDependency[],
+): void {
+    const finalized = db.prepare(`
+      SELECT 1 FROM drafts WHERE chapter_number = ? AND status = 'finalized' LIMIT 1
+    `).get(chapterNumber)
+    if (!finalized) return
+    if (!reopenedFinal({ chapterNumber, sourceDependencies: dependencies })) {
+        throw new Error('CHAPTER_FINALIZED_REOPEN_REQUIRED')
+    }
+    if (openReopenDraft(db, chapterNumber)) throw new Error('CHAPTER_REOPEN_ALREADY_OPEN')
 }
 
 export class DraftRepository {
@@ -334,6 +378,7 @@ export class DraftRepository {
             if (!dependenciesAreCurrent(parsedDependencies.dependencies, states, new Map())) {
                 throw new Error('GENERATION_DRAFT_DEPENDENCY_STALE')
             }
+            assertChapterAcceptsNewDraft(db, params.chapterNumber, parsedDependencies.dependencies)
 
             const row = db.prepare(`
         SELECT MAX(version) as maxVer FROM drafts WHERE chapter_number = ?
@@ -357,6 +402,12 @@ export class DraftRepository {
         })
 
         return tx()
+    }
+
+    static findOpenReopenDraft(chapterNumber: number, capturedDatabase?: BetterSqlite3.Database): { id: number; version: number; contentId: number } | null {
+        const db = capturedDatabase ?? getProjectDb()
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
+        return openReopenDraft(db, chapterNumber)
     }
 
     /** 列出章节的所有草稿（不含正文，按版本升序） */

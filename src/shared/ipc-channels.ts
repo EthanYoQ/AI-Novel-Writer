@@ -64,6 +64,7 @@ import type {
   DeleteFinalizedChapterRequest,
 } from './chapter-deletion'
 import type { FinalizationRepairOnOpen } from './finalization-repair'
+import type { ReopenChapterRequest, ReopenChapterResult } from './chapter-reopen'
 import type {
   ImportRunChapterSnapshot,
   ImportRunEffectCommitResult,
@@ -1277,6 +1278,11 @@ export interface ChapterLifecycleChannels {
   'chapter:list-incomplete-deletions': {
     args: [expectedProjectPath: string]
     return: { success: boolean; operations?: ChapterDeletionOperation[]; error?: string }
+  }
+  /** 重新打开已定稿的一章（ADR-0024），返回打开着的重开稿。 */
+  'chapter:reopen': {
+    args: [request: ReopenChapterRequest, expectedProjectPath: string]
+    return: ReopenChapterResult
   }
 }
 

@@ -29,6 +29,7 @@ import { FinalizationRepository } from '../../repositories/finalization-reposito
 import { PostProcessRepository } from '../../repositories/post-process-repository'
 import { RevisionRepository } from '../../repositories/revision-repository'
 import { DraftRepository } from '../../repositories/draft-repository'
+import { reopenFinalizedChapter } from '../chapter-reopen-service'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import { getProjectDb, getCurrentProjectPath } from '../../database'
@@ -2551,6 +2552,31 @@ describe('main draft persistence and batch lineage', () => {
     expect(DraftRepository.getFull(replacement)?.content).toBe('作者创建的新版本。')
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
+  it('refuses to reopen a chapter written by an unfinished batch and keeps the batch resumable', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
+
+    expect(() => reopenFinalizedChapter('project', { chapterNumber: 1 })).toThrow('CHAPTER_REOPEN_BATCH_UNFINISHED')
+    expect(f.owner.readBatch(batch.batchId)).toMatchObject({ nextChapterNumber: 2 })
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+  })
+  it('reopens a chapter written by a finished batch', async () => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
+
+    expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
+  })
   it.each(['draft_review', 'auto_finalize'] as const)('reads revised finalization without crediting the original %s batch', async mode => {
     const f = drafting()
     const batch = f.owner.beginBatch({ mode, range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
@@ -2605,7 +2631,10 @@ describe('main draft persistence and batch lineage', () => {
     FinalizationRepository.commit({ finalizationId: 'revised-finalization', draftId: saved.id, chapterNumber: 1,
       chapterTitle: '第一章', content: revised, contentHash: textHash(revised), contentRevision: 1, targetFileName: '第一章.txt' })
     const rewrite = '林岚在城门口停下，回头看了一眼灯塔。'
-    const replacement = DraftRepository.create({ chapterNumber: 1, source: 'write', content: rewrite, wordCount: 18 })
+    const reopenedDraft = FinalizationRepository.reopen({ chapterNumber: 1 })
+    if (!reopenedDraft.success) throw new Error('reopen failed')
+    const replacement = reopenedDraft.draftId
+    DraftRepository.updateContent(replacement, rewrite, 18)
     FinalizationRepository.commit({ finalizationId: 'replacing-finalization', draftId: replacement, chapterNumber: 1,
       chapterTitle: '第一章', content: rewrite, contentHash: textHash(rewrite), contentRevision: 1, targetFileName: '第一章 新.txt' })
 

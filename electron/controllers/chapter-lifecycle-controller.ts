@@ -2,11 +2,13 @@ import { ipcMain } from 'electron'
 
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import type { DeleteFinalizedChapterRequest } from '../../src/shared/chapter-deletion'
+import type { ReopenChapterRequest } from '../../src/shared/chapter-reopen'
 import { getCurrentProjectPath } from '../database'
 import {
   chapterDeletionService,
   type ChapterDeletionService,
 } from '../services/chapter-deletion-service'
+import { reopenFinalizedChapter } from '../services/chapter-reopen-service'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 
@@ -26,6 +28,7 @@ export function registerChapterLifecycleController(
           event,
           ...args,
           lease.rootPath,
+          lease.projectId,
         )
       } catch (error) {
         return {
@@ -65,6 +68,17 @@ export function registerChapterLifecycleController(
   ) => {
     assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
     return service.confirmLegacyKnowledgeAbsent(projectRoot, operationId)
+  })
+
+  register('chapter:reopen', async (
+    _event,
+    request: ReopenChapterRequest,
+    expectedProjectPath: string,
+    projectRoot: string,
+    projectId: string,
+  ) => {
+    assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
+    return reopenFinalizedChapter(projectId, request)
   })
 
   register('chapter:list-incomplete-deletions', async (
