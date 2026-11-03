@@ -12,14 +12,14 @@ import { STAGE_SAMPLE } from './stage-sample.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
-function referenceNovel(roots, chapters) {
+export function referenceNovel(roots, chapters) {
   const file = path.join(roots.temp, `reference-${chapters}.txt`)
   fs.writeFileSync(file, Array.from({ length: chapters }, (_, index) =>
     `第${index + 1}章 雾港${index + 1}\n林岚沿着旧港的石阶往下走，第${index + 1}次对照父亲留下的潮汐表。灯塔的雾钟在远处响了三声。\n`).join('\n'))
   return file
 }
 
-async function startImport(app, page, file, chapters) {
+export async function startImport(app, page, file, chapters) {
   assert.ok(await app.evaluate(({ dialog }, selected) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
     return true
@@ -33,17 +33,17 @@ async function startImport(app, page, file, chapters) {
   await dialog.waitFor({ state: 'hidden' })
 }
 
-function readDb(context, read) {
+export function readDb(context, read) {
   const db = new Database(path.join(context.samplePath, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
   try { return read(db) } finally { db.close() }
 }
 
-function writeDb(context, write) {
+export function writeDb(context, write) {
   const db = new Database(path.join(context.samplePath, '.ai-novel', 'project.db'), { fileMustExist: true, timeout: 10_000 })
   try { return write(db) } finally { db.close() }
 }
 
-const importRoot = db => db.prepare(`SELECT root_action_id, budget_json, blocked_code, active_elapsed_ms FROM generation_roots
+export const importRoot = db => db.prepare(`SELECT root_action_id, budget_json, blocked_code, active_elapsed_ms FROM generation_roots
   WHERE json_extract(action_json,'$.operation')='import-global-facts' ORDER BY rowid DESC LIMIT 1`).get()
 
 async function failedStepError(page) {
@@ -59,7 +59,7 @@ async function failedStepError(page) {
  * 卡住第 nth 次序号 0 的导入蓝图派发（假模型输出上限小，每批先被按单章拆开，第 2 次才真正发出），
  * 卡在主进程处理函数之前：这时没有在途请求，改库不会和请求计时打架。
  */
-async function holdBlueprintDispatch(app, nth) {
+export async function holdBlueprintDispatch(app, nth) {
   assert.ok(await app.evaluate(({ ipcMain }, nth) => {
     const handlers = ipcMain._invokeHandlers
     const original = handlers.get('import-generation:execute')
@@ -89,7 +89,7 @@ async function holdBlueprintDispatch(app, nth) {
 }
 
 /** 活动时长在请求进行中用完：派发前把根的活动时长推到只差 300 毫秒，并卡住假模型，让主进程的计时到点中止请求、阻断根。 */
-async function stopOnActiveTime(context) {
+export async function stopOnActiveTime(context) {
   const { app, page, roots, fake, shoot } = context
   fake.replyImport()
   const hold = await holdBlueprintDispatch(app, 2)
