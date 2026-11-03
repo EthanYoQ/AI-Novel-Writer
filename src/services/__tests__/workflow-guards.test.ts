@@ -7,6 +7,7 @@ import {
   guardChapterWriting,
   guardCharacterRegeneration,
   guardDirectoryGeneration,
+  guardRepairPostProcess,
 } from '../workflow-guards'
 import { ipc } from '../ipc-client'
 
@@ -193,5 +194,53 @@ describe('character regeneration guard locale', () => {
       ok: false,
       message: expect.stringContaining('Character cards cannot be regenerated while chapter blueprints exist'),
     })
+  })
+})
+
+describe('repair post-processing guard', () => {
+  type Step = { stepKey: string; ok: boolean }
+  /** 最新定稿是第 3 章；第 2 章当前定稿的最新后处理跑批是 steps，null 表示从没跑过。 */
+  function chapterTwoRun(steps: Step[] | null) {
+    vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (_session: unknown, channel: unknown) => {
+      switch (channel) {
+        case 'db:draft-get-max-finalized-chapter': return 3
+        case 'db:post-process-get-latest-run':
+          return steps && { id: 'run-2', triggerSourceType: 'chapter_finalize', triggerSourceId: 'finalization:f2', sourceLabel: '', allCriticalPassed: true, createdAt: '', updatedAt: '' }
+        case 'db:post-process-get-steps':
+          return steps!.map(step => ({ ...step, label: step.stepKey, critical: false, errorMsg: step.ok ? '' : 'FINALIZATION_GENERATION_INCOMPLETE', lastAttemptAt: '', attemptCount: 1 }))
+        default: throw new Error(`unexpected IPC: ${String(channel)}`)
+      }
+    }) as never)
+  }
+  afterEach(() => vi.mocked(ipc.invokeWithProjectSession).mockReset())
+
+  it('lets an earlier chapter repair a step that did not finish, for example after the chapter was reopened and replaced', async () => {
+    chapterTwoRun([{ stepKey: 'kb_import', ok: true }, { stepKey: 'chapter_notes', ok: true }, { stepKey: 'character_cards', ok: false }])
+
+    await expect(guardRepairPostProcess(2, projectPath, projectSession)).resolves.toEqual({ ok: true })
+  })
+
+  it('lets an earlier chapter whose current final was never post-processed run it', async () => {
+    chapterTwoRun(null)
+
+    await expect(guardRepairPostProcess(2, projectPath, projectSession)).resolves.toEqual({ ok: true })
+  })
+
+  it('refuses an earlier chapter whose post-processing all succeeded, in the interface language', async () => {
+    chapterTwoRun([{ stepKey: 'kb_import', ok: true }, { stepKey: 'chapter_notes', ok: true }, { stepKey: 'character_cards', ok: true }])
+
+    await expect(guardRepairPostProcess(2, projectPath, projectSession)).resolves.toEqual({
+      ok: false, message: '第 2 章的定稿后处理已经全部完成，没有需要修复的步骤。',
+    })
+    useLocaleStore.setState({ locale: 'en-US' })
+    const english = await guardRepairPostProcess(2, projectPath, projectSession)
+    expect(english).toMatchObject({ ok: false, message: expect.stringContaining('Chapter 2') })
+    expect(english.message).not.toMatch(/[\u4e00-\u9fff]/u)
+  })
+
+  it('still lets the latest finalized chapter repair', async () => {
+    chapterTwoRun([{ stepKey: 'kb_import', ok: true }])
+
+    await expect(guardRepairPostProcess(3, projectPath, projectSession)).resolves.toEqual({ ok: true })
   })
 })

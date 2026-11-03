@@ -538,10 +538,11 @@ export function createRepairFinalizeWorkflow(
           // 按行与整卡重试都按当前状态重算卡上的安排：界面可能还拿着旧状态，重试结果也一样的失败不重跑。
           const { getChapterFinalizeScope, readPostProcessStatus } = await import('./workflow-utils')
           const { planFinalizationRetry } = await import('../../shared/finalization-step-error')
+          // 当前定稿从没跑过后处理（例如替换后还没来得及跑就退出了）时整套跑一遍（ADR-0024）。
           const current = await readPostProcessStatus(projectPath, getChapterFinalizeScope(chapterNumber), projectSession)
           const plan = current && planFinalizationRetry(current.steps)
-          const stepKeys = !plan ? [] : stepKey ? [stepKey].filter(key => plan.rows.has(key)) : plan.card
-          if (stepKeys.length === 0) throw new Error(text(
+          const stepKeys = !plan ? undefined : stepKey ? [stepKey].filter(key => plan.rows.has(key)) : plan.card
+          if (stepKeys?.length === 0) throw new Error(text(
             '没有可以重试的失败步骤，请按各步骤的说明处理。',
             'No failed step can be retried. Follow the note on each step.',
           ))
@@ -573,7 +574,7 @@ export function createRepairFinalizeWorkflow(
             projectSession,
           })
           const failedSteps = Object.entries(status.steps)
-            .filter(([key, result]) => stepKeys.includes(key) && !result.ok)
+            .filter(([key, result]) => (!stepKeys || stepKeys.includes(key)) && !result.ok)
             .map(([, result]) => result.label)
           if (failedSteps.length > 0) {
             throw new Error(text(
