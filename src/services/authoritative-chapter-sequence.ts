@@ -7,7 +7,7 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 import type { WritingLanguage } from '../shared/writing-language'
 import { ipc } from './ipc-client'
 
-/** 同一章有多行定稿时，下一章无从确定。 */
+/** 同一章有多行定稿，或主进程交来的章号不合法时，下一章无从确定。 */
 export class AuthoritativeChapterSequenceError extends Error {
   readonly code = 'AUTHORITATIVE_CHAPTER_SEQUENCE_INVALID' as const
 
@@ -16,9 +16,15 @@ export class AuthoritativeChapterSequenceError extends Error {
     locale: WritingLanguage,
   ) {
     const duplicates = sequence.duplicateChapterNumbers
-    super(locale === 'en-US'
-      ? `Finalized authority has duplicate records for Chapters ${duplicates.join(', ')}. Repair or remove the conflicting finalized chapters before continuing.`
-      : `权威定稿的第 ${duplicates.join('、')} 章存在重复记录。请先修复或移除冲突定稿，再继续创作。`)
+    const en = locale === 'en-US'
+    const detail = duplicates.length > 0
+      ? en
+        ? `Finalized authority has duplicate records for Chapters ${duplicates.join(', ')}.`
+        : `权威定稿的第 ${duplicates.join('、')} 章存在重复记录。`
+      : en ? 'Finalized manuscript authority is inconsistent.' : '权威定稿状态不一致。'
+    super(en
+      ? `${detail} Repair or remove the conflicting finalized chapters before continuing.`
+      : `${detail}请先修复或移除冲突定稿，再继续创作。`)
     this.name = 'AuthoritativeChapterSequenceError'
   }
 }
@@ -31,7 +37,9 @@ export interface WritableChapters {
   writable: number[]
 }
 
-/** 渲染端读取定稿序列的唯一入口。缺口是合法状态；只有重复定稿时抛 AuthoritativeChapterSequenceError。 */
+const isChapterNumber = (value: number) => Number.isSafeInteger(value) && value >= 1
+
+/** 渲染端读取定稿序列的唯一入口。缺口是合法状态；重复定稿或章号不合法时抛 AuthoritativeChapterSequenceError。 */
 export async function readWritableChapters(
   projectSession: ProjectSessionContext,
   locale: WritingLanguage,
@@ -41,6 +49,9 @@ export async function readWritableChapters(
     'db:draft-authority-sequence',
     projectSession.projectPath,
   )
-  if (sequence.status === 'invalid') throw new AuthoritativeChapterSequenceError(sequence, locale)
-  return { next: sequence.nextChapterNumber, gaps: sequence.gaps, writable: writableChapterNumbers(sequence) }
+  if (sequence.status !== 'invalid' && Array.isArray(sequence.gaps)) {
+    const writable = writableChapterNumbers(sequence)
+    if (writable.every(isChapterNumber)) return { next: sequence.nextChapterNumber, gaps: sequence.gaps, writable }
+  }
+  throw new AuthoritativeChapterSequenceError(sequence, locale)
 }
