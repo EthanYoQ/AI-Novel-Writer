@@ -7,8 +7,8 @@
 *.ps1 text eol=crlf
 
 # Binary release and documentation assets must never be line-normalized.
-*.dll binary
 *.ainovel binary
+*.dll binary
 *.dmg binary
 *.exe binary
 *.gif binary
