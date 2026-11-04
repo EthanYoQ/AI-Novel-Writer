@@ -36,9 +36,11 @@ export const LIVE_ROW_EXEMPT_TABLES = Object.freeze({
 const CLAUSE_KEYWORDS = new Set(['WHERE', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'FULL', 'NATURAL', 'ON', 'USING',
   'ORDER', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'INDEXED', 'NOT'])
 // 表名可带库名前缀（main.drafts、"main"."drafts"），也可用 "x"、`x`、[x] 引起来。第 2 组吃掉前缀与开引号，第 3 组正好是表名。
-const OPEN_QUOTE = '["`\\[]?', CLOSE_QUOTE = '["`\\]]?'
-const TABLE_PREFIX = `(?:${OPEN_QUOTE}\\w+${CLOSE_QUOTE}\\.)?${OPEN_QUOTE}`
-const READ_PATTERN = new RegExp(`\\b(FROM|JOIN)(\\s+${TABLE_PREFIX})(${LIVE_ROW_TABLES.join('|')})\\b${CLOSE_QUOTE}`, 'gi')
+// 源码里的 \" 预处理后是 ` "`，所以库名后的闭引号、点号后的开引号前允许一个空格；紧跟 \s+ 的开引号不需要，也免得两个量词抢空格。
+const OPEN_QUOTE = '["`\\[]?', SPACED_OPEN = '(?: ?["`\\[])?', SPACED_CLOSE = '(?: ?["`\\]])?'
+const TABLE_PREFIX = `(?:${OPEN_QUOTE}\\w+${SPACED_CLOSE}\\.${SPACED_OPEN}|${OPEN_QUOTE})`
+const READ_PATTERN = new RegExp(`\\b(FROM|JOIN)(\\s+${TABLE_PREFIX})(${LIVE_ROW_TABLES.join('|')})\\b`, 'gi')
+const CLOSE_TO_OPEN = Object.freeze({ '"': '"', '`': '`', ']': '[' })
 // 删除目标只能写原表（视图不能写），不算读。只在预处理后的文本上匹配，注释已是空格。
 const DELETE_TARGET = new RegExp(`\\bDELETE\\s+FROM\\s+${TABLE_PREFIX}(\\w+)`, 'gi')
 
@@ -59,6 +61,7 @@ function literalSegments(sourceFile) {
 /**
  * SQL 词法预处理，一次线性扫过：注释换成等长空格，单引号字符串的内容换成等长空格，引号、分号与其余字符原样。
  * 输入是一个字面量的各段源码原文（含定界符），输出逐段等长，偏移量不变。状态跨 ${} 延续。
+ * JS 转义按解码后的语义：\\ 与 \n \t \r 两个字符都换空格，其余 \X 只换掉反斜杠，X 照常处理（\" 变成 ` "`）。
  */
 export function maskSqlSegments(raws) {
   let state = 'normal'
@@ -67,6 +70,12 @@ export function maskSqlSegments(raws) {
     let out = ' '
     for (let index = 1; index < end; index++) {
       const char = raw[index], next = raw[index + 1]
+      if (char === '\\') {
+        // 源码里的 \n 转义同样结束行注释。
+        if (state === 'line' && next === 'n') state = 'normal'
+        if (next === '\\' || next === 'n' || next === 't' || next === 'r') { out += '  '; index++ } else out += ' '
+        continue
+      }
       if (state === 'normal') {
         const opener = char === '-' && next === '-' ? 'line' : char === '/' && next === '*' ? 'block' : ''
         if (opener) { state = opener; out += '  '; index++; continue }
@@ -76,8 +85,7 @@ export function maskSqlSegments(raws) {
         if (char === "'") state = 'normal'
         out += state === 'normal' ? char : ' '
       } else if (state === 'line') {
-        // 源码里的 \n 转义同样结束行注释。
-        if (char === '\n' || (char === '\\' && next === 'n')) state = 'normal'
+        if (char === '\n') state = 'normal'
         out += char === '\n' ? char : ' '
       } else if (char === '*' && next === '/') {
         state = 'normal'; out += '  '; index++
@@ -87,12 +95,21 @@ export function maskSqlSegments(raws) {
   })
 }
 
+/** 表名后紧跟的源码闭引号记号（可带反斜杠，如 \"），没有则为空串。 */
+function closingQuote(text, end) {
+  const token = text.slice(end, end + (text[end] === '\\' ? 2 : 1))
+  return token.at(-1) in CLOSE_TO_OPEN ? token : ''
+}
+
 // 原句用「表名.列」限定时，视图要以原表名作别名，否则限定会失效。只看同一条语句。
-function rewriteFor(table, after, statement) {
+// 只替换表名本身，所以带引号时补上闭引号再开引号："drafts" 变成 "live_drafts" AS "drafts"。
+function rewriteFor(table, after, statement, close) {
   const next = /^\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)/i.exec(after)
   const aliased = next && !CLAUSE_KEYWORDS.has(next[1].toUpperCase())
-  const qualified = new RegExp(`\\b${table}\\.`).test(statement)
-  return aliased || !qualified ? `live_${table}` : `live_${table} AS ${table}`
+  const qualified = new RegExp(`\\b${table}\\s?["\`\\]]?\\.`).test(statement)
+  if (aliased || !qualified) return `live_${table}`
+  const open = close && close.slice(0, -1) + CLOSE_TO_OPEN[close.at(-1)]
+  return `live_${table}${close} AS ${open}${table}`
 }
 
 /**
@@ -119,11 +136,12 @@ export function scanSource(text, fileName = 'source.ts') {
         const position = statementStart + match.index + match[1].length + match[2].length
         if (deleteTargets.has(position)) continue
         const offset = sourceOffset(position)
+        const close = /["`[]$/.test(match[2]) ? closingQuote(text, offset + match[3].length) : ''
         reads.push({
           line: sourceFile.getLineAndCharacterOfPosition(offset).line + 1,
           table: match[3],
           offset,
-          replacement: rewriteFor(match[3], statement.slice(match.index + match[0].length), statement),
+          replacement: rewriteFor(match[3], statement.slice(match.index + match[0].length + close.length), statement, close),
         })
       }
       statementStart += statement.length + 1
