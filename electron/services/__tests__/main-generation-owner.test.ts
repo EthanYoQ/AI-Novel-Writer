@@ -2714,6 +2714,24 @@ describe('main draft persistence and batch lineage', () => {
     expect(() => f.owner.readBatch(batch.batchId)).toThrow('GENERATION_BATCH_FINALIZATION_CONFLICT')
     expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
   })
+  it('ends a review batch once the author finalizes an older draft of a chapter it wrote, so that chapter reopens (#568)', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const older = '作者先前手写的第一章。'
+    const olderId = DraftRepository.create({ chapterNumber: 1, source: 'write', content: older, wordCount: older.length })
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
+    const saved = f.owner.commitDraft((await generate(f, selection)).request)
+    expect(saved.version).toBe(2)
+    FinalizationRepository.commit({ finalizationId: 'older-final', draftId: olderId, chapterNumber: 1, chapterTitle: '第一章', content: older,
+      contentHash: textHash(older), contentRevision: 1, targetFileName: '第一章.txt' })
+
+    expect(f.owner.listBatches()).toEqual([expect.objectContaining({ batchId: batch.batchId, sourceCurrent: false, nextChapterNumber: 2 })])
+    expect(() => f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedDraftIds: [saved.id] }))
+      .toThrow('GENERATION_BATCH_FINALIZATION_CONFLICT')
+    expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
+  })
   it.each(['draft_review', 'auto_finalize'] as const)('reads revised finalization without crediting the original %s batch', async mode => {
     const f = drafting()
     const batch = f.owner.beginBatch({ mode, range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
