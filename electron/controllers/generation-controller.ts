@@ -239,7 +239,7 @@ export function registerGenerationController(options: {
   register('review-revision:read-recovery', 1, (owner, request) => owner.readReviewRevisionRecovery(request.handle))
   register('agent-generation:begin', 1, (owner, request) => owner.agents.begin(request))
   register('agent-generation:read', 1, (owner, request) => owner.agents.read(request.handle))
-  register('import-generation:read', 1, (owner, request) => owner.readImportGeneration(request.slot))
+  register('import-generation:read', 1, (owner, request) => owner.readImportGeneration(request.slot, typeof request.runId === 'string' ? request.runId : undefined))
   register('import-generation:execute', 1, (owner, request) => owner.executeImportGeneration(request))
   register('editor-inline:begin', 1, (owner, request) => owner.beginEditorInline(request))
   register('editor-inline:read-recovery', 1, (owner, request) => owner.readEditorInlineRecovery(request.handle))

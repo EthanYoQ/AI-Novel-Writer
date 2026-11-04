@@ -25,12 +25,12 @@ if (asEntryPoint) try { assertNodeRunsTypeScript(process.version, process.featur
 }
 const [
   { ARCH_SCENARIOS }, { RUN_SCENARIOS }, { BLUEPRINT_SCENARIOS }, { CHAPTER_SCENARIOS }, { REFS_SCENARIOS },
-  { VISUAL_SCENARIOS }, { X1_SCENARIOS }, { X2_SCENARIOS }, { RDX3_SCENARIOS }, { RD10_SCENARIOS }, { README_SCENARIOS }, { CONTRAST_SCENARIOS }, { F491_SCENARIOS }, { F484_SCENARIOS }, { ST504_SCENARIOS }, { F512_SCENARIOS }, { SM517_SCENARIOS }, { BPG_SCENARIOS }, { IMPORT_INFER_SCENARIOS }, { RBK_SCENARIOS }, { F537_SCENARIOS }, { D77_SCENARIOS }, { REOPEN_SCENARIOS },
+  { VISUAL_SCENARIOS }, { X1_SCENARIOS }, { X2_SCENARIOS }, { RDX3_SCENARIOS }, { RD10_SCENARIOS }, { README_SCENARIOS }, { CONTRAST_SCENARIOS }, { F491_SCENARIOS }, { F484_SCENARIOS }, { ST504_SCENARIOS }, { F512_SCENARIOS }, { SM517_SCENARIOS }, { BPG_SCENARIOS }, { IMPORT_INFER_SCENARIOS }, { RBK_SCENARIOS }, { F537_SCENARIOS }, { F555_SCENARIOS }, { D77_SCENARIOS }, { REOPEN_SCENARIOS },
   { BASELINE_SESSIONS, EXTRA_SCENARIOS, SCENARIOS: BASELINE_SCENARIOS, STAGE_SCENARIOS },
 ] = await Promise.all([
   import('./arch-scenarios.mjs'), import('./run-scenarios.mjs'), import('./blueprint-scenarios.mjs'), import('./chapter-scenarios.mjs'),
   import('./refs-scenarios.mjs'), import('./visual-scenarios.mjs'), import('./x1-scenarios.mjs'), import('./x2-scenarios.mjs'),
-  import('./rdx3-scenarios.mjs'), import('./rd10-scenarios.mjs'), import('./readme-scenarios.mjs'), import('./contrast-scenarios.mjs'), import('./f491-scenarios.mjs'), import('./f484-scenarios.mjs'), import('./st504-scenarios.mjs'), import('./f512-scenarios.mjs'), import('./sm517-scenarios.mjs'), import('./bpg-scenarios.mjs'), import('./import-infer-scenarios.mjs'), import('./rbk-scenarios.mjs'), import('./f537-scenarios.mjs'), import('./d77-scenarios.mjs'), import('./reopen-scenarios.mjs'), import('./scenarios.mjs'),
+  import('./rdx3-scenarios.mjs'), import('./rd10-scenarios.mjs'), import('./readme-scenarios.mjs'), import('./contrast-scenarios.mjs'), import('./f491-scenarios.mjs'), import('./f484-scenarios.mjs'), import('./st504-scenarios.mjs'), import('./f512-scenarios.mjs'), import('./sm517-scenarios.mjs'), import('./bpg-scenarios.mjs'), import('./import-infer-scenarios.mjs'), import('./rbk-scenarios.mjs'), import('./f537-scenarios.mjs'), import('./f555-scenarios.mjs'), import('./d77-scenarios.mjs'), import('./reopen-scenarios.mjs'), import('./scenarios.mjs'),
 ])
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -40,7 +40,7 @@ const VIEWPORT = { width: 1440, height: 900 }
 const THEMES = ['light', 'dark']
 const SHELLS = ['writer', 'stage']
 const ROOT_NAMES = ['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'temp', 'projects']
-const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS }
+const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...F555_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS }
 /** 计时会话：先在同一隔离目录预启动一次写好外观（书房计时另建 20 部作品），再计之后那次冷启动。 */
 const TIMED_SESSIONS = new Set(['startup-timing', 'library-timing'])
 /** 空闲内存：与启动计时同样先预启动一次，第二次冷启动到可交互后静置，再按间隔采样全部进程的内存。 */
@@ -175,6 +175,17 @@ function isAlive(pid) {
     process.kill(pid, 0)
     return true
   } catch (error) { return error.code === 'EPERM' }
+}
+
+async function kill(app) {
+  const pid = app.process().pid
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    else process.kill(pid, 'SIGKILL')
+  } catch (error) {
+    if (isAlive(pid)) throw error
+  }
+  for (const deadline = Date.now() + 10_000; isAlive(pid); await delay(100)) assert.ok(Date.now() < deadline, `10 秒内进程 ${pid} 没有结束`)
 }
 
 /** close 失败时进程可能已自行退出，这时 taskkill 报「not found」；进程已不存在即视为已退出，不算强杀。 */
@@ -458,12 +469,15 @@ async function runSession(sessionName, names, options) {
         /** 场景中途多拍一张图，与收尾截图放在同一目录。 */
         shoot: name => shoot(context.page, `${base(name)}.png`),
         reload: () => context.page.reload().then(() => waitForShell(context.page, TIMEOUT)),
-        /** 退出应用再用同一隔离目录冷启动（真正的重启，不重写外观），context 换成新的 app 与 page。appRoot 换成另一份构建（旧版本造数据、新版本接着打开），之后不传时沿用上次启动的构建。 */
-        restart: async ({ appRoot = currentAppRoot, beforeLaunch } = {}) => {
+        /**
+         * 退出应用再用同一隔离目录冷启动（真正的重启，不重写外观），context 换成新的 app 与 page。appRoot 换成另一份构建（旧版本造数据、新版本接着打开），之后不传时沿用上次启动的构建。
+         * killed: true 时模拟进程被杀：Windows 用 taskkill /T /F 结束整棵进程树，其他平台只向主进程发 SIGKILL。不走正常退出，也就跳过「重启前应用没有正常退出」的断言。
+         */
+        restart: async ({ appRoot = currentAppRoot, beforeLaunch, killed = false } = {}) => {
           restartRequests.push(...await launched.app.evaluate(() => globalThis.__driveExternalRequests))
           await recording?.pause()
-          const exited = await quit(launched.app)
-          assert.equal(exited.forced, false, '重启前应用没有正常退出')
+          if (killed) await kill(launched.app)
+          else assert.equal((await quit(launched.app)).forced, false, '重启前应用没有正常退出')
           await beforeLaunch?.()
           launched = await launch({ roots, appRoot, fakeModelPort: fake?.port, diagnostics, failureBase })
           currentAppRoot = appRoot

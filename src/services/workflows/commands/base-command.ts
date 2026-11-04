@@ -26,6 +26,7 @@ import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
 import type { WritingSkillStage } from '../../../shared/writing-skills'
 import { ipc } from '../../ipc-client'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
 import type { VisibleCompositionReceipt } from '../../../shared/generation-owner-contract'
 import { composeVisibleContinuation } from '../../../shared/visible-continuation'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationSelection, type WorkflowMainGenerationRequest, type WorkflowMainGenerationRuntime } from '../workflow-main-generation'
@@ -248,6 +249,21 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     const handle = execution.context.mainGenerationRunHandle
     if (!execution.mainOwned || !handle) throw new Error('GENERATION_COMPOSITION_HANDLE_REQUIRED')
     return ipc.invokeWithProjectSession(execution.context.projectSession, 'generation:read-visible-composition', handle)
+  }
+
+  protected async discardRejectedImportOutput(callbacks: StepCallbacks): Promise<void> {
+    const execution = this.activeGenerationExecution
+    const handle = execution?.context.mainGenerationRunHandle
+    if (!execution?.mainOwned || !handle) return
+    const { context } = execution
+    const logFailure = (error: unknown) => {
+      const reason = displayedErrorMessage(context.uiLocale, error)
+      callbacks.log(workflowUiText(context, `丢弃没通过校验的导入输出失败：${reason}`, `Could not discard the rejected import output: ${reason}`))
+    }
+    const view = await ipc.invokeWithProjectSession(context.projectSession, 'generation:read', handle).catch(logFailure)
+    for (const candidate of view?.candidates ?? []) {
+      if (candidate.status !== 'running') await ipc.invokeWithProjectSession(context.projectSession, 'generation:discard-candidate', handle, candidate.artifactId).catch(logFailure)
+    }
   }
 
   /** 获取 LLM 大模型连接代理（支持取消） */

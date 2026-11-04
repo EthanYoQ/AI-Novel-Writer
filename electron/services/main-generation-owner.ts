@@ -32,7 +32,7 @@ import type { FinalizedCharacterGenerationCommit } from '../../src/shared/finali
 import type { ReviewRevisionContext, PrepareReviewRevisionRequest, ReviewGenerationCommitRequest, RevisionGenerationCommitRequest } from '../../src/shared/review-revision-generation'
 import { ReviewRevisionGeneration } from './review-revision-generation'
 import { AgentGeneration, type AgentBeginSelection } from './agent-generation'
-import { ImportGeneration } from './import-generation'
+import { ImportGeneration, importSlotNonce } from './import-generation'
 import type { ImportGenerationSlot } from '../../src/shared/import-generation'
 import { importGenerationSlotKey } from './import-generation-source'
 import type { ApproveCharacterProposalRequest } from '../../src/shared/character-proposal'
@@ -421,8 +421,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (selection.operation === 'legacy-character-roster-repair' && !legacyInitialization) throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
     const importAdmission = imports.admit(selection)
     if (importAdmission?.existing) return viewOf(importAdmission.existing)
-    if (importAdmission) selection = { ...selection, uiActionNonce: `import:${importGenerationSlotKey(selection.importSlot!)}`,
-      ...(importAdmission.parentRootActionId ? { parentRootActionId: importAdmission.parentRootActionId, modelId: importAdmission.modelId! } : {}) }
+    if (importAdmission) selection = { ...selection, uiActionNonce: importSlotNonce(importGenerationSlotKey(selection.importSlot!), importAdmission.retryOf),
+      ...(importAdmission.parentRootActionId ? { parentRootActionId: importAdmission.parentRootActionId } : {}),
+      ...(importAdmission.modelId ? { modelId: importAdmission.modelId } : {}) }
     if (selection.operation === 'agent-round' && !agentInitialization) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
     const agentWorkflow = agentInitialization ? undefined : agents.admitWorkflow(selection)
     if (selection.parentRootActionId && repository.budget(selection.parentRootActionId).root.operation === 'editor-inline') throw new Error('GENERATION_EDITOR_CHILD_FORBIDDEN')
@@ -501,7 +502,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const run = deps.database.transaction(() => {
       if (selection.importSlot) {
         const existing = imports.find(selection.importSlot)
-        if (existing) return existing
+        if (existing && !imports.retryable(existing)) return existing
       }
       if (selection.finalizationGenerationSlot) {
         const existing = finalizations.find(selection.finalizationGenerationSlot)
@@ -1441,10 +1442,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
       return execute({ handle: current.handle, invocationNonce, task }, false, false, true)
     },
-    readImportGeneration: (slot: ImportGenerationSlot) => {
+    readImportGeneration: (slot: ImportGenerationSlot, runId?: string) => {
       assertCurrent()
       const run = imports.find(slot)
-      return run ? { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, frozenContext: imports.context(run) } : null
+      return run && (run.runId === runId || !imports.retryable(run)) ? { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, frozenContext: imports.context(run) } : null
     },
     assertImportGenerationSources: (handle: MainGenerationRunHandle, slot?: ImportGenerationSlot, allowLegacyStyle = false) => {
       const run = requireRun(handle)
@@ -1457,13 +1458,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }
       if (!slot || !isDeepStrictEqual(imports.context(run).slot, slot)) throw new Error('GENERATION_IMPORT_EFFECT_SLOT_CHANGED')
       const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
-      const attempts = repository.budget(run.rootActionId).attempts.filter(attempt => repository.receipt(attempt.attemptId).run.runId === run.runId)
       if (repository.budget(run.rootActionId).root.status === 'cancelled' || !compareGenerationSourceBindings(run.binding, current)
-        || !attempts.length || attempts.some(attempt => {
-          const receipt = repository.receipt(attempt.attemptId), artifact = receipt.artifact
-          return receipt.result?.finishReason !== 'stop' || !artifact || !artifact.text.trim() || textHash(artifact.text) !== artifact.textHash
-            || deps.database.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) !== 1
-        }))
+        || !imports.hasAttempts(run) || imports.rejected(run))
         throw new Error('GENERATION_IMPORT_EFFECT_SOURCE_CHANGED')
     },
     executeImportGeneration: async (request: import('../../src/shared/import-generation').ImportGenerationChannels['import-generation:execute']['args'][0]) => {
@@ -1486,6 +1482,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       imports.assertExecution(run, request.execution)
       const previous = repository.budget(run.rootActionId).attempts.map(attempt => repository.receipt(attempt.attemptId)).filter(receipt => receipt.run.runId === run.runId)
       if (previous.some(receipt => receipt.result?.finishReason !== 'stop')) throw new Error('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
+      imports.abandonIfRootStopped(run)
       const current = viewOf(run).nonReplayable ? await resume(request.handle) : viewOf(run)
       return execute({ handle: current.handle, invocationNonce, task: request.task }, false, true)
     },

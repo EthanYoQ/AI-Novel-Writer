@@ -235,7 +235,7 @@ describe('import generation stops (#537)', () => {
     expect(errorCodeOf(Object.assign(new Error('open failed'), { code: 'ENOENT' }))).toBeUndefined()
   })
 
-  const nextStep = { 'zh-CN': /只能在导入对话框里点「重新开始」，它会从第 1 章重新推演蓝图/u, 'en-US': /choose Start over in the import dialog.*Chapter 1/u } as const
+  const nextStep = { 'zh-CN': /在导入对话框里点「继续导入」.*已提交的批次不会重做/u, 'en-US': /choose Continue import in the import dialog.*batches already committed are not redone/u } as const
   const blocked = ['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'] as const
 
   it.each(['zh-CN', 'en-US'] as const)('tells a request limit, an active-time stop and a blocked generation apart in %s, without codes, and names the only way to finish', locale => {
@@ -273,7 +273,7 @@ describe('import generation stops (#537)', () => {
       expect(author).toMatch(saved)
       expect(author).not.toMatch(startOver)
       expect(author).not.toMatch(/[A-Z]{3,}_[A-Z]/u)
-      expect(reference).toMatch(startOver)
+      expect(reference).toMatch(nextStep[locale])
       expect(importGenerationStopMessage(locale, code, inFlight, 'reference')).toBe(reference)
     }
   })

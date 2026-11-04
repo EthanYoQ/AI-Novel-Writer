@@ -110,7 +110,8 @@ it('ordinal gap拒绝，unknown重开不自动重发且预算保留',async()=>{
  const replay=await next.executeImportGeneration({handle,ordinal:0,task})
  expect(replay.run.artifacts).toEqual(receipt.run.artifacts)
  expect(replay.outcome.status).toBe(receipt.outcome.status)
- expect(next.readImportGeneration(f.slot)?.view.ledger?.physicalRequests).toBe(1)
+ expect(replay.run.ledger?.physicalRequests).toBe(1)
+ expect(next.readImportGeneration(f.slot)).toBeNull()
  expect(f.spy).toHaveBeenCalledTimes(1)
 })
 
