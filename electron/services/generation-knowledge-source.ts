@@ -52,8 +52,8 @@ async function readStable<T>(root: string, read: (reader: Reader) => Promise<T>)
     } }
     if (fs.existsSync(directory)) {
       physicalDirectory(directory)
-      const lance = await import('@lancedb/lancedb')
-      connection = await lance.connect(directory)
+      const { openLanceDatabase } = await import('../lance-database')
+      connection = await openLanceDatabase(directory)
       reader.connection = connection
       reader.names = await connection.tableNames()
       const hasChunks = reader.names.includes('chunks'), hasDocuments = reader.names.includes('documents')

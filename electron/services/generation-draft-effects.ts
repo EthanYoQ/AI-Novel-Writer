@@ -160,6 +160,11 @@ export class GenerationDraftEffects {
       if (intent.mode === 'auto_finalize' && (!chapter.finalizationId || !chapter.postProcessComplete)) break
       nextChapterNumber = chapter.chapterNumber === intent.range.endChapter ? null : chapter.chapterNumber + 1
     }
+    // 审稿批次不替作者定稿；作者开始定稿其中一章即结束这一批，剩下的章另起一批（#568）。
+    // 按章查：作者定稿的可能是该章更旧的草稿。批次只能写还没定稿的章，所以这里查到的定稿都在批次之后。
+    const chapterFinalized = this.db.prepare('SELECT 1 FROM finalization_outbox WHERE chapter_number=? LIMIT 1').pluck()
+    if (intent.mode === 'draft_review' && nextChapterNumber !== null
+      && completedChapters.some(chapter => chapterFinalized.get(chapter.chapterNumber))) sourceConflict ??= 'GENERATION_BATCH_FINALIZATION_CONFLICT'
     const pending = (this.db.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=?').all(root.rootActionId) as { run_id: string }[])
       .map(row => this.runs.get(row.run_id)).filter(run => run.binding.sourceManifest.batchId === batchId
         && run.binding.sourceManifest.chapterNumber === nextChapterNumber && !this.readSaveState(run.runId))
