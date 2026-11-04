@@ -24,8 +24,6 @@ const formSelectOptions = page => page.locator('select').evaluateAll(selects =>
   selects.map(select => Array.from(select.options).map(option => option.value)))
 
 export const A573_SCENARIOS = {
-  // 选 Anthropic 协议的生成模型写完第 3 章：假服务只从 /v1/messages 收到对话请求，带 x-api-key 与 anthropic-version；
-  // 中途拍设置页里这份模型的表单；检索模型的新建表单里没有 Anthropic 协议与对应服务商。
   'a573-anthropic-generation': { model: true, shell: 'stage', setup, run: async ({ page, fake, shoot }) => {
     const model = anthropicModel(fake.port)
     await stage.openSettings(page)

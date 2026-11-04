@@ -6,7 +6,6 @@ const CONTEXT_LENGTH_MESSAGES = [
   /max_tokens \(\d+\) have exceeded max_seq_len/iu,
   // Gemini；没有 key，未实测。
   /input token count \(\d+\) exceeds the maximum number of tokens/iu,
-  // Anthropic Messages（官方文档示例）
   /prompt is too long: \d+ tokens? > \d+ maximum/iu,
 ]
 

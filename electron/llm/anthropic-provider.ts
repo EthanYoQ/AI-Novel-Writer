@@ -4,7 +4,6 @@ import { VisibleStreamFilter } from './visible-stream'
 import { StreamTransportDiagnostics } from './transport-diagnostics'
 import { providerFailureCode } from './provider-context-length'
 
-/** Anthropic Messages API 的稳定协议版本号。 */
 const ANTHROPIC_VERSION = '2023-06-01'
 
 /**
@@ -81,7 +80,6 @@ function toAnthropicTurns(messages: Array<{ role: string; content: string }>): {
   return { system: systemParts.length ? systemParts.join('\n\n') : undefined, messages: turns }
 }
 
-/** visibleOnly 流的载荷校验：与 Gemini 一致，只在需要可审计正文时严格执行。 */
 function assertVisibleStreamEvent(value: unknown): void {
   const record = (input: unknown): input is Record<string, unknown> =>
     typeof input === 'object' && input !== null && !Array.isArray(input)
@@ -99,7 +97,6 @@ function assertVisibleStreamEvent(value: unknown): void {
 }
 
 export class AnthropicProvider implements ILLMProvider {
-  /** 把 Anthropic 的 stop_reason 归一化为产品内部的完成原因。 */
   private normalizeStopReason(reason: string | null | undefined): LLMFinishReason {
     if (reason === 'end_turn' || reason === 'stop_sequence') return 'stop'
     if (reason === 'max_tokens') return 'length'
@@ -130,7 +127,6 @@ export class AnthropicProvider implements ILLMProvider {
     }
   }
 
-  /** 组装 Messages 请求体：system 走顶层字段，max_tokens 必填，temperature 仅在有值时发送。 */
   private buildRequestBody(
     model: ModelProfile,
     messages: Array<{ role: string; content: string }>,
@@ -146,8 +142,6 @@ export class AnthropicProvider implements ILLMProvider {
       stream,
     }
     if (system !== undefined) body.system = system
-    // Temperature has already been resolved by generation-parameter-policy;
-    // undefined is an intentional instruction to omit the field.
     if (opts.temperature !== undefined) {
       body.temperature = opts.temperature
     }
@@ -155,7 +149,6 @@ export class AnthropicProvider implements ILLMProvider {
     return body
   }
 
-  /** 非流式 Messages 调用：正文取 text 块，stop_reason 归一化，未到 end_turn 视为不完整。 */
   async generate(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMGenerateOptions): Promise<LLMResponse> {
     try {
       const url = resolveAnthropicMessagesUrl(model.baseUrl)
@@ -208,7 +201,6 @@ export class AnthropicProvider implements ILLMProvider {
     }
   }
 
-  /** 流式 Messages 调用：解析 SSE 事件流，思考与正文分流，收到 message_stop 才算完成。 */
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
     const transport = new StreamTransportDiagnostics(opts.onDiagnostics)
     let fullText = ''
@@ -440,7 +432,6 @@ export class AnthropicProvider implements ILLMProvider {
           if (fatalError || sawMessageStop) break
         }
         lineBuffer = lineBuffer.slice(consumed)
-        // 不换行的超长行（异常或恶意的 Anthropic 兼容端点）不能无限占住内存。
         if (!fatalError && lineBuffer.length > MAX_STREAM_EVENT_CHARS) {
           fatalError = 'LLM_STREAM_INVALID'
           return
@@ -490,7 +481,6 @@ export class AnthropicProvider implements ILLMProvider {
         fail(protocolError ?? (transport.networkFailure ? 'LLM_STREAM_NETWORK_FAILED' : 'LLM_STREAM_FAILED'))
       }
     } finally {
-      // Do not wait for a remote stream to settle before releasing the local task.
       void reader?.cancel?.().catch(() => {})
       reader?.releaseLock?.()
     }
