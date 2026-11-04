@@ -11,4 +11,19 @@ module.exports = {
       { allowConstantExport: true },
     ],
   },
+  overrides: [
+    {
+      files: ['**/*.ts', '**/*.tsx'],
+      excludedFiles: ['electron/lance-database.ts', '**/__tests__/**', '**/*.test.ts', '**/*.test.tsx', 'scripts/**', 'test/**'],
+      rules: {
+        '@typescript-eslint/no-restricted-imports': ['error', {
+          paths: [{ name: '@lancedb/lancedb', allowTypeImports: true, message: '经 electron/lance-database.ts 打开 LanceDB，新表格式钉在那里。' }],
+        }],
+        'no-restricted-syntax': ['error', {
+          selector: "ImportExpression[source.value='@lancedb/lancedb']",
+          message: '经 electron/lance-database.ts 打开 LanceDB，新表格式钉在那里。',
+        }],
+      },
+    },
+  ],
 }
