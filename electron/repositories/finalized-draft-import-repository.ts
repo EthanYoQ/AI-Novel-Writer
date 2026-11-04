@@ -146,8 +146,8 @@ function authorityRows(): AuthorityRow[] {
   return current.prepare(`
     SELECT drafts.id AS draft_id, drafts.chapter_number, drafts.version,
            contents.body,
-           (SELECT chapter_title FROM finalization_outbox WHERE draft_id = drafts.id) AS title
-    FROM drafts
+           (SELECT chapter_title FROM live_finalization_outbox WHERE draft_id = drafts.id) AS title
+    FROM live_drafts AS drafts
     JOIN contents ON contents.id = drafts.content_id
     WHERE drafts.status = 'finalized'
     ORDER BY drafts.chapter_number ASC, drafts.version ASC, drafts.id ASC
@@ -260,9 +260,9 @@ function verifyStoredFacts(
              contents.body, finalization_outbox.finalization_id,
              finalization_outbox.content_hash, finalization_outbox.content_snapshot,
              finalization_outbox.target_file_name, finalization_outbox.publication_status
-      FROM drafts
+      FROM live_drafts AS drafts
       JOIN contents ON contents.id = drafts.content_id
-      JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+      JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
       WHERE drafts.id = ? AND finalization_outbox.finalization_id = ?
     `).get(draftReceipt.draftId, draftReceipt.finalizationId) as ImportedDraftFactRow | undefined
     if (
@@ -432,7 +432,7 @@ export class FinalizedDraftImportRepository {
       }
 
       const finalizedChapter = db.prepare(`
-        SELECT 1 FROM drafts WHERE chapter_number = ? AND status = 'finalized' LIMIT 1
+        SELECT 1 FROM live_drafts WHERE chapter_number = ? AND status = 'finalized' LIMIT 1
       `)
       if (chapters.some(chapter => finalizedChapter.get(chapter.chapterNumber) !== undefined)) {
         throw new Error('FINALIZED_IMPORT_CHAPTER_ALREADY_FINALIZED')

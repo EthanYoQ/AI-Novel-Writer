@@ -55,10 +55,12 @@ function literalSegments(sourceFile) {
   return statements
 }
 
-function rewriteFor(table, after) {
+// 原句用「表名.列」限定时，视图要以原表名作别名，否则限定会失效。
+function rewriteFor(table, after, statement) {
   const next = /^\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)/i.exec(after)
   const aliased = next && !CLAUSE_KEYWORDS.has(next[1].toUpperCase())
-  return aliased ? `live_${table}` : `live_${table} AS ${table}`
+  const qualified = new RegExp(`\\b${table}\\.`).test(statement)
+  return aliased || !qualified ? `live_${table}` : `live_${table} AS ${table}`
 }
 
 /** 列出一个源文件里读原表的位置。写语句（INSERT/UPDATE/DELETE 等）整句跳过，它们只能写原表。 */
@@ -77,7 +79,7 @@ export function scanSource(text, fileName = 'source.ts') {
           line: sourceFile.getLineAndCharacterOfPosition(tableOffset).line + 1,
           table,
           offset: tableOffset,
-          replacement: rewriteFor(table, raw.slice(match.index + match[0].length)),
+          replacement: rewriteFor(table, raw.slice(match.index + match[0].length), statement.text),
         })
       }
     }

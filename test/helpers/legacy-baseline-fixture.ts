@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import type BetterSqlite3 from 'better-sqlite3'
 import { initializeLegacyBaselineSchema } from '../../electron/migrations/baseline-schema'
+import { createLiveRowViews } from './live-row-views'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 let fixtureDb: BetterSqlite3.Database | null = null
@@ -15,7 +16,7 @@ export function openLegacyNormalizationFixture(projectPath: string): void {
   const root = path.join(projectPath, '.vela'); fs.mkdirSync(root, { recursive: true })
   fixtureDb = new Database(path.join(root, 'vela.db'))
   fixtureDb.pragma('foreign_keys = ON')
-  fixtureDb.transaction(() => initializeLegacyBaselineSchema(fixtureDb!))()
+  fixtureDb.transaction(() => { initializeLegacyBaselineSchema(fixtureDb!); createLiveRowViews(fixtureDb!) })()
   fixturePath = projectPath
 }
 export function closeLegacyNormalizationFixture(): void {

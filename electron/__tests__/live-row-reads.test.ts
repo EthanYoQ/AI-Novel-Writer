@@ -26,6 +26,7 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
       `const target = ${DRAFT_TARGET}`,
       `const catalog = ${CATALOG}`,
       "const summaries = db.prepare('SELECT * FROM summary_snapshots WHERE chapter_number < ?')",
+      "const guard = db.prepare('SELECT drafts.id FROM drafts JOIN contents ON contents.id = drafts.content_id')",
       '// SELECT * FROM drafts 只是注释',
       "db.prepare('DELETE FROM drafts WHERE id = ?')",
       "db.prepare(`UPDATE drafts SET status = 'superseded' WHERE id IN (SELECT id FROM drafts)`)",
@@ -33,13 +34,14 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
       "const label = 'drafts'",
     ].join('\n')
     expect(scanSource(sample).map(read => `${read.line}:${read.table}`))
-      .toEqual(['1:drafts', '2:drafts', '2:finalization_outbox', '2:drafts', '3:summary_snapshots'])
+      .toEqual(['1:drafts', '2:drafts', '2:finalization_outbox', '2:drafts', '3:summary_snapshots', '4:drafts'])
 
     const rewritten = rewriteSource(sample)
     expect(rewritten).toContain('FROM live_drafts d JOIN contents')
     expect(rewritten).toContain('FROM live_drafts newer WHERE')
     expect(rewritten).toContain('LEFT JOIN live_finalization_outbox o ON')
-    expect(rewritten).toContain('FROM live_summary_snapshots AS summary_snapshots WHERE')
+    expect(rewritten).toContain('FROM live_summary_snapshots WHERE')
+    expect(rewritten).toContain('FROM live_drafts AS drafts JOIN contents')
     expect(rewritten).toContain("'DELETE FROM drafts WHERE id = ?'")
     expect(scanSource(rewritten)).toEqual([])
     expect(rewriteSource(rewritten)).toBe(rewritten)

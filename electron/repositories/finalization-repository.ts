@@ -196,9 +196,9 @@ function readAuthoritativeExportRows(): AuthoritativeFinalizedDraftExport[] {
            finalization_outbox.chapter_number AS outbox_chapter_number,
            finalization_outbox.chapter_title, finalization_outbox.content_hash,
            finalization_outbox.content_snapshot
-    FROM drafts
+    FROM live_drafts AS drafts
     JOIN contents ON contents.id = drafts.content_id
-    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
     WHERE drafts.status = 'finalized'
     ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
   `).all() as FinalizedDraftExportRow[]))()
@@ -249,7 +249,7 @@ export class FinalizationRepository {
     const db = requireDatabase()
     const transaction = db.transaction(() => {
       const existing = db.prepare(`
-        SELECT * FROM finalization_outbox WHERE draft_id = ?
+        SELECT * FROM live_finalization_outbox WHERE draft_id = ?
       `).get(input.draftId) as FinalizationRow | undefined
       if (existing) {
         // renderer 可能在主进程已提交而响应丢失后重发同一冻结快照。此时新生成的
@@ -261,7 +261,7 @@ export class FinalizationRepository {
       }
 
       const draft = db.prepare(`
-        SELECT id, chapter_number, status, content_id FROM drafts WHERE id = ?
+        SELECT id, chapter_number, status, content_id FROM live_drafts WHERE id = ?
       `).get(input.draftId) as {
         id: number
         chapter_number: number
@@ -280,7 +280,7 @@ export class FinalizationRepository {
       }
 
       const replacedDraftIds = (db.prepare(`
-        SELECT id FROM drafts WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
+        SELECT id FROM live_drafts WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
       `).all(input.chapterNumber, input.draftId) as { id: number }[]).map(row => row.id)
       if (replacedDraftIds.length > 0 && DraftRepository.findOpenReopenDraft(input.chapterNumber, db)?.id !== input.draftId) {
         throw new Error('CHAPTER_FINALIZED_REOPEN_REQUIRED')
@@ -346,9 +346,9 @@ export class FinalizationRepository {
       const base = db.prepare(`
         SELECT drafts.id, contents.body, finalization_outbox.finalization_id,
                finalization_outbox.content_hash, finalization_outbox.content_snapshot
-        FROM drafts
+        FROM live_drafts AS drafts
         JOIN contents ON contents.id = drafts.content_id
-        LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+        LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
         WHERE drafts.chapter_number = ? AND drafts.status = 'finalized'
         ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
         LIMIT 1
@@ -365,7 +365,7 @@ export class FinalizationRepository {
         throw new Error('FINALIZATION_SNAPSHOT_HASH_MISMATCH')
       }
       const bodyOf = db.prepare(`
-        SELECT contents.body FROM drafts JOIN contents ON contents.id = drafts.content_id
+        SELECT contents.body FROM live_drafts AS drafts JOIN contents ON contents.id = drafts.content_id
         WHERE drafts.id = ? AND drafts.chapter_number = ?
       `).pluck()
       const initial = request.initialDraftId === undefined
@@ -390,7 +390,7 @@ export class FinalizationRepository {
         wordCount: countDraftUnits(initial),
         sourceDependencies: [reopened],
       }, db)
-      const version = db.prepare('SELECT version FROM drafts WHERE id = ?').pluck().get(draftId) as number
+      const version = db.prepare('SELECT version FROM live_drafts WHERE id = ?').pluck().get(draftId) as number
       return { success: true, created: true, draftId, version }
     }).immediate()
   }
@@ -402,10 +402,10 @@ export class FinalizationRepository {
         SELECT drafts.id, drafts.chapter_number, drafts.version,
                finalization_outbox.knowledge_document_id, finalization_outbox.target_file_name,
                finalization_outbox.publication_status
-        FROM drafts
-        LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+        FROM live_drafts AS drafts
+        LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
         WHERE drafts.status = 'finalized' AND drafts.chapter_number IN (
-          SELECT chapter_number FROM drafts WHERE status = 'finalized'
+          SELECT chapter_number FROM live_drafts AS drafts WHERE status = 'finalized'
           GROUP BY chapter_number HAVING COUNT(*) > 1
         )
         ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
@@ -457,9 +457,9 @@ export class FinalizationRepository {
 
   static isAuthoritative(draftId: number): boolean {
     return requireDatabase().prepare(`
-      SELECT drafts.id FROM drafts
+      SELECT drafts.id FROM live_drafts AS drafts
       WHERE drafts.status = 'finalized'
-        AND drafts.chapter_number = (SELECT chapter_number FROM drafts WHERE id = ?)
+        AND drafts.chapter_number = (SELECT chapter_number FROM live_drafts AS drafts WHERE id = ?)
       ORDER BY ${AUTHORITATIVE_FINALIZED_ORDER}
       LIMIT 1
     `).pluck().get(draftId) === draftId
@@ -468,7 +468,7 @@ export class FinalizationRepository {
   static get(finalizationId: string): FinalizationRecord | null {
     const db = requireDatabase()
     const row = db.prepare(`
-      SELECT * FROM finalization_outbox WHERE finalization_id = ?
+      SELECT * FROM live_finalization_outbox WHERE finalization_id = ?
     `).get(finalizationId) as FinalizationRow | undefined
     return row ? rowToRecord(row) : null
   }
@@ -476,7 +476,7 @@ export class FinalizationRepository {
   /** 定稿收进知识库的文档身份到章号；知识库凭它区分定稿章节与作者导入的资料（两者都写项目副本）。 */
   static knowledgeDocumentChapters(): Map<string, number> {
     const rows = requireDatabase().prepare(`
-      SELECT knowledge_document_id, chapter_number FROM finalization_outbox WHERE knowledge_document_id != ''
+      SELECT knowledge_document_id, chapter_number FROM live_finalization_outbox WHERE knowledge_document_id != ''
     `).all() as Array<{ knowledge_document_id: string; chapter_number: number }>
     return new Map(rows.map(row => [row.knowledge_document_id, row.chapter_number]))
   }
@@ -484,7 +484,7 @@ export class FinalizationRepository {
   static getByDraftId(draftId: number): FinalizationRecord | null {
     const db = requireDatabase()
     const row = db.prepare(`
-      SELECT * FROM finalization_outbox WHERE draft_id = ?
+      SELECT * FROM live_finalization_outbox WHERE draft_id = ?
     `).get(draftId) as FinalizationRow | undefined
     return row ? rowToRecord(row) : null
   }
@@ -494,7 +494,7 @@ export class FinalizationRepository {
     if (!normalizedDocumentId) throw new Error('FINALIZATION_COMMIT_KNOWLEDGE_DOCUMENT_REQUIRED')
     const db = requireDatabase()
     const existing = db.prepare(`
-      SELECT finalization_id FROM finalization_outbox WHERE draft_id = ?
+      SELECT finalization_id FROM live_finalization_outbox WHERE draft_id = ?
     `).get(draftId) as { finalization_id: string } | undefined
     if (!existing) throw new Error('FINALIZATION_COMMIT_NOT_FOUND')
     readPortableRuntimeFreeze(getCurrentProjectPath()).assertMutable('finalization_outbox', existing.finalization_id)

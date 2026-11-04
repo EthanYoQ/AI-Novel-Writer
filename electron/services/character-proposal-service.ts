@@ -46,7 +46,7 @@ export class CharacterProposalService {
     if (envelope.batch.source.kind !== 'finalized-generation') return
     const provenance = envelope.proof.provenance
     const source = provenance && 'source' in provenance ? provenance.source : undefined
-    const row = source && this.db.prepare('SELECT draft_id FROM finalization_outbox WHERE finalization_id=?').get(source.sourceId) as { draft_id: number } | undefined
+    const row = source && this.db.prepare('SELECT draft_id FROM live_finalization_outbox WHERE finalization_id=?').get(source.sourceId) as { draft_id: number } | undefined
     if (!row) throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
     try {
       const current = SummaryRepository.readFinalizedCharacterContext(row.draft_id,

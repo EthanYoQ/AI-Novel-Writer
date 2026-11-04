@@ -52,13 +52,13 @@ export class PlotTreeRepository {
                CASE WHEN TRIM(COALESCE(blueprints.notes_updated_at, '')) <> ''
                  THEN blueprints.notes ELSE '' END
              ) AS summary
-      FROM drafts
-      LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
-      LEFT JOIN summary_snapshots ON summary_snapshots.draft_id = drafts.id
+      FROM live_drafts AS drafts
+      LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
+      LEFT JOIN live_summary_snapshots AS summary_snapshots ON summary_snapshots.draft_id = drafts.id
       LEFT JOIN blueprints ON blueprints.chapter_number = drafts.chapter_number
       WHERE drafts.status = 'finalized'
         AND NOT EXISTS (
-          SELECT 1 FROM drafts newer
+          SELECT 1 FROM live_drafts newer
           WHERE newer.chapter_number = drafts.chapter_number
             AND newer.status = 'finalized'
             AND (newer.version > drafts.version

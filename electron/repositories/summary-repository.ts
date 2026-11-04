@@ -284,9 +284,9 @@ function readFinalizedSourceFromDb(
            finalization_outbox.content_hash AS contentHash,
            finalization_outbox.content_snapshot AS contentSnapshot,
            continuity_projection_meta.generation AS projectionGeneration
-    FROM drafts
+    FROM live_drafts AS drafts
     JOIN contents ON contents.id = drafts.content_id
-    JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
     JOIN continuity_projection_meta ON continuity_projection_meta.id = 'main'
     WHERE drafts.id = ?
   `).get(draftId) as {
@@ -340,11 +340,11 @@ function readCurrentCharacterStateCandidateRow(db: BetterSqlite3.Database, draft
   const row = db.prepare(`SELECT id,draft_id AS draftId,chapter_number AS chapterNumber,
     character_state_candidates AS candidates,source_finalization_id AS finalizationId,
     source_content_hash AS contentHash,projection_generation AS projectionGeneration
-    FROM summary_snapshots WHERE draft_id=?`).get(draftId) as CharacterStateCandidateRow | undefined
+    FROM live_summary_snapshots WHERE draft_id=?`).get(draftId) as CharacterStateCandidateRow | undefined
   const snapshot = readFinalizedSourceFromDb(db, draftId)
   const source = row && { draftId: row.draftId, finalizationId: row.finalizationId,
     chapterNumber: row.chapterNumber, contentHash: row.contentHash }
-  const latest = snapshot && db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1")
+  const latest = snapshot && db.prepare("SELECT id FROM live_drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1")
     .pluck().get(snapshot.source.chapterNumber) as number | undefined
   const staleFromChapter = db.prepare("SELECT stale_from_chapter FROM continuity_projection_meta WHERE id='main'").pluck().get() as number | null
   if (!row || !snapshot || !source || !sameSource(source, snapshot.source)
@@ -409,7 +409,7 @@ export class SummaryRepository {
     return db.transaction(() => {
       const source = readFinalizedSourceFromDb(db, draftId)
       if (!source) throw new Error('FINALIZED_CHARACTER_SOURCE_CHANGED')
-      const latest = db.prepare("SELECT id,version FROM drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1")
+      const latest = db.prepare("SELECT id,version FROM live_drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1")
         .get(source.source.chapterNumber) as { id: number; version: number } | undefined
       if (!latest || latest.id !== draftId) throw new Error('FINALIZED_CHARACTER_SOURCE_CHANGED')
       const frozen = readFrozenCharacterSnapshot(db, source.source)
@@ -483,7 +483,7 @@ export class SummaryRepository {
 
   static listPendingFinalizedCharacterStateCandidates(database = getProjectDb()): PendingFinalizedCharacterStateCandidateSummary[] {
     if (!database) return []
-    const rows = database.prepare("SELECT draft_id AS draftId FROM summary_snapshots WHERE character_state_candidates<>'[]'")
+    const rows = database.prepare("SELECT draft_id AS draftId FROM live_summary_snapshots WHERE character_state_candidates<>'[]'")
       .all() as Array<{ draftId: number }>
     return rows.flatMap(({ draftId }) => {
       try {
@@ -531,7 +531,7 @@ export class SummaryRepository {
     const db = database
     return db.transaction(() => {
       const payloadHash = stateDecisionPayloadHash(request)
-      const receiptRows = db.prepare("SELECT character_state_candidates AS candidates FROM summary_snapshots WHERE character_state_candidates<>'[]'")
+      const receiptRows = db.prepare("SELECT character_state_candidates AS candidates FROM live_summary_snapshots WHERE character_state_candidates<>'[]'")
         .all() as Array<{ candidates: string }>
       const replay = receiptRows.flatMap(item => parseCharacterStateCandidateStore(item.candidates).receipts)
         .find(receipt => receipt.operationId === request.operationId)
@@ -676,7 +676,7 @@ export class SummaryRepository {
                source_finalization_id AS finalizationId,
                source_content_hash AS contentHash,
                projection_generation AS projectionGeneration
-        FROM summary_snapshots
+        FROM live_summary_snapshots
         WHERE draft_id = ?
       `).get(input.draftId) as {
         candidates: string
@@ -732,26 +732,26 @@ export class SummaryRepository {
              current_contents.body AS currentContent,
              continuity_projection_meta.generation AS currentGeneration,
              continuity_projection_meta.stale_from_chapter AS staleFromChapter
-      FROM summary_snapshots
-      JOIN drafts ON drafts.id = summary_snapshots.draft_id
+      FROM live_summary_snapshots AS summary_snapshots
+      JOIN live_drafts AS drafts ON drafts.id = summary_snapshots.draft_id
       JOIN contents ON contents.id = drafts.content_id
-      LEFT JOIN drafts current_drafts ON current_drafts.chapter_number = drafts.chapter_number
+      LEFT JOIN live_drafts current_drafts ON current_drafts.chapter_number = drafts.chapter_number
         AND current_drafts.status = 'finalized'
         AND NOT EXISTS (
-          SELECT 1 FROM drafts newer
+          SELECT 1 FROM live_drafts newer
           WHERE newer.chapter_number = current_drafts.chapter_number
             AND newer.status = 'finalized'
             AND (newer.version > current_drafts.version OR (newer.version = current_drafts.version AND newer.id > current_drafts.id))
         )
       LEFT JOIN contents current_contents ON current_contents.id = current_drafts.content_id
-      LEFT JOIN finalization_outbox current_outbox ON current_outbox.draft_id = current_drafts.id
+      LEFT JOIN live_finalization_outbox current_outbox ON current_outbox.draft_id = current_drafts.id
       JOIN continuity_projection_meta ON continuity_projection_meta.id = 'main'
       WHERE summary_snapshots.draft_id IS NOT NULL
         AND summary_snapshots.chapter_number < ?
         AND summary_snapshots.chapter_notes <> ''
         AND drafts.status IN (${RECEIPTED_DRAFT_STATUS_SQL})
         AND NOT EXISTS (
-          SELECT 1 FROM summary_snapshots newer_summary
+          SELECT 1 FROM live_summary_snapshots newer_summary
           WHERE newer_summary.chapter_number = summary_snapshots.chapter_number
             AND newer_summary.chapter_notes <> '' AND newer_summary.id > summary_snapshots.id
         )
@@ -840,9 +840,9 @@ export class SummaryRepository {
              COALESCE(finalization_outbox.chapter_title, blueprints.title, '') AS chapterTitle,
              finalization_outbox.draft_id AS receiptDraftId,
              finalization_outbox.finalization_id AS finalizationId
-      FROM drafts
+      FROM live_drafts AS drafts
       JOIN contents ON contents.id = drafts.content_id
-      LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+      LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
       LEFT JOIN blueprints ON blueprints.chapter_number = drafts.chapter_number
       WHERE drafts.id = ?
     `).get(draftId) as {
@@ -884,7 +884,7 @@ export class SummaryRepository {
     if (!db) return null
     const row = db.prepare(
       `SELECT character_states AS characterStates, chapter_number AS chapterNumber
-       FROM summary_snapshots
+       FROM live_summary_snapshots
        WHERE draft_id IS NULL
        ORDER BY id DESC LIMIT 1`,
     ).get() as { characterStates: string; chapterNumber: number } | undefined

@@ -384,13 +384,13 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
             const relationships = deps.db.prepare('SELECT * FROM character_relationships ORDER BY relationship_id').all() as Record<string, unknown>[];
             add('character-relationships:all', 0, stable(relationships.map(row => without(row, ['created_at', 'updated_at']))), 'author-constraint', 'current identity relationships projected into character profiles');
             const plans = deps.db.prepare('SELECT * FROM narrative_thread_plans ORDER BY id').all() as Record<string, unknown>[];
-            const events = deps.db.prepare("SELECT c.id,c.plan_id,c.draft_id,c.event_type,c.evidence,c.reason,d.chapter_number,o.chapter_title FROM narrative_thread_confirmations c JOIN drafts d ON d.id=c.draft_id AND d.status='finalized' JOIN finalization_outbox o ON o.draft_id=d.id ORDER BY d.chapter_number,c.id").all();
+            const events = deps.db.prepare("SELECT c.id,c.plan_id,c.draft_id,c.event_type,c.evidence,c.reason,d.chapter_number,o.chapter_title FROM live_narrative_thread_confirmations c JOIN live_drafts d ON d.id=c.draft_id AND d.status='finalized' JOIN live_finalization_outbox o ON o.draft_id=d.id ORDER BY d.chapter_number,c.id").all();
             add('narrative-thread-context:all', 0, stable({ plans: plans.map(row => without(row, ['created_at', 'updated_at'])), events }), 'unconfirmed-continuity', 'author plans and confirmed event evidence used to select active narrative context');
-            const currentDraft = deps.db.prepare('SELECT d.id,d.version,d.status,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1').get(input.chapterNumber) ?? null;
+            const currentDraft = deps.db.prepare('SELECT d.id,d.version,d.status,c.body FROM live_drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1').get(input.chapterNumber) ?? null;
             add(`draft-target:${input.chapterNumber}`, 0, stable(currentDraft), 'author-constraint', 'prevent a later draft or author edit from being silently superseded');
-            const catalog = deps.db.prepare(`SELECT d.id,d.chapter_number,d.version,d.status,c.body,o.finalization_id,o.content_hash,o.content_snapshot FROM drafts d JOIN contents c ON c.id=d.content_id LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.chapter_number < ? AND (d.status='finalized' OR NOT EXISTS (SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL}) AND newer.version>d.version)) ORDER BY d.id`).all(input.chapterNumber) as Record<string, unknown>[];
+            const catalog = deps.db.prepare(`SELECT d.id,d.chapter_number,d.version,d.status,c.body,o.finalization_id,o.content_hash,o.content_snapshot FROM live_drafts d JOIN contents c ON c.id=d.content_id LEFT JOIN live_finalization_outbox o ON o.draft_id=d.id WHERE d.chapter_number < ? AND (d.status='finalized' OR NOT EXISTS (SELECT 1 FROM live_drafts newer WHERE newer.chapter_number=d.chapter_number AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL}) AND newer.version>d.version)) ORDER BY d.id`).all(input.chapterNumber) as Record<string, unknown>[];
             add('draft-continuity-catalog', 0, stable(catalog.map(row => ({ ...without(row, ['body', 'content_snapshot']), bodyHash: hash(String(row.body)), snapshotHash: row.content_snapshot === null ? null : hash(String(row.content_snapshot)) }))), 'unconfirmed-continuity', 'source catalog frozen before renderer selects continuity material');
-            const locators = deps.db.prepare('SELECT * FROM summary_snapshots WHERE draft_id IS NOT NULL AND chapter_number < ? ORDER BY draft_id,id').all(input.chapterNumber) as Record<string, unknown>[];
+            const locators = deps.db.prepare('SELECT * FROM live_summary_snapshots WHERE draft_id IS NOT NULL AND chapter_number < ? ORDER BY draft_id,id').all(input.chapterNumber) as Record<string, unknown>[];
             const watermark = deps.db.prepare("SELECT * FROM continuity_projection_meta WHERE id='main'").get();
             add('continuity-locators', 0, stable({ rows: locators.map(row => without(row, ['created_at', 'character_states'])), watermark }), 'unconfirmed-continuity', 'derived locators and invalidation watermark; never promoted to author facts');
         }
@@ -411,7 +411,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         }
         for (const [ids, finalized] of [[input.selectedDraftIds, false], [input.selectedFinalizedDraftIds, true]] as const)
             for (const id of ids) {
-                const row = deps.db.prepare('SELECT d.*,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(id) as {
+                const row = deps.db.prepare('SELECT d.*,c.body FROM live_drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(id) as {
                     id: number;
                     chapter_number: number;
                     version: number;
@@ -423,8 +423,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
                 if (input.operation === 'chapter-draft' && row.chapter_number >= input.chapterNumber!)
                     fail('GENERATION_DRAFT_CONTINUITY_RANGE_INVALID');
                 if (finalized) {
-                    const latest = deps.db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1").pluck().get(row.chapter_number);
-                    const receipt = deps.db.prepare('SELECT * FROM finalization_outbox WHERE draft_id=?').get(id) as {
+                    const latest = deps.db.prepare("SELECT id FROM live_drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1").pluck().get(row.chapter_number);
+                    const receipt = deps.db.prepare('SELECT * FROM live_finalization_outbox WHERE draft_id=?').get(id) as {
                         finalization_id: string;
                         chapter_number: number;
                         content_hash: string;
@@ -436,7 +436,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
                     add(`finalized:${id}:${receipt.finalization_id}`, receipt.content_revision, row.body, 'finalized-fact', 'explicit current finalized source');
                 }
                 else {
-                    const latest = deps.db.prepare(`SELECT id FROM drafts WHERE chapter_number=? AND status IN (${CURRENT_DRAFT_STATUS_SQL}) ORDER BY version DESC,id DESC LIMIT 1`).pluck().get(row.chapter_number);
+                    const latest = deps.db.prepare(`SELECT id FROM live_drafts WHERE chapter_number=? AND status IN (${CURRENT_DRAFT_STATUS_SQL}) ORDER BY version DESC,id DESC LIMIT 1`).pluck().get(row.chapter_number);
                     if (!(WORKING_DRAFT_STATUSES as readonly string[]).includes(row.status) || latest !== id)
                         fail('GENERATION_DRAFT_NOT_CURRENT');
                     add(`draft:${id}`, row.version, row.body, 'unconfirmed-continuity', 'explicit selected current draft');
