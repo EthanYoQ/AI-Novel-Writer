@@ -3,6 +3,7 @@ import { page, userEvent } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
+import type { AuthoritativeChapterSequence } from '../../../../shared/author-manuscript-import'
 import type { ProjectData } from '../../../../shared/ipc-channels'
 import { globalEventBus } from '../../../../shared/event-bus'
 import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
@@ -28,6 +29,7 @@ let stored: ChapterBlueprint[]
 let nextChapter: number
 let projectCore: { premise: string } | null
 let invoke: ReturnType<typeof vi.fn>
+let authority: AuthoritativeChapterSequence | null
 
 function blueprint(chapterNumber: number, title: string): ChapterBlueprint {
   return {
@@ -50,7 +52,7 @@ function project(): ProjectData {
 function installIpc() {
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'db:blueprint-get-all') return stored
-    if (channel === 'db:draft-authority-sequence') return {
+    if (channel === 'db:draft-authority-sequence') return authority ?? {
       status: 'continuous', lastChapterNumber: nextChapter - 1, nextChapterNumber: nextChapter, duplicateChapterNumbers: [], authorityFingerprint: 'a'.repeat(64),
     }
     if (channel === 'generation:find-blueprint-recovery') return null
@@ -103,6 +105,7 @@ beforeEach(async () => {
   stored = [blueprint(1, '旧港'), blueprint(2, '北堤'), blueprint(3, '灯室')]
   nextChapter = 2
   projectCore = null
+  authority = null
   useLocaleStore.setState({ locale: 'zh-CN' })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
   useProjectStore.setState({ currentProject: project() })
@@ -168,6 +171,20 @@ describe('蓝图阶段', () => {
     await vi.waitFor(() => expect(calls('db:blueprint-clear-all')).toHaveLength(1))
     await expect.element(page.getByRole('heading', { name: '还没有章节蓝图' })).toBeVisible()
     expect(page.getByRole('complementary', { name: '章节规划' }).query()).toBeNull()
+  })
+
+  it('删掉前面某章定稿正文后出现的缺口提示与清除确认都说明：这种情况请取消，清除会删掉全部草稿和定稿（#564）', async () => {
+    authority = {
+      status: 'invalid', lastChapterNumber: 2, firstGapChapterNumber: 1, duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    await renderPage()
+    await expect.element(page.getByText('第 1 章还没写，后面却已有正文')).toBeVisible()
+    const notice = page.getByText('第 1 章还没写，后面却已有正文').element().closest('.pi-notice')
+    expect(notice?.textContent).toContain('如果是删掉了某一章的正文才出现这条提示，不要清除，清除会删掉全部草稿和定稿')
+
+    await act(async () => page.getByRole('button', { name: '清除误导入正文…' }).click())
+    const confirm = page.getByRole('dialog', { name: '清除误导入正文？' })
+    await expect.element(confirm).toHaveTextContent('如果是删掉了某一章的正文才出现这条提示，请取消，清除会删掉全部草稿和定稿，不只是那一章')
   })
 
   it('删除此章在单章的危险分组里，确认后只删这一章', async () => {
