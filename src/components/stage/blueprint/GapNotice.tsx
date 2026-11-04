@@ -20,7 +20,6 @@ export default function GapNotice({ gap, blueprint, onWrite, onAddBlueprint, cle
   const writeLabel = text(`写第 ${head} 章`, `Write chapter ${head}`)
   const addLabel = text(`补上第 ${head} 章蓝图`, `Add chapter ${head} blueprint`)
 
-  // 段内只有第一章能写：写作前置检查要求前一章已定稿。
   const order = many
     ? text(`要从第 ${head} 章起逐章写，前一章定稿后才能写下一章。`,
         `Write them one at a time from Chapter ${head}; each opens once the one before it is finalized. `)

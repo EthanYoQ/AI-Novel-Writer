@@ -15,7 +15,6 @@ import { useStageStore } from '../../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import StageBlueprint from '../StageBlueprint'
 
-// 可写章的规则只在定稿序列服务里：测试里改写它交出的 writable，蓝图页必须照着走，不能自己再算一遍。
 const writableOverride = vi.hoisted(() => ({ value: null as number[] | null }))
 // 用以 /src 开头的路径：检出路径含空格时（本机 Vibe Coding Project），浏览器模式匹配不到相对路径的模拟。
 vi.mock('/src/services/authoritative-chapter-sequence.ts', async importOriginal => {
