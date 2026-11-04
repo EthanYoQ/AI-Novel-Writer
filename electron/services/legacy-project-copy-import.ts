@@ -3,7 +3,7 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { isDeepStrictEqual } from 'node:util'
-import * as lancedb from '@lancedb/lancedb'
+import { openLanceDatabase } from '../lance-database'
 import { KNOWLEDGE_COPY_MARKER, readKnowledgeCopy, writeKnowledgeCopy } from '../vector-store'
 import { m05CharacterAssetMigrationAdapter } from '../migrations/m05-character-assets'
 import { CharacterRosterRepository, refreshCharacterIdentityProjection } from '../repositories/character-roster-repository'
@@ -141,7 +141,7 @@ function restoreSafeLegacyDiagnostics(databasePath: string, calls: ReturnType<ty
 async function adoptLegacyKnowledgeOriginals(sourceRoot: string, copiedRoot: string, builtRoot: string, storage: string): Promise<void> {
   const directory = path.join(storage, 'lancedb')
   if (!exists(directory)) return
-  const connection = await lancedb.connect(directory)
+  const connection = await openLanceDatabase(directory)
   try {
     if (!(await connection.tableNames()).includes('documents')) return
     const table = await connection.openTable('documents')
