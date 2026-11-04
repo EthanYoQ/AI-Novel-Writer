@@ -54,3 +54,19 @@ describe('删除定稿失败时的说明', () => {
     }
   })
 })
+
+describe('删除定稿章前的确认说明（#564）', () => {
+  it.each([
+    ['zh-CN', 'manuscript', ['删除后无法恢复', '如果这一章后面还有已定稿的章，删除后既补写不了这一章，也无法继续写后面的章节', '只想改写这一章，请取消，在这一章点「重新打开修改」']],
+    ['zh-CN', 'draft', ['删除后无法恢复', '如果这一章后面还有已定稿的章，删除后既补写不了这一章，也无法继续写后面的章节', '只想改写这一章，请取消，在这一章点「重新打开修改」']],
+    ['en-US', 'manuscript', ['This cannot be undone', 'If later chapters are already finalized, you will not be able to rewrite this chapter or keep writing later ones', 'To rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter']],
+    ['en-US', 'draft', ['This cannot be undone', 'If later chapters are already finalized, you will not be able to rewrite this chapter or keep writing later ones', 'To rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter']],
+  ] as const)('%s 界面的 %s 入口：写明删后无法恢复、后面有定稿会写不下去、只想改写用重新打开修改；取消后不删', async (locale, surface, phrases) => {
+    useLocaleStore.setState({ locale })
+    mocks.confirm.mockResolvedValueOnce(false)
+    await deleteFinalizedChapter({ ...input, surface })
+    const [message] = mocks.confirm.mock.calls[0] as unknown as [string]
+    for (const phrase of phrases) expect(message).toContain(phrase)
+    expect(mocks.invoke).not.toHaveBeenCalled()
+  })
+})
