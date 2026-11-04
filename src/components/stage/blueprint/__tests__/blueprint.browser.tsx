@@ -15,6 +15,20 @@ import { useStageStore } from '../../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import StageBlueprint from '../StageBlueprint'
 
+// 可写章的规则只在定稿序列服务里：测试里改写它交出的 writable，蓝图页必须照着走，不能自己再算一遍。
+const writableOverride = vi.hoisted(() => ({ value: null as number[] | null }))
+// 用以 /src 开头的路径：检出路径含空格时（本机 Vibe Coding Project），浏览器模式匹配不到相对路径的模拟。
+vi.mock('/src/services/authoritative-chapter-sequence.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../services/authoritative-chapter-sequence')>()
+  return {
+    ...actual,
+    readWritableChapters: async (...args: Parameters<typeof actual.readWritableChapters>) => {
+      const chapters = await actual.readWritableChapters(...args)
+      return writableOverride.value ? { ...chapters, writable: writableOverride.value } : chapters
+    },
+  }
+})
+
 const PROJECT_PATH = 'C:\\novels\\stage-blueprint'
 const SESSION = { projectId: 'stage-blueprint', leaseId: 'stage-blueprint-lease', projectPath: PROJECT_PATH }
 const originalEditor = useEditorStore.getState()
@@ -106,6 +120,7 @@ beforeEach(async () => {
   nextChapter = 2
   projectCore = null
   authority = null
+  writableOverride.value = null
   useLocaleStore.setState({ locale: 'zh-CN' })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
   useProjectStore.setState({ currentProject: project() })
@@ -202,6 +217,21 @@ describe('蓝图阶段', () => {
     await act(async () => useStageStore.setState({ writeRequest: { session: SESSION, chapterNumber: 1 } }))
     expect(useStageStore.getState().writeRequest).toMatchObject({ chapterNumber: 1 })
     await act(async () => useStageStore.setState({ writeRequest: { session: SESSION, chapterNumber: 2 } }))
+    await vi.waitFor(() => expect(useStageStore.getState().writeRequest).toBeNull())
+  })
+
+  it('哪些章能写只听定稿序列给的可写章，蓝图页不另算（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 3, nextChapterNumber: 4, gaps: [{ from: 1, to: 2, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    writableOverride.value = [1, 2, 4]
+    await renderPage()
+    await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
+
+    await act(async () => useStageStore.setState({ writeRequest: { session: SESSION, chapterNumber: 2 } }))
+    expect(useStageStore.getState().writeRequest).toMatchObject({ chapterNumber: 2 })
+    await act(async () => useStageStore.setState({ writeRequest: { session: SESSION, chapterNumber: 3 } }))
     await vi.waitFor(() => expect(useStageStore.getState().writeRequest).toBeNull())
   })
 
