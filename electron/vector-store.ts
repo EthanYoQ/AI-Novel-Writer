@@ -5,7 +5,8 @@ import { assertKnowledgeSourceIdle, withKnowledgeSourceGate } from './services/k
  * `chunks` 是始终可用的全文文本事实源。每个嵌入空间都有独立物理表，避免
  * 不同模型、维度或距离语义的向量混写进同一 Arrow FixedSizeList。
  */
-import * as lancedb from '@lancedb/lancedb'
+import type * as lancedb from '@lancedb/lancedb'
+import { Index, openLanceDatabase } from './lance-database'
 import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Utf8, Schema as ArrowSchema } from 'apache-arrow'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -217,7 +218,7 @@ async function getConnectionInternal(projectPath: string): Promise<lancedb.Conne
   if (cached) return cached
 
   fs.mkdirSync(dbPath, { recursive: true })
-  const db = await lancedb.connect(dbPath)
+  const db = await openLanceDatabase(dbPath)
   connectionPool.set(dbPath, db)
   return db
 }
@@ -619,7 +620,7 @@ async function appendCanonicalRecords(
 
 async function ensureTextIndex(table: lancedb.Table): Promise<void> {
   try {
-    await table.createIndex('text', { config: lancedb.Index.fts() })
+    await table.createIndex('text', { config: Index.fts() })
   } catch {
     // 已有索引和不支持 FTS 的旧 LanceDB 都不应阻断文本写入。
   }
@@ -1658,7 +1659,7 @@ async function readPortableKnowledgeSnapshotInternal(projectStorageRoot: string)
     throw new Error('PORTABLE_KNOWLEDGE_INVALID')
   }
   assertPhysicalTree(dbPath)
-  const db = await lancedb.connect(dbPath)
+  const db = await openLanceDatabase(dbPath)
   try {
     const tableNames = await db.tableNames()
     const hasDocuments = tableNames.includes(DOCS_TABLE_NAME)
@@ -1732,7 +1733,7 @@ export async function restorePortableKnowledgeSnapshot(
     }
     if (snapshot.documents.length === 0) return snapshot
     fs.mkdirSync(dbPath, { recursive: false })
-    const db = await lancedb.connect(dbPath)
+    const db = await openLanceDatabase(dbPath)
     try {
       const documentRows: DocumentInfo[] = snapshot.documents.map(document => ({
         id: document.docId,
