@@ -250,6 +250,36 @@ describe('蓝图阶段', () => {
     expect([...document.querySelectorAll('.stage-bp-plan-no')].map(node => node.textContent)).toEqual(['1', '2', '3'])
   })
 
+  it('缺的是连续几章时，提示按几章说，并点明只能先写段首那一章（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 3, nextChapterNumber: 4, gaps: [{ from: 1, to: 2, cause: 'unexplained' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    await renderPage()
+
+    const notice = page.getByText('第 1～2 章还没写，后面却已有正文').element().closest('.pi-notice')
+    expect(notice?.textContent).toContain('只是缺这几章时，要从第 1 章起逐章写，前一章定稿后才能写下一章。点「写第 1 章」在原位置重写。')
+    expect(notice?.textContent).not.toContain('这一章')
+    await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
+    expect(page.getByRole('button', { name: '写第 2 章' }).query()).toBeNull()
+  })
+
+  it('英文界面里删掉连续几章、蓝图也没了时，提示按几章说，并点明先补段首那一章的蓝图（#564）', async () => {
+    stored = [blueprint(3, '灯室')]
+    authority = {
+      status: 'gapped', lastChapterNumber: 3, nextChapterNumber: 4, gaps: [{ from: 1, to: 2, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    await renderPage()
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+
+    const notice = page.getByText('Chapters 1–2 were deleted').element().closest('.pi-notice')
+    expect(notice?.textContent).toContain('Write them one at a time from Chapter 1; each opens once the one before it is finalized.')
+    expect(notice?.textContent).toContain('Chapter 1’s blueprint is gone too. Choose “Add chapter 1 blueprint”')
+    expect(notice?.textContent).not.toMatch(/Its blueprint/u)
+    await expect.element(page.getByRole('button', { name: 'Add chapter 1 blueprint' })).toBeVisible()
+  })
+
   it('没有删除记录的缺口也能写；清除误导入正文放在次级位置，确认框说明它清的是全书（#564）', async () => {
     authority = {
       status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'unexplained' }],
