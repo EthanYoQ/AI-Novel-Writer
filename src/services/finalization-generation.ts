@@ -12,8 +12,8 @@ export async function runFinalizationGeneration(options: {
   modelId: () => string
   parentRootActionId?: string
   retryOf?: FinalizedCharacterArtifact
-  /** 作者显式重试时冻结的最近一次未成功尝试；主进程按它只重发一次。 */
-  recoverFrom?: string
+  /** 作者点重试时看到的运行。主进程判断它没有可提交的结果时另开运行，用 modelId() 给出的当前分工模型。 */
+  retryRunId?: string
   cancelled: () => boolean
   onHandle?: (handle: MainGenerationRunHandle, modelId: string) => void
 }) {
@@ -37,7 +37,8 @@ export async function runFinalizationGeneration(options: {
     if (recovery?.effect) return recovery.effect
     if (options.cancelled()) throw new Error('GENERATION_WORKFLOW_CANCELLED')
     recovery = await ipc.invokeWithProjectSession(session, 'finalization-generation:begin', {
-      slot: options.slot, modelId: recovery?.modelId ?? options.modelId(), ...(options.parentRootActionId ? { parentRootActionId: options.parentRootActionId } : {}),
+      slot: options.slot, modelId: options.retryRunId ? options.modelId() : recovery?.modelId ?? options.modelId(),
+      ...(options.parentRootActionId ? { parentRootActionId: options.parentRootActionId } : {}), ...(options.retryRunId ? { retryRunId: options.retryRunId } : {}),
     })
     validate(recovery)
     options.onHandle?.(recovery.view.handle, recovery.modelId)
@@ -49,16 +50,15 @@ export async function runFinalizationGeneration(options: {
     if (isTerminalProviderFailure(latestFailure)) throw new Error(latestFailure)
     let candidates = recovery.view.candidates ?? recovery.view.artifacts
     let candidate = candidates.at(-1)
-    // 显式引用只对冻结它的那次运行有效；begin 换了新运行时按普通路径重新请求。recoverFrom 是否属于本运行由主进程判断。
+    // 显式引用只对冻结它的那次运行有效；begin 换了新运行时按普通路径重新请求。
     const requested = options.retryOf
     const retryOf = requested && candidates.some(item => item.artifactId === requested.artifactId) ? requested : undefined
-    const recoverFrom = options.recoverFrom
     let executed = false
-    if (retryOf || recoverFrom || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
-      if (!candidate && recovery.attemptCount > 0 && !recoverFrom) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
+    if (retryOf || !candidate || options.slot.stepKey === 'character_cards' && candidate.status === 'completed' && candidate.compositionEligible === true) {
+      if (!candidate && recovery.attemptCount > 0) throw new Error('FINALIZATION_GENERATION_OUTCOME_UNKNOWN')
       const previous = recovery.view.handle
       executed = true
-      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(retryOf ? { retryOf } : {}), ...(recoverFrom ? { recoverFrom } : {}) })
+      const receipt = await ipc.invokeWithProjectSession(session, 'finalization-generation:execute', { handle: previous, ...(retryOf ? { retryOf } : {}) })
       if (receipt.run.handle.projectId !== previous.projectId || receipt.run.handle.rootActionId !== previous.rootActionId || receipt.run.handle.runId !== previous.runId) throw new Error('FINALIZATION_GENERATION_IDENTITY_MISMATCH')
       recovery.view = receipt.run
       if (options.cancelled()) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }

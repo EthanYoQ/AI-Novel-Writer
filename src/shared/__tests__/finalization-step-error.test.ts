@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { describeFinalizationStepError, finalizationStepErrorCode, planFinalizationRetry } from '../finalization-step-error'
+import { appErrorMessage } from '../../i18n/app-errors'
 
 const zh = (zhCNText: string) => zhCNText
 const en = (_zhCNText: string, enUSText: string) => enUSText
@@ -58,6 +60,38 @@ describe('定稿后处理步骤错误', () => {
     expect(enText).toContain('Retrying gives the same result')
     expect(zhText).not.toBe(describeFinalizationStepError('FINALIZED_CHARACTER_SOURCE_CONFLICT', zh))
     for (const text of [zhText, enText]) expect(text).not.toMatch(/Error invoking|FINALIZED_CHARACTER|请点「重试」|Select Retry/u)
+  })
+
+  // 合同解析函数抛出的每个码都会在提交时记到「角色状态更新」步骤上（#552）；从源码取全集，新增的码漏登记时这里先红。
+  const contractCodes = [...new Set(readFileSync(new URL('../finalized-continuity.ts', import.meta.url), 'utf8').match(/FINALIZED_CHARACTER_[A-Z_]+[A-Z]/gu))]
+  it('#552 IDENTITY_REQUIRED 在章节要点提交时也会出现：说明不能说成角色卡没更新', () => {
+    const raw = "Error invoking remote method 'finalization-generation:commit': Error: FINALIZED_CHARACTER_IDENTITY_REQUIRED"
+    for (const text of [describeFinalizationStepError(raw, zh), appErrorMessage('zh-CN', new Error('FINALIZED_CHARACTER_IDENTITY_REQUIRED'))]) {
+      expect(text).toContain('对不上')
+      expect(text).not.toContain('角色卡没有自动更新')
+    }
+    for (const text of [describeFinalizationStepError(raw, en), appErrorMessage('en-US', new Error('FINALIZED_CHARACTER_IDENTITY_REQUIRED'))]) {
+      expect(text).toMatch(/did not match/u)
+      expect(text).not.toContain('character cards were not updated')
+    }
+    expect(planFinalizationRetry({ kb_import: { ok: true }, chapter_notes: { ok: false, error: raw } }).rows).toEqual(new Set(['chapter_notes']))
+  })
+
+  it('#552 角色状态合同码全集：每个都有说明，告诉作者可以重试或换模型，不露原码', () => {
+    expect(contractCodes).toHaveLength(8)
+    for (const code of contractCodes) {
+      const raw = `Error invoking remote method 'finalization-generation:commit': Error: ${code}`
+      expect(finalizationStepErrorCode(raw), code).toBe(code)
+      const zhText = describeFinalizationStepError(raw, zh), enText = describeFinalizationStepError(raw, en)
+      expect(zhText, code).toContain('正文定稿已保存')
+      expect(zhText, code).toContain('「分工模型」')
+      expect(zhText, code).toContain('「定稿后处理」')
+      expect(enText, code).toContain('Models by stage')
+      expect(enText, code).toContain('After finalizing')
+      for (const text of [zhText, enText]) expect(text, code).not.toMatch(/Error invoking|FINALIZED_CHARACTER/u)
+      expect(planFinalizationRetry({ kb_import: { ok: true }, chapter_notes: { ok: true }, character_cards: { ok: false, error: code } }))
+        .toMatchObject({ rows: new Set(['character_cards']), card: ['character_cards'] })
+    }
   })
 
   it('旧版本存下的带 IPC 包装的步骤错误也换成可读说明', () => {

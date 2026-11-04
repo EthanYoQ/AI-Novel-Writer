@@ -43,7 +43,7 @@ import type { FinalizationGenerationChannels, FinalizationGenerationSlot, Finali
 import { FinalizationGeneration } from './finalization-generation'
 import { finalizationSlotKey, readFinalizationGenerationContext } from './finalization-generation-source'
 import { proveFinalizedCharacterGeneration } from './finalized-character-generation-proof'
-import { FinalizedCharacterEvidenceError, parseFinalizedCharacterStateResponse } from '../../src/shared/finalized-continuity'
+import { FinalizedCharacterEvidenceError, parseFinalizedCharacterStateResponse, type FinalizedCharacterContext } from '../../src/shared/finalized-continuity'
 import type { GraphGenerationChannels, GraphGenerationInput, GraphGenerationRecovery } from '../../src/shared/graph-generation'
 import { GraphGeneration } from './graph-generation'
 import type { LegacyRosterGenerationChannels, LegacyRosterGenerationRecovery } from '../../src/shared/legacy-roster-generation'
@@ -506,7 +506,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }
       if (selection.finalizationGenerationSlot) {
         const existing = finalizations.find(selection.finalizationGenerationSlot)
-        if (existing && !finalizations.retryable(existing)) return existing
+        if (existing && !finalizations.retryable(existing) && selection.uiActionNonce !== `finalization:${finalizationSlotKey(selection.finalizationGenerationSlot)}:retry:${existing.runId}`) return existing
         if (selection.parentRootActionId) repository.activateRootForCommittedStage(selection.parentRootActionId, binding)
       }
       if (batch) repository.activateRootForCommittedStage(batch.rootHandle.rootActionId, binding)
@@ -1085,6 +1085,21 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (repository.budget(run.rootActionId).root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
     if (!compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)))) throw new Error('GENERATION_SOURCE_CHANGED')
   }
+  /** 角色状态回答不合合同（坏 JSON 或合同码）时返回那个错误，合格时返回 undefined；别的错误照抛。 */
+  const characterContractFailure = (text: string, identity: FinalizedCharacterContext): Error | undefined => {
+    try { parseFinalizedCharacterStateResponse(text, identity); return undefined } catch (error) {
+      if (error instanceof SyntaxError || error instanceof Error && /^FINALIZED_CHARACTER_(UPDATES_INVALID|UPDATE_INVALID|EVIDENCE_MISSING|EVIDENCE_NOT_UNIQUE|EVIDENCE_INVALID|FIELD_INVALID|IDENTITY_REQUIRED|DUPLICATE_ID)$/.test(error.message)) return error
+      throw error
+    }
+  }
+  /** 作者点重试时能否另开运行：本运行没有写入结果、没有在途请求，最后的候选也不能直接提交。能提交的候选沿用它，不重新计费。 */
+  const finalizationRetriesWithNewRun = (run: DurableGenerationRun): boolean => {
+    if (finalizations.readEffect(run) || repository.budget(run.rootActionId).attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))) return false
+    const candidate = viewOf(run).candidates?.at(-1)
+    if (candidate?.status !== 'completed' || !candidate.compositionEligible) return true
+    const context = readFinalizationGenerationContext(run)
+    return context.slot.stepKey === 'character_cards' && !!characterContractFailure(candidate.text, context.identity)
+  }
   const graphRecovery = (run: DurableGenerationRun): GraphGenerationRecovery => {
     assertCurrent()
     const context = readGraphGenerationContext(run), effects = graphs.effects(run)
@@ -1238,13 +1253,21 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     beginFinalizationGeneration: (request: FinalizationGenerationChannels['finalization-generation:begin']['args'][0]) => {
       assertCurrent()
-      if (!request || Object.keys(request).some(key => !['slot', 'modelId', 'parentRootActionId'].includes(key))) throw new Error('GENERATION_FINALIZATION_SLOT_INVALID')
+      if (!request || Object.keys(request).some(key => !['slot', 'modelId', 'parentRootActionId', 'retryRunId'].includes(key))) throw new Error('GENERATION_FINALIZATION_SLOT_INVALID')
       const { slot } = request, prior = finalizations.find(slot)
-      if (prior && !finalizations.retryable(prior)) return finalizationRecovery(prior)
+      // 作者重试没有可提交结果的运行：在同一 root 另开运行，用作者现在选的模型，修正次数与首跑相同。
+      const explicitRetry = prior !== undefined && request.retryRunId === prior.runId
+      const authorRetry = explicitRetry && finalizationRetriesWithNewRun(prior)
+      if (prior && !authorRetry && !finalizations.retryable(prior)) return finalizationRecovery(prior)
+      // 根已被阻断或用完时间预算时，新运行也发不出请求，直接报出原因。
+      const priorBudget = authorRetry ? repository.budget(prior.rootActionId) : undefined
+      const blockedCode = priorBudget && (priorBudget.blockedCode ?? (priorBudget.activeElapsedMs >= priorBudget.policy.maxActiveElapsedMs ? 'ROOT_BUDGET_EXHAUSTED' : null))
+      if (blockedCode) throw new Error(blockedCode)
       const sibling = finalizations.find({ source: slot.source, stepKey: slot.stepKey === 'chapter_notes' ? 'character_cards' : 'chapter_notes' })
       const predecessor = prior ?? sibling
       let parentRootActionId = predecessor && repository.budget(predecessor.rootActionId).root.status !== 'cancelled' ? predecessor.rootActionId : undefined
-      let selectedModelId = predecessor ? modelReceipt(predecessor.binding).modelId : request.modelId
+      // 作者点重试而另开的运行（包括要点改过、root 被取消的情形）一律用作者现在选的模型。
+      let selectedModelId = predecessor && !explicitRetry ? modelReceipt(predecessor.binding).modelId : request.modelId
       if (request.parentRootActionId !== undefined) {
         const root = repository.budget(request.parentRootActionId).root
         if (root.operation !== 'batch-chapters' || root.projectId !== deps.projectId || parentRootActionId && parentRootActionId !== request.parentRootActionId) throw new Error('GENERATION_FINALIZATION_PARENT_INVALID')
@@ -1273,12 +1296,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const initialTask = finalizations.task(run), context = readFinalizationGenerationContext(run)
       const replay = (attempt: ReturnType<typeof runAttempts>[number]) => pending.get(JSON.stringify([run.runId, attempt.invocationNonce]))?.promise
         ?? outcomeOf(volatileReceipts.get(attempt.attemptId) ?? repository.receipt(attempt.attemptId), { purpose: attempt.purpose })
-      const failureOf = (text: string): Error | undefined => {
-        try { parseFinalizedCharacterStateResponse(text, context.identity); return undefined } catch (error) {
-          if (error instanceof SyntaxError || error instanceof Error && /^FINALIZED_CHARACTER_(UPDATES_INVALID|UPDATE_INVALID|EVIDENCE_MISSING|EVIDENCE_NOT_UNIQUE|EVIDENCE_INVALID|FIELD_INVALID|IDENTITY_REQUIRED|DUPLICATE_ID)$/.test(error.message)) return error
-          throw error
-        }
-      }
+      const failureOf = (text: string) => characterContractFailure(text, context.identity)
       const repairTask = (invalidText: string | undefined, ordinal: number | string, error?: Error): GenerationTask => {
         const code = error?.message ?? ''
         const repairKind = code === 'FINALIZED_CHARACTER_EVIDENCE_MISSING' ? 'evidence-missing' : code.startsWith('FINALIZED_CHARACTER_EVIDENCE_') ? 'evidence-span' : 'generic'

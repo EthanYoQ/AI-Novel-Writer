@@ -403,7 +403,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       ))
     }
     // Capture once before the pipeline's withRetry; a transport retry must keep the same failed result.
-    const explicit: Partial<Record<FinalizationStepKey, { retryOf: FinalizedCharacterArtifact } | { recoverFrom: string }>> = {}
+    const explicit: Partial<Record<FinalizationStepKey, { retryRunId: string; retryOf?: FinalizedCharacterArtifact }>> = {}
     if (this.params.retryInvalidResult) {
       for (const stepKey of ['chapter_notes', 'character_cards'] as const) {
         if (this.params.stepKeys && !this.params.stepKeys.includes(stepKey)) continue
@@ -415,8 +415,9 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         if (!recovery || recovery.effect || !latest || latest.inFlight) continue
         const candidate = (recovery.view.candidates ?? recovery.view.artifacts).at(-1)
         const usable = !latest.failureCode && latest.finishReason === 'stop' && candidate?.status === 'completed' && candidate.compositionEligible
-        if (!usable) explicit[stepKey] = { recoverFrom: latest.attemptId }
-        else if (stepKey === 'character_cards') explicit[stepKey] = { retryOf: { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash } }
+        // 没有可提交结果时，主进程按 retryRunId 另开运行，用作者现在的分工模型重新生成；能提交的角色状态结果只做校验与写入。
+        explicit[stepKey] = { retryRunId: recovery.view.handle.runId,
+          ...(usable && stepKey === 'character_cards' ? { retryOf: { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash } } : {}) }
       }
     }
     const generation: FinalizePostProcessGeneration = {

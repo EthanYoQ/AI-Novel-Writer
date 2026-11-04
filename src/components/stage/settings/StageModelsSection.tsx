@@ -31,8 +31,8 @@ const STAGE_COPY: Record<ModelStage, { name: Pair; scope: Pair }> = {
   },
   finalization: {
     name: ['定稿后处理', 'After finalizing'],
-    scope: ['单章「定稿…」后的首次后处理。批量写作的自动定稿、导入中的后处理，以及已跑过步骤的修复和重试，沿用原来的模型。',
-      'The first post-processing after you finalize a single chapter. Auto-finalizing in batch writing, post-processing during imports, and repairs or retries of steps that already ran keep their original model.'],
+    scope: ['单章「定稿…」后的首次后处理；点「重试」或「重试失败步骤」重新生成的步骤，按这里当时的选择。批量写作的自动定稿和导入中的后处理沿用原来的模型。',
+      'The first post-processing after you finalize a single chapter; steps you regenerate with Retry or Retry failed steps use the model selected here at that time. Auto-finalizing in batch writing and post-processing during imports keep their original model.'],
   },
 }
 
