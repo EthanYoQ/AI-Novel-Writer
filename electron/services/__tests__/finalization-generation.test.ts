@@ -51,10 +51,12 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], option
   const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: (key: string) => JSON.stringify(options.builtinPrompts
     ? getBuiltinPromptTemplate(key, options.writingLanguage ?? 'zh-CN')
     : {key,systemRole:'合成定稿编辑',content:'正文：{{chapter_content}} 角色：{{existing_cards_json}}'}) }
+  // 「synthetic-b」是作者换上的第二个分工模型，其余 id 都按原夹具模型处理。
+  const byId = (id: string): ModelProfile => id === 'synthetic-b' ? { ...model, id, name: '合成模型 B', modelName: 'gpt-4.1-mini' } : model
   let current = true
   const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectId: 'project', epoch,
     assertCurrent: () => { if (!current) throw new Error('GENERATION_EPOCH_STALE') },
-    leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: dispatchSpy,
+    leases: new ModelExecutionLeaseRegistry({ loadModel: byId }), loadModel: byId, dispatch: dispatchSpy,
     buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch,
       modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
     rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
@@ -705,6 +707,39 @@ it.each(['elapsed', 'blocked'] as const)('#552 作者重试时原 root 已不能
  expect(() => f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: f.handle.runId })).toThrow('ROOT_BUDGET_EXHAUSTED')
  expect(f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
  expect(f.dispatch).toHaveBeenCalledTimes(3)
+})
+
+it('#552 作者重试被截断（length）的章节要点：结果不能提交，另开运行重新请求', async () => {
+ const f = await generated('chapter_notes', 'length')
+ expect(() => f.owner.commitFinalizationGeneration(f.commitRequest)).toThrow()
+ const retry = f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: f.commitRequest.handle.runId })
+ expect(retry.view.handle.runId).not.toBe(f.commitRequest.handle.runId)
+ expect(retry.view.handle.rootActionId).toBe(f.commitRequest.handle.rootActionId)
+})
+
+it('#552 作者重试被截断（length）但合同合格的角色状态：结果不能提交，另开运行重新请求', async () => {
+ const f = await splitEvidenceRun()
+ f.dispatch.mockReset()
+ f.dispatch.mockImplementation(async (_request, options) => {
+  options.onVisible({ kind: 'delta', text: JSON.stringify(single(f.characterId)) }); return { finishReason: 'length', usage: null }
+ })
+ const fresh = fixture(f.dispatch.getMockImplementation(), { content: splitProse })
+ const slot: FinalizationGenerationSlot = { source: fresh.prepared.context.source, stepKey: 'character_cards' }
+ const handle = fresh.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' }).view.handle
+ const result = await fresh.owner.executeFinalizationGeneration({ handle })
+ expect(() => fresh.owner.commitFinalizationGeneration({ handle, artifact: fresh.artifactOf(result) })).toThrow()
+ const retry = fresh.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic', retryRunId: handle.runId })
+ expect(retry.view.handle.runId).not.toBe(handle.runId)
+ expect(retry.view.handle.rootActionId).toBe(handle.rootActionId)
+})
+
+it('#552 章节要点被作者改过后重试：另开的运行用作者现在选的模型', async () => {
+ const f = await generated()
+ f.db.prepare('UPDATE blueprints SET notes=? WHERE chapter_number=1').run('作者新要点')
+ expect(() => f.owner.commitFinalizationGeneration(f.commitRequest)).toThrow('GENERATION_FINALIZATION_NOTES_CHANGED')
+ const retry = f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic-b', retryRunId: f.commitRequest.handle.runId })
+ expect(retry.view.handle.runId).not.toBe(f.commitRequest.handle.runId)
+ expect(retry.modelId).toBe('synthetic-b')
 })
 
 it('#552 retryRunId 不是当前运行时按普通恢复处理，不另开运行', async () => {
