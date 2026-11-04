@@ -216,18 +216,22 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     context: CommandExecuteParams['context'],
   ): Promise<ImportInferenceResult> {
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
+    const decoded = async <T>(decode: () => T): Promise<T> => {
+      try { return decode() } catch (error) { await this.discardRejectedImportOutput(callbacks); throw error }
+    }
     try {
       return decodeImportInferenceJson(rawResult)
     } catch (error) {
       if (!(error instanceof StructuredContractDiagnostic)
         || error.code !== 'relationship_endpoint_not_in_characters') {
+        await this.discardRejectedImportOutput(callbacks)
         throw error
       }
     }
 
-    const recoveryTargets = importEndpointRecoveryTargets(rawResult, text)
+    const recoveryTargets = await decoded(() => importEndpointRecoveryTargets(rawResult, text))
     const delta = recoveryTargets.length === 0 ? null : await this.requestImportEndpointCards(rawResult, recoveryTargets, callbacks, context)
-    const { result, droppedRelationships } = decodeRecoveredImportInference(rawResult, delta, text)
+    const { result, droppedRelationships } = await decoded(() => decodeRecoveredImportInference(rawResult, delta, text))
     if (droppedRelationships.length > 0) {
       const dropped = droppedRelationships.map(item => `${item.source}→${item.target}（${item.relation}）`).join('、')
       const droppedEn = droppedRelationships.map(item => `${item.source}→${item.target} (${item.relation})`).join(', ')
@@ -468,6 +472,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       assertImportCompletionNotStopped(repair, callbacks, context)
       if (repair.finishReason !== 'stop') throw this.createIncompleteCompletionError(repair.finishReason)
       if (!preservesStructuredJsonEvidence(rawResult, repair.content)) {
+        await this.discardRejectedImportOutput(callbacks)
         throw new Error(text(
           '导入推演 JSON 语法修复改变了候选事实，已拒绝写入',
           'The import-inference JSON syntax repair changed candidate facts, so the write was rejected.',
@@ -791,6 +796,7 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     })
     if (!batch.ok) {
       if (batch.failure.terminal) throw batch.failure.terminal
+      if (batch.failure.code === 'invalid_output') await this.discardRejectedImportOutput(callbacks)
       const { errorCode } = batch.failure
       if (errorCode) callbacks.log(text(`蓝图推演停止原因：${errorCode}`, `Blueprint inference stop reason: ${errorCode}`))
       const reason = (errorCode && importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline', importRunPurpose(context)))

@@ -842,6 +842,32 @@ describe('current-project reference import', () => {
     expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: 'persisted-import' })
   })
 
+  it('导入确实还在跑时：「继续导入」点不了，面板写明在跑的是哪一步和进度', async () => {
+    const running = importRun({ status: 'running', stage: 'blueprints', totalChapters: 15, completedChapters: 5 })
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:import-run-list-resumable') return [running]
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => {
+      useProjectStore.setState({ currentProject: { ...project } as never })
+      useWorkflowStore.setState({
+        activeRuns: [{
+          id: running.id,
+          projectPath: project.path,
+          projectSession: { projectId: project.id, leaseId: project.sessionLease, projectPath: project.path },
+          writingLanguage: 'zh-CN', uiLocale: 'zh-CN', type: 'novel_import', title: 'Active import',
+          status: 'running', currentStepIndex: 0, createdAt: '2026-01-01', steps: [],
+        }],
+      })
+    })
+    await act(async () => page.getByTestId('import-target-current').click())
+    await expect.element(page.getByRole('button', { name: '继续导入' })).toBeDisabled()
+    await expect.element(page.getByTestId('import-resumable-run')).toHaveTextContent(/阶段：blueprints；进度：\d+\/\d+/)
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
   it('offers Continue without Start over for a failed author run after finalized commit', async () => {
     const resumable = importRun({
       id: 'failed-author-postprocess',

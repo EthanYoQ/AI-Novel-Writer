@@ -130,7 +130,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
       context.mainGenerationRootHandle = Object.freeze({ ...view.handle })
       context.mainGenerationRunHandle = Object.freeze({ ...view.handle })
       if (intent.importSlot && !importRecovery) {
-        const stored = await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot })
+        const stored = await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot, runId: view.handle.runId })
         if (!stored || stored.view.handle.runId !== view.handle.runId) throw new Error('GENERATION_IMPORT_CONTEXT_REQUIRED')
         context.data.importGenerationContext = stored.frozenContext
         context.generationModelId = stored.modelId

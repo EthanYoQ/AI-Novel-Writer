@@ -25,6 +25,6 @@ export interface ImportGenerationRecovery {
   frozenContext: ImportGenerationContext
 }
 export interface ImportGenerationChannels {
-  'import-generation:read': { args: [{ slot: ImportGenerationSlot }]; return: ImportGenerationRecovery | null }
+  'import-generation:read': { args: [{ slot: ImportGenerationSlot; runId?: string }]; return: ImportGenerationRecovery | null }
   'import-generation:execute': { args: [{ handle: MainGenerationRunHandle; ordinal: number; task: GenerationTask; execution?: ImportRunExecutionAuthority }]; return: MainGenerationExecuteReceipt }
 }
