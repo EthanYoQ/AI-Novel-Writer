@@ -33,34 +33,58 @@ export const LIVE_ROW_EXEMPT_TABLES = Object.freeze({
   review_cycle_merges: '只按 cycle_id 读，挂在 review_cycles 之下',
 })
 
-// 一个字面量可含多条语句，按分号逐条判断：DDL 语句跳过；INSERT/UPDATE/DELETE 里的读子查询照扫，
-// 只放过 DELETE FROM 的删除目标（视图不能写，中间可夹 SQL 注释）。
-const DDL_KEYWORDS = new Set(['CREATE', 'DROP', 'ALTER', 'PRAGMA'])
-const SQL_COMMENT = /\/\*[\s\S]*?\*\/|--[^\n]*/g
-const DELETE_TARGET = /\bDELETE\s+$/i
-const STATEMENT_KEYWORD = /^[\s(`'"}]*([A-Za-z]+)/
 const CLAUSE_KEYWORDS = new Set(['WHERE', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'FULL', 'NATURAL', 'ON', 'USING',
   'ORDER', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'INDEXED', 'NOT'])
 const READ_PATTERN = new RegExp(`\\b(FROM|JOIN)(\\s+)(${LIVE_ROW_TABLES.join('|')})\\b`, 'gi')
+// 删除目标只能写原表（视图不能写），不算读。只在预处理后的文本上匹配，注释已是空格。
+const DELETE_TARGET = /\bDELETE\s+FROM\s+(\w+)/gi
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
+/** 每个字符串或模板字面量是一组源码片段（模板按 ${} 切开）。 */
 function literalSegments(sourceFile) {
-  const statements = []
+  const literals = []
   const visit = node => {
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      statements.push({ text: node.text, segments: [node] })
-    } else if (ts.isTemplateExpression(node)) {
-      const segments = [node.head, ...node.templateSpans.map(span => span.literal)]
-      statements.push({ text: segments.map(segment => segment.text).join(' '), segments })
-    }
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) literals.push([node])
+    else if (ts.isTemplateExpression(node)) literals.push([node.head, ...node.templateSpans.map(span => span.literal)])
     ts.forEachChild(node, visit)
   }
   visit(sourceFile)
-  return statements
+  return literals
 }
 
-// 原句用「表名.列」限定时，视图要以原表名作别名，否则限定会失效。
+/**
+ * SQL 词法预处理，一次线性扫过：注释换成等长空格，单引号字符串的内容换成等长空格，引号、分号与其余字符原样。
+ * 输入是一个字面量的各段源码原文（含定界符），输出逐段等长，偏移量不变。状态跨 ${} 延续。
+ */
+export function maskSqlSegments(raws) {
+  let state = 'normal'
+  return raws.map(raw => {
+    const end = raw.endsWith('${') ? raw.length - 2 : raw.length - 1
+    let out = ' '
+    for (let index = 1; index < end; index++) {
+      const char = raw[index], next = raw[index + 1]
+      if (state === 'normal') {
+        const opener = char === '-' && next === '-' ? 'line' : char === '/' && next === '*' ? 'block' : ''
+        if (opener) { state = opener; out += '  '; index++; continue }
+        if (char === "'") state = 'string'
+        out += char
+      } else if (state === 'string') {
+        if (char === "'") state = 'normal'
+        out += state === 'normal' ? char : ' '
+      } else if (state === 'line') {
+        // 源码里的 \n 转义同样结束行注释。
+        if (char === '\n' || (char === '\\' && next === 'n')) state = 'normal'
+        out += char === '\n' ? char : ' '
+      } else if (char === '*' && next === '/') {
+        state = 'normal'; out += '  '; index++
+      } else out += ' '
+    }
+    return out + ' '.repeat(raw.length - end)
+  })
+}
+
+// 原句用「表名.列」限定时，视图要以原表名作别名，否则限定会失效。只看同一条语句。
 function rewriteFor(table, after, statement) {
   const next = /^\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)/i.exec(after)
   const aliased = next && !CLAUSE_KEYWORDS.has(next[1].toUpperCase())
@@ -68,32 +92,38 @@ function rewriteFor(table, after, statement) {
   return aliased || !qualified ? `live_${table}` : `live_${table} AS ${table}`
 }
 
-function inDdlStatement(prefix) {
-  const keyword = STATEMENT_KEYWORD.exec(prefix.slice(prefix.lastIndexOf(';') + 1))?.[1]?.toUpperCase()
-  return Boolean(keyword && DDL_KEYWORDS.has(keyword))
-}
-
-/** 列出一个源文件里读原表的位置。DDL 语句跳过；DELETE FROM 的目标是写，不算读。 */
+/**
+ * 列出一个源文件里读原表的位置。每个字面量先做词法预处理，再只在正常状态的分号处切成语句，
+ * 每条语句（含 CREATE … AS SELECT、INSERT … SELECT）都扫 FROM/JOIN；DELETE FROM 的目标不算读。
+ */
 export function scanSource(text, fileName = 'source.ts') {
   const sourceFile = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
   const reads = []
-  for (const statement of literalSegments(sourceFile)) {
-    let before = ''
-    for (const segment of statement.segments) {
-      const start = segment.getStart(sourceFile), raw = text.slice(start, segment.end)
-      for (const match of raw.matchAll(READ_PATTERN)) {
-        const prefix = raw.slice(0, match.index)
-        if (DELETE_TARGET.test(prefix.replace(SQL_COMMENT, ' ')) || inDdlStatement(before + prefix)) continue
-        const tableOffset = start + match.index + match[1].length + match[2].length
-        const table = match[3]
+  for (const segments of literalSegments(sourceFile)) {
+    const starts = segments.map(segment => segment.getStart(sourceFile))
+    const masked = maskSqlSegments(segments.map((segment, index) => text.slice(starts[index], segment.end)))
+    const joined = masked.join('')
+    let total = 0
+    const bases = masked.map(part => (total += part.length) - part.length)
+    const sourceOffset = position => {
+      const index = bases.findLastIndex(base => base <= position)
+      return starts[index] + position - bases[index]
+    }
+    const deleteTargets = new Set([...joined.matchAll(DELETE_TARGET)].map(match => match.index + match[0].length - match[1].length))
+    let statementStart = 0
+    for (const statement of joined.split(';')) {
+      for (const match of statement.matchAll(READ_PATTERN)) {
+        const position = statementStart + match.index + match[1].length + match[2].length
+        if (deleteTargets.has(position)) continue
+        const offset = sourceOffset(position)
         reads.push({
-          line: sourceFile.getLineAndCharacterOfPosition(tableOffset).line + 1,
-          table,
-          offset: tableOffset,
-          replacement: rewriteFor(table, raw.slice(match.index + match[0].length), statement.text),
+          line: sourceFile.getLineAndCharacterOfPosition(offset).line + 1,
+          table: match[3],
+          offset,
+          replacement: rewriteFor(match[3], statement.slice(match.index + match[0].length), statement),
         })
       }
-      before += raw
+      statementStart += statement.length + 1
     }
   }
   return reads

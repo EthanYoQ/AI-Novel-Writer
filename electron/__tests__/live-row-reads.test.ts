@@ -38,10 +38,16 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
       "db.exec('CREATE TEMP TABLE picked(id); INSERT INTO picked SELECT id FROM drafts')",
       "db.exec('CREATE TEMP VIEW recent AS SELECT * FROM drafts; SELECT 1')",
       "db.prepare('DELETE /* cleanup */ FROM drafts WHERE id = ?')",
+      "db.prepare('SELECT id /* next; CREATE archive */ FROM drafts')",
+      "db.prepare(`SELECT 'a; CREATE b' AS note FROM drafts`)",
+      "db.exec('DROP VIEW IF EXISTS recent; PRAGMA foreign_keys = ON')",
+      "db.prepare(\"SELECT 'FROM drafts' AS label, '--' AS dash FROM summary_snapshots\")",
+      "db.prepare(`SELECT 1 /* ${note} FROM drafts */ FROM finalization_outbox WHERE s IN ('${a}', 'x;y')`)",
     ].join('\n')
     expect(scanSource(sample).map(read => `${read.line}:${read.table}`))
       .toEqual(['1:drafts', '2:drafts', '2:finalization_outbox', '2:drafts', '3:summary_snapshots', '4:drafts',
-        '7:drafts', '10:summary_snapshots', '11:drafts', '13:drafts'])
+        '7:drafts', '10:summary_snapshots', '11:drafts', '13:drafts', '14:drafts', '16:drafts', '17:drafts',
+        '19:summary_snapshots', '20:finalization_outbox'])
 
     const rewritten = rewriteSource(sample)
     expect(rewritten).toContain('FROM live_drafts d JOIN contents')
@@ -59,9 +65,9 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
     expect(rewriteSource(rewritten)).toBe(rewritten)
   })
 
-  // CodeQL js/redos：删除目标前的空白与注释不能让匹配回溯爆炸。
-  it('病态的空白与注释输入在限定时间内扫完', { timeout: 60_000 }, () => {
-    for (const filler of ['\t'.repeat(30), `/*${'*//*'.repeat(5000)}`, '\t/* */'.repeat(5000)]) {
+  // CodeQL js/redos：删除目标前的空白、注释与字符串不能让扫描回溯爆炸。
+  it('病态的空白、注释与字符串输入在限定时间内扫完', { timeout: 60_000 }, () => {
+    for (const filler of ['\t'.repeat(30), `/*${'*//*'.repeat(5000)}*/`, '\t/* */'.repeat(5000), `'${"x''".repeat(30000)}'`]) {
       const started = performance.now()
       expect(scanSource(`db.exec(\`DELETE${filler}x FROM drafts\`)`)).toHaveLength(1)
       expect(performance.now() - started).toBeLessThan(500)
