@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { resolveReasoningPolicy } from '../reasoning-policy'
+import { reasoningAdapterFitsProtocol } from '../reasoning-types'
 import type { ModelProfile } from '../ipc-channels'
 
 const geminiModel: ModelProfile = {
@@ -299,5 +300,19 @@ describe('reasoning policy', () => {
       status: 'mapped',
       source: 'project-strategy',
     })
+  })
+})
+
+describe('推理映射与协议是否匹配', () => {
+  it.each([
+    [undefined, 'siliconflow-v4-thinking', true],
+    ['openai', 'siliconflow-v4-thinking', true],
+    ['anthropic', 'siliconflow-v4-thinking', false],
+    ['gemini', 'siliconflow-v4-thinking', false],
+    ['gemini', 'gemini-thinking-level', true],
+    [undefined, 'gemini-thinking-level', false],
+    ['anthropic', 'gemini-thinking-budget', false],
+  ] as const)('协议 %s 配 %s：%s（没写协议的旧配置按 OpenAI 兼容处理）', (protocol, adapter, fits) => {
+    expect(reasoningAdapterFitsProtocol(protocol, adapter)).toBe(fits)
   })
 })

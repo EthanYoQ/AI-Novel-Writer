@@ -99,7 +99,7 @@ function assertVisibleStreamEvent(value: unknown): void {
 export class AnthropicProvider implements ILLMProvider {
   private normalizeStopReason(reason: string | null | undefined): LLMFinishReason {
     if (reason === 'end_turn' || reason === 'stop_sequence') return 'stop'
-    if (reason === 'max_tokens') return 'length'
+    if (reason === 'max_tokens' || reason === 'model_context_window_exceeded') return 'length'
     if (reason === 'refusal') return 'content_filter'
     return 'unknown'
   }

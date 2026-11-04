@@ -106,12 +106,12 @@ describe('AnthropicProvider', () => {
     })
   })
 
-  it('reports max_tokens stop as an incomplete response', async () => {
+  it.each(['max_tokens', 'model_context_window_exceeded'])('reports %s stop as a truncated response', async (stopReason) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         content: [{ type: 'text', text: '被截断的正文' }],
-        stop_reason: 'max_tokens',
+        stop_reason: stopReason,
         usage: { input_tokens: 10, output_tokens: 20 },
       }),
     }))
