@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
+import { getDesktopMigrationRegistry } from '../migrations/desktop-registry'
 import { verifySchema } from '../migrations/runner'
 import { LIVE_ROW_VIEWS } from '../migrations/m07-chapter-recycle'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
@@ -7,6 +7,9 @@ import fieldPolicyDocument from './portable-project-field-policy.json'
 
 export const PORTABLE_PROJECT_FORMAT_VERSION = 1 as const
 export const PORTABLE_SOURCE_SCHEMA_VERSION = 8 as const
+/** 能恢复的包：v1.2.0-Preview 到 v1.4.0 导出的是 7（M07 之前），恢复时先迁到 8（#564）。 */
+export const PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS = Object.freeze([7, PORTABLE_SOURCE_SCHEMA_VERSION] as const)
+export type PortableSourceSchemaVersion = typeof PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS[number]
 
 export type PortableFieldDisposition = 'preserve-domain' | 'historical-nonreplayable'
   | 'redacted-projection' | 'exclude-machine-authority' | 'rebuild-stale'
@@ -85,26 +88,31 @@ const liveRowViews = new Set<string>(LIVE_ROW_VIEWS.map(item => item.view))
 /**
  * Read-only bidirectional schema gate. sqlite_* implementation objects are deliberately outside the portable contract.
  * Views carry no data; only M07's live_ views are admitted, and verifySchema's fingerprint pins their exact SQL.
+ * A schema-7 source predates M07: no views at all, and none of M07's drafts columns.
  */
-export function assertPortableSourceSchema(database: Database.Database): { tables: number; fields: number } {
+export function assertPortableSourceSchema(database: Database.Database,
+  version: PortableSourceSchemaVersion = PORTABLE_SOURCE_SCHEMA_VERSION): { tables: number; fields: number } {
   try {
     database.pragma('foreign_keys = ON')
-    verifySchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+    verifySchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), version)
   } catch { formatError('PORTABLE_SCHEMA_UNSUPPORTED') }
+  const expected = version === PORTABLE_SOURCE_SCHEMA_VERSION ? fieldPolicy
+    : new Map([...fieldPolicy].filter(([key]) => !m07Fields.has(key)))
+  const admittedViews = version === PORTABLE_SOURCE_SCHEMA_VERSION ? liveRowViews : new Set<string>()
   const actual = new Set<string>()
   const objects = database.prepare("SELECT name,type FROM pragma_table_list WHERE schema='main' AND name NOT LIKE 'sqlite_%' ORDER BY name")
     .all() as Array<{ name: string; type: string }>
-  if (objects.some(object => object.type === 'view' && !liveRowViews.has(object.name))) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
+  if (objects.some(object => object.type === 'view' && !admittedViews.has(object.name))) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
   const tableObjects = objects.filter(object => object.type !== 'view')
   for (const object of tableObjects) {
     if (object.type !== 'table' || !(object.name in tables)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
     for (const row of database.prepare(`PRAGMA table_info(${quoteIdentifier(object.name)})`).all() as Array<{ name: string }>) {
       const key = `${object.name}.${row.name}`
-      if (!fieldPolicy.has(key)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
+      if (!expected.has(key)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
       actual.add(key)
     }
   }
-  if ([...fieldPolicy.keys()].some(key => !actual.has(key) && !optionalFields.has(key))) {
+  if ([...expected.keys()].some(key => !actual.has(key) && !optionalFields.has(key))) {
     formatError('PORTABLE_SCHEMA_UNSUPPORTED')
   }
   return { tables: tableObjects.length, fields: actual.size }
@@ -130,7 +138,7 @@ export interface PortableProjectManifestEntry {
 
 export interface PortableProjectManifest {
   formatVersion: 1
-  sourceSchemaVersion: typeof PORTABLE_SOURCE_SCHEMA_VERSION
+  sourceSchemaVersion: PortableSourceSchemaVersion
   originProjectId: string
   snapshotGeneration: string
   createdAt: string
@@ -248,7 +256,8 @@ export function parsePortableProjectManifest(value: unknown, configuredLimits?: 
   exactKeys(source, ['formatVersion', 'sourceSchemaVersion', 'originProjectId', 'snapshotGeneration', 'createdAt',
     'declaredUncompressedBytes', 'declaredCompressedBytes', 'entries', 'semanticCounts', 'omittedItems',
     'transferReceiptIds', 'historyProjectionIds'])
-  if (source.formatVersion !== PORTABLE_PROJECT_FORMAT_VERSION || source.sourceSchemaVersion !== PORTABLE_SOURCE_SCHEMA_VERSION) {
+  const sourceSchemaVersion = PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS.find(version => version === source.sourceSchemaVersion)
+  if (source.formatVersion !== PORTABLE_PROJECT_FORMAT_VERSION || sourceSchemaVersion === undefined) {
     formatError('PORTABLE_SCHEMA_UNSUPPORTED')
   }
   const originProjectId = identifier(source.originProjectId)
@@ -311,7 +320,7 @@ export function parsePortableProjectManifest(value: unknown, configuredLimits?: 
   if (new Set(omittedItems.map(item => item.id)).size !== omittedItems.length) formatError('PORTABLE_MANIFEST_INVALID')
   return {
     formatVersion: PORTABLE_PROJECT_FORMAT_VERSION,
-    sourceSchemaVersion: PORTABLE_SOURCE_SCHEMA_VERSION,
+    sourceSchemaVersion,
     originProjectId,
     snapshotGeneration,
     createdAt: source.createdAt,

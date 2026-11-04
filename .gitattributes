@@ -8,6 +8,7 @@
 
 # Binary release and documentation assets must never be line-normalized.
 *.dll binary
+*.ainovel binary
 *.dmg binary
 *.exe binary
 *.gif binary

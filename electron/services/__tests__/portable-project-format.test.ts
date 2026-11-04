@@ -4,6 +4,10 @@ import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BlueprintRepository } from '../../repositories/blueprint-repository'
+import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+import { getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
+import { migrateSchema } from '../../migrations/runner'
+import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { closeProjectDatabase, createProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import {
@@ -172,6 +176,19 @@ describe('portable v8 field policy', () => {
     },
   )
 
+  it('按包声明的版本校验源库：M07 之前的库只认 7，迁过 M07 的库只认 8', () => {
+    const database = new Database(':memory:')
+    try {
+      database.transaction(() => initializeLegacyBaselineSchema(database))()
+      migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), 7)
+      expect(assertPortableSourceSchema(database, 7)).toEqual({ tables: 51, fields: 481 })
+      expect(() => assertPortableSourceSchema(database)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
+      migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), 8)
+      expect(() => assertPortableSourceSchema(database, 7)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 51, fields: 484 })
+    } finally { database.close() }
+  })
+
   it('同表同字段但删除index的v8 DDL fork被registry fingerprint拒绝', () => {
     const project = fixture()
     const mutate = new Database(project.databasePath)
@@ -225,7 +242,10 @@ describe('portable v8 field policy', () => {
 })
 
 describe('portable manifest v1', () => {
-  it.todo('恢复 M07 之前（v1.2.0-Preview 到 v1.4.0）导出的 sourceSchemaVersion 7 包与云备份：现在被拒，交还协调者裁定')
+  it('接受 M07 之前（v1.2.0-Preview 到 v1.4.0）导出的 sourceSchemaVersion 7 清单，并原样报告版本', () => {
+    expect(parsePortableProjectManifest(manifest({ sourceSchemaVersion: 7 })).sourceSchemaVersion).toBe(7)
+    expect(parsePortableProjectManifest(manifest()).sourceSchemaVersion).toBe(8)
+  })
 
   it('接受有界的大型中文项目声明与引用标识', () => {
     const parsed = parsePortableProjectManifest(manifest())
@@ -277,8 +297,9 @@ describe('portable manifest v1', () => {
   })
 
   it('拒绝未知格式、非法hash、非安全整数和声明总量不符', () => {
-    expect(() => parsePortableProjectManifest(manifest({ sourceSchemaVersion: 9 }))).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
-    expect(() => parsePortableProjectManifest(manifest({ sourceSchemaVersion: 7 }))).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
+    for (const version of [6, 9, '8', null]) {
+      expect(() => parsePortableProjectManifest(manifest({ sourceSchemaVersion: version })), String(version)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
+    }
     expect(() => parsePortableProjectManifest(manifest({ entries: [{
       path: '正文/a.txt', byteSize: 1, sha256: 'A'.repeat(64), disposition: 'author-content',
     }], declaredUncompressedBytes: 1, declaredCompressedBytes: 1 }))).toThrow('PORTABLE_MANIFEST_INVALID')
