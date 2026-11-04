@@ -27,7 +27,7 @@ export type FinalizationGenerationEffect = {
 } | (FinalizedCharacterGenerationReceipt & { success: true; stepKey: 'character_cards' })
 export interface FinalizationGenerationRecovery {
   attemptCount: number
-  /** 本运行（不是整个 root）最近一次尝试。章节要点与角色状态共用一个 root，显式重试只能据此冻结 recoverFrom。 */
+  /** 本运行（不是整个 root）最近一次尝试。章节要点与角色状态共用一个 root，作者重试据此判断本运行是否还有在途请求、上次结果能否提交。 */
   latestAttempt?: { attemptId: string; inFlight: boolean; finishReason: string | null; failureCode: string | null }
   view: MainGenerationRunView
   modelId: string
@@ -42,7 +42,7 @@ export interface FinalizationGenerationChannels {
    * 按 modelId（作者现在的分工模型）重新生成；有可提交的结果时沿用它。
    */
   'finalization-generation:begin': { args: [{ slot: FinalizationGenerationSlot; modelId: string; parentRootActionId?: string; retryRunId?: string }]; return: FinalizationGenerationRecovery }
-  /** recoverFrom：作者显式重试时，以最近一次未成功尝试的 attemptId 为幂等键重新请求一次。 */
+  /** recoverFrom：以最近一次未成功尝试的 attemptId 为幂等键重新请求一次。界面重试改用 begin 的 retryRunId，不再发它。 */
   'finalization-generation:execute': { args: [{ handle: MainGenerationRunHandle; retryOf?: FinalizedCharacterArtifact; recoverFrom?: string }]; return: MainGenerationExecuteReceipt }
   'finalization-generation:commit': { args: [{ handle: MainGenerationRunHandle; artifact: FinalizedCharacterArtifact }]; return: FinalizationGenerationEffect }
   'finalization-generation:cancel': { args: [{ handle: MainGenerationRunHandle }]; return: MainGenerationRunView }
