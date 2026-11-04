@@ -59,6 +59,15 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
     expect(rewriteSource(rewritten)).toBe(rewritten)
   })
 
+  // CodeQL js/redos：删除目标前的空白与注释不能让匹配回溯爆炸。
+  it('病态的空白与注释输入在限定时间内扫完', { timeout: 60_000 }, () => {
+    for (const filler of ['\t'.repeat(30), `/*${'*//*'.repeat(5000)}`, '\t/* */'.repeat(5000)]) {
+      const started = performance.now()
+      expect(scanSource(`db.exec(\`DELETE${filler}x FROM drafts\`)`)).toHaveLength(1)
+      expect(performance.now() - started).toBeLessThan(500)
+    }
+  })
+
   it('白名单每条都有理由，而且文件里确实还读原表', () => {
     for (const [file, reason] of Object.entries(RAW_ROW_READERS)) {
       expect(reason.trim(), file).not.toBe('')

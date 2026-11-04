@@ -36,7 +36,8 @@ export const LIVE_ROW_EXEMPT_TABLES = Object.freeze({
 // 一个字面量可含多条语句，按分号逐条判断：DDL 语句跳过；INSERT/UPDATE/DELETE 里的读子查询照扫，
 // 只放过 DELETE FROM 的删除目标（视图不能写，中间可夹 SQL 注释）。
 const DDL_KEYWORDS = new Set(['CREATE', 'DROP', 'ALTER', 'PRAGMA'])
-const DELETE_TARGET = /\bDELETE(?:\s+|\/\*[\s\S]*?\*\/|--[^\n]*\n)+$/i
+const SQL_COMMENT = /\/\*[\s\S]*?\*\/|--[^\n]*/g
+const DELETE_TARGET = /\bDELETE\s+$/i
 const STATEMENT_KEYWORD = /^[\s(`'"}]*([A-Za-z]+)/
 const CLAUSE_KEYWORDS = new Set(['WHERE', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'FULL', 'NATURAL', 'ON', 'USING',
   'ORDER', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'INDEXED', 'NOT'])
@@ -82,7 +83,7 @@ export function scanSource(text, fileName = 'source.ts') {
       const start = segment.getStart(sourceFile), raw = text.slice(start, segment.end)
       for (const match of raw.matchAll(READ_PATTERN)) {
         const prefix = raw.slice(0, match.index)
-        if (DELETE_TARGET.test(prefix) || inDdlStatement(before + prefix)) continue
+        if (DELETE_TARGET.test(prefix.replace(SQL_COMMENT, ' ')) || inDdlStatement(before + prefix)) continue
         const tableOffset = start + match.index + match[1].length + match[2].length
         const table = match[3]
         reads.push({
