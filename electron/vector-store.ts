@@ -222,20 +222,27 @@ async function getConnectionInternal(projectPath: string): Promise<lancedb.Conne
   return db
 }
 
+/** 磁盘满、句柄用尽这类故障与卷支不支持硬链接无关，原样报出。 */
+const TRANSIENT_LINK_FAILURES = new Set(['ENOSPC', 'EDQUOT', 'EMFILE', 'ENFILE', 'EIO', 'EBUSY'])
+
 /**
  * LanceDB 本地提交靠硬链接（object_store 的 LocalFileSystem），exFAT、FAT32 等卷建不了硬链接，每次提交都会失败（#571）。
- * 只看能不能建成，不看错误码：同一种不支持在各平台、各种卷上报的码不一样。
+ * 不支持时各平台、各种卷报的码不一样（Windows exFAT 是 EISDIR，Linux 是 EPERM），所以除临时故障外都算不支持。
+ * 探测文件放在 temp：备份导出不收它，删不掉留下来也不挡导出。
  */
 export function knowledgeStoreSupportsCommits(projectPath: string): boolean {
-  const source = path.join(getProjectDataRoot(projectPath), `.link-probe-${randomUUID()}`)
+  const directory = path.join(getProjectDataRoot(projectPath), 'temp')
+  fs.mkdirSync(directory, { recursive: true })
+  const source = path.join(directory, `.link-probe-${randomUUID()}`)
   const link = `${source}.link`
   fs.writeFileSync(source, '')
-  let linked = true
-  try { fs.linkSync(source, link) } catch { linked = false }
-  for (const file of linked ? [link, source] : [source]) {
+  let failure: NodeJS.ErrnoException | undefined
+  try { fs.linkSync(source, link) } catch (error) { failure = error as NodeJS.ErrnoException }
+  for (const file of failure ? [source] : [link, source]) {
     try { fs.unlinkSync(file) } catch { /* 删不掉（例如杀毒软件正在扫描）只留下空文件，不该让导入失败。 */ }
   }
-  return linked
+  if (failure && TRANSIENT_LINK_FAILURES.has(failure.code ?? '')) throw failure
+  return !failure
 }
 
 /** 关闭指定项目的连接 */

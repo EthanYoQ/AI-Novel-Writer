@@ -69,24 +69,27 @@ const RAW = /LanceError|os error|KNOWLEDGE_BASE|Error invoking/u
 export const F571_SCENARIOS = {
   'f571-volume-unsupported': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const { app, page } = context
+    let failed, probesAfterFinalize, retriedOnSameVolume, english
     await volumeWithoutHardLinks(app, true)
-    await openChapter(page, 3)
-    await chapterView.finalize(page, 3)
-    const failed = await readCard(page, 'zh-CN')
-    await context.shoot('f571-volume-unsupported-zh')
-    const probesAfterFinalize = await probes(app)
+    try {
+      await openChapter(page, 3)
+      await chapterView.finalize(page, 3)
+      failed = await readCard(page, 'zh-CN')
+      await context.shoot('f571-volume-unsupported-zh')
+      probesAfterFinalize = await probes(app)
 
-    await region(page, 'zh-CN').locator('.stage-ch-post-head').getByRole('button', { name: '重试失败步骤' }).click()
-    for (const deadline = Date.now() + 60_000; await probes(app) === probesAfterFinalize; await page.waitForTimeout(100)) {
-      assert.ok(Date.now() < deadline, '60 秒内「重试失败步骤」没有再导入知识库')
+      await region(page, 'zh-CN').locator('.stage-ch-post-head').getByRole('button', { name: '重试失败步骤' }).click()
+      for (const deadline = Date.now() + 60_000; await probes(app) === probesAfterFinalize; await page.waitForTimeout(100)) {
+        assert.ok(Date.now() < deadline, '60 秒内「重试失败步骤」没有再导入知识库')
+      }
+      retriedOnSameVolume = await readCard(page, 'zh-CN')
+
+      await switchToEnglish(page)
+      english = await readCard(page, 'en-US')
+      await context.shoot('f571-volume-unsupported-en')
+    } finally {
+      await volumeWithoutHardLinks(app, false)
     }
-    const retriedOnSameVolume = await readCard(page, 'zh-CN')
-
-    await switchToEnglish(page)
-    const english = await readCard(page, 'en-US')
-    await context.shoot('f571-volume-unsupported-en')
-
-    await volumeWithoutHardLinks(app, false)
     await kbRow(page, 'en-US').getByRole('button', { name: 'Retry', exact: true }).click()
     await page.waitForFunction(label => [...document.querySelectorAll('[aria-label="Post-finalization steps"] li')]
       .some(row => row.querySelector('b')?.textContent === label && row.dataset.state === 'success'), KB_IMPORT, { timeout: 90_000 })
@@ -102,11 +105,13 @@ export const F571_SCENARIOS = {
     }
     assert.equal(retriedOnSameVolume.detail, failed.detail, '在同一块盘上重试，说明不变')
     assert.equal(english.state, 'failed')
+    assert.deepEqual({ rowRetry: english.rowRetry, cardRetry: english.cardRetry }, { rowRetry: 1, cardRetry: 1 }, '英文界面同样能重试')
     assert.match(english.detail, /^The finalized chapter text is saved.*exFAT.*NTFS.*APFS.*select Retry\.$/u, JSON.stringify(english))
     assert.doesNotMatch(english.detail, RAW)
     assert.doesNotMatch(english.detail, /\p{Script=Han}/u, '英文说明不带汉字')
     assert.equal(movedToSupportedVolume.state, 'success', JSON.stringify(movedToSupportedVolume))
     assert.equal(movedToSupportedVolume.cardRetry, 0, '都完成后不再摆「重试失败步骤」')
+    assert.equal(movedToSupportedVolume.count, '4 / 4 done', '换盘后各步都完成')
     return { failed, retriedOnSameVolume, english, movedToSupportedVolume, probesAfterFinalize, probesTotal: await probes(app) }
   } },
 }
