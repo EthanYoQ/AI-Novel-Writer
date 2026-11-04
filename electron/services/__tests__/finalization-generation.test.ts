@@ -709,6 +709,41 @@ it.each(['elapsed', 'blocked'] as const)('#552 作者重试时原 root 已不能
  expect(f.dispatch).toHaveBeenCalledTimes(3)
 })
 
+it('#569 请求超时把根阻断后又取消了后处理：作者重试另开新根，真正发出请求并可提交', async () => {
+ const f = fixture()
+ const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey: 'character_cards' }
+ f.dispatch.mockImplementationOnce((_request, options) => new Promise((_resolve, reject) => {
+  options.signal.addEventListener('abort', () => reject(new Error('synthetic provider aborted')), { once: true })
+ }))
+ const handle = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' }).view.handle
+ f.db.prepare("UPDATE generation_roots SET active_elapsed_ms=json_extract(budget_json,'$.maxActiveElapsedMs')-5 WHERE root_action_id=?").run(handle.rootActionId)
+ await f.owner.executeFinalizationGeneration({ handle }).catch(() => undefined)
+ expect(f.db.prepare('SELECT blocked_code FROM generation_roots WHERE root_action_id=?').pluck().get(handle.rootActionId)).toBe('ROOT_BUDGET_EXHAUSTED')
+ f.owner.cancelFinalizationGeneration({ handle })
+ const retry = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic', retryRunId: handle.runId })
+ expect(retry.view.handle.rootActionId).not.toBe(handle.rootActionId)
+ const receipt = await f.owner.executeFinalizationGeneration({ handle: retry.view.handle })
+ expect(f.dispatch).toHaveBeenCalledTimes(2)
+ expect(f.owner.commitFinalizationGeneration({ handle: retry.view.handle, artifact: f.artifactOf(receipt) })).toMatchObject({ success: true, applied: 1 })
+})
+
+it('#569 根的请求次数已用完时作者重试：报出 ROOT_BUDGET_EXHAUSTED，不另开运行', async () => {
+ const f = await splitEvidenceRun(undefined, [joined(false), joined(false), joined(false)])
+ f.dispatch.mockImplementation(async (_request, options) => {
+  options.onVisible({ kind: 'delta', text: JSON.stringify(joined(false)(f.characterId)) }); return { finishReason: 'stop', usage: null }
+ })
+ let handle = f.handle
+ for (let retry = 0; retry < 10; retry++) {
+  handle = f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: handle.runId }).view.handle
+  await f.owner.executeFinalizationGeneration({ handle }).catch(() => undefined)
+ }
+ expect(f.dispatch).toHaveBeenCalledTimes(f.result.run.ledger!.policy.maxPhysicalRequests)
+ const runs = () => f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()
+ const before = runs()
+ expect(() => f.owner.beginFinalizationGeneration({ slot: f.slot, modelId: 'synthetic', retryRunId: handle.runId })).toThrow('ROOT_BUDGET_EXHAUSTED')
+ expect(runs()).toBe(before)
+})
+
 it('#552 作者重试被截断（length）的章节要点：结果不能提交，另开运行重新请求', async () => {
  const f = await generated('chapter_notes', 'length')
  expect(() => f.owner.commitFinalizationGeneration(f.commitRequest)).toThrow()
