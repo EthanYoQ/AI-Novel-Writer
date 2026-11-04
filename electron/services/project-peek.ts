@@ -17,7 +17,7 @@ import type {
   ReadyProjectOverview,
 } from '../../src/shared/project-overview'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
-import { verifySchema } from '../migrations/runner'
+import { migrateSchema, verifySchema } from '../migrations/runner'
 import { CURRENT_DRAFT_STATUS_SQL } from '../../src/shared/draft-status'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 
@@ -25,6 +25,8 @@ const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 const UNAVAILABLE: ProjectOverview = Object.freeze({ state: 'unavailable' })
 const SQLITE_SUFFIXES = ['', '-wal', '-shm'] as const
+// 最近项目列表在正常打开升级之前就预览。M07（#564）之前的 schema 7 只在私有快照上迁到当前版本再统计，原库不动。
+const SNAPSHOT_UPGRADABLE_SCHEMA_VERSION = 7
 
 interface ManifestState {
   rootPath: string
@@ -298,6 +300,17 @@ function aggregateProject(
   })
 }
 
+/** 快照先按 v7 形态严格校验，再迁到当前版本；只写这份私有副本。 */
+function upgradeSnapshot(snapshotPath: string): void {
+  const database = new Database(snapshotPath, { fileMustExist: true })
+  try {
+    database.pragma('foreign_keys = ON')
+    const adapter = new SqliteSchemaAdapter(database)
+    verifySchema(adapter, getDesktopMigrationRegistry(), SNAPSHOT_UPGRADABLE_SCHEMA_VERSION)
+    migrateSchema(adapter, getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+  } finally { database.close() }
+}
+
 export class ProjectPeekService {
   private readonly scratchRoot: string
   private readonly newCapabilityId: () => string
@@ -397,6 +410,11 @@ export class ProjectPeekService {
         throw new Error('PROJECT_PEEK_SOURCE_CHANGED')
       }
       database = new Database(snapshotPath, { readonly: true, fileMustExist: true })
+      if (new SqliteSchemaAdapter(database).readUserVersion() === SNAPSHOT_UPGRADABLE_SCHEMA_VERSION) {
+        database.close()
+        upgradeSnapshot(snapshotPath)
+        database = new Database(snapshotPath, { readonly: true, fileMustExist: true })
+      }
       database.pragma('foreign_keys = ON')
       verifySchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), capability.expectedSchemaVersion)
       const physicalRevision = digest(JSON.stringify({

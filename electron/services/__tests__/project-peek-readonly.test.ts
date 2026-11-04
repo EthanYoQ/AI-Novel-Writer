@@ -187,6 +187,25 @@ describe('ProjectPeekService source-zero-write overview', { timeout: 20_000 }, (
     }
   })
 
+  // #564 M07 把库升到 8；最近项目列表在正常打开升级之前就预览，schema 7 的项目必须照常统计（合并前即如此）。
+  it('previews a schema-7 project by migrating only its private snapshot, leaving the source at 7', () => {
+    const f = fixture({ schemaVersion: 7, journalMode: 'wal' })
+    seedCore(f.database)
+    addChapter(f.database, 1, { blueprint: true, draft: true, review: true, finalized: true })
+    addChapter(f.database, 2, { draft: true })
+    const before = sourceState(f.databasePath)
+    const service = new ProjectPeekService({ scratchRoot: f.scratch })
+    const overview = service.peek(service.issueCapability(f.root)!.capabilityId)
+
+    ready(overview)
+    expect(overview).toMatchObject({ projectId: f.projectId, name: '雨夜来信', totalWords: 24, finalizedChapters: 1 })
+    expect(overview.stages.find(stage => stage.id === 'drafting')).toEqual({ id: 'drafting', status: 'in-progress', count: 2 })
+    expect(sourceState(f.databasePath)).toEqual(before)
+    expect(f.database.pragma('user_version', { simple: true })).toBe(7)
+    expect(fs.readdirSync(f.storage).sort()).toEqual(['project.db', 'project.db-shm', 'project.db-wal', 'project.json'])
+    expect(fs.readdirSync(f.scratch)).toEqual([])
+  })
+
   it('reports conservative counts and never marks one chapter as a completed multi-chapter plan', () => {
     const f = fixture()
     f.database.prepare("UPDATE project_core SET premise='前提', worldbuilding='世界观'").run()
