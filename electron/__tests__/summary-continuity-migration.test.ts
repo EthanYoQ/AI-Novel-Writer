@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { closeLegacyNormalizationFixture as closeProjectDatabase, getLegacyNormalizationFixtureDb as getProjectDb, openLegacyNormalizationFixture } from '../../test/helpers/legacy-baseline-fixture'
+import { createLiveRowViews } from '../../test/helpers/live-row-views'
 
 // Historical normalization regressions use an explicit fixture handle. Production
 // rejects these unqualified old roots; canonical activation is tested separately.
@@ -46,6 +47,7 @@ describe('summary continuity migration', () => {
     legacyDb.close()
 
     expect(() => openLegacyNormalizationFixture(projectRoot)).not.toThrow()
+    createLiveRowViews(getProjectDb()!)
     expect(getProjectDb()!.prepare('PRAGMA table_info(summary_snapshots)').all())
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'draft_id' }),
@@ -82,6 +84,7 @@ describe('summary continuity migration', () => {
     legacyDb.close()
 
     openLegacyNormalizationFixture(projectRoot)
+    createLiveRowViews(getProjectDb()!)
     const finalizedContent = 'A finalized author chapter.'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'migration-cascade-finalized',
