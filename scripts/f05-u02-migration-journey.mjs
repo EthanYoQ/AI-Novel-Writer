@@ -207,7 +207,7 @@ async function currentProjectState(name, roots, session, source) {
     assert.equal(manifest.storageFormat, 'ai-novel')
     const db = new Database(path.join(targetRoot, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
     try {
-      assert.equal(db.pragma('user_version', { simple: true }), 7)
+      assert.equal(db.pragma('user_version', { simple: true }), 8)
       assert.deepEqual(db.prepare('SELECT id,project_name FROM project_core').get(), { id: 'main', project_name: source.sourceName })
     } finally { db.close() }
     assert.equal(dbBody(targetRoot), initialBody)
