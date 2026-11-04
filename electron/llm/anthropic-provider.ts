@@ -11,7 +11,7 @@ const ANTHROPIC_VERSION = '2023-06-01'
  * 单个 SSE 事件允许保留的最大字符数（半行缓冲与 data 行合计共用此上限）。
  * 正常事件远小于该值；超过即视为异常或恶意端点，按无效流终止，避免内存被无限占住。
  */
-const MAX_STREAM_EVENT_CHARS = 4_000_000
+export const MAX_STREAM_EVENT_CHARS = 4_000_000
 
 export function resolveAnthropicMessagesUrl(baseUrl: string): string {
   const endpoint = new URL(baseUrl.trim())
@@ -268,6 +268,7 @@ export class AnthropicProvider implements ILLMProvider {
       let isThinking = false
       let lineBuffer = ''
       let dataLines: string[] = []
+      let eventChars = 0
       let sawMessageStop = false
       let finishReason: LLMFinishReason = 'unknown'
       let fatalError: string | null = null
@@ -403,6 +404,7 @@ export class AnthropicProvider implements ILLMProvider {
         if (line === '') {
           if (dataLines.length > 0) processEvent(dataLines.join('\n'))
           dataLines = []
+          eventChars = 0
           return
         }
         if (line.startsWith(':')) return
@@ -411,7 +413,9 @@ export class AnthropicProvider implements ILLMProvider {
         if (field !== 'data') return
         let value = colon === -1 ? '' : line.slice(colon + 1)
         if (value.startsWith(' ')) value = value.slice(1)
-        if (value.length + dataLines.reduce((sum, existing) => sum + existing.length, 0) > MAX_STREAM_EVENT_CHARS) {
+        // 每行多计一个字符：合并时的换行符，也让空 data 行同样计入上限。
+        eventChars += value.length + 1
+        if (eventChars > MAX_STREAM_EVENT_CHARS) {
           fatalError = 'LLM_STREAM_INVALID'
           return
         }

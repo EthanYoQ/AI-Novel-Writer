@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { AnthropicProvider, resolveAnthropicMessagesUrl } from '../anthropic-provider'
+import { AnthropicProvider, MAX_STREAM_EVENT_CHARS, resolveAnthropicMessagesUrl } from '../anthropic-provider'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 
 const model: ModelProfile = {
@@ -185,12 +185,13 @@ describe('AnthropicProvider', () => {
     const bytes = encoder.encode(full)
     // 切点一：第一处 \r 与 \n 之间。
     const cutCr = indexOfBytes(bytes, encoder.encode('\r\n')) + 1
-    // 切点二：后面某条 data 行的 JSON 中间。
-    const cutLine = indexOfBytes(bytes, encoder.encode('"stop_reason'), 200) + 3
-    // 切点三：「正」的 UTF-8 字节中间（E6 AD A3 的第二个字节后）。
+    // 切点二：「正」的 UTF-8 字节中间（E6 AD A3 的第二个字节后）。
     const cutText = indexOfBytes(bytes, encoder.encode('"text":"正')) + '"text":"\u6b63'.length + 1
-    const chunks = [bytes.slice(0, cutCr), bytes.slice(cutCr, cutLine), bytes.slice(cutLine, cutText), bytes.slice(cutText)]
-    expect(chunks.length).toBe(4)
+    // 切点三：其后 message_delta 的 data 行 JSON 中间。
+    const cutLine = indexOfBytes(bytes, encoder.encode('"stop_reason'), cutText) + 3
+    const chunks = [bytes.slice(0, cutCr), bytes.slice(cutCr, cutText), bytes.slice(cutText, cutLine), bytes.slice(cutLine)]
+    expect(Buffer.concat(chunks).equals(Buffer.from(bytes))).toBe(true)
+    expect(chunks.every(chunk => chunk.length > 0)).toBe(true)
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader(...chunks) } }))
 
     const onChunk = vi.fn()
@@ -208,11 +209,27 @@ describe('AnthropicProvider', () => {
 
   it('terminates as an invalid stream when a single line grows beyond the retention bound', async () => {
     // 一条不换行、超过上限的 data 行：解析器必须按无效流终止，而不是继续累积。
-    const oversized = `data: ${'x'.repeat(4_000_001)}\n\n`
+    const oversized = `data: ${'x'.repeat(MAX_STREAM_EVENT_CHARS + 1)}\n\n`
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
       ok: true,
       body: { getReader: () => sseReader(oversized.slice(0, 2_000_000), oversized.slice(2_000_000)) },
     }))
+
+    const onError = vi.fn()
+    const onDone = vi.fn()
+    await new AnthropicProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.7, maxTokens: 1024, signal: new AbortController().signal,
+      onChunk: vi.fn(), onDone, onError,
+    })
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith('LLM_STREAM_INVALID', undefined, undefined)
+  })
+
+  it('counts the line breaks between data lines toward the event bound', async () => {
+    // 合并后的事件 = 各 data 行 + 行间换行；空 data 行不占字符，却同样让事件变大、数组变长。
+    const lines = [`data: ${'x'.repeat(MAX_STREAM_EVENT_CHARS - 10)}`, ...Array.from({ length: 20 }, () => 'data:')]
+    const stream = `${lines.join('\n')}\n\n${anthropicEvent('message_stop')}`
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader(stream) } }))
 
     const onError = vi.fn()
     const onDone = vi.fn()
