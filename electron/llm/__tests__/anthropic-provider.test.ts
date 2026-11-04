@@ -16,11 +16,11 @@ const model: ModelProfile = {
   purposes: ['generation'],
 }
 
-function sseReader(...messages: string[]) {
+function sseReader(...messages: Array<string | Uint8Array>) {
   const encoder = new TextEncoder()
   const reads: Array<{ done: boolean; value?: Uint8Array }> = messages.map(message => ({
     done: false,
-    value: encoder.encode(message),
+    value: typeof message === 'string' ? encoder.encode(message) : message,
   }))
   reads.push({ done: true, value: undefined })
   return { read: vi.fn(async () => reads.shift()) }
@@ -28,6 +28,17 @@ function sseReader(...messages: string[]) {
 
 function anthropicEvent(type: string, payload: Record<string, unknown> = {}): string {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`
+}
+
+/** 当前 TS lib 的 Uint8Array.indexOf 不接受字节数组参数，这里手写一个朴素字节查找。 */
+function indexOfBytes(haystack: Uint8Array, needle: Uint8Array, from = 0): number {
+  outer: for (let i = Math.max(0, from); i + needle.length <= haystack.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer
+    }
+    return i
+  }
+  return -1
 }
 
 afterEach(() => {
@@ -160,6 +171,57 @@ describe('AnthropicProvider', () => {
     expect(onDone).toHaveBeenCalledWith('正文继续', { promptTokens: 15, completionTokens: 42, totalTokens: 57 }, 'stop')
     const body = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body))
     expect(body.stream).toBe(true)
+  })
+
+  it('parses events split across reads, including inside data lines, between CR and LF, and inside UTF-8 characters', async () => {
+    // 第一个事件用 CRLF 行终止符，正文里带多字节 UTF-8 字符，专门打解析边界。
+    const full = [
+      'event: message_start\r\ndata: {"type":"message_start","message":{"usage":{"input_tokens":11,"output_tokens":1}}}\r\n\r\n',
+      anthropicEvent('content_block_delta', { index: 1, delta: { type: 'text_delta', text: '正文' } }),
+      anthropicEvent('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 9 } }),
+      anthropicEvent('message_stop'),
+    ].join('')
+    const encoder = new TextEncoder()
+    const bytes = encoder.encode(full)
+    // 切点一：第一处 \r 与 \n 之间。
+    const cutCr = indexOfBytes(bytes, encoder.encode('\r\n')) + 1
+    // 切点二：后面某条 data 行的 JSON 中间。
+    const cutLine = indexOfBytes(bytes, encoder.encode('"stop_reason'), 200) + 3
+    // 切点三：「正」的 UTF-8 字节中间（E6 AD A3 的第二个字节后）。
+    const cutText = indexOfBytes(bytes, encoder.encode('"text":"正')) + '"text":"\u6b63'.length + 1
+    const chunks = [bytes.slice(0, cutCr), bytes.slice(cutCr, cutLine), bytes.slice(cutLine, cutText), bytes.slice(cutText)]
+    expect(chunks.length).toBe(4)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader(...chunks) } }))
+
+    const onChunk = vi.fn()
+    const onDone = vi.fn()
+    const onError = vi.fn()
+    await new AnthropicProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.7, maxTokens: 1024, signal: new AbortController().signal,
+      onChunk, onDone, onError,
+    })
+
+    expect(onError).not.toHaveBeenCalled()
+    expect(onChunk.mock.calls.map(call => call[0]).join('')).toBe('正文')
+    expect(onDone).toHaveBeenCalledWith('正文', { promptTokens: 11, completionTokens: 9, totalTokens: 20 }, 'stop')
+  })
+
+  it('terminates as an invalid stream when a single line grows beyond the retention bound', async () => {
+    // 一条不换行、超过上限的 data 行：解析器必须按无效流终止，而不是继续累积。
+    const oversized = `data: ${'x'.repeat(4_000_001)}\n\n`
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: true,
+      body: { getReader: () => sseReader(oversized.slice(0, 2_000_000), oversized.slice(2_000_000)) },
+    }))
+
+    const onError = vi.fn()
+    const onDone = vi.fn()
+    await new AnthropicProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.7, maxTokens: 1024, signal: new AbortController().signal,
+      onChunk: vi.fn(), onDone, onError,
+    })
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith('LLM_STREAM_INVALID', undefined, undefined)
   })
 
   it('delivers only visible content when the durable owner requires visibleOnly', async () => {

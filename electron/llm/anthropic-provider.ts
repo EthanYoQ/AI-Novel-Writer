@@ -7,6 +7,12 @@ import { providerFailureCode } from './provider-context-length'
 /** Anthropic Messages API 的稳定协议版本号。 */
 const ANTHROPIC_VERSION = '2023-06-01'
 
+/**
+ * 单个 SSE 事件允许保留的最大字符数（半行缓冲与 data 行合计共用此上限）。
+ * 正常事件远小于该值；超过即视为异常或恶意端点，按无效流终止，避免内存被无限占住。
+ */
+const MAX_STREAM_EVENT_CHARS = 4_000_000
+
 export function resolveAnthropicMessagesUrl(baseUrl: string): string {
   const endpoint = new URL(baseUrl.trim())
   let configuredPath = endpoint.pathname.replace(/\/+$/u, '')
@@ -93,6 +99,7 @@ function assertVisibleStreamEvent(value: unknown): void {
 }
 
 export class AnthropicProvider implements ILLMProvider {
+  /** 把 Anthropic 的 stop_reason 归一化为产品内部的完成原因。 */
   private normalizeStopReason(reason: string | null | undefined): LLMFinishReason {
     if (reason === 'end_turn' || reason === 'stop_sequence') return 'stop'
     if (reason === 'max_tokens') return 'length'
@@ -100,6 +107,7 @@ export class AnthropicProvider implements ILLMProvider {
     return 'unknown'
   }
 
+  /** 剥离网关在正文里内联输出的 <think> 段，与 OpenAI 兼容协议保持一致。 */
   private stripThinking(content: string): string {
     return content
       .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
@@ -121,6 +129,7 @@ export class AnthropicProvider implements ILLMProvider {
     }
   }
 
+  /** 组装 Messages 请求体：system 走顶层字段，max_tokens 必填，temperature 仅在有值时发送。 */
   private buildRequestBody(
     model: ModelProfile,
     messages: Array<{ role: string; content: string }>,
@@ -145,6 +154,7 @@ export class AnthropicProvider implements ILLMProvider {
     return body
   }
 
+  /** 非流式 Messages 调用：正文取 text 块，stop_reason 归一化，未到 end_turn 视为不完整。 */
   async generate(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMGenerateOptions): Promise<LLMResponse> {
     try {
       const url = resolveAnthropicMessagesUrl(model.baseUrl)
@@ -196,6 +206,7 @@ export class AnthropicProvider implements ILLMProvider {
     }
   }
 
+  /** 流式 Messages 调用：解析 SSE 事件流，思考与正文分流，收到 message_stop 才算完成。 */
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
     const transport = new StreamTransportDiagnostics(opts.onDiagnostics)
     let fullText = ''
@@ -272,8 +283,10 @@ export class AnthropicProvider implements ILLMProvider {
           if (opts.visibleOnly) assertVisibleStreamEvent(parsed)
         } catch (error) {
           if (!opts.visibleOnly) return
-          transport.errorCode(error instanceof Error && error.message === 'LLM_STREAM_PROVIDER_ERROR' ? 'PROVIDER_STREAM_ERROR' : 'STREAM_INVALID')
-          throw error
+          // 记下稳定错误码后走统一的 fatalError 失败路径，保住错误身份再交给下游处理。
+          fatalError = error instanceof Error && error.message === 'LLM_STREAM_PROVIDER_ERROR'
+            ? 'LLM_STREAM_PROVIDER_ERROR' : 'LLM_STREAM_INVALID'
+          return
         }
 
         if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -398,6 +411,10 @@ export class AnthropicProvider implements ILLMProvider {
         if (field !== 'data') return
         let value = colon === -1 ? '' : line.slice(colon + 1)
         if (value.startsWith(' ')) value = value.slice(1)
+        if (value.length + dataLines.reduce((sum, existing) => sum + existing.length, 0) > MAX_STREAM_EVENT_CHARS) {
+          fatalError = 'LLM_STREAM_INVALID'
+          return
+        }
         dataLines.push(value)
       }
 
@@ -417,6 +434,11 @@ export class AnthropicProvider implements ILLMProvider {
           if (fatalError || sawMessageStop) break
         }
         lineBuffer = lineBuffer.slice(consumed)
+        // 不换行的超长行（异常或恶意的 Anthropic 兼容端点）不能无限占住内存。
+        if (!fatalError && lineBuffer.length > MAX_STREAM_EVENT_CHARS) {
+          fatalError = 'LLM_STREAM_INVALID'
+          return
+        }
         if (final && !fatalError && !sawMessageStop) {
           if (lineBuffer) processLine(lineBuffer)
           lineBuffer = ''
