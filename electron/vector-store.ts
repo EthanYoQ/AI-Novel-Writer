@@ -222,6 +222,22 @@ async function getConnectionInternal(projectPath: string): Promise<lancedb.Conne
   return db
 }
 
+/**
+ * LanceDB 本地提交靠硬链接（object_store 的 LocalFileSystem），exFAT、FAT32 等卷建不了硬链接，每次提交都会失败（#571）。
+ * 只看能不能建成，不看错误码：同一种不支持在各平台、各种卷上报的码不一样。
+ */
+export function knowledgeStoreSupportsCommits(projectPath: string): boolean {
+  const source = path.join(getProjectDataRoot(projectPath), `.link-probe-${randomUUID()}`)
+  const link = `${source}.link`
+  fs.writeFileSync(source, '')
+  let linked = true
+  try { fs.linkSync(source, link) } catch { linked = false }
+  for (const file of linked ? [link, source] : [source]) {
+    try { fs.unlinkSync(file) } catch { /* 删不掉（例如杀毒软件正在扫描）只留下空文件，不该让导入失败。 */ }
+  }
+  return linked
+}
+
 /** 关闭指定项目的连接 */
 export function closeConnection(projectPath: string): void {
   assertKnowledgeSourceIdle(path.join(path.resolve(projectPath), CANONICAL_PROJECT_DIRECTORY))

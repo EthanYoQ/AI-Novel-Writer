@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { WorkflowContext } from '../../../../stores/workflow-store'
 import { buildFinalizePostProcessSteps, type FinalizePostProcessGeneration } from '../finalize-chapter.command'
 
-const PROJECT_PATH = 'C:\novels\A'
+const PROJECT_PATH = 'C:\\novels\\A'
 const SESSION = { projectId: 'A', leaseId: 'lease-A', projectPath: PROJECT_PATH }
 const generation: FinalizePostProcessGeneration = { complete: async () => { throw new Error('unused') } }
 

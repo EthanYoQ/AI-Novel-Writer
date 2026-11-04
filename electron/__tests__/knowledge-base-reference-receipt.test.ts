@@ -81,6 +81,17 @@ afterEach(() => {
 })
 
 describe('stable reference knowledge receipt', () => {
+  it('#571 reports an unsupported volume before writing a receipt or chunks', async () => {
+    const reference = authorizedReference('Reference on exFAT', 'exfat')
+    vi.spyOn(fs, 'linkSync').mockImplementation(() => { throw Object.assign(new Error('EISDIR'), { code: 'EISDIR' }) })
+
+    expect(await reference.import('Chapter 1.txt')).toMatchObject({ success: false, error: 'KNOWLEDGE_BASE_VOLUME_UNSUPPORTED' })
+    vi.restoreAllMocks()
+    expect(await listDocuments(projectPath)).toEqual([])
+    expect(await reference.import('Chapter 1.txt')).toMatchObject({ success: true })
+    reference.release()
+  })
+
   it('discards a delayed embedding result when its only import authority expires', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(1_000)

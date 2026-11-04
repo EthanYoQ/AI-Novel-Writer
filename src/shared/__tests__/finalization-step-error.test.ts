@@ -260,6 +260,7 @@ describe('#571 作品所在的磁盘不支持知识库的提交方式', () => {
     expect(enText).toMatch(/finalized chapter text is saved/u)
     expect(enText).toMatch(/NTFS/u)
     expect(enText).toMatch(/APFS/u)
+    expect(enText).not.toMatch(/\p{Script=Han}/u)
     for (const text of [zhText, enText]) expect(text).not.toMatch(/KNOWLEDGE_BASE|LanceError|os error|请点「重试」重新生成|Select Retry to generate/u)
   })
 

@@ -49,13 +49,14 @@ it('#571 作品所在的卷不支持硬链接：导入前就报登记码，不�
   expect(generateEmbeddings).not.toHaveBeenCalled()
   expect(listing(copiesDirectory(projectPath))).toEqual([])
   expect(listing(lanceDirectory(projectPath))).toEqual([])
+  expect(listing(getProjectDataRoot(projectPath)).filter(name => name.startsWith('.link-probe-'))).toEqual([])
 })
 
-it('#571 能建硬链接的卷照常导入，探测不在 lancedb 目录留下文件', async () => {
+it('#571 能建硬链接的卷照常导入，探测不在作品数据目录留下文件', async () => {
   const projectPath = workspace()
   const result = await importText('第一章正文', '第1章 雾钟.txt', projectPath, 'openai', { provider: 'openai', baseUrl: '', apiKey: '' })
 
   expect(result).toMatchObject({ success: true, chunkCount: 1 })
   expect(await listDocuments(projectPath)).toEqual([expect.objectContaining({ id: result.docId })])
-  expect(listing(lanceDirectory(projectPath)).filter(name => !name.endsWith('.lance'))).toEqual([])
+  expect(listing(getProjectDataRoot(projectPath)).filter(name => name.startsWith('.link-probe-'))).toEqual([])
 })
