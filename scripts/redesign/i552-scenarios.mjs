@@ -52,7 +52,8 @@ async function assignFinalization(page, modelId) {
   await page.locator('select[id$="-finalization"]').selectOption(modelId)
   await page.waitForFunction(value => {
     const element = [...document.querySelectorAll('label')].find(node => node.textContent === '定稿后处理')?.control
-    return element instanceof HTMLSelectElement && !element.disabled && element.value === value
+    // 下拉先显示新选择、再保存；aria-busy 结束才算真正存好。
+    return element instanceof HTMLSelectElement && !element.disabled && element.value === value && element.getAttribute('aria-busy') !== 'true'
   }, modelId, { timeout: 10_000 })
   await stage.closeSettings(page)
 }
