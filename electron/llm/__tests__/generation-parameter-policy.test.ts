@@ -156,6 +156,21 @@ describe('generation parameter policy', () => {
     },
   )
 
+  it.each([
+    ['claude-opus-5-5', undefined],
+    ['claude-opus-5', undefined],
+    ['claude-sonnet-5', undefined],
+    ['claude-opus-4-8', undefined],
+    ['claude-opus-4-7', undefined],
+    ['claude-opus-4-6', 0.7],
+    ['glm-5', 0.7],
+  ])('omits temperature for Anthropic-protocol %s only when the model rejects sampling parameters', (modelName, expected) => {
+    const resolved = resolveGenerationParameters({
+      ...openAIModel, provider: 'custom', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com', modelName, temperature: 0.7,
+    }, { maxTokens: 512 })
+    expect(resolved.temperature).toBe(expected)
+  })
+
   it('enforces the documented range for an official Kimi model without a fixed-temperature rule', () => {
     const unknownKimiModel = {
       ...openAIModel,

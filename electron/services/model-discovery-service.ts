@@ -238,7 +238,9 @@ export class ModelDiscoveryService {
             signal: abortController.signal,
             headers: {
               Accept: 'application/json',
+              // 与 AnthropicProvider 的生成请求同一套鉴权，只认 Bearer 的网关也能拉到列表。
               'x-api-key': model.apiKey,
+              Authorization: `Bearer ${model.apiKey}`,
               'anthropic-version': '2023-06-01',
             },
           },

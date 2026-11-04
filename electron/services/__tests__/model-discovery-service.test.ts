@@ -575,6 +575,23 @@ describe('ModelDiscoveryService', () => {
         profile({ provider: 'bigmodel-anthropic', protocol: 'anthropic', apiKey: credential, baseUrl: `${baseUrl}/api/anthropic`, purposes: ['embedding'] }))
       expect(embedding).toEqual({ success: false, errorCode: 'no_suitable_models' })
     })
+
+    it('Anthropic 协议的网关只认 Bearer 时，模型列表与生成用同一套鉴权', async () => {
+      const credential = crypto.randomUUID()
+      const baseUrl = await listen(createServer((request, response) => {
+        if (request.headers.authorization !== `Bearer ${credential}`) {
+          response.writeHead(401).end()
+          return
+        }
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ data: [{ id: 'glm-5' }], has_more: false }))
+      }))
+
+      const result = await new ModelDiscoveryService().discoverModels(profile({
+        provider: 'bigmodel-anthropic', protocol: 'anthropic', apiKey: credential, baseUrl,
+      }))
+      expect(values(result)).toEqual(['glm-5'])
+    })
   })
 
   it('refuses an endpoint that would place the saved credential in the request URL', async () => {
