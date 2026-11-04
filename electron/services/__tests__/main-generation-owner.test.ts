@@ -2608,6 +2608,53 @@ describe('main draft persistence and batch lineage', () => {
 
     expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
   })
+  it('reopens a finalized chapter after its automatic batch is cancelled mid-chapter, but not while the next chapter is still generating (#568)', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章'),(3,'第三章')")
+    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 3 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
+    const first = await generate(f, selection), saved = f.owner.commitDraft(first.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1, chapterTitle: '第一章', content: saved.content,
+      contentHash: saved.contentHash, contentRevision: 1, targetFileName: '第一章.txt' })
+    FinalizationRepository.markPublished('batch-final')
+    const post = PostProcessRepository.createRun({ triggerSourceType: 'chapter_finalize', triggerSourceId: '1', sourceLabel: '第一章',
+      finalizedSource: { finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1, contentHash: saved.contentHash },
+      steps: [{ key: 'kb_import', label: '知识库', critical: true }, { key: 'chapter_notes', label: '章节笔记', critical: true }] })
+    PostProcessRepository.markStepOk(post, 'kb_import')
+    PostProcessRepository.markStepOk(post, 'chapter_notes')
+    expect(f.owner.confirmBatchFinalization({ batchId: batch.batchId, chapterNumber: 1, finalizationId: 'batch-final' }).nextChapterNumber).toBe(2)
+
+    let started!: () => void
+    const dispatched = new Promise<void>(resolve => { started = resolve })
+    f.dispatch.mockImplementationOnce((_request, options) => new Promise((_resolve, reject) => {
+      started()
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
+    }))
+    const second = f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedFinalizedDraftIds: [saved.id] })
+    const execution = f.owner.execute({ handle: second.handle, invocationNonce: 'draft:2', task }).catch(error => error)
+    await dispatched
+    expect(() => reopenFinalizedChapter('project', { chapterNumber: 1 })).toThrow('CHAPTER_REOPEN_BATCH_UNFINISHED')
+
+    f.owner.cancel(second.handle)
+    await execution
+    expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
+    expect(DraftRepository.getMeta(saved.id)?.status).toBe('finalized')
+  })
+  it('refuses to reopen a chapter written by a paused batch', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1,
+      chapterTitle: '第一章', content: saved.content, contentHash: saved.contentHash, contentRevision: 1, targetFileName: '第一章.txt' })
+    f.owner.pause(generated.run.handle)
+
+    expect(() => reopenFinalizedChapter('project', { chapterNumber: 1 })).toThrow('CHAPTER_REOPEN_BATCH_UNFINISHED')
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+  })
   it.each(['draft_review', 'auto_finalize'] as const)('reads revised finalization without crediting the original %s batch', async mode => {
     const f = drafting()
     const batch = f.owner.beginBatch({ mode, range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
