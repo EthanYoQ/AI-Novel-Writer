@@ -64,10 +64,11 @@ export class GenerationDraftEffects {
   }
   unfinishedBatchChapters(projectId: string): ReadonlySet<number> {
     const { commits } = this.listedBatchCommits()
-    // 已取消或封存的批次再也续不上（续写只接受 active、paused 的根），它写过的章不必为续写锁住。
+    // 已取消、已封存或被阻断的批次再也续不上（续写只接受 active、paused 且未阻断的根），它写过的章不必为续写锁住。
     const roots = this.db.prepare(`SELECT r.run_id FROM generation_runs r JOIN generation_roots g ON g.root_action_id=r.root_action_id
       WHERE json_valid(r.binding_json) AND json_extract(r.binding_json,'$.sourceManifest.batchIntent') IS NOT NULL
-      AND COALESCE(CASE WHEN json_valid(g.action_json) THEN json_extract(g.action_json,'$.status') END,'') NOT IN ('cancelled','sealed')`)
+      AND COALESCE(CASE WHEN json_valid(g.action_json) THEN json_extract(g.action_json,'$.status') END,'') NOT IN ('cancelled','sealed')
+      AND g.blocked_code IS NULL`)
       .pluck().all() as string[]
     const chapters = new Set<number>()
     for (const batchId of roots) {
