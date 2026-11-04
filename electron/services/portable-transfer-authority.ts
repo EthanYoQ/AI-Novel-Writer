@@ -29,13 +29,16 @@ export interface PortableSummarySourceAuthority {
   projectionGeneration: number
 }
 
+/** 收据记的是导出时的 schema 版本。v7 时导入的作品升到 v8 后，原收据仍须可读（#564 M07）。 */
+const READABLE_SOURCE_SCHEMA_VERSIONS = [7, PORTABLE_SOURCE_SCHEMA_VERSION] as const
+
 export interface PortableTransferAuthority {
   version: 1
   receiptId: string
   originProjectId: string
   targetProjectId: string | null
   snapshotGeneration: string
-  sourceSchemaVersion: 7
+  sourceSchemaVersion: typeof READABLE_SOURCE_SCHEMA_VERSIONS[number]
   portableDatabaseSha256: string
   requiresRuntimeFreezeGuard: true
   finalizations: PortableFinalizationAuthority[]
@@ -118,7 +121,7 @@ export function parsePortableTransferAuthority(value: unknown): PortableTransfer
     'version', 'receiptId', 'originProjectId', 'targetProjectId', 'snapshotGeneration', 'sourceSchemaVersion',
     'portableDatabaseSha256', 'requiresRuntimeFreezeGuard', 'finalizations', 'summarySources',
   ])
-  if (source.version !== 1 || source.sourceSchemaVersion !== PORTABLE_SOURCE_SCHEMA_VERSION
+  if (source.version !== 1 || !(READABLE_SOURCE_SCHEMA_VERSIONS as readonly unknown[]).includes(source.sourceSchemaVersion)
     || source.requiresRuntimeFreezeGuard !== true || !Array.isArray(source.finalizations)
     || !Array.isArray(source.summarySources) || source.finalizations.length > MAX_RECORDS
     || source.summarySources.length > MAX_RECORDS) invalid()
@@ -131,7 +134,7 @@ export function parsePortableTransferAuthority(value: unknown): PortableTransfer
     originProjectId: uuid(source.originProjectId),
     targetProjectId: source.targetProjectId === null ? null : uuid(source.targetProjectId),
     snapshotGeneration: identifier(source.snapshotGeneration),
-    sourceSchemaVersion: PORTABLE_SOURCE_SCHEMA_VERSION,
+    sourceSchemaVersion: source.sourceSchemaVersion as PortableTransferAuthority['sourceSchemaVersion'],
     portableDatabaseSha256: hash(source.portableDatabaseSha256),
     requiresRuntimeFreezeGuard: true,
     finalizations,
