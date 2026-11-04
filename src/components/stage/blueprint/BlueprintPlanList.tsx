@@ -10,7 +10,6 @@ interface BlueprintPlanListProps {
   blueprints: readonly ChapterBlueprint[]
   rows: ReadonlyMap<number, ChapterRow>
   selectedIdx: number
-  /** 现在能开写的章（缺口段首与下一章），状态字加深。 */
   writableChapters: ReadonlySet<number>
   onSelect: (index: number) => void
 }

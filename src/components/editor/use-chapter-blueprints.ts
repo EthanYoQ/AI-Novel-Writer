@@ -123,7 +123,6 @@ export function useChapterBlueprints({
     && sameProjectSessionContext(currentProjectSession, dataProjectSession),
   )
   const dirty = dirtyChapterNumbers.size > 0
-  // 下一章接在最后一章定稿之后；缺口是删掉的或旧版误导入留下的空章，每段第一章也能写。
   const [nextWriteChapter, setNextWriteChapter] = useState<number | null>(null)
   const [chapterGaps, setChapterGaps] = useState<ChapterGap[]>([])
   const [authorityError, setAuthorityError] = useState<string | null>(null)
@@ -475,7 +474,6 @@ export function useChapterBlueprints({
     setSelectedChapter(chapterNumber)
   }
 
-  /** 新建空章节：接在下一章之后，不往缺口里填。 */
   const handleAddChapter = () => {
     const projectSession = currentProjectSessionForPath(projectKey)
     if (
@@ -624,7 +622,6 @@ export function useChapterBlueprints({
     navigate({ kind: 'chapter', chapterNumber: bp.chapterNumber, write: blueprintWritePrefill(bp) })
   }
 
-  /** 缺口章的蓝图也删掉了：在原位置补一张空白蓝图，保存后就能写这一章。 */
   const handleAddGapBlueprint = (chapterNumber: number) => {
     const projectSession = currentProjectSessionForPath(projectKey)
     if (

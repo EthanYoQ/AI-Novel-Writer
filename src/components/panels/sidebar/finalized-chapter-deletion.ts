@@ -48,7 +48,6 @@ function deletionSurfaceConfig(
   // 清理没做完时，在这一章的单章视图里提示重试。
   const retryWhere = '在这一章的页面里'
   const retryWhereEn = 'on this chapter’s page'
-  // 两个入口删的是同一份定稿，说明一致：先说保住了什么，再说代价，最后说只想改写时怎么办（#564）。
   const consequence = '后面章节的正文都会保留。删除后可以在原位置重写这一章，后面的章节也照常可写。\n删除后无法恢复。后面的章节可能依赖这一章的情节，删除或重写这一章后，后面的章节可能要改写，甚至全部重写。\n只想改写这一章，请取消，在这一章点「重新打开修改」；已有重开稿时点「打开重开稿」。'
   const consequenceEn = 'Later chapters keep their text. After deleting, you can rewrite this chapter in place, and later chapters stay writable.\nThis cannot be undone. Later chapters may depend on this chapter’s plot; after you delete or rewrite it, they may need revising, or even a full rewrite.\nTo rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter, or “Open reopened draft” if one already exists.'
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {

@@ -318,7 +318,6 @@ export class FinalizedDraftImportRepository {
       }
     })
 
-    // 导入只从下一章往后接，不往缺口里填；缺口章由作者在原位置重写。
     let candidateGap: number | undefined
     if (sequence.status !== 'invalid' && newChapterNumbers.length > 0) {
       const ordered = [...newChapterNumbers].sort((left, right) => left - right)

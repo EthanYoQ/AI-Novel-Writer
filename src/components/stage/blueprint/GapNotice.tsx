@@ -5,10 +5,6 @@ import { useLocaleStore } from '../../../stores/locale-store'
 import { Button } from '../../ui/Button'
 import { Notice } from '../../ui/Notice'
 
-/**
- * 定稿序列里的一段缺口。段首这一章可以直接写（后面的章照常可写）；它的蓝图也没了时先补一张。
- * 来历不明的缺口另给「清除误导入正文…」，放在次级位置。
- */
 export default function GapNotice({ gap, blueprint, onWrite, onAddBlueprint, clearAction }: {
   gap: ChapterGap
   blueprint: ChapterBlueprint | null
