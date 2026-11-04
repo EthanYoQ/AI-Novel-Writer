@@ -21,7 +21,7 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
     expect(scanLiveRowReads().map(read => `${read.file}:${read.line} ${read.table}`)).toEqual([])
   })
 
-  it('故意违规样本会被抓到，注释、写语句与 live_ 视图不算', () => {
+  it('故意违规样本会被抓到，注释、删除目标与 live_ 视图不算；写语句里的读子查询照抓', () => {
     const sample = [
       `const target = ${DRAFT_TARGET}`,
       `const catalog = ${CATALOG}`,
@@ -32,9 +32,13 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
       "db.prepare(`UPDATE drafts SET status = 'superseded' WHERE id IN (SELECT id FROM drafts)`)",
       "db.prepare('SELECT * FROM live_drafts d JOIN live_finalization_outbox o ON o.draft_id = d.id')",
       "const label = 'drafts'",
+      "db.prepare('INSERT INTO reviews (base_draft_id) SELECT id FROM summary_snapshots')",
+      "db.prepare('WITH doomed AS (SELECT id FROM drafts) DELETE FROM drafts WHERE id IN doomed')",
+      "db.exec('SELECT 1; DELETE FROM finalization_outbox')",
     ].join('\n')
     expect(scanSource(sample).map(read => `${read.line}:${read.table}`))
-      .toEqual(['1:drafts', '2:drafts', '2:finalization_outbox', '2:drafts', '3:summary_snapshots', '4:drafts'])
+      .toEqual(['1:drafts', '2:drafts', '2:finalization_outbox', '2:drafts', '3:summary_snapshots', '4:drafts',
+        '7:drafts', '10:summary_snapshots', '11:drafts'])
 
     const rewritten = rewriteSource(sample)
     expect(rewritten).toContain('FROM live_drafts d JOIN contents')
@@ -43,6 +47,9 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
     expect(rewritten).toContain('FROM live_summary_snapshots WHERE')
     expect(rewritten).toContain('FROM live_drafts AS drafts JOIN contents')
     expect(rewritten).toContain("'DELETE FROM drafts WHERE id = ?'")
+    expect(rewritten).toContain('WHERE id IN (SELECT id FROM live_drafts)')
+    expect(rewritten).toContain("'WITH doomed AS (SELECT id FROM live_drafts) DELETE FROM drafts WHERE id IN doomed'")
+    expect(rewritten).toContain("'SELECT 1; DELETE FROM finalization_outbox'")
     expect(scanSource(rewritten)).toEqual([])
     expect(rewriteSource(rewritten)).toBe(rewritten)
   })

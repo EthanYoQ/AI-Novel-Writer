@@ -33,7 +33,9 @@ export const LIVE_ROW_EXEMPT_TABLES = Object.freeze({
   review_cycle_merges: '只按 cycle_id 读，挂在 review_cycles 之下',
 })
 
-const WRITE_KEYWORDS = new Set(['INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'CREATE', 'DROP', 'ALTER', 'PRAGMA'])
+// DDL 整句跳过；INSERT/UPDATE/DELETE 里的读子查询照扫，只放过 DELETE FROM 的删除目标（视图不能写）。
+const DDL_KEYWORDS = new Set(['CREATE', 'DROP', 'ALTER', 'PRAGMA'])
+const DELETE_TARGET = /\bDELETE\s+$/i
 const CLAUSE_KEYWORDS = new Set(['WHERE', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'FULL', 'NATURAL', 'ON', 'USING',
   'ORDER', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'INDEXED', 'NOT'])
 const READ_PATTERN = new RegExp(`\\b(FROM|JOIN)(\\s+)(${LIVE_ROW_TABLES.join('|')})\\b`, 'gi')
@@ -63,16 +65,17 @@ function rewriteFor(table, after, statement) {
   return aliased || !qualified ? `live_${table}` : `live_${table} AS ${table}`
 }
 
-/** 列出一个源文件里读原表的位置。写语句（INSERT/UPDATE/DELETE 等）整句跳过，它们只能写原表。 */
+/** 列出一个源文件里读原表的位置。DDL 整句跳过；DELETE FROM 的目标是写，不算读。 */
 export function scanSource(text, fileName = 'source.ts') {
   const sourceFile = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
   const reads = []
   for (const statement of literalSegments(sourceFile)) {
     const keyword = /^[\s(]*([A-Za-z]+)/.exec(statement.text)?.[1]?.toUpperCase()
-    if (keyword && WRITE_KEYWORDS.has(keyword)) continue
+    if (keyword && DDL_KEYWORDS.has(keyword)) continue
     for (const segment of statement.segments) {
       const start = segment.getStart(sourceFile), raw = text.slice(start, segment.end)
       for (const match of raw.matchAll(READ_PATTERN)) {
+        if (DELETE_TARGET.test(raw.slice(0, match.index))) continue
         const tableOffset = start + match.index + match[1].length + match[2].length
         const table = match[3]
         reads.push({
