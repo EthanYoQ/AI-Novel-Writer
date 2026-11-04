@@ -17,6 +17,7 @@ import {
 } from '../../src/shared/draft-units'
 import { resolveManuscriptTarget } from '../services/manuscript-publisher'
 import { isReceiptedDraftStatus } from '../../src/shared/draft-status'
+import { nextDraftVersion } from './draft-version'
 
 interface ImportOperationRow {
   operation_id: string
@@ -439,9 +440,6 @@ export class FinalizedDraftImportRepository {
 
       const drafts: FinalizedDraftImportDraftReceipt[] = []
       for (const chapter of chapters) {
-        const versionRow = db.prepare(`
-          SELECT MAX(version) AS max_version FROM drafts WHERE chapter_number = ?
-        `).get(chapter.chapterNumber) as { max_version: number | null }
         const contentResult = db.prepare('INSERT INTO contents (body) VALUES (?)').run(chapter.content)
         const contentId = Number(contentResult.lastInsertRowid)
         const draftResult = db.prepare(`
@@ -449,7 +447,7 @@ export class FinalizedDraftImportRepository {
           VALUES (?, ?, 'finalized', 'write', ?, ?)
         `).run(
           chapter.chapterNumber,
-          (versionRow.max_version ?? 0) + 1,
+          nextDraftVersion(db, chapter.chapterNumber),
           contentId,
           chapter.wordCount,
         )

@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
+import { nextDraftVersion } from './draft-version'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 import { RECEIPTED_DRAFT_STATUS_SQL, WORKING_DRAFT_STATUS_SQL, isReceiptedDraftStatus, type DraftStatus } from '../../src/shared/draft-status'
 import { isOpenReopenDraft, reopenedFinal } from '../../src/shared/chapter-reopen'
@@ -374,10 +375,7 @@ export class DraftRepository {
             }
             assertChapterAcceptsNewDraft(db, params.chapterNumber, parsedDependencies.dependencies)
 
-            const row = db.prepare(`
-        SELECT MAX(version) as maxVer FROM drafts WHERE chapter_number = ?
-      `).get(params.chapterNumber) as { maxVer: number | null }
-            const version = (row.maxVer ?? 0) + 1
+            const version = nextDraftVersion(db, params.chapterNumber)
 
             const contentId = Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(params.content).lastInsertRowid)
             const result = db.prepare(`
@@ -486,11 +484,7 @@ export class DraftRepository {
         const db = getProjectDb()
         if (!db) return 1
 
-        const row = db.prepare(`
-      SELECT MAX(version) as maxVer FROM drafts WHERE chapter_number = ?
-    `).get(chapterNumber) as { maxVer: number | null }
-
-        return (row.maxVer ?? 0) + 1
+        return nextDraftVersion(db, chapterNumber)
     }
 
     /** 获取最大的已定稿章节号，如果没有则返回 0 */
