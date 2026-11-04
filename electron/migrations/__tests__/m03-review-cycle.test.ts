@@ -5,6 +5,7 @@ import { getProjectDb } from '../../database'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { ReviewCycleRepository } from '../../repositories/review-cycle-repository'
 import { initializeLegacyBaselineSchema } from '../baseline-schema'
+import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { M01_GENERATION_SQL } from '../m01-generation-runs'
 import { applyM03ReviewCycle, applyM06ReviewCycleMerge, canonicalM03FindingSetHash, createM03Migration,
   verifyM03ReviewCycle,
@@ -356,6 +357,7 @@ describe('M03 review cycle migration', () => {
         .run(start, start + excerpt.length, hash(excerpt), finding.problemText, finding.expectedText, evidenceHash)
       expect(verifyM03ReviewCycle(db)).toBe(true)
       db.transaction(() => applyM06ReviewCycleMerge(db))()
+      createLiveRowViews(db)
       vi.mocked(getProjectDb).mockReturnValue(db)
       const finalized = `${merged} 作者定稿。`
       FinalizationRepository.commit({ finalizationId: 'finalized-cycle-1', draftId: seeded.draftId,
