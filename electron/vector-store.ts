@@ -222,12 +222,15 @@ async function getConnectionInternal(projectPath: string): Promise<lancedb.Conne
   return db
 }
 
-/** 磁盘满、句柄用尽这类故障与卷支不支持硬链接无关，原样报出。 */
-const TRANSIENT_LINK_FAILURES = new Set(['ENOSPC', 'EDQUOT', 'EMFILE', 'ENFILE', 'EIO', 'EBUSY'])
+/**
+ * 能证明卷不支持硬链接的码。Windows 上 CreateHardLinkW 在 exFAT 报 ERROR_INVALID_FUNCTION，libuv 映射成 EISDIR，
+ * ERROR_NOT_SUPPORTED 映射成 ENOTSUP（win/error.c）；macOS 的 msdosfs 没有 link 操作，返回 ENOTSUP。
+ * 其余码（权限、磁盘满、句柄用尽等）与卷无关，原样报出，不引导作者搬书。
+ */
+const LINK_UNSUPPORTED_CODES = new Set(['EISDIR', 'ENOTSUP'])
 
 /**
  * LanceDB 本地提交靠硬链接（object_store 的 LocalFileSystem），exFAT、FAT32 等卷建不了硬链接，每次提交都会失败（#571）。
- * 不支持时各平台、各种卷报的码不一样（Windows exFAT 是 EISDIR，Linux 是 EPERM），所以除临时故障外都算不支持。
  * 探测文件放在 temp：备份导出不收它，删不掉留下来也不挡导出。
  */
 export function knowledgeStoreSupportsCommits(projectPath: string): boolean {
@@ -241,7 +244,7 @@ export function knowledgeStoreSupportsCommits(projectPath: string): boolean {
   for (const file of failure ? [source] : [link, source]) {
     try { fs.unlinkSync(file) } catch { /* 删不掉（例如杀毒软件正在扫描）只留下空文件，不该让导入失败。 */ }
   }
-  if (failure && TRANSIENT_LINK_FAILURES.has(failure.code ?? '')) throw failure
+  if (failure && !LINK_UNSUPPORTED_CODES.has(failure.code ?? '')) throw failure
   return !failure
 }
 
