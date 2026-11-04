@@ -276,7 +276,7 @@ describe('蓝图阶段', () => {
     const notice = page.getByText('Chapters 1–2 were deleted').element().closest('.pi-notice')
     expect(notice?.textContent).toContain('Write them one at a time from Chapter 1; each opens once the one before it is finalized.')
     expect(notice?.textContent).toContain('Chapter 1’s blueprint is gone too. Choose “Add chapter 1 blueprint”')
-    expect(notice?.textContent).not.toMatch(/Its blueprint/u)
+    expect(notice?.textContent).not.toContain('Its blueprint')
     await expect.element(page.getByRole('button', { name: 'Add chapter 1 blueprint' })).toBeVisible()
   })
 
