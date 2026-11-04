@@ -83,15 +83,15 @@ describe('分工模型设置页', () => {
     expect(row('finalization').textContent).toContain('批量写作的自动定稿')
   })
 
-  it('#552「定稿后处理」说明：重试与修复后处理按这里当前的选择重新生成，不再说沿用原来的模型', async () => {
+  it('#552「定稿后处理」说明：用卡片上真实的按钮名，重试按这里当时的选择重新生成，不再说沿用原来的模型', async () => {
     await mount()
-    expect(row('finalization').textContent).toContain('点「重试」或「修复后处理」重新生成的步骤，按这里当时的选择')
+    expect(row('finalization').textContent).toContain('点「重试」或「重试失败步骤」重新生成的步骤，按这里当时的选择')
     expect(row('finalization').textContent).not.toContain('修复和重试，沿用原来的模型')
     await act(async () => root?.unmount())
     host?.remove()
     useLocaleStore.setState({ locale: 'en-US' })
     await mount()
-    expect(row('finalization').textContent).toContain('steps you regenerate with Retry or Repair post-processing use the model selected here at that time')
+    expect(row('finalization').textContent).toContain('steps you regenerate with Retry or Retry failed steps use the model selected here at that time')
     expect(row('finalization').textContent).not.toMatch(/repairs or retries of steps that already ran keep their original model/u)
   })
 
