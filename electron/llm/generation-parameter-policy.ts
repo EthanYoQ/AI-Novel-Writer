@@ -114,7 +114,9 @@ export function resolveGenerationParameters(
   const limits = resolveGenerationCapabilityConstraints(model)
 
   return {
-    temperature: usesFixedKimiTemperature || rejectsSampling ? undefined : model.temperature,
+    temperature: usesFixedKimiTemperature || rejectsSampling ? undefined
+      // Anthropic Messages 的 temperature 文档范围是 0–1，设置页允许到 2。
+      : model.protocol === 'anthropic' ? Math.min(model.temperature, 1) : model.temperature,
     maxTokens: Math.min(request.maxTokens ?? Infinity, limits.userMaxOutputTokens ?? Infinity,
       limits.modelMaxOutputTokens ?? Infinity),
     ...(request.responseFormat ? { responseFormat: request.responseFormat } : {}),

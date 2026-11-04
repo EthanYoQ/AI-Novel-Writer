@@ -191,8 +191,8 @@ export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: Em
   // 纯生成模型（例如 DeepSeek 官方）没有嵌入接口，回退只会让每次写作前多一次注定失败的请求。
   // 旧档案可能没有 purposes 字段，此时保持原有回退行为，避免影响既有用户。
   if (!configuredEmbeddingModelId && Array.isArray(model.purposes) && !model.purposes.includes('embedding')) return null
-  // Anthropic Messages 协议只有对话端点；嵌入只支持 openai/gemini 两种协议。
-  if (model.protocol !== 'openai' && model.protocol !== 'gemini') return null
+  // Anthropic Messages 协议只有对话端点；旧档案没有 protocol 字段时仍按 OpenAI 兼容回退。
+  if (model.protocol === 'anthropic') return null
   return {
     protocol: model.protocol as 'openai' | 'gemini',
     // models.json 只经过宽松的迁移校验，旧档案可能缺这几个字段。

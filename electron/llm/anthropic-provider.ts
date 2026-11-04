@@ -286,8 +286,7 @@ export class AnthropicProvider implements ILLMProvider {
           parsed = JSON.parse(json)
           if (opts.visibleOnly) assertVisibleStreamEvent(parsed)
         } catch (error) {
-          if (!opts.visibleOnly) return
-          // 记下稳定错误码后走统一的 fatalError 失败路径，保住错误身份再交给下游处理。
+          // 与 OpenAI 兼容协议一致：坏事件在两种模式下都终止流，不能丢掉中间的正文后仍报完成。
           fatalError = error instanceof Error && error.message === 'LLM_STREAM_PROVIDER_ERROR'
             ? 'LLM_STREAM_PROVIDER_ERROR' : 'LLM_STREAM_INVALID'
           return

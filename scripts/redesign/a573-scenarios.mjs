@@ -44,8 +44,7 @@ export const A573_SCENARIOS = {
     await shoot('a573-embedding-form')
     assert.ok(embeddingOptions.includes('gemini'), `检索模型表单已打开：${embeddingOptions.join('、')}`)
     assert.ok(!embeddingOptions.includes('anthropic') && !embeddingOptions.includes('bigmodel-anthropic'), `检索模型表单不提供 Anthropic：${embeddingOptions.join('、')}`)
-    await page.keyboard.press('Escape')
-    await page.keyboard.press('Escape')
+    await stage.closeSettings(page)
 
     const before = fake.chats.length
     await chapterView.open(page, 3)

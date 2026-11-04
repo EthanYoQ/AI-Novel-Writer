@@ -171,6 +171,14 @@ describe('generation parameter policy', () => {
     expect(resolved.temperature).toBe(expected)
   })
 
+  it('caps an Anthropic-protocol temperature at the documented maximum of 1', () => {
+    const anthropic = { ...openAIModel, provider: 'bigmodel-anthropic' as const, protocol: 'anthropic' as const,
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic', modelName: 'glm-5' }
+    expect(resolveGenerationParameters({ ...anthropic, temperature: 1.5 }, { maxTokens: 512 }).temperature).toBe(1)
+    expect(resolveGenerationParameters({ ...anthropic, temperature: 0.4 }, { maxTokens: 512 }).temperature).toBe(0.4)
+    expect(resolveGenerationParameters({ ...openAIModel, temperature: 1.5 }, { maxTokens: 512 }).temperature).toBe(1.5)
+  })
+
   it('enforces the documented range for an official Kimi model without a fixed-temperature rule', () => {
     const unknownKimiModel = {
       ...openAIModel,

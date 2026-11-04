@@ -241,6 +241,26 @@ describe('AnthropicProvider', () => {
     expect(onError).toHaveBeenCalledWith('LLM_STREAM_INVALID', undefined, undefined)
   })
 
+  it('fails the stream instead of dropping a malformed event between text deltas', async () => {
+    const events = [
+      anthropicEvent('content_block_delta', { index: 0, delta: { type: 'text_delta', text: '前半' } }),
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_del\n\n',
+      anthropicEvent('content_block_delta', { index: 0, delta: { type: 'text_delta', text: '后半' } }),
+      anthropicEvent('message_delta', { delta: { stop_reason: 'end_turn' } }),
+      anthropicEvent('message_stop'),
+    ].join('')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader(events) } }))
+
+    const onError = vi.fn()
+    const onDone = vi.fn()
+    await new AnthropicProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.7, maxTokens: 1024, signal: new AbortController().signal,
+      onChunk: vi.fn(), onDone, onError,
+    })
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith('LLM_STREAM_INVALID', '前半', undefined)
+  })
+
   it('delivers only visible content when the durable owner requires visibleOnly', async () => {
     const events = [
       anthropicEvent('message_start', { message: { usage: { input_tokens: 15, output_tokens: 1 } } }),
