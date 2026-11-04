@@ -26,11 +26,11 @@ export const RAW_ROW_READERS = Object.freeze({
  */
 export const LIVE_ROW_EXEMPT_TABLES = Object.freeze({
   contents: '只按 id 读，id 取自 drafts、reviews、revisions 的行；本身没有章号与状态',
-  reviews: '只按 id 或 base_draft_id 定位，draft id 取自 live_drafts 的读取',
-  revisions: '只按 id 或 base_draft_id 定位，draft id 取自 live_drafts 的读取',
-  review_cycles: '只按 cycle、review、revision 的 id 定位，挂在 reviews 与 revisions 之下',
-  review_findings: '只按 cycle_id 定位，挂在 review_cycles 之下',
-  review_cycle_merges: '只按 cycle_id 定位，挂在 review_cycles 之下',
+  reviews: '按 id 或 base_draft_id 读；PR2 没有 deleted 行。db:review-get-full、review-get-latest、review-list 直接用渲染端给的 id，PR3 产生 deleted 行前必须按父稿是否在 live_drafts 拦住',
+  revisions: '按 id 或 base_draft_id 读；PR2 没有 deleted 行。db:revision-get-full、revision-list、revision-get-pending 直接用渲染端给的 id，PR3 产生 deleted 行前必须按父稿是否在 live_drafts 拦住',
+  review_cycles: '按 cycle、review、revision 的 id 读，挂在 reviews 与 revisions 之下；db:review-cycle-get 用渲染端给的 review id，随 reviews 一并在 PR3 拦住',
+  review_findings: '只按 cycle_id 读，挂在 review_cycles 之下',
+  review_cycle_merges: '只按 cycle_id 读，挂在 review_cycles 之下',
 })
 
 const WRITE_KEYWORDS = new Set(['INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'CREATE', 'DROP', 'ALTER', 'PRAGMA'])
