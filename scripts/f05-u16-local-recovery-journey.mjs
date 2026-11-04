@@ -288,12 +288,12 @@ async function main() {
     assert.match(await panel.getByRole('status').last().innerText(), new RegExp(localSha256))
     assert.equal(hash(originalDb), originalSha256, 'local export changed original project database')
     const localManifest = await archiveManifest(fs.readFileSync(localArchive))
-    assert.equal(localManifest.sourceSchemaVersion, 7)
+    assert.equal(localManifest.sourceSchemaVersion, 8)
     assert.equal(localManifest.originProjectId, created.projectId)
     assert.equal(localManifest.semanticCounts['table.review_cycle_merges'], 0)
     assert(localManifest.entries.some(entry => entry.path === 'project.db' && entry.disposition === 'portable-database'))
-    assert.equal(schemaVersion(originalDb), 7)
-    pass('v3-local-export', 'U16.A01', 'V3 native Save created a hash-matched schema-7 archive with M06 table projection and original DB intact')
+    assert.equal(schemaVersion(originalDb), 8)
+    pass('v3-local-export', 'U16.A01', 'V3 native Save created a hash-matched schema-8 archive with M06 table projection and original DB intact')
 
     currentStep = 'U16.A02'
     const localParent = path.join(profile.restored, 'local')
@@ -312,7 +312,7 @@ async function main() {
     const localCopy = path.join(localParent, `${name}-恢复副本`)
     assert(fs.existsSync(path.join(localCopy, '.ai-novel', 'project.db')))
     assert.equal(hash(originalDb), originalSha256, 'local restore changed original project database')
-    assert.equal(schemaVersion(path.join(localCopy, '.ai-novel', 'project.db')), 7)
+    assert.equal(schemaVersion(path.join(localCopy, '.ai-novel', 'project.db')), 8)
 
     if (localOnly) {
       currentStep = 'U16.A02-reopen-copy'
@@ -418,7 +418,7 @@ async function main() {
     await generationChoice.check()
     assert.equal(await panel.locator('input[name="restore-generation"]:checked').inputValue(), generationId)
     const remoteManifest = await archiveManifest(remoteArchive)
-    assert.equal(remoteManifest.sourceSchemaVersion, 7)
+    assert.equal(remoteManifest.sourceSchemaVersion, 8)
     assert.equal(remoteManifest.originProjectId, created.projectId)
 
     currentStep = 'U16.A08-cloud-restore'
@@ -439,12 +439,12 @@ async function main() {
     const deadline = Date.now() + 60_000
     while (!requiredDownloads.every(downloaded) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
     for (const file of requiredDownloads) assert(downloaded(file), `missing authorized download of ${file}`)
-    pass('v3-select-download-generation', 'U16.A07', 'V3 selected exact generation and independently downloaded authorized hash-linked completion, manifest and schema-7 archive')
+    pass('v3-select-download-generation', 'U16.A07', 'V3 selected exact generation and independently downloaded authorized hash-linked completion, manifest and schema-8 archive')
     await panel.getByRole('status').filter({ hasText: '云端世代已恢复为新副本' }).waitFor({ timeout: 60_000 })
     const cloudCopy = path.join(cloudParent, `${name}-恢复副本`)
     assert(fs.existsSync(path.join(cloudCopy, '.ai-novel', 'project.db')))
     assert.equal(hash(originalDb), beforeCloudRestoreSha256, 'cloud restore changed original project database')
-    assert.equal(schemaVersion(path.join(cloudCopy, '.ai-novel', 'project.db')), 7)
+    assert.equal(schemaVersion(path.join(cloudCopy, '.ai-novel', 'project.db')), 8)
 
     currentStep = 'U16.A08-reopen-copy'
     const firstPid = app.process()?.pid
