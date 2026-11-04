@@ -48,11 +48,14 @@ function deletionSurfaceConfig(
   // 清理没做完时，在这一章的单章视图里提示重试。
   const retryWhere = '在这一章的页面里'
   const retryWhereEn = 'on this chapter’s page'
+  // 删掉非末尾的定稿章会让定稿序列出现缺口，整本书停写（#564）。两个入口删的是同一份定稿，说明一致。
+  const consequence = '删除后无法恢复。如果这一章后面还有已定稿的章，删除后既补写不了这一章，也无法继续写后面的章节。\n只想改写这一章，请取消，在这一章点「重新打开修改」。'
+  const consequenceEn = 'This cannot be undone. If later chapters are already finalized, you will not be able to rewrite this chapter or keep writing later ones.\nTo rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter.'
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
       confirmation: text(
-        `确认删除 "${displayName}"？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；失败的投影清理可${retryWhere}重试。`,
-        `Delete “${displayName}”?\nThis removes the finalized fact and cleans its manuscript, knowledge, and post-processing projections. Failed cleanup can be retried ${retryWhereEn}.`,
+        `确认删除 "${displayName}"？\n${consequence}\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；失败的投影清理可${retryWhere}重试。`,
+        `Delete “${displayName}”?\n${consequenceEn}\nThis removes the finalized fact and cleans its manuscript, knowledge, and post-processing projections. Failed cleanup can be retried ${retryWhereEn}.`,
       ),
       confirmationTitle: text('删除这一稿', 'Delete draft'),
       success: text(`已删除 ${displayName}`, `Deleted ${displayName}`),
@@ -66,8 +69,8 @@ function deletionSurfaceConfig(
     },
     manuscript: {
       confirmation: text(
-        `确认删除正文「${displayName}」？\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；蓝图会保留。清理失败时可${retryWhere}重试。`,
-        `Delete manuscript “${displayName}”?\nThis removes the finalized fact and cleans its manuscript file, knowledge document, and post-processing projections. The blueprint is preserved, and failed cleanup can be retried ${retryWhereEn}.`,
+        `确认删除正文「${displayName}」？\n${consequence}\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；蓝图会保留。清理失败时可${retryWhere}重试。`,
+        `Delete manuscript “${displayName}”?\n${consequenceEn}\nThis removes the finalized fact and cleans its manuscript file, knowledge document, and post-processing projections. The blueprint is preserved, and failed cleanup can be retried ${retryWhereEn}.`,
       ),
       confirmationTitle: text('删除正文', 'Delete manuscript'),
       success: text(
