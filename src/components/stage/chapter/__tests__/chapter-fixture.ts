@@ -184,7 +184,7 @@ export function createChapterBackend() {
         return { success: true, impact }
       }
       case 'db:character-get-all': return [{ id: 1 }]
-      case 'db:draft-authority-sequence': return { status: 'continuous', lastChapterNumber: 2, nextChapterNumber: 3, duplicateChapterNumbers: [], authorityFingerprint: 'e'.repeat(64) }
+      case 'db:draft-authority-sequence': return { status: 'continuous', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [], duplicateChapterNumbers: [], authorityFingerprint: 'e'.repeat(64) }
       case 'db:draft-get-finalized': return { chapterNumber: Number(args[0]) }
       case 'db:draft-get-max-finalized-chapter': return Math.max(0, ...state.drafts.filter(draft => draft.status === 'finalized').map(draft => draft.chapterNumber))
       case 'db:continuity-list-before': return []

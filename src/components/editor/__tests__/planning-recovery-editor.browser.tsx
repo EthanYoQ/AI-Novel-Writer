@@ -84,7 +84,7 @@ beforeEach(() => {
     if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
     if (channel === 'db:character-roster-read') return { status: 'ready', renderedMarkdown: '沈砺', entries: [] }
     if (channel === 'db:character-get-all') return [{ id: 'character-1', name: '沈砺' }]
-    if (channel === 'db:draft-authority-sequence') return { status: 'empty', lastChapterNumber: 0, nextChapterNumber: 1, duplicateChapterNumbers: [], authorityFingerprint: 'a'.repeat(64) }
+    if (channel === 'db:draft-authority-sequence') return { status: 'empty', lastChapterNumber: 0, nextChapterNumber: 1, gaps: [], duplicateChapterNumbers: [], authorityFingerprint: 'a'.repeat(64) }
     if (channel === 'generation:restart') throw new Error('RESTART_BOUNDARY_OBSERVED')
     throw new Error(`Unexpected IPC ${channel}`)
   })

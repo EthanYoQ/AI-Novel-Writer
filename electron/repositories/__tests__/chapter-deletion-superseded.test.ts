@@ -144,3 +144,21 @@ describe('删除再定稿过的章节', () => {
     })
   })
 })
+
+describe('删掉中间一章之后（#564）', () => {
+  it('缺口记为删除，后面照常接着写；在原位置重写定稿后序列回到连续', async () => {
+    const first = write(1, '第一章定稿：雾钟。')
+    finalize(first, 'kb-1')
+    finalize(write(2, '第二章定稿：沉船。'), 'kb-2')
+    await new ChapterDeletionService({ cleaner: recordingCleaner().cleaner, createOperationId: () => 'delete-1' })
+      .delete(projectRoot, { draftId: first, chapterNumber: 1 })
+
+    const afterDelete = FinalizedDraftImportRepository.authoritySequence()
+    finalize(write(1, '第一章重写：钟声提前了一刻。'), 'kb-1-rewritten')
+
+    expect({ afterDelete, afterRewrite: FinalizedDraftImportRepository.authoritySequence() }).toMatchObject({
+      afterDelete: { status: 'gapped', nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'deleted' }] },
+      afterRewrite: { status: 'continuous', nextChapterNumber: 3, gaps: [] },
+    })
+  })
+})

@@ -56,17 +56,20 @@ describe('删除定稿失败时的说明', () => {
 })
 
 describe('删除定稿章前的确认说明（#564）', () => {
+  const zh = ['删除后可以在原位置重写这一章，后面的章节也照常可写', '删除后无法恢复', '后面的章节可能依赖这一章的情节，删除或重写这一章后，后面的章节可能要改写，甚至全部重写', '只想改写这一章，请取消，在这一章点「重新打开修改」', '已有重开稿时点「打开重开稿」']
+  const en = ['you can rewrite this chapter in place, and later chapters stay writable', 'This cannot be undone', 'Later chapters may depend on this chapter’s plot; after you delete or rewrite it, they may need revising, or even a full rewrite', 'To rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter', 'or “Open reopened draft” if one already exists']
   it.each([
-    ['zh-CN', 'manuscript', ['删除后无法恢复', '如果这一章后面还有已定稿的章，删除后既补写不了这一章，也无法继续写后面的章节', '只想改写这一章，请取消，在这一章点「重新打开修改」', '已有重开稿时点「打开重开稿」']],
-    ['zh-CN', 'draft', ['删除后无法恢复', '如果这一章后面还有已定稿的章，删除后既补写不了这一章，也无法继续写后面的章节', '只想改写这一章，请取消，在这一章点「重新打开修改」', '已有重开稿时点「打开重开稿」']],
-    ['en-US', 'manuscript', ['This cannot be undone', 'If later chapters are already finalized, you will not be able to rewrite this chapter or keep writing later ones', 'To rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter', 'or “Open reopened draft” if one already exists']],
-    ['en-US', 'draft', ['This cannot be undone', 'If later chapters are already finalized, you will not be able to rewrite this chapter or keep writing later ones', 'To rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter', 'or “Open reopened draft” if one already exists']],
-  ] as const)('%s 界面的 %s 入口：写明删后无法恢复、后面有定稿会写不下去、只想改写用重新打开修改；取消后不删', async (locale, surface, phrases) => {
+    ['zh-CN', 'manuscript', zh, '既补写不了这一章'],
+    ['zh-CN', 'draft', zh, '既补写不了这一章'],
+    ['en-US', 'manuscript', en, 'you will not be able to rewrite this chapter'],
+    ['en-US', 'draft', en, 'you will not be able to rewrite this chapter'],
+  ] as const)('%s 界面的 %s 入口：写明可在原位置重写、删后无法恢复、后面章节可能要重写、只想改写用重新打开修改；取消后不删', async (locale, surface, phrases, retired) => {
     useLocaleStore.setState({ locale })
     mocks.confirm.mockResolvedValueOnce(false)
     await deleteFinalizedChapter({ ...input, surface })
     const [message] = mocks.confirm.mock.calls[0] as unknown as [string]
     for (const phrase of phrases) expect(message).toContain(phrase)
+    expect(message).not.toContain(retired)
     expect(mocks.invoke).not.toHaveBeenCalled()
   })
 })

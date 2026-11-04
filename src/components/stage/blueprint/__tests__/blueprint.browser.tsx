@@ -3,7 +3,7 @@ import { page, userEvent } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
-import type { AuthoritativeChapterSequence } from '../../../../shared/author-manuscript-import'
+import type { AuthoritativeChapterSequence } from '../../../../shared/chapter-sequence'
 import type { ProjectData } from '../../../../shared/ipc-channels'
 import { globalEventBus } from '../../../../shared/event-bus'
 import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
@@ -53,7 +53,7 @@ function installIpc() {
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'db:blueprint-get-all') return stored
     if (channel === 'db:draft-authority-sequence') return authority ?? {
-      status: 'continuous', lastChapterNumber: nextChapter - 1, nextChapterNumber: nextChapter, duplicateChapterNumbers: [], authorityFingerprint: 'a'.repeat(64),
+      status: 'continuous', lastChapterNumber: nextChapter - 1, nextChapterNumber: nextChapter, gaps: [], duplicateChapterNumbers: [], authorityFingerprint: 'a'.repeat(64),
     }
     if (channel === 'generation:find-blueprint-recovery') return null
     if (channel === 'db:consistency-exemption-list') return []
@@ -173,18 +173,79 @@ describe('蓝图阶段', () => {
     expect(page.getByRole('complementary', { name: '章节规划' }).query()).toBeNull()
   })
 
-  it('删掉前面某章定稿正文后出现的缺口提示与清除确认都说明：这种情况请取消，清除会删掉全部草稿和定稿（#564）', async () => {
+  it('删掉第 1 章定稿后整本照常可写：缺口章与下一章都有写作入口，批量、生成蓝图、新建章节都可用（#564）', async () => {
     authority = {
-      status: 'invalid', lastChapterNumber: 2, firstGapChapterNumber: 1, duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+      status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    await renderPage()
+
+    await expect.element(page.getByRole('button', { name: '写第 3 章' })).toBeVisible()
+    const notice = page.getByText('第 1 章的正文已删除').element().closest('.pi-notice')
+    expect(notice?.textContent).toContain('后面的章节都还在，照常可写')
+    await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
+    expect(page.getByRole('button', { name: '清除误导入正文…' }).query()).toBeNull()
+    await expect.element(page.getByRole('button', { name: '批量创作' })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'AI 生成蓝图' })).toBeEnabled()
+    await act(async () => page.getByRole('button', { name: '更多蓝图操作' }).click())
+    await expect.element(page.getByRole('menuitem', { name: '新建章节' })).not.toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('写作请求落在缺口章时留给那一章的单章视图，落在写不了的章时丢掉（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    await renderPage()
+    await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
+
+    await act(async () => useStageStore.setState({ writeRequest: { session: SESSION, chapterNumber: 1 } }))
+    expect(useStageStore.getState().writeRequest).toMatchObject({ chapterNumber: 1 })
+    await act(async () => useStageStore.setState({ writeRequest: { session: SESSION, chapterNumber: 2 } }))
+    await vi.waitFor(() => expect(useStageStore.getState().writeRequest).toBeNull())
+  })
+
+  it('缺口章的蓝图也删了时，在原位置补一张空白蓝图（#564）', async () => {
+    stored = [blueprint(2, '北堤'), blueprint(3, '灯室')]
+    authority = {
+      status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    await renderPage()
+    expect(page.getByRole('button', { name: '写第 1 章' }).query()).toBeNull()
+
+    await act(async () => page.getByRole('button', { name: '补上第 1 章蓝图' }).click())
+
+    await expect.element(page.getByRole('region', { name: '第 1 章蓝图' })).toBeVisible()
+    expect([...document.querySelectorAll('.stage-bp-plan-no')].map(node => node.textContent)).toEqual(['1', '2', '3'])
+  })
+
+  it('没有删除记录的缺口也能写；清除误导入正文放在次级位置，确认框说明它清的是全书（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'unexplained' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
     }
     await renderPage()
     await expect.element(page.getByText('第 1 章还没写，后面却已有正文')).toBeVisible()
-    const notice = page.getByText('第 1 章还没写，后面却已有正文').element().closest('.pi-notice')
-    expect(notice?.textContent).toContain('如果是删掉了某一章的正文才出现这条提示，不要清除，清除会删掉全部草稿和定稿')
+    await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '写第 3 章' })).toBeVisible()
+    const clear = page.getByRole('button', { name: '清除误导入正文…' })
+    expect(clear.element().className).toContain('pi-btn--text')
 
-    await act(async () => page.getByRole('button', { name: '清除误导入正文…' }).click())
+    await act(async () => clear.click())
     const confirm = page.getByRole('dialog', { name: '清除误导入正文？' })
-    await expect.element(confirm).toHaveTextContent('如果是删掉了某一章的正文才出现这条提示，请取消，清除会删掉全部草稿和定稿，不只是那一章')
+    await expect.element(confirm).toHaveTextContent('清除的是全书所有章节的草稿、定稿、审稿和摘要，不只是缺的那一章')
+    await expect.element(confirm).toHaveTextContent('如果只是删掉了某一章，请取消，直接在原位置重写那一章')
+  })
+
+  it('同一章有两份定稿时仍停写并说明原因', async () => {
+    authority = {
+      status: 'invalid', lastChapterNumber: 2, gaps: [], duplicateChapterNumbers: [2], authorityFingerprint: 'b'.repeat(64),
+    }
+    await renderPage()
+    await expect.element(page.getByText('暂时无法确定下一章')).toBeVisible()
+    expect(page.getByRole('button', { name: /^写第 \d+ 章$/ }).query()).toBeNull()
+    await expect.element(page.getByRole('button', { name: 'AI 生成蓝图' })).toBeDisabled()
   })
 
   it('删除此章在单章的危险分组里，确认后只删这一章', async () => {
