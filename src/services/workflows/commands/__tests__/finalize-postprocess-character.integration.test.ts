@@ -1170,6 +1170,36 @@ it('#420 生成根被超时阻断后，重试记下额度用完的错误码，�
  expect(characterCalls).toBe(1)
 })
 
+it.each([
+ ['单步重试', ['character_cards']],
+ ['整卡重试', undefined],
+] as const)('#569 生成根超时被阻断、随后后处理被取消：%s在新根里重新请求并写入角色状态', async (_entry, stepKeys) => {
+ const content = 'The brass key changes hands.'
+ let characterCalls = 0
+ useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+  const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
+  if (!system.includes('character records')) { streamCallbacks.onDone?.('The handoff is complete.', undefined, 'stop'); return 'notes' }
+  if (++characterCalls === 1) { streamCallbacks.onError?.('synthetic stream interrupted'); return 'interrupted' }
+  streamCallbacks.onDone?.(modelFixtureResponse(JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })), undefined, 'stop')
+  return 'characters'
+ }) })
+ const initial = await command(content).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(initial.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: false } })
+ const slot = { source: { draftId: 7, finalizationId: 'finalization-7', chapterNumber: 2, contentHash: createHash('sha256').update(content, 'utf8').digest('hex') }, stepKey: 'character_cards' as const }
+ const handle = owner().readFinalizationGeneration({ slot })!.view.handle
+ getProjectDb()!.prepare("UPDATE generation_roots SET blocked_code='ROOT_BUDGET_EXHAUSTED' WHERE root_action_id=?").run(handle.rootActionId)
+ owner().cancelFinalizationGeneration({ handle })
+ const roots = () => getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get() as number
+ const before = roots()
+ const retried = await command(content, { onlyFailed: true, retryInvalidResult: true, ...(stepKeys ? { stepKeys } : {}) })
+  .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+ expect(retried.steps.character_cards.error).toBeUndefined()
+ expect(retried.steps.character_cards).toMatchObject({ ok: true })
+ expect(characterCalls).toBe(2)
+ expect(roots()).toBe(before + 1)
+ expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+})
+
 it('#420 断流后重试拿到坏 JSON 时，同一次点击里自动修正一次并成功', async () => {
  insertFinalizedDraft(7, 2)
  const replies = ['interrupted', 'not json', JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })]
