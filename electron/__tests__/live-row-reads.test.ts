@@ -65,6 +65,28 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
     expect(rewriteSource(rewritten)).toBe(rewritten)
   })
 
+  it('带引号或库名限定的原表读取同样被抓到并改写，删除目标照样不算', () => {
+    const sample = [
+      'db.prepare(\'SELECT * FROM "drafts" WHERE id = ?\')',
+      "db.prepare('SELECT * FROM main.drafts')",
+      'db.prepare(\'SELECT * FROM "main"."finalization_outbox"\')',
+      'db.prepare(\'SELECT 1 FROM [summary_snapshots] s JOIN `drafts` d ON d.id = s.draft_id\')',
+      'db.prepare(\'DELETE FROM "drafts" WHERE id = ?\')',
+      "db.prepare('DELETE FROM main.drafts WHERE id = ?')",
+      'db.prepare(\'SELECT * FROM "live_drafts" JOIN main.live_finalization_outbox o ON 1\')',
+    ].join('\n')
+    expect(scanSource(sample).map(read => `${read.line}:${read.table}`))
+      .toEqual(['1:drafts', '2:drafts', '3:finalization_outbox', '4:summary_snapshots', '4:drafts'])
+
+    const rewritten = rewriteSource(sample)
+    expect(rewritten).toContain('FROM "live_drafts" WHERE')
+    expect(rewritten).toContain('FROM main.live_drafts')
+    expect(rewritten).toContain('FROM "main"."live_finalization_outbox"')
+    expect(rewritten).toContain('FROM [live_summary_snapshots] s JOIN `live_drafts` d')
+    expect(rewritten).toContain('DELETE FROM "drafts" WHERE')
+    expect(scanSource(rewritten)).toEqual([])
+  })
+
   // CodeQL js/redos：删除目标前的空白、注释与字符串不能让扫描回溯爆炸。
   it('病态的空白、注释与字符串输入在限定时间内扫完', { timeout: 60_000 }, () => {
     for (const filler of ['\t'.repeat(30), `/*${'*//*'.repeat(5000)}*/`, '\t/* */'.repeat(5000), `'${"x''".repeat(30000)}'`]) {
