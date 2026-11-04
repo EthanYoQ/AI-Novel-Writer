@@ -5,9 +5,11 @@ import { useLocaleStore } from '../../../stores/locale-store'
 import { Button } from '../../ui/Button'
 import { Notice } from '../../ui/Notice'
 
-export default function GapNotice({ gap, blueprint, onWrite, onAddBlueprint, clearAction }: {
+export default function GapNotice({ gap, blueprint, unsaved, onWrite, onAddBlueprint, clearAction }: {
   gap: ChapterGap
   blueprint: ChapterBlueprint | null
+  /** 单章视图只读已保存的蓝图：这一章蓝图还没保存时不给写作入口。 */
+  unsaved: boolean
   onWrite: (blueprint: ChapterBlueprint) => void
   onAddBlueprint: (chapterNumber: number) => void
   clearAction?: ReactNode
@@ -24,7 +26,9 @@ export default function GapNotice({ gap, blueprint, onWrite, onAddBlueprint, cle
     ? text(`要从第 ${head} 章起逐章写，前一章定稿后才能写下一章。`,
         `Write them one at a time from Chapter ${head}; each opens once the one before it is finalized. `)
     : ''
-  const nextStep = order + (blueprint
+  const nextStep = order + (blueprint && unsaved
+    ? text(`先保存第 ${head} 章蓝图，再写这一章。`, `Save the chapter ${head} blueprint first, then write it.`)
+    : blueprint
     ? text(`点「${writeLabel}」在原位置重写。`, `Choose “${writeLabel}” to rewrite it in place.`)
     : text(
         `第 ${head} 章的蓝图也没有了，先点「${addLabel}」填好并保存，再写这一章。`,
@@ -34,7 +38,7 @@ export default function GapNotice({ gap, blueprint, onWrite, onAddBlueprint, cle
   const actions = (
     <>
       {blueprint
-        ? <Button variant="secondary" size="sm" onClick={() => onWrite(blueprint)}>{writeLabel}</Button>
+        ? !unsaved && <Button variant="secondary" size="sm" onClick={() => onWrite(blueprint)}>{writeLabel}</Button>
         : <Button variant="secondary" size="sm" onClick={() => onAddBlueprint(head)}>{addLabel}</Button>}
       {clearAction}
     </>

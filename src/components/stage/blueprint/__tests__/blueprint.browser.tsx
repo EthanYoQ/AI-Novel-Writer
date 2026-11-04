@@ -247,6 +247,12 @@ describe('蓝图阶段', () => {
 
     await expect.element(page.getByRole('region', { name: '第 1 章蓝图' })).toBeVisible()
     expect([...document.querySelectorAll('.stage-bp-plan-no')].map(node => node.textContent)).toEqual(['1', '2', '3'])
+    expect(page.getByRole('button', { name: '写第 1 章' }).query()).toBeNull()
+    expect(page.getByText(/先保存第 1 章蓝图，再写这一章/).query()).not.toBeNull()
+    expect(page.getByRole('button', { name: '补上第 1 章蓝图' }).query()).toBeNull()
+
+    await act(async () => page.getByRole('button', { name: '保存此章' }).click())
+    await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
   })
 
   it('缺的是连续几章时，提示按几章说，并点明只能先写段首那一章（#564）', async () => {

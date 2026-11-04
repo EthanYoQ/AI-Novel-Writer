@@ -175,6 +175,7 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
           key={gap.from}
           gap={gap}
           blueprint={plan.blueprints.find(blueprint => blueprint.chapterNumber === gap.from) ?? null}
+          unsaved={plan.unsavedChapterNumbers.has(gap.from)}
           onWrite={plan.writeChapter}
           onAddBlueprint={plan.addGapBlueprint}
           clearAction={gap === firstUnexplainedGap && (

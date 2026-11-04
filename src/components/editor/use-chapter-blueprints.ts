@@ -48,6 +48,8 @@ import { readWritableChapters } from '../../services/authoritative-chapter-seque
 import type { ChapterGap } from '../../shared/chapter-sequence'
 import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 
+const EMPTY_CHAPTER_NUMBERS: ReadonlySet<number> = new Set()
+
 function readDraftLedgerFromFixedTab() {
   return parseChapterCardDraftLedger(
     useEditorStore.getState().draftLedgers[CHAPTER_CARD_TAB_ID],
@@ -686,6 +688,7 @@ export function useChapterBlueprints({
     setSelectedIdx,
     selected,
     dirty: projectDataReady && dirty,
+    unsavedChapterNumbers: projectDataReady ? dirtyChapterNumbers : EMPTY_CHAPTER_NUMBERS,
     saving,
     saveOutcome,
     nextWriteChapter,
