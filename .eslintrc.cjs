@@ -20,7 +20,7 @@ module.exports = {
           paths: [{ name: '@lancedb/lancedb', allowTypeImports: true, message: '经 electron/lance-database.ts 打开 LanceDB，新表格式钉在那里。' }],
         }],
         'no-restricted-syntax': ['error', {
-          selector: "ImportExpression[source.value='@lancedb/lancedb']",
+          selector: "ImportExpression[source.value='@lancedb/lancedb'], CallExpression[arguments.0.value='@lancedb/lancedb']",
           message: '经 electron/lance-database.ts 打开 LanceDB，新表格式钉在那里。',
         }],
       },
