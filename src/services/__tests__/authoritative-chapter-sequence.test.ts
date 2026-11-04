@@ -52,6 +52,26 @@ describe('readWritableChapters', () => {
     )
   })
 
+  it.each([
+    ['a NaN next chapter', { nextChapterNumber: Number.NaN, gaps: [] }],
+    ['a zero next chapter', { nextChapterNumber: 0, gaps: [] }],
+    ['a fractional next chapter', { nextChapterNumber: 1.5, gaps: [] }],
+    ['a gap that starts at NaN', { nextChapterNumber: 10, gaps: [{ from: Number.NaN, to: 5, cause: 'deleted' }] }],
+    ['a gap that starts at 0', { nextChapterNumber: 10, gaps: [{ from: 0, to: 5, cause: 'deleted' }] }],
+    ['no gap list', { nextChapterNumber: 10 }],
+  ])('rejects a malformed sequence with %s as invalid authority instead of offering it', async (_label, fields) => {
+    installSequence({
+      status: 'gapped', lastChapterNumber: 9, duplicateChapterNumbers: [], authorityFingerprint: 'e'.repeat(64), ...fields,
+    })
+
+    await expect(readWritableChapters(PROJECT_SESSION, 'zh-CN')).rejects.toEqual(
+      expect.objectContaining<Partial<AuthoritativeChapterSequenceError>>({
+        code: 'AUTHORITATIVE_CHAPTER_SEQUENCE_INVALID',
+        message: expect.not.stringMatching(/重复/u),
+      }),
+    )
+  })
+
   it('rejects duplicate finalized authority with exact chapter numbers', async () => {
     installSequence({
       status: 'invalid',
