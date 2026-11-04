@@ -29,10 +29,13 @@ const KIMI_FIXED_TEMPERATURE_MODEL_PREFIXES = [
   'kimi-k2.5',
 ]
 
-// Claude Opus 4.7 起这些模型对 temperature/top_p/top_k 回 400（官方 Opus 5.5 迁移指南）。
+// 这些模型对非默认 temperature/top_p/top_k 回 400（官方 Thinking 文档「Sampling parameters」一节）。
 const CLAUDE_NO_SAMPLING_MODEL_PREFIXES = [
+  'claude-fable-5',
+  'claude-mythos',
   'claude-opus-5',
   'claude-sonnet-5',
+  'claude-haiku-5',
   'claude-opus-4-8',
   'claude-opus-4-7',
 ]
