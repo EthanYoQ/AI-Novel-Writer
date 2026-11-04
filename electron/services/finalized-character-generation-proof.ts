@@ -9,6 +9,14 @@ import type { GenerationAuthorInput } from '../../src/shared/generation-owner-co
 import type { SafeGenerationModelReceipt } from './generation-source-binding'
 import { GenerationRunRepository, textHash } from '../repositories/generation-run-repository'
 
+/** 坏 JSON 报合同码 FINALIZED_CHARACTER_UPDATES_INVALID，后处理面板据此给出说明；其他错误原样抛出。 */
+function parseCharacterArtifact(text: string, context: FinalizedCharacterContext) {
+  try { return parseFinalizedCharacterStateResponse(text, context) } catch (error) {
+    if (error instanceof SyntaxError) throw new Error('FINALIZED_CHARACTER_UPDATES_INVALID')
+    throw error
+  }
+}
+
 /** All generated values are read from the immutable artifact; the request carries references only. */
 export function proveFinalizedCharacterGeneration(db: Database.Database, runs: GenerationRunRepository,
   projectId: string, handle: MainGenerationRunHandle, reference: FinalizedCharacterArtifact) {
@@ -55,7 +63,7 @@ export function proveFinalizedCharacterGeneration(db: Database.Database, runs: G
     || textHash(artifact.text) !== reference.textHash || receipt.failureCode
     || !['settled', 'unknown'].includes(receipt.attempt.status) || receipt.result?.finishReason !== 'stop')
     throw new Error('CHARACTER_PROPOSAL_ARTIFACT_INVALID')
-  const response = parseFinalizedCharacterStateResponse(artifact.text, context)
+  const response = parseCharacterArtifact(artifact.text, context)
   const model = run.binding.sourceManifest.modelReceipt as SafeGenerationModelReceipt
   if (!model || !/^[a-f0-9]{64}$/u.test(model.modelRevision)) throw new Error('CHARACTER_PROPOSAL_PROVENANCE_REQUIRED')
   const sourceHandle = dedicated ? { ...currentHandle, epoch: context.epoch } : currentHandle
