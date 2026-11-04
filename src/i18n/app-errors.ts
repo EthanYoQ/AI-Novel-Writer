@@ -189,7 +189,8 @@ const ERROR_KEYS = {
   FINALIZED_CHARACTER_EVIDENCE_NOT_UNIQUE: 'error.characterStateResultInvalid',
   FINALIZED_CHARACTER_EVIDENCE_INVALID: 'error.characterStateResultInvalid',
   FINALIZED_CHARACTER_FIELD_INVALID: 'error.characterStateResultInvalid',
-  FINALIZED_CHARACTER_IDENTITY_REQUIRED: 'error.characterStateResultInvalid',
+  // 章节要点与角色状态提交都会抛，说明不只讲角色卡。
+  FINALIZED_CHARACTER_IDENTITY_REQUIRED: 'error.finalizedCharacterIdentityMismatch',
   FINALIZED_CHARACTER_DUPLICATE_ID: 'error.characterStateResultInvalid',
   FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT: 'error.characterStateChanged',
   // 角色名单、蓝图与剧情资料（#474 B2）：作者在角色页手工编辑、生成或修复名单时能照着处理的拒绝原因。

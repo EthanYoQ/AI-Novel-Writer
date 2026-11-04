@@ -38,7 +38,11 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; enMany?:
     zh: '正文定稿已保存，但角色卡没有自动更新：这个角色的当前状态里有字段已由后面章节的定稿更新过，或它记录的来源与现在的定稿对不上，为免旧内容覆盖较新的状态，本次没有写入。如果这个项目是从备份恢复的、失败发生在升级前，新版本打开项目时已修复来源记录，可以点「重试」；重试仍失败，或不属于这种情况时，请到角色页的「当前状态」查看这些字段，需要时直接手动修改。',
     en: "The finalized chapter text is saved, but the character card was not updated: some of this character's current state was already updated by a later finalized chapter, or its recorded source no longer matches the current finalized text, so nothing was written to avoid overwriting newer state. If this project was restored from a backup and the failure happened before you updated the app, opening the project in this version already repaired its source records, so you can select Retry. If Retry still fails, or this is not your case, open the character's Current state view, check those fields, and edit them by hand if needed." },
   // 模型连续几次的回答都不合角色状态的格式要求（#552）。重试另开一次运行，按现在「定稿后处理」的分工模型重新生成。
-  { code: /^FINALIZED_CHARACTER_(UPDATES_INVALID|UPDATE_INVALID|EVIDENCE_MISSING|EVIDENCE_NOT_UNIQUE|EVIDENCE_INVALID|FIELD_INVALID|IDENTITY_REQUIRED|DUPLICATE_ID)$/, retry: 'described',
+  // 章节要点与角色状态提交都会抛这个码，说明不能只讲角色卡。
+  { code: /^FINALIZED_CHARACTER_IDENTITY_REQUIRED$/, retry: 'described',
+    zh: '正文定稿已保存，但这一步没有完成：模型返回的结果里有角色对不上本章的角色名单（例如名字写错或有重名）。可以点「重试」重新生成；同一个模型反复失败时，可以先在设置的「分工模型」里给「定稿后处理」换一个模型，再点「重试」。',
+    en: "The finalized chapter text is saved, but this step did not finish: a character in the model's reply did not match this chapter's character list (for example, a misspelled or duplicate name). Select Retry to generate it again. If the same model keeps failing, choose another model for After finalizing in Models by stage, then select Retry." },
+  { code: /^FINALIZED_CHARACTER_(UPDATES_INVALID|UPDATE_INVALID|EVIDENCE_MISSING|EVIDENCE_NOT_UNIQUE|EVIDENCE_INVALID|FIELD_INVALID|DUPLICATE_ID)$/, retry: 'described',
     zh: '正文定稿已保存，但角色卡没有自动更新：模型连续几次返回的角色状态都不合要求的格式（例如引用的原文在正文里找不到）。可以点「重试」重新生成；同一个模型反复失败时，可以先在设置的「分工模型」里给「定稿后处理」换一个模型，再点「重试」。',
     en: "The finalized chapter text is saved, but the character cards were not updated: the model's character-state replies did not follow the required format several times in a row (for example, a quoted passage was not found in the chapter). Select Retry to generate them again. If the same model keeps failing, choose another model for After finalizing in Models by stage, then select Retry." },
   // 生成期间字段被作者或其他提交改过（#484）。重试沿用生成开始时冻结的角色状态，仍会拒写。
