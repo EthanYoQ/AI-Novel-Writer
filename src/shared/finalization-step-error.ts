@@ -62,6 +62,10 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; enMany?:
   { code: /^GENERATION_FINALIZATION_NOTES_CHANGED$/, retry: 'described',
     zh: '生成期间本章的「章节要点」被改动过（例如在章节蓝图里手动修改），为免覆盖这次改动，本次没有写入，角色状态更新也还没有进行。点「重试」会重新生成，并用新结果替换现在的章节要点；想保留这次改动就不要重试。',
     en: "This chapter's Chapter notes changed while this step was running (for example, they were edited on the chapter blueprint), so nothing was written to avoid overwriting that change, and the character state update has not run yet. Retry generates the notes again and replaces the current Chapter notes. To keep your change, don't retry." },
+  // 作品放在不支持硬链接的磁盘上，知识库每次提交都失败（#571）；搬到支持的磁盘后重试才有用。
+  { code: /^KNOWLEDGE_BASE_VOLUME_UNSUPPORTED$/, retry: 'described',
+    zh: '正文定稿已保存，但没能收进知识库：作品文件夹所在的磁盘不支持知识库要用的文件操作，常见于 exFAT、FAT32 格式的移动硬盘和 U 盘，留在这个磁盘上再点「重试」结果也一样。请退出书童，把整个作品文件夹移到 NTFS 格式的磁盘（Mac 上用 APFS 格式），打开新位置的作品后再点「重试」。',
+    en: "The finalized chapter text is saved, but it could not be added to the knowledge base: the drive holding this book's folder does not support a file operation the knowledge base needs. This is common on external drives and USB sticks formatted as exFAT or FAT32, and retrying on that drive gives the same result. Quit Pagekin, move the whole book folder to an NTFS drive (APFS on a Mac), open the book from its new location, then select Retry." },
   { code: /^GENERATION_FINALIZATION_PREDECESSOR_REQUIRED$/, retry: { after: 'chapter_notes' },
     zh: '需要先完成「章节剧情要点」。', en: 'Chapter plot notes must finish first.' },
   { code: /^FINALIZATION_REPLACED_KNOWLEDGE_IMPORT_REQUIRED$/, retry: { after: 'kb_import' },

@@ -578,3 +578,11 @@ node scripts/redesign/drive.mjs --scenario refs-timing --shell stage --out <目�
 | `reopen-refinalize` | 第 3 章定稿后重开第 2 章（`reopen-1-final-reopen-button`、`reopen-2-banner`），末尾加一句、直接修稿、全部用修稿合并后定稿。确认框预览「第 3 章写于这次修改之前，第 4–12 章只有蓝图」和状态来自后续章节的林岚（`reopen-3-finalize-preview`），后处理全部成功；本章顶部「第 2 章已修改」（`reopen-4-impact-notice`），第 3 章有「写于第 2 章修改之前」（`reopen-4b-later-chapter`），v1 标为已被替换的定稿（`reopen-5-superseded`）。点「知道了」后两处一起消失，导入时发布的旧正文文件已删；第 4 章照常能写；重启后不再提示。再重开替换一次（`reopen-6-second-replacement`）：预览含刚写的第 4 章，上一份定稿的知识库文档和正文文件在新的导入之后删掉，提示重新出现；库里 v1、v2 已被替换，v3 是权威定稿 | 驱动读库后的页面 | 是 | #516 |
 | `reopen-refinalize-edited-txt` | 第 3 章定稿后重开、改一句再放弃修改：版本、正文文件、知识库都和重开前一样，横幅消失（`reopen-7-discarded`）。手改它的正文文件后重开替换：「删除旧版本的正文文件」失败并写出保留的文件名，其余各步成功，旧知识库文档照常删除，手改的文件原样保留，新定稿另起带后缀的文件，本章仍可再重开（`reopen-8-edited-txt-kept`） | 后处理结果 | 是 | #516 |
 | `reopen-refinalize-cards-failed` | 第 3 章定稿后重开第 2 章、末尾加一句，角色状态请求改回非 JSON 再定稿：「角色状态更新」失败，本章顶部照样出现「第 2 章已修改」并列出第 3 章与第 4–12 章（`reopen-9-cards-failed-notice`）。影响列表随定稿完成事件重读，不靠角色状态那一步发的刷新 | 定稿后的本章 | 是 | #516 |
+
+## 作品放在不支持硬链接的磁盘上（#571）
+
+场景在 `scripts/redesign/f571-scenarios.mjs`。替身：驱动在主进程里替换 `fs.linkSync`，只让知识库导入前的硬链接探测（路径含 `.link-probe-`）失败，模拟 exFAT、FAT32 卷；LanceDB 的原生提交不经过 Node 的 fs，场景碰不到真实卷上的提交失败。`measured.probesAfterFinalize` 与 `probesTotal` 是主进程里探测失败的次数。
+
+| 名称 | 检查 | 截图停在 | 夹具模型 | 对应 |
+|---|---|---|---|---|
+| `f571-volume-unsupported` | 第 3 章定稿后「导入知识库」失败，中文说明以「正文定稿已保存，但没能收进知识库」开头，写明 exFAT、NTFS、APFS 与「重试」（`f571-volume-unsupported-zh`）；点「重试失败步骤」后又探测一次，说明不变；切到英文后说明是英文、不带汉字（`f571-volume-unsupported-en`）；两种语言都不显示 `LanceError`、`os error` 与错误码，这一行与整卡都有重试。去掉替身后点这一行的「Retry」，导入知识库完成，卡上 4 / 4、不再有「重试失败步骤」（`f571-volume-unsupported-retried`） | 重试成功后的定稿视图 | 是 | #571 |

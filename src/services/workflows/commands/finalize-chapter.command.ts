@@ -139,6 +139,8 @@ export function buildFinalizePostProcessSteps(
         contentFileName,
         _project.path,
       ) as { success: boolean; error?: string; chunkCount?: number; docId?: string }
+      const code = result.error ? finalizationStepErrorCode(result.error) : undefined
+      if (code) throw new Error(code)
       requireIpcSuccess(result, text('导入知识库', 'Import into knowledge base'))
       if (finalizedDraftId !== undefined) {
         if (!result.docId) throw new Error(workflowUiText(

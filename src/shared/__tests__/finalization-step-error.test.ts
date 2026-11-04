@@ -245,3 +245,37 @@ describe('重开再定稿后清理旧版本（ADR-0024）', () => {
     expect(describeFinalizationStepError(error, en)).toContain('“第1章 $& 与 $`.txt”')
   })
 })
+
+describe('#571 作品所在的磁盘不支持知识库的提交方式', () => {
+  const raw = "Error invoking remote method 'project-session:invoke': Error: KNOWLEDGE_BASE_VOLUME_UNSUPPORTED"
+
+  it('记成码；中英文说明正文已保存、原因与搬到哪种磁盘，不露原码，不追加「请点重试」', () => {
+    expect(finalizationStepErrorCode(raw)).toBe('KNOWLEDGE_BASE_VOLUME_UNSUPPORTED')
+    const zhText = describeFinalizationStepError(raw, zh), enText = describeFinalizationStepError(raw, en)
+    expect(zhText).toContain('正文定稿已保存')
+    expect(zhText).toMatch(/exFAT/u)
+    expect(zhText).toMatch(/NTFS/u)
+    expect(zhText).toMatch(/APFS/u)
+    expect(zhText).toContain('「重试」')
+    expect(enText).toMatch(/finalized chapter text is saved/u)
+    expect(enText).toMatch(/NTFS/u)
+    expect(enText).toMatch(/APFS/u)
+    expect(enText).not.toMatch(/\p{Script=Han}/u)
+    for (const text of [zhText, enText]) expect(text).not.toMatch(/KNOWLEDGE_BASE|LanceError|os error|请点「重试」重新生成|Select Retry to generate/u)
+  })
+
+  it('换到支持的磁盘后重试才有用：单步与整卡都还能重试', () => {
+    expect(planFinalizationRetry({ kb_import: failedStep(raw), chapter_notes: { ok: true }, character_cards: { ok: true } }))
+      .toMatchObject({ rows: new Set(['kb_import']), card: ['kb_import'] })
+  })
+
+  it('知识库页导入创作资料走同一个码，说明里没有定稿字样', () => {
+    for (const locale of ['zh-CN', 'en-US'] as const) {
+      const text = appErrorMessage(locale, new Error('KNOWLEDGE_BASE_VOLUME_UNSUPPORTED'))
+      expect(text).toMatch(/NTFS/u)
+      expect(text).not.toMatch(/KNOWLEDGE_BASE|定稿|finalized/u)
+    }
+  })
+})
+
+function failedStep(error: string) { return { ok: false, error } }
