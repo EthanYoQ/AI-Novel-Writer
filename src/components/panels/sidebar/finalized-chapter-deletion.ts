@@ -48,13 +48,13 @@ function deletionSurfaceConfig(
   // 清理没做完时，在这一章的单章视图里提示重试。
   const retryWhere = '在这一章的页面里'
   const retryWhereEn = 'on this chapter’s page'
-  const consequence = '后面章节的正文都会保留。删除后可以在原位置重写这一章，后面的章节也照常可写。\n删除后无法恢复。后面的章节可能依赖这一章的情节，删除或重写这一章后，后面的章节可能要改写，甚至全部重写。\n只想改写这一章，请取消，在这一章点「重新打开修改」；已有重开稿时点「打开重开稿」。'
-  const consequenceEn = 'Later chapters keep their text. After deleting, you can rewrite this chapter in place, and later chapters stay writable.\nThis cannot be undone. Later chapters may depend on this chapter’s plot; after you delete or rewrite it, they may need revising, or even a full rewrite.\nTo rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter, or “Open reopened draft” if one already exists.'
+  const consequence = '删除后无法恢复，后面的章节可能也要跟着改写。\n只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」。'
+  const consequenceEn = 'This cannot be undone, and later chapters may need rewriting too.\nTo change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”.'
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
       confirmation: text(
-        `确认删除 "${displayName}"？\n${consequence}\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；失败的投影清理可${retryWhere}重试。`,
-        `Delete “${displayName}”?\n${consequenceEn}\nThis removes the finalized fact and cleans its manuscript, knowledge, and post-processing projections. Failed cleanup can be retried ${retryWhereEn}.`,
+        `确认删除 "${displayName}"？\n${consequence}`,
+        `Delete “${displayName}”?\n${consequenceEn}`,
       ),
       confirmationTitle: text('删除这一稿', 'Delete draft'),
       success: text(`已删除 ${displayName}`, `Deleted ${displayName}`),
@@ -68,8 +68,8 @@ function deletionSurfaceConfig(
     },
     manuscript: {
       confirmation: text(
-        `确认删除正文「${displayName}」？\n${consequence}\n此操作会删除定稿事实，并清理实体稿、知识库和后处理投影；蓝图会保留。清理失败时可${retryWhere}重试。`,
-        `Delete manuscript “${displayName}”?\n${consequenceEn}\nThis removes the finalized fact and cleans its manuscript file, knowledge document, and post-processing projections. The blueprint is preserved, and failed cleanup can be retried ${retryWhereEn}.`,
+        `确认删除正文「${displayName}」？\n${consequence}`,
+        `Delete manuscript “${displayName}”?\n${consequenceEn}`,
       ),
       confirmationTitle: text('删除正文', 'Delete manuscript'),
       success: text(
