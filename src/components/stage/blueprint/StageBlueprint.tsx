@@ -177,8 +177,8 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
             </Button>
           )}
         >
-          {text('这可能是旧版「小说拆解与仿写」误导入的参考原文。不会自动清除任何内容。',
-            'This may be reference text imported by mistake by the old “Novel breakdown & imitation”. Nothing is cleared automatically.')}
+          {text('这可能是旧版「小说拆解与仿写」误导入的参考原文。如果是删掉了某一章的正文才出现这条提示，不要清除，清除会删掉全部草稿和定稿。不会自动清除任何内容。',
+            'This may be reference text imported by mistake by the old “Novel breakdown & imitation”. If this appeared after you deleted a chapter’s manuscript, do not clear: clearing deletes every draft and finalized chapter. Nothing is cleared automatically.')}
         </Notice>
       )}
 
@@ -277,8 +277,8 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
         open={ask?.kind === 'legacy'}
         onOpenChange={open => { if (!open) setAsk(null) }}
         title={text('清除误导入正文？', 'Clear incorrectly imported text?')}
-        consequence={text('将永久清除草稿、定稿、审稿和摘要等正文产物；角色、故事架构、章节蓝图与知识库会保留。只是缺下一章蓝图时，请取消并先补蓝图。',
-          'Drafts, final manuscript text, reviews and summaries are permanently cleared. Characters, story architecture, chapter blueprints and the knowledge base are kept. If only the next blueprint is missing, cancel and add it first.')}
+        consequence={text('将永久清除草稿、定稿、审稿和摘要等正文产物；角色、故事架构、章节蓝图与知识库会保留。如果是删掉了某一章的正文才出现这条提示，请取消，清除会删掉全部草稿和定稿，不只是那一章。只是缺下一章蓝图时，请取消并先补蓝图。',
+          'Drafts, final manuscript text, reviews and summaries are permanently cleared. Characters, story architecture, chapter blueprints and the knowledge base are kept. If this appeared after you deleted a chapter’s manuscript, cancel: clearing deletes every draft and finalized chapter, not just that one. If only the next blueprint is missing, cancel and add it first.')}
         recoverability={text('清除后无法恢复。', 'This cannot be undone.')}
         confirmLabel={text('清除误导入正文', 'Clear imported text')}
         cancelLabel={text('取消', 'Cancel')}
