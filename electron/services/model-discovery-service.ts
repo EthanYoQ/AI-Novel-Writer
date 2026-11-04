@@ -62,6 +62,25 @@ function resolveGeminiModelsUrl(baseUrl: string): string {
   return endpoint.toString()
 }
 
+/** Anthropic Models API：GET {base}/v1/models，默认每页 20 条，显式放宽到接口上限。 */
+function resolveAnthropicModelsUrl(baseUrl: string): string {
+  const endpoint = new URL(baseUrl.trim())
+  let configuredPath = endpoint.pathname.replace(/\/+$/u, '')
+
+  if (configuredPath.endsWith('/v1/messages')) {
+    configuredPath = configuredPath.slice(0, -'/messages'.length)
+  } else if (configuredPath.endsWith('/messages')) {
+    configuredPath = configuredPath.slice(0, -'/messages'.length)
+  }
+  if (!configuredPath.endsWith('/v1')) configuredPath = `${configuredPath}/v1`
+  endpoint.pathname = `${configuredPath}/models`
+  endpoint.search = 'limit=1000'
+  endpoint.hash = ''
+  endpoint.username = ''
+  endpoint.password = ''
+  return endpoint.toString()
+}
+
 function safeProviderText(value: unknown, credential: string): string | null {
   if (typeof value !== 'string') return null
   if (Buffer.byteLength(value, 'utf8') > MAX_DISCOVERED_MODEL_TEXT_BYTES) return null
@@ -165,6 +184,30 @@ function parseGeminiModels(payload: unknown, credential: string, purpose: Discov
   return { models, listed: seenValues.size }
 }
 
+/** Anthropic Models 的返回形如 {data: [{id, display_name}]}；只认声明过的文本字段。 */
+function parseAnthropicModels(payload: unknown, credential: string): { models: DiscoveredModel[], listed: number } | null {
+  if (!payload || typeof payload !== 'object' || !Array.isArray((payload as { data?: unknown }).data)) {
+    return null
+  }
+
+  const entries = (payload as { data: unknown[] }).data
+  if (entries.length > MAX_DISCOVERED_MODEL_ENTRIES) return null
+  const models: DiscoveredModel[] = []
+  const seenValues = new Set<string>()
+  for (const item of entries) {
+    if (!item || typeof item !== 'object') return null
+    const id = safeProviderText((item as { id?: unknown }).id, credential)
+    if (!id) return null
+    const providerName = (item as { display_name?: unknown }).display_name
+    const name = providerName === undefined ? id : safeProviderText(providerName, credential)
+    if (!name) return null
+    if (seenValues.has(id)) continue
+    seenValues.add(id)
+    models.push({ id, name, value: id })
+  }
+  return { models, listed: seenValues.size }
+}
+
 /**
  * Main-process model discovery boundary. The current form reaches this trusted
  * boundary without being saved, and provider details are reduced to a fixed result.
@@ -182,6 +225,42 @@ export class ModelDiscoveryService {
     const timeout = setTimeout(() => abortController.abort(), timeoutMs)
 
     try {
+      if (model.protocol === 'anthropic') {
+        const requestUrl = resolveAnthropicModelsUrl(model.baseUrl)
+        if (urlContainsCredential(requestUrl, model.apiKey)) {
+          return { success: false, errorCode: 'invalid_response' }
+        }
+        const response = await (this.dependencies.fetchImpl ?? fetch)(
+          requestUrl,
+          {
+            method: 'GET',
+            redirect: 'error',
+            signal: abortController.signal,
+            headers: {
+              Accept: 'application/json',
+              'x-api-key': model.apiKey,
+              'anthropic-version': '2023-06-01',
+            },
+          },
+        )
+        if (!response.ok) return classifyHttpFailure(response.status)
+
+        let payload: unknown
+        try {
+          payload = await response.json()
+        } catch {
+          return abortController.signal.aborted
+            ? { success: false, errorCode: 'network' }
+            : { success: false, errorCode: 'invalid_response' }
+        }
+        const parsed = parseAnthropicModels(payload, model.apiKey)
+        if (!parsed) return { success: false, errorCode: 'invalid_response' }
+        if (parsed.listed === 0) return { success: false, errorCode: 'no_models' }
+        // Anthropic Messages 协议没有嵌入端点；列出的都是对话模型。
+        if (purpose === 'embedding') return { success: false, errorCode: 'no_suitable_models' }
+        return { success: true, models: parsed.models }
+      }
+
       if (model.protocol === 'gemini') {
         const requestUrl = resolveGeminiModelsUrl(model.baseUrl)
         if (urlContainsCredential(requestUrl, model.apiKey)) {

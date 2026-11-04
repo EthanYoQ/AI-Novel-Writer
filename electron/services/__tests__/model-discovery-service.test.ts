@@ -538,6 +538,43 @@ describe('ModelDiscoveryService', () => {
       const generation = await service.discoverModels(profile({ baseUrl: 'https://example.test/v1', purposes: ['generation'] }))
       expect(values(generation)).toEqual(['Qwen/Qwen3.8-27B', 'BAAI/bge-m3', 'deepseek-v4-flash', 'Qwen/Qwen3-Embedding-8B'])
     })
+
+    it('Anthropic 协议拉取官方模型列表，向量用途直接判为无合适模型', async () => {
+      const credential = crypto.randomUUID()
+      let requestUrl = ''
+      let apiKeyHeader = ''
+      let versionHeader = ''
+      const baseUrl = await listen(createServer((request, response) => {
+        requestUrl = request.url ?? ''
+        apiKeyHeader = String(request.headers['x-api-key'] ?? '')
+        versionHeader = String(request.headers['anthropic-version'] ?? '')
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({
+          data: [
+            { id: 'claude-opus-4-6', display_name: 'Claude Opus 4.6' },
+            { id: 'glm-4.6' },
+          ],
+          has_more: false,
+        }))
+      }))
+      const anthropic = profile({
+        provider: 'bigmodel-anthropic', protocol: 'anthropic',
+        apiKey: credential, baseUrl: `${baseUrl}/api/anthropic`,
+      })
+
+      const generation = await new ModelDiscoveryService().discoverModels(anthropic)
+      expect(requestUrl).toBe('/api/anthropic/v1/models?limit=1000')
+      expect(requestUrl).not.toContain(credential)
+      expect(apiKeyHeader).toBe(credential)
+      expect(versionHeader).toBe('2023-06-01')
+      expect(values(generation)).toEqual(['claude-opus-4-6', 'glm-4.6'])
+      if (!generation.success) throw new Error('Expected discovered models')
+      expect(generation.models[0].name).toBe('Claude Opus 4.6')
+
+      const embedding = await new ModelDiscoveryService().discoverModels(
+        profile({ provider: 'bigmodel-anthropic', protocol: 'anthropic', apiKey: credential, baseUrl: `${baseUrl}/api/anthropic`, purposes: ['embedding'] }))
+      expect(embedding).toEqual({ success: false, errorCode: 'no_suitable_models' })
+    })
   })
 
   it('refuses an endpoint that would place the saved credential in the request URL', async () => {

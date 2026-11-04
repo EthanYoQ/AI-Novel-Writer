@@ -824,8 +824,8 @@ export interface TokenUsage {
 export interface ModelProfile {
   id: string
   name: string
-  provider: 'openai' | 'gemini' | 'deepseek' | 'ollama' | 'bigmodel' | 'novelai' | 'xai' | 'siliconflow' | 'custom'
-  protocol: 'openai' | 'gemini'
+  provider: 'openai' | 'gemini' | 'deepseek' | 'ollama' | 'bigmodel' | 'bigmodel-anthropic' | 'novelai' | 'xai' | 'siliconflow' | 'custom'
+  protocol: 'openai' | 'gemini' | 'anthropic'
   modelName: string
   apiKey: string
   baseUrl: string
