@@ -280,6 +280,39 @@ describe('写作此章弹层', () => {
     await expect.element(dialog.getByRole('button', { name: '开始写 1 章' })).toBeEnabled()
   })
 
+  it('批量开写时定稿序列已失效：只说明重复定稿，不再留着之前的缺口提示（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [{ from: 2, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'f'.repeat(64),
+    }
+    await render(<BatchWriteDialog isOpen startChapterNumber={5} onClose={vi.fn()} />)
+    const dialog = page.getByRole('dialog', { name: '批量创作' })
+    await expect.element(dialog).toHaveTextContent('批量只往后写')
+
+    authority = { status: 'invalid', lastChapterNumber: 4, gaps: [], duplicateChapterNumbers: [4], authorityFingerprint: 'f'.repeat(64) }
+    await act(async () => dialog.getByRole('button', { name: '开始写 1 章' }).click())
+
+    await expect.element(dialog).toHaveTextContent('权威定稿的第 4 章存在重复记录')
+    expect(dialog.element().textContent).not.toContain('批量只往后写')
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('批量对话框重新读取定稿序列失败时，不再留着之前的缺口提示（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [{ from: 2, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'f'.repeat(64),
+    }
+    await render(<BatchWriteDialog isOpen startChapterNumber={5} onClose={vi.fn()} />)
+    await expect.element(page.getByRole('dialog', { name: '批量创作' })).toHaveTextContent('批量只往后写')
+
+    authority = { status: 'invalid', lastChapterNumber: 4, gaps: [], duplicateChapterNumbers: [4], authorityFingerprint: 'f'.repeat(64) }
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+
+    const dialog = page.getByRole('dialog', { name: 'Batch write' })
+    await expect.element(dialog).toHaveTextContent('Finalized authority has duplicate records for Chapters 4')
+    expect(dialog.element().textContent).not.toContain('Batch writing only continues forward')
+  })
+
   it('弹层只有本次模型、作者微操指导与折叠的更多，不重复蓝图字段', async () => {
     await render(<WriteChapterPopover chapterNumber={5} blueprint={blueprintWritePrefill(BLUEPRINT)} label="写第 5 章" />)
     await act(async () => page.getByRole('button', { name: '本次写作选项' }).click())
