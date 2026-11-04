@@ -1256,7 +1256,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (!request || Object.keys(request).some(key => !['slot', 'modelId', 'parentRootActionId', 'retryRunId'].includes(key))) throw new Error('GENERATION_FINALIZATION_SLOT_INVALID')
       const { slot } = request, prior = finalizations.find(slot)
       // 作者重试没有可提交结果的运行：在同一 root 另开运行，用作者现在选的模型，修正次数与首跑相同。
-      const authorRetry = prior !== undefined && request.retryRunId === prior.runId && finalizationRetriesWithNewRun(prior)
+      const explicitRetry = prior !== undefined && request.retryRunId === prior.runId
+      const authorRetry = explicitRetry && finalizationRetriesWithNewRun(prior)
       if (prior && !authorRetry && !finalizations.retryable(prior)) return finalizationRecovery(prior)
       // 根已被阻断或用完时间预算时，新运行也发不出请求，直接报出原因。
       const priorBudget = authorRetry ? repository.budget(prior.rootActionId) : undefined
@@ -1265,7 +1266,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const sibling = finalizations.find({ source: slot.source, stepKey: slot.stepKey === 'chapter_notes' ? 'character_cards' : 'chapter_notes' })
       const predecessor = prior ?? sibling
       let parentRootActionId = predecessor && repository.budget(predecessor.rootActionId).root.status !== 'cancelled' ? predecessor.rootActionId : undefined
-      let selectedModelId = predecessor && !authorRetry ? modelReceipt(predecessor.binding).modelId : request.modelId
+      // 作者点重试而另开的运行（包括要点改过、root 被取消的情形）一律用作者现在选的模型。
+      let selectedModelId = predecessor && !explicitRetry ? modelReceipt(predecessor.binding).modelId : request.modelId
       if (request.parentRootActionId !== undefined) {
         const root = repository.budget(request.parentRootActionId).root
         if (root.operation !== 'batch-chapters' || root.projectId !== deps.projectId || parentRootActionId && parentRootActionId !== request.parentRootActionId) throw new Error('GENERATION_FINALIZATION_PARENT_INVALID')
