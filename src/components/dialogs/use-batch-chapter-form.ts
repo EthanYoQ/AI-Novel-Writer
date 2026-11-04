@@ -91,6 +91,7 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
       } catch (cause) {
         if (disposed || !isProjectSessionCurrent(projectSession)) return
         setAuthoritativeStart(null)
+        setGaps([])
         setAuthorityError(displayedErrorMessage(useLocaleStore.getState().locale, cause))
       } finally {
         if (!disposed && isProjectSessionCurrent(projectSession)) setAuthorityLoading(false)
@@ -233,6 +234,7 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
       if (!isProjectSessionCurrent(projectSession)) return
       const message = displayedErrorMessage(useLocaleStore.getState().locale, cause)
       if (cause && typeof cause === 'object' && 'code' in cause && cause.code === 'AUTHORITATIVE_CHAPTER_SEQUENCE_INVALID') {
+        setGaps([])
         setAuthorityError(message)
       } else {
         setError(message)
