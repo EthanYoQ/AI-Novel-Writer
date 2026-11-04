@@ -191,6 +191,17 @@ describe('运行侧页', () => {
     expect(host!.textContent).toContain('批量正文：已保存 1 章，下一章 4')
   })
 
+  it('作者定稿过其中一章的批次列为来源已变化，「继续此批次」不可点 (#568)', async () => {
+    batches = [{ batchId: '批次', range: { startChapter: 3, endChapter: 5 }, completedChapters: [{ chapterNumber: 3, finalizationId: '作者定稿' }],
+      nextChapterNumber: 4, sourceCurrent: false, rootHandle: { projectId: session.projectId, epoch: session.leaseId, rootActionId: '根', runId: '批量' } }]
+    await render()
+    await vi.waitFor(() => expect(button('继续此批次')).toBeTruthy())
+    expect(button('继续此批次')!.disabled).toBe(true)
+    expect(host!.textContent).toContain('批次来源已变化，不能继续此批次。请从当前正文发起新任务。')
+    await click('继续此批次')
+    expect(invoke.mock.calls.some(([channel]) => channel === 'generation:read-batch')).toBe(false)
+  })
+
   it('等你确认：显示下一步，确认后工作流继续到完成', async () => {
     const second = vi.fn(async () => '已写入')
     const pending = useWorkflowStore.getState().startWorkflow({ type: 'post_process', title: '提取角色', projectPath: session.projectPath, projectSession: session, steps: [
