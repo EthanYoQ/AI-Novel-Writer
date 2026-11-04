@@ -6,7 +6,9 @@ const CONTEXT_LENGTH_MESSAGES = [
   /max_tokens \(\d+\) have exceeded max_seq_len/iu,
   // Gemini；没有 key，未实测。
   /input token count \(\d+\) exceeds the maximum number of tokens/iu,
+  // Anthropic：提示词超长，或输入加 max_tokens 超过上下文
   /prompt is too long: \d+ tokens? > \d+ maximum/iu,
+  /input length and `?max_tokens`? exceed context limit: \d+ \+ \d+ > \d+/iu,
 ]
 
 export async function providerFailureCode(response: Response, signal: AbortSignal): Promise<'LLM_CONTEXT_LENGTH_EXCEEDED' | 'LLM_REQUEST_FAILED'> {

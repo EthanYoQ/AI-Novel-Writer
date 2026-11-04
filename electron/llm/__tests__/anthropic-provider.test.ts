@@ -319,11 +319,14 @@ describe('AnthropicProvider', () => {
     expect(onError).toHaveBeenCalledWith('LLM_STREAM_INCOMPLETE', '正文', undefined)
   })
 
-  it('maps the documented prompt-too-long failure to the context-length code', async () => {
+  it.each([
+    'prompt is too long: 200005 tokens > 200000 maximum',
+    'input length and `max_tokens` exceed context limit: 188240 + 21333 > 200000, decrease input length or `max_tokens` and try again',
+  ])('maps the context-overflow failure "%s" to the context-length code', async (message) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 400,
-      text: async () => '{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 200005 tokens > 200000 maximum"}}',
+      text: async () => JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message } }),
     }))
 
     const onError = vi.fn()
