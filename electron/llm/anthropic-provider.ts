@@ -35,16 +35,27 @@ export function resolveAnthropicMessagesUrl(baseUrl: string): string {
 
 interface AnthropicUsage {
   input_tokens?: number
+  cache_creation_input_tokens?: number
+  cache_read_input_tokens?: number
   output_tokens?: number
 }
 
-/** Anthropic 的 usage 只报输入与输出两栏；输出栏已含思考块，总量按两者之和回填。 */
+const tokenCount = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+
+/** input_tokens 不含提示缓存的写入与命中，三者之和才是本次输入；缓存栏缺省按 0 计。 */
+function anthropicInputTokens(usage: AnthropicUsage): number | null {
+  const uncached = tokenCount(usage.input_tokens)
+  const cacheWrite = usage.cache_creation_input_tokens == null ? 0 : tokenCount(usage.cache_creation_input_tokens)
+  const cacheRead = usage.cache_read_input_tokens == null ? 0 : tokenCount(usage.cache_read_input_tokens)
+  return uncached === null || cacheWrite === null || cacheRead === null ? null : uncached + cacheWrite + cacheRead
+}
+
+/** 输出栏已含思考块，总量按输入与输出之和回填。 */
 function anthropicTokenUsage(usage: AnthropicUsage | undefined): TokenUsage | undefined {
   if (!usage) return undefined
-  const inputTokens = typeof usage.input_tokens === 'number' && Number.isSafeInteger(usage.input_tokens) && usage.input_tokens >= 0
-    ? usage.input_tokens : null
-  const outputTokens = typeof usage.output_tokens === 'number' && Number.isSafeInteger(usage.output_tokens) && usage.output_tokens >= 0
-    ? usage.output_tokens : null
+  const inputTokens = anthropicInputTokens(usage)
+  const outputTokens = tokenCount(usage.output_tokens)
   return {
     promptTokens: inputTokens,
     completionTokens: outputTokens,
@@ -303,8 +314,7 @@ export class AnthropicProvider implements ILLMProvider {
           if (message !== null && typeof message === 'object' && !Array.isArray(message)) {
             const rawUsage = (message as Record<string, unknown>).usage
             if (rawUsage !== null && typeof rawUsage === 'object' && !Array.isArray(rawUsage)) {
-              const input = (rawUsage as AnthropicUsage).input_tokens
-              recordUsage(typeof input === 'number' ? input : null, null)
+              recordUsage(anthropicInputTokens(rawUsage as AnthropicUsage), null)
             }
           }
           return

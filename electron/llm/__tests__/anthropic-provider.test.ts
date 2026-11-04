@@ -136,6 +136,31 @@ describe('AnthropicProvider', () => {
       httpFailure: { status: 401 } })
   })
 
+  it('counts cache-write and cache-read input in prompt usage on both paths', async () => {
+    const cached = { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 1000 }
+    const expected = { promptTokens: 1030, completionTokens: 5, totalTokens: 1035 }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ content: [{ type: 'text', text: '正文' }], stop_reason: 'end_turn', usage: { ...cached, output_tokens: 5 } }),
+    }))
+    const response = await new AnthropicProvider().generate(model, [{ role: 'user', content: '写正文' }], { temperature: 0.7, maxTokens: 1024 })
+    expect(response.usage).toEqual(expected)
+
+    const events = [
+      anthropicEvent('message_start', { message: { usage: { ...cached, output_tokens: 1 } } }),
+      anthropicEvent('content_block_delta', { index: 0, delta: { type: 'text_delta', text: '正文' } }),
+      anthropicEvent('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } }),
+      anthropicEvent('message_stop'),
+    ].join('')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader(events) } }))
+    const onDone = vi.fn()
+    await new AnthropicProvider().generateStream(model, [{ role: 'user', content: '写正文' }], {
+      temperature: 0.7, maxTokens: 1024, signal: new AbortController().signal,
+      onChunk: vi.fn(), onDone, onError: vi.fn(),
+    })
+    expect(onDone).toHaveBeenCalledWith('正文', expected, 'stop')
+  })
+
   it('streams visible text, thinking, and usage evidence until message_stop', async () => {
     const events = [
       anthropicEvent('message_start', { message: { usage: { input_tokens: 15, output_tokens: 1 } } }),
