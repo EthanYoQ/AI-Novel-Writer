@@ -36,6 +36,7 @@ import {
   activatePlannedEmbeddingSpace,
   rebuildPlannedEmbeddingSpace,
   KNOWLEDGE_COPY_MARKER,
+  knowledgeStoreSupportsCommits,
   readKnowledgeCopy,
   writeKnowledgeCopy,
   type EmbeddingSpaceIdentity,
@@ -278,6 +279,7 @@ async function importTextInternal(
     if (!text.trim()) return { success: false, error: 'KNOWLEDGE_BASE_TEXT_EMPTY' }
 
     await ensureMigration(projectPath)
+    if (!knowledgeStoreSupportsCommits(projectPath)) return { success: false, error: 'KNOWLEDGE_BASE_VOLUME_UNSUPPORTED' }
 
     const docId = randomUUID()
 
@@ -449,6 +451,7 @@ async function performReferenceTextImport(
     if (!text.trim()) return { success: false, error: 'KNOWLEDGE_BASE_TEXT_EMPTY' }
     assertAuthority()
     await ensureMigration(projectPath)
+    if (!knowledgeStoreSupportsCommits(projectPath)) return { success: false, error: 'KNOWLEDGE_BASE_VOLUME_UNSUPPORTED' }
     assertAuthority()
     const projectDb = getProjectDb()
     if (!projectDb) return { success: false, error: 'PROJECT_NOT_OPEN' }

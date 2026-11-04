@@ -133,6 +133,7 @@ export const zhCN = {
   'error.knowledgeCopyChanged': '项目副本在别处被改过，本次没有保存。请重新打开这份资料后再修改。',
   'error.knowledgeCopyEmpty': '项目副本是空的，无法更新检索。请先写入内容并保存。',
   'error.knowledgeTextEmpty': '资料内容是空的，没有可导入的文字。',
+  'error.knowledgeVolumeUnsupported': '资料没有收进知识库：作品文件夹所在的磁盘不支持知识库要用的文件操作，常见于 exFAT、FAT32 格式的移动硬盘和 U 盘。请退出书童，把整个作品文件夹移到 NTFS 格式的磁盘（Mac 上用 APFS 格式），打开新位置的作品后再导入。',
   'error.modelSettingsFileDamaged': '模型设置文件已损坏，为免覆盖，本次没有保存。请修复或移走用户配置目录里损坏的设置文件后重试。',
   'error.stageModelUnavailable': '这个模型已删除或不能用于文本生成，这个环节保留原来的模型。请在「分工模型」里另选一个。',
   'error.stageModelRequestInvalid': '请求无效，这次分工设置没有保存。请重新打开设置再选一次。',
