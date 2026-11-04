@@ -16,6 +16,14 @@ const Database = createRequire(import.meta.url)('better-sqlite3') as typeof impo
 const DRAFT_TARGET = "deps.db.prepare('SELECT d.id,d.version,d.status,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1')"
 const CATALOG = 'deps.db.prepare(`SELECT d.id FROM drafts d LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.chapter_number < ? AND (d.status=\'finalized\' OR NOT EXISTS (SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number AND newer.status IN (${CURRENT}) AND newer.version>d.version)) ORDER BY d.id`)'
 
+/** 迁到 schema 8 的内存库，带 live_ 视图。 */
+function openLiveRowDb() {
+  const db = new Database(':memory:')
+  db.transaction(() => initializeLegacyBaselineSchema(db))()
+  migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 8)
+  return db
+}
+
 describe('live-row-reads：读取路径只读 live_ 视图', () => {
   it('白名单外没有读原表的地方', () => {
     expect(scanLiveRowReads().map(read => `${read.file}:${read.line} ${read.table}`)).toEqual([])
@@ -87,6 +95,67 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
     expect(scanSource(rewritten)).toEqual([])
   })
 
+  it('源码里的 JS 转义按解码后的 SQL 扫描：转义引号照抓，转义反斜杠不结束行注释', () => {
+    const sample = [
+      String.raw`db.prepare("SELECT * FROM \"drafts\" WHERE id = ?")`,
+      String.raw`db.prepare("SELECT 1 FROM \"main\".\"finalization_outbox\"")`,
+      'db.prepare(`SELECT * FROM \\`summary_snapshots\\``)',
+      String.raw`db.prepare("DELETE FROM \"drafts\" WHERE id = ?")`,
+      String.raw`db.prepare('SELECT id FROM\ndrafts')`,
+      String.raw`db.prepare('SELECT 1 -- a \\n FROM drafts\nFROM narrative_thread_confirmations')`,
+      String.raw`db.prepare('SELECT \'FROM drafts\' AS label FROM summary_snapshots')`,
+    ].join('\n')
+    expect(scanSource(sample).map(read => `${read.line}:${read.table}`))
+      .toEqual(['1:drafts', '2:finalization_outbox', '3:summary_snapshots', '5:drafts', '6:narrative_thread_confirmations', '7:summary_snapshots'])
+
+    const rewritten = rewriteSource(sample)
+    expect(rewritten).toContain(String.raw`FROM \"live_drafts\" WHERE`)
+    expect(rewritten).toContain(String.raw`FROM \"main\".\"live_finalization_outbox\"`)
+    expect(rewritten).toContain('FROM \\`live_summary_snapshots\\`')
+    expect(rewritten).toContain(String.raw`DELETE FROM \"drafts\" WHERE`)
+    expect(rewritten).toContain(String.raw`FROM\nlive_drafts`)
+    expect(rewritten).toContain(String.raw`-- a \\n FROM drafts\nFROM live_narrative_thread_confirmations`)
+    expect(scanSource(rewritten)).toEqual([])
+    expect(rewriteSource(rewritten)).toBe(rewritten)
+  })
+
+  it('需要别名的带引号表名，改写后引号各自闭合，SQLite 能编译；转义引号写法结果相同', () => {
+    const sqls = [
+      'SELECT drafts.id FROM "drafts"',
+      'SELECT drafts.id FROM [drafts] WHERE drafts.status = ?',
+      'SELECT drafts.id FROM `drafts`',
+      'SELECT "drafts".id FROM "drafts"',
+      'SELECT drafts.id FROM main."drafts"',
+      'SELECT d.id FROM "drafts" d WHERE d.id IN (SELECT drafts.id FROM drafts)',
+    ]
+    const expected = [
+      'SELECT drafts.id FROM "live_drafts" AS "drafts"',
+      'SELECT drafts.id FROM [live_drafts] AS [drafts] WHERE drafts.status = ?',
+      'SELECT drafts.id FROM `live_drafts` AS `drafts`',
+      'SELECT "drafts".id FROM "live_drafts" AS "drafts"',
+      'SELECT drafts.id FROM main."live_drafts" AS "drafts"',
+      'SELECT d.id FROM "live_drafts" d WHERE d.id IN (SELECT drafts.id FROM live_drafts AS drafts)',
+    ]
+    // 单引号字面量里的双引号原样；JSON.stringify 给出 \" 转义写法。
+    const source = [...sqls.map(sql => `db.prepare('${sql}')`), ...sqls.map(sql => `db.prepare(${JSON.stringify(sql)})`)].join('\n')
+    const lines = sqls.flatMap((sql, index) => sql.includes('IN (SELECT') ? [index + 1, index + 1] : [index + 1])
+    expect.soft(scanSource(source).map(read => read.line))
+      .toEqual([...lines, ...lines.map(line => line + sqls.length)])
+
+    const rewritten = rewriteSource(source)
+    const decoded = rewritten.split('\n').map((line, index) => {
+      const literal = line.slice('db.prepare('.length, -1)
+      return index < sqls.length ? literal.slice(1, -1) : JSON.parse(literal) as string
+    })
+    expect.soft(decoded).toEqual([...expected, ...expected])
+    const db = openLiveRowDb()
+    try {
+      for (const sql of decoded) expect(() => db.prepare(sql), sql).not.toThrow()
+    } finally { db.close() }
+    expect(scanSource(rewritten)).toEqual([])
+    expect(rewriteSource(rewritten)).toBe(rewritten)
+  })
+
   // CodeQL js/redos：删除目标前的空白、注释与字符串不能让扫描回溯爆炸。
   it('病态的空白、注释与字符串输入在限定时间内扫完', { timeout: 60_000 }, () => {
     for (const filler of ['\t'.repeat(30), `/*${'*//*'.repeat(5000)}*/`, '\t/* */'.repeat(5000), `'${"x''".repeat(30000)}'`]) {
@@ -104,10 +173,8 @@ describe('live-row-reads：读取路径只读 live_ 视图', () => {
   })
 
   it('外键挂在 drafts 或 contents 上的表，要么有 live_ 视图，要么写明豁免理由（G6）', () => {
-    const db = new Database(':memory:')
+    const db = openLiveRowDb()
     try {
-      db.transaction(() => initializeLegacyBaselineSchema(db))()
-      migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 8)
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").pluck().all() as string[]
       const parents = new Map(tables.map(table => [table, (db.prepare('SELECT "table" FROM pragma_foreign_key_list(?)')
         .pluck().all(table) as string[])]))
