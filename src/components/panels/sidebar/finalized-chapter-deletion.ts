@@ -49,8 +49,8 @@ function deletionSurfaceConfig(
   const retryWhere = '在这一章的页面里'
   const retryWhereEn = 'on this chapter’s page'
   // 删掉非末尾的定稿章会让定稿序列出现缺口，整本书停写（#564）。两个入口删的是同一份定稿，说明一致。
-  const consequence = '删除后无法恢复。如果这一章后面还有已定稿的章，删除后既补写不了这一章，也无法继续写后面的章节。\n只想改写这一章，请取消，在这一章点「重新打开修改」。'
-  const consequenceEn = 'This cannot be undone. If later chapters are already finalized, you will not be able to rewrite this chapter or keep writing later ones.\nTo rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter.'
+  const consequence = '删除后无法恢复。如果这一章后面还有已定稿的章，删除后既补写不了这一章，也无法继续写后面的章节。\n只想改写这一章，请取消，在这一章点「重新打开修改」；已有重开稿时点「打开重开稿」。'
+  const consequenceEn = 'This cannot be undone. If later chapters are already finalized, you will not be able to rewrite this chapter or keep writing later ones.\nTo rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter, or “Open reopened draft” if one already exists.'
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
       confirmation: text(
