@@ -119,6 +119,7 @@ export class AnthropicProvider implements ILLMProvider {
   /**
    * x-api-key 是 Anthropic Messages 的标准鉴权头；同时带 Bearer 以兼容
    * 只认 Authorization 的 Anthropic 兼容网关，两者都取同一把 Key。
+   * 跨源重定向只剥掉 Authorization、不剥 x-api-key，所以两处请求都带 redirect: 'error'。
    */
   private buildRequestHeaders(model: ModelProfile): Record<string, string> {
     return {
@@ -165,6 +166,7 @@ export class AnthropicProvider implements ILLMProvider {
         headers: this.buildRequestHeaders(model),
         body: JSON.stringify(body),
         signal: opts.signal,
+        redirect: 'error',
       })
 
       if (!res.ok) {
@@ -248,6 +250,7 @@ export class AnthropicProvider implements ILLMProvider {
         headers: this.buildRequestHeaders(model),
         body: JSON.stringify(body),
         signal: opts.signal,
+        redirect: 'error',
       }))
 
       if (!res.ok) {
