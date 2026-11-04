@@ -1358,8 +1358,8 @@ function authorManuscriptConflictGuidance(preview: AuthorManuscriptImportPreview
   const gap = preview.firstGapChapterNumber ?? '?'
   if (preview.authorityInvalid) {
     return locale === 'en-US'
-      ? `The existing finalized chapters are not continuous. Repair the data near Chapter ${gap} first.`
-      : `现有权威正文章节不连续；请先修复第 ${gap} 章附近的数据`
+      ? 'Some existing chapters have more than one finalized version. Repair the duplicate finalized chapters first.'
+      : '现有正文里有章节存在重复定稿；请先修复重复定稿'
   }
   if (preview.conflictChapterNumbers.length > 0) {
     return locale === 'en-US'

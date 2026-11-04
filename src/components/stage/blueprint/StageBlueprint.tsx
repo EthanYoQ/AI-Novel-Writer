@@ -17,6 +17,7 @@ import WriteChapterPopover from '../write/WriteChapterPopover'
 import BatchWriteDialog from './BatchWriteDialog'
 import BlueprintCard from './BlueprintCard'
 import BlueprintPlanList from './BlueprintPlanList'
+import GapNotice from './GapNotice'
 import GenerateBlueprintsDialog from './GenerateBlueprintsDialog'
 import { pluralEn } from '../../../shared/plural-en'
 
@@ -48,12 +49,17 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
   const count = plan.blueprints.length
   const selected = plan.selected
   const deleting = ask?.kind === 'delete' ? ask.chapterNumber : null
+  const writable = useMemo(() => new Set([
+    ...plan.chapterGaps.map(gap => gap.from),
+    ...(plan.nextWriteChapter === null ? [] : [plan.nextWriteChapter]),
+  ]), [plan.chapterGaps, plan.nextWriteChapter])
+  const firstUnexplainedGap = plan.chapterGaps.find(gap => gap.cause === 'unexplained')
 
-  // 写作请求只由那一章的写作按钮接手；那一章现在写不了时丢掉请求，免得以后突然弹出。
+  // 写作请求只由那一章的写作按钮接手：下一章在本页，缺口章在它的单章视图。那一章现在写不了时丢掉请求，免得以后突然弹出。
   useEffect(() => {
-    if (plan.loading || !writeRequest || writeRequest.chapterNumber === next?.chapterNumber) return
+    if (plan.loading || !writeRequest || writable.has(writeRequest.chapterNumber)) return
     useStageStore.setState({ writeRequest: null })
-  }, [plan.loading, writeRequest, next])
+  }, [plan.loading, writeRequest, writable])
 
   const confirmWith = (kind: 'overwrite' | 'warning', message?: string) =>
     new Promise<boolean>(resolve => setAsk({ kind, message, resolve }))
@@ -167,22 +173,22 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
         </Notice>
       )}
 
-      {plan.legacyImportedTextRecoveryChapter !== null && (
-        <Notice
-          tone="warn"
-          title={text(`第 ${plan.legacyImportedTextRecoveryChapter} 章还没写，后面却已有正文`, `Chapter ${plan.legacyImportedTextRecoveryChapter} is unwritten, but later chapters have text`)}
-          actions={(
-            <Button variant="danger" size="sm" disabled={plan.recoveringLegacyImportedText} onClick={() => setAsk({ kind: 'legacy' })}>
+      {plan.chapterGaps.map(gap => (
+        <GapNotice
+          key={gap.from}
+          gap={gap}
+          blueprint={plan.blueprints.find(blueprint => blueprint.chapterNumber === gap.from) ?? null}
+          onWrite={plan.writeChapter}
+          onAddBlueprint={plan.addGapBlueprint}
+          clearAction={gap === firstUnexplainedGap && (
+            <Button variant="text" size="sm" disabled={plan.recoveringLegacyImportedText} onClick={() => setAsk({ kind: 'legacy' })}>
               {plan.recoveringLegacyImportedText ? text('清除中…', 'Clearing…') : text('清除误导入正文…', 'Clear imported text…')}
             </Button>
           )}
-        >
-          {text('这可能是旧版「小说拆解与仿写」误导入的参考原文。如果是删掉了某一章的正文才出现这条提示，不要清除，清除会删掉全部草稿和定稿。不会自动清除任何内容。',
-            'This may be reference text imported by mistake by the old “Novel breakdown & imitation”. If this appeared after you deleted a chapter’s manuscript, do not clear: clearing deletes every draft and finalized chapter. Nothing is cleared automatically.')}
-        </Notice>
-      )}
+        />
+      ))}
 
-      {plan.projectDataReady && plan.authorityError && plan.legacyImportedTextRecoveryChapter === null && (
+      {plan.projectDataReady && plan.authorityError && (
         <Notice tone="warn" title={text('暂时无法确定下一章', 'The next chapter cannot be determined')}>{plan.authorityError}</Notice>
       )}
 
@@ -202,7 +208,7 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
             blueprints={plan.blueprints}
             rows={rows}
             selectedIdx={plan.selectedIdx}
-            nextWriteChapter={plan.nextWriteChapter}
+            writableChapters={writable}
             onSelect={plan.setSelectedIdx}
           />
           {selected && (
@@ -277,8 +283,8 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
         open={ask?.kind === 'legacy'}
         onOpenChange={open => { if (!open) setAsk(null) }}
         title={text('清除误导入正文？', 'Clear incorrectly imported text?')}
-        consequence={text('将永久清除草稿、定稿、审稿和摘要等正文产物；角色、故事架构、章节蓝图与知识库会保留。如果是删掉了某一章的正文才出现这条提示，请取消，清除会删掉全部草稿和定稿，不只是那一章。只是缺下一章蓝图时，请取消并先补蓝图。',
-          'Drafts, final manuscript text, reviews and summaries are permanently cleared. Characters, story architecture, chapter blueprints and the knowledge base are kept. If this appeared after you deleted a chapter’s manuscript, cancel: clearing deletes every draft and finalized chapter, not just that one. If only the next blueprint is missing, cancel and add it first.')}
+        consequence={text('角色、故事架构、章节蓝图与知识库会保留。清除的是全书所有章节的草稿、定稿、审稿和摘要，不只是缺的那一章。如果只是删掉了某一章，请取消，直接在原位置重写那一章，后面的章节照常可写。',
+          'Characters, story architecture, chapter blueprints and the knowledge base are kept. This clears drafts, finalized text, reviews and summaries for every chapter in the book, not just the missing one. If you only deleted a chapter, cancel and rewrite it in place; later chapters stay writable.')}
         recoverability={text('清除后无法恢复。', 'This cannot be undone.')}
         confirmLabel={text('清除误导入正文', 'Clear imported text')}
         cancelLabel={text('取消', 'Cancel')}

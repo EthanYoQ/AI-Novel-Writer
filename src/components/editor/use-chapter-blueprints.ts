@@ -44,10 +44,8 @@ import {
 } from './chapter-card-draft-ledger'
 import { LatestRequestGate } from './latest-request-gate'
 import type { SaveOutcome } from './save-feedback'
-import {
-  AuthoritativeChapterSequenceError,
-  readAuthoritativeNextChapter,
-} from '../../services/authoritative-chapter-sequence'
+import { readWritableChapters } from '../../services/authoritative-chapter-sequence'
+import type { ChapterGap } from '../../shared/chapter-sequence'
 import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 
 function readDraftLedgerFromFixedTab() {
@@ -73,7 +71,7 @@ export function isCurrentProjectSession(projectSession: ProjectSessionContext): 
 }
 
 /**
- * 章节蓝图的数据：读写蓝图表、未保存修改的草稿账本（顶栏保存状态与 ⌘S 都认它）、权威下一章、蓝图恢复候选。
+ * 章节蓝图的数据：读写蓝图表、未保存修改的草稿账本（顶栏保存状态与 ⌘S 都认它）、权威下一章与缺口、蓝图恢复候选。
  * 蓝图阶段用它；删除、清空、生成前警告的确认由页面负责。
  */
 export function useChapterBlueprints({
@@ -125,11 +123,10 @@ export function useChapterBlueprints({
     && sameProjectSessionContext(currentProjectSession, dataProjectSession),
   )
   const dirty = dirtyChapterNumbers.size > 0
-  // 下一个可写的章节号
+  // 下一章接在最后一章定稿之后；缺口是删掉的或旧版误导入留下的空章，每段第一章也能写。
   const [nextWriteChapter, setNextWriteChapter] = useState<number | null>(null)
+  const [chapterGaps, setChapterGaps] = useState<ChapterGap[]>([])
   const [authorityError, setAuthorityError] = useState<string | null>(null)
-  // 旧版仿写导入可能造成“前章未写、后续正文已定稿”的异常状态；该状态只能由用户确认恢复。
-  const [legacyImportedTextRecoveryChapter, setLegacyImportedTextRecoveryChapter] = useState<number | null>(null)
 
   const [recoveringLegacyImportedText, setRecoveringLegacyImportedText] = useState(false)
 
@@ -226,8 +223,8 @@ export function useChapterBlueprints({
       dataProjectSessionRef.current = null
       setDataProjectSession(null)
       setNextWriteChapter(null)
+      setChapterGaps([])
       setAuthorityError(null)
-      setLegacyImportedTextRecoveryChapter(null)
       setSaving(false)
       applyVisibleDraftState([], new Set())
       setLoading(false)
@@ -239,13 +236,12 @@ export function useChapterBlueprints({
       && isCurrentProjectSession(projectSession)
     )
     setLoading(true)
-    setLegacyImportedTextRecoveryChapter(null)
     if (!sameProjectSessionContext(dataProjectSessionRef.current, projectSession)) {
       dataProjectSessionRef.current = null
       setDataProjectSession(null)
       setNextWriteChapter(null)
+      setChapterGaps([])
       setAuthorityError(null)
-      setLegacyImportedTextRecoveryChapter(null)
       setSaving(false)
       applyVisibleDraftState([], new Set())
     }
@@ -273,22 +269,16 @@ export function useChapterBlueprints({
       // 项目可能在远端读取期间切换；旧项目结果不会进入 commit。
       if (!restored || !isLatestProjectRequest()) return
       try {
-        const nextChapter = await readAuthoritativeNextChapter(projectSession, locale)
+        const chapters = await readWritableChapters(projectSession, locale)
         if (!isLatestProjectRequest()) return
         setAuthorityError(null)
-        setLegacyImportedTextRecoveryChapter(null)
-        setNextWriteChapter(nextChapter)
+        setNextWriteChapter(chapters.next)
+        setChapterGaps(chapters.gaps)
       } catch (error) {
         if (!isLatestProjectRequest()) return
-        const message = displayedErrorMessage(useLocaleStore.getState().locale, error)
-        const recoveryChapter = error instanceof AuthoritativeChapterSequenceError
-          && error.sequence.firstGapChapterNumber !== undefined
-          && error.sequence.lastChapterNumber > error.sequence.firstGapChapterNumber
-          ? error.sequence.firstGapChapterNumber
-          : null
-        setAuthorityError(message)
-        setLegacyImportedTextRecoveryChapter(recoveryChapter)
+        setAuthorityError(displayedErrorMessage(useLocaleStore.getState().locale, error))
         setNextWriteChapter(null)
+        setChapterGaps([])
       }
     } catch (error) {
       if (isLatestProjectRequest()) {
@@ -468,7 +458,24 @@ export function useChapterBlueprints({
     })
   }, [projectKey])
 
-  /** 新建空章节 */
+  const insertBlankBlueprint = (chapterNumber: number) => {
+    const newBlueprint: ChapterBlueprint = {
+      chapterNumber,
+      title: '',
+      role: '发展',
+      purpose: '',
+      keyEvents: '',
+      characters: [],
+      suspenseHook: '',
+      userGuidance: '',
+      notes: '',
+      notesUpdatedAt: '',
+    }
+    markChapterDirty([...blueprintsRef.current, newBlueprint].sort((left, right) => left.chapterNumber - right.chapterNumber), chapterNumber)
+    setSelectedChapter(chapterNumber)
+  }
+
+  /** 新建空章节：接在下一章之后，不往缺口里填。 */
   const handleAddChapter = () => {
     const projectSession = currentProjectSessionForPath(projectKey)
     if (
@@ -490,20 +497,7 @@ export function useChapterBlueprints({
     const chapterNumber = authoritativeBlueprintExists
       ? Math.max(nextWriteChapter, ...currentBlueprints.map(blueprint => blueprint.chapterNumber)) + 1
       : nextWriteChapter
-    const newBlueprint: ChapterBlueprint = {
-      chapterNumber,
-      title: '',
-      role: '发展',
-      purpose: '',
-      keyEvents: '',
-      characters: [],
-      suspenseHook: '',
-      userGuidance: '',
-      notes: '',
-      notesUpdatedAt: '',
-    }
-    markChapterDirty([...currentBlueprints, newBlueprint], newBlueprint.chapterNumber)
-    setSelectedChapter(newBlueprint.chapterNumber)
+    insertBlankBlueprint(chapterNumber)
     if (authoritativeBlueprintExists) {
       toast.info(text(
         `第 ${nextWriteChapter} 章蓝图已存在，已新增第 ${chapterNumber} 章；写作入口仍为第 ${nextWriteChapter} 章。`,
@@ -630,6 +624,18 @@ export function useChapterBlueprints({
     navigate({ kind: 'chapter', chapterNumber: bp.chapterNumber, write: blueprintWritePrefill(bp) })
   }
 
+  /** 缺口章的蓝图也删掉了：在原位置补一张空白蓝图，保存后就能写这一章。 */
+  const handleAddGapBlueprint = (chapterNumber: number) => {
+    const projectSession = currentProjectSessionForPath(projectKey)
+    if (
+      !projectMatches
+      || !projectSession
+      || !sameProjectSessionContext(dataProjectSessionRef.current, projectSession)
+      || blueprintsRef.current.some(blueprint => blueprint.chapterNumber === chapterNumber)
+    ) return
+    insertBlankBlueprint(chapterNumber)
+  }
+
   /**
    * 旧版“小说拆解与仿写”曾把参考原文误写为草稿和定稿；此处只给用户一个
    * 明确确认后的恢复入口，不尝试自动判定或删除任何项目内容。
@@ -682,8 +688,8 @@ export function useChapterBlueprints({
     saveOutcome,
     nextWriteChapter,
     nextWritableBlueprint,
+    chapterGaps: projectDataReady ? chapterGaps : [],
     authorityError,
-    legacyImportedTextRecoveryChapter: projectDataReady ? legacyImportedTextRecoveryChapter : null,
     recoveringLegacyImportedText,
     planningRecovery,
     reload: loadBlueprints,
@@ -691,6 +697,7 @@ export function useChapterBlueprints({
     saveOne: handleSaveOne,
     saveAll: handleSaveAll,
     addChapter: handleAddChapter,
+    addGapBlueprint: handleAddGapBlueprint,
     deleteChapter: handleDeleteChapter,
     clearAll: handleClearAllBlueprints,
     generateBlueprints: handleBatchGenerate,

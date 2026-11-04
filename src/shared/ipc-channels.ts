@@ -884,10 +884,8 @@ import type {
   FinalizedDraftImportReceipt,
   FinalizedDraftImportRequest,
 } from './finalized-draft-import'
-import type {
-  AuthorManuscriptImportPreview,
-  AuthoritativeChapterSequence,
-} from './author-manuscript-import'
+import type { AuthorManuscriptImportPreview } from './author-manuscript-import'
+import type { AuthoritativeChapterSequence } from './chapter-sequence'
 import type {
   ImportGlobalFactsReceipt,
   ImportGlobalFactsRequest,

@@ -137,8 +137,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       if (preview.classification === 'conflict') {
         if (preview.authorityInvalid) {
           setSplitError(text(
-            `现有权威正文不连续，请先补齐第 ${preview.firstGapChapterNumber ?? '?'} 章或清理重复定稿。`,
-            `The authoritative manuscript is not continuous. Fill Chapter ${preview.firstGapChapterNumber ?? '?'} or resolve duplicate finalized chapters first.`,
+            '现有正文里有章节存在重复定稿，请先修复重复定稿再导入。',
+            'Some existing chapters have more than one finalized version. Repair the duplicate finalized chapters before importing.',
           ))
         } else if (preview.conflictChapterNumbers.length > 0) {
           setSplitError(text(

@@ -39,7 +39,7 @@ import {
   MAX_BLUEPRINT_CHAPTERS_PER_TASK,
   planBlueprintGenerationCost,
 } from '../blueprint-batch-policy'
-import { readAuthoritativeNextChapter } from '../../authoritative-chapter-sequence'
+import { readWritableChapters } from '../../authoritative-chapter-sequence'
 import { localizeNovelConfigFacts } from '../../../shared/novel-config-localization'
 import { normalizeChapterWordsTarget } from '../chapter-creation-parameters'
 import { draftTargetUnitRange } from '../../../shared/draft-units'
@@ -250,10 +250,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     const modelFacts = localizeNovelConfigFacts(novelConfig, writingLanguage)
     const totalChapters = novelConfig.totalChapters
     const wordsPerChapter = normalizeChapterWordsTarget(novelConfig.wordsPerChapter)
-    const authoritativeNextChapter = await readAuthoritativeNextChapter(
-      projectSession,
-      writingLanguage,
-    )
+    const { next: authoritativeNextChapter } = await readWritableChapters(projectSession, writingLanguage)
     let startChapter = 1
     if (!context.data.directoryResumeHandle && this.params.count !== undefined
       && (!Number.isSafeInteger(this.params.count) || this.params.count < 1)) throw new Error('GENERATION_PLANNING_RANGE_INVALID')
