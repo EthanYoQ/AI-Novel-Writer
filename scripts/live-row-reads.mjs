@@ -35,9 +35,12 @@ export const LIVE_ROW_EXEMPT_TABLES = Object.freeze({
 
 const CLAUSE_KEYWORDS = new Set(['WHERE', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'FULL', 'NATURAL', 'ON', 'USING',
   'ORDER', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'INDEXED', 'NOT'])
-const READ_PATTERN = new RegExp(`\\b(FROM|JOIN)(\\s+)(${LIVE_ROW_TABLES.join('|')})\\b`, 'gi')
+// 表名可带库名前缀（main.drafts、"main"."drafts"），也可用 "x"、`x`、[x] 引起来。第 2 组吃掉前缀与开引号，第 3 组正好是表名。
+const OPEN_QUOTE = '["`\\[]?', CLOSE_QUOTE = '["`\\]]?'
+const TABLE_PREFIX = `(?:${OPEN_QUOTE}\\w+${CLOSE_QUOTE}\\.)?${OPEN_QUOTE}`
+const READ_PATTERN = new RegExp(`\\b(FROM|JOIN)(\\s+${TABLE_PREFIX})(${LIVE_ROW_TABLES.join('|')})\\b${CLOSE_QUOTE}`, 'gi')
 // 删除目标只能写原表（视图不能写），不算读。只在预处理后的文本上匹配，注释已是空格。
-const DELETE_TARGET = /\bDELETE\s+FROM\s+(\w+)/gi
+const DELETE_TARGET = new RegExp(`\\bDELETE\\s+FROM\\s+${TABLE_PREFIX}(\\w+)`, 'gi')
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
