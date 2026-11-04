@@ -468,6 +468,14 @@ export function registerLLMController() {
 
       let result = { success: true, error: undefined as undefined | string }
       if (model.purposes?.includes('embedding')) {
+        if (model.protocol === 'anthropic') {
+          return {
+            success: false,
+            error: mainText(app.getLocale(),
+              'Anthropic 协议没有嵌入端点，无法测试向量连接。请改用 OpenAI 兼容或 Gemini 协议的向量模型。',
+              'The Anthropic protocol has no embedding endpoint, so an embedding connection test is impossible. Use an OpenAI-compatible or Gemini embedding model instead.'),
+          }
+        }
         const { generateEmbeddings } = await import('../embedding')
         await generateEmbeddings(['hello'], model.protocol, model, undefined, undefined, deadline.signal)
       } else {

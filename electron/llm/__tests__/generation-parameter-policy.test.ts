@@ -156,6 +156,36 @@ describe('generation parameter policy', () => {
     },
   )
 
+  it.each([
+    ['claude-opus-5-5', undefined],
+    ['claude-opus-5', undefined],
+    ['claude-sonnet-5', undefined],
+    ['claude-sonnet-5-5', undefined],
+    ['claude-haiku-5-5', undefined],
+    ['claude-fable-5-1', undefined],
+    ['claude-fable-5', undefined],
+    ['claude-mythos-5-1', undefined],
+    ['claude-mythos-preview', undefined],
+    ['claude-haiku-4-5-20251001', 0.7],
+    ['claude-opus-4-8', undefined],
+    ['claude-opus-4-7', undefined],
+    ['claude-opus-4-6', 0.7],
+    ['glm-5', 0.7],
+  ])('omits temperature for Anthropic-protocol %s only when the model rejects sampling parameters', (modelName, expected) => {
+    const resolved = resolveGenerationParameters({
+      ...openAIModel, provider: 'custom', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com', modelName, temperature: 0.7,
+    }, { maxTokens: 512 })
+    expect(resolved.temperature).toBe(expected)
+  })
+
+  it('caps an Anthropic-protocol temperature at the documented maximum of 1', () => {
+    const anthropic = { ...openAIModel, provider: 'bigmodel-anthropic' as const, protocol: 'anthropic' as const,
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic', modelName: 'glm-5' }
+    expect(resolveGenerationParameters({ ...anthropic, temperature: 1.5 }, { maxTokens: 512 }).temperature).toBe(1)
+    expect(resolveGenerationParameters({ ...anthropic, temperature: 0.4 }, { maxTokens: 512 }).temperature).toBe(0.4)
+    expect(resolveGenerationParameters({ ...openAIModel, temperature: 1.5 }, { maxTokens: 512 }).temperature).toBe(1.5)
+  })
+
   it('enforces the documented range for an official Kimi model without a fixed-temperature rule', () => {
     const unknownKimiModel = {
       ...openAIModel,
