@@ -333,7 +333,8 @@ it('characters连续三次坏JSON封顶，重开保留三候选不再请求',asy
  expect(f.db.prepare('SELECT invocation_nonce FROM generation_attempts ORDER BY rowid').pluck().all()).toEqual(['finalization:0','finalization:1','finalization:2'])
  const next=f.reopen(),cached=await next.executeFinalizationGeneration({handle})
  expect(cached.run.artifacts).toEqual(result.run.artifacts)
- expect(()=>next.commitFinalizationGeneration({handle,artifact:f.artifactOf(cached)})).toThrow()
+ // #552：提交时坏 JSON 也报合同码，后处理面板才能给出说明，而不是露出 SyntaxError 原文。
+ expect(()=>next.commitFinalizationGeneration({handle,artifact:f.artifactOf(cached)})).toThrow(/^FINALIZED_CHARACTER_UPDATES_INVALID$/)
  expect(next.readFinalizationGeneration({slot})?.effect).toBeUndefined()
  expect(f.dispatch).toHaveBeenCalledTimes(3)
 })
