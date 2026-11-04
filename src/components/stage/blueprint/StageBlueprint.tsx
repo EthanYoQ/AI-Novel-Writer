@@ -49,10 +49,7 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
   const count = plan.blueprints.length
   const selected = plan.selected
   const deleting = ask?.kind === 'delete' ? ask.chapterNumber : null
-  const writable = useMemo(() => new Set([
-    ...plan.chapterGaps.map(gap => gap.from),
-    ...(plan.nextWriteChapter === null ? [] : [plan.nextWriteChapter]),
-  ]), [plan.chapterGaps, plan.nextWriteChapter])
+  const writable = useMemo(() => new Set(plan.writableChapters), [plan.writableChapters])
   const firstUnexplainedGap = plan.chapterGaps.find(gap => gap.cause === 'unexplained')
 
   // 写作请求只由那一章的写作按钮接手：下一章在本页，缺口章在它的单章视图。那一章现在写不了时丢掉请求，免得以后突然弹出。

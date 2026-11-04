@@ -125,6 +125,7 @@ export function useChapterBlueprints({
   const dirty = dirtyChapterNumbers.size > 0
   const [nextWriteChapter, setNextWriteChapter] = useState<number | null>(null)
   const [chapterGaps, setChapterGaps] = useState<ChapterGap[]>([])
+  const [writableChapters, setWritableChapters] = useState<number[]>([])
   const [authorityError, setAuthorityError] = useState<string | null>(null)
 
   const [recoveringLegacyImportedText, setRecoveringLegacyImportedText] = useState(false)
@@ -223,6 +224,7 @@ export function useChapterBlueprints({
       setDataProjectSession(null)
       setNextWriteChapter(null)
       setChapterGaps([])
+      setWritableChapters([])
       setAuthorityError(null)
       setSaving(false)
       applyVisibleDraftState([], new Set())
@@ -240,6 +242,7 @@ export function useChapterBlueprints({
       setDataProjectSession(null)
       setNextWriteChapter(null)
       setChapterGaps([])
+      setWritableChapters([])
       setAuthorityError(null)
       setSaving(false)
       applyVisibleDraftState([], new Set())
@@ -273,11 +276,13 @@ export function useChapterBlueprints({
         setAuthorityError(null)
         setNextWriteChapter(chapters.next)
         setChapterGaps(chapters.gaps)
+        setWritableChapters(chapters.writable)
       } catch (error) {
         if (!isLatestProjectRequest()) return
         setAuthorityError(displayedErrorMessage(useLocaleStore.getState().locale, error))
         setNextWriteChapter(null)
         setChapterGaps([])
+        setWritableChapters([])
       }
     } catch (error) {
       if (isLatestProjectRequest()) {
@@ -686,6 +691,7 @@ export function useChapterBlueprints({
     nextWriteChapter,
     nextWritableBlueprint,
     chapterGaps: projectDataReady ? chapterGaps : [],
+    writableChapters: projectDataReady ? writableChapters : [],
     authorityError,
     recoveringLegacyImportedText,
     planningRecovery,
