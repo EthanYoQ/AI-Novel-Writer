@@ -191,6 +191,7 @@ describe('回收站对话框（#564）', () => {
   })
 
   it('清空回收站连读不全的项一起删', async () => {
+    const success = vi.spyOn(toast, 'success')
     await render()
     await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
     await act(async () => dialog().getByRole('button', { name: '清空回收站…' }).click())
@@ -200,6 +201,7 @@ describe('回收站对话框（#564）', () => {
     await vi.waitFor(() => expect(calls('chapter:trash-purge')[0]?.[1]).toEqual({ deletionIds: ['del-3', 'del-5', 'del-broken'] }))
     await expect.element(dialog()).toHaveAccessibleName('回收站（0）')
     await expect.element(dialog()).toHaveTextContent('回收站是空的')
+    await vi.waitFor(() => expect(success).toHaveBeenCalledWith('已清空回收站。'))
   })
 
   it.each([
@@ -257,6 +259,7 @@ describe('回收站对话框（#564）', () => {
   })
 
   it('清空确认开着时又有章节进了回收站，确认只删确认框说到的那几项，新进来的还在（#592）', async () => {
+    const success = vi.spyOn(toast, 'success')
     await render()
     await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
     await act(async () => dialog().getByRole('button', { name: '清空回收站…' }).click())
@@ -271,6 +274,8 @@ describe('回收站对话框（#564）', () => {
     expect(entries.map(item => item.deletionId)).toEqual(['del-7'])
     expect(damaged).toEqual([])
     await expect.element(dialog()).toHaveAccessibleName('回收站（1）')
+    await vi.waitFor(() => expect(success).toHaveBeenCalledWith('已彻底删除 3 项。'))
+    expect(success.mock.calls.flat()).not.toContain('已清空回收站。')
   })
 
   it.each([
