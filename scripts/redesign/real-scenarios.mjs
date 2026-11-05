@@ -401,7 +401,6 @@ export const REAL_SCENARIOS = {
     const before = await runsStarted(page)
     await blueprint.startBatch(page, 2)
     await runSheet.waitUntilOpen(page)
-    // 暂停按钮一出现就点：第一次点就生效。
     await runSheet.sheet(page).getByRole('button', { name: '暂停批量创作' }).click()
     await runSheet.sheet(page).getByText(/本章写完后暂停$/).waitFor({ state: 'visible', timeout: 5000 })
       .catch(async () => { throw new Error(`侧页出现即点暂停批量创作，没有进入「本章写完后暂停」\n${await runSheetText(page)}`) })
