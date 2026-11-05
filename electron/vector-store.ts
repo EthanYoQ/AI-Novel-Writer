@@ -1396,36 +1396,14 @@ export async function search(
   embeddingSpace?: EmbeddingSpaceIdentity,
   excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<SearchResult[]> {
-  return searchWithScope(
-    projectPath,
-    queryText,
-    queryVector,
-    topK,
-    undefined,
-    embeddingSpace,
-    excludedCorpusKinds,
-  )
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => searchInternal(projectPath, queryText, queryVector, topK, embeddingSpace, excludedCorpusKinds))
 }
 
-/** 支持章节范围限定的检索入口。 */
-export async function searchWithScope(
+async function searchInternal(
   projectPath: string,
   queryText: string,
   queryVector?: number[],
   topK: number = 5,
-  chapterScope?: [number, number],
-  embeddingSpace?: EmbeddingSpaceIdentity,
-  excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
-): Promise<SearchResult[]> {
-  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => searchWithScopeInternal(projectPath, queryText, queryVector, topK, chapterScope, embeddingSpace, excludedCorpusKinds))
-}
-
-async function searchWithScopeInternal(
-  projectPath: string,
-  queryText: string,
-  queryVector?: number[],
-  topK: number = 5,
-  chapterScope?: [number, number],
   embeddingSpace?: EmbeddingSpaceIdentity,
   excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<SearchResult[]> {
@@ -1444,12 +1422,6 @@ async function searchWithScopeInternal(
       ? staleDocIds.map(id => `\`docId\` != '${id.replace(/'/g, "''")}'`).join(' AND ')
       : undefined
 
-    let scopeFilter: string | undefined
-    if (chapterScope) {
-      const [from, to] = chapterScope
-      scopeFilter = `\`chapterNumber\` >= ${from} AND \`chapterNumber\` <= ${to}`
-    }
-
     if (queryVector && vectorIsUsable(queryVector)) {
       try {
         const registry = await loadOrRegisterLegacyRegistry(projectPath, db, tableNames)
@@ -1459,9 +1431,6 @@ async function searchWithScopeInternal(
           try {
           let query = vectorTable.search(queryVector).limit(topK)
           const vectorFilters: string[] = []
-          if (scopeFilter && await tableSupportsField(vectorTable, 'chapterNumber')) {
-            vectorFilters.push(scopeFilter)
-          }
           const corpusFilter = excludedCorpusFilter(excludedCorpusKinds)
           if (corpusFilter && await tableSupportsField(vectorTable, 'corpusKind')) {
             vectorFilters.push(corpusFilter)
@@ -1498,9 +1467,6 @@ async function searchWithScopeInternal(
             .join(' OR ')})`
         : "text LIKE '%%'"
       const filters = [textFilter]
-      if (scopeFilter && await tableSupportsField(canonicalTable, 'chapterNumber')) {
-        filters.push(scopeFilter)
-      }
       const corpusFilter = excludedCorpusFilter(excludedCorpusKinds)
       if (corpusFilter && await tableSupportsField(canonicalTable, 'corpusKind')) {
         filters.push(corpusFilter)

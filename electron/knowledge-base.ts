@@ -25,7 +25,7 @@ import {
   replaceDocumentChunks,
   removeDocument as removeDocFromStore,
   clearAll as clearKnowledgeStore,
-  searchWithScope as storeSearchWithScope,
+  search as storeSearch,
   listDocuments as storeListDocuments,
   getStats as storeGetStats,
   getChunksWithoutVectors as storeGetChunksWithoutVectors,
@@ -131,7 +131,6 @@ export async function searchKnowledge(
   protocol: 'openai' | 'gemini',
   model: EmbeddingModel,
   topK: number = 5,
-  chapterScope?: [number, number],
   excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<Array<{ text: string; score: number; fileName: string }>> {
   await ensureMigration(projectPath)
@@ -149,12 +148,11 @@ export async function searchKnowledge(
     }
   }
 
-  return storeSearchWithScope(
+  return storeSearch(
     projectPath,
     query,
     queryVector,
     topK,
-    chapterScope,
     embeddingSpaceFor(protocol, model),
     excludedCorpusKinds,
   )
@@ -762,16 +760,14 @@ export async function searchKnowledgeFTS(
   query: string,
   projectPath: string,
   topK: number = 5,
-  chapterScope?: [number, number],
   excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<Array<{ text: string; score: number; fileName: string }>> {
   await ensureMigration(projectPath)
-  return storeSearchWithScope(
+  return storeSearch(
     projectPath,
     query,
     undefined,
     topK,
-    chapterScope,
     undefined,
     excludedCorpusKinds,
   )

@@ -37,7 +37,7 @@ it('keeps chapter identity and scoped metadata across reindex and exact deletion
   expect(await reindexDocumentCopy(first.docId!, projectPath)).toMatchObject({ success: true, docId: first.docId })
   expect(remove).not.toHaveBeenCalled()
   remove.mockRestore()
-  expect(await searchKnowledgeFTS('chapter after', projectPath, 5, [1, 1])).toEqual([expect.objectContaining({ text: 'chapter after' })])
+  expect(await searchKnowledgeFTS('chapter after', projectPath, 5)).toEqual([expect.objectContaining({ text: 'chapter after' })])
   expect(await removeDocument(projectPath, first.docId!)).toBe(true)
   expect(await searchKnowledgeFTS('chapter', projectPath)).toEqual([])
   expect(await listDocuments(projectPath)).toEqual([expect.objectContaining({ id: 'reference' })])
