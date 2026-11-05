@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { appearanceWrite, captureFailure, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs, sessionIsClean } from '../drive.mjs'
+import { appearanceWrite, assertBuilt, captureFailure, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs, sessionIsClean } from '../drive.mjs'
 import { BASELINE_SESSIONS, SCENARIOS } from '../scenarios.mjs'
 
 const parents = []
@@ -129,4 +129,20 @@ it('空闲内存取各次采样全部进程合计的中位数，按进程类型�
     byType: { Browser: 100, Tab: 300, GPU: 50 },
   })
   assert.throws(() => idleMemory([]), /没有采样/)
+})
+
+it('真实模型场景只能带 --real-model 跑，--real-model 也不能用在假模型场景上', () => {
+  assert.equal(parseArgs(['--scenario', 'real-main', '--real-model']).realModel, true)
+  assert.equal(parseArgs(['--scenario', 'settings']).realModel, false)
+  assert.throws(() => parseArgs(['--scenario', 'real-main']), /real-main 是真实模型场景，要带 --real-model/)
+  assert.throws(() => parseArgs(['--scenario', 'finalize', '--real-model']), /--real-model 只用于真实模型场景/)
+  assert.throws(() => parseArgs(['--scenario', 'real-main', '--real-model', '--api-key', 'sk-x']), /未知参数 --api-key/)
+})
+
+it('没构建的应用根直接报错，不去启动 Electron', () => {
+  const root = tempParent()
+  assert.throws(() => assertBuilt(root), /dist-electron[\\/]main\.js 不存在/)
+  fs.mkdirSync(path.join(root, 'dist-electron'))
+  fs.writeFileSync(path.join(root, 'dist-electron', 'main.js'), '')
+  assertBuilt(root)
 })
