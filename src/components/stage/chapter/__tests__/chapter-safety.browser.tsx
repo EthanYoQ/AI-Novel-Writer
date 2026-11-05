@@ -391,9 +391,23 @@ describe('标签与外壳', () => {
     await act(async () => openChapterPlan(3, BLUEPRINT.title, SESSION))
     await expect.element(page.getByText('删除正文后的清理没有完成')).toBeVisible()
     await expect.element(page.getByText('正文文件被占用')).toBeVisible()
+    const success = vi.spyOn(toast, 'success')
     await click('重试清理')
     await vi.waitFor(() => expect(backend.writes('chapter:retry-deletion').map(args => args[0])).toEqual(['deletion-1']))
     await expect.element(page.getByText('删除正文后的清理没有完成')).not.toBeInTheDocument()
+    await vi.waitFor(() => expect(success).toHaveBeenCalledOnce())
+    expect(String(success.mock.calls[0][0])).not.toMatch(/投影/)
+  })
+
+  it.each([['zh-CN', '确认人工核对并继续', /投影/], ['en-US', 'Confirm and continue', /projection/i]] as const)('旧定稿删除正文后待人工核对知识库：提示不出现内部术语（%s）', async (locale, action, jargon) => {
+    useLocaleStore.setState({ locale })
+    backend.state.incompleteDeletions = [{ operationId: 'deletion-1', chapterNumber: 3, draftId: 9, chapterTitle: '雨夜车站', status: 'authorization_required',
+      manuscriptStatus: 'completed', manuscriptError: '', knowledgeStatus: 'pending', legacyKnowledgeAuthorization: 'required' }]
+    await mount()
+    await act(async () => openChapterPlan(3, BLUEPRINT.title, SESSION))
+    const button = page.getByRole('button', { name: action })
+    await expect.element(button).toBeVisible()
+    expect(button.element().closest('.pi-notice')?.textContent).not.toMatch(jargon)
   })
 
   it.each([
