@@ -1056,7 +1056,115 @@ describe('写作 Skill 快照还在读取时作者点了取消', () => {
     expect(finished.error).toContain('写作 Skill 绑定文件已损坏')
     expect(errorLogs()).not.toEqual([])
   })
+
+  it.each([
+    ['快照读取因取消被拒绝', 'rejected'],
+    ['快照读完时作品已切换', 'switched'],
+  ] as const)('导入在快照读取时被切换作品取消（%s）：取消请求保存好之前，切换作品一直等着', async (_when, exit) => {
+    const release = holdSkillSnapshot(exit === 'rejected' ? new Error('GENERATION_CANCELLED') : undefined)
+    const request = heldCancellationRequest()
+    const executor = vi.fn(async () => undefined)
+    const completion = useWorkflowStore.getState().startWorkflow({
+      runId: 'snapshot-import-cancel', type: 'novel_import', title: '导入《旧稿》', projectPath,
+      projectSession: frozenSession(), onCancelRequested: request.hook,
+      steps: [{ name: '解析', description: '', executor }],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('running'))
+
+    const switching = projectSwitchWait()
+    expect(request.hook).toHaveBeenCalledOnce()
+    if (exit === 'switched') {
+      useProjectStore.setState({
+        currentProject: {
+          id: 'other-project', name: 'Other', path: 'C:\\other-project', sessionLease: 'lease-other-project', novelConfig: {},
+        } as never,
+      })
+    }
+    release()
+    await afterSeveralPolls()
+    expect(switching.returned()).toBe(false)
+    expect(useWorkflowStore.getState().activeRuns.map(run => run.id)).toEqual(['snapshot-import-cancel'])
+
+    request.save()
+    await switching.done
+    await completion
+    expect(executor).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({ id: 'snapshot-import-cancel', status: 'cancelled' })
+    expect(errorLogs()).toEqual([])
+  })
+
+  it('取消请求没能保存：切换作品照样等它有了结果再继续，失败写进错误日志，运行记已取消', async () => {
+    const release = holdSkillSnapshot(new Error('GENERATION_CANCELLED'))
+    const request = heldCancellationRequest()
+    const completion = useWorkflowStore.getState().startWorkflow({
+      runId: 'snapshot-import-cancel', type: 'novel_import', title: '导入《旧稿》', projectPath,
+      projectSession: frozenSession(), onCancelRequested: request.hook,
+      steps: [{ name: '解析', description: '', executor: vi.fn(async () => undefined) }],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('running'))
+
+    const switching = projectSwitchWait()
+    release()
+    await afterSeveralPolls()
+    expect(switching.returned()).toBe(false)
+
+    request.fail(new Error('磁盘写入失败'))
+    await switching.done
+    await completion
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({ id: 'snapshot-import-cancel', status: 'cancelled' })
+    expect(errorLogs().map(log => log.message)).toEqual([expect.stringContaining('[取消失败] 未能立即保存取消请求：磁盘写入失败')])
+  })
 })
+
+describe('导入写到一半被切换作品取消，随后出了真实错误', () => {
+  it('取消请求保存好之前，切换作品一直等着；运行记失败，带原错误码', async () => {
+    const request = heldCancellationRequest()
+    let fail!: () => void
+    const completion = useWorkflowStore.getState().startWorkflow({
+      runId: 'mid-step-import-cancel', type: 'novel_import', title: '导入《旧稿》', projectPath,
+      projectSession: frozenSession(), onCancelRequested: request.hook,
+      steps: [{ name: '反推蓝图', description: '', executor: async () => {
+        await new Promise<void>(resolve => { fail = resolve })
+        throw Object.assign(new Error('章节蓝图保存失败：磁盘空间不足'), { code: 'GENERATION_STORAGE_FAILED' })
+      } }],
+    })
+    await vi.waitFor(() => expect(fail).toBeTypeOf('function'))
+
+    const switching = projectSwitchWait()
+    expect(request.hook).toHaveBeenCalledOnce()
+    fail()
+    await afterSeveralPolls()
+    expect(switching.returned()).toBe(false)
+    expect(useWorkflowStore.getState().activeRuns.map(run => run.id)).toEqual(['mid-step-import-cancel'])
+
+    request.save()
+    await switching.done
+    await completion
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({
+      id: 'mid-step-import-cancel', status: 'failed', errorCode: 'GENERATION_STORAGE_FAILED',
+    })
+  })
+})
+
+/** 导入的取消请求要落盘：hook 返回的 promise 由测试决定何时保存成功或失败。 */
+function heldCancellationRequest() {
+  let save!: () => void
+  let fail!: (error: Error) => void
+  const hook = vi.fn(() => new Promise<void>((resolve, reject) => { save = resolve; fail = reject }))
+  return { hook, save: () => save(), fail: (error: Error) => fail(error) }
+}
+
+/** 切换作品前的等待：取消本作品全部运行，等活动列表里没有它们。 */
+function projectSwitchWait() {
+  let returned = false
+  const done = useWorkflowStore.getState().cancelProjectWorkflowsAndWait(projectPath).then(() => { returned = true })
+  return { done, returned: () => returned }
+}
+
+/** 等待按 50ms 轮询活动列表；过几轮还没返回，就是在等。 */
+function afterSeveralPolls() {
+  return new Promise<void>(resolve => setTimeout(resolve, 250))
+}
 
 afterEach(() => {
   vi.unstubAllGlobals()
