@@ -85,8 +85,8 @@ const OCCUPIED_REASON: Record<Occupier, (title: string, verbZh: string, verbEn: 
     `The batch “${title}” is paused but still holds this chapter. Cancel the batch to ${verbEn} now; drafts already written are kept.`,
   ],
   'batch-shared': (title, verbZh, verbEn) => [
-    `批量创作「${title}」正在给别的章节定稿，要更新全书共用的角色状态和章节要点，这期间不能${verbZh}这一章。等它结束再${verbZh}，或者取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
-    `The batch “${title}” is finalizing other chapters and updating the book’s shared character state and chapter notes, so you can’t ${verbEn} this chapter meanwhile. Wait for it to finish, or cancel the batch to ${verbEn} now; drafts already written are kept.`,
+    `批量创作「${title}」会给它写的章节自动定稿，已经预留了全书共用的角色状态和章节要点，定稿时要更新它们，这期间不能${verbZh}这一章。等它结束再${verbZh}，或者取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
+    `The batch “${title}” auto-finalizes the chapters it writes, so it has reserved the book’s shared character state and chapter notes, which it will update when finalizing. You can’t ${verbEn} this chapter meanwhile. Wait for it to finish, or cancel the batch to ${verbEn} now; drafts already written are kept.`,
   ],
   'paused-batch-shared': (title, verbZh, verbEn) => [
     `批量创作「${title}」已暂停，但它还要给别的章节定稿，一直占着全书共用的角色状态和章节要点，这期间不能${verbZh}这一章。取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
