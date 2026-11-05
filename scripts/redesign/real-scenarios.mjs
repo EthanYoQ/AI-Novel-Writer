@@ -193,7 +193,7 @@ async function finalizeAndPostProcess(page, chapterNumber) {
   return { ms: Date.now() - started, steps }
 }
 
-/** 审稿、按意见修稿、全部用修稿、完成合并；审稿 0 条意见时修稿按钮是「按 0 项意见修稿」且不可点，改由作者添一条意见再修稿。 */
+/** 审稿、按意见修稿、全部用修稿、完成合并；审稿没有可修的意见时主按钮直接是「定稿」，改由作者添一条意见再修稿。 */
 async function reviewReviseMerge(page, chapterNumber, confirmations) {
   const measured = {}
   measured.reviewMs = await runAndWait(page, () => chapterView.view(page).getByRole('button', { name: 'AI 审稿', exact: true }).click(),
@@ -201,15 +201,20 @@ async function reviewReviseMerge(page, chapterNumber, confirmations) {
   await chapterView.reviewSheet(page).waitFor({ state: 'visible', timeout: 30_000 })
     .catch(async () => { throw new Error(`第 ${chapterNumber} 章审稿结束后审稿侧页没有出现\n${await runSheetText(page)}`) })
   const revise = chapterView.reviseButton(page)
-  await revise.waitFor({ state: 'visible' })
-  measured.reviewIssues = Number((await revise.innerText()).match(/\d+/)[0])
-  measured.reviseEnabled = await revise.isEnabled()
-  if (measured.reviewIssues === 0) {
-    // 审稿没提意见时修稿走作者自己的意见：这也是作者能走的路，修稿与合并照样由真实模型完成。
-    assert.equal(measured.reviseEnabled, false, '0 条意见时不能修稿')
+  const finalizeNow = chapterView.view(page).getByRole('button', { name: '定稿', exact: true })
+  await revise.or(finalizeNow).first().waitFor({ state: 'visible' })
+  if (await revise.count() > 0) {
+    measured.reviewIssues = Number((await revise.innerText()).match(/\d+/)[0])
+    assert.ok(measured.reviewIssues > 0 && await revise.isEnabled(), `有修稿按钮时它按至少 1 项意见修稿且可点：${await revise.innerText()}`)
+  } else {
+    // 审稿没提可修的意见时修稿走作者自己的意见：这也是作者能走的路，修稿与合并照样由真实模型完成。
+    measured.reviewIssues = 0
+    measured.nothingToReviseHint = await chapterView.hint(page).innerText()
+    assert.match(measured.nothingToReviseHint, /这次审稿没有需要修改的意见/u)
     await chapterView.reviewSheet(page).getByRole('button', { name: '添加我的意见' }).click()
     await chapterView.reviewSheet(page).getByRole('textbox', { name: '审稿问题' }).fill(AUTHOR_NOTE)
     await chapterView.view(page).getByRole('button', { name: '按 1 项意见修稿' }).waitFor({ state: 'visible' })
+    assert.equal(await finalizeNow.count(), 0, '添了意见后主按钮换成修稿')
     measured.authorNote = true
   }
   measured.reviseMs = await runAndWait(page, () => revise.click(), `第 ${chapterNumber} 章修稿`, confirmations)
@@ -387,7 +392,7 @@ export const REAL_SCENARIOS = {
     return { ...measured, confirmations }
   } },
 
-  /** #582：批量写第 3、4 章，第 3 章写完后暂停（暂停中定稿被拒，记下界面反馈）；取消后批次可续，作者定稿第 3 章后批次列为来源已变化、不能继续，第 3 章可以重新打开；再重启仍不能继续。 */
+  /** #582：批量写第 3、4 章，第 3 章写完后暂停（暂停中点定稿立即提示还不能定稿）；取消后批次可续，作者定稿第 3 章后批次列为来源已变化、不能继续，第 3 章可以重新打开；再重启仍不能继续。 */
   'real-batch': { real: true, setup: context => seedBook(context, { finalized: [1, 2] }), run: async context => {
     const { shoot } = context
     let { page } = context
@@ -396,20 +401,10 @@ export const REAL_SCENARIOS = {
     const before = await runsStarted(page)
     await blueprint.startBatch(page, 2)
     await runSheet.waitUntilOpen(page)
-    // 批次在侧页里出现后要过一会儿才接得住暂停：先点一次看是否生效，不生效就等第 3 章开始写再点，两次的结果都记下。
-    const pausing = runSheet.sheet(page).getByText(/本章写完后暂停$/)
-    measured.pauseClicks = []
-    for (const when of ['侧页出现即点', '第 3 章开始写后再点']) {
-      if (when !== '侧页出现即点') await runSheet.sheet(page).getByText(/第 3 章 · 生成草稿待审/).waitFor({ state: 'visible', timeout: MODEL_WAIT })
-      const pause = runSheet.sheet(page).getByRole('button', { name: '暂停批量创作' })
-      if (await pause.count() === 0) break
-      await pause.click()
-      const tookEffect = await pausing.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false)
-      measured.pauseClicks.push({ when, tookEffect })
-      if (tookEffect) break
-    }
-    await pausing.waitFor({ state: 'visible', timeout: 1000 })
-      .catch(async () => { throw new Error(`点了暂停批量创作，没有进入「本章写完后暂停」：${JSON.stringify(measured.pauseClicks)}\n${await runSheetText(page)}`) })
+    // 暂停按钮一出现就点：第一次点就生效。
+    await runSheet.sheet(page).getByRole('button', { name: '暂停批量创作' }).click()
+    await runSheet.sheet(page).getByText(/本章写完后暂停$/).waitFor({ state: 'visible', timeout: 5000 })
+      .catch(async () => { throw new Error(`侧页出现即点暂停批量创作，没有进入「本章写完后暂停」\n${await runSheetText(page)}`) })
     const started = Date.now()
     await runSheet.sheet(page).getByText(/· 已暂停$/).waitFor({ state: 'visible', timeout: MODEL_WAIT })
       .catch(async () => { throw new Error(`批量创作 ${MODEL_WAIT / 60_000} 分钟内没有停在第 3 章之后\n${await runSheetText(page)}`) })
@@ -420,25 +415,25 @@ export const REAL_SCENARIOS = {
     assert.deepEqual(measured.paused.chapter4, [], '暂停后没有写第 4 章')
     await shoot('real-batch-paused')
 
-    // 暂停中的批次仍占着第 3、4 章，确认定稿会因资源冲突被拒。拒绝原因写进「诊断」，等它出现就说明拒绝已发生。
-    // 记下作者能看到什么。入口是否可点不作为通过条件。
+    // 暂停中的批次仍占着第 3、4 章：点定稿立即提示还不能定稿，不打开确认框。
     await openChapter(page, 3)
-    await chapterView.finalize(page, 3, { untilReadOnly: false })
-    await runSheet.openFromPalette(page)
-    await runSheet.tab(page, '诊断').click()
-    await runSheet.sheet(page).getByText(/请等待完成或取消任务后再试/).first().waitFor({ state: 'visible', timeout: 30_000 })
+    const finalizeButton = chapterView.view(page).getByRole('button', { name: '定稿', exact: true })
+    if (await finalizeButton.count() > 0) await finalizeButton.click()
+    else await chapterView.more(page, '定稿…')
+    const blocked = page.locator('.pi-toast').filter({ hasText: '第 3 章还不能定稿' })
+    await blocked.waitFor({ state: 'visible', timeout: 10_000 })
+      .catch(async () => { throw new Error(`批次暂停时点定稿没有提示「第 3 章还不能定稿」：${JSON.stringify(await page.locator('.pi-toast').allInnerTexts())}`) })
     measured.finalizeWhilePaused = {
+      toast: await blocked.innerText(),
+      dialogs: await chapterView.finalizeDialog(page, 3).count(),
       finalizedInDb: (await chapterFacts(context, 3)).some(draft => draft.status === 'finalized'),
-      readOnlyShown: await chapterView.view(page).getByText('已定稿，只读', { exact: true }).count() > 0,
-      toasts: await page.locator('.pi-toast').allInnerTexts(),
     }
     await shoot('real-batch-finalize-while-paused')
-    await runSheet.tab(page, '历史').click()
-    measured.finalizeWhilePaused.historyText = (await runSheet.sheet(page).innerText()).slice(0, 1500)
-    await runSheet.tab(page, '进行中').click()
+    assert.equal(measured.finalizeWhilePaused.dialogs, 0, '批次占着本章时不打开定稿确认框')
     assert.equal(measured.finalizeWhilePaused.finalizedInDb, false, '批次暂停时第 3 章不会被定稿')
 
     // 暂停中的批次挡着退出（「创作任务仍在运行」），作者能走的路是在运行侧页取消它；取消后批次列为可恢复，这时定稿第 3 章（#582 的情形）。
+    await runSheet.openFromPalette(page)
     const batchTitle = (await runSheet.activeTitles(page)).find(title => title.startsWith('批量草稿待审'))
     assert.ok(batchTitle, `运行侧页里有这一批：${await runSheetText(page)}`)
     await runSheet.sheet(page).getByRole('button', { name: `取消「${batchTitle}」` }).click()
