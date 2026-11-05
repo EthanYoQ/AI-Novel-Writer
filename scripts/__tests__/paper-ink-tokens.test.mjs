@@ -21,9 +21,17 @@ test('tokens.css 出现两条主题规则以外的块时报错', () => {
   assert.throws(() => parseTokens(theme('--a: red;', '--a: blue;') + '@media (min-width: 1px) { .paper-ink { --a: green; } }'), /只支持/)
 })
 
-test('带标题或尖括号的行内链接指向不存在的文件时报坏链接', () => {
-  const doc = '[在](../assets/brand/pagekin-icon.svg "预览") [缺](../assets/brand/missing.svg "预览") [尖括号](<../assets/brand/gone.svg>)'
-  assert.deepEqual(linkProblems(doc), ['链接到不存在的文件：../assets/brand/missing.svg', '链接到不存在的文件：../assets/brand/gone.svg'])
+test('带标题的行内链接指向不存在的文件时报坏链接', () => {
+  const doc = '[在](../assets/brand/pagekin-icon.svg "预览") [缺](../assets/brand/missing.svg "预览")'
+  assert.deepEqual(linkProblems(doc), ['链接到不存在的文件：../assets/brand/missing.svg'])
+})
+
+test('出现尖括号链接目标时直接失败', () => {
+  assert.deepEqual(linkProblems('[图](<../assets/brand/pagekin-icon.svg missing>)'), ['出现尖括号链接目标，品牌文档请使用不带尖括号的行内链接'])
+})
+
+test('浅色规则的选择器不是 .paper-ink 时报错', () => {
+  assert.throws(() => parseTokens(theme('--a: red;', '--a: blue;').replace('.paper-ink {', '.other {')), /只支持/)
 })
 
 test('img src 指向不存在的文件时报坏链接', () => {

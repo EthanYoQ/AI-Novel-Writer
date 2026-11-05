@@ -3,9 +3,10 @@
 //   node scripts/brand/paper-ink-tokens.mjs           打印令牌表
 //   node scripts/brand/paper-ink-tokens.mjs --write   把令牌表写进文档的标记之间
 //   node scripts/brand/paper-ink-tokens.mjs --check   令牌表与源码不一致或链接指向不存在的文件时以退出码 1 结束
-// 支持的语法只有下面这些，超出范围时报错，不放行：
-//   tokens.css：只有浅色、深色两条规则，只读自定义属性声明；出现别的块（如 @media）就报错。
-//   文档链接：行内链接（可带标题、可用尖括号包目标）与 HTML 的 src、href；出现引用式链接定义就报错。
+// 只接受下面这些写法，其余一律报错，不放行：
+//   tokens.css：恰好是浅色 `.paper-ink` 与深色 `.paper-ink[data-theme="dark"], [data-theme="dark"] .paper-ink` 两条规则，
+//   规则里只读自定义属性声明。
+//   文档链接：不带尖括号的行内链接（可带标题）与 HTML 的 src、href。引用式链接定义和尖括号目标都报错。
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -14,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const TOKEN_FILE = 'src/styles/paper-ink/tokens.css'
 const DOC_FILE = 'docs/brand/README.md'
-const DARK_SELECTOR = '.paper-ink[data-theme="dark"]'
+const THEME_RULES = /^\s*\.paper-ink\s*\{([^{}]*)\}\s*\.paper-ink\[data-theme="dark"\],\s*\[data-theme="dark"\] \.paper-ink\s*\{([^{}]*)\}\s*$/
 const START = '<!-- paper-ink-tokens:start -->'
 const END = '<!-- paper-ink-tokens:end -->'
 
@@ -42,20 +43,17 @@ const CATEGORIES = [
   { title: '层级', purpose: '侧页、弹层、遮罩、对话框、命令式弹窗、提示栈的叠放顺序', match: /^z-[a-z]+$/ },
 ]
 
-function declarations(css) {
-  const body = css.replace(/\/\*[\s\S]*?\*\//g, '')
+function declarations(body) {
   const result = new Map()
-  for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;}]+)(?=[;}])/g)) result.set(name, value.trim().replace(/\s+/g, ' '))
+  for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;]+)(?=;|$)/g)) result.set(name, value.trim().replace(/\s+/g, ' '))
   return result
 }
 
 export function parseTokens(css) {
-  const blocks = css.replace(/\/\*[\s\S]*?\*\//g, '').split('{').length - 1
-  if (blocks !== 2) throw new Error(`${TOKEN_FILE} 有 ${blocks} 个块，只支持浅色、深色两条规则`)
-  const split = css.indexOf(DARK_SELECTOR)
-  if (split < 0) throw new Error(`${TOKEN_FILE} 里找不到深色选择器 ${DARK_SELECTOR}`)
-  const light = declarations(css.slice(0, split))
-  const dark = declarations(css.slice(split))
+  const rules = css.replace(/\/\*[\s\S]*?\*\//g, '').match(THEME_RULES)
+  if (!rules) throw new Error(`${TOKEN_FILE} 的结构不受支持：只支持浅色 .paper-ink 与深色两条规则`)
+  const light = declarations(rules[1])
+  const dark = declarations(rules[2])
   const orphans = [...dark.keys()].filter(name => !light.has(name))
   if (orphans.length) throw new Error(`只在深色里声明的令牌：${orphans.join(', ')}`)
   return { light, dark }
@@ -94,8 +92,9 @@ function block(table) {
 
 export function linkProblems(doc) {
   if (/^\s*\[[^\]]+\]:\s*\S/m.test(doc)) return ['出现引用式链接定义，品牌文档请使用行内链接']
+  if (doc.includes('](<')) return ['出现尖括号链接目标，品牌文档请使用不带尖括号的行内链接']
   const docDir = path.dirname(path.join(root, DOC_FILE))
-  return [...doc.matchAll(/\]\(<?([^\s)>]+)|\s(?:src|href)=["']([^"']+)["']/g)]
+  return [...doc.matchAll(/\]\(([^\s)]+)|\s(?:src|href)=["']([^"']+)["']/g)]
     .map(match => match[1] ?? match[2])
     .filter(target => !/^(https?:|mailto:|#)/.test(target))
     .filter(target => !fs.existsSync(path.resolve(docDir, target.split('#')[0])))
