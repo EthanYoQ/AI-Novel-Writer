@@ -7,6 +7,7 @@ import { useLocaleStore } from '../locale-store'
 import { createBoundedCompletionError } from '../../services/workflows/bounded-completion'
 import { PromptBudgetExceededError } from '../../services/generation/generation-harness'
 import { SourceDraftChangedError } from '../../services/workflows/source-draft-changed'
+import { WorkflowCancelledError } from '../../services/workflows/workflow-cancellation'
 
 const projectPath = 'C:\\test-project'
 
@@ -188,7 +189,7 @@ describe('workflow pause at a safe step boundary', () => {
       expect(context.cancelRequested).toBe(true)
       expect(context.cancelled).toBe(false)
       terminal()
-      throw new Error('Import cancelled at a safe boundary.')
+      throw new WorkflowCancelledError('Import cancelled at a safe boundary.')
     })
     const completion = useWorkflowStore.getState().startWorkflow({
       runId: 'durable-cancel-run',
@@ -272,7 +273,7 @@ describe('workflow pause at a safe step boundary', () => {
       projectSession: frozenSession(),
       steps: [{ name: '写稿', description: '', executor: async (_step, context) => {
         await new Promise<void>(resolve => { release = resolve })
-        if (exit === 'throws' && context.cancelled) throw new Error('批量创作已取消')
+        if (exit === 'throws' && context.cancelled) throw new WorkflowCancelledError('批量创作已取消')
       } }],
     })
     await vi.waitFor(() => expect(release).toBeTypeOf('function'))
@@ -968,6 +969,19 @@ describe('作者点了取消，但中止是真实错误造成的：仍记失败�
     expect(finished.error).toContain('磁盘空间不足')
     expect(finished.steps[0]).toMatchObject({ status: 'failed', errorCode: 'GENERATION_STORAGE_FAILED' })
     expect(errorLogs()).not.toEqual([])
+  })
+
+  it.each([
+    ['执行器看到取消后停下', new WorkflowCancelledError('批量创作已取消')],
+    ['主进程生成被取消（码在 code 上）', Object.assign(new Error('生成请求已取消。'), { code: 'CANCELLED' })],
+    ['主进程生成被取消（码就是消息，带调用通道前缀）', new Error("Error invoking remote method 'generation:advance': Error: GENERATION_WORKFLOW_CANCELLED")],
+    ['模型输出因取消没写完', createBoundedCompletionError('cancelled')],
+  ])('取消造成的中止（%s）：运行和这一步都记已取消', async (_shape, cancellation) => {
+    const finished = await cancelThenThrow('batch_generate', cancellation)
+
+    expect(finished).toMatchObject({ status: 'cancelled' })
+    expect(finished.steps[0]).toMatchObject({ status: 'cancelled' })
+    expect(errorLogs()).toEqual([])
   })
 
   it('取消请求之后抛出的普通错误认不出是取消造成的，也记失败', async () => {

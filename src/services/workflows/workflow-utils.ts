@@ -14,6 +14,7 @@ import { ipc } from '../ipc-client'
 import { localize } from '../../i18n/core'
 import { displayedErrorMessage } from '../../i18n/app-errors'
 import type { Locale } from '../../i18n/types'
+import { WorkflowCancelledError } from './workflow-cancellation'
 
 /**
  * Project-level post-processing is fail-closed: never borrow the active lease.
@@ -58,13 +59,13 @@ export async function withRetry(
 ): Promise<{ ok: boolean; error?: string; attempts: number }> {
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+    if (isCancelled?.()) throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
     try {
       await fn()
-      if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+      if (isCancelled?.()) throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
       return { ok: true, attempts: attempt + 1 }
     } catch (err) {
-      if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+      if (isCancelled?.()) throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
       // 原始原因随步骤失败记录保存；日志按冻结的界面语言说明。
       const errMsg = err instanceof Error ? err.message : String(err)
       if (attempt < maxRetries) {
@@ -239,7 +240,7 @@ export async function runPostProcessPipeline(
   const projectSession = options?.projectSession ?? cancellation?.projectSession ?? undefined
   const assertNotCancelled = () => {
     if (cancellation?.cancelled) {
-      throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+      throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
     }
   }
 

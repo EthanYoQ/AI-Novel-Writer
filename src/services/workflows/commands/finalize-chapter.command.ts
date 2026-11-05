@@ -3,6 +3,7 @@ import { runFinalizationGeneration } from '../../finalization-generation'
 import { routeModelId } from '../../model-routing'
 import type { FinalizationGenerationEffect } from '../../../shared/finalization-generation'
 import { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
+import { WorkflowCancelledError } from '../workflow-cancellation'
 export { buildFinalizedContinuityFacts } from '../../../shared/finalized-continuity-facts'
 import {
   BaseWorkflowCommand,
@@ -122,7 +123,7 @@ export function buildFinalizePostProcessSteps(
     critical: true,
     executor: async (callbacks, context) => {
       if (!context) throw new Error(text('定稿后处理缺少冻结工作流上下文', 'Post-finalization processing is missing the frozen workflow context.'))
-      if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+      if (context.cancelled) throw new WorkflowCancelledError(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
       const projectSession = requireWorkflowProjectSession(context)
       const writingLanguage = workflowWritingLanguage(context)
       const contentFileName = chapterTitle
@@ -175,7 +176,7 @@ export function buildFinalizePostProcessSteps(
       critical: true,
       executor: async (callbacks, context) => {
         if (!context) throw new Error(text('定稿后处理缺少冻结工作流上下文', 'Post-finalization processing is missing the frozen workflow context.'))
-        if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+        if (context.cancelled) throw new WorkflowCancelledError(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         if (
           finalizedDraftId !== undefined
           && (
@@ -212,7 +213,7 @@ export function buildFinalizePostProcessSteps(
 
         generatedChapterNotes ??= await generation.complete(notesBuilder, callbacks, 'visible-text', context)
         const cleanNotes = generatedChapterNotes
-        if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+        if (context?.cancelled) throw new WorkflowCancelledError(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
 
         if (finalizedDraftId !== undefined) {
           const facts = buildFinalizedContinuityFacts(
@@ -247,7 +248,7 @@ export function buildFinalizePostProcessSteps(
         }
 
         // 兼容已有蓝图项目；作者原稿无蓝图时，权威事实仍已由定稿投影保存。
-        if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+        if (context?.cancelled) throw new WorkflowCancelledError(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         const result = await ipc.invokeWithProjectSession(
           projectSession,
           'db:blueprint-update-notes',
@@ -322,7 +323,7 @@ export function buildFinalizePostProcessSteps(
         critical: false,
         executor: async (callbacks, context) => {
           if (!context) throw new Error(text('定稿后处理缺少冻结工作流上下文', 'Post-finalization processing is missing the frozen workflow context.'))
-          if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+          if (context.cancelled) throw new WorkflowCancelledError(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
           const result = await ipc.invokeWithProjectSession(
             requireWorkflowProjectSession(context),
             key === 'remove_replaced_knowledge' ? 'chapter:remove-replaced-knowledge' : 'chapter:remove-replaced-manuscripts',

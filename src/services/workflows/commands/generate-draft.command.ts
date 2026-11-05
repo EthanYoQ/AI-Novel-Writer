@@ -3,6 +3,7 @@ import { appErrorMessage, displayedErrorMessage, englishWithReason } from '../..
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock, draftShortOutlineTask } from '../../../shared/draft-short-outline'
+import { WorkflowCancelledError } from '../workflow-cancellation'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
@@ -1144,7 +1145,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         })
         }
       } catch (error) {
-        if (context.cancelled) throw new Error(uiText('工作流已取消', 'Workflow was cancelled.'))
+        if (context.cancelled) throw new WorkflowCancelledError(uiText('工作流已取消', 'Workflow was cancelled.'))
         throw error
       } finally {
         cancellation.dispose()

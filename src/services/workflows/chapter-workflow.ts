@@ -7,7 +7,7 @@ import { ipc } from '../ipc-client'
 import type { DraftStatus } from '../../shared/draft-status'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
-import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
+import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS, type WorkflowResourceClaims } from '../../shared/workflow-resource-claims'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 import { localize } from '../../i18n/core'
 import type { Locale } from '../../i18n/types'
@@ -124,7 +124,7 @@ const FINALIZE_SHARED_WRITE_RESOURCE_KEYS = Object.freeze([
 ])
 
 /** 定稿与修复后处理声明的资源：本章，加上定稿要更新的全书共用资料。定稿入口先按它查占用。 */
-export function finalizeResourceClaims(chapterNumber: number) {
+export function finalizeResourceClaims(chapterNumber: number): WorkflowResourceClaims {
   return {
     resourceKeys: Object.freeze([workflowResourceKey('chapter', chapterNumber), ...FINALIZE_SHARED_WRITE_RESOURCE_KEYS]),
     readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,

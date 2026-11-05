@@ -51,6 +51,7 @@ import {
 } from '../novel-config-expansion'
 import { displayedErrorMessage, englishWithReason, knownAppErrorMessage } from '../../../i18n/app-errors'
 import { pluralEn } from '../../../shared/plural-en'
+import { WorkflowCancelledError } from '../workflow-cancellation'
 
 // --- 基础工具库 ---
 
@@ -934,7 +935,7 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
       '故事前提生成失败，AI 返回空内容',
       'Story premise generation failed because the AI returned empty content.',
     ))
-    if (context.cancelled) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+    if (context.cancelled) throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
 
     const heading = promptLanguageText(writingLanguage, '故事前提', 'Story Premise')
     const content = `# ${heading}\n\n${result}\n`

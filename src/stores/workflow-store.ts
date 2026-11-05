@@ -13,6 +13,7 @@ import {
   getBoundedCompletionFailureCode,
   type BoundedCompletionFailureCode,
 } from '../services/workflows/bounded-completion'
+import { isWorkflowCancellation, WorkflowCancelledError } from '../services/workflows/workflow-cancellation'
 import {
   promptBudgetFailureFromError,
   type PromptBudgetFailureCode,
@@ -366,6 +367,11 @@ function isCancellationPending(context: WorkflowContext): boolean {
   return context.cancelled || context.cancelRequested === true
 }
 
+/** 作者点了取消，而且这次中止就是取消造成的；取消窗口里的真实错误不算，照常记失败。 */
+function stoppedByCancellation(context: WorkflowContext, error: unknown): boolean {
+  return isCancellationPending(context) && isWorkflowCancellation(error)
+}
+
 /** 计算兼容字段的辅助函数 */
 function computeCompat(activeRuns: WorkflowRun[], waitingRuns: Record<string, { waitingForConfirm: boolean; waitingAfterStepIndex: number }>) {
   const currentRun = activeRuns.length > 0 ? activeRuns[0] : null
@@ -596,14 +602,14 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       }
     })
 
-    const failBeforeFirstStep = (error: string) => {
-      updateRunById(set, run.id, { status: 'failed', completedAt: new Date().toISOString(), error })
+    const endBeforeFirstStep = (status: 'failed' | 'cancelled', error: string) => {
+      updateRunById(set, run.id, { status, completedAt: new Date().toISOString(), error })
       set(s => {
-        const failedRun = s.activeRuns.find(active => active.id === run.id)
+        const endedRun = s.activeRuns.find(active => active.id === run.id)
         const newRuns = s.activeRuns.filter(active => active.id !== run.id)
         return {
           activeRuns: newRuns,
-          history: failedRun ? prependRunHistory(s.history, failedRun) : s.history,
+          history: endedRun ? prependRunHistory(s.history, endedRun) : s.history,
           ...computeCompat(newRuns, s.waitingRuns),
         }
       })
@@ -611,17 +617,29 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       cancelRequestedHooks.delete(run.id)
       cancelBoundaryHooks.delete(run.id)
     }
+    const cancelBeforeFirstStep = () => {
+      endBeforeFirstStep('cancelled', uiText(uiLocale, '工作流已取消', 'Workflow was cancelled.'))
+      get().addLog('warn', uiText(
+        uiLocale,
+        `[取消] 工作流「${definition.title}」已取消`,
+        `[Cancelled] Workflow "${definition.title}" was cancelled`,
+      ), uiLocale)
+    }
 
     try {
       context.writingSkills = await freezeWritingSkillsSnapshot(projectSession, writingLanguage)
     } catch (error) {
+      if (stoppedByCancellation(context, error)) {
+        cancelBeforeFirstStep()
+        return runId
+      }
       const reason = displayedErrorMessage(uiLocale, error)
       const failure = uiText(
         uiLocale,
         `写作 Skill 快照加载失败，工作流未启动：${reason}`,
         `Writing skill snapshot could not be loaded, so the workflow was not started: ${reason}`,
       )
-      failBeforeFirstStep(failure)
+      endBeforeFirstStep('failed', failure)
       get().addLog('error', failure, uiLocale)
       return runId
     }
@@ -629,7 +647,12 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
     )) {
-      failBeforeFirstStep(uiText(
+      // 切换作品会先取消本作品的运行；作者已取消时，项目变了正是取消的结果，不是出错。
+      if (isCancellationPending(context)) {
+        cancelBeforeFirstStep()
+        return runId
+      }
+      endBeforeFirstStep('failed', uiText(
         uiLocale,
         '写作 Skill 快照加载期间项目已切换，工作流未启动',
         'The project changed while writing skills were being frozen, so the workflow was not started.',
@@ -787,7 +810,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       try {
         const result = await stepDef.executor(run.steps[i], context, callbacks)
         if (context.cancelled) {
-          throw new Error(uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'))
+          throw new WorkflowCancelledError(uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'))
         }
         if (!isCurrentWorkflowSession(definition.projectPath, context.projectSession)) {
           throw new Error(uiText(
@@ -810,7 +833,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
       } catch (error) {
         // 作者取消引发的中止：这一步停在取消处，运行保持「正在取消」，由循环后的取消收尾记为已取消。
-        if (isCancellationPending(context)) {
+        if (stoppedByCancellation(context, error)) {
           updateStepById(set, run.id, i, { status: 'cancelled', completedAt: new Date().toISOString() })
           const reason = displayedErrorMessage(context.uiLocale, error)
           get().addLog('warn', uiText(
@@ -854,7 +877,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
     // 检查是否全部完成
     let finalRun = get().activeRuns.find(r => r.id === run.id)
-    if (finalRun?.status === 'cancelling' || context.cancelled) {
+    // 取消窗口里真实出错的运行已记失败，不能再改成已取消。
+    if (finalRun?.status !== 'failed' && (finalRun?.status === 'cancelling' || context.cancelled)) {
       const finalizeCancellation = cancelBoundaryHooks.get(run.id)
       if (finalizeCancellation) {
         try {
