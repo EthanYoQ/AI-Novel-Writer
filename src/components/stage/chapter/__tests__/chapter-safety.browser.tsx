@@ -391,9 +391,23 @@ describe('标签与外壳', () => {
     await act(async () => openChapterPlan(3, BLUEPRINT.title, SESSION))
     await expect.element(page.getByText('删除正文后的清理没有完成')).toBeVisible()
     await expect.element(page.getByText('正文文件被占用')).toBeVisible()
+    const success = vi.spyOn(toast, 'success')
     await click('重试清理')
     await vi.waitFor(() => expect(backend.writes('chapter:retry-deletion').map(args => args[0])).toEqual(['deletion-1']))
     await expect.element(page.getByText('删除正文后的清理没有完成')).not.toBeInTheDocument()
+    await vi.waitFor(() => expect(success).toHaveBeenCalledOnce())
+    expect(String(success.mock.calls[0][0])).not.toMatch(/投影/)
+  })
+
+  it.each([['zh-CN', '确认人工核对并继续', /投影/], ['en-US', 'Confirm and continue', /projection/i]] as const)('旧定稿删除正文后待人工核对知识库：提示不出现内部术语（%s）', async (locale, action, jargon) => {
+    useLocaleStore.setState({ locale })
+    backend.state.incompleteDeletions = [{ operationId: 'deletion-1', chapterNumber: 3, draftId: 9, chapterTitle: '雨夜车站', status: 'authorization_required',
+      manuscriptStatus: 'completed', manuscriptError: '', knowledgeStatus: 'pending', legacyKnowledgeAuthorization: 'required' }]
+    await mount()
+    await act(async () => openChapterPlan(3, BLUEPRINT.title, SESSION))
+    const button = page.getByRole('button', { name: action })
+    await expect.element(button).toBeVisible()
+    expect(button.element().closest('.pi-notice')?.textContent).not.toMatch(jargon)
   })
 
   it.each([
@@ -480,6 +494,186 @@ describe('定稿冲突与定稿进行中', () => {
     await act(async () => confirm.element().dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
     expect(activeTab()?.finalizationConflict).toEqual(conflict)
+  })
+})
+
+describe('批量创作占着这一章时定稿、审稿与修稿（本批真实模型实测缺陷 1）', () => {
+  const BATCH_TITLE = '批量草稿待审 · 第 3 至 4 章'
+  const batch = (status: 'running' | 'paused', currentStepIndex: number) => ({
+    id: 'batch-run', type: 'batch_generate', title: BATCH_TITLE, status, projectPath: SESSION.projectPath, projectSession: SESSION,
+    resourceKeys: ['chapter:3', 'chapter:4'], readResourceKeys: ['novel-config', 'architecture', 'blueprints'],
+    uiLocale: 'zh-CN', writingLanguage: 'zh-CN', createdAt: '2026-11-05T08:00:00.000Z', currentStepIndex,
+    steps: [
+      { id: 's3', name: '第 3 章 · 生成草稿待审', description: '', status: currentStepIndex > 0 ? 'completed' : 'pending', logs: [] },
+      { id: 's4', name: '第 4 章 · 生成草稿待审', description: '', status: 'pending', logs: [] },
+    ],
+  })
+  const blockedToast = () => [...document.querySelectorAll('.pi-toast')].find(card => card.textContent?.includes('还不能定稿'))
+  let cancelWorkflow: ReturnType<typeof vi.fn>
+
+  beforeEach(async () => {
+    cancelWorkflow = vi.fn()
+    useWorkflowStore.setState({ cancelWorkflow: cancelWorkflow as never })
+    await act(async () => { for (const card of document.querySelectorAll<HTMLButtonElement>('.pi-toast button[aria-label="关闭通知"]')) card.click() })
+  })
+
+  it.each([
+    ['刚开始', 'running', 0],
+    ['运行中', 'running', 1],
+    ['暂停中', 'paused', 1],
+  ] as const)('批次%s：「更多」里的定稿可以点，点了立即说明原因与办法，不打开确认框、不发起定稿', async (_when, status, step) => {
+    const draft = backend.addDraft({ status: 'draft' })
+    await mount()
+    await openDraft(draft.id)
+    await act(async () => useWorkflowStore.setState({ activeRuns: [batch(status, step) as never] }))
+    await click('更多操作')
+    const item = page.getByRole('menuitem', { name: '定稿…' })
+    await expect.element(item).toBeEnabled()
+    await act(async () => item.click())
+
+    await vi.waitFor(() => expect(blockedToast()).toBeTruthy())
+    const toastText = blockedToast()!.textContent!
+    expect(toastText).toContain('正文保持原样')
+    expect(toastText).toContain(BATCH_TITLE)
+    expect(toastText).toContain('取消批量创作后就能定稿')
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().history).toEqual([])
+
+    await act(async () => [...blockedToast()!.querySelectorAll('button')].find(button => button.textContent === '取消批量创作')!.click())
+    expect(cancelWorkflow).toHaveBeenCalledWith('batch-run')
+  })
+
+  it('已修稿的稿：主按钮「定稿」同样立即说明，不打开确认框', async () => {
+    const draft = backend.addDraft({ status: 'revised' })
+    await mount()
+    await openDraft(draft.id)
+    await act(async () => useWorkflowStore.setState({ activeRuns: [batch('paused', 1) as never] }))
+    await click('定稿')
+    await vi.waitFor(() => expect(blockedToast()).toBeTruthy())
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('确认框开着时批次开始：点「确认定稿」说明原因，不发起定稿', async () => {
+    const draft = backend.addDraft({ status: 'revised' })
+    await mount()
+    await openDraft(draft.id)
+    await click('定稿')
+    await expect.element(page.getByRole('dialog', { name: '定稿第 3 章？' })).toBeVisible()
+    await act(async () => useWorkflowStore.setState({ activeRuns: [batch('running', 0) as never] }))
+    await click('确认定稿')
+    await vi.waitFor(() => expect(blockedToast()).toBeTruthy())
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+  })
+
+  // CodeRabbit（#587）：有未保存修改时，审稿和修稿曾先把修改写盘、再说「正文保持原样」。
+  const occupiedToast = (verb: string) => [...document.querySelectorAll('.pi-toast')].find(card => card.textContent?.includes(`还不能${verb}`))
+  const startRefine = async () => {
+    await click('更多操作')
+    await act(async () => page.getByRole('menuitem', { name: '直接修稿…' }).click())
+    await click('开始修稿')
+  }
+
+  it.each([
+    ['审稿', () => click('AI 审稿')],
+    ['修稿', startRefine],
+  ] as const)('有未保存的修改时点%s：先说明被占着，不保存、不发起，正文保持原样属实', async (verb, start) => {
+    const draft = backend.addDraft({ status: 'draft' })
+    await mount()
+    await openDraft(draft.id)
+    await type('作者还没保存的修改')
+    await act(async () => useWorkflowStore.setState({ activeRuns: [batch('running', 0) as never] }))
+    await start()
+
+    await vi.waitFor(() => expect(occupiedToast(verb)).toBeTruthy())
+    expect(occupiedToast(verb)!.textContent).toContain('正文保持原样')
+    expect(backend.writes('db:draft-update-content')).toEqual([])
+    expect(activeTab()?.dirty).toBe(true)
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('保存修改期间批次占上本章：点审稿说明原因，但不再说正文保持原样', async () => {
+    const draft = backend.addDraft({ status: 'draft' })
+    const answer = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation(async (channel, ...args) => {
+      const result = await answer(channel, ...args)
+      if (channel === 'db:draft-update-content') useWorkflowStore.setState({ activeRuns: [batch('running', 0) as never] })
+      return result
+    })
+    await mount()
+    await openDraft(draft.id)
+    await type('作者还没保存的修改')
+    await click('AI 审稿')
+
+    await vi.waitFor(() => expect(occupiedToast('审稿')).toBeTruthy())
+    expect(occupiedToast('审稿')!.textContent).not.toContain('正文保持原样')
+    expect(backend.writes('db:draft-update-content').map(args => args.slice(0, 2))).toEqual([[draft.id, '作者还没保存的修改']])
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+  })
+
+  // OCR 意见（#587 第 3 条）：第 5–6 章批量自动定稿不占第 3 章，只占定稿要更新的全书共用资料。
+  const AUTO_FINALIZE_TITLE = '批量自动定稿 · 第 5 至 6 章'
+  const autoFinalizeBatch = (status: 'running' | 'paused') => ({
+    ...batch(status, 1), title: AUTO_FINALIZE_TITLE,
+    resourceKeys: ['chapter:5', 'chapter:6', 'character-roster', 'continuity', 'chapter-summary'],
+    steps: [
+      { id: 's5', name: '第 5 章 · 写稿并定稿', description: '', status: 'completed', logs: [] },
+      { id: 's6', name: '第 6 章 · 写稿并定稿', description: '', status: status === 'running' ? 'running' : 'pending', logs: [] },
+    ],
+  })
+  const sharedToast = () => [...document.querySelectorAll('.pi-toast')].find(card => card.textContent?.includes(AUTO_FINALIZE_TITLE))
+  const expectSharedReason = (toastText: string) => {
+    expect(toastText).toContain('正文保持原样')
+    expect(toastText).not.toContain('占着这一章')
+    expect(toastText).toMatch(/角色状态/)
+    expect(toastText).toMatch(/章节要点/)
+    expect(toastText).toContain('取消它就能定稿')
+    // 批次正在写第 6 章时只是预留了共用资料，定稿还没开始。
+    expect(toastText).not.toContain('正在给别的章节定稿')
+  }
+
+  it.each([['运行中', 'running'], ['暂停中', 'paused']] as const)('别的章节的批量自动定稿%s：第 3 章点定稿，立即说明它占着全书共用资料，不说占着这一章', async (_when, status) => {
+    const draft = backend.addDraft({ status: 'revised' })
+    await mount()
+    await openDraft(draft.id)
+    await act(async () => useWorkflowStore.setState({ activeRuns: [autoFinalizeBatch(status) as never] }))
+    await click('定稿')
+
+    await vi.waitFor(() => expect(sharedToast()).toBeTruthy())
+    expectSharedReason(sharedToast()!.textContent!)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+    await act(async () => [...sharedToast()!.querySelectorAll('button')].find(button => button.textContent === '取消批量创作')!.click())
+    expect(cancelWorkflow).toHaveBeenCalledWith('batch-run')
+  })
+
+  it('确认框开着时别的章节的批量自动定稿开始：点「确认定稿」说明真实原因', async () => {
+    const draft = backend.addDraft({ status: 'revised' })
+    await mount()
+    await openDraft(draft.id)
+    await click('定稿')
+    await expect.element(page.getByRole('dialog', { name: '定稿第 3 章？' })).toBeVisible()
+    await act(async () => useWorkflowStore.setState({ activeRuns: [autoFinalizeBatch('running') as never] }))
+    await click('确认定稿')
+    await vi.waitFor(() => expect(sharedToast()).toBeTruthy())
+    expectSharedReason(sharedToast()!.textContent!)
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('英文界面：别的章节的批量自动定稿占着共用资料时，提示同样不说占着这一章', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    const draft = backend.addDraft({ status: 'revised' })
+    await mount()
+    await openDraft(draft.id)
+    await act(async () => useWorkflowStore.setState({ activeRuns: [autoFinalizeBatch('running') as never] }))
+    await click('Finalize')
+    const englishToast = () => [...document.querySelectorAll('.pi-toast')].find(card => card.textContent?.includes('can’t finalize'))
+    await vi.waitFor(() => expect(englishToast()).toBeTruthy())
+    const toastText = englishToast()!.textContent!
+    expect(toastText).not.toMatch(/holds this chapter/i)
+    expect(toastText).toMatch(/character state/i)
+    expect(toastText).toMatch(/chapter notes/i)
   })
 })
 

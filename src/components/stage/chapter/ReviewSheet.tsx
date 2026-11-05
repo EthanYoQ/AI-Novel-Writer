@@ -185,9 +185,11 @@ export default function ReviewSheet({ checklist, subtitle, reportText, onClose }
       )}
       {actionable.length === 0 && (
         <p className="stage-ch-sheet-note">
-          {checklist.goalReview && checklist.goalReview.coverage !== 'complete'
-            ? text('暂无已确认的检查结果', 'No confirmed review results yet')
-            : text('审稿通过，未发现问题', 'Review passed. No issues found.')}
+          {!checklist.reportRead
+            ? text('这份报告读不出逐条意见。展开下方「查看原始 AI 审稿文本」自己看，要改的地方用「添加我的意见」记下。', 'No individual notes could be read from this report. Open “View original AI review text” below to read it, and use “Add my note” for anything to change.')
+            : checklist.goalReview && checklist.goalReview.coverage !== 'complete'
+              ? text('暂无已确认的检查结果', 'No confirmed review results yet')
+              : text('审稿通过，未发现问题', 'Review passed. No issues found.')}
         </p>
       )}
       <div className="stage-ch-issues">

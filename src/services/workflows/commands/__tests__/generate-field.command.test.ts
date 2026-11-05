@@ -6,6 +6,7 @@ import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow
 import { GenerateFieldCommand as RuntimeGenerateFieldCommand } from '../generate-field.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 import { TerminalProviderFailureError } from '../../../generation/generation-harness'
+import { isWorkflowCancellation, WorkflowCancelledError } from '../../workflow-cancellation'
 
 class GenerateFieldCommand extends RuntimeGenerateFieldCommand {
   constructor(...args: ConstructorParameters<typeof RuntimeGenerateFieldCommand>) {
@@ -397,6 +398,29 @@ describe('GenerateFieldCommand project identity', () => {
     expect(failure).toBeInstanceOf(Error)
     expect((failure as Error).message).toBe('Field generation failed. Please try again.')
     expect((failure as Error).message).not.toContain('provider-secret-field-failure')
+  })
+
+  it('取消请求之后模型请求真的失败了：照常报字段生成失败，不改写成取消', async () => {
+    const command = new GenerateFieldCommand('writingStyle')
+    const cancelling = { ...context, cancelled: false }
+    vi.spyOn(command as unknown as { callLLM: (...args: unknown[]) => Promise<string> }, 'callLLM').mockImplementation(async () => {
+      cancelling.cancelled = true
+      throw Object.assign(new Error('生成记录写入失败'), { code: 'GENERATION_STORAGE_FAILED' })
+    })
+    const failure = await command.execute({ step: {}, context: cancelling, callbacks })
+      .then(() => new Error('generation did not fail'), (error: unknown) => error)
+    expect(isWorkflowCancellation(failure)).toBe(false)
+    expect((failure as Error).message).toBe('字段生成失败，请重试。')
+  })
+
+  it('取消造成的中止：仍报已取消', async () => {
+    const command = new GenerateFieldCommand('writingStyle')
+    const cancelling = { ...context, cancelled: false }
+    vi.spyOn(command as unknown as { callLLM: (...args: unknown[]) => Promise<string> }, 'callLLM').mockImplementation(async () => {
+      cancelling.cancelled = true
+      throw new WorkflowCancelledError('工作流已取消')
+    })
+    await expect(command.execute({ step: {}, context: cancelling, callbacks })).rejects.toBeInstanceOf(WorkflowCancelledError)
   })
 
   it('passes a provider context-length rejection through with its code and receipt', async () => {

@@ -2,11 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatResourceUri, parseResourceUri, resourceWriteAllowed } from '../../shared/project-paths'
 import { useProjectStore } from '../../stores/project-store'
 import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
-import { useWorkflowStore, workflowResourceKey } from '../../stores/workflow-store'
+import { useWorkflowStore, workflowResourceKey, type WorkflowDefinition, type WorkflowRun } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { navigate } from '../../stores/navigation/navigation-intents'
 import { toast } from '../ui/Toast'
+import { actionToast, type ActionToastAction } from '../ui/ActionToast'
+import { chapterLabel } from '../../shared/chapter-label'
 import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 import {
+  draftAIResourceClaims,
+  finalizeResourceClaims,
   parseDraftMeta,
   type DraftMeta,
   type DraftStatus,
@@ -40,6 +45,79 @@ export function reviewDimensions(text: Text) {
     { key: 'character', label: text('角色状态', 'Character state'), desc: text('能力/位置/情感一致性', 'Ability, location, and emotional consistency'), promptLabel: '角色状态' },
     { key: 'foreshadow', label: text('前后章节串联', 'Chapter connections'), desc: text('伏笔、悬念连贯', 'Foreshadowing and suspense continuity'), promptLabel: '前后章节串联' },
   ]
+}
+
+type OccupiedAction = 'finalize' | 'review' | 'refine'
+
+const OCCUPIED_ACTION_VERB: Record<OccupiedAction, readonly [string, string]> = {
+  finalize: ['定稿', 'finalize'],
+  review: ['审稿', 'review'],
+  refine: ['修稿', 'revise'],
+}
+
+/**
+ * 谁占着、占着什么。批量自动定稿只写它自己的章节，但定稿都要更新全书共用的角色状态、
+ * 连续性与章节要点，所以别的章节的批量也会拦住本章定稿；这时不能说「占着这一章」。
+ */
+type Occupier = 'cancelling' | 'run' | 'batch-chapter' | 'paused-batch-chapter' | 'batch-shared' | 'paused-batch-shared'
+
+function occupierOf(run: WorkflowRun, chapterNumber: number): Occupier {
+  if (run.status === 'cancelling') return 'cancelling'
+  if (run.type !== 'batch_generate') return 'run'
+  const holds = run.resourceKeys?.includes(workflowResourceKey('chapter', chapterNumber)) ? 'chapter' : 'shared'
+  return run.status === 'paused' ? `paused-batch-${holds}` : `batch-${holds}`
+}
+
+const OCCUPIED_REASON: Record<Occupier, (title: string, verbZh: string, verbEn: string) => readonly [string, string]> = {
+  'cancelling': (title, verbZh, verbEn) => [
+    `「${title}」正在取消，${verbZh}要等它停下。`,
+    `“${title}” is being cancelled. Wait for it to stop before you ${verbEn}.`,
+  ],
+  'run': (title, verbZh, verbEn) => [
+    `「${title}」还在进行，等它结束后再${verbZh}。`,
+    `“${title}” is still running. ${verbEn[0].toUpperCase()}${verbEn.slice(1)} after it finishes.`,
+  ],
+  'batch-chapter': (title, verbZh, verbEn) => [
+    `批量创作「${title}」正在进行，占着这一章。取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
+    `The batch “${title}” is running and holds this chapter. Cancel the batch to ${verbEn} now; drafts already written are kept.`,
+  ],
+  'paused-batch-chapter': (title, verbZh, verbEn) => [
+    `批量创作「${title}」已暂停，但还占着这一章。取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
+    `The batch “${title}” is paused but still holds this chapter. Cancel the batch to ${verbEn} now; drafts already written are kept.`,
+  ],
+  'batch-shared': (title, verbZh, verbEn) => [
+    `批量创作「${title}」正在占用角色状态和章节要点，暂时不能${verbZh}这一章。等它结束或取消它就能${verbZh}，草稿不会丢。`,
+    `The batch “${title}” is using the character states and chapter notes, so you can’t ${verbEn} this chapter yet. Wait for it to finish or cancel it; drafts are kept.`,
+  ],
+  'paused-batch-shared': (title, verbZh, verbEn) => [
+    `批量创作「${title}」已暂停，但仍占用角色状态和章节要点，暂时不能${verbZh}这一章。取消它就能${verbZh}，草稿不会丢。`,
+    `The batch “${title}” is paused but still holds the character states and chapter notes, so you can’t ${verbEn} this chapter yet. Cancel it to ${verbEn}; drafts are kept.`,
+  ],
+}
+
+/**
+ * 本章被别的运行占着时，作者点了动作要立即知道：正文没动、谁占着什么、怎么办。
+ * draftSaved：这次动作已经把未保存的修改写盘，就不能再说正文保持原样。
+ */
+function explainChapterOccupied(run: WorkflowRun, chapterNumber: number, action: OccupiedAction, text: Text, draftSaved: boolean) {
+  const [verbZh, verbEn] = OCCUPIED_ACTION_VERB[action]
+  const chapter = chapterLabel(chapterNumber, text)
+  const occupier = occupierOf(run, chapterNumber)
+  const cancellable = occupier !== 'cancelling' && occupier !== 'run'
+  const reason = text(...OCCUPIED_REASON[occupier](run.title, verbZh, verbEn))
+  const actions: ActionToastAction[] = [
+    ...(cancellable ? [{ label: text('取消批量创作', 'Cancel batch'), onClick: () => useWorkflowStore.getState().cancelWorkflow(run.id) }] : []),
+    { label: text('查看运行', 'Open run'), variant: 'ghost', onClick: () => navigate({ kind: 'run', facet: 'output', runId: run.id }) },
+  ]
+  actionToast.show({
+    type: 'warning',
+    message: text(
+      `${chapter}还不能${verbZh}\n\n${draftSaved ? '' : '正文保持原样。'}${reason}`,
+      `You can’t ${verbEn} ${chapter} yet\n\n${draftSaved ? '' : 'The draft is unchanged. '}${reason}`,
+    ),
+    actions,
+    duration: 12000,
+  })
 }
 
 export type DraftChapterMeta = DraftMeta & { chapterTitle?: string; filePath?: string }
@@ -238,7 +316,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
 
     if (targetTab.dirty) await save(body, true)
     if (!isProjectSessionCurrent(projectSession)) return null
-    return Object.freeze({ body, sourceDraft })
+    return Object.freeze({ body, sourceDraft, saved: targetTab.dirty })
   }
 
   const isFrozenAISourceCurrent = (
@@ -265,18 +343,30 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     return true
   }
 
+  /** 本章被别的运行占着时说明原因并返回 true；调用方就此停下，不发起运行。 */
+  const explainIfOccupied = (
+    definition: Pick<WorkflowDefinition, 'projectPath' | 'resourceKeys' | 'readResourceKeys'>,
+    action: OccupiedAction,
+    draftSaved = false,
+  ): boolean => {
+    const run = useWorkflowStore.getState().getResourceConflict(definition)
+    if (run && meta) explainChapterOccupied(run, meta.chapterNumber, action, text, draftSaved)
+    return Boolean(run)
+  }
+
   /** 执行 AI 修稿（含用户自定义提示词） */
   const refine = async (userRefinePrompt: string) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     try {
+      if (explainIfOccupied({ projectPath: projectSession.projectPath, ...draftAIResourceClaims(meta.chapterNumber) }, 'refine')) return
       const source = await freezeDraftSourceForAI(projectSession)
       if (!source || !isProjectSessionCurrent(projectSession)) return
       const { createRefineOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
       if (!isFrozenAISourceCurrent(source.body, source.sourceDraft)) return
 
-      useWorkflowStore.getState().startWorkflow(createRefineOnlyWorkflow({
+      const definition = createRefineOnlyWorkflow({
         projectPath: projectSession.projectPath,
         chapterNumber: meta.chapterNumber,
         chapterTitle: meta.chapterTitle ?? '未知标题',
@@ -284,7 +374,9 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         draftContent: source.body,
         sourceDraft: source.sourceDraft,
         userRefinePrompt: userRefinePrompt.trim() || undefined,
-      }, projectSession), false)
+      }, projectSession)
+      if (explainIfOccupied(definition, 'refine', source.saved)) return
+      useWorkflowStore.getState().startWorkflow(definition, false)
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, e)
@@ -297,13 +389,14 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !currentProject || !meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     try {
+      if (explainIfOccupied({ projectPath: projectSession.projectPath, ...draftAIResourceClaims(meta.chapterNumber) }, 'review')) return
       const source = await freezeDraftSourceForAI(projectSession)
       if (!source || !isProjectSessionCurrent(projectSession)) return
       const { createReviewOnlyWorkflow } = await import('../../services/workflows/chapter-workflow')
       if (!isProjectSessionCurrent(projectSession)) return
       if (!isFrozenAISourceCurrent(source.body, source.sourceDraft)) return
 
-      useWorkflowStore.getState().startWorkflow(createReviewOnlyWorkflow({
+      const definition = createReviewOnlyWorkflow({
         projectPath: projectSession.projectPath,
         chapterNumber: meta.chapterNumber,
         chapterTitle: meta.chapterTitle ?? '未知标题',
@@ -311,7 +404,9 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         draftContent: source.body,
         sourceDraft: source.sourceDraft,
         reviewFocus,
-      }, projectSession), false)
+      }, projectSession)
+      if (explainIfOccupied(definition, 'review', source.saved)) return
+      useWorkflowStore.getState().startWorkflow(definition, false)
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, e)
@@ -324,6 +419,12 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
    * 再定稿会清掉它）。所有定稿入口都看这一项，finalize 自己也再查一次。
    */
   const canFinalize = Boolean(projectMatches && currentProject && meta && !isChapterBusy && !finalizationConflict && !finalizationPending)
+
+  /** 定稿入口（「更多」菜单、定稿主按钮）：本章或定稿要更新的共用资料被占着，就立即说明，不打开确认框。 */
+  const requestFinalize = (openConfirm: () => void) => {
+    if (meta && explainIfOccupied({ projectPath: projectKey, ...finalizeResourceClaims(meta.chapterNumber) }, 'finalize')) return
+    openConfirm()
+  }
 
   /** 定稿：冻结标签里可见的正文（含未保存的修改）作为提交快照。 */
   const finalize = async () => {
@@ -351,6 +452,16 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         chapterTitle: meta.chapterTitle ?? '未知标题',
       })
       if (!isProjectSessionCurrent(projectSession)) return
+      const definition = createFinalizeWorkflow({
+        projectPath: projectSession.projectPath,
+        chapterNumber: meta.chapterNumber,
+        chapterTitle: meta.chapterTitle ?? '未知标题',
+        draftPath: filePath,
+        draftContent: snapshot.content,
+        snapshot,
+      }, projectSession)
+      // 确认框开着时也可能有运行占上本章；先查，免得清掉标签上的定稿冲突却没有发起定稿。
+      if (explainIfOccupied(definition, 'finalize')) return
       useEditorStore.setState(state => ({
         tabs: state.tabs.map(tab => tab.id === snapshot.tabId && tab.projectKey === snapshot.projectPath
           ? {
@@ -364,14 +475,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       }))
 
       if (!isProjectSessionCurrent(projectSession)) return
-      useWorkflowStore.getState().startWorkflow(createFinalizeWorkflow({
-        projectPath: projectSession.projectPath,
-        chapterNumber: meta.chapterNumber,
-        chapterTitle: meta.chapterTitle ?? '未知标题',
-        draftPath: filePath,
-        draftContent: snapshot.content,
-        snapshot,
-      }, projectSession), false)
+      useWorkflowStore.getState().startWorkflow(definition, false)
     } catch (e) {
       if (!isProjectSessionCurrent(projectSession)) return
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, e)
@@ -584,7 +688,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     meta, status, isReadonly, isChapterBusy, isDirty, finalizationPending, finalizationConflict,
     pendingRevisions, reviews, loaded, reload,
     saving, saveOutcome, currentBodyRef, onBodyChange, save,
-    refine, review, canFinalize, finalize, retryManuscriptPublication, repairFinalize,
+    refine, review, canFinalize, requestFinalize, finalize, retryManuscriptPublication, repairFinalize,
     mergeData, closeMerge, openPendingRevision, completeMerge, discardRevisions,
   }
 }

@@ -41,6 +41,7 @@ import {
 } from '../generate-draft.command'
 import { assembleChapterMaterials } from '../../chapter-materials'
 import { MATERIAL_DECISION_MAX_INPUT_UNITS } from '../../../../shared/generation-owner-contract'
+import { WorkflowCancelledError } from '../../workflow-cancellation'
 
 // 默认原样透传真实装配；只有个别测试用 mockImplementationOnce 改写一次返回值，
 // 用来验证命令层对装配结果的独立复核。
@@ -1219,6 +1220,29 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         visibleText: '取消前已经收到的正文。',
         failureCode: 'CANCELLED',
       }),
+      projectPath,
+      prepared.context.projectSession,
+    )
+  })
+
+  it('取消请求之后存储层写入失败：原错误带着原错误码抛出，不改写成取消，恢复稿记原错误码', async () => {
+    const activeContext: { value?: WorkflowContext } = {}
+    const storageFailure = Object.assign(new Error('生成记录写入失败：磁盘空间不足'), { code: 'GENERATION_STORAGE_FAILED' })
+    const runtime = fakeRuntime((_attempt, _task, options) => {
+      options?.onChunk?.('取消前已经收到的正文。')
+      if (activeContext.value) activeContext.value.cancelled = true
+      throw storageFailure
+    })
+    const prepared = setup({ runtime, wordsTarget: 500 })
+    activeContext.value = prepared.context
+
+    const failure = await prepared.command.execute({ step: { id: 'draft-step' }, context: prepared.context, callbacks: prepared.callbacks })
+      .then(() => new Error('generation did not fail'), (error: unknown) => error)
+
+    expect(failure).toBe(storageFailure)
+    expect(prepared.invoke).toHaveBeenCalledWith(
+      'db:recovery-candidate-record',
+      expect.objectContaining({ visibleText: '取消前已经收到的正文。', failureCode: 'GENERATION_STORAGE_FAILED' }),
       projectPath,
       prepared.context.projectSession,
     )
@@ -2785,6 +2809,24 @@ ${headingPrefix}第3章：潮门
       expect(runtime.createRuntime).toHaveBeenCalledTimes(1)
       for (const [task] of runtime.complete.mock.calls) expect(task.messages.at(-1)!.content).toContain('行动与结果：本章读完信')
     })
+    it.each([
+      ['存储写入失败', 'GENERATION_STORAGE_FAILED'],
+      ['被取消截断', undefined],
+    ] as const)('作者取消时短细纲%s：真实失败照常记失败，取消造成的中止才记取消', async (_label, failureCode) => {
+      const runtime = fakeOutcomes(outcome('正文'.repeat(250), 'stop'))
+      const f = setup({ runtime, wordsTarget: 500 })
+      runtime.outline.mockImplementation(async () => {
+        f.context.cancelled = true
+        const result = outcome('未完成的计划', 'error')
+        if (failureCode) result.receipt.failureCode = failureCode
+        return result
+      })
+      const failure = await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+        .then(() => new Error('generation did not fail'), (error: unknown) => error)
+      expect(failure instanceof WorkflowCancelledError).toBe(!failureCode)
+      if (failureCode) expect((failure as { code?: unknown }).code).toBe(failureCode)
+      expect(runtime.complete).not.toHaveBeenCalled()
+    })
     it('fails the outline explicitly without drafting or saving its text as prose', async () => {
       const runtime = fakeOutcomes(outcome('正文'.repeat(250), 'stop'))
       runtime.outline.mockResolvedValue(outcome('未完成的计划', 'length'))
@@ -2792,6 +2834,36 @@ ${headingPrefix}第3章：潮门
       await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
       expect(runtime.complete).not.toHaveBeenCalled()
       expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:recovery-candidate-record')).toBe(false)
+    })
+  })
+
+  describe('作者取消时正文请求返回带失败码的结果（#587）', () => {
+    // 主进程把存储、预算这些失败写进收据后照常返回结果；取消截断的结果收据里没有失败码。
+    const failedWhileCancelling = (failureCode: 'GENERATION_STORAGE_FAILED' | 'ROOT_BUDGET_EXHAUSTED' | undefined, attempt: number) => {
+      const result = outcome('写到一半', 'error', attempt)
+      if (failureCode) result.receipt.failureCode = failureCode
+      return result
+    }
+    it.each([
+      ['首稿', [] as GenerationOutcome[], 500],
+      ['自动续写', [outcome('初'.repeat(1000), 'stop', 1)], 2000],
+      ['压缩修订', [outcome(`${'长'.repeat(2700)}。`, 'stop', 1)], 2000],
+    ] as const)('%s：带失败码照常记失败并带原码，没有失败码才记取消', async (_stage, before, wordsTarget) => {
+      for (const failureCode of ['GENERATION_STORAGE_FAILED', 'ROOT_BUDGET_EXHAUSTED', undefined] as const) {
+        const holder: { context?: WorkflowContext } = {}
+        const runtime = fakeRuntime(attempt => {
+          if (attempt <= before.length) return before[attempt - 1]!
+          holder.context!.cancelled = true
+          return failedWhileCancelling(failureCode, attempt)
+        })
+        const f = setup({ runtime, wordsPerChapter: wordsTarget, wordsTarget })
+        holder.context = f.context
+        const failure = await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+          .then(() => new Error('generation did not fail'), (error: unknown) => error)
+        expect(runtime.complete).toHaveBeenCalledTimes(before.length + 1)
+        expect(failure instanceof WorkflowCancelledError, String(failureCode)).toBe(!failureCode)
+        if (failureCode) expect((failure as { code?: unknown }).code).toBe(failureCode)
+      }
     })
   })
 

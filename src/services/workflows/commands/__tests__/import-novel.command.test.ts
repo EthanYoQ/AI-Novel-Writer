@@ -11,6 +11,8 @@ import {
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 import { importGenerationStopMessage } from '../../../../i18n/app-errors'
 import { contextLengthRejectingDependencies } from './context-length-runtime.fixture'
+import { isWorkflowCancellation } from '../../workflow-cancellation'
+import { GenerationHarnessError } from '../../../generation/generation-harness'
 
 class InferBlueprintsPerChapterCommand extends RuntimeInferBlueprintsPerChapterCommand {
   constructor() { super(workflowRuntimeDependencies) }
@@ -329,6 +331,37 @@ describe('InferBlueprintsPerChapterCommand', () => {
     expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED')}`)
     expect((failure as Error).message).not.toContain('ROOT_BUDGET_EXHAUSTED')
     expect(log.mock.calls.flat().some(line => String(line).includes('ROOT_BUDGET_EXHAUSTED'))).toBe(true)
+  })
+
+  // #587：编排器只把取消本身造成的中止记为取消，蓝图推演的失败包装不能把取消身份丢掉。
+  it.each([
+    ['主进程拒绝已取消的请求', () => new Error('GENERATION_ACTION_CANCELLED')],
+    ['会话因取消中止', () => new GenerationHarnessError('CANCELLED', '生成请求已取消。')],
+  ])('作者在两批蓝图推演之间取消（%s）：抛出的仍是取消', async (_label, rejection) => {
+    stubIpcInvoke(() => ({ success: true }))
+    const context = createContext()
+    const session = { complete: vi.fn(async () => { context.cancelled = true; throw rejection() }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })
+      .catch((error: Error) => error)
+
+    expect(isWorkflowCancellation(failure)).toBe(true)
+  })
+
+  it('取消请求之后蓝图推演遇到真实的预算用完：仍是失败，不算取消', async () => {
+    stubIpcInvoke(() => ({ success: true }))
+    const context = createContext()
+    const session = { complete: vi.fn(async () => { context.cancelled = true; throw new Error('ROOT_BUDGET_EXHAUSTED') }) }
+    const runtime = { execute: (operation: (scope: { session: typeof session }) => Promise<unknown>) => operation({ session }) }
+
+    const failure = await new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+      .execute({ step: {}, context, callbacks })
+      .catch((error: Error) => error)
+
+    expect(isWorkflowCancellation(failure)).toBe(false)
+    expect((failure as Error).message).toBe(`蓝图推演失败：${importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED')}`)
   })
 
   it('does not point an English request-limit stop at the token settings', async () => {

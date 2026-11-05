@@ -56,7 +56,7 @@ function RecoveryCard({ entry, recovery, text }: { entry: RecoveryEntry; recover
       )
     case 'review':
       return (
-        <RecoveryShell title={entry.title} text={text} notes={[entry.usage, ...entry.notes]}
+        <RecoveryShell title={entry.title} text={text} saved={entry.saved} notes={[entry.usage, ...entry.notes]}
           budget={<GenerationBudgetDiagnostics diagnostics={entry.budget} locale={locale} />}
           actions={<Button variant="secondary" size="sm" disabled={busy || !entry.canAct} onClick={() => recovery.resumeReview(entry)}>{entry.actionLabel}</Button>}>
           {entry.artifacts.map(item => <Excerpt key={item.id} text={item.display} copyLabel={entry.labels.copy} onCopy={() => recovery.copy(item.text)} />)}
@@ -73,9 +73,10 @@ function RecoveryCard({ entry, recovery, text }: { entry: RecoveryEntry; recover
   }
 }
 
-function RecoveryShell({ title, text, notes = [], budget, actions, children }: {
+function RecoveryShell({ title, text, saved = false, notes = [], budget, actions, children }: {
   title: string
   text: Text
+  saved?: boolean
   notes?: (string | undefined)[]
   budget?: ReactNode
   actions?: ReactNode
@@ -85,7 +86,7 @@ function RecoveryShell({ title, text, notes = [], budget, actions, children }: {
   return (
     <article className="run-card" data-state="recoverable" aria-labelledby={titleId}>
       <header className="run-card-heading">
-        <p className="run-card-kicker">{text('可恢复', 'Recoverable')}</p>
+        <p className="run-card-kicker">{saved ? text('已保存', 'Saved') : text('可恢复', 'Recoverable')}</p>
         <h3 id={titleId} className="run-card-title">{title}</h3>
       </header>
       {notes.filter(Boolean).map(note => <p key={note} className="run-note">{note}</p>)}

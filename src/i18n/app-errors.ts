@@ -295,6 +295,7 @@ const ERROR_KEYS = {
   IMPORT_RUN_NOT_STARTABLE: 'error.importRunNotStartable',
   IMPORT_RUN_NOT_RESTARTABLE: 'error.importRunNotRestartable',
   IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN: 'error.importRunAuthorRestartForbidden',
+  IMPORT_RUN_CANCELLED: 'error.importRunCancelled',
   IMPORT_RUN_NOT_CANCELLABLE: 'error.importRunNotCancellable',
   IMPORT_RUN_PARSING_INCOMPLETE: 'error.importRunParsingIncomplete',
   IMPORT_RUN_REAUTHORIZE_UNAVAILABLE: 'error.importRunReauthorizeUnavailable',

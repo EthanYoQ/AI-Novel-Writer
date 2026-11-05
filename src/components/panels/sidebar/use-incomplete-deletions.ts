@@ -12,7 +12,7 @@ import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } 
 import { confirmLegacyKnowledgeAbsentAndContinue } from './finalized-chapter-deletion'
 
 /**
- * 没做完的正文删除（F-070）：派生投影清理失败或待人工核对的操作，可以重试清理或确认人工核对后继续。
+ * 没做完的正文删除（F-070）：正文文件或知识库清理失败、或待人工核对的操作，可以重试清理或确认人工核对后继续。
  * 删除清理提示（DeletionCleanupNotices）用它，待写视图与这一章其余未定稿的稿都挂着那块提示。
  */
 export function useIncompleteDeletions(projectPath: string) {
@@ -55,7 +55,7 @@ export function useIncompleteDeletions(projectPath: string) {
     await load(projectSession)
     if (result.success) {
       globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts', 'fileTree'], projectPath, projectSession })
-      toast.success(text(`第${operation.chapterNumber}章派生投影清理完成`, `Chapter ${operation.chapterNumber} projection cleanup completed.`))
+      toast.success(text(`第${operation.chapterNumber}章清理完成。在软件外改过的正文文件会保留。`, `Chapter ${operation.chapterNumber} cleanup is done. A manuscript file you edited outside Pagekin is kept.`))
     } else {
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, result.error)
       toast.error(text(`重试清理失败\n\n${reason}`, `Cleanup retry failed\n\n${reason}`))

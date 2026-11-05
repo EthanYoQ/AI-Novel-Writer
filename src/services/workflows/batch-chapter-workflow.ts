@@ -18,6 +18,7 @@ import { finalizationContentRevision, type FinalizationSnapshot } from '../final
 import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import { requireWorkflowProjectSession, workflowMainProcessError } from './workflow-project-session'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
+import { WorkflowCancelledError } from './workflow-cancellation'
 
 /** 单次批量创作的安全上限，避免无边界调用模型；主进程准入（assertGenerationBatchIntent）同样执行。 */
 export { MAX_BATCH_CHAPTERS, MIN_BATCH_CHAPTERS }
@@ -95,7 +96,7 @@ function toChapterInfo(
 
 function throwIfCancelled(context: WorkflowContext, uiLocale: Locale) {
   if (context.cancelled) {
-    throw new Error(localeText(uiLocale, '批量创作已取消', 'Batch writing was cancelled.'))
+    throw new WorkflowCancelledError(localeText(uiLocale, '批量创作已取消', 'Batch writing was cancelled.'))
   }
 }
 

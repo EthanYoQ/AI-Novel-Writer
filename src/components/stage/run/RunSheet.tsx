@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight, CircleCheck, CircleX } from 'lucide-react'
+import { ChevronRight, CircleCheck, CircleMinus, CircleX } from 'lucide-react'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useStageStore, type RunSheetTab, type StageSheet } from '../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../stores/project-store'
@@ -94,9 +94,15 @@ function ActiveRuns({ runs, last, recovery, focusRunId, hasHistory, text }: {
 }
 
 function HistoryIcon({ status }: { status: WorkflowRun['status'] }) {
-  return status === 'completed'
-    ? <CircleCheck className="run-step-icon" data-tone="ok" size={16} aria-hidden />
-    : <CircleX className="run-step-icon" data-tone="danger" size={16} aria-hidden />
+  if (status === 'completed') return <CircleCheck className="run-step-icon" data-tone="ok" size={16} aria-hidden />
+  if (status === 'cancelled') return <CircleMinus className="run-step-icon" data-tone="todo" size={16} aria-hidden />
+  return <CircleX className="run-step-icon" data-tone="danger" size={16} aria-hidden />
+}
+
+function historyOutcome(status: WorkflowRun['status'], text: Text): string {
+  if (status === 'completed') return text('已完成，', 'Complete, ')
+  if (status === 'cancelled') return text('已取消，', 'Cancelled, ')
+  return text('未完成，', 'Did not finish, ')
 }
 
 function RunHistory({ runs, focusRunId, text }: { runs: WorkflowRun[]; focusRunId: string | undefined; text: Text }) {
@@ -128,7 +134,7 @@ function RunHistory({ runs, focusRunId, text }: { runs: WorkflowRun[]; focusRunI
               <HistoryIcon status={run.status} />
               <span className="run-history-title">{run.title}</span>
               <span className="run-history-meta">
-                <span className="run-visually-hidden">{run.status === 'completed' ? text('已完成，', 'Complete, ') : text('未完成，', 'Did not finish, ')}</span>
+                <span className="run-visually-hidden">{historyOutcome(run.status, text)}</span>
                 {done}/{run.steps.length} · {clockTime(run.createdAt, locale)}
               </span>
               <ChevronRight className="run-step-chevron" size={14} aria-hidden />

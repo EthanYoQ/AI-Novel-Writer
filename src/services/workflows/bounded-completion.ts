@@ -9,6 +9,7 @@ import type { WritingLanguage } from '../../shared/writing-language'
 import { localize, type Locale } from '../../i18n/core'
 import { promptLanguageText } from '../prompt-language'
 import { stripThinkingTags } from './workflow-utils'
+import { WorkflowCancelledError } from './workflow-cancellation'
 
 const MAX_BOUNDED_CONTINUATIONS = 7
 const MAX_STRUCTURED_CONTINUATIONS = 2
@@ -160,7 +161,7 @@ function continuationLimitExceededError(maxContinuations: number, uiLocale: Loca
 }
 
 function assertNotCancelled(uiLocale: Locale, isCancelled?: () => boolean): void {
-  if (isCancelled?.()) throw new Error(localize(uiLocale, '工作流已取消', 'Workflow was cancelled.'))
+  if (isCancelled?.()) throw new WorkflowCancelledError(localize(uiLocale, '工作流已取消', 'Workflow was cancelled.'))
 }
 
 function modeContinuationLimit(mode: BoundedCompletionMode): number {

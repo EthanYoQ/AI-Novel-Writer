@@ -251,11 +251,12 @@ function productionDependencies(
         run.id,
         executionAuthority,
       )
-      if (!result.success) throw new Error(result.error || textForLocale(
+      // 带上主进程给的码：取消请求之后剩下的章节被拒绝时，取消判定只凭这个码。
+      if (!result.success) throw Object.assign(new Error(result.error || textForLocale(
         run.locale,
         `第 ${chapter.number} 章参照文本未能写入知识库`,
         `Reference Chapter ${chapter.number} could not be written to the knowledge base.`,
-      ))
+      )), result.errorCode ? { code: result.errorCode } : {})
       callbacks.log(textForLocale(
         run.locale,
         `参照章节 ${chapter.number} 已进入知识库${result.idempotent ? '（已存在）' : ''}`,

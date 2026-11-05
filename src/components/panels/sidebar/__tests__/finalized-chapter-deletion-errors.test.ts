@@ -55,6 +55,47 @@ describe('删除定稿失败时的说明', () => {
   })
 })
 
+describe('删除定稿章之后的提示用作者看得懂的话', () => {
+  const JARGON = /投影|projection/i
+  const committed = (result: Record<string, unknown>) => mocks.invoke.mockImplementation(async (_session: unknown, channel: string) => (
+    channel === 'chapter:delete-finalized' ? { committed: true, ...result } : []
+  ))
+
+  it.each([
+    ['zh-CN', 'manuscript', '重试清理'],
+    ['zh-CN', 'draft', '重试清理'],
+    ['en-US', 'manuscript', 'Retry cleanup'],
+    ['en-US', 'draft', 'Retry cleanup'],
+  ] as const)('%s 界面的 %s 入口：清理没做完时说明哪些还没清理、去哪里重试，不出现内部术语', async (locale, surface, retry) => {
+    useLocaleStore.setState({ locale })
+    committed({ success: false, error: 'EBUSY: resource busy or locked' })
+    await deleteFinalizedChapter({ ...input, surface })
+    const [message] = mocks.toast.warning.mock.calls[0] as [string]
+    expect(message).toContain(retry)
+    expect(message).toContain('EBUSY')
+    expect(message).not.toMatch(JARGON)
+  })
+
+  it.each(['zh-CN', 'en-US'] as const)('%s 界面：删除正文成功的提示不出现内部术语', async (locale) => {
+    useLocaleStore.setState({ locale })
+    committed({ success: true })
+    await deleteFinalizedChapter(input)
+    const [message] = mocks.toast.success.mock.calls[0] as [string]
+    expect(message).toContain('第3章')
+    expect(message).not.toMatch(JARGON)
+  })
+
+  it.each(['zh-CN', 'en-US'] as const)('%s 界面：旧定稿要先人工核对知识库时，确认框的标题与说明不出现内部术语', async (locale) => {
+    useLocaleStore.setState({ locale })
+    mocks.invoke.mockResolvedValue({ committed: false, operation: { operationId: 'op-1', legacyKnowledgeAuthorization: 'required' } })
+    mocks.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    await deleteFinalizedChapter(input)
+    const [message, options] = mocks.confirm.mock.calls[1] as unknown as [string, { title: string }]
+    expect(message).not.toMatch(JARGON)
+    expect(options.title).not.toMatch(JARGON)
+  })
+})
+
 describe('删除定稿章前的确认说明（#564）', () => {
   const zh = ['删除后无法恢复，后面的章节可能也要跟着改写', '只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」']
   const en = ['This cannot be undone, and later chapters may need rewriting too', 'To change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”']
