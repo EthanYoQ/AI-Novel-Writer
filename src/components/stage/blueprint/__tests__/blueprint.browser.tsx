@@ -369,8 +369,8 @@ describe('蓝图阶段', () => {
 
     await act(async () => clear.click())
     const confirm = page.getByRole('dialog', { name: '清除误导入正文？' })
-    await expect.element(confirm).toHaveTextContent('清除的是全书所有章节的草稿、定稿、审稿和摘要，回收站里的章节也会一并清掉，不只是缺的那一章')
-    await expect.element(confirm).toHaveTextContent('如果只是删掉了某一章，请取消，从回收站恢复，或直接在原位置重写那一章')
+    await expect.element(confirm).toHaveTextContent('会清空全书所有章节的正文，包括回收站里的，不只是缺的那一章')
+    await expect.element(confirm).toHaveTextContent('只是删了某一章的话，请取消，从回收站恢复它')
   })
 
   it('同一章有两份定稿时仍停写并说明原因', async () => {

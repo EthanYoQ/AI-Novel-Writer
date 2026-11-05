@@ -284,8 +284,8 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
         open={ask?.kind === 'legacy'}
         onOpenChange={open => { if (!open) setAsk(null) }}
         title={text('清除误导入正文？', 'Clear incorrectly imported text?')}
-        consequence={text('角色、故事架构、章节蓝图与知识库会保留。清除的是全书所有章节的草稿、定稿、审稿和摘要，回收站里的章节也会一并清掉，不只是缺的那一章。如果只是删掉了某一章，请取消，从回收站恢复，或直接在原位置重写那一章，后面的章节照常可写。',
-          'Characters, story architecture, chapter blueprints and the knowledge base are kept. This clears drafts, finalized text, reviews and summaries for every chapter in the book, including chapters in the trash, not just the missing one. If you only deleted a chapter, cancel and restore it from the trash or rewrite it in place; later chapters stay writable.')}
+        consequence={text('会清空全书所有章节的正文，包括回收站里的，不只是缺的那一章。角色、架构、蓝图和知识库保留。只是删了某一章的话，请取消，从回收站恢复它。',
+          'This clears the text of every chapter, including the trash, not just the missing one. Characters, architecture, blueprints and the knowledge base are kept. If you only deleted a chapter, cancel and restore it from the trash.')}
         recoverability={text('清除后无法恢复。', 'This cannot be undone.')}
         confirmLabel={text('清除误导入正文', 'Clear imported text')}
         cancelLabel={text('取消', 'Cancel')}
