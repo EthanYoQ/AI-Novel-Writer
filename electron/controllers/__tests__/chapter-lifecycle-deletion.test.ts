@@ -523,6 +523,37 @@ describe('chapter lifecycle deletion IPC', () => {
     })
   })
 
+  it('旧版本定稿确认删除后，本章被取代的那一稿认得出的知识库资料一并删掉，来源不明的参考资料不动', async () => {
+    registerChapterLifecycleController(new ChapterDeletionService())
+    getProjectDb()!.prepare(`UPDATE drafts_all SET status = 'superseded' WHERE id = ?`).run(draftId)
+    const legacyDraftId = DraftRepository.create({ chapterNumber: 1, source: 'write', content: '旧版本定稿正文', wordCount: 7 })
+    FinalizationRepository.commit({
+      finalizationId: 'finalization-legacy',
+      draftId: legacyDraftId,
+      chapterNumber: 1,
+      chapterTitle: '同名',
+      content: '旧版本定稿正文',
+      contentHash: 'legacy-hash',
+      contentRevision: 1,
+      targetFileName,
+    })
+
+    const blocked = await handlers.get('chapter:delete-finalized')!(
+      {}, { draftId: legacyDraftId, chapterNumber: 1 }, projectRoot, projectSession,
+    ) as { operation: { operationId: string; legacyKnowledgeAuthorization: string } }
+    expect(blocked.operation).toMatchObject({ legacyKnowledgeAuthorization: 'required' })
+    await expect(listDocuments(projectRoot)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'finalized-document' }),
+    ]))
+
+    await expect(handlers.get('chapter:confirm-legacy-knowledge-absent')!(
+      {}, blocked.operation.operationId, projectRoot, projectSession,
+    )).resolves.toMatchObject({ success: true, committed: true })
+    await expect(listDocuments(projectRoot)).resolves.toEqual([
+      expect.objectContaining({ id: 'reference-document' }),
+    ])
+  })
+
   it('keeps the chapter fact when legacy knowledge identity is ambiguous', async () => {
     getProjectDb()!.prepare(`
       UPDATE finalization_outbox_all SET knowledge_document_id = '' WHERE draft_id = ?

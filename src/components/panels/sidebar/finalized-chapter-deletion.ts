@@ -132,8 +132,8 @@ async function confirmLegacyKnowledgeAbsent(
   text: Localize,
 ): Promise<ChapterDeletionResult | null> {
   const confirmed = await confirm(text(
-    '这一章是旧版本定稿的，书童认不出知识库里哪份资料属于它，所以不会替你删知识库里的内容，也不会动来源不明的参考资料。请先到知识库里检查，删掉这一章留下的资料，再继续删除。',
-    'This chapter was finalized by an older version, so Pagekin cannot tell which knowledge base entry belongs to it. It will not remove anything from the knowledge base for you, and it leaves reference documents of unknown origin alone. Check the knowledge base and remove what this chapter left there, then continue.',
+    '这一章是旧版本定稿的，书童认不出知识库里哪份资料属于它，所以那份资料不会替你删，来源不明的参考资料也不会动。书童认得出的这一章的资料，继续删除时会一并删掉。请先到知识库里检查，删掉这一章留下、书童认不出的资料，再点「我已人工核对/清理，继续删除」。',
+    'This chapter was finalized by an older version, so Pagekin cannot tell which knowledge base entry belongs to it. Pagekin will not remove that entry for you, and it leaves reference documents of unknown origin alone. Entries it can identify as this chapter’s are removed when you continue. Check the knowledge base and remove what this chapter left there that Pagekin cannot identify, then choose “I have checked; continue deletion”.',
   ), {
     title: text('先检查知识库', 'Check the knowledge base first'),
     confirmText: text('我已人工核对/清理，继续删除', 'I have checked; continue deletion'),
