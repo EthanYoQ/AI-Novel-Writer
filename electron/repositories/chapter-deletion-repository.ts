@@ -515,13 +515,13 @@ export class ChapterDeletionRepository {
 
       const finalizationId = primary.finalization_id!
       const intoGap = entry.restoreMode === 'into-gap'
-      FinalizationRepository.reinstateDeleted(db, {
-        deletionId: request.deletionId,
-        chapterNumber,
-        as: intoGap ? 'original' : 'superseded',
-        ...(intoGap ? { republish: { finalizationId, targetFileName: republishTargetFileName
-          ?? db.prepare('SELECT target_file_name FROM finalization_outbox_all WHERE finalization_id = ?').pluck().get(finalizationId) as string } } : {}),
-      })
+      FinalizationRepository.reinstateDeleted(db, intoGap
+        ? { deletionId: request.deletionId, chapterNumber, as: 'original', republish: { finalizationId, targetFileName: republishTargetFileName
+          ?? db.prepare('SELECT target_file_name FROM finalization_outbox_all WHERE finalization_id = ?').pluck().get(finalizationId) as string } }
+        : { deletionId: request.deletionId, chapterNumber, as: 'superseded' })
+      const removedKnowledge = (db.prepare(`
+        SELECT knowledge_document_id FROM chapter_deletion_operations WHERE operation_id = ?
+      `).pluck().get(request.deletionId) as string | undefined ?? '') !== ''
       const prefix = `${request.deletionId}${SUPERSEDED_SUFFIX}`
       db.prepare(`
         DELETE FROM chapter_deletion_operations WHERE operation_id = ? OR substr(operation_id, 1, length(?)) = ?
@@ -529,7 +529,8 @@ export class ChapterDeletionRepository {
       if (!intoGap) return { success: true, outcome: 'restored-as-history', chapterNumber, draftId: entry.draftId }
 
       // 本章要点与角色派生字段绑定的收据没变，水位也没动，仍然可信；只有知识库文档在删除时清掉了，要重导。
-      const run = PostProcessRepository.getLatestRun('chapter_finalize', String(chapterNumber))
+      // 删除时本来就没有知识库文档（旧版章节确认过不在库里），就没有要重导的，导入步骤原样不动。
+      const run = removedKnowledge ? PostProcessRepository.getLatestRun('chapter_finalize', String(chapterNumber)) : null
       if (run && PostProcessRepository.getSteps(run.id).some(step => step.stepKey === 'kb_import')) {
         PostProcessRepository.markStepFailed(run.id, 'kb_import', CHAPTER_RESTORED_REPROJECTION_PENDING)
       }

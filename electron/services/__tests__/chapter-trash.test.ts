@@ -48,7 +48,7 @@ function finalize(draftId: number, knowledgeDocumentId: string, runKey: 'chapter
     content: draft.content, contentHash: sha256(draft.content), contentRevision: 1,
     targetFileName: `第${draft.chapterNumber}章 沉船 ${knowledgeDocumentId}.txt`,
   })
-  FinalizationRepository.linkKnowledgeDocument(draftId, knowledgeDocumentId)
+  if (knowledgeDocumentId) FinalizationRepository.linkKnowledgeDocument(draftId, knowledgeDocumentId)
   const runId = PostProcessRepository.createRun({
     triggerSourceType: 'chapter_finalize', triggerSourceId: String(draft.chapterNumber),
     sourceLabel: '定稿', steps: [{ key: 'kb_import', label: '导入知识库', critical: true }],
@@ -174,6 +174,21 @@ describe('恢复', () => {
 
     expect(again).toMatchObject({ success: true, committed: true })
     expect(again.error).toBeUndefined()
+  })
+
+  it('删除时本来就没有知识库文档：放回原位后知识库导入步骤原样不动，不标待重做', async () => {
+    finalize(write(1, '第一章。'), 'kb-1')
+    const draft = write(2, '第二章，从没进过知识库。')
+    finalize(draft, '')
+    const { service: s } = service()
+    await s.delete(projectRoot, { draftId: draft, chapterNumber: 2 })
+    const confirmed = await s.confirmLegacyKnowledgeAbsent(projectRoot, 'delete-a')
+    expect(confirmed.operation).toMatchObject({ knowledgeDocumentId: '', knowledgeStatus: 'not_required', status: 'completed' })
+
+    await s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: draft, expectedMode: 'into-gap' })
+
+    const run = PostProcessRepository.getLatestRun('chapter_finalize', '2')!
+    expect(PostProcessRepository.getSteps(run.id)).toEqual([expect.objectContaining({ stepKey: 'kb_import', ok: true })])
   })
 
   it('本章已经重写定稿时作为旧版本放回，当前定稿不动', async () => {
@@ -373,7 +388,7 @@ describe('彻底删除', () => {
     await s.delete(projectRoot, { draftId: current, chapterNumber: 2 })
     const contents = db().prepare('SELECT content_id FROM drafts_all WHERE id IN (?,?)').pluck().all(old, current)
 
-    expect(await s.purge({ deletionIds: ['delete-a'] })).toEqual({ success: true, purged: ['delete-a'], alreadyGone: [] })
+    expect(await s.purge(projectRoot, { deletionIds: ['delete-a'] })).toEqual({ success: true, purged: ['delete-a'], alreadyGone: [] })
 
     expect(db().prepare('SELECT COUNT(*) FROM drafts_all WHERE id IN (?,?)').pluck().get(old, current)).toBe(0)
     expect(db().prepare(`SELECT COUNT(*) FROM contents WHERE id IN (${contents.map(() => '?').join(',')})`).pluck().get(...contents)).toBe(0)
@@ -382,7 +397,7 @@ describe('彻底删除', () => {
     }
     expect(ChapterDeletionRepository.getByDraftId(current)).toMatchObject({ status: 'completed' })
     expect(DraftRepository.getMaxFinalizedChapter()).toBe(3)
-    expect(await s.purge({ deletionIds: ['delete-a'] })).toEqual({ success: true, purged: [], alreadyGone: ['delete-a'] })
+    expect(await s.purge(projectRoot, { deletionIds: ['delete-a'] })).toEqual({ success: true, purged: [], alreadyGone: ['delete-a'] })
     expect(await s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: current, expectedMode: 'into-gap' }))
       .toEqual({ success: false, error: 'CHAPTER_RESTORE_NOT_FOUND' })
   })
@@ -396,11 +411,11 @@ describe('彻底删除', () => {
     expect(first).toBe(3)
 
     for (const request of [{ deletionIds: [] }, { deletionIds: [''] }, { all: false }, null, 'all']) {
-      expect(await s.purge(request as never)).toEqual({ success: false, error: 'CHAPTER_TRASH_REQUEST_INVALID' })
+      expect(await s.purge(projectRoot, request as never)).toEqual({ success: false, error: 'CHAPTER_TRASH_REQUEST_INVALID' })
     }
     expect((s.listTrash() as { entries: unknown[] }).entries).toHaveLength(2)
 
-    expect(await s.purge({ all: true })).toEqual({ success: true, purged: ['delete-a', 'delete-b'], alreadyGone: [] })
+    expect(await s.purge(projectRoot, { all: true })).toEqual({ success: true, purged: ['delete-a', 'delete-b'], alreadyGone: [] })
     expect(s.listTrash()).toEqual({ success: true, entries: [], damaged: [] })
   })
 
@@ -412,11 +427,11 @@ describe('彻底删除', () => {
     await s.delete(projectRoot, { draftId: ids[1]!, chapterNumber: 3 })
     db().exec(`CREATE TRIGGER inject_purge_failure BEFORE DELETE ON drafts_all WHEN old.id = ${ids[1]} BEGIN SELECT RAISE(ABORT, 'INJECTED_PURGE_FAILURE'); END`)
 
-    expect(await s.purge({ all: true })).toEqual({ success: false, error: 'INJECTED_PURGE_FAILURE' })
+    expect(await s.purge(projectRoot, { all: true })).toEqual({ success: false, error: 'INJECTED_PURGE_FAILURE' })
     expect(statuses(...ids)).toEqual(['deleted', 'deleted'])
 
     db().exec('DROP TRIGGER inject_purge_failure')
-    expect(await s.purge({ all: true })).toEqual({ success: true, purged: ['delete-a', 'delete-b'], alreadyGone: [] })
+    expect(await s.purge(projectRoot, { all: true })).toEqual({ success: true, purged: ['delete-a', 'delete-b'], alreadyGone: [] })
   })
 })
 
@@ -434,5 +449,44 @@ describe('回收站列表', () => {
       damaged: [{ deletionId: 'delete-a', error: 'CHAPTER_TRASH_RECEIPT_MISSING' }] })
     expect(await s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: ids[0]!, expectedMode: 'into-gap' }))
       .toEqual({ success: false, error: 'CHAPTER_TRASH_RECEIPT_MISSING' })
+  })
+})
+
+describe('排队的回收站操作跨作品切换', () => {
+  it('A 作品删除卡在清理时排队的「全部彻底删除」，切到 B 作品后被拒绝，B 的回收站原样保留', async () => {
+    const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-trash-b-'))
+    try {
+      initProjectDatabase(otherRoot)
+      const otherDraft = write(1, 'B 作品第一章。')
+      finalize(otherDraft, 'kb-b-1')
+      await service({ id: 'delete-b-1' }).service.delete(otherRoot, { draftId: otherDraft, chapterNumber: 1 })
+
+      initProjectDatabase(projectRoot)
+      const draft = write(1, 'A 作品第一章。')
+      finalize(draft, 'kb-a-1')
+      let release!: () => void
+      const gate = new Promise<void>(resolve => { release = resolve })
+      const s = new ChapterDeletionService({
+        cleaner: {
+          async removeManuscript() {},
+          async removeKnowledgeDocument() { await gate },
+        },
+        createOperationId: () => 'delete-a-1',
+        finalizations: { retry: vi.fn() },
+      })
+
+      const deleting = s.delete(projectRoot, { draftId: draft, chapterNumber: 1 })
+      const purging = s.purge(projectRoot, { all: true })
+      await new Promise(resolve => setImmediate(resolve))
+      initProjectDatabase(otherRoot)
+      release()
+      await deleting.catch(() => undefined)
+
+      await expect(purging).rejects.toThrow('PROJECT_CONTEXT_CHANGED')
+      expect(s.listTrash()).toMatchObject({ success: true, entries: [{ deletionId: 'delete-b-1', chapterNumber: 1 }] })
+    } finally {
+      closeProjectDatabase()
+      fs.rmSync(otherRoot, { recursive: true, force: true })
+    }
   })
 })

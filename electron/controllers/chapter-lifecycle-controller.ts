@@ -165,6 +165,6 @@ export function registerChapterLifecycleController(
     projectRoot: string,
   ) => {
     assertRequiredExpectedProjectPath(projectRoot, expectedProjectPath)
-    return service.purge(request)
+    return service.purge(projectRoot, request)
   })
 }

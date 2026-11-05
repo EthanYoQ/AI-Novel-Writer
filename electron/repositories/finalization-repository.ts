@@ -470,12 +470,10 @@ export class FinalizationRepository {
    * （删除时已移除，可换不撞名的目标）；as-history 一律降为被替换的旧定稿。知识文档在删除时已清掉，
    * 未冻结的收据把知识文档 ID 置空，等 kb_import 回链。
    */
-  static reinstateDeleted(db: Db, deletion: {
-    deletionId: string
-    chapterNumber: number
-    as: 'original' | 'superseded'
-    republish?: { finalizationId: string; targetFileName: string }
-  }): void {
+  static reinstateDeleted(db: Db, deletion: { deletionId: string; chapterNumber: number } & (
+    | { as: 'original'; republish: { finalizationId: string; targetFileName: string } }
+    | { as: 'superseded' }
+  )): void {
     const rows = db.prepare(`
       SELECT d.id, o.finalization_id FROM drafts_all d LEFT JOIN finalization_outbox_all o ON o.draft_id = d.id
       WHERE d.deletion_id = ? AND d.status = 'deleted' AND d.chapter_number = ?
@@ -490,8 +488,8 @@ export class FinalizationRepository {
       db.prepare(`
         UPDATE drafts_all SET status = deleted_from_status, deletion_id = '', deleted_from_status = '', deleted_at = '',
           updated_at = datetime('now')
-        WHERE deletion_id = ? AND status = 'deleted'
-      `).run(deletion.deletionId)
+        WHERE deletion_id = ? AND status = 'deleted' AND chapter_number = ?
+      `).run(deletion.deletionId, deletion.chapterNumber)
       if (liveFinal() !== 1) throw new Error('FINALIZATION_REINSTATE_TARGET_INVALID')
     }
     const freeze = readPortableRuntimeFreeze(getCurrentProjectPath())
@@ -499,7 +497,7 @@ export class FinalizationRepository {
     for (const row of rows) {
       if (row.finalization_id && !freeze.isFrozen('finalization_outbox', row.finalization_id)) forget.run(row.finalization_id)
     }
-    if (deletion.republish) {
+    if (deletion.as === 'original') {
       freeze.assertMutable('finalization_outbox', deletion.republish.finalizationId)
       const updated = db.prepare(`
         UPDATE finalization_outbox_all

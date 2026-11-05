@@ -12,7 +12,8 @@ import type {
   RestoreTrashedChapterResult,
 } from '../../src/shared/chapter-deletion'
 import { CHAPTER_RESTORED_REPROJECTION_PENDING } from '../../src/shared/finalization-step-error'
-import { getProjectDb } from '../database'
+import { getCurrentProjectPath, getProjectDb } from '../database'
+import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { ChapterDeletionRepository } from '../repositories/chapter-deletion-repository'
 import { FinalizationRepository } from '../repositories/finalization-repository'
 import { GenerationRunRepository } from '../repositories/generation-run-repository'
@@ -100,14 +101,20 @@ export class ChapterDeletionService {
     this.finalizations = options.finalizations ?? new FinalizationService()
   }
 
-  private exclusive<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(work, work)
+  /** 排队等到的工作开始前、跨过 await 之后，都要确认打开的还是发起它的那部作品；作品换了就拒绝，不碰另一部作品的库。 */
+  private assertOwner(projectRoot: string): void {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), projectRoot)
+  }
+
+  private exclusive<T>(projectRoot: string, work: () => Promise<T>): Promise<T> {
+    const owned = () => { this.assertOwner(projectRoot); return work() }
+    const run = this.queue.then(owned, owned)
     this.queue = run.catch(() => undefined)
     return run
   }
 
   delete(projectRoot: string, request: DeleteFinalizedChapterRequest): Promise<ChapterDeletionResult> {
-    return this.exclusive(async () => {
+    return this.exclusive(projectRoot, async () => {
       const existing = ChapterDeletionRepository.getByDraftId(request.draftId)
       if (existing) {
         if (existing.draftId !== request.draftId || existing.chapterNumber !== request.chapterNumber) {
@@ -145,7 +152,7 @@ export class ChapterDeletionService {
   }
 
   confirmLegacyKnowledgeAbsent(projectRoot: string, operationId: string): Promise<ChapterDeletionResult> {
-    return this.exclusive(async () => {
+    return this.exclusive(projectRoot, async () => {
       const existing = ChapterDeletionRepository.get(operationId)
       if (existing) {
         const frozen = frozenLegacyOperation(projectRoot, existing)
@@ -157,7 +164,7 @@ export class ChapterDeletionService {
   }
 
   retry(projectRoot: string, operationId: string): Promise<ChapterDeletionResult> {
-    return this.exclusive(async () => {
+    return this.exclusive(projectRoot, async () => {
       const operation = ChapterDeletionRepository.get(operationId)
       if (!operation) {
         return { success: false, committed: false, error: 'CHAPTER_DELETE_OPERATION_NOT_FOUND' }
@@ -185,7 +192,7 @@ export class ChapterDeletionService {
    * 事务提交后重发实体稿。重发失败只让实体稿停在待发布，章节页已有「重试发布」。
    */
   restore(projectRoot: string, projectId: string, request: RestoreTrashedChapterRequest): Promise<RestoreTrashedChapterResult> {
-    return this.exclusive(async (): Promise<RestoreTrashedChapterResult> => {
+    return this.exclusive(projectRoot, async (): Promise<RestoreTrashedChapterResult> => {
       if (!validRestoreRequest(request)) return { success: false, error: 'CHAPTER_RESTORE_REQUEST_INVALID' }
       const receipt = ChapterDeletionRepository.get(request.deletionId)
       if (receipt && (receipt.status === 'pending' || receipt.status === 'failed') && !frozenLegacyOperation(projectRoot, receipt)) {
@@ -199,6 +206,7 @@ export class ChapterDeletionService {
           ? republishTarget({ projectRoot, targetFileName: final.targetFileName, chapterNumber: final.chapterNumber,
             chapterTitle: final.chapterTitle, content: final.contentSnapshot, finalizationId: final.finalizationId })
           : undefined
+        this.assertOwner(projectRoot)
         const db = getProjectDb()
         if (!db) throw new Error('PROJECT_NOT_OPEN')
         restored = db.transaction(() => {
@@ -221,8 +229,8 @@ export class ChapterDeletionService {
     })
   }
 
-  purge(request: PurgeTrashRequest): Promise<PurgeTrashResult> {
-    return this.exclusive(async (): Promise<PurgeTrashResult> => {
+  purge(projectRoot: string, request: PurgeTrashRequest): Promise<PurgeTrashResult> {
+    return this.exclusive(projectRoot, async (): Promise<PurgeTrashResult> => {
       const targets = purgeTargets(request)
       if (!targets) return { success: false, error: 'CHAPTER_TRASH_REQUEST_INVALID' }
       try {

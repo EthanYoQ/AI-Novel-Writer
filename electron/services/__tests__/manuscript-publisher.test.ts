@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { publishManuscript, removeManuscriptIfUnchanged, resolveManuscriptTarget } from '../manuscript-publisher'
+import { publishManuscript, removeManuscriptIfUnchanged, republishTarget, resolveManuscriptTarget, serializeManuscript } from '../manuscript-publisher'
 
 const roots: string[] = []
 
@@ -90,5 +90,43 @@ describe('被替换的旧正文文件', () => {
 
     expect(removeManuscriptIfUnchanged(projectRoot, '第1章 雾钟.txt', [published])).toBe('changed')
     expect(fs.readFileSync(file, 'utf8')).toBe(edited)
+  })
+})
+
+describe('从回收站恢复时重新发布的目标', () => {
+  const chapter = { chapterNumber: 3, chapterTitle: '雨夜', content: '定稿正文', finalizationId: 'fin-restored' }
+  const stored = '第3章 雨夜.txt'
+
+  it('原目标空着就沿用', () => {
+    const projectRoot = makeRoot()
+    expect(republishTarget({ projectRoot, targetFileName: stored, ...chapter })).toBe(stored)
+  })
+
+  it('原目标已是同一份正文就沿用，不另起一份', () => {
+    const projectRoot = makeRoot()
+    fs.writeFileSync(path.join(projectRoot, stored), serializeManuscript(chapter), 'utf8')
+    expect(republishTarget({ projectRoot, targetFileName: stored, ...chapter })).toBe(stored)
+  })
+
+  it('作者在删除后放了同名的别的文件：换一个不撞名的目标，原文件不动', () => {
+    const projectRoot = makeRoot()
+    fs.writeFileSync(path.join(projectRoot, stored), '作者另写的东西', 'utf8')
+    const target = republishTarget({ projectRoot, targetFileName: stored, ...chapter })
+    expect(target).not.toBe(stored)
+    expect(target).toContain('fin-restored')
+    expect(fs.readFileSync(path.join(projectRoot, stored), 'utf8')).toBe('作者另写的东西')
+  })
+
+  it('同名位置是一个文件夹：换目标，不因读文件夹而抛错', () => {
+    const projectRoot = makeRoot()
+    fs.mkdirSync(path.join(projectRoot, stored))
+    const target = republishTarget({ projectRoot, targetFileName: stored, ...chapter })
+    expect(target).not.toBe(stored)
+    expect(fs.existsSync(path.join(projectRoot, target))).toBe(false)
+  })
+
+  it('旧收据里的目标名不合法：按章节重新取名，不抛错', () => {
+    const projectRoot = makeRoot()
+    expect(republishTarget({ projectRoot, targetFileName: '../escape.txt', ...chapter })).toBe(stored)
   })
 })

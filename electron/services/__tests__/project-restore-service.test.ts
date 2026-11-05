@@ -315,7 +315,7 @@ describe('portable project restore service', { timeout: 20_000 }, () => {
     expect(await service.restore(f.targetRoot, receipt.targetProjectId, { deletionId: 'trash-after-import', draftId: keptDraft, expectedMode: 'reopen-as-draft' }))
       .toMatchObject({ success: true, outcome: 'reopened-as-draft', chapterNumber: 3, created: true })
     expect(read()?.originProjectId).toBe(f.sourceProjectId)
-    expect(await service.purge({ all: true })).toEqual({ success: true, purged: ['trash-after-import', 'trash-before-export'], alreadyGone: [] })
+    expect(await service.purge(f.targetRoot, { all: true })).toEqual({ success: true, purged: ['trash-after-import', 'trash-before-export'], alreadyGone: [] })
     expect(read()?.originProjectId).toBe(f.sourceProjectId)
   })
 

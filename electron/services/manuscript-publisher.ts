@@ -91,13 +91,19 @@ function resolveStoredManuscriptTarget(projectRoot: string, targetFileName: stri
 
 /**
  * 重新发布一份已冻结目标的定稿（从回收站恢复）。目标空着或已是同一内容就沿用；作者在删除后放了同名的
- * 其他文件时换一个不撞名的目标，否则发布永远因 MANUSCRIPT_TARGET_CONFLICT 失败。
+ * 其他东西（文件、文件夹、读不了的文件），或旧收据的目标名不合法时，换一个不撞名的目标，
+ * 否则发布永远失败，这一章也就放不回去。
  */
 export function republishTarget(input: PublishManuscriptInput & { finalizationId: string }): string {
-  const stored = resolveStoredManuscriptTarget(input.projectRoot, input.targetFileName)
-  if (!fs.existsSync(stored.absolutePath) || fs.readFileSync(stored.absolutePath, 'utf8') === serializeManuscript(input)) {
-    return stored.fileName
-  }
+  let stored: ManuscriptTarget
+  try { stored = resolveStoredManuscriptTarget(input.projectRoot, input.targetFileName) }
+  catch { return resolveManuscriptTarget(input).fileName }
+  if (!fs.existsSync(stored.absolutePath)) return stored.fileName
+  try {
+    if (fs.statSync(stored.absolutePath).isFile() && fs.readFileSync(stored.absolutePath, 'utf8') === serializeManuscript(input)) {
+      return stored.fileName
+    }
+  } catch { /* 读不了的占位与不同内容一样，换目标。 */ }
   return resolveManuscriptTarget(input).fileName
 }
 
