@@ -3,6 +3,9 @@
 //   node scripts/brand/paper-ink-tokens.mjs           打印令牌表
 //   node scripts/brand/paper-ink-tokens.mjs --write   把令牌表写进文档的标记之间
 //   node scripts/brand/paper-ink-tokens.mjs --check   令牌表与源码不一致或链接指向不存在的文件时以退出码 1 结束
+// 支持的语法只有下面这些，超出范围时报错，不放行：
+//   tokens.css：只有浅色、深色两条规则，只读自定义属性声明；出现别的块（如 @media）就报错。
+//   文档链接：行内链接（可带标题、可用尖括号包目标）与 HTML 的 src、href；出现引用式链接定义就报错。
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -39,15 +42,16 @@ const CATEGORIES = [
   { title: '层级', purpose: '侧页、弹层、遮罩、对话框、命令式弹窗、提示栈的叠放顺序', match: /^z-[a-z]+$/ },
 ]
 
-export function declarations(css) {
+function declarations(css) {
   const body = css.replace(/\/\*[\s\S]*?\*\//g, '')
   const result = new Map()
   for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;}]+)(?=[;}])/g)) result.set(name, value.trim().replace(/\s+/g, ' '))
   return result
 }
 
-function readTokens() {
-  const css = fs.readFileSync(path.join(root, TOKEN_FILE), 'utf8')
+export function parseTokens(css) {
+  const blocks = css.replace(/\/\*[\s\S]*?\*\//g, '').split('{').length - 1
+  if (blocks !== 2) throw new Error(`${TOKEN_FILE} 有 ${blocks} 个块，只支持浅色、深色两条规则`)
   const split = css.indexOf(DARK_SELECTOR)
   if (split < 0) throw new Error(`${TOKEN_FILE} 里找不到深色选择器 ${DARK_SELECTOR}`)
   const light = declarations(css.slice(0, split))
@@ -88,16 +92,18 @@ function block(table) {
   return `${START}\n\n${table}\n\n${END}`
 }
 
-export function brokenLinks(doc) {
+export function linkProblems(doc) {
+  if (/^\s*\[[^\]]+\]:\s*\S/m.test(doc)) return ['出现引用式链接定义，品牌文档请使用行内链接']
   const docDir = path.dirname(path.join(root, DOC_FILE))
-  const targets = [...doc.matchAll(/\]\(<?([^\s)>]+)|^\[[^\]]+\]:\s*<?([^\s>]+)|\s(?:src|href)=["']([^"']+)["']/gm)].map(match => match[1] ?? match[2] ?? match[3])
-  return targets
+  return [...doc.matchAll(/\]\(<?([^\s)>]+)|\s(?:src|href)=["']([^"']+)["']/g)]
+    .map(match => match[1] ?? match[2])
     .filter(target => !/^(https?:|mailto:|#)/.test(target))
     .filter(target => !fs.existsSync(path.resolve(docDir, target.split('#')[0])))
+    .map(target => `链接到不存在的文件：${target}`)
 }
 
 function main(mode) {
-  const table = renderTable(readTokens())
+  const table = renderTable(parseTokens(fs.readFileSync(path.join(root, TOKEN_FILE), 'utf8')))
   if (!mode) {
     console.log(table)
     return 0
@@ -116,7 +122,7 @@ function main(mode) {
   if (mode !== '--check') throw new Error(`不认识的参数 ${mode}`)
   const problems = []
   if (next !== doc) problems.push(`${DOC_FILE} 的令牌表与 ${TOKEN_FILE} 不一致，运行 --write 重新生成`)
-  for (const target of brokenLinks(doc)) problems.push(`${DOC_FILE} 链接到不存在的文件：${target}`)
+  for (const problem of linkProblems(doc)) problems.push(`${DOC_FILE} ${problem}`)
   for (const problem of problems) console.error(problem)
   if (!problems.length) console.log(`${DOC_FILE} 的令牌表与源码一致，相对链接都能解析`)
   return problems.length ? 1 : 0
