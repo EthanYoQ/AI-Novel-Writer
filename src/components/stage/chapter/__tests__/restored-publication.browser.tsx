@@ -11,6 +11,7 @@ import { useLLMStore } from '../../../../stores/llm-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useStageStore } from '../../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../../stores/project-store'
+import { useRestoredPublicationStore } from '../../../../stores/restored-publication-store'
 import { useWorkflowStore } from '../../../../stores/workflow-store'
 import { openChapter } from '../../../../stores/navigation/stage-navigation'
 import { openPageTab } from '../../../../stores/navigation/page-tabs'
@@ -81,6 +82,7 @@ afterEach(async () => {
   useStageStore.setState(original.stage, true)
   useLLMStore.setState(original.llm, true)
   useWorkflowStore.setState(original.workflow, true)
+  useRestoredPublicationStore.setState({}, true)
 })
 
 describe('从回收站恢复的章节', () => {
@@ -170,4 +172,20 @@ describe('从回收站恢复的章节', () => {
     await expect.element(page.getByRole('button', { name: '重新写入正文', exact: true })).toBeVisible()
   })
 
+  it('恢复后没写出、没重写又删掉，再恢复时写出来了：打开这一章不再列「正文文件」', async () => {
+    const final = backend.addDraft({ status: 'finalized' })
+    const plain = backend.invoke.getMockImplementation()!
+    let publicationStatus: 'pending' | 'published' = 'pending'
+    backend.invoke.mockImplementation(async (channel, ...args) => channel === 'chapter:trash-restore'
+      ? { ...restoredPending(final.id), finalizationId: `fin-${publicationStatus}`, publicationStatus, ...(publicationStatus === 'published' ? { publicationError: undefined } : {}) }
+      : plain(channel, ...args))
+    await mount()
+
+    await act(async () => { await restoreTrashedChapter(trashed(final.id)) })
+    publicationStatus = 'published'
+    await act(async () => { await restoreTrashedChapter(trashed(final.id)) })
+    await openChapterThree()
+    await expect.element(page.getByRole('button', { name: '重新打开修改' })).toBeVisible()
+    expect(page.getByText('正文文件').query()).toBeNull()
+  })
 })

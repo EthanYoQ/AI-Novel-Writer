@@ -452,7 +452,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
       {stage === 'final' && (
         <PostProcessSteps
           chapterNumber={chapterNumber}
-          publication={tab.finalizationPublication}
+          publication={draft.finalizationPublication}
           busy={busy}
           onRetryStep={stepKey => void draft.repairFinalize(stepKey)}
           onRetryFailed={() => void draft.repairFinalize()}

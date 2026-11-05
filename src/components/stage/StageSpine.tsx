@@ -56,7 +56,7 @@ interface StageSpineProps {
   /** 设置页开着时只有「设置」是当前位置。 */
   settingsOpen?: boolean
   onSettings: () => void
-  /** 回收站里的项数；大于 0 时正文阶段的章节列表底部出现入口。 */
+  /** 回收站里的项数；大于 0 时出现入口，不论在哪个阶段：正文阶段打不开时它是找回章节的唯一入口。 */
   trashCount?: number
   onTrash?: () => void
 }
@@ -117,7 +117,7 @@ export default function StageSpine({ stages, chapters, location: activeLocation,
         </ol>
       )}
 
-      {currentStage === 'manuscript' && trashCount > 0 && onTrash && (
+      {trashCount > 0 && onTrash && (
         <div className="stage-spine-trash">
           <button type="button" className="stage-chapter" aria-haspopup="dialog" onClick={onTrash}>
             <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />

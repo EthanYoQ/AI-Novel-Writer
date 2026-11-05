@@ -5,7 +5,7 @@ import { ipc } from '../../../services/ipc-client'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { pluralEn } from '../../../shared/plural-en'
 import { useDraftStore } from '../../../stores/draft-store'
-import { rememberPendingPublication } from '../../../stores/open-draft-tab'
+import { recordRestoredPublication } from '../../../stores/restored-publication-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { captureProjectSession, isProjectSessionCurrent } from '../../project-session-gate'
@@ -97,9 +97,7 @@ export async function restoreTrashedChapter(entry: TrashedChapter): Promise<bool
       `${trashEntryName(entry, text)} was not restored\n\n${reasonOf(result.error)}`), 10000)
     return false
   }
-  if (result.outcome === 'restored' && result.publicationStatus === 'pending') {
-    rememberPendingPublication(session, result.draftId, result.finalizationId)
-  }
+  if (result.outcome === 'restored') recordRestoredPublication(session, result.draftId, result.finalizationId, result.publicationStatus)
   const message = restoredMessage(result, text)
   if (result.outcome === 'restored' && result.publicationError) toast.warning(message, 12000)
   else toast.success(message, result.outcome === 'already-restored' ? 4000 : 12000)

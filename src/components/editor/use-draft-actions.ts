@@ -21,6 +21,7 @@ import { DRAFT_STATUS_INFO } from '../../shared/draft-status'
 import { getPendingRevisions, getReviewsForVersion, type ReviewEntry, type RevisionEntry } from '../../services/draft-index'
 import { isRevisionSourceCurrent, refreshChapterFacts } from '../../stores/navigation/chapter-facts'
 import { readDraftBody } from '../../stores/draft-store'
+import { markRestoredPublished, restoredPublicationKey, useRestoredPublicationStore } from '../../stores/restored-publication-store'
 import { ipc } from '../../services/ipc-client'
 import { retryFinalizationPublication } from '../../services/finalization-client'
 import { captureFinalizationSnapshot } from '../../services/finalization-snapshot'
@@ -219,7 +220,10 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
   )
   const isChapterBusy = !!activeChapterRun
   const isDirty = editorTab?.dirty ?? false
-  const finalizationPending = editorTab?.finalizationPublication === 'pending'
+  const restoredKey = meta && currentProject?.sessionLease ? restoredPublicationKey(currentProject.sessionLease, meta.id) : null
+  const restored = useRestoredPublicationStore(state => (restoredKey ? state[restoredKey] : undefined))
+  const finalizationPublication = restored?.publication ?? editorTab?.finalizationPublication
+  const finalizationPending = finalizationPublication === 'pending'
   const finalizationConflict = editorTab?.finalizationConflict
 
   const onBodyChange = (body: string) => {
@@ -487,7 +491,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
   const retryManuscriptPublication = useCallback(async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    const finalizationId = useEditorStore.getState().tabs.find(
+    const finalizationId = restored?.finalizationId ?? useEditorStore.getState().tabs.find(
       tab => tab.id === tabId && tab.projectKey === projectKey,
     )?.finalizationId
     if (!finalizationId) return
@@ -504,13 +508,14 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
           ? { ...tab, finalizationPublication: 'published' }
           : tab),
       }))
+      if (meta) markRestoredPublished(projectSession.leaseId, meta.id, finalizationId)
       toast.success(text('实体稿已发布', 'Manuscript published'))
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, error)
       toast.error(text(`实体稿发布失败：${reason}`, englishWithReason('Could not publish the manuscript.', reason)))
     }
-  }, [currentProject, projectKey, tabId, text])
+  }, [currentProject, meta, projectKey, restored, tabId, text])
 
   /** 修复定稿后处理 — 不传 stepKey 时只重跑重试有用的失败步骤 */
   const repairFinalize = useCallback(async (stepKey?: string) => {
@@ -685,7 +690,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
   }
 
   return {
-    meta, status, isReadonly, isChapterBusy, isDirty, finalizationPending, finalizationConflict,
+    meta, status, isReadonly, isChapterBusy, isDirty, finalizationPublication, finalizationPending, finalizationConflict,
     pendingRevisions, reviews, loaded, reload,
     saving, saveOutcome, currentBodyRef, onBodyChange, save,
     refine, review, canFinalize, requestFinalize, finalize, retryManuscriptPublication, repairFinalize,
