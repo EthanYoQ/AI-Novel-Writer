@@ -13,6 +13,7 @@ import {
   CANONICAL_PROJECT_DIRECTORY,
   parseCanonicalProjectManifest,
 } from '../../src/shared/project-format'
+import { logicalTableName } from '../migrations/m07-chapter-recycle'
 import { readPortableCharacterAvatarRows } from '../repositories/character-asset-repository'
 import {
   PORTABLE_PROJECT_FORMAT_VERSION,
@@ -839,22 +840,23 @@ export function sanitizePortableDatabase(databasePath: string): {
       const tables = db.prepare("SELECT name FROM pragma_table_list WHERE schema='main' AND type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
         .all() as Array<{ name: string }>
       let accountedFields = 0
-      for (const { name: table } of tables) {
-        const columns = db.prepare(`PRAGMA table_info(${quote(table)})`).all() as Array<{
+      for (const { name: physical } of tables) {
+        const table = logicalTableName(physical)
+        const columns = db.prepare(`PRAGMA table_info(${quote(physical)})`).all() as Array<{
           name: string; type: string; notnull: number
         }>
         accountedFields += columns.length
         const policies = columns.map(column => getPortableFieldPolicy(table, column.name))
         const hasProjection = policies.some(policy => policy.disposition === 'redacted-projection')
         const hasHistory = policies.some(policy => policy.disposition === 'historical-nonreplayable')
-        const rows = db.prepare(`SELECT rowid AS __portable_rowid__, * FROM ${quote(table)}`).all() as Array<Record<string, unknown>>
+        const rows = db.prepare(`SELECT rowid AS __portable_rowid__, * FROM ${quote(physical)}`).all() as Array<Record<string, unknown>>
         tableCounts[`table.${table}`] = rows.length
         const updates = columns.filter((_column, index) => {
           const disposition = policies[index]!.disposition
           return disposition === 'redacted-projection' || disposition === 'exclude-machine-authority'
         })
         const update = updates.length
-          ? db.prepare(`UPDATE ${quote(table)} SET ${updates.map(column => `${quote(column.name)}=?`).join(',')} WHERE rowid=?`)
+          ? db.prepare(`UPDATE ${quote(physical)} SET ${updates.map(column => `${quote(column.name)}=?`).join(',')} WHERE rowid=?`)
           : null
         for (const row of rows) {
           const reviewProof = table === 'generation_artifacts' ? reviewRuns.has(String(row.run_id))

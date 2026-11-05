@@ -60,7 +60,7 @@ describe('authoritative finalized export integration', () => {
     if (!db) throw new Error('Expected project database')
     const insertContent = db.prepare('INSERT INTO contents (body) VALUES (?)')
     const insertDraft = db.prepare(`
-      INSERT INTO drafts (chapter_number, version, status, content_id, word_count)
+      INSERT INTO drafts_all (chapter_number, version, status, content_id, word_count)
       VALUES (?, ?, 'draft', ?, 0)
     `)
     const facts = [
@@ -145,7 +145,7 @@ describe('authoritative finalized export integration', () => {
     expect(fs.readdirSync(path.join(exportPath, first.path)).sort())
       .toEqual(['chapter_1.md', 'chapter_4.md'])
 
-    db.prepare("UPDATE drafts SET status = 'archived' WHERE chapter_number = 4").run()
+    db.prepare("UPDATE drafts_all SET status = 'archived' WHERE chapter_number = 4").run()
     const second = await exportNovel(
       { format: 'split-md', grantId: grant.grantId },
       {

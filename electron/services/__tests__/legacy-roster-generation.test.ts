@@ -50,7 +50,7 @@ function fixture(dispatch?:GenerationRunServiceDependencies['dispatch']) {
  const base=path.resolve('.runtime/.cache/novel-quality-modernization/legacy-owner-tests');fs.mkdirSync(base,{recursive:true})
  const root=fs.mkdtempSync(path.join(base,'项目-'));prepareCanonicalStorageFixture(root)
  const file=path.join(root,'.ai-novel','project.db');let db=new Database(file);vi.mocked(getProjectDb).mockReturnValue(db)
- db.exec("INSERT INTO project_core(id,project_name,total_chapters,synopsis) VALUES('main','铜钥匙',10,'寻找北塔'); INSERT INTO blueprints(chapter_number,title,key_events) VALUES(1,'雨夜','发现铜钥匙'); INSERT INTO contents(id,body) VALUES(1,'原稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
+ db.exec("INSERT INTO project_core(id,project_name,total_chapters,synopsis) VALUES('main','铜钥匙',10,'寻找北塔'); INSERT INTO blueprints(chapter_number,title,key_events) VALUES(1,'雨夜','发现铜钥匙'); INSERT INTO contents(id,body) VALUES(1,'原稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
  db.prepare("UPDATE character_roster_meta SET migration_state='legacy_markdown_pending',legacy_markdown=?" ).run('  # 林岚\r\n旧角色资料。  ')
  let model:ModelProfile|null={id:'synthetic',name:'合成模型',provider:'openai',protocol:'openai',modelName:'gpt-4.1',apiKey:'fixture-only',baseUrl:'https://api.openai.com/v1',temperature:0.7,maxTokens:2048,purposes:['generation'],capabilities:{contextWindowTokens:32768,maxOutputTokens:2048,reasoning:false,structuredOutput:true,usage:true}}
  const spy=vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch??(async(_request,options)=>{options.onVisible({kind:'delta',text:validOutput});return {finishReason:'stop',usage:null}}))

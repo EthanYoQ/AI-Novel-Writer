@@ -29,7 +29,7 @@ function fixture(version: 1 | 4 | 5 | 'current' = 1) {
     try { initializeLegacyBaselineSchema(db); migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), version) } finally { db.close() }
   }
   const db = new Database(file)
-  try { db.prepare('INSERT INTO contents(body) VALUES (?)').run('铜钥匙\r\n作者原文'); db.exec('INSERT INTO drafts(chapter_number,version,content_id,word_count) VALUES(1,1,1,777)') } finally { db.close() }
+  try { db.prepare('INSERT INTO contents(body) VALUES (?)').run('铜钥匙\r\n作者原文'); db.exec(`INSERT INTO ${version === 'current' ? 'drafts_all' : 'drafts'}(chapter_number,version,content_id,word_count) VALUES(1,1,1,777)`) } finally { db.close() }
   return { root, data, file }
 }
 afterEach(() => {
@@ -145,7 +145,7 @@ it('beforeClose同步持久动作先于句柄关闭与locator撤销', () => {
   const f = fixture('current'); initProjectDatabase(f.root)
   const called = vi.fn(({ database, projectPath }) => {
     expect(projectPath).toBe(f.root); expect(getCurrentProjectPath()).toBe(f.root); expect(database.open).toBe(true)
-    database.prepare('UPDATE drafts SET word_count=778').run()
+    database.prepare('UPDATE drafts_all SET word_count=778').run()
   })
   unsubscribers.push(onProjectDatabaseBeforeClose(called)); closeProjectDatabase()
   expect(called).toHaveBeenCalledTimes(1); expect(getProjectDb()).toBeNull()

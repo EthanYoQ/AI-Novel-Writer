@@ -26,7 +26,7 @@ function fixture(dispatch?:GenerationRunServiceDependencies['dispatch']) {
  const base=path.resolve('.runtime/.cache/novel-quality-modernization/graph-owner-tests');fs.mkdirSync(base,{recursive:true})
  const root=fs.mkdtempSync(path.join(base,'项目-'));prepareCanonicalStorageFixture(root)
  const file=path.join(root,'.ai-novel','project.db');let db=new Database(file);vi.mocked(getProjectDb).mockReturnValue(db)
- db.exec("INSERT INTO project_core(id,project_name,total_chapters,synopsis) VALUES('main','铜钥匙',10,'寻找北塔'); INSERT INTO blueprints(chapter_number,title,key_events) VALUES(1,'雨夜','发现铜钥匙'); INSERT INTO contents(id,body) VALUES(1,'原稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
+ db.exec("INSERT INTO project_core(id,project_name,total_chapters,synopsis) VALUES('main','铜钥匙',10,'寻找北塔'); INSERT INTO blueprints(chapter_number,title,key_events) VALUES(1,'雨夜','发现铜钥匙'); INSERT INTO contents(id,body) VALUES(1,'原稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
  const prose='林岚找到铜钥匙，听见钟声。'
  FinalizationRepository.commit({finalizationId:'定稿1',draftId:1,chapterNumber:1,chapterTitle:'雨夜',content:prose,contentHash:textHash(prose),contentRevision:1,targetFileName:'第一章.txt'})
  const plan=NarrativeThreadRepository.createPlan({title:'铜钥匙',type:'伏笔',targetStartChapter:1,targetEndChapter:3,authorIntent:'打开北塔'},db)

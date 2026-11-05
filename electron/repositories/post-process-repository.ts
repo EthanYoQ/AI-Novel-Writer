@@ -58,10 +58,10 @@ export class PostProcessRepository {
             if (params.finalizedSource) {
                 const source = params.finalizedSource
                 const row = db.prepare(`SELECT d.id,d.chapter_number,d.status,c.body,o.finalization_id,o.content_hash,o.content_snapshot
-                  FROM live_drafts d JOIN contents c ON c.id=d.content_id JOIN live_finalization_outbox o ON o.draft_id=d.id WHERE d.id=?`).get(source.draftId) as {
+                  FROM drafts d JOIN contents c ON c.id=d.content_id JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.id=?`).get(source.draftId) as {
                     id: number; chapter_number: number; status: string; body: string; finalization_id: string; content_hash: string; content_snapshot: string
                 } | undefined
-                const latest = db.prepare("SELECT id FROM live_drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1").pluck().get(source.chapterNumber)
+                const latest = db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1").pluck().get(source.chapterNumber)
                 if (params.triggerSourceType !== 'chapter_finalize' || params.triggerSourceId !== String(source.chapterNumber)
                   || !row || row.id !== latest || row.status !== 'finalized' || row.chapter_number !== source.chapterNumber
                   || row.finalization_id !== source.finalizationId || row.content_hash !== source.contentHash || row.content_snapshot !== row.body
@@ -92,8 +92,8 @@ export class PostProcessRepository {
         const db = getProjectDb()
         if (!db) return null
         if (sourceType === 'chapter_finalize' && /^\d+$/.test(sourceId)
-          && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='finalization_outbox'").get()) {
-            const current = db.prepare("SELECT o.finalization_id FROM live_drafts d JOIN live_finalization_outbox o ON o.draft_id=d.id WHERE d.chapter_number=? AND d.status='finalized' ORDER BY d.version DESC,d.id DESC LIMIT 1").pluck().get(Number(sourceId))
+          && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='finalization_outbox_all'").get()) {
+            const current = db.prepare("SELECT o.finalization_id FROM drafts d JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.chapter_number=? AND d.status='finalized' ORDER BY d.version DESC,d.id DESC LIMIT 1").pluck().get(Number(sourceId))
             if (typeof current === 'string') sourceId = `finalization:${current}`
         }
 

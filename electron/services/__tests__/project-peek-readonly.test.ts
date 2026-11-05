@@ -76,8 +76,11 @@ function addChapter(database: DatabaseHandle, chapterNumber: number, options: {
   if (!options.draft && !options.review && !options.finalized) return
   const body = `第${chapterNumber}章正文：雨落在旧车站。`
   const content = database.prepare('INSERT INTO contents (body) VALUES (?)').run(body)
+  // schema 7 的夹具还没有 M07 改名。
+  const raw = (table: string) => database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(`${table}_all`)
+    ? `${table}_all` : table
   const draft = database.prepare(`
-    INSERT INTO drafts (chapter_number,version,status,source,content_id,word_count)
+    INSERT INTO ${raw('drafts')} (chapter_number,version,status,source,content_id,word_count)
     VALUES (?,1,?,'write',?,?)
   `).run(chapterNumber, options.finalized ? 'finalized' : 'draft', content.lastInsertRowid, 12)
   if (options.review) {
@@ -89,7 +92,7 @@ function addChapter(database: DatabaseHandle, chapterNumber: number, options: {
   }
   if (options.finalized) {
     database.prepare(`
-      INSERT INTO finalization_outbox (
+      INSERT INTO ${raw('finalization_outbox')} (
         finalization_id,draft_id,chapter_number,chapter_title,content_hash,
         content_revision,content_snapshot,target_file_name,publication_status
       ) VALUES (?,?,?,?,?,?,?,?,'pending')
@@ -257,7 +260,7 @@ describe('ProjectPeekService source-zero-write overview', { timeout: 20_000 }, (
     const f = fixture()
     f.database.prepare('UPDATE project_core SET total_chapters=1').run()
     addChapter(f.database, 1, { draft: true, finalized: true })
-    f.database.prepare("UPDATE finalization_outbox SET content_hash='not-the-content-hash'").run()
+    f.database.prepare("UPDATE finalization_outbox_all SET content_hash='not-the-content-hash'").run()
     const service = new ProjectPeekService({ scratchRoot: f.scratch })
     const overview = service.peek(service.issueCapability(f.root)!.capabilityId)
 
@@ -292,7 +295,7 @@ describe('ProjectPeekService source-zero-write overview', { timeout: 20_000 }, (
     const f = fixture()
     const content = f.database.prepare('INSERT INTO contents (body) VALUES (?)').run('缺少定稿回执的正文')
     f.database.prepare(`
-      INSERT INTO drafts (chapter_number,version,status,source,content_id,word_count)
+      INSERT INTO drafts_all (chapter_number,version,status,source,content_id,word_count)
       VALUES (1,1,'finalized','write',?,10)
     `).run(content.lastInsertRowid)
     const service = new ProjectPeekService({ scratchRoot: f.scratch })
@@ -311,7 +314,7 @@ describe('ProjectPeekService source-zero-write overview', { timeout: 20_000 }, (
     addChapter(f.database, 1, { draft: true })
     const reviewed = f.database.prepare('INSERT INTO contents (body) VALUES (?)').run('第1章审过的新稿：灯塔亮了。')
     f.database.prepare(`
-      INSERT INTO drafts (chapter_number,version,status,source,content_id,word_count)
+      INSERT INTO drafts_all (chapter_number,version,status,source,content_id,word_count)
       VALUES (1,2,'reviewed','revise',?,30)
     `).run(reviewed.lastInsertRowid)
     const service = new ProjectPeekService({ scratchRoot: f.scratch })

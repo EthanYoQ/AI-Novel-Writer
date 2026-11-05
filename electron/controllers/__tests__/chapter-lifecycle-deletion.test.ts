@@ -401,7 +401,7 @@ describe('chapter lifecycle deletion IPC', () => {
 
   it('records an authorization-required receipt without touching an identical reference document', async () => {
     getProjectDb()!.prepare(`
-      UPDATE finalization_outbox SET knowledge_document_id = '' WHERE draft_id = ?
+      UPDATE finalization_outbox_all SET knowledge_document_id = '' WHERE draft_id = ?
     `).run(draftId)
     await removeDocument('finalized-document', projectRoot)
     await removeDocument('reference-document', projectRoot)
@@ -454,7 +454,7 @@ describe('chapter lifecycle deletion IPC', () => {
 
   it('continues a legacy deletion only after explicit knowledge-absence confirmation', async () => {
     getProjectDb()!.prepare(`
-      UPDATE finalization_outbox SET knowledge_document_id = '' WHERE draft_id = ?
+      UPDATE finalization_outbox_all SET knowledge_document_id = '' WHERE draft_id = ?
     `).run(draftId)
     await removeDocument('finalized-document', projectRoot)
     await removeDocument('reference-document', projectRoot)
@@ -525,7 +525,7 @@ describe('chapter lifecycle deletion IPC', () => {
 
   it('keeps the chapter fact when legacy knowledge identity is ambiguous', async () => {
     getProjectDb()!.prepare(`
-      UPDATE finalization_outbox SET knowledge_document_id = '' WHERE draft_id = ?
+      UPDATE finalization_outbox_all SET knowledge_document_id = '' WHERE draft_id = ?
     `).run(draftId)
     await addChunks(
       projectRoot,

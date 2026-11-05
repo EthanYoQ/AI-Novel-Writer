@@ -54,11 +54,11 @@ export function captureGraphGenerationContext(db: Database.Database, input: Grap
     f.finalization_id AS finalizationId,f.content_hash AS contentHash,f.content_snapshot AS snapshot,
     f.chapter_number AS finalizedChapterNumber,f.content_revision AS contentRevision,
     m.generation AS projectionGeneration
-    FROM live_drafts d JOIN contents c ON c.id=d.content_id JOIN live_finalization_outbox f ON f.draft_id=d.id
+    FROM drafts d JOIN contents c ON c.id=d.content_id JOIN finalization_outbox f ON f.draft_id=d.id
     JOIN continuity_projection_meta m ON m.id='main' WHERE d.id=?`).get(valid.draftId) as {
       chapterNumber: number; finalizedChapterNumber: number; contentRevision: number; status: string; content: string; finalizationId: string; contentHash: string; snapshot: string; projectionGeneration: number
     } | undefined
-  const latest = row && db.prepare("SELECT id FROM live_drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1").pluck().get(row.chapterNumber)
+  const latest = row && db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1").pluck().get(row.chapterNumber)
   if (!row || row.status !== 'finalized' || latest !== valid.draftId || !nonempty(row.finalizationId)
     || row.finalizedChapterNumber !== row.chapterNumber || !Number.isSafeInteger(row.contentRevision) || row.contentRevision < 0
     || row.content !== row.snapshot || textHash(row.snapshot) !== row.contentHash
@@ -66,7 +66,7 @@ export function captureGraphGenerationContext(db: Database.Database, input: Grap
   if (ignoredOwnEventIds.length) {
     plan.events = plan.events.filter(event => !ignoredOwnEventIds.includes(event.id))
     plan.status = plan.events.at(-1)?.type ?? 'planned'
-    const currentChapter = db.prepare("SELECT COALESCE(MAX(chapter_number),0) FROM live_drafts WHERE status='finalized'").pluck().get() as number
+    const currentChapter = db.prepare("SELECT COALESCE(MAX(chapter_number),0) FROM drafts WHERE status='finalized'").pluck().get() as number
     const terminal = plan.status === 'resolved' || plan.status === 'abandoned'
     plan.dormantChapters = terminal ? 0 : Math.max(0, currentChapter - (plan.events.at(-1)?.chapterNumber ?? plan.targetStartChapter))
     plan.overdue = !terminal && currentChapter > plan.targetEndChapter

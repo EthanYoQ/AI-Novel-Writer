@@ -23,8 +23,8 @@ function fixture() {
   migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
   db.exec("INSERT INTO project_core(id,project_name,total_chapters,synopsis) VALUES('main','真实库',10,'寻找铜钥匙'); INSERT INTO blueprints(chapter_number,title,key_events) VALUES(1,'雨夜','发现钥匙')")
   db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(content)
-  db.exec("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'finalized',1,9)")
-  db.prepare(`INSERT INTO finalization_outbox(finalization_id,draft_id,chapter_number,chapter_title,content_snapshot,content_hash,content_revision,target_file_name)
+  db.exec("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'finalized',1,9)")
+  db.prepare(`INSERT INTO finalization_outbox_all(finalization_id,draft_id,chapter_number,chapter_title,content_snapshot,content_hash,content_revision,target_file_name)
     VALUES('定稿甲',1,1,'雨夜',?,?,1,'第一章.txt')`).run(content,textHash(content))
   const plan = NarrativeThreadRepository.createPlan({title:'铜钥匙',type:'伏笔',targetStartChapter:1,targetEndChapter:2,authorIntent:'打开门'},db)
   return { db, plan, capture: (input:GraphGenerationInput,previous?:GraphGenerationContext,ignored:readonly number[]=[]) => captureGraphGenerationContext(db,input,scope,'上下文甲',previous,ignored) }
@@ -36,14 +36,14 @@ function run(context:GraphGenerationContext): DurableGenerationRun {
 
 it('事件来源核对定稿章节和非负修订号，并冻结合法修订号变化', () => {
  const f=fixture(),input:GraphGenerationInput={kind:'event',planId:f.plan.id,draftId:1}
- f.db.exec('UPDATE finalization_outbox SET chapter_number=99')
+ f.db.exec('UPDATE finalization_outbox_all SET chapter_number=99')
  expect(()=>f.capture(input)).toThrow('GENERATION_GRAPH_FINALIZED_SOURCE_INVALID')
- f.db.exec('UPDATE finalization_outbox SET chapter_number=1,content_revision=-1')
+ f.db.exec('UPDATE finalization_outbox_all SET chapter_number=1,content_revision=-1')
  expect(()=>f.capture(input)).toThrow('GENERATION_GRAPH_FINALIZED_SOURCE_INVALID')
- f.db.exec('UPDATE finalization_outbox SET content_revision=0')
+ f.db.exec('UPDATE finalization_outbox_all SET content_revision=0')
  const original=f.capture(input)
  expect(original).toMatchObject({contentRevision:0})
- f.db.exec('UPDATE finalization_outbox SET content_revision=3')
+ f.db.exec('UPDATE finalization_outbox_all SET content_revision=3')
  expect(f.capture(input,original)).not.toEqual(original)
 })
 
@@ -75,12 +75,12 @@ it('event不依赖角色身份，但必须是最新且outbox与正文hash一致�
  f.db.prepare('UPDATE contents SET body=? WHERE id=1').run('作者后改')
  expect(()=>f.capture(input)).toThrow('GENERATION_GRAPH_FINALIZED_SOURCE_INVALID')
  f.db.prepare('UPDATE contents SET body=? WHERE id=1').run(content)
- f.db.exec("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,2,'finalized',1,9)")
+ f.db.exec("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,2,'finalized',1,9)")
  expect(()=>f.capture(input)).toThrow('GENERATION_GRAPH_FINALIZED_SOURCE_INVALID')
 })
 it('忽略仅传入的已确认自身event后重新计算计划状态，外部event保留',()=>{
  const f=fixture(),input={kind:'event' as const,planId:f.plan.id,draftId:1}
- f.db.exec("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(5,5,1,'finalized',1,9)")
+ f.db.exec("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(5,5,1,'finalized',1,9)")
  const before=f.capture(input)
  expect(before).toMatchObject({plan:{dormantChapters:4,overdue:true}})
  const own=NarrativeThreadRepository.confirmEvent({planId:f.plan.id,draftId:1,type:'resolved',evidence:'铜钥匙',reason:'已找到'},f.db)

@@ -140,7 +140,7 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     const db = getProjectDb()!
     const content = db.prepare('INSERT INTO contents (body) VALUES (?)').run('第二章另一份定稿')
     db.prepare(`
-      INSERT INTO drafts (chapter_number, version, status, source, content_id, word_count)
+      INSERT INTO drafts_all (chapter_number, version, status, source, content_id, word_count)
       VALUES (2, 9, 'finalized', 'write', ?, 8)
     `).run(Number(content.lastInsertRowid))
 
@@ -158,7 +158,7 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     for (const chapter of chapters(3)) {
       const content = db.prepare('INSERT INTO contents (body) VALUES (?)').run(chapter.content)
       db.prepare(`
-        INSERT INTO drafts (chapter_number, version, status, source, content_id, word_count)
+        INSERT INTO drafts_all (chapter_number, version, status, source, content_id, word_count)
         VALUES (?, 1, 'finalized', 'write', ?, ?)
       `).run(chapter.chapterNumber, Number(content.lastInsertRowid), chapter.wordCount)
     }
@@ -255,7 +255,7 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     const db = getProjectDb()!
     db.exec(`
       CREATE TRIGGER reject_fifth_imported_chapter
-      BEFORE INSERT ON finalization_outbox
+      BEFORE INSERT ON finalization_outbox_all
       WHEN NEW.chapter_number = 5
       BEGIN
         SELECT RAISE(ABORT, 'injected fifth chapter failure');
@@ -325,7 +325,7 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     const request = { operationId: 'import-published-replay', chapters: chapters(2) }
     const first = FinalizedDraftImportRepository.commit(projectRoot, request)
     getProjectDb()!.prepare(`
-      UPDATE finalization_outbox SET publication_status = 'published'
+      UPDATE finalization_outbox_all SET publication_status = 'published'
       WHERE finalization_id = ?
     `).run(first.drafts[0].finalizationId)
 

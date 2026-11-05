@@ -162,10 +162,10 @@ describe('替换定稿对后续内容的影响', () => {
     const fromReplacement = DraftRepository.create({ chapterNumber: 7, source: 'write', content: '第七章：灰烬里还有字。', wordCount: 10, sourceDependencies: [
       { kind: 'finalized', draftId: replacement, chapterNumber: 2, finalizationId: replacementId, contentHash: sha256(REVISED_TWO) },
     ] })
-    db.prepare("UPDATE drafts SET created_at = datetime('now', '-1 hour') WHERE id = ?").run(fromReplacement)
+    db.prepare("UPDATE drafts_all SET created_at = datetime('now', '-1 hour') WHERE id = ?").run(fromReplacement)
     const legacy = DraftRepository.create({ chapterNumber: 6, source: 'write', content: '第六章：旧版本的定稿。', wordCount: 10 })
-    db.prepare("UPDATE drafts SET status = 'finalized' WHERE id = ?").run(legacy)
-    db.prepare(`UPDATE drafts SET created_at = datetime('now', '+1 hour') WHERE id IN (${[fromOldFinal, afterwards, legacy].join(',')})`).run()
+    db.prepare("UPDATE drafts_all SET status = 'finalized' WHERE id = ?").run(legacy)
+    db.prepare(`UPDATE drafts_all SET created_at = datetime('now', '+1 hour') WHERE id IN (${[fromOldFinal, afterwards, legacy].join(',')})`).run()
 
     expect(ReplacementImpactRepository.list()).toMatchObject([{ chapterNumber: 2, laterChapters: [3, 4, 6], blueprintOnlyChapters: [] }])
   })

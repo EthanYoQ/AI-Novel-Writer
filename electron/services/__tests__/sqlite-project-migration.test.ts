@@ -7,6 +7,7 @@ import type BetterSqlite3 from 'better-sqlite3'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { ensureBaselineBlueprintTables } from '../../migrations/baseline-blueprint-schema'
 import { sqliteSchemaFingerprint } from '../../migrations/sqlite-schema-adapter'
+import { logicalTableName } from '../../migrations/m07-chapter-recycle'
 import { backupProjectSqlite, probeProjectSqlite, verifyProjectSqlite, upgradeProjectSqlite } from '../sqlite-project-migration'
 import { CharacterRosterRepository } from '../../repositories/character-roster-repository'
 import { ProjectCoreRepository } from '../../repositories/project-core-repository'
@@ -156,7 +157,8 @@ describe('real SQLite schema probe and WAL staging backup', () => {
         ...(kind === 'empty' ? {} : { legacyMarkdown: raw }),
       })
       expect(target.prepare('SELECT rowid,* FROM project_core').get()).toEqual(originalCore)
-      expect(target.prepare('SELECT name,seq FROM sqlite_sequence ORDER BY name').all()).toEqual(sequences)
+      expect((target.prepare('SELECT name,seq FROM sqlite_sequence').all() as Array<{ name: string; seq: number }>)
+        .map(row => ({ ...row, name: logicalTableName(row.name) })).sort((a, b) => a.name < b.name ? -1 : 1)).toEqual(sequences)
       expect(target.prepare('SELECT COUNT(*) FROM llm_calls').pluck().get()).toBe(0)
       if (originalMeta) expect(target.prepare('SELECT rowid,* FROM character_roster_meta').get()).toEqual(originalMeta)
       expect(bytes(f.root)).toMatchObject(before)
@@ -230,7 +232,7 @@ describe('real SQLite schema probe and WAL staging backup', () => {
       id: 23, character_states: '{"乙":"作者旧状态"}', character_state_candidates: '[]',
     })
     expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='contents'").pluck().get()).toBe(900)
-    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='drafts'").pluck().get()).toBe(500)
+    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='drafts_all'").pluck().get()).toBe(500)
     const identities = target.prepare('SELECT source_key,original_row_json,character_id FROM character_identity_origins ORDER BY source_key').all() as Array<{ source_key: string; original_row_json: string; character_id: string }>
     expect(identities.map(row => [row.source_key, JSON.parse(row.original_row_json).name])).toEqual([
       ['legacy:characters:0', '乙'], ['legacy:characters:1', '甲'],
@@ -268,10 +270,10 @@ describe('real SQLite schema probe and WAL staging backup', () => {
       .toEqual({ source_rowid: 21, source_draft_chapter_number: 7, source_draft_version: 1, source_draft_status: 'draft', source_content: '冻结审稿源文', content_id: 12 })
     expect(target.prepare('SELECT rowid AS source_rowid,source_draft_chapter_number,source_draft_version,source_draft_status,source_content,content_id FROM revisions').get())
       .toEqual({ source_rowid: 22, source_draft_chapter_number: 7, source_draft_version: 1, source_draft_status: 'draft', source_content: '冻结修稿源文', content_id: 13 })
-    expect(target.prepare('SELECT rowid AS source_rowid,draft_id,chapter_number,character_states FROM summary_snapshots').get())
+    expect(target.prepare('SELECT rowid AS source_rowid,draft_id,chapter_number,character_states FROM summary_snapshots_all').get())
       .toEqual({ source_rowid: 23, draft_id: 19, chapter_number: 7, character_states: '{"乙":"作者旧状态"}' })
     expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='contents'").pluck().get()).toBe(900)
-    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='drafts'").pluck().get()).toBe(500)
+    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='drafts_all'").pluck().get()).toBe(500)
     expect(bytes(f.root)).toMatchObject(before)
   })
   it('rejects a one-property DDL fork of the exact official v1.0.0 schema', async () => {
@@ -351,7 +353,7 @@ describe('real SQLite schema probe and WAL staging backup', () => {
     expect(target.prepare('SELECT id,generation,stale_from_chapter FROM continuity_projection_meta').all()).toEqual([{ id: 'main', generation: 0, stale_from_chapter: null }])
     expect(target.prepare('SELECT id,content_id,word_count FROM drafts').get()).toEqual({ id: 19, content_id: 11, word_count: 876 })
     expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='contents'").pluck().get()).toBe(900)
-    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='drafts'").pluck().get()).toBe(500)
+    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='drafts_all'").pluck().get()).toBe(500)
     const identities = target.prepare('SELECT source_key,original_row_json,character_id FROM character_identity_origins ORDER BY source_key').all() as Array<{ source_key: string; original_row_json: string; character_id: string }>
     expect(identities.map(row => [row.source_key, JSON.parse(row.original_row_json).name])).toEqual([
       ['legacy:characters:0', '乙'], ['legacy:characters:1', '甲'],

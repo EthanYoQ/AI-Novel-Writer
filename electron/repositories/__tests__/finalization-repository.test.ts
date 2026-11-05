@@ -25,7 +25,7 @@ const roots: string[] = []
 function seedDraft(): void {
   db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(11, '数据库中的旧正文')
   db.prepare(`
-    INSERT INTO drafts (id, chapter_number, status, content_id, word_count)
+    INSERT INTO drafts_all (id, chapter_number, status, content_id, word_count)
     VALUES (?, ?, ?, ?, ?)
   `).run(17, 1, 'draft', 11, 7)
 }
@@ -177,7 +177,7 @@ describe('FinalizationRepository transaction seam', () => {
   it('rolls back content and status when writing the outbox fails', () => {
     db.exec(`
       CREATE TRIGGER reject_finalization_outbox
-      BEFORE INSERT ON finalization_outbox
+      BEFORE INSERT ON finalization_outbox_all
       BEGIN
         SELECT RAISE(ABORT, 'outbox rejected');
       END;
@@ -195,12 +195,12 @@ describe('FinalizationRepository transaction seam', () => {
     commitSnapshot()
     db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(12, 'obsolete chapter one')
     db.prepare(`
-      INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
+      INSERT INTO drafts_all (id, chapter_number, version, status, content_id, word_count)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(18, 1, 0, 'finalized', 12, 20)
     db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(13, '第三章定稿')
     db.prepare(`
-      INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
+      INSERT INTO drafts_all (id, chapter_number, version, status, content_id, word_count)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(19, 3, 4, 'finalized', 13, 5)
 
@@ -241,34 +241,34 @@ describe('FinalizationRepository transaction seam', () => {
 
     db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(12, 'conflicting final')
     db.prepare(`
-      INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
+      INSERT INTO drafts_all (id, chapter_number, version, status, content_id, word_count)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(18, 1, 1, 'finalized', 12, 17)
     expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
-    db.prepare('DELETE FROM drafts WHERE id = 18').run()
+    db.prepare('DELETE FROM drafts_all WHERE id = 18').run()
     db.prepare('DELETE FROM contents WHERE id = 12').run()
 
-    db.prepare("UPDATE finalization_outbox SET content_snapshot = 'other body' WHERE draft_id = 17").run()
+    db.prepare("UPDATE finalization_outbox_all SET content_snapshot = 'other body' WHERE draft_id = 17").run()
     expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
     db.prepare(`
-      UPDATE finalization_outbox SET content_snapshot = ?, content_hash = 'bad-hash' WHERE draft_id = 17
+      UPDATE finalization_outbox_all SET content_snapshot = ?, content_hash = 'bad-hash' WHERE draft_id = 17
     `).run('Finalized snapshot shown to the user')
     expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
-    db.prepare('UPDATE finalization_outbox SET content_hash = ?, finalization_id = ? WHERE draft_id = 17')
+    db.prepare('UPDATE finalization_outbox_all SET content_hash = ?, finalization_id = ? WHERE draft_id = 17')
       .run(hash('Finalized snapshot shown to the user'), 'replacement-finalization')
     expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
-    db.prepare('UPDATE finalization_outbox SET finalization_id = ? WHERE draft_id = 17')
+    db.prepare('UPDATE finalization_outbox_all SET finalization_id = ? WHERE draft_id = 17')
       .run('finalization-1')
-    db.prepare('UPDATE drafts SET version = 2 WHERE id = 17').run()
+    db.prepare('UPDATE drafts_all SET version = 2 WHERE id = 17').run()
     expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
-    db.prepare('UPDATE drafts SET version = 1, id = 18 WHERE id = 17').run()
+    db.prepare('UPDATE drafts_all SET version = 1, id = 18 WHERE id = 17').run()
     expect(FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)).toBe(false)
   })
 
   it('rejects a finalized export snapshot whose outbox identity or body disagrees with the draft fact', () => {
     commitSnapshot()
     db.prepare(`
-      UPDATE finalization_outbox
+      UPDATE finalization_outbox_all
       SET chapter_number = 2
       WHERE draft_id = 17
     `).run()
@@ -277,7 +277,7 @@ describe('FinalizationRepository transaction seam', () => {
       .toThrow('FINALIZATION_EXPORT_IDENTITY_MISMATCH')
 
     db.prepare(`
-      UPDATE finalization_outbox
+      UPDATE finalization_outbox_all
       SET chapter_number = 1, content_snapshot = 'other body'
       WHERE draft_id = 17
     `).run()
@@ -288,7 +288,7 @@ describe('FinalizationRepository transaction seam', () => {
   it('rejects an authoritative finalized draft with no body instead of silently omitting it', () => {
     commitSnapshot()
     db.prepare('UPDATE contents SET body = ? WHERE id = 11').run('')
-    db.prepare('UPDATE finalization_outbox SET content_snapshot = ? WHERE draft_id = 17').run('')
+    db.prepare('UPDATE finalization_outbox_all SET content_snapshot = ? WHERE draft_id = 17').run('')
 
     expect(() => FinalizationRepository.listAuthoritativeForExport())
       .toThrow('FINALIZATION_EXPORT_CONTENT_EMPTY')
