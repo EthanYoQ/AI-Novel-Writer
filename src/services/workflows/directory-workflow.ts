@@ -29,7 +29,7 @@ import type {
 } from '../../../electron/repositories/blueprint-repository'
 import { stripThinkingTags } from './workflow-utils'
 import { requireWorkflowProjectSession, workflowMainProcessError } from './workflow-project-session'
-import { displayedErrorMessage } from '../../i18n/app-errors'
+import { displayedErrorMessage, errorCodeOf } from '../../i18n/app-errors'
 import { isWorkflowCancellation, WorkflowCancelledError } from './workflow-cancellation'
 
 // ==========================================
@@ -397,10 +397,12 @@ export function createDirectoryWorkflow(
               throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
             }
             if (error instanceof TerminalProviderFailureError) throw error
-            throw new Error(text(
+            // 原文可能带主进程以外的内容，不转出；稳定错误码照常带上，运行记录才说得清是哪种失败。
+            const code = errorCodeOf(error)
+            throw Object.assign(new Error(text(
               '章节蓝图生成失败，请重试。',
               'Chapter-blueprint generation failed. Please try again.',
-            ))
+            )), code ? { code } : {})
           }
           // 返回可读摘要字符串（step.result 必须是 string，否则 AIOutputPanel 渲染会崩溃）
           return text(
