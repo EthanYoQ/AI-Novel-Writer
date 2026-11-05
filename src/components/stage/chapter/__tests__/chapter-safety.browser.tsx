@@ -583,7 +583,7 @@ describe('批量创作占着这一章时定稿（本批真实模型实测缺陷 
     expect(toastText).not.toContain('占着这一章')
     expect(toastText).toMatch(/角色状态/)
     expect(toastText).toMatch(/章节要点/)
-    expect(toastText).toContain('取消批量创作后就能定稿')
+    expect(toastText).toContain('取消它就能定稿')
     // 批次正在写第 6 章时只是预留了共用资料，定稿还没开始。
     expect(toastText).not.toContain('正在给别的章节定稿')
   }
