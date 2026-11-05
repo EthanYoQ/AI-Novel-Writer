@@ -41,6 +41,7 @@ import {
 } from '../generate-draft.command'
 import { assembleChapterMaterials } from '../../chapter-materials'
 import { MATERIAL_DECISION_MAX_INPUT_UNITS } from '../../../../shared/generation-owner-contract'
+import { WorkflowCancelledError } from '../../workflow-cancellation'
 
 // 默认原样透传真实装配；只有个别测试用 mockImplementationOnce 改写一次返回值，
 // 用来验证命令层对装配结果的独立复核。
@@ -2807,6 +2808,24 @@ ${headingPrefix}第3章：潮门
       expect(runtime.outline).toHaveBeenCalledTimes(1)
       expect(runtime.createRuntime).toHaveBeenCalledTimes(1)
       for (const [task] of runtime.complete.mock.calls) expect(task.messages.at(-1)!.content).toContain('行动与结果：本章读完信')
+    })
+    it.each([
+      ['存储写入失败', 'GENERATION_STORAGE_FAILED', 'GENERATION_DRAFT_SHORT_OUTLINE_FAILED'],
+      ['被取消截断', undefined, '工作流已取消'],
+    ] as const)('作者取消时短细纲%s：真实失败照常记失败，取消造成的中止才记取消', async (_label, failureCode, expected) => {
+      const runtime = fakeOutcomes(outcome('正文'.repeat(250), 'stop'))
+      const f = setup({ runtime, wordsTarget: 500 })
+      runtime.outline.mockImplementation(async () => {
+        f.context.cancelled = true
+        const result = outcome('未完成的计划', 'error')
+        if (failureCode) result.receipt.failureCode = failureCode
+        return result
+      })
+      const failure = await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+        .then(() => new Error('generation did not fail'), (error: unknown) => error)
+      expect((failure as Error).message).toContain(expected)
+      expect(failure instanceof WorkflowCancelledError).toBe(!failureCode)
+      expect(runtime.complete).not.toHaveBeenCalled()
     })
     it('fails the outline explicitly without drafting or saving its text as prose', async () => {
       const runtime = fakeOutcomes(outcome('正文'.repeat(250), 'stop'))
