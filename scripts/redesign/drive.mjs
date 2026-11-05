@@ -441,6 +441,11 @@ async function dumpDom(page, base) {
 
 const messageOf = error => error instanceof Error ? error.message : String(error)
 
+/** 会话收尾时读回这次启动在主进程里记下的模型请求，并进 modelLog。 */
+export async function harvestModelLog(app, modelLog) {
+  modelLog.push(...await app.evaluate(() => globalThis.__driveModelRequests).catch(() => []))
+}
+
 /**
  * 真实模式会话收尾：汇总模型请求，删掉隔离目录里的模型配置。
  * 删除失败只记进 sessionErrors：会话照常走结果路径，隔离目录因会话不干净而保留，交给收尾的密钥扫描。
@@ -586,7 +591,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
     // 场景在 hold 与 release 之间抛错时门还关着：卡住的请求让运行一直进行，应用拒绝关闭，quit 要等满 10 秒再强杀
     fake?.gate.release()
     if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, diagnostics, sessionErrors, realKey)
-    if (launched && realKey) modelLog.push(...await launched.app.evaluate(() => globalThis.__driveModelRequests).catch(() => []))
+    if (launched && realKey) await harvestModelLog(launched.app, modelLog)
     if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(messageOf(error)); return null })
     await fake?.close()
     if (fake) shared.modelRequests = fake.requests.length
