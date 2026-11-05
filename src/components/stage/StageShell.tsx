@@ -8,6 +8,7 @@ import { useStageStore } from '../../stores/navigation/stage-store'
 import { openBuiltinEditor } from '../../stores/open-builtin-editor'
 import { chapterLabel } from '../../shared/chapter-label'
 import type { Theme } from '../../stores/theme-store'
+import type { ProjectData } from '../../shared/ipc-channels'
 import ClearProjectDataDialog from '../dialogs/ClearProjectDataDialog'
 import { leaveSettingsThen, openProjectFolder } from '../settings/unsaved-settings'
 import type { MenuGroupSpec } from '../ui/Menu'
@@ -42,6 +43,11 @@ function crumbsFor(view: StageView, library: boolean, activeName: string | undef
   return [stage]
 }
 
+/** 这一次打开的作品；同一路径重开会换租约，也算另一次。 */
+function openedWork(project: Pick<ProjectData, 'id' | 'sessionLease'> | null): string | null {
+  return project ? `${project.id}:${project.sessionLease ?? ''}` : null
+}
+
 export default function StageShell({ theme }: { theme: Theme }) {
   const text = useLocaleStore(s => s.text)
   const hasProject = useProjectStore(s => Boolean(s.currentProject))
@@ -55,10 +61,12 @@ export default function StageShell({ theme }: { theme: Theme }) {
     return tab ? stageTabName(tab, text) : undefined
   })
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
-  const [clearOpen, setClearOpen] = useState(false)
+  // 清除生成内容与回收站只对打开它们时的那次作品生效：换了作品就关掉，回收站里的确认框随之作废。
+  const work = useProjectStore(s => openedWork(s.currentProject))
+  const [clearFor, setClearFor] = useState<string | null>(null)
+  const [trashFor, setTrashFor] = useState<string | null>(null)
   const view = useStageView()
   const trash = useChapterTrash()
-  const [trashOpen, setTrashOpen] = useState(false)
 
   useStageWorkRefresh()
   useLandingPage(view)
@@ -96,7 +104,7 @@ export default function StageShell({ theme }: { theme: Theme }) {
       { id: 'import', label: text('小说拆解与仿写…', 'Novel breakdown & imitation…'), onSelect: importNovel },
     ] },
     { id: 'danger', tone: 'danger', items: [
-      { id: 'clear', label: text('清除生成内容…', 'Clear generated content…'), onSelect: () => setClearOpen(true) },
+      { id: 'clear', label: text('清除生成内容…', 'Clear generated content…'), onSelect: () => setClearFor(openedWork(useProjectStore.getState().currentProject)) },
     ] },
   ], [text])
 
@@ -174,15 +182,15 @@ export default function StageShell({ theme }: { theme: Theme }) {
             onResource={page => navigate({ kind: 'resource', page })}
             onSettings={() => navigate({ kind: 'settings', section: 'llm' })}
             trashCount={trash.entries.length + trash.damaged.length}
-            onTrash={() => setTrashOpen(true)}
+            onTrash={() => setTrashFor(work)}
           />
         )}
         <StageWorkspace library={library} focus={focus} />
       </div>
       <StagePalette mode={palette} items={paletteItems} container={root} onClose={() => useStageStore.setState({ palette: null })} />
-      <ClearProjectDataDialog open={clearOpen} onClose={() => setClearOpen(false)} onCleared={() => refreshStageWork(text)} />
+      <ClearProjectDataDialog open={clearFor !== null && clearFor === work} onClose={() => setClearFor(null)} onCleared={() => refreshStageWork(text)} />
       <NewWorkDialog />
-      <TrashDialog open={trashOpen && !library} onOpenChange={setTrashOpen} trash={trash} />
+      <TrashDialog key={work} open={trashFor !== null && trashFor === work && !library} onOpenChange={open => setTrashFor(open ? work : null)} trash={trash} />
     </div>
   )
 }
