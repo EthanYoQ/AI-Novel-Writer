@@ -65,6 +65,8 @@ export default function StageShell({ theme }: { theme: Theme }) {
   const work = useProjectStore(s => openedWork(s.currentProject))
   const [clearFor, setClearFor] = useState<string | null>(null)
   const [trashFor, setTrashFor] = useState<string | null>(null)
+  // 去了书房就算关掉回收站，回来不再自己弹出。
+  if (library && trashFor !== null) setTrashFor(null)
   const view = useStageView()
   const trash = useChapterTrash()
 
@@ -190,7 +192,7 @@ export default function StageShell({ theme }: { theme: Theme }) {
       <StagePalette mode={palette} items={paletteItems} container={root} onClose={() => useStageStore.setState({ palette: null })} />
       <ClearProjectDataDialog open={clearFor !== null && clearFor === work} onClose={() => setClearFor(null)} onCleared={() => refreshStageWork(text)} />
       <NewWorkDialog />
-      <TrashDialog key={work} open={trashFor !== null && trashFor === work && !library} onOpenChange={open => setTrashFor(open ? work : null)} trash={trash} />
+      {!library && <TrashDialog key={work} open={trashFor !== null && trashFor === work} onOpenChange={open => setTrashFor(open ? work : null)} trash={trash} />}
     </div>
   )
 }
