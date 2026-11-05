@@ -89,6 +89,24 @@ export function injectWritingSkillIntoTask(
   }
 }
 
+/**
+ * 主进程把存储、预算这些失败写进收据后照常返回结果，取消截断的结果则不带失败码（取消码不交给渲染端）。
+ * 作者已取消时，带失败码的结果就地抛出带原码的失败，后面任何取消检查点都不会把它改记成取消；没取消时原样返回。
+ */
+export function keepReceiptFailuresOnCancel(session: GenerationSession, context: WorkflowContext): GenerationSession {
+  return {
+    budget: session.budget,
+    complete: async (task, options) => {
+      const outcome = await session.complete(task, options)
+      const failureCode = outcome.receipt.failureCode
+      if (failureCode && context.cancelled) {
+        throw Object.assign(createBoundedCompletionError(outcome.finishReason, context.uiLocale ?? 'zh-CN'), { code: failureCode })
+      }
+      return outcome
+    },
+  }
+}
+
 export function injectWritingSkillIntoSession(
   session: GenerationSession,
   context: WorkflowContext,
@@ -210,7 +228,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       return await runtime.execute(async ({ session }) => {
         this.activeGenerationExecution = {
           context: params.context,
-          session,
+          session: keepReceiptFailuresOnCancel(session, params.context),
           signal: cancellation.signal,
           loggedWritingSkillStages: new Set(),
           runtime,
@@ -482,8 +500,6 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       }
       const outcome = await execution.session.complete(injection.task, { signal: execution.signal })
       this.reportGenerationPromptBudget(callbacks, outcome.receipt)
-      // 带失败码的结果是真实失败（主进程不把取消码交给渲染端）：作者已取消也就地报失败，免得后面的取消检查点把它改记成取消。
-      if (outcome.receipt.failureCode && context?.cancelled) throw this.createIncompleteCompletionError(outcome.finishReason)
       this.assertNotCancelled(context)
       const content = this.stripThinkingTags(outcome.content)
       if (!execution.mainOwned) callbacks.appendText(content)

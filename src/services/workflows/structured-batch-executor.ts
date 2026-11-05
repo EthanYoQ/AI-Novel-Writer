@@ -10,6 +10,7 @@ import {
 import { structuredContractDiagnostic } from '../../shared/structured-contract-diagnostic'
 import type { WritingLanguage } from '../../shared/writing-language'
 import { errorCodeOf, knownAppErrorMessage } from '../../i18n/app-errors'
+import { isWorkflowCancellation, WorkflowCancelledError } from './workflow-cancellation'
 import {
   buildStructuredSyntaxRepairTask,
   isRepairableDirectJsonSyntaxFailure,
@@ -90,8 +91,8 @@ export interface StructuredBatchFailure {
   }
   /** 主进程给出的稳定错误码，例如预算用完或生成被阻断。 */
   errorCode?: string
-  /** 服务商以上下文超长拒绝：消费方原样抛出，保留登记的错误码。 */
-  terminal?: TerminalProviderFailureError
+  /** 消费方原样抛出：服务商以上下文超长拒绝（保留登记的错误码），或取消造成的中止（保留取消身份）。 */
+  terminal?: TerminalProviderFailureError | WorkflowCancelledError
 }
 
 export type StructuredBatchResult<TOutput> =
@@ -583,6 +584,11 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           const errorCode = errorCodeOf(error)
           const message = errorCode && knownAppErrorMessage(writingLanguage, errorCode) ? errorCode : '结构化生成失败'
           failure = { code: 'generation_failed', reason: 'server_error', message, ...(errorCode ? { errorCode } : {}) }
+        }
+        // 取消造成的中止经 terminal 原样交给消费方抛出，各命令的失败包装不能把取消身份丢掉。
+        if (failure.code === 'cancelled' || isWorkflowCancellation(error)) {
+          failure = { ...failure, code: 'cancelled', reason: 'cancelled',
+            terminal: new WorkflowCancelledError(writingLanguage === 'zh-CN' ? '工作流已取消' : 'Workflow was cancelled.') }
         }
         return { ok: false, failure, receipt, validatedItems: [...validated] }
       }
