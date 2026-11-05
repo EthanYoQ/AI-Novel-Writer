@@ -181,6 +181,12 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
   // 每条意见都选了不修改时没有可修的，主按钮改为把这些弃修决定确认进审稿记录（旧审稿报告的「确认审稿清单」）。
   const waived = checklist.items.some(item => item.decision === 'waive')
   const confirmWaived = included === 0 && waived && (checklist.editingChecklist || !checklist.confirmed)
+  // 审稿只给了通过或待作者判断的条目时没有可修的，主路径直接到定稿；作者要改什么仍可在侧页添加自己的意见。
+  const nothingToRevise = included === 0 && !waived && !checklist.items.some(item => item.severity === 'error' || item.severity === 'warning')
+  const toVerify = checklist.items.filter(item => item.severity === 'unknown').length
+  const nothingToReviseHint = toVerify > 0
+    ? text(`这次审稿没有需要修改的意见，有 ${toVerify} 项待你核实，看过再定稿`, `This review found nothing to revise. ${toVerify} ${toVerify === 1 ? 'item needs' : 'items need'} your check before you finalize.`)
+    : text('这次审稿没有需要修改的意见，可以直接定稿', 'This review found nothing to revise. You can finalize now.')
   const confirmWaiver = async () => {
     const session = captureProjectSession(useProjectStore.getState().currentProject)
     const confirmed = await checklist.confirmChecklist()
@@ -258,7 +264,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
   const moreGroups: MenuGroupSpec[] = [
     { id: 'chapter', items: [
       ...(editable ? [{ id: 'refine', label: text('直接修稿…', 'Revise directly…'), disabled: busy, onSelect: () => { setRefinePrompt(''); setAsk('refine') } }] : []),
-      ...(editable && stage !== 'revised' ? [{ id: 'finalize', label: text('定稿…', 'Finalize…'), disabled: !draft.canFinalize || olderDraft, onSelect: () => draft.requestFinalize(() => setAsk('finalize')) }] : []),
+      ...(editable && stage !== 'revised' && !(stage === 'reviewed' && nothingToRevise) ? [{ id: 'finalize', label: text('定稿…', 'Finalize…'), disabled: !draft.canFinalize || olderDraft, onSelect: () => draft.requestFinalize(() => setAsk('finalize')) }] : []),
       ...(review && !sheetOpen && !focus ? [{ id: 'report', label: text('审稿报告', 'Review report'), onSelect: () => setSheet(true) }] : []),
       { id: 'history', label: text('版本历史', 'Version history'), onSelect: () => navigate({ kind: 'resource', page: 'history' }) },
       { id: 'copy', label: text('复制本章正文', 'Copy chapter text'), onSelect: copyBody },
@@ -302,6 +308,10 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
               <Button variant="primary" disabled={busy || checklist.confirming || checklist.processing} onClick={() => void confirmWaiver()}>
                 {text('确认不修改', 'Confirm no revision')}
               </Button>
+            ) : nothingToRevise ? (
+              <Button variant="primary" disabled={!draft.canFinalize || olderDraft} onClick={() => draft.requestFinalize(() => setAsk('finalize'))}>
+                <BadgeCheck size={15} aria-hidden />{text('定稿', 'Finalize')}
+              </Button>
             ) : <SplitAction
               layer={reviseOptions}
               popoverClassName="stage-ch-options"
@@ -324,6 +334,8 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
             {more}
             <span className="stage-ch-hint">{confirmWaived
               ? text('这些意见都不修改，确认后记进审稿记录', 'None of these notes will be revised; confirm to record that in the review')
+              : nothingToRevise
+                ? finalizeHint ?? nothingToReviseHint
               : included > 0
                 ? text('修稿结果会以差异给你确认，不会直接覆盖', 'You confirm the revision as a diff; nothing is overwritten')
                 : waived
