@@ -2810,9 +2810,9 @@ ${headingPrefix}第3章：潮门
       for (const [task] of runtime.complete.mock.calls) expect(task.messages.at(-1)!.content).toContain('行动与结果：本章读完信')
     })
     it.each([
-      ['存储写入失败', 'GENERATION_STORAGE_FAILED', 'GENERATION_DRAFT_SHORT_OUTLINE_FAILED'],
-      ['被取消截断', undefined, '工作流已取消'],
-    ] as const)('作者取消时短细纲%s：真实失败照常记失败，取消造成的中止才记取消', async (_label, failureCode, expected) => {
+      ['存储写入失败', 'GENERATION_STORAGE_FAILED'],
+      ['被取消截断', undefined],
+    ] as const)('作者取消时短细纲%s：真实失败照常记失败，取消造成的中止才记取消', async (_label, failureCode) => {
       const runtime = fakeOutcomes(outcome('正文'.repeat(250), 'stop'))
       const f = setup({ runtime, wordsTarget: 500 })
       runtime.outline.mockImplementation(async () => {
@@ -2823,8 +2823,8 @@ ${headingPrefix}第3章：潮门
       })
       const failure = await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
         .then(() => new Error('generation did not fail'), (error: unknown) => error)
-      expect((failure as Error).message).toContain(expected)
       expect(failure instanceof WorkflowCancelledError).toBe(!failureCode)
+      if (failureCode) expect((failure as { code?: unknown }).code).toBe(failureCode)
       expect(runtime.complete).not.toHaveBeenCalled()
     })
     it('fails the outline explicitly without drafting or saving its text as prose', async () => {
@@ -2834,6 +2834,36 @@ ${headingPrefix}第3章：潮门
       await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
       expect(runtime.complete).not.toHaveBeenCalled()
       expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:recovery-candidate-record')).toBe(false)
+    })
+  })
+
+  describe('作者取消时正文请求返回带失败码的结果（#587）', () => {
+    // 主进程把存储、预算这些失败写进收据后照常返回结果；取消截断的结果收据里没有失败码。
+    const failedWhileCancelling = (failureCode: 'GENERATION_STORAGE_FAILED' | 'ROOT_BUDGET_EXHAUSTED' | undefined, attempt: number) => {
+      const result = outcome('写到一半', 'error', attempt)
+      if (failureCode) result.receipt.failureCode = failureCode
+      return result
+    }
+    it.each([
+      ['首稿', [] as GenerationOutcome[], 500],
+      ['自动续写', [outcome('初'.repeat(1000), 'stop', 1)], 2000],
+      ['压缩修订', [outcome(`${'长'.repeat(2700)}。`, 'stop', 1)], 2000],
+    ] as const)('%s：带失败码照常记失败并带原码，没有失败码才记取消', async (_stage, before, wordsTarget) => {
+      for (const failureCode of ['GENERATION_STORAGE_FAILED', 'ROOT_BUDGET_EXHAUSTED', undefined] as const) {
+        const holder: { context?: WorkflowContext } = {}
+        const runtime = fakeRuntime(attempt => {
+          if (attempt <= before.length) return before[attempt - 1]!
+          holder.context!.cancelled = true
+          return failedWhileCancelling(failureCode, attempt)
+        })
+        const f = setup({ runtime, wordsPerChapter: wordsTarget, wordsTarget })
+        holder.context = f.context
+        const failure = await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+          .then(() => new Error('generation did not fail'), (error: unknown) => error)
+        expect(runtime.complete).toHaveBeenCalledTimes(before.length + 1)
+        expect(failure instanceof WorkflowCancelledError, String(failureCode)).toBe(!failureCode)
+        if (failureCode) expect((failure as { code?: unknown }).code).toBe(failureCode)
+      }
     })
   })
 

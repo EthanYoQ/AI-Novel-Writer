@@ -137,8 +137,8 @@ describe.each([
       return returnedIncomplete(failureCode)
     })).execute({ step: {}, context, callbacks }))
 
-    expect(finished).toMatchObject({ status: 'failed' })
-    expect(finished.steps[0]).toMatchObject({ status: 'failed' })
+    expect(finished).toMatchObject({ status: 'failed', errorCode: failureCode })
+    expect(finished.steps[0]).toMatchObject({ status: 'failed', errorCode: failureCode })
   })
 
   it('取消截断的结果（收据没有失败码）：运行和这一步都记已取消', async () => {
