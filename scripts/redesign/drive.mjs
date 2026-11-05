@@ -463,9 +463,17 @@ export function releaseSessionRoot(root, clean, sessionErrors, remove = removePa
   if (reason) sessionErrors.push(`删不掉隔离目录 ${root}：${reason}`)
 }
 
-/** 写诊断日志；写不进去只记进 sessionErrors，后面的退出与凭据清理照常执行。 */
-export function writeConsoleLog(file, diagnostics, sessionErrors) {
-  try { fs.writeFileSync(file, `${diagnostics.join('\n')}\n`) } catch (error) { sessionErrors.push(messageOf(error)) }
+/**
+ * 写诊断日志；写不进去只记进 sessionErrors，后面的退出与凭据清理照常执行。
+ * 诊断里带出 secret 时写盘前就遮掉，运行中途被打断也不会把密钥留在产出目录；出现过即记进 sessionErrors，会话判失败。
+ */
+export function writeConsoleLog(file, diagnostics, sessionErrors, secret = null) {
+  let text = `${diagnostics.join('\n')}\n`
+  if (secret && text.includes(secret)) {
+    text = text.split(secret).join('[已遮蔽]')
+    sessionErrors.push('诊断日志里出现了密钥，写盘前已遮蔽')
+  }
+  try { fs.writeFileSync(file, text) } catch (error) { sessionErrors.push(messageOf(error)) }
 }
 
 /** 本次写进产出目录的文件与留作取证的隔离目录里不能有密钥；找到就删掉那个文件，结果记下 keyScan。读不了的文件算扫描不完整，判失败。 */
@@ -577,7 +585,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
   } finally {
     // 场景在 hold 与 release 之间抛错时门还关着：卡住的请求让运行一直进行，应用拒绝关闭，quit 要等满 10 秒再强杀
     fake?.gate.release()
-    if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, diagnostics, sessionErrors)
+    if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, diagnostics, sessionErrors, realKey)
     if (launched && realKey) modelLog.push(...await launched.app.evaluate(() => globalThis.__driveModelRequests).catch(() => []))
     if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(messageOf(error)); return null })
     await fake?.close()
