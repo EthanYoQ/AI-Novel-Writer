@@ -161,7 +161,7 @@ function insertFinalizedDraft(
   if (existing) {
     db.prepare('UPDATE contents SET body = ? WHERE id = ?').run(content, existing.contentId)
     db.prepare(`
-      UPDATE finalization_outbox
+      UPDATE finalization_outbox_all
       SET content_hash = ?, content_snapshot = ?
       WHERE draft_id = ?
     `).run(contentHash, content, draftId)
@@ -170,11 +170,11 @@ function insertFinalizedDraft(
   db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)')
     .run(draftId, content)
   db.prepare(`
-    INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
+    INSERT INTO drafts_all (id, chapter_number, version, status, content_id, word_count)
     VALUES (?, ?, 1, 'finalized', ?, 0)
   `).run(draftId, chapterNumber, draftId)
   db.prepare(`
-    INSERT INTO finalization_outbox (
+    INSERT INTO finalization_outbox_all (
       finalization_id, draft_id, chapter_number, chapter_title, content_hash,
       content_revision, content_snapshot, target_file_name, publication_status
     ) VALUES (?, ?, ?, '', ?, 1, ?, ?, 'published')
@@ -1356,9 +1356,9 @@ describe('重开再定稿后的后处理（ADR-0024）', () => {
     expect(cleanupRequests).toEqual([])
 
     insertFinalizedDraft(8, 3, 'Chapter 3 new final content')
-    getProjectDb()!.prepare('UPDATE drafts SET version = 2 WHERE id = 8').run()
+    getProjectDb()!.prepare('UPDATE drafts_all SET version = 2 WHERE id = 8').run()
     insertFinalizedDraft(6, 3, 'Chapter 3 replaced content')
-    getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = 6").run()
+    getProjectDb()!.prepare("UPDATE drafts_all SET status = 'superseded' WHERE id = 6").run()
     const replaced = await command('Chapter 3 new final content', {}, { draftId: 8, chapterNumber: 3 })
       .execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
@@ -1375,9 +1375,9 @@ describe('重开再定稿后的后处理（ADR-0024）', () => {
   it('遇到失败就停的后处理（批量写作、作者原稿导入）：旧正文文件被作者改过、清理失败，章节要点与角色状态照常生成', async () => {
     await command('Chapter 2 finalized content').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
     insertFinalizedDraft(8, 3, 'Chapter 3 new final content')
-    getProjectDb()!.prepare('UPDATE drafts SET version = 2 WHERE id = 8').run()
+    getProjectDb()!.prepare('UPDATE drafts_all SET version = 2 WHERE id = 8').run()
     insertFinalizedDraft(6, 3, 'Chapter 3 replaced content')
-    getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = 6").run()
+    getProjectDb()!.prepare("UPDATE drafts_all SET status = 'superseded' WHERE id = 6").run()
     replacedManuscriptEdited = true
 
     await expect(command('Chapter 3 new final content', { stopOnFailure: true }, { draftId: 8, chapterNumber: 3 })
