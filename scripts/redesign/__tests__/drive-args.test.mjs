@@ -179,3 +179,19 @@ it('诊断日志写不进去时只记进会话错误，不打断后面的退出�
   writeConsoleLog(file, ['a', 'b'], sessionErrors)
   assert.equal(fs.readFileSync(file, 'utf8'), 'a\nb\n')
 })
+
+it('含密钥的文件有一个删不掉时记下路径与原因，其余照删，结果里不含密钥', () => {
+  const out = tempParent()
+  const outBefore = fileStamps(out)
+  const stuck = path.join(out, 'stuck.log')
+  const other = path.join(out, 'other.log')
+  for (const file of [stuck, other]) fs.writeFileSync(file, 'sk-test-secret')
+  const results = [{ isolationRoot: path.join(out, 'gone') }]
+  scanRunForSecret(results, out, outBefore, 'sk-test-secret', file => {
+    if (file === stuck) throw Object.assign(new Error(`EBUSY: resource busy or locked, unlink '${file}'`), { code: 'EBUSY' })
+    fs.rmSync(file)
+  })
+  assert.deepEqual(results[0].keyScan.removeFailures, [{ file: stuck, reason: 'EBUSY' }])
+  assert.equal(fs.existsSync(other), false)
+  assert.equal(JSON.stringify(results).includes('sk-test-secret'), false)
+})

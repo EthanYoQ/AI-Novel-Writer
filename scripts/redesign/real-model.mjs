@@ -32,6 +32,40 @@ export function fetchRoute(href, { fakePort, realOrigin }) {
   return 'refuse'
 }
 
+/**
+ * 包住主进程的 fetch：按 route 的去向放行、改道或拒绝，拒绝的源记进 sink.externalRequests。
+ * 真实模式不跟随重定向，遇到 3xx 记下目标源并拒绝：模型输入与凭据只发往确认过的端点。
+ * 源码会被送进 Electron 主进程重建，函数体不能引用外部变量。
+ */
+export function guardFetch(originalFetch, route, policy, sink) {
+  return async (input, options) => {
+    const url = new URL(String(input instanceof Request ? input.url : input))
+    const decision = route(url.href, policy)
+    if (decision === 'refuse') {
+      sink.externalRequests.push(url.origin)
+      throw new Error('DRIVE_EXTERNAL_FETCH_REFUSED')
+    }
+    if (decision === 'fake') return originalFetch(`http://127.0.0.1:${policy.fakePort}${url.pathname}`, options)
+    if (policy.realOrigin === null) return originalFetch(input, options)
+    const started = Date.now()
+    const record = status => sink.modelRequests.push({ path: url.pathname, status, ms: Date.now() - started })
+    let response
+    try {
+      response = await originalFetch(input, { ...options, redirect: 'manual' })
+    } catch (error) {
+      record(String(error?.name ?? 'error'))
+      throw error
+    }
+    record(response.status)
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location')
+      sink.externalRequests.push(location ? new URL(location, url).origin : `${url.origin}（重定向没有 Location）`)
+      throw new Error('DRIVE_EXTERNAL_FETCH_REFUSED')
+    }
+    return response
+  }
+}
+
 /** 模型请求日志的汇总：只有路径、状态与到响应头的毫秒数，没有请求内容。 */
 export function summarizeModelRequests(log) {
   const byPath = {}

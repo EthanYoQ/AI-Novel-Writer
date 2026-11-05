@@ -12,7 +12,7 @@ import { _electron as electron } from 'playwright'
 
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
 import { startFakeModel } from './fake-model.mjs'
-import { changedFiles, fetchRoute, filesContaining, fileStamps, REAL_KEY_ENV, REAL_ORIGIN, realModelProfiles, redactSecret, removeModelConfigs,
+import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, REAL_KEY_ENV, REAL_ORIGIN, realModelProfiles, redactSecret, removeModelConfigs,
   summarizeModelRequests } from './real-model.mjs'
 import { assertNodeRunsTypeScript } from './node-version.mjs'
 import { dismissCompletionToasts, dismissStartupNotice, firstInteractiveControl, waitForShell } from './pages/shell.mjs'
@@ -246,32 +246,12 @@ async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, realOrig
   let page
   try {
     // 本机检索模型直接把 base_url 配成假服务的本机地址，这类请求原样放行；真实模式只放行硅基流动，只记路径、状态与耗时。
-    await app.evaluate((_, { route, policy }) => {
-      const fetchRoute = (0, eval)(`(${route})`)
-      const originalFetch = globalThis.fetch
-      globalThis.__driveExternalRequests = []
-      globalThis.__driveModelRequests = []
-      globalThis.fetch = async (input, options) => {
-        const url = new URL(String(input instanceof Request ? input.url : input))
-        const decision = fetchRoute(url.href, policy)
-        if (decision === 'refuse') {
-          globalThis.__driveExternalRequests.push(url.origin)
-          throw new Error('DRIVE_EXTERNAL_FETCH_REFUSED')
-        }
-        if (decision === 'fake') return originalFetch(`http://127.0.0.1:${policy.fakePort}${url.pathname}`, options)
-        if (policy.realOrigin === null) return originalFetch(input, options)
-        const started = Date.now()
-        const record = status => globalThis.__driveModelRequests.push({ path: url.pathname, status, ms: Date.now() - started })
-        try {
-          const response = await originalFetch(input, options)
-          record(response.status)
-          return response
-        } catch (error) {
-          record(String(error?.name ?? 'error'))
-          throw error
-        }
-      }
-    }, { route: fetchRoute.toString(), policy: fetchPolicy })
+    await app.evaluate((_, { route, guard, policy }) => {
+      const sink = { externalRequests: [], modelRequests: [] }
+      globalThis.__driveExternalRequests = sink.externalRequests
+      globalThis.__driveModelRequests = sink.modelRequests
+      globalThis.fetch = (0, eval)(`(${guard})`)(globalThis.fetch, (0, eval)(`(${route})`), policy, sink)
+    }, { route: fetchRoute.toString(), guard: guardFetch.toString(), policy: fetchPolicy })
     app.process().stdout?.on('data', chunk => diagnostics.push(`[main:stdout] ${String(chunk).trimEnd()}`))
     app.process().stderr?.on('data', chunk => diagnostics.push(`[main:stderr] ${String(chunk).trimEnd()}`))
     page = await app.firstWindow({ timeout: TIMEOUT })
@@ -478,11 +458,16 @@ export function writeConsoleLog(file, diagnostics, sessionErrors) {
 }
 
 /** 本次写进产出目录的文件与留作取证的隔离目录里不能有密钥；找到就删掉那个文件，结果记下 keyScan。 */
-export function scanRunForSecret(results, out, outBefore, secret) {
+export function scanRunForSecret(results, out, outBefore, secret,
+  remove = file => fs.rmSync(file, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })) {
   const retained = [...new Set(results.map(result => result.isolationRoot))].filter(root => fs.existsSync(root))
   const scan = filesContaining([...changedFiles(out, outBefore), ...retained], secret)
-  for (const file of scan.hits) fs.rmSync(file, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
-  for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits }
+  // 逐个删：一个删不掉不影响其余，删不掉的只记路径与错误码（命中本身已判失败）。
+  const removeFailures = []
+  for (const file of scan.hits) {
+    try { remove(file) } catch (error) { removeFailures.push({ file, reason: error?.code ?? error?.name ?? 'error' }) }
+  }
+  for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits, removeFailures }
 }
 
 /**
@@ -628,11 +613,13 @@ async function main() {
       const { value: result, redacted } = realKey ? redactSecret(raw, realKey) : { value: raw, redacted: false }
       if (redacted) result.secretRedacted = true
       results.push(result)
-      process.stdout.write(`${JSON.stringify(result)}\n`)
+      if (!realKey) process.stdout.write(`${JSON.stringify(result)}\n`)
     }
   }
   const resultFile = path.join(options.out, `${options.scenario}-${options.theme}.json`)
+  // 先扫密钥再打印，stdout 与结果 JSON 报的是同一份发现。
   if (realKey) scanRunForSecret(results, options.out, outBefore, realKey)
+  if (realKey) for (const result of results) process.stdout.write(`${JSON.stringify(result)}\n`)
   const failed = results.filter(result => result.error || result.residualProcesses?.length !== 0 || result.externalWrites?.length !== 0
     || result.keyScan?.hits.length > 0 || result.secretRedacted)
   fs.writeFileSync(resultFile, JSON.stringify(results, null, 2))

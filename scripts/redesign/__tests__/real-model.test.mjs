@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, it } from 'vitest'
-import { changedFiles, fetchRoute, filesContaining, fileStamps, realModelProfiles, redactSecret, removeModelConfigs, summarizeModelRequests } from '../real-model.mjs'
+import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, realModelProfiles, redactSecret, removeModelConfigs, summarizeModelRequests }
+  from '../real-model.mjs'
 
 const REAL = { fakePort: null, realOrigin: 'https://api.siliconflow.cn' }
 const FAKE = { fakePort: 4567, realOrigin: null }
@@ -99,4 +101,33 @@ it('只列出本次运行新建或改过的文件，事先就有且没动过的�
   fs.mkdirSync(path.join(dir, 'shots'))
   fs.writeFileSync(path.join(dir, 'shots', 'new.png'), 'png')
   assert.deepEqual(changedFiles(dir, before).map(file => path.relative(dir, file)).sort(), ['old.json', path.join('shots', 'new.png')])
+})
+
+it('真实模式不跟随重定向：302 指向别的源时拒绝，目标源收不到请求并记进外部请求', async () => {
+  const targetHits = []
+  const target = http.createServer((request, response) => { targetHits.push(request.url); response.end('{}') })
+  const redirect = http.createServer((request, response) => {
+    response.writeHead(302, { location: `http://127.0.0.1:${target.address().port}/v1/steal` })
+    response.end()
+  })
+  await Promise.all([target, redirect].map(server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve))))
+  try {
+    const sink = { externalRequests: [], modelRequests: [] }
+    const realOrigin = `http://127.0.0.1:${redirect.address().port}`
+    const guarded = guardFetch(fetch, fetchRoute, { fakePort: null, realOrigin }, sink)
+    await assert.rejects(guarded(`${realOrigin}/v1/chat/completions`, { method: 'POST', body: '{"messages":[]}' }), /DRIVE_EXTERNAL_FETCH_REFUSED/)
+    assert.deepEqual(targetHits, [])
+    assert.deepEqual(sink.externalRequests, [`http://127.0.0.1:${target.address().port}`])
+    assert.deepEqual(sink.modelRequests.map(entry => [entry.path, entry.status]), [['/v1/chat/completions', 302]])
+  } finally {
+    await Promise.all([target, redirect].map(server => new Promise(resolve => server.close(resolve))))
+  }
+})
+
+it('包装的源码在主进程里重建后同样拒绝不在名单里的请求', async () => {
+  const rebuilt = (0, eval)(`(${guardFetch.toString()})`)
+  const sink = { externalRequests: [], modelRequests: [] }
+  const guarded = rebuilt(() => { throw new Error('不应发出') }, fetchRoute, REAL, sink)
+  await assert.rejects(guarded('https://api.openai.com/v1/chat/completions'), /DRIVE_EXTERNAL_FETCH_REFUSED/)
+  assert.deepEqual(sink.externalRequests, ['https://api.openai.com'])
 })
