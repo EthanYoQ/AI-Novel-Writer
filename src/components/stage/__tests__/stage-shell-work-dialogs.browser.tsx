@@ -51,6 +51,8 @@ async function open(context: ProjectSessionContext, name: string) {
 beforeEach(async () => {
   const invoke = vi.fn(async (channel: string) => {
     if (channel === 'chapter:trash-list') return { success: true, entries: [TRASHED], damaged: [] }
+    if (channel === 'project:overview-current') return { state: 'unavailable' }
+    if (channel === 'update:get-state') return { status: 'idle', currentVersion: '1.4.0', isReminderDeferred: false }
     return channel.endsWith('-list') || channel.endsWith('get-all') ? [] : undefined
   })
   Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => undefined } })
@@ -90,6 +92,18 @@ describe('外壳里的对话框属于打开它时的作品（#592）', () => {
     await act(async () => page.getByRole('button', { name: '回收站（1）' }).click())
     await expect.element(page.getByRole('dialog', { name: '回收站（1）' })).toBeVisible()
     await expect.element(page.getByRole('dialog', { name: /^彻底删除/ })).not.toBeInTheDocument()
+  })
+
+  it('回收站和彻底删除确认开着时去了书房，回到同一部作品不会自己再弹出来（#592）', async () => {
+    await act(async () => page.getByRole('button', { name: '回收站（1）' }).click())
+    await act(async () => page.getByRole('dialog', { name: '回收站（1）' }).getByRole('button', { name: '彻底删除…' }).click())
+    await expect.element(page.getByRole('dialog', { name: '彻底删除第 3 章「灯塔」？' })).toBeVisible()
+
+    await act(async () => useLayoutStore.setState({ sidebarView: 'home' }))
+    await act(async () => useLayoutStore.setState({ sidebarView: 'project' }))
+    expect(document.querySelector('.stage-trash-list')).toBeNull()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    await expect.element(page.getByRole('button', { name: '回收站（1）' })).toBeVisible()
   })
 
   it('清除生成内容开着时换了作品就关掉', async () => {
