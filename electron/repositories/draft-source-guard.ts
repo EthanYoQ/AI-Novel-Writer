@@ -29,7 +29,7 @@ export function assertExpectedDraftSource(
       drafts.version,
       drafts.status,
       contents.body AS content
-    FROM live_drafts AS drafts
+    FROM drafts
     JOIN contents ON contents.id = drafts.content_id
     WHERE drafts.id = ?
   `).get(baseDraftId) as ExpectedDraftSource | undefined

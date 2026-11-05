@@ -516,7 +516,7 @@ function mergeGeneratedEntriesWithExisting(
 function hasFinalizedDraft(db: BetterSqlite3.Database, chapterNumber: number): boolean {
   return db.prepare(`
     SELECT 1
-    FROM live_drafts
+    FROM drafts
     WHERE chapter_number = ? AND status = 'finalized'
     LIMIT 1
   `).get(chapterNumber) !== undefined
@@ -530,8 +530,8 @@ function assertCurrentFinalizedSource(
     SELECT drafts.chapter_number AS chapterNumber, drafts.status,
            finalization_outbox.finalization_id AS finalizationId,
            finalization_outbox.content_hash AS contentHash
-    FROM live_drafts AS drafts
-    JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    FROM drafts
+    JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
     WHERE drafts.id = ?
   `).get(source.draftId) as {
     chapterNumber: number

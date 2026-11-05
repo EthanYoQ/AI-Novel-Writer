@@ -36,7 +36,7 @@ function readReplacement(draftId: number) {
   const current = db.prepare(`
     SELECT drafts.chapter_number, drafts.status, finalization_outbox.target_file_name,
            finalization_outbox.knowledge_document_id, finalization_outbox.publication_status
-    FROM live_drafts AS drafts JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    FROM drafts JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
     WHERE drafts.id = ?
   `).get(draftId) as {
     chapter_number: number
@@ -50,7 +50,7 @@ function readReplacement(draftId: number) {
   const replaced = db.prepare(`
     SELECT finalization_outbox.chapter_title, finalization_outbox.content_snapshot,
            finalization_outbox.target_file_name, finalization_outbox.knowledge_document_id
-    FROM live_drafts AS drafts JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    FROM drafts JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
     WHERE drafts.chapter_number = ? AND drafts.status = 'superseded'
     ORDER BY drafts.version, drafts.id
   `).all(current.chapter_number) as ReplacedFinal[]

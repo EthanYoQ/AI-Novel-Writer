@@ -89,8 +89,8 @@ export class NarrativeThreadRepository {
       SELECT drafts.id AS draft_id, drafts.chapter_number,
              COALESCE(finalization_outbox.chapter_title, '') AS chapter_title,
              finalization_outbox.content_snapshot
-      FROM live_drafts AS drafts
-      JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
+      FROM drafts
+      JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
       WHERE drafts.id = ? AND drafts.status = 'finalized'
     `).get(input.draftId) as { draft_id: number; chapter_number: number; chapter_title: string; content_snapshot: string } | undefined
     if (!source) throw new Error('NARRATIVE_THREAD_EVENT_SOURCE_NOT_FINALIZED')
@@ -99,11 +99,11 @@ export class NarrativeThreadRepository {
     }
     if (!this.getPlan(input.planId, db)) throw new Error('NARRATIVE_THREAD_PLAN_NOT_FOUND')
     const result = db.prepare(`
-      INSERT INTO narrative_thread_confirmations (
+      INSERT INTO narrative_thread_confirmations_all (
         plan_id, draft_id, event_type, evidence, reason
       ) VALUES (?, ?, ?, ?, ?)
     `).run(input.planId, input.draftId, input.type, evidence, reason)
-    const created = db.prepare('SELECT created_at AS createdAt FROM live_narrative_thread_confirmations WHERE id = ?')
+    const created = db.prepare('SELECT created_at AS createdAt FROM narrative_thread_confirmations WHERE id = ?')
       .get(result.lastInsertRowid) as { createdAt: string }
     return {
       id: Number(result.lastInsertRowid),
@@ -123,11 +123,11 @@ export class NarrativeThreadRepository {
   ): void {
     if (replacedDraftIds.length === 0) return
     const confirmations = db.prepare(`
-      SELECT id, evidence FROM live_narrative_thread_confirmations
+      SELECT id, evidence FROM narrative_thread_confirmations
       WHERE draft_id IN (${replacedDraftIds.map(() => '?').join(', ')})
       ORDER BY id ASC
     `).all(...replacedDraftIds) as { id: number; evidence: string }[]
-    const move = db.prepare('UPDATE OR IGNORE narrative_thread_confirmations SET draft_id = ? WHERE id = ?')
+    const move = db.prepare('UPDATE OR IGNORE narrative_thread_confirmations_all SET draft_id = ? WHERE id = ?')
     for (const confirmation of confirmations) {
       if (narrativeEvidenceInText(confirmation.evidence, replacement.content)) move.run(replacement.draftId, confirmation.id)
     }
@@ -136,7 +136,7 @@ export class NarrativeThreadRepository {
   static confirmationsNotCarried(replacedDraftId: number, replacementContent: string, db = requireDb()): Array<{ threadTitle: string; evidence: string }> {
     return (db.prepare(`
       SELECT plans.title AS threadTitle, confirmations.evidence
-      FROM live_narrative_thread_confirmations confirmations
+      FROM narrative_thread_confirmations confirmations
       JOIN narrative_thread_plans plans ON plans.id = confirmations.plan_id
       WHERE confirmations.draft_id = ?
       ORDER BY confirmations.id ASC
@@ -147,7 +147,7 @@ export class NarrativeThreadRepository {
   static list(db = requireDb()): NarrativeThreadView[] {
     const currentFinalizedChapter = (db.prepare(`
       SELECT COALESCE(MAX(chapter_number), 0) AS chapterNumber
-      FROM live_drafts WHERE status = 'finalized'
+      FROM drafts WHERE status = 'finalized'
     `).get() as { chapterNumber: number }).chapterNumber
     const plans = db.prepare('SELECT * FROM narrative_thread_plans ORDER BY id ASC')
       .all() as Record<string, unknown>[]
@@ -159,9 +159,9 @@ export class NarrativeThreadRepository {
                confirmations.evidence, confirmations.reason, confirmations.created_at AS createdAt,
                drafts.chapter_number AS chapterNumber,
                COALESCE(finalization_outbox.chapter_title, '') AS chapterTitle
-        FROM live_narrative_thread_confirmations confirmations
-        JOIN live_drafts AS drafts ON drafts.id = confirmations.draft_id AND drafts.status = 'finalized'
-        JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
+        FROM narrative_thread_confirmations confirmations
+        JOIN drafts ON drafts.id = confirmations.draft_id AND drafts.status = 'finalized'
+        JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
         WHERE confirmations.plan_id = ?
         ORDER BY drafts.chapter_number ASC, confirmations.id ASC
       `).all(plan.id) as NarrativeThreadEvent[]

@@ -114,9 +114,9 @@ describe('project clear repositories', () => {
       'DELETE FROM post_process_runs',
       'DELETE FROM reviews',
       'DELETE FROM revisions',
-      'DELETE FROM drafts',
+      'DELETE FROM drafts_all',
       'DELETE FROM contents',
-      'DELETE FROM summary_snapshots',
+      'DELETE FROM summary_snapshots_all',
     ])
     expect(db.run).toHaveBeenCalledTimes(8)
   })

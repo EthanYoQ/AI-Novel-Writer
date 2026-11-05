@@ -58,7 +58,7 @@ beforeEach(() => {
   createLiveRowViews(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
   const draftContentId = ContentRepository.create('原稿')
-  db.prepare('INSERT INTO drafts (content_id) VALUES (?)').run(draftContentId)
+  db.prepare('INSERT INTO drafts_all (content_id) VALUES (?)').run(draftContentId)
 })
 
 afterEach(() => db.close())
@@ -245,7 +245,7 @@ describe('RevisionRepository.mergeIntoDraft', () => {
 
   it.each([
     ['正文写入', 'contents'],
-    ['草稿状态写入', 'drafts'],
+    ['草稿状态写入', 'drafts_all'],
     ['修订关系写入', 'revisions'],
   ])('rolls back every fact when %s fails', (_label, table) => {
     const revision = RevisionRepository.create({
@@ -314,14 +314,14 @@ describe('RevisionRepository.mergeIntoDraft', () => {
     })).toThrow('REVISION_TARGET_CHANGED')
 
     const secondContentId = ContentRepository.create('另一个草稿')
-    db.prepare('INSERT INTO drafts (content_id) VALUES (?)').run(secondContentId)
+    db.prepare('INSERT INTO drafts_all (content_id) VALUES (?)').run(secondContentId)
     expect(() => RevisionRepository.mergeIntoDraft({
       ...mergeRequest(revision.id),
       targetDraftId: 2,
       expectedDraftContent: '另一个草稿',
     })).toThrow('REVISION_TARGET_MISMATCH')
 
-    db.prepare("UPDATE drafts SET status = 'finalized' WHERE id = 1").run()
+    db.prepare("UPDATE drafts_all SET status = 'finalized' WHERE id = 1").run()
     expect(() => RevisionRepository.mergeIntoDraft(mergeRequest(revision.id)))
       .toThrow('REVISION_TARGET_NOT_EDITABLE')
     expect(db.prepare(`

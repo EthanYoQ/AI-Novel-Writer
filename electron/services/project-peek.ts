@@ -206,10 +206,10 @@ function aggregateProject(
   const blueprints = chapterNumbers(database.prepare('SELECT DISTINCT chapter_number AS chapterNumber FROM blueprints').all() as { chapterNumber: number }[])
   const currentDrafts = database.prepare(`
     SELECT drafts.chapter_number AS chapterNumber, drafts.word_count AS wordCount
-    FROM live_drafts AS drafts
+    FROM drafts
     WHERE drafts.status IN (${CURRENT_DRAFT_STATUS_SQL})
       AND NOT EXISTS (
-        SELECT 1 FROM live_drafts newer
+        SELECT 1 FROM drafts newer
         WHERE newer.chapter_number=drafts.chapter_number
           AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL})
           AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)
@@ -218,7 +218,7 @@ function aggregateProject(
   const draftChapters = chapterNumbers(currentDrafts)
   const reviewChapters = chapterNumbers(database.prepare(`
     SELECT DISTINCT drafts.chapter_number AS chapterNumber
-    FROM reviews JOIN live_drafts AS drafts ON drafts.id=reviews.base_draft_id
+    FROM reviews JOIN drafts ON drafts.id=reviews.base_draft_id
   `).all() as { chapterNumber: number }[])
   const finalizedRows = database.prepare(`
     SELECT drafts.id AS draftId, drafts.chapter_number AS chapterNumber, drafts.version,
@@ -226,12 +226,12 @@ function aggregateProject(
            finalization_outbox.chapter_number AS outboxChapterNumber,
            finalization_outbox.content_hash AS contentHash,
            finalization_outbox.content_snapshot AS contentSnapshot
-    FROM live_drafts AS drafts
+    FROM drafts
     JOIN contents ON contents.id=drafts.content_id
-    LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id=drafts.id
+    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id=drafts.id
     WHERE drafts.status='finalized'
       AND NOT EXISTS (
-        SELECT 1 FROM live_drafts newer
+        SELECT 1 FROM drafts newer
         WHERE newer.chapter_number=drafts.chapter_number AND newer.status='finalized'
           AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)
       )
@@ -263,11 +263,11 @@ function aggregateProject(
   const latestDraftBody = includeExcerpt
     ? database.prepare(`
       SELECT contents.body
-      FROM live_drafts AS drafts
+      FROM drafts
       JOIN contents ON contents.id=drafts.content_id
       WHERE drafts.status IN (${CURRENT_DRAFT_STATUS_SQL})
         AND NOT EXISTS (
-          SELECT 1 FROM live_drafts newer
+          SELECT 1 FROM drafts newer
           WHERE newer.chapter_number=drafts.chapter_number
             AND newer.status IN (${CURRENT_DRAFT_STATUS_SQL})
             AND (newer.version>drafts.version OR newer.version=drafts.version AND newer.id>drafts.id)

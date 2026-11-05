@@ -85,7 +85,7 @@ describe('同章再定稿把旧定稿降为 superseded', () => {
 
   it('没有收据的 superseded 行不能再走定稿提交', () => {
     const legacy = write(2, '第二章旧定稿，没有收据。')
-    getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = ?").run(legacy)
+    getProjectDb()!.prepare("UPDATE drafts_all SET status = 'superseded' WHERE id = ?").run(legacy)
 
     expect(() => finalize(legacy)).toThrow('FINALIZATION_COMMIT_SUPERSEDED')
     expect(FinalizationRepository.getByDraftId(legacy)).toBeNull()

@@ -447,7 +447,7 @@ function isCurrentMergedCycle(cycleId: string, mergedHash: string, db: Database.
       (SELECT MAX(newer.revision_index) FROM revisions newer
         WHERE newer.base_draft_id=v.base_draft_id AND newer.status='merged') AS latest_merged_index
     FROM review_cycles rc JOIN revisions v ON v.id=rc.revision_id
-    JOIN live_drafts d ON d.id=v.base_draft_id JOIN contents c ON c.id=d.content_id WHERE rc.cycle_id=?`)
+    JOIN drafts d ON d.id=v.base_draft_id JOIN contents c ON c.id=d.content_id WHERE rc.cycle_id=?`)
     .get(cycleId) as { body: string; revision_index: number; latest_merged_index: number | null } | undefined
   return Boolean(current && current.revision_index === current.latest_merged_index
     && hash(current.body) === mergedHash)
@@ -459,7 +459,7 @@ function readRecheckCycle(cycleId: string, db: Database.Database): RecheckCycleR
       rc.revision_status,rc.merged_hash,rc.recheck_count,rc.recheck_attempt_id,r.source_content,
       ${snapshot ? 'm.body' : 'c.body'} AS merged_body
     FROM review_cycles rc JOIN reviews r ON r.id=rc.review_id JOIN revisions v ON v.id=rc.revision_id
-    JOIN live_drafts d ON d.id=v.base_draft_id JOIN contents c ON c.id=d.content_id
+    JOIN drafts d ON d.id=v.base_draft_id JOIN contents c ON c.id=d.content_id
     ${snapshot ? 'JOIN review_cycle_merges m ON m.cycle_id=rc.cycle_id' : ''} WHERE rc.cycle_id=?`)
     .get(cycleId) as RecheckCycleRow | undefined
   if (!cycle || cycle.revision_status !== 'merge-committed' || !cycle.merged_hash
@@ -698,7 +698,7 @@ export class ReviewCycleRepository {
       if (!cycle) return { revisionId: input.revisionId, bound: false, idempotent: true }
       if (!['generated', 'merge-committed'].includes(cycle.revision_status)) conflict()
       const merged = db.prepare(`SELECT r.status,r.base_draft_id,r.merged_to_draft_id,c.body
-        FROM revisions r JOIN live_drafts d ON d.id=r.base_draft_id JOIN contents c ON c.id=d.content_id WHERE r.id=?`)
+        FROM revisions r JOIN drafts d ON d.id=r.base_draft_id JOIN contents c ON c.id=d.content_id WHERE r.id=?`)
         .get(input.revisionId) as { status: string; base_draft_id: number; merged_to_draft_id: number | null;
           body: string } | undefined
       if (!merged || merged.status !== 'merged' || merged.merged_to_draft_id !== merged.base_draft_id

@@ -42,8 +42,8 @@ function impactOf(db: BetterSqlite3.Database, replacement: Replacement): Replace
     SELECT drafts.chapter_number AS chapterNumber, drafts.status, drafts.source_dependencies AS sourceDependencies,
            finalization_outbox.draft_id IS NOT NULL AS receipted,
            (? IS NULL OR NOT (julianday(drafts.created_at) > julianday(?))) AS writtenBefore
-    FROM live_drafts AS drafts
-    LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
+    FROM drafts
+    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
     WHERE drafts.chapter_number > ? AND drafts.status IN (${CURRENT_DRAFT_STATUS_SQL})
     ORDER BY drafts.chapter_number ASC, drafts.status = 'finalized' DESC, drafts.version DESC, drafts.id DESC
   `).all(replacement.replacedAt, replacement.replacedAt, replacement.chapterNumber) as LaterDraft[]
@@ -73,8 +73,8 @@ export class ReplacementImpactRepository {
       SELECT drafts.id AS draftId, drafts.chapter_number AS chapterNumber, drafts.source_dependencies AS sourceDependencies,
              finalization_outbox.finalization_id AS finalizationId, finalization_outbox.content_snapshot AS content,
              finalization_outbox.created_at AS replacedAt
-      FROM live_drafts AS drafts
-      JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
+      FROM drafts
+      JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
       WHERE drafts.status = 'finalized'
       ORDER BY drafts.chapter_number ASC
     `).all() as Array<Omit<Replacement, 'replacedDraftId'> & { sourceDependencies: string }>

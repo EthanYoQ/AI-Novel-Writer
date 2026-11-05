@@ -90,8 +90,8 @@ export class GraphGeneration {
       if (effect.kind !== 'event') return []
       const event = effect.event
       const row = this.db.prepare(`SELECT e.id,e.plan_id AS planId,e.draft_id AS draftId,e.event_type AS type,e.evidence,e.reason,e.created_at AS createdAt,
-        d.chapter_number AS chapterNumber,o.chapter_title AS chapterTitle FROM live_narrative_thread_confirmations e
-        JOIN live_drafts d ON d.id=e.draft_id AND d.status='finalized' JOIN live_finalization_outbox o ON o.draft_id=d.id WHERE e.id=?`).get(event.id)
+        d.chapter_number AS chapterNumber,o.chapter_title AS chapterTitle FROM narrative_thread_confirmations e
+        JOIN drafts d ON d.id=e.draft_id AND d.status='finalized' JOIN finalization_outbox o ON o.draft_id=d.id WHERE e.id=?`).get(event.id)
       if (!isDeepStrictEqual(row, { id: event.id, planId: event.planId, draftId: event.draftId, type: event.type, evidence: event.evidence, reason: event.reason,
         createdAt: event.createdAt, chapterNumber: event.chapterNumber, chapterTitle: event.chapterTitle })) throw new Error('GENERATION_GRAPH_OWN_EFFECT_CHANGED')
       return [event.id]

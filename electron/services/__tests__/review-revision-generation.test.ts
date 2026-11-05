@@ -53,7 +53,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
   db.exec("INSERT INTO project_core(id,project_name,words_per_chapter) VALUES('main','合成审稿',100); INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔');")
   db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(prose)
-  db.exec("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,280)")
+  db.exec("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,280)")
   const model: ModelProfile = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'], capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
   const loadModel = (id: string) => id === model.id ? model : id === 'revision-model'
     ? { ...model, id, modelName: 'gpt-4.1-mini', maxTokens: 1024 } : null
@@ -279,11 +279,11 @@ describe('review and revision generation through the actual owner and SQLite', (
   })
   it('captures only the saved predecessor bound by the source draft and rejects changed predecessor bytes', () => {
     const f = fixture()
-    f.db.exec('UPDATE drafts SET chapter_number=2 WHERE id=1')
+    f.db.exec('UPDATE drafts_all SET chapter_number=2 WHERE id=1')
     f.db.prepare('INSERT INTO contents(id,body) VALUES(2,?)').run('已选前驱：钥匙已经交出。')
     f.db.prepare('INSERT INTO contents(id,body) VALUES(3,?)').run('未选版本：钥匙仍在手中。')
-    f.db.exec("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,1,'draft',2,10),(3,1,2,'draft',3,10)")
-    f.db.prepare('UPDATE drafts SET source_dependencies=? WHERE id=1').run(JSON.stringify([{ kind: 'candidate', draftId: 2, contentHash: textHash('已选前驱：钥匙已经交出。') }]))
+    f.db.exec("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,1,'draft',2,10),(3,1,2,'draft',3,10)")
+    f.db.prepare('UPDATE drafts_all SET source_dependencies=? WHERE id=1').run(JSON.stringify([{ kind: 'candidate', draftId: 2, contentHash: textHash('已选前驱：钥匙已经交出。') }]))
     const request: PrepareReviewRevisionRequest = { operation: 'review-chapter', draftId: 1,
       expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: textHash(prose) }, authorInputs: [], uiLocale: 'zh-CN' }
     const frozen = f.owner.prepareReviewRevision(request).context
