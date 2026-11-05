@@ -54,6 +54,12 @@ function setupSchema(): void {
       published_at TEXT,
       updated_at TEXT
     );
+    -- 定稿选实体稿目标时读删除收据占着的文件名，这里只要用到的列。
+    CREATE TABLE chapter_deletion_operations (
+      operation_id TEXT PRIMARY KEY,
+      target_file_name TEXT NOT NULL DEFAULT '',
+      manuscript_status TEXT NOT NULL DEFAULT 'pending'
+    );
   `)
 }
 

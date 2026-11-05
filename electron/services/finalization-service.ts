@@ -5,6 +5,7 @@ import {
   type FinalizationRecord,
   type PublicationStatus,
 } from '../repositories/finalization-repository'
+import { ChapterDeletionRepository } from '../repositories/chapter-deletion-repository'
 import { getCurrentProjectPath } from '../database'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import {
@@ -123,6 +124,8 @@ export class FinalizationService {
         chapterNumber: request.chapterNumber,
         chapterTitle: request.chapterTitle,
         finalizationId,
+        // 删除清理还没记完的文件名不能用：续跑那次清理会把新发布的这份删掉。
+        reserved: ChapterDeletionRepository.reservedManuscriptTargets(),
       })
       record = FinalizationRepository.commit({
         finalizationId,

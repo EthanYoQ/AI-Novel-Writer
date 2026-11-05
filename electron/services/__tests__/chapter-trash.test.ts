@@ -13,7 +13,7 @@ import { ChapterDeletionRepository } from '../../repositories/chapter-deletion-r
 import { DraftRepository } from '../../repositories/draft-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
-import { ChapterDeletionService, type ChapterDeletionProjectionCleaner } from '../chapter-deletion-service'
+import { ChapterDeletionService, removeDeletedManuscript, type ChapterDeletionProjectionCleaner } from '../chapter-deletion-service'
 import { FinalizationService } from '../finalization-service'
 import { GenerationDraftEffects } from '../generation-draft-effects'
 import { serializeManuscript } from '../manuscript-publisher'
@@ -91,6 +91,14 @@ function threeChapters() {
   const currentRecord = finalize(current, 'kb-2-new')
   finalize(write(3, '第三章：铜钟又响了。'), 'kb-3')
   return { old, oldRecord, current, currentRecord }
+}
+
+/** 停在异步边界上的屏障：reached 在工作走到这里时兑现，release 之前 wait 一直不返回。 */
+function barrier() {
+  let release!: () => void, reach!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const reached = new Promise<void>(resolve => { reach = resolve })
+  return { release, reached, wait: async () => { reach(); await gate } }
 }
 
 const continuity = () => db().prepare("SELECT generation, stale_from_chapter FROM continuity_projection_meta WHERE id='main'").get()
@@ -495,6 +503,61 @@ describe('回收站列表', () => {
   })
 })
 
+describe('删除清理只删属于这份定稿的实体稿', () => {
+  /** 实体稿用默认清理器的删法；知识库清理不涉及。 */
+  const fileCleaner: ChapterDeletionProjectionCleaner = {
+    removeManuscript: removeDeletedManuscript,
+    async removeKnowledgeDocument() {},
+  }
+
+  it('作为旧版本放回的行还记着旧文件名，作者后来在那里放了别的文件：再删替换稿时不删作者的文件', async () => {
+    const first = write(2, '第二章初稿。')
+    const firstRecord = finalize(first, 'kb-2')
+    await service().service.delete(projectRoot, { draftId: first, chapterNumber: 2 })
+    const authorFile = path.join(projectRoot, firstRecord.targetFileName)
+    fs.writeFileSync(authorFile, '作者自己的笔记', 'utf8')
+    const replacement = write(2, '第二章重写。')
+    finalize(replacement, 'kb-2b')
+    expect(await service().service.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: first, expectedMode: 'as-history' }))
+      .toMatchObject({ success: true, outcome: 'restored-as-history' })
+
+    const s = new ChapterDeletionService({ cleaner: fileCleaner, createOperationId: () => 'delete-replacement', finalizations: { retry: vi.fn() } })
+    expect(await s.delete(projectRoot, { draftId: replacement, chapterNumber: 2 })).toMatchObject({ success: true })
+
+    expect(fs.readFileSync(authorFile, 'utf8')).toBe('作者自己的笔记')
+  })
+
+  it('删除清理删掉实体稿后、记完成前中断，再定稿同名同内容的章节：新定稿不用那个名字，续跑旧删除删不到新正文', async () => {
+    const body = '第二章：沉船。'
+    const finalizations = new FinalizationService()
+    const original = write(2, body)
+    const committed = await finalizations.finalize({ projectRoot, draftId: original, chapterNumber: 2, chapterTitle: '沉船', content: body, contentRevision: 1 })
+    expect(committed).toMatchObject({ success: true, publicationStatus: 'published' })
+    FinalizationRepository.linkKnowledgeDocument(original, 'kb-2')
+    const originalTarget = FinalizationRepository.getByDraftId(original)!.targetFileName
+    const unlinked = barrier()
+    const crashing = new ChapterDeletionService({
+      cleaner: {
+        async removeManuscript(root, targetFileName) { fs.unlinkSync(path.join(root, targetFileName)); await unlinked.wait(); await new Promise(() => {}) },
+        async removeKnowledgeDocument() {},
+      },
+      createOperationId: () => 'delete-crashed', finalizations: { retry: vi.fn() },
+    })
+    void crashing.delete(projectRoot, { draftId: original, chapterNumber: 2 })
+    await unlinked.reached
+
+    const rewrite = write(2, body)
+    expect(await finalizations.finalize({ projectRoot, draftId: rewrite, chapterNumber: 2, chapterTitle: '沉船', content: body, contentRevision: 1 }))
+      .toMatchObject({ success: true, publicationStatus: 'published' })
+    const rewriteTarget = FinalizationRepository.getByDraftId(rewrite)!.targetFileName
+    expect(rewriteTarget).not.toBe(originalTarget)
+
+    const resumed = new ChapterDeletionService({ cleaner: fileCleaner, finalizations: { retry: vi.fn() } })
+    expect(await resumed.retry(projectRoot, 'delete-crashed')).toMatchObject({ success: true })
+    expect(fs.readFileSync(path.join(projectRoot, rewriteTarget), 'utf8')).toBe(serializeManuscript({ chapterNumber: 2, chapterTitle: '沉船', content: body }))
+  })
+})
+
 describe('彻底删除清理没完成的项', () => {
   it('删除时知识库清理失败的项彻底删除后，收据仍在待续跑，重试照常删掉知识库文档', async () => {
     const draft = write(1, '第一章：雾钟。')
@@ -558,13 +621,6 @@ describe('排队的回收站操作跨作品切换', () => {
   }
   const others: string[] = []
   afterEach(() => { closeProjectDatabase(); for (const root of others.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
-
-  function barrier() {
-    let release!: () => void, reach!: () => void
-    const gate = new Promise<void>(resolve => { release = resolve })
-    const reached = new Promise<void>(resolve => { reach = resolve })
-    return { release, reached, wait: async () => { reach(); await gate } }
-  }
 
   it('删除清理等清理器期间切到 B 作品：清理结果不记进 B 的库，A 的收据停在待续跑，回到 A 照常补完', async () => {
     const otherRoot = otherProject()

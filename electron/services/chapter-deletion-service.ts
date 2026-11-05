@@ -21,11 +21,12 @@ import { PostProcessRepository } from '../repositories/post-process-repository'
 import { FinalizationService } from './finalization-service'
 import { GenerationDraftEffects } from './generation-draft-effects'
 import { knowledgeBaseLoader } from './knowledge-base-loader'
-import { removePublishedManuscript, republishTarget } from './manuscript-publisher'
+import { removeManuscriptIfUnchanged, republishTarget, serializeManuscript } from './manuscript-publisher'
 import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 
 export interface ChapterDeletionProjectionCleaner {
-  removeManuscript(projectRoot: string, targetFileName: string): Promise<void>
+  /** published 是这次定稿发布出的实体稿内容；文件内容不在其中就不是这份定稿的，保留不删。 */
+  removeManuscript(projectRoot: string, targetFileName: string, published: readonly string[]): Promise<void>
   removeKnowledgeDocument(projectRoot: string, documentId: string): Promise<void>
 }
 
@@ -35,8 +36,13 @@ export interface ChapterDeletionServiceOptions {
   finalizations?: Pick<FinalizationService, 'retry'>
 }
 
+/** 删除清理删实体稿：只删内容仍是这份定稿发布出的那份，其余（作者的文件、改过的、别的定稿）原样保留。 */
+export async function removeDeletedManuscript(projectRoot: string, targetFileName: string, published: readonly string[]): Promise<void> {
+  removeManuscriptIfUnchanged(projectRoot, targetFileName, published)
+}
+
 const defaultCleaner: ChapterDeletionProjectionCleaner = {
-  removeManuscript: removePublishedManuscript,
+  removeManuscript: removeDeletedManuscript,
   async removeKnowledgeDocument(projectRoot, documentId) {
     const result = await knowledgeBaseLoader.run((kb) => kb.removeDocument(documentId, projectRoot))
     if (result !== true) {
@@ -46,6 +52,15 @@ const defaultCleaner: ChapterDeletionProjectionCleaner = {
       throw new Error('CHAPTER_DELETE_KNOWLEDGE_NOT_REMOVED')
     }
   },
+}
+
+/**
+ * 这次删除要清理的实体稿当初发布出的内容。同名文件可能已经不是它：作者删后放了别的文件，
+ * 或作为旧版本放回的行还记着旧文件名。只删内容一致的；行已彻底删除、读不到快照时一律保留。
+ */
+function publishedManuscripts(operation: ChapterDeletionOperation): string[] {
+  const snapshot = ChapterDeletionRepository.publishedSnapshot(operation.finalizationId)
+  return snapshot ? [serializeManuscript(snapshot)] : []
 }
 
 /** 每项投影各自的失败原因留在 operation 的 manuscriptError、knowledgeError 上，由删除清理提示逐项显示。 */
@@ -277,7 +292,7 @@ export class ChapterDeletionService {
     const { operationId } = operation
     if (operation.manuscriptStatus === 'pending' || operation.manuscriptStatus === 'failed') {
       try {
-        await this.cleaner.removeManuscript(projectRoot, operation.targetFileName)
+        await this.cleaner.removeManuscript(projectRoot, operation.targetFileName, publishedManuscripts(operation))
         this.assertOwner(projectRoot)
         ChapterDeletionRepository.markProjection(operationId, 'manuscript', 'completed')
       } catch (error) {

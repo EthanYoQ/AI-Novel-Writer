@@ -577,12 +577,22 @@ export class ChapterDeletionRepository {
   }
 
   /** 实体稿还没清理完的删除收据（含旧版本收据）占着的文件名，小写。 */
-  static reservedManuscriptTargets(): Set<string> {
-    const names = requireDatabase().prepare(`
+  static reservedManuscriptTargets(db: ReturnType<typeof requireDatabase> = requireDatabase()): Set<string> {
+    const names = db.prepare(`
       SELECT target_file_name FROM chapter_deletion_operations
       WHERE manuscript_status IN ('pending', 'failed') AND target_file_name <> ''
     `).pluck().all() as string[]
     return new Set(names.map(name => name.toLowerCase()))
+  }
+
+  /** 这次定稿发布实体稿时用的章号、标题和正文快照；行已彻底删除时为 null。 */
+  static publishedSnapshot(finalizationId: string): { chapterNumber: number; chapterTitle: string; content: string } | null {
+    if (!finalizationId) return null
+    const row = requireDatabase().prepare(`
+      SELECT chapter_number AS chapterNumber, chapter_title AS chapterTitle, content_snapshot AS content
+      FROM finalization_outbox_all WHERE finalization_id = ?
+    `).get(finalizationId) as { chapterNumber: number; chapterTitle: string; content: string } | undefined
+    return row ?? null
   }
 
   static listIncomplete(): ChapterDeletionOperation[] {

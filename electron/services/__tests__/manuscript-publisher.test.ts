@@ -28,6 +28,7 @@ describe('manuscript publisher target seam', () => {
       chapterNumber: 1,
       chapterTitle: ' CON<>:"/\\|?* . ',
       finalizationId: 'finalization-1',
+      reserved: new Set(),
     })
 
     expect(path.dirname(target.absolutePath)).toBe(projectRoot)
@@ -44,6 +45,7 @@ describe('manuscript publisher target seam', () => {
       chapterNumber: 2,
       chapterTitle: '   ',
       finalizationId: 'finalization-1',
+      reserved: new Set(),
     })
     fs.writeFileSync(first.absolutePath, 'pre-existing user manuscript', 'utf8')
 
@@ -52,6 +54,7 @@ describe('manuscript publisher target seam', () => {
       chapterNumber: 2,
       chapterTitle: '   ',
       finalizationId: 'finalization-2',
+      reserved: new Set(),
     })
 
     expect(first.fileName).toBe('第2章.txt')
@@ -94,7 +97,7 @@ describe('被替换的旧正文文件', () => {
 })
 
 describe('从回收站恢复时重新发布的目标', () => {
-  const chapter = { chapterNumber: 3, chapterTitle: '雨夜', content: '定稿正文', finalizationId: 'fin-restored' }
+  const chapter = { chapterNumber: 3, chapterTitle: '雨夜', content: '定稿正文', finalizationId: 'fin-restored', reserved: new Set<string>() }
   const stored = '第3章 雨夜.txt'
 
   it('原目标空着就沿用', () => {

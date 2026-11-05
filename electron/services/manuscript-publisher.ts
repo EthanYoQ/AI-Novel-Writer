@@ -20,7 +20,7 @@ export interface ManuscriptTargetInput {
   chapterTitle: string
   finalizationId: string
   /** 还没清理完的删除收据占着的文件名（小写）。文件可能还在也可能不在，都不能拿来发布，否则续跑清理会删掉它。 */
-  reserved?: ReadonlySet<string>
+  reserved: ReadonlySet<string>
 }
 
 export interface ManuscriptTarget {
@@ -72,7 +72,7 @@ export function resolveManuscriptTarget(input: ManuscriptTargetInput): Manuscrip
   }
   const preferred = manuscriptFileName(input.chapterNumber, input.chapterTitle)
   const taken = (target: ManuscriptTarget) => fs.existsSync(target.absolutePath)
-    || (input.reserved?.has(target.fileName.toLowerCase()) ?? false)
+    || input.reserved.has(target.fileName.toLowerCase())
   const first = containedDirectChild(input.projectRoot, preferred)
   if (!taken(first)) return first
 
@@ -102,7 +102,7 @@ export function republishTarget(input: PublishManuscriptInput & Pick<ManuscriptT
   let stored: ManuscriptTarget
   try { stored = resolveStoredManuscriptTarget(input.projectRoot, input.targetFileName) }
   catch { return resolveManuscriptTarget(input).fileName }
-  if (input.reserved?.has(stored.fileName.toLowerCase())) return resolveManuscriptTarget(input).fileName
+  if (input.reserved.has(stored.fileName.toLowerCase())) return resolveManuscriptTarget(input).fileName
   if (!fs.existsSync(stored.absolutePath)) return stored.fileName
   try {
     if (fs.statSync(stored.absolutePath).isFile() && fs.readFileSync(stored.absolutePath, 'utf8') === serializeManuscript(input)) {
