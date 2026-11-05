@@ -251,6 +251,27 @@ describe('蓝图阶段', () => {
     await expect.element(page.getByText('第 1 章已删除，正文在回收站里')).toBeVisible()
   })
 
+  it('读到过空回收站后删了一章、重读回收站失败：不拿旧的空列表下「找不回来」的结论（#592）', async () => {
+    await renderPage()
+    await vi.waitFor(() => expect(calls('chapter:trash-list').length).toBeGreaterThan(0))
+
+    authority = {
+      status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    trashEntries = [trashed(1)]
+    trashListFails = true
+    const trashReads = calls('chapter:trash-list').length
+    await act(async () => globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath: PROJECT_PATH, projectSession: SESSION }))
+    await vi.waitFor(() => expect(calls('chapter:trash-list').length).toBeGreaterThan(trashReads))
+    await refreshBlueprints()
+    const notice = page.getByText('第 1 章的正文已删除')
+    await expect.element(notice).toBeVisible()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(notice.element().closest('.pi-notice')?.textContent).not.toContain('找不回来')
+    await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
+  })
+
   it('缺口段首章没写、后一章在回收站里：卡片指明那一章，恢复它，写作仍从段首开始（#592）', async () => {
     stored = Array.from({ length: 5 }, (_, index) => blueprint(index + 1, `第${index + 1}章`))
     authority = {
