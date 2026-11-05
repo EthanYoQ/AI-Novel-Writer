@@ -220,11 +220,16 @@ export class ChapterDeletionService {
         return { success: false, error: messageOf(error) }
       }
       if (restored.outcome !== 'restored') return restored
-      const published = await this.finalizations.retry({ projectRoot, finalizationId: restored.finalizationId })
-      return {
-        ...restored,
-        publicationStatus: published.publicationStatus ?? 'pending',
-        ...(published.success ? {} : { publicationError: published.error ?? 'FINALIZATION_PUBLICATION_FAILED' }),
+      // 恢复已经提交，重发失败或抛错都只让实体稿停在待发布，不能把这次恢复报成没成功。
+      try {
+        const published = await this.finalizations.retry({ projectRoot, finalizationId: restored.finalizationId })
+        return {
+          ...restored,
+          publicationStatus: published.publicationStatus ?? 'pending',
+          ...(published.success ? {} : { publicationError: published.error ?? 'FINALIZATION_PUBLICATION_FAILED' }),
+        }
+      } catch (error) {
+        return { ...restored, publicationStatus: 'pending', publicationError: messageOf(error) }
       }
     })
   }

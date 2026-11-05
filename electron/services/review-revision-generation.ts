@@ -274,11 +274,18 @@ export class ReviewRevisionGeneration {
       return receipt
     }).immediate()
   }
+  private sourceDeleted(draftId: number): boolean {
+    const status = this.db.prepare('SELECT status FROM drafts_all WHERE id=?').pluck().get(draftId) as string | undefined
+    return status === undefined
+      ? Boolean(this.db.prepare('SELECT 1 FROM chapter_deletion_operations WHERE draft_id=?').get(draftId))
+      : status === 'deleted'
+  }
   readRecovery(handle: MainGenerationRunHandle, sourcesMatch: (run: DurableGenerationRun) => boolean,
     snapshot: (run: DurableGenerationRun) => MainGenerationSnapshot | undefined): ReviewRevisionRecovery {
     const run = this.requireRun(handle), context = this.context(run)
-    // 源稿进了回收站：它的审稿、修稿不再读出，恢复稿里的原文也不再显示或续写；恢复章节后照常可读。
-    if (!this.db.prepare('SELECT 1 FROM drafts WHERE id=?').get(context.source.id)) throw new ReviewSourceDeletedError()
+    // 源稿进了回收站或被彻底删除（删除收据保留）：它的审稿、修稿不再读出，恢复稿里的原文也不再显示或续写；
+    // 放回原位后照常可读。没有删除收据就消失的是被删的工作稿，照旧按来源冲突恢复。
+    if (this.sourceDeleted(context.source.id)) throw new ReviewSourceDeletedError()
     const saved = this.saved(run)?.receipt
     let current = false
     try { current = sourcesMatch(run) } catch { /* Original candidate remains available when a source/model/template has changed. */ }

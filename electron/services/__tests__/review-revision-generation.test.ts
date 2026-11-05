@@ -369,6 +369,20 @@ describe('review and revision generation through the actual owner and SQLite', (
     expect(f.owner.readReviewRevisionRecovery(request.handle).saved).toEqual(saved)
     expect(f.owner.listRecovery().reviews).toHaveLength(1)
   })
+  it('源稿彻底删除后（收据留作删除证明）照样不列出；没有删除收据的工作稿被删，仍保留冲突恢复（#564）', async () => {
+    const purged = fixture(), purgedRun = await purged.run()
+    purged.db.prepare("INSERT INTO chapter_deletion_operations(operation_id,draft_id,chapter_number,finalization_id,status) VALUES('trash-1',1,1,'fin-1','completed')").run()
+    purged.db.pragma('foreign_keys = OFF')
+    purged.db.prepare('DELETE FROM drafts_all WHERE id=1').run()
+    expect(() => purged.owner.readReviewRevisionRecovery(purgedRun.handle)).toThrow('GENERATION_REVIEW_SOURCE_DELETED')
+    expect(purged.owner.listRecovery()).toMatchObject({ reviews: [], partial: false })
+
+    const removed = fixture(), removedRun = await removed.run()
+    removed.db.pragma('foreign_keys = OFF')
+    removed.db.prepare('DELETE FROM drafts_all WHERE id=1').run()
+    expect(removed.owner.readReviewRevisionRecovery(removedRun.handle)).toMatchObject({ sourceStatus: 'conflict' })
+    expect(removed.owner.listRecovery().reviews).toHaveLength(1)
+  })
   it('saves a review once and replays its saved ACK', async () => {
     const f = fixture(), request = await f.run(), saved = f.owner.commitReview(request)
     expect(saved).toMatchObject({ success: true, kind: 'review' })

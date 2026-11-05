@@ -176,6 +176,20 @@ describe('恢复', () => {
     expect(again.error).toBeUndefined()
   })
 
+  it('恢复已提交后重发实体稿抛错：仍报恢复成功，实体稿停在待发布，留给章节页的「重试发布」', async () => {
+    const { old, current, currentRecord } = threeChapters()
+    const { service: s, retry } = service()
+    await s.delete(projectRoot, { draftId: current, chapterNumber: 2 })
+    retry.mockRejectedValueOnce(new Error('PROJECT_CONTEXT_CHANGED'))
+
+    const restored = await s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: current, expectedMode: 'into-gap' })
+
+    expect(restored).toEqual({ success: true, outcome: 'restored', chapterNumber: 2, draftId: current,
+      finalizationId: currentRecord.finalizationId, publicationStatus: 'pending', publicationError: 'PROJECT_CONTEXT_CHANGED' })
+    expect(statuses(old, current)).toEqual(['superseded', 'finalized'])
+    expect(FinalizationRepository.getByDraftId(current)).toMatchObject({ publicationStatus: 'pending' })
+  })
+
   it('删除时本来就没有知识库文档：放回原位后知识库导入步骤原样不动，不标待重做', async () => {
     finalize(write(1, '第一章。'), 'kb-1')
     const draft = write(2, '第二章，从没进过知识库。')
@@ -343,14 +357,17 @@ describe('恢复', () => {
     const { current, currentRecord } = threeChapters()
     const { service: s, retry } = service()
     await s.delete(projectRoot, { draftId: current, chapterNumber: 2 })
-    retry.mockRejectedValueOnce(new Error('PROCESS_KILLED'))
+    let reachedRetry!: () => void
+    const reached = new Promise<void>(resolve => { reachedRetry = resolve })
+    // 进程停在重发里再也没回来；重启后是一个新的服务实例。
+    retry.mockImplementationOnce(() => { reachedRetry(); return new Promise(() => {}) })
 
-    await expect(s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: current, expectedMode: 'into-gap' }))
-      .rejects.toThrow('PROCESS_KILLED')
+    void s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: current, expectedMode: 'into-gap' })
+    await reached
 
     expect(statuses(current)).toEqual(['finalized'])
     expect(FinalizationRepository.get(currentRecord.finalizationId)).toMatchObject({ publicationStatus: 'pending' })
-    expect(await s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: current, expectedMode: 'into-gap' }))
+    expect(await service().service.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: current, expectedMode: 'into-gap' }))
       .toEqual({ success: true, outcome: 'already-restored', chapterNumber: 2, draftId: current })
   })
 
