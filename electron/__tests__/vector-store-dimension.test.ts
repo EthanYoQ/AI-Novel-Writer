@@ -831,7 +831,7 @@ describe('知识库向量维度', () => {
   it.each([
     ['document info', (db: VectorConnection) => failCreateTableAfterSuccess(db, 'documents', 'injected document info failure')],
     ['canonical append', (db: VectorConnection) => failCreateTableAfterSuccess(db, 'chunks', 'injected canonical append failure')],
-    ['final verification', (db: VectorConnection) => failNthTableOpen(db, 'chunks', 2, 'injected final verification failure')],
+    ['final verification', (db: VectorConnection) => failNthTableOpen(db, 'chunks', 1, 'injected final verification failure')],
   ])('首次向量导入在 %s 失败后删除本次新建代际并可复用同一 generation', async (_stage, injectFailure) => {
     const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-orphan-first-import-'))
     projects.push(projectPath)
