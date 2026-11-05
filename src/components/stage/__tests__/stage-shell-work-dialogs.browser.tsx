@@ -106,6 +106,17 @@ describe('外壳里的对话框属于打开它时的作品（#592）', () => {
     await expect.element(page.getByRole('button', { name: '回收站（1）' })).toBeVisible()
   })
 
+  it('没有蓝图、最后一章也删了：点「正文」落到蓝图页，回收站入口仍在，能打开回收站（#592）', async () => {
+    await act(async () => {
+      useStageStore.setState({ work: { session: LIGHTHOUSE, architecture: {}, blueprints: [] }, spineFacts: LIGHTHOUSE })
+      useDraftStore.setState({ draftsByChapter: {}, dataProjectSession: LIGHTHOUSE, loading: false })
+    })
+    await act(async () => page.getByRole('button', { name: /^正文/ }).click())
+    await vi.waitFor(() => expect(useEditorStore.getState().activeTabId).not.toBe('manuscript:lighthouse'))
+    await act(async () => page.getByRole('button', { name: '回收站（1）' }).click())
+    await expect.element(page.getByRole('dialog', { name: '回收站（1）' })).toBeVisible()
+  })
+
   it('清除生成内容开着时换了作品就关掉', async () => {
     await act(async () => page.getByRole('button', { name: '《灯塔》作品菜单' }).click())
     await act(async () => page.getByRole('menuitem', { name: '清除生成内容…' }).click())

@@ -211,7 +211,7 @@ describe('流程脊', () => {
     expect([...host.querySelectorAll('.stage-chapter-title')].map(node => node.textContent)).toEqual(['第 1 章', '第 2 章'])
   })
 
-  it('回收站非空时，正文阶段章节列表底部有「回收站（N）」入口，点它打开回收站；空的或不在正文阶段时没有（#564）', async () => {
+  it('回收站非空时有「回收站（N）」入口，点它打开回收站；不在正文阶段也有，空的时候没有（#564、#592）', async () => {
     const renderWith = async (trashCount: number, stage: 'manuscript' | 'blueprint', onTrash: () => void) => {
       await act(async () => root?.unmount())
       host?.remove()
@@ -235,7 +235,7 @@ describe('流程脊', () => {
     expect(onTrash).toHaveBeenCalledOnce()
 
     expect(await renderWith(0, 'manuscript', onTrash)).toBeUndefined()
-    expect(await renderWith(2, 'blueprint', onTrash)).toBeUndefined()
+    expect((await renderWith(2, 'blueprint', onTrash))?.textContent, '正文阶段打不开时回收站是唯一的入口').toBe('回收站（2）')
   })
 
   it('不在正文阶段时不展开章节列表', async () => {

@@ -12,7 +12,8 @@ import { useLocaleStore } from '../../../../stores/locale-store'
 import { useStageStore } from '../../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore } from '../../../../stores/workflow-store'
-import { openDraftTab } from '../../../../stores/open-draft-tab'
+import { openChapter } from '../../../../stores/navigation/stage-navigation'
+import { openPageTab } from '../../../../stores/navigation/page-tabs'
 import { toast } from '../../../ui/Toast'
 import { restoreTrashedChapter } from '../../trash/trash-actions'
 import StageWorkspace from '../../StageWorkspace'
@@ -38,11 +39,13 @@ async function mount() {
   await act(async () => root!.render(<StageWorkspace library={false} focus={false} />))
 }
 
-async function openDraft(draftId: number) {
-  await act(async () => { await useDraftStore.getState().loadAllDrafts(SESSION.projectPath, SESSION) })
-  const draft = Object.values(useDraftStore.getState().draftsByChapter).flat().find(candidate => candidate.id === draftId)!
-  await act(async () => { await openDraftTab(draft, `第 ${draft.chapterNumber} 章`, SESSION) })
+/** 侧栏点第 3 章走的就是 openChapter：没开过就读正文开新标签，开着就切过去。 */
+async function openChapterThree() {
+  await act(async () => { await openChapter(3) })
 }
+
+const restoredPending = (draftId: number) => ({ success: true, outcome: 'restored', chapterNumber: 3, draftId, finalizationId: 'fin-restored-3',
+  publicationStatus: 'pending', publicationError: 'MANUSCRIPT_WRITE_FAILED' })
 
 function trashed(draftId: number): TrashedChapter {
   return {
@@ -102,7 +105,7 @@ describe('从回收站恢复的章节', () => {
     await act(async () => { await restoreTrashedChapter(trashed(final.id)) })
     expect(warning.mock.calls[0]?.[0]).toContain('「重新写入正文」')
 
-    await openDraft(final.id)
+    await openChapterThree()
     const retry = page.getByRole('button', { name: '重新写入正文', exact: true })
     await expect.element(retry).toBeVisible()
     await act(async () => retry.click())
@@ -119,25 +122,52 @@ describe('从回收站恢复的章节', () => {
     await mount()
 
     await act(async () => { await restoreTrashedChapter(trashed(final.id)) })
-    await openDraft(final.id)
+    await openChapterThree()
     await expect.element(page.getByRole('button', { name: '重新打开修改' })).toBeVisible()
     expect(page.getByText('正文文件').query()).toBeNull()
   })
 
-  it('这一章的标签删除时没关掉、恢复后实体稿没写出：再打开它也有「重新写入正文」（#592）', async () => {
+  it('恢复时这一章的标签早已开着、作者在别处：从侧栏切回这一章，有「重新写入正文」（#592）', async () => {
     const final = backend.addDraft({ status: 'finalized' })
     const plain = backend.invoke.getMockImplementation()!
-    backend.invoke.mockImplementation(async (channel, ...args) => channel === 'chapter:trash-restore'
-      ? { success: true, outcome: 'restored', chapterNumber: 3, draftId: final.id, finalizationId: 'fin-restored-3',
-          publicationStatus: 'pending', publicationError: 'MANUSCRIPT_WRITE_FAILED' }
-      : plain(channel, ...args))
+    backend.invoke.mockImplementation(async (channel, ...args) => channel === 'chapter:trash-restore' ? restoredPending(final.id) : plain(channel, ...args))
     await mount()
-    await openDraft(final.id)
-    expect(useEditorStore.getState().tabs).toHaveLength(1)
+    await openChapterThree()
+    await act(async () => openPageTab('blueprint'))
+    const tabs = useEditorStore.getState().tabs.length
 
     await act(async () => { await restoreTrashedChapter(trashed(final.id)) })
-    await openDraft(final.id)
-    expect(useEditorStore.getState().tabs).toHaveLength(1)
+    await openChapterThree()
+    expect(useEditorStore.getState().tabs, '切回已开的标签，没有另开').toHaveLength(tabs)
     await expect.element(page.getByRole('button', { name: '重新写入正文', exact: true })).toBeVisible()
   })
+
+  it('恢复时这一章正开在眼前：不用切走再切回，「重新写入正文」就出现（#592）', async () => {
+    const final = backend.addDraft({ status: 'finalized' })
+    const plain = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation(async (channel, ...args) => channel === 'chapter:trash-restore' ? restoredPending(final.id) : plain(channel, ...args))
+    await mount()
+    await openChapterThree()
+    await expect.element(page.getByRole('button', { name: '重新打开修改' })).toBeVisible()
+
+    await act(async () => { await restoreTrashedChapter(trashed(final.id)) })
+    await expect.element(page.getByRole('button', { name: '重新写入正文', exact: true })).toBeVisible()
+  })
+
+  it('打开过一次、没重写就关掉标签：再从侧栏打开，「重新写入正文」还在（#592）', async () => {
+    const final = backend.addDraft({ status: 'finalized' })
+    const plain = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation(async (channel, ...args) => channel === 'chapter:trash-restore' ? restoredPending(final.id) : plain(channel, ...args))
+    await mount()
+
+    await act(async () => { await restoreTrashedChapter(trashed(final.id)) })
+    await openChapterThree()
+    await expect.element(page.getByRole('button', { name: '重新写入正文', exact: true })).toBeVisible()
+    await act(async () => useEditorStore.getState().closeTab(useEditorStore.getState().activeTabId!))
+    expect(useEditorStore.getState().tabs).toHaveLength(0)
+
+    await openChapterThree()
+    await expect.element(page.getByRole('button', { name: '重新写入正文', exact: true })).toBeVisible()
+  })
+
 })
