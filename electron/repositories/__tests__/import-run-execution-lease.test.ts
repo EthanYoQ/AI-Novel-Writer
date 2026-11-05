@@ -93,6 +93,16 @@ describe('import execution lease', () => {
     )).toThrow('IMPORT_RUN_CANCELLED')
   })
 
+  it('records a real failure after cancellation was requested as failed and keeps the import resumable', () => {
+    const started = ImportRunRepository.startOrResume('leased-run', 'renderer-a')
+    ImportRunRepository.requestCancel('leased-run', started.execution)
+
+    expect(ImportRunRepository.fail('leased-run', 'knowledge', '检索索引正在建立，请稍后再试。', started.execution))
+      .toMatchObject({ status: 'failed', resumable: true, lastError: '检索索引正在建立，请稍后再试。' })
+    expect(ImportRunRepository.startOrResume('leased-run', 'renderer-b').run)
+      .toMatchObject({ status: 'running', cancelRequested: false })
+  })
+
   it('rejects a concurrent owner, allows expiry takeover, and rejects every stale mutation', () => {
     const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
     expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-b', 1_050, 100))
