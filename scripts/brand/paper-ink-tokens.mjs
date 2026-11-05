@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const TOKEN_FILE = 'src/styles/paper-ink/tokens.css'
 const DOC_FILE = 'docs/brand/README.md'
-const THEME_RULES = /^\s*\.paper-ink\s*\{([^{}]*)\}\s*\.paper-ink\[data-theme="dark"\],\s*\[data-theme="dark"\] \.paper-ink\s*\{([^{}]*)\}\s*$/
+// CSS 只把这五个字符当空白；JS 的 \s 还包括不换行空格等，会让选择器校验放行改过的类名。
+const THEME_RULES = /^[ \t\n\r\f]*\.paper-ink[ \t\n\r\f]*\{([^{}]*)\}[ \t\n\r\f]*\.paper-ink\[data-theme="dark"\],[ \t\n\r\f]*\[data-theme="dark"\] \.paper-ink[ \t\n\r\f]*\{([^{}]*)\}[ \t\n\r\f]*$/
 const START = '<!-- paper-ink-tokens:start -->'
 const END = '<!-- paper-ink-tokens:end -->'
 
@@ -45,12 +46,33 @@ const CATEGORIES = [
 
 function declarations(body) {
   const result = new Map()
-  for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;]+)(?=;|$)/g)) {
-    const unbalanced = quote => (value.split(quote).length - 1) % 2 === 1
-    if (/url\(/i.test(value) || unbalanced('"') || unbalanced("'")) throw new Error(`--${name} 的值是不支持的写法：引号必须成对且不能含 url(`)
-    result.set(name, value.trim().replace(/\s+/g, ' '))
+  for (const [, name, value] of body.matchAll(/(?:^|[;{ \t\n\r\f])--([\w-]+)[ \t\n\r\f]*:[ \t\n\r\f]*([^;]+)(?=;|$)/g)) {
+    const normalized = normalizeValue(value)
+    if (normalized === null) throw new Error(`--${name} 的值是不支持的写法：引号必须闭合，不能含反斜杠转义或 url(`)
+    result.set(name, normalized)
   }
   return result
+}
+
+// 引号外的 CSS 空白折叠成一个空格，引号内原样保留；引号没闭合（值被引号里的分号截断）时返回 null。
+function normalizeValue(value) {
+  if (/url\(/i.test(value) || value.includes('\\')) return null
+  let out = ''
+  let quote = null
+  for (const char of value) {
+    if (quote) {
+      out += char
+      if (char === quote) quote = null
+    } else if (char === '"' || char === "'") {
+      quote = char
+      out += char
+    } else if (' \t\n\r\f'.includes(char)) {
+      if (!out.endsWith(' ')) out += ' '
+    } else {
+      out += char
+    }
+  }
+  return quote ? null : out.replace(/^ | $/g, '')
 }
 
 export function parseTokens(css) {

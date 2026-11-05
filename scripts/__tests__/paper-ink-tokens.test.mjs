@@ -48,3 +48,12 @@ test('令牌值里有被分号截断的引号或 url( 时报错，成对引号�
   const { light } = parseTokens(theme('--font-ui: "Inter", system-ui;', '--font-ui: "Inter", system-ui;'))
   assert.equal(light.get('font-ui'), '"Inter", system-ui')
 })
+
+test('选择器后的不换行空格不算空白，结构校验失败', () => {
+  assert.throws(() => parseTokens(theme('--a: red;', '--a: blue;').replace('.paper-ink {', '.paper-ink {')), /只支持/)
+})
+
+test('双引号里的单引号合法，引号内的空白原样保留', () => {
+  const { light } = parseTokens(theme('--font-ui: "O\'Brien  Sans",\n    sans-serif;', '--a: red;'.replace('--a', '--font-ui')))
+  assert.equal(light.get('font-ui'), '"O\'Brien  Sans", sans-serif')
+})
