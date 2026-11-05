@@ -314,19 +314,25 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     const editSource = () => database.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)').run('作者后来改写的前章', selectedId)
     return { selectedId, prepareRequest, selectionFor, editSource }
   }
-  it('keeps finalized text of the drafted chapter and later chapters out of the writing knowledge snapshot', async () => {
+  async function importKnowledgeText(content: string, fileName: string) {
     const kb = await knowledgeBaseLoader.load()
-    const importText = (content: string, fileName: string) =>
-      kb.importText(content, fileName, session.projectPath, 'openai', { provider: '', baseUrl: '', apiKey: '' })
-    const finalize = async (chapterNumber: number, title: string, content: string) => {
-      const draftId = DraftRepository.create({ chapterNumber, source: 'write', content, wordCount: content.length })
-      const targetFileName = `第${chapterNumber}章 ${title}.txt`
-      FinalizationRepository.commit({ finalizationId: `final-${chapterNumber}`, draftId, chapterNumber, chapterTitle: title,
-        content, contentHash: textHash(content), contentRevision: 1, targetFileName })
-      const imported = await importText(content, targetFileName)
-      expect(imported.success).toBe(true)
-      FinalizationRepository.linkKnowledgeDocument(draftId, imported.docId!)
-    }
+    return kb.importText(content, fileName, session.projectPath, 'openai', { provider: '', baseUrl: '', apiKey: '' })
+  }
+  /** 照定稿后处理的顺序：先提交定稿，再导入知识库，最后登记文档身份。 */
+  async function finalizeIntoKnowledge(chapterNumber: number, title: string, content: string, link = true) {
+    const draftId = DraftRepository.create({ chapterNumber, source: 'write', content, wordCount: content.length })
+    const targetFileName = `第${chapterNumber}章 ${title}.txt`
+    FinalizationRepository.commit({ finalizationId: `final-${chapterNumber}`, draftId, chapterNumber, chapterTitle: title,
+      content, contentHash: textHash(content), contentRevision: 1, targetFileName })
+    const imported = await importKnowledgeText(content, targetFileName)
+    expect(imported.success).toBe(true)
+    const linkDocument = () => FinalizationRepository.linkKnowledgeDocument(draftId, imported.docId!)
+    if (link) linkDocument()
+    return linkDocument
+  }
+  it('keeps finalized text of the drafted chapter and later chapters out of the writing knowledge snapshot', async () => {
+    const importText = importKnowledgeText
+    const finalize = finalizeIntoKnowledge
     await finalize(1, '雾港', '沈砚在雾港听见钟楼的钟声。')
     await finalize(2, '旧信', '沈砚读完旧信，决定夜里去钟楼。')
     await finalize(4, '钟楼暗格', '沈砚在钟楼暗格里找到铜钥匙。')
@@ -339,6 +345,22 @@ describe('generation public IPC with actual project authority and SQLite', () =>
 
     expect(preparation.knowledgeSnapshot.items.map(item => item.fileName).sort())
       .toEqual(['第1章 雾港.txt', '第2章 旧信.txt', '钟楼设定.md'])
+  })
+  it('rejects a draft whose prepared knowledge holds a later chapter linked after preparation', async () => {
+    const fetch = stream()
+    await finalizeIntoKnowledge(2, '旧信', '沈砚读完旧信，决定夜里去钟楼。')
+    const linkLaterChapter = await finalizeIntoKnowledge(4, '钟楼暗格', '沈砚在钟楼暗格里找到铜钥匙。', false)
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(3,'夜探')")
+    const preparation = await invoke('generation:prepare-draft-context', { chapterNumber: 3, modelId: model.id,
+      promptKeys: request.promptKeys, skillStages: [], authorInputs: draftInputs, query: '钟楼', selectedDraftIds: [] })
+    expect(preparation.knowledgeSnapshot.items.map(item => item.fileName)).toContain('第4章 钟楼暗格.txt')
+    linkLaterChapter()
+
+    await expect(invoke('generation:begin', { ...request, operation: 'chapter-draft', chapterNumber: 3, authorInputs: draftInputs,
+      selectedBlueprintChapterNumbers: [3, 4, 5, 6, 7, 8], preparationId: preparation.preparationId, materialDecision: materialDecision() }))
+      .rejects.toThrow('GENERATION_KNOWLEDGE_SOURCE_STALE')
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(0)
+    expect(fetch).not.toHaveBeenCalled()
   })
   it.each([new KnowledgeBaseUnavailableError(new Error('native missing')),new LegacyVectorMigrationBlockedError('untrusted details')])('preserves known knowledge failure code before drafting',async error=>{
     const fixture=await selectedSourceFixture()
