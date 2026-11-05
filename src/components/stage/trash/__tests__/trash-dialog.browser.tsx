@@ -219,6 +219,28 @@ describe('回收站对话框（#564）', () => {
     await expect.element(dialog().getByRole('button', { name: '彻底删除…' }).first()).toBeEnabled()
   })
 
+  it('恢复后重读草稿列表 reject：恢复照常报成功，不留未处理的 rejection（#592）', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      unhandled.push(event.reason)
+      event.preventDefault()
+    }
+    window.addEventListener('unhandledrejection', onUnhandled)
+    try {
+      const success = vi.spyOn(toast, 'success')
+      broken = 'db:draft-list-all'
+      await render()
+      await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
+      await act(async () => item('第 3 章').querySelector('button')!.click())
+      await vi.waitFor(() => expect(calls('db:draft-list-all').length).toBeGreaterThan(0))
+      await vi.waitFor(() => expect(success.mock.calls[0]?.[0]).toMatch(/已恢复第 3 章的正文和全部版本/))
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+      expect(unhandled).toEqual([])
+    } finally {
+      window.removeEventListener('unhandledrejection', onUnhandled)
+    }
+  })
+
   it('彻底删除调用 reject 时给出本地化的短提示（#592）', async () => {
     const error = vi.spyOn(toast, 'error')
     broken = 'chapter:trash-purge'

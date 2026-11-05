@@ -123,4 +123,21 @@ describe('从回收站恢复的章节', () => {
     await expect.element(page.getByRole('button', { name: '重新打开修改' })).toBeVisible()
     expect(page.getByText('正文文件').query()).toBeNull()
   })
+
+  it('这一章的标签删除时没关掉、恢复后实体稿没写出：再打开它也有「重新写入正文」（#592）', async () => {
+    const final = backend.addDraft({ status: 'finalized' })
+    const plain = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation(async (channel, ...args) => channel === 'chapter:trash-restore'
+      ? { success: true, outcome: 'restored', chapterNumber: 3, draftId: final.id, finalizationId: 'fin-restored-3',
+          publicationStatus: 'pending', publicationError: 'MANUSCRIPT_WRITE_FAILED' }
+      : plain(channel, ...args))
+    await mount()
+    await openDraft(final.id)
+    expect(useEditorStore.getState().tabs).toHaveLength(1)
+
+    await act(async () => { await restoreTrashedChapter(trashed(final.id)) })
+    await openDraft(final.id)
+    expect(useEditorStore.getState().tabs).toHaveLength(1)
+    await expect.element(page.getByRole('button', { name: '重新写入正文', exact: true })).toBeVisible()
+  })
 })

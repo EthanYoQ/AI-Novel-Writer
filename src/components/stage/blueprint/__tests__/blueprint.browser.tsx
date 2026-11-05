@@ -322,6 +322,24 @@ describe('蓝图阶段', () => {
     await vi.waitFor(() => expect(page.getByText('第 3 章已删除，正文在回收站里').query()).toBeNull())
   })
 
+  it('回收站里的第 3 章连蓝图也没了：没有「重写第 3 章」按钮，卡片也不说「或者重写它」（#592）', async () => {
+    stored = [1, 2, 4].map(chapterNumber => blueprint(chapterNumber, `第${chapterNumber}章`))
+    authority = {
+      status: 'gapped', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [{ from: 3, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    trashEntries = [trashed(3)]
+    await renderPage()
+
+    const notice = page.getByText('第 3 章已删除，正文在回收站里')
+    await expect.element(notice).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '补上第 3 章蓝图' })).toBeVisible()
+    expect(page.getByRole('button', { name: '重写第 3 章' }).query()).toBeNull()
+    const body = notice.element().closest('.pi-notice')?.textContent
+    expect(body).toContain('点「恢复」放回这一章')
+    expect(body).not.toContain('重写')
+  })
+
   it('转移来的作品，回收站这一项只能开新稿：恢复请求带 reopen-as-draft（#564）', async () => {
     authority = {
       status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'deleted' }],
