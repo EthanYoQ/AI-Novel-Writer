@@ -9,7 +9,7 @@ import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
 import { ReviewCycleRepository } from './review-cycle-repository'
 import type { ExpectedDraftSource } from '../../src/shared/ipc-channels'
-import { assertExpectedDraftSource, SourceDraftChangedError } from './draft-source-guard'
+import { assertExpectedDraftSource, LIVE_PARENT, SourceDraftChangedError } from './draft-source-guard'
 
 const contentHash = (value: string) => createHash('sha256').update(value).digest('hex')
 const hasReviewCycleSchema = (db: import('better-sqlite3').Database) => Boolean(
@@ -213,7 +213,7 @@ export class RevisionRepository {
 
         const rows = db.prepare(`
       SELECT * FROM revisions
-      WHERE base_draft_id = ?
+      WHERE base_draft_id = ? AND ${LIVE_PARENT}
       ORDER BY revision_index ASC
     `).all(baseDraftId) as Record<string, unknown>[]
 
@@ -227,7 +227,7 @@ export class RevisionRepository {
 
         const rows = db.prepare(`
       SELECT * FROM revisions
-      WHERE base_draft_id = ? AND status = 'pending'
+      WHERE base_draft_id = ? AND status = 'pending' AND ${LIVE_PARENT}
       ORDER BY revision_index ASC
     `).all(baseDraftId) as Record<string, unknown>[]
 
@@ -239,7 +239,7 @@ export class RevisionRepository {
         if (!db) return null
 
         const row = db.prepare(
-            'SELECT * FROM revisions WHERE id = ?'
+            `SELECT * FROM revisions WHERE id = ? AND ${LIVE_PARENT}`
         ).get(id) as Record<string, unknown> | undefined
 
         if (!row) return null
@@ -416,7 +416,7 @@ export class RevisionRepository {
             const result = db.prepare(`
       UPDATE revisions
       SET status = 'merged', merged_to_draft_id = ?, updated_at = datetime('now')
-      WHERE id = ? AND status = 'pending'
+      WHERE id = ? AND status = 'pending' AND ${LIVE_PARENT}
     `).run(mergedToDraftId, id)
 
             if (result.changes === 0) {
@@ -432,7 +432,7 @@ export class RevisionRepository {
         db.transaction(() => {
             const result = db.prepare(`
       UPDATE revisions SET status = 'discarded', updated_at = datetime('now')
-      WHERE id = ? AND status = 'pending'
+      WHERE id = ? AND status = 'pending' AND ${LIVE_PARENT}
     `).run(id)
 
             if (result.changes === 0) {

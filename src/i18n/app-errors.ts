@@ -57,6 +57,8 @@ const ERROR_KEYS = {
   GENERATION_PROJECT_SESSION_REQUIRED: 'error.generationProjectSessionRequired',
   GENERATION_DRAFT_NOT_CURRENT: 'error.generationDraftNotCurrent',
   GENERATION_REVIEW_LINEAGE_UNPROVEN: 'error.generationReviewLineageUnproven',
+  // 源稿所在章节进了回收站（#564）：恢复稿里的原文不再显示。
+  GENERATION_REVIEW_SOURCE_DELETED: 'error.generationReviewSourceDeleted',
   GENERATION_DRAFT_DEPENDENCY_STALE: 'error.generationDraftDependencyStale',
   GENERATION_DRAFT_DEPENDENCY_INVALID: 'error.generationDraftDependencyInvalid',
   GENERATION_SOURCE_CHANGED: 'error.generationSourceChanged',

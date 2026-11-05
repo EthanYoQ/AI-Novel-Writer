@@ -30,6 +30,9 @@ import { createPortableProjectAssetProvider } from '../portable-project-assets'
 import { activateCanonicalProjectData, deactivateProjectData } from '../project-data-locator'
 import { importLegacyProjectCopy } from '../legacy-project-copy-import'
 import { ChapterDeletionRepository } from '../../repositories/chapter-deletion-repository'
+import { DraftRepository } from '../../repositories/draft-repository'
+import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { ChapterDeletionService } from '../chapter-deletion-service'
 import { readPortableCurrentAuthority } from '../portable-current-authority'
 import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture'
@@ -264,6 +267,56 @@ describe('portable project restore service', { timeout: 20_000 }, () => {
       excludedFields: [], nonReplayable: true, originalReceiptVerified: false })
     fs.writeFileSync(freezeFile, JSON.stringify(freeze))
     expect(read).toThrow('PORTABLE_CURRENT_AUTHORITY_INVALID')
+  })
+
+  it('回收站非空时便携往返：作品照常打开，回收站一项原样带过去，只能以被删稿开新稿；导入后再删的章同样（#564）', async () => {
+    const f = fixture()
+    initProjectDatabase(f.sourceRoot)
+    const trashedBody = '第二章已删定稿，回收站里的正文。'
+    const trashedDraft = DraftRepository.create({ chapterNumber: 2, source: 'write', content: trashedBody, wordCount: trashedBody.length })
+    FinalizationRepository.commit({ finalizationId: 'finalization-trashed', draftId: trashedDraft, chapterNumber: 2, chapterTitle: '残页',
+      content: trashedBody, contentHash: sha256(trashedBody), contentRevision: 1, targetFileName: '残页.md' })
+    const keptBody = '第三章，导入后才删。'
+    const keptDraft = DraftRepository.create({ chapterNumber: 3, source: 'write', content: keptBody, wordCount: keptBody.length })
+    FinalizationRepository.commit({ finalizationId: 'finalization-kept', draftId: keptDraft, chapterNumber: 3, chapterTitle: '余烬',
+      content: keptBody, contentHash: sha256(keptBody), contentRevision: 1, targetFileName: '余烬.md' })
+    ChapterDeletionRepository.begin({ operationId: 'trash-before-export', draftId: trashedDraft, chapterNumber: 2 })
+    ChapterDeletionRepository.markProjection('trash-before-export', 'manuscript', 'completed')
+    expect(ChapterDeletionRepository.settle('trash-before-export').status).toBe('completed')
+    closeProjectDatabase()
+
+    await exportPortableProject(exportInput(f))
+    const receipt = await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+    initProjectDatabase(f.targetRoot)
+    const db = getProjectDb()!
+    const read = () => readPortableCurrentAuthority({ database: db, projectStorageRoot: path.join(f.targetRoot, '.ai-novel'), projectId: receipt.targetProjectId })
+    expect(read()?.originProjectId).toBe(f.sourceProjectId)
+    expect(db.prepare('SELECT 1 FROM drafts WHERE id=?').get(trashedDraft)).toBeUndefined()
+    expect(db.prepare('SELECT c.body FROM drafts_all d JOIN contents c ON c.id=d.content_id WHERE d.id=?').pluck().get(trashedDraft)).toBe(trashedBody)
+    const service = new ChapterDeletionService({ createOperationId: () => 'trash-after-import',
+      cleaner: { async removeManuscript() {}, async removeKnowledgeDocument() {} },
+      finalizations: { retry: async () => { throw new Error('IMPORTED_FINALIZATION_NOT_REPUBLISHED') } } })
+    expect(service.listTrash()).toEqual({ success: true, damaged: [], entries: [expect.objectContaining({
+      deletionId: 'trash-before-export', draftId: trashedDraft, chapterNumber: 2, restoreMode: 'reopen-as-draft' })] })
+    const reopened = await service.restore(f.targetRoot, receipt.targetProjectId,
+      { deletionId: 'trash-before-export', draftId: trashedDraft, expectedMode: 'reopen-as-draft' })
+    expect(reopened).toMatchObject({ success: true, outcome: 'reopened-as-draft', chapterNumber: 2, created: true })
+    expect(reopened.success && DraftRepository.getFull(reopened.draftId)).toMatchObject({ status: 'draft', content: trashedBody })
+
+    const deleting = await service.delete(f.targetRoot, { draftId: keptDraft, chapterNumber: 3 })
+    // 夹具里这份定稿没有后处理记录，先走旧定稿的人工核对再删。
+    expect(deleting).toMatchObject({ success: false, error: 'CHAPTER_DELETE_LEGACY_KNOWLEDGE_CHECK_REQUIRED' })
+    expect(await service.confirmLegacyKnowledgeAbsent(f.targetRoot, 'trash-after-import')).toMatchObject({ success: true, committed: true })
+    expect(read()?.originProjectId).toBe(f.sourceProjectId)
+    expect(service.listTrash()).toMatchObject({ entries: expect.arrayContaining([
+      expect.objectContaining({ deletionId: 'trash-after-import', draftId: keptDraft, restoreMode: 'reopen-as-draft' })]) })
+    expect(await service.restore(f.targetRoot, receipt.targetProjectId, { deletionId: 'trash-after-import', draftId: keptDraft, expectedMode: 'into-gap' }))
+      .toEqual({ success: false, error: 'CHAPTER_RESTORE_MODE_CHANGED' })
+    expect(await service.restore(f.targetRoot, receipt.targetProjectId, { deletionId: 'trash-after-import', draftId: keptDraft, expectedMode: 'reopen-as-draft' }))
+      .toMatchObject({ success: true, outcome: 'reopened-as-draft', chapterNumber: 3, created: true })
+    expect(read()?.originProjectId).toBe(f.sourceProjectId)
+    expect(await service.purge(f.targetRoot, { all: true })).toEqual({ success: true, purged: ['trash-after-import', 'trash-before-export'], alreadyGone: [] })
+    expect(read()?.originProjectId).toBe(f.sourceProjectId)
   })
 
   it('restores and acknowledges a knowledge snapshot above the small metadata limit', async () => {

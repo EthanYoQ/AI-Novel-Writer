@@ -62,7 +62,8 @@ export class GenerationDraftEffects {
       FROM generation_attempts WHERE ${batchOf} IS NOT NULL ORDER BY rowid`).all() as (AttemptRow & { batch_id: string })[]
     return { commits: groupByBatch(rows), unreadable }
   }
-  unfinishedBatchChapters(projectId: string): ReadonlySet<number> {
+  /** settledChapter 这一章按已确认完（已发布、后处理关键步骤都完成）算进度，用于放回删除前已确认完的章：放回会把它重置为待发布、待重导。 */
+  unfinishedBatchChapters(projectId: string, settledChapter?: number): ReadonlySet<number> {
     const { commits } = this.listedBatchCommits()
     // 已取消、已封存或被阻断的批次再也续不上（续写只接受 active、paused 且未阻断的根），它写过的章不必为续写锁住。
     const roots = this.db.prepare(`SELECT r.run_id FROM generation_runs r JOIN generation_roots g ON g.root_action_id=r.root_action_id
@@ -73,13 +74,24 @@ export class GenerationDraftEffects {
     const chapters = new Set<number>()
     for (const batchId of roots) {
       try {
-        const history = this.readBatchHistory(batchId, projectId, commits)
+        const history = this.readBatchHistory(batchId, projectId, commits, settledChapter)
         if (history.sourceCurrent && history.nextChapterNumber !== null) for (const chapter of history.completedChapters) chapters.add(chapter.chapterNumber)
       } catch (error) {
         if (!(error instanceof Error && error.message.startsWith('GENERATION_'))) throw error
       }
     }
     return chapters
+  }
+  /** 这份定稿已发布、后处理关键步骤都完成。读 _all 表，回收站里的定稿也能查：删除不动 outbox 与后处理，它们仍是删除前的状态。 */
+  finalizationSettled(finalizationId: string): boolean {
+    return this.db.prepare("SELECT 1 FROM finalization_outbox_all WHERE finalization_id=? AND publication_status='published'").get(finalizationId) !== undefined
+      && this.postProcessComplete(finalizationId)
+  }
+  private postProcessComplete(finalizationId: string): boolean {
+    const postProcess = this.db.prepare("SELECT id,all_critical_passed FROM post_process_runs WHERE trigger_source_type='chapter_finalize' AND trigger_source_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(`finalization:${finalizationId}`) as { id: string; all_critical_passed: number } | undefined
+    const steps = postProcess ? this.db.prepare('SELECT step_key,critical,ok FROM post_process_steps WHERE run_id=?').all(postProcess.id) as { step_key: string; critical: number; ok: number }[] : []
+    return postProcess?.all_critical_passed === 1 && ['kb_import', 'chapter_notes'].every(key => steps.some(step => step.step_key === key && step.critical === 1 && step.ok === 1))
+      && steps.filter(step => step.critical === 1).every(step => step.ok === 1)
   }
   private verifiedCommit(row: AttemptRow) {
     const usage = JSON.parse(row.usage_receipt_json), stored = usage.draftCommit as StoredDraftCommit | undefined
@@ -116,11 +128,11 @@ export class GenerationDraftEffects {
     if (snapshot.sourceConflict) throw new Error(snapshot.sourceConflict)
     return snapshot.progress
   }
-  readBatchHistory(batchId: string, projectId: string, commits = this.batchCommits(batchId)): GenerationBatchHistory {
-    const snapshot = this.readBatchSnapshot(batchId, projectId, commits)
+  readBatchHistory(batchId: string, projectId: string, commits = this.batchCommits(batchId), settledChapter?: number): GenerationBatchHistory {
+    const snapshot = this.readBatchSnapshot(batchId, projectId, commits, settledChapter)
     return { ...snapshot.progress, sourceCurrent: snapshot.sourceConflict === null }
   }
-  private readBatchSnapshot(batchId: string, projectId: string, commits = this.batchCommits(batchId)): VerifiedBatchSnapshot {
+  private readBatchSnapshot(batchId: string, projectId: string, commits = this.batchCommits(batchId), settledChapter?: number): VerifiedBatchSnapshot {
     const root = this.runs.get(batchId), intent = root.binding.sourceManifest.batchIntent as GenerationBatchIntent
     assertGenerationBatchIntent(intent)
     if (root.binding.projectId !== projectId || root.binding.sourceManifest.operation !== 'batch-chapters') throw new Error('GENERATION_BATCH_IDENTITY_INVALID')
@@ -144,10 +156,7 @@ export class GenerationDraftEffects {
         sourceConflict ??= 'GENERATION_BATCH_FINALIZATION_CONFLICT'
         outbox = undefined
       }
-      const postProcess = outbox ? this.db.prepare("SELECT id,all_critical_passed FROM post_process_runs WHERE trigger_source_type='chapter_finalize' AND trigger_source_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1").get(`finalization:${outbox.finalization_id}`) as { id: string; all_critical_passed: number } | undefined : undefined
-      const steps = postProcess ? this.db.prepare('SELECT step_key,critical,ok FROM post_process_steps WHERE run_id=?').all(postProcess.id) as { step_key: string; critical: number; ok: number }[] : []
-      const postProcessComplete = postProcess?.all_critical_passed === 1 && ['kb_import', 'chapter_notes'].every(key => steps.some(step => step.step_key === key && step.critical === 1 && step.ok === 1))
-        && steps.filter(step => step.critical === 1).every(step => step.ok === 1)
+      const postProcessComplete = outbox ? this.postProcessComplete(outbox.finalization_id) : false
       completedChapters.push({ chapterNumber: committed.chapterNumber, draftId: committed.id, version: committed.version,
         contentHash: committed.contentHash, sourceRunHandle: handleOf(this.runs.get(row.run_id)), postProcessComplete,
         ...(outbox?.publication_status === 'published' ? { finalizationId: outbox.finalization_id } : outbox ? { pendingFinalizationId: outbox.finalization_id } : {}) })
@@ -157,7 +166,7 @@ export class GenerationDraftEffects {
     for (const [index, chapter] of completedChapters.entries()) {
       if (chapter.chapterNumber !== intent.range.startChapter + index || chapter.chapterNumber > intent.range.endChapter
         || nextChapterNumber !== chapter.chapterNumber) throw new Error('GENERATION_BATCH_PROGRESS_INVALID')
-      if (intent.mode === 'auto_finalize' && (!chapter.finalizationId || !chapter.postProcessComplete)) break
+      if (intent.mode === 'auto_finalize' && chapter.chapterNumber !== settledChapter && (!chapter.finalizationId || !chapter.postProcessComplete)) break
       nextChapterNumber = chapter.chapterNumber === intent.range.endChapter ? null : chapter.chapterNumber + 1
     }
     // 审稿批次不替作者定稿；作者开始定稿其中一章即结束这一批，剩下的章另起一批（#568）。

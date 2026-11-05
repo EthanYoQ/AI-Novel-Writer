@@ -116,6 +116,8 @@ function requireDatabase() {
   return db
 }
 
+type Db = ReturnType<typeof requireDatabase>
+
 function hasSameFinalizationInput(
   existing: FinalizationRow,
   input: FinalizationCommitInput,
@@ -285,10 +287,7 @@ export class FinalizationRepository {
       if (replacedDraftIds.length > 0 && DraftRepository.findOpenReopenDraft(input.chapterNumber, db)?.id !== input.draftId) {
         throw new Error('CHAPTER_FINALIZED_REOPEN_REQUIRED')
       }
-      db.prepare(`
-        UPDATE drafts_all SET status = 'superseded', updated_at = datetime('now')
-        WHERE chapter_number = ? AND status = 'finalized' AND id <> ?
-      `).run(input.chapterNumber, input.draftId)
+      FinalizationRepository.demoteToSuperseded(db, replacedDraftIds)
 
       db.prepare('UPDATE contents SET body = ? WHERE id = ?')
         .run(input.content, draft.content_id)
@@ -419,10 +418,6 @@ export class FinalizationRepository {
       }>
       const chapters: RepairedDuplicateChapter[] = []
       let keptFileName = ''
-      const supersede = db.prepare(`
-        UPDATE drafts_all SET status = 'superseded', updated_at = datetime('now')
-        WHERE id = ? AND status = 'finalized'
-      `)
       for (const row of rows) {
         const current = chapters.at(-1)
         if (current?.chapterNumber !== row.chapter_number) {
@@ -430,7 +425,7 @@ export class FinalizationRepository {
           keptFileName = row.target_file_name ?? ''
           continue
         }
-        supersede.run(row.id)
+        FinalizationRepository.demoteToSuperseded(db, [row.id])
         current.superseded.push({
           draftId: row.id,
           version: row.version,
@@ -453,6 +448,64 @@ export class FinalizationRepository {
       if (chapters.length > 0) invalidateContinuityProjectionFrom(db, chapters[0]!.chapterNumber)
       return { chapters }
     }).immediate()
+  }
+
+  /**
+   * finalized 与 superseded 只由本模块写（ADR-0003、ADR-0025）。定稿或回收站里的行降为只读的被替换定稿；
+   * 回收站里的行同时清掉删除三列（M07 触发器要求它们与状态同进退）。
+   */
+  static demoteToSuperseded(db: Db, draftIds: readonly number[]): void {
+    const demote = db.prepare(`
+      UPDATE drafts_all SET status = 'superseded', deletion_id = '', deleted_from_status = '', deleted_at = '',
+        updated_at = datetime('now')
+      WHERE id = ? AND status IN ('finalized', 'deleted')
+    `)
+    for (const id of draftIds) {
+      if (demote.run(id).changes !== 1) throw new Error('FINALIZATION_DEMOTE_TARGET_INVALID')
+    }
+  }
+
+  /**
+   * 回收站里一次删除的各行回到 live，调用方持有事务。into-gap 按删前状态翻回，主定稿的实体稿置为待发布
+   * （删除时已移除，可换不撞名的目标）；as-history 一律降为被替换的旧定稿。知识文档在删除时已清掉，
+   * 未冻结的收据把知识文档 ID 置空，等 kb_import 回链。
+   */
+  static reinstateDeleted(db: Db, deletion: { deletionId: string; chapterNumber: number } & (
+    | { as: 'original'; republish: { finalizationId: string; targetFileName: string } }
+    | { as: 'superseded' }
+  )): void {
+    const rows = db.prepare(`
+      SELECT d.id, o.finalization_id FROM drafts_all d LEFT JOIN finalization_outbox_all o ON o.draft_id = d.id
+      WHERE d.deletion_id = ? AND d.status = 'deleted' AND d.chapter_number = ?
+    `).all(deletion.deletionId, deletion.chapterNumber) as Array<{ id: number; finalization_id: string | null }>
+    if (rows.length === 0) throw new Error('FINALIZATION_REINSTATE_TARGET_INVALID')
+    const liveFinal = () => db.prepare(`SELECT COUNT(*) FROM drafts WHERE chapter_number = ? AND status = 'finalized'`)
+      .pluck().get(deletion.chapterNumber) as number
+    if (deletion.as === 'superseded') {
+      FinalizationRepository.demoteToSuperseded(db, rows.map(row => row.id))
+    } else {
+      if (liveFinal() !== 0) throw new Error('FINALIZATION_REINSTATE_CHAPTER_FINALIZED')
+      db.prepare(`
+        UPDATE drafts_all SET status = deleted_from_status, deletion_id = '', deleted_from_status = '', deleted_at = '',
+          updated_at = datetime('now')
+        WHERE deletion_id = ? AND status = 'deleted' AND chapter_number = ?
+      `).run(deletion.deletionId, deletion.chapterNumber)
+      if (liveFinal() !== 1) throw new Error('FINALIZATION_REINSTATE_TARGET_INVALID')
+    }
+    const freeze = readPortableRuntimeFreeze(getCurrentProjectPath())
+    const forget = db.prepare(`UPDATE finalization_outbox_all SET knowledge_document_id = '', updated_at = datetime('now') WHERE finalization_id = ?`)
+    for (const row of rows) {
+      if (row.finalization_id && !freeze.isFrozen('finalization_outbox', row.finalization_id)) forget.run(row.finalization_id)
+    }
+    if (deletion.as === 'original') {
+      freeze.assertMutable('finalization_outbox', deletion.republish.finalizationId)
+      const updated = db.prepare(`
+        UPDATE finalization_outbox_all
+        SET publication_status = 'pending', last_error = '', published_at = NULL, target_file_name = ?, updated_at = datetime('now')
+        WHERE finalization_id = ? AND draft_id IN (SELECT id FROM drafts WHERE status = 'finalized' AND chapter_number = ?)
+      `).run(deletion.republish.targetFileName, deletion.republish.finalizationId, deletion.chapterNumber)
+      if (updated.changes !== 1) throw new Error('FINALIZATION_REINSTATE_TARGET_INVALID')
+    }
   }
 
   static isAuthoritative(draftId: number): boolean {

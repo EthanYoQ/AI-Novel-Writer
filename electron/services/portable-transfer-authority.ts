@@ -281,7 +281,9 @@ export function verifyPortableTransferAuthorityHistory(
       FROM drafts_all d JOIN contents c ON c.id=d.content_id
       LEFT JOIN finalization_outbox_all o ON o.draft_id=d.id WHERE d.id=?
     `).get(item.draftId) as { status: string; chapterNumber: number; body: string; finalizationId: string | null; contentHash: string | null; contentSnapshot: string | null; replaced: number } | undefined
-    if (!row && freeze?.active && !database.prepare('SELECT 1 FROM drafts_all WHERE id=?').get(item.draftId)) {
+    /** 本地删除的凭据：一张有效、未被冻结的删除收据。彻底删除后行没了要它，进回收站的行也要它。 */
+    const deletionProven = () => {
+      if (!freeze?.active) return false
       const deletion = database.prepare(`
         SELECT operation_id AS operationId FROM chapter_deletion_operations
         WHERE draft_id=? AND chapter_number=? AND finalization_id=?
@@ -289,12 +291,15 @@ export function verifyPortableTransferAuthorityHistory(
           AND (legacy_knowledge_authorization='not_required'
             OR (legacy_knowledge_authorization='consumed' AND legacy_knowledge_authorized_at <> ''))
       `).get(item.draftId, item.chapterNumber, item.finalizationId) as { operationId: string } | undefined
-      if (deletion && !freeze.isFrozen('chapter_deletion_operations', deletion.operationId)) {
-        deleted.add(item.draftId)
-        continue
-      }
+      return Boolean(deletion && !freeze.isFrozen('chapter_deletion_operations', deletion.operationId))
     }
-    const stillReceipted = row?.status === 'finalized' || (row?.status === 'superseded' && row.replaced === 1)
+    if (!row && !database.prepare('SELECT 1 FROM drafts_all WHERE id=?').get(item.draftId) && deletionProven()) {
+      deleted.add(item.draftId)
+      continue
+    }
+    // 回收站里的行原样保留正文与 outbox，下面的内容校验照做。
+    const stillReceipted = row?.status === 'finalized' || (row?.status === 'deleted' && deletionProven())
+      || (row?.status === 'superseded' && row.replaced === 1)
     if (!row || !stillReceipted || row.chapterNumber !== item.chapterNumber
       || row.finalizationId !== item.finalizationId || row.contentHash !== item.contentHash
       || row.contentSnapshot !== row.body || sha256(row.body) !== item.contentHash) invalid()

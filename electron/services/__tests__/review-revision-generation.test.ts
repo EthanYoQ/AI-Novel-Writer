@@ -356,6 +356,33 @@ describe('review and revision generation through the actual owner and SQLite', (
       }
     },
   )
+  it('源稿进回收站后审修恢复稿既不列出也读不出，不算读坏；放回后照常（#564）', async () => {
+    const f = fixture(), request = await f.run(), saved = f.owner.commitReview(request)
+    const status = (deleted: boolean) => f.db.prepare(deleted
+      ? "UPDATE drafts_all SET status='deleted',deletion_id='trash-1',deleted_from_status='finalized',deleted_at='now' WHERE id=1"
+      : "UPDATE drafts_all SET status='draft',deletion_id='',deleted_from_status='',deleted_at='' WHERE id=1").run()
+    expect(f.owner.listRecovery().reviews).toHaveLength(1)
+    status(true)
+    expect(() => f.owner.readReviewRevisionRecovery(request.handle)).toThrow('GENERATION_REVIEW_SOURCE_DELETED')
+    expect(f.owner.listRecovery()).toMatchObject({ reviews: [], partial: false })
+    status(false)
+    expect(f.owner.readReviewRevisionRecovery(request.handle).saved).toEqual(saved)
+    expect(f.owner.listRecovery().reviews).toHaveLength(1)
+  })
+  it('源稿彻底删除后（收据留作删除证明）照样不列出；没有删除收据的工作稿被删，仍保留冲突恢复（#564）', async () => {
+    const purged = fixture(), purgedRun = await purged.run()
+    purged.db.prepare("INSERT INTO chapter_deletion_operations(operation_id,draft_id,chapter_number,finalization_id,status) VALUES('trash-1',1,1,'fin-1','completed')").run()
+    purged.db.pragma('foreign_keys = OFF')
+    purged.db.prepare('DELETE FROM drafts_all WHERE id=1').run()
+    expect(() => purged.owner.readReviewRevisionRecovery(purgedRun.handle)).toThrow('GENERATION_REVIEW_SOURCE_DELETED')
+    expect(purged.owner.listRecovery()).toMatchObject({ reviews: [], partial: false })
+
+    const removed = fixture(), removedRun = await removed.run()
+    removed.db.pragma('foreign_keys = OFF')
+    removed.db.prepare('DELETE FROM drafts_all WHERE id=1').run()
+    expect(removed.owner.readReviewRevisionRecovery(removedRun.handle)).toMatchObject({ sourceStatus: 'conflict' })
+    expect(removed.owner.listRecovery().reviews).toHaveLength(1)
+  })
   it('saves a review once and replays its saved ACK', async () => {
     const f = fixture(), request = await f.run(), saved = f.owner.commitReview(request)
     expect(saved).toMatchObject({ success: true, kind: 'review' })
