@@ -5,7 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { appearanceWrite, assertBuilt, captureFailure, driveSessions, finishRealSession, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs,
+import { appearanceWrite, assertBuilt, captureFailure, driveSessions, finishRealSession, harvestModelLog, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs,
   releaseSessionRoot, scanRunForSecret, sessionIsClean, writeConsoleLog } from '../drive.mjs'
 import { fileStamps } from '../real-model.mjs'
 import { BASELINE_SESSIONS, SCENARIOS } from '../scenarios.mjs'
@@ -179,6 +179,20 @@ it('诊断日志写不进去时只记进会话错误，不打断后面的退出�
   const file = path.join(tempParent(), 'ok.console.log')
   writeConsoleLog(file, ['a', 'b'], sessionErrors)
   assert.equal(fs.readFileSync(file, 'utf8'), 'a\nb\n')
+})
+
+it('收尾读不回模型请求记录时会话判失败，请求数不会悄悄少算', async () => {
+  const modelLog = [{ path: '/v1/chat/completions', status: 200, ms: 5 }]
+  const sessionErrors = []
+  await harvestModelLog({ evaluate: async () => { throw new Error('Target page, context or browser has been closed') } }, modelLog, sessionErrors)
+  assert.equal(sessionErrors.length, 1)
+  assert.match(sessionErrors[0], /has been closed/)
+  assert.equal(sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [] }), false)
+
+  const readable = []
+  await harvestModelLog({ evaluate: async () => [{ path: '/v1/embeddings', status: 200, ms: 3 }] }, modelLog, readable)
+  assert.deepEqual(readable, [])
+  assert.equal(modelLog.length, 2)
 })
 
 it('诊断里带出密钥时写盘前就遮掉，诊断照样留下，会话判失败', () => {
