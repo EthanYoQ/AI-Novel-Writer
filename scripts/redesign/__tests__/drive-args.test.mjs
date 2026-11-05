@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import process from 'node:process'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { appearanceWrite, captureFailure, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs, sessionIsClean } from '../drive.mjs'
+import { appearanceWrite, assertBuilt, captureFailure, driveSessions, finishRealSession, harvestModelLog, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs,
+  releaseSessionRoot, scanRunForSecret, sessionIsClean, writeConsoleLog } from '../drive.mjs'
+import { fileStamps } from '../real-model.mjs'
 import { BASELINE_SESSIONS, SCENARIOS } from '../scenarios.mjs'
 
 const parents = []
@@ -129,4 +132,171 @@ it('空闲内存取各次采样全部进程合计的中位数，按进程类型�
     byType: { Browser: 100, Tab: 300, GPU: 50 },
   })
   assert.throws(() => idleMemory([]), /没有采样/)
+})
+
+it('真实模型场景只能带 --real-model 跑，--real-model 也不能用在假模型场景上', () => {
+  assert.equal(parseArgs(['--scenario', 'real-main', '--real-model']).realModel, true)
+  assert.equal(parseArgs(['--scenario', 'settings']).realModel, false)
+  assert.throws(() => parseArgs(['--scenario', 'real-main']), /real-main 是真实模型场景，要带 --real-model/)
+  assert.throws(() => parseArgs(['--scenario', 'finalize', '--real-model']), /--real-model 只用于真实模型场景/)
+  assert.throws(() => parseArgs(['--scenario', 'real-main', '--real-model', '--api-key', 'sk-x']), /未知参数 --api-key/)
+})
+
+it('没构建的应用根直接报错，不去启动 Electron', () => {
+  const root = tempParent()
+  assert.throws(() => assertBuilt(root), /dist-electron[\\/]main\.js 不存在/)
+  fs.mkdirSync(path.join(root, 'dist-electron'))
+  fs.writeFileSync(path.join(root, 'dist-electron', 'main.js'), '')
+  assertBuilt(root)
+})
+
+it('真实模式删模型配置失败时记进会话错误，隔离目录留着，收尾的密钥扫描照样查到并删掉', () => {
+  const root = tempParent()
+  const config = path.join(root, 'canonical', 'generations', 'g1', 'models.json')
+  fs.mkdirSync(path.dirname(config), { recursive: true })
+  fs.writeFileSync(config, '{"apiKey":"sk-test-secret"}')
+  const shared = { isolationRoot: root }
+  const sessionErrors = []
+  finishRealSession({ shared, sessionErrors, modelLog: [{ path: '/v1/embeddings', status: 200, ms: 3 }], canonical: path.join(root, 'canonical'),
+    remove: () => 'EBUSY' })
+  assert.deepEqual(sessionErrors, [`删不掉模型配置 ${config}：EBUSY`])
+  assert.equal(shared.modelRequests, 1)
+  assert.equal(sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [] }), false)
+
+  const out = tempParent()
+  const outBefore = fileStamps(out)
+  const results = [{ ...shared, error: sessionErrors.join('\n') }]
+  scanRunForSecret(results, out, outBefore, 'sk-test-secret')
+  assert.deepEqual(results[0].keyScan.hits, [config])
+  assert.equal(fs.existsSync(config), false)
+})
+
+it('诊断日志写不进去时只记进会话错误，不打断后面的退出与凭据清理', () => {
+  const sessionErrors = []
+  writeConsoleLog(path.join(tempParent(), 'missing', 'x.console.log'), ['line'], sessionErrors)
+  assert.equal(sessionErrors.length, 1)
+  assert.match(sessionErrors[0], /ENOENT/)
+  const file = path.join(tempParent(), 'ok.console.log')
+  writeConsoleLog(file, ['a', 'b'], sessionErrors)
+  assert.equal(fs.readFileSync(file, 'utf8'), 'a\nb\n')
+})
+
+it('收尾读不回模型请求记录时会话判失败，请求数不会悄悄少算', async () => {
+  const modelLog = [{ path: '/v1/chat/completions', status: 200, ms: 5 }]
+  const sessionErrors = []
+  await harvestModelLog({ evaluate: async () => { throw new Error('Target page, context or browser has been closed') } }, modelLog, sessionErrors)
+  assert.equal(sessionErrors.length, 1)
+  assert.match(sessionErrors[0], /has been closed/)
+  assert.equal(sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [] }), false)
+
+  const readable = []
+  await harvestModelLog({ evaluate: async () => [{ path: '/v1/embeddings', status: 200, ms: 3 }] }, modelLog, readable)
+  assert.deepEqual(readable, [])
+  assert.equal(modelLog.length, 2)
+})
+
+it('诊断里带出密钥时写盘前就遮掉，诊断照样留下，会话判失败', () => {
+  const sessionErrors = []
+  const file = path.join(tempParent(), 'real.console.log')
+  writeConsoleLog(file, ['[main:stderr] 401 Authorization: Bearer sk-test-secret', '[renderer:log] {"apiKey":"sk-test-secret"}', 'other'],
+    sessionErrors, 'sk-test-secret')
+  const written = fs.readFileSync(file, 'utf8')
+  assert.equal(written.includes('sk-test-secret'), false, '写进产出目录的诊断不含密钥')
+  assert.match(written, /401 Authorization: Bearer \[已遮蔽\]/)
+  assert.match(written, /other/)
+  assert.equal(sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [] }), false, '诊断里出现过密钥，会话不算干净')
+
+  const cleanErrors = []
+  writeConsoleLog(file, ['no secret here'], cleanErrors, 'sk-test-secret')
+  assert.deepEqual(cleanErrors, [])
+  assert.equal(fs.readFileSync(file, 'utf8'), 'no secret here\n')
+})
+
+it('含密钥的文件有一个删不掉时记下路径与原因，其余照删，结果里不含密钥', () => {
+  const out = tempParent()
+  const outBefore = fileStamps(out)
+  const stuck = path.join(out, 'stuck.log')
+  const other = path.join(out, 'other.log')
+  for (const file of [stuck, other]) fs.writeFileSync(file, 'sk-test-secret')
+  const results = [{ isolationRoot: path.join(out, 'gone') }]
+  scanRunForSecret(results, out, outBefore, 'sk-test-secret', file => {
+    if (file === stuck) return 'EBUSY'
+    fs.rmSync(file)
+    return null
+  })
+  assert.deepEqual(results[0].keyScan.removeFailures, [{ file: stuck, reason: 'EBUSY' }])
+  assert.equal(fs.existsSync(other), false)
+  assert.equal(JSON.stringify(results).includes('sk-test-secret'), false)
+})
+
+it('干净会话的隔离目录删不掉时记进会话错误，不抛；不干净的会话不删', () => {
+  const sessionErrors = []
+  const removed = []
+  releaseSessionRoot('C:/iso/a', true, sessionErrors, () => 'EPERM')
+  releaseSessionRoot('C:/iso/b', false, sessionErrors, root => { removed.push(root); return null })
+  assert.deepEqual(sessionErrors, ['删不掉隔离目录 C:/iso/a：EPERM'])
+  assert.deepEqual(removed, [])
+})
+
+it('会话里任一步抛错（含收尾清理），结果 JSON 照样写出、密钥扫描照样执行、退出码为失败', async () => {
+  const out = tempParent()
+  const root = path.join(tempParent(), 'iso')
+  const leaked = path.join(root, 'canonical', 'models.json')
+  const stdout = []
+  const write = process.stdout.write
+  process.stdout.write = chunk => { stdout.push(String(chunk)); return true }
+  let exitCode
+  try {
+    exitCode = await driveSessions({
+      sessions: [['real-x', ['real-x']]],
+      options: { out, theme: 'light', scenario: 'real-x' },
+      realKey: 'sk-test-secret',
+      makeRoots: () => ({ root }),
+      run: async () => {
+        fs.mkdirSync(path.dirname(leaked), { recursive: true })
+        fs.writeFileSync(leaked, '{"apiKey":"sk-test-secret"}')
+        throw Object.assign(new Error('EBUSY: resource busy or locked, rmdir'), { code: 'EBUSY' })
+      },
+    })
+  } finally { process.stdout.write = write }
+  assert.equal(exitCode, 1)
+  const written = fs.readFileSync(path.join(out, 'real-x-light.json'), 'utf8')
+  assert.equal(written.includes('sk-test-secret'), false)
+  const [result] = JSON.parse(written)
+  assert.match(result.error, /EBUSY/)
+  assert.deepEqual(result.keyScan.hits, [leaked])
+  assert.equal(fs.existsSync(leaked), false)
+  assert.equal(stdout.join('').includes('"keyScan"'), true)
+})
+
+it('本次产出里有目录遍历不了时记进 keyScan.unreadable，退出码为失败', async () => {
+  const out = tempParent()
+  const sub = path.join(out, 'locked-dir')
+  const readdir = fs.readdirSync
+  const spy = vi.spyOn(fs, 'readdirSync').mockImplementation((target, ...rest) => {
+    if (String(target) === sub) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+    return readdir(target, ...rest)
+  })
+  const write = process.stdout.write
+  process.stdout.write = () => true
+  let exitCode
+  try {
+    exitCode = await driveSessions({
+      sessions: [['real-x', ['real-x']]],
+      options: { out, theme: 'light', scenario: 'real-x' },
+      realKey: 'sk-test-secret',
+      makeRoots: () => ({ root: path.join(out, 'no-root') }),
+      run: async (sessionName, names, options) => {
+        fs.mkdirSync(sub)
+        fs.writeFileSync(path.join(sub, 'leak.log'), 'sk-test-secret')
+        return names.map(scenario => ({ scenario, theme: options.theme, isolationRoot: path.join(out, 'no-root'), residualProcesses: [], externalWrites: [] }))
+      },
+    })
+  } finally {
+    process.stdout.write = write
+    spy.mockRestore()
+  }
+  assert.equal(exitCode, 1)
+  const [result] = JSON.parse(fs.readFileSync(path.join(out, 'real-x-light.json'), 'utf8'))
+  assert.deepEqual(result.keyScan.unreadable, [{ file: sub, reason: 'EACCES' }])
 })
