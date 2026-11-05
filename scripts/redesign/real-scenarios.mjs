@@ -414,21 +414,21 @@ export const REAL_SCENARIOS = {
     assert.deepEqual(measured.paused.chapter4, [], '暂停后没有写第 4 章')
     await shoot('real-batch-paused')
 
-    // 暂停中的批次仍占着第 3、4 章：此时确认定稿会被资源冲突拒绝。记下作者看到什么，不当作本场景的通过条件。
+    // 暂停中的批次仍占着第 3、4 章，确认定稿会因资源冲突被拒。拒绝原因写进「诊断」，等它出现就说明拒绝已发生。
+    // 记下作者能看到什么。入口是否可点不作为通过条件。
     await openChapter(page, 3)
     await chapterView.finalize(page, 3, { untilReadOnly: false })
-    await page.waitForTimeout(8000)
+    await runSheet.openFromPalette(page)
+    await runSheet.tab(page, '诊断').click()
+    await runSheet.sheet(page).getByText(/请等待完成或取消任务后再试/).first().waitFor({ state: 'visible', timeout: 30_000 })
     measured.finalizeWhilePaused = {
       finalizedInDb: (await chapterFacts(context, 3)).some(draft => draft.status === 'finalized'),
       readOnlyShown: await chapterView.view(page).getByText('已定稿，只读', { exact: true }).count() > 0,
       toasts: await page.locator('.pi-toast').allInnerTexts(),
     }
     await shoot('real-batch-finalize-while-paused')
-    await runSheet.openFromPalette(page)
-    for (const name of ['历史', '诊断']) {
-      await runSheet.tab(page, name).click()
-      measured.finalizeWhilePaused[name] = (await runSheet.sheet(page).innerText()).includes('请等待完成或取消任务后再试')
-    }
+    await runSheet.tab(page, '历史').click()
+    measured.finalizeWhilePaused.historyText = (await runSheet.sheet(page).innerText()).slice(0, 1500)
     await runSheet.tab(page, '进行中').click()
     assert.equal(measured.finalizeWhilePaused.finalizedInDb, false, '批次暂停时第 3 章不会被定稿')
 
