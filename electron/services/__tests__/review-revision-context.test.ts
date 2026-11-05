@@ -23,7 +23,7 @@ function fixture() {
   initializeLegacyBaselineSchema(db)
   migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
   vi.mocked(getProjectDb).mockReturnValue(db)
-  db.exec("INSERT INTO project_core(id,project_name,worldbuilding) VALUES('main','合成项目','作者世界设定'); INSERT INTO contents(id,body) VALUES(1,' 原稿\r\n结尾 '); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(1,2,1,'draft',1)")
+  db.exec("INSERT INTO project_core(id,project_name,worldbuilding) VALUES('main','合成项目','作者世界设定'); INSERT INTO contents(id,body) VALUES(1,' 原稿\r\n结尾 '); INSERT INTO drafts_all(id,chapter_number,version,status,content_id) VALUES(1,2,1,'draft',1)")
   const request: PrepareReviewRevisionRequest = { operation: 'review-chapter', draftId: 1,
     expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: textHash(' 原稿\r\n结尾 ') },
     authorInputs: [{ id: 'review-focus', text: ' 保留原文\r\n ' }], uiLocale: 'zh-CN' }
@@ -61,7 +61,7 @@ describe('审修上下文实际 SQLite 捕获', () => {
   it.each(['contentHash', 'version', 'status', 'chapterNumber', 'id', 'old-version'] as const)('拒绝 UI 来源失配 %s', key => {
     const f = fixture()
     if (key === 'id') f.request.draftId = 999
-    else if (key === 'old-version') f.db.exec("INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(2,2,'draft',1)")
+    else if (key === 'old-version') f.db.exec("INSERT INTO drafts_all(chapter_number,version,status,content_id) VALUES(2,2,'draft',1)")
     else Object.assign(f.request.expectedDraft, { [key]: key === 'contentHash' ? textHash('别稿') : key === 'status' ? 'finalized' : 9 })
     expect(f.capture).toThrow('GENERATION_REVIEW_SOURCE_CHANGED')
   })
@@ -88,7 +88,7 @@ describe('审修上下文实际 SQLite 捕获', () => {
   })
   it('冻结当前及后五章蓝图和目标，历史原文无凭据不变成事实', () => {
     const f = fixture()
-    f.db.exec("INSERT INTO contents(id,body) VALUES(2,'历史正文'); INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(1,1,'finalized',2)")
+    f.db.exec("INSERT INTO contents(id,body) VALUES(2,'历史正文'); INSERT INTO drafts_all(chapter_number,version,status,content_id) VALUES(1,1,'finalized',2)")
     for (const chapter of [1,2,3,7,8]) f.db.prepare('INSERT INTO blueprints(chapter_number,title,key_events) VALUES(?,?,?)').run(chapter, '合成章节', '林岚抵达北塔')
     const context = f.capture()
     expect(context.blueprints.map(row => row.chapterNumber)).toEqual([2,3,7])
@@ -127,7 +127,7 @@ describe('审修上下文实际 SQLite 捕获', () => {
 
 it('当前投影提供预检事实，失效或 legacy 投影只保留同一原文', () => {
   const f = fixture(), prose = '林岚已经死亡。'
-  f.db.exec("INSERT INTO characters(character_id,name) VALUES('lin','林岚'); INSERT INTO contents(id,body) VALUES(2,'待定稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(2,1,1,'draft',2)")
+  f.db.exec("INSERT INTO characters(character_id,name) VALUES('lin','林岚'); INSERT INTO contents(id,body) VALUES(2,'待定稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id) VALUES(2,1,1,'draft',2)")
   f.db.prepare('INSERT INTO blueprints(chapter_number,title,characters,key_events) VALUES(2,?,?,?)').run('归来', JSON.stringify(['林岚']), '林岚归来')
   FinalizationRepository.commit({ finalizationId: 'context-final', draftId: 2, chapterNumber: 1,
     chapterTitle: '告别', content: prose, contentHash: textHash(prose), contentRevision: 1, targetFileName: '1.txt' })
@@ -144,26 +144,26 @@ it('当前投影提供预检事实，失效或 legacy 投影只保留同一原�
   expect(stale.history[0]!.content).toBe(prose); expect(stale.history[0]!.projection).toBeUndefined()
   expect(stale.preflightFindings).toEqual([])
   expect(current.preflightFindings).toHaveLength(1)
-  f.db.exec("UPDATE summary_snapshots SET source_finalization_id='',source_content_hash=''")
+  f.db.exec("UPDATE summary_snapshots_all SET source_finalization_id='',source_content_hash=''")
   expect(f.capture().history[0]!.projection).toBeUndefined()
 })
 
 it('accepts a reviewed current draft and same-hash archived predecessor, but refuses changed history or newer authority', () => {
  const f=fixture()
- f.db.exec("UPDATE drafts SET status='reviewed' WHERE id=1; INSERT INTO contents(id,body) VALUES(2,'前驱正文'); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(2,1,1,'archived',2)")
+ f.db.exec("UPDATE drafts_all SET status='reviewed' WHERE id=1; INSERT INTO contents(id,body) VALUES(2,'前驱正文'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id) VALUES(2,1,1,'archived',2)")
  f.request.expectedDraft.status='reviewed'
- f.db.prepare('UPDATE drafts SET source_dependencies=? WHERE id=1').run(JSON.stringify([{kind:'candidate',draftId:2,contentHash:textHash('前驱正文')}]))
+ f.db.prepare('UPDATE drafts_all SET source_dependencies=? WHERE id=1').run(JSON.stringify([{kind:'candidate',draftId:2,contentHash:textHash('前驱正文')}]))
  expect(f.capture().predecessor?.content).toBe('前驱正文')
  f.db.prepare('UPDATE contents SET body=? WHERE id=2').run('作者修改')
  expect(f.capture).toThrow('GENERATION_REVIEW_HISTORY_CHANGED')
- f.db.exec("UPDATE contents SET body='前驱正文' WHERE id=2; INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(2,2,'reviewed',1)")
+ f.db.exec("UPDATE contents SET body='前驱正文' WHERE id=2; INSERT INTO drafts_all(chapter_number,version,status,content_id) VALUES(2,2,'reviewed',1)")
  expect(f.capture).toThrow('GENERATION_REVIEW_SOURCE_CHANGED')
 })
 
 it('accepts a same-hash predecessor whose final was later replaced', () => {
  const f=fixture()
- f.db.exec("UPDATE drafts SET status='reviewed' WHERE id=1; INSERT INTO contents(id,body) VALUES(2,'前驱正文'); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(2,1,1,'superseded',2)")
+ f.db.exec("UPDATE drafts_all SET status='reviewed' WHERE id=1; INSERT INTO contents(id,body) VALUES(2,'前驱正文'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id) VALUES(2,1,1,'superseded',2)")
  f.request.expectedDraft.status='reviewed'
- f.db.prepare('UPDATE drafts SET source_dependencies=? WHERE id=1').run(JSON.stringify([{kind:'candidate',draftId:2,contentHash:textHash('前驱正文')}]))
+ f.db.prepare('UPDATE drafts_all SET source_dependencies=? WHERE id=1').run(JSON.stringify([{kind:'candidate',draftId:2,contentHash:textHash('前驱正文')}]))
  expect(f.capture().predecessor?.content).toBe('前驱正文')
 })

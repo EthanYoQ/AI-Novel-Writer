@@ -26,7 +26,7 @@ let projectId = ''
 function finalizeChapter(id: number, chapterNumber: number, body: string): string {
   const db = getProjectDb()!
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(id, body)
-  db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,1,'draft',?,0)")
+  db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,1,'draft',?,0)")
     .run(id, chapterNumber, id)
   const finalizationId = `finalization-${chapterNumber}`
   FinalizationRepository.commit({ finalizationId, draftId: id, chapterNumber, chapterTitle: `第${chapterNumber}章`,
@@ -49,14 +49,14 @@ beforeEach(() => {
 
   finalizeChapter(1, 1, '第一章：雾从海面升起。')
   const deletedFinalization = finalizeChapter(2, 2, DELETED_BODY)
-  db.prepare(`INSERT INTO summary_snapshots(draft_id,chapter_number,chapter_notes,source_finalization_id,source_content_hash,projection_generation)
+  db.prepare(`INSERT INTO summary_snapshots_all(draft_id,chapter_number,chapter_notes,source_finalization_id,source_content_hash,projection_generation)
     VALUES(2,2,?,?,?,0)`).run(`要点：${SENTINEL}`, deletedFinalization, sha256(DELETED_BODY))
-  db.prepare("UPDATE finalization_outbox SET knowledge_document_id='doc-deleted' WHERE draft_id=2").run()
+  db.prepare("UPDATE finalization_outbox_all SET knowledge_document_id='doc-deleted' WHERE draft_id=2").run()
   const plan = NarrativeThreadRepository.createPlan({ title: '铜钟', type: '伏笔', targetStartChapter: 1, targetEndChapter: 5, authorIntent: '调查铜钟' })
-  db.prepare("INSERT INTO narrative_thread_confirmations(plan_id,draft_id,event_type,evidence,reason) VALUES(?,2,'planted',?,'')")
+  db.prepare("INSERT INTO narrative_thread_confirmations_all(plan_id,draft_id,event_type,evidence,reason) VALUES(?,2,'planted',?,'')")
     .run(plan.id, SENTINEL)
 
-  db.prepare(`UPDATE drafts SET status='deleted', deletion_id='deletion-sentinel', deleted_from_status='finalized',
+  db.prepare(`UPDATE drafts_all SET status='deleted', deletion_id='deletion-sentinel', deleted_from_status='finalized',
     deleted_at='2026-11-05T00:00:00.000Z' WHERE id=2`).run()
 })
 
@@ -84,7 +84,8 @@ function bindingFor(chapterNumber: number): string {
 describe('被删行对读取路径不可见（哨兵串）', () => {
   it('哨兵行确实留在原表里', () => {
     const db = getProjectDb()!
-    expect(db.prepare('SELECT status FROM drafts WHERE id=2').pluck().get()).toBe('deleted')
+    expect(db.prepare('SELECT status FROM drafts_all WHERE id=2').pluck().get()).toBe('deleted')
+    expect(db.prepare('SELECT 1 FROM drafts WHERE id=2').get()).toBeUndefined()
     expect(db.prepare('SELECT body FROM contents WHERE id=2').pluck().get()).toContain(SENTINEL)
   })
 

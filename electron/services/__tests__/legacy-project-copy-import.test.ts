@@ -92,7 +92,7 @@ async function verifyFrozenLegacyConsumersAfterRestart(target: string, entry: st
         initProjectDatabase(root)
         try {
           const db = getProjectDb()!
-          const rows = () => ['finalization_outbox', 'recovery_candidates', 'import_runs']
+          const rows = () => ['finalization_outbox_all', 'recovery_candidates', 'import_runs']
             .map(table => db.prepare('SELECT * FROM ' + table + ' ORDER BY rowid').all())
           const before = rows()
           const retry = await new FinalizationService({ publisher: { async publish() { publishCalls++ } } })
@@ -983,7 +983,7 @@ it('有定稿收据的旧项目复制导入后，替换那一章再写稿、导�
   const db = getProjectDb()!
   const replacement = '第八章新稿：作者回退后重新定稿。'
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(40, replacement)
-  db.prepare("INSERT INTO drafts(id,chapter_number,version,content_id,status) VALUES(40,8,2,40,'draft')").run()
+  db.prepare("INSERT INTO drafts_all(id,chapter_number,version,content_id,status) VALUES(40,8,2,40,'draft')").run()
   registerAsReopenDraft(db, 40)
   FinalizationRepository.commit({ finalizationId: 'replacement-finalization', draftId: 40, chapterNumber: 8,
     chapterTitle: '第八章', content: replacement, contentHash: createHash('sha256').update(replacement).digest('hex'),

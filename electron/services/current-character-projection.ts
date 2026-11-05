@@ -20,11 +20,11 @@ export function currentCharacterProjection(db: Database.Database, projectId: str
       SELECT d.id AS draftId,d.chapter_number AS chapterNumber,d.version AS draftVersion,c.body,
              o.finalization_id AS finalizationId,o.content_hash AS contentHash,o.content_snapshot AS contentSnapshot,
              s.projection_generation AS projectionGeneration
-      FROM live_drafts d JOIN contents c ON c.id=d.content_id JOIN live_finalization_outbox o ON o.draft_id=d.id
-      JOIN live_summary_snapshots s ON s.draft_id=d.id AND s.chapter_number=d.chapter_number
+      FROM drafts d JOIN contents c ON c.id=d.content_id JOIN finalization_outbox o ON o.draft_id=d.id
+      JOIN summary_snapshots s ON s.draft_id=d.id AND s.chapter_number=d.chapter_number
         AND s.source_finalization_id=o.finalization_id AND s.source_content_hash=o.content_hash
       WHERE d.status='finalized' AND NOT EXISTS (
-        SELECT 1 FROM live_drafts newer WHERE newer.chapter_number=d.chapter_number AND newer.status='finalized'
+        SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number AND newer.status='finalized'
           AND (newer.version>d.version OR (newer.version=d.version AND newer.id>d.id))
       )
     `).all() as Array<FinalizedSourceIdentity & {

@@ -14,9 +14,12 @@ function normalizeHistoricalFixture(projectPath: string): void {
   normalization.db?.close()
   normalization.db = new FixtureDatabase(file)
   normalization.root = projectPath
+  dropLiveRowViews(normalization.db)
   initializeLegacyBaselineSchema(normalization.db)
+  createLiveRowViews(normalization.db)
 }
 import { createRequire } from 'node:module'
+import { createLiveRowViews, dropLiveRowViews } from '../../../test/helpers/live-row-views'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -184,7 +187,7 @@ describe('draft source dependencies', () => {
       wordCount: 8,
       sourceDependencies: [{ draftId: firstId, contentHash: sha256(firstContent) }],
     })
-    getProjectDb()!.prepare('UPDATE drafts SET source_dependencies = ? WHERE id = ?').run(
+    getProjectDb()!.prepare('UPDATE drafts_all SET source_dependencies = ? WHERE id = ?').run(
       JSON.stringify([{ draftId: secondId, contentHash: sha256(secondContent) }]),
       firstId,
     )
@@ -204,7 +207,7 @@ describe('draft source dependencies', () => {
     const sourceId = DraftRepository.create({
       chapterNumber: 1, source: 'write', content: '旧草稿。', wordCount: 4,
     })
-    getProjectDb()!.exec('ALTER TABLE drafts DROP COLUMN source_dependencies')
+    getProjectDb()!.exec('ALTER TABLE drafts_all DROP COLUMN source_dependencies')
     closeProjectDatabase()
     normalizeHistoricalFixture(projectRoot)
 
@@ -278,7 +281,7 @@ describe('draft source dependencies', () => {
       sourceDependencies: [finalizedDependency(sourceId, 1, content, 'finalization-1')],
     })
 
-    getProjectDb()!.prepare("UPDATE drafts SET status = 'archived' WHERE id = ?").run(sourceId)
+    getProjectDb()!.prepare("UPDATE drafts_all SET status = 'archived' WHERE id = ?").run(sourceId)
 
     expect(DraftRepository.getMeta(downstreamId)).toMatchObject({
       id: downstreamId,
@@ -329,7 +332,7 @@ describe('draft source dependencies', () => {
     finalize(replacementId, 1, content, 'finalization-2')
     expect(DraftRepository.getMeta(downstreamId)?.dependenciesStale).toBe(true)
 
-    getProjectDb()!.prepare('DELETE FROM drafts WHERE id = ?').run(sourceId)
+    getProjectDb()!.prepare('DELETE FROM drafts_all WHERE id = ?').run(sourceId)
     expect(DraftRepository.getFull(downstreamId)).toMatchObject({
       content: '第二章正文。',
       dependenciesStale: true,
@@ -341,7 +344,7 @@ describe('draft source dependencies', () => {
     const sourceId = DraftRepository.create({
       chapterNumber: 1, source: 'write', content, wordCount: 8,
     })
-    getProjectDb()!.prepare("UPDATE drafts SET status = 'finalized' WHERE id = ?").run(sourceId)
+    getProjectDb()!.prepare("UPDATE drafts_all SET status = 'finalized' WHERE id = ?").run(sourceId)
     const dependency = {
       kind: 'legacy-finalized' as const,
       draftId: sourceId,

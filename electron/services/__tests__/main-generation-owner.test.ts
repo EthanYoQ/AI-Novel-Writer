@@ -2768,7 +2768,7 @@ describe('main draft persistence and batch lineage', () => {
       chapterTitle: '第一章', content: saved.content, contentHash: textHash(saved.content), contentRevision: 1, targetFileName: '第一章.txt' })
     const older = '作者更早写下的第一章。'
     f.db.prepare('INSERT INTO contents(id,body) VALUES(9001,?)').run(older)
-    f.db.prepare("INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count) VALUES(9001,1,0,'draft','write',9001,10)").run()
+    f.db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,source,content_id,word_count) VALUES(9001,1,0,'draft','write',9001,10)").run()
     registerAsReopenDraft(f.db, 9001)
     FinalizationRepository.commit({ finalizationId: 'older-final', draftId: 9001, chapterNumber: 1,
       chapterTitle: '第一章', content: older, contentHash: textHash(older), contentRevision: 1, targetFileName: '第一章 旧.txt' })
@@ -2807,11 +2807,11 @@ describe('main draft persistence and batch lineage', () => {
     const saved = f.owner.commitDraft(generated.request), revised = '修订后的定稿正文。'
     FinalizationRepository.commit({ finalizationId: 'revised-finalization', draftId: saved.id, chapterNumber: 1,
       chapterTitle: '第一章', content: revised, contentHash: textHash(revised), contentRevision: 1, targetFileName: '第一章.txt' })
-    if (corruption === 'hash') f.db.exec("UPDATE finalization_outbox SET content_hash='invalid'")
-    if (corruption === 'unrelated snapshot') f.db.prepare('UPDATE finalization_outbox SET content_snapshot=?,content_hash=?')
+    if (corruption === 'hash') f.db.exec("UPDATE finalization_outbox_all SET content_hash='invalid'")
+    if (corruption === 'unrelated snapshot') f.db.prepare('UPDATE finalization_outbox_all SET content_snapshot=?,content_hash=?')
       .run('无关但哈希自洽的正文。', textHash('无关但哈希自洽的正文。'))
-    if (corruption === 'chapter') f.db.exec('UPDATE finalization_outbox SET chapter_number=2')
-    if (corruption === 'unfinalized draft') f.db.exec("UPDATE drafts SET status='draft'")
+    if (corruption === 'chapter') f.db.exec('UPDATE finalization_outbox_all SET chapter_number=2')
+    if (corruption === 'unfinalized draft') f.db.exec("UPDATE drafts_all SET status='draft'")
     const reopened = f.reopen()
     expect(() => reopened.listBatches()).toThrow('GENERATION_BATCH_FINALIZATION_CONFLICT')
     expect(() => reopened.readBatch(batch.batchId)).toThrow('GENERATION_BATCH_FINALIZATION_CONFLICT')
@@ -2848,7 +2848,7 @@ describe('main draft persistence and batch lineage', () => {
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
   it.each([
-    'UPDATE drafts SET version=version+1',
+    'UPDATE drafts_all SET version=version+1',
     "UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.draftCommit.contentHash','invalid')",
   ])('still rejects invalid saved history after reopen: %s', async corruption => {
     const f = drafting(), generated = await generate(f, { ...f.begin, authorInputs })

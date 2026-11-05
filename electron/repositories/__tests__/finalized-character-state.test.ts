@@ -23,7 +23,7 @@ afterEach(() => { for (const db of open.splice(0)) db.close(); vi.restoreAllMock
 function draft(db: Db, id = 1, chapter = 1, content = prose, version = 1) {
   db.prepare('INSERT OR IGNORE INTO blueprints(chapter_number,title) VALUES(?,?)').run(chapter, '合成章节')
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(id, '尚未定稿')
-  db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)").run(id, chapter, version, id)
+  db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)").run(id, chapter, version, id)
   registerAsReopenDraft(db, id)
   return { finalizationId: `finalization-${id}`, draftId: id, chapterNumber: chapter, chapterTitle: '合成章节', content,
     contentHash: hash(content), contentRevision: 1, targetFileName: `${chapter}.txt` }
@@ -224,7 +224,7 @@ describe('finalized character identities and derived state in the M02 database',
     const boundKeys = new Set(['candidateKey', 'source', 'expectedFieldRevision', 'expectedFieldValueHash'])
     const legacy = stored.pending.map((item: Record<string, unknown>) =>
       Object.fromEntries(Object.entries(item).filter(([key]) => !boundKeys.has(key))))
-    f.db.prepare('UPDATE summary_snapshots SET character_state_candidates=? WHERE draft_id=1').run(JSON.stringify(legacy))
+    f.db.prepare('UPDATE summary_snapshots_all SET character_state_candidates=? WHERE draft_id=1').run(JSON.stringify(legacy))
     const [legacySummary] = SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)
     expect(legacySummary).toMatchObject({ draftId: 1, finalizationId: context.source.finalizationId,
       characterId: f.ids[0], characterName: '林岚', field: 'location' })
@@ -259,7 +259,7 @@ describe('finalized character identities and derived state in the M02 database',
     const malformed = Object.fromEntries(Object.entries(stored.pending[0] as Record<string, unknown>)
       .filter(([key]) => !boundKeys.has(key)))
     malformed[field] = value
-    f.db.prepare('UPDATE summary_snapshots SET character_state_candidates=? WHERE draft_id=1')
+    f.db.prepare('UPDATE summary_snapshots_all SET character_state_candidates=? WHERE draft_id=1')
       .run(JSON.stringify({ version: 2, pending: [malformed], receipts: [] }))
     expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toEqual([])
   })
@@ -285,7 +285,7 @@ describe('finalized character identities and derived state in the M02 database',
       f.response(reopenedContext, { powerLevel: '提议能力' }), f.db)).toMatchObject({ applied: 0 })
     expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toEqual([])
     expect(f.row().cs_power_level).toBe('作者后来能力')
-    f.db.prepare('UPDATE finalization_outbox SET content_hash=? WHERE draft_id=1').run('0'.repeat(64))
+    f.db.prepare('UPDATE finalization_outbox_all SET content_hash=? WHERE draft_id=1').run('0'.repeat(64))
     expect(SummaryRepository.decideFinalizedCharacterStateCandidate(request, f.db)).toMatchObject({ idempotent: true })
     expect(() => SummaryRepository.decideFinalizedCharacterStateCandidate({ ...request, decision: 'accept' }, f.db))
       .toThrow('FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT')
@@ -312,7 +312,7 @@ describe('finalized character identities and derived state in the M02 database',
       .toThrow('FINALIZED_CHARACTER_STATE_FIELD_CONFLICT')
     expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toHaveLength(1)
 
-    f.db.prepare('UPDATE finalization_outbox SET content_hash=? WHERE draft_id=1').run('0'.repeat(64))
+    f.db.prepare('UPDATE finalization_outbox_all SET content_hash=? WHERE draft_id=1').run('0'.repeat(64))
     expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toEqual([])
     expect(() => SummaryRepository.readPendingFinalizedCharacterStateCandidate(1, candidate.candidateKey, f.db))
       .toThrow('FINALIZED_CHARACTER_STATE_SOURCE_CHANGED')
@@ -364,7 +364,7 @@ describe('finalized character identities and derived state in the M02 database',
   it('preserves legacy name projections as legacy and never backfills a missing identity receipt on retry', () => {
     const f = fixture(); f.saveNotes()
     const nameFact = { category: 'character-state', entities: ['林岚'], statement: '到北塔', sourceChapter: 1, evidence: prose.slice(2, 9) }
-    f.db.prepare('UPDATE summary_snapshots SET continuity_facts=? WHERE draft_id=1').run(JSON.stringify([nameFact]))
+    f.db.prepare('UPDATE summary_snapshots_all SET continuity_facts=? WHERE draft_id=1').run(JSON.stringify([nameFact]))
     expect(SummaryRepository.listFinalizedContinuityBefore(2)[0]).toMatchObject({ sourceStatus: 'legacy', facts: [nameFact] })
     f.db.prepare('DELETE FROM character_identity_proposals WHERE proposal_id=?').run('fcs:finalization-1')
     FinalizationRepository.commit(f.request)
@@ -381,7 +381,7 @@ describe('finalized character identities and derived state in the M02 database',
     f.db.prepare('UPDATE characters SET name=? WHERE character_id=?').run('周研', f.ids[0])
     f.db.prepare('UPDATE characters SET name=? WHERE character_id=?').run('林岚', f.ids[1])
     expect(SummaryRepository.listFinalizedContinuityBefore(2)[0]).toMatchObject({ sourceStatus: 'current', facts: [fact] })
-    f.db.prepare('UPDATE summary_snapshots SET continuity_facts=? WHERE draft_id=1').run(JSON.stringify([
+    f.db.prepare('UPDATE summary_snapshots_all SET continuity_facts=? WHERE draft_id=1').run(JSON.stringify([
       { ...fact, entities: ['陌生人'], characterRefs: [{ characterId: f.ids[0], displayNameSnapshot: '陌生人' }] },
     ]))
     expect(SummaryRepository.listFinalizedContinuityBefore(2)[0].sourceStatus).toBe('stale')

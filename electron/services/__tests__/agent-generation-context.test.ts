@@ -26,8 +26,8 @@ function fixture() {
     db.prepare("INSERT INTO project_core(id,project_name,global_guidance) VALUES('main','项目','作者全局指导')").run();
     db.prepare("INSERT INTO blueprints(chapter_number,title,user_guidance) VALUES(2,'第二章','章指导')").run();
     db.prepare("INSERT INTO contents(id,body) VALUES(1,'原文\r\n汉字。'),(2,'未选草稿'),(3,'已定稿原文')").run();
-    db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(1,2,1,'draft',1),(2,3,1,'draft',2),(3,1,1,'finalized',3)").run();
-    db.prepare("INSERT INTO finalization_outbox(finalization_id,draft_id,chapter_number,content_hash,content_revision,content_snapshot,target_file_name) VALUES('final-3',3,1,?,1,'已定稿原文','chapter1.txt')").run(hash('已定稿原文'));
+    db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id) VALUES(1,2,1,'draft',1),(2,3,1,'draft',2),(3,1,1,'finalized',3)").run();
+    db.prepare("INSERT INTO finalization_outbox_all(finalization_id,draft_id,chapter_number,content_hash,content_revision,content_snapshot,target_file_name) VALUES('final-3',3,1,?,1,'已定稿原文','chapter1.txt')").run(hash('已定稿原文'));
     const h = hash('model'), input: GenerationSourceBindingInput = { projectId: 'p', epoch: 'e', operation: 'agent', chapterNumber: 2, selectedDraftIds: [1], selectedFinalizedDraftIds: [3], promptKeys: ['assistant_writing_identity'], skillStages: [], modelReceipt: { modelId: 'model', provider: 'openai', protocol: 'openai', modelName: 'synthetic', modelRevision: h, endpointFingerprint: h, capabilityEvidence: { source: { contextWindowTokens: 'unknown', maxOutputTokens: 'user-operational-cap', featureFlags: 'unknown' }, subjectFingerprint: h, contextWindowTokens: 8000, maxOutputTokens: 1000, reasoning: false, structuredOutput: false, usage: true } }, policy: { version: 'fixture-v1', maxPhysicalRequests: 2 }, outputContract: 'visible-text' };
     const deps = { db, projectStorageRoot, globalDataRoot, readBuiltinPrompt: () => JSON.stringify({ key: 'assistant_writing_identity', content: '内置助手 {{mode_instruction}}', systemRole: '不可伪造系统角色', systemSuffix: '固定工具协议' }) };
     input.agentInput = agentInput();

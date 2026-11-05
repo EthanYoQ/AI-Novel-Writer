@@ -129,12 +129,12 @@ function finalizedSource(draftId: number, chapterNumber: number) {
 }
 
 function insertDraft(draftId: number, chapterNumber: number, status: 'draft' | 'finalized'): void {
-  db.prepare('INSERT INTO drafts (id, chapter_number, status) VALUES (?, ?, ?)')
+  db.prepare('INSERT INTO drafts_all (id, chapter_number, status) VALUES (?, ?, ?)')
     .run(draftId, chapterNumber, status)
   if (status === 'finalized') {
     const source = finalizedSource(draftId, chapterNumber)
     db.prepare(`
-      INSERT INTO finalization_outbox (finalization_id, draft_id, chapter_number, content_hash)
+      INSERT INTO finalization_outbox_all (finalization_id, draft_id, chapter_number, content_hash)
       VALUES (?, ?, ?, ?)
     `).run(source.finalizationId, source.draftId, source.chapterNumber, source.contentHash)
   }

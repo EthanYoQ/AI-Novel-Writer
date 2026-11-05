@@ -140,9 +140,9 @@ function seedProject(f: Fixture, secret = 'token-绝不外带'): { body: string;
   try {
     db.prepare("INSERT INTO project_core(id,project_name,writing_language) VALUES('main',?,'zh-CN')").run('铜钥匙')
     db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(body)
-    db.prepare(`INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count,source_dependencies)
+    db.prepare(`INSERT INTO drafts_all(id,chapter_number,version,status,source,content_id,word_count,source_dependencies)
       VALUES(1,1,1,'finalized','write',1,?,?)`).run(body.length, '[]')
-    db.prepare(`INSERT INTO finalization_outbox(
+    db.prepare(`INSERT INTO finalization_outbox_all(
       finalization_id,draft_id,chapter_number,chapter_title,content_hash,content_revision,content_snapshot,
       target_file_name,publication_status,last_error
     ) VALUES(?,?,?,?,?,1,?,?,'pending',?)`).run('finalization-1', 1, 1, '雨夜', hash(body), body, '第一章-雨夜.md', `C:\\错误\\${secret}`)
@@ -217,7 +217,7 @@ function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, reche
     frozenGoals: { chapterNumber: 1, coverage: 'not_configured', items: [] }, writingLanguage: 'zh-CN', uiLocale: 'zh-CN',
     preflightFindings: [], reportVersion: reportOptions.reportVersion ?? 1 }), null, 2)
   const addContent = (value: string) => Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(value).lastInsertRowid)
-  const draftId = Number(db.prepare("INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(1,1,'revised',?)")
+  const draftId = Number(db.prepare("INSERT INTO drafts_all(chapter_number,version,status,content_id) VALUES(1,1,'revised',?)")
     .run(addContent(body)).lastInsertRowid)
   const reviewId = Number(db.prepare(`INSERT INTO reviews(base_draft_id,review_index,source_draft_chapter_number,
     source_draft_version,source_draft_status,source_content,content_id) VALUES(?,1,1,1,'draft',?,?)`)
@@ -737,7 +737,7 @@ describe('portable project export service', { timeout: 20_000 }, () => {
     const f = fixture()
     seedProject(f)
     const db = new Database(f.databasePath)
-    db.prepare("UPDATE finalization_outbox SET target_file_name='C:\\outside\\chapter.md'").run()
+    db.prepare("UPDATE finalization_outbox_all SET target_file_name='C:\\outside\\chapter.md'").run()
     db.close()
     await expect(exportPortableProject(input(f))).rejects.toThrow('PORTABLE_PATH_UNSAFE')
     expect(fs.existsSync(f.target)).toBe(false)
@@ -759,7 +759,7 @@ describe('portable project export service', { timeout: 20_000 }, () => {
     const f = fixture()
     const db = new Database(f.databasePath)
     db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run('正文')
-    db.prepare(`INSERT INTO drafts(id,chapter_number,version,content_id,source_dependencies)
+    db.prepare(`INSERT INTO drafts_all(id,chapter_number,version,content_id,source_dependencies)
       VALUES(1,1,1,1,?)`).run(JSON.stringify([{ draftId: 1, contentHash: hash('正文'), secretRef: 'forbidden' }]))
     db.close()
     await expect(exportPortableProject(input(f))).rejects.toThrow('PORTABLE_UNSAFE_PROJECTION')

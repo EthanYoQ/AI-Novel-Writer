@@ -203,7 +203,7 @@ describe('FinalizationService publication failure seam', () => {
       content: '不可变正文',
       contentRevision: 8,
     })
-    db.prepare('UPDATE finalization_outbox SET content_snapshot = ?').run('被篡改的快照')
+    db.prepare('UPDATE finalization_outbox_all SET content_snapshot = ?').run('被篡改的快照')
     const publish = vi.fn(async () => undefined)
 
     const result = await new FinalizationService({ publisher: { publish } }).retry({

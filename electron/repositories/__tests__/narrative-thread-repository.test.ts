@@ -69,7 +69,7 @@ describe('NarrativeThreadRepository', () => {
     })
     const contentId = Number(getProjectDb()!.prepare("INSERT INTO contents (body) VALUES ('草稿')").run().lastInsertRowid)
     const draftId = Number(getProjectDb()!.prepare(`
-      INSERT INTO drafts (chapter_number, version, status, source, content_id, word_count)
+      INSERT INTO drafts_all (chapter_number, version, status, source, content_id, word_count)
       VALUES (1, 1, 'draft', 'write', ?, 2)
     `).run(contentId).lastInsertRowid)
 

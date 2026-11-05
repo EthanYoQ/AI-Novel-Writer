@@ -99,7 +99,7 @@ describe('PlotTreeRepository', () => {
     `).run()
     db.prepare("INSERT INTO contents (id, body) VALUES (1, 'older'), (2, 'newer')").run()
     db.prepare(`
-      INSERT INTO drafts (id, chapter_number, version, status, content_id)
+      INSERT INTO drafts_all (id, chapter_number, version, status, content_id)
       VALUES (200, 1, 1, 'finalized', 1), (100, 1, 2, 'finalized', 2)
     `).run()
 

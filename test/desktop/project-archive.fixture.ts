@@ -159,14 +159,14 @@ function insertRoundtripDomain(database: Database.Database, sourceProjectId: str
     )
 
     const content = database.prepare('INSERT INTO contents(id,body) VALUES(?,?)')
-    const draft = database.prepare(`INSERT INTO drafts(
+    const draft = database.prepare(`INSERT INTO drafts_all(
       id,chapter_number,version,status,source,content_id,word_count,source_dependencies
     ) VALUES(?,?,?,'finalized','write',?,?, '[]')`)
-    const finalization = database.prepare(`INSERT INTO finalization_outbox(
+    const finalization = database.prepare(`INSERT INTO finalization_outbox_all(
       finalization_id,draft_id,chapter_number,chapter_title,content_hash,content_revision,
       content_snapshot,target_file_name,publication_status,last_error
     ) VALUES(?,?,?,?,?,?,?,?,'pending',?)`)
-    const summary = database.prepare(`INSERT INTO summary_snapshots(
+    const summary = database.prepare(`INSERT INTO summary_snapshots_all(
       id,draft_id,chapter_number,chapter_notes,continuity_facts,source_finalization_id,
       source_content_hash,projection_generation
     ) VALUES(?,?,?,?,?,?,?,1)`)
@@ -196,7 +196,7 @@ function insertRoundtripDomain(database: Database.Database, sourceProjectId: str
 
     const archivedBody = '第20章旧候选定稿，不是当前权威。'
     content.run(120, archivedBody)
-    database.prepare(`INSERT INTO drafts(
+    database.prepare(`INSERT INTO drafts_all(
       id,chapter_number,version,status,source,content_id,word_count,source_dependencies
     ) VALUES(120,20,1,'archived','write',120,?,'[]')`).run(Buffer.from(archivedBody).length)
     finalization.run('outbox-old', 120, 20, '旧第20章', sha256(archivedBody), 1, archivedBody, 'chapter-20-old.md', '')
@@ -445,7 +445,7 @@ export async function createProjectArchiveRoundtripFixture(): Promise<ProjectArc
       const draftId = 121
       const body = '第20章新定稿：林澈伤势已经包扎，北门储物柜中的新证据成为当前权威。'
       database.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(draftId, body)
-      database.prepare(`INSERT INTO drafts(
+      database.prepare(`INSERT INTO drafts_all(
         id,chapter_number,version,status,source,content_id,word_count,source_dependencies
       ) VALUES(?,20,3,'draft','rewrite',?,?,?)`).run(
         draftId,

@@ -488,7 +488,7 @@ test.for([
     const prose = revisionBounds ? '林'.repeat(919) : '林岚走进北塔，灯火照亮了石阶。'.repeat(70)
     db.exec("INSERT INTO project_core(id,project_name,words_per_chapter,world_setting) VALUES('main','原生合成',900,'【第1章必现】林岚携带一本账册'); INSERT INTO blueprints(chapter_number,title,key_events) VALUES(1,'北塔','当章归还借书');")
     db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(prose)
-    db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,?)").run(countDraftUnits(prose))
+    db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,?)").run(countDraftUnits(prose))
     const model = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic',
       baseUrl: 'https://api.openai.com/v1', temperature: 0, maxTokens: 2048, purposes: ['generation'],
       capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
@@ -771,7 +771,7 @@ test.for([
     const { ReviewChapterCommand } = await import('../../src/services/workflows/commands/review-chapter.command')
     const nextContent = '次日上午，林岚回到北塔。'.repeat(70)
     db.prepare('INSERT INTO contents(id,body) VALUES(20,?)').run(nextContent)
-    db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,2,1,'draft',20,?)").run(countDraftUnits(nextContent))
+    db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(2,2,1,'draft',20,?)").run(countDraftUnits(nextContent))
     const expected = { arm: 'candidate', projectId: 'project', chapterNumber: 1, draftId: 1, version: 1,
       status: 'revised', contentHash: hash(revisedProse), persistedBytes: Buffer.byteLength(revisedProse) }
     const focusStart = fixture.indexOf('reviewFocus: savedRun || planningRun ?'), focusEnd = fixture.indexOf('\n          })', focusStart)

@@ -398,7 +398,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const binding = draftPreparationBinding(request, knowledgeSnapshot)
       if (beforeKnowledgeRead && !preparationMatches(beforeKnowledgeRead, binding, true)) throw new Error('GENERATION_DRAFT_PREPARATION_CHANGED')
       const selectedDrafts = request.selectedDraftIds.map(draftId => {
-        const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM live_drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string }
+        const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string }
         return { draftId, chapterNumber: row.chapter_number, version: row.version, contentHash: textHash(row.body), content: row.body }
       })
       return { binding, selectedDrafts }
@@ -919,7 +919,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       .filter(item => item.required && /^candidate:\d+$/u.test(item.sourceId))
       .map(item => Number(item.sourceId.slice('candidate:'.length))))
     const selectedDrafts = (manifest.selectedDraftIds as number[] ?? []).map(draftId => {
-      const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM live_drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string } | undefined
+      const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string } | undefined
       const ref = run.binding.sourceRefs.find(source => source.sourceId === `draft:${draftId}`)
       return row && ref && row.version === ref.revision && textHash(row.body) === ref.contentHash
         ? { draftId, chapterNumber: row.chapter_number, version: row.version, contentHash: ref.contentHash, content: row.body,

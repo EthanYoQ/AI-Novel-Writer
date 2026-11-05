@@ -28,11 +28,11 @@ function insertLegacyFinalized(id: number, chapterNumber: number, version: numbe
   publication: { status: 'published' | 'pending'; targetFileName?: string } = { status: 'published' }): void {
   const db = getProjectDb()!
   db.prepare('INSERT INTO contents(id, body) VALUES(?, ?)').run(id, body)
-  db.prepare("INSERT INTO drafts(id, chapter_number, version, status, content_id, word_count) VALUES(?, ?, ?, 'finalized', ?, 1)")
+  db.prepare("INSERT INTO drafts_all(id, chapter_number, version, status, content_id, word_count) VALUES(?, ?, ?, 'finalized', ?, 1)")
     .run(id, chapterNumber, version, id)
   if (!receipt) return
   db.prepare(`
-    INSERT INTO finalization_outbox(finalization_id, draft_id, chapter_number, chapter_title, content_hash,
+    INSERT INTO finalization_outbox_all(finalization_id, draft_id, chapter_number, chapter_title, content_hash,
       content_revision, content_snapshot, target_file_name, knowledge_document_id, publication_status)
     VALUES(?, ?, ?, '沉船', ?, 1, ?, ?, ?, ?)
   `).run(`finalization-${id}`, id, chapterNumber, createHash('sha256').update(body).digest('hex'), body,

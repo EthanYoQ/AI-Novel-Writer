@@ -71,7 +71,7 @@ afterEach(() => {
 })
 
 describe('portable v8 field policy', () => {
-  it('与实际当前registry双向精确匹配51表484字段，放行M07的四个live_视图，并包含两个lazy表', () => {
+  it('与实际当前registry双向精确匹配51表484字段，放行M07的四个live视图，并包含两个lazy表', () => {
     const { database } = openCurrent()
     expect(database.pragma('user_version', { simple: true })).toBe(8)
     const tables = database.prepare("SELECT name FROM pragma_table_list WHERE schema='main' AND type='table' AND name NOT LIKE 'sqlite_%'")
@@ -80,7 +80,7 @@ describe('portable v8 field policy', () => {
       + (database.prepare(`PRAGMA table_info("${table.name}")`).all() as unknown[]).length, 0)
     expect({ tables: tables.length, fields: fieldCount }).toEqual({ tables: 51, fields: 484 })
     expect(database.prepare("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name").pluck().all()).toEqual([
-      'live_drafts', 'live_finalization_outbox', 'live_narrative_thread_confirmations', 'live_summary_snapshots',
+      'drafts', 'finalization_outbox', 'narrative_thread_confirmations', 'summary_snapshots',
     ])
     expect(assertPortableSourceSchema(database)).toEqual({ tables: 51, fields: 484 })
     for (const field of ['deletion_id', 'deleted_from_status', 'deleted_at']) {
@@ -162,7 +162,7 @@ describe('portable v8 field policy', () => {
         if (mode === 'higher-version') mutate.pragma('user_version = 9')
         if (mode === 'lower-version') mutate.pragma('user_version = 5')
         if (mode === 'extra-view') mutate.exec('CREATE VIEW future_portable_view AS SELECT id FROM contents')
-        if (mode === 'altered-live-view') mutate.exec('DROP VIEW live_drafts; CREATE VIEW live_drafts AS SELECT * FROM drafts')
+        if (mode === 'altered-live-view') mutate.exec('DROP VIEW drafts; CREATE VIEW drafts AS SELECT * FROM drafts_all')
         if (mode === 'legacy-v6') {
           mutate.exec('DROP TABLE review_cycle_merges')
           mutate.pragma('user_version = 6')
