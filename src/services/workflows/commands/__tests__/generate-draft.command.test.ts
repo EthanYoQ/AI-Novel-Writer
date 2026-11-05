@@ -1224,6 +1224,29 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  it('取消请求之后存储层写入失败：原错误带着原错误码抛出，不改写成取消，恢复稿记原错误码', async () => {
+    const activeContext: { value?: WorkflowContext } = {}
+    const storageFailure = Object.assign(new Error('生成记录写入失败：磁盘空间不足'), { code: 'GENERATION_STORAGE_FAILED' })
+    const runtime = fakeRuntime((_attempt, _task, options) => {
+      options?.onChunk?.('取消前已经收到的正文。')
+      if (activeContext.value) activeContext.value.cancelled = true
+      throw storageFailure
+    })
+    const prepared = setup({ runtime, wordsTarget: 500 })
+    activeContext.value = prepared.context
+
+    const failure = await prepared.command.execute({ step: { id: 'draft-step' }, context: prepared.context, callbacks: prepared.callbacks })
+      .then(() => new Error('generation did not fail'), (error: unknown) => error)
+
+    expect(failure).toBe(storageFailure)
+    expect(prepared.invoke).toHaveBeenCalledWith(
+      'db:recovery-candidate-record',
+      expect.objectContaining({ visibleText: '取消前已经收到的正文。', failureCode: 'GENERATION_STORAGE_FAILED' }),
+      projectPath,
+      prepared.context.projectSession,
+    )
+  })
+
   it('persists a quality-short candidate and never promotes it to drafts', async () => {
     const runtime = fakeRuntime(() => outcome('正文太短。', 'stop'))
     const { invoke, context, callbacks, command } = setup({ runtime, wordsTarget: 500 })

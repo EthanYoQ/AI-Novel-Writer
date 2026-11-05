@@ -9,6 +9,8 @@ import type {
 import { createImportRunChapterBatchCheckpointId } from '../../../shared/import-run'
 import type { FinalizedDraftImportReceipt } from '../../../shared/finalized-draft-import'
 import { importGenerationStopMessage } from '../../../i18n/app-errors'
+import { useProjectStore } from '../../../stores/project-store'
+import { useWorkflowStore } from '../../../stores/workflow-store'
 import {
   IMPORT_CHAPTER_PAGE_SIZE,
   IMPORT_KNOWLEDGE_BATCH_SIZE,
@@ -550,6 +552,35 @@ describe('ImportRunOrchestrator', () => {
     expect(deps.cancelAtBoundary).toHaveBeenCalledOnce()
     expect(deps.advanceStage).not.toHaveBeenCalled()
     expect(deps.inferGlobal).not.toHaveBeenCalled()
+  })
+
+  it('作者取消导入：运行卡片上已取消的那一步写明停在了已保存的进度处', async () => {
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string) => {
+      if (channel === 'skills:list-user') return []
+      if (channel === 'fs:check-exists') return false
+      throw new Error(`测试未配置桌面调用：${channel}`)
+    }), on: vi.fn(() => () => {}), once: vi.fn() } })
+    const session = { projectId: 'import-project', leaseId: 'lease-import', projectPath: 'C:\\import-project' }
+    useProjectStore.setState({ currentProject: { id: session.projectId, name: '导入', path: session.projectPath, sessionLease: session.leaseId, novelConfig: {} } as never })
+    useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [], waitingRuns: {} })
+    const { deps } = harness(5_000, { locale: 'zh-CN' })
+    deps.importReference = vi.fn(async item => {
+      if (item.number === 1) useWorkflowStore.getState().cancelWorkflow('import-cancel-run')
+    })
+    try {
+      await useWorkflowStore.getState().startWorkflow({
+        runId: 'import-cancel-run', type: 'novel_import', title: '小说拆解与仿写', projectPath: session.projectPath, projectSession: session,
+        steps: [{ name: '导入参照文本与构建知识库', description: '', executor: async (_step, context, stepCallbacks) => {
+          await new ImportRunOrchestrator(deps).executeStage('run-1', 'knowledge', 'test-runner', context, stepCallbacks)
+        } }],
+      })
+      const finished = useWorkflowStore.getState().history[0]
+      expect(finished).toMatchObject({ id: 'import-cancel-run', status: 'cancelled' })
+      expect(finished.steps[0]).toMatchObject({ status: 'cancelled', error: '导入已取消，停在了已保存的进度处。' })
+    } finally {
+      vi.unstubAllGlobals()
+      useProjectStore.setState({ currentProject: null })
+    }
   })
 
   it('does not write a second cancellation terminal when the batch commit already applied it', async () => {

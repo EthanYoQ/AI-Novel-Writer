@@ -317,6 +317,19 @@ describe('单章视图的主按钮随五种状态变化', () => {
     await expect.element(page.getByRole('button', { name: reviseOne })).toBeVisible()
   })
 
+  it('旧审稿报告是一段散文、一条意见也读不出：不说「可以直接定稿」，仍请作者添加自己的意见', async () => {
+    const draft = backend.addDraft({ status: 'draft' })
+    backend.addReview(draft, '整体节奏不错，人物动机清楚。结尾林舟回头那一下来得太突然，前面最好铺一笔。')
+    await mount()
+    await openDraft(draft.id)
+    await expect.element(page.getByRole('button', { name: '添加我的意见' })).toBeVisible()
+    await expect.element(page.getByText('这次审稿没有需要修改的意见', { exact: false })).not.toBeInTheDocument()
+    await expect.element(page.getByRole('button', { name: '定稿', exact: true })).not.toBeInTheDocument()
+    await expect.element(page.getByText('至少勾选一项意见')).toBeVisible()
+    await click('添加我的意见')
+    await expect.element(page.getByRole('button', { name: '按 1 项意见修稿' })).toBeVisible()
+  })
+
   it('有待合并修稿：直接摆出合并视图，完成合并提交选择的正文并启动合并后复验', async () => {
     const draft = backend.addDraft({ status: 'draft' })
     backend.addReview(draft)
