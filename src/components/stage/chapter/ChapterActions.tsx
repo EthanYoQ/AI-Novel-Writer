@@ -258,7 +258,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
   const moreGroups: MenuGroupSpec[] = [
     { id: 'chapter', items: [
       ...(editable ? [{ id: 'refine', label: text('直接修稿…', 'Revise directly…'), disabled: busy, onSelect: () => { setRefinePrompt(''); setAsk('refine') } }] : []),
-      ...(editable && stage !== 'revised' ? [{ id: 'finalize', label: text('定稿…', 'Finalize…'), disabled: !draft.canFinalize || olderDraft, onSelect: () => setAsk('finalize') }] : []),
+      ...(editable && stage !== 'revised' ? [{ id: 'finalize', label: text('定稿…', 'Finalize…'), disabled: !draft.canFinalize || olderDraft, onSelect: () => draft.requestFinalize(() => setAsk('finalize')) }] : []),
       ...(review && !sheetOpen && !focus ? [{ id: 'report', label: text('审稿报告', 'Review report'), onSelect: () => setSheet(true) }] : []),
       { id: 'history', label: text('版本历史', 'Version history'), onSelect: () => navigate({ kind: 'resource', page: 'history' }) },
       { id: 'copy', label: text('复制本章正文', 'Copy chapter text'), onSelect: copyBody },
@@ -344,7 +344,7 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
       case 'revised':
         return (
           <>
-            <Button variant="primary" disabled={!draft.canFinalize || olderDraft} onClick={() => setAsk('finalize')}>
+            <Button variant="primary" disabled={!draft.canFinalize || olderDraft} onClick={() => draft.requestFinalize(() => setAsk('finalize'))}>
               <BadgeCheck size={15} aria-hidden />{text('定稿', 'Finalize')}
             </Button>
             {reviewAgain}
