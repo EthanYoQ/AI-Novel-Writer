@@ -181,6 +181,23 @@ it('诊断日志写不进去时只记进会话错误，不打断后面的退出�
   assert.equal(fs.readFileSync(file, 'utf8'), 'a\nb\n')
 })
 
+it('诊断里带出密钥时写盘前就遮掉，诊断照样留下，会话判失败', () => {
+  const sessionErrors = []
+  const file = path.join(tempParent(), 'real.console.log')
+  writeConsoleLog(file, ['[main:stderr] 401 Authorization: Bearer sk-test-secret', '[renderer:log] {"apiKey":"sk-test-secret"}', 'other'],
+    sessionErrors, 'sk-test-secret')
+  const written = fs.readFileSync(file, 'utf8')
+  assert.equal(written.includes('sk-test-secret'), false, '写进产出目录的诊断不含密钥')
+  assert.match(written, /401 Authorization: Bearer \[已遮蔽\]/)
+  assert.match(written, /other/)
+  assert.equal(sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [] }), false, '诊断里出现过密钥，会话不算干净')
+
+  const cleanErrors = []
+  writeConsoleLog(file, ['no secret here'], cleanErrors, 'sk-test-secret')
+  assert.deepEqual(cleanErrors, [])
+  assert.equal(fs.readFileSync(file, 'utf8'), 'no secret here\n')
+})
+
 it('含密钥的文件有一个删不掉时记下路径与原因，其余照删，结果里不含密钥', () => {
   const out = tempParent()
   const outBefore = fileStamps(out)
