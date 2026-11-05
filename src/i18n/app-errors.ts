@@ -231,7 +231,7 @@ const ERROR_KEYS = {
   CHAPTER_DELETE_KNOWLEDGE_NOT_REMOVED: 'error.chapterDeleteKnowledgeNotRemoved',
   CHAPTER_DELETE_LEGACY_KNOWLEDGE_CHECK_REQUIRED: 'error.chapterDeleteLegacyKnowledgeCheckRequired',
   CHAPTER_DELETE_LEGACY_OPERATION_FROZEN: 'error.chapterDeleteLegacyOperationFrozen',
-  // 拼进「正文已删除，但派生投影仍待清理：……」与「重试清理失败」，所以文案不带句末标点；逐项原因在删除清理提示里。
+  // 拼进「这一章已移到回收站，但……还没清理完：……」与「重试清理失败」，所以文案不带句末标点；逐项原因在删除清理提示里。
   CHAPTER_DELETE_CLEANUP_INCOMPLETE: 'error.chapterDeleteCleanupIncomplete',
   // 回收站（#564）：恢复、彻底删除与列表的拒绝原因，经 chapter:trash-* 交给回收站对话框与蓝图缺口卡。
   CHAPTER_RESTORE_CLEANUP_INCOMPLETE: 'error.chapterRestoreCleanupIncomplete',
@@ -305,6 +305,7 @@ const ERROR_KEYS = {
   IMPORT_RUN_NOT_STARTABLE: 'error.importRunNotStartable',
   IMPORT_RUN_NOT_RESTARTABLE: 'error.importRunNotRestartable',
   IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN: 'error.importRunAuthorRestartForbidden',
+  IMPORT_RUN_CANCELLED: 'error.importRunCancelled',
   IMPORT_RUN_NOT_CANCELLABLE: 'error.importRunNotCancellable',
   IMPORT_RUN_PARSING_INCOMPLETE: 'error.importRunParsingIncomplete',
   IMPORT_RUN_REAUTHORIZE_UNAVAILABLE: 'error.importRunReauthorizeUnavailable',

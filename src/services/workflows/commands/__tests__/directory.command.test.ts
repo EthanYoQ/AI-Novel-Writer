@@ -2,10 +2,12 @@ import { WORKFLOW_GENERATION_BUDGETS } from '../base-command'
 import { TerminalProviderFailureError } from '../../../generation/generation-harness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
+import { useWorkflowStore, type StepCallbacks, type WorkflowContext } from '../../../../stores/workflow-store'
+import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import {
   GenerationAttemptError,
+  GenerationHarnessError,
   type GenerationAttemptReceipt,
   type GenerationSession,
   type GenerationTask,
@@ -1641,5 +1643,107 @@ describe('GenerateDirectoryCommand', () => {
     expect(failure).toBeInstanceOf(DirectoryPostCommitCancellationError)
     expect(failure).toMatchObject({ commitReceipt: { chapterNumbers: [1] } })
     expect((failure as Error).message).toContain('蓝图已提交')
+  })
+})
+
+// #587 第八轮：作者点了取消之后，蓝图批次以真实的存储或预算失败结束，运行要记失败并带原码；只有取消造成的中止才记已取消。
+describe('GenerateDirectoryCommand：作者点了取消，批次随后失败（真实 workflow-store）', () => {
+  const RUN_ID = 'directory-cancel-window-run'
+  const storageFailure = () => Object.assign(new Error('生成记录写入失败：磁盘空间不足'), { code: 'GENERATION_STORAGE_FAILED' })
+  const budgetFailure = () => new Error('ROOT_BUDGET_EXHAUSTED')
+
+  beforeEach(() => {
+    useWorkflowStore.setState({
+      activeRuns: [], history: [], globalLogs: [], waitingRuns: {},
+      currentRun: null, waitingForConfirm: false, waitingAfterStepIndex: -1,
+    })
+    useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
+  })
+
+  async function runDirectory(count: number, complete: (attempt: number, cancelRun: () => void) => ReturnType<GenerationSession['complete']>) {
+    const invoke = stubIpcInvoke(successfulCommitHandler({
+      other: channel => channel === 'skills:list-user' ? [] : channel === 'fs:check-exists' ? false : undefined,
+    }))
+    let attempt = 0
+    const cancelRun = () => useWorkflowStore.getState().cancelWorkflow(RUN_ID)
+    const session = generationSession(async () => complete(++attempt, cancelRun))
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: count } },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+    const context = workflowContext()
+    await useWorkflowStore.getState().startWorkflow({
+      runId: RUN_ID, type: 'directory', title: '生成章节蓝图', projectPath: context.projectPath, projectSession: context.projectSession,
+      steps: [{ name: '章节蓝图', description: '', executor: async (_step, runContext, callbacks) => {
+        runContext.data.architecture = context.data.architecture
+        await command.execute({ step: {}, context: runContext, callbacks })
+        return undefined
+      } }],
+    })
+    const commits = invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range')
+    return { finished: useWorkflowStore.getState().history[0], commits }
+  }
+
+  const firstBatch = (attempt: number) => ({
+    status: 'completed' as const, content: blueprintJson([1, 2, 3, 4, 5]), finishReason: 'stop' as const, receipt: generationReceipt(attempt, 'stop'),
+  })
+
+  it.each([
+    ['GENERATION_STORAGE_FAILED', storageFailure],
+    ['ROOT_BUDGET_EXHAUSTED', budgetFailure],
+  ] as const)('取消请求之后唯一一批以 %s 失败：运行和这一步都记失败，带原码', async (code, failure) => {
+    const { finished, commits } = await runDirectory(3, async (_attempt, cancelRun) => {
+      cancelRun()
+      throw failure()
+    })
+
+    expect(finished).toMatchObject({ status: 'failed', errorCode: code })
+    expect(finished.steps[0]).toMatchObject({ status: 'failed', errorCode: code })
+    expect(commits).toEqual([])
+  })
+
+  it.each([
+    ['GENERATION_STORAGE_FAILED', storageFailure],
+    ['ROOT_BUDGET_EXHAUSTED', budgetFailure],
+  ] as const)('首批已校验、取消请求之后第二批以 %s 失败：记失败带原码，已取消就不再写入前五章', async (code, failure) => {
+    const { finished, commits } = await runDirectory(7, async (attempt, cancelRun) => {
+      if (attempt === 1) return firstBatch(attempt)
+      cancelRun()
+      throw failure()
+    })
+
+    expect(finished).toMatchObject({ status: 'failed', errorCode: code })
+    expect(commits).toEqual([])
+  })
+
+  it('没有取消时唯一一批存储失败：运行同样记失败，带原码', async () => {
+    const { finished } = await runDirectory(3, async () => { throw storageFailure() })
+
+    expect(finished).toMatchObject({ status: 'failed', errorCode: 'GENERATION_STORAGE_FAILED' })
+  })
+
+  it('批次因取消中止：运行和这一步都记已取消，不写入', async () => {
+    const { finished, commits } = await runDirectory(7, async (attempt, cancelRun) => {
+      if (attempt === 1) return firstBatch(attempt)
+      cancelRun()
+      throw new GenerationHarnessError('CANCELLED', '生成请求已取消。')
+    })
+
+    expect(finished).toMatchObject({ status: 'cancelled' })
+    expect(finished.steps[0]).toMatchObject({ status: 'cancelled' })
+    expect(commits).toEqual([])
+  })
+
+  it('两批之间取消：运行记已取消，不写入，也不再发第二批', async () => {
+    const { finished, commits } = await runDirectory(7, async (attempt, cancelRun) => {
+      if (attempt > 1) throw new Error('取消之后不该再发请求')
+      cancelRun()
+      await new Promise(resolve => setTimeout(resolve, 60))
+      return firstBatch(attempt)
+    })
+
+    expect(finished).toMatchObject({ status: 'cancelled' })
+    expect(commits).toEqual([])
   })
 })

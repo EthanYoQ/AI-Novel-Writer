@@ -29,7 +29,8 @@ import type {
 } from '../../../electron/repositories/blueprint-repository'
 import { stripThinkingTags } from './workflow-utils'
 import { requireWorkflowProjectSession, workflowMainProcessError } from './workflow-project-session'
-import { displayedErrorMessage } from '../../i18n/app-errors'
+import { displayedErrorMessage, errorCodeOf } from '../../i18n/app-errors'
+import { isWorkflowCancellation, WorkflowCancelledError } from './workflow-cancellation'
 
 // ==========================================
 // 1. 结构与类型导出 (保留对外的向后兼容)
@@ -381,10 +382,10 @@ export function createDirectoryWorkflow(
               ))
             }
             if (error instanceof directoryCommand.DirectoryPostCommitCancellationError) {
-              throw new Error(text(
+              throw new WorkflowCancelledError(text(
                 '章节蓝图已保存，但任务取消后角色同步可能未完成。',
                 'Chapter blueprints were saved, but character synchronization may be incomplete because the workflow was cancelled.',
-              ))
+              ), true)
             }
             if (error instanceof directoryCommand.DirectoryCostLimitError) {
               throw new Error(text(
@@ -392,14 +393,16 @@ export function createDirectoryWorkflow(
                 'The requested chapter range is too large. Generate a smaller range.',
               ))
             }
-            if (context.cancelled) {
-              throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+            if (context.cancelled && isWorkflowCancellation(error)) {
+              throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
             }
             if (error instanceof TerminalProviderFailureError) throw error
-            throw new Error(text(
+            // 原文可能带主进程以外的内容，不转出；稳定错误码照常带上，运行记录才说得清是哪种失败。
+            const code = errorCodeOf(error)
+            throw Object.assign(new Error(text(
               '章节蓝图生成失败，请重试。',
               'Chapter-blueprint generation failed. Please try again.',
-            ))
+            )), code ? { code } : {})
           }
           // 返回可读摘要字符串（step.result 必须是 string，否则 AIOutputPanel 渲染会崩溃）
           return text(

@@ -3,6 +3,7 @@ import { appErrorMessage, displayedErrorMessage, englishWithReason } from '../..
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock, draftShortOutlineTask } from '../../../shared/draft-short-outline'
+import { isWorkflowCancellation, WorkflowCancelledError } from '../workflow-cancellation'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
@@ -11,6 +12,7 @@ import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
   injectWritingSkillIntoTask,
+  keepReceiptFailuresOnCancel,
   type CommandExecuteParams,
   type LLMCompletion,
 } from './base-command'
@@ -356,8 +358,8 @@ function workflowGenerationModelId(context: CommandExecuteParams['context']): st
   return context.generationModelId?.trim() || undefined
 }
 
-function recoveryFailureCode(error: unknown, cancelled: boolean): string {
-  if (cancelled) return 'CANCELLED'
+function recoveryFailureCode(error: unknown): string {
+  if (isWorkflowCancellation(error)) return 'CANCELLED'
   if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') {
     return error.code.slice(0, 160)
   }
@@ -968,7 +970,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             acknowledgedIds = [...receipt.artifactIds]
             acknowledgedPreview = receipt.text
           }
-          const draftingSession = injectWritingSkillIntoSession(session, context, 'drafting')
+          const draftingSession = injectWritingSkillIntoSession(keepReceiptFailuresOnCancel(session, context), context, 'drafting')
           if (context.writingSkills?.drafting) {
             callbacks.log(uiText(
               `本次 drafting 阶段使用已冻结写作 Skill：${context.writingSkills.drafting.name}`,
@@ -1009,6 +1011,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             }
           }
           if (outlined && (outlined.status !== 'completed' || outlined.finishReason !== 'stop' || !outlined.content.trim())) {
+            // 作者取消时请求会被截断着返回，主进程不把取消码交给渲染端；带失败码的是真实失败，照常报短细纲失败。
+            // 重试结果直接来自 IPC，不经过 keepReceiptFailuresOnCancel，所以这里自己分辨。
+            if (!outlined.receipt.failureCode) this.assertNotCancelled(context)
             const reason = outlined.finishReason === 'length'
               ? uiText('模型输出被截断', 'the model output was truncated')
               : !outlined.content.trim() ? uiText('模型未返回可见内容', 'the model returned no visible content')
@@ -1144,7 +1149,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         })
         }
       } catch (error) {
-        if (context.cancelled) throw new Error(uiText('工作流已取消', 'Workflow was cancelled.'))
+        if (context.cancelled && isWorkflowCancellation(error)) throw new WorkflowCancelledError(uiText('工作流已取消', 'Workflow was cancelled.'))
         throw error
       } finally {
         cancellation.dispose()
@@ -1245,7 +1250,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     } catch (error) {
       if (!mainOwned && !draftPersisted && recoverableDraftCandidate) {
         callbacks.replaceText?.(recoverableDraftCandidate)
-        const failureCode = recoveryFailureCode(error, context.cancelled)
+        const failureCode = recoveryFailureCode(error)
         const failureReason = error instanceof Error ? error.message : String(error)
         try {
           const result = await ipc.invokeWithProjectSession(

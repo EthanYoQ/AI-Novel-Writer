@@ -162,6 +162,7 @@ export const zhCN = {
   'error.importRunNotStartable': '这次导入已经结束，不能再继续。请重新选择文件开始导入。',
   'error.importRunNotRestartable': '这次导入现在不能重新开始，它可能还在运行或已经完成。请重新打开导入对话框查看。',
   'error.importRunAuthorRestartForbidden': '作者原稿导入不能重新开始。请继续原来的这次导入，完成发布和后处理。',
+  'error.importRunCancelled': '导入已取消。',
   'error.importRunNotCancellable': '这次导入已经结束，不需要再取消。',
   'error.importRunParsingIncomplete': '还有文件没有读完。请在导入对话框里重新选择尚未完成的文件。',
   'error.importRunReauthorizeUnavailable': '这次导入已经不能再补选未完成的文件。请重新选择全部文件开始导入。',

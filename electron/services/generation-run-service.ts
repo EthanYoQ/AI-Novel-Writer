@@ -133,7 +133,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision, request.reconciliationInjected);
             }
             catch (error) {
-                if (!/BUDGET|RESERVATION|EPOCH|DISPATCH|INVOCATION/.test(error instanceof Error ? error.message : '')) {
+                if (!/BUDGET|RESERVATION|EPOCH|DISPATCH|INVOCATION|CANCELLED/.test(error instanceof Error ? error.message : '')) {
                     failedRoots.add(run.rootActionId);
                     try {
                         deps.repository.block(run.rootActionId, 'GENERATION_STORAGE_FAILED');

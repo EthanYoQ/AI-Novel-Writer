@@ -148,15 +148,26 @@ describe('审稿候选的片段', () => {
     const [item] = review({}, output(REPORT)).artifacts
     expect(item.text).toBe(REPORT)
     expect(item.display).toContain('时间线需要核对。')
-    expect(item.display).toContain('3 条意见')
+    expect(item.display).toContain('（2 条意见，1 项通过）')
     expect(item.display.split('\n')[1]).toContain('钟声提前一刻与潮位表矛盾。')
     expect(item.display).toContain('第二段铺垫偏长。')
     expect(item.display).not.toContain('{')
   })
 
+  it.each([
+    ['zh-CN', '（0 条意见，4 项通过）', '4 条意见'],
+    ['en-US', '(0 notes, 4 passed)', '4 notes'],
+  ] as const)('%s 界面：审稿全部通过时，条数与单章视图一致写 0 条意见，不把通过项算成意见（本批真实模型实测缺陷 3）', (locale, count, wrong) => {
+    const allPass = JSON.stringify({ summary: '未发现客观问题。', items: ['措辞', '节奏', '人物', '连续性'].map(category => (
+      { category, severity: 'pass', description: '没有问题。' })), goalReviews: [] })
+    const [item] = review({}, { ...output(allPass), locale }).artifacts
+    expect(item.display.split('\n')[0]).toContain(count)
+    expect(item.display).not.toContain(wrong)
+  })
+
   it('英文界面用英文写条数与级别', () => {
     const [item] = review({}, { ...output(REPORT), locale: 'en-US' }).artifacts
-    expect(item.display).toContain('3 items')
+    expect(item.display).toContain('(2 notes, 1 passed)')
     expect(item.display).not.toMatch(/条意见|问题|建议/)
   })
 

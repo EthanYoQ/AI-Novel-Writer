@@ -30,6 +30,7 @@ import { displayedErrorMessage } from '../../../i18n/app-errors'
 import type { VisibleCompositionReceipt } from '../../../shared/generation-owner-contract'
 import { composeVisibleContinuation } from '../../../shared/visible-continuation'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationSelection, type WorkflowMainGenerationRequest, type WorkflowMainGenerationRuntime } from '../workflow-main-generation'
+import { isWorkflowCancellation, WorkflowCancelledError } from '../workflow-cancellation'
 export type { WorkflowMainGenerationSelection } from '../workflow-main-generation'
 
 export interface CommandExecuteParams {
@@ -85,6 +86,24 @@ export function injectWritingSkillIntoTask(
   return {
     task: { ...task, messages, promptBudget },
     skillName: skill.name,
+  }
+}
+
+/**
+ * 主进程把存储、预算这些失败写进收据后照常返回结果，取消截断的结果则不带失败码（取消码不交给渲染端）。
+ * 作者已取消时，带失败码的结果就地抛出带原码的失败，后面任何取消检查点都不会把它改记成取消；没取消时原样返回。
+ */
+export function keepReceiptFailuresOnCancel(session: GenerationSession, context: WorkflowContext): GenerationSession {
+  return {
+    budget: session.budget,
+    complete: async (task, options) => {
+      const outcome = await session.complete(task, options)
+      const failureCode = outcome.receipt.failureCode
+      if (failureCode && context.cancelled) {
+        throw Object.assign(createBoundedCompletionError(outcome.finishReason, context.uiLocale ?? 'zh-CN'), { code: failureCode })
+      }
+      return outcome
+    },
   }
 }
 
@@ -209,7 +228,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       return await runtime.execute(async ({ session }) => {
         this.activeGenerationExecution = {
           context: params.context,
-          session,
+          session: keepReceiptFailuresOnCancel(session, params.context),
           signal: cancellation.signal,
           loggedWritingSkillStages: new Set(),
           runtime,
@@ -494,14 +513,9 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       if (error instanceof GenerationAttemptError) {
         this.reportGenerationPromptBudget(callbacks, error.receipt)
       }
-      if (context?.cancelled || (
-        typeof error === 'object'
-        && error !== null
-        && 'code' in error
-        && error.code === 'CANCELLED'
-      )) {
+      if (isWorkflowCancellation(error)) {
         if (!context) throw new Error('GENERATION_WORKFLOW_CANCELLED')
-        throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+        throw new WorkflowCancelledError(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
       }
       throw error
     }
@@ -546,7 +560,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   /** 在所有异步边界与落盘前复查取消，避免已取消请求继续污染项目。 */
   protected assertNotCancelled(context?: WorkflowContext): void {
     if (context?.cancelled) {
-      throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
+      throw new WorkflowCancelledError(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
     }
   }
 

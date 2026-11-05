@@ -28,6 +28,7 @@ import {
 } from '../../../shared/import-run'
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import { useProjectStore } from '../../../stores/project-store'
+import { useWorkflowStore } from '../../../stores/workflow-store'
 
 const session = { projectId: 'test-project', leaseId: 'lease-test-project', projectPath: 'C:\\test-project' }
 const executionOwner = 'test-import-executor'
@@ -587,5 +588,61 @@ describe('import workflow failure copy follows the import run locale (#484)', ()
     })
 
     expect(failure.message).toMatch(expected)
+  })
+})
+
+describe('作者在一批参照章节导入途中取消（#587）', () => {
+  // 主进程收到取消请求后，这一批剩下的章节都被拒绝；reply 是这时 kb:import-reference-text 给的回答。
+  async function cancelDuringFirstChapter(reply: { success: false; error: string; errorCode: string }) {
+    const snapshot = run({ totalChapters: 3, manifestChapterCount: 3 })
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      switch (channel) {
+        case 'db:import-run-get': return snapshot
+        case 'db:import-run-start-resume': return { success: true, start: { run: snapshot, execution } }
+        case 'db:import-run-renew-execution': return { success: true, execution }
+        case 'db:import-run-list-chapters': return args[1] === 0 ? [1, 2, 3].map(number => ({
+          number, title: `第${number}章`, content: '参照正文', contentFingerprint: 'c'.repeat(64), contentSize: 12,
+        })) : []
+        case 'kb:import-reference-text':
+          if (args[0] === 1) {
+            useWorkflowStore.getState().cancelWorkflow(snapshot.id)
+            return { success: true, docId: 'stable-1', idempotent: false }
+          }
+          return reply
+        case 'db:import-run-request-cancel': return { success: true, run: { ...snapshot, cancelRequested: true } }
+        case 'db:import-run-cancel-at-boundary': return { success: true, run: { ...snapshot, status: 'cancelled' } }
+        case 'db:import-run-fail': return { success: true, run: { ...snapshot, status: 'failed' } }
+        case 'fs:check-exists': return false
+        default: throw new Error(`测试未配置桌面调用：${channel}`)
+      }
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string) => channel === 'skills:list-user' ? [] : false), on: vi.fn(() => () => {}), once: vi.fn() } })
+    useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [], waitingRuns: {} })
+    try {
+      await useWorkflowStore.getState().startWorkflow(createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }))
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    const channels = ipcMocks.invoke.mock.calls.map(call => call[1])
+    return { ended: useWorkflowStore.getState().history[0]!, channels }
+  }
+
+  it('主进程以取消码拒绝剩下的章节：运行记已取消，已取消的步骤写明停在了已保存的进度处', async () => {
+    const { ended, channels } = await cancelDuringFirstChapter({ success: false, error: '导入已取消。', errorCode: 'IMPORT_RUN_CANCELLED' })
+
+    expect(ended).toMatchObject({ status: 'cancelled' })
+    expect(ended.steps[0]).toMatchObject({ status: 'cancelled', error: '导入已取消，停在了已保存的进度处。' })
+    expect(channels).toContain('db:import-run-cancel-at-boundary')
+    expect(channels).not.toContain('db:import-run-fail')
+  })
+
+  it('取消请求之后剩下的章节因真实错误失败：运行记失败，带原错误码，导入运行记失败而不是已取消', async () => {
+    const { ended, channels } = await cancelDuringFirstChapter({ success: false, error: '检索索引正在建立，请稍后再试。', errorCode: 'EMBEDDING_SPACE_BUSY' })
+
+    expect(ended).toMatchObject({ status: 'failed', errorCode: 'EMBEDDING_SPACE_BUSY' })
+    expect(ended.steps[0]).toMatchObject({ status: 'failed', errorCode: 'EMBEDDING_SPACE_BUSY' })
+    expect(channels).toContain('db:import-run-fail')
+    expect(channels).not.toContain('db:import-run-cancel-at-boundary')
   })
 })

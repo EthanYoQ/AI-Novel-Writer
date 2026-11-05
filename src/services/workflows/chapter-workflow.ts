@@ -7,7 +7,7 @@ import { ipc } from '../ipc-client'
 import type { DraftStatus } from '../../shared/draft-status'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
-import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
+import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS, type WorkflowResourceClaims } from '../../shared/workflow-resource-claims'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 import { localize } from '../../i18n/core'
 import type { Locale } from '../../i18n/types'
@@ -123,11 +123,20 @@ const FINALIZE_SHARED_WRITE_RESOURCE_KEYS = Object.freeze([
   ...FINALIZATION_SHARED_WRITE_RESOURCE_KINDS.map(kind => workflowResourceKey(kind)),
 ])
 
-function finalizeWriteResourceKeys(chapterNumber: number): readonly string[] {
-  return Object.freeze([
-    workflowResourceKey('chapter', chapterNumber),
-    ...FINALIZE_SHARED_WRITE_RESOURCE_KEYS,
-  ])
+/** 定稿与修复后处理声明的资源：本章，加上定稿要更新的全书共用资料。定稿入口先按它查占用。 */
+export function finalizeResourceClaims(chapterNumber: number): WorkflowResourceClaims {
+  return {
+    resourceKeys: Object.freeze([workflowResourceKey('chapter', chapterNumber), ...FINALIZE_SHARED_WRITE_RESOURCE_KEYS]),
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+  }
+}
+
+/** 审稿与修稿声明的资源：只写本章，读全书设定。审稿、修稿入口保存修改之前先按它查占用。 */
+export function draftAIResourceClaims(chapterNumber: number): WorkflowResourceClaims {
+  return {
+    resourceKeys: Object.freeze([workflowResourceKey('chapter', chapterNumber)]),
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+  }
 }
 
 function workflowProjectSession(
@@ -272,8 +281,7 @@ export function createRefineOnlyWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     uiLocale,
-    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...draftAIResourceClaims(params.chapterNumber),
     title: localize(uiLocale,
       `第 ${params.chapterNumber} 章 · 修稿`,
       `Chapter ${params.chapterNumber} · Revise`,
@@ -316,8 +324,7 @@ export function createRefineFromReviewWorkflow(
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     uiLocale,
     ...(generationModelId ? { generationModelId } : {}),
-    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...draftAIResourceClaims(params.chapterNumber),
     title: localize(uiLocale,
       `第 ${params.chapterNumber} 章 · 审稿修复`,
       `Chapter ${params.chapterNumber} · Apply review`,
@@ -361,8 +368,7 @@ export function createReviewOnlyWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     uiLocale,
-    resourceKeys: [workflowResourceKey('chapter', params.chapterNumber)],
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...draftAIResourceClaims(params.chapterNumber),
     title: localize(uiLocale,
       `第 ${params.chapterNumber} 章 · 审稿`,
       `Chapter ${params.chapterNumber} · Review`,
@@ -412,8 +418,7 @@ export function createFinalizeWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     uiLocale,
-    resourceKeys: finalizeWriteResourceKeys(params.chapterNumber),
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...finalizeResourceClaims(params.chapterNumber),
     title: localize(uiLocale,
       `第 ${params.chapterNumber} 章 · 定稿`,
       `Chapter ${params.chapterNumber} · Finalize`,
@@ -469,8 +474,7 @@ export function createRepairFinalizeWorkflow(
     projectPath,
     projectSession: workflowProjectSession(projectPath, sourceProjectSession, uiLocale),
     uiLocale,
-    resourceKeys: finalizeWriteResourceKeys(chapterNumber),
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...finalizeResourceClaims(chapterNumber),
     title: text(
       `第 ${chapterNumber} 章 · 修复后处理`,
       `Chapter ${chapterNumber} · Repair post-processing`,

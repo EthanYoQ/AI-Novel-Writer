@@ -83,6 +83,8 @@ export interface ReviewEntry extends Usage {
   tails: ReviewText[]
   actionLabel: string
   canAct: boolean
+  /** 结果已经保存：卡片只留给作者打开或复制，不再算可恢复。 */
+  saved: boolean
   labels: { copy: string; copyTail: string }
   view: MainGenerationRunView
 }
@@ -267,11 +269,17 @@ function reviewDigest(text: string, locale: Locale): string {
   } catch {
     return t('这是审稿的结构化结果，未能整理成摘要；复制可得到原文。', 'This is a structured review result that could not be summarized. Copy it to get the original text.')
   }
-  const count = report.items.length
+  // 通过项不算意见，条数和单章视图「按 N 项意见修稿」同一口径。
+  const passed = report.items.filter(item => item.severity === 'pass').length
+  const notes = report.items.length - passed
+  const counted = t(`${notes} 条意见`, `${notes} ${pluralEn(notes, 'note')}`)
+  const countLabel = passed === 0
+    ? t(`（${counted}）`, ` (${counted})`)
+    : t(`（${counted}，${passed} 项通过）`, ` (${counted}, ${passed} passed)`)
   const label = { error: t('问题', 'Issue'), warning: t('建议', 'Suggestion'), pass: t('通过', 'Pass') }
   const points = [...report.items].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]).slice(0, 2)
     .map(item => t(`${label[item.severity]} · ${item.category}：${item.description}`, `${label[item.severity]} · ${item.category}: ${item.description}`))
-  return [t(`${report.summary}（${count} 条意见）`, `${report.summary} (${count} ${pluralEn(count, 'item')})`), ...points].join('\n')
+  return [`${report.summary}${countLabel}`, ...points].join('\n')
 }
 
 type RecheckItems = readonly Record<string, unknown>[]
@@ -338,6 +346,7 @@ function reviewEntry({ view, recovery }: RecoverySources['reviews'][number], loc
     actionLabel: recovery.saved ? t('打开已保存结果', 'Open saved result')
       : requestsReview ? t('重新审稿', 'Review again') : t('恢复此审修任务', 'Recover this review or revision'),
     canAct: Boolean(recovery.saved) || (recovery.canResume && current && live),
+    saved: Boolean(recovery.saved),
     labels: { copy: t('复制', 'Copy'), copyTail: t('复制未保存文字', 'Copy unsaved text') },
     view,
   }

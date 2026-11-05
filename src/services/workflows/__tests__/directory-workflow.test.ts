@@ -20,6 +20,7 @@ import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-st
 import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
 import { globalEventBus } from '../../../shared/event-bus'
 import { TerminalProviderFailureError } from '../../generation/generation-harness'
+import { isWorkflowCancellation } from '../workflow-cancellation'
 
 const blueprint: ChapterBlueprint = {
   chapterNumber: 1,
@@ -531,6 +532,62 @@ describe('directory workflow project context', () => {
     await expect(workflow.steps[1].executor(workflowStep('Generate blueprints'), { runId: 'context-length-run', projectPath: projectA.path, projectSession,
       writingLanguage: 'zh-CN', uiLocale: 'en-US', data: {}, cancelled: false }, { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }))
       .rejects.toThrow(/^GENERATION_CONTEXT_LENGTH_EXCEEDED$/u)
+  })
+
+  it('取消请求之后蓝图生成真的失败了：照常报生成失败，不改写成取消', async () => {
+    const projectA = project('C:\\novels\\cancel-window-failure')
+    const projectSession = { projectId: projectA.id, leaseId: projectA.sessionLease!, projectPath: projectA.path }
+    useProjectStore.setState({ currentProject: projectA })
+    const context: WorkflowContext = { runId: 'cancel-window-failure-run', projectPath: projectA.path, projectSession,
+      writingLanguage: 'zh-CN', uiLocale: 'zh-CN', data: {}, cancelled: false }
+    const directoryCommand = await import('../commands/directory.command')
+    vi.spyOn(directoryCommand.GenerateDirectoryCommand.prototype, 'execute').mockImplementation(async () => {
+      context.cancelled = true
+      throw Object.assign(new Error('蓝图提交失败'), { code: 'GENERATION_STORAGE_FAILED' })
+    })
+    const workflow = createDirectoryWorkflow({ mode: 'full' }, projectA.path, projectSession, 'zh-CN')
+    const failure = await workflow.steps[1].executor(workflowStep('生成蓝图'), context, { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() })
+      .then(() => new Error('generation did not fail'), (error: unknown) => error)
+    expect(isWorkflowCancellation(failure)).toBe(false)
+    expect((failure as Error).message).toBe('章节蓝图生成失败，请重试。')
+  })
+
+  it.each(['GENERATION_STORAGE_FAILED', 'ROOT_BUDGET_EXHAUSTED'])('取消请求之后蓝图批次以 %s 失败：运行和这一步都记失败并带原码，说明不转出原文', async code => {
+    const projectA = project('C:\\novels\\cancel-window-coded-failure')
+    const projectSession = { projectId: projectA.id, leaseId: projectA.sessionLease!, projectPath: projectA.path }
+    useProjectStore.setState({ currentProject: projectA })
+    stubIpcInvoke([]).mockImplementation(async (channel: string) => channel === 'fs:check-exists' ? false : [])
+    const directoryCommand = await import('../commands/directory.command')
+    vi.spyOn(directoryCommand.GenerateDirectoryCommand.prototype, 'execute').mockImplementation(async () => {
+      useWorkflowStore.getState().cancelWorkflow('cancel-window-coded-failure-run')
+      throw Object.assign(new Error('provider-secret-blueprint-failure'), { code })
+    })
+    const workflow = createDirectoryWorkflow({ mode: 'full' }, projectA.path, projectSession, 'zh-CN')
+    await useWorkflowStore.getState().startWorkflow({ ...workflow, runId: 'cancel-window-coded-failure-run', steps: [workflow.steps[1]] })
+
+    const finished = useWorkflowStore.getState().history[0]
+    expect(finished).toMatchObject({ status: 'failed', errorCode: code, error: '章节蓝图生成失败，请重试。' })
+    expect(finished.steps[0]).toMatchObject({ status: 'failed', errorCode: code })
+  })
+
+  it('蓝图已提交后作者取消：运行记已取消，已取消的那一步写明蓝图已保存、角色同步可能未完成', async () => {
+    const projectA = project('C:\\novels\\post-commit-cancel')
+    const projectSession = { projectId: projectA.id, leaseId: projectA.sessionLease!, projectPath: projectA.path }
+    useProjectStore.setState({ currentProject: projectA })
+    stubIpcInvoke([]).mockImplementation(async (channel: string) => channel === 'fs:check-exists' ? false : [])
+    const directoryCommand = await import('../commands/directory.command')
+    vi.spyOn(directoryCommand.GenerateDirectoryCommand.prototype, 'execute').mockImplementation(async () => {
+      useWorkflowStore.getState().cancelWorkflow('post-commit-cancel-run')
+      throw new directoryCommand.DirectoryPostCommitCancellationError({
+        startChapter: 1, endChapter: 3, characterSyncOperation: { operationId: 'sync-1' },
+      } as never)
+    })
+    const workflow = createDirectoryWorkflow({ mode: 'full' }, projectA.path, projectSession, 'zh-CN')
+    await useWorkflowStore.getState().startWorkflow({ ...workflow, runId: 'post-commit-cancel-run', steps: [workflow.steps[1]] })
+
+    const finished = useWorkflowStore.getState().history[0]
+    expect(finished).toMatchObject({ id: 'post-commit-cancel-run', status: 'cancelled' })
+    expect(finished.steps[0]).toMatchObject({ status: 'cancelled', error: '章节蓝图已保存，但任务取消后角色同步可能未完成。' })
   })
 
   it('freezes English workflow labels and user-visible logs at launch', async () => {

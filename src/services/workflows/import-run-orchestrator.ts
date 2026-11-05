@@ -22,6 +22,7 @@ import type { StepCallbacks } from '../../stores/workflow-store'
 import type { FinalizedDraftImportDraftReceipt, FinalizedDraftImportReceipt } from '../../shared/finalized-draft-import'
 import { appErrorMessage, errorCodeOf, importGenerationStopMessage } from '../../i18n/app-errors'
 import { localize } from '../../i18n/core'
+import { isWorkflowCancellation, WorkflowCancelledError } from './workflow-cancellation'
 
 export const IMPORT_CHAPTER_PAGE_SIZE = 100
 export const IMPORT_KNOWLEDGE_BATCH_SIZE = IMPORT_RUN_KNOWLEDGE_BATCH_SIZE
@@ -155,7 +156,7 @@ function cancellationRequested(context: ImportRunExecutionContext): boolean {
 /** 取消在安全边界生效：这句进运行卡片的步骤详情与日志，按导入运行的语言写。 */
 function stopIfCancelled(context: ImportRunExecutionContext, locale: ImportRunLocale): void {
   if (cancellationRequested(context)) {
-    throw new Error(localize(locale, '导入已取消，停在了已保存的进度处。', 'Import cancelled at a safe boundary.'))
+    throw new WorkflowCancelledError(localize(locale, '导入已取消，停在了已保存的进度处。', 'Import cancelled at a safe boundary.'), true)
   }
 }
 
@@ -316,7 +317,8 @@ export class ImportRunOrchestrator {
       }
     } catch (error) {
       if (execution.lost) throw error
-      if (cancellationRequested(context)) {
+      // 只有取消本身造成的中止才在边界记为取消；取消请求之后的真实错误照常记失败。
+      if (cancellationRequested(context) && isWorkflowCancellation(error)) {
         await context.cancellationRequest?.catch(() => undefined)
         try {
           const durableRun = await this.dependencies.getRun(runId)
@@ -328,6 +330,7 @@ export class ImportRunOrchestrator {
           execution.lost = leaseError
           throw error
         }
+        stopIfCancelled(context, run.locale)
       } else {
         // 生成开始或发送前就被预算、阻断拒绝时报错只有裸码，在这里换成导入的说明，存进运行并抛出同一句；码只进诊断日志。
         // 只改写生成阶段（global、style、blueprints）：非生成阶段抛出的码保留原报错。

@@ -14,6 +14,7 @@ import { ipc } from '../ipc-client'
 import { localize } from '../../i18n/core'
 import { displayedErrorMessage } from '../../i18n/app-errors'
 import type { Locale } from '../../i18n/types'
+import { isWorkflowCancellation, WorkflowCancelledError } from './workflow-cancellation'
 
 /**
  * Project-level post-processing is fail-closed: never borrow the active lease.
@@ -58,16 +59,17 @@ export async function withRetry(
 ): Promise<{ ok: boolean; error?: string; attempts: number }> {
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+    if (isCancelled?.()) throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
     try {
       await fn()
-      if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+      if (isCancelled?.()) throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
       return { ok: true, attempts: attempt + 1 }
     } catch (err) {
-      if (isCancelled?.()) throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
-      // 原始原因随步骤失败记录保存；日志按冻结的界面语言说明。
+      const cancelled = isCancelled?.() === true
+      if (cancelled && isWorkflowCancellation(err)) throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
+      // 原始原因随步骤失败记录保存；日志按冻结的界面语言说明。作者已取消时不再重试，真实失败照常交回。
       const errMsg = err instanceof Error ? err.message : String(err)
-      if (attempt < maxRetries) {
+      if (attempt < maxRetries && !cancelled) {
         const reason = displayedErrorMessage(uiLocale, err)
         callbacks.log(text(
           `  ${label} 第${attempt + 1}次失败，正在重试...（${reason}）`,
@@ -239,7 +241,7 @@ export async function runPostProcessPipeline(
   const projectSession = options?.projectSession ?? cancellation?.projectSession ?? undefined
   const assertNotCancelled = () => {
     if (cancellation?.cancelled) {
-      throw new Error(text('工作流已取消', 'Workflow was cancelled.'))
+      throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
     }
   }
 
@@ -328,7 +330,7 @@ export async function runPostProcessPipeline(
         ))
       }
     } else {
-      assertNotCancelled()
+      // 真实失败先记进后处理状态，再看取消：取消只决定后面不再跑，不能盖掉已经发生的失败。
       const stepError = result.error || text('未知错误', 'Unknown error')
       const markResult = await invokeForProjectSession(
         projectSession,

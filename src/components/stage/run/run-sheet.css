@@ -172,7 +172,8 @@ button.run-step-row:hover {
 }
 
 .run-step[data-status='pending'] .run-step-row,
-.run-step[data-status='skipped'] .run-step-row {
+.run-step[data-status='skipped'] .run-step-row,
+.run-step[data-status='cancelled'] .run-step-row {
   color: var(--ink-3);
 }
 
@@ -236,6 +237,11 @@ button.run-step-row:hover {
   line-height: 1.6;
   color: var(--danger);
   overflow-wrap: anywhere;
+}
+
+/* 已取消的那一步只交代停在哪里、保住了什么，不是错误。 */
+.run-step[data-status='cancelled'] .run-step-error {
+  color: var(--ink-2);
 }
 
 /* ================= 实时输出 ================= */

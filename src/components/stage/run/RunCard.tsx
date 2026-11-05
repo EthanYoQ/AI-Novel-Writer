@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { ChevronRight, CircleCheck, CircleDashed, CircleX, Pause, Play } from 'lucide-react'
+import { ChevronRight, CircleCheck, CircleDashed, CircleMinus, CircleX, Pause, Play } from 'lucide-react'
 import { pluralEn } from '../../../shared/plural-en'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -29,6 +29,7 @@ const STATUS_TEXT: Record<WorkflowRun['status'], [string, string]> = {
   cancelling: ['正在取消，等当前操作退出', 'Cancelling; waiting for the current operation'],
   completed: ['已完成', 'Complete'],
   failed: ['失败', 'Failed'],
+  cancelled: ['已取消', 'Cancelled'],
 }
 
 function runMeta(run: WorkflowRun, model: string | undefined, text: Text, locale: Parameters<typeof clockTime>[1]): string {
@@ -160,6 +161,7 @@ function StepIcon({ step }: { step: WorkflowStep }) {
   switch (step.status) {
     case 'completed': return <CircleCheck className="run-step-icon" data-tone="ok" size={16} aria-hidden />
     case 'failed': return <CircleX className="run-step-icon" data-tone="danger" size={16} aria-hidden />
+    case 'cancelled': return <CircleMinus className="run-step-icon" data-tone="todo" size={16} aria-hidden />
     case 'running': return <ProgressRing className="run-step-icon" size={16} stroke={2} ratio={Math.max(0.08, (step.progress ?? 0) / 100)} />
     default: return <CircleDashed className="run-step-icon" data-tone="todo" size={16} aria-hidden />
   }
@@ -169,6 +171,7 @@ function stepMeta(step: WorkflowStep, text: Text): string {
   if (step.status === 'completed') return stepDuration(step.startedAt, step.completedAt, text)
   if (step.status === 'skipped') return text('已跳过', 'Skipped')
   if (step.status === 'failed') return text('失败', 'Failed')
+  if (step.status === 'cancelled') return text('已取消', 'Cancelled')
   if (step.status === 'running' && step.progress !== undefined && step.generationActivity?.operation !== 'review-chapter') return `${step.progress}%`
   return ''
 }

@@ -95,7 +95,7 @@ function extractJSON(text: string): string | null {
 }
 
 /** 解析审稿报告（优先 JSON，回退到旧版文本解析） */
-function parseReport(text: string, fallbackCategory: string): { issues: ReviewIssue[]; summary: string; goalReview?: ChapterGoalReview } {
+function parseReport(text: string, fallbackCategory: string): { issues: ReviewIssue[]; summary: string; goalReview?: ChapterGoalReview; structured: boolean } {
   const jsonStr = extractJSON(text)
   if (jsonStr) {
     try {
@@ -113,7 +113,7 @@ function parseReport(text: string, fallbackCategory: string): { issues: ReviewIs
             : undefined,
           findingId: typeof item.findingId === 'string' ? item.findingId : undefined,
         }))
-        return { issues, summary: data.summary || '', goalReview: parseChapterGoalReview(data.goalReview) ?? undefined }
+        return { issues, summary: data.summary || '', goalReview: parseChapterGoalReview(data.goalReview) ?? undefined, structured: true }
       }
     } catch {
       // JSON 解析失败，回退到文本解析
@@ -121,7 +121,7 @@ function parseReport(text: string, fallbackCategory: string): { issues: ReviewIs
   }
 
   // 回退：旧版 markdown 文本解析（兼容历史数据）
-  return parseLegacyReport(text, fallbackCategory)
+  return { ...parseLegacyReport(text, fallbackCategory), structured: false }
 }
 
 /** 旧版文本解析器（兼容历史审稿报告） */
@@ -333,6 +333,8 @@ export function useReviewChecklist({
   const sourceReviewId = confirmationSourceReviewId(initialSnapshot, reviewId)
   const summary = initialSnapshot?.summary ?? parsedReport.summary
   const goalReview = confirmed?.snapshot.goalReview ?? initialSnapshot?.goalReview ?? parsedReport.goalReview
+  // 读出了审稿结论：结构化报告（哪怕一条意见都没有），或清单里已有条目。散文写的旧报告一条也读不出，不能当作没有要改的。
+  const reportRead = parsedReport.structured || items.length > 0
   const canManageChecklist = Boolean(draftPath && chapterDir)
 
   useEffect(() => {
@@ -768,7 +770,7 @@ export function useReviewChecklist({
   return {
     items, authorGuidance, setAuthorGuidance, confirmed, editingChecklist, setEditingChecklist,
     checklistError, setChecklistError, confirming, processing, rechecking, recheckMessage,
-    summary, goalReview, canManageChecklist, cycle,
+    summary, goalReview, reportRead, canManageChecklist, cycle,
     updateItem, removeItem, addAuthorItem, confirmChecklist, startConfirmedRevision, retryRequiredRecheck,
   }
 }

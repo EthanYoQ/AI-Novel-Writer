@@ -158,6 +158,62 @@ describe('运行侧页', () => {
     expect(host!.textContent).toContain('正在取消，等当前操作退出')
   })
 
+  it.each([
+    ['zh-CN', '已取消', /失败|未完成/],
+    ['en-US', 'Cancelled', /Failed|did not finish|not complete/i],
+  ] as const)('作者取消的运行标为已取消，不显示成失败（%s）', async (locale, label, failure) => {
+    useLocaleStore.setState({ locale })
+    const cancelled = run('4', 'cancelled', {
+      type: 'batch_generate', title: '批量草稿待审 · 第 3 至 4 章', uiLocale: locale, error: locale === 'en-US' ? 'Workflow was cancelled.' : '工作流已取消',
+      completedAt: '2026-10-12T08:20:00.000Z',
+      steps: [
+        { id: 'c3', name: '第 3 章 · 生成草稿待审', description: '', status: 'completed', logs: [], startedAt: '2026-10-12T08:10:00.000Z', completedAt: '2026-10-12T08:15:00.000Z' },
+        { id: 'c4', name: '第 4 章 · 生成草稿待审', description: '', status: 'pending', logs: [] },
+      ],
+    })
+    useWorkflowStore.setState({ history: [cancelled] })
+    await render()
+    const card = host!.querySelector('article')!
+    expect(card.querySelector('.run-card-meta')?.textContent).toContain(label)
+    expect(card.textContent).not.toMatch(failure)
+
+    await click(locale === 'en-US' ? 'History' : '历史')
+    const row = button(/批量草稿待审/)!
+    expect(row.textContent).toContain(label)
+    expect(row.textContent).not.toMatch(failure)
+    expect(row.querySelector('[data-tone="danger"]')).toBeNull()
+  })
+
+  it.each([
+    ['zh-CN', '历史', '已取消', /失败|未完成/],
+    ['en-US', 'History', 'Cancelled', /Failed|did not finish|not complete/i],
+  ] as const)('取消时正在写的那一章：步骤行标已取消，展开历史也不出现红叉和失败（%s）', async (locale, historyTab, label, failure) => {
+    useLocaleStore.setState({ locale })
+    const cancelled = run('4', 'cancelled', {
+      type: 'batch_generate', title: '批量草稿待审 · 第 3 至 4 章', uiLocale: locale, currentStepIndex: 1,
+      error: locale === 'en-US' ? 'Workflow was cancelled.' : '工作流已取消', completedAt: '2026-10-12T08:20:00.000Z',
+      steps: [
+        { id: 'c3', name: '第 3 章 · 生成草稿待审', description: '', status: 'completed', logs: [], startedAt: '2026-10-12T08:10:00.000Z', completedAt: '2026-10-12T08:15:00.000Z' },
+        { id: 'c4', name: '第 4 章 · 生成草稿待审', description: '', status: 'cancelled', logs: [], startedAt: '2026-10-12T08:15:00.000Z',
+          completedAt: '2026-10-12T08:20:00.000Z', result: '林岚沿着旧港的石阶往下走。' },
+      ],
+    })
+    const chapter4Row = () => [...host!.querySelectorAll('li.run-step')].find(step => step.textContent?.includes('第 4 章'))!
+    const expectCancelledRow = () => {
+      expect(chapter4Row().textContent).toContain(label)
+      expect(chapter4Row().textContent).not.toMatch(failure)
+      expect(chapter4Row().querySelector('[data-tone="danger"]')).toBeNull()
+    }
+    useWorkflowStore.setState({ history: [cancelled] })
+    await render()
+    expectCancelledRow()
+
+    await click(historyTab)
+    await click(/批量草稿待审/)
+    expectCancelledRow()
+    expect(host!.textContent).not.toMatch(failure)
+  })
+
   it('批量创作：运行中可暂停，请求暂停后说明本章写完后暂停，暂停后可继续', async () => {
     const pauseWorkflow = vi.fn()
     const resumeWorkflow = vi.fn()
@@ -339,6 +395,9 @@ describe('运行侧页', () => {
     expect(card.textContent).toContain('时间线需要核对。')
     expect(card.textContent).toContain('核对钟声提前一刻与潮位的关系。')
     expect(card.textContent).not.toContain('"summary"')
+    // 已经保存的审稿不再标「可恢复」（本批真实模型实测缺陷 4：合并并定稿后仍列为可恢复）。
+    expect(card.textContent).toMatch(/^已保存第3章审稿候选/)
+    expect(card.textContent).not.toContain('可恢复')
 
     await click('复制')
     expect(writeText).toHaveBeenCalledWith(report)

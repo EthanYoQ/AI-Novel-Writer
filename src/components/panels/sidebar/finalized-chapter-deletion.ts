@@ -63,6 +63,10 @@ function deletionSurfaceConfig(
     `已把「${displayName}」移到回收站，可以随时恢复。`,
     `Moved “${displayName}” to the trash. You can restore it any time.`,
   )
+  const partialFailure = (error: string) => text(
+    `这一章已移到回收站，但项目文件夹里的正文文件或知识库里的这一章还没清理完：${error}。请${retryWhere}点「重试清理」。`,
+    `The chapter moved to the trash, but its manuscript file in the project folder or its knowledge base entry is not fully cleaned up: ${error}. Choose “Retry cleanup” ${retryWhereEn}.`,
+  )
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
       confirmation: text(
@@ -71,10 +75,7 @@ function deletionSurfaceConfig(
       ),
       confirmationTitle: text('删除这一稿', 'Delete draft'),
       success: movedToTrash,
-      partialFailure: error => text(
-        `正文已删除，但派生投影仍待清理：${error}。请${retryWhere}使用“重试清理”。`,
-        `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup” ${retryWhereEn}.`,
-      ),
+      partialFailure,
       refreshDrafts: (projectPath, chapterNumber, projectSession) => (
         useDraftStore.getState().loadChapterDrafts(chapterNumber, projectPath, projectSession)
       ),
@@ -86,10 +87,7 @@ function deletionSurfaceConfig(
       ),
       confirmationTitle: text('删除正文', 'Delete manuscript'),
       success: movedToTrash,
-      partialFailure: error => text(
-        `正文已删除，但派生投影仍待清理：${error}。请${retryWhere}使用“重试清理”。`,
-        `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup” ${retryWhereEn}.`,
-      ),
+      partialFailure,
       refreshDrafts: (projectPath, _chapterNumber, projectSession) => (
         useDraftStore.getState().loadAllDrafts(projectPath, projectSession)
       ),
@@ -147,10 +145,10 @@ async function confirmLegacyKnowledgeAbsent(
   text: Localize,
 ): Promise<ChapterDeletionResult | null> {
   const confirmed = await confirm(text(
-    '此旧定稿没有可验证的知识文档 ID。只有在我已人工核对/清理，并确认该定稿没有需要应用自动删除的知识投影时，才能继续；应用不会删除来源不明的 reference 文档。',
-    'This legacy finalization has no verifiable knowledge document ID. Continue only if I have manually checked or cleaned the knowledge base and confirm there is no knowledge projection for the app to remove; the app will not delete reference documents of unknown provenance.',
+    '这是旧版本定稿。书童认不出的知识库资料不会自动删除，请先到知识库手动清理，再点「我已人工核对/清理，继续删除」。',
+    'This chapter was finalized by an older version. Knowledge base entries Pagekin can’t trace to it won’t be removed. Clean them up in the knowledge base first, then choose “I have checked; continue deletion”.',
   ), {
-    title: text('确认旧定稿知识投影状态', 'Confirm legacy knowledge projection'),
+    title: text('先检查知识库', 'Check the knowledge base first'),
     confirmText: text('我已人工核对/清理，继续删除', 'I have checked; continue deletion'),
     danger: true,
   })
