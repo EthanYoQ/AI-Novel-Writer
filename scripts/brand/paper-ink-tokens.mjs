@@ -90,7 +90,7 @@ function block(table) {
 
 export function brokenLinks(doc) {
   const docDir = path.dirname(path.join(root, DOC_FILE))
-  const targets = [...doc.matchAll(/\]\(([^)\s]+)\)|\ssrc="([^"]+)"/g)].map(match => match[1] ?? match[2])
+  const targets = [...doc.matchAll(/\]\(<?([^\s)>]+)|\ssrc="([^"]+)"/g)].map(match => match[1] ?? match[2])
   return targets
     .filter(target => !/^(https?:|mailto:|#)/.test(target))
     .filter(target => !fs.existsSync(path.resolve(docDir, target.split('#')[0])))
