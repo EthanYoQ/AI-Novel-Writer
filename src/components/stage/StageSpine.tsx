@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
-import { Check, CircleDashed, GitBranch, History, Library, Settings, type LucideIcon } from 'lucide-react'
+import { Check, CircleDashed, GitBranch, History, Library, Settings, Trash2, type LucideIcon } from 'lucide-react'
 import { useLocaleStore } from '../../stores/locale-store'
 import type { ResourcePage, WorkStage } from '../../stores/navigation/navigation-intents'
 import { chapterLabel } from '../../shared/chapter-label'
@@ -56,9 +56,12 @@ interface StageSpineProps {
   /** 设置页开着时只有「设置」是当前位置。 */
   settingsOpen?: boolean
   onSettings: () => void
+  /** 回收站里的项数；大于 0 时正文阶段的章节列表底部出现入口。 */
+  trashCount?: number
+  onTrash?: () => void
 }
 
-export default function StageSpine({ stages, chapters, location: activeLocation, settingsOpen, onStage, onChapter, onResource, onSettings }: StageSpineProps) {
+export default function StageSpine({ stages, chapters, location: activeLocation, settingsOpen, onStage, onChapter, onResource, onSettings, trashCount = 0, onTrash }: StageSpineProps) {
   const location = settingsOpen ? null : activeLocation
   const text = useLocaleStore(s => s.text)
   const currentStage = location?.kind === 'stage' ? location.stage : null
@@ -112,6 +115,15 @@ export default function StageSpine({ stages, chapters, location: activeLocation,
             )
           })}
         </ol>
+      )}
+
+      {currentStage === 'manuscript' && trashCount > 0 && onTrash && (
+        <div className="stage-spine-trash">
+          <button type="button" className="stage-chapter" onClick={onTrash}>
+            <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
+            <span className="stage-chapter-title">{text(`回收站（${trashCount}）`, `Trash (${trashCount})`)}</span>
+          </button>
+        </div>
       )}
 
       <div className="stage-spine-label stage-spine-label--resources" aria-hidden="true">{text('作品资料', 'Reference')}</div>

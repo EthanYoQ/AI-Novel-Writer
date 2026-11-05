@@ -153,6 +153,21 @@
   padding-top: 8px;
 }
 
+/* 章节列表底部的回收站入口：和章节行同一缩进，图标占章号那一列。 */
+.stage-spine-trash {
+  margin: 2px 0 0 21px;
+  padding-left: 12px;
+  border-left: 1px solid var(--track);
+}
+
+.stage-spine-trash .stage-chapter {
+  color: var(--ink-3);
+}
+
+.stage-spine-trash svg {
+  justify-self: center;
+}
+
 .stage-chapters {
   flex: 0 1 auto;
   min-height: 0;

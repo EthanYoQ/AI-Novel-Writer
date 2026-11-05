@@ -19,6 +19,8 @@ import { paletteItem, type PaletteItem } from './palette-filter'
 import StageSpine from './StageSpine'
 import StageTopBar from './StageTopBar'
 import StageWorkspace from './StageWorkspace'
+import TrashDialog from './trash/TrashDialog'
+import { useChapterTrash } from './trash/use-chapter-trash'
 import { CHAPTER_PHASE_TEXT, CHAPTER_RUNNING_TEXT, RESOURCE_NAMES, STAGE_NAMES, stageTabName } from './stage-text'
 import { refreshStageWork, useLandingPage, useStageView, useStageWorkRefresh, type StageView } from './use-stage-work'
 import { useStageShortcuts } from './use-stage-shortcuts'
@@ -55,6 +57,8 @@ export default function StageShell({ theme }: { theme: Theme }) {
   const [root, setRoot] = useState<HTMLDivElement | null>(null)
   const [clearOpen, setClearOpen] = useState(false)
   const view = useStageView()
+  const trash = useChapterTrash()
+  const [trashOpen, setTrashOpen] = useState(false)
 
   useStageWorkRefresh()
   useLandingPage(view)
@@ -169,6 +173,8 @@ export default function StageShell({ theme }: { theme: Theme }) {
             onChapter={chapterNumber => navigate({ kind: 'chapter', chapterNumber })}
             onResource={page => navigate({ kind: 'resource', page })}
             onSettings={() => navigate({ kind: 'settings', section: 'llm' })}
+            trashCount={trash.entries.length + trash.damaged.length}
+            onTrash={() => setTrashOpen(true)}
           />
         )}
         <StageWorkspace library={library} focus={focus} />
@@ -176,6 +182,7 @@ export default function StageShell({ theme }: { theme: Theme }) {
       <StagePalette mode={palette} items={paletteItems} container={root} onClose={() => useStageStore.setState({ palette: null })} />
       <ClearProjectDataDialog open={clearOpen} onClose={() => setClearOpen(false)} onCleared={() => refreshStageWork(text)} />
       <NewWorkDialog />
+      <TrashDialog open={trashOpen && !library} onOpenChange={setTrashOpen} trash={trash} />
     </div>
   )
 }
