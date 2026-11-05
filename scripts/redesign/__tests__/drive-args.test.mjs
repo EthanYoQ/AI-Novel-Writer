@@ -2,10 +2,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import process from 'node:process'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { appearanceWrite, assertBuilt, captureFailure, finishRealSession, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs, scanRunForSecret,
-  sessionIsClean, writeConsoleLog } from '../drive.mjs'
+import { appearanceWrite, assertBuilt, captureFailure, driveSessions, finishRealSession, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs,
+  releaseSessionRoot, scanRunForSecret, sessionIsClean, writeConsoleLog } from '../drive.mjs'
 import { fileStamps } from '../real-model.mjs'
 import { BASELINE_SESSIONS, SCENARIOS } from '../scenarios.mjs'
 
@@ -157,8 +158,8 @@ it('真实模式删模型配置失败时记进会话错误，隔离目录留着�
   const shared = { isolationRoot: root }
   const sessionErrors = []
   finishRealSession({ shared, sessionErrors, modelLog: [{ path: '/v1/embeddings', status: 200, ms: 3 }], canonical: path.join(root, 'canonical'),
-    remove: () => { throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }) } })
-  assert.deepEqual(sessionErrors, ['EBUSY: resource busy or locked'])
+    remove: () => 'EBUSY' })
+  assert.deepEqual(sessionErrors, [`删不掉模型配置 ${config}：EBUSY`])
   assert.equal(shared.modelRequests, 1)
   assert.equal(sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [] }), false)
 
@@ -188,10 +189,51 @@ it('含密钥的文件有一个删不掉时记下路径与原因，其余照删�
   for (const file of [stuck, other]) fs.writeFileSync(file, 'sk-test-secret')
   const results = [{ isolationRoot: path.join(out, 'gone') }]
   scanRunForSecret(results, out, outBefore, 'sk-test-secret', file => {
-    if (file === stuck) throw Object.assign(new Error(`EBUSY: resource busy or locked, unlink '${file}'`), { code: 'EBUSY' })
+    if (file === stuck) return 'EBUSY'
     fs.rmSync(file)
+    return null
   })
   assert.deepEqual(results[0].keyScan.removeFailures, [{ file: stuck, reason: 'EBUSY' }])
   assert.equal(fs.existsSync(other), false)
   assert.equal(JSON.stringify(results).includes('sk-test-secret'), false)
+})
+
+it('干净会话的隔离目录删不掉时记进会话错误，不抛；不干净的会话不删', () => {
+  const sessionErrors = []
+  const removed = []
+  releaseSessionRoot('C:/iso/a', true, sessionErrors, () => 'EPERM')
+  releaseSessionRoot('C:/iso/b', false, sessionErrors, root => { removed.push(root); return null })
+  assert.deepEqual(sessionErrors, ['删不掉隔离目录 C:/iso/a：EPERM'])
+  assert.deepEqual(removed, [])
+})
+
+it('会话里任一步抛错（含收尾清理），结果 JSON 照样写出、密钥扫描照样执行、退出码为失败', async () => {
+  const out = tempParent()
+  const root = path.join(tempParent(), 'iso')
+  const leaked = path.join(root, 'canonical', 'models.json')
+  const stdout = []
+  const write = process.stdout.write
+  process.stdout.write = chunk => { stdout.push(String(chunk)); return true }
+  let exitCode
+  try {
+    exitCode = await driveSessions({
+      sessions: [['real-x', ['real-x']]],
+      options: { out, theme: 'light', scenario: 'real-x' },
+      realKey: 'sk-test-secret',
+      makeRoots: () => ({ root }),
+      run: async () => {
+        fs.mkdirSync(path.dirname(leaked), { recursive: true })
+        fs.writeFileSync(leaked, '{"apiKey":"sk-test-secret"}')
+        throw Object.assign(new Error('EBUSY: resource busy or locked, rmdir'), { code: 'EBUSY' })
+      },
+    })
+  } finally { process.stdout.write = write }
+  assert.equal(exitCode, 1)
+  const written = fs.readFileSync(path.join(out, 'real-x-light.json'), 'utf8')
+  assert.equal(written.includes('sk-test-secret'), false)
+  const [result] = JSON.parse(written)
+  assert.match(result.error, /EBUSY/)
+  assert.deepEqual(result.keyScan.hits, [leaked])
+  assert.equal(fs.existsSync(leaked), false)
+  assert.equal(stdout.join('').includes('"keyScan"'), true)
 })

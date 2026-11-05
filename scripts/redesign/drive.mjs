@@ -12,7 +12,7 @@ import { _electron as electron } from 'playwright'
 
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
 import { startFakeModel } from './fake-model.mjs'
-import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, REAL_KEY_ENV, REAL_ORIGIN, realModelProfiles, redactSecret, removeModelConfigs,
+import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, REAL_KEY_ENV, REAL_ORIGIN, realModelProfiles, redactSecret, removeModelConfigs, removePath,
   summarizeModelRequests } from './real-model.mjs'
 import { assertNodeRunsTypeScript } from './node-version.mjs'
 import { dismissCompletionToasts, dismissStartupNotice, firstInteractiveControl, waitForShell } from './pages/shell.mjs'
@@ -445,11 +445,22 @@ const messageOf = error => error instanceof Error ? error.message : String(error
  * 真实模式会话收尾：汇总模型请求，删掉隔离目录里的模型配置。
  * 删除失败只记进 sessionErrors：会话照常走结果路径，隔离目录因会话不干净而保留，交给收尾的密钥扫描。
  */
-export function finishRealSession({ shared, sessionErrors, modelLog, canonical, remove = removeModelConfigs }) {
+export function finishRealSession({ shared, sessionErrors, modelLog, canonical, remove = removePath }) {
   const summary = summarizeModelRequests(modelLog)
   shared.modelRequests = summary.count
   shared.modelRequestSummary = summary
-  try { shared.removedModelConfigs = remove(canonical).length } catch (error) { sessionErrors.push(messageOf(error)) }
+  try {
+    const { removed, failures } = removeModelConfigs(canonical, remove)
+    shared.removedModelConfigs = removed.length
+    for (const { file, reason } of failures) sessionErrors.push(`删不掉模型配置 ${file}：${reason}`)
+  } catch (error) { sessionErrors.push(messageOf(error)) }
+}
+
+/** 干净的会话删掉隔离目录；删不掉只记进 sessionErrors（目录留着，收尾的密钥扫描会查到它）。不干净的会话留着取证。 */
+export function releaseSessionRoot(root, clean, sessionErrors, remove = removePath) {
+  if (!clean) return
+  const reason = remove(root)
+  if (reason) sessionErrors.push(`删不掉隔离目录 ${root}：${reason}`)
 }
 
 /** 写诊断日志；写不进去只记进 sessionErrors，后面的退出与凭据清理照常执行。 */
@@ -457,26 +468,25 @@ export function writeConsoleLog(file, diagnostics, sessionErrors) {
   try { fs.writeFileSync(file, `${diagnostics.join('\n')}\n`) } catch (error) { sessionErrors.push(messageOf(error)) }
 }
 
-/** 本次写进产出目录的文件与留作取证的隔离目录里不能有密钥；找到就删掉那个文件，结果记下 keyScan。 */
-export function scanRunForSecret(results, out, outBefore, secret,
-  remove = file => fs.rmSync(file, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })) {
+/** 本次写进产出目录的文件与留作取证的隔离目录里不能有密钥；找到就删掉那个文件，结果记下 keyScan。读不了的文件算扫描不完整，判失败。 */
+export function scanRunForSecret(results, out, outBefore, secret, remove = removePath) {
   const retained = [...new Set(results.map(result => result.isolationRoot))].filter(root => fs.existsSync(root))
   const scan = filesContaining([...changedFiles(out, outBefore), ...retained], secret)
   // 逐个删：一个删不掉不影响其余，删不掉的只记路径与错误码（命中本身已判失败）。
   const removeFailures = []
   for (const file of scan.hits) {
-    try { remove(file) } catch (error) { removeFailures.push({ file, reason: error?.code ?? error?.name ?? 'error' }) }
+    const reason = remove(file)
+    if (reason) removeFailures.push({ file, reason })
   }
-  for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits, removeFailures }
+  for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits, unreadable: scan.unreadable, removeFailures }
 }
 
 /**
  * 一个会话一次冷启动：先跑首个截图点的 setup，再依次 run、截图、after。隔离与进程检查按会话做，结果抄进每一项。
  * realKey 只在真实模式下有：由 installRealModels 交给应用存进隔离目录的模型配置，会话结束时连同配置文件一起删掉。
  */
-async function runSession(sessionName, names, options, realKey = null) {
+async function runSession(sessionName, names, options, realKey = null, roots = createIsolatedRoots(scratchParent())) {
   const before = snapshotRealProfiles()
-  const roots = createIsolatedRoots(scratchParent())
   const diagnostics = []
   const fake = names.some(name => SCENARIOS[name]?.model) ? await startFakeModel(diagnostics) : null
   const base = name => path.join(options.out, `${name}-${options.theme}`)
@@ -578,7 +588,7 @@ async function runSession(sessionName, names, options, realKey = null) {
     Object.assign(shared, profileWrites(before))
   } catch (error) { sessionErrors.push(messageOf(error)) }
   const clean = sessionIsClean({ failedAt, sessionErrors, residualProcesses: shared.residualProcesses, externalWrites: shared.externalWrites })
-  if (clean) fs.rmSync(roots.root, { recursive: true, force: true })
+  releaseSessionRoot(roots.root, clean, sessionErrors)
   return results.map((result, index) => {
     const errors = [result.error, failedAt !== null && index > failedAt ? `未运行：本会话的 ${names[failedAt]} 先失败` : null, ...sessionErrors]
     const error = errors.filter(Boolean).join('\n')
@@ -600,15 +610,33 @@ async function main() {
   const sessions = options.scenario === 'baseline-all'
     ? Object.entries(BASELINE_SESSIONS).map(([name, scenarios]) => [`baseline-${name}`, scenarios])
     : [[options.scenario, [options.scenario]]]
-  const results = []
   const realKey = options.realModel ? process.env[REAL_KEY_ENV] : null
   if (options.realModel && !realKey) {
     process.stderr.write(`--real-model 要从环境变量 ${REAL_KEY_ENV} 读密钥，当前没有\n`)
     process.exit(2)
   }
+  process.exitCode = await driveSessions({ sessions, options, realKey })
+}
+
+/**
+ * 依次跑各会话，再扫密钥、打印、写结果 JSON，返回退出码。
+ * 会话里任何一步（包括收尾清理）抛错都收成该会话的错误，不会逃出去：结果 JSON 与密钥扫描一定执行。
+ * 隔离目录由这里建好交给会话，会话中途出错也知道要扫哪里。
+ */
+export async function driveSessions({ sessions, options, realKey, run = runSession, makeRoots = () => createIsolatedRoots(scratchParent()) }) {
+  const results = []
   const outBefore = realKey ? fileStamps(options.out) : null
   for (const [sessionName, names] of sessions) {
-    for (const raw of await runSession(sessionName, names, options, realKey)) {
+    let sessionResults
+    let roots
+    try {
+      roots = makeRoots()
+      sessionResults = await run(sessionName, names, options, realKey, roots)
+    } catch (error) {
+      sessionResults = names.map(scenario => ({ scenario, theme: options.theme, session: sessionName, isolationRoot: roots?.root,
+        error: `会话中途出错，没有正常收尾：${messageOf(error)}` }))
+    }
+    for (const raw of sessionResults) {
       // 报错与诊断里若带出密钥，打印和写盘之前就遮掉，并判这次失败。
       const { value: result, redacted } = realKey ? redactSecret(raw, realKey) : { value: raw, redacted: false }
       if (redacted) result.secretRedacted = true
@@ -617,14 +645,22 @@ async function main() {
     }
   }
   const resultFile = path.join(options.out, `${options.scenario}-${options.theme}.json`)
-  // 先扫密钥再打印，stdout 与结果 JSON 报的是同一份发现。
-  if (realKey) scanRunForSecret(results, options.out, outBefore, realKey)
-  if (realKey) for (const result of results) process.stdout.write(`${JSON.stringify(result)}\n`)
+  if (realKey) {
+    // 先扫密钥再打印，stdout 与结果 JSON 报的是同一份发现。扫描本身出错也记进结果并判失败。
+    try { scanRunForSecret(results, options.out, outBefore, realKey) } catch (error) {
+      for (const result of results) result.keyScan = { error: messageOf(error) }
+    }
+    for (const result of results) process.stdout.write(`${JSON.stringify(result)}\n`)
+  }
   const failed = results.filter(result => result.error || result.residualProcesses?.length !== 0 || result.externalWrites?.length !== 0
-    || result.keyScan?.hits.length > 0 || result.secretRedacted)
+    || result.keyScan?.hits?.length > 0 || result.keyScan?.unreadable?.length > 0 || result.keyScan?.error || result.secretRedacted)
   fs.writeFileSync(resultFile, JSON.stringify(results, null, 2))
-  if (realKey) assert.equal(filesContaining([resultFile], realKey).hits.length, 0, '结果 JSON 不含密钥')
-  process.exitCode = failed.length ? 1 : 0
+  if (realKey && filesContaining([resultFile], realKey).hits.length > 0) {
+    removePath(resultFile)
+    process.stderr.write('结果 JSON 含密钥，已删除\n')
+    return 1
+  }
+  return failed.length ? 1 : 0
 }
 
 if (asEntryPoint) await main()

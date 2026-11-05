@@ -5,7 +5,8 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, it } from 'vitest'
-import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, realModelProfiles, redactSecret, removeModelConfigs, summarizeModelRequests }
+import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, realModelProfiles, redactSecret, removeModelConfigs, removePath,
+  summarizeModelRequests }
   from '../real-model.mjs'
 
 const REAL = { fakePort: null, realOrigin: 'https://api.siliconflow.cn' }
@@ -68,11 +69,11 @@ it('删掉数据目录里各代的模型配置与写入时的临时文件，别�
   for (const name of ['models.json', '.models.json.123.abc.tmp', 'config.json']) fs.writeFileSync(path.join(generation, name), '{}')
   fs.writeFileSync(path.join(dir, 'models.json'), '{}')
   fs.writeFileSync(path.join(dir, 'recent-projects.json'), '{}')
-  assert.deepEqual(removeModelConfigs(dir).map(file => path.relative(dir, file)).sort(),
+  assert.deepEqual(removeModelConfigs(dir).removed.map(file => path.relative(dir, file)).sort(),
     [path.join('generations', 'g1', '.models.json.123.abc.tmp'), path.join('generations', 'g1', 'models.json'), 'models.json'])
   assert.deepEqual(fs.readdirSync(generation), ['config.json'])
   assert.deepEqual(fs.readdirSync(dir).sort(), ['generations', 'recent-projects.json'])
-  assert.deepEqual(removeModelConfigs(path.join(dir, 'missing')), [])
+  assert.deepEqual(removeModelConfigs(path.join(dir, 'missing')), { removed: [], failures: [] })
 })
 
 it('请求汇总按路径计数，非 200 记为失败', () => {
@@ -130,4 +131,30 @@ it('包装的源码在主进程里重建后同样拒绝不在名单里的请求'
   const guarded = rebuilt(() => { throw new Error('不应发出') }, fetchRoute, REAL, sink)
   await assert.rejects(guarded('https://api.openai.com/v1/chat/completions'), /DRIVE_EXTERNAL_FETCH_REFUSED/)
   assert.deepEqual(sink.externalRequests, ['https://api.openai.com'])
+})
+
+it('删不掉的模型配置记下路径与错误码，其余照删，不抛', () => {
+  const dir = tempDir()
+  for (const name of ['a', 'b']) {
+    fs.mkdirSync(path.join(dir, name))
+    fs.writeFileSync(path.join(dir, name, 'models.json'), '{}')
+  }
+  const stuck = path.join(dir, 'a', 'models.json')
+  const result = removeModelConfigs(dir, file => file === stuck ? 'EBUSY' : removePath(file))
+  assert.deepEqual(result.failures, [{ file: stuck, reason: 'EBUSY' }])
+  assert.deepEqual(result.removed, [path.join(dir, 'b', 'models.json')])
+  assert.equal(removePath(path.join(dir, 'missing')), null)
+})
+
+it('有文件读不了时记下路径与错误码，其余文件照查', () => {
+  const dir = tempDir()
+  const locked = path.join(dir, 'locked.log')
+  const leak = path.join(dir, 'leak.log')
+  fs.writeFileSync(locked, 'x')
+  fs.writeFileSync(leak, 'sk-test-secret')
+  const read = file => {
+    if (file === locked) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+    return fs.readFileSync(file)
+  }
+  assert.deepEqual(filesContaining([dir], 'sk-test-secret', read), { scanned: 2, hits: [leak], unreadable: [{ file: locked, reason: 'EBUSY' }] })
 })
