@@ -93,6 +93,15 @@ it.each([
     expect(snapshot.items.map(item => item.chunkId)).toEqual([expected])
   }
 })
+it.each([
+  ['full-text', {}],
+  ['vector', { queryVector: [1, 0], embeddingSpace: { modelFingerprint: 'synthetic', distanceMetric: 'l2' } }],
+])('excludes the finalized documents of a thousand later chapters on the %s path', async (_path, search) => {
+  await seed({ duplicate: true, vector: true })
+  const later = Array.from({ length: 1000 }, (_, index) => `later-chapter-${index}`)
+  const snapshot = await captureGenerationKnowledge({ projectStorageRoot: root, query: '中文', ...search, excludedDocumentIds: ['doc', ...later] })
+  expect(snapshot.items.map(item => item.chunkId)).toEqual(['other-chunk'])
+})
 it('rejects legacy pending inputs and does not lazily migrate them', async () => {
   fs.writeFileSync(path.join(root, 'vectors.json'), '[]'); const before = physicalHash()
   await expect(captureGenerationKnowledge({ projectStorageRoot: root, query: '中文' })).rejects.toThrow('LEGACY_PENDING')
