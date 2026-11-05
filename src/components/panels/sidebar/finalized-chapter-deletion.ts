@@ -50,6 +50,10 @@ function deletionSurfaceConfig(
   const retryWhereEn = 'on this chapter’s page'
   const consequence = '删除后无法恢复，后面的章节可能也要跟着改写。\n只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」。'
   const consequenceEn = 'This cannot be undone, and later chapters may need rewriting too.\nTo change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”.'
+  const partialFailure = (error: string) => text(
+    `这一章已从作品里删除，但项目文件夹里的正文文件或知识库里的这一章还没清理完：${error}。请${retryWhere}点「重试清理」。`,
+    `The chapter is removed from the book, but its manuscript file in the project folder or its knowledge base entry is not fully cleaned up: ${error}. Choose “Retry cleanup” ${retryWhereEn}.`,
+  )
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
       confirmation: text(
@@ -58,10 +62,7 @@ function deletionSurfaceConfig(
       ),
       confirmationTitle: text('删除这一稿', 'Delete draft'),
       success: text(`已删除 ${displayName}`, `Deleted ${displayName}`),
-      partialFailure: error => text(
-        `正文已删除，但派生投影仍待清理：${error}。请${retryWhere}使用“重试清理”。`,
-        `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup” ${retryWhereEn}.`,
-      ),
+      partialFailure,
       refreshDrafts: (projectPath, chapterNumber, projectSession) => (
         useDraftStore.getState().loadChapterDrafts(chapterNumber, projectPath, projectSession)
       ),
@@ -72,14 +73,8 @@ function deletionSurfaceConfig(
         `Delete manuscript “${displayName}”?\n${consequenceEn}`,
       ),
       confirmationTitle: text('删除正文', 'Delete manuscript'),
-      success: text(
-        `已删除正文「${displayName}」及其派生投影`,
-        `Deleted manuscript “${displayName}” and its derived projections.`,
-      ),
-      partialFailure: error => text(
-        `正文已删除，但派生投影仍待清理：${error}。请${retryWhere}使用“重试清理”。`,
-        `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup” ${retryWhereEn}.`,
-      ),
+      success: text(`已删除正文「${displayName}」`, `Deleted manuscript “${displayName}”.`),
+      partialFailure,
       refreshDrafts: (projectPath, _chapterNumber, projectSession) => (
         useDraftStore.getState().loadAllDrafts(projectPath, projectSession)
       ),
@@ -137,10 +132,10 @@ async function confirmLegacyKnowledgeAbsent(
   text: Localize,
 ): Promise<ChapterDeletionResult | null> {
   const confirmed = await confirm(text(
-    '此旧定稿没有可验证的知识文档 ID。只有在我已人工核对/清理，并确认该定稿没有需要应用自动删除的知识投影时，才能继续；应用不会删除来源不明的 reference 文档。',
-    'This legacy finalization has no verifiable knowledge document ID. Continue only if I have manually checked or cleaned the knowledge base and confirm there is no knowledge projection for the app to remove; the app will not delete reference documents of unknown provenance.',
+    '这一章是旧版本定稿的，书童认不出知识库里哪份资料属于它，所以不会替你删知识库里的内容，也不会动来源不明的参考资料。请先到知识库里检查，删掉这一章留下的资料，再继续删除。',
+    'This chapter was finalized by an older version, so Pagekin cannot tell which knowledge base entry belongs to it. It will not remove anything from the knowledge base for you, and it leaves reference documents of unknown origin alone. Check the knowledge base and remove what this chapter left there, then continue.',
   ), {
-    title: text('确认旧定稿知识投影状态', 'Confirm legacy knowledge projection'),
+    title: text('先检查知识库', 'Check the knowledge base first'),
     confirmText: text('我已人工核对/清理，继续删除', 'I have checked; continue deletion'),
     danger: true,
   })
