@@ -289,6 +289,34 @@ describe('单章视图的主按钮随五种状态变化', () => {
       .toEqual([['结尾要停在林舟回头之前。', 'apply']])
   })
 
+  it.each([
+    ['zh-CN', '定稿', '这次审稿没有需要修改的意见，有 1 项待你核实，看过再定稿', '定稿第 3 章？', '再看看', '添加我的意见', '按 1 项意见修稿'],
+    ['en-US', 'Finalize', 'This review found nothing to revise. 1 item needs your check before you finalize.', 'Finalize chapter 3?', 'Not yet', 'Add my note', 'Revise with 1 note'],
+  ] as const)('%s 界面已审稿但没有需要修改的意见（本批真实模型实测缺陷 3）：主按钮是定稿并写明原因，添加我的意见后回到按意见修稿', async (
+    locale, finalize, hint, dialog, notYet, addNote, reviseOne,
+  ) => {
+    useLocaleStore.setState({ locale })
+    const draft = backend.addDraft({ status: 'draft' })
+    // 真实模型给的「未发现客观问题」：几条都是通过或待作者判断，没有一条默认要修。
+    backend.addReview(draft, JSON.stringify({ summary: '未发现客观问题。', items: [
+      { category: '措辞', severity: 'pass', description: '语言自然。' },
+      { category: '节奏', severity: 'pass', description: '节奏合适。' },
+      { category: '人物', severity: 'pass', description: '人物行为前后一致。' },
+      { category: '本章必现', severity: 'unknown', description: '「不要回头」的伏笔是否回收，由你决定。' },
+    ] }))
+    await mount()
+    await openDraft(draft.id)
+    await expect.element(page.getByRole('button', { name: finalize, exact: true })).toBeEnabled()
+    await expect.element(page.getByText(hint)).toBeVisible()
+    await expect.element(page.getByRole('button', { name: /按 0 项意见修稿|Revise with 0 notes/ })).not.toBeInTheDocument()
+
+    await click(finalize)
+    await expect.element(page.getByRole('dialog', { name: dialog })).toBeVisible()
+    await click(notYet)
+    await click(addNote)
+    await expect.element(page.getByRole('button', { name: reviseOne })).toBeVisible()
+  })
+
   it('有待合并修稿：直接摆出合并视图，完成合并提交选择的正文并启动合并后复验', async () => {
     const draft = backend.addDraft({ status: 'draft' })
     backend.addReview(draft)
