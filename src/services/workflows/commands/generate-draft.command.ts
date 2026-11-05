@@ -1010,8 +1010,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             }
           }
           if (outlined && (outlined.status !== 'completed' || outlined.finishReason !== 'stop' || !outlined.content.trim())) {
-            // 作者取消时请求会被截断着返回：这是取消的结果，不是短细纲失败。
-            this.assertNotCancelled(context)
+            // 作者取消时请求会被截断着返回，主进程不把取消码交给渲染端；带失败码的是真实失败，照常报短细纲失败。
+            if (!outlined.receipt.failureCode) this.assertNotCancelled(context)
             const reason = outlined.finishReason === 'length'
               ? uiText('模型输出被截断', 'the model output was truncated')
               : !outlined.content.trim() ? uiText('模型未返回可见内容', 'the model returned no visible content')
