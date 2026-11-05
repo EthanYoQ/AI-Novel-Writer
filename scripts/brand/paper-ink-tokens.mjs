@@ -45,7 +45,11 @@ const CATEGORIES = [
 
 function declarations(body) {
   const result = new Map()
-  for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;]+)(?=;|$)/g)) result.set(name, value.trim().replace(/\s+/g, ' '))
+  for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;]+)(?=;|$)/g)) {
+    const unbalanced = quote => (value.split(quote).length - 1) % 2 === 1
+    if (/url\(/i.test(value) || unbalanced('"') || unbalanced("'")) throw new Error(`--${name} 的值是不支持的写法：引号必须成对且不能含 url(`)
+    result.set(name, value.trim().replace(/\s+/g, ' '))
+  }
   return result
 }
 

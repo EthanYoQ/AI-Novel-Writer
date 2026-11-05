@@ -41,3 +41,10 @@ test('img src 指向不存在的文件时报坏链接', () => {
 test('出现引用式链接定义时直接失败', () => {
   assert.deepEqual(linkProblems('[x][id]\n\n  [id]: ../assets/brand/pagekin-icon.svg\n'), ['出现引用式链接定义，品牌文档请使用行内链接'])
 })
+
+test('令牌值里有被分号截断的引号或 url( 时报错，成对引号的字体值照常读出', () => {
+  assert.throws(() => parseTokens(theme('--a: url("data:image/png;base64,AAAA");', '--a: red;')), /不支持的写法/)
+  assert.throws(() => parseTokens(theme('--a: red;', '--a: "x;y";')), /不支持的写法/)
+  const { light } = parseTokens(theme('--font-ui: "Inter", system-ui;', '--font-ui: "Inter", system-ui;'))
+  assert.equal(light.get('font-ui'), '"Inter", system-ui')
+})
