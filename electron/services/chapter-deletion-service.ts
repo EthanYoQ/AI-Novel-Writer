@@ -101,7 +101,10 @@ export class ChapterDeletionService {
     this.finalizations = options.finalizations ?? new FinalizationService()
   }
 
-  /** 排队等到的工作开始前、跨过 await 之后，都要确认打开的还是发起它的那部作品；作品换了就拒绝，不碰另一部作品的库。 */
+  /**
+   * 排队等到的工作开始前、跨过 await 之后，都要确认打开的还是发起它的那部作品；作品换了就拒绝，不碰另一部作品的库。
+   * 清理中途被拒时，原作品的收据停在待续跑，重新打开后照常重试（清理本身是幂等的）。
+   */
   private assertOwner(projectRoot: string): void {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), projectRoot)
   }
@@ -260,6 +263,7 @@ export class ChapterDeletionService {
       await this.cleanProjections(projectRoot, member)
     }
 
+    this.assertOwner(projectRoot)
     operation = ChapterDeletionRepository.settle(operationId)
     const error = operationError(operation)
     return {
@@ -275,8 +279,10 @@ export class ChapterDeletionService {
     if (operation.manuscriptStatus === 'pending' || operation.manuscriptStatus === 'failed') {
       try {
         await this.cleaner.removeManuscript(projectRoot, operation.targetFileName)
+        this.assertOwner(projectRoot)
         ChapterDeletionRepository.markProjection(operationId, 'manuscript', 'completed')
       } catch (error) {
+        this.assertOwner(projectRoot)
         ChapterDeletionRepository.markProjection(
           operationId,
           'manuscript',
@@ -289,8 +295,10 @@ export class ChapterDeletionService {
     if (operation.knowledgeStatus === 'pending' || operation.knowledgeStatus === 'failed') {
       try {
         await this.cleaner.removeKnowledgeDocument(projectRoot, operation.knowledgeDocumentId)
+        this.assertOwner(projectRoot)
         ChapterDeletionRepository.markProjection(operationId, 'knowledge', 'completed')
       } catch (error) {
+        this.assertOwner(projectRoot)
         ChapterDeletionRepository.markProjection(
           operationId,
           'knowledge',

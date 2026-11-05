@@ -5,6 +5,8 @@ import {
   type FinalizationRecord,
   type PublicationStatus,
 } from '../repositories/finalization-repository'
+import { getCurrentProjectPath } from '../database'
+import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import {
   manuscriptPublisher,
   resolveManuscriptTarget,
@@ -194,10 +196,17 @@ export class FinalizationService {
         chapterTitle: record.chapterTitle,
         content: record.contentSnapshot,
       })
+      // 写实体稿期间换了作品：发布结果不记进另一部作品的库；原作品的 outbox 仍是待发布，重新打开后重试即可（同内容幂等）。
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), projectRoot)
       return toResult(FinalizationRepository.markPublished(record.finalizationId), true)
     } catch (error) {
       // committed: true 已表明定稿已提交、实体稿待发布，各显示处自己写这句；error 只带原因（错误码或系统报错）。
       const message = String(error)
+      try {
+        assertRequiredExpectedProjectPath(getCurrentProjectPath(), projectRoot)
+      } catch {
+        return toResult(record, false, message)
+      }
       try {
         const pending = FinalizationRepository.markPublicationPending(record.finalizationId, message)
         return toResult(pending, false, message)

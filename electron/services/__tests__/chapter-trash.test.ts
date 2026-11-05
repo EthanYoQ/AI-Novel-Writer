@@ -14,6 +14,7 @@ import { DraftRepository } from '../../repositories/draft-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
 import { ChapterDeletionService, type ChapterDeletionProjectionCleaner } from '../chapter-deletion-service'
+import { FinalizationService } from '../finalization-service'
 import { GenerationDraftEffects } from '../generation-draft-effects'
 import { serializeManuscript } from '../manuscript-publisher'
 import * as portableFreeze from '../portable-runtime-freeze'
@@ -505,5 +506,80 @@ describe('排队的回收站操作跨作品切换', () => {
       closeProjectDatabase()
       fs.rmSync(otherRoot, { recursive: true, force: true })
     }
+  })
+
+  /** 另开一部作品 B（模拟复制出来的作品：收据或定稿 ID 与 A 相同），返回它的根目录。 */
+  function otherProject(): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-trash-b-'))
+    others.push(root)
+    initProjectDatabase(root)
+    return root
+  }
+  const others: string[] = []
+  afterEach(() => { closeProjectDatabase(); for (const root of others.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
+
+  function barrier() {
+    let release!: () => void, reach!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const reached = new Promise<void>(resolve => { reach = resolve })
+    return { release, reached, wait: async () => { reach(); await gate } }
+  }
+
+  it('删除清理等清理器期间切到 B 作品：清理结果不记进 B 的库，A 的收据停在待续跑，回到 A 照常补完', async () => {
+    const otherRoot = otherProject()
+    const otherDraft = write(1, 'B 作品第一章。')
+    finalize(otherDraft, 'kb-b-1')
+    await service({ id: 'delete-a', failKnowledge: new Set(['kb-b-1']) }).service.delete(otherRoot, { draftId: otherDraft, chapterNumber: 1 })
+    const otherBefore = ChapterDeletionRepository.get('delete-a')
+
+    initProjectDatabase(projectRoot)
+    const draft = write(1, 'A 作品第一章。')
+    finalize(draft, 'kb-a-1')
+    const cleanup = barrier()
+    const s = new ChapterDeletionService({
+      cleaner: { async removeManuscript() { await cleanup.wait() }, async removeKnowledgeDocument() {} },
+      createOperationId: () => 'delete-a',
+      finalizations: { retry: vi.fn() },
+    })
+    const deleting = s.delete(projectRoot, { draftId: draft, chapterNumber: 1 })
+    await cleanup.reached
+    initProjectDatabase(otherRoot)
+    cleanup.release()
+
+    await expect(deleting).rejects.toThrow('PROJECT_CONTEXT_CHANGED')
+    expect(ChapterDeletionRepository.get('delete-a')).toEqual(otherBefore)
+
+    initProjectDatabase(projectRoot)
+    expect(ChapterDeletionRepository.get('delete-a')).toMatchObject({ status: 'pending', manuscriptStatus: 'pending', knowledgeStatus: 'pending' })
+    expect(await s.retry(projectRoot, 'delete-a')).toMatchObject({ success: true, operation: { status: 'completed' } })
+  })
+
+  it('恢复后重发实体稿期间切到 B 作品：发布结果不记进 B 里同 ID 的定稿，恢复照报成功、实体稿待发布', async () => {
+    const draft = write(1, 'A 作品第一章。')
+    const record = finalize(draft, 'kb-a-1')
+    await service().service.delete(projectRoot, { draftId: draft, chapterNumber: 1 })
+
+    const otherRoot = otherProject()
+    const otherDraft = write(1, 'B 作品第一章。')
+    FinalizationRepository.commit({ finalizationId: record.finalizationId, draftId: otherDraft, chapterNumber: 1, chapterTitle: '沉船',
+      content: 'B 作品第一章。', contentHash: sha256('B 作品第一章。'), contentRevision: 1, targetFileName: '第1章 沉船.txt' })
+    const otherBefore = FinalizationRepository.get(record.finalizationId)
+
+    initProjectDatabase(projectRoot)
+    const publish = barrier()
+    const s = new ChapterDeletionService({
+      cleaner: recordingCleaner().cleaner,
+      finalizations: new FinalizationService({ publisher: { publish: () => publish.wait() } }),
+    })
+    const restoring = s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: draft, expectedMode: 'into-gap' })
+    await publish.reached
+    initProjectDatabase(otherRoot)
+    publish.release()
+
+    expect(await restoring).toMatchObject({ success: true, outcome: 'restored', publicationStatus: 'pending',
+      publicationError: expect.stringContaining('PROJECT_CONTEXT_CHANGED') })
+    expect(FinalizationRepository.get(record.finalizationId)).toEqual(otherBefore)
+    initProjectDatabase(projectRoot)
+    expect(FinalizationRepository.get(record.finalizationId)).toMatchObject({ publicationStatus: 'pending' })
   })
 })

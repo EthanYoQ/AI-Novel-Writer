@@ -5,12 +5,13 @@ import { createRequire } from 'node:module'
 import type BetterSqlite3 from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getProjectDb } from '../../database'
+import { getCurrentProjectPath, getProjectDb } from '../../database'
 import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { FinalizationService } from '../finalization-service'
 
 vi.mock('../../database', () => ({
   getProjectDb: vi.fn(),
+  getCurrentProjectPath: vi.fn(),
 }))
 
 const require = createRequire(import.meta.url)
@@ -76,6 +77,7 @@ beforeEach(() => {
   createLiveRowViews(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-finalization-service-'))
+  vi.mocked(getCurrentProjectPath).mockReturnValue(projectRoot)
 })
 
 afterEach(() => {
