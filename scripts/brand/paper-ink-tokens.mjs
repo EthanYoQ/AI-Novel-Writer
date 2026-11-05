@@ -42,7 +42,7 @@ const CATEGORIES = [
 export function declarations(css) {
   const body = css.replace(/\/\*[\s\S]*?\*\//g, '')
   const result = new Map()
-  for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;}]+)[;}]/g)) result.set(name, value.trim().replace(/\s+/g, ' '))
+  for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;}]+)(?=[;}])/g)) result.set(name, value.trim().replace(/\s+/g, ' '))
   return result
 }
 
@@ -90,7 +90,7 @@ function block(table) {
 
 export function brokenLinks(doc) {
   const docDir = path.dirname(path.join(root, DOC_FILE))
-  const targets = [...doc.matchAll(/\]\(<?([^\s)>]+)|\ssrc="([^"]+)"/g)].map(match => match[1] ?? match[2])
+  const targets = [...doc.matchAll(/\]\(<?([^\s)>]+)|^\[[^\]]+\]:\s*<?([^\s>]+)|\s(?:src|href)=["']([^"']+)["']/gm)].map(match => match[1] ?? match[2] ?? match[3])
   return targets
     .filter(target => !/^(https?:|mailto:|#)/.test(target))
     .filter(target => !fs.existsSync(path.resolve(docDir, target.split('#')[0])))
