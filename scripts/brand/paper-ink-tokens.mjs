@@ -78,6 +78,7 @@ function normalizeValue(value) {
 export function parseTokens(css) {
   const rules = css.replace(/\/\*[\s\S]*?\*\//g, '').match(THEME_RULES)
   if (!rules) throw new Error(`${TOKEN_FILE} 的结构不受支持：只支持浅色 .paper-ink 与深色两条规则`)
+  if (rules[1].includes('\\') || rules[2].includes('\\')) throw new Error(`${TOKEN_FILE} 出现反斜杠转义，脚本不解析转义写法`)
   const light = declarations(rules[1])
   const dark = declarations(rules[2])
   const orphans = [...dark.keys()].filter(name => !light.has(name))
@@ -119,6 +120,7 @@ function block(table) {
 export function linkProblems(doc) {
   if (/^\s*\[[^\]]+\]:\s*\S/m.test(doc)) return ['出现引用式链接定义，品牌文档请使用行内链接']
   if (doc.includes('](<')) return ['出现尖括号链接目标，品牌文档请使用不带尖括号的行内链接']
+  if (/\]\([ \t\r\n]|\s(?:src|href)[ \t\r\n]*=[ \t\r\n]*(?!["'][^ \t\r\n])|\s(?:src|href)[ \t\r\n]+=/.test(doc)) return ['链接目标或 src、href 的等号两侧带空白，品牌文档请写成紧凑形式']
   const docDir = path.dirname(path.join(root, DOC_FILE))
   return [...doc.matchAll(/\]\(([^\s)]+)|\s(?:src|href)=["']([^"']+)["']/g)]
     .map(match => match[1] ?? match[2])

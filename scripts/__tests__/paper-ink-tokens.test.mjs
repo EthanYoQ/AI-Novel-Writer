@@ -57,3 +57,12 @@ test('双引号里的单引号合法，引号内的空白原样保留', () => {
   const { light } = parseTokens(theme('--font-ui: "O\'Brien  Sans",\n    sans-serif;', '--a: red;'.replace('--a', '--font-ui')))
   assert.equal(light.get('font-ui'), '"O\'Brien  Sans", sans-serif')
 })
+
+test('声明里出现反斜杠转义时报错，不静默跳过', () => {
+  assert.throws(() => parseTokens(theme('--frame: red;', '--frame: red; --\\66 rame: blue;')), /转义/)
+})
+
+test('链接目标或属性等号两侧带空白时直接失败', () => {
+  assert.equal(linkProblems('[坏]( ../does-not-exist.png)').length, 1)
+  assert.equal(linkProblems('<img src = "../does-not-exist.png" />').length, 1)
+})
