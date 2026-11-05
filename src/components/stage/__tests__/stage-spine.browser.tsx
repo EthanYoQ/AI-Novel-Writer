@@ -211,6 +211,33 @@ describe('流程脊', () => {
     expect([...host.querySelectorAll('.stage-chapter-title')].map(node => node.textContent)).toEqual(['第 1 章', '第 2 章'])
   })
 
+  it('回收站非空时有「回收站（N）」入口，点它打开回收站；不在正文阶段也有，空的时候没有（#564、#592）', async () => {
+    const renderWith = async (trashCount: number, stage: 'manuscript' | 'blueprint', onTrash: () => void) => {
+      await act(async () => root?.unmount())
+      host?.remove()
+      host = document.createElement('div')
+      host.className = 'paper-ink stage-shell'
+      document.body.append(host)
+      root = createRoot(host)
+      await act(async () => root!.render(
+        <StageSpine stages={deriveStages(WRITING)} chapters={deriveChapters(WRITING)} location={{ kind: 'stage', stage }}
+          onStage={() => undefined} onChapter={() => undefined} onResource={() => undefined} onSettings={() => undefined}
+          trashCount={trashCount} onTrash={onTrash} />,
+      ))
+      return [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.startsWith('回收站'))
+    }
+    const onTrash = vi.fn()
+    const entry = await renderWith(2, 'manuscript', onTrash)
+    expect(entry?.textContent).toBe('回收站（2）')
+    expect(entry?.closest('[aria-label="章节"]')).toBeNull()
+    expect(entry?.getAttribute('aria-haspopup'), '读屏软件要知道点它会开对话框').toBe('dialog')
+    await act(async () => entry!.click())
+    expect(onTrash).toHaveBeenCalledOnce()
+
+    expect(await renderWith(0, 'manuscript', onTrash)).toBeUndefined()
+    expect((await renderWith(2, 'blueprint', onTrash))?.textContent, '正文阶段打不开时回收站是唯一的入口').toBe('回收站（2）')
+  })
+
   it('不在正文阶段时不展开章节列表', async () => {
     const container = await mount({ kind: 'stage', stage: 'blueprint' })
     expect(container.querySelector('[aria-label="章节"]')).toBeNull()

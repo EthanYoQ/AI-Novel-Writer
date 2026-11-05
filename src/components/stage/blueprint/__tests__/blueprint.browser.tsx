@@ -3,6 +3,7 @@ import { page, userEvent } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
+import type { TrashedChapter } from '../../../../shared/chapter-deletion'
 import type { AuthoritativeChapterSequence } from '../../../../shared/chapter-sequence'
 import type { ProjectData } from '../../../../shared/ipc-channels'
 import { globalEventBus } from '../../../../shared/event-bus'
@@ -43,6 +44,15 @@ let nextChapter: number
 let projectCore: { premise: string } | null
 let invoke: ReturnType<typeof vi.fn>
 let authority: AuthoritativeChapterSequence | null
+let trashEntries: TrashedChapter[]
+let trashListFails: boolean
+
+function trashed(chapterNumber: number, restoreMode: TrashedChapter['restoreMode'] = 'into-gap'): TrashedChapter {
+  return {
+    deletionId: `del-${chapterNumber}`, draftId: chapterNumber * 10, chapterNumber, chapterTitle: '灯室', deletedAt: '2026-11-05T06:00:00.000Z',
+    wordCount: 3120, versionCount: 2, cleanup: 'completed', restoreMode,
+  }
+}
 
 function blueprint(chapterNumber: number, title: string): ChapterBlueprint {
   return {
@@ -70,6 +80,16 @@ function installIpc() {
     }
     if (channel === 'generation:find-blueprint-recovery') return null
     if (channel === 'db:consistency-exemption-list') return []
+    if (channel === 'chapter:trash-list') {
+      if (trashListFails) throw new Error('trash list unavailable')
+      return { success: true, entries: trashEntries, damaged: [] }
+    }
+    if (channel === 'chapter:trash-restore') {
+      trashEntries = []
+      authority = null
+      return { success: true, outcome: 'restored', chapterNumber: 3, draftId: 30, finalizationId: 'fin-3', publicationStatus: 'published' }
+    }
+    if (channel === 'db:draft-list-all') return []
     if (channel === 'db:blueprint-clear-all') {
       stored = []
       return { success: true }
@@ -119,6 +139,8 @@ beforeEach(async () => {
   nextChapter = 2
   projectCore = null
   authority = null
+  trashEntries = []
+  trashListFails = false
   writableOverride.value = null
   useLocaleStore.setState({ locale: 'zh-CN' })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
@@ -197,12 +219,152 @@ describe('蓝图阶段', () => {
     await expect.element(page.getByRole('button', { name: '写第 3 章' })).toBeVisible()
     const notice = page.getByText('第 1 章的正文已删除').element().closest('.pi-notice')
     expect(notice?.textContent).toContain('后面的章节都还在，照常可写')
+    await vi.waitFor(() => expect(page.getByText('第 1 章的正文已删除').element().closest('.pi-notice')?.textContent).toContain('删掉的正文找不回来'))
     await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
     expect(page.getByRole('button', { name: '清除误导入正文…' }).query()).toBeNull()
     await expect.element(page.getByRole('button', { name: '批量创作' })).toBeVisible()
     await expect.element(page.getByRole('button', { name: 'AI 生成蓝图' })).toBeEnabled()
     await act(async () => page.getByRole('button', { name: '更多蓝图操作' }).click())
     await expect.element(page.getByRole('menuitem', { name: '新建章节' })).not.toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('回收站读不出来时不说删掉的正文找不回来，缺口章照常可写（#592）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    trashEntries = [trashed(1)]
+    trashListFails = true
+    await renderPage()
+
+    await vi.waitFor(() => expect(calls('chapter:trash-list').length).toBeGreaterThan(0))
+    const notice = page.getByText('第 1 章的正文已删除')
+    await expect.element(notice).toBeVisible()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    const body = notice.element().closest('.pi-notice')?.textContent
+    expect(body).toContain('后面的章节都还在，照常可写')
+    expect(body).not.toContain('找不回来')
+    await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
+
+    trashListFails = false
+    await act(async () => globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath: PROJECT_PATH, projectSession: SESSION }))
+    await expect.element(page.getByText('第 1 章已删除，正文在回收站里')).toBeVisible()
+  })
+
+  it('读到过空回收站后删了一章、重读回收站失败：不拿旧的空列表下「找不回来」的结论（#592）', async () => {
+    await renderPage()
+    await vi.waitFor(() => expect(calls('chapter:trash-list').length).toBeGreaterThan(0))
+
+    authority = {
+      status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    trashEntries = [trashed(1)]
+    trashListFails = true
+    const trashReads = calls('chapter:trash-list').length
+    await act(async () => globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath: PROJECT_PATH, projectSession: SESSION }))
+    await vi.waitFor(() => expect(calls('chapter:trash-list').length).toBeGreaterThan(trashReads))
+    await refreshBlueprints()
+    const notice = page.getByText('第 1 章的正文已删除')
+    await expect.element(notice).toBeVisible()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(notice.element().closest('.pi-notice')?.textContent).not.toContain('找不回来')
+    await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
+  })
+
+  it('缺口段首章没写、后一章在回收站里：卡片指明那一章，恢复它，写作仍从段首开始（#592）', async () => {
+    stored = Array.from({ length: 5 }, (_, index) => blueprint(index + 1, `第${index + 1}章`))
+    authority = {
+      status: 'gapped', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [{ from: 2, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    trashEntries = [trashed(3)]
+    await renderPage()
+
+    const notice = page.getByText('第 2～3 章已删除，第 3 章的正文在回收站里')
+    await expect.element(notice).toBeVisible()
+    const body = notice.element().closest('.pi-notice')?.textContent
+    expect(body).toContain('点「恢复」放回这一章')
+    expect(body).not.toContain('重写')
+    expect(body).not.toContain('找不回来')
+    await expect.element(page.getByRole('button', { name: '写第 2 章' })).toBeVisible()
+    expect(page.getByRole('button', { name: '重写第 2 章' }).query()).toBeNull()
+    expect(page.getByRole('button', { name: '重写第 3 章' }).query()).toBeNull()
+
+    await act(async () => page.getByRole('button', { name: '恢复', exact: true }).click())
+    await vi.waitFor(() => expect(calls('chapter:trash-restore')).toHaveLength(1))
+    expect(calls('chapter:trash-restore')[0][1]).toMatchObject({ deletionId: 'del-3', expectedMode: 'into-gap' })
+  })
+
+  it('删掉的第 3 章在回收站里：「写第 13 章」「批量创作」「恢复」「重写第 3 章」同时出现，点恢复按列表给的方式放回并重读（#564）', async () => {
+    stored = Array.from({ length: 13 }, (_, index) => blueprint(index + 1, `第${index + 1}章`))
+    authority = {
+      status: 'gapped', lastChapterNumber: 12, nextChapterNumber: 13, gaps: [{ from: 3, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    trashEntries = [trashed(3)]
+    await renderPage()
+
+    const notice = page.getByText('第 3 章已删除，正文在回收站里')
+    await expect.element(notice).toBeVisible()
+    expect(notice.element().closest('.pi-notice')?.textContent).toContain('点「恢复」放回这一章')
+    await expect.element(page.getByRole('button', { name: '写第 13 章' })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '批量创作' })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '重写第 3 章' })).toBeVisible()
+    const restore = page.getByRole('button', { name: '恢复', exact: true })
+    await expect.element(restore).toBeVisible()
+
+    const sequenceReads = calls('db:draft-authority-sequence').length
+    await act(async () => restore.click())
+    await vi.waitFor(() => expect(calls('chapter:trash-restore')).toHaveLength(1))
+    expect(calls('chapter:trash-restore')[0][1]).toEqual({ deletionId: 'del-3', draftId: 30, expectedMode: 'into-gap' })
+    await vi.waitFor(() => expect(calls('db:draft-authority-sequence').length).toBeGreaterThan(sequenceReads))
+    await vi.waitFor(() => expect(page.getByText('第 3 章已删除，正文在回收站里').query()).toBeNull())
+  })
+
+  it('回收站里的第 3 章连蓝图也没了：没有「重写第 3 章」按钮，卡片也不说「或者重写它」（#592）', async () => {
+    stored = [1, 2, 4].map(chapterNumber => blueprint(chapterNumber, `第${chapterNumber}章`))
+    authority = {
+      status: 'gapped', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [{ from: 3, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    trashEntries = [trashed(3)]
+    await renderPage()
+
+    const notice = page.getByText('第 3 章已删除，正文在回收站里')
+    await expect.element(notice).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '补上第 3 章蓝图' })).toBeVisible()
+    expect(page.getByRole('button', { name: '重写第 3 章' }).query()).toBeNull()
+    const body = notice.element().closest('.pi-notice')?.textContent
+    expect(body).toContain('点「恢复」放回这一章')
+    expect(body).not.toContain('重写')
+  })
+
+  it('转移来的作品，回收站这一项只能开新稿：恢复请求带 reopen-as-draft（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 2, nextChapterNumber: 3, gaps: [{ from: 1, to: 1, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    trashEntries = [trashed(1, 'reopen-as-draft')]
+    await renderPage()
+    await act(async () => page.getByRole('button', { name: '恢复', exact: true }).click())
+    await vi.waitFor(() => expect(calls('chapter:trash-restore')).toHaveLength(1))
+    expect(calls('chapter:trash-restore')[0][1]).toMatchObject({ deletionId: 'del-1', expectedMode: 'reopen-as-draft' })
+  })
+
+  it('英文界面：回收站里的缺口章写 Restore 与 Rewrite chapter 3（#564）', async () => {
+    useLocaleStore.setState({ locale: 'en-US' })
+    stored = Array.from({ length: 4 }, (_, index) => blueprint(index + 1, `第${index + 1}章`))
+    authority = {
+      status: 'gapped', lastChapterNumber: 3, nextChapterNumber: 4, gaps: [{ from: 3, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'b'.repeat(64),
+    }
+    trashEntries = [trashed(3)]
+    await act(async () => root?.render(<div className="paper-ink"><StageBlueprint projectKey={PROJECT_PATH} /></div>))
+    await expect.element(page.getByText('Chapter 3 was deleted; its text is in the trash')).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'Rewrite chapter 3' })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'Restore', exact: true })).toBeVisible()
+    await expect.element(page.getByRole('button', { name: 'Write chapter 4' })).toBeVisible()
   })
 
   it('写作请求落在缺口章时留给那一章的单章视图，落在写不了的章时丢掉（#564）', async () => {
@@ -299,8 +461,8 @@ describe('蓝图阶段', () => {
 
     await act(async () => clear.click())
     const confirm = page.getByRole('dialog', { name: '清除误导入正文？' })
-    await expect.element(confirm).toHaveTextContent('清除的是全书所有章节的草稿、定稿、审稿和摘要，不只是缺的那一章')
-    await expect.element(confirm).toHaveTextContent('如果只是删掉了某一章，请取消，直接在原位置重写那一章')
+    await expect.element(confirm).toHaveTextContent('会清空全书所有章节的正文，包括回收站里的，不只是缺的那一章')
+    await expect.element(confirm).toHaveTextContent('只是删了某一章的话，请取消，从回收站恢复它')
   })
 
   it('同一章有两份定稿时仍停写并说明原因', async () => {

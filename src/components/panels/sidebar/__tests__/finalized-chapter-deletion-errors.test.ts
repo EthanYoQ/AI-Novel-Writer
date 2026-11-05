@@ -97,21 +97,34 @@ describe('删除定稿章之后的提示用作者看得懂的话', () => {
 })
 
 describe('删除定稿章前的确认说明（#564）', () => {
-  const zh = ['删除后无法恢复，后面的章节可能也要跟着改写', '只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」']
-  const en = ['This cannot be undone, and later chapters may need rewriting too', 'To change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”']
+  const zh = ['移到回收站，可以随时恢复', '后面的章节', '可能要跟着改', '「重新打开修改」']
+  const en = ['move to the trash and can be restored', 'Later chapters', 'may need changes', '“Reopen to edit”']
   it.each([
     ['zh-CN', 'manuscript', zh],
     ['zh-CN', 'draft', zh],
     ['en-US', 'manuscript', en],
     ['en-US', 'draft', en],
-  ] as const)('%s 界面的 %s 入口：三行以内写明删后无法恢复、后面章节可能要改写、只想修改用重新打开修改，不出现内部术语；取消后不删', async (locale, surface, phrases) => {
+  ] as const)('%s 界面的 %s 入口：短短几行写明进回收站可恢复、后面章节可能要改、只想修改用重新打开修改，不再说无法恢复或要点待更新；取消后不删', async (locale, surface, phrases) => {
     useLocaleStore.setState({ locale })
     mocks.confirm.mockResolvedValueOnce(false)
     await deleteFinalizedChapter({ ...input, surface })
     const [message] = mocks.confirm.mock.calls[0] as unknown as [string]
     for (const phrase of phrases) expect(message).toContain(phrase)
-    expect(message.split('\n')).toHaveLength(3)
-    expect(message).not.toMatch(/投影|定稿事实|projection|finalized fact/)
+    expect(message.split('\n')).toHaveLength(4)
+    expect(message).not.toMatch(/投影|定稿事实|无法恢复|待更新|projection|finalized fact|cannot be undone|out of date/)
     expect(mocks.invoke).not.toHaveBeenCalled()
+  })
+})
+
+describe('删除定稿章成功后的说明（#564）', () => {
+  it.each([
+    ['zh-CN', ['「第3章」', '移到回收站', '可以随时恢复']],
+    ['en-US', ['“第3章”', 'to the trash', 'restore it']],
+  ] as const)('%s 界面：提示移到了回收站、可以恢复', async (locale, phrases) => {
+    useLocaleStore.setState({ locale })
+    mocks.invoke.mockResolvedValue({ committed: true, success: true, operation: { legacyKnowledgeAuthorization: 'not_required' } })
+    await deleteFinalizedChapter(input)
+    const [message] = mocks.toast.success.mock.calls[0] as unknown as [string]
+    for (const phrase of phrases) expect(message).toContain(phrase)
   })
 })

@@ -48,11 +48,24 @@ function deletionSurfaceConfig(
   // 清理没做完时，在这一章的单章视图里提示重试。
   const retryWhere = '在这一章的页面里'
   const retryWhereEn = 'on this chapter’s page'
-  const consequence = '删除后无法恢复，后面的章节可能也要跟着改写。\n只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」。'
-  const consequenceEn = 'This cannot be undone, and later chapters may need rewriting too.\nTo change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”.'
+  // 删除进回收站（ADR-0025）：不推连续性水位，所以不说要点会待更新，只说后面的章节可能依赖这一章的情节。
+  const consequence = [
+    '正文和全部版本会移到回收站，可以随时恢复。',
+    '后面的章节如果用到了这一章的情节，可能要跟着改。',
+    '只想修改，请取消后点「重新打开修改」或「打开重开稿」。',
+  ].join('\n')
+  const consequenceEn = [
+    'The text and every version move to the trash and can be restored any time.',
+    'Later chapters that use events from this one may need changes too.',
+    'To edit only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”.',
+  ].join('\n')
+  const movedToTrash = text(
+    `已把「${displayName}」移到回收站，可以随时恢复。`,
+    `Moved “${displayName}” to the trash. You can restore it any time.`,
+  )
   const partialFailure = (error: string) => text(
-    `这一章已从作品里删除，但项目文件夹里的正文文件或知识库里的这一章还没清理完：${error}。请${retryWhere}点「重试清理」。`,
-    `The chapter is removed from the book, but its manuscript file in the project folder or its knowledge base entry is not fully cleaned up: ${error}. Choose “Retry cleanup” ${retryWhereEn}.`,
+    `这一章已移到回收站，但项目文件夹里的正文文件或知识库里的这一章还没清理完：${error}。请${retryWhere}点「重试清理」。`,
+    `The chapter moved to the trash, but its manuscript file in the project folder or its knowledge base entry is not fully cleaned up: ${error}. Choose “Retry cleanup” ${retryWhereEn}.`,
   )
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
@@ -61,7 +74,7 @@ function deletionSurfaceConfig(
         `Delete “${displayName}”?\n${consequenceEn}`,
       ),
       confirmationTitle: text('删除这一稿', 'Delete draft'),
-      success: text(`已删除 ${displayName}`, `Deleted ${displayName}`),
+      success: movedToTrash,
       partialFailure,
       refreshDrafts: (projectPath, chapterNumber, projectSession) => (
         useDraftStore.getState().loadChapterDrafts(chapterNumber, projectPath, projectSession)
@@ -73,7 +86,7 @@ function deletionSurfaceConfig(
         `Delete manuscript “${displayName}”?\n${consequenceEn}`,
       ),
       confirmationTitle: text('删除正文', 'Delete manuscript'),
-      success: text(`已删除正文「${displayName}」`, `Deleted manuscript “${displayName}”.`),
+      success: movedToTrash,
       partialFailure,
       refreshDrafts: (projectPath, _chapterNumber, projectSession) => (
         useDraftStore.getState().loadAllDrafts(projectPath, projectSession)

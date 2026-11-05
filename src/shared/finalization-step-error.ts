@@ -95,8 +95,8 @@ const FINALIZATION_STEP_ERRORS: { code: RegExp; zh: string; en: string; enMany?:
     zh: '被替换的旧定稿留下的内容还没清理。点「重试」清理；和旧定稿对不上（可能改过）的会留着。',
     en: 'Content left by a replaced final version has not been cleaned up yet. Select Retry to clean it up; anything that differs from that version (it may have been edited) is kept.' },
   { code: /^CHAPTER_RESTORED_REPROJECTION_PENDING$/, retry: 'described',
-    zh: '这一章是从回收站恢复的，正文和版本都在。知识库里的这一章在删除时移除了，点「重试」把它重新收进知识库。',
-    en: "This chapter was restored from the trash, and its text and versions are back. Its knowledge base entry was removed when it was deleted. Select Retry to add it to the knowledge base again." },
+    zh: '这一章从回收站恢复了，还没重新收进知识库。点「重试」收进去。',
+    en: 'This chapter was restored from the trash and is not in the knowledge base yet. Select Retry to add it.' },
 ]
 
 const IPC_PREFIX = /^Error invoking remote method '[^']+': Error: /u

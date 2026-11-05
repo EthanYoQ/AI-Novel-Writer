@@ -1,0 +1,76 @@
+/* 回收站对话框。只引用纸墨令牌。 */
+.stage-trash-list {
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: min(56vh, 440px);
+  overflow-y: auto;
+  border-top: 1px solid var(--rule);
+}
+
+.stage-trash-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-2) var(--s-4);
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.stage-trash-main {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.stage-trash-name {
+  margin: 0;
+  display: flex;
+  gap: var(--s-2);
+  align-items: baseline;
+  min-width: 0;
+  font: 600 var(--fs-14) var(--font-ui);
+  color: var(--ink);
+}
+
+.stage-trash-no {
+  flex: none;
+}
+
+.stage-trash-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.stage-trash-meta,
+.stage-trash-hint,
+.stage-trash-cleanup {
+  margin: 2px 0 0;
+  font: 400 var(--fs-12) var(--font-ui);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.stage-trash-cleanup {
+  color: var(--warn);
+}
+
+.stage-trash-item[data-damaged='true'] .stage-trash-name {
+  color: var(--ink-2);
+}
+
+.stage-trash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.stage-trash-empty {
+  margin: var(--s-3) 0 0;
+  color: var(--ink-3);
+}
+

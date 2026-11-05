@@ -441,6 +441,31 @@ describe('标签与外壳', () => {
     await vi.waitFor(() => expect(backend.writes('chapter:retry-deletion').map(args => args[0])).toEqual(['deletion-1']))
     await expect.element(page.getByText('删除正文后的清理没有完成')).not.toBeInTheDocument()
   })
+
+  it('旧定稿删除正文待人工核对、核对后继续删完：被删那一稿的标签和普通删除一样关掉（#592）', async () => {
+    const final = backend.addDraft({ status: 'finalized' })
+    const draft = backend.addDraft({ status: 'draft', version: 2 })
+    backend.state.incompleteDeletions = [{ operationId: 'deletion-1', chapterNumber: 3, draftId: final.id, chapterTitle: '雨夜车站', status: 'authorization_required',
+      manuscriptStatus: 'completed', manuscriptError: '', knowledgeStatus: 'pending', legacyKnowledgeAuthorization: 'required' }]
+    const plain = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation(async (channel, ...args) => {
+      if (channel !== 'chapter:confirm-legacy-knowledge-absent') return plain(channel, ...args)
+      backend.state.calls.push({ channel, args })
+      backend.state.incompleteDeletions = []
+      backend.state.drafts = backend.state.drafts.filter(candidate => candidate.id !== final.id)
+      return { committed: true, success: true }
+    })
+    await mount()
+    await openDraft(final.id)
+    await openDraft(draft.id)
+    const finalPath = formatResourceUri({ kind: 'draft', id: final.id })
+    expect(tabs().map(tab => tab.filePath)).toContain(finalPath)
+
+    await click('确认人工核对并继续')
+    await click('我已人工核对/清理，继续删除')
+    await vi.waitFor(() => expect(backend.writes('chapter:confirm-legacy-knowledge-absent').map(args => args[0])).toEqual(['deletion-1']))
+    await vi.waitFor(() => expect(tabs().map(tab => tab.filePath)).not.toContain(finalPath))
+  })
 })
 
 describe('定稿冲突与定稿进行中', () => {
@@ -837,13 +862,14 @@ describe('写作此章、标签顶替与跨作品的请求', () => {
     expect(useStageStore.getState().sheet).toBeNull()
   })
 
-  it('删除正文的确认说明删后无法恢复、后面章节可能要改写，不再提旧外壳的位置', async () => {
+  it('删除正文的确认说明会移到回收站、后面章节可能要改写，不再提旧外壳的位置', async () => {
     const draft = backend.addDraft({ status: 'finalized' })
     await mount()
     await openDraft(draft.id)
     await click('更多操作')
     await act(async () => page.getByRole('menuitem', { name: '删除正文…' }).click())
-    await expect.element(page.getByText(/后面的章节可能也要跟着改写/)).toBeVisible()
+    await expect.element(page.getByText(/会移到回收站，可以随时恢复/)).toBeVisible()
+    await expect.element(page.getByText(/后面的章节.*可能要跟着改/)).toBeVisible()
     await expect.element(page.getByText(/正文章节下/)).not.toBeInTheDocument()
     await click('取消')
   })

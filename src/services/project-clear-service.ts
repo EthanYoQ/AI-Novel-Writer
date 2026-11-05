@@ -6,6 +6,7 @@ import { useProjectStore } from '../stores/project-store'
 import { useWorkflowStore } from '../stores/workflow-store'
 import { useLocaleStore } from '../stores/locale-store'
 import { knownAppErrorMessage } from '../i18n/app-errors'
+import { globalEventBus } from '../shared/event-bus'
 import type { ProjectClearScope, ProjectSessionContext } from '../shared/ipc-channels'
 import {
   getActiveProjectSessionContext,
@@ -163,6 +164,8 @@ export async function clearProjectData(
 
   if (normalized.generatedText) {
     useDraftStore.getState().reset()
+    // 清除正文连回收站里的章节一起清掉，回收站与删除清理提示要重读。
+    globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath, projectSession })
   }
   if (normalized.creativeFields) {
     await useCharacterStore.getState().load(projectPath, projectSession)
