@@ -937,6 +937,113 @@ describe('批量创作刚开始、写作 Skill 快照还在读取时，运行卡
   })
 })
 
+describe('作者点了取消，但中止是真实错误造成的：仍记失败，恢复入口和失败提示才看得到', () => {
+  function errorLogs() {
+    return useWorkflowStore.getState().globalLogs.filter(log => log.level === 'error')
+  }
+
+  async function cancelThenThrow(type: WorkflowDefinition['type'], error: Error) {
+    let release!: () => void
+    const completion = useWorkflowStore.getState().startWorkflow({
+      runId: 'cancel-window-failure', type, title: '第 5 章 · 写稿', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '写稿', description: '', executor: async () => {
+        await new Promise<void>(resolve => { release = resolve })
+        throw error
+      } }],
+    })
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    useWorkflowStore.getState().cancelWorkflow('cancel-window-failure')
+    expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('cancelling')
+    release()
+    await completion
+    return useWorkflowStore.getState().history[0]
+  }
+
+  it.each(['batch_generate', 'novel_import'] as const)('%s：取消请求之后存储层写入失败，运行和这一步都记失败，带原错误码', async type => {
+    const storageFailure = Object.assign(new Error('章节草稿保存失败：磁盘空间不足'), { code: 'GENERATION_STORAGE_FAILED' })
+    const finished = await cancelThenThrow(type, storageFailure)
+
+    expect(finished).toMatchObject({ status: 'failed', errorCode: 'GENERATION_STORAGE_FAILED' })
+    expect(finished.error).toContain('磁盘空间不足')
+    expect(finished.steps[0]).toMatchObject({ status: 'failed', errorCode: 'GENERATION_STORAGE_FAILED' })
+    expect(errorLogs()).not.toEqual([])
+  })
+
+  it('取消请求之后抛出的普通错误认不出是取消造成的，也记失败', async () => {
+    const finished = await cancelThenThrow('chapter_creation', new Error('知识库索引写入失败'))
+
+    expect(finished).toMatchObject({ status: 'failed', error: '知识库索引写入失败' })
+    expect(finished.steps[0]).toMatchObject({ status: 'failed' })
+  })
+})
+
+describe('写作 Skill 快照还在读取时作者点了取消', () => {
+  /** 卡住快照读取；放行后正常读完，给了 rejection 时读取以它被拒绝。 */
+  function holdSkillSnapshot(rejection?: Error) {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    type Invoke = (channel: string, ...args: unknown[]) => Promise<unknown>
+    const invoke = (window as unknown as { aiNovelAPI: { invoke: ReturnType<typeof vi.fn<Invoke>> } }).aiNovelAPI.invoke
+    const original = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'skills:list-user') await gate
+      if (channel === 'fs:check-exists' && rejection) throw rejection
+      return original(channel, ...args)
+    })
+    return release
+  }
+
+  async function startAndCancelDuringSnapshot(release: () => void, beforeRelease?: () => void) {
+    const executor = vi.fn(async () => undefined)
+    const completion = useWorkflowStore.getState().startWorkflow({
+      runId: 'snapshot-cancel', type: 'batch_generate', title: '批量草稿待审 · 第 3 至 4 章', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '第 3 章 · 生成草稿待审', description: '', executor }],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('running'))
+    useWorkflowStore.getState().cancelWorkflow('snapshot-cancel')
+    expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('cancelling')
+    beforeRelease?.()
+    release()
+    await completion
+    expect(executor).not.toHaveBeenCalled()
+    return useWorkflowStore.getState().history[0]
+  }
+
+  function errorLogs() {
+    return useWorkflowStore.getState().globalLogs.filter(log => log.level === 'error')
+  }
+
+  it('快照读取因取消被拒绝：运行记为已取消，不写错误日志', async () => {
+    const finished = await startAndCancelDuringSnapshot(holdSkillSnapshot(new Error('GENERATION_CANCELLED')))
+
+    expect(finished).toMatchObject({ id: 'snapshot-cancel', status: 'cancelled' })
+    expect(errorLogs()).toEqual([])
+  })
+
+  it('作者取消后切换了作品，快照读完时项目已变：运行记为已取消，不记失败', async () => {
+    const finished = await startAndCancelDuringSnapshot(holdSkillSnapshot(), () => {
+      useProjectStore.setState({
+        currentProject: {
+          id: 'other-project', name: 'Other', path: 'C:\\other-project', sessionLease: 'lease-other-project', novelConfig: {},
+        } as never,
+      })
+    })
+
+    expect(finished).toMatchObject({ id: 'snapshot-cancel', status: 'cancelled' })
+    expect(errorLogs()).toEqual([])
+  })
+
+  it('快照读取本身失败了：即使作者点了取消，也记失败并写明原因', async () => {
+    const finished = await startAndCancelDuringSnapshot(holdSkillSnapshot(new Error('写作 Skill 绑定文件已损坏')))
+
+    expect(finished).toMatchObject({ id: 'snapshot-cancel', status: 'failed' })
+    expect(finished.error).toContain('写作 Skill 绑定文件已损坏')
+    expect(errorLogs()).not.toEqual([])
+  })
+})
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
