@@ -119,7 +119,7 @@ export default function StageSpine({ stages, chapters, location: activeLocation,
 
       {currentStage === 'manuscript' && trashCount > 0 && onTrash && (
         <div className="stage-spine-trash">
-          <button type="button" className="stage-chapter" onClick={onTrash}>
+          <button type="button" className="stage-chapter" aria-haspopup="dialog" onClick={onTrash}>
             <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
             <span className="stage-chapter-title">{text(`回收站（${trashCount}）`, `Trash (${trashCount})`)}</span>
           </button>
