@@ -196,7 +196,6 @@ describe('知识库嵌入空间回填', () => {
       '写作检索哨兵',
       projectPath,
       10,
-      undefined,
       ['reference'],
     )
     const semanticResults = await searchKnowledge(
@@ -205,7 +204,6 @@ describe('知识库嵌入空间回填', () => {
       'openai',
       model,
       10,
-      undefined,
       ['reference'],
     )
     expect(semanticResults.every(result => result.score > 0.5)).toBe(true)
@@ -253,7 +251,6 @@ describe('知识库嵌入空间回填', () => {
       '作者检索哨兵 林晓 数据对峙 异常标签 旧实验室 陆星辰 系统警报 第七章 保护幸存者 历史事故',
       projectPath,
       2,
-      undefined,
       ['reference'],
     )
 

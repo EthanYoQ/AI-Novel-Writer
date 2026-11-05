@@ -217,7 +217,6 @@ describe('knowledge-base controller project context guard', () => {
     ['kb:import-text', ['text', 'book.txt']],
     ['kb:import-planning-text', ['text', 'planning.md']],
     ['kb:search', ['query', 5]],
-    ['kb:search-with-scope', ['query', 1, 3, 5]],
     ['kb:list-documents', []],
     ['kb:remove-document', ['doc-1']],
     ['kb:clear-all', []],

@@ -14,7 +14,6 @@ import {
   getStats,
   removeDocument,
   search,
-  searchWithScope,
   updateChunkVectors,
 } from '../vector-store'
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
@@ -388,83 +387,6 @@ describe('知识库向量维度', () => {
         expect.objectContaining({ generation: active.generation, chunkCount: 2, complete: true }),
       ]),
     })
-  })
-
-  it('在大小写敏感的 LanceDB SQL 上按章节范围检索', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-chapter-scope-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-
-    await expect(addChunks(
-      projectPath,
-      'chapter-one',
-      'chapter-one.txt',
-      ['范围检索共同正文'],
-      undefined,
-      undefined,
-      { chapterNumber: 1 },
-    )).resolves.toEqual({ success: true, chunkCount: 1 })
-    await expect(addChunks(
-      projectPath,
-      'chapter-two',
-      'chapter-two.txt',
-      ['范围检索共同正文'],
-      undefined,
-      undefined,
-      { chapterNumber: 2 },
-    )).resolves.toEqual({ success: true, chunkCount: 1 })
-    await expect(addChunks(
-      projectPath,
-      'chapter-two-unmatched',
-      'chapter-two-unmatched.txt',
-      ['本章不匹配检索条件'],
-      undefined,
-      undefined,
-      { chapterNumber: 2 },
-    )).resolves.toEqual({ success: true, chunkCount: 1 })
-
-    await expect(searchWithScope(projectPath, '范围检索', undefined, 5, [2, 2])).resolves.toEqual([
-      expect.objectContaining({ fileName: 'chapter-two.txt' }),
-    ])
-  })
-
-  it('在大小写敏感的 LanceDB SQL 上将向量检索限定在章节范围', async () => {
-    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-chapter-scope-vector-'))
-    projects.push(projectPath)
-    prepareCanonicalStorageFixture(projectPath)
-    const embeddingSpace = { modelFingerprint: 'test/chapter-scope', distanceMetric: 'l2' }
-
-    await expect(addChunks(
-      projectPath,
-      'chapter-one-vector',
-      'chapter-one-vector.txt',
-      ['向量范围检索共同正文'],
-      [[1, 0]],
-      undefined,
-      { chapterNumber: 1 },
-      embeddingSpace,
-    )).resolves.toEqual({ success: true, chunkCount: 1 })
-    await expect(addChunks(
-      projectPath,
-      'chapter-two-vector',
-      'chapter-two-vector.txt',
-      ['向量范围检索共同正文'],
-      [[0, 1]],
-      undefined,
-      { chapterNumber: 2 },
-      embeddingSpace,
-    )).resolves.toEqual({ success: true, chunkCount: 1 })
-
-    await expect(searchWithScope(
-      projectPath,
-      '向量范围检索',
-      [1, 0],
-      5,
-      [2, 2],
-      embeddingSpace,
-    )).resolves.toEqual([
-      expect.objectContaining({ fileName: 'chapter-two-vector.txt' }),
-    ])
   })
 
   it('安全登记缺少元数据的旧 2048 维 chunks 表并保持可检索', async () => {
