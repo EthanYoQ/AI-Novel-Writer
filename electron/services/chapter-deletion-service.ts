@@ -227,11 +227,14 @@ export class ChapterDeletionService {
         const db = getProjectDb()
         if (!db) throw new Error('PROJECT_NOT_OPEN')
         restored = db.transaction(() => {
-          if (final && new GenerationDraftEffects(db, new GenerationRunRepository(() => db))
-            .unfinishedBatchChapters(projectId).has(final.chapterNumber)) {
+          const batches = new GenerationDraftEffects(db, new GenerationRunRepository(() => db))
+          // 放回会把发布与后处理重置为待处理；被删章删除前已确认完，才按确认完算批次进度。
+          const settled = final && batches.finalizationSettled(final.finalizationId) ? final.chapterNumber : undefined
+          const result = ChapterDeletionRepository.restore(request, target)
+          if (result.outcome !== 'already-restored' && batches.unfinishedBatchChapters(projectId, settled).has(result.chapterNumber)) {
             throw new Error('CHAPTER_RESTORE_BATCH_UNFINISHED')
           }
-          return ChapterDeletionRepository.restore(request, target)
+          return result
         }).immediate()
       } catch (error) {
         return { success: false, error: messageOf(error) }
