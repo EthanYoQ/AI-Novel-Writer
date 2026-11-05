@@ -83,6 +83,8 @@ export interface ReviewEntry extends Usage {
   tails: ReviewText[]
   actionLabel: string
   canAct: boolean
+  /** 结果已经保存：卡片只留给作者打开或复制，不再算可恢复。 */
+  saved: boolean
   labels: { copy: string; copyTail: string }
   view: MainGenerationRunView
 }
@@ -343,6 +345,7 @@ function reviewEntry({ view, recovery }: RecoverySources['reviews'][number], loc
     actionLabel: recovery.saved ? t('打开已保存结果', 'Open saved result')
       : requestsReview ? t('重新审稿', 'Review again') : t('恢复此审修任务', 'Recover this review or revision'),
     canAct: Boolean(recovery.saved) || (recovery.canResume && current && live),
+    saved: Boolean(recovery.saved),
     labels: { copy: t('复制', 'Copy'), copyTail: t('复制未保存文字', 'Copy unsaved text') },
     view,
   }
