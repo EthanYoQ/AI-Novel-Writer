@@ -17,10 +17,21 @@ import WriteChapterPopover from '../write/WriteChapterPopover'
 import BatchWriteDialog from './BatchWriteDialog'
 import BlueprintCard from './BlueprintCard'
 import BlueprintPlanList from './BlueprintPlanList'
-import GapNotice from './GapNotice'
-import { useChapterTrash } from '../trash/use-chapter-trash'
+import GapNotice, { type GapTrash } from './GapNotice'
+import { useChapterTrash, type ChapterTrash } from '../trash/use-chapter-trash'
 import GenerateBlueprintsDialog from './GenerateBlueprintsDialog'
 import { pluralEn } from '../../../shared/plural-en'
+import type { ChapterGap } from '../../../shared/chapter-sequence'
+
+/** 缺口段里章号最小的那一项回收站记录；段里任何一章都可能是被删进回收站的那章。 */
+function trashedInGap(gap: ChapterGap, trash: ChapterTrash | null): GapTrash {
+  if (!trash) return 'unknown'
+  for (let chapterNumber = gap.from; chapterNumber <= gap.to; chapterNumber++) {
+    const entry = trash.byChapter.get(chapterNumber)
+    if (entry) return entry
+  }
+  return null
+}
 
 /** 等作者确认的一步：覆盖已有蓝图、生成前的架构警告、清空全部、删除此章、清除误导入正文。 */
 type Ask =
@@ -178,7 +189,7 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
           gap={gap}
           blueprint={plan.blueprints.find(blueprint => blueprint.chapterNumber === gap.from) ?? null}
           unsaved={plan.unsavedChapterNumbers.has(gap.from)}
-          trashed={trash.byChapter.get(gap.from)}
+          trashed={trashedInGap(gap, trash)}
           onWrite={plan.writeChapter}
           onAddBlueprint={plan.addGapBlueprint}
           clearAction={gap === firstUnexplainedGap && (

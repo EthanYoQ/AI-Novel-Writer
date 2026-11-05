@@ -183,7 +183,7 @@ export default function StageShell({ theme }: { theme: Theme }) {
             onChapter={chapterNumber => navigate({ kind: 'chapter', chapterNumber })}
             onResource={page => navigate({ kind: 'resource', page })}
             onSettings={() => navigate({ kind: 'settings', section: 'llm' })}
-            trashCount={trash.entries.length + trash.damaged.length}
+            trashCount={trash ? trash.entries.length + trash.damaged.length : 0}
             onTrash={() => setTrashFor(work)}
           />
         )}
@@ -192,7 +192,7 @@ export default function StageShell({ theme }: { theme: Theme }) {
       <StagePalette mode={palette} items={paletteItems} container={root} onClose={() => useStageStore.setState({ palette: null })} />
       <ClearProjectDataDialog open={clearFor !== null && clearFor === work} onClose={() => setClearFor(null)} onCleared={() => refreshStageWork(text)} />
       <NewWorkDialog />
-      {!library && <TrashDialog key={work} open={trashFor !== null && trashFor === work} onOpenChange={open => setTrashFor(open ? work : null)} trash={trash} />}
+      {!library && trash && <TrashDialog key={work} open={trashFor !== null && trashFor === work} onOpenChange={open => setTrashFor(open ? work : null)} trash={trash} />}
     </div>
   )
 }

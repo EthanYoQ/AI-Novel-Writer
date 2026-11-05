@@ -52,7 +52,8 @@ function project(): ProjectData {
 }
 
 async function render() {
-  const Harness = () => <TrashDialog open onOpenChange={() => undefined} trash={useChapterTrash()} />
+  // 换了作品后回收站变成未知，这里仍挂着对话框，用来测它自己的会话检查。
+  const Harness = () => <TrashDialog open onOpenChange={() => undefined} trash={useChapterTrash() ?? { entries: [], damaged: [], byChapter: new Map() }} />
   host = document.createElement('div')
   host.className = 'paper-ink'
   document.body.append(host)

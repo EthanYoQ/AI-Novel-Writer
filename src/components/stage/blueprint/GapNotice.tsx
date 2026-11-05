@@ -8,13 +8,16 @@ import { Button } from '../../ui/Button'
 import { Notice } from '../../ui/Notice'
 import { restoreTrashedChapter } from '../trash/trash-actions'
 
+/** 缺口段在回收站里的那一项；null 是确认不在，unknown 是回收站还没读到。 */
+export type GapTrash = TrashedChapter | null | 'unknown'
+
 export default function GapNotice({ gap, blueprint, unsaved, trashed, onWrite, onAddBlueprint, clearAction }: {
   gap: ChapterGap
   blueprint: ChapterBlueprint | null
   /** 单章视图只读已保存的蓝图：这一章蓝图还没保存时不给写作入口。 */
   unsaved: boolean
-  /** 段首这一章在回收站里的那一项；有它时提示可以恢复，写作按钮叫「重写」。 */
-  trashed?: TrashedChapter
+  /** 有回收站项时提示可以恢复；它就是段首那章时，写作按钮叫「重写」。 */
+  trashed: GapTrash
   onWrite: (blueprint: ChapterBlueprint) => void
   onAddBlueprint: (chapterNumber: number) => void
   clearAction?: ReactNode
@@ -25,7 +28,9 @@ export default function GapNotice({ gap, blueprint, unsaved, trashed, onWrite, o
   const many = gap.to > gap.from
   const zhRange = many ? `第 ${gap.from}～${gap.to} 章` : `第 ${head} 章`
   const enRange = many ? `Chapters ${gap.from}–${gap.to}` : `Chapter ${head}`
-  const writeLabel = trashed
+  const inTrash = trashed !== null && trashed !== 'unknown' ? trashed : null
+  const rewrite = inTrash?.chapterNumber === head
+  const writeLabel = rewrite
     ? text(`重写第 ${head} 章`, `Rewrite chapter ${head}`)
     : text(`写第 ${head} 章`, `Write chapter ${head}`)
   const addLabel = text(`补上第 ${head} 章蓝图`, `Add chapter ${head} blueprint`)
@@ -44,14 +49,14 @@ export default function GapNotice({ gap, blueprint, unsaved, trashed, onWrite, o
       ))
 
   const restore = () => {
-    if (!trashed || restoring) return
+    if (!inTrash || restoring) return
     setRestoring(true)
-    void restoreTrashedChapter(trashed).finally(() => setRestoring(false))
+    void restoreTrashedChapter(inTrash).finally(() => setRestoring(false))
   }
 
   const actions = (
     <>
-      {trashed && (
+      {inTrash && (
         <Button variant="secondary" size="sm" disabled={restoring} onClick={restore}>
           <RotateCcw size={13} aria-hidden />{restoring ? text('恢复中…', 'Restoring…') : text('恢复', 'Restore')}
         </Button>
@@ -63,13 +68,17 @@ export default function GapNotice({ gap, blueprint, unsaved, trashed, onWrite, o
     </>
   )
 
-  if (trashed) {
-    const zhTitle = many ? `${zhRange}已删除，第 ${head} 章的正文在回收站里` : `${zhRange}已删除，正文在回收站里`
-    const enTitle = many ? `${enRange} were deleted; chapter ${head}’s text is in the trash` : `${enRange} was deleted; its text is in the trash`
+  if (inTrash) {
+    const trashedNumber = inTrash.chapterNumber
+    const zhTitle = many ? `${zhRange}已删除，第 ${trashedNumber} 章的正文在回收站里` : `${zhRange}已删除，正文在回收站里`
+    const enTitle = many ? `${enRange} were deleted; chapter ${trashedNumber}’s text is in the trash` : `${enRange} was deleted; its text is in the trash`
     return (
       <Notice tone="info" title={text(zhTitle, enTitle)} actions={actions}>
-        {text(`后面的章节照常可写。点「恢复」放回这一章，或者重写它。${order}`,
-          `Later chapters stay writable. Choose “Restore” to put this chapter back, or rewrite it. ${order}`)}
+        {rewrite
+          ? text(`后面的章节照常可写。点「恢复」放回这一章，或者重写它。${order}`,
+              `Later chapters stay writable. Choose “Restore” to put this chapter back, or rewrite it. ${order}`)
+          : text(`后面的章节照常可写。点「恢复」放回这一章。${order}`,
+              `Later chapters stay writable. Choose “Restore” to put this chapter back. ${order}`)}
       </Notice>
     )
   }
@@ -77,8 +86,10 @@ export default function GapNotice({ gap, blueprint, unsaved, trashed, onWrite, o
   if (gap.cause === 'deleted') {
     return (
       <Notice tone="info" title={text(`${zhRange}的正文已删除`, `${enRange} ${many ? 'were' : 'was'} deleted`)} actions={actions}>
-        {text(`后面的章节都还在，照常可写。删掉的正文找不回来，${nextStep}`,
-          `Later chapters are untouched and stay writable. The deleted text cannot be recovered. ${nextStep}`)}
+        {trashed === 'unknown'
+          ? text(`后面的章节都还在，照常可写。${nextStep}`, `Later chapters are untouched and stay writable. ${nextStep}`)
+          : text(`后面的章节都还在，照常可写。删掉的正文找不回来，${nextStep}`,
+              `Later chapters are untouched and stay writable. The deleted text cannot be recovered. ${nextStep}`)}
       </Notice>
     )
   }
