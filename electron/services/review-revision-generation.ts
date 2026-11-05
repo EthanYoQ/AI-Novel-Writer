@@ -26,6 +26,8 @@ const handleOf = (run: DurableGenerationRun): MainGenerationRunHandle => ({ proj
 const contextHash = (context: ReviewRevisionContext) => textHash(JSON.stringify(context))
 
 /** Admission contexts are disposable; recovery and formal-effect truth live in the existing run ledger. */
+export const REVIEW_SOURCE_DELETED = 'GENERATION_REVIEW_SOURCE_DELETED'
+
 export class ReviewRevisionGeneration {
   private readonly contexts = new Map<string, PreparedReviewRevisionContext>()
   constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository,
@@ -271,7 +273,10 @@ export class ReviewRevisionGeneration {
   }
   readRecovery(handle: MainGenerationRunHandle, sourcesMatch: (run: DurableGenerationRun) => boolean,
     snapshot: (run: DurableGenerationRun) => MainGenerationSnapshot | undefined): ReviewRevisionRecovery {
-    const run = this.requireRun(handle), context = this.context(run), saved = this.saved(run)?.receipt
+    const run = this.requireRun(handle), context = this.context(run)
+    // 源稿进了回收站：它的审稿、修稿不再读出，恢复稿里的原文也不再显示或续写；恢复章节后照常可读。
+    if (!this.db.prepare('SELECT 1 FROM drafts WHERE id=?').get(context.source.id)) throw new Error(REVIEW_SOURCE_DELETED)
+    const saved = this.saved(run)?.receipt
     let current = false
     try { current = sourcesMatch(run) } catch { /* Original candidate remains available when a source/model/template has changed. */ }
     const composition = this.runs.readVisibleComposition(run.runId) ?? undefined, latestArtifact = snapshot(run)

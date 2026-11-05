@@ -6,7 +6,7 @@
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
 import type { ExpectedDraftSource } from '../../src/shared/ipc-channels'
-import { assertExpectedDraftSource, SourceDraftChangedError } from './draft-source-guard'
+import { assertExpectedDraftSource, LIVE_PARENT, SourceDraftChangedError } from './draft-source-guard'
 
 /** 审稿元数据 */
 export interface ReviewMeta {
@@ -97,7 +97,7 @@ export class ReviewRepository {
 
         const rows = db.prepare(`
       SELECT * FROM reviews
-      WHERE base_draft_id = ?
+      WHERE base_draft_id = ? AND ${LIVE_PARENT}
       ORDER BY review_index ASC
     `).all(baseDraftId) as Record<string, unknown>[]
 
@@ -111,7 +111,7 @@ export class ReviewRepository {
 
         const row = db.prepare(`
       SELECT * FROM reviews
-      WHERE base_draft_id = ?
+      WHERE base_draft_id = ? AND ${LIVE_PARENT}
       ORDER BY review_index DESC LIMIT 1
     `).get(baseDraftId) as Record<string, unknown> | undefined
 
@@ -126,7 +126,7 @@ export class ReviewRepository {
         if (!db) return null
 
         const row = db.prepare(
-            'SELECT * FROM reviews WHERE id = ?'
+            `SELECT * FROM reviews WHERE id = ? AND ${LIVE_PARENT}`
         ).get(id) as Record<string, unknown> | undefined
 
         if (!row) return null
