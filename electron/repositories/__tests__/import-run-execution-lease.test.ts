@@ -79,7 +79,7 @@ describe('import execution lease', () => {
     )).toThrow('IMPORT_RUN_REFERENCE_UNBOUND')
   })
 
-  it('revokes knowledge and embedding authority as soon as cancellation is requested', () => {
+  it('revokes knowledge and embedding authority as soon as cancellation is requested, with the cancellation code', () => {
     const started = ImportRunRepository.startOrResume('leased-run', 'renderer-a')
     const authority = { owner: started.execution.owner, epoch: started.execution.epoch }
     expect(() => ImportRunRepository.resolveReferenceImportAuthority(
@@ -90,7 +90,7 @@ describe('import execution lease', () => {
 
     expect(() => ImportRunRepository.resolveReferenceImportAuthority(
       'leased-run', authority, 1,
-    )).toThrow('IMPORT_RUN_REFERENCE_UNBOUND')
+    )).toThrow('IMPORT_RUN_CANCELLED')
   })
 
   it('rejects a concurrent owner, allows expiry takeover, and rejects every stale mutation', () => {

@@ -33,7 +33,8 @@ import { GeneratePlotArchitectureCommand } from '../../../src/services/workflows
 import { ReviewChapterCommand } from '../../../src/services/workflows/commands/review-chapter.command'
 import { RefineDraftCommand } from '../../../src/services/workflows/commands/refine-draft.command'
 import { useProjectStore } from '../../../src/stores/project-store'
-import type { WorkflowContext, StepCallbacks } from '../../../src/stores/workflow-store'
+import { useWorkflowStore, type WorkflowContext, type StepCallbacks } from '../../../src/stores/workflow-store'
+import { useLocaleStore } from '../../../src/stores/locale-store'
 import type { MainGenerationRunHandle } from '../../../src/services/generation/generation-runtime'
 import { PLOT_OUTLINE_PROTOCOL, renderPlotOutlineSynopsis } from '../../../src/shared/plot-outline-contract'
 import { clearProjectCustomPrompts } from '../../../src/services/prompt-templates'
@@ -384,6 +385,68 @@ describe('generation public IPC with actual project authority and SQLite', () =>
 
     await expect(begun).rejects.toThrow('GENERATION_KNOWLEDGE_SOURCE_STALE')
     expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  /**
+   * 写正文的请求停在知识库门闩上时作者点了取消：取消照产品里的路径走（store 取消 → 主进程取消生成根），
+   * inWindow 是同一时刻主进程里发生的事。请求放行后的拒绝原样交给 store，看运行最后记成什么。
+   */
+  async function draftRejectedAfterCancel(inWindow: (handle: MainGenerationRunHandle) => Promise<unknown>) {
+    await seedKnowledge()
+    const fetch = stream()
+    const { selection } = await prepareDraft()
+    const run = await invoke('generation:begin', selection)
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: async (channel: string, ...args: unknown[]) => {
+      const handler = mocks.handlers.get(channel)
+      if (handler) return handler({ sender }, ...args)
+      return channel === 'skills:list-user' ? [] : false
+    }, on: () => () => {}, once: () => {} } })
+    useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
+    useProjectStore.setState({ currentProject: { id: session.projectId, name: '合成小说', path: session.projectPath, sessionLease: session.leaseId, novelConfig: {} } as never })
+    useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [], waitingRuns: {} })
+    let entered!: () => void, release!: () => void
+    const holding = new Promise<void>(resolve => { entered = resolve })
+    const released = new Promise<void>(resolve => { release = resolve })
+    const holder = withKnowledgeSourceGate(getProjectDataRoot(session.projectPath), async () => { entered(); await released })
+    await holding
+    let rejection: unknown
+    await useWorkflowStore.getState().startWorkflow({ runId: '取消窗口', type: 'chapter_creation', title: '写第 1 章', projectPath: session.projectPath, projectSession: session,
+      steps: [{ name: '写正文', description: '', executor: async (_step, context) => {
+        let mainSide: Promise<unknown> | undefined
+        context.requestMainGenerationCancellation = async () => { mainSide = inWindow(run.handle) }
+        const executing = ipc.invokeWithProjectSession(session, 'generation:execute', { handle: run.handle, invocationNonce: '正文',
+          task: { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '合成初始提示词' }] } })
+        useWorkflowStore.getState().cancelWorkflow('取消窗口')
+        await mainSide
+        release()
+        await holder
+        await executing.catch(error => { rejection = error; throw error })
+        return undefined
+      } }] })
+    return { run, fetch, rejection, ended: useWorkflowStore.getState().history[0]! }
+  }
+  it('作者在请求等知识库校验时取消：运行记已取消，主进程报取消码，不发请求也不阻断生成根', async () => {
+    const { run, fetch, rejection, ended } = await draftRejectedAfterCancel(handle => invoke('generation:cancel', handle))
+
+    expect(rejection).toMatchObject({ message: 'GENERATION_ACTION_CANCELLED' })
+    expect(ended).toMatchObject({ status: 'cancelled' })
+    expect(ended.steps[0]).toMatchObject({ status: 'cancelled' })
+    expect(useWorkflowStore.getState().globalLogs.filter(log => log.level === 'error')).toEqual([])
+    const view = await invoke('generation:read', run.handle)
+    expect(view).toMatchObject({ status: 'cancelled', ledger: { physicalRequests: 0, blockedCode: null } })
+    expect(fetch).not.toHaveBeenCalled()
+    await expect(invoke('generation:execute', { handle: run.handle, invocationNonce: '取消后再发',
+      task: { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '合成初始提示词' }] } }))
+      .rejects.toThrow('GENERATION_ACTION_CANCELLED')
+  })
+  it('取消窗口里生成根被真实阻断（没有取消）：运行照常记失败，带原错误码', async () => {
+    const { rejection, ended, fetch } = await draftRejectedAfterCancel(async handle => {
+      getProjectDb()!.prepare('UPDATE generation_roots SET blocked_code=? WHERE root_action_id=?').run('ROOT_BUDGET_EXHAUSTED', handle.rootActionId)
+    })
+
+    expect(rejection).toMatchObject({ message: 'GENERATION_DISPATCH_BLOCKED' })
+    expect(ended).toMatchObject({ status: 'failed', error: 'GENERATION_DISPATCH_BLOCKED' })
+    expect(ended.steps[0]).toMatchObject({ status: 'failed', error: 'GENERATION_DISPATCH_BLOCKED' })
     expect(fetch).not.toHaveBeenCalled()
   })
   it.each([new KnowledgeBaseUnavailableError(new Error('native missing')),new LegacyVectorMigrationBlockedError('untrusted details')])('preserves known knowledge failure code before drafting',async error=>{

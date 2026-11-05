@@ -85,6 +85,22 @@ it('导入中点取消后，「继续导入」接着跑完', async () => {
   await continueAndFinish(f)
 }, 60_000)
 
+it('导入中点取消后，这一批剩下的开槽和请求都报取消码，不发请求', async () => {
+  const f = importGenerationFixture(cleanup, 10)
+  await runGlobal(f)
+  await runStyle(f)
+  await runBlueprints(f, f.chapters.slice(0, 5))
+  const execution = ImportRunRepository.startOrResume(RUN, '合成执行器').execution
+  const opened = openSlot(f, blueprintSlot(RUN, f.chapters.slice(5, 8)), execution)
+  ImportRunRepository.requestCancel(RUN, execution)
+  f.spy.mockClear()
+
+  await expect(f.owner.executeImportGeneration({ execution, handle: opened, ordinal: 0,
+    task: { purpose: 'import-blueprints', output: 'structured-data', messages: [{ role: 'user', content: '推演参考小说' }] } })).rejects.toThrow('GENERATION_ACTION_CANCELLED')
+  expect(() => openSlot(f, blueprintSlot(RUN, f.chapters.slice(8)), execution)).toThrow('GENERATION_ACTION_CANCELLED')
+  expect(f.spy).not.toHaveBeenCalled()
+}, 60_000)
+
 it('请求确实还在发出时再点「继续导入」：拒绝，原请求结束后照常提交', async () => {
   const f = importGenerationFixture(cleanup, 10)
   let release!: () => void
