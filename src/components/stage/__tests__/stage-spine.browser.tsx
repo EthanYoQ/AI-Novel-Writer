@@ -230,6 +230,7 @@ describe('流程脊', () => {
     const entry = await renderWith(2, 'manuscript', onTrash)
     expect(entry?.textContent).toBe('回收站（2）')
     expect(entry?.closest('[aria-label="章节"]')).toBeNull()
+    expect(entry?.getAttribute('aria-haspopup'), '读屏软件要知道点它会开对话框').toBe('dialog')
     await act(async () => entry!.click())
     expect(onTrash).toHaveBeenCalledOnce()
 
