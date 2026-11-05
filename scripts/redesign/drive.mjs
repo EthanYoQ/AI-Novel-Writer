@@ -12,6 +12,8 @@ import { _electron as electron } from 'playwright'
 
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
 import { startFakeModel } from './fake-model.mjs'
+import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, REAL_KEY_ENV, REAL_ORIGIN, realModelProfiles, redactSecret, removeModelConfigs, removePath,
+  summarizeModelRequests } from './real-model.mjs'
 import { assertNodeRunsTypeScript } from './node-version.mjs'
 import { dismissCompletionToasts, dismissStartupNotice, firstInteractiveControl, waitForShell } from './pages/shell.mjs'
 
@@ -25,12 +27,12 @@ if (asEntryPoint) try { assertNodeRunsTypeScript(process.version, process.featur
 }
 const [
   { ARCH_SCENARIOS }, { RUN_SCENARIOS }, { BLUEPRINT_SCENARIOS }, { CHAPTER_SCENARIOS }, { REFS_SCENARIOS },
-  { VISUAL_SCENARIOS }, { X1_SCENARIOS }, { X2_SCENARIOS }, { RDX3_SCENARIOS }, { RD10_SCENARIOS }, { README_SCENARIOS }, { CONTRAST_SCENARIOS }, { F491_SCENARIOS }, { F484_SCENARIOS }, { ST504_SCENARIOS }, { F512_SCENARIOS }, { SM517_SCENARIOS }, { BPG_SCENARIOS }, { IMPORT_INFER_SCENARIOS }, { RBK_SCENARIOS }, { F537_SCENARIOS }, { F555_SCENARIOS }, { D77_SCENARIOS }, { REOPEN_SCENARIOS }, { I552_SCENARIOS }, { A573_SCENARIOS }, { F571_SCENARIOS }, { RTUX_SCENARIOS },
+  { VISUAL_SCENARIOS }, { X1_SCENARIOS }, { X2_SCENARIOS }, { RDX3_SCENARIOS }, { RD10_SCENARIOS }, { README_SCENARIOS }, { CONTRAST_SCENARIOS }, { F491_SCENARIOS }, { F484_SCENARIOS }, { ST504_SCENARIOS }, { F512_SCENARIOS }, { SM517_SCENARIOS }, { BPG_SCENARIOS }, { IMPORT_INFER_SCENARIOS }, { RBK_SCENARIOS }, { F537_SCENARIOS }, { F555_SCENARIOS }, { D77_SCENARIOS }, { REOPEN_SCENARIOS }, { I552_SCENARIOS }, { A573_SCENARIOS }, { F571_SCENARIOS }, { RTUX_SCENARIOS }, { REAL_SCENARIOS },
   { BASELINE_SESSIONS, EXTRA_SCENARIOS, SCENARIOS: BASELINE_SCENARIOS, STAGE_SCENARIOS },
 ] = await Promise.all([
   import('./arch-scenarios.mjs'), import('./run-scenarios.mjs'), import('./blueprint-scenarios.mjs'), import('./chapter-scenarios.mjs'),
   import('./refs-scenarios.mjs'), import('./visual-scenarios.mjs'), import('./x1-scenarios.mjs'), import('./x2-scenarios.mjs'),
-  import('./rdx3-scenarios.mjs'), import('./rd10-scenarios.mjs'), import('./readme-scenarios.mjs'), import('./contrast-scenarios.mjs'), import('./f491-scenarios.mjs'), import('./f484-scenarios.mjs'), import('./st504-scenarios.mjs'), import('./f512-scenarios.mjs'), import('./sm517-scenarios.mjs'), import('./bpg-scenarios.mjs'), import('./import-infer-scenarios.mjs'), import('./rbk-scenarios.mjs'), import('./f537-scenarios.mjs'), import('./f555-scenarios.mjs'), import('./d77-scenarios.mjs'), import('./reopen-scenarios.mjs'), import('./i552-scenarios.mjs'), import('./a573-scenarios.mjs'), import('./f571-scenarios.mjs'), import('./rtux-scenarios.mjs'), import('./scenarios.mjs'),
+  import('./rdx3-scenarios.mjs'), import('./rd10-scenarios.mjs'), import('./readme-scenarios.mjs'), import('./contrast-scenarios.mjs'), import('./f491-scenarios.mjs'), import('./f484-scenarios.mjs'), import('./st504-scenarios.mjs'), import('./f512-scenarios.mjs'), import('./sm517-scenarios.mjs'), import('./bpg-scenarios.mjs'), import('./import-infer-scenarios.mjs'), import('./rbk-scenarios.mjs'), import('./f537-scenarios.mjs'), import('./f555-scenarios.mjs'), import('./d77-scenarios.mjs'), import('./reopen-scenarios.mjs'), import('./i552-scenarios.mjs'), import('./a573-scenarios.mjs'), import('./f571-scenarios.mjs'), import('./rtux-scenarios.mjs'), import('./real-scenarios.mjs'), import('./scenarios.mjs'),
 ])
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -40,7 +42,7 @@ const VIEWPORT = { width: 1440, height: 900 }
 const THEMES = ['light', 'dark']
 const SHELLS = ['writer', 'stage']
 const ROOT_NAMES = ['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'temp', 'projects']
-const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...F555_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS, ...I552_SCENARIOS, ...A573_SCENARIOS, ...F571_SCENARIOS, ...RTUX_SCENARIOS }
+const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...F555_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS, ...I552_SCENARIOS, ...A573_SCENARIOS, ...F571_SCENARIOS, ...RTUX_SCENARIOS, ...REAL_SCENARIOS }
 /** 计时会话：先在同一隔离目录预启动一次写好外观（书房计时另建 20 部作品），再计之后那次冷启动。 */
 const TIMED_SESSIONS = new Set(['startup-timing', 'library-timing'])
 /** 空闲内存：与启动计时同样先预启动一次，第二次冷启动到可交互后静置，再按间隔采样全部进程的内存。 */
@@ -51,12 +53,13 @@ const IDLE_SAMPLES = 5
 const IDLE_SAMPLE_INTERVAL_MS = 1_000
 export const SHELF_BOOKS = 20
 const ALL_SCENARIOS = [...Object.keys(SCENARIOS), 'baseline-all', ...PREPARED_SESSIONS]
-const USAGE = `用法: node scripts/redesign/drive.mjs --scenario <名称> [--theme light|dark] [--shell writer|stage] [--out <目录>] [--dump-dom] [--console] [--video] [--app-root <目录>]
+const USAGE = `用法: node scripts/redesign/drive.mjs --scenario <名称> [--theme light|dark] [--shell writer|stage] [--out <目录>] [--dump-dom] [--console] [--video] [--app-root <目录>] [--real-model]
+--real-model 只用于 real-* 场景，密钥从环境变量 ${REAL_KEY_ENV} 读
 场景: ${ALL_SCENARIOS.join(', ')}`
 
 export function parseArgs(argv) {
   const options = { scenario: null, theme: 'light', shell: null, out: path.join(repository, '.runtime', 'redesign-baseline'),
-    dumpDom: false, console: false, video: false, appRoot: repository }
+    dumpDom: false, console: false, video: false, appRoot: repository, realModel: false }
   const valueOf = (flag, index) => {
     const value = argv[index + 1]
     if (value === undefined || value.startsWith('--')) throw new Error(`${flag} 缺少取值\n${USAGE}`)
@@ -73,11 +76,15 @@ export function parseArgs(argv) {
     else if (arg === '--dump-dom') options.dumpDom = true
     else if (arg === '--console') options.console = true
     else if (arg === '--video') options.video = true
+    else if (arg === '--real-model') options.realModel = true
     else throw new Error(`未知参数 ${arg}\n${USAGE}`)
   }
   if (!ALL_SCENARIOS.includes(options.scenario)) throw new Error(`未知或缺少场景 ${options.scenario}\n${USAGE}`)
   if (!THEMES.includes(options.theme)) throw new Error(`--theme 只接受 ${THEMES.join('|')}`)
   if (options.shell !== null && !SHELLS.includes(options.shell)) throw new Error(`--shell 只接受 ${SHELLS.join('|')}`)
+  if (Boolean(SCENARIOS[options.scenario]?.real) !== options.realModel) {
+    throw new Error(options.realModel ? `--real-model 只用于真实模型场景，${options.scenario} 不是` : `${options.scenario} 是真实模型场景，要带 --real-model`)
+  }
   return options
 }
 
@@ -220,31 +227,31 @@ export async function captureFailure(page, base) {
   await dumpDom(page, base).catch(() => {})
 }
 
+/** 应用入口是构建产物；没构建就启动，Electron 会在桌面上弹出找不到应用的对话框，所以启动前先查。 */
+export function assertBuilt(appRoot) {
+  const main = path.join(appRoot, 'dist-electron', 'main.js')
+  if (!fs.existsSync(main)) throw new Error(`${main} 不存在：先在 ${appRoot} 构建（pnpm build）再跑驱动`)
+}
+
 /** 外部写入与残留进程都要留着隔离目录取证；只有全部检查通过才删。 */
 export function sessionIsClean({ failedAt, sessionErrors, residualProcesses, externalWrites }) {
   return failedAt === null && sessionErrors.length === 0 && residualProcesses?.length === 0 && externalWrites?.length === 0
 }
 
-async function launch({ roots, appRoot, fakeModelPort, diagnostics, failureBase, shelfBooks = 0, renderTiming = false }) {
+async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, realOrigin: null }, diagnostics, failureBase, shelfBooks = 0, renderTiming = false }) {
+  assertBuilt(appRoot)
   const launchedAt = Date.now()
   const env = { ...isolatedEnvironment(roots), ...(renderTiming ? { DRIVE_RENDER_TIMING: String(shelfBooks || 1) } : {}) }
   const app = await electron.launch({ cwd: appRoot, args: launchArgs(roots), env, timeout: TIMEOUT })
   let page
   try {
-    await app.evaluate((_, port) => {
-      const originalFetch = globalThis.fetch
-      globalThis.__driveExternalRequests = []
-      globalThis.fetch = async (input, options) => {
-        const url = new URL(String(input instanceof Request ? input.url : input))
-        // 本机检索模型直接把 base_url 配成假服务的本机地址，这类请求原样放行。
-        if (port !== null && url.origin === `http://127.0.0.1:${port}`) return originalFetch(input, options)
-        if (port === null || url.origin !== 'https://api.openai.com' || !url.pathname.startsWith('/v1/')) {
-          globalThis.__driveExternalRequests.push(url.origin)
-          throw new Error('DRIVE_EXTERNAL_FETCH_REFUSED')
-        }
-        return originalFetch(`http://127.0.0.1:${port}${url.pathname}`, options)
-      }
-    }, fakeModelPort ?? null)
+    // 本机检索模型直接把 base_url 配成假服务的本机地址，这类请求原样放行；真实模式只放行硅基流动，只记路径、状态与耗时。
+    await app.evaluate((_, { route, guard, policy }) => {
+      const sink = { externalRequests: [], modelRequests: [] }
+      globalThis.__driveExternalRequests = sink.externalRequests
+      globalThis.__driveModelRequests = sink.modelRequests
+      globalThis.fetch = (0, eval)(`(${guard})`)(globalThis.fetch, (0, eval)(`(${route})`), policy, sink)
+    }, { route: fetchRoute.toString(), guard: guardFetch.toString(), policy: fetchPolicy })
     app.process().stdout?.on('data', chunk => diagnostics.push(`[main:stdout] ${String(chunk).trimEnd()}`))
     app.process().stderr?.on('data', chunk => diagnostics.push(`[main:stderr] ${String(chunk).trimEnd()}`))
     page = await app.firstWindow({ timeout: TIMEOUT })
@@ -356,7 +363,7 @@ async function applyAppearance(page, appearance) {
  * 首次启动还要迁移旧配置、建库，与之后的启动不可比。
  */
 async function prepareProfile({ roots, appRoot, diagnostics, failureBase }, appearance, shelfBooks = 0) {
-  const prepared = await launch({ roots, appRoot, fakeModelPort: null, diagnostics, failureBase })
+  const prepared = await launch({ roots, appRoot, diagnostics, failureBase })
   try {
     await applyAppearance(prepared.page, appearance)
     if (shelfBooks > 0) await seedShelf(prepared, roots, shelfBooks)
@@ -434,10 +441,68 @@ async function dumpDom(page, base) {
 
 const messageOf = error => error instanceof Error ? error.message : String(error)
 
-/** 一个会话一次冷启动：先跑首个截图点的 setup，再依次 run、截图、after。隔离与进程检查按会话做，结果抄进每一项。 */
-async function runSession(sessionName, names, options) {
+/** 会话收尾时读回这次启动在主进程里记下的模型请求，并进 modelLog。读不回（应用已退出）记进 sessionErrors：请求数少算了，会话不算干净。 */
+export async function harvestModelLog(app, modelLog, sessionErrors) {
+  try { modelLog.push(...await app.evaluate(() => globalThis.__driveModelRequests)) } catch (error) {
+    sessionErrors.push(`读不回最后一次启动的模型请求记录，modelRequests 偏少：${messageOf(error)}`)
+  }
+}
+
+/**
+ * 真实模式会话收尾：汇总模型请求，删掉隔离目录里的模型配置。
+ * 删除失败只记进 sessionErrors：会话照常走结果路径，隔离目录因会话不干净而保留，交给收尾的密钥扫描。
+ */
+export function finishRealSession({ shared, sessionErrors, modelLog, canonical, remove = removePath }) {
+  const summary = summarizeModelRequests(modelLog)
+  shared.modelRequests = summary.count
+  shared.modelRequestSummary = summary
+  try {
+    const { removed, failures } = removeModelConfigs(canonical, remove)
+    shared.removedModelConfigs = removed.length
+    for (const { file, reason } of failures) sessionErrors.push(`删不掉模型配置 ${file}：${reason}`)
+  } catch (error) { sessionErrors.push(messageOf(error)) }
+}
+
+/** 干净的会话删掉隔离目录；删不掉只记进 sessionErrors（目录留着，收尾的密钥扫描会查到它）。不干净的会话留着取证。 */
+export function releaseSessionRoot(root, clean, sessionErrors, remove = removePath) {
+  if (!clean) return
+  const reason = remove(root)
+  if (reason) sessionErrors.push(`删不掉隔离目录 ${root}：${reason}`)
+}
+
+/**
+ * 写诊断日志；写不进去只记进 sessionErrors，后面的退出与凭据清理照常执行。
+ * 诊断里带出 secret 时写盘前就遮掉，运行中途被打断也不会把密钥留在产出目录；出现过即记进 sessionErrors，会话判失败。
+ */
+export function writeConsoleLog(file, diagnostics, sessionErrors, secret = null) {
+  let text = `${diagnostics.join('\n')}\n`
+  if (secret && text.includes(secret)) {
+    text = text.split(secret).join('[已遮蔽]')
+    sessionErrors.push('诊断日志里出现了密钥，写盘前已遮蔽')
+  }
+  try { fs.writeFileSync(file, text) } catch (error) { sessionErrors.push(messageOf(error)) }
+}
+
+/** 本次写进产出目录的文件与留作取证的隔离目录里不能有密钥；找到就删掉那个文件，结果记下 keyScan。读不了的文件算扫描不完整，判失败。 */
+export function scanRunForSecret(results, out, outBefore, secret, remove = removePath) {
+  const retained = [...new Set(results.map(result => result.isolationRoot))].filter(root => fs.existsSync(root))
+  const walkProblems = []
+  const scan = filesContaining([...changedFiles(out, outBefore, walkProblems), ...retained], secret)
+  // 逐个删：一个删不掉不影响其余，删不掉的只记路径与错误码（命中本身已判失败）。
+  const removeFailures = []
+  for (const file of scan.hits) {
+    const reason = remove(file)
+    if (reason) removeFailures.push({ file, reason })
+  }
+  for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits, unreadable: [...walkProblems, ...scan.unreadable], removeFailures }
+}
+
+/**
+ * 一个会话一次冷启动：先跑首个截图点的 setup，再依次 run、截图、after。隔离与进程检查按会话做，结果抄进每一项。
+ * realKey 只在真实模式下有：由 installRealModels 交给应用存进隔离目录的模型配置，会话结束时连同配置文件一起删掉。
+ */
+async function runSession(sessionName, names, options, realKey = null, roots = createIsolatedRoots(scratchParent())) {
   const before = snapshotRealProfiles()
-  const roots = createIsolatedRoots(scratchParent())
   const diagnostics = []
   const fake = names.some(name => SCENARIOS[name]?.model) ? await startFakeModel(diagnostics) : null
   const base = name => path.join(options.out, `${name}-${options.theme}`)
@@ -449,13 +514,15 @@ async function runSession(sessionName, names, options) {
   let launched
   let recording = null
   const restartRequests = []
+  const modelLog = []
+  const fetchPolicy = () => ({ fakePort: fake?.port ?? null, realOrigin: realKey ? REAL_ORIGIN : null })
   let currentAppRoot = options.appRoot
   const shell = names.map(name => SCENARIOS[name]?.shell).find(Boolean) ?? options.shell
   try {
     const shelfBooks = sessionName === 'library-timing' ? SHELF_BOOKS : 0
     const failureBase = base(sessionName)
     if (PREPARED_SESSIONS.has(sessionName)) await prepareProfile({ roots, appRoot: options.appRoot, diagnostics, failureBase }, { theme: options.theme, shell }, shelfBooks)
-    launched = await launch({ roots, appRoot: options.appRoot, fakeModelPort: fake?.port, diagnostics, failureBase, shelfBooks, renderTiming: TIMED_SESSIONS.has(sessionName) })
+    launched = await launch({ roots, appRoot: options.appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase, shelfBooks, renderTiming: TIMED_SESSIONS.has(sessionName) })
     shared.timing = launched.timing
     const shellShown = page => page.locator('[data-shell-presentation]').first().getAttribute('data-shell-presentation')
     if (PREPARED_SESSIONS.has(sessionName)) {
@@ -475,14 +542,25 @@ async function runSession(sessionName, names, options) {
          */
         restart: async ({ appRoot = currentAppRoot, beforeLaunch, killed = false } = {}) => {
           restartRequests.push(...await launched.app.evaluate(() => globalThis.__driveExternalRequests))
+          modelLog.push(...await launched.app.evaluate(() => globalThis.__driveModelRequests))
           await recording?.pause()
           if (killed) await kill(launched.app)
           else assert.equal((await quit(launched.app)).forced, false, '重启前应用没有正常退出')
           await beforeLaunch?.()
-          launched = await launch({ roots, appRoot, fakeModelPort: fake?.port, diagnostics, failureBase })
+          launched = await launch({ roots, appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase })
           currentAppRoot = appRoot
           Object.assign(context, launched)
           await recording?.resume(context.page)
+        },
+        /** 真实模式：把硅基流动的生成与检索模型存进应用并设为默认。 */
+        installRealModels: async () => {
+          assert.ok(realKey, '只有 --real-model 的会话能接真实模型')
+          const { generation, embedding } = realModelProfiles(realKey)
+          for (const [channel, value] of [['llm:save-model', generation], ['llm:save-model', embedding],
+            ['llm:set-default-model', generation.id], ['llm:set-default-embedding-model', embedding.id]]) {
+            const result = await invoke(context.page, channel, value)
+            assert.equal(result?.success, true, `${channel} 失败：${result?.error ?? ''}`)
+          }
         },
       }
       current = 0
@@ -514,17 +592,19 @@ async function runSession(sessionName, names, options) {
   } finally {
     // 场景在 hold 与 release 之间抛错时门还关着：卡住的请求让运行一直进行，应用拒绝关闭，quit 要等满 10 秒再强杀
     fake?.gate.release()
-    if (options.console) fs.writeFileSync(`${base(sessionName)}.console.log`, `${diagnostics.join('\n')}\n`)
+    if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, diagnostics, sessionErrors, realKey)
+    if (launched && realKey) await harvestModelLog(launched.app, modelLog, sessionErrors)
     if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(messageOf(error)); return null })
     await fake?.close()
     if (fake) shared.modelRequests = fake.requests.length
+    if (realKey) finishRealSession({ shared, sessionErrors, modelLog, canonical: roots.canonical })
   }
   try {
     shared.residualProcesses = await residualProcesses(roots.userData)
     Object.assign(shared, profileWrites(before))
   } catch (error) { sessionErrors.push(messageOf(error)) }
   const clean = sessionIsClean({ failedAt, sessionErrors, residualProcesses: shared.residualProcesses, externalWrites: shared.externalWrites })
-  if (clean) fs.rmSync(roots.root, { recursive: true, force: true })
+  releaseSessionRoot(roots.root, clean, sessionErrors)
   return results.map((result, index) => {
     const errors = [result.error, failedAt !== null && index > failedAt ? `未运行：本会话的 ${names[failedAt]} 先失败` : null, ...sessionErrors]
     const error = errors.filter(Boolean).join('\n')
@@ -538,20 +618,65 @@ async function main() {
     process.stderr.write(`${error.message}\n`)
     process.exit(2)
   }
+  try { assertBuilt(options.appRoot) } catch (error) {
+    process.stderr.write(`${error.message}\n`)
+    process.exit(2)
+  }
   fs.mkdirSync(options.out, { recursive: true })
   const sessions = options.scenario === 'baseline-all'
     ? Object.entries(BASELINE_SESSIONS).map(([name, scenarios]) => [`baseline-${name}`, scenarios])
     : [[options.scenario, [options.scenario]]]
+  const realKey = options.realModel ? process.env[REAL_KEY_ENV] : null
+  if (options.realModel && !realKey) {
+    process.stderr.write(`--real-model 要从环境变量 ${REAL_KEY_ENV} 读密钥，当前没有\n`)
+    process.exit(2)
+  }
+  process.exitCode = await driveSessions({ sessions, options, realKey })
+}
+
+/**
+ * 依次跑各会话，再扫密钥、打印、写结果 JSON，返回退出码。
+ * 会话里任何一步（包括收尾清理）抛错都收成该会话的错误，不会逃出去：结果 JSON 与密钥扫描一定执行。
+ * 隔离目录由这里建好交给会话，会话中途出错也知道要扫哪里。
+ */
+export async function driveSessions({ sessions, options, realKey, run = runSession, makeRoots = () => createIsolatedRoots(scratchParent()) }) {
   const results = []
+  const outBefore = realKey ? fileStamps(options.out) : null
   for (const [sessionName, names] of sessions) {
-    for (const result of await runSession(sessionName, names, options)) {
+    let sessionResults
+    let roots
+    try {
+      roots = makeRoots()
+      sessionResults = await run(sessionName, names, options, realKey, roots)
+    } catch (error) {
+      sessionResults = names.map(scenario => ({ scenario, theme: options.theme, session: sessionName, isolationRoot: roots?.root,
+        error: `会话中途出错，没有正常收尾：${messageOf(error)}` }))
+    }
+    for (const raw of sessionResults) {
+      // 报错与诊断里若带出密钥，打印和写盘之前就遮掉，并判这次失败。
+      const { value: result, redacted } = realKey ? redactSecret(raw, realKey) : { value: raw, redacted: false }
+      if (redacted) result.secretRedacted = true
       results.push(result)
-      process.stdout.write(`${JSON.stringify(result)}\n`)
+      if (!realKey) process.stdout.write(`${JSON.stringify(result)}\n`)
     }
   }
-  const failed = results.filter(result => result.error || result.residualProcesses?.length !== 0 || result.externalWrites?.length !== 0)
-  fs.writeFileSync(path.join(options.out, `${options.scenario}-${options.theme}.json`), JSON.stringify(results, null, 2))
-  process.exitCode = failed.length ? 1 : 0
+  const resultFile = path.join(options.out, `${options.scenario}-${options.theme}.json`)
+  if (realKey) {
+    // 先扫密钥再打印，stdout 与结果 JSON 报的是同一份发现。扫描本身出错也记进结果并判失败。
+    try { scanRunForSecret(results, options.out, outBefore, realKey) } catch (error) {
+      for (const result of results) result.keyScan = { error: messageOf(error) }
+    }
+    for (const result of results) process.stdout.write(`${JSON.stringify(result)}\n`)
+  }
+  const failed = results.filter(result => result.error || result.residualProcesses?.length !== 0 || result.externalWrites?.length !== 0
+    || result.keyScan?.hits?.length > 0 || result.keyScan?.unreadable?.length > 0 || result.keyScan?.error || result.secretRedacted)
+  fs.writeFileSync(resultFile, JSON.stringify(results, null, 2))
+  if (realKey && filesContaining([resultFile], realKey).hits.length > 0) {
+    removePath(resultFile)
+    process.stderr.write('结果 JSON 含密钥，已删除\n')
+    return 1
+  }
+  return failed.length ? 1 : 0
 }
 
 if (asEntryPoint) await main()
