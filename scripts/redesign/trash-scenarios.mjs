@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
+import path from 'node:path'
 
-import { characterStateReply, finalizeChapter } from './f491-scenarios.mjs'
+import { characterStateReply, finalizeChapter, openChapter } from './f491-scenarios.mjs'
+import * as chapterView from './pages/chapter-view.mjs'
+import * as stage from './pages/stage.mjs'
 import { seedStageSample } from './scenarios.mjs'
 
 // 回收站（#564 PR3）没有界面入口（界面在 PR4），这里经公开 IPC 在真实 Electron 里走一遍：
@@ -102,3 +106,98 @@ export const TRASH_SCENARIOS = {
     return observed
   } },
 }
+
+/** 有实体稿时把它独占打开，让删除时的移除失败，回收站这一项就停在「清理没完成」。返回解锁函数。 */
+function lockFile(file) {
+  const quoted = file.replaceAll("'", "''")
+  const child = spawn('powershell.exe', ['-NoProfile', '-Command', `$f=[System.IO.File]::Open('${quoted}','Open','Read','None'); Write-Output locked; Start-Sleep 300`], { stdio: ['ignore', 'pipe', 'inherit'] })
+  const ready = new Promise((resolve, reject) => {
+    child.stdout.on('data', chunk => { if (String(chunk).includes('locked')) resolve() })
+    child.once('exit', code => reject(new Error(`锁文件进程提前退出：${code}`)))
+  })
+  return { pid: child.pid, ready, release: () => { try { execFileSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' }) } catch { /* 已退出 */ } } }
+}
+
+/** 只让下一次恢复返回「批次没写完」：真实复现要一批没写完的批量创作，这里替换一次主进程回复，界面走的是真实的报错与文案。 */
+async function rejectNextRestoreAsBatchUnfinished(app) {
+  await app.evaluate(({ ipcMain }) => {
+    const handlers = ipcMain._invokeHandlers
+    const original = handlers.get('chapter:trash-restore')
+    handlers.set('chapter:trash-restore', async () => {
+      handlers.set('chapter:trash-restore', original)
+      return { success: false, error: 'CHAPTER_RESTORE_BATCH_UNFINISHED' }
+    })
+  })
+}
+
+const toasts = page => page.locator('#ai-novel-ink-toasts')
+/** 关掉已有的通知，下一张截图只留这一步的提示。 */
+const dismissToasts = async page => {
+  await toasts(page).evaluate(node => { for (const button of node.querySelectorAll('button[aria-label="关闭通知"]')) button.click() })
+  await page.waitForTimeout(600)
+}
+const trashDialog = page => page.getByRole('dialog', { name: /^回收站（\d+）$/u })
+
+TRASH_SCENARIOS['trash-ui'] = { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
+  const { page, app } = context
+  const projectPath = context.samplePath
+  const observed = {}
+  context.fake.replyCharacterState(characterStateReply)
+  await finalizeChapter(page, 3)
+  // 第 4 章也定稿，删第 3 章后才留下缺口（后面有定稿章），蓝图页出缺口卡。
+  await finalizeChapter(page, 4)
+  const files = manuscripts(projectPath, 3)
+  observed.manuscripts = files
+  assert.equal(files.length, 1, `第 3 章定稿后有一份实体稿：${files}`)
+  const lock = lockFile(path.join(projectPath, files[0]))
+  try {
+    await lock.ready
+    await openChapter(page, 3)
+    await chapterView.more(page, '删除正文…')
+    const confirm = page.getByRole('dialog', { name: '删除正文' })
+    await confirm.getByText(/后面的章节可能要跟着改写，甚至全部重写/u).waitFor({ state: 'visible' })
+    await context.shoot('delete-confirm')
+    await confirm.getByRole('button', { name: '删除', exact: true }).click()
+    await confirm.waitFor({ state: 'hidden' })
+    await page.waitForTimeout(1500)
+    observed.afterDeleteToast = await toasts(page).innerText()
+  } finally {
+    lock.release()
+  }
+
+  await page.getByRole('button', { name: /^回收站（1）$/u }).click()
+  const trash = trashDialog(page)
+  await trash.waitFor({ state: 'visible' })
+  observed.trashText = await trash.innerText()
+  assert.match(observed.trashText, /还没清理完/u, '实体稿删不掉时，这一项标清理没完成')
+  await dismissToasts(page)
+  await context.shoot('trash-cleanup-incomplete')
+
+  await rejectNextRestoreAsBatchUnfinished(app)
+  await trash.getByRole('button', { name: '恢复' }).click()
+  await toasts(page).getByText(/这一章属于一次还没写完的批量创作/u).waitFor({ state: 'visible' })
+  await context.shoot('restore-batch-unfinished')
+  await dismissToasts(page)
+
+  await trash.getByRole('button', { name: '重试清理' }).click()
+  await toasts(page).getByText(/的清理完成了，现在可以恢复/u).waitFor({ state: 'visible', timeout: 30_000 })
+  observed.afterRetry = manuscripts(projectPath, 3)
+  assert.deepEqual(observed.afterRetry, [], '重试清理后实体稿移除了')
+  await trash.getByRole('button', { name: '关闭' }).click()
+  await dismissToasts(page)
+
+  await stage.stageButton(page, '蓝图').click()
+  const gap = page.locator('.pi-notice').filter({ hasText: '正文在回收站里' }).first()
+  await gap.waitFor({ state: 'visible' })
+  await gap.scrollIntoViewIfNeeded()
+  observed.gapButtons = await gap.getByRole('button').allInnerTexts()
+  await context.shoot('gap-card')
+
+  await gap.getByRole('button', { name: '恢复' }).click()
+  await toasts(page).getByText(/已恢复第 3 章，正文和全部版本都回来了/u).waitFor({ state: 'visible', timeout: 30_000 })
+  observed.afterRestore = manuscripts(projectPath, 3)
+  observed.restoreToast = await toasts(page).innerText()
+  await context.shoot('restore-success')
+  console.log(`[trash-ui] ${JSON.stringify(observed)}`)
+  return observed
+} }
