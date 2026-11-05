@@ -812,10 +812,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         // 作者取消引发的中止：这一步停在取消处，运行保持「正在取消」，由循环后的取消收尾记为已取消。
         if (isCancellationPending(context)) {
           updateStepById(set, run.id, i, { status: 'cancelled', completedAt: new Date().toISOString() })
+          const reason = displayedErrorMessage(context.uiLocale, error)
           get().addLog('warn', uiText(
             context.uiLocale,
-            `[取消] [${definition.title}] 步骤: ${stepDef.name} — ${displayedErrorMessage(context.uiLocale, error)}`,
-            `[Cancelled] [${definition.title}] Step: ${stepDef.name} — ${displayedErrorMessage(context.uiLocale, error)}`,
+            `[取消] [${definition.title}] 步骤: ${stepDef.name} — ${reason}`,
+            `[Cancelled] [${definition.title}] Step: ${stepDef.name} — ${reason}`,
           ), context.uiLocale)
           break
         }
