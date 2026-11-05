@@ -63,7 +63,7 @@ function categorize(name) {
   return hits[0]
 }
 
-const cell = value => '`' + value.replace(/\|/g, '\\|') + '`'
+const cell = value => '`' + value + '`'
 
 function renderTable({ light, dark }) {
   const rows = new Map(CATEGORIES.map(category => [category, []]))
