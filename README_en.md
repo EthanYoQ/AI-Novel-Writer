@@ -242,7 +242,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Official installers are built in GitHub Actions. The Windows x64, macOS Apple Silicon, and macOS Intel installers each pass their own qualification before they are listed in one GitHub Release. See [`docs/README.md`](docs/README.md) for documentation authority, ADRs, and development rules.
+Official installers are built in GitHub Actions. The Windows x64, macOS Apple Silicon, and macOS Intel installers each pass their own qualification before they are listed in one GitHub Release. See [`docs/README.md`](docs/README.md) for documentation authority, ADRs, and development rules. The logo, colors, and design files are indexed in the [brand kit](docs/brand/README.md) (in Chinese).
 
 ## Contributing
 
