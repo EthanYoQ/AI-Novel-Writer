@@ -98,14 +98,17 @@ function filesUnder(target, problems = null) {
 // 读不了的文件记为 null：与运行前的记录不同，算作本次改过，交给扫描去记下读不了的原因。
 const stamp = file => { try { const stat = fs.statSync(file); return `${stat.mtimeMs}:${stat.size}` } catch { return null } }
 
+// 产出目录可能是目录链接（如 Windows junction），lstat 看到的是链接本身；先解析到真实路径再遍历，免得当成空目录。
+const resolvedRoot = target => { try { return fs.realpathSync(target) } catch { return target } }
+
 /** 目录下各文件的修改时间与大小，运行前取一次，交给 changedFiles。 */
 export function fileStamps(target) {
-  return new Map(filesUnder(target).map(file => [file, stamp(file)]))
+  return new Map(filesUnder(resolvedRoot(target)).map(file => [file, stamp(file)]))
 }
 
 /** 运行后新建或改过的文件。事先就有且没动过的文件不归本次运行，不查也不删。遍历不了的路径记进 problems，由调用方判扫描不完整。 */
 export function changedFiles(target, before, problems = []) {
-  return filesUnder(target, problems).filter(file => before.get(file) !== stamp(file))
+  return filesUnder(resolvedRoot(target), problems).filter(file => before.get(file) !== stamp(file))
 }
 
 /** 结果里出现 secret 就把它整体换成占位文字，redacted 标出来，由调用方判失败。 */

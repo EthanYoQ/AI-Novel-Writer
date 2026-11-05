@@ -158,3 +158,12 @@ it('有文件读不了时记下路径与错误码，其余文件照查', () => {
   }
   assert.deepEqual(filesContaining([dir], 'sk-test-secret', read), { scanned: 2, hits: [leak], unreadable: [{ file: locked, reason: 'EBUSY' }] })
 })
+
+it('产出目录是目录链接（Windows junction）时照样列出本次写进去的文件', () => {
+  const target = tempDir()
+  const link = path.join(tempDir(), 'out-link')
+  fs.symlinkSync(target, link, 'junction')
+  const before = fileStamps(link)
+  fs.writeFileSync(path.join(link, 'leak.log'), 'sk-test-secret')
+  assert.deepEqual(changedFiles(link, before).map(file => path.basename(file)), ['leak.log'])
+})
