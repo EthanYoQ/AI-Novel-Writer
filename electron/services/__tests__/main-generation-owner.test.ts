@@ -31,6 +31,7 @@ import { PostProcessRepository } from '../../repositories/post-process-repositor
 import { RevisionRepository } from '../../repositories/revision-repository'
 import { DraftRepository } from '../../repositories/draft-repository'
 import { reopenFinalizedChapter } from '../chapter-reopen-service'
+import { ChapterDeletionService } from '../chapter-deletion-service'
 import { GenerationDraftEffects } from '../generation-draft-effects'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
@@ -2679,6 +2680,86 @@ describe('main draft persistence and batch lineage', () => {
 
     expect(reopenFinalizedChapter('project', { chapterNumber: 1 })).toMatchObject({ success: true, created: true })
     expect(DraftRepository.getMeta(saved.id)?.status).toBe('finalized')
+  })
+  function trash(f: ReturnType<typeof drafting>) {
+    vi.mocked(getCurrentProjectPath).mockReturnValue(f.root)
+    cleanups.push(() => vi.mocked(getCurrentProjectPath).mockReturnValue(null))
+    return new ChapterDeletionService({ createOperationId: () => 'trash-1',
+      cleaner: { async removeManuscript() {}, async removeKnowledgeDocument() {} },
+      finalizations: { retry: async request => ({ success: true, committed: true, finalizationId: request.finalizationId, publicationStatus: 'published' }) } })
+  }
+  async function autoFinalizedFirstChapter(f: ReturnType<typeof drafting>, endChapter: number, postProcessed = true) {
+    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter }, targetUnits: 20,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const saved = f.owner.commitDraft((await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })).request)
+    FinalizationRepository.commit({ finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1, chapterTitle: '第一章', content: saved.content,
+      contentHash: saved.contentHash, contentRevision: 1, targetFileName: '第一章.txt' })
+    FinalizationRepository.markPublished('batch-final')
+    FinalizationRepository.linkKnowledgeDocument(saved.id, 'kb-batch-1')
+    const post = PostProcessRepository.createRun({ triggerSourceType: 'chapter_finalize', triggerSourceId: '1', sourceLabel: '第一章',
+      finalizedSource: { finalizationId: 'batch-final', draftId: saved.id, chapterNumber: 1, contentHash: saved.contentHash },
+      steps: [{ key: 'kb_import', label: '知识库', critical: true }, { key: 'chapter_notes', label: '章节笔记', critical: true }] })
+    PostProcessRepository.markStepOk(post, 'kb_import')
+    if (!postProcessed) return { batch, saved }
+    PostProcessRepository.markStepOk(post, 'chapter_notes')
+    f.owner.confirmBatchFinalization({ batchId: batch.batchId, chapterNumber: 1, finalizationId: 'batch-final' })
+    return { batch, saved }
+  }
+  const everyRow = (db: InstanceType<typeof Database>) => Object.fromEntries((db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").pluck().all() as string[])
+    .map(table => [table, db.prepare(`SELECT * FROM "${table}"`).all()]))
+  it('refuses to restore a trashed chapter of an unfinished auto-finalize batch, leaving every row and the batch as they were', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const { batch, saved } = await autoFinalizedFirstChapter(f, 2)
+    expect(f.owner.readBatch(batch.batchId).nextChapterNumber).toBe(2)
+    const s = trash(f)
+    expect(await s.delete(f.root, { draftId: saved.id, chapterNumber: 1 })).toMatchObject({ success: true, committed: true })
+    expect(() => f.owner.readBatch(batch.batchId)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    const before = everyRow(f.db)
+
+    expect(await s.restore(f.root, 'project', { deletionId: 'trash-1', draftId: saved.id, expectedMode: 'into-gap' }))
+      .toEqual({ success: false, error: 'CHAPTER_RESTORE_BATCH_UNFINISHED' })
+    expect(everyRow(f.db)).toEqual(before)
+    expect(() => f.owner.readBatch(batch.batchId)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+  })
+  it('refuses to restore the last chapter of an auto-finalize batch when its post-processing had not finished before deletion', async () => {
+    const f = drafting()
+    const { batch, saved } = await autoFinalizedFirstChapter(f, 1, false)
+    expect(f.owner.readBatch(batch.batchId).nextChapterNumber).toBe(1)
+    const s = trash(f)
+    expect(await s.delete(f.root, { draftId: saved.id, chapterNumber: 1 })).toMatchObject({ success: true, committed: true })
+    const before = everyRow(f.db)
+
+    expect(await s.restore(f.root, 'project', { deletionId: 'trash-1', draftId: saved.id, expectedMode: 'into-gap' }))
+      .toEqual({ success: false, error: 'CHAPTER_RESTORE_BATCH_UNFINISHED' })
+    expect(everyRow(f.db)).toEqual(before)
+  })
+  it('restores a trashed chapter once its auto-finalize batch has finished', async () => {
+    const f = drafting()
+    const { batch, saved } = await autoFinalizedFirstChapter(f, 1)
+    expect(f.owner.readBatch(batch.batchId).nextChapterNumber).toBeNull()
+    const s = trash(f)
+    await s.delete(f.root, { draftId: saved.id, chapterNumber: 1 })
+
+    expect(await s.restore(f.root, 'project', { deletionId: 'trash-1', draftId: saved.id, expectedMode: 'into-gap' }))
+      .toMatchObject({ success: true, outcome: 'restored', chapterNumber: 1, draftId: saved.id })
+    expect(DraftRepository.getMeta(saved.id)?.status).toBe('finalized')
+  })
+  it('restores a trashed chapter that an unfinished batch never wrote', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章'),(3,'第三章')")
+    const { batch } = await autoFinalizedFirstChapter(f, 2)
+    const content = '作者自己写的第三章。'
+    const own = DraftRepository.create({ chapterNumber: 3, source: 'write', content, wordCount: content.length })
+    FinalizationRepository.commit({ finalizationId: 'own-final', draftId: own, chapterNumber: 3, chapterTitle: '第三章', content,
+      contentHash: textHash(content), contentRevision: 1, targetFileName: '第三章.txt' })
+    FinalizationRepository.linkKnowledgeDocument(own, 'kb-own-3')
+    const s = trash(f)
+    await s.delete(f.root, { draftId: own, chapterNumber: 3 })
+
+    expect(await s.restore(f.root, 'project', { deletionId: 'trash-1', draftId: own, expectedMode: 'into-gap' }))
+      .toMatchObject({ success: true, outcome: 'restored', chapterNumber: 3, draftId: own })
+    expect(f.owner.readBatch(batch.batchId).nextChapterNumber).toBe(2)
   })
   it.each(['published', 'pending'] as const)('ends a review batch once the author finalizes a chapter it wrote, so that chapter reopens (%s, #568)', async state => {
     const f = drafting()

@@ -15,7 +15,6 @@ import { FinalizationRepository } from '../../repositories/finalization-reposito
 import { PostProcessRepository } from '../../repositories/post-process-repository'
 import { ChapterDeletionService, removeDeletedManuscript, type ChapterDeletionProjectionCleaner } from '../chapter-deletion-service'
 import { FinalizationService } from '../finalization-service'
-import { GenerationDraftEffects } from '../generation-draft-effects'
 import { serializeManuscript } from '../manuscript-publisher'
 import * as portableFreeze from '../portable-runtime-freeze'
 
@@ -323,17 +322,6 @@ describe('恢复', () => {
     expect(ChapterDeletionRepository.get('delete-a')).toMatchObject({ status: 'authorization_required', manuscriptStatus: 'pending' })
     expect(FinalizationRepository.getByDraftId(draft)).toMatchObject({ finalizationId: record.finalizationId })
     expect(statuses(draft)).toEqual(['finalized'])
-  })
-
-  it('本章还在批量写作里时拒绝放回', async () => {
-    const { current } = threeChapters()
-    const { service: s } = service()
-    await s.delete(projectRoot, { draftId: current, chapterNumber: 2 })
-    vi.spyOn(GenerationDraftEffects.prototype, 'unfinishedBatchChapters').mockReturnValue(new Set([2]))
-
-    expect(await s.restore(projectRoot, 'project', { deletionId: 'delete-a', draftId: current, expectedMode: 'into-gap' }))
-      .toEqual({ success: false, error: 'CHAPTER_RESTORE_BATCH_UNFINISHED' })
-    expect(statuses(current)).toEqual(['deleted'])
   })
 
   it('作者在删除后放了同名的其他文件，放回时换一个实体稿目标，不覆盖那个文件（G9）', async () => {
