@@ -22,6 +22,7 @@ import { generationIpcErrorCode, registerGenerationController } from '../generat
 import { registerDatabaseController } from '../db-controller'
 import { ProjectCoreRepository } from '../../repositories/project-core-repository'
 import { getProjectDataRoot } from '../../services/project-data-locator'
+import { withKnowledgeSourceGate } from '../../services/knowledge-source-gate'
 import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
 import { projectAccess } from '../../services/project-access'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
@@ -359,6 +360,29 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     await expect(invoke('generation:begin', { ...request, operation: 'chapter-draft', chapterNumber: 3, authorInputs: draftInputs,
       selectedBlueprintChapterNumbers: [3, 4, 5, 6, 7, 8], preparationId: preparation.preparationId, materialDecision: materialDecision() }))
       .rejects.toThrow('GENERATION_KNOWLEDGE_SOURCE_STALE')
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it('rejects a draft when a later chapter is linked while admission waits for the knowledge source gate', async () => {
+    const fetch = stream()
+    await finalizeIntoKnowledge(2, '旧信', '沈砚读完旧信，决定夜里去钟楼。')
+    const linkLaterChapter = await finalizeIntoKnowledge(4, '钟楼暗格', '沈砚在钟楼暗格里找到铜钥匙。', false)
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(3,'夜探')")
+    const preparation = await invoke('generation:prepare-draft-context', { chapterNumber: 3, modelId: model.id,
+      promptKeys: request.promptKeys, skillStages: [], authorInputs: draftInputs, query: '钟楼', selectedDraftIds: [] })
+    let entered!: () => void, release!: () => void
+    const holding = new Promise<void>(resolve => { entered = resolve })
+    const released = new Promise<void>(resolve => { release = resolve })
+    const holder = withKnowledgeSourceGate(getProjectDataRoot(session.projectPath), async () => { entered(); await released })
+    await holding
+
+    const begun = invoke('generation:begin', { ...request, operation: 'chapter-draft', chapterNumber: 3, authorInputs: draftInputs,
+      selectedBlueprintChapterNumbers: [3, 4, 5, 6, 7, 8], preparationId: preparation.preparationId, materialDecision: materialDecision() })
+    linkLaterChapter()
+    release()
+    await holder
+
+    await expect(begun).rejects.toThrow('GENERATION_KNOWLEDGE_SOURCE_STALE')
     expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(0)
     expect(fetch).not.toHaveBeenCalled()
   })
