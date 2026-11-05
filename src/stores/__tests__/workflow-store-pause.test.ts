@@ -829,6 +829,71 @@ describe('workflow pause at a safe step boundary', () => {
   })
 })
 
+describe('批量创作刚开始、写作 Skill 快照还在读取时，运行卡片上的按钮已经可点', () => {
+  /** 卡住写作 Skill 快照的读取：运行已经出现在运行侧页（有暂停、取消按钮），执行上下文还没就绪。 */
+  function holdSkillSnapshot() {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    type Invoke = (channel: string, ...args: unknown[]) => Promise<unknown>
+    const invoke = (window as unknown as { aiNovelAPI: { invoke: ReturnType<typeof vi.fn<Invoke>> } }).aiNovelAPI.invoke
+    const original = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'skills:list-user') await gate
+      return original(channel, ...args)
+    })
+    return release
+  }
+
+  function startBatch(chapter3: () => Promise<void>, chapter4: () => Promise<void>) {
+    return useWorkflowStore.getState().startWorkflow({
+      runId: 'early-batch', type: 'batch_generate', title: '批量草稿待审 · 第 3 至 4 章', projectPath,
+      projectSession: frozenSession(),
+      steps: [
+        { name: '第 3 章 · 生成草稿待审', description: '', executor: chapter3 },
+        { name: '第 4 章 · 生成草稿待审', description: '', executor: chapter4 },
+      ],
+    })
+  }
+
+  it('点暂停立即记下，界面显示本章写完后暂停；快照就绪后写完第 3 章就停，不写第 4 章', async () => {
+    const release = holdSkillSnapshot()
+    const chapter3 = vi.fn(async () => undefined)
+    const chapter4 = vi.fn(async () => undefined)
+    const completion = startBatch(chapter3, chapter4)
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('running'))
+
+    useWorkflowStore.getState().pauseWorkflow('early-batch')
+    expect(useWorkflowStore.getState().activeRuns[0]?.pauseRequested).toBe(true)
+
+    release()
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('paused'))
+    expect(chapter3).toHaveBeenCalledOnce()
+    expect(chapter4).not.toHaveBeenCalled()
+
+    useWorkflowStore.getState().resumeWorkflow('early-batch')
+    await completion
+    expect(chapter4).toHaveBeenCalledOnce()
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({ id: 'early-batch', status: 'completed' })
+  })
+
+  it('点取消立即生效：快照就绪后一章也不写，运行记为已取消', async () => {
+    const release = holdSkillSnapshot()
+    const chapter3 = vi.fn(async () => undefined)
+    const chapter4 = vi.fn(async () => undefined)
+    const completion = startBatch(chapter3, chapter4)
+    await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('running'))
+
+    useWorkflowStore.getState().cancelWorkflow('early-batch')
+    expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('cancelling')
+
+    release()
+    await completion
+    expect(chapter3).not.toHaveBeenCalled()
+    expect(chapter4).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({ id: 'early-batch', status: 'cancelled' })
+  })
+})
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
