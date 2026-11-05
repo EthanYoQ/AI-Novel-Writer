@@ -497,7 +497,7 @@ describe('定稿冲突与定稿进行中', () => {
   })
 })
 
-describe('批量创作占着这一章时定稿（本批真实模型实测缺陷 1）', () => {
+describe('批量创作占着这一章时定稿、审稿与修稿（本批真实模型实测缺陷 1）', () => {
   const BATCH_TITLE = '批量草稿待审 · 第 3 至 4 章'
   const batch = (status: 'running' | 'paused', currentStepIndex: number) => ({
     id: 'batch-run', type: 'batch_generate', title: BATCH_TITLE, status, projectPath: SESSION.projectPath, projectSession: SESSION,
@@ -564,6 +564,51 @@ describe('批量创作占着这一章时定稿（本批真实模型实测缺陷 
     await act(async () => useWorkflowStore.setState({ activeRuns: [batch('running', 0) as never] }))
     await click('确认定稿')
     await vi.waitFor(() => expect(blockedToast()).toBeTruthy())
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+  })
+
+  // CodeRabbit（#587）：有未保存修改时，审稿和修稿曾先把修改写盘、再说「正文保持原样」。
+  const occupiedToast = (verb: string) => [...document.querySelectorAll('.pi-toast')].find(card => card.textContent?.includes(`还不能${verb}`))
+  const startRefine = async () => {
+    await click('更多操作')
+    await act(async () => page.getByRole('menuitem', { name: '直接修稿…' }).click())
+    await click('开始修稿')
+  }
+
+  it.each([
+    ['审稿', () => click('AI 审稿')],
+    ['修稿', startRefine],
+  ] as const)('有未保存的修改时点%s：先说明被占着，不保存、不发起，正文保持原样属实', async (verb, start) => {
+    const draft = backend.addDraft({ status: 'draft' })
+    await mount()
+    await openDraft(draft.id)
+    await type('作者还没保存的修改')
+    await act(async () => useWorkflowStore.setState({ activeRuns: [batch('running', 0) as never] }))
+    await start()
+
+    await vi.waitFor(() => expect(occupiedToast(verb)).toBeTruthy())
+    expect(occupiedToast(verb)!.textContent).toContain('正文保持原样')
+    expect(backend.writes('db:draft-update-content')).toEqual([])
+    expect(activeTab()?.dirty).toBe(true)
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('保存修改期间批次占上本章：点审稿说明原因，但不再说正文保持原样', async () => {
+    const draft = backend.addDraft({ status: 'draft' })
+    const answer = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation(async (channel, ...args) => {
+      const result = await answer(channel, ...args)
+      if (channel === 'db:draft-update-content') useWorkflowStore.setState({ activeRuns: [batch('running', 0) as never] })
+      return result
+    })
+    await mount()
+    await openDraft(draft.id)
+    await type('作者还没保存的修改')
+    await click('AI 审稿')
+
+    await vi.waitFor(() => expect(occupiedToast('审稿')).toBeTruthy())
+    expect(occupiedToast('审稿')!.textContent).not.toContain('正文保持原样')
+    expect(backend.writes('db:draft-update-content').map(args => args.slice(0, 2))).toEqual([[draft.id, '作者还没保存的修改']])
     expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
   })
 
