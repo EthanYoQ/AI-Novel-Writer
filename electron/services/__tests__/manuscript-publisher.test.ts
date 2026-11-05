@@ -94,6 +94,16 @@ describe('被替换的旧正文文件', () => {
     expect(removeManuscriptIfUnchanged(projectRoot, '第1章 雾钟.txt', [published])).toBe('changed')
     expect(fs.readFileSync(file, 'utf8')).toBe(edited)
   })
+
+  it('旧目标被作者换成文件夹时记为已改动，保留文件夹，不让清理失败', () => {
+    const projectRoot = makeRoot()
+    const dir = path.join(projectRoot, '第1章 雾钟.txt')
+    fs.mkdirSync(dir)
+    fs.writeFileSync(path.join(dir, '作者的笔记.md'), '留着', 'utf8')
+
+    expect(removeManuscriptIfUnchanged(projectRoot, '第1章 雾钟.txt', ['任意已发布内容'])).toBe('changed')
+    expect(fs.readFileSync(path.join(dir, '作者的笔记.md'), 'utf8')).toBe('留着')
+  })
 })
 
 describe('从回收站恢复时重新发布的目标', () => {

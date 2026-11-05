@@ -167,6 +167,7 @@ export function removeManuscriptIfUnchanged(
   const target = resolveStoredManuscriptTarget(projectRoot, targetFileName)
   try {
     return retryWhileWindowsFileBusy(() => {
+      if (!fs.lstatSync(target.absolutePath).isFile()) return 'changed'
       if (!published.includes(fs.readFileSync(target.absolutePath, 'utf8'))) return 'changed'
       fs.unlinkSync(target.absolutePath)
       return 'removed'
