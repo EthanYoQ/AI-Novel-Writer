@@ -324,6 +324,8 @@ describe('单章视图的主按钮随五种状态变化', () => {
     await openDraft(draft.id)
     await expect.element(page.getByRole('button', { name: '添加我的意见' })).toBeVisible()
     await expect.element(page.getByText('这次审稿没有需要修改的意见', { exact: false })).not.toBeInTheDocument()
+    await expect.element(page.getByText('审稿通过', { exact: false })).not.toBeInTheDocument()
+    await expect.element(page.getByText('这份报告读不出逐条意见', { exact: false })).toBeVisible()
     await expect.element(page.getByRole('button', { name: '定稿', exact: true })).not.toBeInTheDocument()
     await expect.element(page.getByText('至少勾选一项意见')).toBeVisible()
     await click('添加我的意见')
