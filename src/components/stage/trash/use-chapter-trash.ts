@@ -22,7 +22,7 @@ export function announceTrashChanged(projectSession: ProjectSessionContext): voi
   globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath: projectSession.projectPath, projectSession })
 }
 
-/** 当前作品的回收站。读不到时当作空，不挡页面其余部分。 */
+/** 当前作品的回收站。从没读到过时当作空，不挡页面其余部分。 */
 export function useChapterTrash(): ChapterTrash {
   const currentProject = useProjectStore(s => s.currentProject)
   const [state, setState] = useState<{ session: ProjectSessionContext | null; trash: ChapterTrash }>({ session: null, trash: EMPTY })
@@ -30,7 +30,7 @@ export function useChapterTrash(): ChapterTrash {
 
   const load = useCallback(async (session: ProjectSessionContext) => {
     const request = ++sequence.current
-    let trash = EMPTY
+    let trash: ChapterTrash | null = null
     try {
       const result = await ipc.invokeWithProjectSession(session, 'chapter:trash-list', session.projectPath)
       if (result.success) {
@@ -41,7 +41,12 @@ export function useChapterTrash(): ChapterTrash {
     } catch {
       // 回收站读不到不影响写作，下次删除、恢复或重新打开作品时再读。
     }
-    if (request === sequence.current && isProjectSessionCurrent(session)) setState({ session, trash })
+    if (request !== sequence.current || !isProjectSessionCurrent(session)) return
+    // 读失败时保留这个作品上一次读到的列表，换了作品才当作空。
+    setState(previous => ({
+      session,
+      trash: trash ?? (sameProjectSessionContext(previous.session, session) ? previous.trash : EMPTY),
+    }))
   }, [])
 
   useEffect(() => {

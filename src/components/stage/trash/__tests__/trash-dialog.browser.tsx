@@ -8,8 +8,10 @@ import '../../../../styles/paper-ink/index.css'
 import type { DamagedTrashEntry, RestoreTrashedChapterResult, TrashedChapter } from '../../../../shared/chapter-deletion'
 import type { ProjectData } from '../../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
+import { globalEventBus } from '../../../../shared/event-bus'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
+import { toast } from '../../../ui/Toast'
 import TrashDialog from '../TrashDialog'
 import { useChapterTrash } from '../use-chapter-trash'
 
@@ -25,6 +27,9 @@ let entries: TrashedChapter[]
 let damaged: DamagedTrashEntry[]
 let restoreResult: RestoreTrashedChapterResult
 let invoke: ReturnType<typeof vi.fn>
+/** 这条通道的 IPC 调用直接 reject，模拟主进程没回话。 */
+let broken: string | null
+let listFails: boolean
 
 const calls = (channel: string) => invoke.mock.calls.filter(call => call[0] === channel)
 
@@ -64,7 +69,11 @@ beforeEach(async () => {
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: project() })
   setActiveProjectSessionContext(SESSION)
+  broken = null
+  listFails = false
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+    if (channel === broken) throw new Error('IPC 断开：EBUSY')
+    if (channel === 'chapter:trash-list' && listFails) return { success: false, error: 'CHAPTER_TRASH_REQUEST_INVALID' }
     if (channel === 'chapter:trash-list') return { success: true, entries, damaged }
     if (channel === 'chapter:trash-restore') {
       if (restoreResult.success) entries = entries.filter(item => item.deletionId !== (args[0] as { deletionId: string }).deletionId)
@@ -91,6 +100,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await act(async () => root?.unmount())
   host?.remove()
   root = undefined
@@ -119,9 +129,9 @@ describe('回收站对话框（#564）', () => {
     expect([...fifth.querySelectorAll('button')].map(button => button.textContent)).toEqual(['重试清理', '恢复', '彻底删除…'])
 
     const broken = item('有一项读不全')
-    expect(broken.textContent).toContain('回收站里这一项的记录不完整，没法恢复')
+    expect(broken.textContent).toContain('记录不完整，没法恢复')
     expect(broken.textContent).not.toContain('CHAPTER_TRASH_ENTRY_INVALID')
-    await expect.element(dialog()).toHaveTextContent('回收站里的章节会随作品备份和导出一起带走')
+    await expect.element(dialog()).toHaveTextContent('随备份和导出一起带走')
     await expect.element(dialog().getByRole('button', { name: '清空回收站…' })).toBeEnabled()
   })
 
@@ -132,8 +142,8 @@ describe('回收站对话框（#564）', () => {
     await act(async () => item('第 3 章').querySelector('button')!.click())
     await vi.waitFor(() => expect(calls('chapter:trash-restore')).toHaveLength(1))
     expect(calls('chapter:trash-restore')[0][1]).toEqual({ deletionId: 'del-3', draftId: 30, expectedMode: 'into-gap' })
-    await expect.element(page.getByText(/已恢复第 3 章，正文和全部版本都回来了/)).toBeVisible()
-    await expect.element(page.getByText(/在软件外改过这一章的 txt，那份文件当时留着没删/)).toBeVisible()
+    await expect.element(page.getByText(/已恢复第 3 章的正文和全部版本/)).toBeVisible()
+    await expect.element(page.getByText(/在软件外改过它的 txt，项目文件夹里会多一份/)).toBeVisible()
     await vi.waitFor(() => expect(calls('chapter:trash-list').length).toBeGreaterThan(lists))
     await expect.element(dialog()).toHaveAccessibleName('回收站（2）')
   })
@@ -143,7 +153,7 @@ describe('回收站对话框（#564）', () => {
     await render()
     await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
     await act(async () => item('第 3 章').querySelector('button')!.click())
-    await expect.element(page.getByText(/回收站里的正文还在。这一章属于一次还没写完的批量创作/)).toBeVisible()
+    await expect.element(page.getByText(/正文还在，但这一章属于一次没写完的批量创作/)).toBeVisible()
     expect(document.body.textContent).not.toContain('CHAPTER_RESTORE_BATCH_UNFINISHED')
     await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
   })
@@ -162,7 +172,7 @@ describe('回收站对话框（#564）', () => {
     await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
     await act(async () => (item('第 3 章').querySelectorAll('button')[1] as HTMLButtonElement).click())
     const confirm = page.getByRole('dialog', { name: '彻底删除第 3 章「灯塔3」？' })
-    await expect.element(confirm).toHaveTextContent('彻底删除后，回收站里第 3 章的正文和版本无法再恢复。其他章节不受影响。')
+    await expect.element(confirm).toHaveTextContent('第 3 章的正文和版本会彻底删除，其他章节不受影响')
     await act(async () => confirm.getByRole('button', { name: '取消' }).click())
     expect(calls('chapter:trash-purge')).toHaveLength(0)
 
@@ -173,11 +183,11 @@ describe('回收站对话框（#564）', () => {
     await expect.element(dialog()).toHaveAccessibleName('回收站（2）')
   })
 
-  it('清理没完成的项彻底删除时，确认框说明项目文件夹或知识库里可能还留着它', async () => {
+  it('清理没完成的项彻底删除时，确认框说明项目文件夹或知识库里可能还有残留', async () => {
     await render()
     await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
     await act(async () => dialog().getByRole('button', { name: '彻底删除…' }).nth(1).click())
-    await expect.element(page.getByRole('dialog', { name: '彻底删除第 5 章「灯塔5」？' })).toHaveTextContent('这一项的清理还没完成，项目文件夹或知识库里可能还留着它')
+    await expect.element(page.getByRole('dialog', { name: '彻底删除第 5 章「灯塔5」？' })).toHaveTextContent('项目文件夹或知识库里可能还有残留')
   })
 
   it('清空回收站连读不全的项一起删', async () => {
@@ -185,11 +195,65 @@ describe('回收站对话框（#564）', () => {
     await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
     await act(async () => dialog().getByRole('button', { name: '清空回收站…' }).click())
     const confirm = page.getByRole('dialog', { name: '清空回收站？' })
-    await expect.element(confirm).toHaveTextContent('回收站里 3 项的正文和版本都会彻底删除，无法再恢复')
+    await expect.element(confirm).toHaveTextContent('回收站里的 3 项会彻底删除')
     await act(async () => confirm.getByRole('button', { name: '清空回收站' }).click())
     await vi.waitFor(() => expect(calls('chapter:trash-purge')[0]?.[1]).toEqual({ all: true }))
     await expect.element(dialog()).toHaveAccessibleName('回收站（0）')
     await expect.element(dialog()).toHaveTextContent('回收站是空的')
+  })
+
+  it.each([
+    ['chapter:trash-restore', async () => item('第 3 章').querySelector('button')!.click(), /^第 3 章「灯塔3」没有恢复\n\n操作中断了/],
+    ['chapter:retry-deletion', async () => dialog().getByRole('button', { name: '重试清理' }).click(), /^重试清理没有完成\n\n操作中断了/],
+  ] as const)('%s 调用 reject 时给出本地化的短提示，不露原文（#592）', async (channel, act_, expected) => {
+    const error = vi.spyOn(toast, 'error')
+    broken = channel
+    await render()
+    await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
+    await act(act_)
+    await vi.waitFor(() => expect(error.mock.calls[0]?.[0]).toMatch(expected))
+    expect(error.mock.calls[0][0]).not.toMatch(/EBUSY|IPC 断开/)
+    await expect.element(dialog().getByRole('button', { name: '彻底删除…' }).first()).toBeEnabled()
+  })
+
+  it('彻底删除调用 reject 时给出本地化的短提示（#592）', async () => {
+    const error = vi.spyOn(toast, 'error')
+    broken = 'chapter:trash-purge'
+    await render()
+    await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
+    await act(async () => dialog().getByRole('button', { name: '彻底删除…' }).first().click())
+    await act(async () => page.getByRole('dialog', { name: '彻底删除第 3 章「灯塔3」？' }).getByRole('button', { name: '彻底删除' }).click())
+    await vi.waitFor(() => expect(error.mock.calls[0]?.[0]).toMatch(/^彻底删除没有完成\n\n操作中断了/))
+    expect(error.mock.calls[0][0]).not.toMatch(/EBUSY|IPC 断开/)
+  })
+
+  it('清空回收站时，有清理没完成的项就提醒可能留下残留；都清理完了就不提（#592）', async () => {
+    await render()
+    await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
+    await act(async () => dialog().getByRole('button', { name: '清空回收站…' }).click())
+    await expect.element(page.getByRole('dialog', { name: '清空回收站？' })).toHaveTextContent('项目文件夹或知识库里可能还有残留')
+    await act(async () => page.getByRole('dialog', { name: '清空回收站？' }).getByRole('button', { name: '取消' }).click())
+    entries = [entry(3)]
+    await act(async () => globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath: PROJECT_PATH, projectSession: SESSION }))
+    await expect.element(dialog()).toHaveAccessibleName('回收站（2）')
+    await act(async () => dialog().getByRole('button', { name: '清空回收站…' }).click())
+    await expect.element(page.getByRole('dialog', { name: '清空回收站？' })).toHaveTextContent('回收站里的 2 项会彻底删除')
+    expect(page.getByRole('dialog', { name: '清空回收站？' }).element().textContent).not.toContain('残留')
+  })
+
+  it('回收站重读失败时保留上一次读到的列表，不当作空（#592）', async () => {
+    await render()
+    await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
+    listFails = true
+    const lists = calls('chapter:trash-list').length
+    await act(async () => globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath: PROJECT_PATH, projectSession: SESSION }))
+    await vi.waitFor(() => expect(calls('chapter:trash-list').length).toBeGreaterThan(lists))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
+    broken = 'chapter:trash-list'
+    await act(async () => globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath: PROJECT_PATH, projectSession: SESSION }))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
   })
 
   it('英文界面：标题、按钮与说明都是英文', async () => {
@@ -200,6 +264,6 @@ describe('回收站对话框（#564）', () => {
     expect(item('Chapter 3').textContent).toMatch(/Deleted .* · 3,120 words · 2 versions/)
     await expect.element(trash.getByRole('button', { name: 'Retry cleanup' })).toBeVisible()
     await expect.element(trash.getByRole('button', { name: 'Empty trash…' })).toBeVisible()
-    expect(item('An item could not be read').textContent).toContain('The record for this trash item is incomplete')
+    expect(item('An item could not be read').textContent).toContain('record is incomplete')
   })
 })

@@ -30,28 +30,28 @@ export function restoredMessage(result: Restored, text: Text): string {
   switch (result.outcome) {
     case 'restored': {
       const lines = [
-        text(`已恢复第 ${n} 章，正文和全部版本都回来了。知识库里的这一章要重新收进去：打开这一章，在「定稿后处理」里点「重试」。`,
-          `Chapter ${n} is restored, with its text and every version. Its knowledge base entry needs adding again: open the chapter and choose “Retry” under After finalization.`),
+        text(`已恢复第 ${n} 章的正文和全部版本。要重新收进知识库，请打开这一章，在「定稿后处理」点「重试」。`,
+          `Chapter ${n} is restored with every version. To add it back to the knowledge base, open it and choose “Retry” under After finalization.`),
       ]
       if (result.publicationError) {
-        lines.push(text('实体稿 txt 这次没写出来，在同一处点「重新写入正文」。',
-          'Its manuscript file was not written this time. Choose “Write again” in the same place.'))
+        lines.push(text('实体稿 txt 没写出来，在同一处点「重新写入正文」。',
+          'Its manuscript file was not written. Choose “Write again” in the same place.'))
       }
-      lines.push(text('如果删除前你在软件外改过这一章的 txt，那份文件当时留着没删；恢复的正文写进了另一个带编号的文件名，两份都在项目文件夹里，不需要的那份请自己删掉。',
-        'If you edited this chapter’s manuscript file outside Pagekin before deleting it, that file was kept. The restored text went into a file with a numbered name, so both are in the project folder; delete the one you do not need.'))
+      lines.push(text('如果删除前在软件外改过它的 txt，项目文件夹里会多一份，删掉不要的那份即可。',
+        'If you edited its manuscript file outside Pagekin before deleting it, the project folder now has an extra copy. Delete the one you don’t need.'))
       return lines.join('\n')
     }
     case 'restored-as-history':
-      return text(`第 ${n} 章已经重写过。回收站里的版本已作为旧版本放回这一章。想换回它，在「版本历史」里选中它，点「回退到此版本…」。`,
-        `Chapter ${n} has been rewritten. The version from the trash is back as an older version of this chapter. To switch back to it, select it in Version history and choose “Revert to this version…”.`)
+      return text(`第 ${n} 章已经重写过，回收站里的版本作为旧版本放回了。想换回它，在「版本历史」里选中它，点「回退到此版本…」。`,
+        `Chapter ${n} was rewritten, so the version from the trash is back as an older version. To switch to it, select it in Version history and choose “Revert to this version…”.`)
     case 'reopened-as-draft':
       return result.created
-        ? text(`已用回收站里的第 ${n} 章开了一份新草稿，正文和删除前一样。这份作品是从别处导入的，旧定稿不能直接复原，请检查后点「定稿」。`,
-            `A new draft of chapter ${n} was opened from the trash, with the same text as before it was deleted. This book was imported from elsewhere, so the old final version cannot be put back directly. Check it, then choose “Finalize”.`)
-        : text(`第 ${n} 章已有一份和回收站里正文相同的草稿，没有再开新的。请打开这一章检查后点「定稿」。`,
-            `Chapter ${n} already has a draft with the same text as the one in the trash, so no new draft was opened. Open the chapter, check it, then choose “Finalize”.`)
+        ? text(`已用回收站里的第 ${n} 章开了一份新草稿。导入的作品不能直接复原定稿，请检查后点「定稿」。`,
+            `Opened a new draft of chapter ${n} from the trash. An imported book can’t get its old final version back directly. Check it, then choose “Finalize”.`)
+        : text(`第 ${n} 章已有一份相同的草稿，没有再开新的。请检查后点「定稿」。`,
+            `Chapter ${n} already has the same draft, so no new one was opened. Check it, then choose “Finalize”.`)
     case 'already-restored':
-      return text(`第 ${n} 章已经恢复过了，回收站里没有这一项了。`, `Chapter ${n} was already restored and is no longer in the trash.`)
+      return text(`第 ${n} 章已经恢复过了。`, `Chapter ${n} was already restored.`)
   }
 }
 
@@ -65,15 +65,31 @@ function currentSession(): ProjectSessionContext | null {
   return captureProjectSession(useProjectStore.getState().currentProject)
 }
 
-const reasonOf = (error: string | undefined) => displayedErrorMessage(useLocaleStore.getState().locale, error)
+const INTERRUPTED = 'interrupted'
+
+/** IPC 调用 reject（主进程没回话）时当作一次失败，原文可能带本机路径，不给作者看。 */
+async function settled<T>(call: Promise<T>): Promise<T | { success: false; error: typeof INTERRUPTED }> {
+  try {
+    return await call
+  } catch {
+    return { success: false, error: INTERRUPTED }
+  }
+}
+
+const reasonOf = (error: string | undefined) => {
+  const { locale, text } = useLocaleStore.getState()
+  return error === INTERRUPTED
+    ? text('操作中断了，回收站已刷新，请看清现状后再试。', 'The action was interrupted. The trash was reloaded; check it and try again.')
+    : displayedErrorMessage(locale, error)
+}
 
 /** 按列表给的恢复方式恢复回收站里的一项。返回是否恢复成功。 */
 export async function restoreTrashedChapter(entry: TrashedChapter): Promise<boolean> {
   const text = useLocaleStore.getState().text
   const session = currentSession()
   if (!session) return false
-  const result = await ipc.invokeWithProjectSession(session, 'chapter:trash-restore',
-    { deletionId: entry.deletionId, draftId: entry.draftId, expectedMode: entry.restoreMode }, session.projectPath)
+  const result = await settled(ipc.invokeWithProjectSession(session, 'chapter:trash-restore',
+    { deletionId: entry.deletionId, draftId: entry.draftId, expectedMode: entry.restoreMode }, session.projectPath))
   if (!isProjectSessionCurrent(session)) return false
   refreshAfterTrashChange(session)
   if (!result.success) {
@@ -93,7 +109,7 @@ export async function purgeTrash(target: TrashedChapter | { deletionId: string }
   const session = currentSession()
   if (!session) return false
   const request = target === 'all' ? { all: true as const } : { deletionIds: [target.deletionId] }
-  const result = await ipc.invokeWithProjectSession(session, 'chapter:trash-purge', request, session.projectPath)
+  const result = await settled(ipc.invokeWithProjectSession(session, 'chapter:trash-purge', request, session.projectPath))
   if (!isProjectSessionCurrent(session)) return false
   refreshAfterTrashChange(session)
   if (!result.success) {
@@ -122,7 +138,7 @@ export async function retryTrashCleanup(entry: TrashedChapter): Promise<void> {
     if (isProjectSessionCurrent(session)) announceTrashChanged(session)
     return
   }
-  const result = await ipc.invokeWithProjectSession(session, 'chapter:retry-deletion', entry.deletionId, session.projectPath)
+  const result = await settled(ipc.invokeWithProjectSession(session, 'chapter:retry-deletion', entry.deletionId, session.projectPath))
   if (!isProjectSessionCurrent(session)) return
   refreshAfterTrashChange(session)
   if (result.success) {

@@ -21,8 +21,8 @@ const CLEANUP_TEXT: Record<Exclude<TrashedChapter['cleanup'], 'completed'>, [str
 }
 
 function modeHint(entry: TrashedChapter, text: Text): string | null {
-  if (entry.restoreMode === 'as-history') return text('这一章已经重写过，恢复后作为旧版本放回。', 'This chapter has been rewritten; restoring puts this back as an older version.')
-  if (entry.restoreMode === 'reopen-as-draft') return text('这份作品是导入的，恢复会用它的正文开一份新草稿。', 'This book was imported; restoring opens a new draft with this text.')
+  if (entry.restoreMode === 'as-history') return text('这一章重写过，恢复后作为旧版本放回。', 'Rewritten since; restores as an older version.')
+  if (entry.restoreMode === 'reopen-as-draft') return text('导入的作品，恢复会开一份新草稿。', 'Imported book; restoring opens a new draft.')
   return null
 }
 
@@ -91,15 +91,18 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
     : ask?.kind === 'one'
       ? text(`彻底删除${trashEntryName(ask.entry, text)}？`, `Delete ${trashEntryName(ask.entry, text)} permanently?`)
       : text('彻底删除这一项？', 'Delete this item permanently?')
+  const unfinished = trash.entries.filter(entry => entry.cleanup !== 'completed').length
   const purgeConsequence = ask?.kind === 'all'
-    ? text(`回收站里 ${total} 项的正文和版本都会彻底删除，无法再恢复。其他章节不受影响。`,
-        `The text and versions of all ${total} ${pluralEn(total, 'item')} in the trash will be deleted permanently and cannot be restored. Other chapters are not affected.`)
+    ? text(`回收站里的 ${total} 项会彻底删除，其他章节不受影响。`,
+        `All ${total} ${pluralEn(total, 'item')} in the trash will be deleted permanently. Other chapters are not affected.`)
+      + (unfinished === 0 ? '' : text(`其中 ${unfinished} 项清理没做完，项目文件夹或知识库里可能还有残留，需要时请手动删掉。`,
+        ` ${unfinished} of them didn’t finish cleanup, so leftovers may remain in the project folder or knowledge base. Remove them yourself if needed.`))
     : ask?.kind === 'one'
-      ? text(`彻底删除后，回收站里第 ${ask.entry.chapterNumber} 章的正文和版本无法再恢复。其他章节不受影响。`,
-          `After this, the text and versions of chapter ${ask.entry.chapterNumber} in the trash cannot be restored. Other chapters are not affected.`)
-        + (ask.entry.cleanup === 'completed' ? '' : text('这一项的清理还没完成，项目文件夹或知识库里可能还留着它，需要的话请自己删掉。',
-          ' Its cleanup has not finished, so a copy may remain in the project folder or the knowledge base; remove it yourself if needed.'))
-      : text('彻底删除后，这一项无法再恢复。其他章节不受影响。', 'After this, the item cannot be restored. Other chapters are not affected.')
+      ? text(`第 ${ask.entry.chapterNumber} 章的正文和版本会彻底删除，其他章节不受影响。`,
+          `Chapter ${ask.entry.chapterNumber}’s text and versions will be deleted permanently. Other chapters are not affected.`)
+        + (ask.entry.cleanup === 'completed' ? '' : text('它的清理没做完，项目文件夹或知识库里可能还有残留，需要时请手动删掉。',
+          ' Its cleanup didn’t finish, so leftovers may remain in the project folder or knowledge base. Remove them yourself if needed.'))
+      : text('这一项会彻底删除，其他章节不受影响。', 'This item will be deleted permanently. Other chapters are not affected.')
 
   const confirmPurge = () => {
     const target = ask
@@ -113,8 +116,7 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
         open={open}
         onOpenChange={onOpenChange}
         title={text(`回收站（${total}）`, `Trash (${total})`)}
-        description={text('回收站里的章节会随作品备份和导出一起带走，彻底删除后才不再保留。',
-          'Chapters in the trash travel with project backups and exports. They are gone only after you delete them permanently.')}
+        description={text('回收站里的章节会随备份和导出一起带走。', 'Chapters in the trash are included in backups and exports.')}
         footer={(
           <>
             <Button variant="danger" disabled={busy || total === 0} onClick={() => setAsk({ kind: 'all' })}>{text('清空回收站…', 'Empty trash…')}</Button>
@@ -123,7 +125,7 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
         )}
       >
         {total === 0
-          ? <p className="stage-trash-empty">{text('回收站是空的。删除的章节会先放在这里，可以随时恢复。', 'The trash is empty. Deleted chapters land here first and can be restored any time.')}</p>
+          ? <p className="stage-trash-empty">{text('回收站是空的。删除的章节会放在这里。', 'The trash is empty. Deleted chapters land here.')}</p>
           : (
             <ul className="stage-trash-list" aria-label={text('回收站里的章节', 'Chapters in the trash')}>
               {trash.entries.map(entry => (

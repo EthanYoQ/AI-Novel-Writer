@@ -7,6 +7,7 @@ import { useEditorStore } from '../../stores/editor-store'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { setActiveProjectSessionContext } from '../../shared/project-session-context'
+import { globalEventBus } from '../../shared/event-bus'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 
 vi.mock('../ipc-client', () => ({
@@ -135,6 +136,19 @@ describe('clearProjectData', () => {
     expect(draftReset).toHaveBeenCalledOnce()
     expect(openProject).not.toHaveBeenCalled()
     expect(refreshFileTree).toHaveBeenCalledWith(projectPath, undefined, projectSession)
+  })
+
+  it('清除正文后通知回收站重读：回收站里的章节也一并清掉了（#592）', async () => {
+    const heard: unknown[] = []
+    const off = globalEventBus.on('CHAPTER_DELETION_UPDATED', payload => { heard.push(payload) })
+    try {
+      await clearProjectData({ blueprints: true }, projectSession)
+      expect(heard).toEqual([])
+      await clearProjectData({ generatedText: true }, projectSession)
+      expect(heard).toEqual([{ projectPath, projectSession }])
+    } finally {
+      off()
+    }
   })
 
   it('does not clear draft stores when only architecture fields are selected', async () => {
