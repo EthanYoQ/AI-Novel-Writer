@@ -44,7 +44,7 @@ function finalize(draftId: number, title = '雾钟') {
 
 function legacyFinal(chapterNumber: number, content: string): number {
   const id = write(chapterNumber, content)
-  getProjectDb()!.prepare("UPDATE drafts SET status = 'finalized' WHERE id = ?").run(id)
+  getProjectDb()!.prepare("UPDATE drafts_all SET status = 'finalized' WHERE id = ?").run(id)
   return id
 }
 
@@ -194,7 +194,7 @@ describe('已定稿的章只能经重开稿再写', () => {
     finalize(first)
     const stale = FinalizationRepository.reopen({ chapterNumber: 1 })
     if (!stale.success) throw new Error('reopen failed')
-    getProjectDb()!.prepare("UPDATE drafts SET status = 'superseded' WHERE id = ?").run(first)
+    getProjectDb()!.prepare("UPDATE drafts_all SET status = 'superseded' WHERE id = ?").run(first)
     const other = legacyFinal(1, '第一章另一份旧定稿。')
 
     expect(() => finalize(stale.draftId)).toThrow('CHAPTER_FINALIZED_REOPEN_REQUIRED')

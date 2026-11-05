@@ -61,14 +61,14 @@ function requireFinalizedTarget(
   chapterNumber: number,
 ): FinalizedChapterTarget {
   const target = db.prepare(`
-    SELECT drafts.id, drafts.chapter_number, drafts.status, drafts.content_id,
-           finalization_outbox.finalization_id,
-           finalization_outbox.chapter_title,
-           finalization_outbox.target_file_name,
-           finalization_outbox.knowledge_document_id
-    FROM drafts
-    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
-    WHERE drafts.id = ?
+    SELECT drafts_all.id, drafts_all.chapter_number, drafts_all.status, drafts_all.content_id,
+           finalization_outbox_all.finalization_id,
+           finalization_outbox_all.chapter_title,
+           finalization_outbox_all.target_file_name,
+           finalization_outbox_all.knowledge_document_id
+    FROM drafts_all
+    LEFT JOIN finalization_outbox_all ON finalization_outbox_all.draft_id = drafts_all.id
+    WHERE drafts_all.id = ?
   `).get(draftId) as (Omit<FinalizedChapterTarget, 'finalization_id'> & {
     finalization_id: string | null
   }) | undefined
@@ -121,13 +121,13 @@ function deleteChapterFacts(
 ): void {
   invalidateContinuityProjectionFrom(db, target.chapter_number)
   const superseded = db.prepare(`
-    SELECT drafts.id, drafts.content_id,
-           finalization_outbox.finalization_id, finalization_outbox.chapter_title,
-           finalization_outbox.target_file_name, finalization_outbox.knowledge_document_id
-    FROM drafts
-    LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
-    WHERE drafts.chapter_number = ? AND drafts.status = 'superseded'
-    ORDER BY drafts.id
+    SELECT drafts_all.id, drafts_all.content_id,
+           finalization_outbox_all.finalization_id, finalization_outbox_all.chapter_title,
+           finalization_outbox_all.target_file_name, finalization_outbox_all.knowledge_document_id
+    FROM drafts_all
+    LEFT JOIN finalization_outbox_all ON finalization_outbox_all.draft_id = drafts_all.id
+    WHERE drafts_all.chapter_number = ? AND drafts_all.status = 'superseded'
+    ORDER BY drafts_all.id
   `).all(target.chapter_number) as Array<{
     id: number
     content_id: number
@@ -190,7 +190,7 @@ function deleteDraftFacts(
   for (const runId of postProcessRunIds) {
     db.prepare('DELETE FROM post_process_runs WHERE id = ?').run(runId)
   }
-  db.prepare('DELETE FROM drafts WHERE id = ?').run(draftId)
+  db.prepare('DELETE FROM drafts_all WHERE id = ?').run(draftId)
   for (const contentId of contentIds) {
     try {
       db.prepare('DELETE FROM contents WHERE id = ?').run(contentId)

@@ -1,10 +1,14 @@
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
-import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
+import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
+import { migrateSchema } from '../../migrations/runner'
+import { SqliteSchemaAdapter, sqliteSchemaFingerprint } from '../../migrations/sqlite-schema-adapter'
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 import { exportPortableProject } from '../project-archive-service'
 import { restorePortableProject } from '../project-restore-service'
@@ -32,9 +36,15 @@ describe('恢复 M07 之前导出的便携包（schema 7）', { timeout: 60_000 
     initProjectDatabase(target)
     const db = getProjectDb()!
     expect(db.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
-    expect(db.prepare("SELECT chapter_number FROM live_drafts WHERE status='finalized' ORDER BY chapter_number").pluck().all()).toEqual([1, 3])
+    expect(db.prepare("SELECT chapter_number FROM drafts WHERE status='finalized' ORDER BY chapter_number").pluck().all()).toEqual([1, 3])
     expect(db.prepare('SELECT chapter_number FROM chapter_deletion_operations').pluck().all()).toEqual([2])
     expect(db.prepare("SELECT COUNT(*) FROM drafts WHERE deletion_id <> ''").pluck().get()).toBe(0)
+    const created = new (createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3'))(':memory:')
+    try {
+      created.transaction(() => initializeLegacyBaselineSchema(created))()
+      migrateSchema(new SqliteSchemaAdapter(created), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+      expect(sqliteSchemaFingerprint(db), '与新建作品同形').toBe(sqliteSchemaFingerprint(created))
+    } finally { created.close() }
     expect(readPortableCurrentAuthority({ database: db, projectStorageRoot: path.join(target, '.ai-novel'),
       projectId: receipt.targetProjectId })).not.toBeNull()
   })
@@ -60,7 +70,7 @@ describe('恢复 M07 之前导出的便携包（schema 7）', { timeout: 60_000 
     const second = path.join(base, '再恢复')
     await restorePortableProject({ archivePath: archive, targetProjectRoot: second })
     initProjectDatabase(second)
-    expect(getProjectDb()!.prepare("SELECT chapter_number FROM live_drafts WHERE status='finalized' ORDER BY chapter_number")
+    expect(getProjectDb()!.prepare("SELECT chapter_number FROM drafts WHERE status='finalized' ORDER BY chapter_number")
       .pluck().all()).toEqual([1, 3])
   })
 })

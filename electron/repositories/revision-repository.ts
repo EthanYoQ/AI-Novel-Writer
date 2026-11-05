@@ -272,7 +272,7 @@ export class RevisionRepository {
             const target = db.prepare(`
               SELECT drafts.chapter_number, drafts.version, drafts.status,
                      drafts.word_count, drafts.content_id, contents.body
-              FROM live_drafts AS drafts
+              FROM drafts
               JOIN contents ON contents.id = drafts.content_id
               WHERE drafts.id = ?
             `).get(request.targetDraftId) as {
@@ -364,7 +364,7 @@ export class RevisionRepository {
             db.prepare('UPDATE contents SET body = ? WHERE id = ?')
                 .run(request.mergedContent, target.content_id)
             const draftUpdate = db.prepare(`
-              UPDATE drafts
+              UPDATE drafts_all
               SET status = 'revised', word_count = ?, updated_at = datetime('now')
               WHERE id = ? AND status IN ('draft', 'revised', 'reviewed')
             `).run(request.wordCount, request.targetDraftId)

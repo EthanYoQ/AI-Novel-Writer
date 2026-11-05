@@ -51,7 +51,7 @@ beforeEach(() => {
   createLiveRowViews(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
   const draftContentId = ContentRepository.create('原稿')
-  db.prepare('INSERT INTO drafts (content_id) VALUES (?)').run(draftContentId)
+  db.prepare('INSERT INTO drafts_all (content_id) VALUES (?)').run(draftContentId)
 })
 
 afterEach(() => db.close())

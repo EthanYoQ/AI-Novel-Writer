@@ -72,7 +72,7 @@ function seed(db: import('better-sqlite3').Database, options: SeedOptions = {}):
   const body = options.corruptBody ?? generatedBody
   const sourceContentId = options.existingDraftId === undefined
     ? Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(source).lastInsertRowid) : null
-  const draftId = options.existingDraftId ?? Number(db.prepare(`INSERT INTO drafts(chapter_number,version,status,content_id)
+  const draftId = options.existingDraftId ?? Number(db.prepare(`INSERT INTO drafts_all(chapter_number,version,status,content_id)
     VALUES(1,1,'draft',?)`).run(sourceContentId).lastInsertRowid)
   const reviewContentId = Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(body).lastInsertRowid)
   const reviewIndex = Number(db.prepare('SELECT COALESCE(MAX(review_index),0)+1 FROM reviews WHERE base_draft_id=?')
@@ -238,7 +238,7 @@ function generatedCycle(db: import('better-sqlite3').Database, key: string, same
 function mergeRows(db: import('better-sqlite3').Database, item: ReturnType<typeof generatedCycle>, mergedContent: string): string {
   const contentId = db.prepare('SELECT content_id FROM drafts WHERE id=?').pluck().get(item.seeded.draftId) as number
   db.prepare('UPDATE contents SET body=? WHERE id=?').run(mergedContent, contentId)
-  db.prepare("UPDATE drafts SET status='revised',word_count=? WHERE id=?")
+  db.prepare("UPDATE drafts_all SET status='revised',word_count=? WHERE id=?")
     .run(mergedContent.length, item.seeded.draftId)
   db.prepare("UPDATE revisions SET status='merged',merged_to_draft_id=? WHERE id=?")
     .run(item.seeded.draftId, item.revision.revisionId)
@@ -1018,7 +1018,7 @@ describe('ReviewCycleRepository merge state', () => {
         .run(seeded.draftId, seeded.draftId, seeded.source, contentId, revisionContent.length).lastInsertRowid)
       const draftContentId = db.prepare('SELECT content_id FROM drafts WHERE id=?').pluck().get(seeded.draftId) as number
       db.prepare('UPDATE contents SET body=? WHERE id=?').run(revisionContent, draftContentId)
-      db.prepare("UPDATE drafts SET status='revised' WHERE id=?").run(seeded.draftId)
+      db.prepare("UPDATE drafts_all SET status='revised' WHERE id=?").run(seeded.draftId)
       expect(db.transaction(() => ReviewCycleRepository.commitMergedRevision({
         revisionId, mergedHash: hash(revisionContent),
       }, db))()).toEqual({ revisionId, bound: false, idempotent: true })
@@ -1035,7 +1035,7 @@ describe('ReviewCycleRepository merge state', () => {
       }, db))()).toThrow('REVIEW_CYCLE_CONFLICT')
 
       const otherContentId = Number(db.prepare("INSERT INTO contents(body) VALUES('other')").run().lastInsertRowid)
-      const otherDraftId = Number(db.prepare(`INSERT INTO drafts(chapter_number,version,status,content_id)
+      const otherDraftId = Number(db.prepare(`INSERT INTO drafts_all(chapter_number,version,status,content_id)
         VALUES(2,1,'draft',?)`).run(otherContentId).lastInsertRowid)
       const mergedHash = mergeRows(db, item, '合并后的正文。')
       db.prepare('UPDATE revisions SET merged_to_draft_id=? WHERE id=?').run(otherDraftId, item.revision.revisionId)

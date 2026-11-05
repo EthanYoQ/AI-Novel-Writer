@@ -87,7 +87,7 @@ describe('generation public IPC with actual project authority and SQLite', () =>
   it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('routes %s through the renderer client, registered IPC, owner and actual formal repository', async operation => {
     const body = '林岚到达海港，发现了留下的信。'
     const revisedBody = '林岚到达海港，发现了父亲留下的信。'
-    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'海港'); INSERT INTO contents(id,body) VALUES(1,''); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,18)")
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'海港'); INSERT INTO contents(id,body) VALUES(1,''); INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,18)")
     getProjectDb()!.prepare('UPDATE contents SET body=? WHERE id=1').run(body)
     vi.stubGlobal('window', { aiNovelAPI: { invoke: (channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args) } })
     const source = { id: 1, chapterNumber: 1, version: 1, status: 'draft' as const, content: body }
@@ -164,7 +164,7 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect((await invoke('generation:read', run.handle)).ledger?.physicalRequests).toBe(originalRoot ? 2 : 1)
   })
   it.each(['zh-CN', 'en-US'] as const)('localizes actual prepare source drift for review and refinement in %s', async uiLocale => {
-    getProjectDb()!.exec("INSERT INTO contents(id,body) VALUES(1,'作者已保存的新稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(1,1,1,'draft',1)")
+    getProjectDb()!.exec("INSERT INTO contents(id,body) VALUES(1,'作者已保存的新稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id) VALUES(1,1,1,'draft',1)")
     useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath,
       name: '合成小说', sessionLease: session.leaseId, characterStates: '', createdAt: '', updatedAt: '',
       novelConfig: { genre: '', subGenre: '', targetAudience: '', totalChapters: 1, wordsPerChapter: 2000,
@@ -194,7 +194,7 @@ describe('generation public IPC with actual project authority and SQLite', () =>
   })
   async function finalizedCharacterFixture() {
     const body = '林岚来到北塔。', characterId = 'character-fixture'
-    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO characters(character_id,name) VALUES('character-fixture','林岚'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO characters(character_id,name) VALUES('character-fixture','林岚'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
     FinalizationRepository.commit({ finalizationId: 'ipc-finalized', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
       content: body, contentHash: textHash(body), contentRevision: 1, targetFileName: '第一章.txt' })
     const prepared = await invoke('finalized-character:read-context', { draftId: 1 })
@@ -227,7 +227,7 @@ describe('generation public IPC with actual project authority and SQLite', () =>
   })
   it('routes durable finalized state candidate decisions through the captured project owner', async () => {
     const body = '林岚来到北塔。', characterId = 'candidate-character'
-    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO characters(character_id,name,cs_location,cs_provenance) VALUES('candidate-character','林岚','作者地点','{\"location\":{\"kind\":\"author\",\"chapterNumber\":0,\"revision\":1}}'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO characters(character_id,name,cs_location,cs_provenance) VALUES('candidate-character','林岚','作者地点','{\"location\":{\"kind\":\"author\",\"chapterNumber\":0,\"revision\":1}}'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
     FinalizationRepository.commit({ finalizationId: 'ipc-state-candidate', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
       content: body, contentHash: textHash(body), contentRevision: 1, targetFileName: '第一章.txt' })
     const context = SummaryRepository.readFinalizedCharacterContext(1, { projectId: session.projectId, epoch: session.leaseId }, getProjectDb()!)
@@ -303,7 +303,7 @@ describe('generation public IPC with actual project authority and SQLite', () =>
       return result.id
     }
     const selectedId = await create(1), archivedId = await create(2)
-    database.prepare("UPDATE drafts SET status='archived' WHERE id=?").run(archivedId)
+    database.prepare("UPDATE drafts_all SET status='archived' WHERE id=?").run(archivedId)
     const prepareRequest = { chapterNumber: 2, modelId: model.id, promptKeys: ['next_chapter_draft'],
       skillStages: [], authorInputs: draftInputs, query: '灯塔', selectedDraftIds: [selectedId] }
     const selectionFor = (preparationId: string): BeginGenerationRequest => ({ ...request, chapterNumber: 2,

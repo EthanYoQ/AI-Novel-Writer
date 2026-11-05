@@ -54,7 +54,7 @@ afterEach(() => {
 describe('DraftRepository finalized immutability guard', () => {
   it('lists the finalized outbox chapter title as authoritative draft metadata', () => {
     db.prepare(`
-      INSERT INTO finalization_outbox (finalization_id, draft_id, chapter_number, chapter_title)
+      INSERT INTO finalization_outbox_all (finalization_id, draft_id, chapter_number, chapter_title)
       VALUES (?, ?, ?, ?)
     `).run('finalization-1', 1, 1, '蓝镜初亮')
 
@@ -68,7 +68,7 @@ describe('DraftRepository finalized immutability guard', () => {
 
   it('keeps the finalized title in chapter-scoped metadata reloads', () => {
     db.prepare(`
-      INSERT INTO finalization_outbox (finalization_id, draft_id, chapter_number, chapter_title)
+      INSERT INTO finalization_outbox_all (finalization_id, draft_id, chapter_number, chapter_title)
       VALUES (?, ?, ?, ?)
     `).run('finalization-1', 1, 1, '蓝镜初亮')
 
@@ -81,7 +81,7 @@ describe('DraftRepository finalized immutability guard', () => {
   it('lists draft metadata across chapters without relying on blueprint rows', () => {
     db.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(2, '第二章定稿正文')
     db.prepare(`
-      INSERT INTO drafts (id, chapter_number, version, status, content_id, word_count)
+      INSERT INTO drafts_all (id, chapter_number, version, status, content_id, word_count)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(2, 2, 1, 'finalized', 2, 7)
 
@@ -109,7 +109,7 @@ describe('DraftRepository finalized immutability guard', () => {
 
   it('rechecks authoritative status and refuses generic deletion after finalization', () => {
     db.prepare(`
-      INSERT INTO finalization_outbox (finalization_id, draft_id, chapter_number, chapter_title)
+      INSERT INTO finalization_outbox_all (finalization_id, draft_id, chapter_number, chapter_title)
       VALUES (?, ?, ?, ?)
     `).run('finalization-1', 1, 1, '蓝镜初亮')
 

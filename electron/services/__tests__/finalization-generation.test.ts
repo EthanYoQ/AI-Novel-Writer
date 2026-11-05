@@ -35,7 +35,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], option
   let db = new Database(path.join(root,'.ai-novel','project.db'))
   vi.mocked(getProjectDb).mockReturnValue(db)
   db.exec("INSERT INTO characters(name,character_id,cs_provenance) VALUES('林岚','character-lan','{}')")
-  db.exec("INSERT INTO project_core(id,project_name) VALUES('main','合成定稿'); INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
+  db.exec("INSERT INTO project_core(id,project_name) VALUES('main','合成定稿'); INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
   if (options.writingLanguage) db.prepare("UPDATE project_core SET writing_language=? WHERE id='main'").run(options.writingLanguage)
   FinalizationRepository.commit({ finalizationId: 'finalized-1', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
     content, contentHash: textHash(content), contentRevision: 1, targetFileName: '第一章.txt' })
@@ -179,7 +179,7 @@ it('characters原ACK跨重开保持计数，作者后改不被回读覆盖',asyn
 it('恢复副本重新定稿：经验证origin epoch的derived字段被当前项目推进，无授权仍source-conflict',async()=>{
  const seed=(db:import('better-sqlite3').Database)=>{
   // 原项目在 generation 0 派生；恢复副本复制同一计数器，重新定稿后绑定更大的 generation。
-  db.exec("UPDATE continuity_projection_meta SET generation=generation+1 WHERE id='main'; UPDATE summary_snapshots SET projection_generation=(SELECT generation FROM continuity_projection_meta WHERE id='main') WHERE draft_id=1")
+  db.exec("UPDATE continuity_projection_meta SET generation=generation+1 WHERE id='main'; UPDATE summary_snapshots_all SET projection_generation=(SELECT generation FROM continuity_projection_meta WHERE id='main') WHERE draft_id=1")
   const generation=db.prepare("SELECT generation FROM continuity_projection_meta WHERE id='main'").pluck().get() as number
   const source={draftId:1,finalizationId:'origin-finalized-1',chapterNumber:1,contentHash:textHash('原项目定稿')}
   db.prepare("UPDATE characters SET cs_location='原项目地点',cs_provenance=? WHERE name='林岚'").run(JSON.stringify({location:{kind:'derived',source,revision:1,
@@ -214,7 +214,7 @@ it('#484 生成期间字段被改：界面重试沿用冻结上下文仍拒写�
  const replay=await f.owner.executeFinalizationGeneration({handle:retry.view.handle,retryOf:f.commitRequest.artifact})
  expect(()=>f.owner.commitFinalizationGeneration({handle:retry.view.handle,artifact:f.artifactOf(replay)})).toThrow('FINALIZED_CHARACTER_FIELD_CONFLICT')
  expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('作者新地点')
- f.db.exec("INSERT INTO contents(id,body) VALUES(2,'新稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,2,'draft',2,2)")
+ f.db.exec("INSERT INTO contents(id,body) VALUES(2,'新稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,2,'draft',2,2)")
  registerAsReopenDraft(f.db,2)
  FinalizationRepository.commit({finalizationId:'finalized-2',draftId:2,chapterNumber:1,chapterTitle:'北塔',content:prose,contentHash:textHash(prose),contentRevision:2,targetFileName:'第一章.txt'})
  const source=f.owner.readFinalizedCharacterContext(2).context.source
@@ -388,7 +388,7 @@ it.each(['same-project', 'authorized-origin', 'unknown-origin'] as const)('cards
   return { finishReason: 'stop', usage: null }
  }, { content, transferOrigin: () => authorized ? 'origin-project' : undefined, seed: db => {
   // C17-B shape: prior revision 3 / generation 2, new revision 4 / generation 3.
-  db.exec("UPDATE drafts SET version=4 WHERE id=1; UPDATE continuity_projection_meta SET generation=3 WHERE id='main'; UPDATE summary_snapshots SET projection_generation=3 WHERE draft_id=1")
+  db.exec("UPDATE drafts_all SET version=4 WHERE id=1; UPDATE continuity_projection_meta SET generation=3 WHERE id='main'; UPDATE summary_snapshots_all SET projection_generation=3 WHERE draft_id=1")
   const provenance = { recentEvents: { kind: 'derived', source: { draftId: 3, chapterNumber: 1, finalizationId: 'previous-finalization', contentHash: textHash('previous prose') }, revision: 3,
    sourceOrder: { continuityEpoch: `${origin === 'same-project' ? 'project' : 'origin-project'}:2`, chapterNumber: 1, authoritativeFinalizationRevision: 3 } },
    location: { kind: 'author', chapterNumber: 1, revision: 1 } }
@@ -789,7 +789,7 @@ it.each(['stale-target', 'forged-hash', 'discarded', 'source-changed', 'root-pen
  if (mode === 'stale-target') { const first = f.result.run.artifacts[0]!; retryOf = { artifactId: first.artifactId, revision: first.revision, textHash: first.textHash } }
  if (mode === 'forged-hash') retryOf = { ...retryOf, textHash: textHash('forged') }
  if (mode === 'discarded') f.owner.discardCandidate(f.handle, retryOf.artifactId)
- if (mode === 'source-changed') f.db.prepare('UPDATE finalization_outbox SET content_snapshot=?,content_hash=?').run('作者新正文', textHash('作者新正文'))
+ if (mode === 'source-changed') f.db.prepare('UPDATE finalization_outbox_all SET content_snapshot=?,content_hash=?').run('作者新正文', textHash('作者新正文'))
  if (mode === 'root-pending') f.db.prepare("UPDATE generation_attempts SET attempt_json=json_set(attempt_json,'$.status','dispatch-marked') WHERE invocation_nonce='finalization:0'").run()
  if (mode === 'blocked') f.db.prepare("UPDATE generation_roots SET blocked_code='ROOT_BUDGET_EXHAUSTED'").run()
  await expect(f.owner.executeFinalizationGeneration({ handle: f.handle, retryOf })).rejects.toThrow()

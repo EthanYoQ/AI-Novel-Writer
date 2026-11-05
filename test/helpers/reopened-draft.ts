@@ -29,5 +29,5 @@ export function registerAsReopenDraft(db: BetterSqlite3.Database, draftId: numbe
   const relation: ReopenedFinal = final.finalization_id === null
     ? { kind: 'legacy-finalized', draftId: final.id, chapterNumber: final.chapter_number, contentHash }
     : { kind: 'finalized', draftId: final.id, chapterNumber: final.chapter_number, finalizationId: final.finalization_id, contentHash }
-  db.prepare('UPDATE drafts SET source_dependencies = ? WHERE id = ?').run(JSON.stringify([relation]), draftId)
+  db.prepare('UPDATE drafts_all SET source_dependencies = ? WHERE id = ?').run(JSON.stringify([relation]), draftId)
 }

@@ -23,7 +23,7 @@ const COPIED_RAW_ASSETS = [...CANONICAL_RAW_PROJECT_ASSETS, 'trash'] as const
 const VECTOR_ASSETS = ['lancedb', 'embedding-spaces.json', 'vectors.json', 'vectors.json.migrated', 'vectors.json.migration-journal.json'] as const
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const RUNTIME_AUTHORITY_TABLES = [
-  'recovery_candidates', 'finalization_outbox', 'import_runs', 'chapter_deletion_operations', 'generation_roots',
+  'recovery_candidates', 'finalization_outbox_all', 'import_runs', 'chapter_deletion_operations', 'generation_roots',
   'generation_runs', 'generation_attempts', 'generation_artifacts', 'review_cycles',
   'review_findings', 'llm_calls',
 ] as const
@@ -93,7 +93,7 @@ function sameTree(source: string, target: string): void {
 function hasTransferredRuntimeAuthority(databasePath: string): boolean {
   const db = new Database(databasePath, { readonly: true, fileMustExist: true })
   try {
-    if (db.prepare("SELECT 1 FROM drafts WHERE status='finalized' LIMIT 1").get()) return true
+    if (db.prepare("SELECT 1 FROM drafts_all WHERE status='finalized' LIMIT 1").get()) return true
     for (const name of RUNTIME_AUTHORITY_TABLES) {
       if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) continue
       if (db.prepare(`SELECT 1 FROM "${name}" LIMIT 1`).get()) return true

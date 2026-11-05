@@ -42,7 +42,7 @@ function createSourceProject(base: string): OpenProject {
 function finalizeChapter(draftId: number, chapterNumber: number, body: string, version: number): void {
   const db = getProjectDb()!
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(draftId, '尚未定稿')
-  db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)")
+  db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)")
     .run(draftId, chapterNumber, version, draftId)
   registerAsReopenDraft(db, draftId)
   FinalizationRepository.commit({ finalizationId: `finalization-${randomUUID()}`, draftId, chapterNumber,
@@ -114,7 +114,7 @@ describe('备份恢复的项目替换一章定稿', { timeout: 60_000 }, () => {
     const source = createSourceProject(base)
     const olderBody = '第一章初稿：雾从海面升起。'
     getProjectDb()!.prepare('INSERT INTO contents(id,body) VALUES(3,?)').run(olderBody)
-    getProjectDb()!.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(3,1,1,'draft',3,0)").run()
+    getProjectDb()!.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(3,1,1,'draft',3,0)").run()
     finalizeChapter(4, 1, '第一章改稿：雾从海面一层一层爬上来。', 2)
     const restored = await exportAndRestore(base, source, 'older-version')
     registerAsReopenDraft(getProjectDb()!, 3)

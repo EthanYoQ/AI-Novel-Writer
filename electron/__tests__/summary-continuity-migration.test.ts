@@ -112,7 +112,7 @@ describe('summary continuity migration', () => {
     expect(getProjectDb()!.prepare(
       'SELECT draft_id FROM summary_snapshots WHERE draft_id = ?',
     ).get(draftId)).toEqual({ draft_id: draftId })
-    getProjectDb()!.prepare('DELETE FROM drafts WHERE id = ?').run(draftId)
+    getProjectDb()!.prepare('DELETE FROM drafts_all WHERE id = ?').run(draftId)
     expect(getProjectDb()!.prepare(
       'SELECT draft_id FROM summary_snapshots WHERE draft_id = ?',
     ).get(draftId)).toBeUndefined()

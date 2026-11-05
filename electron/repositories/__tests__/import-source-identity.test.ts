@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { closeProjectDatabase, getProjectDb } from '../../database'
 import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+import { createLiveRowViews, dropLiveRowViews } from '../../../test/helpers/live-row-views'
 import { ImportSourceIdentityRepository } from '../import-source-identity-repository'
 import { ImportRunRepository } from '../import-run-repository'
 
@@ -143,7 +144,9 @@ describe('project-scoped opaque import source identity', () => {
     offline.prepare('INSERT INTO import_source_identity (id, salt_hex) VALUES (?, ?)')
       .run('main', oldSalt.toString('hex'))
     // Explicit legacy normalization regression; ordinary reopen never runs it.
+    dropLiveRowViews(offline)
     initializeLegacyBaselineSchema(offline, applicationSecret)
+    createLiveRowViews(offline)
     offline.close()
 
     initProjectDatabase(root)

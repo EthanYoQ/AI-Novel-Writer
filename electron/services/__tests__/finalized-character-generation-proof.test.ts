@@ -35,7 +35,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   initializeLegacyBaselineSchema(db)
   db.exec("INSERT INTO characters(name,cs_provenance) VALUES('林岚','{}')")
   migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-  db.exec("INSERT INTO project_core(id,project_name) VALUES('main','合成定稿'); INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
+  db.exec("INSERT INTO project_core(id,project_name) VALUES('main','合成定稿'); INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
   FinalizationRepository.commit({ finalizationId: 'finalized-1', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
     content: prose, contentHash: textHash(prose), contentRevision: 1, targetFileName: '第一章.txt' })
   db.transaction(() => refreshCharacterIdentityProjection(db))()
@@ -167,7 +167,7 @@ describe('finalized proposal immutable evidence and live write authority', () =>
 
   it('hides an old chapter finalization and rejects direct read, approve, and cancel without returning candidates', async () => {
     const f = await occurrence(), batch = f.characters.stage(f.source())
-    f.db.exec("INSERT INTO contents(id,body) VALUES(2,'新定稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,2,'draft',2,3)")
+    f.db.exec("INSERT INTO contents(id,body) VALUES(2,'新定稿'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,2,'draft',2,3)")
     registerAsReopenDraft(f.db, 2)
     FinalizationRepository.commit({ finalizationId: 'finalized-2', draftId: 2, chapterNumber: 1, chapterTitle: '新北塔',
       content: '新定稿', contentHash: textHash('新定稿'), contentRevision: 1, targetFileName: '第一章-新版.txt' })
@@ -183,7 +183,7 @@ describe('finalized proposal immutable evidence and live write authority', () =>
 
   it('fails closed when the finalized outbox hash changes', async () => {
     const f = await occurrence(), batch = f.characters.stage(f.source())
-    f.db.prepare('UPDATE finalization_outbox SET content_hash=? WHERE finalization_id=?')
+    f.db.prepare('UPDATE finalization_outbox_all SET content_hash=? WHERE finalization_id=?')
       .run('0'.repeat(64), f.prepared.context.source.finalizationId)
     expect(f.characters.listPendingFinalized()).toEqual([])
     expect(() => f.characters.readPendingFinalized(batch.proposalBatchId)).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')

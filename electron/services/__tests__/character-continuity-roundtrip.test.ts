@@ -63,7 +63,7 @@ function finalizeChapter(project: OpenProject, draftId: number, chapterNumber: n
   const db = getProjectDb()!
   db.prepare('INSERT OR IGNORE INTO blueprints(chapter_number,title) VALUES(?,?)').run(chapterNumber, `第${chapterNumber}章`)
   db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(draftId, '尚未定稿')
-  db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)")
+  db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(?,?,?,'draft',?,0)")
     .run(draftId, chapterNumber, version, draftId)
   registerAsReopenDraft(db, draftId)
   FinalizationRepository.commit({ finalizationId: `finalization-${randomUUID()}`, draftId, chapterNumber,

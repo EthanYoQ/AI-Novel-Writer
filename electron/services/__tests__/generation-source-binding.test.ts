@@ -81,8 +81,8 @@ function fixture(migrated = false) {
     db.prepare("INSERT INTO project_core(id,project_name,global_guidance) VALUES('main','项目','作者全局指导')").run();
     db.prepare("INSERT INTO blueprints(chapter_number,title,user_guidance) VALUES(2,'第二章','章指导')").run();
     db.prepare("INSERT INTO contents(id,body) VALUES(1,'原文\r\n汉字。'),(2,'未选草稿'),(3,'已定稿原文')").run();
-    db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(1,2,1,'draft',1),(2,3,1,'draft',2),(3,1,1,'finalized',3)").run();
-    db.prepare("INSERT INTO finalization_outbox(finalization_id,draft_id,chapter_number,content_hash,content_revision,content_snapshot,target_file_name) VALUES('final-3',3,1,?,1,'已定稿原文','chapter1.txt')").run(hash('已定稿原文'));
+    db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id) VALUES(1,2,1,'draft',1),(2,3,1,'draft',2),(3,1,1,'finalized',3)").run();
+    db.prepare("INSERT INTO finalization_outbox_all(finalization_id,draft_id,chapter_number,content_hash,content_revision,content_snapshot,target_file_name) VALUES('final-3',3,1,?,1,'已定稿原文','chapter1.txt')").run(hash('已定稿原文'));
     const h = hash('model'), input: GenerationSourceBindingInput = { projectId: 'p', epoch: 'e', operation: 'chapter', chapterNumber: 2, selectedDraftIds: [1], selectedFinalizedDraftIds: [3], promptKeys: ['draft'], skillStages: ['drafting'], modelReceipt: { modelId: 'model', provider: 'openai', protocol: 'openai', modelName: 'synthetic', modelRevision: h, endpointFingerprint: h, capabilityEvidence: { source: { contextWindowTokens: 'unknown', maxOutputTokens: 'user-operational-cap', featureFlags: 'unknown' }, subjectFingerprint: h, contextWindowTokens: 8000, maxOutputTokens: 1000, reasoning: false, structuredOutput: false, usage: true } }, policy: { version: 'fixture-v1', maxPhysicalRequests: 2 }, outputContract: 'visible-text' };
     const deps = { db, projectStorageRoot, globalDataRoot, readBuiltinPrompt: () => JSON.stringify({ key: 'draft', content: 'builtin original', systemRole: 'immutable contract' }) };
     return { root, db, input, deps, build: () => buildGenerationSourceBinding(deps, input) };
@@ -112,7 +112,7 @@ describe('main rebuilt generation sources', () => {
         f.input.operation = 'chapter-draft';
         f.input.selectedDraftIds = [];
         const source = { draftId: 3, finalizationId: 'final-3', chapterNumber: 1, contentHash: hash('已定稿原文') };
-        f.db.prepare(`INSERT INTO summary_snapshots(
+        f.db.prepare(`INSERT INTO summary_snapshots_all(
           draft_id,chapter_number,chapter_notes,source_finalization_id,source_content_hash,projection_generation
         ) VALUES(3,1,'当前摘要','final-3',?,0)`).run(source.contentHash);
         f.db.prepare(`INSERT INTO characters(
@@ -308,7 +308,7 @@ describe('main rebuilt generation sources', () => {
     it('reads exact selected prose and current finalized authority without unselected drafts or private paths', () => { const f = fixture(), result = f.build(); expect(result.materials.find(item => item.ref.sourceId === 'draft:1')?.text).toBe('原文\r\n汉字。'); expect(result.materials.some(item => item.text === '未选草稿')).toBe(false); expect(result.binding.sourceRefs.map(ref => ref.sourceId)).toEqual(['project-core:main', 'blueprint:2', 'draft:1', 'finalized:3:final-3']); expect(result.context).not.toHaveProperty('transferAuthority'); expect(JSON.stringify(result.binding.sourceManifest)).not.toContain(f.root); });
     it('binds only a restored receipt projection in the new project scope and detects its replacement', () => {
         const f = fixture(); useCanonicalStorage(f); f.input.projectId = '22222222-2222-4222-8222-222222222222';
-        f.db.prepare("INSERT INTO summary_snapshots(draft_id,chapter_number,chapter_notes,source_finalization_id,source_content_hash,projection_generation) VALUES(3,1,'旧派生摘要','final-3',?,0)").run(hash('已定稿原文'));
+        f.db.prepare("INSERT INTO summary_snapshots_all(draft_id,chapter_number,chapter_notes,source_finalization_id,source_content_hash,projection_generation) VALUES(3,1,'旧派生摘要','final-3',?,0)").run(hash('已定稿原文'));
         const ordinary = f.build(), authority = putPortableAuthority(f), restored = f.build();
         expect(restored.context.transferAuthority).toEqual({ receiptId: authority.receiptId, originProjectId: authority.originProjectId, snapshotGeneration: authority.snapshotGeneration });
         expect(restored.context.sources.at(-1)).toMatchObject({ ref: { projectId: f.input.projectId, epoch: 'e', sourceId: `portable-transfer:${authority.receiptId}` } });
@@ -320,8 +320,8 @@ describe('main rebuilt generation sources', () => {
         expect(changed.receiptId).not.toBe(authority.receiptId);
         expect(SummaryRepository.listFinalizedContinuityBefore(2, f.db)[0]?.sourceStatus).toBe('current');
         f.db.prepare("INSERT INTO contents(id,body) VALUES(4,'新权威正文')").run();
-        f.db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(4,1,2,'finalized',4)").run();
-        f.db.prepare("INSERT INTO finalization_outbox(finalization_id,draft_id,chapter_number,content_hash,content_revision,content_snapshot,target_file_name) VALUES('final-4',4,1,?,1,'新权威正文','chapter1-new.txt')").run(hash('新权威正文'));
+        f.db.prepare("INSERT INTO drafts_all(id,chapter_number,version,status,content_id) VALUES(4,1,2,'finalized',4)").run();
+        f.db.prepare("INSERT INTO finalization_outbox_all(finalization_id,draft_id,chapter_number,content_hash,content_revision,content_snapshot,target_file_name) VALUES('final-4',4,1,?,1,'新权威正文','chapter1-new.txt')").run(hash('新权威正文'));
         expect(SummaryRepository.listFinalizedContinuityBefore(2, f.db)[0]).toMatchObject({ sourceStatus: 'stale', currentFinalizedDraftId: 4 });
         f.input.selectedFinalizedDraftIds = [4];
         expect(f.build().materials.find(item => item.ref.sourceId.startsWith('finalized:4:'))?.text).toBe('新权威正文');
@@ -360,12 +360,12 @@ describe('main rebuilt generation sources', () => {
     });
     it('fails closed when an exported summary source tuple is rewritten', () => {
         const f = fixture(); useCanonicalStorage(f); f.input.projectId = '22222222-2222-4222-8222-222222222222';
-        f.db.prepare("INSERT INTO summary_snapshots(draft_id,chapter_number,chapter_notes,source_finalization_id,source_content_hash,projection_generation) VALUES(3,1,'冻结摘要','final-3',?,0)").run(hash('已定稿原文'));
+        f.db.prepare("INSERT INTO summary_snapshots_all(draft_id,chapter_number,chapter_notes,source_finalization_id,source_content_hash,projection_generation) VALUES(3,1,'冻结摘要','final-3',?,0)").run(hash('已定稿原文'));
         putPortableAuthority(f);
-        f.db.prepare("UPDATE summary_snapshots SET projection_generation=1 WHERE draft_id=3").run();
+        f.db.prepare("UPDATE summary_snapshots_all SET projection_generation=1 WHERE draft_id=3").run();
         expect(() => f.build()).toThrow('PORTABLE_CURRENT_AUTHORITY_INVALID');
     });
-    it('keeps binding hashes stable across epoch and timestamp/log-only changes', () => { const f = fixture(), a = f.build(); f.db.exec("UPDATE project_core SET updated_at='later';UPDATE drafts SET updated_at='later';UPDATE blueprints SET notes='cache',notes_updated_at='later'"); const b = rebuildGenerationSourceBinding(f.deps, a.binding, 'next'); expect(b.binding.epoch).toBe('next'); expect(compareGenerationSourceBindings(a.binding, b.binding)).toBe(true); });
+    it('keeps binding hashes stable across epoch and timestamp/log-only changes', () => { const f = fixture(), a = f.build(); f.db.exec("UPDATE project_core SET updated_at='later';UPDATE drafts_all SET updated_at='later';UPDATE blueprints SET notes='cache',notes_updated_at='later'"); const b = rebuildGenerationSourceBinding(f.deps, a.binding, 'next'); expect(b.binding.epoch).toBe('next'); expect(compareGenerationSourceBindings(a.binding, b.binding)).toBe(true); });
     // 回归（s10b-2）：冻结的审修上下文绝不携带会话租约，否则重开项目（新 epoch）后重建
     // binding 会以 GENERATION_REVIEW_CONTEXT_CHANGED 假失败，审稿/修稿的续跑随之被破坏。
     it('resumes a review/refine run after a reopen because the frozen review context carries no session lease', () => {
@@ -468,10 +468,10 @@ describe('main rebuilt generation sources', () => {
     });
     it.each(['missing', 'obsolete', 'hash', 'receipt'])('rejects %s selected source authority', kind => { const f = fixture(); if (kind === 'missing')
         f.input.selectedDraftIds = [999]; if (kind === 'obsolete') {
-        f.db.exec("INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(2,2,'draft',1)");
+        f.db.exec("INSERT INTO drafts_all(chapter_number,version,status,content_id) VALUES(2,2,'draft',1)");
     } if (kind === 'hash')
         f.db.exec("UPDATE contents SET body='mutated finalized' WHERE id=3"); if (kind === 'receipt')
-        f.db.exec('DELETE FROM finalization_outbox'); expect(() => f.build()).toThrow(); });
+        f.db.exec('DELETE FROM finalization_outbox_all'); expect(() => f.build()).toThrow(); });
     it('rejects a linked prompt without traversing an external source', () => { const f = fixture(); put(f.root, 'outside.json', '{"key":"draft"}'); fs.mkdirSync(path.join(f.deps.projectStorageRoot, 'prompts')); fs.linkSync(path.join(f.root, 'outside.json'), path.join(f.deps.projectStorageRoot, 'prompts/draft.json')); expect(() => f.build()).toThrow('GENERATION_ASSET_UNSAFE'); });
     it('excludes lease lifetime fields and rejects secret or absolute path metadata', () => { const f = fixture(), a = f.build(); const extra = { ...f.input.modelReceipt, leaseId: 'lease-secret', createdAt: 123, expiresAt: 456 }; f.input.modelReceipt = extra; expect(f.build().binding.fingerprint.modelLeaseRevision).toBe(a.binding.fingerprint.modelLeaseRevision); expect(JSON.stringify(f.build().binding.sourceManifest)).not.toContain('lease-secret'); f.input.policy = { apiKey: 'never persist' }; expect(() => f.build()).toThrow('GENERATION_METADATA_PRIVATE_FIELD'); f.input.policy = { source: 'C:\\private\\config' }; expect(() => f.build()).toThrow('GENERATION_METADATA_PRIVATE_PATH'); });
 });
@@ -655,15 +655,15 @@ describe('material decision receipt binding (S10B step 3)', () => {
 
 it('accepts a legacy reviewed draft as the current working draft and still rejects an older one (#411)', () => {
     const f = fixture();
-    f.db.exec("UPDATE drafts SET status='reviewed' WHERE id=1");
+    f.db.exec("UPDATE drafts_all SET status='reviewed' WHERE id=1");
     expect(f.build().binding.sourceRefs.some(ref => ref.sourceId === 'draft:1')).toBe(true);
-    f.db.exec("UPDATE drafts SET status='draft' WHERE id=1; INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(2,2,'reviewed',1)");
+    f.db.exec("UPDATE drafts_all SET status='draft' WHERE id=1; INSERT INTO drafts_all(chapter_number,version,status,content_id) VALUES(2,2,'reviewed',1)");
     expect(() => f.build()).toThrow('GENERATION_DRAFT_NOT_CURRENT');
 });
 
 it('leaves a draft superseded by a newer reviewed version out of the continuity catalog (#411)', () => {
     const f = fixture(true);
-    f.db.exec("INSERT INTO blueprints(chapter_number,title,user_guidance) VALUES(3,'第三章','章指导'); INSERT INTO contents(id,body) VALUES(4,'审过的第二版'); INSERT INTO drafts(id,chapter_number,version,status,content_id) VALUES(4,2,2,'reviewed',4)");
+    f.db.exec("INSERT INTO blueprints(chapter_number,title,user_guidance) VALUES(3,'第三章','章指导'); INSERT INTO contents(id,body) VALUES(4,'审过的第二版'); INSERT INTO drafts_all(id,chapter_number,version,status,content_id) VALUES(4,2,2,'reviewed',4)");
     Object.assign(f.input, { operation: 'chapter-draft', chapterNumber: 3, selectedDraftIds: [4], selectedFinalizedDraftIds: [] });
     const before = f.build();
     // 旧的第一版已被审过的第二版取代：改它不应让使用第二版的运行判定来源变化。

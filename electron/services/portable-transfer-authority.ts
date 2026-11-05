@@ -160,13 +160,13 @@ function currentness(database: Database.Database, legacyCopy = false, freeze?: P
       o.chapter_number AS chapterNumber, o.content_hash AS contentHash,
       o.content_snapshot AS contentSnapshot, d.chapter_number AS draftChapterNumber,
       d.status AS draftStatus, c.body AS body
-    FROM drafts d
+    FROM drafts_all d
     JOIN contents c ON c.id = d.content_id
-    LEFT JOIN finalization_outbox o ON o.draft_id = d.id
+    LEFT JOIN finalization_outbox_all o ON o.draft_id = d.id
     WHERE d.status = 'finalized'
       ${legacyCopy ? 'AND o.finalization_id IS NOT NULL' : ''}
       AND NOT EXISTS (
-        SELECT 1 FROM drafts newer
+        SELECT 1 FROM drafts_all newer
         WHERE newer.chapter_number = d.chapter_number
           AND newer.status = 'finalized'
           AND (newer.version > d.version OR (newer.version = d.version AND newer.id > d.id))
@@ -192,12 +192,12 @@ function currentness(database: Database.Database, legacyCopy = false, freeze?: P
     SELECT s.id AS summaryId, s.draft_id AS draftId, s.chapter_number AS chapterNumber,
       s.source_finalization_id AS sourceFinalizationId, s.source_content_hash AS sourceContentHash,
       s.projection_generation AS projectionGeneration
-    FROM summary_snapshots s
-    JOIN drafts d ON d.id = s.draft_id
+    FROM summary_snapshots_all s
+    JOIN drafts_all d ON d.id = s.draft_id
     WHERE (s.source_finalization_id <> '' OR s.source_content_hash <> '')
       AND d.status = 'finalized'
       AND NOT EXISTS (
-        SELECT 1 FROM drafts newer
+        SELECT 1 FROM drafts_all newer
         WHERE newer.chapter_number = d.chapter_number
           AND newer.status = 'finalized'
           AND (newer.version > d.version OR (newer.version = d.version AND newer.id > d.id))
@@ -276,12 +276,12 @@ export function verifyPortableTransferAuthorityHistory(
     const row = database.prepare(`
       SELECT d.status AS status,d.chapter_number AS chapterNumber,c.body AS body,
         o.finalization_id AS finalizationId,o.content_hash AS contentHash,o.content_snapshot AS contentSnapshot,
-        EXISTS (SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number
+        EXISTS (SELECT 1 FROM drafts_all newer WHERE newer.chapter_number=d.chapter_number
           AND newer.status='finalized' AND newer.id<>d.id) AS replaced
-      FROM drafts d JOIN contents c ON c.id=d.content_id
-      LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.id=?
+      FROM drafts_all d JOIN contents c ON c.id=d.content_id
+      LEFT JOIN finalization_outbox_all o ON o.draft_id=d.id WHERE d.id=?
     `).get(item.draftId) as { status: string; chapterNumber: number; body: string; finalizationId: string | null; contentHash: string | null; contentSnapshot: string | null; replaced: number } | undefined
-    if (!row && freeze?.active && !database.prepare('SELECT 1 FROM drafts WHERE id=?').get(item.draftId)) {
+    if (!row && freeze?.active && !database.prepare('SELECT 1 FROM drafts_all WHERE id=?').get(item.draftId)) {
       const deletion = database.prepare(`
         SELECT operation_id AS operationId FROM chapter_deletion_operations
         WHERE draft_id=? AND chapter_number=? AND finalization_id=?
@@ -304,7 +304,7 @@ export function verifyPortableTransferAuthorityHistory(
       SELECT id AS summaryId,draft_id AS draftId,chapter_number AS chapterNumber,
         source_finalization_id AS sourceFinalizationId,source_content_hash AS sourceContentHash,
         projection_generation AS projectionGeneration
-      FROM summary_snapshots WHERE id=?
+      FROM summary_snapshots_all WHERE id=?
     `).get(item.summaryId) as PortableSummarySourceAuthority | undefined
     if (!row && deleted.has(item.draftId)) continue
     if (!row || row.draftId !== item.draftId || row.chapterNumber !== item.chapterNumber

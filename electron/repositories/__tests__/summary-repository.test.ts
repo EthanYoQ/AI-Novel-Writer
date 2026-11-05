@@ -148,7 +148,7 @@ describe('finalized continuity projection', () => {
     const content = '第二章定稿：林岚抵达新港，随身带着铁罗盘。'
     const db = getProjectDb()!
     const contentId = Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(content).lastInsertRowid)
-    const draftId = Number(db.prepare("INSERT INTO drafts(chapter_number,version,status,content_id,word_count) VALUES(2,1,'draft',?,?)")
+    const draftId = Number(db.prepare("INSERT INTO drafts_all(chapter_number,version,status,content_id,word_count) VALUES(2,1,'draft',?,?)")
       .run(contentId, countDraftUnits(content)).lastInsertRowid)
     const draft = { draftId, finalizationId: 'continuity-character-candidates', contentHash: createHash('sha256').update(content).digest('hex') }
     FinalizationRepository.commit({ ...draft, chapterNumber: 2, chapterTitle: '新港', content, contentRevision: 1, targetFileName: '第二章.txt' })
@@ -254,7 +254,7 @@ describe('finalized continuity projection', () => {
       INSERT INTO contents (body) VALUES ('未定稿正文')
     `).run().lastInsertRowid
     const created = getProjectDb()!.prepare(`
-      INSERT INTO drafts (chapter_number, version, status, source, content_id, word_count)
+      INSERT INTO drafts_all (chapter_number, version, status, source, content_id, word_count)
       VALUES (1, 1, 'draft', 'write', ?, 5)
     `).run(draftId)
 
@@ -378,7 +378,7 @@ describe('finalized continuity projection', () => {
       "INSERT INTO contents (body) VALUES ('旧定稿正文仍可定位。')",
     ).run().lastInsertRowid
     const legacyDraftId = Number(getProjectDb()!.prepare(`
-      INSERT INTO drafts (chapter_number, version, status, source, content_id, word_count)
+      INSERT INTO drafts_all (chapter_number, version, status, source, content_id, word_count)
       VALUES (9, 1, 'finalized', 'write', ?, 10)
     `).run(legacyContentId).lastInsertRowid)
 
@@ -401,7 +401,7 @@ describe('finalized continuity projection', () => {
       }],
     })
     getProjectDb()!.prepare(`
-      UPDATE finalization_outbox SET content_hash = ? WHERE draft_id = ?
+      UPDATE finalization_outbox_all SET content_hash = ? WHERE draft_id = ?
     `).run('0'.repeat(64), receipt.drafts[0]!.draftId)
     expect(SummaryRepository.readFinalizedSource(receipt.drafts[0]!.draftId))
       .toEqual({ status: 'invalid' })

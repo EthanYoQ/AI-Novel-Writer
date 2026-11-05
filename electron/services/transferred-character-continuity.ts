@@ -17,12 +17,12 @@ function record(value: unknown): value is Record<string, unknown> {
  * 删章记录离开 authorization_required 时稿件和收据已在同一事务里删掉，原项目照常允许后面的章节覆盖这类字段（#484）。
  */
 function localSourceProof(db: Database.Database): (source: FinalizedSourceIdentity) => boolean {
-  const receipt = db.prepare(`SELECT 1 FROM finalization_outbox o JOIN drafts d ON d.id=o.draft_id
+  const receipt = db.prepare(`SELECT 1 FROM finalization_outbox_all o JOIN drafts_all d ON d.id=o.draft_id
     WHERE o.finalization_id=? AND o.draft_id=? AND o.chapter_number=? AND d.chapter_number=? AND o.content_hash=?`)
   const deletion = db.prepare(`SELECT 1 FROM chapter_deletion_operations t
     WHERE t.finalization_id=? AND t.draft_id=? AND t.chapter_number=? AND t.status<>'authorization_required'
-      AND NOT EXISTS (SELECT 1 FROM finalization_outbox o WHERE o.finalization_id=t.finalization_id)
-      AND NOT EXISTS (SELECT 1 FROM drafts d WHERE d.id=t.draft_id)`)
+      AND NOT EXISTS (SELECT 1 FROM finalization_outbox_all o WHERE o.finalization_id=t.finalization_id)
+      AND NOT EXISTS (SELECT 1 FROM drafts_all d WHERE d.id=t.draft_id)`)
   return source => !!receipt.get(source.finalizationId, source.draftId, source.chapterNumber, source.chapterNumber, source.contentHash)
     || !!deletion.get(source.finalizationId, source.draftId, source.chapterNumber)
 }

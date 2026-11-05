@@ -14,13 +14,16 @@ function normalizeHistoricalFixture(projectPath: string): void {
   normalization.db?.close()
   normalization.db = new FixtureDatabase(file)
   normalization.root = projectPath
+  dropLiveRowViews(normalization.db)
   initializeLegacyBaselineSchema(normalization.db)
+  createLiveRowViews(normalization.db)
 }
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { createLiveRowViews, dropLiveRowViews } from '../../../test/helpers/live-row-views'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb } from '../../database'

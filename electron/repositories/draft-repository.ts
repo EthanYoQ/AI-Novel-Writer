@@ -15,8 +15,8 @@ import { isOpenReopenDraft, reopenedFinal } from '../../src/shared/chapter-reope
 
 const DRAFT_META_SELECT = `
   SELECT drafts.*, finalization_outbox.chapter_title, finalization_outbox.finalization_id
-  FROM live_drafts AS drafts
-  LEFT JOIN live_finalization_outbox AS finalization_outbox
+  FROM drafts
+  LEFT JOIN finalization_outbox
     ON drafts.status IN (${RECEIPTED_DRAFT_STATUS_SQL}) AND finalization_outbox.draft_id = drafts.id
 `
 
@@ -131,14 +131,14 @@ function dependencyStates(
                  finalization_outbox.content_hash AS receipt_content_hash,
                  finalization_outbox.content_snapshot,
                  NOT EXISTS (
-                   SELECT 1 FROM live_drafts newer
+                   SELECT 1 FROM drafts newer
                    WHERE newer.chapter_number = drafts.chapter_number
                      AND newer.status = 'finalized'
                      AND (newer.version > drafts.version OR (newer.version = drafts.version AND newer.id > drafts.id))
                  ) AS authoritative_finalized
-          FROM live_drafts AS drafts
+          FROM drafts
           JOIN contents ON contents.id = drafts.content_id
-          LEFT JOIN live_finalization_outbox AS finalization_outbox ON finalization_outbox.draft_id = drafts.id
+          LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
           WHERE drafts.id IN (${placeholders})
         `).all(...chunk) as Array<{
             id: number
@@ -312,7 +312,7 @@ function rowToMeta(
 
 function openReopenDraft(db: BetterSqlite3.Database, chapterNumber: number): { id: number; version: number } | null {
     const rows = db.prepare(`
-      SELECT id, version, status, source_dependencies FROM live_drafts
+      SELECT id, version, status, source_dependencies FROM drafts
       WHERE chapter_number = ? AND status IN (${WORKING_DRAFT_STATUS_SQL})
       ORDER BY version DESC, id DESC
     `).all(chapterNumber) as Array<{ id: number; version: number; status: DraftStatus; source_dependencies: string }>
@@ -336,7 +336,7 @@ function assertChapterAcceptsNewDraft(
     dependencies: readonly DraftSourceDependency[],
 ): void {
     const finalized = db.prepare(`
-      SELECT 1 FROM live_drafts WHERE chapter_number = ? AND status = 'finalized' LIMIT 1
+      SELECT 1 FROM drafts WHERE chapter_number = ? AND status = 'finalized' LIMIT 1
     `).get(chapterNumber)
     if (!finalized) return
     if (!reopenedFinal({ chapterNumber, sourceDependencies: dependencies })) {
@@ -379,7 +379,7 @@ export class DraftRepository {
 
             const contentId = Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(params.content).lastInsertRowid)
             const result = db.prepare(`
-        INSERT INTO drafts (
+        INSERT INTO drafts_all (
           chapter_number, version, source, content_id, word_count, source_dependencies
         ) VALUES (?, ?, ?, ?, ?, ?)
       `).run(
@@ -493,7 +493,7 @@ export class DraftRepository {
         if (!db) return 0
         const row = db.prepare(`
             SELECT MAX(chapter_number) as maxChapter
-            FROM live_drafts
+            FROM drafts
             WHERE status = 'finalized'
         `).get() as { maxChapter: number | null }
         return row?.maxChapter ?? 0
@@ -514,12 +514,12 @@ export class DraftRepository {
 
         if (wordCount !== undefined) {
             db.prepare(`
-        UPDATE drafts SET status = ?, word_count = ?, updated_at = datetime('now')
+        UPDATE drafts_all SET status = ?, word_count = ?, updated_at = datetime('now')
         WHERE id = ?
       `).run(status, wordCount, id)
         } else {
             db.prepare(`
-        UPDATE drafts SET status = ?, updated_at = datetime('now')
+        UPDATE drafts_all SET status = ?, updated_at = datetime('now')
         WHERE id = ?
       `).run(status, id)
         }
@@ -539,7 +539,7 @@ export class DraftRepository {
         if (!db) return
 
         db.prepare(`
-      UPDATE drafts SET word_count = ?, updated_at = datetime('now')
+      UPDATE drafts_all SET word_count = ?, updated_at = datetime('now')
       WHERE id = ?
     `).run(wordCount, id)
     }
@@ -553,7 +553,7 @@ export class DraftRepository {
             // 状态必须与 DELETE 位于同一权威事务；菜单打开时的 renderer 状态
             // 不能授权删除在确认期间已经定稿的事实。
             const target = db.prepare(`
-              SELECT status, content_id FROM live_drafts WHERE id = ?
+              SELECT status, content_id FROM drafts WHERE id = ?
             `).get(id) as { status: string; content_id: number } | undefined
             if (!target) return
             if (target.status === 'finalized') {
@@ -569,7 +569,7 @@ export class DraftRepository {
                 )
             }
 
-            db.prepare('DELETE FROM drafts WHERE id = ?').run(id)
+            db.prepare('DELETE FROM drafts_all WHERE id = ?').run(id)
 
             // 【DB 迁移备注】：如果 contents.id 仍被 revision 或 review 引用，
             // SQLite 外键约束会阻止删除；此处保留原有孤立内容兼容策略。
@@ -588,9 +588,9 @@ export class DraftRepository {
             db.prepare('DELETE FROM post_process_runs').run()
             db.prepare('DELETE FROM reviews').run()
             db.prepare('DELETE FROM revisions').run()
-            db.prepare('DELETE FROM drafts').run()
+            db.prepare('DELETE FROM drafts_all').run()
             db.prepare('DELETE FROM contents').run()
-            db.prepare('DELETE FROM summary_snapshots').run()
+            db.prepare('DELETE FROM summary_snapshots_all').run()
         })
 
         tx()

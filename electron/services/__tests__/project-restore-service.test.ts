@@ -91,15 +91,15 @@ function fixture(): Fixture {
   try {
     db.prepare("INSERT INTO project_core(id,project_name,writing_language) VALUES('main','雨夜','zh-CN')").run()
     db.prepare('INSERT INTO contents(id,body) VALUES(1,?),(2,?)').run(oldBody, currentBody)
-    db.prepare(`INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count,source_dependencies)
+    db.prepare(`INSERT INTO drafts_all(id,chapter_number,version,status,source,content_id,word_count,source_dependencies)
       VALUES(1,1,1,'finalized','write',1,?,'[]'),(2,1,2,'finalized','rewrite',2,?,'[]')`)
       .run(oldBody.length, currentBody.length)
-    db.prepare(`INSERT INTO finalization_outbox(
+    db.prepare(`INSERT INTO finalization_outbox_all(
       finalization_id,draft_id,chapter_number,chapter_title,content_hash,content_revision,content_snapshot,
       target_file_name,publication_status,last_error
     ) VALUES(?,1,1,'旧雨',?,1,?,'旧雨.md','published',''),(?,2,1,'新雨',?,1,?,'新雨.md','pending','')`)
       .run('finalization-old', sha256(oldBody), oldBody, 'finalization-current', sha256(currentBody), currentBody)
-    db.prepare(`INSERT INTO summary_snapshots(
+    db.prepare(`INSERT INTO summary_snapshots_all(
       id,draft_id,chapter_number,chapter_notes,source_finalization_id,source_content_hash,projection_generation
     ) VALUES(1,1,1,'旧摘要','finalization-old',?,1),(2,2,1,'当前摘要','finalization-current',?,2)`)
       .run(sha256(oldBody), sha256(currentBody))
@@ -226,7 +226,7 @@ describe('portable project restore service', { timeout: 20_000 }, () => {
     try { expect(restored.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=1').pluck().get()).toBe('原始旧定稿') }
     finally { restored.close() }
     const copy = new Database(path.join(copiedRoot, '.ai-novel', 'project.db'))
-    copy.exec("INSERT INTO contents(id,body) VALUES(2,'无凭据新定稿'); INSERT INTO drafts(id,chapter_number,version,content_id,status) VALUES(2,2,1,2,'finalized')")
+    copy.exec("INSERT INTO contents(id,body) VALUES(2,'无凭据新定稿'); INSERT INTO drafts_all(id,chapter_number,version,content_id,status) VALUES(2,2,1,2,'finalized')")
     copy.close()
     await expect(exportPortableProject({ ...copiedInput, targetArchivePath: path.join(f.base, 'invalid.ainovel') }))
       .rejects.toThrow('PORTABLE_TRANSFER_AUTHORITY_INVALID')

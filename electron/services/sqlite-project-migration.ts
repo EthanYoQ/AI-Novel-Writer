@@ -10,7 +10,7 @@ import { SchemaMigrationError, type MigrationRegistry } from '../migrations/regi
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import { M02_ADDED_CHARACTER_COLUMNS, M02_AUXILIARY_TABLES } from '../migrations/m02-character-identity'
 import { M03_REVIEW_CYCLE_TABLES } from '../migrations/m03-review-cycle'
-import { M07_DRAFT_COLUMNS } from '../migrations/m07-chapter-recycle'
+import { M07_DRAFT_COLUMNS, logicalTableName } from '../migrations/m07-chapter-recycle'
 import { initializeLegacyBaselineSchema } from '../migrations/baseline-schema'
 import { ensureBaselineBlueprintTables } from '../migrations/baseline-blueprint-schema'
 import { initializeCharacterRosterMetadata } from '../repositories/character-roster-schema'
@@ -109,7 +109,7 @@ function domainColumns(db: BetterSqlite3.Database, preIdentity = false, preAsset
     && (!preAsset || !(M05_ASSET_TABLES as readonly string[]).includes(name))).map(({ name }) => ({ name,
     columns: (db.prepare(`PRAGMA table_info(${quoteIdentifier(name)})`).all() as { name: string }[]).map(column => column.name)
       .filter(column => !preIdentity || name !== 'characters' || !(M02_ADDED_CHARACTER_COLUMNS as readonly string[]).includes(column))
-      .filter(column => !preRecycle || name !== 'drafts' || !(M07_DRAFT_COLUMNS as readonly string[]).includes(column)),
+      .filter(column => !preRecycle || logicalTableName(name) !== 'drafts' || !(M07_DRAFT_COLUMNS as readonly string[]).includes(column)),
   }))
 }
 function domain(db: BetterSqlite3.Database, selection = domainColumns(db)): ProjectSqliteEvidence['domain'] {
@@ -119,8 +119,8 @@ function domain(db: BetterSqlite3.Database, selection = domainColumns(db)): Proj
     const encoded = rows.map(row => JSON.stringify(row, (_key, value: unknown) =>
       typeof value === 'bigint' ? { integer: value.toString() } : value)).sort()
     if (encoded.length) {
-      tableCounts[name] = encoded.length
-      digest.update(JSON.stringify([name, encoded]))
+      tableCounts[logicalTableName(name)] = encoded.length
+      digest.update(JSON.stringify([logicalTableName(name), encoded]))
     }
   }
   return { tableCounts, authorContentHash: digest.digest('hex') }

@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { getDesktopMigrationRegistry } from '../migrations/desktop-registry'
 import { verifySchema } from '../migrations/runner'
-import { LIVE_ROW_VIEWS } from '../migrations/m07-chapter-recycle'
+import { LIVE_ROW_VIEWS, logicalTableName } from '../migrations/m07-chapter-recycle'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import fieldPolicyDocument from './portable-project-field-policy.json'
 
@@ -87,8 +87,9 @@ const liveRowViews = new Set<string>(LIVE_ROW_VIEWS.map(item => item.view))
 
 /**
  * Read-only bidirectional schema gate. sqlite_* implementation objects are deliberately outside the portable contract.
- * Views carry no data; only M07's live_ views are admitted, and verifySchema's fingerprint pins their exact SQL.
- * A schema-7 source predates M07: no views at all, and none of M07's drafts columns.
+ * Views carry no data; only M07's live views are admitted, and verifySchema's fingerprint pins their exact SQL.
+ * A schema-7 source predates M07: no views, the managed tables under their original names, and none of M07's drafts columns.
+ * The field policy names managed tables by their original names (drafts, not drafts_all) on both versions.
  */
 export function assertPortableSourceSchema(database: Database.Database,
   version: PortableSourceSchemaVersion = PORTABLE_SOURCE_SCHEMA_VERSION): { tables: number; fields: number } {
@@ -105,9 +106,10 @@ export function assertPortableSourceSchema(database: Database.Database,
   if (objects.some(object => object.type === 'view' && !admittedViews.has(object.name))) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
   const tableObjects = objects.filter(object => object.type !== 'view')
   for (const object of tableObjects) {
-    if (object.type !== 'table' || !(object.name in tables)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
+    const table = version === PORTABLE_SOURCE_SCHEMA_VERSION ? logicalTableName(object.name) : object.name
+    if (object.type !== 'table' || !(table in tables)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
     for (const row of database.prepare(`PRAGMA table_info(${quoteIdentifier(object.name)})`).all() as Array<{ name: string }>) {
-      const key = `${object.name}.${row.name}`
+      const key = `${table}.${row.name}`
       if (!expected.has(key)) formatError('PORTABLE_SCHEMA_UNSUPPORTED')
       actual.add(key)
     }

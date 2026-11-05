@@ -37,7 +37,7 @@ describe('canonical project activation', () => {
     const f = fixture(); createProjectDatabase(f.root); initProjectDatabase(f.root)
     const db = getProjectDb()!
     db.prepare('INSERT INTO contents(body) VALUES (?)').run('合成正文')
-    db.exec(`INSERT INTO drafts(chapter_number,version,content_id,word_count) VALUES(1,1,1,777);
+    db.exec(`INSERT INTO drafts_all(chapter_number,version,content_id,word_count) VALUES(1,1,1,777);
       INSERT INTO import_runs(id,root_run_id,effect_namespace,source_fingerprint,manifest_fingerprint,locale,total_chapters,manifest_chapter_count,status,execution_owner,execution_epoch,lease_expires_at)
       VALUES('fixture','fixture','fixture','source','manifest','zh-CN',1,1,'running','old-owner',5,12345)`)
     closeProjectDatabase()
