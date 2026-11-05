@@ -6,7 +6,7 @@ import { assertKnowledgeSourceIdle, withKnowledgeSourceGate } from './services/k
  * 不同模型、维度或距离语义的向量混写进同一 Arrow FixedSizeList。
  */
 import type * as lancedb from '@lancedb/lancedb'
-import { Index, openLanceDatabase } from './lance-database'
+import { openLanceDatabase } from './lance-database'
 import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Utf8, Schema as ArrowSchema } from 'apache-arrow'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -618,14 +618,6 @@ async function appendCanonicalRecords(
   await appendCompatibleRecords(await db.openTable(TABLE_NAME), records)
 }
 
-async function ensureTextIndex(table: lancedb.Table): Promise<void> {
-  try {
-    await table.createIndex('text', { config: Index.fts() })
-  } catch {
-    // 已有索引和不支持 FTS 的旧 LanceDB 都不应阻断文本写入。
-  }
-}
-
 interface EmbeddingWrite {
   space: EmbeddingSpace
   tableName: string
@@ -1220,8 +1212,6 @@ async function addChunksInternal(
     await writeDocumentInfo(db, tableNames, docInfo)
 
     await appendCanonicalRecords(db, await db.tableNames(), canonicalRecords)
-    const canonicalTable = await db.openTable(TABLE_NAME)
-    await ensureTextIndex(canonicalTable)
 
     if (embeddingWrite) {
       await finaliseEmbeddingWrite(projectPath, db, registry, embeddingWrite)
@@ -1755,7 +1745,6 @@ export async function restorePortableKnowledgeSnapshot(
       })))
       await db.createTable(DOCS_TABLE_NAME, documentRows)
       const chunks = await db.createTable(TABLE_NAME, recordsForSchema(chunkRows, canonicalChunkSchema()), { schema: canonicalChunkSchema() })
-      await ensureTextIndex(chunks)
       chunks.close()
     } finally { db.close() }
     for (const document of snapshot.documents) {
