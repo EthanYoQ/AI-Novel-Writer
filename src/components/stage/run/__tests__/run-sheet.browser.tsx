@@ -365,6 +365,9 @@ describe('运行侧页', () => {
     expect(card.textContent).toContain('时间线需要核对。')
     expect(card.textContent).toContain('核对钟声提前一刻与潮位的关系。')
     expect(card.textContent).not.toContain('"summary"')
+    // 已经保存的审稿不再标「可恢复」（本批真实模型实测缺陷 4：合并并定稿后仍列为可恢复）。
+    expect(card.textContent).toMatch(/^已保存第3章审稿候选/)
+    expect(card.textContent).not.toContain('可恢复')
 
     await click('复制')
     expect(writeText).toHaveBeenCalledWith(report)
