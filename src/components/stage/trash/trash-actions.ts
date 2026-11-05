@@ -3,6 +3,7 @@ import { globalEventBus } from '../../../shared/event-bus'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { ipc } from '../../../services/ipc-client'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
+import { pluralEn } from '../../../shared/plural-en'
 import { useDraftStore } from '../../../stores/draft-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
@@ -119,12 +120,23 @@ export async function purgeTrash(
     toast.error(text(`彻底删除没有完成\n\n${reasonOf(result.error)}`, `Permanent deletion did not finish\n\n${reasonOf(result.error)}`))
     return false
   }
-  toast.success('emptying' in target
-    ? text('已清空回收站。', 'The trash is empty.')
-    : 'chapterNumber' in target
-      ? text(`已彻底删除${trashEntryName(target, text)}。`, `${trashEntryName(target, text)} was deleted permanently.`)
-      : text('已彻底删除这一项。', 'The item was deleted permanently.'))
+  if ('emptying' in target) {
+    const message = await emptiedMessage(session, result.purged.length, text)
+    if (isProjectSessionCurrent(session)) toast.success(message)
+    return true
+  }
+  toast.success('chapterNumber' in target
+    ? text(`已彻底删除${trashEntryName(target, text)}。`, `${trashEntryName(target, text)} was deleted permanently.`)
+    : text('已彻底删除这一项。', 'The item was deleted permanently.'))
   return true
+}
+
+/** 只删了确认时的那几项，确认之后又进来的还在，所以重读一次，真空了才说已清空。 */
+async function emptiedMessage(session: ProjectSessionContext, purged: number, text: Text): Promise<string> {
+  const left = await settled(ipc.invokeWithProjectSession(session, 'chapter:trash-list', session.projectPath))
+  return left.success && left.entries.length + left.damaged.length === 0
+    ? text('已清空回收站。', 'The trash is empty.')
+    : text(`已彻底删除 ${purged} 项。`, `Deleted ${purged} ${pluralEn(purged, 'item')} permanently.`)
 }
 
 /**
