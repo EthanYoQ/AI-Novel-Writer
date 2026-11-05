@@ -497,6 +497,77 @@ describe('定稿冲突与定稿进行中', () => {
   })
 })
 
+describe('批量创作占着这一章时定稿（本批真实模型实测缺陷 1）', () => {
+  const BATCH_TITLE = '批量草稿待审 · 第 3 至 4 章'
+  const batch = (status: 'running' | 'paused', currentStepIndex: number) => ({
+    id: 'batch-run', type: 'batch_generate', title: BATCH_TITLE, status, projectPath: SESSION.projectPath, projectSession: SESSION,
+    resourceKeys: ['chapter:3', 'chapter:4'], readResourceKeys: ['novel-config', 'architecture', 'blueprints'],
+    uiLocale: 'zh-CN', writingLanguage: 'zh-CN', createdAt: '2026-11-05T08:00:00.000Z', currentStepIndex,
+    steps: [
+      { id: 's3', name: '第 3 章 · 生成草稿待审', description: '', status: currentStepIndex > 0 ? 'completed' : 'pending', logs: [] },
+      { id: 's4', name: '第 4 章 · 生成草稿待审', description: '', status: 'pending', logs: [] },
+    ],
+  })
+  const blockedToast = () => [...document.querySelectorAll('.pi-toast')].find(card => card.textContent?.includes('还不能定稿'))
+  let cancelWorkflow: ReturnType<typeof vi.fn>
+
+  beforeEach(async () => {
+    cancelWorkflow = vi.fn()
+    useWorkflowStore.setState({ cancelWorkflow: cancelWorkflow as never })
+    await act(async () => { for (const card of document.querySelectorAll<HTMLButtonElement>('.pi-toast button[aria-label="关闭通知"]')) card.click() })
+  })
+
+  it.each([
+    ['刚开始', 'running', 0],
+    ['运行中', 'running', 1],
+    ['暂停中', 'paused', 1],
+  ] as const)('批次%s：「更多」里的定稿可以点，点了立即说明原因与办法，不打开确认框、不发起定稿', async (_when, status, step) => {
+    const draft = backend.addDraft({ status: 'draft' })
+    await mount()
+    await openDraft(draft.id)
+    await act(async () => useWorkflowStore.setState({ activeRuns: [batch(status, step) as never] }))
+    await click('更多操作')
+    const item = page.getByRole('menuitem', { name: '定稿…' })
+    await expect.element(item).toBeEnabled()
+    await act(async () => item.click())
+
+    await vi.waitFor(() => expect(blockedToast()).toBeTruthy())
+    const toastText = blockedToast()!.textContent!
+    expect(toastText).toContain('正文保持原样')
+    expect(toastText).toContain(BATCH_TITLE)
+    expect(toastText).toContain('取消批量创作后就能定稿')
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().history).toEqual([])
+
+    await act(async () => [...blockedToast()!.querySelectorAll('button')].find(button => button.textContent === '取消批量创作')!.click())
+    expect(cancelWorkflow).toHaveBeenCalledWith('batch-run')
+  })
+
+  it('已修稿的稿：主按钮「定稿」同样立即说明，不打开确认框', async () => {
+    const draft = backend.addDraft({ status: 'revised' })
+    await mount()
+    await openDraft(draft.id)
+    await act(async () => useWorkflowStore.setState({ activeRuns: [batch('paused', 1) as never] }))
+    await click('定稿')
+    await vi.waitFor(() => expect(blockedToast()).toBeTruthy())
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('确认框开着时批次开始：点「确认定稿」说明原因，不发起定稿', async () => {
+    const draft = backend.addDraft({ status: 'revised' })
+    await mount()
+    await openDraft(draft.id)
+    await click('定稿')
+    await expect.element(page.getByRole('dialog', { name: '定稿第 3 章？' })).toBeVisible()
+    await act(async () => useWorkflowStore.setState({ activeRuns: [batch('running', 0) as never] }))
+    await click('确认定稿')
+    await vi.waitFor(() => expect(blockedToast()).toBeTruthy())
+    expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
+  })
+})
+
 describe('审稿侧页与运行侧页', () => {
   const reviewHeading = () => page.getByRole('heading', { name: '审稿报告' })
   const runHeading = () => page.getByRole('heading', { name: '运行' })
