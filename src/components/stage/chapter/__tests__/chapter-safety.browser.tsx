@@ -577,9 +577,9 @@ describe('批量创作占着这一章时定稿（本批真实模型实测缺陷 
       { id: 's6', name: '第 6 章 · 写稿并定稿', description: '', status: status === 'running' ? 'running' : 'pending', logs: [] },
     ],
   })
+  const sharedToast = () => [...document.querySelectorAll('.pi-toast')].find(card => card.textContent?.includes(AUTO_FINALIZE_TITLE))
   const expectSharedReason = (toastText: string) => {
     expect(toastText).toContain('正文保持原样')
-    expect(toastText).toContain(AUTO_FINALIZE_TITLE)
     expect(toastText).not.toContain('占着这一章')
     expect(toastText).toMatch(/角色状态/)
     expect(toastText).toMatch(/章节要点/)
@@ -593,11 +593,11 @@ describe('批量创作占着这一章时定稿（本批真实模型实测缺陷 
     await act(async () => useWorkflowStore.setState({ activeRuns: [autoFinalizeBatch(status) as never] }))
     await click('定稿')
 
-    await vi.waitFor(() => expect(blockedToast()).toBeTruthy())
-    expectSharedReason(blockedToast()!.textContent!)
+    await vi.waitFor(() => expect(sharedToast()).toBeTruthy())
+    expectSharedReason(sharedToast()!.textContent!)
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
-    await act(async () => [...blockedToast()!.querySelectorAll('button')].find(button => button.textContent === '取消批量创作')!.click())
+    await act(async () => [...sharedToast()!.querySelectorAll('button')].find(button => button.textContent === '取消批量创作')!.click())
     expect(cancelWorkflow).toHaveBeenCalledWith('batch-run')
   })
 
@@ -609,8 +609,8 @@ describe('批量创作占着这一章时定稿（本批真实模型实测缺陷 
     await expect.element(page.getByRole('dialog', { name: '定稿第 3 章？' })).toBeVisible()
     await act(async () => useWorkflowStore.setState({ activeRuns: [autoFinalizeBatch('running') as never] }))
     await click('确认定稿')
-    await vi.waitFor(() => expect(blockedToast()).toBeTruthy())
-    expectSharedReason(blockedToast()!.textContent!)
+    await vi.waitFor(() => expect(sharedToast()).toBeTruthy())
+    expectSharedReason(sharedToast()!.textContent!)
     expect(useWorkflowStore.getState().startWorkflow).not.toHaveBeenCalled()
   })
 
