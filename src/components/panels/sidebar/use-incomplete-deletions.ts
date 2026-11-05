@@ -55,7 +55,7 @@ export function useIncompleteDeletions(projectPath: string) {
     await load(projectSession)
     if (result.success) {
       globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts', 'fileTree'], projectPath, projectSession })
-      toast.success(text(`第${operation.chapterNumber}章的正文文件和知识库内容已清理完`, `Chapter ${operation.chapterNumber}’s manuscript file and knowledge base entry are cleaned up.`))
+      toast.success(text(`第${operation.chapterNumber}章清理完成。在软件外改过的正文文件会保留。`, `Chapter ${operation.chapterNumber} cleanup is done. A manuscript file you edited outside Pagekin is kept.`))
     } else {
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, result.error)
       toast.error(text(`重试清理失败\n\n${reason}`, `Cleanup retry failed\n\n${reason}`))
