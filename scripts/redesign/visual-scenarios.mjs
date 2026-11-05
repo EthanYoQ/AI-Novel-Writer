@@ -403,7 +403,7 @@ export const VISUAL_SCENARIOS = {
   } },
 
   // #474 收尾：中文界面导入参考小说，参照章节已入库、批次检查点还没记下时在运行卡片上取消。放行后编排器在安全边界停下，
-  // 运行卡片里失败步骤的说明是中文，不再是编排器原先只有英文的那句。卡在章节入库途中取消会走另一条路
+  // 运行卡片里已取消步骤的说明是中文，不再是编排器原先只有英文的那句。卡在章节入库途中取消会走另一条路
   // （主进程拒绝绑定参照章节，交 IMPORT_RUN_REFERENCE_UNBOUND），所以卡在检查点。
   'import-run-cancel-zh': { model: true, shell: 'stage', setup: seedStageSample, run: async ({ app, page, roots, shoot }) => {
     const file = path.join(roots.temp, 'reference-novel.txt')
@@ -443,20 +443,22 @@ export const VISUAL_SCENARIOS = {
       await app.evaluate(() => globalThis.__driveCheckpointGate.release())
     }
 
-    const failedStep = runSheet.sheet(page).locator('.run-step[data-status="failed"] .run-step-row').first()
-    await failedStep.waitFor({ state: 'visible', timeout: 30_000 })
-    if (await failedStep.getAttribute('aria-expanded') !== 'true') await failedStep.click()
-    const stepError = runSheet.sheet(page).locator('.run-step[data-status="failed"] .run-step-error').first()
-    await stepError.waitFor({ state: 'visible' })
+    // 作者取消记已取消（#587）；停在已保存进度处的那句留在已取消的那一步上。
+    const cancelledStep = runSheet.sheet(page).locator('.run-step[data-status="cancelled"] .run-step-row').first()
+    await cancelledStep.waitFor({ state: 'visible', timeout: 30_000 })
+    if (await cancelledStep.getAttribute('aria-expanded') !== 'true') await cancelledStep.click()
+    const stepNotice = runSheet.sheet(page).locator('.run-step[data-status="cancelled"] .run-step-error').first()
+    await stepNotice.waitFor({ state: 'visible' })
     const observed = {
-      stepError: await stepError.innerText(),
+      stepNotice: await stepNotice.innerText(),
       sheet: await runSheet.sheet(page).innerText(),
       lang: await page.evaluate(() => document.documentElement.lang),
     }
     await settle(page)
     await shoot('import-run-cancel-zh')
     assert.equal(observed.lang, 'zh-CN')
-    assert.equal(observed.stepError, '导入已取消，停在了已保存的进度处。')
+    assert.equal(observed.stepNotice, '导入已取消，停在了已保存的进度处。')
+    assert.doesNotMatch(observed.sheet, /失败/u, '作者取消的导入不写失败')
     assert.doesNotMatch(observed.sheet, /safe boundary|Import cancelled/u, '中文界面的运行侧页不出现编排器的英文说明')
     return observed
   } },

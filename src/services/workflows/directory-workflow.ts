@@ -30,7 +30,7 @@ import type {
 import { stripThinkingTags } from './workflow-utils'
 import { requireWorkflowProjectSession, workflowMainProcessError } from './workflow-project-session'
 import { displayedErrorMessage } from '../../i18n/app-errors'
-import { WorkflowCancelledError } from './workflow-cancellation'
+import { isWorkflowCancellation, WorkflowCancelledError } from './workflow-cancellation'
 
 // ==========================================
 // 1. 结构与类型导出 (保留对外的向后兼容)
@@ -382,10 +382,10 @@ export function createDirectoryWorkflow(
               ))
             }
             if (error instanceof directoryCommand.DirectoryPostCommitCancellationError) {
-              throw new Error(text(
+              throw new WorkflowCancelledError(text(
                 '章节蓝图已保存，但任务取消后角色同步可能未完成。',
                 'Chapter blueprints were saved, but character synchronization may be incomplete because the workflow was cancelled.',
-              ))
+              ), true)
             }
             if (error instanceof directoryCommand.DirectoryCostLimitError) {
               throw new Error(text(
@@ -393,7 +393,7 @@ export function createDirectoryWorkflow(
                 'The requested chapter range is too large. Generate a smaller range.',
               ))
             }
-            if (context.cancelled) {
+            if (context.cancelled && isWorkflowCancellation(error)) {
               throw new WorkflowCancelledError(text('工作流已取消', 'Workflow was cancelled.'))
             }
             if (error instanceof TerminalProviderFailureError) throw error

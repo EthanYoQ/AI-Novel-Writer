@@ -156,7 +156,7 @@ function cancellationRequested(context: ImportRunExecutionContext): boolean {
 /** 取消在安全边界生效：这句进运行卡片的步骤详情与日志，按导入运行的语言写。 */
 function stopIfCancelled(context: ImportRunExecutionContext, locale: ImportRunLocale): void {
   if (cancellationRequested(context)) {
-    throw new WorkflowCancelledError(localize(locale, '导入已取消，停在了已保存的进度处。', 'Import cancelled at a safe boundary.'))
+    throw new WorkflowCancelledError(localize(locale, '导入已取消，停在了已保存的进度处。', 'Import cancelled at a safe boundary.'), true)
   }
 }
 

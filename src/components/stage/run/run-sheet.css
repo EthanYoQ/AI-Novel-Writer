@@ -239,6 +239,11 @@ button.run-step-row:hover {
   overflow-wrap: anywhere;
 }
 
+/* 已取消的那一步只交代停在哪里、保住了什么，不是错误。 */
+.run-step[data-status='cancelled'] .run-step-error {
+  color: var(--ink-2);
+}
+
 /* ================= 实时输出 ================= */
 .run-output-frame {
   display: flex;

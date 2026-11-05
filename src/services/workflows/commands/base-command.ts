@@ -30,7 +30,7 @@ import { displayedErrorMessage } from '../../../i18n/app-errors'
 import type { VisibleCompositionReceipt } from '../../../shared/generation-owner-contract'
 import { composeVisibleContinuation } from '../../../shared/visible-continuation'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationSelection, type WorkflowMainGenerationRequest, type WorkflowMainGenerationRuntime } from '../workflow-main-generation'
-import { WorkflowCancelledError } from '../workflow-cancellation'
+import { isWorkflowCancellation, WorkflowCancelledError } from '../workflow-cancellation'
 export type { WorkflowMainGenerationSelection } from '../workflow-main-generation'
 
 export interface CommandExecuteParams {
@@ -495,12 +495,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       if (error instanceof GenerationAttemptError) {
         this.reportGenerationPromptBudget(callbacks, error.receipt)
       }
-      if (context?.cancelled || (
-        typeof error === 'object'
-        && error !== null
-        && 'code' in error
-        && error.code === 'CANCELLED'
-      )) {
+      if (isWorkflowCancellation(error)) {
         if (!context) throw new Error('GENERATION_WORKFLOW_CANCELLED')
         throw new WorkflowCancelledError(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
       }

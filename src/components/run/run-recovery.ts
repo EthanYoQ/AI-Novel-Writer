@@ -272,13 +272,14 @@ function reviewDigest(text: string, locale: Locale): string {
   // 通过项不算意见，条数和单章视图「按 N 项意见修稿」同一口径。
   const passed = report.items.filter(item => item.severity === 'pass').length
   const notes = report.items.length - passed
-  const count = passed === 0
-    ? t(`（${notes} 条意见）`, ` (${notes} ${pluralEn(notes, 'note')})`)
-    : t(`（${notes} 条意见，${passed} 项通过）`, ` (${notes} ${pluralEn(notes, 'note')}, ${passed} passed)`)
+  const counted = t(`${notes} 条意见`, `${notes} ${pluralEn(notes, 'note')}`)
+  const countLabel = passed === 0
+    ? t(`（${counted}）`, ` (${counted})`)
+    : t(`（${counted}，${passed} 项通过）`, ` (${counted}, ${passed} passed)`)
   const label = { error: t('问题', 'Issue'), warning: t('建议', 'Suggestion'), pass: t('通过', 'Pass') }
   const points = [...report.items].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]).slice(0, 2)
     .map(item => t(`${label[item.severity]} · ${item.category}：${item.description}`, `${label[item.severity]} · ${item.category}: ${item.description}`))
-  return [`${report.summary}${count}`, ...points].join('\n')
+  return [`${report.summary}${countLabel}`, ...points].join('\n')
 }
 
 type RecheckItems = readonly Record<string, unknown>[]

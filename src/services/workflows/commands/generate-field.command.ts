@@ -13,6 +13,7 @@ import type { WritingLanguage } from '../../../shared/writing-language'
 import type { GenerationOperation } from '../../../shared/model-stage-routing'
 import { GenerationAttemptError, PromptBudgetExceededError, TerminalProviderFailureError } from '../../generation/generation-harness'
 import { BoundedCompletionFailure } from '../bounded-completion'
+import { isWorkflowCancellation } from '../workflow-cancellation'
 import {
   GENERATED_GLOBAL_GUIDANCE_MAX_CHARS,
   GENERATED_GLOBAL_GUIDANCE_MAX_RULES,
@@ -129,7 +130,7 @@ export class GenerateFieldCommand extends BaseWorkflowCommand<string> {
           context,
         )
       } catch (error) {
-        if (context.cancelled) this.assertNotCancelled(context)
+        if (isWorkflowCancellation(error)) this.assertNotCancelled(context)
         if (error instanceof BoundedCompletionFailure || error instanceof PromptBudgetExceededError
           || error instanceof TerminalProviderFailureError) {
           throw error

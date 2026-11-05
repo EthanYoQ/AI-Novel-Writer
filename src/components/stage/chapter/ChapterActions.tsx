@@ -182,7 +182,8 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
   const waived = checklist.items.some(item => item.decision === 'waive')
   const confirmWaived = included === 0 && waived && (checklist.editingChecklist || !checklist.confirmed)
   // 审稿只给了通过或待作者判断的条目时没有可修的，主路径直接到定稿；作者要改什么仍可在侧页添加自己的意见。
-  const nothingToRevise = included === 0 && !waived && !checklist.items.some(item => item.severity === 'error' || item.severity === 'warning')
+  // 报告读不出结论时不算没有可修的，仍走添加意见。
+  const nothingToRevise = checklist.reportRead && included === 0 && !waived && !checklist.items.some(item => item.severity === 'error' || item.severity === 'warning')
   const toVerify = checklist.items.filter(item => item.severity === 'unknown').length
   const nothingToReviseHint = toVerify > 0
     ? text(`这次审稿没有需要修改的意见，有 ${toVerify} 项待你核实，看过再定稿`, `This review found nothing to revise. ${toVerify} ${toVerify === 1 ? 'item needs' : 'items need'} your check before you finalize.`)
