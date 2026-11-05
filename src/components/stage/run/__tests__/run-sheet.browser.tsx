@@ -184,6 +184,36 @@ describe('运行侧页', () => {
     expect(row.querySelector('[data-tone="danger"]')).toBeNull()
   })
 
+  it.each([
+    ['zh-CN', '历史', '已取消', /失败|未完成/],
+    ['en-US', 'History', 'Cancelled', /Failed|did not finish|not complete/i],
+  ] as const)('取消时正在写的那一章：步骤行标已取消，展开历史也不出现红叉和失败（%s）', async (locale, historyTab, label, failure) => {
+    useLocaleStore.setState({ locale })
+    const cancelled = run('4', 'cancelled', {
+      type: 'batch_generate', title: '批量草稿待审 · 第 3 至 4 章', uiLocale: locale, currentStepIndex: 1,
+      error: locale === 'en-US' ? 'Workflow was cancelled.' : '工作流已取消', completedAt: '2026-10-12T08:20:00.000Z',
+      steps: [
+        { id: 'c3', name: '第 3 章 · 生成草稿待审', description: '', status: 'completed', logs: [], startedAt: '2026-10-12T08:10:00.000Z', completedAt: '2026-10-12T08:15:00.000Z' },
+        { id: 'c4', name: '第 4 章 · 生成草稿待审', description: '', status: 'cancelled', logs: [], startedAt: '2026-10-12T08:15:00.000Z',
+          completedAt: '2026-10-12T08:20:00.000Z', result: '林岚沿着旧港的石阶往下走。' },
+      ],
+    })
+    const chapter4Row = () => [...host!.querySelectorAll('li.run-step')].find(step => step.textContent?.includes('第 4 章'))!
+    const expectCancelledRow = () => {
+      expect(chapter4Row().textContent).toContain(label)
+      expect(chapter4Row().textContent).not.toMatch(failure)
+      expect(chapter4Row().querySelector('[data-tone="danger"]')).toBeNull()
+    }
+    useWorkflowStore.setState({ history: [cancelled] })
+    await render()
+    expectCancelledRow()
+
+    await click(historyTab)
+    await click(/批量草稿待审/)
+    expectCancelledRow()
+    expect(host!.textContent).not.toMatch(failure)
+  })
+
   it('批量创作：运行中可暂停，请求暂停后说明本章写完后暂停，暂停后可继续', async () => {
     const pauseWorkflow = vi.fn()
     const resumeWorkflow = vi.fn()

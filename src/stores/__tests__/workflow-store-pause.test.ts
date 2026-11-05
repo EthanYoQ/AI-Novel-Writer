@@ -223,9 +223,11 @@ describe('workflow pause at a safe step boundary', () => {
     expect(terminal).toHaveBeenCalledOnce()
     expect(cancelGeneration).not.toHaveBeenCalled()
     expect(finalized).not.toHaveBeenCalled()
-    expect(useWorkflowStore.getState().history[0]).toMatchObject({
-      id: 'durable-cancel-run', status: 'failed',
-    })
+    // 导入被作者取消：停在已保存进度处的那一步和整次运行都记已取消，不记失败（与其他入口同源）。
+    const finished = useWorkflowStore.getState().history[0]
+    expect(finished).toMatchObject({ id: 'durable-cancel-run', status: 'cancelled' })
+    expect(finished.steps.map(step => step.status)).toEqual(['completed', 'cancelled'])
+    expect(useWorkflowStore.getState().globalLogs.filter(log => log.level === 'error')).toEqual([])
   })
 
   it.each([
@@ -255,6 +257,47 @@ describe('workflow pause at a safe step boundary', () => {
     await completion
     expect(second).not.toHaveBeenCalled()
     expect(useWorkflowStore.getState().history[0]).toMatchObject({ id: 'cancelled-batch', status: 'cancelled' })
+  })
+
+  // 批量创作、单章写作、审稿、修稿、定稿都走同一个步骤循环；执行器看到取消后要么照常返回，要么抛出自己的「已取消」。
+  it.each([
+    ['批量创作', 'batch_generate', 'returns'],
+    ['批量创作', 'batch_generate', 'throws'],
+    ['单章写作、审稿、修稿、定稿', 'chapter_creation', 'returns'],
+    ['单章写作、审稿、修稿、定稿', 'chapter_creation', 'throws'],
+  ] as const)('%s：作者取消时正在执行的那一步记为已取消，不记失败、不写错误日志（%s，执行器 %s）', async (_entry, type, exit) => {
+    let release!: () => void
+    const completion = useWorkflowStore.getState().startWorkflow({
+      runId: 'cancel-mid-step', type, title: '第 3 章 · 写稿', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '写稿', description: '', executor: async (_step, context) => {
+        await new Promise<void>(resolve => { release = resolve })
+        if (exit === 'throws' && context.cancelled) throw new Error('批量创作已取消')
+      } }],
+    })
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    useWorkflowStore.getState().cancelWorkflow('cancel-mid-step')
+    release()
+    await completion
+
+    const finished = useWorkflowStore.getState().history[0]
+    expect(finished).toMatchObject({ id: 'cancel-mid-step', status: 'cancelled' })
+    expect(finished.steps[0]).toMatchObject({ status: 'cancelled' })
+    expect(finished.steps[0].error).toBeUndefined()
+    expect(useWorkflowStore.getState().globalLogs.filter(log => log.level === 'error')).toEqual([])
+  })
+
+  it('没有取消时执行器失败：这一步和运行仍记为失败，写错误日志', async () => {
+    const completion = useWorkflowStore.getState().startWorkflow({
+      runId: 'real-failure', type: 'chapter_creation', title: '第 3 章 · 写稿', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '写稿', description: '', executor: async () => { throw new Error('模型服务不可用') } }],
+    })
+    await completion
+    const finished = useWorkflowStore.getState().history[0]
+    expect(finished).toMatchObject({ status: 'failed' })
+    expect(finished.steps[0]).toMatchObject({ status: 'failed', error: '模型服务不可用' })
+    expect(useWorkflowStore.getState().globalLogs.some(log => log.level === 'error')).toBe(true)
   })
   it('freezes the project writing language into both the run and command context', async () => {
     const project = useProjectStore.getState().currentProject!
