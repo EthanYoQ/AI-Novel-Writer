@@ -14,6 +14,7 @@ import {
   countLegacyDraftUnitsV1,
 } from '../../src/shared/draft-units'
 import { resolveManuscriptTarget } from '../services/manuscript-publisher'
+import { ChapterDeletionRepository } from './chapter-deletion-repository'
 import { isReceiptedDraftStatus } from '../../src/shared/draft-status'
 import { nextDraftVersion } from './draft-version'
 
@@ -426,6 +427,7 @@ export class FinalizedDraftImportRepository {
           chapterNumber: chapter.chapterNumber,
           chapterTitle: chapter.title,
           finalizationId: frozenFinalizationId,
+          reserved: ChapterDeletionRepository.reservedManuscriptTargets(db),
         })
         db.prepare(`
           INSERT INTO finalization_outbox_all (

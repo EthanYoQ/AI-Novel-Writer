@@ -19,6 +19,8 @@ export interface ManuscriptTargetInput {
   chapterNumber: number
   chapterTitle: string
   finalizationId: string
+  /** 还没清理完的删除收据占着的文件名（小写）。文件可能还在也可能不在，都不能拿来发布，否则续跑清理会删掉它。 */
+  reserved: ReadonlySet<string>
 }
 
 export interface ManuscriptTarget {
@@ -69,15 +71,17 @@ export function resolveManuscriptTarget(input: ManuscriptTargetInput): Manuscrip
     throw new Error('MANUSCRIPT_CHAPTER_NUMBER_INVALID')
   }
   const preferred = manuscriptFileName(input.chapterNumber, input.chapterTitle)
+  const taken = (target: ManuscriptTarget) => fs.existsSync(target.absolutePath)
+    || input.reserved.has(target.fileName.toLowerCase())
   const first = containedDirectChild(input.projectRoot, preferred)
-  if (!fs.existsSync(first.absolutePath)) return first
+  if (!taken(first)) return first
 
   const parsed = path.parse(preferred)
   const collisionMarker = sanitizeWindowsFileNamePart(input.finalizationId).slice(0, 12) || 'finalized'
   for (let index = 1; index < 1000; index += 1) {
     const suffix = index === 1 ? ` (${collisionMarker})` : ` (${collisionMarker}-${index})`
     const candidate = containedDirectChild(input.projectRoot, `${parsed.name}${suffix}${parsed.ext}`)
-    if (!fs.existsSync(candidate.absolutePath)) return candidate
+    if (!taken(candidate)) return candidate
   }
   throw new Error('MANUSCRIPT_TARGET_COLLISIONS')
 }
@@ -87,6 +91,25 @@ function resolveStoredManuscriptTarget(projectRoot: string, targetFileName: stri
     throw new Error('MANUSCRIPT_STORED_TARGET_INVALID')
   }
   return containedDirectChild(projectRoot, targetFileName)
+}
+
+/**
+ * 重新发布一份已冻结目标的定稿（从回收站恢复）。目标空着或已是同一内容就沿用；作者在删除后放了同名的
+ * 其他东西（文件、文件夹、读不了的文件），原目标还被没清理完的删除收据占着，或旧收据的目标名不合法时，换一个不撞名的目标，
+ * 否则发布永远失败，这一章也就放不回去。
+ */
+export function republishTarget(input: PublishManuscriptInput & Pick<ManuscriptTargetInput, 'finalizationId' | 'reserved'>): string {
+  let stored: ManuscriptTarget
+  try { stored = resolveStoredManuscriptTarget(input.projectRoot, input.targetFileName) }
+  catch { return resolveManuscriptTarget(input).fileName }
+  if (input.reserved.has(stored.fileName.toLowerCase())) return resolveManuscriptTarget(input).fileName
+  if (!fs.existsSync(stored.absolutePath)) return stored.fileName
+  try {
+    if (fs.statSync(stored.absolutePath).isFile() && fs.readFileSync(stored.absolutePath, 'utf8') === serializeManuscript(input)) {
+      return stored.fileName
+    }
+  } catch { /* 读不了的占位与不同内容一样，换目标。 */ }
+  return resolveManuscriptTarget(input).fileName
 }
 
 export function serializeManuscript(input: Omit<PublishManuscriptInput, 'projectRoot' | 'targetFileName'>): string {
@@ -144,6 +167,7 @@ export function removeManuscriptIfUnchanged(
   const target = resolveStoredManuscriptTarget(projectRoot, targetFileName)
   try {
     return retryWhileWindowsFileBusy(() => {
+      if (!fs.lstatSync(target.absolutePath).isFile()) return 'changed'
       if (!published.includes(fs.readFileSync(target.absolutePath, 'utf8'))) return 'changed'
       fs.unlinkSync(target.absolutePath)
       return 'removed'

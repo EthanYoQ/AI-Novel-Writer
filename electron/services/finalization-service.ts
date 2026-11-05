@@ -5,6 +5,9 @@ import {
   type FinalizationRecord,
   type PublicationStatus,
 } from '../repositories/finalization-repository'
+import { ChapterDeletionRepository } from '../repositories/chapter-deletion-repository'
+import { getCurrentProjectPath } from '../database'
+import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import {
   manuscriptPublisher,
   resolveManuscriptTarget,
@@ -121,6 +124,8 @@ export class FinalizationService {
         chapterNumber: request.chapterNumber,
         chapterTitle: request.chapterTitle,
         finalizationId,
+        // 删除清理还没记完的文件名不能用：续跑那次清理会把新发布的这份删掉。
+        reserved: ChapterDeletionRepository.reservedManuscriptTargets(),
       })
       record = FinalizationRepository.commit({
         finalizationId,
@@ -194,10 +199,17 @@ export class FinalizationService {
         chapterTitle: record.chapterTitle,
         content: record.contentSnapshot,
       })
+      // 写实体稿期间换了作品：发布结果不记进另一部作品的库；原作品的 outbox 仍是待发布，重新打开后重试即可（同内容幂等）。
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), projectRoot)
       return toResult(FinalizationRepository.markPublished(record.finalizationId), true)
     } catch (error) {
       // committed: true 已表明定稿已提交、实体稿待发布，各显示处自己写这句；error 只带原因（错误码或系统报错）。
       const message = String(error)
+      try {
+        assertRequiredExpectedProjectPath(getCurrentProjectPath(), projectRoot)
+      } catch {
+        return toResult(record, false, message)
+      }
       try {
         const pending = FinalizationRepository.markPublicationPending(record.finalizationId, message)
         return toResult(pending, false, message)

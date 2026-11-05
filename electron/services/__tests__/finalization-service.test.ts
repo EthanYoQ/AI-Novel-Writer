@@ -5,12 +5,13 @@ import { createRequire } from 'node:module'
 import type BetterSqlite3 from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getProjectDb } from '../../database'
+import { getCurrentProjectPath, getProjectDb } from '../../database'
 import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { FinalizationService } from '../finalization-service'
 
 vi.mock('../../database', () => ({
   getProjectDb: vi.fn(),
+  getCurrentProjectPath: vi.fn(),
 }))
 
 const require = createRequire(import.meta.url)
@@ -53,6 +54,12 @@ function setupSchema(): void {
       published_at TEXT,
       updated_at TEXT
     );
+    -- 定稿选实体稿目标时读删除收据占着的文件名，这里只要用到的列。
+    CREATE TABLE chapter_deletion_operations (
+      operation_id TEXT PRIMARY KEY,
+      target_file_name TEXT NOT NULL DEFAULT '',
+      manuscript_status TEXT NOT NULL DEFAULT 'pending'
+    );
   `)
 }
 
@@ -76,6 +83,7 @@ beforeEach(() => {
   createLiveRowViews(db)
   vi.mocked(getProjectDb).mockReturnValue(db)
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-finalization-service-'))
+  vi.mocked(getCurrentProjectPath).mockReturnValue(projectRoot)
 })
 
 afterEach(() => {

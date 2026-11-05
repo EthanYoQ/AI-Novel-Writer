@@ -61,7 +61,12 @@ import type {
 import type {
   ChapterDeletionOperation,
   ChapterDeletionResult,
+  ChapterTrashListResult,
   DeleteFinalizedChapterRequest,
+  PurgeTrashRequest,
+  PurgeTrashResult,
+  RestoreTrashedChapterRequest,
+  RestoreTrashedChapterResult,
 } from './chapter-deletion'
 import type { FinalizationRepairOnOpen } from './finalization-repair'
 import type { ReopenChapterRequest, ReopenChapterResult, ReplacementImpact } from './chapter-reopen'
@@ -1275,6 +1280,20 @@ export interface ChapterLifecycleChannels {
   'chapter:list-incomplete-deletions': {
     args: [expectedProjectPath: string]
     return: { success: boolean; operations?: ChapterDeletionOperation[]; error?: string }
+  }
+  /** 回收站：每次删除一项；拼不成一项的残缺数据列进 damaged，不让整个列表失败。 */
+  'chapter:trash-list': {
+    args: [expectedProjectPath: string]
+    return: ChapterTrashListResult
+  }
+  /** expectedMode 是列表给出的恢复方式；事务内复核，变了就返回 CHAPTER_RESTORE_MODE_CHANGED。 */
+  'chapter:trash-restore': {
+    args: [request: RestoreTrashedChapterRequest, expectedProjectPath: string]
+    return: RestoreTrashedChapterResult
+  }
+  'chapter:trash-purge': {
+    args: [request: PurgeTrashRequest, expectedProjectPath: string]
+    return: PurgeTrashResult
   }
   'chapter:reopen': {
     args: [request: ReopenChapterRequest, expectedProjectPath: string]

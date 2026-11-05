@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -59,7 +60,7 @@ describe('chapter lifecycle deletion IPC', () => {
       chapterNumber: 1,
       chapterTitle: '同名',
       content: '目标章节独有关键字',
-      contentHash: 'target-hash',
+      contentHash: createHash('sha256').update('目标章节独有关键字').digest('hex'),
       contentRevision: 1,
       targetFileName: '第1章 同名.txt',
     })
@@ -108,7 +109,7 @@ describe('chapter lifecycle deletion IPC', () => {
     fs.rmSync(parentDirectory, { recursive: true, force: true })
   })
 
-  it('removes a finalized chapter and only its frozen derived projections', async () => {
+  it('moves a finalized chapter to the trash, removes only its frozen derived projections, and purges it on request', async () => {
     const finalizationId = getProjectDb()!.prepare('SELECT finalization_id FROM finalization_outbox WHERE draft_id=?').pluck().get(draftId) as string
     for (const id of [`finalization:${finalizationId}`, 'finalization:unrelated']) {
       getProjectDb()!.prepare("INSERT INTO post_process_runs(id,trigger_source_type,trigger_source_id) VALUES(?,'chapter_finalize',?)").run(id,id)
@@ -136,9 +137,19 @@ describe('chapter lifecycle deletion IPC', () => {
     })
     expect(DraftRepository.getFull(draftId)).toBeNull()
     expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(false)
+    // 进回收站：按章号登记的后处理改记到这份定稿名下，留到彻底删除，恢复时摘要、角色状态不必重算。
     expect(PostProcessRepository.getLatestRun('chapter_finalize', '1')).toBeNull()
+    expect(PostProcessRepository.getLatestRun('chapter_finalize', `finalization:${finalizationId}`)).not.toBeNull()
+    expect(PostProcessRepository.getLatestRun('chapter_finalize', 'finalization:unrelated')).not.toBeNull()
+
+    const list = await handlers.get('chapter:trash-list')!({}, projectRoot, projectSession) as { success: boolean; entries: Array<{ deletionId: string; draftId: number; restoreMode: string }> }
+    expect(list).toMatchObject({ success: true, entries: [{ draftId, restoreMode: 'into-gap' }], damaged: [] })
+    const purged = await handlers.get('chapter:trash-purge')!({}, { deletionIds: [list.entries[0]!.deletionId] }, projectRoot, projectSession)
+    expect(purged).toEqual({ success: true, purged: [list.entries[0]!.deletionId], alreadyGone: [] })
     expect(PostProcessRepository.getLatestRun('chapter_finalize', `finalization:${finalizationId}`)).toBeNull()
     expect(PostProcessRepository.getLatestRun('chapter_finalize', 'finalization:unrelated')).not.toBeNull()
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM drafts_all WHERE id=?').pluck().get(draftId)).toBe(0)
+    await expect(handlers.get('chapter:trash-list')!({}, projectRoot, projectSession)).resolves.toEqual({ success: true, entries: [], damaged: [] })
 
     await expect(listDocuments(projectRoot)).resolves.toEqual([
       expect.objectContaining({ id: 'reference-document', fileName: targetFileName }),
@@ -147,6 +158,33 @@ describe('chapter lifecycle deletion IPC', () => {
     await expect(searchKnowledgeFTS('参考小说应保留关键字', projectRoot)).resolves.toEqual([
       expect.objectContaining({ fileName: targetFileName }),
     ])
+  })
+
+  it('restores a trashed chapter through IPC: republishes the manuscript and leaves knowledge for an explicit re-import', async () => {
+    const invoke = (channel: string, ...args: unknown[]) => handlers.get(channel)!({}, ...args, projectRoot, projectSession)
+    await invoke('chapter:delete-finalized', { draftId, chapterNumber: 1 })
+    const list = await invoke('chapter:trash-list') as { entries: Array<{ deletionId: string }> }
+    const deletionId = list.entries[0]!.deletionId
+    expect(fs.existsSync(path.join(projectRoot, targetFileName))).toBe(false)
+
+    const restored = await invoke('chapter:trash-restore', { deletionId, draftId, expectedMode: 'into-gap' })
+
+    expect(restored).toMatchObject({ success: true, outcome: 'restored', chapterNumber: 1, draftId, publicationStatus: 'published' })
+    expect(fs.readFileSync(path.join(projectRoot, targetFileName), 'utf8')).toContain('目标章节独有关键字')
+    expect(DraftRepository.getMeta(draftId)?.status).toBe('finalized')
+    expect(FinalizationRepository.getByDraftId(draftId)).toMatchObject({ knowledgeDocumentId: '', publicationStatus: 'published' })
+    await expect(searchKnowledgeFTS('目标章节独有关键字', projectRoot)).resolves.toEqual([])
+    await expect(invoke('chapter:trash-list')).resolves.toEqual({ success: true, entries: [], damaged: [] })
+    await expect(invoke('chapter:trash-restore', { deletionId, draftId, expectedMode: 'into-gap' }))
+      .resolves.toEqual({ success: true, outcome: 'already-restored', chapterNumber: 1, draftId })
+    await expect(handlers.get('chapter:trash-restore')!({}, { deletionId, draftId, expectedMode: 'into-gap' }, path.join(projectRoot, 'other'), projectSession))
+      .resolves.toMatchObject({ success: false })
+  })
+
+  it('treats removing a knowledge document that is already gone as done (G10)', async () => {
+    await expect(removeDocument('never-imported', projectRoot)).resolves.toBe(true)
+    await expect(removeDocument('finalized-document', projectRoot)).resolves.toBe(true)
+    await expect(removeDocument('finalized-document', projectRoot)).resolves.toBe(true)
   })
 
   it('hides frozen deletion history and does not offer legacy authorization on a refused retry',async()=>{

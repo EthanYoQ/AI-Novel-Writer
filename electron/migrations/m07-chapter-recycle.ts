@@ -30,8 +30,8 @@ const deletionShape = (row: 'NEW.' | '') => `CASE WHEN ${row}status IS 'deleted'
   THEN ${row}deletion_id <> '' AND ${row}deleted_from_status IN ('finalized','superseded') AND ${row}deleted_at <> ''
   ELSE ${row}deletion_id = '' AND ${row}deleted_from_status = '' AND ${row}deleted_at = '' END`
 
-// RENAME 会把其他表的外键与本迁移刚建的索引、触发器一并改指新名（legacy_alter_table 关闭时）。
-export const M07_CHAPTER_RECYCLE_SQL = `
+/** 改名之前的部分：三列、索引与删除形状触发器。手写表结构的测试夹具也用它。 */
+export const M07_DRAFT_SHAPE_SQL = `
 ALTER TABLE drafts ADD COLUMN deletion_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE drafts ADD COLUMN deleted_from_status TEXT NOT NULL DEFAULT '';
 ALTER TABLE drafts ADD COLUMN deleted_at TEXT NOT NULL DEFAULT '';
@@ -42,7 +42,10 @@ BEGIN SELECT RAISE(ABORT, 'DRAFT_DELETION_SHAPE_INVALID'); END;
 CREATE TRIGGER drafts_deletion_shape_update BEFORE UPDATE OF status, deletion_id, deleted_from_status, deleted_at ON drafts
 WHEN NOT (${deletionShape('NEW.')})
 BEGIN SELECT RAISE(ABORT, 'DRAFT_DELETION_SHAPE_INVALID'); END;
-${LIVE_ROW_VIEWS.map(item => `ALTER TABLE ${item.view} RENAME TO ${item.table};`).join('\n')}
+`
+
+// RENAME 会把其他表的外键与本迁移刚建的索引、触发器一并改指新名（legacy_alter_table 关闭时）。
+export const M07_CHAPTER_RECYCLE_SQL = `${M07_DRAFT_SHAPE_SQL}${LIVE_ROW_VIEWS.map(item => `ALTER TABLE ${item.view} RENAME TO ${item.table};`).join('\n')}
 ${LIVE_ROW_VIEWS.map(item => `${item.sql};`).join('\n')}
 `
 

@@ -25,6 +25,11 @@ const handleOf = (run: DurableGenerationRun): MainGenerationRunHandle => ({ proj
   epoch: run.binding.epoch, rootActionId: run.rootActionId, runId: run.runId })
 const contextHash = (context: ReviewRevisionContext) => textHash(JSON.stringify(context))
 
+/** 审稿或修稿的来源稿已进回收站。恢复列表跳过它，不算读取失败。 */
+export class ReviewSourceDeletedError extends Error {
+  constructor() { super('GENERATION_REVIEW_SOURCE_DELETED') }
+}
+
 /** Admission contexts are disposable; recovery and formal-effect truth live in the existing run ledger. */
 export class ReviewRevisionGeneration {
   private readonly contexts = new Map<string, PreparedReviewRevisionContext>()
@@ -269,9 +274,19 @@ export class ReviewRevisionGeneration {
       return receipt
     }).immediate()
   }
+  private sourceDeleted(draftId: number): boolean {
+    const status = this.db.prepare('SELECT status FROM drafts_all WHERE id=?').pluck().get(draftId) as string | undefined
+    return status === undefined
+      ? Boolean(this.db.prepare('SELECT 1 FROM chapter_deletion_operations WHERE draft_id=?').get(draftId))
+      : status === 'deleted'
+  }
   readRecovery(handle: MainGenerationRunHandle, sourcesMatch: (run: DurableGenerationRun) => boolean,
     snapshot: (run: DurableGenerationRun) => MainGenerationSnapshot | undefined): ReviewRevisionRecovery {
-    const run = this.requireRun(handle), context = this.context(run), saved = this.saved(run)?.receipt
+    const run = this.requireRun(handle), context = this.context(run)
+    // 源稿进了回收站或被彻底删除（删除收据保留）：它的审稿、修稿不再读出，恢复稿里的原文也不再显示或续写；
+    // 放回原位后照常可读。没有删除收据就消失的是被删的工作稿，照旧按来源冲突恢复。
+    if (this.sourceDeleted(context.source.id)) throw new ReviewSourceDeletedError()
+    const saved = this.saved(run)?.receipt
     let current = false
     try { current = sourcesMatch(run) } catch { /* Original candidate remains available when a source/model/template has changed. */ }
     const composition = this.runs.readVisibleComposition(run.runId) ?? undefined, latestArtifact = snapshot(run)

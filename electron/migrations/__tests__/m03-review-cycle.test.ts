@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { getProjectDb } from '../../database'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { ReviewCycleRepository } from '../../repositories/review-cycle-repository'
+import { ReviewRepository } from '../../repositories/review-repository'
 import { initializeLegacyBaselineSchema } from '../baseline-schema'
 import { createLiveRowViews } from '../../../test/helpers/live-row-views'
 import { M01_GENERATION_SQL } from '../m01-generation-runs'
@@ -366,6 +367,17 @@ describe('M03 review cycle migration', () => {
       expect(db.prepare('SELECT status FROM drafts WHERE id=?').pluck().get(seeded.draftId)).toBe('finalized')
       expect(verifyM03ReviewCycle(db)).toBe(true)
       expect(ReviewCycleRepository.getByReviewId(seeded.reviewId, db)?.recheckCount).toBe(1)
+      // 回收站（#564）：这一章进回收站后，校验仍要看见全部行；审修循环与审稿按父稿存活过滤，放回后照常读出。
+      const trash = (status: string) => db.prepare(status === 'deleted'
+        ? "UPDATE drafts_all SET status='deleted',deletion_id='trash-1',deleted_from_status='finalized',deleted_at='now' WHERE id=?"
+        : "UPDATE drafts_all SET status='finalized',deletion_id='',deleted_from_status='',deleted_at='' WHERE id=?").run(seeded.draftId)
+      trash('deleted')
+      expect(verifyM03ReviewCycle(db)).toBe(true)
+      expect(ReviewCycleRepository.getByReviewId(seeded.reviewId, db)).toBeNull()
+      expect(ReviewRepository.getFull(seeded.reviewId, db)).toBeNull()
+      trash('finalized')
+      expect(ReviewCycleRepository.getByReviewId(seeded.reviewId, db)?.recheckCount).toBe(1)
+      expect(ReviewRepository.getFull(seeded.reviewId, db)?.id).toBe(seeded.reviewId)
       expect(() => ReviewCycleRepository.planRecheck('cycle-1', db)).toThrow('REVIEW_CYCLE_CONFLICT')
       db.prepare("UPDATE review_findings SET evidence_hash=? WHERE cycle_id='cycle-1'").run('c'.repeat(64))
       expect(verifyM03ReviewCycle(db)).toBe(false)

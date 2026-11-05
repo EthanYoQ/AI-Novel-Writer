@@ -302,6 +302,8 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
   try {
     if (db.pragma('foreign_keys', { simple: true }) !== 1 || (db.pragma('foreign_key_check') as unknown[]).length) return false
     const mergeTable = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_cycle_merges'").get())
+    // M07 起 drafts 是不含回收站的视图；校验要看到全部行，否则删掉一章就让整个作品的审修循环校验失败。
+    const draftRows = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='drafts_all'").get() ? 'drafts_all' : 'drafts'
     if (!mergeTable && Number(db.pragma('user_version', { simple: true })) >= 7) return false
     if (mergeTable && !exactSchema(db, 'review_cycle_merges', ['cycle_id', 'body'], [
       'cycle_id TEXT PRIMARY KEY REFERENCES review_cycles(cycle_id) ON DELETE CASCADE', 'body TEXT NOT NULL',
@@ -409,7 +411,7 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
           const recheckMeta = db.prepare(`SELECT base_draft_id,review_index,source_draft_chapter_number,source_draft_version,
               source_draft_status FROM reviews WHERE id=?`).get(recheckEffect.id) as { base_draft_id: number; review_index: number;
                 source_draft_chapter_number: number | null; source_draft_version: number | null; source_draft_status: string | null } | undefined
-          const mergedDraft = db.prepare('SELECT chapter_number,version,status FROM drafts WHERE id=?').get(review.base_draft_id) as {
+          const mergedDraft = db.prepare(`SELECT chapter_number,version,status FROM ${draftRows} WHERE id=?`).get(review.base_draft_id) as {
             chapter_number: number; version: number; status: string } | undefined
           const recheckFindings = db.prepare(`SELECT finding_id,target_id,category,kind,problem_text,expected_text,status,span_start,span_end,span_unit,occurrence
             FROM review_findings WHERE cycle_id=? ORDER BY finding_id`).all(cycle.cycle_id) as Array<{

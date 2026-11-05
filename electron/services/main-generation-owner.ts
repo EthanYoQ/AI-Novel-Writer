@@ -30,7 +30,7 @@ import type { PrepareDraftContextRequest, PreparedDraftContext } from '../../src
 import { FinalizedCharacterGeneration } from './finalized-character-generation'
 import type { FinalizedCharacterGenerationCommit } from '../../src/shared/finalized-character-generation'
 import type { ReviewRevisionContext, PrepareReviewRevisionRequest, ReviewGenerationCommitRequest, RevisionGenerationCommitRequest } from '../../src/shared/review-revision-generation'
-import { ReviewRevisionGeneration } from './review-revision-generation'
+import { ReviewRevisionGeneration, ReviewSourceDeletedError } from './review-revision-generation'
 import { AgentGeneration, type AgentBeginSelection } from './agent-generation'
 import { ImportGeneration, importSlotNonce } from './import-generation'
 import type { ImportGenerationSlot } from '../../src/shared/import-generation'
@@ -1041,7 +1041,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     for (const run of runs) {
       const kind = RECOVERY_KIND.get(run.operation ?? '')
       if (!kind || (kind === 'draft' && run.batchId)) continue
-      try { collect[kind](run.handle) } catch { list.partial = true }
+      try { collect[kind](run.handle) } catch (error) {
+        if (!(error instanceof ReviewSourceDeletedError)) list.partial = true
+      }
     }
     const batchRoots = runs.filter(item => item.batchRoot)
     if (!batchRoots.length) return list

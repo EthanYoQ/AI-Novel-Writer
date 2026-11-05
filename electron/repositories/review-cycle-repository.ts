@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
+import { LIVE_PARENT } from './draft-source-guard'
 import { canonicalM03FindingSetHash, verifyM03ReviewCycle, type M03FindingDescriptor } from '../migrations/m03-review-cycle'
 import { parseHumanConfirmedReviewSnapshot, type HumanConfirmedReviewSnapshot } from '../../src/shared/human-confirmed-review'
 import { classifyFindingEvidenceChange, unshownMustShowRecheckFindings, type ReviewCycleRecheckContext,
@@ -504,7 +505,7 @@ export class ReviewCycleRepository {
   static getByReviewId(reviewId: number, db: Database.Database): ReviewCycleProjection | null {
     if (!integer(reviewId, 1)) invalid()
     const cycle = db.prepare(`SELECT cycle_id,review_id,revision_status,merged_hash,recheck_count
-      FROM review_cycles WHERE review_id=?`).get(reviewId) as { cycle_id: string; review_id: number;
+      FROM review_cycles WHERE review_id=? AND review_id IN (SELECT id FROM reviews WHERE ${LIVE_PARENT})`).get(reviewId) as { cycle_id: string; review_id: number;
         revision_status: ReviewCycleProjection['revisionStatus']; merged_hash: string | null; recheck_count: 0 | 1 } | undefined
     if (!cycle) return null
     if (!verifyM03ReviewCycle(db)) conflict()
