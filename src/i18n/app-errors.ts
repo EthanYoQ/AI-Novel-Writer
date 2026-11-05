@@ -233,6 +233,16 @@ const ERROR_KEYS = {
   CHAPTER_DELETE_LEGACY_OPERATION_FROZEN: 'error.chapterDeleteLegacyOperationFrozen',
   // 拼进「正文已删除，但派生投影仍待清理：……」与「重试清理失败」，所以文案不带句末标点；逐项原因在删除清理提示里。
   CHAPTER_DELETE_CLEANUP_INCOMPLETE: 'error.chapterDeleteCleanupIncomplete',
+  // 回收站（#564）：恢复、彻底删除与列表的拒绝原因，经 chapter:trash-* 交给回收站对话框与蓝图缺口卡。
+  CHAPTER_RESTORE_CLEANUP_INCOMPLETE: 'error.chapterRestoreCleanupIncomplete',
+  CHAPTER_RESTORE_BATCH_UNFINISHED: 'error.chapterRestoreBatchUnfinished',
+  CHAPTER_RESTORE_MODE_CHANGED: 'error.chapterRestoreModeChanged',
+  CHAPTER_RESTORE_NOT_FOUND: 'error.chapterRestoreNotFound',
+  CHAPTER_RESTORE_REQUEST_MISMATCH: 'error.chapterRestoreRequestMismatch',
+  CHAPTER_RESTORE_REQUEST_INVALID: 'error.chapterRestoreRequestInvalid',
+  CHAPTER_TRASH_ENTRY_INVALID: 'error.chapterTrashEntryInvalid',
+  CHAPTER_TRASH_RECEIPT_MISSING: 'error.chapterTrashReceiptMissing',
+  CHAPTER_TRASH_REQUEST_INVALID: 'error.chapterTrashRequestInvalid',
   CHAPTER_FINALIZED_REOPEN_REQUIRED: 'error.chapterFinalizedReopenRequired',
   CHAPTER_REOPEN_ALREADY_OPEN: 'error.chapterReopenAlreadyOpen',
   CHAPTER_REOPEN_NOT_FINALIZED: 'error.chapterReopenNotFinalized',

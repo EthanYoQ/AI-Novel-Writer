@@ -77,6 +77,9 @@ const COVERED_PREFIXES = [
   'IMPORT_RUN_',
   // 定稿、实体稿、修订、恢复稿、连续性摘要、一致性豁免、后处理与章节删除（#474 B5）。
   'CHAPTER_DELETE_',
+  // 回收站：恢复、彻底删除与列表的拒绝原因（#564）。
+  'CHAPTER_RESTORE_',
+  'CHAPTER_TRASH_',
   'CHAPTER_REOPEN_',
   'CHAPTER_FINALIZED_',
   'FINALIZATION_COMMIT_',
