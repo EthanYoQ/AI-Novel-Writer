@@ -643,13 +643,14 @@ describe('写作此章、标签顶替与跨作品的请求', () => {
     expect(useStageStore.getState().sheet).toBeNull()
   })
 
-  it('删除正文的确认说明删后无法恢复、后面章节可能要改写，不再提旧外壳的位置', async () => {
+  it('删除正文的确认说明会移到回收站、后面章节可能要改写，不再提旧外壳的位置', async () => {
     const draft = backend.addDraft({ status: 'finalized' })
     await mount()
     await openDraft(draft.id)
     await click('更多操作')
     await act(async () => page.getByRole('menuitem', { name: '删除正文…' }).click())
-    await expect.element(page.getByText(/后面的章节可能也要跟着改写/)).toBeVisible()
+    await expect.element(page.getByText(/会移到回收站，随时可以原样恢复/)).toBeVisible()
+    await expect.element(page.getByText(/后面的章节可能要跟着改写，甚至全部重写/)).toBeVisible()
     await expect.element(page.getByText(/正文章节下/)).not.toBeInTheDocument()
     await click('取消')
   })

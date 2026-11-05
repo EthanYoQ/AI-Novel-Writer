@@ -48,8 +48,21 @@ function deletionSurfaceConfig(
   // 清理没做完时，在这一章的单章视图里提示重试。
   const retryWhere = '在这一章的页面里'
   const retryWhereEn = 'on this chapter’s page'
-  const consequence = '删除后无法恢复，后面的章节可能也要跟着改写。\n只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」。'
-  const consequenceEn = 'This cannot be undone, and later chapters may need rewriting too.\nTo change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”.'
+  // 删除进回收站（ADR-0025）：不推连续性水位，所以不说要点会待更新，只说后面的章节可能依赖这一章的情节。
+  const consequence = [
+    '删除后，这一章的正文和全部版本会移到回收站，随时可以原样恢复。实体稿 txt 和知识库里的这一章会先移除，恢复时重新生成；你在软件外改过的 txt 会留着不删。',
+    '后面的章节可能用到了这一章的情节。删除或重写这一章后，后面的章节可能要跟着改写，甚至全部重写。',
+    '删除后可以直接在原位置重写这一章，后面的章节照常可写。只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」。',
+  ].join('\n')
+  const consequenceEn = [
+    'The text and every version of this chapter move to the trash, where you can restore them as they were at any time. Its manuscript file and knowledge base entry are removed first and recreated on restore; a manuscript file you edited outside Pagekin is kept.',
+    'Later chapters may rely on what happens in this one. After deleting or rewriting it, later chapters may need rewriting, possibly all of them.',
+    'You can rewrite this chapter in place right after deleting it, and later chapters stay writable. To change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”.',
+  ].join('\n')
+  const movedToTrash = text(
+    `已把「${displayName}」移到回收站。可以在回收站恢复，也可以直接重写这一章。`,
+    `Moved “${displayName}” to the trash. You can restore it from the trash or rewrite the chapter.`,
+  )
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
       confirmation: text(
@@ -57,7 +70,7 @@ function deletionSurfaceConfig(
         `Delete “${displayName}”?\n${consequenceEn}`,
       ),
       confirmationTitle: text('删除这一稿', 'Delete draft'),
-      success: text(`已删除 ${displayName}`, `Deleted ${displayName}`),
+      success: movedToTrash,
       partialFailure: error => text(
         `正文已删除，但派生投影仍待清理：${error}。请${retryWhere}使用“重试清理”。`,
         `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup” ${retryWhereEn}.`,
@@ -72,10 +85,7 @@ function deletionSurfaceConfig(
         `Delete manuscript “${displayName}”?\n${consequenceEn}`,
       ),
       confirmationTitle: text('删除正文', 'Delete manuscript'),
-      success: text(
-        `已删除正文「${displayName}」及其派生投影`,
-        `Deleted manuscript “${displayName}” and its derived projections.`,
-      ),
+      success: movedToTrash,
       partialFailure: error => text(
         `正文已删除，但派生投影仍待清理：${error}。请${retryWhere}使用“重试清理”。`,
         `The manuscript fact was deleted, but derived projections still need cleanup: ${error}. Use “Retry cleanup” ${retryWhereEn}.`,
