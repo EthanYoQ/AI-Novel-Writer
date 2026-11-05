@@ -394,6 +394,25 @@ describe('写作此章弹层', () => {
     expect(createChapterWorkflow.mock.calls[0][0]).toMatchObject({ chapterNumber: 2 })
   })
 
+  it('第 3、4 章进了回收站：写作弹层对第 3 章放行，对第 4 章拦下并列出第 3、13 章（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 12, nextChapterNumber: 13, gaps: [{ from: 3, to: 4, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'f'.repeat(64),
+    }
+    await render(<>
+      <WriteChapterPopover chapterNumber={4} blueprint={blueprintWritePrefill(BLUEPRINT)} label="写第 4 章" />
+      <WriteChapterPopover chapterNumber={3} blueprint={blueprintWritePrefill(BLUEPRINT)} label="重写第 3 章" />
+    </>)
+
+    await act(async () => page.getByRole('button', { name: '写第 4 章' }).click())
+    await expect.element(page.getByRole('dialog', { name: '本次写作选项' }).getByRole('alert'))
+      .toHaveTextContent('第 4 章现在还不能写：AI 要接着前一章的定稿往下写。现在可以写第 3、13 章')
+    expect(startWorkflow).not.toHaveBeenCalled()
+    await act(async () => page.getByRole('button', { name: '重写第 3 章' }).click())
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+    expect(createChapterWorkflow.mock.calls[0][0]).toMatchObject({ chapterNumber: 3 })
+  })
+
   it('定稿后打开下一章等请求：挂着这一章按钮的弹层自己打开并清掉请求', async () => {
     await render(<WriteChapterPopover chapterNumber={5} blueprint={blueprintWritePrefill(BLUEPRINT)} label="写第 5 章" />)
     expect(page.getByRole('dialog', { name: '本次写作选项' }).query()).toBeNull()

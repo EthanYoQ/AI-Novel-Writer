@@ -18,6 +18,7 @@ import BatchWriteDialog from './BatchWriteDialog'
 import BlueprintCard from './BlueprintCard'
 import BlueprintPlanList from './BlueprintPlanList'
 import GapNotice from './GapNotice'
+import { useChapterTrash } from '../trash/use-chapter-trash'
 import GenerateBlueprintsDialog from './GenerateBlueprintsDialog'
 import { pluralEn } from '../../../shared/plural-en'
 
@@ -38,6 +39,7 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
 }) {
   const text = useLocaleStore(s => s.text)
   const plan = useChapterBlueprints({ projectKey, initialChapterNumber, selectRequest })
+  const trash = useChapterTrash()
   const { chapters } = useStageView()
   const rows = useMemo(() => new Map(chapters.map(row => [row.number, row])), [chapters])
   const writeRequest = useStageStore(s => s.writeRequest)
@@ -176,6 +178,7 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
           gap={gap}
           blueprint={plan.blueprints.find(blueprint => blueprint.chapterNumber === gap.from) ?? null}
           unsaved={plan.unsavedChapterNumbers.has(gap.from)}
+          trashed={trash.byChapter.get(gap.from)}
           onWrite={plan.writeChapter}
           onAddBlueprint={plan.addGapBlueprint}
           clearAction={gap === firstUnexplainedGap && (
@@ -281,8 +284,8 @@ export default function StageBlueprint({ projectKey, initialChapterNumber, selec
         open={ask?.kind === 'legacy'}
         onOpenChange={open => { if (!open) setAsk(null) }}
         title={text('清除误导入正文？', 'Clear incorrectly imported text?')}
-        consequence={text('角色、故事架构、章节蓝图与知识库会保留。清除的是全书所有章节的草稿、定稿、审稿和摘要，不只是缺的那一章。如果只是删掉了某一章，请取消，直接在原位置重写那一章，后面的章节照常可写。',
-          'Characters, story architecture, chapter blueprints and the knowledge base are kept. This clears drafts, finalized text, reviews and summaries for every chapter in the book, not just the missing one. If you only deleted a chapter, cancel and rewrite it in place; later chapters stay writable.')}
+        consequence={text('角色、故事架构、章节蓝图与知识库会保留。清除的是全书所有章节的草稿、定稿、审稿和摘要，回收站里的章节也会一并清掉，不只是缺的那一章。如果只是删掉了某一章，请取消，从回收站恢复，或直接在原位置重写那一章，后面的章节照常可写。',
+          'Characters, story architecture, chapter blueprints and the knowledge base are kept. This clears drafts, finalized text, reviews and summaries for every chapter in the book, including chapters in the trash, not just the missing one. If you only deleted a chapter, cancel and restore it from the trash or rewrite it in place; later chapters stay writable.')}
         recoverability={text('清除后无法恢复。', 'This cannot be undone.')}
         confirmLabel={text('清除误导入正文', 'Clear imported text')}
         cancelLabel={text('取消', 'Cancel')}
