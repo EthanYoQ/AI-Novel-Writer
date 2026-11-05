@@ -552,6 +552,24 @@ describe('directory workflow project context', () => {
     expect((failure as Error).message).toBe('章节蓝图生成失败，请重试。')
   })
 
+  it.each(['GENERATION_STORAGE_FAILED', 'ROOT_BUDGET_EXHAUSTED'])('取消请求之后蓝图批次以 %s 失败：运行和这一步都记失败并带原码，说明不转出原文', async code => {
+    const projectA = project('C:\\novels\\cancel-window-coded-failure')
+    const projectSession = { projectId: projectA.id, leaseId: projectA.sessionLease!, projectPath: projectA.path }
+    useProjectStore.setState({ currentProject: projectA })
+    stubIpcInvoke([]).mockImplementation(async (channel: string) => channel === 'fs:check-exists' ? false : [])
+    const directoryCommand = await import('../commands/directory.command')
+    vi.spyOn(directoryCommand.GenerateDirectoryCommand.prototype, 'execute').mockImplementation(async () => {
+      useWorkflowStore.getState().cancelWorkflow('cancel-window-coded-failure-run')
+      throw Object.assign(new Error('provider-secret-blueprint-failure'), { code })
+    })
+    const workflow = createDirectoryWorkflow({ mode: 'full' }, projectA.path, projectSession, 'zh-CN')
+    await useWorkflowStore.getState().startWorkflow({ ...workflow, runId: 'cancel-window-coded-failure-run', steps: [workflow.steps[1]] })
+
+    const finished = useWorkflowStore.getState().history[0]
+    expect(finished).toMatchObject({ status: 'failed', errorCode: code, error: '章节蓝图生成失败，请重试。' })
+    expect(finished.steps[0]).toMatchObject({ status: 'failed', errorCode: code })
+  })
+
   it('蓝图已提交后作者取消：运行记已取消，已取消的那一步写明蓝图已保存、角色同步可能未完成', async () => {
     const projectA = project('C:\\novels\\post-commit-cancel')
     const projectSession = { projectId: projectA.id, leaseId: projectA.sessionLease!, projectPath: projectA.path }
