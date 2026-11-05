@@ -71,7 +71,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 
 共 101 个令牌，其中 50 个在深色主题里改了值。「同浅色」表示深色沿用左列的写法；写法里引用的令牌按深色的值计算。
 
-#### 表面
+### 表面
 
 | 令牌 | 浅色 | 深色 | 用途 |
 | --- | --- | --- | --- |
@@ -81,7 +81,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--surface-2` | `#F1F0EC` | `#222228` | 悬停与选中 |
 | `--paper` | `#FFFEFB` | `#1D1D22` | 正文纸面 |
 
-#### 墨色
+### 墨色
 
 | 令牌 | 浅色 | 深色 | 用途 |
 | --- | --- | --- | --- |
@@ -90,7 +90,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--ink-3` | `#696972` | `#8B8A93` | 说明文字 |
 | `--ink-4` | `#A1A1A8` | `#5E5D66` | 禁用与占位，只用于占位符、分隔与装饰 |
 
-#### 线
+### 线
 
 | 令牌 | 浅色 | 深色 | 用途 |
 | --- | --- | --- | --- |
@@ -98,7 +98,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--rule-strong` | `rgba(23, 23, 26, .14)` | `rgba(255, 255, 255, .16)` | 控件边框 |
 | `--track` | `rgba(23, 23, 26, .1)` | `rgba(255, 255, 255, .1)` | 进度轨道 |
 
-#### 强调（黛蓝）
+### 强调（黛蓝）
 
 用途：主操作、当前位置、键盘焦点。
 
@@ -111,7 +111,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--accent-line` | `rgba(44, 74, 140, .35)` | `rgba(169, 190, 240, .45)` |
 | `--accent-track` | `rgba(44, 74, 140, .18)` | `rgba(169, 190, 240, .22)` |
 
-#### 语义
+### 语义
 
 用途：完成、提醒、危险，与强调色色相不同。
 
@@ -126,7 +126,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--danger-soft` | `rgba(180, 35, 24, .08)` | `rgba(240, 138, 126, .14)` |
 | `--danger-line` | `rgba(180, 35, 24, .5)` | `rgba(240, 138, 126, .55)` |
 
-#### 焦点环、阴影与遮罩
+### 焦点环、阴影与遮罩
 
 用途：焦点环、按钮与面板投影、模态遮罩。
 
@@ -139,7 +139,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--shadow-seg` | `0 1px 2px rgba(23, 23, 26, .12)` | `0 1px 2px rgba(0, 0, 0, .5)` |
 | `--scrim` | `rgba(23, 23, 26, .35)` | `rgba(0, 0, 0, .55)` |
 
-#### 浮层
+### 浮层
 
 用途：菜单、弹层、通知、对话框共用的浮笺。
 
@@ -148,7 +148,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--layer` | `var(--paper)` | 同浅色 |
 | `--shadow-dialog` | `0 0 0 1px rgba(23, 23, 26, .08), 0 2px 6px -2px rgba(23, 23, 26, .08), 0 28px 56px -24px rgba(23, 23, 26, .42)` | `0 0 0 1px rgba(255, 255, 255, .08), 0 2px 6px -2px rgba(0, 0, 0, .5), 0 32px 72px -24px rgba(0, 0, 0, .8)` |
 
-#### 材质
+### 材质
 
 用途：按钮与输入框的受光、边线、投影、内凹与薄雾，从基础令牌用 color-mix 派生。
 
@@ -177,7 +177,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--danger-hover` | `color-mix(in srgb, var(--danger) 86%, var(--ink))` | 同浅色 |
 | `--danger-press` | `color-mix(in srgb, var(--danger) 74%, var(--ink))` | `color-mix(in srgb, var(--danger) 80%, var(--frame))` |
 
-#### 字体
+### 字体
 
 | 令牌 | 浅色 | 深色 | 用途 |
 | --- | --- | --- | --- |
@@ -187,7 +187,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--font-num` | `"Instrument Serif", Georgia, serif` | 同浅色 | 章节号与统计数字 |
 | `--font-mono` | `"JetBrains Mono", ui-monospace, Consolas, monospace` | 同浅色 | 诊断等宽 |
 
-#### 字号
+### 字号
 
 用途：9 级字号阶梯；正文字号、行高与行宽。
 
@@ -206,7 +206,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--prose-lh` | `2.05` | 同浅色 |
 | `--prose-measure` | `34em` | 同浅色 |
 
-#### 间距
+### 间距
 
 用途：4px 的倍数。
 
@@ -223,7 +223,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--s-12` | `48px` | 同浅色 |
 | `--s-16` | `64px` | 同浅色 |
 
-#### 圆角
+### 圆角
 
 用途：控件、面板与胶囊的圆角。
 
@@ -236,7 +236,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--radius-panel` | `14px` | 同浅色 |
 | `--radius-pill` | `999px` | 同浅色 |
 
-#### 布局
+### 布局
 
 用途：侧页宽度与内容区最小宽度。
 
@@ -246,7 +246,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--sheet-w-wide` | `620px` | 同浅色 |
 | `--content-min-w` | `600px` | 同浅色 |
 
-#### 动效
+### 动效
 
 用途：只用于状态变化。
 
@@ -256,7 +256,7 @@ README 当前的主视觉是 [`v130-hero-zh.webp`](../assets/readme/v130-hero-zh
 | `--dur-fast` | `140ms` | 同浅色 |
 | `--dur` | `220ms` | 同浅色 |
 
-#### 层级
+### 层级
 
 用途：侧页、弹层、遮罩、对话框、命令式弹窗、提示栈的叠放顺序。
 

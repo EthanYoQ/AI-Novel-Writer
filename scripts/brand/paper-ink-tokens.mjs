@@ -39,10 +39,10 @@ const CATEGORIES = [
   { title: '层级', purpose: '侧页、弹层、遮罩、对话框、命令式弹窗、提示栈的叠放顺序', match: /^z-[a-z]+$/ },
 ]
 
-function declarations(css) {
+export function declarations(css) {
   const body = css.replace(/\/\*[\s\S]*?\*\//g, '')
   const result = new Map()
-  for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;]+);/g)) result.set(name, value.trim().replace(/\s+/g, ' '))
+  for (const [, name, value] of body.matchAll(/(?:^|[;{\s])--([\w-]+)\s*:\s*([^;}]+)[;}]/g)) result.set(name, value.trim().replace(/\s+/g, ' '))
   return result
 }
 
@@ -79,7 +79,7 @@ function renderTable({ light, dark }) {
   for (const [category, categoryRows] of rows) {
     if (!categoryRows.length) continue
     const header = category.tokens ? ['| 令牌 | 浅色 | 深色 | 用途 |', '| --- | --- | --- | --- |'] : [`用途：${category.purpose}。`, '', '| 令牌 | 浅色 | 深色 |', '| --- | --- | --- |']
-    lines.push(`#### ${category.title}`, '', ...header, ...categoryRows, '')
+    lines.push(`### ${category.title}`, '', ...header, ...categoryRows, '')
   }
   return lines.join('\n').trimEnd()
 }
@@ -122,9 +122,11 @@ function main(mode) {
   return problems.length ? 1 : 0
 }
 
-try {
-  process.exitCode = main(process.argv[2])
-} catch (error) {
-  console.error(error.message)
-  process.exitCode = 1
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
+  try {
+    process.exitCode = main(process.argv[2])
+  } catch (error) {
+    console.error(error.message)
+    process.exitCode = 1
+  }
 }
