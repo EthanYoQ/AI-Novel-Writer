@@ -482,6 +482,8 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       }
       const outcome = await execution.session.complete(injection.task, { signal: execution.signal })
       this.reportGenerationPromptBudget(callbacks, outcome.receipt)
+      // 带失败码的结果是真实失败（主进程不把取消码交给渲染端）：作者已取消也就地报失败，免得后面的取消检查点把它改记成取消。
+      if (outcome.receipt.failureCode && context?.cancelled) throw this.createIncompleteCompletionError(outcome.finishReason)
       this.assertNotCancelled(context)
       const content = this.stripThinkingTags(outcome.content)
       if (!execution.mainOwned) callbacks.appendText(content)
