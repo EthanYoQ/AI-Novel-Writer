@@ -103,11 +103,10 @@ export async function restoreTrashedChapter(entry: TrashedChapter): Promise<bool
   return true
 }
 
-/** 彻底删除指定的项，或清空回收站。确认由调用方先做。 */
-export async function purgeTrash(target: TrashedChapter | { deletionId: string } | 'all'): Promise<boolean> {
+/** 彻底删除指定的项，或清空回收站。确认由调用方先做；session 取自弹出确认框那一刻，之后换了作品就不删。 */
+export async function purgeTrash(target: TrashedChapter | { deletionId: string } | 'all', session: ProjectSessionContext): Promise<boolean> {
   const text = useLocaleStore.getState().text
-  const session = currentSession()
-  if (!session) return false
+  if (!isProjectSessionCurrent(session)) return false
   const request = target === 'all' ? { all: true as const } : { deletionIds: [target.deletionId] }
   const result = await settled(ipc.invokeWithProjectSession(session, 'chapter:trash-purge', request, session.projectPath))
   if (!isProjectSessionCurrent(session)) return false

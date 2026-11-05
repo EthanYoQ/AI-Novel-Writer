@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { RotateCcw } from 'lucide-react'
 import type { TrashedChapter } from '../../../shared/chapter-deletion'
+import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { pluralEn } from '../../../shared/plural-en'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { useProjectStore } from '../../../stores/project-store'
+import { captureProjectSession } from '../../project-session-gate'
 import { Button } from '../../ui/Button'
 import { DangerConfirm } from '../../ui/DangerConfirm'
 import { InkDialog } from '../InkDialog'
@@ -12,7 +15,9 @@ import type { ChapterTrash } from './use-chapter-trash'
 import './trash.css'
 
 type Text = (zh: string, en: string) => string
-type PurgeAsk = { kind: 'one'; entry: TrashedChapter } | { kind: 'damaged'; deletionId: string } | { kind: 'all' }
+type PurgeTarget = { kind: 'one'; entry: TrashedChapter } | { kind: 'damaged'; deletionId: string } | { kind: 'all' }
+/** 确认框描述的是弹出那一刻的作品，确认时只对这部作品生效。 */
+type PurgeAsk = PurgeTarget & { session: ProjectSessionContext }
 
 const CLEANUP_TEXT: Record<Exclude<TrashedChapter['cleanup'], 'completed'>, [string, string]> = {
   pending: ['实体稿或知识库还没清理完', 'Manuscript file or knowledge base not cleaned up yet'],
@@ -79,6 +84,10 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
   const [busy, setBusy] = useState(false)
   const [ask, setAsk] = useState<PurgeAsk | null>(null)
   const total = trash.entries.length + trash.damaged.length
+  const askPurge = (target: PurgeTarget) => {
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (session) setAsk({ ...target, session })
+  }
 
   const run = (work: () => Promise<unknown>) => {
     if (busy) return
@@ -108,7 +117,7 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
     const target = ask
     setAsk(null)
     if (!target) return
-    run(() => purgeTrash(target.kind === 'all' ? 'all' : target.kind === 'one' ? target.entry : { deletionId: target.deletionId }))
+    run(() => purgeTrash(target.kind === 'all' ? 'all' : target.kind === 'one' ? target.entry : { deletionId: target.deletionId }, target.session))
   }
 
   return (
@@ -119,7 +128,7 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
         description={text('回收站里的章节会随备份和导出一起带走。', 'Chapters in the trash are included in backups and exports.')}
         footer={(
           <>
-            <Button variant="danger" disabled={busy || total === 0} onClick={() => setAsk({ kind: 'all' })}>{text('清空回收站…', 'Empty trash…')}</Button>
+            <Button variant="danger" disabled={busy || total === 0} onClick={() => askPurge({ kind: 'all' })}>{text('清空回收站…', 'Empty trash…')}</Button>
             <Button variant="secondary" onClick={() => onOpenChange(false)}>{text('关闭', 'Close')}</Button>
           </>
         )}
@@ -129,7 +138,7 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
           : (
             <ul className="stage-trash-list" aria-label={text('回收站里的章节', 'Chapters in the trash')}>
               {trash.entries.map(entry => (
-                <TrashItem key={entry.deletionId} entry={entry} busy={busy} onRun={run} onPurge={() => setAsk({ kind: 'one', entry })} />
+                <TrashItem key={entry.deletionId} entry={entry} busy={busy} onRun={run} onPurge={() => askPurge({ kind: 'one', entry })} />
               ))}
               {trash.damaged.map(item => (
                 <li key={item.deletionId} className="stage-trash-item" data-damaged="true">
@@ -138,7 +147,7 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
                     <p className="stage-trash-meta">{displayedErrorMessage(locale, item.error)}</p>
                   </div>
                   <div className="stage-trash-actions">
-                    <Button variant="danger" size="sm" disabled={busy} onClick={() => setAsk({ kind: 'damaged', deletionId: item.deletionId })}>
+                    <Button variant="danger" size="sm" disabled={busy} onClick={() => askPurge({ kind: 'damaged', deletionId: item.deletionId })}>
                       {text('彻底删除…', 'Delete permanently…')}
                     </Button>
                   </div>
