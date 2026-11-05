@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'vitest'
-import { declarations } from '../brand/paper-ink-tokens.mjs'
+import { brokenLinks, declarations } from '../brand/paper-ink-tokens.mjs'
 
 test('块里最后一条声明省略分号时照样读出', () => {
   const tokens = declarations('.paper-ink[data-theme="dark"] {\n  --frame: #111113;\n  --danger-press: color-mix(in srgb, var(--danger) 80%, var(--frame))\n}')
@@ -8,4 +8,9 @@ test('块里最后一条声明省略分号时照样读出', () => {
     ['frame', '#111113'],
     ['danger-press', 'color-mix(in srgb, var(--danger) 80%, var(--frame))'],
   ])
+})
+
+test('带标题的链接指向不存在的文件时报坏链接', () => {
+  const doc = '[在](../assets/brand/pagekin-icon.svg "预览") [缺](../assets/brand/missing.svg "预览") [尖括号](<../assets/brand/gone.svg>)'
+  assert.deepEqual(brokenLinks(doc), ['../assets/brand/missing.svg', '../assets/brand/gone.svg'])
 })

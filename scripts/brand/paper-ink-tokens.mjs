@@ -88,7 +88,7 @@ function block(table) {
   return `${START}\n\n${table}\n\n${END}`
 }
 
-function brokenLinks(doc) {
+export function brokenLinks(doc) {
   const docDir = path.dirname(path.join(root, DOC_FILE))
   const targets = [...doc.matchAll(/\]\(([^)\s]+)\)|\ssrc="([^"]+)"/g)].map(match => match[1] ?? match[2])
   return targets
