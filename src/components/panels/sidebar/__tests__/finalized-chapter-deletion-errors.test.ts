@@ -56,14 +56,14 @@ describe('删除定稿失败时的说明', () => {
 })
 
 describe('删除定稿章前的确认说明（#564）', () => {
-  const zh = ['移到回收站，随时可以原样恢复', '后面的章节可能要跟着改写，甚至全部重写', '只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」']
-  const en = ['move to the trash, where you can restore them', 'later chapters may need rewriting, possibly all of them', 'To change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”']
+  const zh = ['移到回收站，可以随时恢复', '后面的章节', '可能要跟着改', '「重新打开修改」']
+  const en = ['move to the trash and can be restored', 'Later chapters', 'may need changes', '“Reopen to edit”']
   it.each([
     ['zh-CN', 'manuscript', zh],
     ['zh-CN', 'draft', zh],
     ['en-US', 'manuscript', en],
     ['en-US', 'draft', en],
-  ] as const)('%s 界面的 %s 入口：写明进回收站可恢复、后面章节可能要改写甚至全部重写、只想修改用重新打开修改，不再说无法恢复或要点待更新；取消后不删', async (locale, surface, phrases) => {
+  ] as const)('%s 界面的 %s 入口：短短几行写明进回收站可恢复、后面章节可能要改、只想修改用重新打开修改，不再说无法恢复或要点待更新；取消后不删', async (locale, surface, phrases) => {
     useLocaleStore.setState({ locale })
     mocks.confirm.mockResolvedValueOnce(false)
     await deleteFinalizedChapter({ ...input, surface })
@@ -77,12 +77,13 @@ describe('删除定稿章前的确认说明（#564）', () => {
 
 describe('删除定稿章成功后的说明（#564）', () => {
   it.each([
-    ['zh-CN', '已把「第3章」移到回收站。可以在回收站恢复，也可以直接重写这一章。'],
-    ['en-US', 'Moved “第3章” to the trash. You can restore it from the trash or rewrite the chapter.'],
-  ] as const)('%s 界面：提示移到了回收站、可以恢复', async (locale, expected) => {
+    ['zh-CN', ['「第3章」', '移到回收站', '可以随时恢复']],
+    ['en-US', ['“第3章”', 'to the trash', 'restore it']],
+  ] as const)('%s 界面：提示移到了回收站、可以恢复', async (locale, phrases) => {
     useLocaleStore.setState({ locale })
     mocks.invoke.mockResolvedValue({ committed: true, success: true, operation: { legacyKnowledgeAuthorization: 'not_required' } })
     await deleteFinalizedChapter(input)
-    expect(mocks.toast.success).toHaveBeenCalledWith(expected)
+    const [message] = mocks.toast.success.mock.calls[0] as unknown as [string]
+    for (const phrase of phrases) expect(message).toContain(phrase)
   })
 })

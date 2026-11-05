@@ -68,8 +68,8 @@ export default function GapNotice({ gap, blueprint, unsaved, trashed, onWrite, o
     const enTitle = many ? `${enRange} were deleted; chapter ${head}’s text is in the trash` : `${enRange} was deleted; its text is in the trash`
     return (
       <Notice tone="info" title={text(zhTitle, enTitle)} actions={actions}>
-        {text(`后面的章节照常可写。可以从回收站恢复这一章，也可以直接重写。${order}`,
-          `Later chapters stay writable. Restore this chapter from the trash, or rewrite it. ${order}`)}
+        {text(`后面的章节照常可写。点「恢复」放回这一章，或者重写它。${order}`,
+          `Later chapters stay writable. Choose “Restore” to put this chapter back, or rewrite it. ${order}`)}
       </Notice>
     )
   }

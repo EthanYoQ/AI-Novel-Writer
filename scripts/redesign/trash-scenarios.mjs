@@ -158,7 +158,7 @@ TRASH_SCENARIOS['trash-ui'] = { model: true, shell: 'stage', setup: async contex
     await openChapter(page, 3)
     await chapterView.more(page, '删除正文…')
     const confirm = page.getByRole('dialog', { name: '删除正文' })
-    await confirm.getByText(/后面的章节可能要跟着改写，甚至全部重写/u).waitFor({ state: 'visible' })
+    await confirm.getByText(/后面的章节.*可能要跟着改/u).waitFor({ state: 'visible' })
     await context.shoot('delete-confirm')
     await confirm.getByRole('button', { name: '删除', exact: true }).click()
     await confirm.waitFor({ state: 'hidden' })
@@ -168,6 +168,10 @@ TRASH_SCENARIOS['trash-ui'] = { model: true, shell: 'stage', setup: async contex
     lock.release()
   }
 
+  // 第 3 章的页面会列出删除清理失败的原文（本机路径和 EBUSY），回收站从第 4 章打开，截图里只看回收站。
+  await dismissToasts(page)
+  await openChapter(page, 4)
+  assert.equal(await page.getByText(/EBUSY|C:\\Users/u).count(), 0, '回收站背后的页面不露本机路径和 EBUSY')
   await page.getByRole('button', { name: /^回收站（1）$/u }).click()
   const trash = trashDialog(page)
   await trash.waitFor({ state: 'visible' })
@@ -178,7 +182,7 @@ TRASH_SCENARIOS['trash-ui'] = { model: true, shell: 'stage', setup: async contex
 
   await rejectNextRestoreAsBatchUnfinished(app)
   await trash.getByRole('button', { name: '恢复' }).click()
-  await toasts(page).getByText(/这一章属于一次还没写完的批量创作/u).waitFor({ state: 'visible' })
+  await toasts(page).getByText(/这一章属于一次没写完的批量创作/u).waitFor({ state: 'visible' })
   await context.shoot('restore-batch-unfinished')
   await dismissToasts(page)
 
@@ -197,7 +201,7 @@ TRASH_SCENARIOS['trash-ui'] = { model: true, shell: 'stage', setup: async contex
   await context.shoot('gap-card')
 
   await gap.getByRole('button', { name: '恢复' }).click()
-  await toasts(page).getByText(/已恢复第 3 章，正文和全部版本都回来了/u).waitFor({ state: 'visible', timeout: 30_000 })
+  await toasts(page).getByText(/已恢复第 3 章的正文和全部版本/u).waitFor({ state: 'visible', timeout: 30_000 })
   observed.afterRestore = manuscripts(projectPath, 3)
   observed.restoreToast = await toasts(page).innerText()
   await context.shoot('restore-success')

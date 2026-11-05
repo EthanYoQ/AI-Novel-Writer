@@ -233,7 +233,7 @@ describe('蓝图阶段', () => {
 
     const notice = page.getByText('第 3 章已删除，正文在回收站里')
     await expect.element(notice).toBeVisible()
-    expect(notice.element().closest('.pi-notice')?.textContent).toContain('可以从回收站恢复这一章，也可以直接重写')
+    expect(notice.element().closest('.pi-notice')?.textContent).toContain('点「恢复」放回这一章')
     await expect.element(page.getByRole('button', { name: '写第 13 章' })).toBeVisible()
     await expect.element(page.getByRole('button', { name: '批量创作' })).toBeVisible()
     await expect.element(page.getByRole('button', { name: '重写第 3 章' })).toBeVisible()

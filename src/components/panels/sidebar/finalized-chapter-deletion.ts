@@ -50,18 +50,18 @@ function deletionSurfaceConfig(
   const retryWhereEn = 'on this chapter’s page'
   // 删除进回收站（ADR-0025）：不推连续性水位，所以不说要点会待更新，只说后面的章节可能依赖这一章的情节。
   const consequence = [
-    '删除后，这一章的正文和全部版本会移到回收站，随时可以原样恢复。实体稿 txt 和知识库里的这一章会先移除，恢复时重新生成；你在软件外改过的 txt 会留着不删。',
-    '后面的章节可能用到了这一章的情节。删除或重写这一章后，后面的章节可能要跟着改写，甚至全部重写。',
-    '删除后可以直接在原位置重写这一章，后面的章节照常可写。只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」。',
+    '正文和全部版本会移到回收站，可以随时恢复。',
+    '后面的章节如果用到了这一章的情节，可能要跟着改。',
+    '只想修改，请取消后点「重新打开修改」或「打开重开稿」。',
   ].join('\n')
   const consequenceEn = [
-    'The text and every version of this chapter move to the trash, where you can restore them as they were at any time. Its manuscript file and knowledge base entry are removed first and recreated on restore; a manuscript file you edited outside Pagekin is kept.',
-    'Later chapters may rely on what happens in this one. After deleting or rewriting it, later chapters may need rewriting, possibly all of them.',
-    'You can rewrite this chapter in place right after deleting it, and later chapters stay writable. To change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”.',
+    'The text and every version move to the trash and can be restored any time.',
+    'Later chapters that use events from this one may need changes too.',
+    'To edit only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”.',
   ].join('\n')
   const movedToTrash = text(
-    `已把「${displayName}」移到回收站。可以在回收站恢复，也可以直接重写这一章。`,
-    `Moved “${displayName}” to the trash. You can restore it from the trash or rewrite the chapter.`,
+    `已把「${displayName}」移到回收站，可以随时恢复。`,
+    `Moved “${displayName}” to the trash. You can restore it any time.`,
   )
   const configs: Record<DeletionSurface, DeletionSurfaceConfig> = {
     draft: {
