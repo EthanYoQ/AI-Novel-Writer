@@ -256,6 +256,30 @@ describe('回收站对话框（#564）', () => {
     await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
   })
 
+  it.each([
+    ['清空回收站', () => dialog().getByRole('button', { name: '清空回收站…' }).click(), '清空回收站？', '清空回收站'],
+    ['彻底删除一项', () => dialog().getByRole('button', { name: '彻底删除…' }).first().click(), '彻底删除第 3 章「灯塔3」？', '彻底删除'],
+  ] as const)('%s的确认框开着时换了作品，点确认不发彻底删除请求，什么也不删，确认框关掉（#592）', async (_, openAsk, title, confirmLabel) => {
+    await render()
+    await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
+    await act(async () => openAsk())
+    const confirm = page.getByRole('dialog', { name: title })
+    await expect.element(confirm).toBeVisible()
+
+    const other = { projectId: 'other', leaseId: 'other-lease', projectPath: 'C:\\novels\\other' }
+    await act(async () => {
+      setActiveProjectSessionContext(other)
+      useProjectStore.setState({ currentProject: { ...project(), id: other.projectId, sessionLease: other.leaseId, name: '雾港', path: other.projectPath } })
+    })
+    await act(async () => confirm.getByRole('button', { name: confirmLabel, exact: true }).click())
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    expect(calls('chapter:trash-purge')).toEqual([])
+    expect(entries.map(item => item.deletionId)).toEqual(['del-3', 'del-5'])
+    expect(damaged.map(item => item.deletionId)).toEqual(['del-broken'])
+    await expect.element(page.getByRole('dialog', { name: title })).not.toBeInTheDocument()
+  })
+
   it('英文界面：标题、按钮与说明都是英文', async () => {
     useLocaleStore.setState({ locale: 'en-US' })
     await render()
