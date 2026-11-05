@@ -123,11 +123,12 @@ const FINALIZE_SHARED_WRITE_RESOURCE_KEYS = Object.freeze([
   ...FINALIZATION_SHARED_WRITE_RESOURCE_KINDS.map(kind => workflowResourceKey(kind)),
 ])
 
-function finalizeWriteResourceKeys(chapterNumber: number): readonly string[] {
-  return Object.freeze([
-    workflowResourceKey('chapter', chapterNumber),
-    ...FINALIZE_SHARED_WRITE_RESOURCE_KEYS,
-  ])
+/** 定稿与修复后处理声明的资源：本章，加上定稿要更新的全书共用资料。定稿入口先按它查占用。 */
+export function finalizeResourceClaims(chapterNumber: number) {
+  return {
+    resourceKeys: Object.freeze([workflowResourceKey('chapter', chapterNumber), ...FINALIZE_SHARED_WRITE_RESOURCE_KEYS]),
+    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+  }
 }
 
 function workflowProjectSession(
@@ -412,8 +413,7 @@ export function createFinalizeWorkflow(
     projectPath: params.projectPath,
     projectSession: workflowProjectSession(params.projectPath, sourceProjectSession),
     uiLocale,
-    resourceKeys: finalizeWriteResourceKeys(params.chapterNumber),
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...finalizeResourceClaims(params.chapterNumber),
     title: localize(uiLocale,
       `第 ${params.chapterNumber} 章 · 定稿`,
       `Chapter ${params.chapterNumber} · Finalize`,
@@ -469,8 +469,7 @@ export function createRepairFinalizeWorkflow(
     projectPath,
     projectSession: workflowProjectSession(projectPath, sourceProjectSession, uiLocale),
     uiLocale,
-    resourceKeys: finalizeWriteResourceKeys(chapterNumber),
-    readResourceKeys: CHAPTER_CONTEXT_READ_RESOURCE_KEYS,
+    ...finalizeResourceClaims(chapterNumber),
     title: text(
       `第 ${chapterNumber} 章 · 修复后处理`,
       `Chapter ${chapterNumber} · Repair post-processing`,

@@ -10,6 +10,7 @@ import { actionToast, type ActionToastAction } from '../ui/ActionToast'
 import { chapterLabel } from '../../shared/chapter-label'
 import { displayedErrorMessage, englishWithReason } from '../../i18n/app-errors'
 import {
+  finalizeResourceClaims,
   parseDraftMeta,
   type DraftMeta,
   type DraftStatus,
@@ -54,27 +55,52 @@ const OCCUPIED_ACTION_VERB: Record<OccupiedAction, readonly [string, string]> = 
 }
 
 /**
- * 本章被别的运行占着时，作者点了动作要立即知道：正文没动、谁占着、怎么办。
- * 批量创作暂停时也一直占着它覆盖的每一章，所以直接给出「取消批量创作」。
+ * 谁占着、占着什么。批量自动定稿只写它自己的章节，但定稿都要更新全书共用的角色状态、
+ * 连续性与章节要点，所以别的章节的批量也会拦住本章定稿；这时不能说「占着这一章」。
  */
+type Occupier = 'cancelling' | 'run' | 'batch-chapter' | 'paused-batch-chapter' | 'batch-shared' | 'paused-batch-shared'
+
+function occupierOf(run: WorkflowRun, chapterNumber: number): Occupier {
+  if (run.status === 'cancelling') return 'cancelling'
+  if (run.type !== 'batch_generate') return 'run'
+  const holds = run.resourceKeys?.includes(workflowResourceKey('chapter', chapterNumber)) ? 'chapter' : 'shared'
+  return run.status === 'paused' ? `paused-batch-${holds}` : `batch-${holds}`
+}
+
+const OCCUPIED_REASON: Record<Occupier, (title: string, verbZh: string, verbEn: string) => readonly [string, string]> = {
+  'cancelling': (title, verbZh, verbEn) => [
+    `「${title}」正在取消，${verbZh}要等它停下。`,
+    `“${title}” is being cancelled. Wait for it to stop before you ${verbEn}.`,
+  ],
+  'run': (title, verbZh, verbEn) => [
+    `「${title}」还在进行，等它结束后再${verbZh}。`,
+    `“${title}” is still running. ${verbEn[0].toUpperCase()}${verbEn.slice(1)} after it finishes.`,
+  ],
+  'batch-chapter': (title, verbZh, verbEn) => [
+    `批量创作「${title}」正在进行，占着这一章。取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
+    `The batch “${title}” is running and holds this chapter. Cancel the batch to ${verbEn} now; drafts already written are kept.`,
+  ],
+  'paused-batch-chapter': (title, verbZh, verbEn) => [
+    `批量创作「${title}」已暂停，但还占着这一章。取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
+    `The batch “${title}” is paused but still holds this chapter. Cancel the batch to ${verbEn} now; drafts already written are kept.`,
+  ],
+  'batch-shared': (title, verbZh, verbEn) => [
+    `批量创作「${title}」正在给别的章节定稿，要更新全书共用的角色状态和章节要点，这期间不能${verbZh}这一章。等它结束再${verbZh}，或者取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
+    `The batch “${title}” is finalizing other chapters and updating the book’s shared character state and chapter notes, so you can’t ${verbEn} this chapter meanwhile. Wait for it to finish, or cancel the batch to ${verbEn} now; drafts already written are kept.`,
+  ],
+  'paused-batch-shared': (title, verbZh, verbEn) => [
+    `批量创作「${title}」已暂停，但它还要给别的章节定稿，一直占着全书共用的角色状态和章节要点，这期间不能${verbZh}这一章。取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
+    `The batch “${title}” is paused but still holds the book’s shared character state and chapter notes it updates when finalizing other chapters. Cancel the batch to ${verbEn} now; drafts already written are kept.`,
+  ],
+}
+
+/** 本章被别的运行占着时，作者点了动作要立即知道：正文没动、谁占着什么、怎么办。 */
 function explainChapterOccupied(run: WorkflowRun, chapterNumber: number, action: OccupiedAction, text: Text) {
   const [verbZh, verbEn] = OCCUPIED_ACTION_VERB[action]
   const chapter = chapterLabel(chapterNumber, text)
-  const isBatch = run.type === 'batch_generate'
-  const cancellable = isBatch && run.status !== 'cancelling'
-  const reason = run.status === 'cancelling'
-    ? text(`「${run.title}」正在取消，${verbZh}要等它停下。`, `“${run.title}” is being cancelled. Wait for it to stop before you ${verbEn}.`)
-    : !isBatch
-      ? text(`「${run.title}」还在进行，等它结束后再${verbZh}。`, `“${run.title}” is still running. ${verbEn[0].toUpperCase()}${verbEn.slice(1)} after it finishes.`)
-      : run.status === 'paused'
-        ? text(
-            `批量创作「${run.title}」已暂停，但还占着这一章。取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
-            `The batch “${run.title}” is paused but still holds this chapter. Cancel the batch to ${verbEn} now; drafts already written are kept.`,
-          )
-        : text(
-            `批量创作「${run.title}」正在进行，占着这一章。取消批量创作后就能${verbZh}，已写好的草稿都会保留。`,
-            `The batch “${run.title}” is running and holds this chapter. Cancel the batch to ${verbEn} now; drafts already written are kept.`,
-          )
+  const occupier = occupierOf(run, chapterNumber)
+  const cancellable = occupier !== 'cancelling' && occupier !== 'run'
+  const reason = text(...OCCUPIED_REASON[occupier](run.title, verbZh, verbEn))
   const actions: ActionToastAction[] = [
     ...(cancellable ? [{ label: text('取消批量创作', 'Cancel batch'), onClick: () => useWorkflowStore.getState().cancelWorkflow(run.id) }] : []),
     { label: text('查看运行', 'Open run'), variant: 'ghost', onClick: () => navigate({ kind: 'run', facet: 'output', runId: run.id }) },
@@ -387,9 +413,9 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
    */
   const canFinalize = Boolean(projectMatches && currentProject && meta && !isChapterBusy && !finalizationConflict && !finalizationPending)
 
-  /** 定稿入口（「更多」菜单、已修稿的主按钮）：本章被占着就立即说明，不打开确认框。 */
+  /** 定稿入口（「更多」菜单、定稿主按钮）：本章或定稿要更新的共用资料被占着，就立即说明，不打开确认框。 */
   const requestFinalize = (openConfirm: () => void) => {
-    if (meta && explainIfOccupied({ projectPath: projectKey, resourceKeys: [workflowResourceKey('chapter', meta.chapterNumber)] }, 'finalize')) return
+    if (meta && explainIfOccupied({ projectPath: projectKey, ...finalizeResourceClaims(meta.chapterNumber) }, 'finalize')) return
     openConfirm()
   }
 
