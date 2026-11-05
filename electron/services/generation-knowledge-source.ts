@@ -113,7 +113,9 @@ export async function captureGenerationKnowledge(input: {
     const staleDocIds = (await reader.documents!.query().toArray())
       .filter(doc => !isDocumentCopyIndexCurrent(reader.root, String(doc.id), doc.filePath))
       .map(doc => string(doc.id))
-    const documentFilter = [...staleDocIds, ...input.excludedDocumentIds ?? []].map(id => `\`docId\` != ${quote(id)}`).join(' AND ')
+    // 一个扁平的 NOT IN：逐个 `!=` 再用 AND 串起来，长篇补写时上千项会让 LanceDB 原生栈溢出，直接崩掉主进程。
+    const excluded = [...new Set([...staleDocIds, ...(input.excludedDocumentIds ?? [])])]
+    const documentFilter = excluded.length ? `\`docId\` NOT IN (${excluded.map(quote).join(', ')})` : ''
     let hits: { row: Row; score: number }[] = []
     if (input.queryVector) {
       const bytes = registryBytes(input.projectStorageRoot)
