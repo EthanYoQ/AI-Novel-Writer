@@ -39,7 +39,7 @@ import type { WritingSkillStage } from '../shared/writing-skills'
 // ===== 工作流数据模型 =====
 
 /** 工作流步骤状态 */
-export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled'
 
 /** 工作流运行状态 */
 export type WorkflowStatus =
@@ -809,6 +809,16 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         ), context.uiLocale)
 
       } catch (error) {
+        // 作者取消引发的中止：这一步停在取消处，运行保持「正在取消」，由循环后的取消收尾记为已取消。
+        if (isCancellationPending(context)) {
+          updateStepById(set, run.id, i, { status: 'cancelled', completedAt: new Date().toISOString() })
+          get().addLog('warn', uiText(
+            context.uiLocale,
+            `[取消] [${definition.title}] 步骤: ${stepDef.name} — ${displayedErrorMessage(context.uiLocale, error)}`,
+            `[Cancelled] [${definition.title}] Step: ${stepDef.name} — ${displayedErrorMessage(context.uiLocale, error)}`,
+          ), context.uiLocale)
+          break
+        }
         const promptBudgetFailure = promptBudgetFailureFromError(error, context.uiLocale)
         const errorMsg = promptBudgetFailure?.message
           ?? (error instanceof Error ? error.message : String(error))

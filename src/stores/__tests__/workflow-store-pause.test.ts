@@ -469,7 +469,7 @@ describe('workflow pause at a safe step boundary', () => {
     expect(useWorkflowStore.getState().history[0]?.error).toBe('Workflow was cancelled.')
     const messages = useWorkflowStore.getState().globalLogs.map(entry => entry.message).join('\n')
     expect(messages).toContain('[Cancel requested] Waiting for the current operation to exit safely')
-    expect(messages).toContain('[Failed] [Frozen cancellation copy] Step: Draft — Workflow was cancelled.')
+    expect(messages).toContain('[Cancelled] [Frozen cancellation copy] Step: Draft — Workflow was cancelled.')
     expect(messages).not.toMatch(/\[(?:取消|失败)\]/u)
   })
 

@@ -172,7 +172,8 @@ button.run-step-row:hover {
 }
 
 .run-step[data-status='pending'] .run-step-row,
-.run-step[data-status='skipped'] .run-step-row {
+.run-step[data-status='skipped'] .run-step-row,
+.run-step[data-status='cancelled'] .run-step-row {
   color: var(--ink-3);
 }
 
