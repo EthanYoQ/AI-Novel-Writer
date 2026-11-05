@@ -15,8 +15,8 @@ import type { ChapterTrash } from './use-chapter-trash'
 import './trash.css'
 
 type Text = (zh: string, en: string) => string
-type PurgeTarget = { kind: 'one'; entry: TrashedChapter } | { kind: 'damaged'; deletionId: string } | { kind: 'all' }
-/** 确认框描述的是弹出那一刻的作品，确认时只对这部作品生效。 */
+type PurgeTarget = { kind: 'one'; entry: TrashedChapter } | { kind: 'damaged'; deletionId: string } | { kind: 'all'; deletionIds: readonly string[] }
+/** 确认框描述的是弹出那一刻的作品和回收站，确认时只对这些生效。 */
 type PurgeAsk = PurgeTarget & { session: ProjectSessionContext }
 
 function modeHint(entry: TrashedChapter, text: Text): string | null {
@@ -94,10 +94,11 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
     : ask?.kind === 'one'
       ? text(`彻底删除${trashEntryName(ask.entry, text)}？`, `Delete ${trashEntryName(ask.entry, text)} permanently?`)
       : text('彻底删除这一项？', 'Delete this item permanently?')
-  const unfinished = trash.entries.filter(entry => entry.cleanup !== 'completed').length
+  const emptying = new Set(ask?.kind === 'all' ? ask.deletionIds : [])
+  const unfinished = trash.entries.filter(entry => emptying.has(entry.deletionId) && entry.cleanup !== 'completed').length
   const purgeConsequence = ask?.kind === 'all'
-    ? text(`回收站里的 ${total} 项会彻底删除，其他章节不受影响。`,
-        `All ${total} ${pluralEn(total, 'item')} in the trash will be deleted permanently. Other chapters are not affected.`)
+    ? text(`回收站里的 ${emptying.size} 项会彻底删除，其他章节不受影响。`,
+        `All ${emptying.size} ${pluralEn(emptying.size, 'item')} in the trash will be deleted permanently. Other chapters are not affected.`)
       + (unfinished === 0 ? '' : text(`其中 ${unfinished} 项清理没做完，项目文件夹或知识库里可能还有残留，需要时请手动删掉。`,
         ` ${unfinished} of them didn’t finish cleanup, so leftovers may remain in the project folder or knowledge base. Remove them yourself if needed.`))
     : ask?.kind === 'one'
@@ -111,7 +112,7 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
     const target = ask
     setAsk(null)
     if (!target) return
-    run(() => purgeTrash(target.kind === 'all' ? 'all' : target.kind === 'one' ? target.entry : { deletionId: target.deletionId }, target.session))
+    run(() => purgeTrash(target.kind === 'all' ? { emptying: target.deletionIds } : target.kind === 'one' ? target.entry : { deletionId: target.deletionId }, target.session))
   }
 
   return (
@@ -122,7 +123,7 @@ export default function TrashDialog({ open, onOpenChange, trash }: {
         description={text('回收站里的章节会随备份和导出一起带走。', 'Chapters in the trash are included in backups and exports.')}
         footer={(
           <>
-            <Button variant="danger" disabled={busy || total === 0} onClick={() => askPurge({ kind: 'all' })}>{text('清空回收站…', 'Empty trash…')}</Button>
+            <Button variant="danger" disabled={busy || total === 0} onClick={() => askPurge({ kind: 'all', deletionIds: [...trash.entries, ...trash.damaged].map(item => item.deletionId) })}>{text('清空回收站…', 'Empty trash…')}</Button>
             <Button variant="secondary" onClick={() => onOpenChange(false)}>{text('关闭', 'Close')}</Button>
           </>
         )}

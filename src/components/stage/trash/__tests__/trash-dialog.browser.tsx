@@ -197,7 +197,7 @@ describe('回收站对话框（#564）', () => {
     const confirm = page.getByRole('dialog', { name: '清空回收站？' })
     await expect.element(confirm).toHaveTextContent('回收站里的 3 项会彻底删除')
     await act(async () => confirm.getByRole('button', { name: '清空回收站' }).click())
-    await vi.waitFor(() => expect(calls('chapter:trash-purge')[0]?.[1]).toEqual({ all: true }))
+    await vi.waitFor(() => expect(calls('chapter:trash-purge')[0]?.[1]).toEqual({ deletionIds: ['del-3', 'del-5', 'del-broken'] }))
     await expect.element(dialog()).toHaveAccessibleName('回收站（0）')
     await expect.element(dialog()).toHaveTextContent('回收站是空的')
   })

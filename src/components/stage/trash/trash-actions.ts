@@ -101,11 +101,17 @@ export async function restoreTrashedChapter(entry: TrashedChapter): Promise<bool
   return true
 }
 
-/** 彻底删除指定的项，或清空回收站。确认由调用方先做；session 取自弹出确认框那一刻，之后换了作品就不删。 */
-export async function purgeTrash(target: TrashedChapter | { deletionId: string } | 'all', session: ProjectSessionContext): Promise<boolean> {
+/**
+ * 彻底删除指定的项，或清空回收站。确认由调用方先做；session 与 emptying 都取自弹出确认框那一刻：
+ * 之后换了作品就不删，之后才进回收站的项也不删。
+ */
+export async function purgeTrash(
+  target: TrashedChapter | { deletionId: string } | { emptying: readonly string[] },
+  session: ProjectSessionContext,
+): Promise<boolean> {
   const text = useLocaleStore.getState().text
   if (!isProjectSessionCurrent(session)) return false
-  const request = target === 'all' ? { all: true as const } : { deletionIds: [target.deletionId] }
+  const request = { deletionIds: 'emptying' in target ? [...target.emptying] : [target.deletionId] }
   const result = await settled(ipc.invokeWithProjectSession(session, 'chapter:trash-purge', request, session.projectPath))
   if (!isProjectSessionCurrent(session)) return false
   refreshAfterTrashChange(session)
@@ -113,7 +119,7 @@ export async function purgeTrash(target: TrashedChapter | { deletionId: string }
     toast.error(text(`彻底删除没有完成\n\n${reasonOf(result.error)}`, `Permanent deletion did not finish\n\n${reasonOf(result.error)}`))
     return false
   }
-  toast.success(target === 'all'
+  toast.success('emptying' in target
     ? text('已清空回收站。', 'The trash is empty.')
     : 'chapterNumber' in target
       ? text(`已彻底删除${trashEntryName(target, text)}。`, `${trashEntryName(target, text)} was deleted permanently.`)
