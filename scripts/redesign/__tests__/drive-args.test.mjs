@@ -5,7 +5,7 @@ import path from 'node:path'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
 import { appearanceWrite, assertBuilt, captureFailure, finishRealSession, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs, scanRunForSecret,
-  sessionIsClean } from '../drive.mjs'
+  sessionIsClean, writeConsoleLog } from '../drive.mjs'
 import { fileStamps } from '../real-model.mjs'
 import { BASELINE_SESSIONS, SCENARIOS } from '../scenarios.mjs'
 
@@ -168,4 +168,14 @@ it('真实模式删模型配置失败时记进会话错误，隔离目录留着�
   scanRunForSecret(results, out, outBefore, 'sk-test-secret')
   assert.deepEqual(results[0].keyScan.hits, [config])
   assert.equal(fs.existsSync(config), false)
+})
+
+it('诊断日志写不进去时只记进会话错误，不打断后面的退出与凭据清理', () => {
+  const sessionErrors = []
+  writeConsoleLog(path.join(tempParent(), 'missing', 'x.console.log'), ['line'], sessionErrors)
+  assert.equal(sessionErrors.length, 1)
+  assert.match(sessionErrors[0], /ENOENT/)
+  const file = path.join(tempParent(), 'ok.console.log')
+  writeConsoleLog(file, ['a', 'b'], sessionErrors)
+  assert.equal(fs.readFileSync(file, 'utf8'), 'a\nb\n')
 })

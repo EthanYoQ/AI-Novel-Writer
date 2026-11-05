@@ -472,6 +472,11 @@ export function finishRealSession({ shared, sessionErrors, modelLog, canonical, 
   try { shared.removedModelConfigs = remove(canonical).length } catch (error) { sessionErrors.push(messageOf(error)) }
 }
 
+/** 写诊断日志；写不进去只记进 sessionErrors，后面的退出与凭据清理照常执行。 */
+export function writeConsoleLog(file, diagnostics, sessionErrors) {
+  try { fs.writeFileSync(file, `${diagnostics.join('\n')}\n`) } catch (error) { sessionErrors.push(messageOf(error)) }
+}
+
 /** 本次写进产出目录的文件与留作取证的隔离目录里不能有密钥；找到就删掉那个文件，结果记下 keyScan。 */
 export function scanRunForSecret(results, out, outBefore, secret) {
   const retained = [...new Set(results.map(result => result.isolationRoot))].filter(root => fs.existsSync(root))
@@ -576,7 +581,7 @@ async function runSession(sessionName, names, options, realKey = null) {
   } finally {
     // 场景在 hold 与 release 之间抛错时门还关着：卡住的请求让运行一直进行，应用拒绝关闭，quit 要等满 10 秒再强杀
     fake?.gate.release()
-    if (options.console) fs.writeFileSync(`${base(sessionName)}.console.log`, `${diagnostics.join('\n')}\n`)
+    if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, diagnostics, sessionErrors)
     if (launched && realKey) modelLog.push(...await launched.app.evaluate(() => globalThis.__driveModelRequests).catch(() => []))
     if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(messageOf(error)); return null })
     await fake?.close()
