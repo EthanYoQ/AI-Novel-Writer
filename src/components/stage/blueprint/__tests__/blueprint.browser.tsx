@@ -240,11 +240,15 @@ describe('蓝图阶段', () => {
     await vi.waitFor(() => expect(calls('chapter:trash-list').length).toBeGreaterThan(0))
     const notice = page.getByText('第 1 章的正文已删除')
     await expect.element(notice).toBeVisible()
-    await act(async () => {})
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
     const body = notice.element().closest('.pi-notice')?.textContent
     expect(body).toContain('后面的章节都还在，照常可写')
     expect(body).not.toContain('找不回来')
     await expect.element(page.getByRole('button', { name: '写第 1 章' })).toBeVisible()
+
+    trashListFails = false
+    await act(async () => globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath: PROJECT_PATH, projectSession: SESSION }))
+    await expect.element(page.getByText('第 1 章已删除，正文在回收站里')).toBeVisible()
   })
 
   it('缺口段首章没写、后一章在回收站里：卡片指明那一章，恢复它，写作仍从段首开始（#592）', async () => {
