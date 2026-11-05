@@ -72,6 +72,7 @@ const ERROR_KEYS = {
   GENERATION_AGENT_TOOL_STALE: 'error.generationSourceChanged',
   GENERATION_DRAFT_SOURCE_CHANGED: 'error.generationSourceChanged',
   GENERATION_DRAFT_PREPARATION_CHANGED: 'error.generationSourceChanged',
+  GENERATION_KNOWLEDGE_SOURCE_STALE: 'error.generationSourceChanged',
   GENERATION_DRAFT_AUTHOR_CONFIG_CHANGED: 'error.generationSourceChanged',
   GENERATION_DRAFT_RECOVERY_SOURCE_CHANGED: 'error.generationSourceChanged',
   GENERATION_DRAFT_RECOVERY_SOURCE_SELECTION_CHANGED: 'error.generationSourceChanged',

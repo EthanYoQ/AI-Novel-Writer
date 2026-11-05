@@ -103,6 +103,7 @@ async function sourceItem(reader: Reader, row: Row, score: number): Promise<Gene
 }
 export async function captureGenerationKnowledge(input: {
   projectStorageRoot: string; query: string; topK?: number; queryVector?: number[]; embeddingSpace?: EmbeddingSpaceIdentity
+  excludedDocumentIds?: readonly string[]
 }): Promise<GenerationKnowledgeSnapshot> {
   const topK = input.topK ?? 5
   if (typeof input.query !== 'string' || !Number.isSafeInteger(topK) || topK < 1 || topK > 100) fail('INVALID_REQUEST')
@@ -112,7 +113,9 @@ export async function captureGenerationKnowledge(input: {
     const staleDocIds = (await reader.documents!.query().toArray())
       .filter(doc => !isDocumentCopyIndexCurrent(reader.root, String(doc.id), doc.filePath))
       .map(doc => string(doc.id))
-    const currentCopyFilter = staleDocIds.map(id => `\`docId\` != ${quote(id)}`).join(' AND ')
+    // 一个扁平的 NOT IN：逐个 `!=` 再用 AND 串起来，长篇补写时上千项会让 LanceDB 原生栈溢出，直接崩掉主进程。
+    const excluded = [...new Set([...staleDocIds, ...(input.excludedDocumentIds ?? [])])]
+    const documentFilter = excluded.length ? `\`docId\` NOT IN (${excluded.map(quote).join(', ')})` : ''
     let hits: { row: Row; score: number }[] = []
     if (input.queryVector) {
       const bytes = registryBytes(input.projectStorageRoot)
@@ -128,7 +131,7 @@ export async function captureGenerationKnowledge(input: {
         || input.queryVector.length !== active[0].vectorDimension) fail('SPACE_NOT_MATCHED')
       const table = await reader.connection!.openTable(active[0].tableName); await reader.pin(table)
       if (!['l2', 'cosine', 'dot'].includes(active[0].distanceMetric)) fail('SPACE_UNPROVEN')
-      const rows = await table.vectorSearch(input.queryVector).distanceType(active[0].distanceMetric as 'l2' | 'cosine' | 'dot').where(`\`corpusKind\` != 'reference'${currentCopyFilter ? ` AND ${currentCopyFilter}` : ''}`).limit(topK).toArray()
+      const rows = await table.vectorSearch(input.queryVector).distanceType(active[0].distanceMetric as 'l2' | 'cosine' | 'dot').where(`\`corpusKind\` != 'reference'${documentFilter ? ` AND ${documentFilter}` : ''}`).limit(topK).toArray()
       for (const hit of rows) {
         const canonical = await reader.chunks.query().where(`id = ${quote(string(hit.id))}`).toArray()
         if (canonical.length !== 1 || ['docId', 'text', 'fileName', 'chunkIndex', 'totalChunks', 'corpusKind'].some(key => !isDeepStrictEqual(canonical[0][key], hit[key]))) fail('VECTOR_CANONICAL_MISMATCH')
@@ -141,7 +144,7 @@ export async function captureGenerationKnowledge(input: {
       const raw = input.query.match(/[\p{L}\p{N}-]+/gu) ?? [], meaningful = raw.filter(term => Array.from(term).length >= 2)
       const terms = [...new Map((meaningful.length ? meaningful : raw).map(term => [term.toLocaleLowerCase(), term])).values()].slice(0, 8)
       const filter = terms.length ? terms.map(term => `text LIKE ${quote(`%${term}%`)}`).join(' OR ') : "text LIKE '%%'"
-      const rows = await reader.chunks.query().where(`(${filter})${currentCopyFilter ? ` AND ${currentCopyFilter}` : ''}`).toArray()
+      const rows = await reader.chunks.query().where(`(${filter})${documentFilter ? ` AND ${documentFilter}` : ''}`).toArray()
       const rank = (row: Row) => terms.reduce((sum, term, index) => sum + (string(row.text).toLocaleLowerCase().includes(term.toLocaleLowerCase()) ? terms.length - index : 0), 0)
       hits = rows.filter(row => corpus(row.corpusKind) !== 'reference').sort((a, b) => rank(b) - rank(a) || string(a.id).localeCompare(string(b.id)))
         .slice(0, topK).map(row => ({ row, score: 0.5 }))

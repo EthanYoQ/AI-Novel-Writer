@@ -242,7 +242,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-正式安装包由 GitHub Actions 云端构建。Windows x64、macOS Apple Silicon 和 macOS Intel 三个安装包各自通过资格检查后，才进入同一个 GitHub Release。文档权威层级、ADR 和开发规则见 [`docs/README.md`](docs/README.md)。
+正式安装包由 GitHub Actions 云端构建。Windows x64、macOS Apple Silicon 和 macOS Intel 三个安装包各自通过资格检查后，才进入同一个 GitHub Release。文档权威层级、ADR 和开发规则见 [`docs/README.md`](docs/README.md)。Logo、配色和设计稿见[品牌包](docs/brand/README.md)。
 
 ## 参与贡献
 

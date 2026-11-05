@@ -8,7 +8,7 @@ import { importReferenceText, importText, readDocumentCopy, reindexDocumentCopy,
 import { Index } from '../lance-database'
 import { ImportRunRepository } from '../repositories/import-run-repository'
 import { getProjectDataRoot } from '../services/project-data-locator'
-import { addChunks, closeConnection, getConnection, readPortableKnowledgeSnapshot, restorePortableKnowledgeSnapshot, searchWithScope } from '../vector-store'
+import { addChunks, closeConnection, getConnection, readPortableKnowledgeSnapshot, restorePortableKnowledgeSnapshot, search } from '../vector-store'
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
 
 const model = { provider: 'openai', baseUrl: 'https://unused.example/v1', apiKey: '', modelName: 'fts-only' }
@@ -83,14 +83,13 @@ afterEach(async () => {
 })
 
 describe('knowledge search does not depend on a full-text index', () => {
-  it('finalized-chapter import on a table with a leftover text index keeps text search, ranking and chapter scope', async () => {
+  it('finalized-chapter import on a table with a leftover text index keeps text search and ranking', async () => {
     await seedProjectWithLegacyTextIndex()
     expect((await importText(BELL_TOWER, CHAPTER_2, projectPath, 'openai', model)).success).toBe(true)
 
     expect(await searchKnowledgeFTS('灯塔', projectPath)).toEqual([hit(LIGHTHOUSE, CHAPTER_1)])
     expect(await searchKnowledgeFTS('钟楼 钥匙', projectPath)).toEqual([hit(BELL_TOWER, CHAPTER_2)])
     expect(await searchKnowledgeFTS('钟楼 灯塔', projectPath)).toEqual([hit(BELL_TOWER, CHAPTER_2), hit(LIGHTHOUSE, CHAPTER_1)])
-    expect(await searchKnowledgeFTS('钟楼 灯塔', projectPath, 5, [1, 1])).toEqual([hit(LIGHTHOUSE, CHAPTER_1)])
     expect(await searchKnowledgeFTS('不存在的词', projectPath)).toEqual([])
   })
 
@@ -99,7 +98,7 @@ describe('knowledge search does not depend on a full-text index', () => {
     expect(await authorizedReferenceImport(TIDE_TABLE)).toMatchObject({ success: true })
 
     expect(await searchKnowledgeFTS('潮汐表', projectPath)).toEqual([hit(TIDE_TABLE, '参考.txt')])
-    expect(await searchKnowledgeFTS('潮汐表 灯塔', projectPath, 5, undefined, ['reference'])).toEqual([hit(LIGHTHOUSE, CHAPTER_1)])
+    expect(await searchKnowledgeFTS('潮汐表 灯塔', projectPath, 5, ['reference'])).toEqual([hit(LIGHTHOUSE, CHAPTER_1)])
   })
 
   it('rebuilding a document from its edited copy on a table with a leftover text index replaces the searchable text', async () => {
@@ -132,9 +131,8 @@ describe('knowledge search does not depend on a full-text index', () => {
     await addLegacyTextIndex(projectPath)
     expect((await addChunks(projectPath, 'doc-2', CHAPTER_2, [BELL_TOWER], [[0, 1, 0]], undefined, { chapterNumber: 2 }, space)).success).toBe(true)
 
-    const nearest = await searchWithScope(projectPath, '', [0, 1, 0], 5, undefined, space)
+    const nearest = await search(projectPath, '', [0, 1, 0], 5, space)
     expect(nearest.map(result => result.text)).toEqual([BELL_TOWER, LIGHTHOUSE])
     expect(nearest[0].score).toBe(1)
-    expect((await searchWithScope(projectPath, '', [0, 1, 0], 5, [1, 1], space)).map(result => result.text)).toEqual([LIGHTHOUSE])
   })
 })
