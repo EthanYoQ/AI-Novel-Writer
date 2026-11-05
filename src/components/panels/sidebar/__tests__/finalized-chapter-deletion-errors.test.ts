@@ -56,17 +56,21 @@ describe('删除定稿失败时的说明', () => {
 })
 
 describe('删除定稿章前的确认说明（#564）', () => {
+  const zh = ['删除后无法恢复，后面的章节可能也要跟着改写', '只想修改这一章，请取消，点「重新打开修改」或「打开重开稿」']
+  const en = ['This cannot be undone, and later chapters may need rewriting too', 'To change only this chapter, cancel and choose “Reopen to edit” or “Open reopened draft”']
   it.each([
-    ['zh-CN', 'manuscript', ['删除后无法恢复', '如果这一章后面还有已定稿的章，删除后既补写不了这一章，也无法继续写后面的章节', '只想改写这一章，请取消，在这一章点「重新打开修改」', '已有重开稿时点「打开重开稿」']],
-    ['zh-CN', 'draft', ['删除后无法恢复', '如果这一章后面还有已定稿的章，删除后既补写不了这一章，也无法继续写后面的章节', '只想改写这一章，请取消，在这一章点「重新打开修改」', '已有重开稿时点「打开重开稿」']],
-    ['en-US', 'manuscript', ['This cannot be undone', 'If later chapters are already finalized, you will not be able to rewrite this chapter or keep writing later ones', 'To rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter', 'or “Open reopened draft” if one already exists']],
-    ['en-US', 'draft', ['This cannot be undone', 'If later chapters are already finalized, you will not be able to rewrite this chapter or keep writing later ones', 'To rewrite only this chapter, cancel and choose “Reopen to edit” on this chapter', 'or “Open reopened draft” if one already exists']],
-  ] as const)('%s 界面的 %s 入口：写明删后无法恢复、后面有定稿会写不下去、只想改写用重新打开修改；取消后不删', async (locale, surface, phrases) => {
+    ['zh-CN', 'manuscript', zh],
+    ['zh-CN', 'draft', zh],
+    ['en-US', 'manuscript', en],
+    ['en-US', 'draft', en],
+  ] as const)('%s 界面的 %s 入口：三行以内写明删后无法恢复、后面章节可能要改写、只想修改用重新打开修改，不出现内部术语；取消后不删', async (locale, surface, phrases) => {
     useLocaleStore.setState({ locale })
     mocks.confirm.mockResolvedValueOnce(false)
     await deleteFinalizedChapter({ ...input, surface })
     const [message] = mocks.confirm.mock.calls[0] as unknown as [string]
     for (const phrase of phrases) expect(message).toContain(phrase)
+    expect(message.split('\n')).toHaveLength(3)
+    expect(message).not.toMatch(/投影|定稿事实|projection|finalized fact/)
     expect(mocks.invoke).not.toHaveBeenCalled()
   })
 })

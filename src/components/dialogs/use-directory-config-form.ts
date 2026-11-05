@@ -18,7 +18,7 @@ import {
   listPendingDirectoryCharacterSyncs,
   retryAllPendingDirectoryCharacterSyncs,
 } from '../../services/workflows/directory-character-sync-recovery'
-import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
+import { readWritableChapters } from '../../services/authoritative-chapter-sequence'
 import { ipc } from '../../services/ipc-client'
 import { assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS, DEFAULT_PLANNING_TARGET_UNITS, parsePlanningTargetUnits, PLANNING_ACTION_CHAPTER_LIMIT, PLANNING_TARGET_UNITS_LIMIT } from '../../shared/plot-outline-contract'
 import { displayedErrorMessage } from '../../i18n/app-errors'
@@ -167,7 +167,7 @@ export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfi
       setAuthorityLoading(true)
       try {
         const [nextChapter, highestBlueprint] = await Promise.all([
-          readAuthoritativeNextChapter(projectSession, locale),
+          readWritableChapters(projectSession, locale).then(chapters => chapters.next),
           readHighestBlueprintChapter(currentProject.path, projectSession),
         ])
         if (disposed || !isProjectSessionCurrent(projectSession)) return
@@ -258,7 +258,7 @@ export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfi
     let frozenHighestBlueprint: number
     try {
       const authority = await Promise.all([
-        readAuthoritativeNextChapter(projectSession, locale),
+        readWritableChapters(projectSession, locale).then(chapters => chapters.next),
         readHighestBlueprintChapter(currentProject.path, projectSession),
       ])
       frozenAuthoritativeNext = authority[0]

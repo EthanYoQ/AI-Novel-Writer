@@ -103,7 +103,7 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
     })
   })
 
-  it('refuses automatic continuation when existing finalized authority has a gap', () => {
+  it('keeps a gap without a deletion receipt writable and still appends imports after the last chapter (#564)', () => {
     const imported = chapters(2)
     imported[1] = { ...imported[1], chapterNumber: 3, title: '第三章' }
     FinalizedDraftImportRepository.commit(projectRoot, {
@@ -111,18 +111,45 @@ describe('FinalizedDraftImportRepository transaction seam', () => {
       chapters: imported,
     })
 
-    const sequence = FinalizedDraftImportRepository.authoritySequence()
-    expect(sequence).toMatchObject({
-      status: 'invalid',
-      firstGapChapterNumber: 2,
+    expect(FinalizedDraftImportRepository.authoritySequence()).toMatchObject({
+      status: 'gapped',
+      lastChapterNumber: 3,
+      nextChapterNumber: 4,
+      gaps: [{ from: 2, to: 2, cause: 'unexplained' }],
+      duplicateChapterNumbers: [],
     })
-    expect(sequence).not.toHaveProperty('nextChapterNumber')
     expect(FinalizedDraftImportRepository.preview([
       { ...chapters(1)[0], chapterNumber: 4, title: '第四章' },
     ])).toMatchObject({
+      classification: 'ready',
+      authorityInvalid: false,
+      newChapterNumbers: [4],
+      nextChapterNumber: 5,
+    })
+    expect(FinalizedDraftImportRepository.preview([
+      { ...chapters(2)[1], title: '第二章' },
+    ])).toMatchObject({
+      classification: 'conflict',
+      authorityInvalid: false,
+      firstGapChapterNumber: 4,
+    })
+  })
+
+  it('still rejects authority with two finalized rows for one chapter', () => {
+    FinalizedDraftImportRepository.commit(projectRoot, { operationId: 'first-authority', chapters: chapters(2) })
+    const db = getProjectDb()!
+    const content = db.prepare('INSERT INTO contents (body) VALUES (?)').run('第二章另一份定稿')
+    db.prepare(`
+      INSERT INTO drafts (chapter_number, version, status, source, content_id, word_count)
+      VALUES (2, 9, 'finalized', 'write', ?, 8)
+    `).run(Number(content.lastInsertRowid))
+
+    const sequence = FinalizedDraftImportRepository.authoritySequence()
+    expect(sequence).toMatchObject({ status: 'invalid', duplicateChapterNumbers: [2] })
+    expect(sequence).not.toHaveProperty('nextChapterNumber')
+    expect(FinalizedDraftImportRepository.preview([chapters(3)[2]])).toMatchObject({
       classification: 'conflict',
       authorityInvalid: true,
-      firstGapChapterNumber: 2,
     })
   })
 

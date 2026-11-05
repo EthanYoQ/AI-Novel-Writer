@@ -5,7 +5,7 @@ import { isProjectSessionCurrent } from '../../components/project-session-gate'
 import { useLLMStore } from '../../stores/llm-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
-import { readAuthoritativeNextChapter } from '../authoritative-chapter-sequence'
+import { readWritableChapters, type WritableChapters } from '../authoritative-chapter-sequence'
 import { readConsistencyPreflight, type ConsistencyPreflightResult } from '../consistency-preflight'
 import { ipc } from '../ipc-client'
 import { requireIpcSuccess } from '../ipc-result'
@@ -183,18 +183,18 @@ export async function launchChapterWrite({
   )
 
   const targetChapter = Number(form.chapterNumber) || 1
-  let authoritativeNextChapter: number
+  let chapters: WritableChapters
   try {
-    authoritativeNextChapter = await readAuthoritativeNextChapter(session, locale)
+    chapters = await readWritableChapters(session, locale)
   } catch (error) {
     if (!isProjectSessionCurrent(session)) return { kind: 'stale' }
     return { kind: 'authority-error', message: error instanceof Error ? error.message : String(error) }
   }
   if (!isProjectSessionCurrent(session)) return { kind: 'stale' }
-  if (targetChapter !== authoritativeNextChapter) {
+  if (!chapters.writable.includes(targetChapter)) {
     return { kind: 'blocked', message: text(
-      `当前权威定稿之后只能创作第 ${authoritativeNextChapter} 章。请从该章蓝图进入，或修复定稿章节后重试。`,
-      `Only Chapter ${authoritativeNextChapter} can be written after the current finalized authority. Open that blueprint, or repair finalized chapters before retrying.`,
+      `第 ${targetChapter} 章现在还不能写：AI 要接着前一章的定稿往下写。现在可以写第 ${chapters.writable.join('、')} 章，请从其中一章的蓝图进入。`,
+      `Chapter ${targetChapter} cannot be written yet: AI continues from the previous finalized chapter. You can write ${chapters.writable.length === 1 ? 'Chapter' : 'Chapters'} ${chapters.writable.join(', ')} now. Open one of those blueprints.`,
     ) }
   }
 

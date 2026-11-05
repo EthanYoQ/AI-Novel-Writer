@@ -17,7 +17,8 @@ import {
   captureProjectSession,
   isProjectSessionCurrent,
 } from '../project-session-gate'
-import { readAuthoritativeNextChapter } from '../../services/authoritative-chapter-sequence'
+import { readWritableChapters } from '../../services/authoritative-chapter-sequence'
+import type { ChapterGap } from '../../shared/chapter-sequence'
 import { readConsistencyPreflight, type ConsistencyPreflightResult } from '../../services/consistency-preflight'
 import { requireIpcSuccess } from '../../services/ipc-result'
 import { normalizeChapterWordsTarget } from '../../services/workflows/chapter-creation-parameters'
@@ -58,6 +59,7 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
   const [confirmingAutoFinalize, setConfirmingAutoFinalize] = useState(false)
   const [authoritativeStart, setAuthoritativeStart] = useState<number | null>(null)
   const [authorityError, setAuthorityError] = useState<string | null>(null)
+  const [gaps, setGaps] = useState<ChapterGap[]>([])
   const [authorityLoading, setAuthorityLoading] = useState(false)
   const [consistencyPreflight, setConsistencyPreflight] = useState<ConsistencyPreflightResult | null>(null)
   const [generationModelId, setGenerationModelId] = useState<string | null>(() => (
@@ -81,13 +83,15 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
     const loadAuthority = async () => {
       setAuthorityLoading(true)
       try {
-        const nextChapter = await readAuthoritativeNextChapter(projectSession, locale)
+        const chapters = await readWritableChapters(projectSession, locale)
         if (disposed || !isProjectSessionCurrent(projectSession)) return
-        setAuthoritativeStart(nextChapter)
+        setAuthoritativeStart(chapters.next)
+        setGaps(chapters.gaps)
         setAuthorityError(null)
       } catch (cause) {
         if (disposed || !isProjectSessionCurrent(projectSession)) return
         setAuthoritativeStart(null)
+        setGaps([])
         setAuthorityError(displayedErrorMessage(useLocaleStore.getState().locale, cause))
       } finally {
         if (!disposed && isProjectSessionCurrent(projectSession)) setAuthorityLoading(false)
@@ -127,9 +131,10 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
     }
     setStarting(true)
     try {
-      const frozenStart = await readAuthoritativeNextChapter(projectSession, locale)
+      const { next: frozenStart, gaps: frozenGaps } = await readWritableChapters(projectSession, locale)
       if (!isProjectSessionCurrent(projectSession)) return
       setAuthoritativeStart(frozenStart)
+      setGaps(frozenGaps)
       setAuthorityError(null)
       const frozenCompletionMode = completionMode
       const frozenLocale = locale
@@ -229,6 +234,7 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
       if (!isProjectSessionCurrent(projectSession)) return
       const message = displayedErrorMessage(useLocaleStore.getState().locale, cause)
       if (cause && typeof cause === 'object' && 'code' in cause && cause.code === 'AUTHORITATIVE_CHAPTER_SEQUENCE_INVALID') {
+        setGaps([])
         setAuthorityError(message)
       } else {
         setError(message)
@@ -275,6 +281,6 @@ export function useBatchChapterForm({ isOpen, startChapterNumber, onClose }: Bat
     text, currentProject, chapterCount, setChapterCount, chapterWordsTarget, setChapterWordsTarget, error, setError, starting,
     completionMode, setCompletionMode, confirmingAutoFinalize, setConfirmingAutoFinalize, authorityError, authorityLoading,
     consistencyPreflight, generationModels, selectedGenerationModelId, setGenerationModelId, modelSelectionError,
-    normalizedCount, start, end, handleStart, saveArrangement, revokeArrangement,
+    normalizedCount, start, end, gaps, handleStart, saveArrangement, revokeArrangement,
   }
 }

@@ -41,6 +41,10 @@ let continuityProjections: unknown[]
 let exemptions: { stableFactKey: string; reason: string; revoked: boolean }[]
 let exemptionSave: () => Promise<{ success: boolean; error?: string }>
 let continuityGate: Promise<void> | null = null
+let authority: unknown
+const CONTINUOUS_AUTHORITY = {
+  status: 'continuous', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [], duplicateChapterNumbers: [], authorityFingerprint: 'e'.repeat(64),
+}
 
 const DEAD_KEEPER = [{
   draftId: 1, chapterNumber: 1, chapterTitle: '终局', chapterNotes: '老周死亡',
@@ -88,9 +92,7 @@ function model(id: string): ModelProfile {
 
 function installIpc() {
   const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
-    if (channel === 'db:draft-authority-sequence') return {
-      status: 'continuous', lastChapterNumber: 4, nextChapterNumber: 5, duplicateChapterNumbers: [], authorityFingerprint: 'e'.repeat(64),
-    }
+    if (channel === 'db:draft-authority-sequence') return authority
     if (channel === 'db:blueprint-get-all') return [BLUEPRINT]
     if (channel === 'db:blueprint-get') return BLUEPRINT
     if (channel === 'db:character-get-all') return [{ id: 1 }]
@@ -155,6 +157,7 @@ beforeEach(async () => {
   exemptions = []
   exemptionSave = async () => ({ success: true })
   continuityGate = null
+  authority = CONTINUOUS_AUTHORITY
   startWorkflow = vi.fn(async () => 'write-popover-run')
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: project() })
@@ -265,6 +268,51 @@ describe('写作此章弹层', () => {
     await expect.element(page.getByRole('dialog', { name: '批量创作' }).getByLabelText(/本次模型/)).toHaveValue('glm')
   })
 
+  it('删掉中间的章后批量创作照常可用：从最后一章之后开始，并说明不补缺的章（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [{ from: 2, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'f'.repeat(64),
+    }
+    await render(<BatchWriteDialog isOpen startChapterNumber={5} onClose={vi.fn()} />)
+    const dialog = page.getByRole('dialog', { name: '批量创作' })
+    await expect.element(dialog).toHaveTextContent('批量只往后写，不补缺的第 2～3 章；缺的章请在蓝图页单独写。')
+    await expect.element(dialog.getByText('第 5 章', { exact: true })).toBeVisible()
+    await expect.element(dialog.getByRole('button', { name: '开始写 1 章' })).toBeEnabled()
+  })
+
+  it('批量开写时定稿序列已失效：只说明重复定稿，不再留着之前的缺口提示（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [{ from: 2, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'f'.repeat(64),
+    }
+    await render(<BatchWriteDialog isOpen startChapterNumber={5} onClose={vi.fn()} />)
+    const dialog = page.getByRole('dialog', { name: '批量创作' })
+    await expect.element(dialog).toHaveTextContent('批量只往后写')
+
+    authority = { status: 'invalid', lastChapterNumber: 4, gaps: [], duplicateChapterNumbers: [4], authorityFingerprint: 'f'.repeat(64) }
+    await act(async () => dialog.getByRole('button', { name: '开始写 1 章' }).click())
+
+    await expect.element(dialog).toHaveTextContent('权威定稿的第 4 章存在重复记录')
+    expect(dialog.element().textContent).not.toContain('批量只往后写')
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('批量对话框重新读取定稿序列失败时，不再留着之前的缺口提示（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [{ from: 2, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'f'.repeat(64),
+    }
+    await render(<BatchWriteDialog isOpen startChapterNumber={5} onClose={vi.fn()} />)
+    await expect.element(page.getByRole('dialog', { name: '批量创作' })).toHaveTextContent('批量只往后写')
+
+    authority = { status: 'invalid', lastChapterNumber: 4, gaps: [], duplicateChapterNumbers: [4], authorityFingerprint: 'f'.repeat(64) }
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+
+    const dialog = page.getByRole('dialog', { name: 'Batch write' })
+    await expect.element(dialog).toHaveTextContent('Finalized authority has duplicate records for Chapters 4')
+    expect(dialog.element().textContent).not.toContain('Batch writing only continues forward')
+  })
+
   it('弹层只有本次模型、作者微操指导与折叠的更多，不重复蓝图字段', async () => {
     await render(<WriteChapterPopover chapterNumber={5} blueprint={blueprintWritePrefill(BLUEPRINT)} label="写第 5 章" />)
     await act(async () => page.getByRole('button', { name: '本次写作选项' }).click())
@@ -323,8 +371,27 @@ describe('写作此章弹层', () => {
   it('前置条件不满足时弹层打开并写明原因，不启动', async () => {
     await render(<WriteChapterPopover chapterNumber={7} blueprint={blueprintWritePrefill(BLUEPRINT)} label="写第 7 章" />)
     await act(async () => page.getByRole('button', { name: '写第 7 章' }).click())
-    await expect.element(page.getByRole('dialog', { name: '本次写作选项' }).getByRole('alert')).toHaveTextContent('当前权威定稿之后只能创作第 5 章')
+    await expect.element(page.getByRole('dialog', { name: '本次写作选项' }).getByRole('alert')).toHaveTextContent('第 7 章现在还不能写：AI 要接着前一章的定稿往下写。现在可以写第 5 章')
     expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('删掉中间的章后，缺口第一章可以写，缺口里其余的章被拦下并列出能写的章（#564）', async () => {
+    authority = {
+      status: 'gapped', lastChapterNumber: 4, nextChapterNumber: 5, gaps: [{ from: 2, to: 3, cause: 'deleted' }],
+      duplicateChapterNumbers: [], authorityFingerprint: 'f'.repeat(64),
+    }
+    await render(<>
+      <WriteChapterPopover chapterNumber={3} blueprint={blueprintWritePrefill(BLUEPRINT)} label="写第 3 章" />
+      <WriteChapterPopover chapterNumber={2} blueprint={blueprintWritePrefill(BLUEPRINT)} label="写第 2 章" />
+    </>)
+
+    await act(async () => page.getByRole('button', { name: '写第 3 章' }).click())
+    await expect.element(page.getByRole('dialog', { name: '本次写作选项' }).getByRole('alert'))
+      .toHaveTextContent('第 3 章现在还不能写：AI 要接着前一章的定稿往下写。现在可以写第 2、5 章，请从其中一章的蓝图进入。')
+    expect(startWorkflow).not.toHaveBeenCalled()
+    await act(async () => page.getByRole('button', { name: '写第 2 章' }).click())
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+    expect(createChapterWorkflow.mock.calls[0][0]).toMatchObject({ chapterNumber: 2 })
   })
 
   it('定稿后打开下一章等请求：挂着这一章按钮的弹层自己打开并清掉请求', async () => {
@@ -345,7 +412,7 @@ describe('写作此章弹层', () => {
     await act(async () => popover.getByText('更多').click())
     await act(async () => popover.getByLabelText(/知识库检索关键词/).fill('列车时刻表'))
     await act(async () => page.getByRole('button', { name: '写第 7 章' }).click())
-    await expect.element(popover.getByRole('alert')).toHaveTextContent('当前权威定稿之后只能创作第 5 章')
+    await expect.element(popover.getByRole('alert')).toHaveTextContent('第 7 章现在还不能写：AI 要接着前一章的定稿往下写。现在可以写第 5 章')
     await expect.element(popover.getByLabelText(/作者微操指导/)).toHaveValue('被挡下前写的指导')
     await expect.element(popover.getByLabelText(/本次模型/)).toHaveValue('glm')
     await expect.element(popover.getByLabelText(/知识库检索关键词/)).toHaveValue('列车时刻表')

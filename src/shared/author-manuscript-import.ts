@@ -1,14 +1,3 @@
-export type AuthoritativeChapterSequenceStatus = 'empty' | 'continuous' | 'invalid'
-
-export interface AuthoritativeChapterSequence {
-  status: AuthoritativeChapterSequenceStatus
-  lastChapterNumber: number
-  nextChapterNumber?: number
-  firstGapChapterNumber?: number
-  duplicateChapterNumbers: number[]
-  authorityFingerprint: string
-}
-
 export type AuthorManuscriptPreviewClassification = 'ready' | 'exact-duplicate' | 'conflict'
 
 export interface AuthorManuscriptPreviewChapter {

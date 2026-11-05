@@ -59,21 +59,14 @@ beforeEach(() => {
     if (channel === 'db:blueprint-get-all') {
       return blueprintChapterNumbers.map(chapterNumber => ({ chapterNumber }))
     }
-    if (channel === 'db:draft-authority-sequence') return authorityGap === null
-      ? {
-          status: authoritativeNextChapter === 1 ? 'empty' : 'continuous',
-          lastChapterNumber: authoritativeNextChapter - 1,
-          nextChapterNumber: authoritativeNextChapter,
-          duplicateChapterNumbers: [],
-          authorityFingerprint: 'a'.repeat(64),
-        }
-      : {
-          status: 'invalid',
-          lastChapterNumber: 9,
-          firstGapChapterNumber: authorityGap,
-          duplicateChapterNumbers: [],
-          authorityFingerprint: 'b'.repeat(64),
-        }
+    if (channel === 'db:draft-authority-sequence') return {
+      status: authorityGap !== null ? 'gapped' : authoritativeNextChapter === 1 ? 'empty' : 'continuous',
+      lastChapterNumber: authoritativeNextChapter - 1,
+      nextChapterNumber: authoritativeNextChapter,
+      gaps: authorityGap === null ? [] : [{ from: authorityGap, to: authorityGap, cause: 'deleted' }],
+      duplicateChapterNumbers: [],
+      authorityFingerprint: 'a'.repeat(64),
+    }
     return { success: true }
   })
   Object.defineProperty(window, 'aiNovelAPI', {
@@ -203,21 +196,25 @@ describe('workflow launch dialogs', () => {
     }))
   })
 
-  it('blocks blueprint generation when finalized authority has a gap', async () => {
+  it('keeps blueprint generation available after a deleted middle chapter and appends after the last chapter (#564)', async () => {
     authorityGap = 4
-    const onConfirm = vi.fn()
+    authoritativeNextChapter = 7
+    blueprintChapterNumbers = [1, 2, 3, 4, 5, 6]
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
     await act(async () => root.render(
       <GenerateBlueprintsDialog
         isOpen
         onClose={vi.fn()}
-        existingCount={0}
+        existingCount={6}
         onConfirm={onConfirm}
       />,
     ))
 
-    await expect.element(page.getByText(/权威定稿缺少第 4 章/)).toBeVisible()
-    await expect.element(page.getByRole('button', { name: '开始生成' })).toBeDisabled()
-    expect(onConfirm).not.toHaveBeenCalled()
+    await expect.element(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
+    await act(async () => page.getByRole('button', { name: '开始生成' }).click())
+
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledOnce())
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ mode: 'append', startChapter: 7 }))
   })
 
   it('keeps architecture confirmation open and reports launcher rejection', async () => {
@@ -426,6 +423,7 @@ describe('workflow launch dialogs', () => {
         status: 'empty',
         lastChapterNumber: 0,
         nextChapterNumber: 1,
+        gaps: [],
         duplicateChapterNumbers: [],
         authorityFingerprint: 'c'.repeat(64),
       }

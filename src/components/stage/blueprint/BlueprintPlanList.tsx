@@ -10,7 +10,7 @@ interface BlueprintPlanListProps {
   blueprints: readonly ChapterBlueprint[]
   rows: ReadonlyMap<number, ChapterRow>
   selectedIdx: number
-  nextWriteChapter: number | null
+  writableChapters: ReadonlySet<number>
   onSelect: (index: number) => void
 }
 
@@ -45,7 +45,7 @@ const PlanItem = memo(function PlanItem({ blueprint, row, index, selected, next,
 })
 
 /** 章节规划列表：章号、标题、有作者指导与要点的标记、正文进度。 */
-export default function BlueprintPlanList({ blueprints, rows, selectedIdx, nextWriteChapter, onSelect }: BlueprintPlanListProps) {
+export default function BlueprintPlanList({ blueprints, rows, selectedIdx, writableChapters, onSelect }: BlueprintPlanListProps) {
   const text = useLocaleStore(s => s.text)
   return (
     <aside className="stage-bp-plan" aria-label={text('章节规划', 'Chapter plan')}>
@@ -58,7 +58,7 @@ export default function BlueprintPlanList({ blueprints, rows, selectedIdx, nextW
             row={rows.get(blueprint.chapterNumber)}
             index={index}
             selected={index === selectedIdx}
-            next={blueprint.chapterNumber === nextWriteChapter}
+            next={writableChapters.has(blueprint.chapterNumber)}
             onSelect={onSelect}
           />
         ))}

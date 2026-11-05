@@ -6,10 +6,8 @@ import type {
   FinalizedDraftImportReceipt,
   FinalizedDraftImportRequest,
 } from '../../src/shared/finalized-draft-import'
-import type {
-  AuthorManuscriptImportPreview,
-  AuthoritativeChapterSequence,
-} from '../../src/shared/author-manuscript-import'
+import type { AuthorManuscriptImportPreview } from '../../src/shared/author-manuscript-import'
+import { chapterSequenceFrom, type AuthoritativeChapterSequence } from '../../src/shared/chapter-sequence'
 import { getProjectDb } from '../database'
 import {
   countDraftUnits,
@@ -163,45 +161,17 @@ function authorityFingerprint(rows: AuthorityRow[]): string {
   }))))
 }
 
+/** 留有删除收据的章号：这些章的缺口是作者删掉的，不是误导入。 */
+function deletedChapterNumbers(): Set<number> {
+  const current = getProjectDb()
+  if (!current) throw new Error('PROJECT_NOT_OPEN')
+  return new Set(current.prepare('SELECT DISTINCT chapter_number FROM chapter_deletion_operations').pluck().all() as number[])
+}
+
 function sequenceFromRows(rows: AuthorityRow[]): AuthoritativeChapterSequence {
-  const fingerprint = authorityFingerprint(rows)
-  if (rows.length === 0) {
-    return {
-      status: 'empty',
-      lastChapterNumber: 0,
-      nextChapterNumber: 1,
-      duplicateChapterNumbers: [],
-      authorityFingerprint: fingerprint,
-    }
-  }
-  const counts = new Map<number, number>()
-  for (const row of rows) counts.set(row.chapter_number, (counts.get(row.chapter_number) ?? 0) + 1)
-  const duplicateChapterNumbers = [...counts]
-    .filter(([, count]) => count > 1)
-    .map(([chapterNumber]) => chapterNumber)
-  const maxChapter = Math.max(...rows.map(row => row.chapter_number))
-  let firstGapChapterNumber: number | undefined
-  for (let chapterNumber = 1; chapterNumber <= maxChapter; chapterNumber += 1) {
-    if (!counts.has(chapterNumber)) {
-      firstGapChapterNumber = chapterNumber
-      break
-    }
-  }
-  if (duplicateChapterNumbers.length > 0 || firstGapChapterNumber !== undefined) {
-    return {
-      status: 'invalid',
-      lastChapterNumber: maxChapter,
-      ...(firstGapChapterNumber === undefined ? {} : { firstGapChapterNumber }),
-      duplicateChapterNumbers,
-      authorityFingerprint: fingerprint,
-    }
-  }
   return {
-    status: 'continuous',
-    lastChapterNumber: maxChapter,
-    nextChapterNumber: maxChapter + 1,
-    duplicateChapterNumbers: [],
-    authorityFingerprint: fingerprint,
+    ...chapterSequenceFrom(rows.map(row => row.chapter_number), deletedChapterNumbers()),
+    authorityFingerprint: authorityFingerprint(rows),
   }
 }
 
@@ -349,11 +319,10 @@ export class FinalizedDraftImportRepository {
       }
     })
 
-    const expectedNext = sequence.nextChapterNumber
     let candidateGap: number | undefined
-    if (expectedNext !== undefined && newChapterNumbers.length > 0) {
+    if (sequence.status !== 'invalid' && newChapterNumbers.length > 0) {
       const ordered = [...newChapterNumbers].sort((left, right) => left - right)
-      let expected = expectedNext
+      let expected = sequence.nextChapterNumber
       for (const chapterNumber of ordered) {
         if (chapterNumber !== expected) {
           candidateGap = expected
@@ -382,9 +351,7 @@ export class FinalizedDraftImportRepository {
       newChapterNumbers,
       duplicateChapterNumbers,
       conflictChapterNumbers,
-      ...((sequence.firstGapChapterNumber ?? candidateGap) === undefined
-        ? {}
-        : { firstGapChapterNumber: sequence.firstGapChapterNumber ?? candidateGap }),
+      ...(candidateGap === undefined ? {} : { firstGapChapterNumber: candidateGap }),
       authorityInvalid,
     }
   }
@@ -421,7 +388,7 @@ export class FinalizedDraftImportRepository {
         }
       }
       if (request.expectedAuthorityFingerprint !== undefined) {
-        const currentAuthority = sequenceFromRows(authorityRows()).authorityFingerprint
+        const currentAuthority = authorityFingerprint(authorityRows())
         if (request.expectedAuthorityFingerprint !== currentAuthority) {
           throw new Error('FINALIZED_IMPORT_PREVIEW_STALE')
         }

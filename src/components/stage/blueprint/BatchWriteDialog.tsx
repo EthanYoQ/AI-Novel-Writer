@@ -1,4 +1,5 @@
 import { useId } from 'react'
+import type { ChapterGap } from '../../../shared/chapter-sequence'
 import {
   MAX_BATCH_CHAPTERS,
   MIN_BATCH_CHAPTERS,
@@ -13,6 +14,15 @@ import { Button } from '../../ui/Button'
 import { Notice } from '../../ui/Notice'
 import { InkDialog } from '../InkDialog'
 import WritePreflight from '../write/WritePreflight'
+
+function gapHint(gaps: readonly ChapterGap[]): [string, string] {
+  const ranges = (dash: string) => gaps.map(gap => gap.from === gap.to ? `${gap.from}` : `${gap.from}${dash}${gap.to}`)
+  const many = gaps.length > 1 || gaps[0].to > gaps[0].from
+  return [
+    `批量只往后写，不补缺的第 ${ranges('～').join('、')} 章；缺的章请在蓝图页单独写。`,
+    `Batch writing only continues forward and skips the missing ${many ? 'chapters' : 'chapter'} ${ranges('–').join(', ')}. Write ${many ? 'them' : 'it'} from the blueprint page.`,
+  ]
+}
 
 /** 批量创作：按蓝图连续写几章。每次打开都是新的实例，上一次选的模型不会带到下一次。 */
 export default function BatchWriteDialog(props: BatchChapterProps) {
@@ -124,6 +134,11 @@ function BatchWriteDialogSession(props: BatchChapterProps) {
           {text(`将写第 ${start}～${end} 章，共 ${normalizedCount} 章。暂停会在当前章写完后生效，取消会阻止下一章开始。`,
             `Chapters ${start}–${end} (${normalizedCount}). Pausing takes effect after the current chapter; cancelling stops the next one from starting.`)}
         </p>
+        {form.gaps.length > 0 && (
+          <p className="stage-bp-dialog-hint">
+            {text(...gapHint(form.gaps))}
+          </p>
+        )}
 
         {auto && (
           <Notice tone="warn" title={form.confirmingAutoFinalize

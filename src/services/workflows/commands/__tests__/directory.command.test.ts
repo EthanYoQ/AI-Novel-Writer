@@ -291,6 +291,7 @@ beforeEach(() => {
     status: 'empty',
     lastChapterNumber: 0,
     nextChapterNumber: 1,
+    gaps: [],
     duplicateChapterNumbers: [],
     authorityFingerprint: 'f'.repeat(64),
   }
@@ -333,6 +334,7 @@ describe('GenerateDirectoryCommand', () => {
       status: 'continuous',
       lastChapterNumber: 9,
       nextChapterNumber: 10,
+      gaps: [],
       duplicateChapterNumbers: [],
       authorityFingerprint: 'a'.repeat(64),
     }
@@ -355,12 +357,40 @@ describe('GenerateDirectoryCommand', () => {
       .toMatchObject({ startChapter: 10, endChapter: 10 })
   })
 
-  it('fails before opening a runtime when finalized authority is discontinuous', async () => {
+  it('appends after the last finalized chapter when a middle chapter was deleted (#564)', async () => {
+    authoritySequenceResult = {
+      status: 'gapped',
+      lastChapterNumber: 9,
+      nextChapterNumber: 10,
+      gaps: [{ from: 4, to: 4, cause: 'deleted' }],
+      duplicateChapterNumbers: [],
+      authorityFingerprint: 'a'.repeat(64),
+    }
+    const invoke = stubIpcInvoke(successfulCommitHandler())
+    const session = generationSession(async () => ({
+      status: 'completed',
+      content: blueprintJson([10]),
+      finishReason: 'stop',
+      receipt: generationReceipt(1, 'stop'),
+    }))
+    const command = new GenerateDirectoryCommand(
+      { mode: 'append', count: 1 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 10 } },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+
+    await command.execute({ step: {}, context: workflowContext(), callbacks: stepCallbacks() })
+
+    expect(invoke.mock.calls.find(([channel]) => channel === 'db:blueprint-commit-range')?.[1])
+      .toMatchObject({ startChapter: 10, endChapter: 10 })
+  })
+
+  it('fails before opening a runtime when one chapter has two finalized rows', async () => {
     authoritySequenceResult = {
       status: 'invalid',
       lastChapterNumber: 9,
-      firstGapChapterNumber: 4,
-      duplicateChapterNumbers: [],
+      gaps: [],
+      duplicateChapterNumbers: [4],
       authorityFingerprint: 'b'.repeat(64),
     }
     stubIpcInvoke(successfulCommitHandler())
@@ -372,7 +402,7 @@ describe('GenerateDirectoryCommand', () => {
     )
 
     await expect(command.execute({ step: {}, context: workflowContext(), callbacks: stepCallbacks() }))
-      .rejects.toThrow(/权威定稿缺少第 4 章/u)
+      .rejects.toThrow(/权威定稿的第 4 章存在重复记录/u)
     expect(createRuntime).not.toHaveBeenCalled()
   })
 
