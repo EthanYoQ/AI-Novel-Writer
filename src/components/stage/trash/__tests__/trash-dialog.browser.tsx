@@ -256,6 +256,23 @@ describe('回收站对话框（#564）', () => {
     await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
   })
 
+  it('清空确认开着时又有章节进了回收站，确认只删确认框说到的那几项，新进来的还在（#592）', async () => {
+    await render()
+    await expect.element(dialog()).toHaveAccessibleName('回收站（3）')
+    await act(async () => dialog().getByRole('button', { name: '清空回收站…' }).click())
+    const confirm = page.getByRole('dialog', { name: '清空回收站？' })
+    await expect.element(confirm).toHaveTextContent('回收站里的 3 项会彻底删除')
+
+    entries = [entry(7), ...entries]
+    await act(async () => globalEventBus.emit('CHAPTER_DELETION_UPDATED', { projectPath: PROJECT_PATH, projectSession: SESSION }))
+    await act(async () => confirm.getByRole('button', { name: '清空回收站', exact: true }).click())
+    await vi.waitFor(() => expect(calls('chapter:trash-purge')).toHaveLength(1))
+
+    expect(entries.map(item => item.deletionId)).toEqual(['del-7'])
+    expect(damaged).toEqual([])
+    await expect.element(dialog()).toHaveAccessibleName('回收站（1）')
+  })
+
   it.each([
     ['清空回收站', () => dialog().getByRole('button', { name: '清空回收站…' }).click(), '清空回收站？', '清空回收站'],
     ['彻底删除一项', () => dialog().getByRole('button', { name: '彻底删除…' }).first().click(), '彻底删除第 3 章「灯塔3」？', '彻底删除'],
