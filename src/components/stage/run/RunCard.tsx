@@ -29,6 +29,7 @@ const STATUS_TEXT: Record<WorkflowRun['status'], [string, string]> = {
   cancelling: ['正在取消，等当前操作退出', 'Cancelling; waiting for the current operation'],
   completed: ['已完成', 'Complete'],
   failed: ['失败', 'Failed'],
+  cancelled: ['已取消', 'Cancelled'],
 }
 
 function runMeta(run: WorkflowRun, model: string | undefined, text: Text, locale: Parameters<typeof clockTime>[1]): string {

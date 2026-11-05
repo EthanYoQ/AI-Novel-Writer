@@ -48,6 +48,8 @@ export type WorkflowStatus =
   | 'cancelling'
   | 'completed'
   | 'failed'
+  /** 作者主动取消后安全退出；与失败分开，界面不当作出错。 */
+  | 'cancelled'
   | 'paused'
   | 'waiting'
 
@@ -355,6 +357,10 @@ const continueResolveRefs = new Map<string, () => void>()
 const pauseResolveRefs = new Map<string, () => void>()
 const cancelRequestedHooks = new Map<string, (context: WorkflowContext) => void | Promise<void>>()
 const cancelBoundaryHooks = new Map<string, (context: WorkflowContext) => void | Promise<void>>()
+
+function isTerminalRunStatus(status: WorkflowStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled'
+}
 
 function isCancellationPending(context: WorkflowContext): boolean {
   return context.cancelled || context.cancelRequested === true
@@ -711,7 +717,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       // 检查取消
       if (context.cancelled && definition.type !== 'novel_import') {
         updateRunById(set, run.id, {
-          status: 'failed',
+          status: 'cancelled',
           error: uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'),
         })
         get().addLog('warn', uiText(
@@ -864,7 +870,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         }
       }
       updateRunById(set, run.id, {
-        status: 'failed',
+        status: 'cancelled',
         error: uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'),
         completedAt: new Date().toISOString(),
       })
@@ -954,7 +960,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       // 取消指定工作流
       const ctx = activeContexts.get(runId)
       const targetRun = get().activeRuns.find(r => r.id === runId)
-      if (!ctx || !targetRun || targetRun.status === 'completed' || targetRun.status === 'failed') {
+      if (!ctx || !targetRun || isTerminalRunStatus(targetRun.status)) {
         return
       }
       if (ctx) {
@@ -1009,12 +1015,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       ), targetRun.uiLocale)
     } else {
       // 取消全部
-      const targetRuns = get().activeRuns.filter(run =>
-        run.status !== 'completed' && run.status !== 'failed'
-      )
+      const targetRuns = get().activeRuns.filter(run => !isTerminalRunStatus(run.status))
       for (const [id, ctx] of activeContexts) {
         const run = get().activeRuns.find(item => item.id === id)
-        if (!run || run.status === 'completed' || run.status === 'failed') continue
+        if (!run || isTerminalRunStatus(run.status)) continue
         const persistCancellation = cancelRequestedHooks.get(id)
         if (persistCancellation && !ctx.cancellationRequest) {
           ctx.cancellationRequest = Promise.resolve(persistCancellation(ctx))
@@ -1040,7 +1044,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       set(s => {
         const cancellingRuns = s.activeRuns.map(r => ({
           ...r,
-          ...(r.status === 'completed' || r.status === 'failed'
+          ...(isTerminalRunStatus(r.status)
             ? {}
             : {
                 status: 'cancelling' as const,
