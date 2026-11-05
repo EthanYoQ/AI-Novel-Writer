@@ -138,7 +138,10 @@ const dismissToasts = async page => {
 }
 const trashDialog = page => page.getByRole('dialog', { name: /^回收站（\d+）$/u })
 
-TRASH_SCENARIOS['trash-ui'] = { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
+TRASH_SCENARIOS['trash-ui'] = { model: true, shell: 'stage', setup: async context => {
+  await trackOpenedSession(context.app)
+  await seedStageSample(context)
+}, run: async context => {
   const { page, app } = context
   const projectPath = context.samplePath
   const observed = {}
@@ -198,6 +201,14 @@ TRASH_SCENARIOS['trash-ui'] = { model: true, shell: 'stage', setup: seedStageSam
   observed.afterRestore = manuscripts(projectPath, 3)
   observed.restoreToast = await toasts(page).innerText()
   await context.shoot('restore-success')
+
+  // 恢复提示让作者去「定稿后处理」点「重试」重新收进知识库：核对知识库里确实没有这一章，单章页确实有这个按钮。
+  const session = await app.evaluate(() => globalThis.__driveOpened)
+  observed.knowledgeAfterRestore = (await context.invoke(page, 'kb:list-documents', projectPath, session))
+    .filter(document => document.finalizedChapter === 3 || /第3章/u.test(document.fileName)).map(document => document.fileName)
+  await openChapter(page, 3)
+  await chapterView.postProcess(page).waitFor({ state: 'visible' })
+  observed.postProcessAfterRestore = await chapterView.postProcess(page).innerText()
   console.log(`[trash-ui] ${JSON.stringify(observed)}`)
   return observed
 } }
