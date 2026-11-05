@@ -108,6 +108,50 @@ describe('callLLMResult：作者点了取消', () => {
   })
 })
 
+class SingleShotCommand extends BaseWorkflowCommand<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    return this.executeWithGenerationRuntime('text', params, () => this.callLLM('写第 5 章', 'system', params.callbacks, undefined, params.context))
+  }
+}
+
+class BoundedCommand extends BaseWorkflowCommand<string> {
+  async execute(params: CommandExecuteParams): Promise<string> {
+    return this.executeWithGenerationRuntime('text', params, () => this.callLLMWithBoundedCompletion('写第 5 章', 'system', params.callbacks,
+      { mode: 'append-visible-text', maxContinuations: 2 }, undefined, params.context))
+  }
+}
+
+// 主进程把失败写进收据后照常返回结果，不抛错；取消截断的请求同样返回，只是收据里没有失败码（主进程不把取消码交给渲染端）。
+function returnedIncomplete(failureCode?: 'GENERATION_STORAGE_FAILED' | 'ROOT_BUDGET_EXHAUSTED') {
+  return { status: 'incomplete', content: '第 5 章写到一半', finishReason: 'error',
+    receipt: { purpose: 'workflow', ...(failureCode ? { failureCode } : {}) } } as unknown as Awaited<ReturnType<GenerationSession['complete']>>
+}
+
+describe.each([
+  ['callLLM', SingleShotCommand],
+  ['有界续写', BoundedCommand],
+] as const)('%s：作者点了取消，主进程返回的是结果而不是异常', (_label, Command) => {
+  it.each(['GENERATION_STORAGE_FAILED', 'ROOT_BUDGET_EXHAUSTED'] as const)('收据带真实失败码 %s：运行和这一步都记失败', async failureCode => {
+    const finished = await runOneStep((context, callbacks) => new Command(sessionThat(async () => {
+      cancelRun()
+      return returnedIncomplete(failureCode)
+    })).execute({ step: {}, context, callbacks }))
+
+    expect(finished).toMatchObject({ status: 'failed' })
+    expect(finished.steps[0]).toMatchObject({ status: 'failed' })
+  })
+
+  it('取消截断的结果（收据没有失败码）：运行和这一步都记已取消', async () => {
+    const finished = await runOneStep((context, callbacks) => new Command(sessionThat(async () => {
+      cancelRun()
+      return returnedIncomplete()
+    })).execute({ step: {}, context, callbacks }))
+
+    expect(finished).toMatchObject({ status: 'cancelled' })
+    expect(finished.steps[0]).toMatchObject({ status: 'cancelled' })
+  })
+})
+
 describe('定稿后处理（withRetry）：作者点了取消', () => {
   const postProcess = (stopOnFailure: boolean, executor: () => Promise<void>) => (context: WorkflowContext, callbacks: StepCallbacks) => runPostProcessPipeline(
     projectPath, 'chapter_5_finalize', '第 5 章定稿', [{ key: 'character_cards', label: '角色状态更新', critical: false, executor }],
