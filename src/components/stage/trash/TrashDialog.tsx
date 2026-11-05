@@ -19,12 +19,6 @@ type PurgeTarget = { kind: 'one'; entry: TrashedChapter } | { kind: 'damaged'; d
 /** 确认框描述的是弹出那一刻的作品，确认时只对这部作品生效。 */
 type PurgeAsk = PurgeTarget & { session: ProjectSessionContext }
 
-const CLEANUP_TEXT: Record<Exclude<TrashedChapter['cleanup'], 'completed'>, [string, string]> = {
-  pending: ['实体稿或知识库还没清理完', 'Manuscript file or knowledge base not cleaned up yet'],
-  failed: ['实体稿或知识库还没清理完', 'Manuscript file or knowledge base not cleaned up yet'],
-  authorization_required: ['等你核对知识库后才能清理', 'Waiting for you to check the knowledge base'],
-}
-
 function modeHint(entry: TrashedChapter, text: Text): string | null {
   if (entry.restoreMode === 'as-history') return text('这一章重写过，恢复后作为旧版本放回。', 'Rewritten since; restores as an older version.')
   if (entry.restoreMode === 'reopen-as-draft') return text('导入的作品，恢复会开一份新草稿。', 'Imported book; restoring opens a new draft.')
@@ -42,10 +36,10 @@ function TrashItem({ entry, busy, onRun, onPurge }: {
   const deletedAt = new Date(entry.deletedAt)
   const when = Number.isNaN(deletedAt.getTime()) ? entry.deletedAt : deletedAt.toLocaleString(locale, { dateStyle: 'medium', timeStyle: 'short' })
   const words = entry.wordCount.toLocaleString(locale)
-  const cleanup = entry.cleanup === 'completed' ? null : CLEANUP_TEXT[entry.cleanup]
+  const cleanupUnfinished = entry.cleanup !== 'completed'
   const hint = modeHint(entry, text)
   return (
-    <li className="stage-trash-item" data-cleanup={entry.cleanup}>
+    <li className="stage-trash-item">
       <div className="stage-trash-main">
         <p className="stage-trash-name">
           <span className="stage-trash-no">{text(`第 ${entry.chapterNumber} 章`, `Chapter ${entry.chapterNumber}`)}</span>
@@ -55,13 +49,13 @@ function TrashItem({ entry, busy, onRun, onPurge }: {
           {text(`删除于 ${when} · ${words} 字 · ${entry.versionCount} 个版本`,
             `Deleted ${when} · ${words} ${pluralEn(entry.wordCount, 'word')} · ${entry.versionCount} ${pluralEn(entry.versionCount, 'version')}`)}
         </p>
-        {cleanup && <p className="stage-trash-cleanup">{text(...cleanup)}</p>}
+        {cleanupUnfinished && <p className="stage-trash-cleanup">{text('实体稿或知识库还没清理完', 'Manuscript file or knowledge base not cleaned up yet')}</p>}
         {hint && <p className="stage-trash-hint">{hint}</p>}
       </div>
       <div className="stage-trash-actions">
-        {cleanup && (
+        {cleanupUnfinished && (
           <Button variant="text" size="sm" disabled={busy} onClick={() => onRun(() => retryTrashCleanup(entry))}>
-            {entry.cleanup === 'authorization_required' ? text('确认人工核对并继续', 'Confirm and continue') : text('重试清理', 'Retry cleanup')}
+            {text('重试清理', 'Retry cleanup')}
           </Button>
         )}
         <Button variant="secondary" size="sm" disabled={busy} onClick={() => onRun(() => restoreTrashedChapter(entry))}>

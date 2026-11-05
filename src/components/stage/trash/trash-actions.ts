@@ -1,14 +1,12 @@
 import type { RestoreTrashedChapterResult, TrashedChapter } from '../../../shared/chapter-deletion'
 import { globalEventBus } from '../../../shared/event-bus'
-import type { ProjectData, ProjectSessionContext } from '../../../shared/ipc-channels'
-import { formatResourceUri } from '../../../shared/project-paths'
+import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { ipc } from '../../../services/ipc-client'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { useDraftStore } from '../../../stores/draft-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { captureProjectSession, isProjectSessionCurrent } from '../../project-session-gate'
-import { confirmLegacyKnowledgeAbsentAndContinue } from '../../panels/sidebar/finalized-chapter-deletion'
 import { toast } from '../../ui/Toast'
 import { announceTrashChanged } from './use-chapter-trash'
 
@@ -123,20 +121,14 @@ export async function purgeTrash(target: TrashedChapter | { deletionId: string }
   return true
 }
 
-/** 续跑这次删除没做完的实体稿与知识库清理；旧版定稿要先确认人工核对过知识库。 */
+/**
+ * 续跑这次删除没做完的实体稿与知识库清理。等待核对旧定稿知识库的删除还没进回收站
+ * （chapter-deletion-repository 的 begin 与 confirmLegacyKnowledgeAbsent），这里不会遇到。
+ */
 export async function retryTrashCleanup(entry: TrashedChapter): Promise<void> {
   const text = useLocaleStore.getState().text
-  const project: ProjectData | null = useProjectStore.getState().currentProject
   const session = currentSession()
-  if (!project || !session) return
-  if (entry.cleanup === 'authorization_required') {
-    await confirmLegacyKnowledgeAbsentAndContinue({
-      project, projectPath: session.projectPath, draftId: entry.draftId, chapterNumber: entry.chapterNumber,
-      displayName: trashEntryName(entry, text), tabFilePath: formatResourceUri({ kind: 'manuscript', id: entry.draftId }), surface: 'manuscript',
-    }, entry.deletionId)
-    if (isProjectSessionCurrent(session)) announceTrashChanged(session)
-    return
-  }
+  if (!session) return
   const result = await settled(ipc.invokeWithProjectSession(session, 'chapter:retry-deletion', entry.deletionId, session.projectPath))
   if (!isProjectSessionCurrent(session)) return
   refreshAfterTrashChange(session)
