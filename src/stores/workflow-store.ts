@@ -602,7 +602,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       }
     })
 
-    const endBeforeFirstStep = (status: 'failed' | 'cancelled', error: string) => {
+    // 切换作品等的是活动列表清空，取消请求落盘之前运行不能离开；保存失败由 cancelWorkflow 记日志。
+    const cancellationRequestSettled = () => context.cancellationRequest?.catch(() => undefined)
+
+    const endBeforeFirstStep = async (status: 'failed' | 'cancelled', error: string) => {
+      await cancellationRequestSettled()
       updateRunById(set, run.id, { status, completedAt: new Date().toISOString(), error })
       set(s => {
         const endedRun = s.activeRuns.find(active => active.id === run.id)
@@ -617,8 +621,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       cancelRequestedHooks.delete(run.id)
       cancelBoundaryHooks.delete(run.id)
     }
-    const cancelBeforeFirstStep = () => {
-      endBeforeFirstStep('cancelled', uiText(uiLocale, '工作流已取消', 'Workflow was cancelled.'))
+    const cancelBeforeFirstStep = async () => {
+      await endBeforeFirstStep('cancelled', uiText(uiLocale, '工作流已取消', 'Workflow was cancelled.'))
       get().addLog('warn', uiText(
         uiLocale,
         `[取消] 工作流「${definition.title}」已取消`,
@@ -630,7 +634,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       context.writingSkills = await freezeWritingSkillsSnapshot(projectSession, writingLanguage)
     } catch (error) {
       if (stoppedByCancellation(context, error)) {
-        cancelBeforeFirstStep()
+        await cancelBeforeFirstStep()
         return runId
       }
       const reason = displayedErrorMessage(uiLocale, error)
@@ -639,7 +643,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         `写作 Skill 快照加载失败，工作流未启动：${reason}`,
         `Writing skill snapshot could not be loaded, so the workflow was not started: ${reason}`,
       )
-      endBeforeFirstStep('failed', failure)
+      await endBeforeFirstStep('failed', failure)
       get().addLog('error', failure, uiLocale)
       return runId
     }
@@ -649,10 +653,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     )) {
       // 切换作品会先取消本作品的运行；作者已取消时，项目变了正是取消的结果，不是出错。
       if (isCancellationPending(context)) {
-        cancelBeforeFirstStep()
+        await cancelBeforeFirstStep()
         return runId
       }
-      endBeforeFirstStep('failed', uiText(
+      await endBeforeFirstStep('failed', uiText(
         uiLocale,
         '写作 Skill 快照加载期间项目已切换，工作流未启动',
         'The project changed while writing skills were being frozen, so the workflow was not started.',
@@ -876,6 +880,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       }
     }
 
+    await cancellationRequestSettled()
     // 检查是否全部完成
     let finalRun = get().activeRuns.find(r => r.id === run.id)
     // 取消窗口里真实出错的运行已记失败，不能再改成已取消。
