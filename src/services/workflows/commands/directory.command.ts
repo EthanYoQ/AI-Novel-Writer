@@ -30,6 +30,7 @@ import {
 import { requireWorkflowProjectSession, workflowUiLocale, workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
 import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
+import { WorkflowCancelledError } from '../workflow-cancellation'
 export {
   retryDirectoryCharacterSync,
   type DirectoryCharacterSyncReceipt,
@@ -420,8 +421,9 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         })
       })()
       if (!batchResult.ok) {
-        this.assertNotCancelled(context)
-        const prefix = [...batchResult.validatedItems]
+        // 只有取消造成的中止才按取消抛出；作者已取消后的真实失败照常报出原因和错误码，只是不再写入已校验的前缀。
+        if (batchResult.failure.terminal instanceof WorkflowCancelledError) throw batchResult.failure.terminal
+        const prefix = context.cancelled ? [] : [...batchResult.validatedItems]
         if (prefix.length) {
           if (prefix.some((item, index) => item.chapterNumber !== startChapter + index)) throw new Error('DIRECTORY_VALIDATED_PREFIX_NOT_CONTIGUOUS')
           const prefixEnd = startChapter + prefix.length - 1
@@ -458,11 +460,12 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           )
         }
         if (batchResult.failure.terminal) throw batchResult.failure.terminal
-        throw new Error(workflowUiText(
+        const { errorCode } = batchResult.failure
+        throw Object.assign(new Error(workflowUiText(
           context,
           `${displayedErrorMessage(context.uiLocale, batchResult.failure.message)}；${generationSummary}`,
           `Blueprint generation failed: code=${batchResult.failure.code} reason=${batchResult.failure.reason ?? 'unknown'}; ${generationSummary}`,
-        ))
+        )), errorCode ? { code: errorCode } : {})
       }
 
       this.assertNotCancelled(context)
