@@ -179,7 +179,7 @@ async function postProcessSettled(page, chapterNumber) {
   return chapterView.postProcessSteps(page)
 }
 
-/** 定稿并等后处理三步（知识库、要点、角色状态）在真实回复下结束；任何一步失败都判失败。 */
+/** 定稿并等后处理各行（正文文件、知识库、要点、角色状态）在真实回复下结束；任何一行失败都判失败，正文文件没写入也算。 */
 async function finalizeAndPostProcess(page, chapterNumber) {
   const started = Date.now()
   await chapterView.finalize(page, chapterNumber)
